@@ -21,11 +21,12 @@ using namespace mlir::arts;
 
 ArtsAnalysisManager::ArtsAnalysisManager(ModuleOp module,
                                          const std::string &configFile,
-                                         const std::string &metadataFile)
+                                         const std::string &metadataFile,
+                                         PartitionFallback fallback)
     : module(module), configFile(configFile),
       metadataFile(metadataFile.empty() ? ".carts-metadata.json"
                                         : metadataFile),
-      abstractMachine(configFile) {}
+      abstractMachine(configFile), partitionFallback(fallback) {}
 
 ArtsAnalysisManager::~ArtsAnalysisManager() {}
 
@@ -92,8 +93,8 @@ HeuristicsConfig &ArtsAnalysisManager::getHeuristicsConfig() {
   if (!heuristicsConfig) {
     /// Ensure MetadataManager and IdRegistry are initialized first
     auto &idRegistry = getMetadataManager().getIdRegistry();
-    heuristicsConfig =
-        std::make_unique<HeuristicsConfig>(abstractMachine, idRegistry);
+    heuristicsConfig = std::make_unique<HeuristicsConfig>(
+        abstractMachine, idRegistry, partitionFallback);
   }
   return *heuristicsConfig;
 }

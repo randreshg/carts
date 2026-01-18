@@ -85,22 +85,19 @@ public:
   // State Queries
   //===------------------------------------------------------------------===//
 
-  bool isInitialized() const { return initialized_; }
-  int64_t getNextId() const { return nextId_; }
-  size_t getCacheSize() const { return locationCache_.size(); }
+  bool isInitialized() const { return initialized; }
+  int64_t getNextId() const { return nextId; }
+  size_t getCacheSize() const { return locationCache.size(); }
 
 private:
-  /// Assign ID from operation location
   int64_t assignFromLocation(Operation *op);
-
-  /// Set the arts.id attribute on operation
   void setIdAttribute(Operation *op, int64_t id);
 
 private:
-  llvm::StringMap<int64_t> locationCache_;
-  llvm::DenseSet<int64_t> usedIds_;
-  int64_t nextId_ = 1;
-  bool initialized_ = false;
+  llvm::StringMap<int64_t> locationCache;
+  llvm::DenseSet<int64_t> usedIds;
+  int64_t nextId = 1;
+  bool initialized = false;
 };
 
 } // namespace arts

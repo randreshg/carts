@@ -33,9 +33,7 @@ namespace arts {
 /// Index localizer for chunked datablock allocation.
 /// Implements div/mod localization for coarse-grained parallelism.
 class DbChunkedIndexer : public DbIndexerBase {
-  Value chunkSize_;
-  Value startChunk_;
-  Value elemOffset_;
+  Value chunkSize, startChunk, elemOffset;
 
 public:
   DbChunkedIndexer(Value chunkSize, Value startChunk, Value elemOffset,

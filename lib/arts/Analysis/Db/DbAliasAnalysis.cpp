@@ -105,7 +105,7 @@ static const char *aliasResultToString(DbAliasAnalysis::AliasResult res) {
   case DbAliasAnalysis::AliasResult::MayAlias:
     return "MAY ALIAS";
   }
-  llvm_unreachable("Unhandled alias result");
+  ARTS_UNREACHABLE("Unhandled alias result");
 }
 
 ///===----------------------------------------------------------------------===///
@@ -274,7 +274,7 @@ Value DbAliasAnalysis::getUnderlyingValue(const NodeBase &node) {
     Value source = cast<DbReleaseOp>(op).getSource();
     return ValueUtils::getUnderlyingValue(source);
   }
-  llvm_unreachable("Invalid DB node type");
+  ARTS_UNREACHABLE("Invalid DB node type");
 }
 
 DbAliasAnalysis::OverlapKind

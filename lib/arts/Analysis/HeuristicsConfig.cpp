@@ -1,81 +1,169 @@
 ///==========================================================================///
 /// File: HeuristicsConfig.cpp
 ///
-/// This file implements the HeuristicsConfig class which centralizes all
-/// compile-time heuristic decision logic.
+/// Centralized heuristics configuration and evaluation for the CARTS compiler.
+///
+/// This file implements:
+/// - H1.x partitioning heuristics (evaluatePartitioningHeuristics)
+/// - H2 twin-diff heuristics (shouldUseTwinDiff)
+/// - Decision recording for ArtsMate diagnostics
 ///==========================================================================///
 
 #include "arts/Analysis/HeuristicsConfig.h"
-#include "arts/Analysis/Heuristics/PartitioningHeuristics.h"
+#include "arts/ArtsDialect.h"
 #include "arts/Transforms/Datablock/DbRewriter.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/Metadata/IdRegistry.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
 #include "arts/Utils/ValueUtils.h"
-#include "llvm/ADT/STLExtras.h"
 
 ARTS_DEBUG_SETUP(heuristics)
 
 using namespace mlir;
 using namespace mlir::arts;
 
+///===----------------------------------------------------------------------===///
+/// Helper Functions
+///===----------------------------------------------------------------------===///
+
 namespace {
-/// Compute minimum inner bytes based on execution mode
-static int64_t computeMinInnerBytes(const ArtsAbstractMachine &machine) {
-  auto mode = machine.getExecutionMode();
-  switch (mode) {
-  case ExecutionMode::SingleThreaded:
-    return 64; /// Cache-line aligned
-  case ExecutionMode::IntraNode:
-    return 1024; /// Modest lower bound
-  case ExecutionMode::InterNode:
-    return 4096; /// Avoid tiny chunks for distributed
+
+/// Extract heuristic ID from rationale string (e.g., "H1.2: ..." -> "H1.2")
+static std::string extractHeuristicId(llvm::StringRef rationale) {
+  /// Look for "H1.X:" pattern
+  if (rationale.starts_with("H1.")) {
+    size_t colonPos = rationale.find(':');
+    if (colonPos != std::string::npos)
+      return rationale.substr(0, colonPos).str();
   }
-  return 64; /// Fallback
+  return "Fallback";
 }
+
 } // namespace
 
-HeuristicsConfig::HeuristicsConfig(const ArtsAbstractMachine &machine,
-                                   IdRegistry &idRegistry)
-    : machine(machine), idRegistry_(idRegistry) {
-  initializeThresholds();
-  initializeDefaultHeuristics();
-  ARTS_DEBUG("HeuristicsConfig initialized: singleNode="
-             << isSingleNode() << ", valid=" << isValid()
-             << ", minInnerBytes=" << thresholds_.minInnerBytes
-             << ", partitioningHeuristics=" << partitioningHeuristics_.size());
-}
+///===----------------------------------------------------------------------===///
+/// H1: Partitioning Heuristics Evaluation
+///===----------------------------------------------------------------------===///
 
-void HeuristicsConfig::initializeThresholds() {
-  /// Compute thresholds based on execution mode and memory tier
-  auto mode = machine.getExecutionMode();
-  /// Set DB limits based on execution mode
-  switch (mode) {
-  case ExecutionMode::SingleThreaded:
-    thresholds_.maxOuterDBs = 256;
-    thresholds_.maxTotalDBsPerEDT = 64;
-    thresholds_.minElementsPerChunk = 4;
-    break;
-  case ExecutionMode::IntraNode:
-    thresholds_.maxOuterDBs = 512;
-    thresholds_.maxTotalDBsPerEDT = 256;
-    thresholds_.minElementsPerChunk = 16;
-    break;
-  case ExecutionMode::InterNode:
-    thresholds_.maxOuterDBs = 2048;
-    thresholds_.maxTotalDBsPerEDT = 1024;
-    thresholds_.minElementsPerChunk = 64;
-    break;
+PartitioningDecision
+mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
+                                           const ArtsAbstractMachine *machine,
+                                           PartitionFallback fallback) {
+  ARTS_DEBUG("evaluatePartitioningHeuristics: canElementWise="
+             << ctx.canElementWise << ", canChunked=" << ctx.canChunked
+             << ", pinnedDimCount=" << ctx.pinnedDimCount
+             << ", accessMode=" << static_cast<int>(ctx.accessMode));
+
+  /// H1.1: Read-Only Single-Node -> Coarse
+  /// On a single node with read-only access, there is no write contention to
+  /// relieve via fine-graining. Coarse allocation reduces datablock count.
+  if (machine && machine->getNodeCount() == 1) {
+    bool isReadOnly = !ctx.acquires.empty() ? ctx.allReadOnly()
+                                            : (ctx.accessMode == ArtsMode::in);
+    if (isReadOnly && !ctx.canChunked && !ctx.canElementWise) {
+      ARTS_DEBUG("H1.1 applied: Read-only single-node prefers coarse");
+      return PartitioningDecision::coarse(
+          ctx, "H1.1: All acquires read-only on single-node prefers coarse");
+    }
   }
 
-  /// Compute memory-aware thresholds
-  thresholds_.minInnerBytes = computeMinInnerBytes(machine);
+  /// H1.2: Mixed Access (Chunked Writes + Indirect Reads) -> Chunked
+  /// Mixed access patterns use chunked partitioning with full-range acquires
+  /// for indirect reads. This avoids DbCopy/DbSync overhead.
+  if (ctx.canChunked && ctx.hasIndirectRead && !ctx.hasIndirectWrite &&
+      ctx.hasDirectAccess) {
+    ARTS_DEBUG("H1.2 applied: Mixed access pattern");
+    return PartitioningDecision::chunked(
+        ctx, "H1.2: Mixed access (chunked writes + full-range indirect reads)");
+  }
 
-  ARTS_DEBUG("Thresholds initialized: maxOuterDBs="
-             << thresholds_.maxOuterDBs
-             << ", maxTotalDBsPerEDT=" << thresholds_.maxTotalDBsPerEDT
-             << ", minInnerBytes=" << thresholds_.minInnerBytes);
+  /// H1.3: Stencil/Indexed Patterns
+  /// - Indexed access (data-dependent) requires element-wise partitioning
+  /// - Stencil patterns use Stencil mode (chunked + ESD) for halo handling
+  const auto &patterns = ctx.accessPatterns;
+
+  /// Case 1: Indexed access -> Element-wise (unpredictable access pattern)
+  if (patterns.hasIndexed) {
+    ARTS_DEBUG("H1.3 applied: Indexed access requires element-wise");
+    return PartitioningDecision::elementWise(
+        ctx, 1, "H1.3: Indexed access requires element-wise");
+  }
+
+  /// Case 2: Stencil (with or without uniform) -> Stencil mode (chunked + ESD)
+  if (patterns.hasStencil) {
+    if (!ctx.canChunked) {
+      ARTS_DEBUG("H1.3 applied: Stencil but chunked unsupported; fallback");
+      return PartitioningDecision::elementWise(
+          ctx, 1,
+          "H1.3: Stencil detected but chunked unsupported; fallback to "
+          "element-wise");
+    }
+
+    ARTS_DEBUG("H1.3 applied: Stencil uses ESD mode");
+    return PartitioningDecision::stencil(
+        ctx, patterns.hasUniform
+                 ? "H1.3: Mixed (uniform+stencil) uses Stencil mode - chunked "
+                   "handles both"
+                 : "H1.3: Pure stencil uses ESD mode");
+  }
+
+  /// H1.4: Multi-Node -> Fine-Grained for Network Efficiency
+  /// On multi-node systems, fine-grained partitioning reduces data transfer
+  /// by allowing nodes to acquire only the data they need.
+  if (machine && machine->getNodeCount() > 1) {
+    bool canDoChunked = ctx.canChunked || ctx.anyCanChunked();
+    bool canDoElementWise = ctx.canElementWise || ctx.anyCanElementWise();
+
+    if (canDoChunked) {
+      ARTS_DEBUG("H1.4 applied: Multi-node prefers chunked");
+      return PartitioningDecision::chunked(
+          ctx, "H1.4: Multi-node prefers chunked for network efficiency");
+    }
+
+    if (canDoElementWise) {
+      ARTS_DEBUG("H1.4 applied: Multi-node prefers fine-grained");
+      unsigned outerRank =
+          ctx.pinnedDimCount > 0 ? ctx.pinnedDimCount : ctx.maxPinnedDimCount();
+      outerRank = outerRank > 0 ? outerRank : 1;
+      return PartitioningDecision::elementWise(
+          ctx, outerRank, "H1.4: Multi-node prefers fine-grained");
+    }
+  }
+
+  /// H1.5: Non-Uniform Access -> Coarse
+  /// When access patterns are non-uniform and no fine-grained option is
+  /// available, default to coarse allocation to avoid complexity.
+  if (!ctx.isUniformAccess && !ctx.canElementWise && !ctx.canChunked) {
+    ARTS_DEBUG("H1.5 applied: Non-uniform access prefers coarse");
+    return PartitioningDecision::coarse(
+        ctx, "H1.5: Non-uniform access prefers coarse");
+  }
+
+  /// Fallback: Respect user partition-fallback preference
+  if (fallback == PartitionFallback::FineGrained) {
+    ARTS_DEBUG("Fallback applied: No heuristic matched, using fine-grained "
+               "(user preference)");
+    return PartitioningDecision::elementWise(
+        ctx, 1, "Fallback: User preference for fine-grained partitioning");
+  }
+
+  ARTS_DEBUG("Fallback applied: No heuristic matched, using coarse (user "
+             "preference)");
+  return PartitioningDecision::coarse(
+      ctx, "Fallback: User preference for coarse partitioning");
+}
+
+//===----------------------------------------------------------------------===//
+// HeuristicsConfig Implementation
+//===----------------------------------------------------------------------===//
+
+HeuristicsConfig::HeuristicsConfig(const ArtsAbstractMachine &machine,
+                                   IdRegistry &registry,
+                                   PartitionFallback fallback)
+    : machine(machine), idRegistry(registry), partitionFallback(fallback) {
+  ARTS_DEBUG("HeuristicsConfig initialized: singleNode="
+             << isSingleNode() << ", valid=" << isValid());
 }
 
 bool HeuristicsConfig::isSingleNode() const {
@@ -85,7 +173,7 @@ bool HeuristicsConfig::isSingleNode() const {
 bool HeuristicsConfig::isValid() const { return machine.isValid(); }
 
 //===----------------------------------------------------------------------===//
-// H4: Twin-Diff Heuristic
+// H2: Twin-Diff Heuristic
 //===----------------------------------------------------------------------===//
 
 bool HeuristicsConfig::shouldUseTwinDiff(const TwinDiffContext &context) {
@@ -99,12 +187,12 @@ bool HeuristicsConfig::shouldUseTwinDiff(const TwinDiffContext &context) {
 
   /// Twin-diff heuristics (disabled - to be re-enabled when runtime supports
   /// it)
-#if 0 
-  /// H4: Single-node disables twin-diff unconditionally
+#if 0
+  /// H2: Single-node disables twin-diff unconditionally
   /// - No remote owner to send diffs to
   /// - Twin allocation + memcpy + diff computation are wasted
   if (isSingleNode()) {
-    recordDecision("H4-TwinDiff", true, "single-node disables twin-diff", op,
+    recordDecision("H2-TwinDiff", true, "single-node disables twin-diff", op,
                    {});
     return false;
   }
@@ -146,7 +234,7 @@ void HeuristicsConfig::recordDecision(llvm::StringRef heuristic, bool applied,
                                       llvm::StringRef rationale, Operation *op,
                                       const llvm::StringMap<int64_t> &inputs) {
   /// Get artsId from operation via IdRegistry
-  int64_t artsId = op ? idRegistry_.getOrCreate(op) : 0;
+  int64_t artsId = op ? idRegistry.getOrCreate(op) : 0;
 
   /// Compute affected alloc and runtime DB IDs (PGO-style mapping)
   int64_t allocId = 0;
@@ -166,7 +254,7 @@ void HeuristicsConfig::recordDecision(llvm::StringRef heuristic, bool applied,
               DatablockUtils::getUnderlyingDbAlloc(acquireOp.getSourcePtr())) {
         /// Use getOrCreate to ensure the alloc has an ID (it may not be
         /// assigned yet if we're in the middle of CreateDbs pass)
-        allocId = idRegistry_.getOrCreate(allocOp);
+        allocId = idRegistry.getOrCreate(allocOp);
 
         /// Compute affected DB IDs based on offsets and sizes
         /// Runtime DB ID = allocId + offset (for 1D case)
@@ -222,9 +310,9 @@ void HeuristicsConfig::recordDecision(llvm::StringRef heuristic, bool applied,
     }
   }
 
-  decisions_.push_back({heuristic.str(), applied, rationale.str(), artsId,
-                        allocId, std::move(affectedDbIds), sourceLocation,
-                        inputs});
+  decisions.push_back({heuristic.str(), applied, rationale.str(), artsId,
+                       allocId, std::move(affectedDbIds), sourceLocation,
+                       inputs});
 
   ARTS_DEBUG("Recorded heuristic decision: "
              << heuristic << " applied=" << applied << " for ARTS ID " << artsId
@@ -232,38 +320,12 @@ void HeuristicsConfig::recordDecision(llvm::StringRef heuristic, bool applied,
 }
 
 llvm::ArrayRef<HeuristicDecision> HeuristicsConfig::getDecisions() const {
-  return decisions_;
+  return decisions;
 }
 
 //===----------------------------------------------------------------------===//
-// H1: Unified Partitioning Heuristics Registry
+// H1: Partitioning Mode Evaluation
 //===----------------------------------------------------------------------===//
-
-void HeuristicsConfig::initializeDefaultHeuristics() {
-  /// Get all default partitioning heuristics from factory
-  auto defaults = createDefaultPartitioningHeuristics();
-  for (auto &h : defaults) {
-    registerHeuristic(std::move(h));
-  }
-
-  /// Sort by priority (highest first)
-  llvm::sort(partitioningHeuristics_, [](const auto &a, const auto &b) {
-    return a->getPriority() > b->getPriority();
-  });
-
-  ARTS_DEBUG("Registered " << partitioningHeuristics_.size()
-                           << " partitioning heuristics");
-  for (const auto &h : partitioningHeuristics_) {
-    ARTS_DEBUG("  - " << h->getName() << " (priority=" << h->getPriority()
-                      << "): " << h->getDescription());
-  }
-}
-
-void HeuristicsConfig::registerHeuristic(
-    std::unique_ptr<PartitioningHeuristic> h) {
-  ARTS_DEBUG("Registering heuristic: " << h->getName());
-  partitioningHeuristics_.push_back(std::move(h));
-}
 
 PartitioningDecision
 HeuristicsConfig::getPartitioningMode(const PartitioningContext &ctx) {
@@ -272,55 +334,49 @@ HeuristicsConfig::getPartitioningMode(const PartitioningContext &ctx) {
              << ", pinnedDimCount=" << ctx.pinnedDimCount
              << ", accessMode=" << static_cast<int>(ctx.accessMode));
 
-  /// Evaluate heuristics in priority order
-  for (const auto &heuristic : partitioningHeuristics_) {
-    auto decision = heuristic->evaluate(ctx);
-    if (decision.has_value()) {
-      /// Record the decision for diagnostics
-      recordDecision(heuristic->getName(), true, decision->rationale, nullptr,
-                     {});
-      ARTS_DEBUG("Heuristic " << heuristic->getName()
-                              << " applied: " << decision->rationale);
-      return *decision;
-    }
-  }
+  /// Call the unified heuristics evaluation function
+  auto decision =
+      evaluatePartitioningHeuristics(ctx, &machine, partitionFallback);
 
-  /// Fallback: coarse allocation
-  PartitioningDecision fallback = PartitioningDecision::coarse(
-      ctx, "No heuristic applied, using coarse fallback");
-  recordDecision("Fallback", true, fallback.rationale, nullptr, {});
-  ARTS_DEBUG("Fallback applied: " << fallback.rationale);
-  return fallback;
+  /// Record the decision for diagnostics (extract heuristic ID from rationale)
+  std::string heuristicId = extractHeuristicId(decision.rationale);
+  recordDecision(heuristicId, true, decision.rationale, nullptr, {});
+
+  ARTS_DEBUG("Heuristic " << heuristicId << " applied: " << decision.rationale);
+  return decision;
 }
+
+//===----------------------------------------------------------------------===//
+// JSON Export for ArtsMate
+//===----------------------------------------------------------------------===//
 
 void HeuristicsConfig::exportDecisionsToJson(llvm::json::OStream &J) const {
   J.attributeArray("heuristic_decisions", [&]() {
-    for (const auto &decision : decisions_) {
+    for (const auto &d : decisions) {
       J.object([&]() {
-        J.attribute("heuristic", decision.heuristic);
-        J.attribute("applied", decision.applied);
-        J.attribute("rationale", decision.rationale);
-        J.attribute("target_id", decision.affectedArtsId);
+        J.attribute("heuristic", d.heuristic);
+        J.attribute("applied", d.applied);
+        J.attribute("rationale", d.rationale);
+        J.attribute("target_id", d.affectedArtsId);
 
-        /// PGO-style mapping: compile-time → runtime correlation
-        if (decision.affectedAllocId != 0)
-          J.attribute("alloc_id", decision.affectedAllocId);
+        /// PGO-style mapping: compile-time -> runtime correlation
+        if (d.affectedAllocId != 0)
+          J.attribute("alloc_id", d.affectedAllocId);
 
-        if (!decision.affectedDbIds.empty()) {
+        if (!d.affectedDbIds.empty()) {
           J.attributeArray("affected_db_ids", [&]() {
-            for (int64_t id : decision.affectedDbIds)
+            for (int64_t id : d.affectedDbIds)
               J.value(id);
           });
         }
 
-        if (!decision.sourceLocation.empty())
-          J.attribute("source_location", decision.sourceLocation);
+        if (!d.sourceLocation.empty())
+          J.attribute("source_location", d.sourceLocation);
 
-        if (!decision.costModelInputs.empty()) {
+        if (!d.costModelInputs.empty()) {
           J.attributeObject("parameters", [&]() {
-            for (const auto &input : decision.costModelInputs) {
+            for (const auto &input : d.costModelInputs)
               J.attribute(input.first(), input.second);
-            }
           });
         }
       });

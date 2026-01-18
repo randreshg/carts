@@ -23,7 +23,7 @@ int main(int argc, char **argv) {
   int kernel_size = 5;
   int num_tasks = 4;
 
-  // Parse command line arguments
+  /// Parse command line arguments
   for (int i = 1; i < argc; ++i) {
     if (strcmp(argv[i], "-n") == 0 && i + 1 < argc) {
       matrix_size = atoi(argv[++i]);
@@ -41,7 +41,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  // Validate parameters
+  /// Validate parameters
   if (matrix_size <= 0 || kernel_size <= 0 || num_tasks <= 0) {
     printf("Error: All sizes must be positive\n");
     return EXIT_FAILURE;
@@ -64,7 +64,7 @@ int main(int argc, char **argv) {
   printf("  Output size: %dx%d\n", output_size, output_size);
   printf("  Initializing with random numbers\n\n");
 
-  // Dynamic memory allocation
+  /// Dynamic memory allocation
   double **A = new double *[matrix_size];
   double **Kernel = new double *[kernel_size];
   double **C_parallel = new double *[output_size];
@@ -82,22 +82,22 @@ int main(int argc, char **argv) {
   /// Initialize matrices with random numbers
   printf("Initializing matrices with random numbers...\n");
 
-  // Seed random number generator
+  /// Seed random number generator
   srand(time(NULL));
 
-  // Initialize matrix A with random values between 0.0 and 1.0
+  /// Initialize matrix A with random values between 0.0 and 1.0
   for (int i = 0; i < matrix_size; ++i) {
     for (int j = 0; j < matrix_size; ++j)
       A[i][j] = (double)rand() / RAND_MAX;
   }
 
-  // Initialize kernel with random values between -1.0 and 1.0
+  /// Initialize kernel with random values between -1.0 and 1.0
   for (int i = 0; i < kernel_size; ++i) {
     for (int j = 0; j < kernel_size; ++j)
       Kernel[i][j] = 2.0 * ((double)rand() / RAND_MAX) - 1.0;
   }
 
-  // Initialize output matrices to zero
+  /// Initialize output matrices to zero
   for (int i = 0; i < output_size; ++i) {
     for (int j = 0; j < output_size; ++j) {
       C_parallel[i][j] = 0.0;
@@ -113,7 +113,6 @@ int main(int argc, char **argv) {
       printf("Starting tasks\n");
       for (int task_id = 0; task_id < num_tasks; ++task_id) {
         const int start_row = task_id * block_size;
-// printf("Task %d starting at row %d\n", task_id + 1, start_row);
 #pragma omp task firstprivate(start_row, task_id)
         {
           printf("Task %d running\n", task_id + 1);
@@ -170,7 +169,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  // Memory cleanup
+  /// Memory cleanup
   for (int i = 0; i < matrix_size; ++i)
     delete[] A[i];
 
@@ -186,9 +185,8 @@ int main(int argc, char **argv) {
   delete[] C_parallel;
   delete[] C_serial;
 
-  if (errors == 0) {
+  if (errors == 0)
     CARTS_TEST_PASS();
-  } else {
+  else
     CARTS_TEST_FAIL("convolution verification failed");
-  }
 }

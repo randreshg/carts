@@ -183,7 +183,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
     case omp::ClauseTaskDepend::taskdependinout:
       return ArtsMode::inout;
     }
-    llvm_unreachable("Unknown ClauseTaskDepend value");
+    ARTS_UNREACHABLE("Unknown ClauseTaskDepend value");
   }
 
   LogicalResult collectTaskDependencies(SmallVector<Value> &deps,

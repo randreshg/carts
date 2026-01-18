@@ -3,12 +3,14 @@
 This guide teaches agents and developers how to understand, run, and debug CARTS optimizations. It covers the complete pipeline from C/C++ source to ARTS runtime executable.
 
 ## Table of Contents
+
 1. [Quick Reference Card](#quick-reference-card)
 2. [Pipeline Overview](#pipeline-overview)
 3. [Pipeline Stages](#pipeline-stages)
-4. [Pass-Level Debug Reference](#pass-level-debug-reference)
-5. [Common Issues & Troubleshooting](#common-issues--troubleshooting)
-6. [Example Workflows](#example-workflows)
+4. [Partition Mode Algorithm](#partition-mode-algorithm)
+5. [Pass-Level Debug Reference](#pass-level-debug-reference)
+6. [Common Issues & Troubleshooting](#common-issues--troubleshooting)
+7. [Example Workflows](#example-workflows)
 
 ---
 
@@ -45,8 +47,8 @@ carts execute <file>.c -O3 --diagnose
 
 ### Pipeline Stage Names (for --stop-at)
 
-| Stage | Name | Purpose |
-|-------|------|---------|
+| Stage | Name                   | Purpose                      |
+|-------|------------------------|------------------------------|
 | 1 | `canonicalize-memrefs` | Normalize memref operations |
 | 2 | `collect-metadata` | Extract loop/array metadata |
 | 3 | `initial-cleanup` | Remove dead code |
@@ -85,70 +87,69 @@ carts execute <file>.c -O3 --diagnose
 
 ## Pipeline Overview
 
-```
-C/C++ Source (.c/.cpp)
-        │
-        ▼ carts cgeist (Polygeist frontend)
-┌─────────────────────────────────────────────────────────────────┐
-│                      MLIR PIPELINE                              │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │ PHASE 1: NORMALIZATION & ANALYSIS                       │   │
-│  ├─────────────────────────────────────────────────────────┤   │
-│  │ 1. canonicalize-memrefs  │ Normalize memref operations  │   │
-│  │ 2. collect-metadata      │ Extract loop/array metadata  │   │
-│  │ 3. initial-cleanup       │ Dead code elimination        │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                         │                                       │
-│                         ▼                                       │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │ PHASE 2: OPENMP → ARTS TRANSFORMATION                   │   │
-│  ├─────────────────────────────────────────────────────────┤   │
-│  │ 4. openmp-to-arts        │ OMP parallel → ARTS EDTs     │   │
-│  │ 5. edt-transforms        │ EDT structure optimization   │   │
-│  │ 6. loop-reordering       │ Cache-optimal loop order     │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                         │                                       │
-│                         ▼                                       │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │ PHASE 3: DATABLOCK MANAGEMENT                           │   │
-│  ├─────────────────────────────────────────────────────────┤   │
-│  │ 7. create-dbs            │ Create DataBlock allocations │   │
-│  │ 8. db-opt                │ Optimize DB access modes     │   │
-│  │ 9. edt-opt               │ EDT fusion & optimization    │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                         │                                       │
-│                         ▼                                       │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │ PHASE 4: CONCURRENCY & SYNCHRONIZATION                  │   │
-│  ├─────────────────────────────────────────────────────────┤   │
-│  │ 10. concurrency          │ Build EDT concurrency graph  │   │
-│  │ 11. concurrency-opt      │ DB partitioning & twin-diff  │   │
-│  │ 12. epochs               │ Epoch synchronization        │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                         │                                       │
-│                         ▼                                       │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │ PHASE 5: LOWERING TO LLVM                               │   │
-│  ├─────────────────────────────────────────────────────────┤   │
-│  │ 13. pre-lowering         │ EDT/DB/Epoch lowering        │   │
-│  │ 14. arts-to-llvm         │ Final ARTS → LLVM conversion │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-        │
-        ▼ --emit-llvm
-┌─────────────────────────────────────────────────────────────────┐
-│                   POST-LOWERING OPTIMIZATIONS                   │
-├─────────────────────────────────────────────────────────────────┤
-│ • AliasScopeGen           │ LLVM alias metadata for vectorizer │
-│ • LoopVectorizationHints  │ LLVM loop hints (!llvm.loop)       │
-│ • PrefetchHints           │ Software prefetch intrinsics       │
-└─────────────────────────────────────────────────────────────────┘
-        │
-        ▼
-    LLVM IR (.ll) → Executable
+```mermaid
+flowchart TB
+  SRC["C/C++ Source (.c/.cpp)"]
+  CG["carts cgeist<br/>Polygeist frontend"]
+
+  subgraph MLIR["MLIR pipeline"]
+    direction TB
+
+    subgraph P1["Phase 1: Normalization & Analysis"]
+      direction TB
+      S1["1) canonicalize-memrefs<br/>Normalize memref operations"]
+      S2["2) collect-metadata<br/>Extract loop/array metadata"]
+      S3["3) initial-cleanup<br/>Dead code elimination"]
+      S1 --> S2 --> S3
+    end
+
+    subgraph P2["Phase 2: OpenMP → ARTS transformation"]
+      direction TB
+      S4["4) openmp-to-arts<br/>OMP parallel → ARTS EDTs"]
+      S5["5) edt-transforms<br/>EDT structure optimization"]
+      S6["6) loop-reordering<br/>Cache-optimal loop order"]
+      S4 --> S5 --> S6
+    end
+
+    subgraph P3["Phase 3: Datablock management"]
+      direction TB
+      S7["7) create-dbs<br/>Create DataBlock allocations"]
+      S8["8) db-opt<br/>Optimize DB access modes"]
+      S9["9) edt-opt<br/>EDT fusion & optimization"]
+      S7 --> S8 --> S9
+    end
+
+    subgraph P4["Phase 4: Concurrency & synchronization"]
+      direction TB
+      S10["10) concurrency<br/>Build EDT concurrency graph"]
+      S11["11) concurrency-opt<br/>DB partitioning & twin-diff"]
+      S12["12) epochs<br/>Epoch synchronization"]
+      S10 --> S11 --> S12
+    end
+
+    subgraph P5["Phase 5: Lowering to LLVM"]
+      direction TB
+      S13["13) pre-lowering<br/>EDT/DB/Epoch lowering"]
+      S14["14) arts-to-llvm<br/>Final ARTS → LLVM conversion"]
+      S13 --> S14
+    end
+
+    P1 --> P2 --> P3 --> P4 --> P5
+  end
+
+  EMIT["--emit-llvm"]
+
+  subgraph POST["Post-lowering optimizations"]
+    direction TB
+    O1["AliasScopeGen<br/>LLVM alias metadata for vectorizer"]
+    O2["LoopVectorizationHints<br/>LLVM loop hints (!llvm.loop)"]
+    O3["PrefetchHints<br/>Software prefetch intrinsics"]
+    O1 --> O2 --> O3
+  end
+
+  OUT["LLVM IR (.ll) → Executable"]
+
+  SRC --> CG --> MLIR --> EMIT --> POST --> OUT
 ```
 
 ### Key Concepts
@@ -221,7 +222,8 @@ carts run <file>_seq.mlir --collect-metadata --debug-only=collect_metadata 2>&1
 - Memory access patterns for partitioning decisions
 
 **Debug Output:**
-```
+
+```text
 [DEBUG] [collect_metadata] Collecting loop metadata...
 [DEBUG] [collect_metadata] Collecting memref metadata...
 ```
@@ -264,8 +266,9 @@ carts run <file>.mlir --stop-after=openmp-to-arts --debug-only=convert_openmp_to
 - `CSE` - Common subexpression elimination
 
 **Transformations:**
-| OpenMP | ARTS |
-|--------|------|
+
+| OpenMP            | ARTS                          |
+|-------------------|-------------------------------|
 | `omp.parallel` | `arts.edt<parallel>` |
 | `omp.task` | `arts.edt<task>` |
 | `omp.wsloop` | `arts.for` |
@@ -551,9 +554,11 @@ carts run <file>.mlir --stop-after=concurrency-opt --debug-only=db,db_partitioni
 
 | Heuristic | Condition | Result |
 |-----------|-----------|--------|
-| H1 | Read-only on single node | Keep coarse-grained |
-| H2 | Cost model (innerBytes vs minInnerBytes) | Partition if beneficial |
-| Stencil | Detected stencil pattern | Generate bounds checks |
+| H1.1 | Read-only on single node | Keep coarse-grained |
+| H1.2 | Mixed access patterns | Chunked partitioning |
+| H1.3 | Stencil/indexed patterns | Element-wise partitioning |
+| H1.4 | Multi-node systems | Fine-grained partitioning |
+| H1.5 | Non-uniform access | Keep coarse-grained |
 
 **Twin-Diff Policy:**
 - **DEFAULT:** `twin_diff = TRUE` (safe, handles potential overlap)
@@ -569,6 +574,508 @@ carts run <file>.mlir --stop-after=concurrency-opt --debug-only=db,db_partitioni
 %local_idx = arith.remui %global_idx, %chunk_size
 %ref = arts.db_ref %ptr[%chunk_idx] : memref<?xmemref<T>> -> memref<T>
 memref.load/store %ref[%local_idx]
+```
+
+---
+
+## Partition Mode Algorithm
+
+This section provides a comprehensive guide to how CARTS determines the partitioning strategy for DataBlocks. The algorithm spans three compilation stages and involves capability analysis, heuristic decision-making, and IR transformation.
+
+### Overview
+
+Partition mode determines how a DataBlock's data is distributed:
+
+| Mode | Allocation Structure | Use Case |
+|------|---------------------|----------|
+| **Coarse** | `sizes=[1], elementSizes=[N]` | Single DB for entire array |
+| **Chunked** | `sizes=[numChunks], elementSizes=[chunkSize]` | Loop-based parallel access |
+| **ElementWise** | `sizes=[N], elementSizes=[1]` | Fine-grained from depend clauses |
+| **Stencil** | `sizes=[numChunks], elementSizes=[chunkSize+halo]` | Stencil patterns with halos |
+
+### Master Flowchart: Three-Stage Partition Mode Assignment
+
+```mermaid
+flowchart TB
+    subgraph Stage7["Stage 7: CreateDbs"]
+        direction TB
+        S7_1[Identify memrefs escaping to parallel EDTs]
+        S7_2{Has DbControlOps<br/>from depend clauses?}
+        S7_3[Extract indices from<br/>depend clause patterns]
+        S7_4{Indices match<br/>access patterns?}
+        S7_5["Set partition=fine_grained<br/>canElementWise=true"]
+        S7_6{Has chunk offsets/sizes<br/>in depend clause?}
+        S7_7["Set partition=chunked<br/>canChunked=true"]
+        S7_8["Set partition=coarse<br/>default"]
+        S7_9[Create DbAllocOp + DbAcquireOps]
+
+        S7_1 --> S7_2
+        S7_2 -->|Yes| S7_3
+        S7_2 -->|No| S7_8
+        S7_3 --> S7_4
+        S7_4 -->|Yes| S7_5
+        S7_4 -->|No| S7_6
+        S7_5 --> S7_9
+        S7_6 -->|Yes| S7_7
+        S7_6 -->|No| S7_8
+        S7_7 --> S7_9
+        S7_8 --> S7_9
+    end
+
+    subgraph Stage10["Stage 10: ForLowering"]
+        direction TB
+        S10_1[Find arts.for inside parallel EDT]
+        S10_2[Compute chunk_offset and chunk_size<br/>from loop bounds]
+        S10_3[Clone DbAcquireOp for worker task]
+        S10_4["Add chunk hints to acquire:<br/>chunk_hint(%chunk_index, %chunk_size)"]
+        S10_5["Set partition=chunked<br/>on cloned acquire"]
+
+        S10_1 --> S10_2 --> S10_3 --> S10_4 --> S10_5
+    end
+
+    subgraph Stage11["Stage 11: DbPartitioning"]
+        direction TB
+        S11_1[For each DbAllocOp]
+        S11_2{Already partitioned?<br/>partition != coarse}
+        S11_3[Skip - keep existing]
+        S11_4[Gather all child DbAcquireOps]
+        S11_5[Build PartitioningContext<br/>from per-acquire analysis]
+        S11_6[Query Heuristics H1.1-H1.5]
+        S11_7[Apply DbRewriter]
+        S11_8[Update allocation sizes]
+
+        S11_1 --> S11_2
+        S11_2 -->|Yes| S11_3
+        S11_2 -->|No| S11_4
+        S11_4 --> S11_5 --> S11_6 --> S11_7 --> S11_8
+    end
+
+    Stage7 --> Stage10 --> Stage11
+```
+
+---
+
+### Stage 7: CreateDbs - Initial Partition Mode
+
+CreateDbs analyzes OpenMP `depend` clauses (converted to DbControlOps) to determine initial partitioning capability.
+
+#### DbControlOp Analysis
+
+```c
+// OpenMP source with depend clause
+#pragma omp task depend(inout: A[i])
+{
+    A[i] = compute(A[i]);
+}
+```
+
+Becomes:
+```mlir
+// DbControlOp carries the index pattern
+arts.db_control %A_ptr mode(inout) indices(%i)
+```
+
+#### CreateDbs Decision Tree
+
+```mermaid
+flowchart TB
+    START[DbControlOps collected for memref]
+
+    Q1{All accesses have<br/>consistent indices?}
+    Q2{Pinned dim count > 0?}
+    Q3{Has chunk offsets/sizes?}
+
+    R1["partition = fine_grained<br/>canElementWise = true"]
+    R2["partition = chunked<br/>canChunked = true"]
+    R3["partition = coarse<br/>no structural info"]
+
+    START --> Q1
+    Q1 -->|Yes| Q2
+    Q1 -->|No| R3
+    Q2 -->|Yes| R1
+    Q2 -->|No| Q3
+    Q3 -->|Yes| R2
+    Q3 -->|No| R3
+```
+
+**Key Code Location**: `lib/arts/Passes/Transformations/CreateDbs.cpp:595-750`
+
+```cpp
+// Build PartitioningContext from DbControlOp analysis
+ctx.canElementWise = !isRankZero && accessPatternInfo.isConsistent &&
+                     accessPatternInfo.pinnedDimCount > 0 &&
+                     accessPatternInfo.allAccessesHaveIndices;
+ctx.canChunked = !isRankZero && accessPatternInfo.hasChunkDeps &&
+                 accessPatternInfo.chunkSizesAreConsistent;
+
+// Set partition attribute on DbAllocOp
+PromotionMode promotionMode = decision.isChunked() ? PromotionMode::chunked
+                              : decision.isFineGrained() ? PromotionMode::fine_grained
+                              : PromotionMode::coarse;
+setPartitionMode(dbAllocOp, promotionMode);
+```
+
+---
+
+### Stage 10: ForLowering - Chunk Hint Propagation
+
+When ForLowering encounters an `arts.for` loop inside a parallel EDT, it creates worker tasks and propagates chunk information via **chunk_hint(index, size)**.
+
+#### Chunk Hint Mechanism
+
+```mermaid
+flowchart LR
+    subgraph Before["Before ForLowering"]
+        FOR["arts.for %lb to %ub step %step"]
+        ACQ1["arts.db_acquire %db<br/>partition=coarse"]
+    end
+
+    subgraph After["After ForLowering"]
+        DISPATCH[Worker dispatch EDT]
+        TASK[Worker task EDT]
+        ACQ2["arts.db_acquire %db<br/>chunk_hint(%chunk_index, %chunk_size)<br/>partition=chunked"]
+    end
+
+    Before --> After
+```
+
+#### Chunk Index/Size Computation
+
+```cpp
+// ForLowering.cpp:1685-1711
+// Compute chunk hints from loop iteration space
+// chunk_index = which chunk this worker handles (NOT element offset!)
+// chunk_size = elements per chunk
+Value chunkIndex = chunkOffset;
+Value chunkSizeVal = loopInfo.workerIterationCount;
+
+// If loop has step != 1, scale chunk_size to element space
+if (!forOp.getStep().empty()) {
+    Value step = forOp.getStep()[0];
+    chunkSizeVal = AC->create<arith::MulIOp>(loc, loopInfo.workerIterationCount, step);
+}
+
+// Create acquire with chunk hints
+auto chunkAcqOp = AC->create<DbAcquireOp>(loc, mode, guid, ptr, elementType,
+    indices, chunkOffsets, chunkSizes,
+    /*chunkIndex=*/chunkIndex,
+    /*chunkSize=*/chunkSizeVal);
+
+// Mark acquire as having chunked structure
+setPartitionMode(chunkAcqOp.getOperation(), PromotionMode::chunked);
+```
+
+**Key Insight**: The `partition=chunked` attribute on acquires signals to DbPartitioning that this acquire has structural information for chunked partitioning.
+
+#### ChunkHintInfo Semantics
+
+The `chunk_hint(index, size)` operands have specific semantics that are crucial for correct partitioning:
+
+| Operand | Meaning | Example |
+|---------|---------|---------|
+| `chunk_index` | Which chunk this worker handles (0, 1, 2, ...) | Worker 0 → chunk 0 |
+| `chunk_size` | Elements per chunk (must be consistent across acquires) | 250 elements |
+
+**Critical Distinction: Chunk Index vs Element Offset**
+
+```
+Given: 1000 elements split across 4 workers with chunk_size=250
+
+chunk_index=0 → elements [0, 250)      (NOT element offset 0!)
+chunk_index=1 → elements [250, 500)    (NOT element offset 1!)
+chunk_index=2 → elements [500, 750)
+chunk_index=3 → elements [750, 1000)
+
+The chunk_index is a CHUNK number, not an element offset.
+Element offset = chunk_index * chunk_size
+```
+
+**Chunk Size Consistency Check**
+
+DbPartitioning validates that all acquires for the same allocation have consistent `chunk_size`:
+
+```cpp
+// DbPartitioning.cpp:82-92
+bool isConsistentWith(const AcquirePartitionInfo &other) const {
+    if (mode != other.mode)
+        return false;
+    // For Chunked mode: chunk_sizes must be same SSA value OR equal constants
+    if (mode == PartitionMode::Chunked &&
+        chunkSize != other.chunkSize) {
+        int64_t lhs = 0, rhs = 0;
+        bool lhsConst = ValueUtils::getConstantIndex(chunkSize, lhs);
+        bool rhsConst = ValueUtils::getConstantIndex(other.chunkSize, rhs);
+        if (!(lhsConst && rhsConst && lhs == rhs))
+            return false;  // Sizes don't agree → fall back to coarse/fine
+    }
+    return true;
+}
+```
+
+**Fallback When Chunk Sizes Don't Agree**
+
+If chunk sizes are inconsistent, partitioning falls back to the `--partition-fallback` CLI option:
+- `--partition-fallback=coarse` (default): Keep coarse allocation
+- `--partition-fallback=fine`: Use element-wise partitioning
+
+---
+
+### Stage 11: DbPartitioning - Final Decision Algorithm
+
+DbPartitioning is the final decision point. It analyzes all acquires for an allocation and applies heuristics to choose the optimal partitioning.
+
+#### Per-Acquire Analysis Flowchart
+
+```mermaid
+flowchart TB
+    START[For each DbAcquireOp]
+
+    Q1{Has partition attribute<br/>from ForLowering/CreateDbs?}
+    Q2{partition == chunked?}
+    Q3{Offset depends on<br/>loop IV?}
+    Q4{partition == fine_grained?}
+
+    R1["thisAcquireCanChunked = true<br/>Send chunk with index"]
+    R2["thisAcquireCanChunked = true<br/>needsFullRange = true<br/>indirect access"]
+    R3["thisAcquireCanElementWise = true"]
+    R4["Neither capability<br/>coarse fallback"]
+
+    CHECK["Validate with canPartitionWithOffset()"]
+
+    START --> Q1
+    Q1 -->|Yes| Q2
+    Q1 -->|No| R4
+    Q2 -->|Yes| CHECK
+    Q2 -->|No| Q4
+    CHECK --> Q3
+    Q3 -->|Yes| R1
+    Q3 -->|No| R2
+    Q4 -->|Yes| R3
+    Q4 -->|No| R4
+```
+
+#### `canPartitionWithOffset()` - IV Dependence Check
+
+This critical function determines if an acquire's access pattern is derived from the partition offset:
+
+```cpp
+// DbAcquireNode.cpp:923-1001
+bool DbAcquireNode::canPartitionWithOffset(Value offset) {
+    // Zero offset always valid (full array access)
+    if (ValueUtils::isZeroConstant(offset))
+        return true;
+
+    // Collect all memory access operations
+    DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+    collectAccessOperations(dbRefToMemOps);
+
+    for (auto &[dbRef, memOps] : dbRefToMemOps) {
+        for (Operation *memOp : memOps) {
+            Value accessIndex = getFirstAccessIndex(memOp);
+
+            // Check if access index is derived from partition offset
+            // e.g., A[chunk_offset + local_idx] → offset appears in access
+            if (!isIndexDerivedFromOffset(accessIndex, offset))
+                return false;
+        }
+    }
+    return true;
+}
+```
+
+**What This Validates**:
+- If offset = `%chunk_start` and access is `A[%chunk_start + %local]` → **Valid** (IV-dependent)
+- If offset = `%chunk_start` but access is `A[nodelist[%i]]` → **Invalid** (indirect, needs full-range)
+
+#### Building PartitioningContext
+
+```cpp
+// DbPartitioning.cpp:970-1030
+for each DbAcquireNode {
+    // Read partition attribute from acquire (set by ForLowering/CreateDbs)
+    auto acquireMode = getPartitionMode(acquire.getOperation());
+
+    bool thisAcquireCanChunked =
+        acquireMode && *acquireMode == PromotionMode::chunked;
+    bool thisAcquireCanElementWise =
+        acquireMode && *acquireMode == PromotionMode::fine_grained;
+
+    // Validate chunked capability with IV dependence check
+    if (thisAcquireCanChunked) {
+        Value offsetForCheck = getPartitionOffset(acqNode, &acqInfo);
+        if (offsetForCheck && !acqNode->canPartitionWithOffset(offsetForCheck)) {
+            if (hasIndirectAccess) {
+                // Indirect access: still chunked but needs full-range
+                thisAcquireCanChunked = true;  // allocation chunked
+                needsFullRange = true;          // this acquire gets all chunks
+            } else {
+                // Direct access but offset not derived from access
+                thisAcquireCanChunked = false;  // fall back to coarse
+            }
+        }
+    }
+
+    // Build AcquireInfo for heuristic voting
+    AcquireInfo info;
+    info.canChunked = thisAcquireCanChunked;
+    info.canElementWise = thisAcquireCanElementWise;
+    ctx.acquires.push_back(info);
+}
+
+// Aggregate capabilities via voting
+ctx.canChunked = ctx.anyCanChunked();
+ctx.canElementWise = ctx.anyCanElementWise();
+```
+
+---
+
+### Heuristics Decision Flow
+
+```mermaid
+flowchart TB
+    CTX[PartitioningContext built]
+
+    subgraph Heuristics["Heuristic Evaluation (Priority Order)"]
+        H11["H1.1: ReadOnlySingleNode<br/>Priority: 100"]
+        H12["H1.2: MixedAccessVersioning<br/>Priority: 98"]
+        H13["H1.3: StencilPattern<br/>Priority: 95"]
+        H14["H1.4: MultiNode<br/>Priority: 90"]
+        H15["H1.5: AccessUniformity<br/>Priority: 80"]
+        FALLBACK["Fallback: Coarse"]
+
+        H11 --> H12 --> H13 --> H14 --> H15 --> FALLBACK
+    end
+
+    CTX --> Heuristics
+
+    Heuristics --> DECISION[PartitioningDecision]
+```
+
+#### Heuristics Summary Table
+
+| ID | Priority | Name | Condition | Result |
+|----|----------|------|-----------|--------|
+| H1.1 | 100 | ReadOnlySingleNode | `singleNode && allReadOnly()` | **Coarse** |
+| H1.2 | 98 | MixedAccessVersioning | `anyCanChunked() && anyCanElementWise()` | **Chunked** |
+| H1.3 | 95 | StencilPattern | `accessPatterns.hasStencil` | **Stencil** |
+| H1.4 | 90 | MultiNode | `multiNode && anyCanElementWise()` | **ElementWise** |
+| H1.5 | 80 | AccessUniformity | `!isUniformAccess && !anyCanElementWise()` | **Coarse** |
+
+---
+
+### Mixed Mode: Chunked + Full-Range Acquires
+
+When both IV-dependent and indirect accesses exist for the same allocation:
+
+```mermaid
+flowchart TB
+    subgraph Allocation["Chunked Allocation"]
+        ALLOC["sizes=[numChunks]<br/>elementSizes=[chunkSize]"]
+    end
+
+    subgraph Workers["Worker Tasks (IV-dependent)"]
+        W1["Worker 0: acquire offset=0, size=1"]
+        W2["Worker 1: acquire offset=1, size=1"]
+        WN["Worker N: acquire offset=N, size=1"]
+    end
+
+    subgraph Indirect["Indirect Reader (Full-Range)"]
+        IR["Indirect read: acquire offset=0, size=numChunks<br/>Access via: data[nodelist[i]]"]
+    end
+
+    Allocation --> Workers
+    Allocation --> Indirect
+```
+
+**Example: LULESH-style nodelist pattern**
+
+```c
+// Worker writes (IV-dependent) → chunked with index
+for (int e = chunk_start; e < chunk_end; e++) {
+    elemData[e] = compute(...);  // Direct: A[chunk_start + local]
+}
+
+// Indirect reads (not IV-dependent) → full-range acquire
+for (int e = 0; e < numElems; e++) {
+    for (int n = 0; n < 4; n++) {
+        int nodeIdx = nodelist[e*4 + n];  // Indirect index
+        nodeData[nodeIdx] += ...;          // Need all of nodeData
+    }
+}
+```
+
+---
+
+### Heuristics Architecture Assessment
+
+#### Current Structure
+
+```
+include/arts/Analysis/Heuristics/
+├── HeuristicBase.h              # Abstract base (name, priority, description)
+├── PartitioningHeuristics.h     # 6 concrete heuristic classes
+└── TwinDiffHeuristics.h         # H4 structures (disabled)
+
+lib/arts/Analysis/
+├── HeuristicsConfig.h           # Registry + thresholds
+├── HeuristicsConfig.cpp         # ~300 lines: registry, evaluation, recording
+└── Heuristics/
+    └── PartitioningHeuristics.cpp  # H1.x implementations
+```
+
+#### Is It Overengineered?
+
+**Assessment**: Moderately complex but justified for extensibility.
+
+| Aspect | Current | Assessment |
+|--------|---------|------------|
+| LOC | ~1,000 total | Reasonable for decision system |
+| Classes | 6 heuristics + base | Small, manageable |
+| Context fields | 16 in PartitioningContext | Appropriate for complex decisions |
+| Evaluation | Linear O(n), n=6 | Very fast |
+
+**Why NOT overengineered**:
+1. **Extensibility**: New heuristics (H1.7+) can be added by deriving from `PartitioningHeuristic`
+2. **Separation**: Decision logic separate from application logic (DbRewriter)
+3. **Diagnostics**: `recordDecision()` enables PGO-style feedback
+
+**Simplification Opportunity**: Could consolidate H1.1-H1.5 into a single decision function for simpler codebases, but current architecture supports future complexity.
+
+---
+
+### Key Code References
+
+| Stage | File | Key Lines | Purpose |
+|-------|------|-----------|---------|
+| CreateDbs | `lib/arts/Passes/Transformations/CreateDbs.cpp` | 595-750 | Initial partition mode |
+| ForLowering | `lib/arts/Passes/Transformations/ForLowering.cpp` | 1685-1711 | Chunk hint propagation |
+| DbPartitioning | `lib/arts/Passes/Optimizations/DbPartitioning.cpp` | 970-1030 | Per-acquire analysis |
+| DbPartitioning | `lib/arts/Passes/Optimizations/DbPartitioning.cpp` | 1032-1061 | Context aggregation |
+| IV Check | `lib/arts/Analysis/Graphs/Db/DbAcquireNode.cpp` | 923-1001 | canPartitionWithOffset |
+| Heuristics | `lib/arts/Analysis/HeuristicsConfig.cpp` | 200-280 | getPartitioningMode |
+
+---
+
+### Twin-Diff Policy
+
+Twin-diff handles potential overlapping writes between workers.
+
+**Default**: `twin_diff = true` (safe, assumes overlap possible)
+
+**Disabled when proof exists**:
+
+| Proof Type | Condition | Source |
+|------------|-----------|--------|
+| `IndexedControl` | DbControlOps prove disjoint indices | CreateDbs |
+| `PartitionSuccess` | Partitioning proves disjoint chunks | DbPartitioning |
+| `AliasAnalysis` | Alias analysis proves no overlap | DbPartitioning |
+
+```cpp
+// DbPartitioning.cpp
+bool disjoint = allocNode->canProveNonOverlapping();
+if (disjoint) {
+    setTwinAttr(acqOp, TwinDiffProof::PartitionSuccess);
+}
 ```
 
 ---

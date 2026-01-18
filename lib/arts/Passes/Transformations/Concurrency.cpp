@@ -68,11 +68,6 @@ void ConcurrencyPass::runOnOperation() {
   /// Update runtime query operations based on EDT concurrency
   updateRuntimeQueryOperations();
 
-  /// Apply EDT and DB placement decisions to all functions
-  // module.walk([&](func::FuncOp func) {
-  //   applyPlacementDecisions(func);
-  // });
-
   ARTS_INFO_FOOTER(Concurrency);
   ARTS_DEBUG_REGION(module.dump(););
 }

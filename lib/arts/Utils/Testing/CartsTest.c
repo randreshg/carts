@@ -16,10 +16,10 @@ const char *carts_extract_test_name(const char *path) {
   if (!last_slash)
     return path;
 
-  // Find the "examples" directory marker
+  /// Find the "examples" directory marker
   const char *examples = strstr(path, "/examples/");
   if (examples) {
-    const char *start = examples + 10; // Skip "/examples/"
+    const char *start = examples + 10;
     size_t len = (size_t)(last_slash - start);
     if (len > 0 && len < sizeof(buf) - 1) {
       strncpy(buf, start, len);
@@ -28,7 +28,7 @@ const char *carts_extract_test_name(const char *path) {
     }
   }
 
-  // Fallback: return just the parent directory name
+  /// Fallback: return just the parent directory name
   const char *p = last_slash - 1;
   while (p > path && *p != '/')
     p--;

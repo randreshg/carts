@@ -45,36 +45,24 @@ inline void setArtsId(Operation *op, int64_t id) {
   op->setAttr(AttrNames::Operation::ArtsId, IntegerAttr::get(type, id));
 }
 
-/// Helper accessors for arts.partition attribute (PromotionMode).
-inline std::optional<PromotionMode> getPartitionMode(Operation *op) {
+/// Helper accessors for arts.partition attribute (PartitionMode).
+inline std::optional<PartitionMode> getPartitionMode(Operation *op) {
   if (!op)
     return std::nullopt;
   if (auto attr =
-          op->getAttrOfType<PromotionModeAttr>(AttrNames::Operation::Partition))
+          op->getAttrOfType<PartitionModeAttr>(AttrNames::Operation::Partition))
     return attr.getValue();
   return std::nullopt;
 }
 
-inline void setPartitionMode(Operation *op, PromotionMode mode) {
+inline void setPartitionMode(Operation *op, PartitionMode mode) {
   if (!op)
     return;
   op->setAttr(AttrNames::Operation::Partition,
-              PromotionModeAttr::get(op->getContext(), mode));
-}
-
-inline llvm::StringRef getPartitionModeLabel(PromotionMode mode) {
-  switch (mode) {
-  case PromotionMode::coarse:
-    return "coarse";
-  case PromotionMode::chunked:
-    return "chunked";
-  case PromotionMode::fine_grained:
-    return "fine_grained";
-  }
-  return "unknown";
+              PartitionModeAttr::get(op->getContext(), mode));
 }
 
 } // namespace arts
 } // namespace mlir
 
-#endif // CARTS_UTILS_OPERATIONATTRIBUTES_H
+#endif /// CARTS_UTILS_OPERATIONATTRIBUTES_H

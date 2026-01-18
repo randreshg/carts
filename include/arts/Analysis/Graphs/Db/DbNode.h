@@ -24,6 +24,7 @@ namespace arts {
 class DbAnalysis;
 class DbAcquireNode;
 class ArtsMetadataManager;
+class LoopNode;
 
 ////===----------------------------------------------------------------------===////
 /// DbAllocNode
@@ -57,60 +58,28 @@ public:
     return N->getKind() == NodeKind::DbAlloc;
   }
 
-  /// Returns true if the memref is accessed in parallel loops (or has
-  /// ForLowering partition hints) and is not a string datablock.
+  /// Utility methods
   bool isParallelFriendly() const;
-
-  /// Check if this allocation can be partitioned for parallel execution.
-  /// Validates allocation metadata and recursively checks all acquires.
-  /// @param useFineGrainedFallback If true, non-affine accesses use element-wise
-  ///        partitioning instead of blocking. Default: false (block non-affine).
-  bool canBePartitioned(bool useFineGrainedFallback = false);
-
-  /// Check if this allocation is already fine-grained
-  /// (all elementSizes are constant 1, meaning each datablock holds one
-  /// element)
-  bool isFineGrained() const;
-
-  /// Check if at most one acquire writes to this allocation.
-  /// If true, twin-diff is not needed (no write conflicts possible).
-  bool hasSingleWriter() const;
-
-  /// Check if any writer uses non-constant offset/size hints.
-  /// This implies multiple runtime writers may touch the same DB.
-  bool hasDynamicWriterOffsets() const;
-
-  /// Check if all acquires use worker-indexed pattern (array[workerId] size=1).
-  /// If true, all accesses are inherently disjoint.
-  bool allAcquiresWorkerIndexed() const;
-
-  /// Analyze if all acquires can be proven non-overlapping.
-  /// Uses multiple detection methods: alias analysis, partition hints,
-  /// worker-indexed patterns, and single-writer detection.
+  bool canBePartitioned();
   bool canProveNonOverlapping() const;
 
-  /// Collect acquire access patterns and summarize them at allocation level.
-  /// Returns AcquirePatternSummary (defined in DbAccessPattern.h)
-  /// @param useFineGrainedFallback If true, non-affine accesses mark hasIndexed
-  ///        to trigger element-wise partitioning via H1.5 heuristic.
-  AcquirePatternSummary summarizeAcquirePatterns(
-      bool useFineGrainedFallback = false) const;
-
-  /// Returns true if any acquire is stencil-like.
+  /// Patterns summary
+  AcquirePatternSummary summarizeAcquirePatterns() const;
   bool hasStencilAccess() const;
-
-  /// Returns true if allocation mixes different access patterns.
   bool hasMixedAccessPatterns() const;
 
   /// Analysis metadata
   uint64_t inCount = 0, outCount = 0;
   uint64_t beginIndex = 0, endIndex = 0;
-  bool isLongLived = false;
   uint64_t maxLoopDepth = 0;
-  uint64_t criticalSpan = 0, criticalPath = 0;
   unsigned long long totalAccessBytes = 0;
   uint64_t numAcquires = 0;
   bool isStringBacked = false;
+
+  /// Twin-diff overlap analysis
+  bool hasSingleWriter() const;
+  bool hasDynamicWriterOffsets() const;
+  bool allAcquiresWorkerIndexed() const;
 
 private:
   DbAllocOp dbAllocOp;
@@ -131,8 +100,6 @@ private:
 ////===----------------------------------------------------------------------===////
 class DbAcquireNode : public NodeBase {
 public:
-  /// AccessPattern enum is now defined in DbAccessPattern.h
-
   DbAcquireNode(DbAcquireOp op, NodeBase *parent, DbAllocNode *rootAlloc,
                 DbAnalysis *analysis, std::string initialHierId = "");
 
@@ -160,8 +127,7 @@ public:
   Value getUseInEdt() const { return useInEdt; }
 
   /// Collect access operations mapping DbRefOp to its memory operations.
-  /// All data accesses go through DbRefOp, this preserves that relationship.
-  /// This is the primary API for accessing memory operations.
+
   void collectAccessOperations(
       DenseMap<DbRefOp, SetVector<Operation *>> &dbRefToMemOps);
 
@@ -175,6 +141,7 @@ public:
   size_t countLoads();
   size_t countStores();
   bool hasIndirectAccess() const;
+  bool hasDirectAccess() const;
 
   DbAcquireOp getDbAcquireOp() const { return dbAcquireOp; }
   DbReleaseOp getDbReleaseOp() const { return dbReleaseOp; }
@@ -182,22 +149,11 @@ public:
   DbAcquireNode *getOrCreateAcquireNode(DbAcquireOp op);
   void forEachChildNode(const std::function<void(NodeBase *)> &fn) const;
 
-  /// Check if this acquire can be partitioned for parallel execution.
-  /// Validates EDT type, memory accesses, access patterns, and nested children.
-  /// @param useFineGrainedFallback If true, skip offset validation for non-affine
-  ///        accesses (element-wise partitioning doesn't need offset-based chunks).
-  bool canBePartitioned(bool useFineGrainedFallback = false);
+  /// Utility methods for partitioning
+  bool canBePartitioned();
+  bool hasValidEdtAndAccesses();
 
-  /// Check EDT type, memory accesses, and parallel loop metadata.
-  bool hasValidEdtAndAccesses(bool useFineGrainedFallback = false);
-
-  /// Extract chunk offset/size and validate access patterns.
-  /// @param useFineGrainedFallback If true, skip offset validation for non-affine
-  ///        accesses (element-wise partitioning doesn't need offset-based chunks).
-  bool computePartitionBounds(bool useFineGrainedFallback = false);
-
-  /// Check if array accesses use indices derived from the given offset.
-  /// Returns true if partitioning is safe (first index = offset + delta).
+  bool computePartitionBounds();
   bool canPartitionWithOffset(Value offset);
 
   LogicalResult computeChunkInfo(Value &chunkOffset, Value &chunkSize);
@@ -205,16 +161,14 @@ public:
                                           Value &chunkOffset, Value &chunkSize,
                                           Value *offsetForCheck = nullptr);
   LogicalResult computeChunkInfoFromHints(Value &chunkOffset, Value &chunkSize);
-  LogicalResult computeChunkInfoFromForLoop(ArrayRef<scf::ForOp> forLoops,
+  LogicalResult computeChunkInfoFromForLoop(ArrayRef<LoopNode *> loopNodes,
                                             Value &chunkOffset,
                                             Value &chunkSize,
                                             Value *offsetForCheck = nullptr);
 
-  /// StencilBounds struct is now defined in DbAccessPattern.h
-
   /// Get stencil bounds for this acquire (computed during canBePartitioned)
   const std::optional<StencilBounds> &getStencilBounds() const {
-    return stencilBounds_;
+    return stencilBounds;
   }
 
   /// Classify this acquire's access pattern using current analysis state.
@@ -230,15 +184,14 @@ public:
   }
 
   const std::optional<std::pair<Value, Value>> &getOriginalBounds() const {
-    return originalBounds_;
+    return originalBounds;
   }
 
   /// Check if this acquire uses worker-indexed pattern: offsets[%workerId] with
   /// sizes[1]. This pattern is inherently disjoint across workers.
   bool isWorkerIndexedAccess() const;
 
-  /// Check if this acquire has disjoint partition info with another acquire.
-  /// Uses offset_hints/size_hints from ForLowering to determine disjointness.
+  /// Check if this acquire has disjoint partition info with another acquire
   bool hasDisjointPartitionWith(const DbAcquireNode *other) const;
 
 private:
@@ -250,15 +203,14 @@ private:
   DbAnalysis *analysis = nullptr;
   std::string hierId;
   Operation *edtUserOp = nullptr;
-  Value useInEdt;
-  Value partitionOffset;
-  Value partitionSize;
+  Value useInEdt = nullptr;
+  Value partitionOffset, partitionSize;
 
   /// Cached adjusted chunk info
   std::optional<std::pair<Value, Value>> computedChunkInfo;
-  std::optional<std::pair<Value, Value>> originalBounds_;
-  std::optional<StencilBounds> stencilBounds_;
-  mutable std::optional<AccessPattern> accessPattern_;
+  std::optional<std::pair<Value, Value>> originalBounds;
+  std::optional<StencilBounds> stencilBounds;
+  mutable std::optional<AccessPattern> accessPattern;
 
 public:
   uint64_t inCount = 0, outCount = 0;

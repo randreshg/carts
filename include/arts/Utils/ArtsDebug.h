@@ -8,6 +8,7 @@
 #define ARTS_UTILS_ARTSDEBUG_H
 
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace mlir {
@@ -18,7 +19,7 @@ namespace arts {
 /// for emitting debug logs so callers don't use llvm::dbgs() directly.
 static inline llvm::raw_ostream &debugStream() {
   static llvm::raw_ostream &stream = llvm::errs();
-  // Force color support if we're connected to a terminal
+  /// Force color support if we're connected to a terminal
   if (stream.is_displayed())
     stream.enable_colors(ARTS_DEBUG_COLORS);
   return stream;
@@ -142,6 +143,17 @@ static inline llvm::raw_ostream &debugStream() {
     __os.resetColor();                                                         \
     __os << " " << x << "\n";                                                  \
   }
-} // namespace arts
-} // namespace mlir
-#endif // ARTS_UTILS_ARTSDEBUG_H
+
+/// Unreachable code marker with ARTS formatting
+#define ARTS_UNREACHABLE(msg)                                                  \
+  {                                                                            \
+    auto &__os = llvm::errs();                                                 \
+    __os.changeColor(llvm::raw_ostream::RED, /*bold=*/true);                   \
+    __os << "[UNREACHABLE] [" << ARTS_DEBUG_TYPE_STR << "]";                   \
+    __os.resetColor();                                                         \
+    __os << " " << msg << "\n";                                                \
+    llvm_unreachable(msg);                                                     \
+  }
+} /// namespace arts
+} /// namespace mlir
+#endif /// ARTS_UTILS_ARTSDEBUG_H

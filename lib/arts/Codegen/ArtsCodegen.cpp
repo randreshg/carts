@@ -60,7 +60,7 @@ ArtsCodegen::ArtsCodegen(ModuleOp module, bool debug)
   ARTS_DEBUG_HEADER(ArtsCodegen);
   if (failed(extractDataLayouts())) {
     mlir::emitError(module.getLoc()) << "Failed to extract data layouts";
-    llvm_unreachable("Failed to extract data layouts");
+    ARTS_UNREACHABLE("Failed to extract data layouts");
     return;
   }
   initializeTypes();
@@ -761,7 +761,7 @@ SmallVector<Value> ArtsCodegen::computeStridesFromSizes(ArrayRef<Value> sizes,
   SmallVector<Value> strides(sizes.size());
   Value stride = createIndexConstant(1, loc);
 
-  // Compute strides from right to left (row-major)
+  /// Compute strides from right to left (row-major)
   for (int i = static_cast<int>(sizes.size()) - 1; i >= 0; --i) {
     strides[i] = stride;
     if (i > 0)

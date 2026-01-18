@@ -169,7 +169,7 @@ bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
       if (auto edt = dyn_cast<arts::EdtOp>(&inst)) {
         if (edt.getType() == arts::EdtType::single) {
           if (singleOp)
-            llvm_unreachable(
+            ARTS_UNREACHABLE(
                 "Multiple single ops in parallel op not supported");
           singleOp = edt;
         } else
@@ -182,7 +182,7 @@ bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
       } else if (auto relOp = dyn_cast<DbReleaseOp>(&inst)) {
         innerReleases.push_back(relOp);
       } else {
-        // Any other operation means we keep parallel structure
+        /// Any other operation means we keep parallel structure
         return false;
       }
     }
@@ -285,9 +285,9 @@ bool EdtPass::convertParallelWithAcquiresToSync(
     /// Create replacement outer acquire with inner's mode
     OpBuilder builder(outerAcq);
     auto newAcq = builder.create<DbAcquireOp>(
-        outerAcq.getLoc(), innerAcq.getMode(), // Use inner's mode (<inout>)
-        outerAcq.getSourceGuid(), outerAcq.getSourcePtr(),
-        outerAcq.getPtr().getType(), SmallVector<Value>(outerAcq.getIndices()),
+        outerAcq.getLoc(), innerAcq.getMode(), outerAcq.getSourceGuid(),
+        outerAcq.getSourcePtr(), outerAcq.getPtr().getType(),
+        SmallVector<Value>(outerAcq.getIndices()),
         SmallVector<Value>(outerAcq.getOffsets()),
         SmallVector<Value>(outerAcq.getSizes()));
 
@@ -343,12 +343,6 @@ bool EdtPass::convertParallelWithAcquiresToSync(
     builder.create<YieldOp>(loc);
 
   /// Step 5: Clean up old operations
-
-  /// Erase inner ops in reverse order to avoid use-after-free:
-  /// 1. Single EDT uses inner acquire results
-  /// 2. Inner releases use block args
-  /// 3. Inner acquires use block args
-
   /// First erase the single EDT (its operands reference inner acquire results)
   singleOp->erase();
 
@@ -564,8 +558,8 @@ bool EdtPass::removeRedundantBarriersWithGraphs(func::FuncOp func,
       for (arts::EdtOp b : afterTasks) {
         bool connected = graph.isEdtReachable(a, b);
         bool independent = graph.areEdtsIndependent(a, b);
-        // Barrier redundant if: connected (dependency already enforced) OR
-        // independent (no dependency needed)
+        /// Barrier redundant if: connected (dependency already enforced) OR
+        /// independent (no dependency needed)
         if (!connected && !independent) {
           redundant = false;
           break;

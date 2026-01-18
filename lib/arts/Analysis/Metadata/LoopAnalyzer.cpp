@@ -181,19 +181,19 @@ void LoopAnalyzer::finalizeParallelFlag(Operation *loopOp,
 }
 
 ///===----------------------------------------------------------------------===///
-// Per-Dimension Dependency Analysis
+/// Per-Dimension Dependency Analysis
 ///===----------------------------------------------------------------------===///
 
 void LoopAnalyzer::analyzeLoopNestDependences(affine::AffineForOp outerLoop,
                                               LoopMetadata *metadata) {
-  // Use DependenceAnalyzer to get per-dimension dependency info
+  /// Use DependenceAnalyzer to get per-dimension dependency info
   auto result = depAnalyzer.analyzeLoopNestDependences(outerLoop);
 
-  // Copy results to metadata
+  /// Copy results to metadata
   metadata->dimensionDeps = std::move(result.dimensionDeps);
   metadata->outermostParallelDim = result.outermostParallelDim;
 
-  // Debug output
+  /// Debug output
   if (metadata->dimensionDeps.empty()) {
     ARTS_DEBUG("Per-dimension deps: single loop or no nest");
     return;
@@ -209,12 +209,11 @@ void LoopAnalyzer::analyzeLoopNestDependences(affine::AffineForOp outerLoop,
                          : ""));
   }
 
-  if (metadata->outermostParallelDim) {
+  if (metadata->outermostParallelDim)
     ARTS_DEBUG(
         "Outermost parallel dimension: " << *metadata->outermostParallelDim);
-  } else {
+  else
     ARTS_DEBUG("No parallelizable dimension found");
-  }
 }
 
 ///===----------------------------------------------------------------------===///
@@ -230,7 +229,7 @@ void LoopAnalyzer::analyzeLoopReordering(affine::AffineForOp outerLoop,
 
   if (nest.size() < 2) {
     ARTS_DEBUG("Loop reordering: nest size < 2, skipping");
-    return; /// Nothing to reorder
+    return;
   }
 
   /// 2. Check if perfectly nested (body has only inner loop + terminator)

@@ -37,10 +37,8 @@ public:
   void print(llvm::raw_ostream &os) const override;
   Operation *getOp() const override { return loopOp; }
 
-  void addInEdge(EdgeBase *edge) override { /* unused for loop nodes */
-  }
-  void addOutEdge(EdgeBase *edge) override { /* unused for loop nodes */
-  }
+  void addInEdge(EdgeBase *edge) override { /* unused for loop nodes */ }
+  void addOutEdge(EdgeBase *edge) override { /* unused for loop nodes */ }
   const DenseSet<EdgeBase *> &getInEdges() const override { return edges; }
   const DenseSet<EdgeBase *> &getOutEdges() const override { return edges; }
 
@@ -56,38 +54,28 @@ public:
   /// Get the induction variable for this loop
   Value getInductionVar() const;
 
-  /// Check if a value depends on this loop's induction variable.
-  /// Walks the def-use chain to find IV dependencies.
+  /// Utility functions
   bool dependsOnInductionVar(Value v);
-  /// Check IV dependency after stripping numeric casts.
   bool dependsOnInductionVarNormalized(Value v);
-  /// Check if a value is invariant with respect to this loop's body.
   bool isValueLoopInvariant(Value v);
-  /// Check if a value depends on base after normalizing loop IV to its init.
   static bool dependsOnLoopInit(Value value, Value base);
-  /// Normalized variant that strips numeric casts on inputs.
   static bool dependsOnLoopInitNormalized(Value value, Value base);
 
   /// Analyzed index expression relative to induction variable.
   /// Represents: index = iv * multiplier + offset
   struct IVExpr {
     bool dependsOnIV = false;
-    std::optional<int64_t> offset;     // e.g., -1 for i-1, +1 for i+1
-    std::optional<int64_t> multiplier; // e.g., 2 for 2*i
+    std::optional<int64_t> offset;     /// e.g., -1 for i-1, +1 for i+1
+    std::optional<int64_t> multiplier; /// e.g., 2 for 2*i
     bool isAnalyzable() const { return dependsOnIV && offset.has_value(); }
   };
 
   /// Analyze an index expression to extract IV relationship.
   /// Returns IVExpr with offset/multiplier if analyzable.
   IVExpr analyzeIndexExpr(Value index);
-
-  /// Get constant lower bound if available
   std::optional<int64_t> getLowerBoundConstant() const;
-
-  /// Get constant upper bound if available
   std::optional<int64_t> getUpperBoundConstant() const;
-
-  /// Clear the IV dependency cache (call when IR changes)
+  int getNestingDepth() const;
   void clearIVCache() { ivDependencyCache.clear(); }
 
 private:

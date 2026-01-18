@@ -11,5 +11,6 @@
 #include "arts/Transforms/Datablock/DbIndexerBase.h"
 #include "arts/Transforms/Datablock/DbRewriter.h"
 #include "arts/Transforms/Datablock/Stencil/DbStencilIndexer.h"
+#include "arts/Transforms/Datablock/Versioned/DbVersionedRewriter.h"
 
 #endif /// ARTS_TRANSFORMS_DBTRANSFORMS_H

@@ -139,21 +139,21 @@ def DepAccessMode : Arts_I32Enum<"DepAccessMode",
 /// Enum attribute for dependency access modes
 def DepAccessModeAttr : Arts_I32EnumAttr<"dep_access", DepAccessMode>;
 
-/// Enum info for DB promotion modes
+/// Enum info for DB partition modes
 /// Used to track how a DbAllocOp was partitioned:
 ///   - coarse: Single DB for entire array (outerRank=0)
 ///   - chunked: Fixed-size chunks
 ///   - fine_grained: One DB per element/row (outerRank>0)
-def PromotionMode : Arts_I32Enum<"PromotionMode",
-    "DB allocation promotion mode",
+def PartitionMode : Arts_I32Enum<"PartitionMode",
+    "DB allocation partition mode",
     [
       I32EnumAttrCase<"coarse", 0, "coarse">,
       I32EnumAttrCase<"chunked", 1, "chunked">,
       I32EnumAttrCase<"fine_grained", 2, "fine_grained">
     ]>;
 
-/// Enum attribute for DB promotion modes
-def PromotionModeAttr : Arts_I32EnumAttr<"promotion_mode", PromotionMode>;
+/// Enum attribute for DB partition modes
+def PartitionModeAttr : Arts_I32EnumAttr<"partition_mode", PartitionMode>;
 
 /// Integer attribute for storing number of workers for EDT operations
 def WorkersAttr : AttrDef<ArtsDialect, "workers"> {
@@ -228,7 +228,7 @@ def LoopMetadataAttr : Arts_Attr<"LoopMetadata", "loop_metadata"> {
     OptionalParameter<"::mlir::BoolAttr">:$hasInterIterationDeps,
     OptionalParameter<"::mlir::IntegerAttr">:$memrefsWithLoopCarriedDeps,
     OptionalParameter<"::mlir::IntegerAttr">:$parallelClassification,
-    // Source location
+    /// Source location
     "::mlir::StringAttr":$locationKey
   );
   let mnemonic = "loop_metadata";

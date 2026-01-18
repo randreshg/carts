@@ -103,14 +103,14 @@ bool DbAllocNode::isParallelFriendly() const {
     DbAcquireOp acqOp = acqNode->getDbAcquireOp();
     if (!acqOp)
       continue;
-    if (!acqOp.getOffsetHints().empty() || !acqOp.getSizeHints().empty())
+    if (acqOp.getChunkIndex() || acqOp.getChunkSize())
       return true;
   }
 
   return false;
 }
 
-bool DbAllocNode::canBePartitioned(bool useFineGrainedFallback) {
+bool DbAllocNode::canBePartitioned() {
   ARTS_DEBUG("canBePartitioned for alloc " << hierId);
 
   auto skip = [&](StringRef reason) {
@@ -128,22 +128,23 @@ bool DbAllocNode::canBePartitioned(bool useFineGrainedFallback) {
       if (!acqNode)
         continue;
       DbAcquireOp acqOp = acqNode->getDbAcquireOp();
-      if (acqOp &&
-          (!acqOp.getOffsetHints().empty() || !acqOp.getSizeHints().empty())) {
+      if (acqOp && (acqOp.getChunkIndex() || acqOp.getChunkSize())) {
         hasAcquireWithHints = true;
         ARTS_DEBUG("  Found acquire with hints - allowing non-affine alloc");
         break;
       }
     }
-    if (!hasAcquireWithHints) {
-      /// If fine-grained fallback is enabled, allow non-affine accesses through.
-      /// H1.5 heuristic will choose element-wise partitioning for these.
-      if (useFineGrainedFallback) {
-        ARTS_DEBUG("  Non-affine access - using fine-grained fallback "
-                   "(element-wise partitioning)");
-      } else {
-        return skip("memref has non-affine accesses (no hints to override)");
-      }
+    /// Allow non-affine accesses - let heuristics decide fallback strategy
+
+    if (hasAcquireWithHints) {
+      ARTS_DEBUG("  Non-affine access with hints - using fallback "
+                 "(partitioning enabled)");
+    } else {
+      /// If fine-grained fallback is enabled, allow non-affine accesses
+      /// through. H1.5 heuristic will choose element-wise partitioning for
+      /// these.
+      ARTS_DEBUG("  Non-affine access - using fine-grained fallback "
+                 "(element-wise partitioning)");
     }
   }
 
@@ -190,7 +191,6 @@ bool DbAllocNode::canBePartitioned(bool useFineGrainedFallback) {
     }
   }
 
-  /// NOTE: We do NOT reject based on allocation-level metadata alone.
   /// Non-uniform access (stencil patterns like A[i-1], A[i], A[i+1]) can
   /// still be partitioned if the acquire-level analysis succeeds.
   /// The acquire-level canPartitionWithOffset() validates that indices
@@ -214,12 +214,20 @@ bool DbAllocNode::canBePartitioned(bool useFineGrainedFallback) {
   bool anyPassed = false;
   bool anyHasStencilBounds = false;
   bool allFailed = true;
+  bool anyIndirectAccess = false;
+  bool anyAcquireWithHints = false;
 
   for (const auto &acqNode : acquireNodes) {
     if (!acqNode)
       continue;
 
-    bool passed = acqNode->canBePartitioned(useFineGrainedFallback);
+    DbAcquireOp acqOp = acqNode->getDbAcquireOp();
+    if (acqOp && (acqOp.getChunkIndex() || acqOp.getChunkSize()))
+      anyAcquireWithHints = true;
+    if (acqNode->hasIndirectAccess())
+      anyIndirectAccess = true;
+
+    bool passed = acqNode->canBePartitioned();
     if (passed) {
       anyPassed = true;
       allFailed = false;
@@ -238,8 +246,7 @@ bool DbAllocNode::canBePartitioned(bool useFineGrainedFallback) {
   }
 
   /// Summarize access patterns (for logging)
-  AcquirePatternSummary patterns =
-      summarizeAcquirePatterns(useFineGrainedFallback);
+  AcquirePatternSummary patterns = summarizeAcquirePatterns();
   ARTS_DEBUG("  Access patterns: hasUniform="
              << patterns.hasUniform << ", hasStencil=" << patterns.hasStencil
              << ", hasIndexed=" << patterns.hasIndexed
@@ -250,6 +257,13 @@ bool DbAllocNode::canBePartitioned(bool useFineGrainedFallback) {
   if (anyHasStencilBounds) {
     ARTS_DEBUG(
         "  Stencil bounds detected - allowing partition for H1.5 ESD mode");
+    return true;
+  }
+
+  /// Allow mixed access patterns (indirect + hints) to proceed for versioning
+  if (allFailed && anyIndirectAccess && anyAcquireWithHints) {
+    ARTS_DEBUG("  All acquires failed but indirect access with hints "
+               "- allowing partitioning for versioning");
     return true;
   }
 
@@ -267,25 +281,8 @@ bool DbAllocNode::canBePartitioned(bool useFineGrainedFallback) {
   return true;
 }
 
-bool DbAllocNode::isFineGrained() const {
-  if (!dbAllocOp)
-    return false;
-
-  DbAllocOp allocOp = const_cast<DbAllocOp &>(dbAllocOp);
-  ValueRange elementSizes = allocOp.getElementSizes();
-  if (elementSizes.empty())
-    return false;
-
-  /// Fine-grained: ALL elementSizes are constant 1
-  /// This means each datablock holds exactly one element
-  return llvm::all_of(elementSizes, [](Value v) {
-    int64_t cst;
-    return ValueUtils::getConstantIndex(v, cst) && cst == 1;
-  });
-}
-
 ///===----------------------------------------------------------------------===///
-// Twin-diff overlap analysis methods
+/// Twin-diff overlap analysis methods
 ///===----------------------------------------------------------------------===///
 
 bool DbAllocNode::hasSingleWriter() const {
@@ -392,7 +389,7 @@ bool DbAllocNode::canProveNonOverlapping() const {
   if (dbAllocOp) {
     auto &mutableAlloc = const_cast<DbAllocOp &>(dbAllocOp);
     if (auto mode = getPartitionMode(mutableAlloc.getOperation()))
-      isPartitioned = (*mode != PromotionMode::coarse);
+      isPartitioned = (*mode != PartitionMode::coarse);
   }
   if (!isPartitioned) {
     ARTS_DEBUG(
@@ -432,7 +429,7 @@ bool DbAllocNode::canProveNonOverlapping() const {
         }
       }
 
-      /// Method 4: Check offset_hints/size_hints from ForLowering
+      /// Method 4: Check chunk_hint from ForLowering
       if (acqA->hasDisjointPartitionWith(acqB)) {
         /// Proven disjoint by loop partitioning
         ARTS_DEBUG("Pair (" << i << "," << j
@@ -450,8 +447,7 @@ bool DbAllocNode::canProveNonOverlapping() const {
   return true; /// All pairs proven disjoint
 }
 
-AcquirePatternSummary
-DbAllocNode::summarizeAcquirePatterns(bool useFineGrainedFallback) const {
+AcquirePatternSummary DbAllocNode::summarizeAcquirePatterns() const {
   AcquirePatternSummary summary;
 
   for (const auto &acqNode : acquireNodes) {
@@ -473,23 +469,19 @@ DbAllocNode::summarizeAcquirePatterns(bool useFineGrainedFallback) const {
     }
   }
 
-  /// Fine-grained fallback: treat non-affine or indirect indices as indexed
-  /// so H1.5 can select element-wise partitioning.
-  if (useFineGrainedFallback) {
-    if (hasNonAffineAccesses && *hasNonAffineAccesses) {
-      summary.hasIndexed = true;
-      ARTS_DEBUG(
-          "summarizeAcquirePatterns: non-affine with fine-grained fallback "
-          "-> marking hasIndexed=true for element-wise partitioning");
-    } else if (!summary.hasIndexed) {
-      for (const auto &acqNode : acquireNodes) {
-        if (acqNode && acqNode->hasIndirectAccess()) {
-          summary.hasIndexed = true;
-          ARTS_DEBUG(
-              "summarizeAcquirePatterns: indirect index with fine-grained "
-              "fallback -> marking hasIndexed=true");
-          break;
-        }
+  /// Always treat non-affine or indirect indices as indexed
+  /// so heuristics can decide appropriate partitioning strategy.
+  if (hasNonAffineAccesses && *hasNonAffineAccesses) {
+    summary.hasIndexed = true;
+    ARTS_DEBUG("summarizeAcquirePatterns: non-affine access -> marking "
+               "hasIndexed=true");
+  } else if (!summary.hasIndexed) {
+    for (const auto &acqNode : acquireNodes) {
+      if (acqNode && acqNode->hasIndirectAccess()) {
+        summary.hasIndexed = true;
+        ARTS_DEBUG("summarizeAcquirePatterns: indirect index -> marking "
+                   "hasIndexed=true");
+        break;
       }
     }
   }

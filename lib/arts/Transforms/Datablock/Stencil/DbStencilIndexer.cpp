@@ -37,10 +37,10 @@ DbStencilIndexer::DbStencilIndexer(Value haloLeft, Value haloRight,
                                    unsigned innerRank, Value elemOffset,
                                    Value ownedArg, Value leftHaloArg,
                                    Value rightHaloArg)
-    : DbIndexerBase(outerRank, innerRank), elemOffset_(elemOffset),
-      haloLeft_(haloLeft), haloRight_(haloRight), chunkSize_(chunkSize),
-      ownedArg_(ownedArg), leftHaloArg_(leftHaloArg),
-      rightHaloArg_(rightHaloArg) {}
+    : DbIndexerBase(outerRank, innerRank), elemOffset(elemOffset),
+      haloLeft(haloLeft), haloRight(haloRight), chunkSize(chunkSize),
+      ownedArg(ownedArg), leftHaloArg(leftHaloArg),
+      rightHaloArg(rightHaloArg) {}
 
 //===----------------------------------------------------------------------===//
 // Helper: Clamp index to valid bounds
@@ -100,12 +100,12 @@ static unsigned pickPartitionDim(ValueRange indices, Value elemOffset) {
 
 LocalizedIndices DbStencilIndexer::localize(ArrayRef<Value>, OpBuilder &,
                                             Location) {
-  llvm_unreachable("DbStencilIndexer uses 3-buffer mode, not localize()");
+  ARTS_UNREACHABLE("DbStencilIndexer uses 3-buffer mode, not localize()");
 }
 
 LocalizedIndices DbStencilIndexer::localizeLinearized(Value, Value, OpBuilder &,
                                                       Location) {
-  llvm_unreachable(
+  ARTS_UNREACHABLE(
       "DbStencilIndexer uses 3-buffer mode, not localizeLinearized()");
 }
 
@@ -118,7 +118,7 @@ void DbStencilIndexer::transformDbRefUsers(
     llvm::SetVector<Operation *> &opsToRemove) {
 
   /// Stencil indexer requires 3-buffer mode (owned + left/right halos)
-  bool has3BufferMode = leftHaloArg_ || rightHaloArg_;
+  bool has3BufferMode = leftHaloArg || rightHaloArg;
   assert(has3BufferMode && "DbStencilIndexer requires halo arguments");
 
   ARTS_DEBUG("DbStencilIndexer::transformDbRefUsers (3-buffer mode)");
@@ -134,7 +134,7 @@ void DbStencilIndexer::transformDbRefUsers(
   /// Insert DbRefOps at the START of EDT block to ensure dominance for all
   /// users. Users can be in different blocks (loop iterations, branches), so
   /// inserting at users.front() would cause SSA dominance errors.
-  Block *edtBlock = ownedArg_.cast<BlockArgument>().getOwner();
+  Block *edtBlock = ownedArg.cast<BlockArgument>().getOwner();
   Location loc = edtBlock->front().getLoc();
   OpBuilder::InsertionGuard topGuard(builder);
   builder.setInsertionPointToStart(edtBlock);
@@ -142,26 +142,26 @@ void DbStencilIndexer::transformDbRefUsers(
   Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
 
   /// Create 3 DbRefOps ONCE at the start, reuse for all accesses
-  assert(haloLeft_ && chunkSize_ &&
+  assert(haloLeft && chunkSize &&
          "Stencil mode requires haloLeft and chunkSize");
 
   Value ownedMemref, leftMemref, rightMemref;
 
   /// Create owned memref (always needed)
-  auto ownedRef = builder.create<DbRefOp>(loc, newElementType, ownedArg_,
+  auto ownedRef = builder.create<DbRefOp>(loc, newElementType, ownedArg,
                                           SmallVector<Value>{zero});
   ownedMemref = ownedRef.getResult();
 
   /// Create left halo memref if available (null at left boundary)
-  if (leftHaloArg_) {
-    auto leftRef = builder.create<DbRefOp>(loc, newElementType, leftHaloArg_,
+  if (leftHaloArg) {
+    auto leftRef = builder.create<DbRefOp>(loc, newElementType, leftHaloArg,
                                            SmallVector<Value>{zero});
     leftMemref = leftRef.getResult();
   }
 
   /// Create right halo memref if available (null at right boundary)
-  if (rightHaloArg_) {
-    auto rightRef = builder.create<DbRefOp>(loc, newElementType, rightHaloArg_,
+  if (rightHaloArg) {
+    auto rightRef = builder.create<DbRefOp>(loc, newElementType, rightHaloArg,
                                             SmallVector<Value>{zero});
     rightMemref = rightRef.getResult();
   }
@@ -177,20 +177,20 @@ void DbStencilIndexer::transformDbRefUsers(
         loc, llvmPtrTy, leftMemref);
     leftPtrNotNull = builder.create<LLVM::ICmpOp>(
         loc, LLVM::ICmpPredicate::ne, leftPtr, nullPtr);
-    if (elemOffset_ && chunkSize_) {
+    if (elemOffset && chunkSize) {
       Value offsetMod =
-          builder.create<arith::RemUIOp>(loc, elemOffset_, chunkSize_);
+          builder.create<arith::RemUIOp>(loc, elemOffset, chunkSize);
       Value extendedRemainder =
-          builder.create<arith::SubIOp>(loc, chunkSize_, haloLeft_);
+          builder.create<arith::SubIOp>(loc, chunkSize, haloLeft);
       Value isExtendedOffset = builder.create<arith::CmpIOp>(
           loc, arith::CmpIPredicate::eq, offsetMod, extendedRemainder);
       Value shift =
-          builder.create<arith::SelectOp>(loc, isExtendedOffset, haloLeft_, zero);
+          builder.create<arith::SelectOp>(loc, isExtendedOffset, haloLeft, zero);
       effectiveHaloLeft =
           builder.create<arith::SelectOp>(loc, leftPtrNotNull, shift, zero);
     } else {
       effectiveHaloLeft =
-          builder.create<arith::SelectOp>(loc, leftPtrNotNull, haloLeft_, zero);
+          builder.create<arith::SelectOp>(loc, leftPtrNotNull, haloLeft, zero);
     }
   }
 
@@ -229,7 +229,7 @@ void DbStencilIndexer::transformDbRefUsers(
       continue;
 
     /// Extract row index for region determination
-    unsigned partitionDim = pickPartitionDim(indices, elemOffset_);
+    unsigned partitionDim = pickPartitionDim(indices, elemOffset);
     Value globalRow = indices[partitionDim];
 
     /// Handle linearized access: extract row from linear index
@@ -241,8 +241,8 @@ void DbStencilIndexer::transformDbRefUsers(
 
     /// Compute localRow = globalRow - elemOffset
     Value localRow =
-        elemOffset_
-            ? builder.create<arith::SubIOp>(userLoc, globalRow, elemOffset_)
+        elemOffset
+            ? builder.create<arith::SubIOp>(userLoc, globalRow, elemOffset)
             : globalRow;
 
     /// 3-BUFFER SELECTION MODE
@@ -256,7 +256,7 @@ void DbStencilIndexer::transformDbRefUsers(
         userLoc, arith::CmpIPredicate::slt, localRow, effectiveHaloLeft);
 
     Value haloLeftPlusChunk = builder.create<arith::AddIOp>(
-        userLoc, effectiveHaloLeft, chunkSize_);
+        userLoc, effectiveHaloLeft, chunkSize);
 
     /// Compute buffer-local indices for each region:
     /// Left halo: index = localRow (clamped)
@@ -297,7 +297,7 @@ void DbStencilIndexer::transformDbRefUsers(
 
       /// Load from owned buffer (always valid)
       Value clampedOwnedIdx =
-          clampIndex(ownedIdx, chunkSize_, builder, userLoc);
+          clampIndex(ownedIdx, chunkSize, builder, userLoc);
       SmallVector<Value> ownedIndices = buildAccessIndices(clampedOwnedIdx);
 
       auto ownedLoad =
@@ -316,7 +316,7 @@ void DbStencilIndexer::transformDbRefUsers(
           OpBuilder::InsertionGuard g(builder);
           builder.setInsertionPointToStart(&leftIfOp.getThenRegion().front());
           Value clampedLeftIdx =
-              clampIndex(leftIdx, haloLeft_, builder, userLoc);
+              clampIndex(leftIdx, haloLeft, builder, userLoc);
           SmallVector<Value> leftIndices = buildAccessIndices(clampedLeftIdx);
           auto leftLoad =
               builder.create<memref::LoadOp>(userLoc, leftMemref, leftIndices);
@@ -348,7 +348,7 @@ void DbStencilIndexer::transformDbRefUsers(
           OpBuilder::InsertionGuard g(builder);
           builder.setInsertionPointToStart(&rightIfOp.getThenRegion().front());
           Value clampedRightIdx =
-              clampIndex(rightIdx, haloRight_, builder, userLoc);
+              clampIndex(rightIdx, haloRight, builder, userLoc);
           SmallVector<Value> rightIndices = buildAccessIndices(clampedRightIdx);
           auto rightLoad = builder.create<memref::LoadOp>(userLoc, rightMemref,
                                                           rightIndices);
@@ -379,7 +379,7 @@ void DbStencilIndexer::transformDbRefUsers(
     } else {
       /// STORE: Only store to owned buffer (halos are read-only)
       Value clampedOwnedIdx =
-          clampIndex(ownedIdx, chunkSize_, builder, userLoc);
+          clampIndex(ownedIdx, chunkSize, builder, userLoc);
       SmallVector<Value> ownedIndices = buildAccessIndices(clampedOwnedIdx);
 
       builder.create<memref::StoreOp>(userLoc, storeValue, ownedMemref,
@@ -409,7 +409,7 @@ void DbStencilIndexer::transformOps(ArrayRef<Operation *> ops, Value dbPtr,
 
     /// Stencil mode requires all accesses through DbRefOp
     if (isa<memref::LoadOp, memref::StoreOp>(op))
-      llvm_unreachable("DbStencilIndexer: direct load/store not supported, "
-                       "use DbRefOp for 3-buffer mode");
+      ARTS_UNREACHABLE("DbStencilIndexer: direct load/store not supported, "
+                        "use DbRefOp for 3-buffer mode");
   }
 }

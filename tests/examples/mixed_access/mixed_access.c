@@ -1,17 +1,19 @@
 /*
  * CARTS Mixed Access Pattern Test
- * Demonstrates LULESH-like access patterns that trigger DbCopy/DbSync:
+ * Demonstrates LULESH-like access patterns with full-range chunked acquires:
  *
- * 1. Node-parallel loop: Direct write x[i] = ... (CHUNKED partitioning)
+ * 1. Node-parallel loop: Direct write nodeData[i] = ... (CHUNKED partitioning)
  *    - Workers write contiguous chunks of node data
+ *    - Each worker acquires only its chunk for writing
  *
- * 2. Element-parallel loop: Indirect read x[nodelist[elem][j]] (FINE-GRAINED)
- *    - Each element reads 4 nodes via indirection array
- *    - Access pattern is irregular, requires fine-grained DB
+ * 2. Element-parallel loop: Indirect read nodeData[nodelist[e][j]] (FULL-RANGE)
+ *    - Each element reads scattered nodes via indirection array
+ *    - Workers acquire ALL chunks (full-range) for indirect reads
+ *    - This avoids DbCopy/DbSync overhead while maintaining correctness
  *
- * This mixed pattern (chunked write + fine-grained read) triggers:
- * - DbCopy: Creates fine-grained copy of chunked allocation
- * - DbSync: Synchronizes data before indirect reads
+ * The H1.2 heuristic detects this pattern and enables:
+ * - Chunked allocation for the data array
+ * - Full-range acquires for indirect read operations
  */
 
 #include <math.h>
@@ -25,12 +27,12 @@
 // Sequential version for verification
 static void compute_seq(int numNodes, int numElems, double *nodeData,
                         double *elemData, int (*nodelist)[NODES_PER_ELEM]) {
-  // Phase 1: Initialize node data (direct access)
+  /// Phase 1: Initialize node data (direct access)
   for (int i = 0; i < numNodes; i++) {
     nodeData[i] = (double)(i * i) * 0.01;
   }
 
-  // Phase 2: Compute element values from nodes (indirect access)
+  /// Phase 2: Compute element values from nodes (indirect access)
   for (int e = 0; e < numElems; e++) {
     double sum = 0.0;
     for (int j = 0; j < NODES_PER_ELEM; j++) {
@@ -43,17 +45,17 @@ static void compute_seq(int numNodes, int numElems, double *nodeData,
 
 // Parallel version with #pragma omp parallel for
 static void compute_parallel(int numNodes, int numElems, double *nodeData,
-                             double *elemData, int (*nodelist)[NODES_PER_ELEM]) {
-  // Phase 1: Node-parallel initialization - CHUNKED access
-  // Each worker writes a contiguous chunk of nodes
+                             double *elemData,
+                             int (*nodelist)[NODES_PER_ELEM]) {
+  /// Phase 1: Node-parallel initialization - CHUNKED access
+  /// Each worker writes a contiguous chunk of nodes
 #pragma omp parallel for
-  for (int i = 0; i < numNodes; i++) {
+  for (int i = 0; i < numNodes; i++)
     nodeData[i] = (double)(i * i) * 0.01;
-  }
 
-  // Phase 2: Element-parallel computation - INDIRECT access
-  // Each element reads scattered nodes via nodelist indirection
-  // This triggers DbCopy (chunked -> fine-grained) + DbSync
+  /// Phase 2: Element-parallel computation - INDIRECT access
+  /// Each element reads scattered nodes via nodelist indirection
+  /// Workers acquire full-range (all chunks) for indirect access
 #pragma omp parallel for
   for (int e = 0; e < numElems; e++) {
     double sum = 0.0;
@@ -72,11 +74,11 @@ static void build_mesh(int nx, int ny, int (*nodelist)[NODES_PER_ELEM]) {
   for (int ey = 0; ey < ny; ey++) {
     for (int ex = 0; ex < nx; ex++) {
       int elem = ey * nx + ex;
-      // Counter-clockwise node ordering for quad element
-      nodelist[elem][0] = ey * numNodesX + ex;         // bottom-left
-      nodelist[elem][1] = ey * numNodesX + ex + 1;     // bottom-right
-      nodelist[elem][2] = (ey + 1) * numNodesX + ex + 1; // top-right
-      nodelist[elem][3] = (ey + 1) * numNodesX + ex;   // top-left
+      /// Counter-clockwise node ordering for quad element
+      nodelist[elem][0] = ey * numNodesX + ex;           /// bottom-left
+      nodelist[elem][1] = ey * numNodesX + ex + 1;       /// bottom-right
+      nodelist[elem][2] = (ey + 1) * numNodesX + ex + 1; /// top-right
+      nodelist[elem][3] = (ey + 1) * numNodesX + ex;     /// top-left
     }
   }
 }
@@ -96,9 +98,9 @@ int main(void) {
   int numElems = nx * ny;
 
   printf("Mixed Access Test: %d nodes, %d elements\n", numNodes, numElems);
-  printf("Pattern: chunked node writes + fine-grained indirect reads\n");
+  printf("Pattern: chunked node writes + full-range indirect reads\n");
 
-  // Allocate arrays
+  /// Allocate arrays
   double *nodeData = (double *)malloc(numNodes * sizeof(double));
   double *nodeData_seq = (double *)malloc(numNodes * sizeof(double));
   double *elemData = (double *)malloc(numElems * sizeof(double));
@@ -106,7 +108,7 @@ int main(void) {
   int (*nodelist)[NODES_PER_ELEM] =
       (int (*)[NODES_PER_ELEM])malloc(numElems * sizeof(*nodelist));
 
-  // Initialize
+  /// Initialize
   for (int i = 0; i < numNodes; i++) {
     nodeData[i] = 0.0;
     nodeData_seq[i] = 0.0;
@@ -116,18 +118,18 @@ int main(void) {
     elemData_seq[e] = 0.0;
   }
 
-  // Build mesh connectivity
+  /// Build mesh connectivity
   build_mesh(nx, ny, nodelist);
 
-  // Run sequential version for verification
+  /// Run sequential version for verification
   printf("Running sequential version...\n");
   compute_seq(numNodes, numElems, nodeData_seq, elemData_seq, nodelist);
 
-  // Run parallel version
+  /// Run parallel version
   printf("Running parallel version...\n");
   compute_parallel(numNodes, numElems, nodeData, elemData, nodelist);
 
-  // Compare results
+  /// Compare results
   double error = 0.0;
   double max_error = 0.0;
   for (int e = 0; e < numElems; e++) {
@@ -142,7 +144,7 @@ int main(void) {
   printf("RMS error: %e\n", error);
   printf("Max error: %e\n", max_error);
 
-  // Free arrays
+  /// Free arrays
   free(nodeData);
   free(nodeData_seq);
   free(elemData);

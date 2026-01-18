@@ -19,13 +19,6 @@ namespace mlir {
 namespace arts {
 
 ///===----------------------------------------------------------------------===///
-/// Partition Mode Enum
-///===----------------------------------------------------------------------===///
-/// Partition mode for datablock access patterns.
-/// Determined from DbAcquireOp structure - no attributes needed!
-enum class PartitionMode { Coarse, ElementWise, Chunked };
-
-///===----------------------------------------------------------------------===///
 /// Datablock Utilities
 ///===----------------------------------------------------------------------===///
 /// Utility class for working with ARTS datablocks (DbAllocOp, DbAcquireOp).
@@ -76,27 +69,31 @@ public:
   /// Check if allocation is coarse-grained (all sizes == 1).
   static bool isCoarseGrained(DbAllocOp alloc);
 
+  /// Check if allocation is fine-grained (partitioned into multiple DBs).
+  static bool isFineGrained(DbAllocOp alloc);
+
   ///===----------------------------------------------------------------------===///
   /// Partition Mode Detection
   ///===----------------------------------------------------------------------===///
   /// Structure-based mode detection - no attributes needed!
 
   /// Get partition mode from DbAcquireOp structure.
-  static PartitionMode getPartitionMode(DbAcquireOp acquire);
+  static PartitionMode getPartitionModeFromStructure(DbAcquireOp acquire);
 
   /// Get partition mode from DbAllocOp
-  static PartitionMode getPartitionMode(DbAllocOp alloc);
+  static PartitionMode getPartitionModeFromStructure(DbAllocOp alloc);
 
   static bool isChunked(DbAcquireOp acquire) {
-    return getPartitionMode(acquire) == PartitionMode::Chunked;
+    return getPartitionModeFromStructure(acquire) == PartitionMode::chunked;
   }
 
   static bool isElementWise(DbAcquireOp acquire) {
-    return getPartitionMode(acquire) == PartitionMode::ElementWise;
+    return getPartitionModeFromStructure(acquire) ==
+           PartitionMode::fine_grained;
   }
 
   static bool isCoarse(DbAcquireOp acquire) {
-    return getPartitionMode(acquire) == PartitionMode::Coarse;
+    return getPartitionModeFromStructure(acquire) == PartitionMode::coarse;
   }
 
   ///===----------------------------------------------------------------------===///
@@ -170,6 +167,16 @@ public:
 
   /// Find the EDT operation that uses a DbControlOp result.
   static Operation *findUserEdt(DbControlOp dbControl);
+
+  ///===----------------------------------------------------------------------===///
+  /// Index Chain Utilities
+  ///===----------------------------------------------------------------------===///
+
+  /// Collect full index chain from DbRefOp indices plus memory operation
+  /// indices. Returns the combined index chain from [DbRef indices] ++
+  /// [load/store indices].
+  static SmallVector<Value> collectFullIndexChain(DbRefOp dbRef,
+                                                  Operation *memOp);
 };
 
 } // namespace arts

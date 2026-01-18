@@ -368,3 +368,14 @@ std::optional<int64_t> LoopNode::getUpperBoundConstant() const {
   }
   return std::nullopt;
 }
+
+int LoopNode::getNestingDepth() const {
+  int depth = 0;
+  for (Operation *parent = loopOp->getParentOp(); parent;
+       parent = parent->getParentOp()) {
+    if (isa<scf::ForOp, scf::WhileOp, scf::ParallelOp, affine::AffineForOp>(
+            parent))
+      ++depth;
+  }
+  return depth;
+}

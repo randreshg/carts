@@ -81,3 +81,39 @@ void LoopAnalysis::collectEnclosingLoops(
   /// Reverse to get outermost-to-innermost order
   std::reverse(enclosingLoops.begin(), enclosingLoops.end());
 }
+
+void LoopAnalysis::collectLoopsInOperation(Operation *op,
+                                           SmallVectorImpl<LoopNode *> &loops) {
+  op->walk([&](Operation *childOp) {
+    if (isLoopOperation(childOp)) {
+      if (LoopNode *node = getOrCreateLoopNode(childOp))
+        loops.push_back(node);
+    }
+  });
+}
+
+void LoopAnalysis::collectForLoopsInOperation(
+    Operation *op, SmallVectorImpl<LoopNode *> &loops) {
+  op->walk([&](Operation *childOp) {
+    if (isa<scf::ForOp>(childOp)) {
+      if (LoopNode *node = getOrCreateLoopNode(childOp))
+        loops.push_back(node);
+    }
+  });
+}
+
+template <typename LoopOpType>
+void LoopAnalysis::collectLoopsInOperation(Operation *op,
+                                           SmallVectorImpl<LoopNode *> &loops) {
+  op->walk([&](Operation *childOp) {
+    if (isa<LoopOpType>(childOp)) {
+      if (LoopNode *node = getOrCreateLoopNode(childOp))
+        loops.push_back(node);
+    }
+  });
+}
+
+template void LoopAnalysis::collectLoopsInOperation<scf::ForOp>(
+    Operation *op, SmallVectorImpl<LoopNode *> &loops);
+template void LoopAnalysis::collectLoopsInOperation<scf::WhileOp>(
+    Operation *op, SmallVectorImpl<LoopNode *> &loops);

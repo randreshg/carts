@@ -51,6 +51,19 @@ public:
   void collectEnclosingLoops(Operation *op,
                              SmallVectorImpl<LoopNode *> &enclosingLoops);
 
+  /// Collect all LoopNodes within an operation subtree
+  void collectLoopsInOperation(Operation *op,
+                               SmallVectorImpl<LoopNode *> &loops);
+
+  /// Collect scf::ForOp LoopNodes within an operation subtree
+  void collectForLoopsInOperation(Operation *op,
+                                  SmallVectorImpl<LoopNode *> &loops);
+
+  /// Collect all LoopNodes within an operation subtree, filtered by loop type
+  template <typename LoopOpType>
+  void collectLoopsInOperation(Operation *op,
+                               SmallVectorImpl<LoopNode *> &loops);
+
 private:
   ModuleOp module;
 

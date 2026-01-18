@@ -254,7 +254,6 @@ Current partitioning (`DbPartitioning.cpp`):
 ## Phase 6: Documentation Output
 
 ### 6.1 analysis.md Structure
-```markdown
 # CARTS Benchmarks Analysis
 
 ## Executive Summary
@@ -310,7 +309,6 @@ Current partitioning (`DbPartitioning.cpp`):
 
 ## DB Partitioning Research
 [findings and proposals]
-```
 
 ---
 

@@ -13,43 +13,55 @@ The current partitioning system has naming confusion:
 
 The actual pipeline order is critical to understand:
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         ACTUAL PIPELINE ORDER                               │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  Stage 7: CreateDbs                                                         │
-│  ├── CreateDbsPass         ← Creates initial DBs (NO hints yet!)            │
-│  └── Canonicalize/CSE                                                       │
-│                                                                             │
-│  Stage 8: DbOpt                                                             │
-│  └── DbPass                ← First DB optimization pass                     │
-│                                                                             │
-│  Stage 9: EdtOpt                                                            │
-│  └── EdtPass + LoopFusion                                                   │
-│                                                                             │
-│  Stage 10: Concurrency                                                      │
-│  ├── ConcurrencyPass                                                        │
-│  └── ForLoweringPass       ← GENERATES offset_hints, size_hints, indices!   │
-│                                                                             │
-│  Stage 11: ConcurrencyOpt                                                   │
-│  ├── EdtPass                                                                │
-│  ├── DbPartitioningPass    ← USES hints to partition (coarse → fine!)       │
-│  └── DbPass                ← Re-run to adjust modes after partitioning      │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  subgraph S7["Stage 7: CreateDbs"]
+    direction TB
+    S7A["CreateDbsPass<br/>Creates initial DBs (no hints yet)"]
+    S7B["Canonicalize / CSE"]
+    S7A --> S7B
+  end
+
+  subgraph S8["Stage 8: DbOpt"]
+    direction TB
+    S8A["DbPass<br/>First DB optimization pass"]
+  end
+
+  subgraph S9["Stage 9: EdtOpt"]
+    direction TB
+    S9A["EdtPass + LoopFusion"]
+  end
+
+  subgraph S10["Stage 10: Concurrency"]
+    direction TB
+    S10A["ConcurrencyPass"]
+    S10B["ForLoweringPass<br/>Generates chunk_hint(index, size) and indices"]
+    S10A --> S10B
+  end
+
+  subgraph S11["Stage 11: ConcurrencyOpt"]
+    direction TB
+    S11A["EdtPass"]
+    S11B["DbPartitioningPass<br/>Uses hints to partition (coarse → fine)"]
+    S11C["DbPass<br/>Re-run to adjust modes after partitioning"]
+    S11A --> S11B --> S11C
+  end
+
+  S7 --> S8 --> S9 --> S10 --> S11
 ```
 
 ### Key Insight: Hints Are Generated AFTER CreateDbs!
 
 **CreateDbs Pass** (stage 7):
 - Creates DB allocations based on memref usage in EDTs
-- At this point, **NO partition hints exist** - no offset_hints, size_hints, indices
+- At this point, **NO partition hints exist** - no chunk_hint, indices
 - DBs are created with basic structure only
 
 **ForLoweringPass** (stage 10, in Concurrency):
 - Analyzes loop iteration variables and depend clauses
-- **GENERATES** `offset_hints`, `size_hints`, `indices` on DbAcquireOps
+- **GENERATES** `chunk_hint(chunk_index, chunk_size)`, `indices` on DbAcquireOps
+- `chunk_index` = which chunk this worker handles (0, 1, 2, ...)
+- `chunk_size` = elements per chunk (must be consistent across acquires)
 - These hints indicate how the loop accesses the DB
 
 **DbPartitioningPass** (stage 11, in ConcurrencyOpt):
@@ -84,7 +96,7 @@ All mode names and decisions must use **enums and attributes**, never string com
 ```cpp
 // BAD - hardcoded string comparisons
 if (modeName == "coarse") { ... }
-if (getPartitionModeLabel(mode) == "element_wise") { ... }
+if (mlir::arts::stringifyPartitionMode(mode) == "fine_grained") { ... }
 
 // GOOD - enum comparisons
 if (decision.granularity == PartitionGranularity::Coarse) { ... }
@@ -201,11 +213,11 @@ ReadOnlySingleNodeHeuristic::evaluate(const PartitioningContext &ctx) const {
   return std::nullopt;
 }
 
-// H1.5: StencilPatternHeuristic
+// H1.3: StencilPatternHeuristic
 std::optional<PartitioningDecision>
 StencilPatternHeuristic::evaluate(const PartitioningContext &ctx) const {
   if (patterns.hasIndexed) {
-    return PartitioningDecision::fineGrained(ctx, 1, "H1.5: Indexed access");
+    return PartitioningDecision::fineGrained(ctx, 1, "H1.3: Indexed access");
   }
   // ... etc
 }
@@ -241,7 +253,6 @@ Optionally rename for clarity (breaking change):
 
 ### 7.1: Add Terminology Mapping Section (after line 8)
 
-```markdown
 ## Terminology Mapping
 
 | User/CLI Term | Decision Enum | RewriterMode | outerRank | IR Attribute |
@@ -256,140 +267,60 @@ The difference is `outerRank`: coarse has `outerRank=0` (single DB), fine-graine
 has `outerRank>0` (multiple DBs, one per element/row).
 ```
 
-### 7.2: Add Complete Partitioning Flowchart (after Modes at a Glance)
+### 7.2: Add Complete Partitioning Flowchart
 
-```markdown
 ## Complete Partitioning Decision Flowchart
 
 This flowchart shows the end-to-end decision process across the pipeline stages.
+The hints (chunk_hint with chunk_index/chunk_size, and indices) are generated
+by ForLoweringPass AFTER CreateDbs runs. DbPartitioning uses these hints to make partitioning decisions.
 
-**CRITICAL**: The hints (offset_hints, size_hints, indices) are generated by ForLoweringPass
-AFTER CreateDbs runs. DbPartitioning uses these hints to make partitioning decisions.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────────┐
-│                        STAGE 7: CreateDbs Pass                                       │
-├─────────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                      │
-│   For each memref used in EDTs:                                                      │
-│                                                                                      │
-│   ┌──────────────────────────────────────────────────────────────────────┐          │
-│   │              Create Initial DbAllocOp + DbAcquireOps                 │          │
-│   │                                                                      │          │
-│   │   • No partition hints exist yet (ForLowering hasn't run!)           │          │
-│   │   • Creates basic DB structure from memref usage                     │          │
-│   │   • DbAcquireOps have offsets/sizes but NO offset_hints/size_hints   │          │
-│   └──────────────────────────────────────────────────────────────────────┘          │
-│                                                                                      │
-│   Output: DbAllocOps with DbAcquireOps (no partition hints yet)                      │
-│                                                                                      │
-└─────────────────────────────────────────┬───────────────────────────────────────────┘
-                                          │
-                                          ▼
-┌─────────────────────────────────────────────────────────────────────────────────────┐
-│                        STAGE 8-9: DbOpt + EdtOpt                                     │
-├─────────────────────────────────────────────────────────────────────────────────────┤
-│   DbPass: Initial DB optimization                                                    │
-│   EdtPass + LoopFusion: EDT optimization                                            │
-└─────────────────────────────────────────┬───────────────────────────────────────────┘
-                                          │
-                                          ▼
-┌─────────────────────────────────────────────────────────────────────────────────────┐
-│                        STAGE 10: Concurrency                                         │
-├─────────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                      │
-│   ConcurrencyPass: Analyze concurrency patterns                                      │
-│                                                                                      │
-│   ┌──────────────────────────────────────────────────────────────────────┐          │
-│   │              ForLoweringPass - GENERATES HINTS!                      │          │
-│   │                                                                      │          │
-│   │   Analyzes loop iteration variables and depend clauses:              │          │
-│   │                                                                      │          │
-│   │   • indices[] ← from indexed access patterns (A[i])                  │          │
-│   │   • offset_hints[] ← from chunk start (workerIdx * chunkSize)        │          │
-│   │   • size_hints[] ← from chunk size (min(chunkSize, remaining))       │          │
-│   │                                                                      │          │
-│   │   These hints are ADDED to existing DbAcquireOps                     │          │
-│   └──────────────────────────────────────────────────────────────────────┘          │
-│                                                                                      │
-│   Output: DbAcquireOps NOW have offset_hints, size_hints, indices                    │
-│                                                                                      │
-└─────────────────────────────────────────┬───────────────────────────────────────────┘
-                                          │
-                                          ▼
-┌─────────────────────────────────────────────────────────────────────────────────────┐
-│                        STAGE 11: ConcurrencyOpt                                      │
-├─────────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                      │
-│   EdtPass: Final EDT pass                                                            │
-│                                                                                      │
-│   ┌──────────────────────────────────────────────────────────────────────┐          │
-│   │              DbPartitioningPass - USES HINTS!                        │          │
-│   │                                                                      │          │
-│   │   For each DbAllocOp:                                                │          │
-│   │                                                                      │          │
-│   │   ┌────────────────────────────────────────────────────────────┐    │          │
-│   │   │  canBePartitioned(useFineGrainedFallback)?                 │    │          │
-│   │   │                                                            │    │          │
-│   │   │  Checks:                                                   │    │          │
-│   │   │  • hasNonAffineAccesses && !useFineGrainedFallback → false│    │          │
-│   │   │  • Safety checks on hints and structure                    │    │          │
-│   │   │                                                            │    │          │
-│   │   │  false? → SKIP (keep original)                             │    │          │
-│   │   └──────────────────────────┬─────────────────────────────────┘    │          │
-│   │                              │ true                                  │          │
-│   │                              ▼                                       │          │
-│   │   ┌────────────────────────────────────────────────────────────┐    │          │
-│   │   │  Per-Acquire Analysis (using hints from ForLowering)       │    │          │
-│   │   │                                                            │    │          │
-│   │   │  For each DbAcquireOp:                                     │    │          │
-│   │   │    • Read offset_hints → partitionOffset                   │    │          │
-│   │   │    • Read size_hints → partitionSize                       │    │          │
-│   │   │    • Read indices → canElementWise = true                  │    │          │
-│   │   │    • Determine mode: Coarse / ElementWise / Chunked        │    │          │
-│   │   └──────────────────────────┬─────────────────────────────────┘    │          │
-│   │                              │                                       │          │
-│   │                              ▼                                       │          │
-│   │   ┌────────────────────────────────────────────────────────────┐    │          │
-│   │   │  Heuristics Evaluation                                     │    │          │
-│   │   │                                                            │    │          │
-│   │   │  Priority Order:                                           │    │          │
-│   │   │  100: H1.1 ReadOnlySingleNode → Coarse                     │    │          │
-│   │   │   95: H1.5 StencilPattern → Stencil/FineGrained            │    │          │
-│   │   │   90: H1.4 MultiNode → FineGrained preferred               │    │          │
-│   │   │   80: H1.3 AccessUniformity → Coarse fallback              │    │          │
-│   │   │   50: H1.2 CostModel → Best of options                     │    │          │
-│   │   │                                                            │    │          │
-│   │   │  First heuristic returning decision WINS                   │    │          │
-│   │   └──────────────────────────┬─────────────────────────────────┘    │          │
-│   │                              │                                       │          │
-│   │                              ▼                                       │          │
-│   │   ┌────────────────────────────────────────────────────────────┐    │          │
-│   │   │  Apply Decision                                            │    │          │
-│   │   │                                                            │    │          │
-│   │   │  if decision.isCoarse():                                   │    │          │
-│   │   │      → Keep original (no change)                           │    │          │
-│   │   │  else:                                                     │    │          │
-│   │   │      → Apply DbRewriter (transforms allocation)            │    │          │
-│   │   │      → Set partition attribute                             │    │          │
-│   │   │                                                            │    │          │
-│   │   │  ┌──────────────────────────────────────────────────┐     │    │          │
-│   │   │  │  CONVERSION EXAMPLE:                             │     │    │          │
-│   │   │  │  sizes=[1] → sizes=[N]                           │     │    │          │
-│   │   │  │  partition=none → partition=element_wise         │     │    │          │
-│   │   │  └──────────────────────────────────────────────────┘     │    │          │
-│   │   └────────────────────────────────────────────────────────────┘    │          │
-│   └──────────────────────────────────────────────────────────────────────┘          │
-│                                                                                      │
-│   DbPass: Re-run to adjust modes after partitioning                                  │
-│                                                                                      │
-└─────────────────────────────────────────────────────────────────────────────────────┘
-```
+```mermaid
+flowchart TB
+  subgraph S7["Stage 7: CreateDbs pass"]
+    direction TB
+    S7A["For each memref used in EDTs:<br/>Create initial DbAllocOp + DbAcquireOps<br/><br/>Notes:<br/>- no partition hints exist yet (ForLowering has not run)<br/>- creates basic DB structure from memref usage<br/>- DbAcquireOps have offsets/sizes but no chunk_hint yet"]
+    S7O["Output: DbAllocOps with DbAcquireOps (no partition hints yet)"]
+    S7A --> S7O
+  end
+
+  subgraph S89["Stage 8-9: DbOpt + EdtOpt"]
+    direction TB
+    S89A["DbPass: initial DB optimization"]
+    S89B["EdtPass + LoopFusion: EDT optimization"]
+    S89A --> S89B
+  end
+
+  subgraph S10["Stage 10: Concurrency"]
+    direction TB
+    S10A["ConcurrencyPass: analyze concurrency patterns"]
+    S10B["ForLoweringPass: generates hints<br/><br/>Adds to existing DbAcquireOps:<br/>- indices[] from indexed access patterns (A[i])<br/>- chunk_hint(chunk_index, chunk_size)<br/>- chunk_index = which chunk (workerIdx, not element offset)<br/>- chunk_size = elements per chunk"]
+    S10O["Output: DbAcquireOps now have chunk_hint(index, size) and indices"]
+    S10A --> S10B --> S10O
+  end
+
+  subgraph S11["Stage 11: ConcurrencyOpt"]
+    direction TB
+    S11A["EdtPass: final EDT pass"]
+    S11B{"canBePartitioned: useFineGrainedFallback?"}
+    S11Bnote["Checks:<br/>- hasNonAffineAccesses and fallback not enabled → false<br/>- safety checks on hints and structure<br/>false → keep original"]
+    S11C["Per-acquire analysis (using hints from ForLowering)"]
+    S11D["Heuristics evaluation (H1.x)<br/>priority order (first hit wins):<br/>100: H1.1 ReadOnlySingleNode → coarse<br/>98: H1.2 MixedAccessVersioning → chunked + versioning<br/>95: H1.3 StencilPattern → stencil/fine-grained<br/>90: H1.4 MultiNode → fine-grained preferred<br/>80: H1.5 AccessUniformity → coarse fallback"]
+    S11E["Apply decision:<br/>- if coarse: keep original<br/>- else: apply DbRewriter, set partition attribute"]
+    S11F["DbPass: re-run to adjust modes after partitioning"]
+
+    S11A --> S11B
+    S11B -->|false| S11F
+    S11B -->|true| S11C --> S11D --> S11E --> S11F
+    S11B -.-> S11Bnote
+  end
+
+  S7 --> S89 --> S10 --> S11
 ```
 
 ### 7.3: Add Pass Pipeline Section (after flowchart)
 
-```markdown
 ## Pass Pipeline: CreateDbs → ForLowering → DbPartitioning
 
 The partitioning decision spans THREE key passes in the pipeline:
@@ -404,8 +335,9 @@ The partitioning decision spans THREE key passes in the pipeline:
 - Analyzes loop iteration variables and depend clauses
 - **GENERATES hints** on existing DbAcquireOps:
   - `indices[]` ← from indexed access patterns (e.g., `A[i]`)
-  - `offset_hints[]` ← from chunk start (e.g., `workerIdx * chunkSize`)
-  - `size_hints[]` ← from chunk size (e.g., `min(chunkSize, remaining)`)
+  - `chunk_index` ← which chunk this worker handles (NOT element offset!)
+  - `chunk_size` ← elements per chunk (must be consistent across all acquires)
+- Uses `chunk_hint(chunk_index, chunk_size)` syntax in IR
 - These hints enable partitioning decisions in the next stage
 
 ### Stage 11: DbPartitioning Pass (Partitioning Decisions) - IN CONCURRENCYOPT STAGE
@@ -421,20 +353,21 @@ The partitioning decision spans THREE key passes in the pipeline:
 ```
 Stage 7 (CreateDbs):
     DbAllocOp created with basic structure
-    DbAcquireOps have offsets/sizes (NO hints yet)
+    DbAcquireOps have offsets/sizes (NO chunk_hint yet)
                     ↓
 Stage 10 (ForLowering):
     ForLowering analyzes loop structure
-    ADDS offset_hints, size_hints, indices to DbAcquireOps
+    ADDS chunk_hint(chunk_index, chunk_size), indices to DbAcquireOps
                     ↓
 Stage 11 (DbPartitioning):
-    Reads hints from DbAcquireOps
+    Reads chunk_index/chunk_size from DbAcquireOps
+    Validates chunk_size consistency (must agree across all acquires)
     Builds PartitioningContext
     Evaluates heuristics → PartitioningDecision
-    If fine-grained chosen:
+    If chunked/fine-grained chosen:
         → Apply DbRewriter
-        → sizes=[1] → sizes=[N]
-        → partition=none → partition=element_wise
+        → sizes=[1] → sizes=[numChunks]
+        → partition=none → partition=chunked/element_wise
 ```
 
 This three-stage design allows:
@@ -443,15 +376,14 @@ This three-stage design allows:
 - DbPartitioning to make informed decisions using those hints
 ```
 
-### 7.3: Add Stencil Mode Section (after Mixed Mode, ~line 567)
+### 7.3: Add Stencil Mode Section
 
-```markdown
 ## Stencil Mode (ESD - Ephemeral Slice Dependencies)
 
 Stencil mode is a specialized form of chunked partitioning for stencil access patterns.
 
 ### When Stencil Mode is Selected
-- H1.5 detects `hasStencil` pattern in access analysis
+- H1.3 detects `hasStencil` pattern in access analysis
 - Access bounds show non-zero offsets (e.g., `A[i-1]`, `A[i+1]`)
 
 ### How It Differs from Chunked
@@ -473,9 +405,6 @@ For detailed stencil documentation, see:
 
 **File**: `docs/heuristics/partitioning/partitioning.md` (replace lines 205-248)
 
-### Complete LULESH Case Study Content
-
-```markdown
 ## LULESH Case Study: Coarse vs Fine vs DB Copy
 
 This case study compares three partitioning strategies for LULESH, demonstrating
@@ -513,7 +442,7 @@ carts benchmarks run lulesh --size small
 **What happens:**
 - `--partition-fallback=fine` enables non-affine conversion
 - `canBePartitioned(useFineGrainedFallback=true)` returns true
-- H1.5 selects element-wise for indexed access patterns
+- H1.3 selects element-wise for indexed access patterns
 - Allocation becomes: `sizes=[numNodes], elementSizes=[1]`
 
 **Commands:**
@@ -618,13 +547,12 @@ carts benchmarks run lulesh --size small -- --partition-fallback=fine
 ```bash
 # Stage 7: After CreateDbs - DBs exist but NO hints yet
 carts run lulesh.mlir --create-dbs > lulesh_after_createdb.mlir
-grep "offset_hints" lulesh_after_createdb.mlir | wc -l  # Should be 0!
+grep "chunk_hint" lulesh_after_createdb.mlir | wc -l  # Should be 0!
 grep "arts.db_alloc" lulesh_after_createdb.mlir | head -3
 
 # Stage 10: After ForLowering (in Concurrency) - Hints NOW exist
 carts run lulesh.mlir --concurrency > lulesh_after_forlowering.mlir
-grep "offset_hints" lulesh_after_forlowering.mlir | wc -l  # Should be > 0!
-grep "size_hints" lulesh_after_forlowering.mlir | wc -l    # Should be > 0!
+grep "chunk_hint" lulesh_after_forlowering.mlir | wc -l  # Should be > 0!
 
 # Stage 11: After DbPartitioning (in ConcurrencyOpt) - Partitioning applied
 carts run lulesh.mlir --concurrency-opt > lulesh_coarse.mlir
@@ -653,8 +581,8 @@ diff <(grep "arts.db_alloc" lulesh_coarse.mlir | head -5) \
 carts run lulesh.mlir --concurrency-opt 2>&1 | grep -E "H1\.[0-9]"
 carts run lulesh.mlir --concurrency-opt --partition-fallback=fine 2>&1 | grep -E "H1\.[0-9]"
 
-# Verify H1.5 triggers for indexed patterns
-carts run lulesh.mlir --concurrency-opt --partition-fallback=fine 2>&1 | grep "H1.5"
+# Verify H1.3 triggers for indexed patterns
+carts run lulesh.mlir --concurrency-opt --partition-fallback=fine 2>&1 | grep "H1.3"
 ```
 
 ### Step 7: Documentation Review

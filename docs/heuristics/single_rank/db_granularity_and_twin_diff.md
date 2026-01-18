@@ -178,7 +178,7 @@ Otherwise it falls back to coarse-grained.
 ```mermaid
 flowchart TD
   A[memref allocation] --> B[Collect per-EDT access patterns from DbControlOps]
-  B --> C{isConsistent AND pinnedDimCount>0 AND allAccessesHaveIndices?}
+  B --> C{"isConsistent AND pinnedDimCount &gt; 0 AND allAccessesHaveIndices?"}
   C -->|yes| D[Fine-grained db_alloc: sizes=pinned dims, elementSizes=rest]
   C -->|no| E["Coarse db_alloc: sizes=1, elementSizes=all dims"]
   D --> F[Per-EDT: emit 1 acquire per dependency index]
@@ -233,18 +233,18 @@ There is already compiler infrastructure that reasons about chunking/partitionin
 ```mermaid
 flowchart TD
   A[memref alloc] --> B[Compute global accessMode across EDTs]
-  B --> C{accessMode == IN?}
-  C -->|yes| D["COARSE: 1 DB<br/>(min deps, min DB count)"]
+  B --> C{"accessMode == IN?"}
+  C -->|yes| D["COARSE: 1 DB<br/>min deps, min DB count"]
   C -->|no| E[Writes exist]
 
-  E --> F{Can prove indexed disjointness?<br/>(consistent + pinned>0 + all indexed)}
-  F -->|no| G["COARSE: 1 DB<br/>(accept serialization or rely on depend ordering)"]
+  E --> F{"Can prove indexed disjointness?<br/>consistent + pinned &gt; 0 + all indexed"}
+  F -->|no| G["COARSE: 1 DB<br/>accept serialization or rely on depend ordering"]
   F -->|yes| H[Candidate for fine-grain/chunk]
 
   H --> I[Estimate cost: outerDBs, depsPerEDT, innerBytes]
-  I --> J{outerDBs small AND depsPerEDT small AND innerBytes large?}
-  J -->|yes| K["FINE: many DB GUIDs<br/>(max write concurrency)"]
-  J -->|no| L["CHUNK: block DBs<br/>(balance concurrency vs overhead)"]
+  I --> J{"outerDBs small AND depsPerEDT small AND innerBytes large?"}
+  J -->|yes| K["FINE: many DB GUIDs<br/>max write concurrency"]
+  J -->|no| L["CHUNK: block DBs<br/>balance concurrency vs overhead"]
 ```
 
 ### How frontier mechanics map to these heuristics
@@ -293,42 +293,30 @@ On single rank, it’s typically not needed for correctness and is mostly overhe
 ```mermaid
 flowchart TD
   A[DbAcquireOp] --> B{artsGlobalRankCount == 1?}
-  B -->|yes| C["twin_diff=false<br/>(avoid twin alloc + diff scan)"]
-  B -->|no| D{Can prove disjoint writes?}
+  B -->|yes| C["twin_diff=false<br/>avoid twin alloc + diff scan"]
+  B -->|no| D{"Can prove disjoint writes?"}
   D -->|yes| E[twin_diff=false]
-  D -->|no| F["twin_diff=true<br/>(conservative safety/perf)"]
+  D -->|no| F["twin_diff=true<br/>conservative safety/perf"]
 ```
 
 ## Decision flowchart (single rank)
 
-```text
-For each memref allocation:
+```mermaid
+flowchart TD
+  A["For each memref allocation"] --> B["Determine global accessMode across EDTs<br/>in / out / inout"]
+  B --> C{"accessMode == IN?<br/>read-only across EDTs"}
 
-  1) Determine global accessMode across EDTs (in / out / inout)
+  C -->|yes| D["COARSE allocation (1 DB)<br/>twin_diff = false"]
 
-  2) If accessMode == IN (read-only across EDTs):
-        -> COARSE allocation (1 DB)
-        -> twin_diff = false
+  C -->|no| E{"Can we prove consistent indexed access?<br/>consistent + pinnedDimCount &gt; 0 + allAccessesHaveIndices"}
 
-     Else (writes exist):
-        3) Can we prove consistent indexed access?
-             (consistent + pinnedDimCount>0 + allAccessesHaveIndices)
+  E -->|no| F["COARSE allocation (1 DB)<br/>twin_diff = false (single rank)"]
 
-           If NO:
-              -> COARSE allocation (1 DB)
-              -> twin_diff = false (single rank)
+  E -->|yes| G["Compute rough cost model:<br/>outerDBs, depsPerEDT, innerBytes"]
+  G --> H{"outerDBs small<br/>AND depsPerEDT small<br/>AND innerBytes large?"}
 
-           If YES:
-              4) Compute rough cost model:
-                    outerDBs, depsPerEDT, innerBytes
-
-                 If outerDBs small AND depsPerEDT small AND innerBytes large:
-                      -> FINE allocation
-                      -> twin_diff = false
-
-                 Else:
-                      -> CHUNKED allocation (blocked DBs)
-                      -> twin_diff = false
+  H -->|yes| I["FINE allocation<br/>twin_diff = false"]
+  H -->|no| J["CHUNKED allocation (blocked DBs)<br/>twin_diff = false"]
 ```
 
 ## What to measure next (to validate these heuristics)

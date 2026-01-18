@@ -13,7 +13,7 @@ using namespace mlir::arts;
 
 ///===-------------------------------------------------------------===///
 /// Enums
-//===-------------------------------------------------------------===///
+///===-------------------------------------------------------------===///
 const char *LoopMetadata::reductionKindToString(ReductionKind kind) const {
   switch (kind) {
   case ReductionKind::Add:
@@ -315,8 +315,6 @@ void DimensionDependency::importFromJson(const llvm::json::Object &json) {
     distance = *dist;
   else
     distance.reset();
-  // Note: dependentMemrefs not serialized (Values don't persist across
-  // sessions)
 }
 
 void DimensionDependency::exportToJson(llvm::json::Object &json) const {
@@ -324,8 +322,6 @@ void DimensionDependency::exportToJson(llvm::json::Object &json) const {
   json["has_carried_dep"] = hasCarriedDep;
   if (distance)
     json["distance"] = *distance;
-  // Note: dependentMemrefs not serialized (Values don't persist across
-  // sessions)
 }
 
 LoopMetadataAttr
@@ -339,23 +335,11 @@ LoopMetadata::createParallelizedMetadata(MLIRContext *ctx,
   /// - hasInterIterationDeps = false (broken by partial accumulators)
   /// - memrefsWithLoopCarriedDeps = 0
   /// - parallelClassification = Likely
-  /// - reductionKinds = null (cleared)
-  /// All other fields are copied from base.
-
   return LoopMetadataAttr::get(
-      ctx,
-      /// Parallelism - now parallel after reduction handling
-      builder.getBoolAttr(true),  // potentiallyParallel
-      builder.getBoolAttr(false), // hasReductions (handled via partials)
-      nullptr,                    // reductionKinds (cleared)
-      /// Loop structure - copied from base
-      base.getTripCount(), base.getNestingLevel(),
-      /// Dependency info - updated for parallelization
-      builder.getBoolAttr(false), // hasInterIterationDeps (broken by partials)
-      builder.getI64IntegerAttr(0), // memrefsWithLoopCarriedDeps = 0
-      /// Classification - now Likely parallel
+      ctx, builder.getBoolAttr(true), builder.getBoolAttr(false), nullptr,
+      base.getTripCount(), base.getNestingLevel(), builder.getBoolAttr(false),
+      builder.getI64IntegerAttr(0),
       builder.getI64IntegerAttr(
           static_cast<int64_t>(ParallelClassification::Likely)),
-      /// Location - copied from base
       base.getLocationKey());
 }

@@ -30,11 +30,11 @@ Walk through these steps and fix any problem that you find in the way
    Inspect `matrix_canon.mlir` to confirm the array-of-pointers form has been rewritten into a memref with explicit dimensions. For example, the OpenMP input carries `memref<?xmemref<?xf64>>` to represent `double**`; after canonicalization you should see a contiguous shape such as `memref<?x?xf64>` (or equivalent casts) and accesses of the form:
 
    ```
-   // Before: pointer-chasing per row/col
+   /// Before: pointer-chasing per row/col
    %row = memref.load %A[%i] : memref<?xmemref<?xf64>>
    %elt = memref.load %row[%j] : memref<?xf64>
 
-   // After: direct 2D memref with clear sizes
+   /// After: direct 2D memref with clear sizes
    %elt = memref.load %A_flat[%i, %j] : memref<?x?xf64>
    ```
 

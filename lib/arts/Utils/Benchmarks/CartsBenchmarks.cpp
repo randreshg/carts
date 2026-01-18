@@ -41,12 +41,12 @@ uint64_t carts_e2e_timer_get_time_ns(void) {
 __attribute__((noinline)) void carts_benchmarks_warmup_omp(void) {
 #pragma omp parallel
   {
-    // Intentionally empty - forces thread pool creation
+    /// Intentionally empty - forces thread pool creation
   }
 }
 #else
 __attribute__((noinline)) void carts_benchmarks_warmup_omp(void) {
-  // No-op for non-OMP builds
+  /// No-op for non-OMP builds
 }
 #endif
 
@@ -73,9 +73,9 @@ __attribute__((constructor)) static void carts_benchmarks_ctor(void) {
 }
 
 static int carts_benchmarks_is_arts_binary(void) {
-  // OpenMP reference binaries do not link against ARTS, but CARTS-generated
-  // binaries do. Use symbol presence as a robust discriminator even when
-  // `artsConfig` env var is not set (e.g., using ./arts.cfg in CWD).
+  /// OpenMP reference binaries do not link against ARTS, but CARTS-generated
+  /// binaries do. Use symbol presence as a robust discriminator even when
+  /// `artsConfig` env var is not set (e.g., using ./arts.cfg in CWD).
   return dlsym(RTLD_DEFAULT, "artsRT") != nullptr;
 }
 
@@ -104,7 +104,7 @@ __attribute__((noinline)) void carts_benchmarks_start(void) {
     return;
   }
 
-  // OpenMP reference path. Safe as a no-op when OpenMP is not enabled.
+  /// OpenMP reference path. Safe as a no-op when OpenMP is not enabled.
 #ifdef _OPENMP
   uint64_t t0 = carts_e2e_timer_get_time_ns();
   carts_benchmarks_warmup_omp();
@@ -123,47 +123,28 @@ __attribute__((noinline)) void carts_benchmarks_start(void) {
 /// Checksum/Result Reporting
 ///===----------------------------------------------------------------------===///
 
-/// Print checksum as double
 void carts_bench_checksum_d(double value) {
   printf("checksum: %.12e\n", value);
 }
-
-/// Print checksum as float
 void carts_bench_checksum_f(float value) { printf("checksum: %.6e\n", value); }
-
-/// Print checksum as integer
 void carts_bench_checksum_i(int value) { printf("checksum: %d\n", value); }
-
-/// Print checksum as long
 void carts_bench_checksum_l(long value) { printf("checksum: %ld\n", value); }
-
-/// Print RMS error
 void carts_bench_rms_error(double error) {
   printf("RMS error: %.12e\n", error);
 }
-
-/// Print a named result value
 void carts_bench_result_named(const char *name, double value) {
   printf("%s: %.12e\n", name, value);
 }
-
-/// Print sum
 void carts_bench_sum(double value) { printf("sum: %.12e\n", value); }
-
-/// Print total
 void carts_bench_total(double value) { printf("total: %.12e\n", value); }
-
-/// Verify result against expected value with tolerance
 int carts_bench_verify_d(double actual, double expected, double tolerance) {
   double diff;
-  if (expected == 0.0) {
+  if (expected == 0.0)
     diff = fabs(actual);
-  } else {
+  else
     diff = fabs((actual - expected) / expected);
-  }
 
   int passed = (diff < tolerance);
-
   if (passed) {
     printf("Verification: PASS (checksum: %.12e)\n", actual);
   } else {
@@ -175,4 +156,4 @@ int carts_bench_verify_d(double actual, double expected, double tolerance) {
   return passed ? 0 : 1;
 }
 
-} // extern "C"
+} /// extern "C"

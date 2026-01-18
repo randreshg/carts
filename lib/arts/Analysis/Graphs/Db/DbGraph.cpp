@@ -242,7 +242,7 @@ void DbGraph::print(llvm::raw_ostream &os) {
     os << "  DB [" << alloc->getHierId() << "]\n";
     os << "  Op: " << alloc->getDbAllocOp() << "\n";
     os << "  Lifetime: Op " << alloc->beginIndex << " -> " << alloc->endIndex
-       << " (span=" << alloc->criticalSpan << ")\n";
+       << "\n";
     if (alloc->rank)
       os << "  Rank: " << *alloc->rank << "\n";
     os << "\n";
@@ -326,9 +326,6 @@ void DbGraph::computeMetrics() {
 
   /// Compute global peak metrics using sweep-line algorithm
   computePeakMetrics();
-
-  /// Identify allocations that could reuse memory
-  computeReuseCandidates();
 }
 
 /// Compute metrics for a single allocation.
@@ -372,10 +369,7 @@ void DbGraph::computeAllocMetrics(DbAllocOp alloc, DbAllocNode *allocNode) {
   info.endIndex = lastEnd;
 
   /// Compute derived lifetime and locality metrics
-  computeCriticalSpan(info, allAcquireNodes);
-  computeCriticalPath(info, allAcquireNodes);
   computeLoopDepth(info, allAcquireNodes);
-  computeLongLivedFlag(info);
 }
 
 /// Process an acquire node: compute timing interval, link to release,
@@ -407,65 +401,6 @@ void DbGraph::processAcquireNode(DbAcquireNode *acq, DbAllocNode &info) {
   info.totalAccessBytes += acq->estimatedBytes;
 }
 
-/// Compute critical span for an allocation.
-/// It measures the bounding lifetime window for the
-/// allocation across all of its acquires. This is the inclusive distance from
-/// the earliest acquire beginIndex to the latest acquire endIndex.
-void DbGraph::computeCriticalSpan(
-    DbAllocNode &info, const SmallVectorImpl<DbAcquireNode *> &acquireNodes) {
-  info.criticalSpan = 0;
-  if (acquireNodes.empty())
-    return;
-
-  uint64_t minBegin = acquireNodes.front()->beginIndex;
-  uint64_t maxEnd = acquireNodes.front()->endIndex;
-
-  for (auto *node : acquireNodes) {
-    minBegin = std::min(minBegin, node->beginIndex);
-    maxEnd = std::max(maxEnd, node->endIndex);
-  }
-
-  info.criticalSpan = maxEnd >= minBegin ? (maxEnd - minBegin + 1) : 0;
-}
-
-/// Compute critical path length as the union of acquire intervals.
-/// It measures the total active-use time by merging overlapping inclusive
-/// intervals [beginIndex, endIndex] and summing their lengths.
-void DbGraph::computeCriticalPath(
-    DbAllocNode &info, const SmallVectorImpl<DbAcquireNode *> &acquireNodes) {
-  SmallVector<std::pair<uint64_t, uint64_t>, 8> segments;
-  for (auto *node : acquireNodes)
-    segments.emplace_back(node->beginIndex, node->endIndex);
-
-  llvm::sort(segments, [](auto a, auto b) {
-    return a.first < b.first || (a.first == b.first && a.second < b.second);
-  });
-
-  uint64_t currentStart = 0, currentEnd = 0;
-  bool initialized = false;
-  info.criticalPath = 0;
-
-  for (auto [start, end] : segments) {
-    if (!initialized) {
-      currentStart = start;
-      currentEnd = end;
-      initialized = true;
-      continue;
-    }
-
-    if (start <= currentEnd) {
-      currentEnd = std::max(currentEnd, end);
-    } else {
-      info.criticalPath += (currentEnd - currentStart + 1);
-      currentStart = start;
-      currentEnd = end;
-    }
-  }
-
-  if (initialized)
-    info.criticalPath += (currentEnd - currentStart + 1);
-}
-
 /// Compute maximum loop depth for an allocation.
 /// It captures the deepest loop nesting among all acquires of this
 /// allocation as a proxy for locality/pressure heuristics.
@@ -480,20 +415,6 @@ void DbGraph::computeLoopDepth(
     maxDepth = std::max<unsigned>(maxDepth, enclosingLoops.size());
   }
   info.maxLoopDepth = maxDepth;
-}
-
-/// Classify whether the allocation is long-lived.
-/// It marks allocations that span most of the function's op-order so they
-/// can be handled differently by later heuristics (e.g., reuse/coloring).
-void DbGraph::computeLongLivedFlag(DbAllocNode &info) {
-  unsigned firstIdx = info.beginIndex;
-  unsigned lastIdx = opOrder.empty() ? 0u : (unsigned)opOrder.size() - 1;
-  if (lastIdx > 0) {
-    double coverage =
-        (double)(info.endIndex - firstIdx + 1) / (double)(lastIdx + 1);
-    /// If coverage > 0.7, set `isLongLived`.
-    info.isLongLived = coverage > 0.7;
-  }
 }
 
 /// Compute peak live databases and bytes using sweep-line algorithm
@@ -534,16 +455,11 @@ void DbGraph::computePeakMetrics() {
   }
 }
 
-/// Compute reuse candidates for allocations
-void DbGraph::computeReuseCandidates() {
-  // Reuse detection disabled until we reintroduce a consumer.
-}
-
 void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
   using namespace llvm::json;
 
   if (!includeAnalysis) {
-    // Original graph visualization format
+    /// Original graph visualization format
     Object root;
 
     Array nodesArr;
@@ -567,7 +483,7 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
     return;
   }
 
-  /// ArtsMate-compatible DB entities export
+  /// ArtsMate DB entities export
   Array dbs;
 
   for (const auto &kv : allocNodes) {
@@ -584,8 +500,10 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
     if (artsId != 0)
       db["arts_id"] = artsId;
 
-    /// Granularity
-    db["granularity"] = allocNode->isFineGrained() ? "fine" : "coarse";
+    /// Partitioning mode
+    PartitionMode partitionMode = DatablockUtils::getPartitionModeFromStructure(
+        allocNode->getDbAllocOp());
+    db["partitioning"] = stringifyPartitionMode(partitionMode);
 
     /// Helper: extract static value or null for dynamic
     auto extractSizes = [](OperandRange values) -> Array {
@@ -650,9 +568,6 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
     /// Lifetime metrics
     staticAnalysis["begin_index"] = (int64_t)allocNode->beginIndex;
     staticAnalysis["end_index"] = (int64_t)allocNode->endIndex;
-    staticAnalysis["critical_span"] = (int64_t)allocNode->criticalSpan;
-    staticAnalysis["critical_path"] = (int64_t)allocNode->criticalPath;
-    staticAnalysis["is_long_lived"] = allocNode->isLongLived;
 
     /// Access metrics
     staticAnalysis["total_access_bytes"] = (int64_t)allocNode->totalAccessBytes;
@@ -662,7 +577,8 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
     /// Parallelization and partitioning hints
     staticAnalysis["is_parallel_friendly"] = allocNode->isParallelFriendly();
     staticAnalysis["can_be_partitioned"] = allocNode->canBePartitioned();
-    staticAnalysis["is_fine_grained"] = allocNode->isFineGrained();
+    staticAnalysis["is_fine_grained"] =
+        DatablockUtils::isFineGrained(allocNode->getDbAllocOp());
 
     /// Twin-diff analysis
     staticAnalysis["has_single_writer"] = allocNode->hasSingleWriter();

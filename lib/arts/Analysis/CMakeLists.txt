@@ -10,9 +10,6 @@ add_subdirectory(Edt)
 # Add the Graphs subdirectory
 add_subdirectory(Graphs)
 
-# Add the Heuristics subdirectory
-add_subdirectory(Heuristics)
-
 # Add the Metadata subdirectory
 add_subdirectory(Metadata)
 
@@ -23,7 +20,6 @@ add_subdirectory(Loop)
 list(APPEND CARTS_ANALYSIS_SOURCE_FILES ${CARTS_DB_ANALYSIS_SOURCE_FILES})
 list(APPEND CARTS_ANALYSIS_SOURCE_FILES ${CARTS_EDT_ANALYSIS_SOURCE_FILES})
 list(APPEND CARTS_ANALYSIS_SOURCE_FILES ${CARTS_GRAPHS_SOURCE_FILES})
-list(APPEND CARTS_ANALYSIS_SOURCE_FILES ${CARTS_HEURISTICS_SOURCE_FILES})
 list(APPEND CARTS_ANALYSIS_SOURCE_FILES ${CARTS_METADATA_ANALYSIS_SOURCE_FILES})
 list(APPEND CARTS_ANALYSIS_SOURCE_FILES ${LOOP_ANALYSIS_SOURCE_FILES})
 

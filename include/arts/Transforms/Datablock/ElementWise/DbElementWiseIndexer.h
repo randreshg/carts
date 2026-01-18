@@ -37,9 +37,8 @@ namespace arts {
 ///                      memrefIdx = remaining dimensions unchanged
 ///   Linearized:        localLinear = globalLinear - (elemOffset * stride)
 class DbElementWiseIndexer : public DbIndexerBase {
-  Value elemOffset_;
-  Value elemSize_;
-  SmallVector<Value> oldElementSizes_;
+  Value elemOffset, elemSize;
+  SmallVector<Value> oldElementSizes;
 
 public:
   DbElementWiseIndexer(Value elemOffset, Value elemSize, unsigned outerRank,

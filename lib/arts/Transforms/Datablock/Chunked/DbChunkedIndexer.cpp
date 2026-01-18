@@ -9,15 +9,15 @@
 ///     %db = arts.db_alloc memref<100xf64>
 ///     arts.edt {
 ///       %ref = arts.db_ref %db[0]
-///       memref.load %ref[%j]                 // global row j
+///       memref.load %ref[%j]                 /// global row j
 ///     }
 ///
 ///   AFTER (chunked, div/mod localization):
-///     %db = arts.db_alloc memref<4x25xf64>   // 4 chunks of 25 rows
+///     %db = arts.db_alloc memref<4x25xf64>   /// 4 chunks of 25 rows
 ///     arts.edt(%startChunk, %numChunks) {
-///       %chunk = %j / 25                     // physical chunk
-///       %relChunk = %chunk - %startChunk     // worker-relative chunk
-///       %localRow = %j % 25                  // row within chunk
+///       %chunk = %j / 25                     /// physical chunk
+///       %relChunk = %chunk - %startChunk     /// worker-relative chunk
+///       %localRow = %j % 25                  /// row within chunk
 ///       %ref = arts.db_ref %db[%relChunk]
 ///       memref.load %ref[%localRow]
 ///     }
@@ -30,7 +30,6 @@
 ///   1. De-linearize: globalRow = linear / stride, col = linear % stride
 ///   2. Apply div/mod: localRow = globalRow % chunkSize
 ///   3. Re-linearize: localLinear = localRow * stride + col
-///
 ///==========================================================================///
 
 #include "arts/Transforms/Datablock/Chunked/DbChunkedIndexer.h"
@@ -49,8 +48,8 @@ using namespace mlir::arts;
 DbChunkedIndexer::DbChunkedIndexer(Value chunkSize, Value startChunk,
                                    Value elemOffset, unsigned outerRank,
                                    unsigned innerRank)
-    : DbIndexerBase(outerRank, innerRank), chunkSize_(chunkSize),
-      startChunk_(startChunk), elemOffset_(elemOffset) {}
+    : DbIndexerBase(outerRank, innerRank), chunkSize(chunkSize),
+      startChunk(startChunk), elemOffset(elemOffset) {}
 
 LocalizedIndices DbChunkedIndexer::localize(ArrayRef<Value> globalIndices,
                                             OpBuilder &builder, Location loc) {
@@ -69,21 +68,21 @@ LocalizedIndices DbChunkedIndexer::localize(ArrayRef<Value> globalIndices,
 
   /// Pick the index that tracks the partition offset (defaults to 0)
   unsigned partitionDim = 0;
-  if (elemOffset_) {
+  if (elemOffset) {
     for (unsigned i = 0; i < globalIndices.size(); ++i) {
-      if (ValueUtils::dependsOn(globalIndices[i], elemOffset_)) {
+      if (ValueUtils::dependsOn(globalIndices[i], elemOffset)) {
         partitionDim = i;
         break;
       }
     }
   }
   Value globalRow = globalIndices[partitionDim];
-  Value cs = chunkSize_ ? chunkSize_ : one();
+  Value cs = chunkSize ? chunkSize : one();
   cs = builder.create<arith::MaxUIOp>(loc, cs, one());
 
   /// dbRefIdx = (globalRow / chunkSize) - startChunk
   Value physChunk = builder.create<arith::DivUIOp>(loc, globalRow, cs);
-  Value relChunk = builder.create<arith::SubIOp>(loc, physChunk, startChunk_);
+  Value relChunk = builder.create<arith::SubIOp>(loc, physChunk, startChunk);
   result.dbRefIndices.push_back(relChunk);
 
   /// memrefIdx[partitionDim] = globalRow % chunkSize
@@ -114,13 +113,13 @@ LocalizedIndices DbChunkedIndexer::localizeLinearized(Value globalLinearIndex,
   Value col = builder.create<arith::RemUIOp>(loc, globalLinearIndex, stride);
 
   Value cs =
-      chunkSize_ ? chunkSize_ : builder.create<arith::ConstantIndexOp>(loc, 1);
+      chunkSize ? chunkSize : builder.create<arith::ConstantIndexOp>(loc, 1);
   cs = builder.create<arith::MaxUIOp>(
       loc, cs, builder.create<arith::ConstantIndexOp>(loc, 1));
 
   /// dbRefIdx = (globalRow / chunkSize) - startChunk
   Value physChunk = builder.create<arith::DivUIOp>(loc, globalRow, cs);
-  Value relChunk = builder.create<arith::SubIOp>(loc, physChunk, startChunk_);
+  Value relChunk = builder.create<arith::SubIOp>(loc, physChunk, startChunk);
   result.dbRefIndices.push_back(relChunk);
 
   /// localRow = globalRow % chunkSize
@@ -290,13 +289,13 @@ DbChunkedIndexer::localizeCoordinates(ArrayRef<Value> globalIndices,
     if (d < numIndexedDims) {
       /// Indexed dimension: local index is always 0
       result.push_back(zero());
-    } else if (d == numIndexedDims && chunkSize_) {
+    } else if (d == numIndexedDims && chunkSize) {
       /// First sliced dimension: compute chunk-relative index
       /// dbRefIdx = (globalIdx / chunkSize) - startChunk
       Value physChunk =
-          builder.create<arith::DivUIOp>(loc, globalIdx, chunkSize_);
+          builder.create<arith::DivUIOp>(loc, globalIdx, chunkSize);
       Value relChunk =
-          builder.create<arith::SubIOp>(loc, physChunk, startChunk_);
+          builder.create<arith::SubIOp>(loc, physChunk, startChunk);
       result.push_back(relChunk);
       ARTS_DEBUG("  Dim " << d << ": div/mod by chunkSize");
     } else if (d - numIndexedDims < sliceOffsets.size()) {

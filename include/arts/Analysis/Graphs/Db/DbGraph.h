@@ -82,18 +82,9 @@ private:
   /// Metrics computation helpers
   void computeAllocMetrics(DbAllocOp alloc, DbAllocNode *allocNode);
   void processAcquireNode(DbAcquireNode *acq, DbAllocNode &info);
-  void
-  computeCriticalSpan(DbAllocNode &info,
-                      const SmallVectorImpl<DbAcquireNode *> &acquireNodes);
-  void
-  computeCriticalPath(DbAllocNode &info,
-                      const SmallVectorImpl<DbAcquireNode *> &acquireNodes);
   void computeLoopDepth(DbAllocNode &info,
                         const SmallVectorImpl<DbAcquireNode *> &acquireNodes);
-  void computeLongLivedFlag(DbAllocNode &info);
-  void computeEscapingFlag(DbAllocOp alloc, DbAllocNode &info);
   void computePeakMetrics();
-  void computeReuseCandidates();
 
 private:
   DenseMap<Operation *, unsigned> opOrder;

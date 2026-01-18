@@ -6,6 +6,7 @@
 
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -68,6 +69,8 @@ Operation *DatablockUtils::getUnderlyingDb(Value v, unsigned depth) {
     return acq.getOperation();
   if (auto alloc = v.getDefiningOp<DbAllocOp>())
     return alloc.getOperation();
+  if (auto copy = v.getDefiningOp<DbCopyOp>())
+    return copy.getOperation();
   if (auto dbLoad = v.getDefiningOp<DbRefOp>())
     return getUnderlyingDb(dbLoad.getSource(), depth + 1);
 
@@ -99,7 +102,7 @@ Operation *DatablockUtils::getUnderlyingDb(Value v, unsigned depth) {
 
   /// As a last resort, try underlying root op if it's a DB op
   if (Operation *root = ValueUtils::getUnderlyingOperation(v)) {
-    if (isa<DbAcquireOp, DbAllocOp>(root))
+    if (isa<DbAcquireOp, DbAllocOp, DbCopyOp>(root))
       return root;
   }
 
@@ -113,8 +116,11 @@ Operation *DatablockUtils::getUnderlyingDbAlloc(Value v) {
   if (isa<DbAllocOp>(underlyingDb))
     return underlyingDb;
   auto dbAcquire = dyn_cast<DbAcquireOp>(underlyingDb);
-  assert(dbAcquire);
-  return getUnderlyingDbAlloc(dbAcquire.getSourcePtr());
+  if (dbAcquire)
+    return getUnderlyingDbAlloc(dbAcquire.getSourcePtr());
+  if (auto dbCopy = dyn_cast<DbCopyOp>(underlyingDb))
+    return getUnderlyingDbAlloc(dbCopy.getSourcePtr());
+  return nullptr;
 }
 
 ///===----------------------------------------------------------------------===///
@@ -171,9 +177,28 @@ bool DatablockUtils::hasSingleSize(Operation *dbOp) {
 }
 
 bool DatablockUtils::isCoarseGrained(DbAllocOp alloc) {
+  if (auto mode = getPartitionMode(alloc.getOperation()))
+    return *mode == PartitionMode::coarse;
+
+  /// Fallback: check sizes for backward compatibility
   return llvm::all_of(alloc.getSizes(), [](Value v) {
     int64_t val;
     return ValueUtils::getConstantIndex(v, val) && val == 1;
+  });
+}
+
+bool DatablockUtils::isFineGrained(DbAllocOp alloc) {
+  if (auto mode = getPartitionMode(alloc.getOperation()))
+    return *mode == PartitionMode::fine_grained;
+
+  /// Fallback: check elementSizes for backward compatibility
+  ValueRange elementSizes = alloc.getElementSizes();
+  if (elementSizes.empty())
+    return false;
+
+  return llvm::all_of(elementSizes, [](Value v) {
+    int64_t cst;
+    return ValueUtils::getConstantIndex(v, cst) && cst == 1;
   });
 }
 
@@ -193,33 +218,25 @@ SmallVector<Value> DatablockUtils::getOffsetsFromDb(Value datablockPtr) {
 /// Partition Mode Detection
 ///===----------------------------------------------------------------------===///
 
-PartitionMode DatablockUtils::getPartitionMode(DbAcquireOp acquire) {
-  /// Element-wise: has explicit indices (from OpenMP depend(in: A[i][j]))
-  if (!acquire.getIndices().empty())
-    return PartitionMode::ElementWise;
+PartitionMode
+DatablockUtils::getPartitionModeFromStructure(DbAcquireOp acquire) {
+  if (auto mode = ::getPartitionMode(acquire.getOperation()))
+    return *mode;
 
-  /// Chunked: has offsets but no indices (from OpenMP depend(in: A[i:size]))
-  if (!acquire.getOffsets().empty())
-    return PartitionMode::Chunked;
-
-  /// Chunked hints: offsets/sizes inferred by lowering
-  /// (offset_hints/size_hints)
-  if (!acquire.getOffsetHints().empty() || !acquire.getSizeHints().empty())
-    return PartitionMode::Chunked;
-
-  /// Default: coarse-grained (acquires entire datablock)
-  return PartitionMode::Coarse;
+  /// Fallback: if no attribute, default to coarse
+  return PartitionMode::coarse;
 }
 
-PartitionMode DatablockUtils::getPartitionMode(DbAllocOp alloc) {
-  /// Can only detect coarse from alloc structure (all sizes == 1)
-  if (isCoarseGrained(alloc))
-    return PartitionMode::Coarse;
+PartitionMode DatablockUtils::getPartitionModeFromStructure(DbAllocOp alloc) {
+  if (auto mode = ::getPartitionMode(alloc.getOperation()))
+    return *mode;
 
-  /// Fine-grained allocations could be either ElementWise or Chunked.
-  /// The actual mode is determined at acquire time based on DbAcquireOp
-  /// structure. Default to ElementWise for fine-grained allocations.
-  return PartitionMode::ElementWise;
+  /// Fallback: if no attribute, check structural coarseness
+  if (isCoarseGrained(alloc))
+    return PartitionMode::coarse;
+
+  /// Default to fine_grained for fine-grained allocations
+  return PartitionMode::fine_grained;
 }
 
 ///===----------------------------------------------------------------------===///
@@ -236,10 +253,10 @@ std::optional<int64_t> DatablockUtils::getStaticStride(ValueRange sizes) {
 
   /// Multi-dimensional [D0, D1, ...]: stride = D1 * D2 * ... (skip D0!)
   int64_t stride = 1;
-  for (size_t i = 1; i < sizes.size(); ++i) { /// START AT 1
+  for (size_t i = 1; i < sizes.size(); ++i) {
     int64_t dim;
     if (!ValueUtils::getConstantIndex(sizes[i], dim))
-      return std::nullopt; /// Dynamic dimension
+      return std::nullopt;
     stride *= dim;
   }
   return stride;
@@ -254,7 +271,7 @@ std::optional<int64_t> DatablockUtils::getStaticStride(MemRefType memrefType) {
     return 1;
 
   int64_t stride = 1;
-  for (size_t i = 1; i < shape.size(); ++i) { /// START AT 1
+  for (size_t i = 1; i < shape.size(); ++i) {
     if (shape[i] == ShapedType::kDynamic)
       return std::nullopt;
     stride *= shape[i];
@@ -306,13 +323,12 @@ Value DatablockUtils::getOuterStrideValue(OpBuilder &builder, Location loc,
 ///===----------------------------------------------------------------------===//
 
 bool DatablockUtils::hasStaticHints(DbAcquireOp acqOp) {
-  auto offsets = acqOp.getOffsetHints();
-  auto sizes = acqOp.getSizeHints();
+  Value chunkIndex = acqOp.getChunkIndex();
+  Value chunkSize = acqOp.getChunkSize();
   int64_t val = 0;
-  bool offConst =
-      offsets.empty() || ValueUtils::getConstantIndex(offsets[0], val);
-  bool sizeConst = sizes.empty() || ValueUtils::getConstantIndex(sizes[0], val);
-  return offConst && sizeConst;
+  bool idxConst = !chunkIndex || ValueUtils::getConstantIndex(chunkIndex, val);
+  bool sizeConst = !chunkSize || ValueUtils::getConstantIndex(chunkSize, val);
+  return idxConst && sizeConst;
 }
 
 bool DatablockUtils::isWriterMode(ArtsMode mode) {
@@ -421,4 +437,22 @@ Operation *DatablockUtils::findUserEdt(DbControlOp dbControl) {
     }
   }
   return nullptr;
+}
+
+///===----------------------------------------------------------------------===///
+/// Index Chain Utilities
+///===----------------------------------------------------------------------===///
+
+/// Collect full index chain from DbRefOp indices plus memory operation indices.
+SmallVector<Value> DatablockUtils::collectFullIndexChain(DbRefOp dbRef,
+                                                         Operation *memOp) {
+  SmallVector<Value> chain(dbRef.getIndices().begin(),
+                           dbRef.getIndices().end());
+  ValueRange memIndices;
+  if (auto load = dyn_cast<memref::LoadOp>(memOp))
+    memIndices = load.getIndices();
+  else if (auto store = dyn_cast<memref::StoreOp>(memOp))
+    memIndices = store.getIndices();
+  chain.append(memIndices.begin(), memIndices.end());
+  return chain;
 }

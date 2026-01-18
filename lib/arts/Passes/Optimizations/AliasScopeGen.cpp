@@ -11,7 +11,8 @@
 ///   scf.for %i = ... {
 ///     %a = llvm.load %ptr_A[%i] : f64
 ///     %b = llvm.load %ptr_B[%i] : f64
-///     llvm.store %result, %ptr_A[%i]  // May alias with %ptr_B - blocks opt!
+///     /// May alias with %ptr_B - blocks opt!
+///     llvm.store %result, %ptr_A[%i]
 ///   }
 ///
 /// After (distinct alias scopes enable vectorization):
@@ -55,16 +56,15 @@ using namespace mlir::arts;
 
 namespace {
 
-/// Maximum number of arrays for alias scope generation (following Polly's
-/// limit) Alias scope metadata grows quadratically with number of arrays.
+/// Maximum number of arrays for alias scope generation
 constexpr unsigned MaxArraysForAliasScopes = 10;
 
 /// Information about a data pointer loaded from the deps struct
 struct DataPointerInfo {
-  LLVM::LoadOp loadOp;        // The load op that loads the data pointer
-  Value ptr;                  // The loaded pointer value
-  int64_t depIndex;           // Index into deps array (for naming)
-  LLVM::AliasScopeAttr scope; // Assigned alias scope
+  LLVM::LoadOp loadOp;        /// The load op that loads the data pointer
+  Value ptr;                  /// The loaded pointer value
+  int64_t depIndex;           /// Index into deps array (for naming)
+  LLVM::AliasScopeAttr scope; /// Assigned alias scope
 };
 
 static void
