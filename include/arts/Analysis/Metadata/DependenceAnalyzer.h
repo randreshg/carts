@@ -132,7 +132,7 @@ public:
   /// Result of per-dimension dependency analysis for a loop nest.
   struct LoopNestDependenceResult {
     SmallVector<DimensionDependency> dimensionDeps;
-    std::optional<int64_t> outermostParallelDim; // -1 if none parallelizable
+    std::optional<int64_t> outermostParallelDim;
   };
 
   /// Analyze a loop nest for per-dimension dependencies.
@@ -140,23 +140,19 @@ public:
   ///
   /// Example: for(i) { for(j) { A[i][j] = f(A[i][j-1]) } }
   /// Result:
-  ///   - dimensionDeps[0] = {dim=0, hasCarriedDep=false} // i-loop is
-  ///   parallelizable
-  ///   - dimensionDeps[1] = {dim=1, hasCarriedDep=true}  // j-loop has deps
+  ///   - dimensionDeps[0] = {dim=0, hasCarriedDep=false} 
+  ///   - dimensionDeps[1] = {dim=1, hasCarriedDep=true} 
   ///   - outermostParallelDim = 0
-  ///
-  /// This allows Seidel-2D to parallelize the i-loop even though j-loop is
-  /// sequential.
   LoopNestDependenceResult
   analyzeLoopNestDependences(affine::AffineForOp outermostLoop) const {
     LoopNestDependenceResult result;
 
-    // Collect the loop nest (outermost to innermost)
+    /// Collect the loop nest (outermost to innermost)
     SmallVector<affine::AffineForOp, 4> nest;
     affine::AffineForOp current = outermostLoop;
     while (current) {
       nest.push_back(current);
-      // Find immediate inner affine.for
+      /// Find immediate inner affine.for
       affine::AffineForOp inner;
       current.getBody()->walk([&](affine::AffineForOp innerFor) {
         if (innerFor->getParentOp() == current.getOperation()) {
@@ -171,23 +167,22 @@ public:
     if (nest.empty())
       return result;
 
-    // Analyze per-dimension dependencies
+    /// Analyze per-dimension dependencies
     result.outermostParallelDim = std::nullopt;
     for (size_t dim = 0; dim < nest.size(); ++dim) {
       DimensionDependency depInfo;
       depInfo.dimension = dim;
 
-      // Check if this specific loop dimension carries dependencies
+      /// Check if this specific loop dimension carries dependencies
       auto summary = analyzeAffineLoopDependencesAtDimension(nest, dim);
       depInfo.hasCarriedDep = summary.hasDependence;
       depInfo.distance = summary.minDistance;
 
       result.dimensionDeps.push_back(depInfo);
 
-      // Track outermost parallelizable dimension
-      if (!depInfo.hasCarriedDep && !result.outermostParallelDim) {
+      /// Track outermost parallelizable dimension
+      if (!depInfo.hasCarriedDep && !result.outermostParallelDim)
         result.outermostParallelDim = dim;
-      }
     }
 
     return result;
@@ -246,12 +241,12 @@ private:
   /// Check if a dependence component at the target dimension is loop-carried.
   /// Returns true if the distance bounds indicate a non-zero distance.
   static bool isDimensionCarried(const affine::DependenceComponent &comp) {
-    // A dimension carries a dependency if its distance is not zero.
-    // Zero distance means same iteration (no loop-carried dep for this dim).
+    /// A dimension carries a dependency if its distance is not zero.
+    /// Zero distance means same iteration (no loop-carried dep for this dim).
     bool lbZero = comp.lb && *comp.lb == 0;
     bool ubZero = comp.ub && *comp.ub == 0;
     if (lbZero && ubZero)
-      return false; // Same iteration in this dimension
+      return false;
     return true;
   }
 
@@ -270,15 +265,15 @@ private:
     if (nest.empty() || targetDim >= nest.size())
       return summary;
 
-    // The target loop we're checking for carried dependencies
+    /// The target loop we're checking for carried dependencies
     affine::AffineForOp targetLoop = nest[targetDim];
 
-    // Use the existing single-loop analysis for the target loop
-    // This is safer than trying to compute per-dimension components manually
+    /// Use the existing single-loop analysis for the target loop
+    /// This is safer than trying to compute per-dimension components manually
     auto singleLoopResult =
         analyzeAffineLoopDependences(targetLoop, std::nullopt);
 
-    // If there's a dependency carried by THIS loop, mark it
+    /// If there's a dependency carried by THIS loop, mark it
     summary.hasDependence = singleLoopResult.hasDependence;
     summary.minDistance = singleLoopResult.minDistance;
 

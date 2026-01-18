@@ -18,11 +18,7 @@ namespace mlir {
 namespace arts {
 
 /// Execution mode classification for chunking decisions.
-enum class ExecutionMode {
-  SingleThreaded, // nodeCount=1, threads=1
-  IntraNode,      // nodeCount=1, threads>1
-  InterNode       // nodeCount>1
-};
+enum class ExecutionMode { SingleThreaded, IntraNode, InterNode };
 
 class ArtsAbstractMachine {
 public:

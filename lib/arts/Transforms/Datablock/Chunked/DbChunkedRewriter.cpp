@@ -6,15 +6,15 @@
 /// Example transformation (N=100 rows, chunkSize=25, 4 workers):
 ///   BEFORE:
 ///     %db = arts.db_alloc memref<100x10xf64>
-///     arts.db_acquire %db [0] [100]            // worker acquires all rows
+///     arts.db_acquire %db [0] [100]            /// worker acquires all rows
 ///     %ref = arts.db_ref %db[%i]
-///     memref.load %ref[%j]                     // global row j
+///     memref.load %ref[%j]                     /// global row j
 ///
 ///   AFTER:
-///     %db = arts.db_alloc memref<4x25x10xf64>  // 4 chunks of 25 rows
-///     arts.db_acquire %db [%chunk] [1]         // worker 1: chunk[1]
-///     %ref = arts.db_ref %db[%j / 25]          // chunk = j / chunkSize
-///     memref.load %ref[%j % 25]                // local = j % chunkSize
+///     %db = arts.db_alloc memref<4x25x10xf64>  /// 4 chunks of 25 rows
+///     arts.db_acquire %db [%chunk] [1]         /// worker 1: chunk[1]
+///     %ref = arts.db_ref %db[%j / 25]          /// chunk = j / chunkSize
+///     memref.load %ref[%j % 25]                /// local = j % chunkSize
 ///
 /// Index localization: chunk = global / chunkSize, local = global % chunkSize
 ///==========================================================================///
@@ -24,10 +24,9 @@
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/EdtUtils.h"
+#include "arts/Utils/RemovalUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-
-#define DEBUG_TYPE "db_transforms"
 
 ARTS_DEBUG_SETUP(db_transforms);
 
@@ -46,10 +45,8 @@ void DbChunkedRewriter::transformAcquire(const DbRewriteAcquire &info,
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPoint(acquire);
   Location loc = acquire.getLoc();
-  SmallVector<Value> originalOffsetHints(acquire.getOffsetHints().begin(),
-                                         acquire.getOffsetHints().end());
-  SmallVector<Value> originalSizeHints(acquire.getSizeHints().begin(),
-                                       acquire.getSizeHints().end());
+  Value originalChunkIndex = acquire.getChunkIndex();
+  Value originalChunkSize = acquire.getChunkSize();
 
   /// Update source to new allocation
   acquire.getSourceGuidMutable().assign(newAlloc.getGuid());
@@ -71,96 +68,72 @@ void DbChunkedRewriter::transformAcquire(const DbRewriteAcquire &info,
   if (info.isFullRange) {
     Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
     Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
-    Value chunkCount =
-        plan_.numChunks ? plan_.numChunks
-                        : (!newOuterSizes_.empty() ? newOuterSizes_[0] : one);
+    Value chunkCount = plan.numChunks
+                           ? plan.numChunks
+                           : (!newOuterSizes.empty() ? newOuterSizes[0] : one);
 
     SmallVector<Value> newOffsets{zero};
     SmallVector<Value> newSizes{chunkCount};
     acquire.getOffsetsMutable().assign(newOffsets);
     acquire.getSizesMutable().assign(newSizes);
-    acquire.getOffsetHintsMutable().clear();
-    acquire.getSizeHintsMutable().clear();
+    // Clear chunk hints for full-range acquire
+    acquire.getChunkIndexMutable().clear();
+    acquire.getChunkSizeMutable().clear();
 
     ARTS_DEBUG("  Mixed mode: coarse acquire gets full range [0, " << chunkCount
                                                                    << ")");
-    rebaseEdtUsers(acquire, builder, /*startChunk=*/zero);
+    if (!info.skipRebase)
+      rebaseEdtUsers(acquire, builder, /*startChunk=*/zero);
     return;
   }
 
-  /// CHUNKED MODE: Multi-chunk div/mod model
-  /// DISJOINT MODEL: Physical chunks are disjoint and indexed by
-  /// plan_.chunkSize. Chunk layout: chunk 0 -> rows [0, plan_.chunkSize),
-  /// chunk 1 -> rows [plan_.chunkSize, 2*plan_.chunkSize), etc.
-  ///
-  /// A partition may span MULTIPLE physical chunks if chunk boundary
-  /// doesn't align with partition boundary.
-  ///
-  /// Example: plan_.chunkSize=66, worker 1 needs rows 63-128
-  ///   - startChunk = 63/66 = 0
-  ///   - endChunk = 128/66 = 1
-  ///   - chunkCount = 2
-
+  /// CHUNKED MODE: div/mod model where partitions may span multiple chunks
   Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
-  Value chunkSize = plan_.chunkSize ? plan_.chunkSize : one;
+  Value chunkSize = plan.chunkSize ? plan.chunkSize : one;
   chunkSize = builder.create<arith::MaxUIOp>(loc, chunkSize, one);
 
-  /// Compute start chunk index using physical chunk size
   Value startChunk = builder.create<arith::DivUIOp>(loc, elemOffset, chunkSize);
-
-  /// Compute end position (elemOffset + elemSize - 1)
   Value endPos = builder.create<arith::AddIOp>(loc, elemOffset, elemSize);
   endPos = builder.create<arith::SubIOp>(loc, endPos, one);
-
-  /// Compute end chunk index
   Value endChunk = builder.create<arith::DivUIOp>(loc, endPos, chunkSize);
 
-  /// Clamp endChunk to valid range (numChunks - 1)
-  if (!newOuterSizes_.empty()) {
-    Value numChunks = newOuterSizes_[0];
-    Value maxChunk = builder.create<arith::SubIOp>(loc, numChunks, one);
+  /// Clamp endChunk to valid range
+  if (!newOuterSizes.empty()) {
+    Value maxChunk = builder.create<arith::SubIOp>(loc, newOuterSizes[0], one);
     endChunk = builder.create<arith::MinUIOp>(loc, endChunk, maxChunk);
   }
 
-  /// Compute chunk count = endChunk - startChunk + 1
   Value chunkCount = builder.create<arith::SubIOp>(loc, endChunk, startChunk);
   chunkCount = builder.create<arith::AddIOp>(loc, chunkCount, one);
 
-  /// Set offsets/sizes for chunked mode
-  SmallVector<Value> newOffsets, newSizes;
-  newOffsets.push_back(startChunk);
-  newSizes.push_back(chunkCount);
+  SmallVector<Value> newOffsets{startChunk};
+  SmallVector<Value> newSizes{chunkCount};
 
   acquire.getOffsetsMutable().assign(newOffsets);
   acquire.getSizesMutable().assign(newSizes);
 
-  /// Preserve original loop bounds hints when available; otherwise fall back
-  /// to element-space offsets/sizes for localization.
-  SmallVector<Value> offsetHints = originalOffsetHints.empty()
-                                       ? SmallVector<Value>{elemOffset}
-                                       : originalOffsetHints;
-  SmallVector<Value> sizeHints = originalSizeHints.empty()
-                                     ? SmallVector<Value>{elemSize}
-                                     : originalSizeHints;
-  acquire.getOffsetHintsMutable().assign(offsetHints);
-  acquire.getSizeHintsMutable().assign(sizeHints);
+  /// Preserve original chunk hints or fall back to element-space values
+  acquire.getChunkIndexMutable().assign(originalChunkIndex ? originalChunkIndex
+                                                           : elemOffset);
+  acquire.getChunkSizeMutable().assign(originalChunkSize ? originalChunkSize
+                                                         : elemSize);
 
   /// Use mode-aware rebase for chunked mode EDT users
-  /// Pass startChunk directly to avoid recomputation
-  rebaseEdtUsers(acquire, builder, startChunk);
+  if (!info.skipRebase)
+    rebaseEdtUsers(acquire, builder, startChunk);
 }
 
 void DbChunkedRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
                                        OpBuilder &builder) {
   Location loc = ref.getLoc();
   Type newElementType = newAlloc.getAllocatedElementType();
-  Value newSource = (ref.getSource() == oldAlloc_.getPtr()) ? newAlloc.getPtr()
-                                                            : ref.getSource();
+  Value newSource = (ref.getSource() == oldAlloc.getPtr()) ? newAlloc.getPtr()
+                                                           : ref.getSource();
 
   /// Collect load/store users of this db_ref
   SmallVector<Operation *> refUsers(ref.getResult().getUsers().begin(),
                                     ref.getResult().getUsers().end());
-  llvm::SetVector<Operation *> opsToRemove;
+  RemovalUtils removal;
 
   bool hasLoadStoreUsers = false;
   for (Operation *user : refUsers) {
@@ -180,16 +153,11 @@ void DbChunkedRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
       loadStoreIndices = store.getIndices();
 
     SmallVector<Value> newOuter, newInner;
-    auto zero = [&]() {
-      return builder.create<arith::ConstantIndexOp>(userLoc, 0);
-    };
+    Value one = builder.create<arith::ConstantIndexOp>(userLoc, 1);
+    Value cs = plan.chunkSize ? plan.chunkSize : one;
+    cs = builder.create<arith::MaxUIOp>(userLoc, cs, one);
 
-    /// CHUNKED: div/mod for chunk selection
-    auto one = [&]() {
-      return builder.create<arith::ConstantIndexOp>(userLoc, 1);
-    };
-    Value cs = plan_.chunkSize ? plan_.chunkSize : one();
-    cs = builder.create<arith::MaxUIOp>(userLoc, cs, one());
+    /// Div/mod for chunk selection
     if (!loadStoreIndices.empty()) {
       Value idx0 = loadStoreIndices.front();
       newOuter.push_back(builder.create<arith::DivUIOp>(userLoc, idx0, cs));
@@ -198,10 +166,13 @@ void DbChunkedRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
         newInner.push_back(loadStoreIndices[i]);
     }
 
-    if (newOuter.empty())
-      newOuter.push_back(zero());
-    if (newInner.empty())
-      newInner.push_back(zero());
+    if (newOuter.empty() || newInner.empty()) {
+      Value zero = builder.create<arith::ConstantIndexOp>(userLoc, 0);
+      if (newOuter.empty())
+        newOuter.push_back(zero);
+      if (newInner.empty())
+        newInner.push_back(zero);
+    }
 
     /// Create new db_ref with transformed outer indices
     auto newRef =
@@ -215,7 +186,7 @@ void DbChunkedRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
       builder.create<memref::StoreOp>(userLoc, store.getValue(), newRef,
                                       newInner);
     }
-    opsToRemove.insert(user);
+    removal.markForRemoval(user);
   }
 
   /// For db_refs without load/store users, just update the db_ref type
@@ -232,9 +203,7 @@ void DbChunkedRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
   }
 
   /// Remove old load/store operations
-  for (Operation *op : opsToRemove)
-    if (op->use_empty())
-      op->erase();
+  removal.removeAllMarked();
 }
 
 bool DbChunkedRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
@@ -245,21 +214,21 @@ bool DbChunkedRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
   if (!blockArg)
     return false;
 
-  /// Determine element type from users or allocation
+  /// Determine element type from DbRefOp users or block argument
   Type targetType;
-  for (Operation *user : blockArg.getUsers()) {
+  for (Operation *user : blockArg.getUsers())
     if (auto ref = dyn_cast<DbRefOp>(user)) {
       targetType = ref.getResult().getType();
       break;
     }
-  }
+
   if (!targetType) {
     targetType = blockArg.getType();
     if (auto outer = targetType.dyn_cast<MemRefType>())
       if (auto inner = outer.getElementType().dyn_cast<MemRefType>())
         targetType = inner;
   }
-  if (!targetType || !targetType.isa<MemRefType>())
+  if (!targetType.isa_and_nonnull<MemRefType>())
     return false;
 
   Type derivedType = targetType;
@@ -267,15 +236,13 @@ bool DbChunkedRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
           DatablockUtils::getUnderlyingDbAlloc(blockArg)))
     derivedType = dbAlloc.getAllocatedElementType();
 
-  /// Get element offset from hints
-  Value elemOffset;
-  if (!acquire.getOffsetHints().empty())
-    elemOffset = acquire.getOffsetHints()[0];
+  /// Get element offset from chunk hint
+  Value elemOffset = acquire.getChunkIndex();
 
   /// Create chunked indexer
   auto indexer = std::make_unique<DbChunkedIndexer>(
-      plan_.chunkSize, startChunk, elemOffset, newOuterSizes_.size(),
-      newInnerSizes_.size());
+      plan.chunkSize, startChunk, elemOffset, newOuterSizes.size(),
+      newInnerSizes.size());
 
   SmallVector<Operation *> users(blockArg.getUsers().begin(),
                                  blockArg.getUsers().end());
@@ -290,9 +257,10 @@ bool DbChunkedRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
     }
   }
 
+  RemovalUtils removal;
   for (Operation *op : opsToRemove)
-    if (op->use_empty())
-      op->erase();
+    removal.markForRemoval(op);
+  removal.removeAllMarked();
 
   return rewritten;
 }

@@ -1637,8 +1637,11 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         loc, ArtsMode::inout, partialGuid, partialPtr, innerMemrefType,
         SmallVector<Value>{}, SmallVector<Value>{workerIdPlaceholder},
         SmallVector<Value>{one},
-        /*offset_hints=*/SmallVector<Value>{workerIdPlaceholder},
-        /*size_hints=*/SmallVector<Value>{one});
+        /*chunkIndex=*/workerIdPlaceholder,
+        /*chunkSize=*/one);
+
+    /// When adding offset/size hints, set partition mode to chunked.
+    setPartitionMode(partialAcqOp.getOperation(), PartitionMode::chunked);
 
     reductionTaskDeps.push_back(partialAcqOp.getResult(1));
     reductionVarIndex[redInfo.reductionVars[i]] = i;
@@ -1680,17 +1683,16 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       chunkSizes.push_back(AC->createIndexConstant(1, loc));
 
     /// Create acquire directly from DbAllocOp with chunk hints.
-    /// Offset/size hints must be in element space (global index), not
-    /// iteration space, so we fold in lowerBound (and step) here.
-    Value offsetHint = chunkOffset;
-    Value sizeHint = loopInfo.workerIterationCount;
-    if (!forOp.getLowerBound().empty()) {
+    /// chunk_index = chunkOffset, chunk_size = workerIterationCount * step
+    Value chunkIndex = chunkOffset;
+    Value chunkSizeVal = loopInfo.workerIterationCount;
+    if (!forOp.getStep().empty()) {
       Value step = forOp.getStep()[0];
-      Value scaledOffset = AC->create<arith::MulIOp>(loc, chunkOffset, step);
-      offsetHint = AC->create<arith::AddIOp>(loc, forOp.getLowerBound()[0],
-                                             scaledOffset);
-      sizeHint =
-          AC->create<arith::MulIOp>(loc, loopInfo.workerIterationCount, step);
+      int64_t stepVal;
+      if (!ValueUtils::getConstantIndex(step, stepVal) || stepVal != 1) {
+        chunkSizeVal =
+            AC->create<arith::MulIOp>(loc, loopInfo.workerIterationCount, step);
+      }
     }
     auto chunkAcqOp = AC->create<DbAcquireOp>(
         loc, parentAcqOp.getMode(),
@@ -1700,8 +1702,12 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         SmallVector<Value>(parentAcqOp.getIndices().begin(),
                            parentAcqOp.getIndices().end()),
         chunkOffsets, chunkSizes,
-        /*offset_hints=*/SmallVector<Value>{offsetHint},
-        /*size_hints=*/SmallVector<Value>{sizeHint});
+        /*chunkIndex=*/chunkIndex,
+        /*chunkSize=*/chunkSizeVal);
+
+    /// When adding offset/size hints, set partition mode to chunked.
+    /// This signals to DbPartitioning that this acquire has chunked structure.
+    setPartitionMode(chunkAcqOp.getOperation(), PartitionMode::chunked);
 
     Value acquirePtr = chunkAcqOp.getResult(1);
 

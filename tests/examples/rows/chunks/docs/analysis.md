@@ -66,7 +66,7 @@ carts run rowchunk.mlir --create-dbs &> rowchunk_create_dbs.mlir
 The EDT contains `arts.for` which will be lowered next:
 ```mlir
 arts.for(%c0) to(%c1000) step(%c1) {{
-  // parallel loop body
+  /// parallel loop body
 }}
 ```
 
@@ -79,8 +79,8 @@ carts run rowchunk.mlir --concurrency &> rowchunk_concurrency.mlir
 **Expected behavior**: ForLowering converts `arts.for` to worker distribution and adds `offset_hints`/`size_hints`:
 ```mlir
 scf.for %worker = %c0 to %c16 step %c1 {
-  %offset = arith.muli %worker, %c63 : index  // 1000/16 ≈ 63 rows per worker
-  %size = ... // min(63, remaining)
+  %offset = arith.muli %worker, %c63 : index  /// 1000/16 ≈ 63 rows per worker
+  %size = ...                                 /// min(63, remaining)
 
   %guid_acq, %ptr_acq = arts.db_acquire ... offset_hints[%offset] size_hints[%size]
 }

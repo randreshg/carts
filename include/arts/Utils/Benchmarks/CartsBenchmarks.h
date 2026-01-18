@@ -8,13 +8,14 @@
 ///   #include "arts/Utils/Benchmarks/CartsBenchmarks.h"
 ///
 ///   int main() {
-///       CARTS_KERNEL_TIMER_START("kernel");
-///       kernel_function(...);
-///       CARTS_KERNEL_TIMER_STOP("kernel");
+///     CARTS_KERNEL_TIMER_START("kernel");
+///     kernel_function(...);
+///     CARTS_KERNEL_TIMER_STOP("kernel");
 ///
-///       // Compute checksum inline (NOT via helper functions - CARTS
-///       limitation) double checksum = 0.0; for (int i = 0; i < N; i++)
-///       checksum += data[i]; CARTS_BENCH_CHECKSUM(checksum); return 0;
+///     double checksum = 0.0; for (int i = 0; i < N; i++)
+///     checksum += data[i];
+///     CARTS_BENCH_CHECKSUM(checksum);
+///     return 0;
 ///   }
 ///
 /// Output format:

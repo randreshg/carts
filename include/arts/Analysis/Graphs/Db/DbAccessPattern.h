@@ -25,6 +25,12 @@ struct StencilBounds {
   int64_t haloLeft() const { return minOffset < 0 ? -minOffset : 0; }
   int64_t haloRight() const { return maxOffset > 0 ? maxOffset : 0; }
   bool hasHalo() const { return haloLeft() > 0 || haloRight() > 0; }
+
+  /// Factory method to create StencilBounds from analyzed access bounds.
+  static StencilBounds create(int64_t min, int64_t max, bool stencil,
+                              bool isValid) {
+    return {min, max, stencil, isValid};
+  }
 };
 
 /// Summary of per-acquire access patterns at allocation level.

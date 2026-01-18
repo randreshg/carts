@@ -7,15 +7,15 @@
 ///
 ///   BEFORE:
 ///     %db = arts.db_alloc memref<100xf64>
-///     arts.db_acquire %db [0] [100]          // worker acquires all
+///     arts.db_acquire %db [0] [100]          /// worker acquires all
 ///     %ref = arts.db_ref %db[%i]
-///     memref.load %ref[%j]                   // global index j
+///     memref.load %ref[%j]                   /// global index j
 ///
 ///   AFTER:
-///     %db = arts.db_alloc memref<100x1xf64>  // outer=100, inner=1
-///     arts.db_acquire %db [%offset] [%size]  // worker 0: [0][25]
+///     %db = arts.db_alloc memref<100x1xf64>  /// outer=100, inner=1
+///     arts.db_acquire %db [%offset] [%size]  /// worker 0: [0][25]
 ///     %ref = arts.db_ref %db[%i]
-///     memref.load %ref[0]                    // local index (always 0)
+///     memref.load %ref[0]                    /// local index (always 0)
 ///
 /// Index localization: local = global - elemOffset
 ///==========================================================================///
@@ -25,6 +25,7 @@
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/EdtUtils.h"
+#include "arts/Utils/RemovalUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 
@@ -68,11 +69,11 @@ void DbElementWiseRewriter::transformAcquire(const DbRewriteAcquire &info,
 
   acquire.getOffsetsMutable().assign(newOffsets);
   acquire.getSizesMutable().assign(newSizes);
-  acquire.getOffsetHintsMutable().assign(newOffsets);
-  acquire.getSizeHintsMutable().assign(newSizes);
+  acquire.getChunkIndexMutable().assign(elemOffset);
+  acquire.getChunkSizeMutable().assign(elemSize);
 
   /// Store original stride for linearized access (stride = D1 * D2 * ...)
-  if (auto staticStride = DatablockUtils::getStaticElementStride(oldAlloc_)) {
+  if (auto staticStride = DatablockUtils::getStaticElementStride(oldAlloc)) {
     if (*staticStride > 1) {
       acquire->setAttr("element_stride", builder.getIndexAttr(*staticStride));
       ARTS_DEBUG("Element-wise rewrite: stored stride=" << *staticStride);
@@ -87,16 +88,16 @@ void DbElementWiseRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
                                            OpBuilder &builder) {
   Location loc = ref.getLoc();
   Type newElementType = newAlloc.getAllocatedElementType();
-  Value newSource = (ref.getSource() == oldAlloc_.getPtr()) ? newAlloc.getPtr()
-                                                            : ref.getSource();
+  Value newSource = (ref.getSource() == oldAlloc.getPtr()) ? newAlloc.getPtr()
+                                                           : ref.getSource();
 
-  unsigned newOuterRank = newOuterSizes_.size();
-  unsigned newInnerRank = newInnerSizes_.size();
+  unsigned newOuterRank = newOuterSizes.size();
+  unsigned newInnerRank = newInnerSizes.size();
 
   /// Collect load/store users of this db_ref
   SmallVector<Operation *> refUsers(ref.getResult().getUsers().begin(),
                                     ref.getResult().getUsers().end());
-  llvm::SetVector<Operation *> opsToRemove;
+  RemovalUtils removal;
 
   bool hasLoadStoreUsers = false;
   for (Operation *user : refUsers) {
@@ -152,7 +153,7 @@ void DbElementWiseRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
       builder.create<memref::StoreOp>(userLoc, store.getValue(), newRef,
                                       newInner);
     }
-    opsToRemove.insert(user);
+    removal.markForRemoval(user);
   }
 
   /// For db_refs without load/store users, just update the db_ref type
@@ -169,9 +170,7 @@ void DbElementWiseRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
   }
 
   /// Remove old load/store operations
-  for (Operation *op : opsToRemove)
-    if (op->use_empty())
-      op->erase();
+  removal.removeAllMarked();
 }
 
 bool DbElementWiseRewriter::rebaseEdtUsers(DbAcquireOp acquire,
@@ -205,18 +204,14 @@ bool DbElementWiseRewriter::rebaseEdtUsers(DbAcquireOp acquire,
           DatablockUtils::getUnderlyingDbAlloc(blockArg)))
     derivedType = dbAlloc.getAllocatedElementType();
 
-  /// Get element offset from hints
-  Value elemOffset;
-  Value elemSize;
-  if (!acquire.getOffsetHints().empty())
-    elemOffset = acquire.getOffsetHints()[0];
-  if (!acquire.getSizeHints().empty())
-    elemSize = acquire.getSizeHints()[0];
+  /// Get element offset and size from chunk hints
+  Value elemOffset = acquire.getChunkIndex();
+  Value elemSize = acquire.getChunkSize();
 
   /// Create element-wise indexer
   auto indexer = std::make_unique<DbElementWiseIndexer>(
-      elemOffset, elemSize, newOuterSizes_.size(), newInnerSizes_.size(),
-      oldAlloc_.getElementSizes());
+      elemOffset, elemSize, newOuterSizes.size(), newInnerSizes.size(),
+      oldAlloc.getElementSizes());
 
   SmallVector<Operation *> users(blockArg.getUsers().begin(),
                                  blockArg.getUsers().end());
@@ -231,9 +226,10 @@ bool DbElementWiseRewriter::rebaseEdtUsers(DbAcquireOp acquire,
     }
   }
 
+  RemovalUtils removal;
   for (Operation *op : opsToRemove)
-    if (op->use_empty())
-      op->erase();
+    removal.markForRemoval(op);
+  removal.removeAllMarked();
 
   return rewritten;
 }

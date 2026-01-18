@@ -121,19 +121,17 @@ static cl::opt<int64_t> LoopTransformsMinTripCount(
     cl::desc("Minimum constant trip count required to apply tiling"),
     cl::init(128));
 
-/// Partition fallback strategy for non-affine accesses
-enum class PartitionFallback { Coarse, Fine, Versioned };
+/// Partition fallback strategy
+enum class PartitionFallback { Coarse, Fine };
 
 static cl::opt<PartitionFallback> PartitionFallbackMode(
     "partition-fallback",
-    cl::desc("Fallback strategy for non-partitionable (non-affine) accesses:"),
+    cl::desc("Fallback strategy for non-partitionable accesses:"),
     cl::values(
         clEnumValN(PartitionFallback::Coarse, "coarse",
                    "Use coarse allocation - serializes access (default)"),
         clEnumValN(PartitionFallback::Fine, "fine",
-                   "Use fine-grained (element-wise) allocation"),
-        clEnumValN(PartitionFallback::Versioned, "versioned",
-                   "Create a copy for mixed access patterns (experimental)")),
+                   "Use fine-grained (element-wise) allocation")),
     cl::init(PartitionFallback::Coarse));
 
 ///===----------------------------------------------------------------------===///
@@ -369,13 +367,7 @@ void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   /// Partition DBs and run DbPass again to adjust modes
-  bool useFineGrainedFallback =
-      (PartitionFallbackMode != PartitionFallback::Coarse);
-  bool useVersionedFallback =
-      (PartitionFallbackMode == PartitionFallback::Versioned);
-  if (useVersionedFallback)
-    pm.addPass(arts::createDbVersioningPass(AM));
-  pm.addPass(arts::createDbPartitioningPass(AM, useFineGrainedFallback));
+  pm.addPass(arts::createDbPartitioningPass(AM));
   pm.addPass(arts::createDbPass(AM));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
@@ -462,9 +454,13 @@ setupPassManager(ModuleOp module, MLIRContext &context,
                  PipelineStage stopAt = PipelineStage::Complete,
                  std::unique_ptr<arts::ArtsAnalysisManager> *outAM = nullptr) {
   /// Create module-level analysis manager for caching across functions
+  arts::PartitionFallback partitionFallback =
+      (PartitionFallbackMode == PartitionFallback::Fine)
+          ? arts::PartitionFallback::FineGrained
+          : arts::PartitionFallback::Coarse;
   std::unique_ptr<arts::ArtsAnalysisManager> AM =
-      std::make_unique<arts::ArtsAnalysisManager>(module, ArtsConfig,
-                                                  MetadataFile);
+      std::make_unique<arts::ArtsAnalysisManager>(
+          module, ArtsConfig, MetadataFile, partitionFallback);
 
   /// Canonicalize memrefs
   {

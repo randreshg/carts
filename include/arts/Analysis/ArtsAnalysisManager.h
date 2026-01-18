@@ -11,6 +11,7 @@
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Edt/EdtAnalysis.h"
 #include "arts/Analysis/HeuristicsConfig.h"
+
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/Analysis/StringAnalysis.h"
@@ -31,8 +32,10 @@ class EdtGraph;
 /// Centralized manager for all ARTS analysis objects.
 class ArtsAnalysisManager {
 public:
-  ArtsAnalysisManager(ModuleOp module, const std::string &configFile = "",
-                      const std::string &metadataFile = "");
+  ArtsAnalysisManager(
+      ModuleOp module, const std::string &configFile = "",
+      const std::string &metadataFile = "",
+      PartitionFallback partitionFallback = PartitionFallback::Coarse);
   ~ArtsAnalysisManager();
 
   /// Invalidate all analysis objects and graphs
@@ -90,19 +93,19 @@ public:
     bool hasData = false;
   };
 
-  /// Set metadata coverage data (called by VerifyMetadataPass)
+  /// Set metadata coverage data
   void setMetadataCoverage(int64_t loopsAnalyzed, int64_t loopsTotal,
                            int64_t memrefsAnalyzed, int64_t memrefsTotal) {
-    metadataCoverage_.loopsAnalyzed = loopsAnalyzed;
-    metadataCoverage_.loopsTotal = loopsTotal;
-    metadataCoverage_.memrefsAnalyzed = memrefsAnalyzed;
-    metadataCoverage_.memrefsTotal = memrefsTotal;
-    metadataCoverage_.hasData = true;
+    metadataCoverage.loopsAnalyzed = loopsAnalyzed;
+    metadataCoverage.loopsTotal = loopsTotal;
+    metadataCoverage.memrefsAnalyzed = memrefsAnalyzed;
+    metadataCoverage.memrefsTotal = memrefsTotal;
+    metadataCoverage.hasData = true;
   }
 
   /// Get metadata coverage data
   const MetadataCoverage &getMetadataCoverage() const {
-    return metadataCoverage_;
+    return metadataCoverage;
   }
 
 private:
@@ -110,6 +113,7 @@ private:
   std::string configFile;
   std::string metadataFile;
   ArtsAbstractMachine abstractMachine;
+  PartitionFallback partitionFallback;
   bool built = false;
 
   std::unique_ptr<DbAnalysis> dbAnalysis;
@@ -119,11 +123,11 @@ private:
   std::unique_ptr<StringAnalysis> stringAnalysis;
   std::unique_ptr<ArtsMetadataManager> metadataManager;
 
-  /// Cached diagnostic data (captured before LLVM lowering)
+  /// Cached diagnostic data
   std::optional<std::string> cachedDiagnosticJson;
 
   /// Metadata coverage from VerifyMetadataPass
-  MetadataCoverage metadataCoverage_;
+  MetadataCoverage metadataCoverage;
 };
 
 } // namespace arts

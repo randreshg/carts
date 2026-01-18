@@ -1,8 +1,8 @@
 ///==========================================================================///
-// File: ConvertArtsToLLVM.cpp
-//
-// This file implements a pass to convert ARTS dialect operations into
-// LLVM dialect operations.
+/// File: ConvertArtsToLLVM.cpp
+///
+/// This file implements a pass to convert ARTS dialect operations into
+/// LLVM dialect operations.
 ///==========================================================================///
 
 /// Dialects
@@ -59,7 +59,7 @@ public:
 };
 
 ///===----------------------------------------------------------------------===///
-// Helpers for DB sizes and single-element detection
+/// Helpers for DB sizes and single-element detection
 ///===----------------------------------------------------------------------===///
 namespace {
 template <typename OpType>
@@ -213,11 +213,11 @@ struct AtomicAddPattern : public ArtsToLLVMPattern<AtomicAddOp> {
     auto addr = op.getAddr();
     auto value = op.getValue();
 
-    // Convert memref to LLVM pointer
+    /// Convert memref to LLVM pointer
     Value llvmPtr = rewriter.create<polygeist::Memref2PointerOp>(
         loc, LLVM::LLVMPointerType::get(rewriter.getContext()), addr);
 
-    // Create LLVM atomic add operation
+    /// Create LLVM atomic add operation
     rewriter.create<LLVM::AtomicRMWOp>(loc, LLVM::AtomicBinOp::add, llvmPtr,
                                        value, LLVM::AtomicOrdering::seq_cst);
 
@@ -250,14 +250,14 @@ struct BuiltinObjectSizePattern : public OpRewritePattern<func::CallOp> {
 
     Location loc = callOp.getLoc();
 
-    // Get ptr argument (memref) and convert to llvm.ptr
+    /// Get ptr argument (memref) and convert to llvm.ptr
     Value memrefArg = callOp.getOperand(0);
     Value ptr = rewriter.create<polygeist::Memref2PointerOp>(
         loc, LLVM::LLVMPointerType::get(rewriter.getContext()), memrefArg);
 
     Value typeArg = callOp.getOperand(1);
 
-    // Extract type value to compute min flag: min = (type & 2) != 0
+    /// Extract type value to compute min flag: min = (type & 2) != 0
     bool minFlag = false;
     if (auto constOp = typeArg.getDefiningOp<arith::ConstantOp>()) {
       if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
@@ -265,13 +265,13 @@ struct BuiltinObjectSizePattern : public OpRewritePattern<func::CallOp> {
       }
     }
 
-    // Create boolean constants for intrinsic parameters
+    /// Create boolean constants for intrinsic parameters
     Type i1Type = rewriter.getI1Type();
     Value min = rewriter.create<LLVM::ConstantOp>(loc, i1Type, minFlag);
     Value nullIsUnknown = rewriter.create<LLVM::ConstantOp>(loc, i1Type, true);
     Value dynamic = rewriter.create<LLVM::ConstantOp>(loc, i1Type, false);
 
-    // Create llvm.call_intrinsic for llvm.objectsize
+    /// Create llvm.call_intrinsic for llvm.objectsize
     Type resultType = callOp.getResult(0).getType();
     auto intrinsicOp = rewriter.create<LLVM::CallIntrinsicOp>(
         loc, resultType, "llvm.objectsize",
@@ -389,7 +389,7 @@ private:
       depStruct = depDbAcquireOp.getDepStruct();
       baseOffset = depDbAcquireOp.getOffset();
     } else {
-      llvm_unreachable("dbGuid must come from DbAcquireOp or DepDbAcquireOp");
+      ARTS_UNREACHABLE("dbGuid must come from DbAcquireOp or DepDbAcquireOp");
     }
 
     /// Get totalDBs for bounds check (only for stencil cases)
@@ -562,7 +562,7 @@ private:
     } else {
       ARTS_ERROR("dbGuid must come from DbAcquireOp or DepDbAcquireOp"
                  << dbGuid);
-      llvm_unreachable("dbGuid must come from DbAcquireOp or DepDbAcquireOp");
+      ARTS_UNREACHABLE("dbGuid must come from DbAcquireOp or DepDbAcquireOp");
     }
 
     /// Use shared slot counter and iterate over all db elements
@@ -625,7 +625,7 @@ struct EdtParamPackPattern : public ArtsToLLVMPattern<EdtParamPackOp> {
     if (!resultType)
       return op.emitError("Expected MemRef type for result");
 
-    // Check if result type has dynamic dimensions
+    /// Check if result type has dynamic dimensions
     bool hasDynamicDims = resultType.getNumDynamicDims() > 0;
 
     memref::AllocOp allocOp;

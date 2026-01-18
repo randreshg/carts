@@ -21,7 +21,7 @@ int main(int argc, char *argv[]) {
   double *A = (double *)malloc(N * sizeof(double));
   double *B = (double *)malloc(N * sizeof(double));
 
-  // Initialize A
+  /// Initialize A
   for (unsigned i = 0; i < N; i++)
     A[i] = i * 1.0;
 
@@ -29,9 +29,9 @@ int main(int argc, char *argv[]) {
   {
 #pragma omp single
     {
-      // Process in chunks - each task handles BLOCK_SIZE elements
+      /// Process in chunks - each task handles BLOCK_SIZE elements
       for (unsigned i = 0; i < N; i += BLOCK_SIZE) {
-        // Chunk dependency: depend on A[i:BLOCK_SIZE] not A[i]
+        /// Chunk dependency: depend on A[i:BLOCK_SIZE] not A[i]
 #pragma omp task firstprivate(i) depend(in : A[i : BLOCK_SIZE])                \
     depend(out : B[i : BLOCK_SIZE])
         {
@@ -42,7 +42,7 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  // Verify
+  /// Verify
   int correct = 1;
   for (unsigned i = 0; i < N; i++) {
     if (B[i] != A[i] * 2.0) {
@@ -55,9 +55,8 @@ int main(int argc, char *argv[]) {
   free(A);
   free(B);
 
-  if (correct) {
+  if (correct)
     CARTS_TEST_PASS();
-  } else {
-    CARTS_TEST_FAIL("chunked matrix verification failed");
-  }
+  else
+    CARTS_TEST_FAIL("chunked array verification failed");
 }

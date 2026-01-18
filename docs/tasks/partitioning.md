@@ -19,10 +19,12 @@ Flow: hasNonAffineAccesses = true
 ## Solution: CLI Option for Partition Fallback
 
 Add `--partition-fallback={coarse,fine}` option to control behavior:
+
 - `coarse` (default): Current behavior - block non-affine, use coarse allocation
 - `fine`: New behavior - allow non-affine through, use element-wise allocation
 
 **Benefits**:
+
 1. Safe rollout - default preserves existing behavior
 2. Easy A/B testing for performance comparison
 3. User control for different workload characteristics
@@ -110,7 +112,7 @@ bool DbAllocNode::canBePartitioned() {
       // Check if fine-grained fallback is enabled
       if (useFineGrainedFallback_) {
         ARTS_DEBUG("  Non-affine access - using fine-grained fallback");
-        // Continue to allow partitioning (H1.5 will choose element-wise)
+        // Continue to allow partitioning (H1.3 will choose element-wise)
       } else {
         return skip("memref has non-affine accesses (no hints to override)");
       }
@@ -135,7 +137,7 @@ AcquirePatternSummary DbAllocNode::summarizeAcquirePatterns() const {
   }
 
   // NEW: If allocation has non-affine accesses AND fine-grained fallback enabled
-  // mark as indexed so H1.5 triggers element-wise
+  // mark as indexed so H1.3 triggers element-wise
   if (useFineGrainedFallback_ && hasNonAffineAccesses && *hasNonAffineAccesses) {
     summary.hasIndexed = true;
   }
@@ -226,9 +228,10 @@ carts benchmarks run --all --size small -- --partition-fallback=fine
 ## Risk Assessment (Part 1)
 
 **Low Risk**:
+
 - Default behavior is unchanged
 - Changes are localized and testable
-- Existing H1.5 heuristic and element-wise rewriter are already tested
+- Existing H1.3 heuristic and element-wise rewriter are already tested
 
 ---
 
@@ -237,6 +240,7 @@ carts benchmarks run --all --size small -- --partition-fallback=fine
 ## Motivation
 
 The fine-grained fallback (Part 1) helps but may have high overhead for LULESH due to:
+
 - 8 acquires per element (one per node in hexahedron)
 - High sync overhead for many small DBs
 
@@ -349,6 +353,7 @@ Analyze access patterns and insert db_copy/db_sync:
 **File**: ARTS runtime (external)
 
 Need to ensure runtime supports:
+
 - `artsDbCopy(srcGuid, dstGuid, partitionMode)`
 - `artsDbSync(dstGuid, srcGuid)`
 
@@ -380,6 +385,7 @@ Run DbVersioning pass on LULESH, verify correct copy/sync insertion.
 ### Step 3: Performance Comparison
 
 Compare three modes:
+
 1. `--partition-fallback=coarse` (baseline)
 2. `--partition-fallback=fine` (Part 1)
 3. `--partition-fallback=versioned` (Part 2)

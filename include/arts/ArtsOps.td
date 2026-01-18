@@ -141,7 +141,33 @@ def DbAllocOp : Arts_Op<"db_alloc", [
                    "Type":$elementType,
                    "Type":$pointerType,
                    CArg<"SmallVector<Value>", "{}">:$sizes,
-                   CArg<"SmallVector<Value>", "{}">:$elementSizes)>
+                   CArg<"SmallVector<Value>", "{}">:$elementSizes)>,
+    OpBuilder<(ins "ArtsMode":$mode,
+                   "Value":$route,
+                   "DbAllocType":$allocType,
+                   "DbMode":$dbMode,
+                   "Type":$elementType,
+                   CArg<"Value", "nullptr">:$address,
+                   CArg<"SmallVector<Value>", "{}">:$sizes,
+                   CArg<"SmallVector<Value>", "{}">:$elementSizes,
+                   CArg<"PartitionMode", "PartitionMode::coarse">:$partitionMode)>,
+    OpBuilder<(ins "ArtsMode":$mode,
+                   "Value":$route,
+                   "DbAllocType":$allocType,
+                   "DbMode":$dbMode,
+                   "Type":$elementType,
+                   CArg<"SmallVector<Value>", "{}">:$sizes,
+                   CArg<"SmallVector<Value>", "{}">:$elementSizes,
+                   CArg<"PartitionMode", "PartitionMode::coarse">:$partitionMode)>,
+    OpBuilder<(ins "ArtsMode":$mode,
+                   "Value":$route,
+                   "DbAllocType":$allocType,
+                   "DbMode":$dbMode,
+                   "Type":$elementType,
+                   "Type":$pointerType,
+                   CArg<"SmallVector<Value>", "{}">:$sizes,
+                   CArg<"SmallVector<Value>", "{}">:$elementSizes,
+                   CArg<"PartitionMode", "PartitionMode::coarse">:$partitionMode)>
   ];
   let extraClassDeclaration = [{
     MemRefType getAllocatedElementType();
@@ -162,9 +188,10 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     - indices: indices for subregion
     - offsets: offsets for subregion
     - sizes: sizes for subregion
-    - offset_hints / size_hints: optional per-dimension hints for downstream
-      passes. These are not semantically relevant but help partitioning passes
-      propagate the intended chunking strategy (e.g., worker chunk offsets).
+
+    Chunk hint (set by ForLowering for chunked partitioning):
+    - chunk_index: Which chunk this worker accesses (0, 1, 2, ...).
+    - chunk_size: Size of each chunk in elements.
 
     When source_guid is absent (nullptr), it means this acquire is chaining from
     a parent EDT's acquire where only the ptr was passed through block arguments.
@@ -185,8 +212,8 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     Variadic<Index>:$indices,
     Variadic<Index>:$offsets,
     Variadic<Index>:$sizes,
-    Variadic<Index>:$offset_hints,
-    Variadic<Index>:$size_hints,
+    Optional<Index>:$chunk_index,
+    Optional<Index>:$chunk_size,
     Optional<I1>:$bounds_valid,
     Variadic<Index>:$element_offsets,
     Variadic<Index>:$element_sizes
@@ -198,8 +225,7 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     ( `indices` `[` $indices^ `]` )?
     ( `offsets` `[` $offsets^ `]` )?
     ( `sizes` `[` $sizes^ `]` )?
-    ( `offset_hints` `[` $offset_hints^ `]` )?
-    ( `size_hints` `[` $size_hints^ `]` )?
+    ( `chunk_hint` `(` $chunk_index^ `,` $chunk_size `)` )?
     ( `bounds_valid` `(` $bounds_valid^ `)` )?
     ( `element_offsets` `[` $element_offsets^ `]` )?
     ( `element_sizes` `[` $element_sizes^ `]` )?
@@ -215,8 +241,8 @@ def DbAcquireOp : Arts_Op<"db_acquire",
                    CArg<"SmallVector<Value>", "{}">:$indices,
                    CArg<"SmallVector<Value>", "{}">:$offsets,
                    CArg<"SmallVector<Value>", "{}">:$sizes,
-                   CArg<"SmallVector<Value>", "{}">:$offset_hints,
-                   CArg<"SmallVector<Value>", "{}">:$size_hints,
+                   CArg<"Value", "nullptr">:$chunkIndex,
+                   CArg<"Value", "nullptr">:$chunkSize,
                    CArg<"Value", "{}">:$bounds_valid,
                    CArg<"SmallVector<Value>", "{}">:$element_offsets,
                    CArg<"SmallVector<Value>", "{}">:$element_sizes)>,
@@ -227,8 +253,8 @@ def DbAcquireOp : Arts_Op<"db_acquire",
                    CArg<"SmallVector<Value>", "{}">:$indices,
                    CArg<"SmallVector<Value>", "{}">:$offsets,
                    CArg<"SmallVector<Value>", "{}">:$sizes,
-                   CArg<"SmallVector<Value>", "{}">:$offset_hints,
-                   CArg<"SmallVector<Value>", "{}">:$size_hints,
+                   CArg<"Value", "nullptr">:$chunkIndex,
+                   CArg<"Value", "nullptr">:$chunkSize,
                    CArg<"Value", "{}">:$bounds_valid,
                    CArg<"SmallVector<Value>", "{}">:$element_offsets,
                    CArg<"SmallVector<Value>", "{}">:$element_sizes)>
@@ -247,6 +273,9 @@ def DbAcquireOp : Arts_Op<"db_acquire",
 
     /// Check if this acquire has element-level offset/size info (ESD partial acquisition)
     bool hasElementOffsets() { return !getElementOffsets().empty(); }
+
+    /// Check if this acquire has chunk hint info (set by ForLowering)
+    bool hasChunkHint() { return getChunkIndex() != nullptr && getChunkSize() != nullptr; }
   }];
 }
 
@@ -262,7 +291,7 @@ def DbCopyOp : Arts_Op<"db_copy", [MemoryEffects<[MemWrite]>]> {
   }];
   let arguments = (ins
     AnyMemRef:$source_ptr,
-    PromotionModeAttr:$dest_partition
+    PartitionModeAttr:$dest_partition
   );
   let results = (outs MemRefOf<[I64]>:$guid, AnyMemRef:$ptr);
   let assemblyFormat = [{
@@ -271,7 +300,7 @@ def DbCopyOp : Arts_Op<"db_copy", [MemoryEffects<[MemWrite]>]> {
     attr-dict `->` `(` type($guid) `,` type($ptr) `)`
   }];
   let builders = [
-    OpBuilder<(ins "Value":$source_ptr, "PromotionMode":$dest_partition)>
+    OpBuilder<(ins "Value":$source_ptr, "PartitionMode":$dest_partition)>
   ];
 }
 
@@ -283,7 +312,7 @@ def DbSyncOp : Arts_Op<"db_sync", [AttrSizedOperandSegments, MemoryEffects<[MemW
     - dest_ptr = where we WRITE to
 
     The optional element_offsets/element_sizes describe a logical subrange
-    for partial sync (per-acquire ranges from DbVersioning).
+    for partial sync.
 
     During lowering, this creates a DbAcquireOp on source to establish
     the dependency chain for distributed execution.
@@ -440,16 +469,16 @@ def OmpDepOp : Arts_Op<"omp_dep", [Pure, AttrSizedOperandSegments]> {
     DbControlOp operations with proper chunk support.
 
     Examples:
-      // Point dependency: depend(in: A[i][j])
+      /// Point dependency: depend(in: A[i][j])
       %dep = arts.omp_dep <in> %A_2D[%i, %j] size [%c1, %c1] : memref<?x?xf64>
 
-      // Chunk dependency: depend(out: A[i:BLOCK_SIZE][j:BLOCK_SIZE])
+      /// Chunk dependency: depend(out: A[i:BLOCK_SIZE][j:BLOCK_SIZE])
       %dep = arts.omp_dep <out> %A_2D[%i, %j] size [%bs, %bs] : memref<?x?xf64>
 
-      // Mixed: depend(in: A[i][j:COLS])
+      /// Mixed: depend(in: A[i][j:COLS])
       %dep = arts.omp_dep <in> %A_2D[%i, %j] size [%c1, %cols] : memref<?x?xf64>
 
-      // Full array: depend(in: B[0:N][0:N])
+      /// Full array: depend(in: B[0:N][0:N])
       %dep = arts.omp_dep <in> %B[%c0, %c0] size [%N, %N] : memref<?x?xf64>
   }];
 

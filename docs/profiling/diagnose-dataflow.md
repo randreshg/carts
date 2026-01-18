@@ -13,77 +13,44 @@ The CARTS diagnose system enables iterative performance optimization by:
 ## Key Design Principle
 
 **Correct Hint Direction:**
-```
-WRONG:  Compiler -> "here are hints I could apply" -> ArtsMate
-RIGHT:  Compiler -> "here's what I did" -> ArtsMate -> "do this differently" -> Compiler
+
+```mermaid
+flowchart LR
+  C[CARTS Compiler]
+  M[ArtsMate]
+  H[hints.json]
+
+  C -. "WRONG: proposes candidate hints" .-> M
+
+  C -->|"RIGHT: exports facts (.carts-diagnose.json)"| M
+  M -->|"RIGHT: generates hints (do this differently)"| H
+  H -->|"RIGHT: used on next compilation"| C
 ```
 
 The compiler exports **facts** (what it analyzed, what it applied). ArtsMate generates **hints** based on runtime evidence.
 
 ## Complete Dataflow Diagram
 
-```
-+-----------------------------------------------------------------------------+
-|                    PROFILE-GUIDED OPTIMIZATION FLOW                          |
-+------------------------------------------------------------------------------+
-|                                                                              |
-|  +-------------+         +----------------------------------------------+   |
-|  | Source Code |-------->|            CARTS COMPILER                    |   |
-|  | + hints.json|         |                                              |   |
-|  +-------------+         |  1. Parse OpenMP pragmas                     |   |
-|                          |  2. Apply heuristics (H1, H2, H4)            |   |
-|                          |  3. Track what was applied                   |   |
-|                          |  4. Export .carts-diagnose.json              |   |
-|                          +------------------+---------------------------+   |
-|                                             |                                |
-|                                             v                                |
-|  +----------------------------------------------------------------------+   |
-|  |                    .carts-diagnose.json                               |   |
-|  |  - entities: EDTs, DBs, Loops (with arts_id)                         |   |
-|  |  - applied_optimizations: what compiler DID                          |   |
-|  +----------------------------------+-----------------------------------+   |
-|                                     |                                        |
-|  +-------------+                    |                                        |
-|  |   Binary    |<-------------------+                                        |
-|  +------+------+                                                             |
-|         |                                                                    |
-|         v                                                                    |
-|  +----------------------------------------------------------------------+   |
-|  |                      ARTS RUNTIME                                     |   |
-|  |  Execute with profiling enabled                                       |   |
-|  |  Collect per-arts_id counters                                         |   |
-|  +----------------------+-----------------------------------------------+   |
-|                         |                                                    |
-|                         v                                                    |
-|  +----------------------------------------------------------------------+   |
-|  |                    counters.json                                      |   |
-|  |  Per EDT: invocations, exec_time_ns, stall_time_ns                   |   |
-|  |  Per DB:  invocations, bytes_local, bytes_remote, cache_misses       |   |
-|  +----------------------+-----------------------------------------------+   |
-|                         |                                                    |
-|                         v                                                    |
-|  +----------------------------------------------------------------------+   |
-|  |                      ARTSMATE                                         |   |
-|  |  1. MERGE diagnose + counters by arts_id                             |   |
-|  |  2. ANALYZE: find bottlenecks, opportunities                         |   |
-|  |  3. GENERATE hints.json                                              |   |
-|  +----------------------+-----------------------------------------------+   |
-|                         |                                                    |
-|                         v                                                    |
-|  +----------------------------------------------------------------------+   |
-|  |                    hints.json (HEP format)                            |   |
-|  |  { "hints": [                                                         |   |
-|  |    {"target": 100, "type": "loop_reorder", "order": [1,0]},          |   |
-|  |    {"target": 300, "type": "coarse_alloc"},                          |   |
-|  |    {"target": 300, "type": "enable_twin_diff"}                       |   |
-|  |  ]}                                                                   |   |
-|  +----------------------+-----------------------------------------------+   |
-|                         |                                                    |
-|                         v                                                    |
-|               LOOP BACK TO CARTS COMPILER                                    |
-|               (Recompile with hints)                                         |
-|                                                                              |
-+------------------------------------------------------------------------------+
+```mermaid
+flowchart TB
+  SRC["Source Code<br/>optionally with hints.json"]
+  CARTS["CARTS Compiler<br/>1) Parse OpenMP pragmas<br/>2) Apply heuristics (H1, H2, H4)<br/>3) Track what was applied<br/>4) Export .carts-diagnose.json"]
+  DIAG[".carts-diagnose.json<br/>- entities: EDTs, DBs, Loops (with arts_id)<br/>- applied_optimizations: what compiler DID"]
+  BIN["Binary / Executable"]
+  ARTS["ARTS Runtime<br/>Execute with profiling enabled<br/>Collect per-arts_id counters"]
+  COUNTERS["counters.json<br/>Per EDT: invocations, exec_time_ns, stall_time_ns<br/>Per DB: invocations, bytes_local, bytes_remote, cache_misses"]
+  AM["ArtsMate<br/>1) MERGE diagnose + counters by arts_id<br/>2) ANALYZE bottlenecks/opportunities<br/>3) GENERATE hints.json"]
+  HINTS["hints.json (HEP format)<br/>{ &quot;hints&quot;: [ ... ] }"]
+
+  SRC --> CARTS
+  CARTS --> DIAG
+  CARTS --> BIN
+  BIN --> ARTS
+  ARTS --> COUNTERS
+  DIAG --> AM
+  COUNTERS --> AM
+  AM --> HINTS
+  HINTS --> CARTS
 ```
 
 ## Data Separation: Compile-Time vs Runtime

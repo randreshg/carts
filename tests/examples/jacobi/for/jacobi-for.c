@@ -15,17 +15,17 @@
 
 #include "arts/Utils/Testing/CartsTest.h"
 
-// Sequential version for verification
+/// Sequential version for verification
 static void sweep_seq(int nx, int ny, double dx, double dy, double **f,
                       int itold, int itnew, double **u, double **unew) {
   for (int it = itold + 1; it <= itnew; it++) {
-    // Save the current estimate
+    /// Save the current estimate
     for (int i = 0; i < nx; i++) {
-      for (int j = 0; j < ny; j++) {
+      for (int j = 0; j < ny; j++)
         u[i][j] = unew[i][j];
-      }
     }
-    // Compute a new estimate
+
+    /// Compute a new estimate
     for (int i = 0; i < nx; i++) {
       for (int j = 0; j < ny; j++) {
         if (i == 0 || j == 0 || i == nx - 1 || j == ny - 1) {
@@ -39,30 +39,29 @@ static void sweep_seq(int nx, int ny, double dx, double dy, double **f,
   }
 }
 
-// Parallel version with #pragma omp parallel for
+/// Parallel version with #pragma omp parallel for
 static void sweep(int nx, int ny, double dx, double dy, double **f, int itold,
                   int itnew, double **u, double **unew, int block_size) {
   int i, j, it;
 
   for (it = itold + 1; it <= itnew; it++) {
-    // LOOP 1: Save the current estimate - UNIFORM access pattern
-    // Each worker writes ONLY its assigned rows (no halo needed)
+    /// LOOP 1: Save the current estimate - UNIFORM access pattern
+    /// Each worker writes ONLY its assigned rows (no halo needed)
 #pragma omp parallel for private(j)
     for (i = 0; i < nx; i++) {
-      for (j = 0; j < ny; j++) {
+      for (j = 0; j < ny; j++)
         u[i][j] = unew[i][j];
-      }
     }
 
-    // LOOP 2: Compute a new estimate - STENCIL access pattern
-    // Each worker reads its rows PLUS neighboring rows (halo needed)
+    /// LOOP 2: Compute a new estimate - STENCIL access pattern
+    /// Each worker reads its rows PLUS neighboring rows (halo needed)
 #pragma omp parallel for private(j)
     for (i = 0; i < nx; i++) {
       for (j = 0; j < ny; j++) {
         if (i == 0 || j == 0 || i == nx - 1 || j == ny - 1) {
           unew[i][j] = f[i][j];
         } else {
-          // 5-point stencil: reads u[i-1], u[i], u[i+1]
+          /// 5-point stencil: reads u[i-1], u[i], u[i+1]
           unew[i][j] = 0.25 * (u[i - 1][j] + u[i][j + 1] + u[i][j - 1] +
                                u[i + 1][j] + f[i][j] * dx * dy);
         }
@@ -77,7 +76,6 @@ int main(void) {
 #ifdef SIZE
   int nx = SIZE, ny = SIZE;
 #else
-  // default for testing
   int nx = 100, ny = 100;
 #endif
   int itold = 0, itnew = 10;
@@ -86,9 +84,10 @@ int main(void) {
   double dy = 1.0 / (ny - 1);
 
   printf("Jacobi-For Test: %d x %d grid, %d iterations\n", nx, ny, itnew);
-  printf("Demonstrating uniform (Loop 1) vs stencil (Loop 2) access patterns\n");
+  printf(
+      "Demonstrating uniform (Loop 1) vs stencil (Loop 2) access patterns\n");
 
-  // Allocate 2D arrays
+  /// Allocate 2D arrays
   double **f = (double **)malloc(nx * sizeof(double *));
   double **u = (double **)malloc(nx * sizeof(double *));
   double **unew = (double **)malloc(nx * sizeof(double *));
@@ -101,7 +100,7 @@ int main(void) {
     unew_seq[i] = (double *)malloc(ny * sizeof(double));
   }
 
-  // Initialize arrays
+  /// Initialize arrays
   for (int i = 0; i < nx; i++) {
     for (int j = 0; j < ny; j++) {
       f[i][j] = 0.0;
@@ -111,18 +110,17 @@ int main(void) {
     }
   }
 
-  // Run sequential version for verification
+  /// Run sequential version for verification
   printf("Running sequential version for verification...\n");
   sweep_seq(nx, ny, dx, dy, f, itold, itnew, u, unew_seq);
 
-  // Save sequential result
+  /// Save sequential result
   for (int i = 0; i < nx; i++) {
-    for (int j = 0; j < ny; j++) {
+    for (int j = 0; j < ny; j++)
       unew_seq[i][j] = unew[i][j];
-    }
   }
 
-  // Re-initialize for parallel version
+  /// Re-initialize for parallel version
   for (int i = 0; i < nx; i++) {
     for (int j = 0; j < ny; j++) {
       u[i][j] = 0.0;
@@ -130,20 +128,19 @@ int main(void) {
     }
   }
 
-  // Run parallel version
+  /// Run parallel version
   printf("Running parallel version with #pragma omp parallel for...\n");
   sweep(nx, ny, dx, dy, f, itold, itnew, u, unew, block_size);
 
-  // Compare results
+  /// Compare results
   double error = 0.0;
   double max_error = 0.0;
   for (int i = 0; i < nx; i++) {
     for (int j = 0; j < ny; j++) {
       double diff = unew_seq[i][j] - unew[i][j];
       error += diff * diff;
-      if (fabs(diff) > max_error) {
+      if (fabs(diff) > max_error)
         max_error = fabs(diff);
-      }
     }
   }
   error = sqrt(error / (nx * ny));
@@ -151,7 +148,7 @@ int main(void) {
   printf("RMS error: %e\n", error);
   printf("Max error: %e\n", max_error);
 
-  // Free 2D arrays
+  /// Free 2D arrays
   for (int i = 0; i < nx; i++) {
     free(f[i]);
     free(u[i]);
@@ -163,9 +160,8 @@ int main(void) {
   free(unew);
   free(unew_seq);
 
-  if (error < 1e-6) {
+  if (error < 1e-6)
     CARTS_TEST_PASS();
-  } else {
+  else
     CARTS_TEST_FAIL("jacobi-for verification failed");
-  }
 }

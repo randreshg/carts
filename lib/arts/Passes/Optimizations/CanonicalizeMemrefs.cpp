@@ -93,7 +93,6 @@ struct AllocPattern {
   SmallVector<DepInfo> dependencies;
 
   /// Outer wrapper allocas that store the root allocation value
-  /// (created when inlined alloc_Nd returns to caller's variable)
   SmallVector<Value> outerWrapperAliases;
 
   /// Get outermost init loop
@@ -1683,7 +1682,7 @@ ArtsMode CanonicalizeMemrefsPass::convertOmpMode(omp::ClauseTaskDepend mode) {
   case omp::ClauseTaskDepend::taskdependinout:
     return ArtsMode::inout;
   }
-  llvm_unreachable("Unknown OMP depend mode");
+  ARTS_UNREACHABLE("Unknown OMP depend mode");
 }
 
 ///===----------------------------------------------------------------------===///
@@ -1720,9 +1719,11 @@ bool CanonicalizeMemrefsPass::isLoadFromValue(Value maybeLoad, Value source) {
 /// directly.
 ///
 /// Returns true if a complete pattern was found (reaching scalar element type)
-bool CanonicalizeMemrefsPass::extractNestedAllocations(
-    Value storedVal, Operation *loopOp, memref::StoreOp storeOp,
-    AllocPattern &pattern, int depth) {
+bool CanonicalizeMemrefsPass::extractNestedAllocations(Value storedVal,
+                                                       Operation *loopOp,
+                                                       memref::StoreOp storeOp,
+                                                       AllocPattern &pattern,
+                                                       int depth) {
   /// Limit recursion depth to prevent infinite loops
   constexpr int MAX_DEPTH = 10;
   if (depth >= MAX_DEPTH) {

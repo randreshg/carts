@@ -8,11 +8,8 @@
 ///
 ///   for j:                           for j: C[i,j] = 0
 ///     sum = for k iter_args:   =>    for k:
-///       sum += A[i,k]*B[k,j]           a = A[i,k]              // hoisted
-///     C[i,j] = sum                     for j: C[i,j] += a*B[k,j]  // stride-1
-///
-/// See LoopReordering.cpp for explicit-init patterns (e.g., 2mm, 3mm).
-/// Supports FAdd/IAdd reductions. Must run BEFORE CreateDbs.
+///       sum += A[i,k]*B[k,j]           a = A[i,k]                /// hoisted
+///     C[i,j] = sum                     for j: C[i,j] += a*B[k,j] /// stride-1
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"

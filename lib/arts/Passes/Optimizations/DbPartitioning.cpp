@@ -11,7 +11,6 @@
 ///==========================================================================///
 
 /// Dialects
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -40,7 +39,6 @@
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/Analysis/Graphs/Edt/EdtGraph.h"
 #include "arts/Analysis/Graphs/Edt/EdtNode.h"
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
@@ -48,10 +46,11 @@
 #include <cstdint>
 #include <optional>
 
-#include "arts/Transforms/DbTransforms.h"
+#include "arts/Transforms/Datablock/DbRewriter.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/EdtUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 ARTS_DEBUG_SETUP(db_partitioning);
 
@@ -63,28 +62,14 @@ using namespace mlir::arts;
 
 namespace {
 
-///===----------------------------------------------------------------------===///
-/// Partition Mode Conversion Helper
-///===----------------------------------------------------------------------===///
-static PromotionMode toPromotionMode(RewriterMode mode) {
-  switch (mode) {
-  case RewriterMode::Chunked:
-    return PromotionMode::chunked;
-  case RewriterMode::Stencil:
-    return PromotionMode::chunked;
-  case RewriterMode::ElementWise:
-    return PromotionMode::fine_grained;
-  }
-  return PromotionMode::coarse;
-}
-
 /// Per-acquire partition analysis results for Phase 1.
 struct AcquirePartitionInfo {
   DbAcquireOp acquire;
-  PartitionMode mode;    /// From DatablockUtils::getPartitionMode
-  Value partitionOffset; /// Computed from hints or loop analysis
-  Value partitionSize;   /// Computed chunk/element size (dynamic!)
+  PartitionMode mode;
+  Value partitionOffset;
+  Value partitionSize;
   bool isValid = false;
+  bool hasIndirectAccess = false;
   /// For mixed mode: this coarse acquire needs full-range access to chunked
   /// alloc.
   bool needsFullRange = false;
@@ -95,7 +80,7 @@ struct AcquirePartitionInfo {
     if (mode != other.mode)
       return false;
     /// For Chunked mode, sizes must be same SSA value
-    if (mode == PartitionMode::Chunked &&
+    if (mode == PartitionMode::chunked &&
         partitionSize != other.partitionSize) {
       int64_t lhs = 0, rhs = 0;
       bool lhsConst = ValueUtils::getConstantIndex(partitionSize, lhs);
@@ -107,7 +92,7 @@ struct AcquirePartitionInfo {
   }
 };
 
-/// Extract partition offset with cascading fallback: info → node → hints →
+/// Extract partition offset with cascading fallback: info → node → chunk_hint →
 /// offsets.
 static Value getPartitionOffset(DbAcquireNode *acqNode,
                                 const AcquirePartitionInfo *info) {
@@ -119,9 +104,9 @@ static Value getPartitionOffset(DbAcquireNode *acqNode,
     return offset;
 
   DbAcquireOp acqOp = acqNode->getDbAcquireOp();
-  auto hints = acqOp.getOffsetHints();
-  if (!hints.empty())
-    return hints.front();
+  /// Check for chunk_hint (chunk_index is the chunk index, not element offset)
+  if (Value chunkIndex = acqOp.getChunkIndex())
+    return chunkIndex;
 
   auto offsets = acqOp.getOffsets();
   if (!offsets.empty())
@@ -137,10 +122,12 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
                                                         Location loc) {
   AcquirePartitionInfo info;
   info.acquire = acquire;
-  info.mode = DatablockUtils::getPartitionMode(acquire);
+  info.mode = DatablockUtils::getPartitionModeFromStructure(acquire);
+  if (acqNode)
+    info.hasIndirectAccess = acqNode->hasIndirectAccess();
 
   switch (info.mode) {
-  case PartitionMode::Coarse:
+  case PartitionMode::coarse:
     /// No partitioning needed
     info.isValid = true;
     if (acqNode) {
@@ -156,7 +143,7 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
     }
     break;
 
-  case PartitionMode::ElementWise:
+  case PartitionMode::fine_grained:
     /// Use indices as partition offset
     if (!acquire.getIndices().empty()) {
       info.partitionOffset = acquire.getIndices().front();
@@ -165,7 +152,7 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
     }
     break;
 
-  case PartitionMode::Chunked:
+  case PartitionMode::chunked:
     /// Use offsets/sizes or compute from loop structure
     if (acqNode) {
       Value offset, size;
@@ -174,14 +161,53 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
         info.partitionSize = size;
         info.isValid = true;
       } else {
+        /// Indirect access with chunk hints: trust chunk_hint for versioning.
+        if (acqNode->hasIndirectAccess()) {
+          Value chunkIndex = acquire.getChunkIndex();
+          Value chunkSize = acquire.getChunkSize();
+          if (chunkIndex && chunkSize) {
+            info.partitionOffset = chunkIndex;
+            info.partitionSize = chunkSize;
+            info.isValid = true;
+            break;
+          }
+        }
         /// Validation failed -> fall back to coarse for correctness.
-        info.mode = PartitionMode::Coarse;
+        info.mode = PartitionMode::coarse;
       }
     }
     break;
   }
 
   return info;
+}
+
+static void resetCoarseAcquireRanges(DbAllocOp allocOp, DbAllocNode *allocNode,
+                                     OpBuilder &builder) {
+  if (!allocNode || allocOp.getSizes().empty())
+    return;
+
+  Value zero = builder.create<arith::ConstantIndexOp>(allocOp.getLoc(), 0);
+  SmallVector<Value> fullOffsets;
+  SmallVector<Value> fullSizes;
+  for (Value size : allocOp.getSizes()) {
+    fullOffsets.push_back(zero);
+    fullSizes.push_back(size);
+  }
+
+  allocNode->forEachChildNode([&](NodeBase *child) {
+    auto *acqNode = dyn_cast<DbAcquireNode>(child);
+    if (!acqNode)
+      return;
+    DbAcquireOp acqOp = acqNode->getDbAcquireOp();
+    if (!acqOp)
+      return;
+    acqOp.getOffsetsMutable().assign(fullOffsets);
+    acqOp.getSizesMutable().assign(fullSizes);
+    /// Clear chunk hints since we're resetting to coarse (full-range)
+    acqOp.getChunkIndexMutable().clear();
+    acqOp.getChunkSizeMutable().clear();
+  });
 }
 
 ///===----------------------------------------------------------------------===///
@@ -440,7 +466,7 @@ static Value traceBackChunkSize(Value chunkSize, DbAllocOp allocOp,
   ARTS_DEBUG("  Trace-back: examining " << defOp->getName().getStringRef());
 
   //===--------------------------------------------------------------------===//
-  // Division patterns (block_size = N / tasks)
+  /// Division patterns (block_size = N / tasks)
   //===--------------------------------------------------------------------===//
   if (auto op = dyn_cast<arith::DivSIOp>(defOp))
     return traceBinaryOp(op, allocOp, builder, domInfo, loc, "divsi");
@@ -452,7 +478,7 @@ static Value traceBackChunkSize(Value chunkSize, DbAllocOp allocOp,
     return traceBinaryOp(op, allocOp, builder, domInfo, loc, "ceildivui");
 
   //===--------------------------------------------------------------------===//
-  // Cast pattern (unwrap and trace source)
+  /// Cast pattern (unwrap and trace source)
   //===--------------------------------------------------------------------===//
   if (auto castOp = dyn_cast<arith::IndexCastOp>(defOp)) {
     if (Value inner = traceBackChunkSize(castOp.getIn(), allocOp, builder,
@@ -466,7 +492,7 @@ static Value traceBackChunkSize(Value chunkSize, DbAllocOp allocOp,
   }
 
   //===--------------------------------------------------------------------===//
-  // Bounds patterns (clamping with max/min)
+  /// Bounds patterns (clamping with max/min)
   //===--------------------------------------------------------------------===//
   if (auto op = dyn_cast<arith::MaxSIOp>(defOp))
     return traceBinaryOp(op, allocOp, builder, domInfo, loc, "maxsi");
@@ -476,13 +502,13 @@ static Value traceBackChunkSize(Value chunkSize, DbAllocOp allocOp,
     return traceMinUI(op, allocOp, builder, domInfo, loc);
 
   //===--------------------------------------------------------------------===//
-  // Conditional pattern (select with fallback)
+  /// Conditional pattern (select with fallback)
   //===--------------------------------------------------------------------===//
   if (auto op = dyn_cast<arith::SelectOp>(defOp))
     return traceSelect(op, allocOp, builder, domInfo, loc);
 
   //===--------------------------------------------------------------------===//
-  // Arithmetic patterns (add, sub, mul)
+  /// Arithmetic patterns (add, sub, mul)
   //===--------------------------------------------------------------------===//
   if (auto op = dyn_cast<arith::SubIOp>(defOp))
     return traceBinaryOp(op, allocOp, builder, domInfo, loc, "subi");
@@ -492,7 +518,7 @@ static Value traceBackChunkSize(Value chunkSize, DbAllocOp allocOp,
     return traceBinaryOp(op, allocOp, builder, domInfo, loc, "muli");
 
   //===--------------------------------------------------------------------===//
-  // Constant patterns (recreate at allocation point)
+  /// Constant patterns (recreate at allocation point)
   //===--------------------------------------------------------------------===//
   if (auto constOp = dyn_cast<arith::ConstantOp>(defOp)) {
     if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
@@ -522,9 +548,8 @@ struct DbPartitioningPass
     : public arts::DbPartitioningBase<DbPartitioningPass> {
   DbPartitioningPass(ArtsAnalysisManager *AM,
                      bool useFineGrainedFallback = false)
-      : AM(AM) {
+      : AM(AM), useFineGrainedFallback(useFineGrainedFallback) {
     assert(AM && "ArtsAnalysisManager must be provided externally");
-    this->useFineGrainedFallback = useFineGrainedFallback;
   }
 
   void runOnOperation() override;
@@ -563,6 +588,7 @@ struct DbPartitioningPass
 private:
   ModuleOp module;
   ArtsAnalysisManager *AM = nullptr;
+  bool useFineGrainedFallback = false;
 };
 } // namespace
 
@@ -623,7 +649,7 @@ bool DbPartitioningPass::partitionDb() {
   llvm::SmallPtrSet<Operation *, 8> partitionAttempt, partitionSuccess,
       partitionFailed;
 
-  // PHASE 1: Partition allocations
+  /// PHASE 1: Partition allocations
   module.walk([&](func::FuncOp func) {
     DbGraph &graph = AM->getDbGraph(func);
 
@@ -640,7 +666,7 @@ bool DbPartitioningPass::partitionDb() {
       ARTS_DEBUG("Checking allocation: " << allocOp);
 
       /// Pre-check: can this allocation be partitioned at all?
-      if (!allocNode->canBePartitioned(useFineGrainedFallback)) {
+      if (!allocNode->canBePartitioned()) {
         ARTS_DEBUG("  SKIP: canBePartitioned() returned false");
         partitionFailed.insert(allocOp.getOperation());
         return;
@@ -679,7 +705,7 @@ bool DbPartitioningPass::partitionDb() {
     });
   });
 
-  // PHASE 2: Overlap analysis for unpartitioned allocations
+  /// PHASE 2: Overlap analysis for unpartitioned allocations
   ARTS_DEBUG("  Overlap analysis for unpartitioned allocations:");
   module.walk([&](func::FuncOp func) {
     DbGraph &graph = AM->getDbGraph(func);
@@ -726,7 +752,7 @@ bool DbPartitioningPass::partitionDb() {
     });
   });
 
-  // PHASE 3: Default twin_diff=true for remaining acquires
+  /// PHASE 3: Default twin_diff=true for remaining acquires
   ARTS_DEBUG(
       "  Final pass: Setting safe default twin_diff=true for unset acquires");
   module.walk([&](DbAcquireOp acq) {
@@ -736,9 +762,9 @@ bool DbPartitioningPass::partitionDb() {
     }
   });
 
-  /// Rebuild graph if any promotions occurred
+  /// Rebuild graph if any partitioning occurred
   if (changed) {
-    ARTS_DEBUG("Rebuilding graph after promotions");
+    ARTS_DEBUG("Rebuilding graph after partitioning");
     invalidateAndRebuildGraph();
   }
 
@@ -760,9 +786,10 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   /// Step 0: Check existing partition attribute
   if (auto existingMode = getPartitionMode(allocOp)) {
     /// Only skip if SUCCESSFULLY partitioned (element_wise or chunked)
-    if (*existingMode != PromotionMode::coarse) {
+    if (*existingMode != PartitionMode::coarse) {
       ARTS_DEBUG("  Already partitioned as "
-                 << getPartitionModeLabel(*existingMode) << " - SKIP");
+                 << mlir::arts::stringifyPartitionMode(*existingMode)
+                 << " - SKIP");
       heuristics.recordDecision(
           "Partition-AlreadyPartitioned", false,
           "allocation already has partition attribute, skipping",
@@ -770,8 +797,9 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       return allocOp; /// Skip - already partitioned!
     }
     /// mode == none means CreateDbs couldn't partition - continue to re-analyze
-    ARTS_DEBUG("  Partition mode is " << getPartitionModeLabel(*existingMode)
-                                      << " - re-analyzing with loop structure");
+    ARTS_DEBUG("  Partition mode is "
+               << mlir::arts::stringifyPartitionMode(*existingMode)
+               << " - re-analyzing with loop structure");
     heuristics.recordDecision(
         "Partition-ReanalyzeNone", true,
         "CreateDbs set none, attempting loop-based chunk detection",
@@ -779,7 +807,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   }
 
   /// Already fine-grained by structure - skip
-  if (allocNode && allocNode->isFineGrained()) {
+  if (allocNode && DatablockUtils::isFineGrained(allocNode->getDbAllocOp())) {
     ARTS_DEBUG("  Already fine-grained by structure - SKIP");
     heuristics.recordDecision(
         "Partition-AlreadyFineGrained", false,
@@ -839,88 +867,123 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       true; /// Assume chunked is possible until proven otherwise
 
   if (allocNode) {
-    ctx.accessPatterns =
-        allocNode->summarizeAcquirePatterns(useFineGrainedFallback);
+    ctx.accessPatterns = allocNode->summarizeAcquirePatterns();
     ARTS_DEBUG("  Access patterns: hasUniform="
                << ctx.accessPatterns.hasUniform
                << ", hasStencil=" << ctx.accessPatterns.hasStencil
                << ", hasIndexed=" << ctx.accessPatterns.hasIndexed
                << ", isMixed=" << ctx.accessPatterns.isMixed());
 
-    // Build per-acquire capabilities for heuristic voting
+    allocNode->forEachChildNode([&](NodeBase *child) {
+      auto *acqNode = dyn_cast<DbAcquireNode>(child);
+      if (!acqNode)
+        return;
+      DbAcquireOp acqOp = acqNode->getDbAcquireOp();
+      if (!acqOp)
+        return;
+      bool hasIndirect = acqNode->hasIndirectAccess();
+      if (hasIndirect) {
+        ctx.hasIndirectAccess = true;
+        if (acqNode->hasLoads())
+          ctx.hasIndirectRead = true;
+        if (acqNode->hasStores())
+          ctx.hasIndirectWrite = true;
+      }
+      if (acqNode->hasDirectAccess())
+        ctx.hasDirectAccess = true;
+    });
+
+    /// Note: Indirect access is handled via full-range acquires, not by
+    /// disabling chunked. Full-range acquires allow indirect reads to access
+    /// all chunks.
+    if (ctx.hasIndirectAccess) {
+      ARTS_DEBUG("  Indirect access detected - indirect acquires will use "
+                 "full-range");
+    }
+
+    /// Build per-acquire capabilities for heuristic voting
     size_t idx = 0;
     allocNode->forEachChildNode([&](NodeBase *child) {
       auto *acqNode = dyn_cast<DbAcquireNode>(child);
       if (!acqNode || idx >= acquireInfos.size())
         return;
 
-      const auto &acqInfo = acquireInfos[idx];
+      auto &acqInfo = acquireInfos[idx];
 
       /// Check for non-leading partition offset (disables chunked mode).
       /// Non-leading means the first array index isn't directly derived from
       /// the partition offset, so chunk-based indexing won't work correctly.
-      if (canUseChunked && acqInfo.mode == PartitionMode::Chunked) {
+      bool hasIndirect = acqNode->hasIndirectAccess();
+      bool hasDirect = acqNode->hasDirectAccess();
+
+      /// Read partition capability from acquire's attribute.
+      /// ForLowering sets this to 'chunked' when adding offset/size hints.
+      /// CreateDbs sets this based on DbControlOp analysis.
+      auto acquire = acqNode->getDbAcquireOp();
+      auto acquireMode = getPartitionMode(acquire.getOperation());
+      bool thisAcquireCanChunked =
+          acquireMode && *acquireMode == PartitionMode::chunked;
+      bool thisAcquireCanElementWise =
+          acquireMode && *acquireMode == PartitionMode::fine_grained;
+
+      /// Additional validation: check for non-leading partition offset
+      if (canUseChunked && thisAcquireCanChunked) {
         Value offsetForCheck = getPartitionOffset(acqNode, &acqInfo);
         if (offsetForCheck &&
             !acqNode->canPartitionWithOffset(offsetForCheck)) {
-          ARTS_DEBUG("  Non-leading partition offset detected; "
-                     "disabling chunked partitioning for allocation");
-          canUseChunked = false;
+          if (hasIndirect && !hasDirect) {
+            ARTS_DEBUG("  Non-leading offset on indirect access; "
+                       "disabling chunked for this acquire");
+            thisAcquireCanChunked = false;
+          } else if (hasIndirect && hasDirect) {
+            ARTS_DEBUG("  Non-leading offset on mixed access; "
+                       "keeping chunked for versioning");
+          } else {
+            ARTS_DEBUG("  Non-leading partition offset detected; "
+                       "disabling chunked partitioning for allocation");
+            canUseChunked = false;
+            thisAcquireCanChunked = false;
+          }
         }
       }
 
       /// Build AcquireInfo for heuristic voting
       AcquireInfo info;
-      info.accessMode = acqNode->getDbAcquireOp().getMode();
-      info.canElementWise = (acqInfo.mode == PartitionMode::ElementWise);
-      info.canChunked =
-          canUseChunked && (acqInfo.mode == PartitionMode::Chunked);
+      info.accessMode = acquire.getMode();
+      info.canElementWise =
+          thisAcquireCanElementWise || !acquire.getIndices().empty();
+      info.canChunked = canUseChunked && thisAcquireCanChunked;
       info.pinnedDimCount = info.canElementWise ? 1 : 0;
 
       ctx.acquires.push_back(info);
       ARTS_DEBUG("    Acquire["
                  << idx << "]: mode=" << static_cast<int>(info.accessMode)
                  << ", canEW=" << info.canElementWise
-                 << ", canChunked=" << info.canChunked);
+                 << ", canChunked=" << info.canChunked << ", acquireAttr="
+                 << (acquireMode ? static_cast<int>(*acquireMode) : -1));
       ++idx;
     });
   }
 
-  // Determine allocation-level capabilities from per-acquire analysis
-  if (modesConsistent) {
-    ARTS_DEBUG(
-        "  Consistent partition mode: " << static_cast<int>(consistentMode));
-    /// All consistent and coarse -> no partitioning needed
-    if (consistentMode == PartitionMode::Coarse) {
-      /// When fine-grained fallback is enabled and allocation has non-affine
-      /// accesses, allow element-wise partitioning instead of keeping coarse.
-      if (useFineGrainedFallback && ctx.accessPatterns.hasIndexed) {
-        ARTS_DEBUG("  Coarse mode but fine-grained fallback enabled with "
-                   "hasIndexed - allowing element-wise");
-        ctx.canElementWise = true;
-        ctx.canChunked = false;
-      } else {
-        ARTS_DEBUG("  Coarse mode - no partitioning needed");
-        heuristics.recordDecision(
-            "Partition-CoarseMode", false,
-            "all acquires are coarse mode, no partitioning needed",
-            allocOp.getOperation(), {});
-        return allocOp;
-      }
-    } else {
-      ctx.canElementWise = (consistentMode == PartitionMode::ElementWise);
-      ctx.canChunked =
-          canUseChunked && (consistentMode == PartitionMode::Chunked);
-    }
-  } else {
-    /// Inconsistent modes: use per-acquire voting to determine capabilities
-    ctx.canElementWise = ctx.anyCanElementWise();
-    ctx.canChunked = ctx.anyCanChunked(); /// Uses per-acquire canChunked flags
-    /// If neither is true but we have acquires, allow element-wise as fallback
-    if (!ctx.canElementWise && !ctx.canChunked && !ctx.acquires.empty())
-      ctx.canElementWise = true;
-    ARTS_DEBUG("  Inconsistent modes - using per-acquire voting: canEW="
-               << ctx.canElementWise << ", canChunked=" << ctx.canChunked);
+  /// Determine allocation-level capabilities from per-acquire STRUCTURAL
+  /// analysis Always use per-acquire voting since we've updated acquire
+  /// attributes based on structural hints (offset_hints, indices, etc.)
+  ctx.canElementWise = ctx.anyCanElementWise();
+  ctx.canChunked = ctx.anyCanChunked(); /// Uses per-acquire canChunked flags
+
+  ARTS_DEBUG("  Per-acquire voting: canEW="
+             << ctx.canElementWise << ", canChunked=" << ctx.canChunked
+             << ", modesConsistent=" << modesConsistent);
+
+  /// If no structural capability found, let heuristics handle it
+  if (!ctx.canElementWise && !ctx.canChunked) {
+    ARTS_DEBUG("  Coarse mode - no partitioning needed");
+    resetCoarseAcquireRanges(allocOp, allocNode, builder);
+    heuristics.recordDecision(
+        "Partition-CoarseMode", false,
+        "all acquires are coarse mode, no partitioning needed",
+        allocOp.getOperation(), {});
+    return allocOp;
   }
 
   /// If any coarse acquires exist alongside chunked candidates, enable MIXED
@@ -929,28 +992,45 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   if (ctx.canChunked) {
     bool hasCoarse =
         llvm::any_of(acquireInfos, [](const AcquirePartitionInfo &info) {
-          return info.mode == PartitionMode::Coarse;
+          return info.mode == PartitionMode::coarse;
         });
     bool hasChunked =
         llvm::any_of(acquireInfos, [](const AcquirePartitionInfo &info) {
-          return info.mode == PartitionMode::Chunked;
+          return info.mode == PartitionMode::chunked;
         });
 
     if (hasCoarse && hasChunked) {
-      // MIXED MODE: chunked allocation with coarse acquires getting full-range
+      /// MIXED MODE: chunked allocation with coarse acquires getting full-range
       ctx.canElementWise = false;
       ARTS_DEBUG(
           "  Mixed mode enabled: chunked allocation with coarse acquires");
 
-      // Mark coarse acquires for full-range treatment
+      /// Mark coarse acquires for full-range treatment
       for (auto &info : acquireInfos) {
-        if (info.mode == PartitionMode::Coarse) {
+        if (info.mode == PartitionMode::coarse) {
           info.needsFullRange = true;
         }
       }
     } else if (hasCoarse) {
       ctx.canElementWise = false;
       ARTS_DEBUG("  Coarse+chunked mix detected - disabling element-wise");
+    }
+
+    /// Mark indirect read-only acquires for full-range treatment.
+    /// This enables chunked writes + full-range indirect reads without needing
+    /// DbCopy/DbSync (the versioning approach).
+    if (ctx.hasIndirectRead && !ctx.hasIndirectWrite) {
+      for (auto &info : acquireInfos) {
+        if (info.hasIndirectAccess && info.acquire) {
+          /// Check if this acquire is read-only
+          ArtsMode mode = info.acquire.getMode();
+          if (mode == ArtsMode::in) {
+            info.needsFullRange = true;
+            ARTS_DEBUG("  Marked indirect read-only acquire as full-range: "
+                       << info.acquire);
+          }
+        }
+      }
     }
   }
 
@@ -964,12 +1044,6 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   /// Get canonical chunk size for Chunked mode (extract static value if
   /// possible).
   Value dynamicChunkSize;
-  auto isZeroCandidate = [](Value candidate) -> bool {
-    if (!candidate)
-      return false;
-    Value stripped = ValueUtils::stripNumericCasts(candidate);
-    return ValueUtils::isZeroConstant(stripped);
-  };
   if (ctx.canChunked) {
     SmallVector<Value> chunkCandidates;
     int64_t staticCandidateCount = 0;
@@ -978,24 +1052,25 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     DominanceInfo domInfo(func);
 
     for (const auto &info : acquireInfos) {
-      if (info.mode != PartitionMode::Chunked || !info.partitionSize)
+      if (info.mode != PartitionMode::chunked || !info.partitionSize)
         continue;
 
       DbAcquireOp acquire = info.acquire;
       if (!acquire)
         continue;
 
-      Value offsetHint = info.partitionOffset;
-      Value sizeHint = info.partitionSize;
-      if (!acquire.getOffsetHints().empty())
-        offsetHint = acquire.getOffsetHints().front();
-      if (!acquire.getSizeHints().empty())
-        sizeHint = acquire.getSizeHints().front();
+      /// Use chunk_hint if available, otherwise fall back to partition info
+      Value chunkIndex = info.partitionOffset;
+      Value chunkSizeVal = info.partitionSize;
+      if (acquire.getChunkIndex())
+        chunkIndex = acquire.getChunkIndex();
+      if (acquire.getChunkSize())
+        chunkSizeVal = acquire.getChunkSize();
 
-      Value baseCandidate =
-          DatablockUtils::extractBaseChunkSizeCandidate(offsetHint, sizeHint);
+      Value baseCandidate = DatablockUtils::extractBaseChunkSizeCandidate(
+          chunkIndex, chunkSizeVal);
       if (!baseCandidate)
-        baseCandidate = sizeHint;
+        baseCandidate = chunkSizeVal;
       if (!baseCandidate)
         continue;
 
@@ -1011,7 +1086,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       if (!domCandidate)
         continue;
 
-      if (isZeroCandidate(domCandidate)) {
+      if (ValueUtils::isZeroConstant(
+              ValueUtils::stripNumericCasts(domCandidate))) {
         ARTS_DEBUG("  Skipping zero chunk size candidate");
         continue;
       }
@@ -1048,8 +1124,9 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
   /// Fallback: use the first observed chunk size if canonicalization failed.
   if (!dynamicChunkSize) {
-    if (consistentMode == PartitionMode::Chunked && reference.partitionSize &&
-        !isZeroCandidate(reference.partitionSize)) {
+    if (consistentMode == PartitionMode::chunked && reference.partitionSize &&
+        !ValueUtils::isZeroConstant(
+            ValueUtils::stripNumericCasts(reference.partitionSize))) {
       dynamicChunkSize = reference.partitionSize;
       if (auto staticSize =
               arts::extractChunkSizeFromHint(reference.partitionSize)) {
@@ -1058,9 +1135,10 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       }
     } else {
       for (const auto &info : acquireInfos) {
-        if (info.mode != PartitionMode::Chunked || !info.partitionSize)
+        if (info.mode != PartitionMode::chunked || !info.partitionSize)
           continue;
-        if (isZeroCandidate(info.partitionSize)) {
+        if (ValueUtils::isZeroConstant(
+                ValueUtils::stripNumericCasts(info.partitionSize))) {
           ARTS_DEBUG("  Skipping zero fallback chunk size");
           continue;
         }
@@ -1087,6 +1165,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
   if (decision.isCoarse()) {
     ARTS_DEBUG("  Heuristics chose coarse - keeping original");
+    resetCoarseAcquireRanges(allocOp, allocNode, builder);
     heuristics.recordDecision(
         "Partition-HeuristicsCoarse", false,
         "heuristics chose coarse allocation, keeping original",
@@ -1096,22 +1175,23 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     return allocOp;
   }
 
+  /// Disabled: versioned partitioning via DbCopy/DbSync is currently off.
+  /// The implementation lives in DbVersionedRewriter for future enablement.
+
   /// For element-wise partitioning, we don't need per-acquire partition info
   /// since each acquire specifies its indices directly via offset_hints.
   bool skipAcquireInfoCheck =
-      decision.isFineGrained() &&
-      (useFineGrainedFallback && ctx.accessPatterns.hasIndexed);
+      decision.isFineGrained() && ctx.accessPatterns.hasIndexed;
 
-  bool allRewriteable = skipAcquireInfoCheck ||
-      std::all_of(acquireInfos.begin(), acquireInfos.end(),
-                  [](const auto &info) {
-                    // Full-range acquires don't need offset/size - they get full
-                    // allocation
-                    if (info.needsFullRange)
-                      return true;
-                    return info.isValid && info.partitionOffset &&
-                           info.partitionSize;
-                  });
+  bool allRewriteable =
+      skipAcquireInfoCheck ||
+      std::all_of(acquireInfos.begin(), acquireInfos.end(), [&](auto &info) {
+        /// Full-range acquires don't need offset/size - they get full
+        /// allocation
+        if (info.needsFullRange)
+          return true;
+        return info.isValid && info.partitionOffset && info.partitionSize;
+      });
   if (!allRewriteable) {
     ARTS_DEBUG("  Some acquires missing partition info - keeping original");
     heuristics.recordDecision(
@@ -1282,23 +1362,23 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   /// ESD: Use early-computed stencilInfo for Stencil mode
   if (stencilInfo)
     plan.stencilInfo = *stencilInfo;
-  // Note: byte_offset/byte_size for ESD is computed in EdtLowering from
-  // element_offsets/element_sizes, using allocation's elementSizes for stride.
+  /// Note: byte_offset/byte_size for ESD is computed in EdtLowering from
+  /// element_offsets/element_sizes, using allocation's elementSizes for stride.
 
   /// Build DbRewriteAcquire list from AcquirePartitionInfo
   /// Include ALL acquires - invalid ones get Coarse fallback (offset=0,
   /// size=totalSize)
   SmallVector<DbRewriteAcquire> rewriteAcquires;
   Value zero = builder.create<arith::ConstantIndexOp>(allocOp.getLoc(), 0);
-  for (const auto &info : acquireInfos) {
+  for (auto &info : acquireInfos) {
     if (!info.acquire)
       continue;
 
     DbRewriteAcquire rewriteInfo;
     rewriteInfo.acquire = info.acquire;
 
-    if (info.needsFullRange) {
-      // Coarse acquire in mixed mode: full-range access.
+    if (info.needsFullRange && decision.isChunked()) {
+      /// Coarse acquire in mixed mode: full-range access.
       rewriteInfo.isFullRange = true;
     } else if (info.isValid) {
       rewriteInfo.elemOffset = info.partitionOffset;
@@ -1315,6 +1395,14 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                                       << " rewritten with Coarse fallback");
     }
 
+    if (decision.isFineGrained() && info.hasIndirectAccess) {
+      Value totalSize = allocOp.getElementSizes().empty()
+                            ? zero
+                            : allocOp.getElementSizes().front();
+      rewriteInfo.elemOffset = zero;
+      rewriteInfo.elemSize = totalSize;
+    }
+
     rewriteAcquires.push_back(rewriteInfo);
   }
 
@@ -1324,7 +1412,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
   /// Step 7: Set partition attribute on new alloc
   if (succeeded(result)) {
-    setPartitionMode(*result, toPromotionMode(decision.mode));
+    setPartitionMode(*result, toPartitionMode(decision.mode));
+
     AM->getMetadataManager().transferMetadata(allocOp, result.value());
 
     /// Record successful partition decision
@@ -1502,15 +1591,14 @@ void DbPartitioningPass::generateBoundsValid(DbAcquireOp acquireOp,
                                 acquireOp.getOffsets().end());
   SmallVector<Value> sizesVec(acquireOp.getSizes().begin(),
                               acquireOp.getSizes().end());
-  SmallVector<Value> offsetHintsVec(acquireOp.getOffsetHints().begin(),
-                                    acquireOp.getOffsetHints().end());
-  SmallVector<Value> sizeHintsVec(acquireOp.getSizeHints().begin(),
-                                  acquireOp.getSizeHints().end());
+  /// Get chunk hints (single values in new API)
+  Value chunkIndex = acquireOp.getChunkIndex();
+  Value chunkSize = acquireOp.getChunkSize();
 
   auto newAcquire = builder.create<DbAcquireOp>(
       loc, acquireOp.getMode(), acquireOp.getSourceGuid(),
-      acquireOp.getSourcePtr(), indicesVec, offsetsVec, sizesVec,
-      offsetHintsVec, sizeHintsVec, boundsValid);
+      acquireOp.getSourcePtr(), indicesVec, offsetsVec, sizesVec, chunkIndex,
+      chunkSize, boundsValid);
   transferAttributes(acquireOp, newAcquire);
 
   acquireOp.getGuid().replaceAllUsesWith(newAcquire.getGuid());

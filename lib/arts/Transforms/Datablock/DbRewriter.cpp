@@ -6,7 +6,7 @@
 ///==========================================================================///
 
 #include "arts/Transforms/Datablock/DbRewriter.h"
-#include "arts/Analysis/Heuristics/PartitioningHeuristics.h"
+#include "arts/Analysis/HeuristicsConfig.h"
 #include "arts/Transforms/Datablock/Chunked/DbChunkedIndexer.h"
 #include "arts/Transforms/Datablock/Chunked/DbChunkedRewriter.h"
 #include "arts/Transforms/Datablock/ElementWise/DbElementWiseIndexer.h"
@@ -15,6 +15,7 @@
 #include "arts/Transforms/Datablock/Stencil/DbStencilRewriter.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/RemovalUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -42,8 +43,8 @@ DbRewriter::DbRewriter(DbAllocOp oldAlloc, ValueRange newOuterSizes,
                        ValueRange newInnerSizes,
                        ArrayRef<DbRewriteAcquire> acquires,
                        const DbRewritePlan &plan)
-    : oldAlloc_(oldAlloc), newOuterSizes_(newOuterSizes),
-      newInnerSizes_(newInnerSizes), acquires_(acquires), plan_(plan) {}
+    : oldAlloc(oldAlloc), newOuterSizes(newOuterSizes),
+      newInnerSizes(newInnerSizes), acquires(acquires), plan(plan) {}
 
 ///===----------------------------------------------------------------------===///
 /// Factory Method - Creates appropriate subclass based on mode
@@ -68,7 +69,7 @@ std::unique_ptr<DbRewriter> DbRewriter::create(
                                                newInnerSizes, acquires, plan);
   }
 
-  llvm_unreachable("Unknown RewriterMode");
+  ARTS_UNREACHABLE("Unknown RewriterMode");
 }
 
 ///===----------------------------------------------------------------------===///
@@ -76,27 +77,29 @@ std::unique_ptr<DbRewriter> DbRewriter::create(
 ///===----------------------------------------------------------------------===///
 
 FailureOr<DbAllocOp> DbRewriter::apply(OpBuilder &builder) {
-  ARTS_DEBUG("DbRewriter::apply - mode=" << getRewriterModeName(plan_.mode)
-                                         << ", acquires=" << acquires_.size());
+  ARTS_DEBUG("DbRewriter::apply - mode=" << getRewriterModeName(plan.mode)
+                                         << ", acquires=" << acquires.size());
 
-  if (!oldAlloc_)
+  if (!oldAlloc)
     return failure();
 
-  Location loc = oldAlloc_.getLoc();
+  Location loc = oldAlloc.getLoc();
   OpBuilder::InsertionGuard guard(builder);
-  builder.setInsertionPoint(oldAlloc_);
+  builder.setInsertionPoint(oldAlloc);
 
   /// 1. Create new allocation with the given sizes
+  PartitionMode partitionMode =
+      getPartitionMode(oldAlloc.getOperation()).value_or(PartitionMode::coarse);
   auto newAlloc = builder.create<DbAllocOp>(
-      loc, oldAlloc_.getMode(), oldAlloc_.getRoute(), oldAlloc_.getAllocType(),
-      oldAlloc_.getDbMode(), oldAlloc_.getElementType(), oldAlloc_.getAddress(),
-      newOuterSizes_, newInnerSizes_);
+      loc, oldAlloc.getMode(), oldAlloc.getRoute(), oldAlloc.getAllocType(),
+      oldAlloc.getDbMode(), oldAlloc.getElementType(), oldAlloc.getAddress(),
+      newOuterSizes, newInnerSizes, partitionMode);
 
   /// 2. Transfer metadata/attributes from old to new allocation
-  transferAttributes(oldAlloc_, newAlloc);
+  transferAttributes(oldAlloc, newAlloc, {"arts.partition"});
 
   /// 3. Rewrite all acquires with their partition info (virtual dispatch)
-  for (const auto &info : acquires_)
+  for (const auto &info : acquires)
     transformAcquire(info, newAlloc, builder);
 
   /// 4. Collect and rewrite DbRefs outside of EDTs (virtual dispatch)
@@ -117,7 +120,7 @@ FailureOr<DbAllocOp> DbRewriter::apply(OpBuilder &builder) {
       }
     }
   };
-  collectDbRefs(oldAlloc_.getPtr());
+  collectDbRefs(oldAlloc.getPtr());
 
   for (DbRefOp ref : dbRefUsers) {
     transformDbRef(ref, newAlloc, builder);
@@ -125,10 +128,10 @@ FailureOr<DbAllocOp> DbRewriter::apply(OpBuilder &builder) {
   }
 
   /// 5. Replace all uses of old allocation with new
-  oldAlloc_.getGuid().replaceAllUsesWith(newAlloc.getGuid());
-  oldAlloc_.getPtr().replaceAllUsesWith(newAlloc.getPtr());
-  if (oldAlloc_.use_empty())
-    opsToRemove.insert(oldAlloc_.getOperation());
+  oldAlloc.getGuid().replaceAllUsesWith(newAlloc.getGuid());
+  oldAlloc.getPtr().replaceAllUsesWith(newAlloc.getPtr());
+  if (oldAlloc.use_empty())
+    opsToRemove.insert(oldAlloc.getOperation());
 
   /// 6. Clean up removed operations
   RemovalUtils removalMgr;
@@ -204,5 +207,5 @@ DbRewriter::createIndexer(const DbRewritePlan &plan, Value startChunk,
                                 rightHaloArg, builder, loc);
   }
 
-  llvm_unreachable("Unknown RewriterMode");
+  ARTS_UNREACHABLE("Unknown RewriterMode");
 }

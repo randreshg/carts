@@ -14,7 +14,7 @@ int main(int argc, char **argv) {
   int *c = (int *)malloc(N * sizeof(int));
 
   int randomNumber = rand() % 100;
-  // Initialize arrays
+  /// Initialize arrays
   for (int i = 0; i < N; i++) {
     a[i] = i;
     b[i] = (i * 2) + randomNumber;
@@ -50,9 +50,8 @@ int main(int argc, char **argv) {
   free(b);
   free(c);
 
-  if (sum == expectedSum) {
+  if (sum == expectedSum)
     CARTS_TEST_PASS();
-  } else {
+  else
     CARTS_TEST_FAIL("sum mismatch");
-  }
 }

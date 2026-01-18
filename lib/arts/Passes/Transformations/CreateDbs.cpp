@@ -732,21 +732,20 @@ void CreateDbsPass::createDbAllocOps() {
       sizes.push_back(AC->createIndexConstant(1, loc));
     }
 
+    /// Determine partition mode based on heuristic decision
+    PartitionMode partitionMode = decision.isChunked() ? PartitionMode::chunked
+                                  : decision.isFineGrained()
+                                      ? PartitionMode::fine_grained
+                                      : PartitionMode::coarse;
+    ARTS_DEBUG(" - Partition mode: " << static_cast<int>(partitionMode));
+
     /// Create the db_alloc operation
     auto route = AC->createIntConstant(0, AC->Int32, loc);
-    auto dbAllocOp = AC->create<DbAllocOp>(loc, mode, route, allocType, dbMode,
-                                           elementType, sizes, elementSizes);
+    auto dbAllocOp =
+        AC->create<DbAllocOp>(loc, mode, route, allocType, dbMode, elementType,
+                              sizes, elementSizes, partitionMode);
 
     initializeGlobalDbIfNeeded(alloc, dbAllocOp, sizes, allocType, decision);
-
-    /// Set partition attribute based on heuristic decision
-    PromotionMode promotionMode = decision.isChunked() ? PromotionMode::chunked
-                                  : decision.isFineGrained()
-                                      ? PromotionMode::fine_grained
-                                      : PromotionMode::coarse;
-    setPartitionMode(dbAllocOp, promotionMode);
-    ARTS_DEBUG(
-        " - Set partition attribute: " << static_cast<int>(promotionMode));
 
     /// Transfer metadata from original allocation to DbAllocOp
     if (AM->getMetadataManager().transferMetadata(alloc, dbAllocOp)) {

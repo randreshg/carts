@@ -143,28 +143,7 @@ def DbPartitioning : Pass<"db-partitioning", "mlir::ModuleOp"> {
     "scf::SCFDialect",
     "polygeist::PolygeistDialect"
   ];
-  let options = [
-    Option<"useFineGrainedFallback", "fine-grained-fallback", "bool", "false",
-           "Use fine-grained (element-wise) fallback for non-affine accesses">
-  ];
   let constructor = "mlir::arts::createDbPartitioningPass(nullptr, false)";
-}
-
-def DbVersioning : Pass<"db-versioning", "mlir::ModuleOp"> {
-  let summary = "Create copy/sync pairs for mixed access patterns";
-  let description = [{
-    Inserts arts.db_copy and arts.db_sync for allocations with mixed access
-    patterns (direct writes + indirect reads). This enables separate
-    read-optimized versions of data.
-  }];
-  let dependentDialects = [
-    "memref::MemRefDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "arith::ArithDialect",
-    "scf::SCFDialect"
-  ];
-  let constructor = "mlir::arts::createDbVersioningPass(nullptr)";
 }
 
 def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {
@@ -279,14 +258,14 @@ def ArtsDataPointerHoisting : Pass<"arts-data-pointer-hoisting", "mlir::ModuleOp
     ```mlir
     scf.for %i = ... {
       scf.for %j = ... {
-        %ptr = llvm.load %dep_ptr_addr : !llvm.ptr -> !llvm.ptr  // Load every iteration
+        %ptr = llvm.load %dep_ptr_addr : !llvm.ptr -> !llvm.ptr
         %val = polygeist.load %ptr[%i, %j] : memref<?x?xf64>
       }
     }
     ```
     becomes:
     ```mlir
-    %ptr = llvm.load %dep_ptr_addr : !llvm.ptr -> !llvm.ptr  // Load once
+    %ptr = llvm.load %dep_ptr_addr : !llvm.ptr -> !llvm.ptr
     scf.for %i = ... {
       scf.for %j = ... {
         %val = polygeist.load %ptr[%i, %j] : memref<?x?xf64>
