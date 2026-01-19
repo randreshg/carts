@@ -124,6 +124,9 @@ struct ReductionInfo {
   /// Final result accumulators: scalar for each reduction variable
   SmallVector<Value> finalResultGuids, finalResultPtrs, finalResultArgs;
 
+  /// Track which final result indices are externally allocated
+  SmallVector<bool> finalResultIsExternal;
+
   /// Optional stack-allocated sinks to mirror final reduction value
   SmallVector<Value> hostResultPtrs;
 
@@ -1006,10 +1009,12 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
           auto [rootGuid, rootPtr] = *allocInfo;
           redInfo.finalResultGuids.push_back(rootGuid);
           redInfo.finalResultPtrs.push_back(rootPtr);
+          redInfo.finalResultIsExternal.push_back(true);
           ARTS_DEBUG("  - Traced reduction result to DbAllocOp from parent");
         } else {
           /// Fallback: use the acquire ptr directly (for non-split mode)
           redInfo.finalResultPtrs.push_back(existingPtr);
+          redInfo.finalResultIsExternal.push_back(true); // Also external
           ARTS_DEBUG(
               "  - Reusing pre-allocated reduction result datablock from "
               "parent (acquire ptr)");
@@ -1034,6 +1039,8 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
       /// Store handles for cleanup (db_free) after parallel EDT completes
       redInfo.finalResultGuids.push_back(finalGuid);
       redInfo.finalResultPtrs.push_back(finalPtr);
+      redInfo.finalResultIsExternal.push_back(
+          false); // Internal - free after epoch
 
       /// In non-split mode, acquire and pass to parallel EDT as dependency
       /// In split mode, skip this - acquires happen directly in result/task
@@ -1466,6 +1473,13 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
 
     /// Free final result DBs
     for (uint64_t i = 0; i < redInfo.finalResultGuids.size(); i++) {
+      /// Skip external DBs - CreateDbs handles their lifetime
+      if (i < redInfo.finalResultIsExternal.size() &&
+          redInfo.finalResultIsExternal[i]) {
+        ARTS_DEBUG("  - Skipping db_free for external final result DB at index "
+                   << i);
+        continue;
+      }
       AC.create<DbFreeOp>(loc, redInfo.finalResultGuids[i]);
       AC.create<DbFreeOp>(loc, redInfo.finalResultPtrs[i]);
     }

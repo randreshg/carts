@@ -11,8 +11,9 @@
 ///   H1.1: Read-only single-node -> coarse
 ///   H1.2: Mixed access (chunked writes + indirect reads) -> chunked
 ///   H1.3: Stencil/indexed patterns -> stencil or element-wise
-///   H1.4: Multi-node -> fine-grained for network efficiency
-///   H1.5: Non-uniform access -> coarse
+///   H1.4: Uniform direct access -> chunked
+///   H1.5: Multi-node -> fine-grained for network efficiency
+///   H1.6: Non-uniform access -> coarse
 ///
 /// H2 Twin-Diff Heuristics:
 ///   Determines when twin-diff can be safely disabled based on provable
@@ -74,6 +75,7 @@ struct PartitioningContext {
   bool hasIndirectWrite = false, hasDirectAccess = false;
   ///  Memref info
   unsigned memrefRank = 0;
+  bool elementTypeIsMemRef = false;
 
   /// Per-acquire info for voting
   SmallVector<AcquireInfo> acquires;
