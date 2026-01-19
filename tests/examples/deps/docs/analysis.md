@@ -92,9 +92,9 @@ Walk through these steps and fix any problem that you find in the way.
    To check later stages, keep using the stop flags:
 
    ```bash
-   carts run deps_canon.mlir --concurrency --debug-only=db &> deps_concurrency.mlir
-   carts run deps_canon.mlir --concurrency-opt --debug-only=db &> deps_concurrency_opt.mlir
-   carts run deps_canon.mlir --arts-to-llvm &> deps_llvm.mlir
+   carts run deps.mlir --concurrency --debug-only=db &> deps_concurrency.mlir
+   carts run deps.mlir --concurrency-opt --debug-only=db &> deps_concurrency_opt.mlir
+   carts run deps.mlir --arts-to-llvm &> deps_llvm.mlir
    ```
 
    Or run the full program:

@@ -108,7 +108,18 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
                  : "H1.3: Pure stencil uses ESD mode");
   }
 
-  /// H1.4: Multi-Node -> Fine-Grained for Network Efficiency
+  /// H1.4: Uniform direct access -> Chunked
+  /// If access is uniform and directly indexable, prefer chunked when possible.
+  bool chunkSizeFits = !ctx.totalElements || !ctx.chunkSize ||
+                       *ctx.totalElements >= *ctx.chunkSize;
+  if (ctx.canChunked && ctx.hasDirectAccess && !ctx.hasIndirectAccess &&
+      patterns.hasUniform && !ctx.elementTypeIsMemRef && chunkSizeFits) {
+    ARTS_DEBUG("H1.4 applied: Uniform direct access prefers chunked");
+    return PartitioningDecision::chunked(
+        ctx, "H1.4: Uniform direct access prefers chunked");
+  }
+
+  /// H1.5: Multi-Node -> Fine-Grained for Network Efficiency
   /// On multi-node systems, fine-grained partitioning reduces data transfer
   /// by allowing nodes to acquire only the data they need.
   if (machine && machine->getNodeCount() > 1) {
@@ -116,28 +127,28 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
     bool canDoElementWise = ctx.canElementWise || ctx.anyCanElementWise();
 
     if (canDoChunked) {
-      ARTS_DEBUG("H1.4 applied: Multi-node prefers chunked");
+      ARTS_DEBUG("H1.5 applied: Multi-node prefers chunked");
       return PartitioningDecision::chunked(
-          ctx, "H1.4: Multi-node prefers chunked for network efficiency");
+          ctx, "H1.5: Multi-node prefers chunked for network efficiency");
     }
 
     if (canDoElementWise) {
-      ARTS_DEBUG("H1.4 applied: Multi-node prefers fine-grained");
+      ARTS_DEBUG("H1.5 applied: Multi-node prefers fine-grained");
       unsigned outerRank =
           ctx.pinnedDimCount > 0 ? ctx.pinnedDimCount : ctx.maxPinnedDimCount();
       outerRank = outerRank > 0 ? outerRank : 1;
       return PartitioningDecision::elementWise(
-          ctx, outerRank, "H1.4: Multi-node prefers fine-grained");
+          ctx, outerRank, "H1.5: Multi-node prefers fine-grained");
     }
   }
 
-  /// H1.5: Non-Uniform Access -> Coarse
+  /// H1.6: Non-Uniform Access -> Coarse
   /// When access patterns are non-uniform and no fine-grained option is
   /// available, default to coarse allocation to avoid complexity.
   if (!ctx.isUniformAccess && !ctx.canElementWise && !ctx.canChunked) {
-    ARTS_DEBUG("H1.5 applied: Non-uniform access prefers coarse");
+    ARTS_DEBUG("H1.6 applied: Non-uniform access prefers coarse");
     return PartitioningDecision::coarse(
-        ctx, "H1.5: Non-uniform access prefers coarse");
+        ctx, "H1.6: Non-uniform access prefers coarse");
   }
 
   /// Fallback: Respect user partition-fallback preference

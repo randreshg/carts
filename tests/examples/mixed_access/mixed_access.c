@@ -24,13 +24,25 @@
 
 #define NODES_PER_ELEM 4
 
+static int **AllocateInt2D(int rows, int cols) {
+  int **arr = (int **)malloc(rows * sizeof(int *));
+  for (int i = 0; i < rows; i++)
+    arr[i] = (int *)malloc(cols * sizeof(int));
+  return arr;
+}
+
+static void FreeInt2D(int **arr, int rows) {
+  for (int i = 0; i < rows; i++)
+    free(arr[i]);
+  free(arr);
+}
+
 // Sequential version for verification
 static void compute_seq(int numNodes, int numElems, double *nodeData,
-                        double *elemData, int (*nodelist)[NODES_PER_ELEM]) {
+                        double *elemData, int **nodelist) {
   /// Phase 1: Initialize node data (direct access)
-  for (int i = 0; i < numNodes; i++) {
+  for (int i = 0; i < numNodes; i++)
     nodeData[i] = (double)(i * i) * 0.01;
-  }
 
   /// Phase 2: Compute element values from nodes (indirect access)
   for (int e = 0; e < numElems; e++) {
@@ -45,10 +57,8 @@ static void compute_seq(int numNodes, int numElems, double *nodeData,
 
 // Parallel version with #pragma omp parallel for
 static void compute_parallel(int numNodes, int numElems, double *nodeData,
-                             double *elemData,
-                             int (*nodelist)[NODES_PER_ELEM]) {
+                             double *elemData, int **nodelist) {
   /// Phase 1: Node-parallel initialization - CHUNKED access
-  /// Each worker writes a contiguous chunk of nodes
 #pragma omp parallel for
   for (int i = 0; i < numNodes; i++)
     nodeData[i] = (double)(i * i) * 0.01;
@@ -69,7 +79,7 @@ static void compute_parallel(int numNodes, int numElems, double *nodeData,
 
 // Build a simple 2D quad mesh connectivity
 // Elements are quads with 4 nodes each
-static void build_mesh(int nx, int ny, int (*nodelist)[NODES_PER_ELEM]) {
+static void build_mesh(int nx, int ny, int **nodelist) {
   int numNodesX = nx + 1;
   for (int ey = 0; ey < ny; ey++) {
     for (int ex = 0; ex < nx; ex++) {
@@ -105,8 +115,7 @@ int main(void) {
   double *nodeData_seq = (double *)malloc(numNodes * sizeof(double));
   double *elemData = (double *)malloc(numElems * sizeof(double));
   double *elemData_seq = (double *)malloc(numElems * sizeof(double));
-  int (*nodelist)[NODES_PER_ELEM] =
-      (int (*)[NODES_PER_ELEM])malloc(numElems * sizeof(*nodelist));
+  int **nodelist = AllocateInt2D(numElems, NODES_PER_ELEM);
 
   /// Initialize
   for (int i = 0; i < numNodes; i++) {
@@ -149,11 +158,10 @@ int main(void) {
   free(nodeData_seq);
   free(elemData);
   free(elemData_seq);
-  free(nodelist);
+  FreeInt2D(nodelist, numElems);
 
-  if (error < 1e-10) {
+  if (error < 1e-10)
     CARTS_TEST_PASS();
-  } else {
+  else
     CARTS_TEST_FAIL("mixed_access verification failed");
-  }
 }
