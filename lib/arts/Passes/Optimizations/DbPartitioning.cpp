@@ -207,6 +207,8 @@ static void resetCoarseAcquireRanges(DbAllocOp allocOp, DbAllocNode *allocNode,
     /// Clear chunk hints since we're resetting to coarse (full-range)
     acqOp.getChunkIndexMutable().clear();
     acqOp.getChunkSizeMutable().clear();
+    /// Keep acquire partition attribute consistent with coarse allocation.
+    setPartitionMode(acqOp.getOperation(), PartitionMode::coarse);
   });
 }
 
@@ -868,11 +870,20 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
   if (allocNode) {
     ctx.accessPatterns = allocNode->summarizeAcquirePatterns();
+    ctx.isUniformAccess = ctx.accessPatterns.hasUniform;
     ARTS_DEBUG("  Access patterns: hasUniform="
                << ctx.accessPatterns.hasUniform
                << ", hasStencil=" << ctx.accessPatterns.hasStencil
                << ", hasIndexed=" << ctx.accessPatterns.hasIndexed
                << ", isMixed=" << ctx.accessPatterns.isMixed());
+
+    if (!allocOp.getElementSizes().empty()) {
+      int64_t staticFirstDim = 0;
+      if (ValueUtils::getConstantIndex(allocOp.getElementSizes().front(),
+                                       staticFirstDim)) {
+        ctx.totalElements = staticFirstDim;
+      }
+    }
 
     allocNode->forEachChildNode([&](NodeBase *child) {
       auto *acqNode = dyn_cast<DbAcquireNode>(child);
@@ -1155,10 +1166,13 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   }
 
   /// Get memref rank
-  if (auto memrefType = allocOp.getElementType().dyn_cast<MemRefType>())
+  if (auto memrefType = allocOp.getElementType().dyn_cast<MemRefType>()) {
     ctx.memrefRank = memrefType.getRank();
-  else
+    ctx.elementTypeIsMemRef = true;
+  } else {
     ctx.memrefRank = allocOp.getElementSizes().size();
+    ctx.elementTypeIsMemRef = false;
+  }
 
   /// Step 4: Query heuristics → PartitioningDecision
   PartitioningDecision decision = heuristics.getPartitioningMode(ctx);

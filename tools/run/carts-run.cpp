@@ -259,9 +259,9 @@ void setupCanonicalizeMemrefs(PassManager &pm) {
   pm.addPass(createCSEPass());
   pm.addPass(createInlinerPass());
   pm.addPass(arts::createArtsInlinerPass());
-  pm.addPass(createMem2Reg());
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(createCSEPass());
+  // pm.addPass(createMem2Reg());
+  // pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  // pm.addPass(createCSEPass());
 
   pm.addPass(arts::createCanonicalizeMemrefsPass());
   pm.addPass(arts::createDeadCodeEliminationPass());
@@ -310,8 +310,7 @@ void setupEdtTransforms(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createEdtPtrRematerializationPass());
 }
 
-/// Loop reordering pass - applies optimal loop orders for cache efficiency.
-/// MUST run BEFORE CreateDbs to preserve SSA value relationships.
+/// Loop reordering pass
 void setupLoopReordering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createLoopReorderingPass(AM));
   pm.addPass(arts::createLoopTransformsPass(

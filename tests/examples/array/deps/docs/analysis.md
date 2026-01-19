@@ -158,7 +158,7 @@ Walk through these steps and fix any problem that you find in the way
 5. **Finally lets carts execute and check**
 ```bash
    carts execute array.c -O3
-   ./array_arts 8
+   ./array_arts 32
 ```
 
 Keep in mind the part below:
