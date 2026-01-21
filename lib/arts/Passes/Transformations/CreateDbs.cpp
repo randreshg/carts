@@ -39,7 +39,7 @@
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
-#include "arts/Transforms/Datablock/Chunked/DbChunkedIndexer.h"
+#include "arts/Transforms/Datablock/Block/DbBlockIndexer.h"
 #include "arts/Transforms/Datablock/DbRewriter.h"
 #include "arts/Transforms/Datablock/ElementWise/DbElementWiseIndexer.h"
 #include "arts/Transforms/DbTransforms.h"
@@ -104,8 +104,8 @@ private:
     EdtOp parentEdt = nullptr;
     ArtsMode accessMode = ArtsMode::uninitialized;
     bool usedFineGrained = false;
-    bool usedChunked = false;
-    SmallVector<Value> chunkSizes;
+    bool usedBlock = false;
+    SmallVector<Value> blockSizes;
     DbAllocOp dbAllocOp = nullptr;
 
     /// The computed allocation strategy plan
@@ -143,10 +143,10 @@ private:
       bool hasChunkDeps = false;
       /// Number of chunk dimensions
       unsigned chunkDimCount = 0;
-      /// SSA values for chunk sizes
-      SmallVector<Value> chunkSizes;
-      /// All deps use same chunk size count?
-      bool chunkSizesAreConsistent = true;
+      /// SSA values for block sizes
+      SmallVector<Value> blockSizes;
+      /// All deps use same block size count?
+      bool blockSizesAreConsistent = true;
     };
 
     AccessPatternInfo getAccessPatternInfo() const {
@@ -187,19 +187,19 @@ private:
           }
 
           /// Track chunk dependencies from DbControlOp.offsets/sizes
-          /// Chunk deps have: indices=[], offsets=[offset], sizes=[chunkSize]
+          /// Chunk deps have: indices=[], offsets=[offset], sizes=[blockSize]
           if (!access.offsets.empty() && !access.sizes.empty()) {
             info.hasChunkDeps = true;
 
-            if (info.chunkSizes.empty()) {
+            if (info.blockSizes.empty()) {
               /// First chunk dep - record the sizes
-              info.chunkSizes.assign(access.sizes.begin(), access.sizes.end());
+              info.blockSizes.assign(access.sizes.begin(), access.sizes.end());
               info.chunkDimCount = access.sizes.size();
             } else {
               /// Subsequent chunk deps - check consistency (dimension count)
               /// We can't compare SSA values statically, so we just check count
               if (access.sizes.size() != info.chunkDimCount) {
-                info.chunkSizesAreConsistent = false;
+                info.blockSizesAreConsistent = false;
               }
             }
           }
@@ -220,8 +220,7 @@ private:
   Value findParentAcquireSource(EdtOp edt, Operation *dbAllocOp,
                                 bool requiresIndexedAccess = false);
   void initializeGlobalDbIfNeeded(Operation *alloc, DbAllocOp dbAllocOp,
-                                  ArrayRef<Value> sizes, DbAllocType allocType,
-                                  const PartitioningDecision &decision);
+                                  ArrayRef<Value> sizes, DbAllocType allocType);
 
   DbAllocType inferAllocType(Operation *alloc);
   void insertDbFreeForDbAlloc(DbAllocOp dbAlloc, Operation *alloc);
@@ -558,9 +557,7 @@ void CreateDbsPass::collectControlDbOps() {
   });
 }
 
-///===----------------------------------------------------------------------===///
-// Create DB Allocation Operations
-///===----------------------------------------------------------------------===///
+/// Create DB Allocation Operations
 void CreateDbsPass::createDbAllocOps() {
   /// All memrefs in memrefInfo are converted to DBs
   for (auto &entry : memrefInfo) {
@@ -600,144 +597,36 @@ void CreateDbsPass::createDbAllocOps() {
 
     auto &heuristics = AM->getHeuristicsConfig();
 
-    /// Build PartitioningContext for unified heuristic evaluation
-    PartitioningContext ctx;
-    ctx.machine = &AM->getAbstractMachine();
-    ctx.memrefRank = memRefType.getRank();
-    ctx.canElementWise = !isRankZero && accessPatternInfo.isConsistent &&
-                         accessPatternInfo.pinnedDimCount > 0 &&
-                         accessPatternInfo.allAccessesHaveIndices;
-    ctx.canChunked = !isRankZero && accessPatternInfo.hasChunkDeps &&
-                     accessPatternInfo.chunkSizesAreConsistent &&
-                     accessPatternInfo.chunkDimCount > 0;
-    ctx.pinnedDimCount = accessPatternInfo.pinnedDimCount;
-    ctx.accessMode = info.accessMode;
-    ctx.isUniformAccess = accessPatternInfo.isConsistent;
-    ctx.depsPerEDT = computeMaxDepsPerEDT(info);
+    /// CreateDbs ALWAYS creates COARSE allocations.
+    /// The actual partitioning is deferred to DbPartitioning pass.
+    /// Partition info is carried by DbAcquireOp's offsets/indices attributes.
 
-    /// Extract static chunk size for cost model if available
-    if (ctx.canChunked && !accessPatternInfo.chunkSizes.empty()) {
-      if (auto cst = accessPatternInfo.chunkSizes[0]
-                         .getDefiningOp<arith::ConstantIndexOp>())
-        ctx.chunkSize = cst.value();
+    /// Store block sizes for later use in createDbAcquireOps
+    if (accessPatternInfo.hasChunkDeps) {
+      info.blockSizes.assign(accessPatternInfo.blockSizes.begin(),
+                             accessPatternInfo.blockSizes.end());
     }
 
-    /// Compute total elements for cost model if statically known
-    int64_t totalElements = 1;
-    bool allStaticDims = true;
-    for (unsigned d = 0; d < memRefType.getRank(); ++d) {
-      if (memRefType.isDynamicDim(d)) {
-        allStaticDims = false;
-        break;
-      }
-      totalElements *= memRefType.getDimSize(d);
-    }
-    if (allStaticDims)
-      ctx.totalElements = totalElements;
-
-    /// Get partitioning decision from unified heuristics
-    /// The decision is FINAL - heuristics already respect capabilities
-    PartitioningDecision decision = heuristics.getPartitioningMode(ctx);
-
-    ARTS_DEBUG(" - Heuristic decision: " << decision.rationale);
-    ARTS_DEBUG("   mode=" << (decision.isChunked() ? "Chunked" : "ElementWise")
-                          << ", outerRank=" << decision.outerRank
-                          << ", innerRank=" << decision.innerRank);
-
-    /// Build sizes/elementSizes based on the decision
-    if (decision.isChunked()) {
-      info.usedFineGrained = true;
-      info.usedChunked = true;
-      info.chunkSizes.assign(accessPatternInfo.chunkSizes.begin(),
-                             accessPatternInfo.chunkSizes.end());
-
-      /// Chunked allocation: divide first dimension into chunks
-      /// numChunks = ceildiv(dim0, chunkSize)
-      /// sizes = [numChunks], elementSizes = [chunkSize, remaining dims]
-      Value chunkSize = accessPatternInfo.chunkSizes[0];
-      Value dim0;
-      if (memRefType.isDynamicDim(0)) {
-        dim0 = AC->create<arts::DbDimOp>(loc, allocValue, (int64_t)0);
+    /// ALWAYS create COARSE allocation:
+    /// sizes = [1], elementSizes = [all original dimensions]
+    /// DbPartitioning will transform this based on the hint
+    ARTS_DEBUG(" - Using coarse-grained allocation (deferred partitioning)");
+    elementSizes.reserve(rank);
+    for (unsigned i = 0; i < rank; ++i) {
+      if (!isRankZero && memRefType.isDynamicDim(i)) {
+        elementSizes.push_back(
+            AC->create<arts::DbDimOp>(loc, allocValue, (int64_t)i));
       } else {
-        dim0 = AC->createIndexConstant(memRefType.getDimSize(0), loc);
+        int64_t dimSize =
+            isRankZero ? 1 : static_cast<int64_t>(memRefType.getDimSize(i));
+        elementSizes.push_back(AC->createIndexConstant(dimSize, loc));
       }
-      Value numChunks = AC->create<arith::CeilDivUIOp>(loc, dim0, chunkSize);
-      sizes.push_back(numChunks);
-      elementSizes.push_back(chunkSize);
-
-      /// Remaining dimensions go to elementSizes
-      for (unsigned i = 1; i < rank; ++i) {
-        if (memRefType.isDynamicDim(i)) {
-          elementSizes.push_back(
-              AC->create<arts::DbDimOp>(loc, allocValue, (int64_t)i));
-        } else {
-          elementSizes.push_back(
-              AC->createIndexConstant(memRefType.getDimSize(i), loc));
-        }
-      }
-
-      ARTS_DEBUG(" - Using chunked allocation: numChunks computed at runtime, "
-                 << "elementSizes has " << elementSizes.size() << " dims");
-    } else if (decision.isFineGrained()) {
-      info.usedFineGrained = true;
-      const unsigned pinnedDimCount = decision.outerRank;
-
-      /// Fine-grained element-wise allocation:
-      /// All indexed dimensions go into sizes (outer array dimensions)
-      /// Non-indexed dimensions go into elementSizes (inner datablock dims)
-      ARTS_DEBUG(" - Using fine-grained allocation with "
-                 << pinnedDimCount << " pinned dimensions");
-
-      /// Add all pinned dimensions to sizes
-      for (unsigned dim = 0; dim < pinnedDimCount; ++dim) {
-        if (memRefType.isDynamicDim(dim)) {
-          sizes.push_back(
-              AC->create<arts::DbDimOp>(loc, allocValue, (int64_t)dim));
-        } else {
-          sizes.push_back(
-              AC->createIndexConstant(memRefType.getDimSize(dim), loc));
-        }
-      }
-
-      /// All non-pinned dimensions go into elementSizes
-      for (unsigned i = pinnedDimCount; i < rank; ++i) {
-        if (memRefType.isDynamicDim(i)) {
-          elementSizes.push_back(
-              AC->create<arts::DbDimOp>(loc, allocValue, (int64_t)i));
-        } else {
-          elementSizes.push_back(
-              AC->createIndexConstant(memRefType.getDimSize(i), loc));
-        }
-      }
-
-      ARTS_DEBUG("   - Created fine-grained DB: Outer rank="
-                 << sizes.size() << ", Inner rank=" << elementSizes.size());
-    } else {
-      /// Coarse-grained: all dimensions go to elementSizes, single DB. For
-      /// rank-0 memrefs, model them as a 1-D memref of size 1.
-      ARTS_DEBUG(" - Using coarse-grained allocation");
-      elementSizes.reserve(rank);
-      for (unsigned i = 0; i < rank; ++i) {
-        if (!isRankZero && memRefType.isDynamicDim(i)) {
-          elementSizes.push_back(
-              AC->create<arts::DbDimOp>(loc, allocValue, (int64_t)i));
-        } else {
-          int64_t dimSize =
-              isRankZero ? 1 : static_cast<int64_t>(memRefType.getDimSize(i));
-          elementSizes.push_back(AC->createIndexConstant(dimSize, loc));
-        }
-      }
-
-      /// Single datablock
-      sizes.push_back(AC->createIndexConstant(1, loc));
     }
+    sizes.push_back(AC->createIndexConstant(1, loc));
 
-    /// Determine partition mode based on heuristic decision
-    PartitionMode partitionMode = decision.isChunked() ? PartitionMode::chunked
-                                  : decision.isFineGrained()
-                                      ? PartitionMode::fine_grained
-                                      : PartitionMode::coarse;
-    ARTS_DEBUG(" - Partition mode: " << static_cast<int>(partitionMode));
+    /// Always coarse partition mode - DbPartitioning will change if needed
+    PartitionMode partitionMode = PartitionMode::coarse;
+    ARTS_DEBUG(" - Partition mode: coarse (to be refined by DbPartitioning)");
 
     /// Create the db_alloc operation
     auto route = AC->createIntConstant(0, AC->Int32, loc);
@@ -745,7 +634,8 @@ void CreateDbsPass::createDbAllocOps() {
         AC->create<DbAllocOp>(loc, mode, route, allocType, dbMode, elementType,
                               sizes, elementSizes, partitionMode);
 
-    initializeGlobalDbIfNeeded(alloc, dbAllocOp, sizes, allocType, decision);
+    /// Initialize global DBs
+    initializeGlobalDbIfNeeded(alloc, dbAllocOp, sizes, allocType);
 
     /// Transfer metadata from original allocation to DbAllocOp
     if (AM->getMetadataManager().transferMetadata(alloc, dbAllocOp)) {
@@ -755,50 +645,17 @@ void CreateDbsPass::createDbAllocOps() {
       ARTS_DEBUG("  No metadata found for original allocation");
     }
 
-    /// Create and store the rewrite plan directly from heuristic decision
-    DbRewritePlan plan(decision);
-    if (decision.isChunked()) {
-      Value chunkSize = accessPatternInfo.chunkSizes.empty()
-                            ? Value()
-                            : accessPatternInfo.chunkSizes[0];
-      Value offsetHint;
-      Value sizeHint;
-      for (const auto &[edtOp, deps] : info.edtToDeps) {
-        for (const auto &dep : deps) {
-          if (dep.offsets.empty() || dep.sizes.empty())
-            continue;
-          offsetHint = dep.offsets.front();
-          sizeHint = dep.sizes.front();
-          if (Value base = DatablockUtils::extractBaseChunkSizeCandidate(
-                  offsetHint, sizeHint)) {
-            chunkSize = base;
-          }
-          break;
-        }
-        if (offsetHint)
-          break;
-      }
-
-      Value one = AC->createIndexConstant(1, loc);
-      if (!chunkSize) {
-        ARTS_DEBUG("  Missing chunk size; defaulting to 1");
-        chunkSize = one;
-      } else {
-        /// Clamp to at least 1 to avoid divide-by-zero in chunked indexing.
-        chunkSize = AC->create<arith::MaxUIOp>(loc, chunkSize, one);
-      }
-      plan.chunkSize = chunkSize;
-    }
+    /// Create coarse rewrite plan - DbPartitioning will refine based on hint
+    DbRewritePlan plan;
+    plan.mode = PartitionMode::coarse;
+    plan.outerRank = 0;
+    plan.innerRank = rank;
     info.rewritePlan = plan;
 
     /// Record allocation strategy decision for diagnostics
     heuristics.recordDecision(
-        "AllocationStrategy", true,
-        "Selected " + std::string(getRewriterModeName(plan.mode)) +
-            " allocation mode",
-        alloc,
-        {{"outerRank", static_cast<int64_t>(plan.outerRank)},
-         {"innerRank", static_cast<int64_t>(plan.innerRank)}});
+        "AllocationStrategy", true, "Coarse allocation", alloc,
+        {{"outerRank", 0}, {"innerRank", static_cast<int64_t>(rank)}});
 
     /// Store mappings for later use
     info.dbAllocOp = dbAllocOp;
@@ -814,50 +671,42 @@ void CreateDbsPass::createDbAllocOps() {
     if (info.parentEdt) {
       rewriteUsesInParentEdt(info);
     } else {
-      /// Use stored plan for parent region rewrites
-      Value startChunk = AC->createIndexConstant(0, loc);
+      /// Use element-wise indexer with outerRank=0
       Value elemOffset = AC->createIndexConstant(0, loc);
-      Value elemSize = AC->createIndexConstant(1, loc);
+      SmallVector<Value> elemOffsets = {elemOffset};
 
-      if (plan.mode == RewriterMode::Chunked) {
-        DbChunkedIndexer indexer(plan.chunkSize, startChunk, elemOffset,
-                                 plan.outerRank, plan.innerRank);
-        indexer.transformUsesInParentRegion(alloc, dbAllocOp, *AC, opsToRemove);
-      } else {
-        DbElementWiseIndexer indexer(elemOffset, elemSize, plan.outerRank,
-                                     plan.innerRank, {});
-        /// Step 1: Rewrite parent region uses (skips EDTs by design)
-        indexer.transformUsesInParentRegion(alloc, dbAllocOp, *AC, opsToRemove);
+      DbElementWiseIndexer indexer(elemOffsets, 0, rank, {});
 
-        /// Step 2: For coarse mode, also rewrite EDT uses without explicit deps
-        if (plan.outerRank == 0) {
-          Type elementMemRefType = dbAllocOp.getAllocatedElementType();
-          SmallVector<Operation *> edtUsesToRewrite;
-          for (auto &use : alloc->getUses()) {
-            Operation *user = use.getOwner();
-            if (user == dbAllocOp.getOperation())
-              continue;
-            if (auto parentEdt = user->getParentOfType<EdtOp>()) {
-              if (info.edtToDeps.count(parentEdt) == 0)
-                edtUsesToRewrite.push_back(user);
-            }
-          }
-          if (!edtUsesToRewrite.empty()) {
-            indexer.transformOps(edtUsesToRewrite, dbAllocOp.getPtr(),
-                                 elementMemRefType, *AC, opsToRemove);
-          }
+      /// Step 1: Rewrite parent region uses (skips EDTs by design)
+      indexer.transformUsesInParentRegion(alloc, dbAllocOp, *AC, opsToRemove);
+
+      /// Step 2: Rewrite EDT uses without explicit deps
+      Type elementMemRefType = dbAllocOp.getAllocatedElementType();
+      SmallVector<Operation *> edtUsesToRewrite;
+      for (auto &use : alloc->getUses()) {
+        Operation *user = use.getOwner();
+        if (user == dbAllocOp.getOperation())
+          continue;
+        if (auto parentEdt = user->getParentOfType<EdtOp>()) {
+          if (info.edtToDeps.count(parentEdt) == 0)
+            edtUsesToRewrite.push_back(user);
         }
+      }
+      if (!edtUsesToRewrite.empty()) {
+        indexer.transformOps(edtUsesToRewrite, dbAllocOp.getPtr(),
+                             elementMemRefType, *AC, opsToRemove);
       }
     }
   }
 }
 
 /// Initialize global constants for single coarse-grained DBs.
-void CreateDbsPass::initializeGlobalDbIfNeeded(
-    Operation *alloc, DbAllocOp dbAllocOp, ArrayRef<Value> sizes,
-    DbAllocType allocType, const PartitioningDecision &decision) {
-  if (allocType != DbAllocType::global || decision.isChunked() ||
-      decision.isFineGrained())
+/// Since CreateDbs now always creates coarse allocations, this is always safe.
+void CreateDbsPass::initializeGlobalDbIfNeeded(Operation *alloc,
+                                               DbAllocOp dbAllocOp,
+                                               ArrayRef<Value> sizes,
+                                               DbAllocType allocType) {
+  if (allocType != DbAllocType::global)
     return;
 
   auto getGlobal = dyn_cast<memref::GetGlobalOp>(alloc);
@@ -971,11 +820,7 @@ Value CreateDbsPass::findParentAcquireSource(EdtOp edt, Operation *dbAllocOp,
   return nullptr;
 }
 
-///===----------------------------------------------------------------------===///
-// Process EDT Dependencies
-/// For each EDT, analyze external memory dependencies and insert
-/// acquire/release
-///===----------------------------------------------------------------------===///
+/// Create DB Acquire Operations for EDT Dependencies
 void CreateDbsPass::createDbAcquireOps(EdtOp edt,
                                        SetVector<Value> &externalDeps) {
   ARTS_DEBUG(" - Creating DbAcquire operations for "
@@ -1011,268 +856,211 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
     /// Get the source guid and ptr
     auto sourceGuid = dbAllocOp.getGuid();
     auto sourcePtr = dbAllocOp.getPtr();
-    auto sourceSizes = dbAllocOp.getSizes();
     assert((sourceGuid && sourcePtr) && "Source guid and ptr must be non-null");
 
     /// Create acquire operation (pass both source guid and ptr)
     OpBuilder::InsertionGuard IG(AC->getBuilder());
     AC->setInsertionPoint(edt);
 
-    /// We use fine-grained acquire if the allocation was also fine-grained
-    /// AND this EDT has dependencies for this memref
+    /// Create acquires based on DbControlOp dependencies
     const auto &deps = info.edtToDeps[edt];
-    if (info.usedFineGrained && !deps.empty()) {
-      /// Fine-grained acquire: Multiple separate acquires for stencil patterns
-      /// Example: A stencil accessing u[i-1], u[i], u[i+1] creates 3 acquires
-      ARTS_DEBUG(" - Using fine-grained acquire with " << deps.size()
-                                                       << " dependencies");
+    const auto &plan = info.rewritePlan.value();
 
-      for (const auto &dep : deps) {
-        const auto &depIndices = dep.indices;
-        const auto &depOffsets = dep.offsets;
+    /// CreateDbs always creates coarse-grained DB-space acquires. The partition
+    /// hints (from DbControlOp depend clauses) tell DbPartitioning how to
+    /// optimize later. This simplifies CreateDbs to focus on:
+    ///   1. Wrapping allocations in datablocks
+    ///   2. Annotating with partition hints for later optimization
+    ///
+    /// DB-space is always: offsets=[0], sizes=[allocSizes]
+    /// Partition hints vary based on access pattern from depend clauses
 
-        SmallVector<Value> acquireIndices(depIndices.begin(), depIndices.end());
-        SmallVector<Value> acquireOffsets(depOffsets.begin(), depOffsets.end());
-        assert(sourceSizes.size() >= depIndices.size() &&
-               "Sizes must be greater than or equal to indices");
+    ARTS_DEBUG(" - Creating unified coarse-grained acquire");
 
-        /// CHUNKED MODE: Convert element offset to chunk index for DbAcquireOp
-        /// Use stored plan instead of recomputing chunked detection
-        const auto &plan = info.rewritePlan.value();
-        bool isChunkedDep = plan.mode == RewriterMode::Chunked &&
-                            depIndices.empty() && !depOffsets.empty();
-        SmallVector<Value> rewriteOffsets(depOffsets.begin(), depOffsets.end());
-        if (isChunkedDep) {
-          Value elemOffset = depOffsets[0];
-          Location loc = edt.getLoc();
-
-          Value chunkIndex =
-              AC->create<arith::DivUIOp>(loc, elemOffset, plan.chunkSize);
-          acquireOffsets.clear();
-          acquireOffsets.push_back(chunkIndex);
-          ARTS_DEBUG(
-              "   - Chunked dep: converted element offset to chunk index");
-        }
-
-        /// Source guid and ptr are the source of the acquire
-        Value acqGuid = sourceGuid;
-        Value acqPtr = sourcePtr;
-
-        /// Check if there is a parent acquired handle for this memref
-        if (Value availableHandle =
-                findParentAcquireSource(edt, dbAllocOp, !depIndices.empty())) {
-          ARTS_DEBUG("   - Reusing existing datablock handle in parent scope");
-          acqGuid = Value();
-          acqPtr = availableHandle;
-        }
-
-        /// Compute acquired view sizes based on allocation mode:
-        /// - Chunked: acquire exactly 1 chunk
-        /// - Element-wise: indexed dimensions become size 1
-        SmallVector<Value> acquireSizes;
-        auto allocSizes = dbAllocOp.getSizes();
-        unsigned numIndices = acquireIndices.size();
-
-        if (isChunkedDep) {
-          /// Chunked mode: acquire exactly 1 chunk
-          acquireSizes.push_back(AC->createIndexConstant(1, edt.getLoc()));
-        } else {
-          /// Element-wise or coarse-grained: existing logic
-          /// DbAcquire works like memref.load - indexed dimensions become
-          /// size 1. Example: DbAlloc sizes=[N,N] with indices=[i,j] ->
-          /// acquireSizes=[1,1]
-          for (unsigned i = 0; i < allocSizes.size(); ++i) {
-            if (i < numIndices) {
-              /// Dimension is indexed -> acquired view has size 1 in this dim
-              acquireSizes.push_back(AC->createIndexConstant(1, edt.getLoc()));
-            } else {
-              /// Dimension is not indexed -> preserve original size
-              acquireSizes.push_back(allocSizes[i]);
-            }
-          }
-        }
-        if (acquireSizes.empty())
-          acquireSizes.push_back(AC->createIndexConstant(1, edt.getLoc()));
-        if (acquireOffsets.size() < acquireSizes.size()) {
-          auto zero = AC->createIndexConstant(0, edt.getLoc());
-          acquireOffsets.resize(acquireSizes.size(), zero);
-        }
-        auto acquireOp = AC->create<DbAcquireOp>(
-            edt.getLoc(), dep.mode, acqGuid, acqPtr, acquireIndices,
-            acquireOffsets, acquireSizes);
-        ARTS_DEBUG(" - Created fine-grained acquire operation: " << acquireOp);
-
-        /// Twin-diff decision for fine-grained acquires:
-        /// When DbControlOps provide indexed access patterns (from OpenMP
-        /// depend clauses like `depend(inout: A[i])`), each EDT acquires a
-        /// DISTINCT element of the datablock.
-        /// Therefore, twin-diff is NOT needed - we can safely disable it.
-        TwinDiffContext twinCtx;
-        twinCtx.proof = TwinDiffProof::IndexedControl;
-        twinCtx.op = acquireOp.getOperation();
-        bool useTwinDiff = AM->getHeuristicsConfig().shouldUseTwinDiff(twinCtx);
-        acquireOp.setTwinDiff(useTwinDiff);
-        ARTS_DEBUG("   - Fine-grained acquire: twin_diff=" << useTwinDiff);
-
-        /// Add corresponding block argument for each acquired/reused view
-        Value acquirePtr = acquireOp.getPtr();
-        auto sourceType = acquirePtr.getType().dyn_cast<MemRefType>();
-        BlockArgument dbAcquireArg =
-            edt.getBody().front().addArgument(sourceType, edt.getLoc());
-        dependencyOperands.push_back(acquirePtr);
-
-        /// Rewrite uses in edt
-        SmallVector<Operation *> opsToRewrite(dep.operations.begin(),
-                                              dep.operations.end());
-        rewriteOpsToUseDbAcquire(edt, opsToRewrite, acquireOp, acquireIndices,
-                                 rewriteOffsets, dbAcquireArg, plan);
-
-        /// Insert release for each acquire before EDT terminator
-        OpBuilder::InsertionGuard IG(AC->getBuilder());
-        AC->setInsertionPoint(edt.getBody().front().getTerminator());
-        AC->create<DbReleaseOp>(edt.getLoc(), dbAcquireArg);
-      }
-      /// We've handled everything for this memref, continue to next
+    /// Deduplicate: one acquire per allocation per EDT
+    if (!processedCoarseAllocs.insert(dbAllocOp.getOperation()).second) {
+      ARTS_DEBUG("   - Skipping duplicate acquire for already-processed "
+                 "DbAllocOp");
       continue;
-    } else {
-      /// Coarse-grained acquire: Acquire entire DB as a single block
-      ARTS_DEBUG(" - Using coarse-grained acquire");
-
-      /// For coarse-grained acquires, all acquires for the same DbAllocOp have
-      /// identical parameters (offsets=[0], sizes=[1]).
-      if (!processedCoarseAllocs.insert(dbAllocOp.getOperation()).second) {
-        ARTS_DEBUG("   - Skipping duplicate coarse-grained acquire for "
-                   "already-processed DbAllocOp");
-        continue;
-      }
-
-      SmallVector<Value> acquireIndices, acquireOffsets, acquireSizes;
-      acquireOffsets.push_back(AC->createIndexConstant(0, edt.getLoc()));
-
-      /// For coarse-grained acquire on fine-grained allocations, acquire ALL
-      /// chunks. Use the DbAllocOp's sizes instead of hardcoded 1.
-      SmallVector<Value> allocSizes(dbAllocOp.getSizes().begin(),
-                                    dbAllocOp.getSizes().end());
-      if (allocSizes.empty()) {
-        acquireSizes.push_back(AC->createIndexConstant(1, edt.getLoc()));
-      } else {
-        for (Value s : allocSizes)
-          acquireSizes.push_back(s);
-      }
-
-      /// Source guid and ptr are the source of the acquire
-      Value acqGuid = sourceGuid;
-      Value acqPtr = sourcePtr;
-
-      /// Check if there is a parent acquired handle for this memref
-      if (Value availableHandle = findParentAcquireSource(edt, dbAllocOp)) {
-        ARTS_DEBUG(" - Reusing existing datablock handle in parent scope");
-        acqGuid = Value();
-        acqPtr = availableHandle;
-      }
-
-      /// Use the dependency mode from DbControlOp if available
-      ArtsMode acquireMode = ArtsMode::inout;
-      auto acquireOp =
-          AC->create<DbAcquireOp>(edt.getLoc(), acquireMode, acqGuid, acqPtr,
-                                  acquireIndices, acquireOffsets, acquireSizes);
-      ARTS_DEBUG(" - Created coarse-grained acquire operation: " << acquireOp);
-
-      /// Twin-diff decision for coarse-grained acquires:
-      /// When we fall back to coarse-grained allocation, we CANNOT guarantee
-      /// that EDTs access disjoint regions of the datablock. This happens when:
-      ///   1. No DbControlOps were provided (no OpenMP depend clauses)
-      ///   2. Access patterns are inconsistent across EDTs
-      ///   3. Some EDTs need full array access without specific indices
-      ///
-      /// In these cases, we MUST enable twin-diff because:
-      ///   - Multiple workers may write to overlapping regions
-      ///   - Without twin-diff, concurrent writes cause DATA CORRUPTION
-      ///   - The runtime twin-diff mechanism safely merges partial updates
-      ///
-      /// The DbPartitioning pass may later disable twin-diff if it can prove
-      /// non-overlap through successful partitioning or alias analysis.
-      TwinDiffContext twinCtx;
-      twinCtx.proof = TwinDiffProof::None;
-      twinCtx.isCoarseAllocation = true;
-      twinCtx.op = acquireOp.getOperation();
-      bool useTwinDiff = AM->getHeuristicsConfig().shouldUseTwinDiff(twinCtx);
-      acquireOp.setTwinDiff(useTwinDiff);
-      ARTS_DEBUG("   - Coarse-grained acquire: twin_diff=" << useTwinDiff);
-
-      /// Add corresponding block argument for the acquired/reused view
-      Value acquirePtr = acquireOp.getPtr();
-      auto sourceType = acquirePtr.getType().dyn_cast<MemRefType>();
-      BlockArgument dbAcquireArg =
-          edt.getBody().front().addArgument(sourceType, edt.getLoc());
-      dependencyOperands.push_back(acquirePtr);
-
-      /// Collect all operations from all deps for coarse-grained rewrite
-      SmallVector<Operation *> opsToRewrite;
-      llvm::SmallPtrSet<Operation *, 16> seenOps;
-      auto addOpIfNew = [&](Operation *op) {
-        if (!op)
-          return;
-        if (seenOps.insert(op).second)
-          opsToRewrite.push_back(op);
-      };
-
-      bool missingOpsForDeps = false;
-      const auto &deps = info.edtToDeps[edt];
-      for (const auto &dep : deps) {
-        if (dep.operations.empty())
-          missingOpsForDeps = true;
-        for (Operation *op : dep.operations)
-          addOpIfNew(op);
-      }
-
-      /// If we failed to match operations for any dependency (SSA mismatch)
-      /// or if none were found, conservatively rewrite all uses of the memref
-      /// within this EDT.
-      if (opsToRewrite.empty() || missingOpsForDeps) {
-        ARTS_DEBUG(" - Falling back: collecting all operations using this "
-                   "memref in the EDT");
-        edt.walk([&](Operation *op) {
-          /// Skip operations that belong to nested EDTs - they will be
-          /// processed when their containing EDT is handled
-          if (op->getParentOfType<EdtOp>() != edt)
-            return;
-
-          for (Value operand : op->getOperands()) {
-            Operation *operandUnderlyingOp =
-                ValueUtils::getUnderlyingOperation(operand);
-            if (operandUnderlyingOp == underlyingOp) {
-              addOpIfNew(op);
-              break;
-            }
-          }
-        });
-        ARTS_DEBUG(" - Found " << opsToRewrite.size()
-                               << " operations to rewrite");
-      }
-
-      if (!opsToRewrite.empty()) {
-        rewriteOpsToUseDbAcquire(edt, opsToRewrite, acquireOp, acquireIndices,
-                                 acquireOffsets, dbAcquireArg,
-                                 info.rewritePlan.value());
-      }
-
-      /// Insert release for this acquire before EDT terminator
-      OpBuilder::InsertionGuard IG(AC->getBuilder());
-      AC->setInsertionPoint(edt.getBody().front().getTerminator());
-      AC->create<DbReleaseOp>(edt.getLoc(), dbAcquireArg);
     }
+
+    /// Build coarse DB-space: offsets=[0], sizes=[allocSizes]
+    SmallVector<Value> dbOffsets, dbSizes;
+    dbOffsets.push_back(AC->createIndexConstant(0, edt.getLoc()));
+
+    SmallVector<Value> allocSizes(dbAllocOp.getSizes().begin(),
+                                  dbAllocOp.getSizes().end());
+    if (allocSizes.empty()) {
+      dbSizes.push_back(AC->createIndexConstant(1, edt.getLoc()));
+    } else {
+      for (Value s : allocSizes)
+        dbSizes.push_back(s);
+    }
+
+    /// Collect partition hints from ALL deps (not just first!)
+    /// Each depend clause entry becomes a partition entry:
+    /// - fine_grained: deps have indices (from depend(inout: A[i][j],
+    /// A[i-1][j]))
+    /// - chunked: deps have offsets/sizes (from depend(in: A[off:sz]))
+    /// - coarse: no indices/offsets (from depend(inout: A))
+    ///
+    /// Multiple entries are stored with segment attributes to track boundaries.
+    SmallVector<Value> partIndices, partOffsets, partSizes;
+    SmallVector<int32_t> indicesSegments, offsetsSegments, sizesSegments;
+    SmallVector<int32_t> entryModes;
+    ArtsMode acquireMode = ArtsMode::inout;
+    TwinDiffProof twinProof = TwinDiffProof::None;
+
+    // Helper to combine access modes (most permissive wins)
+    auto combineAccessModes = [](ArtsMode a, ArtsMode b) -> ArtsMode {
+      if (a == ArtsMode::inout || b == ArtsMode::inout)
+        return ArtsMode::inout;
+      if (a == ArtsMode::out || b == ArtsMode::out)
+        return ArtsMode::out;
+      return ArtsMode::in;
+    };
+
+    for (const auto &dep : deps) {
+      // Determine mode for this entry
+      PartitionMode entryMode = PartitionMode::coarse;
+      if (!dep.indices.empty()) {
+        entryMode = PartitionMode::fine_grained;
+        twinProof = TwinDiffProof::IndexedControl;
+      } else if (!dep.offsets.empty() && !dep.sizes.empty()) {
+        entryMode = PartitionMode::block;
+      }
+      entryModes.push_back(static_cast<int32_t>(entryMode));
+
+      // Add this entry's indices
+      indicesSegments.push_back(static_cast<int32_t>(dep.indices.size()));
+      for (Value v : dep.indices)
+        partIndices.push_back(v);
+
+      // Add this entry's offsets
+      offsetsSegments.push_back(static_cast<int32_t>(dep.offsets.size()));
+      for (Value v : dep.offsets)
+        partOffsets.push_back(v);
+
+      // Add this entry's sizes
+      sizesSegments.push_back(static_cast<int32_t>(dep.sizes.size()));
+      for (Value v : dep.sizes)
+        partSizes.push_back(v);
+
+      // Combine access modes
+      acquireMode = combineAccessModes(acquireMode, dep.mode);
+    }
+
+    // Determine the "primary" partition mode from first entry (for
+    // compatibility)
+    PartitionMode partMode = PartitionMode::coarse;
+    if (!entryModes.empty()) {
+      partMode = static_cast<PartitionMode>(entryModes[0]);
+    }
+
+    /// Source guid and ptr
+    Value acqGuid = sourceGuid;
+    Value acqPtr = sourcePtr;
+
+    /// Check if there is a parent acquired handle for this memref
+    if (Value availableHandle = findParentAcquireSource(edt, dbAllocOp)) {
+      ARTS_DEBUG("   - Reusing existing datablock handle in parent scope");
+      acqGuid = Value();
+      acqPtr = availableHandle;
+    }
+
+    /// Create coarse DB-space acquire with partition hints for ALL entries
+    auto acquireOp = AC->create<DbAcquireOp>(
+        edt.getLoc(), acquireMode, acqGuid, acqPtr, partMode,
+        /*indices=*/SmallVector<Value>{}, /*offsets=*/dbOffsets,
+        /*sizes=*/dbSizes,
+        /*partition_indices=*/partIndices,
+        /*partition_offsets=*/partOffsets,
+        /*partition_sizes=*/partSizes);
+
+    /// Set segment attributes for multiple partition entries
+    acquireOp.setPartitionSegments(indicesSegments, offsetsSegments,
+                                   sizesSegments, entryModes);
+
+    ARTS_DEBUG(" - Created acquire with "
+               << deps.size() << " partition entries, "
+               << "primary mode=" << static_cast<int>(partMode) << ": "
+               << acquireOp);
+
+    /// Twin-diff decision
+    TwinDiffContext twinCtx;
+    twinCtx.proof = twinProof;
+    twinCtx.isCoarseAllocation = (partMode == PartitionMode::coarse);
+    twinCtx.op = acquireOp.getOperation();
+    bool useTwinDiff = AM->getHeuristicsConfig().shouldUseTwinDiff(twinCtx);
+    acquireOp.setTwinDiff(useTwinDiff);
+    ARTS_DEBUG("   - twin_diff=" << useTwinDiff);
+
+    /// Add block argument for acquired view
+    Value acquirePtr = acquireOp.getPtr();
+    auto sourceType = acquirePtr.getType().dyn_cast<MemRefType>();
+    BlockArgument dbAcquireArg =
+        edt.getBody().front().addArgument(sourceType, edt.getLoc());
+    dependencyOperands.push_back(acquirePtr);
+
+    /// Collect operations to rewrite
+    SmallVector<Operation *> opsToRewrite;
+    llvm::SmallPtrSet<Operation *, 16> seenOps;
+    auto addOpIfNew = [&](Operation *op) {
+      if (!op)
+        return;
+      if (seenOps.insert(op).second)
+        opsToRewrite.push_back(op);
+    };
+
+    bool missingOpsForDeps = false;
+    for (const auto &dep : deps) {
+      if (dep.operations.empty())
+        missingOpsForDeps = true;
+      for (Operation *op : dep.operations)
+        addOpIfNew(op);
+    }
+
+    /// Fallback: collect all operations using this memref in EDT
+    if (opsToRewrite.empty() || missingOpsForDeps) {
+      ARTS_DEBUG(
+          " - Fallback: collecting all operations using this memref in EDT");
+      edt.walk([&](Operation *op) {
+        if (op->getParentOfType<EdtOp>() != edt)
+          return;
+        for (Value operand : op->getOperands()) {
+          Operation *operandUnderlyingOp =
+              ValueUtils::getUnderlyingOperation(operand);
+          if (operandUnderlyingOp == underlyingOp) {
+            addOpIfNew(op);
+            break;
+          }
+        }
+      });
+      ARTS_DEBUG(" - Found " << opsToRewrite.size()
+                             << " operations to rewrite");
+    }
+
+    /// Rewrite operations using DbRef with coarse DB-space indices
+    /// DbRef uses [0] index since we have 1D coarse allocation
+    if (!opsToRewrite.empty()) {
+      SmallVector<Value> dbRefIndices;
+      dbRefIndices.push_back(AC->createIndexConstant(0, edt.getLoc()));
+      rewriteOpsToUseDbAcquire(edt, opsToRewrite, acquireOp, dbRefIndices,
+                               dbOffsets, dbAcquireArg, plan);
+    }
+
+    /// Insert release
+    OpBuilder::InsertionGuard releaseGuard(AC->getBuilder());
+    AC->setInsertionPoint(edt.getBody().front().getTerminator());
+    AC->create<DbReleaseOp>(edt.getLoc(), dbAcquireArg);
   }
 
   /// After processing all memrefs, set EDT dependencies
   edt.setDependencies(dependencyOperands);
 }
 
-///===----------------------------------------------------------------------===///
-// Insert DB Free Operations
 /// Insert db_free for DbAllocOp at the appropriate location and remove
 /// associated dealloc operations
-///===----------------------------------------------------------------------===///
 void CreateDbsPass::insertDbFreeForDbAlloc(DbAllocOp dbAlloc,
                                            Operation *alloc) {
   Location loc = dbAlloc.getLoc();
@@ -1296,10 +1084,7 @@ void CreateDbsPass::insertDbFreeForDbAlloc(DbAllocOp dbAlloc,
   AC->create<DbFreeOp>(loc, dbAlloc.getPtr());
 }
 
-///===----------------------------------------------------------------------===///
-/// Rewrite Alloc uses
-/// Adjust load/store indices based on DB allocation granularity.
-///===----------------------------------------------------------------------===///
+/// Rewrite uses in parent EDT based on DB allocation granularity.
 void CreateDbsPass::rewriteUsesInParentEdt(MemrefInfo &memrefInfo) {
   assert(memrefInfo.dbAllocOp && "No DbAllocOp found");
 
@@ -1322,14 +1107,14 @@ void CreateDbsPass::rewriteUsesInParentEdt(MemrefInfo &memrefInfo) {
       memrefInfo.usedFineGrained ? dbAlloc.getSizes().size() : 0;
   unsigned innerRank = elementMemRefType.cast<MemRefType>().getRank();
   Value elemOffset = AC->createIndexConstant(0, dbAlloc.getLoc());
-  Value elemSize = AC->createIndexConstant(1, dbAlloc.getLoc());
-  DbElementWiseIndexer indexer(elemOffset, elemSize, outerRank, innerRank, {});
+  SmallVector<Value> elemOffsets = {elemOffset};
+  DbElementWiseIndexer indexer(elemOffsets, outerRank, innerRank, {});
   for (Operation *user : users)
     indexer.transformAccess(user, dbAlloc.getPtr(), elementMemRefType, *AC,
                             opsToRemove);
 }
 
-/// Rewrite all uses of a coarse-grained allocation in the parent region.
+/// Rewrite uses of a coarse-grained allocation in the parent region.
 /// This is used when the allocation is not inside an EDT, but is still shared
 /// with EDTs and the host needs to see the updated data.
 /// For coarse-grained: all indices go to inner load/store, db_ref gets [0].
@@ -1354,20 +1139,15 @@ void CreateDbsPass::rewriteUsesEverywhereCoarse(Operation *alloc,
 
   /// Coarse-grained: outerCount=0, all indices go to inner load/store
   Value elemOffset = AC->createIndexConstant(0, dbAlloc.getLoc());
-  Value elemSize = AC->createIndexConstant(1, dbAlloc.getLoc());
-  DbElementWiseIndexer indexer(elemOffset, elemSize, 0,
-                               elementMemRefType.cast<MemRefType>().getRank(),
-                               {});
+  SmallVector<Value> elemOffsets = {elemOffset};
+  DbElementWiseIndexer indexer(
+      elemOffsets, 0, elementMemRefType.cast<MemRefType>().getRank(), {});
   for (Operation *user : users)
     indexer.transformAccess(user, dbAlloc.getPtr(), elementMemRefType, *AC,
                             opsToRemove);
 }
 
-///===----------------------------------------------------------------------===///
-/// Rewrite Operations to Use DbAcquire
-/// Rewrite loads/stores in an EDT to use acquired datablocks
-/// Uses the stored DbRewritePlan to avoid recomputing allocation decisions
-///===----------------------------------------------------------------------===///
+/// Rewrite operations to use DbAcquire
 void CreateDbsPass::rewriteOpsToUseDbAcquire(
     EdtOp edt, SmallVector<Operation *> &operations, Operation *dbOp,
     SmallVector<Value> &acquireIndices, SmallVector<Value> &acquireOffsets,
@@ -1427,26 +1207,27 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
       }
     }
 
-    if (plan.mode == RewriterMode::Chunked) {
-      /// Chunked mode: Use DbChunkedIndexer with stored chunk size
-      ARTS_DEBUG(" - Using DbChunkedIndexer with stored plan");
+    if (plan.mode == PartitionMode::block) {
+      /// Block mode: Use DbBlockIndexer with stored block size
+      ARTS_DEBUG(" - Using DbBlockIndexer with stored plan");
       Location loc = op->getLoc();
       Value startOffset = acquireOffsets.empty()
                               ? AC->createIndexConstant(0, loc)
                               : acquireOffsets[0];
 
-      /// Compute startChunk using stored chunkSize from plan
-      Value startChunk =
-          AC->create<arith::DivUIOp>(loc, startOffset, plan.chunkSize);
-      Value elemOffset = AC->createIndexConstant(0, loc);
+      /// Compute startBlock using stored blockSize from plan
+      Value startBlock =
+          AC->create<arith::DivUIOp>(loc, startOffset, plan.blockSize);
 
       unsigned chunkOuterRank = plan.outerRank;
       if (chunkOuterRank == 0)
         if (auto acquireOp = dyn_cast<DbAcquireOp>(dbOp))
           chunkOuterRank = acquireOp.getSizes().size();
 
-      DbChunkedIndexer indexer(plan.chunkSize, startChunk, elemOffset,
-                               chunkOuterRank, innerRank);
+      SmallVector<Value> blockSizes = {plan.blockSize};
+      SmallVector<Value> startBlocks = {startBlock};
+      DbBlockIndexer indexer(blockSizes, startBlocks, chunkOuterRank,
+                             innerRank);
       llvm::SetVector<Operation *> localOpsToRemove;
       indexer.transformOps({op}, dbAcquireArg, elementMemRefType, *AC,
                            localOpsToRemove);
@@ -1457,9 +1238,8 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
 
     /// ElementWise mode
     Value elemOffset = AC->createIndexConstant(0, op->getLoc());
-    Value elemSize = AC->createIndexConstant(1, op->getLoc());
-    DbElementWiseIndexer indexer(elemOffset, elemSize, plan.outerRank,
-                                 innerRank, {});
+    SmallVector<Value> elemOffsets = {elemOffset};
+    DbElementWiseIndexer indexer(elemOffsets, plan.outerRank, innerRank, {});
 
     if (auto load = dyn_cast<memref::LoadOp>(op)) {
       auto localized = indexer.localizeForFineGrained(
@@ -1491,7 +1271,7 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
 }
 
 ///===----------------------------------------------------------------------===///
-// Pass creation
+/// Pass creation
 ///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {

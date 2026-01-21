@@ -140,8 +140,8 @@ public:
   ///
   /// Example: for(i) { for(j) { A[i][j] = f(A[i][j-1]) } }
   /// Result:
-  ///   - dimensionDeps[0] = {dim=0, hasCarriedDep=false} 
-  ///   - dimensionDeps[1] = {dim=1, hasCarriedDep=true} 
+  ///   - dimensionDeps[0] = {dim=0, hasCarriedDep=false}
+  ///   - dimensionDeps[1] = {dim=1, hasCarriedDep=true}
   ///   - outermostParallelDim = 0
   LoopNestDependenceResult
   analyzeLoopNestDependences(affine::AffineForOp outermostLoop) const {

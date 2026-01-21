@@ -17,7 +17,7 @@ Walk through these steps and fix any problem that you find in the way.
    carts cgeist deps.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine &> deps.mlir
    ```
 
-3. **Create DBs with control DBs (expect fine-grained allocations):**
+3. **Create DBs with control DBs (expect coarse allocations + partition hints):**
 
    Use the canonicalized file to drive DB creation and dump debug info:
 
@@ -26,6 +26,7 @@ Walk through these steps and fix any problem that you find in the way.
    ```
 
    Analyze the comments within the summarized output.
+
    ```mlir
    module attributes {...} {
       ...
@@ -87,7 +88,7 @@ Walk through these steps and fix any problem that you find in the way.
       }
    ```
 
-5. **Continue or run end-to-end:**
+4. **Continue or run end-to-end:**
 
    To check later stages, keep using the stop flags:
 
@@ -104,4 +105,4 @@ Walk through these steps and fix any problem that you find in the way.
    ./deps 8
    ```
 
-   If execution fails, re-check `deps_canon.mlir` for any remaining array-of-pointer accesses and `deps_create_dbs.mlir` for coarse-grained DBs that should have been refined by control DBs.
+   If execution fails, re-check `deps_canon.mlir` for any remaining array-of-pointer accesses and `deps_concurrency_opt.mlir` for missing partitioning (CreateDbs outputs are expected to remain coarse).

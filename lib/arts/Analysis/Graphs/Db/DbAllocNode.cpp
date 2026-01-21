@@ -53,7 +53,7 @@ DbAllocNode::DbAllocNode(DbAllocOp op, DbAnalysis *analysis)
     isStringBacked = stringAnalysis.isStringMemRef(address);
   }
 
-  /// Find the corresponding DbFreeOp for this allocation
+  /// Find the corresponding DbFreeOp for this DbAllocOp
   Value dbVal = dbAllocOp.getPtr();
   for (Operation *user : dbVal.getUsers()) {
     if (auto freeOp = dyn_cast<DbFreeOp>(user)) {
@@ -88,6 +88,11 @@ DbAcquireNode *DbAllocNode::getOrCreateAcquireNode(DbAcquireOp op) {
   return ptr;
 }
 
+DbAcquireNode *DbAllocNode::findAcquireNode(DbAcquireOp op) const {
+  auto it = acquireMap.find(op);
+  return it != acquireMap.end() ? it->second : nullptr;
+}
+
 bool DbAllocNode::isParallelFriendly() const {
   if (isStringDatablock())
     return false;
@@ -103,7 +108,8 @@ bool DbAllocNode::isParallelFriendly() const {
     DbAcquireOp acqOp = acqNode->getDbAcquireOp();
     if (!acqOp)
       continue;
-    if (acqOp.getChunkIndex() || acqOp.getChunkSize())
+    if (!acqOp.getPartitionIndices().empty() ||
+        !acqOp.getPartitionOffsets().empty())
       return true;
   }
 
@@ -128,27 +134,20 @@ bool DbAllocNode::canBePartitioned() {
       if (!acqNode)
         continue;
       DbAcquireOp acqOp = acqNode->getDbAcquireOp();
-      if (acqOp && (acqOp.getChunkIndex() || acqOp.getChunkSize())) {
+      if (acqOp && (!acqOp.getPartitionIndices().empty() ||
+                    !acqOp.getPartitionOffsets().empty())) {
         hasAcquireWithHints = true;
-        ARTS_DEBUG("  Found acquire with hints - allowing non-affine alloc");
+        ARTS_DEBUG(
+            "  Found acquire with partition hints - allowing non-affine alloc");
         break;
       }
     }
-    /// Allow non-affine accesses - let heuristics decide fallback strategy
 
-    if (hasAcquireWithHints) {
-      ARTS_DEBUG("  Non-affine access with hints - using fallback "
-                 "(partitioning enabled)");
-    } else {
-      /// If fine-grained fallback is enabled, allow non-affine accesses
-      /// through. H1.5 heuristic will choose element-wise partitioning for
-      /// these.
-      ARTS_DEBUG("  Non-affine access - using fine-grained fallback "
-                 "(element-wise partitioning)");
-    }
+    if (hasAcquireWithHints)
+      ARTS_DEBUG("  Non-affine access with hints - using fallback");
+    else
+      ARTS_DEBUG("  Non-affine access - using fine-grained fallback");
   }
-
-  /// Step 1: Allocation-level metadata checks
   ARTS_DEBUG_REGION({
     ARTS_DBGS() << "  accessedInParallelLoop="
                 << (accessedInParallelLoop
@@ -191,38 +190,26 @@ bool DbAllocNode::canBePartitioned() {
     }
   }
 
-  /// Non-uniform access (stencil patterns like A[i-1], A[i], A[i+1]) can
-  /// still be partitioned if the acquire-level analysis succeeds.
-  /// The acquire-level canPartitionWithOffset() validates that indices
-  /// are derived from the partition offset, and analyzeAccessBounds()
-  /// correctly computes stencil halo adjustments.
-  if (!allocLevelOk) {
+  if (!allocLevelOk)
     ARTS_DEBUG("  alloc-level metadata inconclusive - deferring to "
                "acquire-level validation");
-  }
 
-  /// Step 2: Check ALL acquire children and track stencil patterns
-  /// For stencil patterns (uniform write + stencil read), we allow partitioning
-  /// even if the uniform write acquire fails offset validation. H1.5 will use
-  /// ESD mode which handles mixed access patterns correctly.
   if (acquireNodes.empty()) {
     ARTS_DEBUG("  No acquire nodes - trivially partitionable");
     return true;
   }
 
   ARTS_DEBUG("  Checking " << acquireNodes.size() << " acquire children...");
-  bool anyPassed = false;
-  bool anyHasStencilBounds = false;
-  bool allFailed = true;
-  bool anyIndirectAccess = false;
-  bool anyAcquireWithHints = false;
+  bool anyPassed = false, anyHasStencilBounds = false;
+  bool allFailed = true, anyIndirectAccess = false, anyAcquireWithHints = false;
 
   for (const auto &acqNode : acquireNodes) {
     if (!acqNode)
       continue;
 
     DbAcquireOp acqOp = acqNode->getDbAcquireOp();
-    if (acqOp && (acqOp.getChunkIndex() || acqOp.getChunkSize()))
+    if (acqOp && (!acqOp.getPartitionIndices().empty() ||
+                  !acqOp.getPartitionOffsets().empty()))
       anyAcquireWithHints = true;
     if (acqNode->hasIndirectAccess())
       anyIndirectAccess = true;
@@ -231,7 +218,6 @@ bool DbAllocNode::canBePartitioned() {
     if (passed) {
       anyPassed = true;
       allFailed = false;
-      /// Check if this acquire has stencil bounds (minOffset != maxOffset)
       if (auto bounds = acqNode->getStencilBounds()) {
         if (bounds->valid && bounds->isStencil) {
           anyHasStencilBounds = true;
@@ -245,47 +231,38 @@ bool DbAllocNode::canBePartitioned() {
     }
   }
 
-  /// Summarize access patterns (for logging)
   AcquirePatternSummary patterns = summarizeAcquirePatterns();
   ARTS_DEBUG("  Access patterns: hasUniform="
              << patterns.hasUniform << ", hasStencil=" << patterns.hasStencil
              << ", hasIndexed=" << patterns.hasIndexed
              << ", isMixed=" << patterns.isMixed());
 
-  /// Allow partitioning if ANY acquire passed with stencil bounds
-  /// This handles mixed access patterns (uniform write + stencil read)
+  /// Non-uniform access (stencil patterns like A[i-1], A[i], A[i+1]) can
+  /// still be partitioned if the acquire-level analysis succeeds.
   if (anyHasStencilBounds) {
-    ARTS_DEBUG(
-        "  Stencil bounds detected - allowing partition for H1.5 ESD mode");
+    ARTS_DEBUG("  Stencil bounds detected - allowing partition for ESD mode");
     return true;
   }
 
-  /// Allow mixed access patterns (indirect + hints) to proceed for versioning
   if (allFailed && anyIndirectAccess && anyAcquireWithHints) {
     ARTS_DEBUG("  All acquires failed but indirect access with hints "
                "- allowing partitioning for versioning");
     return true;
   }
 
-  /// If all acquires failed, reject the allocation
-  if (allFailed) {
+  if (allFailed)
     return skip("all acquire children failed canBePartitioned()");
-  }
 
-  /// If at least one passed (but no stencil bounds), allow partitioning
-  if (anyPassed) {
+  if (anyPassed)
     ARTS_DEBUG("  At least one acquire passed validation");
-  }
 
   ARTS_DEBUG("  PASS: alloc " << hierId << " can be partitioned");
   return true;
 }
 
-///===----------------------------------------------------------------------===///
-/// Twin-diff overlap analysis methods
-///===----------------------------------------------------------------------===///
-
 bool DbAllocNode::hasSingleWriter() const {
+  /// A single DbAcquireOp can still represent many writers if it is
+  /// partitioned by dynamic loop hints. Treat as multi-writer.
   int writeCount = 0;
 
   for (const auto &acqNode : acquireNodes) {
@@ -303,15 +280,12 @@ bool DbAllocNode::hasSingleWriter() const {
     if (writeCount > 1)
       return false;
 
-    /// A single DbAcquireOp can still represent many writers if it is
-    /// partitioned by dynamic loop hints. Treat as multi-writer.
     if (!DatablockUtils::hasStaticHints(acqOp))
       return false;
   }
 
   if (writeCount <= 1) {
-    ARTS_DEBUG("Single writer detected ("
-               << writeCount << " writers) -> no overlap possible");
+    ARTS_DEBUG("Single writer detected -> no overlap possible");
     return true;
   }
 
@@ -349,110 +323,79 @@ bool DbAllocNode::allAcquiresWorkerIndexed() const {
       return false;
   }
 
-  ARTS_DEBUG("All acquires use worker-indexed pattern -> disjoint");
   return true;
 }
 
 bool DbAllocNode::canProveNonOverlapping() const {
-  /// No acquires = trivially non-overlapping
   if (acquireNodes.empty())
     return true;
 
-  /// Single acquire is only safe when it does not represent a loop-partitioned
-  /// writer (dynamic offset/size hints can imply multiple runtime instances).
   if (acquireNodes.size() == 1) {
     const auto *single = acquireNodes.front().get();
     if (!single)
       return true;
-    DbAcquireOp acqOp = single->getDbAcquireOp();
-    if (DatablockUtils::hasStaticHints(acqOp))
+    if (DatablockUtils::hasStaticHints(single->getDbAcquireOp()))
       return true;
   }
 
-  ARTS_DEBUG("Analyzing overlap for " << acquireNodes.size() << " acquires");
-
-  /// Method 1: Single writer = no overlap possible
-  /// If only one EDT writes, there's no possibility of write conflicts
   if (hasSingleWriter())
     return true;
 
-  /// Dynamic writer offsets can represent multiple runtime writers.
-  if (hasDynamicWriterOffsets()) {
-    ARTS_DEBUG("Dynamic writer offsets -> potential overlap");
+  if (hasDynamicWriterOffsets())
     return false;
-  }
 
-  /// If the allocation is not actually partitioned, disjoint offset hints are
-  /// insufficient to prove non-overlap because each EDT still acquires the full
-  /// DB copy (remote updates would clobber each other). Require twin-diff.
   bool isPartitioned = false;
   if (dbAllocOp) {
     auto &mutableAlloc = const_cast<DbAllocOp &>(dbAllocOp);
     if (auto mode = getPartitionMode(mutableAlloc.getOperation()))
       isPartitioned = (*mode != PartitionMode::coarse);
   }
-  if (!isPartitioned) {
-    ARTS_DEBUG(
-        "Unpartitioned alloc with multiple writers -> potential overlap");
+  if (!isPartitioned)
     return false;
-  }
 
-  /// Method 2: All worker-indexed = disjoint
-  /// If all acquires use the pattern array[workerId] with size=1,
-  /// they access disjoint slots by construction
   if (allAcquiresWorkerIndexed())
     return true;
 
-  /// Get alias analysis from DbAnalysis (may be null during export)
   DbAliasAnalysis *aliasAnalysis =
       analysis ? analysis->getAliasAnalysis() : nullptr;
 
-  /// Check all acquire pairs using enhanced analysis
   for (size_t i = 0; i < acquireNodes.size(); ++i) {
     for (size_t j = i + 1; j < acquireNodes.size(); ++j) {
       const DbAcquireNode *acqA = acquireNodes[i].get();
       const DbAcquireNode *acqB = acquireNodes[j].get();
-
       if (!acqA || !acqB)
         continue;
 
-      /// Method 3: Use DbAliasAnalysis overlap estimation (if available)
       if (aliasAnalysis) {
         auto overlap =
             aliasAnalysis->estimateOverlap(const_cast<DbAcquireNode *>(acqA),
                                            const_cast<DbAcquireNode *>(acqB));
-        if (overlap == DbAliasAnalysis::OverlapKind::Disjoint) {
-          /// Proven disjoint by alias analysis
-          ARTS_DEBUG("Pair (" << i << "," << j
-                              << "): Disjoint (aliasAnalysis)");
+        if (overlap == DbAliasAnalysis::OverlapKind::Disjoint)
           continue;
-        }
       }
 
-      /// Method 4: Check chunk_hint from ForLowering
-      if (acqA->hasDisjointPartitionWith(acqB)) {
-        /// Proven disjoint by loop partitioning
-        ARTS_DEBUG("Pair (" << i << "," << j
-                            << "): Disjoint (partition hints)");
+      if (acqA->hasDisjointPartitionWith(acqB))
         continue;
-      }
 
-      /// Could not prove disjoint - potential overlap
-      ARTS_DEBUG("Pair (" << i << "," << j << "): POTENTIAL OVERLAP");
       return false;
     }
   }
 
-  ARTS_DEBUG("All acquire pairs proven disjoint");
-  return true; /// All pairs proven disjoint
+  return true;
 }
 
 AcquirePatternSummary DbAllocNode::summarizeAcquirePatterns() const {
   AcquirePatternSummary summary;
+  bool hasBlockHint = false;
 
   for (const auto &acqNode : acquireNodes) {
     if (!acqNode)
       continue;
+    if (DbAcquireOp acqOp = acqNode->getDbAcquireOp()) {
+      auto mode = acqOp.getPartitionModeOr();
+      if (mode == PartitionMode::block || mode == PartitionMode::stencil)
+        hasBlockHint = true;
+    }
     auto pattern = acqNode->getAccessPattern();
     switch (pattern) {
     case AccessPattern::Uniform:
@@ -469,18 +412,13 @@ AcquirePatternSummary DbAllocNode::summarizeAcquirePatterns() const {
     }
   }
 
-  /// Always treat non-affine or indirect indices as indexed
-  /// so heuristics can decide appropriate partitioning strategy.
   if (hasNonAffineAccesses && *hasNonAffineAccesses) {
-    summary.hasIndexed = true;
-    ARTS_DEBUG("summarizeAcquirePatterns: non-affine access -> marking "
-               "hasIndexed=true");
+    if (!hasBlockHint)
+      summary.hasIndexed = true;
   } else if (!summary.hasIndexed) {
     for (const auto &acqNode : acquireNodes) {
       if (acqNode && acqNode->hasIndirectAccess()) {
         summary.hasIndexed = true;
-        ARTS_DEBUG("summarizeAcquirePatterns: indirect index -> marking "
-                   "hasIndexed=true");
         break;
       }
     }

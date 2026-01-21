@@ -401,7 +401,7 @@ carts run <file>.mlir --stop-after=create-dbs --debug-only=create_dbs 2>&1
 |----------|-----------|----------|
 | Coarse-grained | `sizes=[1]` | Single datablock for entire array |
 | Fine-grained | `sizes=[N]` | One datablock per element |
-| Chunked | `sizes=[numChunks]` | Multiple datablocks matching workers |
+| Blocked | `sizes=[numChunks]` | Multiple datablocks matching workers |
 
 **What to Look For:**
 ```mlir
@@ -492,7 +492,7 @@ arts.edt <parallel> {
 
 ### Stage 10: concurrency
 
-**Purpose:** Build EDT concurrency graph and lower parallel loops to chunked tasks.
+**Purpose:** Build EDT concurrency graph and lower parallel loops to blocked tasks.
 
 **Run Command:**
 ```bash
@@ -506,7 +506,7 @@ carts run <file>.mlir --stop-after=concurrency --debug-only=concurrency,for_lowe
 
 **Passes Executed:**
 - `Concurrency` - Build EDT concurrency graph
-- `ForLowering` - Lower arts.for in parallel EDTs to chunked tasks
+- `ForLowering` - Lower arts.for in parallel EDTs to blocked tasks
 - `PolygeistCanonicalize`, `CSE` - Cleanup passes
 
 **For Lowering Transformation:**
@@ -518,10 +518,10 @@ arts.for (%i) = (%c0) to (%N) {
 
 // After (conceptual)
 %num_workers = arts.get_total_workers
-%chunk_size = ceildiv(%N, %num_workers)
+%block_size = ceildiv(%N, %num_workers)
 %worker_id = arts.get_worker_id
-%chunk_start = %worker_id * %chunk_size
-%chunk_end = min(%chunk_start + %chunk_size, %N)
+%chunk_start = %worker_id * %block_size
+%chunk_end = min(%chunk_start + %block_size, %N)
 scf.for %i = %chunk_start to %chunk_end {
   // loop body
 }
@@ -555,7 +555,7 @@ carts run <file>.mlir --stop-after=concurrency-opt --debug-only=db,db_partitioni
 | Heuristic | Condition | Result |
 |-----------|-----------|--------|
 | H1.1 | Read-only on single node | Keep coarse-grained |
-| H1.2 | Mixed access patterns | Chunked partitioning |
+| H1.2 | Mixed access patterns | Blocked partitioning |
 | H1.3 | Stencil/indexed patterns | Element-wise partitioning |
 | H1.4 | Multi-node systems | Fine-grained partitioning |
 | H1.5 | Non-uniform access | Keep coarse-grained |
@@ -567,11 +567,11 @@ carts run <file>.mlir --stop-after=concurrency-opt --debug-only=db,db_partitioni
   2. Successful partitioning with proven disjoint acquires
   3. DbAliasAnalysis proving disjoint acquires
 
-**Chunked Access Pattern:**
+**Blocked Access Pattern:**
 ```mlir
 // Global index → chunk index + local index
-%chunk_idx = arith.divui %global_idx, %chunk_size
-%local_idx = arith.remui %global_idx, %chunk_size
+%chunk_idx = arith.divui %global_idx, %block_size
+%local_idx = arith.remui %global_idx, %block_size
 %ref = arts.db_ref %ptr[%chunk_idx] : memref<?xmemref<T>> -> memref<T>
 memref.load/store %ref[%local_idx]
 ```
@@ -589,9 +589,9 @@ Partition mode determines how a DataBlock's data is distributed:
 | Mode | Allocation Structure | Use Case |
 |------|---------------------|----------|
 | **Coarse** | `sizes=[1], elementSizes=[N]` | Single DB for entire array |
-| **Chunked** | `sizes=[numChunks], elementSizes=[chunkSize]` | Loop-based parallel access |
+| **Blocked** | `sizes=[numChunks], elementSizes=[blockSize]` | Loop-based parallel access |
 | **ElementWise** | `sizes=[N], elementSizes=[1]` | Fine-grained from depend clauses |
-| **Stencil** | `sizes=[numChunks], elementSizes=[chunkSize+halo]` | Stencil patterns with halos |
+| **Stencil** | `sizes=[numChunks], elementSizes=[blockSize+halo]` | Stencil patterns with halos |
 
 ### Master Flowchart: Three-Stage Partition Mode Assignment
 
@@ -605,7 +605,7 @@ flowchart TB
         S7_4{Indices match<br/>access patterns?}
         S7_5["Set partition=fine_grained<br/>canElementWise=true"]
         S7_6{Has chunk offsets/sizes<br/>in depend clause?}
-        S7_7["Set partition=chunked<br/>canChunked=true"]
+        S7_7["Set partition=blocked<br/>canBlocked=true"]
         S7_8["Set partition=coarse<br/>default"]
         S7_9[Create DbAllocOp + DbAcquireOps]
 
@@ -625,10 +625,10 @@ flowchart TB
     subgraph Stage10["Stage 10: ForLowering"]
         direction TB
         S10_1[Find arts.for inside parallel EDT]
-        S10_2[Compute chunk_offset and chunk_size<br/>from loop bounds]
+        S10_2[Compute chunk_offset and block_size<br/>from loop bounds]
         S10_3[Clone DbAcquireOp for worker task]
-        S10_4["Add chunk hints to acquire:<br/>chunk_hint(%chunk_index, %chunk_size)"]
-        S10_5["Set partition=chunked<br/>on cloned acquire"]
+        S10_4["Add chunk hints to acquire:<br/>chunk_hint(%chunk_index, %block_size)"]
+        S10_5["Set partition=blocked<br/>on cloned acquire"]
 
         S10_1 --> S10_2 --> S10_3 --> S10_4 --> S10_5
     end
@@ -686,7 +686,7 @@ flowchart TB
     Q3{Has chunk offsets/sizes?}
 
     R1["partition = fine_grained<br/>canElementWise = true"]
-    R2["partition = chunked<br/>canChunked = true"]
+    R2["partition = blocked<br/>canBlocked = true"]
     R3["partition = coarse<br/>no structural info"]
 
     START --> Q1
@@ -705,11 +705,11 @@ flowchart TB
 ctx.canElementWise = !isRankZero && accessPatternInfo.isConsistent &&
                      accessPatternInfo.pinnedDimCount > 0 &&
                      accessPatternInfo.allAccessesHaveIndices;
-ctx.canChunked = !isRankZero && accessPatternInfo.hasChunkDeps &&
-                 accessPatternInfo.chunkSizesAreConsistent;
+ctx.canBlocked = !isRankZero && accessPatternInfo.hasChunkDeps &&
+                 accessPatternInfo.blockSizesAreConsistent;
 
 // Set partition attribute on DbAllocOp
-PromotionMode promotionMode = decision.isChunked() ? PromotionMode::chunked
+PromotionMode promotionMode = decision.isBlocked() ? PromotionMode::blocked
                               : decision.isFineGrained() ? PromotionMode::fine_grained
                               : PromotionMode::coarse;
 setPartitionMode(dbAllocOp, promotionMode);
@@ -733,7 +733,7 @@ flowchart LR
     subgraph After["After ForLowering"]
         DISPATCH[Worker dispatch EDT]
         TASK[Worker task EDT]
-        ACQ2["arts.db_acquire %db<br/>chunk_hint(%chunk_index, %chunk_size)<br/>partition=chunked"]
+        ACQ2["arts.db_acquire %db<br/>chunk_hint(%chunk_index, %block_size)<br/>partition=blocked"]
     end
 
     Before --> After
@@ -745,27 +745,27 @@ flowchart LR
 // ForLowering.cpp:1685-1711
 // Compute chunk hints from loop iteration space
 // chunk_index = which chunk this worker handles (NOT element offset!)
-// chunk_size = elements per chunk
+// block_size = elements per chunk
 Value chunkIndex = chunkOffset;
-Value chunkSizeVal = loopInfo.workerIterationCount;
+Value blockSizeVal = loopInfo.workerIterationCount;
 
-// If loop has step != 1, scale chunk_size to element space
+// If loop has step != 1, scale block_size to element space
 if (!forOp.getStep().empty()) {
     Value step = forOp.getStep()[0];
-    chunkSizeVal = AC->create<arith::MulIOp>(loc, loopInfo.workerIterationCount, step);
+    blockSizeVal = AC->create<arith::MulIOp>(loc, loopInfo.workerIterationCount, step);
 }
 
 // Create acquire with chunk hints
 auto chunkAcqOp = AC->create<DbAcquireOp>(loc, mode, guid, ptr, elementType,
-    indices, chunkOffsets, chunkSizes,
+    indices, chunkOffsets, blockSizes,
     /*chunkIndex=*/chunkIndex,
-    /*chunkSize=*/chunkSizeVal);
+    /*blockSize=*/blockSizeVal);
 
-// Mark acquire as having chunked structure
-setPartitionMode(chunkAcqOp.getOperation(), PromotionMode::chunked);
+// Mark acquire as having blocked structure
+setPartitionMode(chunkAcqOp.getOperation(), PromotionMode::blocked);
 ```
 
-**Key Insight**: The `partition=chunked` attribute on acquires signals to DbPartitioning that this acquire has structural information for chunked partitioning.
+**Key Insight**: The `partition=blocked` attribute on acquires signals to DbPartitioning that this acquire has structural information for blocked partitioning.
 
 #### ChunkHintInfo Semantics
 
@@ -774,12 +774,12 @@ The `chunk_hint(index, size)` operands have specific semantics that are crucial 
 | Operand | Meaning | Example |
 |---------|---------|---------|
 | `chunk_index` | Which chunk this worker handles (0, 1, 2, ...) | Worker 0 → chunk 0 |
-| `chunk_size` | Elements per chunk (must be consistent across acquires) | 250 elements |
+| `block_size` | Elements per chunk (must be consistent across acquires) | 250 elements |
 
 **Critical Distinction: Chunk Index vs Element Offset**
 
 ```
-Given: 1000 elements split across 4 workers with chunk_size=250
+Given: 1000 elements split across 4 workers with block_size=250
 
 chunk_index=0 → elements [0, 250)      (NOT element offset 0!)
 chunk_index=1 → elements [250, 500)    (NOT element offset 1!)
@@ -787,24 +787,24 @@ chunk_index=2 → elements [500, 750)
 chunk_index=3 → elements [750, 1000)
 
 The chunk_index is a CHUNK number, not an element offset.
-Element offset = chunk_index * chunk_size
+Element offset = chunk_index * block_size
 ```
 
-**Chunk Size Consistency Check**
+**Block Size Consistency Check**
 
-DbPartitioning validates that all acquires for the same allocation have consistent `chunk_size`:
+DbPartitioning validates that all acquires for the same allocation have consistent `block_size`:
 
 ```cpp
 // DbPartitioning.cpp:82-92
 bool isConsistentWith(const AcquirePartitionInfo &other) const {
     if (mode != other.mode)
         return false;
-    // For Chunked mode: chunk_sizes must be same SSA value OR equal constants
-    if (mode == PartitionMode::Chunked &&
-        chunkSize != other.chunkSize) {
+    // For Blocked mode: block_sizes must be same SSA value OR equal constants
+    if (mode == PartitionMode::Blocked &&
+        blockSize != other.blockSize) {
         int64_t lhs = 0, rhs = 0;
-        bool lhsConst = ValueUtils::getConstantIndex(chunkSize, lhs);
-        bool rhsConst = ValueUtils::getConstantIndex(other.chunkSize, rhs);
+        bool lhsConst = ValueUtils::getConstantIndex(blockSize, lhs);
+        bool rhsConst = ValueUtils::getConstantIndex(other.blockSize, rhs);
         if (!(lhsConst && rhsConst && lhs == rhs))
             return false;  // Sizes don't agree → fall back to coarse/fine
     }
@@ -812,9 +812,9 @@ bool isConsistentWith(const AcquirePartitionInfo &other) const {
 }
 ```
 
-**Fallback When Chunk Sizes Don't Agree**
+**Fallback When Block Sizes Don't Agree**
 
-If chunk sizes are inconsistent, partitioning falls back to the `--partition-fallback` CLI option:
+If block sizes are inconsistent, partitioning falls back to the `--partition-fallback` CLI option:
 - `--partition-fallback=coarse` (default): Keep coarse allocation
 - `--partition-fallback=fine`: Use element-wise partitioning
 
@@ -831,12 +831,12 @@ flowchart TB
     START[For each DbAcquireOp]
 
     Q1{Has partition attribute<br/>from ForLowering/CreateDbs?}
-    Q2{partition == chunked?}
+    Q2{partition == blocked?}
     Q3{Offset depends on<br/>loop IV?}
     Q4{partition == fine_grained?}
 
-    R1["thisAcquireCanChunked = true<br/>Send chunk with index"]
-    R2["thisAcquireCanChunked = true<br/>needsFullRange = true<br/>indirect access"]
+    R1["thisAcquireCanBlocked = true<br/>Send chunk with index"]
+    R2["thisAcquireCanBlocked = true<br/>needsFullRange = true<br/>indirect access"]
     R3["thisAcquireCanElementWise = true"]
     R4["Neither capability<br/>coarse fallback"]
 
@@ -895,35 +895,35 @@ for each DbAcquireNode {
     // Read partition attribute from acquire (set by ForLowering/CreateDbs)
     auto acquireMode = getPartitionMode(acquire.getOperation());
 
-    bool thisAcquireCanChunked =
-        acquireMode && *acquireMode == PromotionMode::chunked;
+    bool thisAcquireCanBlocked =
+        acquireMode && *acquireMode == PromotionMode::blocked;
     bool thisAcquireCanElementWise =
         acquireMode && *acquireMode == PromotionMode::fine_grained;
 
-    // Validate chunked capability with IV dependence check
-    if (thisAcquireCanChunked) {
+    // Validate blocked capability with IV dependence check
+    if (thisAcquireCanBlocked) {
         Value offsetForCheck = getPartitionOffset(acqNode, &acqInfo);
         if (offsetForCheck && !acqNode->canPartitionWithOffset(offsetForCheck)) {
             if (hasIndirectAccess) {
-                // Indirect access: still chunked but needs full-range
-                thisAcquireCanChunked = true;  // allocation chunked
+                // Indirect access: still blocked but needs full-range
+                thisAcquireCanBlocked = true;  // allocation blocked
                 needsFullRange = true;          // this acquire gets all chunks
             } else {
                 // Direct access but offset not derived from access
-                thisAcquireCanChunked = false;  // fall back to coarse
+                thisAcquireCanBlocked = false;  // fall back to coarse
             }
         }
     }
 
     // Build AcquireInfo for heuristic voting
     AcquireInfo info;
-    info.canChunked = thisAcquireCanChunked;
+    info.canBlocked = thisAcquireCanBlocked;
     info.canElementWise = thisAcquireCanElementWise;
     ctx.acquires.push_back(info);
 }
 
 // Aggregate capabilities via voting
-ctx.canChunked = ctx.anyCanChunked();
+ctx.canBlocked = ctx.anyCanBlocked();
 ctx.canElementWise = ctx.anyCanElementWise();
 ```
 
@@ -956,21 +956,21 @@ flowchart TB
 | ID | Priority | Name | Condition | Result |
 |----|----------|------|-----------|--------|
 | H1.1 | 100 | ReadOnlySingleNode | `singleNode && allReadOnly()` | **Coarse** |
-| H1.2 | 98 | MixedAccessVersioning | `anyCanChunked() && anyCanElementWise()` | **Chunked** |
+| H1.2 | 98 | MixedAccessVersioning | `anyCanBlocked() && anyCanElementWise()` | **Blocked** |
 | H1.3 | 95 | StencilPattern | `accessPatterns.hasStencil` | **Stencil** |
 | H1.4 | 90 | MultiNode | `multiNode && anyCanElementWise()` | **ElementWise** |
 | H1.5 | 80 | AccessUniformity | `!isUniformAccess && !anyCanElementWise()` | **Coarse** |
 
 ---
 
-### Mixed Mode: Chunked + Full-Range Acquires
+### Mixed Mode: Blocked + Full-Range Acquires
 
 When both IV-dependent and indirect accesses exist for the same allocation:
 
 ```mermaid
 flowchart TB
-    subgraph Allocation["Chunked Allocation"]
-        ALLOC["sizes=[numChunks]<br/>elementSizes=[chunkSize]"]
+    subgraph Allocation["Blocked Allocation"]
+        ALLOC["sizes=[numChunks]<br/>elementSizes=[blockSize]"]
     end
 
     subgraph Workers["Worker Tasks (IV-dependent)"]
@@ -990,7 +990,7 @@ flowchart TB
 **Example: LULESH-style nodelist pattern**
 
 ```c
-// Worker writes (IV-dependent) → chunked with index
+// Worker writes (IV-dependent) → blocked with index
 for (int e = chunk_start; e < chunk_end; e++) {
     elemData[e] = compute(...);  // Direct: A[chunk_start + local]
 }
@@ -1337,13 +1337,13 @@ checksum += fabs(data[i]);
 
 **Cause:** Element-wise allocation creating millions of tiny datablocks.
 
-**Fix:** Use chunked allocation with div/mod index transformation:
+**Fix:** Use blocked allocation with div/mod index transformation:
 ```mlir
 // Fine-grained (slow for large N)
 %db = arts.db_alloc ... { outer_dims = [0], sizes = [%N] }
 
-// Chunked (efficient)
-%num_chunks = arith.divui %N, %chunk_size
+// Blocked (efficient)
+%num_chunks = arith.divui %N, %block_size
 %db = arts.db_alloc ... { outer_dims = [0], sizes = [%num_chunks] }
 ```
 

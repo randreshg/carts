@@ -31,7 +31,7 @@ for (i = 0; i < nx; i++) {
 
 - **Pattern**: Simple block distribution
 - **Ideal partitioning**: Chunked ownership (no communication needed)
-- **Worker k**: owns rows `[k*chunkSize, (k+1)*chunkSize)`
+- **Worker k**: owns rows `[k*blockSize, (k+1)*blockSize)`
 
 ### Loop 2: Stencil Access (Neighbor Computation)
 
@@ -45,7 +45,7 @@ for (i = 0; i < nx; i++) {
 ```
 
 - **Pattern**: Each worker needs its rows PLUS neighbor boundaries
-- **Halo requirement**: Worker k needs rows `[k*chunkSize-1, (k+1)*chunkSize+1)`
+- **Halo requirement**: Worker k needs rows `[k*blockSize-1, (k+1)*blockSize+1)`
 - **Challenge**: How should CARTS partition array `u` for both patterns?
 
 ## Walkthrough Steps
@@ -176,7 +176,7 @@ For the stencil loop, the acquire for `u` uses extended ranges:
 %53 = arith.select %51, %52, %c0 : index  /// offset = max(i-1, 0)
 
 /// Compute size including both halos
-%54 = arith.addi %41, %c2 : index         /// size = chunkSize + 2
+%54 = arith.addi %41, %c2 : index         /// size = blockSize + 2
 
 /// Acquire with extended range
 %guid_12, %ptr_13 = arts.db_acquire[<in>] (%guid_4, %ptr_5)
@@ -186,7 +186,7 @@ For the stencil loop, the acquire for `u` uses extended ranges:
 This correctly extends the acquire range to include:
 
 - **Left halo**: row `i-1` (when `i > 0`)
-- **Right halo**: row `i+chunkSize` (when within bounds)
+- **Right halo**: row `i+blockSize` (when within bounds)
 
 ### Current Implementation: Element-Wise for Stencil
 
@@ -300,6 +300,6 @@ To fully enable ESD for stencil patterns:
 |--------|------------------------|---------------------|
 | DB count | O(Nrows) = 100 | O(Nchunks) = ~16 |
 | Bytes transferred | Optimal (halo rows) | Optimal (halo bytes) |
-| Dependency slots | ~chunkSize + 2 | 3 (chunk + 2 halos) |
+| Dependency slots | ~blockSize + 2 | 3 (chunk + 2 halos) |
 | Runtime overhead | Higher (many DBs) | Lower (few DBs) |
 | Implementation | Complete | Runtime complete, DbPartitioning connection pending |

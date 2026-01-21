@@ -1,5 +1,5 @@
 ///==========================================================================///
-/// File: HeuristicsConfig.cpp
+/// File: ArtsHeuristics.cpp
 ///
 /// Centralized heuristics configuration and evaluation for the CARTS compiler.
 ///
@@ -9,14 +9,16 @@
 /// - Decision recording for ArtsMate diagnostics
 ///==========================================================================///
 
-#include "arts/Analysis/HeuristicsConfig.h"
+#include "arts/Analysis/ArtsHeuristics.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Transforms/Datablock/DbRewriter.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/Metadata/IdRegistry.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
+#include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
+#include "mlir/IR/BuiltinAttributes.h"
 
 ARTS_DEBUG_SETUP(heuristics)
 
@@ -51,7 +53,7 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
                                            const ArtsAbstractMachine *machine,
                                            PartitionFallback fallback) {
   ARTS_DEBUG("evaluatePartitioningHeuristics: canElementWise="
-             << ctx.canElementWise << ", canChunked=" << ctx.canChunked
+             << ctx.canElementWise << ", canBlock=" << ctx.canBlock
              << ", pinnedDimCount=" << ctx.pinnedDimCount
              << ", accessMode=" << static_cast<int>(ctx.accessMode));
 
@@ -61,81 +63,94 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   if (machine && machine->getNodeCount() == 1) {
     bool isReadOnly = !ctx.acquires.empty() ? ctx.allReadOnly()
                                             : (ctx.accessMode == ArtsMode::in);
-    if (isReadOnly && !ctx.canChunked && !ctx.canElementWise) {
+    if (isReadOnly && !ctx.canBlock && !ctx.canElementWise) {
       ARTS_DEBUG("H1.1 applied: Read-only single-node prefers coarse");
       return PartitioningDecision::coarse(
           ctx, "H1.1: All acquires read-only on single-node prefers coarse");
     }
   }
 
-  /// H1.2: Mixed Access (Chunked Writes + Indirect Reads) -> Chunked
-  /// Mixed access patterns use chunked partitioning with full-range acquires
+  /// H1.2: Mixed Access (Block Writes + Indirect Reads) -> Block
+  /// Mixed access patterns use block partitioning with full-range acquires
   /// for indirect reads. This avoids DbCopy/DbSync overhead.
-  if (ctx.canChunked && ctx.hasIndirectRead && !ctx.hasIndirectWrite &&
+  if (ctx.canBlock && ctx.hasIndirectRead && !ctx.hasIndirectWrite &&
       ctx.hasDirectAccess) {
     ARTS_DEBUG("H1.2 applied: Mixed access pattern");
-    return PartitioningDecision::chunked(
-        ctx, "H1.2: Mixed access (chunked writes + full-range indirect reads)");
+    return PartitioningDecision::block(
+        ctx, "H1.2: Mixed access (block writes + full-range indirect reads)");
   }
 
   /// H1.3: Stencil/Indexed Patterns
   /// - Indexed access (data-dependent) requires element-wise partitioning
-  /// - Stencil patterns use Stencil mode (chunked + ESD) for halo handling
+  /// - Stencil patterns use Stencil mode (block + ESD) for halo handling
   const auto &patterns = ctx.accessPatterns;
 
   /// Case 1: Indexed access -> Element-wise (unpredictable access pattern)
+  /// Compute outerRank from partitionInfos with uniformity check.
+  /// Use minimum dimension count to ensure all acquires can address datablocks.
   if (patterns.hasIndexed) {
-    ARTS_DEBUG("H1.3 applied: Indexed access requires element-wise");
+    unsigned minDim = ctx.minPinnedDimCount();
+    unsigned maxDim = ctx.maxPinnedDimCount();
+
+    /// Use minimum for safety - ensures all acquires can address the datablocks
+    unsigned outerRank = minDim > 0 ? minDim : 1;
+
+    if (minDim != maxDim && minDim > 0 && maxDim > 0) {
+      ARTS_DEBUG("H1.3: Non-uniform partition indices (min="
+                 << minDim << ", max=" << maxDim << "), using min");
+    }
+    ARTS_DEBUG("H1.3 applied: Indexed access requires element-wise (outerRank="
+               << outerRank << ")");
     return PartitioningDecision::elementWise(
-        ctx, 1, "H1.3: Indexed access requires element-wise");
+        ctx, outerRank, "H1.3: Indexed access requires element-wise");
   }
 
-  /// Case 2: Stencil (with or without uniform) -> Stencil mode (chunked + ESD)
+  /// Case 2: Stencil (with or without uniform) -> Stencil mode (block + ESD)
   if (patterns.hasStencil) {
-    if (!ctx.canChunked) {
-      ARTS_DEBUG("H1.3 applied: Stencil but chunked unsupported; fallback");
+    if (!ctx.canBlock) {
+      ARTS_DEBUG("H1.3 applied: Stencil but block unsupported; fallback");
       return PartitioningDecision::elementWise(
           ctx, 1,
-          "H1.3: Stencil detected but chunked unsupported; fallback to "
+          "H1.3: Stencil detected but block unsupported; fallback to "
           "element-wise");
     }
 
     ARTS_DEBUG("H1.3 applied: Stencil uses ESD mode");
     return PartitioningDecision::stencil(
         ctx, patterns.hasUniform
-                 ? "H1.3: Mixed (uniform+stencil) uses Stencil mode - chunked "
+                 ? "H1.3: Mixed (uniform+stencil) uses Stencil mode - block "
                    "handles both"
                  : "H1.3: Pure stencil uses ESD mode");
   }
 
-  /// H1.4: Uniform direct access -> Chunked
-  /// If access is uniform and directly indexable, prefer chunked when possible.
-  bool chunkSizeFits = !ctx.totalElements || !ctx.chunkSize ||
-                       *ctx.totalElements >= *ctx.chunkSize;
-  if (ctx.canChunked && ctx.hasDirectAccess && !ctx.hasIndirectAccess &&
-      patterns.hasUniform && !ctx.elementTypeIsMemRef && chunkSizeFits) {
-    ARTS_DEBUG("H1.4 applied: Uniform direct access prefers chunked");
-    return PartitioningDecision::chunked(
-        ctx, "H1.4: Uniform direct access prefers chunked");
+  /// H1.4: Uniform direct access -> Block
+  /// If access is uniform and directly indexable, prefer block when possible.
+  bool blockSizeFits = !ctx.totalElements || !ctx.blockSize ||
+                       *ctx.totalElements >= *ctx.blockSize;
+  if (ctx.canBlock && ctx.hasDirectAccess && !ctx.hasIndirectAccess &&
+      patterns.hasUniform && !ctx.elementTypeIsMemRef && blockSizeFits) {
+    ARTS_DEBUG("H1.4 applied: Uniform direct access prefers block");
+    return PartitioningDecision::block(
+        ctx, "H1.4: Uniform direct access prefers block");
   }
 
   /// H1.5: Multi-Node -> Fine-Grained for Network Efficiency
   /// On multi-node systems, fine-grained partitioning reduces data transfer
   /// by allowing nodes to acquire only the data they need.
   if (machine && machine->getNodeCount() > 1) {
-    bool canDoChunked = ctx.canChunked || ctx.anyCanChunked();
+    bool canDoBlock = ctx.canBlock || ctx.anyCanBlock();
     bool canDoElementWise = ctx.canElementWise || ctx.anyCanElementWise();
 
-    if (canDoChunked) {
-      ARTS_DEBUG("H1.5 applied: Multi-node prefers chunked");
-      return PartitioningDecision::chunked(
-          ctx, "H1.5: Multi-node prefers chunked for network efficiency");
+    if (canDoBlock) {
+      ARTS_DEBUG("H1.5 applied: Multi-node prefers block");
+      return PartitioningDecision::block(
+          ctx, "H1.5: Multi-node prefers block for network efficiency");
     }
 
     if (canDoElementWise) {
       ARTS_DEBUG("H1.5 applied: Multi-node prefers fine-grained");
-      unsigned outerRank =
-          ctx.pinnedDimCount > 0 ? ctx.pinnedDimCount : ctx.maxPinnedDimCount();
+      /// Use minimum for uniformity safety
+      unsigned outerRank = ctx.minPinnedDimCount();
       outerRank = outerRank > 0 ? outerRank : 1;
       return PartitioningDecision::elementWise(
           ctx, outerRank, "H1.5: Multi-node prefers fine-grained");
@@ -145,7 +160,7 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// H1.6: Non-Uniform Access -> Coarse
   /// When access patterns are non-uniform and no fine-grained option is
   /// available, default to coarse allocation to avoid complexity.
-  if (!ctx.isUniformAccess && !ctx.canElementWise && !ctx.canChunked) {
+  if (!ctx.isUniformAccess && !ctx.canElementWise && !ctx.canBlock) {
     ARTS_DEBUG("H1.6 applied: Non-uniform access prefers coarse");
     return PartitioningDecision::coarse(
         ctx, "H1.6: Non-uniform access prefers coarse");
@@ -165,9 +180,9 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
       ctx, "Fallback: User preference for coarse partitioning");
 }
 
-//===----------------------------------------------------------------------===//
-// HeuristicsConfig Implementation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// HeuristicsConfig Implementation
+///===----------------------------------------------------------------------===///
 
 HeuristicsConfig::HeuristicsConfig(const ArtsAbstractMachine &machine,
                                    IdRegistry &registry,
@@ -183,8 +198,8 @@ bool HeuristicsConfig::isSingleNode() const {
 
 bool HeuristicsConfig::isValid() const { return machine.isValid(); }
 
-//===----------------------------------------------------------------------===//
-// H2: Twin-Diff Heuristic
+///===----------------------------------------------------------------------===///
+/// H2: Twin-Diff Heuristic
 //===----------------------------------------------------------------------===//
 
 bool HeuristicsConfig::shouldUseTwinDiff(const TwinDiffContext &context) {
@@ -237,9 +252,9 @@ bool HeuristicsConfig::shouldUseTwinDiff(const TwinDiffContext &context) {
 #endif
 }
 
-//===----------------------------------------------------------------------===//
-// Decision Recording for Diagnostics
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// Decision Recording for Diagnostics
+///===----------------------------------------------------------------------===///
 
 void HeuristicsConfig::recordDecision(llvm::StringRef heuristic, bool applied,
                                       llvm::StringRef rationale, Operation *op,
@@ -334,14 +349,14 @@ llvm::ArrayRef<HeuristicDecision> HeuristicsConfig::getDecisions() const {
   return decisions;
 }
 
-//===----------------------------------------------------------------------===//
-// H1: Partitioning Mode Evaluation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// H1: Partitioning Mode Evaluation
+///===----------------------------------------------------------------------===///
 
 PartitioningDecision
 HeuristicsConfig::getPartitioningMode(const PartitioningContext &ctx) {
   ARTS_DEBUG("getPartitioningMode: canElementWise="
-             << ctx.canElementWise << ", canChunked=" << ctx.canChunked
+             << ctx.canElementWise << ", canBlock=" << ctx.canBlock
              << ", pinnedDimCount=" << ctx.pinnedDimCount
              << ", accessMode=" << static_cast<int>(ctx.accessMode));
 
@@ -357,9 +372,9 @@ HeuristicsConfig::getPartitioningMode(const PartitioningContext &ctx) {
   return decision;
 }
 
-//===----------------------------------------------------------------------===//
-// JSON Export for ArtsMate
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// JSON Export for ArtsMate
+///===----------------------------------------------------------------------===///
 
 void HeuristicsConfig::exportDecisionsToJson(llvm::json::OStream &J) const {
   J.attributeArray("heuristic_decisions", [&]() {
@@ -394,3 +409,82 @@ void HeuristicsConfig::exportDecisionsToJson(llvm::json::OStream &J) const {
     }
   });
 }
+
+///===----------------------------------------------------------------------===///
+/// PartitioningHint Implementation
+///===----------------------------------------------------------------------===///
+
+DictionaryAttr PartitioningHint::toAttribute(MLIRContext *ctx) const {
+  SmallVector<NamedAttribute> attrs;
+  attrs.push_back(
+      {StringAttr::get(ctx, "mode"),
+       IntegerAttr::get(IntegerType::get(ctx, 8), static_cast<uint8_t>(mode))});
+  if (blockSize)
+    attrs.push_back({StringAttr::get(ctx, "blockSize"),
+                     IntegerAttr::get(IntegerType::get(ctx, 64), *blockSize)});
+  return DictionaryAttr::get(ctx, attrs);
+}
+
+std::optional<PartitioningHint>
+PartitioningHint::fromAttribute(Attribute attr) {
+  auto dictAttr = dyn_cast_or_null<DictionaryAttr>(attr);
+  if (!dictAttr)
+    return std::nullopt;
+
+  PartitioningHint hint;
+
+  if (auto modeAttr = dictAttr.getAs<IntegerAttr>("mode"))
+    hint.mode = static_cast<PartitionMode>(modeAttr.getInt());
+
+  if (auto chunkAttr = dictAttr.getAs<IntegerAttr>("blockSize"))
+    hint.blockSize = chunkAttr.getInt();
+
+  return hint;
+}
+
+/// PartitioningHint Accessor Functions
+namespace mlir {
+namespace arts {
+
+std::optional<PartitioningHint> getPartitioningHint(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr = op->getAttr(AttrNames::Operation::PartitionHint))
+    return PartitioningHint::fromAttribute(attr);
+  return std::nullopt;
+}
+
+void setPartitioningHint(Operation *op, const PartitioningHint &hint) {
+  if (!op)
+    return;
+  op->setAttr(AttrNames::Operation::PartitionHint,
+              hint.toAttribute(op->getContext()));
+}
+
+/// Attribute Transfer Utilities
+void transferAttributes(Operation *source, Operation *dest) {
+  if (!source || !dest)
+    return;
+
+  /// Transfer arts.id
+  if (auto id =
+          source->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsId))
+    dest->setAttr(AttrNames::Operation::ArtsId, id);
+
+  /// Transfer partition_mode
+  if (auto mode = source->getAttrOfType<PartitionModeAttr>(
+          AttrNames::Operation::PartitionMode))
+    dest->setAttr(AttrNames::Operation::PartitionMode, mode);
+
+  /// Transfer arts.partition_hint
+  if (auto hint = source->getAttr(AttrNames::Operation::PartitionHint))
+    dest->setAttr(AttrNames::Operation::PartitionHint, hint);
+
+  /// Transfer arts.twin_diff
+  if (auto twinDiff =
+          source->getAttrOfType<BoolAttr>(AttrNames::Operation::ArtsTwinDiff))
+    dest->setAttr(AttrNames::Operation::ArtsTwinDiff, twinDiff);
+}
+
+} // namespace arts
+} // namespace mlir

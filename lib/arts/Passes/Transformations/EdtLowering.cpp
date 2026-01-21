@@ -839,6 +839,26 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
     bool isSingleElement = DatablockUtils::hasSingleSize(
         originalDeps[depIndex].getDefiningOp<DbAcquireOp>());
 
+    auto normalizeUnitDimIndices = [&](ArrayRef<Value> indices) {
+      SmallVector<Value> adjusted;
+      adjusted.reserve(indices.size());
+      Value one = AC->createIndexConstant(1, loc);
+      Value zero = AC->createIndexConstant(0, loc);
+      for (size_t i = 0; i < indices.size(); ++i) {
+        Value idx = indices[i];
+        if (i < depSizes.size()) {
+          Value size = depSizes[i];
+          if (size.getType() != idx.getType())
+            size = AC->castToInt(idx.getType(), size, loc);
+          Value isOne = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                                  size, one);
+          idx = AC->create<arith::SelectOp>(loc, isOne, zero, idx);
+        }
+        adjusted.push_back(idx);
+      }
+      return adjusted;
+    };
+
     /// Get the users of the dependency placeholder
     SmallVector<Operation *, 16> users, dbAcquireUsers;
     for (auto &use : placeholder.getUses()) {
@@ -875,8 +895,18 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
       dbAcquire.erase();
     }
 
-    /// If single element, rewrite the placeholder with a DepGepOp
-    if (isSingleElement) {
+    /// If single element, we can optionally replace the placeholder directly.
+    /// Skip the shortcut when the dependency is indexed (db_ref/db_gep/loads)
+    /// or when the element type is itself a memref (block-of-blocks), because
+    /// we must index depv, not treat a single dep entry as an array.
+    bool isNestedMemref = false;
+    if (auto mt = placeholder.getType().dyn_cast<MemRefType>())
+      isNestedMemref = mt.getElementType().isa<MemRefType>();
+    bool hasIndexedUsers = llvm::any_of(users, [](Operation *op) {
+      return isa<arts::DbRefOp, arts::DbGepOp, memref::LoadOp, memref::StoreOp,
+                 polygeist::Memref2PointerOp>(op);
+    });
+    if (isSingleElement && !isNestedMemref && !hasIndexedUsers) {
       ARTS_DEBUG(" - Rewriting single element placeholder");
       Operation *placeholderOp = placeholder.getDefiningOp();
       AC->setInsertionPoint(placeholderOp);
@@ -904,6 +934,7 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         AC->setInsertionPoint(op);
         SmallVector<Value> dbGepIndices(dbGep.getIndices().begin(),
                                         dbGep.getIndices().end());
+        dbGepIndices = normalizeUnitDimIndices(dbGepIndices);
         auto depGep =
             AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
                                  baseOffset, dbGepIndices, depStrides);
@@ -913,6 +944,7 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         AC->setInsertionPoint(op);
         SmallVector<Value> refIndices(dbRef.getIndices().begin(),
                                       dbRef.getIndices().end());
+        refIndices = normalizeUnitDimIndices(refIndices);
         auto depGep = AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
                                            baseOffset, refIndices, depStrides);
         auto newMemref = AC->create<polygeist::Pointer2MemrefOp>(
@@ -923,6 +955,7 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         AC->setInsertionPoint(op);
         SmallVector<Value> storeIndices(store.getIndices().begin(),
                                         store.getIndices().end());
+        storeIndices = normalizeUnitDimIndices(storeIndices);
         auto depGep =
             AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
                                  baseOffset, storeIndices, depStrides);
@@ -932,6 +965,7 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         AC->setInsertionPoint(op);
         SmallVector<Value> loadIndices(load.getIndices().begin(),
                                        load.getIndices().end());
+        loadIndices = normalizeUnitDimIndices(loadIndices);
         auto depGep = AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
                                            baseOffset, loadIndices, depStrides);
         Value loaded =

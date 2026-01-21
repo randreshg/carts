@@ -33,14 +33,14 @@ using namespace mlir::arts;
 //===----------------------------------------------------------------------===//
 
 DbStencilIndexer::DbStencilIndexer(Value haloLeft, Value haloRight,
-                                   Value chunkSize, unsigned outerRank,
+                                   Value blockSize, unsigned outerRank,
                                    unsigned innerRank, Value elemOffset,
                                    Value ownedArg, Value leftHaloArg,
                                    Value rightHaloArg)
     : DbIndexerBase(outerRank, innerRank), elemOffset(elemOffset),
-      haloLeft(haloLeft), haloRight(haloRight), chunkSize(chunkSize),
-      ownedArg(ownedArg), leftHaloArg(leftHaloArg),
-      rightHaloArg(rightHaloArg) {}
+      haloLeft(haloLeft), haloRight(haloRight), blockSize(blockSize),
+      ownedArg(ownedArg), leftHaloArg(leftHaloArg), rightHaloArg(rightHaloArg) {
+}
 
 //===----------------------------------------------------------------------===//
 // Helper: Clamp index to valid bounds
@@ -142,8 +142,8 @@ void DbStencilIndexer::transformDbRefUsers(
   Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
 
   /// Create 3 DbRefOps ONCE at the start, reuse for all accesses
-  assert(haloLeft && chunkSize &&
-         "Stencil mode requires haloLeft and chunkSize");
+  assert(haloLeft && blockSize &&
+         "Stencil mode requires haloLeft and blockSize");
 
   Value ownedMemref, leftMemref, rightMemref;
 
@@ -173,19 +173,19 @@ void DbStencilIndexer::transformDbRefUsers(
   Value effectiveHaloLeft = zero;
 
   if (leftMemref) {
-    Value leftPtr = builder.create<polygeist::Memref2PointerOp>(
-        loc, llvmPtrTy, leftMemref);
-    leftPtrNotNull = builder.create<LLVM::ICmpOp>(
-        loc, LLVM::ICmpPredicate::ne, leftPtr, nullPtr);
-    if (elemOffset && chunkSize) {
+    Value leftPtr =
+        builder.create<polygeist::Memref2PointerOp>(loc, llvmPtrTy, leftMemref);
+    leftPtrNotNull = builder.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ne,
+                                                  leftPtr, nullPtr);
+    if (elemOffset && blockSize) {
       Value offsetMod =
-          builder.create<arith::RemUIOp>(loc, elemOffset, chunkSize);
+          builder.create<arith::RemUIOp>(loc, elemOffset, blockSize);
       Value extendedRemainder =
-          builder.create<arith::SubIOp>(loc, chunkSize, haloLeft);
+          builder.create<arith::SubIOp>(loc, blockSize, haloLeft);
       Value isExtendedOffset = builder.create<arith::CmpIOp>(
           loc, arith::CmpIPredicate::eq, offsetMod, extendedRemainder);
-      Value shift =
-          builder.create<arith::SelectOp>(loc, isExtendedOffset, haloLeft, zero);
+      Value shift = builder.create<arith::SelectOp>(loc, isExtendedOffset,
+                                                    haloLeft, zero);
       effectiveHaloLeft =
           builder.create<arith::SelectOp>(loc, leftPtrNotNull, shift, zero);
     } else {
@@ -195,10 +195,10 @@ void DbStencilIndexer::transformDbRefUsers(
   }
 
   if (rightMemref) {
-    Value rightPtr = builder.create<polygeist::Memref2PointerOp>(
-        loc, llvmPtrTy, rightMemref);
-    rightPtrNotNull = builder.create<LLVM::ICmpOp>(
-        loc, LLVM::ICmpPredicate::ne, rightPtr, nullPtr);
+    Value rightPtr = builder.create<polygeist::Memref2PointerOp>(loc, llvmPtrTy,
+                                                                 rightMemref);
+    rightPtrNotNull = builder.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ne,
+                                                   rightPtr, nullPtr);
   }
 
   ARTS_DEBUG("  Created 3 buffer refs: owned="
@@ -250,18 +250,18 @@ void DbStencilIndexer::transformDbRefUsers(
     ///
     /// Region boundaries:
     /// - Left halo: localRow < haloLeft
-    /// - Owned: haloLeft <= localRow < haloLeft + chunkSize
-    /// - Right halo: localRow >= haloLeft + chunkSize
+    /// - Owned: haloLeft <= localRow < haloLeft + blockSize
+    /// - Right halo: localRow >= haloLeft + blockSize
     Value isLeftHalo = builder.create<arith::CmpIOp>(
         userLoc, arith::CmpIPredicate::slt, localRow, effectiveHaloLeft);
 
-    Value haloLeftPlusChunk = builder.create<arith::AddIOp>(
-        userLoc, effectiveHaloLeft, chunkSize);
+    Value haloLeftPlusChunk =
+        builder.create<arith::AddIOp>(userLoc, effectiveHaloLeft, blockSize);
 
     /// Compute buffer-local indices for each region:
     /// Left halo: index = localRow (clamped)
     /// Owned: index = localRow - haloLeft
-    /// Right halo: index = localRow - haloLeft - chunkSize
+    /// Right halo: index = localRow - haloLeft - blockSize
 
     Value leftIdx = localRow;
     Value ownedIdx =
@@ -296,8 +296,7 @@ void DbStencilIndexer::transformDbRefUsers(
       /// NULL pointers for boundary workers.
 
       /// Load from owned buffer (always valid)
-      Value clampedOwnedIdx =
-          clampIndex(ownedIdx, chunkSize, builder, userLoc);
+      Value clampedOwnedIdx = clampIndex(ownedIdx, blockSize, builder, userLoc);
       SmallVector<Value> ownedIndices = buildAccessIndices(clampedOwnedIdx);
 
       auto ownedLoad =
@@ -378,8 +377,7 @@ void DbStencilIndexer::transformDbRefUsers(
 
     } else {
       /// STORE: Only store to owned buffer (halos are read-only)
-      Value clampedOwnedIdx =
-          clampIndex(ownedIdx, chunkSize, builder, userLoc);
+      Value clampedOwnedIdx = clampIndex(ownedIdx, blockSize, builder, userLoc);
       SmallVector<Value> ownedIndices = buildAccessIndices(clampedOwnedIdx);
 
       builder.create<memref::StoreOp>(userLoc, storeValue, ownedMemref,
@@ -410,6 +408,6 @@ void DbStencilIndexer::transformOps(ArrayRef<Operation *> ops, Value dbPtr,
     /// Stencil mode requires all accesses through DbRefOp
     if (isa<memref::LoadOp, memref::StoreOp>(op))
       ARTS_UNREACHABLE("DbStencilIndexer: direct load/store not supported, "
-                        "use DbRefOp for 3-buffer mode");
+                       "use DbRefOp for 3-buffer mode");
   }
 }

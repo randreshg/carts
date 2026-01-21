@@ -3,7 +3,7 @@
 ///
 /// Stencil rewriter: 3-buffer halo for stencil patterns (e.g., jacobi).
 ///
-/// Example transformation (N=100 rows, chunkSize=25, halo=1):
+/// Example transformation (N=100 rows, blockSize=25, halo=1):
 ///
 ///   BEFORE:
 ///     %db = arts.db_alloc memref<100x10xf64>
@@ -45,18 +45,13 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
                                          DbAllocOp newAlloc,
                                          OpBuilder &builder) {
   DbAcquireOp acquire = info.acquire;
-  Value elemOffset = info.elemOffset;
-  Value elemSize = info.elemSize;
+  Value elemOffset = info.getElemOffset();
 
   ARTS_DEBUG("DbStencilRewriter::transformAcquire");
 
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPoint(acquire);
   Location loc = acquire.getLoc();
-
-  /// Save original chunk hints
-  Value originalChunkIndex = acquire.getChunkIndex();
-  Value originalChunkSize = acquire.getChunkSize();
 
   /// Update source to new allocation
   acquire.getSourceGuidMutable().assign(newAlloc.getGuid());
@@ -103,11 +98,11 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
       builder.create<arith::SelectOp>(loc, isFirstWorker, zero, baseOffset);
 
   /// Compute chunk index for owned chunk
-  Value startChunk =
-      builder.create<arith::DivUIOp>(loc, baseOffset, plan.chunkSize);
+  Value startBlock =
+      builder.create<arith::DivUIOp>(loc, baseOffset, plan.blockSize);
   Value chunkCount = one;
 
-  ARTS_DEBUG("  Stencil ESD: chunkIdx=" << startChunk
+  ARTS_DEBUG("  Stencil ESD: chunkIdx=" << startBlock
                                         << ", haloLeft=" << haloLeftVal
                                         << ", haloRight=" << haloRightVal);
 
@@ -129,32 +124,33 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   };
 
   /// Get number of chunks for boundary checking
-  Value numChunks = newOuterSizes.empty()
+  Value numBlocks = newOuterSizes.empty()
                         ? builder.create<arith::ConstantIndexOp>(loc, 1)
                         : newOuterSizes[0];
-  Value lastChunkIdx = builder.create<arith::SubIOp>(loc, numChunks, one);
+  Value lastChunkIdx = builder.create<arith::SubIOp>(loc, numBlocks, one);
 
   /// Create LEFT HALO acquire (partial: last haloLeft rows of prev chunk)
   unsigned leftHaloArgIdx = ~0u;
   if (haloLeftVal > 0) {
-    Value leftChunkIdx = builder.create<arith::SubIOp>(loc, startChunk, one);
+    Value leftChunkIdx = builder.create<arith::SubIOp>(loc, startBlock, one);
 
-    /// element_offsets: start at (chunkSize - haloLeft) within prev chunk
+    /// element_offsets: start at (blockSize - haloLeft) within prev chunk
     Value leftElemOffset = builder.create<arith::SubIOp>(
-        loc, plan.chunkSize,
+        loc, plan.blockSize,
         builder.create<arith::ConstantIndexOp>(loc, haloLeftVal));
 
-    /// bounds_valid = (startChunk != 0): valid only if not first chunk
+    /// bounds_valid = (startBlock != 0): valid only if not first chunk
     Value leftValid = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::ne, startChunk, zero);
+        loc, arith::CmpIPredicate::ne, startBlock, zero);
 
     auto leftHalo = builder.create<DbAcquireOp>(
         loc, ArtsMode::in, newAlloc.getGuid(), newAlloc.getPtr(),
-        /*indices=*/SmallVector<Value>{},
+        PartitionMode::stencil, /*indices=*/SmallVector<Value>{},
         /*offsets=*/SmallVector<Value>{leftChunkIdx},
         /*sizes=*/SmallVector<Value>{one},
-        /*chunkIndex=*/nullptr,
-        /*chunkSize=*/nullptr,
+        /*partition_indices=*/SmallVector<Value>{},
+        /*partition_offsets=*/SmallVector<Value>{},
+        /*partition_sizes=*/SmallVector<Value>{},
         /*bounds_valid=*/leftValid,
         /*element_offsets=*/buildHaloOffsets(leftElemOffset),
         /*element_sizes=*/buildHaloSizes(haloLeftVal));
@@ -170,19 +166,20 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   /// Create RIGHT HALO acquire (partial: first haloRight rows of next chunk)
   unsigned rightHaloArgIdx = ~0u;
   if (haloRightVal > 0) {
-    Value rightChunkIdx = builder.create<arith::AddIOp>(loc, startChunk, one);
+    Value rightChunkIdx = builder.create<arith::AddIOp>(loc, startBlock, one);
 
-    /// bounds_valid = (startChunk != lastChunk): valid only if not last chunk
+    /// bounds_valid = (startBlock != lastChunk): valid only if not last chunk
     Value rightValid = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::ne, startChunk, lastChunkIdx);
+        loc, arith::CmpIPredicate::ne, startBlock, lastChunkIdx);
 
     auto rightHalo = builder.create<DbAcquireOp>(
         loc, ArtsMode::in, newAlloc.getGuid(), newAlloc.getPtr(),
-        /*indices=*/SmallVector<Value>{},
+        PartitionMode::stencil, /*indices=*/SmallVector<Value>{},
         /*offsets=*/SmallVector<Value>{rightChunkIdx},
         /*sizes=*/SmallVector<Value>{one},
-        /*chunkIndex=*/nullptr,
-        /*chunkSize=*/nullptr,
+        /*partition_indices=*/SmallVector<Value>{},
+        /*partition_offsets=*/SmallVector<Value>{},
+        /*partition_sizes=*/SmallVector<Value>{},
         /*bounds_valid=*/rightValid,
         /*element_offsets=*/buildHaloOffsets(zero),
         /*element_sizes=*/buildHaloSizes(haloRightVal));
@@ -212,24 +209,13 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
 
   /// Set acquire offsets/sizes for stencil mode
   SmallVector<Value> newOffsets, newSizes;
-  newOffsets.push_back(startChunk);
+  newOffsets.push_back(startBlock);
   newSizes.push_back(chunkCount);
   acquire.getOffsetsMutable().assign(newOffsets);
   acquire.getSizesMutable().assign(newSizes);
 
-  /// Set chunk hints for stencil mode - use original hints if available
-  if (originalChunkIndex)
-    acquire.getChunkIndexMutable().assign(originalChunkIndex);
-  else
-    acquire.getChunkIndexMutable().assign(elemOffset);
-
-  if (originalChunkSize)
-    acquire.getChunkSizeMutable().assign(originalChunkSize);
-  else
-    acquire.getChunkSizeMutable().assign(elemSize);
-
   /// Rebase EDT users with 3-buffer stencil mode
-  rebaseEdtUsers(acquire, builder, startChunk);
+  rebaseEdtUsers(acquire, builder, startBlock);
 }
 
 void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
@@ -267,7 +253,7 @@ void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
     };
 
     /// STENCIL: div/mod for chunk selection (same as chunked)
-    Value cs = plan.chunkSize ? plan.chunkSize : zero();
+    Value cs = plan.blockSize ? plan.blockSize : zero();
     if (!loadStoreIndices.empty()) {
       Value idx0 = loadStoreIndices.front();
       newOuter.push_back(builder.create<arith::DivUIOp>(userLoc, idx0, cs));
@@ -314,7 +300,8 @@ void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
 }
 
 bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
-                                       Value startChunk) {
+                                       Value startBlock,
+                                       bool /*isSingleChunk*/) {
   ARTS_DEBUG("DbStencilRewriter::rebaseEdtUsers (3-buffer mode)");
 
   auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
@@ -343,8 +330,32 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
           DatablockUtils::getUnderlyingDbAlloc(blockArg)))
     derivedType = dbAlloc.getAllocatedElementType();
 
-  /// Get element offset from chunk hint
-  Value elemOffset = acquire.getChunkIndex();
+  /// Derive element offset for stencil localization (extended base offset).
+  /// startBlock is in chunk space; convert to element space and extend by halo.
+  Location loc = acquire.getLoc();
+  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+  Value haloLeft =
+      builder.create<arith::ConstantIndexOp>(loc, plan.stencilInfo->haloLeft);
+  Value haloRight =
+      builder.create<arith::ConstantIndexOp>(loc, plan.stencilInfo->haloRight);
+
+  Value elemOffset;
+  if (startBlock && plan.blockSize) {
+    Value baseOffset =
+        builder.create<arith::MulIOp>(loc, startBlock, plan.blockSize);
+    if (plan.stencilInfo->haloLeft > 0) {
+      Value isFirst = builder.create<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::eq, startBlock, zero);
+      Value extended = builder.create<arith::SubIOp>(loc, baseOffset, haloLeft);
+      elemOffset =
+          builder.create<arith::SelectOp>(loc, isFirst, zero, extended);
+    } else {
+      elemOffset = baseOffset;
+    }
+  } else {
+    elemOffset =
+        acquire.getOffsets().empty() ? nullptr : acquire.getOffsets().front();
+  }
 
   /// For stencil mode, get the 3 block args (owned, left halo, right halo)
   Value leftHaloArg, rightHaloArg;
@@ -369,14 +380,8 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
              << ", right=" << (rightHaloArg ? "valid" : "null"));
 
   /// Create stencil indexer with 3-buffer mode
-  Location loc = acquire.getLoc();
-  Value haloLeft =
-      builder.create<arith::ConstantIndexOp>(loc, plan.stencilInfo->haloLeft);
-  Value haloRight =
-      builder.create<arith::ConstantIndexOp>(loc, plan.stencilInfo->haloRight);
-
   auto indexer = std::make_unique<DbStencilIndexer>(
-      haloLeft, haloRight, plan.chunkSize, newOuterSizes.size(),
+      haloLeft, haloRight, plan.blockSize, newOuterSizes.size(),
       newInnerSizes.size(), elemOffset, blockArg, leftHaloArg, rightHaloArg);
 
   SmallVector<Operation *> users(blockArg.getUsers().begin(),

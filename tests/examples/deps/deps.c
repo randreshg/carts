@@ -29,9 +29,7 @@ int main() {
       }
 
 #pragma omp task depend(in : b)
-      {
-        printf("Task 3: Final value of b=%d\n", b);
-      }
+      { printf("Task 3: Final value of b=%d\n", b); }
     }
   }
 

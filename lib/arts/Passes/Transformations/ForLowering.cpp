@@ -14,11 +14,12 @@
 ///           edt.parallel { work_2 }  /// with reacquired DBs from DbAllocOp
 ///
 /// Worker partitioning uses block distribution:
-///   - chunkSize = ceil(totalIterations / numWorkers)
+///   - blockSize = ceil(totalIterations / numWorkers)
 ///   - Each worker processes iterations [start, start + count)
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"
+#include "arts/Analysis/ArtsHeuristics.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
@@ -59,9 +60,9 @@ namespace {
 ///
 /// LoopInfo encapsulates worker partitioning for arts.for inside a parallel
 /// EDT. It implements a simple block distribution:
-///   - chunkSizeCeil = ceil(totalIterations / numWorkers)
-///   - start = workerId * chunkSizeCeil
-///   - count = min(chunkSizeCeil, max(0, totalIterations - start))
+///   - blockSizeCeil = ceil(totalIterations / numWorkers)
+///   - start = workerId * blockSizeCeil
+///   - count = min(blockSizeCeil, max(0, totalIterations - start))
 ///   - hasWork = start < totalIterations
 ///===----------------------------------------------------------------------===///
 class LoopInfo {
@@ -82,9 +83,10 @@ public:
   ForOp forOp;
   Value lowerBound, upperBound, loopStep;
   /// Distribution information
-  Value chunkSize, totalWorkers, totalIterations, totalChunks;
+  Value blockSize, totalWorkers, totalIterations, totalChunks;
   /// Worker information
-  Value workerFirstChunk, workerIterationCount, workerHasWork;
+  Value workerFirstChunk, workerIterationCount, workerMaxIterations,
+      workerHasWork;
 
   /// Compute worker-specific iteration bounds for block distribution
   void computeWorkerIterationsBlock(Value workerId);
@@ -101,13 +103,13 @@ private:
 };
 
 ///===----------------------------------------------------------------------===///
-// ReductionInfo - Information about reductions within a parallel for
-///===----------------------------------------------------------------------===///
+/// ReductionInfo - Information about reductions within a parallel for
 /// Tracks DB handles for reduction pattern
 ///
 /// Two sets of DBs per reduction variable:
 /// 1. Partial accumulators: array[num_workers] for intermediate worker results
 /// 2. Final result: scalar for combined output
+///===----------------------------------------------------------------------===///
 struct ReductionInfo {
   /// Original reduction variables from arts.for operation
   SmallVector<Value> reductionVars;
@@ -134,11 +136,9 @@ struct ReductionInfo {
   Value numWorkers;
 };
 
-///===----------------------------------------------------------------------===///
-// ParallelRegionAnalysis - Analyze parallel EDT contents for splitting
+/// ParallelRegionAnalysis - Analyze parallel EDT contents for splitting
 /// Categorizes operations in a parallel EDT relative to arts.for operations.
 /// Used to split the parallel region into pre-for and post-for sections.
-///===----------------------------------------------------------------------===///
 struct ParallelRegionAnalysis {
   SmallVector<Operation *, 8> opsBeforeFor;
   SmallVector<ForOp, 4> forOps;
@@ -346,9 +346,7 @@ static Value createZeroValue(ArtsCodegen *AC, Type elemType, Location loc) {
   return Value();
 }
 
-///===----------------------------------------------------------------------===///
-// ForLowering Pass Implementation
-///===----------------------------------------------------------------------===///
+/// ForLowering Pass Implementation
 struct ForLoweringPass : public arts::ForLoweringBase<ForLoweringPass> {
   void runOnOperation() override;
 
@@ -362,9 +360,7 @@ private:
   void cloneLoopBody(ArtsCodegen *AC, ForOp forOp, scf::ForOp chunkLoop,
                      Value chunkOffset, IRMapping &mapper);
 
-  ///===--------------------------------------------------------------------===///
   /// Reduction Support
-  ///===--------------------------------------------------------------------===///
 
   /// Allocate partial accumulators for reductions (one per worker)
   /// If splitMode is true, skip creating DbAcquireOps as dependencies to the
@@ -403,22 +399,23 @@ private:
 
 } // namespace
 
-///===----------------------------------------------------------------------===///
-// LoopInfo Implementation - Work Partitioning Logic
 /// LoopInfo computes how to distribute loop iterations across workers using
 /// block distribution. This ensures balanced work with minimal overhead.
-///===----------------------------------------------------------------------===///
 
 void LoopInfo::initialize() {
   Location loc = forOp.getLoc();
 
-  /// Extract or default the chunk size from loop attributes
-  if (auto chunkAttr =
-          forOp->getAttrOfType<IntegerAttr>(AttrNames::Operation::ChunkSize))
-    chunkSize =
-        AC->createIndexConstant(std::max<int64_t>(1, chunkAttr.getInt()), loc);
-  else
-    chunkSize = AC->createIndexConstant(1, loc);
+  /// Extract block size from PartitioningHint if available
+  if (auto hint = getPartitioningHint(forOp.getOperation())) {
+    if (hint->mode == PartitionMode::block && hint->blockSize &&
+        *hint->blockSize > 0) {
+      blockSize = AC->createIndexConstant(*hint->blockSize, loc);
+    } else {
+      blockSize = AC->createIndexConstant(1, loc);
+    }
+  } else {
+    blockSize = AC->createIndexConstant(1, loc);
+  }
 
   /// Compute total iterations: ceil((upper - lower) / step)
   Value range = AC->create<arith::SubIOp>(loc, upperBound, lowerBound);
@@ -428,41 +425,37 @@ void LoopInfo::initialize() {
                                 AC->createIndexConstant(1, loc)));
   totalIterations = AC->create<arith::DivUIOp>(loc, adjustedRange, loopStep);
 
-  ///===--------------------------------------------------------------------===///
-  /// Compute total chunks: ceil(totalIterations / chunkSize)
-  /// Formula: totalChunks = (totalIterations + chunkSize - 1) / chunkSize
+  /// Compute total chunks: ceil(totalIterations / blockSize)
+  /// Formula: totalChunks = (totalIterations + blockSize - 1) / blockSize
   Value adjustedIterations = AC->create<arith::AddIOp>(
       loc, totalIterations,
-      AC->create<arith::SubIOp>(loc, chunkSize,
+      AC->create<arith::SubIOp>(loc, blockSize,
                                 AC->createIndexConstant(1, loc)));
-  totalChunks = AC->create<arith::DivUIOp>(loc, adjustedIterations, chunkSize);
+  totalChunks = AC->create<arith::DivUIOp>(loc, adjustedIterations, blockSize);
 }
 
 void LoopInfo::computeWorkerIterationsBlock(Value workerId) {
   auto loc = forOp.getLoc();
 
-  ///===--------------------------------------------------------------------===///
-  /// Block Distribution Strategy with Chunk Size Support
+  /// Block Distribution Strategy with Block Size Support
   /// This function computes the iteration bounds for a specific worker using
-  /// block distribution. When a chunk size is specified (e.g., schedule(static,
+  /// block distribution. When a block size is specified (e.g., schedule(static,
   /// 4)), we distribute chunks to workers rather than individual iterations.
   ///
   /// Algorithm:
-  ///   1. totalChunks = ceil(totalIterations / chunkSize)
+  ///   1. totalChunks = ceil(totalIterations / blockSize)
   ///      - Already computed in initialize()
   ///   2. chunksPerWorkerCeil = ceil(totalChunks / totalWorkers)
   ///      - Each worker gets approximately equal number of chunks
   ///   3. workerFirstChunk = workerId * chunksPerWorkerCeil
   ///      - First chunk index for this worker
-  ///   4. workerChunkCount = min(chunksPerWorkerCeil,
-  ///                             max(0, totalChunks - workerFirstChunk))
-  ///      - Number of chunks this worker processes
-  ///   5. Convert chunk indices to iteration indices:
-  ///      - workerFirstIteration = workerFirstChunk * chunkSize
-  ///      - workerIterationCount = min(workerChunkCount * chunkSize,
-  ///      totalIterations - workerFirstIteration)
+  ///   4. Convert chunk indices to iteration indices:
+  ///      - workerFirstIteration = workerFirstChunk * blockSize
+  ///      - workerMaxIterations = chunksPerWorkerCeil * blockSize
+  ///      - workerIterationCount = min(workerMaxIterations,
+  ///      max(0, totalIterations - workerFirstIteration))
   ///
-  /// Example: N=16, chunkSize=4, workers=8
+  /// Example: N=16, blockSize=4, workers=8
   ///   - totalChunks = ceil(16/4) = 4
   ///   - chunksPerWorkerCeil = ceil(4/8) = 1
   ///   - worker 0: firstChunk=0, chunkCount=1, iterations 0-3
@@ -470,7 +463,6 @@ void LoopInfo::computeWorkerIterationsBlock(Value workerId) {
   ///   - worker 2: firstChunk=2, chunkCount=1, iterations 8-11
   ///   - worker 3: firstChunk=3, chunkCount=1, iterations 12-15
   ///   - worker 4+: firstChunk>=4, chunkCount=0, no work
-  ///===--------------------------------------------------------------------===///
 
   Value oneIndex = AC->createIndexConstant(1, loc);
   Value zeroIndex = AC->createIndexConstant(0, loc);
@@ -490,25 +482,15 @@ void LoopInfo::computeWorkerIterationsBlock(Value workerId) {
   Value workerFirstChunkIdx =
       AC->create<arith::MulIOp>(loc, workerId, chunksPerWorkerCeil);
 
-  /// Step 3: Compute number of chunks for this worker
-  /// Handle edge case: if firstChunkIdx >= totalChunks, worker has no work
-  Value needZeroChunks = AC->create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::uge, workerFirstChunkIdx, totalChunks);
-  Value remainingChunks =
-      AC->create<arith::SubIOp>(loc, totalChunks, workerFirstChunkIdx);
-  Value remainingChunksNonNeg = AC->create<arith::SelectOp>(
-      loc, needZeroChunks, zeroIndex, remainingChunks);
-  Value workerChunkCount = AC->create<arith::MinUIOp>(loc, chunksPerWorkerCeil,
-                                                      remainingChunksNonNeg);
-
-  /// Step 4: Convert chunk indices to iteration indices
-  /// workerFirstIteration = workerFirstChunkIdx * chunkSize
+  /// Step 3: Convert chunk indices to iteration indices
+  /// workerFirstIteration = workerFirstChunkIdx * blockSize
   workerFirstChunk =
-      AC->create<arith::MulIOp>(loc, workerFirstChunkIdx, chunkSize);
+      AC->create<arith::MulIOp>(loc, workerFirstChunkIdx, blockSize);
 
-  /// workerMaxIterations = workerChunkCount * chunkSize
-  Value workerMaxIterations =
-      AC->create<arith::MulIOp>(loc, workerChunkCount, chunkSize);
+  /// workerMaxIterations (hint) = chunksPerWorkerCeil * blockSize
+  /// This is the uniform upper bound per worker, independent of offsets.
+  workerMaxIterations =
+      AC->create<arith::MulIOp>(loc, chunksPerWorkerCeil, blockSize);
 
   /// Handle edge case: last worker's iterations may exceed totalIterations
   /// remaining = max(0, totalIterations - workerFirstIteration)
@@ -566,7 +548,7 @@ void LoopInfo::recomputeWorkerBoundsInside(Value workerId,
   collectWithDeps(upperBound);
   collectWithDeps(lowerBound);
   collectWithDeps(loopStep);
-  collectWithDeps(chunkSize);
+  collectWithDeps(blockSize);
 
   IRMapping boundsMapper;
   cloneExternalValues(boundsToClone, currentRegion, boundsMapper,
@@ -575,7 +557,7 @@ void LoopInfo::recomputeWorkerBoundsInside(Value workerId,
   Value localUpperBound = boundsMapper.lookupOrDefault(upperBound);
   Value localLowerBound = boundsMapper.lookupOrDefault(lowerBound);
   Value localLoopStep = boundsMapper.lookupOrDefault(loopStep);
-  Value localChunkSize = boundsMapper.lookupOrDefault(chunkSize);
+  Value localBlockSize = boundsMapper.lookupOrDefault(blockSize);
 
   /// totalIterations = ceil((upper - lower) / step)
   Value range =
@@ -585,12 +567,12 @@ void LoopInfo::recomputeWorkerBoundsInside(Value workerId,
   Value localTotalIterations =
       AC->create<arith::DivUIOp>(loc, adjustedRange, localLoopStep);
 
-  /// totalChunks = ceil(totalIterations / chunkSize)
+  /// totalChunks = ceil(totalIterations / blockSize)
   Value adjustedIterations = AC->create<arith::AddIOp>(
       loc, localTotalIterations,
-      AC->create<arith::SubIOp>(loc, localChunkSize, oneIndex));
+      AC->create<arith::SubIOp>(loc, localBlockSize, oneIndex));
   Value localTotalChunks =
-      AC->create<arith::DivUIOp>(loc, adjustedIterations, localChunkSize);
+      AC->create<arith::DivUIOp>(loc, adjustedIterations, localBlockSize);
 
   /// chunksPerWorkerCeil = ceil(totalChunks / totalWorkers)
   Value workersMinusOne =
@@ -603,22 +585,13 @@ void LoopInfo::recomputeWorkerBoundsInside(Value workerId,
   Value workerFirstChunkIdx =
       AC->create<arith::MulIOp>(loc, workerIdIndex, chunksPerWorkerCeil);
 
-  /// Handle workers beyond totalChunks
-  Value needZeroChunks = AC->create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::uge, workerFirstChunkIdx, localTotalChunks);
-  Value remainingChunks =
-      AC->create<arith::SubIOp>(loc, localTotalChunks, workerFirstChunkIdx);
-  Value remainingChunksNonNeg = AC->create<arith::SelectOp>(
-      loc, needZeroChunks, zeroIndex, remainingChunks);
-  Value workerChunkCount = AC->create<arith::MinUIOp>(loc, chunksPerWorkerCeil,
-                                                      remainingChunksNonNeg);
-
   /// Convert chunks to iterations
   workerFirstChunk =
-      AC->create<arith::MulIOp>(loc, workerFirstChunkIdx, localChunkSize);
+      AC->create<arith::MulIOp>(loc, workerFirstChunkIdx, localBlockSize);
 
-  Value workerMaxIterations =
-      AC->create<arith::MulIOp>(loc, workerChunkCount, localChunkSize);
+  /// workerMaxIterations (hint) = chunksPerWorkerCeil * blockSize
+  workerMaxIterations =
+      AC->create<arith::MulIOp>(loc, chunksPerWorkerCeil, localBlockSize);
 
   /// Handle last worker overflow
   Value needZeroIters = AC->create<arith::CmpIOp>(
@@ -901,9 +874,7 @@ void ForLoweringPass::cloneLoopBody(ArtsCodegen *AC, ForOp forOp,
                     << " operations into chunk loop");
 }
 
-///===----------------------------------------------------------------------===///
 /// Reduction Support Implementation
-///===----------------------------------------------------------------------===///
 /// Allocate reduction DBs outside parallel EDT:
 /// For each reduction variable:
 /// 1. Reuse the existing reduction result DB if available (fallback allocates
@@ -1047,8 +1018,12 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
       /// EDTs
       if (!splitMode) {
         auto finalDepAcqOp = AC->create<DbAcquireOp>(
-            loc, ArtsMode::inout, finalGuid, finalPtr, finalPtr.getType(),
-            ValueRange{}, ValueRange{}, ValueRange{});
+            loc, ArtsMode::inout, finalGuid, finalPtr, PartitionMode::coarse,
+            /*indices=*/SmallVector<Value>{}, /*offsets=*/SmallVector<Value>{},
+            /*sizes=*/SmallVector<Value>{},
+            /*partition_indices=*/SmallVector<Value>{},
+            /*partition_offsets=*/SmallVector<Value>{},
+            /*partition_sizes=*/SmallVector<Value>{});
         Value finalDepPtr = finalDepAcqOp.getPtr();
         parallelEdt.appendDependency(finalDepPtr);
         BlockArgument finalPtrArg =
@@ -1104,8 +1079,12 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
       SmallVector<Value> partialOffsets{zeroIndex};
       SmallVector<Value> partialSizes{numWorkers};
       auto depAcqOp = AC->create<DbAcquireOp>(
-          loc, ArtsMode::inout, partialGuid, partialPtr, partialPtr.getType(),
-          ValueRange{}, partialOffsets, partialSizes);
+          loc, ArtsMode::inout, partialGuid, partialPtr, PartitionMode::coarse,
+          /*indices=*/SmallVector<Value>{}, /*offsets=*/partialOffsets,
+          /*sizes=*/partialSizes,
+          /*partition_indices=*/SmallVector<Value>{},
+          /*partition_offsets=*/SmallVector<Value>{},
+          /*partition_sizes=*/SmallVector<Value>{});
       Value depPtr = depAcqOp.getPtr();
       parallelEdt.appendDependency(depPtr);
       BlockArgument partialPtrArg =
@@ -1123,9 +1102,7 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
   return redInfo;
 }
 
-///===----------------------------------------------------------------------===///
 /// Create result EDT to combine partial accumulators into final result.
-///===----------------------------------------------------------------------===///
 void ForLoweringPass::createResultEdt(ArtsCodegen *AC, EdtOp parallelEdt,
                                       ReductionInfo &redInfo, Location loc) {
   OpBuilder::InsertionGuard IG(AC->getBuilder());
@@ -1164,8 +1141,12 @@ void ForLoweringPass::createResultEdt(ArtsCodegen *AC, EdtOp parallelEdt,
     /// Acquire entire partial accumulator array with <in> mode (read-only)
     /// Source directly from DbAllocOp (partialGuid, partialPtr)
     auto acqOp = AC->create<DbAcquireOp>(
-        loc, ArtsMode::in, partialGuid, partialPtr, partialPtr.getType(),
-        SmallVector<Value>{}, partialOffsets, partialSizes);
+        loc, ArtsMode::in, partialGuid, partialPtr, PartitionMode::coarse,
+        /*indices=*/SmallVector<Value>{}, /*offsets=*/partialOffsets,
+        /*sizes=*/partialSizes,
+        /*partition_indices=*/SmallVector<Value>{},
+        /*partition_offsets=*/SmallVector<Value>{},
+        /*partition_sizes=*/SmallVector<Value>{});
 
     partialAcqPtrs.push_back(acqOp.getResult(1));
   }
@@ -1194,8 +1175,12 @@ void ForLoweringPass::createResultEdt(ArtsCodegen *AC, EdtOp parallelEdt,
     /// The result EDT will store the combined value, no need to read it first
     /// Source directly from DbAllocOp (finalGuid, finalPtr)
     auto acqOp = AC->create<DbAcquireOp>(
-        loc, ArtsMode::out, finalGuid, finalPtr, finalPtr.getType(),
-        SmallVector<Value>{}, finalOffsets, finalSizes);
+        loc, ArtsMode::out, finalGuid, finalPtr, PartitionMode::coarse,
+        /*indices=*/SmallVector<Value>{}, /*offsets=*/finalOffsets,
+        /*sizes=*/finalSizes,
+        /*partition_indices=*/SmallVector<Value>{},
+        /*partition_offsets=*/SmallVector<Value>{},
+        /*partition_sizes=*/SmallVector<Value>{});
 
     finalResultAcqPtrs.push_back(acqOp.getResult(1));
   }
@@ -1375,7 +1360,6 @@ void ForLoweringPass::createResultEdt(ArtsCodegen *AC, EdtOp parallelEdt,
 ///===----------------------------------------------------------------------===///
 // Parallel Region Splitting Implementation
 ///===----------------------------------------------------------------------===///
-
 void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
                                              EdtOp originalParallel,
                                              ParallelRegionAnalysis &analysis,
@@ -1534,14 +1518,24 @@ EdtOp ForLoweringPass::createContinuationParallel(
     Type ptrType = origAcq ? origAcq.getPtr().getType() : rootPtr.getType();
 
     /// Create NEW acquire directly from DbAllocOp
+    /// Preserve partition_mode and partition hints from original acquire if
+    /// present
     auto newAcq = AC.create<DbAcquireOp>(
         loc, mode, rootGuid, rootPtr, ptrType,
+        origAcq ? origAcq.getPartitionMode() : std::nullopt,
         origAcq ? SmallVector<Value>(origAcq.getIndices())
                 : SmallVector<Value>{},
         origAcq ? SmallVector<Value>(origAcq.getOffsets())
                 : SmallVector<Value>{},
-        origAcq ? SmallVector<Value>(origAcq.getSizes())
+        origAcq ? SmallVector<Value>(origAcq.getSizes()) : SmallVector<Value>{},
+        origAcq ? SmallVector<Value>(origAcq.getPartitionIndices())
+                : SmallVector<Value>{},
+        origAcq ? SmallVector<Value>(origAcq.getPartitionOffsets())
+                : SmallVector<Value>{},
+        origAcq ? SmallVector<Value>(origAcq.getPartitionSizes())
                 : SmallVector<Value>{});
+    if (origAcq)
+      newAcq.copyPartitionSegmentsFrom(origAcq);
 
     newDeps.push_back(newAcq.getPtr());
     origArgIndices.push_back(idx);
@@ -1647,15 +1641,16 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
     /// Acquire the worker's slice of the partial accumulator array
     /// Source directly from DbAllocOp (partialGuid, partialPtr)
+    /// Use chunked partition mode since we're acquiring by worker offset
+    /// offsets=[workerId] and sizes=[1] to get this worker's slot
     auto partialAcqOp = AC->create<DbAcquireOp>(
         loc, ArtsMode::inout, partialGuid, partialPtr, innerMemrefType,
-        SmallVector<Value>{}, SmallVector<Value>{workerIdPlaceholder},
-        SmallVector<Value>{one},
-        /*chunkIndex=*/workerIdPlaceholder,
-        /*chunkSize=*/one);
-
-    /// When adding offset/size hints, set partition mode to chunked.
-    setPartitionMode(partialAcqOp.getOperation(), PartitionMode::chunked);
+        PartitionMode::block, /*indices=*/SmallVector<Value>{},
+        /*offsets=*/SmallVector<Value>{workerIdPlaceholder},
+        /*sizes=*/SmallVector<Value>{one},
+        /*partition_indices=*/SmallVector<Value>{},
+        /*partition_offsets=*/SmallVector<Value>{},
+        /*partition_sizes=*/SmallVector<Value>{});
 
     reductionTaskDeps.push_back(partialAcqOp.getResult(1));
     reductionVarIndex[redInfo.reductionVars[i]] = i;
@@ -1687,41 +1682,97 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     }
     auto [rootGuid, rootPtr] = *allocInfo;
 
-    /// Get offsets/sizes from parent acquire for hints
-    SmallVector<Value> chunkOffsets =
-        DatablockUtils::getOffsetsFromDb(parentDep);
-    SmallVector<Value> chunkSizes = DatablockUtils::getSizesFromDb(parentDep);
-    if (chunkOffsets.empty())
-      chunkOffsets.push_back(AC->createIndexConstant(0, loc));
-    if (chunkSizes.empty())
-      chunkSizes.push_back(AC->createIndexConstant(1, loc));
+    /// Check if parent acquire already has partition hints (from CreateDbs via
+    /// DbControlOp). If hints exist, the user provided explicit partitioning,
+    /// so ForLowering RESPECTS the user's intent and does NOT override.
+    bool parentHasPartitionInfo = parentAcqOp.hasExplicitPartitionHints();
 
-    /// Create acquire directly from DbAllocOp with chunk hints.
-    /// chunk_index = chunkOffset, chunk_size = workerIterationCount * step
-    Value chunkIndex = chunkOffset;
-    Value chunkSizeVal = loopInfo.workerIterationCount;
-    if (!forOp.getStep().empty()) {
-      Value step = forOp.getStep()[0];
-      int64_t stepVal;
-      if (!ValueUtils::getConstantIndex(step, stepVal) || stepVal != 1) {
-        chunkSizeVal =
-            AC->create<arith::MulIOp>(loc, loopInfo.workerIterationCount, step);
+    DbAcquireOp chunkAcqOp;
+
+    if (parentHasPartitionInfo) {
+      /// USER HINT EXISTS - ForLowering RESPECTS it!
+      /// Use parent's partition mode and operands (from DbControlOp via
+      /// CreateDbs)
+      /// ═══════════════════════════════════════════════════════════════════════
+      ARTS_DEBUG("    - Respecting existing DbControlOp hint on allocation");
+
+      /// Reuse the parent acquire's partitioning clause which came from
+      /// CreateDbs
+      auto parentPartMode = parentAcqOp.getPartitionMode();
+      SmallVector<Value> parentIndices(parentAcqOp.getIndices().begin(),
+                                       parentAcqOp.getIndices().end());
+      SmallVector<Value> parentOffsets(parentAcqOp.getOffsets().begin(),
+                                       parentAcqOp.getOffsets().end());
+      SmallVector<Value> parentSizes(parentAcqOp.getSizes().begin(),
+                                     parentAcqOp.getSizes().end());
+
+      SmallVector<Value> parentPartIndices(
+          parentAcqOp.getPartitionIndices().begin(),
+          parentAcqOp.getPartitionIndices().end());
+      SmallVector<Value> parentPartOffsets(
+          parentAcqOp.getPartitionOffsets().begin(),
+          parentAcqOp.getPartitionOffsets().end());
+      SmallVector<Value> parentPartSizes(
+          parentAcqOp.getPartitionSizes().begin(),
+          parentAcqOp.getPartitionSizes().end());
+      chunkAcqOp = AC->create<DbAcquireOp>(
+          loc, parentAcqOp.getMode(), rootGuid, rootPtr,
+          parentAcqOp.getPtr().getType(),
+          parentPartMode.value_or(PartitionMode::coarse), parentIndices,
+          parentOffsets, parentSizes, parentPartIndices, parentPartOffsets,
+          parentPartSizes);
+      chunkAcqOp.copyPartitionSegmentsFrom(parentAcqOp);
+
+    } else {
+      /// ═══════════════════════════════════════════════════════════════════════
+      /// NO USER HINT - ForLowering sets chunked partitioning for workers
+      /// ═══════════════════════════════════════════════════════════════════════
+      ARTS_DEBUG("    - No DbControlOp hint, using ForLowering chunked mode");
+
+      /// Get offsets/sizes from parent acquire for hints
+      SmallVector<Value> chunkOffsets =
+          DatablockUtils::getOffsetsFromDb(parentDep);
+      SmallVector<Value> blockSizes = DatablockUtils::getSizesFromDb(parentDep);
+      if (chunkOffsets.empty())
+        chunkOffsets.push_back(AC->createIndexConstant(0, loc));
+      if (blockSizes.empty())
+        blockSizes.push_back(AC->createIndexConstant(1, loc));
+
+      /// Compute worker chunk offset and size
+      /// workerOffset = chunkOffset (from loop partitioning)
+      /// workerSize = workerIterationCount * step
+      SmallVector<Value> workerOffsets = {chunkOffset};
+      Value workerSizeVal = loopInfo.workerIterationCount;
+      Value workerHintSizeVal = loopInfo.workerMaxIterations
+                                    ? loopInfo.workerMaxIterations
+                                    : workerSizeVal;
+      if (!forOp.getStep().empty()) {
+        Value step = forOp.getStep()[0];
+        int64_t stepVal;
+        if (!ValueUtils::getConstantIndex(step, stepVal) || stepVal != 1) {
+          workerSizeVal = AC->create<arith::MulIOp>(
+              loc, loopInfo.workerIterationCount, step);
+          workerHintSizeVal =
+              AC->create<arith::MulIOp>(loc, workerHintSizeVal, step);
+        }
       }
-    }
-    auto chunkAcqOp = AC->create<DbAcquireOp>(
-        loc, parentAcqOp.getMode(),
-        rootGuid, /// From DbAllocOp
-        rootPtr,  /// From DbAllocOp
-        parentAcqOp.getPtr().getType(),
-        SmallVector<Value>(parentAcqOp.getIndices().begin(),
-                           parentAcqOp.getIndices().end()),
-        chunkOffsets, chunkSizes,
-        /*chunkIndex=*/chunkIndex,
-        /*chunkSize=*/chunkSizeVal);
+      SmallVector<Value> workerSizes = {workerSizeVal};
+      SmallVector<Value> workerHintSizes = {workerHintSizeVal};
 
-    /// When adding offset/size hints, set partition mode to chunked.
-    /// This signals to DbPartitioning that this acquire has chunked structure.
-    setPartitionMode(chunkAcqOp.getOperation(), PartitionMode::chunked);
+      /// Create chunked acquire with unified offsets/sizes (no deprecated
+      /// chunk_index/chunk_size)
+      chunkAcqOp = AC->create<DbAcquireOp>(
+          loc, parentAcqOp.getMode(), rootGuid, rootPtr,
+          parentAcqOp.getPtr().getType(), PartitionMode::block,
+          /*indices=*/
+          SmallVector<Value>(parentAcqOp.getIndices().begin(),
+                             parentAcqOp.getIndices().end()),
+          /*offsets=*/workerOffsets,
+          /*sizes=*/workerSizes,
+          /*partition_indices=*/SmallVector<Value>{},
+          /*partition_offsets=*/workerOffsets,
+          /*partition_sizes=*/workerHintSizes);
+    }
 
     Value acquirePtr = chunkAcqOp.getResult(1);
 

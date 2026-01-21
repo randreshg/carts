@@ -22,7 +22,6 @@ static bool rebaseAcquireToElementWiseCopy(DbAcquireOp acquire,
   if (!blockArg)
     return false;
 
-  /// Determine element type from users or allocation
   Type targetType;
   for (Operation *user : blockArg.getUsers()) {
     if (auto ref = dyn_cast<DbRefOp>(user)) {
@@ -47,7 +46,10 @@ static bool rebaseAcquireToElementWiseCopy(DbAcquireOp acquire,
       innerRank = inner.getRank();
   }
 
-  DbElementWiseIndexer indexer(elemOffset, elemSize, outerRank, innerRank,
+  SmallVector<Value> elemOffsets;
+  if (elemOffset)
+    elemOffsets.push_back(elemOffset);
+  DbElementWiseIndexer indexer(elemOffsets, outerRank, innerRank,
                                oldElementSizes);
 
   SmallVector<Operation *> users(blockArg.getUsers().begin(),
@@ -74,7 +76,6 @@ void DbVersionedRewriter::apply(
   if (!allocOp || versionedAcquires.empty())
     return;
 
-  /// Only handle rank-1 copies for now.
   if (allocOp.getElementSizes().size() != 1 || allocOp.getSizes().size() != 1)
     return;
 
@@ -113,15 +114,14 @@ void DbVersionedRewriter::apply(
 
     builder.setInsertionPoint(acqOp);
 
-    /// Use chunk hints from VersionedAcquireInfo or fall back to offsets/sizes
     SmallVector<Value> offsets, sizes;
     if (info.chunkIndex)
       offsets.push_back(info.chunkIndex);
     else
       offsets.assign(acqOp.getOffsets().begin(), acqOp.getOffsets().end());
 
-    if (info.chunkSize)
-      sizes.push_back(info.chunkSize);
+    if (info.blockSize)
+      sizes.push_back(info.blockSize);
     else
       sizes.assign(acqOp.getSizes().begin(), acqOp.getSizes().end());
 
@@ -142,10 +142,6 @@ void DbVersionedRewriter::apply(
       acqOp.getOffsetsMutable().assign(fullOffsets);
     if (!fullSizes.empty())
       acqOp.getSizesMutable().assign(fullSizes);
-
-    /// Clear chunk hints since we're using versioned copy
-    acqOp.getChunkIndexMutable().clear();
-    acqOp.getChunkSizeMutable().clear();
 
     MemRefType newPtrType = copyOp.getPtr().getType().cast<MemRefType>();
     Type oldAcqPtrType = acqOp.getPtr().getType();

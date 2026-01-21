@@ -22,34 +22,52 @@
 #include "llvm/ADT/DenseMapInfo.h"
 #include <optional>
 
-///===----------------------------------------------------------------------===///
-// Arts Dialect
-///===----------------------------------------------------------------------===///
+/// Arts Dialect
 #include "arts/ArtsOpsDialect.h.inc"
 
 bool isArtsRegion(mlir::Operation *op);
 bool isArtsOp(mlir::Operation *op);
 
-///===----------------------------------------------------------------------===///
-// Arts Dialect Types
-///===----------------------------------------------------------------------===///
+/// Arts Dialect Types
 #define GET_TYPEDEF_CLASSES
 #include "arts/ArtsOpsTypes.h.inc"
 
-///===----------------------------------------------------------------------===///
-// Arts Dialect Enums
-///===----------------------------------------------------------------------===///
+/// Arts Dialect Enums
 #include "arts/ArtsOpsEnums.h.inc"
 
-///===----------------------------------------------------------------------===///
-// Arts Dialect Attributes
-///===----------------------------------------------------------------------===///
+namespace mlir {
+namespace arts {
+
+/// Information about a single partition entry.
+struct PartitionInfo {
+  PartitionMode mode = PartitionMode::coarse;
+  SmallVector<Value, 4> indices; /// For fine_grained: [%i, %j]
+  SmallVector<Value, 4> offsets; /// For chunked/stencil
+  SmallVector<Value, 4> sizes;   /// For chunked/stencil
+
+  /// Number of partition dimensions
+  unsigned dimCount() const {
+    if (!indices.empty())
+      return indices.size();
+    if (!offsets.empty())
+      return offsets.size();
+    return 0;
+  }
+
+  bool isFineGrained() const { return mode == PartitionMode::fine_grained; }
+  bool isBlock() const { return mode == PartitionMode::block; }
+  bool isStencil() const { return mode == PartitionMode::stencil; }
+  bool isCoarse() const { return mode == PartitionMode::coarse; }
+};
+
+} // namespace arts
+} // namespace mlir
+
+/// Arts Dialect Attributes
 #define GET_ATTRDEF_CLASSES
 #include "arts/ArtsOpsAttributes.h.inc"
 
-///===----------------------------------------------------------------------===///
-// Arts Dialect Operations
-///===----------------------------------------------------------------------===///
+/// Arts Dialect Operations
 #define GET_OP_CLASSES
 #include "arts/ArtsOps.h.inc"
 

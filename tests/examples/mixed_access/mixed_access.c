@@ -63,9 +63,9 @@ static void compute_parallel(int numNodes, int numElems, double *nodeData,
   for (int i = 0; i < numNodes; i++)
     nodeData[i] = (double)(i * i) * 0.01;
 
-  /// Phase 2: Element-parallel computation - INDIRECT access
-  /// Each element reads scattered nodes via nodelist indirection
-  /// Workers acquire full-range (all chunks) for indirect access
+    /// Phase 2: Element-parallel computation - INDIRECT access
+    /// Each element reads scattered nodes via nodelist indirection
+    /// Workers acquire full-range (all chunks) for indirect access
 #pragma omp parallel for
   for (int e = 0; e < numElems; e++) {
     double sum = 0.0;

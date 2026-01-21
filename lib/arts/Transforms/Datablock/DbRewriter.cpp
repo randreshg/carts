@@ -6,9 +6,9 @@
 ///==========================================================================///
 
 #include "arts/Transforms/Datablock/DbRewriter.h"
-#include "arts/Analysis/HeuristicsConfig.h"
-#include "arts/Transforms/Datablock/Chunked/DbChunkedIndexer.h"
-#include "arts/Transforms/Datablock/Chunked/DbChunkedRewriter.h"
+#include "arts/Analysis/ArtsHeuristics.h"
+#include "arts/Transforms/Datablock/Block/DbBlockIndexer.h"
+#include "arts/Transforms/Datablock/Block/DbBlockRewriter.h"
 #include "arts/Transforms/Datablock/ElementWise/DbElementWiseIndexer.h"
 #include "arts/Transforms/Datablock/ElementWise/DbElementWiseRewriter.h"
 #include "arts/Transforms/Datablock/Stencil/DbStencilIndexer.h"
@@ -28,16 +28,12 @@ ARTS_DEBUG_SETUP(db_transforms);
 using namespace mlir;
 using namespace mlir::arts;
 
-///===----------------------------------------------------------------------===///
 /// DbRewritePlan constructor from PartitioningDecision
-///===----------------------------------------------------------------------===///
 DbRewritePlan::DbRewritePlan(const PartitioningDecision &decision)
     : mode(decision.mode), outerRank(decision.outerRank),
       innerRank(decision.innerRank) {}
 
-///===----------------------------------------------------------------------===///
 /// DbRewriter - Abstract Base Class
-///===----------------------------------------------------------------------===///
 
 DbRewriter::DbRewriter(DbAllocOp oldAlloc, ValueRange newOuterSizes,
                        ValueRange newInnerSizes,
@@ -46,38 +42,35 @@ DbRewriter::DbRewriter(DbAllocOp oldAlloc, ValueRange newOuterSizes,
     : oldAlloc(oldAlloc), newOuterSizes(newOuterSizes),
       newInnerSizes(newInnerSizes), acquires(acquires), plan(plan) {}
 
-///===----------------------------------------------------------------------===///
 /// Factory Method - Creates appropriate subclass based on mode
-///===----------------------------------------------------------------------===///
 
 std::unique_ptr<DbRewriter> DbRewriter::create(
     DbAllocOp oldAlloc, ValueRange newOuterSizes, ValueRange newInnerSizes,
     ArrayRef<DbRewriteAcquire> acquires, const DbRewritePlan &plan) {
-  ARTS_DEBUG("DbRewriter::create mode=" << getRewriterModeName(plan.mode));
+  ARTS_DEBUG("DbRewriter::create mode=" << getPartitionModeName(plan.mode));
 
   switch (plan.mode) {
-  case RewriterMode::ElementWise:
+  case PartitionMode::fine_grained:
+  case PartitionMode::coarse:
     return std::make_unique<DbElementWiseRewriter>(
         oldAlloc, newOuterSizes, newInnerSizes, acquires, plan);
 
-  case RewriterMode::Chunked:
-    return std::make_unique<DbChunkedRewriter>(oldAlloc, newOuterSizes,
-                                               newInnerSizes, acquires, plan);
+  case PartitionMode::block:
+    return std::make_unique<DbBlockRewriter>(oldAlloc, newOuterSizes,
+                                             newInnerSizes, acquires, plan);
 
-  case RewriterMode::Stencil:
+  case PartitionMode::stencil:
     return std::make_unique<DbStencilRewriter>(oldAlloc, newOuterSizes,
                                                newInnerSizes, acquires, plan);
   }
 
-  ARTS_UNREACHABLE("Unknown RewriterMode");
+  ARTS_UNREACHABLE("Unknown PartitionMode");
 }
 
-///===----------------------------------------------------------------------===///
 /// Template Method - Shared workflow for all modes
-///===----------------------------------------------------------------------===///
 
 FailureOr<DbAllocOp> DbRewriter::apply(OpBuilder &builder) {
-  ARTS_DEBUG("DbRewriter::apply - mode=" << getRewriterModeName(plan.mode)
+  ARTS_DEBUG("DbRewriter::apply - mode=" << getPartitionModeName(plan.mode)
                                          << ", acquires=" << acquires.size());
 
   if (!oldAlloc)
@@ -96,7 +89,7 @@ FailureOr<DbAllocOp> DbRewriter::apply(OpBuilder &builder) {
       newOuterSizes, newInnerSizes, partitionMode);
 
   /// 2. Transfer metadata/attributes from old to new allocation
-  transferAttributes(oldAlloc, newAlloc, {"arts.partition"});
+  transferAttributes(oldAlloc, newAlloc, {AttrNames::Operation::PartitionMode});
 
   /// 3. Rewrite all acquires with their partition info (virtual dispatch)
   for (const auto &info : acquires)
@@ -142,31 +135,31 @@ FailureOr<DbAllocOp> DbRewriter::apply(OpBuilder &builder) {
   return newAlloc;
 }
 
-///===----------------------------------------------------------------------===///
 /// Indexer Factory Methods - Used by subclasses for index localization
-///===----------------------------------------------------------------------===///
 std::unique_ptr<DbIndexerBase>
-DbRewriter::createElementWiseIndexer(Value elemOffset, Value elemSize,
+DbRewriter::createElementWiseIndexer(ArrayRef<Value> elemOffsets,
                                      unsigned outerRank, unsigned innerRank,
                                      ValueRange oldElementSizes) {
-  ARTS_DEBUG("  ElementWise indexer: outerRank=" << outerRank << ", innerRank="
-                                                 << innerRank);
-  return std::make_unique<DbElementWiseIndexer>(elemOffset, elemSize, outerRank,
+  ARTS_DEBUG("  ElementWise indexer: outerRank="
+             << outerRank << ", innerRank=" << innerRank
+             << ", offsetDims=" << elemOffsets.size());
+  return std::make_unique<DbElementWiseIndexer>(elemOffsets, outerRank,
                                                 innerRank, oldElementSizes);
 }
 
 std::unique_ptr<DbIndexerBase>
-DbRewriter::createChunkedIndexer(Value chunkSize, Value startChunk,
-                                 Value elemOffset, unsigned outerRank,
-                                 unsigned innerRank) {
-  ARTS_DEBUG("  Chunked indexer: outerRank=" << outerRank
-                                             << ", innerRank=" << innerRank);
-  return std::make_unique<DbChunkedIndexer>(chunkSize, startChunk, elemOffset,
-                                            outerRank, innerRank);
+DbRewriter::createBlockIndexer(ArrayRef<Value> blockSizes,
+                               ArrayRef<Value> startBlocks, unsigned outerRank,
+                               unsigned innerRank) {
+  ARTS_DEBUG("  Block indexer: outerRank="
+             << outerRank << ", innerRank=" << innerRank
+             << ", nPartDims=" << blockSizes.size());
+  return std::make_unique<DbBlockIndexer>(blockSizes, startBlocks, outerRank,
+                                          innerRank);
 }
 
 std::unique_ptr<DbIndexerBase> DbRewriter::createStencilIndexer(
-    const StencilInfo &info, Value chunkSize, Value elemOffset,
+    const StencilInfo &info, Value blockSize, Value elemOffset,
     unsigned outerRank, unsigned innerRank, Value ownedArg, Value leftHaloArg,
     Value rightHaloArg, OpBuilder &builder, Location loc) {
   /// Create halo values from StencilInfo
@@ -177,35 +170,56 @@ std::unique_ptr<DbIndexerBase> DbRewriter::createStencilIndexer(
                                             << info.haloRight);
 
   return std::make_unique<DbStencilIndexer>(
-      haloLeft, haloRight, chunkSize, outerRank, innerRank, elemOffset,
+      haloLeft, haloRight, blockSize, outerRank, innerRank, elemOffset,
       ownedArg, leftHaloArg, rightHaloArg);
 }
 
 std::unique_ptr<DbIndexerBase>
-DbRewriter::createIndexer(const DbRewritePlan &plan, Value startChunk,
+DbRewriter::createIndexer(const DbRewritePlan &plan, Value startBlock,
                           Value elemOffset, Value elemSize, unsigned outerRank,
                           unsigned innerRank, ValueRange oldElementSizes,
                           OpBuilder &builder, Location loc, Value ownedArg,
                           Value leftHaloArg, Value rightHaloArg) {
 
   ARTS_DEBUG(
-      "DbRewriter::createIndexer mode=" << getRewriterModeName(plan.mode));
+      "DbRewriter::createIndexer mode=" << getPartitionModeName(plan.mode));
 
   switch (plan.mode) {
-  case RewriterMode::ElementWise:
-    return createElementWiseIndexer(elemOffset, elemSize, outerRank, innerRank,
+  case PartitionMode::fine_grained:
+  case PartitionMode::coarse: {
+    /// For backward compatibility, wrap single elemOffset in array
+    SmallVector<Value> elemOffsets;
+    if (elemOffset)
+      elemOffsets.push_back(elemOffset);
+    return createElementWiseIndexer(elemOffsets, outerRank, innerRank,
                                     oldElementSizes);
+  }
 
-  case RewriterMode::Chunked:
-    return createChunkedIndexer(plan.chunkSize, startChunk, elemOffset,
-                                outerRank, innerRank);
+  case PartitionMode::block: {
+    /// Build blockSizes and startBlocks vectors
+    /// For N-D partitioning, use plan.blockSizes; for 1D, wrap single value
+    SmallVector<Value> blockSizes = plan.blockSizes;
+    if (blockSizes.empty() && plan.blockSize)
+      blockSizes.push_back(plan.blockSize);
 
-  case RewriterMode::Stencil:
+    /// Compute startBlocks from elemOffset and blockSizes
+    SmallVector<Value> startBlocks;
+    if (startBlock)
+      startBlocks.push_back(startBlock);
+    else if (!blockSizes.empty()) {
+      /// Create zero start block if no explicit startBlock provided
+      startBlocks.resize(blockSizes.size());
+    }
+
+    return createBlockIndexer(blockSizes, startBlocks, outerRank, innerRank);
+  }
+
+  case PartitionMode::stencil:
     assert(plan.stencilInfo && "Stencil mode requires stencil info");
-    return createStencilIndexer(*plan.stencilInfo, plan.chunkSize, elemOffset,
+    return createStencilIndexer(*plan.stencilInfo, plan.blockSize, elemOffset,
                                 outerRank, innerRank, ownedArg, leftHaloArg,
                                 rightHaloArg, builder, loc);
   }
 
-  ARTS_UNREACHABLE("Unknown RewriterMode");
+  ARTS_UNREACHABLE("Unknown PartitionMode");
 }

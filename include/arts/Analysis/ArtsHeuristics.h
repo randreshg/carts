@@ -1,17 +1,17 @@
 ///==========================================================================///
-/// File: HeuristicsConfig.h
+/// File: ArtsHeuristics.h
 ///
 /// Compile-time heuristics for the CARTS compiler.
 ///
 /// Heuristic Families:
-///   H1: Partitioning - Decide coarse/chunked/element-wise allocation
+///   H1: Partitioning - Decide coarse/block/element-wise allocation
 ///   H2: Twin-Diff    - Decide when twin-diff can be disabled
 ///
 /// H1 Partitioning Heuristics (evaluated in priority order):
 ///   H1.1: Read-only single-node -> coarse
-///   H1.2: Mixed access (chunked writes + indirect reads) -> chunked
+///   H1.2: Mixed access (block writes + indirect reads) -> block
 ///   H1.3: Stencil/indexed patterns -> stencil or element-wise
-///   H1.4: Uniform direct access -> chunked
+///   H1.4: Uniform direct access -> block
 ///   H1.5: Multi-node -> fine-grained for network efficiency
 ///   H1.6: Non-uniform access -> coarse
 ///
@@ -23,17 +23,20 @@
 /// separate guidelines for distributed optimization, not implemented here.
 ///==========================================================================///
 
-#ifndef ARTS_ANALYSIS_HEURISTICSCONFIG_H
-#define ARTS_ANALYSIS_HEURISTICSCONFIG_H
+#ifndef ARTS_ANALYSIS_ARTSHEURISTICS_H
+#define ARTS_ANALYSIS_ARTSHEURISTICS_H
 
 #include "arts/Analysis/Graphs/Db/DbAccessPattern.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Transforms/Datablock/DbRewriter.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Value.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/JSON.h"
+#include <climits>
 #include <optional>
 #include <string>
 
@@ -55,9 +58,13 @@ class IdRegistry;
 /// Per-acquire info for heuristic voting.
 struct AcquireInfo {
   ArtsMode accessMode = ArtsMode::uninitialized;
+  PartitionMode partitionMode = PartitionMode::coarse;
   bool canElementWise = false;
-  bool canChunked = false;
-  unsigned pinnedDimCount = 0;
+  bool canBlock = false;
+
+  /// Unified partition infos from DbAcquireOp::getPartitionInfos()
+  /// One entry per depend clause entry on this acquire.
+  SmallVector<PartitionInfo> partitionInfos;
 };
 
 /// Context for partitioning decisions
@@ -65,10 +72,10 @@ struct PartitioningContext {
   const ArtsAbstractMachine *machine = nullptr;
 
   /// DB partitioning capabilities
-  bool canElementWise = false, canChunked = false;
+  bool canElementWise = false, canBlock = false;
   unsigned pinnedDimCount = 0;
   ArtsMode accessMode = ArtsMode::uninitialized;
-  std::optional<int64_t> totalElements, chunkSize, depsPerEDT;
+  std::optional<int64_t> totalElements, blockSize, depsPerEDT;
   bool isUniformAccess = false;
   AcquirePatternSummary accessPatterns;
   bool hasIndirectAccess = false, hasIndirectRead = false;
@@ -101,31 +108,48 @@ struct PartitioningContext {
                         [](const AcquireInfo &a) { return a.canElementWise; });
   }
 
-  /// Returns true if any acquire can use chunked partitioning.
-  bool anyCanChunked() const {
+  /// Returns true if any acquire can use block partitioning.
+  bool anyCanBlock() const {
     return llvm::any_of(acquires,
-                        [](const AcquireInfo &a) { return a.canChunked; });
+                        [](const AcquireInfo &a) { return a.canBlock; });
   }
 
-  /// Returns the maximum pinnedDimCount across all acquires.
+  /// Returns the maximum partition dimension count across all acquires.
+  /// Computed from partitionInfos for uniformity analysis in heuristics.
   unsigned maxPinnedDimCount() const {
     unsigned maxVal = 0;
-    for (const auto &a : acquires)
-      maxVal = std::max(maxVal, a.pinnedDimCount);
+    for (const auto &a : acquires) {
+      for (const auto &pinfo : a.partitionInfos) {
+        maxVal = std::max(maxVal, pinfo.dimCount());
+      }
+    }
     return maxVal;
+  }
+
+  /// Returns the minimum partition dimension count across all acquires.
+  unsigned minPinnedDimCount() const {
+    unsigned minVal = UINT_MAX;
+    for (const auto &a : acquires) {
+      for (const auto &pinfo : a.partitionInfos) {
+        unsigned d = pinfo.dimCount();
+        if (d > 0)
+          minVal = std::min(minVal, d);
+      }
+    }
+    return minVal == UINT_MAX ? 0 : minVal;
   }
 };
 
 /// Recommended partitioning strategy
 struct PartitioningDecision {
-  RewriterMode mode = RewriterMode::ElementWise;
+  PartitionMode mode = PartitionMode::fine_grained;
   unsigned outerRank = 0, innerRank = 0;
   std::string rationale;
 
   /// Factory for coarse allocation (single datablock).
   static PartitioningDecision coarse(const PartitioningContext &ctx,
                                      llvm::StringRef reason) {
-    return {RewriterMode::ElementWise, 0, ctx.memrefRank, reason.str()};
+    return {PartitionMode::coarse, 0, ctx.memrefRank, reason.str()};
   }
 
   /// Factory for element-wise partitioning (one DB per element in outer dims).
@@ -134,27 +158,49 @@ struct PartitioningDecision {
                                           llvm::StringRef reason) {
     unsigned inner =
         ctx.memrefRank > outerRank ? ctx.memrefRank - outerRank : 0;
-    return {RewriterMode::ElementWise, outerRank, inner, reason.str()};
+    return {PartitionMode::fine_grained, outerRank, inner, reason.str()};
   }
 
-  /// Factory for chunked partitioning (contiguous chunks along leading dim).
-  static PartitioningDecision chunked(const PartitioningContext &ctx,
-                                      llvm::StringRef reason) {
-    return {RewriterMode::Chunked, 1, ctx.memrefRank, reason.str()};
+  /// Factory for block partitioning (contiguous blocks along leading dim).
+  static PartitioningDecision block(const PartitioningContext &ctx,
+                                    llvm::StringRef reason) {
+    return {PartitionMode::block, 1, ctx.memrefRank, reason.str()};
   }
 
-  /// Factory for stencil mode (chunked + ESD for halo handling).
+  /// Factory for stencil mode (block + ESD for halo handling).
   static PartitioningDecision stencil(const PartitioningContext &ctx,
                                       llvm::StringRef reason) {
     unsigned inner = ctx.memrefRank > 0 ? ctx.memrefRank - 1 : 0;
-    return {RewriterMode::Stencil, 1, inner, reason.str()};
+    return {PartitionMode::stencil, 1, inner, reason.str()};
   }
 
   bool isCoarse() const { return outerRank == 0; }
   bool isFineGrained() const { return outerRank > 0; }
-  bool isChunked() const {
-    return mode == RewriterMode::Chunked || mode == RewriterMode::Stencil;
+  bool isBlock() const {
+    return mode == PartitionMode::block || mode == PartitionMode::stencil;
   }
+};
+
+/// Consolidated structure for partitioning recommendations
+struct PartitioningHint {
+  /// Recommended partitioning mode
+  PartitionMode mode = PartitionMode::coarse;
+
+  /// Block size for block partitioning (optional)
+  std::optional<int64_t> blockSize;
+
+  /// Factory methods
+  static PartitioningHint coarse() { return {}; }
+
+  static PartitioningHint block(std::optional<int64_t> size) {
+    PartitioningHint h;
+    h.mode = PartitionMode::block;
+    h.blockSize = size;
+    return h;
+  }
+
+  DictionaryAttr toAttribute(MLIRContext *ctx) const;
+  static std::optional<PartitioningHint> fromAttribute(Attribute attr);
 };
 
 ///===----------------------------------------------------------------------===///
@@ -210,7 +256,7 @@ public:
   /// Twin-diff heuristic evaluation
   bool shouldUseTwinDiff(const TwinDiffContext &context);
 
-  /// Cost model thresholds for chunked partitioning
+  /// Cost model thresholds for block partitioning
   static constexpr int64_t kMaxOuterDBs = 1024;
   static constexpr int64_t kMaxDepsPerEDT = 8;
   static constexpr int64_t kMinInnerBytes = 64;
@@ -244,4 +290,4 @@ PartitioningDecision evaluatePartitioningHeuristics(
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_ANALYSIS_HEURISTICSCONFIG_H
+#endif // ARTS_ANALYSIS_ARTSHEURISTICS_H

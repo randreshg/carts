@@ -45,7 +45,7 @@ Even in multi-rank, each DB GUID has the same frontier rules as single-rank:
 - only one writer can join a frontier (`frontierAddWriteLock` rejects if `writeSet` is set; `external/arts/core/src/runtime/memory/DbList.c:87`)
 - additional writers for the same GUID are queued in later frontiers and run later (`external/arts/core/src/runtime/memory/DbList.c:268`)
 
-So **coarse-grained DBs can serialize writers per GUID**, while fine/chunked DBs can increase concurrency by reducing “writers per GUID”.
+So **coarse-grained DBs can serialize writers per GUID**, while fine/blocked DBs can increase concurrency by reducing “writers per GUID”.
 
 ---
 
@@ -95,7 +95,7 @@ Multi-rank adds two new forces that single-rank doesn’t have:
 2. **Invalidation fanout**
    - if many ranks hold duplicates of a DB and a writer appears, the owner may invalidate many ranks
 
-So the multi-rank “sweet spot” is often **chunked DBs aligned to partitions**, not per-element DBs.
+So the multi-rank “sweet spot” is often **blocked DBs aligned to partitions**, not per-element DBs.
 
 ---
 
@@ -125,7 +125,7 @@ If a DB is read-only (or read-mostly) across ranks:
 - coarse DB reduces dependency/messaging overhead
 - replication/caching reduces repeated remote acquires
 
-### H4: write-heavy shared DBs should be partitioned (chunked DBs)
+### H4: write-heavy shared DBs should be partitioned (blocked DBs)
 
 If many ranks write disjoint regions of a logical array:
 - representing the whole array as one DB GUID forces:
@@ -133,7 +133,7 @@ If many ranks write disjoint regions of a logical array:
   - high remote update pressure
 
 Prefer:
-- chunked DBs per tile/block, so each rank mainly writes “its” GUIDs.
+- blocked DBs per tile/block, so each rank mainly writes “its” GUIDs.
 
 ### H5: minimize “writers per GUID per phase”
 
@@ -232,6 +232,6 @@ Enable `external/arts/counter.profile-overhead.cfg` and track:
 Then iterate:
 1. Fix ownership hotspots (H1)
 2. Fix EDT placement vs write owners (H2)
-3. Sweep chunk size (H4) and watch message count vs serialization
+3. Sweep block size (H4) and watch message count vs serialization
 4. Tune `twin_diff` using ROI (H6)
 

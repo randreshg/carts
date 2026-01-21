@@ -37,11 +37,14 @@ namespace arts {
 ///                      memrefIdx = remaining dimensions unchanged
 ///   Linearized:        localLinear = globalLinear - (elemOffset * stride)
 class DbElementWiseIndexer : public DbIndexerBase {
-  Value elemOffset, elemSize;
+  /// Multi-dimensional element offsets for fine-grained partitioning.
+  /// For 2D fine-grained (e.g., A[i][j]), stores [%i, %j].
+  SmallVector<Value> elemOffsets;
   SmallVector<Value> oldElementSizes;
 
 public:
-  DbElementWiseIndexer(Value elemOffset, Value elemSize, unsigned outerRank,
+  /// Constructor for multi-dimensional fine-grained partitioning.
+  DbElementWiseIndexer(ArrayRef<Value> elemOffsets, unsigned outerRank,
                        unsigned innerRank, ValueRange oldElementSizes = {});
 
 private:

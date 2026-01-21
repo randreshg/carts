@@ -17,7 +17,7 @@ Memory EDTs solve these problems by making data layout transformations explicit,
 
 ## Scope
 
-- **Initial**: Layout recoding (coarse/chunked/fine-grained) + gather operations
+- **Initial**: Layout recoding (coarse/blocked/fine-grained) + gather operations
 - **Future Extensions**: Streaming, compression, prefetching (extension points provided)
 - **Insertion Mode**: Compiler-inserted with heuristics (future: artsmate-guided)
 
@@ -111,7 +111,7 @@ sum += A[i][k] * B[k][j];  // B[k][j]: column access on row-major layout
 
 ```tablegen
 def MemoryEdtKind : Arts_I32Enum<"MemoryEdtKind", [
-  I32EnumAttrCase<"recode", 0>,    // Layout transformation (coarse↔chunked↔fine)
+  I32EnumAttrCase<"recode", 0>,    // Layout transformation (coarse↔blocked↔fine)
   I32EnumAttrCase<"gather", 1>,    // Indirect gather (LULESH nodelist pattern)
   I32EnumAttrCase<"scatter", 2>,   // Indirect scatter (inverse of gather)
   I32EnumAttrCase<"copy", 3>,      // Simple copy (locality optimization)
@@ -161,7 +161,7 @@ def MemoryEdtOp : Arts_Op<"memory_edt", [...]> {
 ```mlir
 // Gather: transform node-indexed data to element-local layout
 %elem_data_guid, %elem_data_ptr = arts.memory_edt gather
-    source(%node_x_ptr : memref<?xf64>) [source_layout = chunked]
+    source(%node_x_ptr : memref<?xf64>) [source_layout = blocked]
     -> [dest_layout = fine_grained]
     indirection(%nodelist : memref<?x8xi32>)
     elements_per_access(8)
@@ -227,7 +227,7 @@ void MemoryEdtPass::runOnOperation() {
 
 Key decision points:
 - **H1.6.1**: Skip if layouts already compatible
-- **H1.6.2**: Mixed chunked writes + indirect reads (LULESH pattern) → `recode`
+- **H1.6.2**: Mixed blocked writes + indirect reads (LULESH pattern) → `recode`
 - **H1.6.3**: Indirect array access via indirection array → `gather`
 - **H1.6.4**: Stencil producer with gather consumer → `recode` or `gather`
 - **H1.6.5**: Multi-node network optimization → `recode` with locality hints
@@ -340,7 +340,7 @@ Since Memory EDTs replace the functionality of static DbCopy/DbSync:
 **Before** (H1.2 full-range):
 
 ```mlir
-// Producer: chunked writes
+// Producer: blocked writes
 arts.edt parallel (%chunk_acq) { x[i] = ... }
 
 // Consumer: full-range indirect reads (wasteful)
@@ -351,12 +351,12 @@ arts.edt parallel (%full_acq) { ... = x[nodelist[e]] }
 **After** (Memory EDT with recode):
 
 ```mlir
-// Producer: chunked writes
+// Producer: blocked writes
 arts.edt parallel (%chunk_acq) { x[i] = ... }
 
-// Memory EDT: transform chunked → fine-grained
+// Memory EDT: transform blocked → fine-grained
 %fg_guid, %fg_ptr = arts.memory_edt recode
-    source(%x_ptr) [source_layout = chunked]
+    source(%x_ptr) [source_layout = blocked]
     -> [dest_layout = fine_grained]
     route(%r) dependencies(%x_ptr)
 
@@ -368,12 +368,12 @@ arts.edt parallel (%elem_acq) { ... = x_fg[nodelist[e]] }
 **After** (Memory EDT with gather):
 
 ```mlir
-// Producer: chunked writes to node arrays
+// Producer: blocked writes to node arrays
 arts.edt parallel (%chunk_acq) { x[i] = ...; y[i] = ...; z[i] = ... }
 
 // Memory EDT: gather node data into element-local layout
 %elem_x_guid, %elem_x_ptr = arts.memory_edt gather
-    source(%x_ptr) [source_layout = chunked]
+    source(%x_ptr) [source_layout = blocked]
     -> [dest_layout = fine_grained]
     indirection(%nodelist) elements_per_access(8)
     route(%r) dependencies(%x_ptr)
@@ -427,19 +427,19 @@ artsEdtCreate() + outlined function
 ```mlir
 // Input:
 %guid, %ptr = arts.memory_edt recode
-    source(%src_ptr) [source_layout = chunked]
+    source(%src_ptr) [source_layout = blocked]
     -> [dest_layout = fine_grained]
     route(%r) dependencies(%src_ptr)
 
 // Output:
-%dest_alloc = arts.db_alloc sizes[%total] elementSizes[1]
-    {arts.partition = fine_grained}
+%dest_alloc = arts.db_alloc[<inout>, <heap>, <write>, <fine_grained>]
+    sizes[%total] elementSizes[1]
 arts.edt single intranode route(%r) (%src_ptr) {
   // Transformation loop (generated)
   scf.for %i = 0 to %total {
     // Load from source layout
-    %src_chunk = arith.divui %i, %chunk_size
-    %src_offset = arith.remui %i, %chunk_size
+    %src_chunk = arith.divui %i, %block_size
+    %src_offset = arith.remui %i, %block_size
     %src_base = arts.db_ref %src_ptr[%src_chunk]
     %val = memref.load %src_base[%src_offset]
     // Store to dest layout
@@ -471,16 +471,16 @@ The EDT wrapper lowers through standard `EdtLoweringPass`:
 
 ### Transformation Loop Patterns
 
-**Chunked → Fine-Grained**:
+**Blocked → Fine-Grained**:
 
 ```cpp
 // From DbLowering.cpp:259-265 pattern
 Value numChunks = sourceAlloc.getSizes().front();
-Value chunkSize = sourceAlloc.getElementSizes().front();
-Value totalSize = builder.create<arith::MulIOp>(loc, numChunks, chunkSize);
+Value blockSize = sourceAlloc.getElementSizes().front();
+Value totalSize = builder.create<arith::MulIOp>(loc, numChunks, blockSize);
 // Loop: for i in [0, totalSize)
-//   src_chunk = i / chunkSize
-//   src_offset = i % chunkSize
+//   src_chunk = i / blockSize
+//   src_offset = i % blockSize
 //   dest[i] = src[src_chunk][src_offset]
 ```
 
@@ -529,7 +529,7 @@ arts.edt single intranode route(%r) (%nodelist, %nodeData) {
 | Pattern | Benchmark | Current Issue | Memory EDT Solution | Expected Gain |
 |---------|-----------|---------------|---------------------|---------------|
 | Indirect gather (nodelist) | LULESH | 24 scattered reads/element | Pre-gather via MemEDT | 1.5-1.8x |
-| Mixed chunked+indirect | LULESH | H1.2 full-range overhead | Chunked→fine-grained MemEDT | 1.2-1.5x |
+| Mixed blocked+indirect | LULESH | H1.2 full-range overhead | Blocked→fine-grained MemEDT | 1.2-1.5x |
 | Stencil halo fetch | Jacobi2D | Vertical neighbor ptr chase | Contiguous halo prefetch | 1.1-1.3x |
 
 ### Priority 2: Moderate Performance Impact
@@ -631,8 +631,8 @@ TEST(MemoryEdtOp, Verifier) {
 **2. Pass Tests** (`test/arts/Passes/MemoryEdtPassTests.cpp`)
 ```cpp
 // Test layout mismatch detection
-TEST(MemoryEdtPass, DetectChunkedToFineGrained) {
-  // Producer writes chunked, consumer reads fine-grained
+TEST(MemoryEdtPass, DetectBlockedToFineGrained) {
+  // Producer writes blocked, consumer reads fine-grained
   // Verify mismatch is detected
 }
 
@@ -663,14 +663,14 @@ TEST(MemoryEdtLowering, GatherToEdtWithNestedLoop) {
 **1. FileCheck Tests** (`test/arts/Integration/memory_edt/`)
 
 ```bash
-# test/arts/Integration/memory_edt/recode_chunked_to_fine.mlir
+# test/arts/Integration/memory_edt/recode_blocked_to_fine.mlir
 // RUN: carts-opt %s --memory-edt | FileCheck %s
 
 // CHECK: arts.memory_edt recode
-// CHECK-SAME: source_layout = chunked
+// CHECK-SAME: source_layout = blocked
 // CHECK-SAME: dest_layout = fine_grained
 func.func @test_recode(%arg: memref<?x?xf64>) {
-  // ... producer EDT with chunked writes ...
+  // ... producer EDT with blocked writes ...
   // ... consumer EDT with indirect reads ...
 }
 ```

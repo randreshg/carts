@@ -29,7 +29,8 @@ protected:
                       OpBuilder &builder) override;
 
   bool rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
-                      Value startChunk = nullptr) override;
+                      Value startBlock = nullptr,
+                      bool isSingleChunk = false) override;
 
 private:
   /// Add a halo acquire as a new EDT dependency.

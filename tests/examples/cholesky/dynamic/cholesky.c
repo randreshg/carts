@@ -75,18 +75,18 @@ int main(int argc, char *argv[]) {
 #pragma omp task depend(inout : L_parallel[k_block][k_block])
       {
         for (unsigned i = k_block; i < k_block + kb; i++) {
-          for (unsigned j = k_block; j < i; j++) {
+          for (unsigned j = k_block; j < i; j++)
             L_parallel[i][i] -= L_parallel[i][j] * L_parallel[i][j];
-          }
+
           /// Avoid sqrt of negative due to floating point inaccuracies
           if (L_parallel[i][i] < 0.0)
             L_parallel[i][i] = 0.0;
           L_parallel[i][i] = sqrt(L_parallel[i][i]);
 
           for (unsigned j = i + 1; j < k_block + kb; j++) {
-            for (unsigned m = k_block; m < i; m++) {
+            for (unsigned m = k_block; m < i; m++)
               L_parallel[j][i] -= L_parallel[j][m] * L_parallel[i][m];
-            }
+
             /// Handle division by zero if diagonal element L_ii is zero
             if (L_parallel[i][i] != 0.0)
               L_parallel[j][i] /= L_parallel[i][i];
@@ -156,7 +156,7 @@ int main(int argc, char *argv[]) {
         }
       }
     } /// End k_block loop
-  } /// End OpenMP single / parallel region
+  }   /// End OpenMP single / parallel region
   double parallel_time = omp_get_wtime() - start_time;
   printf("Finished in %f seconds\n", parallel_time);
 

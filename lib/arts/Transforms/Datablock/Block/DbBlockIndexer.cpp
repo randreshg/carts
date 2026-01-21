@@ -1,9 +1,9 @@
 ///==========================================================================///
-/// File: DbChunkedIndexer.cpp
+/// File: DbBlockIndexer.cpp
 ///
-/// Chunked index localization for datablock partitioning.
+/// Block index localization for datablock partitioning.
 ///
-/// Example transformation (N=100 rows, chunkSize=25, 4 workers):
+/// Example transformation (N=100 rows, blockSize=25, 4 workers):
 ///
 ///   BEFORE (single allocation, global indices):
 ///     %db = arts.db_alloc memref<100xf64>
@@ -12,27 +12,27 @@
 ///       memref.load %ref[%j]                 /// global row j
 ///     }
 ///
-///   AFTER (chunked, div/mod localization):
-///     %db = arts.db_alloc memref<4x25xf64>   /// 4 chunks of 25 rows
-///     arts.edt(%startChunk, %numChunks) {
-///       %chunk = %j / 25                     /// physical chunk
-///       %relChunk = %chunk - %startChunk     /// worker-relative chunk
-///       %localRow = %j % 25                  /// row within chunk
-///       %ref = arts.db_ref %db[%relChunk]
+///   AFTER (blocked, div/mod localization):
+///     %db = arts.db_alloc memref<4x25xf64>   /// 4 blocks of 25 rows
+///     arts.edt(%startBlock, %numBlocks) {
+///       %block = %j / 25                     /// physical block
+///       %relBlock = %block - %startBlock     /// worker-relative block
+///       %localRow = %j % 25                  /// row within block
+///       %ref = arts.db_ref %db[%relBlock]
 ///       memref.load %ref[%localRow]
 ///     }
 ///
 /// Index localization formulas:
-///   chunkIdx = (globalRow / chunkSize) - startChunk
-///   localRow = globalRow % chunkSize
+///   blockIdx = (globalRow / blockSize) - startBlock
+///   localRow = globalRow % blockSize
 ///
 /// For linearized access (single index into multi-dim memref):
 ///   1. De-linearize: globalRow = linear / stride, col = linear % stride
-///   2. Apply div/mod: localRow = globalRow % chunkSize
+///   2. Apply div/mod: localRow = globalRow % blockSize
 ///   3. Re-linearize: localLinear = localRow * stride + col
 ///==========================================================================///
 
-#include "arts/Transforms/Datablock/Chunked/DbChunkedIndexer.h"
+#include "arts/Transforms/Datablock/Block/DbBlockIndexer.h"
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/DatablockUtils.h"
@@ -45,20 +45,23 @@ ARTS_DEBUG_SETUP(db_transforms);
 using namespace mlir;
 using namespace mlir::arts;
 
-DbChunkedIndexer::DbChunkedIndexer(Value chunkSize, Value startChunk,
-                                   Value elemOffset, unsigned outerRank,
-                                   unsigned innerRank)
-    : DbIndexerBase(outerRank, innerRank), chunkSize(chunkSize),
-      startChunk(startChunk), elemOffset(elemOffset) {}
+DbBlockIndexer::DbBlockIndexer(ArrayRef<Value> blockSizes,
+                               ArrayRef<Value> startBlocks, unsigned outerRank,
+                               unsigned innerRank)
+    : DbIndexerBase(outerRank, innerRank),
+      blockSizes(blockSizes.begin(), blockSizes.end()),
+      startBlocks(startBlocks.begin(), startBlocks.end()) {}
 
-LocalizedIndices DbChunkedIndexer::localize(ArrayRef<Value> globalIndices,
-                                            OpBuilder &builder, Location loc) {
+LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
+                                          OpBuilder &builder, Location loc) {
   LocalizedIndices result;
   auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
   auto one = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 1); };
 
-  ARTS_DEBUG("DbChunkedIndexer::localize with " << globalIndices.size()
-                                                << " indices");
+  unsigned nPartDims = numPartitionedDims();
+  ARTS_DEBUG("DbBlockIndexer::localize with "
+             << globalIndices.size()
+             << " indices, numPartitionedDims=" << nPartDims);
 
   if (globalIndices.empty()) {
     result.dbRefIndices.push_back(zero());
@@ -66,32 +69,34 @@ LocalizedIndices DbChunkedIndexer::localize(ArrayRef<Value> globalIndices,
     return result;
   }
 
-  /// Pick the index that tracks the partition offset (defaults to 0)
-  unsigned partitionDim = 0;
-  if (elemOffset) {
-    for (unsigned i = 0; i < globalIndices.size(); ++i) {
-      if (ValueUtils::dependsOn(globalIndices[i], elemOffset)) {
-        partitionDim = i;
-        break;
-      }
-    }
+  /// N-D block partitioning: apply div/mod to each partitioned dimension
+  /// For each partitioned dimension d, compute:
+  ///   dbRefIdx[d]  = (globalIdx[d] / blockSize[d]) - startBlock[d]
+  ///   memrefIdx[d] = globalIdx[d] % blockSize[d]
+  for (unsigned d = 0; d < nPartDims && d < globalIndices.size(); ++d) {
+    Value globalIdx = globalIndices[d];
+    Value bs = (d < blockSizes.size() && blockSizes[d]) ? blockSizes[d] : one();
+    bs = builder.create<arith::MaxUIOp>(loc, bs, one());
+
+    Value sb =
+        (d < startBlocks.size() && startBlocks[d]) ? startBlocks[d] : zero();
+
+    /// Always compute full formula: relBlock = (globalIdx / bs) - startBlock
+    /// The startBlock = 0 case will naturally simplify to physBlock
+    Value physBlock = builder.create<arith::DivUIOp>(loc, globalIdx, bs);
+    Value relBlock = builder.create<arith::SubIOp>(loc, physBlock, sb);
+    Value localIdx = builder.create<arith::RemUIOp>(loc, globalIdx, bs);
+
+    result.dbRefIndices.push_back(relBlock);
+    result.memrefIndices.push_back(localIdx);
+
+    ARTS_DEBUG("    Dim " << d << ": dbRef=" << relBlock
+                          << ", memref=" << localIdx);
   }
-  Value globalRow = globalIndices[partitionDim];
-  Value cs = chunkSize ? chunkSize : one();
-  cs = builder.create<arith::MaxUIOp>(loc, cs, one());
 
-  /// dbRefIdx = (globalRow / chunkSize) - startChunk
-  Value physChunk = builder.create<arith::DivUIOp>(loc, globalRow, cs);
-  Value relChunk = builder.create<arith::SubIOp>(loc, physChunk, startChunk);
-  result.dbRefIndices.push_back(relChunk);
-
-  /// memrefIdx[partitionDim] = globalRow % chunkSize
-  Value localRow = builder.create<arith::RemUIOp>(loc, globalRow, cs);
-  for (unsigned i = 0; i < globalIndices.size(); ++i) {
-    if (i == partitionDim)
-      result.memrefIndices.push_back(localRow);
-    else
-      result.memrefIndices.push_back(globalIndices[i]);
+  /// Pass through remaining non-partitioned dimensions
+  for (unsigned d = nPartDims; d < globalIndices.size(); ++d) {
+    result.memrefIndices.push_back(globalIndices[d]);
   }
 
   ARTS_DEBUG("  -> dbRef: " << result.dbRefIndices.size()
@@ -99,44 +104,62 @@ LocalizedIndices DbChunkedIndexer::localize(ArrayRef<Value> globalIndices,
   return result;
 }
 
-LocalizedIndices DbChunkedIndexer::localizeLinearized(Value globalLinearIndex,
-                                                      Value stride,
-                                                      OpBuilder &builder,
-                                                      Location loc) {
+LocalizedIndices DbBlockIndexer::localizeLinearized(Value globalLinearIndex,
+                                                    Value stride,
+                                                    OpBuilder &builder,
+                                                    Location loc) {
   LocalizedIndices result;
+  auto one = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 1); };
+  auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
 
-  ARTS_DEBUG("DbChunkedIndexer::localizeLinearized - using div/mod");
+  ARTS_DEBUG("DbBlockIndexer::localizeLinearized - using div/mod for 2D");
 
   /// De-linearize: globalLinear = globalRow * stride + col
   Value globalRow =
       builder.create<arith::DivUIOp>(loc, globalLinearIndex, stride);
-  Value col = builder.create<arith::RemUIOp>(loc, globalLinearIndex, stride);
+  Value globalCol =
+      builder.create<arith::RemUIOp>(loc, globalLinearIndex, stride);
 
-  Value cs =
-      chunkSize ? chunkSize : builder.create<arith::ConstantIndexOp>(loc, 1);
-  cs = builder.create<arith::MaxUIOp>(
-      loc, cs, builder.create<arith::ConstantIndexOp>(loc, 1));
+  /// Get block sizes for both dimensions
+  /// For 2D blocking: bsRow for row dimension, bsCol for column dimension
+  Value bsRow = (!blockSizes.empty() && blockSizes[0]) ? blockSizes[0] : one();
+  bsRow = builder.create<arith::MaxUIOp>(loc, bsRow, one());
 
-  /// dbRefIdx = (globalRow / chunkSize) - startChunk
-  Value physChunk = builder.create<arith::DivUIOp>(loc, globalRow, cs);
-  Value relChunk = builder.create<arith::SubIOp>(loc, physChunk, startChunk);
-  result.dbRefIndices.push_back(relChunk);
+  /// Column block size: use blockSizes[1] if available, otherwise same as row
+  Value bsCol =
+      (blockSizes.size() > 1 && blockSizes[1]) ? blockSizes[1] : bsRow;
+  bsCol = builder.create<arith::MaxUIOp>(loc, bsCol, one());
 
-  /// localRow = globalRow % chunkSize
-  Value localRow = builder.create<arith::RemUIOp>(loc, globalRow, cs);
+  Value sb = (!startBlocks.empty() && startBlocks[0]) ? startBlocks[0] : zero();
 
-  /// Re-linearize: localLinear = localRow * stride + col
-  Value localLinear = builder.create<arith::MulIOp>(loc, localRow, stride);
-  localLinear = builder.create<arith::AddIOp>(loc, localLinear, col);
+  /// dbRefIdx = (globalRow / blockSize) - startBlock
+  Value physBlock = builder.create<arith::DivUIOp>(loc, globalRow, bsRow);
+  Value relBlock = builder.create<arith::SubIOp>(loc, physBlock, sb);
+  result.dbRefIndices.push_back(relBlock);
+
+  /// Compute local row (modulo block size)
+  Value localRow = builder.create<arith::RemUIOp>(loc, globalRow, bsRow);
+
+  /// Compute local col (modulo block size) - THIS IS THE FIX
+  /// For 2D blocks, the column also needs to be localized within the block
+  Value localCol = builder.create<arith::RemUIOp>(loc, globalCol, bsCol);
+
+  /// Re-linearize with LOCAL stride (block size), not global stride
+  /// Block memory is [bsRow x bsCol], so stride is bsCol
+  Value localLinear = builder.create<arith::MulIOp>(loc, localRow, bsCol);
+  localLinear = builder.create<arith::AddIOp>(loc, localLinear, localCol);
   result.memrefIndices.push_back(localLinear);
+
+  ARTS_DEBUG("  localRow = globalRow % bsRow, localCol = globalCol % bsCol");
+  ARTS_DEBUG("  localLinear = localRow * bsCol + localCol");
 
   return result;
 }
 
-void DbChunkedIndexer::transformOps(ArrayRef<Operation *> ops, Value dbPtr,
-                                    Type elementType, ArtsCodegen &AC,
-                                    llvm::SetVector<Operation *> &opsToRemove) {
-  ARTS_DEBUG("DbChunkedIndexer::transformOps with " << ops.size() << " ops");
+void DbBlockIndexer::transformOps(ArrayRef<Operation *> ops, Value dbPtr,
+                                  Type elementType, ArtsCodegen &AC,
+                                  llvm::SetVector<Operation *> &opsToRemove) {
+  ARTS_DEBUG("DbBlockIndexer::transformOps with " << ops.size() << " ops");
 
   for (Operation *op : ops) {
     OpBuilder::InsertionGuard IG(AC.getBuilder());
@@ -198,10 +221,10 @@ void DbChunkedIndexer::transformOps(ArrayRef<Operation *> ops, Value dbPtr,
   }
 }
 
-void DbChunkedIndexer::transformDbRefUsers(
+void DbBlockIndexer::transformDbRefUsers(
     DbRefOp ref, Value blockArg, Type newElementType, OpBuilder &builder,
     llvm::SetVector<Operation *> &opsToRemove) {
-  ARTS_DEBUG("DbChunkedIndexer::transformDbRefUsers");
+  ARTS_DEBUG("DbBlockIndexer::transformDbRefUsers");
 
   SmallVector<Operation *> refUsers(ref.getResult().getUsers().begin(),
                                     ref.getResult().getUsers().end());
@@ -266,15 +289,15 @@ void DbChunkedIndexer::transformDbRefUsers(
 }
 
 SmallVector<Value>
-DbChunkedIndexer::localizeCoordinates(ArrayRef<Value> globalIndices,
-                                      ArrayRef<Value> sliceOffsets,
-                                      unsigned numIndexedDims, Type elementType,
-                                      OpBuilder &builder, Location loc) {
+DbBlockIndexer::localizeCoordinates(ArrayRef<Value> globalIndices,
+                                    ArrayRef<Value> sliceOffsets,
+                                    unsigned numIndexedDims, Type elementType,
+                                    OpBuilder &builder, Location loc) {
   SmallVector<Value> result;
   auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
 
-  ARTS_DEBUG("DbChunkedIndexer::localizeCoordinates with "
-             << globalIndices.size() << " indices");
+  ARTS_DEBUG("DbBlockIndexer::localizeCoordinates with " << globalIndices.size()
+                                                         << " indices");
 
   /// Handle empty case
   if (globalIndices.empty()) {
@@ -282,22 +305,30 @@ DbChunkedIndexer::localizeCoordinates(ArrayRef<Value> globalIndices,
     return result;
   }
 
-  /// CHUNKED MODE: first sliced dimension uses div by chunkSize
+  /// BLOCK MODE: partitioned dimensions use div by blockSize
+  unsigned nPartDims = numPartitionedDims();
   for (unsigned d = 0; d < globalIndices.size(); ++d) {
     Value globalIdx = globalIndices[d];
 
     if (d < numIndexedDims) {
       /// Indexed dimension: local index is always 0
       result.push_back(zero());
-    } else if (d == numIndexedDims && chunkSize) {
-      /// First sliced dimension: compute chunk-relative index
-      /// dbRefIdx = (globalIdx / chunkSize) - startChunk
-      Value physChunk =
-          builder.create<arith::DivUIOp>(loc, globalIdx, chunkSize);
-      Value relChunk =
-          builder.create<arith::SubIOp>(loc, physChunk, startChunk);
-      result.push_back(relChunk);
-      ARTS_DEBUG("  Dim " << d << ": div/mod by chunkSize");
+    } else if (d < numIndexedDims + nPartDims &&
+               d - numIndexedDims < blockSizes.size()) {
+      /// Partitioned dimension: compute block-relative index
+      unsigned partIdx = d - numIndexedDims;
+      Value bs = blockSizes[partIdx];
+      Value sb = (partIdx < startBlocks.size()) ? startBlocks[partIdx] : zero();
+      if (bs) {
+        /// dbRefIdx = (globalIdx / blockSize) - startBlock
+        Value physBlock = builder.create<arith::DivUIOp>(loc, globalIdx, bs);
+        Value relBlock = builder.create<arith::SubIOp>(loc, physBlock, sb);
+        result.push_back(relBlock);
+        ARTS_DEBUG("  Dim " << d << ": div/mod by blockSize[" << partIdx
+                            << "]");
+      } else {
+        result.push_back(globalIdx);
+      }
     } else if (d - numIndexedDims < sliceOffsets.size()) {
       /// Other sliced dimensions: subtract offset
       unsigned offsetIdx = d - numIndexedDims;
@@ -313,10 +344,10 @@ DbChunkedIndexer::localizeCoordinates(ArrayRef<Value> globalIndices,
   return result;
 }
 
-void DbChunkedIndexer::transformUsesInParentRegion(
+void DbBlockIndexer::transformUsesInParentRegion(
     Operation *alloc, DbAllocOp dbAlloc, ArtsCodegen &AC,
     llvm::SetVector<Operation *> &opsToRemove) {
-  ARTS_DEBUG("DbChunkedIndexer::transformUsesInParentRegion");
+  ARTS_DEBUG("DbBlockIndexer::transformUsesInParentRegion");
 
   /// Collect users of the original allocation (excluding DbAllocOp and EDT
   /// uses)
@@ -338,9 +369,9 @@ void DbChunkedIndexer::transformUsesInParentRegion(
   }
 
   ARTS_DEBUG("  Rewriting " << users.size()
-                            << " main body accesses with chunked indexing");
+                            << " main body accesses with block indexing");
 
-  /// Use transformOps with the collected users - chunked div/mod transformation
+  /// Use transformOps with the collected users - block div/mod transformation
   Type elementMemRefType = dbAlloc.getAllocatedElementType();
   transformOps(users, dbAlloc.getPtr(), elementMemRefType, AC, opsToRemove);
 }

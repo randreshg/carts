@@ -24,7 +24,7 @@ The key insight is that the Db pass runs **twice**:
 ### 1. Navigate to the rowchunk example directory
 
 ```bash
-cd ~/Documents/carts/tests/examples/rowchunk
+cd ~/Documents/carts/tests/examples/rows/chunks
 ```
 
 ### 2. Build and generate the MLIR inputs
@@ -76,13 +76,14 @@ arts.for(%c0) to(%c1000) step(%c1) {{
 carts run rowchunk.mlir --concurrency &> rowchunk_concurrency.mlir
 ```
 
-**Expected behavior**: ForLowering converts `arts.for` to worker distribution and adds `offset_hints`/`size_hints`:
+**Expected behavior**: ForLowering converts `arts.for` to worker distribution and adds
+chunked acquires with `partitioning(<block>)` plus DB-space `offsets`/`sizes`:
 ```mlir
 scf.for %worker = %c0 to %c16 step %c1 {
   %offset = arith.muli %worker, %c63 : index  /// 1000/16 ≈ 63 rows per worker
   %size = ...                                 /// min(63, remaining)
 
-  %guid_acq, %ptr_acq = arts.db_acquire ... offset_hints[%offset] size_hints[%size]
+  %guid_acq, %ptr_acq = arts.db_acquire ... partitioning(<block>), offsets[%offset], sizes[%size]
 }
 ```
 
@@ -147,6 +148,6 @@ The runtime should create 16 task EDTs, each processing ~63 rows of the 1000-row
 - **Check**: H1 heuristic should keep read-only arrays coarse on single-node
 - **Check**: `arts.cfg` has `nodeCount=1`
 
-**Problem**: Wrong chunk size
+**Problem**: Wrong block size
 - **Check**: `arts.cfg` has `threads=16` (determines worker count)
-- **Expected**: chunkSize = ceil(1000/16) = 63 rows
+- **Expected**: blockSize = ceil(1000/16) = 63 rows
