@@ -18,7 +18,7 @@ namespace arts {
 struct VersionedAcquireInfo {
   DbAcquireOp acquire;
   Value chunkIndex;
-  Value chunkSize;
+  Value blockSize;
 };
 
 /// Rewriter for versioned partitioning (DbCopy/DbSync).

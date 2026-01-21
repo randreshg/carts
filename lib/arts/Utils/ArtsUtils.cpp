@@ -224,14 +224,14 @@ void replaceInRegion(Region &region, DenseMap<Value, Value> &rewireMap,
 // Pattern Recognition and Analysis Utilities
 ///===----------------------------------------------------------------------===///
 
-/// Extract chunk size from ForLowering's size hint.
+/// Extract block size from ForLowering's size hint.
 /// Patterns handled:
 ///   Case 1: Direct constant %c1048576 -> returns 1048576
 ///   Case 2: minui/minsi(%remaining, %c1048576) -> returns larger constant
 ///   Case 3: Nested minui/minsi -> recursively finds largest constant
 ///   Case 4: addi(%baseSize, %halo) -> recurse on non-constant operand
-///           (for stencil patterns where chunkSize = baseChunk + haloAdjust)
-std::optional<int64_t> extractChunkSizeFromHint(Value sizeHint, int depth) {
+///           (for stencil patterns where blockSize = baseBlock + haloAdjust)
+std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
   if (!sizeHint || depth > 4)
     return std::nullopt;
 
@@ -254,8 +254,8 @@ std::optional<int64_t> extractChunkSizeFromHint(Value sizeHint, int depth) {
       return rhsVal;
 
     /// Recurse for nested minui
-    auto lhsExtracted = extractChunkSizeFromHint(minOp.getLhs(), depth + 1);
-    auto rhsExtracted = extractChunkSizeFromHint(minOp.getRhs(), depth + 1);
+    auto lhsExtracted = extractBlockSizeFromHint(minOp.getLhs(), depth + 1);
+    auto rhsExtracted = extractBlockSizeFromHint(minOp.getRhs(), depth + 1);
     if (lhsExtracted && rhsExtracted)
       return std::max(*lhsExtracted, *rhsExtracted);
     if (lhsExtracted)
@@ -276,8 +276,8 @@ std::optional<int64_t> extractChunkSizeFromHint(Value sizeHint, int depth) {
       return rhsVal;
 
     /// Recurse for nested minsi
-    auto lhsExtracted = extractChunkSizeFromHint(minOp.getLhs(), depth + 1);
-    auto rhsExtracted = extractChunkSizeFromHint(minOp.getRhs(), depth + 1);
+    auto lhsExtracted = extractBlockSizeFromHint(minOp.getLhs(), depth + 1);
+    auto rhsExtracted = extractBlockSizeFromHint(minOp.getRhs(), depth + 1);
     if (lhsExtracted && rhsExtracted)
       return std::max(*lhsExtracted, *rhsExtracted);
     if (lhsExtracted)
@@ -287,9 +287,9 @@ std::optional<int64_t> extractChunkSizeFromHint(Value sizeHint, int depth) {
   }
 
   /// Case 4: addi pattern - stencil halo adjustment
-  /// For stencil patterns, chunkSize = addi(baseChunkSize, haloAdjustment)
+  /// For stencil patterns, blockSize = addi(baseBlockSize, haloAdjustment)
   /// where haloAdjustment is a small constant (e.g., 2 for i-1, i, i+1 pattern)
-  /// We want to extract baseChunkSize, which is the actual partition chunk size
+  /// We want to extract baseBlockSize, which is the actual partition block size
   if (auto addOp = sizeHint.getDefiningOp<arith::AddIOp>()) {
     int64_t lhsVal = 0, rhsVal = 0;
     bool hasLhsConst = ValueUtils::getConstantIndex(addOp.getLhs(), lhsVal);
@@ -298,17 +298,42 @@ std::optional<int64_t> extractChunkSizeFromHint(Value sizeHint, int depth) {
     /// If one operand is a small constant (halo adjustment), recurse on the
     /// other
     if (hasRhsConst && std::abs(rhsVal) <= 16) {
-      /// rhsVal is halo adjustment, lhs is base chunk size
-      return extractChunkSizeFromHint(addOp.getLhs(), depth + 1);
+      /// rhsVal is halo adjustment, lhs is base block size
+      return extractBlockSizeFromHint(addOp.getLhs(), depth + 1);
     }
     if (hasLhsConst && std::abs(lhsVal) <= 16) {
-      /// lhsVal is halo adjustment, rhs is base chunk size
-      return extractChunkSizeFromHint(addOp.getRhs(), depth + 1);
+      /// lhsVal is halo adjustment, rhs is base block size
+      return extractBlockSizeFromHint(addOp.getRhs(), depth + 1);
     }
 
     /// Both constants or both large - try both sides
-    auto lhsExtracted = extractChunkSizeFromHint(addOp.getLhs(), depth + 1);
-    auto rhsExtracted = extractChunkSizeFromHint(addOp.getRhs(), depth + 1);
+    auto lhsExtracted = extractBlockSizeFromHint(addOp.getLhs(), depth + 1);
+    auto rhsExtracted = extractBlockSizeFromHint(addOp.getRhs(), depth + 1);
+    if (lhsExtracted)
+      return lhsExtracted;
+    if (rhsExtracted)
+      return rhsExtracted;
+  }
+
+  /// Case 5: maxui pattern - clamp minimum (e.g., MaxUIOp(blockSize, 1))
+  /// Return the larger constant operand as the block size upper bound
+  if (auto maxOp = sizeHint.getDefiningOp<arith::MaxUIOp>()) {
+    int64_t lhsVal = 0, rhsVal = 0;
+    bool hasLhs = ValueUtils::getConstantIndex(maxOp.getLhs(), lhsVal);
+    bool hasRhs = ValueUtils::getConstantIndex(maxOp.getRhs(), rhsVal);
+
+    if (hasLhs && hasRhs)
+      return std::max(lhsVal, rhsVal);
+    if (hasLhs)
+      return lhsVal;
+    if (hasRhs)
+      return rhsVal;
+
+    /// Recurse for nested maxui
+    auto lhsExtracted = extractBlockSizeFromHint(maxOp.getLhs(), depth + 1);
+    auto rhsExtracted = extractBlockSizeFromHint(maxOp.getRhs(), depth + 1);
+    if (lhsExtracted && rhsExtracted)
+      return std::max(*lhsExtracted, *rhsExtracted);
     if (lhsExtracted)
       return lhsExtracted;
     if (rhsExtracted)
@@ -318,15 +343,15 @@ std::optional<int64_t> extractChunkSizeFromHint(Value sizeHint, int depth) {
   return std::nullopt;
 }
 
-/// Extract chunk size INCLUDING any halo adjustments for allocation sizing.
-/// Unlike extractChunkSizeFromHint which extracts BASE size for loop bound
+/// Extract block size INCLUDING any halo adjustments for allocation sizing.
+/// Unlike extractBlockSizeFromHint which extracts BASE size for loop bound
 /// matching, this function preserves stencil halo adjustments since allocations
 /// need to be large enough to hold the full adjusted size.
 ///
 /// Examples:
 ///   minui(%remaining, %c64) -> 64
 ///   addi(minui(%remaining, %c64), %c2) -> 66 (base + halo)
-std::optional<int64_t> extractChunkSizeForAllocation(Value sizeHint,
+std::optional<int64_t> extractBlockSizeForAllocation(Value sizeHint,
                                                      int depth) {
   if (!sizeHint || depth > 4)
     return std::nullopt;
@@ -351,9 +376,9 @@ std::optional<int64_t> extractChunkSizeForAllocation(Value sizeHint,
 
     /// Recurse for nested minui
     auto lhsExtracted =
-        extractChunkSizeForAllocation(minOp.getLhs(), depth + 1);
+        extractBlockSizeForAllocation(minOp.getLhs(), depth + 1);
     auto rhsExtracted =
-        extractChunkSizeForAllocation(minOp.getRhs(), depth + 1);
+        extractBlockSizeForAllocation(minOp.getRhs(), depth + 1);
     if (lhsExtracted && rhsExtracted)
       return std::max(*lhsExtracted, *rhsExtracted);
     if (lhsExtracted)
@@ -375,9 +400,9 @@ std::optional<int64_t> extractChunkSizeForAllocation(Value sizeHint,
 
     /// Recurse for nested minsi
     auto lhsExtracted =
-        extractChunkSizeForAllocation(minOp.getLhs(), depth + 1);
+        extractBlockSizeForAllocation(minOp.getLhs(), depth + 1);
     auto rhsExtracted =
-        extractChunkSizeForAllocation(minOp.getRhs(), depth + 1);
+        extractBlockSizeForAllocation(minOp.getRhs(), depth + 1);
     if (lhsExtracted && rhsExtracted)
       return std::max(*lhsExtracted, *rhsExtracted);
     if (lhsExtracted)
@@ -387,7 +412,7 @@ std::optional<int64_t> extractChunkSizeForAllocation(Value sizeHint,
   }
 
   /// Case 3: addi pattern - INCLUDE the halo adjustment for allocation
-  /// For stencil patterns: chunkSize = addi(baseChunkSize, haloAdjustment)
+  /// For stencil patterns: blockSize = addi(baseBlockSize, haloAdjustment)
   /// Allocation needs full size: base + halo
   if (auto addOp = sizeHint.getDefiningOp<arith::AddIOp>()) {
     int64_t lhsVal = 0, rhsVal = 0;
@@ -396,21 +421,21 @@ std::optional<int64_t> extractChunkSizeForAllocation(Value sizeHint,
 
     /// If one operand is a small constant (halo), add it to the extracted base
     if (hasRhsConst && std::abs(rhsVal) <= 16) {
-      auto baseSize = extractChunkSizeForAllocation(addOp.getLhs(), depth + 1);
+      auto baseSize = extractBlockSizeForAllocation(addOp.getLhs(), depth + 1);
       if (baseSize)
         return *baseSize + rhsVal; /// base + halo
     }
     if (hasLhsConst && std::abs(lhsVal) <= 16) {
-      auto baseSize = extractChunkSizeForAllocation(addOp.getRhs(), depth + 1);
+      auto baseSize = extractBlockSizeForAllocation(addOp.getRhs(), depth + 1);
       if (baseSize)
         return *baseSize + lhsVal; /// base + halo
     }
 
     /// Both operands non-constant - try both sides
     auto lhsExtracted =
-        extractChunkSizeForAllocation(addOp.getLhs(), depth + 1);
+        extractBlockSizeForAllocation(addOp.getLhs(), depth + 1);
     auto rhsExtracted =
-        extractChunkSizeForAllocation(addOp.getRhs(), depth + 1);
+        extractBlockSizeForAllocation(addOp.getRhs(), depth + 1);
     if (lhsExtracted)
       return lhsExtracted;
     if (rhsExtracted)

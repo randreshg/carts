@@ -287,9 +287,13 @@ bool EdtPass::convertParallelWithAcquiresToSync(
     auto newAcq = builder.create<DbAcquireOp>(
         outerAcq.getLoc(), innerAcq.getMode(), outerAcq.getSourceGuid(),
         outerAcq.getSourcePtr(), outerAcq.getPtr().getType(),
-        SmallVector<Value>(outerAcq.getIndices()),
+        outerAcq.getPartitionMode(), SmallVector<Value>(outerAcq.getIndices()),
         SmallVector<Value>(outerAcq.getOffsets()),
-        SmallVector<Value>(outerAcq.getSizes()));
+        SmallVector<Value>(outerAcq.getSizes()),
+        SmallVector<Value>(outerAcq.getPartitionIndices()),
+        SmallVector<Value>(outerAcq.getPartitionOffsets()),
+        SmallVector<Value>(outerAcq.getPartitionSizes()));
+    newAcq.copyPartitionSegmentsFrom(outerAcq);
 
     /// Copy attributes from outer acquire
     if (outerAcq->hasAttr("arts.twin_diff"))

@@ -8,9 +8,9 @@
 #ifndef ARTS_ANALYSIS_ARTSANALYSISMANAGER_H
 #define ARTS_ANALYSIS_ARTSANALYSISMANAGER_H
 
+#include "arts/Analysis/ArtsHeuristics.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Edt/EdtAnalysis.h"
-#include "arts/Analysis/HeuristicsConfig.h"
 
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
@@ -52,16 +52,11 @@ public:
   DbGraph &getDbGraph(func::FuncOp func);
   EdtGraph &getEdtGraph(func::FuncOp func);
 
-  /// Per-function invalidation
+  /// Other functions
   bool invalidateFunction(func::FuncOp func);
 
-  /// Get the module containing the function
   ModuleOp &getModule() { return module; }
-
-  /// Get the configuration file path
   const std::string &getConfigFile() const { return configFile; }
-
-  /// Get the metadata file path
   const std::string &getMetadataFile() const { return metadataFile; }
 
   /// Get the ARTS abstract machine
@@ -84,7 +79,7 @@ public:
   /// Export analysis objects and graphs to JSON
   void exportToJson(llvm::raw_ostream &os, bool includeAnalysis = false);
 
-  /// Metadata coverage data (set by VerifyMetadataPass)
+  /// Metadata coverage data
   struct MetadataCoverage {
     int64_t loopsAnalyzed = 0;
     int64_t loopsTotal = 0;

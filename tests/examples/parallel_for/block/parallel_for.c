@@ -23,7 +23,7 @@ int main(int argc, char **argv) {
   for (int i = 0; i < N; i++)
     CARTS_DEBUG_PRINT("a[%d] = %d, b[%d] = %d\n", i, a[i], i, b[i]);
 
-  /// Parallel region with worksharing loop - vector addition
+    /// Parallel region with worksharing loop - vector addition
 #pragma omp parallel for
   for (int i = 0; i < N; i++)
     c[i] = a[i] + b[i];

@@ -25,21 +25,16 @@ using namespace mlir::arts;
 
 std::optional<std::pair<Value, Value>>
 DatablockUtils::traceToDbAlloc(Value dep) {
-  /// Case 1: Direct DbAllocOp result (either guid or ptr)
   if (auto allocOp = dep.getDefiningOp<DbAllocOp>())
     return std::make_pair(allocOp.getGuid(), allocOp.getPtr());
 
-  /// Case 2: DbAcquireOp - trace through sourceGuid or sourcePtr
   if (auto acqOp = dep.getDefiningOp<DbAcquireOp>()) {
-    /// Prefer tracing through sourceGuid if it exists
     if (Value srcGuid = acqOp.getSourceGuid())
       return traceToDbAlloc(srcGuid);
-    /// Otherwise trace through sourcePtr
     if (Value srcPtr = acqOp.getSourcePtr())
       return traceToDbAlloc(srcPtr);
   }
 
-  /// Case 3: Block argument - trace through parent EDT's dependencies
   if (auto blockArg = dep.dyn_cast<BlockArgument>()) {
     Operation *parentOp = blockArg.getOwner()->getParentOp();
     if (auto parentEdt = dyn_cast<EdtOp>(parentOp)) {
@@ -59,38 +54,35 @@ Operation *DatablockUtils::getUnderlyingDb(Value v, unsigned depth) {
 
   /// Prevent infinite recursion from circular acquire chains
   if (depth > 20) {
-    ARTS_WARN("getUnderlyingDb exceeded depth limit of 20 "
-              << "(possible circular acquire chain)");
+    ARTS_WARN("getUnderlyingDb exceeded depth limit");
     return nullptr;
   }
 
-  /// Directly return the DbAcquireOp or DbAllocOp if present
+  /// Case 1: Direct DbAllocOp result (either guid or ptr)
   if (auto acq = v.getDefiningOp<DbAcquireOp>())
     return acq.getOperation();
   if (auto alloc = v.getDefiningOp<DbAllocOp>())
     return alloc.getOperation();
   if (auto copy = v.getDefiningOp<DbCopyOp>())
     return copy.getOperation();
+  /// Case 2: DbAcquireOp - trace through sourceGuid or sourcePtr
   if (auto dbLoad = v.getDefiningOp<DbRefOp>())
     return getUnderlyingDb(dbLoad.getSource(), depth + 1);
 
+  /// Case 3: Block argument - trace through parent EDT's dependencies
   /// If it's a block argument of an EDT, map to the corresponding operand and
-  /// recurse. Block arguments correspond to dependencies
+  /// recurse. Block arguments correspond to dependencies.
   if (auto blockArg = v.dyn_cast<BlockArgument>()) {
     Block *block = blockArg.getOwner();
     Operation *owner = block->getParentOp();
     if (auto edt = dyn_cast<EdtOp>(owner)) {
       unsigned argIndex = blockArg.getArgNumber();
-      /// Block arguments correspond to dependencies
       ValueRange deps = edt.getDependencies();
-      if (argIndex < deps.size()) {
-        Value operand = deps[argIndex];
-        return getUnderlyingDb(operand, depth + 1);
-      }
+      if (argIndex < deps.size())
+        return getUnderlyingDb(deps[argIndex], depth + 1);
     }
   }
 
-  /// Peel through common view/cast/gep nodes to reach DB ops
   if (Operation *def = v.getDefiningOp()) {
     if (auto gep = dyn_cast<DbGepOp>(def))
       return getUnderlyingDb(gep.getBasePtr(), depth + 1);
@@ -100,7 +92,6 @@ Operation *DatablockUtils::getUnderlyingDb(Value v, unsigned depth) {
       return getUnderlyingDb(subview.getSource(), depth + 1);
   }
 
-  /// As a last resort, try underlying root op if it's a DB op
   if (Operation *root = ValueUtils::getUnderlyingOperation(v)) {
     if (isa<DbAcquireOp, DbAllocOp, DbCopyOp>(root))
       return root;
@@ -164,23 +155,55 @@ bool DatablockUtils::hasSingleSize(Operation *dbOp) {
   if (!dbOp)
     return false;
 
+  auto isOneLike = [](Value size) -> bool {
+    if (ValueUtils::isOneConstant(size))
+      return true;
+
+    auto addOp = size.getDefiningOp<arith::AddIOp>();
+    if (!addOp)
+      return false;
+
+    Value lhs = addOp.getLhs();
+    Value rhs = addOp.getRhs();
+    Value other;
+    if (ValueUtils::isOneConstant(lhs))
+      other = rhs;
+    else if (ValueUtils::isOneConstant(rhs))
+      other = lhs;
+    else
+      return false;
+
+    auto subOp = other.getDefiningOp<arith::SubIOp>();
+    if (!subOp)
+      return false;
+
+    Value subLhs = subOp.getLhs();
+    Value subRhs = subOp.getRhs();
+    if (subLhs == subRhs)
+      return true;
+
+    if (auto minOp = subLhs.getDefiningOp<arith::MinUIOp>()) {
+      if (minOp.getLhs() == subRhs || minOp.getRhs() == subRhs)
+        return true;
+    }
+    return false;
+  };
+
   SmallVector<Value> sizes = getSizesFromDb(dbOp);
-
   if (sizes.empty())
-    return false;
+    return true;
 
-  /// Check if there's exactly one size and it's constant 1
-  if (sizes.size() != 1)
-    return false;
-
-  return ValueUtils::isOneConstant(sizes[0]);
+  for (Value size : sizes) {
+    if (!isOneLike(size))
+      return false;
+  }
+  return true;
 }
 
 bool DatablockUtils::isCoarseGrained(DbAllocOp alloc) {
   if (auto mode = getPartitionMode(alloc.getOperation()))
     return *mode == PartitionMode::coarse;
 
-  /// Fallback: check sizes for backward compatibility
   return llvm::all_of(alloc.getSizes(), [](Value v) {
     int64_t val;
     return ValueUtils::getConstantIndex(v, val) && val == 1;
@@ -191,7 +214,6 @@ bool DatablockUtils::isFineGrained(DbAllocOp alloc) {
   if (auto mode = getPartitionMode(alloc.getOperation()))
     return *mode == PartitionMode::fine_grained;
 
-  /// Fallback: check elementSizes for backward compatibility
   ValueRange elementSizes = alloc.getElementSizes();
   if (elementSizes.empty())
     return false;
@@ -203,14 +225,10 @@ bool DatablockUtils::isFineGrained(DbAllocOp alloc) {
 }
 
 SmallVector<Value> DatablockUtils::getOffsetsFromDb(Value datablockPtr) {
-  Operation *underlyingDb = getUnderlyingDb(datablockPtr);
-  if (!underlyingDb)
-    return {};
-
-  if (auto acquireOp = dyn_cast<DbAcquireOp>(underlyingDb))
-    return SmallVector<Value>(acquireOp.getOffsets().begin(),
-                              acquireOp.getOffsets().end());
-
+  if (auto *underlyingDb = getUnderlyingDb(datablockPtr))
+    if (auto acquireOp = dyn_cast<DbAcquireOp>(underlyingDb))
+      return SmallVector<Value>(acquireOp.getOffsets().begin(),
+                                acquireOp.getOffsets().end());
   return {};
 }
 
@@ -222,8 +240,6 @@ PartitionMode
 DatablockUtils::getPartitionModeFromStructure(DbAcquireOp acquire) {
   if (auto mode = ::getPartitionMode(acquire.getOperation()))
     return *mode;
-
-  /// Fallback: if no attribute, default to coarse
   return PartitionMode::coarse;
 }
 
@@ -231,11 +247,9 @@ PartitionMode DatablockUtils::getPartitionModeFromStructure(DbAllocOp alloc) {
   if (auto mode = ::getPartitionMode(alloc.getOperation()))
     return *mode;
 
-  /// Fallback: if no attribute, check structural coarseness
   if (isCoarseGrained(alloc))
     return PartitionMode::coarse;
 
-  /// Default to fine_grained for fine-grained allocations
   return PartitionMode::fine_grained;
 }
 
@@ -247,11 +261,9 @@ std::optional<int64_t> DatablockUtils::getStaticStride(ValueRange sizes) {
   if (sizes.empty())
     return std::nullopt;
 
-  /// Single dimension [N]: stride = 1
   if (sizes.size() == 1)
     return 1;
 
-  /// Multi-dimensional [D0, D1, ...]: stride = D1 * D2 * ... (skip D0!)
   int64_t stride = 1;
   for (size_t i = 1; i < sizes.size(); ++i) {
     int64_t dim;
@@ -292,16 +304,12 @@ Value DatablockUtils::getStrideValue(OpBuilder &builder, Location loc,
   if (sizes.empty())
     return nullptr;
 
-  /// Single dimension [N]: stride = 1
   if (sizes.size() == 1)
     return builder.create<arith::ConstantIndexOp>(loc, 1);
 
-  /// Try static first for efficiency
   if (auto staticStride = getStaticStride(sizes))
     return builder.create<arith::ConstantIndexOp>(loc, *staticStride);
 
-  /// Dynamic: build multiplication chain for trailing dimensions
-  /// stride = sizes[1] * sizes[2] * ... * sizes[n-1]
   Value stride = sizes[1];
   for (size_t i = 2; i < sizes.size(); ++i)
     stride = builder.create<arith::MulIOp>(loc, stride, sizes[i]);
@@ -318,28 +326,24 @@ Value DatablockUtils::getOuterStrideValue(OpBuilder &builder, Location loc,
   return getStrideValue(builder, loc, alloc.getSizes());
 }
 
-///===----------------------------------------------------------------------===//
-/// Access Mode and Hints Analysis
-///===----------------------------------------------------------------------===//
-
 bool DatablockUtils::hasStaticHints(DbAcquireOp acqOp) {
-  Value chunkIndex = acqOp.getChunkIndex();
-  Value chunkSize = acqOp.getChunkSize();
+  /// Check partition hints (element-space) for static values
+  Value offset = acqOp.getPartitionOffsets().empty()
+                     ? nullptr
+                     : acqOp.getPartitionOffsets().front();
+  Value size = acqOp.getPartitionSizes().empty()
+                   ? nullptr
+                   : acqOp.getPartitionSizes().front();
   int64_t val = 0;
-  bool idxConst = !chunkIndex || ValueUtils::getConstantIndex(chunkIndex, val);
-  bool sizeConst = !chunkSize || ValueUtils::getConstantIndex(chunkSize, val);
-  return idxConst && sizeConst;
+  bool offsetConst = !offset || ValueUtils::getConstantIndex(offset, val);
+  bool sizeConst = !size || ValueUtils::getConstantIndex(size, val);
+  return offsetConst && sizeConst;
 }
 
 bool DatablockUtils::isWriterMode(ArtsMode mode) {
   return mode == ArtsMode::out || mode == ArtsMode::inout;
 }
 
-///===----------------------------------------------------------------------===///
-/// Offset Dependency and Chunk Size Analysis
-///===----------------------------------------------------------------------===///
-
-/// Check if a value depends on a partition offset (ignoring numeric casts).
 bool DatablockUtils::dependsOnOffset(Value v, Value offset) {
   if (!v || !offset)
     return false;
@@ -348,9 +352,7 @@ bool DatablockUtils::dependsOnOffset(Value v, Value offset) {
   return ValueUtils::dependsOn(vStripped, oStripped);
 }
 
-/// Try to extract an offset-independent base chunk size from size hints.
-/// This peels remainder-aware patterns like min(base, total - offset).
-Value DatablockUtils::extractBaseChunkSizeCandidate(Value offsetHint,
+Value DatablockUtils::extractBaseBlockSizeCandidate(Value offsetHint,
                                                     Value sizeHint, int depth) {
   if (!sizeHint || depth > 6)
     return Value();
@@ -368,12 +370,12 @@ Value DatablockUtils::extractBaseChunkSizeCandidate(Value offsetHint,
     bool lhsDep = dependsOnOffset(lhs, offsetHint);
     bool rhsDep = dependsOnOffset(rhs, offsetHint);
     if (lhsDep && !rhsDep)
-      return extractBaseChunkSizeCandidate(offsetHint, rhs, depth + 1);
+      return extractBaseBlockSizeCandidate(offsetHint, rhs, depth + 1);
     if (rhsDep && !lhsDep)
-      return extractBaseChunkSizeCandidate(offsetHint, lhs, depth + 1);
-    if (Value cand = extractBaseChunkSizeCandidate(offsetHint, lhs, depth + 1))
+      return extractBaseBlockSizeCandidate(offsetHint, lhs, depth + 1);
+    if (Value cand = extractBaseBlockSizeCandidate(offsetHint, lhs, depth + 1))
       return cand;
-    return extractBaseChunkSizeCandidate(offsetHint, rhs, depth + 1);
+    return extractBaseBlockSizeCandidate(offsetHint, rhs, depth + 1);
   }
 
   if (auto minOp = dyn_cast<arith::MinSIOp>(defOp)) {
@@ -382,12 +384,12 @@ Value DatablockUtils::extractBaseChunkSizeCandidate(Value offsetHint,
     bool lhsDep = dependsOnOffset(lhs, offsetHint);
     bool rhsDep = dependsOnOffset(rhs, offsetHint);
     if (lhsDep && !rhsDep)
-      return extractBaseChunkSizeCandidate(offsetHint, rhs, depth + 1);
+      return extractBaseBlockSizeCandidate(offsetHint, rhs, depth + 1);
     if (rhsDep && !lhsDep)
-      return extractBaseChunkSizeCandidate(offsetHint, lhs, depth + 1);
-    if (Value cand = extractBaseChunkSizeCandidate(offsetHint, lhs, depth + 1))
+      return extractBaseBlockSizeCandidate(offsetHint, lhs, depth + 1);
+    if (Value cand = extractBaseBlockSizeCandidate(offsetHint, lhs, depth + 1))
       return cand;
-    return extractBaseChunkSizeCandidate(offsetHint, rhs, depth + 1);
+    return extractBaseBlockSizeCandidate(offsetHint, rhs, depth + 1);
   }
 
   if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
@@ -396,12 +398,12 @@ Value DatablockUtils::extractBaseChunkSizeCandidate(Value offsetHint,
     bool tDep = dependsOnOffset(tVal, offsetHint);
     bool fDep = dependsOnOffset(fVal, offsetHint);
     if (tDep && !fDep)
-      return extractBaseChunkSizeCandidate(offsetHint, fVal, depth + 1);
+      return extractBaseBlockSizeCandidate(offsetHint, fVal, depth + 1);
     if (fDep && !tDep)
-      return extractBaseChunkSizeCandidate(offsetHint, tVal, depth + 1);
-    if (Value cand = extractBaseChunkSizeCandidate(offsetHint, tVal, depth + 1))
+      return extractBaseBlockSizeCandidate(offsetHint, tVal, depth + 1);
+    if (Value cand = extractBaseBlockSizeCandidate(offsetHint, tVal, depth + 1))
       return cand;
-    return extractBaseChunkSizeCandidate(offsetHint, fVal, depth + 1);
+    return extractBaseBlockSizeCandidate(offsetHint, fVal, depth + 1);
   }
 
   if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
@@ -409,10 +411,10 @@ Value DatablockUtils::extractBaseChunkSizeCandidate(Value offsetHint,
     bool lhsIsConst = ValueUtils::getConstantIndex(addOp.getLhs(), lhsConst);
     bool rhsIsConst = ValueUtils::getConstantIndex(addOp.getRhs(), rhsConst);
     if (lhsIsConst && lhsConst >= -16 && lhsConst <= 16)
-      return extractBaseChunkSizeCandidate(offsetHint, addOp.getRhs(),
+      return extractBaseBlockSizeCandidate(offsetHint, addOp.getRhs(),
                                            depth + 1);
     if (rhsIsConst && rhsConst >= -16 && rhsConst <= 16)
-      return extractBaseChunkSizeCandidate(offsetHint, addOp.getLhs(),
+      return extractBaseBlockSizeCandidate(offsetHint, addOp.getLhs(),
                                            depth + 1);
   }
 
@@ -420,16 +422,13 @@ Value DatablockUtils::extractBaseChunkSizeCandidate(Value offsetHint,
     int64_t rhsConst = 0;
     if (ValueUtils::getConstantIndex(subOp.getRhs(), rhsConst) &&
         rhsConst >= -16 && rhsConst <= 16)
-      return extractBaseChunkSizeCandidate(offsetHint, subOp.getLhs(),
+      return extractBaseBlockSizeCandidate(offsetHint, subOp.getLhs(),
                                            depth + 1);
   }
 
   return Value();
 }
 
-/// Find the EDT operation that uses a DbControlOp result.
-/// Returns the first EDT operation that uses the DbControlOp's result,
-/// or nullptr if no EDT user is found.
 Operation *DatablockUtils::findUserEdt(DbControlOp dbControl) {
   for (Operation *user : dbControl.getResult().getUsers()) {
     if (auto edt = dyn_cast<EdtOp>(user)) {
@@ -439,11 +438,6 @@ Operation *DatablockUtils::findUserEdt(DbControlOp dbControl) {
   return nullptr;
 }
 
-///===----------------------------------------------------------------------===///
-/// Index Chain Utilities
-///===----------------------------------------------------------------------===///
-
-/// Collect full index chain from DbRefOp indices plus memory operation indices.
 SmallVector<Value> DatablockUtils::collectFullIndexChain(DbRefOp dbRef,
                                                          Operation *memOp) {
   SmallVector<Value> chain(dbRef.getIndices().begin(),

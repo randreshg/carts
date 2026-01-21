@@ -26,9 +26,7 @@ int main(int argc, char *argv[]) {
         for (int j = 0; j < N; j++) {
 /// Each task computes one A[i][j].
 #pragma omp task firstprivate(i, j) depend(out : A[i][j])
-          {
-            A[i][j] = i * 1.0 + random;
-          }
+          { A[i][j] = i * 1.0 + random; }
         }
       }
 
@@ -36,9 +34,7 @@ int main(int argc, char *argv[]) {
       /// For row zero, B[0][j] only depends on A[0][j]
       for (int j = 0; j < N; j++) {
 #pragma omp task firstprivate(j) depend(in : A[0][j]) depend(out : B[0][j])
-        {
-          B[0][j] = A[0][j];
-        }
+        { B[0][j] = A[0][j]; }
       }
 
       /// For rows 1..N-1, B[i][j] depends on A[i][j] and A[i-1][j].
@@ -46,9 +42,7 @@ int main(int argc, char *argv[]) {
         for (int j = 0; j < N; j++) {
 #pragma omp task firstprivate(i, j) depend(in : A[i][j], A[i - 1][j])          \
     depend(out : B[i][j])
-          {
-            B[i][j] = A[i][j] + A[i - 1][j];
-          }
+          { B[i][j] = A[i][j] + A[i - 1][j]; }
         }
       }
     }

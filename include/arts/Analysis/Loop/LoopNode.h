@@ -37,8 +37,10 @@ public:
   void print(llvm::raw_ostream &os) const override;
   Operation *getOp() const override { return loopOp; }
 
-  void addInEdge(EdgeBase *edge) override { /* unused for loop nodes */ }
-  void addOutEdge(EdgeBase *edge) override { /* unused for loop nodes */ }
+  void addInEdge(EdgeBase *edge) override { /* unused for loop nodes */
+  }
+  void addOutEdge(EdgeBase *edge) override { /* unused for loop nodes */
+  }
   const DenseSet<EdgeBase *> &getInEdges() const override { return edges; }
   const DenseSet<EdgeBase *> &getOutEdges() const override { return edges; }
 

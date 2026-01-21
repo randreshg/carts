@@ -85,7 +85,7 @@ Walk through these steps and check any problem that you find in the way
         %17 = arts.epoch {
             /// This is the worker loop that performs the work. We dispatch the work to the workers and synchronize them.
             scf.for %arg2 = %c0 to %c8 step %c1 {
-                /// This is the work that each worker performs. We compute the chunk size and the chunk index.
+                /// This is the work that each worker performs. We compute the block size and the chunk index.
                 %33 = arith.addi %7, %c7 : index
                 %34 = arith.divui %33, %c8 : index
                 %35 = arith.muli %arg2, %34 : index

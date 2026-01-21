@@ -37,12 +37,12 @@ ARTS_DEBUG_SETUP(db_transforms);
 using namespace mlir;
 using namespace mlir::arts;
 
-DbElementWiseIndexer::DbElementWiseIndexer(Value elemOffset, Value elemSize,
+DbElementWiseIndexer::DbElementWiseIndexer(ArrayRef<Value> elemOffsets,
                                            unsigned outerRank,
                                            unsigned innerRank,
                                            ValueRange oldElementSizes)
-    : DbIndexerBase(outerRank, innerRank), elemOffset(elemOffset),
-      elemSize(elemSize),
+    : DbIndexerBase(outerRank, innerRank),
+      elemOffsets(elemOffsets.begin(), elemOffsets.end()),
       oldElementSizes(oldElementSizes.begin(), oldElementSizes.end()) {}
 
 LocalizedIndices DbElementWiseIndexer::splitIndices(ValueRange globalIndices,
@@ -57,13 +57,15 @@ LocalizedIndices DbElementWiseIndexer::splitIndices(ValueRange globalIndices,
     return result;
   }
 
-  for (unsigned i = 0; i < globalIndices.size(); ++i) {
-    if (i < outerRank)
-      result.dbRefIndices.push_back(globalIndices[i]);
-    else
-      result.memrefIndices.push_back(globalIndices[i]);
-  }
+  /// Fine-grained: each datablock has one element, so db_ref indices are zero
+  for (unsigned i = 0; i < outerRank; ++i)
+    result.dbRefIndices.push_back(zero());
 
+  /// Inner dimensions become memref indices
+  for (unsigned i = outerRank; i < globalIndices.size(); ++i)
+    result.memrefIndices.push_back(globalIndices[i]);
+
+  /// Ensure at least one index in each category
   if (result.dbRefIndices.empty())
     result.dbRefIndices.push_back(zero());
   if (result.memrefIndices.empty())
@@ -78,19 +80,10 @@ LocalizedIndices DbElementWiseIndexer::localize(ArrayRef<Value> globalIndices,
   ARTS_DEBUG("DbElementWiseIndexer::localize with " << globalIndices.size()
                                                     << " indices");
 
-  if (outerRank == 0)
-    return splitIndices(ValueRange(globalIndices), builder, loc);
-
-  if (globalIndices.empty())
-    return splitIndices(ValueRange(globalIndices), builder, loc);
-
-  /// Element-wise: split indices by outer/inner rank and subtract elemOffset
+  /// Delegate to splitIndices which handles fine-grained partitioning
+  /// by returning zeros for db_ref indices (each datablock has one element)
   LocalizedIndices result =
       splitIndices(ValueRange(globalIndices), builder, loc);
-  if (!result.dbRefIndices.empty()) {
-    result.dbRefIndices[0] =
-        builder.create<arith::SubIOp>(loc, result.dbRefIndices[0], elemOffset);
-  }
 
   ARTS_DEBUG("  -> dbRef: " << result.dbRefIndices.size()
                             << ", memref: " << result.memrefIndices.size());
@@ -104,6 +97,17 @@ DbElementWiseIndexer::localizeLinearized(Value globalLinearIndex, Value stride,
 
   ARTS_DEBUG(
       "DbElementWiseIndexer::localizeLinearized - scaling offset by stride");
+
+  /// For linearized access, we only use the first element offset (1D case).
+  /// Multi-dimensional fine-grained uses localize() instead.
+  Value elemOffset = elemOffsets.empty() ? nullptr : elemOffsets.front();
+  if (!elemOffset) {
+    /// No offset - return zeros
+    Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+    result.dbRefIndices.push_back(zero);
+    result.memrefIndices.push_back(globalLinearIndex);
+    return result;
+  }
 
   ///   globalLinear = (elemOffset + localRow) * stride + col
   ///   localLinear  = localRow * stride + col

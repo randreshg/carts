@@ -28,19 +28,16 @@ using namespace mlir;
 using namespace mlir::arts;
 
 void ArtsDialect::initialize() {
-  /// Register operations
   addOperations<
 #define GET_OP_LIST
 #include "arts/ArtsOps.cpp.inc"
       >();
 
-  /// Register types
   addTypes<
 #define GET_TYPEDEF_LIST
 #include "arts/ArtsOpsTypes.cpp.inc"
       >();
 
-  /// Register attributes
   addAttributes<
 #define GET_ATTRDEF_LIST
 #include "arts/ArtsOpsAttributes.cpp.inc"
@@ -49,7 +46,6 @@ void ArtsDialect::initialize() {
 
 #include "arts/ArtsOpsDialect.cpp.inc"
 
-// Arts Dialect Operations - method definitions
 #define GET_OP_CLASSES
 #include "arts/ArtsOps.cpp.inc"
 
@@ -83,16 +79,11 @@ struct FoldDbDimFromDbOps : public OpRewritePattern<DbDimOp> {
   }
 };
 
-/// Canonicalization pattern to remove unused DbAcquireOp operations.
-/// An acquire is considered unused if both its guid and ptr results have no
-/// uses. This can happen when an acquire is created but the associated EDT is
-/// later removed or when duplicate acquires are created for the same datablock.
 struct RemoveUnusedDbAcquire : public OpRewritePattern<DbAcquireOp> {
   using OpRewritePattern<DbAcquireOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(DbAcquireOp op,
                                 PatternRewriter &rewriter) const override {
-    /// Check if both guid and ptr results are unused
     if (op.getGuid().use_empty() && op.getPtr().use_empty()) {
       rewriter.eraseOp(op);
       return success();
@@ -126,14 +117,11 @@ bool isArtsOp(Operation *op) {
 #define GET_TYPEDEF_CLASSES
 #include "arts/ArtsOpsTypes.cpp.inc"
 
-/// Arts Dialect Attributes
 #define GET_ATTRDEF_CLASSES
 #include "arts/ArtsOpsAttributes.cpp.inc"
 
-/// Arts Dialect Enums
 #include "arts/ArtsOpsEnums.cpp.inc"
 
-/// UndefOp
 class UndefToLLVM final : public OpRewritePattern<UndefOp> {
 public:
   using OpRewritePattern<UndefOp>::OpRewritePattern;
@@ -153,7 +141,6 @@ void UndefOp::getCanonicalizationPatterns(RewritePatternSet &results,
   results.insert<UndefToLLVM>(context);
 }
 
-/// EdtOp
 SmallVector<Value> mlir::arts::EdtOp::getDependenciesAsVector() {
   SmallVector<Value> deps(getDependencies().begin(), getDependencies().end());
   return deps;
@@ -163,7 +150,6 @@ void mlir::arts::EdtOp::setDependencies(ValueRange newDeps) {
   Operation *op = getOperation();
   SmallVector<Value> operands;
 
-  /// Operand layout: route (required), then dependencies.
   if (op->getNumOperands() > 0)
     operands.push_back(op->getOperand(0));
 
@@ -178,7 +164,6 @@ void mlir::arts::EdtOp::appendDependency(Value dep) {
 }
 
 LogicalResult EdtOp::verify() {
-  /// Skip verification if no_verify attribute is present
   if (getNoVerifyAttr())
     return success();
 
@@ -186,14 +171,12 @@ LogicalResult EdtOp::verify() {
   auto blockArgs = block.getArguments();
   auto deps = getDependenciesAsVector();
 
-  /// Check that dependencies and block arguments match
   if (blockArgs.size() != deps.size()) {
     return emitOpError("block arguments (")
            << blockArgs.size() << ") must match dependencies (" << deps.size()
            << ")";
   }
 
-  /// Check that all dependencies come from DbAcquireOp operations
   for (Value dep : deps) {
     auto dbAcquireOp = dep.getDefiningOp<DbAcquireOp>();
     if (!dbAcquireOp) {
@@ -202,30 +185,22 @@ LogicalResult EdtOp::verify() {
     }
   }
 
-  /// Collect all values defined outside the EDT region
   DenseSet<Value> externalValues;
   for (Value dep : deps)
     externalValues.insert(dep);
 
-  /// Walk all operations in the EDT body
   auto walkResult = getBody().walk([&](Operation *op) {
-    /// Skip the block itself
     if (op == &block.front())
       return WalkResult::advance();
 
-    /// Skip children EDTs
     if (isa<EdtOp>(op))
       return WalkResult::skip();
 
-    /// Check each operand
     for (Value operand : op->getOperands()) {
-      /// Skip if operand is not a memref
       if (!operand.getType().isa<MemRefType>())
         continue;
 
-      /// Skip block arguments - these are allowed
       if (llvm::is_contained(blockArgs, operand)) {
-        /// Verify that the operand is a DbAcquireOp
         DbAcquireOp underlyingAcquire =
             dyn_cast<DbAcquireOp>(DatablockUtils::getUnderlyingDb(operand));
         if (!underlyingAcquire) {
@@ -233,32 +208,24 @@ LogicalResult EdtOp::verify() {
               << operand << "' as a DbAcquire value.";
           return WalkResult::interrupt();
         }
-        /// Block argument is valid, skip remaining checks
         continue;
       }
 
-      /// Get the underlying operation for the operand
       auto definingOp = operand.getDefiningOp();
       if (!definingOp)
         continue;
 
-      /// Skip if operand is defined inside the region
       if (getBody().isAncestor(definingOp->getParentRegion()))
         continue;
 
-      /// Check if this is a dependency value used directly
       if (externalValues.contains(operand)) {
         op->emitOpError("EDT region uses external DbAcquire value '")
             << operand << "' directly instead of DbAcquire block argument. ";
         return WalkResult::interrupt();
       }
 
-      /// If we  got this far, the operand is not a block argument, not a
-      /// dependency, and not defined inside the region
       op->emitOpError("EDT region uses external value '")
-          << operand
-          << "' that is not a block argument, not a dependency, and not "
-             "defined inside the region.\n"
+          << operand << "' that is not a block argument or dependency.\n"
           << *definingOp << "\n"
           << *op << "\n";
       return WalkResult::interrupt();
@@ -274,11 +241,8 @@ LogicalResult EdtOp::verify() {
 
 void EdtOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
-  /// Collect all effects from the dependencies using safe method
   auto dependencies = getDependenciesAsVector();
 
-  /// If no dependencies, assume it has effects on all the memrefs
-  /// and add read/write effects
   if (dependencies.empty()) {
     effects.emplace_back(MemoryEffects::Read::get(),
                          ::mlir::SideEffects::DefaultResource::get());
@@ -286,16 +250,8 @@ void EdtOp::getEffects(
                          ::mlir::SideEffects::DefaultResource::get());
     return;
   }
-
-  /// Otherwise, collect effects from each dependency
-  /// for (auto dep : dependencies) {
-  /// TODO: Implement getEffects for DbDepOp
-  /// if (auto dbOp = dep.getDefiningOp<DbDepOp>())
-  ///   dbOp.getEffects(effects);
-  /// }
 }
 
-/// ARTS Operation Builders
 void DbReleaseOp::build(OpBuilder &builder, OperationState &state,
                         Value source) {
   state.addOperands(source);
@@ -315,7 +271,6 @@ void DbGepOp::build(OpBuilder &builder, OperationState &state, Type ptr,
   state.addOperands(base_ptr);
   state.addOperands(indices);
   state.addOperands(strides);
-  /// Set operand segment sizes: [base_ptr, indices..., strides...]
   SmallVector<int32_t, 3> segments = {1, (int32_t)indices.size(),
                                       (int32_t)strides.size()};
   state.addAttribute(getOperandSegmentSizesAttrName(state.name),
@@ -332,7 +287,6 @@ void DbControlOp::build(OpBuilder &builder, OperationState &state,
                      sizes);
 }
 
-/// EDT Ops
 void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
                   EdtConcurrency concurrency) {
   build(builder, state, type, concurrency, ValueRange{});
@@ -353,13 +307,10 @@ void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
   state.addOperands(route);
   state.addOperands(dependencies);
 
-  /// Create the region with a block
   Region *bodyRegion = state.addRegion();
   Block *bodyBlock = new Block();
   bodyRegion->push_back(bodyBlock);
 }
-
-/// EDT Create Ops
 
 void EdtCreateOp::build(OpBuilder &builder, OperationState &state,
                         Value param_memref, Value depCount) {
@@ -374,8 +325,6 @@ void EdtCreateOp::build(OpBuilder &builder, OperationState &state,
   state.addOperands({param_memref, depCount, route});
 }
 
-/// DB operations builders
-/// DbAllocOp builders
 static void
 buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
                      Value route, DbAllocType allocType, DbMode dbMode,
@@ -390,11 +339,9 @@ buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
     guidShape.push_back(ShapedType::kDynamic);
   Type guidType = MemRefType::get(guidShape, builder.getI64Type());
 
-  /// If outersizes are empty, set to 1
   if (sizes.empty())
     sizes.push_back(builder.create<arith::ConstantIndexOp>(state.location, 1));
 
-  /// If element sizes are empty, set to 1
   if (elementSizes.empty())
     elementSizes.push_back(
         builder.create<arith::ConstantIndexOp>(state.location, 1));
@@ -407,14 +354,10 @@ buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
         arts::getElementMemRefType(elementType, elementSizes);
     SmallVector<int64_t> shape;
     shape.assign(sizes.size(), ShapedType::kDynamic);
-    /// Use element type directly without extra rank-0 wrapper
-    /// This produces memref<?xmemref<?xf32>> instead of
-    /// memref<?xmemref<memref<?xf32>>>
     ptrType = MemRefType::get(shape, pointerElementType);
   }
   state.addTypes({guidType, ptrType});
 
-  /// Add attributes
   ArtsModeAttr modeAttr = ArtsModeAttr::get(builder.getContext(), mode);
   DbAllocTypeAttr allocTypeAttr =
       DbAllocTypeAttr::get(builder.getContext(), allocType);
@@ -426,18 +369,15 @@ buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
   state.addAttribute("dbMode", dbModeAttr);
   state.addAttribute("elementType", elementTypeAttr);
   state.addAttribute(
-      AttrNames::Operation::Partition,
+      AttrNames::Operation::PartitionMode,
       PartitionModeAttr::get(builder.getContext(), partitionMode));
 
-  /// Add operands
   state.addOperands(route);
   if (address)
     state.addOperands(address);
   state.addOperands(sizes);
   state.addOperands(elementSizes);
 
-  /// Build operand segment sizes:
-  /// [route=1, address(0/1), sizes, elementSizes]
   state.addAttribute("operandSegmentSizes",
                      builder.getDenseI32ArrayAttr(
                          {1, static_cast<int32_t>(address ? 1 : 0),
@@ -476,7 +416,6 @@ void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
 }
 
 MemRefType DbAllocOp::getAllocatedElementType() {
-  /// For nested memrefs (float **), return the inner memref type directly.
   auto ptrType = getPtr().getType().cast<MemRefType>();
   if (auto innerMemRefType = ptrType.getElementType().dyn_cast<MemRefType>())
     return innerMemRefType;
@@ -487,14 +426,11 @@ MemRefType DbAllocOp::getAllocatedElementType() {
 }
 
 LogicalResult DbAllocOp::verify() {
-  /// Enforce invariant: elementSizes must be non-empty (scalars use [1]).
   if (getElementSizes().empty())
     return emitOpError(
         "elementSizes must be non-empty; use a single size of 1 for scalars");
   return success();
 }
-
-/// DbAcquireOp twin_diff attribute accessors.
 
 void DbAcquireOp::setTwinDiff(bool enabled) {
   (*this)->setAttr(AttrNames::Operation::ArtsTwinDiff,
@@ -512,12 +448,184 @@ bool DbAcquireOp::getTwinDiff() {
   return true;
 }
 
-/// DbAcquireOp builders
+bool DbAcquireOp::hasExplicitPartitionHints() {
+  return !getPartitionIndices().empty() || !getPartitionOffsets().empty() ||
+         !getPartitionSizes().empty();
+}
+
+void DbAcquireOp::copyPartitionSegmentsFrom(DbAcquireOp source) {
+  if (!source)
+    return;
+
+  OpBuilder builder(getContext());
+  if (auto segments = source.getPartitionIndicesSegments())
+    setPartitionIndicesSegmentsAttr(builder.getDenseI32ArrayAttr(*segments));
+  if (auto segments = source.getPartitionOffsetsSegments())
+    setPartitionOffsetsSegmentsAttr(builder.getDenseI32ArrayAttr(*segments));
+  if (auto segments = source.getPartitionSizesSegments())
+    setPartitionSizesSegmentsAttr(builder.getDenseI32ArrayAttr(*segments));
+  if (auto modes = source.getPartitionEntryModes())
+    setPartitionEntryModesAttr(builder.getDenseI32ArrayAttr(*modes));
+}
+
+bool DbAcquireOp::hasMultiplePartitionEntries() {
+  auto segments = getPartitionIndicesSegments();
+  return segments && segments->size() > 1;
+}
+
+size_t DbAcquireOp::getNumPartitionEntries() {
+  auto segments = getPartitionIndicesSegments();
+  if (segments && !segments->empty())
+    return segments->size();
+  if (!getPartitionIndices().empty() || !getPartitionOffsets().empty() ||
+      !getPartitionSizes().empty())
+    return 1;
+  return 0;
+}
+
+PartitionMode DbAcquireOp::getPartitionEntryMode(size_t entryIdx) {
+  auto modes = getPartitionEntryModes();
+  if (modes && entryIdx < modes->size())
+    return static_cast<PartitionMode>((*modes)[entryIdx]);
+  return getPartitionModeOr();
+}
+
+/// Helper to extract a segment of values from a flat array using segment info
+static SmallVector<Value>
+getSegmentedValues(std::optional<ArrayRef<int32_t>> segments,
+                   OperandRange allValues, size_t entryIdx) {
+  if (!segments || segments->empty()) {
+    if (entryIdx == 0)
+      return SmallVector<Value>(allValues.begin(), allValues.end());
+    return {};
+  }
+  if (entryIdx >= segments->size())
+    return {};
+
+  int64_t offset = 0;
+  for (size_t i = 0; i < entryIdx; ++i)
+    offset += (*segments)[i];
+
+  int64_t size = (*segments)[entryIdx];
+  SmallVector<Value> result;
+  for (int64_t i = 0; i < size && (offset + i) < (int64_t)allValues.size(); ++i)
+    result.push_back(allValues[offset + i]);
+  return result;
+}
+
+SmallVector<Value> DbAcquireOp::getPartitionIndicesForEntry(size_t entryIdx) {
+  return getSegmentedValues(getPartitionIndicesSegments(),
+                            getPartitionIndices(), entryIdx);
+}
+
+SmallVector<Value> DbAcquireOp::getPartitionOffsetsForEntry(size_t entryIdx) {
+  return getSegmentedValues(getPartitionOffsetsSegments(),
+                            getPartitionOffsets(), entryIdx);
+}
+
+SmallVector<Value> DbAcquireOp::getPartitionSizesForEntry(size_t entryIdx) {
+  return getSegmentedValues(getPartitionSizesSegments(), getPartitionSizes(),
+                            entryIdx);
+}
+
+void DbAcquireOp::setPartitionSegments(ArrayRef<int32_t> indicesSegments,
+                                       ArrayRef<int32_t> offsetsSegments,
+                                       ArrayRef<int32_t> sizesSegments,
+                                       ArrayRef<int32_t> entryModes) {
+  OpBuilder builder(getContext());
+  if (!indicesSegments.empty())
+    setPartitionIndicesSegmentsAttr(
+        builder.getDenseI32ArrayAttr(indicesSegments));
+  if (!offsetsSegments.empty())
+    setPartitionOffsetsSegmentsAttr(
+        builder.getDenseI32ArrayAttr(offsetsSegments));
+  if (!sizesSegments.empty())
+    setPartitionSizesSegmentsAttr(builder.getDenseI32ArrayAttr(sizesSegments));
+  if (!entryModes.empty())
+    setPartitionEntryModesAttr(builder.getDenseI32ArrayAttr(entryModes));
+}
+
+SmallVector<PartitionInfo> DbAcquireOp::getPartitionInfos() {
+  SmallVector<PartitionInfo> result;
+  size_t numEntries = getNumPartitionEntries();
+
+  for (size_t i = 0; i < numEntries; ++i) {
+    PartitionInfo info;
+    info.mode = getPartitionEntryMode(i);
+    info.indices = getPartitionIndicesForEntry(i);
+    info.offsets = getPartitionOffsetsForEntry(i);
+    info.sizes = getPartitionSizesForEntry(i);
+    result.push_back(info);
+  }
+  return result;
+}
+
+/// Helper to add DbAcquireOp operands and attributes to OperationState
+static void addDbAcquireOperandsAndAttrs(
+    OpBuilder &builder, OperationState &state, ArtsMode mode, Value sourceGuid,
+    Value sourcePtr, Type guidType, Type ptrType,
+    std::optional<PartitionMode> partitionMode, ArrayRef<Value> indices,
+    ArrayRef<Value> offsets, ArrayRef<Value> sizes,
+    ArrayRef<Value> partitionIndices, ArrayRef<Value> partitionOffsets,
+    ArrayRef<Value> partitionSizes, Value boundsValid,
+    ArrayRef<Value> elementOffsets, ArrayRef<Value> elementSizes) {
+  state.addTypes({guidType, ptrType});
+  state.addAttribute("mode", ArtsModeAttr::get(builder.getContext(), mode));
+
+  if (sourceGuid)
+    state.addOperands(sourceGuid);
+  state.addOperands(sourcePtr);
+  state.addOperands(indices);
+  state.addOperands(offsets);
+  state.addOperands(sizes);
+  state.addOperands(partitionIndices);
+  state.addOperands(partitionOffsets);
+  state.addOperands(partitionSizes);
+  if (boundsValid)
+    state.addOperands(boundsValid);
+  state.addOperands(elementOffsets);
+  state.addOperands(elementSizes);
+
+  state.addAttribute(
+      "operandSegmentSizes",
+      builder.getDenseI32ArrayAttr(
+          {sourceGuid ? 1 : 0, 1, static_cast<int32_t>(indices.size()),
+           static_cast<int32_t>(offsets.size()),
+           static_cast<int32_t>(sizes.size()),
+           static_cast<int32_t>(partitionIndices.size()),
+           static_cast<int32_t>(partitionOffsets.size()),
+           static_cast<int32_t>(partitionSizes.size()), boundsValid ? 1 : 0,
+           static_cast<int32_t>(elementOffsets.size()),
+           static_cast<int32_t>(elementSizes.size())}));
+
+  /// Resolve partition_mode from parameter or parent allocation
+  PartitionMode resolvedMode = PartitionMode::coarse;
+  if (partitionMode.has_value()) {
+    resolvedMode = *partitionMode;
+  } else if (auto *allocOp = DatablockUtils::getUnderlyingDbAlloc(sourcePtr)) {
+    if (auto parentMode = arts::getPartitionMode(allocOp))
+      resolvedMode = *parentMode;
+  }
+  state.addAttribute(
+      AttrNames::Operation::PartitionMode,
+      PartitionModeAttr::get(builder.getContext(), resolvedMode));
+}
+
+/// Helper to compute GUID type from sizes
+static Type computeGuidType(OpBuilder &builder, ArrayRef<Value> sizes) {
+  size_t numDims = sizes.empty() ? 1 : std::max(sizes.size(), size_t(1));
+  SmallVector<int64_t> shape(numDims, ShapedType::kDynamic);
+  return MemRefType::get(shape, builder.getI64Type());
+}
+
 void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
                         ArtsMode mode, Value sourceGuid, Value sourcePtr,
+                        std::optional<PartitionMode> partitionMode,
                         SmallVector<Value> indices, SmallVector<Value> offsets,
-                        SmallVector<Value> sizes, Value chunkIndex,
-                        Value chunkSize, Value boundsValid,
+                        SmallVector<Value> sizes,
+                        SmallVector<Value> partitionIndices,
+                        SmallVector<Value> partitionOffsets,
+                        SmallVector<Value> partitionSizes, Value boundsValid,
                         SmallVector<Value> elementOffsets,
                         SmallVector<Value> elementSizes) {
   auto sourceDb = DatablockUtils::getUnderlyingDb(sourcePtr);
@@ -526,223 +634,128 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
   assert(sourceDb && "Expected sourceDb");
   assert(sourceDbAlloc && "Expected sourceDbAlloc");
 
-  /// Get the sizes from the source datablock
   auto sourceSizes = DatablockUtils::getSizesFromDb(sourceDb);
   const uint64_t sourceRank = sourceSizes.size();
   const uint64_t pinnedDims = indices.size();
-  assert(pinnedDims <= sourceRank && "Number of indices exceeds source rank");
 
-  /// Compute the remaining rank, if it is 0, we still need a pointer to the db
-  uint64_t remainingRank = sourceRank - pinnedDims;
-  if (remainingRank == 0)
-    remainingRank = 1;
+  if (!indices.empty())
+    assert(pinnedDims <= sourceRank &&
+           "Number of DB-space indices exceeds source rank");
 
-  /// If sizes are not provided, add single size for each remaining dimension
-  if (sizes.empty()) {
-    sizes.reserve(remainingRank);
-    for (uint64_t d = 0; d < remainingRank; ++d)
-      sizes.push_back(
-          builder.create<arith::ConstantIndexOp>(state.location, 1));
+  uint64_t remainingRank = std::max(sourceRank - pinnedDims, uint64_t(1));
+
+  /// Auto-fill sizes/offsets when indices are provided
+  if (!indices.empty()) {
+    if (sizes.empty()) {
+      sizes.reserve(remainingRank);
+      for (uint64_t d = 0; d < remainingRank; ++d)
+        sizes.push_back(
+            builder.create<arith::ConstantIndexOp>(state.location, 1));
+    }
+    if (offsets.empty()) {
+      offsets.reserve(remainingRank);
+      for (uint64_t d = 0; d < remainingRank; ++d)
+        offsets.push_back(
+            builder.create<arith::ConstantIndexOp>(state.location, 0));
+    }
   }
 
-  /// Ensure offsets are present for remaining dimensions when omitted
-  if (offsets.empty()) {
-    offsets.reserve(remainingRank);
-    for (uint64_t d = 0; d < remainingRank; ++d)
-      offsets.push_back(
-          builder.create<arith::ConstantIndexOp>(state.location, 0));
-  }
-
-  /// GUID type uses dimensionality equal to number of sizes (at least 1)
-  SmallVector<int64_t> guidShape;
-  size_t numGuidDims = std::max(sizes.size(), size_t(1));
-  guidShape.assign(numGuidDims, ShapedType::kDynamic);
-  Type guidType = MemRefType::get(guidShape, builder.getI64Type());
-
-  /// The DbAcquireOp only offsets the pointer, so the type is the same as the
-  /// source pointer
+  Type guidType = computeGuidType(builder, sizes);
   Type ptrType = sourceDbAlloc.getPtr().getType().cast<MemRefType>();
 
-  /// Result types
-  state.addTypes({guidType, ptrType});
-
-  /// Add operands and attributes
-  state.addAttribute("mode", ArtsModeAttr::get(builder.getContext(), mode));
-  if (sourceGuid)
-    state.addOperands(sourceGuid);
-  state.addOperands(sourcePtr);
-  state.addOperands(indices);
-  state.addOperands(offsets);
-  state.addOperands(sizes);
-  if (chunkIndex)
-    state.addOperands(chunkIndex);
-  if (chunkSize)
-    state.addOperands(chunkSize);
-  if (boundsValid)
-    state.addOperands(boundsValid);
-  state.addOperands(elementOffsets);
-  state.addOperands(elementSizes);
-
-  /// Build operand segment sizes: [source_guid(0/1), source_ptr=1, indices,
-  /// offsets, sizes, chunk_index(0/1), chunk_size(0/1), boundsValid(0/1),
-  /// element_offsets, element_sizes]
-  state.addAttribute(
-      "operandSegmentSizes",
-      builder.getDenseI32ArrayAttr(
-          {sourceGuid ? 1 : 0, 1, static_cast<int32_t>(indices.size()),
-           static_cast<int32_t>(offsets.size()),
-           static_cast<int32_t>(sizes.size()), chunkIndex ? 1 : 0,
-           chunkSize ? 1 : 0, boundsValid ? 1 : 0,
-           static_cast<int32_t>(elementOffsets.size()),
-           static_cast<int32_t>(elementSizes.size())}));
-
-  /// Initialize partition attribute from parent allocation's mode.
-  if (auto parentMode = getPartitionMode(sourceDbAlloc.getOperation())) {
-    state.addAttribute(
-        AttrNames::Operation::Partition,
-        PartitionModeAttr::get(builder.getContext(), *parentMode));
-  } else {
-    state.addAttribute(
-        AttrNames::Operation::Partition,
-        PartitionModeAttr::get(builder.getContext(), PartitionMode::coarse));
-  }
+  addDbAcquireOperandsAndAttrs(builder, state, mode, sourceGuid, sourcePtr,
+                               guidType, ptrType, partitionMode, indices,
+                               offsets, sizes, partitionIndices,
+                               partitionOffsets, partitionSizes, boundsValid,
+                               elementOffsets, elementSizes);
 }
 
-/// DbAcquireOp builder with explicit ptr type (for block arguments)
-void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
-                        ArtsMode mode, Value sourceGuid, Value sourcePtr,
-                        Type ptrType, SmallVector<Value> indices,
-                        SmallVector<Value> offsets, SmallVector<Value> sizes,
-                        Value chunkIndex, Value chunkSize, Value boundsValid,
-                        SmallVector<Value> elementOffsets,
-                        SmallVector<Value> elementSizes) {
-  /// When sourceGuid is null and sourcePtr is a block argument,
-  /// we can't trace back to find the DB, so we use explicit sizes/offsets
-
-  /// If sizes/offsets not provided, use defaults for rank-1
-  if (sizes.empty()) {
-    sizes.push_back(builder.create<arith::ConstantIndexOp>(state.location, 1));
+void DbAcquireOp::build(
+    OpBuilder &builder, OperationState &state, ArtsMode mode, Value sourceGuid,
+    Value sourcePtr, Type ptrType, std::optional<PartitionMode> partitionMode,
+    SmallVector<Value> indices, SmallVector<Value> offsets,
+    SmallVector<Value> sizes, SmallVector<Value> partitionIndices,
+    SmallVector<Value> partitionOffsets, SmallVector<Value> partitionSizes,
+    Value boundsValid, SmallVector<Value> elementOffsets,
+    SmallVector<Value> elementSizes) {
+  /// Auto-fill sizes/offsets when indices are provided
+  if (!indices.empty()) {
+    if (sizes.empty())
+      sizes.push_back(
+          builder.create<arith::ConstantIndexOp>(state.location, 1));
+    if (offsets.empty()) {
+      for (size_t i = 0; i < sizes.size(); ++i)
+        offsets.push_back(
+            builder.create<arith::ConstantIndexOp>(state.location, 0));
+    }
   }
-  if (offsets.empty()) {
-    for (size_t i = 0; i < sizes.size(); ++i)
-      offsets.push_back(
-          builder.create<arith::ConstantIndexOp>(state.location, 0));
-  }
 
-  /// GUID type uses dimensionality equal to number of sizes (at least 1)
-  SmallVector<int64_t> guidShape;
-  size_t numGuidDims = std::max(sizes.size(), size_t(1));
-  guidShape.assign(numGuidDims, ShapedType::kDynamic);
-  Type guidType = MemRefType::get(guidShape, builder.getI64Type());
+  Type guidType = computeGuidType(builder, sizes);
 
-  /// Result types
-  state.addTypes({guidType, ptrType});
-
-  /// Add operands and attributes
-  state.addAttribute("mode", ArtsModeAttr::get(builder.getContext(), mode));
-  if (sourceGuid)
-    state.addOperands(sourceGuid);
-  state.addOperands(sourcePtr);
-  state.addOperands(indices);
-  state.addOperands(offsets);
-  state.addOperands(sizes);
-  if (chunkIndex)
-    state.addOperands(chunkIndex);
-  if (chunkSize)
-    state.addOperands(chunkSize);
-  if (boundsValid)
-    state.addOperands(boundsValid);
-  state.addOperands(elementOffsets);
-  state.addOperands(elementSizes);
-
-  /// Build operand segment sizes: [source_guid(0/1), source_ptr=1, indices,
-  /// offsets, sizes, chunk_index(0/1), chunk_size(0/1), boundsValid(0/1),
-  /// element_offsets, element_sizes]
-  state.addAttribute(
-      "operandSegmentSizes",
-      builder.getDenseI32ArrayAttr(
-          {sourceGuid ? 1 : 0, 1, static_cast<int32_t>(indices.size()),
-           static_cast<int32_t>(offsets.size()),
-           static_cast<int32_t>(sizes.size()), chunkIndex ? 1 : 0,
-           chunkSize ? 1 : 0, boundsValid ? 1 : 0,
-           static_cast<int32_t>(elementOffsets.size()),
-           static_cast<int32_t>(elementSizes.size())}));
-
-  /// Initialize partition attribute.
-  PartitionMode partitionMode = PartitionMode::coarse;
-  if (auto *allocOp = DatablockUtils::getUnderlyingDbAlloc(sourcePtr)) {
-    if (auto parentMode = getPartitionMode(allocOp))
-      partitionMode = *parentMode;
-  }
-  state.addAttribute(
-      AttrNames::Operation::Partition,
-      PartitionModeAttr::get(builder.getContext(), partitionMode));
+  addDbAcquireOperandsAndAttrs(builder, state, mode, sourceGuid, sourcePtr,
+                               guidType, ptrType, partitionMode, indices,
+                               offsets, sizes, partitionIndices,
+                               partitionOffsets, partitionSizes, boundsValid,
+                               elementOffsets, elementSizes);
 }
 
 LogicalResult DbAcquireOp::verify() {
-  /// Check that the number of offsets matches the number of sizes
-  auto dbSizes = getSizes().size();
-  auto dbOffsets = getOffsets().size();
-  if (dbOffsets != dbSizes) {
-    return emitOpError("Number of offsets (")
-           << dbOffsets << ") must match Number of sizes (" << dbSizes << ")";
+  size_t numSizes = getSizes().size();
+  size_t numOffsets = getOffsets().size();
+  size_t numIndices = getIndices().size();
+
+  /// Validate offsets/sizes consistency
+  if (numSizes != 0 && numOffsets != 0 && numOffsets != numSizes) {
+    return emitOpError("Number of DB-space offsets (")
+           << numOffsets << ") must match Number of DB-space sizes ("
+           << numSizes << ")";
   }
 
-  /// Get the source pointer type and rank
-  auto srcRank = DatablockUtils::getSizesFromDb(getSourcePtr()).size();
-  auto dbIndices = getIndices().size();
+  /// Skip validation for partition hints only mode (no indices or sizes)
+  if (numIndices == 0 && numSizes == 0)
+    return success();
 
-  /// Check that indices don't exceed source rank
-  if (dbIndices > srcRank) {
-    return emitOpError("Number of indices (")
-           << dbIndices << ") exceeds source datablock rank (" << srcRank
+  size_t srcRank = DatablockUtils::getSizesFromDb(getSourcePtr()).size();
+
+  if (numIndices > srcRank) {
+    return emitOpError("Number of DB-space indices (")
+           << numIndices << ") exceeds source datablock rank (" << srcRank
            << "). This indicates a dimensionality mismatch between DbAcquire "
            << "and its source DbAlloc.";
   }
 
-  auto remainingRank = srcRank - dbIndices;
+  size_t remainingRank = srcRank - numIndices;
 
-  /// Check that source rank minus Db indices equals number of sizes
-  if (remainingRank > 0 && remainingRank != dbSizes) {
+  if (remainingRank > 0 && numSizes > 0 && remainingRank != numSizes) {
     return emitOpError("Source rank (")
-           << srcRank << ") - indices (" << dbIndices << ") = " << remainingRank
-           << " must equal Number of sizes (" << dbSizes
-           << "). When modifying DbAcquire layout, ensure the source DbAlloc "
-           << "dimensionality is updated correspondingly.";
+           << srcRank << ") - indices (" << numIndices
+           << ") = " << remainingRank
+           << " must equal Number of DB-space sizes (" << numSizes
+           << "). When modifying DbAcquire layout, ensure the "
+           << "source DbAlloc dimensionality is updated correspondingly.";
   }
 
-  /// Check if the source has a single size of 1 and we are using indices
-  if (dbIndices > 0) {
+  /// Validate indices are not used on single-element datablocks
+  if (numIndices > 0) {
     Operation *sourceDb = DatablockUtils::getUnderlyingDb(getSourcePtr());
     if (DatablockUtils::hasSingleSize(sourceDb)) {
-      return emitOpError(
-                 "Cannot use indices on single-element datablock (size=1)\n")
-             << *getOperation();
+      auto partMode = getPartitionMode();
+      bool awaitingPartitioning =
+          partMode && (*partMode == PartitionMode::fine_grained ||
+                       *partMode == PartitionMode::block);
+      if (!awaitingPartitioning) {
+        return emitOpError("Cannot use DB-space indices on single-element "
+                           "datablock (size=1)\n")
+               << *getOperation();
+      }
     }
   }
-
-  /// Chunk hint validation
-  bool hasChunkIndex = getChunkIndex() != nullptr;
-  bool hasChunkSize = getChunkSize() != nullptr;
-  if (hasChunkIndex != hasChunkSize) {
-    return emitOpError("chunk_hint requires both chunk_index and chunk_size\n")
-           << *getOperation();
-  }
-
-  /// NOTE: We do NOT warn about unused ptr results here because:
-  /// 1. During IR transformations, acquires may temporarily have unused results
-  /// 2. Emitting a warning here triggers operation printing, which triggers
-  ///    verification again, causing infinite recursion and stack overflow
-  /// 3. The RemoveUnusedDbAcquire canonicalization pattern handles cleanup
-  ///    of truly orphaned acquires after transformations complete
 
   return success();
 }
 
-/// DbRefOp builders
 void DbRefOp::build(OpBuilder &builder, OperationState &state, Value source,
                     ArrayRef<Value> indices) {
-  /// The dbref
   DbAllocOp dbAllocOp =
       dyn_cast<DbAllocOp>(DatablockUtils::getUnderlyingDbAlloc(source));
   assert(dbAllocOp && "Expected dbAllocOp");
@@ -760,7 +773,6 @@ LogicalResult DbRefOp::verify() {
     return emitOpError("source must be a datablock operation\n")
            << *getOperation();
 
-  /// Verify outer indices
   auto outerSizes = DatablockUtils::getSizesFromDb(underlyingDbOp);
   if (getIndices().size() != outerSizes.size()) {
     return emitOpError("expects ")
@@ -769,12 +781,6 @@ LogicalResult DbRefOp::verify() {
            << *getOperation();
   }
 
-  /// If the underlying datablock ALLOCATION is coarse-grained (all outer sizes
-  /// are 1), every db_ref index must be constant zero. Using any other value
-  /// would select a non-existent datablock slice.
-  /// Note: We check the DbAllocOp's sizes, not the DbAcquireOp's sizes, because
-  /// a coarse-grained acquire on a fine-grained allocation should still allow
-  /// indexing into the individual chunks of the fine-grained structure.
   SmallVector<Value> allocSizes = outerSizes;
   if (auto dbAcquire = dyn_cast<DbAcquireOp>(underlyingDbOp)) {
     if (auto dbAlloc = dyn_cast_or_null<DbAllocOp>(
@@ -797,7 +803,6 @@ LogicalResult DbRefOp::verify() {
     }
   }
 
-  /// Verify output
   DbAllocOp dbAllocOp = nullptr;
   if (auto dbAcquire = dyn_cast<DbAcquireOp>(underlyingDbOp)) {
     dbAllocOp = dyn_cast<DbAllocOp>(
@@ -862,17 +867,14 @@ void DbNumElementsOp::build(OpBuilder &builder, OperationState &state,
 
 void DbNumElementsOp::build(OpBuilder &builder, OperationState &state,
                             DbAcquireOp acquireOp) {
-  /// Extract sizes from the DbAcquireOp
   SmallVector<Value> sizes = acquireOp.getSizes();
   build(builder, state, sizes);
 }
 
-/// Canonicalization pattern for DbNumElementsOp
 struct FoldDbNumElementsSingleSize : public OpRewritePattern<DbNumElementsOp> {
   using OpRewritePattern<DbNumElementsOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(DbNumElementsOp op,
                                 PatternRewriter &rewriter) const override {
-    /// If we have a single size, we can rewire the value directly
     if (op.getSizes().size() == 1) {
       rewriter.replaceOp(op, op.getSizes()[0]);
       return success();
@@ -881,44 +883,24 @@ struct FoldDbNumElementsSingleSize : public OpRewritePattern<DbNumElementsOp> {
   }
 };
 
-/// Add canonicalization patterns for DbNumElementsOp
 void DbNumElementsOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                                   MLIRContext *context) {
   results.add<FoldDbNumElementsSingleSize>(context);
 }
 
-///==========================================================================///
-/// OmpDepOp Builder
-///==========================================================================///
-
 void OmpDepOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
                      Value source, SmallVector<Value> indices,
                      SmallVector<Value> sizes) {
-  /// Result type is the same as source memref type
   state.addTypes(source.getType());
-
-  /// Add mode attribute
   state.addAttribute("mode", ArtsModeAttr::get(builder.getContext(), mode));
-
-  /// Add operands: source, indices, sizes
   state.addOperands(source);
   state.addOperands(indices);
   state.addOperands(sizes);
-
-  /// Build operand segment sizes: [source=1, indices, sizes]
   state.addAttribute(
       "operandSegmentSizes",
       builder.getDenseI32ArrayAttr({1, static_cast<int32_t>(indices.size()),
                                     static_cast<int32_t>(sizes.size())}));
 }
 
-// ForOp Canonicalization
-
 void arts::ForOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
-                                              MLIRContext *context) {
-  /// No canonicalization patterns for now
-  /// Future patterns could include:
-  ///  - Loop unrolling for small iteration counts
-  /// - Loop fusion for adjacent loops
-  /// - Loop invariant code motion
-}
+                                              MLIRContext *context) {}

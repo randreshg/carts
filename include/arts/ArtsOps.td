@@ -106,11 +106,12 @@ def DbAllocOp : Arts_Op<"db_alloc", [
     TypeAttr:$elementType,
     Optional<AnyMemRef>:$address,
     Variadic<Index>:$sizes,
-    Variadic<Index>:$elementSizes
+    Variadic<Index>:$elementSizes,
+    OptionalAttr<PartitionModeAttr>:$partition_mode
   );
   let results = (outs MemRefOf<[I64]>:$guid, AnyMemRef:$ptr);
   let assemblyFormat = [{
-    `[` $mode `,` $allocType `,` $dbMode `]`
+    `[` $mode `,` $allocType `,` $dbMode (`,` $partition_mode^)? `]`
     `route` `(` $route `:` type($route) `)`
     ( `(` $address^ `:` type($address) `)` )?
     `sizes` `[` $sizes `]`
@@ -185,13 +186,21 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     - mode: enum for "in", "out", "inout"
     - sourceGuid: GUID memref from DbAllocOp or previous DbAcquireOp (optional)
     - sourcePtr: Ptr memref from DbAllocOp or previous DbAcquireOp
-    - indices: indices for subregion
-    - offsets: offsets for subregion
-    - sizes: sizes for subregion
 
-    Chunk hint (set by ForLowering for chunked partitioning):
-    - chunk_index: Which chunk this worker accesses (0, 1, 2, ...).
-    - chunk_size: Size of each chunk in elements.
+    DB-space fields: indices, offsets and sizes
+
+    Partition hints (element-space, for DbPartitioning pass):
+    - partition_mode: coarse, chunked, fine_grained, or stencil - describes access pattern
+    - partition_indices: element indices for fine_grained access (from depend(inout: A[i][j]))
+    - partition_offsets: element offsets for chunked/stencil access (from depend(in: A[off:sz]))
+    - partition_sizes: element sizes for chunked/stencil access
+
+    Multiple partition entries (for multiple depend clause entries):
+    When an OpenMP task has multiple depend entries like `depend(in: A[i][j], A[i-1][j])`,
+    each entry becomes a separate partition entry. The segment attributes track how many
+    values belong to each entry:
+    - partition_indices_segments: [2, 2] means entry 0 has 2 indices, entry 1 has 2 indices
+    - partition_entry_modes: per-entry partition mode (fine_grained, chunked, etc.)
 
     When source_guid is absent (nullptr), it means this acquire is chaining from
     a parent EDT's acquire where only the ptr was passed through block arguments.
@@ -209,23 +218,37 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     ArtsModeAttr:$mode,
     Optional<MemRefOf<[I64]>>:$source_guid,
     AnyMemRef:$source_ptr,
+    OptionalAttr<PartitionModeAttr>:$partition_mode,
     Variadic<Index>:$indices,
     Variadic<Index>:$offsets,
     Variadic<Index>:$sizes,
-    Optional<Index>:$chunk_index,
-    Optional<Index>:$chunk_size,
+    Variadic<Index>:$partition_indices,
+    Variadic<Index>:$partition_offsets,
+    Variadic<Index>:$partition_sizes,
     Optional<I1>:$bounds_valid,
     Variadic<Index>:$element_offsets,
-    Variadic<Index>:$element_sizes
+    Variadic<Index>:$element_sizes,
+    /// Segment attributes for multiple partition entries
+    OptionalAttr<DenseI32ArrayAttr>:$partition_indices_segments,
+    OptionalAttr<DenseI32ArrayAttr>:$partition_offsets_segments,
+    OptionalAttr<DenseI32ArrayAttr>:$partition_sizes_segments,
+    /// Per-entry partition modes
+    OptionalAttr<DenseI32ArrayAttr>:$partition_entry_modes
   );
   let results = (outs MemRefOf<[I64]>:$guid, AnyMemRef:$ptr);
   let assemblyFormat = [{
     `[` $mode `]`
     `(` ($source_guid^ `:` type($source_guid) `,`)? $source_ptr `:` type($source_ptr) `)`
-    ( `indices` `[` $indices^ `]` )?
-    ( `offsets` `[` $offsets^ `]` )?
-    ( `sizes` `[` $sizes^ `]` )?
-    ( `chunk_hint` `(` $chunk_index^ `,` $chunk_size `)` )?
+    ( `partitioning` `(`
+        $partition_mode^
+        (`,` `indices` `[` $partition_indices^ `]`)?
+        (`,` `offsets` `[` $partition_offsets^ `]`)?
+        (`,` `sizes` `[` $partition_sizes^ `]`)?
+      `)`
+    )?
+    (`,` `indices` `[` $indices^ `]`)?
+    (`,` `offsets` `[` $offsets^ `]`)?
+    (`,` `sizes` `[` $sizes^ `]`)?
     ( `bounds_valid` `(` $bounds_valid^ `)` )?
     ( `element_offsets` `[` $element_offsets^ `]` )?
     ( `element_sizes` `[` $element_sizes^ `]` )?
@@ -235,26 +258,32 @@ def DbAcquireOp : Arts_Op<"db_acquire",
   let hasCanonicalizer = 1;
   let skipDefaultBuilders = 1;
   let builders = [
+    /// Builder for CreateDbs: sets partition hints, leaves DB-space empty
     OpBuilder<(ins "ArtsMode":$mode,
                    "Value":$source_guid,
                    "Value":$source_ptr,
+                   CArg<"std::optional<PartitionMode>", "std::nullopt">:$partitionMode,
                    CArg<"SmallVector<Value>", "{}">:$indices,
                    CArg<"SmallVector<Value>", "{}">:$offsets,
                    CArg<"SmallVector<Value>", "{}">:$sizes,
-                   CArg<"Value", "nullptr">:$chunkIndex,
-                   CArg<"Value", "nullptr">:$chunkSize,
+                   CArg<"SmallVector<Value>", "{}">:$partition_indices,
+                   CArg<"SmallVector<Value>", "{}">:$partition_offsets,
+                   CArg<"SmallVector<Value>", "{}">:$partition_sizes,
                    CArg<"Value", "{}">:$bounds_valid,
                    CArg<"SmallVector<Value>", "{}">:$element_offsets,
                    CArg<"SmallVector<Value>", "{}">:$element_sizes)>,
+    /// Builder with partition_mode and explicit ptrType
     OpBuilder<(ins "ArtsMode":$mode,
                    "Value":$source_guid,
                    "Value":$source_ptr,
                    "Type":$ptrType,
+                   CArg<"std::optional<PartitionMode>", "std::nullopt">:$partitionMode,
                    CArg<"SmallVector<Value>", "{}">:$indices,
                    CArg<"SmallVector<Value>", "{}">:$offsets,
                    CArg<"SmallVector<Value>", "{}">:$sizes,
-                   CArg<"Value", "nullptr">:$chunkIndex,
-                   CArg<"Value", "nullptr">:$chunkSize,
+                   CArg<"SmallVector<Value>", "{}">:$partition_indices,
+                   CArg<"SmallVector<Value>", "{}">:$partition_offsets,
+                   CArg<"SmallVector<Value>", "{}">:$partition_sizes,
                    CArg<"Value", "{}">:$bounds_valid,
                    CArg<"SmallVector<Value>", "{}">:$element_offsets,
                    CArg<"SmallVector<Value>", "{}">:$element_sizes)>
@@ -274,8 +303,77 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     /// Check if this acquire has element-level offset/size info (ESD partial acquisition)
     bool hasElementOffsets() { return !getElementOffsets().empty(); }
 
-    /// Check if this acquire has chunk hint info (set by ForLowering)
-    bool hasChunkHint() { return getChunkIndex() != nullptr && getChunkSize() != nullptr; }
+    /// Check if this acquire has a partition mode set
+    bool hasPartitionMode() { return getPartitionMode().has_value(); }
+
+    /// Get partition mode, returns coarse if not set
+    PartitionMode getPartitionModeOr(PartitionMode defaultMode = PartitionMode::coarse) {
+      return getPartitionMode().value_or(defaultMode);
+    }
+
+    /// Check if this is a fine-grained (element-wise) acquire
+    bool isFineGrained() {
+      return getPartitionModeOr() == PartitionMode::fine_grained;
+    }
+
+    /// Check if this is a block acquire
+    bool isBlock() {
+      return getPartitionModeOr() == PartitionMode::block;
+    }
+
+    /// Check if this is a stencil acquire
+    bool isStencil() {
+      return getPartitionModeOr() == PartitionMode::stencil;
+    }
+
+    /// Check if this is a coarse acquire
+    bool isCoarse() {
+      return getPartitionModeOr() == PartitionMode::coarse;
+    }
+
+    /// Check if this acquire has partition hints (element-space indices/offsets/sizes)
+    bool hasPartitionHints() {
+      return hasExplicitPartitionHints();
+    }
+
+    /// Check if this acquire has explicit partition hints (including sizes)
+    bool hasExplicitPartitionHints();
+
+    /// Copy partition segment metadata from another acquire
+    void copyPartitionSegmentsFrom(DbAcquireOp source);
+
+    //===------------------------------------------------------------------===//
+    // Multiple Partition Entry Support
+    //===------------------------------------------------------------------===//
+
+    /// Check if this acquire has multiple partition entries
+    bool hasMultiplePartitionEntries();
+
+    /// Get number of partition entries (returns 1 for backward compat if no segments)
+    size_t getNumPartitionEntries();
+
+    /// Get the partition mode for a specific entry (uses partition_entry_modes if set)
+    PartitionMode getPartitionEntryMode(size_t entryIdx);
+
+    /// Get partition indices for a specific entry
+    SmallVector<Value> getPartitionIndicesForEntry(size_t entryIdx);
+
+    /// Get partition offsets for a specific entry
+    SmallVector<Value> getPartitionOffsetsForEntry(size_t entryIdx);
+
+    /// Get partition sizes for a specific entry
+    SmallVector<Value> getPartitionSizesForEntry(size_t entryIdx);
+
+    /// Set segment attributes for multi-entry partition hints.
+    /// Only sets non-empty arrays, skips empty ones.
+    void setPartitionSegments(ArrayRef<int32_t> indicesSegments,
+                              ArrayRef<int32_t> offsetsSegments,
+                              ArrayRef<int32_t> sizesSegments,
+                              ArrayRef<int32_t> entryModes);
+
+    /// Get all partition entries as unified PartitionInfo structs.
+    /// Returns one PartitionInfo per depend entry.
+    SmallVector<PartitionInfo> getPartitionInfos();
   }];
 }
 
@@ -405,7 +503,7 @@ def DbControlOp : Arts_Op<"db_control",
     - ptr: base address of the DataBlock
     - indices: pinned indices for the subview (dimensions with size=1)
     - offsets: chunk offsets for the subview (dimensions with size>1)
-    - sizes: chunk sizes for the subview (dimensions with size>1)
+    - sizes: block sizes for the subview (dimensions with size>1)
     Note: Currently ignored for execution, but retained for future correctness enforcement.
   }];
   let arguments = (ins
@@ -462,7 +560,7 @@ def OmpDepOp : Arts_Op<"omp_dep", [Pure, AttrSizedOperandSegments]> {
     - Base array (canonicalized N-D array)
     - Access mode (in/out/inout)
     - Starting indices for each dimension
-    - Chunk size for each dimension
+    - Block size for each dimension
 
     This operation is created in CanonicalizeMemrefs when transforming nested
     arrays to N-D arrays, and is consumed in ConvertOpenMPToArts to create

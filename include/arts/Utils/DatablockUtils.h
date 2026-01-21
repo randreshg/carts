@@ -83,8 +83,8 @@ public:
   /// Get partition mode from DbAllocOp
   static PartitionMode getPartitionModeFromStructure(DbAllocOp alloc);
 
-  static bool isChunked(DbAcquireOp acquire) {
-    return getPartitionModeFromStructure(acquire) == PartitionMode::chunked;
+  static bool isBlock(DbAcquireOp acquire) {
+    return getPartitionModeFromStructure(acquire) == PartitionMode::block;
   }
 
   static bool isElementWise(DbAcquireOp acquire) {
@@ -152,17 +152,17 @@ public:
   static bool isWriterMode(ArtsMode mode);
 
   ///===----------------------------------------------------------------------===///
-  /// Offset Dependency and Chunk Size Analysis
+  /// Offset Dependency and Block Size Analysis
   ///===----------------------------------------------------------------------===///
   /// Functions for analyzing value dependencies on offsets and extracting
-  /// base chunk sizes from size hints.
+  /// base block sizes from size hints.
 
   /// Check if a value depends on a partition offset (ignoring numeric casts).
   /// Used to determine data dependencies in index expressions for partitioning.
   static bool dependsOnOffset(Value v, Value offset);
 
-  /// Try to extract an offset-independent base chunk size from size hints.
-  static Value extractBaseChunkSizeCandidate(Value offsetHint, Value sizeHint,
+  /// Try to extract an offset-independent base block size from size hints.
+  static Value extractBaseBlockSizeCandidate(Value offsetHint, Value sizeHint,
                                              int depth = 0);
 
   /// Find the EDT operation that uses a DbControlOp result.

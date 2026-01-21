@@ -1,47 +1,58 @@
 ///==========================================================================///
-/// File: DbChunkedIndexer.h
+/// File: DbBlockIndexer.h
 ///
-/// Index localizer for chunked datablock allocation.
-/// Multiple elements are grouped into chunks for coarse-grained parallelism.
+/// Index localizer for block datablock allocation.
+/// Multiple elements are grouped into blocks for coarse-grained parallelism.
 ///
 /// Partitioning policy:
-/// - Chunked is selected only when chunk hints exist and the cost model
-///   prefers chunking; otherwise we fall back to element-wise for concurrency.
+/// - Block is selected only when block hints exist and the cost model
+///   prefers blocking; otherwise we fall back to element-wise for concurrency.
 /// - Twin-diff remains enabled unless disjoint access is proven after rewrite.
 ///
-/// Example (A[100][50], chunkSize=25, startChunk=1):
-///   Chunk 1 covers rows 25..49.
+/// Example (A[100][50], blockSize=25, startBlock=1):
+///   Block 1 covers rows 25..49.
 ///   Access A[27][10]:
-///     chunkIdx = 27 / 25 = 1
-///     dbRefIdx = chunkIdx - startChunk = 0
+///     blockIdx = 27 / 25 = 1
+///     dbRefIdx = blockIdx - startBlock = 0
 ///     localRow = 27 % 25 = 2
 ///     memrefIdx = [2, 10]
 ///
 /// Equations (div/mod localization):
-///   dbRefIdx  = (globalRow / chunkSize) - startChunk
-///   memrefIdx = globalRow % chunkSize
+///   dbRefIdx  = (globalRow / blockSize) - startBlock
+///   memrefIdx = globalRow % blockSize
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_DATABLOCK_DBCHUNKEDINDEXER_H
-#define ARTS_TRANSFORMS_DATABLOCK_DBCHUNKEDINDEXER_H
+#ifndef ARTS_TRANSFORMS_DATABLOCK_DBBLOCKINDEXER_H
+#define ARTS_TRANSFORMS_DATABLOCK_DBBLOCKINDEXER_H
 
 #include "arts/Transforms/Datablock/DbIndexerBase.h"
 
 namespace mlir {
 namespace arts {
 
-/// Index localizer for chunked datablock allocation.
+/// Index localizer for block datablock allocation.
 /// Implements div/mod localization for coarse-grained parallelism.
-class DbChunkedIndexer : public DbIndexerBase {
-  Value chunkSize, startChunk, elemOffset;
+/// Supports N-dimensional block partitioning where multiple leading dimensions
+/// use div/mod localization.
+///
+/// For each partitioned dimension d:
+///   dbRefIdx[d]  = (globalIdx[d] / blockSize[d]) - startBlock[d]
+///   memrefIdx[d] = globalIdx[d] % blockSize[d]
+class DbBlockIndexer : public DbIndexerBase {
+  SmallVector<Value> blockSizes;  /// Block size per partitioned dimension
+  SmallVector<Value> startBlocks; /// Start block per partitioned dimension
 
 public:
-  DbChunkedIndexer(Value chunkSize, Value startChunk, Value elemOffset,
-                   unsigned outerRank, unsigned innerRank);
+  /// N-D constructor for multi-dimensional block partitioning
+  DbBlockIndexer(ArrayRef<Value> blockSizes, ArrayRef<Value> startBlocks,
+                 unsigned outerRank, unsigned innerRank);
+
+  /// Number of partitioned dimensions
+  unsigned numPartitionedDims() const { return blockSizes.size(); }
 
   /// Transform global multi-dimensional indices to local
-  /// For chunked mode: dbRefIdx = global / chunkSize - startChunk
-  ///                   memrefIdx = global % chunkSize
+  /// For block mode: dbRefIdx = global / blockSize - startBlock
+  ///                 memrefIdx = global % blockSize
   LocalizedIndices localize(ArrayRef<Value> globalIndices, OpBuilder &builder,
                             Location loc) override;
 
@@ -75,4 +86,4 @@ public:
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_DATABLOCK_DBCHUNKEDINDEXER_H
+#endif // ARTS_TRANSFORMS_DATABLOCK_DBBLOCKINDEXER_H
