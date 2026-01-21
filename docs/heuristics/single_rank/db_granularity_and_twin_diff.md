@@ -215,9 +215,9 @@ Use fine-grain only if:
 - `depsPerEDT` is not too large (stencil width not huge)
 - `innerBytes` is large enough to amortize metadata/event overhead
 
-Otherwise, prefer chunked/blocking (see Heuristic 3).
+Otherwise, prefer blocked/blocking (see Heuristic 3).
 
-### Heuristic 3: chunked DBs as the middle ground
+### Heuristic 3: blocked DBs as the middle ground
 
 When per-element DBs are too expensive but coarse is too serializing:
 - allocate DBs per **block** of elements (chunk)

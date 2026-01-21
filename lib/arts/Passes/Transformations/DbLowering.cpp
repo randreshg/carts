@@ -86,7 +86,9 @@ static SmallVector<Value> getLogicalDims(const LayoutInfo &info,
     dims.append(info.sizes.begin(), info.sizes.end());
     dims.append(info.elementSizes.begin(), info.elementSizes.end());
     break;
-  case PartitionMode::chunked: {
+  case PartitionMode::block:
+  case PartitionMode::stencil: {
+    /// Stencil mode uses same layout as chunked (with halo handling)
     Value firstDim = info.elementSizes.front();
     if (!info.sizes.empty()) {
       firstDim =
@@ -144,16 +146,16 @@ static void mapGlobalToLayout(ArrayRef<Value> globalIndices,
     return;
   }
 
-  /// Chunked: assume chunking along the leading dimension
+  /// Block: assume chunking along the leading dimension
   Value g0 = globalIndices.empty() ? zero : globalIndices.front();
-  Value chunkSize = info.elementSizes.empty()
+  Value blockSize = info.elementSizes.empty()
                         ? builder.create<arith::ConstantIndexOp>(loc, 1)
                         : info.elementSizes.front();
-  outerIndices.push_back(builder.create<arith::DivUIOp>(loc, g0, chunkSize));
+  outerIndices.push_back(builder.create<arith::DivUIOp>(loc, g0, blockSize));
   while (outerIndices.size() < info.outerRank)
     outerIndices.push_back(zero);
 
-  innerIndices.push_back(builder.create<arith::RemUIOp>(loc, g0, chunkSize));
+  innerIndices.push_back(builder.create<arith::RemUIOp>(loc, g0, blockSize));
   for (unsigned i = 1; i < globalIndices.size(); ++i)
     innerIndices.push_back(globalIndices[i]);
   while (innerIndices.size() < info.innerRank)
@@ -161,7 +163,7 @@ static void mapGlobalToLayout(ArrayRef<Value> globalIndices,
   if (innerIndices.empty())
     innerIndices.push_back(zero);
 }
-} /// namespace
+} // namespace
 
 namespace {
 struct DbLoweringPass : public arts::DbLoweringBase<DbLoweringPass> {
@@ -186,11 +188,9 @@ private:
   ArtsCodegen *AC = nullptr;
   IdRegistry idRegistry;
 };
-} /// namespace
+} // namespace
 
-///===----------------------------------------------------------------------===///
 /// Lower datablock allocations to use opaque pointers
-///===----------------------------------------------------------------------===///
 void DbLoweringPass::runOnOperation() {
   module = getOperation();
   AC = new ArtsCodegen(module, false);
@@ -256,11 +256,11 @@ void DbLoweringPass::lowerDbCopyOps() {
     if (destMode == PartitionMode::fine_grained &&
         sourceAlloc.getElementSizes().size() == 1 &&
         sourceAlloc.getSizes().size() == 1) {
-      /// Chunked -> Fine-grained: total elements = numChunks * chunkSize
-      Value numChunks = sourceAlloc.getSizes().front();
-      Value chunkSize = sourceAlloc.getElementSizes().front();
+      /// Block -> Fine-grained: total elements = numBlocks * blockSize
+      Value numBlocks = sourceAlloc.getSizes().front();
+      Value blockSize = sourceAlloc.getElementSizes().front();
       Value totalSize =
-          builder.create<arith::MulIOp>(loc, numChunks, chunkSize);
+          builder.create<arith::MulIOp>(loc, numBlocks, blockSize);
       newSizes.push_back(totalSize);
       newElementSizes.push_back(one);
     } else {
@@ -339,9 +339,7 @@ void DbLoweringPass::lowerDbCopyOps() {
   }
 }
 
-///===----------------------------------------------------------------------===///
 /// Lower DbSyncOp to data copy loop
-///===----------------------------------------------------------------------===///
 void DbLoweringPass::lowerDbSyncOps() {
   SmallVector<DbSyncOp, 4> syncOps;
   module.walk([&](DbSyncOp op) { syncOps.push_back(op); });
@@ -453,9 +451,7 @@ void DbLoweringPass::lowerDbSyncOps() {
   }
 }
 
-///===----------------------------------------------------------------------===///
 /// Convert all DB allocation operations to use opaque pointers
-///===----------------------------------------------------------------------===///
 void DbLoweringPass::convertDbAllocOps() {
   SmallVector<DbAllocOp, 8> dbAllocOps;
   module.walk([&](arts::DbAllocOp allocOp) { dbAllocOps.push_back(allocOp); });
@@ -500,8 +496,7 @@ void DbLoweringPass::convertDbAllocOps() {
     for (auto &attr : oldOp->getAttrs()) {
       if (!attr.getName().getValue().starts_with("arts."))
         continue;
-      if (attr.getName() == AttrNames::Operation::ArtsCreateId ||
-          attr.getName() == AttrNames::Operation::Partition)
+      if (attr.getName() == AttrNames::Operation::ArtsCreateId)
         continue;
       newOp->setAttr(attr.getName(), attr.getValue());
     }
@@ -522,9 +517,7 @@ void DbLoweringPass::convertDbAllocOps() {
   }
 }
 
-///===----------------------------------------------------------------------===///
 /// Update all users of the old allocation to use the new lowered allocation
-///===----------------------------------------------------------------------===///
 void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
                                       DbAllocOp newAllocOp) {
   Value oldGuid = oldAllocOp.getGuid();
@@ -627,9 +620,7 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
   }
 }
 
-///===----------------------------------------------------------------------===///
 /// Process a single DbAcquireOp and its nested acquire operations
-///===----------------------------------------------------------------------===///
 void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
                                         Value newPtr,
                                         SmallVector<Value> elementSizes) {
@@ -643,21 +634,28 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
                              acquireOp.getOffsets().end());
   SmallVector<Value> sizes(acquireOp.getSizes().begin(),
                            acquireOp.getSizes().end());
-  Value chunkIndex = acquireOp.getChunkIndex();
-  Value chunkSize = acquireOp.getChunkSize();
   SmallVector<Value> elementOffsets(acquireOp.getElementOffsets().begin(),
                                     acquireOp.getElementOffsets().end());
   SmallVector<Value> acquireElementSizes(acquireOp.getElementSizes().begin(),
                                          acquireOp.getElementSizes().end());
+  /// Extract partition hints from original acquire
+  SmallVector<Value> partitionIndices(acquireOp.getPartitionIndices().begin(),
+                                      acquireOp.getPartitionIndices().end());
+  SmallVector<Value> partitionOffsets(acquireOp.getPartitionOffsets().begin(),
+                                      acquireOp.getPartitionOffsets().end());
+  SmallVector<Value> partitionSizes(acquireOp.getPartitionSizes().begin(),
+                                    acquireOp.getPartitionSizes().end());
   Value boundsValid = acquireOp.getBoundsValid();
   auto newAcquireOp = AC->create<DbAcquireOp>(
-      acquireOp.getLoc(), acquireOp.getMode(), sourceGuid, sourcePtr, indices,
-      offsets, sizes, chunkIndex, chunkSize, boundsValid, elementOffsets,
+      acquireOp.getLoc(), acquireOp.getMode(), sourceGuid, sourcePtr,
+      acquireOp.getPartitionMode(), indices, offsets, sizes, partitionIndices,
+      partitionOffsets, partitionSizes, boundsValid, elementOffsets,
       acquireElementSizes);
   for (auto &attr : acquireOp->getAttrs()) {
     if (attr.getName().getValue().starts_with("arts."))
       newAcquireOp->setAttr(attr.getName(), attr.getValue());
   }
+  newAcquireOp.copyPartitionSegmentsFrom(acquireOp);
   ARTS_DEBUG("  - New DbAcquireOp: " << newAcquireOp);
 
   auto rewriteBlockUses = [&](Value base, Value replacementBase) {
@@ -764,9 +762,7 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
   opsToRemove.insert(acquireOp);
 }
 
-///===----------------------------------------------------------------------===///
 /// Helper function to get LLVM pointer from a base value and indices
-///===----------------------------------------------------------------------===///
 Value DbLoweringPass::getLLVMPtr(Value base, ValueRange opIndices,
                                  Location loc) {
   if (opIndices.empty())
@@ -791,5 +787,5 @@ std::unique_ptr<Pass> createDbLoweringPass() {
 std::unique_ptr<Pass> createDbLoweringPass(uint64_t idStride) {
   return std::make_unique<DbLoweringPass>(idStride);
 }
-} /// namespace arts
-} /// namespace mlir
+} // namespace arts
+} // namespace mlir

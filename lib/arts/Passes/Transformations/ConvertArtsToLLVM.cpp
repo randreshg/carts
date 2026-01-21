@@ -91,6 +91,14 @@ static inline void getDbInfo(OpType op, SmallVector<Value> &sizesOut,
     isSingleElement = mlir::arts::ValueUtils::isOneConstant(sizesOut[0]);
   }
 }
+
+static inline DbAllocOp getAllocOpFromGuid(Value dbGuid) {
+  if (auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>())
+    return dbAcquireOp.getSourceGuid().getDefiningOp<DbAllocOp>();
+  if (auto depDbAcquireOp = dbGuid.getDefiningOp<DepDbAcquireOp>())
+    return depDbAcquireOp.getGuid().getDefiningOp<DbAllocOp>();
+  return nullptr;
+}
 } // namespace
 
 /// Pattern to convert arts.get_total_workers operations
@@ -360,14 +368,16 @@ private:
     if (!boundsValid)
       return nullptr;
 
-    DbAllocOp allocOp = nullptr;
-    if (auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>())
-      allocOp = dbAcquireOp.getSourceGuid().getDefiningOp<DbAllocOp>();
-    else if (auto depDbAcquireOp = dbGuid.getDefiningOp<DepDbAcquireOp>())
-      allocOp = depDbAcquireOp.getGuid().getDefiningOp<DbAllocOp>();
+    DbAllocOp allocOp = getAllocOpFromGuid(dbGuid);
 
-    if (allocOp && !allocOp.getSizes().empty())
-      return allocOp.getSizes()[0];
+    if (allocOp && !allocOp.getSizes().empty()) {
+      auto sizes = allocOp.getSizes();
+      Value totalDBs = sizes[0];
+      for (size_t i = 1; i < sizes.size(); ++i)
+        totalDBs =
+            AC->create<arith::MulIOp>(allocOp.getLoc(), totalDBs, sizes[i]);
+      return totalDBs;
+    }
     return nullptr;
   }
 
@@ -392,17 +402,30 @@ private:
       ARTS_UNREACHABLE("dbGuid must come from DbAcquireOp or DepDbAcquireOp");
     }
 
-    /// Get totalDBs for bounds check (only for stencil cases)
-    Value totalDBs = getTotalDBsForBoundsCheck(dbGuid, boundsValid);
+    const bool useDepv = depStruct && baseOffset &&
+                         (accessMode == DepAccessMode::from_depv ||
+                          dbGuid.getDefiningOp<DepDbAcquireOp>());
 
-    AC->iterateDbElements(dbGuid, edtGuid, dbSizes, dbOffsets, isSingle, loc,
-                          [&](Value linearIndex) {
-                            recordSingleDb(dbGuid, edtGuid, sharedSlotAlloc,
-                                           linearIndex, accessMode, acquireMode,
-                                           twinDiff, boundsValid, depStruct,
-                                           baseOffset, totalDBs, byteOffset,
-                                           byteSize, loc);
-                          });
+    /// Get totalDBs for bounds check (only for stencil cases)
+    Value totalDBs =
+        useDepv ? Value() : getTotalDBsForBoundsCheck(dbGuid, boundsValid);
+    SmallVector<Value> allocSizes;
+    if (!useDepv) {
+      if (auto allocOp = getAllocOpFromGuid(dbGuid)) {
+        auto sizes = allocOp.getSizes();
+        allocSizes.assign(sizes.begin(), sizes.end());
+      }
+    }
+
+    AC->iterateDbElements(
+        dbGuid, edtGuid, dbSizes, dbOffsets, isSingle, loc,
+        [&](Value linearIndex) {
+          recordSingleDb(dbGuid, edtGuid, sharedSlotAlloc, linearIndex,
+                         accessMode, acquireMode, twinDiff, boundsValid,
+                         depStruct, baseOffset, totalDBs, byteOffset, byteSize,
+                         loc);
+        },
+        allocSizes);
   }
 
   /// Emit the appropriate runtime call for recording a dependency.
@@ -545,6 +568,7 @@ private:
                      DepAccessMode accessMode, Location loc) const {
     SmallVector<Value> dbSizes, dbOffsets, dbIndices;
     bool isSingle = false;
+    SmallVector<Value> allocSizes;
 
     /// Extract base offset and dep_struct for this specific dependency
     Value depStruct = nullptr;
@@ -564,14 +588,22 @@ private:
                  << dbGuid);
       ARTS_UNREACHABLE("dbGuid must come from DbAcquireOp or DepDbAcquireOp");
     }
+    if (auto allocOp = getAllocOpFromGuid(dbGuid)) {
+      auto sizes = allocOp.getSizes();
+      allocSizes.assign(sizes.begin(), sizes.end());
+    }
 
+    const bool useDepv = depStruct && baseOffset &&
+                         (accessMode == DepAccessMode::from_depv ||
+                          dbGuid.getDefiningOp<DepDbAcquireOp>());
     /// Use shared slot counter and iterate over all db elements
-    AC->iterateDbElements(dbGuid, Value(), dbSizes, dbOffsets, isSingle, loc,
-                          [&](Value linearIndex) {
-                            incSingleLatch(dbGuid, sharedSlotAlloc, linearIndex,
-                                           accessMode, depStruct, baseOffset,
-                                           loc);
-                          });
+    AC->iterateDbElements(
+        dbGuid, Value(), dbSizes, dbOffsets, isSingle, loc,
+        [&](Value linearIndex) {
+          incSingleLatch(dbGuid, sharedSlotAlloc, linearIndex, accessMode,
+                         depStruct, baseOffset, loc);
+        },
+        useDepv ? ArrayRef<Value>() : allocSizes);
   }
 
   void incSingleLatch(Value dbGuid, Value slotAlloc, Value linearIndex,
@@ -580,8 +612,7 @@ private:
     /// Load dbGuid value - check if we actually have depStruct (from
     /// DepDbAcquireOp) or if this specific dependency is from DbAcquireOp
     Value dbGuidValue;
-    /// TODO: Enable this
-    if (depStruct && baseOffset && false) {
+    if (depStruct && baseOffset) {
       /// Access GUID via DepGepOp from EDT depv structure
       /// Must add baseOffset to linearIndex to get correct position in depv
       Value finalOffset =

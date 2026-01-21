@@ -107,7 +107,7 @@ LOOP 2 (Stencil) - Worker 1 computes rows 25-49:
 **Concept**: Multiple rows are grouped into chunks; each chunk is one datablock.
 
 ```
-Array u[100][50] with 4 workers, chunkSize=25:
+Array u[100][50] with 4 workers, blockSize=25:
 
 ALLOCATION:
   arts.db.alloc sizes=[4] element_sizes=[25, 50]
@@ -156,19 +156,19 @@ LOOP 2 (Stencil) - Worker 1:
 
 ---
 
-### 3.3 Hybrid: Chunked Ownership + Halo Strips (Explicit Halo Exchange)
+### 3.3 Hybrid: Blocked Ownership + Halo Strips (Explicit Halo Exchange)
 
-**Concept**: Keep **chunked** datablocks for ownership and bulk writes (good for Loop 1),
+**Concept**: Keep **blocked** datablocks for ownership and bulk writes (good for Loop 1),
 but represent the **stencil boundary data** as **separate, small datablocks** (“halo strips”).
 
 For a 1D row-stencil with `haloLeft=1`, `haloRight=1`, each chunk publishes:
-- `halo_left(chunk k)`: first row of chunk `k` (row `k*chunkSize`)
-- `halo_right(chunk k)`: last row of chunk `k` (row `(k+1)*chunkSize - 1`)
+- `halo_left(chunk k)`: first row of chunk `k` (row `k*blockSize`)
+- `halo_right(chunk k)`: last row of chunk `k` (row `(k+1)*blockSize - 1`)
 
 ```
-Array u[100][50], 4 workers, chunkSize=25, halo=1 row:
+Array u[100][50], 4 workers, blockSize=25, halo=1 row:
 
-OWNERSHIP DBs (chunked):
+OWNERSHIP DBs (blocked):
   Chunk[0] = u[0..24][*]   (rows 0-24,  Worker 0)
   Chunk[1] = u[25..49][*]  (rows 25-49, Worker 1)
   Chunk[2] = u[50..74][*]  (rows 50-74, Worker 2)
@@ -196,7 +196,7 @@ Network transfer for Worker 1 (per iteration):
 ```
 
 **Advantages**:
-- Preserves chunked ownership for bulk updates (Loop 1)
+- Preserves blocked ownership for bulk updates (Loop 1)
 - Transfers only halo boundary data for stencils (Loop 2), not whole neighbor chunks
 - Avoids creating “N datablocks” when only “O(chunks)” boundaries are needed
 - Aligns with classic domain decomposition practice (MPI ghost cells / halo exchange)
@@ -210,9 +210,9 @@ Network transfer for Worker 1 (per iteration):
 
 ---
 
-### 3.4 Ephemeral Slice Dependencies (ESD): Chunked DBs + Slice Gets + Interior/Boundary Split
+### 3.4 Ephemeral Slice Dependencies (ESD): Blocked DBs + Slice Gets + Interior/Boundary Split
 
-**Concept**: Keep chunked ownership DBs (like 3.2), but avoid whole-chunk transfers by
+**Concept**: Keep blocked ownership DBs (like 3.2), but avoid whole-chunk transfers by
 fetching *only the needed halo bytes* as **ephemeral pointer dependencies**.
 
 This leverages an existing ARTS capability that classic DB-acquire does not provide:
@@ -224,7 +224,7 @@ The kernel is split into two EDTs per worker:
 2. **Boundary EDT**: reads the local chunk plus two halo slices (left/right)
 
 ```
-Array u[100][50], 4 workers, chunkSize=25, halo=1 row:
+Array u[100][50], 4 workers, blockSize=25, halo=1 row:
 
 Ownership DBs:
   Chunk[0], Chunk[1], Chunk[2], Chunk[3]
@@ -248,7 +248,7 @@ At boundaries (worker 0 / worker last), slot1 or slot2 is still required:
 
 **Advantages**:
 - Stencil transfer volume is optimal (halo bytes only), like fine-grained
-- Number of DBs remains small (chunked ownership only)
+- Number of DBs remains small (blocked ownership only)
 - Natural overlap: interior compute can run while slice-get halos are in flight
 
 **Disadvantages / requirements**:
@@ -265,7 +265,7 @@ cheapest correct way to provide stencil halos *without*:
 - creating `O(Nrows)` datablocks (fine-grained), or
 - fetching `O(chunkBytes)` just to read `O(haloBytes)` (coarse-grained).
 
-EHP keeps **chunked ownership** for phases like Loop 1, and then chooses one of:
+EHP keeps **blocked ownership** for phases like Loop 1, and then chooses one of:
 1) **Hybrid halo strips** (push-style halo exchange): publish boundary rows/faces as small halo DBs.
 2) **ESD slice gets** (pull-style halo exchange): fetch halo byte ranges via `artsGetFromDbAt(...)`
    and satisfy EDT slots with `ARTS_PTR` (no persistent halo DBs).
@@ -280,7 +280,7 @@ EHP selection rule-of-thumb (Jacobi-like stencils):
 - If **slice gets are available** and the halo is a **small, statically known set of byte ranges**,
   prefer **ESD** (keeps DB count minimal and avoids whole-chunk transfers).
 - Otherwise, prefer **Hybrid halo strips** (uses standard DB dependencies and persistent-event signaling).
-- Only fall back to **Chunked** (whole-chunk fetch) when neither halo strips nor slice gets can be generated.
+- Only fall back to **Blocked** (whole-chunk fetch) when neither halo strips nor slice gets can be generated.
 
 EHP also makes the “halo-in-chunk” pitfall explicit:
 - Allocating halo *space* inside a chunk does not create halo *data*. Without materialization
@@ -302,21 +302,21 @@ EHP also makes the “halo-in-chunk” pitfall explicit:
 
 **Key Insight**: The “right” partitioning is **not just correctness**; it’s also whether ARTS can execute it efficiently:
 - Fine-grained is correct, but may overproduce DBs/events and dependency edges.
-- Chunked is fast for uniform loops, but wastes bandwidth on narrow-halo stencils.
+- Blocked is fast for uniform loops, but wastes bandwidth on narrow-halo stencils.
 - Hybrid is the standard stencil strategy (halo exchange), and fits ARTS well if we make halos first-class.
 
-### 4.1 Three-Way Comparison (Fine vs Chunked vs EHP Default)
+### 4.1 Three-Way Comparison (Fine vs Blocked vs EHP Default)
 
 This section compares the **decision-relevant** choices:
 - **Fine-grained** (row DBs): “always correct, minimal bytes, maximal metadata”
-- **Chunked** (chunk DBs): “minimal metadata, maximal bytes”
+- **Blocked** (chunk DBs): “minimal metadata, maximal bytes”
 - **EHP** (recommended default): “minimal bytes with bounded metadata”
 
 Assumptions (mock scenario):
 - `nx=4096`, `ny=4096`, `elemBytes=8` (double)
-- `ranks=16`, `chunkSize=256 rows`, `haloLeft=haloRight=1 row`
+- `ranks=16`, `blockSize=256 rows`, `haloLeft=haloRight=1 row`
 - `rowBytes = ny*elemBytes = 32 KiB`
-- `chunkBytes = chunkSize*rowBytes = 8 MiB`
+- `chunkBytes = blockSize*rowBytes = 8 MiB`
 - `haloBytes (per worker per iter) = 2*rowBytes = 64 KiB`
 
 What the mock values represent:
@@ -324,7 +324,7 @@ What the mock values represent:
 - **Large transfers**: “big payload” moves (not counting control packets).
 - **Deps/slots**: number of EDT dependency slots that must be satisfied before running.
 
-| Metric (per worker, per iteration) | Fine-Grained (Row DBs) | Chunked (Chunk DBs) | EHP Default (Hybrid or ESD) |
+| Metric (per worker, per iteration) | Fine-Grained (Row DBs) | Blocked (Chunk DBs) | EHP Default (Hybrid or ESD) |
 |---|---:|---:|---:|
 | Cross-rank bytes moved (Loop 2) | ~`64 KiB` | ~`16 MiB` (2 neighbor chunks) | ~`64 KiB` |
 | Large transfers | 2 small halo rows | 2 large chunk pulls | 2 small halo rows/slices |
@@ -338,7 +338,7 @@ Key takeaway:
 
 ### 4.2 Visual Comparison (Data Movement)
 
-Same scenario (`chunkSize=256`, `halo=1`), worker `k` computing its chunk interior:
+Same scenario (`blockSize=256`, `halo=1`), worker `k` computing its chunk interior:
 
 ```
 FINE-GRAINED (Row DBs)
@@ -609,7 +609,7 @@ remote case:
 
 **Why this shows up in partitioning**:
 - Fine-grained partitioning increases the number of datablocks → increases persistent events → increases dependence registrations and signaling traffic.
-- Chunked partitioning decreases this overhead, but increases bytes moved per dependency.
+- Blocked partitioning decreases this overhead, but increases bytes moved per dependency.
 
 ### How CARTS Generates “Record Dependencies” Code
 
@@ -790,7 +790,7 @@ creating **only the halo bytes we actually need** (as halo strips or slice gets)
 
 ## 8. Data Movement Diagrams (Per Iteration)
 
-Assume row decomposition, 4 workers, chunkSize=25, halo=1 row.
+Assume row decomposition, 4 workers, blockSize=25, halo=1 row.
 
 ### Three-Way Comparison (Mock Numbers + Concurrency Implications)
 
@@ -828,7 +828,7 @@ W1 stencil EDT depc (typical): ~chunkRows + 2 = 258 slots
 Network (per iteration, interior worker): ~64 KiB (2 rows)
 ```
 
-#### B) Chunked (Whole-chunk fetch)
+#### B) Blocked (Whole-chunk fetch)
 
 Readiness gating is light (few slots), but bandwidth is worst-case because DB-acquire is DB-granularity.
 
@@ -845,7 +845,7 @@ Network (per iteration, interior worker): ~16 MiB (2 neighbor chunks)
 
 EHP matches fine-grained bandwidth (`O(haloBytes)`), but avoids both extremes:
 - it avoids `O(Nrows)` DB/dependence explosion (fine-grained), and
-- it avoids `O(chunkBytes)` neighbor pulls (chunked).
+- it avoids `O(chunkBytes)` neighbor pulls (blocked).
 
 EHP can take one of two equivalent “halo exchange” forms:
 - **ESD path (pull)**: slice-get the halo bytes into `ARTS_PTR` deps (best when slice-get lowering exists).
@@ -882,7 +882,7 @@ Critical: depc is fixed
 
 These are not measurements; they represent the quantities ARTS actually “pays for”.
 
-| Metric | Fine-grained (Row DBs) | Chunked (Whole-chunk) | EHP default (Hybrid or ESD) |
+| Metric | Fine-grained (Row DBs) | Blocked (Whole-chunk) | EHP default (Hybrid or ESD) |
 |--------|-------------------------|-----------------------|------------------|
 | **Bytes pulled from neighbors** | ~64 KiB | ~16 MiB | ~64 KiB |
 | **Messages (neighbor pulls)** | ~2 | ~2 | ~2 |
@@ -891,8 +891,8 @@ These are not measurements; they represent the quantities ARTS actually “pays 
 | **What gates progress** | “all rows arrived” | “2 big chunks arrived” | “2 halo rows arrived (plus optional interior overlap)” |
 | **Primary risk** | dependence explosion | bandwidth explosion | implementation complexity (halo materialization or slice offsets) |
 
-Note: EHP is exactly the “middle ground” between Chunked and Fine-grained:
-- it keeps a small number of dependencies like Chunked, but
+Note: EHP is exactly the “middle ground” between Blocked and Fine-grained:
+- it keeps a small number of dependencies like Blocked, but
 - it moves only halo bytes like Fine-grained.
 
 ### Element-Wise (Row DBs)
@@ -1249,32 +1249,21 @@ In stencil mode, chunk indices must be computed consistently for both READ and W
 
 #### The Key Insight
 
-The allocation uses `plan_.chunkSize` (e.g., 7 rows per chunk). This chunk size is the actual physical size in the datablock allocation:
+The allocation uses `plan_.blockSize` (e.g., 7 rows per chunk). This block size is the actual physical size in the datablock allocation:
 
 ```mlir
 arts.db_alloc sizes=[15] elementSizes=[%c7, %c100]  // 15 chunks, 7 rows each
 ```
 
-The "base chunk size" concept (owned rows per worker, excluding halos) is relevant for **iteration scheduling** but NOT for **chunk index calculation**:
+The "base block size" concept (owned rows per worker, excluding halos) is relevant for **iteration scheduling** but NOT for **chunk index calculation**:
 
 - **Chunk index** = which chunk contains a given row
-- **Row r** maps to **chunk r / chunkSize**
-
-#### Incorrect vs Correct Calculation
-
-```cpp
-// INCORRECT (old code): used baseChunkSize for chunk index
-Value baseChunkSize = plan_.chunkSize - haloLeft - haloRight;  // e.g., 7-1-1 = 5
-startChunk = baseOffset / baseChunkSize;  // WRONG! Maps row 78 to chunk 15
-
-// CORRECT: use plan_.chunkSize (allocation chunk size)
-startChunk = baseOffset / plan_.chunkSize;  // Maps row 78 to chunk 11
-```
+- **Row r** maps to **chunk r / blockSize**
 
 #### Example: Jacobi with 100 rows, 15 workers
 
-- `plan_.chunkSize = 7` (allocation uses 7 rows per chunk)
-- `baseChunkSize = 7 - 1 - 1 = 5` (owned rows per worker, excluding halos)
+- `plan_.blockSize = 7` (allocation uses 7 rows per chunk)
+- `baseBlockSize = 7 - 1 - 1 = 5` (owned rows per worker, excluding halos)
 - `numChunks = ceil(100/7) = 15` (chunks 0-14)
 
 For Worker 11 with `firstIteration = 77`:
@@ -1284,7 +1273,7 @@ For Worker 11 with `firstIteration = 77`:
 
 #### Implementation in DbRewriter.cpp
 
-The stencil mode chunk index calculation now always uses `plan_.chunkSize`:
+The stencil mode chunk index calculation now always uses `plan_.blockSize`:
 
 ```cpp
 if (plan_.mode == RewriterMode::Stencil && plan_.stencilInfo &&
@@ -1293,8 +1282,8 @@ if (plan_.mode == RewriterMode::Stencil && plan_.stencilInfo &&
   Value adjustedOffset = builder.create<arith::AddIOp>(loc, elemOffset, haloLeft);
   Value baseOffset = builder.create<arith::SelectOp>(loc, isZero, zero, adjustedOffset);
 
-  // Use allocation chunk size for chunk index (NOT baseChunkSize)
-  startChunk = builder.create<arith::DivUIOp>(loc, baseOffset, plan_.chunkSize);
+  // Use allocation block size for chunk index (NOT baseBlockSize)
+  startChunk = builder.create<arith::DivUIOp>(loc, baseOffset, plan_.blockSize);
 }
 ```
 
@@ -1326,12 +1315,12 @@ Yes—this is essentially the Jacobi canonical optimization:
 - The “prepare” loop overwrites `u` every iteration, so the halo must be refreshed each iteration anyway.
 
 Halo exchange is attractive when:
-- `haloWidth << chunkSize` (narrow stencil)
+- `haloWidth << blockSize` (narrow stencil)
 - the stencil reads are **read-only** (no write-sharing on `u` during the stencil loop)
 - network costs dominate, so reducing bytes moved matters more than a few extra tasks/copies
 
 Halo exchange is less attractive when:
-- the halo is wide (halo width comparable to chunk size)
+- the halo is wide (halo width comparable to block size)
 - access patterns are irregular or data-dependent (hard to precompute a compact halo)
 - the cost to pack/unpack halos exceeds the savings (very small arrays / single node)
 
@@ -1347,7 +1336,7 @@ the “slice” first-class, which is exactly what stencil communication wants.
 ### Generalization: Why Halo Exchange Scales (2D/3D Intuition)
 
 Halo exchange is a “surface area vs volume” optimization:
-- Chunked DBs move **volume** (entire neighbor chunks).
+- Blocked DBs move **volume** (entire neighbor chunks).
 - Halo exchange moves **surface** (faces/edges/corners needed by the stencil).
 
 For a 2D tiling (blocks), the neighbor data is the tile perimeter:
@@ -1411,11 +1400,11 @@ For 1D row-stencils on a 2D array `u[nx][ny]`:
 
 ```
 rowBytes      = ny * elemBytes
-chunkBytes    = chunkSize * rowBytes
+chunkBytes    = blockSize * rowBytes
 haloBytes     = (haloLeft + haloRight) * rowBytes
 
-fineGrained deps/worker ≈ chunkSize + haloLeft + haloRight
-chunked     deps/worker ≈ 1..3 chunks
+fineGrained deps/worker ≈ blockSize + haloLeft + haloRight
+blocked     deps/worker ≈ 1..3 chunks
 hybrid      deps/worker ≈ 1 chunk + (haloLeft + haloRight) halo strips
 ```
 
@@ -1430,11 +1419,11 @@ EHP selection inside the compiler:
 - Prefer **ESD slice gets** when the halo is a small, statically known set of byte ranges and
   `artsGetFromDbAt(...)` lowering is available (minimal bytes, no extra halo DBs/events).
 - Otherwise prefer **Hybrid halo strips** (explicit halo DBs published each iteration).
-- Only fall back to **Chunked** (whole neighbor chunk acquisition) if neither ESD nor Hybrid can be generated.
+- Only fall back to **Blocked** (whole neighbor chunk acquisition) if neither ESD nor Hybrid can be generated.
 
 Why fine-grained is not the default here (even though it’s “precise”):
 - ForLowering already gives us a contiguous chunk assignment; the *only* cross-rank data for Jacobi is the
-  `O(haloBytes)` boundary. Making every interior row its own DB adds `O(chunkSize)` extra dependencies per EDT
+  `O(haloBytes)` boundary. Making every interior row its own DB adds `O(blockSize)` extra dependencies per EDT
   without reducing communication below the halo.
 - In ARTS, fixed-slot EDTs + persistent-event signaling means “many tiny DBs” amplifies:
   - `artsRecordDep(...)` calls,
@@ -1448,10 +1437,10 @@ Why fine-grained is not the default here (even though it’s “precise”):
 
 If an allocation is used with *multiple* access patterns across phases:
 - If at least one phase writes and another phase reads with a stencil halo, do **not** assume “halo space implies halo data”.
-- Prefer **EHP**: keep chunked ownership, and provide halos either as halo strips (Hybrid) or as slice gets (ESD).
+- Prefer **EHP**: keep blocked ownership, and provide halos either as halo strips (Hybrid) or as slice gets (ESD).
 - If EHP cannot be generated, pick the least-bad correct option based on scale:
   - If `nx` (or `Nrows`) is small: fine-grained is acceptable.
-  - If `nx` is large: keep chunked to avoid dependence explosion, and accept extra bytes moved.
+  - If `nx` is large: keep blocked to avoid dependence explosion, and accept extra bytes moved.
 
 ---
 
@@ -1462,11 +1451,11 @@ The Jacobi stencil case exposes a fundamental trade-off:
 - **Runtime overhead** (number of DBs and dependency edges)
 
 The key observation is that the “best” stencil strategy for ARTS is usually **EHP**:
-keep chunked ownership for bulk updates and exchange only boundary halos (via Hybrid halo strips or ESD slice gets).
+keep blocked ownership for bulk updates and exchange only boundary halos (via Hybrid halo strips or ESD slice gets).
 
 Fine-grained (row DBs) remains a useful baseline for correctness and minimal
 transfer, but it can become an execution bottleneck in ARTS due to DB/event and
-dependency scaling. Chunked is the right default for uniform loops, but it
+dependency scaling. Blocked is the right default for uniform loops, but it
 becomes wasteful for narrow-halo stencils unless halo exchange is made explicit.
 
 This analysis applies to many scientific computing patterns beyond Jacobi - any code with a "prepare data" phase followed by "compute with neighbors" will benefit from this approach.

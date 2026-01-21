@@ -143,7 +143,7 @@ def DbPartitioning : Pass<"db-partitioning", "mlir::ModuleOp"> {
     "scf::SCFDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createDbPartitioningPass(nullptr, false)";
+  let constructor = "mlir::arts::createDbPartitioningPass(nullptr)";
 }
 
 def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {

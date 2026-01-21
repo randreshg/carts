@@ -46,9 +46,9 @@ for (int i = 0; i < N; i++) {
 **Supported Schedule Clauses**:
 
 - `schedule(static)` - Static work distribution
-- `schedule(static, chunk_size)` - Static with chunk size
+- `schedule(static, block_size)` - Static with block size
 - `schedule(dynamic)` - Dynamic work distribution
-- `schedule(dynamic, chunk_size)` - Dynamic with chunk size
+- `schedule(dynamic, block_size)` - Dynamic with block size
 - `schedule(guided)` - Guided scheduling
 - `schedule(auto)` - Automatic scheduling
 - `schedule(runtime)` - Runtime-determined scheduling
@@ -698,7 +698,7 @@ CARTS includes an extensive test suite with working examples. These examples dem
 
 5. **`parallel_for/`** - Various parallel loop patterns
    - `reduction/` - Reduction operations
-   - `chunk/` - Chunked parallel loops with scheduling
+   - `chunk/` - Blocked parallel loops with scheduling
    - `block/` - Block-based parallelism
 
 6. **`convolution/`** - 2D convolution

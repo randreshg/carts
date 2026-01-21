@@ -2,7 +2,7 @@
 
 Walk through these steps and fix any problem that you find in the way
 
-1. **Navigate to the matrixmul example directory:**
+1. **Navigate to the mixed_access example directory:**
 
    ```bash
    cd ~/Documents/carts/tests/examples/mixed_access
@@ -29,7 +29,7 @@ Walk through these steps and fix any problem that you find in the way
     }
 ```
 
-3. **Canonicalize memrefs (array-of-pointers → shaped memrefs):**
+1. **Canonicalize memrefs (array-of-pointers → shaped memrefs):**
 
    ```bash
    carts run mixed_access.mlir --canonicalize-memrefs &> mixed_access_canon.mlir
@@ -41,34 +41,66 @@ Walk through these steps and fix any problem that you find in the way
     %alloc_7 = memref.alloc(%13, %17) : memref<?x?xi32>
   ```
 
-4. **Create DBs with control DBs**
+1. **Create DBs with control DBs**
 
   ```bash
     carts run mixed_access.mlir --create-dbs > create_dbs.mlir
     grep -c "arts.edt" create_dbs.mlir      # Expected: 2 (one per omp.parallel)
   ```
 
-5. **ForLowering - Chunk Hints from Loop IVs**
+1. **ForLowering - Worker Chunk Hints**
 
-ForLowering adds `chunk_hint(chunk_index, chunk_size)` when it can derive the
-index from loop IVs. Indirect reads may still carry a hint, but are handled
-later in DbPartitioning.
+ForLowering lowers `omp.wsloop` into worker-chunked `scf.for` loops and marks
+the worker acquires as `partitioning(<block>)` with offsets/sizes derived from
+the loop IVs. Indirect reads may still carry chunked acquires here; DbPartitioning
+decides which ones become full-range.
 
 ```bash
   carts run mixed_access.mlir --concurrency > for_lowering.mlir
 ```
 
-if yoy $grep "chunk_hint" for_lowering.mlir$ you will see we generate chunk hints.
+If you grep for `partitioning(<block>)` in `for_lowering.mlir`, you should see
+chunked acquires for the worker loops.
 
-6. **DbPartitioning**
-This example is a mixed access pattern, one parallel for suggest chunked partitioning, and one parallel for suggest full-range partitioning.
-So we should apply the H1.2 heuristic to decide the partitioning mode.
-In this partitioning, the dballoc is rewritten with the chunk info of the first parallel and send only the chunk index to the first parallel, and for the second parallel, we send the full range.
-Lets make sure THIS IS THE CASE.
-Remember that we should stay with the chunk info of the first parallel.
+1. **DbPartitioning**
+This example is a mixed access pattern: one parallel loop suggests chunked
+partitioning, while the other needs full-range for the indirect reads. We rely
+on H1.2 to choose block partitioning for the allocation and mark indirect
+read-only acquires as full-range.
 
+In `mixed_access_partitioned.mlir`, verify:
 
-7. **Execute and Verify Correctness**
+- First loop (node writes): block partitioning + per-chunk offsets/sizes.
+- Second loop (indirect reads of `nodeData`): block partitioning but **full-range**
+  offsets/sizes for the read acquire.
+- Second loop (direct writes to `elemData`): block partitioning + per-chunk
+  offsets/sizes.
+
+Example (trimmed):
+
+```mlir
+%guid_8, %ptr_9 = arts.db_acquire[<out>] ... partitioning(<block>, offsets[%36], sizes[%c163]),
+  offsets[%42], sizes[%47]
+%guid_10, %ptr_11 = arts.db_acquire[<in>] ... partitioning(<block>, offsets[%36], sizes[%c157]),
+  offsets[%c0], sizes[%c17]        // full-range for indirect reads
+%guid_12, %ptr_13 = arts.db_acquire[<out>] ... partitioning(<block>, offsets[%36], sizes[%c157]),
+  offsets[%42], sizes[%51]
+```
+
+Concretely, after `--concurrency-opt`:
+
+- `nodeData` in the **first** parallel loop is chunked (`offsets[%chunk]`).
+- `nodeData` in the **second** parallel loop is full-range (`offsets[%c0]`,
+  `sizes[%numChunks]`) because of indirect indexing.
+- `elemData` stays chunked in the second loop (direct access).
+
+```bash
+carts run mixed_access.mlir --concurrency-opt > mixed_access_partitioned.mlir
+```
+
+Verify by inspecting the acquires in `mixed_access_partitioned.mlir`.
+
+1. **Execute and Verify Correctness**
 
 ```bash
 # Compile and execute
@@ -86,5 +118,6 @@ carts execute mixed_access.c -O3
 # Max error: 0.000000e+00
 # Test PASSED
 ```
-IF something does work, investigate why, and fix it.....
+
+If something doesn't work, investigate why and fix it.
 If necessary run lldb to debug.

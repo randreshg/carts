@@ -3,10 +3,6 @@
 
 #include "arts/Utils/Testing/CartsTest.h"
 
-static inline int clamp(int x, int lo, int hi) {
-  return x < lo ? lo : (x > hi ? hi : x);
-}
-
 int main(int argc, char **argv) {
   CARTS_TIMER_START();
   int N = (argc >= 2) ? atoi(argv[1]) : 100;
@@ -23,9 +19,13 @@ int main(int argc, char **argv) {
 
 #pragma omp parallel for schedule(static)
   for (int i = 0; i < N; ++i) {
-    int left = in[clamp(i - 1, 0, N - 1)];
+    int left = in[i];
+    if (i > 0)
+      left = in[i - 1];
     int center = in[i];
-    int right = in[clamp(i + 1, 0, N - 1)];
+    int right = in[i];
+    if (i + 1 < N)
+      right = in[i + 1];
     out[i] = left + center + right;
   }
 

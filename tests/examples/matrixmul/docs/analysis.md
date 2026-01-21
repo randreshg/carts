@@ -26,23 +26,28 @@ Walk through these steps and fix any problem that you find in the way
    ```bash
    carts run matrixmul.mlir --canonicalize-memrefs &> matrix_canon.mlir
    ```
+
    Check the code for memref allocs like:
+
    ```mlir
    %alloc = memref.alloc(%15, %18) : memref<?x?xf32>
    %alloc_1 = memref.alloc(%15, %18) : memref<?x?xf32>
    %alloc_2 = memref.alloc(%15, %18) : memref<?x?xf32>
    %alloc_3 = memref.alloc(%15, %18) : memref<?x?xf32>
    ```
+
    The sizes should be the dimensions of the matrix.
 
-4. **Create DBs with control DBs (expect fine-grained allocations):**
+4. **Create DBs with control DBs (expect coarse allocations + partition hints):**
 
    Use the canonicalized file to drive DB creation and dump debug info:
 
    ```bash
    carts run matrixmul.mlir --create-dbs --debug-only=create_dbs &> matrix_create_dbs.mlir
    ```
-   This is fialing...
+
+   At this stage, `db_alloc` stays coarse (`sizes=[1]`) and partition hints
+   live in `db_acquire` (`partition_indices/offsets/sizes`).
 
 5. **Continue or run end-to-end:**
 
@@ -61,4 +66,4 @@ Walk through these steps and fix any problem that you find in the way
    ./matrixmul 8
    ```
 
-   If execution fails, re-check `matrix_canon.mlir` for any remaining array-of-pointer accesses and `matrix_create_dbs.mlir` for coarse-grained DBs that should have been refined by control DBs.
+   If execution fails, re-check `matrix_canon.mlir` for any remaining array-of-pointer accesses and `matrix_concurrency_opt.mlir` for missing partitioning (CreateDbs outputs are expected to remain coarse).

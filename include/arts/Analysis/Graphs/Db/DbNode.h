@@ -46,6 +46,7 @@ public:
 
   /// Graph structure management
   DbAcquireNode *getOrCreateAcquireNode(DbAcquireOp op);
+  DbAcquireNode *findAcquireNode(DbAcquireOp op) const;
   void forEachChildNode(const std::function<void(NodeBase *)> &fn) const;
   size_t getAcquireNodesSize() const { return acquireNodes.size(); }
 
@@ -156,14 +157,14 @@ public:
   bool computePartitionBounds();
   bool canPartitionWithOffset(Value offset);
 
-  LogicalResult computeChunkInfo(Value &chunkOffset, Value &chunkSize);
+  LogicalResult computeChunkInfo(Value &chunkOffset, Value &blockSize);
   LogicalResult computeChunkInfoFromWhile(scf::WhileOp whileOp,
-                                          Value &chunkOffset, Value &chunkSize,
+                                          Value &chunkOffset, Value &blockSize,
                                           Value *offsetForCheck = nullptr);
-  LogicalResult computeChunkInfoFromHints(Value &chunkOffset, Value &chunkSize);
+  LogicalResult computeChunkInfoFromHints(Value &chunkOffset, Value &blockSize);
   LogicalResult computeChunkInfoFromForLoop(ArrayRef<LoopNode *> loopNodes,
                                             Value &chunkOffset,
-                                            Value &chunkSize,
+                                            Value &blockSize,
                                             Value *offsetForCheck = nullptr);
 
   /// Get stencil bounds for this acquire (computed during canBePartitioned)
@@ -193,6 +194,15 @@ public:
 
   /// Check if this acquire has disjoint partition info with another acquire
   bool hasDisjointPartitionWith(const DbAcquireNode *other) const;
+
+  /// Check if any access index within this acquire depends on the given value.
+  /// Used to validate that partition indices match actual memory accesses.
+  bool accessIndexDependsOn(Value idx);
+
+  /// Validate that element-wise partition indices match actual accesses.
+  /// Returns false if this is a block-wise pattern (indices are block corners,
+  /// but accesses span a range) - indicating we should fall back to block mode.
+  bool validateElementWisePartitioning();
 
 private:
   DbAcquireOp dbAcquireOp;

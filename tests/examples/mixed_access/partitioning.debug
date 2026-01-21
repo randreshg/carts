@@ -1,0 +1,941 @@
+[0;1;35m[DEBUG] [heuristics][0m HeuristicsConfig initialized: singleNode=1, valid=1
+[0;1;35m[DEBUG] [heuristics][0m getPartitioningMode: canElementWise=0, canChunked=0, pinnedDimCount=0, accessMode=2
+[0;1;35m[DEBUG] [heuristics][0m evaluatePartitioningHeuristics: canElementWise=0, canChunked=0, pinnedDimCount=0, accessMode=2
+[0;1;35m[DEBUG] [heuristics][0m Fallback applied: No heuristic matched, using coarse (user preference)
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: Fallback applied=1 for ARTS ID 0 (allocId=0)
+[0;1;35m[DEBUG] [heuristics][0m Heuristic Fallback applied: Fallback: User preference for coarse partitioning
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: AllocationStrategy applied=1 for ARTS ID 27 (allocId=0)
+[0;1;35m[DEBUG] [heuristics][0m getPartitioningMode: canElementWise=0, canChunked=0, pinnedDimCount=0, accessMode=2
+[0;1;35m[DEBUG] [heuristics][0m evaluatePartitioningHeuristics: canElementWise=0, canChunked=0, pinnedDimCount=0, accessMode=2
+[0;1;35m[DEBUG] [heuristics][0m Fallback applied: No heuristic matched, using coarse (user preference)
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: Fallback applied=1 for ARTS ID 0 (allocId=0)
+[0;1;35m[DEBUG] [heuristics][0m Heuristic Fallback applied: Fallback: User preference for coarse partitioning
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: AllocationStrategy applied=1 for ARTS ID 30 (allocId=0)
+[0;1;35m[DEBUG] [heuristics][0m getPartitioningMode: canElementWise=0, canChunked=0, pinnedDimCount=0, accessMode=2
+[0;1;35m[DEBUG] [heuristics][0m evaluatePartitioningHeuristics: canElementWise=0, canChunked=0, pinnedDimCount=0, accessMode=2
+[0;1;35m[DEBUG] [heuristics][0m Fallback applied: No heuristic matched, using coarse (user preference)
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: Fallback applied=1 for ARTS ID 0 (allocId=0)
+[0;1;35m[DEBUG] [heuristics][0m Heuristic Fallback applied: Fallback: User preference for coarse partitioning
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: AllocationStrategy applied=1 for ARTS ID 28 (allocId=0)
+[0;1;35m[DEBUG] [heuristics][0m   Computed affected_db_ids: [27, 28)
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: TwinDiff-Disabled applied=1 for ARTS ID 44 (allocId=27)
+[0;1;35m[DEBUG] [heuristics][0m   Computed affected_db_ids: [30, 31)
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: TwinDiff-Disabled applied=1 for ARTS ID 44 (allocId=30)
+[0;1;35m[DEBUG] [heuristics][0m   Computed affected_db_ids: [27, 28)
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: TwinDiff-Disabled applied=1 for ARTS ID 44 (allocId=27)
+[0;1;35m[DEBUG] [heuristics][0m   Computed affected_db_ids: [28, 29)
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: TwinDiff-Disabled applied=1 for ARTS ID 44 (allocId=28)
+[0;1;34m
+-----------------------------------------
+DbPartitioningPass STARTED
+-----------------------------------------
+[0mmodule attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<i128, dense<128> : vector<2xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:o-i64:64-i128:128-n32:64-S128", llvm.target_triple = "arm64-apple-macosx16.0.0", "polygeist.target-cpu" = "apple-m1", "polygeist.target-features" = "+aes,+crc,+dotprod,+fp-armv8,+fp16fml,+fullfp16,+lse,+neon,+ras,+rcpc,+rdm,+sha2,+sha3,+v8.1a,+v8.2a,+v8.3a,+v8.4a,+v8.5a,+v8a,+zcm,+zcz"} {
+  llvm.mlir.global internal constant @str7("mixed_access verification failed\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str6("mixed_access.c\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str5("Max error: %e\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str4("RMS error: %e\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str3("Running parallel version...\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str2("Running sequential version...\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str1("Pattern: chunked node writes + full-range indirect reads\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str0("Mixed Access Test: %d nodes, %d elements\0A\00") {addr_space = 0 : i32}
+  llvm.func @printf(!llvm.ptr, ...) -> i32
+  memref.global "private" @_carts_timer_start : memref<1xf64> = dense<0.000000e+00>
+  func.func @main() -> i32 attributes {llvm.linkage = #llvm.linkage<external>} {
+    %c625 = arith.constant 625 : index
+    %c651 = arith.constant 651 : index
+    %c4 = arith.constant 4 : index
+    %c0_i32 = arith.constant 0 : i32
+    %c2500_i64 = arith.constant 2500 : i64
+    %c2601 = arith.constant 2601 : index
+    %c2500 = arith.constant 2500 : index
+    %c50 = arith.constant 50 : index
+    %c51_i32 = arith.constant 51 : i32
+    %cst = arith.constant 1.000000e-02 : f64
+    %cst_0 = arith.constant 4.000000e+00 : f64
+    %c1_i32 = arith.constant 1 : i32
+    %c2 = arith.constant 2 : index
+    %c3 = arith.constant 3 : index
+    %c1 = arith.constant 1 : index
+    %c0 = arith.constant 0 : index
+    %c2601_i32 = arith.constant 2601 : i32
+    %cst_1 = arith.constant 2.500000e+03 : f64
+    %c2500_i32 = arith.constant 2500 : i32
+    %cst_2 = arith.constant 1.000000e-10 : f64
+    %cst_3 = arith.constant 0.000000e+00 : f64
+    %0 = memref.get_global @_carts_timer_start : memref<1xf64>
+    %1 = call @omp_get_wtime() : () -> f64
+    memref.store %1, %0[%c0] : memref<1xf64>
+    %2 = llvm.mlir.addressof @str0 : !llvm.ptr
+    %3 = llvm.getelementptr %2[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<42 x i8>
+    %4 = llvm.call @printf(%3, %c2601_i32, %c2500_i32) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
+    %5 = llvm.mlir.addressof @str1 : !llvm.ptr
+    %6 = llvm.getelementptr %5[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<58 x i8>
+    %7 = llvm.call @printf(%6) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+    %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>] route(%c0_i32 : i32) sizes[%c1] elementType(f64) elementSizes[%c2601] {arts.id = 27 : i64, arts.partition = #arts.partition_mode<coarse>} : (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %guid_4, %ptr_5 = arts.db_alloc[<inout>, <heap>, <write>] route(%c0_i32 : i32) sizes[%c1] elementType(f64) elementSizes[%c2500] {arts.id = 28 : i64, arts.partition = #arts.partition_mode<coarse>} : (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %alloc = memref.alloc() : memref<2500xf64>
+    %8 = polygeist.typeSize memref<?xi32> : index
+    %9 = arith.index_cast %8 : index to i64
+    %10 = arith.muli %9, %c2500_i64 : i64
+    %11 = arith.index_cast %10 : i64 to index
+    %12 = arith.divui %11, %8 : index
+    %guid_6, %ptr_7 = arts.db_alloc[<in>, <heap>, <read>] route(%c0_i32 : i32) sizes[%c1] elementType(i32) elementSizes[%12, %c4] {arts.id = 30 : i64, arts.partition = #arts.partition_mode<coarse>} : (memref<?xi64>, memref<?xmemref<?x?xi32>>)
+    scf.for %arg0 = %c0 to %c2601 step %c1 {
+      %32 = arts.db_ref %ptr[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
+      memref.store %cst_3, %32[%arg0] : memref<?xf64>
+    }
+    scf.for %arg0 = %c0 to %c2500 step %c1 {
+      %32 = arts.db_ref %ptr_5[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
+      memref.store %cst_3, %32[%arg0] : memref<?xf64>
+      memref.store %cst_3, %alloc[%arg0] : memref<2500xf64>
+    }
+    scf.for %arg0 = %c0 to %c50 step %c1 {
+      %32 = arith.index_cast %arg0 : index to i32
+      %33 = arith.muli %32, %c51_i32 : i32
+      %34 = arith.addi %32, %c1_i32 : i32
+      %35 = arith.muli %34, %c51_i32 : i32
+      scf.for %arg1 = %c0 to %c50 step %c1 {
+        %36 = arith.index_cast %arg1 : index to i32
+        %37 = arith.muli %arg0, %c50 : index
+        %38 = arith.addi %arg1, %37 : index
+        %39 = arith.addi %33, %36 : i32
+        %40 = arts.db_ref %ptr_7[%c0] : memref<?xmemref<?x?xi32>> -> memref<?x?xi32>
+        memref.store %39, %40[%38, %c0] : memref<?x?xi32>
+        %41 = arith.addi %39, %c1_i32 : i32
+        %42 = arts.db_ref %ptr_7[%c0] : memref<?xmemref<?x?xi32>> -> memref<?x?xi32>
+        memref.store %41, %42[%38, %c1] : memref<?x?xi32>
+        %43 = arith.addi %35, %36 : i32
+        %44 = arith.addi %43, %c1_i32 : i32
+        %45 = arts.db_ref %ptr_7[%c0] : memref<?xmemref<?x?xi32>> -> memref<?x?xi32>
+        memref.store %44, %45[%38, %c2] : memref<?x?xi32>
+        %46 = arts.db_ref %ptr_7[%c0] : memref<?xmemref<?x?xi32>> -> memref<?x?xi32>
+        memref.store %43, %46[%38, %c3] : memref<?x?xi32>
+      }
+    }
+    %13 = llvm.mlir.addressof @str2 : !llvm.ptr
+    %14 = llvm.getelementptr %13[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<31 x i8>
+    %15 = llvm.call @printf(%14) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+    scf.for %arg0 = %c0 to %c2500 step %c1 {
+      %32 = scf.for %arg1 = %c0 to %c4 step %c1 iter_args(%arg2 = %cst_3) -> (f64) {
+        %34 = arts.db_ref %ptr_7[%c0] : memref<?xmemref<?x?xi32>> -> memref<?x?xi32>
+        %35 = memref.load %34[%arg0, %arg1] : memref<?x?xi32>
+        %36 = arith.muli %35, %35 : i32
+        %37 = arith.sitofp %36 : i32 to f64
+        %38 = arith.mulf %37, %cst : f64
+        %39 = arith.addf %arg2, %38 : f64
+        scf.yield %39 : f64
+      }
+      %33 = arith.divf %32, %cst_0 : f64
+      memref.store %33, %alloc[%arg0] : memref<2500xf64>
+    }
+    %16 = llvm.mlir.addressof @str3 : !llvm.ptr
+    %17 = llvm.getelementptr %16[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<29 x i8>
+    %18 = llvm.call @printf(%17) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+    %19 = arts.epoch {
+      scf.for %arg0 = %c0 to %c4 step %c1 {
+        %32 = arith.muli %arg0, %c651 : index
+        %33 = arith.cmpi uge, %32, %c2601 : index
+        %34 = arith.subi %c2601, %32 : index
+        %35 = arith.select %33, %c0, %34 : index
+        %36 = arith.minui %35, %c651 : index
+        %37 = arith.minui %36, %35 : index
+        %38 = arith.cmpi ugt, %37, %c0 : index
+        scf.if %38 {
+          %guid_8, %ptr_9 = arts.db_acquire[<out>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) offsets[%c0] sizes[%c1] chunk_hint(%32, %37) {arts.partition = #arts.partition_mode<chunked>} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
+          arts.edt <task> <intranode> route(%c0_i32) (%ptr_9) : memref<?xmemref<?xf64>> {
+          ^bb0(%arg1: memref<?xmemref<?xf64>>):
+            scf.for %arg2 = %c0 to %37 step %c1 {
+              %39 = arith.addi %32, %arg2 : index
+              %40 = arith.index_cast %39 : index to i32
+              %41 = arith.muli %40, %40 : i32
+              %42 = arith.sitofp %41 : i32 to f64
+              %43 = arith.mulf %42, %cst : f64
+              %44 = arts.db_ref %arg1[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
+              memref.store %43, %44[%39] : memref<?xf64>
+            }
+            arts.db_release(%arg1) : memref<?xmemref<?xf64>>
+          }
+        }
+      }
+    } : i64
+    %20 = arts.epoch {
+      scf.for %arg0 = %c0 to %c4 step %c1 {
+        %32 = arith.muli %arg0, %c625 : index
+        %33 = arith.cmpi uge, %32, %c2500 : index
+        %34 = arith.subi %c2500, %32 : index
+        %35 = arith.select %33, %c0, %34 : index
+        %36 = arith.minui %35, %c625 : index
+        %37 = arith.minui %36, %35 : index
+        %38 = arith.cmpi ugt, %37, %c0 : index
+        scf.if %38 {
+          %guid_8, %ptr_9 = arts.db_acquire[<in>] (%guid_6 : memref<?xi64>, %ptr_7 : memref<?xmemref<?x?xi32>>) offsets[%c0] sizes[%c1] chunk_hint(%32, %37) {arts.partition = #arts.partition_mode<chunked>} -> (memref<?xi64>, memref<?xmemref<?x?xi32>>)
+          %guid_10, %ptr_11 = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) offsets[%c0] sizes[%c1] chunk_hint(%32, %37) {arts.partition = #arts.partition_mode<chunked>} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
+          %guid_12, %ptr_13 = arts.db_acquire[<out>] (%guid_4 : memref<?xi64>, %ptr_5 : memref<?xmemref<?xf64>>) offsets[%c0] sizes[%c1] chunk_hint(%32, %37) {arts.partition = #arts.partition_mode<chunked>} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
+          arts.edt <task> <intranode> route(%c0_i32) (%ptr_9, %ptr_11, %ptr_13) : memref<?xmemref<?x?xi32>>, memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>> {
+          ^bb0(%arg1: memref<?xmemref<?x?xi32>>, %arg2: memref<?xmemref<?xf64>>, %arg3: memref<?xmemref<?xf64>>):
+            scf.for %arg4 = %c0 to %37 step %c1 {
+              %39 = arith.addi %32, %arg4 : index
+              %40 = scf.for %arg5 = %c0 to %c4 step %c1 iter_args(%arg6 = %cst_3) -> (f64) {
+                %43 = arts.db_ref %arg1[%c0] : memref<?xmemref<?x?xi32>> -> memref<?x?xi32>
+                %44 = memref.load %43[%39, %arg5] : memref<?x?xi32>
+                %45 = arith.index_cast %44 : i32 to index
+                %46 = arts.db_ref %arg2[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
+                %47 = memref.load %46[%45] : memref<?xf64>
+                %48 = arith.addf %arg6, %47 : f64
+                scf.yield %48 : f64
+              }
+              %41 = arith.divf %40, %cst_0 : f64
+              %42 = arts.db_ref %arg3[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
+              memref.store %41, %42[%39] : memref<?xf64>
+            }
+            arts.db_release(%arg1) : memref<?xmemref<?x?xi32>>
+            arts.db_release(%arg2) : memref<?xmemref<?xf64>>
+            arts.db_release(%arg3) : memref<?xmemref<?xf64>>
+          }
+        }
+      }
+    } : i64
+    %21:2 = scf.for %arg0 = %c0 to %c2500 step %c1 iter_args(%arg1 = %cst_3, %arg2 = %cst_3) -> (f64, f64) {
+      %32 = memref.load %alloc[%arg0] : memref<2500xf64>
+      %33 = arts.db_ref %ptr_5[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
+      %34 = memref.load %33[%arg0] : memref<?xf64>
+      %35 = arith.subf %32, %34 : f64
+      %36 = arith.mulf %35, %35 : f64
+      %37 = arith.addf %arg2, %36 : f64
+      %38 = math.absf %35 : f64
+      %39 = arith.cmpf ogt, %38, %arg1 : f64
+      %40 = arith.select %39, %38, %arg1 : f64
+      scf.yield %40, %37 : f64, f64
+    }
+    %22 = arith.divf %21#1, %cst_1 : f64
+    %23 = math.sqrt %22 : f64
+    %24 = llvm.mlir.addressof @str4 : !llvm.ptr
+    %25 = llvm.getelementptr %24[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<15 x i8>
+    %26 = llvm.call @printf(%25, %23) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, f64) -> i32
+    %27 = llvm.mlir.addressof @str5 : !llvm.ptr
+    %28 = llvm.getelementptr %27[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<15 x i8>
+    %29 = llvm.call @printf(%28, %21#0) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, f64) -> i32
+    memref.dealloc %alloc : memref<2500xf64>
+    %30 = arith.cmpf olt, %23, %cst_2 : f64
+    %31 = scf.if %30 -> (i32) {
+      %32 = llvm.mlir.addressof @str6 : !llvm.ptr
+      %33 = func.call @omp_get_wtime() : () -> f64
+      %34 = memref.load %0[%c0] : memref<1xf64>
+      %35 = arith.subf %33, %34 : f64
+      %36 = polygeist.pointer2memref %32 : !llvm.ptr to memref<?xi8>
+      %37 = func.call @carts_test_pass_impl(%36, %35) : (memref<?xi8>, f64) -> i32
+      scf.yield %37 : i32
+    } else {
+      %32 = llvm.mlir.addressof @str6 : !llvm.ptr
+      %33 = llvm.mlir.addressof @str7 : !llvm.ptr
+      %34 = polygeist.pointer2memref %32 : !llvm.ptr to memref<?xi8>
+      %35 = polygeist.pointer2memref %33 : !llvm.ptr to memref<?xi8>
+      %36 = func.call @carts_test_fail_impl(%34, %35) : (memref<?xi8>, memref<?xi8>) -> i32
+      scf.yield %36 : i32
+    }
+    arts.db_free(%guid) : memref<?xi64>
+    arts.db_free(%ptr) : memref<?xmemref<?xf64>>
+    arts.db_free(%guid_6) : memref<?xi64>
+    arts.db_free(%ptr_7) : memref<?xmemref<?x?xi32>>
+    arts.db_free(%guid_4) : memref<?xi64>
+    arts.db_free(%ptr_5) : memref<?xmemref<?xf64>>
+    return %31 : i32
+  }
+  func.func private @carts_test_pass_impl(memref<?xi8>, f64) -> i32 attributes {llvm.linkage = #llvm.linkage<external>}
+  func.func private @carts_test_fail_impl(memref<?xi8>, memref<?xi8>) -> i32 attributes {llvm.linkage = #llvm.linkage<external>}
+  func.func private @omp_get_wtime() -> f64 attributes {llvm.linkage = #llvm.linkage<external>}
+}
+[0;1;35m
+PartitionDb STARTED
+===================================
+[0m[0;1;35m[DEBUG] [db_partitioning][0m Checking allocation: %guid_4, %ptr_5 = arts.db_alloc[<inout>, <heap>, <write>] route(%c0_i32 : i32) sizes[%c1] elementType(f64) elementSizes[%c2500] {arts.id = 28 : i64, arts.partition = #arts.partition_mode<coarse>} : (memref<?xi64>, memref<?xmemref<?xf64>>)
+[0;1;35m[DEBUG] [db_partitioning][0m   Partition mode is coarse - re-analyzing with loop structure
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: Partition-ReanalyzeNone applied=1 for ARTS ID 28 (allocId=0)
+[0;1;35m[DEBUG] [db_partitioning][0m   Access patterns: hasUniform=1, hasStencil=0, hasIndexed=0, isMixed=0
+[0;1;35m[DEBUG] [db_partitioning][0m     Acquire[0]: mode=1, canEW=0, canChunked=1, acquireAttr=1
+[0;1;35m[DEBUG] [db_partitioning][0m   Per-acquire voting: canEW=0, canChunked=1, modesConsistent=1
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: Partition-CanonicalChunkSize applied=1 for ARTS ID 28 (allocId=0)
+[0;1;35m[DEBUG] [heuristics][0m getPartitioningMode: canElementWise=0, canChunked=1, pinnedDimCount=0, accessMode=2
+[0;1;35m[DEBUG] [heuristics][0m evaluatePartitioningHeuristics: canElementWise=0, canChunked=1, pinnedDimCount=0, accessMode=2
+[0;1;35m[DEBUG] [heuristics][0m H1.6 applied: Uniform direct access prefers chunked
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: H1.6 applied=1 for ARTS ID 0 (allocId=0)
+[0;1;35m[DEBUG] [heuristics][0m Heuristic H1.6 applied: H1.6: Uniform direct access prefers chunked
+[0;1;35m[DEBUG] [db_partitioning][0m   Decision: mode=Chunked, outerRank=1, innerRank=1
+[0;1;35m[DEBUG] [db_partitioning][0m   Set partition attribute: Chunked
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: Partition-Success applied=1 for ARTS ID 28 (allocId=0)
+[0;1;35m[DEBUG] [db_partitioning][0m   Partitioned alloc to sizes=1
+[0;1;35m[DEBUG] [db_partitioning][0m   Partitioned alloc has potential overlap; keeping twin_diff enabled
+[0;1;35m[DEBUG] [db_partitioning][0m Checking allocation: %guid_9, %ptr_10 = arts.db_alloc[<in>, <heap>, <read>] route(%c0_i32 : i32) sizes[%c1] elementType(i32) elementSizes[%19, %c4] {arts.id = 30 : i64, arts.partition = #arts.partition_mode<coarse>} : (memref<?xi64>, memref<?xmemref<?x?xi32>>)
+[0;1;35m[DEBUG] [db_partitioning][0m   Partition mode is coarse - re-analyzing with loop structure
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: Partition-ReanalyzeNone applied=1 for ARTS ID 30 (allocId=0)
+[0;1;35m[DEBUG] [db_partitioning][0m   Access patterns: hasUniform=1, hasStencil=0, hasIndexed=0, isMixed=0
+[0;1;35m[DEBUG] [db_partitioning][0m     Acquire[0]: mode=0, canEW=0, canChunked=1, acquireAttr=1
+[0;1;35m[DEBUG] [db_partitioning][0m   Per-acquire voting: canEW=0, canChunked=1, modesConsistent=1
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: Partition-CanonicalChunkSize applied=1 for ARTS ID 30 (allocId=0)
+[0;1;35m[DEBUG] [heuristics][0m getPartitioningMode: canElementWise=0, canChunked=1, pinnedDimCount=0, accessMode=0
+[0;1;35m[DEBUG] [heuristics][0m evaluatePartitioningHeuristics: canElementWise=0, canChunked=1, pinnedDimCount=0, accessMode=0
+[0;1;35m[DEBUG] [heuristics][0m H1.6 applied: Uniform direct access prefers chunked
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: H1.6 applied=1 for ARTS ID 0 (allocId=0)
+[0;1;35m[DEBUG] [heuristics][0m Heuristic H1.6 applied: H1.6: Uniform direct access prefers chunked
+[0;1;35m[DEBUG] [db_partitioning][0m   Decision: mode=Chunked, outerRank=1, innerRank=2
+[0;1;35m[DEBUG] [db_partitioning][0m   Set partition attribute: Chunked
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: Partition-Success applied=1 for ARTS ID 30 (allocId=0)
+[0;1;35m[DEBUG] [db_partitioning][0m   Partitioned alloc to sizes=1
+[0;1;35m[DEBUG] [heuristics][0m   Dynamic offset/size - partial correlation only
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: TwinDiff-Disabled applied=1 for ARTS ID 38 (allocId=30)
+[0;1;35m[DEBUG] [db_partitioning][0m   Set twin_diff=false
+[0;1;35m[DEBUG] [db_partitioning][0m Checking allocation: %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>] route(%c0_i32 : i32) sizes[%c1] elementType(f64) elementSizes[%c2601] {arts.id = 27 : i64, arts.partition = #arts.partition_mode<coarse>} : (memref<?xi64>, memref<?xmemref<?xf64>>)
+[0;1;35m[DEBUG] [db_partitioning][0m   Partition mode is coarse - re-analyzing with loop structure
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: Partition-ReanalyzeNone applied=1 for ARTS ID 27 (allocId=0)
+[0;1;35m[DEBUG] [db_partitioning][0m   Inconsistent partition modes across acquires
+[0;1;35m[DEBUG] [db_partitioning][0m   Access patterns: hasUniform=1, hasStencil=0, hasIndexed=1, isMixed=1
+[0;1;35m[DEBUG] [db_partitioning][0m   Indirect access detected - indirect acquires will use full-range
+[0;1;35m[DEBUG] [db_partitioning][0m     Acquire[0]: mode=1, canEW=0, canChunked=1, acquireAttr=1
+[0;1;35m[DEBUG] [db_partitioning][0m   Non-leading offset on indirect access; disabling chunked for this acquire
+[0;1;35m[DEBUG] [db_partitioning][0m     Acquire[1]: mode=0, canEW=0, canChunked=0, acquireAttr=1
+[0;1;35m[DEBUG] [db_partitioning][0m   Per-acquire voting: canEW=0, canChunked=1, modesConsistent=0
+[0;1;35m[DEBUG] [db_partitioning][0m   Marked indirect read-only acquire as full-range: %guid_18, %ptr_19 = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) offsets[%c0] sizes[%c1] chunk_hint(%46, %51) {arts.partition = #arts.partition_mode<chunked>} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: Partition-CanonicalChunkSize applied=1 for ARTS ID 27 (allocId=0)
+[0;1;35m[DEBUG] [heuristics][0m getPartitioningMode: canElementWise=0, canChunked=1, pinnedDimCount=0, accessMode=2
+[0;1;35m[DEBUG] [heuristics][0m evaluatePartitioningHeuristics: canElementWise=0, canChunked=1, pinnedDimCount=0, accessMode=2
+[0;1;35m[DEBUG] [heuristics][0m H1.2 applied: Mixed access pattern
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: H1.2 applied=1 for ARTS ID 0 (allocId=0)
+[0;1;35m[DEBUG] [heuristics][0m Heuristic H1.2 applied: H1.2: Mixed access (chunked writes + full-range indirect reads)
+[0;1;35m[DEBUG] [db_partitioning][0m   Decision: mode=Chunked, outerRank=1, innerRank=1
+[0;1;35m[DEBUG] [db_partitioning][0m   Mixed mode plan: numChunks=%15 = arith.index_cast %14 : i64 to index
+[0;1;35m[DEBUG] [db_partitioning][0m   Set partition attribute: Chunked
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: Partition-Success applied=1 for ARTS ID 27 (allocId=0)
+[0;1;35m[DEBUG] [db_partitioning][0m   Partitioned alloc to sizes=1
+[0;1;35m[DEBUG] [db_partitioning][0m   Partitioned alloc has potential overlap; keeping twin_diff enabled
+[0;1;35m[DEBUG] [db_partitioning][0m   Overlap analysis for unpartitioned allocations:
+[0;1;35m[DEBUG] [db_partitioning][0m     Skipping alloc B - already partitioned
+[0;1;35m[DEBUG] [db_partitioning][0m     Analyzing alloc C with 1 acquires
+[0;1;35m[DEBUG] [db_partitioning][0m     Analyzing alloc A with 2 acquires
+[0;1;35m[DEBUG] [db_partitioning][0m       Potential overlap detected -> will use default twin_diff=true
+[0;1;35m[DEBUG] [db_partitioning][0m   Final pass: Setting safe default twin_diff=true for unset acquires
+[0;1;35m[DEBUG] [heuristics][0m   Dynamic offset/size - partial correlation only
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: TwinDiff-Disabled applied=1 for ARTS ID 38 (allocId=27)
+[0;1;35m[DEBUG] [db_partitioning][0m   Set twin_diff=false
+[0;1;35m[DEBUG] [db_partitioning][0m     Default twin_diff=true for unset acquire
+[0;1;35m[DEBUG] [heuristics][0m   Dynamic offset/size - partial correlation only
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: TwinDiff-Disabled applied=1 for ARTS ID 38 (allocId=27)
+[0;1;35m[DEBUG] [db_partitioning][0m   Set twin_diff=false
+[0;1;35m[DEBUG] [db_partitioning][0m     Default twin_diff=true for unset acquire
+[0;1;35m[DEBUG] [heuristics][0m   Dynamic offset/size - partial correlation only
+[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: TwinDiff-Disabled applied=1 for ARTS ID 38 (allocId=28)
+[0;1;35m[DEBUG] [db_partitioning][0m   Set twin_diff=false
+[0;1;35m[DEBUG] [db_partitioning][0m     Default twin_diff=true for unset acquire
+[0;1;35m[DEBUG] [db_partitioning][0m Rebuilding graph after partitioning
+[0;1;35m
+PartitionDb FINISHED
+===================================
+
+[0m[0;1;35m
+AnalyzeStencilBounds STARTED
+===================================
+[0m[0;1;35m
+AnalyzeStencilBounds FINISHED
+===================================
+
+[0m[0;1;34m[INFO] [db_partitioning][0m  Module has changed, invalidating analyses
+[0;1;34m
+-----------------------------------------
+DbPartitioningPass FINISHED
+-----------------------------------------
+
+[0mmodule attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<i128, dense<128> : vector<2xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:o-i64:64-i128:128-n32:64-S128", llvm.target_triple = "arm64-apple-macosx16.0.0", "polygeist.target-cpu" = "apple-m1", "polygeist.target-features" = "+aes,+crc,+dotprod,+fp-armv8,+fp16fml,+fullfp16,+lse,+neon,+ras,+rcpc,+rdm,+sha2,+sha3,+v8.1a,+v8.2a,+v8.3a,+v8.4a,+v8.5a,+v8a,+zcm,+zcz"} {
+  llvm.mlir.global internal constant @str7("mixed_access verification failed\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str6("mixed_access.c\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str5("Max error: %e\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str4("RMS error: %e\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str3("Running parallel version...\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str2("Running sequential version...\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str1("Pattern: chunked node writes + full-range indirect reads\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str0("Mixed Access Test: %d nodes, %d elements\0A\00") {addr_space = 0 : i32}
+  llvm.func @printf(!llvm.ptr, ...) -> i32
+  memref.global "private" @_carts_timer_start : memref<1xf64> = dense<0.000000e+00>
+  func.func @main() -> i32 attributes {llvm.linkage = #llvm.linkage<external>} {
+    %c625 = arith.constant 625 : index
+    %c651 = arith.constant 651 : index
+    %c4 = arith.constant 4 : index
+    %c0_i32 = arith.constant 0 : i32
+    %c2500_i64 = arith.constant 2500 : i64
+    %c2601 = arith.constant 2601 : index
+    %c2500 = arith.constant 2500 : index
+    %c50 = arith.constant 50 : index
+    %c51_i32 = arith.constant 51 : i32
+    %cst = arith.constant 1.000000e-02 : f64
+    %cst_0 = arith.constant 4.000000e+00 : f64
+    %c1_i32 = arith.constant 1 : i32
+    %c2 = arith.constant 2 : index
+    %c3 = arith.constant 3 : index
+    %c1 = arith.constant 1 : index
+    %c0 = arith.constant 0 : index
+    %c2601_i32 = arith.constant 2601 : i32
+    %cst_1 = arith.constant 2.500000e+03 : f64
+    %c2500_i32 = arith.constant 2500 : i32
+    %cst_2 = arith.constant 1.000000e-10 : f64
+    %cst_3 = arith.constant 0.000000e+00 : f64
+    %0 = memref.get_global @_carts_timer_start : memref<1xf64>
+    %1 = call @omp_get_wtime() : () -> f64
+    memref.store %1, %0[%c0] : memref<1xf64>
+    %2 = llvm.mlir.addressof @str0 : !llvm.ptr
+    %3 = llvm.getelementptr %2[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<42 x i8>
+    %4 = llvm.call @printf(%3, %c2601_i32, %c2500_i32) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
+    %5 = llvm.mlir.addressof @str1 : !llvm.ptr
+    %6 = llvm.getelementptr %5[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<58 x i8>
+    %7 = llvm.call @printf(%6) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+    %8 = arith.minui %c651, %c625 : index
+    %c625_4 = arith.constant 625 : index
+    %c1_5 = arith.constant 1 : index
+    %9 = arith.maxui %c625_4, %c1_5 : index
+    %10 = arith.index_cast %c2601 : index to i64
+    %11 = arith.index_cast %9 : index to i64
+    %c1_i64 = arith.constant 1 : i64
+    %12 = arith.addi %10, %11 : i64
+    %13 = arith.subi %12, %c1_i64 : i64
+    %14 = arith.divui %13, %11 : i64
+    %15 = arith.index_cast %14 : i64 to index
+    %c0_6 = arith.constant 0 : index
+    %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>] route(%c0_i32 : i32) sizes[%15] elementType(f64) elementSizes[%9] {arts.id = 27 : i64, arts.partition = #arts.partition_mode<chunked>} : (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %c625_7 = arith.constant 625 : index
+    %c1_8 = arith.constant 1 : index
+    %16 = arith.maxui %c625_7, %c1_8 : index
+    %17 = arith.index_cast %c2500 : index to i64
+    %18 = arith.index_cast %16 : index to i64
+    %c1_i64_9 = arith.constant 1 : i64
+    %19 = arith.addi %17, %18 : i64
+    %20 = arith.subi %19, %c1_i64_9 : i64
+    %21 = arith.divui %20, %18 : i64
+    %22 = arith.index_cast %21 : i64 to index
+    %c0_10 = arith.constant 0 : index
+    %guid_11, %ptr_12 = arts.db_alloc[<inout>, <heap>, <write>] route(%c0_i32 : i32) sizes[%22] elementType(f64) elementSizes[%16] {arts.id = 28 : i64, arts.partition = #arts.partition_mode<chunked>} : (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %alloc = memref.alloc() : memref<2500xf64>
+    %23 = polygeist.typeSize memref<?xi32> : index
+    %24 = arith.index_cast %23 : index to i64
+    %25 = arith.muli %24, %c2500_i64 : i64
+    %26 = arith.index_cast %25 : i64 to index
+    %27 = arith.divui %26, %23 : index
+    %c625_13 = arith.constant 625 : index
+    %c1_14 = arith.constant 1 : index
+    %28 = arith.maxui %c625_13, %c1_14 : index
+    %29 = arith.index_cast %27 : index to i64
+    %30 = arith.index_cast %28 : index to i64
+    %c1_i64_15 = arith.constant 1 : i64
+    %31 = arith.addi %29, %30 : i64
+    %32 = arith.subi %31, %c1_i64_15 : i64
+    %33 = arith.divui %32, %30 : i64
+    %34 = arith.index_cast %33 : i64 to index
+    %c0_16 = arith.constant 0 : index
+    %guid_17, %ptr_18 = arts.db_alloc[<in>, <heap>, <read>] route(%c0_i32 : i32) sizes[%34] elementType(i32) elementSizes[%28, %c4] {arts.id = 30 : i64, arts.partition = #arts.partition_mode<chunked>} : (memref<?xi64>, memref<?xmemref<?x?xi32>>)
+    scf.for %arg0 = %c0 to %c2601 step %c1 {
+      %c1_19 = arith.constant 1 : index
+      %54 = arith.maxui %9, %c1_19 : index
+      %55 = arith.divui %arg0, %54 : index
+      %56 = arith.remui %arg0, %54 : index
+      %57 = arts.db_ref %ptr[%55] : memref<?xmemref<?xf64>> -> memref<?xf64>
+      memref.store %cst_3, %57[%56] : memref<?xf64>
+    }
+    scf.for %arg0 = %c0 to %c2500 step %c1 {
+      %c1_19 = arith.constant 1 : index
+      %54 = arith.maxui %16, %c1_19 : index
+      %55 = arith.divui %arg0, %54 : index
+      %56 = arith.remui %arg0, %54 : index
+      %57 = arts.db_ref %ptr_12[%55] : memref<?xmemref<?xf64>> -> memref<?xf64>
+      memref.store %cst_3, %57[%56] : memref<?xf64>
+      memref.store %cst_3, %alloc[%arg0] : memref<2500xf64>
+    }
+    scf.for %arg0 = %c0 to %c50 step %c1 {
+      %54 = arith.index_cast %arg0 : index to i32
+      %55 = arith.muli %54, %c51_i32 : i32
+      %56 = arith.addi %54, %c1_i32 : i32
+      %57 = arith.muli %56, %c51_i32 : i32
+      scf.for %arg1 = %c0 to %c50 step %c1 {
+        %58 = arith.index_cast %arg1 : index to i32
+        %59 = arith.muli %arg0, %c50 : index
+        %60 = arith.addi %arg1, %59 : index
+        %61 = arith.addi %55, %58 : i32
+        %c1_19 = arith.constant 1 : index
+        %62 = arith.maxui %28, %c1_19 : index
+        %63 = arith.divui %60, %62 : index
+        %64 = arith.remui %60, %62 : index
+        %65 = arts.db_ref %ptr_18[%63] : memref<?xmemref<?x?xi32>> -> memref<?x?xi32>
+        memref.store %61, %65[%64, %c0] : memref<?x?xi32>
+        %66 = arith.addi %61, %c1_i32 : i32
+        %c1_20 = arith.constant 1 : index
+        %67 = arith.maxui %28, %c1_20 : index
+        %68 = arith.divui %60, %67 : index
+        %69 = arith.remui %60, %67 : index
+        %70 = arts.db_ref %ptr_18[%68] : memref<?xmemref<?x?xi32>> -> memref<?x?xi32>
+        memref.store %66, %70[%69, %c1] : memref<?x?xi32>
+        %71 = arith.addi %57, %58 : i32
+        %72 = arith.addi %71, %c1_i32 : i32
+        %c1_21 = arith.constant 1 : index
+        %73 = arith.maxui %28, %c1_21 : index
+        %74 = arith.divui %60, %73 : index
+        %75 = arith.remui %60, %73 : index
+        %76 = arts.db_ref %ptr_18[%74] : memref<?xmemref<?x?xi32>> -> memref<?x?xi32>
+        memref.store %72, %76[%75, %c2] : memref<?x?xi32>
+        %c1_22 = arith.constant 1 : index
+        %77 = arith.maxui %28, %c1_22 : index
+        %78 = arith.divui %60, %77 : index
+        %79 = arith.remui %60, %77 : index
+        %80 = arts.db_ref %ptr_18[%78] : memref<?xmemref<?x?xi32>> -> memref<?x?xi32>
+        memref.store %71, %80[%79, %c3] : memref<?x?xi32>
+      }
+    }
+    %35 = llvm.mlir.addressof @str2 : !llvm.ptr
+    %36 = llvm.getelementptr %35[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<31 x i8>
+    %37 = llvm.call @printf(%36) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+    scf.for %arg0 = %c0 to %c2500 step %c1 {
+      %54 = scf.for %arg1 = %c0 to %c4 step %c1 iter_args(%arg2 = %cst_3) -> (f64) {
+        %c1_19 = arith.constant 1 : index
+        %56 = arith.maxui %28, %c1_19 : index
+        %57 = arith.divui %arg0, %56 : index
+        %58 = arith.remui %arg0, %56 : index
+        %59 = arts.db_ref %ptr_18[%57] : memref<?xmemref<?x?xi32>> -> memref<?x?xi32>
+        %60 = memref.load %59[%58, %arg1] : memref<?x?xi32>
+        %61 = arith.muli %60, %60 : i32
+        %62 = arith.sitofp %61 : i32 to f64
+        %63 = arith.mulf %62, %cst : f64
+        %64 = arith.addf %arg2, %63 : f64
+        scf.yield %64 : f64
+      }
+      %55 = arith.divf %54, %cst_0 : f64
+      memref.store %55, %alloc[%arg0] : memref<2500xf64>
+    }
+    %38 = llvm.mlir.addressof @str3 : !llvm.ptr
+    %39 = llvm.getelementptr %38[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<29 x i8>
+    %40 = llvm.call @printf(%39) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+    %41 = arts.epoch {
+      scf.for %arg0 = %c0 to %c4 step %c1 {
+        %54 = arith.muli %arg0, %c651 : index
+        %55 = arith.cmpi uge, %54, %c2601 : index
+        %56 = arith.subi %c2601, %54 : index
+        %57 = arith.select %55, %c0, %56 : index
+        %58 = arith.minui %57, %c651 : index
+        %59 = arith.minui %58, %57 : index
+        %60 = arith.cmpi ugt, %59, %c0 : index
+        scf.if %60 {
+          %c1_19 = arith.constant 1 : index
+          %61 = arith.maxui %9, %c1_19 : index
+          %62 = arith.divui %54, %61 : index
+          %63 = arith.addi %54, %59 : index
+          %64 = arith.subi %63, %c1_19 : index
+          %65 = arith.divui %64, %61 : index
+          %66 = arith.subi %15, %c1_19 : index
+          %67 = arith.minui %65, %66 : index
+          %68 = arith.subi %67, %62 : index
+          %69 = arith.addi %68, %c1_19 : index
+          %guid_20, %ptr_21 = arts.db_acquire[<out>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) offsets[%62] sizes[%69] chunk_hint(%54, %59) {arts.id = 38 : i64, arts.partition = #arts.partition_mode<chunked>, arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
+          arts.edt <task> <intranode> route(%c0_i32) (%ptr_21) : memref<?xmemref<?xf64>> attributes {arts.id = 38 : i64} {
+          ^bb0(%arg1: memref<?xmemref<?xf64>>):
+            scf.for %arg2 = %c0 to %59 step %c1 {
+              %70 = arith.addi %54, %arg2 : index
+              %71 = arith.index_cast %70 : index to i32
+              %72 = arith.muli %71, %71 : i32
+              %73 = arith.sitofp %72 : i32 to f64
+              %74 = arith.mulf %73, %cst : f64
+              %c1_22 = arith.constant 1 : index
+              %75 = arith.maxui %9, %c1_22 : index
+              %76 = arith.divui %70, %75 : index
+              %77 = arith.subi %76, %62 : index
+              %78 = arith.remui %70, %75 : index
+              %79 = arts.db_ref %arg1[%77] : memref<?xmemref<?xf64>> -> memref<?xf64>
+              memref.store %74, %79[%78] : memref<?xf64>
+            }
+            arts.db_release(%arg1) : memref<?xmemref<?xf64>>
+          }
+        }
+      }
+    } : i64
+    %42 = arts.epoch {
+      scf.for %arg0 = %c0 to %c4 step %c1 {
+        %54 = arith.muli %arg0, %c625 : index
+        %55 = arith.cmpi uge, %54, %c2500 : index
+        %56 = arith.subi %c2500, %54 : index
+        %57 = arith.select %55, %c0, %56 : index
+        %58 = arith.minui %57, %c625 : index
+        %59 = arith.minui %58, %57 : index
+        %60 = arith.cmpi ugt, %59, %c0 : index
+        scf.if %60 {
+          %c1_19 = arith.constant 1 : index
+          %61 = arith.maxui %28, %c1_19 : index
+          %62 = arith.divui %54, %61 : index
+          %63 = arith.addi %54, %59 : index
+          %64 = arith.subi %63, %c1_19 : index
+          %65 = arith.divui %64, %61 : index
+          %66 = arith.subi %34, %c1_19 : index
+          %67 = arith.minui %65, %66 : index
+          %68 = arith.subi %67, %62 : index
+          %69 = arith.addi %68, %c1_19 : index
+          %guid_20, %ptr_21 = arts.db_acquire[<in>] (%guid_17 : memref<?xi64>, %ptr_18 : memref<?xmemref<?x?xi32>>) offsets[%62] sizes[%69] chunk_hint(%54, %59) {arts.id = 38 : i64, arts.partition = #arts.partition_mode<chunked>, arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<?x?xi32>>)
+          %c0_22 = arith.constant 0 : index
+          %c1_23 = arith.constant 1 : index
+          %guid_24, %ptr_25 = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) offsets[%c0_22] sizes[%15] {arts.id = 38 : i64, arts.partition = #arts.partition_mode<chunked>, arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
+          %c1_26 = arith.constant 1 : index
+          %70 = arith.maxui %16, %c1_26 : index
+          %71 = arith.divui %54, %70 : index
+          %72 = arith.addi %54, %59 : index
+          %73 = arith.subi %72, %c1_26 : index
+          %74 = arith.divui %73, %70 : index
+          %75 = arith.subi %22, %c1_26 : index
+          %76 = arith.minui %74, %75 : index
+          %77 = arith.subi %76, %71 : index
+          %78 = arith.addi %77, %c1_26 : index
+          %guid_27, %ptr_28 = arts.db_acquire[<out>] (%guid_11 : memref<?xi64>, %ptr_12 : memref<?xmemref<?xf64>>) offsets[%71] sizes[%78] chunk_hint(%54, %59) {arts.id = 38 : i64, arts.partition = #arts.partition_mode<chunked>, arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
+          arts.edt <task> <intranode> route(%c0_i32) (%ptr_21, %ptr_25, %ptr_28) : memref<?xmemref<?x?xi32>>, memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>> attributes {arts.id = 38 : i64} {
+          ^bb0(%arg1: memref<?xmemref<?x?xi32>>, %arg2: memref<?xmemref<?xf64>>, %arg3: memref<?xmemref<?xf64>>):
+            scf.for %arg4 = %c0 to %59 step %c1 {
+              %79 = arith.addi %54, %arg4 : index
+              %80 = scf.for %arg5 = %c0 to %c4 step %c1 iter_args(%arg6 = %cst_3) -> (f64) {
+                %c1_30 = arith.constant 1 : index
+                %87 = arith.maxui %28, %c1_30 : index
+                %88 = arith.divui %79, %87 : index
+                %89 = arith.subi %88, %62 : index
+                %90 = arith.remui %79, %87 : index
+                %91 = arts.db_ref %arg1[%89] : memref<?xmemref<?x?xi32>> -> memref<?x?xi32>
+                %92 = memref.load %91[%90, %arg5] : memref<?x?xi32>
+                %93 = arith.index_cast %92 : i32 to index
+                %c1_31 = arith.constant 1 : index
+                %94 = arith.maxui %9, %c1_31 : index
+                %95 = arith.divui %93, %94 : index
+                %96 = arith.subi %95, %c0_22 : index
+                %97 = arith.remui %93, %94 : index
+                %98 = arts.db_ref %arg2[%96] : memref<?xmemref<?xf64>> -> memref<?xf64>
+                %99 = memref.load %98[%97] : memref<?xf64>
+                %100 = arith.addf %arg6, %99 : f64
+                scf.yield %100 : f64
+              }
+              %81 = arith.divf %80, %cst_0 : f64
+              %c1_29 = arith.constant 1 : index
+              %82 = arith.maxui %16, %c1_29 : index
+              %83 = arith.divui %79, %82 : index
+              %84 = arith.subi %83, %71 : index
+              %85 = arith.remui %79, %82 : index
+              %86 = arts.db_ref %arg3[%84] : memref<?xmemref<?xf64>> -> memref<?xf64>
+              memref.store %81, %86[%85] : memref<?xf64>
+            }
+            arts.db_release(%arg1) : memref<?xmemref<?x?xi32>>
+            arts.db_release(%arg2) : memref<?xmemref<?xf64>>
+            arts.db_release(%arg3) : memref<?xmemref<?xf64>>
+          }
+        }
+      }
+    } : i64
+    %43:2 = scf.for %arg0 = %c0 to %c2500 step %c1 iter_args(%arg1 = %cst_3, %arg2 = %cst_3) -> (f64, f64) {
+      %54 = memref.load %alloc[%arg0] : memref<2500xf64>
+      %c1_19 = arith.constant 1 : index
+      %55 = arith.maxui %16, %c1_19 : index
+      %56 = arith.divui %arg0, %55 : index
+      %57 = arith.remui %arg0, %55 : index
+      %58 = arts.db_ref %ptr_12[%56] : memref<?xmemref<?xf64>> -> memref<?xf64>
+      %59 = memref.load %58[%57] : memref<?xf64>
+      %60 = arith.subf %54, %59 : f64
+      %61 = arith.mulf %60, %60 : f64
+      %62 = arith.addf %arg2, %61 : f64
+      %63 = math.absf %60 : f64
+      %64 = arith.cmpf ogt, %63, %arg1 : f64
+      %65 = arith.select %64, %63, %arg1 : f64
+      scf.yield %65, %62 : f64, f64
+    }
+    %44 = arith.divf %43#1, %cst_1 : f64
+    %45 = math.sqrt %44 : f64
+    %46 = llvm.mlir.addressof @str4 : !llvm.ptr
+    %47 = llvm.getelementptr %46[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<15 x i8>
+    %48 = llvm.call @printf(%47, %45) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, f64) -> i32
+    %49 = llvm.mlir.addressof @str5 : !llvm.ptr
+    %50 = llvm.getelementptr %49[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<15 x i8>
+    %51 = llvm.call @printf(%50, %43#0) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, f64) -> i32
+    memref.dealloc %alloc : memref<2500xf64>
+    %52 = arith.cmpf olt, %45, %cst_2 : f64
+    %53 = scf.if %52 -> (i32) {
+      %54 = llvm.mlir.addressof @str6 : !llvm.ptr
+      %55 = func.call @omp_get_wtime() : () -> f64
+      %56 = memref.load %0[%c0] : memref<1xf64>
+      %57 = arith.subf %55, %56 : f64
+      %58 = polygeist.pointer2memref %54 : !llvm.ptr to memref<?xi8>
+      %59 = func.call @carts_test_pass_impl(%58, %57) : (memref<?xi8>, f64) -> i32
+      scf.yield %59 : i32
+    } else {
+      %54 = llvm.mlir.addressof @str6 : !llvm.ptr
+      %55 = llvm.mlir.addressof @str7 : !llvm.ptr
+      %56 = polygeist.pointer2memref %54 : !llvm.ptr to memref<?xi8>
+      %57 = polygeist.pointer2memref %55 : !llvm.ptr to memref<?xi8>
+      %58 = func.call @carts_test_fail_impl(%56, %57) : (memref<?xi8>, memref<?xi8>) -> i32
+      scf.yield %58 : i32
+    }
+    arts.db_free(%guid) : memref<?xi64>
+    arts.db_free(%ptr) : memref<?xmemref<?xf64>>
+    arts.db_free(%guid_17) : memref<?xi64>
+    arts.db_free(%ptr_18) : memref<?xmemref<?x?xi32>>
+    arts.db_free(%guid_11) : memref<?xi64>
+    arts.db_free(%ptr_12) : memref<?xmemref<?xf64>>
+    return %53 : i32
+  }
+  func.func private @carts_test_pass_impl(memref<?xi8>, f64) -> i32 attributes {llvm.linkage = #llvm.linkage<external>}
+  func.func private @carts_test_fail_impl(memref<?xi8>, memref<?xi8>) -> i32 attributes {llvm.linkage = #llvm.linkage<external>}
+  func.func private @omp_get_wtime() -> f64 attributes {llvm.linkage = #llvm.linkage<external>}
+}
+module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<i128, dense<128> : vector<2xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:o-i64:64-i128:128-n32:64-S128", llvm.target_triple = "arm64-apple-macosx16.0.0", "polygeist.target-cpu" = "apple-m1", "polygeist.target-features" = "+aes,+crc,+dotprod,+fp-armv8,+fp16fml,+fullfp16,+lse,+neon,+ras,+rcpc,+rdm,+sha2,+sha3,+v8.1a,+v8.2a,+v8.3a,+v8.4a,+v8.5a,+v8a,+zcm,+zcz"} {
+  llvm.mlir.global internal constant @str7("mixed_access verification failed\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str6("mixed_access.c\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str5("Max error: %e\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str4("RMS error: %e\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str3("Running parallel version...\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str2("Running sequential version...\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str1("Pattern: chunked node writes + full-range indirect reads\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str0("Mixed Access Test: %d nodes, %d elements\0A\00") {addr_space = 0 : i32}
+  llvm.func @printf(!llvm.ptr, ...) -> i32
+  memref.global "private" @_carts_timer_start : memref<1xf64> = dense<0.000000e+00>
+  func.func @main() -> i32 attributes {llvm.linkage = #llvm.linkage<external>} {
+    %c624_i64 = arith.constant 624 : i64
+    %c625_i64 = arith.constant 625 : i64
+    %c625 = arith.constant 625 : index
+    %c4 = arith.constant 4 : index
+    %c2500_i64 = arith.constant 2500 : i64
+    %c5 = arith.constant 5 : index
+    %c651 = arith.constant 651 : index
+    %c0_i32 = arith.constant 0 : i32
+    %c2601 = arith.constant 2601 : index
+    %c2500 = arith.constant 2500 : index
+    %c50 = arith.constant 50 : index
+    %c51_i32 = arith.constant 51 : i32
+    %cst = arith.constant 1.000000e-02 : f64
+    %cst_0 = arith.constant 4.000000e+00 : f64
+    %c1_i32 = arith.constant 1 : i32
+    %c2 = arith.constant 2 : index
+    %c3 = arith.constant 3 : index
+    %c1 = arith.constant 1 : index
+    %c0 = arith.constant 0 : index
+    %c2601_i32 = arith.constant 2601 : i32
+    %cst_1 = arith.constant 2.500000e+03 : f64
+    %c2500_i32 = arith.constant 2500 : i32
+    %cst_2 = arith.constant 1.000000e-10 : f64
+    %cst_3 = arith.constant 0.000000e+00 : f64
+    %0 = memref.get_global @_carts_timer_start : memref<1xf64>
+    %1 = call @omp_get_wtime() : () -> f64
+    memref.store %1, %0[%c0] : memref<1xf64>
+    %2 = llvm.mlir.addressof @str0 : !llvm.ptr
+    %3 = llvm.getelementptr %2[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<42 x i8>
+    %4 = llvm.call @printf(%3, %c2601_i32, %c2500_i32) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
+    %5 = llvm.mlir.addressof @str1 : !llvm.ptr
+    %6 = llvm.getelementptr %5[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<58 x i8>
+    %7 = llvm.call @printf(%6) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+    %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>] route(%c0_i32 : i32) sizes[%c5] elementType(f64) elementSizes[%c625] {arts.id = 27 : i64, arts.partition = #arts.partition_mode<chunked>} : (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %guid_4, %ptr_5 = arts.db_alloc[<inout>, <heap>, <write>] route(%c0_i32 : i32) sizes[%c4] elementType(f64) elementSizes[%c625] {arts.id = 28 : i64, arts.partition = #arts.partition_mode<chunked>} : (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %alloc = memref.alloc() : memref<2500xf64>
+    %8 = polygeist.typeSize memref<?xi32> : index
+    %9 = arith.index_cast %8 : index to i64
+    %10 = arith.muli %9, %c2500_i64 : i64
+    %11 = arith.index_cast %10 : i64 to index
+    %12 = arith.divui %11, %8 : index
+    %13 = arith.index_cast %12 : index to i64
+    %14 = arith.addi %13, %c624_i64 : i64
+    %15 = arith.divui %14, %c625_i64 : i64
+    %16 = arith.index_cast %15 : i64 to index
+    %guid_6, %ptr_7 = arts.db_alloc[<in>, <heap>, <read>] route(%c0_i32 : i32) sizes[%16] elementType(i32) elementSizes[%c625, %c4] {arts.id = 30 : i64, arts.partition = #arts.partition_mode<chunked>} : (memref<?xi64>, memref<?xmemref<?x?xi32>>)
+    scf.for %arg0 = %c0 to %c2601 step %c1 {
+      %36 = arith.divui %arg0, %c625 : index
+      %37 = arith.remui %arg0, %c625 : index
+      %38 = arts.db_ref %ptr[%36] : memref<?xmemref<?xf64>> -> memref<?xf64>
+      memref.store %cst_3, %38[%37] : memref<?xf64>
+    }
+    scf.for %arg0 = %c0 to %c2500 step %c1 {
+      %36 = arith.divui %arg0, %c625 : index
+      %37 = arith.remui %arg0, %c625 : index
+      %38 = arts.db_ref %ptr_5[%36] : memref<?xmemref<?xf64>> -> memref<?xf64>
+      memref.store %cst_3, %38[%37] : memref<?xf64>
+      memref.store %cst_3, %alloc[%arg0] : memref<2500xf64>
+    }
+    scf.for %arg0 = %c0 to %c50 step %c1 {
+      %36 = arith.index_cast %arg0 : index to i32
+      %37 = arith.muli %36, %c51_i32 : i32
+      %38 = arith.addi %36, %c1_i32 : i32
+      %39 = arith.muli %38, %c51_i32 : i32
+      scf.for %arg1 = %c0 to %c50 step %c1 {
+        %40 = arith.index_cast %arg1 : index to i32
+        %41 = arith.muli %arg0, %c50 : index
+        %42 = arith.addi %arg1, %41 : index
+        %43 = arith.addi %37, %40 : i32
+        %44 = arith.divui %42, %c625 : index
+        %45 = arith.remui %42, %c625 : index
+        %46 = arts.db_ref %ptr_7[%44] : memref<?xmemref<?x?xi32>> -> memref<?x?xi32>
+        memref.store %43, %46[%45, %c0] : memref<?x?xi32>
+        %47 = arith.addi %43, %c1_i32 : i32
+        %48 = arts.db_ref %ptr_7[%44] : memref<?xmemref<?x?xi32>> -> memref<?x?xi32>
+        memref.store %47, %48[%45, %c1] : memref<?x?xi32>
+        %49 = arith.addi %39, %40 : i32
+        %50 = arith.addi %49, %c1_i32 : i32
+        %51 = arts.db_ref %ptr_7[%44] : memref<?xmemref<?x?xi32>> -> memref<?x?xi32>
+        memref.store %50, %51[%45, %c2] : memref<?x?xi32>
+        %52 = arts.db_ref %ptr_7[%44] : memref<?xmemref<?x?xi32>> -> memref<?x?xi32>
+        memref.store %49, %52[%45, %c3] : memref<?x?xi32>
+      }
+    }
+    %17 = llvm.mlir.addressof @str2 : !llvm.ptr
+    %18 = llvm.getelementptr %17[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<31 x i8>
+    %19 = llvm.call @printf(%18) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+    scf.for %arg0 = %c0 to %c2500 step %c1 {
+      %36 = scf.for %arg1 = %c0 to %c4 step %c1 iter_args(%arg2 = %cst_3) -> (f64) {
+        %38 = arith.divui %arg0, %c625 : index
+        %39 = arith.remui %arg0, %c625 : index
+        %40 = arts.db_ref %ptr_7[%38] : memref<?xmemref<?x?xi32>> -> memref<?x?xi32>
+        %41 = memref.load %40[%39, %arg1] : memref<?x?xi32>
+        %42 = arith.muli %41, %41 : i32
+        %43 = arith.sitofp %42 : i32 to f64
+        %44 = arith.mulf %43, %cst : f64
+        %45 = arith.addf %arg2, %44 : f64
+        scf.yield %45 : f64
+      }
+      %37 = arith.divf %36, %cst_0 : f64
+      memref.store %37, %alloc[%arg0] : memref<2500xf64>
+    }
+    %20 = llvm.mlir.addressof @str3 : !llvm.ptr
+    %21 = llvm.getelementptr %20[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<29 x i8>
+    %22 = llvm.call @printf(%21) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+    %23 = arts.epoch {
+      scf.for %arg0 = %c0 to %c4 step %c1 {
+        %36 = arith.muli %arg0, %c651 : index
+        %37 = arith.cmpi uge, %36, %c2601 : index
+        %38 = arith.subi %c2601, %36 : index
+        %39 = arith.select %37, %c0, %38 : index
+        %40 = arith.minui %39, %c651 : index
+        %41 = arith.minui %40, %39 : index
+        %42 = arith.cmpi ugt, %41, %c0 : index
+        scf.if %42 {
+          %43 = arith.divui %36, %c625 : index
+          %44 = arith.addi %36, %41 : index
+          %45 = arith.subi %44, %c1 : index
+          %46 = arith.divui %45, %c625 : index
+          %47 = arith.minui %46, %c4 : index
+          %48 = arith.subi %47, %43 : index
+          %49 = arith.addi %48, %c1 : index
+          %guid_8, %ptr_9 = arts.db_acquire[<out>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) offsets[%43] sizes[%49] chunk_hint(%36, %41) {arts.id = 38 : i64, arts.partition = #arts.partition_mode<chunked>, arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
+          arts.edt <task> <intranode> route(%c0_i32) (%ptr_9) : memref<?xmemref<?xf64>> attributes {arts.id = 38 : i64} {
+          ^bb0(%arg1: memref<?xmemref<?xf64>>):
+            scf.for %arg2 = %c0 to %41 step %c1 {
+              %50 = arith.addi %36, %arg2 : index
+              %51 = arith.index_cast %50 : index to i32
+              %52 = arith.muli %51, %51 : i32
+              %53 = arith.sitofp %52 : i32 to f64
+              %54 = arith.mulf %53, %cst : f64
+              %55 = arith.divui %50, %c625 : index
+              %56 = arith.subi %55, %43 : index
+              %57 = arith.remui %50, %c625 : index
+              %58 = arts.db_ref %arg1[%56] : memref<?xmemref<?xf64>> -> memref<?xf64>
+              memref.store %54, %58[%57] : memref<?xf64>
+            }
+            arts.db_release(%arg1) : memref<?xmemref<?xf64>>
+          }
+        }
+      }
+    } : i64
+    %24 = arts.epoch {
+      scf.for %arg0 = %c0 to %c4 step %c1 {
+        %36 = arith.muli %arg0, %c625 : index
+        %37 = arith.cmpi uge, %36, %c2500 : index
+        %38 = arith.subi %c2500, %36 : index
+        %39 = arith.select %37, %c0, %38 : index
+        %40 = arith.minui %39, %c625 : index
+        %41 = arith.minui %40, %39 : index
+        %42 = arith.cmpi ugt, %41, %c0 : index
+        scf.if %42 {
+          %43 = arith.divui %36, %c625 : index
+          %44 = arith.addi %36, %41 : index
+          %45 = arith.subi %44, %c1 : index
+          %46 = arith.divui %45, %c625 : index
+          %47 = arith.subi %16, %c1 : index
+          %48 = arith.minui %46, %47 : index
+          %49 = arith.subi %48, %43 : index
+          %50 = arith.addi %49, %c1 : index
+          %guid_8, %ptr_9 = arts.db_acquire[<in>] (%guid_6 : memref<?xi64>, %ptr_7 : memref<?xmemref<?x?xi32>>) offsets[%43] sizes[%50] chunk_hint(%36, %41) {arts.id = 38 : i64, arts.partition = #arts.partition_mode<chunked>, arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<?x?xi32>>)
+          %guid_10, %ptr_11 = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) offsets[%c0] sizes[%c5] {arts.id = 38 : i64, arts.partition = #arts.partition_mode<chunked>, arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
+          %51 = arith.minui %46, %c3 : index
+          %52 = arith.subi %51, %43 : index
+          %53 = arith.addi %52, %c1 : index
+          %guid_12, %ptr_13 = arts.db_acquire[<out>] (%guid_4 : memref<?xi64>, %ptr_5 : memref<?xmemref<?xf64>>) offsets[%43] sizes[%53] chunk_hint(%36, %41) {arts.id = 38 : i64, arts.partition = #arts.partition_mode<chunked>, arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
+          arts.edt <task> <intranode> route(%c0_i32) (%ptr_9, %ptr_11, %ptr_13) : memref<?xmemref<?x?xi32>>, memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>> attributes {arts.id = 38 : i64} {
+          ^bb0(%arg1: memref<?xmemref<?x?xi32>>, %arg2: memref<?xmemref<?xf64>>, %arg3: memref<?xmemref<?xf64>>):
+            scf.for %arg4 = %c0 to %41 step %c1 {
+              %54 = arith.addi %36, %arg4 : index
+              %55 = scf.for %arg5 = %c0 to %c4 step %c1 iter_args(%arg6 = %cst_3) -> (f64) {
+                %61 = arith.divui %54, %c625 : index
+                %62 = arith.subi %61, %43 : index
+                %63 = arith.remui %54, %c625 : index
+                %64 = arts.db_ref %arg1[%62] : memref<?xmemref<?x?xi32>> -> memref<?x?xi32>
+                %65 = memref.load %64[%63, %arg5] : memref<?x?xi32>
+                %66 = arith.index_cast %65 : i32 to index
+                %67 = arith.divui %66, %c625 : index
+                %68 = arith.remui %66, %c625 : index
+                %69 = arts.db_ref %arg2[%67] : memref<?xmemref<?xf64>> -> memref<?xf64>
+                %70 = memref.load %69[%68] : memref<?xf64>
+                %71 = arith.addf %arg6, %70 : f64
+                scf.yield %71 : f64
+              }
+              %56 = arith.divf %55, %cst_0 : f64
+              %57 = arith.divui %54, %c625 : index
+              %58 = arith.subi %57, %43 : index
+              %59 = arith.remui %54, %c625 : index
+              %60 = arts.db_ref %arg3[%58] : memref<?xmemref<?xf64>> -> memref<?xf64>
+              memref.store %56, %60[%59] : memref<?xf64>
+            }
+            arts.db_release(%arg1) : memref<?xmemref<?x?xi32>>
+            arts.db_release(%arg2) : memref<?xmemref<?xf64>>
+            arts.db_release(%arg3) : memref<?xmemref<?xf64>>
+          }
+        }
+      }
+    } : i64
+    %25:2 = scf.for %arg0 = %c0 to %c2500 step %c1 iter_args(%arg1 = %cst_3, %arg2 = %cst_3) -> (f64, f64) {
+      %36 = memref.load %alloc[%arg0] : memref<2500xf64>
+      %37 = arith.divui %arg0, %c625 : index
+      %38 = arith.remui %arg0, %c625 : index
+      %39 = arts.db_ref %ptr_5[%37] : memref<?xmemref<?xf64>> -> memref<?xf64>
+      %40 = memref.load %39[%38] : memref<?xf64>
+      %41 = arith.subf %36, %40 : f64
+      %42 = arith.mulf %41, %41 : f64
+      %43 = arith.addf %arg2, %42 : f64
+      %44 = math.absf %41 : f64
+      %45 = arith.cmpf ogt, %44, %arg1 : f64
+      %46 = arith.select %45, %44, %arg1 : f64
+      scf.yield %46, %43 : f64, f64
+    }
+    %26 = arith.divf %25#1, %cst_1 : f64
+    %27 = math.sqrt %26 : f64
+    %28 = llvm.mlir.addressof @str4 : !llvm.ptr
+    %29 = llvm.getelementptr %28[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<15 x i8>
+    %30 = llvm.call @printf(%29, %27) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, f64) -> i32
+    %31 = llvm.mlir.addressof @str5 : !llvm.ptr
+    %32 = llvm.getelementptr %31[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<15 x i8>
+    %33 = llvm.call @printf(%32, %25#0) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, f64) -> i32
+    memref.dealloc %alloc : memref<2500xf64>
+    %34 = arith.cmpf olt, %27, %cst_2 : f64
+    %35 = scf.if %34 -> (i32) {
+      %36 = llvm.mlir.addressof @str6 : !llvm.ptr
+      %37 = func.call @omp_get_wtime() : () -> f64
+      %38 = memref.load %0[%c0] : memref<1xf64>
+      %39 = arith.subf %37, %38 : f64
+      %40 = polygeist.pointer2memref %36 : !llvm.ptr to memref<?xi8>
+      %41 = func.call @carts_test_pass_impl(%40, %39) : (memref<?xi8>, f64) -> i32
+      scf.yield %41 : i32
+    } else {
+      %36 = llvm.mlir.addressof @str6 : !llvm.ptr
+      %37 = llvm.mlir.addressof @str7 : !llvm.ptr
+      %38 = polygeist.pointer2memref %36 : !llvm.ptr to memref<?xi8>
+      %39 = polygeist.pointer2memref %37 : !llvm.ptr to memref<?xi8>
+      %40 = func.call @carts_test_fail_impl(%38, %39) : (memref<?xi8>, memref<?xi8>) -> i32
+      scf.yield %40 : i32
+    }
+    arts.db_free(%guid) : memref<?xi64>
+    arts.db_free(%ptr) : memref<?xmemref<?xf64>>
+    arts.db_free(%guid_6) : memref<?xi64>
+    arts.db_free(%ptr_7) : memref<?xmemref<?x?xi32>>
+    arts.db_free(%guid_4) : memref<?xi64>
+    arts.db_free(%ptr_5) : memref<?xmemref<?xf64>>
+    return %35 : i32
+  }
+  func.func private @carts_test_pass_impl(memref<?xi8>, f64) -> i32 attributes {llvm.linkage = #llvm.linkage<external>}
+  func.func private @carts_test_fail_impl(memref<?xi8>, memref<?xi8>) -> i32 attributes {llvm.linkage = #llvm.linkage<external>}
+  func.func private @omp_get_wtime() -> f64 attributes {llvm.linkage = #llvm.linkage<external>}
+}

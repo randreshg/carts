@@ -131,10 +131,12 @@ public:
   /// Db iteration helpers
   void iterateDbElements(Value dbGuid, Value edtGuid, ArrayRef<Value> dbSizes,
                          ArrayRef<Value> dbOffsets, bool isSingle, Location loc,
-                         std::function<void(Value)> elementCallback);
+                         std::function<void(Value)> elementCallback,
+                         ArrayRef<Value> linearSizes = {});
   void iterateMultiDb(Value dbGuid, Value edtGuid, ArrayRef<Value> dbSizes,
                       ArrayRef<Value> dbOffsets, Location loc,
-                      std::function<void(Value)> elementCallback);
+                      std::function<void(Value)> elementCallback,
+                      ArrayRef<Value> linearSizes = {});
 
   /// Debug printing helpers
   void printDebugInfo(Location loc, const Twine &message, ValueRange args = {});

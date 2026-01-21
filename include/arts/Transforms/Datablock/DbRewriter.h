@@ -19,39 +19,27 @@ namespace mlir {
 namespace arts {
 
 ///===----------------------------------------------------------------------===//
-/// Rewriter modes for datablock partitioning
+/// Partition mode utilities
 ///===----------------------------------------------------------------------===//
-enum class RewriterMode { ElementWise, Chunked, Stencil };
 
-/// Check if mode requires chunk size parameter
-inline bool requiresChunkSize(RewriterMode mode) {
-  return mode == RewriterMode::Chunked || mode == RewriterMode::Stencil;
+/// Check if mode requires block size parameter
+inline bool requiresBlockSize(PartitionMode mode) {
+  return mode == PartitionMode::block || mode == PartitionMode::stencil;
 }
 
 /// Get string name for mode (for debugging/logging)
-inline StringRef getRewriterModeName(RewriterMode mode) {
+inline StringRef getPartitionModeName(PartitionMode mode) {
   switch (mode) {
-  case RewriterMode::ElementWise:
-    return "ElementWise";
-  case RewriterMode::Chunked:
-    return "Chunked";
-  case RewriterMode::Stencil:
+  case PartitionMode::coarse:
+    return "Coarse";
+  case PartitionMode::fine_grained:
+    return "FineGrained";
+  case PartitionMode::block:
+    return "Block";
+  case PartitionMode::stencil:
     return "Stencil";
   }
   return "Unknown";
-}
-
-/// Convert RewriterMode to PartitionMode
-inline PartitionMode toPartitionMode(RewriterMode mode) {
-  switch (mode) {
-  case RewriterMode::Chunked:
-    return PartitionMode::chunked;
-  case RewriterMode::Stencil:
-    return PartitionMode::chunked;
-  case RewriterMode::ElementWise:
-    return PartitionMode::fine_grained;
-  }
-  return PartitionMode::coarse;
 }
 
 ///===----------------------------------------------------------------------===//
@@ -66,12 +54,23 @@ struct StencilInfo {
 };
 
 /// Per-acquire rewrite input (element-space offsets/sizes).
+/// Supports multi-dimensional fine-grained partitioning (e.g., A[i][j]).
 struct DbRewriteAcquire {
   DbAcquireOp acquire;
-  Value elemOffset;
-  Value elemSize;
+  /// Multi-dimensional element offsets (e.g., [%i, %j] for 2D fine-grained)
+  SmallVector<Value> elemOffsets;
+  /// Multi-dimensional element sizes (e.g., [1, 1] for 2D fine-grained)
+  SmallVector<Value> elemSizes;
   bool isFullRange = false;
   bool skipRebase = false;
+
+  /// Legacy accessors for 1D backward compatibility
+  Value getElemOffset() const {
+    return elemOffsets.empty() ? Value() : elemOffsets.front();
+  }
+  Value getElemSize() const {
+    return elemSizes.empty() ? Value() : elemSizes.front();
+  }
 };
 
 /// Forward declaration for PartitioningDecision
@@ -79,27 +78,42 @@ struct PartitioningDecision;
 
 /// Rewriter plan chosen by DbPartitioning.
 struct DbRewritePlan {
-  RewriterMode mode = RewriterMode::ElementWise;
-  Value chunkSize;
+  PartitionMode mode = PartitionMode::fine_grained;
+  Value blockSize; /// Legacy: single block size for 1D partitioning
+  SmallVector<Value> blockSizes; /// N-D: block size per partitioned dimension
   std::optional<StencilInfo> stencilInfo;
   unsigned outerRank = 0;
   unsigned innerRank = 0;
 
   /// Mixed mode support
   bool isMixedMode = false;
-  Value numChunks;
+  Value numBlocks;
+  SmallVector<Value> numBlocksPerDim; /// N-D: block count per dimension
 
   /// Default constructor
   DbRewritePlan() = default;
   explicit DbRewritePlan(const PartitioningDecision &decision);
 
+  /// Get block size for dimension d (falls back to blockSize for 1D)
+  Value getBlockSize(unsigned d = 0) const {
+    if (d < blockSizes.size())
+      return blockSizes[d];
+    return blockSize;
+  }
+
+  /// Number of partitioned dimensions
+  unsigned numPartitionedDims() const {
+    return blockSizes.empty() ? (blockSize ? 1 : 0) : blockSizes.size();
+  }
+
   bool isValid() const {
     switch (mode) {
-    case RewriterMode::Stencil:
+    case PartitionMode::stencil:
       return stencilInfo.has_value();
-    case RewriterMode::Chunked:
-      return static_cast<bool>(chunkSize);
-    case RewriterMode::ElementWise:
+    case PartitionMode::block:
+      return static_cast<bool>(blockSize) || !blockSizes.empty();
+    case PartitionMode::fine_grained:
+    case PartitionMode::coarse:
       return true;
     }
     return false;
@@ -123,10 +137,13 @@ public:
   FailureOr<DbAllocOp> apply(OpBuilder &builder);
 
   /// Accessors
-  RewriterMode getMode() const { return plan.mode; }
-  bool isElementWise() const { return plan.mode == RewriterMode::ElementWise; }
-  bool isChunked() const { return plan.mode == RewriterMode::Chunked; }
-  bool isStencil() const { return plan.mode == RewriterMode::Stencil; }
+  PartitionMode getMode() const { return plan.mode; }
+  bool isElementWise() const {
+    return plan.mode == PartitionMode::fine_grained;
+  }
+  bool isBlock() const { return plan.mode == PartitionMode::block; }
+  bool isStencil() const { return plan.mode == PartitionMode::stencil; }
+  bool isCoarse() const { return plan.mode == PartitionMode::coarse; }
 
 protected:
   /// Protected constructor - use create() factory instead
@@ -136,45 +153,39 @@ protected:
 
   ///===--------------------------------------------------------------------===///
   /// Virtual hooks
-  ///===--------------------------------------------------------------------===///
-
   virtual void transformAcquire(const DbRewriteAcquire &info,
                                 DbAllocOp newAlloc, OpBuilder &builder) = 0;
   virtual void transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
                               OpBuilder &builder) = 0;
   virtual bool rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
-                              Value startChunk = nullptr) = 0;
+                              Value startBlock = nullptr,
+                              bool isSingleBlock = false) = 0;
 
-  ///===--------------------------------------------------------------------===///
   /// Shared state
-  ///===--------------------------------------------------------------------===///
-
   DbAllocOp oldAlloc;
   SmallVector<Value> newOuterSizes, newInnerSizes;
   SmallVector<DbRewriteAcquire> acquires;
   DbRewritePlan plan;
 
-  ///===--------------------------------------------------------------------===///
-  /// Indexer factory - used by subclasses for index localization
-  ///===--------------------------------------------------------------------===///
+  /// Indexer factory
 
   static std::unique_ptr<DbIndexerBase>
-  createIndexer(const DbRewritePlan &plan, Value startChunk, Value elemOffset,
+  createIndexer(const DbRewritePlan &plan, Value startBlock, Value elemOffset,
                 Value elemSize, unsigned outerRank, unsigned innerRank,
                 ValueRange oldElementSizes, OpBuilder &builder, Location loc,
                 Value ownedArg = nullptr, Value leftHaloArg = nullptr,
                 Value rightHaloArg = nullptr);
 
   static std::unique_ptr<DbIndexerBase>
-  createElementWiseIndexer(Value elemOffset, Value elemSize, unsigned outerRank,
+  createElementWiseIndexer(ArrayRef<Value> elemOffsets, unsigned outerRank,
                            unsigned innerRank, ValueRange oldElementSizes);
 
   static std::unique_ptr<DbIndexerBase>
-  createChunkedIndexer(Value chunkSize, Value startChunk, Value elemOffset,
-                       unsigned outerRank, unsigned innerRank);
+  createBlockIndexer(ArrayRef<Value> blockSizes, ArrayRef<Value> startBlocks,
+                     unsigned outerRank, unsigned innerRank);
 
   static std::unique_ptr<DbIndexerBase>
-  createStencilIndexer(const StencilInfo &info, Value chunkSize,
+  createStencilIndexer(const StencilInfo &info, Value blockSize,
                        Value elemOffset, unsigned outerRank, unsigned innerRank,
                        Value ownedArg, Value leftHaloArg, Value rightHaloArg,
                        OpBuilder &builder, Location loc);

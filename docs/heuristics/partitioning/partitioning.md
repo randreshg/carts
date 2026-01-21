@@ -13,24 +13,44 @@ For rank-aware and multi-node specifics, see:
 |--------------|------------------------------|---------------------------|----------------------------------|
 | Coarse       | One datablock for full array | Irregular or mixed access | Lowest overhead, least locality  |
 | Element-wise | One datablock per element    | Precise indexed access    | Highest overhead                 |
-| Chunked      | One datablock per block      | Blocked/tiling patterns   | Good locality, moderate overhead |
+| Block (blocked) | One datablock per block   | Blocked/tiling patterns   | Good locality, moderate overhead |
 
-## IR Labels (Coarse vs Fine-Grained)
+## IR Labels and Partitioning Clause
 
-The IR uses `arts.partition` with `promotion_mode` values:
+The IR uses `partition_mode` in `db_alloc` brackets and a unified `partitioning(...)` clause for `db_acquire`:
 
-| IR Attribute                              | Meaning        |
-|-------------------------------------------|----------------|
-| `#arts.promotion_mode<coarse>`            | Coarse         |
-| `#arts.promotion_mode<fine_grained>`      | Fine-grained   |
-| `#arts.promotion_mode<chunked>`           | Chunked        |
+| Partition Mode     | Meaning        |
+|--------------------|----------------|
+| `<coarse>`         | Coarse         |
+| `<fine_grained>`   | Fine-grained   |
+| `<block>`          | Block (blocked) |
 
-Internally, "coarse" is represented as element-wise with `outerRank=0`
-(`PartitioningDecision::isCoarse()`), so both labels appear in logs.
+### Unified Partitioning Clause
 
-All `arts.db_alloc` operations carry an explicit `arts.partition` attribute
-(default `promotion_mode<coarse>`). This keeps allocation layout explicit for
-copy/sync decisions and diagnostics.
+The `partitioning(...)` clause on `db_acquire` operations specifies access semantics:
+
+| Mode | `indices[]` | `offsets[]` | `sizes[]` |
+|------|-------------|-------------|-----------|
+| **fine_grained** | element index | 0 | 1 |
+| **block (blocked)** | (empty) | chunk start | chunk count |
+| **coarse** | (empty) | 0 | total size |
+| **stencil** | (empty) | chunk start | chunk + halo |
+
+Example:
+
+```mlir
+// Fine-grained: access single element at index %i
+arts.db_acquire[<out>] (%guid, %ptr)
+    partitioning(<fine_grained>, indices[%i], offsets[%c0], sizes[%c1])
+
+// Block (blocked): access chunk starting at %workerStart with %blockSize elements
+arts.db_acquire[<inout>] (%guid, %ptr)
+    partitioning(<block>, offsets[%workerStart], sizes[%blockSize])
+```
+
+All `arts.db_alloc` operations carry an explicit `partition_mode` in brackets
+(e.g., `db_alloc[<inout>, <heap>, <write>, <coarse>]`). This keeps allocation
+layout explicit for copy/sync decisions and diagnostics.
 
 ## Terminology Mapping
 
@@ -40,8 +60,8 @@ This table maps user-facing CLI options to internal implementation details:
 |---------------|----------------------|--------------|-----------|-----------------|
 | coarse        | Coarse               | ElementWise  | 0         | coarse          |
 | fine          | FineGrained          | ElementWise  | >0        | fine_grained    |
-| chunked       | Chunked              | Chunked      | 1         | chunked         |
-| stencil       | Stencil              | Stencil      | 1         | chunked         |
+| blocked       | Blocked              | Blocked      | 1         | block           |
+| stencil       | Stencil              | Stencil      | 1         | stencil         |
 
 **Key insight**: `RewriterMode::ElementWise` handles both coarse and fine-grained.
 The difference is `outerRank`: coarse has `outerRank=0` (single DB for entire array),
@@ -58,9 +78,9 @@ A compact reasoning flow that captures how the system decides without naming spe
 flowchart TD
   A[Start] --> B["1) Collect access evidence across all acquires for the allocation<br/>- indices, offsets, sizes, read/write modes"]
   B --> C["2) Normalize structure and run uniformity checks<br/>- dimensional shape matches across acquires<br/>- chunk rank and per-dim sizes are consistent"]
-  C --> D["3) Build intent signals<br/>- element-wise intent: indices present everywhere<br/>- chunked intent: offsets/sizes present and consistent<br/>- read-only: no writes across all acquires"]
+  C --> D["3) Build intent signals<br/>- element-wise intent: indices present everywhere<br/>- blocked intent: offsets/sizes present and consistent<br/>- read-only: no writes across all acquires"]
   D --> E["4) Evaluate environment and risk<br/>- single-node vs multi-node<br/>- safety of partitioning with observed access structure<br/>- expected overhead vs locality gain"]
-  E --> F["5) Choose a mode<br/>- coarse if unsafe/not beneficial<br/>- element-wise if precise indexing intent dominates<br/>- chunked if block intent dominates and overhead acceptable"]
+  E --> F["5) Choose a mode<br/>- coarse if unsafe/not beneficial<br/>- element-wise if precise indexing intent dominates<br/>- blocked if block intent dominates and overhead acceptable"]
 ```
 
 ## Partitioning Pipeline (End-to-End)
@@ -72,10 +92,10 @@ Understanding when hints are generated vs. consumed is essential.
 
 | Pipeline Stage | Pass               | What Happens                                       |
 |----------------|--------------------|----------------------------------------------------|
-| Stage 7        | CreateDbsPass      | Creates DbAllocs (no hints yet)                    |
+| Stage 7        | CreateDbsPass      | Creates DbAllocs with initial partitioning hints   |
 | Stage 8-9      | DbOpt + EdtOpt     | Initial optimization passes                        |
-| Stage 10       | ForLoweringPass    | Generates `chunk_hint(index, size)` and `indices`  |
-| Stage 11       | DbPartitioningPass | Uses hints to partition (coarse → fine)            |
+| Stage 10       | ForLoweringPass    | Sets PartitioningHint on parallel loops            |
+| Stage 11       | DbPartitioningPass | Uses hints to partition (coarse → fine/blocked)    |
 | Stage 11       | DbPass             | Re-run to adjust modes after partitioning          |
 
 ### Three-Stage Flow Diagram
@@ -84,26 +104,26 @@ Understanding when hints are generated vs. consumed is essential.
 flowchart TB
   subgraph S7["Stage 7: CreateDbs pass"]
     direction TB
-    S7A["For each memref used in EDTs:<br/>- create DbAllocOp + DbAcquireOps based on memref usage<br/>- no partition hints exist yet (ForLowering has not run)<br/>- DbAcquireOps have offsets/sizes but no chunk_hint yet"]
-    S7O["Output: DbAllocOps with basic structure (no hints)"]
+    S7A["For each memref used in EDTs:<br/>- create DbAllocOp + DbAcquireOps<br/>- ALWAYS coarse db_alloc (sizes=[1])<br/>- attach partition hints on DbAcquire: partition_indices/offsets/sizes<br/>- capture multi-entry depend hints via segment attrs"]
+    S7O["Output: coarse DbAllocOps + DbAcquireOps carrying partition hints"]
     S7A --> S7O
   end
 
   subgraph S10["Stage 10: ForLowering pass (in Concurrency)"]
     direction TB
-    S10A["Analyze loop IVs and depend structure:<br/>- indices[] from indexed access patterns (A[i])<br/>- chunk_index = which chunk (workerIdx, not element offset)<br/>- chunk_size = elements per chunk (must be consistent)"]
-    S10B["Add hints to existing DbAcquireOps as chunk_hint"]
-    S10O["Output: DbAcquireOps now have chunk_hint(index, size) and indices"]
+    S10A["Analyze loop IVs and depend structure:<br/>- indices[] from indexed access patterns (A[i])<br/>- offsets/sizes for blocked patterns<br/>- set PartitioningHint attribute on loops"]
+    S10B["Update DbAcquireOps with partition info"]
+    S10O["Output: DbAcquireOps with partitioning(mode, indices, offsets, sizes)"]
     S10A --> S10B --> S10O
   end
 
   subgraph S11["Stage 11: DbPartitioning pass (in ConcurrencyOpt)"]
     direction TB
     S11A["1) canBePartitioned(useFineGrainedFallback)?<br/>- if hasNonAffineAccesses and fallback not enabled → false<br/>- safety checks on hints/structure<br/>- false → skip (keep coarse)"]
-    S11B["2) Per-acquire analysis (using hints from ForLowering):<br/>- chunk_index: which chunk this worker handles<br/>- chunk_size: elements per chunk<br/>- indices: canElementWise = true"]
-    S11C["3) Build PartitioningContext:<br/>- ctx.canChunked / ctx.canElementWise<br/>- ctx.chunkSize (canonical)<br/>- per-acquire voting"]
-    S11D["4) Heuristics evaluation (H1.x):<br/>- H1.1 read-only single node → coarse<br/>- H1.2 mixed access → chunked + versioning<br/>- H1.3 stencil pattern → stencil/fine-grained<br/>- H1.4 multi-node → fine-grained preferred<br/>- H1.5 access uniformity → coarse fallback"]
-    S11E["5) Apply decision via DbRewriter:<br/>- coarse: keep original<br/>- else: rewrite alloc and acquires to new grid<br/>- set partition attribute (coarse/fine_grained/chunked)"]
+    S11B["2) Per-acquire analysis:<br/>- indices present → canElementWise = true<br/>- offsets/sizes present → canBlocked = true<br/>- extract partition offset/size"]
+    S11C["3) Build PartitioningContext:<br/>- ctx.canBlocked / ctx.canElementWise<br/>- ctx.blockSize (canonical)<br/>- per-acquire voting"]
+    S11D["4) Heuristics evaluation (H1.x):<br/>- H1.1 read-only single node → coarse<br/>- H1.2 mixed access → blocked + full-range<br/>- H1.3 stencil pattern → stencil/fine-grained<br/>- H1.4 multi-node → fine-grained preferred<br/>- H1.5 access uniformity → coarse fallback"]
+    S11E["5) Apply decision via DbRewriter:<br/>- coarse: keep original<br/>- else: rewrite alloc and acquires to new grid<br/>- set partition attribute (coarse/fine_grained/blocked)"]
     S11A --> S11B --> S11C --> S11D --> S11E
   end
 
@@ -116,31 +136,39 @@ When DbPartitioning converts an allocation from coarse to fine-grained:
 
 ```text
 BEFORE (coarse, after CreateDbs):
-  %alloc = arts.db_alloc sizes[1] elementSizes[N]
-      {arts.partition = #arts.promotion_mode<coarse>}
-  %acq = arts.db_acquire %alloc offsets[0] sizes[1]
-      chunk_hint(%idx, 1) indices[%idx]  ← hints from ForLowering
+  %alloc = arts.db_alloc[<inout>, <heap>, <write>, <coarse>]
+      sizes[1] elementSizes[N]
+  %acq = arts.db_acquire %alloc
+      partitioning(<coarse>, offsets[0], sizes[1])
 
 AFTER (fine-grained, after DbPartitioning):
-  %alloc = arts.db_alloc sizes[N] elementSizes[1]
-      {arts.partition = #arts.promotion_mode<fine_grained>}
-  %acq = arts.db_acquire %alloc offsets[%idx] sizes[1]
+  %alloc = arts.db_alloc[<inout>, <heap>, <write>, <fine_grained>]
+      sizes[N] elementSizes[1]
+  %acq = arts.db_acquire %alloc
+      partitioning(<fine_grained>, indices[%idx], offsets[%c0], sizes[%c1])
 ```
+
+### Invariants (Keep in Mind)
+
+- CreateDbs always emits coarse `db_alloc` (`sizes=[1]`) and never changes allocation layout.
+- Partition hints live only in `partition_*` fields on `db_acquire` and are consumed later.
+- Multi-entry depend clauses are encoded with segment arrays; if segment attrs are missing, treat the hints as a single entry.
+- DbPartitioning is the only place where allocation mode changes (coarse → fine/blocked/stencil).
 
 ### Verification Commands
 
 ```bash
-# Stage 7: After CreateDbs - DBs exist but NO hints yet
+# Stage 7: After CreateDbs - DBs exist with initial partitioning
 carts run input.mlir --create-dbs > after_createdb.mlir
-grep "chunk_hint" after_createdb.mlir | wc -l  # Should be 0!
+grep "partitioning" after_createdb.mlir | head -5
 
-# Stage 10: After ForLowering - Hints NOW exist
+# Stage 10: After ForLowering - Partition hints refined
 carts run input.mlir --concurrency > after_forlowering.mlir
-grep "chunk_hint" after_forlowering.mlir | wc -l  # Should be > 0!
+grep "partitioning" after_forlowering.mlir | head -5
 
-# Stage 11: After DbPartitioning - Partitioning applied
+# Stage 11: After DbPartitioning - Final partitioning applied
 carts run input.mlir --concurrency-opt > final.mlir
-grep "promotion_mode" final.mlir | sort | uniq -c
+grep "partition_mode" final.mlir | sort | uniq -c
 ```
 
 ### Detailed Per-Stage Flow
@@ -148,20 +176,332 @@ grep "promotion_mode" final.mlir | sort | uniq -c
 ```mermaid
 flowchart TD
   A["ForLowering<br/>Generates hints in parallel loops:<br/>- create worker_id placeholder<br/>- compute offset/size hints per worker"]
-  B["DbPartitioning: per-acquire analysis<br/>- access pattern summary<br/>- partition offset/size extraction<br/>- base chunk size candidate per acquire"]
-  C["Canonical chunk size per allocation<br/>- pick offset-independent base sizes<br/>- trace/hoist to dominate the alloc<br/>- combine candidates (min) into a single size"]
-  D["Build PartitioningContext<br/>- ctx.canChunked / ctx.canElementWise<br/>- ctx.chunkSize (canonical)<br/>- per-acquire voting"]
-  E["Heuristics (H1.x) → decision<br/>- chooses Chunked / ElementWise / Coarse"]
+  B["DbPartitioning: per-acquire analysis<br/>- access pattern summary<br/>- partition offset/size extraction<br/>- base block size candidate per acquire"]
+  C["Canonical block size per allocation<br/>- pick offset-independent base sizes<br/>- trace/hoist to dominate the alloc<br/>- combine candidates (min) into a single size"]
+  D["Build PartitioningContext<br/>- ctx.canBlocked / ctx.canElementWise<br/>- ctx.blockSize (canonical)<br/>- per-acquire voting"]
+  E["Heuristics (H1.x) → decision<br/>- chooses Blocked / ElementWise / Coarse"]
   F["DbRewriter<br/>- rewrites alloc and acquires to new grid"]
-  G["Attributes and diagnostics<br/>- arts.partition<br/>- decisions recorded via HeuristicsConfig"]
+  G["Attributes and diagnostics<br/>- partition_mode in db_alloc brackets<br/>- decisions recorded via HeuristicsConfig"]
 
   A --> B --> C --> D --> E --> F --> G
 ```
 
-Mixed access patterns (chunked writes + indirect reads) are handled via H1.2
+Mixed access patterns (blocked writes + indirect reads) are handled via H1.2
 heuristic using **full-range acquires** instead of DbCopy/DbSync. When H1.2
 detects this pattern, indirect read-only acquires are marked as `needsFullRange`,
-allowing them to access all chunks while direct writes use chunked partitioning.
+allowing them to access all chunks while direct writes use blocked partitioning.
+
+## Partition Hint Validation and Allocation-Level Decisions
+
+**CRITICAL**: Partitioning decisions are made at the **allocation level**, but the
+appropriate mode depends on what the **acquires** suggest. This section documents
+how partition hints from CreateDbs are validated and how conflicts between acquires
+are resolved.
+
+### Key Constraint: No Mixed-Mode Acquires
+
+All acquires for the same DbAllocOp **MUST** have the same partitioning mode.
+This is because the allocation's structure (`sizes`/`elementSizes`) is determined
+at the allocation level. You cannot have blocked and fine-grained acquires for
+the same allocation.
+
+```
+INVALID:
+  %alloc = arts.db_alloc sizes[N] elementSizes[1]  // Fine-grained structure
+  %acq1 = arts.db_acquire partitioning(<fine_grained>, indices[%i])
+  %acq2 = arts.db_acquire partitioning(<block>, offsets[%o], sizes[%s])
+                                       ↑ CONFLICT! Different mode
+
+VALID:
+  %alloc = arts.db_alloc sizes[N] elementSizes[1]  // Fine-grained structure
+  %acq1 = arts.db_acquire partitioning(<fine_grained>, indices[%i])
+  %acq2 = arts.db_acquire partitioning(<fine_grained>, indices[%j])
+                                       ↑ SAME mode
+```
+
+### Hint Flow: CreateDbs → DbPartitioning
+
+```mermaid
+flowchart TD
+    subgraph CreateDbs["Stage 7: CreateDbs"]
+        C1["Analyze OpenMP depend clauses and access patterns"]
+        C2["Generate partition hints per acquire:<br/>- fine_grained: indices from A[i]<br/>- blocked: offsets/sizes from blocked access"]
+        C3["Set DbAcquireOp attributes:<br/>partition_indices, partition_offsets,<br/>partition_sizes, partition_entry_modes"]
+        C1 --> C2 --> C3
+    end
+
+    subgraph DbPartitioning["Stage 11: DbPartitioning"]
+        D1["For each DbAllocOp, collect all acquires"]
+        D2["Per-acquire: validate partition hints"]
+        D3["Aggregate: determine allocation-level mode"]
+        D4["Apply: rewrite allocation and all acquires"]
+        D1 --> D2 --> D3 --> D4
+    end
+
+    CreateDbs --> DbPartitioning
+```
+
+### Per-Acquire Hint Validation
+
+For each acquire, DbPartitioning validates the partition hints from CreateDbs:
+
+```mermaid
+flowchart TD
+    START["Per-Acquire Validation"] --> MODE{"Partition mode<br/>from hint?"}
+
+    MODE -->|fine_grained| FG_CHECK{"Has valid indices[]?"}
+    FG_CHECK -->|yes| FG_VALIDATE["Validate index depends on loop IV"]
+    FG_CHECK -->|no| FG_FAIL["canElementWise = false"]
+    FG_VALIDATE -->|pass| FG_OK["canElementWise = true"]
+    FG_VALIDATE -->|fail| FG_FAIL
+
+    MODE -->|blocked| CH_CHECK{"Has offsets[]/sizes[]?"}
+    CH_CHECK -->|yes| CH_VALIDATE["Validate offset/size consistency"]
+    CH_CHECK -->|no| CH_FAIL["canBlocked = false"]
+    CH_VALIDATE -->|pass| CH_OK["canBlocked = true"]
+    CH_VALIDATE -->|fail| CH_FAIL
+
+    MODE -->|coarse/none| COARSE["No partitioning capability"]
+
+    FG_OK --> COLLECT["Add to AcquireInfo list"]
+    FG_FAIL --> COLLECT
+    CH_OK --> COLLECT
+    CH_FAIL --> COLLECT
+    COARSE --> COLLECT
+```
+
+### Allocation-Level Mode Resolution
+
+When acquires suggest different modes, heuristics determine the final allocation mode:
+
+```mermaid
+flowchart TD
+    COLLECT["Collect per-acquire capabilities:<br/>- canElementWise flags<br/>- canBlocked flags<br/>- partition hints"] --> ANALYZE
+
+    ANALYZE{"All acquires<br/>suggest same mode?"}
+
+    ANALYZE -->|"All blocked"| CHUNKED_DECIDE["Use blocked partitioning<br/>(validate block size consistency)"]
+    ANALYZE -->|"All fine-grained"| FG_DECIDE["Use fine-grained partitioning<br/>(validate index structure)"]
+    ANALYZE -->|"All coarse/none"| COARSE_DECIDE["Use coarse partitioning"]
+    ANALYZE -->|"Mixed suggestions"| CONFLICT
+
+    CONFLICT["Conflict Resolution via Heuristics"]
+    CONFLICT --> H1["H1.1: Read-only single-node? → coarse"]
+    H1 -->|no| H2["H1.2: Blocked + indirect? → blocked + full-range"]
+    H2 -->|no| H3["H1.3: Stencil pattern? → stencil/fine-grained"]
+    H3 -->|no| H4["H1.4: Multi-node? → prefer fine-grained"]
+    H4 -->|no| H5["H1.5: Non-uniform? → coarse"]
+    H5 -->|no| FALLBACK["Fallback: --partition-fallback"]
+
+    CHUNKED_DECIDE --> APPLY["Apply decision to allocation"]
+    FG_DECIDE --> APPLY
+    COARSE_DECIDE --> APPLY
+    H1 --> APPLY
+    H2 --> APPLY
+    H3 --> APPLY
+    H4 --> APPLY
+    H5 --> APPLY
+    FALLBACK --> APPLY
+```
+
+### Conflict Resolution Rules
+
+| Conflict Scenario | Resolution | Rationale |
+|-------------------|------------|-----------|
+| Blocked + Coarse | Blocked (coarse → full-range) | Enables parallelism; coarse uses full-range acquire |
+| Fine-grained + Coarse | Heuristics decide | May use fine-grained with full-range, or fall back to coarse |
+| Blocked + Fine-grained | **NOT ALLOWED** | Incompatible allocation structures; fall back to coarse |
+| All modes agree | Use that mode | No conflict to resolve |
+
+### Example 1: All Acquires Suggest Blocked
+
+**Source pattern:**
+
+```c
+#pragma omp parallel for
+for (int i = 0; i < N; i += BLOCK_SIZE) {
+    for (int j = 0; j < BLOCK_SIZE; j++) {
+        B[i+j] = A[i+j] * 2.0;  // Blocked access
+    }
+}
+```
+
+**CreateDbs output:**
+
+```mlir
+%acq_A = arts.db_acquire partitioning(<block>, offsets[%arg2], sizes[%c4])
+%acq_B = arts.db_acquire partitioning(<block>, offsets[%arg2], sizes[%c4])
+```
+
+**DbPartitioning analysis:**
+
+- Acquire A: canBlocked=true, offset=%arg2, size=%c4
+- Acquire B: canBlocked=true, offset=%arg2, size=%c4
+- All suggest blocked → Use blocked partitioning
+
+**Result:** Both allocations use `sizes[numChunks] elementSizes[blockSize]`
+
+### Example 2: All Acquires Suggest Fine-Grained
+
+**Source pattern:**
+
+```c
+#pragma omp parallel for
+for (int i = 0; i < N; i++) {
+    #pragma omp depend(inout: C[i])
+    #pragma omp depend(in: A[i], B[i])
+    C[i] = A[i] + B[i];  // Element-wise access
+}
+```
+
+**CreateDbs output:**
+
+```mlir
+%acq_A = arts.db_acquire partitioning(<fine_grained>, indices[%i])
+%acq_B = arts.db_acquire partitioning(<fine_grained>, indices[%i])
+%acq_C = arts.db_acquire partitioning(<fine_grained>, indices[%i])
+```
+
+**DbPartitioning analysis:**
+
+- All acquires: canElementWise=true, indices=[%i]
+- All suggest fine-grained → Use fine-grained partitioning
+
+**Result:** All allocations use `sizes[N] elementSizes[1]`
+
+### Example 3: Blocked + Coarse (Mixed Mode)
+
+**Source pattern:**
+
+```c
+// Sequential initialization
+for (int i = 0; i < N; i++) {
+    A[i] = (double)i;  // Coarse access (no parallel, no hints)
+}
+
+// Parallel computation
+#pragma omp parallel for
+for (int i = 0; i < N; i += BLOCK_SIZE) {
+    #pragma omp depend(inout: A[i:BLOCK_SIZE])
+    for (int j = 0; j < BLOCK_SIZE; j++) {
+        A[i+j] *= 2.0;  // Blocked access
+    }
+}
+```
+
+**CreateDbs output:**
+
+```mlir
+// Init acquire (no hints)
+%acq_init = arts.db_acquire partitioning(<coarse>, offsets[%c0], sizes[%total])
+
+// Parallel acquire (with hints)
+%acq_parallel = arts.db_acquire partitioning(<block>, offsets[%arg2], sizes[%c4])
+```
+
+**DbPartitioning analysis:**
+
+- Init acquire: canBlocked=false, canElementWise=false
+- Parallel acquire: canBlocked=true, offset=%arg2, size=%c4
+- Conflict: blocked vs coarse
+- Resolution: Use blocked, init acquire becomes full-range
+
+**Result:**
+
+```mlir
+%alloc = arts.db_alloc sizes[%numChunks] elementSizes[%blockSize]
+
+// Init: full-range (accesses all chunks)
+%acq_init = arts.db_acquire offsets[%c0], sizes[%numChunks]
+
+// Parallel: single chunk per worker
+%acq_parallel = arts.db_acquire offsets[%chunkIdx], sizes[%c1]
+```
+
+### Example 4: Incompatible Suggestions (Fallback to Coarse)
+
+**Source pattern:**
+
+```c
+#pragma omp parallel for
+for (int i = 0; i < N; i++) {
+    // One task uses element-wise
+    #pragma omp depend(inout: A[i])
+    process_element(A, i);
+
+    // Another uses blocked (different granularity!)
+    #pragma omp depend(in: A[chunk_start:BLOCK_SIZE])
+    summarize_chunk(A, chunk_start);
+}
+```
+
+**CreateDbs output:**
+
+```mlir
+%acq1 = arts.db_acquire partitioning(<fine_grained>, indices[%i])
+%acq2 = arts.db_acquire partitioning(<block>, offsets[%chunk_start], sizes[%BLOCK_SIZE])
+```
+
+**DbPartitioning analysis:**
+
+- Acquire 1: canElementWise=true, indices=[%i]
+- Acquire 2: canBlocked=true, offset=%chunk_start
+- Conflict: fine-grained vs blocked (incompatible structures!)
+- Resolution: Fall back to coarse (cannot satisfy both)
+
+**Result:**
+
+```mlir
+%alloc = arts.db_alloc sizes[%c1] elementSizes[%N]  // Coarse
+// All acquires rewritten to coarse mode
+```
+
+### Trusting vs Validating Partition Hints
+
+DbPartitioning does **not** blindly trust hints from CreateDbs. Instead:
+
+1. **Trust the intent**: If CreateDbs set `<block>` mode, the intent is blocked
+2. **Validate the structure**: Check that offsets/sizes are consistent across acquires
+3. **Verify safety**: Ensure partition offset ties to access indices
+
+**Why validation is needed:**
+
+CreateDbs analyzes access patterns from the **outer scope** (parallel loop IV),
+but DbPartitioning must verify that accesses **inside the EDT** are correctly
+structured for the suggested partitioning.
+
+```
+CreateDbs sees:        scf.for %arg2 = ... step %c4
+                              ↓
+                       DbAcquire with offsets[%arg2]
+
+DbPartitioning must verify:
+  - EDT body uses %arg2 consistently for indexing
+  - All memref accesses can be localized to the chunk
+  - No cross-chunk access patterns that would cause errors
+```
+
+**Current validation approach:**
+
+```cpp
+// In computeAcquirePartitionInfo():
+case PartitionMode::block:
+  // FIRST: Try to use partition hints from CreateDbs
+  if (!acquire.getPartitionOffsets().empty()) {
+    info.partitionOffset = acquire.getPartitionOffsets().front();
+    info.partitionSize = acquire.getPartitionSizes().front();
+    info.isValid = true;  // Trust the hint
+  }
+  // FALLBACK: computeChunkInfo for cases without hints
+  else if (acqNode && succeeded(acqNode->computeChunkInfo(offset, size))) {
+    info.partitionOffset = offset;
+    info.partitionSize = size;
+    info.isValid = true;
+  }
+  else {
+    info.mode = PartitionMode::coarse;  // Cannot validate
+  }
+```
 
 ## What Signals Are Used
 
@@ -169,62 +509,65 @@ allowing them to access all chunks while direct writes use chunked partitioning.
 |---------------------------|-----------------------------------------|-----------------------------|
 | Uniform access structure   | Uniformity checks pass for all acquires | Enables safe partitioning   |
 | Element-wise intent        | Indices present for all acquires        | Enables element-wise mode   |
-| Chunked intent             | `chunk_hint` present and sizes consistent | Enables chunked mode      |
+| Blocked intent             | `offsets/sizes` present and consistent  | Enables blocked mode        |
 | Read-only allocation       | No write acquires across the allocation | Reduces need to split DBs   |
 | Environment (single/multi) | Execution context                       | Changes transfer tradeoff   |
 
-### ChunkHintInfo Semantics
+### Partitioning Clause Semantics
 
-The `chunk_hint(chunk_index, chunk_size)` operands have specific semantics:
+The `partitioning(<mode>, indices[...], offsets[...], sizes[...])` clause operands:
 
 | Operand | Meaning | Example |
 |---------|---------|---------|
-| `chunk_index` | Which chunk this worker handles (0, 1, 2, ...) | Worker 0 → chunk 0 |
-| `chunk_size` | Elements per chunk (must be consistent across acquires) | 250 elements |
+| `indices[]` | Element index for fine-grained (element-wise) access | `indices[%i]` → access element `A[i]` |
+| `offsets[]` | Chunk start index for blocked/coarse access | `offsets[%workerStart]` → chunk starts at element `workerStart` |
+| `sizes[]` | Number of elements in the chunk | `sizes[%blockSize]` → chunk has `blockSize` elements |
 
-**Critical Distinction: Chunk Index vs Element Offset**
+**Semantic Mapping by Mode:**
 
 ```
-Given: 1000 elements split across 4 workers with chunk_size=250
+fine_grained:  indices[%i], offsets[0], sizes[1]
+               → Access single element at index %i
+               → %i identifies WHICH element in the fine-grained DB grid
 
-chunk_index=0 → elements [0, 250)      (NOT element offset 0!)
-chunk_index=1 → elements [250, 500)    (NOT element offset 1!)
-chunk_index=2 → elements [500, 750)
-chunk_index=3 → elements [750, 1000)
+blocked:       offsets[%start], sizes[%count]
+               → Access chunk starting at element %start
+               → Chunk contains %count elements
 
-The chunk_index is a CHUNK number, not an element offset.
-Element offset = chunk_index * chunk_size
+coarse:        offsets[0], sizes[%total]
+               → Access entire array as one chunk
+               → Single DB for all elements
 ```
 
-**Chunk Size Consistency Check:**
+**Size Consistency Check:**
 DbPartitioning validates that all acquires for the same allocation have consistent
-`chunk_size` (same SSA value or equal constants). If sizes don't agree, partitioning
-falls back to `--partition-fallback` (coarse or fine, NOT chunked).
+`sizes` (same SSA value or equal constants). If sizes don't agree, partitioning
+falls back to `--partition-fallback` (coarse or fine, NOT blocked).
 
-## Canonical Chunk Size Per Allocation
+## Canonical Block Size Per Allocation
 
-Chunked partitioning needs a single chunk size per allocation, even when
+Blocked partitioning needs a single block size per allocation, even when
 individual acquires have remainder-aware sizes (e.g., the last worker gets a
 smaller slice). The canonicalization step derives a stable base size and makes
 it available to the heuristics interface.
 
 Algorithm (per allocation):
 
-1) Collect chunk_size from all acquires with chunk_hint.
+1) Collect `sizes[]` from all acquires with partitioning clause.
 2) For each acquire, try to strip remainder-aware sizes:
-   - If size depends on chunk_index, peel min/select to pick the non-offset branch.
-   - If size does not depend on chunk_index, use it directly.
+   - If size depends on offset, peel min/select to pick the non-offset branch.
+   - If size does not depend on offset, use it directly.
 3) Trace/hoist candidates to dominate the alloc site.
 4) Canonicalize:
    - If candidates match, use that.
    - If candidates differ, use min(candidate_i) to stay safe.
-5) Set ctx.chunkSize to the smallest static candidate (if any) and use the
+5) Set ctx.blockSize to the smallest static candidate (if any) and use the
    canonical dynamic size for rewriting.
 
 This ensures all acquires are rewritten against the same allocation grid while
 keeping per-worker offsets/sizes intact.
 
-## Offset Validation (Chunked Safety)
+## Offset Validation (Blocked Safety)
 
 Offset validation ensures that the partition offset is tied to the memref
 indices used by the task. The current rule is:
@@ -266,22 +609,152 @@ fallbacks because they work for ANY access pattern:
 |----------|-----------|--------------|
 | coarse   | All patterns | None (single DB) |
 | fine     | All patterns | None (one DB per element) |
-| chunked  | **Not a fallback** | Requires chunk_hint from ForLowering |
+| blocked  | **Not a fallback** | Requires offsets/sizes from ForLowering |
 | stencil  | **Not a fallback** | Requires stencil pattern detection |
 
-Chunked and Stencil modes require specific structural information (chunk_hint
-with chunk_index/chunk_size) that may not be available for arbitrary access patterns.
-They are selected by heuristics when the patterns are detected, not as fallbacks.
+Blocked and Stencil modes require specific structural information (offsets/sizes)
+that may not be available for arbitrary access patterns. They are selected by
+heuristics when the patterns are detected, not as fallbacks.
 
-**Note:** Mixed access patterns (chunked writes + indirect reads) are handled
-via full-range acquires in chunked mode. The indirect read-only acquires get
+**Note:** Mixed access patterns (blocked writes + indirect reads) are handled
+via full-range acquires in blocked mode. The indirect read-only acquires get
 `needsFullRange=true` and access all chunks, while direct writes use standard
-chunked partitioning. This avoids the memory duplication and sync overhead of
+blocked partitioning. This avoids the memory duplication and sync overhead of
 the versioning approach (DbCopy/DbSync).
 
 This keeps correctness while enabling exploration of finer-grained
 parallelism. The element-wise path can be expensive; use it for targeted
 experiments or when indirect access dominates the kernel.
+
+## Element-Wise to Coarse Fallback (Block-Wise Pattern Detection)
+
+When partition hints suggest element-wise (`indices[]` present) but the indices
+don't match actual accesses, the system detects a **block-wise pattern** and
+falls back to coarse partitioning for correctness.
+
+### Detection Criteria
+
+A **block-wise pattern** is detected when:
+
+1. Partition hints have `indices[]` (looks like element-wise)
+2. BUT the enclosing loop steps by > 1 (BLOCK_SIZE)
+3. OR partition indices don't appear in EDT body accesses
+4. OR accesses span a range beyond the hinted element
+
+### Why This Matters
+
+The Cholesky benchmark uses block-wise OpenMP dependencies:
+
+```c
+#pragma omp task depend(inout: L[k_block][k_block])  // Block corner (representative)
+{
+    // But accesses ENTIRE block: L[i][j] where i,j ∈ [k_block, k_block+BLOCK_SIZE)
+    for (int i = k_block; i < k_block + BLOCK_SIZE; i++) {
+        for (int j = k_block; j < i; j++) {
+            L[i][i] -= L[i][j] * L[i][j];  // Accesses many elements!
+        }
+    }
+}
+```
+
+**Key Insight**: The partition hint `indices[k_block, k_block]` is a **BLOCK IDENTIFIER**,
+not an element index. The depend clause specifies the block corner, but the task
+accesses the entire block region.
+
+### Comparison: Element-Wise vs Block-Wise
+
+| Aspect | Element-Wise | Block-Wise |
+|--------|--------------|------------|
+| Depend pattern | `depend(inout: A[i])` | `depend(inout: L[k][k])` |
+| Loop step | 1 | BLOCK_SIZE (e.g., 16) |
+| Actual access | Single element `A[i]` | Entire block `L[k..k+bs][k..k+bs]` |
+| Hint matches access? | YES | NO |
+| Partition mode | `<fine_grained>` | Falls back to `<coarse>` |
+
+### Fallback Flow
+
+```mermaid
+flowchart TD
+    A[Partition hints have indices] --> B{Loop step > 1?}
+    B -->|Yes| COARSE[Fallback to Coarse]
+    B -->|No| C{Indices match accesses?}
+    C -->|Yes| ELEM[Use Element-Wise Partitioning]
+    C -->|No| COARSE
+
+    COARSE --> D[Program runs correctly but without fine-grained parallelism]
+    ELEM --> E[Program runs with element-level parallelism]
+```
+
+### Validation Logic
+
+The `validateElementWisePartitioning()` function checks if element-wise indices
+are valid before applying element-wise partitioning:
+
+```cpp
+bool DbAcquireNode::validateElementWisePartitioning() {
+    // Check 1: Loop step > 1 means block-wise pattern
+    for (Value idx : partitionIndices) {
+        if (enclosingLoop.step > 1)
+            return false;  // Block-wise, not element-wise
+    }
+
+    // Check 2: Partition indices must appear in access chain
+    for (Value idx : partitionIndices) {
+        if (!accessIndexDependsOn(idx))
+            return false;  // Index mismatch
+    }
+    return true;  // Valid element-wise
+}
+```
+
+### Heuristic Integration
+
+The fallback integrates with existing heuristics (H1.x):
+
+```mermaid
+flowchart TD
+    START[Analyze Partition Hints] --> HAS_IDX{Has indices[]?}
+
+    HAS_IDX -->|No| CHECK_OFFSETS{Has offsets/sizes?}
+    CHECK_OFFSETS -->|Yes| H14[H1.4: Block Mode]
+    CHECK_OFFSETS -->|No| H11[H1.1: Coarse]
+
+    HAS_IDX -->|Yes| VALIDATE[Validate Element-Wise]
+    VALIDATE --> VALID{Indices valid?}
+    VALID -->|Yes| H13_ELEM[H1.3: Element-Wise]
+    VALID -->|No| FALLBACK[Fallback to Coarse]
+    FALLBACK --> H11
+```
+
+### Future: 2D Block Partitioning
+
+Currently, block-wise patterns fall back to coarse for correctness. A future
+enhancement would implement 2D block partitioning:
+
+```
+Allocation: sizes[N/bs, N/bs] elementSizes[bs, bs]
+            (N/16 × N/16 blocks, each 16×16 elements)
+
+Acquire for block (k_block, k_block):
+  - Block index: (k_block/bs, k_block/bs)
+  - offsets: [k_block/bs, k_block/bs], sizes: [1, 1]
+
+Access localization for L[i][j]:
+  - db_ref index: [i/bs - startRow, j/bs - startCol]
+  - memref index: [i%bs, j%bs]
+```
+
+This would enable block-level parallelism for Cholesky-style patterns while
+maintaining correctness.
+
+### Verification
+
+```bash
+# Check if block-wise pattern is detected
+carts-run cholesky.mlir --concurrency-opt --debug-only=db_partitioning 2>&1 | grep "block-wise"
+
+# Should show: "Element-wise indices don't match accesses; falling back to coarse"
+```
 
 ## LULESH Case Study: Coarse vs Fine vs Versioned (DB Copy)
 
@@ -320,8 +793,8 @@ carts run lulesh.mlir --concurrency-opt > lulesh_coarse.mlir
 # Run benchmark
 carts benchmarks run lulesh --size small
 
-# Verify IR - should show promotion_mode<none> for node arrays
-grep "promotion_mode" lulesh_coarse.mlir | sort | uniq -c
+# Verify IR - should show partition_mode<coarse> for node arrays
+grep "partition_mode" lulesh_coarse.mlir | sort | uniq -c
 ```
 
 **Expected metrics:**
@@ -352,8 +825,8 @@ carts run lulesh.mlir --concurrency-opt --partition-fallback=fine > lulesh_fine.
 # Run benchmark
 carts benchmarks run lulesh --size small -- --partition-fallback=fine
 
-# Verify IR - should show promotion_mode<fine_grained> for node arrays
-grep "promotion_mode" lulesh_fine.mlir | sort | uniq -c
+# Verify IR - should show partition_mode<fine_grained> for node arrays
+grep "partition_mode" lulesh_fine.mlir | sort | uniq -c
 
 # Compare allocation structure
 diff <(grep "arts.db_alloc" lulesh_coarse.mlir | head -3) \
@@ -375,20 +848,19 @@ diff <(grep "arts.db_alloc" lulesh_coarse.mlir | head -3) \
 
 **What happens:**
 
-- **Write-optimized DB**: Chunked partitioning for direct writes
+- **Write-optimized DB**: Blocked partitioning for direct writes
 - **Read-optimized DB**: Element-wise copy for indirect reads
 - **Explicit sync**: Between write and read phases
 
 **Conceptual IR:**
 
 ```mlir
-// Write phase: chunked for locality
-%x_write = arts.db_alloc sizes[numChunks] elementSizes[chunkSize]
-    {arts.partition = #arts.promotion_mode<chunked>}
+// Write phase: blocked for locality
+%x_write = arts.db_alloc[<inout>, <heap>, <write>, <block>]
+    sizes[numChunks] elementSizes[blockSize]
 
 // Read phase: fine-grained copy for indirect access
-%x_read = arts.db_copy(%x_write)
-    {arts.partition = #arts.promotion_mode<fine_grained>}
+%x_read = arts.db_copy(%x_write) dest_partition = <fine_grained>
 
 // Sync before indirect reads
 arts.db_sync(%x_read, %x_write)
@@ -401,7 +873,7 @@ carts run lulesh.mlir --concurrency-opt --partition-fallback=versioned > lulesh_
 carts benchmarks run lulesh --size small -- --partition-fallback=versioned
 ```
 
-This aims to balance write locality (chunked) with read flexibility (element-wise).
+This aims to balance write locality (blocked) with read flexibility (element-wise).
 
 ### Performance Comparison Table
 
@@ -458,7 +930,7 @@ Uniformity ensures that each EDT observes the same partitioning contract.
 |----------------------------|------------------|------------------------|
 | Same dimensional structure  | Safe             | Fine-grain can be used |
 | Mixed dimensional structure | Unsafe           | Coarse required        |
-| Inconsistent chunk sizes    | Unsafe           | Coarse required        |
+| Inconsistent block sizes    | Unsafe           | Coarse required        |
 
 ## Per-Acquire Voting
 
@@ -481,7 +953,7 @@ Each acquire contributes:
 |---------------|--------------|-----------------------------------|
 | accessMode     | in/out/inout | Read, write, or read-write access |
 | canElementWise | bool         | Has indexed dependencies          |
-| canChunked     | bool         | Has chunk/offset dependencies     |
+| canBlocked     | bool         | Has chunk/offset dependencies     |
 | pinnedDimCount | unsigned     | Dimensions with indexed access    |
 
 ### Aggregation Helpers
@@ -491,7 +963,7 @@ Each acquire contributes:
 | hasWriteAccess()    | Any acquire is out or inout            | Removed (was H1.6 optimistic) |
 | allReadOnly()       | All acquires are in mode               | H1.1 (read-only check)        |
 | anyCanElementWise() | Any acquire can use element-wise       | H1.4 (multi-node)             |
-| anyCanChunked()     | Any acquire can use chunked            | H1.4 (multi-node)             |
+| anyCanBlocked()     | Any acquire can use blocked            | H1.4 (multi-node)             |
 | maxPinnedDimCount() | Maximum pinnedDimCount across acquires | Removed (was H1.6 decision)   |
 
 ### Write-Priority Rule
@@ -507,9 +979,9 @@ Write modes have priority over read modes because:
 | Heuristic | Per-Acquire Check          | Behavior                                   |
 |----------|-----------------------------|--------------------------------------------|
 | H1.1      | allReadOnly()              | Only applies if all acquires are read-only |
-| H1.2      | anyCanChunked() + patterns | Mixed chunked+indirect uses full-range     |
+| H1.2      | anyCanBlocked() + patterns | Mixed blocked+indirect uses full-range     |
 | H1.3      | accessPatterns summary     | Handles indexed/stencil/mixed patterns     |
-| H1.4      | anyCanChunked/ElementWise  | Uses any-acquire capability for multi-node |
+| H1.4      | anyCanBlocked/ElementWise  | Uses any-acquire capability for multi-node |
 
 ## Heuristic Evaluation Flowchart
 
@@ -524,7 +996,7 @@ flowchart TD
     H1_1 -->|applies| COARSE1[COARSE]
     H1_1 -->|skip| H1_2
 
-    H1_2{H1.2 priority=98<br/>Mixed Access Pattern?<br/>canChunked && hasIndirectRead}
+    H1_2{H1.2 priority=98<br/>Mixed Access Pattern?<br/>canBlocked && hasIndirectRead}
     H1_2 -->|applies| CHUNKED_FR[CHUNKED + full-range indirect reads]
     H1_2 -->|skip| H1_3
 
@@ -546,26 +1018,26 @@ flowchart TD
   Decision =
     if !canBePartitioned              -> Coarse
     else if H1.1 (read-only + single) -> Coarse
-    else if H1.2 (mixed chunked+idx)  -> Chunked (with full-range indirect reads)
+    else if H1.2 (mixed blocked+idx)  -> Blocked (with full-range indirect reads)
     else if H1.3 (stencil/mixed)      -> Stencil or ElementWise
-    else if H1.4 (multi-node)         -> Chunked or ElementWise
+    else if H1.4 (multi-node)         -> Blocked or ElementWise
     else if H1.5 (!uniform)           -> Coarse
     else                              -> Coarse (fallback)
 
-## When Chunked Beats Element-wise
+## When Blocked Beats Element-wise
 
-Chunked mode is favored when the access pattern is contiguous and block-shaped, and the system expects locality benefits to outweigh overhead.
+Blocked mode is favored when the access pattern is contiguous and block-shaped, and the system expects locality benefits to outweigh overhead.
 
 | Observation               | Favor                  | Reason                     |
 |--------------------------|------------------------|----------------------------|
-| Offsets/sizes present     | Chunked                | Explicit block structure   |
+| Offsets/sizes present     | Blocked                | Explicit block structure   |
 | Only indices present      | Element-wise            | Fine-grain intent          |
-| Dynamic chunk size        | Chunked (optimistic)   | Intent is clear            |
+| Dynamic block size        | Blocked (optimistic)   | Intent is clear            |
 | Very small chunk capacity | Element-wise or Coarse | Overhead outweighs benefit |
 
 ## Mixed Mode Partitioning
 
-Mixed mode enables chunked partitioning when an allocation has both chunked acquires
+Mixed mode enables blocked partitioning when an allocation has both blocked acquires
 (in parallel regions) and coarse acquires (in non-parallel regions). Without mixed
 mode, the presence of any coarse acquire would force the entire allocation to use
 coarse-grained partitioning, serializing all parallel work.
@@ -594,10 +1066,10 @@ Problem: All workers must wait for exclusive access to the single coarse block.
 
 ### The Solution: Mixed Mode with Full-Range Acquires
 
-Mixed mode uses chunked partitioning but allows coarse acquires to access all chunks:
+Mixed mode uses blocked partitioning but allows coarse acquires to access all chunks:
 
 ```
-Allocation: sizes=[numChunks], elementSizes=[chunkSize]  (CHUNKED)
+Allocation: sizes=[numChunks], elementSizes=[blockSize]  (CHUNKED)
 
         ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
         │ Chunk 0  │  │ Chunk 1  │  │ Chunk 2  │  │ Chunk 3  │ ...
@@ -625,19 +1097,19 @@ Benefit: Workers own disjoint chunks and can execute concurrently.
 
 ### How Index Localization Works
 
-The DbChunkedRewriter uses div/mod localization for both single-chunk and full-range
+The DbBlockedRewriter uses div/mod localization for both single-chunk and full-range
 acquires. The same arithmetic handles both cases correctly.
 
 **Localization Formula:**
 
 ```
-dbRefIdx  = (globalRow / chunkSize) - startChunk
-memrefIdx = globalRow % chunkSize
+dbRefIdx  = (globalRow / blockSize) - startChunk
+memrefIdx = globalRow % blockSize
 ```
 
 **Single-Chunk Acquire (Parallel Worker):**
 
-Worker owns chunk 2, accessing element at globalIdx=55 with chunkSize=25:
+Worker owns chunk 2, accessing element at globalIdx=55 with blockSize=25:
 
 ```
 startChunk = 2
@@ -650,7 +1122,7 @@ Result: dbRef[0], memref[5]  ← worker sees single chunk at index 0
 
 **Full-Range Acquire (Non-Parallel Code):**
 
-Init code accessing element at globalIdx=55 with chunkSize=25:
+Init code accessing element at globalIdx=55 with blockSize=25:
 
 ```
 startChunk = 0
@@ -665,12 +1137,12 @@ Result: dbRef[2], memref[5]  ← init sees all chunks at their absolute indices
 
 Mixed mode is detected when:
 
-- `anyCanChunked()` returns true (at least one acquire has offset/size hints)
+- `anyCanBlocked()` returns true (at least one acquire has offset/size hints)
 - Some acquires have `mode == PartitionMode::Coarse` (no hints)
 
 Decision:
 
-- Use chunked partitioning for the allocation
+- Use blocked partitioning for the allocation
 - Mark coarse acquires as `needsFullRange = true`
 - Rewrite full-range acquires with `offset=0, size=numChunks`
 
@@ -680,43 +1152,47 @@ Decision:
 
 ```mlir
 // Single coarse block - all acquires compete for exclusive access
-%alloc = arts.db_alloc sizes[%c1] elementSizes[%N]
-    {arts.partition = #arts.promotion_mode<none>}
+%alloc = arts.db_alloc[<inout>, <heap>, <write>, <coarse>]
+    sizes[%c1] elementSizes[%N]
 
-%acq_init = arts.db_acquire %alloc offsets[%c0] sizes[%c1]
-%acq_worker = arts.db_acquire %alloc offsets[%c0] sizes[%c1]
-    chunk_hint(%worker_off, %chunk)  // Hints ignored!
+%acq_init = arts.db_acquire %alloc
+    partitioning(<coarse>, offsets[%c0], sizes[%c1])
+%acq_worker = arts.db_acquire %alloc
+    partitioning(<coarse>, offsets[%c0], sizes[%c1])
+    // No partition hints - worker competes for exclusive access!
 ```
 
 **After (Mixed Mode - Parallel):**
 
 ```mlir
-// Chunked allocation - workers can run in parallel
-%alloc = arts.db_alloc sizes[%numChunks] elementSizes[%chunkSize]
-    {arts.partition = #arts.promotion_mode<chunked>}
+// Blocked allocation - workers can run in parallel
+%alloc = arts.db_alloc[<inout>, <heap>, <write>, <block>]
+    sizes[%numChunks] elementSizes[%blockSize]
 
 // Init: full-range access (all chunks)
-%acq_init = arts.db_acquire %alloc offsets[%c0] sizes[%numChunks]
+%acq_init = arts.db_acquire %alloc
+    partitioning(<block>, offsets[%c0], sizes[%numChunks])
 
 // Worker: single-chunk access (disjoint)
-%acq_worker = arts.db_acquire %alloc offsets[%workerIdx] sizes[%c1]
+%acq_worker = arts.db_acquire %alloc
+    partitioning(<block>, offsets[%workerIdx], sizes[%c1])
 ```
 
 ### When Mixed Mode Applies
 
 | Acquire Pattern               | Mixed Mode? | Resulting Behavior             |
 |------------------------------|------------|--------------------------------|
-| All chunked                   | No         | Standard chunked partitioning  |
+| All blocked                   | No         | Standard blocked partitioning  |
 | All coarse                    | No         | Coarse (no partitioning)       |
-| Chunked + coarse (same alloc) | Yes        | Chunked with full-range coarse |
-| Chunked + element-wise        | No         | Falls back based on heuristics |
+| Blocked + coarse (same alloc) | Yes        | Blocked with full-range coarse |
+| Blocked + element-wise        | No         | Falls back based on heuristics |
 
 ### Implementation Notes
 
-1. **No New Rewriter Needed:** The existing DbChunkedRewriter handles full-range
+1. **No New Rewriter Needed:** The existing DbBlockedRewriter handles full-range
    correctly because `startChunk=0` makes the subtraction a no-op.
 
-2. **Allocation Grid:** Determined by chunked acquires (chunk count and size).
+2. **Allocation Grid:** Determined by blocked acquires (chunk count and size).
    Coarse acquires adapt to this grid by requesting all chunks.
 
 3. **Dataflow Safety:** The ARTS runtime still enforces proper dependencies.
@@ -727,7 +1203,7 @@ Decision:
 
 ## Stencil Mode (ESD - Ephemeral Slice Dependencies)
 
-Stencil mode is a specialized form of chunked partitioning designed for stencil
+Stencil mode is a specialized form of blocked partitioning designed for stencil
 access patterns where each element accesses its neighbors (e.g., `A[i-1]`, `A[i]`,
 `A[i+1]`).
 
@@ -744,18 +1220,18 @@ Access pattern detected:
 Result: hasStencil = true, haloLeft = 1, haloRight = 1
 ```
 
-### How Stencil Differs from Standard Chunked
+### How Stencil Differs from Standard Blocked
 
-| Aspect | Chunked | Stencil |
+| Aspect | Blocked | Stencil |
 |--------|---------|---------|
 | Chunk structure | `[start, end)` | `[start-halo, end+halo)` |
-| Inner size | `chunkSize` | `chunkSize + haloLeft + haloRight` |
+| Inner size | `blockSize` | `blockSize + haloLeft + haloRight` |
 | Data delivery | Local chunk only | Local chunk + neighbor halos |
 | Runtime support | Standard ARTS | ESD (Ephemeral Slice Dependencies) |
 
 ### Stencil Partitioning Example
 
-For a 1D stencil with `haloLeft=1, haloRight=1, chunkSize=100`:
+For a 1D stencil with `haloLeft=1, haloRight=1, blockSize=100`:
 
 ```
 Worker 0: chunk [0, 100)    → acquires [-1, 101) = 102 elements
@@ -767,18 +1243,19 @@ Worker 2: chunk [200, 300)  → acquires [199, 301) = 102 elements
 
 ### IR Representation
 
-Both Chunked and Stencil use `promotion_mode<chunked>` in the IR. The difference
+Blocked uses `partition_mode<block>` while stencil uses `partition_mode<stencil>`
+in the IR. The difference
 is tracked internally through `StencilInfo` with halo sizes:
 
 ```mlir
-// Chunked (no halo)
-%alloc = arts.db_alloc sizes[%numChunks] elementSizes[%chunkSize]
-    {arts.partition = #arts.promotion_mode<chunked>}
+// Blocked (no halo)
+%alloc = arts.db_alloc[<inout>, <heap>, <write>, <block>]
+    sizes[%numChunks] elementSizes[%blockSize]
 
-// Stencil (with halo) - same IR attribute, different internal metadata
-%alloc = arts.db_alloc sizes[%numChunks] elementSizes[%extendedChunkSize]
-    {arts.partition = #arts.promotion_mode<chunked>}
-// where extendedChunkSize = chunkSize + haloLeft + haloRight
+// Stencil (with halo) - same partition mode, different internal metadata
+%alloc = arts.db_alloc[<inout>, <heap>, <write>, <block>]
+    sizes[%numChunks] elementSizes[%extendedBlockSize]
+// where extendedBlockSize = blockSize + haloLeft + haloRight
 ```
 
 ### Detection Conditions
@@ -803,7 +1280,7 @@ When stencil mode is active, the ARTS runtime:
 # Check if stencil pattern is detected
 carts run jacobi.mlir --concurrency-opt 2>&1 | grep -i stencil
 
-# Verify extended chunk sizes in IR
+# Verify extended block sizes in IR
 carts run jacobi.mlir --concurrency-opt | grep "elementSizes"
 ```
 
@@ -811,14 +1288,14 @@ carts run jacobi.mlir --concurrency-opt | grep "elementSizes"
 
 - The decision is per allocation, not per acquire.
 - Partitioning is only enabled when it is safe and consistent across all acquires.
-- Canonical chunk size is derived per allocation from acquire hints before heuristics run.
+- Canonical block size is derived per allocation from acquire hints before heuristics run.
 - Explicit intent signals (indices or chunk bounds) are honored when possible.
 - Environment constraints (single vs multi-node) affect whether fine-grain is worth it.
 - Per-acquire voting enables fine-grained decisions when acquires have different access modes.
 - Write modes get priority: if any acquire writes, fine-grained partitioning is preferred.
-- Mixed mode allows chunked partitioning even when some acquires are coarse, enabling
+- Mixed mode allows blocked partitioning even when some acquires are coarse, enabling
   parallel execution while preserving correctness for sequential initialization code.
-- Stencil mode extends chunked partitioning with halo regions for neighbor accesses,
+- Stencil mode extends blocked partitioning with halo regions for neighbor accesses,
   using ESD (Ephemeral Slice Dependencies) for efficient data delivery.
 - The three-stage pipeline (CreateDbs → ForLowering → DbPartitioning) separates
   DB creation from hint generation and partitioning decisions.

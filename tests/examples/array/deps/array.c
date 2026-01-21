@@ -67,9 +67,8 @@ int main(int argc, char *argv[]) {
   free(A);
   free(B);
 
-  if (correct) {
+  if (correct)
     CARTS_TEST_PASS();
-  } else {
+  else
     CARTS_TEST_FAIL("array computation mismatch");
-  }
 }

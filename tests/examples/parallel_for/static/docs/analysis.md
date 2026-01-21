@@ -1,6 +1,6 @@
 # parallel_for/chunk Example Analysis
 
-This example demonstrates **element-wise partitioning** for a 1D vector addition with `#pragma omp parallel for schedule(static, 4)`. The H2 heuristic determines that for small chunk sizes (4 bytes/element x 4 elements = 16 bytes), element-wise allocation is optimal.
+This example demonstrates **element-wise partitioning** for a 1D vector addition with `#pragma omp parallel for schedule(static, 4)`. The H2 heuristic determines that for small block sizes (4 bytes/element x 4 elements = 16 bytes), element-wise allocation is optimal.
 
 ## Source Code
 
@@ -16,7 +16,7 @@ for (int i = 0; i < N; i++)
 |--------|-------|
 | OpenMP construct | `#pragma omp parallel for schedule(static, 4)` |
 | Arrays | 1D integer arrays (a, b, c) |
-| Chunk size | 4 iterations (from schedule clause) |
+| Block size | 4 iterations (from schedule clause) |
 | Element size | 4 bytes (int) |
 | Inner bytes | 16 bytes (4 x 4) |
 
@@ -114,7 +114,7 @@ memref.store %val, %ref[%c0] : memref<?xi32>
 ### Why Element-wise (not Chunked)?
 
 The H2 heuristic rejects chunking when `innerBytes < minInnerBytes`:
-- `innerBytes = sizeof(int) * chunkSize = 4 * 4 = 16 bytes`
+- `innerBytes = sizeof(int) * blockSize = 4 * 4 = 16 bytes`
 - `minInnerBytes = 64 bytes` (cache-line aligned threshold)
 - Since 16 < 64, chunking is rejected -> element-wise allocation
 
@@ -132,7 +132,7 @@ Element-wise promotion redistributes indices:
 2. Promoted: `db_ref[i]` then `load/store[0]`
 
 This is different from chunked mode which uses coordinate localization:
-- Chunked: `outer = (global - offset) / chunkSize`, `inner = global % chunkSize`
+- Chunked: `outer = (global - offset) / blockSize`, `inner = global % blockSize`
 - Element-wise: `outer = global element index`, `inner = 0`
 
 ## Troubleshooting

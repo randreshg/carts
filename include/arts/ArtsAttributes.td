@@ -140,16 +140,18 @@ def DepAccessMode : Arts_I32Enum<"DepAccessMode",
 def DepAccessModeAttr : Arts_I32EnumAttr<"dep_access", DepAccessMode>;
 
 /// Enum info for DB partition modes
-/// Used to track how a DbAllocOp was partitioned:
-///   - coarse: Single DB for entire array (outerRank=0)
-///   - chunked: Fixed-size chunks
-///   - fine_grained: One DB per element/row (outerRank>0)
+/// Used to track how a DbAllocOp was partitioned and how DbAcquireOp accesses:
+///   - coarse: Single DB for entire array (outerRank=0), full array access
+///   - block: Fixed-size blocks, contiguous block by offset/size
+///   - fine_grained: One DB per element/row (outerRank>0), element-wise access
+///   - stencil: Halo pattern access (offset + size for neighboring elements)
 def PartitionMode : Arts_I32Enum<"PartitionMode",
     "DB allocation partition mode",
     [
       I32EnumAttrCase<"coarse", 0, "coarse">,
-      I32EnumAttrCase<"chunked", 1, "chunked">,
-      I32EnumAttrCase<"fine_grained", 2, "fine_grained">
+      I32EnumAttrCase<"block", 1, "block">,
+      I32EnumAttrCase<"fine_grained", 2, "fine_grained">,
+      I32EnumAttrCase<"stencil", 3, "stencil">
     ]>;
 
 /// Enum attribute for DB partition modes

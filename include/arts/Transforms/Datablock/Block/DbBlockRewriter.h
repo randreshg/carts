@@ -1,25 +1,24 @@
 ///==========================================================================///
-/// File: DbChunkedRewriter.h
+/// File: DbBlockRewriter.h
 ///
-/// Chunked rewriter: uniform chunks with div/mod localization.
-/// Multiple physical chunks may be acquired if partition spans chunk
+/// Block rewriter: uniform blocks with div/mod localization.
+/// Multiple physical blocks may be acquired if partition spans block
 /// boundaries.
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_DATABLOCK_DBCHUNKEDREWRITER_H
-#define ARTS_TRANSFORMS_DATABLOCK_DBCHUNKEDREWRITER_H
+#ifndef ARTS_TRANSFORMS_DATABLOCK_DBBLOCKREWRITER_H
+#define ARTS_TRANSFORMS_DATABLOCK_DBBLOCKREWRITER_H
 
 #include "arts/Transforms/Datablock/DbRewriter.h"
 
 namespace mlir {
 namespace arts {
 
-class DbChunkedRewriter : public DbRewriter {
+class DbBlockRewriter : public DbRewriter {
 public:
-  DbChunkedRewriter(DbAllocOp oldAlloc, ValueRange newOuterSizes,
-                    ValueRange newInnerSizes,
-                    ArrayRef<DbRewriteAcquire> acquires,
-                    const DbRewritePlan &plan)
+  DbBlockRewriter(DbAllocOp oldAlloc, ValueRange newOuterSizes,
+                  ValueRange newInnerSizes, ArrayRef<DbRewriteAcquire> acquires,
+                  const DbRewritePlan &plan)
       : DbRewriter(oldAlloc, newOuterSizes, newInnerSizes, acquires, plan) {}
 
 protected:
@@ -30,10 +29,11 @@ protected:
                       OpBuilder &builder) override;
 
   bool rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
-                      Value startChunk = nullptr) override;
+                      Value startBlock = nullptr,
+                      bool isSingleBlock = false) override;
 };
 
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_DATABLOCK_DBCHUNKEDREWRITER_H
+#endif // ARTS_TRANSFORMS_DATABLOCK_DBBLOCKREWRITER_H

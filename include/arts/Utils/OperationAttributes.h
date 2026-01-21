@@ -16,17 +16,35 @@ namespace AttrNames {
 /// Operation-level attributes used across ARTS passes
 namespace Operation {
 using namespace llvm;
+
+/// Common ARTS attributes
 constexpr StringLiteral Workers = "workers";
-constexpr StringLiteral ChunkSize = "chunk_size";
 constexpr StringLiteral ArtsId = "arts.id";
 constexpr StringLiteral ArtsCreateId = "arts.create_id";
 constexpr StringLiteral ArtsTwinDiff = "arts.twin_diff";
 constexpr StringLiteral OutlinedFunc = "outlined_func";
 constexpr StringLiteral Nowait = "nowait";
-constexpr StringLiteral Partition = "arts.partition";
+
+/// Partition-related attributes (TableGen-generated names)
+constexpr StringLiteral PartitionMode = "partition_mode";
+constexpr StringLiteral PartitionHint = "arts.partition_hint";
+
+/// DbAllocOp attributes (TableGen-generated names)
+constexpr StringLiteral Mode = "mode";
+constexpr StringLiteral AllocType = "allocType";
+constexpr StringLiteral DbMode = "dbMode";
+constexpr StringLiteral ElementType = "elementType";
+
+/// EdtOp attributes (TableGen-generated names)
+constexpr StringLiteral Type = "type";
+constexpr StringLiteral Concurrency = "concurrency";
+
 } // namespace Operation
 
 } // namespace AttrNames
+
+// Forward declaration - defined in HeuristicsConfig.h
+struct PartitioningHint;
 
 /// Helper accessors for arts.id on arbitrary operations.
 inline int64_t getArtsId(Operation *op) {
@@ -45,12 +63,12 @@ inline void setArtsId(Operation *op, int64_t id) {
   op->setAttr(AttrNames::Operation::ArtsId, IntegerAttr::get(type, id));
 }
 
-/// Helper accessors for arts.partition attribute (PartitionMode).
+/// Helper accessors for partition_mode attribute (PartitionMode).
 inline std::optional<PartitionMode> getPartitionMode(Operation *op) {
   if (!op)
     return std::nullopt;
-  if (auto attr =
-          op->getAttrOfType<PartitionModeAttr>(AttrNames::Operation::Partition))
+  if (auto attr = op->getAttrOfType<PartitionModeAttr>(
+          AttrNames::Operation::PartitionMode))
     return attr.getValue();
   return std::nullopt;
 }
@@ -58,9 +76,19 @@ inline std::optional<PartitionMode> getPartitionMode(Operation *op) {
 inline void setPartitionMode(Operation *op, PartitionMode mode) {
   if (!op)
     return;
-  op->setAttr(AttrNames::Operation::Partition,
+  op->setAttr(AttrNames::Operation::PartitionMode,
               PartitionModeAttr::get(op->getContext(), mode));
 }
+
+/// Helper accessors for arts.partition_hint attribute (PartitioningHint).
+/// These use DictionaryAttr for serialization - full implementation in
+/// HeuristicsConfig.cpp
+std::optional<PartitioningHint> getPartitioningHint(Operation *op);
+void setPartitioningHint(Operation *op, const PartitioningHint &hint);
+
+/// Transfer attributes from source to dest operation.
+/// Copies common ARTS attributes (arts.id, arts.partition, etc.)
+void transferAttributes(Operation *source, Operation *dest);
 
 } // namespace arts
 } // namespace mlir

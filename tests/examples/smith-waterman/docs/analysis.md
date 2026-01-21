@@ -16,6 +16,7 @@ Walk through these steps and fix any problem that you find in the way
    carts run smith-waterman_seq.mlir --collect-metadata &> smith_waterman_arts_metadata.mlir
    carts cgeist smith-waterman.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine &> smith-waterman.mlir
    ```
+
 3. **Create DBs with control DBs:**
 
    Use the canonicalized file to drive DB creation and dump debug info:
@@ -25,14 +26,15 @@ Walk through these steps and fix any problem that you find in the way
    ```
 
    In `smith-waterman_create_dbs.mlir`, verify:
-   - `arts.db_alloc` for the score matrices are fine grained (sizes correspond to the 2D shape, e.g., `sizes[%len1, %len2]` with `elementSizes[%c1]`), not coarse `[1]` allocations.
-   - Something important here is that the string should remained coarse-grained.
+   - `arts.db_alloc` for the score matrices are **coarse** (`sizes=[1]`) with `elementSizes=[len1+1, len2+1]`.
+   - `arts.db_acquire` carries **partition hints** (partition_indices for the 2D dependencies).
+   - The string datablocks remain coarse (no partition hints).
 
    Or run the full program:
 
    ```bash
-   carts execute matrix.c
-   ./matrix 8
+   carts execute smith-waterman.c
+   ./smith-waterman_arts
    ```
 
    If execution fails, analyze the code..

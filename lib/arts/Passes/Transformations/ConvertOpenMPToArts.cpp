@@ -14,6 +14,7 @@
 #include "mlir/IR/BuiltinOps.h"
 /// Arts
 #include "../ArtsPassDetails.h"
+#include "arts/Analysis/ArtsHeuristics.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
@@ -243,12 +244,12 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
         SmallVector<Value> allSizes(ompDepOp.getSizes().begin(),
                                     ompDepOp.getSizes().end());
 
-        SmallVector<Value> pinnedIndices, chunkOffsets, chunkSizes;
+        SmallVector<Value> pinnedIndices, chunkOffsets, blockSizes;
 
         /// If we have indices but no explicit sizes, treat indices as offsets
         /// and use them as pinned dimensions (sizes will be analyzed later)
         if (!allIndices.empty() && allSizes.empty()) {
-          /// No explicit chunk sizes - use indices as pinned dimensions
+          /// No explicit block sizes - use indices as pinned dimensions
           pinnedIndices = allIndices;
           ARTS_DEBUG("  - No explicit sizes, using "
                      << allIndices.size() << " indices as pinned dims");
@@ -263,18 +264,18 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
               pinnedIndices.push_back(allIndices[i]);
             } else {
               chunkOffsets.push_back(allIndices[i]);
-              chunkSizes.push_back(allSizes[i]);
+              blockSizes.push_back(allSizes[i]);
             }
           }
         }
 
         ARTS_DEBUG("  - Creating DbControlOp from arts.omp_dep: "
                    << allIndices.size() << " indices, " << pinnedIndices.size()
-                   << " pinned, " << chunkSizes.size() << " chunks");
+                   << " pinned, " << blockSizes.size() << " chunks");
 
         Value dbControl = rewriter.create<DbControlOp>(
             ompDepOp.getLoc(), ompDepOp.getMode(), ompDepOp.getSource(),
-            pinnedIndices, chunkOffsets, chunkSizes);
+            pinnedIndices, chunkOffsets, blockSizes);
         deps.push_back(dbControl);
       }
     }
@@ -349,14 +350,14 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
       }
     }
 
-    /// Capture OpenMP chunk size if it is a known constant so later passes can
+    /// Capture OpenMP block size if it is a known constant so later passes can
     /// implement the desired scheduling policy. The loop step should remain the
-    /// original iteration step irrespective of the chunk size.
-    std::optional<int64_t> staticChunkSize;
+    /// original iteration step irrespective of the block size.
+    std::optional<int64_t> staticBlockSize;
     if (auto chunk = op.getScheduleChunkVar()) {
       int64_t chunkVal;
       if (ValueUtils::getConstantIndex(chunk, chunkVal) && chunkVal > 0)
-        staticChunkSize = chunkVal;
+        staticBlockSize = chunkVal;
     }
 
     /// Collect reduction metadata if present on omp.wsloop
@@ -369,10 +370,11 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
         loc, ValueRange{lowerBound}, ValueRange{upperBound}, ValueRange{step},
         schedAttr, ValueRange{redAccs});
 
-    /// Set chunk size attribute if present
-    if (staticChunkSize)
-      forOp->setAttr(AttrNames::Operation::ChunkSize,
-                     rewriter.getI64IntegerAttr(*staticChunkSize));
+    /// Set partitioning hint if block size is present
+    if (staticBlockSize) {
+      setPartitioningHint(forOp.getOperation(),
+                          PartitioningHint::block(staticBlockSize));
+    }
 
     /// Add region and argument to the forOp
     Region &dstRegion = forOp.getRegion();

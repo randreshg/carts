@@ -273,9 +273,9 @@ x[] array lifecycle in LULESH iteration:
 %x_copy = arts.db_copy(%x_orig) partition=element_wise
 // OR: %x_copy = arts.db_copy(%x_orig) partition=none  // full replica
 
-// Node-parallel loop: write to original (chunked)
+// Node-parallel loop: write to original (blocked)
 arts.for (%i = 0 to %numNodes) {
-  %x_chunk = arts.db_acquire(%x_orig) offsets[%start] sizes[%chunk_size]
+  %x_chunk = arts.db_acquire(%x_orig) offsets[%start] sizes[%block_size]
   // x[i] += xd[i] * dt
 }
 
@@ -292,7 +292,7 @@ arts.for (%k = 0 to %numElem) {
 
 ## Benefits
 
-1. **Write path optimized**: Chunked partitioning for direct writes (CalcPositionForNodes)
+1. **Write path optimized**: Blocked partitioning for direct writes (CalcPositionForNodes)
 2. **Read path optimized**: Element-wise or replicated for indirect reads
 3. **Explicit sync points**: Only sync when needed (between write and read phases)
 4. **Reduced contention**: Writers and readers use different DB instances

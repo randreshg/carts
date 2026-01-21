@@ -26,10 +26,13 @@ Walk through these steps and fix any problem that you find in the way
     Remember that you can also debug any pass. For example to stop at create_db pass
 
    Check for example the create db pass
+
    ```bash
       carts run array.mlir --create-dbs &> array_create_dbs.mlir
    ```
-   Analyze the inline comments, I provided a summarized version of the module after all finished. 
+
+   Analyze the inline comments, I provided a summarized version of the module after all finished.
+
    ```mlir
    module attributes {...} {
       ...
@@ -46,7 +49,8 @@ Walk through these steps and fix any problem that you find in the way
          scf.if %2 {
             %5 = memref.load %arg1[%c1] : memref<?xmemref<?xi8>>
             ...
-            /// This is fine grained db_alloc - this is expected because the SSA form of the array matches the control_dbs. For more details check the CreateDbs.cpp pass.
+            /// CreateDbs emits coarse db_alloc (sizes=[1]); fine-grained layout
+            /// is applied later in DbPartitioning based on partition hints.
             %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>] route(%c0_i32 : i32) sizes[%10] elementType(i32) elementSizes[%c1] {...} : (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
             %guid_0, %ptr_1 = arts.db_alloc[<inout>, <heap>, <write>] route(%c0_i32 : i32) sizes[%10] elementType(i32) elementSizes[%c1] {...} : (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
             /// This is the epoch that synchronizes the two EDTs.
@@ -54,9 +58,8 @@ Walk through these steps and fix any problem that you find in the way
             ...
             scf.for %arg2 = %c0 to %25 step %c1 {
                %31 = arith.index_cast %arg2 : index to i32
-               /// We acquire the ptr db, with indices %arg2, offsets %c0, sizes %c1, and twin_diff set to false
-               /// This is correct, because we were able to prove that the access is disjoint across the two EDTs by using the control_dbs. For more details check the CreateDbs.cpp pass.
-               %guid_2, %ptr_3 = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<memref<?xi32>>>) indices[%arg2] offsets[%c0] sizes[%c1] {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+               /// Fine-grained acquire: indices=element index, offsets=0, sizes=1
+               %guid_2, %ptr_3 = arts.db_acquire[<out>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<memref<?xi32>>>) partitioning(<fine_grained>, indices[%arg2], offsets[%c0], sizes[%c1]) {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
                /// This is the EDT that writes to the ptr db.
                arts.edt <task> <intranode> route(%c0_i32) (%ptr_3) : memref<?xmemref<memref<?xi32>>> {
                ^bb0(%arg3: memref<?xmemref<memref<?xi32>>>):
@@ -71,9 +74,9 @@ Walk through these steps and fix any problem that you find in the way
                }
                %32 = arith.cmpi eq, %31, %c0_i32 : i32
                scf.if %32 {
-                  /// These acquires are also fine grained acquires and we have twin_diff = false
-                  %guid_4, %ptr_5 = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<memref<?xi32>>>) indices[%arg2] offsets[%%c0] sizes[%c1] {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
-                  %guid_6, %ptr_7 = arts.db_acquire[<inout>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<memref<?xi32>>>) indices[%arg2] offsets[%c0] sizes[%c1] {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+                  /// Fine-grained acquires for i==0 case
+                  %guid_4, %ptr_5 = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<memref<?xi32>>>) partitioning(<fine_grained>, indices[%arg2], offsets[%c0], sizes[%c1]) {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+                  %guid_6, %ptr_7 = arts.db_acquire[<out>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<memref<?xi32>>>) partitioning(<fine_grained>, indices[%arg2], offsets[%c0], sizes[%c1]) {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
                   /// Carefully check the dbref + load/store pattern in here.
                   /// The dbref works on the outer dimension of the db, and the load/store works on the inner dimension.
                   /// The pattern within the EDT is correct because the dbAcquire has as index %arg2...
@@ -96,10 +99,10 @@ Walk through these steps and fix any problem that you find in the way
                } else {
                   %33 = arith.addi %31, %c-1_i32 : i32
                   %34 = arith.index_cast %33 : i32 to index
-                  /// These acquires are also fine grained acquires and we have twin_diff = false
-                  %guid_4, %ptr_5 = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<memref<?xi32>>>) indices[%arg2] offsets[%arg2] sizes[%c1] {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
-                  %guid_6, %ptr_7 = arts.db_acquire[<in>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<memref<?xi32>>>) indices[%34] offsets[%34] sizes[%c1] {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
-                  %guid_8, %ptr_9 = arts.db_acquire[<inout>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<memref<?xi32>>>) indices[%arg2] offsets[%arg2] sizes[%c1] {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+                  /// These acquires use the unified partitioning format: indices=element, offsets=0, sizes=1
+                  %guid_4, %ptr_5 = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<memref<?xi32>>>) partitioning(<fine_grained>, indices[%arg2], offsets[%c0], sizes[%c1]) {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+                  %guid_6, %ptr_7 = arts.db_acquire[<in>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<memref<?xi32>>>) partitioning(<fine_grained>, indices[%34], offsets[%c0], sizes[%c1]) {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+                  %guid_8, %ptr_9 = arts.db_acquire[<inout>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<memref<?xi32>>>) partitioning(<fine_grained>, indices[%arg2], offsets[%c0], sizes[%c1]) {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
                   arts.edt <task> <intranode> route(%c0_i32) (%ptr_5, %ptr_7, %ptr_9) : memref<?xmemref<memref<?xi32>>>, memref<?xmemref<memref<?xi32>>>, memref<?xmemref<memref<?xi32>>> {
                   ^bb0(%arg3: memref<?xmemref<memref<?xi32>>>, %arg4: memref<?xmemref<memref<?xi32>>>, %arg5: memref<?xmemref<memref<?xi32>>>):
                   %35 = llvm.getelementptr %29[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<46 x i8>
@@ -150,12 +153,15 @@ Walk through these steps and fix any problem that you find in the way
    Lets analyze the code after running the pipeline and verify if it matches the expected output.
 
 4. **Analyze the concurrency-opt output**
+
     ```bash
       carts run array.mlir --concurrency-opt &> array_concurrency_opt.mlir
     ```
-    And verify the pattern of the Conditional Stencil Pattern 
+
+    And verify the pattern of the Conditional Stencil Pattern
 
 5. **Finally lets carts execute and check**
+
 ```bash
    carts execute array.c -O3
    ./array_arts 32
@@ -215,12 +221,14 @@ The `B[i-1]` access (indices `%34`) is computed and acquired ONLY in the else br
 | **Why** | Control flow guards access | All iterations declare stencil |
 
 In jacobi-task-dep:
+
 ```c
 #pragma omp task depend(in : u[i-1], u[i], u[i+1]) depend(out : unew[i])
 // Dependencies declared for ALL i values, including boundaries!
 ```
 
 When `i=0`, this declares `u[-1]` which is out of bounds. CARTS must:
+
 1. Generate `bounds_valid` condition: `0 <= (i-1) < size`
 2. Use `artsSignalEdtNull` when bounds are invalid
 
@@ -238,3 +246,51 @@ CARTS correctly identifies that array.c does NOT need bounds checking because:
 |--------------|---------|--------------|----------------|
 | **Conditional** | `if (i > 0) depend(B[i-1])` | NOT needed | Control flow preserved |
 | **Unconditional** | `depend(u[i-1])` for all i | NEEDED | `bounds_valid` + `artsSignalEdtNull` |
+
+---
+
+## Unified Partitioning Format
+
+CARTS uses a unified `partitioning(...)` clause for `db_acquire` operations. The semantics depend on the partition mode:
+
+| Mode | `indices[]` | `offsets[]` | `sizes[]` |
+|------|-------------|-------------|-----------|
+| **fine_grained** | element index | 0 | 1 |
+| **chunked** | (empty) | chunk start | chunk count |
+| **coarse** | (empty) | 0 | total size |
+| **stencil** | (empty) | chunk start | chunk + halo |
+
+### Fine-grained Example (this example)
+
+```mlir
+arts.db_acquire[<out>] (%guid, %ptr)
+    partitioning(<fine_grained>, indices[%i], offsets[%c0], sizes[%c1])
+```
+
+- `indices[%i]` - which element to access (the loop index)
+- `offsets[%c0]` - always 0 for fine_grained (no chunk offset)
+- `sizes[%c1]` - always 1 for fine_grained (single element)
+
+### Chunked Example
+
+```mlir
+arts.db_acquire[<inout>] (%guid, %ptr)
+    partitioning(<block>, offsets[%workerStart], sizes[%blockSize])
+```
+
+- `indices` - empty for chunked mode
+- `offsets[%workerStart]` - where this worker's chunk begins
+- `sizes[%blockSize]` - how many elements in this chunk
+
+---
+
+## Verification Results (January 2026)
+
+| Test | Status | Details |
+|------|--------|---------|
+| CreateDbs hints | ✅ PASS | `partitioning(<fine_grained>, indices[%arg2])` |
+| Multi-entry B[i-1] | ✅ PASS | `indices[%18, %arg2]` with `partition_indices_segments = [1, 1]` |
+| DbPartitioning allocation | ✅ PASS | `<fine_grained> sizes[%N] elementSizes[%c1]` |
+| Multi-entry expansion | ✅ PASS | 3 separate acquires for else branch |
+| DbRef localization | ✅ PASS | `memref.store %16, %18[%c0]` (inner dim = 0) |
+| Runtime execution | ✅ PASS | `array_arts 32` produces correct output |

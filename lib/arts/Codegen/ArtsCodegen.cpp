@@ -772,10 +772,12 @@ SmallVector<Value> ArtsCodegen::computeStridesFromSizes(ArrayRef<Value> sizes,
 }
 
 /// Helper to iterate over all Db elements
-void ArtsCodegen::iterateDbElements(
-    Value dbGuid, Value edtGuid, ArrayRef<Value> dbSizes,
-    ArrayRef<Value> dbOffsets, bool isSingle, Location loc,
-    std::function<void(Value)> elementCallback) {
+void ArtsCodegen::iterateDbElements(Value dbGuid, Value edtGuid,
+                                    ArrayRef<Value> dbSizes,
+                                    ArrayRef<Value> dbOffsets, bool isSingle,
+                                    Location loc,
+                                    std::function<void(Value)> elementCallback,
+                                    ArrayRef<Value> linearSizes) {
 
   /// If the db sizes are empty, we are dealing with a single element
   if (dbSizes.empty()) {
@@ -799,22 +801,25 @@ void ArtsCodegen::iterateDbElements(
   }
 
   /// Otherwise, we need to iterate over all dimensions of the db
-  iterateMultiDb(dbGuid, edtGuid, dbSizes, dbOffsets, loc, elementCallback);
+  iterateMultiDb(dbGuid, edtGuid, dbSizes, dbOffsets, loc, elementCallback,
+                 linearSizes);
 }
 
 /// Helper to iterate over multi-dimensional db elements
 void ArtsCodegen::iterateMultiDb(Value dbGuid, Value edtGuid,
                                  ArrayRef<Value> dbSizes,
                                  ArrayRef<Value> dbOffsets, Location loc,
-                                 std::function<void(Value)> elementCallback) {
+                                 std::function<void(Value)> elementCallback,
+                                 ArrayRef<Value> linearSizes) {
   const unsigned dbRank = dbSizes.size();
   auto stepConstant = createIndexConstant(1, loc);
+  ArrayRef<Value> sizesForLinear = linearSizes.empty() ? dbSizes : linearSizes;
 
   std::function<void(unsigned, SmallVector<Value, 4> &)>
       addDependenciesRecursive = [&](unsigned dim,
                                      SmallVector<Value, 4> &indices) {
         if (dim == dbRank) {
-          auto linearIndex = computeLinearIndex(dbSizes, indices, loc);
+          auto linearIndex = computeLinearIndex(sizesForLinear, indices, loc);
           elementCallback(linearIndex);
           return;
         }

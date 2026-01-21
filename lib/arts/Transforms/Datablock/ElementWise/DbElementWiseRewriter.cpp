@@ -38,10 +38,9 @@ void DbElementWiseRewriter::transformAcquire(const DbRewriteAcquire &info,
                                              DbAllocOp newAlloc,
                                              OpBuilder &builder) {
   DbAcquireOp acquire = info.acquire;
-  Value elemOffset = info.elemOffset;
-  Value elemSize = info.elemSize;
 
-  ARTS_DEBUG("DbElementWiseRewriter::transformAcquire");
+  ARTS_DEBUG("DbElementWiseRewriter::transformAcquire (dims="
+             << info.elemOffsets.size() << ")");
 
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPoint(acquire);
@@ -62,15 +61,34 @@ void DbElementWiseRewriter::transformAcquire(const DbRewriteAcquire &info,
       blockArg.setType(newPtrType);
   }
 
-  /// ELEMENT-WISE: already in datablock space, no offset transformation
-  SmallVector<Value> newOffsets, newSizes;
-  newOffsets.push_back(elemOffset);
-  newSizes.push_back(elemSize);
+  /// ELEMENT-WISE: Update indices to the element offsets for fine_grained mode.
+  /// Supports multi-dimensional fine-grained (e.g., A[i][j] -> indices [i, j]).
+  /// Keep offsets at 0 and sizes at 1 to avoid double-indexing during lowering.
+  Location loc = acquire.getLoc();
+  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+  Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
 
+  /// Set indices to element offsets (for multi-dim fine_grained indexing)
+  SmallVector<Value> newIndices(info.elemOffsets.begin(),
+                                info.elemOffsets.end());
+  acquire.getIndicesMutable().assign(newIndices);
+
+  /// Set offsets to 0 and sizes to 1 for each dimension
+  SmallVector<Value> newOffsets, newSizes;
+  for (size_t i = 0; i < info.elemOffsets.size(); ++i) {
+    newOffsets.push_back(zero);
+    newSizes.push_back(one);
+  }
   acquire.getOffsetsMutable().assign(newOffsets);
   acquire.getSizesMutable().assign(newSizes);
-  acquire.getChunkIndexMutable().assign(elemOffset);
-  acquire.getChunkSizeMutable().assign(elemSize);
+
+  /// Clear partition hints - they've been consumed by partitioning.
+  /// The runtime indices now carry the element coordinates.
+  acquire.getPartitionIndicesMutable().clear();
+  acquire.getPartitionOffsetsMutable().clear();
+  acquire.getPartitionSizesMutable().clear();
+  if (acquire.getPartitionMode().has_value())
+    acquire.removePartitionModeAttr();
 
   /// Store original stride for linearized access (stride = D1 * D2 * ...)
   if (auto staticStride = DatablockUtils::getStaticElementStride(oldAlloc)) {
@@ -175,7 +193,8 @@ void DbElementWiseRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
 
 bool DbElementWiseRewriter::rebaseEdtUsers(DbAcquireOp acquire,
                                            OpBuilder &builder,
-                                           Value /*startChunk*/) {
+                                           Value /*startBlock*/,
+                                           bool /*isSingleChunk*/) {
   ARTS_DEBUG("DbElementWiseRewriter::rebaseEdtUsers");
 
   auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
@@ -204,13 +223,16 @@ bool DbElementWiseRewriter::rebaseEdtUsers(DbAcquireOp acquire,
           DatablockUtils::getUnderlyingDbAlloc(blockArg)))
     derivedType = dbAlloc.getAllocatedElementType();
 
-  /// Get element offset and size from chunk hints
-  Value elemOffset = acquire.getChunkIndex();
-  Value elemSize = acquire.getChunkSize();
+  /// Get element offsets from indices (for fine_grained mode).
+  /// The offsets/sizes are now 0/1 after transformAcquire, so we get
+  /// the actual element indices from indices (supports multi-dimensional).
+  /// For 2D fine-grained (e.g., A[i][j]), indices will be [%i, %j].
+  SmallVector<Value> elemOffsets(acquire.getIndices().begin(),
+                                 acquire.getIndices().end());
 
-  /// Create element-wise indexer
+  /// Create element-wise indexer with multi-dimensional offsets
   auto indexer = std::make_unique<DbElementWiseIndexer>(
-      elemOffset, elemSize, newOuterSizes.size(), newInnerSizes.size(),
+      elemOffsets, newOuterSizes.size(), newInnerSizes.size(),
       oldAlloc.getElementSizes());
 
   SmallVector<Operation *> users(blockArg.getUsers().begin(),

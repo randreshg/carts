@@ -59,9 +59,9 @@ flowchart TB
 
 **ForLoweringPass** (stage 10, in Concurrency):
 - Analyzes loop iteration variables and depend clauses
-- **GENERATES** `chunk_hint(chunk_index, chunk_size)`, `indices` on DbAcquireOps
+- **GENERATES** `chunk_hint(chunk_index, block_size)`, `indices` on DbAcquireOps
 - `chunk_index` = which chunk this worker handles (0, 1, 2, ...)
-- `chunk_size` = elements per chunk (must be consistent across acquires)
+- `block_size` = elements per chunk (must be consistent across acquires)
 - These hints indicate how the loop accesses the DB
 
 **DbPartitioningPass** (stage 11, in ConcurrencyOpt):
@@ -118,7 +118,7 @@ User/CLI Level          Decision Level              Implementation Level
 --partition-fallback    PartitionGranularity       RewriterMode + outerRank
   =coarse               =Coarse                    =ElementWise, outerRank=0
   =fine                 =FineGrained               =ElementWise, outerRank>0
-                        =Chunked                   =Chunked
+                        =Blocked                   =Blocked
                         =Stencil                   =Stencil
 ```
 
@@ -136,8 +136,8 @@ Add a new semantic enum for decision-level clarity:
 enum class PartitionGranularity {
   Coarse,      // Single DB for entire array (ElementWise + outerRank=0)
   FineGrained, // One DB per element/row (ElementWise + outerRank>0)
-  Chunked,     // Fixed-size chunks
-  Stencil      // Chunked with halo regions (ESD)
+  Blocked,     // Fixed-size chunks
+  Stencil      // Blocked with halo regions (ESD)
 };
 ```
 
@@ -158,14 +158,14 @@ struct PartitioningDecision {
   // Factory methods with clear names
   static PartitioningDecision coarse(const PartitioningContext &ctx, StringRef reason);
   static PartitioningDecision fineGrained(const PartitioningContext &ctx, unsigned outerRank, StringRef reason);
-  static PartitioningDecision chunked(const PartitioningContext &ctx, StringRef reason);
+  static PartitioningDecision blocked(const PartitioningContext &ctx, StringRef reason);
   static PartitioningDecision stencil(const PartitioningContext &ctx, StringRef reason);
 
   // Queries derived from granularity
   bool isCoarse() const { return granularity == PartitionGranularity::Coarse; }
   bool isFineGrained() const { return granularity == PartitionGranularity::FineGrained; }
-  bool isChunked() const {
-    return granularity == PartitionGranularity::Chunked ||
+  bool isBlocked() const {
+    return granularity == PartitionGranularity::Blocked ||
            granularity == PartitionGranularity::Stencil;
   }
 
@@ -187,8 +187,8 @@ inline RewriterMode toRewriterMode(PartitionGranularity granularity) {
   case PartitionGranularity::Coarse:
   case PartitionGranularity::FineGrained:
     return RewriterMode::ElementWise;  // Both use same rewriter, differ by outerRank
-  case PartitionGranularity::Chunked:
-    return RewriterMode::Chunked;
+  case PartitionGranularity::Blocked:
+    return RewriterMode::Blocked;
   case PartitionGranularity::Stencil:
     return RewriterMode::Stencil;
   }
@@ -259,8 +259,8 @@ Optionally rename for clarity (breaking change):
 |---------------|---------------|--------------|-----------|--------------|
 | coarse        | Coarse        | ElementWise  | 0         | none         |
 | fine          | FineGrained   | ElementWise  | >0        | element_wise |
-| chunked       | Chunked       | Chunked      | 1         | chunked      |
-| stencil       | Stencil       | Stencil      | 1         | chunked      |
+| blocked       | Blocked       | Blocked      | 1         | blocked      |
+| stencil       | Stencil       | Stencil      | 1         | blocked      |
 
 **Key insight**: `RewriterMode::ElementWise` handles both coarse and fine-grained.
 The difference is `outerRank`: coarse has `outerRank=0` (single DB), fine-grained
@@ -272,7 +272,7 @@ has `outerRank>0` (multiple DBs, one per element/row).
 ## Complete Partitioning Decision Flowchart
 
 This flowchart shows the end-to-end decision process across the pipeline stages.
-The hints (chunk_hint with chunk_index/chunk_size, and indices) are generated
+The hints (chunk_hint with chunk_index/block_size, and indices) are generated
 by ForLoweringPass AFTER CreateDbs runs. DbPartitioning uses these hints to make partitioning decisions.
 
 
@@ -295,7 +295,7 @@ flowchart TB
   subgraph S10["Stage 10: Concurrency"]
     direction TB
     S10A["ConcurrencyPass: analyze concurrency patterns"]
-    S10B["ForLoweringPass: generates hints<br/><br/>Adds to existing DbAcquireOps:<br/>- indices[] from indexed access patterns (A[i])<br/>- chunk_hint(chunk_index, chunk_size)<br/>- chunk_index = which chunk (workerIdx, not element offset)<br/>- chunk_size = elements per chunk"]
+    S10B["ForLoweringPass: generates hints<br/><br/>Adds to existing DbAcquireOps:<br/>- indices[] from indexed access patterns (A[i])<br/>- chunk_hint(chunk_index, block_size)<br/>- chunk_index = which chunk (workerIdx, not element offset)<br/>- block_size = elements per chunk"]
     S10O["Output: DbAcquireOps now have chunk_hint(index, size) and indices"]
     S10A --> S10B --> S10O
   end
@@ -306,7 +306,7 @@ flowchart TB
     S11B{"canBePartitioned: useFineGrainedFallback?"}
     S11Bnote["Checks:<br/>- hasNonAffineAccesses and fallback not enabled → false<br/>- safety checks on hints and structure<br/>false → keep original"]
     S11C["Per-acquire analysis (using hints from ForLowering)"]
-    S11D["Heuristics evaluation (H1.x)<br/>priority order (first hit wins):<br/>100: H1.1 ReadOnlySingleNode → coarse<br/>98: H1.2 MixedAccessVersioning → chunked + versioning<br/>95: H1.3 StencilPattern → stencil/fine-grained<br/>90: H1.4 MultiNode → fine-grained preferred<br/>80: H1.5 AccessUniformity → coarse fallback"]
+    S11D["Heuristics evaluation (H1.x)<br/>priority order (first hit wins):<br/>100: H1.1 ReadOnlySingleNode → coarse<br/>98: H1.2 MixedAccessVersioning → blocked + versioning<br/>95: H1.3 StencilPattern → stencil/fine-grained<br/>90: H1.4 MultiNode → fine-grained preferred<br/>80: H1.5 AccessUniformity → coarse fallback"]
     S11E["Apply decision:<br/>- if coarse: keep original<br/>- else: apply DbRewriter, set partition attribute"]
     S11F["DbPass: re-run to adjust modes after partitioning"]
 
@@ -336,8 +336,8 @@ The partitioning decision spans THREE key passes in the pipeline:
 - **GENERATES hints** on existing DbAcquireOps:
   - `indices[]` ← from indexed access patterns (e.g., `A[i]`)
   - `chunk_index` ← which chunk this worker handles (NOT element offset!)
-  - `chunk_size` ← elements per chunk (must be consistent across all acquires)
-- Uses `chunk_hint(chunk_index, chunk_size)` syntax in IR
+  - `block_size` ← elements per chunk (must be consistent across all acquires)
+- Uses `chunk_hint(chunk_index, block_size)` syntax in IR
 - These hints enable partitioning decisions in the next stage
 
 ### Stage 11: DbPartitioning Pass (Partitioning Decisions) - IN CONCURRENCYOPT STAGE
@@ -357,17 +357,17 @@ Stage 7 (CreateDbs):
                     ↓
 Stage 10 (ForLowering):
     ForLowering analyzes loop structure
-    ADDS chunk_hint(chunk_index, chunk_size), indices to DbAcquireOps
+    ADDS chunk_hint(chunk_index, block_size), indices to DbAcquireOps
                     ↓
 Stage 11 (DbPartitioning):
-    Reads chunk_index/chunk_size from DbAcquireOps
-    Validates chunk_size consistency (must agree across all acquires)
+    Reads chunk_index/block_size from DbAcquireOps
+    Validates block_size consistency (must agree across all acquires)
     Builds PartitioningContext
     Evaluates heuristics → PartitioningDecision
-    If chunked/fine-grained chosen:
+    If blocked/fine-grained chosen:
         → Apply DbRewriter
         → sizes=[1] → sizes=[numChunks]
-        → partition=none → partition=chunked/element_wise
+        → partition=none → partition=blocked/element_wise
 ```
 
 This three-stage design allows:
@@ -380,19 +380,19 @@ This three-stage design allows:
 
 ## Stencil Mode (ESD - Ephemeral Slice Dependencies)
 
-Stencil mode is a specialized form of chunked partitioning for stencil access patterns.
+Stencil mode is a specialized form of blocked partitioning for stencil access patterns.
 
 ### When Stencil Mode is Selected
 - H1.3 detects `hasStencil` pattern in access analysis
 - Access bounds show non-zero offsets (e.g., `A[i-1]`, `A[i+1]`)
 
-### How It Differs from Chunked
-- **Inner size extended**: `innerSize = baseChunkSize + haloLeft + haloRight`
+### How It Differs from Blocked
+- **Inner size extended**: `innerSize = baseBlockSize + haloLeft + haloRight`
 - **Halo regions**: Left and right neighbors included in each chunk
 - **ESD delivery**: Runtime delivers halo data to adjacent chunks
 
 ### IR Representation
-Both Chunked and Stencil use `promotion_mode<chunked>` in IR.
+Both Blocked and Stencil use `promotion_mode<block>` in IR.
 The difference is internal (StencilInfo with halo sizes).
 
 For detailed stencil documentation, see:
@@ -463,7 +463,7 @@ carts benchmarks run lulesh --size small -- --partition-fallback=fine
 ### Mode 3: Versioned DB Copy (Future)
 
 **Proposed approach:**
-- Write-optimized DB: Chunked partitioning for direct writes
+- Write-optimized DB: Blocked partitioning for direct writes
 - Read-optimized DB: Element-wise copy for indirect reads
 - Explicit sync between write and read phases
 

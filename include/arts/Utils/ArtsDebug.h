@@ -154,6 +154,6 @@ static inline llvm::raw_ostream &debugStream() {
     __os << " " << msg << "\n";                                                \
     llvm_unreachable(msg);                                                     \
   }
-} /// namespace arts
-} /// namespace mlir
+} // namespace arts
+} // namespace mlir
 #endif /// ARTS_UTILS_ARTSDEBUG_H

@@ -2,7 +2,6 @@
 /// File: DbElementWiseRewriter.h
 ///
 /// Element-wise rewriter: each element is a separate datablock.
-/// Simplest mode - uses direct subtraction for index localization.
 ///==========================================================================///
 
 #ifndef ARTS_TRANSFORMS_DATABLOCK_DBELEMENTWISEREWRITER_H
@@ -29,7 +28,8 @@ protected:
                       OpBuilder &builder) override;
 
   bool rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
-                      Value startChunk = nullptr) override;
+                      Value startBlock = nullptr,
+                      bool isSingleChunk = false) override;
 };
 
 } // namespace arts

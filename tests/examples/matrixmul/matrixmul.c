@@ -16,7 +16,8 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
   if (N % BS != 0) {
-    printf("Block size (BS=%d) must evenly divide matrix size (N=%d).\n", BS, N);
+    printf("Block size (BS=%d) must evenly divide matrix size (N=%d).\n", BS,
+           N);
     return EXIT_FAILURE;
   }
 
