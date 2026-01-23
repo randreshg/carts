@@ -143,8 +143,14 @@ DbRewriter::createElementWiseIndexer(ArrayRef<Value> elemOffsets,
   ARTS_DEBUG("  ElementWise indexer: outerRank="
              << outerRank << ", innerRank=" << innerRank
              << ", offsetDims=" << elemOffsets.size());
-  return std::make_unique<DbElementWiseIndexer>(elemOffsets, outerRank,
-                                                innerRank, oldElementSizes);
+
+  /// Build PartitionInfo from elemOffsets
+  PartitionInfo info;
+  info.mode = PartitionMode::fine_grained;
+  info.indices.assign(elemOffsets.begin(), elemOffsets.end());
+
+  return std::make_unique<DbElementWiseIndexer>(info, outerRank, innerRank,
+                                                oldElementSizes);
 }
 
 std::unique_ptr<DbIndexerBase>
@@ -154,24 +160,41 @@ DbRewriter::createBlockIndexer(ArrayRef<Value> blockSizes,
   ARTS_DEBUG("  Block indexer: outerRank="
              << outerRank << ", innerRank=" << innerRank
              << ", nPartDims=" << blockSizes.size());
-  return std::make_unique<DbBlockIndexer>(blockSizes, startBlocks, outerRank,
+
+  /// Build PartitionInfo from blockSizes
+  PartitionInfo info;
+  info.mode = PartitionMode::block;
+  info.sizes.assign(blockSizes.begin(), blockSizes.end());
+
+  return std::make_unique<DbBlockIndexer>(info, startBlocks, outerRank,
                                           innerRank);
 }
 
 std::unique_ptr<DbIndexerBase> DbRewriter::createStencilIndexer(
-    const StencilInfo &info, Value blockSize, Value elemOffset,
+    const StencilInfo &stencilInfo, Value blockSize, Value baseOffset,
     unsigned outerRank, unsigned innerRank, Value ownedArg, Value leftHaloArg,
     Value rightHaloArg, OpBuilder &builder, Location loc) {
   /// Create halo values from StencilInfo
-  Value haloLeft = builder.create<arith::ConstantIndexOp>(loc, info.haloLeft);
-  Value haloRight = builder.create<arith::ConstantIndexOp>(loc, info.haloRight);
+  Value haloLeft =
+      builder.create<arith::ConstantIndexOp>(loc, stencilInfo.haloLeft);
+  Value haloRight =
+      builder.create<arith::ConstantIndexOp>(loc, stencilInfo.haloRight);
 
-  ARTS_DEBUG("  Stencil indexer: haloLeft=" << info.haloLeft << ", haloRight="
-                                            << info.haloRight);
+  ARTS_DEBUG("  Stencil indexer: haloLeft=" << stencilInfo.haloLeft
+                                            << ", haloRight="
+                                            << stencilInfo.haloRight);
 
-  return std::make_unique<DbStencilIndexer>(
-      haloLeft, haloRight, blockSize, outerRank, innerRank, elemOffset,
-      ownedArg, leftHaloArg, rightHaloArg);
+  /// Build PartitionInfo with base offset semantics
+  PartitionInfo info;
+  info.mode = PartitionMode::stencil;
+  if (baseOffset)
+    info.offsets.push_back(baseOffset);
+  if (blockSize)
+    info.sizes.push_back(blockSize);
+
+  return std::make_unique<DbStencilIndexer>(info, haloLeft, haloRight,
+                                            outerRank, innerRank, ownedArg,
+                                            leftHaloArg, rightHaloArg);
 }
 
 std::unique_ptr<DbIndexerBase>

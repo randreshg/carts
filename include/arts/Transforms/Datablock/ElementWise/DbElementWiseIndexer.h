@@ -2,22 +2,27 @@
 /// File: DbElementWiseIndexer.h
 ///
 /// Index localizer for element-wise (fine-grained) datablock allocation.
-/// Each element of the partitioned dimension gets its own datablock.
+/// Each element of the partitioned dimension gets its own datablock entry.
 ///
-/// Partitioning policy:
-/// - Element-wise is the default fallback when chunk hints are missing,
-///   access is stencil/mixed/irregular, or chunking is not beneficial.
-/// - This preserves concurrency at the cost of more datablocks.
+/// IMPORTANT: elemOffsets are element COORDINATES from partition_indices,
+/// NOT range offsets. They identify which element this EDT owns.
 ///
-/// Example (A[100][50], elemOffset=25):
-///   Access A[27][10]:
-///     dbRefIdx = 27 - 25 = 2
-///     memrefIdx = 10
+/// For fine-grained mode:
+///   - elemOffsets = element coordinates (e.g., [%i] from depend(inout: A[i]))
+///   - globalIndices = inner indices from load/store (e.g., [%j])
+///   - Use elemOffsets DIRECTLY as db_ref indices
+///   - Pass globalIndices through as memref indices
+///
+/// Example (A[100][50], fine-grained on dim 0):
+///   EDT owns element %i from loop
+///   Access: A[%i][%j]
+///   elemOffsets = [%i]   (element coordinate from partition_indices)
+///   globalIndices = [%j] (inner index from memref.load)
+///   Result: db_ref[%i], memref[%j]
 ///
 /// Equations:
-///   dbRefIdx   = globalRow - elemOffset
-///   memrefIdx  = remaining dimensions unchanged
-///   localLinear = globalLinear - (elemOffset * stride)
+///   dbRefIdx  = elemOffsets (element coordinates - use directly)
+///   memrefIdx = globalIndices (inner indices - pass through)
 ///
 ///==========================================================================///
 
@@ -30,21 +35,20 @@ namespace mlir {
 namespace arts {
 
 /// Index localizer for element-wise (fine-grained) datablock allocation.
-/// Implements subtraction-based offset adjustment for fine-grained parallelism.
 ///
-/// Index Localization Formulas:
-///   Multi-dimensional: dbRefIdx = globalRow - elemOffset
-///                      memrefIdx = remaining dimensions unchanged
-///   Linearized:        localLinear = globalLinear - (elemOffset * stride)
+/// Key insight: partitionInfo.indices from partition_indices ARE element
+/// coordinates, not range offsets. Use them DIRECTLY as db_ref indices.
+///
+/// Index Localization:
+///   dbRefIdx  = partitionInfo.indices (element coordinates)
+///   memrefIdx = globalIndices (inner indices from load/store)
 class DbElementWiseIndexer : public DbIndexerBase {
-  /// Multi-dimensional element offsets for fine-grained partitioning.
-  /// For 2D fine-grained (e.g., A[i][j]), stores [%i, %j].
-  SmallVector<Value> elemOffsets;
   SmallVector<Value> oldElementSizes;
 
 public:
-  /// Constructor for multi-dimensional fine-grained partitioning.
-  DbElementWiseIndexer(ArrayRef<Value> elemOffsets, unsigned outerRank,
+  /// Constructor with PartitionInfo - the canonical way to create indexers.
+  /// Uses partitionInfo.indices as element coordinates for fine-grained mode.
+  DbElementWiseIndexer(const PartitionInfo &info, unsigned outerRank,
                        unsigned innerRank, ValueRange oldElementSizes = {});
 
 private:

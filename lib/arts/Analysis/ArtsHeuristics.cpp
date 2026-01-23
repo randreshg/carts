@@ -85,6 +85,23 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// - Stencil patterns use Stencil mode (block + ESD) for halo handling
   const auto &patterns = ctx.accessPatterns;
 
+  if (patterns.hasStencil) {
+    if (!ctx.canBlock || ctx.hasIndirectAccess) {
+      ARTS_DEBUG("H1.3 applied: Stencil but block unsupported; fallback");
+      return PartitioningDecision::elementWise(
+          ctx, 1,
+          "H1.3: Stencil detected but block unsupported/indirect; fallback to "
+          "element-wise");
+    }
+
+    ARTS_DEBUG("H1.3 applied: Stencil uses ESD mode");
+    return PartitioningDecision::stencil(
+        ctx, patterns.hasUniform
+                 ? "H1.3: Mixed (uniform+stencil) uses Stencil mode - block "
+                   "handles both"
+                 : "H1.3: Pure stencil uses ESD mode");
+  }
+
   /// Case 1: Indexed access -> Element-wise (unpredictable access pattern)
   /// Compute outerRank from partitionInfos with uniformity check.
   /// Use minimum dimension count to ensure all acquires can address datablocks.
@@ -103,24 +120,6 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
                << outerRank << ")");
     return PartitioningDecision::elementWise(
         ctx, outerRank, "H1.3: Indexed access requires element-wise");
-  }
-
-  /// Case 2: Stencil (with or without uniform) -> Stencil mode (block + ESD)
-  if (patterns.hasStencil) {
-    if (!ctx.canBlock) {
-      ARTS_DEBUG("H1.3 applied: Stencil but block unsupported; fallback");
-      return PartitioningDecision::elementWise(
-          ctx, 1,
-          "H1.3: Stencil detected but block unsupported; fallback to "
-          "element-wise");
-    }
-
-    ARTS_DEBUG("H1.3 applied: Stencil uses ESD mode");
-    return PartitioningDecision::stencil(
-        ctx, patterns.hasUniform
-                 ? "H1.3: Mixed (uniform+stencil) uses Stencil mode - block "
-                   "handles both"
-                 : "H1.3: Pure stencil uses ESD mode");
   }
 
   /// H1.4: Uniform direct access -> Block

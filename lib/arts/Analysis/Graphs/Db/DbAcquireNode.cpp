@@ -203,7 +203,7 @@ void DbAcquireNode::forEachChildNode(
 ///
 /// For stencil patterns like A[i-1], A[i], A[i+1], we need to analyze the
 /// actual memory access bounds rather than using iteration hints directly.
-/// The index expression is typically: chunkOffset + loopIV + constant
+/// The index expression is typically: blockOffset + loopIV + constant
 /// We extract the constant to determine the offset adjustment needed.
 ///===----------------------------------------------------------------------===///
 
@@ -214,12 +214,12 @@ struct AccessBoundsInfo {
   bool valid = false;
 };
 
-/// Analyze all memory accesses to compute actual bounds relative to chunk base.
+/// Analyze all memory accesses to compute actual bounds relative to block base.
 /// For stencil patterns like A[i-1], A[i], A[i+1], this extracts the min/max
 /// offsets. For uniform access like B[i+1], this extracts the constant
 /// adjustment.
 static AccessBoundsInfo analyzeAccessBounds(DbAcquireNode *node,
-                                            Value chunkOffset, Value loopIV);
+                                            Value blockOffset, Value loopIV);
 
 /// Find the best loop node for bounds analysis.
 /// Prefers loops whose IV the first dynamic index depends on, selecting deeper
@@ -460,7 +460,7 @@ bool DbAcquireNode::computePartitionBounds() {
   if (!firstDynIdx) {
     if (offsetIsZero) {
       ARTS_DEBUG("  No dynamic index - allowing zero-offset partition hints");
-      computedChunkInfo = std::make_pair(partitionOffset, partitionSize);
+      computedBlockInfo = std::make_pair(partitionOffset, partitionSize);
       return true;
     }
     ARTS_DEBUG("  No dynamic index - allowing for heuristic evaluation");
@@ -476,15 +476,15 @@ bool DbAcquireNode::computePartitionBounds() {
     return true;
   }
 
-  LoopNode *chunkLoopNode =
+  LoopNode *blockLoopNode =
       findBestLoopNode(loopNodes, firstDynIdx, partitionOffset, offsetIsZero);
 
-  if (!chunkLoopNode) {
-    ARTS_DEBUG("  No chunk loop found - allowing for heuristic evaluation");
+  if (!blockLoopNode) {
+    ARTS_DEBUG("  No block loop found - allowing for heuristic evaluation");
     return true;
   }
 
-  Value loopIV = chunkLoopNode->getInductionVar();
+  Value loopIV = blockLoopNode->getInductionVar();
   AccessBoundsInfo bounds = analyzeAccessBounds(this, partitionOffset, loopIV);
 
   if (!bounds.valid) {
@@ -529,7 +529,7 @@ bool DbAcquireNode::computePartitionBounds() {
         builder.create<arith::AddIOp>(loc, partitionSize, adjustment);
   }
 
-  computedChunkInfo = std::make_pair(adjustedOffset, adjustedSize);
+  computedBlockInfo = std::make_pair(adjustedOffset, adjustedSize);
   return true;
 }
 
@@ -565,6 +565,14 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
   }
 
   DbAcquireOp acqOp = const_cast<DbAcquireOp &>(dbAcquireOp);
+  if (acqOp.hasMultiplePartitionEntries()) {
+    int64_t minOffset = 0, maxOffset = 0;
+    if (DatablockUtils::hasMultiEntryStencilPattern(acqOp, minOffset,
+                                                    maxOffset)) {
+      accessPattern = AccessPattern::Stencil;
+      return *accessPattern;
+    }
+  }
   if (!acqOp.getPartitionIndices().empty()) {
     accessPattern = AccessPattern::Indexed;
     return *accessPattern;
@@ -575,12 +583,12 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
 }
 
 static AccessBoundsInfo analyzeAccessBounds(DbAcquireNode *node,
-                                            Value chunkOffset, Value loopIV) {
+                                            Value blockOffset, Value loopIV) {
   AccessBoundsInfo bounds;
   bounds.minOffset = std::numeric_limits<int64_t>::max();
   bounds.maxOffset = std::numeric_limits<int64_t>::min();
 
-  if (!node || !chunkOffset || !loopIV)
+  if (!node || !blockOffset || !loopIV)
     return bounds;
 
   DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
@@ -615,7 +623,7 @@ static AccessBoundsInfo analyzeAccessBounds(DbAcquireNode *node,
         continue;
 
       auto constOffset =
-          ValueUtils::extractConstantOffset(firstDynIdx, loopIV, chunkOffset);
+          ValueUtils::extractConstantOffset(firstDynIdx, loopIV, blockOffset);
       if (constOffset) {
         foundAny = true;
         bounds.minOffset = std::min(bounds.minOffset, *constOffset);
@@ -809,7 +817,7 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
         if (ValueUtils::dependsOn(fullChain[i], offsetStripped)) {
           if (firstDynPos >= 0 && i != static_cast<unsigned>(firstDynPos)) {
             ARTS_DEBUG("  partition offset maps to non-leading dim; "
-                       "disabling chunked partitioning");
+                       "disabling blocked partitioning");
             return false;
           }
           offsetSeen = true;
@@ -823,7 +831,7 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
           continue;
 
         if (isIndirectIndex(idx, offsetStripped)) {
-          ARTS_DEBUG("  indirect index detected; disabling chunked "
+          ARTS_DEBUG("  indirect index detected; disabling blocked "
                      "partitioning");
           return false;
         }
@@ -844,14 +852,14 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
   return true;
 }
 
-LogicalResult DbAcquireNode::computeChunkInfo(Value &chunkOffset,
+LogicalResult DbAcquireNode::computeBlockInfo(Value &blockOffset,
                                               Value &blockSize) {
-  ARTS_DEBUG("computeChunkInfo for acquire: " << dbAcquireOp);
+  ARTS_DEBUG("computeBlockInfo for acquire: " << dbAcquireOp);
 
-  if (computedChunkInfo) {
-    chunkOffset = computedChunkInfo->first;
-    blockSize = computedChunkInfo->second;
-    ARTS_DEBUG("  using cached chunk info");
+  if (computedBlockInfo) {
+    blockOffset = computedBlockInfo->first;
+    blockSize = computedBlockInfo->second;
+    ARTS_DEBUG("  using cached block info");
     return success();
   }
 
@@ -871,7 +879,7 @@ LogicalResult DbAcquireNode::computeChunkInfo(Value &chunkOffset,
     Location loc = dbAcquireOp.getLoc();
     builder.setInsertionPoint(dbAcquireOp);
 
-    chunkOffset = builder.create<arith::ConstantIndexOp>(loc, 0);
+    blockOffset = builder.create<arith::ConstantIndexOp>(loc, 0);
     blockSize = allocOp.getElementSizes().front();
     ARTS_DEBUG("  full-range fallback (" << reason << ")");
     return success();
@@ -893,40 +901,117 @@ LogicalResult DbAcquireNode::computeChunkInfo(Value &chunkOffset,
   loopAnalysis.collectLoopsInOperation<scf::ForOp>(edt, forLoopNodes);
   loopAnalysis.collectLoopsInOperation<scf::WhileOp>(edt, whileLoopNodes);
 
-  scf::WhileOp chunkWhile;
+  scf::WhileOp blockWhile;
   if (!whileLoopNodes.empty()) {
-    chunkWhile = cast<scf::WhileOp>(whileLoopNodes[0]->getLoopOp());
+    blockWhile = cast<scf::WhileOp>(whileLoopNodes[0]->getLoopOp());
   }
-  if (chunkWhile)
-    ARTS_DEBUG("  found scf.while at " << chunkWhile.getLoc());
+  if (blockWhile)
+    ARTS_DEBUG("  found scf.while at " << blockWhile.getLoc());
   if (!forLoopNodes.empty())
     ARTS_DEBUG("  found " << forLoopNodes.size() << " scf.for loops in EDT");
 
-  if (partitionOffset && partitionSize)
-    return computeChunkInfoFromHints(chunkOffset, blockSize);
+  if (partitionOffset && partitionSize) {
+    if (succeeded(computeBlockInfoFromHints(blockOffset, blockSize))) {
+      /// Prefer loop-derived size when it depends on the block offset or is
+      /// dynamic, while keeping the hint-derived offset.
+      if (!forLoopNodes.empty()) {
+        Value loopOffset, loopSize;
+        if (succeeded(computeBlockInfoFromForLoop(forLoopNodes, loopOffset,
+                                                  loopSize))) {
+          bool useLoopSize = false;
+          int64_t hintConst = 0;
+          int64_t loopConst = 0;
+          bool hintIsConst = ValueUtils::getConstantIndex(blockSize, hintConst);
+          bool loopIsConst = ValueUtils::getConstantIndex(loopSize, loopConst);
+          bool offsetRelated = false;
+          if (loopOffset && blockOffset) {
+            Value loopOffStripped = ValueUtils::stripNumericCasts(loopOffset);
+            Value blockOffStripped = ValueUtils::stripNumericCasts(blockOffset);
+            if (loopOffStripped == blockOffStripped)
+              offsetRelated = true;
+            if (!offsetRelated &&
+                (ValueUtils::dependsOn(loopOffset, blockOffset) ||
+                 ValueUtils::dependsOn(blockOffset, loopOffset)))
+              offsetRelated = true;
+            if (!offsetRelated) {
+              int64_t loopOffConst = 0;
+              int64_t blockOffConst = 0;
+              if (ValueUtils::getConstantIndex(loopOffStripped, loopOffConst) &&
+                  ValueUtils::getConstantIndex(blockOffStripped,
+                                               blockOffConst) &&
+                  loopOffConst == blockOffConst)
+                offsetRelated = true;
+            }
+          }
 
-  if (chunkWhile) {
+          bool loopSizeDependsOnOffset =
+              blockOffset && ValueUtils::dependsOn(loopSize, blockOffset);
+
+          if (loopSizeDependsOnOffset)
+            useLoopSize = true;
+          if (offsetRelated && !loopIsConst)
+            useLoopSize = true;
+          if (offsetRelated && hintIsConst && loopIsConst &&
+              hintConst != loopConst)
+            useLoopSize = true;
+
+          if (useLoopSize) {
+            blockSize = loopSize;
+            ARTS_DEBUG("  overriding blockSize from loops: " << blockSize);
+          }
+        }
+        /// If loop analysis couldn't connect offsets, still allow a loop upper
+        /// bound that depends on the partition offset (common in chunked loops
+        /// where EDT body only sees local indices).
+        if (partitionOffset &&
+            !ValueUtils::dependsOn(blockSize, partitionOffset)) {
+          func::FuncOp func = dbAcquireOp->getParentOfType<func::FuncOp>();
+          if (func) {
+            OpBuilder builder(dbAcquireOp);
+            Location loc = dbAcquireOp.getLoc();
+            DominanceInfo domInfo(func);
+            for (LoopNode *loopNode : forLoopNodes) {
+              auto loop = cast<scf::ForOp>(loopNode->getLoopOp());
+              Value ubDom = ValueUtils::traceValueToDominating(
+                  loop.getUpperBound(), dbAcquireOp, builder, domInfo, loc);
+              if (!ubDom)
+                continue;
+              if (ValueUtils::dependsOn(ubDom, partitionOffset)) {
+                blockSize = ubDom;
+                ARTS_DEBUG("  overriding blockSize from loop upper bound: "
+                           << blockSize);
+                break;
+              }
+            }
+          }
+        }
+      }
+      return success();
+    }
+  }
+
+  if (blockWhile) {
     Value offsetForCheck;
-    if (succeeded(computeChunkInfoFromWhile(chunkWhile, chunkOffset, blockSize,
+    if (succeeded(computeBlockInfoFromWhile(blockWhile, blockOffset, blockSize,
                                             &offsetForCheck))) {
-      Value checkOffset = offsetForCheck ? offsetForCheck : chunkOffset;
+      Value checkOffset = offsetForCheck ? offsetForCheck : blockOffset;
       if (!canPartitionWithOffset(checkOffset))
         return fullRangeFallback("scf.while offset not derived from access");
       return success();
     }
-    ARTS_DEBUG("  computeChunkInfoFromWhile failed");
-    return fullRangeFallback("scf.while chunk info");
+    ARTS_DEBUG("  computeBlockInfoFromWhile failed");
+    return fullRangeFallback("scf.while block info");
   }
 
   llvm::sort(forLoopNodes, [](LoopNode *a, LoopNode *b) {
     return a->getNestingDepth() < b->getNestingDepth();
   });
 
-  return computeChunkInfoFromForLoop(forLoopNodes, chunkOffset, blockSize);
+  return computeBlockInfoFromForLoop(forLoopNodes, blockOffset, blockSize);
 }
 
-LogicalResult DbAcquireNode::computeChunkInfoFromWhile(scf::WhileOp whileOp,
-                                                       Value &chunkOffset,
+LogicalResult DbAcquireNode::computeBlockInfoFromWhile(scf::WhileOp whileOp,
+                                                       Value &blockOffset,
                                                        Value &blockSize,
                                                        Value *offsetForCheck) {
   if (!whileOp || !dbAcquireOp)
@@ -986,18 +1071,18 @@ LogicalResult DbAcquireNode::computeChunkInfoFromWhile(scf::WhileOp whileOp,
       Value rhs = addOp.getRhs();
       Value lhsStripped = ValueUtils::stripNumericCasts(lhs);
       Value rhsStripped = ValueUtils::stripNumericCasts(rhs);
-      Value chunkCandidate;
+      Value sizeCandidate;
       if (lhsStripped == initStripped)
-        chunkCandidate = rhs;
+        sizeCandidate = rhs;
       else if (rhsStripped == initStripped)
-        chunkCandidate = lhs;
+        sizeCandidate = lhs;
 
-      if (chunkCandidate) {
-        Value chunkDom = ValueUtils::traceValueToDominating(
-            chunkCandidate, dbAcquireOp, builder, domInfo, loc);
-        Value chunkIdx = ValueUtils::ensureIndexType(chunkDom, builder, loc);
-        if (chunkIdx) {
-          blockSizes.push_back(chunkIdx);
+      if (sizeCandidate) {
+        Value sizeDom = ValueUtils::traceValueToDominating(
+            sizeCandidate, dbAcquireOp, builder, domInfo, loc);
+        Value sizeIdx = ValueUtils::ensureIndexType(sizeDom, builder, loc);
+        if (sizeIdx) {
+          blockSizes.push_back(sizeIdx);
           continue;
         }
       }
@@ -1054,17 +1139,17 @@ LogicalResult DbAcquireNode::computeChunkInfoFromWhile(scf::WhileOp whileOp,
     adjustedSize = builder.create<arith::AddIOp>(loc, minSize, adjustment);
   }
 
-  chunkOffset = adjustedOffset;
+  blockOffset = adjustedOffset;
   blockSize = adjustedSize;
   return success();
 }
 
-LogicalResult DbAcquireNode::computeChunkInfoFromHints(Value &chunkOffset,
+LogicalResult DbAcquireNode::computeBlockInfoFromHints(Value &blockOffset,
                                                        Value &blockSize) {
   if (!partitionOffset || !partitionSize)
     return failure();
 
-  ARTS_DEBUG("  computeChunkInfoFromHints: " << partitionOffset << " / "
+  ARTS_DEBUG("  computeBlockInfoFromHints: " << partitionOffset << " / "
                                              << partitionSize);
   if (!originalBounds)
     originalBounds = std::make_pair(partitionOffset, partitionSize);
@@ -1099,7 +1184,7 @@ LogicalResult DbAcquireNode::computeChunkInfoFromHints(Value &chunkOffset,
       ValueUtils::stripNumericCasts(partitionOffset));
   if (!firstDynIdx) {
     if (offsetIsZero) {
-      chunkOffset = partitionOffset;
+      blockOffset = partitionOffset;
       blockSize = partitionSize;
       return success();
     }
@@ -1132,10 +1217,10 @@ LogicalResult DbAcquireNode::computeChunkInfoFromHints(Value &chunkOffset,
       if (bounds.minOffset != 0) {
         Value adjustment =
             builder.create<arith::ConstantIndexOp>(loc, bounds.minOffset);
-        chunkOffset =
+        blockOffset =
             builder.create<arith::AddIOp>(loc, partitionOffset, adjustment);
       } else {
-        chunkOffset = partitionOffset;
+        blockOffset = partitionOffset;
       }
 
       int64_t sizeAdjustment = bounds.maxOffset - bounds.minOffset;
@@ -1152,23 +1237,23 @@ LogicalResult DbAcquireNode::computeChunkInfoFromHints(Value &chunkOffset,
     }
   }
 
-  chunkOffset = partitionOffset;
+  blockOffset = partitionOffset;
   blockSize = partitionSize;
   return success();
 }
 
 LogicalResult
-DbAcquireNode::computeChunkInfoFromForLoop(ArrayRef<LoopNode *> loopNodes,
-                                           Value &chunkOffset, Value &blockSize,
+DbAcquireNode::computeBlockInfoFromForLoop(ArrayRef<LoopNode *> loopNodes,
+                                           Value &blockOffset, Value &blockSize,
                                            Value *offsetForCheck) {
   Value ptrArg = getUseInEdt();
   if (!ptrArg) {
-    ARTS_DEBUG("  computeChunkInfoFromForLoop: no EDT block argument");
+    ARTS_DEBUG("  computeBlockInfoFromForLoop: no EDT block argument");
     return failure();
   }
 
   if (loopNodes.empty()) {
-    ARTS_DEBUG("  computeChunkInfoFromForLoop: no scf.for found");
+    ARTS_DEBUG("  computeBlockInfoFromForLoop: no scf.for found");
     return failure();
   }
 
@@ -1223,6 +1308,16 @@ DbAcquireNode::computeChunkInfoFromForLoop(ArrayRef<LoopNode *> loopNodes,
 
         if (offsetCandidate)
           break;
+      }
+
+      /// If memref indices don't expose the partitioned dimension (common in
+      /// row-partitioned 2D arrays), fall back to DbRef indices.
+      if (!offsetCandidate) {
+        for (Value refIdx : refOp.getIndices()) {
+          offsetCandidate = pickCandidateFromIndex(refIdx);
+          if (offsetCandidate)
+            break;
+        }
       }
       if (offsetCandidate)
         break;
@@ -1285,20 +1380,20 @@ DbAcquireNode::computeChunkInfoFromForLoop(ArrayRef<LoopNode *> loopNodes,
           builder.create<arith::AddIOp>(loc, adjustedSize, adjustment);
     }
 
-    chunkOffset = adjustedOffset;
+    blockOffset = adjustedOffset;
     blockSize = adjustedSize;
     if (offsetForCheck)
       *offsetForCheck = offsetCandidate;
-    ARTS_DEBUG("  selected loop " << loop.getLoc() << " chunkOffset="
-                                  << chunkOffset << " blockSize=" << blockSize);
+    ARTS_DEBUG("  selected loop " << loop.getLoc() << " blockOffset="
+                                  << blockOffset << " blockSize=" << blockSize);
 
-    Value checkOffset = offsetForCheck ? *offsetForCheck : chunkOffset;
+    Value checkOffset = offsetForCheck ? *offsetForCheck : blockOffset;
     if (!canPartitionWithOffset(checkOffset))
       return failure();
     return success();
   }
 
-  ARTS_DEBUG("  no suitable scf.for loop found for chunk info");
+  ARTS_DEBUG("  no suitable scf.for loop found for block info");
   return failure();
 }
 

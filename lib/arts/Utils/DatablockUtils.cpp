@@ -450,3 +450,136 @@ SmallVector<Value> DatablockUtils::collectFullIndexChain(DbRefOp dbRef,
   chain.append(memIndices.begin(), memIndices.end());
   return chain;
 }
+
+///===----------------------------------------------------------------------===///
+/// Multi-Entry Stencil Pattern Detection
+///===----------------------------------------------------------------------===///
+
+std::optional<int64_t> DatablockUtils::getConstantOffsetBetween(Value idx,
+                                                                Value base) {
+  if (!idx || !base)
+    return std::nullopt;
+
+  /// Same value means offset 0
+  if (idx == base)
+    return 0;
+
+  /// Strip numeric casts (index casts, sign/zero extensions, etc.)
+  Value strippedIdx = ValueUtils::stripNumericCasts(idx);
+  Value strippedBase = ValueUtils::stripNumericCasts(base);
+
+  if (strippedIdx == strippedBase)
+    return 0;
+
+  /// Check if idx = base + constant
+  if (auto addOp = strippedIdx.getDefiningOp<arith::AddIOp>()) {
+    int64_t constVal;
+    if (addOp.getLhs() == strippedBase &&
+        ValueUtils::getConstantIndex(addOp.getRhs(), constVal))
+      return constVal;
+    if (addOp.getRhs() == strippedBase &&
+        ValueUtils::getConstantIndex(addOp.getLhs(), constVal))
+      return constVal;
+  }
+
+  /// Check if idx = base - constant
+  if (auto subOp = strippedIdx.getDefiningOp<arith::SubIOp>()) {
+    int64_t constVal;
+    if (subOp.getLhs() == strippedBase &&
+        ValueUtils::getConstantIndex(subOp.getRhs(), constVal))
+      return -constVal;
+  }
+
+  /// Check the reverse: base = idx + constant means idx = base - constant
+  if (auto addOp = strippedBase.getDefiningOp<arith::AddIOp>()) {
+    int64_t constVal;
+    if (addOp.getLhs() == strippedIdx &&
+        ValueUtils::getConstantIndex(addOp.getRhs(), constVal))
+      return -constVal;
+    if (addOp.getRhs() == strippedIdx &&
+        ValueUtils::getConstantIndex(addOp.getLhs(), constVal))
+      return -constVal;
+  }
+
+  if (auto subOp = strippedBase.getDefiningOp<arith::SubIOp>()) {
+    int64_t constVal;
+    if (subOp.getLhs() == strippedIdx &&
+        ValueUtils::getConstantIndex(subOp.getRhs(), constVal))
+      return constVal;
+  }
+
+  return std::nullopt;
+}
+
+bool DatablockUtils::hasMultiEntryStencilPattern(DbAcquireOp acquire,
+                                                 int64_t &minOffset,
+                                                 int64_t &maxOffset) {
+  size_t numEntries = acquire.getNumPartitionEntries();
+  if (numEntries < 2)
+    return false;
+
+  /// Get indices for all entries
+  SmallVector<SmallVector<Value>> allIndices;
+  for (size_t i = 0; i < numEntries; ++i) {
+    allIndices.push_back(acquire.getPartitionIndicesForEntry(i));
+  }
+
+  /// All entries must have the same number of indices (same dimensionality)
+  size_t numDims = allIndices[0].size();
+  if (numDims == 0)
+    return false;
+  for (const auto &indices : allIndices) {
+    if (indices.size() != numDims)
+      return false;
+  }
+
+  /// For each dimension, check if indices form a stencil pattern
+  /// A stencil pattern means all indices are base +/- small constant
+  bool foundStencilDim = false;
+  minOffset = 0;
+  maxOffset = 0;
+
+  for (size_t dim = 0; dim < numDims; ++dim) {
+    /// Try each entry as potential base
+    bool dimIsStencil = false;
+    int64_t dimMin = 0, dimMax = 0;
+
+    for (size_t baseEntry = 0; baseEntry < numEntries && !dimIsStencil;
+         ++baseEntry) {
+      Value base = allIndices[baseEntry][dim];
+      if (!base)
+        continue;
+
+      bool allMatch = true;
+      int64_t localMin = 0, localMax = 0;
+
+      for (size_t i = 0; i < numEntries; ++i) {
+        Value idx = allIndices[i][dim];
+        auto offset = getConstantOffsetBetween(idx, base);
+        if (!offset || std::abs(*offset) > 2) {
+          /// Not a small constant offset - not stencil in this dimension
+          allMatch = false;
+          break;
+        }
+        localMin = std::min(localMin, *offset);
+        localMax = std::max(localMax, *offset);
+      }
+
+      if (allMatch && (localMin != localMax)) {
+        /// Found stencil pattern in this dimension
+        dimIsStencil = true;
+        dimMin = localMin;
+        dimMax = localMax;
+      }
+    }
+
+    if (dimIsStencil) {
+      foundStencilDim = true;
+      /// Accumulate bounds (for multi-dimensional stencils, use the widest)
+      minOffset = std::min(minOffset, dimMin);
+      maxOffset = std::max(maxOffset, dimMax);
+    }
+  }
+
+  return foundStencilDim;
+}

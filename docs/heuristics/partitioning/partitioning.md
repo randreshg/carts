@@ -31,10 +31,10 @@ The `partitioning(...)` clause on `db_acquire` operations specifies access seman
 
 | Mode | `indices[]` | `offsets[]` | `sizes[]` |
 |------|-------------|-------------|-----------|
-| **fine_grained** | element index | 0 | 1 |
-| **block (blocked)** | (empty) | chunk start | chunk count |
+| **fine_grained** | element index (single) or empty (range) | optional range start (element coords) | optional range length (element count) |
+| **block (blocked)** | (empty) | chunk start (block coord) | block size |
 | **coarse** | (empty) | 0 | total size |
-| **stencil** | (empty) | chunk start | chunk + halo |
+| **stencil** | (empty) | chunk start (block coord) | block size + halo |
 
 Example:
 
@@ -42,6 +42,10 @@ Example:
 // Fine-grained: access single element at index %i
 arts.db_acquire[<out>] (%guid, %ptr)
     partitioning(<fine_grained>, indices[%i], offsets[%c0], sizes[%c1])
+
+// Fine-grained range: access a contiguous span starting at %start for %len
+arts.db_acquire[<inout>] (%guid, %ptr)
+    partitioning(<fine_grained>, offsets[%start], sizes[%len])
 
 // Block (blocked): access chunk starting at %workerStart with %blockSize elements
 arts.db_acquire[<inout>] (%guid, %ptr)
@@ -51,6 +55,12 @@ arts.db_acquire[<inout>] (%guid, %ptr)
 All `arts.db_alloc` operations carry an explicit `partition_mode` in brackets
 (e.g., `db_alloc[<inout>, <heap>, <write>, <coarse>]`). This keeps allocation
 layout explicit for copy/sync decisions and diagnostics.
+
+**Note on DB-space vs partition hints:** CreateDbs always emits **coarse
+DB-space** offsets/sizes (`offsets=[0]`, `sizes=[allocSizes]`) regardless of
+fine-grained intent. Fine-grained intent is carried **only** in the
+`partition_*` hint fields (`partition_indices/offsets/sizes`). DbPartitioning
+consumes those hints and rewrites the DB-space fields later.
 
 ## Terminology Mapping
 
@@ -69,6 +79,132 @@ fine-grained has `outerRank>0` (multiple DBs, one per element/row).
 
 **CLI option**: `--partition-fallback=coarse|fine` controls the fallback behavior
 for non-affine (indirect) accesses. See "Non-Affine Fallback" section for details.
+
+## PartitionInfo: The Canonical Terminology Source
+
+All indexers and rewriters use `PartitionInfo` (defined in ArtsDialect.h) as the
+single source of truth for partition semantics. This struct flows through the
+entire partitioning pipeline, ensuring consistent terminology.
+
+### The PartitionInfo Struct
+
+```cpp
+struct PartitionInfo {
+  PartitionMode mode;                    // coarse, fine_grained, block, stencil
+  SmallVector<Value, 4> indices;         // For fine_grained: element COORDINATES
+  SmallVector<Value, 4> offsets;         // For block/stencil and fine-grained range: START
+  SmallVector<Value, 4> sizes;           // For block/stencil and fine-grained range: SIZE
+};
+```
+
+### Inheritance Architecture
+
+```
+DbIndexerBase (holds PartitionInfo)
+    |-- partitionInfo.mode          // Determines which fields to use
+    |-- partitionInfo.indices       // Element coordinates (fine-grained)
+    |-- partitionInfo.offsets       // Range start (block/stencil or fine-grained range)
+    |-- partitionInfo.sizes         // Range size (block/stencil or fine-grained range)
+    |
+    |-- DbElementWiseIndexer (uses partitionInfo.indices)
+    |-- DbBlockIndexer (uses partitionInfo.offsets/sizes)
+    +-- DbStencilIndexer (uses partitionInfo.offsets/sizes + stencilInfo)
+```
+
+### Field Semantics by Mode
+
+| Mode | `indices` | `offsets` | `sizes` | Indexer |
+|------|-----------|-----------|---------|---------|
+| **fine_grained** | Element COORDINATES (single) | Optional range START (element coords) | Optional range SIZE (element count) | DbElementWiseIndexer |
+| **block** | (unused) | Range START | Range SIZE | DbBlockIndexer |
+| **stencil** | (unused) | Range START | Range SIZE + halo | DbStencilIndexer |
+
+### Index Localization Formulas
+
+**Fine-Grained (DbElementWiseIndexer):**
+```
+dbRefIndex  = partitionInfo.indices    // Direct use - these ARE the element coordinates
+memrefIndex = accessIndices[outerRank:]
+```
+
+**Fine-Grained Range (DbElementWiseIndexer):**
+```
+dbRefIndex  = globalOuter - rangeStart   // rangeStart = partitionInfo.offsets[0]
+memrefIndex = globalInner
+```
+Range acquires still use element-wise indexing (no division/modulo). The
+offsets/sizes describe a contiguous span of element coordinates.
+
+**Block (DbBlockIndexer):**
+```
+blockSize   = partitionInfo.sizes[d]
+startBlock  = partitionInfo.offsets[d] / blockSize  // Computed by rewriter
+dbRefIndex  = (accessIndex / blockSize) - startBlock
+memrefIndex = accessIndex % blockSize
+```
+
+**Stencil (DbStencilIndexer):**
+```
+// Same as block, but with 3-buffer selection for halo regions
+blockSize   = partitionInfo.sizes[d]
+localRow    = globalRow - elemOffset
+// Then select: leftHalo, owned, or rightHalo buffer based on localRow
+```
+
+### Data Flow Through Pipeline
+
+```
+DbAcquireOp.getPartitionInfos() --> PartitionInfo
+                                          |
+                          DbPartitioning populates DbRewriteAcquire.partitionInfo
+                                          |
+                          Rewriter checks partitionInfo.mode, passes to Indexer
+                                          |
+                          DbIndexerBase.partitionInfo (inherited by all indexers)
+                                          |
+                          Specialized indexer accesses .indices OR .offsets/.sizes
+```
+
+This unified flow eliminates the previous semantic confusion where `elemOffsets`
+could mean either element coordinates (fine-grained) or range starts (block mode).
+
+## Index Localization by Mode
+
+### Terminology: partition_indices vs partition_offsets
+
+| CreateDbs Source | Semantic Meaning | When Used | Indexer |
+|------------------|------------------|-----------|---------|
+| `partition_indices` | Element COORDINATES `[%i, %j]` | Fine-grained: `depend(inout: A[i][j])` | DbElementWiseIndexer |
+| `partition_offsets` | Range START (element coords) | Fine-grained range: batch deps like `depend(in: A[i : len])` | DbElementWiseIndexer |
+| `partition_offsets` | Block START (block coords) | Block mode: `depend(in: A[off:sz])` | DbBlockIndexer |
+
+Both flow to `DbRewriteAcquire.elemOffsets` but have different semantics!
+
+### DbElementWiseIndexer (Fine-Grained Mode)
+- **elemOffsets**: Element COORDINATES from `partition_indices` (or range start from `partition_offsets`)
+- **globalIndices**: Inner indices from load/store operations
+- **Behavior**: Single-element uses elemOffsets directly; range uses `globalOuter - rangeStart` (no div/mod)
+- **Example**:
+  ```
+  partition_indices = [%i] from depend(inout: A[i])
+  Access: A[%i][%j]
+  elemOffsets = [%i], globalIndices = [%j]
+  Result: db_ref[%i], memref[%j]
+  ```
+
+### DbBlockIndexer (Block Mode)
+- **blockSizes, startBlocks**: Block configuration
+- **Behavior**: Div/mod localization: `dbRefIdx = global / blockSize - startBlock`
+- **Example**:
+  ```
+  partition_offsets = [25], partition_sizes = [25]
+  Access: A[27][10]
+  dbRefIdx = 27 / 25 - 1 = 0
+  memrefIdx = [27 % 25, 10] = [2, 10]
+  ```
+
+### DbStencilIndexer (Stencil Mode)
+- Extends block mode with halo regions for neighbor access
 
 ## Decision Flow (High-Level)
 
@@ -492,8 +628,8 @@ case PartitionMode::block:
     info.partitionSize = acquire.getPartitionSizes().front();
     info.isValid = true;  // Trust the hint
   }
-  // FALLBACK: computeChunkInfo for cases without hints
-  else if (acqNode && succeeded(acqNode->computeChunkInfo(offset, size))) {
+  // FALLBACK: computeBlockInfo for cases without hints
+  else if (acqNode && succeeded(acqNode->computeBlockInfo(offset, size))) {
     info.partitionOffset = offset;
     info.partitionSize = size;
     info.isValid = true;
@@ -1205,7 +1341,56 @@ Decision:
 
 Stencil mode is a specialized form of blocked partitioning designed for stencil
 access patterns where each element accesses its neighbors (e.g., `A[i-1]`, `A[i]`,
-`A[i+1]`).
+`A[i+1]`). This section provides a comprehensive guide including the Jacobi case
+study, partitioning strategy comparisons, and ESD implementation details.
+
+### Motivating Example: The Jacobi Case Study
+
+The Jacobi iterative solver presents a challenging compilation scenario: a single
+array (`u`) is accessed with **two fundamentally different patterns** within the
+same iteration:
+
+```c
+// jacobi-for.c - The problematic code structure
+for (it = 0; it < maxit; it++) {
+    // LOOP 1: Copy operation - UNIFORM access pattern
+    #pragma omp parallel for private(j)
+    for (i = 0; i < nx; i++) {
+        for (j = 0; j < ny; j++) {
+            u[i][j] = unew[i][j];  // Each worker writes ONLY its assigned rows
+        }
+    }
+
+    // LOOP 2: Stencil computation - NEIGHBOR access pattern
+    #pragma omp parallel for private(j)
+    for (i = 0; i < nx; i++) {
+        for (j = 0; j < ny; j++) {
+            if (i == 0 || j == 0 || i == nx-1 || j == ny-1) {
+                unew[i][j] = f[i][j];  // Boundary condition
+            } else {
+                // 5-point stencil: reads u[i-1], u[i], u[i+1]
+                unew[i][j] = 0.25 * (u[i-1][j] + u[i][j+1] +
+                                     u[i][j-1] + u[i+1][j] +
+                                     f[i][j] * dx * dy);
+            }
+        }
+    }
+}
+```
+
+**The Challenge**: How should we partition array `u` when:
+- Loop 1 needs simple block distribution (rows 0-24 to Worker 0, 25-49 to Worker 1, etc.)
+- Loop 2 needs each worker to access its rows PLUS neighboring rows (Worker 1 needs rows 24-50)
+
+### Understanding ESD: Block Partitioning + Halo Exchanges
+
+**Key concept**: ESD (Ephemeral Slice Dependencies) is **block partitioning** with **halo exchanges**.
+
+- **Block partitioning**: ForLowering distributes iterations into blocks (e.g., Worker 0 gets rows 0-15)
+- **Halo exchanges**: For stencil pattern [i-1, i, i+1], send just the boundary elements needed
+
+Without ESD: accessing neighbor block (i-1) requires sending the COMPLETE neighbor block (expensive).
+With ESD: send just the halo elements (e.g., row -1 and row 16 for a block of rows 0-15).
 
 ### When Stencil Mode is Selected
 
@@ -1220,6 +1405,17 @@ Access pattern detected:
 Result: hasStencil = true, haloLeft = 1, haloRight = 1
 ```
 
+#### Multi-Entry Stencil Detection
+
+For OpenMP tasks with multi-entry depend clauses like `depend(in: A[i-1], A[i], A[i+1])`,
+the compiler detects stencil patterns using `DatablockUtils::hasMultiEntryStencilPattern()`:
+
+1. Get partition indices for all entries
+2. All entries must have same dimensionality
+3. For each dimension, check if indices differ by small constant offsets (|offset| <= 2)
+4. A dimension is stencil if indices are `base +/- constant` with different offsets
+5. Return true with halo bounds if any dimension has stencil pattern
+
 ### How Stencil Differs from Standard Blocked
 
 | Aspect | Blocked | Stencil |
@@ -1228,6 +1424,88 @@ Result: hasStencil = true, haloLeft = 1, haloRight = 1
 | Inner size | `blockSize` | `blockSize + haloLeft + haloRight` |
 | Data delivery | Local chunk only | Local chunk + neighbor halos |
 | Runtime support | Standard ARTS | ESD (Ephemeral Slice Dependencies) |
+
+### Four Partitioning Strategies Comparison
+
+#### 1. Element-Wise (Fine-Grained) Partitioning
+
+Each row of the array becomes its own datablock.
+
+```
+Array u[100][50] with 4 workers:
+
+ALLOCATION:
+  arts.db.alloc sizes=[100] element_sizes=[50]
+                      ↑ 100 datablocks, each containing 1 row (50 elements)
+
+Stencil: Worker 1 acquires DB[24], DB[25..49], DB[50]
+Data moved: 2 rows (optimal)
+Overhead: Many DBs, many dependencies
+```
+
+**Advantages**: Precise data acquisition, minimal network transfer
+**Disadvantages**: Many datablocks, higher metadata overhead
+
+#### 2. Chunk-Wise (Coarse-Grained) Partitioning
+
+Multiple rows are grouped into chunks; each chunk is one datablock.
+
+```
+Array u[100][50] with 4 workers, blockSize=25:
+
+ALLOCATION:
+  arts.db.alloc sizes=[4] element_sizes=[25, 50]
+                      ↑ 4 chunks, each containing 25 rows
+
+Stencil: Worker 1 acquires Chunk[0], Chunk[1], Chunk[2]
+Data moved: 50 rows (wasteful!)
+```
+
+**Advantages**: Fewer datablocks, lower metadata overhead
+**Disadvantages**: Wastes network bandwidth for stencil patterns
+
+#### 3. Hybrid: Blocked + Halo Strips
+
+Keep blocked datablocks for ownership, represent stencil boundaries as separate small DBs.
+
+```
+OWNERSHIP DBs (blocked):
+  Chunk[0..3] = 25 rows each
+
+HALO STRIP DBs (small):
+  HaloRight[k] = last row of chunk k
+  HaloLeft[k]  = first row of chunk k
+
+Stencil: Worker 1 reads Chunk[1] + HaloRight[0] + HaloLeft[2]
+Data moved: 2 rows (optimal)
+```
+
+#### 4. ESD (Ephemeral Slice Dependencies) - Recommended
+
+Keep blocked ownership DBs, fetch only needed halo bytes as ephemeral pointer dependencies.
+
+```
+Worker 1, Loop 2:
+  Interior EDT: depends only on Chunk[1]
+  Boundary EDT: depends on Chunk[1] + left halo ptr + right halo ptr
+
+Halo delivery via artsGetFromDbAt():
+  slot1: GetFromDbAt(Chunk[0], row24_offset, row_bytes)
+  slot2: GetFromDbAt(Chunk[2], row50_offset, row_bytes)
+
+Data moved: 2 rows (optimal)
+No extra halo DBs created!
+```
+
+### Trade-off Summary
+
+| Aspect | Element-Wise | Chunk-Wise | Hybrid | ESD |
+|--------|--------------|------------|--------|-----|
+| # of Datablocks | O(Nrows) | O(Nchunks) | O(Nchunks + halos) | O(Nchunks) |
+| Stencil transfer | Optimal | Worst-case | Optimal | Optimal |
+| Deps per worker | High | Low | Medium | Medium |
+| Runtime overhead | High | Low | Medium | Medium |
+| Best when | Small N, irregular | No halo | Regular stencil | Narrow halo + barrier |
 
 ### Stencil Partitioning Example
 
@@ -1244,16 +1522,15 @@ Worker 2: chunk [200, 300)  → acquires [199, 301) = 102 elements
 ### IR Representation
 
 Blocked uses `partition_mode<block>` while stencil uses `partition_mode<stencil>`
-in the IR. The difference
-is tracked internally through `StencilInfo` with halo sizes:
+in the IR. The difference is tracked internally through `StencilInfo` with halo sizes:
 
 ```mlir
 // Blocked (no halo)
 %alloc = arts.db_alloc[<inout>, <heap>, <write>, <block>]
     sizes[%numChunks] elementSizes[%blockSize]
 
-// Stencil (with halo) - same partition mode, different internal metadata
-%alloc = arts.db_alloc[<inout>, <heap>, <write>, <block>]
+// Stencil (with halo)
+%alloc = arts.db_alloc[<inout>, <heap>, <write>, <stencil>]
     sizes[%numChunks] elementSizes[%extendedBlockSize]
 // where extendedBlockSize = blockSize + haloLeft + haloRight
 ```
@@ -1265,6 +1542,39 @@ Stencil mode is triggered when:
 1. `hasStencil` is true (neighbor accesses detected)
 2. Access bounds show non-zero offsets relative to the base index
 3. Pattern is consistent across all acquires
+4. Multi-entry acquires have indices differing by small constants
+
+### ESD Implementation Details
+
+#### Runtime Functions
+
+The ESD implementation adds key runtime functions in ARTS:
+
+1. **`artsRecordDepAt`**: Record dependency at byte offset
+   - Extends `artsRecordDep` to store byte offset and size in the dependency
+   - Enables slice-based signaling
+
+2. **`artsSignalEdtPtrWithGuid`**: Signal EDT with pointer while preserving DB GUID
+   - Signals with `ARTS_PTR` mode but preserves original DB GUID
+   - EDT knows which DB the slice came from
+
+3. **`artsAddDependenceToPersistentEventWithByteOffset`**: Extended event registration
+   - Stores byteOffset and size in artsDependent struct
+
+#### MLIR Lowering Path
+
+1. `DbAcquireOp` carries `halo_left`, `halo_right`, `element_bytes` attributes
+2. `EdtLowering` extracts halo info, computes `byte_offset = halo_left * element_bytes`
+3. `RecordDepOp` created with `byte_offsets` and `byte_sizes`
+4. `ConvertArtsToLLVM` lowers to `artsRecordDepAt(...)` runtime call
+
+#### Signaling Flow
+
+When a persistent event fires:
+1. Check for ESD dependencies (byteOffset != 0 || size != 0)
+2. Compute slicePtr = dbData + byteOffset
+3. Call `artsSignalEdtPtrWithGuid(edt, slot, dbGuid, slicePtr, size)`
+4. EDT receives: `depv[slot].guid` = dbGuid, `depv[slot].ptr` = slicePtr
 
 ### ESD Runtime Behavior
 
@@ -1274,14 +1584,29 @@ When stencil mode is active, the ARTS runtime:
 2. Delivers neighbor data to halo regions before EDT execution
 3. Ensures data consistency across chunk boundaries
 
+### When Halo Exchange Makes Sense
+
+Halo exchange is attractive when:
+- `haloWidth << blockSize` (narrow stencil)
+- Stencil reads are **read-only** (no write-sharing)
+- Network costs dominate
+
+Halo exchange is less attractive when:
+- Halo is wide (comparable to block size)
+- Access patterns are irregular or data-dependent
+- Pack/unpack cost exceeds savings (very small arrays)
+
 ### Verification
 
 ```bash
 # Check if stencil pattern is detected
-carts run jacobi.mlir --concurrency-opt 2>&1 | grep -i stencil
+carts run jacobi.mlir --concurrency-opt --debug-only=db_partitioning 2>&1 | grep -i stencil
 
 # Verify extended block sizes in IR
 carts run jacobi.mlir --concurrency-opt | grep "elementSizes"
+
+# Run benchmark to verify correctness
+carts benchmarks run kastors-jacobi/poisson-task
 ```
 
 ## Summary

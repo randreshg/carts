@@ -374,6 +374,9 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     /// Get all partition entries as unified PartitionInfo structs.
     /// Returns one PartitionInfo per depend entry.
     SmallVector<PartitionInfo> getPartitionInfos();
+
+    /// Clear all partition hints (operands and segment attributes).
+    void clearPartitionHints();
   }];
 }
 

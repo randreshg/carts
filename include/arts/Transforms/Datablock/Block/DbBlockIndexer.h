@@ -35,16 +35,23 @@ namespace arts {
 /// Supports N-dimensional block partitioning where multiple leading dimensions
 /// use div/mod localization.
 ///
+/// Uses partitionInfo.sizes for block sizes. The startBlocks are computed
+/// by the rewriter as: startBlock = partitionInfo.offsets / blockSize.
+///
 /// For each partitioned dimension d:
 ///   dbRefIdx[d]  = (globalIdx[d] / blockSize[d]) - startBlock[d]
 ///   memrefIdx[d] = globalIdx[d] % blockSize[d]
 class DbBlockIndexer : public DbIndexerBase {
-  SmallVector<Value> blockSizes;  /// Block size per partitioned dimension
-  SmallVector<Value> startBlocks; /// Start block per partitioned dimension
+  /// Block size per partitioned dimension
+  SmallVector<Value> blockSizes;
+  /// Start block per partitioned dimension (computed)
+  SmallVector<Value> startBlocks;
 
 public:
-  /// N-D constructor for multi-dimensional block partitioning
-  DbBlockIndexer(ArrayRef<Value> blockSizes, ArrayRef<Value> startBlocks,
+  /// Constructor with PartitionInfo - the canonical way to create indexers.
+  /// Uses partitionInfo.sizes for blockSizes. The startBlocks must be passed
+  /// separately as they require division which needs a builder.
+  DbBlockIndexer(const PartitionInfo &info, ArrayRef<Value> startBlocks,
                  unsigned outerRank, unsigned innerRank);
 
   /// Number of partitioned dimensions

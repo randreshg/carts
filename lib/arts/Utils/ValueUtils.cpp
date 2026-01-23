@@ -519,6 +519,8 @@ static Value getUnderlyingValueImpl(Value v, SmallPtrSet<Value, 16> &visited,
       return getUnderlyingValueImpl(dbGep.getBasePtr(), visited, depth + 1);
     else if (auto dbControl = dyn_cast<DbControlOp>(op))
       return getUnderlyingValueImpl(dbControl.getPtr(), visited, depth + 1);
+    else if (auto dbRef = dyn_cast<DbRefOp>(op))
+      return getUnderlyingValueImpl(dbRef.getSource(), visited, depth + 1);
     else if (auto subview = dyn_cast<memref::SubViewOp>(op))
       return getUnderlyingValueImpl(subview.getSource(), visited, depth + 1);
     else if (auto castOp = dyn_cast<memref::CastOp>(op))
@@ -534,6 +536,8 @@ static Value getUnderlyingValueImpl(Value v, SmallPtrSet<Value, 16> &visited,
       return getUnderlyingValueImpl(m2p.getSource(), visited, depth + 1);
     else if (auto gep = dyn_cast<LLVM::GEPOp>(op))
       return getUnderlyingValueImpl(gep.getBase(), visited, depth + 1);
+    else if (auto subindex = dyn_cast<polygeist::SubIndexOp>(op))
+      return getUnderlyingValueImpl(subindex.getSource(), visited, depth + 1);
     else if (isa<arts::UndefOp>(op))
       return nullptr;
     else

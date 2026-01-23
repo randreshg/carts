@@ -177,6 +177,25 @@ public:
   /// [load/store indices].
   static SmallVector<Value> collectFullIndexChain(DbRefOp dbRef,
                                                   Operation *memOp);
+
+  ///===----------------------------------------------------------------------===///
+  /// Multi-Entry Stencil Pattern Detection
+  ///===----------------------------------------------------------------------===///
+
+  /// Try to extract a constant offset between two index values.
+  /// Returns the offset if idx = base + constant (or base - constant).
+  /// For stencil patterns like [i-1, i, i+1], this finds the offset from base.
+  static std::optional<int64_t> getConstantOffsetBetween(Value idx, Value base);
+
+  /// Check if a multi-entry acquire has a stencil access pattern.
+  /// Stencil patterns have indices that differ by small constant offsets,
+  /// e.g., [i-1, i, i+1] for a 1D stencil or [i-1, i, i+1] x [j] for 2D.
+  ///
+  /// Returns true if partition indices across entries form a stencil pattern.
+  /// Outputs halo bounds in minOffset (negative for left halo) and maxOffset.
+  static bool hasMultiEntryStencilPattern(DbAcquireOp acquire,
+                                          int64_t &minOffset,
+                                          int64_t &maxOffset);
 };
 
 } // namespace arts

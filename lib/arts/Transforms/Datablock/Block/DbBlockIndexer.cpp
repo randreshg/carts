@@ -39,17 +39,18 @@
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "polygeist/Ops.h"
 
 ARTS_DEBUG_SETUP(db_transforms);
 
 using namespace mlir;
 using namespace mlir::arts;
 
-DbBlockIndexer::DbBlockIndexer(ArrayRef<Value> blockSizes,
+DbBlockIndexer::DbBlockIndexer(const PartitionInfo &info,
                                ArrayRef<Value> startBlocks, unsigned outerRank,
                                unsigned innerRank)
-    : DbIndexerBase(outerRank, innerRank),
-      blockSizes(blockSizes.begin(), blockSizes.end()),
+    : DbIndexerBase(info, outerRank, innerRank),
+      blockSizes(info.sizes.begin(), info.sizes.end()),
       startBlocks(startBlocks.begin(), startBlocks.end()) {}
 
 LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
@@ -64,7 +65,14 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
              << " indices, numPartitionedDims=" << nPartDims);
 
   if (globalIndices.empty()) {
-    result.dbRefIndices.push_back(zero());
+    /// For empty indices with multi-dimensional partitioning, we need
+    /// nPartDims zeros for db_ref (to select partition 0,0,...) and
+    /// 1 zero for the memref inner access.
+    for (unsigned i = 0; i < nPartDims; ++i)
+      result.dbRefIndices.push_back(zero());
+    /// Ensure at least 1 index for dbRef
+    if (result.dbRefIndices.empty())
+      result.dbRefIndices.push_back(zero());
     result.memrefIndices.push_back(zero());
     return result;
   }
@@ -92,6 +100,14 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
 
     ARTS_DEBUG("    Dim " << d << ": dbRef=" << relBlock
                           << ", memref=" << localIdx);
+  }
+
+  /// Pad dbRefIndices with zeros if globalIndices has fewer dimensions than
+  /// nPartDims. This happens when accessing a lower-dimensional array with
+  /// multi-dimensional partitioning.
+  for (unsigned d = globalIndices.size(); d < nPartDims; ++d) {
+    result.dbRefIndices.push_back(zero());
+    ARTS_DEBUG("    Dim " << d << ": dbRef=0 (padded)");
   }
 
   /// Pass through remaining non-partitioned dimensions
@@ -170,6 +186,35 @@ void DbBlockIndexer::transformOps(ArrayRef<Operation *> ops, Value dbPtr,
     if (auto dbRef = dyn_cast<DbRefOp>(op)) {
       transformDbRefUsers(dbRef, dbPtr, elementType, AC.getBuilder(),
                           opsToRemove);
+      continue;
+    }
+
+    /// Handle subindex: redirect its source to db_ref result.
+    /// polygeist.subindex takes a memref and returns a subview (e.g., B[0] from
+    /// B[3][8]). We redirect its source to use the db_ref result, so downstream
+    /// load/store operations work correctly with the datablock.
+    if (auto subindex = dyn_cast<polygeist::SubIndexOp>(op)) {
+      auto zero = AC.getBuilder().create<arith::ConstantIndexOp>(loc, 0);
+
+      SmallVector<Value> dbRefIndices;
+      if (outerRank > 0) {
+        /// Use the subindex index as the db_ref outer index. Pad remaining
+        /// outer dimensions with zeros.
+        dbRefIndices.push_back(subindex.getIndex());
+        for (unsigned i = 1; i < outerRank; ++i)
+          dbRefIndices.push_back(zero);
+      } else {
+        /// Fallback to a single zero index if there is no outer dimension.
+        dbRefIndices.push_back(zero);
+      }
+
+      auto dbRef =
+          AC.create<DbRefOp>(loc, elementType, dbPtr, dbRefIndices);
+
+      /// Replace subindex uses with db_ref result and remove the subindex.
+      subindex.replaceAllUsesWith(dbRef.getResult());
+      opsToRemove.insert(subindex.getOperation());
+      ARTS_DEBUG("  Replaced subindex with db_ref (block mode)");
       continue;
     }
 

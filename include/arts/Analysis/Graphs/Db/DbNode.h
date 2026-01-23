@@ -157,13 +157,13 @@ public:
   bool computePartitionBounds();
   bool canPartitionWithOffset(Value offset);
 
-  LogicalResult computeChunkInfo(Value &chunkOffset, Value &blockSize);
-  LogicalResult computeChunkInfoFromWhile(scf::WhileOp whileOp,
-                                          Value &chunkOffset, Value &blockSize,
+  LogicalResult computeBlockInfo(Value &blockOffset, Value &blockSize);
+  LogicalResult computeBlockInfoFromWhile(scf::WhileOp whileOp,
+                                          Value &blockOffset, Value &blockSize,
                                           Value *offsetForCheck = nullptr);
-  LogicalResult computeChunkInfoFromHints(Value &chunkOffset, Value &blockSize);
-  LogicalResult computeChunkInfoFromForLoop(ArrayRef<LoopNode *> loopNodes,
-                                            Value &chunkOffset,
+  LogicalResult computeBlockInfoFromHints(Value &blockOffset, Value &blockSize);
+  LogicalResult computeBlockInfoFromForLoop(ArrayRef<LoopNode *> loopNodes,
+                                            Value &blockOffset,
                                             Value &blockSize,
                                             Value *offsetForCheck = nullptr);
 
@@ -216,8 +216,8 @@ private:
   Value useInEdt = nullptr;
   Value partitionOffset, partitionSize;
 
-  /// Cached adjusted chunk info
-  std::optional<std::pair<Value, Value>> computedChunkInfo;
+  /// Cached adjusted block info
+  std::optional<std::pair<Value, Value>> computedBlockInfo;
   std::optional<std::pair<Value, Value>> originalBounds;
   std::optional<StencilBounds> stencilBounds;
   mutable std::optional<AccessPattern> accessPattern;
