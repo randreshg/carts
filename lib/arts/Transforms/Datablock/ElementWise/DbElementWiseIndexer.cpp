@@ -158,10 +158,16 @@ LocalizedIndices DbElementWiseIndexer::splitIndices(ValueRange globalIndices,
     }
   }
 
-  /// Phase 3: Unmatched global indices go to memref
+  /// Phase 3: Unmatched global indices go to memref, limited by innerRank
   for (unsigned g = 0; g < globalIndices.size(); ++g) {
-    if (!isMatched[g])
-      result.memrefIndices.push_back(globalIndices[g]);
+    if (!isMatched[g]) {
+      if (result.memrefIndices.size() < innerRank) {
+        result.memrefIndices.push_back(globalIndices[g]);
+      } else {
+        ARTS_DEBUG("  Skipping unmatched index " << g << " - innerRank limit ("
+                                                 << innerRank << ") reached");
+      }
+    }
   }
 
   /// Ensure at least one index for dbRef (always needed for db_ref op).

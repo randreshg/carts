@@ -61,8 +61,9 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
 
   unsigned nPartDims = numPartitionedDims();
   ARTS_DEBUG("DbBlockIndexer::localize with "
-             << globalIndices.size()
-             << " indices, numPartitionedDims=" << nPartDims);
+             << globalIndices.size() << " indices, numPartitionedDims="
+             << nPartDims << ", innerRank=" << innerRank
+             << ", outerRank=" << outerRank);
 
   if (globalIndices.empty()) {
     /// For empty indices with multi-dimensional partitioning, we need
@@ -81,6 +82,17 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
   /// For each partitioned dimension d, compute:
   ///   dbRefIdx[d]  = (globalIdx[d] / blockSize[d]) - startBlock[d]
   ///   memrefIdx[d] = globalIdx[d] % blockSize[d]
+  ///
+  /// However, we must respect innerRank (the element type's rank).
+  /// For 2D array with 1D partitioning (e.g., memref<?x?xf64> → memref<?xf64>):
+  ///   - access [i, j] with nPartDims=1, innerRank=1
+  ///   - dbRefIndices = [div(i)]
+  ///   - memrefIndices = [j] (NOT [rem(i), j] which would be 2 indices!)
+  /// Count non-partitioned dimensions that need to go into memrefIndices
+  unsigned nonPartDims = globalIndices.size() > nPartDims
+                             ? globalIndices.size() - nPartDims
+                             : 0;
+
   for (unsigned d = 0; d < nPartDims && d < globalIndices.size(); ++d) {
     Value globalIdx = globalIndices[d];
     Value bs = (d < blockSizes.size() && blockSizes[d]) ? blockSizes[d] : one();
@@ -93,13 +105,19 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
     /// The startBlock = 0 case will naturally simplify to physBlock
     Value physBlock = builder.create<arith::DivUIOp>(loc, globalIdx, bs);
     Value relBlock = builder.create<arith::SubIOp>(loc, physBlock, sb);
-    Value localIdx = builder.create<arith::RemUIOp>(loc, globalIdx, bs);
 
     result.dbRefIndices.push_back(relBlock);
-    result.memrefIndices.push_back(localIdx);
 
-    ARTS_DEBUG("    Dim " << d << ": dbRef=" << relBlock
-                          << ", memref=" << localIdx);
+    /// Only add rem(localIdx) if there's room after reserving for non-partitioned dims
+    if (result.memrefIndices.size() + nonPartDims < innerRank) {
+      Value localIdx = builder.create<arith::RemUIOp>(loc, globalIdx, bs);
+      result.memrefIndices.push_back(localIdx);
+      ARTS_DEBUG("    Dim " << d << ": dbRef=" << relBlock
+                            << ", memref=" << localIdx);
+    } else {
+      ARTS_DEBUG("    Dim " << d << ": dbRef=" << relBlock
+                            << " (skipping rem, innerRank=" << innerRank << ")");
+    }
   }
 
   /// Pad dbRefIndices with zeros if globalIndices has fewer dimensions than
@@ -110,9 +128,12 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
     ARTS_DEBUG("    Dim " << d << ": dbRef=0 (padded)");
   }
 
-  /// Pass through remaining non-partitioned dimensions
-  for (unsigned d = nPartDims; d < globalIndices.size(); ++d) {
+  /// Pass through remaining non-partitioned dimensions, limited by innerRank
+  for (unsigned d = nPartDims;
+       d < globalIndices.size() && result.memrefIndices.size() < innerRank;
+       ++d) {
     result.memrefIndices.push_back(globalIndices[d]);
+    ARTS_DEBUG("    Pass-through dim " << d << ": " << globalIndices[d]);
   }
 
   ARTS_DEBUG("  -> dbRef: " << result.dbRefIndices.size()
@@ -156,18 +177,25 @@ LocalizedIndices DbBlockIndexer::localizeLinearized(Value globalLinearIndex,
   /// Compute local row (modulo block size)
   Value localRow = builder.create<arith::RemUIOp>(loc, globalRow, bsRow);
 
-  /// Compute local col (modulo block size) - THIS IS THE FIX
+  /// Compute local col (modulo block size)
   /// For 2D blocks, the column also needs to be localized within the block
   Value localCol = builder.create<arith::RemUIOp>(loc, globalCol, bsCol);
 
-  /// Re-linearize with LOCAL stride (block size), not global stride
-  /// Block memory is [bsRow x bsCol], so stride is bsCol
-  Value localLinear = builder.create<arith::MulIOp>(loc, localRow, bsCol);
-  localLinear = builder.create<arith::AddIOp>(loc, localLinear, localCol);
-  result.memrefIndices.push_back(localLinear);
-
-  ARTS_DEBUG("  localRow = globalRow % bsRow, localCol = globalCol % bsCol");
-  ARTS_DEBUG("  localLinear = localRow * bsCol + localCol");
+  /// If innerRank >= 2, return separate indices to match element type rank
+  /// Otherwise, re-linearize with LOCAL stride
+  if (innerRank >= 2) {
+    result.memrefIndices.push_back(localRow);
+    result.memrefIndices.push_back(localCol);
+    ARTS_DEBUG("  innerRank=" << innerRank
+                              << ", returning separate [localRow, localCol]");
+  } else {
+    /// Re-linearize with LOCAL stride (block size), not global stride
+    /// Block memory is [bsRow x bsCol], so stride is bsCol
+    Value localLinear = builder.create<arith::MulIOp>(loc, localRow, bsCol);
+    localLinear = builder.create<arith::AddIOp>(loc, localLinear, localCol);
+    result.memrefIndices.push_back(localLinear);
+    ARTS_DEBUG("  innerRank=" << innerRank << ", re-linearized to single index");
+  }
 
   return result;
 }
@@ -196,11 +224,33 @@ void DbBlockIndexer::transformOps(ArrayRef<Operation *> ops, Value dbPtr,
     if (auto subindex = dyn_cast<polygeist::SubIndexOp>(op)) {
       auto zero = AC.getBuilder().create<arith::ConstantIndexOp>(loc, 0);
 
+      ARTS_DEBUG("  Handling subindex: elementType rank="
+                 << (elementType.isa<MemRefType>()
+                         ? elementType.cast<MemRefType>().getRank()
+                         : 0)
+                 << ", subindex result type rank="
+                 << (subindex.getResult().getType().isa<MemRefType>()
+                         ? subindex.getResult()
+                               .getType()
+                               .cast<MemRefType>()
+                               .getRank()
+                         : 0));
+
       SmallVector<Value> dbRefIndices;
       if (outerRank > 0) {
-        /// Use the subindex index as the db_ref outer index. Pad remaining
-        /// outer dimensions with zeros.
-        dbRefIndices.push_back(subindex.getIndex());
+        Value globalIdx = subindex.getIndex();
+
+        // Apply div/mod like load/store (see localize() lines 84-96)
+        Value one = AC.getBuilder().create<arith::ConstantIndexOp>(loc, 1);
+        Value bs = (blockSizes.size() > 0 && blockSizes[0]) ? blockSizes[0] : one;
+        bs = AC.getBuilder().create<arith::MaxUIOp>(loc, bs, one);
+        Value sb = (startBlocks.size() > 0 && startBlocks[0]) ? startBlocks[0] : zero;
+
+        Value physBlock = AC.getBuilder().create<arith::DivUIOp>(loc, globalIdx, bs);
+        Value relBlock = AC.getBuilder().create<arith::SubIOp>(loc, physBlock, sb);
+
+        dbRefIndices.push_back(relBlock);  // Block-relative, not raw!
+
         for (unsigned i = 1; i < outerRank; ++i)
           dbRefIndices.push_back(zero);
       } else {
