@@ -43,16 +43,32 @@ class ArtsCodegen;
 /// Abstract base class for datablock index localizers.
 ///
 /// Each derived class implements mode-specific localization:
-/// - DbChunkedIndexer: div/mod localization for chunked allocation
-/// - DbElementWiseIndexer: subtraction-based offset adjustment
+/// - DbBlockIndexer: div/mod localization for block allocation
+/// - DbElementWiseIndexer: direct element coordinate mapping
 /// - DbStencilIndexer: halo-aware clamping and offset
+///
+/// All indexers hold PartitionInfo as the canonical source of partition data:
+/// - DbElementWiseIndexer uses partitionInfo.indices (element COORDINATES)
+/// - DbBlockIndexer uses partitionInfo.offsets/sizes (range start/size)
+/// - DbStencilIndexer uses partitionInfo.offsets/sizes + halo info
 class DbIndexerBase {
 protected:
+  /// Canonical source of partition semantics. Indexers access the fields
+  /// appropriate for their mode:
+  /// - fine_grained: use partitionInfo.indices directly as db_ref indices
+  /// - block/stencil: use partitionInfo.offsets/sizes for div/mod formulas
+  PartitionInfo partitionInfo;
   unsigned outerRank, innerRank;
 
 public:
-  DbIndexerBase(unsigned outerRank, unsigned innerRank)
-      : outerRank(outerRank), innerRank(innerRank) {}
+  /// Constructor with PartitionInfo - the canonical way to create indexers.
+  DbIndexerBase(const PartitionInfo &info, unsigned outerRank,
+                unsigned innerRank)
+      : partitionInfo(info), outerRank(outerRank), innerRank(innerRank) {}
+
+  /// Accessors for partition info
+  const PartitionInfo &getPartitionInfo() const { return partitionInfo; }
+  PartitionMode getMode() const { return partitionInfo.mode; }
 
   virtual ~DbIndexerBase() = default;
 

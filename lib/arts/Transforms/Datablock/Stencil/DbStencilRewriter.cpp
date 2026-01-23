@@ -30,6 +30,7 @@
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/EdtUtils.h"
+#include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/RemovalUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -45,7 +46,9 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
                                          DbAllocOp newAlloc,
                                          OpBuilder &builder) {
   DbAcquireOp acquire = info.acquire;
-  Value elemOffset = info.getElemOffset();
+  /// Prefer explicit offsets for stencil mode; indices are element coordinates.
+  Value elemOffset = info.getOffsets().empty() ? info.getElemOffset()
+                                               : info.getOffsets().front();
 
   ARTS_DEBUG("DbStencilRewriter::transformAcquire");
 
@@ -56,6 +59,12 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   /// Update source to new allocation
   acquire.getSourceGuidMutable().assign(newAlloc.getGuid());
   acquire.getSourcePtrMutable().assign(newAlloc.getPtr());
+
+  /// Stencil mode uses offsets/sizes only; clear fine-grained indices and
+  /// partition hints from the original acquire.
+  acquire.getIndicesMutable().clear();
+  acquire.clearPartitionHints();
+  setPartitionMode(acquire.getOperation(), PartitionMode::stencil);
 
   /// Update acquire's ptr result type to match new source
   MemRefType newPtrType = newAlloc.getPtr().getType().cast<MemRefType>();
@@ -82,20 +91,8 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   int64_t haloLeftVal = plan.stencilInfo->haloLeft;
   int64_t haloRightVal = plan.stencilInfo->haloRight;
 
-  /// Recover base offset from extended offset.
-  /// Extended offset = max(0, baseOffset - haloLeft)
-  /// So:
-  // baseOffset = elemOffset + haloLeft (unless elemOffset=0 -> first chunk)
-  Value haloLeftConst =
-      builder.create<arith::ConstantIndexOp>(loc, haloLeftVal);
-  Value baseOffset =
-      builder.create<arith::AddIOp>(loc, elemOffset, haloLeftConst);
-
-  /// For first chunk (elemOffset=0), baseOffset should be 0, not haloLeft
-  Value isFirstWorker = builder.create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::eq, elemOffset, zero);
-  baseOffset =
-      builder.create<arith::SelectOp>(loc, isFirstWorker, zero, baseOffset);
+  /// Base-offset semantics: elemOffset is the owned chunk base.
+  Value baseOffset = elemOffset ? elemOffset : zero;
 
   /// Compute chunk index for owned chunk
   Value startBlock =
@@ -252,14 +249,36 @@ void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
       return builder.create<arith::ConstantIndexOp>(userLoc, 0);
     };
 
-    /// STENCIL: div/mod for chunk selection (same as chunked)
+    /// STENCIL: div/mod for chunk selection (owned rows start at 0).
+    /// Prefer row index from load/store when it includes row+col; otherwise
+    /// fall back to db_ref indices (row-partitioned access).
     Value cs = plan.blockSize ? plan.blockSize : zero();
-    if (!loadStoreIndices.empty()) {
-      Value idx0 = loadStoreIndices.front();
-      newOuter.push_back(builder.create<arith::DivUIOp>(userLoc, idx0, cs));
-      newInner.push_back(builder.create<arith::RemUIOp>(userLoc, idx0, cs));
-      for (unsigned i = 1; i < loadStoreIndices.size(); ++i)
-        newInner.push_back(loadStoreIndices[i]);
+    Value rowIdx;
+    bool rowFromLoad = false;
+    if (loadStoreIndices.size() > 1) {
+      rowIdx = loadStoreIndices.front();
+      rowFromLoad = true;
+    } else if (!ref.getIndices().empty()) {
+      rowIdx = ref.getIndices().front();
+    } else if (!loadStoreIndices.empty()) {
+      rowIdx = loadStoreIndices.front();
+      rowFromLoad = true;
+    }
+
+    if (rowIdx) {
+      newOuter.push_back(builder.create<arith::DivUIOp>(userLoc, rowIdx, cs));
+
+      /// Inner index = (rowIdx % blockSize)
+      Value rem = builder.create<arith::RemUIOp>(userLoc, rowIdx, cs);
+      newInner.push_back(rem);
+
+      if (rowFromLoad && loadStoreIndices.size() > 1) {
+        for (unsigned i = 1; i < loadStoreIndices.size(); ++i)
+          newInner.push_back(loadStoreIndices[i]);
+      } else {
+        for (Value idx : loadStoreIndices)
+          newInner.push_back(idx);
+      }
     }
 
     if (newOuter.empty())
@@ -330,8 +349,12 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
           DatablockUtils::getUnderlyingDbAlloc(blockArg)))
     derivedType = dbAlloc.getAllocatedElementType();
 
-  /// Derive element offset for stencil localization (extended base offset).
-  /// startBlock is in chunk space; convert to element space and extend by halo.
+  /// Derive BASE offset for stencil localization.
+  /// FIXED: Pass BASE offset (startBlock * blockSize), NOT extended offset.
+  /// The indexer uses base-offset semantics where:
+  ///   - localRow < 0 -> left halo
+  ///   - 0 <= localRow < blockSize -> owned
+  ///   - localRow >= blockSize -> right halo
   Location loc = acquire.getLoc();
   Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
   Value haloLeft =
@@ -339,22 +362,12 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
   Value haloRight =
       builder.create<arith::ConstantIndexOp>(loc, plan.stencilInfo->haloRight);
 
-  Value elemOffset;
+  /// Compute BASE offset = startBlock * blockSize (NOT extended!)
+  Value baseOffset;
   if (startBlock && plan.blockSize) {
-    Value baseOffset =
-        builder.create<arith::MulIOp>(loc, startBlock, plan.blockSize);
-    if (plan.stencilInfo->haloLeft > 0) {
-      Value isFirst = builder.create<arith::CmpIOp>(
-          loc, arith::CmpIPredicate::eq, startBlock, zero);
-      Value extended = builder.create<arith::SubIOp>(loc, baseOffset, haloLeft);
-      elemOffset =
-          builder.create<arith::SelectOp>(loc, isFirst, zero, extended);
-    } else {
-      elemOffset = baseOffset;
-    }
+    baseOffset = builder.create<arith::MulIOp>(loc, startBlock, plan.blockSize);
   } else {
-    elemOffset =
-        acquire.getOffsets().empty() ? nullptr : acquire.getOffsets().front();
+    baseOffset = zero;
   }
 
   /// For stencil mode, get the 3 block args (owned, left halo, right halo)
@@ -379,10 +392,16 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
              << blockArg << ", left=" << (leftHaloArg ? "valid" : "null")
              << ", right=" << (rightHaloArg ? "valid" : "null"));
 
-  /// Create stencil indexer with 3-buffer mode
+  /// Build PartitionInfo with BASE offset semantics
+  PartitionInfo info;
+  info.mode = PartitionMode::stencil;
+  info.offsets.push_back(baseOffset);
+  info.sizes.push_back(plan.blockSize);
+
+  /// Create stencil indexer with PartitionInfo (base-offset semantics)
   auto indexer = std::make_unique<DbStencilIndexer>(
-      haloLeft, haloRight, plan.blockSize, newOuterSizes.size(),
-      newInnerSizes.size(), elemOffset, blockArg, leftHaloArg, rightHaloArg);
+      info, haloLeft, haloRight, newOuterSizes.size(), newInnerSizes.size(),
+      blockArg, leftHaloArg, rightHaloArg);
 
   SmallVector<Operation *> users(blockArg.getUsers().begin(),
                                  blockArg.getUsers().end());

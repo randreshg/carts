@@ -26,6 +26,7 @@
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/EdtUtils.h"
 #include "arts/Utils/RemovalUtils.h"
+#include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 
@@ -40,7 +41,7 @@ void DbElementWiseRewriter::transformAcquire(const DbRewriteAcquire &info,
   DbAcquireOp acquire = info.acquire;
 
   ARTS_DEBUG("DbElementWiseRewriter::transformAcquire (dims="
-             << info.elemOffsets.size() << ")");
+             << info.partitionInfo.indices.size() << ")");
 
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPoint(acquire);
@@ -68,27 +69,86 @@ void DbElementWiseRewriter::transformAcquire(const DbRewriteAcquire &info,
   Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
   Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
 
-  /// Set indices to element offsets (for multi-dim fine_grained indexing)
-  SmallVector<Value> newIndices(info.elemOffsets.begin(),
-                                info.elemOffsets.end());
-  acquire.getIndicesMutable().assign(newIndices);
+  bool hasRange =
+      !info.partitionInfo.offsets.empty() && !info.partitionInfo.sizes.empty();
 
-  /// Set offsets to 0 and sizes to 1 for each dimension
-  SmallVector<Value> newOffsets, newSizes;
-  for (size_t i = 0; i < info.elemOffsets.size(); ++i) {
-    newOffsets.push_back(zero);
-    newSizes.push_back(one);
+  if (hasRange) {
+    ARTS_DEBUG("  Fine-grained range acquire: offsets="
+               << info.partitionInfo.offsets.size()
+               << ", sizes=" << info.partitionInfo.sizes.size());
+    if (!info.partitionInfo.offsets.empty() &&
+        !info.partitionInfo.sizes.empty())
+      ARTS_DEBUG("    offset0=" << info.partitionInfo.offsets.front()
+                                << ", size0="
+                                << info.partitionInfo.sizes.front());
+    auto refineRangeSizeFromMin = [&](Value offset, Value sizeHint) -> Value {
+      if (!offset || !sizeHint)
+        return Value();
+      int64_t sizeConst = 0;
+      bool sizeIsConst = ValueUtils::getConstantIndex(sizeHint, sizeConst);
+      auto isSameConst = [&](Value v) -> bool {
+        int64_t val = 0;
+        return ValueUtils::getConstantIndex(v, val) && val == sizeConst;
+      };
+      for (Operation &op : *acquire->getBlock()) {
+        Value refined;
+        auto tryRefine = [&](Value lhs, Value rhs, Value result) {
+          bool lhsIsHint =
+              (lhs == sizeHint) || (sizeIsConst && isSameConst(lhs));
+          bool rhsIsHint =
+              (rhs == sizeHint) || (sizeIsConst && isSameConst(rhs));
+          if (lhsIsHint && ValueUtils::dependsOn(rhs, offset))
+            refined = result;
+          else if (rhsIsHint && ValueUtils::dependsOn(lhs, offset))
+            refined = result;
+        };
+
+        if (auto minOp = dyn_cast<arith::MinUIOp>(&op)) {
+          tryRefine(minOp.getLhs(), minOp.getRhs(), minOp.getResult());
+        } else if (auto minOp = dyn_cast<arith::MinSIOp>(&op)) {
+          tryRefine(minOp.getLhs(), minOp.getRhs(), minOp.getResult());
+        }
+
+        if (refined)
+          return refined;
+      }
+      return Value();
+    };
+
+    /// Range acquire: use DB-space offsets/sizes to cover multiple elements.
+    acquire.getIndicesMutable().clear();
+    acquire.getOffsetsMutable().assign(info.partitionInfo.offsets);
+    SmallVector<Value> rangeSizes(info.partitionInfo.sizes.begin(),
+                                  info.partitionInfo.sizes.end());
+    if (info.partitionInfo.offsets.size() == 1 && rangeSizes.size() == 1) {
+      Value offset = info.partitionInfo.offsets.front();
+      Value size = rangeSizes.front();
+      if (Value refined = refineRangeSizeFromMin(offset, size)) {
+        rangeSizes.clear();
+        rangeSizes.push_back(refined);
+        ARTS_DEBUG("  Refined fine-grained range size: " << refined);
+      }
+    }
+    acquire.getSizesMutable().assign(rangeSizes);
+  } else {
+    /// Single element: use element coordinates (fine-grained indices).
+    SmallVector<Value> newIndices(info.partitionInfo.indices.begin(),
+                                  info.partitionInfo.indices.end());
+    acquire.getIndicesMutable().assign(newIndices);
+
+    /// Set offsets to 0 and sizes to 1 for each dimension
+    SmallVector<Value> newOffsets, newSizes;
+    for (size_t i = 0; i < info.partitionInfo.indices.size(); ++i) {
+      newOffsets.push_back(zero);
+      newSizes.push_back(one);
+    }
+    acquire.getOffsetsMutable().assign(newOffsets);
+    acquire.getSizesMutable().assign(newSizes);
   }
-  acquire.getOffsetsMutable().assign(newOffsets);
-  acquire.getSizesMutable().assign(newSizes);
 
   /// Clear partition hints - they've been consumed by partitioning.
   /// The runtime indices now carry the element coordinates.
-  acquire.getPartitionIndicesMutable().clear();
-  acquire.getPartitionOffsetsMutable().clear();
-  acquire.getPartitionSizesMutable().clear();
-  if (acquire.getPartitionMode().has_value())
-    acquire.removePartitionModeAttr();
+  acquire.clearPartitionHints();
 
   /// Store original stride for linearized access (stride = D1 * D2 * ...)
   if (auto staticStride = DatablockUtils::getStaticElementStride(oldAlloc)) {
@@ -223,16 +283,19 @@ bool DbElementWiseRewriter::rebaseEdtUsers(DbAcquireOp acquire,
           DatablockUtils::getUnderlyingDbAlloc(blockArg)))
     derivedType = dbAlloc.getAllocatedElementType();
 
-  /// Get element offsets from indices (for fine_grained mode).
+  /// Build PartitionInfo for fine-grained mode.
   /// The offsets/sizes are now 0/1 after transformAcquire, so we get
   /// the actual element indices from indices (supports multi-dimensional).
   /// For 2D fine-grained (e.g., A[i][j]), indices will be [%i, %j].
-  SmallVector<Value> elemOffsets(acquire.getIndices().begin(),
-                                 acquire.getIndices().end());
+  PartitionInfo info;
+  info.mode = PartitionMode::fine_grained;
+  info.indices.assign(acquire.getIndices().begin(), acquire.getIndices().end());
+  info.offsets.assign(acquire.getOffsets().begin(), acquire.getOffsets().end());
+  info.sizes.assign(acquire.getSizes().begin(), acquire.getSizes().end());
 
-  /// Create element-wise indexer with multi-dimensional offsets
+  /// Create element-wise indexer with PartitionInfo
   auto indexer = std::make_unique<DbElementWiseIndexer>(
-      elemOffsets, newOuterSizes.size(), newInnerSizes.size(),
+      info, newOuterSizes.size(), newInnerSizes.size(),
       oldAlloc.getElementSizes());
 
   SmallVector<Operation *> users(blockArg.getUsers().begin(),

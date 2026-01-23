@@ -171,13 +171,12 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
       bs = one;
     bs = builder.create<arith::MaxUIOp>(loc, bs, one);
 
-    /// Get element offset and size for this dimension
-    Value elemOff = (d < info.elemOffsets.size() && info.elemOffsets[d])
-                        ? info.elemOffsets[d]
-                        : zero;
-    Value elemSz = (d < info.elemSizes.size() && info.elemSizes[d])
-                       ? info.elemSizes[d]
-                       : one;
+    /// Get element offset and size for this dimension from partitionInfo.
+    /// For block mode: offsets are range starts, sizes are range sizes.
+    const auto &offsets = info.partitionInfo.offsets;
+    const auto &sizes = info.partitionInfo.sizes;
+    Value elemOff = (d < offsets.size() && offsets[d]) ? offsets[d] : zero;
+    Value elemSz = (d < sizes.size() && sizes[d]) ? sizes[d] : one;
 
     Value startBlock = builder.create<arith::DivUIOp>(loc, elemOff, bs);
     Value endPos = builder.create<arith::AddIOp>(loc, elemOff, elemSz);
@@ -410,10 +409,16 @@ bool DbBlockRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
     }
   }
 
-  /// Create N-D block indexer
+  /// Build PartitionInfo for block mode
+  PartitionInfo info;
+  info.mode = PartitionMode::block;
+  info.sizes.assign(effectiveBlockSizes.begin(), effectiveBlockSizes.end());
+  /// Note: offsets are stored but startBlocks are passed separately
+  /// because the division (offsets / sizes) requires a builder.
+
+  /// Create N-D block indexer with PartitionInfo
   auto indexer = std::make_unique<DbBlockIndexer>(
-      effectiveBlockSizes, effectiveStartBlocks, newOuterSizes.size(),
-      newInnerSizes.size());
+      info, effectiveStartBlocks, newOuterSizes.size(), newInnerSizes.size());
 
   SmallVector<Operation *> users(blockArg.getUsers().begin(),
                                  blockArg.getUsers().end());

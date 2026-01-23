@@ -560,6 +560,27 @@ SmallVector<PartitionInfo> DbAcquireOp::getPartitionInfos() {
   return result;
 }
 
+void DbAcquireOp::clearPartitionHints() {
+  /// Clear partition operands
+  getPartitionIndicesMutable().clear();
+  getPartitionOffsetsMutable().clear();
+  getPartitionSizesMutable().clear();
+
+  /// Clear partition mode attribute
+  if (getPartitionMode().has_value())
+    removePartitionModeAttr();
+
+  /// Clear segment attributes
+  if (getPartitionIndicesSegments())
+    removePartitionIndicesSegmentsAttr();
+  if (getPartitionOffsetsSegments())
+    removePartitionOffsetsSegmentsAttr();
+  if (getPartitionSizesSegments())
+    removePartitionSizesSegmentsAttr();
+  if (getPartitionEntryModes())
+    removePartitionEntryModesAttr();
+}
+
 /// Helper to add DbAcquireOp operands and attributes to OperationState
 static void addDbAcquireOperandsAndAttrs(
     OpBuilder &builder, OperationState &state, ArtsMode mode, Value sourceGuid,

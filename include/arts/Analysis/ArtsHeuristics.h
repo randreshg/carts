@@ -156,26 +156,42 @@ struct PartitioningDecision {
   static PartitioningDecision elementWise(const PartitioningContext &ctx,
                                           unsigned outerRank,
                                           llvm::StringRef reason) {
-    unsigned inner =
-        ctx.memrefRank > outerRank ? ctx.memrefRank - outerRank : 0;
+    unsigned inner = ctx.memrefRank > outerRank ? ctx.memrefRank - outerRank : 0;
     return {PartitionMode::fine_grained, outerRank, inner, reason.str()};
   }
 
-  /// Factory for block partitioning (contiguous blocks along leading dim).
+  /// Factory for block partitioning (contiguous blocks along leading dims).
+  /// N-D support: uses maxPinnedDimCount from context if > 0, else defaults
+  /// to 1.
   static PartitioningDecision block(const PartitioningContext &ctx,
                                     llvm::StringRef reason) {
-    return {PartitionMode::block, 1, ctx.memrefRank, reason.str()};
+    unsigned outerRank =
+        ctx.maxPinnedDimCount() > 0 ? ctx.maxPinnedDimCount() : 1;
+    unsigned inner = ctx.memrefRank > outerRank ? ctx.memrefRank - outerRank : 0;
+    return {PartitionMode::block, outerRank, inner, reason.str()};
+  }
+
+  /// Factory for block partitioning with explicit N-D support.
+  static PartitioningDecision blockND(const PartitioningContext &ctx,
+                                      unsigned outerRank,
+                                      llvm::StringRef reason) {
+    unsigned inner = ctx.memrefRank > outerRank ? ctx.memrefRank - outerRank : 0;
+    return {PartitionMode::block, outerRank, inner, reason.str()};
   }
 
   /// Factory for stencil mode (block + ESD for halo handling).
+  /// N-D support: uses maxPinnedDimCount from context if > 0, else defaults
+  /// to 1.
   static PartitioningDecision stencil(const PartitioningContext &ctx,
                                       llvm::StringRef reason) {
-    unsigned inner = ctx.memrefRank > 0 ? ctx.memrefRank - 1 : 0;
-    return {PartitionMode::stencil, 1, inner, reason.str()};
+    unsigned outerRank =
+        ctx.maxPinnedDimCount() > 0 ? ctx.maxPinnedDimCount() : 1;
+    unsigned inner = ctx.memrefRank > outerRank ? ctx.memrefRank - outerRank : 0;
+    return {PartitionMode::stencil, outerRank, inner, reason.str()};
   }
 
   bool isCoarse() const { return outerRank == 0; }
-  bool isFineGrained() const { return outerRank > 0; }
+  bool isFineGrained() const { return mode == PartitionMode::fine_grained; }
   bool isBlock() const {
     return mode == PartitionMode::block || mode == PartitionMode::stencil;
   }

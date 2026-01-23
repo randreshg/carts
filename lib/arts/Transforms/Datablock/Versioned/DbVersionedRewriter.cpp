@@ -46,11 +46,12 @@ static bool rebaseAcquireToElementWiseCopy(DbAcquireOp acquire,
       innerRank = inner.getRank();
   }
 
-  SmallVector<Value> elemOffsets;
+  /// Build PartitionInfo from elemOffset
+  PartitionInfo info;
+  info.mode = PartitionMode::fine_grained;
   if (elemOffset)
-    elemOffsets.push_back(elemOffset);
-  DbElementWiseIndexer indexer(elemOffsets, outerRank, innerRank,
-                               oldElementSizes);
+    info.indices.push_back(elemOffset);
+  DbElementWiseIndexer indexer(info, outerRank, innerRank, oldElementSizes);
 
   SmallVector<Operation *> users(blockArg.getUsers().begin(),
                                  blockArg.getUsers().end());

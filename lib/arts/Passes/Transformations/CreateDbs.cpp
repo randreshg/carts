@@ -442,6 +442,7 @@ void CreateDbsPass::collectMemrefs() {
       }
     });
   });
+  ARTS_DEBUG("collectMemrefs: Total " << memrefInfo.size() << " unique memrefs");
 }
 
 ///===----------------------------------------------------------------------===///
@@ -673,9 +674,13 @@ void CreateDbsPass::createDbAllocOps() {
     } else {
       /// Use element-wise indexer with outerRank=0
       Value elemOffset = AC->createIndexConstant(0, loc);
-      SmallVector<Value> elemOffsets = {elemOffset};
 
-      DbElementWiseIndexer indexer(elemOffsets, 0, rank, {});
+      /// Build PartitionInfo from elemOffset
+      PartitionInfo partInfo;
+      partInfo.mode = PartitionMode::fine_grained;
+      partInfo.indices.push_back(elemOffset);
+
+      DbElementWiseIndexer indexer(partInfo, 0, rank, {});
 
       /// Step 1: Rewrite parent region uses (skips EDTs by design)
       indexer.transformUsesInParentRegion(alloc, dbAllocOp, *AC, opsToRemove);
@@ -841,7 +846,11 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
     if (!underlyingOp)
       if (auto load = externalDep.getDefiningOp<memref::LoadOp>())
         underlyingOp = ValueUtils::getUnderlyingOperation(load.getMemref());
-    assert(underlyingOp && "Underlying operation not found");
+    if (!underlyingOp) {
+      ARTS_DEBUG("Skipping external dep with no underlying allocation: "
+                 << externalDep);
+      continue;
+    }
 
     /// Get the memref info for the underlying operation
     MemrefInfo &info = memrefInfo[underlyingOp];
@@ -872,8 +881,8 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
     ///   1. Wrapping allocations in datablocks
     ///   2. Annotating with partition hints for later optimization
     ///
-    /// DB-space is always: offsets=[0], sizes=[allocSizes]
-    /// Partition hints vary based on access pattern from depend clauses
+    /// DB-space is always coarse: offsets=[0], sizes=[allocSizes]
+    /// Partition hints vary based on access pattern from depend clauses.
 
     ARTS_DEBUG(" - Creating unified coarse-grained acquire");
 
@@ -1093,13 +1102,25 @@ void CreateDbsPass::rewriteUsesInParentEdt(MemrefInfo &memrefInfo) {
 
   /// Collect users in the parent edt
   SmallVector<Operation *, 8> users;
+  unsigned totalUses = 0;
+  unsigned skippedUses = 0;
   for (auto &use : memrefInfo.alloc->getUses()) {
+    totalUses++;
     Operation *user = use.getOwner();
-    if (user->getParentOfType<EdtOp>() == memrefInfo.parentEdt)
+    EdtOp userParentEdt = user->getParentOfType<EdtOp>();
+    if (userParentEdt == memrefInfo.parentEdt) {
       users.push_back(user);
+      ARTS_DEBUG("   Collected user: " << user->getName() << " at "
+                                       << user->getLoc());
+    } else {
+      skippedUses++;
+      ARTS_DEBUG("   Skipped user (different EDT): " << user->getName());
+    }
   }
 
-  ARTS_DEBUG(" - Rewriting " << users.size() << " operations in parent EDT");
+  ARTS_DEBUG(" - Alloc has " << totalUses << " total uses, collected "
+                             << users.size() << " in parent EDT, skipped "
+                             << skippedUses);
 
   /// Coarse-grained: db_ref[0] + load/store[indices]
   /// Fine-grained: db_ref[indices] + load/store[0]
@@ -1107,11 +1128,23 @@ void CreateDbsPass::rewriteUsesInParentEdt(MemrefInfo &memrefInfo) {
       memrefInfo.usedFineGrained ? dbAlloc.getSizes().size() : 0;
   unsigned innerRank = elementMemRefType.cast<MemRefType>().getRank();
   Value elemOffset = AC->createIndexConstant(0, dbAlloc.getLoc());
-  SmallVector<Value> elemOffsets = {elemOffset};
-  DbElementWiseIndexer indexer(elemOffsets, outerRank, innerRank, {});
-  for (Operation *user : users)
+
+  /// Build PartitionInfo from elemOffset
+  PartitionInfo info;
+  info.mode = PartitionMode::fine_grained;
+  info.indices.push_back(elemOffset);
+  DbElementWiseIndexer indexer(info, outerRank, innerRank, {});
+  for (Operation *user : users) {
+    size_t sizeBefore = opsToRemove.size();
     indexer.transformAccess(user, dbAlloc.getPtr(), elementMemRefType, *AC,
                             opsToRemove);
+    if (opsToRemove.size() > sizeBefore) {
+      ARTS_DEBUG("   Transformed: " << user->getName() << " -> added to remove");
+    } else {
+      ARTS_DEBUG("   NOT transformed: " << user->getName() << " at "
+                                        << user->getLoc());
+    }
+  }
 }
 
 /// Rewrite uses of a coarse-grained allocation in the parent region.
@@ -1139,9 +1172,13 @@ void CreateDbsPass::rewriteUsesEverywhereCoarse(Operation *alloc,
 
   /// Coarse-grained: outerCount=0, all indices go to inner load/store
   Value elemOffset = AC->createIndexConstant(0, dbAlloc.getLoc());
-  SmallVector<Value> elemOffsets = {elemOffset};
+
+  /// Build PartitionInfo from elemOffset
+  PartitionInfo info;
+  info.mode = PartitionMode::fine_grained;
+  info.indices.push_back(elemOffset);
   DbElementWiseIndexer indexer(
-      elemOffsets, 0, elementMemRefType.cast<MemRefType>().getRank(), {});
+      info, 0, elementMemRefType.cast<MemRefType>().getRank(), {});
   for (Operation *user : users)
     indexer.transformAccess(user, dbAlloc.getPtr(), elementMemRefType, *AC,
                             opsToRemove);
@@ -1224,10 +1261,12 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
         if (auto acquireOp = dyn_cast<DbAcquireOp>(dbOp))
           chunkOuterRank = acquireOp.getSizes().size();
 
-      SmallVector<Value> blockSizes = {plan.blockSize};
+      /// Build PartitionInfo from blockSize
+      PartitionInfo blockInfo;
+      blockInfo.mode = PartitionMode::block;
+      blockInfo.sizes.push_back(plan.blockSize);
       SmallVector<Value> startBlocks = {startBlock};
-      DbBlockIndexer indexer(blockSizes, startBlocks, chunkOuterRank,
-                             innerRank);
+      DbBlockIndexer indexer(blockInfo, startBlocks, chunkOuterRank, innerRank);
       llvm::SetVector<Operation *> localOpsToRemove;
       indexer.transformOps({op}, dbAcquireArg, elementMemRefType, *AC,
                            localOpsToRemove);
@@ -1238,8 +1277,12 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
 
     /// ElementWise mode
     Value elemOffset = AC->createIndexConstant(0, op->getLoc());
-    SmallVector<Value> elemOffsets = {elemOffset};
-    DbElementWiseIndexer indexer(elemOffsets, plan.outerRank, innerRank, {});
+
+    /// Build PartitionInfo from elemOffset
+    PartitionInfo ewInfo;
+    ewInfo.mode = PartitionMode::fine_grained;
+    ewInfo.indices.push_back(elemOffset);
+    DbElementWiseIndexer indexer(ewInfo, plan.outerRank, innerRank, {});
 
     if (auto load = dyn_cast<memref::LoadOp>(op)) {
       auto localized = indexer.localizeForFineGrained(
