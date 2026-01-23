@@ -151,6 +151,391 @@ localRow    = globalRow - elemOffset
 // Then select: leftHalo, owned, or rightHalo buffer based on localRow
 ```
 
+---
+
+## Visual Guide to Index Localization
+
+This section provides visual ASCII diagrams showing how each partitioning type transforms memory layout and indices. Use this as a quick reference before diving into the detailed formulas above.
+
+### 1. Memory Layout Fundamentals (Common to All)
+
+```
+C Declaration: double A[4][8]  (4 rows, 8 columns)
+
+Logical View (2D):
+┌───┬───┬───┬───┬───┬───┬───┬───┐
+│0,0│0,1│0,2│0,3│0,4│0,5│0,6│0,7│  Row 0    addr 0-7
+├───┼───┼───┼───┼───┼───┼───┼───┤
+│1,0│1,1│1,2│1,3│1,4│1,5│1,6│1,7│  Row 1    addr 8-15
+├───┼───┼───┼───┼───┼───┼───┼───┤
+│2,0│2,1│2,2│2,3│2,4│2,5│2,6│2,7│  Row 2    addr 16-23
+├───┼───┼───┼───┼───┼───┼───┼───┤
+│3,0│3,1│3,2│3,3│3,4│3,5│3,6│3,7│  Row 3    addr 24-31
+└───┴───┴───┴───┴───┴───┴───┴───┘
+
+Linearized vs Multi-index access:
+  A[2][5]      → row=2, col=5              (2 indices)
+  A[2*8 + 5]   → linear_idx=21             (1 index)
+```
+
+### 2. Element-Wise (Fine-Grained) Partitioning
+
+#### 2.1 What It Does
+
+Creates one datablock per element (or per row for 2D arrays).
+
+```
+Original: memref<4x8xf64>  (4 rows, 8 columns)
+
+BEFORE:                          AFTER (element-wise on dim 0):
+┌─────────────────────────┐      ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐
+│ [0,0]..[0,7]            │      │ Row 0   │ │ Row 1   │ │ Row 2   │ │ Row 3   │
+│ [1,0]..[1,7]            │  →   │ 8 elems │ │ 8 elems │ │ 8 elems │ │ 8 elems │
+│ [2,0]..[2,7]            │      └─────────┘ └─────────┘ └─────────┘ └─────────┘
+│ [3,0]..[3,7]            │       db_ref[0]   db_ref[1]   db_ref[2]   db_ref[3]
+└─────────────────────────┘
+
+Allocation: sizes=[4], elementSizes=[8]
+            (4 datablocks, each holding 8 elements)
+```
+
+#### 2.2 Index Transformation Formula
+
+```
+Access A[row][col]:
+  db_ref_idx  = row          (direct - row IS the db index)
+  memref_idx  = [col]        (remaining indices passed through)
+```
+
+#### 2.3 Example: Jacobi Copy Loop
+
+```c
+// Source code
+for (i = 0; i < 4; i++) {
+    for (j = 0; j < 8; j++) {
+        u[i][j] = unew[i][j];
+    }
+}
+```
+
+```
+Access u[2][5]:
+  Step 1: db_ref_idx = 2     → select db_ref[2]
+  Step 2: memref_idx = [5]   → load from memref[5]
+
+Result:  db_ref[2] → memref.load[5]
+
+Visual:
+  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐
+  │ Row 0   │ │ Row 1   │ │ Row 2 ← │ │ Row 3   │
+  └─────────┘ └─────────┘ └────┬────┘ └─────────┘
+                               │
+                          memref[5] = element at col 5
+```
+
+### 3. Block Partitioning
+
+#### 3.1 What It Does
+
+Groups multiple rows/elements into blocks. Each block is one datablock.
+
+```
+Original: memref<4x8xf64>  (4 rows)
+Block partitioning on dim 0, blockSize=2
+
+BEFORE:                          AFTER:
+┌─────────────────────────┐      ┌─────────────────┐  ┌─────────────────┐
+│ [0,0]..[0,7]            │      │  Block 0        │  │  Block 1        │
+│ [1,0]..[1,7]            │  →   │  rows 0-1       │  │  rows 2-3       │
+│ [2,0]..[2,7]            │      │  16 elements    │  │  16 elements    │
+│ [3,0]..[3,7]            │      └─────────────────┘  └─────────────────┘
+└─────────────────────────┘           db_ref[0]            db_ref[1]
+
+Allocation: sizes=[2], elementSizes=[2, 8]
+            (2 datablocks, each holding 2 rows × 8 cols)
+```
+
+#### 3.2 Index Transformation Formula
+
+```
+Access A[row][col] with blockSize=B:
+  db_ref_idx  = row / B              (which block)
+  memref_idx  = [row % B, col]       (position within block)
+```
+
+#### 3.3 Example: Standard 2D Access
+
+```c
+// Access A[2][5] with blockSize=2
+```
+
+```
+Step 1: Compute block index
+  db_ref_idx = 2 / 2 = 1        → block 1
+
+Step 2: Compute local indices
+  local_row = 2 % 2 = 0         → row 0 within block
+  local_col = 5                 → col 5 (unchanged)
+  memref_idx = [0, 5]
+
+Result: db_ref[1] → memref.load[0, 5]
+
+Visual:
+  ┌─────────────────┐  ┌─────────────────┐
+  │  Block 0        │  │  Block 1    ←   │
+  │  row 0: [0..7]  │  │  row 0: [0..7]──┼─→ memref[0,5]
+  │  row 1: [0..7]  │  │  row 1: [0..7]  │    (local row 0, col 5)
+  └─────────────────┘  └─────────────────┘
+       db_ref[0]            db_ref[1]
+```
+
+#### 3.4 Linearized Access in Block Mode
+
+**What is linearized access?**
+
+C code can access 2D arrays with a single computed index:
+
+```c
+Real_t (*A)[8];         // 2D array, 8 columns
+A[elem / 8][elem % 8];  // mathematically equals A[elem] (linearized)
+```
+
+The compiler may optimize this to `memref.load %A[%elem]` (1 index instead of 2).
+
+**The Problem:**
+
+```
+Array type: memref<?x8xf64>  (2D, stride=8)
+Access:     load[21]          (1 index)
+
+After block partitioning:
+  Element type: memref<?x8xf64>  (still 2D!)
+
+But we only have 1 index (21) and need 2 indices for 2D element!
+```
+
+**The Solution: De-linearize first**
+
+```
+Input: linear_idx=21, stride=8, blockSize=2
+
+Step 1: DE-LINEARIZE
+  ┌─────────────────────────────┐
+  │ globalRow = 21 / 8 = 2      │
+  │ globalCol = 21 % 8 = 5      │
+  │                             │
+  │ Linear 21 → row 2, col 5    │
+  └─────────────────────────────┘
+
+Step 2: BLOCK INDEX
+  ┌─────────────────────────────┐
+  │ db_ref_idx = 2 / 2 = 1      │
+  │ (row 2 is in block 1)       │
+  └─────────────────────────────┘
+
+Step 3: LOCAL INDICES
+  ┌─────────────────────────────┐
+  │ local_row = 2 % 2 = 0       │
+  │ local_col = 5               │
+  │ memref_idx = [0, 5]         │
+  └─────────────────────────────┘
+
+Result: db_ref[1] → memref.load[0, 5]
+```
+
+**Visual Flow:**
+
+```
+  load[21]  ──de-linearize──▶  (row=2, col=5)
+                                    │
+                              ┌─────▼─────┐
+                              │ row / bs  │ = db_ref[1]
+                              │ row % bs  │ = local_row 0
+                              │ col       │ = local_col 5
+                              └───────────┘
+                                    │
+                              memref.load[0, 5]
+```
+
+### 4. Stencil Partitioning
+
+#### 4.1 What It Does
+
+Block partitioning + halo regions for neighbor access patterns.
+
+```
+5-point stencil: A[i-1], A[i], A[i+1]
+
+Standard block:       Stencil block (with halo):
+┌───────────────┐     ┌─┬─────────────┬─┐
+│ owned rows    │  →  │H│ owned rows  │H│
+│ [0..bs-1]     │     │a│ [0..bs-1]   │a│
+└───────────────┘     │l│             │l│
+                      │o│             │o│
+                      └─┴─────────────┴─┘
+                       ↑               ↑
+                    left halo      right halo
+```
+
+#### 4.2 Index Transformation Formula
+
+```
+Access A[i] with halo:
+  db_ref_idx  = (i - halo_left) / blockSize
+  memref_idx  = (i - halo_left) % blockSize + halo_offset
+```
+
+#### 4.3 Example: Jacobi Stencil
+
+```c
+// 5-point stencil access
+unew[i][j] = 0.25 * (u[i-1][j] + u[i][j+1] +
+                     u[i][j-1] + u[i+1][j] + f[i][j]);
+```
+
+```
+Worker 1 owns rows 2-3 (blockSize=2)
+Stencil needs: u[i-1], u[i], u[i+1]
+
+Block with halo:
+  ┌─────────────────────────────┐
+  │ halo_left:  row 1 (copy)    │  ← neighbor data
+  │ owned:      rows 2-3        │  ← worker's data
+  │ halo_right: row 4 (copy)    │  ← neighbor data
+  └─────────────────────────────┘
+
+Access u[2-1][j] = u[1][j]:
+  → Found in halo_left region
+```
+
+### 5. Comparison Summary
+
+```
+| Type         | DBs Created | Index Transform | Best For         |
+|--------------|-------------|-----------------|------------------|
+| Element-wise | O(N)        | direct          | precise deps     |
+| Block        | O(N/bs)     | div/mod         | locality         |
+| Stencil      | O(N/bs)     | div/mod + halo  | neighbor access  |
+
+Example: 4-row array, blockSize=2
+
+Element-wise: 4 DBs     Block: 2 DBs        Stencil: 2 DBs + halos
+┌──┐┌──┐┌──┐┌──┐        ┌────┐┌────┐        ┌─┬────┬─┐┌─┬────┬─┐
+│r0││r1││r2││r3│        │r0-1││r2-3│        │H│r0-1│H││H│r2-3│H│
+└──┘└──┘└──┘└──┘        └────┘└────┘        └─┴────┴─┘└─┴────┴─┘
+```
+
+---
+
+### Linearized Access in Block Mode
+
+When C code uses linearized indexing to access multi-dimensional arrays, the compiler
+detects this pattern and handles it specially in `DbBlockIndexer`.
+
+**What is linearized access?**
+
+C arrays can be accessed either with multi-dimensional indices or with a single
+linearized index:
+
+```c
+// Multi-dimensional access (2 indices)
+double A[N][8];
+value = A[row][col];  // MLIR: memref.load A[%row, %col]
+
+// Linearized access (1 index)
+double *A_linear = (double*)A;
+value = A_linear[row * 8 + col];  // MLIR: memref.load A[%linear_idx]
+```
+
+**Detection in DbBlockIndexer:**
+
+Linearized access is detected when:
+1. The load/store has **1 index** (`indices.size() == 1`)
+2. The element type has **rank >= 2** (e.g., `memref<?x8xf64>`)
+3. There's a **static stride > 1** (e.g., stride=8 for the inner dimension)
+
+```cpp
+// From DbBlockIndexer::transformDbRefUsers (lines 335-350)
+bool isLinearized = false;
+if (elementIndices.size() == 1) {
+  if (auto memrefType = newElementType.dyn_cast<MemRefType>()) {
+    if (memrefType.getRank() >= 2) {
+      if (auto staticStride = DatablockUtils::getStaticStride(memrefType)) {
+        if (*staticStride > 1) {
+          isLinearized = true;
+          stride = staticStride;
+        }
+      }
+    }
+  }
+}
+```
+
+**Localization Formula (localizeLinearized):**
+
+```
+Input:  globalLinearIndex (single index), stride (from element type)
+
+Step 1: De-linearize global index
+  globalRow = globalLinearIndex / stride
+  globalCol = globalLinearIndex % stride
+
+Step 2: Compute block index (same as regular block mode)
+  physBlock = globalRow / blockSize
+  dbRefIdx  = physBlock - startBlock
+
+Step 3: Compute local indices within block
+  localRow = globalRow % blockSize
+  localCol = globalCol % colBlockSize  // colBlockSize defaults to stride if not specified
+
+Step 4: Output depends on innerRank
+  if innerRank >= 2:
+    memrefIndices = [localRow, localCol]    // Separate indices for 2D element type
+  else:
+    localLinear = localRow * colBlockSize + localCol
+    memrefIndices = [localLinear]           // Re-linearized for 1D element type
+```
+
+**Why innerRank matters:**
+
+The element type after partitioning determines how many indices the load/store needs:
+
+| Element Type | innerRank | memrefIndices Format |
+|--------------|-----------|---------------------|
+| `memref<?xf64>` | 1 | `[localLinear]` (re-linearized) |
+| `memref<?x?xf64>` | 2 | `[localRow, localCol]` (separate) |
+| `memref<?x?x?xf64>` | 3 | `[localRow, localCol, ...]` (separate) |
+
+**Example: LULESH 2D Array Access**
+
+```c
+// Source: lulesh.c line 957
+Real_t (*fx_elem)[8] = AllocReal2D(numElem, 8);
+fx_tmp += fx_elem[elem / 8][elem % 8];
+```
+
+This gets compiled to a linearized single-index access. With block partitioning:
+
+```
+Original: memref<?x8xf64> partitioned on dim 0
+Element type: memref<?x8xf64> (innerRank=2)
+
+Access: load[linear_idx] where linear_idx = (elem/8)*8 + (elem%8) = elem
+
+De-linearize:
+  globalRow = elem / 8
+  globalCol = elem % 8
+
+Block localization (blockSize=B):
+  dbRefIdx = (elem / 8) / B - startBlock
+  localRow = (elem / 8) % B
+  localCol = elem % 8
+
+Output (innerRank=2):
+  db_ref[dbRefIdx]
+  memref.load[localRow, localCol]  // 2 indices for rank-2 element type
+```
+
 ### Data Flow Through Pipeline
 
 ```
