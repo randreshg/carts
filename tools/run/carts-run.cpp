@@ -260,7 +260,7 @@ void setupCanonicalizeMemrefs(PassManager &pm) {
   pm.addPass(createInlinerPass());
   pm.addPass(arts::createArtsInlinerPass());
   // pm.addPass(createMem2Reg());
-  // pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
   // pm.addPass(createCSEPass());
 
   pm.addPass(arts::createCanonicalizeMemrefsPass());

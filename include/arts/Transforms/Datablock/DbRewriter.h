@@ -53,23 +53,36 @@ struct StencilInfo {
   bool hasHalo() const { return haloLeft > 0 || haloRight > 0; }
 };
 
-/// Per-acquire rewrite input (element-space offsets/sizes).
-/// Supports multi-dimensional fine-grained partitioning (e.g., A[i][j]).
+/// Per-acquire rewrite input preserving partition semantics.
+/// Supports multi-dimensional partitioning for fine-grained (A[i][j]) and
+/// block modes.
 struct DbRewriteAcquire {
   DbAcquireOp acquire;
-  /// Multi-dimensional element offsets (e.g., [%i, %j] for 2D fine-grained)
-  SmallVector<Value> elemOffsets;
-  /// Multi-dimensional element sizes (e.g., [1, 1] for 2D fine-grained)
-  SmallVector<Value> elemSizes;
+  /// Canonical partition info - preserves semantic context (mode, indices,
+  /// offsets, sizes) through the pipeline. Indexers use this to know whether
+  /// values are element coordinates (indices) or range starts (offsets).
+  ///
+  /// Field semantics by mode:
+  /// - fine_grained: indices = element COORDINATES (use directly as db_ref idx)
+  /// - block/stencil: offsets = range START, sizes = range SIZE (for div/mod)
+  PartitionInfo partitionInfo;
   bool isFullRange = false;
   bool skipRebase = false;
 
+  /// Accessors for partition data (mode-aware)
+  ArrayRef<Value> getIndices() const { return partitionInfo.indices; }
+  ArrayRef<Value> getOffsets() const { return partitionInfo.offsets; }
+  ArrayRef<Value> getSizes() const { return partitionInfo.sizes; }
+
   /// Legacy accessors for 1D backward compatibility
   Value getElemOffset() const {
-    return elemOffsets.empty() ? Value() : elemOffsets.front();
+    if (!partitionInfo.indices.empty())
+      return partitionInfo.indices.front();
+    return partitionInfo.offsets.empty() ? Value()
+                                         : partitionInfo.offsets.front();
   }
   Value getElemSize() const {
-    return elemSizes.empty() ? Value() : elemSizes.front();
+    return partitionInfo.sizes.empty() ? Value() : partitionInfo.sizes.front();
   }
 };
 

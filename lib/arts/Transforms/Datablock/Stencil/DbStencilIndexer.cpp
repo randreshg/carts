@@ -32,13 +32,14 @@ using namespace mlir::arts;
 // Constructor
 //===----------------------------------------------------------------------===//
 
-DbStencilIndexer::DbStencilIndexer(Value haloLeft, Value haloRight,
-                                   Value blockSize, unsigned outerRank,
-                                   unsigned innerRank, Value elemOffset,
-                                   Value ownedArg, Value leftHaloArg,
-                                   Value rightHaloArg)
-    : DbIndexerBase(outerRank, innerRank), elemOffset(elemOffset),
-      haloLeft(haloLeft), haloRight(haloRight), blockSize(blockSize),
+DbStencilIndexer::DbStencilIndexer(const PartitionInfo &info, Value haloLeft,
+                                   Value haloRight, unsigned outerRank,
+                                   unsigned innerRank, Value ownedArg,
+                                   Value leftHaloArg, Value rightHaloArg)
+    : DbIndexerBase(info, outerRank, innerRank),
+      elemOffset(info.offsets.empty() ? Value() : info.offsets.front()),
+      haloLeft(haloLeft), haloRight(haloRight),
+      blockSize(info.sizes.empty() ? Value() : info.sizes.front()),
       ownedArg(ownedArg), leftHaloArg(leftHaloArg), rightHaloArg(rightHaloArg) {
 }
 
@@ -83,12 +84,29 @@ static Value getLinearizedStride(ValueRange indices, Type elementType,
   return builder.create<arith::ConstantIndexOp>(loc, *staticStride);
 }
 
-/// Pick the index dimension that tracks the partition offset (defaults to 0).
-static unsigned pickPartitionDim(ValueRange indices, Value elemOffset) {
-  if (!elemOffset || indices.empty())
+/// Try to find a stable anchor (typically a loop IV) for dependency checks.
+static Value findAnchor(Value v, int depth = 0) {
+  if (!v || depth > 6)
+    return v;
+  v = ValueUtils::stripNumericCasts(v);
+  if (auto blockArg = v.dyn_cast<BlockArgument>())
+    return blockArg;
+  if (Operation *op = v.getDefiningOp()) {
+    for (Value operand : op->getOperands()) {
+      Value anchor = findAnchor(operand, depth + 1);
+      if (anchor && anchor.isa<BlockArgument>())
+        return anchor;
+    }
+  }
+  return v;
+}
+
+/// Pick the index dimension that tracks the partition anchor (defaults to 0).
+static unsigned pickPartitionDim(ValueRange indices, Value anchor) {
+  if (!anchor || indices.empty())
     return 0;
   for (unsigned i = 0; i < indices.size(); ++i) {
-    if (ValueUtils::dependsOn(indices[i], elemOffset))
+    if (ValueUtils::dependsOn(indices[i], anchor))
       return i;
   }
   return 0;
@@ -166,32 +184,27 @@ void DbStencilIndexer::transformDbRefUsers(
     rightMemref = rightRef.getResult();
   }
 
+  /// BASE-OFFSET SEMANTICS: Simplified region boundaries
+  /// With base offset (not extended), the regions are:
+  ///   localRow < 0        -> left halo (negative indices)
+  ///   0 <= localRow < blockSize -> owned
+  ///   localRow >= blockSize    -> right halo
+  ///
+  /// Buffer-local indices:
+  ///   Left halo: index = localRow + haloLeft (shift negative to positive)
+  ///   Owned: index = localRow (0-based within owned chunk)
+  ///   Right halo: index = localRow - blockSize (0-based within right halo)
+
   auto llvmPtrTy = LLVM::LLVMPointerType::get(builder.getContext());
   Value nullPtr = builder.create<LLVM::ZeroOp>(loc, llvmPtrTy);
   Value leftPtrNotNull;
   Value rightPtrNotNull;
-  Value effectiveHaloLeft = zero;
 
   if (leftMemref) {
     Value leftPtr =
         builder.create<polygeist::Memref2PointerOp>(loc, llvmPtrTy, leftMemref);
     leftPtrNotNull = builder.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ne,
                                                   leftPtr, nullPtr);
-    if (elemOffset && blockSize) {
-      Value offsetMod =
-          builder.create<arith::RemUIOp>(loc, elemOffset, blockSize);
-      Value extendedRemainder =
-          builder.create<arith::SubIOp>(loc, blockSize, haloLeft);
-      Value isExtendedOffset = builder.create<arith::CmpIOp>(
-          loc, arith::CmpIPredicate::eq, offsetMod, extendedRemainder);
-      Value shift = builder.create<arith::SelectOp>(loc, isExtendedOffset,
-                                                    haloLeft, zero);
-      effectiveHaloLeft =
-          builder.create<arith::SelectOp>(loc, leftPtrNotNull, shift, zero);
-    } else {
-      effectiveHaloLeft =
-          builder.create<arith::SelectOp>(loc, leftPtrNotNull, haloLeft, zero);
-    }
   }
 
   if (rightMemref) {
@@ -229,8 +242,21 @@ void DbStencilIndexer::transformDbRefUsers(
       continue;
 
     /// Extract row index for region determination
-    unsigned partitionDim = pickPartitionDim(indices, elemOffset);
+    ValueRange refIndices = ref.getIndices();
+    Value anchor = findAnchor(elemOffset);
+    unsigned partitionDim = pickPartitionDim(indices, anchor);
     Value globalRow = indices[partitionDim];
+
+    /// If load/store indices don't carry the partition dimension, fall back to
+    /// the db_ref indices (common for row-partitioned 2D stencils).
+    if (anchor && !ValueUtils::dependsOn(globalRow, anchor) &&
+        !refIndices.empty()) {
+      unsigned refPartitionDim = pickPartitionDim(refIndices, anchor);
+      Value refRow = refIndices[refPartitionDim];
+      if (refRow == anchor || ValueUtils::dependsOn(refRow, anchor)) {
+        globalRow = refRow;
+      }
+    }
 
     /// Handle linearized access: extract row from linear index
     Value stride =
@@ -239,35 +265,34 @@ void DbStencilIndexer::transformDbRefUsers(
       globalRow = builder.create<arith::DivUIOp>(userLoc, indices[0], stride);
     }
 
-    /// Compute localRow = globalRow - elemOffset
+    /// Compute localRow = globalRow - baseOffset (using BASE offset semantics)
+    /// The baseOffset comes from partitionInfo.offsets[0]
+    Value baseOffset =
+        partitionInfo.offsets.empty() ? zero : partitionInfo.offsets.front();
     Value localRow =
-        elemOffset
-            ? builder.create<arith::SubIOp>(userLoc, globalRow, elemOffset)
+        baseOffset
+            ? builder.create<arith::SubIOp>(userLoc, globalRow, baseOffset)
             : globalRow;
 
-    /// 3-BUFFER SELECTION MODE
+    /// 3-BUFFER SELECTION MODE (BASE-OFFSET SEMANTICS)
     /// Determine which region localRow falls into and select correct buffer
     ///
-    /// Region boundaries:
-    /// - Left halo: localRow < haloLeft
-    /// - Owned: haloLeft <= localRow < haloLeft + blockSize
-    /// - Right halo: localRow >= haloLeft + blockSize
+    /// Region boundaries (base-offset semantics uses SIGNED comparison):
+    /// - Left halo: localRow < 0 (negative indices)
+    /// - Owned: 0 <= localRow < blockSize
+    /// - Right halo: localRow >= blockSize
     Value isLeftHalo = builder.create<arith::CmpIOp>(
-        userLoc, arith::CmpIPredicate::slt, localRow, effectiveHaloLeft);
+        userLoc, arith::CmpIPredicate::slt, localRow, zero);
 
-    Value haloLeftPlusChunk =
-        builder.create<arith::AddIOp>(userLoc, effectiveHaloLeft, blockSize);
+    /// Compute buffer-local indices for each region (base-offset semantics):
+    /// Left halo: index = localRow + haloLeft (shift negative to positive)
+    /// Owned: index = localRow (0-based within owned chunk)
+    /// Right halo: index = localRow - blockSize (0-based within right halo)
 
-    /// Compute buffer-local indices for each region:
-    /// Left halo: index = localRow (clamped)
-    /// Owned: index = localRow - haloLeft
-    /// Right halo: index = localRow - haloLeft - blockSize
-
-    Value leftIdx = localRow;
-    Value ownedIdx =
-        builder.create<arith::SubIOp>(userLoc, localRow, effectiveHaloLeft);
+    Value leftIdx = builder.create<arith::AddIOp>(userLoc, localRow, haloLeft);
+    Value ownedIdx = localRow;
     Value rightIdx =
-        builder.create<arith::SubIOp>(userLoc, localRow, haloLeftPlusChunk);
+        builder.create<arith::SubIOp>(userLoc, localRow, blockSize);
 
     /// Build full index lists by replacing the partitioned dimension.
     auto buildAccessIndices = [&](Value rowIdx) {
@@ -361,9 +386,9 @@ void DbStencilIndexer::transformDbRefUsers(
           builder.create<scf::YieldOp>(userLoc, result);
         }
 
-        /// isRightHalo = localRow >= haloLeftPlusChunk (beyond owned region)
+        /// isRightHalo = localRow >= blockSize (base-offset semantics)
         Value isRightHalo = builder.create<arith::CmpIOp>(
-            userLoc, arith::CmpIPredicate::sge, localRow, haloLeftPlusChunk);
+            userLoc, arith::CmpIPredicate::sge, localRow, blockSize);
 
         /// Select: if isRightHalo, use conditional result, else use current
         Value safeRightVal = rightIfOp.getResult(0);

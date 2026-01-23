@@ -20,6 +20,11 @@ namespace mlir {
 namespace arts {
 
 /// Stencil-aware index localizer using 3-buffer conditional selection.
+/// Extends block mode with halo regions for neighbor access patterns.
+///
+/// Uses partitionInfo.offsets for elemOffset and partitionInfo.sizes for
+/// blockSize. Additional stencil-specific data (halo sizes, buffer args) are
+/// stored separately.
 class DbStencilIndexer : public DbIndexerBase {
   Value elemOffset;
   Value haloLeft;     /// Left halo size (number of rows)
@@ -30,9 +35,12 @@ class DbStencilIndexer : public DbIndexerBase {
   Value rightHaloArg; /// Block arg for right halo (may be null at boundary)
 
 public:
-  DbStencilIndexer(Value haloLeft, Value haloRight, Value blockSize,
-                   unsigned outerRank, unsigned innerRank, Value elemOffset,
-                   Value ownedArg, Value leftHaloArg, Value rightHaloArg);
+  /// Constructor with PartitionInfo - uses partitionInfo.offsets[0] as
+  /// baseOffset and partitionInfo.sizes[0] as blockSize.
+  /// Uses base-offset semantics where localRow = globalRow - baseOffset.
+  DbStencilIndexer(const PartitionInfo &info, Value haloLeft, Value haloRight,
+                   unsigned outerRank, unsigned innerRank, Value ownedArg,
+                   Value leftHaloArg, Value rightHaloArg);
 
   LocalizedIndices localize(ArrayRef<Value> globalIndices, OpBuilder &builder,
                             Location loc) override;
