@@ -220,6 +220,55 @@ bool ValueUtils::dependsOn(Value value, Value base, int depth) {
   return false;
 }
 
+/// Try to detect a constant stride for a base value within an index expression.
+/// Returns 1 when idx is base, constant C when idx contains base * C combined
+/// with additive terms, or nullopt if stride cannot be determined.
+std::optional<int64_t> ValueUtils::getOffsetStride(Value idx, Value base,
+                                                   int depth) {
+  if (!idx || !base || depth > 8)
+    return std::nullopt;
+
+  idx = stripNumericCasts(idx);
+  base = stripNumericCasts(base);
+
+  if (idx == base)
+    return int64_t{1};
+
+  if (auto addOp = idx.getDefiningOp<arith::AddIOp>()) {
+    Value lhs = addOp.getLhs();
+    Value rhs = addOp.getRhs();
+    bool lhsDep = dependsOn(lhs, base, depth + 1);
+    bool rhsDep = dependsOn(rhs, base, depth + 1);
+    if (lhsDep && !rhsDep)
+      return getOffsetStride(lhs, base, depth + 1);
+    if (rhsDep && !lhsDep)
+      return getOffsetStride(rhs, base, depth + 1);
+    return std::nullopt;
+  }
+
+  if (auto subOp = idx.getDefiningOp<arith::SubIOp>()) {
+    Value lhs = subOp.getLhs();
+    Value rhs = subOp.getRhs();
+    bool lhsDep = dependsOn(lhs, base, depth + 1);
+    bool rhsDep = dependsOn(rhs, base, depth + 1);
+    if (lhsDep && !rhsDep)
+      return getOffsetStride(lhs, base, depth + 1);
+    return std::nullopt;
+  }
+
+  if (auto mulOp = idx.getDefiningOp<arith::MulIOp>()) {
+    Value lhs = mulOp.getLhs();
+    Value rhs = mulOp.getRhs();
+    int64_t constVal = 0;
+    if (getConstantIndex(lhs, constVal) && dependsOn(rhs, base, depth + 1))
+      return constVal;
+    if (getConstantIndex(rhs, constVal) && dependsOn(lhs, base, depth + 1))
+      return constVal;
+  }
+
+  return std::nullopt;
+}
+
 /// Internal helper for isDerivedFromPtr with cycle detection and depth limit.
 static bool isDerivedFromPtrImpl(Value value, Value source,
                                  SmallPtrSetImpl<Value> &visited,

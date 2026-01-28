@@ -46,13 +46,16 @@ class DbBlockIndexer : public DbIndexerBase {
   SmallVector<Value> blockSizes;
   /// Start block per partitioned dimension (computed)
   SmallVector<Value> startBlocks;
+  /// True when allocation outer sizes are all constant 1
+  bool allocSingleBlock = false;
 
 public:
   /// Constructor with PartitionInfo - the canonical way to create indexers.
   /// Uses partitionInfo.sizes for blockSizes. The startBlocks must be passed
   /// separately as they require division which needs a builder.
   DbBlockIndexer(const PartitionInfo &info, ArrayRef<Value> startBlocks,
-                 unsigned outerRank, unsigned innerRank);
+                 unsigned outerRank, unsigned innerRank,
+                 bool allocSingleBlock = false);
 
   /// Number of partitioned dimensions
   unsigned numPartitionedDims() const { return blockSizes.size(); }

@@ -77,8 +77,11 @@ This table maps user-facing CLI options to internal implementation details:
 The difference is `outerRank`: coarse has `outerRank=0` (single DB for entire array),
 fine-grained has `outerRank>0` (multiple DBs, one per element/row).
 
-**CLI option**: `--partition-fallback=coarse|fine` controls the fallback behavior
-for non-affine (indirect) accesses. See "Non-Affine Fallback" section for details.
+**CLI option**: `--partition-fallback=coarse|fine` is a `carts run` flag that
+controls the fallback behavior for non-affine (indirect) accesses. When driving
+the pipeline via `carts execute`, pass it through with `--run-args`
+(e.g., `carts execute foo.c --run-args "--partition-fallback=fine"`). For
+benchmarks, pass the same run-args string via `--arts-exec-args` (examples below).
 
 ## PartitionInfo: The Canonical Terminology Source
 
@@ -142,12 +145,18 @@ startBlock  = partitionInfo.offsets[d] / blockSize  // Computed by rewriter
 dbRefIndex  = (accessIndex / blockSize) - startBlock
 memrefIndex = accessIndex % blockSize
 ```
+Note: If all outer sizes are constant 1 (single-block allocation), `db_ref`
+indices are forced to constant 0 to satisfy verifier rules. `memref` indices
+still use `rem` for locality (it degenerates to identity when blockSize >= N).
 
 **Stencil (DbStencilIndexer):**
 ```
-// Same as block, but with 3-buffer selection for halo regions
+// Same as block, but with 3-buffer selection for halo regions.
+// If the stencil offsets are uniformly shifted (e.g., {0,1,2}), bounds are
+// normalized to {-1,0,1} and a centerOffset is recorded on the acquire.
 blockSize   = partitionInfo.sizes[d]
-localRow    = globalRow - elemOffset
+baseOffset  = partitionInfo.offsets[d]   // startBlock * blockSize + centerOffset
+localRow    = globalRow - baseOffset
 // Then select: leftHalo, owned, or rightHalo buffer based on localRow
 ```
 
@@ -381,9 +390,12 @@ Standard block:       Stencil block (with halo):
 
 ```
 Access A[i] with halo:
-  db_ref_idx  = (i - halo_left) / blockSize
-  memref_idx  = (i - halo_left) % blockSize + halo_offset
+  effective_i = i - centerOffset   // centerOffset defaults to 0
+  db_ref_idx  = (effective_i - halo_left) / blockSize
+  memref_idx  = (effective_i - halo_left) % blockSize + halo_offset
 ```
+`centerOffset` is recorded when stencil offsets are uniformly shifted (e.g.,
+{0,1,2}); otherwise it is 0.
 
 #### 4.3 Example: Jacobi Stencil
 
@@ -632,7 +644,7 @@ flowchart TB
 
   subgraph S10["Stage 10: ForLowering pass (in Concurrency)"]
     direction TB
-    S10A["Analyze loop IVs and depend structure:<br/>- indices[] from indexed access patterns (A[i])<br/>- offsets/sizes for blocked patterns<br/>- set PartitioningHint attribute on loops"]
+    S10A["Analyze loop IVs and depend structure:<br/>- indices[] from indexed access patterns (A[i])<br/>- offsets/sizes for blocked patterns (workerOffset = lowerBound + chunkOffset * step)<br/>- set PartitioningHint attribute on loops"]
     S10B["Update DbAcquireOps with partition info"]
     S10O["Output: DbAcquireOps with partitioning(mode, indices, offsets, sizes)"]
     S10A --> S10B --> S10O
@@ -1096,6 +1108,8 @@ indices used by the task. The current rule is:
 - Prefer memref indices (load/store) for validation.
 - If no memref indices exist, fall back to db_ref indices.
 - The first dynamic index in that chain must depend on the partition offset.
+- The offset must appear with unit stride (no constant scaling like `offset * C`).
+- The offset must not appear in later (non-leading) dimensions.
 
 Pseudocode:
 
@@ -1103,9 +1117,13 @@ Pseudocode:
 for each memref access:
   chain = memref.indices if present else db_ref.indices
   first_dyn = first non-constant index in chain
-  if first_dyn exists and !dependsOn(first_dyn, offset):
-    fail
+  if first_dyn exists:
+    if !dependsOn(first_dyn, offset): fail
+    if stride(first_dyn, offset) != 1: fail
+    if offset appears in any later dim: fail
 ```
+The stride check is conservative: only constant multipliers are recognized;
+any other scaling is treated as unsafe for blocked partitioning.
 
 When twin_diff is unavailable, partitioning proceeds only if this rule holds
 for all acquires, ensuring disjoint chunk ownership for writers.
@@ -1122,6 +1140,12 @@ Policy is controlled by `--partition-fallback`:
 - `fine`: allow non-affine allocations to proceed and mark them as indexed so
   H1.3 selects element-wise partitioning.
 - `versioned`: legacy alias for `fine` (versioning is no longer automatic).
+
+**Usage note:** `--partition-fallback` is a `carts run` flag. When using
+`carts execute`, pass it via `--run-args` (e.g.,
+`carts execute foo.c --run-args "--partition-fallback=fine"`). When using
+`carts benchmarks run`, pass the same run-args string via `--arts-exec-args`
+so it is forwarded to `carts execute`.
 
 **Why only coarse and fine?** Only these two modes are direct partitioning
 fallbacks because they work for ANY access pattern:
@@ -1140,8 +1164,10 @@ heuristics when the patterns are detected, not as fallbacks.
 **Note:** Mixed access patterns (blocked writes + indirect reads) are handled
 via full-range acquires in blocked mode. The indirect read-only acquires get
 `needsFullRange=true` and access all chunks, while direct writes use standard
-blocked partitioning. This avoids the memory duplication and sync overhead of
-the versioning approach (DbCopy/DbSync).
+blocked partitioning. Read-only direct accesses that don't align with the
+partitioned dimension also use full-range acquires instead of disabling block
+mode. This avoids the memory duplication and sync overhead of the versioning
+approach (DbCopy/DbSync).
 
 This keeps correctness while enabling exploration of finer-grained
 parallelism. The element-wise path can be expensive; use it for targeted
@@ -1344,7 +1370,8 @@ grep "partition_mode" lulesh_coarse.mlir | sort | uniq -c
 carts run lulesh.mlir --concurrency-opt --partition-fallback=fine > lulesh_fine.mlir
 
 # Run benchmark
-carts benchmarks run lulesh --size small -- --partition-fallback=fine
+carts benchmarks run lulesh --size small \
+  --arts-exec-args "--run-args '--partition-fallback=fine'"
 
 # Verify IR - should show partition_mode<fine_grained> for node arrays
 grep "partition_mode" lulesh_fine.mlir | sort | uniq -c
@@ -1391,7 +1418,8 @@ arts.db_sync(%x_read, %x_write)
 
 ```bash
 carts run lulesh.mlir --concurrency-opt --partition-fallback=versioned > lulesh_versioned.mlir
-carts benchmarks run lulesh --size small -- --partition-fallback=versioned
+carts benchmarks run lulesh --size small \
+  --arts-exec-args "--run-args '--partition-fallback=versioned'"
 ```
 
 This aims to balance write locality (blocked) with read flexibility (element-wise).
@@ -1415,11 +1443,13 @@ All modes must produce identical numerical results:
 ```bash
 # Verify correctness for each mode
 carts benchmarks run lulesh --size small --verify
-carts benchmarks run lulesh --size small --verify -- --partition-fallback=fine
+carts benchmarks run lulesh --size small --verify \
+  --arts-exec-args "--run-args '--partition-fallback=fine'"
 
 # Compare checksums (should match)
 carts benchmarks run lulesh --size small 2>&1 | grep checksum
-carts benchmarks run lulesh --size small -- --partition-fallback=fine 2>&1 | grep checksum
+carts benchmarks run lulesh --size small \
+  --arts-exec-args "--run-args '--partition-fallback=fine'" 2>&1 | grep checksum
 ```
 
 ### Which Heuristics Fire

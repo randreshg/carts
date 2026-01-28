@@ -210,9 +210,29 @@ void DbAcquireNode::forEachChildNode(
 struct AccessBoundsInfo {
   int64_t minOffset = 0;
   int64_t maxOffset = 0;
+  int64_t centerOffset = 0;
   bool isStencil = false;
   bool valid = false;
 };
+
+/// Normalize stencil bounds to be centered around 0 when a uniform shift is
+/// present (e.g., accesses at offsets {0,1,2} should map to {-1,0,1}).
+static void normalizeStencilBounds(AccessBoundsInfo &bounds) {
+  if (!bounds.valid || !bounds.isStencil)
+    return;
+  /// Already centered (has both left and right offsets).
+  if (bounds.minOffset < 0 && bounds.maxOffset > 0)
+    return;
+  int64_t sum = bounds.minOffset + bounds.maxOffset;
+  if (sum % 2 != 0)
+    return;
+  int64_t center = sum / 2;
+  if (center == 0)
+    return;
+  bounds.centerOffset = center;
+  bounds.minOffset -= center;
+  bounds.maxOffset -= center;
+}
 
 /// Analyze all memory accesses to compute actual bounds relative to block base.
 /// For stencil patterns like A[i-1], A[i], A[i+1], this extracts the min/max
@@ -505,6 +525,11 @@ bool DbAcquireNode::computePartitionBounds() {
   Location loc = dbAcquireOp.getLoc();
   builder.setInsertionPoint(dbAcquireOp);
 
+  if (bounds.valid && bounds.isStencil && bounds.centerOffset != 0) {
+    dbAcquireOp->setAttr("stencil_center_offset",
+                         builder.getI64IntegerAttr(bounds.centerOffset));
+  }
+
   Value adjustedOffset = partitionOffset;
   Value adjustedSize = partitionSize;
 
@@ -637,6 +662,7 @@ static AccessBoundsInfo analyzeAccessBounds(DbAcquireNode *node,
   if (foundAny) {
     bounds.isStencil = (bounds.minOffset != bounds.maxOffset);
     bounds.valid = true;
+    normalizeStencilBounds(bounds);
   }
 
   return bounds;
@@ -815,6 +841,14 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
           firstDynPos = static_cast<int64_t>(i);
 
         if (ValueUtils::dependsOn(fullChain[i], offsetStripped)) {
+          if (auto stride =
+                  ValueUtils::getOffsetStride(fullChain[i], offsetStripped)) {
+            if (*stride != 1) {
+              ARTS_DEBUG("  partition offset has stride "
+                         << *stride << "; disabling blocked partitioning");
+              return false;
+            }
+          }
           if (firstDynPos >= 0 && i != static_cast<unsigned>(firstDynPos)) {
             ARTS_DEBUG("  partition offset maps to non-leading dim; "
                        "disabling blocked partitioning");
