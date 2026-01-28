@@ -818,5 +818,92 @@ Value ValueUtils::traceValueToDominating(Value value, Operation *insertBefore,
   return nullptr;
 }
 
+Value ValueUtils::traceMinSIWithFallback(
+    arith::MinSIOp minOp, Operation *insertBefore, OpBuilder &builder,
+    Location loc, llvm::function_ref<Value(Value)> traceValueFn) {
+  Value lhsTraced = traceValueFn(minOp.getLhs());
+  Value rhsTraced = traceValueFn(minOp.getRhs());
+  if (lhsTraced && rhsTraced) {
+    if (ValueUtils::isZeroConstant(lhsTraced))
+      return rhsTraced;
+    if (ValueUtils::isZeroConstant(rhsTraced))
+      return lhsTraced;
+    builder.setInsertionPoint(insertBefore);
+    return builder.create<arith::MinSIOp>(loc, lhsTraced, rhsTraced);
+  }
+  if (rhsTraced && !lhsTraced) {
+    if (ValueUtils::isZeroConstant(rhsTraced))
+      return nullptr;
+    return rhsTraced;
+  }
+  if (lhsTraced && !rhsTraced) {
+    if (ValueUtils::isZeroConstant(lhsTraced))
+      return nullptr;
+    return lhsTraced;
+  }
+  return nullptr;
+}
+
+Value ValueUtils::traceMinUIWithFallback(
+    arith::MinUIOp minOp, Operation *insertBefore, OpBuilder &builder,
+    Location loc, llvm::function_ref<Value(Value)> traceValueFn) {
+  Value lhsTraced = traceValueFn(minOp.getLhs());
+  Value rhsTraced = traceValueFn(minOp.getRhs());
+  if (lhsTraced && rhsTraced) {
+    if (ValueUtils::isZeroConstant(lhsTraced))
+      return rhsTraced;
+    if (ValueUtils::isZeroConstant(rhsTraced))
+      return lhsTraced;
+    builder.setInsertionPoint(insertBefore);
+    return builder.create<arith::MinUIOp>(loc, lhsTraced, rhsTraced);
+  }
+  if (rhsTraced && !lhsTraced) {
+    if (ValueUtils::isZeroConstant(rhsTraced))
+      return nullptr;
+    return rhsTraced;
+  }
+  if (lhsTraced && !rhsTraced) {
+    if (ValueUtils::isZeroConstant(lhsTraced))
+      return nullptr;
+    return lhsTraced;
+  }
+  return nullptr;
+}
+
+Value ValueUtils::traceSelectWithFallback(
+    arith::SelectOp selectOp, Operation *insertBefore, OpBuilder &builder,
+    Location loc, llvm::function_ref<Value(Value)> traceValueFn,
+    llvm::function_ref<Value(Value)> traceCondFn) {
+  Value trueTraced = traceValueFn(selectOp.getTrueValue());
+  Value falseTraced = traceValueFn(selectOp.getFalseValue());
+
+  if (trueTraced && falseTraced) {
+    Value cond = traceCondFn(selectOp.getCondition());
+    builder.setInsertionPoint(insertBefore);
+    if (cond) {
+      return builder.create<arith::SelectOp>(loc, cond, trueTraced,
+                                             falseTraced);
+    }
+    /// Condition doesn't dominate - use max of arms as a safe upper bound.
+    Type valTy = trueTraced.getType();
+    if (valTy.isa<IndexType>()) {
+      return builder.create<arith::MaxUIOp>(loc, trueTraced, falseTraced);
+    }
+    return builder.create<arith::MaxSIOp>(loc, trueTraced, falseTraced);
+  }
+
+  if (trueTraced && !falseTraced) {
+    if (ValueUtils::isZeroConstant(trueTraced))
+      return nullptr;
+    return trueTraced;
+  }
+  if (falseTraced && !trueTraced) {
+    if (ValueUtils::isZeroConstant(falseTraced))
+      return nullptr;
+    return falseTraced;
+  }
+  return nullptr;
+}
+
 } // namespace arts
 } // namespace mlir

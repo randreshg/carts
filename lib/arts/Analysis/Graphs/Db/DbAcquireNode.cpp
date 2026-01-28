@@ -118,13 +118,29 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
     return;
   }
 
-  /// Capture partition info from the operation.
-  if (!dbAcquireOp.getIndices().empty())
-    partitionOffset = dbAcquireOp.getIndices().front();
-  else if (!dbAcquireOp.getOffsets().empty())
-    partitionOffset = dbAcquireOp.getOffsets().front();
-  if (!dbAcquireOp.getSizes().empty())
-    partitionSize = dbAcquireOp.getSizes().front();
+  /// Capture partition hints (element-space) for analysis.
+  if (!dbAcquireOp.getPartitionIndices().empty())
+    partitionOffset = dbAcquireOp.getPartitionIndices().front();
+  else if (!dbAcquireOp.getPartitionOffsets().empty())
+    partitionOffset = dbAcquireOp.getPartitionOffsets().front();
+  if (!dbAcquireOp.getPartitionSizes().empty())
+    partitionSize = dbAcquireOp.getPartitionSizes().front();
+
+  /// Fallback to DB-space offsets/sizes only when an explicit non-coarse
+  /// partition mode is set (legacy paths or already-partitioned acquires).
+  if (!partitionOffset && !partitionSize) {
+    if (auto mode = dbAcquireOp.getPartitionMode()) {
+      if (*mode == PartitionMode::block || *mode == PartitionMode::stencil ||
+          *mode == PartitionMode::fine_grained) {
+        if (!dbAcquireOp.getIndices().empty())
+          partitionOffset = dbAcquireOp.getIndices().front();
+        else if (!dbAcquireOp.getOffsets().empty())
+          partitionOffset = dbAcquireOp.getOffsets().front();
+        if (!dbAcquireOp.getSizes().empty())
+          partitionSize = dbAcquireOp.getSizes().front();
+      }
+    }
+  }
 
   if (isa<DbAcquireOp>(singleUser)) {
     /// Nested acquire; create child node lazily via getOrCreateAcquireNode
@@ -424,18 +440,36 @@ bool DbAcquireNode::hasValidEdtAndAccesses() {
 bool DbAcquireNode::computePartitionBounds() {
   DbAcquireOp mutableAcquire = DbAcquireOp(dbAcquireOp.getOperation());
 
-  if (!mutableAcquire.getIndices().empty())
-    partitionOffset = mutableAcquire.getIndices().front();
-  else if (!mutableAcquire.getOffsets().empty())
-    partitionOffset = mutableAcquire.getOffsets().front();
-  if (!mutableAcquire.getSizes().empty())
-    partitionSize = mutableAcquire.getSizes().front();
+  partitionOffset = Value();
+  partitionSize = Value();
+
+  if (!mutableAcquire.getPartitionIndices().empty())
+    partitionOffset = mutableAcquire.getPartitionIndices().front();
+  else if (!mutableAcquire.getPartitionOffsets().empty())
+    partitionOffset = mutableAcquire.getPartitionOffsets().front();
+  if (!mutableAcquire.getPartitionSizes().empty())
+    partitionSize = mutableAcquire.getPartitionSizes().front();
+
+  if (!partitionOffset && !partitionSize) {
+    if (auto mode = mutableAcquire.getPartitionMode()) {
+      if (*mode == PartitionMode::block || *mode == PartitionMode::stencil ||
+          *mode == PartitionMode::fine_grained) {
+        if (!mutableAcquire.getIndices().empty())
+          partitionOffset = mutableAcquire.getIndices().front();
+        else if (!mutableAcquire.getOffsets().empty())
+          partitionOffset = mutableAcquire.getOffsets().front();
+        if (!mutableAcquire.getSizes().empty())
+          partitionSize = mutableAcquire.getSizes().front();
+      }
+    }
+  }
 
   if (!edtUserOp)
     return true;
 
-  bool hasPartitionHint = !mutableAcquire.getIndices().empty() ||
-                          !mutableAcquire.getOffsets().empty();
+  bool hasPartitionHint = !mutableAcquire.getPartitionIndices().empty() ||
+                          !mutableAcquire.getPartitionOffsets().empty() ||
+                          !mutableAcquire.getPartitionSizes().empty();
   if (partitionOffset && !canPartitionWithOffset(partitionOffset)) {
     if (hasPartitionHint) {
       ARTS_DEBUG("Partition offset not derived from access; "

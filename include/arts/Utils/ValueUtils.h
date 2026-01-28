@@ -7,10 +7,12 @@
 #ifndef CARTS_UTILS_VALUEUTILS_H
 #define CARTS_UTILS_VALUEUTILS_H
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Value.h"
+#include "llvm/ADT/FunctionExtras.h"
 #include <optional>
 
 namespace mlir {
@@ -133,6 +135,32 @@ public:
                                       OpBuilder &builder,
                                       DominanceInfo &domInfo, Location loc,
                                       unsigned depth = 0);
+
+  /// Recreate a binary op at a dominating point using a custom trace callback.
+  /// The callback should return a dominating value for each operand or null.
+  template <typename OpType>
+  static Value traceBinaryOp(OpType op, Operation *insertBefore,
+                             OpBuilder &builder, Location loc,
+                             llvm::function_ref<Value(Value)> traceValueFn) {
+    Value lhs = traceValueFn(op.getLhs());
+    Value rhs = traceValueFn(op.getRhs());
+    if (!lhs || !rhs)
+      return nullptr;
+    builder.setInsertionPoint(insertBefore);
+    return builder.create<OpType>(loc, lhs, rhs);
+  }
+
+  /// Trace min/select with partial operand fallback.
+  static Value traceMinSIWithFallback(
+      arith::MinSIOp minOp, Operation *insertBefore, OpBuilder &builder,
+      Location loc, llvm::function_ref<Value(Value)> traceValueFn);
+  static Value traceMinUIWithFallback(
+      arith::MinUIOp minOp, Operation *insertBefore, OpBuilder &builder,
+      Location loc, llvm::function_ref<Value(Value)> traceValueFn);
+  static Value traceSelectWithFallback(
+      arith::SelectOp selectOp, Operation *insertBefore, OpBuilder &builder,
+      Location loc, llvm::function_ref<Value(Value)> traceValueFn,
+      llvm::function_ref<Value(Value)> traceCondFn);
 };
 
 } // namespace arts
