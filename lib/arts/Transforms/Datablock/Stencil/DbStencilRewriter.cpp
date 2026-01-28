@@ -250,12 +250,19 @@ void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
     };
 
     /// STENCIL: div/mod for chunk selection (owned rows start at 0).
-    /// Prefer row index from load/store when it includes row+col; otherwise
-    /// fall back to db_ref indices (row-partitioned access).
+    /// Prefer row index from load/store when it includes row+col, or when the
+    /// element type is 1D (single index is the row). Otherwise fall back to
+    /// db_ref indices (row-partitioned access with column-only loads).
     Value cs = plan.blockSize ? plan.blockSize : zero();
     Value rowIdx;
     bool rowFromLoad = false;
-    if (loadStoreIndices.size() > 1) {
+    unsigned elemRank = 0;
+    if (auto memrefTy = newElementType.dyn_cast<MemRefType>())
+      elemRank = memrefTy.getRank();
+
+    bool loadIncludesRow = (loadStoreIndices.size() > 1) || (elemRank == 1);
+
+    if (loadIncludesRow && !loadStoreIndices.empty()) {
       rowIdx = loadStoreIndices.front();
       rowFromLoad = true;
     } else if (!ref.getIndices().empty()) {
@@ -272,7 +279,7 @@ void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
       Value rem = builder.create<arith::RemUIOp>(userLoc, rowIdx, cs);
       newInner.push_back(rem);
 
-      if (rowFromLoad && loadStoreIndices.size() > 1) {
+      if (rowFromLoad) {
         for (unsigned i = 1; i < loadStoreIndices.size(); ++i)
           newInner.push_back(loadStoreIndices[i]);
       } else {
@@ -368,6 +375,17 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
     baseOffset = builder.create<arith::MulIOp>(loc, startBlock, plan.blockSize);
   } else {
     baseOffset = zero;
+  }
+
+  /// Adjust base offset by stencil center shift (if any) to align localRow
+  /// with the logical loop index when loops start at non-zero bounds.
+  if (auto centerAttr =
+          acquire->getAttrOfType<IntegerAttr>("stencil_center_offset")) {
+    int64_t center = centerAttr.getInt();
+    if (center != 0) {
+      Value shift = builder.create<arith::ConstantIndexOp>(loc, center);
+      baseOffset = builder.create<arith::AddIOp>(loc, baseOffset, shift);
+    }
   }
 
   /// For stencil mode, get the 3 block args (owned, left halo, right halo)

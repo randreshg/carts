@@ -227,6 +227,12 @@ void DbBlockRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
   Type newElementType = newAlloc.getAllocatedElementType();
   Value newSource = (ref.getSource() == oldAlloc.getPtr()) ? newAlloc.getPtr()
                                                            : ref.getSource();
+  /// Detect allocation-level single-block (same condition as verifier)
+  bool allocSingleBlock = !newOuterSizes.empty() &&
+      llvm::all_of(newOuterSizes, [](Value v) {
+        int64_t val;
+        return ValueUtils::getConstantIndex(v, val) && val == 1;
+      });
 
   /// Collect load/store users of this db_ref
   SmallVector<Operation *> refUsers(ref.getResult().getUsers().begin(),
@@ -262,12 +268,23 @@ void DbBlockRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
       Value globalIdx = loadStoreIndices[d];
       if (d < nPartDims) {
         /// Partitioned dimension: compute block index and local index
+        if (allocSingleBlock) {
+          newOuter.push_back(
+              builder.create<arith::ConstantIndexOp>(userLoc, 0));
+        } else {
+          Value bs = plan.getBlockSize(d);
+          if (!bs)
+            bs = one;
+          bs = builder.create<arith::MaxUIOp>(userLoc, bs, one);
+          newOuter.push_back(
+              builder.create<arith::DivUIOp>(userLoc, globalIdx, bs));
+        }
+
+        /// Always compute rem for memref index
         Value bs = plan.getBlockSize(d);
         if (!bs)
           bs = one;
         bs = builder.create<arith::MaxUIOp>(userLoc, bs, one);
-        newOuter.push_back(
-            builder.create<arith::DivUIOp>(userLoc, globalIdx, bs));
         newInner.push_back(
             builder.create<arith::RemUIOp>(userLoc, globalIdx, bs));
       } else {
@@ -313,16 +330,21 @@ void DbBlockRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
     ValueRange refIndices = ref.getIndices();
 
     for (unsigned d = 0; d < nPartDims; ++d) {
-      Value bs = plan.getBlockSize(d);
-      if (!bs)
-        bs = one;
-      bs = builder.create<arith::MaxUIOp>(loc, bs, one);
-
-      if (d < refIndices.size()) {
-        blockIndices.push_back(
-            builder.create<arith::DivUIOp>(loc, refIndices[d], bs));
-      } else {
+      if (allocSingleBlock) {
         blockIndices.push_back(builder.create<arith::ConstantIndexOp>(loc, 0));
+      } else {
+        Value bs = plan.getBlockSize(d);
+        if (!bs)
+          bs = one;
+        bs = builder.create<arith::MaxUIOp>(loc, bs, one);
+
+        if (d < refIndices.size()) {
+          blockIndices.push_back(
+              builder.create<arith::DivUIOp>(loc, refIndices[d], bs));
+        } else {
+          blockIndices.push_back(
+              builder.create<arith::ConstantIndexOp>(loc, 0));
+        }
       }
     }
 
@@ -416,9 +438,18 @@ bool DbBlockRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
   /// Note: offsets are stored but startBlocks are passed separately
   /// because the division (offsets / sizes) requires a builder.
 
+  /// Detect allocation-level single-block: all outer sizes are constant 1.
+  /// This matches the verifier's coarse check exactly.
+  bool allocSingleBlock = !newOuterSizes.empty() &&
+      llvm::all_of(newOuterSizes, [](Value v) {
+        int64_t val;
+        return ValueUtils::getConstantIndex(v, val) && val == 1;
+      });
+
   /// Create N-D block indexer with PartitionInfo
   auto indexer = std::make_unique<DbBlockIndexer>(
-      info, effectiveStartBlocks, newOuterSizes.size(), newInnerSizes.size());
+      info, effectiveStartBlocks, newOuterSizes.size(), newInnerSizes.size(),
+      allocSingleBlock);
 
   SmallVector<Operation *> users(blockArg.getUsers().begin(),
                                  blockArg.getUsers().end());

@@ -673,12 +673,9 @@ void CreateDbsPass::createDbAllocOps() {
       rewriteUsesInParentEdt(info);
     } else {
       /// Use element-wise indexer with outerRank=0
-      Value elemOffset = AC->createIndexConstant(0, loc);
-
-      /// Build PartitionInfo from elemOffset
+      /// Coarse allocation: keep indices empty so db_ref uses constant zero
       PartitionInfo partInfo;
-      partInfo.mode = PartitionMode::fine_grained;
-      partInfo.indices.push_back(elemOffset);
+      partInfo.mode = PartitionMode::coarse;
 
       DbElementWiseIndexer indexer(partInfo, 0, rank, {});
 
@@ -1127,12 +1124,9 @@ void CreateDbsPass::rewriteUsesInParentEdt(MemrefInfo &memrefInfo) {
   unsigned outerRank =
       memrefInfo.usedFineGrained ? dbAlloc.getSizes().size() : 0;
   unsigned innerRank = elementMemRefType.cast<MemRefType>().getRank();
-  Value elemOffset = AC->createIndexConstant(0, dbAlloc.getLoc());
-
-  /// Build PartitionInfo from elemOffset
+  /// Coarse allocation: keep indices empty so db_ref uses constant zero
   PartitionInfo info;
-  info.mode = PartitionMode::fine_grained;
-  info.indices.push_back(elemOffset);
+  info.mode = PartitionMode::coarse;
   DbElementWiseIndexer indexer(info, outerRank, innerRank, {});
   for (Operation *user : users) {
     size_t sizeBefore = opsToRemove.size();
@@ -1171,12 +1165,9 @@ void CreateDbsPass::rewriteUsesEverywhereCoarse(Operation *alloc,
     return;
 
   /// Coarse-grained: outerCount=0, all indices go to inner load/store
-  Value elemOffset = AC->createIndexConstant(0, dbAlloc.getLoc());
-
-  /// Build PartitionInfo from elemOffset
+  /// Keep indices empty so db_ref uses constant zero
   PartitionInfo info;
-  info.mode = PartitionMode::fine_grained;
-  info.indices.push_back(elemOffset);
+  info.mode = PartitionMode::coarse;
   DbElementWiseIndexer indexer(
       info, 0, elementMemRefType.cast<MemRefType>().getRank(), {});
   for (Operation *user : users)
@@ -1242,6 +1233,19 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
         operand.set(mappedVal);
         ARTS_DEBUG("   - Remapped operand from outer scope to inner scope");
       }
+    }
+
+    if (plan.mode == PartitionMode::coarse) {
+      /// Coarse mode: db_ref index must be constant zero.
+      PartitionInfo coarseInfo;
+      coarseInfo.mode = PartitionMode::coarse;
+      DbElementWiseIndexer indexer(coarseInfo, /*outerRank=*/0, innerRank, {});
+      llvm::SetVector<Operation *> localOpsToRemove;
+      indexer.transformOps({op}, dbAcquireArg, elementMemRefType, *AC,
+                           localOpsToRemove);
+      for (Operation *toRemove : localOpsToRemove)
+        opsToRemove.insert(toRemove);
+      continue;
     }
 
     if (plan.mode == PartitionMode::block) {

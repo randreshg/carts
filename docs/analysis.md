@@ -817,6 +817,11 @@ bool isConsistentWith(const AcquirePartitionInfo &other) const {
 If block sizes are inconsistent, partitioning falls back to the `--partition-fallback` CLI option:
 - `--partition-fallback=coarse` (default): Keep coarse allocation
 - `--partition-fallback=fine`: Use element-wise partitioning
+**Note:** `--partition-fallback` is a `carts run` flag. When using
+`carts execute`, pass it via `--run-args` (e.g.,
+`carts execute foo.c --run-args "--partition-fallback=fine"`). When using
+`carts benchmarks run`, pass the same run-args string via `--arts-exec-args`
+so it is forwarded to `carts execute`.
 
 ---
 
@@ -886,6 +891,8 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
 **What This Validates**:
 - If offset = `%chunk_start` and access is `A[%chunk_start + %local]` → **Valid** (IV-dependent)
 - If offset = `%chunk_start` but access is `A[nodelist[%i]]` → **Invalid** (indirect, needs full-range)
+- If offset appears with a constant stride (`offset * C`) or in a non-leading
+  dimension → **Invalid** (unsafe for blocked partitioning)
 
 #### Building PartitioningContext
 
@@ -908,8 +915,12 @@ for each DbAcquireNode {
                 // Indirect access: still blocked but needs full-range
                 thisAcquireCanBlocked = true;  // allocation blocked
                 needsFullRange = true;          // this acquire gets all chunks
+            } else if (acqNode->hasLoads() && !acqNode->hasStores()) {
+                // Read-only direct access with mismatched offset: full-range
+                thisAcquireCanBlocked = true;
+                needsFullRange = true;
             } else {
-                // Direct access but offset not derived from access
+                // Direct access but offset not derived from access (writes)
                 thisAcquireCanBlocked = false;  // fall back to coarse
             }
         }

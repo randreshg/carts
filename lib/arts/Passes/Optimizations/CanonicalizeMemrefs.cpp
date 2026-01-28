@@ -507,7 +507,6 @@ CanonicalizeMemrefsPass::detectPattern(Value alloc) {
   /// - pattern.wrapperAlloca set (or null if direct alloc)
   /// - pattern.rootAlloc pointing to the actual allocation
   /// - allocType is the type of rootAlloc
-
   auto elemType = allocType.getElementType();
 
   /// =======================================================================

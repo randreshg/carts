@@ -81,8 +81,7 @@ FailureOr<DbAllocOp> DbRewriter::apply(OpBuilder &builder) {
   builder.setInsertionPoint(oldAlloc);
 
   /// 1. Create new allocation with the given sizes
-  PartitionMode partitionMode =
-      getPartitionMode(oldAlloc.getOperation()).value_or(PartitionMode::coarse);
+  PartitionMode partitionMode = plan.mode;
   auto newAlloc = builder.create<DbAllocOp>(
       loc, oldAlloc.getMode(), oldAlloc.getRoute(), oldAlloc.getAllocType(),
       oldAlloc.getDbMode(), oldAlloc.getElementType(), oldAlloc.getAddress(),

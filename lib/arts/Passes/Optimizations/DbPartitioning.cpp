@@ -1636,6 +1636,13 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
             if (idx < acquireInfos.size()) {
               acquireInfos[idx].needsFullRange = true;
             }
+          } else if (!hasIndirect && hasDirect && !acqNode->hasStores()) {
+            ARTS_DEBUG("  Non-leading offset on read-only direct access; "
+                       "marking for full-range access");
+            /// Read-only accesses that don't align to the partitioned dimension
+            /// can safely use full-range acquires on a chunked allocation.
+            if (idx < acquireInfos.size())
+              acquireInfos[idx].needsFullRange = true;
           } else if (hasIndirect && hasDirect) {
             ARTS_DEBUG("  Non-leading offset on mixed access; "
                        "keeping chunked for versioning");
@@ -1679,7 +1686,9 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   /// analysis Always use per-acquire voting since we've updated acquire
   /// attributes based on structural hints (offset_hints, indices, etc.)
   ctx.canElementWise = ctx.anyCanElementWise();
-  ctx.canBlock = ctx.anyCanBlock(); /// Uses per-acquire canBlock flags
+  ctx.canBlock = ctx.anyCanBlock();
+  if (!canUseBlock)
+    ctx.canBlock = false;
 
   ARTS_DEBUG("  Per-acquire voting: canEW="
              << ctx.canElementWise << ", canBlock=" << ctx.canBlock
@@ -1717,9 +1726,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
       /// Mark coarse acquires for full-range treatment
       for (auto &info : acquireInfos) {
-        if (info.mode == PartitionMode::coarse) {
+        if (info.mode == PartitionMode::coarse)
           info.needsFullRange = true;
-        }
       }
     } else if (hasCoarse) {
       ctx.canElementWise = false;
@@ -1727,8 +1735,6 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     }
 
     /// Mark indirect read-only acquires for full-range treatment.
-    /// This enables chunked writes + full-range indirect reads without needing
-    /// DbCopy/DbSync (the versioning approach).
     if (ctx.hasIndirectRead && !ctx.hasIndirectWrite) {
       for (auto &info : acquireInfos) {
         if (info.hasIndirectAccess && info.acquire) {
@@ -1739,6 +1745,21 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
             ARTS_DEBUG("  Marked indirect read-only acquire as full-range: "
                        << info.acquire);
           }
+        }
+      }
+    }
+
+    /// Indirect writes require full-range acquires to avoid out-of-range
+    /// block indexing when scatter targets fall outside the worker chunk.
+    /// This also covers mixed direct+indirect access within the same
+    /// allocation.
+    if (ctx.hasIndirectWrite) {
+      for (auto &info : acquireInfos) {
+        if (info.hasIndirectAccess && info.acquire) {
+          info.needsFullRange = true;
+          ARTS_DEBUG(
+              "  Marked indirect acquire (writes present) as full-range: "
+              << info.acquire);
         }
       }
     }
@@ -1753,8 +1774,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   if (allocNode)
     ctx.accessMode = allocOp.getMode();
 
-  /// Get canonical block size for Block mode (extract static value if
-  /// possible).
+  /// Get canonical block size for Block mode
   Value dynamicBlockSize;
   if (ctx.canBlock) {
     SmallVector<Value> blockSizeCandidates;
@@ -2034,8 +2054,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       /// For non-stencil block mode, upgrade to N-D block mode
       unsigned nDims = blockSizesForNDBlock.size();
       if (decision.mode != PartitionMode::stencil) {
-        decision = PartitioningDecision::blockND(
-            ctx, nDims, "N-D block pattern detected");
+        decision = PartitioningDecision::blockND(ctx, nDims,
+                                                 "N-D block pattern detected");
         ARTS_DEBUG("  Upgraded to N-D block mode with " << nDims
                                                         << " dimensions");
         heuristics.recordDecision(
@@ -2133,12 +2153,13 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     /// Single-sided patterns (only left or only right halo) break the
     /// 3-buffer approach which assumes data from both neighbors exists.
     if (info.haloLeft == 0 || info.haloRight == 0) {
-      ARTS_DEBUG("  Single-sided halo detected (haloLeft=" << info.haloLeft
-                 << ", haloRight=" << info.haloRight
+      ARTS_DEBUG("  Single-sided halo detected (haloLeft="
+                 << info.haloLeft << ", haloRight=" << info.haloRight
                  << ") - falling back to BLOCK mode");
-      decision = PartitioningDecision::blockND(ctx, decision.outerRank,
+      decision = PartitioningDecision::blockND(
+          ctx, decision.outerRank,
           "Single-sided stencil pattern - using BLOCK instead");
-      stencilInfo = std::nullopt;  // Clear stencil info
+      stencilInfo = std::nullopt; // Clear stencil info
     }
   }
 

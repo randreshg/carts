@@ -79,6 +79,13 @@ public:
   /// Traces through: add, sub, mul, div, rem, index casts, ext, trunc.
   static bool dependsOn(Value value, Value base, int depth = 0);
 
+  /// Try to detect a constant stride for a base value within an index
+  /// expression. Returns 1 when idx is base, constant C when idx contains
+  /// base * C combined with additive terms, or std::nullopt if stride cannot
+  /// be determined.
+  static std::optional<int64_t> getOffsetStride(Value idx, Value base,
+                                                int depth = 0);
+
   /// Check if a pointer/memref value is derived from a source value.
   /// Used for alias analysis and scope generation.
   /// Traces through: GEP, Pointer2Memref, Memref2Pointer, SubView, Cast, View,
