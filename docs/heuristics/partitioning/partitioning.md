@@ -62,6 +62,37 @@ fine-grained intent. Fine-grained intent is carried **only** in the
 `partition_*` hint fields (`partition_indices/offsets/sizes`). DbPartitioning
 consumes those hints and rewrites the DB-space fields later.
 
+## Authoritative Sources and Pipeline
+
+The pipeline relies on a clear separation between *intent* and *layout*:
+
+- **Partition hints (`partition_indices/offsets/sizes`) are authoritative** for
+  analysis and heuristics.
+- **DB-space fields (`offsets/sizes`) reflect the *current allocation layout***
+  and are only correct after DbPartitioning rewrites the allocation.
+
+### How the pieces interact
+
+1) **CreateDbs / ForLowering** emit partition hints on `db_acquire`.
+2) **DbAcquireNode** interprets hints to compute partition bounds and classify
+   access (uniform/indirect/stencil).
+3) **DbAllocNode** aggregates acquire patterns and hint presence.
+4) **DbPartitioning** uses those summaries to choose a mode, then rewrites
+   DB-space offsets/sizes to match the new allocation layout.
+
+## Heuristic Ordering (H1.x Summary)
+
+The partitioning decision is made in this order:
+
+1) **H1.1**: Read-only single-node with no partition capability → **coarse**
+2) **H1.2**: Mixed direct writes + indirect reads → **block** (indirect gets full-range)
+3) **H1.2b**: Mixed direct + indirect writes → **block** (indirect gets full-range)
+4) **H1.3**: Stencil → **stencil**, Indexed → **element-wise**
+5) **H1.4**: Uniform direct access → **block**
+6) **H1.5**: Multi-node prefers **block**, else **element-wise**
+7) **H1.6**: Non-uniform with no capability → **coarse**
+8) **Fallback**: Respect `--partition-fallback` (coarse or fine-grained)
+
 ## Terminology Mapping
 
 This table maps user-facing CLI options to internal implementation details:
