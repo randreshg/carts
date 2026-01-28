@@ -80,6 +80,17 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
         ctx, "H1.2: Mixed access (block writes + full-range indirect reads)");
   }
 
+  /// H1.2b: Mixed Access (Direct + Indirect Writes) -> Block
+  /// Indirect writes are handled via full-range acquires, while direct writes
+  /// still benefit from block partitioning.
+  if (ctx.canBlock && ctx.hasIndirectWrite && ctx.hasDirectAccess) {
+    ARTS_DEBUG("H1.2b applied: Mixed direct+indirect writes");
+    return PartitioningDecision::block(
+        ctx,
+        "H1.2b: Mixed direct+indirect writes prefers block with full-range "
+        "indirect acquires");
+  }
+
   /// H1.3: Stencil/Indexed Patterns
   /// - Indexed access (data-dependent) requires element-wise partitioning
   /// - Stencil patterns use Stencil mode (block + ESD) for halo handling

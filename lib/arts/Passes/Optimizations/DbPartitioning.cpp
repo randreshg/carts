@@ -416,6 +416,13 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
   AcquirePartitionInfo info;
   info.acquire = acquire;
   info.mode = DatablockUtils::getPartitionModeFromStructure(acquire);
+  if (info.mode == PartitionMode::coarse) {
+    if (!acquire.getPartitionIndices().empty())
+      info.mode = PartitionMode::fine_grained;
+    else if (!acquire.getPartitionOffsets().empty() ||
+             !acquire.getPartitionSizes().empty())
+      info.mode = PartitionMode::block;
+  }
   if (acqNode)
     info.hasIndirectAccess = acqNode->hasIndirectAccess();
 
@@ -742,6 +749,35 @@ static Value traceBackBlockSize(Value blockSize, DbAllocOp allocOp,
                                 OpBuilder &builder, DominanceInfo &domInfo,
                                 Location loc);
 
+/// Fallback: derive a dominating block size from allocation size + workers.
+/// This keeps block partitioning viable when hints are loop-scoped and
+/// non-dominating. The formula is ceil(elemSize / workers), clamped to >= 1.
+static Value computeDefaultBlockSize(DbAllocOp allocOp, OpBuilder &builder,
+                                     Location loc, bool useNodes) {
+  if (allocOp.getElementSizes().empty())
+    return nullptr;
+
+  Value elemSize = allocOp.getElementSizes().front();
+  if (!elemSize)
+    return nullptr;
+
+  Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
+  Value parallelI32 = useNodes ? builder.create<GetTotalNodesOp>(loc).getResult()
+                               : builder.create<GetTotalWorkersOp>(loc)
+                                     .getResult();
+  Value workers =
+      builder.create<arith::IndexCastUIOp>(loc, builder.getIndexType(),
+                                           parallelI32);
+  Value workersClamped = builder.create<arith::MaxUIOp>(loc, workers, one);
+
+  Value workersMinusOne =
+      builder.create<arith::SubIOp>(loc, workersClamped, one);
+  Value adjusted = builder.create<arith::AddIOp>(loc, elemSize, workersMinusOne);
+  Value blockSize = builder.create<arith::DivUIOp>(loc, adjusted, workersClamped);
+  blockSize = builder.create<arith::MaxUIOp>(loc, blockSize, one);
+  return blockSize;
+}
+
 /// Check if operand dominates allocation, or trace through EDT block args.
 static Value getDominatingOperand(Value operand, DbAllocOp allocOp,
                                   DominanceInfo &domInfo) {
@@ -758,104 +794,6 @@ static Value getTracedOrDominatingOperand(Value operand, DbAllocOp allocOp,
   if (Value dom = getDominatingOperand(operand, allocOp, domInfo))
     return dom;
   return traceBackBlockSize(operand, allocOp, builder, domInfo, loc);
-}
-
-/// Trace binary op: trace both operands, recreate if both succeed.
-template <typename OpType>
-static Value traceBinaryOp(OpType op, DbAllocOp allocOp, OpBuilder &builder,
-                           DominanceInfo &domInfo, Location loc,
-                           StringRef opName) {
-  Value lhs =
-      getTracedOrDominatingOperand(op.getLhs(), allocOp, builder, domInfo, loc);
-  Value rhs =
-      getTracedOrDominatingOperand(op.getRhs(), allocOp, builder, domInfo, loc);
-  if (lhs && rhs) {
-    builder.setInsertionPoint(allocOp);
-    return builder.create<OpType>(loc, lhs, rhs);
-  }
-  return nullptr;
-}
-
-/// Trace minsi with partial operand fallback.
-static Value traceMinSI(arith::MinSIOp minOp, DbAllocOp allocOp,
-                        OpBuilder &builder, DominanceInfo &domInfo,
-                        Location loc) {
-  Value lhsTraced = getTracedOrDominatingOperand(minOp.getLhs(), allocOp,
-                                                 builder, domInfo, loc);
-  Value rhsTraced = getTracedOrDominatingOperand(minOp.getRhs(), allocOp,
-                                                 builder, domInfo, loc);
-  if (lhsTraced && rhsTraced) {
-    if (ValueUtils::isZeroConstant(lhsTraced))
-      return rhsTraced;
-    if (ValueUtils::isZeroConstant(rhsTraced))
-      return lhsTraced;
-    return builder.create<arith::MinSIOp>(loc, lhsTraced, rhsTraced);
-  }
-  /// Partial operand fallback: use whichever operand traces successfully
-  /// This handles patterns like minsi(start_row + block_size, output_size)
-  /// where block_size dominates but start_row doesn't
-  if (rhsTraced && !lhsTraced)
-    return rhsTraced;
-  if (lhsTraced && !rhsTraced)
-    return lhsTraced;
-  return nullptr;
-}
-
-/// Trace minui with partial operand fallback.
-static Value traceMinUI(arith::MinUIOp minOp, DbAllocOp allocOp,
-                        OpBuilder &builder, DominanceInfo &domInfo,
-                        Location loc) {
-  Value lhsTraced = getTracedOrDominatingOperand(minOp.getLhs(), allocOp,
-                                                 builder, domInfo, loc);
-  Value rhsTraced = getTracedOrDominatingOperand(minOp.getRhs(), allocOp,
-                                                 builder, domInfo, loc);
-  if (lhsTraced && rhsTraced) {
-    if (ValueUtils::isZeroConstant(lhsTraced))
-      return rhsTraced;
-    if (ValueUtils::isZeroConstant(rhsTraced))
-      return lhsTraced;
-    return builder.create<arith::MinUIOp>(loc, lhsTraced, rhsTraced);
-  }
-  if (rhsTraced && !lhsTraced)
-    return rhsTraced;
-  if (lhsTraced && !rhsTraced)
-    return lhsTraced;
-  return nullptr;
-}
-
-/// Trace select with partial operand fallback; uses max if condition doesn't
-/// dominate.
-static Value traceSelect(arith::SelectOp selectOp, DbAllocOp allocOp,
-                         OpBuilder &builder, DominanceInfo &domInfo,
-                         Location loc) {
-  Value trueTraced = getTracedOrDominatingOperand(
-      selectOp.getTrueValue(), allocOp, builder, domInfo, loc);
-  Value falseTraced = getTracedOrDominatingOperand(
-      selectOp.getFalseValue(), allocOp, builder, domInfo, loc);
-
-  if (trueTraced && falseTraced) {
-    Value condDom =
-        getDominatingOperand(selectOp.getCondition(), allocOp, domInfo);
-    builder.setInsertionPoint(allocOp);
-    if (condDom) {
-      return builder.create<arith::SelectOp>(loc, condDom, trueTraced,
-                                             falseTraced);
-    }
-    /// Condition doesn't dominate - use max of arms as safe upper bound
-    return builder.create<arith::MaxSIOp>(loc, trueTraced, falseTraced);
-  }
-  /// Partial operand fallback: use whichever arm traces successfully
-  if (trueTraced && !falseTraced) {
-    if (ValueUtils::isZeroConstant(trueTraced))
-      return nullptr;
-    return trueTraced;
-  }
-  if (falseTraced && !trueTraced) {
-    if (ValueUtils::isZeroConstant(falseTraced))
-      return nullptr;
-    return falseTraced;
-  }
-  return nullptr;
 }
 
 static Value traceBackBlockSize(Value blockSize, DbAllocOp allocOp,
@@ -878,17 +816,24 @@ static Value traceBackBlockSize(Value blockSize, DbAllocOp allocOp,
     return nullptr;
   }
 
+  auto traceOperand = [&](Value v) -> Value {
+    return getTracedOrDominatingOperand(v, allocOp, builder, domInfo, loc);
+  };
+  auto traceCond = [&](Value v) -> Value {
+    return getDominatingOperand(v, allocOp, domInfo);
+  };
+
   /// Division patterns (block_size = N / tasks)
   if (auto op = dyn_cast<arith::DivSIOp>(defOp))
-    return traceBinaryOp(op, allocOp, builder, domInfo, loc, "divsi");
+    return ValueUtils::traceBinaryOp(op, allocOp, builder, loc, traceOperand);
   if (auto op = dyn_cast<arith::DivUIOp>(defOp))
-    return traceBinaryOp(op, allocOp, builder, domInfo, loc, "divui");
+    return ValueUtils::traceBinaryOp(op, allocOp, builder, loc, traceOperand);
   if (auto op = dyn_cast<arith::CeilDivSIOp>(defOp))
-    return traceBinaryOp(op, allocOp, builder, domInfo, loc, "ceildivsi");
+    return ValueUtils::traceBinaryOp(op, allocOp, builder, loc, traceOperand);
   if (auto op = dyn_cast<arith::CeilDivUIOp>(defOp))
-    return traceBinaryOp(op, allocOp, builder, domInfo, loc, "ceildivui");
+    return ValueUtils::traceBinaryOp(op, allocOp, builder, loc, traceOperand);
 
-  /// Cast pattern (unwrap and trace source)
+  /// Cast patterns (unwrap and trace source)
   if (auto castOp = dyn_cast<arith::IndexCastOp>(defOp)) {
     if (Value inner = traceBackBlockSize(castOp.getIn(), allocOp, builder,
                                          domInfo, loc)) {
@@ -898,26 +843,68 @@ static Value traceBackBlockSize(Value blockSize, DbAllocOp allocOp,
     }
     return nullptr;
   }
+  if (auto castOp = dyn_cast<arith::IndexCastUIOp>(defOp)) {
+    if (Value inner = traceBackBlockSize(castOp.getIn(), allocOp, builder,
+                                         domInfo, loc)) {
+      if (inner.getType() == castOp.getType())
+        return inner;
+      return builder.create<arith::IndexCastUIOp>(loc, castOp.getType(), inner);
+    }
+    return nullptr;
+  }
+  if (auto castOp = dyn_cast<arith::ExtSIOp>(defOp)) {
+    if (Value inner =
+            traceBackBlockSize(castOp.getIn(), allocOp, builder, domInfo, loc))
+      return builder.create<arith::ExtSIOp>(loc, castOp.getType(), inner);
+    return nullptr;
+  }
+  if (auto castOp = dyn_cast<arith::ExtUIOp>(defOp)) {
+    if (Value inner =
+            traceBackBlockSize(castOp.getIn(), allocOp, builder, domInfo, loc))
+      return builder.create<arith::ExtUIOp>(loc, castOp.getType(), inner);
+    return nullptr;
+  }
+  if (auto castOp = dyn_cast<arith::TruncIOp>(defOp)) {
+    if (Value inner =
+            traceBackBlockSize(castOp.getIn(), allocOp, builder, domInfo, loc))
+      return builder.create<arith::TruncIOp>(loc, castOp.getType(), inner);
+    return nullptr;
+  }
 
   /// Bounds patterns (clamping with max/min)
   if (auto op = dyn_cast<arith::MaxSIOp>(defOp))
-    return traceBinaryOp(op, allocOp, builder, domInfo, loc, "maxsi");
+    return ValueUtils::traceBinaryOp(op, allocOp, builder, loc, traceOperand);
+  if (auto op = dyn_cast<arith::MaxUIOp>(defOp))
+    return ValueUtils::traceBinaryOp(op, allocOp, builder, loc, traceOperand);
   if (auto op = dyn_cast<arith::MinSIOp>(defOp))
-    return traceMinSI(op, allocOp, builder, domInfo, loc);
+    return ValueUtils::traceMinSIWithFallback(op, allocOp, builder, loc,
+                                              traceOperand);
   if (auto op = dyn_cast<arith::MinUIOp>(defOp))
-    return traceMinUI(op, allocOp, builder, domInfo, loc);
+    return ValueUtils::traceMinUIWithFallback(op, allocOp, builder, loc,
+                                              traceOperand);
 
   /// Conditional pattern (select with fallback)
   if (auto op = dyn_cast<arith::SelectOp>(defOp))
-    return traceSelect(op, allocOp, builder, domInfo, loc);
+    return ValueUtils::traceSelectWithFallback(op, allocOp, builder, loc,
+                                               traceOperand, traceCond);
 
   /// Arithmetic patterns (add, sub, mul)
   if (auto op = dyn_cast<arith::SubIOp>(defOp))
-    return traceBinaryOp(op, allocOp, builder, domInfo, loc, "subi");
+    return ValueUtils::traceBinaryOp(op, allocOp, builder, loc, traceOperand);
   if (auto op = dyn_cast<arith::AddIOp>(defOp))
-    return traceBinaryOp(op, allocOp, builder, domInfo, loc, "addi");
+    return ValueUtils::traceBinaryOp(op, allocOp, builder, loc, traceOperand);
   if (auto op = dyn_cast<arith::MulIOp>(defOp))
-    return traceBinaryOp(op, allocOp, builder, domInfo, loc, "muli");
+    return ValueUtils::traceBinaryOp(op, allocOp, builder, loc, traceOperand);
+
+  /// ARTS runtime queries: recreate at allocation point
+  if (isa<GetTotalWorkersOp>(defOp)) {
+    builder.setInsertionPoint(allocOp);
+    return builder.create<GetTotalWorkersOp>(loc).getResult();
+  }
+  if (isa<GetTotalNodesOp>(defOp)) {
+    builder.setInsertionPoint(allocOp);
+    return builder.create<GetTotalNodesOp>(loc).getResult();
+  }
 
   /// Constant patterns (recreate at allocation point)
   if (auto constOp = dyn_cast<arith::ConstantOp>(defOp)) {
@@ -1546,6 +1533,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   PartitioningContext ctx;
   ctx.machine = &AM->getAbstractMachine();
   bool canUseBlock = true; /// Assume chunked is possible until proven otherwise
+  bool anyBlockCapable = false;
+  bool anyBlockNotFullRange = false;
 
   if (allocNode) {
     ctx.accessPatterns = allocNode->summarizeAcquirePatterns();
@@ -1611,9 +1600,14 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       /// CreateDbs sets this based on DbControlOp analysis.
       auto acquire = acqNode->getDbAcquireOp();
       auto acquireMode = getPartitionMode(acquire.getOperation());
+      bool hasBlockHints = !acquire.getPartitionOffsets().empty() ||
+                           !acquire.getPartitionSizes().empty();
+      bool inferredBlock = !acqInfo.partitionOffsets.empty() &&
+                           !acqInfo.partitionSizes.empty();
       bool thisAcquireCanBlock =
-          acquireMode && (*acquireMode == PartitionMode::block ||
-                          *acquireMode == PartitionMode::stencil);
+          (acquireMode && (*acquireMode == PartitionMode::block ||
+                           *acquireMode == PartitionMode::stencil)) ||
+          hasBlockHints || inferredBlock;
       if (!thisAcquireCanBlock &&
           acqNode->getAccessPattern() == AccessPattern::Stencil)
         thisAcquireCanBlock = true;
@@ -1648,11 +1642,17 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                        "keeping chunked for versioning");
           } else {
             ARTS_DEBUG("  Non-leading partition offset detected; "
-                       "disabling chunked partitioning for allocation");
-            canUseBlock = false;
-            thisAcquireCanBlock = false;
+                       "marking for full-range access");
+            if (idx < acquireInfos.size())
+              acquireInfos[idx].needsFullRange = true;
           }
         }
+      }
+
+      if (thisAcquireCanBlock) {
+        anyBlockCapable = true;
+        if (idx < acquireInfos.size() && !acquireInfos[idx].needsFullRange)
+          anyBlockNotFullRange = true;
       }
 
       /// Build AcquireInfo for heuristic voting
@@ -1680,6 +1680,17 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                  << (acquireMode ? static_cast<int>(*acquireMode) : -1));
       ++idx;
     });
+  }
+
+  /// If every block-capable acquire is full-range, block partitioning adds
+  /// overhead without locality benefit. Disable block in that case.
+  bool allBlockFullRange = anyBlockCapable && !anyBlockNotFullRange;
+  if (allBlockFullRange) {
+    ARTS_DEBUG("  All block-capable acquires are full-range; disabling block "
+               "partitioning");
+    for (auto &info : ctx.acquires)
+      info.canBlock = false;
+    canUseBlock = false;
   }
 
   /// Determine allocation-level capabilities from per-acquire STRUCTURAL
@@ -1786,6 +1797,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     for (const auto &info : acquireInfos) {
       if (info.mode != PartitionMode::block || info.partitionSizes.empty())
         continue;
+      if (info.needsFullRange)
+        continue;
 
       DbAcquireOp acquire = info.acquire;
       if (!acquire)
@@ -1863,9 +1876,15 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
   /// Fallback: use the first observed block size if canonicalization failed.
   if (!dynamicBlockSize) {
-    Value refSize = reference.partitionSizes.empty()
-                        ? Value()
-                        : reference.partitionSizes.front();
+    Value refSize;
+    for (const auto &info : acquireInfos) {
+      if (info.mode != PartitionMode::block || info.partitionSizes.empty())
+        continue;
+      if (info.needsFullRange)
+        continue;
+      refSize = info.partitionSizes.front();
+      break;
+    }
     if (consistentMode == PartitionMode::block && refSize &&
         !ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(refSize))) {
       dynamicBlockSize = refSize;
@@ -1876,6 +1895,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     } else {
       for (const auto &info : acquireInfos) {
         if (info.mode != PartitionMode::block || info.partitionSizes.empty())
+          continue;
+        if (info.needsFullRange)
           continue;
         Value infoSize = info.partitionSizes.front();
         if (ValueUtils::isZeroConstant(
@@ -2224,6 +2245,26 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                 "recreated block size at allocation point via trace-back",
                 allocOp.getOperation(), {});
           }
+        }
+      }
+
+      if (!blockSizeForPlan) {
+        /// Fallback: derive a dominating block size from alloc size + workers.
+        ARTS_DEBUG("  No block size available for block mode - attempting "
+                   "alloc+workers fallback");
+        bool useNodesForFallback = false;
+        if (AM) {
+          ArtsAbstractMachine &machine = AM->getAbstractMachine();
+          if (machine.hasValidNodeCount() && machine.getNodeCount() > 1)
+            useNodesForFallback = true;
+        }
+        blockSizeForPlan =
+            computeDefaultBlockSize(allocOp, builder, loc, useNodesForFallback);
+        if (blockSizeForPlan) {
+          heuristics.recordDecision(
+              "Partition-BlockSizeFallbackHeuristic", true,
+              "derived block size from alloc size and total workers",
+              allocOp.getOperation(), {});
         }
       }
 

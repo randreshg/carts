@@ -395,6 +395,9 @@ AcquirePatternSummary DbAllocNode::summarizeAcquirePatterns() const {
       auto mode = acqOp.getPartitionModeOr();
       if (mode == PartitionMode::block || mode == PartitionMode::stencil)
         hasBlockHint = true;
+      if (!acqOp.getPartitionOffsets().empty() ||
+          !acqOp.getPartitionSizes().empty())
+        hasBlockHint = true;
     }
     auto pattern = acqNode->getAccessPattern();
     switch (pattern) {
