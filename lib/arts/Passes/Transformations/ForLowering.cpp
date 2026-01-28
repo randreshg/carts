@@ -1693,7 +1693,6 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       /// USER HINT EXISTS - ForLowering RESPECTS it!
       /// Use parent's partition mode and operands (from DbControlOp via
       /// CreateDbs)
-      /// ═══════════════════════════════════════════════════════════════════════
       ARTS_DEBUG("    - Respecting existing DbControlOp hint on allocation");
 
       /// Reuse the parent acquire's partitioning clause which came from
@@ -1724,54 +1723,93 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       chunkAcqOp.copyPartitionSegmentsFrom(parentAcqOp);
 
     } else {
-      /// ═══════════════════════════════════════════════════════════════════════
       /// NO USER HINT - ForLowering sets chunked partitioning for workers
-      /// ═══════════════════════════════════════════════════════════════════════
       ARTS_DEBUG("    - No DbControlOp hint, using ForLowering chunked mode");
 
-      /// Get offsets/sizes from parent acquire for hints
-      SmallVector<Value> chunkOffsets =
-          DatablockUtils::getOffsetsFromDb(parentDep);
-      SmallVector<Value> blockSizes = DatablockUtils::getSizesFromDb(parentDep);
-      if (chunkOffsets.empty())
-        chunkOffsets.push_back(AC->createIndexConstant(0, loc));
-      if (blockSizes.empty())
-        blockSizes.push_back(AC->createIndexConstant(1, loc));
-
-      /// Compute worker chunk offset and size
-      /// workerOffset = chunkOffset (from loop partitioning)
-      /// workerSize = workerIterationCount * step
-      SmallVector<Value> workerOffsets = {chunkOffset};
-      Value workerSizeVal = loopInfo.workerIterationCount;
-      Value workerHintSizeVal = loopInfo.workerMaxIterations
-                                    ? loopInfo.workerMaxIterations
-                                    : workerSizeVal;
-      if (!forOp.getStep().empty()) {
-        Value step = forOp.getStep()[0];
-        int64_t stepVal;
-        if (!ValueUtils::getConstantIndex(step, stepVal) || stepVal != 1) {
-          workerSizeVal = AC->create<arith::MulIOp>(
-              loc, loopInfo.workerIterationCount, step);
-          workerHintSizeVal =
-              AC->create<arith::MulIOp>(loc, workerHintSizeVal, step);
+      /// If the DB element is a single element (scalar/size-1), keep coarse.
+      /// Chunking with worker offsets is invalid for size=1.
+      bool isSingleElement = false;
+      if (Operation *rootAllocOp =
+              DatablockUtils::getUnderlyingDbAlloc(rootPtr)) {
+        if (auto dbAlloc = dyn_cast<DbAllocOp>(rootAllocOp)) {
+          auto elemSizes = dbAlloc.getElementSizes();
+          if (!elemSizes.empty()) {
+            isSingleElement = llvm::all_of(elemSizes, [](Value v) {
+              int64_t val;
+              return ValueUtils::getConstantIndex(v, val) && val == 1;
+            });
+          }
         }
       }
-      SmallVector<Value> workerSizes = {workerSizeVal};
-      SmallVector<Value> workerHintSizes = {workerHintSizeVal};
+      if (isSingleElement) {
+        ARTS_DEBUG("    - Single-element DB, using coarse acquire");
+        chunkAcqOp = AC->create<DbAcquireOp>(
+            loc, parentAcqOp.getMode(), rootGuid, rootPtr,
+            parentAcqOp.getPtr().getType(), PartitionMode::coarse,
+            /*indices=*/SmallVector<Value>{}, /*offsets=*/SmallVector<Value>{zero},
+            /*sizes=*/SmallVector<Value>{one},
+            /*partition_indices=*/SmallVector<Value>{},
+            /*partition_offsets=*/SmallVector<Value>{},
+            /*partition_sizes=*/SmallVector<Value>{});
+      } else {
 
-      /// Create chunked acquire with unified offsets/sizes (no deprecated
-      /// chunk_index/chunk_size)
-      chunkAcqOp = AC->create<DbAcquireOp>(
-          loc, parentAcqOp.getMode(), rootGuid, rootPtr,
-          parentAcqOp.getPtr().getType(), PartitionMode::block,
-          /*indices=*/
-          SmallVector<Value>(parentAcqOp.getIndices().begin(),
-                             parentAcqOp.getIndices().end()),
-          /*offsets=*/workerOffsets,
-          /*sizes=*/workerSizes,
-          /*partition_indices=*/SmallVector<Value>{},
-          /*partition_offsets=*/workerOffsets,
-          /*partition_sizes=*/workerHintSizes);
+        /// Get offsets/sizes from parent acquire for hints
+        SmallVector<Value> chunkOffsets =
+            DatablockUtils::getOffsetsFromDb(parentDep);
+        SmallVector<Value> blockSizes =
+            DatablockUtils::getSizesFromDb(parentDep);
+        if (chunkOffsets.empty())
+          chunkOffsets.push_back(AC->createIndexConstant(0, loc));
+        if (blockSizes.empty())
+          blockSizes.push_back(AC->createIndexConstant(1, loc));
+
+        /// Compute worker chunk offset and size
+        /// workerOffset = lowerBound + chunkOffset * step
+        /// workerSize = workerIterationCount * step
+        Value workerOffsetVal = chunkOffset;
+        if (!forOp.getStep().empty()) {
+          Value step = forOp.getStep()[0];
+          int64_t stepVal;
+          if (!ValueUtils::getConstantIndex(step, stepVal) || stepVal != 1) {
+            workerOffsetVal =
+                AC->create<arith::MulIOp>(loc, workerOffsetVal, step);
+          }
+        }
+        Value lowerBoundVal = forOp.getLowerBound()[0];
+        workerOffsetVal =
+            AC->create<arith::AddIOp>(loc, lowerBoundVal, workerOffsetVal);
+        SmallVector<Value> workerOffsets = {workerOffsetVal};
+        Value workerSizeVal = loopInfo.workerIterationCount;
+        Value workerHintSizeVal = loopInfo.workerMaxIterations
+                                      ? loopInfo.workerMaxIterations
+                                      : workerSizeVal;
+        if (!forOp.getStep().empty()) {
+          Value step = forOp.getStep()[0];
+          int64_t stepVal;
+          if (!ValueUtils::getConstantIndex(step, stepVal) || stepVal != 1) {
+            workerSizeVal = AC->create<arith::MulIOp>(
+                loc, loopInfo.workerIterationCount, step);
+            workerHintSizeVal =
+                AC->create<arith::MulIOp>(loc, workerHintSizeVal, step);
+          }
+        }
+        SmallVector<Value> workerSizes = {workerSizeVal};
+        SmallVector<Value> workerHintSizes = {workerHintSizeVal};
+
+        /// Create chunked acquire with unified offsets/sizes (no deprecated
+        /// chunk_index/chunk_size)
+        chunkAcqOp = AC->create<DbAcquireOp>(
+            loc, parentAcqOp.getMode(), rootGuid, rootPtr,
+            parentAcqOp.getPtr().getType(), PartitionMode::block,
+            /*indices=*/
+            SmallVector<Value>(parentAcqOp.getIndices().begin(),
+                               parentAcqOp.getIndices().end()),
+            /*offsets=*/workerOffsets,
+            /*sizes=*/workerSizes,
+            /*partition_indices=*/SmallVector<Value>{},
+            /*partition_offsets=*/workerOffsets,
+            /*partition_sizes=*/workerHintSizes);
+      }
     }
 
     Value acquirePtr = chunkAcqOp.getResult(1);

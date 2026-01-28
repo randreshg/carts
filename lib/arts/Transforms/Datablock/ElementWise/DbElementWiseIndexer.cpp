@@ -304,6 +304,22 @@ LocalizedIndices DbElementWiseIndexer::localizeForFineGrained(
         }
       }
     }
+    /// Positional fallback for range acquires: when no offsets matched,
+    /// split by rank with offset subtraction.
+    if (result.dbRefIndices.empty() && globalIndices.size() > innerRank) {
+      for (unsigned i = 0; i < outerRank && i < globalIndices.size(); ++i) {
+        Value globalIdx = globalIndices[i];
+        if (i < acquireOffsets.size() && acquireOffsets[i]) {
+          Value localIdx =
+              builder.create<arith::SubIOp>(loc, globalIdx, acquireOffsets[i]);
+          result.dbRefIndices.push_back(localIdx);
+        } else {
+          result.dbRefIndices.push_back(globalIdx);
+        }
+        isMatched.set(i);
+      }
+      ARTS_DEBUG("  Phase 1b positional fallback: " << outerRank << " dims");
+    }
     /// Add unmatched globals to memref
     for (unsigned g = 0; g < globalIndices.size(); ++g) {
       if (!isMatched[g])
@@ -317,17 +333,37 @@ LocalizedIndices DbElementWiseIndexer::localizeForFineGrained(
   }
 
   /// Phase 2: Create localized dbRef indices for matched dimensions
+  ///
+  /// When value-based matching fails (e.g., partition indices from outside EDT
+  /// vs. load indices computed inside EDT from different data sources), fall
+  /// back to positional mapping: dimension p in partition → dimension p in
+  /// global indices, with localization by subtraction.
+  ///
+  /// EdtOp is NOT IsolatedFromAbove, so parent-scope partition values are
+  /// accessible inside the EDT body for the subtraction.
+  bool anyMatched = isMatched.any();
+
   for (unsigned p = 0; p < numPinnedDims; ++p) {
     int g = matchedGlobalIdx[p];
     if (g >= 0) {
+      /// Value-matched: use the matched global index
       Value globalIdx = globalIndices[g];
       Value partitionIdx = acquireIndices[p];
       Value localIdx =
           builder.create<arith::SubIOp>(loc, globalIdx, partitionIdx);
       result.dbRefIndices.push_back(localIdx);
+    } else if (!anyMatched && p < globalIndices.size()) {
+      /// Positional fallback: no values matched at all, use position p.
+      /// Localize by subtracting the partition index.
+      Value globalIdx = globalIndices[p];
+      Value partitionIdx = acquireIndices[p];
+      Value localIdx =
+          builder.create<arith::SubIOp>(loc, globalIdx, partitionIdx);
+      result.dbRefIndices.push_back(localIdx);
+      isMatched.set(p);
+      ARTS_DEBUG("  Phase 2 positional fallback: dim " << p);
     } else {
-      /// No matching global found - use zero (element already selected by
-      /// acquire)
+      /// Partial match or no global index for this dimension
       result.dbRefIndices.push_back(zero());
     }
   }
@@ -477,8 +513,11 @@ void DbElementWiseIndexer::transformOps(
       continue;
 
     ValueRange indices = getIndicesFromOp(op);
-    if (indices.empty())
+    if (indices.empty()) {
+      /// Handle scalar (rank-0) accesses by rewriting with db_ref[0]
+      transformAccess(op, dbPtr, elementType, AC, opsToRemove);
       continue;
+    }
 
     /// Detect linearized access for multi-dimensional elements
     bool isLinearized = false;
