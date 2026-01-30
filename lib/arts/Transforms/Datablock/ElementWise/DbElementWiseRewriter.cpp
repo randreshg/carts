@@ -169,8 +169,8 @@ void DbElementWiseRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
   Value newSource = (ref.getSource() == oldAlloc.getPtr()) ? newAlloc.getPtr()
                                                            : ref.getSource();
 
-  unsigned newOuterRank = newOuterSizes.size();
-  unsigned newInnerRank = newInnerSizes.size();
+  unsigned newOuterRank = plan.outerRank();
+  unsigned newInnerRank = plan.innerRank();
 
   /// Collect load/store users of this db_ref
   SmallVector<Operation *> refUsers(ref.getResult().getUsers().begin(),
@@ -295,8 +295,7 @@ bool DbElementWiseRewriter::rebaseEdtUsers(DbAcquireOp acquire,
 
   /// Create element-wise indexer with PartitionInfo
   auto indexer = std::make_unique<DbElementWiseIndexer>(
-      info, newOuterSizes.size(), newInnerSizes.size(),
-      oldAlloc.getElementSizes());
+      info, plan.outerRank(), plan.innerRank(), oldAlloc.getElementSizes());
 
   SmallVector<Operation *> users(blockArg.getUsers().begin(),
                                  blockArg.getUsers().end());

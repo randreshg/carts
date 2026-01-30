@@ -14,11 +14,9 @@ namespace arts {
 
 class DbElementWiseRewriter : public DbRewriter {
 public:
-  DbElementWiseRewriter(DbAllocOp oldAlloc, ValueRange newOuterSizes,
-                        ValueRange newInnerSizes,
-                        ArrayRef<DbRewriteAcquire> acquires,
-                        const DbRewritePlan &plan)
-      : DbRewriter(oldAlloc, newOuterSizes, newInnerSizes, acquires, plan) {}
+  DbElementWiseRewriter(DbAllocOp oldAlloc, ArrayRef<DbRewriteAcquire> acquires,
+                        DbRewritePlan &plan)
+      : DbRewriter(oldAlloc, acquires, plan) {}
 
 protected:
   void transformAcquire(const DbRewriteAcquire &info, DbAllocOp newAlloc,

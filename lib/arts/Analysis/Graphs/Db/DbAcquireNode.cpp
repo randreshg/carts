@@ -847,17 +847,35 @@ size_t DbAcquireNode::countStores() {
 }
 
 bool DbAcquireNode::canPartitionWithOffset(Value offset) {
-  if (!offset)
+  ARTS_DEBUG("canPartitionWithOffset called with offset=" << offset);
+  if (!offset) {
+    ARTS_DEBUG("  -> returning false (no offset)");
     return false;
+  }
   Value offsetStripped = ValueUtils::stripNumericCasts(offset);
-  if (ValueUtils::isZeroConstant(offsetStripped))
-    return true;
+  ARTS_DEBUG("  offsetStripped=" << offsetStripped
+                                 << " isZero=" << ValueUtils::isZeroConstant(offsetStripped));
+
+  // A constant offset (like %c0) is NOT a valid partition variable.
+  // The partition offset should be a dynamic value (like a loop IV) that
+  // varies across partitions. A constant cannot represent "which partition
+  // am I in" and using it in dependsOn() checks would incorrectly match
+  // any use of that constant in the index chain.
+  int64_t constVal;
+  if (ValueUtils::getConstantIndex(offsetStripped, constVal)) {
+    ARTS_DEBUG("  -> returning false (constant offset " << constVal
+               << " cannot be partition variable)");
+    return false;
+  }
 
   DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
   collectAccessOperations(dbRefToMemOps);
 
-  if (dbRefToMemOps.empty())
+  if (dbRefToMemOps.empty()) {
+    ARTS_DEBUG("  -> returning true (no memory operations)");
     return true;
+  }
+  ARTS_DEBUG("  found " << dbRefToMemOps.size() << " db_ref users with memOps");
 
   for (auto &[dbRef, memOps] : dbRefToMemOps) {
     for (Operation *memOp : memOps) {
@@ -908,16 +926,48 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
           firstDynIdx = idx;
       }
 
-      if (!firstDynIdx)
+      if (!firstDynIdx) {
+        ARTS_DEBUG("    no dynamic index, continuing");
         continue;
+      }
 
+      ARTS_DEBUG("    offsetSeen=" << offsetSeen << " firstDynIdx=" << firstDynIdx);
       if (!offsetSeen ||
-          !LoopNode::dependsOnLoopInitNormalized(firstDynIdx, offsetStripped))
+          !LoopNode::dependsOnLoopInitNormalized(firstDynIdx, offsetStripped)) {
+        ARTS_DEBUG("  -> returning false: offsetSeen=" << offsetSeen
+                   << " (offset not in access pattern)");
         return false;
+      }
     }
   }
 
+  ARTS_DEBUG("  -> returning true (all checks passed)");
   return true;
+}
+
+bool DbAcquireNode::needsFullRange(Value partitionOffset) {
+  /// Case 1: Indirect access can't determine which block to access.
+  if (hasIndirectAccess()) {
+    ARTS_DEBUG("  needsFullRange: indirect access detected");
+    return true;
+  }
+
+  /// Case 2: No partition offset OR partition offset not in access pattern.
+  /// - No offset: acquire has no hints, needs full-range for safety
+  /// - Offset mismatch: e.g., parallel over 'b' but access mean[f]
+  /// Exception: Stencil patterns have special ESD handling.
+  if (!partitionOffset || !canPartitionWithOffset(partitionOffset)) {
+    if (getAccessPattern() == AccessPattern::Stencil) {
+      ARTS_DEBUG("  needsFullRange: stencil pattern - keeping block access");
+      return false;
+    }
+    ARTS_DEBUG("  needsFullRange: "
+               << (partitionOffset ? "partition offset not in access pattern"
+                                   : "no partition offset (needs full range)"));
+    return true;
+  }
+
+  return false;
 }
 
 LogicalResult DbAcquireNode::computeBlockInfo(Value &blockOffset,

@@ -86,51 +86,49 @@ struct DbRewriteAcquire {
   }
 };
 
-/// Forward declaration for PartitioningDecision
-struct PartitioningDecision;
-
 /// Rewriter plan chosen by DbPartitioning.
 struct DbRewritePlan {
   PartitionMode mode = PartitionMode::fine_grained;
-  Value blockSize; /// Legacy: single block size for 1D partitioning
-  SmallVector<Value> blockSizes; /// N-D: block size per partitioned dimension
   std::optional<StencilInfo> stencilInfo;
-  unsigned outerRank = 0;
-  unsigned innerRank = 0;
+
+  /// N-D block sizes (one per partitioned dimension)
+  SmallVector<Value> blockSizes;
+
+  /// Allocation shape (single source of truth)
+  SmallVector<Value> outerSizes; /// Number of blocks per dimension
+  SmallVector<Value> innerSizes; /// Size of each dimension within a block
 
   /// Mixed mode support
   bool isMixedMode = false;
-  Value numBlocks;
-  SmallVector<Value> numBlocksPerDim; /// N-D: block count per dimension
 
-  /// Default constructor
-  DbRewritePlan() = default;
-  explicit DbRewritePlan(const PartitioningDecision &decision);
+  /// Derived ranks (computed from sizes)
+  unsigned outerRank() const { return outerSizes.size(); }
+  unsigned innerRank() const { return innerSizes.size(); }
 
-  /// Get block size for dimension d (falls back to blockSize for 1D)
+  /// Get block size for dimension d
   Value getBlockSize(unsigned d = 0) const {
-    if (d < blockSizes.size())
-      return blockSizes[d];
-    return blockSize;
+    return d < blockSizes.size() ? blockSizes[d] : Value();
   }
 
   /// Number of partitioned dimensions
-  unsigned numPartitionedDims() const {
-    return blockSizes.empty() ? (blockSize ? 1 : 0) : blockSizes.size();
-  }
+  unsigned numPartitionedDims() const { return blockSizes.size(); }
 
   bool isValid() const {
     switch (mode) {
     case PartitionMode::stencil:
       return stencilInfo.has_value();
     case PartitionMode::block:
-      return static_cast<bool>(blockSize) || !blockSizes.empty();
+      return !blockSizes.empty();
     case PartitionMode::fine_grained:
     case PartitionMode::coarse:
       return true;
     }
     return false;
   }
+
+  /// Default constructor
+  DbRewritePlan() = default;
+  explicit DbRewritePlan(PartitionMode m) : mode(m) {}
 };
 
 ///===----------------------------------------------------------------------===//
@@ -140,13 +138,9 @@ class DbRewriter {
 public:
   virtual ~DbRewriter() = default;
 
-  /// Factory method - creates the appropriate subclass based on plan.mode
-  static std::unique_ptr<DbRewriter>
-  create(DbAllocOp oldAlloc, ValueRange newOuterSizes, ValueRange newInnerSizes,
-         ArrayRef<DbRewriteAcquire> acquires, const DbRewritePlan &plan);
-
-  /// Main entry point - shared workflow (template method pattern)
-  /// Non-virtual: defines the transformation steps, calls virtual hooks.
+  static std::unique_ptr<DbRewriter> create(DbAllocOp oldAlloc,
+                                            ArrayRef<DbRewriteAcquire> acquires,
+                                            DbRewritePlan &plan);
   FailureOr<DbAllocOp> apply(OpBuilder &builder);
 
   /// Accessors
@@ -160,12 +154,9 @@ public:
 
 protected:
   /// Protected constructor - use create() factory instead
-  DbRewriter(DbAllocOp oldAlloc, ValueRange newOuterSizes,
-             ValueRange newInnerSizes, ArrayRef<DbRewriteAcquire> acquires,
-             const DbRewritePlan &plan);
+  DbRewriter(DbAllocOp oldAlloc, ArrayRef<DbRewriteAcquire> acquires,
+             DbRewritePlan &plan);
 
-  ///===--------------------------------------------------------------------===///
-  /// Virtual hooks
   virtual void transformAcquire(const DbRewriteAcquire &info,
                                 DbAllocOp newAlloc, OpBuilder &builder) = 0;
   virtual void transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
@@ -176,7 +167,6 @@ protected:
 
   /// Shared state
   DbAllocOp oldAlloc;
-  SmallVector<Value> newOuterSizes, newInnerSizes;
   SmallVector<DbRewriteAcquire> acquires;
   DbRewritePlan plan;
 

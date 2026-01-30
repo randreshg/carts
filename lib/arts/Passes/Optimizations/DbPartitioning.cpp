@@ -130,29 +130,46 @@ validateElementWiseIndices(ArrayRef<AcquirePartitionInfo> acquireInfos,
   return true; /// Valid element-wise
 }
 
-/// Extract partition offset
-static Value getPartitionOffset(DbAcquireNode *acqNode,
-                                const AcquirePartitionInfo *info) {
-  if (info && !info->partitionOffsets.empty())
-    return info->partitionOffsets.front();
+/// Decompose an index value into base value and constant offset.
+/// Returns true if decomposition succeeds, filling base and offset.
+/// Examples: "x + 1" -> base=x, offset=1; "x - 2" -> base=x, offset=-2
+static bool decomposeIndexToBaseAndOffset(Value idx, Value &base,
+                                          int64_t &offset) {
+  if (!idx)
+    return false;
 
-  auto [offset, size] = acqNode->getPartitionInfo();
-  if (offset)
-    return offset;
+  Value stripped = ValueUtils::stripNumericCasts(idx);
+  offset = 0;
+  base = stripped;
 
-  DbAcquireOp acqOp = acqNode->getDbAcquireOp();
-  /// Check partition hints from partition_indices
-  if (!acqOp.getPartitionIndices().empty())
-    return acqOp.getPartitionIndices().front();
+  if (auto addOp = stripped.getDefiningOp<arith::AddIOp>()) {
+    int64_t constVal;
+    if (ValueUtils::getConstantIndex(addOp.getLhs(), constVal)) {
+      base = addOp.getRhs();
+      offset = constVal;
+    } else if (ValueUtils::getConstantIndex(addOp.getRhs(), constVal)) {
+      base = addOp.getLhs();
+      offset = constVal;
+    } else {
+      return false;
+    }
+  } else if (auto subOp = stripped.getDefiningOp<arith::SubIOp>()) {
+    int64_t constVal;
+    if (ValueUtils::getConstantIndex(subOp.getRhs(), constVal)) {
+      base = subOp.getLhs();
+      offset = -constVal;
+    } else {
+      return false;
+    }
+  }
 
-  auto offsets = acqOp.getPartitionOffsets();
-  if (!offsets.empty())
-    return offsets.front();
-
-  return nullptr;
+  base = ValueUtils::stripNumericCasts(base);
+  return base != nullptr;
 }
 
-/// Extract all partition offsets for N-D support
+/// Extract all partition offsets for N-D support.
+/// Unified function that handles both single and multi-dimensional cases.
+/// Use front() on the result for 1-D compatibility.
 static SmallVector<Value>
 getPartitionOffsetsND(DbAcquireNode *acqNode,
                       const AcquirePartitionInfo *info) {
@@ -175,6 +192,11 @@ getPartitionOffsetsND(DbAcquireNode *acqNode,
     result.append(offsets.begin(), offsets.end());
     return result;
   }
+
+  /// Finally, try getPartitionInfo for single-dim case
+  auto [offset, size] = acqNode->getPartitionInfo();
+  if (offset)
+    result.push_back(offset);
 
   return result;
 }
@@ -200,38 +222,6 @@ static bool findStencilBaseIndices(DbAcquireOp acquire,
       return false;
   }
 
-  auto decomposeIndex = [](Value idx, Value &base, int64_t &offset) -> bool {
-    if (!idx)
-      return false;
-    Value stripped = ValueUtils::stripNumericCasts(idx);
-    offset = 0;
-    base = stripped;
-
-    if (auto addOp = stripped.getDefiningOp<arith::AddIOp>()) {
-      int64_t constVal;
-      if (ValueUtils::getConstantIndex(addOp.getLhs(), constVal)) {
-        base = addOp.getRhs();
-        offset = constVal;
-      } else if (ValueUtils::getConstantIndex(addOp.getRhs(), constVal)) {
-        base = addOp.getLhs();
-        offset = constVal;
-      } else {
-        return false;
-      }
-    } else if (auto subOp = stripped.getDefiningOp<arith::SubIOp>()) {
-      int64_t constVal;
-      if (ValueUtils::getConstantIndex(subOp.getRhs(), constVal)) {
-        base = subOp.getLhs();
-        offset = -constVal;
-      } else {
-        return false;
-      }
-    }
-
-    base = ValueUtils::stripNumericCasts(base);
-    return base != nullptr;
-  };
-
   /// Fast path: if all entries share the same base value per dimension, pick
   /// the entry whose offsets are all zero (center), otherwise minimal offset.
   {
@@ -245,7 +235,8 @@ static bool findStencilBaseIndices(DbAcquireOp acquire,
       for (size_t dim = 0; dim < numDims; ++dim) {
         Value base;
         int64_t offset = 0;
-        if (!decomposeIndex(allIndices[entry][dim], base, offset)) {
+        if (!decomposeIndexToBaseAndOffset(allIndices[entry][dim], base,
+                                           offset)) {
           canDecompose = false;
           break;
         }
@@ -762,18 +753,19 @@ static Value computeDefaultBlockSize(DbAllocOp allocOp, OpBuilder &builder,
     return nullptr;
 
   Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
-  Value parallelI32 = useNodes ? builder.create<GetTotalNodesOp>(loc).getResult()
-                               : builder.create<GetTotalWorkersOp>(loc)
-                                     .getResult();
-  Value workers =
-      builder.create<arith::IndexCastUIOp>(loc, builder.getIndexType(),
-                                           parallelI32);
+  Value parallelI32 = useNodes
+                          ? builder.create<GetTotalNodesOp>(loc).getResult()
+                          : builder.create<GetTotalWorkersOp>(loc).getResult();
+  Value workers = builder.create<arith::IndexCastUIOp>(
+      loc, builder.getIndexType(), parallelI32);
   Value workersClamped = builder.create<arith::MaxUIOp>(loc, workers, one);
 
   Value workersMinusOne =
       builder.create<arith::SubIOp>(loc, workersClamped, one);
-  Value adjusted = builder.create<arith::AddIOp>(loc, elemSize, workersMinusOne);
-  Value blockSize = builder.create<arith::DivUIOp>(loc, adjusted, workersClamped);
+  Value adjusted =
+      builder.create<arith::AddIOp>(loc, elemSize, workersMinusOne);
+  Value blockSize =
+      builder.create<arith::DivUIOp>(loc, adjusted, workersClamped);
   blockSize = builder.create<arith::MaxUIOp>(loc, blockSize, one);
   return blockSize;
 }
@@ -1589,11 +1581,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
       auto &acqInfo = acquireInfos[idx];
 
-      /// Check for non-leading partition offset (disables chunked mode).
-      /// Non-leading means the first array index isn't directly derived from
-      /// the partition offset, so chunk-based indexing won't work correctly.
+      /// Check access patterns for block capability decisions.
       bool hasIndirect = acqNode->hasIndirectAccess();
-      bool hasDirect = acqNode->hasDirectAccess();
 
       /// Read partition capability from acquire's attribute.
       /// ForLowering sets this to 'chunked' when adding offset/size hints.
@@ -1602,58 +1591,32 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       auto acquireMode = getPartitionMode(acquire.getOperation());
       bool hasBlockHints = !acquire.getPartitionOffsets().empty() ||
                            !acquire.getPartitionSizes().empty();
-      bool inferredBlock = !acqInfo.partitionOffsets.empty() &&
-                           !acqInfo.partitionSizes.empty();
+      bool inferredBlock =
+          !acqInfo.partitionOffsets.empty() && !acqInfo.partitionSizes.empty();
       bool thisAcquireCanBlock =
           (acquireMode && (*acquireMode == PartitionMode::block ||
                            *acquireMode == PartitionMode::stencil)) ||
           hasBlockHints || inferredBlock;
+      /// If access is indirect and no explicit hints exist, still allow block
+      /// partitioning so we can fall back to full-range acquires on a blocked
+      /// allocation (improves parallelism vs coarse).
+      if (!thisAcquireCanBlock &&
+          (hasIndirect || (allocNode && allocNode->hasNonAffineAccesses &&
+                           *allocNode->hasNonAffineAccesses))) {
+        if (!ctx.totalElements || *ctx.totalElements > 1) {
+          thisAcquireCanBlock = true;
+          ARTS_DEBUG("  Non-affine/indirect access without hints; enabling "
+                     "block capability for full-range acquires");
+        }
+      }
       if (!thisAcquireCanBlock &&
           acqNode->getAccessPattern() == AccessPattern::Stencil)
         thisAcquireCanBlock = true;
       bool thisAcquireCanElementWise =
           acquireMode && *acquireMode == PartitionMode::fine_grained;
 
-      /// Additional validation: check for non-leading partition offset
-      if (canUseBlock && thisAcquireCanBlock) {
-        Value offsetForCheck = getPartitionOffset(acqNode, &acqInfo);
-        if (offsetForCheck &&
-            !acqNode->canPartitionWithOffset(offsetForCheck)) {
-          if (acqNode->getAccessPattern() == AccessPattern::Stencil) {
-            ARTS_DEBUG("  Stencil access with non-leading offset; keeping "
-                       "chunked partitioning");
-          } else if (hasIndirect && !hasDirect) {
-            ARTS_DEBUG("  Non-leading offset on indirect access; "
-                       "marking for full-range access");
-            // Keep thisAcquireCanBlock = true so the allocation can still be
-            // chunked. Mark this acquire for full-range access in acquireInfos.
-            if (idx < acquireInfos.size()) {
-              acquireInfos[idx].needsFullRange = true;
-            }
-          } else if (!hasIndirect && hasDirect && !acqNode->hasStores()) {
-            ARTS_DEBUG("  Non-leading offset on read-only direct access; "
-                       "marking for full-range access");
-            /// Read-only accesses that don't align to the partitioned dimension
-            /// can safely use full-range acquires on a chunked allocation.
-            if (idx < acquireInfos.size())
-              acquireInfos[idx].needsFullRange = true;
-          } else if (hasIndirect && hasDirect) {
-            ARTS_DEBUG("  Non-leading offset on mixed access; "
-                       "keeping chunked for versioning");
-          } else {
-            ARTS_DEBUG("  Non-leading partition offset detected; "
-                       "marking for full-range access");
-            if (idx < acquireInfos.size())
-              acquireInfos[idx].needsFullRange = true;
-          }
-        }
-      }
-
-      if (thisAcquireCanBlock) {
+      if (thisAcquireCanBlock)
         anyBlockCapable = true;
-        if (idx < acquireInfos.size() && !acquireInfos[idx].needsFullRange)
-          anyBlockNotFullRange = true;
-      }
 
       /// Build AcquireInfo for heuristic voting
       AcquireInfo info;
@@ -1680,17 +1643,47 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                  << (acquireMode ? static_cast<int>(*acquireMode) : -1));
       ++idx;
     });
+
+    /// Collect DbAcquireNode* and partition offsets for heuristic decisions
+    SmallVector<DbAcquireNode *> acqNodes;
+    SmallVector<Value> partitionOffsets;
+    idx = 0;
+    allocNode->forEachChildNode([&](NodeBase *child) {
+      if (auto *acqNode = dyn_cast<DbAcquireNode>(child)) {
+        acqNodes.push_back(acqNode);
+        auto offsets = getPartitionOffsetsND(
+            acqNode, idx < acquireInfos.size() ? &acquireInfos[idx] : nullptr);
+        partitionOffsets.push_back(offsets.empty() ? Value() : offsets.front());
+        ++idx;
+      }
+    });
+
+    /// Get per-acquire decisions from heuristics (calls needsFullRange)
+    auto acquireDecisions =
+        heuristics.getAcquireDecisions(ctx, acqNodes, partitionOffsets);
+
+    /// Apply decisions to acquireInfos
+    for (size_t i = 0; i < acquireDecisions.size() && i < acquireInfos.size();
+         ++i) {
+      if (acquireDecisions[i].needsFullRange) {
+        acquireInfos[i].needsFullRange = true;
+      }
+    }
+
+    /// Update anyBlockNotFullRange based on heuristic decisions
+    for (size_t i = 0; i < acquireInfos.size(); ++i) {
+      if (ctx.acquires[i].canBlock && !acquireInfos[i].needsFullRange)
+        anyBlockNotFullRange = true;
+    }
   }
 
-  /// If every block-capable acquire is full-range, block partitioning adds
-  /// overhead without locality benefit. Disable block in that case.
+  /// If every block-capable acquire is full-range, block partitioning does not
+  /// improve locality but is still a valid layout choice. Keep block enabled
+  /// and let heuristics decide; coarse is a last-resort fallback.
   bool allBlockFullRange = anyBlockCapable && !anyBlockNotFullRange;
   if (allBlockFullRange) {
-    ARTS_DEBUG("  All block-capable acquires are full-range; disabling block "
-               "partitioning");
-    for (auto &info : ctx.acquires)
-      info.canBlock = false;
-    canUseBlock = false;
+    ARTS_DEBUG("  All block-capable acquires are full-range; keeping block "
+               "partitioning enabled");
   }
 
   /// Determine allocation-level capabilities from per-acquire STRUCTURAL
@@ -1743,36 +1736,6 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     } else if (hasCoarse) {
       ctx.canElementWise = false;
       ARTS_DEBUG("  Coarse+chunked mix detected - disabling element-wise");
-    }
-
-    /// Mark indirect read-only acquires for full-range treatment.
-    if (ctx.hasIndirectRead && !ctx.hasIndirectWrite) {
-      for (auto &info : acquireInfos) {
-        if (info.hasIndirectAccess && info.acquire) {
-          /// Check if this acquire is read-only
-          ArtsMode mode = info.acquire.getMode();
-          if (mode == ArtsMode::in) {
-            info.needsFullRange = true;
-            ARTS_DEBUG("  Marked indirect read-only acquire as full-range: "
-                       << info.acquire);
-          }
-        }
-      }
-    }
-
-    /// Indirect writes require full-range acquires to avoid out-of-range
-    /// block indexing when scatter targets fall outside the worker chunk.
-    /// This also covers mixed direct+indirect access within the same
-    /// allocation.
-    if (ctx.hasIndirectWrite) {
-      for (auto &info : acquireInfos) {
-        if (info.hasIndirectAccess && info.acquire) {
-          info.needsFullRange = true;
-          ARTS_DEBUG(
-              "  Marked indirect acquire (writes present) as full-range: "
-              << info.acquire);
-        }
-      }
     }
   }
 
@@ -2343,24 +2306,22 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   }
 
   /// Step 6: Apply DbRewriter
-  DbRewritePlan plan(decision);
+  DbRewritePlan plan(decision.mode);
   plan.blockSizes = blockSizesForPlan;
-  if (!blockSizesForPlan.empty())
-    plan.blockSize = blockSizesForPlan.front(); /// Backward compatibility
-  plan.numBlocksPerDim.assign(newOuterSizes.begin(), newOuterSizes.end());
+  plan.outerSizes.assign(newOuterSizes.begin(), newOuterSizes.end());
+  plan.innerSizes.assign(newInnerSizes.begin(), newInnerSizes.end());
 
-  ARTS_DEBUG("  Plan created: blockSizes=" << plan.blockSizes.size()
-                                           << ", numPartitionedDims="
-                                           << plan.numPartitionedDims());
+  ARTS_DEBUG("  Plan created: blockSizes="
+             << plan.blockSizes.size() << ", outerRank=" << plan.outerRank()
+             << ", innerRank=" << plan.innerRank()
+             << ", numPartitionedDims=" << plan.numPartitionedDims());
 
-  /// Mixed mode: set flag and store numBlocks for full-range acquires
+  /// Mixed mode: set flag for full-range acquires
   bool hasMixedMode = llvm::any_of(
       acquireInfos, [](const auto &info) { return info.needsFullRange; });
   if (hasMixedMode && decision.isBlock()) {
     plan.isMixedMode = true;
-    if (!newOuterSizes.empty())
-      plan.numBlocks = newOuterSizes[0];
-    ARTS_DEBUG("  Mixed mode plan: numBlocks=" << plan.numBlocks);
+    ARTS_DEBUG("  Mixed mode plan enabled");
   }
 
   /// ESD: Use early-computed stencilInfo for Stencil mode
@@ -2497,8 +2458,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     rewriteAcquires.push_back(rewriteInfo);
   }
 
-  auto rewriter = DbRewriter::create(allocOp, newOuterSizes, newInnerSizes,
-                                     rewriteAcquires, plan);
+  auto rewriter = DbRewriter::create(allocOp, rewriteAcquires, plan);
   auto result = rewriter->apply(builder);
 
   /// Step 7: Set partition attribute on new alloc
