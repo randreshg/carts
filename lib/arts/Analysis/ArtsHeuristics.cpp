@@ -17,6 +17,7 @@
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/Metadata/IdRegistry.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
+#include "arts/Utils/Metadata/LoopMetadata.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -56,7 +57,10 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   ARTS_DEBUG("evaluatePartitioningHeuristics: canElementWise="
              << ctx.canElementWise << ", canBlock=" << ctx.canBlock
              << ", pinnedDimCount=" << ctx.pinnedDimCount
-             << ", accessMode=" << static_cast<int>(ctx.accessMode));
+             << ", accessMode=" << static_cast<int>(ctx.accessMode)
+             << ", allBlockFullRange=" << ctx.allBlockFullRange);
+
+  const auto &patterns = ctx.accessPatterns;
 
   /// H1.1: Read-Only Single-Node -> Coarse
   /// On a single node with read-only access, there is no write contention to
@@ -68,6 +72,26 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
       ARTS_DEBUG("H1.1 applied: Read-only single-node prefers coarse");
       return PartitioningDecision::coarse(
           ctx, "H1.1: All acquires read-only on single-node prefers coarse");
+    }
+
+    /// H1.1b: Read-only + all full-range block acquires -> Coarse
+    /// If every block-capable acquire is full-range, block partitioning adds
+    /// overhead without improving locality. Prefer coarse on single-node.
+    if (isReadOnly && ctx.allBlockFullRange) {
+      ARTS_DEBUG(
+          "H1.1b applied: Read-only full-range acquires prefer coarse");
+      return PartitioningDecision::coarse(
+          ctx,
+          "H1.1b: Read-only full-range acquires on single-node prefer coarse");
+    }
+
+    /// H1.1c: Read-only stencil on single-node -> Coarse
+    /// Stencil ESD introduces per-access selection and halo acquires.
+    /// For read-only inputs on a single node, coarse is typically faster.
+    if (isReadOnly && patterns.hasStencil) {
+      ARTS_DEBUG("H1.1c applied: Read-only stencil prefers coarse");
+      return PartitioningDecision::coarse(
+          ctx, "H1.1c: Read-only stencil on single-node prefers coarse");
     }
   }
 
@@ -95,8 +119,6 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// H1.3: Stencil/Indexed Patterns
   /// - Indexed access (data-dependent) requires element-wise partitioning
   /// - Stencil patterns use Stencil mode (block + ESD) for halo handling
-  const auto &patterns = ctx.accessPatterns;
-
   if (patterns.hasStencil) {
     if (!ctx.canBlock || ctx.hasIndirectAccess) {
       ARTS_DEBUG("H1.3 applied: Stencil but block unsupported; fallback");
@@ -519,14 +541,22 @@ void setPartitioningHint(Operation *op, const PartitioningHint &hint) {
 }
 
 /// Attribute Transfer Utilities
-void transferAttributes(Operation *source, Operation *dest) {
+/// Copies specific ARTS metadata attributes (arts.id, partition info, arts.loop)
+/// from source to destination operation. Unlike the generic transferAttributes
+/// in ArtsUtils.h which copies ALL attributes, this only copies ARTS-specific ones.
+void copyArtsMetadataAttrs(Operation *source, Operation *dest) {
   if (!source || !dest)
     return;
 
+  ARTS_DEBUG("copyArtsMetadataAttrs: " << source->getName() << " -> "
+                                       << dest->getName());
+
   /// Transfer arts.id
   if (auto id =
-          source->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsId))
+          source->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsId)) {
     dest->setAttr(AttrNames::Operation::ArtsId, id);
+    ARTS_DEBUG("  → transferred arts.id=" << id.getInt());
+  }
 
   /// Transfer partition_mode
   if (auto mode = source->getAttrOfType<PartitionModeAttr>(
@@ -541,6 +571,14 @@ void transferAttributes(Operation *source, Operation *dest) {
   if (auto twinDiff =
           source->getAttrOfType<BoolAttr>(AttrNames::Operation::ArtsTwinDiff))
     dest->setAttr(AttrNames::Operation::ArtsTwinDiff, twinDiff);
+
+  /// Transfer arts.loop metadata (trip count, parallelism info, etc.)
+  if (auto loopAttr = source->getAttr(AttrNames::LoopMetadata::Name)) {
+    dest->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
+    ARTS_DEBUG("  → transferred arts.loop metadata");
+  } else {
+    ARTS_DEBUG("  → source has NO arts.loop attribute");
+  }
 }
 
 } // namespace arts

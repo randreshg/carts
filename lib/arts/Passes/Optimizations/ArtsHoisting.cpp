@@ -12,11 +12,14 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Dominance.h"
+#include "mlir/IR/OpDefinition.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "polygeist/Ops.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include "arts/Utils/ArtsDebug.h"
+#include "arts/Utils/ValueUtils.h"
 ARTS_DEBUG_SETUP(arts_hoisting);
 
 using namespace mlir;
@@ -27,23 +30,62 @@ using namespace mlir::arts;
 //===----------------------------------------------------------------------===//
 
 static bool isLoopInvariant(scf::ForOp loop, Value v) {
-  return loop.isDefinedOutsideOfLoop(v);
-}
-
-static bool valuesInvariant(scf::ForOp loop, ValueRange values) {
-  for (Value v : values) {
-    if (!v)
-      continue;
-    if (!isLoopInvariant(loop, v))
-      return false;
-  }
-  return true;
+  if (!v)
+    return true;
+  if (loop.isDefinedOutsideOfLoop(v))
+    return true;
+  Value stripped = ValueUtils::stripNumericCasts(v);
+  return ValueUtils::isValueConstant(stripped);
 }
 
 static bool isWorkerLoop(scf::ForOp loop) {
   bool hasEdt = false;
   loop.walk([&](EdtOp) { hasEdt = true; });
   return hasEdt;
+}
+
+/// Hoist loop-invariant pure ops (e.g., div/rem/mod/max) out of inner loops.
+static bool hoistInvariantOpsInLoop(scf::ForOp loop) {
+  bool changed = false;
+  SmallVector<Operation *> candidates;
+
+  for (Operation &op : loop.getBody()->getOperations()) {
+    if (op.hasTrait<OpTrait::IsTerminator>())
+      continue;
+    if (isa<scf::ForOp>(op))
+      continue;
+    if (op.getNumRegions() != 0)
+      continue;
+    if (!mlir::isPure(&op))
+      continue;
+
+    bool allInvariant = true;
+    for (Value operand : op.getOperands()) {
+      if (!isLoopInvariant(loop, operand)) {
+        allInvariant = false;
+        break;
+      }
+    }
+    if (!allInvariant)
+      continue;
+
+    candidates.push_back(&op);
+  }
+
+  for (Operation *op : candidates) {
+    ARTS_DEBUG("Hoisting loop-invariant op: " << *op);
+    op->moveBefore(loop);
+    changed = true;
+  }
+
+  return changed;
+}
+
+/// Process an EDT to hoist loop-invariant pure ops from all loops within it.
+static bool hoistInvariantOpsInEdt(EdtOp edt) {
+  bool changed = false;
+  edt.walk([&](scf::ForOp loop) { changed |= hoistInvariantOpsInLoop(loop); });
+  return changed;
 }
 
 //===----------------------------------------------------------------------===//
@@ -74,30 +116,77 @@ static bool isWorkerLoop(scf::ForOp loop) {
 ///
 //===----------------------------------------------------------------------===//
 
-/// Checks if all runtime operands (guid, ptr, indices, offsets, sizes) of a
-/// db_acquire are loop invariant.
-static bool runtimeOperandsInvariant(scf::ForOp loop, DbAcquireOp acq) {
-  if (!isLoopInvariant(loop, acq.getGuid()) ||
-      !isLoopInvariant(loop, acq.getPtr()))
-    return false;
-  if (!valuesInvariant(loop, acq.getIndices()))
-    return false;
-  if (!valuesInvariant(loop, acq.getOffsets()))
-    return false;
-  if (!valuesInvariant(loop, acq.getSizes()))
-    return false;
-  return true;
-}
+/// Rematerialize loop-invariant operands to dominate the insertion point.
+/// Returns false if any operand depends on the loop IV or can't be traced.
+static bool rematerializeInvariantOperands(Operation *insertBefore,
+                                           DbAcquireOp acq,
+                                           DominanceInfo &domInfo) {
+  OpBuilder builder(insertBefore);
+  Location loc = acq.getLoc();
 
-/// Checks if all partition hints (partition indices, offsets, sizes) of a
-/// db_acquire are loop invariant.
-static bool partitionHintsInvariant(scf::ForOp loop, DbAcquireOp acq) {
-  if (!valuesInvariant(loop, acq.getPartitionIndices()))
+  auto mustDominate = [&](Value v) -> bool {
+    if (!v)
+      return true;
+    return domInfo.properlyDominates(v, insertBefore);
+  };
+
+  /// Source guid/ptr must already dominate (memref values can't be rebuilt).
+  if (!mustDominate(acq.getSourcePtr()))
     return false;
-  if (!valuesInvariant(loop, acq.getPartitionOffsets()))
+  if (Value srcGuid = acq.getSourceGuid()) {
+    if (!mustDominate(srcGuid))
+      return false;
+  }
+
+  auto materialize = [&](Value v) -> Value {
+    if (!v)
+      return v;
+    if (domInfo.properlyDominates(v, insertBefore))
+      return v;
+    if (v.getType().isa<MemRefType>())
+      return nullptr;
+    return ValueUtils::traceValueToDominating(v, insertBefore, builder, domInfo,
+                                              loc);
+  };
+
+  auto replaceIfNeeded = [&](Value v) -> bool {
+    if (!v)
+      return true;
+    Value newV = materialize(v);
+    if (!newV)
+      return false;
+    if (newV != v)
+      acq->replaceUsesOfWith(v, newV);
+    return true;
+  };
+
+  if (!replaceIfNeeded(acq.getBoundsValid()))
     return false;
-  if (!valuesInvariant(loop, acq.getPartitionSizes()))
-    return false;
+  for (Value v : acq.getIndices())
+    if (!replaceIfNeeded(v))
+      return false;
+  for (Value v : acq.getOffsets())
+    if (!replaceIfNeeded(v))
+      return false;
+  for (Value v : acq.getSizes())
+    if (!replaceIfNeeded(v))
+      return false;
+  for (Value v : acq.getPartitionIndices())
+    if (!replaceIfNeeded(v))
+      return false;
+  for (Value v : acq.getPartitionOffsets())
+    if (!replaceIfNeeded(v))
+      return false;
+  for (Value v : acq.getPartitionSizes())
+    if (!replaceIfNeeded(v))
+      return false;
+  for (Value v : acq.getElementOffsets())
+    if (!replaceIfNeeded(v))
+      return false;
+  for (Value v : acq.getElementSizes())
+    if (!replaceIfNeeded(v))
+      return false;
+
   return true;
 }
 
@@ -172,16 +261,24 @@ static bool hoistAcquiresInWorkerLoop(scf::ForOp loop) {
   });
 
   for (DbAcquireOp acq : candidates) {
-    if (acq.getMode() != ArtsMode::in)
+    if (acq.getMode() != ArtsMode::in) {
+      ARTS_DEBUG("Skip acquire: not read-only");
       continue;
-    if (acq->getParentOfType<EdtOp>())
+    }
+    if (acq->getParentOfType<EdtOp>()) {
+      ARTS_DEBUG("Skip acquire: inside EDT");
       continue;
-    if (!runtimeOperandsInvariant(loop, acq))
+    }
+    func::FuncOp func = loop->getParentOfType<func::FuncOp>();
+    DominanceInfo domInfo(func);
+    if (!rematerializeInvariantOperands(loop, acq, domInfo)) {
+      ARTS_DEBUG("Skip acquire: operands not loop-invariant: " << acq);
       continue;
-    if (!partitionHintsInvariant(loop, acq))
+    }
+    if (!usesAreSafe(loop, acq)) {
+      ARTS_DEBUG("Skip acquire: unsafe uses");
       continue;
-    if (!usesAreSafe(loop, acq))
-      continue;
+    }
 
     SmallVector<DbReleaseOp> releases;
     if (hasReleaseOutsideLoop(loop, acq, releases))
@@ -211,11 +308,83 @@ static bool hoistAcquiresInWorkerLoop(scf::ForOp loop) {
 static bool hoistAcquiresInEpoch(EpochOp epoch) {
   bool changed = false;
   Block &body = epoch.getBody().front();
+
+  /// First, try hoisting read-only coarse acquires out of the epoch entirely.
+  /// This handles acquires inside conditional regions or EDT dependencies by
+  /// moving them to the parent block and releasing after the epoch completes.
+  auto hoistOutOfEpoch = [&]() {
+    bool localChanged = false;
+    SmallVector<DbAcquireOp> candidates;
+
+    epoch.walk([&](DbAcquireOp acq) {
+      if (acq.getMode() != ArtsMode::in)
+        return;
+      if (acq->getParentOfType<EdtOp>())
+        return;
+      candidates.push_back(acq);
+    });
+
+    if (candidates.empty())
+      return false;
+
+    func::FuncOp func = epoch->getParentOfType<func::FuncOp>();
+    DominanceInfo domInfo(func);
+
+    for (DbAcquireOp acq : candidates) {
+      scf::ForOp loop = acq->getParentOfType<scf::ForOp>();
+      if (!loop || !isWorkerLoop(loop))
+        continue;
+
+      if (!rematerializeInvariantOperands(epoch, acq, domInfo))
+        continue;
+
+      /// Ensure all uses are within the epoch region.
+      bool safe = true;
+      SmallVector<DbReleaseOp> releasesToRemove;
+      auto checkUses = [&](Value v) {
+        for (OpOperand &use : v.getUses()) {
+          Operation *owner = use.getOwner();
+          if (!epoch->isAncestor(owner)) {
+            safe = false;
+            return;
+          }
+          if (auto rel = dyn_cast<DbReleaseOp>(owner))
+            releasesToRemove.push_back(rel);
+        }
+      };
+      checkUses(acq.getPtr());
+      checkUses(acq.getGuid());
+      if (!safe)
+        continue;
+
+      ARTS_DEBUG(
+          "Hoisting read-only db_acquire out of epoch (loop-invariant)");
+
+      /// Remove releases inside the epoch (including those inside EDTs).
+      for (DbReleaseOp rel : releasesToRemove)
+        rel.erase();
+
+      /// Move acquire before epoch and insert a single release after epoch.
+      acq->moveBefore(epoch);
+      OpBuilder builder(epoch);
+      builder.setInsertionPointAfter(epoch);
+      builder.create<DbReleaseOp>(epoch.getLoc(), acq.getPtr());
+      localChanged = true;
+    }
+
+    return localChanged;
+  };
+
+  changed |= hoistOutOfEpoch();
+
   for (Operation &op : body) {
     auto loop = dyn_cast<scf::ForOp>(op);
     if (!loop)
       continue;
-    if (!isWorkerLoop(loop))
+    size_t acqCount = 0;
+    loop.walk([&](DbAcquireOp) { ++acqCount; });
+    ARTS_DEBUG("Epoch loop has " << acqCount << " db_acquire ops");
+    if (acqCount == 0)
       continue;
     changed |= hoistAcquiresInWorkerLoop(loop);
   }
@@ -313,6 +482,12 @@ struct ArtsHoistingPass : public arts::ArtsHoistingBase<ArtsHoistingPass> {
 
     if (enableRefHoisting) {
       bool refChanged = false;
+      bool arithChanged = false;
+      module.walk([&](EdtOp edt) { arithChanged |= hoistInvariantOpsInEdt(edt); });
+      if (arithChanged) {
+        ARTS_INFO("Loop-invariant op hoisting applied");
+        changed = true;
+      }
       module.walk([&](EdtOp edt) { refChanged |= hoistDbRefsInEdt(edt); });
       if (refChanged) {
         ARTS_INFO("DbRef hoisting applied");

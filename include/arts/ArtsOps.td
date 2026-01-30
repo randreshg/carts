@@ -440,7 +440,7 @@ def DbSyncOp : Arts_Op<"db_sync", [AttrSizedOperandSegments, MemoryEffects<[MemW
   ];
 }
 
-def DbRefOp : Arts_Op<"db_ref", []> {
+def DbRefOp : Arts_Op<"db_ref", [Pure]> {
   let summary = "References an outer datablock element.";
   let description = [{
     References an element from a datablock handle using only the outer

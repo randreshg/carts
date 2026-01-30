@@ -545,7 +545,6 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
         Value llvmPtr = getLLVMPtr(newPtr, dbRefIndices, loc);
         auto loadedLlvmPtr =
             AC->create<LLVM::LoadOp>(loc, llvmPtr.getType(), llvmPtr);
-        loadedLlvmPtr.setVolatile_(true);
         return AC->create<polygeist::Pointer2MemrefOp>(loc, originalMemrefType,
                                                        loadedLlvmPtr);
       };
@@ -672,7 +671,6 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
           Value llvmPtr = getLLVMPtr(replacementBase, dbRefIndices, loc);
           auto loadedLlvmPtr =
               AC->create<LLVM::LoadOp>(loc, llvmPtr.getType(), llvmPtr);
-          loadedLlvmPtr.setVolatile_(true);
           return AC->create<polygeist::Pointer2MemrefOp>(
               loc, originalMemrefType, loadedLlvmPtr);
         };

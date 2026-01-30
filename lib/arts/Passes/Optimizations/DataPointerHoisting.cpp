@@ -79,20 +79,6 @@ static bool isDepsPtrLoad(LLVM::LoadOp loadOp) {
   return false;
 }
 
-/// Find the outermost loop that contains the operation
-static scf::ForOp findOutermostLoop(Operation *op) {
-  scf::ForOp outermost = nullptr;
-  Operation *parent = op->getParentOp();
-
-  while (parent) {
-    if (auto forOp = dyn_cast<scf::ForOp>(parent))
-      outermost = forOp;
-    parent = parent->getParentOp();
-  }
-
-  return outermost;
-}
-
 /// Check if all operands of an operation are defined outside the given region
 static bool allOperandsDefinedOutside(Operation *op, Region &region) {
   for (Value operand : op->getOperands()) {
@@ -112,31 +98,39 @@ static bool allOperandsDominate(Operation *op, Operation *insertPoint,
   return true;
 }
 
-/// Hoist a load and its address computation (GEP) out of loops
-static bool hoistLoadOutOfLoop(LLVM::LoadOp loadOp, scf::ForOp outermostLoop,
-                               DominanceInfo &domInfo) {
+/// Find the highest loop that can legally hoist the address computation.
+static scf::ForOp findHoistTarget(Operation *op, Operation *addrOp,
+                                  DominanceInfo &domInfo) {
+  scf::ForOp target = nullptr;
+  for (Operation *parent = op->getParentOp(); parent;
+       parent = parent->getParentOp()) {
+    auto loop = dyn_cast<scf::ForOp>(parent);
+    if (!loop)
+      continue;
+    Region &loopRegion = loop.getRegion();
+    if (!allOperandsDefinedOutside(addrOp, loopRegion))
+      break;
+    if (!allOperandsDominate(addrOp, loop, domInfo))
+      break;
+    target = loop;
+  }
+  return target;
+}
+
+/// Hoist a load and its address computation (GEP) out of loops.
+static bool hoistLoadOutOfLoop(LLVM::LoadOp loadOp, scf::ForOp targetLoop) {
   /// Get the address defining op (should be a GEP or arts op)
   Value addr = loadOp.getAddr();
   Operation *addrOp = addr.getDefiningOp();
 
   if (!addrOp)
     return false;
-
-  Region &loopRegion = outermostLoop.getRegion();
-
-  /// Check if we can hoist - all operands of the address op must be
-  /// loop-invariant and dominate the insertion point.
-  if (!allOperandsDefinedOutside(addrOp, loopRegion))
+  if (!targetLoop || !targetLoop->isAncestor(loadOp))
     return false;
 
-  if (!allOperandsDominate(addrOp, outermostLoop, domInfo))
-    return false;
-
-  /// Move the address computation before the loop
-  addrOp->moveBefore(outermostLoop);
-
-  /// Move the load before the loop
-  loadOp->moveBefore(outermostLoop);
+  if (targetLoop->isAncestor(addrOp))
+    addrOp->moveBefore(targetLoop);
+  loadOp->moveBefore(targetLoop);
 
   ARTS_INFO("Hoisted data pointer load: " << loadOp);
   return true;
@@ -168,19 +162,8 @@ void DataPointerHoistingPass::runOnOperation() {
 
     DominanceInfo domInfo(funcOp);
     funcOp.walk([&](LLVM::LoadOp loadOp) {
-      if (loadOp.getVolatile_())
-        return;
-
       /// Check if this is a deps pointer load
       if (!isDepsPtrLoad(loadOp))
-        return;
-
-      /// Find outermost enclosing loop
-      scf::ForOp outermostLoop = findOutermostLoop(loadOp);
-      if (!outermostLoop)
-        return;
-      /// Be conservative: only hoist loads that are directly in the loop body.
-      if (loadOp->getParentOp() != outermostLoop)
         return;
 
       /// Check if address operands are loop-invariant
@@ -189,22 +172,16 @@ void DataPointerHoistingPass::runOnOperation() {
       if (!addrOp)
         return;
 
-      if (addrOp->getParentOp() != outermostLoop)
+      scf::ForOp targetLoop = findHoistTarget(loadOp, addrOp, domInfo);
+      if (!targetLoop)
         return;
 
-      Region &loopRegion = outermostLoop.getRegion();
-      if (!allOperandsDefinedOutside(addrOp, loopRegion))
-        return;
-
-      if (!allOperandsDominate(addrOp, outermostLoop, domInfo))
-        return;
-
-      loadsToHoist.push_back({loadOp, outermostLoop});
+      loadsToHoist.push_back({loadOp, targetLoop});
     });
 
     /// Now hoist the collected loads
-    for (auto &[loadOp, outermostLoop] : loadsToHoist) {
-      if (hoistLoadOutOfLoop(loadOp, outermostLoop, domInfo))
+    for (auto &[loadOp, targetLoop] : loadsToHoist) {
+      if (hoistLoadOutOfLoop(loadOp, targetLoop))
         hoistedCount++;
     }
   });

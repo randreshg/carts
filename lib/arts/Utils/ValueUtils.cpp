@@ -559,6 +559,51 @@ ValueUtils::extractConstantOffset(Value idx, Value loopIV, Value chunkOffset) {
   return std::nullopt;
 }
 
+Value ValueUtils::stripConstantOffset(Value value, int64_t *outConst) {
+  int64_t accumulator = 0;
+  Value current = value;
+
+  if (!current) {
+    if (outConst)
+      *outConst = 0;
+    return current;
+  }
+
+  while (current) {
+    current = stripNumericCasts(current);
+
+    if (auto addOp = current.getDefiningOp<arith::AddIOp>()) {
+      int64_t constVal;
+      if (getConstantIndex(addOp.getLhs(), constVal)) {
+        accumulator += constVal;
+        current = addOp.getRhs();
+        continue;
+      }
+      if (getConstantIndex(addOp.getRhs(), constVal)) {
+        accumulator += constVal;
+        current = addOp.getLhs();
+        continue;
+      }
+    } else if (auto subOp = current.getDefiningOp<arith::SubIOp>()) {
+      int64_t constVal;
+      if (getConstantIndex(subOp.getRhs(), constVal)) {
+        accumulator -= constVal;
+        current = subOp.getLhs();
+        continue;
+      }
+    } else if (auto indexCast =
+                   current.getDefiningOp<arith::IndexCastOp>()) {
+      current = indexCast.getIn();
+      continue;
+    }
+    break;
+  }
+
+  if (outConst)
+    *outConst = accumulator;
+  return current;
+}
+
 /// Extract array index from byte offset pattern: bytes = (index * elemBytes).
 /// Handles common patterns where GEP indices are scaled by element byte size.
 /// Returns the logical array index or null Value if pattern doesn't match.

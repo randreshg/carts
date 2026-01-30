@@ -483,6 +483,9 @@ bool DbAcquireNode::computePartitionBounds() {
   if (!partitionOffset || !partitionSize)
     return true;
 
+  Value analysisOffset = partitionOffset;
+  analysisOffset = ValueUtils::stripConstantOffset(analysisOffset, nullptr);
+
   originalBounds = std::make_pair(partitionOffset, partitionSize);
   ArtsAnalysisManager &AM = analysis->getAnalysisManager();
   LoopAnalysis &loopAnalysis = AM.getLoopAnalysis();
@@ -509,8 +512,8 @@ bool DbAcquireNode::computePartitionBounds() {
       break;
   }
 
-  bool offsetIsZero = ValueUtils::isZeroConstant(
-      ValueUtils::stripNumericCasts(partitionOffset));
+  bool offsetIsZero =
+      ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(analysisOffset));
   if (!firstDynIdx) {
     if (offsetIsZero) {
       ARTS_DEBUG("  No dynamic index - allowing zero-offset partition hints");
@@ -531,7 +534,7 @@ bool DbAcquireNode::computePartitionBounds() {
   }
 
   LoopNode *blockLoopNode =
-      findBestLoopNode(loopNodes, firstDynIdx, partitionOffset, offsetIsZero);
+      findBestLoopNode(loopNodes, firstDynIdx, analysisOffset, offsetIsZero);
 
   if (!blockLoopNode) {
     ARTS_DEBUG("  No block loop found - allowing for heuristic evaluation");
@@ -539,7 +542,7 @@ bool DbAcquireNode::computePartitionBounds() {
   }
 
   Value loopIV = blockLoopNode->getInductionVar();
-  AccessBoundsInfo bounds = analyzeAccessBounds(this, partitionOffset, loopIV);
+  AccessBoundsInfo bounds = analyzeAccessBounds(this, analysisOffset, loopIV);
 
   if (!bounds.valid) {
     ARTS_DEBUG(
@@ -853,8 +856,8 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
     return false;
   }
   Value offsetStripped = ValueUtils::stripNumericCasts(offset);
-  ARTS_DEBUG("  offsetStripped=" << offsetStripped
-                                 << " isZero=" << ValueUtils::isZeroConstant(offsetStripped));
+  ARTS_DEBUG("  offsetStripped=" << offsetStripped << " isZero="
+                                 << ValueUtils::isZeroConstant(offsetStripped));
 
   // A constant offset (like %c0) is NOT a valid partition variable.
   // The partition offset should be a dynamic value (like a loop IV) that
@@ -863,9 +866,18 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
   // any use of that constant in the index chain.
   int64_t constVal;
   if (ValueUtils::getConstantIndex(offsetStripped, constVal)) {
-    ARTS_DEBUG("  -> returning false (constant offset " << constVal
-               << " cannot be partition variable)");
+    ARTS_DEBUG("  -> returning false (constant offset "
+               << constVal << " cannot be partition variable)");
     return false;
+  }
+
+  int64_t offsetConst = 0;
+  Value offsetBase =
+      ValueUtils::stripConstantOffset(offsetStripped, &offsetConst);
+  if (offsetBase && offsetBase != offsetStripped) {
+    ARTS_DEBUG("  normalized offset base=" << offsetBase
+                                           << " const=" << offsetConst);
+    offsetStripped = offsetBase;
   }
 
   DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
@@ -931,11 +943,12 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
         continue;
       }
 
-      ARTS_DEBUG("    offsetSeen=" << offsetSeen << " firstDynIdx=" << firstDynIdx);
+      ARTS_DEBUG("    offsetSeen=" << offsetSeen
+                                   << " firstDynIdx=" << firstDynIdx);
       if (!offsetSeen ||
           !LoopNode::dependsOnLoopInitNormalized(firstDynIdx, offsetStripped)) {
-        ARTS_DEBUG("  -> returning false: offsetSeen=" << offsetSeen
-                   << " (offset not in access pattern)");
+        ARTS_DEBUG("  -> returning false: offsetSeen="
+                   << offsetSeen << " (offset not in access pattern)");
         return false;
       }
     }
@@ -1298,8 +1311,11 @@ LogicalResult DbAcquireNode::computeBlockInfoFromHints(Value &blockOffset,
       break;
   }
 
-  bool offsetIsZero = ValueUtils::isZeroConstant(
-      ValueUtils::stripNumericCasts(partitionOffset));
+  Value analysisOffset = partitionOffset;
+  analysisOffset = ValueUtils::stripConstantOffset(analysisOffset, nullptr);
+
+  bool offsetIsZero =
+      ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(analysisOffset));
   if (!firstDynIdx) {
     if (offsetIsZero) {
       blockOffset = partitionOffset;
@@ -1315,13 +1331,12 @@ LogicalResult DbAcquireNode::computeBlockInfoFromHints(Value &blockOffset,
   SmallVector<LoopNode *> forLoopNodes;
   loopAnalysis.collectForLoopsInOperation(edt, forLoopNodes);
 
-  LoopNode *boundsLoopNode = findBestLoopNode(forLoopNodes, firstDynIdx,
-                                              partitionOffset, offsetIsZero);
+  LoopNode *boundsLoopNode =
+      findBestLoopNode(forLoopNodes, firstDynIdx, analysisOffset, offsetIsZero);
 
   if (boundsLoopNode) {
     Value loopIV = boundsLoopNode->getInductionVar();
-    AccessBoundsInfo bounds =
-        analyzeAccessBounds(this, partitionOffset, loopIV);
+    AccessBoundsInfo bounds = analyzeAccessBounds(this, analysisOffset, loopIV);
 
     if (bounds.valid) {
       if (!stencilBounds)
