@@ -30,6 +30,7 @@
 #include "arts/Utils/OperationAttributes.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -54,6 +55,93 @@ using namespace mlir::func;
 using namespace mlir::arts;
 
 namespace {
+
+/// Attempt to extract a constant index value.
+static std::optional<int64_t> getConstIndex(Value v) {
+  int64_t val = 0;
+  if (ValueUtils::getConstantIndex(v, val))
+    return val;
+  if (auto folded = ValueUtils::tryFoldConstantIndex(v))
+    return *folded;
+  return std::nullopt;
+}
+
+/// Extract static trip count from loop metadata or constant bounds.
+static std::optional<int64_t> getStaticTripCount(ForOp forOp) {
+  if (auto loopAttr =
+          forOp->getAttrOfType<LoopMetadataAttr>(AttrNames::LoopMetadata::Name)) {
+    if (auto tripAttr = loopAttr.getTripCount()) {
+      int64_t tc = tripAttr.getInt();
+      if (tc > 0)
+        return tc;
+    }
+  }
+
+  int64_t lb = 0, ub = 0, step = 0;
+  if (ValueUtils::getConstantIndex(forOp.getLowerBound()[0], lb) &&
+      ValueUtils::getConstantIndex(forOp.getUpperBound()[0], ub) &&
+      ValueUtils::getConstantIndex(forOp.getStep()[0], step) && step > 0) {
+    int64_t span = ub - lb;
+    if (span <= 0)
+      return 0;
+    return (span + step - 1) / step;
+  }
+  return std::nullopt;
+}
+
+static Value castToIndex(ArtsCodegen *AC, Value v, Location loc) {
+  if (!v)
+    return v;
+  if (v.getType().isIndex())
+    return v;
+  auto indexTy = AC->getBuilder().getIndexType();
+  return AC->create<arith::IndexCastOp>(loc, indexTy, v);
+}
+
+/// Skip coarsening for sequential or dependency-carrying loops.
+static bool shouldSkipCoarsening(ForOp forOp) {
+  if (auto loopAttr =
+          forOp->getAttrOfType<LoopMetadataAttr>(AttrNames::LoopMetadata::Name)) {
+    if (auto depsAttr = loopAttr.getHasInterIterationDeps())
+      if (depsAttr.getValue())
+        return true;
+    if (auto classAttr = loopAttr.getParallelClassification()) {
+      if (classAttr.getInt() ==
+          static_cast<int64_t>(LoopMetadata::ParallelClassification::Sequential))
+        return true;
+    }
+  }
+  return false;
+}
+
+/// Compute a block size that reduces worker count for small trip counts.
+static std::optional<int64_t> computeCoarsenedBlockSize(ForOp forOp,
+                                                        Value totalWorkers) {
+  if (shouldSkipCoarsening(forOp))
+    return std::nullopt;
+
+  auto workersOpt = getConstIndex(totalWorkers);
+  auto tripOpt = getStaticTripCount(forOp);
+  if (!workersOpt || !tripOpt)
+    return std::nullopt;
+
+  int64_t workers = *workersOpt;
+  int64_t tripCount = *tripOpt;
+  if (workers <= 0 || tripCount <= 0)
+    return std::nullopt;
+
+  constexpr int64_t kMinItersPerWorker = 4;
+  if (tripCount >= workers * kMinItersPerWorker)
+    return std::nullopt;
+
+  int64_t desiredWorkers =
+      std::max<int64_t>(1, tripCount / kMinItersPerWorker);
+  desiredWorkers = std::min(desiredWorkers, workers);
+  int64_t blockSize =
+      (tripCount + desiredWorkers - 1) / desiredWorkers;
+  blockSize = std::max<int64_t>(1, blockSize);
+  return blockSize;
+}
 
 ///===----------------------------------------------------------------------===///
 /// LoopInfo - Information about a loop within a parallel EDT
@@ -82,6 +170,10 @@ public:
   /// Loop information
   ForOp forOp;
   Value lowerBound, upperBound, loopStep;
+  /// Base lower bound used for chunking (may be aligned to block size)
+  Value chunkLowerBound;
+  bool useAlignedLowerBound = false;
+  std::optional<int64_t> alignmentBlockSize;
   /// Distribution information
   Value blockSize, totalWorkers, totalIterations, totalChunks;
   /// Worker information
@@ -224,6 +316,8 @@ static bool canCloneOperation(Operation *op) {
     return true;
   if (isMemoryEffectFree(op))
     return true;
+  if (isa<memref::AllocaOp>(op))
+    return true;
   if (isa<arts::DbRefOp>(op))
     return true;
   if (isa<memref::LoadOp>(op))
@@ -324,7 +418,102 @@ static bool cloneExternalValues(SetVector<Value> &externalValues,
     remainingValues = std::move(stillRemaining);
   }
 
+  if (!remainingValues.empty()) {
+    for (Value val : remainingValues) {
+      if (Operation *defOp = val.getDefiningOp()) {
+        ARTS_DEBUG("  - Uncloned external value op: " << defOp->getName());
+      } else {
+        ARTS_DEBUG("  - Uncloned external value (no defining op)");
+      }
+    }
+  }
+
   return remainingValues.empty();
+}
+
+/// Clone external stack allocations into the EDT region and remap uses.
+static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
+                                        IRMapping &mapper,
+                                        OpBuilder &builder) {
+  DenseMap<Operation *, SmallVector<Operation *, 4>> usesByAlloca;
+
+  taskBlock.walk([&](Operation *op) {
+    for (Value operand : op->getOperands()) {
+      auto allocaOp = operand.getDefiningOp<memref::AllocaOp>();
+      if (!allocaOp)
+        continue;
+      if (taskEdtRegion->isAncestor(allocaOp->getParentRegion()))
+        continue;
+      usesByAlloca[allocaOp.getOperation()].push_back(op);
+    }
+  });
+
+  if (usesByAlloca.empty())
+    return;
+
+  ARTS_DEBUG("  - Cloning " << usesByAlloca.size()
+                             << " external stack allocas into EDT");
+
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToStart(&taskBlock);
+
+  auto isConstLikeValue = [](Value v) {
+    if (!v)
+      return false;
+    if (Operation *def = v.getDefiningOp())
+      if (def->hasTrait<OpTrait::ConstantLike>())
+        return true;
+    int64_t idxVal = 0;
+    return ValueUtils::getConstantIndex(v, idxVal);
+  };
+
+  for (const auto &entry : usesByAlloca) {
+    auto allocaOp = cast<memref::AllocaOp>(entry.first);
+    Operation *clonedOp = builder.clone(*allocaOp.getOperation(), mapper);
+    auto newAlloca = cast<memref::AllocaOp>(clonedOp);
+
+    for (Operation *user : entry.second)
+      user->replaceUsesOfWith(allocaOp.getResult(), newAlloca.getResult());
+
+    mapper.map(allocaOp.getResult(), newAlloca.getResult());
+
+    /// Clone constant initialization stores for this alloca when available.
+    SmallVector<memref::StoreOp, 4> initStores;
+    SmallVector<affine::AffineStoreOp, 4> affineInitStores;
+    for (Operation *user : allocaOp->getUsers()) {
+      if (auto store = dyn_cast<memref::StoreOp>(user)) {
+        if (store.getMemRef() != allocaOp.getResult())
+          continue;
+        if (store->getBlock() != allocaOp->getBlock())
+          continue;
+        bool allConst = isConstLikeValue(store.getValueToStore());
+        for (Value idx : store.getIndices())
+          allConst &= isConstLikeValue(idx);
+        if (allConst)
+          initStores.push_back(store);
+      }
+      if (auto store = dyn_cast<affine::AffineStoreOp>(user)) {
+        if (store.getMemRef() != allocaOp.getResult())
+          continue;
+        if (store->getBlock() != allocaOp->getBlock())
+          continue;
+        bool allConst = isConstLikeValue(store.getValueToStore());
+        for (Value idx : store.getIndices())
+          allConst &= isConstLikeValue(idx);
+        if (allConst)
+          affineInitStores.push_back(store);
+      }
+    }
+
+    if (!initStores.empty() || !affineInitStores.empty()) {
+      builder.setInsertionPointAfter(newAlloca);
+      for (memref::StoreOp store : initStores)
+        builder.clone(*store.getOperation(), mapper);
+      for (affine::AffineStoreOp store : affineInitStores)
+        builder.clone(*store.getOperation(), mapper);
+      builder.setInsertionPointToStart(&taskBlock);
+    }
+  }
 }
 
 /// Create a zero/identity value matching the provided element type.
@@ -405,16 +594,7 @@ private:
 void LoopInfo::initialize() {
   Location loc = forOp.getLoc();
 
-  /// Step 1: Compute total iterations
-  /// totalIterations = ceil((upper - lower) / step)
-  Value range = AC->create<arith::SubIOp>(loc, upperBound, lowerBound);
-  Value adjustedRange = AC->create<arith::AddIOp>(
-      loc, range,
-      AC->create<arith::SubIOp>(loc, loopStep,
-                                AC->createIndexConstant(1, loc)));
-  totalIterations = AC->create<arith::DivUIOp>(loc, adjustedRange, loopStep);
-
-  /// Step 2: Determine block size from PartitioningHint or default to 1
+  /// Step 1: Determine block size from PartitioningHint or default to 1
   int64_t computedBlockSize = 1;
 
   if (auto hint = getPartitioningHint(forOp.getOperation())) {
@@ -426,8 +606,61 @@ void LoopInfo::initialize() {
     }
   }
 
+  if (computedBlockSize == 1) {
+    if (auto coarsened = computeCoarsenedBlockSize(forOp, totalWorkers)) {
+      computedBlockSize = *coarsened;
+      ARTS_DEBUG("Auto-coarsening: blockSize=" << computedBlockSize);
+    }
+  }
+
   /// Create the block size constant
   blockSize = AC->createIndexConstant(computedBlockSize, loc);
+
+  /// Step 2: Compute total iterations
+  /// totalIterations = ceil((upper - lower) / step)
+  chunkLowerBound = lowerBound;
+  useAlignedLowerBound = false;
+  alignmentBlockSize = std::nullopt;
+
+  /// If lower bound is misaligned with block size, align chunking base down
+  /// to the nearest block boundary. This avoids overlapping block partitions
+  /// when lowerBound is not a multiple of blockSize (e.g., stencil loops).
+  int64_t alignSize = computedBlockSize;
+  if (alignSize == 1) {
+    if (auto tripCount = getStaticTripCount(forOp)) {
+      if (auto workersConst = getConstIndex(totalWorkers)) {
+        int64_t workers = *workersConst;
+        if (workers > 0) {
+          int64_t chunksPerWorker =
+              (tripCount.value() + workers - 1) / workers;
+          if (chunksPerWorker > 1)
+            alignSize = chunksPerWorker;
+        }
+      }
+    }
+  }
+  if (alignSize > 1)
+    alignmentBlockSize = alignSize;
+
+  if (alignmentBlockSize) {
+    if (auto lbConst = getConstIndex(lowerBound)) {
+      int64_t lbVal = *lbConst;
+      int64_t aligned = lbVal - (lbVal % *alignmentBlockSize);
+      if (aligned != lbVal) {
+        useAlignedLowerBound = true;
+        chunkLowerBound = AC->createIndexConstant(aligned, loc);
+        ARTS_DEBUG("Aligning chunk lower bound from " << lbVal << " to "
+                                                      << aligned);
+      }
+    }
+  }
+
+  Value range = AC->create<arith::SubIOp>(loc, upperBound, chunkLowerBound);
+  Value adjustedRange = AC->create<arith::AddIOp>(
+      loc, range,
+      AC->create<arith::SubIOp>(loc, loopStep,
+                                AC->createIndexConstant(1, loc)));
+  totalIterations = AC->create<arith::DivUIOp>(loc, adjustedRange, loopStep);
 
   /// Step 3: Compute total chunks based on block size
   /// Formula: totalChunks = ceil(totalIterations / blockSize)
@@ -481,6 +714,25 @@ void LoopInfo::computeWorkerIterationsBlock(Value workerId) {
       AC->create<arith::AddIOp>(loc, totalChunks, workersMinusOne);
   Value chunksPerWorkerCeil =
       AC->create<arith::DivUIOp>(loc, adjustedChunks, totalWorkers);
+
+  /// Optional coarsening for nested loops: give each worker more chunks to
+  /// reduce task creation overhead when an outer loop repeats the region.
+  if (forOp->getParentOfType<scf::ForOp>()) {
+    if (auto tripConst = getStaticTripCount(forOp)) {
+      if (auto workersConst = getConstIndex(totalWorkers)) {
+        int64_t blockSizeConst = 1;
+        if (auto bsConst = getConstIndex(blockSize))
+          blockSizeConst = *bsConst;
+        int64_t totalChunksConst =
+            (tripConst.value() + blockSizeConst - 1) / blockSizeConst;
+        if (totalChunksConst >= (*workersConst * 2)) {
+          Value factorVal = AC->createIndexConstant(2, loc);
+          chunksPerWorkerCeil =
+              AC->create<arith::MulIOp>(loc, chunksPerWorkerCeil, factorVal);
+        }
+      }
+    }
+  }
 
   /// Step 2: Compute worker's first chunk index
   /// workerFirstChunkIdx = workerId * chunksPerWorkerCeil
@@ -564,9 +816,23 @@ void LoopInfo::recomputeWorkerBoundsInside(Value workerId,
   Value localLoopStep = boundsMapper.lookupOrDefault(loopStep);
   Value localBlockSize = boundsMapper.lookupOrDefault(blockSize);
 
+  chunkLowerBound = localLowerBound;
+  useAlignedLowerBound = false;
+  if (alignmentBlockSize) {
+    if (auto lbConst = getConstIndex(localLowerBound)) {
+      int64_t aligned = *lbConst - (*lbConst % *alignmentBlockSize);
+      if (aligned != *lbConst) {
+        useAlignedLowerBound = true;
+        chunkLowerBound = AC->createIndexConstant(aligned, loc);
+        ARTS_DEBUG("Aligning chunk lower bound inside task from "
+                   << *lbConst << " to " << aligned);
+      }
+    }
+  }
+
   /// totalIterations = ceil((upper - lower) / step)
   Value range =
-      AC->create<arith::SubIOp>(loc, localUpperBound, localLowerBound);
+      AC->create<arith::SubIOp>(loc, localUpperBound, chunkLowerBound);
   Value adjustedRange = AC->create<arith::AddIOp>(
       loc, range, AC->create<arith::SubIOp>(loc, localLoopStep, oneIndex));
   Value localTotalIterations =
@@ -586,6 +852,25 @@ void LoopInfo::recomputeWorkerBoundsInside(Value workerId,
       AC->create<arith::AddIOp>(loc, localTotalChunks, workersMinusOne);
   Value chunksPerWorkerCeil =
       AC->create<arith::DivUIOp>(loc, adjustedChunks, totalWorkersIndex);
+
+  /// Optional coarsening for nested loops: mirror computeWorkerIterationsBlock
+  /// so the task-local bounds stay consistent with pre-task DB partitioning.
+  if (forOp->getParentOfType<scf::ForOp>()) {
+    if (auto tripConst = getStaticTripCount(forOp)) {
+      if (auto workersConst = getConstIndex(insideTotalWorkers)) {
+        int64_t blockSizeConst = 1;
+        if (auto bsConst = getConstIndex(localBlockSize))
+          blockSizeConst = *bsConst;
+        int64_t totalChunksConst =
+            (tripConst.value() + blockSizeConst - 1) / blockSizeConst;
+        if (totalChunksConst >= (*workersConst * 2)) {
+          Value factorVal = AC->createIndexConstant(2, loc);
+          chunksPerWorkerCeil =
+              AC->create<arith::MulIOp>(loc, chunksPerWorkerCeil, factorVal);
+        }
+      }
+    }
+  }
 
   Value workerFirstChunkIdx =
       AC->create<arith::MulIOp>(loc, workerIdIndex, chunksPerWorkerCeil);
@@ -933,6 +1218,7 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
     numWorkers = AC->create<GetTotalNodesOp>(loc).getResult();
   else
     numWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
+  numWorkers = castToIndex(AC, numWorkers, loc);
 
   Block &parallelBlock = parallelEdt.getBody().front();
   ValueRange parentDeps = parallelEdt.getDependencies();
@@ -1390,6 +1676,7 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
     numWorkers = AC.create<GetTotalNodesOp>(loc).getResult();
   else
     numWorkers = AC.create<GetTotalWorkersOp>(loc).getResult();
+  numWorkers = castToIndex(&AC, numWorkers, loc);
 
   Value zero = AC.createIndexConstant(0, loc);
   Value one = AC.createIndexConstant(1, loc);
@@ -1599,6 +1886,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     loopInfo.totalWorkers = AC->create<GetTotalNodesOp>(loc).getResult();
   else
     loopInfo.totalWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
+  loopInfo.totalWorkers = castToIndex(AC, loopInfo.totalWorkers, loc);
 
   /// Compute worker iteration bounds
   loopInfo.computeWorkerIterationsBlock(workerIdPlaceholder);
@@ -1781,7 +2069,9 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
                 AC->create<arith::MulIOp>(loc, workerOffsetVal, step);
           }
         }
-        Value lowerBoundVal = forOp.getLowerBound()[0];
+        Value lowerBoundVal = loopInfo.chunkLowerBound
+                                  ? loopInfo.chunkLowerBound
+                                  : forOp.getLowerBound()[0];
         workerOffsetVal =
             AC->create<arith::AddIOp>(loc, lowerBoundVal, workerOffsetVal);
         SmallVector<Value> workerOffsets = {workerOffsetVal};
@@ -1960,6 +2250,10 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
   Value origStep = forOp.getStep()[0];
   Value origLowerBound = forOp.getLowerBound()[0];
+  Value origUpperBound = forOp.getUpperBound()[0];
+  Value chunkLowerBoundVal = loopInfo.chunkLowerBound
+                                 ? loopInfo.chunkLowerBound
+                                 : origLowerBound;
 
   Region *forBodyRegion = forBody.getParent();
   std::function<void(Value)> collectWithDeps = [&](Value val) {
@@ -1978,6 +2272,9 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
   collectWithDeps(origStep);
   collectWithDeps(origLowerBound);
+  if (loopInfo.useAlignedLowerBound)
+    collectWithDeps(origUpperBound);
+  collectWithDeps(chunkLowerBoundVal);
 
   /// Collect transitive dependencies
   SmallVector<Value> valuesToProcess(externalValues.begin(),
@@ -1999,10 +2296,13 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   Value localIter = iterLoop.getInductionVar();
   Value globalIter = AC->create<arith::AddIOp>(loc, chunkOffset, localIter);
   Value stepVal = redMapper.lookupOrDefault(origStep);
-  Value lowerBoundVal = redMapper.lookupOrDefault(origLowerBound);
+  Value baseLowerBoundVal = redMapper.lookupOrDefault(chunkLowerBoundVal);
   Value globalIterScaled = AC->create<arith::MulIOp>(loc, globalIter, stepVal);
   Value globalIdx =
-      AC->create<arith::AddIOp>(loc, lowerBoundVal, globalIterScaled);
+      AC->create<arith::AddIOp>(loc, baseLowerBoundVal, globalIterScaled);
+
+  Value origLowerBoundVal = redMapper.lookupOrDefault(origLowerBound);
+  Value origUpperBoundVal = redMapper.lookupOrDefault(origUpperBound);
 
   /// Map undef to identity value
   for (Operation &op : forBody.without_terminator()) {
@@ -2020,11 +2320,38 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   if (forBody.getNumArguments() > 0)
     redMapper.map(forBody.getArgument(0), globalIdx);
 
-  /// Clone loop body
+  scf::IfOp boundsIf;
+  if (loopInfo.useAlignedLowerBound) {
+    Value geLower = AC->create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::uge, globalIdx, origLowerBoundVal);
+    Value ltUpper = AC->create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::ult, globalIdx, origUpperBoundVal);
+    Value inBounds = AC->create<arith::AndIOp>(loc, geLower, ltUpper);
+    boundsIf = AC->create<scf::IfOp>(loc, inBounds,
+                                    /*withElseRegion=*/false);
+    AC->setInsertionPointToStart(&boundsIf.getThenRegion().front());
+  }
+
+  /// Clone stack allocations first so subsequent ops can map to them.
   for (Operation &op : forBody.without_terminator()) {
-    if (!opsToSkip.contains(&op))
+    if (opsToSkip.contains(&op))
+      continue;
+    if (isa<memref::AllocaOp>(op))
       AC->clone(op, redMapper);
   }
+
+  /// Clone remaining loop body operations.
+  for (Operation &op : forBody.without_terminator()) {
+    if (opsToSkip.contains(&op))
+      continue;
+    if (isa<memref::AllocaOp>(op))
+      continue;
+    AC->clone(op, redMapper);
+  }
+
+  /// Ensure stack allocations used inside the EDT are cloned locally.
+  cloneExternalAllocasIntoEdt(taskEdtRegion, taskBlock, redMapper,
+                              AC->getBuilder());
 
   /// Add yield terminator
   AC->setInsertionPointToEnd(&taskBlock);

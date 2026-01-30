@@ -10,7 +10,6 @@
 /// H1 Partitioning Heuristics (evaluated in priority order):
 ///   H1.1: Read-only single-node -> coarse
 ///   H1.1b: Read-only + all full-range block acquires -> coarse
-///   H1.1c: Read-only stencil on single-node -> coarse
 ///   H1.2: Mixed access (block writes + indirect reads) -> block
 ///   H1.3: Stencil/indexed patterns -> stencil or block/element-wise
 ///   H1.4: Uniform direct access -> block

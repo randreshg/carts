@@ -62,12 +62,14 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
 
   const auto &patterns = ctx.accessPatterns;
 
+  bool isReadOnly = !ctx.acquires.empty() ? ctx.allReadOnly()
+                                          : (ctx.accessMode == ArtsMode::in);
+  bool isSingleNode = machine && machine->getNodeCount() == 1;
+
   /// H1.1: Read-Only Single-Node -> Coarse
   /// On a single node with read-only access, there is no write contention to
   /// relieve via fine-graining. Coarse allocation reduces datablock count.
-  if (machine && machine->getNodeCount() == 1) {
-    bool isReadOnly = !ctx.acquires.empty() ? ctx.allReadOnly()
-                                            : (ctx.accessMode == ArtsMode::in);
+  if (isSingleNode) {
     if (isReadOnly && !ctx.canBlock && !ctx.canElementWise) {
       ARTS_DEBUG("H1.1 applied: Read-only single-node prefers coarse");
       return PartitioningDecision::coarse(
@@ -85,14 +87,6 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
           "H1.1b: Read-only full-range acquires on single-node prefer coarse");
     }
 
-    /// H1.1c: Read-only stencil on single-node -> Coarse
-    /// Stencil ESD introduces per-access selection and halo acquires.
-    /// For read-only inputs on a single node, coarse is typically faster.
-    if (isReadOnly && patterns.hasStencil) {
-      ARTS_DEBUG("H1.1c applied: Read-only stencil prefers coarse");
-      return PartitioningDecision::coarse(
-          ctx, "H1.1c: Read-only stencil on single-node prefers coarse");
-    }
   }
 
   /// H1.2: Mixed Access (Block Writes + Indirect Reads) -> Block
@@ -120,6 +114,14 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// - Indexed access (data-dependent) requires element-wise partitioning
   /// - Stencil patterns use Stencil mode (block + ESD) for halo handling
   if (patterns.hasStencil) {
+    /// Read-only stencil on a single node: coarse avoids ESD/halo overhead
+    /// while preserving correctness (shared read-only input).
+    if (isSingleNode && isReadOnly) {
+      ARTS_DEBUG("H1.3 applied: Read-only stencil on single-node prefers coarse");
+      return PartitioningDecision::coarse(
+          ctx, "H1.3: Read-only stencil on single-node prefers coarse");
+    }
+
     if (!ctx.canBlock || ctx.hasIndirectAccess) {
       ARTS_DEBUG("H1.3 applied: Stencil but block unsupported; fallback");
       return PartitioningDecision::elementWise(

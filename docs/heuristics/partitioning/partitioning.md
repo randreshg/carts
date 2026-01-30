@@ -139,14 +139,6 @@ If every block-capable acquire is full-range *and* all acquires are read-only
 on a single node, block partitioning adds overhead without locality benefits.
 Prefer coarse to avoid extra datablocks, div/rem index math, and dependency fan-out.
 
-### Heuristic Rule (H1.1c)
-
-**H1.1c: Read-only stencil on single-node** → **coarse**
-
-Stencil ESD introduces halo acquires and per-access buffer selection. For
-read-only inputs on a single node, coarse allocation is typically faster and
-avoids stencil indexing overhead.
-
 ---
 
 ## Heuristic Ordering (H1.x Summary)
@@ -155,15 +147,14 @@ The partitioning decision is made in this order:
 
 1) **H1.1**: Read-only single-node with no partition capability → **coarse**
 2) **H1.1b**: Read-only + all block-capable acquires are full-range → **coarse**
-3) **H1.1c**: Read-only stencil on single-node → **coarse**
-4) **H1.2**: Mixed direct writes + indirect reads → **block** (indirect gets full-range)
-5) **H1.2b**: Mixed direct + indirect writes → **block** (indirect gets full-range)
-6) **H1.3**: Stencil → **stencil**, Indexed → **block when supported** (else element-wise)
-7) **H1.4**: Uniform direct access → **block**
-8) **H1.5**: Multi-node prefers **block**, else **element-wise**
-9) **H1.6**: Non-uniform with no capability → **coarse**
-10) **H1.7**: Per-acquire partition offset mismatch → **full-range** for that acquire
-11) **Fallback**: Respect `--partition-fallback` (coarse or fine-grained)
+3) **H1.2**: Mixed direct writes + indirect reads → **block** (indirect gets full-range)
+4) **H1.2b**: Mixed direct + indirect writes → **block** (indirect gets full-range)
+5) **H1.3**: Stencil → **stencil**, Indexed → **block when supported** (else element-wise)
+6) **H1.4**: Uniform direct access → **block**
+7) **H1.5**: Multi-node prefers **block**, else **element-wise**
+8) **H1.6**: Non-uniform with no capability → **coarse**
+9) **H1.7**: Per-acquire partition offset mismatch → **full-range** for that acquire
+10) **Fallback**: Respect `--partition-fallback` (coarse or fine-grained)
 
 ## Terminology Mapping
 

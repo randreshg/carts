@@ -102,6 +102,8 @@ private:
   struct MemrefInfo {
     Operation *alloc = nullptr;
     EdtOp parentEdt = nullptr;
+    /// True if this allocation is used by an EDT other than its defining EDT.
+    bool usedByOtherEdts = false;
     ArtsMode accessMode = ArtsMode::uninitialized;
     bool usedFineGrained = false;
     bool usedBlock = false;
@@ -437,8 +439,10 @@ void CreateDbsPass::collectMemrefs() {
 
         /// If the parent edt is different from the current edt, it means
         /// it is an external dependency
-        if (parentEdt != edt)
+        if (parentEdt != edt) {
           edtExternalValues[edt].insert(operand);
+          info.usedByOtherEdts = true;
+        }
       }
     });
   });
@@ -569,6 +573,23 @@ void CreateDbsPass::createDbAllocOps() {
     Location loc = alloc->getLoc();
     OpBuilder::InsertionGuard IG(AC->getBuilder());
     AC->setInsertionPointAfter(alloc);
+
+    /// Skip local allocations that do not escape their defining EDT.
+    /// These buffers are private to a single EDT and do not need datablocks.
+    if (info.parentEdt && !info.usedByOtherEdts) {
+      bool escapesEdt = false;
+      for (auto &use : alloc->getUses()) {
+        Operation *user = use.getOwner();
+        if (!info.parentEdt->isAncestor(user)) {
+          escapesEdt = true;
+          break;
+        }
+      }
+      if (!escapesEdt) {
+        ARTS_DEBUG(" - Skipping local EDT allocation (no external uses)");
+        continue;
+      }
+    }
 
     /// Infer allocation type based on the defining operation
     DbAllocType allocType = inferAllocType(alloc);

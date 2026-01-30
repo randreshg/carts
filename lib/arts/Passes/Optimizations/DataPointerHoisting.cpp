@@ -26,6 +26,7 @@
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
@@ -33,6 +34,7 @@
 
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
+#include "arts/Utils/ValueUtils.h"
 
 #include "arts/Utils/ArtsDebug.h"
 ARTS_DEBUG_SETUP(arts_data_pointer_hoisting);
@@ -98,6 +100,55 @@ static bool allOperandsDominate(Operation *op, Operation *insertPoint,
   return true;
 }
 
+static bool isConstantAtLeastOne(Value v) {
+  if (!v)
+    return false;
+  int64_t val = 0;
+  if (ValueUtils::getConstantIndex(v, val))
+    return val >= 1;
+  if (auto cst = v.getDefiningOp<arith::ConstantOp>()) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue()))
+      return intAttr.getInt() >= 1;
+  }
+  return false;
+}
+
+static bool isProvablyNonZero(Value v, unsigned depth = 0) {
+  if (!v || depth > 4)
+    return false;
+  v = ValueUtils::stripNumericCasts(v);
+  if (isConstantAtLeastOne(v))
+    return true;
+  if (auto maxui = v.getDefiningOp<arith::MaxUIOp>()) {
+    return isProvablyNonZero(maxui.getLhs(), depth + 1) ||
+           isProvablyNonZero(maxui.getRhs(), depth + 1);
+  }
+  if (auto maxsi = v.getDefiningOp<arith::MaxSIOp>()) {
+    return isProvablyNonZero(maxsi.getLhs(), depth + 1) ||
+           isProvablyNonZero(maxsi.getRhs(), depth + 1);
+  }
+  return false;
+}
+
+static bool isSafeDivRemToHoist(Operation *op, scf::ForOp loop,
+                                DominanceInfo &domInfo) {
+  if (!loop || !loop->isAncestor(op))
+    return false;
+  Value denom;
+  if (auto div = dyn_cast<arith::DivUIOp>(op))
+    denom = div.getRhs();
+  else if (auto rem = dyn_cast<arith::RemUIOp>(op))
+    denom = rem.getRhs();
+  else
+    return false;
+
+  if (!isProvablyNonZero(denom))
+    return false;
+  if (!allOperandsDominate(op, loop, domInfo))
+    return false;
+  return true;
+}
+
 /// Find the highest loop that can legally hoist the address computation.
 static scf::ForOp findHoistTarget(Operation *op, Operation *addrOp,
                                   DominanceInfo &domInfo) {
@@ -148,6 +199,7 @@ void DataPointerHoistingPass::runOnOperation() {
   ARTS_INFO_HEADER(DataPointerHoistingPass);
 
   int hoistedCount = 0;
+  int divRemHoisted = 0;
 
   /// Process each function
   module.walk([&](func::FuncOp funcOp) {
@@ -184,9 +236,31 @@ void DataPointerHoistingPass::runOnOperation() {
       if (hoistLoadOutOfLoop(loadOp, targetLoop))
         hoistedCount++;
     }
+
+    /// Hoist div/rem out of inner loops when operands are invariant and the
+    /// divisor is provably non-zero.
+    funcOp.walk([&](scf::ForOp loop) {
+      SmallVector<Operation *> divRemOps;
+      for (Operation &op : loop.getBody()->getOperations()) {
+        if (op.hasTrait<OpTrait::IsTerminator>())
+          continue;
+        if (isa<scf::ForOp>(op))
+          continue;
+        if (!isa<arith::DivUIOp, arith::RemUIOp>(op))
+          continue;
+        if (!isSafeDivRemToHoist(&op, loop, domInfo))
+          continue;
+        divRemOps.push_back(&op);
+      }
+      for (Operation *op : divRemOps) {
+        op->moveBefore(loop);
+        divRemHoisted++;
+      }
+    });
   });
 
   ARTS_INFO("Hoisted " << hoistedCount << " data pointer loads out of loops");
+  ARTS_INFO("Hoisted " << divRemHoisted << " div/rem ops out of loops");
   ARTS_INFO_FOOTER(DataPointerHoistingPass);
 }
 
