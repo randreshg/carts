@@ -92,6 +92,9 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
         /*schedule*/ nullptr,
         /*reductionAccumulators*/ ValueRange{});
 
+    /// Transfer metadata attributes (arts.loop, arts.id, etc.) from source
+    copyArtsMetadataAttrs(op, artsFor);
+
     Region &dstRegion = artsFor.getRegion();
     if (dstRegion.empty())
       dstRegion.push_back(new Block());
@@ -370,6 +373,9 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
         loc, ValueRange{lowerBound}, ValueRange{upperBound}, ValueRange{step},
         schedAttr, ValueRange{redAccs});
 
+    /// Transfer metadata attributes (arts.loop, arts.id, etc.) from source
+    copyArtsMetadataAttrs(op, forOp);
+
     /// Set partitioning hint if block size is present
     if (staticBlockSize) {
       setPartitioningHint(forOp.getOperation(),
@@ -610,6 +616,10 @@ struct TaskloopToARTSPattern : public OpRewritePattern<omp::TaskLoopOp> {
         loc, ValueRange{lowerBound}, ValueRange{upperBound}, ValueRange{step},
         /*schedule*/ nullptr,
         /*reductionAccumulators*/ ValueRange{});
+
+    /// Transfer metadata attributes (arts.loop, arts.id, etc.) from source
+    copyArtsMetadataAttrs(op, forOp);
+
     Region &dstRegion = forOp.getRegion();
     if (dstRegion.empty())
       dstRegion.push_back(new Block());

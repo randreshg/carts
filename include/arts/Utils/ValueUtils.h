@@ -109,6 +109,11 @@ public:
   static std::optional<int64_t> extractConstantOffset(Value idx, Value loopIV,
                                                       Value chunkOffset);
 
+  /// Strip constant add/sub offsets from an index expression.
+  /// Returns the base value and accumulates the constant offset (if provided).
+  static Value stripConstantOffset(Value value,
+                                   int64_t *outConst = nullptr);
+
   /// Extract array index from byte offset pattern: bytes = (index * elemBytes).
   /// Handles common patterns where GEP indices are scaled by element byte size.
   /// Returns the logical array index or null Value if pattern doesn't match.

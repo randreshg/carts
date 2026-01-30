@@ -86,9 +86,11 @@ inline void setPartitionMode(Operation *op, PartitionMode mode) {
 std::optional<PartitioningHint> getPartitioningHint(Operation *op);
 void setPartitioningHint(Operation *op, const PartitioningHint &hint);
 
-/// Transfer attributes from source to dest operation.
-/// Copies common ARTS attributes (arts.id, arts.partition, etc.)
-void transferAttributes(Operation *source, Operation *dest);
+/// Copy ARTS-specific metadata attributes from source to dest operation.
+/// Copies: arts.id, partition_mode, arts.partition_hint, arts.twin_diff, arts.loop
+/// Unlike transferAttributes in ArtsUtils.h which copies ALL attributes,
+/// this only copies ARTS-specific metadata attributes.
+void copyArtsMetadataAttrs(Operation *source, Operation *dest);
 
 } // namespace arts
 } // namespace mlir

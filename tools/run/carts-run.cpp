@@ -465,6 +465,11 @@ setupPassManager(ModuleOp module, MLIRContext &context,
       std::make_unique<arts::ArtsAnalysisManager>(
           module, ArtsConfig, MetadataFile, partitionFallback);
 
+  /// Load metadata from JSON file early to attach to omp.wsloop operations
+  /// BEFORE ConvertOpenMPToArts converts them to arts.for.
+  /// This enables trip count and parallelism info to flow through the pipeline.
+  (void)AM->getMetadataManager();
+
   /// Canonicalize memrefs
   {
     PassManager pm(&context);
@@ -478,17 +483,21 @@ setupPassManager(ModuleOp module, MLIRContext &context,
   if (stopAt == PipelineStage::CanonicalizeMemrefs)
     return success();
 
-  /// Metadata collection
-  if (stopAt == PipelineStage::CollectMetadata) {
+  /// Metadata collection - run early to attach arts.loop attributes
+  /// BEFORE InitialCleanup's createLowerAffinePass() loses metadata.
+  /// This enables downstream passes (ForLowering) to access trip counts.
+  {
     PassManager pm(&context);
-    setupCollectMetadata(pm, true);
+    bool shouldExport = (stopAt == PipelineStage::CollectMetadata);
+    setupCollectMetadata(pm, shouldExport);
     if (failed(pm.run(module))) {
       ARTS_ERROR("Error when collecting metadata");
       module->dump();
       return failure();
     }
-    return success();
   }
+  if (stopAt == PipelineStage::CollectMetadata)
+    return success();
 
   /// Initial cleanup
   {
