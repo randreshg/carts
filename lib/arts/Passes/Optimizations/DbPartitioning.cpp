@@ -39,6 +39,7 @@
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/Analysis/Graphs/Edt/EdtGraph.h"
 #include "arts/Analysis/Graphs/Edt/EdtNode.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
@@ -199,6 +200,43 @@ getPartitionOffsetsND(DbAcquireNode *acqNode,
     result.push_back(offset);
 
   return result;
+}
+
+/// Pick a representative partition offset (prefer non-constant).
+/// Returns the chosen offset and its index via outIdx when provided.
+static Value pickRepresentativePartitionOffset(ArrayRef<Value> offsets,
+                                               unsigned *outIdx = nullptr) {
+  if (outIdx)
+    *outIdx = 0;
+  for (unsigned i = 0; i < offsets.size(); ++i) {
+    Value off = offsets[i];
+    if (!off)
+      continue;
+    int64_t c = 0;
+    if (!ValueUtils::getConstantIndex(ValueUtils::stripNumericCasts(off), c)) {
+      if (outIdx)
+        *outIdx = i;
+      return off;
+    }
+  }
+  for (unsigned i = 0; i < offsets.size(); ++i) {
+    if (offsets[i]) {
+      if (outIdx)
+        *outIdx = i;
+      return offsets[i];
+    }
+  }
+  return Value();
+}
+
+/// Pick a partition size that matches the chosen offset index.
+static Value pickRepresentativePartitionSize(ArrayRef<Value> sizes,
+                                             unsigned idx) {
+  if (sizes.empty())
+    return Value();
+  if (idx < sizes.size() && sizes[idx])
+    return sizes[idx];
+  return sizes.front();
 }
 
 /// Identify the base (offset 0) entry for a multi-entry stencil acquire.
@@ -370,6 +408,7 @@ static bool findStencilBaseIndices(DbAcquireOp acquire,
 /// Analyze a single acquire to determine its partition mode and chunk info.
 static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
                                                         DbAcquireNode *acqNode,
+                                                        DbAllocOp allocOp,
                                                         OpBuilder &builder,
                                                         Location loc) {
   auto refineSizeFromMinInBlock = [&](Value offset, Value sizeHint) -> Value {
@@ -437,9 +476,16 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
       if (succeeded(acqNode->computeBlockInfo(offset, size))) {
         info.partitionOffsets.push_back(offset);
         info.partitionSizes.push_back(size);
-        if (Value refined = refineSizeFromMinInBlock(
-                info.partitionOffsets.front(), info.partitionSizes.front())) {
-          info.partitionSizes[0] = refined;
+        unsigned offsetIdx = 0;
+        Value repOffset = pickRepresentativePartitionOffset(
+            info.partitionOffsets, &offsetIdx);
+        Value repSize =
+            pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
+        if (Value refined = refineSizeFromMinInBlock(repOffset, repSize)) {
+          if (offsetIdx < info.partitionSizes.size())
+            info.partitionSizes[offsetIdx] = refined;
+          else if (!info.partitionSizes.empty())
+            info.partitionSizes[0] = refined;
           ARTS_DEBUG("  Refined partition size from min: "
                      << info.partitionSizes.front());
         }
@@ -479,7 +525,7 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
           info.partitionSizes.push_back(one);
         info.isValid = true;
         ARTS_DEBUG("  Using stencil base indices for partition offset: "
-                   << info.partitionOffsets.front());
+                   << pickRepresentativePartitionOffset(info.partitionOffsets));
         break;
       }
     }
@@ -497,13 +543,19 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
         info.partitionSizes.push_back(i < sizes.size() ? sizes[i] : one);
       }
       info.isValid = true;
+      unsigned offsetIdx = 0;
+      Value repOffset =
+          pickRepresentativePartitionOffset(info.partitionOffsets, &offsetIdx);
+      Value repSize =
+          pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
       ARTS_DEBUG("  Using partition hints from CreateDbs: offset="
-                 << info.partitionOffsets.front()
-                 << ", size=" << info.partitionSizes.front());
+                 << repOffset << ", size=" << repSize);
 
-      if (Value refined = refineSizeFromMinInBlock(
-              info.partitionOffsets.front(), info.partitionSizes.front())) {
-        info.partitionSizes[0] = refined;
+      if (Value refined = refineSizeFromMinInBlock(repOffset, repSize)) {
+        if (offsetIdx < info.partitionSizes.size())
+          info.partitionSizes[offsetIdx] = refined;
+        else if (!info.partitionSizes.empty())
+          info.partitionSizes[0] = refined;
         ARTS_DEBUG("  Refined partition size from min: "
                    << info.partitionSizes.front());
       }
@@ -516,12 +568,10 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
           bool useLoopSize = false;
           int64_t hintConst = 0;
           int64_t loopConst = 0;
-          Value hintSize = info.partitionSizes.empty()
-                               ? Value()
-                               : info.partitionSizes.front();
-          Value hintOff = info.partitionOffsets.empty()
-                              ? Value()
-                              : info.partitionOffsets.front();
+          Value hintSize =
+              pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
+          Value hintOff = pickRepresentativePartitionOffset(
+              info.partitionOffsets, &offsetIdx);
           bool hintIsConst =
               hintSize && ValueUtils::getConstantIndex(hintSize, hintConst);
           bool loopIsConst = ValueUtils::getConstantIndex(loopSize, loopConst);
@@ -558,7 +608,9 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
             useLoopSize = true;
 
           if (useLoopSize) {
-            if (!info.partitionSizes.empty())
+            if (offsetIdx < info.partitionSizes.size())
+              info.partitionSizes[offsetIdx] = loopSize;
+            else if (!info.partitionSizes.empty())
               info.partitionSizes[0] = loopSize;
             else
               info.partitionSizes.push_back(loopSize);
@@ -1129,6 +1181,19 @@ static SmallVector<Value> collectAccessIndices(DbRefOp dbRef) {
   return indices;
 }
 
+static SmallVector<Value> collectAccessIndicesFromUser(Operation *refUser) {
+  SmallVector<Value> indices;
+  if (auto load = dyn_cast<memref::LoadOp>(refUser)) {
+    indices.assign(load.getIndices().begin(), load.getIndices().end());
+    return indices;
+  }
+  if (auto store = dyn_cast<memref::StoreOp>(refUser)) {
+    indices.assign(store.getIndices().begin(), store.getIndices().end());
+    return indices;
+  }
+  return indices;
+}
+
 struct EntryMatch {
   size_t index = 0;
   bool found = false;
@@ -1309,22 +1374,89 @@ bool DbPartitioningPass::expandMultiEntryAcquires() {
 
     /// Remap DbRef operations to use their correct block arguments.
     for (DbRefOp dbRef : collectDbRefUsers(use.blockArg)) {
-      SmallVector<Value> accessIndices = collectAccessIndices(dbRef);
-      EntryMatch match =
-          matchDbRefEntry(dbRef, accessIndices, original, numEntries);
+      SmallVector<Operation *> users(dbRef.getResult().getUsers().begin(),
+                                     dbRef.getResult().getUsers().end());
+      SmallVector<std::pair<Operation *, size_t>> matchedUsers;
+      SmallVector<Operation *> unmatchedUsers;
+      llvm::DenseMap<size_t, unsigned> entryCounts;
 
-      /// Fallback: For multi-entry acquires without a match, log and use entry
-      /// 0.
-      if (!match.found && numEntries > 1) {
-        ARTS_DEBUG("      WARNING: Could not match db_ref to partition entry, "
-                   "defaulting to entry 0");
+      for (Operation *user : users) {
+        SmallVector<Value> accessIndices = collectAccessIndicesFromUser(user);
+        if (accessIndices.empty()) {
+          unmatchedUsers.push_back(user);
+          continue;
+        }
+
+        EntryMatch match =
+            matchDbRefEntry(dbRef, accessIndices, original, numEntries);
+        if (!match.found && numEntries > 1) {
+          ARTS_DEBUG("      WARNING: Could not match db_ref user to partition "
+                     "entry, defaulting to entry 0");
+        }
+
+        ARTS_DEBUG("      db_ref user matched entry "
+                   << match.index
+                   << " (access indices: " << accessIndices.size()
+                   << ", found: " << match.found << ")");
+
+        matchedUsers.emplace_back(user, match.index);
+        entryCounts[match.index]++;
       }
 
-      ARTS_DEBUG("      db_ref matched entry "
-                 << match.index << " (access indices: " << accessIndices.size()
-                 << ", found: " << match.found << ")");
+      if (entryCounts.empty()) {
+        SmallVector<Value> accessIndices = collectAccessIndices(dbRef);
+        EntryMatch match =
+            matchDbRefEntry(dbRef, accessIndices, original, numEntries);
 
-      dbRef.getSourceMutable().assign(newBlockArgs[match.index]);
+        if (!match.found && numEntries > 1) {
+          ARTS_DEBUG(
+              "      WARNING: Could not match db_ref to partition entry, "
+              "defaulting to entry 0");
+        }
+
+        ARTS_DEBUG("      db_ref matched entry "
+                   << match.index
+                   << " (access indices: " << accessIndices.size()
+                   << ", found: " << match.found << ")");
+
+        dbRef.getSourceMutable().assign(newBlockArgs[match.index]);
+        continue;
+      }
+
+      if (entryCounts.size() == 1) {
+        size_t entry = entryCounts.begin()->first;
+        ARTS_DEBUG("      db_ref matched entry " << entry
+                                                 << " (single-entry match)");
+        dbRef.getSourceMutable().assign(newBlockArgs[entry]);
+        continue;
+      }
+
+      /// Multiple entries matched: clone db_ref per entry and remap uses.
+      OpBuilder refBuilder(dbRef);
+      llvm::DenseMap<size_t, DbRefOp> entryRefs;
+      for (const auto &entryPair : entryCounts) {
+        size_t entry = entryPair.first;
+        DbRefOp newRef =
+            refBuilder.create<DbRefOp>(dbRef.getLoc(), dbRef.getType(),
+                                       newBlockArgs[entry], dbRef.getIndices());
+        entryRefs[entry] = newRef;
+      }
+
+      size_t fallbackEntry = entryRefs.count(0) ? 0 : entryRefs.begin()->first;
+      DbRefOp fallbackRef = entryRefs[fallbackEntry];
+
+      for (const auto &matchPair : matchedUsers) {
+        Operation *user = matchPair.first;
+        size_t entry = matchPair.second;
+        DbRefOp refForEntry = entryRefs[entry];
+        user->replaceUsesOfWith(dbRef.getResult(), refForEntry.getResult());
+      }
+
+      for (Operation *user : unmatchedUsers) {
+        user->replaceUsesOfWith(dbRef.getResult(), fallbackRef.getResult());
+      }
+
+      dbRef.erase();
     }
 
     /// Create db_release operations for new block arguments (entries 1+)
@@ -1495,7 +1627,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         return;
 
       auto info = computeAcquirePartitionInfo(acqNode->getDbAcquireOp(),
-                                              acqNode, builder, loc);
+                                              acqNode, allocOp, builder, loc);
       if (!info.isValid) {
         ARTS_DEBUG("  Acquire analysis failed for "
                    << acqNode->getDbAcquireOp());
@@ -1619,6 +1751,20 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         thisAcquireCanBlock = true;
       bool thisAcquireCanElementWise =
           acquireMode && *acquireMode == PartitionMode::fine_grained;
+
+      /// If the partition offset does not map to the access pattern, block
+      /// partitioning would select the wrong dimension (non-leading) and is
+      /// unsafe. Disable block capability in that case.
+      SmallVector<Value> offsetVals = getPartitionOffsetsND(acqNode, &acqInfo);
+      unsigned offsetIdx = 0;
+      Value partitionOffset =
+          pickRepresentativePartitionOffset(offsetVals, &offsetIdx);
+      if (partitionOffset &&
+          !acqNode->canPartitionWithOffset(partitionOffset)) {
+        ARTS_DEBUG("  Partition offset incompatible with access pattern; "
+                   "disabling block capability");
+        thisAcquireCanBlock = false;
+      }
 
       if (thisAcquireCanBlock)
         anyBlockCapable = true;
@@ -1773,20 +1919,30 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       if (!acquire)
         continue;
 
-      /// Use partition_indices or partition_offsets as partition info
-      /// N-D support: iterate all partition dimensions for block size
-      /// extraction
-      Value blockIndex = info.partitionOffsets.empty()
-                             ? Value()
-                             : info.partitionOffsets.front();
+      /// Use partition offsets/sizes from analysis if available; fall back to
+      /// acquire hints otherwise. Prefer non-constant offsets.
+      unsigned offsetIdx = 0;
+      Value blockIndex =
+          pickRepresentativePartitionOffset(info.partitionOffsets, &offsetIdx);
       Value blockSizeVal =
-          info.partitionSizes.empty() ? Value() : info.partitionSizes.front();
-      if (!acquire.getPartitionIndices().empty())
-        blockIndex = acquire.getPartitionIndices().front();
-      else if (!acquire.getPartitionOffsets().empty())
-        blockIndex = acquire.getPartitionOffsets().front();
-      if (!acquire.getPartitionSizes().empty())
-        blockSizeVal = acquire.getPartitionSizes().front();
+          pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
+      if (!blockIndex) {
+        unsigned opIdx = 0;
+        if (!acquire.getPartitionIndices().empty()) {
+          SmallVector<Value> partIndices(acquire.getPartitionIndices().begin(),
+                                         acquire.getPartitionIndices().end());
+          blockIndex = pickRepresentativePartitionOffset(partIndices, &opIdx);
+        } else if (!acquire.getPartitionOffsets().empty()) {
+          SmallVector<Value> partOffsets(acquire.getPartitionOffsets().begin(),
+                                         acquire.getPartitionOffsets().end());
+          blockIndex = pickRepresentativePartitionOffset(partOffsets, &opIdx);
+        }
+        if (!acquire.getPartitionSizes().empty()) {
+          SmallVector<Value> partSizes(acquire.getPartitionSizes().begin(),
+                                       acquire.getPartitionSizes().end());
+          blockSizeVal = pickRepresentativePartitionSize(partSizes, opIdx);
+        }
+      }
 
       Value baseCandidate = DatablockUtils::extractBaseBlockSizeCandidate(
           blockIndex, blockSizeVal);
@@ -1851,7 +2007,10 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         continue;
       if (info.needsFullRange)
         continue;
-      refSize = info.partitionSizes.front();
+      unsigned offsetIdx = 0;
+      (void)pickRepresentativePartitionOffset(info.partitionOffsets,
+                                              &offsetIdx);
+      refSize = pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
       break;
     }
     if (consistentMode == PartitionMode::block && refSize &&
@@ -1867,7 +2026,11 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
           continue;
         if (info.needsFullRange)
           continue;
-        Value infoSize = info.partitionSizes.front();
+        unsigned offsetIdx = 0;
+        (void)pickRepresentativePartitionOffset(info.partitionOffsets,
+                                                &offsetIdx);
+        Value infoSize =
+            pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
         if (ValueUtils::isZeroConstant(
                 ValueUtils::stripNumericCasts(infoSize))) {
           ARTS_DEBUG("  Skipping zero fallback block size");
@@ -2335,6 +2498,31 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     plan.stencilInfo = *stencilInfo;
   /// Note: byte_offset/byte_size for ESD is computed in EdtLowering from
   /// element_offsets/element_sizes, using allocation's elementSizes for stride.
+
+  /// Propagate stencil center offset to all acquires when using stencil mode.
+  /// This keeps base offsets aligned for non-stencil accesses (e.g., outputs)
+  /// when loop bounds are shifted (i starts at 1).
+  if (decision.mode == PartitionMode::stencil) {
+    std::optional<int64_t> centerOffset;
+    for (const auto &info : acquireInfos) {
+      if (!info.acquire)
+        continue;
+      if (auto centerAttr = info.acquire->getAttrOfType<IntegerAttr>(
+              "stencil_center_offset")) {
+        centerOffset = centerAttr.getInt();
+        break;
+      }
+    }
+    if (centerOffset) {
+      IntegerAttr centerAttr = builder.getI64IntegerAttr(*centerOffset);
+      for (const auto &info : acquireInfos) {
+        if (!info.acquire)
+          continue;
+        if (!info.acquire->hasAttr("stencil_center_offset"))
+          info.acquire->setAttr("stencil_center_offset", centerAttr);
+      }
+    }
+  }
 
   /// Build DbRewriteAcquire list from AcquirePartitionInfo
   /// Include ALL acquires - invalid ones get Coarse fallback (offset=0,

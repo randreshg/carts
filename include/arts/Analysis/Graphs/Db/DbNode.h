@@ -156,6 +156,10 @@ public:
 
   bool computePartitionBounds();
   bool canPartitionWithOffset(Value offset);
+  /// Return the access-chain dimension that depends on the partition offset.
+  /// If requireLeading is true, only accept leading dynamic index.
+  std::optional<unsigned> getPartitionOffsetDim(Value offset,
+                                                bool requireLeading = false);
 
   /// Unified check: does this acquire need full-range access on a block alloc?
   /// Returns true if:

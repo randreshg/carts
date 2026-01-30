@@ -40,6 +40,7 @@ std::unique_ptr<Pass> createCreateEpochsPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug);
 std::unique_ptr<Pass> createEdtInvariantCodeMotionPass();
+std::unique_ptr<Pass> createEdtAllocaSinkingPass();
 std::unique_ptr<Pass> createDataPointerHoistingPass();
 std::unique_ptr<Pass> createAliasScopeGenPass();
 std::unique_ptr<Pass> createLoopVectorizationHintsPass();

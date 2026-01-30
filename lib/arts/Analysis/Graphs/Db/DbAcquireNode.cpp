@@ -443,23 +443,58 @@ bool DbAcquireNode::computePartitionBounds() {
   partitionOffset = Value();
   partitionSize = Value();
 
+  auto pickRepresentative = [&](ValueRange vals, unsigned &idx) -> Value {
+    idx = 0;
+    for (unsigned i = 0; i < vals.size(); ++i) {
+      Value v = vals[i];
+      if (!v)
+        continue;
+      int64_t c = 0;
+      if (!ValueUtils::getConstantIndex(ValueUtils::stripNumericCasts(v), c)) {
+        idx = i;
+        return v;
+      }
+    }
+    for (unsigned i = 0; i < vals.size(); ++i) {
+      if (vals[i]) {
+        idx = i;
+        return vals[i];
+      }
+    }
+    return Value();
+  };
+
+  unsigned offsetIdx = 0;
   if (!mutableAcquire.getPartitionIndices().empty())
-    partitionOffset = mutableAcquire.getPartitionIndices().front();
+    partitionOffset =
+        pickRepresentative(mutableAcquire.getPartitionIndices(), offsetIdx);
   else if (!mutableAcquire.getPartitionOffsets().empty())
-    partitionOffset = mutableAcquire.getPartitionOffsets().front();
-  if (!mutableAcquire.getPartitionSizes().empty())
-    partitionSize = mutableAcquire.getPartitionSizes().front();
+    partitionOffset =
+        pickRepresentative(mutableAcquire.getPartitionOffsets(), offsetIdx);
+  if (!mutableAcquire.getPartitionSizes().empty()) {
+    if (offsetIdx < mutableAcquire.getPartitionSizes().size())
+      partitionSize = mutableAcquire.getPartitionSizes()[offsetIdx];
+    else
+      partitionSize = mutableAcquire.getPartitionSizes().front();
+  }
 
   if (!partitionOffset && !partitionSize) {
     if (auto mode = mutableAcquire.getPartitionMode()) {
       if (*mode == PartitionMode::block || *mode == PartitionMode::stencil ||
           *mode == PartitionMode::fine_grained) {
+        offsetIdx = 0;
         if (!mutableAcquire.getIndices().empty())
-          partitionOffset = mutableAcquire.getIndices().front();
+          partitionOffset =
+              pickRepresentative(mutableAcquire.getIndices(), offsetIdx);
         else if (!mutableAcquire.getOffsets().empty())
-          partitionOffset = mutableAcquire.getOffsets().front();
-        if (!mutableAcquire.getSizes().empty())
-          partitionSize = mutableAcquire.getSizes().front();
+          partitionOffset =
+              pickRepresentative(mutableAcquire.getOffsets(), offsetIdx);
+        if (!mutableAcquire.getSizes().empty()) {
+          if (offsetIdx < mutableAcquire.getSizes().size())
+            partitionSize = mutableAcquire.getSizes()[offsetIdx];
+          else
+            partitionSize = mutableAcquire.getSizes().front();
+        }
       }
     }
   }
@@ -849,26 +884,28 @@ size_t DbAcquireNode::countStores() {
   return count;
 }
 
-bool DbAcquireNode::canPartitionWithOffset(Value offset) {
-  ARTS_DEBUG("canPartitionWithOffset called with offset=" << offset);
+std::optional<unsigned>
+DbAcquireNode::getPartitionOffsetDim(Value offset, bool requireLeading) {
+  ARTS_DEBUG("getPartitionOffsetDim called with offset="
+             << offset << " requireLeading=" << requireLeading);
   if (!offset) {
-    ARTS_DEBUG("  -> returning false (no offset)");
-    return false;
+    ARTS_DEBUG("  -> returning none (no offset)");
+    return std::nullopt;
   }
   Value offsetStripped = ValueUtils::stripNumericCasts(offset);
   ARTS_DEBUG("  offsetStripped=" << offsetStripped << " isZero="
                                  << ValueUtils::isZeroConstant(offsetStripped));
 
-  // A constant offset (like %c0) is NOT a valid partition variable.
-  // The partition offset should be a dynamic value (like a loop IV) that
-  // varies across partitions. A constant cannot represent "which partition
-  // am I in" and using it in dependsOn() checks would incorrectly match
-  // any use of that constant in the index chain.
+  /// A constant offset (like %c0) is NOT a valid partition variable.
+  /// The partition offset should be a dynamic value (like a loop IV) that
+  /// varies across partitions. A constant cannot represent "which partition
+  /// am I in" and using it in dependsOn() checks would incorrectly match
+  /// any use of that constant in the index chain.
   int64_t constVal;
   if (ValueUtils::getConstantIndex(offsetStripped, constVal)) {
-    ARTS_DEBUG("  -> returning false (constant offset "
+    ARTS_DEBUG("  -> returning none (constant offset "
                << constVal << " cannot be partition variable)");
-    return false;
+    return std::nullopt;
   }
 
   int64_t offsetConst = 0;
@@ -884,11 +921,12 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
   collectAccessOperations(dbRefToMemOps);
 
   if (dbRefToMemOps.empty()) {
-    ARTS_DEBUG("  -> returning true (no memory operations)");
-    return true;
+    ARTS_DEBUG("  -> returning dim 0 (no memory operations)");
+    return 0u;
   }
   ARTS_DEBUG("  found " << dbRefToMemOps.size() << " db_ref users with memOps");
 
+  std::optional<unsigned> foundDim;
   for (auto &[dbRef, memOps] : dbRefToMemOps) {
     for (Operation *memOp : memOps) {
       SmallVector<Value> fullChain =
@@ -896,8 +934,8 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
       if (fullChain.empty())
         continue;
 
-      bool offsetSeen = false;
       int64_t firstDynPos = -1;
+      int64_t matchedPos = -1;
       for (unsigned i = 0; i < fullChain.size(); ++i) {
         int64_t constVal = 0;
         bool isConst = ValueUtils::getConstantIndex(fullChain[i], constVal);
@@ -910,19 +948,33 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
             if (*stride != 1) {
               ARTS_DEBUG("  partition offset has stride "
                          << *stride << "; disabling blocked partitioning");
-              return false;
+              return std::nullopt;
             }
           }
-          if (firstDynPos >= 0 && i != static_cast<unsigned>(firstDynPos)) {
+          if (isIndirectIndex(fullChain[i], offsetStripped)) {
+            ARTS_DEBUG("  indirect index detected; disabling blocked "
+                       "partitioning");
+            return std::nullopt;
+          }
+          if (matchedPos >= 0 && matchedPos != static_cast<int64_t>(i)) {
+            ARTS_DEBUG("  partition offset maps to multiple dims; "
+                       "disabling blocked partitioning");
+            return std::nullopt;
+          }
+          matchedPos = static_cast<int64_t>(i);
+          if (requireLeading && firstDynPos >= 0 && matchedPos != firstDynPos) {
             ARTS_DEBUG("  partition offset maps to non-leading dim; "
                        "disabling blocked partitioning");
-            return false;
+            return std::nullopt;
           }
-          offsetSeen = true;
         }
       }
 
-      Value firstDynIdx;
+      if (matchedPos < 0) {
+        ARTS_DEBUG("  -> returning none (offset not in access pattern)");
+        return std::nullopt;
+      }
+
       for (Value idx : fullChain) {
         int64_t constVal;
         if (ValueUtils::getConstantIndex(idx, constVal))
@@ -931,31 +983,36 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
         if (isIndirectIndex(idx, offsetStripped)) {
           ARTS_DEBUG("  indirect index detected; disabling blocked "
                      "partitioning");
-          return false;
+          return std::nullopt;
         }
-
-        if (!firstDynIdx)
-          firstDynIdx = idx;
       }
 
-      if (!firstDynIdx) {
-        ARTS_DEBUG("    no dynamic index, continuing");
-        continue;
+      Value idxAtPos = fullChain[matchedPos];
+      if (!LoopNode::dependsOnLoopInitNormalized(idxAtPos, offsetStripped)) {
+        ARTS_DEBUG("  -> returning none (offset not in access pattern)");
+        return std::nullopt;
       }
 
-      ARTS_DEBUG("    offsetSeen=" << offsetSeen
-                                   << " firstDynIdx=" << firstDynIdx);
-      if (!offsetSeen ||
-          !LoopNode::dependsOnLoopInitNormalized(firstDynIdx, offsetStripped)) {
-        ARTS_DEBUG("  -> returning false: offsetSeen="
-                   << offsetSeen << " (offset not in access pattern)");
-        return false;
+      if (foundDim && *foundDim != static_cast<unsigned>(matchedPos)) {
+        ARTS_DEBUG("  partition offset maps to inconsistent dims; "
+                   "disabling blocked partitioning");
+        return std::nullopt;
       }
+      foundDim = static_cast<unsigned>(matchedPos);
     }
   }
 
-  ARTS_DEBUG("  -> returning true (all checks passed)");
-  return true;
+  if (!foundDim) {
+    ARTS_DEBUG("  -> returning dim 0 (no dynamic index)");
+    return 0u;
+  }
+
+  ARTS_DEBUG("  -> returning dim " << *foundDim);
+  return foundDim;
+}
+
+bool DbAcquireNode::canPartitionWithOffset(Value offset) {
+  return getPartitionOffsetDim(offset, /*requireLeading=*/true).has_value();
 }
 
 bool DbAcquireNode::needsFullRange(Value partitionOffset) {
@@ -968,12 +1025,7 @@ bool DbAcquireNode::needsFullRange(Value partitionOffset) {
   /// Case 2: No partition offset OR partition offset not in access pattern.
   /// - No offset: acquire has no hints, needs full-range for safety
   /// - Offset mismatch: e.g., parallel over 'b' but access mean[f]
-  /// Exception: Stencil patterns have special ESD handling.
   if (!partitionOffset || !canPartitionWithOffset(partitionOffset)) {
-    if (getAccessPattern() == AccessPattern::Stencil) {
-      ARTS_DEBUG("  needsFullRange: stencil pattern - keeping block access");
-      return false;
-    }
     ARTS_DEBUG("  needsFullRange: "
                << (partitionOffset ? "partition offset not in access pattern"
                                    : "no partition offset (needs full range)"));

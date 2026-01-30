@@ -218,6 +218,11 @@ LogicalResult EdtOp::verify() {
       if (getBody().isAncestor(definingOp->getParentRegion()))
         continue;
 
+      /// Allow external stack allocas; they are sunk into EDTs later in the
+      /// pipeline to keep task-local buffers private.
+      if (operand.getDefiningOp<memref::AllocaOp>())
+        continue;
+
       if (externalValues.contains(operand)) {
         op->emitOpError("EDT region uses external DbAcquire value '")
             << operand << "' directly instead of DbAcquire block argument. ";

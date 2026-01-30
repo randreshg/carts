@@ -194,6 +194,16 @@ def Edt : Pass<"edt", "mlir::ModuleOp"> {
   ];
 }
 
+def EdtAllocaSinking : Pass<"edt-alloca-sinking", "mlir::ModuleOp"> {
+  let summary = "Clone external stack allocas into EDT regions";
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect"
+  ];
+  let constructor = "mlir::arts::createEdtAllocaSinkingPass()";
+}
+
 def Concurrency : Pass<"concurrency", "mlir::ModuleOp"> {
   let summary = "Build EDT concurrency graph and apply concurrency-driven cleanups";
   let dependentDialects = [
