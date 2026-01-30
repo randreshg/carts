@@ -28,6 +28,7 @@
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
 #include "arts/Utils/OperationAttributes.h"
+#include "arts/Utils/ValueUtils.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -96,7 +97,8 @@ public:
   /// SSA values outside the task EDT, causing dominance errors.
   /// This method recreates all necessary values inside the current insertion
   /// point.
-  void recomputeWorkerBoundsInside(Value workerId, Value insideTotalWorkers);
+  void recomputeWorkerBoundsInside(Value workerId, Value baseWorkers,
+                                   bool capWorkers);
 
 private:
   void initialize();
@@ -135,6 +137,42 @@ struct ReductionInfo {
   /// Number of workers (from workers attribute - provides bounded memory)
   Value numWorkers;
 };
+
+/// Minimum iterations per worker to justify task creation.
+static constexpr int64_t kMinItersPerWorker = 1024;
+
+/// Compute total iterations for a 1D arts.for loop.
+static Value computeTotalIterations(ArtsCodegen &AC, ForOp forOp, Location loc) {
+  Value lowerBound = forOp.getLowerBound()[0];
+  Value upperBound = forOp.getUpperBound()[0];
+  Value loopStep = forOp.getStep()[0];
+  Value one = AC.createIndexConstant(1, loc);
+  Value range = AC.create<arith::SubIOp>(loc, upperBound, lowerBound);
+  Value adjustedRange = AC.create<arith::AddIOp>(
+      loc, range, AC.create<arith::SubIOp>(loc, loopStep, one));
+  return AC.create<arith::DivUIOp>(loc, adjustedRange, loopStep);
+}
+
+/// Cap workers based on total iterations to avoid spawning tiny tasks.
+static Value capWorkersByTripCount(ArtsCodegen &AC, Location loc,
+                                   Value baseWorkers,
+                                   Value totalIterations) {
+  Value one = AC.createIndexConstant(1, loc);
+  Value baseWorkersIdx =
+      baseWorkers.getType().isIndex()
+          ? baseWorkers
+          : AC.create<arith::IndexCastOp>(loc, AC.getBuilder().getIndexType(),
+                                          baseWorkers);
+  baseWorkersIdx = AC.create<arith::MaxUIOp>(loc, baseWorkersIdx, one);
+
+  Value minIters = AC.createIndexConstant(kMinItersPerWorker, loc);
+  Value minItersMinusOne = AC.create<arith::SubIOp>(loc, minIters, one);
+  Value adjusted = AC.create<arith::AddIOp>(loc, totalIterations,
+                                            minItersMinusOne);
+  Value maxWorkers = AC.create<arith::DivUIOp>(loc, adjusted, minIters);
+  maxWorkers = AC.create<arith::MaxUIOp>(loc, maxWorkers, one);
+  return AC.create<arith::MinUIOp>(loc, baseWorkersIdx, maxWorkers);
+}
 
 /// ParallelRegionAnalysis - Analyze parallel EDT contents for splitting
 /// Categorizes operations in a parallel EDT relative to arts.for operations.
@@ -367,13 +405,14 @@ private:
   /// parallel EDT (used when the parallel will be erased in split pattern)
   ReductionInfo allocatePartialAccumulators(ArtsCodegen *AC, ForOp forOp,
                                             EdtOp parallelEdt, Location loc,
+                                            Value numWorkersOverride = Value(),
                                             bool splitMode = false);
 
   /// Create result EDT that combines partial accumulators
   /// The barrierEpochGuid parameter specifies which epoch the result EDT
   /// should be spawned into.
-  void createResultEdt(ArtsCodegen *AC, EdtOp parallelEdt,
-                       ReductionInfo &redInfo, Location loc);
+  EdtOp createResultEdt(ArtsCodegen *AC, EdtOp parallelEdt,
+                        ReductionInfo &redInfo, Location loc);
 
   Attribute getLoopMetadataAttr(ForOp forOp);
 
@@ -394,7 +433,16 @@ private:
   EdtOp createTaskEdtWithRewiring(ArtsCodegen *AC, LoopInfo &loopInfo,
                                   ForOp forOp, Value workerIdPlaceholder,
                                   EdtOp originalParallel,
-                                  ReductionInfo &redInfo);
+                                  ReductionInfo &redInfo,
+                                  bool forceSerial = false,
+                                  Value effectiveWorkers = Value(),
+                                  bool capWorkers = false);
+
+  /// Decide whether to force serial execution based on loop metadata.
+  bool shouldForceSerial(ForOp forOp);
+
+  /// Detect indirect writes in the loop body (e.g., indices derived from loads).
+  bool hasIndirectWrite(ForOp forOp);
 };
 
 } // namespace
@@ -405,7 +453,17 @@ private:
 void LoopInfo::initialize() {
   Location loc = forOp.getLoc();
 
-  /// Extract block size from PartitioningHint if available
+  /// Compute total iterations: ceil((upper - lower) / step)
+  Value range = AC->create<arith::SubIOp>(loc, upperBound, lowerBound);
+  Value adjustedRange = AC->create<arith::AddIOp>(
+      loc, range,
+      AC->create<arith::SubIOp>(loc, loopStep,
+                                AC->createIndexConstant(1, loc)));
+  totalIterations = AC->create<arith::DivUIOp>(loc, adjustedRange, loopStep);
+
+  /// Extract block size from PartitioningHint if available.
+  /// If not provided, default to a balanced block size:
+  ///   blockSize = ceil(totalIterations / totalWorkers)
   if (auto hint = getPartitioningHint(forOp.getOperation())) {
     if (hint->mode == PartitionMode::block && hint->blockSize &&
         *hint->blockSize > 0) {
@@ -414,16 +472,16 @@ void LoopInfo::initialize() {
       blockSize = AC->createIndexConstant(1, loc);
     }
   } else {
-    blockSize = AC->createIndexConstant(1, loc);
+    Value one = AC->createIndexConstant(1, loc);
+    Value workersClamped =
+        AC->create<arith::MaxUIOp>(loc, totalWorkers, one);
+    Value workersMinusOne =
+        AC->create<arith::SubIOp>(loc, workersClamped, one);
+    Value adjustedIters =
+        AC->create<arith::AddIOp>(loc, totalIterations, workersMinusOne);
+    blockSize = AC->create<arith::DivUIOp>(loc, adjustedIters, workersClamped);
+    blockSize = AC->create<arith::MaxUIOp>(loc, blockSize, one);
   }
-
-  /// Compute total iterations: ceil((upper - lower) / step)
-  Value range = AC->create<arith::SubIOp>(loc, upperBound, lowerBound);
-  Value adjustedRange = AC->create<arith::AddIOp>(
-      loc, range,
-      AC->create<arith::SubIOp>(loc, loopStep,
-                                AC->createIndexConstant(1, loc)));
-  totalIterations = AC->create<arith::DivUIOp>(loc, adjustedRange, loopStep);
 
   /// Compute total chunks: ceil(totalIterations / blockSize)
   /// Formula: totalChunks = (totalIterations + blockSize - 1) / blockSize
@@ -511,8 +569,8 @@ void LoopInfo::computeWorkerIterationsBlock(Value workerId) {
                                             workerIterationCount, zeroIndex);
 }
 
-void LoopInfo::recomputeWorkerBoundsInside(Value workerId,
-                                           Value insideTotalWorkers) {
+void LoopInfo::recomputeWorkerBoundsInside(Value workerId, Value baseWorkers,
+                                           bool capWorkers) {
   Location loc = forOp.getLoc();
 
   /// Cast worker values to index type
@@ -522,9 +580,9 @@ void LoopInfo::recomputeWorkerBoundsInside(Value workerId,
           ? workerId
           : AC->create<arith::IndexCastOp>(loc, indexType, workerId);
   Value totalWorkersIndex =
-      insideTotalWorkers.getType().isIndex()
-          ? insideTotalWorkers
-          : AC->create<arith::IndexCastOp>(loc, indexType, insideTotalWorkers);
+      baseWorkers.getType().isIndex()
+          ? baseWorkers
+          : AC->create<arith::IndexCastOp>(loc, indexType, baseWorkers);
 
   Value oneIndex = AC->createIndexConstant(1, loc);
   Value zeroIndex = AC->createIndexConstant(0, loc);
@@ -566,6 +624,18 @@ void LoopInfo::recomputeWorkerBoundsInside(Value workerId,
       loc, range, AC->create<arith::SubIOp>(loc, localLoopStep, oneIndex));
   Value localTotalIterations =
       AC->create<arith::DivUIOp>(loc, adjustedRange, localLoopStep);
+
+  /// Optionally cap workers based on total iterations.
+  if (capWorkers && kMinItersPerWorker > 1) {
+    Value minIters = AC->createIndexConstant(kMinItersPerWorker, loc);
+    Value minItersMinusOne = AC->create<arith::SubIOp>(loc, minIters, oneIndex);
+    Value adjustedTotal = AC->create<arith::AddIOp>(loc, localTotalIterations,
+                                                    minItersMinusOne);
+    Value maxWorkers = AC->create<arith::DivUIOp>(loc, adjustedTotal, minIters);
+    maxWorkers = AC->create<arith::MaxUIOp>(loc, maxWorkers, oneIndex);
+    totalWorkersIndex =
+        AC->create<arith::MinUIOp>(loc, totalWorkersIndex, maxWorkers);
+  }
 
   /// totalChunks = ceil(totalIterations / blockSize)
   Value adjustedIterations = AC->create<arith::AddIOp>(
@@ -744,6 +814,103 @@ Attribute ForLoweringPass::getLoopMetadataAttr(ForOp forOp) {
   return forOp->getAttr(AttrNames::LoopMetadata::Name);
 }
 
+bool ForLoweringPass::shouldForceSerial(ForOp forOp) {
+  Attribute attr = getLoopMetadataAttr(forOp);
+  auto loopAttr = attr ? attr.dyn_cast<LoopMetadataAttr>() : LoopMetadataAttr();
+  if (!loopAttr)
+    return false;
+
+  if (auto depsAttr = loopAttr.getHasInterIterationDeps()) {
+    if (depsAttr.getValue())
+      return true;
+  }
+
+  if (auto pcAttr = loopAttr.getParallelClassification()) {
+    auto classification = static_cast<LoopMetadata::ParallelClassification>(
+        pcAttr.getInt());
+    if (classification == LoopMetadata::ParallelClassification::Sequential)
+      return true;
+  }
+
+  return false;
+}
+
+bool ForLoweringPass::hasIndirectWrite(ForOp forOp) {
+  Block *body = forOp.getBody();
+  if (!body || body->getNumArguments() == 0)
+    return false;
+  Value iv = body->getArgument(0);
+
+  auto isPureAffine = [&](Value idx, auto &&self,
+                          int depth) -> bool {
+    if (!idx || depth > 8)
+      return false;
+    idx = ValueUtils::stripNumericCasts(idx);
+    if (idx == iv)
+      return true;
+    int64_t cval = 0;
+    if (ValueUtils::getConstantIndex(idx, cval))
+      return true;
+
+    Operation *op = idx.getDefiningOp();
+    if (!op)
+      return false;
+
+    if (!isa<arith::AddIOp, arith::SubIOp, arith::MulIOp, arith::DivSIOp,
+             arith::DivUIOp, arith::RemSIOp, arith::RemUIOp,
+             arith::IndexCastOp, arith::IndexCastUIOp, arith::ExtSIOp,
+             arith::ExtUIOp, arith::TruncIOp, arith::MinSIOp, arith::MinUIOp,
+             arith::MaxSIOp, arith::MaxUIOp, arith::SelectOp,
+             arith::CmpIOp, arith::CmpFOp>(op))
+      return false;
+
+    for (Value operand : op->getOperands()) {
+      if (!self(operand, self, depth + 1))
+        return false;
+    }
+    return true;
+  };
+
+  auto isDirectIndex = [&](Value idx) -> bool {
+    return isPureAffine(idx, isPureAffine, 0);
+  };
+
+  bool indirectWrite = false;
+  forOp.walk([&](memref::StoreOp store) {
+    if (indirectWrite)
+      return;
+    Operation *underlyingOp =
+        ValueUtils::getUnderlyingOperation(store.getMemRef());
+    auto dbRef = dyn_cast_or_null<DbRefOp>(underlyingOp);
+    if (!dbRef)
+      return;
+
+    /// No indices implies coarse/full-range access -> treat as indirect.
+    auto indices = dbRef.getIndices();
+    if (indices.empty()) {
+      indirectWrite = true;
+      return;
+    }
+
+    for (Value idx : indices) {
+      if (!isDirectIndex(idx)) {
+        indirectWrite = true;
+        return;
+      }
+    }
+
+    /// Also check inner indices on the store itself (indirect scatter).
+    for (Value idx : store.getIndices()) {
+      if (!isDirectIndex(idx)) {
+        indirectWrite = true;
+        return;
+      }
+    }
+  });
+
+  return indirectWrite;
+}
+
 ///===----------------------------------------------------------------------===///
 // Helper Functions for Reduction Handling
 ///===----------------------------------------------------------------------===///
@@ -888,6 +1055,7 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
                                                            ForOp forOp,
                                                            EdtOp parallelEdt,
                                                            Location loc,
+                                                           Value numWorkersOverride,
                                                            bool splitMode) {
   ReductionInfo redInfo;
   Attribute loopAttr = getLoopMetadataAttr(forOp);
@@ -917,17 +1085,23 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
                                                       << " reduction(s)");
 
   OpBuilder::InsertionGuard IG(AC->getBuilder());
-  AC->setInsertionPoint(parallelEdt);
+  /// In split mode, keep allocs at the caller's insertion point (after the
+  /// original parallel). Otherwise, place them before the parallel EDT.
+  if (!splitMode)
+    AC->setInsertionPoint(parallelEdt);
 
-  /// Use numWorkers from parallel EDT workers attribute
-  Value numWorkers;
-  if (auto workers = parallelEdt->getAttrOfType<workersAttr>(
-          AttrNames::Operation::Workers))
-    numWorkers = AC->createIndexConstant(workers.getValue(), loc);
-  else if (parallelEdt.getConcurrency() == EdtConcurrency::internode)
-    numWorkers = AC->create<GetTotalNodesOp>(loc).getResult();
-  else
-    numWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
+  /// Use numWorkers override if provided, otherwise fall back to parallel EDT
+  /// worker count.
+  Value numWorkers = numWorkersOverride;
+  if (!numWorkers) {
+    if (auto workers = parallelEdt->getAttrOfType<workersAttr>(
+            AttrNames::Operation::Workers))
+      numWorkers = AC->createIndexConstant(workers.getValue(), loc);
+    else if (parallelEdt.getConcurrency() == EdtConcurrency::internode)
+      numWorkers = AC->create<GetTotalNodesOp>(loc).getResult();
+    else
+      numWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
+  }
 
   Block &parallelBlock = parallelEdt.getBody().front();
   ValueRange parentDeps = parallelEdt.getDependencies();
@@ -1103,11 +1277,11 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
 }
 
 /// Create result EDT to combine partial accumulators into final result.
-void ForLoweringPass::createResultEdt(ArtsCodegen *AC, EdtOp parallelEdt,
-                                      ReductionInfo &redInfo, Location loc) {
+EdtOp ForLoweringPass::createResultEdt(ArtsCodegen *AC, EdtOp parallelEdt,
+                                       ReductionInfo &redInfo, Location loc) {
   OpBuilder::InsertionGuard IG(AC->getBuilder());
   if (redInfo.reductionVars.empty())
-    return;
+    return EdtOp();
 
   ARTS_INFO(" - Creating single result EDT to combine partial accumulators");
 
@@ -1115,7 +1289,7 @@ void ForLoweringPass::createResultEdt(ArtsCodegen *AC, EdtOp parallelEdt,
   Value numWorkers = redInfo.numWorkers;
   if (!numWorkers) {
     ARTS_ERROR("Missing numWorkers in ReductionInfo");
-    return;
+    return EdtOp();
   }
 
   /// Step 1: Acquire all partial accumulator DBs (READ-ONLY)
@@ -1196,7 +1370,7 @@ void ForLoweringPass::createResultEdt(ArtsCodegen *AC, EdtOp parallelEdt,
   }
   if (reductionCount == 0) {
     ARTS_ERROR("No reduction handles available for result EDT");
-    return;
+    return EdtOp();
   }
 
   /// Step 3: Create result EDT with dependencies
@@ -1266,7 +1440,7 @@ void ForLoweringPass::createResultEdt(ArtsCodegen *AC, EdtOp parallelEdt,
     Value identity = createZeroValue(AC, elemType, loc);
     if (!identity) {
       ARTS_ERROR("Unsupported reduction element type");
-      return;
+      return EdtOp();
     }
 
     /// Combine loop: for (w = 0; w < numWorkers; w++) { acc +=
@@ -1355,6 +1529,7 @@ void ForLoweringPass::createResultEdt(ArtsCodegen *AC, EdtOp parallelEdt,
   /// They must be placed OUTSIDE the parallel EDT region, after it completes
 
   ARTS_INFO(" - Result EDT created successfully");
+  return resultEdt;
 }
 
 ///===----------------------------------------------------------------------===///
@@ -1366,6 +1541,31 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
                                              Location loc) {
   ARTS_INFO(" - Lowering arts.for with DB rewiring (split pattern)");
 
+  /// Get base worker count from original parallel EDT
+  Value baseWorkers;
+  bool forceSerial = shouldForceSerial(forOp) || hasIndirectWrite(forOp);
+  if (auto workers = originalParallel->getAttrOfType<workersAttr>(
+          AttrNames::Operation::Workers)) {
+    baseWorkers = AC.createIndexConstant(workers.getValue(), loc);
+  } else if (originalParallel.getConcurrency() == EdtConcurrency::internode) {
+    baseWorkers = AC.create<GetTotalNodesOp>(loc).getResult();
+  } else {
+    baseWorkers = AC.create<GetTotalWorkersOp>(loc).getResult();
+  }
+
+  /// Optionally cap workers for tiny loops to reduce task overhead.
+  bool capWorkers =
+      (originalParallel.getConcurrency() != EdtConcurrency::internode);
+  Value numWorkers = baseWorkers;
+  if (forceSerial) {
+    numWorkers = AC.createIndexConstant(1, loc);
+    capWorkers = false;
+    ARTS_INFO(" - Forcing serial execution (1 worker) based on loop metadata");
+  } else if (capWorkers && kMinItersPerWorker > 1) {
+    Value totalIterations = computeTotalIterations(AC, forOp, loc);
+    numWorkers = capWorkersByTripCount(AC, loc, baseWorkers, totalIterations);
+  }
+
   /// Allocate reduction accumulators (same as before, but place BEFORE epoch)
   /// Use splitMode=true since we're splitting the parallel EDT and will
   /// create acquires directly in result/task EDTs
@@ -1373,18 +1573,8 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   if (!forOp.getReductionAccumulators().empty()) {
     ARTS_INFO(" - Detected reduction(s), allocating partial accumulators");
     redInfo = allocatePartialAccumulators(&AC, forOp, originalParallel, loc,
-                                          /*splitMode=*/true);
+                                          numWorkers, /*splitMode=*/true);
   }
-
-  /// Get numWorkers from original parallel EDT
-  Value numWorkers;
-  if (auto workers = originalParallel->getAttrOfType<workersAttr>(
-          AttrNames::Operation::Workers))
-    numWorkers = AC.createIndexConstant(workers.getValue(), loc);
-  else if (originalParallel.getConcurrency() == EdtConcurrency::internode)
-    numWorkers = AC.create<GetTotalNodesOp>(loc).getResult();
-  else
-    numWorkers = AC.create<GetTotalWorkersOp>(loc).getResult();
 
   Value zero = AC.createIndexConstant(0, loc);
   Value one = AC.createIndexConstant(1, loc);
@@ -1407,7 +1597,7 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   /// Create task EDT with DB rewiring
   LoopInfo loopInfo(&AC, forOp, numWorkers);
   createTaskEdtWithRewiring(&AC, loopInfo, forOp, workerIV, originalParallel,
-                            redInfo);
+                            redInfo, forceSerial, numWorkers, capWorkers);
 
   /// After worker loop, create result EDT (if reductions)
   AC.setInsertionPointAfter(workerLoop);
@@ -1420,9 +1610,10 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   AC.setInsertionPointToEnd(&epochBlock);
   AC.create<YieldOp>(loc);
 
-  /// Reduction cleanup happens AFTER the epoch
+  AC.setInsertionPointAfter(forEpoch);
+
+  /// Reduction cleanup happens AFTER the work
   if (!redInfo.reductionVars.empty()) {
-    AC.setInsertionPointAfter(forEpoch);
     Value zeroIdx = AC.createIndexConstant(0, loc);
     SmallVector<Value> zeroIndices{zeroIdx};
 
@@ -1467,10 +1658,6 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
       AC.create<DbFreeOp>(loc, redInfo.finalResultGuids[i]);
       AC.create<DbFreeOp>(loc, redInfo.finalResultPtrs[i]);
     }
-  } else {
-    /// No reductions - still need to set insertion point after epoch
-    /// so the next for loop (if any) inserts AFTER this epoch, not inside it
-    AC.setInsertionPointAfter(forEpoch);
   }
 
   ARTS_INFO(" - arts.for lowering with DB rewiring complete");
@@ -1581,14 +1768,19 @@ EdtOp ForLoweringPass::createContinuationParallel(
 
 EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     ArtsCodegen *AC, LoopInfo &loopInfo, ForOp forOp, Value workerIdPlaceholder,
-    EdtOp originalParallel, ReductionInfo &redInfo) {
+    EdtOp originalParallel, ReductionInfo &redInfo, bool forceSerial,
+    Value effectiveWorkers, bool capWorkers) {
   Location loc = forOp.getLoc();
 
   ARTS_DEBUG("  Creating task EDT with DB rewiring");
 
   /// Recreate numWorkers constant
-  if (auto workers = originalParallel->getAttrOfType<workersAttr>(
-          AttrNames::Operation::Workers))
+  if (effectiveWorkers)
+    loopInfo.totalWorkers = effectiveWorkers;
+  else if (forceSerial)
+    loopInfo.totalWorkers = AC->createIndexConstant(1, loc);
+  else if (auto workers = originalParallel->getAttrOfType<workersAttr>(
+               AttrNames::Operation::Workers))
     loopInfo.totalWorkers = AC->createIndexConstant(workers.getValue(), loc);
   else if (originalParallel.getConcurrency() == EdtConcurrency::internode)
     loopInfo.totalWorkers = AC->create<GetTotalNodesOp>(loc).getResult();
@@ -1882,16 +2074,20 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     taskWorkerId = workerIdPlaceholder;
   }
 
-  Value insideTotalWorkers;
-  if (auto workers = originalParallel->getAttrOfType<workersAttr>(
-          AttrNames::Operation::Workers))
-    insideTotalWorkers = AC->createIndexConstant(workers.getValue(), loc);
-  else if (taskConcurrency == EdtConcurrency::internode)
-    insideTotalWorkers = AC->create<GetTotalNodesOp>(loc).getResult();
-  else
-    insideTotalWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
+  Value insideBaseWorkers;
+  if (forceSerial) {
+    insideBaseWorkers = AC->createIndexConstant(1, loc);
+  } else if (auto workers = originalParallel->getAttrOfType<workersAttr>(
+                 AttrNames::Operation::Workers)) {
+    insideBaseWorkers = AC->createIndexConstant(workers.getValue(), loc);
+  } else if (taskConcurrency == EdtConcurrency::internode) {
+    insideBaseWorkers = AC->create<GetTotalNodesOp>(loc).getResult();
+  } else {
+    insideBaseWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
+  }
 
-  loopInfo.recomputeWorkerBoundsInside(taskWorkerId, insideTotalWorkers);
+  loopInfo.recomputeWorkerBoundsInside(taskWorkerId, insideBaseWorkers,
+                                       capWorkers);
   chunkOffset = loopInfo.workerFirstChunk;
 
   scf::ForOp iterLoop =

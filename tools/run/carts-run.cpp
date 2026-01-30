@@ -365,9 +365,13 @@ void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createEdtPass(AM, /*runAnalysis*/ false));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
+  pm.addPass(arts::createEpochOptPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createCSEPass());
   /// Partition DBs and run DbPass again to adjust modes
   pm.addPass(arts::createDbPartitioningPass(AM));
   pm.addPass(arts::createDbPass(AM));
+  pm.addPass(arts::createArtsHoistingPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createMem2Reg());

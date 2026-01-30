@@ -90,6 +90,84 @@ std::optional<int64_t> ValueUtils::getConstantValue(Value v) {
   return std::nullopt;
 }
 
+/// Try to fold a constant index expression composed of basic arithmetic ops.
+std::optional<int64_t> ValueUtils::tryFoldConstantIndex(Value v,
+                                                        unsigned depth) {
+  if (!v || depth > 8)
+    return std::nullopt;
+
+  int64_t val;
+  if (getConstantIndex(v, val))
+    return val;
+
+  if (auto cast = v.getDefiningOp<arith::IndexCastOp>()) {
+    return tryFoldConstantIndex(cast.getIn(), depth + 1);
+  }
+
+  if (auto add = v.getDefiningOp<arith::AddIOp>()) {
+    auto lhs = tryFoldConstantIndex(add.getLhs(), depth + 1);
+    auto rhs = tryFoldConstantIndex(add.getRhs(), depth + 1);
+    if (lhs && rhs)
+      return *lhs + *rhs;
+    return std::nullopt;
+  }
+
+  if (auto sub = v.getDefiningOp<arith::SubIOp>()) {
+    auto lhs = tryFoldConstantIndex(sub.getLhs(), depth + 1);
+    auto rhs = tryFoldConstantIndex(sub.getRhs(), depth + 1);
+    if (lhs && rhs)
+      return *lhs - *rhs;
+    return std::nullopt;
+  }
+
+  if (auto mul = v.getDefiningOp<arith::MulIOp>()) {
+    auto lhs = tryFoldConstantIndex(mul.getLhs(), depth + 1);
+    auto rhs = tryFoldConstantIndex(mul.getRhs(), depth + 1);
+    if (lhs && rhs)
+      return *lhs * *rhs;
+    return std::nullopt;
+  }
+
+  if (auto div = v.getDefiningOp<arith::DivUIOp>()) {
+    auto lhs = tryFoldConstantIndex(div.getLhs(), depth + 1);
+    auto rhs = tryFoldConstantIndex(div.getRhs(), depth + 1);
+    if (lhs && rhs && *rhs != 0) {
+      uint64_t ulhs = static_cast<uint64_t>(*lhs);
+      uint64_t urhs = static_cast<uint64_t>(*rhs);
+      return static_cast<int64_t>(ulhs / urhs);
+    }
+    return std::nullopt;
+  }
+
+  if (auto div = v.getDefiningOp<arith::DivSIOp>()) {
+    auto lhs = tryFoldConstantIndex(div.getLhs(), depth + 1);
+    auto rhs = tryFoldConstantIndex(div.getRhs(), depth + 1);
+    if (lhs && rhs && *rhs != 0)
+      return *lhs / *rhs;
+    return std::nullopt;
+  }
+
+  if (auto max = v.getDefiningOp<arith::MaxUIOp>()) {
+    auto lhs = tryFoldConstantIndex(max.getLhs(), depth + 1);
+    auto rhs = tryFoldConstantIndex(max.getRhs(), depth + 1);
+    if (lhs && rhs)
+      return std::max<uint64_t>(static_cast<uint64_t>(*lhs),
+                                static_cast<uint64_t>(*rhs));
+    return std::nullopt;
+  }
+
+  if (auto min = v.getDefiningOp<arith::MinUIOp>()) {
+    auto lhs = tryFoldConstantIndex(min.getLhs(), depth + 1);
+    auto rhs = tryFoldConstantIndex(min.getRhs(), depth + 1);
+    if (lhs && rhs)
+      return std::min<uint64_t>(static_cast<uint64_t>(*lhs),
+                                static_cast<uint64_t>(*rhs));
+    return std::nullopt;
+  }
+
+  return std::nullopt;
+}
+
 /// Extract a constant floating-point value from a Value.
 std::optional<double> ValueUtils::getConstantFloat(Value v) {
   if (!v)
@@ -644,176 +722,114 @@ Value ValueUtils::traceValueToDominating(Value value, Operation *insertBefore,
                                   depth + 1);
   };
 
-  builder.setInsertionPoint(insertBefore);
+  /// Binary arithmetic operations - use traceBinaryOp template
+  if (auto op = dyn_cast<arith::AddIOp>(defOp))
+    return traceBinaryOp(op, insertBefore, builder, loc, trace);
+  if (auto op = dyn_cast<arith::SubIOp>(defOp))
+    return traceBinaryOp(op, insertBefore, builder, loc, trace);
+  if (auto op = dyn_cast<arith::MulIOp>(defOp))
+    return traceBinaryOp(op, insertBefore, builder, loc, trace);
+  if (auto op = dyn_cast<arith::DivSIOp>(defOp))
+    return traceBinaryOp(op, insertBefore, builder, loc, trace);
+  if (auto op = dyn_cast<arith::DivUIOp>(defOp))
+    return traceBinaryOp(op, insertBefore, builder, loc, trace);
+  if (auto op = dyn_cast<arith::CeilDivSIOp>(defOp))
+    return traceBinaryOp(op, insertBefore, builder, loc, trace);
+  if (auto op = dyn_cast<arith::CeilDivUIOp>(defOp))
+    return traceBinaryOp(op, insertBefore, builder, loc, trace);
+  if (auto op = dyn_cast<arith::RemSIOp>(defOp))
+    return traceBinaryOp(op, insertBefore, builder, loc, trace);
+  if (auto op = dyn_cast<arith::RemUIOp>(defOp))
+    return traceBinaryOp(op, insertBefore, builder, loc, trace);
+  if (auto op = dyn_cast<arith::MaxSIOp>(defOp))
+    return traceBinaryOp(op, insertBefore, builder, loc, trace);
+  if (auto op = dyn_cast<arith::MaxUIOp>(defOp))
+    return traceBinaryOp(op, insertBefore, builder, loc, trace);
+  if (auto op = dyn_cast<arith::MinSIOp>(defOp))
+    return traceBinaryOp(op, insertBefore, builder, loc, trace);
+  if (auto op = dyn_cast<arith::MinUIOp>(defOp))
+    return traceBinaryOp(op, insertBefore, builder, loc, trace);
+  if (auto op = dyn_cast<arith::AndIOp>(defOp))
+    return traceBinaryOp(op, insertBefore, builder, loc, trace);
+  if (auto op = dyn_cast<arith::OrIOp>(defOp))
+    return traceBinaryOp(op, insertBefore, builder, loc, trace);
+  if (auto op = dyn_cast<arith::XOrIOp>(defOp))
+    return traceBinaryOp(op, insertBefore, builder, loc, trace);
 
-  if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
-    Value lhs = trace(addOp.getLhs());
-    Value rhs = trace(addOp.getRhs());
-    if (lhs && rhs)
-      return builder.create<arith::AddIOp>(loc, lhs, rhs);
-  }
-
-  if (auto subOp = dyn_cast<arith::SubIOp>(defOp)) {
-    Value lhs = trace(subOp.getLhs());
-    Value rhs = trace(subOp.getRhs());
-    if (lhs && rhs)
-      return builder.create<arith::SubIOp>(loc, lhs, rhs);
-  }
-
-  if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
-    Value lhs = trace(mulOp.getLhs());
-    Value rhs = trace(mulOp.getRhs());
-    if (lhs && rhs)
-      return builder.create<arith::MulIOp>(loc, lhs, rhs);
-  }
-
-  if (auto divOp = dyn_cast<arith::DivSIOp>(defOp)) {
-    Value lhs = trace(divOp.getLhs());
-    Value rhs = trace(divOp.getRhs());
-    if (lhs && rhs)
-      return builder.create<arith::DivSIOp>(loc, lhs, rhs);
-  }
-
-  if (auto divOp = dyn_cast<arith::DivUIOp>(defOp)) {
-    Value lhs = trace(divOp.getLhs());
-    Value rhs = trace(divOp.getRhs());
-    if (lhs && rhs)
-      return builder.create<arith::DivUIOp>(loc, lhs, rhs);
-  }
-
-  if (auto divOp = dyn_cast<arith::CeilDivSIOp>(defOp)) {
-    Value lhs = trace(divOp.getLhs());
-    Value rhs = trace(divOp.getRhs());
-    if (lhs && rhs)
-      return builder.create<arith::CeilDivSIOp>(loc, lhs, rhs);
-  }
-
-  if (auto divOp = dyn_cast<arith::CeilDivUIOp>(defOp)) {
-    Value lhs = trace(divOp.getLhs());
-    Value rhs = trace(divOp.getRhs());
-    if (lhs && rhs)
-      return builder.create<arith::CeilDivUIOp>(loc, lhs, rhs);
-  }
-
-  if (auto maxOp = dyn_cast<arith::MaxSIOp>(defOp)) {
-    Value lhs = trace(maxOp.getLhs());
-    Value rhs = trace(maxOp.getRhs());
-    if (lhs && rhs)
-      return builder.create<arith::MaxSIOp>(loc, lhs, rhs);
-  }
-
-  if (auto minOp = dyn_cast<arith::MinSIOp>(defOp)) {
-    Value lhs = trace(minOp.getLhs());
-    Value rhs = trace(minOp.getRhs());
-    if (lhs && rhs)
-      return builder.create<arith::MinSIOp>(loc, lhs, rhs);
-  }
-
-  if (auto minOp = dyn_cast<arith::MinUIOp>(defOp)) {
-    Value lhs = trace(minOp.getLhs());
-    Value rhs = trace(minOp.getRhs());
-    if (lhs && rhs)
-      return builder.create<arith::MinUIOp>(loc, lhs, rhs);
-  }
-
-  if (auto maxOp = dyn_cast<arith::MaxUIOp>(defOp)) {
-    Value lhs = trace(maxOp.getLhs());
-    Value rhs = trace(maxOp.getRhs());
-    if (lhs && rhs)
-      return builder.create<arith::MaxUIOp>(loc, lhs, rhs);
-  }
-
-  if (auto remOp = dyn_cast<arith::RemSIOp>(defOp)) {
-    Value lhs = trace(remOp.getLhs());
-    Value rhs = trace(remOp.getRhs());
-    if (lhs && rhs)
-      return builder.create<arith::RemSIOp>(loc, lhs, rhs);
-  }
-
-  if (auto remOp = dyn_cast<arith::RemUIOp>(defOp)) {
-    Value lhs = trace(remOp.getLhs());
-    Value rhs = trace(remOp.getRhs());
-    if (lhs && rhs)
-      return builder.create<arith::RemUIOp>(loc, lhs, rhs);
-  }
-
+  /// Comparison - special case with predicate
   if (auto cmpOp = dyn_cast<arith::CmpIOp>(defOp)) {
     Value lhs = trace(cmpOp.getLhs());
     Value rhs = trace(cmpOp.getRhs());
-    if (lhs && rhs)
+    if (lhs && rhs) {
+      builder.setInsertionPoint(insertBefore);
       return builder.create<arith::CmpIOp>(loc, cmpOp.getPredicate(), lhs, rhs);
+    }
+    return nullptr;
   }
 
-  if (auto andOp = dyn_cast<arith::AndIOp>(defOp)) {
-    Value lhs = trace(andOp.getLhs());
-    Value rhs = trace(andOp.getRhs());
-    if (lhs && rhs)
-      return builder.create<arith::AndIOp>(loc, lhs, rhs);
-  }
-
-  if (auto orOp = dyn_cast<arith::OrIOp>(defOp)) {
-    Value lhs = trace(orOp.getLhs());
-    Value rhs = trace(orOp.getRhs());
-    if (lhs && rhs)
-      return builder.create<arith::OrIOp>(loc, lhs, rhs);
-  }
-
-  if (auto xorOp = dyn_cast<arith::XOrIOp>(defOp)) {
-    Value lhs = trace(xorOp.getLhs());
-    Value rhs = trace(xorOp.getRhs());
-    if (lhs && rhs)
-      return builder.create<arith::XOrIOp>(loc, lhs, rhs);
-  }
-
+  /// Select - ternary operation
   if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
     Value cond = trace(selectOp.getCondition());
     Value trueVal = trace(selectOp.getTrueValue());
     Value falseVal = trace(selectOp.getFalseValue());
-    if (cond && trueVal && falseVal)
+    if (cond && trueVal && falseVal) {
+      builder.setInsertionPoint(insertBefore);
       return builder.create<arith::SelectOp>(loc, cond, trueVal, falseVal);
+    }
+    return nullptr;
   }
 
+  /// Cast operations - trace through and recreate
   if (auto castOp = dyn_cast<arith::IndexCastOp>(defOp)) {
     Value inner = trace(castOp.getIn());
     if (!inner)
       return nullptr;
     if (inner.getType() == castOp.getType())
       return inner;
+    builder.setInsertionPoint(insertBefore);
     return builder.create<arith::IndexCastOp>(loc, castOp.getType(), inner);
   }
-
   if (auto castOp = dyn_cast<arith::IndexCastUIOp>(defOp)) {
     Value inner = trace(castOp.getIn());
     if (!inner)
       return nullptr;
     if (inner.getType() == castOp.getType())
       return inner;
+    builder.setInsertionPoint(insertBefore);
     return builder.create<arith::IndexCastUIOp>(loc, castOp.getType(), inner);
   }
-
   if (auto castOp = dyn_cast<arith::ExtSIOp>(defOp)) {
     Value inner = trace(castOp.getIn());
-    if (inner)
-      return builder.create<arith::ExtSIOp>(loc, castOp.getType(), inner);
+    if (!inner)
+      return nullptr;
+    builder.setInsertionPoint(insertBefore);
+    return builder.create<arith::ExtSIOp>(loc, castOp.getType(), inner);
   }
-
   if (auto castOp = dyn_cast<arith::ExtUIOp>(defOp)) {
     Value inner = trace(castOp.getIn());
-    if (inner)
-      return builder.create<arith::ExtUIOp>(loc, castOp.getType(), inner);
+    if (!inner)
+      return nullptr;
+    builder.setInsertionPoint(insertBefore);
+    return builder.create<arith::ExtUIOp>(loc, castOp.getType(), inner);
   }
-
   if (auto castOp = dyn_cast<arith::TruncIOp>(defOp)) {
     Value inner = trace(castOp.getIn());
-    if (inner)
-      return builder.create<arith::TruncIOp>(loc, castOp.getType(), inner);
+    if (!inner)
+      return nullptr;
+    builder.setInsertionPoint(insertBefore);
+    return builder.create<arith::TruncIOp>(loc, castOp.getType(), inner);
   }
 
-  if (auto constOp = dyn_cast<arith::ConstantOp>(defOp))
+  /// Constants - recreate at insertion point
+  if (auto constOp = dyn_cast<arith::ConstantOp>(defOp)) {
+    builder.setInsertionPoint(insertBefore);
     return builder.create<arith::ConstantOp>(loc, constOp.getType(),
                                              constOp.getValue());
-  if (auto constIdxOp = dyn_cast<arith::ConstantIndexOp>(defOp))
+  }
+  if (auto constIdxOp = dyn_cast<arith::ConstantIndexOp>(defOp)) {
+    builder.setInsertionPoint(insertBefore);
     return builder.create<arith::ConstantIndexOp>(loc, constIdxOp.value());
+  }
 
   return nullptr;
 }

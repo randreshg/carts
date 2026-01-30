@@ -10,6 +10,7 @@
 #define CARTS_UTILS_EDTUTILS_H
 
 #include "arts/ArtsDialect.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Region.h"
 #include "mlir/IR/Value.h"
@@ -23,19 +24,12 @@ namespace arts {
 
 /// Forward declarations
 class EdtOp;
+class EpochOp;
 class DbAcquireOp;
 
-///===----------------------------------------------------------------------===///
-/// EDT Utilities
-///===----------------------------------------------------------------------===///
 /// Utility class for working with ARTS EDTs (EdtOp).
 class EdtUtils {
 public:
-  ///===----------------------------------------------------------------------===///
-  /// EDT Analysis Utilities
-  ///===----------------------------------------------------------------------===///
-  /// Functions for analyzing EDT regions and operations
-
   /// Check if a value is invariant within an EDT region.
   /// A value is invariant if it is defined outside the region or not modified
   /// within it.
@@ -45,10 +39,12 @@ public:
   /// the EDT control flow graph.
   static bool isReachable(Operation *source, Operation *target);
 
-  ///===----------------------------------------------------------------------===///
-  /// EDT Block Argument Utilities
-  ///===----------------------------------------------------------------------===///
-  /// Functions for querying EDT block arguments
+  /// Check if an EDT contains nested EDTs (tasks/parallel/sync).
+  static bool hasNestedEdt(EdtOp edt);
+
+  /// Wrap all operations (except terminator) in a block inside an EpochOp.
+  /// Returns the created EpochOp, or nullptr if no operations to wrap.
+  static EpochOp wrapBodyInEpoch(Block &body, Location loc);
 
   /// Finds the EdtOp that uses a DbAcquireOp and returns the corresponding
   /// block argument. Returns {EdtOp, BlockArgument} pair, or {nullptr,

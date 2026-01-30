@@ -250,6 +250,13 @@ bool DbAllocNode::canBePartitioned() {
     return true;
   }
 
+  if (allFailed && (anyIndirectAccess ||
+                    (hasNonAffineAccesses && *hasNonAffineAccesses))) {
+    ARTS_DEBUG("  All acquires failed but non-affine/indirect access present "
+               "- allowing partitioning with full-range acquires");
+    return true;
+  }
+
   if (allFailed)
     return skip("all acquire children failed canBePartitioned()");
 
@@ -387,6 +394,7 @@ bool DbAllocNode::canProveNonOverlapping() const {
 AcquirePatternSummary DbAllocNode::summarizeAcquirePatterns() const {
   AcquirePatternSummary summary;
   bool hasBlockHint = false;
+  bool hasIndirect = false;
 
   for (const auto &acqNode : acquireNodes) {
     if (!acqNode)
@@ -413,18 +421,17 @@ AcquirePatternSummary DbAllocNode::summarizeAcquirePatterns() const {
     default:
       break;
     }
+    if (!hasIndirect && acqNode->hasIndirectAccess())
+      hasIndirect = true;
   }
 
   if (hasNonAffineAccesses && *hasNonAffineAccesses) {
-    if (!hasBlockHint)
+    /// Treat indirect access as indexed even when block hints are present.
+    /// This enables block partitioning with full-range acquires.
+    if (hasIndirect || !hasBlockHint)
       summary.hasIndexed = true;
-  } else if (!summary.hasIndexed) {
-    for (const auto &acqNode : acquireNodes) {
-      if (acqNode && acqNode->hasIndirectAccess()) {
-        summary.hasIndexed = true;
-        break;
-      }
-    }
+  } else if (!summary.hasIndexed && hasIndirect) {
+    summary.hasIndexed = true;
   }
 
   return summary;

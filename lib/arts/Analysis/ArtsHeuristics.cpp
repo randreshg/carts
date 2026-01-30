@@ -10,6 +10,7 @@
 ///==========================================================================///
 
 #include "arts/Analysis/ArtsHeuristics.h"
+#include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Transforms/Datablock/DbRewriter.h"
 #include "arts/Utils/ArtsDebug.h"
@@ -113,10 +114,17 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
                  : "H1.3: Pure stencil uses ESD mode");
   }
 
-  /// Case 1: Indexed access -> Element-wise (unpredictable access pattern)
-  /// Compute outerRank from partitionInfos with uniformity check.
-  /// Use minimum dimension count to ensure all acquires can address datablocks.
+  /// Case 1: Indexed access -> Prefer block when possible, otherwise
+  /// element-wise Indexed (data-dependent) accesses can be handled with block
+  /// partitioning by using full-range acquires for indirect access. This avoids
+  /// excessive datablock counts while preserving correctness.
   if (patterns.hasIndexed) {
+    if (ctx.canBlock) {
+      ARTS_DEBUG("H1.3 applied: Indexed access prefers block when supported");
+      return PartitioningDecision::block(
+          ctx, "H1.3: Indexed access prefers block when supported");
+    }
+
     unsigned minDim = ctx.minPinnedDimCount();
     unsigned maxDim = ctx.maxPinnedDimCount();
 
@@ -380,6 +388,45 @@ HeuristicsConfig::getPartitioningMode(const PartitioningContext &ctx) {
 
   ARTS_DEBUG("Heuristic " << heuristicId << " applied: " << decision.rationale);
   return decision;
+}
+
+///===----------------------------------------------------------------------===///
+/// H1.7: Per-Acquire Decisions
+///===----------------------------------------------------------------------===///
+
+SmallVector<AcquireDecision>
+HeuristicsConfig::getAcquireDecisions(const PartitioningContext &ctx,
+                                      ArrayRef<DbAcquireNode *> acquireNodes,
+                                      ArrayRef<Value> partitionOffsets) {
+  SmallVector<AcquireDecision> decisions;
+  decisions.reserve(acquireNodes.size());
+
+  for (auto [acqNode, offset] : llvm::zip(acquireNodes, partitionOffsets)) {
+    AcquireDecision decision;
+
+    if (acqNode && acqNode->needsFullRange(offset)) {
+      /// DbAcquireNode::needsFullRange() handles all per-acquire cases:
+      /// 1. Indirect access (can't determine which block)
+      /// 2. Partition offset not in access pattern (except stencil)
+      decision.needsFullRange = true;
+      decision.canContributeBlockSize = false;
+      decision.rationale = acqNode->hasIndirectAccess()
+                               ? "indirect access pattern"
+                               : "partition offset not in access pattern";
+
+      recordDecision("H1.7-AcquireFullRange", true,
+                     "acquire needs full range: " + decision.rationale,
+                     acqNode->getDbAcquireOp(), {});
+
+      ARTS_DEBUG("H1.7: Acquire " << acqNode->getDbAcquireOp()
+                                  << " needs full-range (" << decision.rationale
+                                  << ")");
+    }
+
+    decisions.push_back(decision);
+  }
+
+  return decisions;
 }
 
 ///===----------------------------------------------------------------------===///

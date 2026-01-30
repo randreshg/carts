@@ -145,10 +145,9 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
     SmallVector<Value> newOffsets, newSizes;
     for (unsigned d = 0; d < nPartDims; ++d) {
       newOffsets.push_back(zero);
-      Value blockCount =
-          (d < plan.numBlocksPerDim.size() && plan.numBlocksPerDim[d])
-              ? plan.numBlocksPerDim[d]
-              : (d < newOuterSizes.size() ? newOuterSizes[d] : one);
+      Value blockCount = (d < plan.outerSizes.size() && plan.outerSizes[d])
+                             ? plan.outerSizes[d]
+                             : one;
       newSizes.push_back(blockCount);
     }
 
@@ -184,9 +183,9 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
     Value endBlock = builder.create<arith::DivUIOp>(loc, endPos, bs);
 
     /// Clamp endBlock to valid range
-    if (d < newOuterSizes.size()) {
+    if (d < plan.outerSizes.size()) {
       Value maxBlock =
-          builder.create<arith::SubIOp>(loc, newOuterSizes[d], one);
+          builder.create<arith::SubIOp>(loc, plan.outerSizes[d], one);
       endBlock = builder.create<arith::MinUIOp>(loc, endBlock, maxBlock);
     }
 
@@ -228,10 +227,10 @@ void DbBlockRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
   Value newSource = (ref.getSource() == oldAlloc.getPtr()) ? newAlloc.getPtr()
                                                            : ref.getSource();
   /// Detect allocation-level single-block (same condition as verifier)
-  bool allocSingleBlock = !newOuterSizes.empty() &&
-      llvm::all_of(newOuterSizes, [](Value v) {
-        int64_t val;
-        return ValueUtils::getConstantIndex(v, val) && val == 1;
+  bool allocSingleBlock =
+      !plan.outerSizes.empty() && llvm::all_of(plan.outerSizes, [](Value v) {
+        auto val = ValueUtils::tryFoldConstantIndex(v);
+        return val && *val == 1;
       });
 
   /// Collect load/store users of this db_ref
@@ -440,15 +439,15 @@ bool DbBlockRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
 
   /// Detect allocation-level single-block: all outer sizes are constant 1.
   /// This matches the verifier's coarse check exactly.
-  bool allocSingleBlock = !newOuterSizes.empty() &&
-      llvm::all_of(newOuterSizes, [](Value v) {
-        int64_t val;
-        return ValueUtils::getConstantIndex(v, val) && val == 1;
+  bool allocSingleBlock =
+      !plan.outerSizes.empty() && llvm::all_of(plan.outerSizes, [](Value v) {
+        auto val = ValueUtils::tryFoldConstantIndex(v);
+        return val && *val == 1;
       });
 
   /// Create N-D block indexer with PartitionInfo
   auto indexer = std::make_unique<DbBlockIndexer>(
-      info, effectiveStartBlocks, newOuterSizes.size(), newInnerSizes.size(),
+      info, effectiveStartBlocks, plan.outerRank(), plan.innerRank(),
       allocSingleBlock);
 
   SmallVector<Operation *> users(blockArg.getUsers().begin(),

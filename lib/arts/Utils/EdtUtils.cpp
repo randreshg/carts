@@ -27,69 +27,70 @@ using namespace mlir::arts;
 /// EDT Analysis Utilities
 ///===----------------------------------------------------------------------===///
 
+/// Check if a block argument is invariant with respect to an EDT region.
+static bool isBlockArgInvariant(Region &edtRegion, BlockArgument blockArg) {
+  Block *owner = blockArg.getOwner();
+  if (!owner)
+    return false;
+  Region *ownerRegion = owner->getParent();
+  if (!ownerRegion)
+    return false;
+
+  /// Entry block arguments of the EDT region are considered invariant
+  /// because their defining value is outside the region.
+  if (ownerRegion == &edtRegion && owner == &edtRegion.front())
+    return true;
+
+  /// Block arguments that belong to regions outside of this EDT are also
+  /// treated as invariant inputs.
+  return !edtRegion.isAncestor(ownerRegion);
+}
+
+/// Check if an operation's result is invariant with respect to an EDT region.
+/// Recursive helper for isInvariantInEdt.
+static bool isDefOpInvariant(Region &edtRegion, Value v,
+                             SmallPtrSetImpl<Value> &visited) {
+  if (!v)
+    return false;
+  if (!visited.insert(v).second)
+    return true;
+
+  if (ValueUtils::isValueConstant(v))
+    return true;
+
+  if (auto blockArg = v.dyn_cast<BlockArgument>())
+    return isBlockArgInvariant(edtRegion, blockArg);
+
+  Operation *defOp = v.getDefiningOp();
+  if (!defOp)
+    return false;
+
+  if (!edtRegion.isAncestor(defOp->getParentRegion()))
+    return true;
+
+  if (isa<arith::ConstantIndexOp, arith::ConstantIntOp>(defOp))
+    return true;
+
+  if (isa<arith::AddIOp, arith::SubIOp, arith::MulIOp, arith::DivSIOp,
+          arith::DivUIOp, arith::IndexCastOp, arith::ExtSIOp, arith::ExtUIOp,
+          arith::TruncIOp>(defOp)) {
+    for (Value operand : defOp->getOperands())
+      if (!isDefOpInvariant(edtRegion, operand, visited))
+        return false;
+    return true;
+  }
+
+  return false;
+}
+
 bool EdtUtils::isInvariantInEdt(Region &edtRegion, Value value) {
   SmallPtrSet<Value, 16> visited;
 
-  std::function<bool(Value)> definedInvariant = [&](Value v) -> bool {
-    if (!v)
-      return false;
-    if (!visited.insert(v).second)
-      return true;
-
-    if (ValueUtils::isValueConstant(v))
-      return true;
-
-    if (auto blockArg = v.dyn_cast<BlockArgument>()) {
-      Block *owner = blockArg.getOwner();
-      if (!owner)
-        return false;
-      Region *ownerRegion = owner->getParent();
-      if (!ownerRegion)
-        return false;
-
-      /// Entry block arguments of the EDT region are considered invariant
-      /// because their defining value is outside the region.
-      if (ownerRegion == &edtRegion && owner == &edtRegion.front())
-        return true;
-
-      /// Block arguments that belong to regions outside of this EDT are also
-      /// treated as invariant inputs.
-      if (!edtRegion.isAncestor(ownerRegion))
-        return true;
-
-      return false;
-    }
-
-    Operation *defOp = v.getDefiningOp();
-    if (!defOp)
-      return false;
-
-    if (!edtRegion.isAncestor(defOp->getParentRegion()))
-      return true;
-
-    if (isa<arith::ConstantIndexOp, arith::ConstantIntOp>(defOp))
-      return true;
-
-    if (isa<arith::AddIOp, arith::SubIOp, arith::MulIOp, arith::DivSIOp,
-            arith::DivUIOp, arith::IndexCastOp, arith::ExtSIOp, arith::ExtUIOp,
-            arith::TruncIOp>(defOp)) {
-      for (Value operand : defOp->getOperands())
-        if (!definedInvariant(operand))
-          return false;
-      return true;
-    }
-
-    return false;
-  };
-
-  if (!definedInvariant(value))
+  if (!isDefOpInvariant(edtRegion, value, visited))
     return false;
 
-  auto isPointerLike = [](Type type) {
-    return type.isa<MemRefType, UnrankedMemRefType>();
-  };
-
-  if (!isPointerLike(value.getType()))
+  /// Check for pointer-like types and their users
+  if (!value.getType().isa<MemRefType, UnrankedMemRefType>())
     return true;
 
   for (Operation *user : value.getUsers()) {
@@ -114,6 +115,10 @@ bool EdtUtils::isReachable(Operation *source, Operation *target) {
     return false;
   if (source == target)
     return true;
+
+  /// If either op is detached, conservatively report not reachable.
+  if (!source->getBlock() || !target->getBlock())
+    return false;
 
   /// If both operations are in the same block, check their order.
   if (source->getBlock() == target->getBlock())
@@ -180,4 +185,38 @@ EdtUtils::getEdtBlockArgumentForAcquire(DbAcquireOp acquireOp) {
 
   BlockArgument blockArg = body.getArgument(blockArgIdx);
   return {edtUser, blockArg};
+}
+
+///===----------------------------------------------------------------------===///
+/// EDT Transformation Utilities
+///===----------------------------------------------------------------------===///
+
+bool EdtUtils::hasNestedEdt(EdtOp edt) {
+  bool found = false;
+  edt.getRegion().walk([&](EdtOp) {
+    found = true;
+    return WalkResult::interrupt();
+  });
+  return found;
+}
+
+EpochOp EdtUtils::wrapBodyInEpoch(Block &body, Location loc) {
+  SmallVector<Operation *, 8> opsToMove;
+  for (Operation &op : body.without_terminator())
+    opsToMove.push_back(&op);
+
+  if (opsToMove.empty())
+    return nullptr;
+
+  OpBuilder builder(body.getTerminator());
+  auto epochOp = builder.create<EpochOp>(loc);
+  auto &epochBlock = epochOp.getRegion().emplaceBlock();
+
+  for (Operation *op : opsToMove)
+    op->moveBefore(&epochBlock, epochBlock.end());
+
+  builder.setInsertionPointToEnd(&epochBlock);
+  builder.create<YieldOp>(loc);
+
+  return epochOp;
 }

@@ -16,10 +16,9 @@ namespace arts {
 
 class DbBlockRewriter : public DbRewriter {
 public:
-  DbBlockRewriter(DbAllocOp oldAlloc, ValueRange newOuterSizes,
-                  ValueRange newInnerSizes, ArrayRef<DbRewriteAcquire> acquires,
-                  const DbRewritePlan &plan)
-      : DbRewriter(oldAlloc, newOuterSizes, newInnerSizes, acquires, plan) {}
+  DbBlockRewriter(DbAllocOp oldAlloc, ArrayRef<DbRewriteAcquire> acquires,
+                  DbRewritePlan &plan)
+      : DbRewriter(oldAlloc, acquires, plan) {}
 
 protected:
   void transformAcquire(const DbRewriteAcquire &info, DbAllocOp newAlloc,

@@ -4,6 +4,7 @@
 
 /// Dialects
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/EdtUtils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
@@ -19,6 +20,7 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
+#include "mlir/IR/Visitors.h"
 #include "mlir/Pass/Pass.h"
 /// Debug
 #include "arts/Utils/ArtsDebug.h"
@@ -52,7 +54,12 @@ struct EdtPass : public arts::EdtBase<EdtPass> {
   /// acquires
   bool convertParallelWithAcquiresToSync(EdtOp parallelOp, EdtOp singleOp,
                                          ArrayRef<DbAcquireOp> innerAcquires,
-                                         ArrayRef<DbReleaseOp> innerReleases);
+                                         ArrayRef<DbReleaseOp> innerReleases,
+                                         bool needsBarrier);
+
+  /// Inline EDTs with no dependencies by splicing their bodies into the parent
+  /// block. This removes task creation overhead for independent work.
+  bool inlineNoDepEdts();
 
   bool processSingleEdts();
   bool processParallelEdts();
@@ -82,6 +89,7 @@ void EdtPass::runOnOperation() {
     ARTS_INFO("Running EDT pass without analysis");
     processSingleEdts();
     processParallelEdts();
+    inlineNoDepEdts();
     processSyncTaskEdts();
   }
 
@@ -103,6 +111,44 @@ void EdtPass::runOnOperation() {
 
   ARTS_INFO_FOOTER(EdtPass);
   ARTS_DEBUG_REGION(module.dump(););
+}
+
+bool EdtPass::inlineNoDepEdts() {
+  SmallVector<EdtOp, 8> candidates;
+
+  module.walk([&](EdtOp edt) {
+    if (edt.getType() != arts::EdtType::task &&
+        edt.getType() != arts::EdtType::sync)
+      return;
+    if (!edt.getDependencies().empty())
+      return;
+    candidates.push_back(edt);
+  });
+
+  if (candidates.empty())
+    return false;
+
+  bool changed = false;
+  for (EdtOp edt : candidates) {
+    Block &edtBody = edt.getRegion().front();
+    if (edtBody.getNumArguments() != 0) {
+      ARTS_DEBUG("Skipping no-dep EDT with unexpected block args");
+      continue;
+    }
+
+    Operation *insertBefore = edt.getOperation();
+    SmallVector<Operation *, 8> opsToMove;
+    for (Operation &childOp : edtBody.without_terminator())
+      opsToMove.push_back(&childOp);
+
+    for (Operation *childOp : opsToMove)
+      childOp->moveBefore(insertBefore);
+
+    edt.erase();
+    changed = true;
+    ARTS_DEBUG("Inlined no-dep EDT");
+  }
+  return changed;
 }
 
 /// Remove unconditional barriers that provide no additional ordering beyond
@@ -192,10 +238,17 @@ bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
   if (!singleOp || numOps < 3)
     return false;
 
+  /// Preserve implicit single barrier semantics when nested EDTs are present.
+  /// Only insert a barrier if the original parallel region had a trailing
+  /// barrier after the single (i.e., not a nowait single).
+  Operation *nextOp = singleOp->getNextNode();
+  bool hadTrailingBarrier = nextOp && isa<arts::BarrierOp>(nextOp);
+  bool needsBarrier = EdtUtils::hasNestedEdt(singleOp) && hadTrailingBarrier;
+
   /// If we have inner acquires, use the enhanced conversion path
   if (!innerAcquires.empty()) {
     return convertParallelWithAcquiresToSync(op, singleOp, innerAcquires,
-                                             innerReleases);
+                                             innerReleases, needsBarrier);
   }
 
   /// Original path for simple case (no inner acquires)
@@ -204,6 +257,11 @@ bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
                                   op.getDependencies().end());
   auto newEdt = createEdtWithMergedDepsAndRegion(
       builder, op.getLoc(), arts::EdtType::sync, singleOp, parallelDeps);
+
+  /// If nested EDTs were present and we had a trailing barrier, wrap top-level
+  /// tasks in an epoch to preserve ordering without relying on barriers.
+  if (needsBarrier)
+    EdtUtils::wrapBodyInEpoch(newEdt.getRegion().front(), op.getLoc());
 
   /// Replace the parallel EDT with the new EDT and erase the single EDT
   op->replaceAllUsesWith(newEdt);
@@ -220,7 +278,7 @@ bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
 /// acquires to use the correct mode and feeding them directly to the sync EDT.
 bool EdtPass::convertParallelWithAcquiresToSync(
     EdtOp parallelOp, EdtOp singleOp, ArrayRef<DbAcquireOp> innerAcquires,
-    ArrayRef<DbReleaseOp> innerReleases) {
+    ArrayRef<DbReleaseOp> innerReleases, bool needsBarrier) {
 
   Location loc = parallelOp.getLoc();
   Block &parallelBlock = parallelOp.getRegion().front();
@@ -342,6 +400,11 @@ bool EdtPass::convertParallelWithAcquiresToSync(
     builder.clone(bodyOp, argMapper);
   }
 
+  /// If nested EDTs were present and we had a trailing barrier, wrap top-level
+  /// tasks in an epoch to preserve ordering without relying on barriers.
+  if (needsBarrier)
+    EdtUtils::wrapBodyInEpoch(syncBody, loc);
+
   /// Add yield terminator if needed
   if (syncBody.empty() || !syncBody.back().hasTrait<OpTrait::IsTerminator>())
     builder.create<YieldOp>(loc);
@@ -388,6 +451,13 @@ void EdtPass::removeBarriersAroundSingleEdt(EdtOp parallelOp, EdtOp singleOp) {
   Block *parentBlock = singleOp->getBlock();
   if (!parentBlock)
     return;
+
+  /// If the single region spawns nested EDTs (tasks/parallel/sync), we must
+  /// keep explicit barriers to preserve ordering for CreateEpochs.
+  if (EdtUtils::hasNestedEdt(singleOp)) {
+    ARTS_DEBUG("Keeping barriers around single EDT with nested EDTs");
+    return;
+  }
 
   /// Find and remove barrier immediately before the single EDT
   Operation *prevOp = singleOp->getPrevNode();

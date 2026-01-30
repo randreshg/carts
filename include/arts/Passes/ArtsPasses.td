@@ -372,6 +372,49 @@ def ArtsLoopFusion : Pass<"arts-loop-fusion", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createLoopFusionPass(nullptr)";
 }
 
+def ArtsEpochOpt : Pass<"arts-epoch-opt", "mlir::ModuleOp"> {
+  let summary = "Combined epoch optimizations (fusion + loop fusion)";
+  let description = [{
+    Runs epoch-related optimizations:
+    1. Epoch fusion - merge independent consecutive epochs when their datablock
+       accesses are independent (no shared writes)
+    2. Worker loop fusion - merge compatible worker loops within epochs when they
+       have identical bounds and no loop-carried values
+  }];
+  let options = [
+    Option<"enableEpochFusion", "epoch-fusion", "bool", "true", "Enable epoch fusion">,
+    Option<"enableLoopFusion", "loop-fusion", "bool", "true", "Enable worker loop fusion">
+  ];
+  let dependentDialects = [
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "scf::SCFDialect"
+  ];
+  let constructor = "mlir::arts::createEpochOptPass()";
+}
+
+def ArtsHoisting : Pass<"arts-hoisting", "mlir::ModuleOp"> {
+  let summary = "Hoist loop-invariant ARTS operations";
+  let description = [{
+    Unified hoisting for ARTS operations:
+    - Hoists read-only db_acquire out of worker loops in epochs when operands
+      do not depend on the worker induction variable
+    - Hoists db_ref out of inner loops in EDTs when source and indices are
+      loop-invariant
+  }];
+  let options = [
+    Option<"enableAcquireHoisting", "acquire", "bool", "true", "Hoist db_acquire in epochs">,
+    Option<"enableRefHoisting", "ref", "bool", "true", "Hoist db_ref in EDTs">
+  ];
+  let dependentDialects = [
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "scf::SCFDialect",
+    "memref::MemRefDialect"
+  ];
+  let constructor = "mlir::arts::createArtsHoistingPass()";
+}
+
 def LoopReordering : Pass<"loop-reordering", "mlir::ModuleOp"> {
   let summary = "Reorder inner loops for cache-optimal access patterns";
   let description = [{
