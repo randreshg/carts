@@ -612,6 +612,11 @@ static void resetCoarseAcquireRanges(DbAllocOp allocOp, DbAllocNode *allocNode,
       return;
     acqOp.getOffsetsMutable().assign(fullOffsets);
     acqOp.getSizesMutable().assign(fullSizes);
+    /// Clear partition hints for coarse allocations to avoid redundant
+    /// per-task hint plumbing and enable invariant acquire hoisting.
+    acqOp.getPartitionIndicesMutable().clear();
+    acqOp.getPartitionOffsetsMutable().clear();
+    acqOp.getPartitionSizesMutable().clear();
     /// Keep acquire partition attribute consistent with coarse allocation.
     setPartitionMode(acqOp.getOperation(), PartitionMode::coarse);
   });
@@ -1682,8 +1687,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   /// and let heuristics decide; coarse is a last-resort fallback.
   bool allBlockFullRange = anyBlockCapable && !anyBlockNotFullRange;
   if (allBlockFullRange) {
-    ARTS_DEBUG("  All block-capable acquires are full-range; keeping block "
-               "partitioning enabled");
+    ARTS_DEBUG("  All block-capable acquires are full-range; deferring to "
+               "heuristics");
   }
 
   /// Determine allocation-level capabilities from per-acquire STRUCTURAL
@@ -1693,6 +1698,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   ctx.canBlock = ctx.anyCanBlock();
   if (!canUseBlock)
     ctx.canBlock = false;
+  ctx.allBlockFullRange = allBlockFullRange;
 
   ARTS_DEBUG("  Per-acquire voting: canEW="
              << ctx.canElementWise << ", canBlock=" << ctx.canBlock
@@ -2466,6 +2472,16 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     setPartitionMode(*result, decision.mode);
 
     AM->getMetadataManager().transferMetadata(allocOp, result.value());
+
+    /// Coarse allocation: clear partition hints on acquires to avoid
+    /// unnecessary per-task hint plumbing and enable invariant hoisting.
+    if (decision.isCoarse()) {
+      for (auto &info : rewriteAcquires) {
+        if (!info.acquire)
+          continue;
+        info.acquire.clearPartitionHints();
+      }
+    }
 
     /// Record successful partition decision
     StringRef modeName = getPartitionModeName(decision.mode);

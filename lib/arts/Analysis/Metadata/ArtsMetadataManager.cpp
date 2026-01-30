@@ -8,6 +8,7 @@
 #include "arts/Utils/Metadata/LoopMetadata.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "llvm/ADT/DenseSet.h"
@@ -109,29 +110,42 @@ bool ArtsMetadataManager::ensureLoopMetadata(Operation *op) {
   if (!op)
     return false;
 
+  ARTS_DEBUG("ensureLoopMetadata: " << op->getName());
+
   /// 1. Check if already in memory
-  if (getLoopMetadata(op))
+  if (getLoopMetadata(op)) {
+    ARTS_DEBUG("  → already in memory");
     return true;
+  }
 
   /// 2. Check if op has metadata attribute
   if (op->getAttr(AttrNames::LoopMetadata::Name)) {
+    ARTS_DEBUG("  → has arts.loop attr, importing");
     importFromOperation(op);
     return getLoopMetadata(op) != nullptr;
   }
 
   /// 3. Try to attach from cache using arts.id or location
   LocationMetadata loc = LocationMetadata::fromLocation(op->getLoc());
+  ARTS_DEBUG("  → extracted location: " << loc.getKey()
+             << " (file=" << loc.file << ", line=" << loc.line << ")");
   std::string key;
   if (auto idAttr = op->getAttrOfType<IntegerAttr>(ArtsMetadata::IdAttrName))
     key = std::to_string(idAttr.getInt());
   if (key.empty())
     key = loc.getKey().str();
+  ARTS_DEBUG("  → trying exact match with key: " << key);
   if (!key.empty() &&
-      attachMetadataFromJson(op, key, loopJsonCache, /*isLoop=*/true))
+      attachMetadataFromJson(op, key, loopJsonCache, /*isLoop=*/true)) {
+    ARTS_DEBUG("  → exact match found!");
     return true;
+  }
 
-  if (!loc.isValid())
+  ARTS_DEBUG("  → no exact match, trying near-location match");
+  if (!loc.isValid()) {
+    ARTS_DEBUG("  → location invalid, giving up");
     return false;
+  }
   return attachLoopMetadataNearLocation(op, loc);
 }
 
@@ -534,8 +548,14 @@ bool ArtsMetadataManager::attachMetadataFromJson(
 
 bool ArtsMetadataManager::attachLoopMetadataNearLocation(
     Operation *op, const LocationMetadata &loc, unsigned lineTolerance) {
-  if (!op || !loc.isValid() || lineTolerance == 0)
+  ARTS_DEBUG("attachLoopMetadataNearLocation: op=" << op->getName()
+             << ", loc=" << loc.getKey() << ", tolerance=" << lineTolerance);
+  if (!op || !loc.isValid() || lineTolerance == 0) {
+    ARTS_DEBUG("  → early return: op=" << (op ? "valid" : "null")
+               << ", loc.isValid=" << loc.isValid()
+               << ", tolerance=" << lineTolerance);
     return false;
+  }
 
   if (!loadJsonCache())
     return false;
@@ -544,6 +564,7 @@ bool ArtsMetadataManager::attachLoopMetadataNearLocation(
   const llvm::json::Object *bestMatch = nullptr;
   unsigned bestDistance = std::numeric_limits<unsigned>::max();
   std::string baseFile = LocationMetadata::getBasename(loc.file);
+  ARTS_DEBUG("  → searching for baseFile=" << baseFile << ", line=" << loc.line);
 
   for (auto &entry : loopJsonCache) {
     const llvm::json::Object *obj = entry.second.get();
@@ -558,19 +579,28 @@ bool ArtsMetadataManager::attachLoopMetadataNearLocation(
     if (!entryLoc.isValid())
       continue;
 
-    if (entryLoc.file != baseFile)
+    ARTS_DEBUG("  → candidate: file=" << entryLoc.file << ", line="
+               << entryLoc.line << " (vs baseFile=" << baseFile << ")");
+
+    if (entryLoc.file != baseFile) {
+      ARTS_DEBUG("     → file mismatch, skipping");
       continue;
+    }
 
     unsigned distance = static_cast<unsigned>(
         std::abs(static_cast<int>(entryLoc.line) - static_cast<int>(loc.line)));
-    if (distance == 0 || distance > lineTolerance)
+    ARTS_DEBUG("     → distance=" << distance << ", tolerance=" << lineTolerance);
+    if (distance > lineTolerance) {
+      ARTS_DEBUG("     → distance too large, skipping");
       continue;
+    }
 
     if (bestMatch && distance >= bestDistance)
       continue;
 
     bestMatch = obj;
     bestDistance = distance;
+    ARTS_DEBUG("     → new best match!");
   }
 
   if (!bestMatch)
@@ -680,7 +710,7 @@ bool ArtsMetadataManager::transferMetadata(Operation *sourceOp,
 
 bool ArtsMetadataManager::isLoopOp(Operation *op) {
   return isa<affine::AffineForOp, scf::ForOp, scf::ParallelOp, scf::ForallOp,
-             arts::ForOp>(op);
+             omp::WsLoopOp, arts::ForOp>(op);
 }
 
 bool ArtsMetadataManager::isMemrefAllocOp(Operation *op) {
@@ -717,12 +747,19 @@ bool ArtsMetadataManager::attachMetadataFromCache(ModuleOp module,
   if (!module)
     return false;
 
-  uint64_t loopsAttached = 0, memrefsAttached = 0;
+  ARTS_DEBUG_HEADER(attachMetadataFromCache);
+  ARTS_DEBUG("Source: " << source);
+
+  uint64_t loopsAttached = 0, memrefsAttached = 0, loopsChecked = 0;
   module.walk([&](Operation *op) {
     if (isLoopOp(op)) {
+      loopsChecked++;
+      ARTS_DEBUG("Found loop op: " << op->getName());
       bool hadAttr = op->hasAttr(AttrNames::LoopMetadata::Name);
-      if (ensureLoopMetadata(op) && !hadAttr)
+      if (ensureLoopMetadata(op) && !hadAttr) {
         loopsAttached++;
+        ARTS_DEBUG("  → attached metadata!");
+      }
       return;
     }
 
@@ -732,6 +769,7 @@ bool ArtsMetadataManager::attachMetadataFromCache(ModuleOp module,
         memrefsAttached++;
     }
   });
+  ARTS_DEBUG("Checked " << loopsChecked << " loop ops");
 
   if (loopsAttached == 0 && memrefsAttached == 0)
     return false;
