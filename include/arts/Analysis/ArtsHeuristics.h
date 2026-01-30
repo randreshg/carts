@@ -10,7 +10,7 @@
 /// H1 Partitioning Heuristics (evaluated in priority order):
 ///   H1.1: Read-only single-node -> coarse
 ///   H1.2: Mixed access (block writes + indirect reads) -> block
-///   H1.3: Stencil/indexed patterns -> stencil or element-wise
+///   H1.3: Stencil/indexed patterns -> stencil or block/element-wise
 ///   H1.4: Uniform direct access -> block
 ///   H1.5: Multi-node -> fine-grained for network efficiency
 ///   H1.6: Non-uniform access -> coarse
@@ -54,6 +54,16 @@ class IdRegistry;
 ///===----------------------------------------------------------------------===///
 /// H1: Partitioning Heuristic Types
 ///===----------------------------------------------------------------------===///
+
+class DbAcquireNode;
+
+/// Per-acquire decision from heuristics.
+/// Used to centralize needsFullRange decisions based on canPartitionWithOffset.
+struct AcquireDecision {
+  bool needsFullRange = false;
+  bool canContributeBlockSize = true;
+  std::string rationale;
+};
 
 /// Per-acquire info for heuristic voting.
 struct AcquireInfo {
@@ -146,18 +156,27 @@ struct PartitioningDecision {
   unsigned outerRank = 0, innerRank = 0;
   std::string rationale;
 
+  /// General factory method for creating partitioning decisions.
+  /// All specialized factories delegate to this method.
+  static PartitioningDecision create(PartitionMode mode, unsigned outerRank,
+                                     unsigned memrefRank,
+                                     llvm::StringRef reason) {
+    unsigned inner = memrefRank > outerRank ? memrefRank - outerRank : 0;
+    return {mode, outerRank, inner, reason.str()};
+  }
+
   /// Factory for coarse allocation (single datablock).
   static PartitioningDecision coarse(const PartitioningContext &ctx,
                                      llvm::StringRef reason) {
-    return {PartitionMode::coarse, 0, ctx.memrefRank, reason.str()};
+    return create(PartitionMode::coarse, 0, ctx.memrefRank, reason);
   }
 
   /// Factory for element-wise partitioning (one DB per element in outer dims).
   static PartitioningDecision elementWise(const PartitioningContext &ctx,
                                           unsigned outerRank,
                                           llvm::StringRef reason) {
-    unsigned inner = ctx.memrefRank > outerRank ? ctx.memrefRank - outerRank : 0;
-    return {PartitionMode::fine_grained, outerRank, inner, reason.str()};
+    return create(PartitionMode::fine_grained, outerRank, ctx.memrefRank,
+                  reason);
   }
 
   /// Factory for block partitioning (contiguous blocks along leading dims).
@@ -167,16 +186,14 @@ struct PartitioningDecision {
                                     llvm::StringRef reason) {
     unsigned outerRank =
         ctx.maxPinnedDimCount() > 0 ? ctx.maxPinnedDimCount() : 1;
-    unsigned inner = ctx.memrefRank > outerRank ? ctx.memrefRank - outerRank : 0;
-    return {PartitionMode::block, outerRank, inner, reason.str()};
+    return create(PartitionMode::block, outerRank, ctx.memrefRank, reason);
   }
 
   /// Factory for block partitioning with explicit N-D support.
   static PartitioningDecision blockND(const PartitioningContext &ctx,
                                       unsigned outerRank,
                                       llvm::StringRef reason) {
-    unsigned inner = ctx.memrefRank > outerRank ? ctx.memrefRank - outerRank : 0;
-    return {PartitionMode::block, outerRank, inner, reason.str()};
+    return create(PartitionMode::block, outerRank, ctx.memrefRank, reason);
   }
 
   /// Factory for stencil mode (block + ESD for halo handling).
@@ -186,8 +203,7 @@ struct PartitioningDecision {
                                       llvm::StringRef reason) {
     unsigned outerRank =
         ctx.maxPinnedDimCount() > 0 ? ctx.maxPinnedDimCount() : 1;
-    unsigned inner = ctx.memrefRank > outerRank ? ctx.memrefRank - outerRank : 0;
-    return {PartitionMode::stencil, outerRank, inner, reason.str()};
+    return create(PartitionMode::stencil, outerRank, ctx.memrefRank, reason);
   }
 
   bool isCoarse() const { return outerRank == 0; }
@@ -279,6 +295,15 @@ public:
 
   /// H1: Partitioning Mode Evaluation
   PartitioningDecision getPartitioningMode(const PartitioningContext &ctx);
+
+  /// H1.7: Per-acquire partitioning decisions based on canPartitionWithOffset.
+  /// Evaluates each acquire to determine if it needs full-range access
+  /// (when partition offset doesn't match access pattern, e.g., mean[f] in
+  /// batchnorm parallel over batch b).
+  SmallVector<AcquireDecision>
+  getAcquireDecisions(const PartitioningContext &ctx,
+                      ArrayRef<DbAcquireNode *> acquireNodes,
+                      ArrayRef<Value> partitionOffsets);
 
   /// Decision recording for diagnostics
   void recordDecision(llvm::StringRef heuristic, bool applied,

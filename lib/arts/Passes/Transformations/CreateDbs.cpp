@@ -442,7 +442,8 @@ void CreateDbsPass::collectMemrefs() {
       }
     });
   });
-  ARTS_DEBUG("collectMemrefs: Total " << memrefInfo.size() << " unique memrefs");
+  ARTS_DEBUG("collectMemrefs: Total " << memrefInfo.size()
+                                      << " unique memrefs");
 }
 
 ///===----------------------------------------------------------------------===///
@@ -647,10 +648,7 @@ void CreateDbsPass::createDbAllocOps() {
     }
 
     /// Create coarse rewrite plan - DbPartitioning will refine based on hint
-    DbRewritePlan plan;
-    plan.mode = PartitionMode::coarse;
-    plan.outerRank = 0;
-    plan.innerRank = rank;
+    DbRewritePlan plan(PartitionMode::coarse);
     info.rewritePlan = plan;
 
     /// Record allocation strategy decision for diagnostics
@@ -1133,7 +1131,8 @@ void CreateDbsPass::rewriteUsesInParentEdt(MemrefInfo &memrefInfo) {
     indexer.transformAccess(user, dbAlloc.getPtr(), elementMemRefType, *AC,
                             opsToRemove);
     if (opsToRemove.size() > sizeBefore) {
-      ARTS_DEBUG("   Transformed: " << user->getName() << " -> added to remove");
+      ARTS_DEBUG("   Transformed: " << user->getName()
+                                    << " -> added to remove");
     } else {
       ARTS_DEBUG("   NOT transformed: " << user->getName() << " at "
                                         << user->getLoc());
@@ -1194,7 +1193,7 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
   ARTS_DEBUG(" - Element memref type: " << elementMemRefType);
 
   /// Use stored ranks from plan, with fallback for innerRank
-  unsigned innerRank = plan.innerRank;
+  unsigned innerRank = plan.innerRank();
   if (innerRank == 0)
     if (auto memrefType = elementMemRefType.dyn_cast<MemRefType>())
       innerRank = memrefType.getRank();
@@ -1257,10 +1256,12 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
                               : acquireOffsets[0];
 
       /// Compute startBlock using stored blockSize from plan
+      Value blockSize = plan.getBlockSize(0);
       Value startBlock =
-          AC->create<arith::DivUIOp>(loc, startOffset, plan.blockSize);
+          blockSize ? AC->create<arith::DivUIOp>(loc, startOffset, blockSize)
+                    : AC->createIndexConstant(0, loc);
 
-      unsigned chunkOuterRank = plan.outerRank;
+      unsigned chunkOuterRank = plan.outerRank();
       if (chunkOuterRank == 0)
         if (auto acquireOp = dyn_cast<DbAcquireOp>(dbOp))
           chunkOuterRank = acquireOp.getSizes().size();
@@ -1268,7 +1269,8 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
       /// Build PartitionInfo from blockSize
       PartitionInfo blockInfo;
       blockInfo.mode = PartitionMode::block;
-      blockInfo.sizes.push_back(plan.blockSize);
+      if (blockSize)
+        blockInfo.sizes.push_back(blockSize);
       SmallVector<Value> startBlocks = {startBlock};
       DbBlockIndexer indexer(blockInfo, startBlocks, chunkOuterRank, innerRank);
       llvm::SetVector<Operation *> localOpsToRemove;
@@ -1286,7 +1288,7 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
     PartitionInfo ewInfo;
     ewInfo.mode = PartitionMode::fine_grained;
     ewInfo.indices.push_back(elemOffset);
-    DbElementWiseIndexer indexer(ewInfo, plan.outerRank, innerRank, {});
+    DbElementWiseIndexer indexer(ewInfo, plan.outerRank(), innerRank, {});
 
     if (auto load = dyn_cast<memref::LoadOp>(op)) {
       auto localized = indexer.localizeForFineGrained(

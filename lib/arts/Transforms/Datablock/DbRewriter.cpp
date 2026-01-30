@@ -28,40 +28,29 @@ ARTS_DEBUG_SETUP(db_transforms);
 using namespace mlir;
 using namespace mlir::arts;
 
-/// DbRewritePlan constructor from PartitioningDecision
-DbRewritePlan::DbRewritePlan(const PartitioningDecision &decision)
-    : mode(decision.mode), outerRank(decision.outerRank),
-      innerRank(decision.innerRank) {}
-
 /// DbRewriter - Abstract Base Class
 
-DbRewriter::DbRewriter(DbAllocOp oldAlloc, ValueRange newOuterSizes,
-                       ValueRange newInnerSizes,
-                       ArrayRef<DbRewriteAcquire> acquires,
-                       const DbRewritePlan &plan)
-    : oldAlloc(oldAlloc), newOuterSizes(newOuterSizes),
-      newInnerSizes(newInnerSizes), acquires(acquires), plan(plan) {}
+DbRewriter::DbRewriter(DbAllocOp oldAlloc, ArrayRef<DbRewriteAcquire> acquires,
+                       DbRewritePlan &plan)
+    : oldAlloc(oldAlloc), acquires(acquires), plan(plan) {}
 
 /// Factory Method - Creates appropriate subclass based on mode
 
-std::unique_ptr<DbRewriter> DbRewriter::create(
-    DbAllocOp oldAlloc, ValueRange newOuterSizes, ValueRange newInnerSizes,
-    ArrayRef<DbRewriteAcquire> acquires, const DbRewritePlan &plan) {
+std::unique_ptr<DbRewriter>
+DbRewriter::create(DbAllocOp oldAlloc, ArrayRef<DbRewriteAcquire> acquires,
+                   DbRewritePlan &plan) {
   ARTS_DEBUG("DbRewriter::create mode=" << getPartitionModeName(plan.mode));
 
   switch (plan.mode) {
   case PartitionMode::fine_grained:
   case PartitionMode::coarse:
-    return std::make_unique<DbElementWiseRewriter>(
-        oldAlloc, newOuterSizes, newInnerSizes, acquires, plan);
+    return std::make_unique<DbElementWiseRewriter>(oldAlloc, acquires, plan);
 
   case PartitionMode::block:
-    return std::make_unique<DbBlockRewriter>(oldAlloc, newOuterSizes,
-                                             newInnerSizes, acquires, plan);
+    return std::make_unique<DbBlockRewriter>(oldAlloc, acquires, plan);
 
   case PartitionMode::stencil:
-    return std::make_unique<DbStencilRewriter>(oldAlloc, newOuterSizes,
-                                               newInnerSizes, acquires, plan);
+    return std::make_unique<DbStencilRewriter>(oldAlloc, acquires, plan);
   }
 
   ARTS_UNREACHABLE("Unknown PartitionMode");
@@ -80,12 +69,12 @@ FailureOr<DbAllocOp> DbRewriter::apply(OpBuilder &builder) {
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPoint(oldAlloc);
 
-  /// 1. Create new allocation with the given sizes
+  /// 1. Create new allocation with the given sizes from plan
   PartitionMode partitionMode = plan.mode;
   auto newAlloc = builder.create<DbAllocOp>(
       loc, oldAlloc.getMode(), oldAlloc.getRoute(), oldAlloc.getAllocType(),
       oldAlloc.getDbMode(), oldAlloc.getElementType(), oldAlloc.getAddress(),
-      newOuterSizes, newInnerSizes, partitionMode);
+      plan.outerSizes, plan.innerSizes, partitionMode);
 
   /// 2. Transfer metadata/attributes from old to new allocation
   transferAttributes(oldAlloc, newAlloc, {AttrNames::Operation::PartitionMode});
@@ -218,11 +207,8 @@ DbRewriter::createIndexer(const DbRewritePlan &plan, Value startBlock,
   }
 
   case PartitionMode::block: {
-    /// Build blockSizes and startBlocks vectors
-    /// For N-D partitioning, use plan.blockSizes; for 1D, wrap single value
+    /// Build blockSizes and startBlocks vectors from plan.blockSizes
     SmallVector<Value> blockSizes = plan.blockSizes;
-    if (blockSizes.empty() && plan.blockSize)
-      blockSizes.push_back(plan.blockSize);
 
     /// Compute startBlocks from elemOffset and blockSizes
     SmallVector<Value> startBlocks;
@@ -238,9 +224,9 @@ DbRewriter::createIndexer(const DbRewritePlan &plan, Value startBlock,
 
   case PartitionMode::stencil:
     assert(plan.stencilInfo && "Stencil mode requires stencil info");
-    return createStencilIndexer(*plan.stencilInfo, plan.blockSize, elemOffset,
-                                outerRank, innerRank, ownedArg, leftHaloArg,
-                                rightHaloArg, builder, loc);
+    return createStencilIndexer(*plan.stencilInfo, plan.getBlockSize(0),
+                                elemOffset, outerRank, innerRank, ownedArg,
+                                leftHaloArg, rightHaloArg, builder, loc);
   }
 
   ARTS_UNREACHABLE("Unknown PartitionMode");

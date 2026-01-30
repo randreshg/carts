@@ -157,6 +157,12 @@ public:
   bool computePartitionBounds();
   bool canPartitionWithOffset(Value offset);
 
+  /// Unified check: does this acquire need full-range access on a block alloc?
+  /// Returns true if:
+  ///   1. Has indirect access (can't determine which block)
+  ///   2. Partition offset not in access pattern (except stencil)
+  bool needsFullRange(Value partitionOffset);
+
   LogicalResult computeBlockInfo(Value &blockOffset, Value &blockSize);
   LogicalResult computeBlockInfoFromWhile(scf::WhileOp whileOp,
                                           Value &blockOffset, Value &blockSize,

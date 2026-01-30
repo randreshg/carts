@@ -42,6 +42,11 @@ public:
   /// constants.
   static std::optional<int64_t> getConstantValue(Value v);
 
+  /// Try to fold a constant index expression composed of basic arith ops.
+  /// Supports common integer/index arithmetic patterns (add/sub/mul/div/casts).
+  static std::optional<int64_t> tryFoldConstantIndex(Value v,
+                                                     unsigned depth = 0);
+
   /// Extract a constant floating-point value from a Value.
   static std::optional<double> getConstantFloat(Value v);
 

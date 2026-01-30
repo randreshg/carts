@@ -80,6 +80,59 @@ The pipeline relies on a clear separation between *intent* and *layout*:
 4) **DbPartitioning** uses those summaries to choose a mode, then rewrites
    DB-space offsets/sizes to match the new allocation layout.
 
+## Per-Acquire Decisions: Full-Range vs Specific Block
+
+While the allocation-level decision (coarse/block/element-wise) applies to all acquires,
+individual acquires may have different access patterns:
+
+### The Full-Range Acquire Pattern
+
+When an acquire's access doesn't depend on its partition offset (e.g., parallel loop
+over `batch` but array indexed by `channel`), the acquire needs **full-range access**
+(all blocks) instead of a specific block.
+
+| Access Pattern | Partition Offset | Acquire Behavior |
+|----------------|------------------|------------------|
+| `x[b][f][i]` parallel over `b` | `b` | Specific block at index `b/blockSize` |
+| `mean[f]` parallel over `b` | `b` | **Full range** (all blocks) |
+
+### Responsibility Separation
+
+| Layer | Component | Responsibility |
+|-------|-----------|----------------|
+| **Analysis** | `DbAcquireNode::canPartitionWithOffset()` | Check if partition offset is used in access pattern |
+| **Heuristics** | `HeuristicsConfig::getAcquireDecisions()` | Decide needsFullRange for each acquire based on analysis |
+| **Execution** | `DbPartitioning` | Apply heuristic decisions, populate `AcquirePartitionInfo.needsFullRange` |
+| **Transformation** | `DbBlockRewriter` | Use `isFullRange` to emit correct acquire offsets/sizes |
+
+### How Full-Range Works in Block Mode
+
+```
+DbAlloc: memref<N/blockSize x blockSize x ...>  (blocked layout)
+
+Specific-block acquire:
+  offsets = [startBlock]
+  sizes   = [1]           // One block
+
+Full-range acquire:
+  offsets = [0]
+  sizes   = [numBlocks]   // ALL blocks
+```
+
+Both acquires share the same blocked allocation layout. The difference is only
+in which blocks they acquire.
+
+### Heuristic Rule (H1.7)
+
+**H1.7: Partition Offset Mismatch** → Full-range acquire
+
+When `canPartitionWithOffset(offset)` returns false:
+- Partition offset is not used in the acquire's access pattern
+- Acquire cannot benefit from block-specific indexing
+- Decision: `needsFullRange = true`, `canContributeBlockSize = false`
+
+---
+
 ## Heuristic Ordering (H1.x Summary)
 
 The partitioning decision is made in this order:
@@ -87,11 +140,12 @@ The partitioning decision is made in this order:
 1) **H1.1**: Read-only single-node with no partition capability → **coarse**
 2) **H1.2**: Mixed direct writes + indirect reads → **block** (indirect gets full-range)
 3) **H1.2b**: Mixed direct + indirect writes → **block** (indirect gets full-range)
-4) **H1.3**: Stencil → **stencil**, Indexed → **element-wise**
+4) **H1.3**: Stencil → **stencil**, Indexed → **block when supported** (else element-wise)
 5) **H1.4**: Uniform direct access → **block**
 6) **H1.5**: Multi-node prefers **block**, else **element-wise**
 7) **H1.6**: Non-uniform with no capability → **coarse**
-8) **Fallback**: Respect `--partition-fallback` (coarse or fine-grained)
+8) **H1.7**: Per-acquire partition offset mismatch → **full-range** for that acquire
+9) **Fallback**: Respect `--partition-fallback` (coarse or fine-grained)
 
 ## Terminology Mapping
 
@@ -686,7 +740,7 @@ flowchart TB
     S11A["1) canBePartitioned(useFineGrainedFallback)?<br/>- if hasNonAffineAccesses and fallback not enabled → false<br/>- safety checks on hints/structure<br/>- false → skip (keep coarse)"]
     S11B["2) Per-acquire analysis:<br/>- indices present → canElementWise = true<br/>- offsets/sizes present → canBlocked = true<br/>- extract partition offset/size"]
     S11C["3) Build PartitioningContext:<br/>- ctx.canBlocked / ctx.canElementWise<br/>- ctx.blockSize (canonical)<br/>- per-acquire voting"]
-    S11D["4) Heuristics evaluation (H1.x):<br/>- H1.1 read-only single node → coarse<br/>- H1.2 mixed access → blocked + full-range<br/>- H1.3 stencil pattern → stencil/fine-grained<br/>- H1.4 multi-node → fine-grained preferred<br/>- H1.5 access uniformity → coarse fallback"]
+    S11D["4) Heuristics evaluation (H1.x):<br/>- H1.1 read-only single node → coarse<br/>- H1.2/H1.2b mixed access → blocked + full-range<br/>- H1.3 stencil/indexed → stencil or block/element-wise<br/>- H1.4 uniform direct → block<br/>- H1.5 multi-node → block (else element-wise)<br/>- H1.6 non-uniform/no capability → coarse"]
     S11E["5) Apply decision via DbRewriter:<br/>- coarse: keep original<br/>- else: rewrite alloc and acquires to new grid<br/>- set partition attribute (coarse/fine_grained/blocked)"]
     S11A --> S11B --> S11C --> S11D --> S11E
   end
@@ -852,7 +906,7 @@ flowchart TD
     CONFLICT["Conflict Resolution via Heuristics"]
     CONFLICT --> H1["H1.1: Read-only single-node? → coarse"]
     H1 -->|no| H2["H1.2: Blocked + indirect? → blocked + full-range"]
-    H2 -->|no| H3["H1.3: Stencil pattern? → stencil/fine-grained"]
+    H2 -->|no| H3["H1.3: Stencil/indexed? → stencil or block/element-wise"]
     H3 -->|no| H4["H1.4: Multi-node? → prefer fine-grained"]
     H4 -->|no| H5["H1.5: Non-uniform? → coarse"]
     H5 -->|no| FALLBACK["Fallback: --partition-fallback"]
@@ -1169,7 +1223,7 @@ Policy is controlled by `--partition-fallback`:
 - `coarse` (default): reject non-affine allocations unless explicit
   offset/size hints override; allocation stays coarse.
 - `fine`: allow non-affine allocations to proceed and mark them as indexed so
-  H1.3 selects element-wise partitioning.
+  H1.3 can select block when supported, otherwise element-wise.
 - `versioned`: legacy alias for `fine` (versioning is no longer automatic).
 
 **Usage note:** `--partition-fallback` is a `carts run` flag. When using
@@ -1299,7 +1353,7 @@ flowchart TD
 
     HAS_IDX -->|Yes| VALIDATE[Validate Element-Wise]
     VALIDATE --> VALID{Indices valid?}
-    VALID -->|Yes| H13_ELEM[H1.3: Element-Wise]
+    VALID -->|Yes| H13_ELEM[H1.3: Block or Element-Wise]
     VALID -->|No| FALLBACK[Fallback to Coarse]
     FALLBACK --> H11
 ```
@@ -1391,7 +1445,7 @@ grep "partition_mode" lulesh_coarse.mlir | sort | uniq -c
 
 - `--partition-fallback=fine` enables non-affine conversion
 - `canBePartitioned(useFineGrainedFallback=true)` returns true
-- H1.3 selects element-wise for indexed access patterns
+- H1.3 selects block for indexed access when supported, otherwise element-wise
 - Allocation becomes: `sizes=[numNodes], elementSizes=[1]`
 
 **Commands:**
@@ -1574,25 +1628,31 @@ that returns a decision wins.
 flowchart TD
     START[Build PartitioningContext] --> H1_1
 
-    H1_1{H1.1 priority=100<br/>Read-Only Single-Node?}
+    H1_1{H1.1 priority=100<br/>Read-Only Single-Node<br/>and no partition capability?}
     H1_1 -->|applies| COARSE1[COARSE]
     H1_1 -->|skip| H1_2
 
-    H1_2{H1.2 priority=98<br/>Mixed Access Pattern?<br/>canBlocked && hasIndirectRead}
-    H1_2 -->|applies| CHUNKED_FR[CHUNKED + full-range indirect reads]
+    H1_2{H1.2 priority=98<br/>Mixed Access?<br/>direct + indirect}
+    H1_2 -->|applies| BLOCK_FR[BLOCK + full-range indirect]
     H1_2 -->|skip| H1_3
 
-    H1_3{H1.3 priority=95<br/>Stencil Pattern?}
-    H1_3 -->|applies| STENCIL[STENCIL or ELEMENTWISE]
+    H1_3{H1.3 priority=95<br/>Stencil/Indexed?}
+    H1_3 -->|stencil| STENCIL[STENCIL]
+    H1_3 -->|indexed & block-capable| BLOCK_IDX[BLOCK]
+    H1_3 -->|indexed & no block| ELEM_IDX[ELEMENT-WISE]
     H1_3 -->|skip| H1_4
 
-    H1_4{H1.4 priority=90<br/>Multi-Node?}
-    H1_4 -->|applies| FINE1[CHUNKED or ELEMENTWISE]
+    H1_4{H1.4 priority=90<br/>Uniform Direct Access?}
+    H1_4 -->|applies| BLOCK1[BLOCK]
     H1_4 -->|skip| H1_5
 
-    H1_5{H1.5 priority=80<br/>Non-Uniform Access?}
-    H1_5 -->|applies| COARSE2[COARSE]
-    H1_5 -->|skip| DECISION[COARSE (fallback)]
+    H1_5{H1.5 priority=85<br/>Multi-Node?}
+    H1_5 -->|applies| BLOCK_OR_EW[BLOCK (else ELEMENT-WISE)]
+    H1_5 -->|skip| H1_6
+
+    H1_6{H1.6 priority=80<br/>Non-Uniform and no capability?}
+    H1_6 -->|applies| COARSE2[COARSE]
+    H1_6 -->|skip| FALLBACK[Fallback: coarse or fine]
 ```
 
 ## Decision Equation
@@ -1601,10 +1661,11 @@ flowchart TD
     if !canBePartitioned              -> Coarse
     else if H1.1 (read-only + single) -> Coarse
     else if H1.2 (mixed blocked+idx)  -> Blocked (with full-range indirect reads)
-    else if H1.3 (stencil/mixed)      -> Stencil or ElementWise
-    else if H1.4 (multi-node)         -> Blocked or ElementWise
-    else if H1.5 (!uniform)           -> Coarse
-    else                              -> Coarse (fallback)
+    else if H1.3 (stencil/indexed)    -> Stencil, Block, or ElementWise
+    else if H1.4 (uniform direct)     -> Blocked
+    else if H1.5 (multi-node)         -> Blocked or ElementWise
+    else if H1.6 (!uniform/no cap)    -> Coarse
+    else                              -> Fallback (coarse or fine)
 
 ## When Blocked Beats Element-wise
 
