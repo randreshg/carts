@@ -5,6 +5,7 @@
 /// Dialects
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/EdtUtils.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
@@ -29,6 +30,108 @@ ARTS_DEBUG_SETUP(edt);
 using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
+
+namespace {
+void sinkExternalAllocasInEdt(EdtOp edt) {
+  Block &body = edt.getBody().front();
+  DenseMap<Operation *, SmallVector<Operation *, 4>> usesByAlloca;
+
+  body.walk([&](Operation *op) {
+    for (Value operand : op->getOperands()) {
+      auto allocaOp = operand.getDefiningOp<memref::AllocaOp>();
+      if (!allocaOp)
+        continue;
+      if (edt.getBody().isAncestor(allocaOp->getParentRegion()))
+        continue;
+      usesByAlloca[allocaOp.getOperation()].push_back(op);
+    }
+  });
+
+  if (usesByAlloca.empty())
+    return;
+
+  OpBuilder builder(edt);
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToStart(&body);
+
+  for (const auto &entry : usesByAlloca) {
+    auto allocaOp = cast<memref::AllocaOp>(entry.first);
+    bool hasStoreInEdt = false;
+    for (Operation *user : entry.second) {
+      if (auto store = dyn_cast<memref::StoreOp>(user)) {
+        if (store.getMemRef() == allocaOp.getResult()) {
+          hasStoreInEdt = true;
+          break;
+        }
+      }
+      if (auto store = dyn_cast<affine::AffineStoreOp>(user)) {
+        if (store.getMemRef() == allocaOp.getResult()) {
+          hasStoreInEdt = true;
+          break;
+        }
+      }
+    }
+
+    /// Shared read-only allocas should remain outside the EDT.
+    if (!hasStoreInEdt)
+      continue;
+
+    bool hasUnsafeStore = false;
+    SmallVector<memref::StoreOp, 4> initStores;
+    SmallVector<affine::AffineStoreOp, 4> affineInitStores;
+    for (Operation *user : allocaOp->getUsers()) {
+      auto inSameBlock = [&](Operation *op) {
+        return op->getBlock() == allocaOp->getBlock();
+      };
+      auto hasLoopAncestor = [&](Operation *op) {
+        return op->getParentOfType<scf::ForOp>() ||
+               op->getParentOfType<affine::AffineForOp>() ||
+               op->getParentOfType<scf::IfOp>();
+      };
+      if (auto store = dyn_cast<memref::StoreOp>(user)) {
+        if (store.getMemRef() != allocaOp.getResult())
+          continue;
+        if (!inSameBlock(store.getOperation()) ||
+            hasLoopAncestor(store.getOperation())) {
+          hasUnsafeStore = true;
+          break;
+        }
+        initStores.push_back(store);
+        continue;
+      }
+      if (auto store = dyn_cast<affine::AffineStoreOp>(user)) {
+        if (store.getMemRef() != allocaOp.getResult())
+          continue;
+        if (!inSameBlock(store.getOperation()) ||
+            hasLoopAncestor(store.getOperation())) {
+          hasUnsafeStore = true;
+          break;
+        }
+        affineInitStores.push_back(store);
+        continue;
+      }
+    }
+
+    if (hasUnsafeStore)
+      continue;
+
+    Operation *clonedOp = builder.clone(*allocaOp.getOperation());
+    auto newAlloca = cast<memref::AllocaOp>(clonedOp);
+
+    for (Operation *user : entry.second)
+      user->replaceUsesOfWith(allocaOp.getResult(), newAlloca.getResult());
+
+    if (!initStores.empty() || !affineInitStores.empty()) {
+      builder.setInsertionPointAfter(newAlloca);
+      for (memref::StoreOp store : initStores)
+        builder.clone(*store.getOperation());
+      for (affine::AffineStoreOp store : affineInitStores)
+        builder.clone(*store.getOperation());
+      builder.setInsertionPointToStart(&body);
+    }
+  }
+}
+} // namespace
 
 ///===----------------------------------------------------------------------===///
 // Pass Implementation
@@ -75,12 +178,22 @@ private:
   ArtsAnalysisManager *AM = nullptr;
   SetVector<Operation *> opsToRemove;
 };
+
+struct EdtAllocaSinkingPass
+    : public arts::EdtAllocaSinkingBase<EdtAllocaSinkingPass> {
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    module.walk([&](EdtOp edt) { sinkExternalAllocasInEdt(edt); });
+  }
+};
 } // namespace
 
 void EdtPass::runOnOperation() {
   module = getOperation();
   ARTS_INFO_HEADER(EdtPass);
   ARTS_DEBUG_REGION(module.dump(););
+
+  module.walk([&](EdtOp edt) { sinkExternalAllocasInEdt(edt); });
 
   if (runAnalysis) {
     ARTS_INFO("Running EDT pass with analysis");
@@ -92,6 +205,10 @@ void EdtPass::runOnOperation() {
     inlineNoDepEdts();
     processSyncTaskEdts();
   }
+
+  /// Re-run alloca sinking after EDT rewrites to keep task-local buffers inside
+  /// their regions.
+  module.walk([&](EdtOp edt) { sinkExternalAllocasInEdt(edt); });
 
   /// Remove ops marked for removal
   ARTS_DEBUG("Ops to remove: " << opsToRemove.size());
@@ -662,6 +779,9 @@ namespace mlir {
 namespace arts {
 std::unique_ptr<Pass> createEdtPass(ArtsAnalysisManager *AM, bool runAnalysis) {
   return std::make_unique<EdtPass>(AM, runAnalysis);
+}
+std::unique_ptr<Pass> createEdtAllocaSinkingPass() {
+  return std::make_unique<EdtAllocaSinkingPass>();
 }
 } // namespace arts
 } // namespace mlir

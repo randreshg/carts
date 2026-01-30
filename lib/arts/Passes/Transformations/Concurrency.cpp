@@ -186,6 +186,14 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
   if (edtOp.getWorkers().has_value())
     return;
 
+  /// If no config file is present, avoid forcing a compile-time worker count.
+  /// Let the runtime query decide (arts.get_total_workers).
+  if (!abstractMachine->hasConfigFile()) {
+    ARTS_WARN("No arts.cfg; using runtime worker count for parallel EDT");
+    edtOp.setConcurrency(EdtConcurrency::intranode);
+    return;
+  }
+
   /// Determine parallelism strategy based on abstract machine
   int numWorkers = 0;
   EdtConcurrency concurrencyType = EdtConcurrency::intranode;

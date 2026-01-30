@@ -351,18 +351,14 @@ void setupConcurrency(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createConcurrencyPass(AM));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createForLoweringPass());
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(createCSEPass());
 }
 
 /// Concurrency optimization passes.
 void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
-  /// Remove dead code after the concurrency pass.
-  pm.addPass(arts::createDeadCodeEliminationPass());
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(createCSEPass());
-  /// Convert parallel EDTs into single EDTs.
+  /// Convert parallel EDTs into single EDTs (also sinks external allocas).
   pm.addPass(arts::createEdtPass(AM, /*runAnalysis*/ false));
+  /// Remove dead code after EDT transformations.
+  pm.addPass(arts::createDeadCodeEliminationPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(arts::createEpochOptPass());
@@ -374,6 +370,8 @@ void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createArtsHoistingPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
+  pm.addPass(arts::createEdtAllocaSinkingPass());
+  pm.addPass(arts::createDeadCodeEliminationPass());
   pm.addPass(createMem2Reg());
 }
 
@@ -388,6 +386,8 @@ void setupEpochs(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 
 /// Pre-lowering passes.
 void setupPreLowering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
+  /// Ensure task-local stack buffers are sunk before lowering.
+  pm.addPass(arts::createEdtAllocaSinkingPass());
   pm.addPass(arts::createParallelEdtLoweringPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
