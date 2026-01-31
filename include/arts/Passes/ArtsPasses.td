@@ -13,11 +13,8 @@ include "mlir/Rewrite/PassUtil.td"
 def ArtsInliner : Pass<"arts-inliner", "mlir::ModuleOp"> {
   let summary = "Inline functions in the program";
   let dependentDialects = [
-    "memref::MemRefDialect",
-    "LLVM::LLVMDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "polygeist::PolygeistDialect"
+    "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
+    "arts::ArtsDialect", "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createArtsInlinerPass()";
 }
@@ -40,17 +37,14 @@ def CollectMetadata : Pass<"collect-metadata", "mlir::ModuleOp"> {
     This preserves high-level semantic information through OpenMP transformations.
   }];
   let dependentDialects = [
-    "memref::MemRefDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "arith::ArithDialect",
-    "affine::AffineDialect"
+    "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",
+    "arith::ArithDialect", "affine::AffineDialect"
   ];
   let options = [
     Option<"exportMetadata", "export-metadata", "bool", "false",
            "Export metadata to JSON file after collection">,
-    Option<"metadataFile", "metadata-file", "std::string", "\".carts-metadata.json\"",
-           "Path to metadata JSON file for export">
+    Option<"metadataFile", "metadata-file", "std::string",
+           "\".carts-metadata.json\"", "Path to metadata JSON file for export">
   ];
   let constructor = "mlir::arts::createCollectMetadataPass()";
 }
@@ -63,25 +57,17 @@ def CanonicalizeMemrefs : Pass<"canonicalize-memrefs", "mlir::ModuleOp"> {
     rewrites pointer-based accesses to direct memref indexed accesses.
   }];
   let dependentDialects = [
-    "memref::MemRefDialect",
-    "LLVM::LLVMDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "arith::ArithDialect",
-    "polygeist::PolygeistDialect"
+    "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
+    "arts::ArtsDialect", "arith::ArithDialect", "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createCanonicalizeMemrefsPass()";
 }
 
-
 def ConvertOpenMPToArts : Pass<"convert-openmp-to-arts", "mlir::ModuleOp"> {
   let summary = "Convert OpenMP functions to ARTS";
   let dependentDialects = [
-    "memref::MemRefDialect",
-    "omp::OpenMPDialect",
-    "LLVM::LLVMDialect",
-    "arts::ArtsDialect",
-    "polygeist::PolygeistDialect"
+    "memref::MemRefDialect", "omp::OpenMPDialect", "LLVM::LLVMDialect",
+    "arts::ArtsDialect", "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createConvertOpenMPtoArtsPass()";
 }
@@ -98,23 +84,18 @@ def DeadCodeElimination : Pass<"arts-dce", "mlir::ModuleOp"> {
     This is particularly useful after openmp-to-arts conversion where OMP
     dependency proxy allocas become unused.
   }];
-  let dependentDialects = [
-    "memref::MemRefDialect"
-  ];
+  let dependentDialects = ["memref::MemRefDialect"];
   let constructor = "mlir::arts::createDeadCodeEliminationPass()";
 }
 
 def Db : Pass<"db", "mlir::ModuleOp"> {
   let summary = "Adjust datablock modes based on access patterns";
-  let description = [{
-    Adjusts the mode (in/out/inout) of datablock allocations and acquires
-    based on the actual load/store operations performed on them.
-  }];
-  let dependentDialects = [
-    "memref::MemRefDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect"
-  ];
+  let description =
+      [{Adjusts the mode(in / out / inout)
+            of datablock allocations and acquires based on the actual load /
+        store operations performed on them.}];
+  let dependentDialects =
+      ["memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect"];
   let constructor = "mlir::arts::createDbPass(nullptr)";
 }
 
@@ -135,12 +116,8 @@ def DbPartitioning : Pass<"db-partitioning", "mlir::ModuleOp"> {
     - fine: Non-affine accesses use element-wise (fine-grained) partitioning
   }];
   let dependentDialects = [
-    "memref::MemRefDialect",
-    "LLVM::LLVMDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "arith::ArithDialect",
-    "scf::SCFDialect",
+    "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
+    "arts::ArtsDialect", "arith::ArithDialect", "scf::SCFDialect",
     "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createDbPartitioningPass(nullptr)";
@@ -149,30 +126,21 @@ def DbPartitioning : Pass<"db-partitioning", "mlir::ModuleOp"> {
 def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {
   let summary = "Identify Dbs in the program";
   let dependentDialects = [
-    "memref::MemRefDialect",
-    "LLVM::LLVMDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "arith::ArithDialect",
-    "polygeist::PolygeistDialect"
+    "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
+    "arts::ArtsDialect", "arith::ArithDialect", "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createCreateDbsPass(nullptr)";
 }
 
 def DbLowering : Pass<"db-lowering", "mlir::ModuleOp"> {
   let summary = "Lower ARTS DataBlock handles to opaque pointer form";
-  let description = [{
-    This pass converts ARTS DataBlocks from typed memrefs to the opaque pointer
-    representation required by the runtime. It assumes the datablocks are already
-    in canonical form.
-  }];
+  let description =
+      [{This pass converts ARTS DataBlocks from typed memrefs to the opaque
+            pointer representation required by the runtime
+                .It assumes the datablocks are already in canonical form.}];
   let dependentDialects = [
-    "memref::MemRefDialect",
-    "LLVM::LLVMDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "arith::ArithDialect",
-    "polygeist::PolygeistDialect"
+    "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
+    "arts::ArtsDialect", "arith::ArithDialect", "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createDbLoweringPass()";
 }
@@ -180,48 +148,33 @@ def DbLowering : Pass<"db-lowering", "mlir::ModuleOp"> {
 def Edt : Pass<"edt", "mlir::ModuleOp"> {
   let summary = "Optimize EDTs";
   let dependentDialects = [
-    "memref::MemRefDialect",
-    "LLVM::LLVMDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "arith::ArithDialect",
-    "polygeist::PolygeistDialect"
+    "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
+    "arts::ArtsDialect", "arith::ArithDialect", "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createEdtPass(nullptr, true)";
-  let options = [
-    Option<"runAnalysis", "run-analysis", "bool", /*default=*/"true",
-           "Enable EDT analysis.">
-  ];
+  let options = [Option<"runAnalysis", "run-analysis", "bool",
+                        /*default=*/"true", "Enable EDT analysis.">];
 }
 
 def EdtAllocaSinking : Pass<"edt-alloca-sinking", "mlir::ModuleOp"> {
   let summary = "Clone external stack allocas into EDT regions";
-  let dependentDialects = [
-    "memref::MemRefDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect"
-  ];
+  let dependentDialects =
+      ["memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect"];
   let constructor = "mlir::arts::createEdtAllocaSinkingPass()";
 }
 
 def Concurrency : Pass<"concurrency", "mlir::ModuleOp"> {
-  let summary = "Build EDT concurrency graph and apply concurrency-driven cleanups";
-  let dependentDialects = [
-    "func::FuncDialect",
-    "arts::ArtsDialect"
-  ];
+  let summary =
+      "Build EDT concurrency graph and apply concurrency-driven cleanups";
+  let dependentDialects = ["func::FuncDialect", "arts::ArtsDialect"];
   let constructor = "mlir::arts::createConcurrencyPass(nullptr)";
 }
 
 def CreateEpochs : Pass<"create-epochs", "mlir::ModuleOp"> {
   let summary = "Analyzes the program and creates ARTS epochs";
   let dependentDialects = [
-    "memref::MemRefDialect",
-    "LLVM::LLVMDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "arith::ArithDialect",
-    "polygeist::PolygeistDialect"
+    "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
+    "arts::ArtsDialect", "arith::ArithDialect", "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createCreateEpochsPass()";
 }
@@ -229,29 +182,24 @@ def CreateEpochs : Pass<"create-epochs", "mlir::ModuleOp"> {
 def ConvertArtsToLLVM : Pass<"convert-arts-to-llvm", "mlir::ModuleOp"> {
   let summary = "Convert ARTS Dialect to LLVM Dialect";
   let dependentDialects = [
-    "memref::MemRefDialect",
-    "LLVM::LLVMDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "arith::ArithDialect",
-    "polygeist::PolygeistDialect"
+    "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
+    "arts::ArtsDialect", "arith::ArithDialect", "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createConvertArtsToLLVMPass()";
   let options = [
-    Option<"debug", "debug", "bool", /*default=*/"false",
-           "Enable debug mode.">,
+    Option<"debug", "debug", "bool", /*default=*/"false", "Enable debug mode.">,
   ];
 }
 
-def EdtInvariantCodeMotion : Pass<"edt-invariant-code-motion", "mlir::ModuleOp"> {
+def EdtInvariantCodeMotion
+    : Pass<"edt-invariant-code-motion", "mlir::ModuleOp"> {
   let summary = "Hoist invariant operations from arts edt regions";
-  let dependentDialects = [
-    "arts::ArtsDialect"
-  ];
+  let dependentDialects = ["arts::ArtsDialect"];
   let constructor = "mlir::arts::createEdtInvariantCodeMotionPass()";
 }
 
-def ArtsDataPointerHoisting : Pass<"arts-data-pointer-hoisting", "mlir::ModuleOp"> {
+def ArtsDataPointerHoisting
+    : Pass<"arts-data-pointer-hoisting", "mlir::ModuleOp"> {
   let summary = "Hoist data pointer loads from deps struct out of loops";
   let description = [{
     This pass hoists llvm.load operations that extract data pointers from the
@@ -268,8 +216,8 @@ def ArtsDataPointerHoisting : Pass<"arts-data-pointer-hoisting", "mlir::ModuleOp
     ```mlir
     scf.for %i = ... {
       scf.for %j = ... {
-        %ptr = llvm.load %dep_ptr_addr : !llvm.ptr -> !llvm.ptr
-        %val = polygeist.load %ptr[%i, %j] : memref<?x?xf64>
+        % ptr = llvm.load % dep_ptr_addr : !llvm.ptr->!llvm.ptr % val =
+                    polygeist.load % ptr[% i, % j] : memref < ? x ? xf64 >
       }
     }
     ```
@@ -278,55 +226,44 @@ def ArtsDataPointerHoisting : Pass<"arts-data-pointer-hoisting", "mlir::ModuleOp
     %ptr = llvm.load %dep_ptr_addr : !llvm.ptr -> !llvm.ptr
     scf.for %i = ... {
       scf.for %j = ... {
-        %val = polygeist.load %ptr[%i, %j] : memref<?x?xf64>
+        % val = polygeist.load % ptr[% i, % j] : memref < ? x ? xf64 >
       }
     }
     ```
   }];
-  let dependentDialects = [
-    "arts::ArtsDialect",
-    "LLVM::LLVMDialect",
-    "scf::SCFDialect"
-  ];
+  let dependentDialects =
+      ["arts::ArtsDialect", "LLVM::LLVMDialect", "scf::SCFDialect"];
   let constructor = "mlir::arts::createDataPointerHoistingPass()";
 }
 
-def EdtPtrRematerialization : Pass<"edt-ptr-rematerialization", "mlir::ModuleOp"> {
+def EdtPtrRematerialization
+    : Pass<"edt-ptr-rematerialization", "mlir::ModuleOp"> {
   let summary = "Rematerialize pointer dependencies in EDTs.";
-  let description = [{
-    This pass rematerializes pointer dependencies in event-driven tasks (EDTs) 
-    to optimize memory usage and data movement.
-  }];
+  let description =
+      [{This pass rematerializes pointer dependencies in event -
+        driven tasks(EDTs) to optimize memory usage and data movement.}];
   let constructor = "mlir::arts::createEdtPtrRematerializationPass()";
 }
 
 def EpochLowering : Pass<"epoch-lowering", "mlir::ModuleOp"> {
   let summary = "Lower ARTS epochs and propagate epoch GUIDs to EDTs";
   let dependentDialects = [
-    "memref::MemRefDialect",
-    "LLVM::LLVMDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "arith::ArithDialect",
-    "polygeist::PolygeistDialect"
+    "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
+    "arts::ArtsDialect", "arith::ArithDialect", "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createEpochLoweringPass()";
 }
 
 def ParallelEdtLowering : Pass<"parallel-edt-lowering", "mlir::ModuleOp"> {
   let summary = "Lower ARTS parallel EDTs to task graphs";
-  let description = [{
-    This pass transforms parallel EDT operations that contain loop constructs into
-    epoch-wrapped task graphs. It must execute before datablock lowering to ensure
-    proper dependency management.
-  }];
+  let description = [{This pass transforms parallel EDT operations that contain
+                          loop constructs into epoch -
+                      wrapped task graphs
+                          .It must execute before datablock lowering to ensure
+                              proper dependency management.}];
   let dependentDialects = [
-    "memref::MemRefDialect",
-    "LLVM::LLVMDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "arith::ArithDialect",
-    "scf::SCFDialect",
+    "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
+    "arts::ArtsDialect", "arith::ArithDialect", "scf::SCFDialect",
     "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createParallelEdtLoweringPass()";
@@ -340,12 +277,8 @@ def ForLowering : Pass<"for-lowering", "mlir::ModuleOp"> {
     datablocks, and generating a task EDT with a local scf.for over the chunk.
   }];
   let dependentDialects = [
-    "memref::MemRefDialect",
-    "LLVM::LLVMDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "arith::ArithDialect",
-    "scf::SCFDialect",
+    "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
+    "arts::ArtsDialect", "arith::ArithDialect", "scf::SCFDialect",
     "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createForLoweringPass()";
@@ -354,12 +287,8 @@ def ForLowering : Pass<"for-lowering", "mlir::ModuleOp"> {
 def EdtLowering : Pass<"edt-lowering", "mlir::ModuleOp"> {
   let summary = "Lower ARTS EDTs to LLVM";
   let dependentDialects = [
-    "memref::MemRefDialect",
-    "LLVM::LLVMDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "arith::ArithDialect",
-    "polygeist::PolygeistDialect"
+    "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
+    "arts::ArtsDialect", "arith::ArithDialect", "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createEdtLoweringPass()";
 }
@@ -373,11 +302,8 @@ def ArtsLoopFusion : Pass<"arts-loop-fusion", "mlir::ModuleOp"> {
     Uses LoopAnalysis for enhanced dependency checking.
   }];
   let dependentDialects = [
-    "memref::MemRefDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "arith::ArithDialect",
-    "scf::SCFDialect"
+    "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",
+    "arith::ArithDialect", "scf::SCFDialect"
   ];
   let constructor = "mlir::arts::createLoopFusionPass(nullptr)";
 }
@@ -385,21 +311,23 @@ def ArtsLoopFusion : Pass<"arts-loop-fusion", "mlir::ModuleOp"> {
 def ArtsEpochOpt : Pass<"arts-epoch-opt", "mlir::ModuleOp"> {
   let summary = "Combined epoch optimizations (fusion + loop fusion)";
   let description = [{
-    Runs epoch-related optimizations:
-    1. Epoch fusion - merge independent consecutive epochs when their datablock
-       accesses are independent (no shared writes)
-    2. Worker loop fusion - merge compatible worker loops within epochs when they
-       have identical bounds and no loop-carried values
+    Runs epoch - related
+    optimizations:
+        1. Epoch fusion -
+            merge independent consecutive epochs when their datablock accesses
+                are independent(no shared writes) 2. Worker loop fusion -
+            merge compatible worker loops within epochs when they have identical
+                bounds and no loop -
+            carried values
   }];
   let options = [
-    Option<"enableEpochFusion", "epoch-fusion", "bool", "true", "Enable epoch fusion">,
-    Option<"enableLoopFusion", "loop-fusion", "bool", "true", "Enable worker loop fusion">
+    Option<"enableEpochFusion", "epoch-fusion", "bool", "true",
+           "Enable epoch fusion">,
+    Option<"enableLoopFusion", "loop-fusion", "bool", "true",
+           "Enable worker loop fusion">
   ];
-  let dependentDialects = [
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "scf::SCFDialect"
-  ];
+  let dependentDialects =
+      ["func::FuncDialect", "arts::ArtsDialect", "scf::SCFDialect"];
   let constructor = "mlir::arts::createEpochOptPass()";
 }
 
@@ -413,32 +341,42 @@ def ArtsHoisting : Pass<"arts-hoisting", "mlir::ModuleOp"> {
       loop-invariant
   }];
   let options = [
-    Option<"enableAcquireHoisting", "acquire", "bool", "true", "Hoist db_acquire in epochs">,
+    Option<"enableAcquireHoisting", "acquire", "bool", "true",
+           "Hoist db_acquire in epochs">,
     Option<"enableRefHoisting", "ref", "bool", "true", "Hoist db_ref in EDTs">
   ];
   let dependentDialects = [
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "scf::SCFDialect",
+    "func::FuncDialect", "arts::ArtsDialect", "scf::SCFDialect",
     "memref::MemRefDialect"
   ];
   let constructor = "mlir::arts::createArtsHoistingPass()";
 }
 
+def BlockLoopStripMining : Pass<"block-stripmine", "mlir::func::FuncOp"> {
+  let summary = "Strip-mine innermost loops with block-partitioned indexing";
+  let description = [{
+    Matches innermost loops that use div/rem by a constant block size and
+    block-partitioned db_ref patterns. Rewrites them into a block loop and
+    local index loop to remove per-iteration div/rem overhead and reuse db_ref.
+  }];
+  let dependentDialects = [
+    "func::FuncDialect", "scf::SCFDialect", "arith::ArithDialect",
+    "arts::ArtsDialect"
+  ];
+  let constructor = "mlir::arts::createBlockLoopStripMiningPass()";
+}
+
 def LoopReordering : Pass<"loop-reordering", "mlir::ModuleOp"> {
   let summary = "Reorder inner loops for cache-optimal access patterns";
   let description = [{
-    Applies loop reordering transformations based on metadata collected during
-    the CollectMetadata phase. This pass reads the `reorder_nest_to` field from
-    LoopMetadata (populated by LoopAnalyzer::analyzeLoopReordering) which contains
-    the target order as a sequence of arts.ids.
-  }];
+      Applies loop reordering transformations based on metadata collected during
+          the CollectMetadata phase
+              .This pass reads the `reorder_nest_to` field from LoopMetadata(
+                  populated by LoopAnalyzer::analyzeLoopReordering)
+                  which contains the target order as a sequence of arts.ids.}];
   let dependentDialects = [
-    "memref::MemRefDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "arith::ArithDialect",
-    "scf::SCFDialect"
+    "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",
+    "arith::ArithDialect", "scf::SCFDialect"
   ];
   let constructor = "mlir::arts::createLoopReorderingPass(nullptr)";
 }
@@ -449,11 +387,8 @@ def ArtsLoopTransforms : Pass<"arts-loop-transforms", "mlir::ModuleOp"> {
     Applies ARTS-specific loop transformations for reduction patterns inside arts.for.
   }];
   let dependentDialects = [
-    "memref::MemRefDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "arith::ArithDialect",
-    "scf::SCFDialect"
+    "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",
+    "arith::ArithDialect", "scf::SCFDialect"
   ];
   let constructor = "mlir::arts::createLoopTransformsPass(nullptr)";
   let options = [
@@ -475,24 +410,21 @@ def ScalarReplacement : Pass<"arts-scalar-replacement", "mlir::ModuleOp"> {
     to register-based iter_args patterns to enable LLVM vectorization.
   }];
   let dependentDialects = [
-    "scf::SCFDialect",
-    "memref::MemRefDialect",
-    "arith::ArithDialect",
+    "scf::SCFDialect", "memref::MemRefDialect", "arith::ArithDialect",
     "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createScalarReplacementPass()";
 }
 
-def LoopVectorizationHints : Pass<"arts-loop-vectorization-hints", "mlir::ModuleOp"> {
+def LoopVectorizationHints
+    : Pass<"arts-loop-vectorization-hints", "mlir::ModuleOp"> {
   let summary = "Attach LLVM loop vectorization hints to EDT function loops";
   let description = [{
     This pass attaches LLVM loop optimization hints to loop backedges in EDT
     functions. It uses MLIR's native LoopAnnotationAttr which automatically
     translates to !llvm.loop metadata during LLVM IR emission.
   }];
-  let dependentDialects = [
-    "LLVM::LLVMDialect"
-  ];
+  let dependentDialects = ["LLVM::LLVMDialect"];
   let constructor = "mlir::arts::createLoopVectorizationHintsPass()";
 }
 
@@ -512,16 +444,12 @@ def VerifyMetadata : Pass<"verify-metadata", "mlir::ModuleOp"> {
     diagnose output contains complete information for all entities.
   }];
   let dependentDialects = [
-    "memref::MemRefDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "affine::AffineDialect",
-    "scf::SCFDialect"
+    "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",
+    "affine::AffineDialect", "scf::SCFDialect"
   ];
-  let options = [
-    Option<"failOnMissing", "fail-on-missing", "bool", "false",
-           "Fail compilation if any entities are missing metadata">
-  ];
+  let options =
+      [Option<"failOnMissing", "fail-on-missing", "bool", "false",
+              "Fail compilation if any entities are missing metadata">];
   let constructor = "mlir::arts::createVerifyMetadataPass(nullptr)";
 }
 

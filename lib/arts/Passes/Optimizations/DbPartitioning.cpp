@@ -527,8 +527,7 @@ static void computeSizesFromDecision(DbAllocOp allocOp,
       }
 
       for (unsigned p = 0; p < nPartDims; ++p) {
-        unsigned dim =
-            p < partitionedDims.size() ? partitionedDims[p] : p;
+        unsigned dim = p < partitionedDims.size() ? partitionedDims[p] : p;
         if (dim >= elemSizes.size())
           continue;
         Value bs = blockSizes[p];
@@ -538,7 +537,8 @@ static void computeSizesFromDecision(DbAllocOp allocOp,
 
         Value dimSize = elemSizes[dim];
 
-        /// numBlocks = ceil(dim / blockSize) = (dim + blockSize - 1) / blockSize
+        /// numBlocks = ceil(dim / blockSize) = (dim + blockSize - 1) /
+        /// blockSize
         Value dimI64 =
             builder.create<arith::IndexCastOp>(loc, i64Type, dimSize);
         Value bsI64 = builder.create<arith::IndexCastOp>(loc, i64Type, bs);
@@ -568,7 +568,8 @@ static void computeSizesFromDecision(DbAllocOp allocOp,
 
         Value dim = elemSizes[d];
 
-        /// numBlocks = ceil(dim / blockSize) = (dim + blockSize - 1) / blockSize
+        /// numBlocks = ceil(dim / blockSize) = (dim + blockSize - 1) /
+        /// blockSize
         Value dimI64 = builder.create<arith::IndexCastOp>(loc, i64Type, dim);
         Value bsI64 = builder.create<arith::IndexCastOp>(loc, i64Type, bs);
         Value sum = builder.create<arith::AddIOp>(loc, dimI64, bsI64);
@@ -1625,9 +1626,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       Value partitionOffset =
           pickRepresentativePartitionOffset(offsetVals, &offsetIdx);
       if (partitionOffset) {
-        auto dimOpt =
-            acqNode->getPartitionOffsetDim(partitionOffset,
-                                           /*requireLeading=*/false);
+        auto dimOpt = acqNode->getPartitionOffsetDim(partitionOffset,
+                                                     /*requireLeading=*/false);
         if (!dimOpt) {
           ARTS_DEBUG("  Partition offset incompatible with access pattern; "
                      "disabling block capability");
@@ -2331,8 +2331,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   if (decision.isBlock()) {
     unsigned nPartDims = blockSizesForPlan.size();
     if (nPartDims > 0) {
-      auto dimsEqual = [](ArrayRef<unsigned> a,
-                          ArrayRef<unsigned> b) -> bool {
+      auto dimsEqual = [](ArrayRef<unsigned> a, ArrayRef<unsigned> b) -> bool {
         if (a.size() != b.size())
           return false;
         for (unsigned i = 0; i < a.size(); ++i) {
@@ -2412,8 +2411,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       for (auto &info : acquireInfos) {
         if (info.needsFullRange || info.partitionDims.empty())
           continue;
-        bool same =
-            info.partitionDims.size() == partitionedDimsForPlan.size();
+        bool same = info.partitionDims.size() == partitionedDimsForPlan.size();
         if (same) {
           for (unsigned i = 0; i < info.partitionDims.size(); ++i) {
             if (info.partitionDims[i] != partitionedDimsForPlan[i]) {

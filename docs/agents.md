@@ -1,4 +1,4 @@
-# CARTS Optimization Analysis Guide
+# CARTS Analysis Guide
 
 This guide teaches agents and developers how to understand, run, and debug CARTS optimizations. It covers the complete pipeline from C/C++ source to ARTS runtime executable.
 
