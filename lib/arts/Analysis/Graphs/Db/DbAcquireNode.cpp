@@ -298,7 +298,48 @@ static LoopNode *findBestLoopNode(ArrayRef<LoopNode *> loopNodes,
 }
 
 /// Detect indirect (data-dependent) indices derived from memory loads.
-static bool isIndirectIndex(Value idx, Value partitionOffset, int depth = 0) {
+static bool isIndirectIndex(Value idx, Value partitionOffset, int depth = 0);
+
+/// Detect data-dependent loop bounds for a given induction variable.
+static bool loopBoundsAreIndirect(BlockArgument iv, Value partitionOffset,
+                                  int depth) {
+  if (depth > 8)
+    return false;
+
+  Operation *parentOp = iv.getOwner()->getParentOp();
+  if (!parentOp)
+    return false;
+
+  if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+    if (iv != forOp.getInductionVar())
+      return false;
+    if (isIndirectIndex(forOp.getLowerBound(), partitionOffset, depth + 1) ||
+        isIndirectIndex(forOp.getUpperBound(), partitionOffset, depth + 1) ||
+        isIndirectIndex(forOp.getStep(), partitionOffset, depth + 1))
+      return true;
+    return false;
+  }
+
+  if (auto parOp = dyn_cast<scf::ParallelOp>(parentOp)) {
+    auto ivs = parOp.getInductionVars();
+    for (auto it : llvm::enumerate(ivs)) {
+      if (it.value() != iv)
+        continue;
+      unsigned idx = it.index();
+      if (isIndirectIndex(parOp.getLowerBound()[idx], partitionOffset,
+                          depth + 1) ||
+          isIndirectIndex(parOp.getUpperBound()[idx], partitionOffset,
+                          depth + 1) ||
+          isIndirectIndex(parOp.getStep()[idx], partitionOffset, depth + 1))
+        return true;
+      return false;
+    }
+  }
+
+  return false;
+}
+
+static bool isIndirectIndex(Value idx, Value partitionOffset, int depth) {
   if (!idx || depth > 8)
     return false;
 
@@ -322,16 +363,16 @@ static bool isIndirectIndex(Value idx, Value partitionOffset, int depth = 0) {
     Operation *parentOp = blockArg.getOwner()->getParentOp();
     if (auto forOp = dyn_cast<affine::AffineForOp>(parentOp)) {
       if (blockArg == forOp.getInductionVar())
-        return false;
+        return loopBoundsAreIndirect(blockArg, partitionOffset, depth + 1);
     }
     if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
       if (blockArg == forOp.getInductionVar())
-        return false;
+        return loopBoundsAreIndirect(blockArg, partitionOffset, depth + 1);
     }
     if (auto parOp = dyn_cast<scf::ParallelOp>(parentOp)) {
       for (Value iv : parOp.getInductionVars()) {
         if (blockArg == iv)
-          return false;
+          return loopBoundsAreIndirect(blockArg, partitionOffset, depth + 1);
       }
     }
     return true;
@@ -1022,15 +1063,19 @@ DbAcquireNode::getPartitionOffsetDim(Value offset, bool requireLeading) {
         return std::nullopt;
       }
 
-      for (Value idx : fullChain) {
+      /// Only reject indirect indices on the PARTITIONED dimension. Indirect
+      /// indices on other (non-partitioned) dims do not affect block selection
+      /// along this offset and are safe for block partitioning.
+      unsigned matchedIdxPos = memrefStart + matchedPos;
+      if (matchedIdxPos < fullChain.size()) {
+        Value idx = fullChain[matchedIdxPos];
         int64_t constVal;
-        if (ValueUtils::getConstantIndex(idx, constVal))
-          continue;
-
-        if (isIndirectIndex(idx, offsetStripped)) {
-          ARTS_DEBUG("  indirect index detected; disabling blocked "
-                     "partitioning");
-          return std::nullopt;
+        if (!ValueUtils::getConstantIndex(idx, constVal)) {
+          if (isIndirectIndex(idx, offsetStripped)) {
+            ARTS_DEBUG("  indirect index detected on partitioned dim; "
+                       "disabling blocked partitioning");
+            return std::nullopt;
+          }
         }
       }
 
@@ -1064,10 +1109,52 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
 }
 
 bool DbAcquireNode::needsFullRange(Value partitionOffset) {
-  /// Case 1: Indirect access can't determine which block to access.
-  if (hasIndirectAccess()) {
-    ARTS_DEBUG("  needsFullRange: indirect access detected");
-    return true;
+  /// Case 1: Indirect access in the PARTITIONED dimension can't determine
+  /// which block to access. Indirect indices in non-partitioned dims are safe.
+  if (partitionOffset) {
+    auto dimOpt = getPartitionOffsetDim(partitionOffset,
+                                        /*requireLeading=*/false);
+    if (dimOpt) {
+      DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+      collectAccessOperations(dbRefToMemOps);
+      bool indirectInPartitionedDim = false;
+      for (auto &[dbRef, memOps] : dbRefToMemOps) {
+        for (Operation *memOp : memOps) {
+          SmallVector<Value> fullChain =
+              DatablockUtils::collectFullIndexChain(dbRef, memOp);
+          unsigned memrefStart = dbRef.getIndices().size();
+          unsigned idxPos = memrefStart + *dimOpt;
+          if (idxPos >= fullChain.size()) {
+            indirectInPartitionedDim = true;
+            break;
+          }
+          Value idx = fullChain[idxPos];
+          int64_t constVal;
+          if (!ValueUtils::getConstantIndex(idx, constVal) &&
+              isIndirectIndex(idx, partitionOffset)) {
+            indirectInPartitionedDim = true;
+            break;
+          }
+        }
+        if (indirectInPartitionedDim)
+          break;
+      }
+      if (indirectInPartitionedDim) {
+        ARTS_DEBUG("  needsFullRange: indirect access in partitioned dim");
+        return true;
+      }
+    } else {
+      /// No reliable partition dim - fall back to conservative check.
+      if (hasIndirectAccess()) {
+        ARTS_DEBUG("  needsFullRange: indirect access detected");
+        return true;
+      }
+    }
+  } else {
+    if (hasIndirectAccess()) {
+      ARTS_DEBUG("  needsFullRange: indirect access detected");
+      return true;
+    }
   }
 
   /// Case 1.5: Variable (non-constant) offset in partitioned dimension.

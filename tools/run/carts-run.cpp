@@ -40,6 +40,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cstdlib>
 
 using namespace llvm;
 using namespace mlir;
@@ -303,19 +304,23 @@ void setupOpenMPToArts(PassManager &pm) {
 /// EDT transformation passes.
 void setupEdtTransforms(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createEdtPass(AM, false));
-  pm.addPass(arts::createEdtInvariantCodeMotionPass());
+  if (!std::getenv("CARTS_DISABLE_EDT_ICM"))
+    pm.addPass(arts::createEdtInvariantCodeMotionPass());
   pm.addPass(arts::createDeadCodeEliminationPass());
   pm.addPass(createSymbolDCEPass());
   pm.addPass(createCSEPass());
-  pm.addPass(arts::createEdtPtrRematerializationPass());
+  if (!std::getenv("CARTS_DISABLE_EDT_PTR_REMAT"))
+    pm.addPass(arts::createEdtPtrRematerializationPass());
 }
 
 /// Loop reordering pass
 void setupLoopReordering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
-  pm.addPass(arts::createLoopReorderingPass(AM));
-  pm.addPass(arts::createLoopTransformsPass(
-      AM, LoopTransformsEnableMatmul, LoopTransformsEnableTiling,
-      LoopTransformsTileJ, LoopTransformsMinTripCount));
+  if (!std::getenv("CARTS_DISABLE_LOOP_REORDERING"))
+    pm.addPass(arts::createLoopReorderingPass(AM));
+  if (!std::getenv("CARTS_DISABLE_LOOP_TRANSFORMS"))
+    pm.addPass(arts::createLoopTransformsPass(
+        AM, LoopTransformsEnableMatmul, LoopTransformsEnableTiling,
+        LoopTransformsTileJ, LoopTransformsMinTripCount));
   pm.addPass(createCSEPass());
 }
 
@@ -387,7 +392,6 @@ void setupEpochs(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 
 /// Pre-lowering passes.
 void setupPreLowering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
-  /// Ensure task-local stack buffers are sunk before lowering.
   pm.addPass(arts::createEdtAllocaSinkingPass());
   pm.addPass(arts::createParallelEdtLoweringPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());

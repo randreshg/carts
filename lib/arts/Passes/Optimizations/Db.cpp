@@ -25,6 +25,7 @@
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/ValueUtils.h"
+#include <cstdlib>
 
 ARTS_DEBUG_SETUP(db);
 
@@ -48,13 +49,6 @@ static bool isConstZero(Value v) {
 static bool isConstOne(Value v) {
   int64_t val = 0;
   return isConstIndex(v, val) && val == 1;
-}
-
-static bool isRemIndex(Value v) {
-  if (!v)
-    return false;
-  v = ValueUtils::stripNumericCasts(v);
-  return v.getDefiningOp<arith::RemUIOp>() || v.getDefiningOp<arith::RemSIOp>();
 }
 
 static bool isSameValueOrConst(Value a, Value b) {
@@ -102,15 +96,11 @@ static bool isIndexFullCoverage(Value idx, Value dimSize,
 
   idx = ValueUtils::stripNumericCasts(idx);
 
-  /// Partitioned-dim local indices are usually rem ops; assume full coverage.
-  if (isRemIndex(idx))
-    return true;
-
   int64_t idxConst = 0;
-  if (isConstIndex(idx, idxConst)) {
-    /// Constant index only covers full range if size == 1.
+  /// Constant index only covers full range if size == 1.
+  if (isConstIndex(idx, idxConst))
+
     return dimConst == 1 && idxConst == 0;
-  }
 
   LoopNode *best = nullptr;
   LoopNode::IVExpr bestExpr;
@@ -270,6 +260,12 @@ bool DbPass::adjustDbModes() {
         newMode = ArtsMode::out;
       else
         newMode = ArtsMode::in;
+
+      if (hasStores && std::getenv("CARTS_FORCE_INOUT")) {
+        ARTS_DEBUG("AcquireOp: " << acqOp
+                                 << " forcing inout mode (CARTS_FORCE_INOUT)");
+        newMode = ArtsMode::inout;
+      }
 
       if (newMode == ArtsMode::out) {
         DbAllocNode *allocNode = acqNode->getRootAlloc();
