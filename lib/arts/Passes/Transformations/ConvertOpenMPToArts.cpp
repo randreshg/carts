@@ -400,6 +400,13 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
     moveOps(src, dst, rewriter, mapper, reductionDecls);
     rewriter.create<arts::YieldOp>(loc);
 
+    /// OpenMP wsloop has an implicit barrier unless nowait is present.
+    /// Insert an explicit ARTS barrier to preserve ordering between loops.
+    if (!op.getNowaitAttr()) {
+      rewriter.setInsertionPointAfter(forOp);
+      rewriter.create<arts::BarrierOp>(loc);
+    }
+
     /// Remove the original wsloop
     rewriter.eraseOp(op);
     return success();

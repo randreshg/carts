@@ -1,7 +1,7 @@
 ///==========================================================================///
 /// File: ArtsHeuristics.cpp
 ///
-/// Centralized heuristics configuration and evaluation for the CARTS compiler.
+/// Heuristics configuration and evaluation for the CARTS compiler.
 ///
 /// This file implements:
 /// - H1.x partitioning heuristics (evaluatePartitioningHeuristics)
@@ -21,6 +21,7 @@
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include <cstdlib>
 
 ARTS_DEBUG_SETUP(heuristics)
 
@@ -65,6 +66,16 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   bool isReadOnly = !ctx.acquires.empty() ? ctx.allReadOnly()
                                           : (ctx.accessMode == ArtsMode::in);
   bool isSingleNode = machine && machine->getNodeCount() == 1;
+  bool hasExplicitFineGrained =
+      llvm::any_of(ctx.acquires, [](const AcquireInfo &info) {
+        if (info.partitionMode == PartitionMode::fine_grained)
+          return true;
+        for (const auto &pinfo : info.partitionInfos) {
+          if (pinfo.isFineGrained() && !pinfo.indices.empty())
+            return true;
+        }
+        return false;
+      });
 
   /// H1.1: Read-Only Single-Node -> Coarse
   /// On a single node with read-only access, there is no write contention to
@@ -112,6 +123,17 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// - Indexed access (data-dependent) requires element-wise partitioning
   /// - Stencil patterns use Stencil mode (block + ESD) for halo handling
   if (patterns.hasStencil) {
+    /// If explicit fine-grained dependences exist (task deps), avoid stencil
+    /// mode and keep element-wise partitioning.
+    if (hasExplicitFineGrained) {
+      unsigned outerRank = ctx.minPinnedDimCount();
+      outerRank = outerRank > 0 ? outerRank : 1;
+      ARTS_DEBUG("H1.3 applied: Stencil with explicit dependences prefers "
+                 "element-wise");
+      return PartitioningDecision::elementWise(
+          ctx, outerRank,
+          "H1.3: Stencil with explicit dependences prefers element-wise");
+    }
     /// Read-only stencil on a single node: coarse avoids ESD/halo overhead
     /// while preserving correctness (shared read-only input).
     if (isSingleNode && isReadOnly) {
