@@ -543,8 +543,9 @@ def main_callback(
 # Counter profile mapping: level -> config file name
 COUNTER_PROFILES = {
     0: "counter.profile-none.cfg",      # All OFF - baseline performance
-    1: "counter.profile-artsid-only.cfg",  # ArtsID metrics for hotspot analysis
-    2: "counter.profile-deep.cfg",       # Full captures for deep profiling
+    1: "counter.profile-timing.cfg",    # Timing only - minimal overhead (DEFAULT)
+    2: "counter.profile-artsid-only.cfg",  # ArtsID metrics for hotspot analysis
+    3: "counter.profile-deep.cfg",       # Full captures for deep profiling
 }
 
 
@@ -559,8 +560,8 @@ def build(
         0, "--debug",
         help="Debug level: 0=off (default), 1=info, 2=full debug"),
     counters_level: int = typer.Option(
-        0, "--counters",
-        help="Counter profile: 0=off (default), 1=artsid, 2=deep"),
+        1, "--counters",
+        help="Counter profile: 0=off, 1=timing (default), 2=artsid, 3=deep"),
 ):
     """Build CARTS project using system clang."""
     config = get_config()

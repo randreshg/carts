@@ -114,15 +114,18 @@ ARTS_USE_METRICS ?= OFF
 # Logging levels
 ARTS_INFO_ENABLED ?= OFF
 ARTS_DEBUG_ENABLED ?= OFF
-# Counter configuration profile (defaults to no counters for baseline performance)
-# Available profiles: counter.profile-none.cfg, counter.profile-artsid-only.cfg, counter.profile-deep.cfg
-COUNTER_CONFIG_PATH ?= $(ARTS_DIR)/counter.profile-none.cfg
+# Counter configuration profile (defaults to timing-only for minimal overhead)
+# Available profiles: counter.profile-none.cfg, counter.profile-timing.cfg, counter.profile-artsid-only.cfg, counter.profile-deep.cfg
+COUNTER_CONFIG_PATH ?= $(ARTS_DIR)/counter.profile-timing.cfg
 
 # Configuration hash file for ARTS build caching
 ARTS_CONFIG_HASH_FILE := $(ARTS_BUILD_DIR)/.arts-build-config
 
+# Hash the content of counter.cfg to detect changes
+COUNTER_CONFIG_HASH := $(shell md5sum $(COUNTER_CONFIG_PATH) 2>/dev/null | cut -d' ' -f1 || echo "no-config")
+
 # Compute current configuration as a string for hashing
-ARTS_CONFIG_STRING := $(ARTS_BUILD_TYPE)|$(ARTS_USE_COUNTERS)|$(ARTS_USE_METRICS)|$(ARTS_INFO_ENABLED)|$(ARTS_DEBUG_ENABLED)|$(COUNTER_CONFIG_PATH)|$(CARTS_LINKER_PATH)
+ARTS_CONFIG_STRING := $(ARTS_BUILD_TYPE)|$(ARTS_USE_COUNTERS)|$(ARTS_USE_METRICS)|$(ARTS_INFO_ENABLED)|$(ARTS_DEBUG_ENABLED)|$(COUNTER_CONFIG_PATH)|$(COUNTER_CONFIG_HASH)|$(CARTS_LINKER_PATH)
 
 arts-download:
 	@if [ ! -d "$(ARTS_DIR)/.git" ]; then \
