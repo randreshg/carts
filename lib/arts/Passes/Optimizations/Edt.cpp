@@ -5,7 +5,6 @@
 /// Dialects
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/EdtUtils.h"
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
@@ -64,28 +63,16 @@ void sinkExternalAllocasInEdt(EdtOp edt) {
           break;
         }
       }
-      if (auto store = dyn_cast<affine::AffineStoreOp>(user)) {
-        if (store.getMemRef() == allocaOp.getResult()) {
-          hasStoreInEdt = true;
-          break;
-        }
-      }
     }
-
-    /// Shared read-only allocas should remain outside the EDT.
-    if (!hasStoreInEdt)
-      continue;
 
     bool hasUnsafeStore = false;
     SmallVector<memref::StoreOp, 4> initStores;
-    SmallVector<affine::AffineStoreOp, 4> affineInitStores;
     for (Operation *user : allocaOp->getUsers()) {
       auto inSameBlock = [&](Operation *op) {
         return op->getBlock() == allocaOp->getBlock();
       };
       auto hasLoopAncestor = [&](Operation *op) {
         return op->getParentOfType<scf::ForOp>() ||
-               op->getParentOfType<affine::AffineForOp>() ||
                op->getParentOfType<scf::IfOp>();
       };
       if (auto store = dyn_cast<memref::StoreOp>(user)) {
@@ -99,34 +86,29 @@ void sinkExternalAllocasInEdt(EdtOp edt) {
         initStores.push_back(store);
         continue;
       }
-      if (auto store = dyn_cast<affine::AffineStoreOp>(user)) {
-        if (store.getMemRef() != allocaOp.getResult())
-          continue;
-        if (!inSameBlock(store.getOperation()) ||
-            hasLoopAncestor(store.getOperation())) {
-          hasUnsafeStore = true;
-          break;
-        }
-        affineInitStores.push_back(store);
-        continue;
-      }
     }
 
     if (hasUnsafeStore)
       continue;
 
+    /// If the alloca is only read inside the EDT, sink it only when we can
+    /// safely clone its initialization stores. This preserves scalar values
+    /// that would otherwise be uninitialized after outlining.
+    if (!hasStoreInEdt && initStores.empty())
+      continue;
+
     Operation *clonedOp = builder.clone(*allocaOp.getOperation());
     auto newAlloca = cast<memref::AllocaOp>(clonedOp);
+    IRMapping mapping;
+    mapping.map(allocaOp.getResult(), newAlloca.getResult());
 
     for (Operation *user : entry.second)
       user->replaceUsesOfWith(allocaOp.getResult(), newAlloca.getResult());
 
-    if (!initStores.empty() || !affineInitStores.empty()) {
+    if (!initStores.empty()) {
       builder.setInsertionPointAfter(newAlloca);
       for (memref::StoreOp store : initStores)
-        builder.clone(*store.getOperation());
-      for (affine::AffineStoreOp store : affineInitStores)
-        builder.clone(*store.getOperation());
+        builder.clone(*store.getOperation(), mapping);
       builder.setInsertionPointToStart(&body);
     }
   }

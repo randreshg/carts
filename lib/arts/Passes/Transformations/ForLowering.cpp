@@ -315,8 +315,6 @@ static bool canCloneOperation(Operation *op) {
     return true;
   if (isMemoryEffectFree(op))
     return true;
-  if (isa<memref::AllocaOp>(op))
-    return true;
   if (isa<arts::DbRefOp>(op))
     return true;
   if (isa<memref::LoadOp>(op))
@@ -455,18 +453,39 @@ static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPointToStart(&taskBlock);
 
-  auto isConstLikeValue = [](Value v) {
-    if (!v)
-      return false;
-    if (Operation *def = v.getDefiningOp())
-      if (def->hasTrait<OpTrait::ConstantLike>())
-        return true;
-    int64_t idxVal = 0;
-    return ValueUtils::getConstantIndex(v, idxVal);
-  };
-
   for (const auto &entry : usesByAlloca) {
     auto allocaOp = cast<memref::AllocaOp>(entry.first);
+    bool hasStoreInEdt = false;
+    for (Operation *user : entry.second) {
+      if (auto store = dyn_cast<memref::StoreOp>(user)) {
+        if (store.getMemRef() == allocaOp.getResult()) {
+          hasStoreInEdt = true;
+          break;
+        }
+      }
+    }
+
+    bool hasStoreOutsideEdt = false;
+    for (Operation *user : allocaOp->getUsers()) {
+      if (auto store = dyn_cast<memref::StoreOp>(user)) {
+        if (store.getMemRef() != allocaOp.getResult())
+          continue;
+        if (!taskEdtRegion->isAncestor(store->getParentRegion())) {
+          hasStoreOutsideEdt = true;
+          break;
+        }
+      }
+    }
+
+    /// If the alloca is initialized outside and only read inside the EDT,
+    /// keep the original alloca to preserve its initialized value only when
+    /// the original alloca remains visible to the task EDT.
+    Region *allocaRegion = allocaOp->getParentRegion();
+    bool allocaVisible =
+        allocaRegion && allocaRegion->isAncestor(taskEdtRegion);
+    if (hasStoreOutsideEdt && !hasStoreInEdt && allocaVisible)
+      continue;
+
     Operation *clonedOp = builder.clone(*allocaOp.getOperation(), mapper);
     auto newAlloca = cast<memref::AllocaOp>(clonedOp);
 
@@ -475,40 +494,32 @@ static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
 
     mapper.map(allocaOp.getResult(), newAlloca.getResult());
 
-    /// Clone constant initialization stores for this alloca when available.
+    /// Clone safe initialization stores for this alloca when available.
     SmallVector<memref::StoreOp, 4> initStores;
-    SmallVector<affine::AffineStoreOp, 4> affineInitStores;
+    bool hasUnsafeStore = false;
     for (Operation *user : allocaOp->getUsers()) {
+      auto hasLoopAncestor = [&](Operation *op) {
+        return op->getParentOfType<scf::ForOp>() ||
+               op->getParentOfType<scf::IfOp>();
+      };
       if (auto store = dyn_cast<memref::StoreOp>(user)) {
         if (store.getMemRef() != allocaOp.getResult())
           continue;
-        if (store->getBlock() != allocaOp->getBlock())
-          continue;
-        bool allConst = isConstLikeValue(store.getValueToStore());
-        for (Value idx : store.getIndices())
-          allConst &= isConstLikeValue(idx);
-        if (allConst)
-          initStores.push_back(store);
-      }
-      if (auto store = dyn_cast<affine::AffineStoreOp>(user)) {
-        if (store.getMemRef() != allocaOp.getResult())
-          continue;
-        if (store->getBlock() != allocaOp->getBlock())
-          continue;
-        bool allConst = isConstLikeValue(store.getValueToStore());
-        for (Value idx : store.getIndices())
-          allConst &= isConstLikeValue(idx);
-        if (allConst)
-          affineInitStores.push_back(store);
+        if (store->getBlock() != allocaOp->getBlock() ||
+            hasLoopAncestor(store.getOperation())) {
+          hasUnsafeStore = true;
+          break;
+        }
+        initStores.push_back(store);
       }
     }
 
-    if (!initStores.empty() || !affineInitStores.empty()) {
+    if (!hasUnsafeStore && !initStores.empty()) {
+      IRMapping storeMapper;
+      storeMapper.map(allocaOp.getResult(), newAlloca.getResult());
       builder.setInsertionPointAfter(newAlloca);
       for (memref::StoreOp store : initStores)
-        builder.clone(*store.getOperation(), mapper);
-      for (affine::AffineStoreOp store : affineInitStores)
-        builder.clone(*store.getOperation(), mapper);
+        builder.clone(*store.getOperation(), storeMapper);
       builder.setInsertionPointToStart(&taskBlock);
     }
   }

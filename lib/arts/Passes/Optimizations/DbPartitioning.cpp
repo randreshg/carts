@@ -45,6 +45,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 
 #include "arts/Transforms/Datablock/DbRewriter.h"
@@ -287,8 +288,34 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
     info.hasIndirectAccess = acqNode->hasIndirectAccess();
 
   if (acqNode) {
-    if (acqNode->getAccessPattern() == AccessPattern::Stencil)
-      info.mode = PartitionMode::stencil;
+    if (acqNode->getAccessPattern() == AccessPattern::Stencil) {
+      /// Task-based dependences provide explicit fine-grained indices and
+      /// should NOT trigger stencil/ESD mode. Stencil mode applies to
+      /// parallel-for style patterns where block partitioning is desired.
+      bool hasExplicitFineGrained = false;
+      if (!acquire.getPartitionIndices().empty())
+        hasExplicitFineGrained = true;
+      if (auto mode = acquire.getPartitionMode()) {
+        if (*mode == PartitionMode::fine_grained)
+          hasExplicitFineGrained = true;
+      }
+      if (acquire.hasMultiplePartitionEntries()) {
+        bool allFine = true;
+        for (size_t entryIdx = 0; entryIdx < acquire.getNumPartitionEntries();
+             ++entryIdx) {
+          if (acquire.getPartitionEntryMode(entryIdx) !=
+              PartitionMode::fine_grained) {
+            allFine = false;
+            break;
+          }
+        }
+        if (allFine)
+          hasExplicitFineGrained = true;
+      }
+
+      if (!hasExplicitFineGrained)
+        info.mode = PartitionMode::stencil;
+    }
   } else if (acquire.hasMultiplePartitionEntries()) {
     int64_t minOffset = 0;
     int64_t maxOffset = 0;
