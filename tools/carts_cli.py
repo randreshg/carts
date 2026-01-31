@@ -937,7 +937,13 @@ def compile(
 # Execute Command
 # ============================================================================
 
-@app.command(context_settings={"allow_extra_args": True, "allow_interspersed_args": False})
+@app.command(
+    context_settings={
+        "allow_extra_args": True,
+        "allow_interspersed_args": False,
+        "ignore_unknown_options": True,
+    }
+)
 def execute(
     ctx: typer.Context,
     input_file: Path = typer.Argument(..., help="Input C/C++ file"),
@@ -946,6 +952,11 @@ def execute(
     optimize: bool = typer.Option(
         False, "-O3", help="Enable dual compilation mode"),
     debug: bool = typer.Option(False, "-g", help="Generate debug symbols"),
+    partition_fallback: Optional[str] = typer.Option(
+        None,
+        "--partition-fallback",
+        help="Partition fallback strategy for carts run (coarse, block, elementwise)",
+    ),
     diagnose: bool = typer.Option(
         False, "--diagnose", help="Export diagnostic information"),
     diagnose_output: Optional[Path] = typer.Option(
@@ -974,6 +985,8 @@ def execute(
     # Parse extra args - combine explicit args with pass-through args
     extra_run_args = run_args.split() if run_args else []
     extra_compile_args = compile_args.split() if compile_args else []
+    if partition_fallback:
+        extra_run_args.append(f"--partition-fallback={partition_fallback}")
 
     # Separate passthrough args into two categories:
     # - cgeist_args: Flags for cgeist C-to-MLIR frontend (e.g., -I, -D, -fopenmp)

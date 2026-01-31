@@ -31,6 +31,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
+#include "polygeist/Ops.h"
 
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
@@ -78,6 +79,16 @@ static bool isDepsPtrLoad(LLVM::LoadOp loadOp) {
     }
   }
 
+  return false;
+}
+
+/// Check if an LLVM load is loading a datablock pointer from a db_gep.
+static bool isDbPtrLoad(LLVM::LoadOp loadOp) {
+  auto resultType = loadOp.getResult().getType();
+  if (!isa<LLVM::LLVMPointerType>(resultType))
+    return false;
+  if (auto defOp = loadOp.getAddr().getDefiningOp<DbGepOp>())
+    return true;
   return false;
 }
 
@@ -200,27 +211,53 @@ void DataPointerHoistingPass::runOnOperation() {
 
   int hoistedCount = 0;
   int divRemHoisted = 0;
+  int dbPtrHoisted = 0;
+  int m2rHoisted = 0;
 
   /// Process each function
   module.walk([&](func::FuncOp funcOp) {
-    /// Only process EDT functions (start with __arts_edt_)
-    if (!funcOp.getName().starts_with("__arts_edt_"))
-      return;
+    bool isEdt = funcOp.getName().starts_with("__arts_edt_");
 
-    ARTS_DEBUG_TYPE("Processing EDT function: " << funcOp.getName());
+    ARTS_DEBUG_TYPE("Processing function: " << funcOp.getName());
 
     /// Collect loads to hoist (don't modify while iterating)
     SmallVector<std::pair<LLVM::LoadOp, scf::ForOp>> loadsToHoist;
 
     DominanceInfo domInfo(funcOp);
+    if (isEdt) {
+      funcOp.walk([&](LLVM::LoadOp loadOp) {
+        /// Check if this is a deps pointer load
+        if (!isDepsPtrLoad(loadOp))
+          return;
+
+        /// Check if address operands are loop-invariant
+        Value addr = loadOp.getAddr();
+        Operation *addrOp = addr.getDefiningOp();
+        if (!addrOp)
+          return;
+
+        scf::ForOp targetLoop = findHoistTarget(loadOp, addrOp, domInfo);
+        if (!targetLoop)
+          return;
+
+        loadsToHoist.push_back({loadOp, targetLoop});
+      });
+    }
+
+    /// Now hoist the collected loads
+    for (auto &[loadOp, targetLoop] : loadsToHoist) {
+      if (hoistLoadOutOfLoop(loadOp, targetLoop))
+        hoistedCount++;
+    }
+
+    /// Hoist datablock pointer loads (db_gep + llvm.load) out of inner loops.
+    SmallVector<std::tuple<LLVM::LoadOp, Operation *, scf::ForOp>>
+        dbLoadsToHoist;
     funcOp.walk([&](LLVM::LoadOp loadOp) {
-      /// Check if this is a deps pointer load
-      if (!isDepsPtrLoad(loadOp))
+      if (!isDbPtrLoad(loadOp))
         return;
 
-      /// Check if address operands are loop-invariant
-      Value addr = loadOp.getAddr();
-      Operation *addrOp = addr.getDefiningOp();
+      Operation *addrOp = loadOp.getAddr().getDefiningOp();
       if (!addrOp)
         return;
 
@@ -228,13 +265,27 @@ void DataPointerHoistingPass::runOnOperation() {
       if (!targetLoop)
         return;
 
-      loadsToHoist.push_back({loadOp, targetLoop});
+      dbLoadsToHoist.push_back({loadOp, addrOp, targetLoop});
     });
 
-    /// Now hoist the collected loads
-    for (auto &[loadOp, targetLoop] : loadsToHoist) {
-      if (hoistLoadOutOfLoop(loadOp, targetLoop))
-        hoistedCount++;
+    for (auto &[loadOp, addrOp, targetLoop] : dbLoadsToHoist) {
+      if (!targetLoop || !targetLoop->isAncestor(loadOp))
+        continue;
+      if (targetLoop->isAncestor(addrOp))
+        addrOp->moveBefore(targetLoop);
+      loadOp->moveBefore(targetLoop);
+      dbPtrHoisted++;
+
+      /// Also hoist pointer2memref users if they live inside the loop.
+      for (Operation *user :
+           llvm::make_early_inc_range(loadOp.getResult().getUsers())) {
+        if (auto m2r = dyn_cast<polygeist::Pointer2MemrefOp>(user)) {
+          if (!targetLoop->isAncestor(m2r))
+            continue;
+          m2r->moveBefore(targetLoop);
+          m2rHoisted++;
+        }
+      }
     }
 
     /// Hoist div/rem out of inner loops when operands are invariant and the
@@ -260,6 +311,9 @@ void DataPointerHoistingPass::runOnOperation() {
   });
 
   ARTS_INFO("Hoisted " << hoistedCount << " data pointer loads out of loops");
+  ARTS_INFO("Hoisted " << dbPtrHoisted
+                       << " datablock pointer loads out of loops");
+  ARTS_INFO("Hoisted " << m2rHoisted << " pointer2memref ops out of loops");
   ARTS_INFO("Hoisted " << divRemHoisted << " div/rem ops out of loops");
   ARTS_INFO_FOOTER(DataPointerHoistingPass);
 }

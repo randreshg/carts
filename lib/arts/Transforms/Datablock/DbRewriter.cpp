@@ -161,8 +161,9 @@ std::unique_ptr<DbIndexerBase> DbRewriter::createBlockIndexer(
 
 std::unique_ptr<DbIndexerBase> DbRewriter::createStencilIndexer(
     const StencilInfo &stencilInfo, Value blockSize, Value baseOffset,
-    unsigned outerRank, unsigned innerRank, Value ownedArg, Value leftHaloArg,
-    Value rightHaloArg, OpBuilder &builder, Location loc) {
+    unsigned outerRank, unsigned innerRank, ArrayRef<unsigned> partitionedDims,
+    Value ownedArg, Value leftHaloArg, Value rightHaloArg, OpBuilder &builder,
+    Location loc) {
   /// Create halo values from StencilInfo
   Value haloLeft =
       builder.create<arith::ConstantIndexOp>(loc, stencilInfo.haloLeft);
@@ -180,6 +181,8 @@ std::unique_ptr<DbIndexerBase> DbRewriter::createStencilIndexer(
     info.offsets.push_back(baseOffset);
   if (blockSize)
     info.sizes.push_back(blockSize);
+  if (!partitionedDims.empty())
+    info.partitionedDims.assign(partitionedDims.begin(), partitionedDims.end());
 
   return std::make_unique<DbStencilIndexer>(info, haloLeft, haloRight,
                                             outerRank, innerRank, ownedArg,
@@ -227,8 +230,9 @@ DbRewriter::createIndexer(const DbRewritePlan &plan, Value startBlock,
   case PartitionMode::stencil:
     assert(plan.stencilInfo && "Stencil mode requires stencil info");
     return createStencilIndexer(*plan.stencilInfo, plan.getBlockSize(0),
-                                elemOffset, outerRank, innerRank, ownedArg,
-                                leftHaloArg, rightHaloArg, builder, loc);
+                                elemOffset, outerRank, innerRank,
+                                plan.partitionedDims, ownedArg, leftHaloArg,
+                                rightHaloArg, builder, loc);
   }
 
   ARTS_UNREACHABLE("Unknown PartitionMode");

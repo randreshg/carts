@@ -196,7 +196,8 @@ protected:
   static std::unique_ptr<DbIndexerBase>
   createStencilIndexer(const StencilInfo &info, Value blockSize,
                        Value elemOffset, unsigned outerRank, unsigned innerRank,
-                       Value ownedArg, Value leftHaloArg, Value rightHaloArg,
+                       ArrayRef<unsigned> partitionedDims, Value ownedArg,
+                       Value leftHaloArg, Value rightHaloArg,
                        OpBuilder &builder, Location loc);
 };
 
