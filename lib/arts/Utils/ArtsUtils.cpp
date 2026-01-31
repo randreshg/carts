@@ -324,10 +324,18 @@ std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
 
     if (hasLhs && hasRhs)
       return std::max(lhsVal, rhsVal);
-    if (hasLhs)
+    if (hasLhs && !hasRhs) {
+      auto rhsExtracted = extractBlockSizeFromHint(maxOp.getRhs(), depth + 1);
+      if (rhsExtracted)
+        return rhsExtracted;
       return lhsVal;
-    if (hasRhs)
+    }
+    if (hasRhs && !hasLhs) {
+      auto lhsExtracted = extractBlockSizeFromHint(maxOp.getLhs(), depth + 1);
+      if (lhsExtracted)
+        return lhsExtracted;
       return rhsVal;
+    }
 
     /// Recurse for nested maxui
     auto lhsExtracted = extractBlockSizeFromHint(maxOp.getLhs(), depth + 1);

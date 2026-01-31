@@ -44,10 +44,16 @@ namespace arts {
 class DbBlockIndexer : public DbIndexerBase {
   /// Block size per partitioned dimension
   SmallVector<Value> blockSizes;
+  /// Original dimension indices for each partitioned dimension
+  SmallVector<unsigned> partitionedDims;
   /// Start block per partitioned dimension (computed)
   SmallVector<Value> startBlocks;
   /// True when allocation outer sizes are all constant 1
   bool allocSingleBlock = false;
+  /// True when the acquired range is guaranteed to fit within a single block
+  bool acquireSingleBlock = false;
+  /// Optional zero constant defined in a dominating scope
+  Value dominantZero;
 
 public:
   /// Constructor with PartitionInfo - the canonical way to create indexers.
@@ -55,10 +61,14 @@ public:
   /// separately as they require division which needs a builder.
   DbBlockIndexer(const PartitionInfo &info, ArrayRef<Value> startBlocks,
                  unsigned outerRank, unsigned innerRank,
-                 bool allocSingleBlock = false);
+                 bool allocSingleBlock = false, bool acquireSingleBlock = false,
+                 Value dominantZero = Value());
 
   /// Number of partitioned dimensions
-  unsigned numPartitionedDims() const { return blockSizes.size(); }
+  unsigned numPartitionedDims() const {
+    return !partitionedDims.empty() ? partitionedDims.size()
+                                    : blockSizes.size();
+  }
 
   /// Transform global multi-dimensional indices to local
   /// For block mode: dbRefIdx = global / blockSize - startBlock

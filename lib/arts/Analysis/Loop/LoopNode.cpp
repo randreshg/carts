@@ -8,6 +8,7 @@
 #include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
+#include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -58,6 +59,8 @@ void LoopNode::print(llvm::raw_ostream &os) const {
 
   if (isa<scf::ForOp>(loopOp))
     os << " scf.for";
+  else if (isa<arts::ForOp>(loopOp))
+    os << " arts.for";
   else if (isa<scf::ParallelOp>(loopOp))
     os << " scf.parallel";
   else if (isa<scf::WhileOp>(loopOp))
@@ -81,6 +84,12 @@ Value LoopNode::getInductionVar() const {
       .Case<scf::ParallelOp>([](auto op) -> Value {
         return op.getInductionVars().empty() ? Value()
                                              : op.getInductionVars()[0];
+      })
+      .Case<arts::ForOp>([](auto op) -> Value {
+        if (op.getRegion().empty())
+          return Value();
+        Block &body = op.getRegion().front();
+        return body.getNumArguments() == 0 ? Value() : body.getArgument(0);
       })
       .Case<scf::WhileOp>([](auto op) { return getWhileInductionVar(op); })
       .Default([](Operation *) { return Value(); });
@@ -139,6 +148,11 @@ static bool dependsOnLoopInitImpl(Value value, Value base, unsigned depth) {
       unsigned idx = blockArg.getArgNumber();
       if (idx < whileOp.getInits().size())
         return dependsOnLoopInitImpl(whileOp.getInits()[idx], base, depth + 1);
+    } else if (auto artsFor = dyn_cast_or_null<arts::ForOp>(parentOp)) {
+      unsigned idx = blockArg.getArgNumber();
+      auto lbs = artsFor.getLowerBound();
+      if (idx < lbs.size())
+        return dependsOnLoopInitImpl(lbs[idx], base, depth + 1);
     } else if (auto parallelOp = dyn_cast_or_null<scf::ParallelOp>(parentOp)) {
       auto ivs = parallelOp.getInductionVars();
       for (auto it : llvm::enumerate(ivs)) {

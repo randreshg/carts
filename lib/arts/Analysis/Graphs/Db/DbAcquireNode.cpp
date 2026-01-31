@@ -12,6 +12,7 @@
 #include "arts/Analysis/Graphs/Edt/EdtGraph.h"
 #include "arts/Analysis/Graphs/Edt/EdtNode.h"
 #include "arts/Analysis/Loop/LoopAnalysis.h"
+#include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/EdtUtils.h"
@@ -229,6 +230,7 @@ struct AccessBoundsInfo {
   int64_t centerOffset = 0;
   bool isStencil = false;
   bool valid = false;
+  bool hasVariableOffset = false;
 };
 
 /// Normalize stencil bounds to be centered around 0 when a uniform shift is
@@ -254,8 +256,9 @@ static void normalizeStencilBounds(AccessBoundsInfo &bounds) {
 /// For stencil patterns like A[i-1], A[i], A[i+1], this extracts the min/max
 /// offsets. For uniform access like B[i+1], this extracts the constant
 /// adjustment.
-static AccessBoundsInfo analyzeAccessBounds(DbAcquireNode *node,
-                                            Value blockOffset, Value loopIV);
+static AccessBoundsInfo
+analyzeAccessBounds(DbAcquireNode *node, Value blockOffset, Value loopIV,
+                    std::optional<unsigned> partitionDim = std::nullopt);
 
 /// Find the best loop node for bounds analysis.
 /// Prefers loops whose IV the first dynamic index depends on, selecting deeper
@@ -442,6 +445,7 @@ bool DbAcquireNode::computePartitionBounds() {
 
   partitionOffset = Value();
   partitionSize = Value();
+  hasNonConstantOffset = false;
 
   auto pickRepresentative = [&](ValueRange vals, unsigned &idx) -> Value {
     idx = 0;
@@ -528,11 +532,23 @@ bool DbAcquireNode::computePartitionBounds() {
   DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
   collectAccessOperations(dbRefToMemOps);
 
+  std::optional<unsigned> partitionDim =
+      analysisOffset
+          ? getPartitionOffsetDim(analysisOffset, /*requireLeading=*/false)
+          : std::nullopt;
+
+  Value partitionIdx;
   Value firstDynIdx;
   for (auto &[dbRef, memOps] : dbRefToMemOps) {
     for (Operation *memOp : memOps) {
       SmallVector<Value> fullChain =
           DatablockUtils::collectFullIndexChain(dbRef, memOp);
+      if (!partitionIdx && partitionDim) {
+        unsigned memrefStart = dbRef.getIndices().size();
+        unsigned chainIdx = memrefStart + *partitionDim;
+        if (chainIdx < fullChain.size())
+          partitionIdx = fullChain[chainIdx];
+      }
       for (Value idx : fullChain) {
         int64_t constVal;
         if (!ValueUtils::getConstantIndex(idx, constVal)) {
@@ -540,16 +556,17 @@ bool DbAcquireNode::computePartitionBounds() {
           break;
         }
       }
-      if (firstDynIdx)
+      if (partitionIdx || firstDynIdx)
         break;
     }
-    if (firstDynIdx)
+    if (partitionIdx || firstDynIdx)
       break;
   }
 
   bool offsetIsZero =
       ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(analysisOffset));
-  if (!firstDynIdx) {
+  Value loopIdx = partitionIdx ? partitionIdx : firstDynIdx;
+  if (!loopIdx) {
     if (offsetIsZero) {
       ARTS_DEBUG("  No dynamic index - allowing zero-offset partition hints");
       computedBlockInfo = std::make_pair(partitionOffset, partitionSize);
@@ -569,7 +586,7 @@ bool DbAcquireNode::computePartitionBounds() {
   }
 
   LoopNode *blockLoopNode =
-      findBestLoopNode(loopNodes, firstDynIdx, analysisOffset, offsetIsZero);
+      findBestLoopNode(loopNodes, loopIdx, analysisOffset, offsetIsZero);
 
   if (!blockLoopNode) {
     ARTS_DEBUG("  No block loop found - allowing for heuristic evaluation");
@@ -577,9 +594,12 @@ bool DbAcquireNode::computePartitionBounds() {
   }
 
   Value loopIV = blockLoopNode->getInductionVar();
-  AccessBoundsInfo bounds = analyzeAccessBounds(this, analysisOffset, loopIV);
+  AccessBoundsInfo bounds =
+      analyzeAccessBounds(this, analysisOffset, loopIV, partitionDim);
 
   if (!bounds.valid) {
+    if (bounds.hasVariableOffset && partitionDim)
+      hasNonConstantOffset = true;
     ARTS_DEBUG(
         "  Access bounds analysis failed - allowing for heuristic evaluation");
     return true;
@@ -662,6 +682,10 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
   }
 
   DbAcquireOp acqOp = const_cast<DbAcquireOp &>(dbAcquireOp);
+  if (!acqOp.getPartitionIndices().empty()) {
+    accessPattern = AccessPattern::Indexed;
+    return *accessPattern;
+  }
   if (acqOp.hasMultiplePartitionEntries()) {
     int64_t minOffset = 0, maxOffset = 0;
     if (DatablockUtils::hasMultiEntryStencilPattern(acqOp, minOffset,
@@ -670,17 +694,14 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
       return *accessPattern;
     }
   }
-  if (!acqOp.getPartitionIndices().empty()) {
-    accessPattern = AccessPattern::Indexed;
-    return *accessPattern;
-  }
 
   accessPattern = AccessPattern::Uniform;
   return *accessPattern;
 }
 
-static AccessBoundsInfo analyzeAccessBounds(DbAcquireNode *node,
-                                            Value blockOffset, Value loopIV) {
+static AccessBoundsInfo
+analyzeAccessBounds(DbAcquireNode *node, Value blockOffset, Value loopIV,
+                    std::optional<unsigned> partitionDim) {
   AccessBoundsInfo bounds;
   bounds.minOffset = std::numeric_limits<int64_t>::max();
   bounds.maxOffset = std::numeric_limits<int64_t>::min();
@@ -707,25 +728,36 @@ static AccessBoundsInfo analyzeAccessBounds(DbAcquireNode *node,
       if (indexChain.empty())
         continue;
 
-      Value firstDynIdx;
-      for (Value idx : indexChain) {
-        int64_t constVal;
-        if (!ValueUtils::getConstantIndex(idx, constVal)) {
-          firstDynIdx = idx;
-          break;
+      Value idxForBounds;
+      if (partitionDim) {
+        unsigned memrefStart = dbRef.getIndices().size();
+        unsigned chainIdx = memrefStart + *partitionDim;
+        if (chainIdx < indexChain.size())
+          idxForBounds = indexChain[chainIdx];
+      }
+      if (!idxForBounds) {
+        for (Value idx : indexChain) {
+          int64_t constVal;
+          if (!ValueUtils::getConstantIndex(idx, constVal)) {
+            idxForBounds = idx;
+            break;
+          }
         }
       }
 
-      if (!firstDynIdx)
+      if (!idxForBounds)
         continue;
 
       auto constOffset =
-          ValueUtils::extractConstantOffset(firstDynIdx, loopIV, blockOffset);
+          ValueUtils::extractConstantOffset(idxForBounds, loopIV, blockOffset);
       if (constOffset) {
         foundAny = true;
         bounds.minOffset = std::min(bounds.minOffset, *constOffset);
         bounds.maxOffset = std::max(bounds.maxOffset, *constOffset);
       } else {
+        if (ValueUtils::dependsOn(idxForBounds, loopIV) &&
+            ValueUtils::dependsOn(idxForBounds, blockOffset))
+          bounds.hasVariableOffset = true;
         return bounds;
       }
     }
@@ -934,13 +966,26 @@ DbAcquireNode::getPartitionOffsetDim(Value offset, bool requireLeading) {
       if (fullChain.empty())
         continue;
 
+      unsigned memrefStart = dbRef.getIndices().size();
+      if (memrefStart >= fullChain.size())
+        continue;
+
+      for (unsigned i = 0; i < memrefStart; ++i) {
+        if (ValueUtils::dependsOn(fullChain[i], offsetStripped)) {
+          ARTS_DEBUG("  partition offset appears in db_ref index; "
+                     "disabling blocked partitioning");
+          return std::nullopt;
+        }
+      }
+
       int64_t firstDynPos = -1;
       int64_t matchedPos = -1;
-      for (unsigned i = 0; i < fullChain.size(); ++i) {
+      Value matchedIdx;
+      for (unsigned i = memrefStart; i < fullChain.size(); ++i) {
         int64_t constVal = 0;
         bool isConst = ValueUtils::getConstantIndex(fullChain[i], constVal);
         if (!isConst && firstDynPos < 0)
-          firstDynPos = static_cast<int64_t>(i);
+          firstDynPos = static_cast<int64_t>(i - memrefStart);
 
         if (ValueUtils::dependsOn(fullChain[i], offsetStripped)) {
           if (auto stride =
@@ -956,12 +1001,14 @@ DbAcquireNode::getPartitionOffsetDim(Value offset, bool requireLeading) {
                        "partitioning");
             return std::nullopt;
           }
-          if (matchedPos >= 0 && matchedPos != static_cast<int64_t>(i)) {
+          int64_t dim = static_cast<int64_t>(i - memrefStart);
+          if (matchedPos >= 0 && matchedPos != dim) {
             ARTS_DEBUG("  partition offset maps to multiple dims; "
                        "disabling blocked partitioning");
             return std::nullopt;
           }
-          matchedPos = static_cast<int64_t>(i);
+          matchedPos = dim;
+          matchedIdx = fullChain[i];
           if (requireLeading && firstDynPos >= 0 && matchedPos != firstDynPos) {
             ARTS_DEBUG("  partition offset maps to non-leading dim; "
                        "disabling blocked partitioning");
@@ -987,7 +1034,8 @@ DbAcquireNode::getPartitionOffsetDim(Value offset, bool requireLeading) {
         }
       }
 
-      Value idxAtPos = fullChain[matchedPos];
+      Value idxAtPos =
+          matchedIdx ? matchedIdx : fullChain[memrefStart + matchedPos];
       if (!LoopNode::dependsOnLoopInitNormalized(idxAtPos, offsetStripped)) {
         ARTS_DEBUG("  -> returning none (offset not in access pattern)");
         return std::nullopt;
@@ -1012,7 +1060,7 @@ DbAcquireNode::getPartitionOffsetDim(Value offset, bool requireLeading) {
 }
 
 bool DbAcquireNode::canPartitionWithOffset(Value offset) {
-  return getPartitionOffsetDim(offset, /*requireLeading=*/true).has_value();
+  return getPartitionOffsetDim(offset, /*requireLeading=*/false).has_value();
 }
 
 bool DbAcquireNode::needsFullRange(Value partitionOffset) {
@@ -1020,6 +1068,25 @@ bool DbAcquireNode::needsFullRange(Value partitionOffset) {
   if (hasIndirectAccess()) {
     ARTS_DEBUG("  needsFullRange: indirect access detected");
     return true;
+  }
+
+  /// Case 1.5: Variable (non-constant) offset in partitioned dimension.
+  /// This indicates a stencil-like pattern that we cannot safely localize.
+  if (hasNonConstantOffset) {
+    ARTS_DEBUG("  needsFullRange: non-constant offset in partitioned dim");
+    return true;
+  }
+
+  /// Case 2: Read-only stencil on a non-leading partitioned dimension.
+  /// Without halo support for non-leading dims, require full-range to preserve
+  /// correctness.
+  if (!hasStores() && getAccessPattern() == AccessPattern::Stencil &&
+      partitionOffset) {
+    if (!getPartitionOffsetDim(partitionOffset, /*requireLeading=*/true)) {
+      ARTS_DEBUG(
+          "  needsFullRange: stencil access on non-leading partition dim");
+      return true;
+    }
   }
 
   /// Case 2: No partition offset OR partition offset not in access pattern.
@@ -1082,6 +1149,7 @@ LogicalResult DbAcquireNode::computeBlockInfo(Value &blockOffset,
   SmallVector<LoopNode *> forLoopNodes;
   SmallVector<LoopNode *> whileLoopNodes;
   loopAnalysis.collectLoopsInOperation<scf::ForOp>(edt, forLoopNodes);
+  loopAnalysis.collectLoopsInOperation<arts::ForOp>(edt, forLoopNodes);
   loopAnalysis.collectLoopsInOperation<scf::WhileOp>(edt, whileLoopNodes);
 
   scf::WhileOp blockWhile;
@@ -1091,7 +1159,7 @@ LogicalResult DbAcquireNode::computeBlockInfo(Value &blockOffset,
   if (blockWhile)
     ARTS_DEBUG("  found scf.while at " << blockWhile.getLoc());
   if (!forLoopNodes.empty())
-    ARTS_DEBUG("  found " << forLoopNodes.size() << " scf.for loops in EDT");
+    ARTS_DEBUG("  found " << forLoopNodes.size() << " for-like loops in EDT");
 
   if (partitionOffset && partitionSize) {
     if (succeeded(computeBlockInfoFromHints(blockOffset, blockSize))) {
@@ -1290,7 +1358,12 @@ LogicalResult DbAcquireNode::computeBlockInfoFromWhile(scf::WhileOp whileOp,
   Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
   minSize = builder.create<arith::MaxSIOp>(loc, minSize, zero);
 
-  AccessBoundsInfo bounds = analyzeAccessBounds(this, initValue, loopIV);
+  std::optional<unsigned> partitionDim =
+      partitionOffset
+          ? getPartitionOffsetDim(partitionOffset, /*requireLeading=*/false)
+          : std::nullopt;
+  AccessBoundsInfo bounds =
+      analyzeAccessBounds(this, initValue, loopIV, partitionDim);
   if (!bounds.valid)
     return failure();
 
@@ -1337,11 +1410,14 @@ LogicalResult DbAcquireNode::computeBlockInfoFromHints(Value &blockOffset,
   if (!originalBounds)
     originalBounds = std::make_pair(partitionOffset, partitionSize);
 
-  if (!canPartitionWithOffset(partitionOffset)) {
+  if (!getPartitionOffsetDim(partitionOffset, /*requireLeading=*/false)) {
     ARTS_DEBUG("  offset hints not derived from access; failing");
     return failure();
   }
 
+  std::optional<unsigned> partitionDim =
+      getPartitionOffsetDim(partitionOffset, /*requireLeading=*/false);
+  Value partitionIdx;
   Value firstDynIdx;
   DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
   collectAccessOperations(dbRefToMemOps);
@@ -1349,6 +1425,12 @@ LogicalResult DbAcquireNode::computeBlockInfoFromHints(Value &blockOffset,
     for (Operation *memOp : memOps) {
       SmallVector<Value> fullChain =
           DatablockUtils::collectFullIndexChain(dbRef, memOp);
+      if (!partitionIdx && partitionDim) {
+        unsigned memrefStart = dbRef.getIndices().size();
+        unsigned chainIdx = memrefStart + *partitionDim;
+        if (chainIdx < fullChain.size())
+          partitionIdx = fullChain[chainIdx];
+      }
       for (Value idx : fullChain) {
         int64_t constVal;
         if (!ValueUtils::getConstantIndex(idx, constVal)) {
@@ -1356,10 +1438,10 @@ LogicalResult DbAcquireNode::computeBlockInfoFromHints(Value &blockOffset,
           break;
         }
       }
-      if (firstDynIdx)
+      if (partitionIdx || firstDynIdx)
         break;
     }
-    if (firstDynIdx)
+    if (partitionIdx || firstDynIdx)
       break;
   }
 
@@ -1368,7 +1450,8 @@ LogicalResult DbAcquireNode::computeBlockInfoFromHints(Value &blockOffset,
 
   bool offsetIsZero =
       ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(analysisOffset));
-  if (!firstDynIdx) {
+  Value loopIdx = partitionIdx ? partitionIdx : firstDynIdx;
+  if (!loopIdx) {
     if (offsetIsZero) {
       blockOffset = partitionOffset;
       blockSize = partitionSize;
@@ -1384,11 +1467,12 @@ LogicalResult DbAcquireNode::computeBlockInfoFromHints(Value &blockOffset,
   loopAnalysis.collectForLoopsInOperation(edt, forLoopNodes);
 
   LoopNode *boundsLoopNode =
-      findBestLoopNode(forLoopNodes, firstDynIdx, analysisOffset, offsetIsZero);
+      findBestLoopNode(forLoopNodes, loopIdx, analysisOffset, offsetIsZero);
 
   if (boundsLoopNode) {
     Value loopIV = boundsLoopNode->getInductionVar();
-    AccessBoundsInfo bounds = analyzeAccessBounds(this, analysisOffset, loopIV);
+    AccessBoundsInfo bounds =
+        analyzeAccessBounds(this, analysisOffset, loopIV, partitionDim);
 
     if (bounds.valid) {
       if (!stencilBounds)
@@ -1446,9 +1530,28 @@ DbAcquireNode::computeBlockInfoFromForLoop(ArrayRef<LoopNode *> loopNodes,
   Location loc = dbAcquireOp.getLoc();
   builder.setInsertionPoint(dbAcquireOp);
 
+  std::optional<unsigned> partitionDim =
+      partitionOffset
+          ? getPartitionOffsetDim(partitionOffset, /*requireLeading=*/false)
+          : std::nullopt;
+
+  auto getLoopUpperBound = [&](Operation *loopOp) -> Value {
+    if (!loopOp)
+      return Value();
+    if (auto forOp = dyn_cast<scf::ForOp>(loopOp))
+      return forOp.getUpperBound();
+    if (auto artsFor = dyn_cast<arts::ForOp>(loopOp)) {
+      auto ubs = artsFor.getUpperBound();
+      return ubs.empty() ? Value() : ubs.front();
+    }
+    return Value();
+  };
+
   for (LoopNode *loopNode : loopNodes) {
     Value offsetCandidate;
-    auto loop = cast<scf::ForOp>(loopNode->getLoopOp());
+    Operation *loopOp = loopNode->getLoopOp();
+    if (!loopOp || !isa<scf::ForOp, arts::ForOp>(loopOp))
+      continue;
     Value loopIV = loopNode->getInductionVar();
     auto pickCandidateFromIndex = [&](Value idx) -> Value {
       Value stripped = ValueUtils::stripNumericCasts(idx);
@@ -1470,7 +1573,7 @@ DbAcquireNode::computeBlockInfoFromForLoop(ArrayRef<LoopNode *> loopNodes,
 
     for (Operation *user : ptrArg.getUsers()) {
       auto refOp = dyn_cast<DbRefOp>(user);
-      if (!refOp || !loop->isAncestor(refOp))
+      if (!refOp || !loopOp->isAncestor(refOp))
         continue;
 
       Value refVal = refOp.getResult();
@@ -1483,12 +1586,14 @@ DbAcquireNode::computeBlockInfoFromForLoop(ArrayRef<LoopNode *> loopNodes,
         else
           continue;
 
-        if (!loop->isAncestor(memUser))
+        if (!loopOp->isAncestor(memUser))
           continue;
 
         if (memIndices.empty())
           continue;
         Value idx = memIndices.front();
+        if (partitionDim && *partitionDim < memIndices.size())
+          idx = memIndices[*partitionDim];
         offsetCandidate = pickCandidateFromIndex(idx);
 
         if (offsetCandidate)
@@ -1509,14 +1614,14 @@ DbAcquireNode::computeBlockInfoFromForLoop(ArrayRef<LoopNode *> loopNodes,
     }
 
     if (!offsetCandidate) {
-      ARTS_DEBUG("  no offset candidate found in loop at " << loop.getLoc());
+      ARTS_DEBUG("  no offset candidate found in loop at " << loopOp->getLoc());
       continue;
     }
 
     AccessBoundsInfo bounds =
-        analyzeAccessBounds(this, offsetCandidate, loopIV);
+        analyzeAccessBounds(this, offsetCandidate, loopIV, partitionDim);
     if (!bounds.valid) {
-      ARTS_DEBUG("  bounds analysis failed for loop at " << loop.getLoc());
+      ARTS_DEBUG("  bounds analysis failed for loop at " << loopOp->getLoc());
       continue;
     }
 
@@ -1531,11 +1636,14 @@ DbAcquireNode::computeBlockInfoFromForLoop(ArrayRef<LoopNode *> loopNodes,
 
     Value offsetDom = ValueUtils::traceValueToDominating(
         offsetCandidate, dbAcquireOp, builder, domInfo, loc);
+    Value loopUpperBound = getLoopUpperBound(loopOp);
+    if (!loopUpperBound)
+      continue;
     Value sizeDom = ValueUtils::traceValueToDominating(
-        loop.getUpperBound(), dbAcquireOp, builder, domInfo, loc);
+        loopUpperBound, dbAcquireOp, builder, domInfo, loc);
     if (!offsetDom || !sizeDom) {
       ARTS_DEBUG("  offset/size does not dominate for loop at "
-                 << loop.getLoc());
+                 << loopOp->getLoc());
       continue;
     }
 
@@ -1569,11 +1677,11 @@ DbAcquireNode::computeBlockInfoFromForLoop(ArrayRef<LoopNode *> loopNodes,
     blockSize = adjustedSize;
     if (offsetForCheck)
       *offsetForCheck = offsetCandidate;
-    ARTS_DEBUG("  selected loop " << loop.getLoc() << " blockOffset="
+    ARTS_DEBUG("  selected loop " << loopOp->getLoc() << " blockOffset="
                                   << blockOffset << " blockSize=" << blockSize);
 
     Value checkOffset = offsetForCheck ? *offsetForCheck : blockOffset;
-    if (!canPartitionWithOffset(checkOffset))
+    if (!getPartitionOffsetDim(checkOffset, /*requireLeading=*/false))
       return failure();
     return success();
   }

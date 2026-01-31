@@ -111,8 +111,7 @@ public:
 
   /// Strip constant add/sub offsets from an index expression.
   /// Returns the base value and accumulates the constant offset (if provided).
-  static Value stripConstantOffset(Value value,
-                                   int64_t *outConst = nullptr);
+  static Value stripConstantOffset(Value value, int64_t *outConst = nullptr);
 
   /// Extract array index from byte offset pattern: bytes = (index * elemBytes).
   /// Handles common patterns where GEP indices are scaled by element byte size.
@@ -161,16 +160,19 @@ public:
   }
 
   /// Trace min/select with partial operand fallback.
-  static Value traceMinSIWithFallback(
-      arith::MinSIOp minOp, Operation *insertBefore, OpBuilder &builder,
-      Location loc, llvm::function_ref<Value(Value)> traceValueFn);
-  static Value traceMinUIWithFallback(
-      arith::MinUIOp minOp, Operation *insertBefore, OpBuilder &builder,
-      Location loc, llvm::function_ref<Value(Value)> traceValueFn);
-  static Value traceSelectWithFallback(
-      arith::SelectOp selectOp, Operation *insertBefore, OpBuilder &builder,
-      Location loc, llvm::function_ref<Value(Value)> traceValueFn,
-      llvm::function_ref<Value(Value)> traceCondFn);
+  static Value
+  traceMinSIWithFallback(arith::MinSIOp minOp, Operation *insertBefore,
+                         OpBuilder &builder, Location loc,
+                         llvm::function_ref<Value(Value)> traceValueFn);
+  static Value
+  traceMinUIWithFallback(arith::MinUIOp minOp, Operation *insertBefore,
+                         OpBuilder &builder, Location loc,
+                         llvm::function_ref<Value(Value)> traceValueFn);
+  static Value
+  traceSelectWithFallback(arith::SelectOp selectOp, Operation *insertBefore,
+                          OpBuilder &builder, Location loc,
+                          llvm::function_ref<Value(Value)> traceValueFn,
+                          llvm::function_ref<Value(Value)> traceCondFn);
 };
 
 } // namespace arts

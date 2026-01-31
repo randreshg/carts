@@ -76,6 +76,7 @@ struct AcquirePartitionInfo {
   /// N-D partition support: vectors for all dimensions
   SmallVector<Value> partitionOffsets;
   SmallVector<Value> partitionSizes;
+  SmallVector<unsigned> partitionDims;
   bool isValid = false;
   bool hasIndirectAccess = false;
   /// For mixed mode: this coarse acquire needs full-range access to chunked
@@ -129,43 +130,6 @@ validateElementWiseIndices(ArrayRef<AcquirePartitionInfo> acquireInfos,
     }
   }
   return true; /// Valid element-wise
-}
-
-/// Decompose an index value into base value and constant offset.
-/// Returns true if decomposition succeeds, filling base and offset.
-/// Examples: "x + 1" -> base=x, offset=1; "x - 2" -> base=x, offset=-2
-static bool decomposeIndexToBaseAndOffset(Value idx, Value &base,
-                                          int64_t &offset) {
-  if (!idx)
-    return false;
-
-  Value stripped = ValueUtils::stripNumericCasts(idx);
-  offset = 0;
-  base = stripped;
-
-  if (auto addOp = stripped.getDefiningOp<arith::AddIOp>()) {
-    int64_t constVal;
-    if (ValueUtils::getConstantIndex(addOp.getLhs(), constVal)) {
-      base = addOp.getRhs();
-      offset = constVal;
-    } else if (ValueUtils::getConstantIndex(addOp.getRhs(), constVal)) {
-      base = addOp.getLhs();
-      offset = constVal;
-    } else {
-      return false;
-    }
-  } else if (auto subOp = stripped.getDefiningOp<arith::SubIOp>()) {
-    int64_t constVal;
-    if (ValueUtils::getConstantIndex(subOp.getRhs(), constVal)) {
-      base = subOp.getLhs();
-      offset = -constVal;
-    } else {
-      return false;
-    }
-  }
-
-  base = ValueUtils::stripNumericCasts(base);
-  return base != nullptr;
 }
 
 /// Extract all partition offsets for N-D support.
@@ -239,172 +203,6 @@ static Value pickRepresentativePartitionSize(ArrayRef<Value> sizes,
   return sizes.front();
 }
 
-/// Identify the base (offset 0) entry for a multi-entry stencil acquire.
-/// Returns true and fills baseIndices when a stencil-like pattern is found.
-static bool findStencilBaseIndices(DbAcquireOp acquire,
-                                   SmallVector<Value> &baseIndices) {
-  size_t numEntries = acquire.getNumPartitionEntries();
-  if (numEntries < 2)
-    return false;
-
-  SmallVector<SmallVector<Value>> allIndices;
-  allIndices.reserve(numEntries);
-  for (size_t i = 0; i < numEntries; ++i)
-    allIndices.push_back(acquire.getPartitionIndicesForEntry(i));
-
-  size_t numDims = allIndices[0].size();
-  if (numDims == 0)
-    return false;
-  for (const auto &indices : allIndices) {
-    if (indices.size() != numDims)
-      return false;
-  }
-
-  /// Fast path: if all entries share the same base value per dimension, pick
-  /// the entry whose offsets are all zero (center), otherwise minimal offset.
-  {
-    bool canDecompose = true;
-    SmallVector<SmallVector<Value>> baseVals(numEntries);
-    SmallVector<SmallVector<int64_t>> offsetVals(numEntries);
-
-    for (size_t entry = 0; entry < numEntries && canDecompose; ++entry) {
-      baseVals[entry].reserve(numDims);
-      offsetVals[entry].reserve(numDims);
-      for (size_t dim = 0; dim < numDims; ++dim) {
-        Value base;
-        int64_t offset = 0;
-        if (!decomposeIndexToBaseAndOffset(allIndices[entry][dim], base,
-                                           offset)) {
-          canDecompose = false;
-          break;
-        }
-        baseVals[entry].push_back(base);
-        offsetVals[entry].push_back(offset);
-      }
-    }
-
-    if (canDecompose) {
-      bool basesMatch = true;
-      for (size_t dim = 0; dim < numDims && basesMatch; ++dim) {
-        Value base0 = baseVals[0][dim];
-        for (size_t entry = 1; entry < numEntries; ++entry) {
-          if (baseVals[entry][dim] != base0) {
-            basesMatch = false;
-            break;
-          }
-        }
-      }
-
-      if (basesMatch) {
-        int bestEntry = -1;
-        int bestScore = std::numeric_limits<int>::max();
-        for (size_t entry = 0; entry < numEntries; ++entry) {
-          bool allZero = true;
-          int score = 0;
-          for (size_t dim = 0; dim < numDims; ++dim) {
-            int64_t off = offsetVals[entry][dim];
-            if (off != 0)
-              allZero = false;
-            score = std::max(score, std::abs((int)off));
-          }
-          if (allZero) {
-            baseIndices = allIndices[entry];
-            ARTS_DEBUG("  Stencil base selected (decompose): entry="
-                       << entry << " loc=" << acquire.getLoc());
-            return true;
-          }
-          if (score < bestScore) {
-            bestScore = score;
-            bestEntry = static_cast<int>(entry);
-          }
-        }
-
-        if (bestEntry >= 0) {
-          baseIndices = allIndices[bestEntry];
-          ARTS_DEBUG("  Stencil base selected (decompose-min): entry="
-                     << bestEntry << " loc=" << acquire.getLoc());
-          return true;
-        }
-      }
-    }
-  }
-
-  int bestScore = std::numeric_limits<int>::max();
-  bool bestCentered = false;
-
-  for (size_t baseEntry = 0; baseEntry < numEntries; ++baseEntry) {
-    bool allMatch = true;
-    bool sawNonZero = false;
-    int64_t overallMin = 0;
-    int64_t overallMax = 0;
-    bool hasOffsetRange = false;
-
-    for (size_t dim = 0; dim < numDims && allMatch; ++dim) {
-      Value base = allIndices[baseEntry][dim];
-      if (!base) {
-        allMatch = false;
-        break;
-      }
-
-      int64_t localMin = 0;
-      int64_t localMax = 0;
-      for (size_t i = 0; i < numEntries; ++i) {
-        Value idx = allIndices[i][dim];
-        auto offset = DatablockUtils::getConstantOffsetBetween(idx, base);
-        if (!offset || std::abs(*offset) > 2) {
-          allMatch = false;
-          break;
-        }
-        if (*offset != 0)
-          sawNonZero = true;
-        localMin = std::min(localMin, *offset);
-        localMax = std::max(localMax, *offset);
-      }
-      if (!hasOffsetRange) {
-        overallMin = localMin;
-        overallMax = localMax;
-        hasOffsetRange = true;
-      } else {
-        overallMin = std::min(overallMin, localMin);
-        overallMax = std::max(overallMax, localMax);
-      }
-    }
-
-    if (!allMatch || !sawNonZero)
-      continue;
-
-    /// Prefer the entry whose base index is a loop IV (center of stencil).
-    bool isLoopIv = false;
-    if (!allIndices[baseEntry].empty()) {
-      Value ivCandidate =
-          ValueUtils::stripNumericCasts(allIndices[baseEntry][0]);
-      if (auto blockArg = ivCandidate.dyn_cast<BlockArgument>()) {
-        if (auto forOp =
-                dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp())) {
-          isLoopIv = (blockArg == forOp.getInductionVar());
-        }
-      }
-    }
-    if (isLoopIv) {
-      baseIndices = allIndices[baseEntry];
-      ARTS_DEBUG("  Stencil base selected (loop iv): entry="
-                 << baseEntry << " loc=" << acquire.getLoc());
-      return true;
-    }
-
-    int score = std::max(std::abs((int)overallMin), std::abs((int)overallMax));
-    bool centered = (overallMin < 0 && overallMax > 0);
-    if (score < bestScore ||
-        (score == bestScore && centered && !bestCentered)) {
-      bestScore = score;
-      bestCentered = centered;
-      baseIndices = allIndices[baseEntry];
-    }
-  }
-
-  return !baseIndices.empty();
-}
-
 /// Analyze a single acquire to determine its partition mode and chunk info.
 static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
                                                         DbAcquireNode *acqNode,
@@ -443,6 +241,38 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
     return Value();
   };
 
+  auto inferPartitionDims = [&](AcquirePartitionInfo &info) {
+    if (!acqNode || info.partitionOffsets.empty())
+      return;
+    info.partitionDims.clear();
+    SmallVector<unsigned, 4> seen;
+    for (Value off : info.partitionOffsets) {
+      if (!off) {
+        info.partitionDims.clear();
+        return;
+      }
+      auto dimOpt =
+          acqNode->getPartitionOffsetDim(off, /*requireLeading=*/false);
+      if (!dimOpt) {
+        info.partitionDims.clear();
+        return;
+      }
+      bool alreadySeen = false;
+      for (unsigned seenDim : seen) {
+        if (seenDim == *dimOpt) {
+          alreadySeen = true;
+          break;
+        }
+      }
+      if (alreadySeen) {
+        info.partitionDims.clear();
+        return;
+      }
+      seen.push_back(*dimOpt);
+      info.partitionDims.push_back(*dimOpt);
+    }
+  };
+
   AcquirePartitionInfo info;
   info.acquire = acquire;
   info.mode = DatablockUtils::getPartitionModeFromStructure(acquire);
@@ -456,14 +286,15 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
   if (acqNode)
     info.hasIndirectAccess = acqNode->hasIndirectAccess();
 
-  bool hasStencilPattern = false;
-  if (acquire.hasMultiplePartitionEntries()) {
+  if (acqNode) {
+    if (acqNode->getAccessPattern() == AccessPattern::Stencil)
+      info.mode = PartitionMode::stencil;
+  } else if (acquire.hasMultiplePartitionEntries()) {
     int64_t minOffset = 0;
     int64_t maxOffset = 0;
     if (DatablockUtils::hasMultiEntryStencilPattern(acquire, minOffset,
                                                     maxOffset)) {
       info.mode = PartitionMode::stencil;
-      hasStencilPattern = true;
     }
   }
 
@@ -489,6 +320,7 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
           ARTS_DEBUG("  Refined partition size from min: "
                      << info.partitionSizes.front());
         }
+        inferPartitionDims(info);
       } else {
         info.isValid = false;
       }
@@ -508,27 +340,12 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
       for (unsigned i = 0; i < info.partitionOffsets.size(); ++i)
         info.partitionSizes.push_back(one);
       info.isValid = true;
+      inferPartitionDims(info);
     }
     break;
 
   case PartitionMode::block:
   case PartitionMode::stencil:
-    if (info.mode == PartitionMode::stencil && hasStencilPattern) {
-      SmallVector<Value> baseIndices;
-      if (findStencilBaseIndices(acquire, baseIndices) &&
-          !baseIndices.empty()) {
-        /// N-D support: use all base indices
-        for (Value idx : baseIndices)
-          info.partitionOffsets.push_back(idx);
-        Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
-        for (unsigned i = 0; i < baseIndices.size(); ++i)
-          info.partitionSizes.push_back(one);
-        info.isValid = true;
-        ARTS_DEBUG("  Using stencil base indices for partition offset: "
-                   << pickRepresentativePartitionOffset(info.partitionOffsets));
-        break;
-      }
-    }
     /// FIRST: Trust partition hints from CreateDbs (authoritative source).
     /// CreateDbs sets partition_offsets/sizes based on DbControlOp analysis
     /// which happens BEFORE EDT outlining. Re-validation inside EDT scope
@@ -619,6 +436,7 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
           }
         }
       }
+      inferPartitionDims(info);
       break;
     }
     /// FALLBACK: Try computeBlockInfo for cases without CreateDbs hints.
@@ -630,6 +448,7 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
         info.partitionSizes.push_back(size);
         info.isValid = true;
         ARTS_DEBUG("  Computed block info from access analysis");
+        inferPartitionDims(info);
       } else {
         /// Validation failed -> fall back to coarse for correctness.
         info.mode = PartitionMode::coarse;
@@ -682,6 +501,7 @@ static void resetCoarseAcquireRanges(DbAllocOp allocOp, DbAllocNode *allocNode,
 static void computeSizesFromDecision(DbAllocOp allocOp,
                                      const PartitioningDecision &decision,
                                      ArrayRef<Value> blockSizes,
+                                     ArrayRef<unsigned> partitionedDims,
                                      SmallVector<Value> &newOuterSizes,
                                      SmallVector<Value> &newInnerSizes) {
   OpBuilder builder(allocOp);
@@ -697,30 +517,75 @@ static void computeSizesFromDecision(DbAllocOp allocOp,
     Value oneI64 = builder.create<arith::ConstantIntOp>(loc, 1, 64);
 
     unsigned nPartDims = blockSizes.size();
-    for (unsigned d = 0; d < nPartDims && d < elemSizes.size(); ++d) {
-      Value bs = blockSizes[d];
-      if (!bs || ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(bs)))
-        continue;
+    if (!partitionedDims.empty()) {
+      /// Non-leading partitioning: outer sizes follow partitionedDims order,
+      /// inner sizes preserve original dimension order.
+      SmallVector<int64_t> dimToPart(elemSizes.size(), -1);
+      for (unsigned p = 0; p < partitionedDims.size(); ++p) {
+        if (partitionedDims[p] < elemSizes.size())
+          dimToPart[partitionedDims[p]] = static_cast<int64_t>(p);
+      }
 
-      Value dim = elemSizes[d];
+      for (unsigned p = 0; p < nPartDims; ++p) {
+        unsigned dim =
+            p < partitionedDims.size() ? partitionedDims[p] : p;
+        if (dim >= elemSizes.size())
+          continue;
+        Value bs = blockSizes[p];
+        if (!bs ||
+            ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(bs)))
+          continue;
 
-      /// numBlocks = ceil(dim / blockSize) = (dim + blockSize - 1) / blockSize
-      Value dimI64 = builder.create<arith::IndexCastOp>(loc, i64Type, dim);
-      Value bsI64 = builder.create<arith::IndexCastOp>(loc, i64Type, bs);
-      Value sum = builder.create<arith::AddIOp>(loc, dimI64, bsI64);
-      Value sumMinusOne = builder.create<arith::SubIOp>(loc, sum, oneI64);
-      Value numBlocksI64 =
-          builder.create<arith::DivUIOp>(loc, sumMinusOne, bsI64);
-      Value numBlocks = builder.create<arith::IndexCastOp>(
-          loc, builder.getIndexType(), numBlocksI64);
+        Value dimSize = elemSizes[dim];
 
-      newOuterSizes.push_back(numBlocks);
-      newInnerSizes.push_back(bs);
+        /// numBlocks = ceil(dim / blockSize) = (dim + blockSize - 1) / blockSize
+        Value dimI64 =
+            builder.create<arith::IndexCastOp>(loc, i64Type, dimSize);
+        Value bsI64 = builder.create<arith::IndexCastOp>(loc, i64Type, bs);
+        Value sum = builder.create<arith::AddIOp>(loc, dimI64, bsI64);
+        Value sumMinusOne = builder.create<arith::SubIOp>(loc, sum, oneI64);
+        Value numBlocksI64 =
+            builder.create<arith::DivUIOp>(loc, sumMinusOne, bsI64);
+        Value numBlocks = builder.create<arith::IndexCastOp>(
+            loc, builder.getIndexType(), numBlocksI64);
+
+        newOuterSizes.push_back(numBlocks);
+      }
+
+      for (unsigned d = 0; d < elemSizes.size(); ++d) {
+        int64_t partIdx = dimToPart[d];
+        if (partIdx >= 0 && static_cast<unsigned>(partIdx) < blockSizes.size())
+          newInnerSizes.push_back(blockSizes[partIdx]);
+        else
+          newInnerSizes.push_back(elemSizes[d]);
+      }
+    } else {
+      for (unsigned d = 0; d < nPartDims && d < elemSizes.size(); ++d) {
+        Value bs = blockSizes[d];
+        if (!bs ||
+            ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(bs)))
+          continue;
+
+        Value dim = elemSizes[d];
+
+        /// numBlocks = ceil(dim / blockSize) = (dim + blockSize - 1) / blockSize
+        Value dimI64 = builder.create<arith::IndexCastOp>(loc, i64Type, dim);
+        Value bsI64 = builder.create<arith::IndexCastOp>(loc, i64Type, bs);
+        Value sum = builder.create<arith::AddIOp>(loc, dimI64, bsI64);
+        Value sumMinusOne = builder.create<arith::SubIOp>(loc, sum, oneI64);
+        Value numBlocksI64 =
+            builder.create<arith::DivUIOp>(loc, sumMinusOne, bsI64);
+        Value numBlocks = builder.create<arith::IndexCastOp>(
+            loc, builder.getIndexType(), numBlocksI64);
+
+        newOuterSizes.push_back(numBlocks);
+        newInnerSizes.push_back(bs);
+      }
+
+      /// Remaining non-partitioned dims go to inner
+      for (unsigned d = nPartDims; d < elemSizes.size(); ++d)
+        newInnerSizes.push_back(elemSizes[d]);
     }
-
-    /// Remaining non-partitioned dims go to inner
-    for (unsigned d = nPartDims; d < elemSizes.size(); ++d)
-      newInnerSizes.push_back(elemSizes[d]);
 
     /// Ensure non-empty
     if (newOuterSizes.empty())
@@ -1759,11 +1624,15 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       unsigned offsetIdx = 0;
       Value partitionOffset =
           pickRepresentativePartitionOffset(offsetVals, &offsetIdx);
-      if (partitionOffset &&
-          !acqNode->canPartitionWithOffset(partitionOffset)) {
-        ARTS_DEBUG("  Partition offset incompatible with access pattern; "
-                   "disabling block capability");
-        thisAcquireCanBlock = false;
+      if (partitionOffset) {
+        auto dimOpt =
+            acqNode->getPartitionOffsetDim(partitionOffset,
+                                           /*requireLeading=*/false);
+        if (!dimOpt) {
+          ARTS_DEBUG("  Partition offset incompatible with access pattern; "
+                     "disabling block capability");
+          thisAcquireCanBlock = false;
+        }
       }
 
       if (thisAcquireCanBlock)
@@ -2151,9 +2020,26 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   /// heuristics already chose block mode but we need to extract the N-D
   /// block sizes from loop steps for proper multi-dimensional partitioning.
   /// Check for both indexed and uniform patterns (block-wise access).
+  bool hasExplicitBlockSizes = false;
+  for (const auto &info : acquireInfos) {
+    if (info.mode != PartitionMode::block)
+      continue;
+    for (Value sz : info.partitionSizes) {
+      if (!sz)
+        continue;
+      Value stripped = ValueUtils::stripNumericCasts(sz);
+      if (!ValueUtils::isOneConstant(stripped)) {
+        hasExplicitBlockSizes = true;
+        break;
+      }
+    }
+    if (hasExplicitBlockSizes)
+      break;
+  }
+
   if (decision.isBlock() &&
       (ctx.accessPatterns.hasIndexed || ctx.accessPatterns.hasUniform) &&
-      blockSizesForNDBlock.empty()) {
+      blockSizesForNDBlock.empty() && !hasExplicitBlockSizes) {
     ARTS_DEBUG(
         "  Block/stencil mode with indexed/uniform patterns - extracting "
         "N-D block sizes");
@@ -2440,6 +2326,111 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     }
   }
 
+  /// Determine partitioned dimensions for block mode (supports non-leading).
+  SmallVector<unsigned> partitionedDimsForPlan;
+  if (decision.isBlock()) {
+    unsigned nPartDims = blockSizesForPlan.size();
+    if (nPartDims > 0) {
+      auto dimsEqual = [](ArrayRef<unsigned> a,
+                          ArrayRef<unsigned> b) -> bool {
+        if (a.size() != b.size())
+          return false;
+        for (unsigned i = 0; i < a.size(); ++i) {
+          if (a[i] != b[i])
+            return false;
+        }
+        return true;
+      };
+
+      int bestScore = std::numeric_limits<int>::max();
+      bool bestFromFine = false;
+      for (const auto &candidate : acquireInfos) {
+        if (candidate.needsFullRange)
+          continue;
+        if (candidate.partitionDims.size() != nPartDims)
+          continue;
+
+        int score = 0;
+        for (const auto &info : acquireInfos) {
+          if (info.needsFullRange)
+            continue;
+          if (info.partitionDims.empty() ||
+              info.partitionDims.size() != nPartDims)
+            continue;
+          if (!dimsEqual(info.partitionDims, candidate.partitionDims)) {
+            score += (info.mode == PartitionMode::fine_grained) ? 2 : 1;
+          }
+        }
+
+        bool fromFine = candidate.mode == PartitionMode::fine_grained;
+        if (score < bestScore ||
+            (score == bestScore && fromFine && !bestFromFine)) {
+          bestScore = score;
+          bestFromFine = fromFine;
+          partitionedDimsForPlan.assign(candidate.partitionDims.begin(),
+                                        candidate.partitionDims.end());
+        }
+      }
+    }
+
+    if (!partitionedDimsForPlan.empty()) {
+      SmallVector<bool> seen(allocOp.getElementSizes().size(), false);
+      bool valid = true;
+      for (unsigned d : partitionedDimsForPlan) {
+        if (d >= seen.size() || seen[d]) {
+          valid = false;
+          break;
+        }
+        seen[d] = true;
+      }
+      if (!valid)
+        partitionedDimsForPlan.clear();
+    }
+
+    /// Non-leading partitioning is not supported by stencil ESD. Downgrade
+    /// to block mode when needed.
+    if (decision.mode == PartitionMode::stencil &&
+        !partitionedDimsForPlan.empty()) {
+      bool nonLeading = false;
+      for (unsigned i = 0; i < partitionedDimsForPlan.size(); ++i) {
+        if (partitionedDimsForPlan[i] != i) {
+          nonLeading = true;
+          break;
+        }
+      }
+      if (nonLeading) {
+        decision = PartitioningDecision::blockND(
+            ctx, partitionedDimsForPlan.size(),
+            "Non-leading partition dims: disable stencil ESD");
+        stencilInfo = std::nullopt;
+      }
+    }
+
+    /// If an acquire's inferred partition dims disagree with the chosen plan,
+    /// require full-range to preserve correctness (non-leading mismatch).
+    if (!partitionedDimsForPlan.empty()) {
+      for (auto &info : acquireInfos) {
+        if (info.needsFullRange || info.partitionDims.empty())
+          continue;
+        bool same =
+            info.partitionDims.size() == partitionedDimsForPlan.size();
+        if (same) {
+          for (unsigned i = 0; i < info.partitionDims.size(); ++i) {
+            if (info.partitionDims[i] != partitionedDimsForPlan[i]) {
+              same = false;
+              break;
+            }
+          }
+        }
+        if (!same) {
+          info.needsFullRange = true;
+          ARTS_DEBUG("  Acquire partition dims mismatch with plan; "
+                     "forcing full-range access");
+        }
+      }
+    }
+  }
+
   /// For stencil ESD, inner size stays at BASE block size; halos are acquired
   /// via separate DBs (left/right) using element_offsets into neighboring
   /// chunks.
@@ -2456,7 +2447,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   }
 
   SmallVector<Value> newOuterSizes, newInnerSizes;
-  computeSizesFromDecision(allocOp, decision, blockSizesForPlan, newOuterSizes,
+  computeSizesFromDecision(allocOp, decision, blockSizesForPlan,
+                           partitionedDimsForPlan, newOuterSizes,
                            newInnerSizes);
   if (extendInnerForStencil) {
     if (!newInnerSizes.empty())
@@ -2477,6 +2469,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   /// Step 6: Apply DbRewriter
   DbRewritePlan plan(decision.mode);
   plan.blockSizes = blockSizesForPlan;
+  plan.partitionedDims = partitionedDimsForPlan;
   plan.outerSizes.assign(newOuterSizes.begin(), newOuterSizes.end());
   plan.innerSizes.assign(newInnerSizes.begin(), newInnerSizes.end());
 
@@ -2647,6 +2640,11 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       /// fine-grained mode.
       rewriteInfo.partitionInfo.indices.push_back(zero);
       rewriteInfo.partitionInfo.sizes.push_back(totalSize);
+    }
+
+    if (decision.isBlock() && !plan.partitionedDims.empty()) {
+      rewriteInfo.partitionInfo.partitionedDims.assign(
+          plan.partitionedDims.begin(), plan.partitionedDims.end());
     }
 
     rewriteAcquires.push_back(rewriteInfo);

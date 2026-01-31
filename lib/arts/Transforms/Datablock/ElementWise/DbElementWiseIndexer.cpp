@@ -414,8 +414,7 @@ void DbElementWiseIndexer::transformAccess(
     for (unsigned i = 1; i < outerRank; ++i)
       dbRefIndices.push_back(zero);
 
-    auto dbRef =
-        AC.create<DbRefOp>(loc, elementType, dbPtr, dbRefIndices);
+    auto dbRef = AC.create<DbRefOp>(loc, elementType, dbPtr, dbRefIndices);
 
     /// Replace subindex uses with db_ref result and remove the subindex.
     subindex.replaceAllUsesWith(dbRef.getResult());
@@ -498,8 +497,7 @@ void DbElementWiseIndexer::transformOps(
       for (unsigned i = 1; i < outerRank; ++i)
         dbRefIndices.push_back(zero);
 
-      auto dbRef =
-          AC.create<DbRefOp>(loc, elementType, dbPtr, dbRefIndices);
+      auto dbRef = AC.create<DbRefOp>(loc, elementType, dbPtr, dbRefIndices);
 
       /// Replace subindex uses with db_ref result and remove the subindex.
       subindex.replaceAllUsesWith(dbRef.getResult());

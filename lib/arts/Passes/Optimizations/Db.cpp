@@ -5,13 +5,16 @@
 ///==========================================================================///
 
 /// Dialects
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 /// Arts
 #include "../ArtsPassDetails.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
+#include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 /// Other
@@ -20,12 +23,180 @@
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/ValueUtils.h"
 
 ARTS_DEBUG_SETUP(db);
 
 using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
+
+namespace {
+
+static bool isConstIndex(Value v, int64_t &out) {
+  if (!v)
+    return false;
+  return ValueUtils::getConstantIndex(ValueUtils::stripNumericCasts(v), out);
+}
+
+static bool isConstZero(Value v) {
+  int64_t val = 0;
+  return isConstIndex(v, val) && val == 0;
+}
+
+static bool isConstOne(Value v) {
+  int64_t val = 0;
+  return isConstIndex(v, val) && val == 1;
+}
+
+static bool isRemIndex(Value v) {
+  if (!v)
+    return false;
+  v = ValueUtils::stripNumericCasts(v);
+  return v.getDefiningOp<arith::RemUIOp>() || v.getDefiningOp<arith::RemSIOp>();
+}
+
+static bool isSameValueOrConst(Value a, Value b) {
+  if (!a || !b)
+    return false;
+  Value aStripped = ValueUtils::stripNumericCasts(a);
+  Value bStripped = ValueUtils::stripNumericCasts(b);
+  if (aStripped == bStripped)
+    return true;
+  int64_t aConst = 0;
+  int64_t bConst = 0;
+  if (isConstIndex(aStripped, aConst) && isConstIndex(bStripped, bConst))
+    return aConst == bConst;
+  return false;
+}
+
+static bool isLoopFullRange(LoopNode *loop, Value dimSize) {
+  if (!loop || !dimSize)
+    return false;
+  auto *op = loop->getLoopOp();
+  auto forOp = dyn_cast_or_null<scf::ForOp>(op);
+  if (!forOp)
+    return false;
+
+  Value lb = ValueUtils::stripNumericCasts(forOp.getLowerBound());
+  if (!isConstZero(lb))
+    return false;
+
+  Value step = ValueUtils::stripNumericCasts(forOp.getStep());
+  if (!isConstOne(step))
+    return false;
+
+  Value ub = ValueUtils::stripNumericCasts(forOp.getUpperBound());
+  return isSameValueOrConst(ub, dimSize);
+}
+
+static bool isIndexFullCoverage(Value idx, Value dimSize,
+                                ArrayRef<LoopNode *> loops) {
+  if (!idx || !dimSize)
+    return false;
+
+  int64_t dimConst = 0;
+  if (isConstIndex(dimSize, dimConst) && dimConst == 1)
+    return true;
+
+  idx = ValueUtils::stripNumericCasts(idx);
+
+  /// Partitioned-dim local indices are usually rem ops; assume full coverage.
+  if (isRemIndex(idx))
+    return true;
+
+  int64_t idxConst = 0;
+  if (isConstIndex(idx, idxConst)) {
+    /// Constant index only covers full range if size == 1.
+    return dimConst == 1 && idxConst == 0;
+  }
+
+  LoopNode *best = nullptr;
+  LoopNode::IVExpr bestExpr;
+  int bestDepth = -1;
+
+  for (LoopNode *loop : loops) {
+    if (!loop || !loop->dependsOnInductionVarNormalized(idx))
+      continue;
+    auto expr = loop->analyzeIndexExpr(idx);
+    if (!expr.dependsOnIV)
+      continue;
+    int depth = loop->getNestingDepth();
+    if (!best || depth > bestDepth) {
+      best = loop;
+      bestExpr = expr;
+      bestDepth = depth;
+    }
+  }
+
+  if (!best || !bestExpr.multiplier || !bestExpr.offset)
+    return false;
+  if (*bestExpr.multiplier != 1)
+    return false;
+  if (*bestExpr.offset != 0)
+    return false;
+
+  return isLoopFullRange(best, dimSize);
+}
+
+static bool writesFullAllocation(DbAcquireNode *acqNode, DbAllocOp allocOp,
+                                 LoopAnalysis &loopAnalysis) {
+  if (!acqNode || !allocOp)
+    return true;
+  if (!acqNode->hasStores())
+    return true;
+
+  EdtOp edt = acqNode->getEdtUser();
+  if (!edt)
+    return true;
+
+  SmallVector<LoopNode *> loops;
+  loopAnalysis.collectLoopsInOperation(edt, loops);
+
+  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+  acqNode->collectAccessOperations(dbRefToMemOps);
+  if (dbRefToMemOps.empty())
+    return true;
+
+  ValueRange elemSizes = allocOp.getElementSizes();
+  if (elemSizes.empty())
+    return true;
+
+  for (auto &entry : dbRefToMemOps) {
+    DbRefOp dbRef = entry.first;
+    for (Operation *memOp : entry.second) {
+      if (!isa<memref::StoreOp>(memOp))
+        continue;
+      SmallVector<Value> indexChain =
+          DatablockUtils::collectFullIndexChain(dbRef, memOp);
+      if (indexChain.empty())
+        return false;
+
+      unsigned memrefStart = dbRef.getIndices().size();
+      if (indexChain.size() <= memrefStart)
+        return false;
+
+      unsigned memrefRank = indexChain.size() - memrefStart;
+      unsigned sizeRank = elemSizes.size();
+      unsigned checkRank = std::min(memrefRank, sizeRank);
+
+      for (unsigned d = 0; d < checkRank; ++d) {
+        Value idx = indexChain[memrefStart + d];
+        Value dimSize = elemSizes[d];
+        if (!isIndexFullCoverage(idx, dimSize, loops))
+          return false;
+      }
+
+      if (memrefRank != sizeRank)
+        return false;
+    }
+  }
+
+  return true;
+}
+
+} // namespace
 
 ///===----------------------------------------------------------------------===///
 // Pass Implementation
@@ -99,6 +270,18 @@ bool DbPass::adjustDbModes() {
         newMode = ArtsMode::out;
       else
         newMode = ArtsMode::in;
+
+      if (newMode == ArtsMode::out) {
+        DbAllocNode *allocNode = acqNode->getRootAlloc();
+        DbAllocOp allocOp = allocNode ? allocNode->getDbAllocOp() : DbAllocOp();
+        LoopAnalysis &loopAnalysis = AM->getLoopAnalysis();
+        if (allocOp && !writesFullAllocation(acqNode, allocOp, loopAnalysis)) {
+          ARTS_DEBUG("AcquireOp: " << acqOp
+                                   << " writes partial region; upgrading to "
+                                      "inout to preserve untouched elements");
+          newMode = ArtsMode::inout;
+        }
+      }
 
       /// Each DbAcquireNode's mode is derived from its own accesses only.
       /// Nested acquires will be processed separately by forEachAcquireNode.

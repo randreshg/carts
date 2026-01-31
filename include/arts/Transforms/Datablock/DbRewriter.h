@@ -93,6 +93,8 @@ struct DbRewritePlan {
 
   /// N-D block sizes (one per partitioned dimension)
   SmallVector<Value> blockSizes;
+  /// Original dimension indices for each partitioned dimension
+  SmallVector<unsigned> partitionedDims;
 
   /// Allocation shape (single source of truth)
   SmallVector<Value> outerSizes; /// Number of blocks per dimension
@@ -111,7 +113,10 @@ struct DbRewritePlan {
   }
 
   /// Number of partitioned dimensions
-  unsigned numPartitionedDims() const { return blockSizes.size(); }
+  unsigned numPartitionedDims() const {
+    return !partitionedDims.empty() ? partitionedDims.size()
+                                    : blockSizes.size();
+  }
 
   bool isValid() const {
     switch (mode) {
@@ -185,7 +190,8 @@ protected:
 
   static std::unique_ptr<DbIndexerBase>
   createBlockIndexer(ArrayRef<Value> blockSizes, ArrayRef<Value> startBlocks,
-                     unsigned outerRank, unsigned innerRank);
+                     unsigned outerRank, unsigned innerRank,
+                     ArrayRef<unsigned> partitionedDims);
 
   static std::unique_ptr<DbIndexerBase>
   createStencilIndexer(const StencilInfo &info, Value blockSize,

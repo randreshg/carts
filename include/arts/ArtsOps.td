@@ -755,8 +755,7 @@ def AtomicAddOp : Arts_Op<"atomic_add", [MemoryEffects<[MemWrite]>]> {
 ///===----------------------------------------------------------------------===///
 /// arts.get_total_workers
 ///===----------------------------------------------------------------------===///
-def GetTotalWorkersOp : Arts_Op<"get_total_workers", 
-  [MemoryEffects<[MemWrite]>, RecursiveMemoryEffects]> {
+def GetTotalWorkersOp : Arts_Op<"get_total_workers", [Pure]> {
   let summary = "Get the total number of workers in ARTS";
   let description = [{
     The `arts.get_total_workers` operation retrieves the total number of 
@@ -775,8 +774,7 @@ def GetTotalWorkersOp : Arts_Op<"get_total_workers",
 ///===----------------------------------------------------------------------===///
 /// arts.get_total_nodes
 ///===----------------------------------------------------------------------===///
-def GetTotalNodesOp : Arts_Op<"get_total_nodes",
-  [MemoryEffects<[MemWrite]>, RecursiveMemoryEffects]> {
+def GetTotalNodesOp : Arts_Op<"get_total_nodes", [Pure]> {
   let summary = "Get the total number of nodes in ARTS";
   let description = [{
     The `arts.get_total_nodes` operation retrieves the total number of 
@@ -795,8 +793,7 @@ def GetTotalNodesOp : Arts_Op<"get_total_nodes",
 ///===----------------------------------------------------------------------===///
 /// arts.get_current_worker
 ///===----------------------------------------------------------------------===///
-def GetCurrentWorkerOp : Arts_Op<"get_current_worker",
-  [MemoryEffects<[MemWrite]>, RecursiveMemoryEffects]> {
+def GetCurrentWorkerOp : Arts_Op<"get_current_worker", [Pure]> {
   let summary = "Get the current worker ID in ARTS";
   let description = [{
     The `arts.get_current_worker` operation retrieves the ID of the 
@@ -815,8 +812,7 @@ def GetCurrentWorkerOp : Arts_Op<"get_current_worker",
 ///===----------------------------------------------------------------------===///
 /// arts.get_current_node
 ///===----------------------------------------------------------------------===///
-def GetCurrentNodeOp : Arts_Op<"get_current_node",
-  [MemoryEffects<[MemWrite]>, RecursiveMemoryEffects]> {
+def GetCurrentNodeOp : Arts_Op<"get_current_node", [Pure]> {
   let summary = "Get the current node ID in ARTS";
   let description = [{
     The `arts.get_current_node` operation retrieves the ID of the

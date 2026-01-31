@@ -6,6 +6,7 @@
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
+#include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsDebug.h"
 #include <algorithm>
 
@@ -46,8 +47,8 @@ void LoopAnalysis::run() {
 ///===----------------------------------------------------------------------===///
 
 bool LoopAnalysis::isLoopOperation(Operation *op) const {
-  return isa<scf::ForOp, affine::AffineForOp, scf::ParallelOp, scf::WhileOp>(
-      op);
+  return isa<scf::ForOp, affine::AffineForOp, scf::ParallelOp, scf::WhileOp,
+             arts::ForOp>(op);
 }
 
 LoopNode *LoopAnalysis::getOrCreateLoopNode(Operation *loopOp) {
@@ -116,4 +117,6 @@ void LoopAnalysis::collectLoopsInOperation(Operation *op,
 template void LoopAnalysis::collectLoopsInOperation<scf::ForOp>(
     Operation *op, SmallVectorImpl<LoopNode *> &loops);
 template void LoopAnalysis::collectLoopsInOperation<scf::WhileOp>(
+    Operation *op, SmallVectorImpl<LoopNode *> &loops);
+template void LoopAnalysis::collectLoopsInOperation<arts::ForOp>(
     Operation *op, SmallVectorImpl<LoopNode *> &loops);

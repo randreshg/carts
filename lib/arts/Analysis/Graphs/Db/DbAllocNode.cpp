@@ -250,8 +250,8 @@ bool DbAllocNode::canBePartitioned() {
     return true;
   }
 
-  if (allFailed && (anyIndirectAccess ||
-                    (hasNonAffineAccesses && *hasNonAffineAccesses))) {
+  if (allFailed &&
+      (anyIndirectAccess || (hasNonAffineAccesses && *hasNonAffineAccesses))) {
     ARTS_DEBUG("  All acquires failed but non-affine/indirect access present "
                "- allowing partitioning with full-range acquires");
     return true;

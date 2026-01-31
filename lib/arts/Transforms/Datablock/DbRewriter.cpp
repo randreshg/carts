@@ -141,10 +141,9 @@ DbRewriter::createElementWiseIndexer(ArrayRef<Value> elemOffsets,
                                                 oldElementSizes);
 }
 
-std::unique_ptr<DbIndexerBase>
-DbRewriter::createBlockIndexer(ArrayRef<Value> blockSizes,
-                               ArrayRef<Value> startBlocks, unsigned outerRank,
-                               unsigned innerRank) {
+std::unique_ptr<DbIndexerBase> DbRewriter::createBlockIndexer(
+    ArrayRef<Value> blockSizes, ArrayRef<Value> startBlocks, unsigned outerRank,
+    unsigned innerRank, ArrayRef<unsigned> partitionedDims) {
   ARTS_DEBUG("  Block indexer: outerRank="
              << outerRank << ", innerRank=" << innerRank
              << ", nPartDims=" << blockSizes.size());
@@ -153,6 +152,8 @@ DbRewriter::createBlockIndexer(ArrayRef<Value> blockSizes,
   PartitionInfo info;
   info.mode = PartitionMode::block;
   info.sizes.assign(blockSizes.begin(), blockSizes.end());
+  if (!partitionedDims.empty())
+    info.partitionedDims.assign(partitionedDims.begin(), partitionedDims.end());
 
   return std::make_unique<DbBlockIndexer>(info, startBlocks, outerRank,
                                           innerRank);
@@ -219,7 +220,8 @@ DbRewriter::createIndexer(const DbRewritePlan &plan, Value startBlock,
       startBlocks.resize(blockSizes.size());
     }
 
-    return createBlockIndexer(blockSizes, startBlocks, outerRank, innerRank);
+    return createBlockIndexer(blockSizes, startBlocks, outerRank, innerRank,
+                              plan.partitionedDims);
   }
 
   case PartitionMode::stencil:

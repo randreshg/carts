@@ -80,13 +80,11 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
     /// If every block-capable acquire is full-range, block partitioning adds
     /// overhead without improving locality. Prefer coarse on single-node.
     if (isReadOnly && ctx.allBlockFullRange) {
-      ARTS_DEBUG(
-          "H1.1b applied: Read-only full-range acquires prefer coarse");
+      ARTS_DEBUG("H1.1b applied: Read-only full-range acquires prefer coarse");
       return PartitioningDecision::coarse(
           ctx,
           "H1.1b: Read-only full-range acquires on single-node prefer coarse");
     }
-
   }
 
   /// H1.2: Mixed Access (Block Writes + Indirect Reads) -> Block
@@ -117,7 +115,8 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
     /// Read-only stencil on a single node: coarse avoids ESD/halo overhead
     /// while preserving correctness (shared read-only input).
     if (isSingleNode && isReadOnly) {
-      ARTS_DEBUG("H1.3 applied: Read-only stencil on single-node prefers coarse");
+      ARTS_DEBUG(
+          "H1.3 applied: Read-only stencil on single-node prefers coarse");
       return PartitioningDecision::coarse(
           ctx, "H1.3: Read-only stencil on single-node prefers coarse");
     }
@@ -543,9 +542,10 @@ void setPartitioningHint(Operation *op, const PartitioningHint &hint) {
 }
 
 /// Attribute Transfer Utilities
-/// Copies specific ARTS metadata attributes (arts.id, partition info, arts.loop)
-/// from source to destination operation. Unlike the generic transferAttributes
-/// in ArtsUtils.h which copies ALL attributes, this only copies ARTS-specific ones.
+/// Copies specific ARTS metadata attributes (arts.id, partition info,
+/// arts.loop) from source to destination operation. Unlike the generic
+/// transferAttributes in ArtsUtils.h which copies ALL attributes, this only
+/// copies ARTS-specific ones.
 void copyArtsMetadataAttrs(Operation *source, Operation *dest) {
   if (!source || !dest)
     return;
