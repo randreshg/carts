@@ -554,11 +554,15 @@ carts run <file>.mlir --stop-after=concurrency-opt --debug-only=db,db_partitioni
 
 | Heuristic | Condition | Result |
 |-----------|-----------|--------|
-| H1.1 | Read-only on single node | Keep coarse-grained |
-| H1.2 | Mixed access patterns | Blocked partitioning |
-| H1.3 | Stencil/indexed patterns | Element-wise partitioning |
-| H1.4 | Multi-node systems | Fine-grained partitioning |
-| H1.5 | Non-uniform access | Keep coarse-grained |
+| H1.1 | Read-only single-node, no partition capability | **Coarse** |
+| H1.1b | Read-only + all block-capable acquires are full-range | **Coarse** |
+| H1.2 | Mixed direct writes + indirect reads | **Block** (indirect uses full-range) |
+| H1.2b | Mixed direct + indirect writes | **Block** (indirect uses full-range) |
+| H1.3 | Stencil or indexed patterns | **Stencil** (if supported) or **Block/ElementWise** |
+| H1.4 | Uniform direct access | **Block** |
+| H1.5 | Multi-node system | **Block** if supported, else **ElementWise** |
+| H1.6 | Non-uniform, no capability | **Coarse** |
+| H1.7 | Per-acquire offset mismatch | **Full-range** acquire (per-acquire only) |
 
 **Twin-Diff Policy:**
 - **DEFAULT:** `twin_diff = TRUE` (safe, handles potential overlap)
@@ -640,7 +644,7 @@ flowchart TB
         S11_3[Skip - keep existing]
         S11_4[Gather all child DbAcquireOps]
         S11_5[Build PartitioningContext<br/>from per-acquire analysis]
-        S11_6[Query Heuristics H1.1-H1.5]
+        S11_6[Query Heuristics H1.1-H1.6]
         S11_7[Apply DbRewriter]
         S11_8[Update allocation sizes]
 
@@ -946,15 +950,18 @@ ctx.canElementWise = ctx.anyCanElementWise();
 flowchart TB
     CTX[PartitioningContext built]
 
-    subgraph Heuristics["Heuristic Evaluation (Priority Order)"]
-        H11["H1.1: ReadOnlySingleNode<br/>Priority: 100"]
-        H12["H1.2: MixedAccessVersioning<br/>Priority: 98"]
-        H13["H1.3: StencilPattern<br/>Priority: 95"]
-        H14["H1.4: MultiNode<br/>Priority: 90"]
-        H15["H1.5: AccessUniformity<br/>Priority: 80"]
-        FALLBACK["Fallback: Coarse"]
+    subgraph Heuristics["Heuristic Evaluation (Order in code)"]
+        H11["H1.1: Read-only single-node, no capability"]
+        H11b["H1.1b: Read-only + all full-range block acquires"]
+        H12["H1.2: Mixed direct writes + indirect reads"]
+        H12b["H1.2b: Mixed direct + indirect writes"]
+        H13["H1.3: Stencil / indexed patterns"]
+        H14["H1.4: Uniform direct access"]
+        H15["H1.5: Multi-node"]
+        H16["H1.6: Non-uniform + no capability"]
+        FALLBACK["Fallback: user preference"]
 
-        H11 --> H12 --> H13 --> H14 --> H15 --> FALLBACK
+        H11 --> H11b --> H12 --> H12b --> H13 --> H14 --> H15 --> H16 --> FALLBACK
     end
 
     CTX --> Heuristics
@@ -964,13 +971,19 @@ flowchart TB
 
 #### Heuristics Summary Table
 
-| ID | Priority | Name | Condition | Result |
-|----|----------|------|-----------|--------|
-| H1.1 | 100 | ReadOnlySingleNode | `singleNode && allReadOnly()` | **Coarse** |
-| H1.2 | 98 | MixedAccessVersioning | `anyCanBlocked() && anyCanElementWise()` | **Blocked** |
-| H1.3 | 95 | StencilPattern | `accessPatterns.hasStencil` | **Stencil** |
-| H1.4 | 90 | MultiNode | `multiNode && anyCanElementWise()` | **ElementWise** |
-| H1.5 | 80 | AccessUniformity | `!isUniformAccess && !anyCanElementWise()` | **Coarse** |
+| ID | Condition | Result |
+|----|-----------|--------|
+| H1.1 | Read-only single-node, no partition capability | **Coarse** |
+| H1.1b | Read-only + all block-capable acquires are full-range | **Coarse** |
+| H1.2 | Mixed direct writes + indirect reads | **Block** (indirect full-range) |
+| H1.2b | Mixed direct + indirect writes | **Block** (indirect full-range) |
+| H1.3 | Stencil or indexed patterns | **Stencil** (if supported), else **Block/ElementWise** |
+| H1.4 | Uniform direct access | **Block** |
+| H1.5 | Multi-node | **Block** if supported, else **ElementWise** |
+| H1.6 | Non-uniform + no capability | **Coarse** |
+
+**Note:** H1.7 is a per-acquire decision (full-range vs specific block). It is
+computed during acquire analysis and does not change the allocation-level mode.
 
 ---
 
@@ -1019,38 +1032,37 @@ for (int e = 0; e < numElems; e++) {
 
 ### Heuristics Architecture Assessment
 
-#### Current Structure
+#### Current Structure (as of this codebase)
+
+Heuristics are centralized in the core analysis layer:
 
 ```
-include/arts/Analysis/Heuristics/
-├── HeuristicBase.h              # Abstract base (name, priority, description)
-├── PartitioningHeuristics.h     # 6 concrete heuristic classes
-└── TwinDiffHeuristics.h         # H4 structures (disabled)
-
-lib/arts/Analysis/
-├── HeuristicsConfig.h           # Registry + thresholds
-├── HeuristicsConfig.cpp         # ~300 lines: registry, evaluation, recording
-└── Heuristics/
-    └── PartitioningHeuristics.cpp  # H1.x implementations
+include/arts/Analysis/ArtsHeuristics.h   # PartitioningDecision, PartitioningContext
+lib/arts/Analysis/ArtsHeuristics.cpp     # evaluatePartitioningHeuristics(...)
 ```
 
-#### Is It Overengineered?
+Key entry points:
 
-**Assessment**: Moderately complex but justified for extensibility.
+- `evaluatePartitioningHeuristics(...)` returns a `PartitioningDecision`.
+- `HeuristicsConfig::getPartitioningMode(...)` wraps evaluation and records
+  decisions for diagnostics.
+- `HeuristicsConfig::getAcquireDecisions(...)` applies H1.7 (per-acquire
+  full-range decisions).
 
-| Aspect | Current | Assessment |
-|--------|---------|------------|
-| LOC | ~1,000 total | Reasonable for decision system |
-| Classes | 6 heuristics + base | Small, manageable |
-| Context fields | 16 in PartitioningContext | Appropriate for complex decisions |
-| Evaluation | Linear O(n), n=6 | Very fast |
+**Assessment**: The current single-function structure keeps policy clear and
+traceable, while still recording decisions for diagnostics.
 
-**Why NOT overengineered**:
-1. **Extensibility**: New heuristics (H1.7+) can be added by deriving from `PartitioningHeuristic`
-2. **Separation**: Decision logic separate from application logic (DbRewriter)
-3. **Diagnostics**: `recordDecision()` enables PGO-style feedback
+| Aspect | Current | Notes |
+|--------|---------|-------|
+| LOC | single file (`ArtsHeuristics.cpp`) | Centralized and traceable |
+| Classes | none (function-based) | Simpler than class registry |
+| Context fields | `PartitioningContext` | Rich enough for H1.x decisions |
+| Evaluation | linear chain | Very fast |
 
-**Simplification Opportunity**: Could consolidate H1.1-H1.5 into a single decision function for simpler codebases, but current architecture supports future complexity.
+**Why it is reasonable**:
+1. **Extensibility**: Add new branches in `evaluatePartitioningHeuristics(...)`
+2. **Separation**: Heuristics decide; DbPartitioning applies
+3. **Diagnostics**: `recordDecision()` captures rationale for tooling
 
 ---
 

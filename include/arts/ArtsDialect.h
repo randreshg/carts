@@ -41,9 +41,10 @@ namespace arts {
 /// Information about a single partition entry.
 struct PartitionInfo {
   PartitionMode mode = PartitionMode::coarse;
-  SmallVector<Value, 4> indices; /// For fine_grained: [%i, %j]
-  SmallVector<Value, 4> offsets; /// For chunked/stencil
-  SmallVector<Value, 4> sizes;   /// For chunked/stencil
+  SmallVector<Value, 4> indices;            /// For fine_grained: [%i, %j]
+  SmallVector<Value, 4> offsets;            /// For chunked/stencil
+  SmallVector<Value, 4> sizes;              /// For chunked/stencil
+  SmallVector<unsigned, 4> partitionedDims; /// Original dimension indices
 
   /// Number of partition dimensions
   unsigned dimCount() const {

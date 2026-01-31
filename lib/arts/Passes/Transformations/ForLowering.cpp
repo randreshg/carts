@@ -29,8 +29,8 @@
 #include "arts/Utils/Metadata/LoopMetadata.h"
 #include "arts/Utils/OperationAttributes.h"
 
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -68,8 +68,8 @@ static std::optional<int64_t> getConstIndex(Value v) {
 
 /// Extract static trip count from loop metadata or constant bounds.
 static std::optional<int64_t> getStaticTripCount(ForOp forOp) {
-  if (auto loopAttr =
-          forOp->getAttrOfType<LoopMetadataAttr>(AttrNames::LoopMetadata::Name)) {
+  if (auto loopAttr = forOp->getAttrOfType<LoopMetadataAttr>(
+          AttrNames::LoopMetadata::Name)) {
     if (auto tripAttr = loopAttr.getTripCount()) {
       int64_t tc = tripAttr.getInt();
       if (tc > 0)
@@ -100,14 +100,15 @@ static Value castToIndex(ArtsCodegen *AC, Value v, Location loc) {
 
 /// Skip coarsening for sequential or dependency-carrying loops.
 static bool shouldSkipCoarsening(ForOp forOp) {
-  if (auto loopAttr =
-          forOp->getAttrOfType<LoopMetadataAttr>(AttrNames::LoopMetadata::Name)) {
+  if (auto loopAttr = forOp->getAttrOfType<LoopMetadataAttr>(
+          AttrNames::LoopMetadata::Name)) {
     if (auto depsAttr = loopAttr.getHasInterIterationDeps())
       if (depsAttr.getValue())
         return true;
     if (auto classAttr = loopAttr.getParallelClassification()) {
       if (classAttr.getInt() ==
-          static_cast<int64_t>(LoopMetadata::ParallelClassification::Sequential))
+          static_cast<int64_t>(
+              LoopMetadata::ParallelClassification::Sequential))
         return true;
     }
   }
@@ -130,15 +131,13 @@ static std::optional<int64_t> computeCoarsenedBlockSize(ForOp forOp,
   if (workers <= 0 || tripCount <= 0)
     return std::nullopt;
 
-  constexpr int64_t kMinItersPerWorker = 4;
+  constexpr int64_t kMinItersPerWorker = 8;
   if (tripCount >= workers * kMinItersPerWorker)
     return std::nullopt;
 
-  int64_t desiredWorkers =
-      std::max<int64_t>(1, tripCount / kMinItersPerWorker);
+  int64_t desiredWorkers = std::max<int64_t>(1, tripCount / kMinItersPerWorker);
   desiredWorkers = std::min(desiredWorkers, workers);
-  int64_t blockSize =
-      (tripCount + desiredWorkers - 1) / desiredWorkers;
+  int64_t blockSize = (tripCount + desiredWorkers - 1) / desiredWorkers;
   blockSize = std::max<int64_t>(1, blockSize);
   return blockSize;
 }
@@ -433,8 +432,7 @@ static bool cloneExternalValues(SetVector<Value> &externalValues,
 
 /// Clone external stack allocations into the EDT region and remap uses.
 static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
-                                        IRMapping &mapper,
-                                        OpBuilder &builder) {
+                                        IRMapping &mapper, OpBuilder &builder) {
   DenseMap<Operation *, SmallVector<Operation *, 4>> usesByAlloca;
 
   taskBlock.walk([&](Operation *op) {
@@ -452,7 +450,7 @@ static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
     return;
 
   ARTS_DEBUG("  - Cloning " << usesByAlloca.size()
-                             << " external stack allocas into EDT");
+                            << " external stack allocas into EDT");
 
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPointToStart(&taskBlock);
@@ -631,8 +629,7 @@ void LoopInfo::initialize() {
       if (auto workersConst = getConstIndex(totalWorkers)) {
         int64_t workers = *workersConst;
         if (workers > 0) {
-          int64_t chunksPerWorker =
-              (tripCount.value() + workers - 1) / workers;
+          int64_t chunksPerWorker = (tripCount.value() + workers - 1) / workers;
           if (chunksPerWorker > 1)
             alignSize = chunksPerWorker;
         }
@@ -1910,6 +1907,19 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   Value zero = AC->createIndexConstant(0, loc);
   Value one = AC->createIndexConstant(1, loc);
 
+  /// Precompute worker base offset (global chunk start) once for reuse.
+  Value stepVal = forOp.getStep().empty() ? one : forOp.getStep()[0];
+  Value lowerBoundVal = loopInfo.chunkLowerBound ? loopInfo.chunkLowerBound
+                                                 : forOp.getLowerBound()[0];
+  Value workerOffsetVal = chunkOffset;
+  int64_t stepConst = 0;
+  if (!forOp.getStep().empty() &&
+      (!ValueUtils::getConstantIndex(stepVal, stepConst) || stepConst != 1)) {
+    workerOffsetVal = AC->create<arith::MulIOp>(loc, workerOffsetVal, stepVal);
+  }
+  workerOffsetVal =
+      AC->create<arith::AddIOp>(loc, lowerBoundVal, workerOffsetVal);
+
   /// Acquire worker-local partial accumulator slot for reductions
   SmallVector<Value> reductionTaskDeps;
   DenseMap<Value, uint64_t> reductionVarIndex;
@@ -2057,37 +2067,20 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         if (blockSizes.empty())
           blockSizes.push_back(AC->createIndexConstant(1, loc));
 
-        /// Compute worker chunk offset and size
-        /// workerOffset = lowerBound + chunkOffset * step
+        /// Compute worker chunk size (offset precomputed).
         /// workerSize = workerIterationCount * step
-        Value workerOffsetVal = chunkOffset;
-        if (!forOp.getStep().empty()) {
-          Value step = forOp.getStep()[0];
-          int64_t stepVal;
-          if (!ValueUtils::getConstantIndex(step, stepVal) || stepVal != 1) {
-            workerOffsetVal =
-                AC->create<arith::MulIOp>(loc, workerOffsetVal, step);
-          }
-        }
-        Value lowerBoundVal = loopInfo.chunkLowerBound
-                                  ? loopInfo.chunkLowerBound
-                                  : forOp.getLowerBound()[0];
-        workerOffsetVal =
-            AC->create<arith::AddIOp>(loc, lowerBoundVal, workerOffsetVal);
         SmallVector<Value> workerOffsets = {workerOffsetVal};
         Value workerSizeVal = loopInfo.workerIterationCount;
         Value workerHintSizeVal = loopInfo.workerMaxIterations
                                       ? loopInfo.workerMaxIterations
                                       : workerSizeVal;
-        if (!forOp.getStep().empty()) {
-          Value step = forOp.getStep()[0];
-          int64_t stepVal;
-          if (!ValueUtils::getConstantIndex(step, stepVal) || stepVal != 1) {
-            workerSizeVal = AC->create<arith::MulIOp>(
-                loc, loopInfo.workerIterationCount, step);
-            workerHintSizeVal =
-                AC->create<arith::MulIOp>(loc, workerHintSizeVal, step);
-          }
+        if (!forOp.getStep().empty() &&
+            (!ValueUtils::getConstantIndex(stepVal, stepConst) ||
+             stepConst != 1)) {
+          workerSizeVal = AC->create<arith::MulIOp>(
+              loc, loopInfo.workerIterationCount, stepVal);
+          workerHintSizeVal =
+              AC->create<arith::MulIOp>(loc, workerHintSizeVal, stepVal);
         }
         SmallVector<Value> workerSizes = {workerSizeVal};
         SmallVector<Value> workerHintSizes = {workerHintSizeVal};
@@ -2190,38 +2183,6 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   loopInfo.recomputeWorkerBoundsInside(taskWorkerId, insideTotalWorkers);
   chunkOffset = loopInfo.workerFirstChunk;
 
-  scf::ForOp iterLoop =
-      AC->create<scf::ForOp>(loc, zero, loopInfo.workerIterationCount, one);
-
-  /// Set loop metadata, marking as parallel if only reduction deps existed
-  if (Attribute loopAttr = getLoopMetadataAttr(forOp)) {
-    if (!reductionVarIndex.empty()) {
-      if (auto origMeta = dyn_cast<LoopMetadataAttr>(loopAttr)) {
-        int64_t memrefDeps = 0;
-        if (auto attr = origMeta.getMemrefsWithLoopCarriedDeps())
-          memrefDeps = attr.getInt();
-
-        if (memrefDeps == 0) {
-          auto parallelMeta = LoopMetadata::createParallelizedMetadata(
-              forOp.getContext(), origMeta);
-          iterLoop->setAttr(AttrNames::LoopMetadata::Name, parallelMeta);
-          ARTS_DEBUG("  Updated loop metadata: potentiallyParallel=true "
-                     "(reduction-only deps, no stencil patterns)");
-        } else {
-          iterLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
-          ARTS_DEBUG("  Keeping original metadata: memrefsWithLoopCarriedDeps="
-                     << memrefDeps << " (stencil patterns detected)");
-        }
-      } else {
-        iterLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
-      }
-    } else {
-      iterLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
-    }
-  }
-
-  AC->setInsertionPointToStart(iterLoop.getBody());
-
   /// Map reduction variables to worker's accumulator slot
   IRMapping redMapper = mapper;
   DenseSet<Operation *> opsToSkip;
@@ -2242,7 +2203,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   }
 
   Block &forBody = forOp.getRegion().front();
-  Region *taskEdtRegion = iterLoop->getParentRegion();
+  Region *taskEdtRegion = taskBlock.getParent();
 
   /// Collect external values needed by the loop body and induction variable
   SetVector<Value> externalValues;
@@ -2251,9 +2212,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   Value origStep = forOp.getStep()[0];
   Value origLowerBound = forOp.getLowerBound()[0];
   Value origUpperBound = forOp.getUpperBound()[0];
-  Value chunkLowerBoundVal = loopInfo.chunkLowerBound
-                                 ? loopInfo.chunkLowerBound
-                                 : origLowerBound;
+  Value chunkLowerBoundVal =
+      loopInfo.chunkLowerBound ? loopInfo.chunkLowerBound : origLowerBound;
 
   Region *forBodyRegion = forBody.getParent();
   std::function<void(Value)> collectWithDeps = [&](Value val) {
@@ -2292,17 +2252,80 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
               "passed as EDT dependencies");
   }
 
-  /// Map induction variable
-  Value localIter = iterLoop.getInductionVar();
-  Value globalIter = AC->create<arith::AddIOp>(loc, chunkOffset, localIter);
-  Value stepVal = redMapper.lookupOrDefault(origStep);
-  Value baseLowerBoundVal = redMapper.lookupOrDefault(chunkLowerBoundVal);
-  Value globalIterScaled = AC->create<arith::MulIOp>(loc, globalIter, stepVal);
-  Value globalIdx =
-      AC->create<arith::AddIOp>(loc, baseLowerBoundVal, globalIterScaled);
-
+  Value stepValMapped = redMapper.lookupOrDefault(origStep);
+  Value baseOffsetVal = redMapper.lookupOrDefault(workerOffsetVal);
   Value origLowerBoundVal = redMapper.lookupOrDefault(origLowerBound);
   Value origUpperBoundVal = redMapper.lookupOrDefault(origUpperBound);
+
+  /// Compute local loop bounds to avoid per-iteration bounds checks when the
+  /// chunk lower bound was aligned down. This preserves block alignment while
+  /// skipping invalid prefix/suffix iterations.
+  Value loopLower = zero;
+  Value loopUpper = loopInfo.workerIterationCount;
+  if (loopInfo.useAlignedLowerBound) {
+    Value stepClamped = AC->create<arith::MaxUIOp>(loc, stepValMapped, one);
+
+    auto clampNonNeg = [&](Value v) -> Value {
+      Value isNeg =
+          AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, v, zero);
+      return AC->create<arith::SelectOp>(loc, isNeg, zero, v);
+    };
+    auto ceilDiv = [&](Value num, Value denom) -> Value {
+      Value denomMinusOne = AC->create<arith::SubIOp>(loc, denom, one);
+      Value adjusted = AC->create<arith::AddIOp>(loc, num, denomMinusOne);
+      return AC->create<arith::DivUIOp>(loc, adjusted, denom);
+    };
+
+    Value diffLower =
+        AC->create<arith::SubIOp>(loc, origLowerBoundVal, baseOffsetVal);
+    Value diffUpper =
+        AC->create<arith::SubIOp>(loc, origUpperBoundVal, baseOffsetVal);
+    Value diffLowerPos = clampNonNeg(diffLower);
+    Value diffUpperPos = clampNonNeg(diffUpper);
+
+    loopLower = ceilDiv(diffLowerPos, stepClamped);
+    loopUpper = ceilDiv(diffUpperPos, stepClamped);
+    loopUpper = AC->create<arith::MinUIOp>(loc, loopUpper,
+                                           loopInfo.workerIterationCount);
+  }
+
+  scf::ForOp iterLoop = AC->create<scf::ForOp>(loc, loopLower, loopUpper, one);
+
+  /// Set loop metadata, marking as parallel if only reduction deps existed
+  if (Attribute loopAttr = getLoopMetadataAttr(forOp)) {
+    if (!reductionVarIndex.empty()) {
+      if (auto origMeta = dyn_cast<LoopMetadataAttr>(loopAttr)) {
+        int64_t memrefDeps = 0;
+        if (auto attr = origMeta.getMemrefsWithLoopCarriedDeps())
+          memrefDeps = attr.getInt();
+
+        if (memrefDeps == 0) {
+          auto parallelMeta = LoopMetadata::createParallelizedMetadata(
+              forOp.getContext(), origMeta);
+          iterLoop->setAttr(AttrNames::LoopMetadata::Name, parallelMeta);
+          ARTS_DEBUG("  Updated loop metadata: potentiallyParallel=true "
+                     "(reduction-only deps, no stencil patterns)");
+        } else {
+          iterLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
+          ARTS_DEBUG("  Keeping original metadata: memrefsWithLoopCarriedDeps="
+                     << memrefDeps << " (stencil patterns detected)");
+        }
+      } else {
+        iterLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
+      }
+    } else {
+      iterLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
+    }
+  }
+
+  AC->setInsertionPointToStart(iterLoop.getBody());
+
+  /// Map induction variable
+  Value localIter = iterLoop.getInductionVar();
+  Value globalIterScaled =
+      AC->create<arith::MulIOp>(loc, localIter, stepValMapped);
+  Value globalIdx =
+      AC->create<arith::AddIOp>(loc, baseOffsetVal, globalIterScaled);
 
   /// Map undef to identity value
   for (Operation &op : forBody.without_terminator()) {
@@ -2320,17 +2343,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   if (forBody.getNumArguments() > 0)
     redMapper.map(forBody.getArgument(0), globalIdx);
 
-  scf::IfOp boundsIf;
-  if (loopInfo.useAlignedLowerBound) {
-    Value geLower = AC->create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::uge, globalIdx, origLowerBoundVal);
-    Value ltUpper = AC->create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::ult, globalIdx, origUpperBoundVal);
-    Value inBounds = AC->create<arith::AndIOp>(loc, geLower, ltUpper);
-    boundsIf = AC->create<scf::IfOp>(loc, inBounds,
-                                    /*withElseRegion=*/false);
-    AC->setInsertionPointToStart(&boundsIf.getThenRegion().front());
-  }
+  /// No per-iteration bounds check needed: loop bounds already clamped.
 
   /// Clone stack allocations first so subsequent ops can map to them.
   for (Operation &op : forBody.without_terminator()) {

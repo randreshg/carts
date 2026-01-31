@@ -230,6 +230,7 @@ private:
   std::optional<std::pair<Value, Value>> computedBlockInfo;
   std::optional<std::pair<Value, Value>> originalBounds;
   std::optional<StencilBounds> stencilBounds;
+  bool hasNonConstantOffset = false;
   mutable std::optional<AccessPattern> accessPattern;
 
 public:
