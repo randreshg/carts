@@ -367,6 +367,7 @@ void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   /// Partition DBs and run DbPass again to adjust modes
   pm.addPass(arts::createDbPartitioningPass(AM));
   pm.addPass(arts::createDbPass(AM));
+  pm.addNestedPass<func::FuncOp>(arts::createBlockLoopStripMiningPass());
   pm.addPass(arts::createArtsHoistingPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());

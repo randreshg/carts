@@ -19,7 +19,10 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/IRMapping.h"
 #include "polygeist/Ops.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "db_stencil"
 
@@ -219,6 +222,500 @@ void DbStencilIndexer::transformDbRefUsers(
              << ", left=" << (leftMemref ? "yes" : "no")
              << ", right=" << (rightMemref ? "yes" : "no"));
 
+  llvm::DenseMap<Value, std::pair<Value, Value>> selectionCache;
+  struct RowSelection {
+    Value memref;
+    Value rowIdx;
+  };
+  using OffsetMap = llvm::DenseMap<int64_t, RowSelection>;
+  llvm::DenseMap<Operation *, OffsetMap> rowSelectionCache;
+
+  auto isSameValueWithCasts = [&](Value a, Value b) -> bool {
+    if (!a || !b)
+      return false;
+    if (a == b)
+      return true;
+    a = ValueUtils::stripNumericCasts(a);
+    b = ValueUtils::stripNumericCasts(b);
+    if (a == b)
+      return true;
+    if (auto cast = a.getDefiningOp<arith::IndexCastOp>())
+      if (cast.getIn() == b)
+        return true;
+    if (auto cast = b.getDefiningOp<arith::IndexCastOp>())
+      if (cast.getIn() == a)
+        return true;
+    return false;
+  };
+
+  auto deriveRowOffset = [&](Value rowExpr, Value rowIV, Value baseOffsetVal,
+                             int64_t &rowOffset,
+                             bool &includesBaseOffset) -> bool {
+    int64_t constOff = 0;
+    Value baseExpr = ValueUtils::stripConstantOffset(rowExpr, &constOff);
+    baseExpr = ValueUtils::stripNumericCasts(baseExpr);
+
+    if (isSameValueWithCasts(baseExpr, rowIV)) {
+      rowOffset = constOff;
+      includesBaseOffset = false;
+      return true;
+    }
+
+    if (auto addOp = baseExpr.getDefiningOp<arith::AddIOp>()) {
+      Value lhs = ValueUtils::stripNumericCasts(addOp.getLhs());
+      Value rhs = ValueUtils::stripNumericCasts(addOp.getRhs());
+      bool lhsIsRow = isSameValueWithCasts(lhs, rowIV);
+      bool rhsIsRow = isSameValueWithCasts(rhs, rowIV);
+      if (lhsIsRow || rhsIsRow) {
+        Value other = lhsIsRow ? rhs : lhs;
+        if (baseOffsetVal && (other == baseOffsetVal ||
+                              ValueUtils::dependsOn(other, baseOffsetVal))) {
+          rowOffset = constOff;
+          includesBaseOffset = true;
+          return true;
+        }
+        if (!ValueUtils::dependsOn(other, rowIV)) {
+          rowOffset = constOff;
+          includesBaseOffset =
+              baseOffsetVal && ValueUtils::dependsOn(other, baseOffsetVal);
+          return true;
+        }
+      }
+    }
+
+    if (ValueUtils::dependsOn(baseExpr, rowIV)) {
+      rowOffset = constOff;
+      includesBaseOffset =
+          baseOffsetVal && ValueUtils::dependsOn(baseExpr, baseOffsetVal);
+      return true;
+    }
+
+    return false;
+  };
+
+  enum class RegionKind { Left, Middle, Right };
+
+  auto rewriteUserForRegion = [&](Operation *user, RegionKind region,
+                                  scf::ForOp rowLoop) {
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPoint(user);
+    Location userLoc = user->getLoc();
+
+    ValueRange indices;
+    bool isLoad = false;
+    Value storeValue;
+    if (auto load = dyn_cast<memref::LoadOp>(user)) {
+      indices = load.getIndices();
+      isLoad = true;
+    } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
+      indices = store.getIndices();
+      storeValue = store.getValue();
+    } else {
+      return;
+    }
+
+    if (indices.empty())
+      return;
+
+    /// Extract row index for region determination
+    ValueRange refIndices = ref.getIndices();
+    Value anchor = findAnchor(elemOffset);
+    unsigned partitionDim = 0;
+    if (!partitionInfo.partitionedDims.empty() &&
+        partitionInfo.partitionedDims.front() < indices.size()) {
+      partitionDim = partitionInfo.partitionedDims.front();
+    } else {
+      partitionDim = pickPartitionDim(indices, anchor);
+    }
+    Value globalRow = indices[partitionDim];
+
+    /// If load/store indices don't carry the partition dimension, fall back to
+    /// the db_ref indices (common for row-partitioned 2D stencils).
+    if (anchor && !ValueUtils::dependsOn(globalRow, anchor) &&
+        !refIndices.empty()) {
+      unsigned refPartitionDim = pickPartitionDim(refIndices, anchor);
+      Value refRow = refIndices[refPartitionDim];
+      if (refRow == anchor || ValueUtils::dependsOn(refRow, anchor)) {
+        globalRow = refRow;
+      }
+    }
+
+    /// Handle linearized access: extract row from linear index
+    Value stride =
+        getLinearizedStride(indices, newElementType, builder, userLoc);
+    if (stride) {
+      globalRow = builder.create<arith::DivUIOp>(userLoc, indices[0], stride);
+    }
+
+    /// Compute localRow = globalRow - baseOffset (using BASE offset semantics)
+    Value baseOffset =
+        partitionInfo.offsets.empty() ? zero : partitionInfo.offsets.front();
+    Value localRow =
+        baseOffset
+            ? builder.create<arith::SubIOp>(userLoc, globalRow, baseOffset)
+            : globalRow;
+
+    int64_t rowOffset = 0;
+    bool includesBaseOffset = false;
+    if (!deriveRowOffset(globalRow, rowLoop.getInductionVar(), baseOffset,
+                         rowOffset, includesBaseOffset)) {
+      return;
+    }
+
+    Value selectedRowIdx = localRow;
+    Value selectedMemref = ownedMemref;
+
+    if (region == RegionKind::Left && rowOffset < 0) {
+      selectedMemref = leftMemref ? leftMemref : ownedMemref;
+      selectedRowIdx =
+          builder.create<arith::AddIOp>(userLoc, localRow, haloLeft);
+    } else if (region == RegionKind::Right && rowOffset > 0) {
+      selectedMemref = rightMemref ? rightMemref : ownedMemref;
+      selectedRowIdx =
+          builder.create<arith::SubIOp>(userLoc, localRow, blockSize);
+    }
+
+    /// Build full index lists by replacing the partitioned dimension.
+    auto buildAccessIndices = [&](Value rowIdx) {
+      SmallVector<Value> out;
+      out.reserve(indices.size());
+      if (stride) {
+        /// Linearized: re-linearize with rowIdx and extracted column.
+        Value col = builder.create<arith::RemUIOp>(userLoc, indices[0], stride);
+        Value linear = builder.create<arith::MulIOp>(userLoc, rowIdx, stride);
+        linear = builder.create<arith::AddIOp>(userLoc, linear, col);
+        out.push_back(linear);
+        return out;
+      }
+      for (size_t i = 0; i < indices.size(); ++i) {
+        if (i == partitionDim)
+          out.push_back(rowIdx);
+        else
+          out.push_back(indices[i]);
+      }
+      return out;
+    };
+
+    SmallVector<Value> selectedIndices = buildAccessIndices(selectedRowIdx);
+    if (isLoad) {
+      auto newLoad = builder.create<memref::LoadOp>(userLoc, selectedMemref,
+                                                    selectedIndices);
+      auto load = cast<memref::LoadOp>(user);
+      load.replaceAllUsesWith(newLoad.getResult());
+      opsToRemove.insert(load);
+    } else {
+      builder.create<memref::StoreOp>(userLoc, storeValue, selectedMemref,
+                                      selectedIndices);
+      opsToRemove.insert(user);
+    }
+  };
+
+  bool refErasedWithRowLoop = false;
+  auto tryVersionRowLoop = [&]() -> bool {
+    int64_t haloLeftConst = 0;
+    int64_t haloRightConst = 0;
+    if (!ValueUtils::getConstantIndex(haloLeft, haloLeftConst) ||
+        !ValueUtils::getConstantIndex(haloRight, haloRightConst))
+      return false;
+
+    scf::ForOp rowLoop;
+    scf::ForOp innerLoop;
+    int64_t minOffset = 0;
+    int64_t maxOffset = 0;
+    bool hasOffsets = false;
+    bool rowIvIsLocal = false;
+    bool rowIvIsLocalSet = false;
+
+    for (Operation *user : users) {
+      if (!isa<memref::LoadOp, memref::StoreOp>(user))
+        continue;
+
+      /// Extract indices from load/store
+      ValueRange indices;
+      if (auto load = dyn_cast<memref::LoadOp>(user)) {
+        indices = load.getIndices();
+      } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
+        indices = store.getIndices();
+      }
+
+      if (indices.empty())
+        continue;
+
+      /// Determine row loop and inner loop
+      scf::ForOp foundInner;
+      for (Operation *parent = user->getParentOp(); parent;
+           parent = parent->getParentOp()) {
+        if (auto loop = dyn_cast<scf::ForOp>(parent)) {
+          foundInner = loop;
+          break;
+        }
+      }
+      if (!foundInner)
+        return false;
+
+      ValueRange refIndices = ref.getIndices();
+      Value anchor = findAnchor(elemOffset);
+      unsigned partitionDim = 0;
+      if (!partitionInfo.partitionedDims.empty() &&
+          partitionInfo.partitionedDims.front() < indices.size()) {
+        partitionDim = partitionInfo.partitionedDims.front();
+      } else {
+        partitionDim = pickPartitionDim(indices, anchor);
+      }
+      Value globalRow = indices[partitionDim];
+
+      if (anchor && !ValueUtils::dependsOn(globalRow, anchor) &&
+          !refIndices.empty()) {
+        unsigned refPartitionDim = pickPartitionDim(refIndices, anchor);
+        Value refRow = refIndices[refPartitionDim];
+        if (refRow == anchor || ValueUtils::dependsOn(refRow, anchor)) {
+          globalRow = refRow;
+        }
+      }
+
+      if (indices.size() == 1) {
+        if (auto memrefType = newElementType.dyn_cast<MemRefType>()) {
+          if (memrefType.getRank() >= 2) {
+            auto staticStride = DatablockUtils::getStaticStride(memrefType);
+            if (staticStride && *staticStride > 1)
+              return false;
+          }
+        }
+      }
+
+      scf::ForOp foundRow;
+      for (Operation *parent = user->getParentOp(); parent;
+           parent = parent->getParentOp()) {
+        auto loop = dyn_cast<scf::ForOp>(parent);
+        if (!loop)
+          continue;
+        if (ValueUtils::dependsOn(globalRow, loop.getInductionVar())) {
+          foundRow = loop;
+          break;
+        }
+      }
+      if (!foundRow)
+        return false;
+
+      if (!rowLoop)
+        rowLoop = foundRow;
+      else if (rowLoop != foundRow)
+        return false;
+
+      if (!innerLoop)
+        innerLoop = foundInner;
+      else if (innerLoop != foundInner)
+        return false;
+
+      Value baseOffset =
+          partitionInfo.offsets.empty() ? zero : partitionInfo.offsets.front();
+      int64_t rowOffset = 0;
+      bool includesBaseOffset = false;
+      if (!deriveRowOffset(globalRow, rowLoop.getInductionVar(), baseOffset,
+                           rowOffset, includesBaseOffset))
+        return false;
+
+      if (!rowIvIsLocalSet) {
+        rowIvIsLocal = includesBaseOffset;
+        rowIvIsLocalSet = true;
+      } else if (rowIvIsLocal != includesBaseOffset) {
+        return false;
+      }
+
+      minOffset = hasOffsets ? std::min(minOffset, rowOffset) : rowOffset;
+      maxOffset = hasOffsets ? std::max(maxOffset, rowOffset) : rowOffset;
+      hasOffsets = true;
+    }
+
+    if (!rowLoop || !innerLoop || !hasOffsets)
+      return false;
+
+    int64_t leftBand = minOffset < 0 ? -minOffset : 0;
+    int64_t rightBand = maxOffset > 0 ? maxOffset : 0;
+    if (leftBand > 0 && haloLeftConst < leftBand)
+      return false;
+    if (rightBand > 0 && haloRightConst < rightBand)
+      return false;
+
+    if (rowLoop.getNumResults() != 0)
+      return false;
+
+    int64_t stepConst = 0;
+    if (!ValueUtils::getConstantIndex(rowLoop.getStep(), stepConst) ||
+        stepConst != 1)
+      return false;
+
+    /// Create three row-loop regions: left, middle, right.
+    OpBuilder::InsertionGuard versionGuard(builder);
+    builder.setInsertionPoint(rowLoop);
+    Location loopLoc = rowLoop.getLoc();
+
+    Value lb = rowLoop.getLowerBound();
+    Value ub = rowLoop.getUpperBound();
+    Value step = rowLoop.getStep();
+    Value zero = builder.create<arith::ConstantIndexOp>(loopLoc, 0);
+
+    Value baseOffset =
+        partitionInfo.offsets.empty() ? zero : partitionInfo.offsets.front();
+    Value blockSz =
+        partitionInfo.sizes.empty() ? Value() : partitionInfo.sizes.front();
+    if (!baseOffset || !blockSz)
+      return false;
+
+    int64_t blockSzConst = 0;
+    if (!ValueUtils::getConstantIndex(blockSz, blockSzConst))
+      return false;
+    if (leftBand + rightBand > blockSzConst)
+      return false;
+
+    Value leftBandVal =
+        builder.create<arith::ConstantIndexOp>(loopLoc, leftBand);
+    Value rightBandVal =
+        builder.create<arith::ConstantIndexOp>(loopLoc, rightBand);
+
+    /// Split at localRow boundaries: left band, middle band, right band.
+    Value leftRow = rowIvIsLocal ? zero : baseOffset;
+    Value leftEnd =
+        builder.create<arith::AddIOp>(loopLoc, leftRow, leftBandVal);
+
+    Value rightEnd =
+        rowIvIsLocal
+            ? blockSz
+            : builder.create<arith::AddIOp>(loopLoc, baseOffset, blockSz);
+    Value rightRow =
+        builder.create<arith::SubIOp>(loopLoc, rightEnd, rightBandVal);
+
+    /// Clamp splits to original loop bounds
+    Value leftLb = builder.create<arith::MaxSIOp>(loopLoc, lb, leftRow);
+    Value leftUb = builder.create<arith::MinSIOp>(loopLoc, ub, leftEnd);
+
+    Value midLb = builder.create<arith::MaxSIOp>(loopLoc, lb, leftEnd);
+    Value midUb = builder.create<arith::MinSIOp>(loopLoc, ub, rightRow);
+
+    Value rightLb = builder.create<arith::MaxSIOp>(loopLoc, lb, rightRow);
+    Value rightUb = builder.create<arith::MinSIOp>(loopLoc, ub, rightEnd);
+
+    bool refInRowLoop = rowLoop->isAncestor(ref.getOperation());
+
+    auto cloneRowLoop = [&](Value newLb, Value newUb,
+                            RegionKind region) -> scf::ForOp {
+      scf::ForOp newLoop =
+          builder.create<scf::ForOp>(loopLoc, newLb, newUb, step);
+      Block *oldBody = rowLoop.getBody();
+      Block *newBody = newLoop.getBody();
+
+      IRMapping mapping;
+      mapping.map(rowLoop.getInductionVar(), newLoop.getInductionVar());
+
+      builder.setInsertionPointToStart(newBody);
+      for (Operation &op : oldBody->without_terminator())
+        builder.clone(op, mapping);
+
+      /// Rewrite loads/stores for this region.
+      newLoop.getBody()->walk([&](Operation *op) {
+        if (!isa<memref::LoadOp, memref::StoreOp>(op))
+          return;
+        auto mem = isa<memref::LoadOp>(op)
+                       ? cast<memref::LoadOp>(op).getMemRef()
+                       : cast<memref::StoreOp>(op).getMemRef();
+        bool matchesRef = mem == ref.getResult();
+        if (!matchesRef) {
+          if (auto dbRef = mem.getDefiningOp<DbRefOp>())
+            matchesRef = dbRef.getSource() == ref.getSource();
+        }
+        if (!matchesRef)
+          return;
+        rewriteUserForRegion(op, region, newLoop);
+      });
+
+      return newLoop;
+    };
+
+    cloneRowLoop(leftLb, leftUb, RegionKind::Left);
+    cloneRowLoop(midLb, midUb, RegionKind::Middle);
+    cloneRowLoop(rightLb, rightUb, RegionKind::Right);
+
+    rowLoop.erase();
+    refErasedWithRowLoop = refInRowLoop;
+    return true;
+  };
+
+  if (tryVersionRowLoop()) {
+    if (!refErasedWithRowLoop)
+      opsToRemove.insert(ref.getOperation());
+    return;
+  }
+
+  auto buildSelection = [&](OpBuilder &selBuilder, Location selLoc,
+                            Value localRowVal) -> RowSelection {
+    Value isLeft = selBuilder.create<arith::CmpIOp>(
+        selLoc, arith::CmpIPredicate::slt, localRowVal, zero);
+    Value leftIdx =
+        selBuilder.create<arith::AddIOp>(selLoc, localRowVal, haloLeft);
+    Value ownedIdx = localRowVal;
+    Value rightIdx =
+        selBuilder.create<arith::SubIOp>(selLoc, localRowVal, blockSize);
+
+    Value clampedOwnedIdx = clampIndex(ownedIdx, blockSize, selBuilder, selLoc);
+    Value clampedLeftIdx =
+        leftMemref ? clampIndex(leftIdx, haloLeft, selBuilder, selLoc)
+                   : Value();
+    Value clampedRightIdx =
+        rightMemref ? clampIndex(rightIdx, haloRight, selBuilder, selLoc)
+                    : Value();
+
+    Value selectedMemref = ownedMemref;
+    Value selectedRowIdx = clampedOwnedIdx;
+
+    auto selectValue = [&](Value cond, Value trueVal, Value falseVal) -> Value {
+      bool forceIf = trueVal.getType().isa<MemRefType>();
+      if (!forceIf && cond && cond.getType().isInteger(1))
+        return selBuilder.create<arith::SelectOp>(selLoc, cond, trueVal,
+                                                  falseVal);
+      auto ifOp = selBuilder.create<scf::IfOp>(selLoc, trueVal.getType(), cond,
+                                               /*withElseRegion=*/true);
+      {
+        OpBuilder::InsertionGuard g(selBuilder);
+        selBuilder.setInsertionPointToStart(&ifOp.getThenRegion().front());
+        selBuilder.create<scf::YieldOp>(selLoc, trueVal);
+        selBuilder.setInsertionPointToStart(&ifOp.getElseRegion().front());
+        selBuilder.create<scf::YieldOp>(selLoc, falseVal);
+      }
+      return ifOp.getResult(0);
+    };
+
+    if (leftMemref) {
+      Value safeLeftMemref =
+          leftPtrNotNull ? selectValue(leftPtrNotNull, leftMemref, ownedMemref)
+                         : leftMemref;
+      Value safeLeftIdx =
+          leftPtrNotNull
+              ? selectValue(leftPtrNotNull, clampedLeftIdx, clampedOwnedIdx)
+              : clampedLeftIdx;
+      selectedMemref = selectValue(isLeft, safeLeftMemref, selectedMemref);
+      selectedRowIdx = selectValue(isLeft, safeLeftIdx, selectedRowIdx);
+    }
+
+    if (rightMemref) {
+      Value isRight = selBuilder.create<arith::CmpIOp>(
+          selLoc, arith::CmpIPredicate::sge, localRowVal, blockSize);
+
+      Value safeRightMemref =
+          rightPtrNotNull
+              ? selectValue(rightPtrNotNull, rightMemref, ownedMemref)
+              : rightMemref;
+      Value safeRightIdx =
+          rightPtrNotNull
+              ? selectValue(rightPtrNotNull, clampedRightIdx, clampedOwnedIdx)
+              : clampedRightIdx;
+
+      selectedMemref = selectValue(isRight, safeRightMemref, selectedMemref);
+      selectedRowIdx = selectValue(isRight, safeRightIdx, selectedRowIdx);
+    }
+
+    return {selectedMemref, selectedRowIdx};
+  };
+
   for (Operation *user : users) {
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPoint(user);
@@ -244,7 +741,13 @@ void DbStencilIndexer::transformDbRefUsers(
     /// Extract row index for region determination
     ValueRange refIndices = ref.getIndices();
     Value anchor = findAnchor(elemOffset);
-    unsigned partitionDim = pickPartitionDim(indices, anchor);
+    unsigned partitionDim = 0;
+    if (!partitionInfo.partitionedDims.empty() &&
+        partitionInfo.partitionedDims.front() < indices.size()) {
+      partitionDim = partitionInfo.partitionedDims.front();
+    } else {
+      partitionDim = pickPartitionDim(indices, anchor);
+    }
     Value globalRow = indices[partitionDim];
 
     /// If load/store indices don't carry the partition dimension, fall back to
@@ -274,25 +777,7 @@ void DbStencilIndexer::transformDbRefUsers(
             ? builder.create<arith::SubIOp>(userLoc, globalRow, baseOffset)
             : globalRow;
 
-    /// 3-BUFFER SELECTION MODE (BASE-OFFSET SEMANTICS)
-    /// Determine which region localRow falls into and select correct buffer
-    ///
-    /// Region boundaries (base-offset semantics uses SIGNED comparison):
-    /// - Left halo: localRow < 0 (negative indices)
-    /// - Owned: 0 <= localRow < blockSize
-    /// - Right halo: localRow >= blockSize
-    Value isLeftHalo = builder.create<arith::CmpIOp>(
-        userLoc, arith::CmpIPredicate::slt, localRow, zero);
-
-    /// Compute buffer-local indices for each region (base-offset semantics):
-    /// Left halo: index = localRow + haloLeft (shift negative to positive)
-    /// Owned: index = localRow (0-based within owned chunk)
-    /// Right halo: index = localRow - blockSize (0-based within right halo)
-
-    Value leftIdx = builder.create<arith::AddIOp>(userLoc, localRow, haloLeft);
     Value ownedIdx = localRow;
-    Value rightIdx =
-        builder.create<arith::SubIOp>(userLoc, localRow, blockSize);
 
     /// Build full index lists by replacing the partitioned dimension.
     auto buildAccessIndices = [&](Value rowIdx) {
@@ -316,58 +801,137 @@ void DbStencilIndexer::transformDbRefUsers(
     };
 
     if (isLoad) {
-      /// LOAD: Select buffer+row index, then perform a single load.
-      /// This avoids per-element scf.if regions and redundant loads.
+      /// LOAD: Hoist buffer selection to the row loop when possible, then do a
+      /// single load inside the inner loop.
 
-      Value clampedOwnedIdx = clampIndex(ownedIdx, blockSize, builder, userLoc);
-      Value clampedLeftIdx =
-          leftMemref ? clampIndex(leftIdx, haloLeft, builder, userLoc)
-                     : Value();
-      Value clampedRightIdx =
-          rightMemref ? clampIndex(rightIdx, haloRight, builder, userLoc)
-                      : Value();
+      Value selectedMemref;
+      Value selectedRowIdx;
 
-      Value selectedMemref = ownedMemref;
-      Value selectedRowIdx = clampedOwnedIdx;
+      bool usedRowSelection = false;
 
-      /// Select left halo if needed (and valid), else owned.
-      if (leftMemref) {
-        Value safeLeftMemref =
-            leftPtrNotNull
-                ? builder.create<arith::SelectOp>(userLoc, leftPtrNotNull,
-                                                  leftMemref, ownedMemref)
-                : leftMemref;
-        Value safeLeftIdx =
-            leftPtrNotNull
-                ? builder.create<arith::SelectOp>(
-                      userLoc, leftPtrNotNull, clampedLeftIdx, clampedOwnedIdx)
-                : clampedLeftIdx;
-        selectedMemref = builder.create<arith::SelectOp>(
-            userLoc, isLeftHalo, safeLeftMemref, selectedMemref);
-        selectedRowIdx = builder.create<arith::SelectOp>(
-            userLoc, isLeftHalo, safeLeftIdx, selectedRowIdx);
+      /// Per-row ESD: if globalRow is rowIV + constant, hoist selection to the
+      /// row loop body (one select per row, not per element).
+      scf::ForOp rowLoop;
+      for (Operation *parent = user->getParentOp(); parent;
+           parent = parent->getParentOp()) {
+        auto loop = dyn_cast<scf::ForOp>(parent);
+        if (!loop)
+          continue;
+        if (ValueUtils::dependsOn(globalRow, loop.getInductionVar())) {
+          rowLoop = loop;
+          break;
+        }
       }
 
-      /// Select right halo if needed (and valid), else current selection.
-      if (rightMemref) {
-        Value safeRightMemref =
-            rightPtrNotNull
-                ? builder.create<arith::SelectOp>(userLoc, rightPtrNotNull,
-                                                  rightMemref, ownedMemref)
-                : rightMemref;
-        Value safeRightIdx = rightPtrNotNull
-                                 ? builder.create<arith::SelectOp>(
-                                       userLoc, rightPtrNotNull,
-                                       clampedRightIdx, clampedOwnedIdx)
-                                 : clampedRightIdx;
+      if (rowLoop) {
+        Value rowIV = rowLoop.getInductionVar();
+        int64_t rowOffset = 0;
+        bool includesBaseOffset = false;
+        if (deriveRowOffset(globalRow, rowIV, baseOffset, rowOffset,
+                            includesBaseOffset)) {
+          ARTS_DEBUG("  ESD row selection: offset=" << rowOffset);
+          auto &offsetMap = rowSelectionCache[rowLoop.getOperation()];
+          auto it = offsetMap.find(rowOffset);
+          if (it != offsetMap.end()) {
+            selectedMemref = it->second.memref;
+            selectedRowIdx = it->second.rowIdx;
+            usedRowSelection = true;
+          } else {
+            OpBuilder::InsertionGuard hoistGuard(builder);
+            builder.setInsertionPointToStart(rowLoop.getBody());
+            Location rowLoc = rowLoop.getLoc();
 
-        Value isRightHalo = builder.create<arith::CmpIOp>(
-            userLoc, arith::CmpIPredicate::sge, localRow, blockSize);
+            Value rowIdx = rowIV;
+            if (rowOffset != 0) {
+              Value offVal =
+                  builder.create<arith::ConstantIndexOp>(rowLoc, rowOffset);
+              rowIdx = builder.create<arith::AddIOp>(rowLoc, rowIV, offVal);
+            }
 
-        selectedMemref = builder.create<arith::SelectOp>(
-            userLoc, isRightHalo, safeRightMemref, selectedMemref);
-        selectedRowIdx = builder.create<arith::SelectOp>(
-            userLoc, isRightHalo, safeRightIdx, selectedRowIdx);
+            Value localRowHoisted = rowIdx;
+            if (!includesBaseOffset && baseOffset) {
+              localRowHoisted =
+                  builder.create<arith::SubIOp>(rowLoc, rowIdx, baseOffset);
+            }
+
+            RowSelection selection =
+                buildSelection(builder, rowLoc, localRowHoisted);
+            selectedMemref = selection.memref;
+            selectedRowIdx = selection.rowIdx;
+            offsetMap[rowOffset] = selection;
+            usedRowSelection = true;
+          }
+        } else {
+          std::string rowExpr;
+          llvm::raw_string_ostream rowOS(rowExpr);
+          globalRow.print(rowOS);
+          std::string ivExpr;
+          llvm::raw_string_ostream ivOS(ivExpr);
+          rowIV.print(ivOS);
+          ARTS_DEBUG("  ESD row selection: unable to derive row offset, row="
+                     << rowOS.str() << ", iv=" << ivOS.str());
+        }
+      }
+
+      if (!usedRowSelection) {
+        /// Reuse selection for identical row expressions (e.g., same row for
+        /// center/left/right neighbors).
+        auto cached = selectionCache.find(globalRow);
+        if (cached != selectionCache.end()) {
+          selectedMemref = cached->second.first;
+          selectedRowIdx = cached->second.second;
+        } else {
+          OpBuilder::InsertionGuard hoistGuard(builder);
+
+          /// Find a loop to hoist above (if globalRow is invariant to inner
+          /// loop).
+          Operation *rowDefOp = globalRow.getDefiningOp();
+          Block *rowDefBlock =
+              globalRow.isa<BlockArgument>()
+                  ? globalRow.cast<BlockArgument>().getOwner()
+                  : (rowDefOp ? rowDefOp->getBlock() : nullptr);
+
+          scf::ForOp hoistAbove;
+          for (Operation *parent = user->getParentOp(); parent;
+               parent = parent->getParentOp()) {
+            auto loop = dyn_cast<scf::ForOp>(parent);
+            if (!loop)
+              continue;
+            if (rowDefBlock && loop.getBody() == rowDefBlock)
+              break;
+            if (rowDefOp && loop->isAncestor(rowDefOp))
+              break;
+            if (ValueUtils::dependsOn(globalRow, loop.getInductionVar()))
+              break;
+            hoistAbove = loop;
+          }
+
+          if (hoistAbove) {
+            /// Insert before the inner loop, but after the row definition if
+            /// it lives in the same block.
+            builder.setInsertionPoint(hoistAbove);
+            if (rowDefOp && rowDefOp->getBlock() == hoistAbove->getBlock() &&
+                rowDefOp->isBeforeInBlock(hoistAbove))
+              builder.setInsertionPointAfter(rowDefOp);
+          } else {
+            /// Fall back to local hoisting at the load site.
+            builder.setInsertionPoint(user);
+          }
+
+          /// Recompute row-local indices at the hoist point.
+          Value localRowHoisted =
+              baseOffset ? builder.create<arith::SubIOp>(userLoc, globalRow,
+                                                         baseOffset)
+                         : globalRow;
+
+          RowSelection selection =
+              buildSelection(builder, userLoc, localRowHoisted);
+          selectedMemref = selection.memref;
+          selectedRowIdx = selection.rowIdx;
+        }
+
+        if (selectedMemref && selectedRowIdx)
+          selectionCache[globalRow] = {selectedMemref, selectedRowIdx};
       }
 
       SmallVector<Value> selectedIndices = buildAccessIndices(selectedRowIdx);

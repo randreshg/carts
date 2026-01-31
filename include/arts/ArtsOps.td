@@ -34,17 +34,15 @@ class Arts_InferShapedTypeOpAdaptor<string mnemonic, list<Trait> traits = []>
 ///===----------------------------------------------------------------------===///
 /// arts.undef
 ///===----------------------------------------------------------------------===///
-def UndefOp: Arts_Op<"undef", [Pure]> {
+def UndefOp : Arts_Op<"undef", [Pure]> {
   let summary = "More flexible undef op";
-  let results = (outs AnyType:$result);
+  let results = (outs AnyType : $result);
   let hasCanonicalizer = true;
   let assemblyFormat = "attr-dict `:` type($result)";
   let skipDefaultBuilders = 1;
-  let builders = [
-    OpBuilder<(ins "Type":$type), [{
-      $_state.addTypes(type);
-    }]>
-  ];
+  let builders = [OpBuilder<(ins "Type"
+                             : $type),
+                            [{ $_state.addTypes(type); }]>];
 }
 
 ///===----------------------------------------------------------------------===///
@@ -58,11 +56,11 @@ def AllocOp : Arts_Op<"alloc", []> {
     specific behavior during code generation and lowering.
   }];
 
-  let arguments = (ins Variadic<Index>:$dynamicSizes);
-  let results = (outs AnyMemRef:$result);
-  let assemblyFormat = [{
-    `(` $dynamicSizes `)` attr-dict `:` type($result)
-  }];
+  let arguments = (ins Variadic<Index> : $dynamicSizes);
+  let results = (outs AnyMemRef : $result);
+  let assemblyFormat =
+      [{
+    `(` $dynamicSizes `)` attr-dict `:` type($result)}];
 }
 
 ///===----------------------------------------------------------------------===///
@@ -70,33 +68,36 @@ def AllocOp : Arts_Op<"alloc", []> {
 ///===----------------------------------------------------------------------===///
 def DbDimOp : Arts_Op<"db_dim", [Pure]> {
   let summary = "Query dimension of a datablock-backed memref";
-  let description = [{
-    The `arts.db_dim` op queries the size of the specified dimension of a
-    datablock-backed memref. It is preferred over `memref.dim` so DB-oriented
-    canonicalization can fold it to explicit values coming from `arts.db_alloc`
-    or `arts.db_acquire` slice sizes.
-  }];
-  let arguments = (ins AnyMemRef:$source, Index:$dim);
-  let results = (outs Index:$result);
-  let assemblyFormat = "$source `,` $dim attr-dict `:` type($source) `->` type($result)";
+  let description =
+      [{The `arts.db_dim` op queries the size of the specified dimension of a
+            datablock -
+        backed memref.It is preferred over `memref.dim` so DB -
+        oriented canonicalization can fold it to explicit values coming
+            from `arts.db_alloc` or `arts.db_acquire` slice sizes.}];
+  let arguments = (ins AnyMemRef : $source, Index : $dim);
+  let results = (outs Index : $result);
+  let assemblyFormat =
+      "$source `,` $dim attr-dict `:` type($source) `->` type($result)";
   let hasCanonicalizer = 1;
-  let builders = [
-    OpBuilder<(ins "Value":$source, "int64_t":$dim)>
-  ];
+  let builders = [OpBuilder<(ins "Value" : $source, "int64_t" : $dim)>];
 }
 
-def DbAllocOp : Arts_Op<"db_alloc", [
-    AttrSizedOperandSegments, MemoryEffects<[MemAlloc]>
-    ]> {
+def DbAllocOp : Arts_Op<"db_alloc",
+                        [AttrSizedOperandSegments, MemoryEffects<[MemAlloc]>]> {
   let summary = "Allocate an ARTS DataBlock and get its pointer and GUID.";
   let description = [{
     This operation corresponds to the `artsDbCreate` runtime function.
     It allocates a DataBlock and returns its pointer and GUID.
-    - mode: enum for "in", "out", "inout"
-    - ptr: address that will be copied to the DataBlock
-    - sizes: outer sizes (number of datablocks along each dimension)
-    - elementSizes: logical dimensions of the datablock element payload
-    - allocType: "stack", "heap", "global", "unknown" - tracks original allocation type
+    - mode: enum for
+    "in", "out",
+        "inout" -
+            ptr
+        : address that will be copied to the DataBlock -
+          sizes : outer sizes(number of datablocks along each dimension) -
+                  elementSizes
+        : logical dimensions of the datablock element payload -
+          allocType : "stack",
+        "heap", "global", "unknown" - tracks original allocation type
   }];
   let arguments = (ins
     ArtsModeAttr:$mode,
@@ -109,7 +110,7 @@ def DbAllocOp : Arts_Op<"db_alloc", [
     Variadic<Index>:$elementSizes,
     OptionalAttr<PartitionModeAttr>:$partition_mode
   );
-  let results = (outs MemRefOf<[I64]>:$guid, AnyMemRef:$ptr);
+  let results = (outs MemRefOf<[I64]> : $guid, AnyMemRef : $ptr);
   let assemblyFormat = [{
     `[` $mode `,` $allocType `,` $dbMode (`,` $partition_mode^)? `]`
     `route` `(` $route `:` type($route) `)`
@@ -176,9 +177,7 @@ def DbAllocOp : Arts_Op<"db_alloc", [
   }];
 }
 
-def DbAcquireOp : Arts_Op<"db_acquire",
-  [AttrSizedOperandSegments]
-  > {
+def DbAcquireOp : Arts_Op<"db_acquire", [AttrSizedOperandSegments]> {
   let summary = "Acquires access to an ARTS DataBlock.";
   let description = [{
     This operation acquires a local view of the DataBlock for safe access within EDTs.
@@ -235,7 +234,7 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     /// Per-entry partition modes
     OptionalAttr<DenseI32ArrayAttr>:$partition_entry_modes
   );
-  let results = (outs MemRefOf<[I64]>:$guid, AnyMemRef:$ptr);
+  let results = (outs MemRefOf<[I64]> : $guid, AnyMemRef : $ptr);
   let assemblyFormat = [{
     `[` $mode `]`
     `(` ($source_guid^ `:` type($source_guid) `,`)? $source_ptr `:` type($source_ptr) `)`
@@ -290,8 +289,9 @@ def DbAcquireOp : Arts_Op<"db_acquire",
   ];
   let extraClassDeclaration = [{
     /// Set the twin_diff attribute for this acquire operation.
-    /// twin_diff=true enables shadow copy for distributed sync (safer but slower)
-    /// twin_diff=false disables it when disjoint access is proven (faster)
+    /// twin_diff=true enables shadow copy for distributed sync (safer but
+    /// slower) twin_diff=false disables it when disjoint access is proven
+    /// (faster)
     void setTwinDiff(bool enabled);
 
     /// Check if twin_diff attribute has been explicitly set
@@ -300,14 +300,16 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     /// Get twin_diff value. Returns true (safe default) if not explicitly set.
     bool getTwinDiff();
 
-    /// Check if this acquire has element-level offset/size info (ESD partial acquisition)
+    /// Check if this acquire has element-level offset/size info (ESD partial
+    /// acquisition)
     bool hasElementOffsets() { return !getElementOffsets().empty(); }
 
     /// Check if this acquire has a partition mode set
     bool hasPartitionMode() { return getPartitionMode().has_value(); }
 
     /// Get partition mode, returns coarse if not set
-    PartitionMode getPartitionModeOr(PartitionMode defaultMode = PartitionMode::coarse) {
+    PartitionMode getPartitionModeOr(PartitionMode defaultMode =
+                                         PartitionMode::coarse) {
       return getPartitionMode().value_or(defaultMode);
     }
 
@@ -317,24 +319,17 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     }
 
     /// Check if this is a block acquire
-    bool isBlock() {
-      return getPartitionModeOr() == PartitionMode::block;
-    }
+    bool isBlock() { return getPartitionModeOr() == PartitionMode::block; }
 
     /// Check if this is a stencil acquire
-    bool isStencil() {
-      return getPartitionModeOr() == PartitionMode::stencil;
-    }
+    bool isStencil() { return getPartitionModeOr() == PartitionMode::stencil; }
 
     /// Check if this is a coarse acquire
-    bool isCoarse() {
-      return getPartitionModeOr() == PartitionMode::coarse;
-    }
+    bool isCoarse() { return getPartitionModeOr() == PartitionMode::coarse; }
 
-    /// Check if this acquire has partition hints (element-space indices/offsets/sizes)
-    bool hasPartitionHints() {
-      return hasExplicitPartitionHints();
-    }
+    /// Check if this acquire has partition hints (element-space
+    /// indices/offsets/sizes)
+    bool hasPartitionHints() { return hasExplicitPartitionHints(); }
 
     /// Check if this acquire has explicit partition hints (including sizes)
     bool hasExplicitPartitionHints();
@@ -349,10 +344,12 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     /// Check if this acquire has multiple partition entries
     bool hasMultiplePartitionEntries();
 
-    /// Get number of partition entries (returns 1 for backward compat if no segments)
+    /// Get number of partition entries (returns 1 for backward compat if no
+    /// segments)
     size_t getNumPartitionEntries();
 
-    /// Get the partition mode for a specific entry (uses partition_entry_modes if set)
+    /// Get the partition mode for a specific entry (uses partition_entry_modes
+    /// if set)
     PartitionMode getPartitionEntryMode(size_t entryIdx);
 
     /// Get partition indices for a specific entry
@@ -366,10 +363,9 @@ def DbAcquireOp : Arts_Op<"db_acquire",
 
     /// Set segment attributes for multi-entry partition hints.
     /// Only sets non-empty arrays, skips empty ones.
-    void setPartitionSegments(ArrayRef<int32_t> indicesSegments,
-                              ArrayRef<int32_t> offsetsSegments,
-                              ArrayRef<int32_t> sizesSegments,
-                              ArrayRef<int32_t> entryModes);
+    void setPartitionSegments(
+        ArrayRef<int32_t> indicesSegments, ArrayRef<int32_t> offsetsSegments,
+        ArrayRef<int32_t> sizesSegments, ArrayRef<int32_t> entryModes);
 
     /// Get all partition entries as unified PartitionInfo structs.
     /// Returns one PartitionInfo per depend entry.
@@ -390,22 +386,22 @@ def DbCopyOp : Arts_Op<"db_copy", [MemoryEffects<[MemWrite]>]> {
     The source partition mode is inferred from the source allocation.
     Only source_ptr is needed - source_guid is not used in lowering.
   }];
-  let arguments = (ins
-    AnyMemRef:$source_ptr,
-    PartitionModeAttr:$dest_partition
-  );
-  let results = (outs MemRefOf<[I64]>:$guid, AnyMemRef:$ptr);
+  let arguments = (ins AnyMemRef
+                   : $source_ptr, PartitionModeAttr
+                   : $dest_partition);
+  let results = (outs MemRefOf<[I64]> : $guid, AnyMemRef : $ptr);
   let assemblyFormat = [{
     `(` $source_ptr `:` type($source_ptr) `)`
-    `dest_partition` `=` $dest_partition
-    attr-dict `->` `(` type($guid) `,` type($ptr) `)`
+    `dest_partition` `=` $dest_partition attr-dict
+    `->` `(` type($guid) `,` type($ptr) `)`
   }];
-  let builders = [
-    OpBuilder<(ins "Value":$source_ptr, "PartitionMode":$dest_partition)>
-  ];
+  let builders = [OpBuilder<(ins "Value"
+                             : $source_ptr, "PartitionMode"
+                             : $dest_partition)>];
 }
 
-def DbSyncOp : Arts_Op<"db_sync", [AttrSizedOperandSegments, MemoryEffects<[MemWrite]>]> {
+def DbSyncOp : Arts_Op<"db_sync",
+                       [AttrSizedOperandSegments, MemoryEffects<[MemWrite]>]> {
   let summary = "Copy data from source to dest datablock";
   let description = [{
     Copies data from source datablock to dest datablock. Direction is implicit:
@@ -430,8 +426,7 @@ def DbSyncOp : Arts_Op<"db_sync", [AttrSizedOperandSegments, MemoryEffects<[MemW
   let assemblyFormat = [{
     `(` $dest_ptr `:` type($dest_ptr) `,` $source_ptr `:` type($source_ptr) `)`
     `element_offsets` `[` $element_offsets `]`
-    `element_sizes` `[` $element_sizes `]`
-    attr-dict
+    `element_sizes` `[` $element_sizes `]` attr-dict
   }];
   let builders = [
     OpBuilder<(ins "Value":$dest_ptr, "Value":$source_ptr,
@@ -447,11 +442,8 @@ def DbRefOp : Arts_Op<"db_ref", [Pure]> {
     dimensions. The result type must match the element type of the source
     memref.
   }];
-  let arguments = (ins
-    AnyMemRef:$source,
-    Variadic<Index>:$indices
-  );
-  let results = (outs AnyType:$result);
+  let arguments = (ins AnyMemRef : $source, Variadic<Index> : $indices);
+  let results = (outs AnyType : $result);
   let assemblyFormat = [{
     $source `[` $indices `]` attr-dict `:` type($source) `->` type($result)
   }];
@@ -473,12 +465,14 @@ def DbReleaseOp : Arts_Op<"db_release", []> {
     OptionalAttr<DbReleaseTypeAttr>:$release_type
   );
   let assemblyFormat = [{
-    `(` $source `)` `:` type($source) attr-dict
-  }];
+    `(` $source `)` `:` type($source) attr-dict}];
 
   let builders = [
-    OpBuilder<(ins "Value":$source)>,
-    OpBuilder<(ins "Value":$source, "DbReleaseType":$release_type)>
+    OpBuilder<(ins "Value"
+               : $source)>,
+    OpBuilder<(ins "Value"
+               : $source, "DbReleaseType"
+               : $release_type)>
   ];
 }
 
@@ -488,16 +482,12 @@ def DbFreeOp : Arts_Op<"db_free", []> {
     This operation frees a DataBlock that was previously allocated with arts.db_alloc.
     It is used for memory management of dynamically allocated datablocks.
   }];
-  let arguments = (ins
-    AnyMemRef:$source
-  );
+  let arguments = (ins AnyMemRef : $source);
   let assemblyFormat = [{
-    `(` $source `)` `:` type($source) attr-dict
-  }];
+    `(` $source `)` `:` type($source) attr-dict}];
 }
 
-def DbControlOp : Arts_Op<"db_control",
-  [AttrSizedOperandSegments]> {
+def DbControlOp : Arts_Op<"db_control", [AttrSizedOperandSegments]> {
   let summary = "Creates a control dependency for arts.edt";
   let description = [{
     This operation creates a control dependency for the `arts.edt` operation.
@@ -517,7 +507,7 @@ def DbControlOp : Arts_Op<"db_control",
     Variadic<Index>:$sizes
   );
 
-  let results = (outs MemRefOf<[I64]>:$subview);
+  let results = (outs MemRefOf<[I64]> : $subview);
   let assemblyFormat = [{
     `[` $mode `]` `(` $ptr `:` type($ptr) `)`
     `indices` `[` $indices `]`
@@ -533,7 +523,6 @@ def DbControlOp : Arts_Op<"db_control",
                    CArg<"SmallVector<Value>", "{}">:$offsets,
                    CArg<"SmallVector<Value>", "{}">:$sizes)>
   ];
-
 }
 
 def DbNumElementsOp : Arts_Op<"db_num_elements", [Pure]> {
@@ -542,19 +531,22 @@ def DbNumElementsOp : Arts_Op<"db_num_elements", [Pure]> {
     Computes the total number of elements in a datablock. This is used
     to calculate dependency counts for EDT creation.
   }];
-  let arguments = (ins Variadic<Index>:$sizes);
-  let results = (outs Index:$count);
+  let arguments = (ins Variadic<Index> : $sizes);
+  let results = (outs Index : $count);
   let assemblyFormat = "`sizes` `(` $sizes `)` attr-dict `:` `->` type($count)";
   let hasCanonicalizer = 1;
 
   let builders = [
-    OpBuilder<(ins "DbAllocOp":$allocOp)>,
-    OpBuilder<(ins "DbAcquireOp":$acquireOp)>
+    OpBuilder<(ins "DbAllocOp"
+               : $allocOp)>,
+    OpBuilder<(ins "DbAcquireOp"
+               : $acquireOp)>
   ];
 }
 
 def OmpDepOp : Arts_Op<"omp_dep", [Pure, AttrSizedOperandSegments]> {
-  let summary = "OpenMP dependency descriptor for chunk-based task dependencies";
+  let summary =
+      "OpenMP dependency descriptor for chunk-based task dependencies";
   let description = [{
     Captures dependency information from OpenMP task depend clauses during
     CanonicalizeMemrefs pass. This operation simplifies the conversion pipeline
@@ -590,7 +582,7 @@ def OmpDepOp : Arts_Op<"omp_dep", [Pure, AttrSizedOperandSegments]> {
     Variadic<Index>:$sizes           
   );
 
-  let results = (outs AnyMemRef:$result);
+  let results = (outs AnyMemRef : $result);
 
   let assemblyFormat = [{
     `<` $mode `>` $source `[` $indices `]` `size` `[` $sizes `]`
@@ -608,23 +600,29 @@ def OmpDepOp : Arts_Op<"omp_dep", [Pure, AttrSizedOperandSegments]> {
 ///===----------------------------------------------------------------------===///
 /// arts.edt
 ///===----------------------------------------------------------------------===///
-def EdtOp : Arts_Op<"edt",
-  [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
-   SingleBlockImplicitTerminator<"arts::YieldOp">,
-   RecursiveMemoryEffects]> {
+def EdtOp : Arts_Op<"edt", [
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+  SingleBlockImplicitTerminator<"arts::YieldOp">, RecursiveMemoryEffects
+]> {
   let summary = "Event-Driven Task in ARTS";
   let description = [{
-    Defines an ARTS event-driven task (EDT) with:
-      - `dependencies` that specify input/output memory dependencies (acquired views).
+    Defines an ARTS event -
+        driven task(EDT) with : - `dependencies` that specify input /
+                                output memory dependencies(acquired views)
+                                    .
 
-    The single-block region contains the task body.
-    - if 'parallel' attribute is set, it can spawn multiple tasks.
-    - if 'single' attribute is set, it is guaranteed to run in a single
-      task, even if it is called from a parallel region.
-    - 'concurrency' specifies the execution scope: intranode or internode.
-    - 'workers' specifies the number of parallel workers to use (optional).
-    - 'nowait' indicates the EDT doesn't require an epoch wrapper
-      (typically used when EDT is already inside an epoch).
+                                The single -
+        block region contains the task body.- if 'parallel' attribute is set,
+        it can spawn multiple tasks.- if 'single' attribute is set,
+        it is guaranteed to run in a single task,
+        even if it is called from a parallel region.-
+            'concurrency' specifies the execution scope
+        : intranode or internode.-
+            'workers' specifies the number of parallel workers to use(optional)
+                .-
+            'nowait' indicates the EDT doesn't require an epoch wrapper (
+                typically used when EDT is already inside an epoch)
+                .
   }];
   let arguments = (ins
     EdtTypeAttr:$type,
@@ -635,16 +633,25 @@ def EdtOp : Arts_Op<"edt",
     OptionalAttr<UnitAttr>:$nowait,
     Variadic<AnyMemRef>:$dependencies
   );
-  let regions = (region SizedRegion<1>:$body);
+  let regions = (region SizedRegion<1> : $body);
   let assemblyFormat = [{
     $type $concurrency `route` `(` $route `)` (`(` $dependencies^ `)` `:` type($dependencies))? attr-dict-with-keyword
     $body
   }];
   let skipDefaultBuilders = 1;
   let builders = [
-    OpBuilder<(ins "EdtType":$type, "EdtConcurrency":$concurrency)>,
-    OpBuilder<(ins "EdtType":$type, "EdtConcurrency":$concurrency, "ValueRange":$dependencies)>,
-    OpBuilder<(ins "EdtType":$type, "EdtConcurrency":$concurrency, "Value":$route, "ValueRange":$dependencies)>
+    OpBuilder<(ins "EdtType"
+               : $type, "EdtConcurrency"
+               : $concurrency)>,
+    OpBuilder<(ins "EdtType"
+               : $type, "EdtConcurrency"
+               : $concurrency, "ValueRange"
+               : $dependencies)>,
+    OpBuilder<(ins "EdtType"
+               : $type, "EdtConcurrency"
+               : $concurrency, "Value"
+               : $route, "ValueRange"
+               : $dependencies)>
   ];
   let hasVerifier = 1;
   let extraClassDeclaration = [{
@@ -657,8 +664,8 @@ def EdtOp : Arts_Op<"edt",
 ///===----------------------------------------------------------------------===///
 /// arts.epoch
 ///===----------------------------------------------------------------------===///
-def EpochOp : Arts_Op<"epoch", 
-  [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
+def EpochOp
+    : Arts_Op<"epoch", [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
 
   let summary = "Epoch region in ARTS";
   let description = [{
@@ -666,12 +673,11 @@ def EpochOp : Arts_Op<"epoch",
     synchronize them at the end of the epoch. Returns the epoch GUID
     for use by contained EDTs.
   }];
-  let regions = (region SizedRegion<1>:$body);
-  let results = (outs I64:$epochGuid);
+  let regions = (region SizedRegion<1> : $body);
+  let results = (outs I64 : $epochGuid);
 
-  let assemblyFormat = [{
-    attr-dict-with-keyword $body `:` type($epochGuid)
-  }];
+  let assemblyFormat =
+      [{attr-dict-with-keyword $body `:` type($epochGuid)}];
 }
 
 ///===----------------------------------------------------------------------===///
@@ -685,7 +691,7 @@ def CreateEpochOp : Arts_Op<"create_epoch", [MemoryEffects<[MemWrite]>]> {
     as a value. EDTs can be added to this epoch using EdtCreateOp with the
     epoch parameter. Use WaitOnEpochOp to wait for completion.
   }];
-  let results = (outs I64:$epochGuid);
+  let results = (outs I64 : $epochGuid);
   let assemblyFormat = "attr-dict `:` type($epochGuid)";
 }
 
@@ -700,16 +706,16 @@ def WaitOnEpochOp : Arts_Op<"wait_on_epoch", [MemoryEffects<[MemWrite]>]> {
 
     This is the counterpart to CreateEpochOp for barrier synchronization.
   }];
-  let arguments = (ins I64:$epochGuid);
+  let arguments = (ins I64 : $epochGuid);
   let assemblyFormat = "$epochGuid `:` type($epochGuid) attr-dict";
 }
 
 ///===----------------------------------------------------------------------===///
 /// arts.yield
 ///===----------------------------------------------------------------------===///
-def YieldOp : Arts_Op<"yield",
-  [Pure, ReturnLike, Terminator,
-   ParentOneOf<["EdtOp", "EpochOp", "ForOp"]>]> {
+def YieldOp : Arts_Op<"yield", [
+  Pure, ReturnLike, Terminator, ParentOneOf<["EdtOp", "EpochOp", "ForOp"]>
+]> {
 
   let summary = "ARTS dialect yield terminator";
   let description = [{
@@ -718,9 +724,7 @@ def YieldOp : Arts_Op<"yield",
     and `arts.edt`. It ensures proper control flow within the ARTS dialect 
     by marking the end of a region.
   }];
-  let assemblyFormat = [{
-    attr-dict-with-keyword
-  }];
+  let assemblyFormat = [{attr-dict-with-keyword}];
 }
 
 ///===----------------------------------------------------------------------===///
@@ -728,11 +732,11 @@ def YieldOp : Arts_Op<"yield",
 ///===----------------------------------------------------------------------===///
 def BarrierOp : Arts_Op<"barrier", [MemoryEffects<[MemWrite]>]> {
   let summary = "Barrier synchronization in ARTS";
-  let description = [{
-    Barrier synchronization operation in ARTS. It synchronizes all previous
-    spawned EDTs of the parent region. This operation has memory write effects
-    as it affects the synchronization state of the runtime system.
-  }];
+  let description =
+      [{Barrier synchronization operation in
+            ARTS.It synchronizes all previous spawned EDTs of the parent region
+                .This operation has memory write effects as it affects the
+                    synchronization state of the runtime system.}];
   let assemblyFormat = "attr-dict";
 }
 
@@ -747,28 +751,27 @@ def AtomicAddOp : Arts_Op<"atomic_add", [MemoryEffects<[MemWrite]>]> {
     Only scalar memrefs (rank-0) are supported for now.
   }];
 
-  let arguments = (ins AnyType:$addr, AnyType:$value);
-  let assemblyFormat = "`(` $addr `,` $value `:` type($addr) `,` type($value) `)` attr-dict";
+  let arguments = (ins AnyType : $addr, AnyType : $value);
+  let assemblyFormat =
+      "`(` $addr `,` $value `:` type($addr) `,` type($value) `)` attr-dict";
 }
-
 
 ///===----------------------------------------------------------------------===///
 /// arts.get_total_workers
 ///===----------------------------------------------------------------------===///
 def GetTotalWorkersOp : Arts_Op<"get_total_workers", [Pure]> {
   let summary = "Get the total number of workers in ARTS";
-  let description = [{
-    The `arts.get_total_workers` operation retrieves the total number of 
-    workers available in the ARTS runtime environment.
-  }];
-  let results = (outs I32:$result);
+  let description =
+      [{The `arts
+            .get_total_workers` operation retrieves the total number of workers
+                available in the ARTS runtime environment.}];
+  let results = (outs I32 : $result);
   let assemblyFormat = "attr-dict `->` type($result)";
   let skipDefaultBuilders = 1;
-  let builders = [
-    OpBuilder<(ins), [{
-      $_state.addTypes(IntegerType::get($_builder.getContext(), 32));
-    }]>
-  ];
+  let builders = [OpBuilder<(ins), [{
+                              $_state.addTypes(
+                                  IntegerType::get($_builder.getContext(), 32));
+                            }]>];
 }
 
 ///===----------------------------------------------------------------------===///
@@ -776,18 +779,17 @@ def GetTotalWorkersOp : Arts_Op<"get_total_workers", [Pure]> {
 ///===----------------------------------------------------------------------===///
 def GetTotalNodesOp : Arts_Op<"get_total_nodes", [Pure]> {
   let summary = "Get the total number of nodes in ARTS";
-  let description = [{
-    The `arts.get_total_nodes` operation retrieves the total number of 
-    nodes available in the ARTS runtime environment.
-  }];
-  let results = (outs I32:$result);
+  let description =
+      [{The `arts
+            .get_total_nodes` operation retrieves the total number of nodes
+                available in the ARTS runtime environment.}];
+  let results = (outs I32 : $result);
   let assemblyFormat = "attr-dict `->` type($result)";
   let skipDefaultBuilders = 1;
-  let builders = [
-    OpBuilder<(ins), [{
-      $_state.addTypes(IntegerType::get($_builder.getContext(), 32));
-    }]>
-  ];
+  let builders = [OpBuilder<(ins), [{
+                              $_state.addTypes(
+                                  IntegerType::get($_builder.getContext(), 32));
+                            }]>];
 }
 
 ///===----------------------------------------------------------------------===///
@@ -796,17 +798,16 @@ def GetTotalNodesOp : Arts_Op<"get_total_nodes", [Pure]> {
 def GetCurrentWorkerOp : Arts_Op<"get_current_worker", [Pure]> {
   let summary = "Get the current worker ID in ARTS";
   let description = [{
-    The `arts.get_current_worker` operation retrieves the ID of the 
-    current worker executing the operation in the ARTS runtime environment.
-  }];
-  let results = (outs I32:$result);
+      The `arts
+          .get_current_worker` operation retrieves the ID of the current worker
+              executing the operation in the ARTS runtime environment.}];
+  let results = (outs I32 : $result);
   let assemblyFormat = "attr-dict `->` type($result)";
   let skipDefaultBuilders = 1;
-  let builders = [
-    OpBuilder<(ins), [{
-      $_state.addTypes(IntegerType::get($_builder.getContext(), 32));
-    }]>
-  ];
+  let builders = [OpBuilder<(ins), [{
+                              $_state.addTypes(
+                                  IntegerType::get($_builder.getContext(), 32));
+                            }]>];
 }
 
 ///===----------------------------------------------------------------------===///
@@ -814,18 +815,17 @@ def GetCurrentWorkerOp : Arts_Op<"get_current_worker", [Pure]> {
 ///===----------------------------------------------------------------------===///
 def GetCurrentNodeOp : Arts_Op<"get_current_node", [Pure]> {
   let summary = "Get the current node ID in ARTS";
-  let description = [{
-    The `arts.get_current_node` operation retrieves the ID of the
-    current node executing the operation in the ARTS runtime environment.
-  }];
-  let results = (outs I32:$result);
+  let description =
+      [{The `arts
+            .get_current_node` operation retrieves the ID of the current node
+                executing the operation in the ARTS runtime environment.}];
+  let results = (outs I32 : $result);
   let assemblyFormat = "attr-dict `->` type($result)";
   let skipDefaultBuilders = 1;
-  let builders = [
-    OpBuilder<(ins), [{
-      $_state.addTypes(IntegerType::get($_builder.getContext(), 32));
-    }]>
-  ];
+  let builders = [OpBuilder<(ins), [{
+                              $_state.addTypes(
+                                  IntegerType::get($_builder.getContext(), 32));
+                            }]>];
 }
 
 ///===----------------------------------------------------------------------===///
@@ -842,16 +842,14 @@ def GetParallelWorkerIdOp : Arts_Op<"get_parallel_worker_id", []> {
     This operation is created by ForLowering and consumed by ParallelEdtLowering.
     It should not appear in the final lowered IR.
   }];
-  let results = (outs Index:$result);
+  let results = (outs Index : $result);
   let assemblyFormat = "attr-dict";
   let skipDefaultBuilders = 1;
-  let builders = [
-    OpBuilder<(ins), [{
-      $_state.addTypes(IndexType::get($_builder.getContext()));
-    }]>
-  ];
+  let builders =
+      [OpBuilder<(ins), [{
+                   $_state.addTypes(IndexType::get($_builder.getContext()));
+                 }]>];
 }
-
 
 ///===----------------------------------------------------------------------===///
 /// EDT Lowering Operations
@@ -865,8 +863,8 @@ def EdtCreateOp : Arts_Op<"edt_create", [MemoryEffects<[MemWrite]>]> {
     Returns EDT guid.
   }];
   let arguments = (ins AnyMemRef:$param_memref, I32:$depCount, I32:$route, Optional<I64>:$epochGuid);
-  let results = (outs I64:$guid);
-  
+  let results = (outs I64 : $guid);
+
   let assemblyFormat = [{
     `(` $param_memref `:` type($param_memref) `)` 
     `depCount` `(` $depCount `)`
@@ -874,8 +872,13 @@ def EdtCreateOp : Arts_Op<"edt_create", [MemoryEffects<[MemWrite]>]> {
   }];
 
   let builders = [
-    OpBuilder<(ins "Value":$param_memref, "Value":$depCount)>,
-    OpBuilder<(ins "Value":$param_memref, "Value":$depCount, "Value":$epochGuid)>
+    OpBuilder<(ins "Value"
+               : $param_memref, "Value"
+               : $depCount)>,
+    OpBuilder<(ins "Value"
+               : $param_memref, "Value"
+               : $depCount, "Value"
+               : $epochGuid)>
   ];
 }
 
@@ -884,22 +887,25 @@ def EdtParamPackOp : Arts_Op<"edt_param_pack", [MemoryEffects<[MemWrite]>]> {
   let description = [{
     Packs multiple parameters (cast to i64) into a memref for ARTS paramv.
   }];
-  let arguments = (ins Variadic<AnyType>:$params);
-  let results = (outs AnyMemRef:$memref);
-  let assemblyFormat = "`(` $params `)` attr-dict `:` type($params) `:` type($memref)";
+  let arguments = (ins Variadic<AnyType> : $params);
+  let results = (outs AnyMemRef : $memref);
+  let assemblyFormat =
+      "`(` $params `)` attr-dict `:` type($params) `:` type($memref)";
 }
 
 def EdtParamUnpackOp : Arts_Op<"edt_param_unpack", [Pure]> {
   let summary = "Unpack parameters from memref<?xi64>.";
-  let description = [{
-    Unpacks memref to multiple original types (load i64, cast back).
-  }];
-  let arguments = (ins AnyMemRef:$memref);
-  let results = (outs Variadic<AnyType>:$unpacked);
-  let assemblyFormat = "$memref `:` type($memref) attr-dict `:` `(` type($unpacked) `)`";
+  let description =
+      [{Unpacks memref to multiple original types(load i64, cast back).}];
+  let arguments = (ins AnyMemRef : $memref);
+  let results = (outs Variadic<AnyType> : $unpacked);
+  let assemblyFormat =
+      "$memref `:` type($memref) attr-dict `:` `(` type($unpacked) `)`";
 }
 
-def RecordDepOp : Arts_Op<"rec_dep", [MemoryEffects<[MemWrite]>, AttrSizedOperandSegments]> {
+def RecordDepOp
+    : Arts_Op<"rec_dep",
+              [MemoryEffects<[MemWrite]>, AttrSizedOperandSegments]> {
   let summary = "Record in-dependencies for EDT.";
   let description = [{
     Records all in-dependencies (datablocks) for the EDT in order.
@@ -963,7 +969,8 @@ def IncrementDepOp : Arts_Op<"inc_dep", [MemoryEffects<[MemWrite]>]> {
     Variadic<AnyType>:$datablocks,
     DefaultValuedAttr<DepAccessModeAttr, "::mlir::arts::DepAccessMode::direct">:$access_mode
   );
-  let assemblyFormat = "$edt_guid `(` $datablocks `:` type($datablocks) `)` attr-dict";
+  let assemblyFormat =
+      "$edt_guid `(` $datablocks `:` type($datablocks) `)` attr-dict";
 }
 
 ///===----------------------------------------------------------------------===///
@@ -972,16 +979,17 @@ def IncrementDepOp : Arts_Op<"inc_dep", [MemoryEffects<[MemWrite]>]> {
 
 def DepGepOp : Arts_Op<"dep_gep", [Pure, AttrSizedOperandSegments]> {
   let summary = "Extract pointer field from an EDT dependency structure";
-  let description = [{
-    Extracts the pointer field from an EDT dependency structure.
-    The input can be a pointer to a dependency structure or a memref of
-    dependency structures. Optional indices specify which dependency entry
-    to access when the input is an array of dependencies (e.g., when a
-    DbAlloc/Acquire returned multiple datablocks).
-  }];
+  let description =
+      [{Extracts the pointer field from an EDT dependency structure
+            .The input can be a pointer to a dependency structure or a memref of
+                dependency structures
+            .Optional indices specify which dependency entry to access when the
+                input is an array of dependencies(
+                    e.g., when a DbAlloc / Acquire returned multiple datablocks)
+            .}];
   let arguments = (ins AnyType:$dep_struct, Index:$offset,
                        Variadic<AnyType>:$indices, Variadic<Index>:$strides);
-  let results = (outs AnyType:$guid, AnyType:$ptr);
+  let results = (outs AnyType : $guid, AnyType : $ptr);
   let assemblyFormat = [{
     `(` $dep_struct `)`
      `offset` `[` $offset `:` type($offset) `]`
@@ -991,8 +999,10 @@ def DepGepOp : Arts_Op<"dep_gep", [Pure, AttrSizedOperandSegments]> {
   }];
 }
 
-def DepDbAcquireOp : Arts_Op<"dep_db_acquire", [Pure, AttrSizedOperandSegments]> {
-  let summary = "Acquires a datablock from EDT dependency structure with subregion access.";
+def DepDbAcquireOp
+    : Arts_Op<"dep_db_acquire", [Pure, AttrSizedOperandSegments]> {
+  let summary = "Acquires a datablock from EDT dependency structure with "
+                "subregion access.";
   let description = [{
     Extracts GUID and pointer from an EDT dependency structure at the specified
     offset with optional subregion access (indices, offsets, sizes).
@@ -1011,7 +1021,7 @@ def DepDbAcquireOp : Arts_Op<"dep_db_acquire", [Pure, AttrSizedOperandSegments]>
     Variadic<Index>:$sizes,
     Optional<I1>:$bounds_valid
   );
-  let results = (outs AnyType:$guid, AnyType:$ptr);
+  let results = (outs AnyType : $guid, AnyType : $ptr);
   let assemblyFormat = [{
     `(` $dep_struct `)`
     `offset` `[` $offset `:` type($offset) `]`
@@ -1025,28 +1035,32 @@ def DepDbAcquireOp : Arts_Op<"dep_db_acquire", [Pure, AttrSizedOperandSegments]>
 
 def DbGepOp : Arts_Op<"db_gep", [Pure, AttrSizedOperandSegments]> {
   let summary = "Compute element pointer (LLVM ptr) using byte strides.";
-  let description = [{
-    Computes a raw LLVM pointer to an element from a base pointer using indices and strides.
-    Always produces an LLVM pointer result regardless of the input type.
-  }];
+  let description = [{Computes a raw LLVM pointer to an element from a base
+                          pointer using indices and strides
+                              .Always produces an LLVM pointer result regardless
+                                  of the input type.}];
   let arguments = (
     ins AnyType:$base_ptr, 
     Variadic<Index>:$indices, 
     Variadic<Index>:$strides
   );
-  let results = (outs AnyType:$ptr);
+  let results = (outs AnyType : $ptr);
   let assemblyFormat = [{
     `(` $base_ptr `:` type($base_ptr) `)`
     `indices` `[` $indices `]` 
     `strides` `[` $strides `]`
     attr-dict `:` type($ptr)
   }];
-  let builders = [
-    OpBuilder<(ins "Type":$ptr, "Value":$base_ptr, "SmallVector<Value>":$indices, "SmallVector<Value>":$strides)>
-  ];
+  let builders = [OpBuilder<(ins "Type"
+                             : $ptr, "Value"
+                             : $base_ptr, "SmallVector<Value>"
+                             : $indices, "SmallVector<Value>"
+                             : $strides)>];
 }
 
-def ForOp : Arts_Op<"for", [AttrSizedOperandSegments, SingleBlockImplicitTerminator<"arts::YieldOp">]> {
+def ForOp : Arts_Op<"for", [
+  AttrSizedOperandSegments, SingleBlockImplicitTerminator<"arts::YieldOp">
+]> {
   let summary = "ARTS parallel for loop operation";
   let description = [{
     The `arts.for` operation represents a parallel for loop in the ARTS dialect.
@@ -1056,22 +1070,22 @@ def ForOp : Arts_Op<"for", [AttrSizedOperandSegments, SingleBlockImplicitTermina
     This operation takes lower bound, upper bound, and step values, and executes
     the loop body in parallel across available workers.
   }];
-  
+
   let arguments = (ins Variadic<Index>:$lowerBound, 
                       Variadic<Index>:$upperBound, 
                       Variadic<Index>:$step,
                       OptionalAttr<ForScheduleKindAttr>:$schedule,
                       Variadic<AnyType>:$reductionAccumulators);
   let results = (outs);
-  let regions = (region AnyRegion:$region);
-  
+  let regions = (region AnyRegion : $region);
+
   let assemblyFormat = [{
     `(` $lowerBound `)` `to` `(` $upperBound `)` `step` `(` $step `)`
     ( `schedule` `(` $schedule^ `)` )?
     ( `reduction` `(` $reductionAccumulators^ `:` type($reductionAccumulators) `)` )?
     `{` $region `}` attr-dict
   }];
-  
+
   let hasCanonicalizer = true;
 }
 

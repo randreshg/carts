@@ -212,7 +212,8 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   acquire.getSizesMutable().assign(newSizes);
 
   /// Rebase EDT users with 3-buffer stencil mode
-  rebaseEdtUsers(acquire, builder, startBlock);
+  /// Pass BASE offset (element offset) for index localization.
+  rebaseEdtUsers(acquire, builder, baseOffset);
 }
 
 void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
@@ -357,7 +358,7 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
     derivedType = dbAlloc.getAllocatedElementType();
 
   /// Derive BASE offset for stencil localization.
-  /// FIXED: Pass BASE offset (startBlock * blockSize), NOT extended offset.
+  /// The incoming startBlock value is the element offset (chunk start).
   /// The indexer uses base-offset semantics where:
   ///   - localRow < 0 -> left halo
   ///   - 0 <= localRow < blockSize -> owned
@@ -369,14 +370,8 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
   Value haloRight =
       builder.create<arith::ConstantIndexOp>(loc, plan.stencilInfo->haloRight);
 
-  /// Compute BASE offset = startBlock * blockSize (NOT extended!)
-  Value baseOffset;
-  if (startBlock && plan.getBlockSize(0)) {
-    baseOffset =
-        builder.create<arith::MulIOp>(loc, startBlock, plan.getBlockSize(0));
-  } else {
-    baseOffset = zero;
-  }
+  /// BASE offset = element offset (chunk start)
+  Value baseOffset = startBlock ? startBlock : zero;
 
   /// Adjust base offset by stencil center shift (if any) to align localRow
   /// with the logical loop index when loops start at non-zero bounds.

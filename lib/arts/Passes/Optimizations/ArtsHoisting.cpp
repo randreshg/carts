@@ -507,6 +507,18 @@ static bool hoistDbRefsInEdt(EdtOp edt) {
   return changed;
 }
 
+/// Hoist loop-invariant ops and db_refs in loops that are NOT inside EDTs.
+static bool hoistOutsideEdt(func::FuncOp funcOp) {
+  bool changed = false;
+  funcOp.walk([&](scf::ForOp loop) {
+    if (loop->getParentOfType<EdtOp>())
+      return;
+    changed |= hoistInvariantOpsInLoop(loop);
+    changed |= hoistDbRefsInLoop(loop);
+  });
+  return changed;
+}
+
 //===----------------------------------------------------------------------===//
 // Pass Definition
 //===----------------------------------------------------------------------===//
@@ -534,6 +546,8 @@ struct ArtsHoistingPass : public arts::ArtsHoistingBase<ArtsHoistingPass> {
         changed = true;
       }
       module.walk([&](EdtOp edt) { refChanged |= hoistDbRefsInEdt(edt); });
+      module.walk(
+          [&](func::FuncOp funcOp) { refChanged |= hoistOutsideEdt(funcOp); });
       if (refChanged) {
         ARTS_INFO("DbRef hoisting applied");
         changed = true;

@@ -15,9 +15,8 @@ def ArtsDialect : Dialect {
   let cppNamespace = "::mlir::arts";
 
   let summary = "Types and operations for the ARTS dialect";
-  let description = [{
-    This dialect contains operations for the ARTS Runtime.
-  }];
+  let description =
+      [{ This dialect contains operations for the ARTS Runtime. }];
 
   let useDefaultTypePrinterParser = 1;
   let useDefaultAttributePrinterParser = 1;

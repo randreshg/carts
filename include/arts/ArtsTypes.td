@@ -22,9 +22,9 @@ class Arts_Type<string name, string typeMnemonic> : TypeDef<ArtsDialect, name> {
 def EventType : Arts_Type<"Event", "event"> {
   let summary = "represents an event in the ARTS dialect";
   let description = [{
-    `arts.event` is a type used to represent events in the ARTS dialect.
-    Events are associated with EDT completion or specific dependency states.
-  }];
+    `arts.event` is a type used to represent events in the ARTS dialect
+          .Events are associated with EDT completion or specific dependency
+              states.}];
 }
 
 #endif // ARTS_TYPES
