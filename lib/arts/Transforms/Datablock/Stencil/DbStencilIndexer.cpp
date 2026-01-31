@@ -316,88 +316,66 @@ void DbStencilIndexer::transformDbRefUsers(
     };
 
     if (isLoad) {
-      /// LOAD: Generate loads from all available buffers, then select
-      /// IMPORTANT: Use conditional execution (scf.if) to avoid loading from
-      /// NULL pointers for boundary workers.
+      /// LOAD: Select buffer+row index, then perform a single load.
+      /// This avoids per-element scf.if regions and redundant loads.
 
-      /// Load from owned buffer (always valid)
       Value clampedOwnedIdx = clampIndex(ownedIdx, blockSize, builder, userLoc);
-      SmallVector<Value> ownedIndices = buildAccessIndices(clampedOwnedIdx);
+      Value clampedLeftIdx =
+          leftMemref ? clampIndex(leftIdx, haloLeft, builder, userLoc)
+                     : Value();
+      Value clampedRightIdx =
+          rightMemref ? clampIndex(rightIdx, haloRight, builder, userLoc)
+                      : Value();
 
-      auto ownedLoad =
-          builder.create<memref::LoadOp>(userLoc, ownedMemref, ownedIndices);
-      Value result = ownedLoad.getResult();
+      Value selectedMemref = ownedMemref;
+      Value selectedRowIdx = clampedOwnedIdx;
 
-      /// Load from left halo if available (with null pointer guard)
+      /// Select left halo if needed (and valid), else owned.
       if (leftMemref) {
-        /// Conditionally load from left halo (avoid null pointer dereference)
-        auto leftIfOp =
-            builder.create<scf::IfOp>(userLoc, result.getType(), leftPtrNotNull,
-                                      /*withElseRegion=*/true);
-
-        /// Then block: load from left halo
-        {
-          OpBuilder::InsertionGuard g(builder);
-          builder.setInsertionPointToStart(&leftIfOp.getThenRegion().front());
-          Value clampedLeftIdx =
-              clampIndex(leftIdx, haloLeft, builder, userLoc);
-          SmallVector<Value> leftIndices = buildAccessIndices(clampedLeftIdx);
-          auto leftLoad =
-              builder.create<memref::LoadOp>(userLoc, leftMemref, leftIndices);
-          builder.create<scf::YieldOp>(userLoc, leftLoad.getResult());
-        }
-
-        /// Else block: use owned value as fallback
-        {
-          OpBuilder::InsertionGuard g(builder);
-          builder.setInsertionPointToStart(&leftIfOp.getElseRegion().front());
-          builder.create<scf::YieldOp>(userLoc, result);
-        }
-
-        /// Select: if isLeftHalo, use conditional result, else use owned
-        Value safeLeftVal = leftIfOp.getResult(0);
-        result = builder.create<arith::SelectOp>(userLoc, isLeftHalo,
-                                                 safeLeftVal, result);
+        Value safeLeftMemref =
+            leftPtrNotNull
+                ? builder.create<arith::SelectOp>(userLoc, leftPtrNotNull,
+                                                  leftMemref, ownedMemref)
+                : leftMemref;
+        Value safeLeftIdx =
+            leftPtrNotNull
+                ? builder.create<arith::SelectOp>(
+                      userLoc, leftPtrNotNull, clampedLeftIdx, clampedOwnedIdx)
+                : clampedLeftIdx;
+        selectedMemref = builder.create<arith::SelectOp>(
+            userLoc, isLeftHalo, safeLeftMemref, selectedMemref);
+        selectedRowIdx = builder.create<arith::SelectOp>(
+            userLoc, isLeftHalo, safeLeftIdx, selectedRowIdx);
       }
 
-      /// Load from right halo if available (with null pointer guard)
+      /// Select right halo if needed (and valid), else current selection.
       if (rightMemref) {
-        /// Conditionally load from right halo (avoid null pointer dereference)
-        auto rightIfOp = builder.create<scf::IfOp>(userLoc, result.getType(),
-                                                   rightPtrNotNull,
-                                                   /*withElseRegion=*/true);
+        Value safeRightMemref =
+            rightPtrNotNull
+                ? builder.create<arith::SelectOp>(userLoc, rightPtrNotNull,
+                                                  rightMemref, ownedMemref)
+                : rightMemref;
+        Value safeRightIdx = rightPtrNotNull
+                                 ? builder.create<arith::SelectOp>(
+                                       userLoc, rightPtrNotNull,
+                                       clampedRightIdx, clampedOwnedIdx)
+                                 : clampedRightIdx;
 
-        /// Then block: load from right halo
-        {
-          OpBuilder::InsertionGuard g(builder);
-          builder.setInsertionPointToStart(&rightIfOp.getThenRegion().front());
-          Value clampedRightIdx =
-              clampIndex(rightIdx, haloRight, builder, userLoc);
-          SmallVector<Value> rightIndices = buildAccessIndices(clampedRightIdx);
-          auto rightLoad = builder.create<memref::LoadOp>(userLoc, rightMemref,
-                                                          rightIndices);
-          builder.create<scf::YieldOp>(userLoc, rightLoad.getResult());
-        }
-
-        /// Else block: use current result as fallback
-        {
-          OpBuilder::InsertionGuard g(builder);
-          builder.setInsertionPointToStart(&rightIfOp.getElseRegion().front());
-          builder.create<scf::YieldOp>(userLoc, result);
-        }
-
-        /// isRightHalo = localRow >= blockSize (base-offset semantics)
         Value isRightHalo = builder.create<arith::CmpIOp>(
             userLoc, arith::CmpIPredicate::sge, localRow, blockSize);
 
-        /// Select: if isRightHalo, use conditional result, else use current
-        Value safeRightVal = rightIfOp.getResult(0);
-        result = builder.create<arith::SelectOp>(userLoc, isRightHalo,
-                                                 safeRightVal, result);
+        selectedMemref = builder.create<arith::SelectOp>(
+            userLoc, isRightHalo, safeRightMemref, selectedMemref);
+        selectedRowIdx = builder.create<arith::SelectOp>(
+            userLoc, isRightHalo, safeRightIdx, selectedRowIdx);
       }
 
+      SmallVector<Value> selectedIndices = buildAccessIndices(selectedRowIdx);
+      auto selectedLoad = builder.create<memref::LoadOp>(
+          userLoc, selectedMemref, selectedIndices);
+
       auto load = cast<memref::LoadOp>(user);
-      load.replaceAllUsesWith(result);
+      load.replaceAllUsesWith(selectedLoad.getResult());
       opsToRemove.insert(load);
 
     } else {

@@ -163,6 +163,25 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
   /// N-D BLOCK MODE: div/mod model for each partitioned dimension
   SmallVector<Value> newOffsets, newSizes;
   bool isSingleBlock = true;
+  auto isAlignedToBlock = [&](Value offset,
+                              const std::optional<int64_t> &bsConst) -> bool {
+    if (!offset || !bsConst || *bsConst <= 0)
+      return false;
+    Value stripped = ValueUtils::stripNumericCasts(offset);
+    if (auto c = ValueUtils::getConstantValue(stripped))
+      return (*c % *bsConst) == 0;
+    if (auto mul = stripped.getDefiningOp<arith::MulIOp>()) {
+      Value lhs = ValueUtils::stripNumericCasts(mul.getLhs());
+      Value rhs = ValueUtils::stripNumericCasts(mul.getRhs());
+      if (auto lhsC = ValueUtils::getConstantValue(lhs))
+        if ((*lhsC % *bsConst) == 0)
+          return true;
+      if (auto rhsC = ValueUtils::getConstantValue(rhs))
+        if ((*rhsC % *bsConst) == 0)
+          return true;
+    }
+    return false;
+  };
 
   for (unsigned d = 0; d < nPartDims; ++d) {
     Value bs = plan.getBlockSize(d);
@@ -194,13 +213,21 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
 
     /// Check if single-block for this dimension
     auto constElemSz = ValueUtils::getConstantValue(elemSz);
+    auto constElemSzUpper =
+        constElemSz ? constElemSz : arts::extractBlockSizeFromHint(elemSz);
     auto constBs = arts::extractBlockSizeFromHint(bs);
+    bool isAligned = isAlignedToBlock(elemOff, constBs);
     bool isSingleDim = false;
-    if (constElemSz && constBs) {
-      isSingleDim = (*constElemSz <= *constBs);
-    } else {
-      isSingleBlock = false; // Unknown sizes, assume not single block
+    if (auto constBlocks = ValueUtils::tryFoldConstantIndex(blockCount)) {
+      if (*constBlocks == 1)
+        isSingleDim = true;
     }
+    if (!isSingleDim && constElemSzUpper && constBs) {
+      if (*constElemSzUpper <= *constBs && isAligned)
+        isSingleDim = true;
+    }
+    if (!isSingleDim)
+      isSingleBlock = false; // Unknown/ambiguous sizes, assume not single block
     if (isSingleDim)
       blockCount = one;
 
@@ -238,117 +265,82 @@ void DbBlockRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
                                     ref.getResult().getUsers().end());
   RemovalUtils removal;
 
+  /// Build a block indexer with zero start blocks (global indexing).
+  unsigned nPartDims = plan.numPartitionedDims();
+  if (nPartDims == 0)
+    nPartDims = 1;
+  SmallVector<Value> startBlocks;
+  startBlocks.reserve(nPartDims);
+  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+  for (unsigned d = 0; d < nPartDims; ++d)
+    startBlocks.push_back(zero);
+
+  PartitionInfo info;
+  info.mode = PartitionMode::block;
+  info.sizes.assign(plan.blockSizes.begin(), plan.blockSizes.end());
+  if (!plan.partitionedDims.empty())
+    info.partitionedDims.assign(plan.partitionedDims.begin(),
+                                plan.partitionedDims.end());
+
+  DbBlockIndexer indexer(info, startBlocks, plan.outerRank(), plan.innerRank(),
+                         allocSingleBlock);
+
   bool hasLoadStoreUsers = false;
   for (Operation *user : refUsers) {
     if (!isa<memref::LoadOp, memref::StoreOp>(user))
       continue;
-
     hasLoadStoreUsers = true;
+
     OpBuilder::InsertionGuard ig(builder);
     builder.setInsertionPoint(user);
     Location userLoc = user->getLoc();
 
-    /// Get load/store indices
     ValueRange loadStoreIndices;
     if (auto load = dyn_cast<memref::LoadOp>(user))
       loadStoreIndices = load.getIndices();
     else if (auto store = dyn_cast<memref::StoreOp>(user))
       loadStoreIndices = store.getIndices();
 
-    SmallVector<Value> newOuter, newInner;
-    Value one = builder.create<arith::ConstantIndexOp>(userLoc, 1);
-
-    /// N-D block partitioning: div/mod for each partitioned dimension
-    unsigned nPartDims = plan.numPartitionedDims();
-    if (nPartDims == 0)
-      nPartDims = 1; // Default to 1D if not specified
-
-    for (unsigned d = 0; d < loadStoreIndices.size(); ++d) {
-      Value globalIdx = loadStoreIndices[d];
-      if (d < nPartDims) {
-        /// Partitioned dimension: compute block index and local index
-        if (allocSingleBlock) {
-          newOuter.push_back(
-              builder.create<arith::ConstantIndexOp>(userLoc, 0));
-        } else {
-          Value bs = plan.getBlockSize(d);
-          if (!bs)
-            bs = one;
-          bs = builder.create<arith::MaxUIOp>(userLoc, bs, one);
-          newOuter.push_back(
-              builder.create<arith::DivUIOp>(userLoc, globalIdx, bs));
-        }
-
-        /// Always compute rem for memref index
-        Value bs = plan.getBlockSize(d);
-        if (!bs)
-          bs = one;
-        bs = builder.create<arith::MaxUIOp>(userLoc, bs, one);
-        newInner.push_back(
-            builder.create<arith::RemUIOp>(userLoc, globalIdx, bs));
-      } else {
-        /// Non-partitioned dimension: pass through to inner
-        newInner.push_back(globalIdx);
-      }
+    LocalizedIndices localized;
+    if (!loadStoreIndices.empty()) {
+      SmallVector<Value> indices(loadStoreIndices.begin(),
+                                 loadStoreIndices.end());
+      localized = indexer.localize(indices, builder, userLoc);
+    } else {
+      localized.dbRefIndices.push_back(zero);
+      localized.memrefIndices.push_back(zero);
     }
 
-    if (newOuter.empty() || newInner.empty()) {
-      Value zero = builder.create<arith::ConstantIndexOp>(userLoc, 0);
-      if (newOuter.empty())
-        newOuter.push_back(zero);
-      if (newInner.empty())
-        newInner.push_back(zero);
-    }
+    auto newRef = builder.create<DbRefOp>(userLoc, newElementType, newSource,
+                                          localized.dbRefIndices);
 
-    /// Create new db_ref with transformed outer indices
-    auto newRef =
-        builder.create<DbRefOp>(userLoc, newElementType, newSource, newOuter);
-
-    /// Create new load/store with transformed inner indices
     if (auto load = dyn_cast<memref::LoadOp>(user)) {
-      auto newLoad = builder.create<memref::LoadOp>(userLoc, newRef, newInner);
+      auto newLoad = builder.create<memref::LoadOp>(userLoc, newRef.getResult(),
+                                                    localized.memrefIndices);
       load.replaceAllUsesWith(newLoad.getResult());
     } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
-      builder.create<memref::StoreOp>(userLoc, store.getValue(), newRef,
-                                      newInner);
+      builder.create<memref::StoreOp>(userLoc, store.getValue(),
+                                      newRef.getResult(),
+                                      localized.memrefIndices);
     }
     removal.markForRemoval(user);
   }
 
-  /// For db_refs without load/store users, compute block indices for N-D
+  /// For db_refs without load/store users, rewrite the db_ref indices only.
   if (!hasLoadStoreUsers && !ref.getResult().use_empty()) {
     OpBuilder::InsertionGuard ig(builder);
     builder.setInsertionPoint(ref);
 
-    unsigned nPartDims = plan.numPartitionedDims();
-    if (nPartDims == 0)
-      nPartDims = 1;
+    SmallVector<Value> refIndices(ref.getIndices().begin(),
+                                  ref.getIndices().end());
+    LocalizedIndices localized =
+        refIndices.empty() ? LocalizedIndices()
+                           : indexer.localize(refIndices, builder, loc);
+    if (localized.dbRefIndices.empty())
+      localized.dbRefIndices.push_back(zero);
 
-    SmallVector<Value> blockIndices;
-    Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
-    ValueRange refIndices = ref.getIndices();
-
-    for (unsigned d = 0; d < nPartDims; ++d) {
-      if (allocSingleBlock) {
-        blockIndices.push_back(builder.create<arith::ConstantIndexOp>(loc, 0));
-      } else {
-        Value bs = plan.getBlockSize(d);
-        if (!bs)
-          bs = one;
-        bs = builder.create<arith::MaxUIOp>(loc, bs, one);
-
-        if (d < refIndices.size()) {
-          blockIndices.push_back(
-              builder.create<arith::DivUIOp>(loc, refIndices[d], bs));
-        } else {
-          blockIndices.push_back(
-              builder.create<arith::ConstantIndexOp>(loc, 0));
-        }
-      }
-    }
-
-    auto newRef =
-        builder.create<DbRefOp>(loc, newElementType, newSource, blockIndices);
+    auto newRef = builder.create<DbRefOp>(loc, newElementType, newSource,
+                                          localized.dbRefIndices);
     ref.replaceAllUsesWith(newRef.getResult());
   }
 
@@ -434,6 +426,9 @@ bool DbBlockRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
   PartitionInfo info;
   info.mode = PartitionMode::block;
   info.sizes.assign(effectiveBlockSizes.begin(), effectiveBlockSizes.end());
+  if (!plan.partitionedDims.empty())
+    info.partitionedDims.assign(plan.partitionedDims.begin(),
+                                plan.partitionedDims.end());
   /// Note: offsets are stored but startBlocks are passed separately
   /// because the division (offsets / sizes) requires a builder.
 
@@ -448,7 +443,7 @@ bool DbBlockRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
   /// Create N-D block indexer with PartitionInfo
   auto indexer = std::make_unique<DbBlockIndexer>(
       info, effectiveStartBlocks, plan.outerRank(), plan.innerRank(),
-      allocSingleBlock);
+      allocSingleBlock, isSingleBlock, zero);
 
   SmallVector<Operation *> users(blockArg.getUsers().begin(),
                                  blockArg.getUsers().end());

@@ -591,8 +591,7 @@ Value ValueUtils::stripConstantOffset(Value value, int64_t *outConst) {
         current = subOp.getLhs();
         continue;
       }
-    } else if (auto indexCast =
-                   current.getDefiningOp<arith::IndexCastOp>()) {
+    } else if (auto indexCast = current.getDefiningOp<arith::IndexCastOp>()) {
       current = indexCast.getIn();
       continue;
     }

@@ -48,23 +48,29 @@ using namespace mlir::arts;
 
 DbBlockIndexer::DbBlockIndexer(const PartitionInfo &info,
                                ArrayRef<Value> startBlocks, unsigned outerRank,
-                               unsigned innerRank, bool allocSingleBlock)
+                               unsigned innerRank, bool allocSingleBlock,
+                               bool acquireSingleBlock, Value dominantZero)
     : DbIndexerBase(info, outerRank, innerRank),
       blockSizes(info.sizes.begin(), info.sizes.end()),
+      partitionedDims(info.partitionedDims.begin(), info.partitionedDims.end()),
       startBlocks(startBlocks.begin(), startBlocks.end()),
-      allocSingleBlock(allocSingleBlock) {}
+      allocSingleBlock(allocSingleBlock),
+      acquireSingleBlock(acquireSingleBlock), dominantZero(dominantZero) {}
 
 LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
                                           OpBuilder &builder, Location loc) {
   LocalizedIndices result;
-  auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
+  auto zero = [&]() {
+    return dominantZero ? dominantZero
+                        : builder.create<arith::ConstantIndexOp>(loc, 0);
+  };
   auto one = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 1); };
 
   unsigned nPartDims = numPartitionedDims();
   ARTS_DEBUG("DbBlockIndexer::localize with "
-             << globalIndices.size() << " indices, numPartitionedDims="
-             << nPartDims << ", innerRank=" << innerRank
-             << ", outerRank=" << outerRank);
+             << globalIndices.size()
+             << " indices, numPartitionedDims=" << nPartDims
+             << ", innerRank=" << innerRank << ", outerRank=" << outerRank);
 
   if (globalIndices.empty()) {
     /// For empty indices with multi-dimensional partitioning, we need
@@ -80,7 +86,69 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
   }
 
   /// N-D block partitioning: apply div/mod to each partitioned dimension
-  /// For each partitioned dimension d, compute:
+  /// If partitionedDims is provided, map partitioning to non-leading dims.
+  if (!partitionedDims.empty()) {
+    unsigned rank = globalIndices.size();
+    bool dimsInRange = true;
+    for (unsigned d : partitionedDims) {
+      if (d >= rank) {
+        dimsInRange = false;
+        break;
+      }
+    }
+    if (innerRank >= rank && dimsInRange) {
+      /// Initialize memref indices with global indices (or zero padding).
+      result.memrefIndices.reserve(innerRank);
+      for (unsigned d = 0; d < innerRank; ++d) {
+        if (d < rank)
+          result.memrefIndices.push_back(globalIndices[d]);
+        else
+          result.memrefIndices.push_back(zero());
+      }
+
+      for (unsigned p = 0; p < partitionedDims.size(); ++p) {
+        unsigned dim = partitionedDims[p];
+        Value globalIdx = globalIndices[dim];
+        Value bs =
+            (p < blockSizes.size() && blockSizes[p]) ? blockSizes[p] : one();
+        bs = builder.create<arith::MaxUIOp>(loc, bs, one());
+
+        Value dbRefIdx;
+        if (allocSingleBlock || acquireSingleBlock) {
+          dbRefIdx = zero();
+        } else {
+          Value sb = (p < startBlocks.size() && startBlocks[p]) ? startBlocks[p]
+                                                                : zero();
+          Value physBlock = builder.create<arith::DivUIOp>(loc, globalIdx, bs);
+          dbRefIdx = builder.create<arith::SubIOp>(loc, physBlock, sb);
+        }
+        result.dbRefIndices.push_back(dbRefIdx);
+
+        if (dim < result.memrefIndices.size()) {
+          Value localIdx;
+          if (acquireSingleBlock) {
+            Value sb = (p < startBlocks.size() && startBlocks[p])
+                           ? startBlocks[p]
+                           : zero();
+            Value blockBase = builder.create<arith::MulIOp>(loc, sb, bs);
+            localIdx = builder.create<arith::SubIOp>(loc, globalIdx, blockBase);
+          } else {
+            localIdx = builder.create<arith::RemUIOp>(loc, globalIdx, bs);
+          }
+          result.memrefIndices[dim] = localIdx;
+        }
+      }
+
+      /// Ensure at least one dbRef index
+      if (result.dbRefIndices.empty())
+        result.dbRefIndices.push_back(zero());
+      return result;
+    }
+    ARTS_DEBUG("  Non-leading partition dims not applicable; falling back");
+  }
+
+  /// N-D block partitioning (leading dims): apply div/mod to each partitioned
+  /// dimension For each partitioned dimension d, compute:
   ///   dbRefIdx[d]  = (globalIdx[d] / blockSize[d]) - startBlock[d]
   ///   memrefIdx[d] = globalIdx[d] % blockSize[d]
   ///
@@ -90,9 +158,8 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
   ///   - dbRefIndices = [div(i)]
   ///   - memrefIndices = [j] (NOT [rem(i), j] which would be 2 indices!)
   /// Count non-partitioned dimensions that need to go into memrefIndices
-  unsigned nonPartDims = globalIndices.size() > nPartDims
-                             ? globalIndices.size() - nPartDims
-                             : 0;
+  unsigned nonPartDims =
+      globalIndices.size() > nPartDims ? globalIndices.size() - nPartDims : 0;
 
   for (unsigned d = 0; d < nPartDims && d < globalIndices.size(); ++d) {
     Value globalIdx = globalIndices[d];
@@ -100,7 +167,7 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
     bs = builder.create<arith::MaxUIOp>(loc, bs, one());
 
     Value dbRefIdx;
-    if (allocSingleBlock) {
+    if (allocSingleBlock || acquireSingleBlock) {
       dbRefIdx = zero();
     } else {
       Value sb =
@@ -113,9 +180,18 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
     }
     result.dbRefIndices.push_back(dbRefIdx);
 
-    /// Only add rem(localIdx) if there's room after reserving for non-partitioned dims
+    /// Only add rem(localIdx) if there's room after reserving for
+    /// non-partitioned dims
     if (result.memrefIndices.size() + nonPartDims < innerRank) {
-      Value localIdx = builder.create<arith::RemUIOp>(loc, globalIdx, bs);
+      Value localIdx;
+      if (acquireSingleBlock) {
+        Value sb = (d < startBlocks.size() && startBlocks[d]) ? startBlocks[d]
+                                                              : zero();
+        Value blockBase = builder.create<arith::MulIOp>(loc, sb, bs);
+        localIdx = builder.create<arith::SubIOp>(loc, globalIdx, blockBase);
+      } else {
+        localIdx = builder.create<arith::RemUIOp>(loc, globalIdx, bs);
+      }
       result.memrefIndices.push_back(localIdx);
       ARTS_DEBUG("    Dim " << d << ": dbRef=" << dbRefIdx
                             << ", memref=" << localIdx);
@@ -153,7 +229,10 @@ LocalizedIndices DbBlockIndexer::localizeLinearized(Value globalLinearIndex,
                                                     Location loc) {
   LocalizedIndices result;
   auto one = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 1); };
-  auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
+  auto zero = [&]() {
+    return dominantZero ? dominantZero
+                        : builder.create<arith::ConstantIndexOp>(loc, 0);
+  };
 
   ARTS_DEBUG("DbBlockIndexer::localizeLinearized - using div/mod for 2D");
 
@@ -173,7 +252,7 @@ LocalizedIndices DbBlockIndexer::localizeLinearized(Value globalLinearIndex,
       (blockSizes.size() > 1 && blockSizes[1]) ? blockSizes[1] : bsRow;
   bsCol = builder.create<arith::MaxUIOp>(loc, bsCol, one());
 
-  if (allocSingleBlock) {
+  if (allocSingleBlock || acquireSingleBlock) {
     result.dbRefIndices.push_back(zero());
   } else {
     Value sb =
@@ -186,7 +265,15 @@ LocalizedIndices DbBlockIndexer::localizeLinearized(Value globalLinearIndex,
   }
 
   /// Compute local row (modulo block size)
-  Value localRow = builder.create<arith::RemUIOp>(loc, globalRow, bsRow);
+  Value localRow;
+  if (acquireSingleBlock) {
+    Value sb =
+        (!startBlocks.empty() && startBlocks[0]) ? startBlocks[0] : zero();
+    Value blockBase = builder.create<arith::MulIOp>(loc, sb, bsRow);
+    localRow = builder.create<arith::SubIOp>(loc, globalRow, blockBase);
+  } else {
+    localRow = builder.create<arith::RemUIOp>(loc, globalRow, bsRow);
+  }
 
   /// Compute local col (modulo block size)
   /// For 2D blocks, the column also needs to be localized within the block
@@ -205,7 +292,8 @@ LocalizedIndices DbBlockIndexer::localizeLinearized(Value globalLinearIndex,
     Value localLinear = builder.create<arith::MulIOp>(loc, localRow, bsCol);
     localLinear = builder.create<arith::AddIOp>(loc, localLinear, localCol);
     result.memrefIndices.push_back(localLinear);
-    ARTS_DEBUG("  innerRank=" << innerRank << ", re-linearized to single index");
+    ARTS_DEBUG("  innerRank=" << innerRank
+                              << ", re-linearized to single index");
   }
 
   return result;
@@ -235,17 +323,15 @@ void DbBlockIndexer::transformOps(ArrayRef<Operation *> ops, Value dbPtr,
     if (auto subindex = dyn_cast<polygeist::SubIndexOp>(op)) {
       auto zero = AC.getBuilder().create<arith::ConstantIndexOp>(loc, 0);
 
-      ARTS_DEBUG("  Handling subindex: elementType rank="
-                 << (elementType.isa<MemRefType>()
-                         ? elementType.cast<MemRefType>().getRank()
-                         : 0)
-                 << ", subindex result type rank="
-                 << (subindex.getResult().getType().isa<MemRefType>()
-                         ? subindex.getResult()
-                               .getType()
-                               .cast<MemRefType>()
-                               .getRank()
-                         : 0));
+      ARTS_DEBUG(
+          "  Handling subindex: elementType rank="
+          << (elementType.isa<MemRefType>()
+                  ? elementType.cast<MemRefType>().getRank()
+                  : 0)
+          << ", subindex result type rank="
+          << (subindex.getResult().getType().isa<MemRefType>()
+                  ? subindex.getResult().getType().cast<MemRefType>().getRank()
+                  : 0));
 
       SmallVector<Value> dbRefIndices;
       if (outerRank > 0) {
@@ -260,8 +346,8 @@ void DbBlockIndexer::transformOps(ArrayRef<Operation *> ops, Value dbPtr,
           Value bs =
               (blockSizes.size() > 0 && blockSizes[0]) ? blockSizes[0] : one;
           bs = AC.getBuilder().create<arith::MaxUIOp>(loc, bs, one);
-          Value sb =
-              (startBlocks.size() > 0 && startBlocks[0]) ? startBlocks[0] : zero;
+          Value sb = (startBlocks.size() > 0 && startBlocks[0]) ? startBlocks[0]
+                                                                : zero;
 
           Value physBlock =
               AC.getBuilder().create<arith::DivUIOp>(loc, globalIdx, bs);
@@ -280,8 +366,7 @@ void DbBlockIndexer::transformOps(ArrayRef<Operation *> ops, Value dbPtr,
         dbRefIndices.push_back(zero);
       }
 
-      auto dbRef =
-          AC.create<DbRefOp>(loc, elementType, dbPtr, dbRefIndices);
+      auto dbRef = AC.create<DbRefOp>(loc, elementType, dbPtr, dbRefIndices);
 
       /// Replace subindex uses with db_ref result and remove the subindex.
       subindex.replaceAllUsesWith(dbRef.getResult());
@@ -411,7 +496,10 @@ DbBlockIndexer::localizeCoordinates(ArrayRef<Value> globalIndices,
                                     unsigned numIndexedDims, Type elementType,
                                     OpBuilder &builder, Location loc) {
   SmallVector<Value> result;
-  auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
+  auto zero = [&]() {
+    return dominantZero ? dominantZero
+                        : builder.create<arith::ConstantIndexOp>(loc, 0);
+  };
 
   ARTS_DEBUG("DbBlockIndexer::localizeCoordinates with " << globalIndices.size()
                                                          << " indices");
@@ -437,10 +525,14 @@ DbBlockIndexer::localizeCoordinates(ArrayRef<Value> globalIndices,
       Value bs = blockSizes[partIdx];
       Value sb = (partIdx < startBlocks.size()) ? startBlocks[partIdx] : zero();
       if (bs) {
-        /// dbRefIdx = (globalIdx / blockSize) - startBlock
-        Value physBlock = builder.create<arith::DivUIOp>(loc, globalIdx, bs);
-        Value relBlock = builder.create<arith::SubIOp>(loc, physBlock, sb);
-        result.push_back(relBlock);
+        if (allocSingleBlock || acquireSingleBlock) {
+          result.push_back(zero());
+        } else {
+          /// dbRefIdx = (globalIdx / blockSize) - startBlock
+          Value physBlock = builder.create<arith::DivUIOp>(loc, globalIdx, bs);
+          Value relBlock = builder.create<arith::SubIOp>(loc, physBlock, sb);
+          result.push_back(relBlock);
+        }
         ARTS_DEBUG("  Dim " << d << ": div/mod by blockSize[" << partIdx
                             << "]");
       } else {

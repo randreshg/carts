@@ -402,8 +402,7 @@ static bool hoistAcquiresInEpoch(EpochOp epoch) {
       if (!safe)
         continue;
 
-      ARTS_DEBUG(
-          "Hoisting read-only db_acquire out of epoch (loop-invariant)");
+      ARTS_DEBUG("Hoisting read-only db_acquire out of epoch (loop-invariant)");
 
       /// Remove releases inside the epoch (including those inside EDTs).
       for (DbReleaseOp rel : releasesToRemove)
@@ -528,7 +527,8 @@ struct ArtsHoistingPass : public arts::ArtsHoistingBase<ArtsHoistingPass> {
     if (enableRefHoisting) {
       bool refChanged = false;
       bool arithChanged = false;
-      module.walk([&](EdtOp edt) { arithChanged |= hoistInvariantOpsInEdt(edt); });
+      module.walk(
+          [&](EdtOp edt) { arithChanged |= hoistInvariantOpsInEdt(edt); });
       if (arithChanged) {
         ARTS_INFO("Loop-invariant op hoisting applied");
         changed = true;

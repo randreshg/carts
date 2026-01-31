@@ -127,8 +127,8 @@ bool ArtsMetadataManager::ensureLoopMetadata(Operation *op) {
 
   /// 3. Try to attach from cache using arts.id or location
   LocationMetadata loc = LocationMetadata::fromLocation(op->getLoc());
-  ARTS_DEBUG("  → extracted location: " << loc.getKey()
-             << " (file=" << loc.file << ", line=" << loc.line << ")");
+  ARTS_DEBUG("  → extracted location: " << loc.getKey() << " (file=" << loc.file
+                                        << ", line=" << loc.line << ")");
   std::string key;
   if (auto idAttr = op->getAttrOfType<IntegerAttr>(ArtsMetadata::IdAttrName))
     key = std::to_string(idAttr.getInt());
@@ -548,12 +548,13 @@ bool ArtsMetadataManager::attachMetadataFromJson(
 
 bool ArtsMetadataManager::attachLoopMetadataNearLocation(
     Operation *op, const LocationMetadata &loc, unsigned lineTolerance) {
-  ARTS_DEBUG("attachLoopMetadataNearLocation: op=" << op->getName()
-             << ", loc=" << loc.getKey() << ", tolerance=" << lineTolerance);
+  ARTS_DEBUG("attachLoopMetadataNearLocation: op="
+             << op->getName() << ", loc=" << loc.getKey()
+             << ", tolerance=" << lineTolerance);
   if (!op || !loc.isValid() || lineTolerance == 0) {
     ARTS_DEBUG("  → early return: op=" << (op ? "valid" : "null")
-               << ", loc.isValid=" << loc.isValid()
-               << ", tolerance=" << lineTolerance);
+                                       << ", loc.isValid=" << loc.isValid()
+                                       << ", tolerance=" << lineTolerance);
     return false;
   }
 
@@ -564,7 +565,8 @@ bool ArtsMetadataManager::attachLoopMetadataNearLocation(
   const llvm::json::Object *bestMatch = nullptr;
   unsigned bestDistance = std::numeric_limits<unsigned>::max();
   std::string baseFile = LocationMetadata::getBasename(loc.file);
-  ARTS_DEBUG("  → searching for baseFile=" << baseFile << ", line=" << loc.line);
+  ARTS_DEBUG("  → searching for baseFile=" << baseFile
+                                           << ", line=" << loc.line);
 
   for (auto &entry : loopJsonCache) {
     const llvm::json::Object *obj = entry.second.get();
@@ -579,8 +581,9 @@ bool ArtsMetadataManager::attachLoopMetadataNearLocation(
     if (!entryLoc.isValid())
       continue;
 
-    ARTS_DEBUG("  → candidate: file=" << entryLoc.file << ", line="
-               << entryLoc.line << " (vs baseFile=" << baseFile << ")");
+    ARTS_DEBUG("  → candidate: file=" << entryLoc.file
+                                      << ", line=" << entryLoc.line
+                                      << " (vs baseFile=" << baseFile << ")");
 
     if (entryLoc.file != baseFile) {
       ARTS_DEBUG("     → file mismatch, skipping");
@@ -589,7 +592,8 @@ bool ArtsMetadataManager::attachLoopMetadataNearLocation(
 
     unsigned distance = static_cast<unsigned>(
         std::abs(static_cast<int>(entryLoc.line) - static_cast<int>(loc.line)));
-    ARTS_DEBUG("     → distance=" << distance << ", tolerance=" << lineTolerance);
+    ARTS_DEBUG("     → distance=" << distance
+                                  << ", tolerance=" << lineTolerance);
     if (distance > lineTolerance) {
       ARTS_DEBUG("     → distance too large, skipping");
       continue;

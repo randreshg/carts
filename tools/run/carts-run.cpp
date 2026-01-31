@@ -397,6 +397,8 @@ void setupPreLowering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createEdtLoweringPass(ArtsIdStride));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
+  /// Hoist loop-invariant arithmetic to enable dep_gep/load hoisting.
+  pm.addPass(createLoopInvariantCodeMotionPass());
   /// Hoist data pointer loads out of loops (must run after EdtLowering).
   pm.addPass(arts::createDataPointerHoistingPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
