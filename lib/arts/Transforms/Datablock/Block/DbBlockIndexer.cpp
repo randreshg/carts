@@ -39,12 +39,111 @@
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "polygeist/Ops.h"
 
 ARTS_DEBUG_SETUP(db_transforms);
 
 using namespace mlir;
 using namespace mlir::arts;
+
+static Value stripClampOne(Value v) {
+  Value cur = ValueUtils::stripNumericCasts(v);
+  while (auto maxOp = cur.getDefiningOp<arith::MaxUIOp>()) {
+    Value lhs = ValueUtils::stripNumericCasts(maxOp.getLhs());
+    Value rhs = ValueUtils::stripNumericCasts(maxOp.getRhs());
+    if (ValueUtils::isOneConstant(lhs)) {
+      cur = rhs;
+      continue;
+    }
+    if (ValueUtils::isOneConstant(rhs)) {
+      cur = lhs;
+      continue;
+    }
+    break;
+  }
+  return cur;
+}
+
+static bool sameValue(Value a, Value b) {
+  a = ValueUtils::stripNumericCasts(a);
+  b = ValueUtils::stripNumericCasts(b);
+  if (a == b)
+    return true;
+  auto aConst = ValueUtils::tryFoldConstantIndex(a);
+  auto bConst = ValueUtils::tryFoldConstantIndex(b);
+  return aConst && bConst && *aConst == *bConst;
+}
+
+static bool isMulOf(Value v, Value a, Value b) {
+  v = stripClampOne(v);
+  a = stripClampOne(a);
+  b = stripClampOne(b);
+  if (auto mul = v.getDefiningOp<arith::MulIOp>()) {
+    Value lhs = stripClampOne(mul.getLhs());
+    Value rhs = stripClampOne(mul.getRhs());
+    if ((sameValue(lhs, a) && sameValue(rhs, b)) ||
+        (sameValue(lhs, b) && sameValue(rhs, a)))
+      return true;
+  }
+  return false;
+}
+
+static Value canonicalizeStartBlock(Value startBlock, Value blockSize) {
+  Value sb = stripClampOne(startBlock);
+  Value bs = stripClampOne(blockSize);
+  if (auto div = sb.getDefiningOp<arith::DivUIOp>()) {
+    Value lhs = stripClampOne(div.getLhs());
+    Value rhs = stripClampOne(div.getRhs());
+    if (sameValue(rhs, bs)) {
+      if (auto mul = lhs.getDefiningOp<arith::MulIOp>()) {
+        Value ml = stripClampOne(mul.getLhs());
+        Value mr = stripClampOne(mul.getRhs());
+        if (sameValue(ml, bs))
+          return mr;
+        if (sameValue(mr, bs))
+          return ml;
+      }
+    }
+  }
+  return sb;
+}
+
+static std::optional<Value>
+extractLocalFromBlockBase(Value globalIdx, Value startBlock, Value blockSize) {
+  Value idx = ValueUtils::stripNumericCasts(globalIdx);
+  Value sb = canonicalizeStartBlock(startBlock, blockSize);
+  if (auto add = idx.getDefiningOp<arith::AddIOp>()) {
+    Value lhs = ValueUtils::stripNumericCasts(add.getLhs());
+    Value rhs = ValueUtils::stripNumericCasts(add.getRhs());
+    if (isMulOf(lhs, sb, blockSize))
+      return rhs;
+    if (isMulOf(rhs, sb, blockSize))
+      return lhs;
+  }
+  return std::nullopt;
+}
+
+static bool isLoopIvBoundedBy(Value idx, Value bs) {
+  auto barg = idx.dyn_cast<BlockArgument>();
+  if (!barg)
+    return false;
+  auto *parentOp = barg.getOwner()->getParentOp();
+  auto forOp = dyn_cast_or_null<scf::ForOp>(parentOp);
+  if (!forOp || forOp.getInductionVar() != barg)
+    return false;
+  Value ub = stripClampOne(forOp.getUpperBound());
+  Value bsStripped = stripClampOne(bs);
+  if (sameValue(ub, bsStripped))
+    return true;
+  if (auto minOp = ub.getDefiningOp<arith::MinUIOp>()) {
+    Value lhs = stripClampOne(minOp.getLhs());
+    Value rhs = stripClampOne(minOp.getRhs());
+    if (sameValue(lhs, bsStripped) || sameValue(rhs, bsStripped))
+      return true;
+  }
+  return false;
+}
 
 DbBlockIndexer::DbBlockIndexer(const PartitionInfo &info,
                                ArrayRef<Value> startBlocks, unsigned outerRank,
@@ -113,28 +212,40 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
             (p < blockSizes.size() && blockSizes[p]) ? blockSizes[p] : one();
         bs = builder.create<arith::MaxUIOp>(loc, bs, one());
 
+        Value sb = (p < startBlocks.size() && startBlocks[p]) ? startBlocks[p]
+                                                              : zero();
         Value dbRefIdx;
-        if (allocSingleBlock || acquireSingleBlock) {
-          dbRefIdx = zero();
-        } else {
-          Value sb = (p < startBlocks.size() && startBlocks[p]) ? startBlocks[p]
-                                                                : zero();
-          Value physBlock = builder.create<arith::DivUIOp>(loc, globalIdx, bs);
-          dbRefIdx = builder.create<arith::SubIOp>(loc, physBlock, sb);
+        Value localIdx;
+        bool simplified = false;
+        if (!allocSingleBlock && !acquireSingleBlock) {
+          if (auto local = extractLocalFromBlockBase(globalIdx, sb, bs)) {
+            Value localIdxVal =
+                ValueUtils::ensureIndexType(*local, builder, loc);
+            if (isLoopIvBoundedBy(localIdxVal, bs)) {
+              dbRefIdx = zero();
+              localIdx = localIdxVal;
+              simplified = true;
+            }
+          }
         }
-        result.dbRefIndices.push_back(dbRefIdx);
-
-        if (dim < result.memrefIndices.size()) {
-          Value localIdx;
+        if (!simplified) {
+          if (allocSingleBlock || acquireSingleBlock) {
+            dbRefIdx = zero();
+          } else {
+            Value physBlock =
+                builder.create<arith::DivUIOp>(loc, globalIdx, bs);
+            dbRefIdx = builder.create<arith::SubIOp>(loc, physBlock, sb);
+          }
           if (acquireSingleBlock) {
-            Value sb = (p < startBlocks.size() && startBlocks[p])
-                           ? startBlocks[p]
-                           : zero();
             Value blockBase = builder.create<arith::MulIOp>(loc, sb, bs);
             localIdx = builder.create<arith::SubIOp>(loc, globalIdx, blockBase);
           } else {
             localIdx = builder.create<arith::RemUIOp>(loc, globalIdx, bs);
           }
+        }
+        result.dbRefIndices.push_back(dbRefIdx);
+
+        if (dim < result.memrefIndices.size()) {
           result.memrefIndices[dim] = localIdx;
         }
       }
@@ -166,32 +277,43 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
     Value bs = (d < blockSizes.size() && blockSizes[d]) ? blockSizes[d] : one();
     bs = builder.create<arith::MaxUIOp>(loc, bs, one());
 
+    Value sb =
+        (d < startBlocks.size() && startBlocks[d]) ? startBlocks[d] : zero();
     Value dbRefIdx;
-    if (allocSingleBlock || acquireSingleBlock) {
-      dbRefIdx = zero();
-    } else {
-      Value sb =
-          (d < startBlocks.size() && startBlocks[d]) ? startBlocks[d] : zero();
-
-      /// Always compute full formula: relBlock = (globalIdx / bs) - startBlock
-      /// The startBlock = 0 case will naturally simplify to physBlock
-      Value physBlock = builder.create<arith::DivUIOp>(loc, globalIdx, bs);
-      dbRefIdx = builder.create<arith::SubIOp>(loc, physBlock, sb);
+    Value localIdx;
+    bool simplified = false;
+    if (!allocSingleBlock && !acquireSingleBlock) {
+      if (auto local = extractLocalFromBlockBase(globalIdx, sb, bs)) {
+        Value localIdxVal = ValueUtils::ensureIndexType(*local, builder, loc);
+        if (isLoopIvBoundedBy(localIdxVal, bs)) {
+          dbRefIdx = zero();
+          localIdx = localIdxVal;
+          simplified = true;
+        }
+      }
+    }
+    if (!simplified) {
+      if (allocSingleBlock || acquireSingleBlock) {
+        dbRefIdx = zero();
+      } else {
+        /// Always compute full formula: relBlock = (globalIdx / bs) -
+        /// startBlock The startBlock = 0 case will naturally simplify to
+        /// physBlock
+        Value physBlock = builder.create<arith::DivUIOp>(loc, globalIdx, bs);
+        dbRefIdx = builder.create<arith::SubIOp>(loc, physBlock, sb);
+      }
+      if (acquireSingleBlock) {
+        Value blockBase = builder.create<arith::MulIOp>(loc, sb, bs);
+        localIdx = builder.create<arith::SubIOp>(loc, globalIdx, blockBase);
+      } else {
+        localIdx = builder.create<arith::RemUIOp>(loc, globalIdx, bs);
+      }
     }
     result.dbRefIndices.push_back(dbRefIdx);
 
     /// Only add rem(localIdx) if there's room after reserving for
     /// non-partitioned dims
     if (result.memrefIndices.size() + nonPartDims < innerRank) {
-      Value localIdx;
-      if (acquireSingleBlock) {
-        Value sb = (d < startBlocks.size() && startBlocks[d]) ? startBlocks[d]
-                                                              : zero();
-        Value blockBase = builder.create<arith::MulIOp>(loc, sb, bs);
-        localIdx = builder.create<arith::SubIOp>(loc, globalIdx, blockBase);
-      } else {
-        localIdx = builder.create<arith::RemUIOp>(loc, globalIdx, bs);
-      }
       result.memrefIndices.push_back(localIdx);
       ARTS_DEBUG("    Dim " << d << ": dbRef=" << dbRefIdx
                             << ", memref=" << localIdx);
