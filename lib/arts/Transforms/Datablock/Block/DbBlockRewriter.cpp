@@ -45,6 +45,55 @@ static bool isDefinedInRegion(Value val, Region *region) {
   return false;
 }
 
+/// Shallow structural equivalence for index expressions (best-effort).
+static bool areValuesEquivalent(Value a, Value b, int depth = 0) {
+  if (!a || !b)
+    return false;
+  if (a == b)
+    return true;
+  if (depth > 6)
+    return false;
+
+  a = ValueUtils::stripNumericCasts(a);
+  b = ValueUtils::stripNumericCasts(b);
+  if (a == b)
+    return true;
+
+  auto ca = ValueUtils::getConstantValue(a);
+  auto cb = ValueUtils::getConstantValue(b);
+  if (ca && cb)
+    return *ca == *cb;
+
+  Operation *opA = a.getDefiningOp();
+  Operation *opB = b.getDefiningOp();
+  if (!opA || !opB)
+    return false;
+  if (opA->getName() != opB->getName())
+    return false;
+  if (opA->getNumOperands() != opB->getNumOperands())
+    return false;
+
+  auto eq = [&](Value x, Value y) {
+    return areValuesEquivalent(x, y, depth + 1);
+  };
+
+  if (isa<arith::AddIOp, arith::MulIOp, arith::MaxUIOp, arith::MinUIOp>(opA)) {
+    if (opA->getNumOperands() == 2) {
+      Value a0 = opA->getOperand(0);
+      Value a1 = opA->getOperand(1);
+      Value b0 = opB->getOperand(0);
+      Value b1 = opB->getOperand(1);
+      return (eq(a0, b0) && eq(a1, b1)) || (eq(a0, b1) && eq(a1, b0));
+    }
+  }
+
+  for (unsigned i = 0; i < opA->getNumOperands(); ++i) {
+    if (!eq(opA->getOperand(i), opB->getOperand(i)))
+      return false;
+  }
+  return true;
+}
+
 /// Check if an operation can be safely cloned (pure arithmetic ops).
 static bool canCloneForStartBlock(Operation *op) {
   return isa<arith::ConstantIndexOp, arith::ConstantIntOp, arith::DivUIOp,
@@ -163,6 +212,51 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
   /// N-D BLOCK MODE: div/mod model for each partitioned dimension
   SmallVector<Value> newOffsets, newSizes;
   bool isSingleBlock = true;
+  auto stripClampOne = [&](Value v) {
+    Value cur = ValueUtils::stripNumericCasts(v);
+    while (auto maxOp = cur.getDefiningOp<arith::MaxUIOp>()) {
+      Value lhs = ValueUtils::stripNumericCasts(maxOp.getLhs());
+      Value rhs = ValueUtils::stripNumericCasts(maxOp.getRhs());
+      if (ValueUtils::isOneConstant(lhs)) {
+        cur = rhs;
+        continue;
+      }
+      if (ValueUtils::isOneConstant(rhs)) {
+        cur = lhs;
+        continue;
+      }
+      break;
+    }
+    return cur;
+  };
+  auto isAlignedToBlockDynamic = [&](Value offset, Value bsVal) -> bool {
+    if (!offset || !bsVal)
+      return false;
+    Value off = ValueUtils::stripNumericCasts(offset);
+    Value bs = stripClampOne(bsVal);
+    if (auto mul = off.getDefiningOp<arith::MulIOp>()) {
+      Value lhs = stripClampOne(mul.getLhs());
+      Value rhs = stripClampOne(mul.getRhs());
+      if (areValuesEquivalent(lhs, bs) || areValuesEquivalent(rhs, bs))
+        return true;
+    }
+    return false;
+  };
+  auto isBoundedByBlock = [&](Value sz, Value bsVal) -> bool {
+    if (!sz || !bsVal)
+      return false;
+    Value s = stripClampOne(sz);
+    Value bs = stripClampOne(bsVal);
+    if (areValuesEquivalent(s, bs))
+      return true;
+    if (auto minOp = s.getDefiningOp<arith::MinUIOp>()) {
+      Value lhs = stripClampOne(minOp.getLhs());
+      Value rhs = stripClampOne(minOp.getRhs());
+      if (areValuesEquivalent(lhs, bs) || areValuesEquivalent(rhs, bs))
+        return true;
+    }
+    return false;
+  };
   auto isAlignedToBlock = [&](Value offset,
                               const std::optional<int64_t> &bsConst) -> bool {
     if (!offset || !bsConst || *bsConst <= 0)
@@ -226,8 +320,15 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
       if (*constElemSzUpper <= *constBs && isAligned)
         isSingleDim = true;
     }
+    if (!isSingleDim) {
+      bool dynAligned = isAlignedToBlockDynamic(elemOff, bs) ||
+                        isAlignedToBlockDynamic(elemOff, elemSz);
+      if (isBoundedByBlock(elemSz, bs) && (isAligned || dynAligned))
+        isSingleDim = true;
+    }
+    /// Unknown/ambiguous sizes, assume not single block
     if (!isSingleDim)
-      isSingleBlock = false; // Unknown/ambiguous sizes, assume not single block
+      isSingleBlock = false;
     if (isSingleDim)
       blockCount = one;
 
