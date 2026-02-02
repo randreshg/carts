@@ -40,7 +40,6 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
-#include <cstdlib>
 
 using namespace llvm;
 using namespace mlir;
@@ -304,23 +303,19 @@ void setupOpenMPToArts(PassManager &pm) {
 /// EDT transformation passes.
 void setupEdtTransforms(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createEdtPass(AM, false));
-  if (!std::getenv("CARTS_DISABLE_EDT_ICM"))
-    pm.addPass(arts::createEdtInvariantCodeMotionPass());
+  pm.addPass(arts::createEdtInvariantCodeMotionPass());
   pm.addPass(arts::createDeadCodeEliminationPass());
   pm.addPass(createSymbolDCEPass());
   pm.addPass(createCSEPass());
-  if (!std::getenv("CARTS_DISABLE_EDT_PTR_REMAT"))
-    pm.addPass(arts::createEdtPtrRematerializationPass());
+  pm.addPass(arts::createEdtPtrRematerializationPass());
 }
 
 /// Loop reordering pass
 void setupLoopReordering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
-  if (!std::getenv("CARTS_DISABLE_LOOP_REORDERING"))
-    pm.addPass(arts::createLoopReorderingPass(AM));
-  if (!std::getenv("CARTS_DISABLE_LOOP_TRANSFORMS"))
-    pm.addPass(arts::createLoopTransformsPass(
-        AM, LoopTransformsEnableMatmul, LoopTransformsEnableTiling,
-        LoopTransformsTileJ, LoopTransformsMinTripCount));
+  pm.addPass(arts::createLoopReorderingPass(AM));
+  pm.addPass(arts::createLoopTransformsPass(
+      AM, LoopTransformsEnableMatmul, LoopTransformsEnableTiling,
+      LoopTransformsTileJ, LoopTransformsMinTripCount));
   pm.addPass(createCSEPass());
 }
 
@@ -402,13 +397,10 @@ void setupPreLowering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createEdtLoweringPass(ArtsIdStride));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
-  /// Hoist loop-invariant arithmetic to enable dep_gep/load hoisting.
   pm.addPass(createLoopInvariantCodeMotionPass());
-  /// Hoist data pointer loads out of loops (must run after EdtLowering).
   pm.addPass(arts::createDataPointerHoistingPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
-  /// Transform memory-based reductions to register-based iter_args.
   pm.addPass(arts::createScalarReplacementPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
@@ -442,18 +434,10 @@ void setupAdditionalOptimizations(OpPassManager &optPM) {
 void setupLLVMIREmission(PassManager &pm) {
   pm.addPass(createCSEPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  /// Expand arith ops like CeilDivUI that don't have direct LLVM lowering.
   pm.addPass(arith::createArithExpandOpsPass());
   pm.addPass(polygeist::createConvertPolygeistToLLVMPass());
-  /// Generate alias scope metadata (must run after ConvertPolygeistToLLVM).
   pm.addPass(arts::createAliasScopeGenPass());
-  /// Attach LLVM loop vectorization hints to EDT loop backedges.
-  // pm.addPass(arts::createLoopVectorizationHintsPass());
-  /// Insert software prefetch hints for strided memory accesses.
-  /// NOTE: Currently disabled due to performance regression on tight loops.
-  /// TODO: Re-enable after fixing prefetch distance calculation for innermost
-  /// loops.
-  // pm.addPass(arts::createPrefetchHintsPass());
+  pm.addPass(arts::createLoopVectorizationHintsPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
 }

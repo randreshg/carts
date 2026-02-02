@@ -116,6 +116,8 @@ private:
   int threads = 1;
   int tMT = 0;
   int nodeCount = 1;
+  bool disableMultiNode =
+      false; // Forces intranode execution even when nodeCount > 1
 
   std::vector<std::string> nodes = {"localhost"};
   std::string masterNode = "localhost";

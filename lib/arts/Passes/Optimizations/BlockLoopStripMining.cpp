@@ -76,34 +76,6 @@ static bool isInnermostLoop(scf::ForOp loop) {
   return !hasNested;
 }
 
-static Value stripClampOne(Value v) {
-  Value cur = ValueUtils::stripNumericCasts(v);
-  while (auto maxOp = cur.getDefiningOp<arith::MaxUIOp>()) {
-    Value lhs = ValueUtils::stripNumericCasts(maxOp.getLhs());
-    Value rhs = ValueUtils::stripNumericCasts(maxOp.getRhs());
-    if (ValueUtils::isOneConstant(lhs)) {
-      cur = rhs;
-      continue;
-    }
-    if (ValueUtils::isOneConstant(rhs)) {
-      cur = lhs;
-      continue;
-    }
-    break;
-  }
-  return cur;
-}
-
-static bool sameValue(Value a, Value b) {
-  a = ValueUtils::stripNumericCasts(a);
-  b = ValueUtils::stripNumericCasts(b);
-  if (a == b)
-    return true;
-  auto aConst = ValueUtils::tryFoldConstantIndex(a);
-  auto bConst = ValueUtils::tryFoldConstantIndex(b);
-  return aConst && bConst && *aConst == *bConst;
-}
-
 static std::optional<Value> extractInvariantOffset(Value lhs, Value iv) {
   lhs = ValueUtils::stripNumericCasts(lhs);
   if (lhs == iv)
@@ -124,8 +96,8 @@ static bool isAlignedOffset(Value offset, Value blockSize,
                             Value *mulOther = nullptr) {
   if (!offset)
     return true;
-  Value off = stripClampOne(offset);
-  Value bs = stripClampOne(blockSize);
+  Value off = ValueUtils::stripClampOne(offset);
+  Value bs = ValueUtils::stripClampOne(blockSize);
   if (auto offConst = ValueUtils::tryFoldConstantIndex(off)) {
     if (*offConst == 0)
       return true;
@@ -134,14 +106,14 @@ static bool isAlignedOffset(Value offset, Value blockSize,
     return false;
   }
   if (auto mul = off.getDefiningOp<arith::MulIOp>()) {
-    Value lhs = stripClampOne(mul.getLhs());
-    Value rhs = stripClampOne(mul.getRhs());
-    if (sameValue(lhs, bs)) {
+    Value lhs = ValueUtils::stripClampOne(mul.getLhs());
+    Value rhs = ValueUtils::stripClampOne(mul.getRhs());
+    if (ValueUtils::sameValue(lhs, bs)) {
       if (mulOther)
         *mulOther = rhs;
       return true;
     }
-    if (sameValue(rhs, bs)) {
+    if (ValueUtils::sameValue(rhs, bs)) {
       if (mulOther)
         *mulOther = lhs;
       return true;
@@ -199,7 +171,7 @@ static std::optional<LoopBlockInfo> analyzeLoop(scf::ForOp loop,
       if (offset) {
         if (!info.offsetVal)
           info.offsetVal = offset;
-        else if (!sameValue(info.offsetVal, offset))
+        else if (!ValueUtils::sameValue(info.offsetVal, offset))
           invalid = true;
       } else if (info.offsetVal) {
         invalid = true;
@@ -229,7 +201,7 @@ static std::optional<LoopBlockInfo> analyzeLoop(scf::ForOp loop,
       if (offset) {
         if (!info.offsetVal)
           info.offsetVal = offset;
-        else if (!sameValue(info.offsetVal, offset))
+        else if (!ValueUtils::sameValue(info.offsetVal, offset))
           invalid = true;
       } else if (info.offsetVal) {
         invalid = true;
@@ -320,13 +292,12 @@ static bool stripMineLoop(scf::ForOp loop, const LoopBlockInfo &info) {
   Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
   Value lbVal = builder.create<arith::ConstantIndexOp>(loc, lb);
   Value ubVal = loop.getUpperBound();
-  Value bsVal = info.blockSizeConst
-                    ? builder.create<arith::ConstantIndexOp>(
-                          loc, *info.blockSizeConst)
-                    : ValueUtils::ensureIndexType(info.blockSizeVal, builder,
-                                                  loc);
-  Value ubGeLb = builder.create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::uge, ubVal, lbVal);
+  Value bsVal =
+      info.blockSizeConst
+          ? builder.create<arith::ConstantIndexOp>(loc, *info.blockSizeConst)
+          : ValueUtils::ensureIndexType(info.blockSizeVal, builder, loc);
+  Value ubGeLb = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
+                                               ubVal, lbVal);
   Value tripCountRaw = builder.create<arith::SubIOp>(loc, ubVal, lbVal);
   Value tripCount =
       builder.create<arith::SelectOp>(loc, ubGeLb, tripCountRaw, zero);
@@ -393,14 +364,12 @@ static bool stripMineLoop(scf::ForOp loop, const LoopBlockInfo &info) {
   if (info.offsetVal) {
     Value offsetDiv = nullptr;
     if (info.offsetDivHint) {
-      offsetDiv =
-          ValueUtils::ensureIndexType(info.offsetDivHint, builder, loc);
+      offsetDiv = ValueUtils::ensureIndexType(info.offsetDivHint, builder, loc);
     } else if (auto offConst =
                    ValueUtils::tryFoldConstantIndex(info.offsetVal)) {
       if (info.blockSizeConst) {
         int64_t offDivConst = *offConst / *info.blockSizeConst;
-        offsetDiv =
-            builder.create<arith::ConstantIndexOp>(loc, offDivConst);
+        offsetDiv = builder.create<arith::ConstantIndexOp>(loc, offDivConst);
       }
     }
     if (!offsetDiv) {
@@ -499,7 +468,7 @@ struct BlockLoopStripMiningPass
   }
 };
 
-} /// namespace
+} // namespace
 
 namespace mlir {
 namespace arts {
@@ -509,5 +478,5 @@ std::unique_ptr<Pass> createBlockLoopStripMiningPass() {
   return std::make_unique<BlockLoopStripMiningPass>();
 }
 /// End block loop strip-mining pass creation.
-} /// namespace arts
-} /// namespace mlir
+} // namespace arts
+} // namespace mlir

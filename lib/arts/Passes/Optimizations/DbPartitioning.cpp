@@ -287,7 +287,19 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
   if (acqNode)
     info.hasIndirectAccess = acqNode->hasIndirectAccess();
 
+  ARTS_DEBUG("analyzeAcquirePartitioning for: " << acquire);
+  ARTS_DEBUG("  acqNode: " << (acqNode ? "present" : "null"));
+  ARTS_DEBUG("  hasMultiplePartitionEntries: "
+             << acquire.hasMultiplePartitionEntries());
+  ARTS_DEBUG(
+      "  hasAllFineGrainedEntries: " << acquire.hasAllFineGrainedEntries());
+  ARTS_DEBUG(
+      "  partitionIndices.empty: " << acquire.getPartitionIndices().empty());
+  ARTS_DEBUG("  initial mode: " << static_cast<int>(info.mode));
+
   if (acqNode) {
+    ARTS_DEBUG("  acqNode->getAccessPattern(): "
+               << static_cast<int>(acqNode->getAccessPattern()));
     if (acqNode->getAccessPattern() == AccessPattern::Stencil) {
       /// Task-based dependences provide explicit fine-grained indices and
       /// should NOT trigger stencil/ESD mode. Stencil mode applies to
@@ -299,31 +311,29 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
         if (*mode == PartitionMode::fine_grained)
           hasExplicitFineGrained = true;
       }
-      if (acquire.hasMultiplePartitionEntries()) {
-        bool allFine = true;
-        for (size_t entryIdx = 0; entryIdx < acquire.getNumPartitionEntries();
-             ++entryIdx) {
-          if (acquire.getPartitionEntryMode(entryIdx) !=
-              PartitionMode::fine_grained) {
-            allFine = false;
-            break;
-          }
-        }
-        if (allFine)
-          hasExplicitFineGrained = true;
-      }
+      if (acquire.hasAllFineGrainedEntries())
+        hasExplicitFineGrained = true;
 
-      if (!hasExplicitFineGrained)
+      ARTS_DEBUG("  hasExplicitFineGrained: " << hasExplicitFineGrained);
+      if (!hasExplicitFineGrained) {
+        ARTS_DEBUG("  -> Setting mode to stencil (AccessPattern::Stencil, no "
+                   "fine-grained)");
         info.mode = PartitionMode::stencil;
+      }
     }
-  } else if (acquire.hasMultiplePartitionEntries()) {
+  } else if (acquire.hasMultiplePartitionEntries() &&
+             !acquire.hasAllFineGrainedEntries()) {
+    // Only use stencil mode if NOT all entries are fine_grained (task deps)
     int64_t minOffset = 0;
     int64_t maxOffset = 0;
     if (DatablockUtils::hasMultiEntryStencilPattern(acquire, minOffset,
                                                     maxOffset)) {
+      ARTS_DEBUG(
+          "  -> Setting mode to stencil (multi-entry pattern, no acqNode)");
       info.mode = PartitionMode::stencil;
     }
   }
+  ARTS_DEBUG("  final mode: " << static_cast<int>(info.mode));
 
   switch (info.mode) {
   case PartitionMode::coarse:
