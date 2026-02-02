@@ -34,7 +34,7 @@ The compiler exports **facts** (what it analyzed, what it applied). ArtsMate gen
 ```mermaid
 flowchart TB
   SRC["Source Code<br/>optionally with hints.json"]
-  CARTS["CARTS Compiler<br/>1) Parse OpenMP pragmas<br/>2) Apply heuristics (H1, H2, H4)<br/>3) Track what was applied<br/>4) Export .carts-diagnose.json"]
+  CARTS["CARTS Compiler<br/>1) Parse OpenMP pragmas<br/>2) Apply heuristics (H1, H2; H4 skipped)<br/>3) Track what was applied<br/>4) Export .carts-diagnose.json"]
   DIAG[".carts-diagnose.json<br/>- entities: EDTs, DBs, Loops (with arts_id)<br/>- applied_optimizations: what compiler DID"]
   BIN["Binary / Executable"]
   ARTS["ARTS Runtime<br/>Execute with profiling enabled<br/>Collect per-arts_id counters"]
@@ -68,7 +68,6 @@ flowchart TB
 | `dimension_deps[]` | Per-dimension dependency | Outer-loop parallelism |
 | `reorder_nest_to[]` | Optimal loop order (if legal) | Loop interchange hint |
 | `granularity` | fine/coarse DB allocation | Current state |
-| `twin_diff` | Whether twin-diff is enabled | Current state |
 | `applied_optimizations` | Why compiler decided X | Explain reasoning |
 
 ### What ARTS Runtime Provides (Execution Metrics)
@@ -149,8 +148,7 @@ flowchart TB
   "granularity": "fine",
   "outer_sizes": [64],
   "inner_sizes": [128],
-  "access_mode": "inout",
-  "twin_diff": false
+  "access_mode": "inout"
 }
 ```
 
@@ -166,8 +164,8 @@ What CARTS already did - facts about the current compilation with compile-time �
       "alloc_id": 43,
       "affected_db_ids": [43, 44, 45, 46],
       "source_location": "matrix.c:45",
-      "type": "H4-TwinDiff",
-      "heuristic": "H4-TwinDiff"
+      "type": "Partitioning",
+      "heuristic": "DbPartitioning"
     }
   ]
 }
@@ -184,7 +182,7 @@ What CARTS already did - facts about the current compilation with compile-time �
 ### The Problem
 
 ArtsMate needs to correlate:
-- **Compile-time**: "H4-TwinDiff applied to target_id=50"
+- **Compile-time**: "Partitioning applied to target_id=50"
 - **Runtime**: "DB 45 had 1000 accesses, high latency"
 
 Current disconnect:
@@ -229,7 +227,7 @@ CARTS/ArtsMate:  decision      ──mapping──►  db_ids      ◄──runt
 │                                    │                                        │
 │                                    ▼                                        │
 │                    ┌───────────────────────────────────┐                    │
-│                    │   H4-TwinDiff Decision Recorded   │                    │
+│                    │   Partitioning Decision Recorded │                    │
 │                    │   ────────────────────────────    │                    │
 │                    │   target_id: 50 (acquire op)      │                    │
 │                    │   alloc_id: 43 (parent alloc)     │                    │
@@ -290,12 +288,11 @@ CARTS/ArtsMate:  decision      ──mapping──►  db_ids      ◄──runt
 │      "DB 45 (1500 accesses) is part of array at file.c:30                  │
 │                                                                             │
 │       Optimization Applied:                                                 │
-│       ├─ H4-TwinDiff at file.c:45                                          │
-│       ├─ Rationale: single-node disables twin-diff                         │
+│       ├─ Partitioning at file.c:45                                         │
+│       ├─ Rationale: access pattern favors block partitioning               │
 │       └─ Affects all DBs: [43, 44, 45, 46]                                 │
 │                                                                             │
-│       Consider: If performance is poor, check if twin-diff                 │
-│       should be re-enabled for multi-node execution."                      │
+│       Consider: If performance is poor, revisit partitioning granularity." │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -379,8 +376,6 @@ ArtsMate analyzes merged compile-time + runtime data and generates hints:
 | `loop_reorder` | Apply specific loop interchange | High memory stalls, reorder is legal |
 | `coarse_alloc` | Keep DB coarse-grained | Fine-grained overhead > benefit |
 | `fine_alloc` | Chunkify DB with specific sizes | Large DBs, good locality |
-| `enable_twin_diff` | Force twin-diff for a DB | High remote access ratio |
-| `disable_twin_diff` | Disable twin-diff for a DB | No concurrent writes |
 | `schedule` | Change loop schedule (static/dynamic) | Load imbalance detected |
 | `replicate_db` | Replicate read-only DB | Read-only with high remote access |
 
@@ -419,7 +414,6 @@ When ArtsMate merges compile-time + runtime, it can answer:
 | Replicate DB Y? | `access_mode=read` | `bytes_remote/total=0.8` | YES - read-only AND remote |
 | Reorder loop Z? | `reorder_nest_to=[1,0]` | `stall_pct=5%` | NO - not memory-bound |
 | Which is bottleneck? | All EDTs listed | `exec_time` ranking | Focus on top 3 |
-| Twin-diff needed? | `twin_diff=false` | `concurrent_writes=true` | YES - enable it |
 
 ## CLI Usage
 
@@ -444,6 +438,6 @@ carts execute input.mlir --diagnose
 
 ## Related Documentation
 
-- [CARTS Heuristics](heuristics/single_rank/db_granularity_and_twin_diff.md) - H1, H2, H4 heuristic details
+- [CARTS Heuristics](heuristics/single_rank/db_granularity.md) - DB granularity guidance and partitioning heuristics
 - [CARTS Analysis](analysis.md) - Analysis infrastructure overview
 - [Developer Guide](developer-guide.md) - CARTS development guide

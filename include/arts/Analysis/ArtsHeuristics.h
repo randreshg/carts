@@ -5,7 +5,6 @@
 ///
 /// Heuristic Families:
 ///   H1: Partitioning - Decide coarse/block/element-wise allocation
-///   H2: Twin-Diff    - Decide when twin-diff can be disabled
 ///
 /// H1 Partitioning Heuristics (evaluated in priority order):
 ///   H1.1: Read-only single-node -> coarse
@@ -15,10 +14,6 @@
 ///   H1.4: Uniform direct access -> block
 ///   H1.5: Multi-node -> fine-grained for network efficiency
 ///   H1.6: Non-uniform access -> coarse
-///
-/// H2 Twin-Diff Heuristics:
-///   Determines when twin-diff can be safely disabled based on provable
-///   non-overlap of datablock accesses (currently globally disabled).
 ///
 /// Note: Multi-rank architectural heuristics (H1-H6 in multi_rank docs) are
 /// separate guidelines for distributed optimization, not implemented here.
@@ -239,25 +234,6 @@ struct PartitioningHint {
 };
 
 ///===----------------------------------------------------------------------===///
-/// H2: Twin-Diff Heuristic Types
-///===----------------------------------------------------------------------===///
-
-/// Proof method for why twin-diff can be disabled.
-enum class TwinDiffProof {
-  None,
-  IndexedControl,
-  PartitionSuccess,
-  AliasAnalysis
-};
-
-/// Context for twin-diff decisions (H2 heuristic).
-struct TwinDiffContext {
-  TwinDiffProof proof = TwinDiffProof::None;
-  bool isCoarseAllocation = false;
-  Operation *op = nullptr;
-};
-
-///===----------------------------------------------------------------------===///
 /// HeuristicDecision (for ArtsMate diagnostics)
 ///===----------------------------------------------------------------------===///
 
@@ -287,9 +263,6 @@ public:
   /// Machine configuration queries
   bool isSingleNode() const;
   bool isValid() const;
-
-  /// Twin-diff heuristic evaluation
-  bool shouldUseTwinDiff(const TwinDiffContext &context);
 
   /// Cost model thresholds for block partitioning
   static constexpr int64_t kMaxOuterDBs = 1024;

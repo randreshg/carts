@@ -452,10 +452,6 @@ bool EdtPass::convertParallelWithAcquiresToSync(
         SmallVector<Value>(outerAcq.getPartitionSizes()));
     newAcq.copyPartitionSegmentsFrom(outerAcq);
 
-    /// Copy attributes from outer acquire
-    if (outerAcq->hasAttr("arts.twin_diff"))
-      newAcq->setAttr("arts.twin_diff", outerAcq->getAttr("arts.twin_diff"));
-
     /// Track the mapping and dependency
     oldPtrToNewPtr[outerAcq.getPtr()] = newAcq.getPtr();
     syncDeps.push_back(newAcq.getPtr());

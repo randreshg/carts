@@ -77,7 +77,7 @@ In `array_create_dbs.mlir`, verify:
 %guid_2, %ptr_3 = arts.db_acquire[<inout>] (%guid, %ptr)
     partitioning(<block>, offsets[%arg2], sizes[%c4]),  // <-- chunked hints!
     offsets[%c0], sizes[%c1]                               // <-- coarse DB-space
-    {arts.twin_diff = false, partition_entry_modes = array<i32: 1>, ...}
+    {partition_entry_modes = array<i32: 1>, ...}
 ```
 
 **Key observations:**

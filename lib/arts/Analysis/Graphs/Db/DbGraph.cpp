@@ -549,9 +549,6 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
     else
       db["access_mode"] = "inout";
 
-    /// Twin diff (default false, updated by passes)
-    db["twin_diff"] = false;
-
     /// Heuristic (populated by HeuristicsConfig)
     db["heuristic"] = nullptr;
 
@@ -648,9 +645,6 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
         acq["access_mode"] = "out";
       else
         acq["access_mode"] = "inout";
-
-      /// Twin diff setting
-      acq["twin_diff"] = acqOp.hasTwinDiff() ? acqOp.getTwinDiff() : false;
 
       /// Source location
       auto acqLoc = LocationMetadata::fromLocation(acqOp->getLoc());

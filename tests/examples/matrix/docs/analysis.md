@@ -74,7 +74,7 @@ In `matrix_create_dbs.mlir`, verify:
 %guid_2, %ptr_3 = arts.db_acquire[<out>] (%guid, %ptr)
     partitioning(<fine_grained>, indices[%i, %j]),  // <-- partition hints
     offsets[%c0], sizes[%c1]                        // <-- coarse DB-space
-    {arts.twin_diff = false}
+    
 
 // DbRef uses [0] index for coarse 1D allocation
 %ref = arts.db_ref %arg[%c0] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
@@ -84,7 +84,6 @@ In `matrix_create_dbs.mlir`, verify:
 
 - `partitioning(<fine_grained>, indices[%i, %j])` - hints from `depend(inout: A[i][j])`
 - `offsets[%c0], sizes[%c1]` - coarse DB-space (acquire entire block)
-- `arts.twin_diff = false` - indexed hints prove non-overlap
 - DbRef uses `[%c0]` because DB-space is 1D coarse
 
 ### 5. DbPartitioning: Transform to fine-grained
@@ -110,7 +109,7 @@ In `matrix_partitioned.mlir`, verify:
 %guid_2, %ptr_3 = arts.db_acquire[<out>] (%guid, %ptr)
     partitioning(<fine_grained>, indices[%i, %j]),  // <-- hints preserved
     indices[%i], offsets[%c0], sizes[%c1]           // <-- actual DB-space access
-    {arts.twin_diff = false}
+    
 ```
 
 **Transformation summary:**
@@ -139,7 +138,6 @@ carts execute matrix.c
 | Symptom | Likely Cause | Fix |
 |---------|--------------|-----|
 | Coarse acquires after DbPartitioning | Missing partition hints | Check DbControlOp generation from depend clauses |
-| `twin_diff = true` unexpectedly | No indexed hints | Verify depend clauses have indices `A[i][j]` |
 | DbRef index mismatch | DB-space rank mismatch | Check acquire sizes match DbRef indices |
 | Assertion in verifier | Partition hints in DB-space fields | Ensure CreateDbs uses separate partition hint fields |
 

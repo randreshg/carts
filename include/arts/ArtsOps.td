@@ -288,18 +288,6 @@ def DbAcquireOp : Arts_Op<"db_acquire", [AttrSizedOperandSegments]> {
                    CArg<"SmallVector<Value>", "{}">:$element_sizes)>
   ];
   let extraClassDeclaration = [{
-    /// Set the twin_diff attribute for this acquire operation.
-    /// twin_diff=true enables shadow copy for distributed sync (safer but
-    /// slower) twin_diff=false disables it when disjoint access is proven
-    /// (faster)
-    void setTwinDiff(bool enabled);
-
-    /// Check if twin_diff attribute has been explicitly set
-    bool hasTwinDiff();
-
-    /// Get twin_diff value. Returns true (safe default) if not explicitly set.
-    bool getTwinDiff();
-
     /// Check if this acquire has element-level offset/size info (ESD partial
     /// acquisition)
     bool hasElementOffsets() { return !getElementOffsets().empty(); }
@@ -924,10 +912,6 @@ def RecordDepOp
     The acquire_modes array stores the DbMode for each acquire operation.
     When acquire mode differs from alloc mode, artsAddDependenceWithMode is used
     to enable runtime optimizations (e.g., skip frontier progression for read-only EDTs).
-    The twin_diff attribute is a per-dependency hint indicating whether the
-    runtime should enable twin-diff reuse for that datablock. Lowering enables
-    twin-diff by default for safety; an explicit `false` entry opts out when
-    analysis proves the dependency accesses are disjoint.
 
     The optional bounds_valids operand list contains i1 values corresponding to
     each datablock. When present and false for a datablock, artsRecordDep is
@@ -948,8 +932,7 @@ def RecordDepOp
     Variadic<Index>:$byte_offsets,
     Variadic<Index>:$byte_sizes,
     DefaultValuedAttr<DepAccessModeAttr, "::mlir::arts::DepAccessMode::direct">:$access_mode,
-    OptionalAttr<DenseI32ArrayAttr>:$acquire_modes,
-    OptionalAttr<DenseBoolArrayAttr>:$twin_diff
+    OptionalAttr<DenseI32ArrayAttr>:$acquire_modes
   );
   let hasVerifier = 1;
   let assemblyFormat = [{

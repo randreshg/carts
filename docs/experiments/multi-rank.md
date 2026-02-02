@@ -18,7 +18,7 @@ This runbook is designed to help you measure:
 - Where CARTS can show **clear potential** even if single-node OpenMP is faster (e.g., scaling past one node, comm/compute overlap, dependency-heavy DAGs)
 
 Related tuning notes:
-- `docs/heuristics/multi_rank/db_granularity_and_twin_diff.md`
+- `docs/heuristics/multi_rank/db_granularity_and_ownership.md` (DB granularity + ownership)
 
 ---
 
@@ -239,7 +239,7 @@ What “success” looks like:
 **Goal**: Turn multi-rank scaling into actionable data about remote traffic and update protocols.
 
 This is where multi-rank tuning differs most from single-rank; keep the heuristics doc nearby:
-- `docs/heuristics/multi_rank/db_granularity_and_twin_diff.md`
+- `docs/heuristics/multi_rank/db_granularity_and_ownership.md`
 
 ```bash
 for n in 1 2 4; do
@@ -254,7 +254,6 @@ done
 Counters to inspect (multi-rank oriented):
 - `remoteBytesSent`, `remoteBytesReceived`
 - `ownerUpdatesPerformed`, `ownerUpdatesSaved`
-- `twinDiffUsed`, `twinDiffSkipped`, `twinDiffBytesSaved`, `twinDiffComputeTime`
 
 ---
 
@@ -272,7 +271,7 @@ done
 ```
 
 If scaling is unexpectedly flat, check the known “task centralization” pitfall for internode `parallel_for`:
-- `docs/heuristics/multi_rank/db_granularity_and_twin_diff.md`
+- `docs/heuristics/multi_rank/db_granularity_and_ownership.md`
 
 ---
 
@@ -290,8 +289,7 @@ From counter files in `results/multi_rank/counters/*/`:
 
 1. **Remote traffic**: `remoteBytesSent`, `remoteBytesReceived`
 2. **Update behavior**: `ownerUpdatesSaved`, `ownerUpdatesPerformed`
-3. **Twin/diff ROI**: `twinDiffBytesSaved / twinDiffComputeTime`
-4. **Per-`arts_id` hot spots**: `artsIdMetrics.edts[].total_exec_ns` and `invocations`
+3. **Per-`arts_id` hot spots**: `artsIdMetrics.edts[].total_exec_ns` and `invocations`
 
 ---
 

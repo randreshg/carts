@@ -113,7 +113,6 @@ Good initial candidates:
 - Allocations converted into DBs by CreateDbs that are **accessed inside `internode` tasks** and are **partitioned (blocked/fine)**.
 - Access patterns that suggest **disjoint per-task/per-chunk writes**:
   - `arts.db_acquire` uses `partitioning(<blocked/...>)` or `partitioning(<fine_grained/...>)`
-  - `arts.twin_diff = false` is often a sign CARTS believes the access is disjoint/safe
   - metadata frequently shows `accessedInParallelLoop=true` and `hasLoopCarriedDeps=false`
 
 Avoid initially:
@@ -297,7 +296,7 @@ ARTS has `artsDbCreateRemote(route, size, mode)` which creates DB metadata on a 
 - **Deterministic GUID reservation ordering**: all ranks must execute reservations in the same order before parallel start; conditional control flow in generated `initPerNode` must be identical across ranks.
 - **Host pointer expectations**: any code path that expects a usable pointer on rank 0 must be rewritten (or forced to single-node ownership).
 - **Global initializers**: distributing global constants requires per-owner copying or replication.
-- **Interaction with `twin_diff` / partial deps**: correctness depends on disjointness assumptions; start conservative.
+- **Interaction with partial deps**: correctness depends on disjointness assumptions; start conservative.
 
 ---
 

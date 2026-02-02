@@ -45,7 +45,7 @@ Walk through these steps and fix any problem that you find in the way.
          %12 = arts.epoch {
             ...
             /// Acquire A
-            %guid_2, %ptr_3 = arts.db_acquire[<inout>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<memref<?xi32>>>) offsets[%c0] sizes[%c1] {arts.twin_diff = true} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+            %guid_2, %ptr_3 = arts.db_acquire[<inout>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<memref<?xi32>>>) offsets[%c0] sizes[%c1]  -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
             arts.edt <task> <intranode> route(%c0_i32) (%ptr_3) : memref<?xmemref<memref<?xi32>>> {
             ^bb0(%arg0: memref<?xmemref<memref<?xi32>>>):
             ...
@@ -59,9 +59,9 @@ Walk through these steps and fix any problem that you find in the way.
             /// Why are we acquiring the acquire? we shouldve acuired the db alloc... we only acquire another acquire if we are within an edt...
             /// We acquire a db that an edt acquired already
             /// This is an error
-            %guid_4, %ptr_5 = arts.db_acquire[<inout>] ( %ptr_3 : memref<?xmemref<memref<?xi32>>>) offsets[%c0] sizes[%c1] {arts.twin_diff = true} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+            %guid_4, %ptr_5 = arts.db_acquire[<inout>] ( %ptr_3 : memref<?xmemref<memref<?xi32>>>) offsets[%c0] sizes[%c1]  -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
             /// Acquire B - This is perfect
-            %guid_6, %ptr_7 = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<memref<?xi32>>>) offsets[%c0] sizes[%c1] {arts.twin_diff = true} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+            %guid_6, %ptr_7 = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<memref<?xi32>>>) offsets[%c0] sizes[%c1]  -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
             arts.edt <task> <intranode> route(%c0_i32) (%ptr_5, %ptr_7) : memref<?xmemref<memref<?xi32>>>, memref<?xmemref<memref<?xi32>>> {
             ^bb0(%arg0: memref<?xmemref<memref<?xi32>>>, %arg1: memref<?xmemref<memref<?xi32>>>):
             ....
@@ -69,7 +69,7 @@ Walk through these steps and fix any problem that you find in the way.
             arts.db_release(%arg1) : memref<?xmemref<memref<?xi32>>>
             }
             /// Same problem here... we shouldve acquired the db alloc...
-            %guid_8, %ptr_9 = arts.db_acquire[<inout>] ( %ptr_7 : memref<?xmemref<memref<?xi32>>>) offsets[%c0] sizes[%c1] {arts.twin_diff = true} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+            %guid_8, %ptr_9 = arts.db_acquire[<inout>] ( %ptr_7 : memref<?xmemref<memref<?xi32>>>) offsets[%c0] sizes[%c1]  -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
             arts.edt <task> <intranode> route(%c0_i32) (%ptr_9) : memref<?xmemref<memref<?xi32>>> {
             ^bb0(%arg0: memref<?xmemref<memref<?xi32>>>):
             ...

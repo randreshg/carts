@@ -568,7 +568,6 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
   SmallVector<Value> depGuids, boundsValids;
   SmallVector<Value> byteOffsets, byteSizes;
   SmallVector<int32_t> acquireModes;
-  SmallVector<bool> twinDiffHints;
   bool hasEsdDeps = false;
 
   for (Value dep : deps) {
@@ -681,23 +680,6 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     }
     acquireModes.push_back(static_cast<int32_t>(dbMode));
 
-    /// Twin-diff hint lives on the db_acquire. Fall back to alloc-level hints
-    /// for legacy pipelines. Default to enabled unless an explicit opt-out is
-    /// present. Try DbAcquireOp first, then fall back to legacy attribute
-    /// check.
-    bool useTwinDiff = true;
-    if (dbAcquireOp && dbAcquireOp.hasTwinDiff()) {
-      useTwinDiff = dbAcquireOp.getTwinDiff();
-    } else if (depDbAcquireOp) {
-      if (auto twinAttr = depDbAcquireOp->getAttrOfType<BoolAttr>(
-              AttrNames::Operation::ArtsTwinDiff))
-        useTwinDiff = twinAttr.getValue();
-    } else if (allocForHint) {
-      if (auto twinAttr = allocForHint->getAttrOfType<BoolAttr>(
-              AttrNames::Operation::ArtsTwinDiff))
-        useTwinDiff = twinAttr.getValue();
-    }
-    twinDiffHints.push_back(useTwinDiff);
   }
 
   /// Create dependency management ops with appropriate access mode
@@ -709,11 +691,6 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     acquireAttr =
         DenseI32ArrayAttr::get(AC->getBuilder().getContext(), acquireModes);
 
-  DenseBoolArrayAttr twinDiffAttr;
-  if (!twinDiffHints.empty())
-    twinDiffAttr =
-        DenseBoolArrayAttr::get(AC->getBuilder().getContext(), twinDiffHints);
-
   /// Only include byte offsets if we have ESD dependencies
   SmallVector<Value> finalByteOffsets, finalByteSizes;
   if (hasEsdDeps) {
@@ -723,7 +700,7 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
 
   AC->create<RecordDepOp>(loc, edtGuid, depGuids, boundsValids,
                           finalByteOffsets, finalByteSizes, modeAttr,
-                          acquireAttr, twinDiffAttr);
+                          acquireAttr);
 
   return success();
 }

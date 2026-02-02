@@ -104,12 +104,7 @@ def DbPartitioning : Pass<"db-partitioning", "mlir::ModuleOp"> {
   let description = [{
     Transforms coarse-grained datablock allocations to fine-grained (chunked)
     allocations for better parallelism. Also handles:
-    - Twin-diff attribute assignment for distributed synchronization
     - Stencil bounds analysis and runtime bounds checking
-
-    Twin-Diff Policy:
-    - DEFAULT: twin_diff = TRUE (safe, handles potential overlap at runtime)
-    - DISABLE: Only when we can PROVE non-overlapping access patterns
 
     Partition Fallback (--partition-fallback):
     - coarse (default): Non-affine accesses block partitioning, use coarse allocation
