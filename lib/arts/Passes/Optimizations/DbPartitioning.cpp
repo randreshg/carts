@@ -893,7 +893,7 @@ struct DbPartitioningPass
   /// Main Partitioning Methods
   ///===--------------------------------------------------------------------===///
 
-  /// Iterates over allocations, applies rewriters, and determines twin-diff.
+  /// Iterates over allocations and applies partitioning rewriters.
   bool partitionDb();
 
   ///===--------------------------------------------------------------------===///
@@ -1022,9 +1022,6 @@ static SmallVector<DbAcquireOp> createExpandedAcquires(DbAcquireOp original,
     SmallVector<int32_t> entryModes = {static_cast<int32_t>(entryMode)};
     newAcquire.setPartitionSegments(indicesSegs, offsetsSegs, sizesSegs,
                                     entryModes);
-
-    if (original.hasTwinDiff())
-      newAcquire.setTwinDiff(original.getTwinDiff());
 
     expanded.push_back(newAcquire);
     ARTS_DEBUG("    Created expanded acquire: " << newAcquire);
@@ -1391,24 +1388,10 @@ bool DbPartitioningPass::expandMultiEntryAcquires() {
   return changed;
 }
 
-/// Partition allocations and set twin-diff attributes based on disjoint access
-/// proof.
+/// Partition allocations based on disjoint access proof.
 bool DbPartitioningPass::partitionDb() {
   ARTS_DEBUG_HEADER(PartitionDb);
   bool changed = false;
-
-  auto setTwinAttr = [&](DbAcquireOp acq, TwinDiffProof proof) {
-    if (!acq)
-      return;
-    TwinDiffContext ctx{proof, false, acq.getOperation()};
-    bool useTwinDiff = AM->getHeuristicsConfig().shouldUseTwinDiff(ctx);
-    if (acq.hasTwinDiff() && acq.getTwinDiff() == useTwinDiff)
-      return;
-    acq.setTwinDiff(useTwinDiff);
-    changed = true;
-  };
-
-  llvm::SmallPtrSet<Operation *, 8> partitionSuccess;
 
   /// PHASE 1: Partition allocations
   module.walk([&](func::FuncOp func) {
@@ -1425,45 +1408,9 @@ bool DbPartitioningPass::partitionDb() {
         return;
 
       DbAllocOp promoted = promotedOr.value();
-      if (promoted.getOperation() != allocOp.getOperation()) {
+      if (promoted.getOperation() != allocOp.getOperation())
         changed = true;
-        partitionSuccess.insert(promoted.getOperation());
-      }
     });
-  });
-
-  /// Rebuild graph to ensure valid operation pointers for Phase 2
-  if (changed)
-    invalidateAndRebuildGraph();
-
-  /// PHASE 2: Overlap analysis - set twin_diff=false where proven disjoint
-  module.walk([&](func::FuncOp func) {
-    DbGraph &graph = AM->getDbGraph(func);
-    graph.forEachAllocNode([&](DbAllocNode *allocNode) {
-      DbAllocOp allocOp = allocNode->getDbAllocOp();
-      if (!allocOp || allocNode->getAcquireNodesSize() == 0)
-        return;
-
-      if (!allocNode->canProveNonOverlapping())
-        return;
-
-      bool isPartitioned = partitionSuccess.contains(allocOp.getOperation());
-      TwinDiffProof proof = isPartitioned ? TwinDiffProof::PartitionSuccess
-                                          : TwinDiffProof::AliasAnalysis;
-      allocNode->forEachChildNode([&](NodeBase *child) {
-        if (auto *acqNode = dyn_cast<DbAcquireNode>(child)) {
-          DbAcquireOp acqOp = acqNode->getDbAcquireOp();
-          if (acqOp && !acqOp.hasTwinDiff())
-            setTwinAttr(acqOp, proof);
-        }
-      });
-    });
-  });
-
-  /// PHASE 3: Default twin_diff=true for remaining acquires
-  module.walk([&](DbAcquireOp acq) {
-    if (!acq.hasTwinDiff())
-      setTwinAttr(acq, TwinDiffProof::None);
   });
 
   if (changed)

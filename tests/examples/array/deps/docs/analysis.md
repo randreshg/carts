@@ -59,7 +59,7 @@ Walk through these steps and fix any problem that you find in the way
             scf.for %arg2 = %c0 to %25 step %c1 {
                %31 = arith.index_cast %arg2 : index to i32
                /// Fine-grained acquire: indices=element index, offsets=0, sizes=1
-               %guid_2, %ptr_3 = arts.db_acquire[<out>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<memref<?xi32>>>) partitioning(<fine_grained>, indices[%arg2], offsets[%c0], sizes[%c1]) {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+               %guid_2, %ptr_3 = arts.db_acquire[<out>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<memref<?xi32>>>) partitioning(<fine_grained>, indices[%arg2], offsets[%c0], sizes[%c1])  -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
                /// This is the EDT that writes to the ptr db.
                arts.edt <task> <intranode> route(%c0_i32) (%ptr_3) : memref<?xmemref<memref<?xi32>>> {
                ^bb0(%arg3: memref<?xmemref<memref<?xi32>>>):
@@ -75,8 +75,8 @@ Walk through these steps and fix any problem that you find in the way
                %32 = arith.cmpi eq, %31, %c0_i32 : i32
                scf.if %32 {
                   /// Fine-grained acquires for i==0 case
-                  %guid_4, %ptr_5 = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<memref<?xi32>>>) partitioning(<fine_grained>, indices[%arg2], offsets[%c0], sizes[%c1]) {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
-                  %guid_6, %ptr_7 = arts.db_acquire[<out>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<memref<?xi32>>>) partitioning(<fine_grained>, indices[%arg2], offsets[%c0], sizes[%c1]) {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+                  %guid_4, %ptr_5 = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<memref<?xi32>>>) partitioning(<fine_grained>, indices[%arg2], offsets[%c0], sizes[%c1])  -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+                  %guid_6, %ptr_7 = arts.db_acquire[<out>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<memref<?xi32>>>) partitioning(<fine_grained>, indices[%arg2], offsets[%c0], sizes[%c1])  -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
                   /// Carefully check the dbref + load/store pattern in here.
                   /// The dbref works on the outer dimension of the db, and the load/store works on the inner dimension.
                   /// The pattern within the EDT is correct because the dbAcquire has as index %arg2...
@@ -100,9 +100,9 @@ Walk through these steps and fix any problem that you find in the way
                   %33 = arith.addi %31, %c-1_i32 : i32
                   %34 = arith.index_cast %33 : i32 to index
                   /// These acquires use the unified partitioning format: indices=element, offsets=0, sizes=1
-                  %guid_4, %ptr_5 = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<memref<?xi32>>>) partitioning(<fine_grained>, indices[%arg2], offsets[%c0], sizes[%c1]) {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
-                  %guid_6, %ptr_7 = arts.db_acquire[<in>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<memref<?xi32>>>) partitioning(<fine_grained>, indices[%34], offsets[%c0], sizes[%c1]) {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
-                  %guid_8, %ptr_9 = arts.db_acquire[<inout>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<memref<?xi32>>>) partitioning(<fine_grained>, indices[%arg2], offsets[%c0], sizes[%c1]) {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+                  %guid_4, %ptr_5 = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<memref<?xi32>>>) partitioning(<fine_grained>, indices[%arg2], offsets[%c0], sizes[%c1])  -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+                  %guid_6, %ptr_7 = arts.db_acquire[<in>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<memref<?xi32>>>) partitioning(<fine_grained>, indices[%34], offsets[%c0], sizes[%c1])  -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+                  %guid_8, %ptr_9 = arts.db_acquire[<inout>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<memref<?xi32>>>) partitioning(<fine_grained>, indices[%arg2], offsets[%c0], sizes[%c1])  -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
                   arts.edt <task> <intranode> route(%c0_i32) (%ptr_5, %ptr_7, %ptr_9) : memref<?xmemref<memref<?xi32>>>, memref<?xmemref<memref<?xi32>>>, memref<?xmemref<memref<?xi32>>> {
                   ^bb0(%arg3: memref<?xmemref<memref<?xi32>>>, %arg4: memref<?xmemref<memref<?xi32>>>, %arg5: memref<?xmemref<memref<?xi32>>>):
                   %35 = llvm.getelementptr %29[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<46 x i8>
@@ -125,7 +125,7 @@ Walk through these steps and fix any problem that you find in the way
                   arts.db_release(%arg5) : memref<?xmemref<memref<?xi32>>>
                   }
                }
-            } {}
+            }
             } : i64
             ...
             /// The dballoc was also rewritten, check that we have the correct dbref + load/store pattern in here.

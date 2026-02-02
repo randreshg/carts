@@ -934,7 +934,6 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
     SmallVector<int32_t> indicesSegments, offsetsSegments, sizesSegments;
     SmallVector<int32_t> entryModes;
     ArtsMode acquireMode = ArtsMode::inout;
-    TwinDiffProof twinProof = TwinDiffProof::None;
 
     // Helper to combine access modes (most permissive wins)
     auto combineAccessModes = [](ArtsMode a, ArtsMode b) -> ArtsMode {
@@ -950,7 +949,6 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       PartitionMode entryMode = PartitionMode::coarse;
       if (!dep.indices.empty()) {
         entryMode = PartitionMode::fine_grained;
-        twinProof = TwinDiffProof::IndexedControl;
       } else if (!dep.offsets.empty() && !dep.sizes.empty()) {
         entryMode = PartitionMode::block;
       }
@@ -1010,15 +1008,6 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
                << deps.size() << " partition entries, "
                << "primary mode=" << static_cast<int>(partMode) << ": "
                << acquireOp);
-
-    /// Twin-diff decision
-    TwinDiffContext twinCtx;
-    twinCtx.proof = twinProof;
-    twinCtx.isCoarseAllocation = (partMode == PartitionMode::coarse);
-    twinCtx.op = acquireOp.getOperation();
-    bool useTwinDiff = AM->getHeuristicsConfig().shouldUseTwinDiff(twinCtx);
-    acquireOp.setTwinDiff(useTwinDiff);
-    ARTS_DEBUG("   - twin_diff=" << useTwinDiff);
 
     /// Add block argument for acquired view
     Value acquirePtr = acquireOp.getPtr();

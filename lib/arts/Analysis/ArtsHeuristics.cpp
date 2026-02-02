@@ -5,7 +5,6 @@
 ///
 /// This file implements:
 /// - H1.x partitioning heuristics (evaluatePartitioningHeuristics)
-/// - H2 twin-diff heuristics (shouldUseTwinDiff)
 /// - Decision recording for ArtsMate diagnostics
 ///==========================================================================///
 
@@ -260,60 +259,6 @@ bool HeuristicsConfig::isSingleNode() const {
 }
 
 bool HeuristicsConfig::isValid() const { return machine.isValid(); }
-
-///===----------------------------------------------------------------------===///
-/// H2: Twin-Diff Heuristic
-//===----------------------------------------------------------------------===//
-
-bool HeuristicsConfig::shouldUseTwinDiff(const TwinDiffContext &context) {
-  Operation *op = context.op;
-
-  /// Temporary global disable: twin-diff is not yet fully supported.
-  /// When re-enabled, remove this early return and the #if 0 block below.
-  recordDecision("TwinDiff-Disabled", true,
-                 "twin-diff disabled globally (temporary)", op, {});
-  return false;
-
-  /// Twin-diff heuristics (disabled - to be re-enabled when runtime supports
-  /// it)
-#if 0
-  /// H2: Single-node disables twin-diff unconditionally
-  /// - No remote owner to send diffs to
-  /// - Twin allocation + memcpy + diff computation are wasted
-  if (isSingleNode()) {
-    recordDecision("H2-TwinDiff", true, "single-node disables twin-diff", op,
-                   {});
-    return false;
-  }
-
-  /// Proof-based decisions (multi-node only)
-  switch (context.proof) {
-  case TwinDiffProof::IndexedControl:
-    recordDecision("TwinDiff-IndexedControl", true,
-                   "DbControlOps guarantee indexed access (proven isolation)",
-                   op, {});
-    return false;
-
-  case TwinDiffProof::PartitionSuccess:
-    recordDecision("TwinDiff-Partition", true,
-                   "successful partitioning proves non-overlapping chunks", op,
-                   {});
-    return false;
-
-  case TwinDiffProof::AliasAnalysis:
-    recordDecision("TwinDiff-Alias", true,
-                   "alias analysis proves disjoint acquires", op, {});
-    return false;
-
-  case TwinDiffProof::None:
-  default:
-    recordDecision(
-        "TwinDiff-SafeDefault", true,
-        "no proof of non-overlap, using safe default (twin_diff=true)", op, {});
-    return true;
-  }
-#endif
-}
 
 ///===----------------------------------------------------------------------===///
 /// Decision Recording for Diagnostics
@@ -590,11 +535,6 @@ void copyArtsMetadataAttrs(Operation *source, Operation *dest) {
   /// Transfer arts.partition_hint
   if (auto hint = source->getAttr(AttrNames::Operation::PartitionHint))
     dest->setAttr(AttrNames::Operation::PartitionHint, hint);
-
-  /// Transfer arts.twin_diff
-  if (auto twinDiff =
-          source->getAttrOfType<BoolAttr>(AttrNames::Operation::ArtsTwinDiff))
-    dest->setAttr(AttrNames::Operation::ArtsTwinDiff, twinDiff);
 
   /// Transfer arts.loop metadata (trip count, parallelism info, etc.)
   if (auto loopAttr = source->getAttr(AttrNames::LoopMetadata::Name)) {

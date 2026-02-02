@@ -186,7 +186,7 @@ Single-node OpenMP may often win on mature kernels. CARTS can still be compellin
 - extends scaling beyond one node
 - handles task dependencies/irregularity with less global synchronization
 - overlaps communication and computation (distributed DAG execution)
-- reduces data movement (diff/twin updates) for structured updates
+- reduces data movement for structured updates
 
 Design experiments that stress those strengths:
 
@@ -210,7 +210,6 @@ The runtime already has counter hooks for:
 - **Memory pressure**: `mallocMemory`, `callocMemory`, `freeMemory`, `memoryFootprint`
 - **Compiler-hint effectiveness**:
   - Acquire-mode overrides: `acquireReadMode`, `acquireWriteMode`, `ownerUpdatesSaved`, `ownerUpdatesPerformed`
-  - Twin/diff protocol: `twinDiffUsed`, `twinDiffSkipped`, `twinDiffBytesSaved`, `twinDiffComputeTime`
 - **Per-`arts_id` aggregates** (when the compiler tags work/DBs):
   - EDTs: invocations + `total_exec_ns` (`artsIdEdtMetrics`)
   - DBs: invocations + `bytes_local/bytes_remote/cache_misses` (`artsIdDbMetrics`, currently mostly useful for allocation/size unless extended)
@@ -220,7 +219,7 @@ Implementation pointers:
 - Counter types and `arts_id` structures: `external/arts/core/inc/arts/introspection/Counter.h`, `external/arts/core/inc/arts/introspection/ArtsIdCounter.h`
 - Where EDT exec time is recorded per `arts_id`: `external/arts/core/src/runtime/Runtime.c`
 - Where DB `arts_id` is recorded on create: `external/arts/core/src/runtime/memory/DbFunctions.c`
-- Where compiler hints are applied and counted (acquire-mode, twin-diff): `external/arts/core/src/runtime/memory/DbFunctions.c`
+- Where compiler hints are applied and counted (acquire-mode): `external/arts/core/src/runtime/memory/DbFunctions.c`
 - Counter configuration file: `external/arts/counter.cfg`
 
 ### What CARTS already provides to join with runtime data
@@ -248,7 +247,6 @@ These are designed to be stable, comparable across commits, and directly actiona
   - Track `avg_create_ns / avg_exec_ns` as a “granularity sanity check”.
 - **Hint effectiveness**:
   - `owner_update_avoid_rate = ownerUpdatesSaved / (ownerUpdatesSaved + ownerUpdatesPerformed)`
-  - `twin_diff_roi = twinDiffBytesSaved / twinDiffComputeTime` (note: compute time is recorded in µs in current code)
 - **DB pressure**:
   - `dbs_per_edt = numDbsCreated / numEdtsCreated`
   - `bytes_sent_per_work = remoteBytesSent / (sum total_exec_ns across artsIdEdtMetrics)`
@@ -259,8 +257,8 @@ These are designed to be stable, comparable across commits, and directly actiona
   - Enable the lifecycle counters above and show how their totals scale with threads/nodes and problem size.
 - **Granularity sweep with attribution**:
   - Vary chunk/tile size in CARTS (or in the benchmark) and observe when `avg_create_ns` starts dominating `avg_exec_ns`.
-- **Acquire-mode/twin-diff A/B**:
-  - Compare runs with compiler hints enabled vs disabled (or forced modes) and use `ownerUpdatesSaved` + twin-diff counters to explain speedups/slowdowns.
+- **Acquire-mode A/B**:
+  - Compare runs with compiler hints enabled vs disabled (or forced modes) and use `ownerUpdatesSaved` to explain speedups/slowdowns.
 - **Where distributed memory becomes necessary** (root-cause view):
   - When scaling collapses, use `memoryFootprint`, DB counts, and `remoteBytes*` to separate “capacity wall”, “bandwidth wall”, and “runtime overhead wall”.
 

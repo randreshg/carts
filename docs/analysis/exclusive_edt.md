@@ -17,7 +17,7 @@ All statements below are derived from runtime code:
 
 ```
 artsEdtDep_t:
-  guid, ptr, mode, acquireMode, useTwinDiff
+  guid, ptr, mode, acquireMode
 
 artsDbFrontier:
   list[]      // rank-only destinations for aggregated READ
@@ -74,22 +74,7 @@ acquireDbs
 Key point: the request packet does *not* carry edtGuid/slot; those live in the
 requester's out-of-order list.
 
-### Case B: WRITE (non-owner), twin-diff ON
-
-Acquire still fetches the full DB, but uses the aggregated request path:
-
-```
-acquireDbs
-  -> artsRemoteDbRequest(..., acquireMode=WRITE, useTwinDiff=true)
-        |
-        v
-  Owner sends full DB via artsRemoteDbSendCheck
-  (same flow as READ for delivery)
-```
-
-Twin-diff affects release (diff vs full update), not the initial fetch.
-
-### Case C: WRITE (non-owner), twin-diff OFF
+### Case B: WRITE (non-owner)
 
 Acquire uses a *full-DB request* with explicit EDT targeting:
 
@@ -141,9 +126,7 @@ releaseDbs
       - artsRemoteUpdateDb(dbGuid, sendDb=true)  // full update to owner
 ```
 
-With twin-diff:
-  - `artsTryReleaseTwinDiff` may send diffs or fall back to full update.
-  - Still no EDT slot targeting in release.
+Release still has no EDT slot targeting.
 
 ## Two Different "Full DB" Transfers (Do Not Confuse Them)
 
@@ -161,7 +144,7 @@ The "exclusive EDT" is only for (1).
 
 ## Aggregation vs Exclusive (Different Mechanisms)
 
-- Aggregation (READ + twin-diff acquire):
+- Aggregation (READ acquire):
   - `artsRouteTableAddSent` stores `(edt, slot)` in OO list
   - Only first request triggers network send
   - Response uses OO list to signal all waiting EDTs
@@ -198,7 +181,7 @@ Runtime: artsRecordDep
 EDT ready -> artsHandleReadyEdt -> acquireDbs(edt)
   |
   v
-Non-owner + WRITE + useTwinDiff=false
+Non-owner + WRITE
   -> artsRemoteDbFullRequest(dbGuid, owner, edtGuid, slot, mode)
 ```
 
@@ -238,7 +221,7 @@ Fixes:
 ## Assumptions Verified Against Code
 
 1) Acquire and release are distinct; only acquire targets EDT slots.
-2) Twin-diff affects release updates, not the acquire payload.
+2) Release updates the owner copy without EDT slot targeting.
 3) Full-DB acquire uses explicit EDT slot (packet carries edtGuid/slot).
 4) Aggregated requests store EDT/slot locally via OO list.
 5) Exclusive EDT tracking is tied to `write && !local` in frontier logic.

@@ -122,7 +122,7 @@ flowchart TB
     subgraph P4["Phase 4: Concurrency & synchronization"]
       direction TB
       S10["10) concurrency<br/>Build EDT concurrency graph"]
-      S11["11) concurrency-opt<br/>DB partitioning & twin-diff"]
+      S11["11) concurrency-opt<br/>DB partitioning"]
       S12["12) epochs<br/>Epoch synchronization"]
       S10 --> S11 --> S12
     end
@@ -531,7 +531,7 @@ scf.for %i = %chunk_start to %chunk_end {
 
 ### Stage 11: concurrency-opt
 
-**Purpose:** Optimize concurrent execution with DB partitioning and twin-diff analysis.
+**Purpose:** Optimize concurrent execution with DB partitioning and concurrency rewrites.
 
 **Run Command:**
 ```bash
@@ -563,13 +563,6 @@ carts run <file>.mlir --stop-after=concurrency-opt --debug-only=db,db_partitioni
 | H1.5 | Multi-node system | **Block** if supported, else **ElementWise** |
 | H1.6 | Non-uniform, no capability | **Coarse** |
 | H1.7 | Per-acquire offset mismatch | **Full-range** acquire (per-acquire only) |
-
-**Twin-Diff Policy:**
-- **DEFAULT:** `twin_diff = TRUE` (safe, handles potential overlap)
-- **DISABLE:** Only when PROVEN non-overlapping:
-  1. Fine-grained allocation with DbControlOps from OpenMP depend clauses
-  2. Successful partitioning with proven disjoint acquires
-  3. DbAliasAnalysis proving disjoint acquires
 
 **Blocked Access Pattern:**
 ```mlir
@@ -1076,32 +1069,6 @@ traceable, while still recording decisions for diagnostics.
 | DbPartitioning | `lib/arts/Passes/Optimizations/DbPartitioning.cpp` | 1032-1061 | Context aggregation |
 | IV Check | `lib/arts/Analysis/Graphs/Db/DbAcquireNode.cpp` | 923-1001 | canPartitionWithOffset |
 | Heuristics | `lib/arts/Analysis/HeuristicsConfig.cpp` | 200-280 | getPartitioningMode |
-
----
-
-### Twin-Diff Policy
-
-Twin-diff handles potential overlapping writes between workers.
-
-**Default**: `twin_diff = true` (safe, assumes overlap possible)
-
-**Disabled when proof exists**:
-
-| Proof Type | Condition | Source |
-|------------|-----------|--------|
-| `IndexedControl` | DbControlOps prove disjoint indices | CreateDbs |
-| `PartitionSuccess` | Partitioning proves disjoint chunks | DbPartitioning |
-| `AliasAnalysis` | Alias analysis proves no overlap | DbPartitioning |
-
-```cpp
-// DbPartitioning.cpp
-bool disjoint = allocNode->canProveNonOverlapping();
-if (disjoint) {
-    setTwinAttr(acqOp, TwinDiffProof::PartitionSuccess);
-}
-```
-
----
 
 ### Stage 12: epochs
 
