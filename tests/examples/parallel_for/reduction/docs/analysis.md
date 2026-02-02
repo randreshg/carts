@@ -68,7 +68,7 @@ Walk through these steps and stop as soon as you spot something odd.
             %guid_0, %ptr_1 = arts.db_alloc[<inout>, <heap>, <write>] route(%c0_i32 : i32) sizes[%c1] elementType(i32) elementSizes[%12] {...} : (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
             ...
             /// Acquire input dbs... coarse grained acquires - In next stages we will use fine grained acquires.
-            %guid_2, %ptr_3 = arts.db_acquire[<in>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<memref<?xi32>>>) offsets[%c0] sizes[%c1] {arts.twin_diff = true} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+            %guid_2, %ptr_3 = arts.db_acquire[<in>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<memref<?xi32>>>) offsets[%c0] sizes[%c1]  -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
             %guid_4, %ptr_5 = arts.db_acquire[<in>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<memref<?xi32>>>) offsets[%c0] sizes[%c1] -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
             /// Parallel work before the arts.for loop. This will me removed later on by the edt pass in the concurrency-opt pipeline.
             arts.edt <parallel> <intranode> route(%c0_i32) (%ptr_5) : memref<?xmemref<memref<?xi32>>> attributes {workers = #arts.workers<8>} {

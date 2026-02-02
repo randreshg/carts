@@ -437,22 +437,6 @@ LogicalResult DbAllocOp::verify() {
   return success();
 }
 
-void DbAcquireOp::setTwinDiff(bool enabled) {
-  (*this)->setAttr(AttrNames::Operation::ArtsTwinDiff,
-                   BoolAttr::get(getContext(), enabled));
-}
-
-bool DbAcquireOp::hasTwinDiff() {
-  return (*this)->hasAttr(AttrNames::Operation::ArtsTwinDiff);
-}
-
-bool DbAcquireOp::getTwinDiff() {
-  if (auto attr =
-          (*this)->getAttrOfType<BoolAttr>(AttrNames::Operation::ArtsTwinDiff))
-    return attr.getValue();
-  return true;
-}
-
 bool DbAcquireOp::hasExplicitPartitionHints() {
   return !getPartitionIndices().empty() || !getPartitionOffsets().empty() ||
          !getPartitionSizes().empty();
@@ -860,14 +844,6 @@ LogicalResult RecordDepOp::verify() {
     if (modes->size() != dbCount)
       return emitOpError("acquire_modes entries (")
              << modes->size() << ") must match datablocks (" << dbCount << ")\n"
-             << *getOperation();
-  }
-
-  if (auto twinDiff = getTwinDiff()) {
-    if (twinDiff->size() != dbCount)
-      return emitOpError("twin_diff entries (")
-             << twinDiff->size() << ") must match datablocks (" << dbCount
-             << ")\n"
              << *getOperation();
   }
 

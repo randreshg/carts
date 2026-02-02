@@ -247,10 +247,9 @@ Walk through these steps and check any problem that you find in the way
                 scf.if %41 {
                     /// Notice that we now use a fine grained db_acquire to acquire the partial accumulator dbs.
                     /// The hints were propagated correctly to the acquires.
-                    /// Also notice all twindiff are set to false, this is because we now use fine grained acquires and we can prove disjointness.
-                    %guid_10, %ptr_11 = arts.db_acquire[<inout>] (%guid_4 : memref<?xi64>, %ptr_5 : memref<?xmemref<memref<?xi64>>>) offsets[%arg2] sizes[%c1] offset_hints[%arg2] size_hints[%c1] {arts.twin_diff = false} -> (memref<?xi64>, memref<memref<?xi64>>)
-                    %guid_12, %ptr_13 = arts.db_acquire[<in>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<memref<?xi32>>>) offsets[%35] sizes[%40] offset_hints[%35] size_hints[%40] {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
-                    %guid_14, %ptr_15 = arts.db_acquire[<in>] (%guid_2 : memref<?xi64>, %ptr_3 : memref<?xmemref<memref<?xi32>>>) offsets[%35] sizes[%40] offset_hints[%35] size_hints[%40] {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+                    %guid_10, %ptr_11 = arts.db_acquire[<inout>] (%guid_4 : memref<?xi64>, %ptr_5 : memref<?xmemref<memref<?xi64>>>) offsets[%arg2] sizes[%c1] offset_hints[%arg2] size_hints[%c1] -> (memref<?xi64>, memref<memref<?xi64>>)
+                    %guid_12, %ptr_13 = arts.db_acquire[<in>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<memref<?xi32>>>) offsets[%35] sizes[%40] offset_hints[%35] size_hints[%40] -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+                    %guid_14, %ptr_15 = arts.db_acquire[<in>] (%guid_2 : memref<?xi64>, %ptr_3 : memref<?xmemref<memref<?xi32>>>) offsets[%35] sizes[%40] offset_hints[%35] size_hints[%40] -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
                     /// This is the EDT that computes the work for each partial accumulator.
                     arts.edt <task> <intranode> route(%c0_i32) (%ptr_13, %ptr_15, %ptr_11) : memref<?xmemref<memref<?xi32>>>, memref<?xmemref<memref<?xi32>>>, memref<memref<?xi64>> attributes {arts.id = 37 : i64} {
                     ^bb0(%arg3: memref<?xmemref<memref<?xi32>>>, %arg4: memref<?xmemref<memref<?xi32>>>, %arg5: memref<memref<?xi64>>):
@@ -276,8 +275,8 @@ Walk through these steps and check any problem that you find in the way
                 }
                 } {...}
                 /// This is the acquire of the partial accumulator dbs. These remained unchanged from the first run of the concurrency pass. This is correct since the result db is still size 1.
-                %guid_6, %ptr_7 = arts.db_acquire[<in>] (%guid_4 : memref<?xi64>, %ptr_5 : memref<?xmemref<memref<?xi64>>>) offsets[%c0] sizes[%c8] {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi64>>>)
-                %guid_8, %ptr_9 = arts.db_acquire[<out>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<memref<?xi64>>>) offsets[%c0] sizes[%c1] {arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<memref<?xi64>>>)
+                %guid_6, %ptr_7 = arts.db_acquire[<in>] (%guid_4 : memref<?xi64>, %ptr_5 : memref<?xmemref<memref<?xi64>>>) offsets[%c0] sizes[%c8]  -> (memref<?xi64>, memref<?xmemref<memref<?xi64>>>)
+                %guid_8, %ptr_9 = arts.db_acquire[<out>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<memref<?xi64>>>) offsets[%c0] sizes[%c1]  -> (memref<?xi64>, memref<?xmemref<memref<?xi64>>>)
                 arts.edt <task> <intranode> route(%c0_i32) (%ptr_7, %ptr_9) : memref<?xmemref<memref<?xi64>>>, memref<?xmemref<memref<?xi64>>> attributes {arts.id = 37 : i64} {
                 ^bb0(%arg2: memref<?xmemref<memref<?xi64>>>, %arg3: memref<?xmemref<memref<?xi64>>>):
                 %33 = arts.db_ref %arg3[%c0] {operandSegmentSizes = array<i32: 1, 1>} : memref<?xmemref<memref<?xi64>>> -> memref<?xi64>

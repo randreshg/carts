@@ -21,7 +21,6 @@ using namespace llvm;
 constexpr StringLiteral Workers = "workers";
 constexpr StringLiteral ArtsId = "arts.id";
 constexpr StringLiteral ArtsCreateId = "arts.create_id";
-constexpr StringLiteral ArtsTwinDiff = "arts.twin_diff";
 constexpr StringLiteral OutlinedFunc = "outlined_func";
 constexpr StringLiteral Nowait = "nowait";
 
@@ -87,9 +86,9 @@ std::optional<PartitioningHint> getPartitioningHint(Operation *op);
 void setPartitioningHint(Operation *op, const PartitioningHint &hint);
 
 /// Copy ARTS-specific metadata attributes from source to dest operation.
-/// Copies: arts.id, partition_mode, arts.partition_hint, arts.twin_diff,
-/// arts.loop Unlike transferAttributes in ArtsUtils.h which copies ALL
-/// attributes, this only copies ARTS-specific metadata attributes.
+/// Copies: arts.id, partition_mode, arts.partition_hint, arts.loop.
+/// Unlike transferAttributes in ArtsUtils.h which copies ALL attributes, this
+/// only copies ARTS-specific metadata attributes.
 void copyArtsMetadataAttrs(Operation *source, Operation *dest);
 
 } // namespace arts

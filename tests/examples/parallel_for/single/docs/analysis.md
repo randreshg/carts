@@ -74,11 +74,11 @@ Walk through these steps and stop as soon as you spot something odd.
       
       /// This is the work before the arts.for.... It contains the single region work 
       /// This will be optimized by the edt pass into a single edt during the concurrency-opt pipeline.
-      %guid_2, %ptr_3 = arts.db_acquire[<in>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<?xi32>>) offsets[%c0] sizes[%c1] {arts.twin_diff = true} -> (memref<?xi64>, memref<?xmemref<?xi32>>)
-      %guid_4, %ptr_5 = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xi32>>) offsets[%c0] sizes[%c1] {arts.twin_diff = true} -> (memref<?xi64>, memref<?xmemref<?xi32>>)
+      %guid_2, %ptr_3 = arts.db_acquire[<in>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<?xi32>>) offsets[%c0] sizes[%c1]  -> (memref<?xi64>, memref<?xmemref<?xi32>>)
+      %guid_4, %ptr_5 = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xi32>>) offsets[%c0] sizes[%c1]  -> (memref<?xi64>, memref<?xmemref<?xi32>>)
       arts.edt <parallel> <internode> route(%c0_i32) (%ptr_3, %ptr_5) : memref<?xmemref<?xi32>>, memref<?xmemref<?xi32>> attributes {workers = #arts.workers<6>} {
       ^bb0(%arg0: memref<?xmemref<?xi32>>, %arg1: memref<?xmemref<?xi32>>):
-         %guid_10, %ptr_11 = arts.db_acquire[<inout>] ( %arg0 : memref<?xmemref<?xi32>>) offsets[%c0] sizes[%c1] {arts.twin_diff = true} -> (memref<?xi64>, memref<?xmemref<?xi32>>)
+         %guid_10, %ptr_11 = arts.db_acquire[<inout>] ( %arg0 : memref<?xmemref<?xi32>>) offsets[%c0] sizes[%c1]  -> (memref<?xi64>, memref<?xmemref<?xi32>>)
          arts.edt <single> <intranode> route(%c0_i32) (%ptr_11) : memref<?xmemref<?xi32>> {
          ^bb0(%arg2: memref<?xmemref<?xi32>>):
          %25 = arts.get_current_node -> i32

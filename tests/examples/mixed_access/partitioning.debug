@@ -18,13 +18,9 @@
 [0;1;35m[DEBUG] [heuristics][0m Heuristic Fallback applied: Fallback: User preference for coarse partitioning
 [0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: AllocationStrategy applied=1 for ARTS ID 28 (allocId=0)
 [0;1;35m[DEBUG] [heuristics][0m   Computed affected_db_ids: [27, 28)
-[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: TwinDiff-Disabled applied=1 for ARTS ID 44 (allocId=27)
 [0;1;35m[DEBUG] [heuristics][0m   Computed affected_db_ids: [30, 31)
-[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: TwinDiff-Disabled applied=1 for ARTS ID 44 (allocId=30)
 [0;1;35m[DEBUG] [heuristics][0m   Computed affected_db_ids: [27, 28)
-[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: TwinDiff-Disabled applied=1 for ARTS ID 44 (allocId=27)
 [0;1;35m[DEBUG] [heuristics][0m   Computed affected_db_ids: [28, 29)
-[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: TwinDiff-Disabled applied=1 for ARTS ID 44 (allocId=28)
 [0;1;34m
 -----------------------------------------
 DbPartitioningPass STARTED
@@ -264,7 +260,6 @@ PartitionDb STARTED
 [0;1;35m[DEBUG] [db_partitioning][0m   Set partition attribute: Chunked
 [0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: Partition-Success applied=1 for ARTS ID 28 (allocId=0)
 [0;1;35m[DEBUG] [db_partitioning][0m   Partitioned alloc to sizes=1
-[0;1;35m[DEBUG] [db_partitioning][0m   Partitioned alloc has potential overlap; keeping twin_diff enabled
 [0;1;35m[DEBUG] [db_partitioning][0m Checking allocation: %guid_9, %ptr_10 = arts.db_alloc[<in>, <heap>, <read>] route(%c0_i32 : i32) sizes[%c1] elementType(i32) elementSizes[%19, %c4] {arts.id = 30 : i64, arts.partition = #arts.partition_mode<coarse>} : (memref<?xi64>, memref<?xmemref<?x?xi32>>)
 [0;1;35m[DEBUG] [db_partitioning][0m   Partition mode is coarse - re-analyzing with loop structure
 [0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: Partition-ReanalyzeNone applied=1 for ARTS ID 30 (allocId=0)
@@ -282,8 +277,6 @@ PartitionDb STARTED
 [0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: Partition-Success applied=1 for ARTS ID 30 (allocId=0)
 [0;1;35m[DEBUG] [db_partitioning][0m   Partitioned alloc to sizes=1
 [0;1;35m[DEBUG] [heuristics][0m   Dynamic offset/size - partial correlation only
-[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: TwinDiff-Disabled applied=1 for ARTS ID 38 (allocId=30)
-[0;1;35m[DEBUG] [db_partitioning][0m   Set twin_diff=false
 [0;1;35m[DEBUG] [db_partitioning][0m Checking allocation: %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>] route(%c0_i32 : i32) sizes[%c1] elementType(f64) elementSizes[%c2601] {arts.id = 27 : i64, arts.partition = #arts.partition_mode<coarse>} : (memref<?xi64>, memref<?xmemref<?xf64>>)
 [0;1;35m[DEBUG] [db_partitioning][0m   Partition mode is coarse - re-analyzing with loop structure
 [0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: Partition-ReanalyzeNone applied=1 for ARTS ID 27 (allocId=0)
@@ -306,25 +299,13 @@ PartitionDb STARTED
 [0;1;35m[DEBUG] [db_partitioning][0m   Set partition attribute: Chunked
 [0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: Partition-Success applied=1 for ARTS ID 27 (allocId=0)
 [0;1;35m[DEBUG] [db_partitioning][0m   Partitioned alloc to sizes=1
-[0;1;35m[DEBUG] [db_partitioning][0m   Partitioned alloc has potential overlap; keeping twin_diff enabled
 [0;1;35m[DEBUG] [db_partitioning][0m   Overlap analysis for unpartitioned allocations:
 [0;1;35m[DEBUG] [db_partitioning][0m     Skipping alloc B - already partitioned
 [0;1;35m[DEBUG] [db_partitioning][0m     Analyzing alloc C with 1 acquires
 [0;1;35m[DEBUG] [db_partitioning][0m     Analyzing alloc A with 2 acquires
-[0;1;35m[DEBUG] [db_partitioning][0m       Potential overlap detected -> will use default twin_diff=true
-[0;1;35m[DEBUG] [db_partitioning][0m   Final pass: Setting safe default twin_diff=true for unset acquires
 [0;1;35m[DEBUG] [heuristics][0m   Dynamic offset/size - partial correlation only
-[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: TwinDiff-Disabled applied=1 for ARTS ID 38 (allocId=27)
-[0;1;35m[DEBUG] [db_partitioning][0m   Set twin_diff=false
-[0;1;35m[DEBUG] [db_partitioning][0m     Default twin_diff=true for unset acquire
 [0;1;35m[DEBUG] [heuristics][0m   Dynamic offset/size - partial correlation only
-[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: TwinDiff-Disabled applied=1 for ARTS ID 38 (allocId=27)
-[0;1;35m[DEBUG] [db_partitioning][0m   Set twin_diff=false
-[0;1;35m[DEBUG] [db_partitioning][0m     Default twin_diff=true for unset acquire
 [0;1;35m[DEBUG] [heuristics][0m   Dynamic offset/size - partial correlation only
-[0;1;35m[DEBUG] [heuristics][0m Recorded heuristic decision: TwinDiff-Disabled applied=1 for ARTS ID 38 (allocId=28)
-[0;1;35m[DEBUG] [db_partitioning][0m   Set twin_diff=false
-[0;1;35m[DEBUG] [db_partitioning][0m     Default twin_diff=true for unset acquire
 [0;1;35m[DEBUG] [db_partitioning][0m Rebuilding graph after partitioning
 [0;1;35m
 PartitionDb FINISHED
@@ -527,7 +508,6 @@ DbPartitioningPass FINISHED
           %67 = arith.minui %65, %66 : index
           %68 = arith.subi %67, %62 : index
           %69 = arith.addi %68, %c1_19 : index
-          %guid_20, %ptr_21 = arts.db_acquire[<out>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) offsets[%62] sizes[%69] chunk_hint(%54, %59) {arts.id = 38 : i64, arts.partition = #arts.partition_mode<chunked>, arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
           arts.edt <task> <intranode> route(%c0_i32) (%ptr_21) : memref<?xmemref<?xf64>> attributes {arts.id = 38 : i64} {
           ^bb0(%arg1: memref<?xmemref<?xf64>>):
             scf.for %arg2 = %c0 to %59 step %c1 {
@@ -569,10 +549,8 @@ DbPartitioningPass FINISHED
           %67 = arith.minui %65, %66 : index
           %68 = arith.subi %67, %62 : index
           %69 = arith.addi %68, %c1_19 : index
-          %guid_20, %ptr_21 = arts.db_acquire[<in>] (%guid_17 : memref<?xi64>, %ptr_18 : memref<?xmemref<?x?xi32>>) offsets[%62] sizes[%69] chunk_hint(%54, %59) {arts.id = 38 : i64, arts.partition = #arts.partition_mode<chunked>, arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<?x?xi32>>)
           %c0_22 = arith.constant 0 : index
           %c1_23 = arith.constant 1 : index
-          %guid_24, %ptr_25 = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) offsets[%c0_22] sizes[%15] {arts.id = 38 : i64, arts.partition = #arts.partition_mode<chunked>, arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
           %c1_26 = arith.constant 1 : index
           %70 = arith.maxui %16, %c1_26 : index
           %71 = arith.divui %54, %70 : index
@@ -583,7 +561,6 @@ DbPartitioningPass FINISHED
           %76 = arith.minui %74, %75 : index
           %77 = arith.subi %76, %71 : index
           %78 = arith.addi %77, %c1_26 : index
-          %guid_27, %ptr_28 = arts.db_acquire[<out>] (%guid_11 : memref<?xi64>, %ptr_12 : memref<?xmemref<?xf64>>) offsets[%71] sizes[%78] chunk_hint(%54, %59) {arts.id = 38 : i64, arts.partition = #arts.partition_mode<chunked>, arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
           arts.edt <task> <intranode> route(%c0_i32) (%ptr_21, %ptr_25, %ptr_28) : memref<?xmemref<?x?xi32>>, memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>> attributes {arts.id = 38 : i64} {
           ^bb0(%arg1: memref<?xmemref<?x?xi32>>, %arg2: memref<?xmemref<?xf64>>, %arg3: memref<?xmemref<?xf64>>):
             scf.for %arg4 = %c0 to %59 step %c1 {
@@ -811,7 +788,6 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i32, dense<32> : 
           %47 = arith.minui %46, %c4 : index
           %48 = arith.subi %47, %43 : index
           %49 = arith.addi %48, %c1 : index
-          %guid_8, %ptr_9 = arts.db_acquire[<out>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) offsets[%43] sizes[%49] chunk_hint(%36, %41) {arts.id = 38 : i64, arts.partition = #arts.partition_mode<chunked>, arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
           arts.edt <task> <intranode> route(%c0_i32) (%ptr_9) : memref<?xmemref<?xf64>> attributes {arts.id = 38 : i64} {
           ^bb0(%arg1: memref<?xmemref<?xf64>>):
             scf.for %arg2 = %c0 to %41 step %c1 {
@@ -849,12 +825,9 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i32, dense<32> : 
           %48 = arith.minui %46, %47 : index
           %49 = arith.subi %48, %43 : index
           %50 = arith.addi %49, %c1 : index
-          %guid_8, %ptr_9 = arts.db_acquire[<in>] (%guid_6 : memref<?xi64>, %ptr_7 : memref<?xmemref<?x?xi32>>) offsets[%43] sizes[%50] chunk_hint(%36, %41) {arts.id = 38 : i64, arts.partition = #arts.partition_mode<chunked>, arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<?x?xi32>>)
-          %guid_10, %ptr_11 = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) offsets[%c0] sizes[%c5] {arts.id = 38 : i64, arts.partition = #arts.partition_mode<chunked>, arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
           %51 = arith.minui %46, %c3 : index
           %52 = arith.subi %51, %43 : index
           %53 = arith.addi %52, %c1 : index
-          %guid_12, %ptr_13 = arts.db_acquire[<out>] (%guid_4 : memref<?xi64>, %ptr_5 : memref<?xmemref<?xf64>>) offsets[%43] sizes[%53] chunk_hint(%36, %41) {arts.id = 38 : i64, arts.partition = #arts.partition_mode<chunked>, arts.twin_diff = false} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
           arts.edt <task> <intranode> route(%c0_i32) (%ptr_9, %ptr_11, %ptr_13) : memref<?xmemref<?x?xi32>>, memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>> attributes {arts.id = 38 : i64} {
           ^bb0(%arg1: memref<?xmemref<?x?xi32>>, %arg2: memref<?xmemref<?xf64>>, %arg3: memref<?xmemref<?xf64>>):
             scf.for %arg4 = %c0 to %41 step %c1 {
