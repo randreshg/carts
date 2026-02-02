@@ -346,6 +346,10 @@ static bool isIndirectIndex(Value idx, Value partitionOffset, int depth) {
   idx = ValueUtils::stripNumericCasts(idx);
   if (ValueUtils::isValueConstant(idx))
     return false;
+
+  if (arts::isArtsRuntimeQuery(idx))
+    return false;
+
   if (partitionOffset) {
     Value offsetStripped = ValueUtils::stripNumericCasts(partitionOffset);
     if (idx == offsetStripped)
@@ -717,25 +721,75 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
   if (accessPattern)
     return *accessPattern;
 
+  DbAcquireOp acqOp = const_cast<DbAcquireOp &>(dbAcquireOp);
+
+  ARTS_DEBUG("getAccessPattern() for: " << acqOp);
+  ARTS_DEBUG(
+      "  hasMultiplePartitionEntries: " << acqOp.hasMultiplePartitionEntries());
+  ARTS_DEBUG(
+      "  hasAllFineGrainedEntries: " << acqOp.hasAllFineGrainedEntries());
+  ARTS_DEBUG(
+      "  partitionIndices.empty: " << acqOp.getPartitionIndices().empty());
+  if (acqOp.hasMultiplePartitionEntries()) {
+    ARTS_DEBUG("  numPartitionEntries: " << acqOp.getNumPartitionEntries());
+    for (size_t i = 0; i < acqOp.getNumPartitionEntries(); ++i) {
+      ARTS_DEBUG("    entry["
+                 << i << "] mode: "
+                 << static_cast<int>(acqOp.getPartitionEntryMode(i)));
+    }
+  }
+
+  // Check multi-entry partition_entry_modes[] for task dependencies.
+  // If all entries are fine_grained with partition indices, return Indexed.
+  if (acqOp.hasAllFineGrainedEntries() &&
+      !acqOp.getPartitionIndices().empty()) {
+    ARTS_DEBUG("  -> Returning Indexed (all fine-grained with indices)");
+    accessPattern = AccessPattern::Indexed;
+    return *accessPattern;
+  }
+
+  // Check for explicit fine-grained (element-wise) partition hints FIRST.
+  // These come from OMP task deps and should NOT trigger stencil/ESD mode.
+  // Criteria: partition_indices non-empty AND mode is fine_grained (not block).
+  // Hints from for_lowering might have indices but suggest block partitioning,
+  // while hints from OMP task deps are marked as element-wise (fine_grained).
+  if (!acqOp.getPartitionIndices().empty()) {
+    // Check if this is truly fine-grained (from task deps) vs block hints
+    auto mode = acqOp.getPartitionMode();
+    ARTS_DEBUG("  partitionMode: " << (mode ? static_cast<int>(*mode) : -1));
+    if (!mode || *mode == PartitionMode::fine_grained) {
+      ARTS_DEBUG("  -> Returning Indexed (has indices, mode is fine_grained or "
+                 "unset)");
+      accessPattern = AccessPattern::Indexed;
+      return *accessPattern;
+    }
+    // If mode is block/stencil, fall through to other checks
+    ARTS_DEBUG("  mode is block/stencil, falling through...");
+  }
+
+  // Then check stencilBounds (only applies when no explicit fine-grained hints)
   if (stencilBounds && stencilBounds->valid && stencilBounds->isStencil) {
+    ARTS_DEBUG("  -> Returning Stencil (stencilBounds valid and isStencil)");
     accessPattern = AccessPattern::Stencil;
     return *accessPattern;
   }
 
-  DbAcquireOp acqOp = const_cast<DbAcquireOp &>(dbAcquireOp);
-  if (!acqOp.getPartitionIndices().empty()) {
-    accessPattern = AccessPattern::Indexed;
-    return *accessPattern;
-  }
-  if (acqOp.hasMultiplePartitionEntries()) {
+  // Check multi-entry stencil pattern (only for acquires without partition
+  // indices). Only treat as stencil if NOT all entries are fine-grained (task
+  // deps).
+  if (acqOp.hasMultiplePartitionEntries() &&
+      !acqOp.hasAllFineGrainedEntries()) {
     int64_t minOffset = 0, maxOffset = 0;
     if (DatablockUtils::hasMultiEntryStencilPattern(acqOp, minOffset,
                                                     maxOffset)) {
+      ARTS_DEBUG("  -> Returning Stencil (multi-entry stencil pattern, not all "
+                 "fine-grained)");
       accessPattern = AccessPattern::Stencil;
       return *accessPattern;
     }
   }
 
+  ARTS_DEBUG("  -> Returning Uniform (fallback)");
   accessPattern = AccessPattern::Uniform;
   return *accessPattern;
 }

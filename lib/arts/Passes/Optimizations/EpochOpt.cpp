@@ -201,24 +201,11 @@ static void processRegionForEpochFusion(Region &region, bool &changed) {
 ///
 //===----------------------------------------------------------------------===//
 
-/// Compares two values for compatibility (same value or same constant).
-static bool compatibleValue(Value a, Value b) {
-  if (!a || !b)
-    return false;
-  a = ValueUtils::stripNumericCasts(a);
-  b = ValueUtils::stripNumericCasts(b);
-  if (a == b)
-    return true;
-  auto aConst = ValueUtils::getConstantValue(a);
-  auto bConst = ValueUtils::getConstantValue(b);
-  return aConst && bConst && *aConst == *bConst;
-}
-
-/// Checks if two loops have compatible bounds (lower, upper, step).
+/// Checks if two SCF for loops have compatible bounds (lower, upper, step).
 static bool haveCompatibleBounds(scf::ForOp a, scf::ForOp b) {
-  return compatibleValue(a.getLowerBound(), b.getLowerBound()) &&
-         compatibleValue(a.getUpperBound(), b.getUpperBound()) &&
-         compatibleValue(a.getStep(), b.getStep());
+  return ValueUtils::sameValue(a.getLowerBound(), b.getLowerBound()) &&
+         ValueUtils::sameValue(a.getUpperBound(), b.getUpperBound()) &&
+         ValueUtils::sameValue(a.getStep(), b.getStep());
 }
 
 /// Determines if two worker loops can be fused.

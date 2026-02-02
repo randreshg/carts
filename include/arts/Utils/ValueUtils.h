@@ -56,6 +56,22 @@ public:
   /// Check if a value is a one constant (float or integer).
   static bool isOneConstant(Value v);
 
+  /// Check if two values are equivalent after stripping casts
+  /// (same Value or same constant).
+  static bool sameValue(Value a, Value b);
+
+  /// Strip numeric casts and max(x, 1) clamping.
+  static Value stripClampOne(Value v);
+
+  /// Shallow structural equivalence for index expressions.
+  static bool areValuesEquivalent(Value a, Value b, int depth = 0);
+
+  /// Check if value is a constant >= 1 (strips casts first).
+  static bool isConstantAtLeastOne(Value v);
+
+  /// Recursively prove value is non-zero (for div/rem safety).
+  static bool isProvablyNonZero(Value v, unsigned depth = 0);
+
   /// Determines if the given value represents a non-zero index, returning true
   /// for non-zero constants or unknown (non-constant) values.
   static bool isNonZeroIndex(Value v);

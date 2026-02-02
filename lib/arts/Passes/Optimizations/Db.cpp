@@ -35,36 +35,6 @@ using namespace mlir::arts;
 
 namespace {
 
-static bool isConstIndex(Value v, int64_t &out) {
-  if (!v)
-    return false;
-  return ValueUtils::getConstantIndex(ValueUtils::stripNumericCasts(v), out);
-}
-
-static bool isConstZero(Value v) {
-  int64_t val = 0;
-  return isConstIndex(v, val) && val == 0;
-}
-
-static bool isConstOne(Value v) {
-  int64_t val = 0;
-  return isConstIndex(v, val) && val == 1;
-}
-
-static bool isSameValueOrConst(Value a, Value b) {
-  if (!a || !b)
-    return false;
-  Value aStripped = ValueUtils::stripNumericCasts(a);
-  Value bStripped = ValueUtils::stripNumericCasts(b);
-  if (aStripped == bStripped)
-    return true;
-  int64_t aConst = 0;
-  int64_t bConst = 0;
-  if (isConstIndex(aStripped, aConst) && isConstIndex(bStripped, bConst))
-    return aConst == bConst;
-  return false;
-}
-
 static bool isLoopFullRange(LoopNode *loop, Value dimSize) {
   if (!loop || !dimSize)
     return false;
@@ -74,15 +44,15 @@ static bool isLoopFullRange(LoopNode *loop, Value dimSize) {
     return false;
 
   Value lb = ValueUtils::stripNumericCasts(forOp.getLowerBound());
-  if (!isConstZero(lb))
+  if (!ValueUtils::isZeroConstant(lb))
     return false;
 
   Value step = ValueUtils::stripNumericCasts(forOp.getStep());
-  if (!isConstOne(step))
+  if (!ValueUtils::isOneConstant(step))
     return false;
 
   Value ub = ValueUtils::stripNumericCasts(forOp.getUpperBound());
-  return isSameValueOrConst(ub, dimSize);
+  return ValueUtils::sameValue(ub, dimSize);
 }
 
 static bool isIndexFullCoverage(Value idx, Value dimSize,
@@ -90,17 +60,17 @@ static bool isIndexFullCoverage(Value idx, Value dimSize,
   if (!idx || !dimSize)
     return false;
 
-  int64_t dimConst = 0;
-  if (isConstIndex(dimSize, dimConst) && dimConst == 1)
+  auto dimConstOpt =
+      ValueUtils::tryFoldConstantIndex(ValueUtils::stripNumericCasts(dimSize));
+  if (dimConstOpt && *dimConstOpt == 1)
     return true;
 
   idx = ValueUtils::stripNumericCasts(idx);
 
-  int64_t idxConst = 0;
   /// Constant index only covers full range if size == 1.
-  if (isConstIndex(idx, idxConst))
-
-    return dimConst == 1 && idxConst == 0;
+  auto idxConstOpt = ValueUtils::tryFoldConstantIndex(idx);
+  if (idxConstOpt)
+    return dimConstOpt && *dimConstOpt == 1 && *idxConstOpt == 0;
 
   LoopNode *best = nullptr;
   LoopNode::IVExpr bestExpr;

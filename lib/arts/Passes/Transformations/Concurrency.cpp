@@ -177,6 +177,24 @@ void ConcurrencyPass::adjustDbModes() {
   });
 }
 
+/// Check if an EDT contains nested task EDTs.
+/// Parallel EDTs with nested tasks should remain intranode to ensure correct
+/// work distribution - task parallelism is designed for local execution.
+static bool containsNestedTaskEdts(EdtOp edtOp) {
+  bool hasNestedTasks = false;
+  edtOp.walk([&](EdtOp nestedEdt) {
+    /// Skip the EDT itself
+    if (nestedEdt == edtOp)
+      return WalkResult::advance();
+    if (nestedEdt.getType() == EdtType::task) {
+      hasNestedTasks = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return hasNestedTasks;
+}
+
 void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
   /// Only apply to parallel EDTs that don't already have workers attribute set
   if (edtOp.getType() != EdtType::parallel)
@@ -191,6 +209,25 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
   if (!abstractMachine->hasConfigFile()) {
     ARTS_WARN("No arts.cfg; using runtime worker count for parallel EDT");
     edtOp.setConcurrency(EdtConcurrency::intranode);
+    return;
+  }
+
+  /// Check for nested task EDTs - these must remain intranode.
+  /// Task parallelism is designed for local execution within a single node.
+  /// Distributing a parallel EDT containing tasks across nodes would cause
+  /// incorrect work distribution (each node would only process its portion
+  /// while tasks expect to see the full iteration space).
+  bool hasNestedTasks = containsNestedTaskEdts(edtOp);
+  if (hasNestedTasks) {
+    int threads =
+        abstractMachine->hasValidThreads() ? abstractMachine->getThreads() : 0;
+    ARTS_INFO("Parallel EDT contains nested tasks - keeping intranode with "
+              << threads << " threads");
+    edtOp.setConcurrency(EdtConcurrency::intranode);
+    if (threads > 0) {
+      OpBuilder builder(edtOp.getContext());
+      edtOp.setWorkersAttr(workersAttr::get(builder.getContext(), threads));
+    }
     return;
   }
 

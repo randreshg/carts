@@ -115,22 +115,8 @@ private:
 } // namespace
 
 bool LoopFusionPass::haveCompatibleBounds(ForOp a, ForOp b) {
-  auto aLower = ValueUtils::getConstantValue(a.getLowerBound()[0]);
-  auto bLower = ValueUtils::getConstantValue(b.getLowerBound()[0]);
-  auto aUpper = ValueUtils::getConstantValue(a.getUpperBound()[0]);
-  auto bUpper = ValueUtils::getConstantValue(b.getUpperBound()[0]);
-
-  if (aLower && bLower && *aLower != *bLower)
-    return false;
-  if (aUpper && bUpper && *aUpper != *bUpper)
-    return false;
-
-  if (!aLower && a.getLowerBound()[0] != b.getLowerBound()[0])
-    return false;
-  if (!aUpper && a.getUpperBound()[0] != b.getUpperBound()[0])
-    return false;
-
-  return true;
+  return ValueUtils::sameValue(a.getLowerBound()[0], b.getLowerBound()[0]) &&
+         ValueUtils::sameValue(a.getUpperBound()[0], b.getUpperBound()[0]);
 }
 
 /// Collects the underlying datablock Operations accessed by a ForOp.

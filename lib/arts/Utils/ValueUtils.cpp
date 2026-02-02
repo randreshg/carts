@@ -20,9 +20,6 @@
 #include <algorithm>
 #include <cassert>
 
-// For getElementTypeByteSize
-#include "mlir/IR/BuiltinTypes.h"
-
 namespace mlir {
 namespace arts {
 
@@ -195,6 +192,119 @@ bool ValueUtils::isOneConstant(Value v) {
     return *cst == 1;
   if (auto cst = getConstantFloat(v))
     return *cst == 1.0;
+  return false;
+}
+
+/// Check if two values are equivalent after stripping casts
+/// (same Value or same constant).
+bool ValueUtils::sameValue(Value a, Value b) {
+  a = stripNumericCasts(a);
+  b = stripNumericCasts(b);
+  if (a == b)
+    return true;
+  auto aConst = tryFoldConstantIndex(a);
+  auto bConst = tryFoldConstantIndex(b);
+  return aConst && bConst && *aConst == *bConst;
+}
+
+/// Strip numeric casts and max(x, 1) clamping.
+Value ValueUtils::stripClampOne(Value v) {
+  Value cur = stripNumericCasts(v);
+  while (auto maxOp = cur.getDefiningOp<arith::MaxUIOp>()) {
+    Value lhs = stripNumericCasts(maxOp.getLhs());
+    Value rhs = stripNumericCasts(maxOp.getRhs());
+    if (isOneConstant(lhs)) {
+      cur = rhs;
+      continue;
+    }
+    if (isOneConstant(rhs)) {
+      cur = lhs;
+      continue;
+    }
+    break;
+  }
+  return cur;
+}
+
+/// Shallow structural equivalence for index expressions.
+bool ValueUtils::areValuesEquivalent(Value a, Value b, int depth) {
+  if (!a || !b)
+    return false;
+  if (a == b)
+    return true;
+  if (depth > 6)
+    return false;
+
+  a = stripNumericCasts(a);
+  b = stripNumericCasts(b);
+  if (a == b)
+    return true;
+
+  auto ca = getConstantValue(a);
+  auto cb = getConstantValue(b);
+  if (ca && cb)
+    return *ca == *cb;
+
+  Operation *opA = a.getDefiningOp();
+  Operation *opB = b.getDefiningOp();
+  if (!opA || !opB)
+    return false;
+  if (opA->getName() != opB->getName())
+    return false;
+  if (opA->getNumOperands() != opB->getNumOperands())
+    return false;
+
+  auto eq = [&](Value x, Value y) {
+    return areValuesEquivalent(x, y, depth + 1);
+  };
+
+  if (isa<arith::AddIOp, arith::MulIOp, arith::MaxUIOp, arith::MinUIOp>(opA)) {
+    if (opA->getNumOperands() == 2) {
+      Value a0 = opA->getOperand(0);
+      Value a1 = opA->getOperand(1);
+      Value b0 = opB->getOperand(0);
+      Value b1 = opB->getOperand(1);
+      return (eq(a0, b0) && eq(a1, b1)) || (eq(a0, b1) && eq(a1, b0));
+    }
+  }
+
+  for (unsigned i = 0; i < opA->getNumOperands(); ++i) {
+    if (!eq(opA->getOperand(i), opB->getOperand(i)))
+      return false;
+  }
+  return true;
+}
+
+/// Check if value is a constant >= 1 (strips casts first).
+bool ValueUtils::isConstantAtLeastOne(Value v) {
+  if (!v)
+    return false;
+  v = stripNumericCasts(v);
+  int64_t val = 0;
+  if (getConstantIndex(v, val))
+    return val >= 1;
+  if (auto cst = v.getDefiningOp<arith::ConstantOp>()) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue()))
+      return intAttr.getInt() >= 1;
+  }
+  return false;
+}
+
+/// Recursively prove value is non-zero (for div/rem safety).
+bool ValueUtils::isProvablyNonZero(Value v, unsigned depth) {
+  if (!v || depth > 4)
+    return false;
+  v = stripNumericCasts(v);
+  if (isConstantAtLeastOne(v))
+    return true;
+  if (auto maxui = v.getDefiningOp<arith::MaxUIOp>()) {
+    return isProvablyNonZero(maxui.getLhs(), depth + 1) ||
+           isProvablyNonZero(maxui.getRhs(), depth + 1);
+  }
+  if (auto maxsi = v.getDefiningOp<arith::MaxSIOp>()) {
+    return isProvablyNonZero(maxsi.getLhs(), depth + 1) ||
+           isProvablyNonZero(maxsi.getRhs(), depth + 1);
+  }
   return false;
 }
 

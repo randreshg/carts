@@ -47,61 +47,33 @@ ARTS_DEBUG_SETUP(db_transforms);
 using namespace mlir;
 using namespace mlir::arts;
 
-static Value stripClampOne(Value v) {
-  Value cur = ValueUtils::stripNumericCasts(v);
-  while (auto maxOp = cur.getDefiningOp<arith::MaxUIOp>()) {
-    Value lhs = ValueUtils::stripNumericCasts(maxOp.getLhs());
-    Value rhs = ValueUtils::stripNumericCasts(maxOp.getRhs());
-    if (ValueUtils::isOneConstant(lhs)) {
-      cur = rhs;
-      continue;
-    }
-    if (ValueUtils::isOneConstant(rhs)) {
-      cur = lhs;
-      continue;
-    }
-    break;
-  }
-  return cur;
-}
-
-static bool sameValue(Value a, Value b) {
-  a = ValueUtils::stripNumericCasts(a);
-  b = ValueUtils::stripNumericCasts(b);
-  if (a == b)
-    return true;
-  auto aConst = ValueUtils::tryFoldConstantIndex(a);
-  auto bConst = ValueUtils::tryFoldConstantIndex(b);
-  return aConst && bConst && *aConst == *bConst;
-}
-
 static bool isMulOf(Value v, Value a, Value b) {
-  v = stripClampOne(v);
-  a = stripClampOne(a);
-  b = stripClampOne(b);
+  v = ValueUtils::stripClampOne(v);
+  a = ValueUtils::stripClampOne(a);
+  b = ValueUtils::stripClampOne(b);
   if (auto mul = v.getDefiningOp<arith::MulIOp>()) {
-    Value lhs = stripClampOne(mul.getLhs());
-    Value rhs = stripClampOne(mul.getRhs());
-    if ((sameValue(lhs, a) && sameValue(rhs, b)) ||
-        (sameValue(lhs, b) && sameValue(rhs, a)))
+    Value lhs = ValueUtils::stripClampOne(mul.getLhs());
+    Value rhs = ValueUtils::stripClampOne(mul.getRhs());
+    if ((ValueUtils::sameValue(lhs, a) && ValueUtils::sameValue(rhs, b)) ||
+        (ValueUtils::sameValue(lhs, b) && ValueUtils::sameValue(rhs, a)))
       return true;
   }
   return false;
 }
 
 static Value canonicalizeStartBlock(Value startBlock, Value blockSize) {
-  Value sb = stripClampOne(startBlock);
-  Value bs = stripClampOne(blockSize);
+  Value sb = ValueUtils::stripClampOne(startBlock);
+  Value bs = ValueUtils::stripClampOne(blockSize);
   if (auto div = sb.getDefiningOp<arith::DivUIOp>()) {
-    Value lhs = stripClampOne(div.getLhs());
-    Value rhs = stripClampOne(div.getRhs());
-    if (sameValue(rhs, bs)) {
+    Value lhs = ValueUtils::stripClampOne(div.getLhs());
+    Value rhs = ValueUtils::stripClampOne(div.getRhs());
+    if (ValueUtils::sameValue(rhs, bs)) {
       if (auto mul = lhs.getDefiningOp<arith::MulIOp>()) {
-        Value ml = stripClampOne(mul.getLhs());
-        Value mr = stripClampOne(mul.getRhs());
-        if (sameValue(ml, bs))
+        Value ml = ValueUtils::stripClampOne(mul.getLhs());
+        Value mr = ValueUtils::stripClampOne(mul.getRhs());
+        if (ValueUtils::sameValue(ml, bs))
           return mr;
-        if (sameValue(mr, bs))
+        if (ValueUtils::sameValue(mr, bs))
           return ml;
       }
     }
@@ -132,14 +104,15 @@ static bool isLoopIvBoundedBy(Value idx, Value bs) {
   auto forOp = dyn_cast_or_null<scf::ForOp>(parentOp);
   if (!forOp || forOp.getInductionVar() != barg)
     return false;
-  Value ub = stripClampOne(forOp.getUpperBound());
-  Value bsStripped = stripClampOne(bs);
-  if (sameValue(ub, bsStripped))
+  Value ub = ValueUtils::stripClampOne(forOp.getUpperBound());
+  Value bsStripped = ValueUtils::stripClampOne(bs);
+  if (ValueUtils::sameValue(ub, bsStripped))
     return true;
   if (auto minOp = ub.getDefiningOp<arith::MinUIOp>()) {
-    Value lhs = stripClampOne(minOp.getLhs());
-    Value rhs = stripClampOne(minOp.getRhs());
-    if (sameValue(lhs, bsStripped) || sameValue(rhs, bsStripped))
+    Value lhs = ValueUtils::stripClampOne(minOp.getLhs());
+    Value rhs = ValueUtils::stripClampOne(minOp.getRhs());
+    if (ValueUtils::sameValue(lhs, bsStripped) ||
+        ValueUtils::sameValue(rhs, bsStripped))
       return true;
   }
   return false;

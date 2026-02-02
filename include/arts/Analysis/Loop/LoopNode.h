@@ -80,6 +80,19 @@ public:
   int getNestingDepth() const;
   void clearIVCache() { ivDependencyCache.clear(); }
 
+  //===--------------------------------------------------------------------===//
+  // Loop Classification Methods
+  //===--------------------------------------------------------------------===//
+
+  /// Check if this loop is innermost (contains no nested loops of same type).
+  bool isInnermostLoop() const;
+
+  /// Check if this loop contains EDT operations (worker loop in ARTS).
+  bool hasEdt() const;
+
+  /// Check if two loops have compatible bounds for fusion (lower, upper, step).
+  static bool haveCompatibleBounds(LoopNode *a, LoopNode *b);
+
 private:
   Operation *loopOp;
   std::string hierId;
