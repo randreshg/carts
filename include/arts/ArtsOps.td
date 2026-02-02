@@ -373,6 +373,12 @@ def DbAcquireOp : Arts_Op<"db_acquire", [AttrSizedOperandSegments]> {
 
     /// Clear all partition hints (operands and segment attributes).
     void clearPartitionHints();
+
+    /// Check if all partition entries have fine_grained mode.
+    /// Returns true if hasMultiplePartitionEntries() and all entry modes are
+    /// fine_grained. Used to distinguish task dependency patterns from stencil
+    /// patterns.
+    bool hasAllFineGrainedEntries();
   }];
 }
 

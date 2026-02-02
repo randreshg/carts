@@ -5,6 +5,7 @@
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/ArtsDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -13,6 +14,7 @@
 #include "mlir/Transforms/CSE.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "polygeist/Ops.h"
+#include "llvm/ADT/StringSet.h"
 #include <algorithm>
 #include <cassert>
 
@@ -22,6 +24,36 @@ ARTS_DEBUG_SETUP(arts_utils);
 
 namespace mlir {
 namespace arts {
+
+///===----------------------------------------------------------------------===///
+/// ARTS Runtime Query Utilities
+///===----------------------------------------------------------------------===///
+
+/// Known ARTS runtime query function names that are safe for partitioning.
+/// These functions return deterministic values within an EDT context.
+static const llvm::StringSet<> ArtsRuntimeQueries = {
+    "artsGetCurrentNode", "artsGetTotalNodes", "artsGetCurrentWorker",
+    "artsGetTotalWorkers"};
+
+bool isArtsRuntimeQuery(Value val) {
+  if (!val)
+    return false;
+
+  val = ValueUtils::stripNumericCasts(val);
+  Operation *defOp = val.getDefiningOp();
+  if (!defOp)
+    return false;
+
+  /// Check for ARTS dialect ops (before lowering to func::CallOp)
+  if (isa<GetCurrentNodeOp, GetTotalNodesOp>(defOp))
+    return true;
+
+  /// Check for func::CallOp (after lowering)
+  if (auto callOp = dyn_cast<func::CallOp>(defOp))
+    return ArtsRuntimeQueries.contains(callOp.getCallee());
+
+  return false;
+}
 
 ///===----------------------------------------------------------------------===///
 /// IR Simplification Utilities
@@ -241,10 +273,11 @@ std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
     return val;
 
   /// Case 2/3: minui/minsi pattern - return the larger constant (nominal size)
-  if (auto minOp = sizeHint.getDefiningOp<arith::MinUIOp>()) {
+  /// Helper to handle min operations uniformly
+  auto handleMinOp = [&](Value lhs, Value rhs) -> std::optional<int64_t> {
     int64_t lhsVal = 0, rhsVal = 0;
-    bool hasLhs = ValueUtils::getConstantIndex(minOp.getLhs(), lhsVal);
-    bool hasRhs = ValueUtils::getConstantIndex(minOp.getRhs(), rhsVal);
+    bool hasLhs = ValueUtils::getConstantIndex(lhs, lhsVal);
+    bool hasRhs = ValueUtils::getConstantIndex(rhs, rhsVal);
 
     if (hasLhs && hasRhs)
       return std::max(lhsVal, rhsVal);
@@ -253,37 +286,24 @@ std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
     if (hasRhs)
       return rhsVal;
 
-    /// Recurse for nested minui
-    auto lhsExtracted = extractBlockSizeFromHint(minOp.getLhs(), depth + 1);
-    auto rhsExtracted = extractBlockSizeFromHint(minOp.getRhs(), depth + 1);
+    auto lhsExtracted = extractBlockSizeFromHint(lhs, depth + 1);
+    auto rhsExtracted = extractBlockSizeFromHint(rhs, depth + 1);
     if (lhsExtracted && rhsExtracted)
       return std::max(*lhsExtracted, *rhsExtracted);
     if (lhsExtracted)
       return lhsExtracted;
     if (rhsExtracted)
       return rhsExtracted;
+    return std::nullopt;
+  };
+
+  if (auto minOp = sizeHint.getDefiningOp<arith::MinUIOp>()) {
+    if (auto result = handleMinOp(minOp.getLhs(), minOp.getRhs()))
+      return result;
   }
   if (auto minOp = sizeHint.getDefiningOp<arith::MinSIOp>()) {
-    int64_t lhsVal = 0, rhsVal = 0;
-    bool hasLhs = ValueUtils::getConstantIndex(minOp.getLhs(), lhsVal);
-    bool hasRhs = ValueUtils::getConstantIndex(minOp.getRhs(), rhsVal);
-
-    if (hasLhs && hasRhs)
-      return std::max(lhsVal, rhsVal);
-    if (hasLhs)
-      return lhsVal;
-    if (hasRhs)
-      return rhsVal;
-
-    /// Recurse for nested minsi
-    auto lhsExtracted = extractBlockSizeFromHint(minOp.getLhs(), depth + 1);
-    auto rhsExtracted = extractBlockSizeFromHint(minOp.getRhs(), depth + 1);
-    if (lhsExtracted && rhsExtracted)
-      return std::max(*lhsExtracted, *rhsExtracted);
-    if (lhsExtracted)
-      return lhsExtracted;
-    if (rhsExtracted)
-      return rhsExtracted;
+    if (auto result = handleMinOp(minOp.getLhs(), minOp.getRhs()))
+      return result;
   }
 
   /// Case 4: addi pattern - stencil halo adjustment
@@ -370,10 +390,11 @@ std::optional<int64_t> extractBlockSizeForAllocation(Value sizeHint,
     return val;
 
   /// Case 2: minui/minsi pattern - return the larger constant (nominal size)
-  if (auto minOp = sizeHint.getDefiningOp<arith::MinUIOp>()) {
+  /// Helper to handle min operations uniformly
+  auto handleMinOp = [&](Value lhs, Value rhs) -> std::optional<int64_t> {
     int64_t lhsVal = 0, rhsVal = 0;
-    bool hasLhs = ValueUtils::getConstantIndex(minOp.getLhs(), lhsVal);
-    bool hasRhs = ValueUtils::getConstantIndex(minOp.getRhs(), rhsVal);
+    bool hasLhs = ValueUtils::getConstantIndex(lhs, lhsVal);
+    bool hasRhs = ValueUtils::getConstantIndex(rhs, rhsVal);
 
     if (hasLhs && hasRhs)
       return std::max(lhsVal, rhsVal);
@@ -382,41 +403,24 @@ std::optional<int64_t> extractBlockSizeForAllocation(Value sizeHint,
     if (hasRhs)
       return rhsVal;
 
-    /// Recurse for nested minui
-    auto lhsExtracted =
-        extractBlockSizeForAllocation(minOp.getLhs(), depth + 1);
-    auto rhsExtracted =
-        extractBlockSizeForAllocation(minOp.getRhs(), depth + 1);
+    auto lhsExtracted = extractBlockSizeForAllocation(lhs, depth + 1);
+    auto rhsExtracted = extractBlockSizeForAllocation(rhs, depth + 1);
     if (lhsExtracted && rhsExtracted)
       return std::max(*lhsExtracted, *rhsExtracted);
     if (lhsExtracted)
       return lhsExtracted;
     if (rhsExtracted)
       return rhsExtracted;
+    return std::nullopt;
+  };
+
+  if (auto minOp = sizeHint.getDefiningOp<arith::MinUIOp>()) {
+    if (auto result = handleMinOp(minOp.getLhs(), minOp.getRhs()))
+      return result;
   }
   if (auto minOp = sizeHint.getDefiningOp<arith::MinSIOp>()) {
-    int64_t lhsVal = 0, rhsVal = 0;
-    bool hasLhs = ValueUtils::getConstantIndex(minOp.getLhs(), lhsVal);
-    bool hasRhs = ValueUtils::getConstantIndex(minOp.getRhs(), rhsVal);
-
-    if (hasLhs && hasRhs)
-      return std::max(lhsVal, rhsVal);
-    if (hasLhs)
-      return lhsVal;
-    if (hasRhs)
-      return rhsVal;
-
-    /// Recurse for nested minsi
-    auto lhsExtracted =
-        extractBlockSizeForAllocation(minOp.getLhs(), depth + 1);
-    auto rhsExtracted =
-        extractBlockSizeForAllocation(minOp.getRhs(), depth + 1);
-    if (lhsExtracted && rhsExtracted)
-      return std::max(*lhsExtracted, *rhsExtracted);
-    if (lhsExtracted)
-      return lhsExtracted;
-    if (rhsExtracted)
-      return rhsExtracted;
+    if (auto result = handleMinOp(minOp.getLhs(), minOp.getRhs()))
+      return result;
   }
 
   /// Case 3: addi pattern - INCLUDE the halo adjustment for allocation

@@ -111,36 +111,6 @@ static bool allOperandsDominate(Operation *op, Operation *insertPoint,
   return true;
 }
 
-static bool isConstantAtLeastOne(Value v) {
-  if (!v)
-    return false;
-  int64_t val = 0;
-  if (ValueUtils::getConstantIndex(v, val))
-    return val >= 1;
-  if (auto cst = v.getDefiningOp<arith::ConstantOp>()) {
-    if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue()))
-      return intAttr.getInt() >= 1;
-  }
-  return false;
-}
-
-static bool isProvablyNonZero(Value v, unsigned depth = 0) {
-  if (!v || depth > 4)
-    return false;
-  v = ValueUtils::stripNumericCasts(v);
-  if (isConstantAtLeastOne(v))
-    return true;
-  if (auto maxui = v.getDefiningOp<arith::MaxUIOp>()) {
-    return isProvablyNonZero(maxui.getLhs(), depth + 1) ||
-           isProvablyNonZero(maxui.getRhs(), depth + 1);
-  }
-  if (auto maxsi = v.getDefiningOp<arith::MaxSIOp>()) {
-    return isProvablyNonZero(maxsi.getLhs(), depth + 1) ||
-           isProvablyNonZero(maxsi.getRhs(), depth + 1);
-  }
-  return false;
-}
-
 static bool isSafeDivRemToHoist(Operation *op, scf::ForOp loop,
                                 DominanceInfo &domInfo) {
   if (!loop || !loop->isAncestor(op))
@@ -153,7 +123,7 @@ static bool isSafeDivRemToHoist(Operation *op, scf::ForOp loop,
   else
     return false;
 
-  if (!isProvablyNonZero(denom))
+  if (!ValueUtils::isProvablyNonZero(denom))
     return false;
   if (!allOperandsDominate(op, loop, domInfo))
     return false;
@@ -209,20 +179,10 @@ void DataPointerHoistingPass::runOnOperation() {
   ModuleOp module = getOperation();
   ARTS_INFO_HEADER(DataPointerHoistingPass);
 
-  int hoistedCount = 0;
-  int divRemHoisted = 0;
-  int dbPtrHoisted = 0;
-  int m2rHoisted = 0;
-
-  /// Process each function
+  int hoistedCount = 0, divRemHoisted = 0, dbPtrHoisted = 0, m2rHoisted = 0;
   module.walk([&](func::FuncOp funcOp) {
     bool isEdt = funcOp.getName().starts_with("__arts_edt_");
-
-    ARTS_DEBUG_TYPE("Processing function: " << funcOp.getName());
-
-    /// Collect loads to hoist (don't modify while iterating)
     SmallVector<std::pair<LLVM::LoadOp, scf::ForOp>> loadsToHoist;
-
     DominanceInfo domInfo(funcOp);
     if (isEdt) {
       funcOp.walk([&](LLVM::LoadOp loadOp) {

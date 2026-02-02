@@ -10,6 +10,7 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/RemovalUtils.h"
 #include "arts/Utils/ValueUtils.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
@@ -41,6 +42,9 @@ ArtsMode combineAccessModes(ArtsMode mode1, ArtsMode mode2);
 
 /// Type Casting and Conversion Utilities
 Value castToIndex(Value value, OpBuilder &builder, Location loc);
+
+/// ARTS Runtime Query Utilities
+bool isArtsRuntimeQuery(Value val);
 
 /// Pattern Recognition and Analysis Utilities
 std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth = 0);

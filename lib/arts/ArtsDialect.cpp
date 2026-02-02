@@ -586,6 +586,16 @@ void DbAcquireOp::clearPartitionHints() {
     removePartitionEntryModesAttr();
 }
 
+bool DbAcquireOp::hasAllFineGrainedEntries() {
+  if (!hasMultiplePartitionEntries())
+    return false;
+  for (size_t i = 0; i < getNumPartitionEntries(); ++i) {
+    if (getPartitionEntryMode(i) != PartitionMode::fine_grained)
+      return false;
+  }
+  return true;
+}
+
 /// Helper to add DbAcquireOp operands and attributes to OperationState
 static void addDbAcquireOperandsAndAttrs(
     OpBuilder &builder, OperationState &state, ArtsMode mode, Value sourceGuid,

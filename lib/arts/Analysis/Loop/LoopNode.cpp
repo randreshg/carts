@@ -10,6 +10,7 @@
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -264,31 +265,20 @@ LoopNode::IVExpr LoopNode::analyzeIndexExpr(Value index) {
   if (!defOp)
     return result;
 
-  /// Helper to get constant value from arith ops
-  auto getConstantValue = [](Value v) -> std::optional<int64_t> {
-    return ValueUtils::getConstantValue(v);
-  };
-
   /// Handle arith::AddIOp: iv + constant or constant + iv
   if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
     Value lhs = addOp.getLhs();
     Value rhs = addOp.getRhs();
 
-    /// Check if one operand is the IV and the other is constant
-    if (lhs == iv || dependsOnInductionVar(lhs)) {
-      /// Recursively analyze lhs if it's derived from IV
-      if (lhs == iv) {
-        if (auto constVal = getConstantValue(rhs)) {
-          result.offset = *constVal;
-          result.multiplier = 1;
-        }
+    if (lhs == iv) {
+      if (auto constVal = ValueUtils::getConstantValue(rhs)) {
+        result.offset = *constVal;
+        result.multiplier = 1;
       }
-    } else if (rhs == iv || dependsOnInductionVar(rhs)) {
-      if (rhs == iv) {
-        if (auto constVal = getConstantValue(lhs)) {
-          result.offset = *constVal;
-          result.multiplier = 1;
-        }
+    } else if (rhs == iv) {
+      if (auto constVal = ValueUtils::getConstantValue(lhs)) {
+        result.offset = *constVal;
+        result.multiplier = 1;
       }
     }
     return result;
@@ -296,11 +286,8 @@ LoopNode::IVExpr LoopNode::analyzeIndexExpr(Value index) {
 
   /// Handle arith::SubIOp: iv - constant
   if (auto subOp = dyn_cast<arith::SubIOp>(defOp)) {
-    Value lhs = subOp.getLhs();
-    Value rhs = subOp.getRhs();
-
-    if (lhs == iv) {
-      if (auto constVal = getConstantValue(rhs)) {
+    if (subOp.getLhs() == iv) {
+      if (auto constVal = ValueUtils::getConstantValue(subOp.getRhs())) {
         result.offset = -(*constVal);
         result.multiplier = 1;
       }
@@ -314,12 +301,12 @@ LoopNode::IVExpr LoopNode::analyzeIndexExpr(Value index) {
     Value rhs = mulOp.getRhs();
 
     if (lhs == iv) {
-      if (auto constVal = getConstantValue(rhs)) {
+      if (auto constVal = ValueUtils::getConstantValue(rhs)) {
         result.offset = 0;
         result.multiplier = *constVal;
       }
     } else if (rhs == iv) {
-      if (auto constVal = getConstantValue(lhs)) {
+      if (auto constVal = ValueUtils::getConstantValue(lhs)) {
         result.offset = 0;
         result.multiplier = *constVal;
       }
@@ -392,4 +379,81 @@ int LoopNode::getNestingDepth() const {
       ++depth;
   }
   return depth;
+}
+
+//===----------------------------------------------------------------------===//
+// Loop Classification Methods
+//===----------------------------------------------------------------------===//
+
+bool LoopNode::isInnermostLoop() const {
+  if (!loopOp)
+    return false;
+
+  bool hasNested = false;
+  loopOp->walk([&](Operation *op) {
+    if (op == loopOp)
+      return;
+    if (isa<scf::ForOp, scf::WhileOp, scf::ParallelOp, arts::ForOp>(op))
+      hasNested = true;
+  });
+  return !hasNested;
+}
+
+bool LoopNode::hasEdt() const {
+  if (!loopOp)
+    return false;
+
+  bool foundEdt = false;
+  loopOp->walk([&](EdtOp) { foundEdt = true; });
+  return foundEdt;
+}
+
+bool LoopNode::haveCompatibleBounds(LoopNode *a, LoopNode *b) {
+  if (!a || !b)
+    return false;
+
+  auto *opA = a->getLoopOp();
+  auto *opB = b->getLoopOp();
+
+  /// Handle scf::ForOp
+  if (auto forA = dyn_cast<scf::ForOp>(opA)) {
+    auto forB = dyn_cast<scf::ForOp>(opB);
+    if (!forB)
+      return false;
+
+    return ValueUtils::sameValue(forA.getLowerBound(), forB.getLowerBound()) &&
+           ValueUtils::sameValue(forA.getUpperBound(), forB.getUpperBound()) &&
+           ValueUtils::sameValue(forA.getStep(), forB.getStep());
+  }
+
+  /// Handle arts::ForOp
+  if (auto artsForA = dyn_cast<arts::ForOp>(opA)) {
+    auto artsForB = dyn_cast<arts::ForOp>(opB);
+    if (!artsForB)
+      return false;
+
+    /// Compare lower bounds
+    auto lbA = artsForA.getLowerBound();
+    auto lbB = artsForB.getLowerBound();
+    if (lbA.size() != lbB.size())
+      return false;
+    for (size_t i = 0; i < lbA.size(); ++i) {
+      if (!ValueUtils::sameValue(lbA[i], lbB[i]))
+        return false;
+    }
+
+    /// Compare upper bounds
+    auto ubA = artsForA.getUpperBound();
+    auto ubB = artsForB.getUpperBound();
+    if (ubA.size() != ubB.size())
+      return false;
+    for (size_t i = 0; i < ubA.size(); ++i) {
+      if (!ValueUtils::sameValue(ubA[i], ubB[i]))
+        return false;
+    }
+
+    return true;
+  }
+
+  return false;
 }

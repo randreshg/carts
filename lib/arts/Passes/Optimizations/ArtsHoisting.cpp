@@ -30,6 +30,9 @@ using namespace mlir::arts;
 // Shared Utilities
 //===----------------------------------------------------------------------===//
 
+/// Conservative loop invariance check for hoisting safety.
+/// Returns true if: value is null, defined outside loop, OR constant after
+/// stripping casts.
 static bool isLoopInvariant(scf::ForOp loop, Value v) {
   if (!v)
     return true;
@@ -39,45 +42,14 @@ static bool isLoopInvariant(scf::ForOp loop, Value v) {
   return ValueUtils::isValueConstant(stripped);
 }
 
-static bool isConstantAtLeastOne(Value v) {
-  if (!v)
-    return false;
-  v = ValueUtils::stripNumericCasts(v);
-  int64_t val = 0;
-  if (ValueUtils::getConstantIndex(v, val))
-    return val >= 1;
-  if (auto cst = v.getDefiningOp<arith::ConstantOp>()) {
-    if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue()))
-      return intAttr.getInt() >= 1;
-  }
-  return false;
-}
-
-static bool isProvablyNonZero(Value v, unsigned depth = 0) {
-  if (!v || depth > 4)
-    return false;
-  v = ValueUtils::stripNumericCasts(v);
-  if (isConstantAtLeastOne(v))
-    return true;
-  if (auto maxui = v.getDefiningOp<arith::MaxUIOp>()) {
-    return isProvablyNonZero(maxui.getLhs(), depth + 1) ||
-           isProvablyNonZero(maxui.getRhs(), depth + 1);
-  }
-  if (auto maxsi = v.getDefiningOp<arith::MaxSIOp>()) {
-    return isProvablyNonZero(maxsi.getLhs(), depth + 1) ||
-           isProvablyNonZero(maxsi.getRhs(), depth + 1);
-  }
-  return false;
-}
-
 static bool isSafeToHoistNonSpeculatableOp(scf::ForOp loop, Operation *op) {
   if (auto div = dyn_cast<arith::DivUIOp>(op)) {
     Value denom = div.getRhs();
-    return isLoopInvariant(loop, denom) && isProvablyNonZero(denom);
+    return isLoopInvariant(loop, denom) && ValueUtils::isProvablyNonZero(denom);
   }
   if (auto rem = dyn_cast<arith::RemUIOp>(op)) {
     Value denom = rem.getRhs();
-    return isLoopInvariant(loop, denom) && isProvablyNonZero(denom);
+    return isLoopInvariant(loop, denom) && ValueUtils::isProvablyNonZero(denom);
   }
   return false;
 }
@@ -260,16 +232,14 @@ static bool usesAreSafe(scf::ForOp loop, DbAcquireOp acq) {
   auto checkUses = [&](Value v) -> bool {
     for (OpOperand &use : v.getUses()) {
       Operation *owner = use.getOwner();
-      if (auto rel = dyn_cast<DbReleaseOp>(owner)) {
+      if (isa<DbReleaseOp>(owner)) {
         /// Allow releases only inside loop (handled separately).
-        if (!loop->isAncestor(rel))
+        if (!loop->isAncestor(owner))
           return false;
-        if (rel->getParentOfType<EdtOp>())
-          continue;
         continue;
       }
-      if (auto edt = dyn_cast<EdtOp>(owner)) {
-        if (!loop->isAncestor(edt))
+      if (isa<EdtOp>(owner)) {
+        if (!loop->isAncestor(owner))
           return false;
         continue;
       }
@@ -280,9 +250,7 @@ static bool usesAreSafe(scf::ForOp loop, DbAcquireOp acq) {
           return false;
         continue;
       }
-      /// Other uses inside the loop are conservatively rejected.
-      if (loop->isAncestor(owner))
-        return false;
+      /// Reject any other uses.
       return false;
     }
     return true;
