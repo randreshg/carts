@@ -540,12 +540,12 @@ def main_callback(
 # Build Command
 # ============================================================================
 
-# Counter profile mapping: level -> config file name
+# Counter profile mapping: level -> config file name (in carts/config/)
 COUNTER_PROFILES = {
-    0: "counter.profile-none.cfg",      # All OFF - baseline performance
-    1: "counter.profile-timing.cfg",    # Timing only - minimal overhead (DEFAULT)
-    2: "counter.profile-artsid-only.cfg",  # ArtsID metrics for hotspot analysis
-    3: "counter.profile-deep.cfg",       # Full captures for deep profiling
+    0: "profile-none.cfg",       # All OFF - baseline performance
+    1: "profile-timing.cfg",     # Timing only - minimal overhead (DEFAULT)
+    2: "profile-workload.cfg",   # Workload characterization at CLUSTER level
+    3: "profile-overhead.cfg",   # Full overhead analysis at CLUSTER level
 }
 
 
@@ -561,7 +561,10 @@ def build(
         help="Debug level: 0=off (default), 1=info, 2=full debug"),
     counters_level: int = typer.Option(
         1, "--counters",
-        help="Counter profile: 0=off, 1=timing (default), 2=artsid, 3=deep"),
+        help="Counter profile: 0=off, 1=timing (default), 2=workload, 3=overhead"),
+    counter_config: Optional[Path] = typer.Option(
+        None, "--counter-config",
+        help="Custom counter configuration file path (overrides --counters)"),
 ):
     """Build CARTS project using system clang."""
     config = get_config()
@@ -607,10 +610,20 @@ def build(
 
     # Always pass counter config path for ARTS builds
     if arts:
-        profile_name = COUNTER_PROFILES.get(
-            counters_level, "counter.profile-none.cfg")
-        counter_config = config.carts_dir / "external" / "arts" / profile_name
-        make_vars.append(f"COUNTER_CONFIG_PATH={counter_config}")
+        if counter_config:
+            # Use custom counter config if provided
+            if not counter_config.exists():
+                print_error(f"Counter config not found: {counter_config}")
+                raise typer.Exit(1)
+            effective_counter_config = counter_config.resolve()
+            console.print(f"Counter config: [{Colors.INFO}]{counter_config}[/{Colors.INFO}]")
+        else:
+            # Use profile based on counters_level (profiles are in carts/config/)
+            profile_name = COUNTER_PROFILES.get(
+                counters_level, "profile-timing.cfg")
+            effective_counter_config = config.carts_dir / "config" / profile_name
+            console.print(f"Counter profile: [{Colors.INFO}]{profile_name}[/{Colors.INFO}]")
+        make_vars.append(f"COUNTER_CONFIG_PATH={effective_counter_config}")
 
     # Pass platform-specific linker path to make
     if config.linker_path:
