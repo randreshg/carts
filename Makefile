@@ -51,8 +51,8 @@ polygeist:
 		-S $(POLYGEIST_DIR) -G Ninja \
 		-DCMAKE_INSTALL_PREFIX=$(POLYGEIST_INSTALL_DIR) \
 		-DCMAKE_BUILD_TYPE=Release \
-		-DCMAKE_C_COMPILER=clang \
-		-DCMAKE_CXX_COMPILER=clang++ \
+		-DCMAKE_C_COMPILER=$(LLVM_INSTALL_DIR)/bin/clang \
+		-DCMAKE_CXX_COMPILER=$(LLVM_INSTALL_DIR)/bin/clang++ \
 		-DMLIR_DIR=$(LLVM_BUILD_DIR)/lib/cmake/mlir \
 		-DClang_DIR=$(LLVM_BUILD_DIR)/lib/cmake/clang \
 		-DLLVM_EXTERNAL_LIT="$(LLVM_BUILD_DIR)/bin/llvm-lit" \
@@ -116,7 +116,7 @@ ARTS_INFO_ENABLED ?= OFF
 ARTS_DEBUG_ENABLED ?= OFF
 # Counter configuration profile (defaults to timing-only for minimal overhead)
 # Available profiles: counter.profile-none.cfg, counter.profile-timing.cfg, counter.profile-artsid-only.cfg, counter.profile-deep.cfg
-COUNTER_CONFIG_PATH ?= $(ARTS_DIR)/counter.profile-timing.cfg
+COUNTER_CONFIG_PATH ?= config/profile-timing.cfg
 
 # Configuration hash file for ARTS build caching
 ARTS_CONFIG_HASH_FILE := $(ARTS_BUILD_DIR)/.arts-build-config
@@ -147,10 +147,11 @@ arts:
 	else \
 		echo "Building ARTS (build_type=$(ARTS_BUILD_TYPE), counters=$(ARTS_USE_COUNTERS), metrics=$(ARTS_USE_METRICS), info=$(ARTS_INFO_ENABLED), debug=$(ARTS_DEBUG_ENABLED), counter_config=$(notdir $(COUNTER_CONFIG_PATH)))..."; \
 		cmake -B $(ARTS_BUILD_DIR) -S $(ARTS_DIR) \
-			-DCMAKE_C_COMPILER=clang \
-			-DCMAKE_CXX_COMPILER=clang++ \
+			-DCMAKE_C_COMPILER=$(LLVM_INSTALL_DIR)/bin/clang \
+			-DCMAKE_CXX_COMPILER=$(LLVM_INSTALL_DIR)/bin/clang++ \
 			-DCMAKE_BUILD_TYPE=$(ARTS_BUILD_TYPE) \
 			-DUSE_GPU=OFF \
+			-DUSE_HWLOC=OFF \
 			-DUSE_COUNTERS=$(ARTS_USE_COUNTERS) \
 			-DUSE_METRICS=$(ARTS_USE_METRICS) \
 			-DARTS_INFO_ENABLED=$(ARTS_INFO_ENABLED) \
