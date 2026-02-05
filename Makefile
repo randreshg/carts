@@ -116,7 +116,7 @@ ARTS_INFO_ENABLED ?= OFF
 ARTS_DEBUG_ENABLED ?= OFF
 # Counter configuration profile (defaults to timing-only for minimal overhead)
 # Available profiles: counter.profile-none.cfg, counter.profile-timing.cfg, counter.profile-artsid-only.cfg, counter.profile-deep.cfg
-COUNTER_CONFIG_PATH ?= config/profile-timing.cfg
+COUNTER_CONFIG_PATH ?= configs/profile-timing.cfg
 
 # Configuration hash file for ARTS build caching
 ARTS_CONFIG_HASH_FILE := $(ARTS_BUILD_DIR)/.arts-build-config
