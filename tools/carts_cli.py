@@ -621,7 +621,7 @@ def build(
             # Use profile based on counters_level (profiles are in carts/config/)
             profile_name = COUNTER_PROFILES.get(
                 counters_level, "profile-timing.cfg")
-            effective_counter_config = config.carts_dir / "config" / profile_name
+            effective_counter_config = config.carts_dir / "configs" / profile_name
             console.print(f"Counter profile: [{Colors.INFO}]{profile_name}[/{Colors.INFO}]")
         make_vars.append(f"COUNTER_CONFIG_PATH={effective_counter_config}")
 
