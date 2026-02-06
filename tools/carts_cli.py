@@ -270,8 +270,8 @@ class PlatformConfig:
             f"-I{self.system_cxx_include_path}",
         ] if self.system_cxx_include_path else [f"-I{self.system_include_path}"])
 
-        self.clang_library_flags.extend(["-L/usr/lib", "-L/usr/lib64"])
-        self.compile_library_flags.extend(["-L/usr/lib", "-L/usr/lib64"])
+        self.clang_library_flags.extend(["-L/usr/lib64", "-L/usr/lib"])
+        self.compile_library_flags.extend(["-L/usr/lib64", "-L/usr/lib"])
         self.clang_libraries.extend(["-lpthread", "-lrt", "-lstdc++"])
         self.compile_libraries.extend(["-lpthread", "-lrt", "-lstdc++"])
         self.compile_flags.extend(["-fno-pie", "-no-pie"])
