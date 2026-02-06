@@ -6,6 +6,7 @@ carts benchmarks slurm-run \
     --arts-config=configs/arts.cfg \
     --counter-config=configs/profile-timing.cfg \
     --size=extralarge \
+    --runs=5 \
     --time=00:02:00
 
 # Workload profiling with both ARTS counters and Linux HW counters
@@ -14,6 +15,7 @@ carts benchmarks slurm-run \
     --arts-config=configs/arts.cfg \
     --counter-config=configs/profile-workload.cfg \
     --size=extralarge \
+    --runs=1 \
     --time=00:02:00 \
     --perf
 
@@ -23,13 +25,15 @@ carts benchmarks slurm-run \
     --arts-config=configs/arts-32T.cfg \
     --counter-config=configs/profile-timing.cfg \
     --size=extralarge \
-    --time=00:10:00
+    --runs=5 \
+    --time=00:10:00 \
 
 carts benchmarks slurm-run \
     --nodes=1 \
     --arts-config=configs/arts-16T.cfg \
     --counter-config=configs/profile-timing.cfg \
     --size=extralarge \
+    --runs=5 \
     --time=00:10:00
 
 carts benchmarks slurm-run \
@@ -37,6 +41,7 @@ carts benchmarks slurm-run \
     --arts-config=configs/arts-8T.cfg \
     --counter-config=configs/profile-timing.cfg \
     --size=extralarge \
+    --runs=5 \
     --time=00:10:00
 
 carts benchmarks slurm-run \
@@ -44,4 +49,5 @@ carts benchmarks slurm-run \
     --arts-config=configs/arts-4T.cfg \
     --counter-config=configs/profile-timing.cfg \
     --size=extralarge \
+    --runs=5 \
     --time=00:10:00
