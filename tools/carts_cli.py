@@ -385,6 +385,9 @@ class PlatformConfig:
                 self.carts_install_dir / "lib",
                 self.arts_install_dir / "lib",
                 self.llvm_install_dir / "lib",
+                self.carts_install_dir / "lib64",
+                self.arts_install_dir / "lib64",
+                self.llvm_install_dir / "lib64",
                 self.llvm_lib_path,
             ]
 
