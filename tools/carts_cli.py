@@ -323,9 +323,12 @@ class PlatformConfig:
         # Library flags
         base_lib_flags = [
             f"-L{self.carts_install_dir}/lib",
+            f"-L{self.carts_install_dir}/lib64",
             f"-L{self.arts_install_dir}/lib",
+            f"-L{self.arts_install_dir}/lib64",
             f"-L{self.llvm_lib_path}",
             f"-L{self.llvm_install_dir}/lib",
+            f"-L{self.llvm_install_dir}/lib64",
         ]
         self.clang_library_flags = base_lib_flags + self.clang_library_flags
         self.compile_library_flags = base_lib_flags + self.compile_library_flags
