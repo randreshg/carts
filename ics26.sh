@@ -1,0 +1,47 @@
+#!/bin/bash
+
+# Main experiment (CARTS vs. OMP in single node) + multi-node scaling
+carts benchmarks slurm-run \
+    --nodes=1,2,4,8,16,32 \
+    --arts-config=configs/arts.cfg \
+    --counter-config=configs/profile-timing.cfg \
+    --size=extralarge \
+    --time=00:02:00
+
+# Workload profiling with both ARTS counters and Linux HW counters
+carts benchmarks slurm-run \
+    --nodes=1 \
+    --arts-config=configs/arts.cfg \
+    --counter-config=configs/profile-workload.cfg \
+    --size=extralarge \
+    --time=00:02:00 \
+    --perf
+
+# Single node multi-thread scaling with 32, 16, 8, and 4 threads (ARTS vs. OMP)
+carts benchmarks slurm-run \
+    --nodes=1 \
+    --arts-config=configs/arts-32T.cfg \
+    --counter-config=configs/profile-timing.cfg \
+    --size=extralarge \
+    --time=00:10:00
+
+carts benchmarks slurm-run \
+    --nodes=1 \
+    --arts-config=configs/arts-16T.cfg \
+    --counter-config=configs/profile-timing.cfg \
+    --size=extralarge \
+    --time=00:10:00
+
+carts benchmarks slurm-run \
+    --nodes=1 \
+    --arts-config=configs/arts-8T.cfg \
+    --counter-config=configs/profile-timing.cfg \
+    --size=extralarge \
+    --time=00:10:00
+
+carts benchmarks slurm-run \
+    --nodes=1 \
+    --arts-config=configs/arts-4T.cfg \
+    --counter-config=configs/profile-timing.cfg \
+    --size=extralarge \
+    --time=00:10:00
