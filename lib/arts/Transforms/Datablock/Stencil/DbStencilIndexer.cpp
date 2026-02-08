@@ -229,6 +229,7 @@ void DbStencilIndexer::transformDbRefUsers(
   };
   using OffsetMap = llvm::DenseMap<int64_t, RowSelection>;
   llvm::DenseMap<Operation *, OffsetMap> rowSelectionCache;
+  llvm::DenseMap<Operation *, Value> rowExtentCache;
 
   auto isSameValueWithCasts = [&](Value a, Value b) -> bool {
     if (!a || !b)
@@ -362,6 +363,16 @@ void DbStencilIndexer::transformDbRefUsers(
       return;
     }
 
+    Value ownedRows = blockSize;
+    int64_t stepConst = 0;
+    if (ValueUtils::getConstantIndex(rowLoop.getStep(), stepConst) &&
+        stepConst == 1) {
+      Value lb = rowLoop.getLowerBound();
+      Value ub = rowLoop.getUpperBound();
+      if (lb && ub && ValueUtils::isZeroConstant(lb))
+        ownedRows = ub;
+    }
+
     Value selectedRowIdx = localRow;
     Value selectedMemref = ownedMemref;
 
@@ -372,7 +383,7 @@ void DbStencilIndexer::transformDbRefUsers(
     } else if (region == RegionKind::Right && rowOffset > 0) {
       selectedMemref = rightMemref ? rightMemref : ownedMemref;
       selectedRowIdx =
-          builder.create<arith::SubIOp>(userLoc, localRow, blockSize);
+          builder.create<arith::SubIOp>(userLoc, localRow, ownedRows);
     }
 
     /// Build full index lists by replacing the partitioned dimension.
@@ -647,16 +658,18 @@ void DbStencilIndexer::transformDbRefUsers(
   }
 
   auto buildSelection = [&](OpBuilder &selBuilder, Location selLoc,
-                            Value localRowVal) -> RowSelection {
+                            Value localRowVal,
+                            Value ownedRowsVal) -> RowSelection {
+    Value ownedRows = ownedRowsVal ? ownedRowsVal : blockSize;
     Value isLeft = selBuilder.create<arith::CmpIOp>(
         selLoc, arith::CmpIPredicate::slt, localRowVal, zero);
     Value leftIdx =
         selBuilder.create<arith::AddIOp>(selLoc, localRowVal, haloLeft);
     Value ownedIdx = localRowVal;
     Value rightIdx =
-        selBuilder.create<arith::SubIOp>(selLoc, localRowVal, blockSize);
+        selBuilder.create<arith::SubIOp>(selLoc, localRowVal, ownedRows);
 
-    Value clampedOwnedIdx = clampIndex(ownedIdx, blockSize, selBuilder, selLoc);
+    Value clampedOwnedIdx = clampIndex(ownedIdx, ownedRows, selBuilder, selLoc);
     Value clampedLeftIdx =
         leftMemref ? clampIndex(leftIdx, haloLeft, selBuilder, selLoc)
                    : Value();
@@ -698,7 +711,7 @@ void DbStencilIndexer::transformDbRefUsers(
 
     if (rightMemref) {
       Value isRight = selBuilder.create<arith::CmpIOp>(
-          selLoc, arith::CmpIPredicate::sge, localRowVal, blockSize);
+          selLoc, arith::CmpIPredicate::sge, localRowVal, ownedRows);
 
       Value safeRightMemref =
           rightPtrNotNull
@@ -829,6 +842,22 @@ void DbStencilIndexer::transformDbRefUsers(
         bool includesBaseOffset = false;
         if (deriveRowOffset(globalRow, rowIV, baseOffset, rowOffset,
                             includesBaseOffset)) {
+          Value ownedRows = blockSize;
+          auto extentIt = rowExtentCache.find(rowLoop.getOperation());
+          if (extentIt != rowExtentCache.end()) {
+            ownedRows = extentIt->second;
+          } else {
+            int64_t stepConst = 0;
+            if (ValueUtils::getConstantIndex(rowLoop.getStep(), stepConst) &&
+                stepConst == 1) {
+              Value lb = rowLoop.getLowerBound();
+              Value ub = rowLoop.getUpperBound();
+              if (lb && ub && ValueUtils::isZeroConstant(lb))
+                ownedRows = ub;
+            }
+            rowExtentCache[rowLoop.getOperation()] = ownedRows;
+          }
+
           ARTS_DEBUG("  ESD row selection: offset=" << rowOffset);
           auto &offsetMap = rowSelectionCache[rowLoop.getOperation()];
           auto it = offsetMap.find(rowOffset);
@@ -855,7 +884,7 @@ void DbStencilIndexer::transformDbRefUsers(
             }
 
             RowSelection selection =
-                buildSelection(builder, rowLoc, localRowHoisted);
+                buildSelection(builder, rowLoc, localRowHoisted, ownedRows);
             selectedMemref = selection.memref;
             selectedRowIdx = selection.rowIdx;
             offsetMap[rowOffset] = selection;
@@ -925,12 +954,12 @@ void DbStencilIndexer::transformDbRefUsers(
                          : globalRow;
 
           RowSelection selection =
-              buildSelection(builder, userLoc, localRowHoisted);
+              buildSelection(builder, userLoc, localRowHoisted, blockSize);
           selectedMemref = selection.memref;
           selectedRowIdx = selection.rowIdx;
         }
 
-        if (selectedMemref && selectedRowIdx)
+        if (!usedRowSelection && selectedMemref && selectedRowIdx)
           selectionCache[globalRow] = {selectedMemref, selectedRowIdx};
       }
 

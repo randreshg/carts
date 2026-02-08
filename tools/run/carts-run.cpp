@@ -320,7 +320,7 @@ void setupLoopReordering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(createCSEPass());
 }
 
-/// Db creation pass.
+/// DB creation pass.
 void setupCreateDbs(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createCreateDbsPass(AM));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
@@ -330,7 +330,7 @@ void setupCreateDbs(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
 }
 
-/// Db creation and optimization passes.
+/// DB creation and optimization passes.
 void setupDbOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createDbPass(AM));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
@@ -352,14 +352,14 @@ void setupConcurrency(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createConcurrencyPass(AM));
   pm.addPass(arts::createArtsForOptimizationPass(AM));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  /// TODO: Add an EDT Distribution pass here
   pm.addPass(arts::createForLoweringPass());
 }
 
 /// Concurrency optimization passes.
 void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
-  /// Convert parallel EDTs into single EDTs (also sinks external allocas).
+  /// EDT optimization
   pm.addPass(arts::createEdtPass(AM, /*runAnalysis*/ false));
-  /// Remove dead code after EDT transformations.
   pm.addPass(arts::createDeadCodeEliminationPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
@@ -373,6 +373,7 @@ void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createArtsHoistingPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
+  /// Others
   pm.addPass(arts::createEdtAllocaSinkingPass());
   pm.addPass(arts::createDeadCodeEliminationPass());
   pm.addPass(createMem2Reg());
@@ -383,8 +384,6 @@ void setupEpochs(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createCreateEpochsPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  // pm.addPass(createMem2Reg());
-  // pm.addPass(polygeist::createPolygeistCanonicalizePass());
 }
 
 /// Pre-lowering passes.
@@ -458,9 +457,7 @@ setupPassManager(ModuleOp module, MLIRContext &context,
       std::make_unique<arts::ArtsAnalysisManager>(
           module, ArtsConfig, MetadataFile, partitionFallback);
 
-  /// Load metadata from JSON file early to attach to omp.wsloop operations
-  /// BEFORE ConvertOpenMPToArts converts them to arts.for.
-  /// This enables trip count and parallelism info to flow through the pipeline.
+  /// Load metadata from JSON file
   (void)AM->getMetadataManager();
 
   /// Canonicalize memrefs
@@ -476,9 +473,7 @@ setupPassManager(ModuleOp module, MLIRContext &context,
   if (stopAt == PipelineStage::CanonicalizeMemrefs)
     return success();
 
-  /// Metadata collection - run early to attach arts.loop attributes
-  /// BEFORE InitialCleanup's createLowerAffinePass() loses metadata.
-  /// This enables downstream passes (ForLowering) to access trip counts.
+  /// Metadata collection
   {
     PassManager pm(&context);
     bool shouldExport = (stopAt == PipelineStage::CollectMetadata);
@@ -533,8 +528,7 @@ setupPassManager(ModuleOp module, MLIRContext &context,
   if (stopAt == PipelineStage::EdtTransforms)
     return success();
 
-  /// Loop reordering - reorder inner loops for cache-optimal access patterns
-  /// MUST run BEFORE CreateDbs to preserve SSA value relationships
+  /// Loop reordering
   {
     PassManager pm(&context);
     setupLoopReordering(pm, AM.get());

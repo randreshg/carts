@@ -426,9 +426,17 @@ private:
   /// ESD path: artsRecordDepAt(dbGuid, edtGuid, slot, mode, offset, size)
   void emitRecordDepCall(Value dbGuidValue, Value edtGuidValue,
                          Value currentSlotI32, Value modeValue,
-                         Value byteOffsetI64,
-                         Value byteSizeI64, Location loc) const {
-    if (byteOffsetI64 && byteSizeI64) {
+                         Value byteOffsetI64, Value byteSizeI64,
+                         Location loc) const {
+    bool useRecordDepAt = byteOffsetI64 && byteSizeI64;
+    /// byte_sizes=0 marks "no partial slice" for non-ESD dependencies.
+    /// Fall back to full-db dependency in that case.
+    if (useRecordDepAt && ValueUtils::isZeroConstant(
+                              ValueUtils::stripNumericCasts(byteSizeI64))) {
+      useRecordDepAt = false;
+    }
+
+    if (useRecordDepAt) {
       /// ESD path: partial slice dependency with byte offset/size
       AC->createRuntimeCall(types::ARTSRTL_artsRecordDepAt,
                             {dbGuidValue, edtGuidValue, currentSlotI32,
@@ -438,8 +446,7 @@ private:
       /// Standard path: full datablock dependency
       AC->createRuntimeCall(
           types::ARTSRTL_artsRecordDep,
-          {dbGuidValue, edtGuidValue, currentSlotI32, modeValue},
-          loc);
+          {dbGuidValue, edtGuidValue, currentSlotI32, modeValue}, loc);
     }
   }
 
@@ -483,13 +490,15 @@ private:
     int32_t modeInt = acquireMode.value_or(static_cast<int32_t>(DbMode::write));
     Value modeValue = AC->createIntConstant(modeInt, AC->Int32, loc);
 
-    /// Prepare ESD values if needed (cast Index to Int64)
-    Value byteOffsetI64 = (byteOffset && byteSize)
-                              ? AC->castToInt(AC->Int64, byteOffset, loc)
-                              : nullptr;
-    Value byteSizeI64 = (byteOffset && byteSize)
-                            ? AC->castToInt(AC->Int64, byteSize, loc)
-                            : nullptr;
+    /// Prepare ESD values if needed (cast Index to Int64).
+    /// byte_size == 0 denotes "no partial slice" and should use full-db deps.
+    bool hasPartialSlice =
+        byteOffset && byteSize &&
+        !ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(byteSize));
+    Value byteOffsetI64 =
+        hasPartialSlice ? AC->castToInt(AC->Int64, byteOffset, loc) : nullptr;
+    Value byteSizeI64 =
+        hasPartialSlice ? AC->castToInt(AC->Int64, byteSize, loc) : nullptr;
 
     if (effectiveBoundsValid) {
       /// GUARDED PATH: boundary workers may have invalid indices

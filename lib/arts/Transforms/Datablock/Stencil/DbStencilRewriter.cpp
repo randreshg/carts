@@ -46,9 +46,15 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
                                          DbAllocOp newAlloc,
                                          OpBuilder &builder) {
   DbAcquireOp acquire = info.acquire;
-  /// Prefer explicit offsets for stencil mode; indices are element coordinates.
+  /// Stencil rewriter needs both:
+  ///   - element offset (for local row rebasing),
+  ///   - chunk index (for owned/halo DB selection).
+  /// Prefer explicit offsets for element base. If present, indices carry a
+  /// chunk-index hint from ForLowering (non-uniform worker chunks).
   Value elemOffset = info.getOffsets().empty() ? info.getElemOffset()
                                                : info.getOffsets().front();
+  Value chunkIndexHint =
+      info.getIndices().empty() ? Value() : info.getIndices().front();
 
   ARTS_DEBUG("DbStencilRewriter::transformAcquire");
 
@@ -93,10 +99,24 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
 
   /// Base-offset semantics: elemOffset is the owned chunk base.
   Value baseOffset = elemOffset ? elemOffset : zero;
+  if (baseOffset && !baseOffset.getType().isIndex())
+    baseOffset = builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
+                                                    baseOffset);
+  if (chunkIndexHint && !chunkIndexHint.getType().isIndex())
+    chunkIndexHint = builder.create<arith::IndexCastOp>(
+        loc, builder.getIndexType(), chunkIndexHint);
 
-  /// Compute chunk index for owned chunk
-  Value startBlock =
-      builder.create<arith::DivUIOp>(loc, baseOffset, plan.getBlockSize(0));
+  /// Compute chunk index for owned chunk.
+  /// For non-uniform worker chunking, ForLowering provides a chunk-index hint.
+  /// Fallback to elementOffset/blockSize for legacy/uniform paths.
+  Value startBlock = chunkIndexHint;
+  if (!startBlock) {
+    Value blockSize = plan.getBlockSize(0);
+    if (!blockSize)
+      blockSize = one;
+    blockSize = builder.create<arith::MaxUIOp>(loc, blockSize, one);
+    startBlock = builder.create<arith::DivUIOp>(loc, baseOffset, blockSize);
+  }
   Value chunkCount = one;
 
   ARTS_DEBUG("  Stencil ESD: chunkIdx=" << startBlock
@@ -126,15 +146,40 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
                         : plan.outerSizes[0];
   Value lastChunkIdx = builder.create<arith::SubIOp>(loc, numBlocks, one);
 
+  /// For non-uniform chunking, derive the logical row count for a given chunk
+  /// index so halo offsets can target the true boundary row (not max block
+  /// size).
+  Value totalRows = oldAlloc.getElementSizes().empty() ? Value()
+                                                       : oldAlloc.getElementSizes().front();
+  if (!totalRows)
+    totalRows = plan.getBlockSize(0);
+  if (totalRows && !totalRows.getType().isIndex())
+    totalRows = builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
+                                                   totalRows);
+
+  auto computeChunkRows = [&](Value chunkIdx) -> Value {
+    if (!totalRows)
+      return plan.getBlockSize(0);
+    Value safeBlocks = builder.create<arith::MaxUIOp>(loc, numBlocks, one);
+    Value baseRows = builder.create<arith::DivUIOp>(loc, totalRows, safeBlocks);
+    Value remainder = builder.create<arith::RemUIOp>(loc, totalRows, safeBlocks);
+    Value hasExtra = builder.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::ult, chunkIdx, remainder);
+    Value extra = builder.create<arith::SelectOp>(loc, hasExtra, one, zero);
+    return builder.create<arith::AddIOp>(loc, baseRows, extra);
+  };
+
   /// Create LEFT HALO acquire (partial: last haloLeft rows of prev chunk)
   unsigned leftHaloArgIdx = ~0u;
   if (haloLeftVal > 0) {
     Value leftChunkIdx = builder.create<arith::SubIOp>(loc, startBlock, one);
 
-    /// element_offsets: start at (blockSize - haloLeft) within prev chunk
+    /// element_offsets: start at (leftChunkRows - haloLeft) within prev chunk
+    Value leftChunkRows = computeChunkRows(leftChunkIdx);
+    Value haloLeftConst =
+        builder.create<arith::ConstantIndexOp>(loc, haloLeftVal);
     Value leftElemOffset = builder.create<arith::SubIOp>(
-        loc, plan.getBlockSize(0),
-        builder.create<arith::ConstantIndexOp>(loc, haloLeftVal));
+        loc, leftChunkRows, haloLeftConst);
 
     /// bounds_valid = (startBlock != 0): valid only if not first chunk
     Value leftValid = builder.create<arith::CmpIOp>(

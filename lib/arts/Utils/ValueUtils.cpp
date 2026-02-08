@@ -177,23 +177,20 @@ std::optional<double> ValueUtils::getConstantFloat(Value v) {
   return std::nullopt;
 }
 
-/// Check if a value is a zero constant (float or integer).
-bool ValueUtils::isZeroConstant(Value v) {
+/// Check if a value equals a given constant (float or integer).
+bool ValueUtils::isConstantEqual(Value v, int64_t val) {
   if (auto cst = getConstantValue(v))
-    return *cst == 0;
+    return *cst == val;
   if (auto cst = getConstantFloat(v))
-    return *cst == 0.0;
+    return *cst == static_cast<double>(val);
   return false;
 }
 
+/// Check if a value is a zero constant (float or integer).
+bool ValueUtils::isZeroConstant(Value v) { return isConstantEqual(v, 0); }
+
 /// Check if a value is a one constant (float or integer).
-bool ValueUtils::isOneConstant(Value v) {
-  if (auto cst = getConstantValue(v))
-    return *cst == 1;
-  if (auto cst = getConstantFloat(v))
-    return *cst == 1.0;
-  return false;
-}
+bool ValueUtils::isOneConstant(Value v) { return isConstantEqual(v, 1); }
 
 /// Check if two values are equivalent after stripping casts
 /// (same Value or same constant).
