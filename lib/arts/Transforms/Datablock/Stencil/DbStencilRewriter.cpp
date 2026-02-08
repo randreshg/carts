@@ -149,8 +149,11 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   /// For non-uniform chunking, derive the logical row count for a given chunk
   /// index so halo offsets can target the true boundary row (not max block
   /// size).
-  Value totalRows = oldAlloc.getElementSizes().empty() ? Value()
-                                                       : oldAlloc.getElementSizes().front();
+  Value totalRows =
+      (plan.stencilInfo && plan.stencilInfo->totalRows)
+          ? plan.stencilInfo->totalRows
+          : (oldAlloc.getElementSizes().empty() ? Value()
+                                                : oldAlloc.getElementSizes().front());
   if (!totalRows)
     totalRows = plan.getBlockSize(0);
   if (totalRows && !totalRows.getType().isIndex())
