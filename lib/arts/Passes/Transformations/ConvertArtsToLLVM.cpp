@@ -1168,11 +1168,11 @@ struct DbNumElementsPattern : public ArtsToLLVMPattern<DbNumElementsOp> {
 
     /// If no sizes are provided, return constant 1 (i32)
     if (sizes.empty()) {
-      rewriter.replaceOp(op, AC->createIntConstant(1, AC->Int32, loc));
+      rewriter.replaceOp(op, AC->createIntConstant(1, AC->Int64, loc));
       return success();
     }
 
-    /// If all sizes are constants, fold to a single i32 constant
+    /// If all sizes are constants, fold to a single i64 constant
     bool allConst = true;
     int64_t folded = 1;
     for (Value sz : sizes) {
@@ -1186,15 +1186,15 @@ struct DbNumElementsPattern : public ArtsToLLVMPattern<DbNumElementsOp> {
       break;
     }
     if (allConst) {
-      rewriter.replaceOp(op, AC->createIntConstant(folded, AC->Int32, loc));
+      rewriter.replaceOp(op, AC->createIntConstant(folded, AC->Int64, loc));
       return success();
     }
 
-    /// Otherwise, compute product at runtime as a plain i32 value
-    Value productVal = AC->createIntConstant(1, AC->Int32, loc);
+    /// Otherwise, compute product at runtime as a plain i64 value
+    Value productVal = AC->createIntConstant(1, AC->Int64, loc);
     for (Value sz : sizes) {
-      Value szI32 = AC->castToInt(AC->Int32, sz, loc);
-      productVal = AC->create<arith::MulIOp>(loc, productVal, szI32);
+      Value szI64 = AC->castToInt(AC->Int64, sz, loc);
+      productVal = AC->create<arith::MulIOp>(loc, productVal, szI64);
     }
 
     rewriter.replaceOp(op, productVal);
