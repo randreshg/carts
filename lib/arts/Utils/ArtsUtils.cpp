@@ -45,7 +45,8 @@ bool isArtsRuntimeQuery(Value val) {
     return false;
 
   /// Check for ARTS dialect ops (before lowering to func::CallOp)
-  if (isa<GetCurrentNodeOp, GetTotalNodesOp>(defOp))
+  if (isa<GetCurrentNodeOp, GetTotalNodesOp, GetCurrentWorkerOp,
+          GetTotalWorkersOp, GetParallelWorkerIdOp>(defOp))
     return true;
 
   /// Check for func::CallOp (after lowering)

@@ -1098,6 +1098,14 @@ DbAcquireNode::getPartitionOffsetDim(Value offset, bool requireLeading) {
           }
           int64_t dim = static_cast<int64_t>(i - memrefStart);
           if (matchedPos >= 0 && matchedPos != dim) {
+            /// Allow diagonal accesses where the same index Value appears in
+            /// multiple dims (e.g., corr[i, i]). The partition along the
+            /// leading dim is still valid — keep the first matched position.
+            if (matchedIdx && fullChain[i] == matchedIdx) {
+              ARTS_DEBUG("  same index in multiple dims (diagonal); "
+                         "keeping leading dim " << matchedPos);
+              continue;
+            }
             ARTS_DEBUG("  partition offset maps to multiple dims; "
                        "disabling blocked partitioning");
             return std::nullopt;
