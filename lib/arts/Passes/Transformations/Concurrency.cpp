@@ -248,10 +248,10 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
       abstractMachine->hasValidThreads() ? abstractMachine->getThreads() : 0;
 
   if (nodeCount > 1) {
-    numWorkers = nodeCount;
+    numWorkers = (threads > 0) ? nodeCount * threads : 0;
     concurrencyType = EdtConcurrency::internode;
     ARTS_INFO("Setting EDT parallelism: inter-node across " << nodeCount
-                                                            << " nodes");
+              << " nodes" << (threads > 0 ? " x " + std::to_string(threads) + " threads" : ""));
   } else if (threads > 0) {
     numWorkers = threads;
     concurrencyType = EdtConcurrency::intranode;
