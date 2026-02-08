@@ -213,7 +213,7 @@ For each benchmark, document in `analysis.md`:
 carts benchmarks run polybench/gemm --trace --debug=2
 
 # Compare ARTS vs OpenMP IR
-diff <(carts run gemm.c -S --stop-after=collect-metadata) \
+diff <(carts run gemm.c -S --collect-metadata) \
      <(carts clang gemm.c -fopenmp -S -emit-llvm)
 ```
 

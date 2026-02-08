@@ -1716,6 +1716,10 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     return allocOp;
   }
 
+  auto isBlockLikeMode = [](PartitionMode mode) {
+    return mode == PartitionMode::block || mode == PartitionMode::stencil;
+  };
+
   /// If any coarse acquires exist alongside chunked candidates, enable MIXED
   /// mode. This allows chunked partitioning while giving coarse acquires
   /// full-range access.
@@ -1725,8 +1729,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
           return info.mode == PartitionMode::coarse;
         });
     bool hasBlock =
-        llvm::any_of(acquireInfos, [](const AcquirePartitionInfo &info) {
-          return info.mode == PartitionMode::block;
+        llvm::any_of(acquireInfos, [&](const AcquirePartitionInfo &info) {
+          return isBlockLikeMode(info.mode);
         });
 
     if (hasCoarse && hasBlock) {
@@ -1765,7 +1769,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     DominanceInfo domInfo(func);
 
     for (const auto &info : acquireInfos) {
-      if (info.mode != PartitionMode::block || info.partitionSizes.empty())
+      if (!isBlockLikeMode(info.mode) || info.partitionSizes.empty())
         continue;
       if (info.needsFullRange)
         continue;
@@ -1858,7 +1862,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   if (!dynamicBlockSize) {
     Value refSize;
     for (const auto &info : acquireInfos) {
-      if (info.mode != PartitionMode::block || info.partitionSizes.empty())
+      if (!isBlockLikeMode(info.mode) || info.partitionSizes.empty())
         continue;
       if (info.needsFullRange)
         continue;
@@ -1868,7 +1872,9 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       refSize = pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
       break;
     }
-    if (consistentMode == PartitionMode::block && refSize &&
+    if ((consistentMode == PartitionMode::block ||
+         consistentMode == PartitionMode::stencil) &&
+        refSize &&
         !ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(refSize))) {
       dynamicBlockSize = refSize;
       if (auto staticSize = arts::extractBlockSizeFromHint(refSize)) {
@@ -1877,7 +1883,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       }
     } else {
       for (const auto &info : acquireInfos) {
-        if (info.mode != PartitionMode::block || info.partitionSizes.empty())
+        if (!isBlockLikeMode(info.mode) || info.partitionSizes.empty())
           continue;
         if (info.needsFullRange)
           continue;
@@ -2008,7 +2014,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   /// Check for both indexed and uniform patterns (block-wise access).
   bool hasExplicitBlockSizes = false;
   for (const auto &info : acquireInfos) {
-    if (info.mode != PartitionMode::block)
+    if (info.mode != PartitionMode::block &&
+        info.mode != PartitionMode::stencil)
       continue;
     for (Value sz : info.partitionSizes) {
       if (!sz)
@@ -2160,7 +2167,9 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       }
     });
 
-    /// Get total rows from first element dimension
+    /// Get total rows from first element dimension.
+    /// For stencil loops, the logical owned span excludes halo rows, so use
+    /// (rows - haloLeft - haloRight) when possible.
     if (!allocOp.getElementSizes().empty()) {
       if (auto staticSize =
               arts::extractBlockSizeFromHint(allocOp.getElementSizes()[0]))
@@ -2168,6 +2177,22 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
             builder.create<arith::ConstantIndexOp>(loc, *staticSize);
       else
         info.totalRows = allocOp.getElementSizes()[0];
+
+      if (info.totalRows && (info.haloLeft > 0 || info.haloRight > 0)) {
+        if (!info.totalRows.getType().isIndex())
+          info.totalRows = builder.create<arith::IndexCastOp>(
+              loc, builder.getIndexType(), info.totalRows);
+
+        Value haloTotal = builder.create<arith::ConstantIndexOp>(
+            loc, info.haloLeft + info.haloRight);
+        Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+        Value canSubtract = builder.create<arith::CmpIOp>(
+            loc, arith::CmpIPredicate::uge, info.totalRows, haloTotal);
+        Value reduced = builder.create<arith::SubIOp>(loc, info.totalRows,
+                                                      haloTotal);
+        info.totalRows =
+            builder.create<arith::SelectOp>(loc, canSubtract, reduced, zero);
+      }
     }
 
     stencilInfo = info;
