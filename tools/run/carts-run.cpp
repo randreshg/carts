@@ -349,6 +349,7 @@ void setupEdtOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 void setupConcurrency(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createConcurrencyPass(AM));
+  pm.addPass(arts::createArtsForOptimizationPass(AM));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createForLoweringPass());
 }

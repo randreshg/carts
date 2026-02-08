@@ -17,6 +17,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include <memory>
+#include <optional>
 
 namespace mlir {
 namespace arts {
@@ -63,6 +64,10 @@ public:
   template <typename LoopOpType>
   void collectLoopsInOperation(Operation *op,
                                SmallVectorImpl<LoopNode *> &loops);
+
+  /// Resolve static trip count for a loop operation when possible.
+  /// Uses LoopNode metadata first, then operation attributes/constant bounds.
+  std::optional<int64_t> getStaticTripCount(Operation *loopOp) const;
 
 private:
   ModuleOp module;

@@ -28,6 +28,7 @@
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
 #include "arts/Utils/OperationAttributes.h"
+#include "arts/Utils/ValueUtils.h"
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -56,39 +57,6 @@ using namespace mlir::arts;
 
 namespace {
 
-/// Attempt to extract a constant index value.
-static std::optional<int64_t> getConstIndex(Value v) {
-  int64_t val = 0;
-  if (ValueUtils::getConstantIndex(v, val))
-    return val;
-  if (auto folded = ValueUtils::tryFoldConstantIndex(v))
-    return *folded;
-  return std::nullopt;
-}
-
-/// Extract static trip count from loop metadata or constant bounds.
-static std::optional<int64_t> getStaticTripCount(ForOp forOp) {
-  if (auto loopAttr = forOp->getAttrOfType<LoopMetadataAttr>(
-          AttrNames::LoopMetadata::Name)) {
-    if (auto tripAttr = loopAttr.getTripCount()) {
-      int64_t tc = tripAttr.getInt();
-      if (tc > 0)
-        return tc;
-    }
-  }
-
-  int64_t lb = 0, ub = 0, step = 0;
-  if (ValueUtils::getConstantIndex(forOp.getLowerBound()[0], lb) &&
-      ValueUtils::getConstantIndex(forOp.getUpperBound()[0], ub) &&
-      ValueUtils::getConstantIndex(forOp.getStep()[0], step) && step > 0) {
-    int64_t span = ub - lb;
-    if (span <= 0)
-      return 0;
-    return (span + step - 1) / step;
-  }
-  return std::nullopt;
-}
-
 static Value castToIndex(ArtsCodegen *AC, Value v, Location loc) {
   if (!v)
     return v;
@@ -98,48 +66,32 @@ static Value castToIndex(ArtsCodegen *AC, Value v, Location loc) {
   return AC->create<arith::IndexCastOp>(loc, indexTy, v);
 }
 
-/// Skip coarsening for sequential or dependency-carrying loops.
-static bool shouldSkipCoarsening(ForOp forOp) {
-  if (auto loopAttr = forOp->getAttrOfType<LoopMetadataAttr>(
-          AttrNames::LoopMetadata::Name)) {
-    if (auto depsAttr = loopAttr.getHasInterIterationDeps())
-      if (depsAttr.getValue())
-        return true;
-    if (auto classAttr = loopAttr.getParallelClassification()) {
-      if (classAttr.getInt() ==
-          static_cast<int64_t>(
-              LoopMetadata::ParallelClassification::Sequential))
-        return true;
-    }
+/// Compute internode worker lanes per node used to map a global worker id to a
+/// destination node route.
+/// Prefer the explicit parallel EDT workers attribute (global workers) when
+/// available, then derive workers-per-node as globalWorkers / totalNodes.
+/// Fallback to runtime local workers when the attribute is missing.
+static Value getInternodeWorkersPerNode(ArtsCodegen *AC, Location loc,
+                                        EdtOp parallelEdt) {
+  Value workersPerNode;
+
+  if (auto workers = parallelEdt->getAttrOfType<workersAttr>(
+          AttrNames::Operation::Workers)) {
+    Value totalWorkers = AC->createIndexConstant(workers.getValue(), loc);
+    Value totalNodes =
+        castToIndex(AC, AC->create<GetTotalNodesOp>(loc).getResult(), loc);
+    workersPerNode = AC->create<arith::DivUIOp>(loc, totalWorkers, totalNodes);
+  } else {
+    workersPerNode =
+        castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
   }
-  return false;
-}
 
-/// Compute a block size that reduces worker count for small trip counts.
-static std::optional<int64_t> computeCoarsenedBlockSize(ForOp forOp,
-                                                        Value totalWorkers) {
-  if (shouldSkipCoarsening(forOp))
-    return std::nullopt;
-
-  auto workersOpt = getConstIndex(totalWorkers);
-  auto tripOpt = getStaticTripCount(forOp);
-  if (!workersOpt || !tripOpt)
-    return std::nullopt;
-
-  int64_t workers = *workersOpt;
-  int64_t tripCount = *tripOpt;
-  if (workers <= 0 || tripCount <= 0)
-    return std::nullopt;
-
-  constexpr int64_t kMinItersPerWorker = 8;
-  if (tripCount >= workers * kMinItersPerWorker)
-    return std::nullopt;
-
-  int64_t desiredWorkers = std::max<int64_t>(1, tripCount / kMinItersPerWorker);
-  desiredWorkers = std::min(desiredWorkers, workers);
-  int64_t blockSize = (tripCount + desiredWorkers - 1) / desiredWorkers;
-  blockSize = std::max<int64_t>(1, blockSize);
-  return blockSize;
+  /// Defensive clamp: ensure non-zero divisor for route computation.
+  Value zero = AC->createIndexConstant(0, loc);
+  Value one = AC->createIndexConstant(1, loc);
+  Value isZero = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                           workersPerNode, zero);
+  return AC->create<arith::SelectOp>(loc, isZero, one, workersPerNode);
 }
 
 ///===----------------------------------------------------------------------===///
@@ -615,13 +567,6 @@ void LoopInfo::initialize() {
     }
   }
 
-  if (computedBlockSize == 1) {
-    if (auto coarsened = computeCoarsenedBlockSize(forOp, totalWorkers)) {
-      computedBlockSize = *coarsened;
-      ARTS_DEBUG("Auto-coarsening: blockSize=" << computedBlockSize);
-    }
-  }
-
   /// Create the block size constant
   blockSize = AC->createIndexConstant(computedBlockSize, loc);
 
@@ -635,23 +580,11 @@ void LoopInfo::initialize() {
   /// to the nearest block boundary. This avoids overlapping block partitions
   /// when lowerBound is not a multiple of blockSize (e.g., stencil loops).
   int64_t alignSize = computedBlockSize;
-  if (alignSize == 1) {
-    if (auto tripCount = getStaticTripCount(forOp)) {
-      if (auto workersConst = getConstIndex(totalWorkers)) {
-        int64_t workers = *workersConst;
-        if (workers > 0) {
-          int64_t chunksPerWorker = (tripCount.value() + workers - 1) / workers;
-          if (chunksPerWorker > 1)
-            alignSize = chunksPerWorker;
-        }
-      }
-    }
-  }
   if (alignSize > 1)
     alignmentBlockSize = alignSize;
 
   if (alignmentBlockSize) {
-    if (auto lbConst = getConstIndex(lowerBound)) {
+    if (auto lbConst = ValueUtils::tryFoldConstantIndex(lowerBound)) {
       int64_t lbVal = *lbConst;
       int64_t aligned = lbVal - (lbVal % *alignmentBlockSize);
       if (aligned != lbVal) {
@@ -683,79 +616,53 @@ void LoopInfo::initialize() {
 void LoopInfo::computeWorkerIterationsBlock(Value workerId) {
   auto loc = forOp.getLoc();
 
-  /// Block Distribution Strategy with Block Size Support
-  /// This function computes the iteration bounds for a specific worker using
-  /// block distribution. When a block size is specified (e.g., schedule(static,
-  /// 4)), we distribute chunks to workers rather than individual iterations.
+  /// Block distribution with block-size support.
+  /// This computes worker iteration bounds by partitioning chunk indices using
+  /// floor + remainder:
+  ///   base = totalChunks / totalWorkers
+  ///   rem = totalChunks % totalWorkers
+  ///   workerChunkCount = base + (workerId < rem ? 1 : 0)
+  ///   workerFirstChunkIdx = workerId * base + min(workerId, rem)
   ///
-  /// Algorithm:
-  ///   1. totalChunks = ceil(totalIterations / blockSize)
-  ///      - Already computed in initialize()
-  ///   2. chunksPerWorkerCeil = ceil(totalChunks / totalWorkers)
-  ///      - Each worker gets approximately equal number of chunks
-  ///   3. workerFirstChunk = workerId * chunksPerWorkerCeil
-  ///      - First chunk index for this worker
-  ///   4. Convert chunk indices to iteration indices:
-  ///      - workerFirstIteration = workerFirstChunk * blockSize
-  ///      - workerMaxIterations = chunksPerWorkerCeil * blockSize
-  ///      - workerIterationCount = min(workerMaxIterations,
-  ///      max(0, totalIterations - workerFirstIteration))
-  ///
-  /// Example: N=16, blockSize=4, workers=8
-  ///   - totalChunks = ceil(16/4) = 4
-  ///   - chunksPerWorkerCeil = ceil(4/8) = 1
-  ///   - worker 0: firstChunk=0, chunkCount=1, iterations 0-3
-  ///   - worker 1: firstChunk=1, chunkCount=1, iterations 4-7
-  ///   - worker 2: firstChunk=2, chunkCount=1, iterations 8-11
-  ///   - worker 3: firstChunk=3, chunkCount=1, iterations 12-15
-  ///   - worker 4+: firstChunk>=4, chunkCount=0, no work
+  /// This keeps chunk ownership balanced and avoids idling a large suffix of
+  /// workers when totalChunks is not divisible by totalWorkers.
 
   Value oneIndex = AC->createIndexConstant(1, loc);
   Value zeroIndex = AC->createIndexConstant(0, loc);
 
-  /// Step 1: Compute ceiling chunks per worker
-  /// chunksPerWorkerCeil = ceil(totalChunks / totalWorkers)
-  ///                     = (totalChunks + totalWorkers - 1) / totalWorkers
-  Value workersMinusOne =
-      AC->create<arith::SubIOp>(loc, totalWorkers, oneIndex);
-  Value adjustedChunks =
-      AC->create<arith::AddIOp>(loc, totalChunks, workersMinusOne);
-  Value chunksPerWorkerCeil =
-      AC->create<arith::DivUIOp>(loc, adjustedChunks, totalWorkers);
+  /// Step 1: Compute balanced chunk ownership using floor + remainder.
+  /// This avoids idling a large suffix of workers when totalChunks is not an
+  /// exact multiple of totalWorkers.
+  ///   base = totalChunks / totalWorkers
+  ///   rem = totalChunks % totalWorkers
+  ///   workerChunkCount = base + (workerId < rem ? 1 : 0)
+  ///   workerFirstChunkIdx = workerId * base + min(workerId, rem)
+  Value baseChunksPerWorker =
+      AC->create<arith::DivUIOp>(loc, totalChunks, totalWorkers);
+  Value remainderChunks =
+      AC->create<arith::RemUIOp>(loc, totalChunks, totalWorkers);
 
-  /// Optional coarsening for nested loops: give each worker more chunks to
-  /// reduce task creation overhead when an outer loop repeats the region.
-  if (forOp->getParentOfType<scf::ForOp>()) {
-    if (auto tripConst = getStaticTripCount(forOp)) {
-      if (auto workersConst = getConstIndex(totalWorkers)) {
-        int64_t blockSizeConst = 1;
-        if (auto bsConst = getConstIndex(blockSize))
-          blockSizeConst = *bsConst;
-        int64_t totalChunksConst =
-            (tripConst.value() + blockSizeConst - 1) / blockSizeConst;
-        if (totalChunksConst >= (*workersConst * 2)) {
-          Value factorVal = AC->createIndexConstant(2, loc);
-          chunksPerWorkerCeil =
-              AC->create<arith::MulIOp>(loc, chunksPerWorkerCeil, factorVal);
-        }
-      }
-    }
-  }
+  Value workerGetsExtra = AC->create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::ult, workerId, remainderChunks);
+  Value workerChunkCount = AC->create<arith::SelectOp>(
+      loc, workerGetsExtra,
+      AC->create<arith::AddIOp>(loc, baseChunksPerWorker, oneIndex),
+      baseChunksPerWorker);
 
-  /// Step 2: Compute worker's first chunk index
-  /// workerFirstChunkIdx = workerId * chunksPerWorkerCeil
-  Value workerFirstChunkIdx =
-      AC->create<arith::MulIOp>(loc, workerId, chunksPerWorkerCeil);
+  Value clippedWorkerId =
+      AC->create<arith::MinUIOp>(loc, workerId, remainderChunks);
+  Value workerFirstChunkIdx = AC->create<arith::AddIOp>(
+      loc, AC->create<arith::MulIOp>(loc, workerId, baseChunksPerWorker),
+      clippedWorkerId);
 
   /// Step 3: Convert chunk indices to iteration indices
   /// workerFirstIteration = workerFirstChunkIdx * blockSize
   workerFirstChunk =
       AC->create<arith::MulIOp>(loc, workerFirstChunkIdx, blockSize);
 
-  /// workerMaxIterations (hint) = chunksPerWorkerCeil * blockSize
-  /// This is the uniform upper bound per worker, independent of offsets.
+  /// workerMaxIterations (hint) = workerChunkCount * blockSize
   workerMaxIterations =
-      AC->create<arith::MulIOp>(loc, chunksPerWorkerCeil, blockSize);
+      AC->create<arith::MulIOp>(loc, workerChunkCount, blockSize);
 
   /// Handle edge case: last worker's iterations may exceed totalIterations
   /// remaining = max(0, totalIterations - workerFirstIteration)
@@ -827,7 +734,7 @@ void LoopInfo::recomputeWorkerBoundsInside(Value workerId,
   chunkLowerBound = localLowerBound;
   useAlignedLowerBound = false;
   if (alignmentBlockSize) {
-    if (auto lbConst = getConstIndex(localLowerBound)) {
+    if (auto lbConst = ValueUtils::tryFoldConstantIndex(localLowerBound)) {
       int64_t aligned = *lbConst - (*lbConst % *alignmentBlockSize);
       if (aligned != *lbConst) {
         useAlignedLowerBound = true;
@@ -853,43 +760,32 @@ void LoopInfo::recomputeWorkerBoundsInside(Value workerId,
   Value localTotalChunks =
       AC->create<arith::DivUIOp>(loc, adjustedIterations, localBlockSize);
 
-  /// chunksPerWorkerCeil = ceil(totalChunks / totalWorkers)
-  Value workersMinusOne =
-      AC->create<arith::SubIOp>(loc, totalWorkersIndex, oneIndex);
-  Value adjustedChunks =
-      AC->create<arith::AddIOp>(loc, localTotalChunks, workersMinusOne);
-  Value chunksPerWorkerCeil =
-      AC->create<arith::DivUIOp>(loc, adjustedChunks, totalWorkersIndex);
+  /// Mirror the same balanced floor + remainder mapping used outside the EDT.
+  Value baseChunksPerWorker =
+      AC->create<arith::DivUIOp>(loc, localTotalChunks, totalWorkersIndex);
+  Value remainderChunks =
+      AC->create<arith::RemUIOp>(loc, localTotalChunks, totalWorkersIndex);
 
-  /// Optional coarsening for nested loops: mirror computeWorkerIterationsBlock
-  /// so the task-local bounds stay consistent with pre-task DB partitioning.
-  if (forOp->getParentOfType<scf::ForOp>()) {
-    if (auto tripConst = getStaticTripCount(forOp)) {
-      if (auto workersConst = getConstIndex(insideTotalWorkers)) {
-        int64_t blockSizeConst = 1;
-        if (auto bsConst = getConstIndex(localBlockSize))
-          blockSizeConst = *bsConst;
-        int64_t totalChunksConst =
-            (tripConst.value() + blockSizeConst - 1) / blockSizeConst;
-        if (totalChunksConst >= (*workersConst * 2)) {
-          Value factorVal = AC->createIndexConstant(2, loc);
-          chunksPerWorkerCeil =
-              AC->create<arith::MulIOp>(loc, chunksPerWorkerCeil, factorVal);
-        }
-      }
-    }
-  }
+  Value workerGetsExtra = AC->create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::ult, workerIdIndex, remainderChunks);
+  Value workerChunkCount = AC->create<arith::SelectOp>(
+      loc, workerGetsExtra,
+      AC->create<arith::AddIOp>(loc, baseChunksPerWorker, oneIndex),
+      baseChunksPerWorker);
 
-  Value workerFirstChunkIdx =
-      AC->create<arith::MulIOp>(loc, workerIdIndex, chunksPerWorkerCeil);
+  Value clippedWorkerId =
+      AC->create<arith::MinUIOp>(loc, workerIdIndex, remainderChunks);
+  Value workerFirstChunkIdx = AC->create<arith::AddIOp>(
+      loc, AC->create<arith::MulIOp>(loc, workerIdIndex, baseChunksPerWorker),
+      clippedWorkerId);
 
   /// Convert chunks to iterations
   workerFirstChunk =
       AC->create<arith::MulIOp>(loc, workerFirstChunkIdx, localBlockSize);
 
-  /// workerMaxIterations (hint) = chunksPerWorkerCeil * blockSize
+  /// workerMaxIterations (hint) = workerChunkCount * blockSize
   workerMaxIterations =
-      AC->create<arith::MulIOp>(loc, chunksPerWorkerCeil, localBlockSize);
+      AC->create<arith::MulIOp>(loc, workerChunkCount, localBlockSize);
 
   /// Handle last worker overflow
   Value needZeroIters = AC->create<arith::CmpIOp>(
@@ -2141,11 +2037,14 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   EdtConcurrency taskConcurrency = originalParallel.getConcurrency();
   Value routeValue;
   if (taskConcurrency == EdtConcurrency::internode) {
-    /// Route to worker node: nodeId = workerId / threadsPerNode
-    Value threads = castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
-    Value nodeId = AC->create<arith::DivUIOp>(loc, workerIdPlaceholder, threads);
+    /// Route to destination node from the global worker id:
+    ///   nodeId = globalWorkerId / workersPerNode
+    Value workersPerNode =
+        getInternodeWorkersPerNode(AC, loc, originalParallel);
+    Value nodeId =
+        AC->create<arith::DivUIOp>(loc, workerIdPlaceholder, workersPerNode);
     routeValue = AC->castToInt(AC->Int32, nodeId, loc);
-    ARTS_DEBUG("  - Using internode routing: worker " << workerIdPlaceholder);
+    ARTS_DEBUG("  - Using internode routing by workers-per-node");
   } else {
     routeValue = AC->createIntConstant(0, AC->Int32, loc);
   }

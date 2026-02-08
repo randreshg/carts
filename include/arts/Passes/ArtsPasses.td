@@ -264,6 +264,21 @@ def ParallelEdtLowering : Pass<"parallel-edt-lowering", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createParallelEdtLoweringPass()";
 }
 
+def ArtsForOptimization : Pass<"arts-for-optimization", "mlir::ModuleOp"> {
+  let summary = "Apply pre-lowering optimization hints to arts.for";
+  let description = [{
+    Applies optimization hints to arts.for prior to lowering by writing explicit
+    `arts.partition_hint` metadata (block mode + block size). This pass can
+    coarsen work for both intra-node and inter-node execution while preserving
+    distributed worker utilization constraints for internode mode.
+  }];
+  let dependentDialects = [
+    "func::FuncDialect", "arts::ArtsDialect", "arith::ArithDialect",
+    "scf::SCFDialect"
+  ];
+  let constructor = "mlir::arts::createArtsForOptimizationPass(nullptr)";
+}
+
 def ForLowering : Pass<"for-lowering", "mlir::ModuleOp"> {
   let summary = "Lower arts.for inside parallel EDTs to chunked task EDTs";
   let description = [{

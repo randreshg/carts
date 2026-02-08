@@ -14,6 +14,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   Transformations/DbLowering.cpp
   Transformations/EdtLowering.cpp
   Transformations/EpochLowering.cpp
+  Transformations/ArtsForOptimization.cpp
   Transformations/ForLowering.cpp
   Transformations/ParallelEdtLowering.cpp
   Transformations/LoopReordering.cpp
