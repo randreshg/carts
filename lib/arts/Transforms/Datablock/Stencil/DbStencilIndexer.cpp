@@ -178,6 +178,7 @@ void DbStencilIndexer::transformDbRefUsers(
     auto leftRef = builder.create<DbRefOp>(loc, newElementType, leftHaloArg,
                                            SmallVector<Value>{zero});
     leftMemref = leftRef.getResult();
+
   }
 
   /// Create right halo memref if available (null at right boundary)
@@ -185,6 +186,7 @@ void DbStencilIndexer::transformDbRefUsers(
     auto rightRef = builder.create<DbRefOp>(loc, newElementType, rightHaloArg,
                                             SmallVector<Value>{zero});
     rightMemref = rightRef.getResult();
+
   }
 
   /// BASE-OFFSET SEMANTICS: Simplified region boundaries
@@ -208,6 +210,7 @@ void DbStencilIndexer::transformDbRefUsers(
         builder.create<polygeist::Memref2PointerOp>(loc, llvmPtrTy, leftMemref);
     leftPtrNotNull = builder.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ne,
                                                   leftPtr, nullPtr);
+
   }
 
   if (rightMemref) {
@@ -215,6 +218,7 @@ void DbStencilIndexer::transformDbRefUsers(
                                                                  rightMemref);
     rightPtrNotNull = builder.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ne,
                                                    rightPtr, nullPtr);
+
   }
 
   ARTS_DEBUG("  Created 3 buffer refs: owned="
@@ -226,6 +230,15 @@ void DbStencilIndexer::transformDbRefUsers(
   struct RowSelection {
     Value memref;
     Value rowIdx;
+    Value isLeft;
+    Value isRight;
+    Value leftAvail;
+    Value rightAvail;
+    Value leftFallbackToOwned;
+    Value rightFallbackToOwned;
+    Value ownedIdx;
+    Value leftIdx;
+    Value rightIdx;
   };
   using OffsetMap = llvm::DenseMap<int64_t, RowSelection>;
   llvm::DenseMap<Operation *, OffsetMap> rowSelectionCache;
@@ -663,6 +676,12 @@ void DbStencilIndexer::transformDbRefUsers(
     Value ownedRows = ownedRowsVal ? ownedRowsVal : blockSize;
     Value isLeft = selBuilder.create<arith::CmpIOp>(
         selLoc, arith::CmpIPredicate::slt, localRowVal, zero);
+    Value isRight = selBuilder.create<arith::CmpIOp>(
+        selLoc, arith::CmpIPredicate::sge, localRowVal, ownedRows);
+    Value falseI1 = selBuilder.create<arith::ConstantIntOp>(selLoc, 0, 1);
+    Value trueI1 = selBuilder.create<arith::ConstantIntOp>(selLoc, 1, 1);
+    Value leftAvail = leftPtrNotNull ? leftPtrNotNull : falseI1;
+    Value rightAvail = rightPtrNotNull ? rightPtrNotNull : falseI1;
     Value leftIdx =
         selBuilder.create<arith::AddIOp>(selLoc, localRowVal, haloLeft);
     Value ownedIdx = localRowVal;
@@ -676,6 +695,8 @@ void DbStencilIndexer::transformDbRefUsers(
     Value clampedRightIdx =
         rightMemref ? clampIndex(rightIdx, haloRight, selBuilder, selLoc)
                     : Value();
+    Value diagLeftIdx = clampedLeftIdx ? clampedLeftIdx : clampedOwnedIdx;
+    Value diagRightIdx = clampedRightIdx ? clampedRightIdx : clampedOwnedIdx;
 
     Value selectedMemref = ownedMemref;
     Value selectedRowIdx = clampedOwnedIdx;
@@ -710,9 +731,6 @@ void DbStencilIndexer::transformDbRefUsers(
     }
 
     if (rightMemref) {
-      Value isRight = selBuilder.create<arith::CmpIOp>(
-          selLoc, arith::CmpIPredicate::sge, localRowVal, ownedRows);
-
       Value safeRightMemref =
           rightPtrNotNull
               ? selectValue(rightPtrNotNull, rightMemref, ownedMemref)
@@ -726,7 +744,19 @@ void DbStencilIndexer::transformDbRefUsers(
       selectedRowIdx = selectValue(isRight, safeRightIdx, selectedRowIdx);
     }
 
-    return {selectedMemref, selectedRowIdx};
+    Value leftFallbackToOwned =
+        selBuilder.create<arith::AndIOp>(
+            selLoc, isLeft,
+            selBuilder.create<arith::XOrIOp>(selLoc, leftAvail, trueI1));
+    Value rightFallbackToOwned =
+        selBuilder.create<arith::AndIOp>(
+            selLoc, isRight,
+            selBuilder.create<arith::XOrIOp>(selLoc, rightAvail, trueI1));
+
+    return {selectedMemref,      selectedRowIdx, isLeft,
+            isRight,             leftAvail,      rightAvail,
+            leftFallbackToOwned, rightFallbackToOwned,
+            clampedOwnedIdx,     diagLeftIdx,    diagRightIdx};
   };
 
   for (Operation *user : users) {
@@ -889,6 +919,7 @@ void DbStencilIndexer::transformDbRefUsers(
             selectedRowIdx = selection.rowIdx;
             offsetMap[rowOffset] = selection;
             usedRowSelection = true;
+
           }
         } else {
           std::string rowExpr;

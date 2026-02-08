@@ -26,6 +26,7 @@
 ///==========================================================================///
 
 #include "arts/Transforms/Datablock/Stencil/DbStencilRewriter.h"
+#include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Transforms/Datablock/Stencil/DbStencilIndexer.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/DatablockUtils.h"
@@ -34,6 +35,7 @@
 #include "arts/Utils/RemovalUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 
 #define DEBUG_TYPE "db_transforms"
 
@@ -106,20 +108,21 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
     chunkIndexHint = builder.create<arith::IndexCastOp>(
         loc, builder.getIndexType(), chunkIndexHint);
 
-  /// Compute chunk index for owned chunk.
-  /// For non-uniform worker chunking, ForLowering provides a chunk-index hint.
-  /// Fallback to elementOffset/blockSize for legacy/uniform paths.
-  Value startBlock = chunkIndexHint;
-  if (!startBlock) {
-    Value blockSize = plan.getBlockSize(0);
-    if (!blockSize)
-      blockSize = one;
-    blockSize = builder.create<arith::MaxUIOp>(loc, blockSize, one);
-    startBlock = builder.create<arith::DivUIOp>(loc, baseOffset, blockSize);
-  }
   Value chunkCount = one;
 
-  ARTS_DEBUG("  Stencil ESD: chunkIdx=" << startBlock
+  /// Uniform allocation block size — all blocks are allocated with this size.
+  /// Use this instead of computeChunkRows to avoid non-uniform chunk sizes
+  /// that disagree with the allocation and cause stencil indexing bugs.
+  Value planBlockSize = plan.getBlockSize(0) ? plan.getBlockSize(0) : one;
+  planBlockSize = builder.create<arith::MaxUIOp>(loc, planBlockSize, one);
+
+  /// Compute the actual block index from baseOffset. The chunkIndexHint from
+  /// ForLowering may be a worker index (0..numWorkers-1) which can exceed the
+  /// actual block count when multiple workers share a block. Always derive the
+  /// block index from the element offset to ensure valid block access.
+  Value blockIdx = builder.create<arith::DivUIOp>(loc, baseOffset, planBlockSize);
+
+  ARTS_DEBUG("  Stencil ESD: blockIdx=" << blockIdx
                                         << ", haloLeft=" << haloLeftVal
                                         << ", haloRight=" << haloRightVal);
 
@@ -146,47 +149,21 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
                         : plan.outerSizes[0];
   Value lastChunkIdx = builder.create<arith::SubIOp>(loc, numBlocks, one);
 
-  /// For non-uniform chunking, derive the logical row count for a given chunk
-  /// index so halo offsets can target the true boundary row (not max block
-  /// size).
-  Value totalRows =
-      (plan.stencilInfo && plan.stencilInfo->totalRows)
-          ? plan.stencilInfo->totalRows
-          : (oldAlloc.getElementSizes().empty() ? Value()
-                                                : oldAlloc.getElementSizes().front());
-  if (!totalRows)
-    totalRows = plan.getBlockSize(0);
-  if (totalRows && !totalRows.getType().isIndex())
-    totalRows = builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
-                                                   totalRows);
-
-  auto computeChunkRows = [&](Value chunkIdx) -> Value {
-    if (!totalRows)
-      return plan.getBlockSize(0);
-    Value safeBlocks = builder.create<arith::MaxUIOp>(loc, numBlocks, one);
-    Value baseRows = builder.create<arith::DivUIOp>(loc, totalRows, safeBlocks);
-    Value remainder = builder.create<arith::RemUIOp>(loc, totalRows, safeBlocks);
-    Value hasExtra = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::ult, chunkIdx, remainder);
-    Value extra = builder.create<arith::SelectOp>(loc, hasExtra, one, zero);
-    return builder.create<arith::AddIOp>(loc, baseRows, extra);
-  };
-
   /// Create LEFT HALO acquire (partial: last haloLeft rows of prev chunk)
   unsigned leftHaloArgIdx = ~0u;
   if (haloLeftVal > 0) {
-    Value leftChunkIdx = builder.create<arith::SubIOp>(loc, startBlock, one);
+    Value leftChunkIdx = builder.create<arith::SubIOp>(loc, blockIdx, one);
 
-    /// element_offsets: start at (leftChunkRows - haloLeft) within prev chunk
-    Value leftChunkRows = computeChunkRows(leftChunkIdx);
+    /// element_offsets: start at (planBlockSize - haloLeft) within prev chunk
+    Value leftChunkRows = planBlockSize;
     Value haloLeftConst =
         builder.create<arith::ConstantIndexOp>(loc, haloLeftVal);
     Value leftElemOffset = builder.create<arith::SubIOp>(
         loc, leftChunkRows, haloLeftConst);
 
-    /// bounds_valid = (startBlock != 0): valid only if not first chunk
+    /// bounds_valid = (blockIdx != 0): valid only if not first block
     Value leftValid = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::ne, startBlock, zero);
+        loc, arith::CmpIPredicate::ne, blockIdx, zero);
 
     auto leftHalo = builder.create<DbAcquireOp>(
         loc, ArtsMode::in, newAlloc.getGuid(), newAlloc.getPtr(),
@@ -211,11 +188,11 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   /// Create RIGHT HALO acquire (partial: first haloRight rows of next chunk)
   unsigned rightHaloArgIdx = ~0u;
   if (haloRightVal > 0) {
-    Value rightChunkIdx = builder.create<arith::AddIOp>(loc, startBlock, one);
+    Value rightChunkIdx = builder.create<arith::AddIOp>(loc, blockIdx, one);
 
-    /// bounds_valid = (startBlock != lastChunk): valid only if not last chunk
+    /// bounds_valid = (blockIdx != lastBlock): valid only if not last block
     Value rightValid = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::ne, startBlock, lastChunkIdx);
+        loc, arith::CmpIPredicate::ne, blockIdx, lastChunkIdx);
 
     auto rightHalo = builder.create<DbAcquireOp>(
         loc, ArtsMode::in, newAlloc.getGuid(), newAlloc.getPtr(),
@@ -252,15 +229,18 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
                      builder.getIndexAttr(rightHaloArgIdx));
   }
 
-  /// Set acquire offsets/sizes for stencil mode
+  /// Set acquire offsets/sizes for stencil mode (use blockIdx, not worker index)
   SmallVector<Value> newOffsets, newSizes;
-  newOffsets.push_back(startBlock);
+  newOffsets.push_back(blockIdx);
   newSizes.push_back(chunkCount);
   acquire.getOffsetsMutable().assign(newOffsets);
   acquire.getSizesMutable().assign(newSizes);
 
-  /// Rebase EDT users with 3-buffer stencil mode
-  /// Pass BASE offset (element offset) for index localization.
+  /// Use the ForLowering's actual baseOffset as the indexer's base.
+  /// After alignment, baseOffset == blockIdx * planBlockSize. Using the same
+  /// SSA Value that ForLowering embedded in globalRow = add(baseOffset, localIter)
+  /// ensures the stencil indexer's tryVersionRowLoop correctly identifies the
+  /// coordinate system (includesBaseOffset = true) and splits loops correctly.
   rebaseEdtUsers(acquire, builder, baseOffset);
 }
 
@@ -337,6 +317,8 @@ void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
       }
     }
 
+    ARTS_DEBUG("  Outside-EDT remap uses uniform plan block size: " << cs);
+
     if (newOuter.empty())
       newOuter.push_back(zero());
     if (newInner.empty())
@@ -375,7 +357,7 @@ void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
 }
 
 bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
-                                       Value startBlock,
+                                       Value baseOffsetArg,
                                        bool /*isSingleChunk*/) {
   ARTS_DEBUG("DbStencilRewriter::rebaseEdtUsers (3-buffer mode)");
 
@@ -406,31 +388,29 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
     derivedType = dbAlloc.getAllocatedElementType();
 
   /// Derive BASE offset for stencil localization.
-  /// The incoming startBlock value is the element offset (chunk start).
+  /// The incoming value is the acquire's true element base offset.
   /// The indexer uses base-offset semantics where:
   ///   - localRow < 0 -> left halo
   ///   - 0 <= localRow < blockSize -> owned
   ///   - localRow >= blockSize -> right halo
   Location loc = acquire.getLoc();
   Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+  Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
   Value haloLeft =
       builder.create<arith::ConstantIndexOp>(loc, plan.stencilInfo->haloLeft);
   Value haloRight =
       builder.create<arith::ConstantIndexOp>(loc, plan.stencilInfo->haloRight);
 
-  /// BASE offset = element offset (chunk start)
-  Value baseOffset = startBlock ? startBlock : zero;
+  Value blockSize = plan.getBlockSize(0) ? plan.getBlockSize(0) : one;
+  if (!blockSize.getType().isIndex())
+    blockSize =
+        builder.create<arith::IndexCastOp>(loc, builder.getIndexType(), blockSize);
+  blockSize = builder.create<arith::MaxUIOp>(loc, blockSize, one);
 
-  /// Adjust base offset by stencil center shift (if any) to align localRow
-  /// with the logical loop index when loops start at non-zero bounds.
-  if (auto centerAttr =
-          acquire->getAttrOfType<IntegerAttr>("stencil_center_offset")) {
-    int64_t center = centerAttr.getInt();
-    if (center != 0) {
-      Value shift = builder.create<arith::ConstantIndexOp>(loc, center);
-      baseOffset = builder.create<arith::AddIOp>(loc, baseOffset, shift);
-    }
-  }
+  Value baseOffset = baseOffsetArg ? baseOffsetArg : zero;
+  if (!baseOffset.getType().isIndex())
+    baseOffset = builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
+                                                    baseOffset);
 
   /// For stencil mode, get the 3 block args (owned, left halo, right halo)
   Value leftHaloArg, rightHaloArg;
@@ -458,7 +438,7 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
   PartitionInfo info;
   info.mode = PartitionMode::stencil;
   info.offsets.push_back(baseOffset);
-  info.sizes.push_back(plan.getBlockSize(0));
+  info.sizes.push_back(blockSize);
 
   /// Create stencil indexer with PartitionInfo (base-offset semantics)
   auto indexer = std::make_unique<DbStencilIndexer>(

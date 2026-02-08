@@ -27,7 +27,7 @@ protected:
                       OpBuilder &builder) override;
 
   bool rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
-                      Value startBlock = nullptr,
+                      Value baseOffset = nullptr,
                       bool isSingleChunk = false) override;
 
 private:
