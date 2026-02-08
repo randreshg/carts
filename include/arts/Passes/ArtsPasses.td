@@ -361,6 +361,20 @@ def BlockLoopStripMining : Pass<"block-stripmine", "mlir::func::FuncOp"> {
   let constructor = "mlir::arts::createBlockLoopStripMiningPass()";
 }
 
+def LoopNormalization : Pass<"loop-normalization", "mlir::ModuleOp"> {
+  let summary = "Pattern-based loop normalization for partitioning";
+  let description = [{
+    Applies loop normalization patterns to enable downstream DbPartitioning.
+    Registered patterns include symmetric-triangular normalization (converts
+    triangular loops with symmetric writes to rectangular form) and others.
+  }];
+  let dependentDialects = [
+    "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",
+    "arith::ArithDialect", "scf::SCFDialect"
+  ];
+  let constructor = "mlir::arts::createLoopNormalizationPass(nullptr)";
+}
+
 def LoopReordering : Pass<"loop-reordering", "mlir::ModuleOp"> {
   let summary = "Reorder inner loops for cache-optimal access patterns";
   let description = [{
