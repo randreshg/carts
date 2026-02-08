@@ -6,6 +6,7 @@ file(GLOB CARTS_TRANSFORMS_SOURCE_FILES
     "Datablock/Stencil/*.cpp"
     "Datablock/Versioned/*.cpp"
     "Edt/*.cpp"
+    "Loop/*.cpp"
 )
 
 set(CARTS_TRANSFORMS_SOURCE_FILES ${CARTS_TRANSFORMS_SOURCE_FILES} PARENT_SCOPE)

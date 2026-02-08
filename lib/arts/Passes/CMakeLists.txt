@@ -31,6 +31,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   Optimizations/ArtsHoisting.cpp
   Optimizations/BlockLoopStripMining.cpp
   Optimizations/LoopFusion.cpp
+  Optimizations/LoopNormalization.cpp
   Optimizations/LoopTransforms.cpp
   Optimizations/LoopVectorizationHints.cpp
   Optimizations/ScalarReplacement.cpp
