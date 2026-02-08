@@ -1222,8 +1222,11 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
   if (auto workers = parallelEdt->getAttrOfType<workersAttr>(
           AttrNames::Operation::Workers))
     numWorkers = AC->createIndexConstant(workers.getValue(), loc);
-  else if (parallelEdt.getConcurrency() == EdtConcurrency::internode)
-    numWorkers = AC->create<GetTotalNodesOp>(loc).getResult();
+  else if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {
+    Value nodes = castToIndex(AC, AC->create<GetTotalNodesOp>(loc).getResult(), loc);
+    Value threads = castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
+    numWorkers = AC->create<arith::MulIOp>(loc, nodes, threads);
+  }
   else
     numWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
   numWorkers = castToIndex(AC, numWorkers, loc);
@@ -1680,8 +1683,11 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   if (auto workers = originalParallel->getAttrOfType<workersAttr>(
           AttrNames::Operation::Workers))
     numWorkers = AC.createIndexConstant(workers.getValue(), loc);
-  else if (originalParallel.getConcurrency() == EdtConcurrency::internode)
-    numWorkers = AC.create<GetTotalNodesOp>(loc).getResult();
+  else if (originalParallel.getConcurrency() == EdtConcurrency::internode) {
+    Value nodes = castToIndex(&AC, AC.create<GetTotalNodesOp>(loc).getResult(), loc);
+    Value threads = castToIndex(&AC, AC.create<GetTotalWorkersOp>(loc).getResult(), loc);
+    numWorkers = AC.create<arith::MulIOp>(loc, nodes, threads);
+  }
   else
     numWorkers = AC.create<GetTotalWorkersOp>(loc).getResult();
   numWorkers = castToIndex(&AC, numWorkers, loc);
@@ -1890,8 +1896,11 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   if (auto workers = originalParallel->getAttrOfType<workersAttr>(
           AttrNames::Operation::Workers))
     loopInfo.totalWorkers = AC->createIndexConstant(workers.getValue(), loc);
-  else if (originalParallel.getConcurrency() == EdtConcurrency::internode)
-    loopInfo.totalWorkers = AC->create<GetTotalNodesOp>(loc).getResult();
+  else if (originalParallel.getConcurrency() == EdtConcurrency::internode) {
+    Value nodes = castToIndex(AC, AC->create<GetTotalNodesOp>(loc).getResult(), loc);
+    Value threads = castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
+    loopInfo.totalWorkers = AC->create<arith::MulIOp>(loc, nodes, threads);
+  }
   else
     loopInfo.totalWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
   loopInfo.totalWorkers = castToIndex(AC, loopInfo.totalWorkers, loc);
@@ -2132,8 +2141,10 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   EdtConcurrency taskConcurrency = originalParallel.getConcurrency();
   Value routeValue;
   if (taskConcurrency == EdtConcurrency::internode) {
-    /// Route to the worker node (workerIdPlaceholder is the node ID)
-    routeValue = AC->castToInt(AC->Int32, workerIdPlaceholder, loc);
+    /// Route to worker node: nodeId = workerId / threadsPerNode
+    Value threads = castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
+    Value nodeId = AC->create<arith::DivUIOp>(loc, workerIdPlaceholder, threads);
+    routeValue = AC->castToInt(AC->Int32, nodeId, loc);
     ARTS_DEBUG("  - Using internode routing: worker " << workerIdPlaceholder);
   } else {
     routeValue = AC->createIntConstant(0, AC->Int32, loc);
@@ -2171,23 +2182,22 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   }
 
   /// Get the logical worker ID for recomputing bounds inside the EDT.
-  /// For internode tasks, use GetCurrentNodeOp since the EDT is routed to a
-  /// specific node. For intranode tasks, use workerIdPlaceholder directly -
+  /// Use workerIdPlaceholder directly for both internode and intranode tasks -
   /// it's the scf.for iteration variable (0 to numWorkers-1) and is captured
-  /// in the EDT body automatically.
-  Value taskWorkerId;
-  if (taskConcurrency == EdtConcurrency::internode) {
-    taskWorkerId = AC->create<GetCurrentNodeOp>(loc).getResult();
-  } else {
-    taskWorkerId = workerIdPlaceholder;
-  }
+  /// in the EDT body automatically. For internode, this is the global worker
+  /// index (0..nodes*threads-1) from the dispatch loop, which is the same
+  /// index used for routing and db_acquire partitioning.
+  Value taskWorkerId = workerIdPlaceholder;
 
   Value insideTotalWorkers;
   if (auto workers = originalParallel->getAttrOfType<workersAttr>(
           AttrNames::Operation::Workers))
     insideTotalWorkers = AC->createIndexConstant(workers.getValue(), loc);
-  else if (taskConcurrency == EdtConcurrency::internode)
-    insideTotalWorkers = AC->create<GetTotalNodesOp>(loc).getResult();
+  else if (taskConcurrency == EdtConcurrency::internode) {
+    Value totalNodes = castToIndex(AC, AC->create<GetTotalNodesOp>(loc).getResult(), loc);
+    Value totalThreads = castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
+    insideTotalWorkers = AC->create<arith::MulIOp>(loc, totalNodes, totalThreads);
+  }
   else
     insideTotalWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
 
