@@ -1119,11 +1119,12 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
           AttrNames::Operation::Workers))
     numWorkers = AC->createIndexConstant(workers.getValue(), loc);
   else if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {
-    Value nodes = castToIndex(AC, AC->create<GetTotalNodesOp>(loc).getResult(), loc);
-    Value threads = castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
+    Value nodes =
+        castToIndex(AC, AC->create<GetTotalNodesOp>(loc).getResult(), loc);
+    Value threads =
+        castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
     numWorkers = AC->create<arith::MulIOp>(loc, nodes, threads);
-  }
-  else
+  } else
     numWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
   numWorkers = castToIndex(AC, numWorkers, loc);
 
@@ -1580,11 +1581,12 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
           AttrNames::Operation::Workers))
     numWorkers = AC.createIndexConstant(workers.getValue(), loc);
   else if (originalParallel.getConcurrency() == EdtConcurrency::internode) {
-    Value nodes = castToIndex(&AC, AC.create<GetTotalNodesOp>(loc).getResult(), loc);
-    Value threads = castToIndex(&AC, AC.create<GetTotalWorkersOp>(loc).getResult(), loc);
+    Value nodes =
+        castToIndex(&AC, AC.create<GetTotalNodesOp>(loc).getResult(), loc);
+    Value threads =
+        castToIndex(&AC, AC.create<GetTotalWorkersOp>(loc).getResult(), loc);
     numWorkers = AC.create<arith::MulIOp>(loc, nodes, threads);
-  }
-  else
+  } else
     numWorkers = AC.create<GetTotalWorkersOp>(loc).getResult();
   numWorkers = castToIndex(&AC, numWorkers, loc);
 
@@ -1793,11 +1795,12 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
           AttrNames::Operation::Workers))
     loopInfo.totalWorkers = AC->createIndexConstant(workers.getValue(), loc);
   else if (originalParallel.getConcurrency() == EdtConcurrency::internode) {
-    Value nodes = castToIndex(AC, AC->create<GetTotalNodesOp>(loc).getResult(), loc);
-    Value threads = castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
+    Value nodes =
+        castToIndex(AC, AC->create<GetTotalNodesOp>(loc).getResult(), loc);
+    Value threads =
+        castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
     loopInfo.totalWorkers = AC->create<arith::MulIOp>(loc, nodes, threads);
-  }
-  else
+  } else
     loopInfo.totalWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
   loopInfo.totalWorkers = castToIndex(AC, loopInfo.totalWorkers, loc);
 
@@ -2011,7 +2014,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
                                parentAcqOp.getIndices().end()),
             /*offsets=*/workerOffsets,
             /*sizes=*/workerSizes,
-            /*partition_indices=*/SmallVector<Value>{},
+            /*partition_indices=*/SmallVector<Value>{workerIdPlaceholder},
             /*partition_offsets=*/workerOffsets,
             /*partition_sizes=*/workerHintSizes);
       }
@@ -2093,11 +2096,13 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
           AttrNames::Operation::Workers))
     insideTotalWorkers = AC->createIndexConstant(workers.getValue(), loc);
   else if (taskConcurrency == EdtConcurrency::internode) {
-    Value totalNodes = castToIndex(AC, AC->create<GetTotalNodesOp>(loc).getResult(), loc);
-    Value totalThreads = castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
-    insideTotalWorkers = AC->create<arith::MulIOp>(loc, totalNodes, totalThreads);
-  }
-  else
+    Value totalNodes =
+        castToIndex(AC, AC->create<GetTotalNodesOp>(loc).getResult(), loc);
+    Value totalThreads =
+        castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
+    insideTotalWorkers =
+        AC->create<arith::MulIOp>(loc, totalNodes, totalThreads);
+  } else
     insideTotalWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
 
   loopInfo.recomputeWorkerBoundsInside(taskWorkerId, insideTotalWorkers);

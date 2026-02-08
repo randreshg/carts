@@ -22,8 +22,8 @@ void arts::copyLoopAttributes(Operation *source, Operation *target) {
 void arts::updateTripCountMetadata(Operation *loop, int64_t newTripCount) {
   if (!loop)
     return;
-  auto attr = loop->getAttrOfType<LoopMetadataAttr>(
-      AttrNames::LoopMetadata::Name);
+  auto attr =
+      loop->getAttrOfType<LoopMetadataAttr>(AttrNames::LoopMetadata::Name);
   if (!attr)
     return;
 

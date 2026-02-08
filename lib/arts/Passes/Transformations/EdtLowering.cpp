@@ -679,7 +679,6 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
         dbMode = allocMode;
     }
     acquireModes.push_back(static_cast<int32_t>(dbMode));
-
   }
 
   /// Create dependency management ops with appropriate access mode

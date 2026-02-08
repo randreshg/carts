@@ -50,6 +50,9 @@ public:
   /// Extract a constant floating-point value from a Value.
   static std::optional<double> getConstantFloat(Value v);
 
+  /// Check if a value equals a given constant (float or integer).
+  static bool isConstantEqual(Value v, int64_t val);
+
   /// Check if a value is a zero constant (float or integer).
   static bool isZeroConstant(Value v);
 
