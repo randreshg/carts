@@ -247,11 +247,23 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
   int threads =
       abstractMachine->hasValidThreads() ? abstractMachine->getThreads() : 0;
 
+  /// Compute actual worker threads matching the ARTS runtime calculation:
+  /// workerThreads = threads - senderCount - receiverCount
+  /// This must match what artsGetTotalWorkers() returns at runtime.
+  int workerThreads = threads;
+  if (nodeCount > 1 && threads > 0) {
+    int outgoing = abstractMachine->getOutgoingThreads();
+    int incoming = abstractMachine->getIncomingThreads();
+    workerThreads = threads - outgoing - incoming;
+    if (workerThreads <= 0)
+      workerThreads = 1;
+  }
+
   if (nodeCount > 1) {
-    numWorkers = (threads > 0) ? nodeCount * threads : 0;
+    numWorkers = (threads > 0) ? nodeCount * workerThreads : 0;
     concurrencyType = EdtConcurrency::internode;
     ARTS_INFO("Setting EDT parallelism: inter-node across " << nodeCount
-              << " nodes" << (threads > 0 ? " x " + std::to_string(threads) + " threads" : ""));
+              << " nodes" << (workerThreads > 0 ? " x " + std::to_string(workerThreads) + " workers" : ""));
   } else if (threads > 0) {
     numWorkers = threads;
     concurrencyType = EdtConcurrency::intranode;
