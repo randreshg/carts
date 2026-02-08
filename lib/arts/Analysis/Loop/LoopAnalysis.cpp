@@ -7,9 +7,9 @@
 #include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/ArtsDialect.h"
+#include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
-#include "arts/Utils/ArtsDebug.h"
 #include <algorithm>
 
 ARTS_DEBUG_SETUP(loop_analysis);
@@ -20,7 +20,7 @@ using namespace mlir::arts;
 namespace {
 
 static std::optional<int64_t> getTripCountFromMetadata(Operation *loopOp,
-                                                        LoopNode *loopNode) {
+                                                       LoopNode *loopNode) {
   if (loopNode && loopNode->tripCount && *loopNode->tripCount > 0)
     return *loopNode->tripCount;
 
@@ -38,7 +38,8 @@ static std::optional<int64_t> getTripCountFromMetadata(Operation *loopOp,
   return std::nullopt;
 }
 
-static std::optional<int64_t> getTripCountFromConstantBounds(Operation *loopOp) {
+static std::optional<int64_t>
+getTripCountFromConstantBounds(Operation *loopOp) {
   if (auto artsFor = dyn_cast<arts::ForOp>(loopOp)) {
     if (artsFor.getLowerBound().empty() || artsFor.getUpperBound().empty() ||
         artsFor.getStep().empty())
@@ -160,7 +161,8 @@ void LoopAnalysis::collectForLoopsInOperation(
   });
 }
 
-std::optional<int64_t> LoopAnalysis::getStaticTripCount(Operation *loopOp) const {
+std::optional<int64_t>
+LoopAnalysis::getStaticTripCount(Operation *loopOp) const {
   if (!loopOp || !isLoopOperation(loopOp))
     return std::nullopt;
 

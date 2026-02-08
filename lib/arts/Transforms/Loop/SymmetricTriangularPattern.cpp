@@ -48,11 +48,11 @@ struct SymmetricTriangularMatch {
   ForOp outerArtsFor;
   scf::ForOp jLoop;
   int64_t triangularOffset = 0;
-  memref::StoreOp storeIJ;      /// store to C[i,j]
-  memref::StoreOp storeJI;      /// store to C[j,i] (symmetric)
-  Value memC;                    /// target memref
-  memref::StoreOp diagStore;    /// optional diagonal store
-  Value diagValue;               /// value stored on diagonal
+  memref::StoreOp storeIJ;   /// store to C[i,j]
+  memref::StoreOp storeJI;   /// store to C[j,i] (symmetric)
+  Value memC;                /// target memref
+  memref::StoreOp diagStore; /// optional diagonal store
+  Value diagValue;           /// value stored on diagonal
 };
 
 /// Check if two stores write the same value to the same memref with
@@ -209,8 +209,7 @@ bool SymmetricTriangularPattern::detectSymmetricStores(scf::ForOp jLoop,
 }
 
 bool SymmetricTriangularPattern::detectDiagonalInit(ForOp artsFor,
-                                                    Value outerIV,
-                                                    Value memC) {
+                                                    Value outerIV, Value memC) {
   for (Operation &op : artsFor.getBody()->without_terminator()) {
     if (auto store = dyn_cast<memref::StoreOp>(&op)) {
       if (store.getMemRef() == memC && isDiagonalStore(store, outerIV)) {

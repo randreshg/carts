@@ -119,25 +119,70 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
     return;
   }
 
-  /// Capture partition hints (element-space) for analysis.
-  if (!dbAcquireOp.getPartitionIndices().empty())
-    partitionOffset = dbAcquireOp.getPartitionIndices().front();
-  else if (!dbAcquireOp.getPartitionOffsets().empty())
-    partitionOffset = dbAcquireOp.getPartitionOffsets().front();
-  if (!dbAcquireOp.getPartitionSizes().empty())
-    partitionSize = dbAcquireOp.getPartitionSizes().front();
+  /// Capture partition hints for analysis.
+  /// Fine-grained mode uses partition indices as element coordinates.
+  /// Block/stencil modes use partition offsets as range starts.
+  auto pickRepresentative = [](ValueRange vals, unsigned &idx) -> Value {
+    idx = 0;
+    for (unsigned i = 0; i < vals.size(); ++i) {
+      Value v = vals[i];
+      if (!v)
+        continue;
+      int64_t c = 0;
+      if (!ValueUtils::getConstantIndex(ValueUtils::stripNumericCasts(v), c)) {
+        idx = i;
+        return v;
+      }
+    }
+    for (unsigned i = 0; i < vals.size(); ++i) {
+      if (vals[i]) {
+        idx = i;
+        return vals[i];
+      }
+    }
+    return Value();
+  };
 
-  /// Fallback to DB-space offsets/sizes only when an explicit non-coarse
-  /// partition mode is set (legacy paths or already-partitioned acquires).
+  unsigned hintIdx = 0;
+  auto hintMode = dbAcquireOp.getPartitionMode();
+  bool preferPartitionIndices =
+      !hintMode || *hintMode == PartitionMode::fine_grained;
+  if (preferPartitionIndices && !dbAcquireOp.getPartitionIndices().empty())
+    partitionOffset =
+        pickRepresentative(dbAcquireOp.getPartitionIndices(), hintIdx);
+  else if (!dbAcquireOp.getPartitionOffsets().empty())
+    partitionOffset =
+        pickRepresentative(dbAcquireOp.getPartitionOffsets(), hintIdx);
+  else if (!dbAcquireOp.getPartitionIndices().empty())
+    partitionOffset =
+        pickRepresentative(dbAcquireOp.getPartitionIndices(), hintIdx);
+  if (!dbAcquireOp.getPartitionSizes().empty()) {
+    if (hintIdx < dbAcquireOp.getPartitionSizes().size())
+      partitionSize = dbAcquireOp.getPartitionSizes()[hintIdx];
+    else
+      partitionSize = dbAcquireOp.getPartitionSizes().front();
+  }
+
+  /// Fallback to DB-space indices/offsets/sizes only when an explicit
+  /// non-coarse partition mode is set (legacy paths or already-partitioned
+  /// acquires).
   if (!partitionOffset && !partitionSize) {
-    if (auto mode = dbAcquireOp.getPartitionMode()) {
-      if (*mode == PartitionMode::block || *mode == PartitionMode::stencil ||
-          *mode == PartitionMode::fine_grained) {
-        if (!dbAcquireOp.getIndices().empty())
-          partitionOffset = dbAcquireOp.getIndices().front();
-        else if (!dbAcquireOp.getOffsets().empty())
-          partitionOffset = dbAcquireOp.getOffsets().front();
-        if (!dbAcquireOp.getSizes().empty())
+    if (auto mode = dbAcquireOp.getPartitionMode();
+        mode &&
+        (*mode == PartitionMode::block || *mode == PartitionMode::stencil ||
+         *mode == PartitionMode::fine_grained)) {
+      unsigned dbIdx = 0;
+      bool preferDbIndices = (*mode == PartitionMode::fine_grained);
+      if (preferDbIndices && !dbAcquireOp.getIndices().empty())
+        partitionOffset = pickRepresentative(dbAcquireOp.getIndices(), dbIdx);
+      else if (!dbAcquireOp.getOffsets().empty())
+        partitionOffset = pickRepresentative(dbAcquireOp.getOffsets(), dbIdx);
+      else if (!dbAcquireOp.getIndices().empty())
+        partitionOffset = pickRepresentative(dbAcquireOp.getIndices(), dbIdx);
+      if (!dbAcquireOp.getSizes().empty()) {
+        if (dbIdx < dbAcquireOp.getSizes().size())
+          partitionSize = dbAcquireOp.getSizes()[dbIdx];
+        else
           partitionSize = dbAcquireOp.getSizes().front();
       }
     }
@@ -514,12 +559,18 @@ bool DbAcquireNode::computePartitionBounds() {
   };
 
   unsigned offsetIdx = 0;
-  if (!mutableAcquire.getPartitionIndices().empty())
+  auto hintMode = mutableAcquire.getPartitionMode();
+  bool preferPartitionIndices =
+      !hintMode || *hintMode == PartitionMode::fine_grained;
+  if (preferPartitionIndices && !mutableAcquire.getPartitionIndices().empty())
     partitionOffset =
         pickRepresentative(mutableAcquire.getPartitionIndices(), offsetIdx);
   else if (!mutableAcquire.getPartitionOffsets().empty())
     partitionOffset =
         pickRepresentative(mutableAcquire.getPartitionOffsets(), offsetIdx);
+  else if (!mutableAcquire.getPartitionIndices().empty())
+    partitionOffset =
+        pickRepresentative(mutableAcquire.getPartitionIndices(), offsetIdx);
   if (!mutableAcquire.getPartitionSizes().empty()) {
     if (offsetIdx < mutableAcquire.getPartitionSizes().size())
       partitionSize = mutableAcquire.getPartitionSizes()[offsetIdx];
@@ -528,22 +579,26 @@ bool DbAcquireNode::computePartitionBounds() {
   }
 
   if (!partitionOffset && !partitionSize) {
-    if (auto mode = mutableAcquire.getPartitionMode()) {
-      if (*mode == PartitionMode::block || *mode == PartitionMode::stencil ||
-          *mode == PartitionMode::fine_grained) {
-        offsetIdx = 0;
-        if (!mutableAcquire.getIndices().empty())
-          partitionOffset =
-              pickRepresentative(mutableAcquire.getIndices(), offsetIdx);
-        else if (!mutableAcquire.getOffsets().empty())
-          partitionOffset =
-              pickRepresentative(mutableAcquire.getOffsets(), offsetIdx);
-        if (!mutableAcquire.getSizes().empty()) {
-          if (offsetIdx < mutableAcquire.getSizes().size())
-            partitionSize = mutableAcquire.getSizes()[offsetIdx];
-          else
-            partitionSize = mutableAcquire.getSizes().front();
-        }
+    if (auto mode = mutableAcquire.getPartitionMode();
+        mode &&
+        (*mode == PartitionMode::block || *mode == PartitionMode::stencil ||
+         *mode == PartitionMode::fine_grained)) {
+      offsetIdx = 0;
+      bool preferDbIndices = (*mode == PartitionMode::fine_grained);
+      if (preferDbIndices && !mutableAcquire.getIndices().empty())
+        partitionOffset =
+            pickRepresentative(mutableAcquire.getIndices(), offsetIdx);
+      else if (!mutableAcquire.getOffsets().empty())
+        partitionOffset =
+            pickRepresentative(mutableAcquire.getOffsets(), offsetIdx);
+      else if (!mutableAcquire.getIndices().empty())
+        partitionOffset =
+            pickRepresentative(mutableAcquire.getIndices(), offsetIdx);
+      if (!mutableAcquire.getSizes().empty()) {
+        if (offsetIdx < mutableAcquire.getSizes().size())
+          partitionSize = mutableAcquire.getSizes()[offsetIdx];
+        else
+          partitionSize = mutableAcquire.getSizes().front();
       }
     }
   }
@@ -1103,7 +1158,8 @@ DbAcquireNode::getPartitionOffsetDim(Value offset, bool requireLeading) {
             /// leading dim is still valid — keep the first matched position.
             if (matchedIdx && fullChain[i] == matchedIdx) {
               ARTS_DEBUG("  same index in multiple dims (diagonal); "
-                         "keeping leading dim " << matchedPos);
+                         "keeping leading dim "
+                         << matchedPos);
               continue;
             }
             ARTS_DEBUG("  partition offset maps to multiple dims; "

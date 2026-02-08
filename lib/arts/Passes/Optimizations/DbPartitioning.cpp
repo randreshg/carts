@@ -6,8 +6,6 @@
 ///   Phase 2: Heuristic voting -> RewriterMode
 ///   (Coarse/ElementWise/Block/Stencil) Phase 3: Size computation and
 ///   rewriter application
-///
-/// Twin-diff is enabled when disjoint access cannot be proven.
 ///==========================================================================///
 
 /// Dialects
@@ -144,18 +142,22 @@ getPartitionOffsetsND(DbAcquireNode *acqNode,
 
   SmallVector<Value> result;
   DbAcquireOp acqOp = acqNode->getDbAcquireOp();
+  auto mode = acqOp.getPartitionMode();
+  bool preferPartitionIndices = !mode || *mode == PartitionMode::fine_grained;
 
-  /// Check partition hints from partition_indices first
+  /// Fine-grained uses partition indices; block/stencil use offsets.
   auto indices = acqOp.getPartitionIndices();
-  if (!indices.empty()) {
+  auto offsets = acqOp.getPartitionOffsets();
+  if (preferPartitionIndices && !indices.empty()) {
     result.append(indices.begin(), indices.end());
     return result;
   }
-
-  /// Fall back to partition_offsets
-  auto offsets = acqOp.getPartitionOffsets();
   if (!offsets.empty()) {
     result.append(offsets.begin(), offsets.end());
+    return result;
+  }
+  if (!indices.empty()) {
+    result.append(indices.begin(), indices.end());
     return result;
   }
 
@@ -305,7 +307,7 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
       /// should NOT trigger stencil/ESD mode. Stencil mode applies to
       /// parallel-for style patterns where block partitioning is desired.
       bool hasExplicitFineGrained = false;
-      if (!acquire.getPartitionIndices().empty())
+      if (info.mode == PartitionMode::fine_grained)
         hasExplicitFineGrained = true;
       if (auto mode = acquire.getPartitionMode()) {
         if (*mode == PartitionMode::fine_grained)
@@ -2588,6 +2590,12 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
           rewriteInfo.partitionInfo.offsets.push_back(off);
         for (Value sz : info.partitionSizes)
           rewriteInfo.partitionInfo.sizes.push_back(sz);
+        if (decision.mode == PartitionMode::stencil &&
+            !info.acquire.getPartitionIndices().empty()) {
+          auto partitionIndices = info.acquire.getPartitionIndices();
+          rewriteInfo.partitionInfo.indices.assign(partitionIndices.begin(),
+                                                   partitionIndices.end());
+        }
       }
     } else {
       /// Invalid acquire: use Coarse fallback (full size access).

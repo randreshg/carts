@@ -49,8 +49,9 @@ static bool shouldSkipCoarsening(ForOp forOp, LoopNode *loopNode) {
         return true;
 
     if (auto classAttr = loopAttr.getParallelClassification()) {
-      if (classAttr.getInt() == static_cast<int64_t>(
-                                LoopMetadata::ParallelClassification::Sequential))
+      if (classAttr.getInt() ==
+          static_cast<int64_t>(
+              LoopMetadata::ParallelClassification::Sequential))
         return true;
     }
   }
@@ -123,8 +124,7 @@ computeCoarsenedBlockSize(ForOp forOp, LoopNode *loopNode,
   if (tripCount >= workerCfg.totalWorkers * kMinItersPerWorker)
     return std::nullopt;
 
-  int64_t desiredWorkers =
-      std::max<int64_t>(1, tripCount / kMinItersPerWorker);
+  int64_t desiredWorkers = std::max<int64_t>(1, tripCount / kMinItersPerWorker);
   desiredWorkers = std::min(desiredWorkers, workerCfg.totalWorkers);
 
   int64_t blockSize = (tripCount + desiredWorkers - 1) / desiredWorkers;
@@ -178,9 +178,10 @@ struct ArtsForOptimizationPass
         if (getPartitioningHint(forOp.getOperation()))
           return;
 
-        LoopNode *loopNode = loopAnalysis.getOrCreateLoopNode(forOp.getOperation());
-        auto coarsened =
-            computeCoarsenedBlockSize(forOp, loopNode, loopAnalysis, *workerCfg);
+        LoopNode *loopNode =
+            loopAnalysis.getOrCreateLoopNode(forOp.getOperation());
+        auto coarsened = computeCoarsenedBlockSize(forOp, loopNode,
+                                                   loopAnalysis, *workerCfg);
         if (!coarsened)
           return;
 
