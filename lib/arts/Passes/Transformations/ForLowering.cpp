@@ -94,6 +94,53 @@ static Value getInternodeWorkersPerNode(ArtsCodegen *AC, Location loc,
   return AC->create<arith::SelectOp>(loc, isZero, one, workersPerNode);
 }
 
+/// Compute data-block alignment size from arrays associated with a parallel
+/// EDT. Traces each dependency to its root DbAllocOp (partition-mode agnostic,
+/// since all acquires are coarse at ForLowering time) and computes
+/// ceil(elemSize / numWorkers) — matching DbPartitioning's default formula.
+static Value computeDbAlignmentBlockSize(EdtOp parallelEdt, Value numWorkers,
+                                         ArtsCodegen *AC, Location loc) {
+  if (!parallelEdt || !numWorkers)
+    return Value();
+
+  Value one = AC->createIndexConstant(1, loc);
+  Value hintBlockSize;
+
+  for (Value dep : parallelEdt.getDependencies()) {
+    // Trace each dependency to its root DbAllocOp
+    auto allocInfo = DatablockUtils::traceToDbAlloc(dep);
+    if (!allocInfo)
+      continue;
+    auto [rootGuid, rootPtr] = *allocInfo;
+    auto allocOp = rootGuid.getDefiningOp<DbAllocOp>();
+    if (!allocOp || allocOp.getElementSizes().empty())
+      continue;
+
+    // Skip scalar allocs (element size = 1)
+    Value elemSize = allocOp.getElementSizes().front();
+    if (auto constElem = ValueUtils::tryFoldConstantIndex(elemSize))
+      if (*constElem <= 1)
+        continue;
+
+    elemSize = castToIndex(AC, elemSize, loc);
+
+    // Compute ceil(elemSize / numWorkers) — same formula as DbPartitioning
+    Value adjusted = AC->create<arith::AddIOp>(loc, elemSize,
+        AC->create<arith::SubIOp>(loc, numWorkers, one));
+    Value candidate = AC->create<arith::DivUIOp>(loc, adjusted, numWorkers);
+    candidate = AC->create<arith::MaxUIOp>(loc, candidate, one);
+
+    if (!hintBlockSize)
+      hintBlockSize = candidate;
+    else
+      hintBlockSize = AC->create<arith::MinUIOp>(loc, hintBlockSize, candidate);
+  }
+
+  ARTS_DEBUG("Runtime alignment block size available="
+             << (hintBlockSize ? "yes" : "no"));
+  return hintBlockSize;
+}
+
 ///===----------------------------------------------------------------------===///
 /// LoopInfo - Information about a loop within a parallel EDT
 ///
@@ -106,8 +153,9 @@ static Value getInternodeWorkersPerNode(ArtsCodegen *AC, Location loc,
 ///===----------------------------------------------------------------------===///
 class LoopInfo {
 public:
-  LoopInfo(ArtsCodegen *AC, ForOp forOp, Value numWorkers)
-      : AC(AC), forOp(forOp) {
+  LoopInfo(ArtsCodegen *AC, ForOp forOp, Value numWorkers,
+           Value runtimeBlockSizeHint = Value())
+      : AC(AC), forOp(forOp), runtimeBlockSizeHint(runtimeBlockSizeHint) {
     lowerBound = forOp.getLowerBound()[0];
     upperBound = forOp.getUpperBound()[0];
     loopStep = forOp.getStep()[0];
@@ -124,7 +172,9 @@ public:
   /// Base lower bound used for chunking (may be aligned to block size)
   Value chunkLowerBound;
   bool useAlignedLowerBound = false;
+  bool useRuntimeBlockAlignment = false;
   std::optional<int64_t> alignmentBlockSize;
+  Value runtimeBlockSizeHint;
   /// Distribution information
   Value blockSize, totalWorkers, totalIterations, totalChunks;
   /// Worker information
@@ -554,6 +604,15 @@ private:
 
 void LoopInfo::initialize() {
   Location loc = forOp.getLoc();
+  Value one = AC->createIndexConstant(1, loc);
+  Value safeWorkers = AC->create<arith::MaxUIOp>(loc, totalWorkers, one);
+
+  /// Raw total iterations from original loop bounds (before alignment).
+  Value rawRange = AC->create<arith::SubIOp>(loc, upperBound, lowerBound);
+  Value rawAdjustedRange = AC->create<arith::AddIOp>(
+      loc, rawRange, AC->create<arith::SubIOp>(loc, loopStep, one));
+  Value rawTotalIterations =
+      AC->create<arith::DivUIOp>(loc, rawAdjustedRange, loopStep);
 
   /// Step 1: Determine block size from PartitioningHint or default to 1
   int64_t computedBlockSize = 1;
@@ -569,6 +628,24 @@ void LoopInfo::initialize() {
 
   /// Create the block size constant
   blockSize = AC->createIndexConstant(computedBlockSize, loc);
+  useRuntimeBlockAlignment = false;
+  if (computedBlockSize == 1 && runtimeBlockSizeHint) {
+    blockSize = castToIndex(AC, runtimeBlockSizeHint, loc);
+    blockSize = AC->create<arith::MaxUIOp>(loc, blockSize, one);
+    useRuntimeBlockAlignment = true;
+    ARTS_DEBUG("Using runtime DB alignment block size");
+  } else if (computedBlockSize == 1) {
+    /// Fallback for schedule(static) without explicit chunk size:
+    /// use ceil(totalIterations / workers) to align worker starts to chunk
+    /// boundaries.
+    Value workersMinusOne = AC->create<arith::SubIOp>(loc, safeWorkers, one);
+    Value adjustedIters =
+        AC->create<arith::AddIOp>(loc, rawTotalIterations, workersMinusOne);
+    blockSize = AC->create<arith::DivUIOp>(loc, adjustedIters, safeWorkers);
+    blockSize = AC->create<arith::MaxUIOp>(loc, blockSize, one);
+    useRuntimeBlockAlignment = true;
+    ARTS_DEBUG("Using runtime fallback block size from loop/workers");
+  }
 
   /// Step 2: Compute total iterations
   /// totalIterations = ceil((upper - lower) / step)
@@ -594,6 +671,11 @@ void LoopInfo::initialize() {
                                                       << aligned);
       }
     }
+  }
+  if (useRuntimeBlockAlignment) {
+    Value rem = AC->create<arith::RemUIOp>(loc, lowerBound, blockSize);
+    chunkLowerBound = AC->create<arith::SubIOp>(loc, lowerBound, rem);
+    useAlignedLowerBound = true;
   }
 
   Value range = AC->create<arith::SubIOp>(loc, upperBound, chunkLowerBound);
@@ -743,6 +825,11 @@ void LoopInfo::recomputeWorkerBoundsInside(Value workerId,
                    << *lbConst << " to " << aligned);
       }
     }
+  } else if (useRuntimeBlockAlignment) {
+    Value rem =
+        AC->create<arith::RemUIOp>(loc, localLowerBound, localBlockSize);
+    chunkLowerBound = AC->create<arith::SubIOp>(loc, localLowerBound, rem);
+    useAlignedLowerBound = true;
   }
 
   /// totalIterations = ceil((upper - lower) / step)
@@ -852,8 +939,7 @@ void ForLoweringPass::lowerParallelEdt(EdtOp parallelEdt) {
   ARTS_DEBUG(" - Deps used by for: " << analysis.depsUsedByFor.size());
   ARTS_DEBUG(" - Deps used after for: " << analysis.depsUsedAfterFor.size());
 
-  /// Construct codegen with runtime debug printing disabled by default.
-  ArtsCodegen AC(module, /*debug=*/false);
+  ArtsCodegen AC(module);
   Location loc = parallelEdt.getLoc();
 
   /// Extract for-body outside the parallel EDT
@@ -1590,6 +1676,19 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
     numWorkers = AC.create<GetTotalWorkersOp>(loc).getResult();
   numWorkers = castToIndex(&AC, numWorkers, loc);
 
+  /// numDbPartitions: the number of DB partition blocks (= numNodes for
+  /// internode). Used to align worker chunk boundaries to DB block boundaries
+  /// so stencil 3-buffer schemes don't have gaps at block boundaries.
+  /// For internode, DbPartitioning uses nodeCount for block count, so
+  /// ForLowering must align to the same granularity.
+  Value numDbPartitions;
+  if (originalParallel.getConcurrency() == EdtConcurrency::internode) {
+    numDbPartitions =
+        castToIndex(&AC, AC.create<GetTotalNodesOp>(loc).getResult(), loc);
+  } else {
+    numDbPartitions = numWorkers;
+  }
+
   Value zero = AC.createIndexConstant(0, loc);
   Value one = AC.createIndexConstant(1, loc);
 
@@ -1609,7 +1708,11 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   Value workerIV = workerLoop.getInductionVar();
 
   /// Create task EDT with DB rewiring
-  LoopInfo loopInfo(&AC, forOp, numWorkers);
+  /// Use numDbPartitions (= numNodes for internode) for alignment so that
+  /// ForLowering chunk boundaries align with DbPartitioning block boundaries.
+  Value runtimeBlockSize =
+      computeDbAlignmentBlockSize(originalParallel, numDbPartitions, &AC, loc);
+  LoopInfo loopInfo(&AC, forOp, numWorkers, runtimeBlockSize);
   createTaskEdtWithRewiring(&AC, loopInfo, forOp, workerIV, originalParallel,
                             redInfo);
 
