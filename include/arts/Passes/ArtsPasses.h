@@ -56,6 +56,7 @@ std::unique_ptr<Pass> createLoopFusionPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createEpochOptPass();
 std::unique_ptr<Pass> createArtsHoistingPass();
 std::unique_ptr<Pass> createBlockLoopStripMiningPass();
+std::unique_ptr<Pass> createLoopNormalizationPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createLoopReorderingPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createLoopTransformsPass(ArtsAnalysisManager *AM,
                                                bool enableMatmul = true,
