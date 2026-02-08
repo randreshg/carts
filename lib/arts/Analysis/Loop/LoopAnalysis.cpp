@@ -7,6 +7,8 @@
 #include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/ArtsDialect.h"
+#include "arts/Utils/OperationAttributes.h"
+#include "arts/Utils/ValueUtils.h"
 #include "arts/Utils/ArtsDebug.h"
 #include <algorithm>
 
@@ -14,6 +16,61 @@ ARTS_DEBUG_SETUP(loop_analysis);
 
 using namespace mlir;
 using namespace mlir::arts;
+
+namespace {
+
+static std::optional<int64_t> getTripCountFromMetadata(Operation *loopOp,
+                                                        LoopNode *loopNode) {
+  if (loopNode && loopNode->tripCount && *loopNode->tripCount > 0)
+    return *loopNode->tripCount;
+
+  if (auto artsFor = dyn_cast<arts::ForOp>(loopOp)) {
+    if (auto loopAttr = artsFor->getAttrOfType<LoopMetadataAttr>(
+            AttrNames::LoopMetadata::Name)) {
+      if (auto tripAttr = loopAttr.getTripCount()) {
+        int64_t tc = tripAttr.getInt();
+        if (tc > 0)
+          return tc;
+      }
+    }
+  }
+
+  return std::nullopt;
+}
+
+static std::optional<int64_t> getTripCountFromConstantBounds(Operation *loopOp) {
+  if (auto artsFor = dyn_cast<arts::ForOp>(loopOp)) {
+    if (artsFor.getLowerBound().empty() || artsFor.getUpperBound().empty() ||
+        artsFor.getStep().empty())
+      return std::nullopt;
+
+    int64_t lb = 0, ub = 0, step = 0;
+    if (ValueUtils::getConstantIndex(artsFor.getLowerBound()[0], lb) &&
+        ValueUtils::getConstantIndex(artsFor.getUpperBound()[0], ub) &&
+        ValueUtils::getConstantIndex(artsFor.getStep()[0], step) && step > 0) {
+      int64_t span = ub - lb;
+      if (span <= 0)
+        return 0;
+      return (span + step - 1) / step;
+    }
+  }
+
+  if (auto forOp = dyn_cast<scf::ForOp>(loopOp)) {
+    int64_t lb = 0, ub = 0, step = 0;
+    if (ValueUtils::getConstantIndex(forOp.getLowerBound(), lb) &&
+        ValueUtils::getConstantIndex(forOp.getUpperBound(), ub) &&
+        ValueUtils::getConstantIndex(forOp.getStep(), step) && step > 0) {
+      int64_t span = ub - lb;
+      if (span <= 0)
+        return 0;
+      return (span + step - 1) / step;
+    }
+  }
+
+  return std::nullopt;
+}
+
+} // namespace
 
 LoopAnalysis::LoopAnalysis(ArtsAnalysisManager &analysisManager)
     : ArtsAnalysis(analysisManager), module(analysisManager.getModule()) {
@@ -101,6 +158,17 @@ void LoopAnalysis::collectForLoopsInOperation(
         loops.push_back(node);
     }
   });
+}
+
+std::optional<int64_t> LoopAnalysis::getStaticTripCount(Operation *loopOp) const {
+  if (!loopOp || !isLoopOperation(loopOp))
+    return std::nullopt;
+
+  LoopNode *loopNode = getLoopNode(loopOp);
+  if (auto metadataTripCount = getTripCountFromMetadata(loopOp, loopNode))
+    return metadataTripCount;
+
+  return getTripCountFromConstantBounds(loopOp);
 }
 
 template <typename LoopOpType>
