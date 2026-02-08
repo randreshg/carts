@@ -101,8 +101,8 @@ public:
 
   /// Helper functions
   Value createFnPtr(func::FuncOp funcOp, Location loc);
-  Value createIndexConstant(int value, Location loc);
-  Value createIntConstant(int value, Type type, Location loc);
+  Value createIndexConstant(int64_t value, Location loc);
+  Value createIntConstant(int64_t value, Type type, Location loc);
   Value createPtr(Value source, Location loc);
   enum class ParameterCastMode {
     Numeric,

@@ -415,11 +415,11 @@ Value ArtsCodegen::createFnPtr(func::FuncOp funcOp, Location loc) {
       .getResult();
 }
 
-Value ArtsCodegen::createIndexConstant(int value, Location loc) {
+Value ArtsCodegen::createIndexConstant(int64_t value, Location loc) {
   return create<arith::ConstantIndexOp>(loc, value);
 }
 
-Value ArtsCodegen::createIntConstant(int value, Type type, Location loc) {
+Value ArtsCodegen::createIntConstant(int64_t value, Type type, Location loc) {
   assert(type.isa<IntegerType>() && "Expected integer type");
   auto v = create<arith::ConstantOp>(loc, type,
                                      getBuilder().getIntegerAttr(type, value));
