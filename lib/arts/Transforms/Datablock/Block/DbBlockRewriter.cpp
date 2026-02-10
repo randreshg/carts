@@ -45,8 +45,8 @@ static bool isDefinedInRegion(Value val, Region *region) {
   return false;
 }
 
-/// Check if an operation can be safely cloned (pure arithmetic ops).
-static bool canCloneForStartBlock(Operation *op) {
+/// Start-block clone whitelist (pure arithmetic ops only).
+static bool isStartBlockArithmeticOp(Operation *op) {
   return isa<arith::ConstantIndexOp, arith::ConstantIntOp, arith::DivUIOp,
              arith::DivSIOp, arith::RemUIOp, arith::RemSIOp, arith::AddIOp,
              arith::SubIOp, arith::MulIOp, arith::MaxUIOp, arith::MinUIOp,
@@ -87,17 +87,18 @@ static Value cloneValueIntoEdtIfNeeded(Value val, EdtOp edt, OpBuilder &builder,
   if (!defOp)
     return val;
 
-  /// Only clone safe arithmetic operations
-  if (!canCloneForStartBlock(defOp))
+  /// Only clone whitelisted arithmetic operations.
+  if (!ValueUtils::canCloneOperation(defOp, /*allowMemoryEffectFree=*/false,
+                                     isStartBlockArithmeticOp))
     return val;
 
-  /// Recursively clone operands first
+  /// Recursively clone operands first.
   for (Value operand : defOp->getOperands()) {
     if (!mapping.contains(operand))
       cloneValueIntoEdtIfNeeded(operand, edt, builder, mapping);
   }
 
-  /// Clone the operation with mapped operands
+  /// Clone the operation with mapped operands.
   Operation *clonedOp = builder.clone(*defOp, mapping);
   Value result = clonedOp->getResult(0);
   mapping.map(val, result);

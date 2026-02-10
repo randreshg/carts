@@ -10,8 +10,10 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Value.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/FunctionExtras.h"
 #include <optional>
 
@@ -192,6 +194,24 @@ public:
                           OpBuilder &builder, Location loc,
                           llvm::function_ref<Value(Value)> traceValueFn,
                           llvm::function_ref<Value(Value)> traceCondFn);
+
+  ///===----------------------------------------------------------------------===//
+  /// Value Cloning Utilities
+  ///===----------------------------------------------------------------------===//
+
+  /// Check if an operation can be safely cloned into another region.
+  /// `allowMemoryEffectFree` enables cloning of pure ops.
+  /// `extraAllowed` can whitelist additional ops not covered by defaults.
+  static bool canCloneOperation(
+      Operation *op, bool allowMemoryEffectFree = true,
+      llvm::function_ref<bool(Operation *)> extraAllowed = {});
+
+  /// Clone external values (and dependencies) into a target region.
+  /// Returns true when all requested values were cloned/mapped.
+  static bool cloneValuesIntoRegion(
+      llvm::SetVector<Value> &values, Region *targetRegion, IRMapping &mapper,
+      OpBuilder &builder, bool allowMemoryEffectFree = true,
+      llvm::function_ref<bool(Operation *)> extraAllowed = {});
 };
 
 } // namespace arts

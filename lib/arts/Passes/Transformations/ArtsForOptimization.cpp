@@ -13,7 +13,10 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
+#include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/OperationAttributes.h"
+#include "arts/Utils/ValueUtils.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 
@@ -146,6 +149,123 @@ computeCoarsenedBlockSize(ForOp forOp, LoopNode *loopNode,
   return blockSize;
 }
 
+/// Trace a db_ref source (inside an EDT body) back to the DbAllocOp it
+/// originates from.  The chain is:
+///   EDT block arg → EDT operand → db_acquire ptr result → db_alloc
+static DbAllocOp traceDbRefToAlloc(Value dbRefSource) {
+   /// Inside the EDT, the source is a block argument
+  auto blockArg = dyn_cast<BlockArgument>(dbRefSource);
+  if (!blockArg)
+    return nullptr;
+
+  auto parentOp = blockArg.getOwner()->getParentOp();
+  auto edt = dyn_cast_or_null<EdtOp>(parentOp);
+  if (!edt)
+    return nullptr;
+
+   /// Map block arg index to EDT operand (dependencies list)
+  unsigned argIdx = blockArg.getArgNumber();
+  auto deps = edt.getDependencies();
+  if (argIdx >= deps.size())
+    return nullptr;
+
+  Value edtOperand = deps[argIdx];
+
+   /// The operand should be a db_acquire ptr result
+  if (auto acq = edtOperand.getDefiningOp<DbAcquireOp>()) {
+     /// Trace through source_guid (input guid) or source_ptr (input ptr)
+    if (Value srcGuid = acq.getSourceGuid())
+      if (auto alloc = srcGuid.getDefiningOp<DbAllocOp>())
+        return alloc;
+    if (Value srcPtr = acq.getSourcePtr())
+      return srcPtr.getDefiningOp<DbAllocOp>();
+  }
+
+  return nullptr;
+}
+
+/// Detect stencil access patterns by analyzing memory accesses inside
+/// arts.for loops within parallel EDTs.  At the ArtsForOptimization stage,
+/// acquires are coarse and live outside the parallel EDT — the partition-
+/// bounds machinery cannot detect stencil patterns yet because partition
+/// offsets/sizes haven't been assigned.  Instead, we directly inspect
+/// load/store indices relative to the arts.for IV.
+static void annotateAccessPatterns(ModuleOp module, ArtsAnalysisManager *AM) {
+   /// Collect which DbAllocOps have stencil access patterns
+  DenseSet<Operation *> stencilAllocs;
+
+  module.walk([&](EdtOp parallelEdt) {
+    if (parallelEdt.getType() != EdtType::parallel)
+      return;
+
+     /// Find arts.for loops directly inside this parallel EDT
+    SmallVector<ForOp> forOps;
+    parallelEdt.walk([&](ForOp forOp) {
+      if (forOp->getParentOfType<EdtOp>() == parallelEdt)
+        forOps.push_back(forOp);
+    });
+    if (forOps.empty())
+      return;
+
+    for (ForOp forOp : forOps) {
+       /// Get the loop IV (first block argument of the for body)
+      Block &body = forOp.getRegion().front();
+      if (body.getNumArguments() == 0)
+        continue;
+      Value loopIV = body.getArgument(0);
+
+       /// Walk all memory accesses inside this for loop
+      forOp.walk([&](Operation *memOp) {
+        if (!isa<memref::LoadOp, memref::StoreOp>(memOp))
+          return;
+
+         /// Get the memref being accessed
+        Value memref =
+            isa<memref::LoadOp>(memOp)
+                ? cast<memref::LoadOp>(memOp).getMemRef()
+                : cast<memref::StoreOp>(memOp).getMemRef();
+
+         /// Trace memref back to a db_ref op
+        auto dbRef = memref.getDefiningOp<DbRefOp>();
+        if (!dbRef)
+          return;
+
+         /// Trace the db_ref source to the originating DbAllocOp
+        DbAllocOp allocOp = traceDbRefToAlloc(dbRef.getSource());
+        if (!allocOp)
+          return;
+
+         /// Check memory access indices for stencil pattern:
+         /// If any index = loopIV + nonzero_constant, it's stencil
+        SmallVector<Value> indices =
+            DatablockUtils::collectFullIndexChain(dbRef, memOp);
+        for (Value idx : indices) {
+          auto offset =
+              ValueUtils::extractConstantOffset(idx, loopIV, loopIV);
+          if (offset && *offset != 0) {
+            stencilAllocs.insert(allocOp.getOperation());
+            return;
+          }
+        }
+      });
+    }
+  });
+
+   /// Now annotate all DbAllocOps: stencil if detected, uniform otherwise
+  module.walk([&](DbAllocOp allocOp) {
+    if (allocOp.getElementSizes().empty())
+      return;
+    DbAccessPattern pattern = stencilAllocs.contains(allocOp.getOperation())
+                                  ? DbAccessPattern::stencil
+                                  : DbAccessPattern::uniform;
+    setDbAccessPattern(allocOp.getOperation(), pattern);
+    ARTS_DEBUG("Annotated alloc "
+               << allocOp << " with access_pattern="
+               << (pattern == DbAccessPattern::stencil ? "stencil"
+                                                       : "uniform"));
+  });
+}
+
 struct ArtsForOptimizationPass
     : public arts::ArtsForOptimizationBase<ArtsForOptimizationPass> {
   explicit ArtsForOptimizationPass(ArtsAnalysisManager *AM) : AM(AM) {
@@ -159,6 +279,8 @@ struct ArtsForOptimizationPass
 
     ARTS_INFO_HEADER(ArtsForOptimization);
     ARTS_DEBUG_REGION(module.dump(););
+
+    annotateAccessPatterns(module, AM);
 
     module.walk([&](EdtOp parallelEdt) {
       if (parallelEdt.getType() != EdtType::parallel)
@@ -205,12 +327,12 @@ private:
   ModuleOp module;
 };
 
-} // namespace
+}  /// namespace
 
 namespace mlir {
 namespace arts {
 std::unique_ptr<Pass> createArtsForOptimizationPass(ArtsAnalysisManager *AM) {
   return std::make_unique<ArtsForOptimizationPass>(AM);
 }
-} // namespace arts
-} // namespace mlir
+}  /// namespace arts
+}  /// namespace mlir

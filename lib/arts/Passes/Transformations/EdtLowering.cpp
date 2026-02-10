@@ -570,7 +570,8 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
   SmallVector<int32_t> acquireModes;
   bool hasEsdDeps = false;
 
-  for (Value dep : deps) {
+  for (unsigned depIndex = 0; depIndex < deps.size(); ++depIndex) {
+    Value dep = deps[depIndex];
     /// Handle both DbAcquireOp and DepDbAcquireOp as dependency sources, even
     /// when they are threaded through block arguments.
     Operation *underlyingDb = DatablockUtils::getUnderlyingDb(dep);
