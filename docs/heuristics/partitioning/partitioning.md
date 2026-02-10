@@ -594,7 +594,61 @@ Per-row compute structure (conceptual, local row r in [0..B-1]):
 This preserves multi-node benefits (minimal halo transfers) and restores
 single-node performance by avoiding per-element halo selection.
 
-Stencil limitations (current):
+### 7.4 Chunk Alignment at ForLowering (Stencil Safety)
+
+For stencil loops, worker chunking must stay consistent with DB block
+boundaries, but it must not expand the logical iteration domain.
+
+Current policy:
+
+1) Explicit compile-time block hints (`PartitioningHint blockSize > 1`)
+   - If loop lower bound is a known constant and misaligned, ForLowering may
+     align the chunking base downward.
+   - The generated inner loop is then clamped back to the original
+     `[lowerBound, upperBound)` domain, so no extra iterations execute.
+
+2) Runtime DB block-size hints (`runtimeBlockSizeHint`)
+   - Use the runtime block size for chunk granularity.
+   - Do not realign `lowerBound` at runtime.
+   - This avoids domain expansion and tail/halo mismatches in stencil kernels.
+
+Why runtime lower-bound alignment is disabled:
+- With internode stencil chunking, expanding `lowerBound` (for example `1 -> 0`)
+  can create acquire/iteration mismatches near the upper edge on tail chunks.
+- In Jacobi-style loops (`i-1`, `i`, `i+1`), the final interior row requires
+  stable ownership of the `i+1` neighbor row.
+
+Example A (compile-time block alignment, safe):
+
+```
+Loop domain:      i in [5, 17), step=1
+Explicit block:   B = 4
+Aligned base:     4
+
+Chunking domain:  [4, 17)   (for partition math)
+Execution domain: [5, 17)   (after loopLower/loopUpper clamp)
+```
+
+Example B (runtime block hint, no runtime lower align):
+
+```
+Loop domain:        i in [1, 255), step=1     (254 interior rows)
+numNodes = 6
+runtime block hint: B = ceil(256 / 6) = 43
+
+Chunk starts (global):
+  node0: [1, 44)
+  node1: [44, 87)
+  node2: [87, 130)
+  node3: [130, 173)
+  node4: [173, 216)
+  node5: [216, 255)
+
+No runtime realignment to 0 is applied.
+```
+
+### 7.5 Stencil Limitations (Current)
+
 - Stencil ESD is restricted to leading partitioned dimensions.
 - If partitionedDims is non-leading, stencil is downgraded to Block.
 

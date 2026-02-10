@@ -108,11 +108,12 @@ def DbAllocOp : Arts_Op<"db_alloc",
     Optional<AnyMemRef>:$address,
     Variadic<Index>:$sizes,
     Variadic<Index>:$elementSizes,
-    OptionalAttr<PartitionModeAttr>:$partition_mode
+    OptionalAttr<PartitionModeAttr>:$partition_mode,
+    OptionalAttr<DbAccessPatternAttr>:$access_pattern
   );
   let results = (outs MemRefOf<[I64]> : $guid, AnyMemRef : $ptr);
   let assemblyFormat = [{
-    `[` $mode `,` $allocType `,` $dbMode (`,` $partition_mode^)? `]`
+    `[` $mode `,` $allocType `,` $dbMode (`,` $partition_mode^)? (`,` $access_pattern^)? `]`
     `route` `(` $route `:` type($route) `)`
     ( `(` $address^ `:` type($address) `)` )?
     `sizes` `[` $sizes `]`

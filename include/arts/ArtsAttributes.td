@@ -135,6 +135,16 @@ def PartitionMode
 /// Enum attribute for DB partition modes
 def PartitionModeAttr : Arts_I32EnumAttr<"partition_mode", PartitionMode>;
 
+/// DB access pattern classification (set by analysis, read by ForLowering).
+def DbAccessPattern
+    : Arts_I32Enum<"DbAccessPattern", "DB access pattern classification", [
+      I32EnumAttrCase<"unknown", 0, "unknown">,
+      I32EnumAttrCase<"uniform", 1, "uniform">,
+      I32EnumAttrCase<"stencil", 2, "stencil">,
+      I32EnumAttrCase<"indexed", 3, "indexed">
+    ]>;
+def DbAccessPatternAttr : Arts_I32EnumAttr<"access_pattern", DbAccessPattern>;
+
 /// Integer attribute for storing number of workers for EDT operations
 def WorkersAttr : AttrDef<ArtsDialect, "workers"> {
   let summary = "Number of parallel workers for EDT operations";
