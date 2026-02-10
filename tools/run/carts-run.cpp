@@ -87,6 +87,13 @@ static cl::opt<std::string> MetadataFile("metadata-file",
                                          cl::value_desc("filename"),
                                          cl::init(".carts-metadata.json"));
 
+/// Compatibility flag used by carts_cli.py / benchmark scripts.
+/// Equivalent to --stop-at=collect-metadata.
+static cl::opt<bool> CollectMetadataFlag(
+    "collect-metadata",
+    cl::desc("Collect and export metadata, then stop the pipeline"),
+    cl::init(false));
+
 static cl::opt<uint64_t>
     ArtsIdStride("arts-id-stride",
                  cl::desc("Stride multiplier for arts ids (EDTs/DBs)"),
@@ -148,6 +155,7 @@ enum class PipelineStage {
   DbOpt,
   EdtOpt,
   Concurrency,
+  EdtDistribution,
   ConcurrencyOpt,
   Epochs,
   PreLowering,
@@ -156,6 +164,7 @@ enum class PipelineStage {
 };
 
 static cl::opt<PipelineStage> StopAt(
+    "stop-at",
     cl::desc("Stop pipeline at specified stage:"),
     cl::values(clEnumValN(PipelineStage::CanonicalizeMemrefs,
                           "canonicalize-memrefs",
@@ -180,6 +189,9 @@ static cl::opt<PipelineStage> StopAt(
                           "Stop after EDT optimizations"),
                clEnumValN(PipelineStage::Concurrency, "concurrency",
                           "Stop after concurrency"),
+               clEnumValN(PipelineStage::EdtDistribution,
+                          "edt-distribution",
+                          "Stop after EDT distribution and for lowering"),
                clEnumValN(PipelineStage::ConcurrencyOpt, "concurrency-opt",
                           "Stop after concurrency optimization"),
                clEnumValN(PipelineStage::PreLowering, "pre-lowering",
@@ -352,7 +364,11 @@ void setupConcurrency(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createConcurrencyPass(AM));
   pm.addPass(arts::createArtsForOptimizationPass(AM));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  /// TODO: Add an EDT Distribution pass here
+}
+
+/// EDT distribution and loop lowering passes.
+void setupEdtDistribution(PassManager &pm, arts::ArtsAnalysisManager *AM) {
+  pm.addPass(arts::createEdtDistributionPass(AM));
   pm.addPass(arts::createForLoweringPass());
 }
 
@@ -456,6 +472,20 @@ setupPassManager(ModuleOp module, MLIRContext &context,
   std::unique_ptr<arts::ArtsAnalysisManager> AM =
       std::make_unique<arts::ArtsAnalysisManager>(
           module, ArtsConfig, MetadataFile, partitionFallback);
+
+  auto &machine = AM->getAbstractMachine();
+  if (!machine.hasConfigFile()) {
+    llvm::errs()
+        << "Error: ARTS configuration file is required.\n"
+        << "Provide --arts-config <path> or place arts.cfg in the working "
+           "directory.\n";
+    return failure();
+  }
+  if (!machine.hasValidNodeCount() || !machine.hasValidThreads()) {
+    llvm::errs()
+        << "Error: arts.cfg must define valid nodeCount (>0) and threads (>0).\n";
+    return failure();
+  }
 
   /// Load metadata from JSON file
   (void)AM->getMetadataManager();
@@ -593,6 +623,19 @@ setupPassManager(ModuleOp module, MLIRContext &context,
   if (stopAt == PipelineStage::Concurrency)
     return success();
 
+  /// EDT distribution and for lowering
+  {
+    PassManager pm(&context);
+    setupEdtDistribution(pm, AM.get());
+    if (failed(pm.run(module))) {
+      ARTS_ERROR("Error when running EDT distribution");
+      module->dump();
+      return failure();
+    }
+  }
+  if (stopAt == PipelineStage::EdtDistribution)
+    return success();
+
   /// Concurrency optimizations
   {
     PassManager pm(&context);
@@ -688,6 +731,10 @@ int main(int argc, char **argv) {
   InitLLVM y(argc, argv);
   cl::ParseCommandLineOptions(argc, argv, "MLIR Optimization Driver\n");
 
+  PipelineStage effectiveStopAt = StopAt;
+  if (CollectMetadataFlag)
+    effectiveStopAt = PipelineStage::CollectMetadata;
+
   /// Set up the dialect registry and MLIR context.
   DialectRegistry registry;
   registerDialects(registry);
@@ -710,7 +757,7 @@ int main(int argc, char **argv) {
 
   /// Run the pass pipeline once.
   std::unique_ptr<arts::ArtsAnalysisManager> AM;
-  if (failed(setupPassManager(module.get(), context, StopAt,
+  if (failed(setupPassManager(module.get(), context, effectiveStopAt,
                               Diagnose ? &AM : nullptr))) {
     return 1;
   }

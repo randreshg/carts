@@ -145,6 +145,29 @@ def DbAccessPattern
     ]>;
 def DbAccessPatternAttr : Arts_I32EnumAttr<"access_pattern", DbAccessPattern>;
 
+/// Distribution strategy selected for an arts.for loop by EdtDistribution pass.
+def EdtDistributionKind
+    : Arts_I32Enum<"EdtDistributionKind", "EDT distribution strategy kind", [
+      I32EnumAttrCase<"block", 0, "block">,
+      I32EnumAttrCase<"two_level", 1, "two_level">,
+      I32EnumAttrCase<"block_cyclic", 2, "block_cyclic">,
+      I32EnumAttrCase<"tiling_2d", 3, "tiling_2d">
+    ]>;
+def EdtDistributionKindAttr
+    : Arts_I32EnumAttr<"distribution_kind", EdtDistributionKind>;
+
+/// Loop pattern classification used for strategy selection diagnostics.
+def EdtDistributionPattern
+    : Arts_I32Enum<"EdtDistributionPattern", "EDT loop pattern kind", [
+      I32EnumAttrCase<"unknown", 0, "unknown">,
+      I32EnumAttrCase<"uniform", 1, "uniform">,
+      I32EnumAttrCase<"stencil", 2, "stencil">,
+      I32EnumAttrCase<"matmul", 3, "matmul">,
+      I32EnumAttrCase<"triangular", 4, "triangular">
+    ]>;
+def EdtDistributionPatternAttr
+    : Arts_I32EnumAttr<"distribution_pattern", EdtDistributionPattern>;
+
 /// Integer attribute for storing number of workers for EDT operations
 def WorkersAttr : AttrDef<ArtsDialect, "workers"> {
   let summary = "Number of parallel workers for EDT operations";

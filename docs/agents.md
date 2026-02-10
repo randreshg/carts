@@ -59,10 +59,11 @@ carts execute <file>.c -O3 --diagnose
 | 8 | `db-opt` | Optimize DB modes |
 | 9 | `edt-opt` | EDT fusion |
 | 10 | `concurrency` | Build concurrency graph |
-| 11 | `concurrency-opt` | DB partitioning |
-| 12 | `epochs` | Epoch synchronization |
-| 13 | `pre-lowering` | Prepare for LLVM |
-| 14 | `arts-to-llvm` | Final LLVM conversion |
+| 11 | `edt-distribution` | Distribution selection + for lowering |
+| 12 | `concurrency-opt` | DB partitioning |
+| 13 | `epochs` | Epoch synchronization |
+| 14 | `pre-lowering` | Prepare for LLVM |
+| 15 | `arts-to-llvm` | Final LLVM conversion |
 
 ### Debug Types (for --debug-only)
 
@@ -122,16 +123,17 @@ flowchart TB
     subgraph P4["Phase 4: Concurrency & synchronization"]
       direction TB
       S10["10) concurrency<br/>Build EDT concurrency graph"]
-      S11["11) concurrency-opt<br/>DB partitioning"]
-      S12["12) epochs<br/>Epoch synchronization"]
-      S10 --> S11 --> S12
+      S11["11) edt-distribution<br/>Distribution selection + ForLowering"]
+      S12["12) concurrency-opt<br/>DB partitioning"]
+      S13["13) epochs<br/>Epoch synchronization"]
+      S10 --> S11 --> S12 --> S13
     end
 
     subgraph P5["Phase 5: Lowering to LLVM"]
       direction TB
-      S13["13) pre-lowering<br/>EDT/DB/Epoch lowering"]
-      S14["14) arts-to-llvm<br/>Final ARTS → LLVM conversion"]
-      S13 --> S14
+      S14["14) pre-lowering<br/>EDT/DB/Epoch lowering"]
+      S15["15) arts-to-llvm<br/>Final ARTS → LLVM conversion"]
+      S14 --> S15
     end
 
     P1 --> P2 --> P3 --> P4 --> P5
@@ -492,55 +494,63 @@ arts.edt <parallel> {
 
 ### Stage 10: concurrency
 
-**Purpose:** Build EDT concurrency graph and lower parallel loops to blocked tasks.
+**Purpose:** Build EDT concurrency graph and apply pre-lowering `arts.for` hints.
 
 **Run Command:**
 ```bash
-carts run <file>.mlir --concurrency
+carts run <file>.mlir --stop-at=concurrency
 ```
 
 **Debug Command:**
 ```bash
-carts run <file>.mlir --concurrency --debug-only=concurrency,for_lowering 2>&1
+carts run <file>.mlir --stop-at=concurrency --debug-only=concurrency,arts_for_optimization 2>&1
 ```
 
 **Passes Executed:**
 - `Concurrency` - Build EDT concurrency graph
-- `ForLowering` - Lower arts.for in parallel EDTs to blocked tasks
-- `PolygeistCanonicalize`, `CSE` - Cleanup passes
-
-**For Lowering Transformation:**
-```mlir
-// Before
-arts.for (%i) = (%c0) to (%N) {
-  // loop body
-}
-
-// After (conceptual)
-%num_workers = arts.get_total_workers
-%block_size = ceildiv(%N, %num_workers)
-%worker_id = arts.get_worker_id
-%chunk_start = %worker_id * %block_size
-%chunk_end = min(%chunk_start + %block_size, %N)
-scf.for %i = %chunk_start to %chunk_end {
-  // loop body
-}
-```
+- `ArtsForOptimization` - Add access-pattern + partitioning hints
+- `PolygeistCanonicalize` - Cleanup pass
 
 ---
 
-### Stage 11: concurrency-opt
+### Stage 11: edt-distribution
 
-**Purpose:** Optimize concurrent execution with DB partitioning and concurrency rewrites.
+**Purpose:** Select distribution strategy and lower `arts.for` loops.
+
+**Reference Doc:**
+- `docs/heuristics/distribution/distribution.md`
 
 **Run Command:**
 ```bash
-carts run <file>.mlir --concurrency-opt
+carts run <file>.mlir --stop-at=edt-distribution
 ```
 
 **Debug Command:**
 ```bash
-carts run <file>.mlir --concurrency-opt --debug-only=db,db_partitioning 2>&1
+carts run <file>.mlir --stop-at=edt-distribution --debug-only=edt_distribution,for_lowering 2>&1
+```
+
+**Passes Executed:**
+- `EdtDistribution` - Annotate strategy (`distribution_kind`, `distribution_pattern`)
+- `ForLowering` - Lower `arts.for` into task EDT work chunks
+
+---
+
+### Stage 12: concurrency-opt
+
+**Purpose:** Optimize concurrent execution with DB partitioning and concurrency rewrites.
+
+**Reference Doc:**
+- `docs/heuristics/partitioning/partitioning.md`
+
+**Run Command:**
+```bash
+carts run <file>.mlir --stop-at=concurrency-opt
+```
+
+**Debug Command:**
+```bash
+carts run <file>.mlir --stop-at=concurrency-opt --debug-only=db,db_partitioning 2>&1
 ```
 
 **Passes Executed:**
@@ -619,35 +629,35 @@ flowchart TB
         S7_8 --> S7_9
     end
 
-    subgraph Stage10["Stage 10: ForLowering"]
+    subgraph Stage11["Stage 11: EdtDistribution + ForLowering"]
         direction TB
-        S10_1[Find arts.for inside parallel EDT]
-        S10_2[Compute chunk_offset and block_size<br/>from loop bounds]
-        S10_3[Clone DbAcquireOp for worker task]
-        S10_4["Add chunk hints to acquire:<br/>chunk_hint(%chunk_index, %block_size)"]
-        S10_5["Set partition=blocked<br/>on cloned acquire"]
+        S11_1[Find arts.for inside parallel EDT]
+        S11_2[Classify pattern and select distribution_kind]
+        S11_3[Annotate distribution attributes on arts.for]
+        S11_4[Lower to worker task EDTs]
+        S11_5[Clone DbAcquireOp for worker task]
 
-        S10_1 --> S10_2 --> S10_3 --> S10_4 --> S10_5
+        S11_1 --> S11_2 --> S11_3 --> S11_4 --> S11_5
     end
 
-    subgraph Stage11["Stage 11: DbPartitioning"]
+    subgraph Stage12["Stage 12: DbPartitioning"]
         direction TB
-        S11_1[For each DbAllocOp]
-        S11_2{Already partitioned?<br/>partition != coarse}
-        S11_3[Skip - keep existing]
-        S11_4[Gather all child DbAcquireOps]
-        S11_5[Build PartitioningContext<br/>from per-acquire analysis]
-        S11_6[Query Heuristics H1.1-H1.6]
-        S11_7[Apply DbRewriter]
-        S11_8[Update allocation sizes]
+        S12_1[For each DbAllocOp]
+        S12_2{Already partitioned?<br/>partition != coarse}
+        S12_3[Skip - keep existing]
+        S12_4[Gather all child DbAcquireOps]
+        S12_5[Build PartitioningContext<br/>from per-acquire analysis]
+        S12_6[Query Heuristics H1.1-H1.6]
+        S12_7[Apply DbRewriter]
+        S12_8[Update allocation sizes]
 
-        S11_1 --> S11_2
-        S11_2 -->|Yes| S11_3
-        S11_2 -->|No| S11_4
-        S11_4 --> S11_5 --> S11_6 --> S11_7 --> S11_8
+        S12_1 --> S12_2
+        S12_2 -->|Yes| S12_3
+        S12_2 -->|No| S12_4
+        S12_4 --> S12_5 --> S12_6 --> S12_7 --> S12_8
     end
 
-    Stage7 --> Stage10 --> Stage11
+    Stage7 --> Stage11 --> Stage12
 ```
 
 ---
@@ -822,7 +832,7 @@ so it is forwarded to `carts execute`.
 
 ---
 
-### Stage 11: DbPartitioning - Final Decision Algorithm
+### Stage 12: DbPartitioning - Final Decision Algorithm
 
 DbPartitioning is the final decision point. It analyzes all acquires for an allocation and applies heuristics to choose the optimal partitioning.
 
@@ -1070,13 +1080,13 @@ traceable, while still recording decisions for diagnostics.
 | IV Check | `lib/arts/Analysis/Graphs/Db/DbAcquireNode.cpp` | 923-1001 | canPartitionWithOffset |
 | Heuristics | `lib/arts/Analysis/HeuristicsConfig.cpp` | 200-280 | getPartitioningMode |
 
-### Stage 12: epochs
+### Stage 13: epochs
 
 **Purpose:** Create epoch synchronization for EDT groups.
 
 **Run Command:**
 ```bash
-carts run <file>.mlir --epochs
+carts run <file>.mlir --stop-at=epochs
 ```
 
 **Passes Executed:**
@@ -1085,18 +1095,18 @@ carts run <file>.mlir --epochs
 
 ---
 
-### Stage 13: pre-lowering
+### Stage 14: pre-lowering
 
 **Purpose:** Final transformations before LLVM conversion.
 
 **Run Command:**
 ```bash
-carts run <file>.mlir --pre-lowering
+carts run <file>.mlir --stop-at=pre-lowering
 ```
 
 **Debug Command:**
 ```bash
-carts run <file>.mlir --pre-lowering --debug-only=parallel_edt_lowering,db_lowering,edt_lowering,epoch_lowering,arts_data_pointer_hoisting 2>&1
+carts run <file>.mlir --stop-at=pre-lowering --debug-only=parallel_edt_lowering,db_lowering,edt_lowering,epoch_lowering,arts_data_pointer_hoisting 2>&1
 ```
 
 **Passes Executed:**
@@ -1117,13 +1127,13 @@ carts run <file>.mlir --pre-lowering --debug-only=parallel_edt_lowering,db_lower
 
 ---
 
-### Stage 14: arts-to-llvm
+### Stage 15: arts-to-llvm
 
 **Purpose:** Final conversion of ARTS dialect to LLVM dialect.
 
 **Run Command:**
 ```bash
-carts run <file>.mlir --arts-to-llvm
+carts run <file>.mlir --stop-at=arts-to-llvm
 # or for complete pipeline:
 carts run <file>.mlir
 ```
@@ -1191,22 +1201,22 @@ carts run <file>.mlir --emit-llvm --debug-only=arts_alias_scope_gen,arts_loop_ve
 | CanonicalizeMemrefs | `canonicalize_memrefs` | 1 | Normalize memref operations |
 | LoopReordering | `loop_reordering` | 6 | Cache-optimal loop order |
 | CreateDbs | `create_dbs` | 7 | Create DataBlock allocations |
-| Db | `db` | 8,11 | Adjust DB modes |
-| DbPartitioning | `db_partitioning` | 11 | Partition for parallelism |
-| Edt | `edt` | 5,9,11 | EDT analysis/optimization |
+| Db | `db` | 8,12 | Adjust DB modes |
+| DbPartitioning | `db_partitioning` | 12 | Partition for parallelism |
+| Edt | `edt` | 5,9,12 | EDT analysis/optimization |
 | EdtInvariantCodeMotion | `edt_invariant_code_motion` | 5 | Hoist invariant code |
 | EdtPtrRematerialization | `edt_ptr_rematerialization` | 5 | Optimize pointer deps |
 | ArtsLoopFusion | `arts_loop_fusion` | 9 | Fuse independent loops |
 | Concurrency | `concurrency` | 10 | Build concurrency graph |
-| ForLowering | `for_lowering` | 10 | Lower arts.for to chunks |
-| CreateEpochs | `create_epochs` | 12 | Create epoch sync |
-| ParallelEdtLowering | `parallel_edt_lowering` | 13 | Lower parallel EDTs |
-| DbLowering | `db_lowering` | 13 | Lower DBs to pointers |
-| EdtLowering | `edt_lowering` | 13 | Lower EDTs to runtime |
-| EpochLowering | `epoch_lowering` | 13 | Lower epochs |
-| DataPointerHoisting | `arts_data_pointer_hoisting` | 13 | Hoist pointer loads |
-| ScalarReplacement | `scalar_replacement` | 13 | Mem2reg for reductions |
-| ConvertArtsToLLVM | `convert_arts_to_llvm` | 14 | Final ARTS lowering |
+| ForLowering | `for_lowering` | 11 | Lower arts.for to chunks |
+| CreateEpochs | `create_epochs` | 13 | Create epoch sync |
+| ParallelEdtLowering | `parallel_edt_lowering` | 14 | Lower parallel EDTs |
+| DbLowering | `db_lowering` | 14 | Lower DBs to pointers |
+| EdtLowering | `edt_lowering` | 14 | Lower EDTs to runtime |
+| EpochLowering | `epoch_lowering` | 14 | Lower epochs |
+| DataPointerHoisting | `arts_data_pointer_hoisting` | 14 | Hoist pointer loads |
+| ScalarReplacement | `scalar_replacement` | 14 | Mem2reg for reductions |
+| ConvertArtsToLLVM | `convert_arts_to_llvm` | 15 | Final ARTS lowering |
 | AliasScopeGen | `arts_alias_scope_gen` | emit-llvm | Alias metadata |
 | LoopVectorizationHints | `arts_loop_vectorization_hints` | emit-llvm | Loop hints |
 | PrefetchHints | `arts_prefetch_hints` | emit-llvm | Prefetch intrinsics |
@@ -1230,7 +1240,7 @@ All passes use the ARTS debug infrastructure with color-coded output:
 carts run gemm.mlir --loop-reordering --debug-only=loop_reordering 2>&1 | tee debug.log
 
 # Debug DB partitioning decisions
-carts run gemm.mlir --concurrency-opt --debug-only=db,db_partitioning 2>&1 | tee debug.log
+carts run gemm.mlir --stop-at=concurrency-opt --debug-only=db,db_partitioning 2>&1 | tee debug.log
 
 # Debug multiple passes
 carts run gemm.mlir --debug-only=loop_reordering,create_dbs,db_partitioning 2>&1 | tee debug.log
@@ -1395,7 +1405,7 @@ carts cgeist example.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine 
 carts run example.mlir --canonicalize-memrefs -o stages/01_canonicalize.mlir
 carts run example.mlir --openmp-to-arts -o stages/04_openmp_to_arts.mlir
 carts run example.mlir --create-dbs -o stages/07_create_dbs.mlir
-carts run example.mlir --concurrency-opt -o stages/11_concurrency_opt.mlir
+carts run example.mlir --stop-at=concurrency-opt -o stages/12_concurrency_opt.mlir
 
 # Or dump all stages at once
 carts run example.mlir --all-stages -o stages/
@@ -1414,7 +1424,7 @@ carts execute example.c -O3
 carts cgeist example.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine -o example.mlir
 
 # Stop at concurrency-opt and debug
-carts run example.mlir --concurrency-opt --debug-only=db,db_partitioning 2>&1 | tee db_debug.log
+carts run example.mlir --stop-at=concurrency-opt --debug-only=db,db_partitioning 2>&1 | tee db_debug.log
 
 # Look for partitioning decisions in output:
 # [INFO] [db_partitioning] Analyzing datablock partitioning...
@@ -1503,7 +1513,7 @@ diff stages/example_create-dbs.mlir stages/example_concurrency-opt.mlir
 ## Version Information
 
 This guide covers CARTS with the following features:
-- 14 pipeline stages
+- 15 pipeline stages
 - 27+ optimization passes
 - New passes: LoopReordering, PrefetchHints, AliasScopeGen, LoopVectorizationHints
 - Dual-compilation metadata strategy

@@ -13,10 +13,7 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
-#include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/OperationAttributes.h"
-#include "arts/Utils/ValueUtils.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 
@@ -29,11 +26,6 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
-
-struct WorkerConfig {
-  int64_t totalWorkers = 0;
-  bool internode = false;
-};
 
 static bool shouldSkipCoarsening(ForOp forOp, LoopNode *loopNode) {
   if (loopNode) {
@@ -60,49 +52,6 @@ static bool shouldSkipCoarsening(ForOp forOp, LoopNode *loopNode) {
   }
 
   return false;
-}
-
-static std::optional<WorkerConfig>
-resolveWorkerConfig(EdtOp parallelEdt, ArtsAbstractMachine *machine) {
-  WorkerConfig cfg;
-  cfg.internode = parallelEdt.getConcurrency() == EdtConcurrency::internode;
-
-  if (auto workers = parallelEdt->getAttrOfType<workersAttr>(
-          AttrNames::Operation::Workers)) {
-    cfg.totalWorkers = workers.getValue();
-    if (cfg.totalWorkers > 0)
-      return cfg;
-  }
-
-  if (!machine)
-    return std::nullopt;
-
-  int threads = machine->hasValidThreads() ? machine->getThreads() : 0;
-  if (threads <= 0)
-    return std::nullopt;
-
-  if (cfg.internode) {
-    int nodeCount = machine->hasValidNodeCount() ? machine->getNodeCount() : 0;
-    if (nodeCount <= 0)
-      return std::nullopt;
-
-    int workerThreads = threads;
-    if (nodeCount > 1) {
-      workerThreads = threads - machine->getOutgoingThreads() -
-                      machine->getIncomingThreads();
-      if (workerThreads <= 0)
-        workerThreads = 1;
-    }
-
-    cfg.totalWorkers = static_cast<int64_t>(nodeCount) * workerThreads;
-  } else {
-    cfg.totalWorkers = threads;
-  }
-
-  if (cfg.totalWorkers <= 0)
-    return std::nullopt;
-
-  return cfg;
 }
 
 static std::optional<int64_t>
@@ -149,120 +98,28 @@ computeCoarsenedBlockSize(ForOp forOp, LoopNode *loopNode,
   return blockSize;
 }
 
-/// Trace a db_ref source (inside an EDT body) back to the DbAllocOp it
-/// originates from.  The chain is:
-///   EDT block arg → EDT operand → db_acquire ptr result → db_alloc
-static DbAllocOp traceDbRefToAlloc(Value dbRefSource) {
-   /// Inside the EDT, the source is a block argument
-  auto blockArg = dyn_cast<BlockArgument>(dbRefSource);
-  if (!blockArg)
-    return nullptr;
-
-  auto parentOp = blockArg.getOwner()->getParentOp();
-  auto edt = dyn_cast_or_null<EdtOp>(parentOp);
-  if (!edt)
-    return nullptr;
-
-   /// Map block arg index to EDT operand (dependencies list)
-  unsigned argIdx = blockArg.getArgNumber();
-  auto deps = edt.getDependencies();
-  if (argIdx >= deps.size())
-    return nullptr;
-
-  Value edtOperand = deps[argIdx];
-
-   /// The operand should be a db_acquire ptr result
-  if (auto acq = edtOperand.getDefiningOp<DbAcquireOp>()) {
-     /// Trace through source_guid (input guid) or source_ptr (input ptr)
-    if (Value srcGuid = acq.getSourceGuid())
-      if (auto alloc = srcGuid.getDefiningOp<DbAllocOp>())
-        return alloc;
-    if (Value srcPtr = acq.getSourcePtr())
-      return srcPtr.getDefiningOp<DbAllocOp>();
-  }
-
-  return nullptr;
-}
-
-/// Detect stencil access patterns by analyzing memory accesses inside
-/// arts.for loops within parallel EDTs.  At the ArtsForOptimization stage,
-/// acquires are coarse and live outside the parallel EDT — the partition-
-/// bounds machinery cannot detect stencil patterns yet because partition
-/// offsets/sizes haven't been assigned.  Instead, we directly inspect
-/// load/store indices relative to the arts.for IV.
 static void annotateAccessPatterns(ModuleOp module, ArtsAnalysisManager *AM) {
-   /// Collect which DbAllocOps have stencil access patterns
-  DenseSet<Operation *> stencilAllocs;
+  if (!AM)
+    return;
 
-  module.walk([&](EdtOp parallelEdt) {
-    if (parallelEdt.getType() != EdtType::parallel)
-      return;
+  /// Rebuild DB analysis from current IR before querying alloc access patterns.
+  auto &dbAnalysis = AM->getDbAnalysis();
+  dbAnalysis.invalidate();
 
-     /// Find arts.for loops directly inside this parallel EDT
-    SmallVector<ForOp> forOps;
-    parallelEdt.walk([&](ForOp forOp) {
-      if (forOp->getParentOfType<EdtOp>() == parallelEdt)
-        forOps.push_back(forOp);
-    });
-    if (forOps.empty())
-      return;
-
-    for (ForOp forOp : forOps) {
-       /// Get the loop IV (first block argument of the for body)
-      Block &body = forOp.getRegion().front();
-      if (body.getNumArguments() == 0)
-        continue;
-      Value loopIV = body.getArgument(0);
-
-       /// Walk all memory accesses inside this for loop
-      forOp.walk([&](Operation *memOp) {
-        if (!isa<memref::LoadOp, memref::StoreOp>(memOp))
-          return;
-
-         /// Get the memref being accessed
-        Value memref =
-            isa<memref::LoadOp>(memOp)
-                ? cast<memref::LoadOp>(memOp).getMemRef()
-                : cast<memref::StoreOp>(memOp).getMemRef();
-
-         /// Trace memref back to a db_ref op
-        auto dbRef = memref.getDefiningOp<DbRefOp>();
-        if (!dbRef)
-          return;
-
-         /// Trace the db_ref source to the originating DbAllocOp
-        DbAllocOp allocOp = traceDbRefToAlloc(dbRef.getSource());
-        if (!allocOp)
-          return;
-
-         /// Check memory access indices for stencil pattern:
-         /// If any index = loopIV + nonzero_constant, it's stencil
-        SmallVector<Value> indices =
-            DatablockUtils::collectFullIndexChain(dbRef, memOp);
-        for (Value idx : indices) {
-          auto offset =
-              ValueUtils::extractConstantOffset(idx, loopIV, loopIV);
-          if (offset && *offset != 0) {
-            stencilAllocs.insert(allocOp.getOperation());
-            return;
-          }
-        }
-      });
-    }
-  });
-
-   /// Now annotate all DbAllocOps: stencil if detected, uniform otherwise
   module.walk([&](DbAllocOp allocOp) {
     if (allocOp.getElementSizes().empty())
       return;
-    DbAccessPattern pattern = stencilAllocs.contains(allocOp.getOperation())
-                                  ? DbAccessPattern::stencil
-                                  : DbAccessPattern::uniform;
+
+    DbAccessPattern pattern = DbAccessPattern::uniform;
+    if (auto analyzed = dbAnalysis.getAllocAccessPattern(allocOp))
+      pattern = *analyzed;
+    if (pattern == DbAccessPattern::unknown)
+      pattern = DbAccessPattern::uniform;
+
     setDbAccessPattern(allocOp.getOperation(), pattern);
-    ARTS_DEBUG("Annotated alloc "
-               << allocOp << " with access_pattern="
-               << (pattern == DbAccessPattern::stencil ? "stencil"
-                                                       : "uniform"));
+    ARTS_DEBUG("Annotated alloc " << allocOp
+                                  << " with access_pattern="
+                                  << stringifyDbAccessPattern(pattern));
   });
 }
 
@@ -286,7 +143,9 @@ struct ArtsForOptimizationPass
       if (parallelEdt.getType() != EdtType::parallel)
         return;
 
-      auto workerCfg = resolveWorkerConfig(parallelEdt, abstractMachine);
+      auto workerCfg =
+          DistributionHeuristics::resolveWorkerConfig(parallelEdt,
+                                                      abstractMachine);
       if (!workerCfg) {
         ARTS_DEBUG("Skipping arts.for optimization (unknown worker count)");
         return;
@@ -312,7 +171,7 @@ struct ArtsForOptimizationPass
 
         ARTS_INFO("Set arts.partition_hint blockSize="
                   << *coarsened << " for arts.for ("
-                  << (workerCfg->internode ? "internode" : "intranode")
+                  << stringifyEdtConcurrency(parallelEdt.getConcurrency())
                   << ", workers=" << workerCfg->totalWorkers << ")");
       });
     });

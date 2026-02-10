@@ -8,5 +8,6 @@
 
 #include "arts/Transforms/Edt/EdtInvariantCodeMotion.h"
 #include "arts/Transforms/Edt/EdtPtrRematerialization.h"
+#include "arts/Transforms/Edt/EdtTaskLoopLowering.h"
 
 #endif // ARTS_TRANSFORMS_EDTTRANSFORMS_H

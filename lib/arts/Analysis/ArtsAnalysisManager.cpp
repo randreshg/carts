@@ -107,6 +107,33 @@ EdtGraph &ArtsAnalysisManager::getEdtGraph(func::FuncOp func) {
   return getEdtAnalysis().getOrCreateEdtGraph(func);
 }
 
+std::optional<DbAccessPattern>
+ArtsAnalysisManager::getDbAllocAccessPattern(DbAllocOp alloc) {
+  if (!alloc)
+    return std::nullopt;
+  return getDbAnalysis().getAllocAccessPattern(alloc);
+}
+
+std::optional<DbAnalysis::LoopDbAccessSummary>
+ArtsAnalysisManager::getLoopDbAccessSummary(Operation *loopOp) {
+  if (!loopOp)
+    return std::nullopt;
+  auto forOp = dyn_cast<ForOp>(loopOp);
+  if (!forOp)
+    return std::nullopt;
+  return getDbAnalysis().getLoopDbAccessSummary(forOp);
+}
+
+std::optional<EdtDistributionPattern>
+ArtsAnalysisManager::getLoopDistributionPattern(Operation *loopOp) {
+  if (!loopOp)
+    return std::nullopt;
+  auto forOp = dyn_cast<ForOp>(loopOp);
+  if (!forOp)
+    return std::nullopt;
+  return getDbAnalysis().getLoopDistributionPattern(forOp);
+}
+
 bool ArtsAnalysisManager::invalidateFunction(func::FuncOp func) {
   bool invalidated = false;
   if (dbAnalysis)

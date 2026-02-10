@@ -1,5 +1,5 @@
 # Add the main analysis source files
-file(GLOB CARTS_ANALYSIS_SOURCE_FILES "*.cpp")
+file(GLOB CARTS_ANALYSIS_SOURCE_FILES CONFIGURE_DEPENDS "*.cpp")
 
 # Add the Db subdirectory
 add_subdirectory(Db)

@@ -25,6 +25,8 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
+#include "arts/Transforms/Edt/EdtRewriter.h"
+#include "arts/Transforms/Edt/EdtTaskLoopLowering.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
@@ -1375,27 +1377,22 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
                                           /*splitMode=*/true);
   }
 
-  /// Analyze machine -> distribution strategy
-  /// The abstract machine pointer is not available here at ForLowering time
-  /// (runtime values are used instead), so pass nullptr. The strategy is
-  /// determined by concurrency mode; runtime Values are used for bounds.
+  /// Read distribution strategy selected by EdtDistributionPass.
+  /// Fallback to concurrency-driven default when annotation is missing.
   auto strategy = DistributionHeuristics::analyzeStrategy(
       originalParallel.getConcurrency(), /*machine=*/nullptr);
+  std::optional<EdtDistributionKind> selectedKindAttr =
+      getEdtDistributionKind(forOp.getOperation());
+  std::optional<EdtDistributionPattern> selectedPatternAttr =
+      getEdtDistributionPattern(forOp.getOperation());
+  auto selectedVersionAttr =
+      forOp->getAttrOfType<IntegerAttr>(AttrNames::Operation::DistributionVersion);
+  if (selectedKindAttr)
+    strategy.kind = DistributionHeuristics::toDistributionKind(*selectedKindAttr);
 
-  /// Get numWorkers from original parallel EDT
-  Value numWorkers;
-  if (auto workers = originalParallel->getAttrOfType<workersAttr>(
-          AttrNames::Operation::Workers))
-    numWorkers = AC.createIndexConstant(workers.getValue(), loc);
-  else if (originalParallel.getConcurrency() == EdtConcurrency::internode) {
-    Value nodes =
-        castToIndex(&AC, AC.create<GetTotalNodesOp>(loc).getResult(), loc);
-    Value threads =
-        castToIndex(&AC, AC.create<GetTotalWorkersOp>(loc).getResult(), loc);
-    numWorkers = AC.create<arith::MulIOp>(loc, nodes, threads);
-  } else
-    numWorkers = AC.create<GetTotalWorkersOp>(loc).getResult();
-  numWorkers = castToIndex(&AC, numWorkers, loc);
+  /// Get numWorkers from explicit attrs or runtime queries.
+  Value numWorkers =
+      DistributionHeuristics::getTotalWorkers(&AC, loc, originalParallel);
 
   /// numDbPartitions: the number of DB partition blocks (= numNodes for
   /// internode). Used to align worker chunk boundaries to DB block boundaries.
@@ -1430,8 +1427,23 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
           originalParallel, numDbPartitions, &AC, loc);
   LoopInfo loopInfo(&AC, forOp, numWorkers, runtimeBlockSize);
   loopInfo.strategy = strategy;
-  createTaskEdtWithRewiring(&AC, loopInfo, forOp, workerIV, originalParallel,
-                            redInfo);
+  EdtOp taskEdt = createTaskEdtWithRewiring(&AC, loopInfo, forOp, workerIV,
+                                            originalParallel, redInfo);
+  if (selectedKindAttr)
+    setEdtDistributionKind(taskEdt.getOperation(), *selectedKindAttr);
+  if (selectedPatternAttr)
+    setEdtDistributionPattern(taskEdt.getOperation(), *selectedPatternAttr);
+  if (selectedVersionAttr)
+    taskEdt->setAttr(AttrNames::Operation::DistributionVersion,
+                     selectedVersionAttr);
+
+  if (selectedKindAttr)
+    setEdtDistributionKind(forEpoch.getOperation(), *selectedKindAttr);
+  if (selectedPatternAttr)
+    setEdtDistributionPattern(forEpoch.getOperation(), *selectedPatternAttr);
+  if (selectedVersionAttr)
+    forEpoch->setAttr(AttrNames::Operation::DistributionVersion,
+                      selectedVersionAttr);
 
   /// After worker loop, create result EDT (if reductions)
   AC.setInsertionPointAfter(workerLoop);
@@ -1609,19 +1621,9 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
   ARTS_DEBUG("  Creating task EDT with DB rewiring");
 
-  /// Recreate numWorkers constant
-  if (auto workers = originalParallel->getAttrOfType<workersAttr>(
-          AttrNames::Operation::Workers))
-    loopInfo.totalWorkers = AC->createIndexConstant(workers.getValue(), loc);
-  else if (originalParallel.getConcurrency() == EdtConcurrency::internode) {
-    Value nodes =
-        castToIndex(AC, AC->create<GetTotalNodesOp>(loc).getResult(), loc);
-    Value threads =
-        castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
-    loopInfo.totalWorkers = AC->create<arith::MulIOp>(loc, nodes, threads);
-  } else
-    loopInfo.totalWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
-  loopInfo.totalWorkers = castToIndex(AC, loopInfo.totalWorkers, loc);
+  /// Recreate total workers using shared distribution helper.
+  loopInfo.totalWorkers =
+      DistributionHeuristics::getTotalWorkers(AC, loc, originalParallel);
 
   /// Compute workers-per-node for internode routing and TwoLevel distribution.
   /// Flat may still run in internode mode during debugging/experiments.
@@ -1637,6 +1639,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       AC, loc, loopInfo.strategy, workerIdPlaceholder,
       loopInfo.totalWorkers, workersPerNode,
       loopInfo.totalIterations, loopInfo.totalChunks, loopInfo.blockSize);
+  bool useBlockCyclic =
+      loopInfo.strategy.kind == DistributionKind::BlockCyclic;
 
   Value chunkOffset = loopInfo.bounds.iterStart;
   ValueRange parentDeps = originalParallel.getDependencies();
@@ -1659,12 +1663,14 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
   /// Precompute worker base offset (global chunk start) once for reuse.
   Value stepVal = forOp.getStep().empty() ? one : forOp.getStep()[0];
+  int64_t stepConst = 0;
+  bool stepIsUnit =
+      forOp.getStep().empty() ||
+      (ValueUtils::getConstantIndex(stepVal, stepConst) && stepConst == 1);
   Value lowerBoundVal = loopInfo.chunkLowerBound ? loopInfo.chunkLowerBound
                                                  : forOp.getLowerBound()[0];
   Value workerOffsetVal = chunkOffset;
-  int64_t stepConst = 0;
-  if (!forOp.getStep().empty() &&
-      (!ValueUtils::getConstantIndex(stepVal, stepConst) || stepConst != 1)) {
+  if (!stepIsUnit) {
     workerOffsetVal = AC->create<arith::MulIOp>(loc, workerOffsetVal, stepVal);
   }
   workerOffsetVal =
@@ -1678,8 +1684,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
                                  : acquireSizeVal;
   if (loopInfo.strategy.kind == DistributionKind::TwoLevel) {
     acquireOffsetVal = loopInfo.bounds.acquireStart;
-    if (!forOp.getStep().empty() &&
-        (!ValueUtils::getConstantIndex(stepVal, stepConst) || stepConst != 1)) {
+    if (!stepIsUnit) {
       acquireOffsetVal =
           AC->create<arith::MulIOp>(loc, acquireOffsetVal, stepVal);
     }
@@ -1738,6 +1743,12 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
   SmallVector<Value> taskDeps;
   SmallVector<std::pair<BlockArgument, Value>> parallelArgToAcquire;
+  Tiling2DWorkerGrid tiling2DGrid;
+  bool useTiling2DGrid = loopInfo.strategy.kind == DistributionKind::Tiling2D;
+  if (useTiling2DGrid) {
+    tiling2DGrid = DistributionHeuristics::getTiling2DWorkerGrid(
+        AC, loc, workerIdPlaceholder, loopInfo.totalWorkers);
+  }
   ARTS_DEBUG("  - Processing " << parentDeps.size()
                                << " parent dependencies with DB rewiring");
 
@@ -1802,12 +1813,16 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
     } else {
       /// NO USER HINT - ForLowering sets chunked partitioning for workers
+      bool forceCoarseAcquire = useBlockCyclic;
 
       /// If the DB element is a single element (scalar/size-1), keep coarse.
       /// Chunking with worker offsets is invalid for size=1.
       bool isSingleElement = false;
       bool needsStencilHalo = false;
       Value stencilExtent;
+      SmallVector<Value, 4> extraOffsets;
+      SmallVector<Value, 4> extraSizes;
+      SmallVector<Value, 4> extraHintSizes;
       if (Operation *rootAllocOp =
               DatablockUtils::getUnderlyingDbAlloc(rootPtr)) {
         if (auto dbAlloc = dyn_cast<DbAllocOp>(rootAllocOp)) {
@@ -1824,87 +1839,53 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
                 parentAcqOp.getMode() == ArtsMode::in;
             if (needsStencilHalo)
               stencilExtent = castToIndex(AC, elemSizes.front(), loc);
+
+            /// Tiling2D output ownership:
+            /// partition inout allocations by [row, col] so each task owns
+            /// a 2D C tile while inputs remain on existing read paths.
+            if (useTiling2DGrid && parentAcqOp.getMode() == ArtsMode::inout &&
+                elemSizes.size() > 1 && !isSingleElement &&
+                tiling2DGrid.colWorkers) {
+              Value totalCols = castToIndex(AC, elemSizes[1], loc);
+              Value colWorkers =
+                  castToIndex(AC, tiling2DGrid.colWorkers, loc);
+              Value colWorkerId =
+                  castToIndex(AC, tiling2DGrid.colWorkerId, loc);
+
+              Value colWorkersMinusOne =
+                  AC->create<arith::SubIOp>(loc, colWorkers, one);
+              Value colAdjusted = AC->create<arith::AddIOp>(
+                  loc, totalCols, colWorkersMinusOne);
+              Value colChunk =
+                  AC->create<arith::DivUIOp>(loc, colAdjusted, colWorkers);
+              Value colOffset =
+                  AC->create<arith::MulIOp>(loc, colWorkerId, colChunk);
+
+              Value colNeedZero = AC->create<arith::CmpIOp>(
+                  loc, arith::CmpIPredicate::uge, colOffset, totalCols);
+              Value colRemaining =
+                  AC->create<arith::SubIOp>(loc, totalCols, colOffset);
+              Value colRemainingNonNeg = AC->create<arith::SelectOp>(
+                  loc, colNeedZero, zero, colRemaining);
+              Value colCount = AC->create<arith::MinUIOp>(
+                  loc, colChunk, colRemainingNonNeg);
+
+              extraOffsets.push_back(colOffset);
+              extraSizes.push_back(colCount);
+              extraHintSizes.push_back(colCount);
+            }
           }
         }
       }
-      if (isSingleElement) {
-        chunkAcqOp = AC->create<DbAcquireOp>(
-            loc, parentAcqOp.getMode(), rootGuid, rootPtr,
-            parentAcqOp.getPtr().getType(), PartitionMode::coarse,
-            /*indices=*/SmallVector<Value>{},
-            /*offsets=*/SmallVector<Value>{zero},
-            /*sizes=*/SmallVector<Value>{one},
-            /*partition_indices=*/SmallVector<Value>{},
-            /*partition_offsets=*/SmallVector<Value>{},
-            /*partition_sizes=*/SmallVector<Value>{});
-      } else {
-
-        /// Get offsets/sizes from parent acquire for hints
-        SmallVector<Value> chunkOffsets =
-            DatablockUtils::getOffsetsFromDb(parentDep);
-        SmallVector<Value> blockSizes =
-            DatablockUtils::getSizesFromDb(parentDep);
-        if (chunkOffsets.empty())
-          chunkOffsets.push_back(AC->createIndexConstant(0, loc));
-        if (blockSizes.empty())
-          blockSizes.push_back(AC->createIndexConstant(1, loc));
-
-        /// Compute worker chunk size (offset precomputed).
-        /// Use acquire-level bounds (node-level for TwoLevel, same as iter for
-        /// Flat)
-        SmallVector<Value> workerOffsets = {acquireOffsetVal};
-        Value workerSizeVal = acquireSizeVal;
-        Value workerHintSizeVal = acquireHintSizeVal;
-        if (!forOp.getStep().empty() &&
-            (!ValueUtils::getConstantIndex(stepVal, stepConst) ||
-             stepConst != 1)) {
-          workerSizeVal =
-              AC->create<arith::MulIOp>(loc, acquireSizeVal, stepVal);
-          workerHintSizeVal =
-              AC->create<arith::MulIOp>(loc, workerHintSizeVal, stepVal);
-        }
-        SmallVector<Value> workerSizes = {workerSizeVal};
-        SmallVector<Value> workerHintSizes = {workerHintSizeVal};
-
-        /// For stencil reads, include a 1-cell halo in acquire bounds so
-        /// boundary iterations can safely read neighbors across node chunks.
-        if (needsStencilHalo && !workerOffsets.empty() && !workerSizes.empty()) {
-          Value start = workerOffsets.front();
-          Value size = workerSizes.front();
-          Value end = AC->create<arith::AddIOp>(loc, start, size);
-
-          Value canShiftLeft = AC->create<arith::CmpIOp>(
-              loc, arith::CmpIPredicate::uge, start, one);
-          Value startMinusOne = AC->create<arith::SubIOp>(loc, start, one);
-          Value haloStart = AC->create<arith::SelectOp>(
-              loc, canShiftLeft, startMinusOne, zero);
-
-          Value endPlusOne = AC->create<arith::AddIOp>(loc, end, one);
-          Value haloEnd = stencilExtent
-                              ? AC->create<arith::MinUIOp>(loc, endPlusOne,
-                                                           stencilExtent)
-                              : endPlusOne;
-          Value haloSize = AC->create<arith::SubIOp>(loc, haloEnd, haloStart);
-
-          workerOffsets.front() = haloStart;
-          workerSizes.front() = haloSize;
-          workerHintSizes.front() = haloSize;
-        }
-
-        /// Create chunked acquire with unified offsets/sizes (no deprecated
-        /// chunk_index/chunk_size)
-        chunkAcqOp = AC->create<DbAcquireOp>(
-            loc, parentAcqOp.getMode(), rootGuid, rootPtr,
-            parentAcqOp.getPtr().getType(), PartitionMode::block,
-            /*indices=*/
-            SmallVector<Value>(parentAcqOp.getIndices().begin(),
-                               parentAcqOp.getIndices().end()),
-            /*offsets=*/workerOffsets,
-            /*sizes=*/workerSizes,
-            /*partition_indices=*/SmallVector<Value>{},
-            /*partition_offsets=*/workerOffsets,
-            /*partition_sizes=*/workerHintSizes);
-      }
+      std::unique_ptr<EdtRewriter> edtRewriter =
+          EdtRewriter::create(needsStencilHalo);
+      AcquireRewriteInput rewriteInput{
+          AC,              loc,          parentAcqOp,     rootGuid,
+          rootPtr,         zero,         one,             acquireOffsetVal,
+          acquireSizeVal,  acquireHintSizeVal, extraOffsets, extraSizes,
+          extraHintSizes,  stepVal,      stepIsUnit,      isSingleElement,
+          forceCoarseAcquire, stencilExtent};
+      chunkAcqOp = edtRewriter->rewriteAcquire(rewriteInput);
     }
 
     Value acquirePtr = chunkAcqOp.getResult(1);
@@ -1980,27 +1961,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   /// index used for routing and db_acquire partitioning.
   Value taskWorkerId = workerIdPlaceholder;
 
-  Value insideTotalWorkers;
-  if (auto workers = originalParallel->getAttrOfType<workersAttr>(
-          AttrNames::Operation::Workers))
-    insideTotalWorkers = AC->createIndexConstant(workers.getValue(), loc);
-  else if (taskConcurrency == EdtConcurrency::internode) {
-    Value totalNodes =
-        castToIndex(AC, AC->create<GetTotalNodesOp>(loc).getResult(), loc);
-    Value totalThreads =
-        castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
-    insideTotalWorkers =
-        AC->create<arith::MulIOp>(loc, totalNodes, totalThreads);
-  } else
-    insideTotalWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
-
-  loopInfo.insideBounds = DistributionHeuristics::recomputeBoundsInside(
-      AC, loc, loopInfo.strategy, taskWorkerId, insideTotalWorkers,
-      workersPerNode,
-      loopInfo.upperBound, loopInfo.lowerBound, loopInfo.loopStep,
-      loopInfo.blockSize, loopInfo.alignmentBlockSize,
-      loopInfo.useRuntimeBlockAlignment);
-  chunkOffset = loopInfo.insideBounds.iterStart;
+  Value insideTotalWorkers =
+      DistributionHeuristics::getTotalWorkers(AC, loc, originalParallel);
 
   /// Map reduction variables to worker's accumulator slot
   IRMapping redMapper = mapper;
@@ -2055,6 +2017,26 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     collectWithDeps(origUpperBound);
   collectWithDeps(chunkLowerBoundVal);
 
+  TaskLoopLoweringInput taskLoopInput{AC,
+                                      loc,
+                                      loopInfo.strategy,
+                                      taskWorkerId,
+                                      insideTotalWorkers,
+                                      workersPerNode,
+                                      loopInfo.upperBound,
+                                      loopInfo.lowerBound,
+                                      loopInfo.loopStep,
+                                      loopInfo.blockSize,
+                                      loopInfo.totalIterations,
+                                      loopInfo.totalChunks,
+                                      loopInfo.alignmentBlockSize,
+                                      loopInfo.useRuntimeBlockAlignment,
+                                      loopInfo.useAlignedLowerBound};
+
+  std::unique_ptr<EdtTaskLoopLowering> taskLoopLowering =
+      EdtTaskLoopLowering::create(loopInfo.strategy.kind);
+  taskLoopLowering->collectExtraExternalValues(taskLoopInput, externalValues);
+
   /// Collect transitive dependencies
   SmallVector<Value> valuesToProcess(externalValues.begin(),
                                      externalValues.end());
@@ -2072,43 +2054,23 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   }
 
   Value stepValMapped = redMapper.lookupOrDefault(origStep);
-  Value baseOffsetVal = redMapper.lookupOrDefault(workerOffsetVal);
   Value origLowerBoundVal = redMapper.lookupOrDefault(origLowerBound);
   Value origUpperBoundVal = redMapper.lookupOrDefault(origUpperBound);
+  TaskLoopLoweringMappedValues mappedLoopValues;
+  mappedLoopValues.step = stepValMapped;
+  mappedLoopValues.lowerBound = origLowerBoundVal;
+  mappedLoopValues.upperBound = origUpperBoundVal;
+  mappedLoopValues.workerBaseOffset = redMapper.lookupOrDefault(workerOffsetVal);
+  mappedLoopValues.blockSize = redMapper.lookupOrDefault(loopInfo.blockSize);
+  mappedLoopValues.totalIterations =
+      redMapper.lookupOrDefault(loopInfo.totalIterations);
+  mappedLoopValues.totalChunks = redMapper.lookupOrDefault(loopInfo.totalChunks);
 
-  /// Compute local loop bounds to avoid per-iteration bounds checks when the
-  /// chunk lower bound was aligned down. This preserves block alignment while
-  /// skipping invalid prefix/suffix iterations.
-  Value loopLower = zero;
-  Value loopUpper = loopInfo.insideBounds.iterCount;
-  if (loopInfo.useAlignedLowerBound) {
-    Value stepClamped = AC->create<arith::MaxUIOp>(loc, stepValMapped, one);
-
-    auto clampNonNeg = [&](Value v) -> Value {
-      Value isNeg =
-          AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, v, zero);
-      return AC->create<arith::SelectOp>(loc, isNeg, zero, v);
-    };
-    auto ceilDiv = [&](Value num, Value denom) -> Value {
-      Value denomMinusOne = AC->create<arith::SubIOp>(loc, denom, one);
-      Value adjusted = AC->create<arith::AddIOp>(loc, num, denomMinusOne);
-      return AC->create<arith::DivUIOp>(loc, adjusted, denom);
-    };
-
-    Value diffLower =
-        AC->create<arith::SubIOp>(loc, origLowerBoundVal, baseOffsetVal);
-    Value diffUpper =
-        AC->create<arith::SubIOp>(loc, origUpperBoundVal, baseOffsetVal);
-    Value diffLowerPos = clampNonNeg(diffLower);
-    Value diffUpperPos = clampNonNeg(diffUpper);
-
-    loopLower = ceilDiv(diffLowerPos, stepClamped);
-    loopUpper = ceilDiv(diffUpperPos, stepClamped);
-    loopUpper = AC->create<arith::MinUIOp>(loc, loopUpper,
-                                           loopInfo.insideBounds.iterCount);
-  }
-
-  scf::ForOp iterLoop = AC->create<scf::ForOp>(loc, loopLower, loopUpper, one);
+  TaskLoopLoweringResult loweredLoop =
+      taskLoopLowering->lower(taskLoopInput, mappedLoopValues);
+  loopInfo.insideBounds = loweredLoop.insideBounds;
+  chunkOffset = loweredLoop.iterStart;
+  scf::ForOp iterLoop = loweredLoop.iterLoop;
 
   /// Set loop metadata, marking as parallel if only reduction deps existed
   if (Attribute loopAttr = getLoopMetadataAttr(forOp)) {
@@ -2143,8 +2105,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   Value localIter = iterLoop.getInductionVar();
   Value globalIterScaled =
       AC->create<arith::MulIOp>(loc, localIter, stepValMapped);
-  Value globalIdx =
-      AC->create<arith::AddIOp>(loc, baseOffsetVal, globalIterScaled);
+  Value globalIdx = AC->create<arith::AddIOp>(loc, loweredLoop.globalBase,
+                                              globalIterScaled);
 
   /// Map undef to identity value
   for (Operation &op : forBody.without_terminator()) {
@@ -2180,6 +2142,15 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       continue;
     AC->clone(op, redMapper);
   }
+
+  TaskLoopPostCloneInput postCloneInput{
+      AC,
+      loc,
+      iterLoop,
+      globalIdx,
+      loweredLoop.innerStripeLane,
+      loweredLoop.innerStripeCount};
+  taskLoopLowering->postCloneAdjust(postCloneInput);
 
   /// Ensure stack allocations used inside the EDT are cloned locally.
   cloneExternalAllocasIntoEdt(taskEdtRegion, taskBlock, redMapper,

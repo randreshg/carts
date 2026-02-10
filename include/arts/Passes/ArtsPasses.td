@@ -279,6 +279,20 @@ def ArtsForOptimization : Pass<"arts-for-optimization", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createArtsForOptimizationPass(nullptr)";
 }
 
+def EdtDistribution : Pass<"edt-distribution", "mlir::ModuleOp"> {
+  let summary = "Select and annotate distribution strategy for arts.for loops";
+  let description = [{
+    Classifies loop access patterns inside parallel EDTs and selects an initial
+    distribution strategy, recording the decision as attributes consumed by
+    ForLowering.
+  }];
+  let dependentDialects = [
+    "func::FuncDialect", "arts::ArtsDialect", "arith::ArithDialect",
+    "scf::SCFDialect", "memref::MemRefDialect"
+  ];
+  let constructor = "mlir::arts::createEdtDistributionPass(nullptr)";
+}
+
 def ForLowering : Pass<"for-lowering", "mlir::ModuleOp"> {
   let summary = "Lower arts.for inside parallel EDTs to chunked task EDTs";
   let description = [{

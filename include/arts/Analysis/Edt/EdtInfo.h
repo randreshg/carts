@@ -44,6 +44,13 @@ struct EdtInfo {
   /// Detailed per-alloc access metrics
   llvm::DenseMap<DbAllocOp, uint64_t> dbAllocAccessCount, dbAllocAccessBytes;
 
+  /// Distribution-pattern analysis results owned at EDT analysis level.
+  /// Maps top-level loops within this EDT to classified compute patterns.
+  llvm::DenseMap<Operation *, EdtDistributionPattern> loopDistributionPatterns;
+  /// EDT-level summary pattern (unknown if mixed or not classified).
+  EdtDistributionPattern dominantDistributionPattern =
+      EdtDistributionPattern::unknown;
+
   bool isReadOnly() const { return !basesRead.empty() && basesWritten.empty(); }
   bool isWriteOnly() const {
     return basesRead.empty() && !basesWritten.empty();

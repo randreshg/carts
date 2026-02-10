@@ -8,10 +8,13 @@
 #define ARTS_ANALYSIS_DB_DBANALYSIS_H
 
 #include "arts/Analysis/ArtsAnalysis.h"
+#include "arts/ArtsDialect.h"
+#include "arts/Analysis/Graphs/Db/DbAccessPattern.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "llvm/ADT/DenseMap.h"
+#include <optional>
 
 // Forward declarations
 namespace mlir {
@@ -20,6 +23,8 @@ class DbGraph;
 class DbAliasAnalysis;
 class LoopAnalysis;
 class DbAcquireOp;
+class DbAllocOp;
+class ForOp;
 class ArtsAnalysisManager;
 } // namespace arts
 } // namespace mlir
@@ -32,6 +37,16 @@ class ArtsAnalysisManager;
 
 class DbAnalysis : public ArtsAnalysis {
 public:
+  struct LoopDbAccessSummary {
+    llvm::DenseMap<Operation *, DbAccessPattern> allocPatterns;
+    bool hasStencilOffset = false;
+    bool hasStencilAccessHint = false;
+    bool hasMatmulUpdate = false;
+    bool hasTriangularBound = false;
+    EdtDistributionPattern distributionPattern =
+        EdtDistributionPattern::unknown;
+  };
+
   DbAnalysis(ArtsAnalysisManager &AM);
 
   ~DbAnalysis();
@@ -51,10 +66,18 @@ public:
   /// Access analyses
   DbAliasAnalysis *getAliasAnalysis() { return dbAliasAnalysis.get(); }
   LoopAnalysis *getLoopAnalysis();
+  LoopDbAccessSummary analyzeLoopDbAccessPatterns(ForOp forOp);
+  std::optional<LoopDbAccessSummary> getLoopDbAccessSummary(ForOp forOp);
+  std::optional<EdtDistributionPattern> getLoopDistributionPattern(ForOp forOp);
+
+  /// Query DB access patterns through the DB graph interface.
+  std::optional<AccessPattern> getAcquireAccessPattern(DbAcquireOp acquire);
+  std::optional<DbAccessPattern> getAllocAccessPattern(DbAllocOp alloc);
   using ArtsAnalysis::getAnalysisManager;
 
 private:
   llvm::DenseMap<func::FuncOp, std::unique_ptr<DbGraph>> functionGraphMap;
+  llvm::DenseMap<Operation *, LoopDbAccessSummary> loopAccessSummaryByOp;
   std::unique_ptr<DbAliasAnalysis> dbAliasAnalysis;
 };
 
