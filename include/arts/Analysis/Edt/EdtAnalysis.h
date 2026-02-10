@@ -16,6 +16,7 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 
 #include "arts/Analysis/Edt/EdtInfo.h"
 #include "arts/Analysis/Graphs/Edt/EdtGraph.h"
@@ -41,6 +42,18 @@ public:
   void print(func::FuncOp func, llvm::raw_ostream &os);
   void toJson(func::FuncOp func, llvm::raw_ostream &os);
 
+  /// Get EDT-level summary distribution pattern.
+  std::optional<EdtDistributionPattern> getEdtDistributionPattern(EdtOp edt);
+
+  /// Get DB access pattern inferred from EDT-level loop access analysis.
+  /// Returns std::nullopt when the allocation was not observed in analyzed
+  /// loops.
+  std::optional<DbAccessPattern> getAllocAccessPattern(Operation *allocOp);
+
+  /// Iterate all analyzed DB allocation access patterns.
+  void forEachAllocAccessPattern(
+      llvm::function_ref<void(Operation *, DbAccessPattern)> fn);
+
   /// Graph accessor
   EdtGraph &getOrCreateEdtGraph(func::FuncOp func);
 
@@ -55,6 +68,9 @@ public:
 private:
   /// Order index per EDT in a function
   DenseMap<EdtOp, unsigned> edtOrderIndex;
+  DenseMap<Operation *, EdtDistributionPattern> edtPatternByOp;
+  DenseMap<Operation *, DbAccessPattern> allocPatternByOp;
+  bool analyzed = false;
 
   /// Per-function graph caches
   llvm::DenseMap<func::FuncOp, std::unique_ptr<EdtGraph>> edtGraphs;

@@ -169,6 +169,16 @@ getPartitionOffsetsND(DbAcquireNode *acqNode,
   return result;
 }
 
+static bool isTiling2DTaskAcquire(DbAcquireOp acquire) {
+  if (!acquire)
+    return false;
+  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+  if (!edt)
+    return false;
+  auto kind = getEdtDistributionKind(edt.getOperation());
+  return kind && *kind == EdtDistributionKind::tiling_2d;
+}
+
 /// Pick a representative partition offset (prefer non-constant).
 /// Returns the chosen offset and its index via outIdx when provided.
 static Value pickRepresentativePartitionOffset(ArrayRef<Value> offsets,
@@ -274,6 +284,17 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
       seen.push_back(*dimOpt);
       info.partitionDims.push_back(*dimOpt);
     }
+  };
+  auto applyTiling2DPartitionDimsFallback = [&](AcquirePartitionInfo &info) {
+    if (!isTiling2DTaskAcquire(acquire))
+      return;
+    if (!info.partitionDims.empty())
+      return;
+    if (info.partitionOffsets.size() < 2)
+      return;
+    info.partitionDims.clear();
+    for (unsigned d = 0; d < info.partitionOffsets.size(); ++d)
+      info.partitionDims.push_back(d);
   };
 
   AcquirePartitionInfo info;
@@ -476,6 +497,7 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
         }
       }
       inferPartitionDims(info);
+      applyTiling2DPartitionDimsFallback(info);
       break;
     }
     /// FALLBACK: Try computeBlockInfo for cases without CreateDbs hints.
@@ -488,6 +510,7 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
         info.isValid = true;
         ARTS_DEBUG("  Computed block info from access analysis");
         inferPartitionDims(info);
+        applyTiling2DPartitionDimsFallback(info);
       } else {
         /// Validation failed -> fall back to coarse for correctness.
         info.mode = PartitionMode::coarse;
@@ -1919,6 +1942,38 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
   /// Step 4: Query heuristics -> PartitioningDecision
   PartitioningDecision decision = heuristics.getPartitioningMode(ctx);
+  SmallVector<Value> blockSizesForNDBlock;
+
+  /// tiling_2d owner hint path:
+  /// when task-level distribution selected 2D and an inout acquire carries
+  /// 2D partition sizes, force N-D block planning to preserve 2D ownership.
+  for (auto &info : acquireInfos) {
+    if (!info.acquire || info.acquire.getMode() != ArtsMode::inout)
+      continue;
+    if (!isTiling2DTaskAcquire(info.acquire))
+      continue;
+    if (info.partitionSizes.size() < 2)
+      continue;
+
+    Value rowSize = info.partitionSizes[0];
+    Value colSize = info.partitionSizes[1];
+    if (!rowSize || !colSize)
+      continue;
+    if (ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(rowSize)) ||
+        ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(colSize)))
+      continue;
+
+    blockSizesForNDBlock.push_back(rowSize);
+    blockSizesForNDBlock.push_back(colSize);
+    decision = PartitioningDecision::blockND(
+        ctx, /*nDims=*/2, "tiling_2d owner-based N-D block partitioning");
+    heuristics.recordDecision(
+        "Partition-Tiling2DOwnerBlockND", true,
+        "using tiling_2d owner hints for N-D block partitioning",
+        allocOp.getOperation(), {{"numPartitionedDims", 2}});
+    ARTS_DEBUG("  tiling_2d owner hints -> forcing N-D block partitioning");
+    break;
+  }
 
   if (decision.isCoarse()) {
     ARTS_DEBUG("  Heuristics chose coarse - keeping original");
@@ -1942,7 +1997,6 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   /// Block-wise patterns (like Cholesky's 2D block dependencies) use:
   ///   - Partition indices as block identifiers (not element indices)
   ///   - Loop step as block size per dimension
-  SmallVector<Value> blockSizesForNDBlock;
   bool skipAcquireInfoCheck = false;
   if (decision.isFineGrained() && ctx.accessPatterns.hasIndexed) {
     bool validElementWise = validateElementWiseIndices(acquireInfos, allocNode);

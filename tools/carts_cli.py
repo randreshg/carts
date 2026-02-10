@@ -54,10 +54,12 @@ PIPELINE_STAGES = [
     "initial-cleanup",       # Remove dead code, simplify control flow
     "openmp-to-arts",        # Convert OpenMP parallel regions to ARTS EDTs
     "edt-transforms",        # Optimize EDT (Event Driven Task) structure
+    "loop-reordering",       # Cache-optimal loop reorder and tiling setup
     "create-dbs",            # Create DataBlocks for inter-task communication
     "db-opt",                # Optimize DataBlock operations
     "edt-opt",               # Further EDT optimizations
     "concurrency",           # Add concurrency annotations
+    "edt-distribution",      # Select distribution strategy, lower arts.for
     "concurrency-opt",       # Optimize concurrent execution
     "epochs",                # Add epoch synchronization
     "pre-lowering",          # Prepare for LLVM lowering

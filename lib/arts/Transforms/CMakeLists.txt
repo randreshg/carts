@@ -1,4 +1,4 @@
-file(GLOB CARTS_TRANSFORMS_SOURCE_FILES
+file(GLOB CARTS_TRANSFORMS_SOURCE_FILES CONFIGURE_DEPENDS
     "*.cpp"
     "Datablock/*.cpp"
     "Datablock/Block/*.cpp"
@@ -6,6 +6,9 @@ file(GLOB CARTS_TRANSFORMS_SOURCE_FILES
     "Datablock/Stencil/*.cpp"
     "Datablock/Versioned/*.cpp"
     "Edt/*.cpp"
+    "Edt/Block/*.cpp"
+    "Edt/Tiling2D/*.cpp"
+    "Edt/Stencil/*.cpp"
     "Loop/*.cpp"
 )
 

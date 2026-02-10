@@ -7,6 +7,10 @@ It focuses on:
 - How index localization works (db_ref vs local indices)
 - Where decisions are made (analysis vs heuristics vs rewriting)
 
+Related guide:
+- Distribution (H2): `docs/heuristics/distribution/distribution.md`
+- This document covers partitioning (H1) only.
+
 ---
 
 ## 0) The Core Distinction: Allocation Layout vs Acquire Range
@@ -117,6 +121,9 @@ This is the current intent (see `lib/arts/Analysis/ArtsHeuristics.cpp`):
 - H1.4: Uniform direct access -> Block
 - H1.5: Multi-node -> Prefer Block (else fine-grained) for network efficiency
 - H1.6: Non-uniform + no capability -> Coarse
+- H1 (distribution-integrated): if EDT distribution is `tiling_2d` and an
+  `inout` acquire carries valid 2D partition sizes, force `blockND` (2D) so
+  output ownership matches the distribution plan
 
 Important naming detail:
 - In the implementation, "block" is a family: PartitioningDecision::isBlock()
@@ -135,6 +142,11 @@ Stencil exception:
 - Stencil patterns are allowed to omit the partition offset from the access
   expression, because halo handling provides the missing neighbor rows without
   requiring full-range acquires.
+
+`tiling_2d` exception:
+- For `tiling_2d` output acquires (`inout`) with explicit 2D owner hints,
+  `DbPartitioning` can infer partition dims `[0,1]` and keep those hints even
+  when generic dim inference would otherwise be incomplete.
 
 ---
 

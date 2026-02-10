@@ -19,6 +19,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include <memory>
+#include <optional>
 
 namespace mlir {
 
@@ -51,6 +52,13 @@ public:
   /// Graph getters
   DbGraph &getDbGraph(func::FuncOp func);
   EdtGraph &getEdtGraph(func::FuncOp func);
+
+  /// Unified analysis queries spanning EDT and DB analyses.
+  std::optional<DbAccessPattern> getDbAllocAccessPattern(DbAllocOp alloc);
+  std::optional<DbAnalysis::LoopDbAccessSummary>
+  getLoopDbAccessSummary(Operation *loopOp);
+  std::optional<EdtDistributionPattern>
+  getLoopDistributionPattern(Operation *loopOp);
 
   /// Other functions
   bool invalidateFunction(func::FuncOp func);

@@ -28,6 +28,9 @@ constexpr StringLiteral Nowait = "nowait";
 constexpr StringLiteral PartitionMode = "partition_mode";
 constexpr StringLiteral PartitionHint = "arts.partition_hint";
 constexpr StringLiteral AccessPattern = "access_pattern";
+constexpr StringLiteral DistributionKind = "distribution_kind";
+constexpr StringLiteral DistributionPattern = "distribution_pattern";
+constexpr StringLiteral DistributionVersion = "distribution_version";
 
 /// DbAllocOp attributes (TableGen-generated names)
 constexpr StringLiteral Mode = "mode";
@@ -95,6 +98,42 @@ inline void setDbAccessPattern(Operation *op, DbAccessPattern pattern) {
     return;
   op->setAttr(AttrNames::Operation::AccessPattern,
               DbAccessPatternAttr::get(op->getContext(), pattern));
+}
+
+/// Helper accessors for distribution_kind attribute (EdtDistributionKind).
+inline std::optional<EdtDistributionKind> getEdtDistributionKind(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr = op->getAttrOfType<EdtDistributionKindAttr>(
+          AttrNames::Operation::DistributionKind))
+    return attr.getValue();
+  return std::nullopt;
+}
+
+inline void setEdtDistributionKind(Operation *op, EdtDistributionKind kind) {
+  if (!op)
+    return;
+  op->setAttr(AttrNames::Operation::DistributionKind,
+              EdtDistributionKindAttr::get(op->getContext(), kind));
+}
+
+/// Helper accessors for distribution_pattern attribute (EdtDistributionPattern).
+inline std::optional<EdtDistributionPattern>
+getEdtDistributionPattern(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr = op->getAttrOfType<EdtDistributionPatternAttr>(
+          AttrNames::Operation::DistributionPattern))
+    return attr.getValue();
+  return std::nullopt;
+}
+
+inline void setEdtDistributionPattern(Operation *op,
+                                      EdtDistributionPattern pattern) {
+  if (!op)
+    return;
+  op->setAttr(AttrNames::Operation::DistributionPattern,
+              EdtDistributionPatternAttr::get(op->getContext(), pattern));
 }
 
 /// Helper accessors for arts.partition_hint attribute (PartitioningHint).

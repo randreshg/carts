@@ -8,6 +8,7 @@
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"
+#include "arts/Analysis/DistributionHeuristics.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsDebug.h"
@@ -154,17 +155,6 @@ public:
   }
 
 private:
-  Value getNumWorkers(OpBuilder &builder, Location loc, EdtOp parallelEdt) {
-    if (auto workersAttribute = parallelEdt->getAttrOfType<workersAttr>(
-            AttrNames::Operation::Workers))
-      return builder.create<arith::ConstantIndexOp>(
-          loc, workersAttribute.getValue());
-    /// Check concurrency type to decide which runtime query to use
-    if (parallelEdt.getConcurrency() == EdtConcurrency::internode)
-      return builder.create<GetTotalNodesOp>(loc).getResult();
-    return builder.create<GetTotalWorkersOp>(loc).getResult();
-  }
-
   LogicalResult lowerParallelEdt(EdtOp parallelEdt) {
     ARTS_DEBUG("Lowering parallel EDT\n" << parallelEdt);
 
@@ -189,10 +179,8 @@ private:
     Block *epochBlock = &epochRegion.front();
     OpBuilder epochBuilder = OpBuilder::atBlockBegin(epochBlock);
 
-    Value numWorkers = getNumWorkers(epochBuilder, loc, parallelEdt);
-    if (!numWorkers.getType().isIndex())
-      numWorkers = epochBuilder.create<arith::IndexCastOp>(
-          loc, epochBuilder.getIndexType(), numWorkers);
+    Value numWorkers = DistributionHeuristics::getDispatchWorkerCount(
+        epochBuilder, loc, parallelEdt);
     Value zero = epochBuilder.create<arith::ConstantIndexOp>(loc, 0);
     Value one = epochBuilder.create<arith::ConstantIndexOp>(loc, 1);
 
