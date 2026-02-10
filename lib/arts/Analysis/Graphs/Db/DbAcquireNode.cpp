@@ -5,6 +5,7 @@
 ///==========================================================================///
 
 #include "arts/Analysis/ArtsAnalysisManager.h"
+#include "arts/Analysis/AccessPatternAnalysis.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Edt/EdtAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
@@ -262,40 +263,9 @@ void DbAcquireNode::forEachChildNode(
 
 ///===----------------------------------------------------------------------===///
 /// Stencil-Aware Access Bounds Analysis
-///
-/// For stencil patterns like A[i-1], A[i], A[i+1], we need to analyze the
-/// actual memory access bounds rather than using iteration hints directly.
-/// The index expression is typically: blockOffset + loopIV + constant
-/// We extract the constant to determine the offset adjustment needed.
 ///===----------------------------------------------------------------------===///
 
-struct AccessBoundsInfo {
-  int64_t minOffset = 0;
-  int64_t maxOffset = 0;
-  int64_t centerOffset = 0;
-  bool isStencil = false;
-  bool valid = false;
-  bool hasVariableOffset = false;
-};
-
-/// Normalize stencil bounds to be centered around 0 when a uniform shift is
-/// present (e.g., accesses at offsets {0,1,2} should map to {-1,0,1}).
-static void normalizeStencilBounds(AccessBoundsInfo &bounds) {
-  if (!bounds.valid || !bounds.isStencil)
-    return;
-  /// Already centered (has both left and right offsets).
-  if (bounds.minOffset < 0 && bounds.maxOffset > 0)
-    return;
-  int64_t sum = bounds.minOffset + bounds.maxOffset;
-  if (sum % 2 != 0)
-    return;
-  int64_t center = sum / 2;
-  if (center == 0)
-    return;
-  bounds.centerOffset = center;
-  bounds.minOffset -= center;
-  bounds.maxOffset -= center;
-}
+using AccessBoundsInfo = AccessBoundsResult;
 
 /// Analyze all memory accesses to compute actual bounds relative to block base.
 /// For stencil patterns like A[i-1], A[i], A[i+1], this extracts the min/max
@@ -852,24 +822,13 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
 static AccessBoundsInfo
 analyzeAccessBounds(DbAcquireNode *node, Value blockOffset, Value loopIV,
                     std::optional<unsigned> partitionDim) {
-  AccessBoundsInfo bounds;
-  bounds.minOffset = std::numeric_limits<int64_t>::max();
-  bounds.maxOffset = std::numeric_limits<int64_t>::min();
-
   if (!node || !blockOffset || !loopIV)
-    return bounds;
+    return AccessBoundsInfo{};
 
   DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
   node->collectAccessOperations(dbRefToMemOps);
 
-  if (dbRefToMemOps.empty()) {
-    bounds.minOffset = 0;
-    bounds.maxOffset = 0;
-    bounds.valid = true;
-    return bounds;
-  }
-
-  bool foundAny = false;
+  SmallVector<AccessIndexInfo, 16> accesses;
 
   for (auto &[dbRef, memOps] : dbRefToMemOps) {
     for (Operation *memOp : memOps) {
@@ -877,49 +836,15 @@ analyzeAccessBounds(DbAcquireNode *node, Value blockOffset, Value loopIV,
           DatablockUtils::collectFullIndexChain(dbRef, memOp);
       if (indexChain.empty())
         continue;
-
-      Value idxForBounds;
-      if (partitionDim) {
-        unsigned memrefStart = dbRef.getIndices().size();
-        unsigned chainIdx = memrefStart + *partitionDim;
-        if (chainIdx < indexChain.size())
-          idxForBounds = indexChain[chainIdx];
-      }
-      if (!idxForBounds) {
-        for (Value idx : indexChain) {
-          int64_t constVal;
-          if (!ValueUtils::getConstantIndex(idx, constVal)) {
-            idxForBounds = idx;
-            break;
-          }
-        }
-      }
-
-      if (!idxForBounds)
-        continue;
-
-      auto constOffset =
-          ValueUtils::extractConstantOffset(idxForBounds, loopIV, blockOffset);
-      if (constOffset) {
-        foundAny = true;
-        bounds.minOffset = std::min(bounds.minOffset, *constOffset);
-        bounds.maxOffset = std::max(bounds.maxOffset, *constOffset);
-      } else {
-        if (ValueUtils::dependsOn(idxForBounds, loopIV) &&
-            ValueUtils::dependsOn(idxForBounds, blockOffset))
-          bounds.hasVariableOffset = true;
-        return bounds;
-      }
+      AccessIndexInfo info;
+      info.dbRefPrefix = dbRef.getIndices().size();
+      info.indexChain.append(indexChain.begin(), indexChain.end());
+      accesses.push_back(std::move(info));
     }
   }
 
-  if (foundAny) {
-    bounds.isStencil = (bounds.minOffset != bounds.maxOffset);
-    bounds.valid = true;
-    normalizeStencilBounds(bounds);
-  }
-
-  return bounds;
+  return analyzeAccessBoundsFromIndices(accesses, loopIV, blockOffset,
+                                        partitionDim);
 }
 
 void DbAcquireNode::collectAccessOperations(

@@ -15,6 +15,7 @@
 #ifndef ARTS_ANALYSIS_ARTSHEURISTICS_H
 #define ARTS_ANALYSIS_ARTSHEURISTICS_H
 
+#include "arts/Analysis/DistributionHeuristics.h"
 #include "arts/Analysis/PartitioningHeuristics.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 #include "llvm/ADT/SmallVector.h"

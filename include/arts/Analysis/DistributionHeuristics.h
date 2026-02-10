@@ -117,6 +117,7 @@
 
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/Value.h"
 #include <optional>
 
@@ -128,7 +129,9 @@ class ArtsCodegen;
 /// H2: Distribution strategy kinds
 enum class DistributionKind {
   Flat,     ///< Single-level: all workers divide iterations equally
-  TwoLevel  ///< Two-level: nodes get DB blocks, threads subdivide within
+  TwoLevel, ///< Two-level: nodes get DB blocks, threads subdivide within
+  BlockCyclic, ///< Cyclic chunks: chunk k -> worker (k % totalWorkers)
+  Tiling2D ///< Matmul-oriented 2D worker grid (row ownership + column striping)
 };
 
 /// Machine topology analysis result (compile-time, no IR)
@@ -156,6 +159,22 @@ struct DistributionBounds {
   Value acquireSizeHint;     ///< Max possible (partition_sizes hint)
 };
 
+/// Resolved worker topology for an EDT.
+struct WorkerConfig {
+  int64_t totalWorkers = 0;
+  int64_t workersPerNode = 0;
+  bool internode = false;
+};
+
+/// 2D worker grid for tiling_2d strategy.
+/// workerId = rowWorkerId * colWorkers + colWorkerId
+struct Tiling2DWorkerGrid {
+  Value rowWorkers;
+  Value colWorkers;
+  Value rowWorkerId;
+  Value colWorkerId;
+};
+
 class DistributionHeuristics {
 public:
   /// H2.1: Analyze machine topology -> distribution strategy
@@ -163,6 +182,14 @@ public:
   static DistributionStrategy analyzeStrategy(
       EdtConcurrency concurrency,
       const ArtsAbstractMachine *machine = nullptr);
+
+  /// Select IR distribution kind from machine strategy + detected loop pattern.
+  static EdtDistributionKind
+  selectDistributionKind(const DistributionStrategy &strategy,
+                         EdtDistributionPattern pattern);
+
+  /// Convert IR-level distribution enum into lowering strategy enum.
+  static DistributionKind toDistributionKind(EdtDistributionKind kind);
 
   /// H2.2: Compute runtime bounds for a worker
   /// Emits arith MLIR ops via ArtsCodegen.
@@ -202,6 +229,35 @@ public:
   /// Get workers-per-node runtime Value for internode EDTs.
   static Value getWorkersPerNode(
       ArtsCodegen *AC, Location loc, EdtOp parallelEdt);
+
+  /// Get total worker count as an index Value for the given EDT.
+  /// Honors explicit workers attribute, otherwise uses runtime queries.
+  static Value getTotalWorkers(
+      ArtsCodegen *AC, Location loc, EdtOp parallelEdt);
+
+  /// Get dispatch worker count used by ParallelEdtLowering worker loops.
+  /// Honors explicit workers attribute. Defaults to:
+  ///   - internode: total nodes
+  ///   - intranode: total workers
+  static Value getDispatchWorkerCount(
+      OpBuilder &builder, Location loc, EdtOp parallelEdt);
+
+  /// Resolve compile-time worker topology for an EDT from attrs + machine.
+  /// Returns nullopt when worker count is not computable.
+  static std::optional<WorkerConfig>
+  resolveWorkerConfig(EdtOp parallelEdt,
+                      const ArtsAbstractMachine *machine = nullptr);
+
+  /// Choose compile-time column worker count for tiling_2d.
+  /// Returns the largest divisor <= sqrt(totalWorkers), or 1.
+  static int64_t chooseTiling2DColumnWorkers(int64_t totalWorkers);
+
+  /// Compute row/column worker decomposition for tiling_2d.
+  /// Falls back to rowWorkers=totalWorkers, colWorkers=1 when totalWorkers
+  /// is not compile-time constant.
+  static Tiling2DWorkerGrid
+  getTiling2DWorkerGrid(ArtsCodegen *AC, Location loc, Value workerId,
+                        Value totalWorkers);
 
 private:
   /// Balanced floor+remainder distribution

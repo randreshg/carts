@@ -15,6 +15,7 @@
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
+#include <algorithm>
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -37,6 +38,105 @@ static Value castToIndex(ArtsCodegen *AC, Value v, Location loc) {
 /// regardless of where they are emitted.
 static bool isSafeRuntimeQuery(Operation *op) {
   return isa<GetTotalNodesOp, GetTotalWorkersOp>(op);
+}
+
+std::optional<WorkerConfig>
+DistributionHeuristics::resolveWorkerConfig(EdtOp parallelEdt,
+                                            const ArtsAbstractMachine *machine) {
+  WorkerConfig cfg;
+  cfg.internode = parallelEdt.getConcurrency() == EdtConcurrency::internode;
+
+  if (auto workers = parallelEdt->getAttrOfType<workersAttr>(
+          AttrNames::Operation::Workers)) {
+    cfg.totalWorkers = workers.getValue();
+    if (cfg.totalWorkers <= 0)
+      return std::nullopt;
+
+    if (cfg.internode) {
+      if (machine && machine->hasValidNodeCount() && machine->getNodeCount() > 0)
+        cfg.workersPerNode = std::max<int64_t>(
+            1, cfg.totalWorkers / static_cast<int64_t>(machine->getNodeCount()));
+      if (cfg.workersPerNode <= 0)
+        cfg.workersPerNode = 1;
+    } else {
+      cfg.workersPerNode = cfg.totalWorkers;
+    }
+    return cfg;
+  }
+
+  if (!machine)
+    return std::nullopt;
+
+  int threads = machine->hasValidThreads() ? machine->getThreads() : 0;
+  if (threads <= 0)
+    return std::nullopt;
+
+  if (!cfg.internode) {
+    cfg.totalWorkers = threads;
+    cfg.workersPerNode = threads;
+    return cfg;
+  }
+
+  int nodeCount = machine->hasValidNodeCount() ? machine->getNodeCount() : 0;
+  if (nodeCount <= 0)
+    return std::nullopt;
+
+  int workerThreads =
+      threads - machine->getOutgoingThreads() - machine->getIncomingThreads();
+  if (workerThreads <= 0)
+    workerThreads = 1;
+
+  cfg.workersPerNode = workerThreads;
+  cfg.totalWorkers = static_cast<int64_t>(nodeCount) * workerThreads;
+  if (cfg.totalWorkers <= 0)
+    return std::nullopt;
+
+  return cfg;
+}
+
+int64_t
+DistributionHeuristics::chooseTiling2DColumnWorkers(int64_t totalWorkers) {
+  if (totalWorkers < 4)
+    return 1;
+
+  int64_t best = 1;
+  for (int64_t d = 2; d * d <= totalWorkers; ++d) {
+    if (totalWorkers % d == 0)
+      best = d;
+  }
+  return best;
+}
+
+Tiling2DWorkerGrid DistributionHeuristics::getTiling2DWorkerGrid(
+    ArtsCodegen *AC, Location loc, Value workerId, Value totalWorkers) {
+  Tiling2DWorkerGrid grid;
+  Value one = AC->createIndexConstant(1, loc);
+  Value zero = AC->createIndexConstant(0, loc);
+
+  Value totalWorkersIndex = castToIndex(AC, totalWorkers, loc);
+  Value workerIdIndex = castToIndex(AC, workerId, loc);
+
+  grid.rowWorkers = totalWorkersIndex;
+  grid.colWorkers = one;
+  grid.rowWorkerId = workerIdIndex;
+  grid.colWorkerId = zero;
+
+  if (auto totalWorkersConst =
+          ValueUtils::tryFoldConstantIndex(totalWorkersIndex)) {
+    int64_t colWorkersConst =
+        chooseTiling2DColumnWorkers(*totalWorkersConst);
+    if (colWorkersConst > 1) {
+      grid.colWorkers = AC->createIndexConstant(colWorkersConst, loc);
+      grid.rowWorkers =
+          AC->create<arith::DivUIOp>(loc, totalWorkersIndex, grid.colWorkers);
+      grid.rowWorkerId =
+          AC->create<arith::DivUIOp>(loc, workerIdIndex, grid.colWorkers);
+      grid.colWorkerId =
+          AC->create<arith::RemUIOp>(loc, workerIdIndex, grid.colWorkers);
+    }
+  }
+
+  return grid;
 }
 
 ///===----------------------------------------------------------------------===///
@@ -72,6 +172,47 @@ DistributionHeuristics::analyzeStrategy(EdtConcurrency concurrency,
   }
   strategy.useDbAlignment = true;
   return strategy;
+}
+
+DistributionKind
+DistributionHeuristics::toDistributionKind(EdtDistributionKind kind) {
+  switch (kind) {
+  case EdtDistributionKind::block:
+    return DistributionKind::Flat;
+  case EdtDistributionKind::two_level:
+    return DistributionKind::TwoLevel;
+  case EdtDistributionKind::block_cyclic:
+    return DistributionKind::BlockCyclic;
+  case EdtDistributionKind::tiling_2d:
+    return DistributionKind::Tiling2D;
+  }
+  return DistributionKind::Flat;
+}
+
+EdtDistributionKind DistributionHeuristics::selectDistributionKind(
+    const DistributionStrategy &strategy, EdtDistributionPattern pattern) {
+  switch (strategy.kind) {
+  case DistributionKind::TwoLevel:
+    return EdtDistributionKind::two_level;
+  case DistributionKind::BlockCyclic:
+    return EdtDistributionKind::block_cyclic;
+  case DistributionKind::Tiling2D:
+    return EdtDistributionKind::tiling_2d;
+  case DistributionKind::Flat:
+    break;
+  }
+
+  switch (pattern) {
+  case EdtDistributionPattern::triangular:
+    return EdtDistributionKind::block_cyclic;
+  case EdtDistributionPattern::matmul:
+    return EdtDistributionKind::tiling_2d;
+  case EdtDistributionPattern::stencil:
+  case EdtDistributionPattern::uniform:
+  case EdtDistributionPattern::unknown:
+    return EdtDistributionKind::block;
+  }
+  return EdtDistributionKind::block;
 }
 
 ///===----------------------------------------------------------------------===///
@@ -121,11 +262,39 @@ DistributionHeuristics::computeBounds(ArtsCodegen *AC, Location loc,
   DistributionBounds bounds;
   Value zeroIndex = AC->createIndexConstant(0, loc);
 
-  if (strategy.kind == DistributionKind::Flat) {
-    /// Flat: balanced distribution across all workers
+  if (strategy.kind == DistributionKind::BlockCyclic) {
+    /// BlockCyclic: chunks are assigned round-robin by chunk id.
+    /// Worker i processes chunk ids: i, i+W, i+2W, ...
+    bounds.iterStart = zeroIndex;
+    bounds.iterCount = zeroIndex;
+    bounds.iterCountHint = zeroIndex;
+    bounds.hasWork = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult,
+                                               workerId, totalChunks);
+
+    /// Conservative acquire bounds: full loop span.
+    /// ForLowering may specialize this further per strategy.
+    bounds.acquireStart = zeroIndex;
+    bounds.acquireSize = totalIterations;
+    bounds.acquireSizeHint = totalIterations;
+    return bounds;
+  }
+
+  if (strategy.kind == DistributionKind::Flat ||
+      strategy.kind == DistributionKind::Tiling2D) {
+    /// Flat: balanced distribution across all workers.
+    /// Tiling2D: balanced row distribution across row workers
+    /// (worker decomposition handled by getTiling2DWorkerGrid).
+    Value distWorkerId = workerId;
+    Value distWorkers = runtimeTotalWorkers;
+    if (strategy.kind == DistributionKind::Tiling2D) {
+      Tiling2DWorkerGrid grid = getTiling2DWorkerGrid(
+          AC, loc, workerId, runtimeTotalWorkers);
+      distWorkerId = grid.rowWorkerId;
+      distWorkers = grid.rowWorkers;
+    }
+
     auto [firstChunkIdx, chunkCount] =
-        balancedDistribute(AC, loc, totalChunks, runtimeTotalWorkers,
-                           workerId);
+        balancedDistribute(AC, loc, totalChunks, distWorkers, distWorkerId);
 
     /// Convert chunk indices to iteration indices
     bounds.iterStart =
@@ -316,6 +485,19 @@ DistributionBounds DistributionHeuristics::recomputeBoundsInside(
   Value localTotalChunks =
       AC->create<arith::DivUIOp>(loc, adjustedIterations, localBlockSize);
 
+  if (strategy.kind == DistributionKind::BlockCyclic) {
+    DistributionBounds bounds;
+    bounds.iterStart = zeroIndex;
+    bounds.iterCount = zeroIndex;
+    bounds.iterCountHint = zeroIndex;
+    bounds.hasWork = AC->create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::ult, workerIdIndex, localTotalChunks);
+    bounds.acquireStart = zeroIndex;
+    bounds.acquireSize = localTotalIterations;
+    bounds.acquireSizeHint = localTotalIterations;
+    return bounds;
+  }
+
   if (strategy.kind == DistributionKind::TwoLevel) {
     /// TwoLevel: replicate the two-level logic using runtime values
     /// Clone workersPerNode (and its dependencies) into the current region
@@ -395,10 +577,19 @@ DistributionBounds DistributionHeuristics::recomputeBoundsInside(
     return bounds;
   }
 
-  /// Flat: mirror the same balanced floor + remainder mapping
+  /// Flat: mirror the same balanced floor + remainder mapping.
+  /// Tiling2D: use row-worker decomposition for row ownership.
+  Value distWorkerId = workerIdIndex;
+  Value distWorkers = totalWorkersIndex;
+  if (strategy.kind == DistributionKind::Tiling2D) {
+    Tiling2DWorkerGrid grid = getTiling2DWorkerGrid(
+        AC, loc, workerIdIndex, totalWorkersIndex);
+    distWorkerId = grid.rowWorkerId;
+    distWorkers = grid.rowWorkers;
+  }
+
   auto [firstChunkIdx, chunkCount] =
-      balancedDistribute(AC, loc, localTotalChunks, totalWorkersIndex,
-                         workerIdIndex);
+      balancedDistribute(AC, loc, localTotalChunks, distWorkers, distWorkerId);
 
   DistributionBounds bounds;
   bounds.iterStart =
@@ -510,4 +701,43 @@ Value DistributionHeuristics::getWorkersPerNode(ArtsCodegen *AC, Location loc,
   Value isZero = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
                                            workersPerNode, zero);
   return AC->create<arith::SelectOp>(loc, isZero, one, workersPerNode);
+}
+
+Value DistributionHeuristics::getTotalWorkers(ArtsCodegen *AC, Location loc,
+                                              EdtOp parallelEdt) {
+  if (auto workers = parallelEdt->getAttrOfType<workersAttr>(
+          AttrNames::Operation::Workers)) {
+    return AC->createIndexConstant(workers.getValue(), loc);
+  }
+
+  if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {
+    Value nodes =
+        castToIndex(AC, AC->create<GetTotalNodesOp>(loc).getResult(), loc);
+    Value threads =
+        castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
+    return AC->create<arith::MulIOp>(loc, nodes, threads);
+  }
+
+  return castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
+}
+
+Value DistributionHeuristics::getDispatchWorkerCount(OpBuilder &builder,
+                                                     Location loc,
+                                                     EdtOp parallelEdt) {
+  if (auto workers = parallelEdt->getAttrOfType<workersAttr>(
+          AttrNames::Operation::Workers)) {
+    return builder.create<arith::ConstantIndexOp>(loc, workers.getValue());
+  }
+
+  Value workerCount;
+  if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {
+    workerCount = builder.create<GetTotalNodesOp>(loc).getResult();
+  } else {
+    workerCount = builder.create<GetTotalWorkersOp>(loc).getResult();
+  }
+
+  if (workerCount.getType().isIndex())
+    return workerCount;
+  return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
+                                            workerCount);
 }
