@@ -13,6 +13,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OperationSupport.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/CSE.h"
 #include "polygeist/Ops.h"
@@ -22,6 +23,86 @@
 
 namespace mlir {
 namespace arts {
+
+///===----------------------------------------------------------------------===///
+/// Value Cloning Utilities
+///===----------------------------------------------------------------------===///
+
+bool ValueUtils::canCloneOperation(
+    Operation *op, bool allowMemoryEffectFree,
+    llvm::function_ref<bool(Operation *)> extraAllowed) {
+  if (!op)
+    return false;
+  if (op->hasTrait<OpTrait::ConstantLike>())
+    return true;
+  if (allowMemoryEffectFree && isMemoryEffectFree(op))
+    return true;
+  return extraAllowed ? extraAllowed(op) : false;
+}
+
+bool ValueUtils::cloneValuesIntoRegion(
+    llvm::SetVector<Value> &values, Region *targetRegion, IRMapping &mapper,
+    OpBuilder &builder, bool allowMemoryEffectFree,
+    llvm::function_ref<bool(Operation *)> extraAllowed) {
+  SmallVector<Value> remaining(values.begin(), values.end());
+  bool progress = true;
+
+  while (progress && !remaining.empty()) {
+    progress = false;
+    SmallVector<Value> nextRemaining;
+
+    for (Value val : remaining) {
+      if (mapper.contains(val)) {
+        progress = true;
+        continue;
+      }
+
+      Operation *defOp = val.getDefiningOp();
+      if (!defOp) {
+        nextRemaining.push_back(val);
+        continue;
+      }
+
+      if (!canCloneOperation(defOp, allowMemoryEffectFree, extraAllowed)) {
+        nextRemaining.push_back(val);
+        continue;
+      }
+
+      bool allOperandsAvailable = true;
+      for (Value operand : defOp->getOperands()) {
+        if (mapper.contains(operand))
+          continue;
+        if (auto blockArg = operand.dyn_cast<BlockArgument>()) {
+          Region *ownerRegion = blockArg.getOwner()->getParent();
+          if (targetRegion->isAncestor(ownerRegion))
+            continue;
+        }
+        if (Operation *opDef = operand.getDefiningOp()) {
+          if (targetRegion->isAncestor(opDef->getParentRegion()))
+            continue;
+        }
+        allOperandsAvailable = false;
+        break;
+      }
+
+      if (!allOperandsAvailable) {
+        nextRemaining.push_back(val);
+        continue;
+      }
+
+      Operation *clonedOp = builder.clone(*defOp, mapper);
+      for (auto [oldResult, newResult] :
+           llvm::zip(defOp->getResults(), clonedOp->getResults())) {
+        mapper.map(oldResult, newResult);
+      }
+      progress = true;
+    }
+
+    remaining = std::move(nextRemaining);
+  }
+
+  return remaining.empty();
+}
 
 ///===----------------------------------------------------------------------===///
 /// Constant Value Analysis

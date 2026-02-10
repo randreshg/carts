@@ -27,6 +27,7 @@ constexpr StringLiteral Nowait = "nowait";
 /// Partition-related attributes (TableGen-generated names)
 constexpr StringLiteral PartitionMode = "partition_mode";
 constexpr StringLiteral PartitionHint = "arts.partition_hint";
+constexpr StringLiteral AccessPattern = "access_pattern";
 
 /// DbAllocOp attributes (TableGen-generated names)
 constexpr StringLiteral Mode = "mode";
@@ -77,6 +78,23 @@ inline void setPartitionMode(Operation *op, PartitionMode mode) {
     return;
   op->setAttr(AttrNames::Operation::PartitionMode,
               PartitionModeAttr::get(op->getContext(), mode));
+}
+
+/// Helper accessors for access_pattern attribute (DbAccessPattern).
+inline std::optional<DbAccessPattern> getDbAccessPattern(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr = op->getAttrOfType<DbAccessPatternAttr>(
+          AttrNames::Operation::AccessPattern))
+    return attr.getValue();
+  return std::nullopt;
+}
+
+inline void setDbAccessPattern(Operation *op, DbAccessPattern pattern) {
+  if (!op)
+    return;
+  op->setAttr(AttrNames::Operation::AccessPattern,
+              DbAccessPatternAttr::get(op->getContext(), pattern));
 }
 
 /// Helper accessors for arts.partition_hint attribute (PartitioningHint).
