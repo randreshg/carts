@@ -63,8 +63,6 @@ Operation *DatablockUtils::getUnderlyingDb(Value v, unsigned depth) {
     return acq.getOperation();
   if (auto alloc = v.getDefiningOp<DbAllocOp>())
     return alloc.getOperation();
-  if (auto copy = v.getDefiningOp<DbCopyOp>())
-    return copy.getOperation();
   /// Case 2: DbAcquireOp - trace through sourceGuid or sourcePtr
   if (auto dbLoad = v.getDefiningOp<DbRefOp>())
     return getUnderlyingDb(dbLoad.getSource(), depth + 1);
@@ -92,10 +90,9 @@ Operation *DatablockUtils::getUnderlyingDb(Value v, unsigned depth) {
       return getUnderlyingDb(subview.getSource(), depth + 1);
   }
 
-  if (Operation *root = ValueUtils::getUnderlyingOperation(v)) {
-    if (isa<DbAcquireOp, DbAllocOp, DbCopyOp>(root))
+  if (Operation *root = ValueUtils::getUnderlyingOperation(v))
+    if (isa<DbAcquireOp, DbAllocOp>(root))
       return root;
-  }
 
   return nullptr;
 }
@@ -109,8 +106,6 @@ Operation *DatablockUtils::getUnderlyingDbAlloc(Value v) {
   auto dbAcquire = dyn_cast<DbAcquireOp>(underlyingDb);
   if (dbAcquire)
     return getUnderlyingDbAlloc(dbAcquire.getSourcePtr());
-  if (auto dbCopy = dyn_cast<DbCopyOp>(underlyingDb))
-    return getUnderlyingDbAlloc(dbCopy.getSourcePtr());
   return nullptr;
 }
 

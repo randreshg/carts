@@ -125,11 +125,12 @@ namespace mlir {
 namespace arts {
 
 class ArtsCodegen;
+class LoopAnalysis;
 
 /// H2: Distribution strategy kinds
 enum class DistributionKind {
-  Flat,     ///< Single-level: all workers divide iterations equally
-  TwoLevel, ///< Two-level: nodes get DB blocks, threads subdivide within
+  Flat,        ///< Single-level: all workers divide iterations equally
+  TwoLevel,    ///< Two-level: nodes get DB blocks, threads subdivide within
   BlockCyclic, ///< Cyclic chunks: chunk k -> worker (k % totalWorkers)
   Tiling2D ///< Matmul-oriented 2D worker grid (row ownership + column striping)
 };
@@ -137,26 +138,26 @@ enum class DistributionKind {
 /// Machine topology analysis result (compile-time, no IR)
 struct DistributionStrategy {
   DistributionKind kind = DistributionKind::Flat;
-  int64_t numNodes = 1;          ///< Total nodes
-  int64_t workersPerNode = 1;    ///< Worker threads per node
-  int64_t totalWorkers = 1;      ///< numNodes * workersPerNode
-  bool useDbAlignment = false;   ///< blockSize > 1 for DB boundary alignment
+  int64_t numNodes = 1;        ///< Total nodes
+  int64_t workersPerNode = 1;  ///< Worker threads per node
+  int64_t totalWorkers = 1;    ///< numNodes * workersPerNode
+  bool useDbAlignment = false; ///< blockSize > 1 for DB boundary alignment
 };
 
 /// Runtime distribution bounds (SSA Values emitted during lowering)
 struct DistributionBounds {
   /// Thread-level: inner loop bounds
-  Value iterStart;           ///< First iteration for this worker
-  Value iterCount;           ///< Actual iteration count
-  Value iterCountHint;       ///< Max possible (for sizing)
-  Value hasWork;             ///< i1: does this worker have iterations?
+  Value iterStart;     ///< First iteration for this worker
+  Value iterCount;     ///< Actual iteration count
+  Value iterCountHint; ///< Max possible (for sizing)
+  Value hasWork;       ///< i1: does this worker have iterations?
 
   /// Acquire-level: DB acquire bounds
   /// For Flat: same as thread-level
   /// For TwoLevel: node-level (all threads on same node share same acquire)
-  Value acquireStart;        ///< First iteration of acquire range
-  Value acquireSize;         ///< Actual size
-  Value acquireSizeHint;     ///< Max possible (partition_sizes hint)
+  Value acquireStart;    ///< First iteration of acquire range
+  Value acquireSize;     ///< Actual size
+  Value acquireSizeHint; ///< Max possible (partition_sizes hint)
 };
 
 /// Resolved worker topology for an EDT.
@@ -179,9 +180,9 @@ class DistributionHeuristics {
 public:
   /// H2.1: Analyze machine topology -> distribution strategy
   /// Pure analysis, no IR emission.
-  static DistributionStrategy analyzeStrategy(
-      EdtConcurrency concurrency,
-      const ArtsAbstractMachine *machine = nullptr);
+  static DistributionStrategy
+  analyzeStrategy(EdtConcurrency concurrency,
+                  const ArtsAbstractMachine *machine = nullptr);
 
   /// Select IR distribution kind from machine strategy + detected loop pattern.
   static EdtDistributionKind
@@ -196,57 +197,61 @@ public:
   /// totalWorkers: runtime SSA Value for total worker count.
   /// workersPerNode: runtime SSA Value for workers per node (TwoLevel only).
   ///   For Flat, this parameter is ignored and may be null.
-  static DistributionBounds computeBounds(
-      ArtsCodegen *AC, Location loc,
-      const DistributionStrategy &strategy,
-      Value workerId,
-      Value totalWorkers,
-      Value workersPerNode,
-      Value totalIterations,
-      Value totalChunks,
-      Value blockSize);
+  static DistributionBounds computeBounds(ArtsCodegen *AC, Location loc,
+                                          const DistributionStrategy &strategy,
+                                          Value workerId, Value totalWorkers,
+                                          Value workersPerNode,
+                                          Value totalIterations,
+                                          Value totalChunks, Value blockSize);
 
   /// H2.3: Recompute bounds inside task EDT (handles SSA dominance)
   /// Clones loop bounds into current region, recomputes distribution.
   /// workersPerNode: runtime SSA Value for workers per node (TwoLevel only).
   static DistributionBounds recomputeBoundsInside(
-      ArtsCodegen *AC, Location loc,
-      const DistributionStrategy &strategy,
-      Value workerId, Value insideTotalWorkers,
-      Value workersPerNode,
-      Value upperBound, Value lowerBound, Value loopStep,
-      Value blockSize,
-      std::optional<int64_t> alignmentBlockSize,
-      bool useRuntimeBlockAlignment);
+      ArtsCodegen *AC, Location loc, const DistributionStrategy &strategy,
+      Value workerId, Value insideTotalWorkers, Value workersPerNode,
+      Value upperBound, Value lowerBound, Value loopStep, Value blockSize,
+      std::optional<int64_t> alignmentBlockSize, bool useRuntimeBlockAlignment);
 
   /// Compute DB alignment block size from parallel EDT dependencies.
   /// For internode: ceil(arrayDim / numNodes) for ALL arrays.
   /// For intranode: returns null (no alignment needed).
-  static Value computeDbAlignmentBlockSize(
-      EdtOp parallelEdt, Value numPartitions,
-      ArtsCodegen *AC, Location loc);
+  static Value computeDbAlignmentBlockSize(EdtOp parallelEdt,
+                                           Value numPartitions, ArtsCodegen *AC,
+                                           Location loc);
 
   /// Get workers-per-node runtime Value for internode EDTs.
-  static Value getWorkersPerNode(
-      ArtsCodegen *AC, Location loc, EdtOp parallelEdt);
+  static Value getWorkersPerNode(ArtsCodegen *AC, Location loc,
+                                 EdtOp parallelEdt);
 
   /// Get total worker count as an index Value for the given EDT.
   /// Honors explicit workers attribute, otherwise uses runtime queries.
-  static Value getTotalWorkers(
-      ArtsCodegen *AC, Location loc, EdtOp parallelEdt);
+  static Value getTotalWorkers(ArtsCodegen *AC, Location loc,
+                               EdtOp parallelEdt);
 
   /// Get dispatch worker count used by ParallelEdtLowering worker loops.
   /// Honors explicit workers attribute. Defaults to:
   ///   - internode: total nodes
   ///   - intranode: total workers
-  static Value getDispatchWorkerCount(
-      OpBuilder &builder, Location loc, EdtOp parallelEdt);
+  static Value getDispatchWorkerCount(OpBuilder &builder, Location loc,
+                                      EdtOp parallelEdt);
 
   /// Resolve compile-time worker topology for an EDT from attrs + machine.
   /// Returns nullopt when worker count is not computable.
   static std::optional<WorkerConfig>
   resolveWorkerConfig(EdtOp parallelEdt,
                       const ArtsAbstractMachine *machine = nullptr);
+
+  /// Compute an optional coarsened block-size hint for arts.for loops.
+  /// Returns nullopt when coarsening should be skipped.
+  static std::optional<int64_t>
+  computeCoarsenedBlockHint(ForOp forOp, LoopAnalysis &loopAnalysis,
+                            const WorkerConfig &workerCfg);
+
+  /// Backward-compatible alias. Prefer computeCoarsenedBlockHint.
+  static std::optional<int64_t>
+  computeCoarsenedBlockSize(ForOp forOp, LoopAnalysis &loopAnalysis,
+                            const WorkerConfig &workerCfg);
 
   /// Choose compile-time column worker count for tiling_2d.
   /// Returns the largest divisor <= sqrt(totalWorkers), or 1.
@@ -255,15 +260,15 @@ public:
   /// Compute row/column worker decomposition for tiling_2d.
   /// Falls back to rowWorkers=totalWorkers, colWorkers=1 when totalWorkers
   /// is not compile-time constant.
-  static Tiling2DWorkerGrid
-  getTiling2DWorkerGrid(ArtsCodegen *AC, Location loc, Value workerId,
-                        Value totalWorkers);
+  static Tiling2DWorkerGrid getTiling2DWorkerGrid(ArtsCodegen *AC, Location loc,
+                                                  Value workerId,
+                                                  Value totalWorkers);
 
 private:
   /// Balanced floor+remainder distribution
-  static std::pair<Value, Value> balancedDistribute(
-      ArtsCodegen *AC, Location loc,
-      Value totalChunks, Value numParticipants, Value participantId);
+  static std::pair<Value, Value>
+  balancedDistribute(ArtsCodegen *AC, Location loc, Value totalChunks,
+                     Value numParticipants, Value participantId);
 };
 
 } // namespace arts

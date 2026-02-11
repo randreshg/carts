@@ -25,8 +25,11 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
+#include "arts/Transforms/Edt/AcquireRewritePlanning.h"
 #include "arts/Transforms/Edt/EdtRewriter.h"
 #include "arts/Transforms/Edt/EdtTaskLoopLowering.h"
+#include "arts/Transforms/Edt/ParallelSplitLowering.h"
+#include "arts/Transforms/Edt/ReductionLowering.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
@@ -41,7 +44,6 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
 
@@ -111,141 +113,15 @@ public:
 
   /// Distribution strategy and bounds from DistributionHeuristics
   DistributionStrategy strategy;
-  DistributionBounds bounds;         ///< Set by computeBounds()
-  DistributionBounds insideBounds;   ///< Set by recomputeBoundsInside()
+  DistributionBounds bounds;       ///< Set by computeBounds()
+  DistributionBounds insideBounds; ///< Set by recomputeBoundsInside()
 
 private:
   void initialize();
 };
 
-///===----------------------------------------------------------------------===///
-/// ReductionInfo - Information about reductions within a parallel for
-/// Tracks DB handles for reduction pattern
-///
-/// Two sets of DBs per reduction variable:
-/// 1. Partial accumulators: array[num_workers] for intermediate worker results
-/// 2. Final result: scalar for combined output
-///===----------------------------------------------------------------------===///
-struct ReductionInfo {
-  /// Original reduction variables from arts.for operation
-  SmallVector<Value> reductionVars;
-
-  /// Original loop metadata attribute (if present)
-  Attribute loopMetadataAttr;
-
-  /// Location of the original arts.for operation
-  std::optional<Location> loopLocation;
-
-  /// Partial accumulators: array[num_workers] for intermediate results
-  SmallVector<Value> partialAccumGuids, partialAccumPtrs, partialAccumArgs;
-
-  /// Final result accumulators: scalar for each reduction variable
-  SmallVector<Value> finalResultGuids, finalResultPtrs, finalResultArgs;
-
-  /// Track which final result indices are externally allocated
-  SmallVector<bool> finalResultIsExternal;
-
-  /// Optional stack-allocated sinks to mirror final reduction value
-  SmallVector<Value> hostResultPtrs;
-
-  /// Number of workers (from workers attribute - provides bounded memory)
-  Value numWorkers;
-};
-
-/// ParallelRegionAnalysis - Analyze parallel EDT contents for splitting
-/// Categorizes operations in a parallel EDT relative to arts.for operations.
-/// Used to split the parallel region into pre-for and post-for sections.
-struct ParallelRegionAnalysis {
-  SmallVector<Operation *, 8> opsBeforeFor;
-  SmallVector<ForOp, 4> forOps;
-  SmallVector<Operation *, 8> opsAfterFor;
-
-  /// Track which block arguments (DBs) are used by post-for operations.
-  /// Used for datablock reacquisition when creating continuation parallel.
-  SetVector<BlockArgument> depsUsedByFor, depsUsedAfterFor;
-
-  /// Map block argument index to the original dependency for reacquisition
-  DenseMap<unsigned, Value> argIndexToDep;
-
-  bool hasWorkBefore() const { return !opsBeforeFor.empty(); }
-  bool hasWorkAfter() const { return !opsAfterFor.empty(); }
-  bool needsSplit() const { return !forOps.empty(); }
-
-  /// Analyze a parallel EDT and populate the analysis
-  static ParallelRegionAnalysis analyze(EdtOp parallelEdt) {
-    ParallelRegionAnalysis analysis;
-    Block &body = parallelEdt.getBody().front();
-
-    bool seenFor = false;
-
-    for (Operation &op : body.without_terminator()) {
-      if (auto forOp = dyn_cast<ForOp>(&op)) {
-        analysis.forOps.push_back(forOp);
-        seenFor = true;
-      } else if (isa<DbReleaseOp>(&op)) {
-        /// Skip db_release ops - these are cleanup operations, not real work.
-        /// They'll be handled when the original parallel is cleaned up or
-        /// when the EDTs containing them are erased.
-        continue;
-      } else {
-        if (!seenFor)
-          analysis.opsBeforeFor.push_back(&op);
-        else
-          analysis.opsAfterFor.push_back(&op);
-      }
-    }
-
-    return analysis;
-  }
-
-  /// Analyze which block arguments (DBs) are used by for and post-for
-  /// operations. Must be called after analyze() and before creating
-  /// continuation parallel.
-  void analyzeDependenciesForSplit(EdtOp parallelEdt) {
-    Block &parallelBlock = parallelEdt.getBody().front();
-    ValueRange deps = parallelEdt.getDependencies();
-
-    /// Build arg index to dependency mapping
-    for (auto [idx, dep] : llvm::enumerate(deps))
-      argIndexToDep[idx] = dep;
-
-    /// Helper to collect block arguments used by an operation
-    auto collectUsedBlockArgs = [&](Operation *op,
-                                    SetVector<BlockArgument> &result) {
-      op->walk([&](Operation *nested) {
-        for (Value operand : nested->getOperands()) {
-          if (auto blockArg = operand.dyn_cast<BlockArgument>()) {
-            if (blockArg.getOwner() == &parallelBlock)
-              result.insert(blockArg);
-          }
-        }
-      });
-    };
-
-    /// Collect deps used by arts.for operations
-    for (ForOp forOp : forOps)
-      collectUsedBlockArgs(forOp.getOperation(), depsUsedByFor);
-
-    /// Collect deps used by post-for operations
-    for (Operation *op : opsAfterFor)
-      collectUsedBlockArgs(op, depsUsedAfterFor);
-  }
-};
-
-/// Check if an operation can be safely cloned into a new region.
-static bool canCloneOperation(Operation *op) {
-  if (!op)
-    return false;
-  if (op->hasTrait<OpTrait::ConstantLike>())
-    return true;
-  if (isMemoryEffectFree(op))
-    return true;
-  if (isa<arts::DbRefOp>(op))
-    return true;
-  if (isa<memref::LoadOp>(op))
-    return true;
-  return false;
-}
+using ReductionInfo = ReductionLoweringInfo;
+using ParallelRegionAnalysis = ParallelRegionSplitAnalysis;
 
 /// Collect external values needed by operations in a block (including nested
 /// regions).
@@ -276,81 +152,6 @@ static void collectExternalValues(Block &sourceBlock, Region *boundaryRegion,
       }
     });
   }
-}
-
-/// Clone external values into the target region in dependency order.
-static bool cloneExternalValues(SetVector<Value> &externalValues,
-                                Region *boundaryRegion, IRMapping &mapper,
-                                OpBuilder &builder) {
-  SmallVector<Value> remainingValues(externalValues.begin(),
-                                     externalValues.end());
-
-  bool progress = true;
-  while (progress && !remainingValues.empty()) {
-    progress = false;
-    SmallVector<Value> stillRemaining;
-
-    for (Value val : remainingValues) {
-      if (mapper.contains(val)) {
-        progress = true;
-        continue;
-      }
-
-      Operation *defOp = val.getDefiningOp();
-      if (!defOp) {
-        stillRemaining.push_back(val);
-        continue;
-      }
-
-      if (!canCloneOperation(defOp)) {
-        stillRemaining.push_back(val);
-        continue;
-      }
-
-      bool allOperandsAvailable = true;
-      for (Value operand : defOp->getOperands()) {
-        if (mapper.contains(operand))
-          continue;
-        if (auto blockArg = operand.dyn_cast<BlockArgument>()) {
-          Region *ownerRegion = blockArg.getOwner()->getParent();
-          if (boundaryRegion->isAncestor(ownerRegion))
-            continue;
-        }
-        if (Operation *opDef = operand.getDefiningOp()) {
-          if (boundaryRegion->isAncestor(opDef->getParentRegion()))
-            continue;
-        }
-        allOperandsAvailable = false;
-        break;
-      }
-
-      if (!allOperandsAvailable) {
-        stillRemaining.push_back(val);
-        continue;
-      }
-
-      Operation *clonedOp = builder.clone(*defOp, mapper);
-      for (auto [oldResult, newResult] :
-           llvm::zip(defOp->getResults(), clonedOp->getResults())) {
-        mapper.map(oldResult, newResult);
-      }
-      progress = true;
-    }
-
-    remainingValues = std::move(stillRemaining);
-  }
-
-  if (!remainingValues.empty()) {
-    for (Value val : remainingValues) {
-      if (Operation *defOp = val.getDefiningOp()) {
-        ARTS_DEBUG("  - Uncloned external value op: " << defOp->getName());
-      } else {
-        ARTS_DEBUG("  - Uncloned external value (no defining op)");
-      }
-    }
-  }
-
-  return remainingValues.empty();
 }
 
 /// Clone external stack allocations into the EDT region and remap uses.
@@ -520,7 +321,7 @@ private:
                                   ReductionInfo &redInfo);
 };
 
-} /// namespace
+} // namespace
 
 /// LoopInfo computes how to distribute loop iterations across workers using
 /// block distribution. This ensures balanced work with minimal overhead.
@@ -684,49 +485,9 @@ void ForLoweringPass::lowerParallelEdt(EdtOp parallelEdt) {
       createContinuationParallel(AC, parallelEdt, analysis, loc);
   }
 
-  /// Step 4: Clean up original parallel EDT
-  /// First, erase the operations that have been moved/lowered externally
-  /// This must happen BEFORE erasing the parallel EDT to avoid use-after-free
-
-  /// Erase post-for operations from original parallel (now in continuation)
-  for (Operation *op : llvm::reverse(analysis.opsAfterFor))
-    op->erase();
-
-  /// Erase arts.for operations (now lowered externally as epoch + task EDTs)
-  for (ForOp forOp : analysis.forOps)
-    forOp.erase();
-
-  if (hasPreFor) {
-    ARTS_INFO(" - Keeping pre-for work in original parallel EDT");
-    /// Pre-for operations remain in the original parallel
-  } else {
-    /// No pre-for work - erase the now-empty original parallel entirely
-    /// Also erase the original acquires that were dependencies for it
-    ARTS_INFO(
-        " - Erasing empty original parallel EDT and its original acquires");
-
-    /// Collect original acquire ops to erase (dependencies of original
-    /// parallel)
-    SmallVector<DbAcquireOp> acquiresToErase;
-    for (Value dep : parallelEdt.getDependencies()) {
-      if (auto acqOp = dep.getDefiningOp<DbAcquireOp>())
-        acquiresToErase.push_back(acqOp);
-    }
-
-    /// Erase the parallel first
-    parallelEdt.erase();
-
-    /// Then erase the orphaned acquires.
-    /// An acquire is orphaned if its ptr result is unused. The guid may still
-    /// be referenced but without a corresponding ptr use, the acquire serves
-    /// no purpose.
-    for (DbAcquireOp acqOp : acquiresToErase) {
-      if (acqOp.getPtr().use_empty()) {
-        ARTS_DEBUG("  - Erasing orphaned acquire for original parallel");
-        acqOp.erase();
-      }
-    }
-  }
+  /// Step 4: Clean up original parallel EDT + dependencies.
+  ParallelSplitLowering::cleanupOriginalParallel(parallelEdt, analysis,
+                                                 hasPreFor);
 
   ARTS_INFO(" - Parallel EDT lowering complete");
 }
@@ -747,17 +508,7 @@ Attribute ForLoweringPass::getLoopMetadataAttr(ForOp forOp) {
 /// Detect block arguments used for reduction stores in the loop body.
 /// OpenMP lowering may use different variables than declared in reduction().
 static DenseSet<Value> detectReductionBlockArgs(ForOp forOp) {
-  DenseSet<Value> result;
-  forOp.walk([&](memref::StoreOp store) {
-    if (auto dbRef = store.getMemRef().getDefiningOp<DbRefOp>()) {
-      if (auto blockArg = dbRef.getSource().dyn_cast<BlockArgument>()) {
-        result.insert(blockArg);
-        ARTS_DEBUG(
-            "  - Detected old accumulator block arg in store: " << blockArg);
-      }
-    }
-  });
-  return result;
+  return ReductionLowering::detectReductionBlockArgs(forOp);
 }
 
 /// Check if a parallel block argument should be skipped. Returns true if the
@@ -765,26 +516,8 @@ static DenseSet<Value> detectReductionBlockArgs(ForOp forOp) {
 static bool shouldSkipReductionArg(BlockArgument parallelArg,
                                    const ReductionInfo &redInfo,
                                    const DenseSet<Value> &reductionBlockArgs) {
-  /// Final result accumulator - only needed by result EDT
-  if (llvm::is_contained(redInfo.finalResultArgs, parallelArg)) {
-    ARTS_DEBUG("  - Skipping final result accumulator (only for result EDT)");
-    return true;
-  }
-
-  /// Partial accumulator - handled separately with full array acquisition
-  if (llvm::is_contained(redInfo.partialAccumArgs, parallelArg)) {
-    ARTS_DEBUG("  - Skipping partial accumulator (acquired separately)");
-    return true;
-  }
-
-  /// Old accumulator from OpenMP lowering - replaced by partial accumulators
-  if (reductionBlockArgs.contains(parallelArg)) {
-    ARTS_DEBUG(
-        "  - Skipping old accumulator (replaced by worker-based partials)");
-    return true;
-  }
-
-  return false;
+  return ReductionLowering::shouldSkipReductionArg(parallelArg, redInfo,
+                                                   reductionBlockArgs);
 }
 
 /// Collect db_ref operations that use old accumulator block args.
@@ -796,17 +529,9 @@ collectOldAccumulatorDbRefs(ForOp forOp, Block &parallelBlock,
                             const DenseSet<Value> &reductionBlockArgs,
                             DenseSet<Operation *> &opsToSkip, IRMapping &mapper,
                             Value myAccumulator) {
-  forOp.walk([&](DbRefOp dbRef) {
-    if (auto blockArg = dbRef.getSource().dyn_cast<BlockArgument>()) {
-      if (blockArg.getOwner() == &parallelBlock &&
-          reductionBlockArgs.contains(blockArg)) {
-        mapper.map(dbRef.getResult(), myAccumulator);
-        opsToSkip.insert(dbRef.getOperation());
-        ARTS_DEBUG(
-            "  - Will skip cloning old accumulator db_ref, map to worker slot");
-      }
-    }
-  });
+  ReductionLowering::collectOldAccumulatorDbRefs(forOp, parallelBlock,
+                                                 reductionBlockArgs, opsToSkip,
+                                                 mapper, myAccumulator);
 }
 
 void ForLoweringPass::cloneLoopBody(ArtsCodegen *AC, ForOp forOp,
@@ -885,477 +610,15 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
                                                            EdtOp parallelEdt,
                                                            Location loc,
                                                            bool splitMode) {
-  ReductionInfo redInfo;
-  Attribute loopAttr = getLoopMetadataAttr(forOp);
-  redInfo.loopMetadataAttr = loopAttr;
-  redInfo.loopLocation = forOp.getLoc();
-  ValueRange reductionAccums = forOp.getReductionAccumulators();
-  if (reductionAccums.empty())
-    return redInfo;
-
-  /// Try to find a stack-allocated DB sink in the parent block to mirror the
-  /// final reduction result (used by host prints).
-  if (!forOp->getBlock()->empty()) {
-    for (Operation &op : forOp->getBlock()->getOperations()) {
-      if (auto dbAlloc = dyn_cast<DbAllocOp>(&op)) {
-        if (dbAlloc.getAllocType() == DbAllocType::stack &&
-            dbAlloc.getDbMode() == DbMode::write) {
-          redInfo.hostResultPtrs.push_back(dbAlloc.getPtr());
-          break;
-        }
-      }
-      if (&op == forOp.getOperation())
-        break;
-    }
-  }
-
-  ARTS_INFO(" - Allocating partial accumulators for " << reductionAccums.size()
-                                                      << " reduction(s)");
-
-  OpBuilder::InsertionGuard IG(AC->getBuilder());
-  AC->setInsertionPoint(parallelEdt);
-
-  /// Use numWorkers from parallel EDT workers attribute
-  Value numWorkers;
-  if (auto workers = parallelEdt->getAttrOfType<workersAttr>(
-          AttrNames::Operation::Workers))
-    numWorkers = AC->createIndexConstant(workers.getValue(), loc);
-  else if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {
-    Value nodes =
-        castToIndex(AC, AC->create<GetTotalNodesOp>(loc).getResult(), loc);
-    Value threads =
-        castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
-    numWorkers = AC->create<arith::MulIOp>(loc, nodes, threads);
-  } else
-    numWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
-  numWorkers = castToIndex(AC, numWorkers, loc);
-
-  Block &parallelBlock = parallelEdt.getBody().front();
-  ValueRange parentDeps = parallelEdt.getDependencies();
-
-  /// Detect existing reduction handles inside the parallel EDT. The reduction
-  /// pattern should have already allocated the final result datablock, so we
-  /// try to reuse that handle instead of creating a new one.
-  DenseSet<Value> reductionBlockArgs = detectReductionBlockArgs(forOp);
-  SmallVector<BlockArgument> existingResultArgs;
-  SmallVector<Value> existingResultPtrs;
-
-  for (auto [idx, dep] : llvm::enumerate(parentDeps)) {
-    BlockArgument arg = parallelBlock.getArgument(idx);
-    if (reductionBlockArgs.contains(arg)) {
-      existingResultArgs.push_back(arg);
-      existingResultPtrs.push_back(dep);
-    }
-  }
-
-  Value routeZero = AC->create<arith::ConstantIntOp>(loc, 0, 32);
-  Value sizeOne = AC->createIndexConstant(1, loc);
-  Value zeroIndex = AC->createIndexConstant(0, loc);
-
-  for (auto [idx, redVar] : llvm::enumerate(reductionAccums)) {
-    redInfo.reductionVars.push_back(redVar);
-
-    /// Get the reduction variable type
-    /// Reduction variables are typically memref<?xi32> or similar
-    auto redMemRef = redVar.getType().dyn_cast<MemRefType>();
-    /// Support scalar reductions by using the scalar type directly.
-    Type elementType =
-        redMemRef ? redMemRef.getElementType() : redVar.getType();
-    Value identity = createZeroValue(AC, elementType, loc);
-    if (!identity) {
-      ARTS_ERROR("Unsupported reduction element type for initialization");
-      continue;
-    }
-
-    /// Step 1: Reuse existing final result DB if available, otherwise fall back
-    /// to a private allocation (legacy path).
-    if (idx < existingResultArgs.size()) {
-      redInfo.finalResultArgs.push_back(existingResultArgs[idx]);
-
-      /// For split mode, we need to trace back to the original DbAllocOp
-      /// rather than using the acquire ptr directly
-      if (idx < existingResultPtrs.size()) {
-        Value existingPtr = existingResultPtrs[idx];
-        auto allocInfo = DatablockUtils::traceToDbAlloc(existingPtr);
-        if (allocInfo) {
-          auto [rootGuid, rootPtr] = *allocInfo;
-          redInfo.finalResultGuids.push_back(rootGuid);
-          redInfo.finalResultPtrs.push_back(rootPtr);
-          redInfo.finalResultIsExternal.push_back(true);
-          ARTS_DEBUG("  - Traced reduction result to DbAllocOp from parent");
-        } else {
-          /// Fallback: use the acquire ptr directly (for non-split mode)
-          redInfo.finalResultPtrs.push_back(existingPtr);
-          redInfo.finalResultIsExternal.push_back(true); /// Also external
-          ARTS_DEBUG(
-              "  - Reusing pre-allocated reduction result datablock from "
-              "parent (acquire ptr)");
-        }
-      }
-      ARTS_DEBUG(
-          "  - Reusing pre-allocated reduction result datablock from parent");
-    } else {
-      /// Allocate final result DB: sizes[1], elementSizes[1]
-      auto finalAllocOp = AC->create<DbAllocOp>(
-          loc, ArtsMode::inout, routeZero, DbAllocType::heap, DbMode::write,
-          elementType, Value(), ValueRange{sizeOne}, ValueRange{sizeOne});
-      Value finalGuid = finalAllocOp.getResult(0);
-      Value finalPtr = finalAllocOp.getResult(1);
-
-      /// Initialize directly using db_alloc result
-      SmallVector<Value> finalInitIndices{zeroIndex};
-      Value finalMemRef = AC->create<DbRefOp>(loc, finalPtr, finalInitIndices);
-      SmallVector<Value> innerIndices{zeroIndex};
-      AC->create<memref::StoreOp>(loc, identity, finalMemRef, innerIndices);
-
-      /// Store handles for cleanup (db_free) after parallel EDT completes
-      redInfo.finalResultGuids.push_back(finalGuid);
-      redInfo.finalResultPtrs.push_back(finalPtr);
-      redInfo.finalResultIsExternal.push_back(
-          false); /// Internal - free after epoch
-
-      /// In non-split mode, acquire and pass to parallel EDT as dependency
-      /// In split mode, skip this - acquires happen directly in result/task
-      /// EDTs
-      if (!splitMode) {
-        auto finalDepAcqOp = AC->create<DbAcquireOp>(
-            loc, ArtsMode::inout, finalGuid, finalPtr, PartitionMode::coarse,
-            /*indices=*/SmallVector<Value>{}, /*offsets=*/SmallVector<Value>{},
-            /*sizes=*/SmallVector<Value>{},
-            /*partition_indices=*/SmallVector<Value>{},
-            /*partition_offsets=*/SmallVector<Value>{},
-            /*partition_sizes=*/SmallVector<Value>{});
-        Value finalDepPtr = finalDepAcqOp.getPtr();
-        parallelEdt.appendDependency(finalDepPtr);
-        BlockArgument finalPtrArg =
-            parallelBlock.addArgument(finalDepPtr.getType(), loc);
-        redInfo.finalResultArgs.push_back(finalPtrArg);
-      }
-
-      ARTS_DEBUG("  - Allocated fallback final result DB for reduction "
-                 "variable");
-    }
-
-    SmallVector<Value> innerIndices{zeroIndex};
-
-    /// Step 2: Allocate and initialize partial accumulators DB
-    /// Allocate array[numWorkers] for partial accumulators
-    /// Each worker gets exactly one accumulator slot
-    auto allocOp = AC->create<DbAllocOp>(
-        loc, ArtsMode::inout, routeZero, DbAllocType::heap, DbMode::write,
-        elementType, Value(), ValueRange{numWorkers}, ValueRange{sizeOne});
-    Value partialGuid = allocOp.getGuid();
-    Value partialPtr = allocOp.getPtr();
-
-    /// Initialize all partial accumulators to identity value (0 for addition)
-    Value one = AC->createIndexConstant(1, loc);
-
-    /// Loop to initialize each worker's partial accumulator
-    /// for (i = 0; i < numWorkers; i++) { partialAccums[i] = identity; }
-    Location loopLoc = redInfo.loopLocation.value_or(loc);
-    auto initLoop = AC->create<scf::ForOp>(loopLoc, zeroIndex, numWorkers, one);
-    if (loopAttr)
-      initLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
-    AC->setInsertionPointToStart(initLoop.getBody());
-    Value workerIdx = initLoop.getInductionVar();
-
-    /// Get the memref for this worker's partial accumulator
-    /// Use partialPtr directly from db_alloc result
-    SmallVector<Value> outerIndices{workerIdx};
-    Value partialMemRef = AC->create<DbRefOp>(loc, partialPtr, outerIndices);
-
-    /// Store identity value: partialAccums[workerIdx] = identity
-    AC->create<memref::StoreOp>(loc, identity, partialMemRef, innerIndices);
-
-    /// Return to parent scope after initialization
-    AC->setInsertionPointAfter(initLoop);
-
-    /// Store handles for cleanup (db_free) after parallel EDT completes
-    redInfo.partialAccumGuids.push_back(partialGuid);
-    redInfo.partialAccumPtrs.push_back(partialPtr);
-
-    /// In non-split mode, acquire and pass to parallel EDT as dependency
-    /// In split mode, skip this - acquires happen directly in result/task EDTs
-    if (!splitMode) {
-      SmallVector<Value> partialOffsets{zeroIndex};
-      SmallVector<Value> partialSizes{numWorkers};
-      auto depAcqOp = AC->create<DbAcquireOp>(
-          loc, ArtsMode::inout, partialGuid, partialPtr, PartitionMode::coarse,
-          /*indices=*/SmallVector<Value>{}, /*offsets=*/partialOffsets,
-          /*sizes=*/partialSizes,
-          /*partition_indices=*/SmallVector<Value>{},
-          /*partition_offsets=*/SmallVector<Value>{},
-          /*partition_sizes=*/SmallVector<Value>{});
-      Value depPtr = depAcqOp.getPtr();
-      parallelEdt.appendDependency(depPtr);
-      BlockArgument partialPtrArg =
-          parallelBlock.addArgument(depPtr.getType(), loc);
-      redInfo.partialAccumArgs.push_back(partialPtrArg);
-    }
-
-    ARTS_DEBUG("  - Allocated and initialized partial accumulator DB for "
-               "reduction variable");
-  }
-
-  /// Store numWorkers for use by result EDT
-  redInfo.numWorkers = numWorkers;
-
-  return redInfo;
+  return ReductionLowering::allocatePartialAccumulators(
+      AC, forOp, parallelEdt, loc, getLoopMetadataAttr(forOp), splitMode);
 }
 
 /// Create result EDT to combine partial accumulators into final result.
 void ForLoweringPass::createResultEdt(ArtsCodegen *AC, EdtOp parallelEdt,
                                       ReductionInfo &redInfo, Location loc) {
-  OpBuilder::InsertionGuard IG(AC->getBuilder());
-  if (redInfo.reductionVars.empty())
-    return;
-
-  ARTS_INFO(" - Creating single result EDT to combine partial accumulators");
-
-  /// Use numWorkers from ReductionInfo (already computed during allocation)
-  Value numWorkers = redInfo.numWorkers;
-  if (!numWorkers) {
-    ARTS_ERROR("Missing numWorkers in ReductionInfo");
-    return;
-  }
-
-  /// Step 1: Acquire all partial accumulator DBs (READ-ONLY)
-  /// Each partial accumulator DB contains one slot per worker.
-  /// The result EDT reads ALL worker slots to combine them into the final
-  /// result.
-  SmallVector<Value> partialAcqPtrs;
-  partialAcqPtrs.reserve(redInfo.partialAccumPtrs.size());
-  for (uint64_t i = 0; i < redInfo.partialAccumPtrs.size(); i++) {
-    Value partialPtr = redInfo.partialAccumPtrs[i];
-    Value partialGuid = i < redInfo.partialAccumGuids.size()
-                            ? redInfo.partialAccumGuids[i]
-                            : Value();
-    if (!partialPtr) {
-      ARTS_ERROR("Missing partial accumulator ptr for reduction " << i);
-      continue;
-    }
-
-    Value zeroIndex = AC->createIndexConstant(0, loc);
-    SmallVector<Value> partialOffsets{zeroIndex};
-    SmallVector<Value> partialSizes{numWorkers};
-
-    /// Acquire entire partial accumulator array with <in> mode (read-only)
-    /// Source directly from DbAllocOp (partialGuid, partialPtr)
-    auto acqOp = AC->create<DbAcquireOp>(
-        loc, ArtsMode::in, partialGuid, partialPtr, PartitionMode::coarse,
-        /*indices=*/SmallVector<Value>{}, /*offsets=*/partialOffsets,
-        /*sizes=*/partialSizes,
-        /*partition_indices=*/SmallVector<Value>{},
-        /*partition_offsets=*/SmallVector<Value>{},
-        /*partition_sizes=*/SmallVector<Value>{});
-
-    partialAcqPtrs.push_back(acqOp.getResult(1));
-  }
-
-  /// Step 2: Acquire final result DBs (WRITE-ONLY)
-  /// The final result DBs hold the combined reduction result.
-  /// Each final result is a scalar (size=1).
-  SmallVector<Value> finalResultAcqPtrs;
-  finalResultAcqPtrs.reserve(redInfo.finalResultPtrs.size());
-  for (uint64_t i = 0; i < redInfo.finalResultPtrs.size(); i++) {
-    Value finalPtr = redInfo.finalResultPtrs[i];
-    Value finalGuid = i < redInfo.finalResultGuids.size()
-                          ? redInfo.finalResultGuids[i]
-                          : Value();
-    if (!finalPtr) {
-      ARTS_ERROR("Missing final result ptr for reduction " << i);
-      continue;
-    }
-
-    Value zeroIndex = AC->createIndexConstant(0, loc);
-    Value sizeOne = AC->createIndexConstant(1, loc);
-    SmallVector<Value> finalOffsets{zeroIndex};
-    SmallVector<Value> finalSizes{sizeOne};
-
-    /// Acquire final result with <out> mode (write-only)
-    /// The result EDT will store the combined value, no need to read it first
-    /// Source directly from DbAllocOp (finalGuid, finalPtr)
-    auto acqOp = AC->create<DbAcquireOp>(
-        loc, ArtsMode::out, finalGuid, finalPtr, PartitionMode::coarse,
-        /*indices=*/SmallVector<Value>{}, /*offsets=*/finalOffsets,
-        /*sizes=*/finalSizes,
-        /*partition_indices=*/SmallVector<Value>{},
-        /*partition_offsets=*/SmallVector<Value>{},
-        /*partition_sizes=*/SmallVector<Value>{});
-
-    finalResultAcqPtrs.push_back(acqOp.getResult(1));
-  }
-
-  uint64_t reductionCount = std::min<uint64_t>(
-      redInfo.reductionVars.size(),
-      std::min(partialAcqPtrs.size(), finalResultAcqPtrs.size()));
-  if (reductionCount != redInfo.reductionVars.size()) {
-    ARTS_ERROR("Reduction/result mismatch: reductions="
-               << redInfo.reductionVars.size()
-               << " partials=" << partialAcqPtrs.size()
-               << " finals=" << finalResultAcqPtrs.size());
-  }
-  if (reductionCount == 0) {
-    ARTS_ERROR("No reduction handles available for result EDT");
-    return;
-  }
-
-  /// Step 3: Create result EDT with dependencies
-  /// The result EDT receives two sets of dependencies:
-  ///   1. Partial accumulators (read) - input data to combine
-  ///   2. Final results (write) - output location for combined result
-  ///
-  /// Dependency order matters for block argument indexing:
-  ///   - First N arguments: partial accumulators
-  ///   - Next M arguments: final results
-  SmallVector<Value> edtDeps;
-  edtDeps.reserve(partialAcqPtrs.size() + finalResultAcqPtrs.size());
-
-  /// Add partial accumulators first (indices 0..N-1)
-  for (Value dep : partialAcqPtrs)
-    edtDeps.push_back(dep);
-
-  /// Add final results second (indices N..N+M-1)
-  for (Value dep : finalResultAcqPtrs)
-    edtDeps.push_back(dep);
-
-  Value routeZero = AC->create<arith::ConstantIntOp>(loc, 0, 32);
-  auto resultEdt = AC->create<EdtOp>(
-      loc, EdtType::task, EdtConcurrency::intranode, routeZero, edtDeps);
-
-  Block &resultBlock = resultEdt.getBody().front();
-  AC->setInsertionPointToStart(&resultBlock);
-
-  /// Create block arguments for all EDT dependencies
-  SmallVector<BlockArgument> depBlockArgs;
-  depBlockArgs.reserve(edtDeps.size());
-  for (Value dep : edtDeps)
-    depBlockArgs.push_back(resultBlock.addArgument(dep.getType(), loc));
-
-  if (depBlockArgs.size() < edtDeps.size()) {
-    ARTS_ERROR("Result EDT block arguments do not cover all dependencies");
-  }
-
-  /// Step 5: Combine partial accumulators into final result
-  /// For each reduction variable:
-  ///   1. Get partial accumulator array (block arg at index i)
-  ///   2. Get final result scalar (block arg at index N+i)
-  ///   3. Loop over all workers: accumulate += partialAccums[worker_id]
-  ///   4. Store final accumulated value to final result DB
-  for (uint64_t i = 0; i < reductionCount; i++) {
-    uint64_t partialIdx = i;
-    uint64_t finalIdx = partialAcqPtrs.size() + i;
-
-    /// Get block arguments for this reduction variable
-    /// partialArg: handle to partial accumulator array[numWorkers]
-    /// finalArg: handle to final result scalar
-    BlockArgument partialArg = depBlockArgs[partialIdx];
-    BlockArgument finalArg = depBlockArgs[finalIdx];
-
-    Value zeroIndex = AC->createIndexConstant(0, loc);
-    SmallVector<Value> indices{zeroIndex};
-
-    /// Extract memref from DB handle using db_ref
-    Value finalMemRef = AC->create<DbRefOp>(loc, finalArg, indices);
-
-    /// Initialize accumulator to identity value (0 for addition)
-    /// The loop will accumulate: result = identity + partial[0] + ... +
-    /// partial[numWorkers-1]
-    /// TODO: Support different reduction operations (min, max, multiply, etc.)
-    auto memType = finalMemRef.getType().cast<MemRefType>();
-    Type elemType = memType.getElementType();
-    Value identity = createZeroValue(AC, elemType, loc);
-    if (!identity) {
-      ARTS_ERROR("Unsupported reduction element type");
-      return;
-    }
-
-    /// Combine loop: for (w = 0; w < numWorkers; w++) { acc +=
-    /// partialAccums[w]; }
-    /// Note: Some workers may not have processed any work (if insufficient
-    /// chunks) Their accumulator contains identity value, which doesn't affect
-    /// sum
-    Value zeroIdx = AC->createIndexConstant(0, loc);
-    Value oneIdx = AC->createIndexConstant(1, loc);
-    Location loopLoc = redInfo.loopLocation.value_or(loc);
-    auto combineLoop = AC->create<scf::ForOp>(loopLoc, zeroIdx, numWorkers,
-                                              oneIdx, ValueRange{identity});
-    if (redInfo.loopMetadataAttr) {
-      combineLoop->setAttr(AttrNames::LoopMetadata::Name,
-                           redInfo.loopMetadataAttr);
-      ARTS_DEBUG("  Set loop metadata on result EDT combine loop");
-
-      /// Validate that metadata was properly set
-      if (auto loopAttr = combineLoop->getAttr(AttrNames::LoopMetadata::Name)) {
-        if (auto loopMetadata = dyn_cast<LoopMetadataAttr>(loopAttr)) {
-          ARTS_DEBUG("    - Metadata validated: potentiallyParallel="
-                     << loopMetadata.getPotentiallyParallel().getValue());
-        }
-      } else {
-        ARTS_DEBUG(
-            "    - WARNING: Loop metadata attribute not found after setting");
-      }
-    } else {
-      ARTS_DEBUG(
-          "  WARNING: No loop metadata available for result EDT combine loop");
-    }
-
-    AC->setInsertionPointToStart(combineLoop.getBody());
-    Value workerIdx = combineLoop.getInductionVar();
-    Value accumulator =
-        combineLoop.getRegionIterArg(0); /// Current accumulated value
-
-    /// Load this worker's partial result: partialAccums[workerIdx][0]
-    Value workerSlot =
-        AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{workerIdx});
-    SmallVector<Value> workerElemIdx{zeroIdx};
-    Value partialValue =
-        AC->create<memref::LoadOp>(loc, workerSlot, workerElemIdx);
-
-    /// Debug: print worker idx and its partial value
-    if (AC->isDebug()) {
-      Value workerIdxI64 = AC->castToInt(AC->Int64, workerIdx, loc);
-      Value partialI64 = AC->castToInt(AC->Int64, partialValue, loc);
-      AC->createPrintfCall(loc, "agg partial w=%lu val=%lu\n",
-                           ValueRange{workerIdxI64, partialI64});
-    }
-
-    /// Combine with current accumulator: acc = acc + partialValue
-    /// TODO: Support other reduction operations
-    Value combined = AC->create<arith::AddIOp>(loc, accumulator, partialValue);
-
-    /// Yield combined value for next iteration
-    AC->create<scf::YieldOp>(loc, combined);
-
-    /// Store final accumulated result to final result DB
-    AC->setInsertionPointAfter(combineLoop);
-    SmallVector<Value> finalIndices{zeroIdx};
-    AC->create<memref::StoreOp>(loc, combineLoop.getResult(0), finalMemRef,
-                                finalIndices);
-
-    /// Debug: print final combined value
-    if (AC->isDebug()) {
-      Value finalValI64 =
-          AC->castToInt(AC->Int64, combineLoop.getResult(0), loc);
-      AC->createPrintfCall(loc, "agg final=%lu\n", ValueRange{finalValI64});
-    }
-  }
-
-  /// Step 4: Release all DB handles and cleanup
-  /// All dependencies passed to the result EDT are DB handles that were
-  /// acquired from the parent EDT's block arguments. We must release them
-  /// before the EDT ends.
-  AC->setInsertionPointToEnd(&resultBlock);
-  for (BlockArgument blockArg : depBlockArgs)
-    AC->create<DbReleaseOp>(loc, blockArg);
-
-  /// Add terminator to close the EDT region
-  AC->create<YieldOp>(loc);
-
-  /// NOTE: db_free operations are handled after epoch completion
-  /// They must be placed OUTSIDE the parallel EDT region, after it completes
-
-  ARTS_INFO(" - Result EDT created successfully");
+  (void)parallelEdt;
+  ReductionLowering::createResultEdt(AC, redInfo, loc);
 }
 
 ///===----------------------------------------------------------------------===///
@@ -1383,12 +646,9 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
       originalParallel.getConcurrency(), /*machine=*/nullptr);
   std::optional<EdtDistributionKind> selectedKindAttr =
       getEdtDistributionKind(forOp.getOperation());
-  std::optional<EdtDistributionPattern> selectedPatternAttr =
-      getEdtDistributionPattern(forOp.getOperation());
-  auto selectedVersionAttr =
-      forOp->getAttrOfType<IntegerAttr>(AttrNames::Operation::DistributionVersion);
   if (selectedKindAttr)
-    strategy.kind = DistributionHeuristics::toDistributionKind(*selectedKindAttr);
+    strategy.kind =
+        DistributionHeuristics::toDistributionKind(*selectedKindAttr);
 
   /// Get numWorkers from explicit attrs or runtime queries.
   Value numWorkers =
@@ -1422,28 +682,14 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
 
   /// Create task EDT with DB rewiring
   /// Use DistributionHeuristics for alignment block size
-  Value runtimeBlockSize =
-      DistributionHeuristics::computeDbAlignmentBlockSize(
-          originalParallel, numDbPartitions, &AC, loc);
+  Value runtimeBlockSize = DistributionHeuristics::computeDbAlignmentBlockSize(
+      originalParallel, numDbPartitions, &AC, loc);
   LoopInfo loopInfo(&AC, forOp, numWorkers, runtimeBlockSize);
   loopInfo.strategy = strategy;
   EdtOp taskEdt = createTaskEdtWithRewiring(&AC, loopInfo, forOp, workerIV,
                                             originalParallel, redInfo);
-  if (selectedKindAttr)
-    setEdtDistributionKind(taskEdt.getOperation(), *selectedKindAttr);
-  if (selectedPatternAttr)
-    setEdtDistributionPattern(taskEdt.getOperation(), *selectedPatternAttr);
-  if (selectedVersionAttr)
-    taskEdt->setAttr(AttrNames::Operation::DistributionVersion,
-                     selectedVersionAttr);
-
-  if (selectedKindAttr)
-    setEdtDistributionKind(forEpoch.getOperation(), *selectedKindAttr);
-  if (selectedPatternAttr)
-    setEdtDistributionPattern(forEpoch.getOperation(), *selectedPatternAttr);
-  if (selectedVersionAttr)
-    forEpoch->setAttr(AttrNames::Operation::DistributionVersion,
-                      selectedVersionAttr);
+  copyDistributionAttrs(forOp.getOperation(), taskEdt.getOperation());
+  copyDistributionAttrs(forOp.getOperation(), forEpoch.getOperation());
 
   /// After worker loop, create result EDT (if reductions)
   AC.setInsertionPointAfter(workerLoop);
@@ -1458,50 +704,7 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   /// Reduction cleanup happens AFTER the epoch
   if (!redInfo.reductionVars.empty()) {
     AC.setInsertionPointAfter(forEpoch);
-    Value zeroIdx = AC.createIndexConstant(0, loc);
-    SmallVector<Value> zeroIndices{zeroIdx};
-
-    /// Copy final results back to original reduction variables
-    for (auto [idx, redVar] : llvm::enumerate(redInfo.reductionVars)) {
-      if (idx >= redInfo.finalResultPtrs.size())
-        continue;
-      auto redMemRefTy = redVar.getType().dyn_cast<MemRefType>();
-      if (!redMemRefTy)
-        continue;
-
-      Value finalHandle = redInfo.finalResultPtrs[idx];
-      Value finalRef = AC.create<DbRefOp>(loc, finalHandle, zeroIndices);
-      Value loaded = AC.create<memref::LoadOp>(loc, finalRef, zeroIndices);
-      Value casted =
-          AC.castParameter(redMemRefTy.getElementType(), loaded, loc);
-      AC.create<memref::StoreOp>(loc, casted, redVar, zeroIndices);
-
-      /// Mirror to host-visible stack DB if present
-      if (idx < redInfo.hostResultPtrs.size()) {
-        Value hostPtr = redInfo.hostResultPtrs[idx];
-        Value hostRef = AC.create<DbRefOp>(loc, hostPtr, zeroIndices);
-        AC.create<memref::StoreOp>(loc, casted, hostRef, zeroIndices);
-      }
-    }
-
-    /// Free partial accumulator DBs
-    for (uint64_t i = 0; i < redInfo.partialAccumGuids.size(); i++) {
-      AC.create<DbFreeOp>(loc, redInfo.partialAccumGuids[i]);
-      AC.create<DbFreeOp>(loc, redInfo.partialAccumPtrs[i]);
-    }
-
-    /// Free final result DBs
-    for (uint64_t i = 0; i < redInfo.finalResultGuids.size(); i++) {
-      /// Skip external DBs - CreateDbs handles their lifetime
-      if (i < redInfo.finalResultIsExternal.size() &&
-          redInfo.finalResultIsExternal[i]) {
-        ARTS_DEBUG("  - Skipping db_free for external final result DB at index "
-                   << i);
-        continue;
-      }
-      AC.create<DbFreeOp>(loc, redInfo.finalResultGuids[i]);
-      AC.create<DbFreeOp>(loc, redInfo.finalResultPtrs[i]);
-    }
+    ReductionLowering::finalizeAfterEpoch(&AC, redInfo, loc);
   } else {
     /// No reductions - still need to set insertion point after epoch
     /// so the next for loop (if any) inserts AFTER this epoch, not inside it
@@ -1514,104 +717,8 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
 EdtOp ForLoweringPass::createContinuationParallel(
     ArtsCodegen &AC, EdtOp originalParallel, ParallelRegionAnalysis &analysis,
     Location loc) {
-  ARTS_INFO(" - Creating continuation parallel EDT for post-for work");
-
-  /// We need to insert the continuation parallel AFTER the original parallel
-  /// EDT (which contains the epochs).
-  AC.setInsertionPointAfter(originalParallel);
-
-  ValueRange originalDeps = originalParallel.getDependencies();
-  Block &originalBlock = originalParallel.getBody().front();
-
-  SmallVector<Value> newDeps;
-  IRMapping argMapper;
-
-  /// Track which original arg indices map to which new dep indices
-  SmallVector<unsigned> origArgIndices;
-
-  /// Reacquire DBs used by post-for operations
-  for (BlockArgument origArg : analysis.depsUsedAfterFor) {
-    unsigned idx = origArg.getArgNumber();
-    if (idx >= originalDeps.size()) {
-      ARTS_ERROR("Block argument index out of range: " << idx);
-      continue;
-    }
-
-    Value dep = originalDeps[idx];
-
-    /// Trace back to original DbAllocOp
-    auto allocInfo = DatablockUtils::traceToDbAlloc(dep);
-    if (!allocInfo) {
-      ARTS_ERROR("Could not trace dependency to DbAllocOp for arg " << idx);
-      continue;
-    }
-    auto [rootGuid, rootPtr] = *allocInfo;
-
-    /// Get original acquire parameters
-    auto origAcq = dep.getDefiningOp<DbAcquireOp>();
-    ArtsMode mode = origAcq ? origAcq.getMode() : ArtsMode::inout;
-    Type ptrType = origAcq ? origAcq.getPtr().getType() : rootPtr.getType();
-
-    /// Create NEW acquire directly from DbAllocOp
-    /// Preserve partition_mode and partition hints from original acquire if
-    /// present
-    auto newAcq = AC.create<DbAcquireOp>(
-        loc, mode, rootGuid, rootPtr, ptrType,
-        origAcq ? origAcq.getPartitionMode() : std::nullopt,
-        origAcq ? SmallVector<Value>(origAcq.getIndices())
-                : SmallVector<Value>{},
-        origAcq ? SmallVector<Value>(origAcq.getOffsets())
-                : SmallVector<Value>{},
-        origAcq ? SmallVector<Value>(origAcq.getSizes()) : SmallVector<Value>{},
-        origAcq ? SmallVector<Value>(origAcq.getPartitionIndices())
-                : SmallVector<Value>{},
-        origAcq ? SmallVector<Value>(origAcq.getPartitionOffsets())
-                : SmallVector<Value>{},
-        origAcq ? SmallVector<Value>(origAcq.getPartitionSizes())
-                : SmallVector<Value>{});
-    if (origAcq)
-      newAcq.copyPartitionSegmentsFrom(origAcq);
-
-    newDeps.push_back(newAcq.getPtr());
-    origArgIndices.push_back(idx);
-
-    ARTS_DEBUG("  - Reacquired datablock for arg " << idx);
-  }
-
-  /// Create continuation parallel EDT
-  Value routeZero = AC.createIntConstant(0, AC.Int32, loc);
-  auto contParallel =
-      AC.create<EdtOp>(loc, EdtType::parallel,
-                       originalParallel.getConcurrency(), routeZero, newDeps);
-
-  /// Copy workers attribute if present
-  if (auto workers = originalParallel.getWorkersAttr())
-    contParallel->setAttr(AttrNames::Operation::Workers, workers);
-
-  /// Add block arguments and create mapping
-  Block &contBlock = contParallel.getBody().front();
-  for (auto [i, dep] : llvm::enumerate(newDeps)) {
-    BlockArgument newArg = contBlock.addArgument(dep.getType(), loc);
-    /// Map original block arg to new block arg
-    unsigned origIdx = origArgIndices[i];
-    argMapper.map(originalBlock.getArgument(origIdx), newArg);
-  }
-
-  /// Clone post-for operations into continuation parallel
-  AC.setInsertionPointToStart(&contBlock);
-  for (Operation *op : analysis.opsAfterFor) {
-    AC.clone(*op, argMapper);
-  }
-
-  /// Add yield terminator
-  AC.setInsertionPointToEnd(&contBlock);
-  if (contBlock.empty() || !contBlock.back().hasTrait<OpTrait::IsTerminator>())
-    AC.create<YieldOp>(loc);
-
-  ARTS_INFO(" - Continuation parallel EDT created with "
-            << newDeps.size() << " reacquired dependencies");
-
-  return contParallel;
+  return ParallelSplitLowering::createContinuationParallel(AC, originalParallel,
+                                                           analysis, loc);
 }
 
 EdtOp ForLoweringPass::createTaskEdtWithRewiring(
@@ -1636,11 +743,9 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
   /// Compute worker iteration bounds using DistributionHeuristics
   loopInfo.bounds = DistributionHeuristics::computeBounds(
-      AC, loc, loopInfo.strategy, workerIdPlaceholder,
-      loopInfo.totalWorkers, workersPerNode,
-      loopInfo.totalIterations, loopInfo.totalChunks, loopInfo.blockSize);
-  bool useBlockCyclic =
-      loopInfo.strategy.kind == DistributionKind::BlockCyclic;
+      AC, loc, loopInfo.strategy, workerIdPlaceholder, loopInfo.totalWorkers,
+      workersPerNode, loopInfo.totalIterations, loopInfo.totalChunks,
+      loopInfo.blockSize);
 
   Value chunkOffset = loopInfo.bounds.iterStart;
   ValueRange parentDeps = originalParallel.getDependencies();
@@ -1658,47 +763,39 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
                                            ? DenseSet<Value>{}
                                            : detectReductionBlockArgs(forOp);
 
-  Value zero = AC->createIndexConstant(0, loc);
   Value one = AC->createIndexConstant(1, loc);
+  Value taskWorkerId = workerIdPlaceholder;
+  TaskLoopLoweringInput taskLoopInput{AC,
+                                      loc,
+                                      loopInfo.strategy,
+                                      loopInfo.bounds,
+                                      taskWorkerId,
+                                      loopInfo.totalWorkers,
+                                      workersPerNode,
+                                      loopInfo.upperBound,
+                                      loopInfo.lowerBound,
+                                      loopInfo.chunkLowerBound
+                                          ? loopInfo.chunkLowerBound
+                                          : forOp.getLowerBound()[0],
+                                      loopInfo.loopStep,
+                                      loopInfo.blockSize,
+                                      loopInfo.totalIterations,
+                                      loopInfo.totalChunks,
+                                      loopInfo.alignmentBlockSize,
+                                      loopInfo.useRuntimeBlockAlignment,
+                                      loopInfo.useAlignedLowerBound};
 
-  /// Precompute worker base offset (global chunk start) once for reuse.
-  Value stepVal = forOp.getStep().empty() ? one : forOp.getStep()[0];
-  int64_t stepConst = 0;
-  bool stepIsUnit =
-      forOp.getStep().empty() ||
-      (ValueUtils::getConstantIndex(stepVal, stepConst) && stepConst == 1);
-  Value lowerBoundVal = loopInfo.chunkLowerBound ? loopInfo.chunkLowerBound
-                                                 : forOp.getLowerBound()[0];
-  Value workerOffsetVal = chunkOffset;
-  if (!stepIsUnit) {
-    workerOffsetVal = AC->create<arith::MulIOp>(loc, workerOffsetVal, stepVal);
-  }
-  workerOffsetVal =
-      AC->create<arith::AddIOp>(loc, lowerBoundVal, workerOffsetVal);
-
-  /// For TwoLevel: compute acquire offset (node-level) separately
-  Value acquireOffsetVal = workerOffsetVal;
-  Value acquireSizeVal = loopInfo.bounds.iterCount;
-  Value acquireHintSizeVal = loopInfo.bounds.iterCountHint
-                                 ? loopInfo.bounds.iterCountHint
-                                 : acquireSizeVal;
-  if (loopInfo.strategy.kind == DistributionKind::TwoLevel) {
-    acquireOffsetVal = loopInfo.bounds.acquireStart;
-    if (!stepIsUnit) {
-      acquireOffsetVal =
-          AC->create<arith::MulIOp>(loc, acquireOffsetVal, stepVal);
-    }
-    acquireOffsetVal =
-        AC->create<arith::AddIOp>(loc, lowerBoundVal, acquireOffsetVal);
-    acquireSizeVal = loopInfo.bounds.acquireSize;
-    acquireHintSizeVal = loopInfo.bounds.acquireSizeHint
-                             ? loopInfo.bounds.acquireSizeHint
-                             : acquireSizeVal;
-    // If chunk lower bound is not aligned, a max-size hint can overshoot the
-    // valid tail range on the last node. Keep partition hint within bounds.
-    if (!loopInfo.useAlignedLowerBound)
-      acquireHintSizeVal = acquireSizeVal;
-  }
+  std::unique_ptr<EdtTaskLoopLowering> taskLoopLowering =
+      EdtTaskLoopLowering::create(loopInfo.strategy.kind);
+  TaskAcquirePlanningResult acquirePlanning =
+      taskLoopLowering->planAcquireRewrite(taskLoopInput, chunkOffset);
+  Value workerOffsetVal = acquirePlanning.workerBaseOffset;
+  Value acquireOffsetVal = acquirePlanning.acquireOffset;
+  Value acquireSizeVal = acquirePlanning.acquireSize;
+  Value acquireHintSizeVal = acquirePlanning.acquireHintSize;
+  Value stepVal = acquirePlanning.step;
+  bool stepIsUnit = acquirePlanning.stepIsUnit;
+  std::optional<Tiling2DWorkerGrid> tiling2DGrid = acquirePlanning.tiling2DGrid;
 
   /// Acquire worker-local partial accumulator slot for reductions
   SmallVector<Value> reductionTaskDeps;
@@ -1743,12 +840,6 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
   SmallVector<Value> taskDeps;
   SmallVector<std::pair<BlockArgument, Value>> parallelArgToAcquire;
-  Tiling2DWorkerGrid tiling2DGrid;
-  bool useTiling2DGrid = loopInfo.strategy.kind == DistributionKind::Tiling2D;
-  if (useTiling2DGrid) {
-    tiling2DGrid = DistributionHeuristics::getTiling2DWorkerGrid(
-        AC, loc, workerIdPlaceholder, loopInfo.totalWorkers);
-  }
   ARTS_DEBUG("  - Processing " << parentDeps.size()
                                << " parent dependencies with DB rewiring");
 
@@ -1812,80 +903,27 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       chunkAcqOp.copyPartitionSegmentsFrom(parentAcqOp);
 
     } else {
-      /// NO USER HINT - ForLowering sets chunked partitioning for workers
-      bool forceCoarseAcquire = useBlockCyclic;
+      /// NO USER HINT - plan strategy-specific acquire rewriting externally.
+      AcquireRewritePlanningInput planningInput{AC,
+                                                loc,
+                                                parentAcqOp,
+                                                rootGuid,
+                                                rootPtr,
+                                                loopInfo.strategy.kind,
+                                                tiling2DGrid,
+                                                acquireOffsetVal,
+                                                acquireSizeVal,
+                                                acquireHintSizeVal,
+                                                stepVal,
+                                                stepIsUnit};
 
-      /// If the DB element is a single element (scalar/size-1), keep coarse.
-      /// Chunking with worker offsets is invalid for size=1.
-      bool isSingleElement = false;
-      bool needsStencilHalo = false;
-      Value stencilExtent;
-      SmallVector<Value, 4> extraOffsets;
-      SmallVector<Value, 4> extraSizes;
-      SmallVector<Value, 4> extraHintSizes;
-      if (Operation *rootAllocOp =
-              DatablockUtils::getUnderlyingDbAlloc(rootPtr)) {
-        if (auto dbAlloc = dyn_cast<DbAllocOp>(rootAllocOp)) {
-          auto elemSizes = dbAlloc.getElementSizes();
-          if (!elemSizes.empty()) {
-            isSingleElement = llvm::all_of(elemSizes, [](Value v) {
-              int64_t val;
-              return ValueUtils::getConstantIndex(v, val) && val == 1;
-            });
-            auto pattern = getDbAccessPattern(dbAlloc.getOperation());
-            needsStencilHalo =
-                !isSingleElement && pattern &&
-                *pattern == DbAccessPattern::stencil &&
-                parentAcqOp.getMode() == ArtsMode::in;
-            if (needsStencilHalo)
-              stencilExtent = castToIndex(AC, elemSizes.front(), loc);
-
-            /// Tiling2D output ownership:
-            /// partition inout allocations by [row, col] so each task owns
-            /// a 2D C tile while inputs remain on existing read paths.
-            if (useTiling2DGrid && parentAcqOp.getMode() == ArtsMode::inout &&
-                elemSizes.size() > 1 && !isSingleElement &&
-                tiling2DGrid.colWorkers) {
-              Value totalCols = castToIndex(AC, elemSizes[1], loc);
-              Value colWorkers =
-                  castToIndex(AC, tiling2DGrid.colWorkers, loc);
-              Value colWorkerId =
-                  castToIndex(AC, tiling2DGrid.colWorkerId, loc);
-
-              Value colWorkersMinusOne =
-                  AC->create<arith::SubIOp>(loc, colWorkers, one);
-              Value colAdjusted = AC->create<arith::AddIOp>(
-                  loc, totalCols, colWorkersMinusOne);
-              Value colChunk =
-                  AC->create<arith::DivUIOp>(loc, colAdjusted, colWorkers);
-              Value colOffset =
-                  AC->create<arith::MulIOp>(loc, colWorkerId, colChunk);
-
-              Value colNeedZero = AC->create<arith::CmpIOp>(
-                  loc, arith::CmpIPredicate::uge, colOffset, totalCols);
-              Value colRemaining =
-                  AC->create<arith::SubIOp>(loc, totalCols, colOffset);
-              Value colRemainingNonNeg = AC->create<arith::SelectOp>(
-                  loc, colNeedZero, zero, colRemaining);
-              Value colCount = AC->create<arith::MinUIOp>(
-                  loc, colChunk, colRemainingNonNeg);
-
-              extraOffsets.push_back(colOffset);
-              extraSizes.push_back(colCount);
-              extraHintSizes.push_back(colCount);
-            }
-          }
-        }
-      }
+      AcquireRewritePlan rewritePlan = planAcquireRewrite(planningInput);
+      AcquireRewriteFlavor rewriteFlavor = rewritePlan.useStencilRewriter
+                                               ? AcquireRewriteFlavor::Stencil
+                                               : AcquireRewriteFlavor::Block;
       std::unique_ptr<EdtRewriter> edtRewriter =
-          EdtRewriter::create(needsStencilHalo);
-      AcquireRewriteInput rewriteInput{
-          AC,              loc,          parentAcqOp,     rootGuid,
-          rootPtr,         zero,         one,             acquireOffsetVal,
-          acquireSizeVal,  acquireHintSizeVal, extraOffsets, extraSizes,
-          extraHintSizes,  stepVal,      stepIsUnit,      isSingleElement,
-          forceCoarseAcquire, stencilExtent};
-      chunkAcqOp = edtRewriter->rewriteAcquire(rewriteInput);
+          EdtRewriter::create(rewriteFlavor);
+      chunkAcqOp = edtRewriter->rewriteAcquire(rewritePlan.rewriteInput);
     }
 
     Value acquirePtr = chunkAcqOp.getResult(1);
@@ -1953,16 +991,9 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       mapper.map(parallelArg, taskArg);
   }
 
-  /// Get the logical worker ID for recomputing bounds inside the EDT.
-  /// Use workerIdPlaceholder directly for both internode and intranode tasks -
-  /// it's the scf.for iteration variable (0 to numWorkers-1) and is captured
-  /// in the EDT body automatically. For internode, this is the global worker
-  /// index (0..nodes*threads-1) from the dispatch loop, which is the same
-  /// index used for routing and db_acquire partitioning.
-  Value taskWorkerId = workerIdPlaceholder;
-
   Value insideTotalWorkers =
       DistributionHeuristics::getTotalWorkers(AC, loc, originalParallel);
+  taskLoopInput.totalWorkers = insideTotalWorkers;
 
   /// Map reduction variables to worker's accumulator slot
   IRMapping redMapper = mapper;
@@ -2017,24 +1048,6 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     collectWithDeps(origUpperBound);
   collectWithDeps(chunkLowerBoundVal);
 
-  TaskLoopLoweringInput taskLoopInput{AC,
-                                      loc,
-                                      loopInfo.strategy,
-                                      taskWorkerId,
-                                      insideTotalWorkers,
-                                      workersPerNode,
-                                      loopInfo.upperBound,
-                                      loopInfo.lowerBound,
-                                      loopInfo.loopStep,
-                                      loopInfo.blockSize,
-                                      loopInfo.totalIterations,
-                                      loopInfo.totalChunks,
-                                      loopInfo.alignmentBlockSize,
-                                      loopInfo.useRuntimeBlockAlignment,
-                                      loopInfo.useAlignedLowerBound};
-
-  std::unique_ptr<EdtTaskLoopLowering> taskLoopLowering =
-      EdtTaskLoopLowering::create(loopInfo.strategy.kind);
   taskLoopLowering->collectExtraExternalValues(taskLoopInput, externalValues);
 
   /// Collect transitive dependencies
@@ -2047,8 +1060,20 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     }
   }
 
-  if (!cloneExternalValues(externalValues, taskEdtRegion, redMapper,
-                           AC->getBuilder())) {
+  auto extraCloneableOps = [](Operation *op) {
+    return isa<arts::DbRefOp, memref::LoadOp>(op);
+  };
+  if (!ValueUtils::cloneValuesIntoRegion(
+          externalValues, taskEdtRegion, redMapper, AC->getBuilder(),
+          /*allowMemoryEffectFree=*/true, extraCloneableOps)) {
+    for (Value external : externalValues) {
+      if (redMapper.contains(external))
+        continue;
+      if (Operation *defOp = external.getDefiningOp())
+        ARTS_DEBUG("  - Uncloned external value op: " << defOp->getName());
+      else
+        ARTS_DEBUG("  - Uncloned external value (no defining op)");
+    }
     ARTS_WARN("Some external values could not be cloned - they may need to be "
               "passed as EDT dependencies");
   }
@@ -2060,11 +1085,13 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   mappedLoopValues.step = stepValMapped;
   mappedLoopValues.lowerBound = origLowerBoundVal;
   mappedLoopValues.upperBound = origUpperBoundVal;
-  mappedLoopValues.workerBaseOffset = redMapper.lookupOrDefault(workerOffsetVal);
+  mappedLoopValues.workerBaseOffset =
+      redMapper.lookupOrDefault(workerOffsetVal);
   mappedLoopValues.blockSize = redMapper.lookupOrDefault(loopInfo.blockSize);
   mappedLoopValues.totalIterations =
       redMapper.lookupOrDefault(loopInfo.totalIterations);
-  mappedLoopValues.totalChunks = redMapper.lookupOrDefault(loopInfo.totalChunks);
+  mappedLoopValues.totalChunks =
+      redMapper.lookupOrDefault(loopInfo.totalChunks);
 
   TaskLoopLoweringResult loweredLoop =
       taskLoopLowering->lower(taskLoopInput, mappedLoopValues);
@@ -2105,8 +1132,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   Value localIter = iterLoop.getInductionVar();
   Value globalIterScaled =
       AC->create<arith::MulIOp>(loc, localIter, stepValMapped);
-  Value globalIdx = AC->create<arith::AddIOp>(loc, loweredLoop.globalBase,
-                                              globalIterScaled);
+  Value globalIdx =
+      AC->create<arith::AddIOp>(loc, loweredLoop.globalBase, globalIterScaled);
 
   /// Map undef to identity value
   for (Operation &op : forBody.without_terminator()) {
@@ -2143,13 +1170,12 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     AC->clone(op, redMapper);
   }
 
-  TaskLoopPostCloneInput postCloneInput{
-      AC,
-      loc,
-      iterLoop,
-      globalIdx,
-      loweredLoop.innerStripeLane,
-      loweredLoop.innerStripeCount};
+  TaskLoopPostCloneInput postCloneInput{AC,
+                                        loc,
+                                        iterLoop,
+                                        globalIdx,
+                                        loweredLoop.innerStripeLane,
+                                        loweredLoop.innerStripeCount};
   taskLoopLowering->postCloneAdjust(postCloneInput);
 
   /// Ensure stack allocations used inside the EDT are cloned locally.
@@ -2181,5 +1207,5 @@ namespace arts {
 std::unique_ptr<Pass> createForLoweringPass() {
   return std::make_unique<ForLoweringPass>();
 }
-} /// namespace arts
-} /// namespace mlir
+} // namespace arts
+} // namespace mlir

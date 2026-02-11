@@ -2,16 +2,16 @@
 
 ## Overview
 
-Implement **Memory EDTs** - explicit EDTs that perform data layout transformations between producer and consumer EDTs. Based on the Memory Codelets paper ([arxiv 2302.00115](https://arxiv.org/abs/2302.00115)), this replaces the disabled DBVersioning approach with a proper task-graph-aware solution.
+Implement **Memory EDTs** - explicit EDTs that perform data layout transformations between producer and consumer EDTs. Based on the Memory Codelets paper ([arxiv 2302.00115](https://arxiv.org/abs/2302.00115)), this is designed as a task-graph-aware solution.
 
-**Key Insight**: Instead of static DbCopy/DbSync transformations, Memory EDTs participate in the task graph with proper dependencies, enabling the runtime to schedule data transformations alongside computation.
+**Key Insight**: Instead of static non-task rewrites, Memory EDTs participate in the task graph with proper dependencies, enabling the runtime to schedule data transformations alongside computation.
 
 ## Motivation
 
-The current DBVersioning approach (in `lib/arts/Transforms/Datablock/Versioned/DbVersionedRewriter.cpp`) is disabled because:
-- It performs transformations statically without considering producer EDTs
-- DbCopy/DbSync are not first-class tasks - they don't participate in the EDT dependency graph
-- No cost model to determine when transformations are profitable
+Design requirements:
+- Transformations must account for producer EDT dependencies.
+- Transformations must be first-class tasks in the EDT dependency graph.
+- Selection should use a cost model for profitability.
 
 Memory EDTs solve these problems by making data layout transformations explicit, schedulable tasks.
 
@@ -215,7 +215,7 @@ void MemoryEdtPass::runOnOperation() {
 }
 ```
 
-**2.3 Add to pipeline** - Run after DbPartitioningPass (Stage 11)
+**2.3 Add to pipeline** - Run after DbPartitioningPass (Stage 12, `concurrency-opt`)
 
 ### Phase 3: Heuristics (H1.6)
 
@@ -283,23 +283,11 @@ sourceAlloc    (transforms)   targetAlloc
 Lowering expands MemoryEdtOp to:
 1. New DbAllocOp for destination (with target layout)
 2. Wrapped EdtOp with transformation loop body
-3. Direct load/store operations (NOT DbCopyOp/DbSyncOp)
+3. Direct load/store operations in the generated task body
 
-### Phase 6: Cleanup - Remove DbCopy/DbSync
+### Phase 6: Pipeline Alignment (Completed)
 
-**6.1 Deprecate DbCopyOp and DbSyncOp**
-
-Since Memory EDTs replace the functionality of static DbCopy/DbSync:
-- Mark DbCopyOp and DbSyncOp as deprecated in `ArtsOps.td`
-- Remove `lowerDbCopyOps()` and `lowerDbSyncOps()` from `DbLowering.cpp`
-- Remove disabled `DbVersionedRewriter` entirely
-- Update any remaining uses to use Memory EDTs instead
-
-**Files to clean up:**
-- `include/arts/ArtsOps.td` - Remove/deprecate DbCopyOp, DbSyncOp definitions
-- `lib/arts/Passes/Transformations/DbLowering.cpp` - Remove lines 215-454
-- `lib/arts/Transforms/Datablock/Versioned/` - Remove entire directory
-- `include/arts/Transforms/Datablock/Versioned/` - Remove entire directory
+The active path is explicit task lowering through `MemoryEdtOp` and standard EDT infrastructure.
 
 ---
 
@@ -308,7 +296,7 @@ Since Memory EDTs replace the functionality of static DbCopy/DbSync:
 | File | Changes |
 |------|---------|
 | `include/arts/ArtsAttributes.td` | Add MemoryEdtKind enum |
-| `include/arts/ArtsOps.td` | Add MemoryEdtOp, deprecate DbCopyOp/DbSyncOp |
+| `include/arts/ArtsOps.td` | Add MemoryEdtOp |
 | `include/arts/Analysis/Graphs/Base/NodeBase.h` | Add NodeKind::MemoryEdt |
 | `include/arts/Passes/ArtsPasses.td` | Register MemoryEdtPass |
 | `include/arts/Analysis/HeuristicsConfig.h` | Add H1.6 context/decision types |

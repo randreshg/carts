@@ -19,14 +19,17 @@ carts build
 carts execute simple.cpp -o simple
 
 # Run tests
-carts check
+carts test
+
+# Format source files
+carts format
 ```
 
 ## Running Tests
 
-- Use `carts check --suite arts` to exercise the fast metadata regression suite (default `carts check` runs everything).
+- Use `carts test` (or `carts check`) to run the lit test suites under `tests/`.
 - The lit configuration (`tests/lit.cfg.py`) resolves tools from `.install/`, so re-run `carts build` whenever you modify the compiler to keep the installed toolchain fresh.
-- `tools/carts check` now detects missing `.install` tools and automatically triggers `carts build`, but you can still invoke it manually if the environment has drifted.
+- `carts test` validates `llvm-lit`, `FileCheck`, and `carts-run` from `.install/`.
 
 ---
 ## Common Commands
@@ -40,16 +43,21 @@ carts build --arts --debug   # Build ARTS with debug logging
 # Compilation pipeline
 carts cgeist file.c -fopenmp -S > file.mlir     # C to MLIR
 carts run file.mlir --arts-config arts.cfg      # Apply CARTS passes
+carts run file.mlir --stop-at=edt-distribution  # Stop after strategy selection + ForLowering
 carts compile file.ll -o file                   # LLVM IR to executable
 carts execute file.c -o file                    # All-in-one
 
 # Testing
-carts check                  # Run all tests
-carts check --suite arts     # Run specific suite
+carts test                   # Run all tests
+carts check                  # Alias for carts test
+
+# Formatting
+carts format                 # Format tracked C/C++/TableGen sources
+carts format --check         # Verify formatting only
 
 # Benchmarking
 cd external/carts-benchmarks/kastors/<benchmark>
-/Users/randreshg/Documents/carts/tools/run/dump-carts-stages.sh \
+../../../tools/run/dump-carts-stages.sh \
   file.c --outdir ./stages --arts-config ./arts.cfg
 ```
 
@@ -70,7 +78,7 @@ carts/
 │   ├── benchmark/         # Benchmarking utilities
 │   └── setup/             # Environment setup
 ├── tests/                 # Test suites
-│   ├── arts/              # Pipeline regression tests
+│   ├── contracts/         # Contract-focused compiler tests
 │   └── examples/          # End-to-end tests
 ├── docs/                  # Documentation
 ├── external/
@@ -100,7 +108,8 @@ nodeCount=1              # Number of nodes
 protocol=tcp             # Communication protocol
 ```
 
-See [docs/COMPILER.md](docs/COMPILER.md) for complete configuration options.
+See `docs/agents.md` for pipeline usage and
+`docs/heuristics/distribution/distribution.md` for distribution strategy details.
 
 ---
 
@@ -109,11 +118,13 @@ See [docs/COMPILER.md](docs/COMPILER.md) for complete configuration options.
 ### Dump all compilation stages
 
 ```bash
-/Users/randreshg/Documents/carts/tools/run/dump-carts-stages.sh \
+tools/run/dump-carts-stages.sh \
   example.c --outdir ./stages --arts-config ./arts.cfg
 ```
 
-Output: `stages/example_{simplify,openmp-to-arts,edt,epochs,...}.mlir`
+Output includes one file per pipeline stage, e.g.
+`stages/example_concurrency.mlir`, `stages/example_edt-distribution.mlir`,
+`stages/example_concurrency-opt.mlir`, and `stages/example_arts-to-llvm.mlir`.
 
 ### Enable verbose output
 

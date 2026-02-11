@@ -178,7 +178,6 @@ void DbStencilIndexer::transformDbRefUsers(
     auto leftRef = builder.create<DbRefOp>(loc, newElementType, leftHaloArg,
                                            SmallVector<Value>{zero});
     leftMemref = leftRef.getResult();
-
   }
 
   /// Create right halo memref if available (null at right boundary)
@@ -186,7 +185,6 @@ void DbStencilIndexer::transformDbRefUsers(
     auto rightRef = builder.create<DbRefOp>(loc, newElementType, rightHaloArg,
                                             SmallVector<Value>{zero});
     rightMemref = rightRef.getResult();
-
   }
 
   /// BASE-OFFSET SEMANTICS: Simplified region boundaries
@@ -210,7 +208,6 @@ void DbStencilIndexer::transformDbRefUsers(
         builder.create<polygeist::Memref2PointerOp>(loc, llvmPtrTy, leftMemref);
     leftPtrNotNull = builder.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ne,
                                                   leftPtr, nullPtr);
-
   }
 
   if (rightMemref) {
@@ -218,7 +215,6 @@ void DbStencilIndexer::transformDbRefUsers(
                                                                  rightMemref);
     rightPtrNotNull = builder.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ne,
                                                    rightPtr, nullPtr);
-
   }
 
   ARTS_DEBUG("  Created 3 buffer refs: owned="
@@ -744,19 +740,24 @@ void DbStencilIndexer::transformDbRefUsers(
       selectedRowIdx = selectValue(isRight, safeRightIdx, selectedRowIdx);
     }
 
-    Value leftFallbackToOwned =
-        selBuilder.create<arith::AndIOp>(
-            selLoc, isLeft,
-            selBuilder.create<arith::XOrIOp>(selLoc, leftAvail, trueI1));
-    Value rightFallbackToOwned =
-        selBuilder.create<arith::AndIOp>(
-            selLoc, isRight,
-            selBuilder.create<arith::XOrIOp>(selLoc, rightAvail, trueI1));
+    Value leftFallbackToOwned = selBuilder.create<arith::AndIOp>(
+        selLoc, isLeft,
+        selBuilder.create<arith::XOrIOp>(selLoc, leftAvail, trueI1));
+    Value rightFallbackToOwned = selBuilder.create<arith::AndIOp>(
+        selLoc, isRight,
+        selBuilder.create<arith::XOrIOp>(selLoc, rightAvail, trueI1));
 
-    return {selectedMemref,      selectedRowIdx, isLeft,
-            isRight,             leftAvail,      rightAvail,
-            leftFallbackToOwned, rightFallbackToOwned,
-            clampedOwnedIdx,     diagLeftIdx,    diagRightIdx};
+    return {selectedMemref,
+            selectedRowIdx,
+            isLeft,
+            isRight,
+            leftAvail,
+            rightAvail,
+            leftFallbackToOwned,
+            rightFallbackToOwned,
+            clampedOwnedIdx,
+            diagLeftIdx,
+            diagRightIdx};
   };
 
   for (Operation *user : users) {
@@ -919,7 +920,6 @@ void DbStencilIndexer::transformDbRefUsers(
             selectedRowIdx = selection.rowIdx;
             offsetMap[rowOffset] = selection;
             usedRowSelection = true;
-
           }
         } else {
           std::string rowExpr;

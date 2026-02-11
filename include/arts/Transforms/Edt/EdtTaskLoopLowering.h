@@ -22,12 +22,14 @@ struct TaskLoopLoweringInput {
   Location loc;
 
   DistributionStrategy strategy;
+  DistributionBounds bounds;
   Value taskWorkerId;
   Value totalWorkers;
   Value workersPerNode;
 
   Value upperBound;
   Value lowerBound;
+  Value chunkLowerBound;
   Value loopStep;
   Value blockSize;
   Value totalIterations;
@@ -58,6 +60,16 @@ struct TaskLoopLoweringResult {
   Value innerStripeCount;
 };
 
+struct TaskAcquirePlanningResult {
+  Value workerBaseOffset;
+  Value acquireOffset;
+  Value acquireSize;
+  Value acquireHintSize;
+  Value step;
+  bool stepIsUnit = true;
+  std::optional<Tiling2DWorkerGrid> tiling2DGrid;
+};
+
 struct TaskLoopPostCloneInput {
   ArtsCodegen *AC = nullptr;
   Location loc;
@@ -75,9 +87,15 @@ public:
   lower(TaskLoopLoweringInput &input,
         const TaskLoopLoweringMappedValues &mapped) const = 0;
 
-  virtual void collectExtraExternalValues(const TaskLoopLoweringInput &input,
-                                          llvm::SetVector<Value> &values) const {
-  }
+  virtual void
+  collectExtraExternalValues(const TaskLoopLoweringInput &input,
+                             llvm::SetVector<Value> &values) const {}
+
+  /// Strategy hook for planning parent-acquire rewrite bounds.
+  /// This keeps strategy-specific acquire window logic out of ForLowering.
+  virtual TaskAcquirePlanningResult
+  planAcquireRewrite(const TaskLoopLoweringInput &input,
+                     Value chunkOffset) const;
 
   /// Strategy hook for optional post-clone rewrites in the generated task body.
   virtual void postCloneAdjust(TaskLoopPostCloneInput &input) const {}

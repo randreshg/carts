@@ -11,6 +11,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -884,7 +885,12 @@ static Value getUnderlyingValueImpl(Value v, SmallPtrSet<Value, 16> &visited,
       return getUnderlyingValueImpl(subview.getSource(), visited, depth + 1);
     else if (auto castOp = dyn_cast<memref::CastOp>(op))
       return getUnderlyingValueImpl(castOp.getSource(), visited, depth + 1);
-    else if (auto view = dyn_cast<memref::ViewOp>(op))
+    else if (auto unrealized = dyn_cast<UnrealizedConversionCastOp>(op)) {
+      ValueRange inputs = unrealized.getInputs();
+      if (inputs.empty())
+        return nullptr;
+      return getUnderlyingValueImpl(inputs.front(), visited, depth + 1);
+    } else if (auto view = dyn_cast<memref::ViewOp>(op))
       return getUnderlyingValueImpl(view.getSource(), visited, depth + 1);
     else if (auto reinterpret = dyn_cast<memref::ReinterpretCastOp>(op))
       return getUnderlyingValueImpl(reinterpret.getSource(), visited,

@@ -141,6 +141,12 @@ static cl::opt<PartitionFallback> PartitionFallbackMode(
                    "Use fine-grained (element-wise) allocation")),
     cl::init(PartitionFallback::Coarse));
 
+/// Distributed DB ownership marking (after DbPartitioning).
+static cl::opt<bool> DistributedDbOwnership(
+    "distributed-db-ownership",
+    cl::desc("Mark eligible datablocks for distributed node ownership"),
+    cl::init(false));
+
 ///===----------------------------------------------------------------------===///
 // Pipeline Stop Options
 ///===----------------------------------------------------------------------===///
@@ -164,8 +170,7 @@ enum class PipelineStage {
 };
 
 static cl::opt<PipelineStage> StopAt(
-    "stop-at",
-    cl::desc("Stop pipeline at specified stage:"),
+    "stop-at", cl::desc("Stop pipeline at specified stage:"),
     cl::values(clEnumValN(PipelineStage::CanonicalizeMemrefs,
                           "canonicalize-memrefs",
                           "Stop after canonicalizing memrefs pass"),
@@ -189,8 +194,7 @@ static cl::opt<PipelineStage> StopAt(
                           "Stop after EDT optimizations"),
                clEnumValN(PipelineStage::Concurrency, "concurrency",
                           "Stop after concurrency"),
-               clEnumValN(PipelineStage::EdtDistribution,
-                          "edt-distribution",
+               clEnumValN(PipelineStage::EdtDistribution, "edt-distribution",
                           "Stop after EDT distribution and for lowering"),
                clEnumValN(PipelineStage::ConcurrencyOpt, "concurrency-opt",
                           "Stop after concurrency optimization"),
@@ -384,6 +388,8 @@ void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(createCSEPass());
   /// Partition DBs and run DbPass again to adjust modes
   pm.addPass(arts::createDbPartitioningPass(AM));
+  if (DistributedDbOwnership)
+    pm.addPass(arts::createDistributedDbOwnershipPass(AM));
   pm.addPass(arts::createDbPass(AM));
   pm.addNestedPass<func::FuncOp>(arts::createBlockLoopStripMiningPass());
   pm.addPass(arts::createArtsHoistingPass());
@@ -482,8 +488,8 @@ setupPassManager(ModuleOp module, MLIRContext &context,
     return failure();
   }
   if (!machine.hasValidNodeCount() || !machine.hasValidThreads()) {
-    llvm::errs()
-        << "Error: arts.cfg must define valid nodeCount (>0) and threads (>0).\n";
+    llvm::errs() << "Error: arts.cfg must define valid nodeCount (>0) and "
+                    "threads (>0).\n";
     return failure();
   }
 

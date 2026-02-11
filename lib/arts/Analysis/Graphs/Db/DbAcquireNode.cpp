@@ -4,8 +4,8 @@
 /// Implementation of DbAcquire node
 ///==========================================================================///
 
-#include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/AccessPatternAnalysis.h"
+#include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Edt/EdtAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
@@ -17,6 +17,7 @@
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/EdtUtils.h"
+#include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -687,10 +688,8 @@ bool DbAcquireNode::computePartitionBounds() {
   Location loc = dbAcquireOp.getLoc();
   builder.setInsertionPoint(dbAcquireOp);
 
-  if (bounds.valid && bounds.isStencil && bounds.centerOffset != 0) {
-    dbAcquireOp->setAttr("stencil_center_offset",
-                         builder.getI64IntegerAttr(bounds.centerOffset));
-  }
+  if (bounds.valid && bounds.isStencil && bounds.centerOffset != 0)
+    setStencilCenterOffset(dbAcquireOp.getOperation(), bounds.centerOffset);
 
   Value adjustedOffset = partitionOffset;
   Value adjustedSize = partitionSize;

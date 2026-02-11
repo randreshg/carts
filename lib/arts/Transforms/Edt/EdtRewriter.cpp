@@ -21,15 +21,18 @@
 using namespace mlir;
 using namespace mlir::arts;
 
-DbAcquireOp mlir::arts::detail::rewriteAcquireAsBlock(
-    AcquireRewriteInput &in, bool applyStencilHalo) {
+DbAcquireOp mlir::arts::detail::rewriteAcquireAsBlock(AcquireRewriteInput &in,
+                                                      bool applyStencilHalo) {
+  Value zero = in.AC->createIndexConstant(0, in.loc);
+  Value one = in.AC->createIndexConstant(1, in.loc);
+
   if (in.singleElement || in.forceCoarse) {
     return in.AC->create<DbAcquireOp>(
         in.loc, in.parentAcquire.getMode(), in.rootGuid, in.rootPtr,
         in.parentAcquire.getPtr().getType(), PartitionMode::coarse,
         /*indices=*/SmallVector<Value>{},
-        /*offsets=*/SmallVector<Value>{in.zero},
-        /*sizes=*/SmallVector<Value>{in.one},
+        /*offsets=*/SmallVector<Value>{zero},
+        /*sizes=*/SmallVector<Value>{one},
         /*partition_indices=*/SmallVector<Value>{},
         /*partition_offsets=*/SmallVector<Value>{},
         /*partition_sizes=*/SmallVector<Value>{});
@@ -53,14 +56,13 @@ DbAcquireOp mlir::arts::detail::rewriteAcquireAsBlock(
     Value size = workerSizes.front();
     Value end = in.AC->create<arith::AddIOp>(in.loc, start, size);
 
-    Value canShiftLeft =
-        in.AC->create<arith::CmpIOp>(in.loc, arith::CmpIPredicate::uge, start,
-                                     in.one);
-    Value startMinusOne = in.AC->create<arith::SubIOp>(in.loc, start, in.one);
+    Value canShiftLeft = in.AC->create<arith::CmpIOp>(
+        in.loc, arith::CmpIPredicate::uge, start, one);
+    Value startMinusOne = in.AC->create<arith::SubIOp>(in.loc, start, one);
     Value haloStart = in.AC->create<arith::SelectOp>(in.loc, canShiftLeft,
-                                                     startMinusOne, in.zero);
+                                                     startMinusOne, zero);
 
-    Value endPlusOne = in.AC->create<arith::AddIOp>(in.loc, end, in.one);
+    Value endPlusOne = in.AC->create<arith::AddIOp>(in.loc, end, one);
     Value haloEnd =
         in.AC->create<arith::MinUIOp>(in.loc, endPlusOne, in.stencilExtent);
     Value haloSize = in.AC->create<arith::SubIOp>(in.loc, haloEnd, haloStart);
@@ -76,10 +78,10 @@ DbAcquireOp mlir::arts::detail::rewriteAcquireAsBlock(
                                         workerHintSizes.end());
   for (unsigned i = 0; i < in.extraOffsets.size(); ++i) {
     Value extraOffset = in.extraOffsets[i];
-    Value extraHint = i < in.extraHintSizes.size() ? in.extraHintSizes[i]
-                                                   : Value();
-    Value extraSize = i < in.extraSizes.size() ? in.extraSizes[i] : in.one;
-    partitionOffsets.push_back(extraOffset ? extraOffset : in.zero);
+    Value extraHint =
+        i < in.extraHintSizes.size() ? in.extraHintSizes[i] : Value();
+    Value extraSize = i < in.extraSizes.size() ? in.extraSizes[i] : one;
+    partitionOffsets.push_back(extraOffset ? extraOffset : zero);
     partitionHintSizes.push_back(extraHint ? extraHint : extraSize);
   }
 
@@ -96,8 +98,8 @@ DbAcquireOp mlir::arts::detail::rewriteAcquireAsBlock(
       /*partition_sizes=*/partitionHintSizes);
 }
 
-std::unique_ptr<EdtRewriter> EdtRewriter::create(bool stencilHalo) {
-  if (stencilHalo)
+std::unique_ptr<EdtRewriter> EdtRewriter::create(AcquireRewriteFlavor flavor) {
+  if (flavor == AcquireRewriteFlavor::Stencil)
     return detail::createStencilEdtRewriter();
   return detail::createBlockEdtRewriter();
 }

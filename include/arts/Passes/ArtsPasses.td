@@ -118,6 +118,19 @@ def DbPartitioning : Pass<"db-partitioning", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createDbPartitioningPass(nullptr)";
 }
 
+def DistributedDbOwnership
+    : Pass<"distributed-db-ownership", "mlir::ModuleOp"> {
+  let summary = "Mark eligible datablock allocations for distributed ownership";
+  let description = [{
+    Selects host-level datablock allocations that are safe to distribute across
+    nodes and annotates them with the `distributed` attribute for lowering.
+  }];
+  let dependentDialects = [
+    "func::FuncDialect", "arts::ArtsDialect", "memref::MemRefDialect"
+  ];
+  let constructor = "mlir::arts::createDistributedDbOwnershipPass(nullptr)";
+}
+
 def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {
   let summary = "Identify Dbs in the program";
   let dependentDialects = [

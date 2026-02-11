@@ -9,10 +9,10 @@
 
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
-#include "llvm/ADT/SmallVector.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Value.h"
+#include "llvm/ADT/SmallVector.h"
 #include <memory>
 
 namespace mlir {
@@ -25,8 +25,6 @@ struct AcquireRewriteInput {
   DbAcquireOp parentAcquire;
   Value rootGuid;
   Value rootPtr;
-  Value zero;
-  Value one;
   Value acquireOffset;
   Value acquireSize;
   Value acquireHintSize;
@@ -41,6 +39,11 @@ struct AcquireRewriteInput {
   Value stencilExtent; // optional
 };
 
+enum class AcquireRewriteFlavor {
+  Block,
+  Stencil,
+};
+
 class EdtRewriter {
 public:
   virtual ~EdtRewriter() = default;
@@ -49,7 +52,7 @@ public:
   virtual DbAcquireOp rewriteAcquire(AcquireRewriteInput &input) const = 0;
 
   /// Factory for block vs stencil acquire rewriting.
-  static std::unique_ptr<EdtRewriter> create(bool stencilHalo);
+  static std::unique_ptr<EdtRewriter> create(AcquireRewriteFlavor flavor);
 };
 
 namespace detail {
