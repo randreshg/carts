@@ -134,6 +134,31 @@ bool LoopNode::dependsOnInductionVarNormalized(Value v) {
   return dependsOnInductionVar(ValueUtils::stripNumericCasts(v));
 }
 
+bool LoopNode::hasExplicitLoopMetadata() const {
+  return loopOp && loopOp->hasAttr(AttrNames::LoopMetadata::Name);
+}
+
+bool LoopNode::isParallelizableByMetadata() const {
+  /// No explicit metadata means unknown. Let callers apply structural checks.
+  if (!hasExplicitLoopMetadata())
+    return true;
+
+  if (!potentiallyParallel)
+    return false;
+
+  if (hasInterIterationDeps && hasInterIterationDeps.value())
+    return false;
+
+  if (hasReductions)
+    return false;
+
+  if (parallelClassification &&
+      *parallelClassification == LoopMetadata::ParallelClassification::Sequential)
+    return false;
+
+  return true;
+}
+
 static bool dependsOnLoopInitImpl(Value value, Value base, unsigned depth) {
   if (!value || !base || depth > 8)
     return false;

@@ -17,24 +17,12 @@
 #include "llvm/ADT/DenseMap.h"
 #include <optional>
 
-// Forward declarations
 namespace mlir {
 namespace arts {
+
 class DbGraph;
 class DbAliasAnalysis;
 class LoopAnalysis;
-class DbAcquireOp;
-class DbAllocOp;
-class ForOp;
-class ArtsAnalysisManager;
-} // namespace arts
-} // namespace mlir
-
-namespace mlir {
-namespace arts {
-
-/// Central manager for DB-related analyses across a module.
-class ArtsAnalysisManager;
 
 class DbAnalysis : public ArtsAnalysis {
 public:

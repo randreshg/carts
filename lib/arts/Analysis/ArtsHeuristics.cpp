@@ -33,7 +33,7 @@ using namespace mlir::arts;
 namespace {
 
 /// Extract heuristic ID from rationale string (e.g., "H1.2: ..." -> "H1.2")
-static std::string extractHeuristicId(llvm::StringRef rationale) {
+std::string extractHeuristicId(llvm::StringRef rationale) {
   /// Look for "H1.X:" pattern
   if (rationale.starts_with("H1.")) {
     size_t colonPos = rationale.find(':');

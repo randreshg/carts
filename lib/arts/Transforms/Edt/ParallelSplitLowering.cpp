@@ -65,7 +65,7 @@ void ParallelRegionSplitAnalysis::analyzeDependenciesForSplit(
     collectUsedBlockArgs(op, depsUsedAfterFor);
 }
 
-EdtOp ParallelSplitLowering::createContinuationParallel(
+EdtOp mlir::arts::createContinuationParallel(
     ArtsCodegen &AC, EdtOp originalParallel,
     ParallelRegionSplitAnalysis &analysis, Location loc) {
   ARTS_INFO(" - Creating continuation parallel EDT for post-for work");
@@ -123,9 +123,10 @@ EdtOp ParallelSplitLowering::createContinuationParallel(
   }
 
   Value routeZero = AC.createIntConstant(0, AC.Int32, loc);
-  auto contParallel =
-      AC.create<EdtOp>(loc, EdtType::parallel,
-                       originalParallel.getConcurrency(), routeZero, newDeps);
+  EdtType contType = originalParallel.getType();
+  auto contParallel = AC.create<EdtOp>(loc, contType,
+                                       originalParallel.getConcurrency(),
+                                       routeZero, newDeps);
 
   if (auto workers = originalParallel.getWorkersAttr())
     contParallel->setAttr(AttrNames::Operation::Workers, workers);
@@ -151,7 +152,7 @@ EdtOp ParallelSplitLowering::createContinuationParallel(
   return contParallel;
 }
 
-void ParallelSplitLowering::cleanupOriginalParallel(
+void mlir::arts::cleanupOriginalParallel(
     EdtOp originalParallel, ParallelRegionSplitAnalysis &analysis,
     bool hasPreFor) {
   for (Operation *op : llvm::reverse(analysis.opsAfterFor))

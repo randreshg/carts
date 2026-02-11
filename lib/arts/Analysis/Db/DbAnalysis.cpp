@@ -30,25 +30,6 @@ using namespace mlir::arts;
 
 namespace {
 
-static unsigned dbPatternRank(DbAccessPattern pattern) {
-  switch (pattern) {
-  case DbAccessPattern::stencil:
-    return 3;
-  case DbAccessPattern::indexed:
-    return 2;
-  case DbAccessPattern::uniform:
-    return 1;
-  case DbAccessPattern::unknown:
-    return 0;
-  }
-  return 0;
-}
-
-static DbAccessPattern mergeDbPattern(DbAccessPattern lhs,
-                                      DbAccessPattern rhs) {
-  return dbPatternRank(rhs) > dbPatternRank(lhs) ? rhs : lhs;
-}
-
 static DbAccessPattern toDbAccessPattern(AccessPattern pattern) {
   switch (pattern) {
   case AccessPattern::Stencil:
@@ -189,11 +170,8 @@ DbGraph &DbAnalysis::getOrCreateGraph(func::FuncOp func) {
 
   ARTS_DEBUG(" - Creating new DbGraph for function: " << func.getName());
   auto newGraph = std::make_unique<DbGraph>(func, this);
-
-  /// Build nodes and dependencies
   newGraph->build();
 
-  /// Store the graph
   DbGraph *graphPtr = newGraph.get();
   functionGraphMap[func] = std::move(newGraph);
   return *graphPtr;
@@ -275,7 +253,7 @@ DbAnalysis::analyzeLoopDbAccessPatterns(ForOp forOp) {
     DbAccessPattern combinedPattern = DbAccessPattern::unknown;
     if (auto basePattern = getAcquireAccessPattern(acqNode->getDbAcquireOp())) {
       DbAccessPattern depPattern = toDbAccessPattern(*basePattern);
-      combinedPattern = mergeDbPattern(combinedPattern, depPattern);
+      combinedPattern = mergeDbAccessPattern(combinedPattern, depPattern);
       if (depPattern == DbAccessPattern::stencil)
         summary.hasStencilAccessHint = true;
     }
@@ -310,15 +288,15 @@ DbAnalysis::analyzeLoopDbAccessPatterns(ForOp forOp) {
         if (bounds.isStencil || bounds.minOffset != 0 ||
             bounds.maxOffset != 0) {
           combinedPattern =
-              mergeDbPattern(combinedPattern, DbAccessPattern::stencil);
+              mergeDbAccessPattern(combinedPattern, DbAccessPattern::stencil);
           summary.hasStencilOffset = true;
         } else {
           combinedPattern =
-              mergeDbPattern(combinedPattern, DbAccessPattern::uniform);
+              mergeDbAccessPattern(combinedPattern, DbAccessPattern::uniform);
         }
       } else if (bounds.hasVariableOffset) {
         combinedPattern =
-            mergeDbPattern(combinedPattern, DbAccessPattern::indexed);
+            mergeDbAccessPattern(combinedPattern, DbAccessPattern::indexed);
       }
     }
 
@@ -326,7 +304,7 @@ DbAnalysis::analyzeLoopDbAccessPatterns(ForOp forOp) {
     if (it == summary.allocPatterns.end()) {
       summary.allocPatterns[allocOp] = combinedPattern;
     } else {
-      it->second = mergeDbPattern(it->second, combinedPattern);
+      it->second = mergeDbAccessPattern(it->second, combinedPattern);
     }
   });
 

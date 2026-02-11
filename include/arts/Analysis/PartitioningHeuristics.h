@@ -87,13 +87,6 @@ struct PartitioningContext {
   /// Per-acquire info for voting
   SmallVector<AcquireInfo> acquires;
 
-  /// Returns true if any acquire has write access (out or inout).
-  bool hasWriteAccess() const {
-    return llvm::any_of(acquires, [](const AcquireInfo &a) {
-      return a.accessMode == ArtsMode::out || a.accessMode == ArtsMode::inout;
-    });
-  }
-
   /// Returns true if ALL acquires are read-only (in mode).
   bool allReadOnly() const {
     return !acquires.empty() &&
@@ -210,9 +203,6 @@ struct PartitioningHint {
 
   /// Block size for block partitioning (optional)
   std::optional<int64_t> blockSize;
-
-  /// Factory methods
-  static PartitioningHint coarse() { return {}; }
 
   static PartitioningHint block(std::optional<int64_t> size) {
     PartitioningHint h;

@@ -147,6 +147,12 @@ static cl::opt<bool> DistributedDbOwnership(
     cl::desc("Mark eligible datablocks for distributed node ownership"),
     cl::init(false));
 
+/// Serial loop EDTification (before CreateDbs).
+static cl::opt<bool> SerialEdtify(
+    "serial-edtify",
+    cl::desc("Outline eligible host serial loops into arts.edt<parallel>"),
+    cl::init(false));
+
 ///===----------------------------------------------------------------------===///
 // Pipeline Stop Options
 ///===----------------------------------------------------------------------===///
@@ -250,15 +256,6 @@ void initializeContext(MLIRContext &context) {
   LLVM::LLVMPointerType::attachInterface<MemRefInsider>(context);
   LLVM::LLVMStructType::attachInterface<MemRefInsider>(context);
   MemRefType::attachInterface<PtrElementModel<MemRefType>>(context);
-  LLVM::LLVMStructType::attachInterface<PtrElementModel<LLVM::LLVMStructType>>(
-      context);
-  LLVM::LLVMPointerType::attachInterface<
-      PtrElementModel<LLVM::LLVMPointerType>>(context);
-  LLVM::LLVMArrayType::attachInterface<PtrElementModel<LLVM::LLVMArrayType>>(
-      context);
-  LLVM::LLVMArrayType::attachInterface<MemRefInsider>(context);
-  LLVM::LLVMStructType::attachInterface<MemRefInsider>(context);
-  MemRefType::attachInterface<PtrElementModel<MemRefType>>(context);
   IndexType::attachInterface<PtrElementModel<IndexType>>(context);
   LLVM::LLVMStructType::attachInterface<PtrElementModel<LLVM::LLVMStructType>>(
       context);
@@ -333,6 +330,10 @@ void setupLoopReordering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createLoopTransformsPass(
       AM, LoopTransformsEnableMatmul, LoopTransformsEnableTiling,
       LoopTransformsTileJ, LoopTransformsMinTripCount));
+  /// Distributed DB ownership depends on serial setup loops being edtified so
+  /// host-only initialization does not block eligibility.
+  if (SerialEdtify || DistributedDbOwnership)
+    pm.addPass(arts::createSerialEdtifyPass(AM));
   pm.addPass(createCSEPass());
 }
 

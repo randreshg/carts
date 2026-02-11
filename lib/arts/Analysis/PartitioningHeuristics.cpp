@@ -262,12 +262,8 @@ void copyArtsMetadataAttrs(Operation *source, Operation *dest) {
     dest->setAttr(AttrNames::Operation::PartitionHint, hint);
 
   /// Transfer arts.loop metadata (trip count, parallelism info, etc.)
-  if (auto loopAttr = source->getAttr(AttrNames::LoopMetadata::Name)) {
+  if (auto loopAttr = source->getAttr(AttrNames::LoopMetadata::Name))
     dest->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
-    ARTS_DEBUG("  -> transferred arts.loop metadata");
-  } else {
-    ARTS_DEBUG("  -> source has NO arts.loop attribute");
-  }
 }
 
 } // namespace arts

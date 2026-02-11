@@ -3,7 +3,7 @@
 ///
 /// Implements acquire rewriting helpers used by ForLowering.
 ///
-/// Shared rewrite behavior:
+/// Rewrite behavior:
 ///   1. Single-element or forced-coarse path:
 ///      db_acquire -> partitioning(<coarse>), offsets[0], sizes[1]
 ///   2. Block path:
@@ -15,14 +15,13 @@
 ///==========================================================================///
 
 #include "arts/Transforms/Edt/EdtRewriter.h"
-#include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
 using namespace mlir;
 using namespace mlir::arts;
 
-DbAcquireOp mlir::arts::detail::rewriteAcquireAsBlock(AcquireRewriteInput &in,
-                                                      bool applyStencilHalo) {
+DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
+                                       bool applyStencilHalo) {
   Value zero = in.AC->createIndexConstant(0, in.loc);
   Value one = in.AC->createIndexConstant(1, in.loc);
 
@@ -50,8 +49,7 @@ DbAcquireOp mlir::arts::detail::rewriteAcquireAsBlock(AcquireRewriteInput &in,
   SmallVector<Value> workerSizes = {workerSize};
   SmallVector<Value> workerHintSizes = {workerHintSize};
 
-  if (applyStencilHalo && in.stencilExtent && !workerOffsets.empty() &&
-      !workerSizes.empty()) {
+  if (applyStencilHalo && in.stencilExtent) {
     Value start = workerOffsets.front();
     Value size = workerSizes.front();
     Value end = in.AC->create<arith::AddIOp>(in.loc, start, size);
@@ -96,10 +94,4 @@ DbAcquireOp mlir::arts::detail::rewriteAcquireAsBlock(AcquireRewriteInput &in,
       /*partition_indices=*/SmallVector<Value>{},
       /*partition_offsets=*/partitionOffsets,
       /*partition_sizes=*/partitionHintSizes);
-}
-
-std::unique_ptr<EdtRewriter> EdtRewriter::create(AcquireRewriteFlavor flavor) {
-  if (flavor == AcquireRewriteFlavor::Stencil)
-    return detail::createStencilEdtRewriter();
-  return detail::createBlockEdtRewriter();
 }

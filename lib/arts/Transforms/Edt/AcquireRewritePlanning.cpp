@@ -18,7 +18,6 @@
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include <algorithm>
 
 using namespace mlir;
 using namespace mlir::arts;

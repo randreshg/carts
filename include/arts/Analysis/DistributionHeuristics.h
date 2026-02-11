@@ -248,11 +248,6 @@ public:
   computeCoarsenedBlockHint(ForOp forOp, LoopAnalysis &loopAnalysis,
                             const WorkerConfig &workerCfg);
 
-  /// Backward-compatible alias. Prefer computeCoarsenedBlockHint.
-  static std::optional<int64_t>
-  computeCoarsenedBlockSize(ForOp forOp, LoopAnalysis &loopAnalysis,
-                            const WorkerConfig &workerCfg);
-
   /// Choose compile-time column worker count for tiling_2d.
   /// Returns the largest divisor <= sqrt(totalWorkers), or 1.
   static int64_t chooseTiling2DColumnWorkers(int64_t totalWorkers);

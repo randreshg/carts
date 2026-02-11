@@ -17,10 +17,10 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
+#include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 /// Others
-#include "mlir/Analysis/DataLayoutAnalysis.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
@@ -41,13 +41,6 @@ ARTS_DEBUG_SETUP(convert_arts_to_llvm);
 
 using namespace mlir;
 using namespace arts;
-
-///===----------------------------------------------------------------------===///
-// Constants and Configuration
-///===----------------------------------------------------------------------===///
-namespace {
-/// Configuration constants
-} // namespace
 
 ///===----------------------------------------------------------------------===///
 // Conversion Patterns
@@ -73,17 +66,20 @@ static inline void getDbInfo(OpType op, SmallVector<Value> &sizesOut,
                              SmallVector<Value> &offsetsOut,
                              SmallVector<Value> &indicesOut,
                              bool &isSingleElement) {
-  sizesOut.assign(op.getSizes().begin(), op.getSizes().end());
-
   if (auto acqOp = dyn_cast<DbAcquireOp>(op.getOperation())) {
-    offsetsOut.assign(acqOp.getOffsets().begin(), acqOp.getOffsets().end());
+    sizesOut = DatablockUtils::getDependencySizesFromDb(acqOp.getOperation());
+    offsetsOut =
+        DatablockUtils::getDependencyOffsetsFromDb(acqOp.getOperation());
     indicesOut.assign(acqOp.getIndices().begin(), acqOp.getIndices().end());
   } else if (auto depAcqOp = dyn_cast<DepDbAcquireOp>(op.getOperation())) {
-    offsetsOut.assign(depAcqOp.getOffsets().begin(),
-                      depAcqOp.getOffsets().end());
+    sizesOut =
+        DatablockUtils::getDependencySizesFromDb(depAcqOp.getOperation());
+    offsetsOut =
+        DatablockUtils::getDependencyOffsetsFromDb(depAcqOp.getOperation());
     indicesOut.assign(depAcqOp.getIndices().begin(),
                       depAcqOp.getIndices().end());
   } else {
+    sizesOut.assign(op.getSizes().begin(), op.getSizes().end());
     offsetsOut.clear();
     indicesOut.clear();
   }
@@ -1046,8 +1042,7 @@ private:
       IRMapping mapper;
       auto parentFn = op->getParentOfType<func::FuncOp>();
       if (parentFn && parentFn.getNumArguments() > 0) {
-        if (parentFn.getNumArguments() != 2 ||
-            initFn.getNumArguments() != 3)
+        if (parentFn.getNumArguments() != 2 || initFn.getNumArguments() != 3)
           return failure();
         mapper.map(parentFn.getArgument(0), initFn.getArgument(1));
         mapper.map(parentFn.getArgument(1), initFn.getArgument(2));
@@ -1079,14 +1074,16 @@ private:
       for (Value size : dbSizes) {
         if (failed(collectDependencies(size))) {
           ARTS_WARN("Failed to collect distributed allocation size expression "
-                    "dependencies for " << op);
+                    "dependencies for "
+                    << op);
           return failure();
         }
       }
       for (Value size : op.getElementSizes()) {
         if (failed(collectDependencies(size))) {
           ARTS_WARN("Failed to collect distributed allocation element size "
-                    "expression dependencies for " << op);
+                    "expression dependencies for "
+                    << op);
           return failure();
         }
       }
@@ -1104,8 +1101,10 @@ private:
       if (!ValueUtils::cloneValuesIntoRegion(
               valuesToClone, &initFn.getBody(), mapper, AC->getBuilder(),
               /*allowMemoryEffectFree=*/true, isRuntimeTopologyCall)) {
-        ARTS_WARN("Failed to clone distributed allocation size expressions into "
-                  "init callback for " << op);
+        ARTS_WARN(
+            "Failed to clone distributed allocation size expressions into "
+            "init callback for "
+            << op);
         return failure();
       }
 
@@ -1129,7 +1128,8 @@ private:
         Value mapped = mapValue(size);
         if (!mapped) {
           ARTS_WARN("Missing mapped DbAlloc element size value in distributed "
-                    "init for " << op);
+                    "init for "
+                    << op);
           return failure();
         }
         callbackElementSizes.push_back(mapped);
@@ -1144,9 +1144,8 @@ private:
 
       Value guidHolder = AC->create<memref::GetGlobalOp>(
           op.getLoc(), guidHolderType, guidHolderSymbol);
-      Value ptrHolder = AC->create<memref::GetGlobalOp>(op.getLoc(),
-                                                        ptrHolderType,
-                                                        ptrHolderSymbol);
+      Value ptrHolder = AC->create<memref::GetGlobalOp>(
+          op.getLoc(), ptrHolderType, ptrHolderSymbol);
       Value zero = AC->createIndexConstant(0, op.getLoc());
       AC->create<memref::StoreOp>(op.getLoc(), guidBuffer, guidHolder,
                                   ValueRange{zero});
@@ -1157,8 +1156,8 @@ private:
           AC->computeElementTypeSize(op.getElementType(), op.getLoc());
       Value callbackPayloadSize = AC->createIndexConstant(1, op.getLoc());
       for (Value dim : callbackElementSizes) {
-        callbackPayloadSize = AC->create<arith::MulIOp>(
-            op.getLoc(), callbackPayloadSize, dim);
+        callbackPayloadSize =
+            AC->create<arith::MulIOp>(op.getLoc(), callbackPayloadSize, dim);
       }
       Value callbackTotalDbSize = AC->create<arith::MulIOp>(
           op.getLoc(), callbackElementSize, callbackPayloadSize);
@@ -1169,13 +1168,13 @@ private:
       std::optional<int64_t> callbackNextId = nextId;
 
       if (isSingleElement) {
-        createSingleDb(ptrBuffer, guidBuffer, callbackDbMode,
-                       callbackRoute, callbackTotalDbSize,
+        createSingleDb(ptrBuffer, guidBuffer, callbackDbMode, callbackRoute,
+                       callbackTotalDbSize,
                        callbackNextId ? &callbackNextId : nullptr, op.getLoc(),
                        /*distributedOwnership=*/true);
       } else {
-        createMultiDbs(ptrBuffer, guidBuffer, callbackDbSizes,
-                       callbackDbMode, callbackRoute, callbackTotalDbSize,
+        createMultiDbs(ptrBuffer, guidBuffer, callbackDbSizes, callbackDbMode,
+                       callbackRoute, callbackTotalDbSize,
                        callbackNextId ? &callbackNextId : nullptr, op.getLoc(),
                        /*distributedOwnership=*/true);
       }
@@ -1188,8 +1187,8 @@ private:
     Value zero = AC->createIndexConstant(0, op.getLoc());
     Value guidHolder = AC->create<memref::GetGlobalOp>(
         op.getLoc(), guidHolderType, guidHolderSymbol);
-    Value ptrHolder = AC->create<memref::GetGlobalOp>(op.getLoc(), ptrHolderType,
-                                                      ptrHolderSymbol);
+    Value ptrHolder = AC->create<memref::GetGlobalOp>(
+        op.getLoc(), ptrHolderType, ptrHolderSymbol);
     guidMemref =
         AC->create<memref::LoadOp>(op.getLoc(), guidHolder, ValueRange{zero});
     dbMemref =
@@ -1481,7 +1480,6 @@ struct YieldPattern : public ArtsToLLVMPattern<YieldOp> {
 };
 
 /// Pattern to convert arts.undef to polygeist.undef
-
 struct UndefPattern : public ArtsToLLVMPattern<UndefOp> {
   using ArtsToLLVMPattern::ArtsToLLVMPattern;
 

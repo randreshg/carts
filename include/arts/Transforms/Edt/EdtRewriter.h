@@ -1,7 +1,7 @@
 ///==========================================================================///
 /// File: EdtRewriter.h
 ///
-/// Rewriters for creating per-worker DbAcquireOps during ForLowering.
+/// Acquire rewriting for creating per-worker DbAcquireOps during ForLowering.
 ///==========================================================================///
 
 #ifndef ARTS_TRANSFORMS_EDT_EDTREWRITER_H
@@ -13,7 +13,6 @@
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/SmallVector.h"
-#include <memory>
 
 namespace mlir {
 namespace arts {
@@ -36,36 +35,13 @@ struct AcquireRewriteInput {
   bool stepIsUnit = true;
   bool singleElement = false;
   bool forceCoarse = false;
-  Value stencilExtent; // optional
+  Value stencilExtent;
 };
 
-enum class AcquireRewriteFlavor {
-  Block,
-  Stencil,
-};
-
-class EdtRewriter {
-public:
-  virtual ~EdtRewriter() = default;
-
-  /// Create the rewritten DbAcquireOp for one dependency.
-  virtual DbAcquireOp rewriteAcquire(AcquireRewriteInput &input) const = 0;
-
-  /// Factory for block vs stencil acquire rewriting.
-  static std::unique_ptr<EdtRewriter> create(AcquireRewriteFlavor flavor);
-};
-
-namespace detail {
-
-/// Shared block-style acquire rewrite implementation with optional halo logic.
-DbAcquireOp rewriteAcquireAsBlock(AcquireRewriteInput &input,
-                                  bool applyStencilHalo);
-
-/// Internal factories used by EdtRewriter::create.
-std::unique_ptr<EdtRewriter> createBlockEdtRewriter();
-std::unique_ptr<EdtRewriter> createStencilEdtRewriter();
-
-} // namespace detail
+/// Rewrite a parent acquire into a block-partitioned per-worker acquire.
+/// When applyStencilHalo is true, offsets/sizes are expanded with halo
+/// clamping for stencil access patterns.
+DbAcquireOp rewriteAcquire(AcquireRewriteInput &input, bool applyStencilHalo);
 
 } // namespace arts
 } // namespace mlir

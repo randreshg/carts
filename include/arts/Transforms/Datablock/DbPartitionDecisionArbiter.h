@@ -34,7 +34,7 @@ struct AcquirePartitionInfo {
   bool isConsistentWith(const AcquirePartitionInfo &other) const;
 };
 
-/// Reconciliation summary emitted by AcquireModeReconciler.
+/// Result of reconciling per-acquire partition modes.
 struct AcquireModeReconcileResult {
   PartitionMode consistentMode = PartitionMode::coarse;
   bool modesConsistent = true;

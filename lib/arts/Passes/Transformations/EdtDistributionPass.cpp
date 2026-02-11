@@ -41,15 +41,15 @@ struct EdtDistributionPass
     /// Query distribution patterns from DB analysis built from the current IR.
     AM->getDbAnalysis().invalidate();
 
-    module.walk([&](EdtOp parallelEdt) {
-      if (parallelEdt.getType() != EdtType::parallel)
+    module.walk([&](EdtOp edt) {
+      if (edt.getType() != EdtType::parallel && edt.getType() != EdtType::task)
         return;
 
       DistributionStrategy strategy = DistributionHeuristics::analyzeStrategy(
-          parallelEdt.getConcurrency(), machine);
+          edt.getConcurrency(), machine);
 
-      parallelEdt.walk([&](ForOp forOp) {
-        if (forOp->getParentOfType<EdtOp>() != parallelEdt)
+      edt.walk([&](ForOp forOp) {
+        if (forOp->getParentOfType<EdtOp>() != edt)
           return;
 
         EdtDistributionPattern pattern = EdtDistributionPattern::unknown;

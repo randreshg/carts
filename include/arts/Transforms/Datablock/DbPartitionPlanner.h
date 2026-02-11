@@ -1,11 +1,11 @@
 ///==========================================================================///
 /// File: DbPartitionPlanner.h
 ///
-/// Mode-specialized planning interface used by DbPartitioning.
+/// Mode-specialized planning functions for DbPartitioning.
 ///
-/// DbPartitioning orchestrates analysis + decisions, while this planner owns:
-///   1. allocation shape computation per partition mode
-///   2. per-acquire rewrite payload construction per partition mode
+/// Provides per-mode logic for:
+///   1. allocation shape computation (outer/inner sizes)
+///   2. per-acquire rewrite payload construction
 ///==========================================================================///
 
 #ifndef ARTS_TRANSFORMS_DATABLOCK_DBPARTITIONPLANNER_H
@@ -13,14 +13,13 @@
 
 #include "arts/Transforms/Datablock/DbRewriter.h"
 #include "mlir/IR/Builders.h"
-#include <memory>
 
 namespace mlir {
 namespace arts {
 
 struct PartitioningDecision;
 
-/// Minimal per-acquire planning view passed from DbPartitioning into planners.
+/// Per-acquire planning input passed from DbPartitioning into planners.
 struct DbAcquirePartitionView {
   DbAcquireOp acquire;
   SmallVector<Value> partitionIndices;
@@ -31,23 +30,19 @@ struct DbAcquirePartitionView {
   bool needsFullRange = false;
 };
 
-class DbPartitionPlanner {
-public:
-  virtual ~DbPartitionPlanner() = default;
+/// Compute allocation outer/inner sizes for the given partition mode.
+void computeAllocationShape(PartitionMode mode, DbAllocOp allocOp,
+                            const PartitioningDecision &decision,
+                            ArrayRef<Value> blockSizes,
+                            ArrayRef<unsigned> partitionedDims,
+                            SmallVector<Value> &newOuterSizes,
+                            SmallVector<Value> &newInnerSizes);
 
-  static std::unique_ptr<DbPartitionPlanner> create(PartitionMode mode);
-
-  virtual void computeAllocationShape(
-      DbAllocOp allocOp, const PartitioningDecision &decision,
-      ArrayRef<Value> blockSizes, ArrayRef<unsigned> partitionedDims,
-      SmallVector<Value> &newOuterSizes,
-      SmallVector<Value> &newInnerSizes) const = 0;
-
-  virtual void buildRewriteAcquire(const DbAcquirePartitionView &input,
-                                   DbAllocOp allocOp, const DbRewritePlan &plan,
-                                   DbRewriteAcquire &output,
-                                   OpBuilder &builder) const = 0;
-};
+/// Build per-acquire rewrite payload for the given partition mode.
+void buildRewriteAcquire(PartitionMode mode,
+                         const DbAcquirePartitionView &input,
+                         DbAllocOp allocOp, const DbRewritePlan &plan,
+                         DbRewriteAcquire &output, OpBuilder &builder);
 
 } // namespace arts
 } // namespace mlir

@@ -1,8 +1,7 @@
 ///==========================================================================///
 /// File: DbLayoutStrategy.h
 ///
-/// Layout strategy contract for datablock pointer materialization.
-/// Keeps layout-dependent addressing policy out of lowering pass bodies.
+/// Layout-aware element pointer computation for datablock lowering.
 ///==========================================================================///
 
 #ifndef ARTS_TRANSFORMS_DATABLOCK_DBLAYOUTSTRATEGY_H
@@ -31,18 +30,12 @@ struct LayoutInfo {
 /// Build layout information for a datablock handle or acquire pointer.
 LayoutInfo buildLayoutInfo(Value source);
 
-/// Base strategy for mode-aware datablock element pointer materialization.
-class DbLayoutStrategy {
-public:
-  virtual ~DbLayoutStrategy() = default;
-
-  virtual Value computeElementPointer(ArtsCodegen &AC, Location loc, Value base,
-                                      ArrayRef<Value> indices,
-                                      const LayoutInfo &layout) const = 0;
-};
-
-/// Return the concrete strategy for a partition mode.
-const DbLayoutStrategy &getDbLayoutStrategy(PartitionMode mode);
+/// Compute the LLVM element pointer for a datablock access given base pointer,
+/// indices, and layout info. All partition modes currently use linearized
+/// addressing.
+Value computeDbElementPointer(ArtsCodegen &AC, Location loc, Value base,
+                              ArrayRef<Value> indices,
+                              const LayoutInfo &layout);
 
 } // namespace arts
 } // namespace mlir

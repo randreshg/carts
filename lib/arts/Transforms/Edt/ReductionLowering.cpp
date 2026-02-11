@@ -51,7 +51,7 @@ static Value createZeroValue(ArtsCodegen *AC, Type elemType, Location loc) {
 
 } // namespace
 
-DenseSet<Value> ReductionLowering::detectReductionBlockArgs(ForOp forOp) {
+DenseSet<Value> mlir::arts::detectReductionBlockArgs(ForOp forOp) {
   DenseSet<Value> result;
   forOp.walk([&](memref::StoreOp store) {
     if (auto dbRef = store.getMemRef().getDefiningOp<DbRefOp>()) {
@@ -65,7 +65,7 @@ DenseSet<Value> ReductionLowering::detectReductionBlockArgs(ForOp forOp) {
   return result;
 }
 
-bool ReductionLowering::shouldSkipReductionArg(
+bool mlir::arts::shouldSkipReductionArg(
     BlockArgument parallelArg, const ReductionLoweringInfo &redInfo,
     const DenseSet<Value> &reductionBlockArgs) {
   /// Final result accumulator - only needed by result EDT
@@ -90,7 +90,7 @@ bool ReductionLowering::shouldSkipReductionArg(
   return false;
 }
 
-void ReductionLowering::collectOldAccumulatorDbRefs(
+void mlir::arts::collectOldAccumulatorDbRefs(
     ForOp forOp, Block &parallelBlock,
     const DenseSet<Value> &reductionBlockArgs, DenseSet<Operation *> &opsToSkip,
     IRMapping &mapper, Value myAccumulator) {
@@ -107,7 +107,7 @@ void ReductionLowering::collectOldAccumulatorDbRefs(
   });
 }
 
-ReductionLoweringInfo ReductionLowering::allocatePartialAccumulators(
+ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
     ArtsCodegen *AC, ForOp forOp, EdtOp parallelEdt, Location loc,
     Attribute loopMetadataAttr, bool splitMode) {
   ReductionLoweringInfo redInfo;
@@ -297,7 +297,7 @@ ReductionLoweringInfo ReductionLowering::allocatePartialAccumulators(
   return redInfo;
 }
 
-void ReductionLowering::createResultEdt(ArtsCodegen *AC,
+void mlir::arts::createResultEdt(ArtsCodegen *AC,
                                         ReductionLoweringInfo &redInfo,
                                         Location loc) {
   OpBuilder::InsertionGuard IG(AC->getBuilder());
@@ -383,10 +383,8 @@ void ReductionLowering::createResultEdt(ArtsCodegen *AC,
 
   SmallVector<Value> edtDeps;
   edtDeps.reserve(partialAcqPtrs.size() + finalResultAcqPtrs.size());
-  for (Value dep : partialAcqPtrs)
-    edtDeps.push_back(dep);
-  for (Value dep : finalResultAcqPtrs)
-    edtDeps.push_back(dep);
+  edtDeps.append(partialAcqPtrs.begin(), partialAcqPtrs.end());
+  edtDeps.append(finalResultAcqPtrs.begin(), finalResultAcqPtrs.end());
 
   Value routeZero = AC->create<arith::ConstantIntOp>(loc, 0, 32);
   auto resultEdt = AC->create<EdtOp>(
@@ -400,16 +398,9 @@ void ReductionLowering::createResultEdt(ArtsCodegen *AC,
   for (Value dep : edtDeps)
     depBlockArgs.push_back(resultBlock.addArgument(dep.getType(), loc));
 
-  if (depBlockArgs.size() < edtDeps.size()) {
-    ARTS_ERROR("Result EDT block arguments do not cover all dependencies");
-  }
-
   for (uint64_t i = 0; i < reductionCount; i++) {
-    uint64_t partialIdx = i;
-    uint64_t finalIdx = partialAcqPtrs.size() + i;
-
-    BlockArgument partialArg = depBlockArgs[partialIdx];
-    BlockArgument finalArg = depBlockArgs[finalIdx];
+    BlockArgument partialArg = depBlockArgs[i];
+    BlockArgument finalArg = depBlockArgs[partialAcqPtrs.size() + i];
 
     Value zeroIndex = AC->createIndexConstant(0, loc);
     SmallVector<Value> indices{zeroIndex};
@@ -428,23 +419,9 @@ void ReductionLowering::createResultEdt(ArtsCodegen *AC,
     Location loopLoc = redInfo.loopLocation.value_or(loc);
     auto combineLoop = AC->create<scf::ForOp>(loopLoc, zeroIdx, numWorkers,
                                               oneIdx, ValueRange{identity});
-    if (redInfo.loopMetadataAttr) {
+    if (redInfo.loopMetadataAttr)
       combineLoop->setAttr(AttrNames::LoopMetadata::Name,
                            redInfo.loopMetadataAttr);
-      ARTS_DEBUG("  Set loop metadata on result EDT combine loop");
-      if (auto loopAttr = combineLoop->getAttr(AttrNames::LoopMetadata::Name)) {
-        if (auto loopMetadata = dyn_cast<LoopMetadataAttr>(loopAttr)) {
-          ARTS_DEBUG("    - Metadata validated: potentiallyParallel="
-                     << loopMetadata.getPotentiallyParallel().getValue());
-        }
-      } else {
-        ARTS_DEBUG(
-            "    - WARNING: Loop metadata attribute not found after setting");
-      }
-    } else {
-      ARTS_DEBUG(
-          "  WARNING: No loop metadata available for result EDT combine loop");
-    }
 
     AC->setInsertionPointToStart(combineLoop.getBody());
     Value workerIdx = combineLoop.getInductionVar();
@@ -486,7 +463,7 @@ void ReductionLowering::createResultEdt(ArtsCodegen *AC,
   ARTS_INFO(" - Result EDT created successfully");
 }
 
-void ReductionLowering::finalizeAfterEpoch(ArtsCodegen *AC,
+void mlir::arts::finalizeReductionAfterEpoch(ArtsCodegen *AC,
                                            ReductionLoweringInfo &redInfo,
                                            Location loc) {
   if (redInfo.reductionVars.empty())

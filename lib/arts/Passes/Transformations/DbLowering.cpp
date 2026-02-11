@@ -397,8 +397,7 @@ Value DbLoweringPass::getLLVMPtr(Value base, ValueRange opIndices,
                                  Location loc) {
   LayoutInfo layout = buildLayoutInfo(base);
   SmallVector<Value> indices(opIndices.begin(), opIndices.end());
-  const DbLayoutStrategy &layoutStrategy = getDbLayoutStrategy(layout.mode);
-  return layoutStrategy.computeElementPointer(*AC, loc, base, indices, layout);
+  return computeDbElementPointer(*AC, loc, base, indices, layout);
 }
 
 ///===----------------------------------------------------------------------===///

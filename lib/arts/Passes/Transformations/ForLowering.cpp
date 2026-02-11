@@ -1,7 +1,7 @@
 ///==========================================================================///
 /// File: ForLowering.cpp
 ///
-/// Lowers arts.for operations within arts.edt<parallel>
+/// Lowers arts.for operations within EDT regions (parallel/task)
 /// 1. Splits parallel regions at arts.for boundaries
 /// 2. Creates EpochOp wrappers with task EDTs for loop iterations
 /// 3. Creates continuation parallel EDTs for post-loop work
@@ -36,7 +36,6 @@
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -70,9 +69,6 @@ static Value castToIndex(ArtsCodegen *AC, Value v, Location loc) {
   auto indexTy = AC->getBuilder().getIndexType();
   return AC->create<arith::IndexCastOp>(loc, indexTy, v);
 }
-
-/// getInternodeWorkersPerNode and computeDbAlignmentBlockSize have moved to
-/// DistributionHeuristics. ForLowering uses DistributionHeuristics directly.
 
 ///===----------------------------------------------------------------------===///
 /// LoopInfo - Information about a loop within a parallel EDT
@@ -293,11 +289,7 @@ private:
                                             EdtOp parallelEdt, Location loc,
                                             bool splitMode = false);
 
-  /// Create result EDT that combines partial accumulators
-  /// The barrierEpochGuid parameter specifies which epoch the result EDT
-  /// should be spawned into.
-  void createResultEdt(ArtsCodegen *AC, EdtOp parallelEdt,
-                       ReductionInfo &redInfo, Location loc);
+  void createResultEdt(ArtsCodegen *AC, ReductionInfo &redInfo, Location loc);
 
   Attribute getLoopMetadataAttr(ForOp forOp);
 
@@ -307,12 +299,6 @@ private:
   void lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
                               EdtOp originalParallel,
                               ParallelRegionAnalysis &analysis, Location loc);
-
-  /// Create a continuation parallel EDT for post-for work.
-  /// Reacquires all DBs from the original parallel EDT.
-  EdtOp createContinuationParallel(ArtsCodegen &AC, EdtOp originalParallel,
-                                   ParallelRegionAnalysis &analysis,
-                                   Location loc);
 
   /// Create task EDT with DB dependencies rewired to DbAllocOp.
   EdtOp createTaskEdtWithRewiring(ArtsCodegen *AC, LoopInfo &loopInfo,
@@ -402,9 +388,6 @@ void LoopInfo::initialize() {
   totalChunks = AC->create<arith::DivUIOp>(loc, adjustedIterations, blockSize);
 }
 
-/// computeWorkerIterationsBlock and recomputeWorkerBoundsInside have moved to
-/// DistributionHeuristics::computeBounds and recomputeBoundsInside.
-
 ///===----------------------------------------------------------------------===///
 // Pass Entry Point
 ///===----------------------------------------------------------------------===///
@@ -415,14 +398,15 @@ void ForLoweringPass::runOnOperation() {
   ARTS_INFO_HEADER(ForLowering);
   ARTS_DEBUG_REGION(module.dump(););
 
-  /// Walk all parallel EDTs and lower arts.for operations
-  SmallVector<EdtOp, 4> parallelEdts;
+  /// Walk EDTs that may carry arts.for and lower them.
+  SmallVector<EdtOp, 4> lowerableEdts;
   module.walk([&](EdtOp edt) {
-    if (edt.getType() == EdtType::parallel)
-      parallelEdts.push_back(edt);
+    if (edt.getType() != EdtType::parallel && edt.getType() != EdtType::task)
+      return;
+    lowerableEdts.push_back(edt);
   });
 
-  for (EdtOp parallelEdt : parallelEdts)
+  for (EdtOp parallelEdt : lowerableEdts)
     lowerParallelEdt(parallelEdt);
 
   ARTS_INFO_FOOTER(ForLowering);
@@ -486,8 +470,7 @@ void ForLoweringPass::lowerParallelEdt(EdtOp parallelEdt) {
   }
 
   /// Step 4: Clean up original parallel EDT + dependencies.
-  ParallelSplitLowering::cleanupOriginalParallel(parallelEdt, analysis,
-                                                 hasPreFor);
+  cleanupOriginalParallel(parallelEdt, analysis, hasPreFor);
 
   ARTS_INFO(" - Parallel EDT lowering complete");
 }
@@ -501,44 +484,10 @@ Attribute ForLoweringPass::getLoopMetadataAttr(ForOp forOp) {
   return forOp->getAttr(AttrNames::LoopMetadata::Name);
 }
 
-///===----------------------------------------------------------------------===///
-// Helper Functions for Reduction Handling
-///===----------------------------------------------------------------------===///
-
-/// Detect block arguments used for reduction stores in the loop body.
-/// OpenMP lowering may use different variables than declared in reduction().
-static DenseSet<Value> detectReductionBlockArgs(ForOp forOp) {
-  return ReductionLowering::detectReductionBlockArgs(forOp);
-}
-
-/// Check if a parallel block argument should be skipped. Returns true if the
-/// argument is reduction-related.
-static bool shouldSkipReductionArg(BlockArgument parallelArg,
-                                   const ReductionInfo &redInfo,
-                                   const DenseSet<Value> &reductionBlockArgs) {
-  return ReductionLowering::shouldSkipReductionArg(parallelArg, redInfo,
-                                                   reductionBlockArgs);
-}
-
-/// Collect db_ref operations that use old accumulator block args.
-/// These operations will be skipped during cloning, and their results mapped to
-/// myAccumulator. This fixes dominance violations where cloned operations would
-/// reference parent scope values.
-static void
-collectOldAccumulatorDbRefs(ForOp forOp, Block &parallelBlock,
-                            const DenseSet<Value> &reductionBlockArgs,
-                            DenseSet<Operation *> &opsToSkip, IRMapping &mapper,
-                            Value myAccumulator) {
-  ReductionLowering::collectOldAccumulatorDbRefs(forOp, parallelBlock,
-                                                 reductionBlockArgs, opsToSkip,
-                                                 mapper, myAccumulator);
-}
-
 void ForLoweringPass::cloneLoopBody(ArtsCodegen *AC, ForOp forOp,
                                     scf::ForOp chunkLoop, Value chunkOffset,
                                     IRMapping &mapper) {
   Location loc = forOp.getLoc();
-  OpBuilder builder(AC->getContext());
   AC->setInsertionPointToStart(chunkLoop.getBody());
 
   /// Compute global index from local iteration variable
@@ -595,30 +544,18 @@ void ForLoweringPass::cloneLoopBody(ArtsCodegen *AC, ForOp forOp,
                     << " operations into chunk loop");
 }
 
-/// Reduction Support Implementation
-/// Allocate reduction DBs outside parallel EDT:
-/// For each reduction variable:
-/// 1. Reuse the existing reduction result DB if available (fallback allocates
-///    one to preserve legacy behaviour).
-/// 2. Allocate partial accumulators DB (array[numWorkers]) - intermediate
-///    worker results.
-///
-/// Partial accumulators are initialized to identity and passed to the parallel
-/// EDT. See file header for full reduction pattern details.
 ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
                                                            ForOp forOp,
                                                            EdtOp parallelEdt,
                                                            Location loc,
                                                            bool splitMode) {
-  return ReductionLowering::allocatePartialAccumulators(
+  return mlir::arts::allocatePartialAccumulators(
       AC, forOp, parallelEdt, loc, getLoopMetadataAttr(forOp), splitMode);
 }
 
-/// Create result EDT to combine partial accumulators into final result.
-void ForLoweringPass::createResultEdt(ArtsCodegen *AC, EdtOp parallelEdt,
-                                      ReductionInfo &redInfo, Location loc) {
-  (void)parallelEdt;
-  ReductionLowering::createResultEdt(AC, redInfo, loc);
+void ForLoweringPass::createResultEdt(ArtsCodegen *AC, ReductionInfo &redInfo,
+                                      Location loc) {
+  arts::createResultEdt(AC, redInfo, loc);
 }
 
 ///===----------------------------------------------------------------------===///
@@ -694,31 +631,19 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   /// After worker loop, create result EDT (if reductions)
   AC.setInsertionPointAfter(workerLoop);
   if (!redInfo.reductionVars.empty()) {
-    createResultEdt(&AC, originalParallel, redInfo, loc);
+    createResultEdt(&AC, redInfo, loc);
   }
 
   /// Close epoch with yield
   AC.setInsertionPointToEnd(&epochBlock);
   AC.create<YieldOp>(loc);
 
-  /// Reduction cleanup happens AFTER the epoch
-  if (!redInfo.reductionVars.empty()) {
-    AC.setInsertionPointAfter(forEpoch);
-    ReductionLowering::finalizeAfterEpoch(&AC, redInfo, loc);
-  } else {
-    /// No reductions - still need to set insertion point after epoch
-    /// so the next for loop (if any) inserts AFTER this epoch, not inside it
-    AC.setInsertionPointAfter(forEpoch);
-  }
+  /// Set insertion point after epoch so subsequent for loops insert correctly.
+  AC.setInsertionPointAfter(forEpoch);
+  if (!redInfo.reductionVars.empty())
+    finalizeReductionAfterEpoch(&AC, redInfo, loc);
 
   ARTS_INFO(" - arts.for lowering with DB rewiring complete");
-}
-
-EdtOp ForLoweringPass::createContinuationParallel(
-    ArtsCodegen &AC, EdtOp originalParallel, ParallelRegionAnalysis &analysis,
-    Location loc) {
-  return ParallelSplitLowering::createContinuationParallel(AC, originalParallel,
-                                                           analysis, loc);
 }
 
 EdtOp ForLoweringPass::createTaskEdtWithRewiring(
@@ -759,9 +684,10 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   AC->setInsertionPointToStart(&ifOp.getThenRegion().front());
 
   /// Detect reduction block arguments
-  DenseSet<Value> reductionBlockArgs = redInfo.reductionVars.empty()
-                                           ? DenseSet<Value>{}
-                                           : detectReductionBlockArgs(forOp);
+  DenseSet<Value> reductionBlockArgs =
+      redInfo.reductionVars.empty()
+          ? DenseSet<Value>{}
+          : detectReductionBlockArgs(forOp);
 
   Value one = AC->createIndexConstant(1, loc);
   Value taskWorkerId = workerIdPlaceholder;
@@ -851,7 +777,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     }
 
     BlockArgument parallelArg = parallelBlock.getArgument(idx);
-    if (shouldSkipReductionArg(parallelArg, redInfo, reductionBlockArgs))
+    if (shouldSkipReductionArg(parallelArg, redInfo,
+                                                  reductionBlockArgs))
       continue;
 
     /// Rewiring: Trace to DbAllocOp and acquire from there
@@ -918,12 +845,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
                                                 stepIsUnit};
 
       AcquireRewritePlan rewritePlan = planAcquireRewrite(planningInput);
-      AcquireRewriteFlavor rewriteFlavor = rewritePlan.useStencilRewriter
-                                               ? AcquireRewriteFlavor::Stencil
-                                               : AcquireRewriteFlavor::Block;
-      std::unique_ptr<EdtRewriter> edtRewriter =
-          EdtRewriter::create(rewriteFlavor);
-      chunkAcqOp = edtRewriter->rewriteAcquire(rewritePlan.rewriteInput);
+      chunkAcqOp = rewriteAcquire(rewritePlan.rewriteInput,
+                                  rewritePlan.useStencilRewriter);
     }
 
     Value acquirePtr = chunkAcqOp.getResult(1);
@@ -1010,8 +933,9 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{zeroIndex});
     redMapper.map(redVar, myAccumulator);
 
-    collectOldAccumulatorDbRefs(forOp, parallelBlock, reductionBlockArgs,
-                                opsToSkip, redMapper, myAccumulator);
+    collectOldAccumulatorDbRefs(
+        forOp, parallelBlock, reductionBlockArgs, opsToSkip, redMapper,
+        myAccumulator);
   }
 
   Block &forBody = forOp.getRegion().front();

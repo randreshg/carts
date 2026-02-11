@@ -60,6 +60,8 @@ public:
   bool dependsOnInductionVar(Value v);
   bool dependsOnInductionVarNormalized(Value v);
   bool isValueLoopInvariant(Value v);
+  bool hasExplicitLoopMetadata() const;
+  bool isParallelizableByMetadata() const;
   static bool dependsOnLoopInit(Value value, Value base);
   static bool dependsOnLoopInitNormalized(Value value, Value base);
 
