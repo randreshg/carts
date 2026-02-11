@@ -14,6 +14,43 @@ H1 partitioning still decides DB layout/rewrite details.
 Related guide:
 - `docs/heuristics/partitioning/partitioning.md`
 
+## 0. Motivation: Bridging AMT, OpenMP, and MPI
+
+CARTS bridges three major parallel programming models, combining the strengths
+of each while avoiding their individual limitations:
+
+| Model | Data Distribution | Computation Distribution | Programmer Burden |
+|-------|------------------|-------------------------|-------------------|
+| **OpenMP** | Shared memory (single node) | Implicit (pragmas) | Low |
+| **MPI** | Explicit per-node allocation | Explicit message passing | High |
+| **AMT (ARTS)** | Was: single-node allocation | Task-based + work-stealing | Medium |
+| **CARTS** | Compiler-managed distributed | Compiler-managed task distribution | Low (OpenMP-like source) |
+
+**The problem.** OpenMP-style source code expresses parallelism through simple
+loop annotations, but the memory model is restricted to a single shared address
+space. MPI achieves multi-node memory scaling through explicit per-node
+allocation and message passing, but at the cost of significant programmer effort.
+ARTS (the underlying AMT runtime) provides dynamic task scheduling, work-stealing,
+and task migration across nodes, but its programming model still requires manual
+data placement decisions.
+
+**What CARTS achieves.** The compiler takes OpenMP-annotated C source and
+automatically:
+
+1. **Distributes memory like MPI** — each node allocates only its portion of
+   data (via `DistributedDbOwnershipPass` and round-robin route selection in
+   `ConvertArtsToLLVM`). Memory capacity scales with node count.
+2. **Distributes computation like AMT** — tasks are routed to nodes based on
+   data ownership, with work-stealing for dynamic load balancing. No manual
+   message passing required.
+3. **Preserves OpenMP-like source** — the programmer writes standard parallel
+   loops. Distribution strategy, data placement, and communication are all
+   compiler-managed decisions.
+
+This positions CARTS as a practical bridge: the ease of OpenMP, the scalability
+of MPI, and the runtime flexibility of AMT — all derived from the same source
+annotation level.
+
 ## 1. ARTS Runtime Capability Summary
 
 ### 1.1 Memory and ownership model
@@ -119,7 +156,7 @@ carts-run input.mlir --stop-at=edt-distribution
 carts-run input.mlir --stop-at=concurrency-opt
 ```
 
-## 6. Distributed DB Ownership (Part 8, in progress)
+## 6. Distributed DB Ownership
 
 Goal:
 - distribute eligible host-level DB allocations across nodes so memory scales
@@ -144,12 +181,20 @@ Current eligibility policy is intentionally conservative:
   EDT dependency wiring)
 - allocation is consumed by internode EDTs
 
-Not yet implemented in this slice:
-- distributed init split (`distributed_db_init` in `initPerNode`)
-- distributed free policy beyond current shutdown behavior
-- ownership policy beyond round-robin (future: writer/strategy-aware mapping)
+Distributed init split is implemented:
+- `ArtsCodegen.cpp` generates a `distributed_db_init` callback that runs on ALL
+  nodes inside `initPerNode`. Each node reserves the same deterministic GUID
+  sequence but only allocates DBs whose GUID encodes its rank.
+- `ConvertArtsToLLVM.cpp` lowers marked multi-DB allocations with
+  `route = linearIndex % artsGetTotalNodes()` and guards `artsDbCreateWithGuid`
+  behind `artsIsGuidLocal`.
 
-## 6. IR Contract
+Future work:
+- distributed free policy beyond current `artsShutdown()` behavior
+- writer-aware ownership (align DB route with writer EDT node)
+- broader eligibility (stencil arrays, global initializers with distributed init EDTs)
+
+## 7. IR Contract
 
 `EdtDistributionPass` annotates top-level `arts.for` in parallel EDT regions with:
 
@@ -159,7 +204,7 @@ Not yet implemented in this slice:
 
 These attributes are consumed by `ForLowering` and propagated to generated epoch/task EDT operations.
 
-## 7. Loop Transform Compatibility (R8)
+## 8. Loop Transform Compatibility (R8)
 
 Question: do loop normalization/reordering transforms harm multi-node distribution?
 
@@ -178,11 +223,11 @@ Pass-level summary (current behavior):
 Future caveat:
 - If distribution expands to full 2D outer-loop ownership transforms, some inner-loop tiling/reordering choices may need explicit coordination metadata.
 
-## 8. Lowering Architecture
+## 9. Lowering Architecture
 
 `ForLowering` now orchestrates strategy-specific helpers instead of owning all logic inline.
 
-### 8.1 Acquire rewriting helpers
+### 9.1 Acquire rewriting helpers
 
 - `EdtRewriter` abstraction:
   - `BlockEdtRewriter`
@@ -190,7 +235,7 @@ Future caveat:
 - Strategy-aware planning extracted into:
   - `AcquireRewritePlanning` (`include/arts/Transforms/Edt/AcquireRewritePlanning.h`, `lib/arts/Transforms/Edt/AcquireRewritePlanning.cpp`)
 
-### 8.2 Task loop lowering helpers
+### 9.2 Task loop lowering helpers
 
 - `EdtTaskLoopLowering` abstraction:
   - `BlockTaskLoopLowering`
@@ -200,11 +245,11 @@ Future caveat:
   `EdtTaskLoopLowering::planAcquireRewrite(...)` so `ForLowering` does not
   embed strategy-specific `acquire_offset/size/hint` branching.
 
-### 8.3 Partitioning integration for 2D owner hints
+### 9.3 Partitioning integration for 2D owner hints
 
 `DbPartitioning` consumes tiling-2D owner hints on writable (`inout`) task acquires to force N-D block ownership where valid.
 
-## 9. Heuristics Placement
+## 10. Heuristics Placement
 
 `DistributionHeuristics` now centralizes:
 - worker topology resolution (`resolveWorkerConfig`)
@@ -214,7 +259,7 @@ Future caveat:
 
 Passes consume the API; they do not duplicate these heuristics.
 
-## 10. Validation Checklist
+## 11. Validation Checklist
 
 ```bash
 ninja -C build carts-run
@@ -235,7 +280,7 @@ Expected checks:
 - checksums unchanged for benchmark kernels
 - node/thread counters show non-zero work on remote nodes for distributed runs
 
-## 11. Compiler-System Design Principles (Survey Notes)
+## 12. Compiler-System Design Principles (Survey Notes)
 
 Practical principles adopted from systems like Halide/Legion/Chapel/HPF/GSPMD/Charm++:
 

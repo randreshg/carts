@@ -28,6 +28,44 @@ using namespace mlir::arts;
 
 namespace {
 
+enum class DistributedRejectReason {
+  None,
+  NestedInEdt,
+  GlobalAllocType,
+  SingleBlock,
+  UnsupportedShape,
+  UnsupportedPtrUsers,
+  UnsupportedGuidUsers,
+  NoInternodeEdtUse,
+};
+
+struct EligibilityResult {
+  bool eligible = false;
+  DistributedRejectReason reason = DistributedRejectReason::None;
+};
+
+static const char *toString(DistributedRejectReason reason) {
+  switch (reason) {
+  case DistributedRejectReason::None:
+    return "eligible";
+  case DistributedRejectReason::NestedInEdt:
+    return "nested_in_edt";
+  case DistributedRejectReason::GlobalAllocType:
+    return "global_alloc";
+  case DistributedRejectReason::SingleBlock:
+    return "single_block";
+  case DistributedRejectReason::UnsupportedShape:
+    return "unsupported_shape";
+  case DistributedRejectReason::UnsupportedPtrUsers:
+    return "unsupported_ptr_users";
+  case DistributedRejectReason::UnsupportedGuidUsers:
+    return "unsupported_guid_users";
+  case DistributedRejectReason::NoInternodeEdtUse:
+    return "no_internode_edt_use";
+  }
+  return "unknown";
+}
+
 static bool hasMultipleAllocationBlocks(DbAllocOp alloc) {
   auto sizes = alloc.getSizes();
   if (sizes.empty())
@@ -41,10 +79,8 @@ static bool hasMultipleAllocationBlocks(DbAllocOp alloc) {
   return true;
 }
 
-/// Distributed ownership requires positive extents, but they can be symbolic
-/// (e.g., node-dependent block sizing computed by distribution heuristics).
 static bool hasSupportedAllocationShape(DbAllocOp alloc) {
-  auto isPositiveOrDynamic = [](Value value) {
+  auto isPositiveOrDynamic = [](Value value) -> bool {
     int64_t constant = 0;
     if (!ValueUtils::getConstantIndex(ValueUtils::stripNumericCasts(value),
                                       constant))
@@ -124,25 +160,25 @@ static bool isUsedByInternodeEdt(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
   return hasInternodeUse;
 }
 
-static bool isEligibleDistributedAlloc(DbAllocOp alloc,
-                                       DbAnalysis &dbAnalysis) {
+static EligibilityResult evaluateDistributedEligibility(DbAllocOp alloc,
+                                                        DbAnalysis &dbAnalysis) {
   if (!alloc)
-    return false;
+    return {false, DistributedRejectReason::UnsupportedShape};
   if (alloc->getParentOfType<EdtOp>())
-    return false;
+    return {false, DistributedRejectReason::NestedInEdt};
   if (alloc.getAllocType() == DbAllocType::global)
-    return false;
+    return {false, DistributedRejectReason::GlobalAllocType};
   if (!hasMultipleAllocationBlocks(alloc))
-    return false;
+    return {false, DistributedRejectReason::SingleBlock};
   if (!hasSupportedAllocationShape(alloc))
-    return false;
+    return {false, DistributedRejectReason::UnsupportedShape};
   if (!hasOnlyAllowedHandleUsers(alloc.getPtr()))
-    return false;
+    return {false, DistributedRejectReason::UnsupportedPtrUsers};
   if (!hasOnlyAllowedHandleUsers(alloc.getGuid()))
-    return false;
+    return {false, DistributedRejectReason::UnsupportedGuidUsers};
   if (!isUsedByInternodeEdt(alloc, dbAnalysis))
-    return false;
-  return true;
+    return {false, DistributedRejectReason::NoInternodeEdtUse};
+  return {true, DistributedRejectReason::None};
 }
 
 struct DistributedDbOwnershipPass
@@ -169,10 +205,15 @@ struct DistributedDbOwnershipPass
     unsigned markedDistributed = 0;
     module.walk([&](DbAllocOp alloc) {
       ++totalAllocs;
-      bool eligible = isEligibleDistributedAlloc(alloc, dbAnalysis);
-      setDistributedDbAllocation(alloc.getOperation(), eligible);
-      if (eligible)
+      EligibilityResult eligibility =
+          evaluateDistributedEligibility(alloc, dbAnalysis);
+      setDistributedDbAllocation(alloc.getOperation(), eligibility.eligible);
+      if (eligibility.eligible)
         ++markedDistributed;
+      else
+        ARTS_DEBUG("Reject DbAlloc arts.id="
+                   << getArtsId(alloc.getOperation())
+                   << " reason=" << toString(eligibility.reason));
     });
 
     ARTS_INFO("DistributedDbOwnership marked " << markedDistributed << " / "

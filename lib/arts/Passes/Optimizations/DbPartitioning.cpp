@@ -211,23 +211,6 @@ static void resetCoarseAcquireRanges(DbAllocOp allocOp, DbAllocNode *allocNode,
   });
 }
 
-/// Compute sizes from PartitioningDecision (uses outerRank/innerRank)
-/// Allocation modes:
-///   - Coarse: sizes=[1], elementSizes=all dims (single datablock)
-///   - ElementWise: sizes=first outerRank dims, elementSizes=remaining dims
-///   - Block: sizes=[numBlocks], elementSizes=[blockSize, remaining dims]
-static void computeSizesFromDecision(DbAllocOp allocOp,
-                                     const PartitioningDecision &decision,
-                                     ArrayRef<Value> blockSizes,
-                                     ArrayRef<unsigned> partitionedDims,
-                                     SmallVector<Value> &newOuterSizes,
-                                     SmallVector<Value> &newInnerSizes) {
-  auto planner = DbPartitionPlanner::create(decision.mode);
-  planner->computeAllocationShape(allocOp, decision, blockSizes,
-                                  partitionedDims, newOuterSizes,
-                                  newInnerSizes);
-}
-
 } // namespace
 
 namespace {
@@ -1256,7 +1239,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                                  << ", innerRank=" << decision.innerRank);
 
   /// Step 5a: Compute stencilInfo early (needed for inner size calculation)
-  /// Must be done before computeSizesFromDecision() for stencil mode.
+  /// Must be done before computeAllocationShape() for stencil mode.
   std::optional<StencilInfo> stencilInfo;
   if (decision.mode == PartitionMode::stencil && allocNode) {
     StencilInfo info;
@@ -1430,31 +1413,9 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     }
   }
 
-  /// For stencil ESD, inner size stays at BASE block size; halos are acquired
-  /// via separate DBs (left/right) using element_offsets into neighboring
-  /// chunks.
-  Value firstBlockSize =
-      blockSizesForPlan.empty() ? Value() : blockSizesForPlan.front();
-  Value innerBlockSize = firstBlockSize;
-  bool extendInnerForStencil = false;
-  if (extendInnerForStencil) {
-    int64_t haloTotal = stencilInfo->haloLeft + stencilInfo->haloRight;
-    Value haloConst = builder.create<arith::ConstantIndexOp>(loc, haloTotal);
-    innerBlockSize =
-        builder.create<arith::AddIOp>(loc, firstBlockSize, haloConst);
-    ARTS_DEBUG("  Extended inner size for stencil: base + " << haloTotal);
-  }
-
   SmallVector<Value> newOuterSizes, newInnerSizes;
-  computeSizesFromDecision(allocOp, decision, blockSizesForPlan,
-                           partitionedDimsForPlan, newOuterSizes,
-                           newInnerSizes);
-  if (extendInnerForStencil) {
-    if (!newInnerSizes.empty())
-      newInnerSizes[0] = innerBlockSize;
-    else
-      newInnerSizes.push_back(innerBlockSize);
-  }
+  computeAllocationShape(decision.mode, allocOp, decision, blockSizesForPlan,
+                         partitionedDimsForPlan, newOuterSizes, newInnerSizes);
 
   if (newOuterSizes.empty()) {
     ARTS_DEBUG("  Size computation failed - keeping original");
@@ -1518,7 +1479,6 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   /// Include ALL acquires - invalid ones get Coarse fallback (offset=0,
   /// size=totalSize)
   SmallVector<DbRewriteAcquire> rewriteAcquires;
-  auto acquirePlanner = DbPartitionPlanner::create(decision.mode);
   for (auto &info : acquireInfos) {
     if (!info.acquire)
       continue;
@@ -1547,8 +1507,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     view.isValid = info.isValid;
     view.hasIndirectAccess = info.hasIndirectAccess;
     view.needsFullRange = info.needsFullRange;
-    acquirePlanner->buildRewriteAcquire(view, allocOp, plan, rewriteInfo,
-                                        builder);
+    buildRewriteAcquire(decision.mode, view, allocOp, plan, rewriteInfo,
+                        builder);
 
     rewriteAcquires.push_back(rewriteInfo);
   }

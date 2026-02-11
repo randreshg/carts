@@ -8,7 +8,6 @@ file(GLOB CARTS_TRANSFORMS_SOURCE_FILES CONFIGURE_DEPENDS
     "Edt/*.cpp"
     "Edt/Block/*.cpp"
     "Edt/Tiling2D/*.cpp"
-    "Edt/Stencil/*.cpp"
     "Loop/*.cpp"
 )
 

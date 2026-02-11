@@ -1041,6 +1041,7 @@ def execute(
         # Partitioning options
         "--partition-fallback",
         "--distributed-db-ownership",
+        "--serial-edtify",
     }
 
     # Check if -O3 or --diagnose is in passthrough args

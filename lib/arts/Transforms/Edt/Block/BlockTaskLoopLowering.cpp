@@ -57,56 +57,7 @@ public:
   TaskLoopLoweringResult
   lower(TaskLoopLoweringInput &input,
         const TaskLoopLoweringMappedValues &mapped) const override {
-    TaskLoopLoweringResult result;
-
-    Value zero = input.AC->createIndexConstant(0, input.loc);
-    Value one = input.AC->createIndexConstant(1, input.loc);
-    result.innerStripeLane = zero;
-    result.innerStripeCount = one;
-
-    result.insideBounds = DistributionHeuristics::recomputeBoundsInside(
-        input.AC, input.loc, input.strategy, input.taskWorkerId,
-        input.totalWorkers, input.workersPerNode, input.upperBound,
-        input.lowerBound, input.loopStep, input.blockSize,
-        input.alignmentBlockSize, input.useRuntimeBlockAlignment);
-    result.iterStart = result.insideBounds.iterStart;
-    result.globalBase = mapped.workerBaseOffset;
-
-    Value loopLower = zero;
-    Value loopUpper = result.insideBounds.iterCount;
-    if (input.useAlignedLowerBound) {
-      Value stepClamped =
-          input.AC->create<arith::MaxUIOp>(input.loc, mapped.step, one);
-
-      auto clampNonNeg = [&](Value v) -> Value {
-        Value isNeg = input.AC->create<arith::CmpIOp>(
-            input.loc, arith::CmpIPredicate::slt, v, zero);
-        return input.AC->create<arith::SelectOp>(input.loc, isNeg, zero, v);
-      };
-      auto ceilDiv = [&](Value num, Value denom) -> Value {
-        Value denomMinusOne =
-            input.AC->create<arith::SubIOp>(input.loc, denom, one);
-        Value adjusted =
-            input.AC->create<arith::AddIOp>(input.loc, num, denomMinusOne);
-        return input.AC->create<arith::DivUIOp>(input.loc, adjusted, denom);
-      };
-
-      Value diffLower = input.AC->create<arith::SubIOp>(
-          input.loc, mapped.lowerBound, mapped.workerBaseOffset);
-      Value diffUpper = input.AC->create<arith::SubIOp>(
-          input.loc, mapped.upperBound, mapped.workerBaseOffset);
-      Value diffLowerPos = clampNonNeg(diffLower);
-      Value diffUpperPos = clampNonNeg(diffUpper);
-
-      loopLower = ceilDiv(diffLowerPos, stepClamped);
-      loopUpper = ceilDiv(diffUpperPos, stepClamped);
-      loopUpper = input.AC->create<arith::MinUIOp>(
-          input.loc, loopUpper, result.insideBounds.iterCount);
-    }
-
-    result.iterLoop =
-        input.AC->create<scf::ForOp>(input.loc, loopLower, loopUpper, one);
-    return result;
+    return lowerBlockStyle(input, mapped);
   }
 };
 

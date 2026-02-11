@@ -21,11 +21,8 @@
 #include "arts/Analysis/Edt/EdtInfo.h"
 #include "arts/Analysis/Graphs/Edt/EdtGraph.h"
 
-/// Forward declarations
 namespace mlir {
 namespace arts {
-class ArtsAnalysisManager;
-class DbGraph;
 
 ///==========================================================================///
 /// EdtAnalysis: per-EDT summaries and pairwise affinity metrics

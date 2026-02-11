@@ -52,6 +52,7 @@ std::unique_ptr<Pass> createEpochLoweringPass();
 std::unique_ptr<Pass> createParallelEdtLoweringPass();
 std::unique_ptr<Pass> createEdtLoweringPass(uint64_t idStride = 1000);
 std::unique_ptr<Pass> createArtsForOptimizationPass(ArtsAnalysisManager *AM);
+std::unique_ptr<Pass> createSerialEdtifyPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createEdtDistributionPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createForLoweringPass();
 std::unique_ptr<Pass> createLoopFusionPass(ArtsAnalysisManager *AM);

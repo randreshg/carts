@@ -54,7 +54,26 @@ constexpr StringLiteral Concurrency = "concurrency";
 // Forward declaration - defined in HeuristicsConfig.h
 struct PartitioningHint;
 
-/// Helper accessors for arts.id on arbitrary operations.
+/// Merge two DbAccessPattern values, keeping the higher-priority pattern.
+/// Priority: stencil > indexed > uniform > unknown.
+inline DbAccessPattern mergeDbAccessPattern(DbAccessPattern lhs,
+                                            DbAccessPattern rhs) {
+  auto rank = [](DbAccessPattern p) -> unsigned {
+    switch (p) {
+    case DbAccessPattern::stencil:
+      return 3;
+    case DbAccessPattern::indexed:
+      return 2;
+    case DbAccessPattern::uniform:
+      return 1;
+    case DbAccessPattern::unknown:
+      return 0;
+    }
+    return 0;
+  };
+  return rank(rhs) > rank(lhs) ? rhs : lhs;
+}
+
 inline int64_t getArtsId(Operation *op) {
   if (!op)
     return 0;
@@ -71,7 +90,6 @@ inline void setArtsId(Operation *op, int64_t id) {
   op->setAttr(AttrNames::Operation::ArtsId, IntegerAttr::get(type, id));
 }
 
-/// Helper accessors for partition_mode attribute (PartitionMode).
 inline std::optional<PartitionMode> getPartitionMode(Operation *op) {
   if (!op)
     return std::nullopt;
@@ -88,7 +106,6 @@ inline void setPartitionMode(Operation *op, PartitionMode mode) {
               PartitionModeAttr::get(op->getContext(), mode));
 }
 
-/// Helper accessors for access_pattern attribute (DbAccessPattern).
 inline std::optional<DbAccessPattern> getDbAccessPattern(Operation *op) {
   if (!op)
     return std::nullopt;
@@ -105,7 +122,6 @@ inline void setDbAccessPattern(Operation *op, DbAccessPattern pattern) {
               DbAccessPatternAttr::get(op->getContext(), pattern));
 }
 
-/// Helper accessors for distributed attribute (UnitAttr on DbAllocOp).
 inline bool hasDistributedDbAllocation(Operation *op) {
   if (!op)
     return false;
@@ -123,7 +139,6 @@ inline void setDistributedDbAllocation(Operation *op, bool enabled) {
   op->removeAttr(AttrNames::Operation::Distributed);
 }
 
-/// Helper accessors for distribution_kind attribute (EdtDistributionKind).
 inline std::optional<EdtDistributionKind>
 getEdtDistributionKind(Operation *op) {
   if (!op)
@@ -141,8 +156,6 @@ inline void setEdtDistributionKind(Operation *op, EdtDistributionKind kind) {
               EdtDistributionKindAttr::get(op->getContext(), kind));
 }
 
-/// Helper accessors for distribution_pattern attribute
-/// (EdtDistributionPattern).
 inline std::optional<EdtDistributionPattern>
 getEdtDistributionPattern(Operation *op) {
   if (!op)
@@ -187,7 +200,6 @@ inline void copyDistributionAttrs(Operation *source, Operation *dest) {
     dest->removeAttr(AttrNames::Operation::DistributionVersion);
 }
 
-/// Helper accessors for stencil_center_offset attribute (i64 IntegerAttr).
 inline std::optional<int64_t> getStencilCenterOffset(Operation *op) {
   if (!op)
     return std::nullopt;
@@ -205,7 +217,6 @@ inline void setStencilCenterOffset(Operation *op, int64_t centerOffset) {
       IntegerAttr::get(IntegerType::get(op->getContext(), 64), centerOffset));
 }
 
-/// Helper accessors for element_stride attribute (index IntegerAttr).
 inline std::optional<int64_t> getElementStride(Operation *op) {
   if (!op)
     return std::nullopt;
@@ -222,7 +233,6 @@ inline void setElementStride(Operation *op, int64_t stride) {
               IntegerAttr::get(IndexType::get(op->getContext()), stride));
 }
 
-/// Helper accessors for stencil halo block-argument indices.
 inline std::optional<unsigned> getLeftHaloArgIndex(Operation *op) {
   if (!op)
     return std::nullopt;
@@ -261,9 +271,7 @@ inline void setRightHaloArgIndex(Operation *op, unsigned argIndex) {
               IntegerAttr::get(IndexType::get(op->getContext()), argIndex));
 }
 
-/// Helper accessors for arts.partition_hint attribute (PartitioningHint).
-/// These use DictionaryAttr for serialization - full implementation in
-/// HeuristicsConfig.cpp
+/// Full implementation in HeuristicsConfig.cpp (uses DictionaryAttr).
 std::optional<PartitioningHint> getPartitioningHint(Operation *op);
 void setPartitioningHint(Operation *op, const PartitioningHint &hint);
 

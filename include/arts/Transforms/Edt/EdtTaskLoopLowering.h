@@ -92,7 +92,6 @@ public:
                              llvm::SetVector<Value> &values) const {}
 
   /// Strategy hook for planning parent-acquire rewrite bounds.
-  /// This keeps strategy-specific acquire window logic out of ForLowering.
   virtual TaskAcquirePlanningResult
   planAcquireRewrite(const TaskLoopLoweringInput &input,
                      Value chunkOffset) const;
@@ -101,6 +100,13 @@ public:
   virtual void postCloneAdjust(TaskLoopPostCloneInput &input) const {}
 
   static std::unique_ptr<EdtTaskLoopLowering> create(DistributionKind kind);
+
+protected:
+  /// Shared lowering for block-based strategies (block, two-level, tiling2D).
+  /// Calls recomputeBoundsInside and applies aligned-lower-bound adjustment.
+  TaskLoopLoweringResult
+  lowerBlockStyle(TaskLoopLoweringInput &input,
+                  const TaskLoopLoweringMappedValues &mapped) const;
 };
 
 namespace detail {

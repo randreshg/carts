@@ -393,6 +393,12 @@ Value EdtLoweringPass::packParams(Location loc, EdtEnvManager &envManager,
       appendIfMissing(off);
     for (Value sz : dbAcquireOp.getSizes())
       appendIfMissing(sz);
+    for (Value partIdx : dbAcquireOp.getPartitionIndices())
+      appendIfMissing(partIdx);
+    for (Value partOff : dbAcquireOp.getPartitionOffsets())
+      appendIfMissing(partOff);
+    for (Value partSize : dbAcquireOp.getPartitionSizes())
+      appendIfMissing(partSize);
   }
 
   if (packValues.empty()) {

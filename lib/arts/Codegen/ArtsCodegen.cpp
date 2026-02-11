@@ -459,9 +459,8 @@ Value ArtsCodegen::createIndexConstant(int64_t value, Location loc) {
 
 Value ArtsCodegen::createIntConstant(int64_t value, Type type, Location loc) {
   assert(type.isa<IntegerType>() && "Expected integer type");
-  auto v = create<arith::ConstantOp>(loc, type,
-                                     getBuilder().getIntegerAttr(type, value));
-  return v;
+  return create<arith::ConstantOp>(loc, type,
+                                   getBuilder().getIntegerAttr(type, value));
 }
 
 Value ArtsCodegen::createPtr(Value source, Location loc) {
@@ -594,10 +593,9 @@ Value ArtsCodegen::castToInt(Type targetType, Value source, Location loc) {
 }
 
 Value ArtsCodegen::castToVoidPtr(Value source, Location loc) {
-  auto valPtr = source;
-  if (!valPtr.getType().isa<LLVM::LLVMPointerType>())
-    valPtr = castToLLVMPtr(source, loc);
-  return create<polygeist::Pointer2MemrefOp>(loc, VoidPtr, valPtr);
+  if (!source.getType().isa<LLVM::LLVMPointerType>())
+    source = castToLLVMPtr(source, loc);
+  return create<polygeist::Pointer2MemrefOp>(loc, VoidPtr, source);
 }
 
 Value ArtsCodegen::castToLLVMPtr(Value source, Location loc) {
@@ -703,10 +701,8 @@ LLVM::LLVMPointerType ArtsCodegen::getLLVMPointerType(Value source) {
 }
 
 Value ArtsCodegen::computeElementTypeSize(Type elementType, Location loc) {
-  /// Insert polygeist type size op
-  auto elementSize = create<polygeist::TypeSizeOp>(
-      loc, IndexType::get(getContext()), elementType);
-  return elementSize;
+  return create<polygeist::TypeSizeOp>(loc, IndexType::get(getContext()),
+                                       elementType);
 }
 
 Value ArtsCodegen::computeTotalElements(ValueRange sizes, Location loc) {
