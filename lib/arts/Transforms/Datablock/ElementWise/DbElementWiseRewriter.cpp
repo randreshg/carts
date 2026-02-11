@@ -25,6 +25,7 @@
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/EdtUtils.h"
+#include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/RemovalUtils.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -153,7 +154,7 @@ void DbElementWiseRewriter::transformAcquire(const DbRewriteAcquire &info,
   /// Store original stride for linearized access (stride = D1 * D2 * ...)
   if (auto staticStride = DatablockUtils::getStaticElementStride(oldAlloc)) {
     if (*staticStride > 1) {
-      acquire->setAttr("element_stride", builder.getIndexAttr(*staticStride));
+      setElementStride(acquire.getOperation(), *staticStride);
       ARTS_DEBUG("Element-wise rewrite: stored stride=" << *staticStride);
     }
   }

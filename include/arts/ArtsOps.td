@@ -108,6 +108,7 @@ def DbAllocOp : Arts_Op<"db_alloc",
     Optional<AnyMemRef>:$address,
     Variadic<Index>:$sizes,
     Variadic<Index>:$elementSizes,
+    OptionalAttr<UnitAttr>:$distributed,
     OptionalAttr<PartitionModeAttr>:$partition_mode,
     OptionalAttr<DbAccessPatternAttr>:$access_pattern
   );
@@ -369,65 +370,6 @@ def DbAcquireOp : Arts_Op<"db_acquire", [AttrSizedOperandSegments]> {
     /// patterns.
     bool hasAllFineGrainedEntries();
   }];
-}
-
-def DbCopyOp : Arts_Op<"db_copy", [MemoryEffects<[MemWrite]>]> {
-  let summary = "Create a copy of a datablock with different partitioning";
-  let description = [{
-    Creates a copy of an existing datablock and returns the new GUID and
-    pointer. The `dest_partition` attribute specifies the desired partitioning
-    for the copy (e.g., fine_grained for element-wise access).
-
-    The source partition mode is inferred from the source allocation.
-    Only source_ptr is needed - source_guid is not used in lowering.
-  }];
-  let arguments = (ins AnyMemRef
-                   : $source_ptr, PartitionModeAttr
-                   : $dest_partition);
-  let results = (outs MemRefOf<[I64]> : $guid, AnyMemRef : $ptr);
-  let assemblyFormat = [{
-    `(` $source_ptr `:` type($source_ptr) `)`
-    `dest_partition` `=` $dest_partition attr-dict
-    `->` `(` type($guid) `,` type($ptr) `)`
-  }];
-  let builders = [OpBuilder<(ins "Value"
-                             : $source_ptr, "PartitionMode"
-                             : $dest_partition)>];
-}
-
-def DbSyncOp : Arts_Op<"db_sync",
-                       [AttrSizedOperandSegments, MemoryEffects<[MemWrite]>]> {
-  let summary = "Copy data from source to dest datablock";
-  let description = [{
-    Copies data from source datablock to dest datablock. Direction is implicit:
-    - source_ptr = where we READ from
-    - dest_ptr = where we WRITE to
-
-    The optional element_offsets/element_sizes describe a logical subrange
-    for partial sync.
-
-    During lowering, this creates a DbAcquireOp on source to establish
-    the dependency chain for distributed execution.
-
-    Only ptrs are needed - guids can be obtained from the allocation.
-  }];
-  let arguments = (ins
-    AnyMemRef:$dest_ptr,
-    AnyMemRef:$source_ptr,
-    Variadic<Index>:$element_offsets,
-    Variadic<Index>:$element_sizes,
-    DefaultValuedAttr<BoolAttr, "true">:$full_sync
-  );
-  let assemblyFormat = [{
-    `(` $dest_ptr `:` type($dest_ptr) `,` $source_ptr `:` type($source_ptr) `)`
-    `element_offsets` `[` $element_offsets `]`
-    `element_sizes` `[` $element_sizes `]` attr-dict
-  }];
-  let builders = [
-    OpBuilder<(ins "Value":$dest_ptr, "Value":$source_ptr,
-                   CArg<"ArrayRef<Value>", "{}">:$element_offsets,
-                   CArg<"ArrayRef<Value>", "{}">:$element_sizes)>
-  ];
 }
 
 def DbRefOp : Arts_Op<"db_ref", [Pure]> {

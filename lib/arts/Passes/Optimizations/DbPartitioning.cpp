@@ -27,7 +27,6 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 /// Other
-#include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Visitors.h"
@@ -38,19 +37,19 @@
 #include "arts/Analysis/Graphs/Edt/EdtGraph.h"
 #include "arts/Analysis/Graphs/Edt/EdtNode.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cstdint>
-#include <cstdlib>
 #include <optional>
 
+#include "arts/Transforms/Datablock/DbBlockPlanResolver.h"
+#include "arts/Transforms/Datablock/DbPartitionDecisionArbiter.h"
+#include "arts/Transforms/Datablock/DbPartitionPlanner.h"
 #include "arts/Transforms/Datablock/DbRewriter.h"
+#include "arts/Transforms/Datablock/StencilBoundsLowering.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/DatablockUtils.h"
-#include "arts/Utils/EdtUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 ARTS_DEBUG_SETUP(db_partitioning);
 
@@ -61,48 +60,6 @@ using namespace mlir::polygeist;
 using namespace mlir::arts;
 
 namespace {
-
-/// Per-acquire partition analysis results for Phase 1.
-/// NOTE: This struct shares partitionOffset/partitionSize fields with
-/// AcquireInfo in HeuristicsConfig.h. They serve different purposes:
-///   - AcquireInfo: For heuristic voting/decision-making (capability flags)
-///   - AcquirePartitionInfo: For actual partitioning transformation state
-/// Future consolidation could create a common base, but current separation
-/// keeps concerns cleanly separated.
-struct AcquirePartitionInfo {
-  DbAcquireOp acquire;
-  PartitionMode mode;
-  /// N-D partition support: vectors for all dimensions
-  SmallVector<Value> partitionOffsets;
-  SmallVector<Value> partitionSizes;
-  SmallVector<unsigned> partitionDims;
-  bool isValid = false;
-  bool hasIndirectAccess = false;
-  /// For mixed mode: this coarse acquire needs full-range access to chunked
-  /// alloc.
-  bool needsFullRange = false;
-
-  /// Check consistency with another acquire.
-  /// Returns true if both acquires can use the same partitioning strategy.
-  bool isConsistentWith(const AcquirePartitionInfo &other) const {
-    if (mode != other.mode)
-      return false;
-    /// For Block mode, sizes must be same SSA value (check first dimension)
-    if (mode == PartitionMode::block && !partitionSizes.empty() &&
-        !other.partitionSizes.empty()) {
-      Value thisSize = partitionSizes.front();
-      Value otherSize = other.partitionSizes.front();
-      if (thisSize != otherSize) {
-        int64_t lhs = 0, rhs = 0;
-        bool lhsConst = ValueUtils::getConstantIndex(thisSize, lhs);
-        bool rhsConst = ValueUtils::getConstantIndex(otherSize, rhs);
-        if (!(lhsConst && rhsConst && lhs == rhs))
-          return false;
-      }
-    }
-    return true;
-  }
-};
 
 /// Validate that element-wise partition indices match actual EDT accesses.
 /// Returns false if this is a block-wise pattern (indices are block corners,
@@ -169,16 +126,6 @@ getPartitionOffsetsND(DbAcquireNode *acqNode,
   return result;
 }
 
-static bool isTiling2DTaskAcquire(DbAcquireOp acquire) {
-  if (!acquire)
-    return false;
-  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
-  if (!edt)
-    return false;
-  auto kind = getEdtDistributionKind(edt.getOperation());
-  return kind && *kind == EdtDistributionKind::tiling_2d;
-}
-
 /// Pick a representative partition offset (prefer non-constant).
 /// Returns the chosen offset and its index via outIdx when provided.
 static Value pickRepresentativePartitionOffset(ArrayRef<Value> offsets,
@@ -206,319 +153,28 @@ static Value pickRepresentativePartitionOffset(ArrayRef<Value> offsets,
   return Value();
 }
 
-/// Pick a partition size that matches the chosen offset index.
-static Value pickRepresentativePartitionSize(ArrayRef<Value> sizes,
-                                             unsigned idx) {
-  if (sizes.empty())
-    return Value();
-  if (idx < sizes.size() && sizes[idx])
-    return sizes[idx];
-  return sizes.front();
-}
-
 /// Analyze a single acquire to determine its partition mode and chunk info.
 static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
                                                         DbAcquireNode *acqNode,
-                                                        DbAllocOp allocOp,
-                                                        OpBuilder &builder,
-                                                        Location loc) {
-  auto refineSizeFromMinInBlock = [&](Value offset, Value sizeHint) -> Value {
-    if (!offset || !sizeHint)
-      return Value();
-    int64_t sizeConst = 0;
-    bool sizeIsConst = ValueUtils::getConstantIndex(sizeHint, sizeConst);
-    auto isSameConst = [&](Value v) -> bool {
-      int64_t val = 0;
-      return ValueUtils::getConstantIndex(v, val) && val == sizeConst;
-    };
-    for (Operation &op : *acquire->getBlock()) {
-      Value refined;
-      auto tryRefine = [&](Value lhs, Value rhs, Value result) {
-        bool lhsIsHint = (lhs == sizeHint) || (sizeIsConst && isSameConst(lhs));
-        bool rhsIsHint = (rhs == sizeHint) || (sizeIsConst && isSameConst(rhs));
-        if (lhsIsHint && ValueUtils::dependsOn(rhs, offset))
-          refined = result;
-        else if (rhsIsHint && ValueUtils::dependsOn(lhs, offset))
-          refined = result;
-      };
-
-      if (auto minOp = dyn_cast<arith::MinUIOp>(&op)) {
-        tryRefine(minOp.getLhs(), minOp.getRhs(), minOp.getResult());
-      } else if (auto minOp = dyn_cast<arith::MinSIOp>(&op)) {
-        tryRefine(minOp.getLhs(), minOp.getRhs(), minOp.getResult());
-      }
-
-      if (refined)
-        return refined;
-    }
-    return Value();
-  };
-
-  auto inferPartitionDims = [&](AcquirePartitionInfo &info) {
-    if (!acqNode || info.partitionOffsets.empty())
-      return;
-    info.partitionDims.clear();
-    SmallVector<unsigned, 4> seen;
-    for (Value off : info.partitionOffsets) {
-      if (!off) {
-        info.partitionDims.clear();
-        return;
-      }
-      auto dimOpt =
-          acqNode->getPartitionOffsetDim(off, /*requireLeading=*/false);
-      if (!dimOpt) {
-        info.partitionDims.clear();
-        return;
-      }
-      bool alreadySeen = false;
-      for (unsigned seenDim : seen) {
-        if (seenDim == *dimOpt) {
-          alreadySeen = true;
-          break;
-        }
-      }
-      if (alreadySeen) {
-        info.partitionDims.clear();
-        return;
-      }
-      seen.push_back(*dimOpt);
-      info.partitionDims.push_back(*dimOpt);
-    }
-  };
-  auto applyTiling2DPartitionDimsFallback = [&](AcquirePartitionInfo &info) {
-    if (!isTiling2DTaskAcquire(acquire))
-      return;
-    if (!info.partitionDims.empty())
-      return;
-    if (info.partitionOffsets.size() < 2)
-      return;
-    info.partitionDims.clear();
-    for (unsigned d = 0; d < info.partitionOffsets.size(); ++d)
-      info.partitionDims.push_back(d);
-  };
-
+                                                        OpBuilder &builder) {
   AcquirePartitionInfo info;
   info.acquire = acquire;
-  info.mode = DatablockUtils::getPartitionModeFromStructure(acquire);
-  if (info.mode == PartitionMode::coarse) {
-    if (!acquire.getPartitionIndices().empty())
-      info.mode = PartitionMode::fine_grained;
-    else if (!acquire.getPartitionOffsets().empty() ||
-             !acquire.getPartitionSizes().empty())
-      info.mode = PartitionMode::block;
+  DbAnalysis::AcquirePartitionSummary summary;
+  if (acqNode && acqNode->getAnalysis())
+    summary = acqNode->getAnalysis()->analyzeAcquirePartition(acquire, builder);
+  else {
+    summary.mode = DatablockUtils::getPartitionModeFromStructure(acquire);
+    summary.isValid = false;
   }
-  if (acqNode)
-    info.hasIndirectAccess = acqNode->hasIndirectAccess();
-
-  ARTS_DEBUG("analyzeAcquirePartitioning for: " << acquire);
-  ARTS_DEBUG("  acqNode: " << (acqNode ? "present" : "null"));
-  ARTS_DEBUG("  hasMultiplePartitionEntries: "
-             << acquire.hasMultiplePartitionEntries());
-  ARTS_DEBUG(
-      "  hasAllFineGrainedEntries: " << acquire.hasAllFineGrainedEntries());
-  ARTS_DEBUG(
-      "  partitionIndices.empty: " << acquire.getPartitionIndices().empty());
-  ARTS_DEBUG("  initial mode: " << static_cast<int>(info.mode));
-
-  if (acqNode) {
-    ARTS_DEBUG("  acqNode->getAccessPattern(): "
-               << static_cast<int>(acqNode->getAccessPattern()));
-    if (acqNode->getAccessPattern() == AccessPattern::Stencil) {
-      /// Task-based dependences provide explicit fine-grained indices and
-      /// should NOT trigger stencil/ESD mode. Stencil mode applies to
-      /// parallel-for style patterns where block partitioning is desired.
-      bool hasExplicitFineGrained = false;
-      if (info.mode == PartitionMode::fine_grained)
-        hasExplicitFineGrained = true;
-      if (auto mode = acquire.getPartitionMode()) {
-        if (*mode == PartitionMode::fine_grained)
-          hasExplicitFineGrained = true;
-      }
-      if (acquire.hasAllFineGrainedEntries())
-        hasExplicitFineGrained = true;
-
-      ARTS_DEBUG("  hasExplicitFineGrained: " << hasExplicitFineGrained);
-      if (!hasExplicitFineGrained) {
-        ARTS_DEBUG("  -> Setting mode to stencil (AccessPattern::Stencil, no "
-                   "fine-grained)");
-        info.mode = PartitionMode::stencil;
-      }
-    }
-  } else if (acquire.hasMultiplePartitionEntries() &&
-             !acquire.hasAllFineGrainedEntries()) {
-    // Only use stencil mode if NOT all entries are fine_grained (task deps)
-    int64_t minOffset = 0;
-    int64_t maxOffset = 0;
-    if (DatablockUtils::hasMultiEntryStencilPattern(acquire, minOffset,
-                                                    maxOffset)) {
-      ARTS_DEBUG(
-          "  -> Setting mode to stencil (multi-entry pattern, no acqNode)");
-      info.mode = PartitionMode::stencil;
-    }
-  }
-  ARTS_DEBUG("  final mode: " << static_cast<int>(info.mode));
-
-  switch (info.mode) {
-  case PartitionMode::coarse:
-    /// No partitioning needed
-    info.isValid = true;
-    if (acqNode) {
-      Value offset, size;
-      if (succeeded(acqNode->computeBlockInfo(offset, size))) {
-        info.partitionOffsets.push_back(offset);
-        info.partitionSizes.push_back(size);
-        unsigned offsetIdx = 0;
-        Value repOffset = pickRepresentativePartitionOffset(
-            info.partitionOffsets, &offsetIdx);
-        Value repSize =
-            pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
-        if (Value refined = refineSizeFromMinInBlock(repOffset, repSize)) {
-          if (offsetIdx < info.partitionSizes.size())
-            info.partitionSizes[offsetIdx] = refined;
-          else if (!info.partitionSizes.empty())
-            info.partitionSizes[0] = refined;
-          ARTS_DEBUG("  Refined partition size from min: "
-                     << info.partitionSizes.front());
-        }
-        inferPartitionDims(info);
-      } else {
-        info.isValid = false;
-      }
-    } else {
-      info.isValid = false;
-    }
-    break;
-
-  case PartitionMode::fine_grained:
-    /// Use partition_indices as partition offsets (element-space hints)
-    /// N-D support: iterate ALL partition indices
-    if (!acquire.getPartitionIndices().empty()) {
-      for (Value idx : acquire.getPartitionIndices())
-        info.partitionOffsets.push_back(idx);
-      /// Each dimension has size 1 for fine-grained
-      Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
-      for (unsigned i = 0; i < info.partitionOffsets.size(); ++i)
-        info.partitionSizes.push_back(one);
-      info.isValid = true;
-      inferPartitionDims(info);
-    }
-    break;
-
-  case PartitionMode::block:
-  case PartitionMode::stencil:
-    /// FIRST: Trust partition hints from CreateDbs (authoritative source).
-    /// CreateDbs sets partition_offsets/sizes based on DbControlOp analysis
-    /// which happens BEFORE EDT outlining. Re-validation inside EDT scope
-    /// fails because the partition offset (e.g., outer loop IV) is not visible.
-    if (!acquire.getPartitionOffsets().empty()) {
-      /// N-D support: use all partition offsets/sizes
-      for (Value off : acquire.getPartitionOffsets())
-        info.partitionOffsets.push_back(off);
-      auto sizes = acquire.getPartitionSizes();
-      Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
-      for (unsigned i = 0; i < info.partitionOffsets.size(); ++i) {
-        info.partitionSizes.push_back(i < sizes.size() ? sizes[i] : one);
-      }
-      info.isValid = true;
-      unsigned offsetIdx = 0;
-      Value repOffset =
-          pickRepresentativePartitionOffset(info.partitionOffsets, &offsetIdx);
-      Value repSize =
-          pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
-      ARTS_DEBUG("  Using partition hints from CreateDbs: offset="
-                 << repOffset << ", size=" << repSize);
-
-      if (Value refined = refineSizeFromMinInBlock(repOffset, repSize)) {
-        if (offsetIdx < info.partitionSizes.size())
-          info.partitionSizes[offsetIdx] = refined;
-        else if (!info.partitionSizes.empty())
-          info.partitionSizes[0] = refined;
-        ARTS_DEBUG("  Refined partition size from min: "
-                   << info.partitionSizes.front());
-      }
-
-      /// If loop analysis yields a dynamic size tied to the same offset,
-      /// prefer it over static hints. Avoid overriding with unrelated loops.
-      if (acqNode) {
-        Value loopOffset, loopSize;
-        if (succeeded(acqNode->computeBlockInfo(loopOffset, loopSize))) {
-          bool useLoopSize = false;
-          int64_t hintConst = 0;
-          int64_t loopConst = 0;
-          Value hintSize =
-              pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
-          Value hintOff = pickRepresentativePartitionOffset(
-              info.partitionOffsets, &offsetIdx);
-          bool hintIsConst =
-              hintSize && ValueUtils::getConstantIndex(hintSize, hintConst);
-          bool loopIsConst = ValueUtils::getConstantIndex(loopSize, loopConst);
-
-          bool offsetRelated = false;
-          if (hintOff && loopOffset) {
-            Value hintOffStripped = ValueUtils::stripNumericCasts(hintOff);
-            Value loopOff = ValueUtils::stripNumericCasts(loopOffset);
-            if (hintOffStripped == loopOff)
-              offsetRelated = true;
-            if (!offsetRelated &&
-                (ValueUtils::dependsOn(loopOff, hintOffStripped) ||
-                 ValueUtils::dependsOn(hintOffStripped, loopOff)))
-              offsetRelated = true;
-            if (!offsetRelated) {
-              int64_t hintOffConst = 0;
-              int64_t loopOffConst = 0;
-              if (ValueUtils::getConstantIndex(hintOffStripped, hintOffConst) &&
-                  ValueUtils::getConstantIndex(loopOff, loopOffConst) &&
-                  hintOffConst == loopOffConst)
-                offsetRelated = true;
-            }
-          }
-
-          bool loopSizeDependsOnOffset =
-              hintOff && ValueUtils::dependsOn(loopSize, hintOff);
-
-          if (loopSizeDependsOnOffset)
-            useLoopSize = true;
-          if (offsetRelated && !loopIsConst)
-            useLoopSize = true;
-          if (offsetRelated && hintIsConst && loopIsConst &&
-              hintConst != loopConst)
-            useLoopSize = true;
-
-          if (useLoopSize) {
-            if (offsetIdx < info.partitionSizes.size())
-              info.partitionSizes[offsetIdx] = loopSize;
-            else if (!info.partitionSizes.empty())
-              info.partitionSizes[0] = loopSize;
-            else
-              info.partitionSizes.push_back(loopSize);
-            ARTS_DEBUG("  Overriding partition size from loop: "
-                       << info.partitionSizes.front());
-          }
-        }
-      }
-      inferPartitionDims(info);
-      applyTiling2DPartitionDimsFallback(info);
-      break;
-    }
-    /// FALLBACK: Try computeBlockInfo for cases without CreateDbs hints.
-    /// This handles legacy paths or manually constructed IR.
-    if (acqNode) {
-      Value offset, size;
-      if (succeeded(acqNode->computeBlockInfo(offset, size))) {
-        info.partitionOffsets.push_back(offset);
-        info.partitionSizes.push_back(size);
-        info.isValid = true;
-        ARTS_DEBUG("  Computed block info from access analysis");
-        inferPartitionDims(info);
-        applyTiling2DPartitionDimsFallback(info);
-      } else {
-        /// Validation failed -> fall back to coarse for correctness.
-        info.mode = PartitionMode::coarse;
-        ARTS_DEBUG("  Block info computation failed, falling back to coarse");
-      }
-    }
-    break;
-  }
+  info.mode = summary.mode;
+  info.partitionOffsets.assign(summary.partitionOffsets.begin(),
+                               summary.partitionOffsets.end());
+  info.partitionSizes.assign(summary.partitionSizes.begin(),
+                             summary.partitionSizes.end());
+  info.partitionDims.assign(summary.partitionDims.begin(),
+                            summary.partitionDims.end());
+  info.isValid = summary.isValid;
+  info.hasIndirectAccess = summary.hasIndirectAccess;
 
   return info;
 }
@@ -566,341 +222,10 @@ static void computeSizesFromDecision(DbAllocOp allocOp,
                                      ArrayRef<unsigned> partitionedDims,
                                      SmallVector<Value> &newOuterSizes,
                                      SmallVector<Value> &newInnerSizes) {
-  OpBuilder builder(allocOp);
-  Location loc = allocOp.getLoc();
-  ValueRange elemSizes = allocOp.getElementSizes();
-
-  if (decision.isBlock() && !blockSizes.empty()) {
-    /// N-D Block partitioning: compute numBlocks per dimension
-    /// For each partitioned dimension d:
-    ///   newOuterSizes[d] = ceil(elemSizes[d] / blockSizes[d])
-    ///   newInnerSizes[d] = blockSizes[d]
-    Type i64Type = builder.getI64Type();
-    Value oneI64 = builder.create<arith::ConstantIntOp>(loc, 1, 64);
-
-    unsigned nPartDims = blockSizes.size();
-    if (!partitionedDims.empty()) {
-      /// Non-leading partitioning: outer sizes follow partitionedDims order,
-      /// inner sizes preserve original dimension order.
-      SmallVector<int64_t> dimToPart(elemSizes.size(), -1);
-      for (unsigned p = 0; p < partitionedDims.size(); ++p) {
-        if (partitionedDims[p] < elemSizes.size())
-          dimToPart[partitionedDims[p]] = static_cast<int64_t>(p);
-      }
-
-      for (unsigned p = 0; p < nPartDims; ++p) {
-        unsigned dim = p < partitionedDims.size() ? partitionedDims[p] : p;
-        if (dim >= elemSizes.size())
-          continue;
-        Value bs = blockSizes[p];
-        if (!bs ||
-            ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(bs)))
-          continue;
-
-        Value dimSize = elemSizes[dim];
-
-        /// numBlocks = ceil(dim / blockSize) = (dim + blockSize - 1) /
-        /// blockSize
-        Value dimI64 =
-            builder.create<arith::IndexCastOp>(loc, i64Type, dimSize);
-        Value bsI64 = builder.create<arith::IndexCastOp>(loc, i64Type, bs);
-        Value sum = builder.create<arith::AddIOp>(loc, dimI64, bsI64);
-        Value sumMinusOne = builder.create<arith::SubIOp>(loc, sum, oneI64);
-        Value numBlocksI64 =
-            builder.create<arith::DivUIOp>(loc, sumMinusOne, bsI64);
-        Value numBlocks = builder.create<arith::IndexCastOp>(
-            loc, builder.getIndexType(), numBlocksI64);
-
-        newOuterSizes.push_back(numBlocks);
-      }
-
-      for (unsigned d = 0; d < elemSizes.size(); ++d) {
-        int64_t partIdx = dimToPart[d];
-        if (partIdx >= 0 && static_cast<unsigned>(partIdx) < blockSizes.size())
-          newInnerSizes.push_back(blockSizes[partIdx]);
-        else
-          newInnerSizes.push_back(elemSizes[d]);
-      }
-    } else {
-      for (unsigned d = 0; d < nPartDims && d < elemSizes.size(); ++d) {
-        Value bs = blockSizes[d];
-        if (!bs ||
-            ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(bs)))
-          continue;
-
-        Value dim = elemSizes[d];
-
-        /// numBlocks = ceil(dim / blockSize) = (dim + blockSize - 1) /
-        /// blockSize
-        Value dimI64 = builder.create<arith::IndexCastOp>(loc, i64Type, dim);
-        Value bsI64 = builder.create<arith::IndexCastOp>(loc, i64Type, bs);
-        Value sum = builder.create<arith::AddIOp>(loc, dimI64, bsI64);
-        Value sumMinusOne = builder.create<arith::SubIOp>(loc, sum, oneI64);
-        Value numBlocksI64 =
-            builder.create<arith::DivUIOp>(loc, sumMinusOne, bsI64);
-        Value numBlocks = builder.create<arith::IndexCastOp>(
-            loc, builder.getIndexType(), numBlocksI64);
-
-        newOuterSizes.push_back(numBlocks);
-        newInnerSizes.push_back(bs);
-      }
-
-      /// Remaining non-partitioned dims go to inner
-      for (unsigned d = nPartDims; d < elemSizes.size(); ++d)
-        newInnerSizes.push_back(elemSizes[d]);
-    }
-
-    /// Ensure non-empty
-    if (newOuterSizes.empty())
-      newOuterSizes.push_back(builder.create<arith::ConstantIndexOp>(loc, 1));
-    if (newInnerSizes.empty())
-      newInnerSizes.push_back(builder.create<arith::ConstantIndexOp>(loc, 1));
-
-  } else if (decision.isFineGrained()) {
-    /// ElementWise: use outerRank from decision
-    unsigned outerRank = decision.outerRank;
-
-    /// First outerRank dims go to outer
-    for (unsigned i = 0; i < outerRank && i < elemSizes.size(); ++i)
-      newOuterSizes.push_back(elemSizes[i]);
-
-    /// Remaining dims go to inner
-    for (unsigned i = outerRank; i < elemSizes.size(); ++i)
-      newInnerSizes.push_back(elemSizes[i]);
-
-    /// Ensure non-empty inner
-    if (newInnerSizes.empty())
-      newInnerSizes.push_back(builder.create<arith::ConstantIndexOp>(loc, 1));
-
-  } else {
-    /// Coarse-grained: single datablock with all dims as element sizes
-    /// sizes=[1], elementSizes=all element dimensions
-    newOuterSizes.push_back(builder.create<arith::ConstantIndexOp>(loc, 1));
-    for (Value dim : elemSizes)
-      newInnerSizes.push_back(dim);
-    /// Ensure non-empty inner
-    if (newInnerSizes.empty())
-      newInnerSizes.push_back(builder.create<arith::ConstantIndexOp>(loc, 1));
-  }
-}
-
-/// Trace a value through EDT block arguments to find a dominating value.
-static Value traceValueThroughEdt(Value v, DbAllocOp allocOp,
-                                  DominanceInfo &domInfo, unsigned depth = 0) {
-  if (!v || depth > 16)
-    return nullptr;
-
-  /// If the value already dominates, return it directly
-  if (domInfo.properlyDominates(v, allocOp))
-    return v;
-
-  /// Handle EDT block arguments
-  if (auto blockArg = dyn_cast<BlockArgument>(v)) {
-    Block *block = blockArg.getOwner();
-    if (auto edt = dyn_cast<EdtOp>(block->getParentOp())) {
-      unsigned argIndex = blockArg.getArgNumber();
-      ValueRange deps = edt.getDependencies();
-      if (argIndex < deps.size()) {
-        Value dep = deps[argIndex];
-        /// Recursively trace (could be nested EDTs or DbAcquire)
-        return traceValueThroughEdt(dep, allocOp, domInfo, depth + 1);
-      }
-    }
-  }
-
-  /// Handle DbAcquireOp - trace to source
-  if (auto acqOp = v.getDefiningOp<DbAcquireOp>()) {
-    /// For firstprivate values, the acquire's source might dominate
-    if (Value src = acqOp.getSourcePtr())
-      return traceValueThroughEdt(src, allocOp, domInfo, depth + 1);
-  }
-
-  return nullptr;
-}
-
-/// Trace block size through arithmetic ops to recreate at allocation point.
-/// Supports division, bounds (minsi/maxsi), select, arithmetic, and casts.
-/// For minsi/select, uses partial operand fallback when only one arm traces.
-static Value traceBackBlockSize(Value blockSize, DbAllocOp allocOp,
-                                OpBuilder &builder, DominanceInfo &domInfo,
-                                Location loc);
-
-/// Fallback: derive a dominating block size from allocation size + workers.
-/// This keeps block partitioning viable when hints are loop-scoped and
-/// non-dominating. The formula is ceil(elemSize / workers), clamped to >= 1.
-static Value computeDefaultBlockSize(DbAllocOp allocOp, OpBuilder &builder,
-                                     Location loc, bool useNodes) {
-  if (allocOp.getElementSizes().empty())
-    return nullptr;
-
-  Value elemSize = allocOp.getElementSizes().front();
-  if (!elemSize)
-    return nullptr;
-
-  Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
-  Value parallelI32 = useNodes
-                          ? builder.create<GetTotalNodesOp>(loc).getResult()
-                          : builder.create<GetTotalWorkersOp>(loc).getResult();
-  Value workers = builder.create<arith::IndexCastUIOp>(
-      loc, builder.getIndexType(), parallelI32);
-  Value workersClamped = builder.create<arith::MaxUIOp>(loc, workers, one);
-
-  Value workersMinusOne =
-      builder.create<arith::SubIOp>(loc, workersClamped, one);
-  Value adjusted =
-      builder.create<arith::AddIOp>(loc, elemSize, workersMinusOne);
-  Value blockSize =
-      builder.create<arith::DivUIOp>(loc, adjusted, workersClamped);
-  blockSize = builder.create<arith::MaxUIOp>(loc, blockSize, one);
-  return blockSize;
-}
-
-/// Check if operand dominates allocation, or trace through EDT block args.
-static Value getDominatingOperand(Value operand, DbAllocOp allocOp,
-                                  DominanceInfo &domInfo) {
-  if (domInfo.properlyDominates(operand, allocOp))
-    return operand;
-  return traceValueThroughEdt(operand, allocOp, domInfo);
-}
-
-/// Check dominance first, then attempt full trace-back with reconstruction.
-static Value getTracedOrDominatingOperand(Value operand, DbAllocOp allocOp,
-                                          OpBuilder &builder,
-                                          DominanceInfo &domInfo,
-                                          Location loc) {
-  if (Value dom = getDominatingOperand(operand, allocOp, domInfo))
-    return dom;
-  return traceBackBlockSize(operand, allocOp, builder, domInfo, loc);
-}
-
-static Value traceBackBlockSize(Value blockSize, DbAllocOp allocOp,
-                                OpBuilder &builder, DominanceInfo &domInfo,
-                                Location loc) {
-  if (!blockSize)
-    return nullptr;
-
-  /// If the value already dominates the allocation, reuse it directly.
-  if (domInfo.properlyDominates(blockSize, allocOp))
-    return blockSize;
-
-  Operation *defOp = blockSize.getDefiningOp();
-  if (!defOp) {
-    /// Block size is a block argument - try to trace through EDT
-    if (auto blockArg = dyn_cast<BlockArgument>(blockSize)) {
-      if (Value traced = traceValueThroughEdt(blockSize, allocOp, domInfo))
-        return traced;
-    }
-    return nullptr;
-  }
-
-  auto traceOperand = [&](Value v) -> Value {
-    return getTracedOrDominatingOperand(v, allocOp, builder, domInfo, loc);
-  };
-  auto traceCond = [&](Value v) -> Value {
-    return getDominatingOperand(v, allocOp, domInfo);
-  };
-
-  /// Division patterns (block_size = N / tasks)
-  if (auto op = dyn_cast<arith::DivSIOp>(defOp))
-    return ValueUtils::traceBinaryOp(op, allocOp, builder, loc, traceOperand);
-  if (auto op = dyn_cast<arith::DivUIOp>(defOp))
-    return ValueUtils::traceBinaryOp(op, allocOp, builder, loc, traceOperand);
-  if (auto op = dyn_cast<arith::CeilDivSIOp>(defOp))
-    return ValueUtils::traceBinaryOp(op, allocOp, builder, loc, traceOperand);
-  if (auto op = dyn_cast<arith::CeilDivUIOp>(defOp))
-    return ValueUtils::traceBinaryOp(op, allocOp, builder, loc, traceOperand);
-
-  /// Cast patterns (unwrap and trace source)
-  if (auto castOp = dyn_cast<arith::IndexCastOp>(defOp)) {
-    if (Value inner = traceBackBlockSize(castOp.getIn(), allocOp, builder,
-                                         domInfo, loc)) {
-      if (inner.getType() == castOp.getType())
-        return inner;
-      return builder.create<arith::IndexCastOp>(loc, castOp.getType(), inner);
-    }
-    return nullptr;
-  }
-  if (auto castOp = dyn_cast<arith::IndexCastUIOp>(defOp)) {
-    if (Value inner = traceBackBlockSize(castOp.getIn(), allocOp, builder,
-                                         domInfo, loc)) {
-      if (inner.getType() == castOp.getType())
-        return inner;
-      return builder.create<arith::IndexCastUIOp>(loc, castOp.getType(), inner);
-    }
-    return nullptr;
-  }
-  if (auto castOp = dyn_cast<arith::ExtSIOp>(defOp)) {
-    if (Value inner =
-            traceBackBlockSize(castOp.getIn(), allocOp, builder, domInfo, loc))
-      return builder.create<arith::ExtSIOp>(loc, castOp.getType(), inner);
-    return nullptr;
-  }
-  if (auto castOp = dyn_cast<arith::ExtUIOp>(defOp)) {
-    if (Value inner =
-            traceBackBlockSize(castOp.getIn(), allocOp, builder, domInfo, loc))
-      return builder.create<arith::ExtUIOp>(loc, castOp.getType(), inner);
-    return nullptr;
-  }
-  if (auto castOp = dyn_cast<arith::TruncIOp>(defOp)) {
-    if (Value inner =
-            traceBackBlockSize(castOp.getIn(), allocOp, builder, domInfo, loc))
-      return builder.create<arith::TruncIOp>(loc, castOp.getType(), inner);
-    return nullptr;
-  }
-
-  /// Bounds patterns (clamping with max/min)
-  if (auto op = dyn_cast<arith::MaxSIOp>(defOp))
-    return ValueUtils::traceBinaryOp(op, allocOp, builder, loc, traceOperand);
-  if (auto op = dyn_cast<arith::MaxUIOp>(defOp))
-    return ValueUtils::traceBinaryOp(op, allocOp, builder, loc, traceOperand);
-  if (auto op = dyn_cast<arith::MinSIOp>(defOp))
-    return ValueUtils::traceMinSIWithFallback(op, allocOp, builder, loc,
-                                              traceOperand);
-  if (auto op = dyn_cast<arith::MinUIOp>(defOp))
-    return ValueUtils::traceMinUIWithFallback(op, allocOp, builder, loc,
-                                              traceOperand);
-
-  /// Conditional pattern (select with fallback)
-  if (auto op = dyn_cast<arith::SelectOp>(defOp))
-    return ValueUtils::traceSelectWithFallback(op, allocOp, builder, loc,
-                                               traceOperand, traceCond);
-
-  /// Arithmetic patterns (add, sub, mul)
-  if (auto op = dyn_cast<arith::SubIOp>(defOp))
-    return ValueUtils::traceBinaryOp(op, allocOp, builder, loc, traceOperand);
-  if (auto op = dyn_cast<arith::AddIOp>(defOp))
-    return ValueUtils::traceBinaryOp(op, allocOp, builder, loc, traceOperand);
-  if (auto op = dyn_cast<arith::MulIOp>(defOp))
-    return ValueUtils::traceBinaryOp(op, allocOp, builder, loc, traceOperand);
-
-  /// ARTS runtime queries: recreate at allocation point
-  if (isa<GetTotalWorkersOp>(defOp)) {
-    builder.setInsertionPoint(allocOp);
-    return builder.create<GetTotalWorkersOp>(loc).getResult();
-  }
-  if (isa<GetTotalNodesOp>(defOp)) {
-    builder.setInsertionPoint(allocOp);
-    return builder.create<GetTotalNodesOp>(loc).getResult();
-  }
-
-  /// Constant patterns (recreate at allocation point)
-  if (auto constOp = dyn_cast<arith::ConstantOp>(defOp)) {
-    if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
-      if (intAttr.getInt() == 0)
-        return nullptr;
-    }
-    builder.setInsertionPoint(allocOp);
-    return builder.create<arith::ConstantOp>(loc, constOp.getType(),
-                                             constOp.getValue());
-  }
-  if (auto constIdxOp = dyn_cast<arith::ConstantIndexOp>(defOp)) {
-    if (constIdxOp.value() == 0)
-      return nullptr;
-    builder.setInsertionPoint(allocOp);
-    return builder.create<arith::ConstantIndexOp>(loc, constIdxOp.value());
-  }
-
-  return nullptr; /// Cannot trace back - unsupported pattern
+  auto planner = DbPartitionPlanner::create(decision.mode);
+  planner->computeAllocationShape(allocOp, decision, blockSizes,
+                                  partitionedDims, newOuterSizes,
+                                  newInnerSizes);
 }
 
 } // namespace
@@ -927,11 +252,6 @@ struct DbPartitioningPass
 
   /// Analyze stencil access patterns and generate bounds check flags.
   void analyzeStencilBounds();
-
-  /// Generate runtime bounds validation for stencil accesses.
-  /// Creates conditional guards for out-of-bounds stencil offsets.
-  void generateBoundsValid(DbAcquireOp acquireOp,
-                           ArrayRef<int64_t> boundsCheckFlags, Value loopIV);
 
   ///===--------------------------------------------------------------------===///
   /// Graph Management
@@ -1502,7 +822,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         return;
 
       auto info = computeAcquirePartitionInfo(acqNode->getDbAcquireOp(),
-                                              acqNode, allocOp, builder, loc);
+                                              acqNode, builder);
       if (!info.isValid) {
         ARTS_DEBUG("  Acquire analysis failed for "
                    << acqNode->getDbAcquireOp());
@@ -1520,25 +840,10 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     return allocOp;
   }
 
-  /// Step 2: Determine partition capabilities from acquires
-  const auto &reference = acquireInfos.front();
-  PartitionMode consistentMode = reference.mode;
-  bool modesConsistent = true;
-
-  for (size_t i = 1; i < acquireInfos.size(); ++i) {
-    if (!reference.isConsistentWith(acquireInfos[i])) {
-      modesConsistent = false;
-      ARTS_DEBUG("  Inconsistent partition modes across acquires");
-      break;
-    }
-  }
-
-  /// Step 3: Build PartitioningContext and check for non-leading offsets
+  /// Step 2: Build PartitioningContext and check for non-leading offsets
   PartitioningContext ctx;
   ctx.machine = &AM->getAbstractMachine();
   bool canUseBlock = true; /// Assume chunked is possible until proven otherwise
-  bool anyBlockCapable = false;
-  bool anyBlockNotFullRange = false;
 
   if (allocNode) {
     ctx.accessPatterns = allocNode->summarizeAcquirePatterns();
@@ -1644,9 +949,6 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         }
       }
 
-      if (thisAcquireCanBlock)
-        anyBlockCapable = true;
-
       /// Build AcquireInfo for heuristic voting
       AcquireInfo info;
       info.accessMode = acquire.getMode();
@@ -1698,31 +1000,18 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         acquireInfos[i].needsFullRange = true;
       }
     }
-
-    /// Update anyBlockNotFullRange based on heuristic decisions
-    for (size_t i = 0; i < acquireInfos.size(); ++i) {
-      if (ctx.acquires[i].canBlock && !acquireInfos[i].needsFullRange)
-        anyBlockNotFullRange = true;
-    }
   }
 
-  /// If every block-capable acquire is full-range, block partitioning does not
-  /// improve locality but is still a valid layout choice. Keep block enabled
-  /// and let heuristics decide; coarse is a last-resort fallback.
-  bool allBlockFullRange = anyBlockCapable && !anyBlockNotFullRange;
-  if (allBlockFullRange) {
+  /// Step 3: Reconcile per-acquire capabilities into allocation-level mode.
+  AcquireModeReconcileResult modeSummary =
+      reconcileAcquireModes(ctx, acquireInfos, canUseBlock);
+  bool modesConsistent = modeSummary.modesConsistent;
+  if (!modesConsistent)
+    ARTS_DEBUG("  Inconsistent partition modes across acquires");
+  if (modeSummary.allBlockFullRange) {
     ARTS_DEBUG("  All block-capable acquires are full-range; deferring to "
                "heuristics");
   }
-
-  /// Determine allocation-level capabilities from per-acquire STRUCTURAL
-  /// analysis Always use per-acquire voting since we've updated acquire
-  /// attributes based on structural hints (offset_hints, indices, etc.)
-  ctx.canElementWise = ctx.anyCanElementWise();
-  ctx.canBlock = ctx.anyCanBlock();
-  if (!canUseBlock)
-    ctx.canBlock = false;
-  ctx.allBlockFullRange = allBlockFullRange;
 
   ARTS_DEBUG("  Per-acquire voting: canEW="
              << ctx.canElementWise << ", canBlock=" << ctx.canBlock
@@ -1739,40 +1028,6 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     return allocOp;
   }
 
-  auto isBlockLikeMode = [](PartitionMode mode) {
-    return mode == PartitionMode::block || mode == PartitionMode::stencil;
-  };
-
-  /// If any coarse acquires exist alongside chunked candidates, enable MIXED
-  /// mode. This allows chunked partitioning while giving coarse acquires
-  /// full-range access.
-  if (ctx.canBlock) {
-    bool hasCoarse =
-        llvm::any_of(acquireInfos, [](const AcquirePartitionInfo &info) {
-          return info.mode == PartitionMode::coarse;
-        });
-    bool hasBlock =
-        llvm::any_of(acquireInfos, [&](const AcquirePartitionInfo &info) {
-          return isBlockLikeMode(info.mode);
-        });
-
-    if (hasCoarse && hasBlock) {
-      /// MIXED MODE: chunked allocation with coarse acquires getting full-range
-      ctx.canElementWise = false;
-      ARTS_DEBUG(
-          "  Mixed mode enabled: chunked allocation with coarse acquires");
-
-      /// Mark coarse acquires for full-range treatment
-      for (auto &info : acquireInfos) {
-        if (info.mode == PartitionMode::coarse)
-          info.needsFullRange = true;
-      }
-    } else if (hasCoarse) {
-      ctx.canElementWise = false;
-      ARTS_DEBUG("  Coarse+chunked mix detected - disabling element-wise");
-    }
-  }
-
   /// Set pinnedDimCount for logging (heuristics compute min/max on-the-fly)
   ctx.pinnedDimCount = ctx.maxPinnedDimCount();
   ARTS_DEBUG("  Partition dim counts: min=" << ctx.minPinnedDimCount()
@@ -1781,155 +1036,6 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   /// Get access mode from allocNode
   if (allocNode)
     ctx.accessMode = allocOp.getMode();
-
-  /// Get canonical block size for Block mode
-  Value dynamicBlockSize;
-  if (ctx.canBlock) {
-    SmallVector<Value> blockSizeCandidates;
-    int64_t staticCandidateCount = 0;
-
-    func::FuncOp func = allocOp->getParentOfType<func::FuncOp>();
-    DominanceInfo domInfo(func);
-
-    for (const auto &info : acquireInfos) {
-      if (!isBlockLikeMode(info.mode) || info.partitionSizes.empty())
-        continue;
-      if (info.needsFullRange)
-        continue;
-
-      DbAcquireOp acquire = info.acquire;
-      if (!acquire)
-        continue;
-
-      /// Use partition offsets/sizes from analysis if available; fall back to
-      /// acquire hints otherwise. Prefer non-constant offsets.
-      unsigned offsetIdx = 0;
-      Value blockIndex =
-          pickRepresentativePartitionOffset(info.partitionOffsets, &offsetIdx);
-      Value blockSizeVal =
-          pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
-      if (!blockIndex) {
-        unsigned opIdx = 0;
-        if (!acquire.getPartitionIndices().empty()) {
-          SmallVector<Value> partIndices(acquire.getPartitionIndices().begin(),
-                                         acquire.getPartitionIndices().end());
-          blockIndex = pickRepresentativePartitionOffset(partIndices, &opIdx);
-        } else if (!acquire.getPartitionOffsets().empty()) {
-          SmallVector<Value> partOffsets(acquire.getPartitionOffsets().begin(),
-                                         acquire.getPartitionOffsets().end());
-          blockIndex = pickRepresentativePartitionOffset(partOffsets, &opIdx);
-        }
-        if (!acquire.getPartitionSizes().empty()) {
-          SmallVector<Value> partSizes(acquire.getPartitionSizes().begin(),
-                                       acquire.getPartitionSizes().end());
-          blockSizeVal = pickRepresentativePartitionSize(partSizes, opIdx);
-        }
-      }
-
-      Value baseCandidate = DatablockUtils::extractBaseBlockSizeCandidate(
-          blockIndex, blockSizeVal);
-      if (!baseCandidate)
-        baseCandidate = blockSizeVal;
-      if (!baseCandidate)
-        continue;
-
-      Value idxCandidate =
-          ValueUtils::ensureIndexType(baseCandidate, builder, loc);
-      if (!idxCandidate)
-        continue;
-
-      Value domCandidate = domInfo.properlyDominates(idxCandidate, allocOp)
-                               ? idxCandidate
-                               : traceBackBlockSize(idxCandidate, allocOp,
-                                                    builder, domInfo, loc);
-      if (!domCandidate)
-        continue;
-
-      if (ValueUtils::isZeroConstant(
-              ValueUtils::stripNumericCasts(domCandidate))) {
-        ARTS_DEBUG("  Skipping zero block size candidate");
-        continue;
-      }
-
-      blockSizeCandidates.push_back(domCandidate);
-
-      if (auto staticSize = arts::extractBlockSizeFromHint(domCandidate)) {
-        if (*staticSize > 0) {
-          ++staticCandidateCount;
-          if (!ctx.blockSize || *staticSize < *ctx.blockSize)
-            ctx.blockSize = *staticSize;
-        }
-      }
-    }
-
-    if (!blockSizeCandidates.empty()) {
-      dynamicBlockSize = blockSizeCandidates.front();
-      for (size_t i = 1; i < blockSizeCandidates.size(); ++i) {
-        dynamicBlockSize = builder.create<arith::MinUIOp>(
-            loc, dynamicBlockSize, blockSizeCandidates[i]);
-      }
-      heuristics.recordDecision(
-          "Partition-CanonicalBlockSize", true,
-          "canonicalized block size across acquires", allocOp.getOperation(),
-          {{"candidateCount", static_cast<int64_t>(blockSizeCandidates.size())},
-           {"staticCandidateCount", staticCandidateCount}});
-    } else {
-      heuristics.recordDecision(
-          "Partition-CanonicalBlockSize", false,
-          "no valid block size candidates from acquire hints",
-          allocOp.getOperation(), {});
-    }
-  }
-
-  /// Fallback: use the first observed block size if canonicalization failed.
-  if (!dynamicBlockSize) {
-    Value refSize;
-    for (const auto &info : acquireInfos) {
-      if (!isBlockLikeMode(info.mode) || info.partitionSizes.empty())
-        continue;
-      if (info.needsFullRange)
-        continue;
-      unsigned offsetIdx = 0;
-      (void)pickRepresentativePartitionOffset(info.partitionOffsets,
-                                              &offsetIdx);
-      refSize = pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
-      break;
-    }
-    if ((consistentMode == PartitionMode::block ||
-         consistentMode == PartitionMode::stencil) &&
-        refSize &&
-        !ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(refSize))) {
-      dynamicBlockSize = refSize;
-      if (auto staticSize = arts::extractBlockSizeFromHint(refSize)) {
-        if (*staticSize > 0)
-          ctx.blockSize = *staticSize;
-      }
-    } else {
-      for (const auto &info : acquireInfos) {
-        if (!isBlockLikeMode(info.mode) || info.partitionSizes.empty())
-          continue;
-        if (info.needsFullRange)
-          continue;
-        unsigned offsetIdx = 0;
-        (void)pickRepresentativePartitionOffset(info.partitionOffsets,
-                                                &offsetIdx);
-        Value infoSize =
-            pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
-        if (ValueUtils::isZeroConstant(
-                ValueUtils::stripNumericCasts(infoSize))) {
-          ARTS_DEBUG("  Skipping zero fallback block size");
-          continue;
-        }
-        dynamicBlockSize = infoSize;
-        if (auto staticSize = arts::extractBlockSizeFromHint(infoSize)) {
-          if (*staticSize > 0 &&
-              (!ctx.blockSize || *staticSize < *ctx.blockSize))
-            ctx.blockSize = *staticSize;
-        }
-        break;
-      }
-    }
-  }
 
   /// Get memref rank
   if (auto memrefType = allocOp.getElementType().dyn_cast<MemRefType>()) {
@@ -1940,40 +1046,12 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     ctx.elementTypeIsMemRef = false;
   }
 
-  /// Step 4: Query heuristics -> PartitioningDecision
-  PartitioningDecision decision = heuristics.getPartitioningMode(ctx);
-  SmallVector<Value> blockSizesForNDBlock;
-
-  /// tiling_2d owner hint path:
-  /// when task-level distribution selected 2D and an inout acquire carries
-  /// 2D partition sizes, force N-D block planning to preserve 2D ownership.
-  for (auto &info : acquireInfos) {
-    if (!info.acquire || info.acquire.getMode() != ArtsMode::inout)
-      continue;
-    if (!isTiling2DTaskAcquire(info.acquire))
-      continue;
-    if (info.partitionSizes.size() < 2)
-      continue;
-
-    Value rowSize = info.partitionSizes[0];
-    Value colSize = info.partitionSizes[1];
-    if (!rowSize || !colSize)
-      continue;
-    if (ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(rowSize)) ||
-        ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(colSize)))
-      continue;
-
-    blockSizesForNDBlock.push_back(rowSize);
-    blockSizesForNDBlock.push_back(colSize);
-    decision = PartitioningDecision::blockND(
-        ctx, /*nDims=*/2, "tiling_2d owner-based N-D block partitioning");
-    heuristics.recordDecision(
-        "Partition-Tiling2DOwnerBlockND", true,
-        "using tiling_2d owner hints for N-D block partitioning",
-        allocOp.getOperation(), {{"numPartitionedDims", 2}});
-    ARTS_DEBUG("  tiling_2d owner hints -> forcing N-D block partitioning");
-    break;
-  }
+  /// Step 4: Initial heuristics arbitration.
+  PartitionDecisionArbiterResult arbiterResult =
+      arbitrateInitialPartitionDecision(ctx, acquireInfos, allocOp, heuristics);
+  PartitioningDecision decision = arbiterResult.decision;
+  SmallVector<Value> blockSizesForNDBlock =
+      std::move(arbiterResult.blockSizesForNDBlock);
 
   if (decision.isCoarse()) {
     ARTS_DEBUG("  Heuristics chose coarse - keeping original");
@@ -1987,8 +1065,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     return allocOp;
   }
 
-  /// Disabled: versioned partitioning via DbCopy/DbSync is currently off.
-  /// The implementation lives in DbVersionedRewriter for future enablement.
+  /// Disabled: versioned partitioning path is currently off.
 
   /// For element-wise partitioning, validate that partition indices match
   /// actual accesses. If not (block-wise pattern detected), fall back to
@@ -2242,8 +1319,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
         Value canSubtract = builder.create<arith::CmpIOp>(
             loc, arith::CmpIPredicate::uge, info.totalRows, haloTotal);
-        Value reduced = builder.create<arith::SubIOp>(loc, info.totalRows,
-                                                      haloTotal);
+        Value reduced =
+            builder.create<arith::SubIOp>(loc, info.totalRows, haloTotal);
         info.totalRows =
             builder.create<arith::SelectOp>(loc, canSubtract, reduced, zero);
       }
@@ -2268,188 +1345,47 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   }
 
   /// Step 5b: Compute sizes from decision (uses outerRank/innerRank)
-  /// For block mode, we need block sizes that dominate the allocOp.
-  /// N-D block: use blockSizesForNDBlock extracted from loop steps
-  /// 1D block: use ctx.blockSize or dynamicBlockSize
+  /// For block mode, resolve block-plan sizes/dimensions behind a dedicated
+  /// contract and keep pass logic orchestration-focused.
   SmallVector<Value> blockSizesForPlan;
+  SmallVector<unsigned> partitionedDimsForPlan;
   if (decision.isBlock()) {
-    if (!blockSizesForNDBlock.empty()) {
-      /// N-D block mode: use extracted block sizes from loop steps
-      /// Need to trace/recreate them at allocation point if needed
-      DominanceInfo domInfo(allocOp->getParentOfType<func::FuncOp>());
-      for (Value bs : blockSizesForNDBlock) {
-        if (domInfo.properlyDominates(bs, allocOp)) {
-          blockSizesForPlan.push_back(bs);
-        } else {
-          /// Try to trace back the block size
-          Value traced = traceBackBlockSize(bs, allocOp, builder, domInfo, loc);
-          if (traced) {
-            blockSizesForPlan.push_back(traced);
-          } else {
-            /// Cannot trace - try to extract constant value
-            if (auto constOp = bs.getDefiningOp<arith::ConstantIndexOp>()) {
-              blockSizesForPlan.push_back(
-                  builder.create<arith::ConstantIndexOp>(loc, constOp.value()));
-            } else {
-              ARTS_DEBUG("  Cannot recreate N-D block size - clearing");
-              blockSizesForPlan.clear();
-              break;
-            }
-          }
-        }
-      }
-      if (!blockSizesForPlan.empty()) {
-        ARTS_DEBUG("  Using " << blockSizesForPlan.size()
-                              << " N-D block sizes");
-      }
+    bool useNodesForFallback = false;
+    if (AM) {
+      ArtsAbstractMachine &machine = AM->getAbstractMachine();
+      if (machine.hasValidNodeCount() && machine.getNodeCount() > 1)
+        useNodesForFallback = true;
     }
 
-    /// Fallback to 1D block if N-D failed or wasn't needed
-    if (blockSizesForPlan.empty()) {
-      Value blockSizeForPlan;
-      if (ctx.blockSize && *ctx.blockSize > 0) {
-        /// Use static block size - create a constant at the allocOp point
-        blockSizeForPlan =
-            builder.create<arith::ConstantIndexOp>(loc, *ctx.blockSize);
-      } else if (dynamicBlockSize) {
-        /// Check if the dynamic block size dominates the allocOp
-        DominanceInfo domInfo(allocOp->getParentOfType<func::FuncOp>());
-        if (domInfo.properlyDominates(dynamicBlockSize, allocOp)) {
-          blockSizeForPlan = dynamicBlockSize;
-        } else {
-          /// Try to trace back and recreate the block size at allocation point
-          ARTS_DEBUG("  Dynamic block size doesn't dominate - attempting "
-                     "trace-back");
-          blockSizeForPlan = traceBackBlockSize(dynamicBlockSize, allocOp,
-                                                builder, domInfo, loc);
-          if (blockSizeForPlan) {
-            heuristics.recordDecision(
-                "Partition-BlockSizeRecreated", true,
-                "recreated block size at allocation point via trace-back",
-                allocOp.getOperation(), {});
-          }
-        }
-      }
-
-      if (!blockSizeForPlan) {
-        /// Fallback: derive a dominating block size from alloc size + workers.
-        ARTS_DEBUG("  No block size available for block mode - attempting "
-                   "alloc+workers fallback");
-        bool useNodesForFallback = false;
-        if (AM) {
-          ArtsAbstractMachine &machine = AM->getAbstractMachine();
-          if (machine.hasValidNodeCount() && machine.getNodeCount() > 1)
-            useNodesForFallback = true;
-        }
-        blockSizeForPlan =
-            computeDefaultBlockSize(allocOp, builder, loc, useNodesForFallback);
-        if (blockSizeForPlan) {
-          heuristics.recordDecision(
-              "Partition-BlockSizeFallbackHeuristic", true,
-              "derived block size from alloc size and total workers",
-              allocOp.getOperation(), {});
-        }
-      }
-
-      if (!blockSizeForPlan) {
-        /// No block size available - fall back to coarse
-        ARTS_DEBUG("  No block size available for block mode - falling back to "
-                   "coarse");
-        heuristics.recordDecision(
-            "Partition-NoBlockSize", false,
-            "block mode requested but no block size available",
-            allocOp.getOperation(), {});
-        resetCoarseAcquireRanges(allocOp, allocNode, builder);
-        return allocOp;
-      }
-      blockSizesForPlan.push_back(blockSizeForPlan);
-    }
-  }
-
-  /// Validate block sizes
-  if (decision.isBlock()) {
-    if (blockSizesForPlan.empty()) {
-      ARTS_DEBUG("  Missing block size for block decision - keeping original");
+    DbBlockPlanInput blockPlanInput{allocOp,
+                                    acquireInfos,
+                                    ctx.blockSize,
+                                    /*dynamicBlockSizeHint=*/Value(),
+                                    blockSizesForNDBlock,
+                                    &builder,
+                                    loc,
+                                    useNodesForFallback};
+    auto blockPlanOr = resolveDbBlockPlan(blockPlanInput);
+    if (failed(blockPlanOr) || blockPlanOr->blockSizes.empty()) {
+      ARTS_DEBUG("  No block-plan sizes available - falling back to coarse");
       heuristics.recordDecision(
-          "Partition-BlockSizeMissing", false,
-          "block decision without valid block sizes, keeping original",
+          "Partition-NoBlockSize", false,
+          "block mode requested but no block-plan sizes available",
           allocOp.getOperation(), {});
+      resetCoarseAcquireRanges(allocOp, allocNode, builder);
       return allocOp;
     }
 
-    /// Clamp any zero block sizes to 1
-    Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
-    for (unsigned i = 0; i < blockSizesForPlan.size(); ++i) {
-      Value strippedBlockSize =
-          ValueUtils::stripNumericCasts(blockSizesForPlan[i]);
-      if (ValueUtils::isZeroConstant(strippedBlockSize)) {
-        ARTS_DEBUG("  Block size[" << i << "] is zero - clamping to 1");
-        blockSizesForPlan[i] = one;
-      }
-      blockSizesForPlan[i] =
-          builder.create<arith::MaxUIOp>(loc, blockSizesForPlan[i], one);
-    }
-  }
+    blockSizesForPlan = std::move(blockPlanOr->blockSizes);
+    partitionedDimsForPlan = std::move(blockPlanOr->partitionedDims);
 
-  /// Determine partitioned dimensions for block mode (supports non-leading).
-  SmallVector<unsigned> partitionedDimsForPlan;
-  if (decision.isBlock()) {
-    unsigned nPartDims = blockSizesForPlan.size();
-    if (nPartDims > 0) {
-      auto dimsEqual = [](ArrayRef<unsigned> a, ArrayRef<unsigned> b) -> bool {
-        if (a.size() != b.size())
-          return false;
-        for (unsigned i = 0; i < a.size(); ++i) {
-          if (a[i] != b[i])
-            return false;
-        }
-        return true;
-      };
-
-      int bestScore = std::numeric_limits<int>::max();
-      bool bestFromFine = false;
-      for (const auto &candidate : acquireInfos) {
-        if (candidate.needsFullRange)
-          continue;
-        if (candidate.partitionDims.size() != nPartDims)
-          continue;
-
-        int score = 0;
-        for (const auto &info : acquireInfos) {
-          if (info.needsFullRange)
-            continue;
-          if (info.partitionDims.empty() ||
-              info.partitionDims.size() != nPartDims)
-            continue;
-          if (!dimsEqual(info.partitionDims, candidate.partitionDims)) {
-            score += (info.mode == PartitionMode::fine_grained) ? 2 : 1;
-          }
-        }
-
-        bool fromFine = candidate.mode == PartitionMode::fine_grained;
-        if (score < bestScore ||
-            (score == bestScore && fromFine && !bestFromFine)) {
-          bestScore = score;
-          bestFromFine = fromFine;
-          partitionedDimsForPlan.assign(candidate.partitionDims.begin(),
-                                        candidate.partitionDims.end());
-        }
-      }
-    }
-
-    if (!partitionedDimsForPlan.empty()) {
-      SmallVector<bool> seen(allocOp.getElementSizes().size(), false);
-      bool valid = true;
-      for (unsigned d : partitionedDimsForPlan) {
-        if (d >= seen.size() || seen[d]) {
-          valid = false;
-          break;
-        }
-        seen[d] = true;
-      }
-      if (!valid)
-        partitionedDimsForPlan.clear();
-    }
+    heuristics.recordDecision(
+        "Partition-BlockPlanResolved", true,
+        "resolved block sizes and partition dimensions via block-plan resolver",
+        allocOp.getOperation(),
+        {{"blockDims", static_cast<int64_t>(blockSizesForPlan.size())},
+         {"partitionedDims",
+          static_cast<int64_t>(partitionedDimsForPlan.size())}});
 
     /// Non-leading partitioning is not supported by stencil ESD. Downgrade
     /// to block mode when needed.
@@ -2560,22 +1496,20 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   /// when loop bounds are shifted (i starts at 1).
   if (decision.mode == PartitionMode::stencil) {
     std::optional<int64_t> centerOffset;
-    for (const auto &info : acquireInfos) {
+    for (auto &info : acquireInfos) {
       if (!info.acquire)
         continue;
-      if (auto centerAttr = info.acquire->getAttrOfType<IntegerAttr>(
-              "stencil_center_offset")) {
-        centerOffset = centerAttr.getInt();
+      if (auto center = getStencilCenterOffset(info.acquire.getOperation())) {
+        centerOffset = *center;
         break;
       }
     }
     if (centerOffset) {
-      IntegerAttr centerAttr = builder.getI64IntegerAttr(*centerOffset);
-      for (const auto &info : acquireInfos) {
+      for (auto &info : acquireInfos) {
         if (!info.acquire)
           continue;
-        if (!info.acquire->hasAttr("stencil_center_offset"))
-          info.acquire->setAttr("stencil_center_offset", centerAttr);
+        if (!getStencilCenterOffset(info.acquire.getOperation()))
+          setStencilCenterOffset(info.acquire.getOperation(), *centerOffset);
       }
     }
   }
@@ -2584,13 +1518,14 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   /// Include ALL acquires - invalid ones get Coarse fallback (offset=0,
   /// size=totalSize)
   SmallVector<DbRewriteAcquire> rewriteAcquires;
-  Value zero = builder.create<arith::ConstantIndexOp>(allocOp.getLoc(), 0);
+  auto acquirePlanner = DbPartitionPlanner::create(decision.mode);
   for (auto &info : acquireInfos) {
     if (!info.acquire)
       continue;
 
     DbRewriteAcquire rewriteInfo;
     rewriteInfo.acquire = info.acquire;
+    rewriteInfo.partitionInfo.mode = decision.mode;
 
     if (info.acquire.hasMultiplePartitionEntries()) {
       ARTS_DEBUG("  Rewrite multi-entry acquire offset="
@@ -2600,121 +1535,20 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                  << " loc=" << info.acquire.getLoc());
     }
 
-    Value one = builder.create<arith::ConstantIndexOp>(allocOp.getLoc(), 1);
-
-    /// Populate PartitionInfo to preserve semantic context through the
-    /// pipeline. This is the canonical data structure - indexers use this to
-    /// distinguish between element coordinates (indices) and range starts
-    /// (offsets).
-    rewriteInfo.partitionInfo.mode = decision.mode;
-
-    if (info.needsFullRange && decision.isBlock()) {
-      /// Coarse acquire in mixed mode: full-range access.
-      rewriteInfo.isFullRange = true;
-    } else if (info.isValid) {
-      if (decision.isFineGrained()) {
-        /// Fine-grained: use partition indices as element COORDINATES.
-        /// These identify WHICH element this EDT owns, use directly as db_ref
-        /// indices.
-        auto partitionIndices = info.acquire.getPartitionIndices();
-        rewriteInfo.partitionInfo.indices.assign(partitionIndices.begin(),
-                                                 partitionIndices.end());
-        bool hasRange =
-            !info.partitionSizes.empty() &&
-            !ValueUtils::isOneConstant(
-                ValueUtils::stripNumericCasts(info.partitionSizes.front()));
-        /// Range acquires (e.g., chunked parallel-for) should preserve
-        /// DB-space offsets/sizes so a single acquire can cover multiple
-        /// fine-grained elements.
-        if (rewriteInfo.partitionInfo.indices.empty() && hasRange) {
-          /// N-D support: use all partition offsets/sizes
-          for (Value off : info.partitionOffsets)
-            rewriteInfo.partitionInfo.offsets.push_back(off);
-          for (Value sz : info.partitionSizes)
-            rewriteInfo.partitionInfo.sizes.push_back(sz);
-        }
-        /// Fallback if no partition indices
-        if (rewriteInfo.partitionInfo.indices.empty() &&
-            rewriteInfo.partitionInfo.offsets.empty() &&
-            !info.partitionOffsets.empty()) {
-          for (Value off : info.partitionOffsets)
-            rewriteInfo.partitionInfo.indices.push_back(off);
-        }
-      } else if (decision.mode == PartitionMode::block &&
-                 plan.numPartitionedDims() > 1) {
-        /// N-D Block mode: extract partition indices as range STARTS.
-        /// Each partition index represents the START of the block in that
-        /// dimension. Clear any existing data from the mode-setting block above
-        /// to avoid duplication.
-        rewriteInfo.partitionInfo.offsets.clear();
-        rewriteInfo.partitionInfo.sizes.clear();
-        auto partitionIndices = info.acquire.getPartitionIndices();
-        for (Value idx : partitionIndices) {
-          rewriteInfo.partitionInfo.offsets.push_back(idx);
-          /// For block mode, size is the block size (not 1 like fine-grained)
-          unsigned dimIdx = rewriteInfo.partitionInfo.offsets.size() - 1;
-          Value blockSz = plan.getBlockSize(dimIdx);
-          rewriteInfo.partitionInfo.sizes.push_back(blockSz ? blockSz : one);
-        }
-        /// Fallback if no partition indices - use N-D partition offsets/sizes
-        if (rewriteInfo.partitionInfo.offsets.empty()) {
-          for (Value off : info.partitionOffsets)
-            rewriteInfo.partitionInfo.offsets.push_back(off);
-          for (Value sz : info.partitionSizes)
-            rewriteInfo.partitionInfo.sizes.push_back(sz);
-        }
-      } else {
-        /// 1D Block/Stencil or other modes: use N-D partition offsets/sizes
-        for (Value off : info.partitionOffsets)
-          rewriteInfo.partitionInfo.offsets.push_back(off);
-        for (Value sz : info.partitionSizes)
-          rewriteInfo.partitionInfo.sizes.push_back(sz);
-        if (decision.mode == PartitionMode::stencil &&
-            !info.acquire.getPartitionIndices().empty()) {
-          auto partitionIndices = info.acquire.getPartitionIndices();
-          rewriteInfo.partitionInfo.indices.assign(partitionIndices.begin(),
-                                                   partitionIndices.end());
-        }
-      }
-    } else {
-      /// Invalid acquire: use Coarse fallback (full size access).
-      /// The acquire still needs rewriting to use the new allocation structure.
-      Value totalSize = allocOp.getElementSizes().empty()
-                            ? zero
-                            : allocOp.getElementSizes().front();
-      if (decision.isFineGrained()) {
-        /// Fine-grained mode expects indices (element coordinates)
-        rewriteInfo.partitionInfo.indices.push_back(zero);
-      } else {
-        /// Block/stencil modes expect offsets
-        rewriteInfo.partitionInfo.offsets.push_back(zero);
-      }
-      rewriteInfo.partitionInfo.sizes.push_back(totalSize);
-      ARTS_DEBUG("  Invalid acquire " << info.acquire
-                                      << " rewritten with Coarse fallback");
-    }
-
-    /// Handle indirect access fallback for fine-grained mode.
-    /// For fine-grained with indirect access, use coarse fallback (full range).
-    /// We still use indices (not offsets) because DbElementWiseRewriter expects
-    /// indices.
-    if (decision.isFineGrained() && info.hasIndirectAccess) {
-      Value totalSize = allocOp.getElementSizes().empty()
-                            ? zero
-                            : allocOp.getElementSizes().front();
-      rewriteInfo.partitionInfo.indices.clear();
-      rewriteInfo.partitionInfo.offsets.clear();
-      rewriteInfo.partitionInfo.sizes.clear();
-      /// Use indices (element coordinates) with zero for coarse fallback in
-      /// fine-grained mode.
-      rewriteInfo.partitionInfo.indices.push_back(zero);
-      rewriteInfo.partitionInfo.sizes.push_back(totalSize);
-    }
-
-    if (decision.isBlock() && !plan.partitionedDims.empty()) {
-      rewriteInfo.partitionInfo.partitionedDims.assign(
-          plan.partitionedDims.begin(), plan.partitionedDims.end());
-    }
+    DbAcquirePartitionView view;
+    view.acquire = info.acquire;
+    auto partitionIndices = info.acquire.getPartitionIndices();
+    view.partitionIndices.assign(partitionIndices.begin(),
+                                 partitionIndices.end());
+    view.partitionOffsets.assign(info.partitionOffsets.begin(),
+                                 info.partitionOffsets.end());
+    view.partitionSizes.assign(info.partitionSizes.begin(),
+                               info.partitionSizes.end());
+    view.isValid = info.isValid;
+    view.hasIndirectAccess = info.hasIndirectAccess;
+    view.needsFullRange = info.needsFullRange;
+    acquirePlanner->buildRewriteAcquire(view, allocOp, plan, rewriteInfo,
+                                        builder);
 
     rewriteAcquires.push_back(rewriteInfo);
   }
@@ -2759,188 +1593,11 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   return result;
 }
 
-/// Check if op is in the else branch of `if (iv == 0)`, guaranteeing iv > 0.
-static bool isLowerBoundGuaranteedByControlFlow(Operation *op, Value loopIV) {
-  if (!loopIV)
-    return false;
-
-  /// Helper: check if value matches loopIV (directly or via index_cast)
-  auto matchesIV = [&loopIV](Value v) {
-    if (v == loopIV)
-      return true;
-    if (auto cast = v.getDefiningOp<arith::IndexCastOp>())
-      return cast.getIn() == loopIV;
-    return false;
-  };
-
-  /// Walk up parent chain looking for scf.if with condition `iv == 0`
-  for (Operation *p = op->getParentOp(); p; p = p->getParentOp()) {
-    auto ifOp = dyn_cast<scf::IfOp>(p);
-    if (!ifOp || ifOp.getElseRegion().empty())
-      continue;
-
-    /// Check if we're in else region
-    if (!ifOp.getElseRegion().isAncestor(op->getParentRegion()))
-      continue;
-
-    /// Check if condition is `iv == 0`
-    auto cmp = ifOp.getCondition().getDefiningOp<arith::CmpIOp>();
-    if (!cmp || cmp.getPredicate() != arith::CmpIPredicate::eq)
-      continue;
-
-    Value lhs = cmp.getLhs(), rhs = cmp.getRhs();
-    if ((matchesIV(lhs) && ValueUtils::isZeroConstant(rhs)) ||
-        (matchesIV(rhs) && ValueUtils::isZeroConstant(lhs))) {
-      ARTS_DEBUG("  Lower bound guaranteed by control flow (else of iv==0)");
-      return true;
-    }
-  }
-  return false;
-}
-
 void DbPartitioningPass::analyzeStencilBounds() {
   ARTS_DEBUG_HEADER(AnalyzeStencilBounds);
-
-  LoopAnalysis &loopAnalysis = AM->getLoopAnalysis();
-
-  /// Collect DbAcquireOps that need bounds checking along with flags and loopIV
-  SmallVector<std::tuple<DbAcquireOp, SmallVector<int64_t>, Value>> toModify;
-
-  module.walk([&](DbAcquireOp acquireOp) {
-    /// Skip if already has bounds_valid
-    if (acquireOp.getBoundsValid())
-      return;
-
-    auto indices = acquireOp.getIndices();
-    if (indices.empty())
-      return;
-
-    /// Use LoopAnalysis to find enclosing loops
-    SmallVector<LoopNode *> enclosingLoops;
-    loopAnalysis.collectEnclosingLoops(acquireOp, enclosingLoops);
-    if (enclosingLoops.empty())
-      return;
-
-    /// Use innermost enclosing loop for IV analysis
-    LoopNode *loopNode = enclosingLoops.back();
-
-    /// Compute boundsCheckFlags using analyzeIndexExpr (ONCE per index)
-    SmallVector<int64_t> boundsCheckFlags;
-    bool needsBoundsCheck = false;
-
-    for (Value idx : indices) {
-      int64_t flag = 0;
-      LoopNode::IVExpr expr = loopNode->analyzeIndexExpr(idx);
-      if (expr.isAnalyzable() && expr.offset.has_value() && *expr.offset != 0) {
-        flag = 1;
-        needsBoundsCheck = true;
-        ARTS_DEBUG("  Index with offset " << *expr.offset
-                                          << " needs bounds check");
-      } else if (expr.dependsOnIV && !expr.isAnalyzable()) {
-        flag = 1;
-        needsBoundsCheck = true;
-        ARTS_DEBUG("  Complex IV-dependent index needs bounds check");
-      }
-      boundsCheckFlags.push_back(flag);
-    }
-
-    if (needsBoundsCheck) {
-      Value loopIV = loopNode->getInductionVar();
-      toModify.push_back({acquireOp, std::move(boundsCheckFlags), loopIV});
-    }
-  });
-
-  /// Generate boundsValid and update DbAcquireOps
-  for (auto &[acquireOp, flags, loopIV] : toModify)
-    generateBoundsValid(acquireOp, flags, loopIV);
+  lowerStencilAcquireBounds(module, AM->getLoopAnalysis());
 
   ARTS_DEBUG_FOOTER(AnalyzeStencilBounds);
-}
-
-/// Generate bounds_valid for stencil acquires; skips lower bound if
-/// control-flow guarded.
-void DbPartitioningPass::generateBoundsValid(DbAcquireOp acquireOp,
-                                             ArrayRef<int64_t> boundsCheckFlags,
-                                             Value loopIV) {
-  /// Skip multi-entry acquires (stencil patterns) - they have a different
-  /// structure and bounds are handled via ESD
-  if (acquireOp.hasMultiplePartitionEntries()) {
-    ARTS_DEBUG("  Skipping bounds generation for multi-entry stencil acquire");
-    return;
-  }
-
-  Location loc = acquireOp.getLoc();
-  OpBuilder builder(acquireOp);
-
-  auto indices = acquireOp.getIndices();
-  SmallVector<Value> sourceSizes =
-      DatablockUtils::getSizesFromDb(acquireOp.getSourcePtr());
-
-  /// Check if lower bound is guaranteed by control flow (inside else of `if
-  /// iv==0`)
-  bool lowerBoundGuarded =
-      isLowerBoundGuaranteedByControlFlow(acquireOp, loopIV);
-
-  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
-  Value boundsValid;
-
-  for (size_t i = 0; i < boundsCheckFlags.size() && i < indices.size(); ++i) {
-    if (boundsCheckFlags[i] != 0 && i < sourceSizes.size()) {
-      Value idx = indices[i];
-      Value size = sourceSizes[i];
-      Value dimValid;
-
-      if (lowerBoundGuarded) {
-        /// Only check upper bound: idx < size (lower bound guaranteed by
-        /// control flow)
-        dimValid = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
-                                                 idx, size);
-      } else {
-        /// Full check: 0 <= idx < size
-        Value geZero = builder.create<arith::CmpIOp>(
-            loc, arith::CmpIPredicate::sge, idx, zero);
-        Value ltSize = builder.create<arith::CmpIOp>(
-            loc, arith::CmpIPredicate::slt, idx, size);
-        dimValid = builder.create<arith::AndIOp>(loc, geZero, ltSize);
-      }
-
-      boundsValid =
-          boundsValid
-              ? builder.create<arith::AndIOp>(loc, boundsValid, dimValid)
-              : dimValid;
-    }
-  }
-
-  if (!boundsValid)
-    return;
-
-  /// Recreate DbAcquireOp with bounds_valid
-  SmallVector<Value> indicesVec(indices.begin(), indices.end());
-  SmallVector<Value> offsetsVec(acquireOp.getOffsets().begin(),
-                                acquireOp.getOffsets().end());
-  SmallVector<Value> sizesVec(acquireOp.getSizes().begin(),
-                              acquireOp.getSizes().end());
-  SmallVector<Value> partIndices(acquireOp.getPartitionIndices().begin(),
-                                 acquireOp.getPartitionIndices().end());
-  SmallVector<Value> partOffsets(acquireOp.getPartitionOffsets().begin(),
-                                 acquireOp.getPartitionOffsets().end());
-  SmallVector<Value> partSizes(acquireOp.getPartitionSizes().begin(),
-                               acquireOp.getPartitionSizes().end());
-
-  auto partitionMode = getPartitionMode(acquireOp.getOperation());
-  auto newAcquire = builder.create<DbAcquireOp>(
-      loc, acquireOp.getMode(), acquireOp.getSourceGuid(),
-      acquireOp.getSourcePtr(), partitionMode, indicesVec, offsetsVec, sizesVec,
-      partIndices, partOffsets, partSizes, boundsValid);
-  transferAttributes(acquireOp.getOperation(), newAcquire.getOperation(),
-                     /*excludes=*/{});
-  newAcquire.copyPartitionSegmentsFrom(acquireOp);
-
-  acquireOp.getGuid().replaceAllUsesWith(newAcquire.getGuid());
-  acquireOp.getPtr().replaceAllUsesWith(newAcquire.getPtr());
-  acquireOp.erase();
-
-  ARTS_DEBUG("Added bounds_valid to DbAcquireOp: " << newAcquire);
 }
 
 void DbPartitioningPass::invalidateAndRebuildGraph() {

@@ -120,7 +120,8 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   /// ForLowering may be a worker index (0..numWorkers-1) which can exceed the
   /// actual block count when multiple workers share a block. Always derive the
   /// block index from the element offset to ensure valid block access.
-  Value blockIdx = builder.create<arith::DivUIOp>(loc, baseOffset, planBlockSize);
+  Value blockIdx =
+      builder.create<arith::DivUIOp>(loc, baseOffset, planBlockSize);
 
   ARTS_DEBUG("  Stencil ESD: blockIdx=" << blockIdx
                                         << ", haloLeft=" << haloLeftVal
@@ -158,8 +159,8 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
     Value leftChunkRows = planBlockSize;
     Value haloLeftConst =
         builder.create<arith::ConstantIndexOp>(loc, haloLeftVal);
-    Value leftElemOffset = builder.create<arith::SubIOp>(
-        loc, leftChunkRows, haloLeftConst);
+    Value leftElemOffset =
+        builder.create<arith::SubIOp>(loc, leftChunkRows, haloLeftConst);
 
     /// bounds_valid = (blockIdx != 0): valid only if not first block
     Value leftValid = builder.create<arith::CmpIOp>(
@@ -224,12 +225,12 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
                                               << ", right=" << rightHaloArgIdx);
 
     /// Store halo arg indices as acquire attributes for rebaseEdtUsers
-    acquire->setAttr("left_halo_arg_idx", builder.getIndexAttr(leftHaloArgIdx));
-    acquire->setAttr("right_halo_arg_idx",
-                     builder.getIndexAttr(rightHaloArgIdx));
+    setLeftHaloArgIndex(acquire.getOperation(), leftHaloArgIdx);
+    setRightHaloArgIndex(acquire.getOperation(), rightHaloArgIdx);
   }
 
-  /// Set acquire offsets/sizes for stencil mode (use blockIdx, not worker index)
+  /// Set acquire offsets/sizes for stencil mode (use blockIdx, not worker
+  /// index)
   SmallVector<Value> newOffsets, newSizes;
   newOffsets.push_back(blockIdx);
   newSizes.push_back(chunkCount);
@@ -238,9 +239,10 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
 
   /// Use the ForLowering's actual baseOffset as the indexer's base.
   /// After alignment, baseOffset == blockIdx * planBlockSize. Using the same
-  /// SSA Value that ForLowering embedded in globalRow = add(baseOffset, localIter)
-  /// ensures the stencil indexer's tryVersionRowLoop correctly identifies the
-  /// coordinate system (includesBaseOffset = true) and splits loops correctly.
+  /// SSA Value that ForLowering embedded in globalRow = add(baseOffset,
+  /// localIter) ensures the stencil indexer's tryVersionRowLoop correctly
+  /// identifies the coordinate system (includesBaseOffset = true) and splits
+  /// loops correctly.
   rebaseEdtUsers(acquire, builder, baseOffset);
 }
 
@@ -403,8 +405,8 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
 
   Value blockSize = plan.getBlockSize(0) ? plan.getBlockSize(0) : one;
   if (!blockSize.getType().isIndex())
-    blockSize =
-        builder.create<arith::IndexCastOp>(loc, builder.getIndexType(), blockSize);
+    blockSize = builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
+                                                   blockSize);
   blockSize = builder.create<arith::MaxUIOp>(loc, blockSize, one);
 
   Value baseOffset = baseOffsetArg ? baseOffsetArg : zero;
@@ -417,15 +419,13 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
   Block &edtBody = edt.getBody().front();
 
   /// Read halo arg indices from acquire attributes
-  if (auto leftIdxAttr =
-          acquire->getAttrOfType<IntegerAttr>("left_halo_arg_idx")) {
-    unsigned leftIdx = leftIdxAttr.getInt();
+  if (auto leftIdxOpt = getLeftHaloArgIndex(acquire.getOperation())) {
+    unsigned leftIdx = *leftIdxOpt;
     if (leftIdx < edtBody.getNumArguments())
       leftHaloArg = edtBody.getArgument(leftIdx);
   }
-  if (auto rightIdxAttr =
-          acquire->getAttrOfType<IntegerAttr>("right_halo_arg_idx")) {
-    unsigned rightIdx = rightIdxAttr.getInt();
+  if (auto rightIdxOpt = getRightHaloArgIndex(acquire.getOperation())) {
+    unsigned rightIdx = *rightIdxOpt;
     if (rightIdx < edtBody.getNumArguments())
       rightHaloArg = edtBody.getArgument(rightIdx);
   }

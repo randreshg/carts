@@ -16,6 +16,7 @@
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
+#include "arts/Utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -508,10 +509,10 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
   /// Create k loop: for k: a = alpha*A[i,k]; for j: C[i,j] += a*B[k,j]
   auto newK = b.create<scf::ForOp>(loc, kLoop.getLowerBound(),
                                    kLoop.getUpperBound(), kLoop.getStep());
-  if (auto idAttr = kLoop->getAttr("arts.id"))
-    newK->setAttr("arts.id", idAttr);
-  if (auto loopAttr = kLoop->getAttr("arts.loop"))
-    newK->setAttr("arts.loop",
+  if (auto idAttr = kLoop->getAttr(AttrNames::Operation::ArtsId))
+    newK->setAttr(AttrNames::Operation::ArtsId, idAttr);
+  if (auto loopAttr = kLoop->getAttr(AttrNames::LoopMetadata::Name))
+    newK->setAttr(AttrNames::LoopMetadata::Name,
                   sanitizeLoopMetadataNoReductions(loopAttr, b.getContext()));
 
   b.setInsertionPointToStart(newK.getBody());
@@ -561,11 +562,12 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
               })) {
         for (Operation &op : tiledUpdateOuter.getBody()->without_terminator()) {
           if (auto innerJ = dyn_cast<scf::ForOp>(&op)) {
-            if (auto idAttr = jLoop->getAttr("arts.id"))
-              innerJ->setAttr("arts.id", idAttr);
-            if (auto loopAttr = jLoop->getAttr("arts.loop"))
-              innerJ->setAttr("arts.loop", sanitizeLoopMetadataNoReductions(
-                                               loopAttr, b.getContext()));
+            if (auto idAttr = jLoop->getAttr(AttrNames::Operation::ArtsId))
+              innerJ->setAttr(AttrNames::Operation::ArtsId, idAttr);
+            if (auto loopAttr = jLoop->getAttr(AttrNames::LoopMetadata::Name))
+              innerJ->setAttr(
+                  AttrNames::LoopMetadata::Name,
+                  sanitizeLoopMetadataNoReductions(loopAttr, b.getContext()));
             break;
           }
         }
@@ -576,11 +578,12 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
     if (!createdTiledUpdate) {
       auto newJ = b.create<scf::ForOp>(loc, jLoop.getLowerBound(),
                                        jLoop.getUpperBound(), jLoop.getStep());
-      if (auto idAttr = jLoop->getAttr("arts.id"))
-        newJ->setAttr("arts.id", idAttr);
-      if (auto loopAttr = jLoop->getAttr("arts.loop"))
-        newJ->setAttr("arts.loop", sanitizeLoopMetadataNoReductions(
-                                       loopAttr, b.getContext()));
+      if (auto idAttr = jLoop->getAttr(AttrNames::Operation::ArtsId))
+        newJ->setAttr(AttrNames::Operation::ArtsId, idAttr);
+      if (auto loopAttr = jLoop->getAttr(AttrNames::LoopMetadata::Name))
+        newJ->setAttr(
+            AttrNames::LoopMetadata::Name,
+            sanitizeLoopMetadataNoReductions(loopAttr, b.getContext()));
       b.setInsertionPointToStart(newJ.getBody());
       emitUpdateBody(b, loc, newJ.getInductionVar());
     }

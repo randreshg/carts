@@ -28,9 +28,14 @@ constexpr StringLiteral Nowait = "nowait";
 constexpr StringLiteral PartitionMode = "partition_mode";
 constexpr StringLiteral PartitionHint = "arts.partition_hint";
 constexpr StringLiteral AccessPattern = "access_pattern";
+constexpr StringLiteral Distributed = "distributed";
 constexpr StringLiteral DistributionKind = "distribution_kind";
 constexpr StringLiteral DistributionPattern = "distribution_pattern";
 constexpr StringLiteral DistributionVersion = "distribution_version";
+constexpr StringLiteral StencilCenterOffset = "stencil_center_offset";
+constexpr StringLiteral ElementStride = "element_stride";
+constexpr StringLiteral LeftHaloArgIdx = "left_halo_arg_idx";
+constexpr StringLiteral RightHaloArgIdx = "right_halo_arg_idx";
 
 /// DbAllocOp attributes (TableGen-generated names)
 constexpr StringLiteral Mode = "mode";
@@ -100,8 +105,27 @@ inline void setDbAccessPattern(Operation *op, DbAccessPattern pattern) {
               DbAccessPatternAttr::get(op->getContext(), pattern));
 }
 
+/// Helper accessors for distributed attribute (UnitAttr on DbAllocOp).
+inline bool hasDistributedDbAllocation(Operation *op) {
+  if (!op)
+    return false;
+  return op->hasAttr(AttrNames::Operation::Distributed);
+}
+
+inline void setDistributedDbAllocation(Operation *op, bool enabled) {
+  if (!op)
+    return;
+  if (enabled) {
+    op->setAttr(AttrNames::Operation::Distributed,
+                UnitAttr::get(op->getContext()));
+    return;
+  }
+  op->removeAttr(AttrNames::Operation::Distributed);
+}
+
 /// Helper accessors for distribution_kind attribute (EdtDistributionKind).
-inline std::optional<EdtDistributionKind> getEdtDistributionKind(Operation *op) {
+inline std::optional<EdtDistributionKind>
+getEdtDistributionKind(Operation *op) {
   if (!op)
     return std::nullopt;
   if (auto attr = op->getAttrOfType<EdtDistributionKindAttr>(
@@ -117,7 +141,8 @@ inline void setEdtDistributionKind(Operation *op, EdtDistributionKind kind) {
               EdtDistributionKindAttr::get(op->getContext(), kind));
 }
 
-/// Helper accessors for distribution_pattern attribute (EdtDistributionPattern).
+/// Helper accessors for distribution_pattern attribute
+/// (EdtDistributionPattern).
 inline std::optional<EdtDistributionPattern>
 getEdtDistributionPattern(Operation *op) {
   if (!op)
@@ -134,6 +159,106 @@ inline void setEdtDistributionPattern(Operation *op,
     return;
   op->setAttr(AttrNames::Operation::DistributionPattern,
               EdtDistributionPatternAttr::get(op->getContext(), pattern));
+}
+
+/// Copy distribution_* attributes between operations.
+/// This intentionally transfers only distribution contracts:
+///   - distribution_kind
+///   - distribution_pattern
+///   - distribution_version
+inline void copyDistributionAttrs(Operation *source, Operation *dest) {
+  if (!source || !dest)
+    return;
+
+  if (auto kind = getEdtDistributionKind(source))
+    setEdtDistributionKind(dest, *kind);
+  else
+    dest->removeAttr(AttrNames::Operation::DistributionKind);
+
+  if (auto pattern = getEdtDistributionPattern(source))
+    setEdtDistributionPattern(dest, *pattern);
+  else
+    dest->removeAttr(AttrNames::Operation::DistributionPattern);
+
+  if (auto version = source->getAttrOfType<IntegerAttr>(
+          AttrNames::Operation::DistributionVersion))
+    dest->setAttr(AttrNames::Operation::DistributionVersion, version);
+  else
+    dest->removeAttr(AttrNames::Operation::DistributionVersion);
+}
+
+/// Helper accessors for stencil_center_offset attribute (i64 IntegerAttr).
+inline std::optional<int64_t> getStencilCenterOffset(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr = op->getAttrOfType<IntegerAttr>(
+          AttrNames::Operation::StencilCenterOffset))
+    return attr.getInt();
+  return std::nullopt;
+}
+
+inline void setStencilCenterOffset(Operation *op, int64_t centerOffset) {
+  if (!op)
+    return;
+  op->setAttr(
+      AttrNames::Operation::StencilCenterOffset,
+      IntegerAttr::get(IntegerType::get(op->getContext(), 64), centerOffset));
+}
+
+/// Helper accessors for element_stride attribute (index IntegerAttr).
+inline std::optional<int64_t> getElementStride(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr =
+          op->getAttrOfType<IntegerAttr>(AttrNames::Operation::ElementStride))
+    return attr.getInt();
+  return std::nullopt;
+}
+
+inline void setElementStride(Operation *op, int64_t stride) {
+  if (!op)
+    return;
+  op->setAttr(AttrNames::Operation::ElementStride,
+              IntegerAttr::get(IndexType::get(op->getContext()), stride));
+}
+
+/// Helper accessors for stencil halo block-argument indices.
+inline std::optional<unsigned> getLeftHaloArgIndex(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr = op->getAttrOfType<IntegerAttr>(
+          AttrNames::Operation::LeftHaloArgIdx)) {
+    int64_t value = attr.getInt();
+    if (value >= 0)
+      return static_cast<unsigned>(value);
+  }
+  return std::nullopt;
+}
+
+inline std::optional<unsigned> getRightHaloArgIndex(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr = op->getAttrOfType<IntegerAttr>(
+          AttrNames::Operation::RightHaloArgIdx)) {
+    int64_t value = attr.getInt();
+    if (value >= 0)
+      return static_cast<unsigned>(value);
+  }
+  return std::nullopt;
+}
+
+inline void setLeftHaloArgIndex(Operation *op, unsigned argIndex) {
+  if (!op)
+    return;
+  op->setAttr(AttrNames::Operation::LeftHaloArgIdx,
+              IntegerAttr::get(IndexType::get(op->getContext()), argIndex));
+}
+
+inline void setRightHaloArgIndex(Operation *op, unsigned argIndex) {
+  if (!op)
+    return;
+  op->setAttr(AttrNames::Operation::RightHaloArgIdx,
+              IntegerAttr::get(IndexType::get(op->getContext()), argIndex));
 }
 
 /// Helper accessors for arts.partition_hint attribute (PartitioningHint).

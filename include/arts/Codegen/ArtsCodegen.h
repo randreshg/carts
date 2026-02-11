@@ -18,6 +18,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
+#include "llvm/ADT/SmallVector.h"
 
 namespace mlir {
 namespace arts {
@@ -95,9 +96,11 @@ public:
   /// Function creation
   func::FuncOp insertInitPerWorker(Location loc);
   func::FuncOp insertInitPerNode(Location loc, func::FuncOp callback);
+  func::FuncOp insertDistributedDbInitFn(Location loc);
   func::FuncOp insertArtsMainFn(Location loc, func::FuncOp callback);
   func::FuncOp insertMainFn(Location loc);
   void initRT(Location loc);
+  void registerDistributedInitCallback(func::FuncOp callback);
 
   /// Helper functions
   Value createFnPtr(func::FuncOp funcOp, Location loc);
@@ -182,6 +185,7 @@ private:
   /// Other Attributes
   llvm::DenseMap<RuntimeFunction, func::FuncOp> runtimeFunctionCache;
   llvm::StringMap<LLVM::GlobalOp> llvmStringGlobals;
+  SmallVector<func::FuncOp, 8> distributedInitCallbacks;
 
   /// Helper functions
   void initializeTypes();

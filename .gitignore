@@ -31,6 +31,7 @@ external/*/cmake_install.cmake
 # Generated MLIR files
 *.mlir
 *.ll
+!tests/contracts/*.mlir
 
 # CARTS generated executables
 *_arts
