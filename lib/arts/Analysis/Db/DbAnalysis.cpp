@@ -11,6 +11,7 @@
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/EdtUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
@@ -43,7 +44,8 @@ static unsigned dbPatternRank(DbAccessPattern pattern) {
   return 0;
 }
 
-static DbAccessPattern mergeDbPattern(DbAccessPattern lhs, DbAccessPattern rhs) {
+static DbAccessPattern mergeDbPattern(DbAccessPattern lhs,
+                                      DbAccessPattern rhs) {
   return dbPatternRank(rhs) > dbPatternRank(lhs) ? rhs : lhs;
 }
 
@@ -124,6 +126,50 @@ classifyDistributionPattern(const DbAnalysis::LoopDbAccessSummary &summary) {
   if (summary.hasMatmulUpdate)
     return EdtDistributionPattern::matmul;
   return EdtDistributionPattern::uniform;
+}
+
+static bool isTiling2DTaskAcquire(DbAcquireOp acquire) {
+  if (!acquire)
+    return false;
+  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+  if (!edt)
+    return false;
+  auto kind = getEdtDistributionKind(edt.getOperation());
+  return kind && *kind == EdtDistributionKind::tiling_2d;
+}
+
+static Value pickRepresentativePartitionOffset(ArrayRef<Value> offsets,
+                                               unsigned *outIdx = nullptr) {
+  if (outIdx)
+    *outIdx = 0;
+  for (unsigned i = 0; i < offsets.size(); ++i) {
+    Value off = offsets[i];
+    if (!off)
+      continue;
+    int64_t c = 0;
+    if (!ValueUtils::getConstantIndex(ValueUtils::stripNumericCasts(off), c)) {
+      if (outIdx)
+        *outIdx = i;
+      return off;
+    }
+  }
+  for (unsigned i = 0; i < offsets.size(); ++i) {
+    if (offsets[i]) {
+      if (outIdx)
+        *outIdx = i;
+      return offsets[i];
+    }
+  }
+  return Value();
+}
+
+static Value pickRepresentativePartitionSize(ArrayRef<Value> sizes,
+                                             unsigned idx) {
+  if (sizes.empty())
+    return Value();
+  if (idx < sizes.size() && sizes[idx])
+    return sizes[idx];
+  return sizes.front();
 }
 
 } // namespace
@@ -261,7 +307,8 @@ DbAnalysis::analyzeLoopDbAccessPatterns(ForOp forOp) {
       AccessBoundsResult bounds =
           analyzeAccessBoundsFromIndices(accesses, loopIV, loopIV);
       if (bounds.valid) {
-        if (bounds.isStencil || bounds.minOffset != 0 || bounds.maxOffset != 0) {
+        if (bounds.isStencil || bounds.minOffset != 0 ||
+            bounds.maxOffset != 0) {
           combinedPattern =
               mergeDbPattern(combinedPattern, DbAccessPattern::stencil);
           summary.hasStencilOffset = true;
@@ -305,6 +352,252 @@ DbAnalysis::getLoopDistributionPattern(ForOp forOp) {
   return analyzeLoopDbAccessPatterns(forOp).distributionPattern;
 }
 
+DbAnalysis::AcquirePartitionSummary
+DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
+  AcquirePartitionSummary info;
+  if (!acquire)
+    return info;
+
+  info.mode = DatablockUtils::getPartitionModeFromStructure(acquire);
+  if (info.mode == PartitionMode::coarse) {
+    if (!acquire.getPartitionIndices().empty())
+      info.mode = PartitionMode::fine_grained;
+    else if (!acquire.getPartitionOffsets().empty() ||
+             !acquire.getPartitionSizes().empty())
+      info.mode = PartitionMode::block;
+  }
+
+  DbAcquireNode *acqNode = nullptr;
+  func::FuncOp func = acquire->getParentOfType<func::FuncOp>();
+  if (func) {
+    DbGraph &graph = getOrCreateGraph(func);
+    acqNode = graph.getDbAcquireNode(acquire);
+  }
+
+  if (acqNode)
+    info.hasIndirectAccess = acqNode->hasIndirectAccess();
+
+  auto refineSizeFromMinInBlock = [&](Value offset, Value sizeHint) -> Value {
+    if (!offset || !sizeHint)
+      return Value();
+    int64_t sizeConst = 0;
+    bool sizeIsConst = ValueUtils::getConstantIndex(sizeHint, sizeConst);
+    auto isSameConst = [&](Value v) -> bool {
+      int64_t val = 0;
+      return ValueUtils::getConstantIndex(v, val) && val == sizeConst;
+    };
+    for (Operation &op : *acquire->getBlock()) {
+      Value refined;
+      auto tryRefine = [&](Value lhs, Value rhs, Value result) {
+        bool lhsIsHint = (lhs == sizeHint) || (sizeIsConst && isSameConst(lhs));
+        bool rhsIsHint = (rhs == sizeHint) || (sizeIsConst && isSameConst(rhs));
+        if (lhsIsHint && ValueUtils::dependsOn(rhs, offset))
+          refined = result;
+        else if (rhsIsHint && ValueUtils::dependsOn(lhs, offset))
+          refined = result;
+      };
+
+      if (auto minOp = dyn_cast<arith::MinUIOp>(&op)) {
+        tryRefine(minOp.getLhs(), minOp.getRhs(), minOp.getResult());
+      } else if (auto minOp = dyn_cast<arith::MinSIOp>(&op)) {
+        tryRefine(minOp.getLhs(), minOp.getRhs(), minOp.getResult());
+      }
+
+      if (refined)
+        return refined;
+    }
+    return Value();
+  };
+
+  auto inferPartitionDims = [&](AcquirePartitionSummary &summary) {
+    if (!acqNode || summary.partitionOffsets.empty())
+      return;
+    summary.partitionDims.clear();
+    SmallVector<unsigned, 4> seen;
+    for (Value off : summary.partitionOffsets) {
+      if (!off) {
+        summary.partitionDims.clear();
+        return;
+      }
+      auto dimOpt =
+          acqNode->getPartitionOffsetDim(off, /*requireLeading=*/false);
+      if (!dimOpt) {
+        summary.partitionDims.clear();
+        return;
+      }
+      bool alreadySeen = false;
+      for (unsigned seenDim : seen) {
+        if (seenDim == *dimOpt) {
+          alreadySeen = true;
+          break;
+        }
+      }
+      if (alreadySeen) {
+        summary.partitionDims.clear();
+        return;
+      }
+      seen.push_back(*dimOpt);
+      summary.partitionDims.push_back(*dimOpt);
+    }
+  };
+
+  auto applyTiling2DPartitionDimsFallback =
+      [&](AcquirePartitionSummary &summary) {
+        if (!isTiling2DTaskAcquire(acquire))
+          return;
+        if (!summary.partitionDims.empty())
+          return;
+        if (summary.partitionOffsets.size() < 2)
+          return;
+        summary.partitionDims.clear();
+        for (unsigned d = 0; d < summary.partitionOffsets.size(); ++d)
+          summary.partitionDims.push_back(d);
+      };
+
+  switch (info.mode) {
+  case PartitionMode::coarse: {
+    info.isValid = true;
+    if (acqNode) {
+      Value offset, size;
+      if (succeeded(acqNode->computeBlockInfo(offset, size))) {
+        info.partitionOffsets.push_back(offset);
+        info.partitionSizes.push_back(size);
+        unsigned offsetIdx = 0;
+        Value repOffset = pickRepresentativePartitionOffset(
+            info.partitionOffsets, &offsetIdx);
+        Value repSize =
+            pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
+        if (Value refined = refineSizeFromMinInBlock(repOffset, repSize)) {
+          if (offsetIdx < info.partitionSizes.size())
+            info.partitionSizes[offsetIdx] = refined;
+          else if (!info.partitionSizes.empty())
+            info.partitionSizes[0] = refined;
+        }
+        inferPartitionDims(info);
+      } else {
+        info.isValid = false;
+      }
+    } else {
+      info.isValid = false;
+    }
+    break;
+  }
+
+  case PartitionMode::fine_grained: {
+    if (!acquire.getPartitionIndices().empty()) {
+      for (Value idx : acquire.getPartitionIndices())
+        info.partitionOffsets.push_back(idx);
+      Value one = builder.create<arith::ConstantIndexOp>(acquire.getLoc(), 1);
+      for (unsigned i = 0; i < info.partitionOffsets.size(); ++i)
+        info.partitionSizes.push_back(one);
+      info.isValid = true;
+      inferPartitionDims(info);
+    }
+    break;
+  }
+
+  case PartitionMode::block:
+  case PartitionMode::stencil: {
+    if (!acquire.getPartitionOffsets().empty()) {
+      for (Value off : acquire.getPartitionOffsets())
+        info.partitionOffsets.push_back(off);
+      auto sizes = acquire.getPartitionSizes();
+      Value one = builder.create<arith::ConstantIndexOp>(acquire.getLoc(), 1);
+      for (unsigned i = 0; i < info.partitionOffsets.size(); ++i)
+        info.partitionSizes.push_back(i < sizes.size() ? sizes[i] : one);
+      info.isValid = true;
+
+      unsigned offsetIdx = 0;
+      Value repOffset =
+          pickRepresentativePartitionOffset(info.partitionOffsets, &offsetIdx);
+      Value repSize =
+          pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
+      if (Value refined = refineSizeFromMinInBlock(repOffset, repSize)) {
+        if (offsetIdx < info.partitionSizes.size())
+          info.partitionSizes[offsetIdx] = refined;
+        else if (!info.partitionSizes.empty())
+          info.partitionSizes[0] = refined;
+      }
+
+      if (acqNode) {
+        Value loopOffset, loopSize;
+        if (succeeded(acqNode->computeBlockInfo(loopOffset, loopSize))) {
+          bool useLoopSize = false;
+          int64_t hintConst = 0;
+          int64_t loopConst = 0;
+          Value hintSize =
+              pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
+          Value hintOff = pickRepresentativePartitionOffset(
+              info.partitionOffsets, &offsetIdx);
+          bool hintIsConst =
+              hintSize && ValueUtils::getConstantIndex(hintSize, hintConst);
+          bool loopIsConst = ValueUtils::getConstantIndex(loopSize, loopConst);
+
+          bool offsetRelated = false;
+          if (hintOff && loopOffset) {
+            Value hintOffStripped = ValueUtils::stripNumericCasts(hintOff);
+            Value loopOff = ValueUtils::stripNumericCasts(loopOffset);
+            if (hintOffStripped == loopOff)
+              offsetRelated = true;
+            if (!offsetRelated &&
+                (ValueUtils::dependsOn(loopOff, hintOffStripped) ||
+                 ValueUtils::dependsOn(hintOffStripped, loopOff)))
+              offsetRelated = true;
+            if (!offsetRelated) {
+              int64_t hintOffConst = 0;
+              int64_t loopOffConst = 0;
+              if (ValueUtils::getConstantIndex(hintOffStripped, hintOffConst) &&
+                  ValueUtils::getConstantIndex(loopOff, loopOffConst) &&
+                  hintOffConst == loopOffConst)
+                offsetRelated = true;
+            }
+          }
+
+          bool loopSizeDependsOnOffset =
+              hintOff && ValueUtils::dependsOn(loopSize, hintOff);
+
+          if (loopSizeDependsOnOffset)
+            useLoopSize = true;
+          if (offsetRelated && !loopIsConst)
+            useLoopSize = true;
+          if (offsetRelated && hintIsConst && loopIsConst &&
+              hintConst != loopConst)
+            useLoopSize = true;
+
+          if (useLoopSize) {
+            if (offsetIdx < info.partitionSizes.size())
+              info.partitionSizes[offsetIdx] = loopSize;
+            else if (!info.partitionSizes.empty())
+              info.partitionSizes[0] = loopSize;
+            else
+              info.partitionSizes.push_back(loopSize);
+          }
+        }
+      }
+      inferPartitionDims(info);
+      applyTiling2DPartitionDimsFallback(info);
+      break;
+    }
+
+    if (acqNode) {
+      Value offset, size;
+      if (succeeded(acqNode->computeBlockInfo(offset, size))) {
+        info.partitionOffsets.push_back(offset);
+        info.partitionSizes.push_back(size);
+        info.isValid = true;
+        inferPartitionDims(info);
+        applyTiling2DPartitionDimsFallback(info);
+      } else {
+        info.mode = PartitionMode::coarse;
+      }
+    }
+    break;
+  }
+  }
+
+  return info;
+}
+
 std::optional<AccessPattern>
 DbAnalysis::getAcquireAccessPattern(DbAcquireOp acquire) {
   if (!acquire)
@@ -321,7 +614,8 @@ DbAnalysis::getAcquireAccessPattern(DbAcquireOp acquire) {
   return node->getAccessPattern();
 }
 
-std::optional<DbAccessPattern> DbAnalysis::getAllocAccessPattern(DbAllocOp alloc) {
+std::optional<DbAccessPattern>
+DbAnalysis::getAllocAccessPattern(DbAllocOp alloc) {
   if (!alloc)
     return std::nullopt;
 

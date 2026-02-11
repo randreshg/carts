@@ -293,52 +293,73 @@ func::FuncOp ArtsCodegen::insertInitPerNode(Location loc,
   OpBuilder::InsertionGuard IG(getBuilder());
   setInsertionPoint(module);
 
-  /// Create the function using the InitPerNodeFn type.
-  auto newFn = create<func::FuncOp>(loc, "initPerNode", InitPerNodeFn);
-  newFn.setPublic();
-  module.push_back(newFn);
+  func::FuncOp initPerNodeFn = module.lookupSymbol<func::FuncOp>("initPerNode");
+  if (!initPerNodeFn) {
+    /// Create the function using the InitPerNodeFn type.
+    initPerNodeFn = create<func::FuncOp>(loc, "initPerNode", InitPerNodeFn);
+    initPerNodeFn.setPublic();
+    initPerNodeFn.addEntryBlock();
+    getBuilder().setInsertionPointToStart(&initPerNodeFn.getBody().front());
+    create<func::ReturnOp>(loc);
+  }
 
-  /// Create the entry block.
-  Block *entryBlock = newFn.addEntryBlock();
+  if (!callback)
+    return initPerNodeFn;
+
+  Block &entryBlock = initPerNodeFn.getBody().front();
+  Operation *retTerminator = entryBlock.getTerminator();
+  if (!retTerminator || !isa<func::ReturnOp>(retTerminator))
+    return initPerNodeFn;
+
+  getBuilder().setInsertionPoint(retTerminator);
+  ValueRange args = initPerNodeFn.getArguments();
+  if (callback.getNumArguments() == 3) {
+    create<func::CallOp>(loc, callback, args);
+  } else if (callback.getNumArguments() == 2) {
+    create<func::CallOp>(
+        loc, callback,
+        ValueRange{initPerNodeFn.getArgument(1), initPerNodeFn.getArgument(2)});
+  } else if (callback.getNumArguments() == 0) {
+    create<func::CallOp>(loc, callback, ValueRange{});
+  }
+
+  return initPerNodeFn;
+}
+
+func::FuncOp ArtsCodegen::insertDistributedDbInitFn(Location loc) {
+  if (distributedInitCallbacks.empty())
+    return func::FuncOp();
+
+  OpBuilder::InsertionGuard IG(getBuilder());
+  setInsertionPoint(module);
+
+  if (auto existing = module.lookupSymbol<func::FuncOp>("distributed_db_init"))
+    return existing;
+
+  auto fn = create<func::FuncOp>(loc, "distributed_db_init", InitPerNodeFn);
+  fn.setPrivate();
+
+  Block *entryBlock = fn.addEntryBlock();
   getBuilder().setInsertionPointToStart(entryBlock);
 
-  /// Retrieve the first argument and compare arg with 1.
-  auto arg = entryBlock->getArgument(0);
-  auto cmp =
-      create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
-                            castToIndex(arg, loc), createIndexConstant(1, loc));
-
-  /// Create separate then and merge blocks in the function body.
-  auto thenBlock = new Block();
-  auto mergeBlock = new Block();
-  mergeBlock->addArgument(newFn.getArgument(1).getType(), loc);
-  mergeBlock->addArgument(newFn.getArgument(2).getType(), loc);
-  newFn.getBody().push_back(thenBlock);
-  newFn.getBody().push_back(mergeBlock);
-
-  /// In the entry block, do a conditional branch: if cmp true, jump to
-  /// thenBlock; otherwise, continue in mergeBlock.
-  create<cf::CondBranchOp>(
-      loc, cmp, thenBlock, ValueRange{}, mergeBlock,
-      ValueRange{newFn.getArgument(1), newFn.getArgument(2)});
-
-  /// thenBlock - If nodeId >= 1, return
-  getBuilder().setInsertionPointToStart(thenBlock);
-  create<func::ReturnOp>(loc);
-
-  /// mergeBlock - Otherwise, call the callback function and return
-  getBuilder().setInsertionPointToStart(mergeBlock);
-  if (callback) {
-    /// If the callback function receives arguments, pass them to the call,
-    /// otherwise, pass an empty ValueRange.
-    auto callArgs = ValueRange{};
-    if (callback.getNumArguments() > 0)
-      callArgs = {newFn.getArgument(1), newFn.getArgument(2)};
-    create<func::CallOp>(loc, callback, callArgs);
+  for (func::FuncOp callback : distributedInitCallbacks) {
+    if (!callback)
+      continue;
+    if (callback.getNumArguments() == 3) {
+      create<func::CallOp>(loc, callback, fn.getArguments());
+      continue;
+    }
+    if (callback.getNumArguments() == 2) {
+      create<func::CallOp>(loc, callback,
+                           ValueRange{fn.getArgument(1), fn.getArgument(2)});
+      continue;
+    }
+    if (callback.getNumArguments() == 0)
+      create<func::CallOp>(loc, callback, ValueRange{});
   }
-  createRuntimeCall(ARTSRTL_artsShutdown, {}, loc);
+
   create<func::ReturnOp>(loc);
-  return newFn;
+  return fn;
 }
 
 func::FuncOp ArtsCodegen::insertArtsMainFn(Location loc,
@@ -398,9 +419,26 @@ void ArtsCodegen::initRT(Location loc) {
   /// Rename main function to "mainBody"
   mainFn.setName("mainBody");
 
-  /// Insert init functions (artsMain and main)
+  /// Insert distributed init callback in initPerNode when distributed
+  /// allocations were lowered into callback helpers.
+  if (!distributedInitCallbacks.empty()) {
+    func::FuncOp distributedInitFn = insertDistributedDbInitFn(loc);
+    insertInitPerNode(loc, distributedInitFn);
+  }
+
+  /// Insert runtime entry functions (artsMain and main)
   insertArtsMainFn(loc, mainFn);
   insertMainFn(loc);
+}
+
+void ArtsCodegen::registerDistributedInitCallback(func::FuncOp callback) {
+  if (!callback)
+    return;
+  for (func::FuncOp existing : distributedInitCallbacks) {
+    if (existing == callback)
+      return;
+  }
+  distributedInitCallbacks.push_back(callback);
 }
 
 /// Helpers

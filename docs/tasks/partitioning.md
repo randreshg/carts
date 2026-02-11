@@ -235,178 +235,77 @@ carts benchmarks run --all --size small -- --partition-fallback=fine
 
 ---
 
-# Part 2: DB Copy/Sync for Mixed Access Patterns
+# Part 2: Memory EDT Path for Mixed Access Patterns
 
 ## Motivation
 
-The fine-grained fallback (Part 1) helps but may have high overhead for LULESH due to:
+The fine-grained fallback (Part 1) helps, but LULESH-style indirect access can still create high overhead:
 
 - 8 acquires per element (one per node in hexahedron)
-- High sync overhead for many small DBs
+- high control overhead when each element triggers many tiny accesses
 
-A better approach for mixed access patterns: **create separate DB versions with different partitioning, sync when needed**.
+For mixed access patterns, the active direction is to insert explicit transformation tasks between producer and consumer phases.
 
 ## The LULESH Pattern
 
 ```
-x[] array lifecycle in LULESH iteration:
+x[] array lifecycle in one iteration:
 
 1. CalcPositionForNodes (node-parallel, WRITE)
-   x[i] += xd[i] * dt    // Direct access, stride-1
-   → Can use CHUNKED partitioning
+   x[i] += xd[i] * dt
+   -> blocked/chunked layout is best
 
 2. CalcKinematicsForElems (element-parallel, READ)
-   x_local[j] = x[nodelist[k][j]]  // Indirect access
-   → Needs ELEMENT-WISE or full copy
+   x_local[j] = x[nodelist[k][j]]
+   -> indirect indexed reads favor element-local layout
 
-3. Other element-parallel loops (READ)
-   Same pattern as #2
+3. Additional element-parallel reads
+   -> same indirect pattern
 ```
 
-## Proposed Solution: DB Versioning with Sync
+## Proposed Solution: Memory EDT Recode/Gather
 
 ```mlir
-// Original allocation
-%x_orig = arts.db_alloc memref<numNodes x f64>  // Source of truth
+// Source allocation
+%x_guid, %x_ptr = arts.db_alloc ...
 
-// Create read-optimized copy for indirect access
-%x_copy = arts.db_copy(%x_orig) partition=element_wise
-// OR: %x_copy = arts.db_copy(%x_orig) partition=none  // full replica
-
-// Node-parallel loop: write to original (blocked)
+// Producer phase
 arts.for (%i = 0 to %numNodes) {
-  %x_chunk = arts.db_acquire(%x_orig) offsets[%start] sizes[%block_size]
+  %x_chunk = arts.db_acquire(%x_guid, %x_ptr) offsets[%start] sizes[%block_size]
   // x[i] += xd[i] * dt
 }
 
-// Sync copy with original before element-parallel reads
-arts.db_sync(%x_copy, %x_orig)  // Copy updated data
+// Transform phase as explicit task
+%x_local_guid, %x_local_ptr = arts.memory_edt recode
+    source(%x_ptr) [source_layout = blocked]
+    -> [dest_layout = fine_grained]
+    dependencies(%x_ptr)
 
-// Element-parallel loop: read from copy
+// Consumer phase reads transformed layout
 arts.for (%k = 0 to %numElem) {
   %n0 = load nodelist[%k, 0]
-  %x_n0 = arts.db_acquire(%x_copy) indices[%n0] sizes[1]
+  %x_n0 = arts.db_acquire(%x_local_guid, %x_local_ptr) indices[%n0] sizes[1]
   // Use x_n0...
 }
 ```
 
 ## Benefits
 
-1. **Write path optimized**: Blocked partitioning for direct writes (CalcPositionForNodes)
-2. **Read path optimized**: Element-wise or replicated for indirect reads
-3. **Explicit sync points**: Only sync when needed (between write and read phases)
-4. **Reduced contention**: Writers and readers use different DB instances
+1. Write path remains optimized for direct updates.
+2. Read path is optimized for indirect element access.
+3. Data-layout transforms are explicit tasks in the EDT graph.
+4. Policy stays compiler-driven through analysis + heuristics, not ad-hoc pass logic.
 
-## Implementation Plan (Part 2)
+## Current Status and Next Milestones
 
-### Phase 2.1: Add `arts.db_copy` Operation
-
-**File**: `include/arts/ArtsOps.td`
-
-```tablegen
-def DbCopyOp : Arts_Op<"db_copy", [...]> {
-  let summary = "Create a copy of a datablock with different partitioning";
-  let arguments = (ins
-    AnyType:$sourceGuid,
-    AnyType:$sourcePtr,
-    OptionalAttr<PromotionModeAttr>:$partition
-  );
-  let results = (outs AnyType:$guid, AnyType:$ptr);
-}
-```
-
-### Phase 2.2: Add `arts.db_sync` Operation
-
-**File**: `include/arts/ArtsOps.td`
-
-```tablegen
-def DbSyncOp : Arts_Op<"db_sync", [...]> {
-  let summary = "Synchronize datablock copy with source";
-  let arguments = (ins
-    AnyType:$destGuid,    // Copy to update
-    AnyType:$sourceGuid,  // Source of truth
-    DefaultValuedAttr<BoolAttr, "true">:$fullSync  // vs incremental
-  );
-}
-```
-
-### Phase 2.3: Analysis Pass for Copy Insertion
-
-**File**: `lib/arts/Passes/Optimizations/DbVersioning.cpp` (NEW)
-
-Analyze access patterns and insert db_copy/db_sync:
-
-1. Identify DBs with mixed access patterns (write-direct + read-indirect)
-2. Insert `db_copy` after allocation
-3. Redirect indirect reads to copy
-4. Insert `db_sync` at write→read boundaries
-
-### Phase 2.4: Lower to Runtime
-
-**File**: `lib/arts/Passes/Transformations/DbLowering.cpp`
-
-- `db_copy` → `artsDbCopy()` runtime call
-- `db_sync` → `artsDbSync()` runtime call (or memcpy for single-node)
-
-### Phase 2.5: Runtime Support
-
-**File**: ARTS runtime (external)
-
-Need to ensure runtime supports:
-
-- `artsDbCopy(srcGuid, dstGuid, partitionMode)`
-- `artsDbSync(dstGuid, srcGuid)`
-
----
-
-## Files to Add/Modify (Part 2)
-
-| File | Change |
-|------|--------|
-| `include/arts/ArtsOps.td` | Add `DbCopyOp` and `DbSyncOp` |
-| `lib/arts/Passes/Optimizations/DbVersioning.cpp` | **NEW** - analyze and insert copy/sync |
-| `lib/arts/Passes/Optimizations/CMakeLists.txt` | Add DbVersioning.cpp |
-| `include/arts/Passes/ArtsPasses.td` | Add DbVersioning pass |
-| `lib/arts/Passes/Transformations/DbLowering.cpp` | Lower copy/sync ops |
-| ARTS runtime | Add `artsDbCopy`, `artsDbSync` functions |
-
----
-
-## Verification Plan (Part 2)
-
-### Step 1: Test with Manual Annotation
-
-First, manually insert db_copy/db_sync in LULESH MLIR to verify concept.
-
-### Step 2: Automated Analysis
-
-Run DbVersioning pass on LULESH, verify correct copy/sync insertion.
-
-### Step 3: Performance Comparison
-
-Compare three modes:
-
-1. `--partition-fallback=coarse` (baseline)
-2. `--partition-fallback=fine` (Part 1)
-3. `--partition-fallback=versioned` (Part 2)
-
----
-
-## Implementation Order
-
-| Part | Description | Complexity | This PR? |
-|------|-------------|------------|----------|
-| **Part 1** | Fine-grained fallback option | Low | ✓ Yes |
-| **Part 2** | DB versioning with copy/sync | High | Future |
-
-**Part 1** enables quick experimentation. **Part 2** builds on learnings.
-
----
+1. Part 1 (`--partition-fallback`) is implemented and validated.
+2. Next step for this track is Memory EDT insertion backed by DB/EDT analysis interfaces.
+3. Distributed DB ownership is now available behind `--distributed-db-ownership` for eligible allocations.
 
 ## Summary
 
 | Approach | Parallelism | Overhead | Complexity |
 |----------|-------------|----------|------------|
 | Coarse (current) | None | Low | Simple |
-| Fine-grained (Part 1) | High | High (many acquires) | Low |
-| Versioned (Part 2) | High | Medium (sync cost) | High |
+| Fine-grained fallback | High | High (many acquires) | Low |
+| Memory EDT transform path | High | Medium (amortized transform) | Medium |

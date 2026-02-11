@@ -1,34 +1,117 @@
-# Distribution (Technical Guide)
+# CARTS Distribution Framework
 
 ## Purpose
 
-This document defines how CARTS selects and applies loop distribution for
-`arts.for` in parallel EDT regions.
+This document is the technical reference for CARTS H2 distribution:
+- runtime capability constraints from ARTS
+- algorithm compatibility and tradeoffs
+- pattern classification ownership (analysis API)
+- selected lowering architecture and pipeline integration
 
-This is the H2 heuristic family:
+H2 decides *work distribution* and task loop structure.
+H1 partitioning still decides DB layout/rewrite details.
 
-- H2 decides distribution kind and worker bounds
-- H2 does not decide DB layout modes (that is H1 partitioning)
+Related guide:
+- `docs/heuristics/partitioning/partitioning.md`
 
-For partitioning details, see:
-`docs/heuristics/partitioning/partitioning.md`
+## 1. ARTS Runtime Capability Summary
 
-## Runtime constraints that shape H2
+### 1.1 Memory and ownership model
 
-- DB writes follow single-writer ownership semantics
-- Internode write-back is expensive compared to read-only acquire
-- Work stealing exists, but static mapping still matters for first placement
-- Owner-computes remains the default lowering model
+| Capability | Status | Implication |
+|---|---|---|
+| DB owner node fixed by GUID | Yes | owner-computes is natural for writes |
+| Single writer per generation | Yes | no concurrent multi-writer update of one DB |
+| Read sharing | Yes | multiple readers can acquire concurrently |
+| Partial read dependency (`artsRecordDepAt`) | Yes | stencil/halo exchanges are efficient |
+| Partial point-to-point put (`artsPutInDb`) | Yes | targeted transfer works |
+| Partial write-back of modified DB | No (disabled) | write release remains full DB cost |
 
-## Pipeline placement
+### 1.2 EDT execution model
 
-Distribution is a dedicated pipeline stage:
+| Capability | Status | Implication |
+|---|---|---|
+| Route-based EDT placement | Yes | static first placement is controllable |
+| EDT migration | Yes | runtime can relocate work |
+| Work stealing (intra + inter) | Yes | dynamic balance exists but static mapping still matters |
+| Active messages (`artsActiveMessageWithDb`) | Yes | compute-to-data patterns are feasible |
+| Dynamic route table update | Yes | signals follow migrated EDTs |
 
-- `concurrency`: prepare parallel structure, annotate access patterns/hints
-- `edt-distribution`: choose distribution + annotate `arts.for`, then lower
-- `concurrency-opt`: DB partitioning and downstream optimizations
+### 1.3 Practical constraints for distribution
 
-Commands:
+- Keep write ownership simple (prefer owner-computes).
+- Avoid expensive remote write-back when possible.
+- Use read-only fan-out for shared inputs when possible.
+- Expect no native high-level collectives; compose from EDT/event primitives.
+
+## 2. Algorithm Compatibility (Research)
+
+### 2.1 Compatibility matrix
+
+| Algorithm | ARTS fit | Current status in CARTS |
+|---|---|---|
+| Block | Strong | Implemented baseline |
+| Two-level block (internode) | Strong | Implemented default internode path |
+| Block-cyclic | Good | Implemented task-loop lowering path |
+| 2D block tiling (matmul-oriented) | Good | Implemented strategy + task loop striping + owner hints |
+| Cannon-style shifts | Feasible but complex | Not implemented (future) |
+| SUMMA-style broadcast panels | Feasible via events/active messages | Not implemented (future) |
+| 2.5D replication | Possible but high complexity | Not implemented (future) |
+| Stencil halo | Strong | Implemented via block + halo-aware rewrite |
+
+### 2.2 Why CARTS currently prefers 2D tiling over Cannon/SUMMA
+
+For current compiler/runtime integration:
+- 2D tiling keeps ownership decisions explicit and local to task/DB hints.
+- It avoids multi-phase shift orchestration required by Cannon.
+- It avoids introducing new broadcast protocol machinery needed by SUMMA.
+
+Cannon and SUMMA remain viable future paths once collective-like orchestration is first-class in lowering/runtime APIs.
+
+## 3. Strategy Selection Policy (H2)
+
+Current policy is implemented in
+`DistributionHeuristics::selectDistributionKind` (`lib/arts/Analysis/DistributionHeuristics.cpp`).
+
+1. If EDT concurrency is internode: `two_level`
+2. Otherwise (intranode):
+   - `triangular` -> `block_cyclic`
+   - `matmul` -> `tiling_2d`
+   - `stencil`/`uniform`/`unknown` -> `block`
+
+## 4. Pattern Detection Ownership
+
+Pattern detection is centralized in analysis APIs, not in lowering passes.
+
+### 4.1 DB-backed source of truth
+
+- `DbAnalysis::analyzeLoopDbAccessPatterns(ForOp)` computes loop summary from DB graph + access bounds.
+- `DbAnalysis::getLoopDistributionPattern(ForOp)` exposes pattern.
+- `ArtsAnalysisManager::getLoopDistributionPattern(Operation *)` is the unified pass-facing API.
+
+### 4.2 EDT-facing view
+
+- `EdtAnalysis` consumes DB-derived loop summaries for EDT-level reporting.
+- Passes do not need to rescan memops directly to classify loop patterns.
+
+### 4.3 Access-pattern unification
+
+- Shared utility: `AccessPatternAnalysis` (`include/arts/Analysis/AccessPatternAnalysis.h`, `lib/arts/Analysis/AccessPatternAnalysis.cpp`)
+- DB graph nodes and DB analysis both use the same bounds logic.
+
+## 5. Pipeline Architecture
+
+Distribution is now a dedicated stage:
+
+- `concurrency`: prepares parallel structure
+- `edt-distribution`: runs `EdtDistributionPass`, annotates distribution attrs, then `ForLowering`
+- `concurrency-opt`: DB partitioning and downstream optimization
+
+Key files:
+- `tools/run/carts-run.cpp`
+- `lib/arts/Passes/Transformations/EdtDistributionPass.cpp`
+
+Useful stop points:
 
 ```bash
 carts-run input.mlir --stop-at=concurrency
@@ -36,97 +119,132 @@ carts-run input.mlir --stop-at=edt-distribution
 carts-run input.mlir --stop-at=concurrency-opt
 ```
 
-## IR contract
+## 6. Distributed DB Ownership (Part 8, in progress)
 
-`EdtDistributionPass` annotates each top-level `arts.for` in a parallel EDT:
+Goal:
+- distribute eligible host-level DB allocations across nodes so memory scales
+  with node count.
+
+Current implementation:
+- `DbAllocOp` supports a `distributed` marker attribute.
+- New pass: `DistributedDbOwnershipPass`
+  (`lib/arts/Passes/Optimizations/DistributedDbOwnership.cpp`).
+- Pipeline placement: `DbPartitioning -> DistributedDbOwnership -> DbPass`
+  (gated by `--distributed-db-ownership` in `carts-run`).
+- Lowering support: `ConvertArtsToLLVM` uses round-robin route selection for
+  marked multi-DB allocations:
+  - route = `linearIndex % artsGetTotalNodes()`
+  - unmarked allocations keep the existing route behavior.
+
+Current eligibility policy is intentionally conservative:
+- allocation is host-level (outside `arts.edt`)
+- not `DbAllocType::global`
+- has multiple DB blocks
+- handle uses are restricted to DB dependency flow (`db_acquire`, `db_free`,
+  EDT dependency wiring)
+- allocation is consumed by internode EDTs
+
+Not yet implemented in this slice:
+- distributed init split (`distributed_db_init` in `initPerNode`)
+- distributed free policy beyond current shutdown behavior
+- ownership policy beyond round-robin (future: writer/strategy-aware mapping)
+
+## 6. IR Contract
+
+`EdtDistributionPass` annotates top-level `arts.for` in parallel EDT regions with:
 
 - `distribution_kind` (`#arts.distribution_kind<...>`)
 - `distribution_pattern` (`#arts.distribution_pattern<...>`)
 - `distribution_version = 1`
 
-These attributes are consumed by `ForLowering` and propagated to lowered epoch
-and task EDT operations.
+These attributes are consumed by `ForLowering` and propagated to generated epoch/task EDT operations.
 
-## Pattern classification ownership
+## 7. Loop Transform Compatibility (R8)
 
-Pattern detection is centralized in DB-backed analysis, not in lowering passes:
+Question: do loop normalization/reordering transforms harm multi-node distribution?
 
-- `DbAnalysis::analyzeLoopDbAccessPatterns(ForOp)` computes loop summary
-- `ArtsAnalysisManager::getLoopDistributionPattern(Operation *)` delegates to DB analysis
-- `EdtDistributionPass` queries manager API and only maps pattern -> kind
-- `EdtAnalysis` consumes loop summaries for EDT-level reporting
+Current answer: **no for existing 1D outer-loop distribution path**.
 
-Current pattern values:
+Reason:
+- Stage 5-6 transforms mostly target inner serial `scf.for` structure.
+- Distribution stage (`edt-distribution`) runs later and preserves top-level `arts.for` distribution contract.
 
-- `uniform`
-- `stencil`
-- `matmul`
-- `triangular`
-- `unknown`
+Pass-level summary (current behavior):
+- Loop normalization (triangular-to-rectangular forms): compatible
+- Loop reordering/interchange: compatible for current outer-loop distribution
+- Matmul inner tiling/reduction reshaping: compatible with current H2 selection
+- Loop fusion with matched bounds: compatible if resulting top-level loop semantics remain equivalent
 
-## Strategy mapping
+Future caveat:
+- If distribution expands to full 2D outer-loop ownership transforms, some inner-loop tiling/reordering choices may need explicit coordination metadata.
 
-Current policy in `DistributionHeuristics::selectDistributionKind`:
+## 8. Lowering Architecture
 
-- If EDT concurrency is internode, select `two_level`
-- Otherwise:
-  - `triangular` -> `block_cyclic`
-  - `matmul` -> `tiling_2d`
-  - `uniform`/`stencil`/`unknown` -> `block`
+`ForLowering` now orchestrates strategy-specific helpers instead of owning all logic inline.
 
-## Lowering architecture
+### 8.1 Acquire rewriting helpers
 
-`ForLowering` is orchestration only; strategy-specific behavior is delegated:
+- `EdtRewriter` abstraction:
+  - `BlockEdtRewriter`
+  - `StencilEdtRewriter`
+- Strategy-aware planning extracted into:
+  - `AcquireRewritePlanning` (`include/arts/Transforms/Edt/AcquireRewritePlanning.h`, `lib/arts/Transforms/Edt/AcquireRewritePlanning.cpp`)
 
-- Task-loop lowering:
+### 8.2 Task loop lowering helpers
+
+- `EdtTaskLoopLowering` abstraction:
   - `BlockTaskLoopLowering`
   - `BlockCyclicTaskLoopLowering`
   - `Tiling2DTaskLoopLowering`
-- Acquire rewriting:
-  - `BlockEdtRewriter`
-  - `StencilEdtRewriter`
+- Strategy helpers now also own acquire-window planning through
+  `EdtTaskLoopLowering::planAcquireRewrite(...)` so `ForLowering` does not
+  embed strategy-specific `acquire_offset/size/hint` branching.
 
-Current implementation status:
+### 8.3 Partitioning integration for 2D owner hints
 
-- `block`: implemented and default intranode path
-- `two_level`: implemented internode path
-- `block_cyclic`: implemented task-loop scheduling path
-- `tiling_2d`: implemented with
-  - dedicated task-loop lowering (`Tiling2DTaskLoopLowering`)
-  - task-level column striping
-  - owner-hint propagation for `inout` acquires so H1 can materialize 2D
-    output ownership (`blockND`) in `DbPartitioning`
+`DbPartitioning` consumes tiling-2D owner hints on writable (`inout`) task acquires to force N-D block ownership where valid.
 
-Current scope of `tiling_2d`:
-- 2D owner partitioning is applied to writable outputs (`inout`) when 2D
-  partition hints are present.
-- Read-only inputs continue to use existing block/read paths.
+## 9. Heuristics Placement
 
-## Interaction with partitioning (H1)
+`DistributionHeuristics` now centralizes:
+- worker topology resolution (`resolveWorkerConfig`)
+- dispatch worker count / total worker helpers
+- DB alignment block-size heuristic
+- coarsened block-size hint computation for `arts.for`
 
-Distribution and partitioning are separate and ordered:
+Passes consume the API; they do not duplicate these heuristics.
 
-1. H2 distribution decides worker mapping and loop/task structure
-2. H1 partitioning decides DB layout/rewrite in `DbPartitioning`
-   - for `tiling_2d` outputs, H1 consumes the propagated owner hints and
-     selects N-D block ownership when valid
-
-Both consume shared DB/EDT analysis APIs, but they optimize different layers.
-
-## Validation checklist
+## 10. Validation Checklist
 
 ```bash
 ninja -C build carts-run
 
-# Inspect distribution annotations
+# Missing config must fail fast
+carts-run input.mlir --stop-at=concurrency
+
+# Inspect distribution attributes
 carts-run gemm.mlir --O3 --arts-config arts.cfg --stop-at=edt-distribution
 
-# Optional debug traces
-carts-run gemm.mlir --O3 --arts-config arts.cfg --stop-at=edt-distribution \
-  --debug-only=edt_distribution,for_lowering 2>&1
+# Multi-node counters
+# (example harness depends on your local benchmark setup)
 ```
 
-Expected baseline:
+Expected checks:
+- no `distribution_*` attrs at `--stop-at=concurrency`
+- `distribution_kind/pattern/version` attrs at `--stop-at=edt-distribution`
+- checksums unchanged for benchmark kernels
+- node/thread counters show non-zero work on remote nodes for distributed runs
 
-- checksums unchanged for existing workloads
-- `distribution_kind` and `distribution_pattern` visible after `edt-distribution`
+## 11. Compiler-System Design Principles (Survey Notes)
+
+Practical principles adopted from systems like Halide/Legion/Chapel/HPF/GSPMD/Charm++:
+
+- Separate policy from lowering: distribution plan first, IR rewrite second.
+- Keep strategy catalog extensible through enums + specialized lowerers.
+- Keep correctness independent from mapper choice; mapper changes should be performance policy.
+- Prefer analysis-backed decisions over pass-local ad-hoc classification.
+
+In CARTS, this maps to:
+- `EdtDistributionPass` for policy annotation
+- specialized task/acquire lowering components for execution
+- DB/EDT analysis APIs as single pattern source of truth

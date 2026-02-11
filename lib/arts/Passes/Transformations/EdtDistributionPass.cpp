@@ -60,9 +60,9 @@ struct EdtDistributionPass
             DistributionHeuristics::selectDistributionKind(strategy, pattern);
         setEdtDistributionKind(forOp.getOperation(), kind);
         setEdtDistributionPattern(forOp.getOperation(), pattern);
-        forOp->setAttr(AttrNames::Operation::DistributionVersion,
-                       IntegerAttr::get(IntegerType::get(forOp.getContext(), 32),
-                                        1));
+        forOp->setAttr(
+            AttrNames::Operation::DistributionVersion,
+            IntegerAttr::get(IntegerType::get(forOp.getContext(), 32), 1));
 
         ARTS_DEBUG("Annotated arts.for with kind="
                    << static_cast<int>(kind)

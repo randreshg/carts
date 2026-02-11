@@ -57,7 +57,8 @@ static bool isColumnLoopForGlobalIter(scf::ForOp loop, Value globalIter) {
   return matches;
 }
 
-static void stripeLoopByColumns(TaskLoopPostCloneInput &input, scf::ForOp loop) {
+static void stripeLoopByColumns(TaskLoopPostCloneInput &input,
+                                scf::ForOp loop) {
   ArtsCodegen *AC = input.AC;
   if (!AC || !loop || !input.innerStripeLane || !input.innerStripeCount)
     return;
@@ -92,6 +93,16 @@ static void stripeLoopByColumns(TaskLoopPostCloneInput &input, scf::ForOp loop) 
 
 class Tiling2DTaskLoopLowering final : public EdtTaskLoopLowering {
 public:
+  TaskAcquirePlanningResult
+  planAcquireRewrite(const TaskLoopLoweringInput &input,
+                     Value chunkOffset) const override {
+    TaskAcquirePlanningResult result =
+        EdtTaskLoopLowering::planAcquireRewrite(input, chunkOffset);
+    result.tiling2DGrid = DistributionHeuristics::getTiling2DWorkerGrid(
+        input.AC, input.loc, input.taskWorkerId, input.totalWorkers);
+    return result;
+  }
+
   TaskLoopLoweringResult
   lower(TaskLoopLoweringInput &input,
         const TaskLoopLoweringMappedValues &mapped) const override {

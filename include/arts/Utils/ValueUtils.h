@@ -13,8 +13,8 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Value.h"
-#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/FunctionExtras.h"
+#include "llvm/ADT/SetVector.h"
 #include <optional>
 
 namespace mlir {
@@ -202,9 +202,9 @@ public:
   /// Check if an operation can be safely cloned into another region.
   /// `allowMemoryEffectFree` enables cloning of pure ops.
   /// `extraAllowed` can whitelist additional ops not covered by defaults.
-  static bool canCloneOperation(
-      Operation *op, bool allowMemoryEffectFree = true,
-      llvm::function_ref<bool(Operation *)> extraAllowed = {});
+  static bool
+  canCloneOperation(Operation *op, bool allowMemoryEffectFree = true,
+                    llvm::function_ref<bool(Operation *)> extraAllowed = {});
 
   /// Clone external values (and dependencies) into a target region.
   /// Returns true when all requested values were cloned/mapped.

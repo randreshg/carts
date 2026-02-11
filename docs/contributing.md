@@ -10,7 +10,7 @@
   - `benchmark/` - Performance utilities
   - `setup/` - Environment provisioning
 - `tests/` - Test suites
-  - `arts/` - Pipeline regression tests (MLIR + FileCheck)
+  - `contracts/` - Pipeline regression tests (MLIR + FileCheck)
   - `examples/` - End-to-end C/C++ tests
 - `docker/` - Container workflows
 - `external/` - Dependencies (ARTS, Polygeist, LLVM)
@@ -26,8 +26,12 @@ carts build --arts --debug             # Build ARTS with debug logging
 
 # Testing
 carts execute simple.cpp -o simple     # Full compilation pipeline
-carts check                            # Run all tests
-carts check --suite arts               # Run specific test suite
+carts test                             # Run all tests
+carts check                            # Alias for carts test
+
+# Formatting
+carts format                           # Format tracked C/C++/TableGen files
+carts format --check                   # Check formatting without edits
 
 # Docker
 docker/docker-build.sh --smart         # Build with cached layers
@@ -41,12 +45,12 @@ Follow LLVM conventions:
 - Braces on same line
 - `CamelCase` for types/ops (e.g., `DbDimOp`)
 - `camelCase` for variables
-- Run `clang-format -i <file>` before committing
+- Run `carts format` (or `clang-format -i <file>`) before committing
 - Keep `// RUN:` and `FileCheck` directives aligned
 
 ## Testing Guidelines
 
-1. **MLIR regression tests** → `tests/arts/<area>/`
+1. **MLIR regression tests** → `tests/contracts/<area>/`
    - Use `// RUN: %carts opt ...` with FileCheck
    - Cover new ops/passes with positive and negative cases
 
@@ -54,7 +58,7 @@ Follow LLVM conventions:
    - Include source files, `arts.cfg`, and expected MLIR
    - Document in per-directory README
 
-3. **Always run** `carts check` locally before submitting
+3. **Always run** `carts test` locally before submitting
 
 ## Commit Guidelines
 

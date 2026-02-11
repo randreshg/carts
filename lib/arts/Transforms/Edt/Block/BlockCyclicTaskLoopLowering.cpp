@@ -58,16 +58,17 @@ public:
         input.AC->create<arith::MulIOp>(input.loc, chunkId, mapped.blockSize);
     Value chunkEndHint = input.AC->create<arith::AddIOp>(input.loc, chunkStart,
                                                          mapped.blockSize);
-    Value chunkEnd = input.AC->create<arith::MinUIOp>(
-        input.loc, chunkEndHint, mapped.totalIterations);
+    Value chunkEnd = input.AC->create<arith::MinUIOp>(input.loc, chunkEndHint,
+                                                      mapped.totalIterations);
 
-    result.iterLoop = input.AC->create<scf::ForOp>(input.loc, chunkStart,
-                                                   chunkEnd, one);
+    result.iterLoop =
+        input.AC->create<scf::ForOp>(input.loc, chunkStart, chunkEnd, one);
     return result;
   }
 
-  void collectExtraExternalValues(const TaskLoopLoweringInput &input,
-                                  llvm::SetVector<Value> &values) const override {
+  void
+  collectExtraExternalValues(const TaskLoopLoweringInput &input,
+                             llvm::SetVector<Value> &values) const override {
     values.insert(input.blockSize);
     values.insert(input.totalIterations);
     values.insert(input.totalChunks);

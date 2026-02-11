@@ -111,10 +111,11 @@ struct CollectMetadataPass : public CollectMetadataBase<CollectMetadataPass> {
         ARTS_ERROR("Failed to export metadata to JSON");
     }
 
-    ///  Print statistics
+    ///  Print statistics only in debug mode to keep normal compilation output
+    ///  clean.
     ARTS_DEBUG("CollectMetadata: Collected metadata for " << manager->size()
                                                           << " operations");
-    manager->printStatistics(ARTS_DBGS());
+    ARTS_DEBUG_REGION(manager->printStatistics(ARTS_DBGS()););
   }
 
 private:

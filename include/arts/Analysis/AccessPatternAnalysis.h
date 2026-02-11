@@ -7,9 +7,9 @@
 #ifndef ARTS_ANALYSIS_ACCESSPATTERNANALYSIS_H
 #define ARTS_ANALYSIS_ACCESSPATTERNANALYSIS_H
 
+#include "mlir/IR/Value.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
-#include "mlir/IR/Value.h"
 #include <cstdint>
 #include <optional>
 
@@ -44,4 +44,3 @@ AccessBoundsResult analyzeAccessBoundsFromIndices(
 } // namespace mlir
 
 #endif // ARTS_ANALYSIS_ACCESSPATTERNANALYSIS_H
-

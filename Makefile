@@ -20,9 +20,8 @@ ARTS_INSTALL_DIR ?=$(INSTALL_DIR)/arts
 LLVM_INSTALL_DIR ?=$(INSTALL_DIR)/llvm
 POLYGEIST_INSTALL_DIR ?=$(INSTALL_DIR)/polygeist
 
-PYTHON ?= python3
-PYTHON_VERSION := $(shell $(PYTHON) -c 'import sys; print("{}.{}".format(sys.version_info.major, sys.version_info.minor))')
-PYTHON_SITE_PACKAGES := $(LLVM_INSTALL_DIR)/lib/python$(PYTHON_VERSION)/site-packages
+LIT_SOURCE_DIR := $(LLVM_DIR)/llvm/utils/lit
+LIT_INSTALL_DIR := $(LLVM_INSTALL_DIR)/utils/lit
 
 CARTS_LINKER_PATH ?= ${LLVM_INSTALL_DIR}/bin/ld.lld
 
@@ -94,13 +93,24 @@ llvm:
 		mkdir -p $(LLVM_INSTALL_DIR)/bin; \
 		cp $(LLVM_BUILD_DIR)/bin/llvm-lit $(LLVM_INSTALL_DIR)/bin/; \
 	fi
-llvm-lit: llvm
-	mkdir -p $(PYTHON_SITE_PACKAGES) $(LLVM_BUILD_DIR)/lit-tmp && \
-	rsync -a --exclude='build' --exclude='*.egg-info' --exclude='*.pyc' --exclude='__pycache__' --exclude='ExampleTests*' $(LLVM_DIR)/llvm/utils/lit/ $(LLVM_BUILD_DIR)/lit-tmp/ && \
-	cd $(LLVM_BUILD_DIR)/lit-tmp && \
-	$(PYTHON) -m pip install --target=$(PYTHON_SITE_PACKAGES) --no-deps --no-build-isolation --no-cache-dir . && \
-	rm -rf $(LLVM_BUILD_DIR)/lit-tmp && \
-	[ -f "$(PYTHON_SITE_PACKAGES)/bin/lit" ] && mkdir -p $(LLVM_INSTALL_DIR)/bin && cp $(PYTHON_SITE_PACKAGES)/bin/lit $(LLVM_INSTALL_DIR)/bin/ || true
+
+lit-bootstrap:
+	@if [ ! -d "$(LIT_SOURCE_DIR)/lit" ]; then \
+		echo "Error: lit sources not found at $(LIT_SOURCE_DIR)."; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(LLVM_INSTALL_DIR)/bin/llvm-lit" ]; then \
+		echo "Error: llvm-lit launcher not found at $(LLVM_INSTALL_DIR)/bin/llvm-lit."; \
+		echo "Please run 'make llvm' first."; \
+		exit 1; \
+	fi
+	@echo "Installing lit runtime into $(LIT_INSTALL_DIR)..."
+	@rm -rf "$(LIT_INSTALL_DIR)"
+	@mkdir -p "$(LLVM_INSTALL_DIR)/utils"
+	@cp -a "$(LIT_SOURCE_DIR)" "$(LIT_INSTALL_DIR)"
+	@find "$(LIT_INSTALL_DIR)" -type d -name "__pycache__" -prune -exec rm -rf {} + >/dev/null 2>&1 || true
+
+llvm-lit: llvm lit-bootstrap
 llvm-clean:
 	rm -rf $(LLVM_BUILD_DIR)
 	rm -f -r $(LLVM_INSTALL_DIR)
@@ -178,6 +188,7 @@ build:
 		echo "Error: Polygeist is not built. Please run 'make polygeist' or 'carts build --polygeist' first."; \
 		exit 1; \
 	fi
+	$(MAKE) lit-bootstrap
 	mkdir -p $(CARTS_BUILD_DIR)
 	mkdir -p $(CARTS_INSTALL_DIR)
 	cmake -B $(CARTS_BUILD_DIR) \
@@ -218,4 +229,4 @@ clean:
 	make -C $(CARTS_BUILD_DIR) clean -j
 	rm -rf $(CARTS_BUILD_DIR)
 
-.PHONY: all build install postinstall uninstall fulluninstall clean test llvm-runtimes arts-download polygeist-download llvm llvm-lit
+.PHONY: all build install postinstall uninstall fulluninstall clean test llvm-runtimes arts-download polygeist-download llvm llvm-lit lit-bootstrap

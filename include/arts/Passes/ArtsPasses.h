@@ -36,6 +36,7 @@ std::unique_ptr<Pass> createConcurrencyPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createCreateDbsPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createDbPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createDbPartitioningPass(ArtsAnalysisManager *AM);
+std::unique_ptr<Pass> createDistributedDbOwnershipPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createCreateEpochsPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug);

@@ -61,6 +61,21 @@ Index mapping always has two levels:
 - db_ref indices: choose which DB entry (outer index tuple).
 - local indices: address inside the inner memref for that DB.
 
+## 1.1) Relationship to Distributed DB Ownership
+
+`--distributed-db-ownership` is an ownership/routing concern, not a partition
+mode.
+
+- H1 partitioning still decides DB layout (`coarse`, `block`, `stencil`,
+  `fine_grained`) and acquire localization.
+- Distributed ownership is applied after partitioning and marks eligible
+  `DbAllocOp`s with `distributed`.
+- Lowering then chooses per-block owner routes for marked allocations
+  (currently round-robin).
+
+So, partitioning decides *shape*; distributed ownership decides *which node owns
+each shaped DB entry*.
+
 ---
 
 ## 2) Responsibility Split (Who Does What)
@@ -81,11 +96,15 @@ What each layer owns:
 
 - DbAcquireNode: per-acquire access classification (uniform/indexed/stencil),
   bounds validity, indirect access flags, and partition dim candidates.
+- DbAnalysis: pass-facing acquire partition summary API
+  (`analyzeAcquirePartition`) built from DbGraph/DbAcquireNode state.
 - DbAllocNode: aggregation across acquires for one allocation.
 - Heuristics: chooses allocation-level PartitionMode (H1.1-H1.6) and
   per-acquire full-range decisions (H1.7).
 - DbPartitioning: builds a rewrite plan, legalizes invalid cases, and invokes
-  the correct rewriter/indexer.
+  the correct planner/rewriter/indexer.
+- DbPartitionPlanner: mode-specialized plan construction for allocation shape
+  and per-acquire rewrite payloads (keeps mode branching out of DbPartitioning).
 - Rewriters/Indexers: implement the chosen layout and localize indices using
   PartitionInfo + plan.
 

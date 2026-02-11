@@ -9,8 +9,10 @@
 ///==========================================================================///
 
 #include "arts/Analysis/DistributionHeuristics.h"
+#include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/Metadata/LoopMetadata.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -40,9 +42,35 @@ static bool isSafeRuntimeQuery(Operation *op) {
   return isa<GetTotalNodesOp, GetTotalWorkersOp>(op);
 }
 
-std::optional<WorkerConfig>
-DistributionHeuristics::resolveWorkerConfig(EdtOp parallelEdt,
-                                            const ArtsAbstractMachine *machine) {
+static bool shouldSkipCoarsening(ForOp forOp, LoopNode *loopNode) {
+  if (loopNode) {
+    if (loopNode->hasInterIterationDeps && *loopNode->hasInterIterationDeps)
+      return true;
+    if (loopNode->parallelClassification &&
+        *loopNode->parallelClassification ==
+            LoopMetadata::ParallelClassification::Sequential)
+      return true;
+  }
+
+  if (auto loopAttr = forOp->getAttrOfType<LoopMetadataAttr>(
+          AttrNames::LoopMetadata::Name)) {
+    if (auto depsAttr = loopAttr.getHasInterIterationDeps())
+      if (depsAttr.getValue())
+        return true;
+
+    if (auto classAttr = loopAttr.getParallelClassification()) {
+      if (classAttr.getInt() ==
+          static_cast<int64_t>(
+              LoopMetadata::ParallelClassification::Sequential))
+        return true;
+    }
+  }
+
+  return false;
+}
+
+std::optional<WorkerConfig> DistributionHeuristics::resolveWorkerConfig(
+    EdtOp parallelEdt, const ArtsAbstractMachine *machine) {
   WorkerConfig cfg;
   cfg.internode = parallelEdt.getConcurrency() == EdtConcurrency::internode;
 
@@ -53,9 +81,11 @@ DistributionHeuristics::resolveWorkerConfig(EdtOp parallelEdt,
       return std::nullopt;
 
     if (cfg.internode) {
-      if (machine && machine->hasValidNodeCount() && machine->getNodeCount() > 0)
+      if (machine && machine->hasValidNodeCount() &&
+          machine->getNodeCount() > 0)
         cfg.workersPerNode = std::max<int64_t>(
-            1, cfg.totalWorkers / static_cast<int64_t>(machine->getNodeCount()));
+            1,
+            cfg.totalWorkers / static_cast<int64_t>(machine->getNodeCount()));
       if (cfg.workersPerNode <= 0)
         cfg.workersPerNode = 1;
     } else {
@@ -94,6 +124,54 @@ DistributionHeuristics::resolveWorkerConfig(EdtOp parallelEdt,
   return cfg;
 }
 
+std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
+    ForOp forOp, LoopAnalysis &loopAnalysis, const WorkerConfig &workerCfg) {
+  if (workerCfg.totalWorkers <= 0)
+    return std::nullopt;
+
+  LoopNode *loopNode = loopAnalysis.getOrCreateLoopNode(forOp.getOperation());
+  if (shouldSkipCoarsening(forOp, loopNode))
+    return std::nullopt;
+
+  auto tripOpt = loopAnalysis.getStaticTripCount(forOp.getOperation());
+  if (!tripOpt)
+    return std::nullopt;
+
+  int64_t tripCount = *tripOpt;
+  if (tripCount <= 0)
+    return std::nullopt;
+
+  constexpr int64_t kMinItersPerWorker = 8;
+  if (tripCount >= workerCfg.totalWorkers * kMinItersPerWorker)
+    return std::nullopt;
+
+  int64_t desiredWorkers = std::max<int64_t>(1, tripCount / kMinItersPerWorker);
+  desiredWorkers = std::min(desiredWorkers, workerCfg.totalWorkers);
+
+  int64_t blockSize = (tripCount + desiredWorkers - 1) / desiredWorkers;
+  blockSize = std::max<int64_t>(1, blockSize);
+
+  /// For internode execution, keep enough chunks so all worker lanes can still
+  /// participate. This preserves distribution while still allowing mild
+  /// coarsening for very small trip counts.
+  if (workerCfg.internode) {
+    int64_t maxBlockForAllWorkers = tripCount / workerCfg.totalWorkers;
+    if (maxBlockForAllWorkers <= 1)
+      return std::nullopt;
+    blockSize = std::min(blockSize, maxBlockForAllWorkers);
+  }
+
+  if (blockSize <= 1)
+    return std::nullopt;
+
+  return blockSize;
+}
+
+std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockSize(
+    ForOp forOp, LoopAnalysis &loopAnalysis, const WorkerConfig &workerCfg) {
+  return computeCoarsenedBlockHint(forOp, loopAnalysis, workerCfg);
+}
+
 int64_t
 DistributionHeuristics::chooseTiling2DColumnWorkers(int64_t totalWorkers) {
   if (totalWorkers < 4)
@@ -123,8 +201,7 @@ Tiling2DWorkerGrid DistributionHeuristics::getTiling2DWorkerGrid(
 
   if (auto totalWorkersConst =
           ValueUtils::tryFoldConstantIndex(totalWorkersIndex)) {
-    int64_t colWorkersConst =
-        chooseTiling2DColumnWorkers(*totalWorkersConst);
+    int64_t colWorkersConst = chooseTiling2DColumnWorkers(*totalWorkersConst);
     if (colWorkersConst > 1) {
       grid.colWorkers = AC->createIndexConstant(colWorkersConst, loc);
       grid.rowWorkers =
@@ -219,11 +296,9 @@ EdtDistributionKind DistributionHeuristics::selectDistributionKind(
 /// Balanced Distribution Helper
 ///===----------------------------------------------------------------------===///
 
-std::pair<Value, Value>
-DistributionHeuristics::balancedDistribute(ArtsCodegen *AC, Location loc,
-                                           Value totalChunks,
-                                           Value numParticipants,
-                                           Value participantId) {
+std::pair<Value, Value> DistributionHeuristics::balancedDistribute(
+    ArtsCodegen *AC, Location loc, Value totalChunks, Value numParticipants,
+    Value participantId) {
   Value oneIndex = AC->createIndexConstant(1, loc);
 
   /// base = totalChunks / numParticipants
@@ -232,11 +307,10 @@ DistributionHeuristics::balancedDistribute(ArtsCodegen *AC, Location loc,
   Value rem = AC->create<arith::RemUIOp>(loc, totalChunks, numParticipants);
 
   /// count = base + (participantId < rem ? 1 : 0)
-  Value getsExtra = AC->create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::ult, participantId, rem);
+  Value getsExtra = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult,
+                                              participantId, rem);
   Value count = AC->create<arith::SelectOp>(
-      loc, getsExtra,
-      AC->create<arith::AddIOp>(loc, base, oneIndex), base);
+      loc, getsExtra, AC->create<arith::AddIOp>(loc, base, oneIndex), base);
 
   /// start = participantId * base + min(participantId, rem)
   Value clipped = AC->create<arith::MinUIOp>(loc, participantId, rem);
@@ -250,15 +324,10 @@ DistributionHeuristics::balancedDistribute(ArtsCodegen *AC, Location loc,
 /// H2.2: Compute Runtime Bounds
 ///===----------------------------------------------------------------------===///
 
-DistributionBounds
-DistributionHeuristics::computeBounds(ArtsCodegen *AC, Location loc,
-                                      const DistributionStrategy &strategy,
-                                      Value workerId,
-                                      Value runtimeTotalWorkers,
-                                      Value runtimeWorkersPerNode,
-                                      Value totalIterations,
-                                      Value totalChunks,
-                                      Value blockSize) {
+DistributionBounds DistributionHeuristics::computeBounds(
+    ArtsCodegen *AC, Location loc, const DistributionStrategy &strategy,
+    Value workerId, Value runtimeTotalWorkers, Value runtimeWorkersPerNode,
+    Value totalIterations, Value totalChunks, Value blockSize) {
   DistributionBounds bounds;
   Value zeroIndex = AC->createIndexConstant(0, loc);
 
@@ -287,8 +356,8 @@ DistributionHeuristics::computeBounds(ArtsCodegen *AC, Location loc,
     Value distWorkerId = workerId;
     Value distWorkers = runtimeTotalWorkers;
     if (strategy.kind == DistributionKind::Tiling2D) {
-      Tiling2DWorkerGrid grid = getTiling2DWorkerGrid(
-          AC, loc, workerId, runtimeTotalWorkers);
+      Tiling2DWorkerGrid grid =
+          getTiling2DWorkerGrid(AC, loc, workerId, runtimeTotalWorkers);
       distWorkerId = grid.rowWorkerId;
       distWorkers = grid.rowWorkers;
     }
@@ -297,8 +366,7 @@ DistributionHeuristics::computeBounds(ArtsCodegen *AC, Location loc,
         balancedDistribute(AC, loc, totalChunks, distWorkers, distWorkerId);
 
     /// Convert chunk indices to iteration indices
-    bounds.iterStart =
-        AC->create<arith::MulIOp>(loc, firstChunkIdx, blockSize);
+    bounds.iterStart = AC->create<arith::MulIOp>(loc, firstChunkIdx, blockSize);
     bounds.iterCountHint =
         AC->create<arith::MulIOp>(loc, chunkCount, blockSize);
 
@@ -313,8 +381,8 @@ DistributionHeuristics::computeBounds(ArtsCodegen *AC, Location loc,
                                                   remainingItersNonNeg);
 
     /// hasWork = iterCount > 0
-    bounds.hasWork = AC->create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::ugt, bounds.iterCount, zeroIndex);
+    bounds.hasWork = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt,
+                                               bounds.iterCount, zeroIndex);
 
     /// For Flat, acquire bounds = iteration bounds
     bounds.acquireStart = bounds.iterStart;
@@ -325,13 +393,14 @@ DistributionHeuristics::computeBounds(ArtsCodegen *AC, Location loc,
   }
 
   /// TwoLevel: two-level hierarchical distribution
-  /// Derive numNodes from runtime values: numNodes = totalWorkers / workersPerNode
+  /// Derive numNodes from runtime values: numNodes = totalWorkers /
+  /// workersPerNode
   Value numNodes = AC->create<arith::DivUIOp>(loc, runtimeTotalWorkers,
                                               runtimeWorkersPerNode);
 
   /// Derive nodeId and localThreadId from global workerId
-  Value nodeId = AC->create<arith::DivUIOp>(loc, workerId,
-                                            runtimeWorkersPerNode);
+  Value nodeId =
+      AC->create<arith::DivUIOp>(loc, workerId, runtimeWorkersPerNode);
   Value localThreadId =
       AC->create<arith::RemUIOp>(loc, workerId, runtimeWorkersPerNode);
 
@@ -339,20 +408,18 @@ DistributionHeuristics::computeBounds(ArtsCodegen *AC, Location loc,
   auto [nodeChunkStart, nodeChunkCount] =
       balancedDistribute(AC, loc, totalChunks, numNodes, nodeId);
 
-  Value nodeStart =
-      AC->create<arith::MulIOp>(loc, nodeChunkStart, blockSize);
-  Value nodeMaxRows =
-      AC->create<arith::MulIOp>(loc, nodeChunkCount, blockSize);
+  Value nodeStart = AC->create<arith::MulIOp>(loc, nodeChunkStart, blockSize);
+  Value nodeMaxRows = AC->create<arith::MulIOp>(loc, nodeChunkCount, blockSize);
 
   /// Clamp to remaining iterations
-  Value needZeroNode = AC->create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::uge, nodeStart, totalIterations);
+  Value needZeroNode = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
+                                                 nodeStart, totalIterations);
   Value nodeRemaining =
       AC->create<arith::SubIOp>(loc, totalIterations, nodeStart);
-  Value nodeRemainingNonNeg = AC->create<arith::SelectOp>(
-      loc, needZeroNode, zeroIndex, nodeRemaining);
-  Value nodeRows = AC->create<arith::MinUIOp>(loc, nodeMaxRows,
-                                              nodeRemainingNonNeg);
+  Value nodeRemainingNonNeg =
+      AC->create<arith::SelectOp>(loc, needZeroNode, zeroIndex, nodeRemaining);
+  Value nodeRows =
+      AC->create<arith::MinUIOp>(loc, nodeMaxRows, nodeRemainingNonNeg);
 
   /// Acquire bounds = node-level
   bounds.acquireStart = nodeStart;
@@ -369,28 +436,25 @@ DistributionHeuristics::computeBounds(ArtsCodegen *AC, Location loc,
       AC->create<arith::DivUIOp>(loc, adjusted, runtimeWorkersPerNode);
 
   /// localStart = localThreadId * subBlock
-  Value localStart =
-      AC->create<arith::MulIOp>(loc, localThreadId, subBlock);
+  Value localStart = AC->create<arith::MulIOp>(loc, localThreadId, subBlock);
 
   /// localCount = min(subBlock, max(0, nodeRows - localStart))
   Value needZeroLocal = AC->create<arith::CmpIOp>(
       loc, arith::CmpIPredicate::uge, localStart, nodeRows);
-  Value localRemaining =
-      AC->create<arith::SubIOp>(loc, nodeRows, localStart);
+  Value localRemaining = AC->create<arith::SubIOp>(loc, nodeRows, localStart);
   Value localRemainingNonNeg = AC->create<arith::SelectOp>(
       loc, needZeroLocal, zeroIndex, localRemaining);
-  Value localCount = AC->create<arith::MinUIOp>(loc, subBlock,
-                                                localRemainingNonNeg);
+  Value localCount =
+      AC->create<arith::MinUIOp>(loc, subBlock, localRemainingNonNeg);
 
   /// iterStart = nodeStart + localStart (global offset)
-  bounds.iterStart =
-      AC->create<arith::AddIOp>(loc, nodeStart, localStart);
+  bounds.iterStart = AC->create<arith::AddIOp>(loc, nodeStart, localStart);
   bounds.iterCount = localCount;
   bounds.iterCountHint = subBlock;
 
   /// hasWork = localCount > 0
-  bounds.hasWork = AC->create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::ugt, localCount, zeroIndex);
+  bounds.hasWork = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt,
+                                             localCount, zeroIndex);
 
   return bounds;
 }
@@ -400,14 +464,10 @@ DistributionHeuristics::computeBounds(ArtsCodegen *AC, Location loc,
 ///===----------------------------------------------------------------------===///
 
 DistributionBounds DistributionHeuristics::recomputeBoundsInside(
-    ArtsCodegen *AC, Location loc,
-    const DistributionStrategy &strategy,
-    Value workerId, Value insideTotalWorkers,
-    Value workersPerNode,
-    Value upperBound, Value lowerBound, Value loopStep,
-    Value blockSize,
-    std::optional<int64_t> alignmentBlockSize,
-    bool useRuntimeBlockAlignment) {
+    ArtsCodegen *AC, Location loc, const DistributionStrategy &strategy,
+    Value workerId, Value insideTotalWorkers, Value workersPerNode,
+    Value upperBound, Value lowerBound, Value loopStep, Value blockSize,
+    std::optional<int64_t> alignmentBlockSize, bool useRuntimeBlockAlignment) {
 
   /// Cast worker values to index type
   Type indexType = AC->getBuilder().getIndexType();
@@ -445,10 +505,9 @@ DistributionBounds DistributionHeuristics::recomputeBoundsInside(
   collectWithDeps(blockSize);
 
   IRMapping boundsMapper;
-  ValueUtils::cloneValuesIntoRegion(boundsToClone, currentRegion, boundsMapper,
-                                    AC->getBuilder(),
-                                    /*allowMemoryEffectFree=*/true,
-                                    isSafeRuntimeQuery);
+  ValueUtils::cloneValuesIntoRegion(
+      boundsToClone, currentRegion, boundsMapper, AC->getBuilder(),
+      /*allowMemoryEffectFree=*/true, isSafeRuntimeQuery);
 
   Value localUpperBound = boundsMapper.lookupOrDefault(upperBound);
   Value localLowerBound = boundsMapper.lookupOrDefault(lowerBound);
@@ -490,8 +549,8 @@ DistributionBounds DistributionHeuristics::recomputeBoundsInside(
     bounds.iterStart = zeroIndex;
     bounds.iterCount = zeroIndex;
     bounds.iterCountHint = zeroIndex;
-    bounds.hasWork = AC->create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::ult, workerIdIndex, localTotalChunks);
+    bounds.hasWork = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult,
+                                               workerIdIndex, localTotalChunks);
     bounds.acquireStart = zeroIndex;
     bounds.acquireSize = localTotalIterations;
     bounds.acquireSizeHint = localTotalIterations;
@@ -506,10 +565,9 @@ DistributionBounds DistributionHeuristics::recomputeBoundsInside(
       if (Operation *defOp = wpnIndex.getDefiningOp()) {
         if (!currentRegion->isAncestor(defOp->getParentRegion())) {
           collectWithDeps(wpnIndex);
-          ValueUtils::cloneValuesIntoRegion(boundsToClone, currentRegion,
-                                            boundsMapper, AC->getBuilder(),
-                                            /*allowMemoryEffectFree=*/true,
-                                            isSafeRuntimeQuery);
+          ValueUtils::cloneValuesIntoRegion(
+              boundsToClone, currentRegion, boundsMapper, AC->getBuilder(),
+              /*allowMemoryEffectFree=*/true, isSafeRuntimeQuery);
           wpnIndex = boundsMapper.lookupOrDefault(wpnIndex);
         }
       }
@@ -521,8 +579,7 @@ DistributionBounds DistributionHeuristics::recomputeBoundsInside(
     Value numNodes =
         AC->create<arith::DivUIOp>(loc, totalWorkersIndex, wpnIndex);
 
-    Value nodeId =
-        AC->create<arith::DivUIOp>(loc, workerIdIndex, wpnIndex);
+    Value nodeId = AC->create<arith::DivUIOp>(loc, workerIdIndex, wpnIndex);
     Value localThreadId =
         AC->create<arith::RemUIOp>(loc, workerIdIndex, wpnIndex);
 
@@ -546,30 +603,25 @@ DistributionBounds DistributionHeuristics::recomputeBoundsInside(
 
     /// Level 2: local threads
     Value subAdjusted = AC->create<arith::AddIOp>(
-        loc, nodeRows,
-        AC->create<arith::SubIOp>(loc, wpnIndex, oneIndex));
-    Value subBlock =
-        AC->create<arith::DivUIOp>(loc, subAdjusted, wpnIndex);
+        loc, nodeRows, AC->create<arith::SubIOp>(loc, wpnIndex, oneIndex));
+    Value subBlock = AC->create<arith::DivUIOp>(loc, subAdjusted, wpnIndex);
 
-    Value localStart =
-        AC->create<arith::MulIOp>(loc, localThreadId, subBlock);
+    Value localStart = AC->create<arith::MulIOp>(loc, localThreadId, subBlock);
 
     Value needZeroLocal = AC->create<arith::CmpIOp>(
         loc, arith::CmpIPredicate::uge, localStart, nodeRows);
-    Value localRemaining =
-        AC->create<arith::SubIOp>(loc, nodeRows, localStart);
+    Value localRemaining = AC->create<arith::SubIOp>(loc, nodeRows, localStart);
     Value localRemainingNonNeg = AC->create<arith::SelectOp>(
         loc, needZeroLocal, zeroIndex, localRemaining);
     Value localCount =
         AC->create<arith::MinUIOp>(loc, subBlock, localRemainingNonNeg);
 
     DistributionBounds bounds;
-    bounds.iterStart =
-        AC->create<arith::AddIOp>(loc, nodeStart, localStart);
+    bounds.iterStart = AC->create<arith::AddIOp>(loc, nodeStart, localStart);
     bounds.iterCount = localCount;
     bounds.iterCountHint = subBlock;
-    bounds.hasWork = AC->create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::ugt, localCount, zeroIndex);
+    bounds.hasWork = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt,
+                                               localCount, zeroIndex);
 
     bounds.acquireStart = nodeStart;
     bounds.acquireSize = nodeRows;
@@ -582,8 +634,8 @@ DistributionBounds DistributionHeuristics::recomputeBoundsInside(
   Value distWorkerId = workerIdIndex;
   Value distWorkers = totalWorkersIndex;
   if (strategy.kind == DistributionKind::Tiling2D) {
-    Tiling2DWorkerGrid grid = getTiling2DWorkerGrid(
-        AC, loc, workerIdIndex, totalWorkersIndex);
+    Tiling2DWorkerGrid grid =
+        getTiling2DWorkerGrid(AC, loc, workerIdIndex, totalWorkersIndex);
     distWorkerId = grid.rowWorkerId;
     distWorkers = grid.rowWorkers;
   }
@@ -605,8 +657,8 @@ DistributionBounds DistributionHeuristics::recomputeBoundsInside(
       loc, needZeroIters, zeroIndex, remainingIters);
   bounds.iterCount = AC->create<arith::MinUIOp>(loc, bounds.iterCountHint,
                                                 remainingItersNonNeg);
-  bounds.hasWork = AC->create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::ugt, bounds.iterCount, zeroIndex);
+  bounds.hasWork = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt,
+                                             bounds.iterCount, zeroIndex);
 
   bounds.acquireStart = bounds.iterStart;
   bounds.acquireSize = bounds.iterCount;
@@ -618,16 +670,17 @@ DistributionBounds DistributionHeuristics::recomputeBoundsInside(
 /// DB Alignment Block Size
 ///===----------------------------------------------------------------------===///
 
-Value DistributionHeuristics::computeDbAlignmentBlockSize(
-    EdtOp parallelEdt, Value numPartitions, ArtsCodegen *AC, Location loc) {
+Value DistributionHeuristics::computeDbAlignmentBlockSize(EdtOp parallelEdt,
+                                                          Value numPartitions,
+                                                          ArtsCodegen *AC,
+                                                          Location loc) {
   if (!parallelEdt || !numPartitions)
     return Value();
 
   Value one = AC->createIndexConstant(1, loc);
   Value hintBlockSize;
 
-  bool isTwoLevel =
-      (parallelEdt.getConcurrency() == EdtConcurrency::internode);
+  bool isTwoLevel = (parallelEdt.getConcurrency() == EdtConcurrency::internode);
 
   for (Value dep : parallelEdt.getDependencies()) {
     /// Trace each dependency to its root DbAllocOp
@@ -659,17 +712,14 @@ Value DistributionHeuristics::computeDbAlignmentBlockSize(
 
     /// Compute ceil(elemSize / numPartitions) — same formula as DbPartitioning
     Value adjusted = AC->create<arith::AddIOp>(
-        loc, elemSize,
-        AC->create<arith::SubIOp>(loc, numPartitions, one));
-    Value candidate =
-        AC->create<arith::DivUIOp>(loc, adjusted, numPartitions);
+        loc, elemSize, AC->create<arith::SubIOp>(loc, numPartitions, one));
+    Value candidate = AC->create<arith::DivUIOp>(loc, adjusted, numPartitions);
     candidate = AC->create<arith::MaxUIOp>(loc, candidate, one);
 
     if (!hintBlockSize)
       hintBlockSize = candidate;
     else
-      hintBlockSize =
-          AC->create<arith::MinUIOp>(loc, hintBlockSize, candidate);
+      hintBlockSize = AC->create<arith::MinUIOp>(loc, hintBlockSize, candidate);
   }
 
   return hintBlockSize;
@@ -688,8 +738,7 @@ Value DistributionHeuristics::getWorkersPerNode(ArtsCodegen *AC, Location loc,
     Value totalWorkers = AC->createIndexConstant(workers.getValue(), loc);
     Value totalNodes =
         castToIndex(AC, AC->create<GetTotalNodesOp>(loc).getResult(), loc);
-    workersPerNode =
-        AC->create<arith::DivUIOp>(loc, totalWorkers, totalNodes);
+    workersPerNode = AC->create<arith::DivUIOp>(loc, totalWorkers, totalNodes);
   } else {
     workersPerNode =
         castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);

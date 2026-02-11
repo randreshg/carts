@@ -26,8 +26,8 @@ namespace {
 class StencilEdtRewriter final : public EdtRewriter {
 public:
   DbAcquireOp rewriteAcquire(AcquireRewriteInput &input) const override {
-    return mlir::arts::detail::rewriteAcquireAsBlock(
-        input, /*applyStencilHalo=*/true);
+    return mlir::arts::detail::rewriteAcquireAsBlock(input,
+                                                     /*applyStencilHalo=*/true);
   }
 };
 

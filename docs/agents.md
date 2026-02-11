@@ -27,7 +27,7 @@ carts cgeist <file>.c -O0 --print-debug-info -S --raise-scf-to-affine           
 carts cgeist <file>.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine  # Parallel
 
 # Run pipeline (stop at specific stage)
-carts run <file>.mlir --stage
+carts run <file>.mlir --stop-at=<stage>
 
 # Run pipeline (dump all intermediate stages)
 carts run <file>.mlir --all-stages -o ./stages/
@@ -36,7 +36,7 @@ carts run <file>.mlir --all-stages -o ./stages/
 carts run <file>_seq.mlir --collect-metadata
 
 # Debug a specific pass
-carts run <file>.mlir stage --debug-only=<pass> 2>&1
+carts run <file>.mlir --stop-at=<stage> --debug-only=<pass> 2>&1
 
 # Full compilation and execution
 carts execute <file>.c -O3
@@ -724,111 +724,50 @@ setPartitionMode(dbAllocOp, promotionMode);
 
 ---
 
-### Stage 10: ForLowering - Chunk Hint Propagation
+### Stage 11 Detail: EdtDistribution + ForLowering
 
-When ForLowering encounters an `arts.for` loop inside a parallel EDT, it creates worker tasks and propagates chunk information via **chunk_hint(index, size)**.
+The distribution stage is split into two responsibilities:
+- `EdtDistributionPass` classifies each `arts.for` pattern and sets typed distribution attributes.
+- `ForLowering` consumes those attributes and lowers loops by delegating to strategy-specific task lowerings.
 
-#### Chunk Hint Mechanism
+#### Distribution-Lowering Mechanism
 
 ```mermaid
 flowchart LR
-    subgraph Before["Before ForLowering"]
-        FOR["arts.for %lb to %ub step %step"]
-        ACQ1["arts.db_acquire %db<br/>partition=coarse"]
+    subgraph Before["After Concurrency Stage"]
+        FOR["arts.for ..."]
     end
 
-    subgraph After["After ForLowering"]
-        DISPATCH[Worker dispatch EDT]
-        TASK[Worker task EDT]
-        ACQ2["arts.db_acquire %db<br/>chunk_hint(%chunk_index, %block_size)<br/>partition=blocked"]
+    subgraph Dist["EdtDistributionPass"]
+        PLAN["Set distribution attrs<br/>kind + pattern + version"]
     end
 
-    Before --> After
+    subgraph Lower["ForLowering + strategy helper"]
+        TASK["Create worker EDTs"]
+        ACQ["Rewrite DbAcquire ranges<br/>through AcquireRewritePlanning"]
+    end
+
+    Before --> Dist --> Lower
 ```
 
-#### Chunk Index/Size Computation
+#### Attribute Contract
 
-```cpp
-// ForLowering.cpp:1685-1711
-// Compute chunk hints from loop iteration space
-// chunk_index = which chunk this worker handles (NOT element offset!)
-// block_size = elements per chunk
-Value chunkIndex = chunkOffset;
-Value blockSizeVal = loopInfo.workerIterationCount;
+`EdtDistributionPass` annotates each `arts.for` with the distribution plan:
+- `distribution_kind` (`block`, `block_cyclic`, `tiling_2d`)
+- `distribution_pattern` (e.g., `uniform`, `stencil`, `triangular`, `matmul`)
+- `distribution_version` (typed contract/versioning for downstream passes)
 
-// If loop has step != 1, scale block_size to element space
-if (!forOp.getStep().empty()) {
-    Value step = forOp.getStep()[0];
-    blockSizeVal = AC->create<arith::MulIOp>(loc, loopInfo.workerIterationCount, step);
-}
+#### Lowering Contract
 
-// Create acquire with chunk hints
-auto chunkAcqOp = AC->create<DbAcquireOp>(loc, mode, guid, ptr, elementType,
-    indices, chunkOffsets, blockSizes,
-    /*chunkIndex=*/chunkIndex,
-    /*blockSize=*/blockSizeVal);
+`ForLowering` is orchestration-only:
+- resolve worker topology through `DistributionHeuristics`
+- select `EdtTaskLoopLowering` implementation from `distribution_kind`
+- call acquire rewrite planning (`AcquireRewritePlanning`) and apply rewrites
+- keep strategy-specific bounds and acquire math in strategy classes, not in the pass body
 
-// Mark acquire as having blocked structure
-setPartitionMode(chunkAcqOp.getOperation(), PromotionMode::blocked);
-```
-
-**Key Insight**: The `partition=blocked` attribute on acquires signals to DbPartitioning that this acquire has structural information for blocked partitioning.
-
-#### ChunkHintInfo Semantics
-
-The `chunk_hint(index, size)` operands have specific semantics that are crucial for correct partitioning:
-
-| Operand | Meaning | Example |
-|---------|---------|---------|
-| `chunk_index` | Which chunk this worker handles (0, 1, 2, ...) | Worker 0 → chunk 0 |
-| `block_size` | Elements per chunk (must be consistent across acquires) | 250 elements |
-
-**Critical Distinction: Chunk Index vs Element Offset**
-
-```
-Given: 1000 elements split across 4 workers with block_size=250
-
-chunk_index=0 → elements [0, 250)      (NOT element offset 0!)
-chunk_index=1 → elements [250, 500)    (NOT element offset 1!)
-chunk_index=2 → elements [500, 750)
-chunk_index=3 → elements [750, 1000)
-
-The chunk_index is a CHUNK number, not an element offset.
-Element offset = chunk_index * block_size
-```
-
-**Block Size Consistency Check**
-
-DbPartitioning validates that all acquires for the same allocation have consistent `block_size`:
-
-```cpp
-// DbPartitioning.cpp:82-92
-bool isConsistentWith(const AcquirePartitionInfo &other) const {
-    if (mode != other.mode)
-        return false;
-    // For Blocked mode: block_sizes must be same SSA value OR equal constants
-    if (mode == PartitionMode::Blocked &&
-        blockSize != other.blockSize) {
-        int64_t lhs = 0, rhs = 0;
-        bool lhsConst = ValueUtils::getConstantIndex(blockSize, lhs);
-        bool rhsConst = ValueUtils::getConstantIndex(other.blockSize, rhs);
-        if (!(lhsConst && rhsConst && lhs == rhs))
-            return false;  // Sizes don't agree → fall back to coarse/fine
-    }
-    return true;
-}
-```
-
-**Fallback When Block Sizes Don't Agree**
-
-If block sizes are inconsistent, partitioning falls back to the `--partition-fallback` CLI option:
-- `--partition-fallback=coarse` (default): Keep coarse allocation
-- `--partition-fallback=fine`: Use element-wise partitioning
-**Note:** `--partition-fallback` is a `carts run` flag. When using
-`carts execute`, pass it via `--run-args` (e.g.,
-`carts execute foo.c --run-args "--partition-fallback=fine"`). When using
-`carts benchmarks run`, pass the same run-args string via `--arts-exec-args`
-so it is forwarded to `carts execute`.
+**Fallback behavior**:
+- missing/invalid distribution attrs fall back to `block` strategy
+- `--partition-fallback` still controls coarse vs element-wise behavior inside DbPartitioning for unsupported/non-affine cases
 
 ---
 
@@ -842,12 +781,12 @@ DbPartitioning is the final decision point. It analyzes all acquires for an allo
 flowchart TB
     START[For each DbAcquireOp]
 
-    Q1{Has partition attribute<br/>from ForLowering/CreateDbs?}
+    Q1{Has partition attribute<br/>from CreateDbs/lowered acquires?}
     Q2{partition == blocked?}
     Q3{Offset depends on<br/>loop IV?}
     Q4{partition == fine_grained?}
 
-    R1["thisAcquireCanBlocked = true<br/>Send chunk with index"]
+    R1["thisAcquireCanBlocked = true<br/>Range-local blocked acquire"]
     R2["thisAcquireCanBlocked = true<br/>needsFullRange = true<br/>indirect access"]
     R3["thisAcquireCanElementWise = true"]
     R4["Neither capability<br/>coarse fallback"]
@@ -906,7 +845,7 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
 ```cpp
 // DbPartitioning.cpp:970-1030
 for each DbAcquireNode {
-    // Read partition attribute from acquire (set by ForLowering/CreateDbs)
+    // Read partition attribute from acquire (set by CreateDbs and lowering rewriters)
     auto acquireMode = getPartitionMode(acquire.getOperation());
 
     bool thisAcquireCanBlocked =
@@ -1074,11 +1013,11 @@ traceable, while still recording decisions for diagnostics.
 | Stage | File | Key Lines | Purpose |
 |-------|------|-----------|---------|
 | CreateDbs | `lib/arts/Passes/Transformations/CreateDbs.cpp` | 595-750 | Initial partition mode |
-| ForLowering | `lib/arts/Passes/Transformations/ForLowering.cpp` | 1685-1711 | Chunk hint propagation |
+| ForLowering | `lib/arts/Passes/Transformations/ForLowering.cpp` | task-lowering pipeline | Apply distribution strategy via helper contracts |
 | DbPartitioning | `lib/arts/Passes/Optimizations/DbPartitioning.cpp` | 970-1030 | Per-acquire analysis |
 | DbPartitioning | `lib/arts/Passes/Optimizations/DbPartitioning.cpp` | 1032-1061 | Context aggregation |
 | IV Check | `lib/arts/Analysis/Graphs/Db/DbAcquireNode.cpp` | 923-1001 | canPartitionWithOffset |
-| Heuristics | `lib/arts/Analysis/HeuristicsConfig.cpp` | 200-280 | getPartitioningMode |
+| Heuristics | `lib/arts/Analysis/ArtsHeuristics.cpp` | policy entrypoints | getPartitioningMode + acquire decisions |
 
 ### Stage 13: epochs
 
@@ -1208,7 +1147,7 @@ carts run <file>.mlir --emit-llvm --debug-only=arts_alias_scope_gen,arts_loop_ve
 | EdtPtrRematerialization | `edt_ptr_rematerialization` | 5 | Optimize pointer deps |
 | ArtsLoopFusion | `arts_loop_fusion` | 9 | Fuse independent loops |
 | Concurrency | `concurrency` | 10 | Build concurrency graph |
-| ForLowering | `for_lowering` | 11 | Lower arts.for to chunks |
+| ForLowering | `for_lowering` | 11 | Lower arts.for with strategy-selected helpers |
 | CreateEpochs | `create_epochs` | 13 | Create epoch sync |
 | ParallelEdtLowering | `parallel_edt_lowering` | 14 | Lower parallel EDTs |
 | DbLowering | `db_lowering` | 14 | Lower DBs to pointers |
@@ -1473,7 +1412,7 @@ carts execute example.c -O3 --diagnose --diagnose-output=diag.json
 ### Workflow 5: Full Pipeline Inspection
 
 ```bash
-# Dump all 14 stages + LLVM IR
+# Dump all stages + LLVM IR
 carts run example.mlir --all-stages -o stages/
 
 # Files generated:
@@ -1487,6 +1426,7 @@ carts run example.mlir --all-stages -o stages/
 # stages/example_db-opt.mlir
 # stages/example_edt-opt.mlir
 # stages/example_concurrency.mlir
+# stages/example_edt-distribution.mlir
 # stages/example_concurrency-opt.mlir
 # stages/example_epochs.mlir
 # stages/example_pre-lowering.mlir

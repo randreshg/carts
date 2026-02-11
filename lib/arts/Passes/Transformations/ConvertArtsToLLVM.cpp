@@ -27,7 +27,13 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SetVector.h"
+#include <cassert>
+#include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
 
 /// Debug
 #include "arts/Utils/ArtsDebug.h"
@@ -99,6 +105,7 @@ static inline DbAllocOp getAllocOpFromGuid(Value dbGuid) {
     return depDbAcquireOp.getGuid().getDefiningOp<DbAllocOp>();
   return nullptr;
 }
+
 } // namespace
 
 /// Pattern to convert arts.get_total_workers operations
@@ -844,7 +851,9 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
     if (!route)
       route = AC->createIntConstant(0, AC->Int32, op.getLoc());
     auto paramv = op.getParamMemref();
-    auto depc = op.getDepCount();
+    Value depc = op.getDepCount();
+    if (depc && depc.getType() != AC->Int32)
+      depc = AC->castToInt(AC->Int32, depc, op.getLoc());
 
     /// Calculate parameter count from memref size
     Value paramc;
@@ -923,6 +932,7 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
     Value route = op.getRoute();
     if (!route)
       route = AC->createIntConstant(0, AC->Int32, loc);
+    bool distributedOwnership = hasDistributedDbAllocation(op.getOperation());
     Value elementSize = AC->computeElementTypeSize(op.getElementType(), loc);
 
     /// Compute payload size from elementSizes (product of all payload
@@ -941,6 +951,14 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
     bool isSingleElement = false;
     getDbInfo(op, dbSizes, dbOffsets, dbIndices, isSingleElement);
 
+    if (distributedOwnership) {
+      if (failed(lowerDistributedRuntimeDbAlloc(
+              op, nextId, dbSizes, isSingleElement, guidMemref, dbMemref)))
+        return failure();
+      rewriter.replaceOp(op, {guidMemref, dbMemref});
+      return success();
+    }
+
     if (isSingleElement) {
       ARTS_DEBUG("Creating single DB");
       /// Allocate 1D linear array of GUIDs
@@ -954,7 +972,7 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
       dbMemref = AC->create<memref::AllocOp>(loc, payloadPtrType,
                                              ValueRange{totalElems});
       createSingleDb(dbMemref, guidMemref, dbMode, route, totalDbSize,
-                     nextId ? &nextId : nullptr, loc);
+                     nextId ? &nextId : nullptr, loc, distributedOwnership);
     } else {
       ARTS_DEBUG("Creating multi-dim DB");
       /// Compute total number of elements
@@ -969,7 +987,7 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
       dbMemref = AC->create<memref::AllocOp>(loc, payloadPtrType,
                                              ValueRange{totalElems});
       createMultiDbs(dbMemref, guidMemref, dbSizes, dbMode, route, totalDbSize,
-                     nextId ? &nextId : nullptr, loc);
+                     nextId ? &nextId : nullptr, loc, distributedOwnership);
     }
 
     rewriter.replaceOp(op, {guidMemref, dbMemref});
@@ -977,14 +995,228 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
   }
 
 private:
+  memref::GlobalOp getOrCreateMemrefGlobal(StringRef symbolName,
+                                           MemRefType type,
+                                           Location loc) const {
+    ModuleOp module = AC->getModule();
+    if (auto existing = module.lookupSymbol<memref::GlobalOp>(symbolName))
+      return existing;
+
+    OpBuilder::InsertionGuard IG(AC->getBuilder());
+    AC->setInsertionPoint(module);
+    auto global = AC->create<memref::GlobalOp>(
+        loc, symbolName, StringAttr(), type, Attribute(),
+        /*constant=*/false, IntegerAttr());
+    global.setSymVisibility("private");
+    return global;
+  }
+
+  LogicalResult
+  lowerDistributedRuntimeDbAlloc(DbAllocOp op, std::optional<int64_t> nextId,
+                                 ArrayRef<Value> dbSizes, bool isSingleElement,
+                                 Value &guidMemref, Value &dbMemref) const {
+    uint64_t baseId = getArtsId(op);
+    if (baseId == 0)
+      baseId =
+          static_cast<uint64_t>(reinterpret_cast<uintptr_t>(op.getOperation()));
+    std::string baseName = "__carts_dist_alloc_" + std::to_string(baseId);
+    std::string guidHolderSymbol = baseName + "_guid_holder";
+    std::string ptrHolderSymbol = baseName + "_ptr_holder";
+    std::string initSymbol = baseName + "_init";
+
+    auto guidDynamicType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
+    auto ptrDynamicType = MemRefType::get({ShapedType::kDynamic}, AC->llvmPtr);
+    auto guidHolderType = MemRefType::get({1}, guidDynamicType);
+    auto ptrHolderType = MemRefType::get({1}, ptrDynamicType);
+    getOrCreateMemrefGlobal(guidHolderSymbol, guidHolderType, op.getLoc());
+    getOrCreateMemrefGlobal(ptrHolderSymbol, ptrHolderType, op.getLoc());
+
+    ModuleOp module = AC->getModule();
+    func::FuncOp initFn = module.lookupSymbol<func::FuncOp>(initSymbol);
+    if (!initFn) {
+      OpBuilder::InsertionGuard IG(AC->getBuilder());
+      AC->setInsertionPoint(module);
+      initFn =
+          AC->create<func::FuncOp>(op.getLoc(), initSymbol, AC->InitPerNodeFn);
+      initFn.setPrivate();
+
+      Block *entry = initFn.addEntryBlock();
+      AC->setInsertionPointToStart(entry);
+
+      IRMapping mapper;
+      auto parentFn = op->getParentOfType<func::FuncOp>();
+      if (parentFn && parentFn.getNumArguments() > 0) {
+        if (parentFn.getNumArguments() != 2 ||
+            initFn.getNumArguments() != 3)
+          return failure();
+        mapper.map(parentFn.getArgument(0), initFn.getArgument(1));
+        mapper.map(parentFn.getArgument(1), initFn.getArgument(2));
+      }
+
+      llvm::SetVector<Value> valuesToClone;
+      llvm::DenseSet<Value> visited;
+      std::function<LogicalResult(Value)> collectDependencies =
+          [&](Value value) -> LogicalResult {
+        if (!value)
+          return failure();
+        if (!visited.insert(value).second || mapper.contains(value))
+          return success();
+
+        if (auto blockArg = value.dyn_cast<BlockArgument>())
+          return mapper.contains(blockArg) ? success() : failure();
+
+        Operation *defOp = value.getDefiningOp();
+        if (!defOp)
+          return failure();
+        for (Value operand : defOp->getOperands()) {
+          if (failed(collectDependencies(operand)))
+            return failure();
+        }
+        valuesToClone.insert(value);
+        return success();
+      };
+
+      for (Value size : dbSizes) {
+        if (failed(collectDependencies(size))) {
+          ARTS_WARN("Failed to collect distributed allocation size expression "
+                    "dependencies for " << op);
+          return failure();
+        }
+      }
+      for (Value size : op.getElementSizes()) {
+        if (failed(collectDependencies(size))) {
+          ARTS_WARN("Failed to collect distributed allocation element size "
+                    "expression dependencies for " << op);
+          return failure();
+        }
+      }
+
+      auto isRuntimeTopologyCall = [](Operation *cloneOp) {
+        if (isa<GetTotalNodesOp, GetTotalWorkersOp>(cloneOp))
+          return true;
+        auto callOp = dyn_cast<func::CallOp>(cloneOp);
+        if (!callOp)
+          return false;
+        auto callee = callOp.getCallee();
+        return callee == "artsGetTotalNodes" || callee == "artsGetTotalWorkers";
+      };
+
+      if (!ValueUtils::cloneValuesIntoRegion(
+              valuesToClone, &initFn.getBody(), mapper, AC->getBuilder(),
+              /*allowMemoryEffectFree=*/true, isRuntimeTopologyCall)) {
+        ARTS_WARN("Failed to clone distributed allocation size expressions into "
+                  "init callback for " << op);
+        return failure();
+      }
+
+      auto mapValue = [&](Value v) { return mapper.lookupOrNull(v); };
+
+      SmallVector<Value, 4> callbackDbSizes;
+      callbackDbSizes.reserve(dbSizes.size());
+      for (Value size : dbSizes) {
+        Value mapped = mapValue(size);
+        if (!mapped) {
+          ARTS_WARN("Missing mapped DbAlloc size value in distributed init for "
+                    << op);
+          return failure();
+        }
+        callbackDbSizes.push_back(mapped);
+      }
+
+      SmallVector<Value, 4> callbackElementSizes;
+      callbackElementSizes.reserve(op.getElementSizes().size());
+      for (Value size : op.getElementSizes()) {
+        Value mapped = mapValue(size);
+        if (!mapped) {
+          ARTS_WARN("Missing mapped DbAlloc element size value in distributed "
+                    "init for " << op);
+          return failure();
+        }
+        callbackElementSizes.push_back(mapped);
+      }
+
+      Value callbackTotalElems =
+          AC->computeTotalElements(callbackDbSizes, op.getLoc());
+      Value guidBuffer = AC->create<memref::AllocOp>(
+          op.getLoc(), guidDynamicType, ValueRange{callbackTotalElems});
+      Value ptrBuffer = AC->create<memref::AllocOp>(
+          op.getLoc(), ptrDynamicType, ValueRange{callbackTotalElems});
+
+      Value guidHolder = AC->create<memref::GetGlobalOp>(
+          op.getLoc(), guidHolderType, guidHolderSymbol);
+      Value ptrHolder = AC->create<memref::GetGlobalOp>(op.getLoc(),
+                                                        ptrHolderType,
+                                                        ptrHolderSymbol);
+      Value zero = AC->createIndexConstant(0, op.getLoc());
+      AC->create<memref::StoreOp>(op.getLoc(), guidBuffer, guidHolder,
+                                  ValueRange{zero});
+      AC->create<memref::StoreOp>(op.getLoc(), ptrBuffer, ptrHolder,
+                                  ValueRange{zero});
+
+      Value callbackElementSize =
+          AC->computeElementTypeSize(op.getElementType(), op.getLoc());
+      Value callbackPayloadSize = AC->createIndexConstant(1, op.getLoc());
+      for (Value dim : callbackElementSizes) {
+        callbackPayloadSize = AC->create<arith::MulIOp>(
+            op.getLoc(), callbackPayloadSize, dim);
+      }
+      Value callbackTotalDbSize = AC->create<arith::MulIOp>(
+          op.getLoc(), callbackElementSize, callbackPayloadSize);
+      Value callbackDbMode =
+          AC->createIntConstant(static_cast<int>(op.getDbModeAttr().getValue()),
+                                AC->Int32, op.getLoc());
+      Value callbackRoute = AC->createIntConstant(0, AC->Int32, op.getLoc());
+      std::optional<int64_t> callbackNextId = nextId;
+
+      if (isSingleElement) {
+        createSingleDb(ptrBuffer, guidBuffer, callbackDbMode,
+                       callbackRoute, callbackTotalDbSize,
+                       callbackNextId ? &callbackNextId : nullptr, op.getLoc(),
+                       /*distributedOwnership=*/true);
+      } else {
+        createMultiDbs(ptrBuffer, guidBuffer, callbackDbSizes,
+                       callbackDbMode, callbackRoute, callbackTotalDbSize,
+                       callbackNextId ? &callbackNextId : nullptr, op.getLoc(),
+                       /*distributedOwnership=*/true);
+      }
+
+      AC->create<func::ReturnOp>(op.getLoc());
+    }
+
+    AC->registerDistributedInitCallback(initFn);
+
+    Value zero = AC->createIndexConstant(0, op.getLoc());
+    Value guidHolder = AC->create<memref::GetGlobalOp>(
+        op.getLoc(), guidHolderType, guidHolderSymbol);
+    Value ptrHolder = AC->create<memref::GetGlobalOp>(op.getLoc(), ptrHolderType,
+                                                      ptrHolderSymbol);
+    guidMemref =
+        AC->create<memref::LoadOp>(op.getLoc(), guidHolder, ValueRange{zero});
+    dbMemref =
+        AC->create<memref::LoadOp>(op.getLoc(), ptrHolder, ValueRange{zero});
+    return success();
+  }
+
   void createSingleDb(Value dbMemref, Value guidMemref, Value dbMode,
                       Value route, Value elementSize,
                       std::optional<int64_t> *nextId, Location loc,
+                      bool distributedOwnership = false,
                       ArrayRef<Value> sizes = {},
                       ArrayRef<Value> indices = {}) const {
+    Value reserveRoute = route;
+    if (distributedOwnership) {
+      Value linearIndex = indices.empty()
+                              ? AC->createIndexConstant(0, loc)
+                              : AC->computeLinearIndex(sizes, indices, loc);
+      Value linearIndexI32 = AC->castToInt(AC->Int32, linearIndex, loc);
+      Value totalNodes = AC->getTotalNodes(loc);
+      reserveRoute =
+          AC->create<arith::RemUIOp>(loc, linearIndexI32, totalNodes);
+    }
+
     /// Reserve GUID for the DB
     auto guid = AC->createRuntimeCall(types::ARTSRTL_artsReserveGuidRoute,
-                                      {dbMode, route}, loc)
+                                      {dbMode, reserveRoute}, loc)
                     .getResult(0);
     /// Create the DB with GUID
     auto elemSize64 = AC->castToInt(AC->Int64, elementSize, loc);
@@ -1032,7 +1264,8 @@ private:
 
   void createMultiDbs(Value dbMemref, Value guidMemref, ArrayRef<Value> sizes,
                       Value dbMode, Value route, Value elementSize,
-                      std::optional<int64_t> *nextId, Location loc) const {
+                      std::optional<int64_t> *nextId, Location loc,
+                      bool distributedOwnership = false) const {
     const unsigned rank = sizes.size();
     auto stepConstant = AC->createIndexConstant(1, loc);
 
@@ -1040,7 +1273,7 @@ private:
         [&](unsigned dim, SmallVector<Value, 4> &indices) {
           if (dim == rank) {
             createSingleDb(dbMemref, guidMemref, dbMode, route, elementSize,
-                           nextId, loc, sizes, indices);
+                           nextId, loc, distributedOwnership, sizes, indices);
             return;
           }
 
@@ -1142,7 +1375,10 @@ struct DbFreePattern : public ArtsToLLVMPattern<DbFreeOp> {
                                 PatternRewriter &rewriter) const override {
     ARTS_INFO("Lowering DbFree Op " << op);
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
-    AC->create<memref::DeallocOp>(op.getLoc(), op.getSource());
+    Value source = op.getSource();
+    Operation *rootOp = ValueUtils::getUnderlyingOperation(source);
+    if (!isa_and_nonnull<memref::GetGlobalOp>(rootOp))
+      AC->create<memref::DeallocOp>(op.getLoc(), source);
     rewriter.eraseOp(op);
     return success();
   }
@@ -1175,13 +1411,13 @@ struct DbNumElementsPattern : public ArtsToLLVMPattern<DbNumElementsOp> {
     /// Get the sizes from the operation arguments
     SmallVector<Value> sizes = op.getSizes();
 
-    /// If no sizes are provided, return constant 1 (i32)
+    /// If no sizes are provided, return constant 1 (index)
     if (sizes.empty()) {
-      rewriter.replaceOp(op, AC->createIntConstant(1, AC->Int64, loc));
+      rewriter.replaceOp(op, AC->createIndexConstant(1, loc));
       return success();
     }
 
-    /// If all sizes are constants, fold to a single i64 constant
+    /// If all sizes are constants, fold to a single index constant.
     bool allConst = true;
     int64_t folded = 1;
     for (Value sz : sizes) {
@@ -1195,15 +1431,15 @@ struct DbNumElementsPattern : public ArtsToLLVMPattern<DbNumElementsOp> {
       break;
     }
     if (allConst) {
-      rewriter.replaceOp(op, AC->createIntConstant(folded, AC->Int64, loc));
+      rewriter.replaceOp(op, AC->createIndexConstant(folded, loc));
       return success();
     }
 
-    /// Otherwise, compute product at runtime as a plain i64 value
-    Value productVal = AC->createIntConstant(1, AC->Int64, loc);
+    /// Otherwise, compute product at runtime as index.
+    Value productVal = AC->createIndexConstant(1, loc);
     for (Value sz : sizes) {
-      Value szI64 = AC->castToInt(AC->Int64, sz, loc);
-      productVal = AC->create<arith::MulIOp>(loc, productVal, szI64);
+      Value szIndex = AC->castToIndex(sz, loc);
+      productVal = AC->create<arith::MulIOp>(loc, productVal, szIndex);
     }
 
     rewriter.replaceOp(op, productVal);

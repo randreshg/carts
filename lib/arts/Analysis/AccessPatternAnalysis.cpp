@@ -33,9 +33,10 @@ void arts::normalizeAccessBounds(AccessBoundsResult &bounds) {
   bounds.maxOffset -= center;
 }
 
-AccessBoundsResult arts::analyzeAccessBoundsFromIndices(
-    ArrayRef<AccessIndexInfo> accesses, Value loopIV, Value blockBase,
-    std::optional<unsigned> partitionDim) {
+AccessBoundsResult
+arts::analyzeAccessBoundsFromIndices(ArrayRef<AccessIndexInfo> accesses,
+                                     Value loopIV, Value blockBase,
+                                     std::optional<unsigned> partitionDim) {
   AccessBoundsResult bounds;
   bounds.minOffset = std::numeric_limits<int64_t>::max();
   bounds.maxOffset = std::numeric_limits<int64_t>::min();
@@ -98,4 +99,3 @@ AccessBoundsResult arts::analyzeAccessBoundsFromIndices(
 
   return bounds;
 }
-

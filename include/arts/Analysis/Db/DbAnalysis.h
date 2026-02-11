@@ -8,10 +8,11 @@
 #define ARTS_ANALYSIS_DB_DBANALYSIS_H
 
 #include "arts/Analysis/ArtsAnalysis.h"
-#include "arts/ArtsDialect.h"
 #include "arts/Analysis/Graphs/Db/DbAccessPattern.h"
+#include "arts/ArtsDialect.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "llvm/ADT/DenseMap.h"
 #include <optional>
@@ -37,6 +38,15 @@ class ArtsAnalysisManager;
 
 class DbAnalysis : public ArtsAnalysis {
 public:
+  struct AcquirePartitionSummary {
+    PartitionMode mode = PartitionMode::coarse;
+    SmallVector<Value> partitionOffsets;
+    SmallVector<Value> partitionSizes;
+    SmallVector<unsigned> partitionDims;
+    bool isValid = false;
+    bool hasIndirectAccess = false;
+  };
+
   struct LoopDbAccessSummary {
     llvm::DenseMap<Operation *, DbAccessPattern> allocPatterns;
     bool hasStencilOffset = false;
@@ -69,6 +79,8 @@ public:
   LoopDbAccessSummary analyzeLoopDbAccessPatterns(ForOp forOp);
   std::optional<LoopDbAccessSummary> getLoopDbAccessSummary(ForOp forOp);
   std::optional<EdtDistributionPattern> getLoopDistributionPattern(ForOp forOp);
+  AcquirePartitionSummary analyzeAcquirePartition(DbAcquireOp acquire,
+                                                  OpBuilder &builder);
 
   /// Query DB access patterns through the DB graph interface.
   std::optional<AccessPattern> getAcquireAccessPattern(DbAcquireOp acquire);
