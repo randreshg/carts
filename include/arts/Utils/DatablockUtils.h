@@ -59,6 +59,23 @@ public:
   /// Traces back to the original DbAllocOp or DbAcquireOp that created it.
   static SmallVector<Value> getSizesFromDb(Value datablockPtr);
 
+  /// Extract the dependency iteration sizes used for EDT dependency counting
+  /// and record_dep lowering.
+  /// For block/stencil acquires that carry partition slices, this returns the
+  /// partition_sizes entry so runtime dependencies are scoped to the task slice.
+  static SmallVector<Value> getDependencySizesFromDb(Operation *dbOp);
+
+  /// Extract dependency iteration sizes from a datablock value.
+  static SmallVector<Value> getDependencySizesFromDb(Value datablockPtr);
+
+  /// Extract the dependency iteration offsets used for EDT dependency lowering.
+  /// For block/stencil acquires with partition slices, this returns the
+  /// partition_offsets entry.
+  static SmallVector<Value> getDependencyOffsetsFromDb(Operation *dbOp);
+
+  /// Extract dependency iteration offsets from a datablock value.
+  static SmallVector<Value> getDependencyOffsetsFromDb(Value datablockPtr);
+
   /// Extract offsets from a datablock pointer value.
   /// Only DbAcquireOp has offsets.
   static SmallVector<Value> getOffsetsFromDb(Value datablockPtr);

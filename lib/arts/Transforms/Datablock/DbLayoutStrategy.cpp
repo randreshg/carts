@@ -1,43 +1,16 @@
 ///==========================================================================///
 /// File: DbLayoutStrategy.cpp
 ///
-/// Strategy implementations for datablock layout addressing.
+/// Layout-aware element pointer computation for datablock lowering.
 ///==========================================================================///
 
 #include "arts/Transforms/Datablock/DbLayoutStrategy.h"
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "mlir/IR/Operation.h"
-#include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir;
 using namespace mlir::arts;
-
-namespace {
-
-class LinearizedLayoutStrategy : public DbLayoutStrategy {
-public:
-  Value computeElementPointer(ArtsCodegen &AC, Location loc, Value base,
-                              ArrayRef<Value> indices,
-                              const LayoutInfo &layout) const override {
-    if (indices.empty())
-      return AC.castToLLVMPtr(base, loc);
-
-    SmallVector<Value> fallbackSizes;
-    ArrayRef<Value> sizes = layout.sizes;
-    if (sizes.empty()) {
-      fallbackSizes = DatablockUtils::getSizesFromDb(base);
-      sizes = fallbackSizes;
-    }
-
-    SmallVector<Value> strides = AC.computeStridesFromSizes(sizes, loc);
-    SmallVector<Value> linearIndices(indices.begin(), indices.end());
-    return AC.create<DbGepOp>(loc, AC.getLLVMPointerType(base), base,
-                              linearIndices, strides);
-  }
-};
-
-} // namespace
 
 LayoutInfo mlir::arts::buildLayoutInfo(Value source) {
   LayoutInfo info;
@@ -65,16 +38,21 @@ LayoutInfo mlir::arts::buildLayoutInfo(Value source) {
   return info;
 }
 
-const DbLayoutStrategy &mlir::arts::getDbLayoutStrategy(PartitionMode mode) {
-  static LinearizedLayoutStrategy linearized;
+Value mlir::arts::computeDbElementPointer(ArtsCodegen &AC, Location loc,
+                                          Value base, ArrayRef<Value> indices,
+                                          const LayoutInfo &layout) {
+  if (indices.empty())
+    return AC.castToLLVMPtr(base, loc);
 
-  switch (mode) {
-  case PartitionMode::coarse:
-  case PartitionMode::fine_grained:
-  case PartitionMode::block:
-  case PartitionMode::stencil:
-    return linearized;
+  SmallVector<Value> fallbackSizes;
+  ArrayRef<Value> sizes = layout.sizes;
+  if (sizes.empty()) {
+    fallbackSizes = DatablockUtils::getSizesFromDb(base);
+    sizes = fallbackSizes;
   }
 
-  llvm_unreachable("unknown partition mode");
+  SmallVector<Value> strides = AC.computeStridesFromSizes(sizes, loc);
+  SmallVector<Value> linearIndices(indices.begin(), indices.end());
+  return AC.create<DbGepOp>(loc, AC.getLLVMPointerType(base), base,
+                            linearIndices, strides);
 }

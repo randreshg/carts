@@ -352,6 +352,28 @@ static bool loopBoundsAreIndirect(BlockArgument iv, Value partitionOffset,
     }
   }
 
+  if (auto artsFor = dyn_cast<arts::ForOp>(parentOp)) {
+    auto args = artsFor.getBody()->getArguments();
+    for (auto it : llvm::enumerate(args)) {
+      if (it.value() != iv)
+        continue;
+      unsigned idx = it.index();
+      auto lbs = artsFor.getLowerBound();
+      auto ubs = artsFor.getUpperBound();
+      auto steps = artsFor.getStep();
+      if (idx < lbs.size() &&
+          isIndirectIndex(lbs[idx], partitionOffset, depth + 1))
+        return true;
+      if (idx < ubs.size() &&
+          isIndirectIndex(ubs[idx], partitionOffset, depth + 1))
+        return true;
+      if (idx < steps.size() &&
+          isIndirectIndex(steps[idx], partitionOffset, depth + 1))
+        return true;
+      return false;
+    }
+  }
+
   return false;
 }
 
@@ -391,6 +413,12 @@ static bool isIndirectIndex(Value idx, Value partitionOffset, int depth) {
     }
     if (auto parOp = dyn_cast<scf::ParallelOp>(parentOp)) {
       for (Value iv : parOp.getInductionVars()) {
+        if (blockArg == iv)
+          return loopBoundsAreIndirect(blockArg, partitionOffset, depth + 1);
+      }
+    }
+    if (auto artsFor = dyn_cast<arts::ForOp>(parentOp)) {
+      for (Value iv : artsFor.getBody()->getArguments()) {
         if (blockArg == iv)
           return loopBoundsAreIndirect(blockArg, partitionOffset, depth + 1);
       }
@@ -808,6 +836,54 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
                                                     maxOffset)) {
       ARTS_DEBUG("  -> Returning Stencil (multi-entry stencil pattern, not all "
                  "fine-grained)");
+      accessPattern = AccessPattern::Stencil;
+      return *accessPattern;
+    }
+  }
+
+  ARTS_DEBUG("  [COARSE-CHECK] stencilBounds=" << (stencilBounds ? "SET" : "null") << " edtUserOp=" << (edtUserOp ? "SET" : "null") << " partMode=" << (acqOp.getPartitionMode() ? static_cast<int>(*acqOp.getPartitionMode()) : -1) << " partIndicesEmpty=" << acqOp.getPartitionIndices().empty());
+  // Coarse-acquire stencil detection: at Stage 10 coarse acquires don't have
+  // stencilBounds computed (getPartitionOffsetDim rejects constant offsets),
+  // so walk the EDT body for arts.for loops and check if any row-dimension
+  // index is IV + nonzero_constant — the definition of stencil access.
+  if (!stencilBounds && edtUserOp &&
+      (!acqOp.getPartitionMode() ||
+       *acqOp.getPartitionMode() == PartitionMode::coarse) &&
+      acqOp.getPartitionIndices().empty()) {
+    DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+    const_cast<DbAcquireNode *>(this)->collectAccessOperations(dbRefToMemOps);
+
+    bool stencilFound = false;
+    EdtOp edtUser = const_cast<DbAcquireNode *>(this)->getEdtUser();
+    if (edtUser) {
+      edtUser.walk([&](ForOp forOp) {
+        if (stencilFound || forOp.getLowerBound().empty())
+          return;
+        Value loopIV = forOp.getBody()->getArgument(0);
+
+        for (auto &[dbRef, memOps] : dbRefToMemOps) {
+          if (stencilFound)
+            break;
+          for (Operation *memOp : memOps) {
+            if (stencilFound)
+              break;
+            SmallVector<Value> chain =
+                DatablockUtils::collectFullIndexChain(dbRef, memOp);
+            if (chain.empty())
+              continue;
+            auto offset =
+                ValueUtils::extractConstantOffset(chain[0], loopIV, loopIV);
+            if (offset && *offset != 0) {
+              ARTS_DEBUG("  Coarse stencil detected: offset=" << *offset);
+              stencilFound = true;
+            }
+          }
+        }
+      });
+    }
+
+    if (stencilFound) {
+      ARTS_DEBUG("  -> Returning Stencil (coarse acquire IR walk)");
       accessPattern = AccessPattern::Stencil;
       return *accessPattern;
     }

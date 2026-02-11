@@ -15,29 +15,6 @@
 using namespace mlir;
 using namespace arts;
 
-namespace {
-
-static unsigned dbPatternRank(DbAccessPattern pattern) {
-  switch (pattern) {
-  case DbAccessPattern::stencil:
-    return 3;
-  case DbAccessPattern::indexed:
-    return 2;
-  case DbAccessPattern::uniform:
-    return 1;
-  case DbAccessPattern::unknown:
-    return 0;
-  }
-  return 0;
-}
-
-static DbAccessPattern mergeDbAccessPattern(DbAccessPattern lhs,
-                                            DbAccessPattern rhs) {
-  return dbPatternRank(rhs) > dbPatternRank(lhs) ? rhs : lhs;
-}
-
-} // namespace
-
 ///==========================================================================///
 /// EdtAnalysis
 ///==========================================================================///
@@ -112,21 +89,18 @@ void EdtAnalysis::print(func::FuncOp func, llvm::raw_ostream &os) {
   EdtGraph &edtGraph = getOrCreateEdtGraph(func);
   func.walk([&](EdtOp edt) {
     auto edtNode = edtGraph.getEdtNode(edt);
-    const EdtInfo *edtInfo = &edtNode->getInfo();
-    if (edtInfo) {
-      unsigned edtIndex = edtInfo->orderIndex;
-      os << "  EDT #" << edtIndex << ":\n";
-      os << "    Total ops: " << edtInfo->totalOps << "\n";
-      os << "    Loads: " << edtInfo->numLoads
-         << ", Stores: " << edtInfo->numStores << "\n";
-      os << "    Calls: " << edtInfo->numCalls << "\n";
-      os << "    Max loop depth: " << edtInfo->maxLoopDepth << "\n";
-      os << "    Compute/Memory ratio: " << edtInfo->computeToMemRatio << "\n";
-      os << "    Bases read: " << edtInfo->basesRead.size()
-         << ", written: " << edtInfo->basesWritten.size() << "\n";
-      os << "    Bytes read: " << edtInfo->bytesRead
-         << ", written: " << edtInfo->bytesWritten << "\n";
-    }
+    const EdtInfo &info = edtNode->getInfo();
+    os << "  EDT #" << info.orderIndex << ":\n";
+    os << "    Total ops: " << info.totalOps << "\n";
+    os << "    Loads: " << info.numLoads
+       << ", Stores: " << info.numStores << "\n";
+    os << "    Calls: " << info.numCalls << "\n";
+    os << "    Max loop depth: " << info.maxLoopDepth << "\n";
+    os << "    Compute/Memory ratio: " << info.computeToMemRatio << "\n";
+    os << "    Bases read: " << info.basesRead.size()
+       << ", written: " << info.basesWritten.size() << "\n";
+    os << "    Bytes read: " << info.bytesRead
+       << ", written: " << info.bytesWritten << "\n";
   });
 }
 
@@ -137,30 +111,24 @@ void EdtAnalysis::toJson(func::FuncOp func, llvm::raw_ostream &os) {
 
   bool first = true;
   EdtGraph &edtGraph = getOrCreateEdtGraph(func);
-  func.walk([&](Operation *op) {
-    if (auto edt = dyn_cast<EdtOp>(op)) {
-      auto edtNode = static_cast<EdtNode *>(edtGraph.getNode(op));
-      const EdtInfo *edtInfo = &edtNode->getInfo();
+  func.walk([&](EdtOp edt) {
+    auto edtNode = edtGraph.getEdtNode(edt);
+    const EdtInfo &info = edtNode->getInfo();
 
-      if (edtInfo) {
-        if (!first)
-          os << ",\n";
-        first = false;
+    if (!first)
+      os << ",\n";
+    first = false;
 
-        unsigned edtIndex = edtInfo->orderIndex;
-        os << "    {\n";
-        os << "      \"edtId\": " << edtIndex << ",\n";
-        os << "      \"totalOps\": " << edtInfo->totalOps << ",\n";
-        os << "      \"numLoads\": " << edtInfo->numLoads << ",\n";
-        os << "      \"numStores\": " << edtInfo->numStores << ",\n";
-        os << "      \"bytesRead\": " << edtInfo->bytesRead << ",\n";
-        os << "      \"bytesWritten\": " << edtInfo->bytesWritten << ",\n";
-        os << "      \"maxLoopDepth\": " << edtInfo->maxLoopDepth << ",\n";
-        os << "      \"computeToMemRatio\": " << edtInfo->computeToMemRatio
-           << "\n";
-        os << "    }";
-      }
-    }
+    os << "    {\n";
+    os << "      \"edtId\": " << info.orderIndex << ",\n";
+    os << "      \"totalOps\": " << info.totalOps << ",\n";
+    os << "      \"numLoads\": " << info.numLoads << ",\n";
+    os << "      \"numStores\": " << info.numStores << ",\n";
+    os << "      \"bytesRead\": " << info.bytesRead << ",\n";
+    os << "      \"bytesWritten\": " << info.bytesWritten << ",\n";
+    os << "      \"maxLoopDepth\": " << info.maxLoopDepth << ",\n";
+    os << "      \"computeToMemRatio\": " << info.computeToMemRatio << "\n";
+    os << "    }";
   });
 
   os << "\n  ]\n";
