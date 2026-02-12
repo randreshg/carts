@@ -159,9 +159,8 @@ static void edtifyLoop(scf::ForOp loop) {
   OpBuilder builder(loop);
 
   Value routeZero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
-  auto outlinedEdt = builder.create<EdtOp>(loc, EdtType::task,
-                                           EdtConcurrency::internode,
-                                           routeZero, ValueRange{});
+  auto outlinedEdt = builder.create<EdtOp>(
+      loc, EdtType::task, EdtConcurrency::internode, routeZero, ValueRange{});
   outlinedEdt.setNoVerifyAttr(NoVerifyAttr::get(builder.getContext()));
 
   Block &edtBody = outlinedEdt.getBody().front();
@@ -220,9 +219,8 @@ struct SerialEdtifyPass : public arts::SerialEdtifyBase<SerialEdtifyPass> {
       ++numConverted;
     }
 
-    ARTS_INFO("SerialEdtify outlined " << numConverted << " / "
-                                        << numCandidates
-                                        << " eligible serial loop(s)");
+    ARTS_INFO("SerialEdtify outlined " << numConverted << " / " << numCandidates
+                                       << " eligible serial loop(s)");
   }
 
 private:

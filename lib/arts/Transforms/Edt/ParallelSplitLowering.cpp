@@ -124,9 +124,8 @@ EdtOp mlir::arts::createContinuationParallel(
 
   Value routeZero = AC.createIntConstant(0, AC.Int32, loc);
   EdtType contType = originalParallel.getType();
-  auto contParallel = AC.create<EdtOp>(loc, contType,
-                                       originalParallel.getConcurrency(),
-                                       routeZero, newDeps);
+  auto contParallel = AC.create<EdtOp>(
+      loc, contType, originalParallel.getConcurrency(), routeZero, newDeps);
 
   if (auto workers = originalParallel.getWorkersAttr())
     contParallel->setAttr(AttrNames::Operation::Workers, workers);
@@ -152,9 +151,9 @@ EdtOp mlir::arts::createContinuationParallel(
   return contParallel;
 }
 
-void mlir::arts::cleanupOriginalParallel(
-    EdtOp originalParallel, ParallelRegionSplitAnalysis &analysis,
-    bool hasPreFor) {
+void mlir::arts::cleanupOriginalParallel(EdtOp originalParallel,
+                                         ParallelRegionSplitAnalysis &analysis,
+                                         bool hasPreFor) {
   for (Operation *op : llvm::reverse(analysis.opsAfterFor))
     op->erase();
   for (ForOp forOp : analysis.forOps)

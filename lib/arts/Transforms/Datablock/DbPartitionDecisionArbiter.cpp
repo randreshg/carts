@@ -33,6 +33,46 @@ static bool isTiling2DTaskAcquire(DbAcquireOp acquire) {
   return kind && *kind == EdtDistributionKind::tiling_2d;
 }
 
+struct DistributionPatternHintSummary {
+  bool hasStencil = false;
+  bool hasOther = false;
+  bool hasReadOnlyAcquire = false;
+  bool hasStencilAccessPattern = false;
+};
+
+static DistributionPatternHintSummary summarizeAcquireDistributionPatterns(
+    ArrayRef<AcquirePartitionInfo> acquireInfos) {
+  DistributionPatternHintSummary summary;
+  for (const auto &info : acquireInfos) {
+    DbAcquireOp acquire = info.acquire;
+    if (!acquire)
+      continue;
+
+    if (acquire.getMode() == ArtsMode::in)
+      summary.hasReadOnlyAcquire = true;
+    if (info.accessPattern == AccessPattern::Stencil)
+      summary.hasStencilAccessPattern = true;
+
+    auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+    (void)blockArg;
+    if (!edt)
+      continue;
+
+    auto pattern = getEdtDistributionPattern(edt.getOperation());
+    if (!pattern)
+      continue;
+
+    if (*pattern == EdtDistributionPattern::stencil)
+      summary.hasStencil = true;
+    else
+      summary.hasOther = true;
+
+    if (summary.hasStencil && summary.hasOther)
+      break;
+  }
+  return summary;
+}
+
 } // namespace
 
 bool AcquirePartitionInfo::isConsistentWith(
@@ -121,6 +161,29 @@ PartitionDecisionArbiterResult mlir::arts::arbitrateInitialPartitionDecision(
     DbAllocOp allocOp, HeuristicsConfig &heuristics) {
   PartitionDecisionArbiterResult result;
   result.decision = heuristics.getPartitioningMode(ctx);
+
+  /// Stencil hint path:
+  /// If all distribution-pattern hints for this allocation are stencil EDTs,
+  /// preserve ESD-capable stencil mode even when access-pattern inference
+  /// degrades to uniform.
+  if (ctx.canBlock && result.decision.mode == PartitionMode::block) {
+    DistributionPatternHintSummary distPatterns =
+        summarizeAcquireDistributionPatterns(acquireInfos);
+    bool allocHasStencilPattern = false;
+    if (auto allocPattern = getDbAccessPattern(allocOp.getOperation()))
+      allocHasStencilPattern = *allocPattern == DbAccessPattern::stencil;
+
+    if (distPatterns.hasStencil && distPatterns.hasReadOnlyAcquire &&
+        (distPatterns.hasStencilAccessPattern || allocHasStencilPattern)) {
+      result.decision = PartitioningDecision::stencil(
+          ctx, "stencil EDT distribution pattern hint");
+      heuristics.recordDecision(
+          "Partition-StencilDistributionHint", true,
+          "forcing stencil partition mode from EDT distribution pattern hints",
+          allocOp.getOperation(), {});
+      ARTS_DEBUG("  stencil EDT hints -> forcing stencil partitioning");
+    }
+  }
 
   /// tiling_2d owner hint path:
   /// when task-level distribution selected 2D and an inout acquire carries

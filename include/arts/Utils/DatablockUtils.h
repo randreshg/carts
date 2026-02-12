@@ -62,7 +62,8 @@ public:
   /// Extract the dependency iteration sizes used for EDT dependency counting
   /// and record_dep lowering.
   /// For block/stencil acquires that carry partition slices, this returns the
-  /// partition_sizes entry so runtime dependencies are scoped to the task slice.
+  /// partition_sizes entry so runtime dependencies are scoped to the task
+  /// slice.
   static SmallVector<Value> getDependencySizesFromDb(Operation *dbOp);
 
   /// Extract dependency iteration sizes from a datablock value.

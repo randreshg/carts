@@ -21,39 +21,14 @@ using namespace mlir::arts;
 
 namespace {
 
-static bool usesPartitionDependencySlice(PartitionMode mode) {
-  return mode == PartitionMode::block || mode == PartitionMode::stencil;
-}
-
 static void getAcquireDependencySlice(DbAcquireOp acquire,
                                       SmallVector<Value> &sizesOut,
                                       SmallVector<Value> &offsetsOut) {
+  /// Dependency shape for DB acquires is defined in DB-space by the explicit
+  /// offsets/sizes operands. Partition hints are loop-iteration hints and can
+  /// live in a different index space.
   sizesOut.assign(acquire.getSizes().begin(), acquire.getSizes().end());
   offsetsOut.assign(acquire.getOffsets().begin(), acquire.getOffsets().end());
-
-  if (!acquire.hasExplicitPartitionHints())
-    return;
-
-  PartitionMode mode = DatablockUtils::getPartitionModeFromStructure(acquire);
-  if (!usesPartitionDependencySlice(mode))
-    return;
-
-  SmallVector<Value> partitionSizes;
-  SmallVector<Value> partitionOffsets;
-  if (acquire.hasMultiplePartitionEntries()) {
-    partitionSizes = acquire.getPartitionSizesForEntry(0);
-    partitionOffsets = acquire.getPartitionOffsetsForEntry(0);
-  } else {
-    partitionSizes.assign(acquire.getPartitionSizes().begin(),
-                          acquire.getPartitionSizes().end());
-    partitionOffsets.assign(acquire.getPartitionOffsets().begin(),
-                            acquire.getPartitionOffsets().end());
-  }
-
-  if (!partitionSizes.empty())
-    sizesOut = std::move(partitionSizes);
-  if (!partitionOffsets.empty())
-    offsetsOut = std::move(partitionOffsets);
 }
 
 } // namespace
@@ -187,7 +162,8 @@ SmallVector<Value> DatablockUtils::getSizesFromDb(Value datablockPtr) {
 
 SmallVector<Value> DatablockUtils::getDependencySizesFromDb(Operation *dbOp) {
   if (auto allocOp = dyn_cast_or_null<DbAllocOp>(dbOp))
-    return SmallVector<Value>(allocOp.getSizes().begin(), allocOp.getSizes().end());
+    return SmallVector<Value>(allocOp.getSizes().begin(),
+                              allocOp.getSizes().end());
 
   if (auto acquireOp = dyn_cast_or_null<DbAcquireOp>(dbOp)) {
     SmallVector<Value> sizes;
@@ -203,7 +179,8 @@ SmallVector<Value> DatablockUtils::getDependencySizesFromDb(Operation *dbOp) {
   return {};
 }
 
-SmallVector<Value> DatablockUtils::getDependencySizesFromDb(Value datablockPtr) {
+SmallVector<Value>
+DatablockUtils::getDependencySizesFromDb(Value datablockPtr) {
   Operation *underlyingDb = getUnderlyingDb(datablockPtr);
   if (!underlyingDb)
     return {};

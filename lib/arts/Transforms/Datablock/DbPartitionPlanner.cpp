@@ -6,6 +6,7 @@
 
 #include "arts/Transforms/Datablock/DbPartitionPlanner.h"
 #include "arts/Analysis/PartitioningHeuristics.h"
+#include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
@@ -29,8 +30,8 @@ static Value firstTotalSize(DbAllocOp allocOp, Value zero) {
 ///===----------------------------------------------------------------------===///
 
 static void computeCoarseShape(DbAllocOp allocOp,
-                                SmallVector<Value> &newOuterSizes,
-                                SmallVector<Value> &newInnerSizes) {
+                               SmallVector<Value> &newOuterSizes,
+                               SmallVector<Value> &newInnerSizes) {
   OpBuilder builder(allocOp);
   Location loc = allocOp.getLoc();
   newOuterSizes.push_back(makeIndexConst(builder, loc, 1));
@@ -41,9 +42,9 @@ static void computeCoarseShape(DbAllocOp allocOp,
 }
 
 static void computeElementWiseShape(DbAllocOp allocOp,
-                                     const PartitioningDecision &decision,
-                                     SmallVector<Value> &newOuterSizes,
-                                     SmallVector<Value> &newInnerSizes) {
+                                    const PartitioningDecision &decision,
+                                    SmallVector<Value> &newOuterSizes,
+                                    SmallVector<Value> &newInnerSizes) {
   OpBuilder builder(allocOp);
   Location loc = allocOp.getLoc();
   ValueRange elemSizes = allocOp.getElementSizes();
@@ -59,9 +60,9 @@ static void computeElementWiseShape(DbAllocOp allocOp,
 }
 
 static void computeBlockShape(DbAllocOp allocOp, ArrayRef<Value> blockSizes,
-                               ArrayRef<unsigned> partitionedDims,
-                               SmallVector<Value> &newOuterSizes,
-                               SmallVector<Value> &newInnerSizes) {
+                              ArrayRef<unsigned> partitionedDims,
+                              SmallVector<Value> &newOuterSizes,
+                              SmallVector<Value> &newInnerSizes) {
   OpBuilder builder(allocOp);
   Location loc = allocOp.getLoc();
   ValueRange elemSizes = allocOp.getElementSizes();
@@ -91,13 +92,11 @@ static void computeBlockShape(DbAllocOp allocOp, ArrayRef<Value> blockSizes,
       if (dim >= elemSizes.size())
         continue;
       Value bs = blockSizes[p];
-      if (!bs ||
-          ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(bs)))
+      if (!bs || ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(bs)))
         continue;
 
       Value dimSize = elemSizes[dim];
-      Value dimI64 =
-          builder.create<arith::IndexCastOp>(loc, i64Type, dimSize);
+      Value dimI64 = builder.create<arith::IndexCastOp>(loc, i64Type, dimSize);
       Value bsI64 = builder.create<arith::IndexCastOp>(loc, i64Type, bs);
       Value sum = builder.create<arith::AddIOp>(loc, dimI64, bsI64);
       Value sumMinusOne = builder.create<arith::SubIOp>(loc, sum, oneI64);
@@ -118,8 +117,7 @@ static void computeBlockShape(DbAllocOp allocOp, ArrayRef<Value> blockSizes,
   } else {
     for (unsigned d = 0; d < nPartDims && d < elemSizes.size(); ++d) {
       Value bs = blockSizes[d];
-      if (!bs ||
-          ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(bs)))
+      if (!bs || ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(bs)))
         continue;
 
       Value dim = elemSizes[d];
@@ -150,22 +148,23 @@ static void computeBlockShape(DbAllocOp allocOp, ArrayRef<Value> blockSizes,
 ///===----------------------------------------------------------------------===///
 
 static void buildCoarseRewriteAcquire(DbAllocOp allocOp,
-                                       DbRewriteAcquire &output,
-                                       OpBuilder &builder) {
+                                      DbRewriteAcquire &output,
+                                      OpBuilder &builder) {
   Location loc = allocOp.getLoc();
   Value zero = makeIndexConst(builder, loc, 0);
   Value totalSize = firstTotalSize(allocOp, zero);
 
   output.partitionInfo.offsets.clear();
   output.partitionInfo.sizes.clear();
+  output.partitionInfo.mode = PartitionMode::coarse;
   output.partitionInfo.offsets.push_back(zero);
   output.partitionInfo.sizes.push_back(totalSize);
 }
 
 static void buildElementWiseRewriteAcquire(const DbAcquirePartitionView &input,
-                                            DbAllocOp allocOp,
-                                            DbRewriteAcquire &output,
-                                            OpBuilder &builder) {
+                                           DbAllocOp allocOp,
+                                           DbRewriteAcquire &output,
+                                           OpBuilder &builder) {
   Location loc = allocOp.getLoc();
   Value zero = makeIndexConst(builder, loc, 0);
   Value totalSize = firstTotalSize(allocOp, zero);
@@ -173,6 +172,7 @@ static void buildElementWiseRewriteAcquire(const DbAcquirePartitionView &input,
   output.partitionInfo.indices.clear();
   output.partitionInfo.offsets.clear();
   output.partitionInfo.sizes.clear();
+  output.partitionInfo.mode = PartitionMode::fine_grained;
 
   if (!input.isValid) {
     output.partitionInfo.indices.push_back(zero);
@@ -195,8 +195,7 @@ static void buildElementWiseRewriteAcquire(const DbAcquirePartitionView &input,
   }
 
   if (output.partitionInfo.indices.empty() &&
-      output.partitionInfo.offsets.empty() &&
-      !input.partitionOffsets.empty()) {
+      output.partitionInfo.offsets.empty() && !input.partitionOffsets.empty()) {
     output.partitionInfo.indices.assign(input.partitionOffsets.begin(),
                                         input.partitionOffsets.end());
   }
@@ -212,10 +211,10 @@ static void buildElementWiseRewriteAcquire(const DbAcquirePartitionView &input,
 }
 
 static void buildBlockRewriteAcquire(const DbAcquirePartitionView &input,
-                                      DbAllocOp allocOp,
-                                      const DbRewritePlan &plan,
-                                      DbRewriteAcquire &output,
-                                      OpBuilder &builder) {
+                                     DbAllocOp allocOp,
+                                     const DbRewritePlan &plan,
+                                     DbRewriteAcquire &output,
+                                     OpBuilder &builder) {
   Location loc = allocOp.getLoc();
   Value zero = makeIndexConst(builder, loc, 0);
   Value one = makeIndexConst(builder, loc, 1);
@@ -224,12 +223,13 @@ static void buildBlockRewriteAcquire(const DbAcquirePartitionView &input,
   output.partitionInfo.indices.clear();
   output.partitionInfo.offsets.clear();
   output.partitionInfo.sizes.clear();
+  output.partitionInfo.mode = PartitionMode::block;
 
   if (input.needsFullRange) {
     output.isFullRange = true;
     if (!plan.partitionedDims.empty()) {
-      output.partitionInfo.partitionedDims.assign(
-          plan.partitionedDims.begin(), plan.partitionedDims.end());
+      output.partitionInfo.partitionedDims.assign(plan.partitionedDims.begin(),
+                                                  plan.partitionedDims.end());
     }
     return;
   }
@@ -266,13 +266,25 @@ static void buildBlockRewriteAcquire(const DbAcquirePartitionView &input,
 }
 
 static void buildStencilRewriteAcquire(const DbAcquirePartitionView &input,
-                                        DbAllocOp allocOp,
-                                        const DbRewritePlan &plan,
-                                        DbRewriteAcquire &output,
-                                        OpBuilder &builder) {
+                                       DbAllocOp allocOp,
+                                       const DbRewritePlan &plan,
+                                       DbRewriteAcquire &output,
+                                       OpBuilder &builder) {
+  DbAcquireOp acquire = input.acquire;
+  bool allocIsStencil = false;
+  if (auto pattern = getDbAccessPattern(allocOp.getOperation()))
+    allocIsStencil = *pattern == DbAccessPattern::stencil;
+  bool shouldUseStencil =
+      acquire && acquire.getMode() == ArtsMode::in &&
+      (input.accessPattern == AccessPattern::Stencil || allocIsStencil);
+
   buildBlockRewriteAcquire(input, allocOp, plan, output, builder);
-  if (!input.isValid || input.needsFullRange)
+  if (!shouldUseStencil || !input.isValid || input.needsFullRange) {
+    output.partitionInfo.mode = PartitionMode::block;
     return;
+  }
+
+  output.partitionInfo.mode = PartitionMode::stencil;
 
   if (!input.partitionIndices.empty()) {
     output.partitionInfo.indices.assign(input.partitionIndices.begin(),
@@ -282,11 +294,12 @@ static void buildStencilRewriteAcquire(const DbAcquirePartitionView &input,
 
 } // namespace
 
-void mlir::arts::computeAllocationShape(
-    PartitionMode mode, DbAllocOp allocOp,
-    const PartitioningDecision &decision, ArrayRef<Value> blockSizes,
-    ArrayRef<unsigned> partitionedDims, SmallVector<Value> &newOuterSizes,
-    SmallVector<Value> &newInnerSizes) {
+void mlir::arts::computeAllocationShape(PartitionMode mode, DbAllocOp allocOp,
+                                        const PartitioningDecision &decision,
+                                        ArrayRef<Value> blockSizes,
+                                        ArrayRef<unsigned> partitionedDims,
+                                        SmallVector<Value> &newOuterSizes,
+                                        SmallVector<Value> &newInnerSizes) {
   switch (mode) {
   case PartitionMode::coarse:
     computeCoarseShape(allocOp, newOuterSizes, newInnerSizes);
@@ -302,12 +315,9 @@ void mlir::arts::computeAllocationShape(
   }
 }
 
-void mlir::arts::buildRewriteAcquire(PartitionMode mode,
-                                      const DbAcquirePartitionView &input,
-                                      DbAllocOp allocOp,
-                                      const DbRewritePlan &plan,
-                                      DbRewriteAcquire &output,
-                                      OpBuilder &builder) {
+void mlir::arts::buildRewriteAcquire(
+    PartitionMode mode, const DbAcquirePartitionView &input, DbAllocOp allocOp,
+    const DbRewritePlan &plan, DbRewriteAcquire &output, OpBuilder &builder) {
   switch (mode) {
   case PartitionMode::coarse:
     buildCoarseRewriteAcquire(allocOp, output, builder);

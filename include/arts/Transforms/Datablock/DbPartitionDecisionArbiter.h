@@ -7,6 +7,7 @@
 #ifndef ARTS_TRANSFORMS_DATABLOCK_DBPARTITIONDECISIONARBITER_H
 #define ARTS_TRANSFORMS_DATABLOCK_DBPARTITIONDECISIONARBITER_H
 
+#include "arts/Analysis/Graphs/Db/DbAccessPattern.h"
 #include "arts/Analysis/PartitioningHeuristics.h"
 #include "arts/ArtsDialect.h"
 #include "mlir/Support/LLVM.h"
@@ -24,6 +25,7 @@ struct AcquirePartitionInfo {
   SmallVector<Value> partitionOffsets;
   SmallVector<Value> partitionSizes;
   SmallVector<unsigned> partitionDims;
+  AccessPattern accessPattern = AccessPattern::Unknown;
   bool isValid = false;
   bool hasIndirectAccess = false;
   /// For mixed mode: this coarse acquire needs full-range access to chunked

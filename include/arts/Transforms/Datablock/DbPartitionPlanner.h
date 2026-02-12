@@ -11,6 +11,7 @@
 #ifndef ARTS_TRANSFORMS_DATABLOCK_DBPARTITIONPLANNER_H
 #define ARTS_TRANSFORMS_DATABLOCK_DBPARTITIONPLANNER_H
 
+#include "arts/Analysis/Graphs/Db/DbAccessPattern.h"
 #include "arts/Transforms/Datablock/DbRewriter.h"
 #include "mlir/IR/Builders.h"
 
@@ -25,6 +26,7 @@ struct DbAcquirePartitionView {
   SmallVector<Value> partitionIndices;
   SmallVector<Value> partitionOffsets;
   SmallVector<Value> partitionSizes;
+  AccessPattern accessPattern = AccessPattern::Unknown;
   bool isValid = false;
   bool hasIndirectAccess = false;
   bool needsFullRange = false;
@@ -40,9 +42,9 @@ void computeAllocationShape(PartitionMode mode, DbAllocOp allocOp,
 
 /// Build per-acquire rewrite payload for the given partition mode.
 void buildRewriteAcquire(PartitionMode mode,
-                         const DbAcquirePartitionView &input,
-                         DbAllocOp allocOp, const DbRewritePlan &plan,
-                         DbRewriteAcquire &output, OpBuilder &builder);
+                         const DbAcquirePartitionView &input, DbAllocOp allocOp,
+                         const DbRewritePlan &plan, DbRewriteAcquire &output,
+                         OpBuilder &builder);
 
 } // namespace arts
 } // namespace mlir

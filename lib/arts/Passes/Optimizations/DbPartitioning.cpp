@@ -173,6 +173,8 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
                              summary.partitionSizes.end());
   info.partitionDims.assign(summary.partitionDims.begin(),
                             summary.partitionDims.end());
+  if (acqNode)
+    info.accessPattern = acqNode->getAccessPattern();
   info.isValid = summary.isValid;
   info.hasIndirectAccess = summary.hasIndirectAccess;
 
@@ -1238,6 +1240,27 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                                  << ", outerRank=" << decision.outerRank
                                  << ", innerRank=" << decision.innerRank);
 
+  if (decision.mode == PartitionMode::stencil) {
+    bool allocHasStencilPattern = false;
+    if (auto allocPattern = getDbAccessPattern(allocOp.getOperation()))
+      allocHasStencilPattern = *allocPattern == DbAccessPattern::stencil;
+
+    if (allocHasStencilPattern) {
+      for (auto &info : acquireInfos) {
+        if (!info.acquire || info.acquire.getMode() != ArtsMode::in)
+          continue;
+        bool hasPartitionRange =
+            !info.partitionOffsets.empty() && !info.partitionSizes.empty();
+        bool blockLikeMode =
+            info.mode == PartitionMode::block ||
+            info.mode == PartitionMode::stencil ||
+            (info.mode == PartitionMode::coarse && info.isValid);
+        if (blockLikeMode && hasPartitionRange)
+          info.needsFullRange = false;
+      }
+    }
+  }
+
   /// Step 5a: Compute stencilInfo early (needed for inner size calculation)
   /// Must be done before computeAllocationShape() for stencil mode.
   std::optional<StencilInfo> stencilInfo;
@@ -1280,6 +1303,30 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         }
       }
     });
+
+    auto allocPattern = getDbAccessPattern(allocOp.getOperation());
+    bool allocHasStencilPattern =
+        allocPattern && *allocPattern == DbAccessPattern::stencil;
+
+    bool hasReadStencilAcquire = std::any_of(
+        acquireInfos.begin(), acquireInfos.end(), [&](auto &acqInfo) {
+          if (!acqInfo.acquire || acqInfo.acquire.getMode() != ArtsMode::in)
+            return false;
+          if (acqInfo.accessPattern == AccessPattern::Stencil)
+            return true;
+          return allocHasStencilPattern;
+        });
+
+    if ((info.haloLeft == 0 || info.haloRight == 0) && hasReadStencilAcquire &&
+        allocHasStencilPattern) {
+      if (allocPattern && *allocPattern == DbAccessPattern::stencil) {
+        info.haloLeft = std::max<int64_t>(info.haloLeft, 1);
+        info.haloRight = std::max<int64_t>(info.haloRight, 1);
+        ARTS_DEBUG("  Applying stencil halo fallback from db_alloc access "
+                   "pattern: haloLeft="
+                   << info.haloLeft << ", haloRight=" << info.haloRight);
+      }
+    }
 
     /// Get total rows from first element dimension.
     /// For stencil loops, the logical owned span excludes halo rows, so use
@@ -1504,6 +1551,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                                  info.partitionOffsets.end());
     view.partitionSizes.assign(info.partitionSizes.begin(),
                                info.partitionSizes.end());
+    view.accessPattern = info.accessPattern;
     view.isValid = info.isValid;
     view.hasIndirectAccess = info.hasIndirectAccess;
     view.needsFullRange = info.needsFullRange;

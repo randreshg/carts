@@ -684,10 +684,9 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   AC->setInsertionPointToStart(&ifOp.getThenRegion().front());
 
   /// Detect reduction block arguments
-  DenseSet<Value> reductionBlockArgs =
-      redInfo.reductionVars.empty()
-          ? DenseSet<Value>{}
-          : detectReductionBlockArgs(forOp);
+  DenseSet<Value> reductionBlockArgs = redInfo.reductionVars.empty()
+                                           ? DenseSet<Value>{}
+                                           : detectReductionBlockArgs(forOp);
 
   Value one = AC->createIndexConstant(1, loc);
   Value taskWorkerId = workerIdPlaceholder;
@@ -777,8 +776,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     }
 
     BlockArgument parallelArg = parallelBlock.getArgument(idx);
-    if (shouldSkipReductionArg(parallelArg, redInfo,
-                                                  reductionBlockArgs))
+    if (shouldSkipReductionArg(parallelArg, redInfo, reductionBlockArgs))
       continue;
 
     /// Rewiring: Trace to DbAllocOp and acquire from there
@@ -933,9 +931,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{zeroIndex});
     redMapper.map(redVar, myAccumulator);
 
-    collectOldAccumulatorDbRefs(
-        forOp, parallelBlock, reductionBlockArgs, opsToSkip, redMapper,
-        myAccumulator);
+    collectOldAccumulatorDbRefs(forOp, parallelBlock, reductionBlockArgs,
+                                opsToSkip, redMapper, myAccumulator);
   }
 
   Block &forBody = forOp.getRegion().front();
