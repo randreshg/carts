@@ -298,8 +298,7 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
 }
 
 void mlir::arts::createResultEdt(ArtsCodegen *AC,
-                                        ReductionLoweringInfo &redInfo,
-                                        Location loc) {
+                                 ReductionLoweringInfo &redInfo, Location loc) {
   OpBuilder::InsertionGuard IG(AC->getBuilder());
   if (redInfo.reductionVars.empty())
     return;
@@ -464,8 +463,8 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
 }
 
 void mlir::arts::finalizeReductionAfterEpoch(ArtsCodegen *AC,
-                                           ReductionLoweringInfo &redInfo,
-                                           Location loc) {
+                                             ReductionLoweringInfo &redInfo,
+                                             Location loc) {
   if (redInfo.reductionVars.empty())
     return;
 

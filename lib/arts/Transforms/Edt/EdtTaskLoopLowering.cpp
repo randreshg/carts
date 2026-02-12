@@ -91,8 +91,8 @@ TaskLoopLoweringResult EdtTaskLoopLowering::lowerBlockStyle(
 
     loopLower = ceilDiv(diffLowerPos, stepClamped);
     loopUpper = ceilDiv(diffUpperPos, stepClamped);
-    loopUpper = input.AC->create<arith::MinUIOp>(
-        input.loc, loopUpper, result.insideBounds.iterCount);
+    loopUpper = input.AC->create<arith::MinUIOp>(input.loc, loopUpper,
+                                                 result.insideBounds.iterCount);
   }
 
   result.iterLoop =

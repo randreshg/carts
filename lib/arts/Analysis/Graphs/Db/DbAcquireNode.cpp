@@ -204,8 +204,11 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
   useInEdt = blockArg;
 
   if (!edtUserOp || !useInEdt) {
-    ARTS_ERROR("DbAcquireOp ptr result is not used by an EDT or another "
-               "acquire.\n"
+    /// Host-side acquire/release chains are valid in pre-lowering IR
+    /// (e.g. serial initialization), but they are not partitionable task
+    /// acquires. Keep the node in the graph and treat it as non-EDT.
+    ARTS_DEBUG("DbAcquireOp ptr is not consumed by an EDT; treating as "
+               "non-partitionable acquire.\n"
                "  Acquire op: "
                << dbAcquireOp
                << "\n"
@@ -214,7 +217,7 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
                << "\n"
                   "  User type: "
                << singleUser->getName());
-    ARTS_UNREACHABLE("Acquire ptr should be used by an EDT or another acquire");
+    return;
   }
 
   /// Find the corresponding DbReleaseOp for this acquire
@@ -841,15 +844,18 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
     }
   }
 
-  ARTS_DEBUG("  [COARSE-CHECK] stencilBounds=" << (stencilBounds ? "SET" : "null") << " edtUserOp=" << (edtUserOp ? "SET" : "null") << " partMode=" << (acqOp.getPartitionMode() ? static_cast<int>(*acqOp.getPartitionMode()) : -1) << " partIndicesEmpty=" << acqOp.getPartitionIndices().empty());
-  // Coarse-acquire stencil detection: at Stage 10 coarse acquires don't have
-  // stencilBounds computed (getPartitionOffsetDim rejects constant offsets),
-  // so walk the EDT body for arts.for loops and check if any row-dimension
-  // index is IV + nonzero_constant — the definition of stencil access.
-  if (!stencilBounds && edtUserOp &&
-      (!acqOp.getPartitionMode() ||
-       *acqOp.getPartitionMode() == PartitionMode::coarse) &&
-      acqOp.getPartitionIndices().empty()) {
+  ARTS_DEBUG("  [COARSE-CHECK] stencilBounds="
+             << (stencilBounds ? "SET" : "null")
+             << " edtUserOp=" << (edtUserOp ? "SET" : "null") << " partMode="
+             << (acqOp.getPartitionMode()
+                     ? static_cast<int>(*acqOp.getPartitionMode())
+                     : -1)
+             << " partIndicesEmpty=" << acqOp.getPartitionIndices().empty());
+  bool isFineGrainedHint =
+      acqOp.getPartitionMode() &&
+      *acqOp.getPartitionMode() == PartitionMode::fine_grained;
+  if (!stencilBounds && edtUserOp && acqOp.getMode() == ArtsMode::in &&
+      !isFineGrainedHint && acqOp.getPartitionIndices().empty()) {
     DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
     const_cast<DbAcquireNode *>(this)->collectAccessOperations(dbRefToMemOps);
 
@@ -861,6 +867,8 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
           return;
         Value loopIV = forOp.getBody()->getArgument(0);
 
+        DenseMap<Value, std::pair<int64_t, int64_t>> baseOffsetRange;
+
         for (auto &[dbRef, memOps] : dbRefToMemOps) {
           if (stencilFound)
             break;
@@ -871,11 +879,39 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
                 DatablockUtils::collectFullIndexChain(dbRef, memOp);
             if (chain.empty())
               continue;
-            auto offset =
-                ValueUtils::extractConstantOffset(chain[0], loopIV, loopIV);
-            if (offset && *offset != 0) {
-              ARTS_DEBUG("  Coarse stencil detected: offset=" << *offset);
-              stencilFound = true;
+
+            Value idxForBounds;
+            for (Value idx : chain) {
+              int64_t constVal = 0;
+              if (!ValueUtils::getConstantIndex(idx, constVal)) {
+                idxForBounds = idx;
+                break;
+              }
+            }
+            if (!idxForBounds)
+              continue;
+
+            int64_t constOffset = 0;
+            Value base =
+                ValueUtils::stripConstantOffset(idxForBounds, &constOffset);
+            if (!base)
+              continue;
+            base = ValueUtils::stripNumericCasts(base);
+            if (!ValueUtils::dependsOn(base, loopIV))
+              continue;
+
+            auto it = baseOffsetRange.find(base);
+            if (it == baseOffsetRange.end()) {
+              baseOffsetRange.try_emplace(base, constOffset, constOffset);
+            } else {
+              it->second.first = std::min(it->second.first, constOffset);
+              it->second.second = std::max(it->second.second, constOffset);
+              if (it->second.first != it->second.second) {
+                ARTS_DEBUG("  Coarse stencil detected: base="
+                           << base << " min=" << it->second.first
+                           << " max=" << it->second.second);
+                stencilFound = true;
+              }
             }
           }
         }

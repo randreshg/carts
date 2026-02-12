@@ -153,7 +153,8 @@ bool LoopNode::isParallelizableByMetadata() const {
     return false;
 
   if (parallelClassification &&
-      *parallelClassification == LoopMetadata::ParallelClassification::Sequential)
+      *parallelClassification ==
+          LoopMetadata::ParallelClassification::Sequential)
     return false;
 
   return true;

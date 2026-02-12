@@ -125,9 +125,8 @@ def DistributedDbOwnership
     Selects host-level datablock allocations that are safe to distribute across
     nodes and annotates them with the `distributed` attribute for lowering.
   }];
-  let dependentDialects = [
-    "func::FuncDialect", "arts::ArtsDialect", "memref::MemRefDialect"
-  ];
+  let dependentDialects =
+      ["func::FuncDialect", "arts::ArtsDialect", "memref::MemRefDialect"];
   let constructor = "mlir::arts::createDistributedDbOwnershipPass(nullptr)";
 }
 
@@ -309,11 +308,10 @@ def SerialEdtify : Pass<"serial-edtify", "mlir::ModuleOp"> {
 
 def EdtDistribution : Pass<"edt-distribution", "mlir::ModuleOp"> {
   let summary = "Select and annotate distribution strategy for arts.for loops";
-  let description = [{
-    Classifies loop access patterns inside parallel EDTs and selects an initial
-    distribution strategy, recording the decision as attributes consumed by
-    ForLowering.
-  }];
+  let description =
+      [{Classifies loop access patterns inside parallel EDTs and selects an
+            initial distribution strategy,
+        recording the decision as attributes consumed by ForLowering.}];
   let dependentDialects = [
     "func::FuncDialect", "arts::ArtsDialect", "arith::ArithDialect",
     "scf::SCFDialect", "memref::MemRefDialect"
@@ -406,11 +404,11 @@ def ArtsHoisting : Pass<"arts-hoisting", "mlir::ModuleOp"> {
 
 def BlockLoopStripMining : Pass<"block-stripmine", "mlir::func::FuncOp"> {
   let summary = "Strip-mine innermost loops with block-partitioned indexing";
-  let description = [{
-    Matches innermost loops that use div/rem by a constant block size and
-    block-partitioned db_ref patterns. Rewrites them into a block loop and
-    local index loop to remove per-iteration div/rem overhead and reuse db_ref.
-  }];
+  let description = [{Matches innermost loops that use div /
+                          rem by a constant block size and block -
+                      partitioned db_ref patterns.Rewrites them into a block
+                          loop and local index loop to remove per -
+                      iteration div / rem overhead and reuse db_ref.}];
   let dependentDialects = [
     "func::FuncDialect", "scf::SCFDialect", "arith::ArithDialect",
     "arts::ArtsDialect"
@@ -420,11 +418,12 @@ def BlockLoopStripMining : Pass<"block-stripmine", "mlir::func::FuncOp"> {
 
 def LoopNormalization : Pass<"loop-normalization", "mlir::ModuleOp"> {
   let summary = "Pattern-based loop normalization for partitioning";
-  let description = [{
-    Applies loop normalization patterns to enable downstream DbPartitioning.
-    Registered patterns include symmetric-triangular normalization (converts
-    triangular loops with symmetric writes to rectangular form) and others.
-  }];
+  let description =
+      [{Applies loop normalization patterns to enable downstream
+            DbPartitioning.Registered patterns include symmetric -
+        triangular normalization(
+            converts triangular loops with symmetric writes to rectangular form)
+            and others.}];
   let dependentDialects = [
     "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",
     "arith::ArithDialect", "scf::SCFDialect"
@@ -487,7 +486,7 @@ def LoopVectorizationHints
   let summary = "Attach LLVM loop vectorization hints to EDT function loops";
   let description = [{
     This pass attaches LLVM loop optimization hints to loop backedges in EDT
-    functions. It uses MLIR's native LoopAnnotationAttr which automatically
+    functions. It uses MLIR's native LoopAnnotationAttr, which automatically
     translates to !llvm.loop metadata during LLVM IR emission.
   }];
   let dependentDialects = ["LLVM::LLVMDialect"];
