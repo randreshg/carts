@@ -31,6 +31,10 @@ protected:
                       bool isSingleChunk = false) override;
 
 private:
+  void transformAcquireAsBlock(const DbRewriteAcquire &info,
+                               DbAcquireOp acquire, OpBuilder &builder);
+  bool rebaseEdtUsersAsBlock(DbAcquireOp acquire, OpBuilder &builder);
+
   /// Add a halo acquire as a new EDT dependency.
   void addHaloAcquireToEdt(DbAcquireOp originalAcq, DbAcquireOp haloAcq,
                            OpBuilder &builder);

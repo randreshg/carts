@@ -33,6 +33,7 @@
 #include "arts/Utils/EdtUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/RemovalUtils.h"
+#include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -43,6 +44,25 @@ ARTS_DEBUG_SETUP(db_transforms);
 
 using namespace mlir;
 using namespace mlir::arts;
+
+namespace {
+
+static bool isDefinedInRegion(Value val, Region *region) {
+  if (auto blockArg = val.dyn_cast<BlockArgument>())
+    return region->isAncestor(blockArg.getOwner()->getParent());
+  if (Operation *defOp = val.getDefiningOp())
+    return region->isAncestor(defOp->getParentRegion());
+  return false;
+}
+
+static bool isStartBlockArithmeticOp(Operation *op) {
+  return isa<arith::ConstantIndexOp, arith::ConstantIntOp, arith::DivUIOp,
+             arith::DivSIOp, arith::RemUIOp, arith::RemSIOp, arith::AddIOp,
+             arith::SubIOp, arith::MulIOp, arith::MaxUIOp, arith::MinUIOp,
+             arith::IndexCastOp>(op);
+}
+
+} // namespace
 
 void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
                                          DbAllocOp newAlloc,
@@ -84,6 +104,15 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
     auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
     if (blockArg && blockArg.getType() != newPtrType)
       blockArg.setType(newPtrType);
+  }
+
+  /// Mixed stencil mode: only read-only stencil acquires should use ESD
+  /// 3-buffer lowering. Non-stencil or write-capable acquires are lowered via
+  /// regular block semantics over the same block-partitioned allocation.
+  if (info.partitionInfo.mode != PartitionMode::stencil ||
+      acquire.getMode() != ArtsMode::in) {
+    transformAcquireAsBlock(info, acquire, builder);
+    return;
   }
 
   /// STENCIL MODE with ESD: 3-acquire pattern
@@ -244,6 +273,160 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   /// identifies the coordinate system (includesBaseOffset = true) and splits
   /// loops correctly.
   rebaseEdtUsers(acquire, builder, baseOffset);
+}
+
+void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
+                                                DbAcquireOp acquire,
+                                                OpBuilder &builder) {
+  Location loc = acquire.getLoc();
+  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+  Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
+
+  acquire.clearPartitionHints();
+  setPartitionMode(acquire.getOperation(), PartitionMode::block);
+
+  SmallVector<Value> newOffsets;
+  SmallVector<Value> newSizes;
+  unsigned nPartDims = plan.numPartitionedDims();
+  if (nPartDims == 0)
+    nPartDims = 1;
+
+  if (info.isFullRange) {
+    for (unsigned d = 0; d < nPartDims; ++d) {
+      newOffsets.push_back(zero);
+      Value blockCount = (d < plan.outerSizes.size() && plan.outerSizes[d])
+                             ? plan.outerSizes[d]
+                             : one;
+      newSizes.push_back(blockCount);
+    }
+  } else {
+    newOffsets.assign(info.getOffsets().begin(), info.getOffsets().end());
+    newSizes.assign(info.getSizes().begin(), info.getSizes().end());
+  }
+
+  if (newOffsets.empty())
+    newOffsets.push_back(zero);
+  if (newSizes.empty()) {
+    Value fallbackSize = (!plan.outerSizes.empty() && plan.outerSizes.front())
+                             ? plan.outerSizes.front()
+                             : one;
+    newSizes.push_back(fallbackSize);
+  }
+
+  acquire.getOffsetsMutable().assign(newOffsets);
+  acquire.getSizesMutable().assign(newSizes);
+
+  if (!info.skipRebase)
+    rebaseEdtUsersAsBlock(acquire, builder);
+}
+
+bool DbStencilRewriter::rebaseEdtUsersAsBlock(DbAcquireOp acquire,
+                                              OpBuilder &builder) {
+  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+  if (!blockArg)
+    return false;
+
+  Type targetType;
+  for (Operation *user : blockArg.getUsers()) {
+    if (auto ref = dyn_cast<DbRefOp>(user)) {
+      targetType = ref.getResult().getType();
+      break;
+    }
+  }
+
+  if (!targetType) {
+    targetType = blockArg.getType();
+    if (auto outer = targetType.dyn_cast<MemRefType>())
+      if (auto inner = outer.getElementType().dyn_cast<MemRefType>())
+        targetType = inner;
+  }
+  if (!targetType.isa_and_nonnull<MemRefType>())
+    return false;
+
+  Type derivedType = targetType;
+  if (auto dbAlloc = dyn_cast_or_null<DbAllocOp>(
+          DatablockUtils::getUnderlyingDbAlloc(blockArg)))
+    derivedType = dbAlloc.getAllocatedElementType();
+
+  OpBuilder::InsertionGuard ig(builder);
+  builder.setInsertionPointToStart(&edt.getBody().front());
+  Location loc = acquire.getLoc();
+  Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
+  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+
+  unsigned nPartDims = plan.numPartitionedDims();
+  if (nPartDims == 0)
+    nPartDims = 1;
+
+  SmallVector<Value> effectiveBlockSizes;
+  SmallVector<Value> effectiveStartBlocks;
+  effectiveBlockSizes.reserve(nPartDims);
+  effectiveStartBlocks.reserve(nPartDims);
+
+  Region &edtRegion = edt.getBody();
+  IRMapping cloneMapping;
+  llvm::SetVector<Value> valuesToClone;
+
+  for (unsigned d = 0; d < nPartDims; ++d) {
+    Value bs = plan.getBlockSize(d);
+    if (!bs)
+      bs = one;
+    bs = builder.create<arith::MaxUIOp>(loc, bs, one);
+    effectiveBlockSizes.push_back(bs);
+
+    Value startBlock =
+        d < acquire.getOffsets().size() ? acquire.getOffsets()[d] : zero;
+    if (startBlock && !startBlock.getType().isIndex())
+      startBlock = builder.create<arith::IndexCastOp>(
+          loc, builder.getIndexType(), startBlock);
+    if (!startBlock)
+      startBlock = zero;
+    if (!isDefinedInRegion(startBlock, &edtRegion) &&
+        startBlock.getDefiningOp())
+      valuesToClone.insert(startBlock);
+    effectiveStartBlocks.push_back(startBlock);
+  }
+
+  if (!valuesToClone.empty()) {
+    if (!ValueUtils::cloneValuesIntoRegion(
+            valuesToClone, &edtRegion, cloneMapping, builder,
+            /*allowMemoryEffectFree=*/false, isStartBlockArithmeticOp))
+      return false;
+  }
+
+  for (Value &startBlock : effectiveStartBlocks) {
+    if (!startBlock)
+      continue;
+    if (cloneMapping.contains(startBlock))
+      startBlock = cloneMapping.lookup(startBlock);
+    if (!isDefinedInRegion(startBlock, &edtRegion))
+      startBlock = zero;
+  }
+
+  auto indexer = createBlockIndexer(effectiveBlockSizes, effectiveStartBlocks,
+                                    plan.outerRank(), plan.innerRank(),
+                                    plan.partitionedDims);
+  if (!indexer)
+    return false;
+
+  SmallVector<Operation *> users(blockArg.getUsers().begin(),
+                                 blockArg.getUsers().end());
+  llvm::SetVector<Operation *> opsToRemove;
+  bool rewritten = false;
+
+  for (Operation *user : users) {
+    if (auto ref = dyn_cast<DbRefOp>(user)) {
+      indexer->transformDbRefUsers(ref, blockArg, derivedType, builder,
+                                   opsToRemove);
+      rewritten = true;
+    }
+  }
+
+  RemovalUtils removal;
+  for (Operation *op : opsToRemove)
+    removal.markForRemoval(op);
+  removal.removeAllMarked();
+  return rewritten;
 }
 
 void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,

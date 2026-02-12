@@ -92,8 +92,8 @@ void EdtAnalysis::print(func::FuncOp func, llvm::raw_ostream &os) {
     const EdtInfo &info = edtNode->getInfo();
     os << "  EDT #" << info.orderIndex << ":\n";
     os << "    Total ops: " << info.totalOps << "\n";
-    os << "    Loads: " << info.numLoads
-       << ", Stores: " << info.numStores << "\n";
+    os << "    Loads: " << info.numLoads << ", Stores: " << info.numStores
+       << "\n";
     os << "    Calls: " << info.numCalls << "\n";
     os << "    Max loop depth: " << info.maxLoopDepth << "\n";
     os << "    Compute/Memory ratio: " << info.computeToMemRatio << "\n";

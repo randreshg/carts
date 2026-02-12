@@ -56,10 +56,11 @@ void collectOldAccumulatorDbRefs(ForOp forOp, Block &parallelBlock,
                                  IRMapping &mapper, Value myAccumulator);
 
 /// Allocate reduction DBs and initialize worker-local partial accumulators.
-ReductionLoweringInfo
-allocatePartialAccumulators(ArtsCodegen *AC, ForOp forOp, EdtOp parallelEdt,
-                            Location loc, Attribute loopMetadataAttr,
-                            bool splitMode = false);
+ReductionLoweringInfo allocatePartialAccumulators(ArtsCodegen *AC, ForOp forOp,
+                                                  EdtOp parallelEdt,
+                                                  Location loc,
+                                                  Attribute loopMetadataAttr,
+                                                  bool splitMode = false);
 
 /// Create result EDT to combine partial accumulators into final result DBs.
 void createResultEdt(ArtsCodegen *AC, ReductionLoweringInfo &redInfo,

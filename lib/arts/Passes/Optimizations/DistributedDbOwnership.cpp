@@ -36,6 +36,7 @@ enum class DistributedRejectReason {
   UnsupportedShape,
   UnsupportedPtrUsers,
   UnsupportedGuidUsers,
+  NonEdtAcquireUse,
   NoInternodeEdtUse,
 };
 
@@ -60,6 +61,8 @@ static const char *toString(DistributedRejectReason reason) {
     return "unsupported_ptr_users";
   case DistributedRejectReason::UnsupportedGuidUsers:
     return "unsupported_guid_users";
+  case DistributedRejectReason::NonEdtAcquireUse:
+    return "non_edt_acquire_use";
   case DistributedRejectReason::NoInternodeEdtUse:
     return "no_internode_edt_use";
   }
@@ -160,8 +163,34 @@ static bool isUsedByInternodeEdt(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
   return hasInternodeUse;
 }
 
-static EligibilityResult evaluateDistributedEligibility(DbAllocOp alloc,
-                                                        DbAnalysis &dbAnalysis) {
+static bool hasOnlyEdtAcquireUsers(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
+  func::FuncOp parentFunc = alloc->getParentOfType<func::FuncOp>();
+  if (!parentFunc)
+    return false;
+
+  DbGraph &graph = dbAnalysis.getOrCreateGraph(parentFunc);
+  DbAllocNode *allocNode = graph.getDbAllocNode(alloc);
+  if (!allocNode)
+    return false;
+
+  bool allAcquireUsersAreEdts = true;
+  graph.forEachAcquireNode([&](DbAcquireNode *acquireNode) {
+    if (!allAcquireUsersAreEdts || !acquireNode)
+      return;
+
+    DbAllocNode *rootAlloc = acquireNode->getRootAlloc();
+    if (!rootAlloc || rootAlloc != allocNode)
+      return;
+
+    if (!acquireNode->getEdtUser())
+      allAcquireUsersAreEdts = false;
+  });
+
+  return allAcquireUsersAreEdts;
+}
+
+static EligibilityResult
+evaluateDistributedEligibility(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
   if (!alloc)
     return {false, DistributedRejectReason::UnsupportedShape};
   if (alloc->getParentOfType<EdtOp>())
@@ -176,6 +205,8 @@ static EligibilityResult evaluateDistributedEligibility(DbAllocOp alloc,
     return {false, DistributedRejectReason::UnsupportedPtrUsers};
   if (!hasOnlyAllowedHandleUsers(alloc.getGuid()))
     return {false, DistributedRejectReason::UnsupportedGuidUsers};
+  if (!hasOnlyEdtAcquireUsers(alloc, dbAnalysis))
+    return {false, DistributedRejectReason::NonEdtAcquireUse};
   if (!isUsedByInternodeEdt(alloc, dbAnalysis))
     return {false, DistributedRejectReason::NoInternodeEdtUse};
   return {true, DistributedRejectReason::None};
@@ -211,9 +242,9 @@ struct DistributedDbOwnershipPass
       if (eligibility.eligible)
         ++markedDistributed;
       else
-        ARTS_DEBUG("Reject DbAlloc arts.id="
-                   << getArtsId(alloc.getOperation())
-                   << " reason=" << toString(eligibility.reason));
+        ARTS_DEBUG("Reject DbAlloc arts.id=" << getArtsId(alloc.getOperation())
+                                             << " reason="
+                                             << toString(eligibility.reason));
     });
 
     ARTS_INFO("DistributedDbOwnership marked " << markedDistributed << " / "

@@ -330,9 +330,8 @@ void setupLoopReordering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createLoopTransformsPass(
       AM, LoopTransformsEnableMatmul, LoopTransformsEnableTiling,
       LoopTransformsTileJ, LoopTransformsMinTripCount));
-  /// Distributed DB ownership depends on serial setup loops being edtified so
-  /// host-only initialization does not block eligibility.
-  if (SerialEdtify || DistributedDbOwnership)
+  /// Optional host serial loop outlining.
+  if (SerialEdtify)
     pm.addPass(arts::createSerialEdtifyPass(AM));
   pm.addPass(createCSEPass());
 }
@@ -387,10 +386,8 @@ void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createEpochOptPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
-  /// Partition DBs and run DbPass again to adjust modes
+  /// Partition DBs and run DbPass again to adjust modes.
   pm.addPass(arts::createDbPartitioningPass(AM));
-  if (DistributedDbOwnership)
-    pm.addPass(arts::createDistributedDbOwnershipPass(AM));
   pm.addPass(arts::createDbPass(AM));
   pm.addNestedPass<func::FuncOp>(arts::createBlockLoopStripMiningPass());
   pm.addPass(arts::createArtsHoistingPass());
@@ -428,6 +425,10 @@ void setupPreLowering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createScalarReplacementPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
+  /// Run distributed-ownership eligibility late, after DB/EDT lowering setup
+  /// has materialized concrete handle use-sites, but before epoch lowering.
+  if (DistributedDbOwnership)
+    pm.addPass(arts::createDistributedDbOwnershipPass(AM));
   pm.addPass(arts::createEpochLoweringPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
