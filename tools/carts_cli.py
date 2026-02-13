@@ -1454,7 +1454,12 @@ def benchmarks(
     if ctx.args:
         cmd.extend(ctx.args)
 
-    result = run_subprocess(cmd, check=False)
+    # Inject PYTHONPATH so benchmarks can import carts_styles
+    tools_dir = str(Path(__file__).parent)
+    existing_pythonpath = os.environ.get("PYTHONPATH", "")
+    pythonpath = f"{tools_dir}:{existing_pythonpath}" if existing_pythonpath else tools_dir
+
+    result = run_subprocess(cmd, check=False, env={"PYTHONPATH": pythonpath})
     raise typer.Exit(result.returncode)
 
 
