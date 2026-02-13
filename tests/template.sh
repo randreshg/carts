@@ -4,7 +4,7 @@
 carts benchmarks slurm-run \
     --nodes=1,2 \
     --arts-config=configs/arts-3T.cfg \
-    --counter-config=configs/profile-timing.cfg \
+    --profile=configs/profile-timing.cfg \
     --size=small \
     --runs=5 \
     --time=00:01:00 \
@@ -14,7 +14,7 @@ carts benchmarks slurm-run \
 carts benchmarks slurm-run \
     --nodes=1 \
     --arts-config=configs/arts-3T.cfg \
-    --counter-config=configs/profile-workload.cfg \
+    --profile=configs/profile-workload.cfg \
     --size=small \
     --runs=1 \
     --time=00:01:00 \
@@ -25,7 +25,7 @@ carts benchmarks slurm-run \
 carts benchmarks slurm-run \
     --nodes=1 \
     --arts-config=configs/arts-2T.cfg \
-    --counter-config=configs/profile-timing.cfg \
+    --profile=configs/profile-timing.cfg \
     --size=small \
     --runs=5 \
     --time=00:01:00 \

@@ -130,6 +130,55 @@ cd docker
 - `--llvm, -l`: Force rebuild LLVM compiler (also rebuilds Polygeist)
 - `--carts, -c`: Force rebuild CARTS framework only
 
+## Slurm Simulation Mode
+
+The Docker setup supports simulating a Slurm cluster for testing the `launcher=slurm` code path. All 6 containers run real Slurm daemons (munge, slurmctld, slurmd).
+
+### Quick Tests (Automated from Host)
+```bash
+# Start containers with Slurm and run an example
+./docker-run.sh --slurm parallel.c
+
+# Start containers with Slurm only (no example)
+./docker-run.sh --slurm
+```
+
+### Benchmarks (Interactive from Inside Container)
+```bash
+# Start containers with Slurm
+./docker-run.sh --slurm
+
+# Enter the Slurm controller node
+docker exec -it arts-node-1 bash
+
+# Inside container: check cluster status
+sinfo
+srun --nodes=6 hostname
+
+# Run benchmark pipeline
+cd /opt/carts
+carts benchmarks slurm-run polybench/gemm --nodes=1,2,4,6 --runs=3
+```
+
+### Using carts CLI
+```bash
+carts docker run --slurm parallel.c                  # Run with Slurm
+carts docker run --slurm matrixmul -- 100 10         # With runtime args
+```
+
+### How It Works
+- **Munge**: Authentication daemon with a shared key (baked into Docker image)
+- **slurmctld**: Slurm controller runs on arts-node-1
+- **slurmd**: Slurm worker daemon runs on all 6 nodes
+- **Shared filesystem**: Docker volume at `/opt/carts` mounted identically on all nodes
+- **ARTS config**: Uses `arts-docker-slurm.cfg` with `launcher=slurm` (ARTS reads `SLURM_*` env vars)
+
+### Rebuilding with Slurm Support
+If the base image was built before Slurm was added:
+```bash
+docker build -t arts-node-base docker/   # ~2 min, no CARTS rebuild needed
+```
+
 ## Running Tests
 
 ### Method 1: Manual Commands
