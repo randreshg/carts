@@ -150,10 +150,12 @@ if [[ "$USE_SLURM" == true ]]; then
         docker exec "$node" bash -c "cp /opt/carts/docker/slurm/slurm.conf /etc/slurm/slurm.conf 2>/dev/null || true"
     done
 
-    # Fix permissions for munge and slurm directories
+    # Create and fix permissions for munge and slurm directories
     for node in $ALL_NODES; do
         docker exec "$node" bash -c "
-            chown -R munge:munge /etc/munge /var/log/munge /run/munge 2>/dev/null || true
+            mkdir -p /run/munge /var/log/munge
+            chown -R munge:munge /etc/munge /var/log/munge /run/munge
+            chmod 755 /run/munge /var/log/munge
             chmod 400 /etc/munge/munge.key
             chmod 755 /var/spool/slurmctld /var/spool/slurmd /var/log/slurm
         "
@@ -243,13 +245,13 @@ if [[ -n "$EXAMPLE_FILE" ]]; then
 
     # Select ARTS config based on mode
     if [[ "$USE_SLURM" == true ]]; then
-        REMOTE_ARTS_CONFIG="/opt/carts/docker/arts-docker-slurm.cfg"
+        REMOTE_ARTS_CONFIG="/opt/carts/docker/slurm/arts-docker-slurm.cfg"
     else
         REMOTE_ARTS_CONFIG="/opt/carts/docker/arts-docker.cfg"
     fi
 
     # First: build the binary on the master node
-    REMOTE_BUILD_CMD="cd '$CONTAINER_FILE_DIR' && carts compile '$FILE_NAME' --run-args --arts-config=$REMOTE_ARTS_CONFIG"
+    REMOTE_BUILD_CMD="cd '$CONTAINER_FILE_DIR' && carts compile '$FILE_NAME'"
     if [[ -n "$BUILD_ARGS" ]]; then
         REMOTE_BUILD_CMD+=" $BUILD_ARGS"
     fi
