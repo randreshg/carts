@@ -171,7 +171,7 @@ carts docker run --slurm matrixmul -- 100 10         # With runtime args
 - **slurmctld**: Slurm controller runs on arts-node-1
 - **slurmd**: Slurm worker daemon runs on all 6 nodes
 - **Shared filesystem**: Docker volume at `/opt/carts` mounted identically on all nodes
-- **ARTS config**: Uses `arts-docker-slurm.cfg` with `launcher=slurm` (ARTS reads `SLURM_*` env vars)
+- **ARTS config**: Uses `slurm/arts-docker-slurm.cfg` with `launcher=slurm` (ARTS reads `SLURM_*` env vars)
 
 ### Rebuilding with Slurm Support
 If the base image was built before Slurm was added:
