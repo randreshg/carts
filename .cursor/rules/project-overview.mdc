@@ -34,7 +34,6 @@ All CARTS operations should use the `carts` wrapper script:
 ```bash
 carts build          # Build project
 carts cgeist         # C++ to MLIR
-carts run            # ARTS transformations
-carts compile        # Final compilation
+carts compile        # Compile (C++/MLIR/LLVM IR → executable)
 carts setup          # Environment setup
 ```

@@ -12,6 +12,17 @@
 /// 4. Insert parameter/dependency unpacking in outlined function
 /// 5. Replace EDT with edt_create call returning GUID
 /// 6. Add dependency management (record_in_dep, increment_out_latch)
+///
+/// Dependency contract (before/after):
+///   BEFORE:
+///     %t = arts.edt ... (%dep0, %dep1)
+///
+///   AFTER:
+///     %t = arts.edt_create ...
+///     arts.rec_dep %t(%dep0_guid, %dep1_guid) {acquire_modes = ...}
+///
+/// Every lowered EDT dependency must come from DbAcquire/DepDbAcquire; this
+/// pass errors out otherwise to avoid bypassing runtime dependency semantics.
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"
@@ -844,6 +855,9 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
           Value size = depSizes[i];
           if (size.getType() != idx.getType())
             size = AC->castToInt(idx.getType(), size, loc);
+          Value clampedSize = AC->create<arith::MaxUIOp>(loc, size, one);
+          Value maxIndex = AC->create<arith::SubIOp>(loc, clampedSize, one);
+          idx = AC->create<arith::MinUIOp>(loc, idx, maxIndex);
           Value isOne = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
                                                   size, one);
           idx = AC->create<arith::SelectOp>(loc, isOne, zero, idx);
@@ -929,7 +943,6 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         AC->setInsertionPoint(op);
         SmallVector<Value> dbGepIndices(dbGep.getIndices().begin(),
                                         dbGep.getIndices().end());
-        dbGepIndices = normalizeSliceIndices(dbGepIndices);
         auto depGep =
             AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
                                  baseOffset, dbGepIndices, depStrides);
@@ -939,7 +952,6 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         AC->setInsertionPoint(op);
         SmallVector<Value> refIndices(dbRef.getIndices().begin(),
                                       dbRef.getIndices().end());
-        refIndices = normalizeSliceIndices(refIndices);
         auto depGep = AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
                                            baseOffset, refIndices, depStrides);
         auto newMemref = AC->create<polygeist::Pointer2MemrefOp>(
@@ -950,7 +962,6 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         AC->setInsertionPoint(op);
         SmallVector<Value> storeIndices(store.getIndices().begin(),
                                         store.getIndices().end());
-        storeIndices = normalizeSliceIndices(storeIndices);
         auto depGep =
             AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
                                  baseOffset, storeIndices, depStrides);
@@ -960,7 +971,6 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         AC->setInsertionPoint(op);
         SmallVector<Value> loadIndices(load.getIndices().begin(),
                                        load.getIndices().end());
-        loadIndices = normalizeSliceIndices(loadIndices);
         auto depGep = AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
                                            baseOffset, loadIndices, depStrides);
         Value loaded =

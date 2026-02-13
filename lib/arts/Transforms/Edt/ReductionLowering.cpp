@@ -2,6 +2,19 @@
 /// File: ReductionLowering.cpp
 ///
 /// Shared reduction-lowering helpers used by ForLowering.
+///
+/// Transformation:
+///   BEFORE:
+///     arts.for ... reductions(%acc = ...)
+///
+///   AFTER (conceptual):
+///     1) Allocate partial accumulator array [numWorkers]
+///     2) Each task EDT writes partial[workerId]
+///     3) Result EDT combines partials -> final accumulator DB
+///     4) Final result is exposed to host/result users
+///
+/// The reduction flow preserves the same dependence ordering via EDT creation
+/// and dependency recording in downstream lowering.
 ///==========================================================================///
 
 #include "arts/Transforms/Edt/ReductionLowering.h"

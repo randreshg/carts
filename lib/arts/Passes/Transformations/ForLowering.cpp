@@ -177,10 +177,12 @@ static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
 
   for (const auto &entry : usesByAlloca) {
     auto allocaOp = cast<memref::AllocaOp>(entry.first);
+    Value originalMem = allocaOp.getResult();
+
     bool hasStoreInEdt = false;
     for (Operation *user : entry.second) {
       if (auto store = dyn_cast<memref::StoreOp>(user)) {
-        if (store.getMemRef() == allocaOp.getResult()) {
+        if (store.getMemRef() == originalMem) {
           hasStoreInEdt = true;
           break;
         }
@@ -190,7 +192,7 @@ static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
     bool hasStoreOutsideEdt = false;
     for (Operation *user : allocaOp->getUsers()) {
       if (auto store = dyn_cast<memref::StoreOp>(user)) {
-        if (store.getMemRef() != allocaOp.getResult())
+        if (store.getMemRef() != originalMem)
           continue;
         if (!taskEdtRegion->isAncestor(store->getParentRegion())) {
           hasStoreOutsideEdt = true;
@@ -200,8 +202,7 @@ static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
     }
 
     /// If the alloca is initialized outside and only read inside the EDT,
-    /// keep the original alloca to preserve its initialized value only when
-    /// the original alloca remains visible to the task EDT.
+    /// keep the original alloca to preserve initialized values.
     Region *allocaRegion = allocaOp->getParentRegion();
     bool allocaVisible =
         allocaRegion && allocaRegion->isAncestor(taskEdtRegion);
@@ -210,11 +211,12 @@ static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
 
     Operation *clonedOp = builder.clone(*allocaOp.getOperation(), mapper);
     auto newAlloca = cast<memref::AllocaOp>(clonedOp);
+    Value clonedMem = newAlloca.getResult();
 
     for (Operation *user : entry.second)
-      user->replaceUsesOfWith(allocaOp.getResult(), newAlloca.getResult());
+      user->replaceUsesOfWith(originalMem, clonedMem);
 
-    mapper.map(allocaOp.getResult(), newAlloca.getResult());
+    mapper.map(originalMem, clonedMem);
 
     /// Clone safe initialization stores for this alloca when available.
     SmallVector<memref::StoreOp, 4> initStores;
@@ -225,7 +227,7 @@ static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
                op->getParentOfType<scf::IfOp>();
       };
       if (auto store = dyn_cast<memref::StoreOp>(user)) {
-        if (store.getMemRef() != allocaOp.getResult())
+        if (store.getMemRef() != originalMem)
           continue;
         if (store->getBlock() != allocaOp->getBlock() ||
             hasLoopAncestor(store.getOperation())) {
@@ -333,11 +335,11 @@ void LoopInfo::initialize() {
   if (computedBlockSize == 1 && runtimeBlockSizeHint) {
     blockSize = castToIndex(AC, runtimeBlockSizeHint, loc);
     blockSize = AC->create<arith::MaxUIOp>(loc, blockSize, one);
-    /// Keep runtime block size for chunk granularity, but avoid expanding
-    /// the logical loop domain by aligning lower bounds at runtime.
-    /// Lower-bound expansion can cause stencil chunks to miss required halo
-    /// rows near the loop upper edge (e.g., i+1 at the final interior row).
-    useRuntimeBlockAlignment = false;
+    /// When block size is provided dynamically, align chunk partitioning to
+    /// block boundaries at runtime. This avoids cross-chunk overlap on
+    /// write-capable block slices for misaligned lower bounds (e.g., stencil
+    /// loops that start at 1 with block size 64).
+    useRuntimeBlockAlignment = true;
   }
 
   /// Step 2: Compute total iterations
@@ -458,14 +460,14 @@ void ForLoweringPass::lowerParallelEdt(EdtOp parallelEdt) {
     lowerForWithDbRewiring(AC, forOp, parallelEdt, analysis, loc);
 
   /// Step 3: Create continuation parallel for post-for work (if any)
-  /// Skip if opsAfterFor only contains db_release operations - task EDTs
-  /// already release their acquired DBs, so continuation would be redundant
-  /// and can cause hangs due to parallel EDT coordination issues.
+  /// Skip if opsAfterFor only contains DB release cleanup operations.
+  /// Keep barrier-only continuations intact because barrier semantics may be
+  /// required by timestep-style loops (e.g., stencil updates) between epochs.
   if (hasPostFor) {
-    bool onlyReleases = llvm::all_of(analysis.opsAfterFor, [](Operation *op) {
+    bool onlyCleanup = llvm::all_of(analysis.opsAfterFor, [](Operation *op) {
       return isa<DbReleaseOp>(op);
     });
-    if (!onlyReleases)
+    if (!onlyCleanup)
       createContinuationParallel(AC, parallelEdt, analysis, loc);
   }
 
@@ -786,6 +788,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       continue;
     }
     auto [rootGuid, rootPtr] = *allocInfo;
+    Value rootGuidValue = rootGuid;
+    Value rootPtrValue = rootPtr;
 
     /// Check if parent acquire already has partition hints (from CreateDbs via
     /// DbControlOp). If hints exist, the user provided explicit partitioning,
@@ -793,6 +797,121 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     bool parentHasPartitionInfo = parentAcqOp.hasExplicitPartitionHints();
 
     DbAcquireOp chunkAcqOp;
+    bool chunkUsesStencilHalo = false;
+
+    std::optional<EdtDistributionPattern> distributionPattern =
+        getEdtDistributionPattern(forOp.getOperation());
+    if (!distributionPattern)
+      distributionPattern =
+          getEdtDistributionPattern(originalParallel.getOperation());
+
+    AcquireRewritePlanningInput planningInput{AC,
+                                              loc,
+                                              parentAcqOp,
+                                              rootGuidValue,
+                                              rootPtrValue,
+                                              loopInfo.strategy.kind,
+                                              distributionPattern,
+                                              tiling2DGrid,
+                                              acquireOffsetVal,
+                                              acquireSizeVal,
+                                              acquireHintSizeVal,
+                                              stepVal,
+                                              stepIsUnit};
+
+    auto createPlannedAcquire = [&]() -> std::pair<DbAcquireOp, bool> {
+      AcquireRewritePlan rewritePlan = planAcquireRewrite(planningInput);
+      DbAcquireOp rewritten =
+          rewriteAcquire(rewritePlan.rewriteInput, rewritePlan.useStencilRewriter);
+      return {rewritten, rewritePlan.useStencilRewriter};
+    };
+
+    auto setDbSpaceSliceFromAcquirePlan = [&](DbAcquireOp acquireOp,
+                                              bool usesStencilHalo) {
+      if (!acquireOp || parentAcqOp.getMode() == ArtsMode::in)
+        return;
+
+      OpBuilder::InsertionGuard guard(AC->getBuilder());
+      AC->setInsertionPoint(acquireOp);
+
+      PartitionMode mode =
+          acquireOp.getPartitionMode().value_or(PartitionMode::coarse);
+      /// Convert element-space task hints to DB-space slice coordinates for
+      /// partitioned acquires. This avoids out-of-range DB dependency slices
+      /// when block/stencil allocations use multi-row blocks.
+      if (mode != PartitionMode::stencil && mode != PartitionMode::block)
+        return;
+
+      Value one = AC->createIndexConstant(1, loc);
+      Value blockSpan = one;
+      Value totalBlocks;
+      DbAllocOp rootAlloc;
+      if (auto allocFromGuid = rootGuidValue.getDefiningOp<DbAllocOp>())
+        rootAlloc = allocFromGuid;
+      else if (Operation *allocOp =
+                   DatablockUtils::getUnderlyingDbAlloc(rootPtrValue))
+        rootAlloc = dyn_cast<DbAllocOp>(allocOp);
+      else if (Operation *allocOp =
+                   DatablockUtils::getUnderlyingDbAlloc(parentAcqOp.getPtr()))
+        rootAlloc = dyn_cast<DbAllocOp>(allocOp);
+
+      if (rootAlloc) {
+        auto elementSizes = rootAlloc.getElementSizes();
+        if (!elementSizes.empty() && elementSizes.front())
+          blockSpan = castToIndex(AC, elementSizes.front(), loc);
+        auto outerSizes = rootAlloc.getSizes();
+        if (!outerSizes.empty() && outerSizes.front())
+          totalBlocks = castToIndex(AC, outerSizes.front(), loc);
+      }
+      blockSpan = AC->create<arith::MaxUIOp>(loc, blockSpan, one);
+
+      Value elemOffset = acquireOffsetVal;
+      Value elemHintSize = acquireHintSizeVal;
+      /// Stencil slices may widen and shift by halo extent; DB-space slicing
+      /// must follow the rewritten task acquire window to keep dep indexing
+      /// valid inside task EDT bodies.
+      const bool useRewrittenWindow =
+          usesStencilHalo || mode == PartitionMode::stencil;
+      if (useRewrittenWindow) {
+        if (!acquireOp.getOffsets().empty() && acquireOp.getOffsets().front())
+          elemOffset = acquireOp.getOffsets().front();
+        if (!acquireOp.getSizes().empty() && acquireOp.getSizes().front())
+          elemHintSize = acquireOp.getSizes().front();
+      } else {
+        /// Keep block-mode base aligned across dependencies for the same loop
+        /// slice.
+        if (!acquireOp.getSizes().empty() && acquireOp.getSizes().front())
+          elemHintSize = acquireOp.getSizes().front();
+
+        /// Stencil task bodies index write-capable dependencies against the
+        /// shared stencil base and include the current row upper boundary.
+        /// Reserve one extra element in DB-space slice size to avoid dropping
+        /// the terminal block when the last row crosses a block boundary.
+        bool isStencilPattern =
+            distributionPattern &&
+            *distributionPattern == EdtDistributionPattern::stencil;
+        if (isStencilPattern && parentAcqOp.getMode() != ArtsMode::in)
+          elemHintSize = AC->create<arith::AddIOp>(loc, elemHintSize, one);
+      }
+      elemOffset = castToIndex(AC, elemOffset, loc);
+      elemHintSize = castToIndex(AC, elemHintSize, loc);
+      elemHintSize = AC->create<arith::MaxUIOp>(loc, elemHintSize, one);
+
+      Value startBlock = AC->create<arith::DivUIOp>(loc, elemOffset, blockSpan);
+      Value endElem = AC->create<arith::AddIOp>(loc, elemOffset, elemHintSize);
+      endElem = AC->create<arith::SubIOp>(loc, endElem, one);
+      Value endBlock = AC->create<arith::DivUIOp>(loc, endElem, blockSpan);
+
+      if (totalBlocks) {
+        Value maxBlock = AC->create<arith::SubIOp>(loc, totalBlocks, one);
+        endBlock = AC->create<arith::MinUIOp>(loc, endBlock, maxBlock);
+      }
+
+      Value blockCount = AC->create<arith::SubIOp>(loc, endBlock, startBlock);
+      blockCount = AC->create<arith::AddIOp>(loc, blockCount, one);
+      acquireOp.getOffsetsMutable().assign(SmallVector<Value>{startBlock});
+      acquireOp.getSizesMutable().assign(SmallVector<Value>{blockCount});
+    };
 
     if (parentHasPartitionInfo) {
       /// USER HINT EXISTS - ForLowering RESPECTS it!
@@ -819,42 +938,48 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       SmallVector<Value> parentPartSizes(
           parentAcqOp.getPartitionSizes().begin(),
           parentAcqOp.getPartitionSizes().end());
-      chunkAcqOp = AC->create<DbAcquireOp>(
-          loc, parentAcqOp.getMode(), rootGuid, rootPtr,
-          parentAcqOp.getPtr().getType(),
-          parentPartMode.value_or(PartitionMode::coarse), parentIndices,
-          parentOffsets, parentSizes, parentPartIndices, parentPartOffsets,
-          parentPartSizes);
-      chunkAcqOp.copyPartitionSegmentsFrom(parentAcqOp);
+      PartitionMode mode = parentPartMode.value_or(PartitionMode::coarse);
+      bool hasExplicitRangeHints =
+          !parentOffsets.empty() && !parentSizes.empty();
+
+      /// Hinted ranges are usually element-space and still need DB-space slice
+      /// planning for rec_dep/depCount correctness.
+      if (mode == PartitionMode::block || mode == PartitionMode::stencil ||
+          hasExplicitRangeHints) {
+        auto [plannedAcquire, useStencilHalo] = createPlannedAcquire();
+        chunkAcqOp = plannedAcquire;
+        chunkUsesStencilHalo = useStencilHalo;
+        if (parentPartMode)
+          setPartitionMode(chunkAcqOp.getOperation(), mode);
+        chunkAcqOp.getIndicesMutable().assign(parentIndices);
+        chunkAcqOp.getPartitionIndicesMutable().assign(parentPartIndices);
+        chunkAcqOp.getPartitionOffsetsMutable().assign(parentPartOffsets);
+        chunkAcqOp.getPartitionSizesMutable().assign(parentPartSizes);
+        chunkAcqOp.copyPartitionSegmentsFrom(parentAcqOp);
+      } else {
+        chunkAcqOp = AC->create<DbAcquireOp>(
+            loc, parentAcqOp.getMode(), rootGuidValue, rootPtrValue,
+            parentAcqOp.getPtr().getType(), mode, parentIndices, parentOffsets,
+            parentSizes, parentPartIndices, parentPartOffsets, parentPartSizes);
+        chunkAcqOp.copyPartitionSegmentsFrom(parentAcqOp);
+      }
 
     } else {
       /// NO USER HINT - plan strategy-specific acquire rewriting externally.
-      AcquireRewritePlanningInput planningInput{AC,
-                                                loc,
-                                                parentAcqOp,
-                                                rootGuid,
-                                                rootPtr,
-                                                loopInfo.strategy.kind,
-                                                tiling2DGrid,
-                                                acquireOffsetVal,
-                                                acquireSizeVal,
-                                                acquireHintSizeVal,
-                                                stepVal,
-                                                stepIsUnit};
-
-      AcquireRewritePlan rewritePlan = planAcquireRewrite(planningInput);
-      chunkAcqOp = rewriteAcquire(rewritePlan.rewriteInput,
-                                  rewritePlan.useStencilRewriter);
+      auto [plannedAcquire, useStencilHalo] = createPlannedAcquire();
+      chunkAcqOp = plannedAcquire;
+      chunkUsesStencilHalo = useStencilHalo;
     }
 
-    Value acquirePtr = chunkAcqOp.getResult(1);
+    if (distributionPattern &&
+        *distributionPattern == EdtDistributionPattern::stencil &&
+        !getStencilCenterOffset(chunkAcqOp.getOperation())) {
+      setStencilCenterOffset(chunkAcqOp.getOperation(), 1);
+    }
 
-    /// Replace uses within arts.for so cloned body uses acquire result
-    Region &forRegion = forOp.getRegion();
-    parallelArg.replaceUsesWithIf(acquirePtr, [&](OpOperand &use) {
-      Region *useRegion = use.getOwner()->getParentRegion();
-      return useRegion == &forRegion || forRegion.isAncestor(useRegion);
-    });
+    setDbSpaceSliceFromAcquirePlan(chunkAcqOp, chunkUsesStencilHalo);
+
+    Value acquirePtr = chunkAcqOp.getResult(1);
 
     taskDeps.push_back(acquirePtr);
     parallelArgToAcquire.push_back({parallelArg, acquirePtr});
@@ -968,6 +1093,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   if (loopInfo.useAlignedLowerBound)
     collectWithDeps(origUpperBound);
   collectWithDeps(chunkLowerBoundVal);
+  collectWithDeps(workerOffsetVal);
 
   taskLoopLowering->collectExtraExternalValues(taskLoopInput, externalValues);
 

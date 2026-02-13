@@ -30,6 +30,7 @@
 /// Arts
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/OperationAttributes.h"
 /// Debug
 
 #include "llvm/ADT/StringRef.h"
@@ -375,9 +376,6 @@ func::FuncOp ArtsCodegen::insertArtsMainFn(Location loc,
   auto *entryBlock = newFn.addEntryBlock();
   getBuilder().setInsertionPointToStart(entryBlock);
 
-  /// Debug: Print that artsMain is being called
-  createPrintfCall(loc, "DEBUG: artsMain function called!\n", {});
-
   /// Insert call to 'artsRT' function
   auto callArgs = ValueRange{};
   if (callback.getNumArguments() > 0)
@@ -401,6 +399,25 @@ func::FuncOp ArtsCodegen::insertMainFn(Location loc) {
   /// Create the entry block.
   auto *entryBlock = newFn.addEntryBlock();
   getBuilder().setInsertionPointToStart(entryBlock);
+
+  /// If config data is embedded, inject it before artsRT(). Self-contained
+  /// binary.
+  if (auto configData = getRuntimeConfigData(module)) {
+    Value dataGlobal = getOrCreateGlobalLLVMString(loc, *configData);
+    Value dataPtr = create<LLVM::BitcastOp>(loc, llvmPtr, dataGlobal);
+    Value dataMemref =
+        create<polygeist::Pointer2MemrefOp>(loc, Int8Ptr, dataPtr);
+    createRuntimeCall(ARTSRTL_artsSetConfigData, {dataMemref}, loc);
+  }
+  /// Fallback: old path-based approach (backward compat for pre-existing
+  /// binaries)
+  else if (auto configPath = getRuntimeConfigPath(module)) {
+    Value configGlobal = getOrCreateGlobalLLVMString(loc, *configPath);
+    Value configPtr = create<LLVM::BitcastOp>(loc, llvmPtr, configGlobal);
+    Value configMemref =
+        create<polygeist::Pointer2MemrefOp>(loc, Int8Ptr, configPtr);
+    createRuntimeCall(ARTSRTL_artsSetConfigPath, {configMemref}, loc);
+  }
 
   /// Insert call to 'artsRT' function
   createRuntimeCall(ARTSRTL_artsRT,

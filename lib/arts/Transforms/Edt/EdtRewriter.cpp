@@ -83,14 +83,31 @@ DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
     partitionHintSizes.push_back(extraHint ? extraHint : extraSize);
   }
 
+  /// Keep dependency slices in element space at this stage.
+  /// DbPartitioning/DbPass own the final DB-space mapping once layout decisions
+  /// are materialized.
+  SmallVector<Value> dependencyOffsets(workerOffsets.begin(),
+                                       workerOffsets.end());
+  SmallVector<Value> dependencySizes(workerHintSizes.begin(),
+                                     workerHintSizes.end());
+
+  for (unsigned i = 0; i < in.extraOffsets.size(); ++i) {
+    Value extraOffset = in.extraOffsets[i];
+    Value extraHint =
+        i < in.extraHintSizes.size() ? in.extraHintSizes[i] : Value();
+    Value extraSize = i < in.extraSizes.size() ? in.extraSizes[i] : one;
+    dependencyOffsets.push_back(extraOffset ? extraOffset : zero);
+    dependencySizes.push_back(extraHint ? extraHint : extraSize);
+  }
+
   return in.AC->create<DbAcquireOp>(
       in.loc, in.parentAcquire.getMode(), in.rootGuid, in.rootPtr,
       in.parentAcquire.getPtr().getType(), PartitionMode::block,
       /*indices=*/
       SmallVector<Value>(in.parentAcquire.getIndices().begin(),
                          in.parentAcquire.getIndices().end()),
-      /*offsets=*/workerOffsets,
-      /*sizes=*/workerSizes,
+      /*offsets=*/dependencyOffsets,
+      /*sizes=*/dependencySizes,
       /*partition_indices=*/SmallVector<Value>{},
       /*partition_offsets=*/partitionOffsets,
       /*partition_sizes=*/partitionHintSizes);

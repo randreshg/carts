@@ -231,7 +231,7 @@ ARTS has `artsDbCreateRemote(route, size, mode)` which creates DB metadata on a 
 
 - Add a compiler flag (e.g., `--distributed-db-ownership=init-per-node`) to gate the feature.
 - Plumb it through:
-  - `tools/run/carts-run.cpp` (pipeline option)
+  - `tools/run/carts-compile.cpp` (pipeline option)
   - `tools/carts_cli.py` (CLI exposure)
 
 **0.2 Identify and mark eligible allocations**

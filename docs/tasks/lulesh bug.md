@@ -293,7 +293,7 @@ Not needed for the verifier fix, but avoids temporary mode mismatch during rewri
 
 ## Verification
 
-Following `lulesh/docs/analysis.md`:
+Following the [CARTS pipeline guide](../agents.md):
 
 1. **Build carts:**
 
@@ -305,7 +305,7 @@ Following `lulesh/docs/analysis.md`:
 
    ```bash
    cd /Users/randreshg/Documents/carts/external/carts-benchmarks/lulesh
-   carts run lulesh.mlir --concurrency-opt &> lulesh_concurrency_opt.mlir
+   carts compile lulesh.mlir --concurrency-opt &> lulesh_concurrency_opt.mlir
    ```
 
    Expected: no `Coarse-grained datablock expects db_ref indices to be constant zero` error.
@@ -314,7 +314,7 @@ Following `lulesh/docs/analysis.md`:
 
    ```bash
    cd /Users/randreshg/Documents/carts/external/carts-benchmarks/lulesh
-   carts execute lulesh.c -O3 -DMINI_DATASET -I. -I../common -I../utilities
+   carts compile lulesh.c -O3 -DMINI_DATASET -I. -I../common -I../utilities
    ```
 
 4. **Runtime correctness:**

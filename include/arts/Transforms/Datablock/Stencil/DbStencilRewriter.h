@@ -32,7 +32,8 @@ protected:
 
 private:
   void transformAcquireAsBlock(const DbRewriteAcquire &info,
-                               DbAcquireOp acquire, OpBuilder &builder);
+                               DbAcquireOp acquire, DbAllocOp newAlloc,
+                               OpBuilder &builder);
   bool rebaseEdtUsersAsBlock(DbAcquireOp acquire, OpBuilder &builder);
 
   /// Add a halo acquire as a new EDT dependency.

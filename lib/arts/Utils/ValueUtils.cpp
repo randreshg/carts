@@ -75,11 +75,14 @@ bool ValueUtils::cloneValuesIntoRegion(
           continue;
         if (auto blockArg = operand.dyn_cast<BlockArgument>()) {
           Region *ownerRegion = blockArg.getOwner()->getParent();
-          if (targetRegion->isAncestor(ownerRegion))
+          if (targetRegion->isAncestor(ownerRegion) ||
+              ownerRegion->isAncestor(targetRegion))
             continue;
         }
         if (Operation *opDef = operand.getDefiningOp()) {
-          if (targetRegion->isAncestor(opDef->getParentRegion()))
+          Region *ownerRegion = opDef->getParentRegion();
+          if (targetRegion->isAncestor(ownerRegion) ||
+              ownerRegion->isAncestor(targetRegion))
             continue;
         }
         allOperandsAvailable = false;

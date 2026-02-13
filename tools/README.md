@@ -7,7 +7,7 @@ This directory contains all the tools for the CARTS project.
 ```
 tools/
 ├── carts               # Main wrapper script
-├── run/                # CARTS C++ executable
+├── run/                # CARTS compilation pipeline binary (carts-compile)
 ├── opt/                # CARTS optimization passes
 ├── benchmark/          # Benchmarking tools
 └── setup/              # Setup tools
@@ -26,39 +26,62 @@ tools/
    ```bash
    # Build CARTS project (default)
    carts build
-   
+
    # Clean build
    carts build --clean
-   
+
    # Build only ARTS components
    carts build --arts
-   
+
    # Build only Polygeist
    carts build --polygeist
-   
+
    # Build only LLVM
    carts build --llvm
    ```
 
 3. **Use the unified wrapper:**
    ```bash
-   # Compile C++ to MLIR (uses installed LLVM)
-   carts cgeist simple.cpp -std=c++17 -fopenmp -O0 -S > simple.mlir
-   
-   # Run optimization passes (uses installed LLVM)
-   carts opt simple.mlir --lower-affine --cse --polygeist-mem2reg
-   
-   # Run the CARTS C++ executable
-   carts run --help
-   
-   # Compile with ARTS runtime
-   carts compile simple-arts.ll -o simple
-   
+   # Full pipeline: C → MLIR → LLVM IR → executable
+   carts compile simple.c -o simple_arts -O3 --arts-config arts.cfg
+
+   # Stop at a pipeline stage (C input)
+   carts compile simple.c --pipeline concurrency --arts-config arts.cfg
+
+   # MLIR transformations
+   carts compile simple.mlir --O3 --arts-config arts.cfg
+
+   # MLIR transformations, stop at stage
+   carts compile simple.mlir --O3 --arts-config arts.cfg --pipeline edt-distribution
+
+   # Link LLVM IR with ARTS runtime
+   carts compile simple-arts.ll -o simple_arts
+
    # Run benchmarks
-   carts benchmarks --target_examples matrixmul
+   carts benchmarks run polybench/gemm --size small --threads 2
    ```
 
 > **Important**: Project build uses **system clang**, while ARTS operations use **installed LLVM**
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `carts compile <file.c>` | Full pipeline: C → MLIR → LLVM IR → executable |
+| `carts compile <file.c> --pipeline <stage>` | Full pipeline, stop after MLIR stage |
+| `carts compile <file.mlir>` | MLIR transformations via carts-compile binary |
+| `carts compile <file.mlir> --pipeline <stage>` | MLIR transformations, stop at stage |
+| `carts compile <file.ll> -o out` | Link LLVM IR with ARTS runtime |
+| `carts build` | Build CARTS project |
+| `carts check` | Run test suite |
+| `carts check --examples` | Run example compilation+execution tests |
+| `carts benchmarks` | Build and manage benchmarks |
+| `carts cgeist` | Run cgeist C-to-MLIR frontend |
+| `carts clang` | Compile with LLVM clang and OpenMP |
+| `carts clean` | Clean generated files |
+| `carts format` | Format source files |
+| `carts report` | Analyze benchmark results |
+| `carts setup` | Set up CARTS environment |
 
 ## Individual Tools
 
@@ -69,39 +92,26 @@ Automated setup script that installs all dependencies, builds the project, and a
 python3 tools/setup/carts-setup.py --help
 ```
 
-### Benchmark (`tools/benchmark/carts-benchmark`)
-Performance testing and benchmarking tool.
+### Benchmarks (`carts benchmarks`)
+Performance testing and benchmarking commands.
 
 ```bash
-python3 tools/benchmark/carts-benchmark --help
+carts benchmarks --help
+carts benchmarks run --help
 ```
 
-### Examples (`carts examples`)
+### Examples (`carts check --examples`)
 Run and test CARTS examples.
 
 ```bash
-# List available examples
-carts examples list
-
-# Run a specific example
-carts examples run array/chunks
-
-# Run with custom ARTS configuration
-carts examples run array/chunks --arts-config /path/to/arts.cfg
-
 # Run all examples
-carts examples run --all
+carts check --examples
 ```
 
 **ARTS Configuration Priority:**
 1. **Custom config** (`--arts-config /path/to/config.cfg`)
 2. **Local config** (`example_dir/arts.cfg`)
 3. **Global default** (`tests/examples/arts.cfg`)
-
-The runner displays the effective ARTS configuration before execution:
-- Single example: shows specific config values (threads, nodes, launcher)
-- Multiple examples without `--arts-config`: shows "ARTS Config: using local"
-- Multiple examples with `--arts-config`: shows specific custom config values
 
 ## Environment Setup
 
@@ -115,4 +125,4 @@ python3 tools/setup/carts-setup.py --add-to-path
 ### Environment Variables
 
 - `CARTS_VERBOSE=1` - Enable verbose output
-- `CARTS_INSTALL_DIR` - Override installation directory 
+- `CARTS_INSTALL_DIR` - Override installation directory

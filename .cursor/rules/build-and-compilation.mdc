@@ -39,10 +39,8 @@ source enable
 ```bash
 carts build                    # Build CARTS project
 carts cgeist <file> [opts]     # Convert C++ to MLIR
-carts run [opts]               # Run ARTS transformations
+carts compile <file> [opts]    # Complete pipeline: C++/MLIR/LLVM IR → executable
 carts mlir-translate <file>    # Convert MLIR to LLVM IR
-carts compile <file> [opts]    # Compile LLVM IR to executable
-carts execute <file> [opts]    # Complete pipeline: C++ → executable
 carts benchmark [opts]         # Run benchmarks
 carts report [opts]            # Generate reports
 carts setup [opts]             # Setup environment
@@ -62,65 +60,63 @@ C++ Source (.cpp)
     ↓
 carts cgeist → MLIR (.mlir)
     ↓
-carts run → LLVM IR (.ll)
-    ↓
 carts compile → Executable (binary)
 ```
 
-## Alternative: Complete Pipeline with carts run
+## Pipeline Stages
 
 For a complete transformation pipeline in one command:
 ```bash
-carts run simple.mlir --O3 --emit-llvm > simple-arts.ll
+carts compile simple.mlir --O3 --emit-llvm > simple-arts.ll
 carts compile simple-arts.ll -o simple
 ```
 
-## Pipeline Stages in carts run
+## Pipeline Stages (--pipeline)
 
-The `carts run` command supports stopping at specific pipeline stages for debugging and incremental compilation. Use the `--stop-at` option (or `-stop-at`) to control where the pipeline stops:
+The `carts compile` command supports stopping at specific pipeline stages for debugging and incremental compilation. Use the `--stop-at` option (or `-stop-at`) to control where the pipeline stops:
 
 ```bash
 # Stop after canonicalizing memrefs
-carts run simple.mlir --stop-at=canonicalize-memrefs
+carts compile simple.mlir --stop-at=canonicalize-memrefs
 
 # Stop after collecting metadata
-carts run simple.mlir --stop-at=collect-metadata
+carts compile simple.mlir --stop-at=collect-metadata
 
 # Stop after initial cleanup and simplification
-carts run simple.mlir --stop-at=initial-cleanup
+carts compile simple.mlir --stop-at=initial-cleanup
 
 # Stop after OpenMP to ARTS conversion
-carts run simple.mlir --stop-at=openmp-to-arts
+carts compile simple.mlir --stop-at=openmp-to-arts
 
 # Stop after EDT transformations
-carts run simple.mlir --stop-at=edt-transforms
+carts compile simple.mlir --stop-at=edt-transforms
 
 # Stop after creating data blocks (DBs)
-carts run simple.mlir --stop-at=create-dbs
+carts compile simple.mlir --stop-at=create-dbs
 
 # Stop after DB optimization
-carts run simple.mlir --stop-at=db-opt
+carts compile simple.mlir --stop-at=db-opt
 
 # Stop after EDT optimization
-carts run simple.mlir --stop-at=edt-opt
+carts compile simple.mlir --stop-at=edt-opt
 
 # Stop after concurrency analysis
-carts run simple.mlir --stop-at=concurrency
+carts compile simple.mlir --stop-at=concurrency
 
 # Stop after concurrency optimization
-carts run simple.mlir --stop-at=concurrency-opt
+carts compile simple.mlir --stop-at=concurrency-opt
 
 # Stop after epoch creation
-carts run simple.mlir --stop-at=epochs
+carts compile simple.mlir --stop-at=epochs
 
 # Stop after pre-lowering transformations
-carts run simple.mlir --stop-at=pre-lowering
+carts compile simple.mlir --stop-at=pre-lowering
 
 # Stop after ARTS to LLVM conversion
-carts run simple.mlir --stop-at=arts-to-llvm
+carts compile simple.mlir --stop-at=arts-to-llvm
 
 # Run complete pipeline (default)
-carts run simple.mlir --stop-at=complete
+carts compile simple.mlir --stop-at=complete
 ```
 
 ### Available Pipeline Stages
@@ -139,37 +135,37 @@ carts run simple.mlir --stop-at=complete
 13. **arts-to-llvm**: Convert ARTS dialect to LLVM IR
 14. **complete**: Run complete pipeline (default)
 
-## One-Command Execution: carts execute
+## Full Pipeline: carts compile
 
 For complete end-to-end compilation from C++ source to executable:
 ```bash
-carts execute simple.cpp -o simple
+carts compile simple.cpp -o simple
 ```
 
 This automatically runs the entire pipeline:
 1. `carts cgeist` - Convert C++ to MLIR
-2. `carts run` - Apply ARTS transformations and convert to LLVM IR
-3. `carts compile` - Compile to executable with ARTS runtime
+2. ARTS transformations and LLVM IR generation
+3. Compile to executable with ARTS runtime
 
 ## Debug Options
 ```bash
-# Debug specific passes using carts run with pipeline stages
-carts run simple.mlir --stop-at=openmp-to-arts --debug-only=convert_openmp_to_arts
-carts run simple.mlir --stop-at=create-dbs --debug-only=create_dbs
+# Debug specific passes using carts compile with pipeline stages
+carts compile simple.mlir --stop-at=openmp-to-arts --debug-only=convert_openmp_to_arts
+carts compile simple.mlir --stop-at=create-dbs --debug-only=create_dbs
 
 # Enable debug mode
-carts run simple.mlir -g
+carts compile simple.mlir -g
 
 # Use debug-only flag (note: use underscores, not dashes)
-carts run simple.mlir --debug-only=edt_lowering
-carts run simple.mlir --debug-only=convert_openmp_to_arts
+carts compile simple.mlir --debug-only=edt_lowering
+carts compile simple.mlir --debug-only=convert_openmp_to_arts
 ```
 
 **Note**: When using `--debug-only` flags, replace dashes with underscores in the pass name (e.g., `edt_lowering` not `edt-lowering`).
 
 ## Pass Pipeline Control
 
-The `carts run` command provides fine-grained control over the compilation pipeline:
+The `carts compile` command provides fine-grained control over the compilation pipeline:
 
 - **Stop at specific stages**: Use `--stop-at=<stage>` to stop the pipeline at a particular stage
 - **Enable optimizations**: Use `--O3` to enable optimization passes
@@ -178,7 +174,7 @@ The `carts run` command provides fine-grained control over the compilation pipel
 - **Export metadata**: Use `--metadata-file=<path>` to specify metadata export location
 - **Export JSON**: Use `--export-json` to export DB analysis to JSON files
 
-For complete documentation of all available options, run `carts -h` or `carts run -h`.
+For complete documentation of all available options, run `carts -h` or `carts compile -h`.
 
 ## Environment Variables
 ```bash

@@ -29,6 +29,7 @@
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Transforms/Datablock/Stencil/DbStencilIndexer.h"
 #include "arts/Utils/ArtsDebug.h"
+#include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/EdtUtils.h"
 #include "arts/Utils/OperationAttributes.h"
@@ -79,6 +80,15 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
       info.getIndices().empty() ? Value() : info.getIndices().front();
 
   ARTS_DEBUG("DbStencilRewriter::transformAcquire");
+  ARTS_DEBUG("  acquire mode=" << static_cast<int>(acquire.getMode())
+                               << ", partition mode="
+                               << static_cast<int>(info.partitionInfo.mode)
+                               << ", offsets="
+                               << info.partitionInfo.offsets.size()
+                               << ", sizes="
+                               << info.partitionInfo.sizes.size()
+                               << ", indices="
+                               << info.partitionInfo.indices.size());
 
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPoint(acquire);
@@ -106,12 +116,104 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
       blockArg.setType(newPtrType);
   }
 
+  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+  Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
+
+  /// Base-offset semantics: elemOffset is the owned chunk base.
+  Value baseOffset = elemOffset ? elemOffset : zero;
+  if (baseOffset && !baseOffset.getType().isIndex())
+    baseOffset = builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
+                                                    baseOffset);
+  /// Keep a center-adjusted base for chunk alignment/block-index math.
+  /// Stencil loops often start at 1 (or other shifted center), while block
+  /// boundaries are computed in unshifted element space.
+  Value blockBaseOffset = baseOffset;
+  if (auto center = getStencilCenterOffset(acquire.getOperation())) {
+    if (*center != 0) {
+      Value centerIdx = builder.create<arith::ConstantIndexOp>(loc, *center);
+      blockBaseOffset =
+          builder.create<arith::SubIOp>(loc, blockBaseOffset, centerIdx);
+    }
+  }
+  if (chunkIndexHint && !chunkIndexHint.getType().isIndex())
+    chunkIndexHint = builder.create<arith::IndexCastOp>(
+        loc, builder.getIndexType(), chunkIndexHint);
+
+  /// Uniform allocation block size — all blocks are allocated with this size.
+  /// Use this instead of computeChunkRows to avoid non-uniform chunk sizes
+  /// that disagree with the allocation and cause stencil indexing bugs.
+  Value planBlockSize = plan.getBlockSize(0) ? plan.getBlockSize(0) : one;
+  planBlockSize = builder.create<arith::MaxUIOp>(loc, planBlockSize, one);
+  ARTS_DEBUG("  baseOffset=" << baseOffset << ", blockBaseOffset="
+                              << blockBaseOffset
+                              << ", elemOffset=" << elemOffset
+                              << ", planBlockSize=" << planBlockSize);
+
   /// Mixed stencil mode: only read-only stencil acquires should use ESD
   /// 3-buffer lowering. Non-stencil or write-capable acquires are lowered via
   /// regular block semantics over the same block-partitioned allocation.
-  if (info.partitionInfo.mode != PartitionMode::stencil ||
-      acquire.getMode() != ArtsMode::in) {
-    transformAcquireAsBlock(info, acquire, builder);
+  bool useStencilEsd =
+      info.partitionInfo.mode == PartitionMode::stencil &&
+      acquire.getMode() == ArtsMode::in && plan.stencilInfo &&
+      plan.stencilInfo->hasHalo();
+  int64_t haloLeftVal = plan.stencilInfo ? plan.stencilInfo->haloLeft : 0;
+  int64_t haloRightVal = plan.stencilInfo ? plan.stencilInfo->haloRight : 0;
+  ARTS_DEBUG("  initial ESD eligibility=" << useStencilEsd
+                                          << " (hasHalo="
+                                          << (plan.stencilInfo
+                                                  ? plan.stencilInfo->hasHalo()
+                                                  : false)
+                                          << ")");
+
+  if (useStencilEsd) {
+    /// ESD 3-buffer lowering currently supports one owned DB block per task.
+    /// Derive an owned-span estimate by removing halo width from the hinted
+    /// acquire span and require it to be bounded by one plan block.
+    Value elemSize = one;
+    if (!info.partitionInfo.sizes.empty() && info.partitionInfo.sizes.front())
+      elemSize = info.partitionInfo.sizes.front();
+
+    auto isBoundedByBlock = [&](Value sz, Value bsVal) -> bool {
+      if (!sz || !bsVal)
+        return false;
+      Value s = ValueUtils::stripClampOne(sz);
+      Value bs = ValueUtils::stripClampOne(bsVal);
+      if (ValueUtils::areValuesEquivalent(s, bs))
+        return true;
+      if (auto minOp = s.getDefiningOp<arith::MinUIOp>()) {
+        Value lhs = ValueUtils::stripClampOne(minOp.getLhs());
+        Value rhs = ValueUtils::stripClampOne(minOp.getRhs());
+        if (ValueUtils::areValuesEquivalent(lhs, bs) ||
+            ValueUtils::areValuesEquivalent(rhs, bs))
+          return true;
+      }
+      return false;
+    };
+
+    Value ownedSpan = elemSize;
+    int64_t totalHalo = haloLeftVal + haloRightVal;
+    if (totalHalo > 0) {
+      Value haloConst = builder.create<arith::ConstantIndexOp>(loc, totalHalo);
+      ownedSpan = builder.create<arith::SubIOp>(loc, ownedSpan, haloConst);
+    }
+
+    bool singleBlock = false;
+    auto constOwnedSpan = arts::extractBlockSizeFromHint(ownedSpan);
+    auto constPlanBs = arts::extractBlockSizeFromHint(planBlockSize);
+    if (constOwnedSpan && constPlanBs && *constOwnedSpan <= *constPlanBs)
+      singleBlock = true;
+    if (!singleBlock && isBoundedByBlock(ownedSpan, planBlockSize))
+      singleBlock = true;
+
+    ARTS_DEBUG("  ESD single-block check: singleBlock=" << singleBlock
+                                                        << ", ownedSpan="
+                                                        << ownedSpan);
+    useStencilEsd = singleBlock;
+  }
+
+  ARTS_DEBUG("  final ESD decision=" << useStencilEsd);
+  if (!useStencilEsd) {
+    transformAcquireAsBlock(info, acquire, newAlloc, builder);
     return;
   }
 
@@ -120,37 +222,20 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   ///   1. Owned chunk (full chunk)
   ///   2. Left halo (partial slice from previous chunk)
   ///   3. Right halo (partial slice from next chunk)
-  assert(plan.stencilInfo && plan.stencilInfo->hasHalo() &&
-         "Stencil mode requires stencil info with halo");
-
-  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
-  Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
-  int64_t haloLeftVal = plan.stencilInfo->haloLeft;
-  int64_t haloRightVal = plan.stencilInfo->haloRight;
-
-  /// Base-offset semantics: elemOffset is the owned chunk base.
-  Value baseOffset = elemOffset ? elemOffset : zero;
-  if (baseOffset && !baseOffset.getType().isIndex())
-    baseOffset = builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
-                                                    baseOffset);
-  if (chunkIndexHint && !chunkIndexHint.getType().isIndex())
-    chunkIndexHint = builder.create<arith::IndexCastOp>(
-        loc, builder.getIndexType(), chunkIndexHint);
-
   Value chunkCount = one;
 
-  /// Uniform allocation block size — all blocks are allocated with this size.
-  /// Use this instead of computeChunkRows to avoid non-uniform chunk sizes
-  /// that disagree with the allocation and cause stencil indexing bugs.
-  Value planBlockSize = plan.getBlockSize(0) ? plan.getBlockSize(0) : one;
-  planBlockSize = builder.create<arith::MaxUIOp>(loc, planBlockSize, one);
-
-  /// Compute the actual block index from baseOffset. The chunkIndexHint from
-  /// ForLowering may be a worker index (0..numWorkers-1) which can exceed the
-  /// actual block count when multiple workers share a block. Always derive the
-  /// block index from the element offset to ensure valid block access.
+  /// Compute the block index from the element-space base offset that includes
+  /// halo expansion. Normalize to owned-block coordinates first:
+  ///   ownedBase = haloBase + haloLeft - centerShift
+  /// then map to block space.
+  Value blockIdxBase = blockBaseOffset;
+  if (haloLeftVal > 0) {
+    Value haloLeftConst = builder.create<arith::ConstantIndexOp>(loc, haloLeftVal);
+    blockIdxBase =
+        builder.create<arith::AddIOp>(loc, blockIdxBase, haloLeftConst);
+  }
   Value blockIdx =
-      builder.create<arith::DivUIOp>(loc, baseOffset, planBlockSize);
+      builder.create<arith::DivUIOp>(loc, blockIdxBase, planBlockSize);
 
   ARTS_DEBUG("  Stencil ESD: blockIdx=" << blockIdx
                                         << ", haloLeft=" << haloLeftVal
@@ -277,6 +362,7 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
 
 void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
                                                 DbAcquireOp acquire,
+                                                DbAllocOp newAlloc,
                                                 OpBuilder &builder) {
   Location loc = acquire.getLoc();
   Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
@@ -291,7 +377,12 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
   if (nPartDims == 0)
     nPartDims = 1;
 
-  if (info.isFullRange) {
+  bool hasPartitionSlices = !info.partitionInfo.offsets.empty() ||
+                            !info.partitionInfo.sizes.empty();
+  bool forceFullRangeStencilWriter =
+      acquire.getMode() != ArtsMode::in && !hasPartitionSlices;
+
+  if (info.isFullRange || forceFullRangeStencilWriter) {
     for (unsigned d = 0; d < nPartDims; ++d) {
       newOffsets.push_back(zero);
       Value blockCount = (d < plan.outerSizes.size() && plan.outerSizes[d])
@@ -300,8 +391,38 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
       newSizes.push_back(blockCount);
     }
   } else {
-    newOffsets.assign(info.getOffsets().begin(), info.getOffsets().end());
-    newSizes.assign(info.getSizes().begin(), info.getSizes().end());
+    /// For block-mode fallback acquires on stencil allocations, convert
+    /// element-space partition hints into DB-space block slices.
+    const auto &offsets = info.partitionInfo.offsets;
+    const auto &sizes = info.partitionInfo.sizes;
+    for (unsigned d = 0; d < nPartDims; ++d) {
+      Value blockSize = plan.getBlockSize(d);
+      if (!blockSize)
+        blockSize = one;
+      blockSize = builder.create<arith::MaxUIOp>(loc, blockSize, one);
+
+      Value elemOff = (d < offsets.size() && offsets[d]) ? offsets[d] : zero;
+      Value elemSz = (d < sizes.size() && sizes[d]) ? sizes[d] : one;
+      elemSz = builder.create<arith::MaxUIOp>(loc, elemSz, one);
+
+      Value startBlock = builder.create<arith::DivUIOp>(loc, elemOff, blockSize);
+      Value endElem = builder.create<arith::AddIOp>(loc, elemOff, elemSz);
+      endElem = builder.create<arith::SubIOp>(loc, endElem, one);
+      Value endBlock = builder.create<arith::DivUIOp>(loc, endElem, blockSize);
+
+      if (d < plan.outerSizes.size()) {
+        Value maxBlock =
+            builder.create<arith::SubIOp>(loc, plan.outerSizes[d], one);
+        endBlock = builder.create<arith::MinUIOp>(loc, endBlock, maxBlock);
+      }
+
+      Value blockCount =
+          builder.create<arith::SubIOp>(loc, endBlock, startBlock);
+      blockCount = builder.create<arith::AddIOp>(loc, blockCount, one);
+
+      newOffsets.push_back(startBlock);
+      newSizes.push_back(blockCount);
+    }
   }
 
   if (newOffsets.empty())
@@ -316,7 +437,11 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
   acquire.getOffsetsMutable().assign(newOffsets);
   acquire.getSizesMutable().assign(newSizes);
 
-  if (!info.skipRebase)
+  /// Block fallback must always rebase EDT-side db_ref users into local
+  /// block coordinates. Stencil-origin acquires can still carry global-row
+  /// indexing; skipping rebasing leaves invalid local block accesses.
+  bool rebaseAsBlock = !info.skipRebase;
+  if (rebaseAsBlock)
     rebaseEdtUsersAsBlock(acquire, builder);
 }
 
@@ -667,6 +792,25 @@ void DbStencilRewriter::addHaloAcquireToEdt(DbAcquireOp originalAcq,
   /// Add corresponding block argument to EDT body
   Block &edtBody = edt.getBody().front();
   edtBody.addArgument(haloAcq.getPtr().getType(), haloAcq.getLoc());
+  Value haloArg = edtBody.getArgument(edtBody.getNumArguments() - 1);
+
+  /// Ensure the halo acquire is released in the task body.
+  /// ForLowering only inserts releases for original dependencies; halo
+  /// dependencies are introduced later by this rewriter.
+  bool hasRelease = false;
+  for (Operation &op : edtBody.without_terminator()) {
+    if (auto release = dyn_cast<DbReleaseOp>(&op)) {
+      if (release.getSource() == haloArg) {
+        hasRelease = true;
+        break;
+      }
+    }
+  }
+  if (!hasRelease) {
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPoint(edtBody.getTerminator());
+    builder.create<DbReleaseOp>(haloAcq.getLoc(), haloArg);
+  }
 
   ARTS_DEBUG("  Added halo dep to EDT, now has "
              << edt.getDependencies().size() << " deps and "
