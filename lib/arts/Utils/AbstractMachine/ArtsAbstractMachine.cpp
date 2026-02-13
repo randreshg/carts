@@ -44,10 +44,14 @@ ArtsAbstractMachine::ArtsAbstractMachine(const std::string &configFile) {
 
   /// Check if config file is provided - if not, use default config path
   std::string path;
-  if (!configFile.empty())
-    path = configFile;
-  else
+  if (!configFile.empty()) {
+    std::error_code ec;
+    auto absolutePath = std::filesystem::absolute(configFile, ec);
+    path = ec ? configFile : absolutePath.string();
+  } else {
     path = getDefaultConfigPath();
+  }
+  configPath = path;
 
   ARTS_DEBUG("Looking for configuration file at: " << path);
   if (!parseFromFile(path)) {

@@ -1,6 +1,6 @@
 ///==========================================================================///
-/// File: carts-run.cpp
-/// Main entry point for the CARTS runtime execution tool.
+/// File: carts-compile.cpp
+/// Main entry point for the CARTS compilation pipeline tool.
 ///==========================================================================///
 
 #include "mlir/Conversion/Passes.h"
@@ -36,6 +36,7 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsDebug.h"
+#include "arts/Utils/OperationAttributes.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/ToolOutputFile.h"
@@ -44,7 +45,7 @@
 using namespace llvm;
 using namespace mlir;
 
-ARTS_DEBUG_SETUP(carts_run)
+ARTS_DEBUG_SETUP(carts_compile)
 
 ///===----------------------------------------------------------------------===///
 // Interface Attachments
@@ -388,6 +389,10 @@ void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(createCSEPass());
   /// Partition DBs and run DbPass again to adjust modes.
   pm.addPass(arts::createDbPartitioningPass(AM));
+  /// Run distributed-ownership eligibility while EDT/DB ops are still in
+  /// high-level form so analysis can reason about DbAcquire<->Edt users.
+  if (DistributedDbOwnership)
+    pm.addPass(arts::createDistributedDbOwnershipPass(AM));
   pm.addPass(arts::createDbPass(AM));
   pm.addNestedPass<func::FuncOp>(arts::createBlockLoopStripMiningPass());
   pm.addPass(arts::createArtsHoistingPass());
@@ -425,10 +430,6 @@ void setupPreLowering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createScalarReplacementPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
-  /// Run distributed-ownership eligibility late, after DB/EDT lowering setup
-  /// has materialized concrete handle use-sites, but before epoch lowering.
-  if (DistributedDbOwnership)
-    pm.addPass(arts::createDistributedDbOwnershipPass(AM));
   pm.addPass(arts::createEpochLoweringPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
@@ -493,6 +494,17 @@ setupPassManager(ModuleOp module, MLIRContext &context,
     llvm::errs() << "Error: arts.cfg must define valid nodeCount (>0) and "
                     "threads (>0).\n";
     return failure();
+  }
+
+  /// Embed config file contents into the module so generated binaries are
+  /// self-contained — no external config file needed at runtime.
+  if (machine.hasConfigFile() && !machine.getConfigPath().empty()) {
+    auto configContents =
+        llvm::MemoryBuffer::getFile(machine.getConfigPath());
+    if (configContents)
+      arts::setRuntimeConfigData(module, (*configContents)->getBuffer());
+    else
+      arts::setRuntimeConfigPath(module, machine.getConfigPath());
   }
 
   /// Load metadata from JSON file

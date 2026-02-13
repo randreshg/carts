@@ -205,16 +205,16 @@ build:
 		-DCARTS_USE_LINKER="$(CARTS_LINKER_PATH)"
 	ninja $(NINJA_FLAGS) -C $(CARTS_BUILD_DIR) install
 
-# Build only carts-run
-carts-run-only:
+# Build only carts-compile
+carts-compile-only:
 	@if [ ! -d "$(CARTS_BUILD_DIR)" ]; then \
 		echo "CARTS build directory not found. Run 'make build' first."; \
 		exit 1; \
 	fi
-	# Force rebuild carts-run even if dependencies haven't changed
-	ninja $(NINJA_FLAGS) -C $(CARTS_BUILD_DIR) -t clean carts-run
-	ninja $(NINJA_FLAGS) -C $(CARTS_BUILD_DIR) carts-run
-	cmake --install $(CARTS_BUILD_DIR) --component carts-run
+	# Force rebuild carts-compile even if dependencies haven't changed
+	ninja $(NINJA_FLAGS) -C $(CARTS_BUILD_DIR) -t clean carts-compile
+	ninja $(NINJA_FLAGS) -C $(CARTS_BUILD_DIR) carts-compile
+	cmake --install $(CARTS_BUILD_DIR) --component carts-compile
 
 install: arts-download polygeist-download llvm-lit arts polygeist build
 

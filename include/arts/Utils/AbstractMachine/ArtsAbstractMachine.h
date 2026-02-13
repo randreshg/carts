@@ -95,6 +95,7 @@ public:
 
   /// Configuration file status
   bool hasConfigFile() const { return configFileExists; }
+  const std::string &getConfigPath() const { return configPath; }
   bool isValid() const { return isValidFlag; }
 
   /// Validation methods
@@ -166,6 +167,7 @@ private:
   int introspectiveStartPoint = 1;
 
   /// Configuration file status
+  std::string configPath = "";
   bool configFileExists = false;
   bool isValidFlag = false;
 };

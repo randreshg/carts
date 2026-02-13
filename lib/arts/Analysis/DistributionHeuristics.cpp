@@ -6,6 +6,16 @@
 /// Implements two distribution strategies:
 ///   - Flat: all workers divide iterations equally (intranode)
 ///   - TwoLevel: nodes get DB blocks, threads subdivide within (internode)
+///
+/// Example (strategy selection):
+///   BEFORE: edt.parallel <intranode> ...   -> strategy = Flat
+///   BEFORE: edt.parallel <internode> ...   -> strategy = TwoLevel
+///
+/// Example (pattern-to-kind selection):
+///   pattern = uniform   -> kind = block / two_level
+///   pattern = stencil   -> kind = block / two_level (stencil-aware acquire)
+///   pattern = triangular-> kind = block_cyclic / two_level_block_cyclic
+///   pattern = matmul    -> kind = tiling_2d
 ///==========================================================================///
 
 #include "arts/Analysis/DistributionHeuristics.h"
@@ -278,7 +288,11 @@ EdtDistributionKind DistributionHeuristics::selectDistributionKind(
   case EdtDistributionPattern::triangular:
     return EdtDistributionKind::block_cyclic;
   case EdtDistributionPattern::matmul:
-    return EdtDistributionKind::tiling_2d;
+    /// Keep matmul on stable block/two_level scheduling by default.
+    /// The tiling_2d lowering is available but currently opt-in only.
+    if (strategy.kind == DistributionKind::TwoLevel)
+      return EdtDistributionKind::two_level;
+    return EdtDistributionKind::block;
   case EdtDistributionPattern::stencil:
   case EdtDistributionPattern::uniform:
   case EdtDistributionPattern::unknown:
@@ -692,6 +706,7 @@ Value DistributionHeuristics::computeDbAlignmentBlockSize(EdtOp parallelEdt,
 Value DistributionHeuristics::getWorkersPerNode(ArtsCodegen *AC, Location loc,
                                                 EdtOp parallelEdt) {
   Value workersPerNode;
+  Value one = AC->createIndexConstant(1, loc);
 
   if (auto workers = parallelEdt->getAttrOfType<workersAttr>(
           AttrNames::Operation::Workers)) {
@@ -706,7 +721,6 @@ Value DistributionHeuristics::getWorkersPerNode(ArtsCodegen *AC, Location loc,
 
   /// Clamp to at least 1 to prevent division by zero
   Value zero = AC->createIndexConstant(0, loc);
-  Value one = AC->createIndexConstant(1, loc);
   Value isZero = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
                                            workersPerNode, zero);
   return AC->create<arith::SelectOp>(loc, isZero, one, workersPerNode);
@@ -744,7 +758,6 @@ Value DistributionHeuristics::getDispatchWorkerCount(OpBuilder &builder,
   } else {
     workerCount = builder.create<GetTotalWorkersOp>(loc).getResult();
   }
-
   if (workerCount.getType().isIndex())
     return workerCount;
   return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),

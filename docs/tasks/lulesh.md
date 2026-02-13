@@ -16,7 +16,7 @@ This note tracks how to inspect LULESH through the current CARTS distribution + 
 ### 1) After `create-dbs` (stage 7)
 
 ```bash
-carts run lulesh.mlir --stop-at=create-dbs -o lulesh_create_dbs.mlir
+carts compile lulesh.mlir --stop-at=create-dbs -o lulesh_create_dbs.mlir
 ```
 
 What to inspect:
@@ -27,7 +27,7 @@ What to inspect:
 ### 2) After `concurrency` (stage 10)
 
 ```bash
-carts run lulesh.mlir --stop-at=concurrency -o lulesh_concurrency.mlir
+carts compile lulesh.mlir --stop-at=concurrency -o lulesh_concurrency.mlir
 ```
 
 What to inspect:
@@ -37,7 +37,7 @@ What to inspect:
 ### 3) After `edt-distribution` (stage 11)
 
 ```bash
-carts run lulesh.mlir --stop-at=edt-distribution -o lulesh_edt_distribution.mlir
+carts compile lulesh.mlir --stop-at=edt-distribution -o lulesh_edt_distribution.mlir
 ```
 
 What to inspect:
@@ -51,7 +51,7 @@ What to inspect:
 ### 4) After `concurrency-opt` (stage 12)
 
 ```bash
-carts run lulesh.mlir --stop-at=concurrency-opt -o lulesh_concurrency_opt.mlir
+carts compile lulesh.mlir --stop-at=concurrency-opt -o lulesh_concurrency_opt.mlir
 ```
 
 What to inspect:
@@ -66,11 +66,11 @@ What to inspect:
 
 ```bash
 # Distribution decisions
-carts run lulesh.mlir --stop-at=edt-distribution \
+carts compile lulesh.mlir --stop-at=edt-distribution \
   --debug-only=edt_distribution,for_lowering 2>&1 | tee lulesh_dist.log
 
 # Partitioning decisions
-carts run lulesh.mlir --stop-at=concurrency-opt \
+carts compile lulesh.mlir --stop-at=concurrency-opt \
   --debug-only=db_partitioning,db 2>&1 | tee lulesh_partition.log
 ```
 
@@ -97,12 +97,12 @@ Check logs/counters:
 
 ```bash
 # 1) Build
-ninja -C build carts-run
+ninja -C build carts-compile
 
 # 2) Stage dumps
-carts run lulesh.mlir --stop-at=concurrency -o /tmp/lulesh_concurrency.mlir
-carts run lulesh.mlir --stop-at=edt-distribution -o /tmp/lulesh_edt_distribution.mlir
-carts run lulesh.mlir --stop-at=concurrency-opt -o /tmp/lulesh_concurrency_opt.mlir
+carts compile lulesh.mlir --stop-at=concurrency -o /tmp/lulesh_concurrency.mlir
+carts compile lulesh.mlir --stop-at=edt-distribution -o /tmp/lulesh_edt_distribution.mlir
+carts compile lulesh.mlir --stop-at=concurrency-opt -o /tmp/lulesh_concurrency_opt.mlir
 
 # 3) Local correctness
 carts benchmarks run lulesh --size small

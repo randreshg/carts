@@ -34,18 +34,17 @@ carts build --arts --counters=2
 
 ## Debug Mode
 
-Use `--debug` to troubleshoot benchmark issues:
+Logs (stdout/stderr) are always written to disk — no special flags needed. Use `--debug` for additional console output:
 
 ```bash
 # Level 1: Show commands being executed
 carts benchmarks run polybench/gemm --size small --threads 2 --debug=1
 
-# Level 2: Write full output to log files (for ARTS debug output)
+# Level 2: Also print log file paths to the console
 carts benchmarks run polybench/gemm --size small --threads 2 --debug=2
-# Check logs at: polybench/gemm/logs/
-#   - build_arts.log, build_openmp.log (build output)
-#   - arts_2t.log, omp_2t.log (runtime output)
 ```
+
+After every run, the CLI prints an artifact summary showing where logs were saved.
 
 ---
 
@@ -108,31 +107,30 @@ carts benchmarks run kastors-jacobi/jacobi-task-dep --size small --threads 1,2,4
 **Prerequisite**: ARTS must be rebuilt with counter support (see Counter Support section above).
 
 ```bash
-# Create counter output directory
-mkdir -p results/counters
-
 # GEMM with counters - see EDT creation/execution breakdown
+# --counters auto-creates results/counters/ directory
 carts benchmarks run polybench/gemm --size medium --threads 4 \
-    --counters=1 --counter-dir results/counters/gemm_4t \
-    -o results/gemm_4t --trace
+    --counters -o results/gemm_4t --trace
 
 carts benchmarks run polybench/gemm --size medium --threads 8 \
-    --counters=1 --counter-dir results/counters/gemm_8t \
-    -o results/gemm_8t --trace
+    --counters -o results/gemm_8t --trace
 
 # Jacobi2D with counters
 carts benchmarks run polybench/jacobi2d --size medium --threads 4 \
-    --counters=1 --counter-dir results/counters/jacobi2d_4t \
-    -o results/jacobi2d_4t --trace
+    --counters -o results/jacobi2d_4t --trace
 
 carts benchmarks run polybench/jacobi2d --size medium --threads 8 \
-    --counters=1 --counter-dir results/counters/jacobi2d_8t \
-    -o results/jacobi2d_8t --trace
+    --counters -o results/jacobi2d_8t --trace
+
+# Or use --counter-dir for explicit output location:
+carts benchmarks run polybench/gemm --size medium --threads 4 \
+    --counter-dir results/counters/gemm_4t \
+    -o results/gemm_4t --trace
 ```
 
 **Output**:
 - `results/gemm_4t.json` - Benchmark results (timing, checksums, speedup)
-- `results/counters/gemm_4t/n0_t*.json` - ARTS counter data (EDT metrics)
+- `results/counters/` - ARTS counter data (EDT metrics)
 
 ---
 
@@ -221,40 +219,40 @@ carts benchmarks run --suite polybench --size medium --threads 1,2,4,8,16 \
 
 ## Results Directory Structure
 
-Each experiment creates a self-contained timestamped directory with JSON and artifacts together:
+Every run creates a timestamped experiment directory with logs always persisted:
 
 ```
 results/
-├── correctness_2t_YYYYMMDD_HHMMSS/
-│   ├── correctness_2t.json       # Benchmark results (timing, checksums)
-│   └── polybench/*/build/...     # Build artifacts
-├── correctness_8t_YYYYMMDD_HHMMSS/
-│   └── ...
-├── gemm_strong_medium_YYYYMMDD_HHMMSS/
+├── YYYYMMDD_HHMMSS/                      # Auto-created every run (even without -o)
+│   └── polybench_gemm/build/2t_1n/
+│       ├── arts.cfg
+│       ├── artifacts/
+│       └── runs/
+│           └── 1/
+│               ├── arts.log              # Always written
+│               └── omp.log               # Always written
+├── gemm_strong_medium_YYYYMMDD_HHMMSS/   # With --output
 │   ├── gemm_strong_medium.json
 │   └── polybench/gemm/build/
-│       ├── 1t_1n/                # Per-config build artifacts
+│       ├── 1t_1n/
 │       ├── 2t_1n/
-│       ├── 4t_1n/
-│       ├── 8t_1n/
-│       └── 16t_1n/
-├── gemm_4t_YYYYMMDD_HHMMSS/      # With counters
-│   ├── gemm_4t.json
-│   └── polybench/gemm/build/4t_1n/
-│       ├── artifacts/
-│       └── runs/1/counters/      # Counter files
+│       └── 4t_1n/
+│           ├── artifacts/
+│           └── runs/1/
+│               ├── arts.log
+│               ├── omp.log
+│               └── counters/             # With --counters
 └── ...
 ```
 
 Find all results: `find results/ -name "*.json" -path "*/results/*"`
 
-**Debug logs** (when running with `--debug=2`):
+After each run, the CLI prints an artifact summary:
 ```
-polybench/gemm/logs/
-├── build_arts.log                # ARTS build output
-├── build_openmp.log              # OpenMP build output
-├── arts_2t.log                   # ARTS runtime output (2 threads)
-└── omp_2t.log                    # OpenMP runtime output
+Artifacts:
+  Results:  ./results/YYYYMMDD_HHMMSS.json
+  Logs:     ./results/YYYYMMDD_HHMMSS/polybench_gemm/build/2t_1n/runs/1/
+  Counters: ./results/counters/  (if --counters)
 ```
 
 ---
@@ -278,8 +276,8 @@ polybench/gemm/logs/
 3. **Stall Time**: `artsIdMetrics.edts[].total_stall_ns` - time waiting for data
 
 **Note**: Counter files are only generated when:
-- ARTS is rebuilt with `--counters=1` or `--counters=2`
-- Benchmark is run with `--counters=1 --counter-dir <path>`
+- ARTS is rebuilt with counter support (`carts build --arts --counters=1`)
+- Benchmark is run with `--counters` or `--counter-dir <path>`
 
 ---
 

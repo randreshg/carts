@@ -28,14 +28,14 @@ carts cgeist simple.cpp -std=c++17 -fopenmp -O0 -S > simple.mlir
 ### 2. MLIR Optimization and ARTS Conversion
 
 #### Primary Debugging Approach: Pipeline Stages
-**ALWAYS use `carts run` with pipeline stages first** - this is the recommended debugging approach:
+**ALWAYS use `carts compile` with pipeline stages first** - this is the recommended debugging approach:
 
 ```bash
 # Stop at each major stage to isolate issues
-carts run simple.mlir --convert-openmp -o simple-openmp.mlir
-carts run simple.mlir --edt-transforms -o simple-edt.mlir
-carts run simple.mlir --datablock -o simple-db.mlir
-carts run simple.mlir --edt-lowering -o simple-llvm.mlir
+carts compile simple.mlir --convert-openmp -o simple-openmp.mlir
+carts compile simple.mlir --edt-transforms -o simple-edt.mlir
+carts compile simple.mlir --datablock -o simple-db.mlir
+carts compile simple.mlir --edt-lowering -o simple-llvm.mlir
 ```
 
 #### Advanced Debugging: Individual Passes (when needed)
@@ -45,7 +45,7 @@ Only use individual pass debugging when:
 - You're developing new passes and need to test them individually
 - The pipeline stages don't provide enough granularity for your debugging needs
 
-**Note**: Individual pass debugging should be done through the underlying MLIR tools when absolutely necessary, but prefer using `carts run` with pipeline stages for most debugging scenarios.
+**Note**: Individual pass debugging should be done through the underlying MLIR tools when absolutely necessary, but prefer using `carts compile` with pipeline stages for most debugging scenarios.
 
 ### 3. LLVM IR Generation
 Convert final MLIR to LLVM IR:
@@ -76,18 +76,18 @@ Ensure `arts.cfg` configuration exists, then run:
 - **Code Generation Issues**: Return to ARTS-to-LLVM conversion passes and re-run with fixes
 
 ## Debugging Workflow Summary
-1. **Isolate**: Use `carts run` with pipeline stages to identify which stage fails
+1. **Isolate**: Use `carts compile` with pipeline stages to identify which stage fails
 2. **Debug**: Enable pass-specific debug output with `-debug-only=pass_name`
 3. **Analyze**: Examine intermediate MLIR files at each pipeline stage
 4. **Verify**: Check ARTS runtime API usage and MLIR structure
 5. **Iterate**: Fix issues and re-run pipeline stages as needed
 
 **When to use pipeline stages vs individual passes:**
-- **Pipeline stages** (`carts run --stage-name`): Primary debugging method for quick isolation
+- **Pipeline stages** (`carts compile --stage-name`): Primary debugging method for quick isolation
 - **Individual passes**: Advanced debugging when you need fine-grained control (use underlying MLIR tools)
 
-### Stopping `carts run` at a specific stage
-`carts run` can execute the full pipeline or stop after a specific stage. Use one of the flags below to stop early and inspect the IR.
+### Stopping `carts compile` at a specific stage
+`carts compile` can execute the full pipeline or stop after a specific stage. Use one of the flags below to stop early and inspect the IR.
 
 Supported stages (mutually exclusive):
 - `--simplify`: stop after initial cleanup/simplification
@@ -103,12 +103,12 @@ Supported stages (mutually exclusive):
 Examples:
 ```bash
 # Stop right after OpenMP→ARTS conversion
-carts run input.mlir --convert-openmp -o out-openmp.mlir
+carts compile input.mlir --convert-openmp -o out-openmp.mlir
 
 # Stop after EDT transforms (before DB creation)
-carts run input.mlir --edt-transforms -o out-edt.mlir
+carts compile input.mlir --edt-transforms -o out-edt.mlir
 
 # Stop after EDT lowering
-carts run input.mlir --edt-lowering -o out-lowering.mlir
+carts compile input.mlir --edt-lowering -o out-lowering.mlir
 ```
 
