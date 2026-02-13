@@ -75,7 +75,6 @@ carts/
 ├── tools/                 # Command-line tools
 │   ├── carts              # Main wrapper script
 │   ├── run/               # Compilation driver
-│   ├── benchmark/         # Benchmarking utilities
 │   └── setup/             # Environment setup
 ├── tests/                 # Test suites
 │   ├── contracts/         # Contract-focused compiler tests

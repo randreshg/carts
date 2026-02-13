@@ -7,7 +7,6 @@
 - `tools/` - User-facing scripts and utilities
   - `carts` - Main wrapper script
   - `run/` - C++ compilation driver
-  - `benchmark/` - Performance utilities
   - `setup/` - Environment provisioning
 - `tests/` - Test suites
   - `contracts/` - Pipeline regression tests (MLIR + FileCheck)

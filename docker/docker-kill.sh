@@ -30,6 +30,11 @@ kill_processes_in_container() {
         pkill -9 -f 'arts' 2>/dev/null || true
         pkill -9 -f 'carts' 2>/dev/null || true
 
+        # Kill Slurm daemons if running
+        pkill -9 slurmd 2>/dev/null || true
+        pkill -9 slurmctld 2>/dev/null || true
+        pkill -9 munged 2>/dev/null || true
+
         # Clean up any zombie processes
         ps aux | grep -E '<defunct>' | awk '{print \$2}' | xargs -r kill -9 2>/dev/null || true" 2>/dev/null || true
 }

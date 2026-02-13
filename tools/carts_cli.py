@@ -568,11 +568,11 @@ def build(
         0, "--debug",
         help="Debug level: 0=off (default), 1=info, 2=full debug"),
     counters_level: int = typer.Option(
-        1, "--counters",
-        help="Counter profile: 0=off, 1=timing (default), 2=workload, 3=overhead"),
-    counter_config: Optional[Path] = typer.Option(
-        None, "--counter-config",
-        help="Custom counter configuration file path (overrides --counters)"),
+        0, "--counters",
+        help="Counter profile: 0=off (default), 1=timing, 2=workload, 3=overhead"),
+    profile: Optional[Path] = typer.Option(
+        None, "--profile",
+        help="Custom counter profile file path (overrides --counters)"),
 ):
     """Build CARTS project using system clang."""
     config = get_config()
@@ -618,13 +618,13 @@ def build(
 
     # Always pass counter config path for ARTS builds
     if arts:
-        if counter_config:
-            # Use custom counter config if provided
-            if not counter_config.exists():
-                print_error(f"Counter config not found: {counter_config}")
+        if profile:
+            # Use custom profile if provided
+            if not profile.exists():
+                print_error(f"Profile not found: {profile}")
                 raise typer.Exit(1)
-            effective_counter_config = counter_config.resolve()
-            console.print(f"Counter config: [{Colors.INFO}]{counter_config}[/{Colors.INFO}]")
+            effective_counter_config = profile.resolve()
+            console.print(f"Profile: [{Colors.INFO}]{profile}[/{Colors.INFO}]")
         else:
             # Use profile based on counters_level (profiles are in carts/config/)
             profile_name = COUNTER_PROFILES.get(
@@ -1875,293 +1875,6 @@ def format_sources(
 
 
 # ============================================================================
-# Report Command
-# ============================================================================
-
-@app.command()
-def report(
-    # Input sources (at least one required)
-    results: Optional[Path] = typer.Option(None, "--results", "-r",
-                                           help="JSON from 'carts benchmarks run' (scaling analysis)"),
-    counters: Optional[Path] = typer.Option(None, "--counters", "-c",
-                                            help="Counter directory with n*_t*.json files (hotspot analysis)"),
-    metadata: Optional[Path] = typer.Option(None, "--metadata", "-m",
-                                            help="CARTS metadata JSON for source location mapping"),
-
-    # Output control
-    format: str = typer.Option("table", "--format", "-f",
-                               help="Output format: table, csv, json"),
-    output: Optional[Path] = typer.Option(None, "--output", "-o",
-                                          help="Write to file instead of stdout"),
-    top: int = typer.Option(20, "--top", "-n",
-                            help="Limit rows in hotspot output"),
-
-    # Tuning
-    stride: int = typer.Option(1000, "--stride",
-                               help="EDT arts_id stride for metadata lookup"),
-):
-    """Analyze benchmark results and/or runtime counters."""
-    if not results and not counters:
-        print_error("Must specify at least --results or --counters")
-        raise typer.Exit(1)
-
-    # Load and analyze results
-    if results:
-        try:
-            with open(results) as f:
-                results_data = json.load(f)
-        except Exception as e:
-            print_error(f"Failed to load results JSON: {e}")
-            raise typer.Exit(1)
-
-    if counters:
-        if not counters.is_dir():
-            print_error(f"Counters directory not found: {counters}")
-            raise typer.Exit(1)
-
-        # Load counter data
-        edts, dbs = _load_counter_metrics(counters)
-
-        # Load metadata for source mapping if available
-        meta = {}
-        if metadata:
-            if not metadata.is_file():
-                print_error(f"Metadata file not found: {metadata}")
-                raise typer.Exit(1)
-            meta = _load_metadata(metadata)
-
-    # Generate reports (print directly to console)
-    if results:
-        _print_scaling_table(results_data)
-
-    if counters:
-        _print_hotspot_table(edts, dbs, meta, stride, top)
-
-    # Note: --output with --format csv/json would need separate handling
-    if output and format != "table":
-        print_info(f"Use --format csv or json with --output for file export")
-
-
-def _load_counter_metrics(counter_dir: Path) -> Tuple[Dict[int, Dict], Dict[int, Dict]]:
-    """Load and merge all n*_t*.json counter files."""
-    edts, dbs = {}, {}
-
-    for path in sorted(counter_dir.glob("n*_t*.json")):
-        try:
-            data = json.loads(path.read_text())
-        except Exception:
-            continue
-
-        arts = data.get("artsIdMetrics", {})
-
-        for edt in arts.get("edts", []):
-            if not isinstance(edt, dict):
-                continue
-            aid = edt.get("arts_id", 0)
-            if aid <= 0:
-                continue
-            rec = edts.setdefault(aid, {"invocations": 0, "total_exec_ns": 0})
-            rec["invocations"] += edt.get("invocations", 0)
-            rec["total_exec_ns"] += edt.get("total_exec_ns", 0)
-
-        for db in arts.get("dbs", []):
-            if not isinstance(db, dict):
-                continue
-            aid = db.get("arts_id", 0)
-            if aid <= 0:
-                continue
-            rec = dbs.setdefault(
-                aid, {"invocations": 0, "bytes_local": 0, "bytes_remote": 0})
-            rec["invocations"] += db.get("invocations", 0)
-            rec["bytes_local"] += db.get("bytes_local", 0)
-            rec["bytes_remote"] += db.get("bytes_remote", 0)
-
-    return edts, dbs
-
-
-def _load_metadata(metadata_path: Path) -> Dict[int, Dict]:
-    """Load CARTS metadata for source location mapping."""
-    data = json.loads(metadata_path.read_text())
-    meta = {}
-
-    for obj in data.get("loops", {}).values():
-        aid = obj.get("arts_id", 0)
-        if aid > 0:
-            meta[aid] = {"kind": "loop",
-                         "location": obj.get("location_key", "")}
-
-    for obj in data.get("memrefs", {}).values():
-        aid = obj.get("arts_id", 0)
-        if aid > 0:
-            meta[aid] = {"kind": "memref",
-                         "allocation": obj.get("allocation_id", "")}
-
-    return meta
-
-
-def _get_kernel_time(run_result: Dict) -> Optional[float]:
-    """Extract total kernel time from run result."""
-    timings = run_result.get("kernel_timings", {})
-    if timings:
-        return sum(timings.values())
-    return None
-
-
-def _print_scaling_table(results_data: Dict) -> None:
-    """Print scaling metrics table."""
-    results = results_data.get("results", [])
-
-    # Group by benchmark
-    by_bench = {}
-    for r in results:
-        if "thread_count" in r:  # Thread sweep results
-            by_bench.setdefault(r["name"], []).append(r)
-
-    for bench, runs in by_bench.items():
-        runs = sorted(runs, key=lambda r: r["thread_count"])
-        if not runs:
-            continue
-
-        # Prefer kernel time for speedup (more meaningful), fall back to total time
-        use_kernel_time = all(_get_kernel_time(r["run_arts"]) for r in runs)
-
-        if use_kernel_time:
-            t1_arts = _get_kernel_time(runs[0]["run_arts"])
-            t1_omp = _get_kernel_time(
-                runs[0]["run_omp"]) or runs[0]["run_omp"]["duration_sec"]
-            time_label = "Kernel"
-        else:
-            t1_arts = runs[0]["run_arts"]["duration_sec"]
-            t1_omp = runs[0]["run_omp"]["duration_sec"]
-            time_label = "Total"
-
-        table = Table(title=f"{bench} - Strong Scaling ({time_label} Time)")
-        table.add_column("Threads", justify="right")
-        table.add_column("ARTS", justify="right")
-        table.add_column("OMP", justify="right")
-        table.add_column("S(p)", justify="right", style="cyan")
-        table.add_column("E(p)", justify="right")
-        table.add_column("vs OMP", justify="right")
-
-        for r in runs:
-            p = r["thread_count"]
-
-            if use_kernel_time:
-                t_arts = _get_kernel_time(r["run_arts"])
-                t_omp = _get_kernel_time(
-                    r["run_omp"]) or r["run_omp"]["duration_sec"]
-            else:
-                t_arts = r["run_arts"]["duration_sec"]
-                t_omp = r["run_omp"]["duration_sec"]
-
-            speedup = t1_arts / t_arts if t_arts > 0 else 0.0
-            eff = speedup / p if p > 0 else 0.0
-            diff = ((t_arts - t_omp) / t_omp) * 100 if t_omp > 0 else 0.0
-
-            # Color the vs OMP column based on performance
-            if diff <= 5:
-                diff_str = f"[{Colors.PASS}]{diff:+.1f}%[/]"
-            elif diff <= 20:
-                diff_str = f"[{Colors.WARNING}]{diff:+.1f}%[/]"
-            else:
-                diff_str = f"[{Colors.FAIL}]{diff:+.1f}%[/]"
-
-            table.add_row(
-                str(p),
-                f"{t_arts:.4f}s" if t_arts < 1 else f"{t_arts:.2f}s",
-                f"{t_omp:.4f}s" if t_omp < 1 else f"{t_omp:.2f}s",
-                f"{speedup:.2f}x",
-                f"{eff:.1%}",
-                diff_str
-            )
-
-        console.print(table)
-        console.print()
-
-
-def _print_hotspot_table(edts: Dict, dbs: Dict, meta: Dict, stride: int, top: int) -> None:
-    """Print hotspot ranking tables."""
-    # EDT hotspots by total execution time
-    if edts:
-        edt_rows = []
-        for aid, rec in edts.items():
-            base = aid // stride if stride > 0 else aid
-            meta_entry = meta.get(base, {})
-            loc = meta_entry.get("location", "")
-            # Show base arts_id if no location found (helps debugging metadata gaps)
-            if not loc:
-                loc = f"[dim]base={base}[/]"
-            edt_rows.append({
-                "arts_id": aid,
-                "base": base,
-                "invocations": rec["invocations"],
-                "total_ns": rec["total_exec_ns"],
-                "avg_ns": rec["total_exec_ns"] // max(1, rec["invocations"]),
-                "location": loc,
-            })
-        edt_rows.sort(key=lambda r: r["total_ns"], reverse=True)
-
-        table = Table(title=f"EDT Hotspots (Top {min(top, len(edt_rows))})")
-        table.add_column("Rank", justify="right")
-        table.add_column("arts_id", justify="right")
-        table.add_column("Invocations", justify="right")
-        table.add_column("Total Time", justify="right")
-        table.add_column("Avg Time", justify="right")
-        table.add_column("Location / Source")
-
-        for i, r in enumerate(edt_rows[:top], 1):
-            table.add_row(
-                str(i),
-                str(r["arts_id"]),
-                f"{r['invocations']:,}",
-                f"{r['total_ns']/1e9:.3f}s",
-                f"{r['avg_ns']/1e6:.2f}ms",
-                r["location"],
-            )
-        console.print(table)
-        console.print()
-
-    # DB hotspots by remote bytes (prioritized)
-    if dbs:
-        db_rows = []
-        for aid, rec in dbs.items():
-            meta_entry = meta.get(aid, {})
-            alloc = meta_entry.get("allocation", "")
-            # Show arts_id if no allocation found
-            if not alloc:
-                alloc = f"[dim]id={aid}[/]"
-            db_rows.append({
-                "arts_id": aid,
-                "invocations": rec["invocations"],
-                "local_mb": rec["bytes_local"] / (1024**2),
-                "remote_mb": rec["bytes_remote"] / (1024**2),
-                "allocation": alloc,
-            })
-        db_rows.sort(key=lambda r: (
-            r["remote_mb"], r["local_mb"]), reverse=True)
-
-        table = Table(
-            title=f"DB Hotspots (Top {min(top, len(db_rows))} by Remote)")
-        table.add_column("Rank", justify="right")
-        table.add_column("arts_id", justify="right")
-        table.add_column("Invocations", justify="right")
-        table.add_column("Local (MB)", justify="right")
-        table.add_column("Remote (MB)", justify="right")
-        table.add_column("Allocation / Source")
-
-        for i, r in enumerate(db_rows[:top], 1):
-            table.add_row(
-                str(i),
-                str(r["arts_id"]),
-                f"{r['invocations']:,}",
-                f"{r['local_mb']:.1f}",
-                f"{r['remote_mb']:.1f}",
-                r["allocation"],
-            )
-        console.print(table)
-
-
-# ============================================================================
 # Docker Commands
 # ============================================================================
 
@@ -2198,11 +1911,15 @@ def docker_callback(ctx: typer.Context):
 def docker_run(
     file: Optional[Path] = typer.Argument(None, help="File to run in Docker"),
     args: Optional[List[str]] = typer.Argument(None, help="Runtime arguments"),
+    slurm: bool = typer.Option(
+        False, "--slurm", help="Use Slurm launcher instead of SSH"),
 ):
     """Run example in Docker containers."""
     docker_dir, _ = _get_docker_script("run")
 
     cmd = ["./docker-run.sh"]
+    if slurm:
+        cmd.append("--slurm")
     if file:
         cmd.append(str(file))
     if args:

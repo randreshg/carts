@@ -102,6 +102,24 @@ RUN git config --global init.defaultBranch main \
     && git config --global http.maxRequestBuffer 100M \
     && git config --global core.compression 0
 
+# Install Slurm and Munge for simulated cluster scheduling
+RUN apt-get update && apt-get install -y \
+    slurm-wlm \
+    munge \
+    && rm -rf /var/lib/apt/lists/*
+
+# Generate munge key (baked into image = same key on all containers)
+RUN dd if=/dev/urandom bs=1 count=1024 > /etc/munge/munge.key 2>/dev/null && \
+    chown munge:munge /etc/munge/munge.key && \
+    chmod 400 /etc/munge/munge.key
+
+# Create Slurm spool and log directories
+RUN mkdir -p /var/spool/slurmctld /var/spool/slurmd /var/log/slurm && \
+    chmod 755 /var/spool/slurmctld /var/spool/slurmd /var/log/slurm
+
+# Copy Slurm configuration
+COPY slurm/slurm.conf /etc/slurm/slurm.conf
+
 # Default working directory
 WORKDIR /root
 

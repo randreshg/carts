@@ -9,7 +9,6 @@ tools/
 ├── carts               # Main wrapper script
 ├── run/                # CARTS compilation pipeline binary (carts-compile)
 ├── opt/                # CARTS optimization passes
-├── benchmark/          # Benchmarking tools
 └── setup/              # Setup tools
     └── carts-setup.py  # Automated setup script
 ```
@@ -80,7 +79,6 @@ tools/
 | `carts clang` | Compile with LLVM clang and OpenMP |
 | `carts clean` | Clean generated files |
 | `carts format` | Format source files |
-| `carts report` | Analyze benchmark results |
 | `carts setup` | Set up CARTS environment |
 
 ## Individual Tools
