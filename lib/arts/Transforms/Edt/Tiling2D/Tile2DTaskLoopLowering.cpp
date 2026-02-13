@@ -1,5 +1,6 @@
 ///==========================================================================///
-/// File: Tiling2DTaskLoopLowering.cpp
+/// File: Tile2DTaskLoopLowering.cpp
+/// Impl: Tile2DTaskLoopLowering
 ///
 /// Matmul-oriented task loop lowering.
 /// This path keeps ownership-safe row partitioning while applying a dedicated
@@ -91,7 +92,7 @@ static void stripeLoopByColumns(TaskLoopPostCloneInput &input,
   loop.erase();
 }
 
-class Tiling2DTaskLoopLowering final : public EdtTaskLoopLowering {
+class Tile2DTaskLoopLowering final : public EdtTaskLoopLowering {
 public:
   TaskAcquirePlanningResult
   planAcquireRewrite(const TaskLoopLoweringInput &input,
@@ -106,10 +107,10 @@ public:
   TaskLoopLoweringResult
   lower(TaskLoopLoweringInput &input,
         const TaskLoopLoweringMappedValues &mapped) const override {
-    TaskLoopLoweringResult result = lowerBlockStyle(input, mapped);
-
     Tiling2DWorkerGrid grid = DistributionHeuristics::getTiling2DWorkerGrid(
         input.AC, input.loc, input.taskWorkerId, input.totalWorkers);
+
+    TaskLoopLoweringResult result = lowerBlockStyle(input, mapped);
     result.innerStripeLane = grid.colWorkerId;
     result.innerStripeCount = grid.colWorkers;
 
@@ -144,6 +145,6 @@ public:
 } // namespace
 
 std::unique_ptr<EdtTaskLoopLowering>
-mlir::arts::detail::createTiling2DTaskLoopLowering() {
-  return std::make_unique<Tiling2DTaskLoopLowering>();
+mlir::arts::detail::createTile2DTaskLoopLowering() {
+  return std::make_unique<Tile2DTaskLoopLowering>();
 }

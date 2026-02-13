@@ -37,7 +37,7 @@ llvm_bin_dir = os.path.join(install_root, "llvm", "bin")
 llvm_lib_dir = os.path.join(install_root, "llvm", "lib")
 
 required_tools = {
-    "%carts-run": os.path.join(carts_bin_dir, "carts-run"),
+    "%carts-compile": os.path.join(carts_bin_dir, "carts-compile"),
     "%FileCheck": os.path.join(llvm_bin_dir, "FileCheck"),
 }
 

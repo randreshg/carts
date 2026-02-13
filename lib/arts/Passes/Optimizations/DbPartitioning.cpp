@@ -6,6 +6,19 @@
 ///   Phase 2: Heuristic voting -> RewriterMode
 ///   (Coarse/ElementWise/Block/Stencil) Phase 3: Size computation and
 ///   rewriter application
+///
+/// Transformation (shape-focused):
+///   BEFORE:
+///     %acq = arts.db_acquire ... partition_mode = coarse
+///     (single full-range acquire)
+///
+///   AFTER (example block mode):
+///     %acq = arts.db_acquire ... partition_mode = block
+///       partition_offsets(...), partition_sizes(...)
+///     (task-local range acquire; same program dependencies, smaller transfer)
+///
+/// This pass must preserve dependency semantics: it refines acquire metadata
+/// and rewrite plans, but does not weaken EDT/event ordering.
 ///==========================================================================///
 
 /// Dialects
@@ -50,6 +63,7 @@
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/EdtUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 ARTS_DEBUG_SETUP(db_partitioning);
 
@@ -895,6 +909,13 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                            !acquire.getPartitionSizes().empty();
       bool inferredBlock =
           !acqInfo.partitionOffsets.empty() && !acqInfo.partitionSizes.empty();
+      bool hasDistributionContract = false;
+      if (auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+          edt) {
+        (void)blockArg;
+        hasDistributionContract = getEdtDistributionKind(edt.getOperation()) ||
+                                  getEdtDistributionPattern(edt.getOperation());
+      }
       bool thisAcquireCanBlock =
           (acquireMode && (*acquireMode == PartitionMode::block ||
                            *acquireMode == PartitionMode::stencil)) ||
@@ -928,9 +949,15 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         auto dimOpt = acqNode->getPartitionOffsetDim(partitionOffset,
                                                      /*requireLeading=*/false);
         if (!dimOpt) {
-          ARTS_DEBUG("  Partition offset incompatible with access pattern; "
-                     "disabling block capability");
-          thisAcquireCanBlock = false;
+          if (hasDistributionContract && (hasBlockHints || inferredBlock)) {
+            ARTS_DEBUG("  Partition offset not mappable by DbAcquireNode, but "
+                       "preserving block capability from EDT distribution "
+                       "contract");
+          } else {
+            ARTS_DEBUG("  Partition offset incompatible with access pattern; "
+                       "disabling block capability");
+            thisAcquireCanBlock = false;
+          }
         }
       }
 
@@ -1247,7 +1274,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
     if (allocHasStencilPattern) {
       for (auto &info : acquireInfos) {
-        if (!info.acquire || info.acquire.getMode() != ArtsMode::in)
+        if (!info.acquire)
           continue;
         bool hasPartitionRange =
             !info.partitionOffsets.empty() && !info.partitionSizes.empty();
@@ -1383,8 +1410,14 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     bool useNodesForFallback = false;
     if (AM) {
       ArtsAbstractMachine &machine = AM->getAbstractMachine();
-      if (machine.hasValidNodeCount() && machine.getNodeCount() > 1)
-        useNodesForFallback = true;
+      if (machine.hasValidNodeCount() && machine.getNodeCount() > 1) {
+        /// Stencil ESD requires block-aligned worker chunk offsets.
+        /// Worker chunks are produced by EDT lowering using worker-level
+        /// decomposition. Keeping stencil fallback sizing worker-based avoids
+        /// misalignment (e.g. node-sized blocks with worker-sized tasks) that
+        /// would otherwise force DbStencilRewriter into block fallback.
+        useNodesForFallback = (decision.mode != PartitionMode::stencil);
+      }
     }
 
     DbBlockPlanInput blockPlanInput{allocOp,

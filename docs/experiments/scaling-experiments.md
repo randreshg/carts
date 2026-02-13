@@ -45,28 +45,29 @@ See `external/arts/sampleConfigs/arts.cfg` for a fuller template.
 
 ### Limitations (important for scaling studies)
 
-- **`carts benchmarks run` is single-node oriented**:
-  - No built-in orchestration for multi-node job launch (Slurm/SSH) in the CLI itself
-  - No built-in sweep over threads/nodes; it runs one configuration per invocation
 - **Problem-size control is inconsistent across benchmarks**:
   - Some benchmarks use PolyBench-style dataset macros, others use direct `NI/NJ/NK` macros, and some may take runtime args
-  - The benchmark runner does not currently expose a generic `--cflags/--extra-cflags` or `--run-args` pass-through to automate size sweeps
+  - The runner exposes `--cflags` for compile-time overrides and `--weak-scaling` for automatic size scaling
 - **Reproducibility controls are not centralized**:
   - Thread pinning/NUMA policy, turbo/boost state, and affinity env-vars are not enforced by the harness
-- **Two benchmarking paths exist**:
-  - `external/carts-benchmarks/benchmark_runner.py` is active and integrated with `carts benchmarks`
-  - `tools/benchmark/carts-benchmark.py` appears to assume an `examples/` layout that does not exist in this repo (today it won’t find `examples/parallel`)
 
-### Opportunities (high leverage for your experiment campaign)
+### What's already supported
 
-- Extend `carts benchmarks` to accept:
-  - `--env KEY=VAL` (e.g., `OMP_NUM_THREADS`, affinity vars)
-  - `--cflags/--extra-cflags` (for compile-time sizes like `-DNI=...`)
-  - `--args` (for benchmarks that take runtime sizes/iterations)
-  - `sweep` subcommand to generate a full scaling matrix and emit CSV/JSON
-- Add **standard size targets** across suites (mini/small/medium/large/xlarge) and keep READMEs consistent with actual macros.
-- Add a **cluster mode** (`launcher=slurm`) wrapper that writes a job script, runs, and harvests results automatically.
-- Build a **roofline-oriented report** (effective bandwidth + arithmetic intensity) for “why scaling stops”.
+The benchmark runner now supports:
+- **Thread sweeps**: `--threads 1,2,4,8,16` runs all configurations in one invocation
+- **Multi-node**: `--nodes N --launcher ssh|slurm` for distributed execution
+- **Compile-time flags**: `--cflags "-DNI=1024"` for custom problem sizes
+- **Weak scaling**: `--weak-scaling --base-size N` auto-adjusts dimensions
+- **Counter collection**: `--counters` (auto-creates directory) or `--counter-dir <path>`
+- **Always-on logs**: stdout/stderr are always persisted to disk (no flags needed)
+- **Pre-run cleanup**: lingering ARTS processes on the port are killed before each run
+- **Artifact summary**: after each run, paths to results, logs, and counters are printed
+
+### Opportunities (remaining)
+
+- Add `--env KEY=VAL` for explicit environment overrides (affinity, NUMA policies)
+- Add **standard size targets** across suites (mini/small/medium/large/xlarge) and keep READMEs consistent with actual macros
+- Build a **roofline-oriented report** (effective bandwidth + arithmetic intensity) for "why scaling stops"
 
 ## Experimental design: what we measure and why
 
@@ -378,13 +379,25 @@ carts benchmarks list
 # Run gemm (recommended starting point - 0.99x ARTS vs OMP parity)
 carts benchmarks run polybench/gemm --size large -o gemm_results.json
 
-# Run all polybench benchmarks
-carts benchmarks run polybench/* --size small -o polybench_results.json
+# Thread sweep (all thread counts in one invocation)
+carts benchmarks run polybench/gemm --size medium --threads 1,2,4,8,16 \
+  -o results/gemm_strong --trace
 
-# Run with custom arts.cfg
-carts benchmarks run polybench/gemm --size large \
-  --arts-config ./external/carts-benchmarks/polybench/gemm/arts.cfg \
-  -o results.json
+# Run with counters
+carts benchmarks run polybench/gemm --size medium --threads 4 --counters \
+  -o results/gemm_4t
+
+# Multi-node run
+carts benchmarks run polybench/gemm --size large --threads 8 --nodes 4 \
+  --launcher ssh --arts-config docker/arts-docker.cfg \
+  -o results/gemm_4node
+
+# Run all polybench benchmarks
+carts benchmarks run --suite polybench --size small --threads 2
+
+# Custom problem size
+carts benchmarks run polybench/gemm --threads 8 \
+  --cflags "-DNI=2048 -DNJ=2048 -DNK=2048" -o results/gemm_2048
 ```
 
-Note: today you'll still need to set `OMP_NUM_THREADS` and manage `arts.cfg` variants externally for sweeps.
+The runner handles `OMP_NUM_THREADS`, `arts.cfg` generation, and log persistence automatically.

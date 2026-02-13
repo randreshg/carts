@@ -109,7 +109,7 @@ EdtTaskLoopLowering::create(DistributionKind kind) {
   case DistributionKind::BlockCyclic:
     return detail::createBlockCyclicTaskLoopLowering();
   case DistributionKind::Tiling2D:
-    return detail::createTiling2DTaskLoopLowering();
+    return detail::createTile2DTaskLoopLowering();
   }
   return detail::createBlockTaskLoopLowering();
 }

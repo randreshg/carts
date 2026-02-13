@@ -25,7 +25,7 @@ carts build --clean                    # Clean build
 carts build --arts --debug             # Build ARTS with debug logging
 
 # Testing
-carts execute simple.cpp -o simple     # Full compilation pipeline
+carts compile simple.cpp -o simple     # Full compilation pipeline
 carts test                             # Run all tests
 carts check                            # Alias for carts test
 

@@ -113,7 +113,7 @@ namespace detail {
 
 std::unique_ptr<EdtTaskLoopLowering> createBlockTaskLoopLowering();
 std::unique_ptr<EdtTaskLoopLowering> createBlockCyclicTaskLoopLowering();
-std::unique_ptr<EdtTaskLoopLowering> createTiling2DTaskLoopLowering();
+std::unique_ptr<EdtTaskLoopLowering> createTile2DTaskLoopLowering();
 
 } // namespace detail
 

@@ -419,13 +419,13 @@ When ArtsMate merges compile-time + runtime, it can answer:
 
 ```bash
 # Generate diagnose output
-carts run input.mlir --diagnose
+carts compile input.mlir --diagnose
 
 # Custom output path
-carts run input.mlir --diagnose --diagnose-output my-diagnose.json
+carts compile input.mlir --diagnose --diagnose-output my-diagnose.json
 
-# Also available in carts execute
-carts execute input.mlir --diagnose
+# Also available in carts compile (C input)
+carts compile input.mlir --diagnose
 ```
 
 ## File Locations
@@ -439,5 +439,5 @@ carts execute input.mlir --diagnose
 ## Related Documentation
 
 - [CARTS Heuristics](heuristics/single_rank/db_granularity.md) - DB granularity guidance and partitioning heuristics
-- [CARTS Analysis](analysis.md) - Analysis infrastructure overview
+- [CARTS Pipeline Guide](../agents.md) - Full pipeline reference and troubleshooting
 - [Developer Guide](developer-guide.md) - CARTS development guide

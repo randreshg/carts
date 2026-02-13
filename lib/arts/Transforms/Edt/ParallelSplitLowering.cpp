@@ -2,6 +2,18 @@
 /// File: ParallelSplitLowering.cpp
 ///
 /// Split-analysis and continuation EDT lowering helpers used by ForLowering.
+///
+/// Transformation:
+///   BEFORE:
+///     edt.parallel { pre; arts.for ...; post; }
+///
+///   AFTER:
+///     edt.parallel { pre; }
+///     arts.epoch { ... task edt creation for arts.for ... }
+///     edt.parallel { post; }   // continuation with reacquired DB deps
+///
+/// Dependency contract: continuation deps are reacquired from the same root
+/// DbAlloc GUIDs before cloning post-loop operations.
 ///==========================================================================///
 
 #include "arts/Transforms/Edt/ParallelSplitLowering.h"

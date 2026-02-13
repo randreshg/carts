@@ -13,6 +13,7 @@ H1 partitioning still decides DB layout/rewrite details.
 
 Related guide:
 - `docs/heuristics/partitioning/partitioning.md`
+- `docs/analysis/distributed-debugging.md`
 
 ## 0. Motivation: Bridging AMT, OpenMP, and MPI
 
@@ -145,15 +146,15 @@ Distribution is now a dedicated stage:
 - `concurrency-opt`: DB partitioning and downstream optimization
 
 Key files:
-- `tools/run/carts-run.cpp`
+- `tools/run/carts-compile.cpp`
 - `lib/arts/Passes/Transformations/EdtDistributionPass.cpp`
 
 Useful stop points:
 
 ```bash
-carts-run input.mlir --stop-at=concurrency
-carts-run input.mlir --stop-at=edt-distribution
-carts-run input.mlir --stop-at=concurrency-opt
+carts-compile input.mlir --stop-at=concurrency
+carts-compile input.mlir --stop-at=edt-distribution
+carts-compile input.mlir --stop-at=concurrency-opt
 ```
 
 ## 6. Distributed DB Ownership
@@ -167,7 +168,7 @@ Current implementation:
 - New pass: `DistributedDbOwnershipPass`
   (`lib/arts/Passes/Optimizations/DistributedDbOwnership.cpp`).
 - Pipeline placement: `DbPartitioning -> DistributedDbOwnership -> DbPass`
-  (gated by `--distributed-db-ownership` in `carts-run`).
+  (gated by `--distributed-db-ownership` in `carts-compile`).
 - Lowering support: `ConvertArtsToLLVM` uses round-robin route selection for
   marked multi-DB allocations:
   - route = `linearIndex % artsGetTotalNodes()`
@@ -240,7 +241,7 @@ Future caveat:
 - `EdtTaskLoopLowering` abstraction:
   - `BlockTaskLoopLowering`
   - `BlockCyclicTaskLoopLowering`
-  - `Tiling2DTaskLoopLowering`
+  - `Tile2DTaskLoopLowering`
 - Strategy helpers now also own acquire-window planning through
   `EdtTaskLoopLowering::planAcquireRewrite(...)` so `ForLowering` does not
   embed strategy-specific `acquire_offset/size/hint` branching.
@@ -262,13 +263,13 @@ Passes consume the API; they do not duplicate these heuristics.
 ## 11. Validation Checklist
 
 ```bash
-ninja -C build carts-run
+ninja -C build carts-compile
 
 # Missing config must fail fast
-carts-run input.mlir --stop-at=concurrency
+carts-compile input.mlir --stop-at=concurrency
 
 # Inspect distribution attributes
-carts-run gemm.mlir --O3 --arts-config arts.cfg --stop-at=edt-distribution
+carts-compile gemm.mlir --O3 --arts-config arts.cfg --stop-at=edt-distribution
 
 # Multi-node counters
 # (example harness depends on your local benchmark setup)

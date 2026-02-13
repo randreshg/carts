@@ -1,7 +1,22 @@
 ///==========================================================================///
 /// File: EdtDistributionPass.cpp
 ///
-/// Annotates arts.for loops with distribution strategy decisions.
+/// Annotates arts.for loops with distribution strategy decisions while keeping
+/// loop semantics unchanged.
+///
+/// Transformation (annotation only):
+///   BEFORE:
+///     arts.for (...) {
+///       ...
+///     }
+///
+///   AFTER:
+///     arts.for (...) {
+///       ...
+///     } {distribution_kind = ..., distribution_pattern = ...}
+///
+/// This pass does not create/remove dependencies; it only writes typed attrs
+/// consumed later by lowering.
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"

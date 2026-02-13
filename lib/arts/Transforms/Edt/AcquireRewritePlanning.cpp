@@ -18,6 +18,10 @@
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "llvm/ADT/SmallPtrSet.h"
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -31,6 +35,108 @@ static Value castToIndex(ArtsCodegen *AC, Value value, Location loc) {
     return value;
   return AC->create<arith::IndexCastOp>(loc, AC->getBuilder().getIndexType(),
                                         value);
+}
+
+static bool acquireHasReadAccess(DbAcquireOp acquire) {
+  if (!acquire)
+    return false;
+
+  SmallVector<Value, 16> worklist{acquire.getPtr()};
+  llvm::SmallPtrSet<Value, 32> visited;
+
+  auto enqueue = [&](Value value) {
+    if (value)
+      worklist.push_back(value);
+  };
+
+  while (!worklist.empty()) {
+    Value value = worklist.pop_back_val();
+    if (!value || !visited.insert(value).second)
+      continue;
+
+    for (Operation *user : value.getUsers()) {
+      if (auto load = dyn_cast<memref::LoadOp>(user)) {
+        if (load.getMemRef() == value)
+          return true;
+        continue;
+      }
+
+      if (auto store = dyn_cast<memref::StoreOp>(user)) {
+        if (store.getMemRef() == value)
+          continue;
+      }
+
+      if (auto dbRef = dyn_cast<DbRefOp>(user)) {
+        if (dbRef.getSource() == value)
+          enqueue(dbRef.getResult());
+        continue;
+      }
+
+      if (auto cast = dyn_cast<memref::CastOp>(user)) {
+        if (cast.getSource() == value)
+          enqueue(cast.getResult());
+        continue;
+      }
+
+      if (auto subview = dyn_cast<memref::SubViewOp>(user)) {
+        if (subview.getSource() == value)
+          enqueue(subview.getResult());
+        continue;
+      }
+
+      if (auto reinterpret = dyn_cast<memref::ReinterpretCastOp>(user)) {
+        if (reinterpret.getSource() == value)
+          enqueue(reinterpret.getResult());
+        continue;
+      }
+
+      if (auto view = dyn_cast<memref::ViewOp>(user)) {
+        if (view.getSource() == value)
+          enqueue(view.getResult());
+        continue;
+      }
+
+      if (auto unrealized = dyn_cast<UnrealizedConversionCastOp>(user)) {
+        if (llvm::is_contained(unrealized.getInputs(), value))
+          for (Value out : unrealized.getOutputs())
+            enqueue(out);
+        continue;
+      }
+
+      if (auto edt = dyn_cast<EdtOp>(user)) {
+        Block *entry = edt.getBody().empty() ? nullptr : &edt.getBody().front();
+        if (!entry)
+          continue;
+        for (auto depIt : llvm::enumerate(edt.getDependencies())) {
+          if (depIt.value() != value)
+            continue;
+          unsigned argIdx = depIt.index();
+          if (argIdx < entry->getNumArguments())
+            enqueue(entry->getArgument(argIdx));
+        }
+        continue;
+      }
+
+      if (isa<DbReleaseOp, memref::DeallocOp, memref::DimOp>(user))
+        continue;
+
+      if (auto effects = dyn_cast<MemoryEffectOpInterface>(user)) {
+        SmallVector<MemoryEffects::EffectInstance, 4> valueEffects;
+        effects.getEffectsOnValue(value, valueEffects);
+        if (llvm::any_of(valueEffects, [](const auto &effect) {
+              return isa<MemoryEffects::Read>(effect.getEffect());
+            }))
+          return true;
+        continue;
+      }
+
+      if (llvm::is_contained(user->getOperands(), value) &&
+          !isa<func::CallOp>(user))
+        return true;
+    }
+  }
+
+  return false;
 }
 
 } // namespace
@@ -79,9 +185,19 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
         });
 
         auto accessPattern = getDbAccessPattern(dbAlloc.getOperation());
-        needsStencilHalo = !isSingleElement && accessPattern &&
-                           *accessPattern == DbAccessPattern::stencil &&
-                           input.parentAcquire.getMode() == ArtsMode::in;
+        const ArtsMode mode = input.parentAcquire.getMode();
+        const bool modeNeedsStencilHalo =
+            mode == ArtsMode::in ||
+            (mode == ArtsMode::inout &&
+             acquireHasReadAccess(input.parentAcquire));
+        const bool patternSaysStencil =
+            accessPattern && *accessPattern == DbAccessPattern::stencil;
+        const bool strategySaysStencil =
+            input.distributionPattern &&
+            *input.distributionPattern == EdtDistributionPattern::stencil;
+        needsStencilHalo =
+            !isSingleElement && modeNeedsStencilHalo &&
+            (patternSaysStencil || strategySaysStencil);
         if (needsStencilHalo)
           stencilExtent = castToIndex(input.AC, elemSizes.front(), input.loc);
 

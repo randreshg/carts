@@ -122,9 +122,10 @@ __ARTS_TYPE(RawPtr, mlir::LLVM::LLVMPointerType::get)
 ///   ArtsGuid guid;
 ///   ArtsType mode;
 ///   void *ptr;
+///   ArtsType acquireMode;
 /// } artsEdtDep_t;
 __ARTS_STRUCT_TYPE(ArtsEdtDep, artsEdtDep_t, false, ArtsGuid, ArtsType, llvmPtr,
-                   ArtsType, Int1)
+                   ArtsType)
 
 #undef __ARTS_STRUCT_TYPE
 #undef ARTS_STRUCT_TYPE
@@ -183,6 +184,16 @@ __ARTS_RTL_ATTRS(artsRT, ControlAttrs, SExt, ParamAttrs(SExt, ReadOnlyPtrAttrs))
 /// void artsShutdown();
 __ARTS_RTL(artsShutdown, Void)
 __ARTS_RTL_ATTRS(artsShutdown, ControlAttrs, EmptyAttrs, ParamAttrs())
+
+/// void artsSetConfigPath(const char *path);
+__ARTS_RTL(artsSetConfigPath, Void, Int8Ptr)
+__ARTS_RTL_ATTRS(artsSetConfigPath, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(ReadOnlyPtrAttrs))
+
+/// void artsSetConfigData(const char *data);
+__ARTS_RTL(artsSetConfigData, Void, Int8Ptr)
+__ARTS_RTL_ATTRS(artsSetConfigData, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(ReadOnlyPtrAttrs))
 
 /// void *artsMalloc(size_t size);
 __ARTS_RTL(artsMalloc, VoidPtr, SizeTy)

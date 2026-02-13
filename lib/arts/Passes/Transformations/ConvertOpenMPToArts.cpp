@@ -316,15 +316,71 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
 struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
   using OpRewritePattern::OpRewritePattern;
 
+  /// Returns true when a serial loop is nested inside the current parallel
+  /// region. We stop at the nearest parallel boundary (omp.parallel before
+  /// conversion, arts.edt after conversion) so outer host loops do not force
+  /// wsloop fallback.
+  static bool hasSerialLoopAncestorInParallelRegion(Operation *op) {
+    for (Operation *cur = op ? op->getParentOp() : nullptr; cur;
+         cur = cur->getParentOp()) {
+      if (isa<omp::ParallelOp, arts::EdtOp>(cur))
+        break;
+      if (isa<scf::ForOp>(cur))
+        return true;
+    }
+    return false;
+  }
+
+  /// Returns true when there is meaningful work after `op` in its parent block.
+  /// We ignore terminators because they do not require an explicit barrier.
+  static bool hasWorkAfterInParentBlock(Operation *op) {
+    if (!op || !op->getBlock())
+      return false;
+
+    for (Operation *next = op->getNextNode(); next;
+         next = next->getNextNode()) {
+      if (next->hasTrait<OpTrait::IsTerminator>())
+        continue;
+      return true;
+    }
+    return false;
+  }
+
   LogicalResult matchAndRewrite(omp::WsLoopOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    ARTS_INFO("Converting omp.wsloop to arts.for");
+    ARTS_INFO("Converting omp.wsloop");
 
     /// Get the loop bounds and step from the wsloop
     auto lowerBound = op.getLowerBound()[0];
     auto upperBound = op.getUpperBound()[0];
     auto step = op.getStep()[0];
+
+    /// Nested omp.wsloop inside serial loop nests is lowered to scf.for.
+    /// This avoids leaving nested arts.for constructs that the current
+    /// ForLowering split path does not rewrite.
+    bool nestedInSerialLoop = hasSerialLoopAncestorInParallelRegion(op);
+    bool hasReductions =
+        op.getReductionsAttr() && !op.getReductionsAttr().getValue().empty();
+    if (nestedInSerialLoop && !hasReductions) {
+      ARTS_INFO("  - Nested wsloop fallback: lowering to scf.for");
+      auto scfFor = rewriter.create<scf::ForOp>(loc, lowerBound, upperBound,
+                                                step);
+      copyArtsMetadataAttrs(op, scfFor);
+
+      OpBuilder::InsertionGuard IG(rewriter);
+      rewriter.setInsertionPointToStart(scfFor.getBody());
+      IRMapping mapper;
+      Block &src = op.getRegion().front();
+      if (!src.getArguments().empty())
+        mapper.map(src.getArgument(0), scfFor.getInductionVar());
+      for (Operation &srcOp : src.without_terminator())
+        rewriter.clone(srcOp, mapper);
+
+      rewriter.eraseOp(op);
+      return success();
+    }
+    ARTS_INFO("  - Lowering wsloop to arts.for");
 
     /// Map OpenMP schedule to Arts ForScheduleKindAttr if present
     arts::ForScheduleKindAttr schedAttr = nullptr;
@@ -401,8 +457,9 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
     rewriter.create<arts::YieldOp>(loc);
 
     /// OpenMP wsloop has an implicit barrier unless nowait is present.
-    /// Insert an explicit ARTS barrier to preserve ordering between loops.
-    if (!op.getNowaitAttr()) {
+    /// Emit an explicit ARTS barrier only when there is following work in
+    /// the same region that depends on that synchronization.
+    if (!op.getNowaitAttr() && hasWorkAfterInParentBlock(op.getOperation())) {
       rewriter.setInsertionPointAfter(forOp);
       rewriter.create<arts::BarrierOp>(loc);
     }

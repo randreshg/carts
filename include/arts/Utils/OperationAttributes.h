@@ -3,6 +3,7 @@
 
 #include "arts/ArtsDialect.h"
 #include "mlir/IR/Attributes.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/StringRef.h"
@@ -12,6 +13,13 @@
 namespace mlir {
 namespace arts {
 namespace AttrNames {
+
+/// Module-level attributes used across ARTS passes/codegen.
+namespace Module {
+using namespace llvm;
+constexpr StringLiteral RuntimeConfigPath = "arts.runtime_config_path";
+constexpr StringLiteral RuntimeConfigData = "arts.runtime_config_data";
+} // namespace Module
 
 /// Operation-level attributes used across ARTS passes
 namespace Operation {
@@ -50,6 +58,38 @@ constexpr StringLiteral Concurrency = "concurrency";
 } // namespace Operation
 
 } // namespace AttrNames
+
+inline std::optional<StringRef> getRuntimeConfigPath(ModuleOp module) {
+  if (!module)
+    return std::nullopt;
+  if (auto attr = module->getAttrOfType<StringAttr>(
+          AttrNames::Module::RuntimeConfigPath))
+    return attr.getValue();
+  return std::nullopt;
+}
+
+inline void setRuntimeConfigPath(ModuleOp module, StringRef path) {
+  if (!module || path.empty())
+    return;
+  module->setAttr(AttrNames::Module::RuntimeConfigPath,
+                  StringAttr::get(module.getContext(), path));
+}
+
+inline std::optional<StringRef> getRuntimeConfigData(ModuleOp module) {
+  if (!module)
+    return std::nullopt;
+  if (auto attr = module->getAttrOfType<StringAttr>(
+          AttrNames::Module::RuntimeConfigData))
+    return attr.getValue();
+  return std::nullopt;
+}
+
+inline void setRuntimeConfigData(ModuleOp module, StringRef data) {
+  if (!module || data.empty())
+    return;
+  module->setAttr(AttrNames::Module::RuntimeConfigData,
+                  StringAttr::get(module.getContext(), data));
+}
 
 // Forward declaration - defined in HeuristicsConfig.h
 struct PartitioningHint;

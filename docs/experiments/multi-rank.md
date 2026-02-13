@@ -6,7 +6,7 @@ This document contains the actual commands to execute for understanding CARTS be
 
 Terminology used here:
 - **rank**: one ARTS process (often “one per node” on a cluster, but you can run many ranks on one host for local testing)
-- **node-count**: the number of ranks (`carts benchmarks run --node-count ...`)
+- **nodes**: the number of ranks (`carts benchmarks run --nodes ...`)
 - **threads**: worker threads per rank (`carts benchmarks run --threads ...`)
 - **total cores** (approx): `node_count * threads`
 
@@ -49,7 +49,7 @@ This runs multiple ARTS ranks on the same host via SSH to `localhost`.
 ssh localhost true
 ```
 
-2) Create a “local multi-rank” config with enough `localhost` entries for your largest intended `--node-count`.
+2) Create a “local multi-rank” config with enough `localhost` entries for your largest intended `--nodes`.
 
 ```bash
 cat > results/multi_rank/configs/arts_local_8r.cfg <<'EOF'
@@ -78,7 +78,7 @@ EOF
 
 ### Option B: Multi-node cluster (Slurm launcher)
 
-On Slurm, the benchmark runner wraps execution with `srun` when `--launcher slurm` and `--node-count > 1`.
+On Slurm, the benchmark runner wraps execution with `srun` when `--launcher slurm` and `--nodes > 1`.
 
 Notes:
 - ARTS reads `SLURM_NNODES`/`SLURM_NODELIST` from the environment; you typically don’t need `nodes=...` in `arts.cfg`.
@@ -88,7 +88,7 @@ Example (run inside a Slurm allocation):
 
 ```bash
 carts benchmarks run polybench/jacobi2d --size small \
-  --threads 8 --node-count 4 --launcher slurm \
+  --threads 8 --nodes 4 --launcher slurm \
   -o results/multi_rank/slurm_sanity_jacobi2d_4r_8t --trace
 ```
 
@@ -101,10 +101,17 @@ carts benchmarks run polybench/jacobi2d --size small \
 Run a tiny multi-rank job with counters enabled:
 
 ```bash
+# Using --counters (auto-creates results/counters/)
 carts benchmarks run polybench/jacobi2d --size small \
-  --threads 2 --node-count 2 --launcher ssh \
+  --threads 2 --nodes 2 --launcher ssh \
   --arts-config results/multi_rank/configs/arts_local_8r.cfg \
-  --counters=1 --counter-dir results/multi_rank/counters/sanity_jacobi2d_2r_2t \
+  --counters -o results/multi_rank/sanity_jacobi2d_2r_2t --trace
+
+# Or explicit counter directory:
+carts benchmarks run polybench/jacobi2d --size small \
+  --threads 2 --nodes 2 --launcher ssh \
+  --arts-config results/multi_rank/configs/arts_local_8r.cfg \
+  --counter-dir results/multi_rank/counters/sanity_jacobi2d_2r_2t \
   -o results/multi_rank/sanity_jacobi2d_2r_2t --trace
 ```
 
@@ -114,11 +121,13 @@ Quick check: you should see at least `n0_*.json` and `n1_*.json` in the counter 
 ls -1 results/multi_rank/counters/sanity_jacobi2d_2r_2t | head
 ```
 
+**Note**: The runner automatically kills any process holding the ARTS port (default: 34739) before each run, preventing port-in-use failures from lingering processes.
+
 If you only see `n0_...` files, re-check:
 - you passed an `--arts-config` that contains a valid `nodes=...` list (SSH mode), and
-- `--node-count` is `> 1`.
+- `--nodes` is `> 1`.
 
-Also note: the OpenMP baseline that `carts benchmarks run` executes is always **single-process / single-node**; only the CARTS/ARTS variant uses `--node-count`.
+Also note: the OpenMP baseline that `carts benchmarks run` executes is always **single-process / single-node**; only the CARTS/ARTS variant uses `--nodes`.
 
 ---
 
@@ -127,10 +136,10 @@ Also note: the OpenMP baseline that `carts benchmarks run` executes is always **
 **Goal**: Verify checksums remain consistent as you increase `nodeCount`.
 
 ```bash
-# Keep threads per rank small at first; scale node-count
+# Keep threads per rank small at first; scale nodes
 for n in 1 2 4; do
   carts benchmarks run polybench/jacobi2d --size small \
-    --threads 2 --node-count $n --launcher ssh \
+    --threads 2 --nodes $n --launcher ssh \
     --arts-config results/multi_rank/configs/arts_local_8r.cfg \
     -o results/multi_rank/correctness_jacobi2d_${n}r_2t
 done
@@ -150,7 +159,7 @@ Pick one compute-bound and one bandwidth-bound benchmark.
 # Fixed global problem size (large), fixed threads/rank, vary ranks
 for n in 1 2 4; do
   carts benchmarks run polybench/gemm --size large \
-    --threads 8 --node-count $n --launcher ssh \
+    --threads 8 --nodes $n --launcher ssh \
     --arts-config results/multi_rank/configs/arts_local_8r.cfg \
     -o results/multi_rank/gemm_strong_large_${n}r_8t --trace
 done
@@ -161,7 +170,7 @@ done
 ```bash
 for n in 1 2 4; do
   carts benchmarks run polybench/jacobi2d --size large \
-    --threads 8 --node-count $n --launcher ssh \
+    --threads 8 --nodes $n --launcher ssh \
     --arts-config results/multi_rank/configs/arts_local_8r.cfg \
     -o results/multi_rank/jacobi2d_strong_large_${n}r_8t --trace
 done
@@ -180,7 +189,7 @@ The runner’s weak scaling mode auto-adjusts compile-time size macros for many 
 ```bash
 for n in 1 2 4; do
   carts benchmarks run polybench/jacobi2d \
-    --threads 8 --node-count $n --launcher ssh \
+    --threads 8 --nodes $n --launcher ssh \
     --arts-config results/multi_rank/configs/arts_local_8r.cfg \
     --weak-scaling --base-size 512 \
     -o results/multi_rank/jacobi2d_weak_base512_${n}r_8t --trace
@@ -192,7 +201,7 @@ done
 ```bash
 for n in 1 2 4; do
   carts benchmarks run polybench/gemm \
-    --threads 8 --node-count $n --launcher ssh \
+    --threads 8 --nodes $n --launcher ssh \
     --arts-config results/multi_rank/configs/arts_local_8r.cfg \
     --weak-scaling --base-size 256 \
     -o results/multi_rank/gemm_weak_base256_${n}r_8t --trace
@@ -208,8 +217,8 @@ done
 ### 4A. Establish single-node OpenMP scaling (baseline)
 
 ```bash
-# OpenMP and ARTS will both run, but node-count=1 keeps this in shared memory.
-carts benchmarks run polybench/jacobi2d --size large --node-count 1 --launcher ssh \
+# OpenMP and ARTS will both run, but nodes=1 keeps this in shared memory.
+carts benchmarks run polybench/jacobi2d --size large --nodes 1 --launcher ssh \
   --arts-config results/multi_rank/configs/arts_local_8r.cfg \
   --threads 1,2,4,8,16 \
   -o results/multi_rank/wall_jacobi2d_openmp_vs_arts_1node
@@ -223,7 +232,7 @@ Interpretation:
 ```bash
 for n in 1 2 4; do
   carts benchmarks run polybench/jacobi2d --size large \
-    --threads 16 --node-count $n --launcher ssh \
+    --threads 16 --nodes $n --launcher ssh \
     --arts-config results/multi_rank/configs/arts_local_8r.cfg \
     -o results/multi_rank/wall_jacobi2d_${n}r_16t
 done
@@ -242,11 +251,20 @@ This is where multi-rank tuning differs most from single-rank; keep the heuristi
 - `docs/heuristics/multi_rank/db_granularity_and_ownership.md`
 
 ```bash
+# Using --counters for automatic counter directory:
 for n in 1 2 4; do
   carts benchmarks run polybench/jacobi2d --size large \
-    --threads 8 --node-count $n --launcher ssh \
+    --threads 8 --nodes $n --launcher ssh \
     --arts-config results/multi_rank/configs/arts_local_8r.cfg \
-    --counters=1 --counter-dir results/multi_rank/counters/jacobi2d_${n}r_8t \
+    --counters -o results/multi_rank/jacobi2d_counters_${n}r_8t
+done
+
+# Or with explicit --counter-dir for per-experiment separation:
+for n in 1 2 4; do
+  carts benchmarks run polybench/jacobi2d --size large \
+    --threads 8 --nodes $n --launcher ssh \
+    --arts-config results/multi_rank/configs/arts_local_8r.cfg \
+    --counter-dir results/multi_rank/counters/jacobi2d_${n}r_8t \
     -o results/multi_rank/jacobi2d_counters_${n}r_8t
 done
 ```
@@ -264,7 +282,7 @@ Counters to inspect (multi-rank oriented):
 ```bash
 for n in 1 2 4; do
   carts benchmarks run kastors-jacobi/jacobi-task-dep --size small \
-    --threads 8 --node-count $n --launcher ssh \
+    --threads 8 --nodes $n --launcher ssh \
     --arts-config results/multi_rank/configs/arts_local_8r.cfg \
     -o results/multi_rank/jacobi_taskdep_${n}r_8t --trace
 done
@@ -296,8 +314,7 @@ From counter files in `results/multi_rank/counters/*/`:
 ## Quick sanity check (run first)
 
 ```bash
-carts benchmarks run polybench/gemm --size small --threads 2 --node-count 2 --launcher ssh \
+carts benchmarks run polybench/gemm --size small --threads 2 --nodes 2 --launcher ssh \
   --arts-config results/multi_rank/configs/arts_local_8r.cfg \
-  --counters=1 --counter-dir results/multi_rank/counters/sanity_gemm_2r_2t \
-  -o results/multi_rank/sanity_gemm_2r_2t --trace
+  --counters -o results/multi_rank/sanity_gemm_2r_2t --trace
 ```

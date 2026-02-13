@@ -6,7 +6,7 @@ alwaysApply: false
 
 ## Primary Rule: Always Use `carts` Script
 
-**NEVER call underlying tools directly** (cgeist, carts-run, mlir-translate, clang). Always use the `carts` wrapper script for all operations.
+**NEVER call underlying tools directly** (cgeist, carts-compile, mlir-translate, clang). Always use the `carts` wrapper script for all operations.
 
 ## Why Use the Carts Script?
 
@@ -24,7 +24,7 @@ alwaysApply: false
 carts cgeist simple.cpp -std=c++17 -fopenmp -O0 -S > simple.mlir
 
 # Run ARTS transformations
-carts run simple.mlir --O3 --arts-opt --emit-llvm
+carts compile simple.mlir --O3 --arts-opt --emit-llvm
 
 # Convert MLIR to LLVM IR
 carts mlir-translate --mlir-to-llvmir simple.mlir > simple.ll
@@ -42,14 +42,14 @@ carts setup --add-to-path
 carts clean
 
 # Complete pipeline from C++ to executable
-carts execute simple.cpp -o simple
+carts compile simple.cpp -o simple
 ```
 
 ### DON'T: Call tools directly
 ```bash
 # Wrong - don't do this
 cgeist simple.cpp -std=c++17 -fopenmp -O0 -S
-carts-run simple.mlir --O3
+carts-compile simple.mlir --O3
 mlir-translate --mlir-to-llvmir simple.mlir
 clang simple.ll -larts -lomp -lrt -lpthread
 ```
@@ -60,14 +60,12 @@ clang simple.ll -larts -lomp -lrt -lpthread
 |---------|---------|-------|--------|
 | `carts build` | Build CARTS project | - | - |
 | `carts cgeist` | C++ to MLIR conversion | `.cpp` | `.mlir` |
-| `carts run` | ARTS transformations | `.mlir` | `.mlir` or `.ll` |
+| `carts compile` | Complete pipeline (compile + link) | `.cpp`, `.mlir`, or `.ll` | executable |
 | `carts mlir-translate` | MLIR to LLVM IR | `.mlir` | `.ll` |
-| `carts compile` | LLVM IR to executable | `.ll` | executable |
 | `carts benchmark` | Run benchmarks | - | results |
 | `carts report` | Generate reports | - | reports |
 | `carts setup` | Setup environment | - | - |
 | `carts clean` | Clean generated files | - | - |
-| `carts execute` | Complete pipeline | `.cpp` | executable |
 
 ## Docker Operations
 

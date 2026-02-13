@@ -139,7 +139,7 @@ docker exec -it arts-node-1 bash
 
 # Run a test using carts wrapper
 cd /opt/carts
-carts execute tests/test/parallel/parallel.c
+carts compile tests/test/parallel/parallel.c
 ./parallel
 ```
 
@@ -197,7 +197,7 @@ carts docker --update -f                # Force rebuild everything
 
 The `--run` command supports separating build-time arguments from runtime arguments:
 
-- **Build arguments** (before `--`): Passed to the `carts execute` command (compilation flags, debug options, etc.)
+- **Build arguments** (before `--`): Passed to the `carts compile` command (compilation flags, debug options, etc.)
 - **Runtime arguments** (after `--`): Passed to the actual binary execution (program input parameters)
 
 **Examples:**

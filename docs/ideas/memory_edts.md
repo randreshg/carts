@@ -379,17 +379,17 @@ arts.edt parallel (%elem_x_acq) {
 
 ```bash
 # Enable with auto heuristics (default)
-carts run input.mlir --memory-edt
+carts compile input.mlir --memory-edt
 
 # Force always/never
-carts run input.mlir --memory-edt --memory-edt-mode=always
-carts run input.mlir --memory-edt --memory-edt-mode=never
+carts compile input.mlir --memory-edt --memory-edt-mode=always
+carts compile input.mlir --memory-edt --memory-edt-mode=never
 
 # Only process annotated allocations
-carts run input.mlir --memory-edt --memory-edt-mode=annotated
+carts compile input.mlir --memory-edt --memory-edt-mode=annotated
 
 # Adjust cost threshold
-carts run input.mlir --memory-edt --memory-edt-cost-threshold=0.5
+carts compile input.mlir --memory-edt --memory-edt-cost-threshold=0.5
 ```
 
 ---
@@ -679,8 +679,8 @@ func.func @test_gather(%nodelist: memref<?x8xi32>, %x: memref<?xf64>) {
 
 ```bash
 # Test correctness: results must match non-transformed version
-carts run lulesh.mlir --memory-edt -o lulesh_medt.ll
-carts run lulesh.mlir --memory-edt-mode=never -o lulesh_baseline.ll
+carts compile lulesh.mlir --memory-edt -o lulesh_medt.ll
+carts compile lulesh.mlir --memory-edt-mode=never -o lulesh_baseline.ll
 
 # Run both and compare checksums
 ./lulesh_medt --verify
@@ -755,14 +755,14 @@ carts benchmarks run 3mm -- --memory-edt-mode=never
 
 ```bash
 # Dump Memory EDT decisions
-carts run input.mlir --memory-edt --memory-edt-enable-diagnostics 2>&1 | grep "H1.6"
+carts compile input.mlir --memory-edt --memory-edt-enable-diagnostics 2>&1 | grep "H1.6"
 
 # Visualize EDT graph with Memory EDTs
-carts run input.mlir --memory-edt --dump-edt-graph > edt_graph.dot
+carts compile input.mlir --memory-edt --dump-edt-graph > edt_graph.dot
 dot -Tpng edt_graph.dot -o edt_graph.png
 
 # Trace transformation
-carts run input.mlir --memory-edt --mlir-print-ir-after-all 2>&1 | less
+carts compile input.mlir --memory-edt --mlir-print-ir-after-all 2>&1 | less
 ```
 
 ### Test Files to Create

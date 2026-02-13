@@ -30,20 +30,6 @@ using namespace mlir::arts;
 
 namespace {
 
-static DbAccessPattern toDbAccessPattern(AccessPattern pattern) {
-  switch (pattern) {
-  case AccessPattern::Stencil:
-    return DbAccessPattern::stencil;
-  case AccessPattern::Indexed:
-    return DbAccessPattern::indexed;
-  case AccessPattern::Uniform:
-    return DbAccessPattern::uniform;
-  case AccessPattern::Unknown:
-    return DbAccessPattern::unknown;
-  }
-  return DbAccessPattern::unknown;
-}
-
 static void collectLoadInfo(Value value, DenseSet<Value> &loadedMemrefs,
                             bool &hasMul, bool &hasAdd,
                             DenseSet<Operation *> &visited) {
@@ -250,18 +236,11 @@ DbAnalysis::analyzeLoopDbAccessPatterns(ForOp forOp) {
       return;
     Operation *allocOp = rootAlloc->getDbAllocOp().getOperation();
 
-    DbAccessPattern combinedPattern = DbAccessPattern::unknown;
-    if (auto basePattern = getAcquireAccessPattern(acqNode->getDbAcquireOp())) {
-      DbAccessPattern depPattern = toDbAccessPattern(*basePattern);
-      combinedPattern = mergeDbAccessPattern(combinedPattern, depPattern);
-      if (depPattern == DbAccessPattern::stencil)
-        summary.hasStencilAccessHint = true;
-    }
-
     DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
     acqNode->collectAccessOperations(dbRefToMemOps);
 
     SmallVector<AccessIndexInfo, 16> accesses;
+    bool hasLoopAccess = false;
     for (auto &[dbRef, memOps] : dbRefToMemOps) {
       for (Operation *memOp : memOps) {
         Region *memRegion = memOp ? memOp->getParentRegion() : nullptr;
@@ -269,6 +248,7 @@ DbAnalysis::analyzeLoopDbAccessPatterns(ForOp forOp) {
           continue;
         if (memRegion != &forRegion && !forRegion.isAncestor(memRegion))
           continue;
+        hasLoopAccess = true;
 
         SmallVector<Value> indexChain =
             DatablockUtils::collectFullIndexChain(dbRef, memOp);
@@ -280,6 +260,11 @@ DbAnalysis::analyzeLoopDbAccessPatterns(ForOp forOp) {
         accesses.push_back(std::move(info));
       }
     }
+
+    if (!hasLoopAccess)
+      return;
+
+    DbAccessPattern combinedPattern = DbAccessPattern::unknown;
 
     if (!accesses.empty()) {
       AccessBoundsResult bounds =
@@ -597,17 +582,17 @@ DbAnalysis::getAllocAccessPattern(DbAllocOp alloc) {
   if (!alloc)
     return std::nullopt;
 
-  if (auto attrPattern = getDbAccessPattern(alloc.getOperation()))
-    return attrPattern;
+  std::optional<DbAccessPattern> attrPattern =
+      getDbAccessPattern(alloc.getOperation());
 
   func::FuncOp func = alloc->getParentOfType<func::FuncOp>();
   if (!func)
-    return std::nullopt;
+    return attrPattern;
 
   DbGraph &graph = getOrCreateGraph(func);
   DbAllocNode *node = graph.getDbAllocNode(alloc);
   if (!node)
-    return std::nullopt;
+    return attrPattern;
 
   AcquirePatternSummary summary = node->summarizeAcquirePatterns();
   if (summary.hasStencil)
@@ -616,5 +601,7 @@ DbAnalysis::getAllocAccessPattern(DbAllocOp alloc) {
     return DbAccessPattern::indexed;
   if (summary.hasUniform)
     return DbAccessPattern::uniform;
+  if (attrPattern)
+    return attrPattern;
   return DbAccessPattern::unknown;
 }

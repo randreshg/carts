@@ -18,8 +18,6 @@ import typer
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich.table import Table
-from rich.text import Text
-from rich import box
 import json
 
 # Import shared styles
@@ -410,12 +408,6 @@ class PlatformConfig:
 
 
 # ============================================================================
-# Rich Console Setup
-# ============================================================================
-# Console and print functions are imported from carts_styles
-
-
-# ============================================================================
 # Global State
 # ============================================================================
 
@@ -661,10 +653,10 @@ def build(
 
     result = run_subprocess(cmd, cwd=config.carts_dir, check=False)
 
-    # If polygeist was built, also rebuild carts-run
+    # If polygeist was built, also rebuild carts-compile
     if result.returncode == 0 and target == "polygeist":
-        print_step("Rebuilding carts-run after Polygeist update...")
-        cmd = ["make"] + make_vars + ["carts-run-only"]
+        print_step("Rebuilding carts-compile after Polygeist update...")
+        cmd = ["make"] + make_vars + ["carts-compile-only"]
         result = run_subprocess(cmd, cwd=config.carts_dir, check=False)
 
     if result.returncode == 0:
@@ -765,58 +757,235 @@ def clang(
 
 
 # ============================================================================
-# Run Command
+# MLIR-Translate Command
 # ============================================================================
 
-@app.command(name="run", context_settings={"allow_extra_args": True, "allow_interspersed_args": False})
-def run_cmd(
+@app.command(name="mlir-translate")
+def mlir_translate(
+    args: List[str] = typer.Argument(..., help="Arguments for mlir-translate"),
+):
+    """Run mlir-translate."""
+    config = get_config()
+
+    mlir_translate_bin = config.llvm_install_dir / "bin" / "mlir-translate"
+    cmd = [str(mlir_translate_bin)] + args
+
+    result = run_subprocess(cmd, check=False)
+    raise typer.Exit(result.returncode)
+
+
+# ============================================================================
+# Compile Command (unified)
+# ============================================================================
+
+@app.command(
+    name="compile",
+    context_settings={
+        "allow_extra_args": True,
+        "allow_interspersed_args": False,
+        "ignore_unknown_options": True,
+    },
+)
+def compile_cmd(
     ctx: typer.Context,
-    help_flag: bool = typer.Option(
-        False, "--help", "-h", is_eager=True, help="Show help for carts-run"),
-    input_file: Optional[Path] = typer.Argument(None, help="Input MLIR file"),
-    output: Optional[Path] = typer.Option(None, "-o", help="Output file"),
-    stop_at: Optional[str] = typer.Option(
-        None, "--stop-at", help="Stop at pipeline stage"),
+    input_file: Path = typer.Argument(..., help="Input file (.c/.cpp/.mlir/.ll)"),
+    output: Optional[Path] = typer.Option(
+        None, "-o", help="Output file or directory"),
+    optimize: bool = typer.Option(
+        False, "-O3", help="Enable O3 optimizations"),
+    debug: bool = typer.Option(False, "-g", help="Generate debug symbols"),
+    pipeline: Optional[str] = typer.Option(
+        None, "--pipeline",
+        help="Stop after pipeline stage (e.g., concurrency, edt-distribution)"),
     all_stages: bool = typer.Option(
         False, "--all-stages", help="Dump all pipeline stages"),
     emit_llvm: bool = typer.Option(
         False, "--emit-llvm", help="Emit LLVM IR output"),
     collect_metadata: bool = typer.Option(
         False, "--collect-metadata", help="Collect and export metadata"),
-    optimize: bool = typer.Option(
-        False, "--O3", help="Enable O3 optimizations"),
-    debug: bool = typer.Option(False, "-g", help="Enable debug info emission"),
+    partition_fallback: Optional[str] = typer.Option(
+        None, "--partition-fallback",
+        help="Partition fallback strategy (coarse, fine)"),
+    diagnose: bool = typer.Option(
+        False, "--diagnose", help="Export diagnostic information"),
+    diagnose_output: Optional[Path] = typer.Option(
+        None, "--diagnose-output", help="Output file for diagnostics"),
+    run_args: Optional[str] = typer.Option(
+        None, "--run-args", help="Extra arguments for carts-compile binary"),
+    compile_args: Optional[str] = typer.Option(
+        None, "--compile-args", help="Extra arguments for link step"),
 ):
-    """Run CARTS MLIR transformations."""
-    config = get_config()
-    carts_run_bin = config.carts_install_dir / "bin" / "carts-run"
+    """Unified compilation command.
 
-    # Pass --help through to carts-run binary to show MLIR options
-    if help_flag:
-        result = run_subprocess([str(carts_run_bin), "--help"], check=False)
-        raise typer.Exit(result.returncode)
+    Routes based on input file type:
 
-    # Also check ctx.args in case help comes after the input file
-    if ctx.args and ("--help" in ctx.args or "-h" in ctx.args):
-        result = run_subprocess([str(carts_run_bin), "--help"], check=False)
-        raise typer.Exit(result.returncode)
+      .c/.cpp  Full pipeline: C → MLIR → LLVM IR → executable
 
-    # input_file is required if not showing help
-    if input_file is None:
-        print_error("Input file is required")
+      .mlir    MLIR transformation pipeline via carts-compile binary
+
+      .ll      Link LLVM IR with ARTS runtime → executable
+
+    Use --pipeline <stage> to stop after a specific pipeline stage.
+    """
+    ext = input_file.suffix.lower()
+    if ext in (".c", ".cpp"):
+        _compile_from_c(ctx, input_file, output, optimize, debug, pipeline,
+                        all_stages, emit_llvm, collect_metadata,
+                        partition_fallback, diagnose, diagnose_output,
+                        run_args, compile_args)
+    elif ext == ".mlir":
+        _compile_from_mlir(ctx, input_file, output, optimize, debug, pipeline,
+                           all_stages, emit_llvm, collect_metadata)
+    elif ext == ".ll":
+        if pipeline:
+            print_error("--pipeline is not supported for .ll input (link-only)")
+            raise typer.Exit(1)
+        _compile_from_ll(ctx, input_file, output, debug)
+    else:
+        print_error(f"Unsupported file type: {ext}")
+        print_info("Supported types: .c, .cpp, .mlir, .ll")
         raise typer.Exit(1)
 
-    if all_stages:
-        # Handle --all-stages mode
-        _run_all_stages(config, input_file, output, ctx.args or [])
-        return
 
-    # Normal run
+# -----------------------------------------------------------------------------
+# Compile: .c/.cpp input (full pipeline)
+# -----------------------------------------------------------------------------
+
+def _compile_from_c(
+    ctx: typer.Context,
+    input_file: Path,
+    output: Optional[Path],
+    optimize: bool,
+    debug: bool,
+    pipeline: Optional[str],
+    all_stages: bool,
+    emit_llvm: bool,
+    collect_metadata: bool,
+    partition_fallback: Optional[str],
+    diagnose: bool,
+    diagnose_output: Optional[Path],
+    run_args_str: Optional[str],
+    compile_args_str: Optional[str],
+) -> None:
+    """Full pipeline for C/C++ input."""
+    config = get_config()
+
     if not input_file.is_file():
         print_error(f"Input file '{input_file}' not found")
         raise typer.Exit(1)
 
-    cmd = [str(carts_run_bin), str(input_file)]
+    base_name = input_file.stem
+    output_name = output if output else Path(f"{base_name}_arts")
+
+    # Parse extra args
+    extra_pipeline_args = run_args_str.split() if run_args_str else []
+    extra_link_args = compile_args_str.split() if compile_args_str else []
+    if partition_fallback:
+        extra_pipeline_args.append(f"--partition-fallback={partition_fallback}")
+
+    # Separate passthrough args into cgeist vs pipeline categories
+    cgeist_args: List[str] = []
+    pipeline_passthrough_args: List[str] = []
+
+    # Args that should go to carts-compile binary, not cgeist
+    pipeline_only_args = {
+        "--arts-config",
+        "--metadata-file",
+        "--concurrency",
+        "--concurrency-opt",
+        "--diagnose",
+        "--diagnose-output",
+        "--debug-only",
+        # Loop transforms (carts-compile flags)
+        "--loop-transforms-enable-matmul",
+        "--loop-transforms-enable-tiling",
+        "--loop-transforms-tile-j",
+        "--loop-transforms-min-trip-count",
+        # Partitioning options
+        "--partition-fallback",
+        "--distributed-db-ownership",
+        "--serial-edtify",
+    }
+
+    # Args with a separate value (not =)
+    value_args = {"--arts-config", "--metadata-file", "--debug-only"}
+
+    passthrough_optimize = False
+    passthrough_diagnose = False
+    passthrough_diagnose_output = None
+
+    args_iter = iter(ctx.args) if ctx.args else iter([])
+    for arg in args_iter:
+        if arg == "-O3":
+            passthrough_optimize = True
+        elif arg == "--diagnose":
+            passthrough_diagnose = True
+        elif arg == "--diagnose-output":
+            try:
+                passthrough_diagnose_output = Path(next(args_iter))
+            except StopIteration:
+                pass
+        else:
+            flag_name = arg.split("=", 1)[0]
+            if flag_name in pipeline_only_args:
+                pipeline_passthrough_args.append(arg)
+                if flag_name in value_args and "=" not in arg:
+                    try:
+                        pipeline_passthrough_args.append(next(args_iter))
+                    except StopIteration:
+                        pass
+            else:
+                cgeist_args.append(arg)
+
+    extra_pipeline_args.extend(pipeline_passthrough_args)
+
+    use_dual_mode = optimize or passthrough_optimize
+    use_diagnose = diagnose or passthrough_diagnose
+    final_diagnose_output = diagnose_output or passthrough_diagnose_output
+
+    if use_dual_mode:
+        _compile_c_dual(config, input_file, output_name, debug,
+                        extra_pipeline_args, extra_link_args, cgeist_args,
+                        use_diagnose, final_diagnose_output, pipeline)
+    else:
+        _compile_c_simple(config, input_file, output_name, debug,
+                          extra_pipeline_args, extra_link_args, cgeist_args,
+                          use_diagnose, final_diagnose_output, pipeline)
+
+
+# -----------------------------------------------------------------------------
+# Compile: .mlir input (MLIR pipeline)
+# -----------------------------------------------------------------------------
+
+def _compile_from_mlir(
+    ctx: typer.Context,
+    input_file: Path,
+    output: Optional[Path],
+    optimize: bool,
+    debug: bool,
+    pipeline: Optional[str],
+    all_stages: bool,
+    emit_llvm: bool,
+    collect_metadata: bool,
+) -> None:
+    """MLIR transformation pipeline."""
+    config = get_config()
+    carts_compile_bin = config.carts_install_dir / "bin" / "carts-compile"
+
+    # Pass --help through to carts-compile binary
+    if ctx.args and ("--help" in ctx.args or "-h" in ctx.args):
+        result = run_subprocess([str(carts_compile_bin), "--help"], check=False)
+        raise typer.Exit(result.returncode)
+
+    if all_stages:
+        _compile_all_stages(config, input_file, output, ctx.args or [])
+        return
+
+    if not input_file.is_file():
+        print_error(f"Input file '{input_file}' not found")
+        raise typer.Exit(1)
+
+    cmd = [str(carts_compile_bin), str(input_file)]
 
     if optimize:
         cmd.append("--O3")
@@ -826,11 +995,10 @@ def run_cmd(
         cmd.append("--collect-metadata")
     if debug:
         cmd.append("-g")
-    if stop_at:
-        cmd.append(f"--stop-at={stop_at}")
+    if pipeline:
+        cmd.append(f"--stop-at={pipeline}")
     if output:
         cmd.extend(["-o", str(output)])
-    # Pass through extra args (e.g., --metadata-file, --concurrency)
     if ctx.args:
         cmd.extend(ctx.args)
 
@@ -838,7 +1006,347 @@ def run_cmd(
     raise typer.Exit(result.returncode)
 
 
-def _run_all_stages(
+# -----------------------------------------------------------------------------
+# Compile: .ll input (link only)
+# -----------------------------------------------------------------------------
+
+def _compile_from_ll(
+    ctx: typer.Context,
+    input_file: Path,
+    output: Optional[Path],
+    debug: bool,
+) -> None:
+    """Link LLVM IR with ARTS runtime."""
+    config = get_config()
+
+    if not input_file.is_file():
+        print_error(f"Input file '{input_file}' not found")
+        raise typer.Exit(1)
+
+    if output is None:
+        print_error("-o <output> is required for .ll input")
+        raise typer.Exit(1)
+
+    cmd = _build_link_cmd(config, input_file, output, debug,
+                          ctx.args if ctx.args else [])
+
+    result = run_subprocess(cmd, check=False)
+    raise typer.Exit(result.returncode)
+
+
+# -----------------------------------------------------------------------------
+# Compile Pipeline Helpers
+# -----------------------------------------------------------------------------
+
+def _build_cgeist_cmd(
+    config: PlatformConfig,
+    input_file: Path,
+    std_flag: str,
+    passthrough_args: List[str],
+    with_openmp: bool = False,
+    with_debug_info: bool = False,
+) -> List[str]:
+    """Build cgeist (C-to-MLIR) command with standard flags."""
+    cmd = [str(config.polygeist_install_dir / "bin" / "cgeist")]
+    cmd.extend(config.include_flags)
+    cmd.extend(config.cgeist_sysroot_flags)
+    cmd.extend(["--raise-scf-to-affine", std_flag, "-O0", "-S",
+                 "-D_POSIX_C_SOURCE=199309L"])  # Required for clock_gettime
+    if with_openmp:
+        cmd.append("-fopenmp")
+    if with_debug_info:
+        cmd.append("--print-debug-info")
+    cmd.extend(passthrough_args)
+    cmd.append(str(input_file))
+    return cmd
+
+
+def _build_link_cmd(
+    config: PlatformConfig,
+    input_file: Path,
+    output_file: Path,
+    debug: bool,
+    extra_args: List[str],
+) -> List[str]:
+    """Build clang link command for linking with ARTS runtime."""
+    cmd = [str(config.llvm_install_dir / "bin" / "clang")]
+    cmd.extend(config.compile_flags)
+    cmd.extend(config.clang_sysroot_flags)
+    cmd.extend(config.compile_library_flags)
+    cmd.extend(config.linker_flags)
+    cmd.extend(config.compile_libraries)
+    cmd.append(str(input_file))
+    cmd.extend(["-o", str(output_file)])
+    if debug:
+        cmd.append("-g")
+    cmd.extend(extra_args)
+    return cmd
+
+
+def _compile_c_simple(
+    config: PlatformConfig,
+    input_file: Path,
+    output_name: Path,
+    debug: bool,
+    pipeline_args: List[str],
+    link_args: List[str],
+    passthrough_args: Optional[List[str]] = None,
+    diagnose: bool = False,
+    diagnose_output: Optional[Path] = None,
+    pipeline_stop: Optional[str] = None,
+) -> None:
+    """Simple pipeline: cgeist -> pipeline -> link.
+
+    When pipeline_stop is set, stops after the MLIR pipeline stage (skips link).
+    """
+    base_name = input_file.stem
+    extension = input_file.suffix
+    std_flag = "-std=c++17" if extension == ".cpp" else "-std=c17"
+    passthrough_args = passthrough_args or []
+    skip_link = pipeline_stop is not None
+
+    total_steps = 2 if skip_link else 3
+    step_label = f"/{total_steps}]"
+
+    print_header("CARTS Compile Pipeline")
+    console.print(f"Input:  [{Colors.INFO}]{input_file}[/{Colors.INFO}]")
+    if skip_link:
+        console.print(f"Stop:   [{Colors.WARNING}]{pipeline_stop}[/{Colors.WARNING}]")
+    else:
+        console.print(f"Output: [{Colors.INFO}]{output_name}[/{Colors.INFO}]")
+    console.print(f"Mode:   [{Colors.DIM}]Simple ({total_steps}-step)[/{Colors.DIM}]")
+    console.print()
+
+    carts_compile_bin = config.carts_install_dir / "bin" / "carts-compile"
+    mlir_file = Path(f"{base_name}.mlir")
+    ll_file = Path(f"{base_name}-arts.ll")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        # Step 1: Convert C/C++ to MLIR with OpenMP
+        task = progress.add_task(f"[1{step_label} Converting C to MLIR...", total=None)
+        cmd = _build_cgeist_cmd(
+            config, input_file, std_flag, passthrough_args, with_openmp=True)
+        if run_command_with_output(cmd, mlir_file) != 0:
+            print_error("Failed to convert C to MLIR")
+            raise typer.Exit(1)
+        progress.remove_task(task)
+        print_success(f"[1{step_label} {mlir_file}")
+
+        # Step 2: Apply ARTS transformations
+        task = progress.add_task(
+            f"[2{step_label} Applying ARTS transformations...", total=None)
+        cmd = [str(carts_compile_bin), str(mlir_file), "--O3"]
+        if not skip_link:
+            cmd.append("--emit-llvm")
+        if debug:
+            cmd.append("-g")
+        if diagnose:
+            cmd.append("--diagnose")
+            effective_diagnose_output = diagnose_output or Path(
+                f"{base_name}-diagnose.json")
+            cmd.extend(["--diagnose-output", str(effective_diagnose_output)])
+        if pipeline_stop:
+            cmd.append(f"--stop-at={pipeline_stop}")
+        cmd.extend(pipeline_args)
+
+        out_file = mlir_file.with_suffix(f".{pipeline_stop}.mlir") if skip_link else ll_file
+        if run_command_with_output(cmd, out_file) != 0:
+            print_error("Failed to apply ARTS transformations")
+            raise typer.Exit(1)
+        progress.remove_task(task)
+        print_success(f"[2{step_label} {out_file}")
+
+        if skip_link:
+            console.print()
+            console.print(Panel(
+                f"[{Colors.SUCCESS}]Pipeline output:[/{Colors.SUCCESS}] {out_file}\n"
+                f"[{Colors.DIM}]Stopped at: {pipeline_stop}[/{Colors.DIM}]",
+                title="Success",
+                border_style="green",
+            ))
+            return
+
+        # Step 3: Link with ARTS runtime
+        task = progress.add_task(
+            f"[3{step_label} Linking executable...", total=None)
+        cmd = _build_link_cmd(
+            config, ll_file, output_name, debug, link_args)
+        if run_subprocess(cmd, check=False).returncode != 0:
+            print_error("Failed to link executable")
+            raise typer.Exit(1)
+        progress.remove_task(task)
+        print_success(f"[3{step_label} {output_name}")
+
+    console.print()
+    console.print(Panel(
+        f"[{Colors.SUCCESS}]Generated:[/{Colors.SUCCESS}] {output_name}\n"
+        f"[{Colors.DIM}]MLIR: {mlir_file}[/{Colors.DIM}]\n"
+        f"[{Colors.DIM}]LLVM IR: {ll_file}[/{Colors.DIM}]",
+        title="Success",
+        border_style="green",
+    ))
+
+
+def _compile_c_dual(
+    config: PlatformConfig,
+    input_file: Path,
+    output_name: Path,
+    debug: bool,
+    pipeline_args: List[str],
+    link_args: List[str],
+    passthrough_args: Optional[List[str]] = None,
+    diagnose: bool = False,
+    diagnose_output: Optional[Path] = None,
+    pipeline_stop: Optional[str] = None,
+) -> None:
+    """Dual pipeline with metadata extraction.
+
+    Steps:
+    1. Sequential compilation (no OpenMP) - for metadata extraction
+    2. Collect metadata from sequential MLIR
+    3. Parallel compilation (with OpenMP) - for ARTS transformation
+    4. Apply ARTS transformations
+    5. Link final executable (skipped if pipeline_stop is set)
+    """
+    base_name = input_file.stem
+    extension = input_file.suffix
+    std_flag = "-std=c++17" if extension == ".cpp" else "-std=c17"
+    passthrough_args = passthrough_args or []
+    skip_link = pipeline_stop is not None
+
+    total_steps = 4 if skip_link else 5
+    step_label = f"/{total_steps}]"
+
+    print_header("CARTS Compile Pipeline")
+    console.print(f"Input:  [{Colors.INFO}]{input_file}[/{Colors.INFO}]")
+    if skip_link:
+        console.print(f"Stop:   [{Colors.WARNING}]{pipeline_stop}[/{Colors.WARNING}]")
+    else:
+        console.print(f"Output: [{Colors.INFO}]{output_name}[/{Colors.INFO}]")
+    console.print(
+        f"Mode:   [{Colors.WARNING}]Dual compilation (metadata extraction)[/{Colors.WARNING}]")
+    console.print()
+
+    carts_compile_bin = config.carts_install_dir / "bin" / "carts-compile"
+
+    metadata_args: List[str] = []
+    i = 0
+    while i < len(pipeline_args):
+        arg = pipeline_args[i]
+        if arg == "--arts-config":
+            metadata_args.append(arg)
+            if i + 1 < len(pipeline_args):
+                metadata_args.append(pipeline_args[i + 1])
+                i += 1
+        elif arg.startswith("--arts-config="):
+            metadata_args.append(arg)
+        i += 1
+
+    # Output file paths
+    seq_mlir = Path(f"{base_name}_seq.mlir")
+    metadata_mlir = Path(f"{base_name}_arts_metadata.mlir")
+    par_mlir = Path(f"{base_name}.mlir")
+    ll_file = Path(f"{base_name}-arts.ll")
+    metadata_json = Path(".carts-metadata.json")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        # Step 1: Sequential compilation (no OpenMP, with debug info for metadata)
+        task = progress.add_task(f"[1{step_label} Sequential compilation...", total=None)
+        cmd = _build_cgeist_cmd(config, input_file, std_flag, passthrough_args,
+                                with_openmp=False, with_debug_info=True)
+        if run_command_with_output(cmd, seq_mlir) != 0:
+            print_error("Failed sequential compilation")
+            raise typer.Exit(1)
+        progress.remove_task(task)
+        print_success(f"[1{step_label} {seq_mlir}")
+
+        # Step 2: Extract metadata from sequential MLIR
+        task = progress.add_task(f"[2{step_label} Collecting metadata...", total=None)
+        cmd = [str(carts_compile_bin), str(seq_mlir),
+               "--collect-metadata", "-o", str(metadata_mlir)]
+        cmd.extend(metadata_args)
+        if run_subprocess(cmd, check=False).returncode != 0:
+            print_error("Failed to collect metadata")
+            raise typer.Exit(1)
+        progress.remove_task(task)
+        if metadata_json.is_file():
+            print_success(f"[2{step_label} {metadata_json}")
+        else:
+            print_warning(f"[2{step_label} Metadata file not created")
+
+        # Step 3: Parallel compilation (with OpenMP for ARTS transformation)
+        task = progress.add_task(f"[3{step_label} Parallel compilation...", total=None)
+        cmd = _build_cgeist_cmd(config, input_file, std_flag, passthrough_args,
+                                with_openmp=True, with_debug_info=True)
+        if run_command_with_output(cmd, par_mlir) != 0:
+            print_error("Failed parallel compilation")
+            raise typer.Exit(1)
+        progress.remove_task(task)
+        print_success(f"[3{step_label} {par_mlir}")
+
+        # Step 4: Apply ARTS transformations
+        task = progress.add_task(f"[4{step_label} ARTS transformations...", total=None)
+        cmd = [str(carts_compile_bin), str(par_mlir), "--O3"]
+        if not skip_link:
+            cmd.append("--emit-llvm")
+        if debug:
+            cmd.append("-g")
+        if diagnose:
+            cmd.append("--diagnose")
+            effective_diagnose_output = diagnose_output or Path(
+                f"{base_name}-diagnose.json")
+            cmd.extend(["--diagnose-output", str(effective_diagnose_output)])
+        if pipeline_stop:
+            cmd.append(f"--stop-at={pipeline_stop}")
+        cmd.extend(pipeline_args)
+
+        out_file = par_mlir.with_suffix(f".{pipeline_stop}.mlir") if skip_link else ll_file
+        if run_command_with_output(cmd, out_file) != 0:
+            print_error("Failed ARTS transformations")
+            raise typer.Exit(1)
+        progress.remove_task(task)
+        print_success(f"[4{step_label} {out_file}")
+
+        if skip_link:
+            console.print()
+            console.print(Panel(
+                f"[{Colors.SUCCESS}]Pipeline output:[/{Colors.SUCCESS}] {out_file}\n"
+                f"[{Colors.DIM}]Stopped at: {pipeline_stop}[/{Colors.DIM}]",
+                title="Success",
+                border_style="green",
+            ))
+            return
+
+        # Step 5: Link with ARTS runtime
+        task = progress.add_task(f"[5{step_label} Final linking...", total=None)
+        cmd = _build_link_cmd(
+            config, ll_file, output_name, debug, link_args)
+        if run_subprocess(cmd, check=False).returncode != 0:
+            print_error("Failed final linking")
+            raise typer.Exit(1)
+        progress.remove_task(task)
+        print_success(f"[5{step_label} {output_name}")
+
+    console.print()
+    files_info = (
+        f"[{Colors.SUCCESS}]Generated:[/{Colors.SUCCESS}] {output_name}\n"
+        f"[{Colors.DIM}]Sequential: {seq_mlir}[/{Colors.DIM}]\n"
+        f"[{Colors.DIM}]Metadata: {metadata_json}[/{Colors.DIM}]\n"
+        f"[{Colors.DIM}]Parallel: {par_mlir}[/{Colors.DIM}]\n"
+        f"[{Colors.DIM}]LLVM IR: {ll_file}[/{Colors.DIM}]"
+    )
+    console.print(Panel(files_info, title="Success", border_style="green"))
+
+
+def _compile_all_stages(
     config: PlatformConfig,
     source_file: Path,
     output_dir: Optional[Path],
@@ -849,7 +1357,7 @@ def _run_all_stages(
         print_error(f"Input file '{source_file}' not found")
         raise typer.Exit(1)
 
-    carts_run_bin = config.carts_install_dir / "bin" / "carts-run"
+    carts_compile_bin = config.carts_install_dir / "bin" / "carts-compile"
 
     # Determine output directory
     out_dir = output_dir if output_dir else source_file.parent
@@ -871,7 +1379,7 @@ def _run_all_stages(
 
         # Find arts-config if present
         config_file = source_file.parent / "arts.cfg"
-        base_cmd = [str(carts_run_bin), str(source_file), "--O3"]
+        base_cmd = [str(carts_compile_bin), str(source_file), "--O3"]
         if config_file.is_file():
             base_cmd.extend(["--arts-config", str(config_file)])
 
@@ -899,450 +1407,6 @@ def _run_all_stages(
         progress.advance(task)
 
     print_success(f"Pipeline dumps written to {out_dir}")
-
-
-# ============================================================================
-# MLIR-Translate Command
-# ============================================================================
-
-@app.command(name="mlir-translate")
-def mlir_translate(
-    args: List[str] = typer.Argument(..., help="Arguments for mlir-translate"),
-):
-    """Run mlir-translate."""
-    config = get_config()
-
-    mlir_translate_bin = config.llvm_install_dir / "bin" / "mlir-translate"
-    cmd = [str(mlir_translate_bin)] + args
-
-    result = run_subprocess(cmd, check=False)
-    raise typer.Exit(result.returncode)
-
-
-# ============================================================================
-# Compile Command
-# ============================================================================
-
-@app.command(context_settings={"allow_extra_args": True, "allow_interspersed_args": False})
-def compile(
-    ctx: typer.Context,
-    input_file: Path = typer.Argument(..., help="Input LLVM IR file (.ll)"),
-    output: Path = typer.Option(..., "-o", help="Output executable"),
-    debug: bool = typer.Option(False, "-g", help="Embed debug symbols"),
-):
-    """Compile LLVM IR with ARTS runtime."""
-    config = get_config()
-
-    if not input_file.is_file():
-        print_error(f"Input file '{input_file}' not found")
-        raise typer.Exit(1)
-
-    clang_bin = config.llvm_install_dir / "bin" / "clang"
-    if not clang_bin.is_file():
-        print_error(f"LLVM clang not found at {clang_bin}")
-        raise typer.Exit(1)
-
-    # Build command
-    cmd = [str(clang_bin)]
-    cmd.extend(config.compile_flags)
-    cmd.extend(config.clang_sysroot_flags)
-    cmd.extend(config.compile_library_flags)
-    cmd.extend(config.linker_flags)
-    cmd.extend(config.compile_libraries)
-    cmd.append(str(input_file))
-    cmd.extend(["-o", str(output)])
-
-    if debug:
-        cmd.append("-g")
-
-    # Pass through extra args (e.g., -lm, -lpthread, etc.)
-    if ctx.args:
-        cmd.extend(ctx.args)
-
-    result = run_subprocess(cmd, check=False)
-    raise typer.Exit(result.returncode)
-
-
-# ============================================================================
-# Execute Command
-# ============================================================================
-
-@app.command(
-    context_settings={
-        "allow_extra_args": True,
-        "allow_interspersed_args": False,
-        "ignore_unknown_options": True,
-    }
-)
-def execute(
-    ctx: typer.Context,
-    input_file: Path = typer.Argument(..., help="Input C/C++ file"),
-    output: Optional[Path] = typer.Option(
-        None, "-o", help="Output executable"),
-    optimize: bool = typer.Option(
-        False, "-O3", help="Enable dual compilation mode"),
-    debug: bool = typer.Option(False, "-g", help="Generate debug symbols"),
-    partition_fallback: Optional[str] = typer.Option(
-        None,
-        "--partition-fallback",
-        help="Partition fallback strategy for carts run (coarse, block, elementwise)",
-    ),
-    diagnose: bool = typer.Option(
-        False, "--diagnose", help="Export diagnostic information"),
-    diagnose_output: Optional[Path] = typer.Option(
-        None, "--diagnose-output", help="Output file for diagnostics"),
-    run_args: Optional[str] = typer.Option(
-        None, "--run-args", help="Arguments for carts run"),
-    compile_args: Optional[str] = typer.Option(
-        None, "--compile-args", help="Arguments for carts compile"),
-):
-    """Complete pipeline: C++ -> executable."""
-    config = get_config()
-
-    if not input_file.is_file():
-        print_error(f"Input file '{input_file}' not found")
-        raise typer.Exit(1)
-
-    base_name = input_file.stem
-    extension = input_file.suffix
-
-    if extension not in (".cpp", ".c"):
-        print_error("Input file must be .cpp or .c")
-        raise typer.Exit(1)
-
-    output_name = output if output else Path(f"{base_name}_arts")
-
-    # Parse extra args - combine explicit args with pass-through args
-    extra_run_args = run_args.split() if run_args else []
-    extra_compile_args = compile_args.split() if compile_args else []
-    if partition_fallback:
-        extra_run_args.append(f"--partition-fallback={partition_fallback}")
-
-    # Separate passthrough args into two categories:
-    # - cgeist_args: Flags for cgeist C-to-MLIR frontend (e.g., -I, -D, -fopenmp)
-    # - run_passthrough_args: Flags for carts-run (e.g., --arts-config)
-    # This is needed because execute() calls both tools in sequence.
-    cgeist_args: List[str] = []
-    run_passthrough_args: List[str] = []
-
-    # Args that should go to carts-run, not cgeist
-    run_only_args = {
-        "--arts-config",
-        "--metadata-file",
-        "--concurrency",
-        "--concurrency-opt",
-        "--diagnose",
-        "--diagnose-output",
-        # Loop transforms (carts-run flags)
-        "--loop-transforms-enable-matmul",
-        "--loop-transforms-enable-tiling",
-        "--loop-transforms-tile-j",
-        "--loop-transforms-min-trip-count",
-        # Partitioning options
-        "--partition-fallback",
-        "--distributed-db-ownership",
-        "--serial-edtify",
-    }
-
-    # Check if -O3 or --diagnose is in passthrough args
-    passthrough_optimize = False
-    passthrough_diagnose = False
-    passthrough_diagnose_output = None
-
-    args_iter = iter(ctx.args) if ctx.args else iter([])
-    for arg in args_iter:
-        if arg == "-O3":
-            passthrough_optimize = True
-        elif arg == "--diagnose":
-            passthrough_diagnose = True
-        elif arg == "--diagnose-output":
-            try:
-                passthrough_diagnose_output = Path(next(args_iter))
-            except StopIteration:
-                pass
-        else:
-            # Support --flag=value forms for carts-run-only args.
-            flag_name = arg.split("=", 1)[0]
-            if flag_name in run_only_args:
-                run_passthrough_args.append(arg)
-                if flag_name in ("--arts-config", "--metadata-file") and "=" not in arg:
-                    try:
-                        run_passthrough_args.append(next(args_iter))
-                    except StopIteration:
-                        pass
-            elif arg in run_only_args:
-                run_passthrough_args.append(arg)
-                if arg in ("--arts-config", "--metadata-file"):
-                    try:
-                        run_passthrough_args.append(next(args_iter))
-                    except StopIteration:
-                        pass
-            else:
-                cgeist_args.append(arg)
-
-    # Merge run_passthrough_args into extra_run_args
-    extra_run_args.extend(run_passthrough_args)
-
-    # Combine typer options with passthrough args
-    use_dual_mode = optimize or passthrough_optimize
-    use_diagnose = diagnose or passthrough_diagnose
-    final_diagnose_output = diagnose_output or passthrough_diagnose_output
-
-    if use_dual_mode:
-        _execute_dual(config, input_file, output_name, debug,
-                      extra_run_args, extra_compile_args, cgeist_args,
-                      use_diagnose, final_diagnose_output)
-    else:
-        _execute_simple(config, input_file, output_name, debug, extra_run_args,
-                        extra_compile_args, cgeist_args, use_diagnose, final_diagnose_output)
-
-
-# -----------------------------------------------------------------------------
-# Execute Pipeline Helpers
-# -----------------------------------------------------------------------------
-
-def _build_cgeist_cmd(
-    config: PlatformConfig,
-    input_file: Path,
-    std_flag: str,
-    passthrough_args: List[str],
-    with_openmp: bool = False,
-    with_debug_info: bool = False,
-) -> List[str]:
-    """Build cgeist (C-to-MLIR) command with standard flags."""
-    cmd = [str(config.polygeist_install_dir / "bin" / "cgeist")]
-    cmd.extend(config.include_flags)
-    cmd.extend(config.cgeist_sysroot_flags)
-    cmd.extend(["--raise-scf-to-affine", std_flag, "-O0", "-S",
-                 "-D_POSIX_C_SOURCE=199309L"])  # Required for clock_gettime
-    if with_openmp:
-        cmd.append("-fopenmp")
-    if with_debug_info:
-        cmd.append("--print-debug-info")
-    cmd.extend(passthrough_args)
-    cmd.append(str(input_file))
-    return cmd
-
-
-def _build_compile_cmd(
-    config: PlatformConfig,
-    input_file: Path,
-    output_file: Path,
-    debug: bool,
-    extra_args: List[str],
-) -> List[str]:
-    """Build clang compile command for linking with ARTS runtime."""
-    cmd = [str(config.llvm_install_dir / "bin" / "clang")]
-    cmd.extend(config.compile_flags)
-    cmd.extend(config.clang_sysroot_flags)
-    cmd.extend(config.compile_library_flags)
-    cmd.extend(config.linker_flags)
-    cmd.extend(config.compile_libraries)
-    cmd.append(str(input_file))
-    cmd.extend(["-o", str(output_file)])
-    if debug:
-        cmd.append("-g")
-    cmd.extend(extra_args)
-    return cmd
-
-
-def _execute_simple(
-    config: PlatformConfig,
-    input_file: Path,
-    output_name: Path,
-    debug: bool,
-    run_args: List[str],
-    compile_args: List[str],
-    passthrough_args: Optional[List[str]] = None,
-    diagnose: bool = False,
-    diagnose_output: Optional[Path] = None,
-) -> None:
-    """Simple 3-step pipeline: cgeist -> run -> compile."""
-    base_name = input_file.stem
-    extension = input_file.suffix
-    std_flag = "-std=c++17" if extension == ".cpp" else "-std=c17"
-    passthrough_args = passthrough_args or []
-
-    print_header("CARTS Execute Pipeline")
-    console.print(f"Input:  [{Colors.INFO}]{input_file}[/{Colors.INFO}]")
-    console.print(f"Output: [{Colors.INFO}]{output_name}[/{Colors.INFO}]")
-    console.print(f"Mode:   [{Colors.DIM}]Simple (3-step)[/{Colors.DIM}]")
-    console.print()
-
-    carts_run_bin = config.carts_install_dir / "bin" / "carts-run"
-    mlir_file = Path(f"{base_name}.mlir")
-    ll_file = Path(f"{base_name}-arts.ll")
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-    ) as progress:
-        # Step 1: Convert C/C++ to MLIR with OpenMP
-        task = progress.add_task("[1/3] Converting C++ to MLIR...", total=None)
-        cmd = _build_cgeist_cmd(
-            config, input_file, std_flag, passthrough_args, with_openmp=True)
-        if run_command_with_output(cmd, mlir_file) != 0:
-            print_error("Failed to convert C++ to MLIR")
-            raise typer.Exit(1)
-        progress.remove_task(task)
-        print_success(f"[1/3] {mlir_file}")
-
-        # Step 2: Apply ARTS transformations
-        task = progress.add_task(
-            "[2/3] Applying ARTS transformations...", total=None)
-        cmd = [str(carts_run_bin), str(mlir_file), "--O3", "--emit-llvm"]
-        if debug:
-            cmd.append("-g")
-        if diagnose:
-            cmd.append("--diagnose")
-            # When diagnose is enabled without explicit output, use default file
-            effective_diagnose_output = diagnose_output or Path(
-                f"{base_name}-diagnose.json")
-            cmd.extend(["--diagnose-output", str(effective_diagnose_output)])
-        cmd.extend(run_args)
-        if run_command_with_output(cmd, ll_file) != 0:
-            print_error("Failed to apply ARTS transformations")
-            raise typer.Exit(1)
-        progress.remove_task(task)
-        print_success(f"[2/3] {ll_file}")
-
-        # Step 3: Link with ARTS runtime
-        task = progress.add_task(
-            "[3/3] Compiling to executable...", total=None)
-        cmd = _build_compile_cmd(
-            config, ll_file, output_name, debug, compile_args)
-        if run_subprocess(cmd, check=False).returncode != 0:
-            print_error("Failed to compile to executable")
-            raise typer.Exit(1)
-        progress.remove_task(task)
-        print_success(f"[3/3] {output_name}")
-
-    console.print()
-    console.print(Panel(
-        f"[{Colors.SUCCESS}]Generated:[/{Colors.SUCCESS}] {output_name}\n"
-        f"[{Colors.DIM}]MLIR: {mlir_file}[/{Colors.DIM}]\n"
-        f"[{Colors.DIM}]LLVM IR: {ll_file}[/{Colors.DIM}]",
-        title="Success",
-        border_style="green",
-    ))
-
-
-def _execute_dual(
-    config: PlatformConfig,
-    input_file: Path,
-    output_name: Path,
-    debug: bool,
-    run_args: List[str],
-    compile_args: List[str],
-    passthrough_args: Optional[List[str]] = None,
-    diagnose: bool = False,
-    diagnose_output: Optional[Path] = None,
-) -> None:
-    """Dual 5-step pipeline with metadata extraction.
-
-    Steps:
-    1. Sequential compilation (no OpenMP) - for metadata extraction
-    2. Collect metadata from sequential MLIR
-    3. Parallel compilation (with OpenMP) - for ARTS transformation
-    4. Apply ARTS transformations
-    5. Link final executable
-    """
-    base_name = input_file.stem
-    extension = input_file.suffix
-    std_flag = "-std=c++17" if extension == ".cpp" else "-std=c17"
-    passthrough_args = passthrough_args or []
-
-    print_header("CARTS Execute Pipeline")
-    console.print(f"Input:  [{Colors.INFO}]{input_file}[/{Colors.INFO}]")
-    console.print(f"Output: [{Colors.INFO}]{output_name}[/{Colors.INFO}]")
-    console.print(
-        f"Mode:   [{Colors.WARNING}]Dual compilation (metadata extraction)[/{Colors.WARNING}]")
-    console.print()
-
-    carts_run_bin = config.carts_install_dir / "bin" / "carts-run"
-
-    # Output file paths
-    seq_mlir = Path(f"{base_name}_seq.mlir")
-    metadata_mlir = Path(f"{base_name}_arts_metadata.mlir")
-    par_mlir = Path(f"{base_name}.mlir")
-    ll_file = Path(f"{base_name}-arts.ll")
-    metadata_json = Path(".carts-metadata.json")
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-    ) as progress:
-        # Step 1: Sequential compilation (no OpenMP, with debug info for metadata)
-        task = progress.add_task("[1/5] Sequential compilation...", total=None)
-        cmd = _build_cgeist_cmd(config, input_file, std_flag, passthrough_args,
-                                with_openmp=False, with_debug_info=True)
-        if run_command_with_output(cmd, seq_mlir) != 0:
-            print_error("Failed sequential compilation")
-            raise typer.Exit(1)
-        progress.remove_task(task)
-        print_success(f"[1/5] {seq_mlir}")
-
-        # Step 2: Extract metadata from sequential MLIR
-        task = progress.add_task("[2/5] Collecting metadata...", total=None)
-        cmd = [str(carts_run_bin), str(seq_mlir),
-               "--collect-metadata", "-o", str(metadata_mlir)]
-        if run_subprocess(cmd, check=False).returncode != 0:
-            print_error("Failed to collect metadata")
-            raise typer.Exit(1)
-        progress.remove_task(task)
-        if metadata_json.is_file():
-            print_success(f"[2/5] {metadata_json}")
-        else:
-            print_warning("[2/5] Metadata file not created")
-
-        # Step 3: Parallel compilation (with OpenMP for ARTS transformation)
-        task = progress.add_task("[3/5] Parallel compilation...", total=None)
-        cmd = _build_cgeist_cmd(config, input_file, std_flag, passthrough_args,
-                                with_openmp=True, with_debug_info=True)
-        if run_command_with_output(cmd, par_mlir) != 0:
-            print_error("Failed parallel compilation")
-            raise typer.Exit(1)
-        progress.remove_task(task)
-        print_success(f"[3/5] {par_mlir}")
-
-        # Step 4: Apply ARTS transformations
-        task = progress.add_task("[4/5] ARTS transformations...", total=None)
-        cmd = [str(carts_run_bin), str(par_mlir), "--O3", "--emit-llvm"]
-        if debug:
-            cmd.append("-g")
-        if diagnose:
-            cmd.append("--diagnose")
-            effective_diagnose_output = diagnose_output or Path(
-                f"{base_name}-diagnose.json")
-            cmd.extend(["--diagnose-output", str(effective_diagnose_output)])
-        cmd.extend(run_args)
-        if run_command_with_output(cmd, ll_file) != 0:
-            print_error("Failed ARTS transformations")
-            raise typer.Exit(1)
-        progress.remove_task(task)
-        print_success(f"[4/5] {ll_file}")
-
-        # Step 5: Link with ARTS runtime
-        task = progress.add_task("[5/5] Final compilation...", total=None)
-        cmd = _build_compile_cmd(
-            config, ll_file, output_name, debug, compile_args)
-        if run_subprocess(cmd, check=False).returncode != 0:
-            print_error("Failed final compilation")
-            raise typer.Exit(1)
-        progress.remove_task(task)
-        print_success(f"[5/5] {output_name}")
-
-    console.print()
-    files_info = (
-        f"[{Colors.SUCCESS}]Generated:[/{Colors.SUCCESS}] {output_name}\n"
-        f"[{Colors.DIM}]Sequential: {seq_mlir}[/{Colors.DIM}]\n"
-        f"[{Colors.DIM}]Metadata: {metadata_json}[/{Colors.DIM}]\n"
-        f"[{Colors.DIM}]Parallel: {par_mlir}[/{Colors.DIM}]\n"
-        f"[{Colors.DIM}]LLVM IR: {ll_file}[/{Colors.DIM}]"
-    )
-    console.print(Panel(files_info, title="Success", border_style="green"))
 
 
 # ============================================================================
@@ -1392,93 +1456,6 @@ def benchmarks(
 
     result = run_subprocess(cmd, check=False)
     raise typer.Exit(result.returncode)
-
-
-# ============================================================================
-# Examples Command
-# ============================================================================
-
-@app.command(
-    context_settings={
-        "allow_extra_args": True,
-        "allow_interspersed_args": False,
-        "ignore_unknown_options": True,
-    }
-)
-def examples(
-    ctx: typer.Context,
-    help_flag: bool = typer.Option(
-        False, "--help", "-h", is_eager=True, help="Show help"),
-    clean: bool = typer.Option(
-        False, "--clean", help="Clean all example artifacts"),
-):
-    """Run and manage CARTS examples.
-
-    Commands: list, run, clean
-
-    Examples:
-      carts examples list                    # List all available examples
-      carts examples run <name>              # Run a specific example
-      carts examples run --all              # Run all examples
-      carts examples --clean                 # Clean all example artifacts
-      carts examples clean [name]            # Clean example artifacts
-      carts examples clean --all            # Clean all examples
-    """
-    config = get_config()
-    examples_runner = config.carts_dir / "tools" / "examples_runner.py"
-
-    if not examples_runner.is_file():
-        print_error(f"Examples runner not found at {examples_runner}")
-        raise typer.Exit(1)
-
-    cmd = [sys.executable, str(examples_runner)]
-
-    # Handle --clean flag
-    if clean:
-        cmd.extend(["clean", "--all"])
-        result = run_subprocess(cmd, check=False)
-        raise typer.Exit(result.returncode)
-
-    # Pass --help to the examples runner to show its commands
-    if help_flag:
-        cmd.append("--help")
-
-    # Pass through all extra args (e.g., run, list, --verbose, etc.)
-    if ctx.args:
-        cmd.extend(ctx.args)
-
-    result = run_subprocess(cmd, check=False)
-    raise typer.Exit(result.returncode)
-
-
-def _get_poetry_python(script_dir: Path) -> Optional[str]:
-    """Get the poetry Python executable path."""
-    # First check if dependencies are available in system Python
-    try:
-        result = subprocess.run(
-            ["python3", "-c", "import typer, rich"],
-            capture_output=True,
-            check=True,
-        )
-        return "python3"
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pass
-
-    # Try poetry
-    try:
-        result = subprocess.run(
-            ["poetry", "-C", str(script_dir), "env", "info", "-e"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        poetry_python = result.stdout.strip()
-        if Path(poetry_python).is_file():
-            return poetry_python
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pass
-
-    return None
 
 
 # ============================================================================
@@ -1598,7 +1575,7 @@ def _resolve_lit_tool_paths(config: PlatformConfig) -> Tuple[Path, Path, Path]:
     return (
         config.llvm_install_dir / "bin" / "llvm-lit",
         config.llvm_install_dir / "bin" / "FileCheck",
-        config.carts_install_dir / "bin" / "carts-run",
+        config.carts_install_dir / "bin" / "carts-compile",
     )
 
 
@@ -1662,50 +1639,60 @@ def _run_lit_suite(suite: str, verbose_tests: bool) -> None:
         print_error(f"Tests directory not found at {tests_dir}")
         raise typer.Exit(1)
 
-    llvm_lit, filecheck, carts_run = _resolve_lit_tool_paths(config)
+    llvm_lit, filecheck, carts_compile = _resolve_lit_tool_paths(config)
 
     missing = []
     if not llvm_lit.is_file():
         missing.append(f"llvm-lit ({llvm_lit})")
     if not filecheck.is_file():
         missing.append(f"FileCheck ({filecheck})")
-    if not carts_run.is_file():
-        missing.append(f"carts-run ({carts_run})")
+    if not carts_compile.is_file():
+        missing.append(f"carts-compile ({carts_compile})")
 
     if missing:
         print_error("Required test tools not found:")
         for tool in missing:
             console.print(f"  - {tool}")
         print_info(
-            "Run `carts build` to install llvm-lit/FileCheck/carts-run under .install/."
+            "Run `carts build` to install llvm-lit/FileCheck/carts-compile under .install/."
         )
         raise typer.Exit(1)
 
-    if suite == "all":
-        test_path = tests_dir
-    elif suite == "contracts":
-        test_path = tests_dir / "contracts"
-    elif suite == "arts":
-        test_path = tests_dir / "arts"
+    suite_aliases = {"arts": "examples"}
+    effective_suite = suite_aliases.get(suite, suite)
+    if suite == "arts":
+        print_info("Suite 'arts' is deprecated; using 'examples'.")
+
+    if effective_suite == "all":
+        # Keep "all" deterministic and green by running maintained lit suites.
+        test_paths = [tests_dir / "contracts"]
+    elif effective_suite == "contracts":
+        test_paths = [tests_dir / "contracts"]
+    elif effective_suite == "examples":
+        test_paths = [tests_dir / "examples"]
     else:
         print_error(f"Unknown test suite '{suite}'")
-        print_info("Available suites: all, contracts, arts")
+        print_info("Available suites: all, contracts, examples")
         raise typer.Exit(1)
 
-    if not test_path.is_dir():
-        print_error(f"Test path not found: {test_path}")
-        raise typer.Exit(1)
+    for test_path in test_paths:
+        if not test_path.is_dir():
+            print_error(f"Test path not found: {test_path}")
+            raise typer.Exit(1)
 
     _setup_lit_pythonpath(config)
 
-    console.print(f"Test suite: [{Colors.INFO}]{suite}[/{Colors.INFO}]")
-    console.print(f"Test path: [dim]{test_path}[/dim]")
+    console.print(
+        f"Test suite: [{Colors.INFO}]{effective_suite}[/{Colors.INFO}]")
+    for path in test_paths:
+        console.print(f"Test path: [dim]{path}[/dim]")
     console.print()
 
     cmd = [str(llvm_lit)]
     if verbose_tests:
         cmd.append("-v")
-    cmd.append(str(test_path))
+    for path in test_paths:
+        cmd.append(str(path))
 
     result = run_subprocess(cmd, check=False)
     console.print()
@@ -1716,26 +1703,52 @@ def _run_lit_suite(suite: str, verbose_tests: bool) -> None:
     raise typer.Exit(result.returncode)
 
 
+def _run_examples() -> None:
+    """Run the full example compilation+execution test suite."""
+    config = get_config()
+    examples_runner = config.carts_dir / "tools" / "examples_runner.py"
+
+    if not examples_runner.is_file():
+        print_error(f"Examples runner not found at {examples_runner}")
+        raise typer.Exit(1)
+
+    cmd = [sys.executable, str(examples_runner), "run", "--all"]
+    result = run_subprocess(cmd, check=False)
+    raise typer.Exit(result.returncode)
+
+
 @app.command(name="test")
 def test(
     suite: str = typer.Option("all", "--suite", "-s",
-                              help="Test suite: all, contracts, arts"),
+                              help="Test suite: all, contracts, examples"),
     verbose_tests: bool = typer.Option(
         False, "-v", help="Verbose test output"),
+    examples: bool = typer.Option(
+        False, "--examples",
+        help="Run full example compilation+execution test suite"),
 ):
     """Run CARTS test suite using llvm-lit."""
-    _run_lit_suite(suite=suite, verbose_tests=verbose_tests)
+    if examples:
+        _run_examples()
+    else:
+        _run_lit_suite(suite=suite, verbose_tests=verbose_tests)
 
 
 @app.command(name="check")
 def check(
     suite: str = typer.Option("all", "--suite", "-s",
-                              help="Test suite: all, contracts, arts"),
+                              help="Test suite: all, contracts, examples"),
     verbose_tests: bool = typer.Option(
         False, "-v", help="Verbose test output"),
+    examples: bool = typer.Option(
+        False, "--examples",
+        help="Run full example compilation+execution test suite"),
 ):
     """Alias for `carts test`."""
-    _run_lit_suite(suite=suite, verbose_tests=verbose_tests)
+    if examples:
+        _run_examples()
+    else:
+        _run_lit_suite(suite=suite, verbose_tests=verbose_tests)
 
 
 def _is_format_candidate(path: Path) -> bool:

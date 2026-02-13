@@ -16,7 +16,7 @@ python3 tools/setup/carts-setup.py
 carts build
 
 # Complete pipeline: C++ to executable
-carts execute simple.cpp -o simple
+carts compile simple.cpp -o simple
 
 # Run tests
 carts test
@@ -29,7 +29,7 @@ carts format
 
 - Use `carts test` (or `carts check`) to run the lit test suites under `tests/`.
 - The lit configuration (`tests/lit.cfg.py`) resolves tools from `.install/`, so re-run `carts build` whenever you modify the compiler to keep the installed toolchain fresh.
-- `carts test` validates `llvm-lit`, `FileCheck`, and `carts-run` from `.install/`.
+- `carts test` validates `llvm-lit`, `FileCheck`, and `carts-compile` from `.install/`.
 
 ---
 ## Common Commands
@@ -42,10 +42,10 @@ carts build --arts --debug   # Build ARTS with debug logging
 
 # Compilation pipeline
 carts cgeist file.c -fopenmp -S > file.mlir     # C to MLIR
-carts run file.mlir --arts-config arts.cfg      # Apply CARTS passes
-carts run file.mlir --stop-at=edt-distribution  # Stop after strategy selection + ForLowering
-carts compile file.ll -o file                   # LLVM IR to executable
-carts execute file.c -o file                    # All-in-one
+carts compile file.mlir --arts-config arts.cfg      # Apply CARTS passes
+carts compile file.mlir --pipeline edt-distribution # Stop after strategy selection + ForLowering
+carts compile file.ll -o file                       # LLVM IR to executable
+carts compile file.c -o file                        # All-in-one
 
 # Testing
 carts test                   # Run all tests
@@ -130,7 +130,7 @@ Output includes one file per pipeline stage, e.g.
 
 ```bash
 export CARTS_VERBOSE=1
-carts execute example.c -o example
+carts compile example.c -o example
 ```
 
 ### Runtime debugging

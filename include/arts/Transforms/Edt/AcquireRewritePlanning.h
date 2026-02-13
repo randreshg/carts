@@ -24,6 +24,7 @@ struct AcquireRewritePlanningInput {
   Value rootPtr;
 
   DistributionKind distributionKind = DistributionKind::Flat;
+  std::optional<EdtDistributionPattern> distributionPattern;
   std::optional<Tiling2DWorkerGrid> tiling2DGrid;
 
   Value acquireOffset;

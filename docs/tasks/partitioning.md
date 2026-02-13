@@ -35,7 +35,7 @@ Add `--partition-fallback={coarse,fine}` option to control behavior:
 
 ### Phase 1: Add CLI Option
 
-**File**: `tools/run/carts-run.cpp`
+**File**: `tools/run/carts-compile.cpp`
 
 Add command-line option:
 
@@ -71,7 +71,7 @@ def DbPartitioning : Pass<"db-partitioning", "mlir::ModuleOp"> {
 
 ### Phase 3: Pass Option Through Pipeline
 
-**File**: `tools/run/carts-run.cpp`
+**File**: `tools/run/carts-compile.cpp`
 
 Update `setupConcurrencyOpt()` to pass option:
 
@@ -152,7 +152,7 @@ AcquirePatternSummary DbAllocNode::summarizeAcquirePatterns() const {
 
 | File | Change |
 |------|--------|
-| `tools/run/carts-run.cpp` | Add `--partition-fallback` CLI option |
+| `tools/run/carts-compile.cpp` | Add `--partition-fallback` CLI option |
 | `include/arts/Passes/ArtsPasses.td` | Add `fine-grained-fallback` pass option |
 | `include/arts/Passes/ArtsPasses.h` | Update `createDbPartitioningPass()` signature |
 | `lib/arts/Passes/Optimizations/DbPartitioning.cpp` | Accept and store fallback option |
@@ -195,10 +195,10 @@ carts benchmarks run lulesh --size small --verify -- --partition-fallback=fine
 
 ```bash
 # Coarse (default)
-carts run lulesh.mlir --concurrency-opt 2>&1 | grep "arts.partition" | sort | uniq -c
+carts compile lulesh.mlir --concurrency-opt 2>&1 | grep "arts.partition" | sort | uniq -c
 
 # Fine-grained
-carts run lulesh.mlir --concurrency-opt --partition-fallback=fine 2>&1 | grep "arts.partition" | sort | uniq -c
+carts compile lulesh.mlir --concurrency-opt --partition-fallback=fine 2>&1 | grep "arts.partition" | sort | uniq -c
 ```
 
 ### Step 6: Run Full Benchmark Suite (both modes)

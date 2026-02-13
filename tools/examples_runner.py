@@ -268,7 +268,7 @@ def run_carts_execute(
     config_file: Optional[Path] = None,
 ) -> Tuple[bool, float, str]:
     """
-    Run carts execute -O3 for an example.
+    Run carts compile -O3 for an example.
 
     Returns: (success, duration_seconds, output)
     """
@@ -283,9 +283,9 @@ def run_carts_execute(
 
     # Build command
     source_name = example.source_file.name
-    cmd = [str(carts_cli), "execute", source_name, "-O3"]
+    cmd = [str(carts_cli), "compile", source_name, "-O3"]
 
-    # Pass config file to carts-run for compile-time abstract machine config
+    # Pass config file to carts-compile for compile-time abstract machine config
     if config_file:
         config_path = config_file.resolve()
         if config_path.is_file():
@@ -455,7 +455,7 @@ def run_single_example(
             run_duration=0.0,
             exit_code=-1,
             output=build_output,
-            note="carts execute failed",
+            note="carts compile failed",
         )
 
     # Step 2: Run
