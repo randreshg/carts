@@ -80,15 +80,12 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
       info.getIndices().empty() ? Value() : info.getIndices().front();
 
   ARTS_DEBUG("DbStencilRewriter::transformAcquire");
-  ARTS_DEBUG("  acquire mode=" << static_cast<int>(acquire.getMode())
-                               << ", partition mode="
-                               << static_cast<int>(info.partitionInfo.mode)
-                               << ", offsets="
-                               << info.partitionInfo.offsets.size()
-                               << ", sizes="
-                               << info.partitionInfo.sizes.size()
-                               << ", indices="
-                               << info.partitionInfo.indices.size());
+  ARTS_DEBUG("  acquire mode="
+             << static_cast<int>(acquire.getMode())
+             << ", partition mode=" << static_cast<int>(info.partitionInfo.mode)
+             << ", offsets=" << info.partitionInfo.offsets.size()
+             << ", sizes=" << info.partitionInfo.sizes.size()
+             << ", indices=" << info.partitionInfo.indices.size());
 
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPoint(acquire);
@@ -145,25 +142,21 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   Value planBlockSize = plan.getBlockSize(0) ? plan.getBlockSize(0) : one;
   planBlockSize = builder.create<arith::MaxUIOp>(loc, planBlockSize, one);
   ARTS_DEBUG("  baseOffset=" << baseOffset << ", blockBaseOffset="
-                              << blockBaseOffset
-                              << ", elemOffset=" << elemOffset
-                              << ", planBlockSize=" << planBlockSize);
+                             << blockBaseOffset << ", elemOffset=" << elemOffset
+                             << ", planBlockSize=" << planBlockSize);
 
   /// Mixed stencil mode: only read-only stencil acquires should use ESD
   /// 3-buffer lowering. Non-stencil or write-capable acquires are lowered via
   /// regular block semantics over the same block-partitioned allocation.
-  bool useStencilEsd =
-      info.partitionInfo.mode == PartitionMode::stencil &&
-      acquire.getMode() == ArtsMode::in && plan.stencilInfo &&
-      plan.stencilInfo->hasHalo();
+  bool useStencilEsd = info.partitionInfo.mode == PartitionMode::stencil &&
+                       acquire.getMode() == ArtsMode::in && plan.stencilInfo &&
+                       plan.stencilInfo->hasHalo();
   int64_t haloLeftVal = plan.stencilInfo ? plan.stencilInfo->haloLeft : 0;
   int64_t haloRightVal = plan.stencilInfo ? plan.stencilInfo->haloRight : 0;
-  ARTS_DEBUG("  initial ESD eligibility=" << useStencilEsd
-                                          << " (hasHalo="
-                                          << (plan.stencilInfo
-                                                  ? plan.stencilInfo->hasHalo()
-                                                  : false)
-                                          << ")");
+  ARTS_DEBUG("  initial ESD eligibility="
+             << useStencilEsd << " (hasHalo="
+             << (plan.stencilInfo ? plan.stencilInfo->hasHalo() : false)
+             << ")");
 
   if (useStencilEsd) {
     /// ESD 3-buffer lowering currently supports one owned DB block per task.
@@ -205,9 +198,8 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
     if (!singleBlock && isBoundedByBlock(ownedSpan, planBlockSize))
       singleBlock = true;
 
-    ARTS_DEBUG("  ESD single-block check: singleBlock=" << singleBlock
-                                                        << ", ownedSpan="
-                                                        << ownedSpan);
+    ARTS_DEBUG("  ESD single-block check: singleBlock="
+               << singleBlock << ", ownedSpan=" << ownedSpan);
     useStencilEsd = singleBlock;
   }
 
@@ -230,7 +222,8 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   /// then map to block space.
   Value blockIdxBase = blockBaseOffset;
   if (haloLeftVal > 0) {
-    Value haloLeftConst = builder.create<arith::ConstantIndexOp>(loc, haloLeftVal);
+    Value haloLeftConst =
+        builder.create<arith::ConstantIndexOp>(loc, haloLeftVal);
     blockIdxBase =
         builder.create<arith::AddIOp>(loc, blockIdxBase, haloLeftConst);
   }
@@ -377,8 +370,8 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
   if (nPartDims == 0)
     nPartDims = 1;
 
-  bool hasPartitionSlices = !info.partitionInfo.offsets.empty() ||
-                            !info.partitionInfo.sizes.empty();
+  bool hasPartitionSlices =
+      !info.partitionInfo.offsets.empty() || !info.partitionInfo.sizes.empty();
   bool forceFullRangeStencilWriter =
       acquire.getMode() != ArtsMode::in && !hasPartitionSlices;
 
@@ -405,7 +398,8 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
       Value elemSz = (d < sizes.size() && sizes[d]) ? sizes[d] : one;
       elemSz = builder.create<arith::MaxUIOp>(loc, elemSz, one);
 
-      Value startBlock = builder.create<arith::DivUIOp>(loc, elemOff, blockSize);
+      Value startBlock =
+          builder.create<arith::DivUIOp>(loc, elemOff, blockSize);
       Value endElem = builder.create<arith::AddIOp>(loc, elemOff, elemSz);
       endElem = builder.create<arith::SubIOp>(loc, endElem, one);
       Value endBlock = builder.create<arith::DivUIOp>(loc, endElem, blockSize);
