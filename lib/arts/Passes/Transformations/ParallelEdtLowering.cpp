@@ -204,32 +204,30 @@ private:
 
     /// For internode parallelism, map worker lanes to valid node routes.
     Value workerRoute;
-    bool routeWorkers = hasParallelWorkerPlaceholders &&
-                        parallelEdt.getConcurrency() ==
-                            EdtConcurrency::internode;
+    bool routeWorkers =
+        hasParallelWorkerPlaceholders &&
+        parallelEdt.getConcurrency() == EdtConcurrency::internode;
     if (routeWorkers) {
       Type i32Ty = loopBuilder.getIntegerType(32);
       Value nodes = loopBuilder.create<GetTotalNodesOp>(loc).getResult();
       if (!nodes.getType().isIndex())
-        nodes = loopBuilder.create<arith::IndexCastOp>(loc,
-                                                       loopBuilder.getIndexType(),
-                                                       nodes);
+        nodes = loopBuilder.create<arith::IndexCastOp>(
+            loc, loopBuilder.getIndexType(), nodes);
 
       Value nodesMinusOne = loopBuilder.create<arith::SubIOp>(loc, nodes, one);
       Value ceilNumerator =
           loopBuilder.create<arith::AddIOp>(loc, numWorkers, nodesMinusOne);
       Value workersPerNode =
           loopBuilder.create<arith::DivUIOp>(loc, ceilNumerator, nodes);
-      workersPerNode = loopBuilder.create<arith::MaxUIOp>(loc, workersPerNode,
-                                                          one);
+      workersPerNode =
+          loopBuilder.create<arith::MaxUIOp>(loc, workersPerNode, one);
 
       Value nodeId =
           loopBuilder.create<arith::DivUIOp>(loc, workerId, workersPerNode);
       Value outOfRange = loopBuilder.create<arith::CmpIOp>(
           loc, arith::CmpIPredicate::uge, nodeId, nodes);
-      nodeId =
-          loopBuilder.create<arith::SelectOp>(loc, outOfRange, nodesMinusOne,
-                                              nodeId);
+      nodeId = loopBuilder.create<arith::SelectOp>(loc, outOfRange,
+                                                   nodesMinusOne, nodeId);
       workerRoute = nodeId;
       if (workerRoute.getType() != i32Ty)
         workerRoute =

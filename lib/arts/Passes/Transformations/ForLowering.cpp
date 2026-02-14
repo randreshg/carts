@@ -821,8 +821,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
     auto createPlannedAcquire = [&]() -> std::pair<DbAcquireOp, bool> {
       AcquireRewritePlan rewritePlan = planAcquireRewrite(planningInput);
-      DbAcquireOp rewritten =
-          rewriteAcquire(rewritePlan.rewriteInput, rewritePlan.useStencilRewriter);
+      DbAcquireOp rewritten = rewriteAcquire(rewritePlan.rewriteInput,
+                                             rewritePlan.useStencilRewriter);
       return {rewritten, rewritePlan.useStencilRewriter};
     };
 

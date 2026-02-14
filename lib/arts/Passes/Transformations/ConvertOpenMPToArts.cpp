@@ -364,8 +364,8 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
         op.getReductionsAttr() && !op.getReductionsAttr().getValue().empty();
     if (nestedInSerialLoop && !hasReductions) {
       ARTS_INFO("  - Nested wsloop fallback: lowering to scf.for");
-      auto scfFor = rewriter.create<scf::ForOp>(loc, lowerBound, upperBound,
-                                                step);
+      auto scfFor =
+          rewriter.create<scf::ForOp>(loc, lowerBound, upperBound, step);
       copyArtsMetadataAttrs(op, scfFor);
 
       OpBuilder::InsertionGuard IG(rewriter);

@@ -910,7 +910,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       bool inferredBlock =
           !acqInfo.partitionOffsets.empty() && !acqInfo.partitionSizes.empty();
       bool hasDistributionContract = false;
-      if (auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+      if (auto [edt, blockArg] =
+              EdtUtils::getEdtBlockArgumentForAcquire(acquire);
           edt) {
         (void)blockArg;
         hasDistributionContract = getEdtDistributionKind(edt.getOperation()) ||
