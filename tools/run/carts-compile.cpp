@@ -499,8 +499,7 @@ setupPassManager(ModuleOp module, MLIRContext &context,
   /// Embed config file contents into the module so generated binaries are
   /// self-contained — no external config file needed at runtime.
   if (machine.hasConfigFile() && !machine.getConfigPath().empty()) {
-    auto configContents =
-        llvm::MemoryBuffer::getFile(machine.getConfigPath());
+    auto configContents = llvm::MemoryBuffer::getFile(machine.getConfigPath());
     if (configContents)
       arts::setRuntimeConfigData(module, (*configContents)->getBuffer());
     else

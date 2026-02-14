@@ -40,9 +40,8 @@ public:
     result.acquireOffset = result.workerBaseOffset;
     result.acquireSize = input.bounds.iterCount;
 
-    Value hintSize = input.bounds.acquireSizeHint
-                         ? input.bounds.acquireSizeHint
-                         : input.bounds.acquireSize;
+    Value hintSize = input.bounds.acquireSizeHint ? input.bounds.acquireSizeHint
+                                                  : input.bounds.acquireSize;
     result.acquireHintSize = hintSize ? hintSize : result.acquireSize;
     if (!input.useAlignedLowerBound)
       result.acquireHintSize = result.acquireSize;
