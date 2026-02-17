@@ -215,7 +215,8 @@ public:
 
   /// Compute DB alignment block size from parallel EDT dependencies.
   /// For internode: ceil(arrayDim / numNodes) for ALL arrays.
-  /// For intranode: returns null (no alignment needed).
+  /// For intranode: align stencil arrays and write-capable arrays whose
+  /// element count is not evenly divisible by worker count.
   static Value computeDbAlignmentBlockSize(EdtOp parallelEdt,
                                            Value numPartitions, ArtsCodegen *AC,
                                            Location loc);

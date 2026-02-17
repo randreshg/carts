@@ -391,16 +391,29 @@ void LoopInfo::initialize() {
 void ForLoweringPass::runOnOperation() {
   module = getOperation();
 
-  ARTS_INFO_HEADER(ForLowering);
-  ARTS_DEBUG_REGION(module.dump(););
-
   /// Walk EDTs that may carry arts.for and lower them.
   SmallVector<EdtOp, 4> lowerableEdts;
   module.walk([&](EdtOp edt) {
     if (edt.getType() != EdtType::parallel && edt.getType() != EdtType::task)
       return;
-    lowerableEdts.push_back(edt);
+
+    bool hasForOps = false;
+    edt.getBody().walk([&](ForOp) {
+      hasForOps = true;
+    });
+
+    if (hasForOps)
+      lowerableEdts.push_back(edt);
   });
+
+  /// Skip pass bookkeeping/logging entirely when no arts.for is present.
+  if (lowerableEdts.empty()) {
+    ARTS_DEBUG("No arts.for operations found, skipping ForLowering");
+    return;
+  }
+
+  ARTS_INFO_HEADER(ForLowering);
+  ARTS_DEBUG_REGION(module.dump(););
 
   for (EdtOp parallelEdt : lowerableEdts)
     lowerParallelEdt(parallelEdt);
@@ -896,13 +909,25 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       endElem = AC->create<arith::SubIOp>(loc, endElem, one);
       Value endBlock = AC->create<arith::DivUIOp>(loc, endElem, blockSpan);
 
+      Value startAboveMax;
       if (totalBlocks) {
         Value maxBlock = AC->create<arith::SubIOp>(loc, totalBlocks, one);
-        endBlock = AC->create<arith::MinUIOp>(loc, endBlock, maxBlock);
+        startAboveMax = AC->create<arith::CmpIOp>(
+            loc, arith::CmpIPredicate::ugt, startBlock, maxBlock);
+        Value clampedEnd = AC->create<arith::MinUIOp>(loc, endBlock, maxBlock);
+        endBlock =
+            AC->create<arith::SelectOp>(loc, startAboveMax, endBlock, clampedEnd);
       }
 
       Value blockCount = AC->create<arith::SubIOp>(loc, endBlock, startBlock);
       blockCount = AC->create<arith::AddIOp>(loc, blockCount, one);
+      if (startAboveMax) {
+        Value zero = AC->createIndexConstant(0, loc);
+        startBlock =
+            AC->create<arith::SelectOp>(loc, startAboveMax, zero, startBlock);
+        blockCount =
+            AC->create<arith::SelectOp>(loc, startAboveMax, zero, blockCount);
+      }
       acquireOp.getOffsetsMutable().assign(SmallVector<Value>{startBlock});
       acquireOp.getSizesMutable().assign(SmallVector<Value>{blockCount});
     };

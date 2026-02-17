@@ -662,18 +662,39 @@ Value DistributionHeuristics::computeDbAlignmentBlockSize(EdtOp parallelEdt,
     if (!allocOp || allocOp.getElementSizes().empty())
       continue;
 
-    /// TwoLevel (internode): align ALL arrays so all workers on the same node
-    /// acquire the same DB block. Flat (intranode): only align stencil arrays.
-    if (!isTwoLevel) {
-      auto pattern = getDbAccessPattern(allocOp.getOperation());
-      if (!pattern || *pattern != DbAccessPattern::stencil)
-        continue;
-    }
-
     Value elemSize = allocOp.getElementSizes().front();
     if (auto constElem = ValueUtils::tryFoldConstantIndex(elemSize))
       if (*constElem <= 1)
         continue;
+
+    /// TwoLevel (internode): align ALL arrays so all workers on the same node
+    /// acquire the same DB block.
+    ///
+    /// Flat (intranode):
+    ///   - Always align stencil arrays.
+    ///   - Align write-capable arrays only when element count is not evenly
+    ///     divisible by worker count. This is the mismatch case where
+    ///     floor+remainder iteration slices can straddle DB block boundaries
+    ///     and create unnecessary cross-chunk dependencies.
+    if (!isTwoLevel) {
+      auto pattern = getDbAccessPattern(allocOp.getOperation());
+      bool isStencil = pattern && *pattern == DbAccessPattern::stencil;
+
+      bool needsWriteAlignment = false;
+      if (allocOp.getMode() != ArtsMode::in) {
+        auto elemConst = ValueUtils::tryFoldConstantIndex(elemSize);
+        auto partConst = ValueUtils::tryFoldConstantIndex(numPartitions);
+        if (elemConst && partConst && *partConst > 0) {
+          needsWriteAlignment = (*elemConst % *partConst) != 0;
+        } else {
+          /// Be conservative for dynamic sizes/partition counts.
+          needsWriteAlignment = true;
+        }
+      }
+
+      if (!isStencil && !needsWriteAlignment)
+        continue;
+    }
 
     elemSize = AC->castToIndex(elemSize, loc);
 
