@@ -1,6 +1,18 @@
 
 ///==========================================================================///
 /// File: ArtsInliner.cpp
+///
+/// Specialized inliner policy for ARTS pipelines.
+///
+/// Example:
+///   Before:
+///     func.func @helper(...) { ... }
+///     func.func @kernel(...) { call @helper(...) }
+///
+///   After (when profitable/legal under ARTS policy):
+///     func.func @kernel(...) {
+///       ... inlined body of @helper ...
+///     }
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"

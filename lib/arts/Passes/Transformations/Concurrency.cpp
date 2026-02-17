@@ -6,6 +6,14 @@
 /// nodes—essentially, deciding locality (e.g., which worker thread, node, or
 /// memory tier) based on access patterns, dependencies, and the abstract
 /// machine model.
+///
+/// Example:
+///   Before:
+///     arts.edt <parallel> { arts.for ... }
+///
+///   After:
+///     arts.edt <parallel> { arts.for ... }
+///     // with updated workers/concurrency/route attrs from machine + analysis
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"

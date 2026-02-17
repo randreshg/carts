@@ -4,6 +4,21 @@
 /// Unified hoisting pass for ARTS operations that performs:
 /// 1. Epoch acquire hoisting - hoists read-only db_acquire out of worker loops
 /// 2. DbRef hoisting - hoists loop-invariant db_ref out of inner loops in EDTs
+///
+/// Example:
+///   Before:
+///     scf.for %w = ... {
+///       %acq = arts.db_acquire[<in>] ...
+///       scf.for %i = ... {
+///         %r = arts.db_ref %acq[%i]
+///       }
+///     }
+///
+///   After:
+///     %acq = arts.db_acquire[<in>] ...   // hoisted
+///     scf.for %w = ... {
+///       %r = arts.db_ref %acq[%i]        // inner-invariant refs hoisted
+///     }
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"

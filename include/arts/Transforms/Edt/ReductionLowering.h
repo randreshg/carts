@@ -38,6 +38,7 @@ struct ReductionLoweringInfo {
   SmallVector<Value> hostResultPtrs;
 
   Value numWorkers;
+  EdtConcurrency parentConcurrency = EdtConcurrency::intranode;
 };
 
 /// Detect block arguments used for reduction stores in the loop body.

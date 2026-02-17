@@ -2,6 +2,13 @@
 /// File: DistributedDbOwnership.cpp
 ///
 /// Marks eligible DbAlloc operations for distributed ownership lowering.
+///
+/// Example:
+///   Before:
+///     %db = arts.db_alloc ...      // no ownership marker
+///
+///   After:
+///     %db = arts.db_alloc ... {distributed}
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"

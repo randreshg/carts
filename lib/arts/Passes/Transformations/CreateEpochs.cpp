@@ -1,5 +1,21 @@
 ///==========================================================================///
 /// File: CreateEpochs.cpp
+///
+/// Creates explicit arts.epoch regions around groups of EDT launches that must
+/// complete before control proceeds.
+///
+/// Example:
+///   Before:
+///     arts.edt_create %a
+///     arts.edt_create %b
+///     ... continuation ...
+///
+///   After:
+///     arts.epoch {
+///       arts.edt_create %a
+///       arts.edt_create %b
+///     }
+///     ... continuation ...
 ///==========================================================================///
 
 /// Dialects

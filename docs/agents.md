@@ -11,6 +11,7 @@ This guide teaches agents and developers how to understand, run, and debug CARTS
 5. [Pass-Level Debug Reference](#pass-level-debug-reference)
 6. [Common Issues & Troubleshooting](#common-issues--troubleshooting)
 7. [Example Workflows](#example-workflows)
+8. [Distributed Runtime Debug](#distributed-runtime-debug)
 
 ---
 
@@ -22,11 +23,16 @@ This guide teaches agents and developers how to understand, run, and debug CARTS
 # Build CARTS
 carts build
 
+# Build ARTS runtime with debug instrumentation
+carts build --arts --debug=2
+
 # Generate MLIR from C/C++
 carts cgeist <file>.c -O0 --print-debug-info -S --raise-scf-to-affine           # Sequential
 carts cgeist <file>.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine  # Parallel
 
 # Run pipeline (stop at specific stage)
+carts compile <file>.mlir --pipeline=<stage>
+# (equivalent passthrough also works)
 carts compile <file>.mlir --stop-at=<stage>
 
 # Run pipeline (dump all intermediate stages)
@@ -45,7 +51,7 @@ carts compile <file>.c -O3
 carts compile <file>.c -O3 --diagnose
 ```
 
-### Pipeline Stage Names (for --stop-at)
+### Pipeline Stage Names (for --pipeline / --stop-at)
 
 | Stage | Name                   | Purpose                      |
 |-------|------------------------|------------------------------|
@@ -174,7 +180,7 @@ flowchart TB
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --canonicalize-memrefs
+carts compile <file>.mlir --pipeline=canonicalize-memrefs
 ```
 
 **Passes Executed:**
@@ -254,12 +260,12 @@ carts compile <file>.mlir --initial-cleanup
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --openmp-to-arts
+carts compile <file>.mlir --pipeline=openmp-to-arts
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --openmp-to-arts --debug-only=convert_openmp_to_arts 2>&1
+carts compile <file>.mlir --pipeline=openmp-to-arts --debug-only=convert_openmp_to_arts 2>&1
 ```
 
 **Passes Executed:**
@@ -304,12 +310,12 @@ arts.edt <parallel> {
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --edt-transforms
+carts compile <file>.mlir --pipeline=edt-transforms
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --edt-transforms --debug-only=edt 2>&1
+carts compile <file>.mlir --pipeline=edt-transforms --debug-only=edt 2>&1
 ```
 
 **Passes Executed:**
@@ -327,12 +333,12 @@ carts compile <file>.mlir --edt-transforms --debug-only=edt 2>&1
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --loop-reordering
+carts compile <file>.mlir --pipeline=loop-reordering
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --loop-reordering --debug-only=loop_reordering,loop_transforms 2>&1
+carts compile <file>.mlir --pipeline=loop-reordering --debug-only=loop_reordering,loop_transforms 2>&1
 ```
 
 **Passes Executed:**
@@ -384,12 +390,12 @@ scf.for %i = %c0 to %M {
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --create-dbs
+carts compile <file>.mlir --pipeline=create-dbs
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --create-dbs --debug-only=create_dbs 2>&1
+carts compile <file>.mlir --pipeline=create-dbs --debug-only=create_dbs 2>&1
 ```
 
 **Passes Executed:**
@@ -429,12 +435,12 @@ arts.db_free %db : !arts.db<...>
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --db-opt
+carts compile <file>.mlir --pipeline=db-opt
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --db-opt --debug-only=db 2>&1
+carts compile <file>.mlir --pipeline=db-opt --debug-only=db 2>&1
 ```
 
 **Passes Executed:**
@@ -454,12 +460,12 @@ carts compile <file>.mlir --db-opt --debug-only=db 2>&1
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --edt-opt
+carts compile <file>.mlir --pipeline=edt-opt
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --edt-opt --debug-only=edt,arts_loop_fusion 2>&1
+carts compile <file>.mlir --pipeline=edt-opt --debug-only=edt,arts_loop_fusion 2>&1
 ```
 
 **Passes Executed:**
@@ -1176,7 +1182,7 @@ All passes use the ARTS debug infrastructure with color-coded output:
 
 ```bash
 # Debug loop reordering decisions
-carts compile gemm.mlir --loop-reordering --debug-only=loop_reordering 2>&1 | tee debug.log
+carts compile gemm.mlir --pipeline=loop-reordering --debug-only=loop_reordering 2>&1 | tee debug.log
 
 # Debug DB partitioning decisions
 carts compile gemm.mlir --stop-at=concurrency-opt --debug-only=db,db_partitioning 2>&1 | tee debug.log
@@ -1341,16 +1347,16 @@ carts compile example_seq.mlir --collect-metadata
 carts cgeist example.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine -o example.mlir
 
 # Step 4: Inspect each pipeline stage
-carts compile example.mlir --canonicalize-memrefs -o stages/01_canonicalize.mlir
-carts compile example.mlir --openmp-to-arts -o stages/04_openmp_to_arts.mlir
-carts compile example.mlir --create-dbs -o stages/07_create_dbs.mlir
+carts compile example.mlir --pipeline=canonicalize-memrefs -o stages/01_canonicalize.mlir
+carts compile example.mlir --pipeline=openmp-to-arts -o stages/04_openmp_to_arts.mlir
+carts compile example.mlir --pipeline=create-dbs -o stages/07_create_dbs.mlir
 carts compile example.mlir --stop-at=concurrency-opt -o stages/12_concurrency_opt.mlir
 
 # Or dump all stages at once
 carts compile example.mlir --all-stages -o stages/
 
 # Step 5: Debug specific pass if needed
-carts compile example.mlir --create-dbs --debug-only=create_dbs 2>&1 | tee debug_createdb.log
+carts compile example.mlir --pipeline=create-dbs --debug-only=create_dbs 2>&1 | tee debug_createdb.log
 
 # Step 6: Full execution
 carts compile example.c -O3
@@ -1435,6 +1441,54 @@ carts compile example.mlir --all-stages -o stages/
 
 # Compare transformation between stages
 diff stages/example_create-dbs.mlir stages/example_concurrency-opt.mlir
+```
+
+## Distributed Runtime Debug
+
+Use this workflow when multi-node runs hang, timeout, or show uneven work distribution.
+
+### 1. Build ARTS with runtime debug enabled
+
+```bash
+carts build --arts --debug=2 --profile=configs/profile-workload.cfg
+```
+
+### 2. Run a targeted multi-node benchmark with logs retained
+
+```bash
+carts benchmarks run polybench/2mm \
+  --size small \
+  --arts-config docker/arts-docker-2node.cfg \
+  --nodes 2 \
+  --threads 4 \
+  --debug 2
+```
+
+Notes:
+- `--debug 2` stores full benchmark stdout/stderr in per-run logs (`arts.log`, `omp.log`).
+- Correctness verification is enabled by default (ARTS checksum compared to OpenMP).
+- For `nodes > 1`, speedup is intentionally hidden as an unfair comparison.
+
+### 3. Inspect artifacts
+
+```bash
+# Replace with your run directory
+cd external/carts-benchmarks/results/<timestamp>/
+
+# Benchmark/run logs
+find . -name 'arts.log' -o -name 'omp.log'
+
+# Counter artifacts
+find . -name 'cluster.json' -o -name 'n0.json' -o -name 'n1.json'
+```
+
+### 4. Thread-count sanity for multinode runs
+
+If runtime output shows `Number of Threads = 2` followed by `Killed`, increase threads.
+Use at least 4 worker threads per node to avoid starving runtime communication/progress threads:
+
+```bash
+carts benchmarks run <bench> --nodes 2 --threads 4 --arts-config docker/arts-docker-2node.cfg
 ```
 
 ---

@@ -8,6 +8,14 @@
 ///   see a uniform heap-based handle.
 /// Pointer-result uses are updated; GUID uses remain unchanged.
 /// db_acquire/release ops are recreated with the new handles.
+///
+/// Example:
+///   Before:
+///     arts.db_alloc ... alloc_type = stack
+///
+///   After:
+///     arts.db_alloc ... alloc_type = heap
+///     (users rewritten to the lowered pointer representation)
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"
@@ -33,6 +41,7 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include <cstdint>
+#include <memory>
 
 ARTS_DEBUG_SETUP(db_lowering);
 using namespace mlir;
@@ -42,7 +51,6 @@ namespace {
 struct DbLoweringPass : public arts::DbLoweringBase<DbLoweringPass> {
   DbLoweringPass(uint64_t idStride = IdRegistry::DefaultStride)
       : idStride(idStride) {}
-  ~DbLoweringPass() override { delete AC; }
   void runOnOperation() override;
 
 private:
@@ -64,7 +72,8 @@ private:
 /// Lower datablock allocations to use opaque pointers
 void DbLoweringPass::runOnOperation() {
   module = getOperation();
-  AC = new ArtsCodegen(module, false);
+  auto ownedAC = std::make_unique<ArtsCodegen>(module, false);
+  AC = ownedAC.get();
   ARTS_INFO_HEADER(DbLowering);
   ARTS_DEBUG_REGION(module.dump(););
 
@@ -74,6 +83,7 @@ void DbLoweringPass::runOnOperation() {
   for (Operation *op : opsToRemove)
     removalMgr.markForRemoval(op);
   removalMgr.removeAllMarked(module, /*recursive=*/false);
+  AC = nullptr;
   ARTS_INFO_FOOTER(DbLoweringPass);
   ARTS_DEBUG_REGION(module.dump(););
 }

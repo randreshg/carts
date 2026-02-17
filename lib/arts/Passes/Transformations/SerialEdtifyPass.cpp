@@ -3,6 +3,15 @@
 ///
 /// Outlines eligible host-side serial loops into arts.edt<task> regions so
 /// they flow through the existing distributed ForLowering pipeline.
+///
+/// Example:
+///   Before:
+///     scf.for %i = ... { ... }
+///
+///   After:
+///     arts.edt <task> {
+///       scf.for %i = ... { ... }
+///     }
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"

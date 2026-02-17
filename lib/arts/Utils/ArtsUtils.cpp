@@ -21,6 +21,7 @@
 /// Debug
 #include "arts/Utils/ArtsDebug.h"
 ARTS_DEBUG_SETUP(arts_utils);
+[[maybe_unused]] static const auto *kArtsUtilsDebugType = ARTS_DEBUG_TYPE_STR;
 
 namespace mlir {
 namespace arts {

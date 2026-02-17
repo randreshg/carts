@@ -1,5 +1,15 @@
 ///==========================================================================///
 /// File: EdtPtrRematerialization.cpp
+///
+/// Rematerializes pointer-producing ops at EDT use sites to avoid carrying
+/// unnecessary pointer SSA values across rewritten EDT boundaries.
+///
+/// Example:
+///   Before:
+///     %p = ... ; arts.edt (...) { use %p }
+///
+///   After:
+///     arts.edt (...) { %p' = rematerialized(...); use %p' }
 ///==========================================================================///
 
 /// Dialects

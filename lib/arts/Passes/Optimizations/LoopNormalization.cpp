@@ -7,6 +7,17 @@
 ///
 /// Phase 1: SymmetricTriangularPattern (triangular → rectangular)
 /// Phase 2: LoopInterchangePattern, MatmulReductionPattern (future migration)
+///
+/// Example:
+///   Before:
+///     scf.for %i = ... {
+///       scf.for %j = %i to %N { ... }
+///     }
+///
+///   After:
+///     scf.for %i = ... {
+///       scf.for %j = 0 to %N { if (%j >= %i) ... }
+///     }
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"

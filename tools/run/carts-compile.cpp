@@ -41,6 +41,8 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
+#include <functional>
+#include <vector>
 
 using namespace llvm;
 using namespace mlir;
@@ -509,208 +511,86 @@ setupPassManager(ModuleOp module, MLIRContext &context,
   /// Load metadata from JSON file
   (void)AM->getMetadataManager();
 
-  /// Canonicalize memrefs
-  {
+  struct StageSpec {
+    PipelineStage stage;
+    const char *errorMessage;
+    std::function<void(PassManager &)> setup;
+  };
+
+  auto runStage = [&](const StageSpec &spec) -> LogicalResult {
+    if (spec.stage == PipelineStage::PreLowering && outAM)
+      AM->captureDiagnostics();
+
     PassManager pm(&context);
-    setupCanonicalizeMemrefs(pm);
+    spec.setup(pm);
     if (failed(pm.run(module))) {
-      ARTS_ERROR("Error when canonicalizing memrefs");
+      ARTS_ERROR(spec.errorMessage);
       module->dump();
       return failure();
     }
-  }
-  if (stopAt == PipelineStage::CanonicalizeMemrefs)
     return success();
+  };
 
-  /// Metadata collection
-  {
-    PassManager pm(&context);
-    bool shouldExport = (stopAt == PipelineStage::CollectMetadata);
-    setupCollectMetadata(pm, shouldExport);
-    if (failed(pm.run(module))) {
-      ARTS_ERROR("Error when collecting metadata");
-      module->dump();
+  std::vector<StageSpec> stages = {
+      {PipelineStage::CanonicalizeMemrefs,
+       "Error when canonicalizing memrefs",
+       [&](PassManager &pm) { setupCanonicalizeMemrefs(pm); }},
+      {PipelineStage::CollectMetadata,
+       "Error when collecting metadata",
+       [&](PassManager &pm) {
+         bool shouldExport = (stopAt == PipelineStage::CollectMetadata);
+         setupCollectMetadata(pm, shouldExport);
+       }},
+      {PipelineStage::InitialCleanup,
+       "Error simplifying the IR",
+       [&](PassManager &pm) {
+         OpPassManager &optPM = pm.nest<func::FuncOp>();
+         setupInitialCleanup(optPM);
+       }},
+      {PipelineStage::OpenMPToArts,
+       "Error when converting OpenMP to ARTS",
+       [&](PassManager &pm) { setupOpenMPToArts(pm); }},
+      {PipelineStage::EdtTransforms,
+       "Error when running EDT transformations",
+       [&](PassManager &pm) { setupEdtTransforms(pm, AM.get()); }},
+      {PipelineStage::LoopReordering,
+       "Error when applying loop reordering",
+       [&](PassManager &pm) { setupLoopReordering(pm, AM.get()); }},
+      {PipelineStage::CreateDbs,
+       "Error when creating Dbs",
+       [&](PassManager &pm) { setupCreateDbs(pm, AM.get()); }},
+      {PipelineStage::DbOpt,
+       "Error when optimizing Dbs",
+       [&](PassManager &pm) { setupDbOpt(pm, AM.get()); }},
+      {PipelineStage::EdtOpt,
+       "Error when optimizing EDTs",
+       [&](PassManager &pm) { setupEdtOpt(pm, AM.get()); }},
+      {PipelineStage::Concurrency,
+       "Error when running concurrency",
+       [&](PassManager &pm) { setupConcurrency(pm, AM.get()); }},
+      {PipelineStage::EdtDistribution,
+       "Error when running EDT distribution",
+       [&](PassManager &pm) { setupEdtDistribution(pm, AM.get()); }},
+      {PipelineStage::ConcurrencyOpt,
+       "Error when optimizing concurrency",
+       [&](PassManager &pm) { setupConcurrencyOpt(pm, AM.get()); }},
+      {PipelineStage::Epochs,
+       "Error when creating and optimizing epochs",
+       [&](PassManager &pm) { setupEpochs(pm, AM.get()); }},
+      {PipelineStage::PreLowering,
+       "Error when pre-lowering DBs, EDTs, and Epochs",
+       [&](PassManager &pm) { setupPreLowering(pm, AM.get()); }},
+      {PipelineStage::ArtsToLLVM,
+       "Error when converting ARTS to LLVM",
+       [&](PassManager &pm) { setupArtsToLLVM(pm, Debug); }},
+  };
+
+  for (const StageSpec &spec : stages) {
+    if (failed(runStage(spec)))
       return failure();
-    }
+    if (stopAt == spec.stage)
+      return success();
   }
-  if (stopAt == PipelineStage::CollectMetadata)
-    return success();
-
-  /// Initial cleanup
-  {
-    PassManager pm(&context);
-    OpPassManager &optPM = pm.nest<func::FuncOp>();
-    setupInitialCleanup(optPM);
-
-    if (failed(pm.run(module))) {
-      ARTS_ERROR("Error simplyfing the IR");
-      module->dump();
-      return failure();
-    }
-  }
-  if (stopAt == PipelineStage::InitialCleanup)
-    return success();
-
-  /// OpenMP to ARTS conversion
-  {
-    PassManager pm(&context);
-    setupOpenMPToArts(pm);
-    if (failed(pm.run(module))) {
-      ARTS_ERROR("Error when converting OpenMP to ARTS");
-      module->dump();
-      return failure();
-    }
-  }
-  if (stopAt == PipelineStage::OpenMPToArts)
-    return success();
-
-  /// EDT transformations
-  {
-    PassManager pm(&context);
-    setupEdtTransforms(pm, AM.get());
-    if (failed(pm.run(module))) {
-      ARTS_ERROR("Error when running EDT transformations");
-      module->dump();
-      return failure();
-    }
-  }
-  if (stopAt == PipelineStage::EdtTransforms)
-    return success();
-
-  /// Loop reordering
-  {
-    PassManager pm(&context);
-    setupLoopReordering(pm, AM.get());
-    if (failed(pm.run(module))) {
-      ARTS_ERROR("Error when applying loop reordering");
-      module->dump();
-      return failure();
-    }
-  }
-  if (stopAt == PipelineStage::LoopReordering)
-    return success();
-
-  /// Create Dbs
-  {
-    PassManager pm(&context);
-    setupCreateDbs(pm, AM.get());
-    if (failed(pm.run(module))) {
-      ARTS_ERROR("Error when creating Dbs");
-      module->dump();
-      return failure();
-    }
-  }
-  if (stopAt == PipelineStage::CreateDbs)
-    return success();
-
-  /// Db optimizations
-  {
-    PassManager pm(&context);
-    setupDbOpt(pm, AM.get());
-    if (failed(pm.run(module))) {
-      ARTS_ERROR("Error when optimizing Dbs");
-      module->dump();
-      return failure();
-    }
-  }
-  if (stopAt == PipelineStage::DbOpt)
-    return success();
-
-  /// Edt optimizations
-  {
-    PassManager pm(&context);
-    setupEdtOpt(pm, AM.get());
-    if (failed(pm.run(module))) {
-      ARTS_ERROR("Error when optimizing EDTs");
-      module->dump();
-      return failure();
-    }
-  }
-  if (stopAt == PipelineStage::EdtOpt)
-    return success();
-
-  /// Concurrency
-  {
-    PassManager pm(&context);
-    setupConcurrency(pm, AM.get());
-    if (failed(pm.run(module))) {
-      ARTS_ERROR("Error when running concurrency");
-      module->dump();
-      return failure();
-    }
-  }
-  if (stopAt == PipelineStage::Concurrency)
-    return success();
-
-  /// EDT distribution and for lowering
-  {
-    PassManager pm(&context);
-    setupEdtDistribution(pm, AM.get());
-    if (failed(pm.run(module))) {
-      ARTS_ERROR("Error when running EDT distribution");
-      module->dump();
-      return failure();
-    }
-  }
-  if (stopAt == PipelineStage::EdtDistribution)
-    return success();
-
-  /// Concurrency optimizations
-  {
-    PassManager pm(&context);
-    setupConcurrencyOpt(pm, AM.get());
-    if (failed(pm.run(module))) {
-      ARTS_ERROR("Error when optimizing concurrency");
-      module->dump();
-      return failure();
-    }
-  }
-  if (stopAt == PipelineStage::ConcurrencyOpt)
-    return success();
-
-  /// Epochs: creation and optimization
-  {
-    PassManager pm(&context);
-    setupEpochs(pm, AM.get());
-    if (failed(pm.run(module))) {
-      ARTS_ERROR("Error when creating and optimizing epochs");
-      module->dump();
-      return failure();
-    }
-  }
-  if (stopAt == PipelineStage::Epochs)
-    return success();
-
-  /// Capture diagnostic data for --diagnose output
-  if (outAM) {
-    AM->captureDiagnostics();
-  }
-
-  /// Pre-lowering
-  {
-    PassManager pm(&context);
-    setupPreLowering(pm, AM.get());
-    if (failed(pm.run(module))) {
-      ARTS_ERROR("Error when pre-lowering DBs, EDTs, and Epochs");
-      module->dump();
-      return failure();
-    }
-  }
-  if (stopAt == PipelineStage::PreLowering)
-    return success();
-
-  /// Convert ARTS to LLVM
-  {
-    PassManager pm(&context);
-    setupArtsToLLVM(pm, Debug);
-    if (failed(pm.run(module))) {
-      ARTS_ERROR("Error when converting ARTS to LLVM");
-      module->dump();
-      return failure();
-    }
-  }
-  if (stopAt == PipelineStage::ArtsToLLVM)
-    return success();
 
   /// Optimizations
   if (Opt) {

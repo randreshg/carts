@@ -4,6 +4,14 @@
 /// Combined epoch optimizations pass that performs:
 /// 1. Epoch fusion - merge independent consecutive epochs
 /// 2. Worker loop fusion - merge compatible worker loops within epochs
+///
+/// Example:
+///   Before:
+///     arts.epoch { ... }
+///     arts.epoch { ... }   // independent
+///
+///   After:
+///     arts.epoch { ... ... }   // fused
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"

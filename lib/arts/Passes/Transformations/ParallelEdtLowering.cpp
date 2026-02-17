@@ -5,6 +5,15 @@
 /// variable replaces arts.get_parallel_worker_id placeholders, worker EDTs are
 /// created sequentially, and single EDTs are guarded to run only once
 /// (worker==0) within the loop to preserve program order.
+///
+/// Example:
+///   Before:
+///     arts.edt <parallel> (...) { ... arts.get_parallel_worker_id ... }
+///
+///   After:
+///     scf.for %wid = 0 to %workers step 1 {
+///       arts.edt <task> route(%wid) (...) { ... %wid ... }
+///     }
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"

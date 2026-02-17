@@ -14,6 +14,7 @@ H1 partitioning still decides DB layout/rewrite details.
 Related guide:
 - `docs/heuristics/partitioning/partitioning.md`
 - `docs/analysis/distributed-debugging.md`
+- `docs/compiler/pipeline.md`
 
 ## 0. Motivation: Bridging AMT, OpenMP, and MPI
 
@@ -111,11 +112,26 @@ Cannon and SUMMA remain viable future paths once collective-like orchestration i
 Current policy is implemented in
 `DistributionHeuristics::selectDistributionKind` (`lib/arts/Analysis/DistributionHeuristics.cpp`).
 
-1. If EDT concurrency is internode: `two_level`
-2. Otherwise (intranode):
+Selection order matters:
+
+1. Pattern override:
+   - `matmul` + internode (`TwoLevel` strategy) -> `tiling_2d`
+   - `matmul` + intranode (`Flat` strategy) -> `block`
+2. Otherwise by strategy:
+   - internode (`TwoLevel`) -> `two_level`
+   - block-cyclic strategy -> `block_cyclic`
+   - tiling strategy -> `tiling_2d`
+   - flat strategy -> pattern fallback below
+3. Pattern fallback (flat/default):
    - `triangular` -> `block_cyclic`
-   - `matmul` -> `tiling_2d`
    - `stencil`/`uniform`/`unknown` -> `block`
+
+Operational note:
+- `tiling_2d` for internode matmul is selected by policy, but it is not always
+  the fastest choice for every dataset size and machine topology.
+- For small/medium problems where communication dominates, `two_level` may
+  still outperform `tiling_2d`; treat this as a performance-tuning axis, not a
+  correctness requirement.
 
 ## 4. Pattern Detection Ownership
 
@@ -249,6 +265,9 @@ Future caveat:
 ### 9.3 Partitioning integration for 2D owner hints
 
 `DbPartitioning` consumes tiling-2D owner hints on writable (`inout`) task acquires to force N-D block ownership where valid.
+
+This coupling is what keeps data ownership and routed work aligned for
+`matmul` loops when H2 selects `tiling_2d`.
 
 ## 10. Heuristics Placement
 

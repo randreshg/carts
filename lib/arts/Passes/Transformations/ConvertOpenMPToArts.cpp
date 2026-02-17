@@ -3,6 +3,20 @@
 //
 // This file implements a module pass that converts OpenMP ops
 // (omp.parallel, omp.master, omp.task, etc.) into Arts ops
+//
+// Example:
+//   Before:
+//     omp.parallel {
+//       omp.task depend(in: A[i]) depend(out: B[i]) { ... }
+//     }
+//
+//   After:
+//     arts.edt <parallel> {
+//       arts.edt <task> (...) {
+//         arts.db_control ...
+//         ...
+//       }
+//     }
 ///==========================================================================///
 
 /// Dialects

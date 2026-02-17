@@ -36,15 +36,6 @@ using namespace mlir::arts;
 /// Helpers
 ///===----------------------------------------------------------------------===///
 
-static Value castToIndex(ArtsCodegen *AC, Value v, Location loc) {
-  if (!v)
-    return v;
-  if (v.getType().isIndex())
-    return v;
-  auto indexTy = AC->getBuilder().getIndexType();
-  return AC->create<arith::IndexCastOp>(loc, indexTy, v);
-}
-
 /// Check if an operation can be safely cloned into a new region.
 /// ARTS runtime query ops are safe to clone - they return the same value
 /// regardless of where they are emitted.
@@ -196,8 +187,8 @@ Tiling2DWorkerGrid DistributionHeuristics::getTiling2DWorkerGrid(
   Value one = AC->createIndexConstant(1, loc);
   Value zero = AC->createIndexConstant(0, loc);
 
-  Value totalWorkersIndex = castToIndex(AC, totalWorkers, loc);
-  Value workerIdIndex = castToIndex(AC, workerId, loc);
+  Value totalWorkersIndex = AC->castToIndex(totalWorkers, loc);
+  Value workerIdIndex = AC->castToIndex(workerId, loc);
 
   grid.rowWorkers = totalWorkersIndex;
   grid.colWorkers = one;
@@ -273,6 +264,13 @@ DistributionHeuristics::toDistributionKind(EdtDistributionKind kind) {
 
 EdtDistributionKind DistributionHeuristics::selectDistributionKind(
     const DistributionStrategy &strategy, EdtDistributionPattern pattern) {
+  if (pattern == EdtDistributionPattern::matmul) {
+    /// Matmul benefits from 2D tile ownership under internode distribution.
+    if (strategy.kind == DistributionKind::TwoLevel)
+      return EdtDistributionKind::tiling_2d;
+    return EdtDistributionKind::block;
+  }
+
   switch (strategy.kind) {
   case DistributionKind::TwoLevel:
     return EdtDistributionKind::two_level;
@@ -287,14 +285,9 @@ EdtDistributionKind DistributionHeuristics::selectDistributionKind(
   switch (pattern) {
   case EdtDistributionPattern::triangular:
     return EdtDistributionKind::block_cyclic;
-  case EdtDistributionPattern::matmul:
-    /// Keep matmul on stable block/two_level scheduling by default.
-    /// The tiling_2d lowering is available but currently opt-in only.
-    if (strategy.kind == DistributionKind::TwoLevel)
-      return EdtDistributionKind::two_level;
-    return EdtDistributionKind::block;
   case EdtDistributionPattern::stencil:
   case EdtDistributionPattern::uniform:
+  case EdtDistributionPattern::matmul:
   case EdtDistributionPattern::unknown:
     return EdtDistributionKind::block;
   }
@@ -461,8 +454,8 @@ DistributionBounds DistributionHeuristics::recomputeBoundsInside(
     Value upperBound, Value lowerBound, Value loopStep, Value blockSize,
     std::optional<int64_t> alignmentBlockSize, bool useRuntimeBlockAlignment) {
 
-  Value workerIdIndex = castToIndex(AC, workerId, loc);
-  Value totalWorkersIndex = castToIndex(AC, insideTotalWorkers, loc);
+  Value workerIdIndex = AC->castToIndex(workerId, loc);
+  Value totalWorkersIndex = AC->castToIndex(insideTotalWorkers, loc);
 
   Value oneIndex = AC->createIndexConstant(1, loc);
   Value zeroIndex = AC->createIndexConstant(0, loc);
@@ -552,7 +545,7 @@ DistributionBounds DistributionHeuristics::recomputeBoundsInside(
           wpnIndex = boundsMapper.lookupOrDefault(wpnIndex);
         }
       }
-      wpnIndex = castToIndex(AC, wpnIndex, loc);
+      wpnIndex = AC->castToIndex(wpnIndex, loc);
     }
 
     Value numNodes =
@@ -682,7 +675,7 @@ Value DistributionHeuristics::computeDbAlignmentBlockSize(EdtOp parallelEdt,
       if (*constElem <= 1)
         continue;
 
-    elemSize = castToIndex(AC, elemSize, loc);
+    elemSize = AC->castToIndex(elemSize, loc);
 
     /// ceil(elemSize / numPartitions) to match DbPartitioning block size
     Value adjusted = AC->create<arith::AddIOp>(
@@ -712,11 +705,11 @@ Value DistributionHeuristics::getWorkersPerNode(ArtsCodegen *AC, Location loc,
           AttrNames::Operation::Workers)) {
     Value totalWorkers = AC->createIndexConstant(workers.getValue(), loc);
     Value totalNodes =
-        castToIndex(AC, AC->create<GetTotalNodesOp>(loc).getResult(), loc);
+        AC->castToIndex(AC->create<GetTotalNodesOp>(loc).getResult(), loc);
     workersPerNode = AC->create<arith::DivUIOp>(loc, totalWorkers, totalNodes);
   } else {
     workersPerNode =
-        castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
+        AC->castToIndex(AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
   }
 
   /// Clamp to at least 1 to prevent division by zero
@@ -735,13 +728,13 @@ Value DistributionHeuristics::getTotalWorkers(ArtsCodegen *AC, Location loc,
 
   if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {
     Value nodes =
-        castToIndex(AC, AC->create<GetTotalNodesOp>(loc).getResult(), loc);
+        AC->castToIndex(AC->create<GetTotalNodesOp>(loc).getResult(), loc);
     Value threads =
-        castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
+        AC->castToIndex(AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
     return AC->create<arith::MulIOp>(loc, nodes, threads);
   }
 
-  return castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
+  return AC->castToIndex(AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
 }
 
 Value DistributionHeuristics::getDispatchWorkerCount(OpBuilder &builder,
