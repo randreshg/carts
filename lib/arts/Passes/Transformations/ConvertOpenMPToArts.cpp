@@ -370,24 +370,27 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
     auto upperBound = op.getUpperBound()[0];
     auto step = op.getStep()[0];
 
-    /// Nested omp.wsloop inside serial loop nests is lowered to scf.for.
-    /// This avoids leaving nested arts.for constructs that the current
-    /// ForLowering split path does not rewrite.
+    /// Nested omp.wsloop inside serial loop nests cannot become nested
+    /// arts.for directly because ForLowering only rewrites top-level arts.for
+    /// in a parallel EDT body. Lower to scf.parallel instead so the dedicated
+    /// SCFParallelToArts pattern can materialize a nested parallel EDT.
     bool nestedInSerialLoop = hasSerialLoopAncestorInParallelRegion(op);
     bool hasReductions =
         op.getReductionsAttr() && !op.getReductionsAttr().getValue().empty();
     if (nestedInSerialLoop && !hasReductions) {
-      ARTS_INFO("  - Nested wsloop fallback: lowering to scf.for");
-      auto scfFor =
-          rewriter.create<scf::ForOp>(loc, lowerBound, upperBound, step);
-      copyArtsMetadataAttrs(op, scfFor);
+      ARTS_INFO("  - Nested wsloop fallback: lowering to scf.parallel");
+      auto scfParallel = rewriter.create<scf::ParallelOp>(
+          loc, ValueRange{lowerBound}, ValueRange{upperBound},
+          ValueRange{step});
+      copyArtsMetadataAttrs(op, scfParallel);
 
       OpBuilder::InsertionGuard IG(rewriter);
-      rewriter.setInsertionPointToStart(scfFor.getBody());
+      Block &parallelBody = scfParallel.getRegion().front();
+      rewriter.setInsertionPointToStart(&parallelBody);
       IRMapping mapper;
       Block &src = op.getRegion().front();
-      if (!src.getArguments().empty())
-        mapper.map(src.getArgument(0), scfFor.getInductionVar());
+      if (!src.getArguments().empty() && !scfParallel.getInductionVars().empty())
+        mapper.map(src.getArgument(0), scfParallel.getInductionVars().front());
       for (Operation &srcOp : src.without_terminator())
         rewriter.clone(srcOp, mapper);
 

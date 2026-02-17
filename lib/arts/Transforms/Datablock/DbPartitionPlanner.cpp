@@ -227,6 +227,12 @@ static void buildBlockRewriteAcquire(const DbAcquirePartitionView &input,
 
   if (input.needsFullRange) {
     output.isFullRange = true;
+    if (!input.partitionOffsets.empty() && !input.partitionSizes.empty()) {
+      output.partitionInfo.offsets.assign(input.partitionOffsets.begin(),
+                                          input.partitionOffsets.end());
+      output.partitionInfo.sizes.assign(input.partitionSizes.begin(),
+                                        input.partitionSizes.end());
+    }
     if (!plan.partitionedDims.empty()) {
       output.partitionInfo.partitionedDims.assign(plan.partitionedDims.begin(),
                                                   plan.partitionedDims.end());
