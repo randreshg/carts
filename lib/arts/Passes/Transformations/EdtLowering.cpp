@@ -58,6 +58,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include <memory>
 
 #include "arts/Utils/ArtsDebug.h"
 #include "polygeist/Ops.h"
@@ -135,7 +136,6 @@ private:
 struct EdtLoweringPass : public arts::EdtLoweringBase<EdtLoweringPass> {
   explicit EdtLoweringPass(uint64_t idStride = IdRegistry::DefaultStride)
       : idStride(idStride) {}
-  ~EdtLoweringPass() { delete AC; }
   void runOnOperation() override;
 
 private:
@@ -183,7 +183,8 @@ private:
 
 void EdtLoweringPass::runOnOperation() {
   module = getOperation();
-  AC = new ArtsCodegen(module, false);
+  auto ownedAC = std::make_unique<ArtsCodegen>(module, false);
+  AC = ownedAC.get();
 
   ARTS_INFO_HEADER(EdtLoweringPass);
   ARTS_DEBUG_REGION(module.dump(););
@@ -214,6 +215,7 @@ void EdtLoweringPass::runOnOperation() {
   }
 
   ARTS_INFO_FOOTER(EdtLoweringPass);
+  AC = nullptr;
   ARTS_DEBUG_REGION(module.dump(););
 }
 

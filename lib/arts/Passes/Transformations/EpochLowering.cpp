@@ -8,6 +8,15 @@
 /// 2. Propagate the epoch GUID to all EdtCreateOps within the epoch
 /// 3. Lower epoch operations to CreateEpochOp + operations + WaitOnEpochOp
 /// 4. Return the epoch GUID for synchronization
+///
+/// Example:
+///   Before:
+///     arts.epoch { ... arts.edt_create ... }
+///
+///   After:
+///     %e = arts.create_epoch
+///     ... arts.edt_create(..., %e) ...
+///     arts.wait_on_epoch %e
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"
@@ -21,6 +30,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include <memory>
 
 #include "arts/Utils/ArtsDebug.h"
 ARTS_DEBUG_SETUP(epoch_lowering);
@@ -34,7 +44,6 @@ using namespace mlir::arts;
 ///===----------------------------------------------------------------------===///
 struct EpochLoweringPass : public arts::EpochLoweringBase<EpochLoweringPass> {
   explicit EpochLoweringPass(bool debug = false) : debugMode(debug) {}
-  ~EpochLoweringPass() { delete AC; }
 
   void runOnOperation() override;
 
@@ -51,7 +60,8 @@ private:
 
 void EpochLoweringPass::runOnOperation() {
   module = getOperation();
-  AC = new ArtsCodegen(module, debugMode);
+  auto ownedAC = std::make_unique<ArtsCodegen>(module, debugMode);
+  AC = ownedAC.get();
 
   ARTS_INFO_HEADER(EpochLoweringPass);
   ARTS_DEBUG_REGION(module.dump(););
@@ -143,6 +153,7 @@ void EpochLoweringPass::runOnOperation() {
   }
 
   ARTS_INFO_FOOTER(EpochLoweringPass);
+  AC = nullptr;
   ARTS_DEBUG_REGION(module.dump(););
 }
 

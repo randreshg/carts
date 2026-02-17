@@ -19,6 +19,7 @@
 
 #include "arts/Utils/ArtsDebug.h"
 ARTS_DEBUG_SETUP(edt_utils);
+[[maybe_unused]] static const auto *kEdtUtilsDebugType = ARTS_DEBUG_TYPE_STR;
 
 using namespace mlir;
 using namespace mlir::arts;

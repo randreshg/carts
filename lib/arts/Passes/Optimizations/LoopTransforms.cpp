@@ -3,6 +3,13 @@
 ///
 /// Delegates to LoopPattern-based matmul reduction distribution.
 /// The actual pattern logic lives in MatmulReductionPattern.cpp.
+///
+/// Example:
+///   Before:
+///     C[i][j] += A[i][k] * B[k][j]
+///
+///   After:
+///     // normalized/tiling-ready loop shape for downstream lowering
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"

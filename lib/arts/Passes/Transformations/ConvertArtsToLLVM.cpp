@@ -3,6 +3,17 @@
 ///
 /// This file implements a pass to convert ARTS dialect operations into
 /// LLVM dialect operations.
+///
+/// Example:
+///   Before:
+///     %g = arts.edt_create ...
+///     arts.record_dep %g, ...
+///     arts.wait_on_epoch %e
+///
+///   After:
+///     %g = call @artsEdtCreate(...)
+///     call @artsRecordDep(...)
+///     call @artsWaitOnHandle(...)
 ///==========================================================================///
 
 /// Dialects
@@ -1504,7 +1515,6 @@ struct ConvertArtsToLLVMPass
   void runOnOperation() override;
 
 private:
-  LogicalResult initializeCodegen();
   void populateCorePatterns(RewritePatternSet &patterns);
   void populateDbPatterns(RewritePatternSet &patterns);
 
@@ -1526,10 +1536,9 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   ARTS_DEBUG_REGION(module.dump(););
 
   //// Initialize codegen infrastructure
-  if (failed(initializeCodegen())) {
-    ARTS_ERROR("Failed to initialize ArtsCodegen");
-    return signalPassFailure();
-  }
+  auto ownedAC = std::make_unique<ArtsCodegen>(module, debugMode);
+  AC = ownedAC.get();
+  ARTS_DEBUG_TYPE("ArtsCodegen initialized successfully");
 
   //// Apply patterns with greedy rewriter (two runs)
   GreedyRewriteConfig config;
@@ -1544,7 +1553,6 @@ void ConvertArtsToLLVMPass::runOnOperation() {
     if (failed(applyPatternsAndFoldGreedily(module, std::move(corePatterns),
                                             config))) {
       ARTS_ERROR("Failed to apply core ARTS to LLVM conversion patterns");
-      delete AC;
       return signalPassFailure();
     }
   }
@@ -1557,7 +1565,6 @@ void ConvertArtsToLLVMPass::runOnOperation() {
     if (failed(applyPatternsAndFoldGreedily(module, std::move(dbPatterns),
                                             config))) {
       ARTS_ERROR("Failed to apply DbAcquire/DbRelease conversion patterns");
-      delete AC;
       return signalPassFailure();
     }
   }
@@ -1572,7 +1579,6 @@ void ConvertArtsToLLVMPass::runOnOperation() {
     if (failed(applyPatternsAndFoldGreedily(module, std::move(otherPatterns),
                                             config))) {
       ARTS_ERROR("Failed to apply other conversion patterns");
-      delete AC;
       return signalPassFailure();
     }
   }
@@ -1580,19 +1586,10 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   AC->initRT(AC->getUnknownLoc());
 
   //// Cleanup
-  delete AC;
   AC = nullptr;
 
   ARTS_INFO_FOOTER(ConvertArtsToLLVMPass);
   ARTS_DEBUG_REGION(module.dump(););
-}
-
-LogicalResult ConvertArtsToLLVMPass::initializeCodegen() {
-  ModuleOp module = getOperation();
-  AC = new ArtsCodegen(module, debugMode);
-
-  ARTS_DEBUG_TYPE("ArtsCodegen initialized successfully");
-  return success();
 }
 
 void ConvertArtsToLLVMPass::populateCorePatterns(RewritePatternSet &patterns) {

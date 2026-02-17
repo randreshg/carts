@@ -7,6 +7,13 @@
 ///
 /// Used automatically with --diagnose to ensure the diagnose output contains
 /// complete information for all entities.
+///
+/// Example:
+///   Before:
+///     module has loops/memrefs without metadata entries
+///
+///   After:
+///     pass emits diagnostics and fails if metadata coverage is incomplete
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"

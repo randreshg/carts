@@ -11,6 +11,15 @@
 /// - Dead datablocks (db_alloc where both guid and ptr are unused)
 /// - Unused acquires (db_acquire with no memory ops and unused guid)
 /// - Unused EDT dependencies (EDT block args with no uses + backing acquires)
+///
+/// Example:
+///   Before:
+///     %u = arts.undef ...
+///     %x = memref.load %A[%i]
+///     // %u, %x unused
+///
+///   After:
+///     // dead ops removed
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"

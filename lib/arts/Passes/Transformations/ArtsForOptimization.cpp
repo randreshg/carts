@@ -2,6 +2,13 @@
 /// File: ArtsForOptimization.cpp
 ///
 /// Applies pre-lowering optimization hints to arts.for loops.
+///
+/// Example:
+///   Before:
+///     arts.for ... { ... }
+///
+///   After:
+///     arts.for ... { ... }  // with tuning attrs/hints for downstream lowering
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"
