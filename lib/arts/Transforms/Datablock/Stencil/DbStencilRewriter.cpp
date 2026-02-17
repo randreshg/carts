@@ -60,6 +60,7 @@ static bool isStartBlockArithmeticOp(Operation *op) {
   return isa<arith::ConstantIndexOp, arith::ConstantIntOp, arith::DivUIOp,
              arith::DivSIOp, arith::RemUIOp, arith::RemSIOp, arith::AddIOp,
              arith::SubIOp, arith::MulIOp, arith::MaxUIOp, arith::MinUIOp,
+             arith::SelectOp,
              arith::IndexCastOp>(op);
 }
 
@@ -404,15 +405,28 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
       endElem = builder.create<arith::SubIOp>(loc, endElem, one);
       Value endBlock = builder.create<arith::DivUIOp>(loc, endElem, blockSize);
 
+      Value startAboveMax;
       if (d < plan.outerSizes.size()) {
         Value maxBlock =
             builder.create<arith::SubIOp>(loc, plan.outerSizes[d], one);
-        endBlock = builder.create<arith::MinUIOp>(loc, endBlock, maxBlock);
+        startAboveMax = builder.create<arith::CmpIOp>(
+            loc, arith::CmpIPredicate::ugt, startBlock, maxBlock);
+        Value clampedEnd =
+            builder.create<arith::MinUIOp>(loc, endBlock, maxBlock);
+        endBlock = builder.create<arith::SelectOp>(loc, startAboveMax, endBlock,
+                                                   clampedEnd);
       }
 
       Value blockCount =
           builder.create<arith::SubIOp>(loc, endBlock, startBlock);
       blockCount = builder.create<arith::AddIOp>(loc, blockCount, one);
+
+      if (startAboveMax) {
+        startBlock = builder.create<arith::SelectOp>(loc, startAboveMax, zero,
+                                                     startBlock);
+        blockCount = builder.create<arith::SelectOp>(loc, startAboveMax, zero,
+                                                     blockCount);
+      }
 
       newOffsets.push_back(startBlock);
       newSizes.push_back(blockCount);
