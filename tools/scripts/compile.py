@@ -1,5 +1,6 @@
 """Compile pipeline commands for CARTS CLI."""
 
+import os
 from pathlib import Path
 from typing import List, Optional
 
@@ -8,7 +9,7 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 
 from carts_styles import Colors, console, print_header, print_error, print_info, print_success
-from scripts.config import PlatformConfig, get_config
+from scripts.config import Platform, PlatformConfig, get_config
 from scripts.run import run_subprocess, run_command_with_output
 
 # CARTS transformation pipeline stages in execution order.
@@ -154,6 +155,10 @@ def compile_cmd(
         False, "--all-stages", help="Dump all pipeline stages"),
     emit_llvm: bool = typer.Option(
         False, "--emit-llvm", help="Emit LLVM IR output"),
+    gpu: bool = typer.Option(
+        False, "--gpu", help="Enable GPU compilation pipeline"),
+    gpu_arch: Optional[str] = typer.Option(
+        None, "--gpu-arch", help="GPU target architecture (e.g., sm_80)"),
     collect_metadata: bool = typer.Option(
         False, "--collect-metadata", help="Collect and export metadata"),
     partition_fallback: Optional[str] = typer.Option(
@@ -183,12 +188,13 @@ def compile_cmd(
     ext = input_file.suffix.lower()
     if ext in (".c", ".cpp"):
         _compile_from_c(ctx, input_file, output, optimize, debug, pipeline,
-                        all_stages, emit_llvm, collect_metadata,
+                        all_stages, emit_llvm, gpu, gpu_arch, collect_metadata,
                         partition_fallback, diagnose, diagnose_output,
                         run_args, compile_args)
     elif ext == ".mlir":
         _compile_from_mlir(ctx, input_file, output, optimize, debug, pipeline,
-                           all_stages, emit_llvm, collect_metadata)
+                           all_stages, emit_llvm, gpu, gpu_arch,
+                           collect_metadata)
     elif ext == ".ll":
         if pipeline:
             print_error("--pipeline is not supported for .ll input (link-only)")
@@ -213,6 +219,8 @@ def _compile_from_c(
     pipeline: Optional[str],
     all_stages: bool,
     emit_llvm: bool,
+    gpu: bool,
+    gpu_arch: Optional[str],
     collect_metadata: bool,
     partition_fallback: Optional[str],
     diagnose: bool,
@@ -233,6 +241,10 @@ def _compile_from_c(
     # Parse extra args
     extra_pipeline_args = run_args_str.split() if run_args_str else []
     extra_link_args = compile_args_str.split() if compile_args_str else []
+    if gpu:
+        extra_pipeline_args.append("--gpu")
+    if gpu_arch:
+        extra_pipeline_args.append(f"--gpu-arch={gpu_arch}")
     if partition_fallback:
         extra_pipeline_args.append(f"--partition-fallback={partition_fallback}")
 
@@ -258,10 +270,13 @@ def _compile_from_c(
         "--partition-fallback",
         "--distributed-db-ownership",
         "--serial-edtify",
+        "--gpu",
+        "--gpu-arch",
     }
 
     # Args with a separate value (not =)
-    value_args = {"--arts-config", "--metadata-file", "--debug-only"}
+    value_args = {"--arts-config", "--metadata-file", "--debug-only",
+                  "--gpu-arch"}
 
     passthrough_optimize = False
     passthrough_diagnose = False
@@ -291,6 +306,8 @@ def _compile_from_c(
                 cgeist_args.append(arg)
 
     extra_pipeline_args.extend(pipeline_passthrough_args)
+    if gpu:
+        extra_link_args.extend(_get_gpu_link_flags(config))
 
     use_dual_mode = optimize or passthrough_optimize
     use_diagnose = diagnose or passthrough_diagnose
@@ -319,6 +336,8 @@ def _compile_from_mlir(
     pipeline: Optional[str],
     all_stages: bool,
     emit_llvm: bool,
+    gpu: bool,
+    gpu_arch: Optional[str],
     collect_metadata: bool,
 ) -> None:
     """MLIR transformation pipeline."""
@@ -331,7 +350,12 @@ def _compile_from_mlir(
         raise typer.Exit(result.returncode)
 
     if all_stages:
-        _compile_all_stages(config, input_file, output, ctx.args or [])
+        stage_args = list(ctx.args or [])
+        if gpu:
+            stage_args.append("--gpu")
+        if gpu_arch:
+            stage_args.append(f"--gpu-arch={gpu_arch}")
+        _compile_all_stages(config, input_file, output, stage_args)
         return
 
     if not input_file.is_file():
@@ -344,6 +368,10 @@ def _compile_from_mlir(
         cmd.append("--O3")
     if emit_llvm:
         cmd.append("--emit-llvm")
+    if gpu:
+        cmd.append("--gpu")
+    if gpu_arch:
+        cmd.append(f"--gpu-arch={gpu_arch}")
     if collect_metadata:
         cmd.append("--collect-metadata")
     if debug:
@@ -434,6 +462,21 @@ def _build_link_cmd(
         cmd.append("-g")
     cmd.extend(extra_args)
     return cmd
+
+
+def _get_gpu_link_flags(config: PlatformConfig) -> List[str]:
+    """Return CUDA linker flags for GPU builds when supported by platform."""
+    if config.platform == Platform.MACOS and config.arch == "arm64":
+        # Apple Silicon development mode: compiler-only GPU pipeline.
+        return []
+
+    cuda_home = Path(os.environ.get("CUDA_HOME", "/usr/local/cuda"))
+    cuda_lib64 = cuda_home / "lib64"
+    flags: List[str] = []
+    if cuda_lib64.is_dir():
+        flags.append(f"-L{cuda_lib64}")
+    flags.extend(["-lcudart", "-lcuda"])
+    return flags
 
 
 def _compile_c_simple(

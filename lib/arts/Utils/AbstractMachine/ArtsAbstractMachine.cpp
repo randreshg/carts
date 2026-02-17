@@ -164,6 +164,12 @@ bool ArtsAbstractMachine::parseFromFile(const std::string &path) {
         gpuMaxEdts = parseInt(val, -1);
       else if (key == "gpuP2P")
         gpuP2P = parseBool(val, false);
+      else if (key == "gpuMinIterations")
+        gpuMinIterations = parseInt(val, 1024);
+      else if (key == "gpuMinDataBytes")
+        gpuMinDataBytes = parseInt(val, 1024 * 1024);
+      else if (key == "gpuMinArithIntensity")
+        gpuMinArithIntensity = parseDouble(val, 0.1);
 
       /// Network Configuration
       else if (key == "outgoing")
@@ -310,6 +316,17 @@ bool ArtsAbstractMachine::parseBool(const std::string &value,
   std::string lower = value;
   std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
   return lower == "1" || lower == "true" || lower == "yes" || lower == "on";
+}
+
+double ArtsAbstractMachine::parseDouble(const std::string &value,
+                                        double defaultValue) {
+  if (value.empty())
+    return defaultValue;
+  char *end = nullptr;
+  double result = std::strtod(value.c_str(), &end);
+  if (end == value.c_str())
+    return defaultValue;
+  return result;
 }
 
 bool ArtsAbstractMachine::validateConfiguration() {

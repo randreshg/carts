@@ -11,6 +11,7 @@
 #include "arts/ArtsDialect.h"
 #include "mlir/Conversion/LLVMCommon/LoweringOptions.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Pass/Pass.h"
@@ -30,6 +31,7 @@ std::unique_ptr<Pass> createCollectMetadataPass(bool exportMetadata,
                                                 llvm::StringRef metadataFile);
 std::unique_ptr<Pass> createCanonicalizeMemrefsPass();
 std::unique_ptr<Pass> createConvertOpenMPtoArtsPass();
+std::unique_ptr<Pass> createConvertOpenMPtoArtsPass(bool gpuEnabled);
 std::unique_ptr<Pass> createDeadCodeEliminationPass();
 std::unique_ptr<Pass> createEdtPass(ArtsAnalysisManager *AM, bool runAnalysis);
 std::unique_ptr<Pass> createConcurrencyPass(ArtsAnalysisManager *AM);
@@ -51,10 +53,18 @@ std::unique_ptr<Pass> createDbLoweringPass(uint64_t idStride = 1000);
 std::unique_ptr<Pass> createEpochLoweringPass();
 std::unique_ptr<Pass> createParallelEdtLoweringPass();
 std::unique_ptr<Pass> createEdtLoweringPass(uint64_t idStride = 1000);
+std::unique_ptr<Pass> createEdtLoweringPass(uint64_t idStride, bool gpuEnabled);
 std::unique_ptr<Pass> createArtsForOptimizationPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createSerialEdtifyPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createEdtDistributionPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createForLoweringPass();
+std::unique_ptr<Pass> createGpuEligibilityAnalysisPass();
+std::unique_ptr<Pass>
+createGpuEligibilityAnalysisPass(llvm::StringRef configPath);
+std::unique_ptr<Pass> createGpuForLoweringPass();
+std::unique_ptr<Pass> createGpuForLoweringPass(llvm::StringRef configPath);
+std::unique_ptr<Pass> createGpuEdtLoweringPass();
+std::unique_ptr<Pass> createGpuCodegenPass();
 std::unique_ptr<Pass> createLoopFusionPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createEpochOptPass();
 std::unique_ptr<Pass> createArtsHoistingPass();
@@ -83,6 +93,10 @@ class OpenMPDialect;
 namespace memref {
 class MemRefDialect;
 } // namespace memref
+
+namespace gpu {
+class GPUDialect;
+} // namespace gpu
 
 namespace LLVM {
 class LLVMDialect;

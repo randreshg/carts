@@ -32,6 +32,7 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/Metadata/LoopMetadata.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 /// Others
@@ -751,7 +752,12 @@ struct CallToARTSPattern : public OpRewritePattern<func::CallOp> {
 namespace {
 struct ConvertOpenMPToArtsPass
     : public arts::ConvertOpenMPToArtsBase<ConvertOpenMPToArtsPass> {
+  explicit ConvertOpenMPToArtsPass(bool gpuEnabled = false)
+      : gpuEnabled(gpuEnabled) {}
   void runOnOperation() override;
+
+private:
+  bool gpuEnabled = false;
 };
 } // namespace
 
@@ -773,6 +779,22 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
   GreedyRewriteConfig config;
   (void)applyPatternsAndFoldGreedily(module, std::move(patterns), config);
 
+  /// Tag arts.for loops for GPU consideration when explicitly requested and
+  /// when runtime configuration reports GPU support.
+  if (gpuEnabled) {
+    module.walk([&](arts::ForOp forOp) {
+      if (forOp->hasAttr(AttrNames::Operation::GpuTarget))
+        return;
+      if (auto loopAttr = forOp->getAttrOfType<LoopMetadataAttr>(
+              AttrNames::LoopMetadata::Name)) {
+        if (!loopAttr.getPotentiallyParallel().getValue())
+          return;
+      }
+      forOp->setAttr(AttrNames::Operation::GpuTarget,
+                     GpuTargetAttr::get(context, GpuTarget::Auto));
+    });
+  }
+
   RemovalUtils::removeUndefOps(module);
   ARTS_INFO_FOOTER(ConvertOpenMPToArtsPass);
   ARTS_DEBUG_REGION(module.dump(););
@@ -785,6 +807,10 @@ namespace mlir {
 namespace arts {
 std::unique_ptr<Pass> createConvertOpenMPtoArtsPass() {
   return std::make_unique<ConvertOpenMPToArtsPass>();
+}
+
+std::unique_ptr<Pass> createConvertOpenMPtoArtsPass(bool gpuEnabled) {
+  return std::make_unique<ConvertOpenMPToArtsPass>(gpuEnabled);
 }
 } // namespace arts
 } // namespace mlir

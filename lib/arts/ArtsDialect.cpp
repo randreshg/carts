@@ -103,14 +103,16 @@ void DbAcquireOp::getCanonicalizationPatterns(RewritePatternSet &results,
   results.add<RemoveUnusedDbAcquire>(context);
 }
 
-bool isArtsRegion(Operation *op) { return isa<EdtOp>(op) || isa<EpochOp>(op); }
+bool isArtsRegion(Operation *op) {
+  return isa<EdtOp>(op) || isa<GpuEdtOp>(op) || isa<EpochOp>(op);
+}
 bool isArtsOp(Operation *op) {
   return isArtsRegion(op) ||
-         isa<arts::EdtOp, arts::EpochOp, arts::BarrierOp, arts::AllocOp,
-             arts::DbAllocOp, arts::DbAcquireOp, arts::DbReleaseOp,
-             arts::DbFreeOp, arts::DbControlOp, arts::GetTotalWorkersOp,
-             arts::GetTotalNodesOp, arts::GetCurrentWorkerOp,
-             arts::GetCurrentNodeOp>(op);
+         isa<arts::EdtOp, arts::GpuEdtOp, arts::GpuMemcpyOp, arts::LcSyncOp,
+             arts::EpochOp, arts::BarrierOp, arts::AllocOp, arts::DbAllocOp,
+             arts::DbAcquireOp, arts::DbReleaseOp, arts::DbFreeOp,
+             arts::DbControlOp, arts::GetTotalWorkersOp, arts::GetTotalNodesOp,
+             arts::GetCurrentWorkerOp, arts::GetCurrentNodeOp>(op);
 }
 
 /// Arts Dialect Types
@@ -178,11 +180,29 @@ LogicalResult EdtOp::verify() {
   }
 
   for (Value dep : deps) {
-    auto dbAcquireOp = dep.getDefiningOp<DbAcquireOp>();
-    if (!dbAcquireOp) {
-      return emitOpError("dependency must be a result of DbAcquireOp, got: ")
-             << dep;
+    if (dep.getDefiningOp<DbAcquireOp>())
+      continue;
+
+    /// For nested EDTs, the dependency may be a block argument from the parent
+    /// EDT region. This is valid only if the parent EDT dependency interface is
+    /// already DB-backed.
+    if (auto blockArg = dep.dyn_cast<BlockArgument>()) {
+      if (auto parentEdt =
+              dyn_cast_or_null<EdtOp>(blockArg.getOwner()->getParentOp())) {
+        unsigned argIndex = blockArg.getArgNumber();
+        ValueRange parentDeps = parentEdt.getDependencies();
+        if (argIndex < parentDeps.size()) {
+          Operation *parentUnderlying =
+              DatablockUtils::getUnderlyingDb(parentDeps[argIndex]);
+          if (isa_and_nonnull<DbAcquireOp, DepDbAcquireOp>(parentUnderlying))
+            continue;
+        }
+      }
     }
+
+    return emitOpError(
+               "dependency must trace to DbAcquireOp/DepDbAcquireOp, got: ")
+           << dep;
   }
 
   DenseSet<Value> externalValues;
@@ -201,11 +221,11 @@ LogicalResult EdtOp::verify() {
         continue;
 
       if (llvm::is_contained(blockArgs, operand)) {
-        DbAcquireOp underlyingAcquire =
-            dyn_cast<DbAcquireOp>(DatablockUtils::getUnderlyingDb(operand));
-        if (!underlyingAcquire) {
+        Operation *underlyingDb = DatablockUtils::getUnderlyingDb(operand);
+        if (!isa_and_nonnull<DbAcquireOp, DepDbAcquireOp>(underlyingDb)) {
           op->emitOpError("EDT region uses block argument '")
-              << operand << "' as a DbAcquire value.";
+              << operand
+              << "' that is not traced to a DbAcquire/DepDbAcquire value.";
           return WalkResult::interrupt();
         }
         continue;
@@ -254,6 +274,25 @@ void EdtOp::getEffects(
     effects.emplace_back(MemoryEffects::Write::get(),
                          ::mlir::SideEffects::DefaultResource::get());
     return;
+  }
+}
+
+void GpuEdtOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  auto deps = getDependencies();
+  if (deps.empty()) {
+    effects.emplace_back(MemoryEffects::Read::get(),
+                         ::mlir::SideEffects::DefaultResource::get());
+    effects.emplace_back(MemoryEffects::Write::get(),
+                         ::mlir::SideEffects::DefaultResource::get());
+    return;
+  }
+
+  for (Value dep : deps) {
+    effects.emplace_back(MemoryEffects::Read::get(), dep,
+                         ::mlir::SideEffects::DefaultResource::get());
+    effects.emplace_back(MemoryEffects::Write::get(), dep,
+                         ::mlir::SideEffects::DefaultResource::get());
   }
 }
 

@@ -17,8 +17,11 @@
 ///==========================================================================///
 
 /// Dialects
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Value.h"
@@ -111,6 +114,20 @@ static inline DbAllocOp getAllocOpFromGuid(Value dbGuid) {
   if (auto depDbAcquireOp = dbGuid.getDefiningOp<DepDbAcquireOp>())
     return depDbAcquireOp.getGuid().getDefiningOp<DbAllocOp>();
   return nullptr;
+}
+
+static Value buildDim3(ArtsCodegen *AC, Location loc, int64_t x, int64_t y,
+                       int64_t z) {
+  Value undef = AC->create<LLVM::UndefOp>(loc, AC->Dim3);
+  Value vx = AC->createIntConstant(x, AC->Int32, loc);
+  Value vy = AC->createIntConstant(y, AC->Int32, loc);
+  Value vz = AC->createIntConstant(z, AC->Int32, loc);
+  Value withX = AC->create<LLVM::InsertValueOp>(loc, undef, vx,
+                                                llvm::ArrayRef<int64_t>{0});
+  Value withY = AC->create<LLVM::InsertValueOp>(loc, withX, vy,
+                                                llvm::ArrayRef<int64_t>{1});
+  return AC->create<LLVM::InsertValueOp>(loc, withY, vz,
+                                         llvm::ArrayRef<int64_t>{2});
 }
 
 } // namespace
@@ -887,9 +904,22 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
           AC->create<arith::ConstantOp>(op.getLoc(), AC->Int64, createIdAttr);
     }
 
-    /// Create artsEdtCreate call; prefer arts_id-aware variant when available
+    /// Create runtime call; prefer GPU runtime when launch config is attached.
     func::CallOp callOp;
-    if (createIdAttr) {
+    if (auto launchAttr = op->getAttrOfType<GpuLaunchConfigAttr>(
+            AttrNames::Operation::GpuLaunchConfig)) {
+      Value grid = buildDim3(AC, op.getLoc(), launchAttr.getGridX(),
+                             launchAttr.getGridY(), launchAttr.getGridZ());
+      Value block = buildDim3(AC, op.getLoc(), launchAttr.getBlockX(),
+                              launchAttr.getBlockY(), launchAttr.getBlockZ());
+      Value toSignal = AC->createIntConstant(0, AC->Int64, op.getLoc());
+      Value slot = AC->createIntConstant(0, AC->Int32, op.getLoc());
+      Value dataGuid = AC->createIntConstant(0, AC->Int64, op.getLoc());
+      callOp = AC->createRuntimeCall(types::ARTSRTL_artsEdtCreateGpu,
+                                     {funcPtr, route, paramc, paramv, depc,
+                                      grid, block, toSignal, slot, dataGuid},
+                                     op.getLoc());
+    } else if (createIdAttr) {
       if (op.getEpochGuid()) {
         callOp =
             AC->createRuntimeCall(types::ARTSRTL_artsEdtCreateWithEpochArtsId,
@@ -916,6 +946,46 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
     if (createIdAttr)
       callOp->setAttr(AttrNames::Operation::ArtsCreateId, createIdAttr);
     rewriter.replaceOp(op, callOp.getResult(0));
+    return success();
+  }
+};
+
+/// Pattern to convert arts.gpu_memcpy operations
+struct GpuMemcpyPattern : public ArtsToLLVMPattern<GpuMemcpyOp> {
+  using ArtsToLLVMPattern::ArtsToLLVMPattern;
+
+  LogicalResult matchAndRewrite(GpuMemcpyOp op,
+                                PatternRewriter &rewriter) const override {
+    ARTS_INFO("Lowering GpuMemcpy Op " << op);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Pattern to convert arts.lc_sync operations
+struct LcSyncPattern : public ArtsToLLVMPattern<LcSyncOp> {
+  using ArtsToLLVMPattern::ArtsToLLVMPattern;
+
+  LogicalResult matchAndRewrite(LcSyncOp op,
+                                PatternRewriter &rewriter) const override {
+    ARTS_INFO("Lowering LcSync Op " << op);
+    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
+    Location loc = op.getLoc();
+
+    Value edtGuid = AC->castToInt(AC->Int64, op.getEdtGuid(), loc);
+    Value slot = AC->castToInt(AC->Int32, op.getSlot(), loc);
+    Value dataGuid = op.getDataGuid();
+
+    if (auto memrefTy = dataGuid.getType().dyn_cast<MemRefType>()) {
+      (void)memrefTy;
+      Value zero = AC->createIndexConstant(0, loc);
+      dataGuid = AC->create<memref::LoadOp>(loc, dataGuid, zero);
+    }
+    dataGuid = AC->castToInt(AC->Int64, dataGuid, loc);
+
+    AC->createRuntimeCall(types::ARTSRTL_artsLCSync, {edtGuid, slot, dataGuid},
+                          loc);
+    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -1503,6 +1573,130 @@ struct UndefPattern : public ArtsToLLVMPattern<UndefOp> {
   }
 };
 
+/// Pattern to lower gpu.thread_id to NVVM intrinsic
+struct ThreadIdOpLowering : public OpRewritePattern<gpu::ThreadIdOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(gpu::ThreadIdOp op,
+                                PatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto i32Type = rewriter.getI32Type();
+    Value result;
+
+    switch (op.getDimension()) {
+    case gpu::Dimension::x:
+      result = rewriter.create<NVVM::ThreadIdXOp>(loc, i32Type);
+      break;
+    case gpu::Dimension::y:
+      result = rewriter.create<NVVM::ThreadIdYOp>(loc, i32Type);
+      break;
+    case gpu::Dimension::z:
+      result = rewriter.create<NVVM::ThreadIdZOp>(loc, i32Type);
+      break;
+    default:
+      return failure();
+    }
+
+    if (op.getType().isIndex())
+      result = rewriter.create<arith::IndexCastOp>(loc, op.getType(), result);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+/// Pattern to lower gpu.block_id to NVVM intrinsic
+struct BlockIdOpLowering : public OpRewritePattern<gpu::BlockIdOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(gpu::BlockIdOp op,
+                                PatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto i32Type = rewriter.getI32Type();
+    Value result;
+
+    switch (op.getDimension()) {
+    case gpu::Dimension::x:
+      result = rewriter.create<NVVM::BlockIdXOp>(loc, i32Type);
+      break;
+    case gpu::Dimension::y:
+      result = rewriter.create<NVVM::BlockIdYOp>(loc, i32Type);
+      break;
+    case gpu::Dimension::z:
+      result = rewriter.create<NVVM::BlockIdZOp>(loc, i32Type);
+      break;
+    default:
+      return failure();
+    }
+
+    if (op.getType().isIndex())
+      result = rewriter.create<arith::IndexCastOp>(loc, op.getType(), result);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+/// Pattern to lower gpu.block_dim to NVVM intrinsic
+struct BlockDimOpLowering : public OpRewritePattern<gpu::BlockDimOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(gpu::BlockDimOp op,
+                                PatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto i32Type = rewriter.getI32Type();
+    Value result;
+
+    switch (op.getDimension()) {
+    case gpu::Dimension::x:
+      result = rewriter.create<NVVM::BlockDimXOp>(loc, i32Type);
+      break;
+    case gpu::Dimension::y:
+      result = rewriter.create<NVVM::BlockDimYOp>(loc, i32Type);
+      break;
+    case gpu::Dimension::z:
+      result = rewriter.create<NVVM::BlockDimZOp>(loc, i32Type);
+      break;
+    default:
+      return failure();
+    }
+
+    if (op.getType().isIndex())
+      result = rewriter.create<arith::IndexCastOp>(loc, op.getType(), result);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+/// Pattern to lower gpu.grid_dim to NVVM intrinsic
+struct GridDimOpLowering : public OpRewritePattern<gpu::GridDimOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(gpu::GridDimOp op,
+                                PatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto i32Type = rewriter.getI32Type();
+    Value result;
+
+    switch (op.getDimension()) {
+    case gpu::Dimension::x:
+      result = rewriter.create<NVVM::GridDimXOp>(loc, i32Type);
+      break;
+    case gpu::Dimension::y:
+      result = rewriter.create<NVVM::GridDimYOp>(loc, i32Type);
+      break;
+    case gpu::Dimension::z:
+      result = rewriter.create<NVVM::GridDimZOp>(loc, i32Type);
+      break;
+    default:
+      return failure();
+    }
+
+    if (op.getType().isIndex())
+      result = rewriter.create<arith::IndexCastOp>(loc, op.getType(), result);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 ///===----------------------------------------------------------------------===///
 // Pass Implementation
 ///===----------------------------------------------------------------------===///
@@ -1611,10 +1805,15 @@ void ConvertArtsToLLVMPass::populateCorePatterns(RewritePatternSet &patterns) {
   /// EDT patterns
   patterns.add<EdtParamPackPattern, EdtParamUnpackPattern>(context, AC);
   patterns.add<EdtCreatePattern>(context, AC);
+  patterns.add<GpuMemcpyPattern, LcSyncPattern>(context, AC);
 
   /// Dependency patterns
   patterns.add<DepGepOpPattern>(context, AC);
   patterns.add<RecordDepPattern, IncrementDepPattern>(context, AC);
+
+  /// GPU index lowering patterns (GPU dialect -> NVVM)
+  patterns.add<ThreadIdOpLowering, BlockIdOpLowering, BlockDimOpLowering,
+               GridDimOpLowering>(context);
 }
 
 void ConvertArtsToLLVMPass::populateDbPatterns(RewritePatternSet &patterns) {

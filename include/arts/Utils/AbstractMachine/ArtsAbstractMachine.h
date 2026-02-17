@@ -42,6 +42,9 @@ public:
   bool isGpuBufferEnabled() const { return gpuBufferOn; }
   int getGpuMaxMemory() const { return gpuMaxMemory; }
   int getGpuMaxEdts() const { return gpuMaxEdts; }
+  int64_t getGpuMinIterations() const { return gpuMinIterations; }
+  int64_t getGpuMinDataBytes() const { return gpuMinDataBytes; }
+  double getGpuMinArithIntensity() const { return gpuMinArithIntensity; }
 
   /// Network Configuration
   int getOutgoingThreads() const { return outgoing; }
@@ -112,6 +115,8 @@ private:
   static std::vector<std::string> splitCSV(const std::string &s);
   static int parseInt(const std::string &value, int defaultValue = -1);
   static bool parseBool(const std::string &value, bool defaultValue = false);
+  static double parseDouble(const std::string &value,
+                            double defaultValue = 0.0);
 
   /// Core Configuration
   int threads = 1;
@@ -137,6 +142,9 @@ private:
   int gpuMaxMemory = -1;
   int gpuMaxEdts = -1;
   bool gpuP2P = false;
+  int64_t gpuMinIterations = 1024;
+  int64_t gpuMinDataBytes = 1024 * 1024;
+  double gpuMinArithIntensity = 0.1;
 
   /// Network Configuration
   int outgoing = 1;

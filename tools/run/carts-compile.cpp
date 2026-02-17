@@ -79,6 +79,14 @@ static cl::opt<bool> EmitLLVM("emit-llvm", cl::desc("Emit LLVM IR output"),
 
 static cl::opt<bool> Debug("g", cl::desc("Enable debug mode"), cl::init(false));
 
+static cl::opt<bool>
+    GpuEnabled("gpu", cl::desc("Enable GPU compilation pipeline support"),
+               cl::init(false));
+
+static cl::opt<std::string>
+    GpuArch("gpu-arch", cl::desc("GPU target architecture (e.g., sm_80)"),
+            cl::value_desc("arch"), cl::init(""));
+
 static cl::opt<std::string> ArtsConfig("arts-config",
                                        cl::desc("ARTS configuration file path"),
                                        cl::value_desc("config_file"),
@@ -310,8 +318,10 @@ void setupInitialCleanup(OpPassManager &optPM) {
 }
 
 /// OpenMP to ARTS conversion pass.
-void setupOpenMPToArts(PassManager &pm) {
-  pm.addPass(arts::createConvertOpenMPtoArtsPass());
+void setupOpenMPToArts(PassManager &pm, bool gpuEnabled, StringRef configPath) {
+  pm.addPass(arts::createConvertOpenMPtoArtsPass(gpuEnabled));
+  if (gpuEnabled)
+    pm.addPass(arts::createGpuEligibilityAnalysisPass(configPath));
   pm.addPass(arts::createDeadCodeEliminationPass());
   pm.addPass(createCSEPass());
 }
@@ -374,8 +384,11 @@ void setupConcurrency(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 }
 
 /// EDT distribution and loop lowering passes.
-void setupEdtDistribution(PassManager &pm, arts::ArtsAnalysisManager *AM) {
+void setupEdtDistribution(PassManager &pm, arts::ArtsAnalysisManager *AM,
+                          bool gpuEnabled, StringRef configPath) {
   pm.addPass(arts::createEdtDistributionPass(AM));
+  if (gpuEnabled)
+    pm.addPass(arts::createGpuForLoweringPass(configPath));
   pm.addPass(arts::createForLoweringPass());
 }
 
@@ -414,15 +427,18 @@ void setupEpochs(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 }
 
 /// Pre-lowering passes.
-void setupPreLowering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
+void setupPreLowering(PassManager &pm, arts::ArtsAnalysisManager *AM,
+                      bool gpuEnabled) {
   pm.addPass(arts::createEdtAllocaSinkingPass());
   pm.addPass(arts::createParallelEdtLoweringPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
+  if (gpuEnabled)
+    pm.addPass(arts::createGpuEdtLoweringPass());
   pm.addPass(arts::createDbLoweringPass(ArtsIdStride));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
-  pm.addPass(arts::createEdtLoweringPass(ArtsIdStride));
+  pm.addPass(arts::createEdtLoweringPass(ArtsIdStride, gpuEnabled));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createLoopInvariantCodeMotionPass());
@@ -508,6 +524,10 @@ setupPassManager(ModuleOp module, MLIRContext &context,
       arts::setRuntimeConfigPath(module, machine.getConfigPath());
   }
 
+  if (GpuEnabled && !GpuArch.empty()) {
+    module->setAttr("arts.gpu_arch", StringAttr::get(&context, GpuArch));
+  }
+
   /// Load metadata from JSON file
   (void)AM->getMetadataManager();
 
@@ -532,56 +552,44 @@ setupPassManager(ModuleOp module, MLIRContext &context,
   };
 
   std::vector<StageSpec> stages = {
-      {PipelineStage::CanonicalizeMemrefs,
-       "Error when canonicalizing memrefs",
+      {PipelineStage::CanonicalizeMemrefs, "Error when canonicalizing memrefs",
        [&](PassManager &pm) { setupCanonicalizeMemrefs(pm); }},
-      {PipelineStage::CollectMetadata,
-       "Error when collecting metadata",
+      {PipelineStage::CollectMetadata, "Error when collecting metadata",
        [&](PassManager &pm) {
          bool shouldExport = (stopAt == PipelineStage::CollectMetadata);
          setupCollectMetadata(pm, shouldExport);
        }},
-      {PipelineStage::InitialCleanup,
-       "Error simplifying the IR",
+      {PipelineStage::InitialCleanup, "Error simplifying the IR",
        [&](PassManager &pm) {
          OpPassManager &optPM = pm.nest<func::FuncOp>();
          setupInitialCleanup(optPM);
        }},
-      {PipelineStage::OpenMPToArts,
-       "Error when converting OpenMP to ARTS",
-       [&](PassManager &pm) { setupOpenMPToArts(pm); }},
-      {PipelineStage::EdtTransforms,
-       "Error when running EDT transformations",
+      {PipelineStage::OpenMPToArts, "Error when converting OpenMP to ARTS",
+       [&](PassManager &pm) { setupOpenMPToArts(pm, GpuEnabled, ArtsConfig); }},
+      {PipelineStage::EdtTransforms, "Error when running EDT transformations",
        [&](PassManager &pm) { setupEdtTransforms(pm, AM.get()); }},
-      {PipelineStage::LoopReordering,
-       "Error when applying loop reordering",
+      {PipelineStage::LoopReordering, "Error when applying loop reordering",
        [&](PassManager &pm) { setupLoopReordering(pm, AM.get()); }},
-      {PipelineStage::CreateDbs,
-       "Error when creating Dbs",
+      {PipelineStage::CreateDbs, "Error when creating Dbs",
        [&](PassManager &pm) { setupCreateDbs(pm, AM.get()); }},
-      {PipelineStage::DbOpt,
-       "Error when optimizing Dbs",
+      {PipelineStage::DbOpt, "Error when optimizing Dbs",
        [&](PassManager &pm) { setupDbOpt(pm, AM.get()); }},
-      {PipelineStage::EdtOpt,
-       "Error when optimizing EDTs",
+      {PipelineStage::EdtOpt, "Error when optimizing EDTs",
        [&](PassManager &pm) { setupEdtOpt(pm, AM.get()); }},
-      {PipelineStage::Concurrency,
-       "Error when running concurrency",
+      {PipelineStage::Concurrency, "Error when running concurrency",
        [&](PassManager &pm) { setupConcurrency(pm, AM.get()); }},
-      {PipelineStage::EdtDistribution,
-       "Error when running EDT distribution",
-       [&](PassManager &pm) { setupEdtDistribution(pm, AM.get()); }},
-      {PipelineStage::ConcurrencyOpt,
-       "Error when optimizing concurrency",
+      {PipelineStage::EdtDistribution, "Error when running EDT distribution",
+       [&](PassManager &pm) {
+         setupEdtDistribution(pm, AM.get(), GpuEnabled, ArtsConfig);
+       }},
+      {PipelineStage::ConcurrencyOpt, "Error when optimizing concurrency",
        [&](PassManager &pm) { setupConcurrencyOpt(pm, AM.get()); }},
-      {PipelineStage::Epochs,
-       "Error when creating and optimizing epochs",
+      {PipelineStage::Epochs, "Error when creating and optimizing epochs",
        [&](PassManager &pm) { setupEpochs(pm, AM.get()); }},
       {PipelineStage::PreLowering,
        "Error when pre-lowering DBs, EDTs, and Epochs",
-       [&](PassManager &pm) { setupPreLowering(pm, AM.get()); }},
-      {PipelineStage::ArtsToLLVM,
-       "Error when converting ARTS to LLVM",
+       [&](PassManager &pm) { setupPreLowering(pm, AM.get(), GpuEnabled); }},
+      {PipelineStage::ArtsToLLVM, "Error when converting ARTS to LLVM",
        [&](PassManager &pm) { setupArtsToLLVM(pm, Debug); }},
   };
 

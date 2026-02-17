@@ -43,6 +43,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -134,11 +135,20 @@ private:
 // EDT Lowering Pass Implementation
 ///===----------------------------------------------------------------------===///
 struct EdtLoweringPass : public arts::EdtLoweringBase<EdtLoweringPass> {
-  explicit EdtLoweringPass(uint64_t idStride = IdRegistry::DefaultStride)
-      : idStride(idStride) {}
+  explicit EdtLoweringPass(uint64_t idStride = IdRegistry::DefaultStride,
+                           bool gpuEnabled = false) {
+    this->idStride = idStride;
+    this->gpuEnabled = gpuEnabled;
+  }
   void runOnOperation() override;
 
 private:
+  /// GPU kernel name generation for ops carrying gpu_launch_config.
+  void generateGpuKernelNames();
+
+  /// Convert GpuEdtOp to EdtOp while preserving GPU attributes.
+  void convertGpuEdtsToEdts();
+
   /// Core transformation methods
   LogicalResult lowerEdt(EdtOp edtOp);
 
@@ -168,8 +178,8 @@ private:
                                     const SmallVector<Value> &deps);
 
   /// Attributes
-  uint64_t idStride = IdRegistry::DefaultStride;
   unsigned functionCounter = 0;
+  unsigned gpuKernelCounter = 0;
   ModuleOp module;
   ArtsCodegen *AC = nullptr;
   IdRegistry idRegistry;
@@ -188,6 +198,14 @@ void EdtLoweringPass::runOnOperation() {
 
   ARTS_INFO_HEADER(EdtLoweringPass);
   ARTS_DEBUG_REGION(module.dump(););
+
+  /// Phase 0: GPU EDT handling before generic EDT lowering.
+  if (gpuEnabled) {
+    ARTS_DEBUG_HEADER(GpuKernelNameGeneration);
+    generateGpuKernelNames();
+    ARTS_DEBUG_HEADER(GpuEdtConversion);
+    convertGpuEdtsToEdts();
+  }
 
   /// Collect and lower all task EDTs
   {
@@ -217,6 +235,77 @@ void EdtLoweringPass::runOnOperation() {
   ARTS_INFO_FOOTER(EdtLoweringPass);
   AC = nullptr;
   ARTS_DEBUG_REGION(module.dump(););
+}
+
+void EdtLoweringPass::generateGpuKernelNames() {
+  MLIRContext *context = module.getContext();
+  gpuKernelCounter = 0;
+
+  SmallVector<Operation *, 8> gpuOps;
+  module.walk([&](Operation *op) {
+    if (op->hasAttr(AttrNames::Operation::GpuLaunchConfig))
+      gpuOps.push_back(op);
+  });
+
+  for (Operation *op : gpuOps) {
+    auto launchConfig = op->getAttrOfType<GpuLaunchConfigAttr>(
+        AttrNames::Operation::GpuLaunchConfig);
+    if (!launchConfig)
+      continue;
+    std::string kernelName =
+        "arts_gpu_kernel_" + std::to_string(gpuKernelCounter++);
+    op->setAttr("gpu_kernel_name", StringAttr::get(context, kernelName));
+  }
+}
+
+void EdtLoweringPass::convertGpuEdtsToEdts() {
+  SmallVector<GpuEdtOp, 8> gpuEdts;
+  module.walk([&](GpuEdtOp op) { gpuEdts.push_back(op); });
+
+  for (GpuEdtOp gpuEdt : gpuEdts) {
+    Location loc = gpuEdt.getLoc();
+    OpBuilder builder(gpuEdt);
+
+    Value route = gpuEdt.getRoute();
+    if (!route)
+      route = builder.create<arith::ConstantIntOp>(loc, 0, 32);
+
+    SmallVector<Value> deps(gpuEdt.getDependencies().begin(),
+                            gpuEdt.getDependencies().end());
+    auto edt = builder.create<EdtOp>(loc, EdtType::task,
+                                     EdtConcurrency::intranode, route, deps);
+
+    if (auto launchConfig = gpuEdt.getLaunchConfigAttr())
+      edt->setAttr(AttrNames::Operation::GpuLaunchConfig, launchConfig);
+    if (auto targetAttr = gpuEdt->getAttrOfType<GpuTargetAttr>(
+            AttrNames::Operation::GpuTarget))
+      edt->setAttr(AttrNames::Operation::GpuTarget, targetAttr);
+
+    Region &srcRegion = gpuEdt.getBody();
+    Region &dstRegion = edt.getBody();
+    dstRegion.takeBody(srcRegion);
+    if (dstRegion.empty())
+      dstRegion.push_back(new Block());
+
+    Block &dstBlock = dstRegion.front();
+    if (dstBlock.getNumArguments() == 0) {
+      for (Value dep : deps)
+        dstBlock.addArgument(dep.getType(), loc);
+    }
+
+    for (auto [dep, arg] : llvm::zip(deps, dstBlock.getArguments())) {
+      dep.replaceUsesWithIf(arg, [&](OpOperand &use) {
+        return dstRegion.isAncestor(use.getOwner()->getParentRegion());
+      });
+    }
+
+    if (gpuEdt->getNumResults() > 0 && !gpuEdt->use_empty()) {
+      auto nullGuid = builder.create<arith::ConstantIntOp>(loc, 0, 64);
+      gpuEdt.getResult().replaceAllUsesWith(nullGuid);
+    }
+
+    gpuEdt.erase();
+  }
 }
 
 ///===----------------------------------------------------------------------===///
@@ -287,6 +376,10 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
 
   outlineOp->setAttr(AttrNames::Operation::OutlinedFunc,
                      AC->getBuilder().getStringAttr(outlinedFunc.getName()));
+  if (auto launchAttr = edtOp->getAttr(AttrNames::Operation::GpuLaunchConfig))
+    outlineOp->setAttr(AttrNames::Operation::GpuLaunchConfig, launchAttr);
+  if (auto targetAttr = edtOp->getAttr(AttrNames::Operation::GpuTarget))
+    outlineOp->setAttr(AttrNames::Operation::GpuTarget, targetAttr);
   int64_t baseId = getArtsId(edtOp);
   if (!baseId)
     baseId = idRegistry.getOrCreate(edtOp.getOperation());
@@ -1018,6 +1111,11 @@ std::unique_ptr<Pass> createEdtLoweringPass() {
 
 std::unique_ptr<Pass> createEdtLoweringPass(uint64_t idStride) {
   return std::make_unique<EdtLoweringPass>(idStride);
+}
+
+std::unique_ptr<Pass> createEdtLoweringPass(uint64_t idStride,
+                                            bool gpuEnabled) {
+  return std::make_unique<EdtLoweringPass>(idStride, gpuEnabled);
 }
 
 } // namespace arts

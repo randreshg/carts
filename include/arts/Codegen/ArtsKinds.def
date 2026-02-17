@@ -126,6 +126,7 @@ __ARTS_TYPE(RawPtr, mlir::LLVM::LLVMPointerType::get)
 /// } artsEdtDep_t;
 __ARTS_STRUCT_TYPE(ArtsEdtDep, artsEdtDep_t, false, ArtsGuid, ArtsType, llvmPtr,
                    ArtsType)
+__ARTS_STRUCT_TYPE(Dim3, dim3, false, Int32, Int32, Int32)
 
 #undef __ARTS_STRUCT_TYPE
 #undef ARTS_STRUCT_TYPE
@@ -281,6 +282,17 @@ __ARTS_RTL_ATTRS(artsEdtCreateDep, ControlAttrs, EmptyAttrs,
                  ParamAttrs(ReadOnlyPtrAttrs, ZExt, ZExt, ReadOnlyPtrAttrs,
                             ZExt, ZExt))
 
+/// ArtsGuid artsEdtCreateGpu(artsEdt_t funcPtr, unsigned int route,
+///                           uint32_t paramc, uint64_t *paramv, uint32_t depc,
+///                           dim3 grid, dim3 block, ArtsGuid endGuid,
+///                           uint32_t slot, ArtsGuid dataGuid);
+__ARTS_RTL(artsEdtCreateGpu, ArtsGuid, EdtFnPtr, Int32, Int32, Int64Ptr, Int32,
+           Dim3, Dim3, ArtsGuid, Int32, ArtsGuid)
+__ARTS_RTL_ATTRS(artsEdtCreateGpu, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(ReadOnlyPtrAttrs, ZExt, ZExt, ReadOnlyPtrAttrs, ZExt,
+                            EmptyAttrs, EmptyAttrs, EmptyAttrs, ZExt,
+                            EmptyAttrs))
+
 /// ArtsGuid artsEdtCreateWithGuidDep(artsEdt_t funcPtr, ArtsGuid guid,
 ///                                   uint32_t paramc, uint64_t *paramv,
 ///                                   uint32_t depc, bool hasDepv);
@@ -303,6 +315,11 @@ __ARTS_RTL_ATTRS(artsEdtCreateWithEpochDep, ControlAttrs, EmptyAttrs,
 /// void artsSignalEdt(ArtsGuid edtGuid, uint32_t slot, ArtsGuid dataGuid);
 __ARTS_RTL(artsSignalEdt, Void, ArtsGuid, Int32, ArtsGuid)
 __ARTS_RTL_ATTRS(artsSignalEdt, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, ZExt, EmptyAttrs))
+
+/// void artsLCSync(ArtsGuid edtGuid, uint32_t slot, ArtsGuid dataGuid);
+__ARTS_RTL(artsLCSync, Void, ArtsGuid, Int32, ArtsGuid)
+__ARTS_RTL_ATTRS(artsLCSync, ControlAttrs, EmptyAttrs,
                  ParamAttrs(EmptyAttrs, ZExt, EmptyAttrs))
 
 /// void artsSignalEdtValue(ArtsGuid edtGuid, uint32_t slot, uint64_t data);

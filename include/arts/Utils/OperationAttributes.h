@@ -31,6 +31,9 @@ constexpr StringLiteral ArtsId = "arts.id";
 constexpr StringLiteral ArtsCreateId = "arts.create_id";
 constexpr StringLiteral OutlinedFunc = "outlined_func";
 constexpr StringLiteral Nowait = "nowait";
+constexpr StringLiteral GpuLaunchConfig = "gpu_launch_config";
+constexpr StringLiteral GpuTarget = "gpu_target";
+constexpr StringLiteral GpuProfitability = "gpu_profitability";
 
 /// Partition-related attributes (TableGen-generated names)
 constexpr StringLiteral PartitionMode = "partition_mode";

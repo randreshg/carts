@@ -6,6 +6,9 @@ This document mirrors the actual `carts-compile` stage order in
 Use it as the canonical checklist when auditing pass ordering, ownership, and
 cross-stage contracts.
 
+GPU-specific pass before/after examples live in
+`docs/compiler/gpu-pass-before-after.md`.
+
 ## Stage Order (`--stop-at`)
 
 1. `canonicalize-memrefs`
@@ -49,6 +52,7 @@ cross-stage contracts.
 
 ### 4) openmp-to-arts
 - `ConvertOpenMPtoArts`
+- optional `GpuEligibilityAnalysis` (when `--gpu`)
 - `DeadCodeElimination`
 - `CSE`
 
@@ -95,6 +99,7 @@ cross-stage contracts.
 
 ### 11) edt-distribution
 - `EdtDistributionPass`
+- optional `GpuForLowering` (when `--gpu`)
 - `ForLowering`
 
 ### 12) concurrency-opt
@@ -126,10 +131,11 @@ cross-stage contracts.
 - `ParallelEdtLowering`
 - `PolygeistCanonicalize`
 - `CSE`
+- optional `GpuEdtLowering` (when `--gpu`)
 - `DbLowering`
 - `PolygeistCanonicalize`
 - `CSE`
-- `EdtLowering`
+- `EdtLowering` (`gpuEnabled` option wired from `--gpu`)
 - `PolygeistCanonicalize`
 - `CSE`
 - `LICM`

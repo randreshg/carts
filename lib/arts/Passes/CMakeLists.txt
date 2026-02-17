@@ -18,9 +18,13 @@ add_mlir_dialect_library(MLIRArtsTransforms
   Transformations/SerialEdtifyPass.cpp
   Transformations/EdtDistributionPass.cpp
   Transformations/ForLowering.cpp
+  Transformations/GpuForLowering.cpp
+  Transformations/GpuEdtLowering.cpp
+  Transformations/GpuCodegen.cpp
   Transformations/ParallelEdtLowering.cpp
   Transformations/LoopReordering.cpp
   Transformations/EdtPtrRematerialization.cpp
+  Analysis/GpuEligibilityAnalysis.cpp
   
   # Optimization passes
   Optimizations/AliasScopeGen.cpp
@@ -62,6 +66,7 @@ LINK_LIBS PUBLIC
   MLIRMathDialect
   MLIRMathToLLVM
   MLIRMemRefDialect
+  MLIRGPUDialect
   MLIRNVVMDialect
   MLIRPass
   MLIRArts
