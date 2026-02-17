@@ -25,6 +25,7 @@
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/EdtUtils.h"
+#include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/RemovalUtils.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -144,6 +145,72 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
 
   /// Mixed mode: full-range coarse acquire on a block allocation.
   if (info.isFullRange) {
+    auto hintMode = acquire.getPartitionMode();
+    bool isSingleEntryStencilHint = !acquire.hasMultiplePartitionEntries();
+    bool isStencilLikeAcquire =
+        isSingleEntryStencilHint && acquire.getMode() == ArtsMode::inout &&
+        (getStencilCenterOffset(acquire.getOperation()).has_value() ||
+         (hintMode && *hintMode == PartitionMode::stencil));
+
+    SmallVector<Value> hintOffsets(info.partitionInfo.offsets.begin(),
+                                   info.partitionInfo.offsets.end());
+    SmallVector<Value> hintSizes(info.partitionInfo.sizes.begin(),
+                                 info.partitionInfo.sizes.end());
+    if (hintOffsets.empty() || hintSizes.empty()) {
+      hintOffsets.assign(acquire.getPartitionOffsets().begin(),
+                         acquire.getPartitionOffsets().end());
+      hintSizes.assign(acquire.getPartitionSizes().begin(),
+                       acquire.getPartitionSizes().end());
+    }
+    bool hasBlockLikeHints =
+        isStencilLikeAcquire && !hintOffsets.empty() && !hintSizes.empty();
+
+    /// Prefer explicit element-space partition hints when available.
+    /// This keeps DB-space dependency slices narrow for stencil-style acquires
+    /// that were conservatively marked full-range earlier in partition planning.
+    if (hasBlockLikeHints && nPartDims == 1) {
+      Value bs = plan.getBlockSize(0);
+      if (!bs)
+        bs = one;
+      bs = builder.create<arith::MaxUIOp>(loc, bs, one);
+
+      Value elemOff = hintOffsets.front();
+      Value elemSz = hintSizes.front();
+      Value startBlock = builder.create<arith::DivUIOp>(loc, elemOff, bs);
+      Value endPos = builder.create<arith::AddIOp>(loc, elemOff, elemSz);
+      endPos = builder.create<arith::SubIOp>(loc, endPos, one);
+      Value endBlock = builder.create<arith::DivUIOp>(loc, endPos, bs);
+
+      Value startAboveMax;
+      if (!plan.outerSizes.empty()) {
+        Value maxBlock =
+            builder.create<arith::SubIOp>(loc, plan.outerSizes.front(), one);
+        startAboveMax = builder.create<arith::CmpIOp>(
+            loc, arith::CmpIPredicate::ugt, startBlock, maxBlock);
+        Value clampedEnd =
+            builder.create<arith::MinUIOp>(loc, endBlock, maxBlock);
+        endBlock = builder.create<arith::SelectOp>(loc, startAboveMax, endBlock,
+                                                   clampedEnd);
+      }
+
+      Value blockCount = builder.create<arith::SubIOp>(loc, endBlock, startBlock);
+      blockCount = builder.create<arith::AddIOp>(loc, blockCount, one);
+      if (startAboveMax) {
+        startBlock = builder.create<arith::SelectOp>(loc, startAboveMax, zero,
+                                                     startBlock);
+        blockCount = builder.create<arith::SelectOp>(loc, startAboveMax, zero,
+                                                     blockCount);
+      }
+
+      acquire.getOffsetsMutable().assign({startBlock});
+      acquire.getSizesMutable().assign({blockCount});
+      ARTS_DEBUG("  Mixed mode: using explicit partition hints for DB-space "
+                 "slice");
+      if (!info.skipRebase)
+        rebaseEdtUsers(acquire, builder, startBlock, /*isSingleBlock=*/false);
+      return;
+    }
+
     SmallVector<Value> newOffsets, newSizes;
     for (unsigned d = 0; d < nPartDims; ++d) {
       newOffsets.push_back(zero);
