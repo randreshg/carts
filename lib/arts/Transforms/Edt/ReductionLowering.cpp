@@ -35,15 +35,6 @@ using namespace mlir::arts;
 
 namespace {
 
-static Value castToIndex(ArtsCodegen *AC, Value v, Location loc) {
-  if (!v)
-    return v;
-  if (v.getType().isIndex())
-    return v;
-  auto indexTy = AC->getBuilder().getIndexType();
-  return AC->create<arith::IndexCastOp>(loc, indexTy, v);
-}
-
 static Value createZeroValue(ArtsCodegen *AC, Type elemType, Location loc) {
   if (!elemType)
     return Value();
@@ -126,6 +117,7 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
   ReductionLoweringInfo redInfo;
   redInfo.loopMetadataAttr = loopMetadataAttr;
   redInfo.loopLocation = forOp.getLoc();
+  redInfo.parentConcurrency = parallelEdt.getConcurrency();
   ValueRange reductionAccums = forOp.getReductionAccumulators();
   if (reductionAccums.empty())
     return redInfo;
@@ -159,14 +151,14 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
     numWorkers = AC->createIndexConstant(workers.getValue(), loc);
   else if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {
     Value nodes =
-        castToIndex(AC, AC->create<GetTotalNodesOp>(loc).getResult(), loc);
+        AC->castToIndex(AC->create<GetTotalNodesOp>(loc).getResult(), loc);
     Value threads =
-        castToIndex(AC, AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
+        AC->castToIndex(AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
     numWorkers = AC->create<arith::MulIOp>(loc, nodes, threads);
   } else {
     numWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
   }
-  numWorkers = castToIndex(AC, numWorkers, loc);
+  numWorkers = AC->castToIndex(numWorkers, loc);
 
   Block &parallelBlock = parallelEdt.getBody().front();
   ValueRange parentDeps = parallelEdt.getDependencies();
@@ -400,7 +392,7 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
 
   Value routeZero = AC->create<arith::ConstantIntOp>(loc, 0, 32);
   auto resultEdt = AC->create<EdtOp>(
-      loc, EdtType::task, EdtConcurrency::intranode, routeZero, edtDeps);
+      loc, EdtType::task, redInfo.parentConcurrency, routeZero, edtDeps);
 
   Block &resultBlock = resultEdt.getBody().front();
   AC->setInsertionPointToStart(&resultBlock);

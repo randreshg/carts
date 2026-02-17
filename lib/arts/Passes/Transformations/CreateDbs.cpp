@@ -15,6 +15,14 @@
 /// 6. Insert arts.db_release operations before EDT terminators
 /// 7. Insert arts.db_free operations for db_alloc operations
 ///
+/// Example:
+///   Before:
+///     memref.load/store inside arts.edt body on captured buffers
+///
+///   After:
+///     arts.db_alloc + arts.db_acquire/arts.db_release around EDT body access
+///     with loads/stores redirected through acquired DB views
+///
 /// Allocation Strategy:
 /// This pass analyzes memory access patterns from task dependencies
 /// (DbControlOps) to determine the optimal datablock allocation granularity:
@@ -67,6 +75,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include <cstdint>
+#include <memory>
 
 /// Debug
 #include "arts/Utils/ArtsDebug.h"
@@ -292,7 +301,8 @@ void CreateDbsPass::runOnOperation() {
   memrefInfo.clear();
 
   /// Initialize ArtsCodegen
-  AC = new ArtsCodegen(module, false);
+  auto ownedAC = std::make_unique<ArtsCodegen>(module, false);
+  AC = ownedAC.get();
 
   ARTS_INFO_HEADER(CreateDbsPass);
   ARTS_DEBUG_REGION(module.dump(););
@@ -374,10 +384,7 @@ void CreateDbsPass::runOnOperation() {
   DominanceInfo domInfo(module);
   arts::simplifyIR(module, domInfo);
 
-  /// Cleanup ArtsCodegen
-  delete AC;
   AC = nullptr;
-
   ARTS_INFO_FOOTER(CreateDbsPass);
   ARTS_DEBUG_REGION(module.dump(););
 }

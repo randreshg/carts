@@ -144,6 +144,11 @@ This is the current intent (see `lib/arts/Analysis/ArtsHeuristics.cpp`):
   `inout` acquire carries valid 2D partition sizes, force `blockND` (2D) so
   output ownership matches the distribution plan
 
+Current H2 tie-in:
+- Internode `matmul` is currently selected as `tiling_2d` by distribution
+  heuristics, so this `blockND` path is expected to trigger for writable output
+  acquires in that case.
+
 Important naming detail:
 - In the implementation, "block" is a family: PartitioningDecision::isBlock()
   returns true for both Block and Stencil (Stencil is "Block + ESD halos").
@@ -166,6 +171,74 @@ Stencil exception:
 - For `tiling_2d` output acquires (`inout`) with explicit 2D owner hints,
   `DbPartitioning` can infer partition dims `[0,1]` and keep those hints even
   when generic dim inference would otherwise be incomplete.
+- Read-only inputs in the same loop may still follow regular block localization
+  rules; only writable ownership is forced to N-D alignment.
+
+---
+
+## 3.3) Partitioning Modes At A Glance (Paragraph + Figure)
+
+This section gives one compact paragraph and one compact figure per mode. The
+later sections (4-7) keep the full formal detail and worked examples.
+
+### Coarse
+
+Coarse keeps the entire logical array in one DB (`outerSizes=[1]`). There is no
+outer block selection during execution: every access uses `db_ref[0]`, and all
+indices are local indices into the single inner memref.
+
+```
+Logical A[...]  --->  DbAlloc outerSizes=[1], innerSizes=[full shape]
+                           |
+                           v
+                        DbRef[0]
+```
+
+### Fine-Grained
+
+Fine-grained creates many small DBs keyed by outer coordinates (often one row
+or one element per DB depending on outer rank). Access first selects a DB from
+outer indices (`db_ref`), then uses remaining local indices inside that DB.
+
+```
+Logical A[i,j] (outerRank=1 on i)
+   rows -> DB[0], DB[1], ... DB[D0-1]
+
+  db_ref = i
+  local  = j
+```
+
+### Block
+
+Block partitions one or more dimensions into contiguous chunks. Each access is
+split into block coordinates (`floor(idx/B)`) and local coordinates (`idx%B`).
+`db_ref` selects the block; local indices address within that block.
+
+```
+A[i,j], block rows by B
+
+  blockIdx = floor(i/B)   -> db_ref[blockIdx]
+  localI   = i % B        -> view[localI, j]
+```
+
+### Stencil (Block + Halo / ESD)
+
+Stencil keeps Block allocation layout, but dependency delivery is augmented with
+halo slices (ESD): each worker sees owned block data plus neighbor boundary
+slices (`leftHalo`, `rightHalo`) for ghost-cell accesses.
+
+```
+neighbor block   owned block   neighbor block
+    |                |               |
+    v                v               v
+ leftHalo         owned view      rightHalo
+ (ESD slice)      (full block)    (ESD slice)
+```
+
+### Coarse vs Full-Range (Important)
+
+Coarse is an allocation decision (single DB). Full-range is an acquire decision
+(request all DB blocks) and can happen under block/fine/stencil layouts.
 
 ---
 

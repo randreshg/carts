@@ -18,6 +18,13 @@
 /// - Memrefs have clear multi-dimensional types (no flattened arrays)
 /// - Sequential code before OpenMP pragmas
 ///
+/// Example:
+///   Before:
+///     module with scf/affine loops and memrefs
+///
+///   After:
+///     same IR + metadata records for loops/memrefs/access/dependence
+///
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"

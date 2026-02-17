@@ -16,6 +16,9 @@
 /// Worker partitioning uses block distribution:
 ///   - blockSize = ceil(totalIterations / numWorkers)
 ///   - Each worker processes iterations [start, start + count)
+///
+/// Example:
+///   one `arts.for` inside `arts.edt<parallel>` -> epoch + per-worker task EDTs
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"
@@ -60,15 +63,6 @@ using namespace mlir::func;
 using namespace mlir::arts;
 
 namespace {
-
-static Value castToIndex(ArtsCodegen *AC, Value v, Location loc) {
-  if (!v)
-    return v;
-  if (v.getType().isIndex())
-    return v;
-  auto indexTy = AC->getBuilder().getIndexType();
-  return AC->create<arith::IndexCastOp>(loc, indexTy, v);
-}
 
 ///===----------------------------------------------------------------------===///
 /// LoopInfo - Information about a loop within a parallel EDT
@@ -333,7 +327,7 @@ void LoopInfo::initialize() {
   blockSize = AC->createIndexConstant(computedBlockSize, loc);
   useRuntimeBlockAlignment = false;
   if (computedBlockSize == 1 && runtimeBlockSizeHint) {
-    blockSize = castToIndex(AC, runtimeBlockSizeHint, loc);
+    blockSize = AC->castToIndex(runtimeBlockSizeHint, loc);
     blockSize = AC->create<arith::MaxUIOp>(loc, blockSize, one);
     /// When block size is provided dynamically, align chunk partitioning to
     /// block boundaries at runtime. This avoids cross-chunk overlap on
@@ -598,7 +592,7 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   Value numDbPartitions;
   if (originalParallel.getConcurrency() == EdtConcurrency::internode) {
     numDbPartitions =
-        castToIndex(&AC, AC.create<GetTotalNodesOp>(loc).getResult(), loc);
+        AC.castToIndex(AC.create<GetTotalNodesOp>(loc).getResult(), loc);
   } else {
     numDbPartitions = numWorkers;
   }
@@ -858,10 +852,10 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       if (rootAlloc) {
         auto elementSizes = rootAlloc.getElementSizes();
         if (!elementSizes.empty() && elementSizes.front())
-          blockSpan = castToIndex(AC, elementSizes.front(), loc);
+          blockSpan = AC->castToIndex(elementSizes.front(), loc);
         auto outerSizes = rootAlloc.getSizes();
         if (!outerSizes.empty() && outerSizes.front())
-          totalBlocks = castToIndex(AC, outerSizes.front(), loc);
+          totalBlocks = AC->castToIndex(outerSizes.front(), loc);
       }
       blockSpan = AC->create<arith::MaxUIOp>(loc, blockSpan, one);
 
@@ -893,8 +887,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         if (isStencilPattern && parentAcqOp.getMode() != ArtsMode::in)
           elemHintSize = AC->create<arith::AddIOp>(loc, elemHintSize, one);
       }
-      elemOffset = castToIndex(AC, elemOffset, loc);
-      elemHintSize = castToIndex(AC, elemHintSize, loc);
+      elemOffset = AC->castToIndex(elemOffset, loc);
+      elemHintSize = AC->castToIndex(elemHintSize, loc);
       elemHintSize = AC->create<arith::MaxUIOp>(loc, elemHintSize, one);
 
       Value startBlock = AC->create<arith::DivUIOp>(loc, elemOffset, blockSpan);

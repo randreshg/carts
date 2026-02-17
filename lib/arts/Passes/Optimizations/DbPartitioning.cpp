@@ -17,6 +17,9 @@
 ///       partition_offsets(...), partition_sizes(...)
 ///     (task-local range acquire; same program dependencies, smaller transfer)
 ///
+/// Example:
+///   coarse single-range acquire -> block/stencil/element-wise layout rewrite
+///
 /// This pass must preserve dependency semantics: it refines acquire metadata
 /// and rewrite plans, but does not weaken EDT/event ordering.
 ///==========================================================================///

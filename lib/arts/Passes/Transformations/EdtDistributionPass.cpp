@@ -16,6 +16,9 @@
 ///     } {distribution_kind = ..., distribution_pattern = ...}
 ///
 /// This pass does not create/remove dependencies; it only writes typed attrs
+///
+/// Example:
+///   matmul loop in internode EDT -> annotation picks `distribution_kind=tiling_2d`
 /// consumed later by lowering.
 ///==========================================================================///
 

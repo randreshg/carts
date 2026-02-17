@@ -1,5 +1,14 @@
 ///==========================================================================///
 /// File: Edt.cpp
+///
+/// EDT analysis/cleanup pass used in multiple pipeline stages.
+///
+/// Example:
+///   Before:
+///     arts.edt ... { dead ops / stale attributes / unnormalized deps }
+///
+///   After:
+///     arts.edt ... { normalized dependency form + cleaned/annotated body }
 ///==========================================================================///
 
 /// Dialects

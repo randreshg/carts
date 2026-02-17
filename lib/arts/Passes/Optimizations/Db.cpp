@@ -2,6 +2,13 @@
 /// File: Db.cpp
 /// Pass for DB mode adjustments based on access patterns.
 /// Partitioning logic has been moved to DbPartitioning.cpp.
+///
+/// Example:
+///   Before:
+///     arts.db_acquire[<inout>] ...   // conservative mode
+///
+///   After:
+///     arts.db_acquire[<in>] ...      // mode tightened when write not observed
 ///==========================================================================///
 
 /// Dialects

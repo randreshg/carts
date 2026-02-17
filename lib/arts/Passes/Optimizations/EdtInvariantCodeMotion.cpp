@@ -1,5 +1,16 @@
 ///==========================================================================///
 /// File: EdtInvariantCodeMotion.cpp
+///
+/// Hoists loop-invariant computations inside EDT regions to reduce repeated
+/// work and improve downstream simplification opportunities.
+///
+/// Example:
+///   Before:
+///     scf.for %i = ... { %c = arith.addi %N, %M ... use %c }
+///
+///   After:
+///     %c = arith.addi %N, %M
+///     scf.for %i = ... { ... use %c }
 ///==========================================================================///
 
 /// Dialects

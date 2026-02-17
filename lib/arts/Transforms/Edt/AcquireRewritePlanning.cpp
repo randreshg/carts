@@ -28,15 +28,6 @@ using namespace mlir::arts;
 
 namespace {
 
-static Value castToIndex(ArtsCodegen *AC, Value value, Location loc) {
-  if (!value)
-    return value;
-  if (value.getType().isIndex())
-    return value;
-  return AC->create<arith::IndexCastOp>(loc, AC->getBuilder().getIndexType(),
-                                        value);
-}
-
 static bool acquireHasReadAccess(DbAcquireOp acquire) {
   if (!acquire)
     return false;
@@ -197,17 +188,17 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
         needsStencilHalo = !isSingleElement && modeNeedsStencilHalo &&
                            (patternSaysStencil || strategySaysStencil);
         if (needsStencilHalo)
-          stencilExtent = castToIndex(input.AC, elemSizes.front(), input.loc);
+          stencilExtent = input.AC->castToIndex(elemSizes.front(), input.loc);
 
         if (input.distributionKind == DistributionKind::Tiling2D &&
             input.parentAcquire.getMode() == ArtsMode::inout &&
             elemSizes.size() > 1 && !isSingleElement && input.tiling2DGrid &&
             input.tiling2DGrid->colWorkers) {
-          Value totalCols = castToIndex(input.AC, elemSizes[1], input.loc);
+          Value totalCols = input.AC->castToIndex(elemSizes[1], input.loc);
           Value colWorkers =
-              castToIndex(input.AC, input.tiling2DGrid->colWorkers, input.loc);
-          Value colWorkerId =
-              castToIndex(input.AC, input.tiling2DGrid->colWorkerId, input.loc);
+              input.AC->castToIndex(input.tiling2DGrid->colWorkers, input.loc);
+          Value colWorkerId = input.AC->castToIndex(
+              input.tiling2DGrid->colWorkerId, input.loc);
 
           Value colWorkersMinusOne =
               input.AC->create<arith::SubIOp>(input.loc, colWorkers, one);
