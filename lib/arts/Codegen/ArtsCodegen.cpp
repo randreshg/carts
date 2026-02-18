@@ -277,16 +277,43 @@ void ArtsCodegen::waitOnHandle(Value epochGuid, Location loc) {
   createRuntimeCall(ARTSRTL_artsWaitOnHandle, {epochGuid}, loc);
 }
 
-func::FuncOp ArtsCodegen::insertInitPerWorker(Location loc) {
+func::FuncOp ArtsCodegen::insertInitPerWorker(Location loc,
+                                              func::FuncOp callback) {
   OpBuilder::InsertionGuard IG(getBuilder());
   setInsertionPoint(module);
-  auto newFn = create<func::FuncOp>(loc, "initPerWorker", InitPerWorkerFn);
-  newFn.setPublic();
-  module.push_back(newFn);
-  auto *entryBlock = newFn.addEntryBlock();
-  getBuilder().setInsertionPointToStart(entryBlock);
-  create<func::ReturnOp>(loc);
-  return newFn;
+
+  func::FuncOp initPerWorkerFn =
+      module.lookupSymbol<func::FuncOp>("initPerWorker");
+  if (!initPerWorkerFn) {
+    initPerWorkerFn =
+        create<func::FuncOp>(loc, "initPerWorker", InitPerWorkerFn);
+    initPerWorkerFn.setPublic();
+    initPerWorkerFn.addEntryBlock();
+    getBuilder().setInsertionPointToStart(&initPerWorkerFn.getBody().front());
+    create<func::ReturnOp>(loc);
+  }
+
+  if (!callback)
+    return initPerWorkerFn;
+
+  Block &entryBlock = initPerWorkerFn.getBody().front();
+  Operation *retTerminator = entryBlock.getTerminator();
+  if (!retTerminator || !isa<func::ReturnOp>(retTerminator))
+    return initPerWorkerFn;
+
+  getBuilder().setInsertionPoint(retTerminator);
+  ValueRange args = initPerWorkerFn.getArguments();
+  if (callback.getNumArguments() == 4) {
+    create<func::CallOp>(loc, callback, args);
+  } else if (callback.getNumArguments() == 2) {
+    create<func::CallOp>(
+        loc, callback,
+        ValueRange{initPerWorkerFn.getArgument(2), initPerWorkerFn.getArgument(3)});
+  } else if (callback.getNumArguments() == 0) {
+    create<func::CallOp>(loc, callback, ValueRange{});
+  }
+
+  return initPerWorkerFn;
 }
 
 func::FuncOp ArtsCodegen::insertInitPerNode(Location loc,
@@ -327,8 +354,8 @@ func::FuncOp ArtsCodegen::insertInitPerNode(Location loc,
   return initPerNodeFn;
 }
 
-func::FuncOp ArtsCodegen::insertDistributedDbInitFn(Location loc) {
-  if (distributedInitCallbacks.empty())
+func::FuncOp ArtsCodegen::insertDistributedDbInitNodeFn(Location loc) {
+  if (distributedInitNodeCallbacks.empty())
     return func::FuncOp();
 
   OpBuilder::InsertionGuard IG(getBuilder());
@@ -343,7 +370,7 @@ func::FuncOp ArtsCodegen::insertDistributedDbInitFn(Location loc) {
   Block *entryBlock = fn.addEntryBlock();
   getBuilder().setInsertionPointToStart(entryBlock);
 
-  for (func::FuncOp callback : distributedInitCallbacks) {
+  for (func::FuncOp callback : distributedInitNodeCallbacks) {
     if (!callback)
       continue;
     if (callback.getNumArguments() == 3) {
@@ -353,6 +380,44 @@ func::FuncOp ArtsCodegen::insertDistributedDbInitFn(Location loc) {
     if (callback.getNumArguments() == 2) {
       create<func::CallOp>(loc, callback,
                            ValueRange{fn.getArgument(1), fn.getArgument(2)});
+      continue;
+    }
+    if (callback.getNumArguments() == 0)
+      create<func::CallOp>(loc, callback, ValueRange{});
+  }
+
+  create<func::ReturnOp>(loc);
+  return fn;
+}
+
+func::FuncOp ArtsCodegen::insertDistributedDbInitWorkerFn(Location loc) {
+  if (distributedInitWorkerCallbacks.empty())
+    return func::FuncOp();
+
+  OpBuilder::InsertionGuard IG(getBuilder());
+  setInsertionPoint(module);
+
+  if (auto existing =
+          module.lookupSymbol<func::FuncOp>("distributed_db_init_worker"))
+    return existing;
+
+  auto fn = create<func::FuncOp>(loc, "distributed_db_init_worker",
+                                 InitPerWorkerFn);
+  fn.setPrivate();
+
+  Block *entryBlock = fn.addEntryBlock();
+  getBuilder().setInsertionPointToStart(entryBlock);
+
+  for (func::FuncOp callback : distributedInitWorkerCallbacks) {
+    if (!callback)
+      continue;
+    if (callback.getNumArguments() == 4) {
+      create<func::CallOp>(loc, callback, fn.getArguments());
+      continue;
+    }
+    if (callback.getNumArguments() == 2) {
+      create<func::CallOp>(loc, callback,
+                           ValueRange{fn.getArgument(2), fn.getArgument(3)});
       continue;
     }
     if (callback.getNumArguments() == 0)
@@ -436,11 +501,15 @@ void ArtsCodegen::initRT(Location loc) {
   /// Rename main function to "mainBody"
   mainFn.setName("mainBody");
 
-  /// Insert distributed init callback in initPerNode when distributed
-  /// allocations were lowered into callback helpers.
-  if (!distributedInitCallbacks.empty()) {
-    func::FuncOp distributedInitFn = insertDistributedDbInitFn(loc);
+  /// Insert distributed init callbacks when distributed allocations were
+  /// lowered into callback helpers.
+  if (!distributedInitNodeCallbacks.empty()) {
+    func::FuncOp distributedInitFn = insertDistributedDbInitNodeFn(loc);
     insertInitPerNode(loc, distributedInitFn);
+  }
+  if (!distributedInitWorkerCallbacks.empty()) {
+    func::FuncOp distributedWorkerInitFn = insertDistributedDbInitWorkerFn(loc);
+    insertInitPerWorker(loc, distributedWorkerInitFn);
   }
 
   /// Insert runtime entry functions (artsMain and main)
@@ -448,14 +517,24 @@ void ArtsCodegen::initRT(Location loc) {
   insertMainFn(loc);
 }
 
-void ArtsCodegen::registerDistributedInitCallback(func::FuncOp callback) {
+void ArtsCodegen::registerDistributedInitNodeCallback(func::FuncOp callback) {
   if (!callback)
     return;
-  for (func::FuncOp existing : distributedInitCallbacks) {
+  for (func::FuncOp existing : distributedInitNodeCallbacks) {
     if (existing == callback)
       return;
   }
-  distributedInitCallbacks.push_back(callback);
+  distributedInitNodeCallbacks.push_back(callback);
+}
+
+void ArtsCodegen::registerDistributedInitWorkerCallback(func::FuncOp callback) {
+  if (!callback)
+    return;
+  for (func::FuncOp existing : distributedInitWorkerCallbacks) {
+    if (existing == callback)
+      return;
+  }
+  distributedInitWorkerCallbacks.push_back(callback);
 }
 
 /// Helpers

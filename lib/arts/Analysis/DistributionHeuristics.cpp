@@ -28,6 +28,8 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -70,23 +72,37 @@ static bool shouldSkipCoarsening(ForOp forOp, LoopNode *loopNode) {
   return false;
 }
 
+static std::optional<int64_t> getExplicitWorkerCount(EdtOp edt) {
+  if (!edt)
+    return std::nullopt;
+  return arts::getWorkers(edt.getOperation());
+}
+
+static std::optional<int64_t> getExplicitWorkersPerNodeCount(EdtOp edt) {
+  if (!edt)
+    return std::nullopt;
+  return arts::getWorkersPerNode(edt.getOperation());
+}
+
 std::optional<WorkerConfig> DistributionHeuristics::resolveWorkerConfig(
     EdtOp parallelEdt, const ArtsAbstractMachine *machine) {
   WorkerConfig cfg;
   cfg.internode = parallelEdt.getConcurrency() == EdtConcurrency::internode;
 
-  if (auto workers = parallelEdt->getAttrOfType<workersAttr>(
-          AttrNames::Operation::Workers)) {
-    cfg.totalWorkers = workers.getValue();
+  if (auto workers = getExplicitWorkerCount(parallelEdt)) {
+    cfg.totalWorkers = *workers;
     if (cfg.totalWorkers <= 0)
       return std::nullopt;
 
     if (cfg.internode) {
-      if (machine && machine->hasValidNodeCount() &&
-          machine->getNodeCount() > 0)
+      if (auto workersPerNode = getExplicitWorkersPerNodeCount(parallelEdt)) {
+        cfg.workersPerNode = *workersPerNode;
+      } else if (machine && machine->hasValidNodeCount() &&
+                 machine->getNodeCount() > 0) {
         cfg.workersPerNode = std::max<int64_t>(
             1,
             cfg.totalWorkers / static_cast<int64_t>(machine->getNodeCount()));
+      }
       if (cfg.workersPerNode <= 0)
         cfg.workersPerNode = 1;
     } else {
@@ -168,21 +184,38 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
   return blockSize;
 }
 
-int64_t
-DistributionHeuristics::chooseTiling2DColumnWorkers(int64_t totalWorkers) {
+int64_t DistributionHeuristics::chooseTiling2DColumnWorkers(
+    int64_t totalWorkers, std::optional<int64_t> workersPerNode) {
   if (totalWorkers < 4)
     return 1;
 
+  auto validDivisor = [&](int64_t d) -> bool {
+    if (d <= 1 || totalWorkers % d != 0)
+      return false;
+    if (!workersPerNode || *workersPerNode <= 0)
+      return true;
+    return (*workersPerNode % d) == 0;
+  };
+
   int64_t best = 1;
-  for (int64_t d = 2; d * d <= totalWorkers; ++d) {
-    if (totalWorkers % d == 0)
+  double bestDist = std::numeric_limits<double>::infinity();
+  double target = std::sqrt(static_cast<double>(totalWorkers));
+  for (int64_t d = 2; d <= totalWorkers; ++d) {
+    if (!validDivisor(d))
+      continue;
+    double dist = std::fabs(static_cast<double>(d) - target);
+    if (dist < bestDist || (dist == bestDist && d > best)) {
       best = d;
+      bestDist = dist;
+    }
   }
+
   return best;
 }
 
 Tiling2DWorkerGrid DistributionHeuristics::getTiling2DWorkerGrid(
-    ArtsCodegen *AC, Location loc, Value workerId, Value totalWorkers) {
+    ArtsCodegen *AC, Location loc, Value workerId, Value totalWorkers,
+    Value workersPerNode) {
   Tiling2DWorkerGrid grid;
   Value one = AC->createIndexConstant(1, loc);
   Value zero = AC->createIndexConstant(0, loc);
@@ -197,7 +230,13 @@ Tiling2DWorkerGrid DistributionHeuristics::getTiling2DWorkerGrid(
 
   if (auto totalWorkersConst =
           ValueUtils::tryFoldConstantIndex(totalWorkersIndex)) {
-    int64_t colWorkersConst = chooseTiling2DColumnWorkers(*totalWorkersConst);
+    std::optional<int64_t> workersPerNodeConst = std::nullopt;
+    if (workersPerNode)
+      workersPerNodeConst = ValueUtils::tryFoldConstantIndex(
+          AC->castToIndex(workersPerNode, loc));
+
+    int64_t colWorkersConst =
+        chooseTiling2DColumnWorkers(*totalWorkersConst, workersPerNodeConst);
     if (colWorkersConst > 1) {
       grid.colWorkers = AC->createIndexConstant(colWorkersConst, loc);
       grid.rowWorkers =
@@ -355,7 +394,8 @@ DistributionBounds DistributionHeuristics::computeBounds(
     Value distWorkers = runtimeTotalWorkers;
     if (strategy.kind == DistributionKind::Tiling2D) {
       Tiling2DWorkerGrid grid =
-          getTiling2DWorkerGrid(AC, loc, workerId, runtimeTotalWorkers);
+          getTiling2DWorkerGrid(AC, loc, workerId, runtimeTotalWorkers,
+                                runtimeWorkersPerNode);
       distWorkerId = grid.rowWorkerId;
       distWorkers = grid.rowWorkers;
     }
@@ -606,7 +646,8 @@ DistributionBounds DistributionHeuristics::recomputeBoundsInside(
   Value distWorkers = totalWorkersIndex;
   if (strategy.kind == DistributionKind::Tiling2D) {
     Tiling2DWorkerGrid grid =
-        getTiling2DWorkerGrid(AC, loc, workerIdIndex, totalWorkersIndex);
+        getTiling2DWorkerGrid(AC, loc, workerIdIndex, totalWorkersIndex,
+                              workersPerNode);
     distWorkerId = grid.rowWorkerId;
     distWorkers = grid.rowWorkers;
   }
@@ -717,54 +758,78 @@ Value DistributionHeuristics::computeDbAlignmentBlockSize(EdtOp parallelEdt,
 /// Workers Per Node
 ///===----------------------------------------------------------------------===///
 
-Value DistributionHeuristics::getWorkersPerNode(ArtsCodegen *AC, Location loc,
+Value DistributionHeuristics::getWorkersPerNode(OpBuilder &builder,
+                                                Location loc,
                                                 EdtOp parallelEdt) {
-  Value workersPerNode;
-  Value one = AC->createIndexConstant(1, loc);
+  auto toIndex = [&](Value v) -> Value {
+    if (!v)
+      return Value();
+    if (v.getType().isIndex())
+      return v;
+    return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(), v);
+  };
 
-  if (auto workers = parallelEdt->getAttrOfType<workersAttr>(
-          AttrNames::Operation::Workers)) {
-    Value totalWorkers = AC->createIndexConstant(workers.getValue(), loc);
-    Value totalNodes =
-        AC->castToIndex(AC->create<GetTotalNodesOp>(loc).getResult(), loc);
-    workersPerNode = AC->create<arith::DivUIOp>(loc, totalWorkers, totalNodes);
-  } else {
-    workersPerNode =
-        AC->castToIndex(AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
+  Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
+  Value workersPerNode;
+
+  if (auto wpnConst = getExplicitWorkersPerNodeCount(parallelEdt)) {
+    int64_t clamped = std::max<int64_t>(1, *wpnConst);
+    return builder.create<arith::ConstantIndexOp>(loc, clamped);
   }
 
-  /// Clamp to at least 1 to prevent division by zero
-  Value zero = AC->createIndexConstant(0, loc);
-  Value isZero = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                           workersPerNode, zero);
-  return AC->create<arith::SelectOp>(loc, isZero, one, workersPerNode);
+  if (auto workers = getExplicitWorkerCount(parallelEdt)) {
+    Value totalWorkers = builder.create<arith::ConstantIndexOp>(loc, *workers);
+    Value totalNodes = toIndex(builder.create<GetTotalNodesOp>(loc).getResult());
+    workersPerNode =
+        builder.create<arith::DivUIOp>(loc, totalWorkers, totalNodes);
+  } else {
+    workersPerNode = toIndex(builder.create<GetTotalWorkersOp>(loc).getResult());
+  }
+
+  /// Clamp to at least 1 to prevent division by zero.
+  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+  Value isZero = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                               workersPerNode, zero);
+  return builder.create<arith::SelectOp>(loc, isZero, one, workersPerNode);
+}
+
+Value DistributionHeuristics::getWorkersPerNode(ArtsCodegen *AC, Location loc,
+                                                EdtOp parallelEdt) {
+  return getWorkersPerNode(AC->getBuilder(), loc, parallelEdt);
+}
+
+Value DistributionHeuristics::getTotalWorkers(OpBuilder &builder, Location loc,
+                                              EdtOp parallelEdt) {
+  auto toIndex = [&](Value v) -> Value {
+    if (!v)
+      return Value();
+    if (v.getType().isIndex())
+      return v;
+    return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(), v);
+  };
+
+  if (auto workers = getExplicitWorkerCount(parallelEdt))
+    return builder.create<arith::ConstantIndexOp>(loc, *workers);
+
+  if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {
+    Value nodes = toIndex(builder.create<GetTotalNodesOp>(loc).getResult());
+    Value threads = toIndex(builder.create<GetTotalWorkersOp>(loc).getResult());
+    return builder.create<arith::MulIOp>(loc, nodes, threads);
+  }
+
+  return toIndex(builder.create<GetTotalWorkersOp>(loc).getResult());
 }
 
 Value DistributionHeuristics::getTotalWorkers(ArtsCodegen *AC, Location loc,
                                               EdtOp parallelEdt) {
-  if (auto workers = parallelEdt->getAttrOfType<workersAttr>(
-          AttrNames::Operation::Workers)) {
-    return AC->createIndexConstant(workers.getValue(), loc);
-  }
-
-  if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {
-    Value nodes =
-        AC->castToIndex(AC->create<GetTotalNodesOp>(loc).getResult(), loc);
-    Value threads =
-        AC->castToIndex(AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
-    return AC->create<arith::MulIOp>(loc, nodes, threads);
-  }
-
-  return AC->castToIndex(AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
+  return getTotalWorkers(AC->getBuilder(), loc, parallelEdt);
 }
 
 Value DistributionHeuristics::getDispatchWorkerCount(OpBuilder &builder,
                                                      Location loc,
                                                      EdtOp parallelEdt) {
-  if (auto workers = parallelEdt->getAttrOfType<workersAttr>(
-          AttrNames::Operation::Workers)) {
-    return builder.create<arith::ConstantIndexOp>(loc, workers.getValue());
-  }
+  if (auto workers = getExplicitWorkerCount(parallelEdt))
+    return builder.create<arith::ConstantIndexOp>(loc, *workers);
 
   Value workerCount;
   if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {

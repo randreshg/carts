@@ -256,7 +256,7 @@ def _compile_from_c(
         "--loop-transforms-min-trip-count",
         # Partitioning options
         "--partition-fallback",
-        "--distributed-db-ownership",
+        "--distributed-db",
         "--serial-edtify",
     }
 

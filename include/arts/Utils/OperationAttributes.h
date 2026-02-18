@@ -8,6 +8,7 @@
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/StringRef.h"
 #include <cstdint>
+#include <limits>
 #include <optional>
 
 namespace mlir {
@@ -27,6 +28,7 @@ using namespace llvm;
 
 /// Common ARTS attributes
 constexpr StringLiteral Workers = "workers";
+constexpr StringLiteral WorkersPerNode = "workers_per_node";
 constexpr StringLiteral ArtsId = "arts.id";
 constexpr StringLiteral ArtsCreateId = "arts.create_id";
 constexpr StringLiteral OutlinedFunc = "outlined_func";
@@ -177,6 +179,61 @@ inline void setDistributedDbAllocation(Operation *op, bool enabled) {
     return;
   }
   op->removeAttr(AttrNames::Operation::Distributed);
+}
+
+inline std::optional<int64_t> getWorkers(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr = op->getAttrOfType<workersAttr>(AttrNames::Operation::Workers))
+    return static_cast<int64_t>(attr.getValue());
+  if (auto attr = op->getAttrOfType<IntegerAttr>(AttrNames::Operation::Workers))
+    return attr.getInt();
+  return std::nullopt;
+}
+
+inline void setWorkers(Operation *op, int64_t workers) {
+  if (!op)
+    return;
+  if (workers <= 0) {
+    op->removeAttr(AttrNames::Operation::Workers);
+    return;
+  }
+  int64_t clamped = std::min<int64_t>(workers, std::numeric_limits<int32_t>::max());
+  op->setAttr(AttrNames::Operation::Workers,
+              workersAttr::get(op->getContext(), static_cast<int32_t>(clamped)));
+}
+
+inline std::optional<int64_t> getWorkersPerNode(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr = op->getAttrOfType<IntegerAttr>(
+          AttrNames::Operation::WorkersPerNode))
+    return attr.getInt();
+  return std::nullopt;
+}
+
+inline void setWorkersPerNode(Operation *op, int64_t workersPerNode) {
+  if (!op)
+    return;
+  if (workersPerNode <= 0) {
+    op->removeAttr(AttrNames::Operation::WorkersPerNode);
+    return;
+  }
+  op->setAttr(
+      AttrNames::Operation::WorkersPerNode,
+      IntegerAttr::get(IntegerType::get(op->getContext(), 64), workersPerNode));
+}
+
+inline void copyWorkerTopologyAttrs(Operation *from, Operation *to) {
+  if (!to)
+    return;
+  if (!from) {
+    setWorkers(to, 0);
+    setWorkersPerNode(to, 0);
+    return;
+  }
+  setWorkers(to, getWorkers(from).value_or(0));
+  setWorkersPerNode(to, getWorkersPerNode(from).value_or(0));
 }
 
 inline std::optional<EdtDistributionKind>

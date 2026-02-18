@@ -222,8 +222,17 @@ public:
                                            Location loc);
 
   /// Get workers-per-node runtime Value for internode EDTs.
+  static Value getWorkersPerNode(OpBuilder &builder, Location loc,
+                                 EdtOp parallelEdt);
+
+  /// Get workers-per-node runtime Value for internode EDTs.
   static Value getWorkersPerNode(ArtsCodegen *AC, Location loc,
                                  EdtOp parallelEdt);
+
+  /// Get total worker count as an index Value for the given EDT.
+  /// Honors explicit workers attribute, otherwise uses runtime queries.
+  static Value getTotalWorkers(OpBuilder &builder, Location loc,
+                               EdtOp parallelEdt);
 
   /// Get total worker count as an index Value for the given EDT.
   /// Honors explicit workers attribute, otherwise uses runtime queries.
@@ -250,15 +259,20 @@ public:
                             const WorkerConfig &workerCfg);
 
   /// Choose compile-time column worker count for tiling_2d.
-  /// Returns the largest divisor <= sqrt(totalWorkers), or 1.
-  static int64_t chooseTiling2DColumnWorkers(int64_t totalWorkers);
+  /// Defaults to a near-square divisor of totalWorkers. When workersPerNode is
+  /// provided, prefer divisors that keep a row-worker group within one node
+  /// (colWorkers divides workersPerNode).
+  static int64_t
+  chooseTiling2DColumnWorkers(int64_t totalWorkers,
+                              std::optional<int64_t> workersPerNode);
 
   /// Compute row/column worker decomposition for tiling_2d.
-  /// Falls back to rowWorkers=totalWorkers, colWorkers=1 when totalWorkers
-  /// is not compile-time constant.
+  /// Falls back to rowWorkers=totalWorkers, colWorkers=1 when totalWorkers is
+  /// not compile-time constant.
   static Tiling2DWorkerGrid getTiling2DWorkerGrid(ArtsCodegen *AC, Location loc,
                                                   Value workerId,
-                                                  Value totalWorkers);
+                                                  Value totalWorkers,
+                                                  Value workersPerNode = Value());
 
 private:
   /// Balanced floor+remainder distribution

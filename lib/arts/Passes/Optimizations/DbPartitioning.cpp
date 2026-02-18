@@ -53,6 +53,7 @@
 #include "arts/Analysis/Graphs/Edt/EdtGraph.h"
 #include "arts/Analysis/Graphs/Edt/EdtNode.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include <algorithm>
 #include <cstdint>
@@ -78,6 +79,9 @@ using namespace mlir::arts;
 
 namespace {
 
+static SmallVector<DbAcquireNode *, 16>
+collectAcquireNodesForAlloc(DbAllocNode *allocNode);
+
 /// Validate that element-wise partition indices match actual EDT accesses.
 /// Returns false if this is a block-wise pattern (indices are block corners,
 /// but accesses span a range) - indicating we should fall back to block mode.
@@ -98,6 +102,14 @@ validateElementWiseIndices(ArrayRef<AcquirePartitionInfo> acquireInfos,
     /// Use DbAcquireNode's validation method for the actual check
     if (allocNode) {
       auto *acqNode = allocNode->findAcquireNode(acquire);
+      if (!acqNode) {
+        for (DbAcquireNode *candidate : collectAcquireNodesForAlloc(allocNode)) {
+          if (candidate && candidate->getDbAcquireOp() == acquire) {
+            acqNode = candidate;
+            break;
+          }
+        }
+      }
       if (acqNode && !acqNode->validateElementWisePartitioning())
         return false;
     }
@@ -141,6 +153,33 @@ getPartitionOffsetsND(DbAcquireNode *acqNode,
     result.push_back(offset);
 
   return result;
+}
+
+static void collectAcquireNodesRecursive(DbAcquireNode *acqNode,
+                                         SmallVectorImpl<DbAcquireNode *> &out) {
+  if (!acqNode)
+    return;
+  out.push_back(acqNode);
+  acqNode->forEachChildNode([&](NodeBase *child) {
+    auto *nested = dyn_cast<DbAcquireNode>(child);
+    if (!nested)
+      return;
+    collectAcquireNodesRecursive(nested, out);
+  });
+}
+
+static SmallVector<DbAcquireNode *, 16>
+collectAcquireNodesForAlloc(DbAllocNode *allocNode) {
+  SmallVector<DbAcquireNode *, 16> allAcquireNodes;
+  if (!allocNode)
+    return allAcquireNodes;
+  allocNode->forEachChildNode([&](NodeBase *child) {
+    auto *acqNode = dyn_cast<DbAcquireNode>(child);
+    if (!acqNode)
+      return;
+    collectAcquireNodesRecursive(acqNode, allAcquireNodes);
+  });
+  return allAcquireNodes;
 }
 
 /// Pick a representative partition offset (prefer non-constant).
@@ -211,13 +250,12 @@ static void resetCoarseAcquireRanges(DbAllocOp allocOp, DbAllocNode *allocNode,
     fullSizes.push_back(size);
   }
 
-  allocNode->forEachChildNode([&](NodeBase *child) {
-    auto *acqNode = dyn_cast<DbAcquireNode>(child);
-    if (!acqNode)
-      return;
+  SmallVector<DbAcquireNode *, 16> acquireNodes =
+      collectAcquireNodesForAlloc(allocNode);
+  for (DbAcquireNode *acqNode : acquireNodes) {
     DbAcquireOp acqOp = acqNode->getDbAcquireOp();
     if (!acqOp)
-      return;
+      continue;
     acqOp.getOffsetsMutable().assign(fullOffsets);
     acqOp.getSizesMutable().assign(fullSizes);
     /// Clear partition hints for coarse allocations to avoid redundant
@@ -227,7 +265,7 @@ static void resetCoarseAcquireRanges(DbAllocOp allocOp, DbAllocNode *allocNode,
     acqOp.getPartitionSizesMutable().clear();
     /// Keep acquire partition attribute consistent with coarse allocation.
     setPartitionMode(acqOp.getOperation(), PartitionMode::coarse);
-  });
+  }
 }
 
 } // namespace
@@ -414,31 +452,36 @@ static SmallVector<DbRefOp> collectDbRefUsers(BlockArgument arg) {
 }
 
 static SmallVector<Value> collectAccessIndices(DbRefOp dbRef) {
-  SmallVector<Value> indices;
-  for (Operation *refUser : dbRef.getResult().getUsers()) {
-    if (auto load = dyn_cast<memref::LoadOp>(refUser)) {
-      indices.assign(load.getIndices().begin(), load.getIndices().end());
-      break;
-    }
-    if (auto store = dyn_cast<memref::StoreOp>(refUser)) {
-      indices.assign(store.getIndices().begin(), store.getIndices().end());
-      break;
-    }
+  SetVector<Operation *> memOps;
+  DatablockUtils::collectReachableMemoryOps(dbRef.getResult(), memOps,
+                                            dbRef->getParentRegion());
+  for (Operation *memOp : memOps) {
+    SmallVector<Value> indices = DatablockUtils::getMemoryAccessIndices(memOp);
+    if (!indices.empty())
+      return indices;
   }
-  return indices;
+  return {};
 }
 
 static SmallVector<Value> collectAccessIndicesFromUser(Operation *refUser) {
-  SmallVector<Value> indices;
-  if (auto load = dyn_cast<memref::LoadOp>(refUser)) {
-    indices.assign(load.getIndices().begin(), load.getIndices().end());
-    return indices;
+  SmallVector<Value> direct = DatablockUtils::getMemoryAccessIndices(refUser);
+  if (!direct.empty())
+    return direct;
+
+  for (Value result : refUser->getResults()) {
+    if (!result.getType().isa<MemRefType>())
+      continue;
+    SetVector<Operation *> memOps;
+    DatablockUtils::collectReachableMemoryOps(result, memOps,
+                                              refUser->getParentRegion());
+    for (Operation *memOp : memOps) {
+      SmallVector<Value> indices =
+          DatablockUtils::getMemoryAccessIndices(memOp);
+      if (!indices.empty())
+        return indices;
+    }
   }
-  if (auto store = dyn_cast<memref::StoreOp>(refUser)) {
-    indices.assign(store.getIndices().begin(), store.getIndices().end());
-    return indices;
-  }
-  return indices;
+  return {};
 }
 
 struct EntryMatch {
@@ -815,14 +858,13 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   Location loc = allocOp.getLoc();
   builder.setInsertionPoint(allocOp);
 
+  SmallVector<DbAcquireNode *, 16> allocAcquireNodes =
+      collectAcquireNodesForAlloc(allocNode);
+
   /// Step 1: Analyze each acquire's PartitionMode
   SmallVector<AcquirePartitionInfo> acquireInfos;
   if (allocNode) {
-    allocNode->forEachChildNode([&](NodeBase *child) {
-      auto *acqNode = dyn_cast<DbAcquireNode>(child);
-      if (!acqNode)
-        return;
-
+    for (DbAcquireNode *acqNode : allocAcquireNodes) {
       auto info = computeAcquirePartitionInfo(acqNode->getDbAcquireOp(),
                                               acqNode, builder);
       if (!info.isValid) {
@@ -830,7 +872,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                    << acqNode->getDbAcquireOp());
       }
       acquireInfos.push_back(info);
-    });
+    }
   }
 
   if (acquireInfos.empty()) {
@@ -864,13 +906,10 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       }
     }
 
-    allocNode->forEachChildNode([&](NodeBase *child) {
-      auto *acqNode = dyn_cast<DbAcquireNode>(child);
-      if (!acqNode)
-        return;
+    for (DbAcquireNode *acqNode : allocAcquireNodes) {
       DbAcquireOp acqOp = acqNode->getDbAcquireOp();
       if (!acqOp)
-        return;
+        continue;
       bool hasIndirect = acqNode->hasIndirectAccess();
       if (hasIndirect) {
         ctx.hasIndirectAccess = true;
@@ -881,7 +920,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       }
       if (acqNode->hasDirectAccess())
         ctx.hasDirectAccess = true;
-    });
+    }
 
     /// Note: Indirect access is handled via full-range acquires, not by
     /// disabling chunked. Full-range acquires allow indirect reads to access
@@ -893,10 +932,9 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
     /// Build per-acquire capabilities for heuristic voting
     size_t idx = 0;
-    allocNode->forEachChildNode([&](NodeBase *child) {
-      auto *acqNode = dyn_cast<DbAcquireNode>(child);
+    for (DbAcquireNode *acqNode : allocAcquireNodes) {
       if (!acqNode || idx >= acquireInfos.size())
-        return;
+        continue;
 
       auto &acqInfo = acquireInfos[idx];
 
@@ -989,21 +1027,21 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                  << ", canBlock=" << info.canBlock << ", acquireAttr="
                  << (acquireMode ? static_cast<int>(*acquireMode) : -1));
       ++idx;
-    });
+    }
 
     /// Collect DbAcquireNode* and partition offsets for heuristic decisions
     SmallVector<DbAcquireNode *> acqNodes;
     SmallVector<Value> partitionOffsets;
     idx = 0;
-    allocNode->forEachChildNode([&](NodeBase *child) {
-      if (auto *acqNode = dyn_cast<DbAcquireNode>(child)) {
-        acqNodes.push_back(acqNode);
-        auto offsets = getPartitionOffsetsND(
-            acqNode, idx < acquireInfos.size() ? &acquireInfos[idx] : nullptr);
-        partitionOffsets.push_back(offsets.empty() ? Value() : offsets.front());
-        ++idx;
-      }
-    });
+    for (DbAcquireNode *acqNode : allocAcquireNodes) {
+      if (!acqNode)
+        continue;
+      acqNodes.push_back(acqNode);
+      auto offsets = getPartitionOffsetsND(
+          acqNode, idx < acquireInfos.size() ? &acquireInfos[idx] : nullptr);
+      partitionOffsets.push_back(offsets.empty() ? Value() : offsets.front());
+      ++idx;
+    }
 
     /// Get per-acquire decisions from heuristics (calls needsFullRange)
     auto acquireDecisions =
@@ -1303,20 +1341,19 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     /// Collect stencil bounds from acquire nodes or multi-entry structure.
     /// For multi-entry stencil acquires (not expanded), extract halo bounds
     /// from the partition indices pattern using DatablockUtils.
-    allocNode->forEachChildNode([&](NodeBase *child) {
-      auto *acqNode = dyn_cast<DbAcquireNode>(child);
+    for (DbAcquireNode *acqNode : allocAcquireNodes) {
       if (!acqNode)
-        return;
+        continue;
       DbAcquireOp acq = acqNode->getDbAcquireOp();
       if (!acq)
-        return;
+        continue;
 
       /// First try: get bounds from DbAcquireNode analysis
       auto stencilBounds = acqNode->getStencilBounds();
       if (stencilBounds && stencilBounds->hasHalo()) {
         info.haloLeft = std::max(info.haloLeft, stencilBounds->haloLeft());
         info.haloRight = std::max(info.haloRight, stencilBounds->haloRight());
-        return;
+        continue;
       }
 
       /// Second try: for multi-entry stencil acquires, extract from structure
@@ -1333,7 +1370,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                      << haloL << ", haloRight=" << haloR);
         }
       }
-    });
+    }
 
     auto allocPattern = getDbAccessPattern(allocOp.getOperation());
     bool allocHasStencilPattern =
@@ -1474,21 +1511,26 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     }
 
     /// If an acquire's inferred partition dims disagree with the chosen plan,
-    /// require full-range to preserve correctness (non-leading mismatch).
+    /// require full-range to preserve correctness.
+    ///
+    /// Allow acquires to carry extra trailing partition dimensions as long as
+    /// the plan dims are a leading prefix. This is common when a 2D acquire
+    /// participates in a 1D block plan (partition along rows only).
     if (!partitionedDimsForPlan.empty()) {
       for (auto &info : acquireInfos) {
         if (info.needsFullRange || info.partitionDims.empty())
           continue;
-        bool same = info.partitionDims.size() == partitionedDimsForPlan.size();
-        if (same) {
-          for (unsigned i = 0; i < info.partitionDims.size(); ++i) {
+        bool compatible =
+            info.partitionDims.size() >= partitionedDimsForPlan.size();
+        if (compatible) {
+          for (unsigned i = 0; i < partitionedDimsForPlan.size(); ++i) {
             if (info.partitionDims[i] != partitionedDimsForPlan[i]) {
-              same = false;
+              compatible = false;
               break;
             }
           }
         }
-        if (!same) {
+        if (!compatible) {
           info.needsFullRange = true;
           ARTS_DEBUG("  Acquire partition dims mismatch with plan; "
                      "forcing full-range access");

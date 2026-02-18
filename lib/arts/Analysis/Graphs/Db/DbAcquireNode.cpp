@@ -110,13 +110,8 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
 
   /// The ptr result should be passed directly to an EDT or another acquire
   auto users = ptrResult.getUsers();
-  if (users.empty()) {
-    ARTS_ERROR("DbAcquireOp ptr has no users");
-    return;
-  }
-
-  Operation *singleUser = *users.begin();
-  if (!singleUser) {
+  Operation *singleUser = users.empty() ? nullptr : *users.begin();
+  if (!singleUser && !users.empty()) {
     ARTS_ERROR("DbAcquireOp ptr user is null");
     return;
   }
@@ -190,7 +185,7 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
     }
   }
 
-  if (isa<DbAcquireOp>(singleUser)) {
+  if (singleUser && isa<DbAcquireOp>(singleUser)) {
     /// Nested acquire; create child node lazily via getOrCreateAcquireNode
     /// The rest of this constructor computes info for this node; nested
     /// children will compute their own. For nested acquires, the EDT user
@@ -213,10 +208,11 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
                << dbAcquireOp
                << "\n"
                   "  Single user: "
-               << *singleUser
+               << (singleUser ? *singleUser : *dbAcquireOp.getOperation())
                << "\n"
                   "  User type: "
-               << singleUser->getName());
+               << (singleUser ? singleUser->getName().getStringRef()
+                               : StringRef("<none>")));
     return;
   }
 
@@ -982,13 +978,11 @@ void DbAcquireNode::collectAccessOperations(
 
         Value refResult = dbRef.getResult();
         worklist.push_back(refResult);
-
-        for (Operation *memUser : refResult.getUsers()) {
-          if (!edtUser.getBody().isAncestor(memUser->getParentRegion()))
-            continue;
-          if (isa<memref::LoadOp, memref::StoreOp>(memUser))
-            dbRefToMemOps[dbRef].insert(memUser);
-        }
+        SetVector<Operation *> memOps;
+        DatablockUtils::collectReachableMemoryOps(refResult, memOps,
+                                                  &edtUser.getBody());
+        for (Operation *memOp : memOps)
+          dbRefToMemOps[dbRef].insert(memOp);
       }
     }
   }
@@ -1757,8 +1751,13 @@ DbAcquireNode::computeBlockInfoFromForLoop(ArrayRef<LoopNode *> loopNodes,
                                            Value &blockOffset, Value &blockSize,
                                            Value *offsetForCheck) {
   Value ptrArg = getUseInEdt();
+  EdtOp edtUser = getEdtUser();
   if (!ptrArg) {
     ARTS_DEBUG("  computeBlockInfoFromForLoop: no EDT block argument");
+    return failure();
+  }
+  if (!edtUser) {
+    ARTS_DEBUG("  computeBlockInfoFromForLoop: no EDT user");
     return failure();
   }
 
@@ -1817,19 +1816,15 @@ DbAcquireNode::computeBlockInfoFromForLoop(ArrayRef<LoopNode *> loopNodes,
       if (!refOp || !loopOp->isAncestor(refOp))
         continue;
 
-      Value refVal = refOp.getResult();
-      for (Operation *memUser : refVal.getUsers()) {
-        ValueRange memIndices;
-        if (auto loadOp = dyn_cast<memref::LoadOp>(memUser))
-          memIndices = loadOp.getIndices();
-        else if (auto storeOp = dyn_cast<memref::StoreOp>(memUser))
-          memIndices = storeOp.getIndices();
-        else
-          continue;
-
+      SetVector<Operation *> memOps;
+      DatablockUtils::collectReachableMemoryOps(refOp.getResult(), memOps,
+                                                &edtUser.getBody());
+      for (Operation *memUser : memOps) {
         if (!loopOp->isAncestor(memUser))
           continue;
 
+        SmallVector<Value> memIndices =
+            DatablockUtils::getMemoryAccessIndices(memUser);
         if (memIndices.empty())
           continue;
         Value idx = memIndices.front();

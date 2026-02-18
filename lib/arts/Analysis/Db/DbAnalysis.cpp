@@ -7,6 +7,7 @@
 #include "arts/Analysis/AccessPatternAnalysis.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/Db/DbAliasAnalysis.h"
+#include "arts/Analysis/Db/DbPatternMatchers.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/Analysis/Loop/LoopAnalysis.h"
@@ -17,7 +18,6 @@
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Debug.h"
@@ -29,60 +29,6 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
-
-static void collectLoadInfo(Value value, DenseSet<Value> &loadedMemrefs,
-                            bool &hasMul, bool &hasAdd,
-                            DenseSet<Operation *> &visited) {
-  Operation *def = value.getDefiningOp();
-  if (!def || !visited.insert(def).second)
-    return;
-
-  if (auto load = dyn_cast<memref::LoadOp>(def))
-    loadedMemrefs.insert(load.getMemRef());
-  if (isa<arith::MulIOp, arith::MulFOp>(def))
-    hasMul = true;
-  if (isa<arith::AddIOp, arith::AddFOp>(def))
-    hasAdd = true;
-
-  for (Value operand : def->getOperands())
-    collectLoadInfo(operand, loadedMemrefs, hasMul, hasAdd, visited);
-}
-
-static bool detectMatmulUpdate(ForOp forOp) {
-  bool hasMatmulUpdate = false;
-  forOp.walk([&](memref::StoreOp store) {
-    DenseSet<Value> loadedMemrefs;
-    DenseSet<Operation *> visited;
-    bool hasMul = false;
-    bool hasAdd = false;
-    collectLoadInfo(store.getValueToStore(), loadedMemrefs, hasMul, hasAdd,
-                    visited);
-
-    if (!hasMul || !hasAdd)
-      return WalkResult::advance();
-    if (!loadedMemrefs.contains(store.getMemRef()))
-      return WalkResult::advance();
-    if (loadedMemrefs.size() < 2)
-      return WalkResult::advance();
-
-    hasMatmulUpdate = true;
-    return WalkResult::interrupt();
-  });
-  return hasMatmulUpdate;
-}
-
-static bool detectTriangularBound(ForOp forOp, Value loopIV) {
-  bool hasTriangularBound = false;
-  forOp.walk([&](scf::ForOp nestedFor) {
-    if (ValueUtils::dependsOn(nestedFor.getLowerBound(), loopIV) ||
-        ValueUtils::dependsOn(nestedFor.getUpperBound(), loopIV)) {
-      hasTriangularBound = true;
-      return WalkResult::interrupt();
-    }
-    return WalkResult::advance();
-  });
-  return hasTriangularBound;
-}
 
 static EdtDistributionPattern
 classifyDistributionPattern(const DbAnalysis::LoopDbAccessSummary &summary) {
@@ -214,8 +160,8 @@ DbAnalysis::analyzeLoopDbAccessPatterns(ForOp forOp) {
   }
 
   Value loopIV = forBody.getArgument(0);
-  summary.hasTriangularBound = detectTriangularBound(forOp, loopIV);
-  summary.hasMatmulUpdate = detectMatmulUpdate(forOp);
+  summary.hasTriangularBound = hasTriangularBoundPattern(forOp);
+  summary.hasMatmulUpdate = detectMatmulUpdatePattern(forOp);
 
   Region &forRegion = forOp.getRegion();
   EdtOp edt = forOp->getParentOfType<EdtOp>();

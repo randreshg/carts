@@ -1,0 +1,328 @@
+///==========================================================================///
+/// File: DbPatternMatchers.cpp
+///
+/// Shared DB-oriented loop pattern matchers used by analysis passes.
+///==========================================================================///
+
+#include "arts/Analysis/Db/DbPatternMatchers.h"
+#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/ValueUtils.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallVector.h"
+
+using namespace mlir;
+using namespace mlir::arts;
+
+namespace {
+
+/// Strip arith.index_cast ops to find the underlying value.
+static Value stripIndexCasts(Value v) {
+  while (auto cast = v.getDefiningOp<arith::IndexCastOp>())
+    v = cast.getIn();
+  return v;
+}
+
+/// Check if two values refer to the same SSA value modulo index casts.
+static bool isSameValueModuloCasts(Value a, Value b) {
+  return stripIndexCasts(a) == stripIndexCasts(b);
+}
+
+/// Try to extract a positive integer constant from a Value.
+static std::optional<int64_t> getPositiveConstant(Value v) {
+  v = stripIndexCasts(v);
+  if (auto constIdx = v.getDefiningOp<arith::ConstantIndexOp>())
+    return constIdx.value() > 0 ? std::optional<int64_t>(constIdx.value())
+                                : std::nullopt;
+  if (auto constInt = v.getDefiningOp<arith::ConstantIntOp>()) {
+    int64_t val = constInt.value();
+    return val > 0 ? std::optional<int64_t>(val) : std::nullopt;
+  }
+  return std::nullopt;
+}
+
+/// Check if two stores write the same value to the same memref with
+/// swapped 2D indices: one stores at [outerIV, innerIV] and the other at
+/// [innerIV, outerIV].
+static bool areSymmetricStores(memref::StoreOp s1, memref::StoreOp s2,
+                               Value outerIV, Value innerIV) {
+  if (s1.getValueToStore() != s2.getValueToStore())
+    return false;
+
+  if (!DatablockUtils::isSameMemoryObject(s1.getMemRef(), s2.getMemRef()))
+    return false;
+
+  auto idx1 = s1.getIndices();
+  auto idx2 = s2.getIndices();
+  if (idx1.size() != 2 || idx2.size() != 2)
+    return false;
+
+  bool s1IsIJ = (idx1[0] == outerIV && idx1[1] == innerIV);
+  bool s2IsJI = (idx2[0] == innerIV && idx2[1] == outerIV);
+  if (s1IsIJ && s2IsJI)
+    return true;
+
+  bool s1IsJI = (idx1[0] == innerIV && idx1[1] == outerIV);
+  bool s2IsIJ = (idx2[0] == outerIV && idx2[1] == innerIV);
+  return s1IsJI && s2IsIJ;
+}
+
+/// Check if a store writes to the diagonal: memref[iv, iv].
+static bool isDiagonalStore(memref::StoreOp store, Value iv) {
+  auto indices = store.getIndices();
+  return indices.size() == 2 && indices[0] == iv && indices[1] == iv;
+}
+
+/// Count distinct memory objects under isSameMemoryObject semantics.
+static unsigned countDistinctMemoryObjects(ArrayRef<Value> memrefs) {
+  SmallVector<Value, 4> distinct;
+  for (Value memref : memrefs) {
+    bool seen = false;
+    for (Value existing : distinct) {
+      if (DatablockUtils::isSameMemoryObject(existing, memref)) {
+        seen = true;
+        break;
+      }
+    }
+    if (!seen)
+      distinct.push_back(memref);
+  }
+  return distinct.size();
+}
+
+static bool containsSameMemoryObject(ArrayRef<Value> memrefs, Value target) {
+  for (Value memref : memrefs) {
+    if (DatablockUtils::isSameMemoryObject(memref, target))
+      return true;
+  }
+  return false;
+}
+
+static void collectLoadedMemrefs(Value value, DenseSet<Value> &loadedMemrefs,
+                                 DenseSet<Operation *> &visited) {
+  Operation *def = value.getDefiningOp();
+  if (!def || !visited.insert(def).second)
+    return;
+
+  value = ValueUtils::stripNumericCasts(value);
+  if (Operation *strippedDef = value.getDefiningOp())
+    def = strippedDef;
+
+  if (auto load = dyn_cast<memref::LoadOp>(def))
+    loadedMemrefs.insert(load.getMemRef());
+  else if (auto load = dyn_cast<affine::AffineLoadOp>(def))
+    loadedMemrefs.insert(load.getMemRef());
+
+  for (Value operand : def->getOperands())
+    collectLoadedMemrefs(operand, loadedMemrefs, visited);
+}
+
+static bool isAccumulatorTerm(Value value, Value storeMemref) {
+  DenseSet<Value> loadedMemrefSet;
+  DenseSet<Operation *> visited;
+  collectLoadedMemrefs(value, loadedMemrefSet, visited);
+
+  SmallVector<Value, 4> loadedMemrefs(loadedMemrefSet.begin(),
+                                      loadedMemrefSet.end());
+  return countDistinctMemoryObjects(loadedMemrefs) == 1 &&
+         containsSameMemoryObject(loadedMemrefs, storeMemref);
+}
+
+static bool isTwoInputProductTerm(Value value, Value storeMemref) {
+  value = ValueUtils::stripNumericCasts(value);
+  Operation *def = value.getDefiningOp();
+  if (!def)
+    return false;
+
+  Value lhs;
+  Value rhs;
+  if (auto mul = dyn_cast<arith::MulFOp>(def)) {
+    lhs = mul.getLhs();
+    rhs = mul.getRhs();
+  } else if (auto mul = dyn_cast<arith::MulIOp>(def)) {
+    lhs = mul.getLhs();
+    rhs = mul.getRhs();
+  } else {
+    return false;
+  }
+
+  DenseSet<Value> lhsMemrefSet;
+  DenseSet<Value> rhsMemrefSet;
+  DenseSet<Operation *> visitedLhs;
+  DenseSet<Operation *> visitedRhs;
+  collectLoadedMemrefs(lhs, lhsMemrefSet, visitedLhs);
+  collectLoadedMemrefs(rhs, rhsMemrefSet, visitedRhs);
+
+  SmallVector<Value, 4> lhsMemrefs(lhsMemrefSet.begin(), lhsMemrefSet.end());
+  SmallVector<Value, 4> rhsMemrefs(rhsMemrefSet.begin(), rhsMemrefSet.end());
+  if (countDistinctMemoryObjects(lhsMemrefs) != 1 ||
+      countDistinctMemoryObjects(rhsMemrefs) != 1)
+    return false;
+
+  Value lhsMemref = lhsMemrefs.front();
+  Value rhsMemref = rhsMemrefs.front();
+  if (DatablockUtils::isSameMemoryObject(lhsMemref, rhsMemref))
+    return false;
+  if (DatablockUtils::isSameMemoryObject(lhsMemref, storeMemref) ||
+      DatablockUtils::isSameMemoryObject(rhsMemref, storeMemref))
+    return false;
+
+  return true;
+}
+
+} // namespace
+
+std::optional<int64_t> mlir::arts::matchTriangularOffset(Value lb,
+                                                         Value outerIV) {
+  if (!lb || !outerIV)
+    return std::nullopt;
+
+  Value stripped = stripIndexCasts(lb);
+  auto addOp = stripped.getDefiningOp<arith::AddIOp>();
+  if (!addOp)
+    return std::nullopt;
+
+  Value lhs = addOp.getLhs();
+  Value rhs = addOp.getRhs();
+  Value constOperand;
+  if (isSameValueModuloCasts(lhs, outerIV))
+    constOperand = rhs;
+  else if (isSameValueModuloCasts(rhs, outerIV))
+    constOperand = lhs;
+  else
+    return std::nullopt;
+
+  return getPositiveConstant(constOperand);
+}
+
+bool mlir::arts::hasTriangularBoundPattern(ForOp forOp) {
+  if (!forOp || forOp.getBody()->getNumArguments() == 0)
+    return false;
+
+  Value outerIV = forOp.getBody()->getArgument(0);
+  bool hasTriangularBound = false;
+  forOp.walk([&](scf::ForOp nestedFor) {
+    if (ValueUtils::dependsOn(nestedFor.getLowerBound(), outerIV) ||
+        ValueUtils::dependsOn(nestedFor.getUpperBound(), outerIV)) {
+      hasTriangularBound = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return hasTriangularBound;
+}
+
+bool mlir::arts::detectMatmulUpdatePattern(ForOp forOp) {
+  bool hasMatmulUpdate = false;
+  forOp.walk([&](memref::StoreOp store) {
+    Value storeValue = ValueUtils::stripNumericCasts(store.getValueToStore());
+    Operation *storeValueDef = storeValue.getDefiningOp();
+    if (!storeValueDef)
+      return WalkResult::advance();
+
+    Value lhs;
+    Value rhs;
+    if (auto add = dyn_cast<arith::AddFOp>(storeValueDef)) {
+      lhs = add.getLhs();
+      rhs = add.getRhs();
+    } else if (auto add = dyn_cast<arith::AddIOp>(storeValueDef)) {
+      lhs = add.getLhs();
+      rhs = add.getRhs();
+    } else {
+      return WalkResult::advance();
+    }
+
+    Value storeMemref = store.getMemRef();
+    bool matchesUpdateForm =
+        (isAccumulatorTerm(lhs, storeMemref) &&
+         isTwoInputProductTerm(rhs, storeMemref)) ||
+        (isAccumulatorTerm(rhs, storeMemref) &&
+         isTwoInputProductTerm(lhs, storeMemref));
+
+    if (!matchesUpdateForm)
+      return WalkResult::advance();
+
+    hasMatmulUpdate = true;
+    return WalkResult::interrupt();
+  });
+  return hasMatmulUpdate;
+}
+
+bool mlir::arts::detectSymmetricTriangularPattern(
+    ForOp artsFor, SymmetricTriangularPatternMatch &out) {
+  out = {};
+  if (!artsFor || artsFor.getBody()->getNumArguments() == 0)
+    return false;
+
+  Value outerIV = artsFor.getBody()->getArgument(0);
+
+  scf::ForOp jLoop = nullptr;
+  for (Operation &op : artsFor.getBody()->without_terminator()) {
+    if (auto forOp = dyn_cast<scf::ForOp>(&op)) {
+      jLoop = forOp;
+      break;
+    }
+  }
+  if (!jLoop)
+    return false;
+
+  auto triangularOffset = matchTriangularOffset(jLoop.getLowerBound(), outerIV);
+  if (!triangularOffset)
+    return false;
+
+  auto outerUBRange = artsFor.getUpperBound();
+  if (outerUBRange.size() != 1)
+    return false;
+  if (outerUBRange[0] != jLoop.getUpperBound())
+    return false;
+
+  int forCount = 0;
+  for (Operation &op : artsFor.getBody()->without_terminator())
+    if (isa<scf::ForOp>(&op))
+      ++forCount;
+  if (forCount != 1)
+    return false;
+
+  SmallVector<memref::StoreOp> stores;
+  for (Operation &op : jLoop.getBody()->without_terminator()) {
+    if (auto store = dyn_cast<memref::StoreOp>(&op))
+      stores.push_back(store);
+  }
+  if (stores.size() != 2)
+    return false;
+
+  Value jIV = jLoop.getInductionVar();
+  if (!areSymmetricStores(stores[0], stores[1], outerIV, jIV))
+    return false;
+
+  auto idx0 = stores[0].getIndices();
+  if (idx0[0] == outerIV && idx0[1] == jIV) {
+    out.storeIJ = stores[0];
+    out.storeJI = stores[1];
+  } else {
+    out.storeIJ = stores[1];
+    out.storeJI = stores[0];
+  }
+
+  out.memC = stores[0].getMemRef();
+  for (Operation &op : artsFor.getBody()->without_terminator()) {
+    auto store = dyn_cast<memref::StoreOp>(&op);
+    if (!store)
+      continue;
+    if (!DatablockUtils::isSameMemoryObject(store.getMemRef(), out.memC))
+      continue;
+    if (!isDiagonalStore(store, outerIV))
+      continue;
+    out.diagStore = store;
+    out.diagValue = store.getValueToStore();
+    break;
+  }
+  if (!out.diagStore)
+    return false;
+
+  out.jLoop = jLoop;
+  out.triangularOffset = *triangularOffset;
+  return true;
+}

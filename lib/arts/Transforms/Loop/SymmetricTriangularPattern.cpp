@@ -29,6 +29,7 @@
 ///==========================================================================///
 
 #include "arts/Transforms/Loop/LoopNormalizer.h"
+#include "arts/Analysis/Db/DbPatternMatchers.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -41,59 +42,6 @@ ARTS_DEBUG_SETUP(loop_normalization);
 using namespace mlir;
 using namespace mlir::arts;
 
-namespace {
-
-/// Match result for symmetric-triangular detection.
-struct SymmetricTriangularMatch {
-  ForOp outerArtsFor;
-  scf::ForOp jLoop;
-  int64_t triangularOffset = 0;
-  memref::StoreOp storeIJ;   /// store to C[i,j]
-  memref::StoreOp storeJI;   /// store to C[j,i] (symmetric)
-  Value memC;                /// target memref
-  memref::StoreOp diagStore; /// optional diagonal store
-  Value diagValue;           /// value stored on diagonal
-};
-
-/// Check if two stores write the same value to the same memref with
-/// swapped 2D indices: one stores at [outerIV, innerIV] and the other at
-/// [innerIV, outerIV].
-static bool areSymmetricStores(memref::StoreOp s1, memref::StoreOp s2,
-                               Value outerIV, Value innerIV) {
-  /// Same value stored
-  if (s1.getValueToStore() != s2.getValueToStore())
-    return false;
-
-  /// Same memref
-  if (s1.getMemRef() != s2.getMemRef())
-    return false;
-
-  /// Must be 2D stores
-  auto idx1 = s1.getIndices();
-  auto idx2 = s2.getIndices();
-  if (idx1.size() != 2 || idx2.size() != 2)
-    return false;
-
-  /// Check for swapped indices: s1=[outerIV, innerIV], s2=[innerIV, outerIV]
-  bool s1IsIJ = (idx1[0] == outerIV && idx1[1] == innerIV);
-  bool s2IsJI = (idx2[0] == innerIV && idx2[1] == outerIV);
-  if (s1IsIJ && s2IsJI)
-    return true;
-
-  /// Or the other way around
-  bool s1IsJI = (idx1[0] == innerIV && idx1[1] == outerIV);
-  bool s2IsIJ = (idx2[0] == outerIV && idx2[1] == innerIV);
-  return s1IsJI && s2IsIJ;
-}
-
-/// Check if a store writes to the diagonal: memref[iv, iv].
-static bool isDiagonalStore(memref::StoreOp store, Value iv) {
-  auto indices = store.getIndices();
-  return indices.size() == 2 && indices[0] == iv && indices[1] == iv;
-}
-
-} // namespace
-
 namespace mlir {
 namespace arts {
 
@@ -104,11 +52,8 @@ public:
   StringRef getName() const override { return "symmetric-triangular"; }
 
 private:
-  SymmetricTriangularMatch matchResult;
-
-  bool detectTriangularBound(scf::ForOp jLoop, Value outerIV);
-  bool detectSymmetricStores(scf::ForOp jLoop, Value outerIV, Value jIV);
-  bool detectDiagonalInit(ForOp artsFor, Value outerIV, Value memC);
+  ForOp outerArtsFor;
+  SymmetricTriangularPatternMatch matchResult;
 };
 
 ///===----------------------------------------------------------------------===//
@@ -117,109 +62,11 @@ private:
 
 bool SymmetricTriangularPattern::match(ForOp artsFor) {
   matchResult = {};
-  matchResult.outerArtsFor = artsFor;
-
-  Value outerIV = artsFor.getBody()->getArgument(0);
-
-  /// Find the first scf.for inside this arts.for
-  scf::ForOp jLoop = nullptr;
-  for (Operation &op : artsFor.getBody()->without_terminator()) {
-    if (auto forOp = dyn_cast<scf::ForOp>(&op)) {
-      jLoop = forOp;
-      break;
-    }
-  }
-  if (!jLoop)
+  if (!detectSymmetricTriangularPattern(artsFor, matchResult))
     return false;
 
-  /// 1. Check triangular lower bound: lb = arith.addi(outerIV, const)
-  if (!detectTriangularBound(jLoop, outerIV))
-    return false;
-
-  /// 2. Symmetric matrix: outer and inner loops must share the same upper bound
-  auto outerUBRange = artsFor.getUpperBound();
-  if (outerUBRange.size() != 1)
-    return false;
-  Value outerUB = outerUBRange[0];
-  Value innerUB = jLoop.getUpperBound();
-  if (outerUB != innerUB)
-    return false;
-
-  /// 3. The inner scf.for must be the only for-loop in the outer body
-  int forCount = 0;
-  for (Operation &op : artsFor.getBody()->without_terminator())
-    if (isa<scf::ForOp>(&op))
-      forCount++;
-  if (forCount != 1)
-    return false;
-
-  /// 4. Check for symmetric stores in j-loop body
-  Value jIV = jLoop.getInductionVar();
-  if (!detectSymmetricStores(jLoop, outerIV, jIV))
-    return false;
-
-  /// 5. Require diagonal init: store %val, %C[%i, %i] — characteristic of
-  /// correlation/covariance symmetric matrix initialization
-  if (!detectDiagonalInit(artsFor, outerIV, matchResult.memC))
-    return false;
-
-  matchResult.jLoop = jLoop;
+  outerArtsFor = artsFor;
   return true;
-}
-
-bool SymmetricTriangularPattern::detectTriangularBound(scf::ForOp jLoop,
-                                                       Value outerIV) {
-  auto offset = getTriangularOffset(jLoop.getLowerBound(), outerIV);
-  if (!offset)
-    return false;
-  matchResult.triangularOffset = *offset;
-  return true;
-}
-
-bool SymmetricTriangularPattern::detectSymmetricStores(scf::ForOp jLoop,
-                                                       Value outerIV,
-                                                       Value jIV) {
-  /// Collect all memref.store ops in the j-loop body (not nested in sub-loops)
-  SmallVector<memref::StoreOp> stores;
-  for (Operation &op : jLoop.getBody()->without_terminator()) {
-    if (auto store = dyn_cast<memref::StoreOp>(&op))
-      stores.push_back(store);
-  }
-
-  /// Need exactly 2 stores at the top-level of the j-loop body
-  if (stores.size() != 2)
-    return false;
-
-  /// Check if they form a symmetric pair
-  if (!areSymmetricStores(stores[0], stores[1], outerIV, jIV))
-    return false;
-
-  /// Determine which is [i,j] and which is [j,i]
-  auto idx0 = stores[0].getIndices();
-  if (idx0[0] == outerIV && idx0[1] == jIV) {
-    matchResult.storeIJ = stores[0];
-    matchResult.storeJI = stores[1];
-  } else {
-    matchResult.storeIJ = stores[1];
-    matchResult.storeJI = stores[0];
-  }
-
-  matchResult.memC = stores[0].getMemRef();
-  return true;
-}
-
-bool SymmetricTriangularPattern::detectDiagonalInit(ForOp artsFor,
-                                                    Value outerIV, Value memC) {
-  for (Operation &op : artsFor.getBody()->without_terminator()) {
-    if (auto store = dyn_cast<memref::StoreOp>(&op)) {
-      if (store.getMemRef() == memC && isDiagonalStore(store, outerIV)) {
-        matchResult.diagStore = store;
-        matchResult.diagValue = store.getValueToStore();
-        return true;
-      }
-    }
-  }
-  return false;
 }
 
 ///===----------------------------------------------------------------------===//
@@ -229,7 +76,7 @@ bool SymmetricTriangularPattern::detectDiagonalInit(ForOp artsFor,
 LogicalResult SymmetricTriangularPattern::apply(OpBuilder &builder) {
   auto &m = matchResult;
   Location loc = m.jLoop.getLoc();
-  Value outerIV = m.outerArtsFor.getBody()->getArgument(0);
+  Value outerIV = outerArtsFor.getBody()->getArgument(0);
 
   ARTS_INFO("Normalizing symmetric-triangular loop (offset="
             << m.triangularOffset << ")");
@@ -298,7 +145,7 @@ LogicalResult SymmetricTriangularPattern::apply(OpBuilder &builder) {
   /// Step 5: Handle diagonal store — move it after the new j-loop
   if (m.diagStore) {
     /// Erase the original diagonal store (which was before the j-loop)
-    m.diagStore->moveBefore(m.outerArtsFor.getBody()->getTerminator());
+    m.diagStore->moveBefore(outerArtsFor.getBody()->getTerminator());
   }
 
   /// Step 6: Replace uses of j-loop results (if any iter_args)

@@ -1,0 +1,46 @@
+///==========================================================================///
+/// File: DbPatternMatchers.h
+///
+/// Shared DB-oriented loop pattern matchers used by analysis passes.
+///==========================================================================///
+
+#ifndef ARTS_ANALYSIS_DB_DBPATTERNMATCHERS_H
+#define ARTS_ANALYSIS_DB_DBPATTERNMATCHERS_H
+
+#include "arts/ArtsDialect.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include <optional>
+
+namespace mlir {
+namespace arts {
+
+/// Match lb = outerIV + c, where c is a positive constant.
+std::optional<int64_t> matchTriangularOffset(Value lb, Value outerIV);
+
+/// Detect whether a loop contains a nested bound that depends on its IV.
+bool hasTriangularBoundPattern(ForOp forOp);
+
+/// Detect update-form matmul kernels in arts.for regions:
+///   C[...] = C[...] + A[...] * B[...]
+bool detectMatmulUpdatePattern(ForOp forOp);
+
+/// Match result for symmetric triangular loops.
+struct SymmetricTriangularPatternMatch {
+  scf::ForOp jLoop;
+  int64_t triangularOffset = 0;
+  memref::StoreOp storeIJ;   /// store to C[i,j]
+  memref::StoreOp storeJI;   /// store to C[j,i]
+  Value memC;                /// target memref
+  memref::StoreOp diagStore; /// store to C[i,i]
+  Value diagValue;           /// value stored on diagonal
+};
+
+/// Detect symmetric triangular loops used by normalization.
+bool detectSymmetricTriangularPattern(ForOp artsFor,
+                                      SymmetricTriangularPatternMatch &out);
+
+} // namespace arts
+} // namespace mlir
+
+#endif // ARTS_ANALYSIS_DB_DBPATTERNMATCHERS_H

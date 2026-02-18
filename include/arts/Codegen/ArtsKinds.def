@@ -153,7 +153,7 @@ __ARTS_FUNCTION_TYPE(InitPerNodeFn, Void, Int32, Int32, Int8PtrPtr)
 
 /// void initPerWorker(unsigned int nodeId, unsigned int workerId, int argc,
 ///                    char** argv)
-__ARTS_FUNCTION_TYPE(InitPerWorkerFn, Void, Int32, Int32, Int8PtrPtr)
+__ARTS_FUNCTION_TYPE(InitPerWorkerFn, Void, Int32, Int32, Int32, Int8PtrPtr)
 
 /// int main(int argc, char** argv)
 __ARTS_FUNCTION_TYPE(MainFn, Int32, Int32, Int8PtrPtr)

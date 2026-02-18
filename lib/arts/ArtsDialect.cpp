@@ -229,6 +229,14 @@ LogicalResult EdtOp::verify() {
         return WalkResult::interrupt();
       }
 
+      /// DbAcquire source handles may intentionally reference outer-scope
+      /// datablock handles to derive nested views inside EDTs.
+      if (auto dbAcquire = dyn_cast<DbAcquireOp>(op)) {
+        if (operand == dbAcquire.getSourceGuid() ||
+            operand == dbAcquire.getSourcePtr())
+          continue;
+      }
+
       op->emitOpError("EDT region uses external value '")
           << operand << "' that is not a block argument or dependency.\n"
           << *definingOp << "\n"

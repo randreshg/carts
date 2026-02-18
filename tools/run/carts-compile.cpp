@@ -144,10 +144,12 @@ static cl::opt<PartitionFallback> PartitionFallbackMode(
                    "Use fine-grained (element-wise) allocation")),
     cl::init(PartitionFallback::Coarse));
 
-/// Distributed DB ownership marking (after DbPartitioning).
-static cl::opt<bool> DistributedDbOwnership(
-    "distributed-db-ownership",
-    cl::desc("Mark eligible datablocks for distributed node ownership"),
+/// Distributed DB allocation enablement (after DbPartitioning).
+static cl::opt<bool> DistributedDb(
+    "distributed-db",
+    cl::desc("Attempt distributed DB allocation "
+             "(ownership marking + parallel initPerWorker creation; "
+             "auto-enables serial loop EDT outlining for eligible host loops)"),
     cl::init(false));
 
 /// Serial loop EDTification (before CreateDbs).
@@ -333,8 +335,10 @@ void setupLoopReordering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createLoopTransformsPass(
       AM, LoopTransformsEnableMatmul, LoopTransformsEnableTiling,
       LoopTransformsTileJ, LoopTransformsMinTripCount));
-  /// Optional host serial loop outlining.
-  if (SerialEdtify)
+  /// Optional host serial loop outlining. Distributed DB mode requires this to
+  /// lift host-side init loops into arts.for/EDT flow so ownership can be
+  /// inferred from DB acquire dependencies.
+  if (SerialEdtify || DistributedDb)
     pm.addPass(arts::createSerialEdtifyPass(AM));
   pm.addPass(createCSEPass());
 }
@@ -393,7 +397,7 @@ void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createDbPartitioningPass(AM));
   /// Run distributed-ownership eligibility while EDT/DB ops are still in
   /// high-level form so analysis can reason about DbAcquire<->Edt users.
-  if (DistributedDbOwnership)
+  if (DistributedDb)
     pm.addPass(arts::createDistributedDbOwnershipPass(AM));
   pm.addPass(arts::createDbPass(AM));
   pm.addNestedPass<func::FuncOp>(arts::createBlockLoopStripMiningPass());
@@ -438,8 +442,10 @@ void setupPreLowering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 }
 
 /// Setup ARTS to LLVM conversion passes.
-void setupArtsToLLVM(PassManager &pm, bool debug) {
-  pm.addPass(arts::createConvertArtsToLLVMPass(debug));
+void setupArtsToLLVM(PassManager &pm, bool debug,
+                     bool distributedInitPerWorker) {
+  pm.addPass(
+      arts::createConvertArtsToLLVMPass(debug, distributedInitPerWorker));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createMem2Reg());
@@ -582,7 +588,9 @@ setupPassManager(ModuleOp module, MLIRContext &context,
        [&](PassManager &pm) { setupPreLowering(pm, AM.get()); }},
       {PipelineStage::ArtsToLLVM,
        "Error when converting ARTS to LLVM",
-       [&](PassManager &pm) { setupArtsToLLVM(pm, Debug); }},
+       [&](PassManager &pm) {
+         setupArtsToLLVM(pm, Debug, DistributedDb);
+       }},
   };
 
   for (const StageSpec &spec : stages) {

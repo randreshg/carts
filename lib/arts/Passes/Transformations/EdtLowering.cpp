@@ -200,7 +200,8 @@ void EdtLoweringPass::runOnOperation() {
       if (edtOp.getType() != EdtType::task) {
         ARTS_DEBUG("Demoting non-task EDT to task: " << edtOp);
         edtOp.setType(EdtType::task);
-        edtOp->removeAttr(AttrNames::Operation::Workers);
+        arts::setWorkers(edtOp.getOperation(), 0);
+        arts::setWorkersPerNode(edtOp.getOperation(), 0);
         edtOp->removeAttr(AttrNames::Operation::Nowait);
       }
       taskEdts.push_back(edtOp);

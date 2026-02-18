@@ -40,6 +40,8 @@ std::unique_ptr<Pass> createDistributedDbOwnershipPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createCreateEpochsPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug);
+std::unique_ptr<Pass> createConvertArtsToLLVMPass(
+    bool debug, bool distributedInitPerWorker);
 std::unique_ptr<Pass> createEdtInvariantCodeMotionPass();
 std::unique_ptr<Pass> createEdtAllocaSinkingPass();
 std::unique_ptr<Pass> createDataPointerHoistingPass();

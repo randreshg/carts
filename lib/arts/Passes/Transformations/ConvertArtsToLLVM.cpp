@@ -1029,7 +1029,10 @@ private:
     std::string baseName = "__carts_dist_alloc_" + std::to_string(baseId);
     std::string guidHolderSymbol = baseName + "_guid_holder";
     std::string ptrHolderSymbol = baseName + "_ptr_holder";
-    std::string initSymbol = baseName + "_init";
+    bool parallelInit = AC->useDistributedInitInWorkers();
+    std::string nodeInitSymbol =
+        baseName + (parallelInit ? "_reserve_init" : "_init");
+    std::string workerInitSymbol = baseName + "_worker_init";
 
     auto guidDynamicType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
     auto ptrDynamicType = MemRefType::get({ShapedType::kDynamic}, AC->llvmPtr);
@@ -1039,12 +1042,13 @@ private:
     getOrCreateMemrefGlobal(ptrHolderSymbol, ptrHolderType, op.getLoc());
 
     ModuleOp module = AC->getModule();
-    func::FuncOp initFn = module.lookupSymbol<func::FuncOp>(initSymbol);
+    func::FuncOp initFn = module.lookupSymbol<func::FuncOp>(nodeInitSymbol);
+    func::FuncOp workerInitFn;
     if (!initFn) {
       OpBuilder::InsertionGuard IG(AC->getBuilder());
       AC->setInsertionPoint(module);
-      initFn =
-          AC->create<func::FuncOp>(op.getLoc(), initSymbol, AC->InitPerNodeFn);
+      initFn = AC->create<func::FuncOp>(op.getLoc(), nodeInitSymbol,
+                                        AC->InitPerNodeFn);
       initFn.setPrivate();
 
       Block *entry = initFn.addEntryBlock();
@@ -1178,22 +1182,205 @@ private:
       Value callbackRoute = AC->createIntConstant(0, AC->Int32, op.getLoc());
       std::optional<int64_t> callbackNextId = nextId;
 
-      if (isSingleElement) {
-        createSingleDb(ptrBuffer, guidBuffer, callbackDbMode, callbackRoute,
-                       callbackTotalDbSize,
-                       callbackNextId ? &callbackNextId : nullptr, op.getLoc(),
-                       /*distributedOwnership=*/true);
+      if (!parallelInit) {
+        if (isSingleElement) {
+          createSingleDb(ptrBuffer, guidBuffer, callbackDbMode, callbackRoute,
+                         callbackTotalDbSize,
+                         callbackNextId ? &callbackNextId : nullptr,
+                         op.getLoc(),
+                         /*distributedOwnership=*/true);
+        } else {
+          createMultiDbs(ptrBuffer, guidBuffer, callbackDbSizes, callbackDbMode,
+                         callbackRoute, callbackTotalDbSize,
+                         callbackNextId ? &callbackNextId : nullptr,
+                         op.getLoc(),
+                         /*distributedOwnership=*/true);
+        }
+        AC->create<func::ReturnOp>(op.getLoc());
       } else {
-        createMultiDbs(ptrBuffer, guidBuffer, callbackDbSizes, callbackDbMode,
-                       callbackRoute, callbackTotalDbSize,
-                       callbackNextId ? &callbackNextId : nullptr, op.getLoc(),
-                       /*distributedOwnership=*/true);
-      }
+        // Reserve deterministic GUIDs once per node; DB creation runs in
+        // initPerWorker.
+        if (isSingleElement) {
+          createSingleDb(ptrBuffer, guidBuffer, callbackDbMode, callbackRoute,
+                         callbackTotalDbSize,
+                         callbackNextId ? &callbackNextId : nullptr,
+                         op.getLoc(),
+                         /*distributedOwnership=*/true,
+                         /*createDb=*/false);
+        } else {
+          createMultiDbs(ptrBuffer, guidBuffer, callbackDbSizes, callbackDbMode,
+                         callbackRoute, callbackTotalDbSize,
+                         callbackNextId ? &callbackNextId : nullptr,
+                         op.getLoc(),
+                         /*distributedOwnership=*/true,
+                         /*createDb=*/false);
+        }
+        AC->create<func::ReturnOp>(op.getLoc());
 
-      AC->create<func::ReturnOp>(op.getLoc());
+        workerInitFn = module.lookupSymbol<func::FuncOp>(workerInitSymbol);
+        if (!workerInitFn) {
+          AC->setInsertionPoint(module);
+          workerInitFn = AC->create<func::FuncOp>(
+              op.getLoc(), workerInitSymbol, AC->InitPerWorkerFn);
+          workerInitFn.setPrivate();
+
+          Block *workerEntry = workerInitFn.addEntryBlock();
+          AC->setInsertionPointToStart(workerEntry);
+
+          IRMapping workerMapper;
+          if (parentFn && parentFn.getNumArguments() > 0) {
+            if (parentFn.getNumArguments() != 2 ||
+                workerInitFn.getNumArguments() != 4)
+              return failure();
+            workerMapper.map(parentFn.getArgument(0), workerInitFn.getArgument(2));
+            workerMapper.map(parentFn.getArgument(1), workerInitFn.getArgument(3));
+          }
+
+          llvm::SetVector<Value> workerValuesToClone;
+          llvm::DenseSet<Value> workerVisited;
+          std::function<LogicalResult(Value)> collectWorkerDependencies =
+              [&](Value value) -> LogicalResult {
+            if (!value)
+              return failure();
+            if (!workerVisited.insert(value).second ||
+                workerMapper.contains(value))
+              return success();
+
+            if (auto blockArg = value.dyn_cast<BlockArgument>())
+              return workerMapper.contains(blockArg) ? success() : failure();
+
+            Operation *defOp = value.getDefiningOp();
+            if (!defOp)
+              return failure();
+            for (Value operand : defOp->getOperands()) {
+              if (failed(collectWorkerDependencies(operand)))
+                return failure();
+            }
+            workerValuesToClone.insert(value);
+            return success();
+          };
+
+          for (Value size : dbSizes) {
+            if (failed(collectWorkerDependencies(size))) {
+              ARTS_WARN("Failed to collect distributed worker init size "
+                        "expression dependencies for "
+                        << op);
+              return failure();
+            }
+          }
+
+          for (Value size : op.getElementSizes()) {
+            if (failed(collectWorkerDependencies(size))) {
+              ARTS_WARN("Failed to collect distributed worker init element "
+                        "size expression dependencies for "
+                        << op);
+              return failure();
+            }
+          }
+
+          if (!ValueUtils::cloneValuesIntoRegion(
+                  workerValuesToClone, &workerInitFn.getBody(), workerMapper,
+                  AC->getBuilder(), /*allowMemoryEffectFree=*/true,
+                  isRuntimeTopologyCall)) {
+            ARTS_WARN("Failed to clone distributed allocation size "
+                      "expressions into worker init callback for "
+                      << op);
+            return failure();
+          }
+
+          auto mapWorkerValue = [&](Value v) { return workerMapper.lookupOrNull(v); };
+
+          SmallVector<Value, 4> workerDbSizes;
+          workerDbSizes.reserve(dbSizes.size());
+          for (Value size : dbSizes) {
+            Value mapped = mapWorkerValue(size);
+            if (!mapped) {
+              ARTS_WARN("Missing mapped DbAlloc size value in distributed "
+                        "worker init for "
+                        << op);
+              return failure();
+            }
+            workerDbSizes.push_back(mapped);
+          }
+
+          SmallVector<Value, 4> workerElementSizes;
+          workerElementSizes.reserve(op.getElementSizes().size());
+          for (Value size : op.getElementSizes()) {
+            Value mapped = mapWorkerValue(size);
+            if (!mapped) {
+              ARTS_WARN("Missing mapped DbAlloc element size value in "
+                        "distributed worker init for "
+                        << op);
+              return failure();
+            }
+            workerElementSizes.push_back(mapped);
+          }
+
+          Value workerGuidHolder = AC->create<memref::GetGlobalOp>(
+              op.getLoc(), guidHolderType, guidHolderSymbol);
+          Value workerPtrHolder = AC->create<memref::GetGlobalOp>(
+              op.getLoc(), ptrHolderType, ptrHolderSymbol);
+          Value zeroIdx = AC->createIndexConstant(0, op.getLoc());
+          Value workerGuidBuffer = AC->create<memref::LoadOp>(
+              op.getLoc(), workerGuidHolder, ValueRange{zeroIdx});
+          Value workerPtrBuffer = AC->create<memref::LoadOp>(
+              op.getLoc(), workerPtrHolder, ValueRange{zeroIdx});
+          Value workerTotalElems =
+              AC->computeTotalElements(workerDbSizes, op.getLoc());
+
+          Value workerElementSize =
+              AC->computeElementTypeSize(op.getElementType(), op.getLoc());
+          Value workerPayloadSize = AC->createIndexConstant(1, op.getLoc());
+          for (Value dim : workerElementSizes) {
+            workerPayloadSize =
+                AC->create<arith::MulIOp>(op.getLoc(), workerPayloadSize, dim);
+          }
+          Value workerTotalDbSize = AC->create<arith::MulIOp>(
+              op.getLoc(), workerElementSize, workerPayloadSize);
+
+          Value workerNodeId = AC->castToIndex(workerInitFn.getArgument(0),
+                                               op.getLoc());
+          Value workerLocalId = AC->castToIndex(workerInitFn.getArgument(1),
+                                                op.getLoc());
+          Value workersPerNode =
+              AC->castToIndex(AC->getTotalWorkers(op.getLoc()), op.getLoc());
+          Value runtimeTotalNodes =
+              AC->castToIndex(AC->getTotalNodes(op.getLoc()), op.getLoc());
+          Value one = AC->createIndexConstant(1, op.getLoc());
+          workersPerNode =
+              AC->create<arith::MaxUIOp>(op.getLoc(), workersPerNode, one);
+          runtimeTotalNodes =
+              AC->create<arith::MaxUIOp>(op.getLoc(), runtimeTotalNodes, one);
+          /// Reserve/create ownership is per node (route = linearIndex %
+          /// totalNodes). Start from this node's residue class and stripe work
+          /// across local workers so each index is created exactly once.
+          Value workerStart = AC->create<arith::AddIOp>(
+              op.getLoc(),
+              AC->create<arith::MulIOp>(op.getLoc(), workerLocalId,
+                                        runtimeTotalNodes),
+              workerNodeId);
+          Value workerStride = AC->create<arith::MulIOp>(
+              op.getLoc(), runtimeTotalNodes, workersPerNode);
+          auto workerLoop = AC->create<scf::ForOp>(op.getLoc(), workerStart,
+                                                   workerTotalElems, workerStride);
+          AC->setInsertionPointToStart(&workerLoop.getRegion().front());
+          Value linearIndex = workerLoop.getInductionVar();
+          createDbFromReservedGuidAtIndex(workerPtrBuffer, workerGuidBuffer,
+                                          linearIndex, workerTotalDbSize,
+                                          callbackNextId, op.getLoc());
+          AC->setInsertionPointAfter(workerLoop);
+          AC->create<func::ReturnOp>(op.getLoc());
+        }
+      }
     }
 
-    AC->registerDistributedInitCallback(initFn);
+    AC->registerDistributedInitNodeCallback(initFn);
+    if (parallelInit) {
+      if (!workerInitFn)
+        workerInitFn = module.lookupSymbol<func::FuncOp>(workerInitSymbol);
+      if (workerInitFn)
+        AC->registerDistributedInitWorkerCallback(workerInitFn);
+    }
 
     Value zero = AC->createIndexConstant(0, op.getLoc());
     Value guidHolder = AC->create<memref::GetGlobalOp>(
@@ -1207,11 +1394,38 @@ private:
     return success();
   }
 
+  void createDbFromReservedGuidAtIndex(Value dbMemref, Value guidMemref,
+                                       Value linearIndex, Value elementSize,
+                                       std::optional<int64_t> nextId,
+                                       Location loc) const {
+    Value guid =
+        AC->create<memref::LoadOp>(loc, guidMemref, ValueRange{linearIndex});
+    Value elemSize64 = AC->castToInt(AC->Int64, elementSize, loc);
+
+    func::CallOp dbCall;
+    if (nextId.has_value()) {
+      Value baseArtsId =
+          AC->create<arith::ConstantOp>(loc, AC->Int64,
+                                        AC->getBuilder().getI64IntegerAttr(*nextId));
+      Value linearIndex64 = AC->castToInt(AC->Int64, linearIndex, loc);
+      Value artsIdValue =
+          AC->create<arith::AddIOp>(loc, baseArtsId, linearIndex64);
+      dbCall = AC->createRuntimeCall(types::ARTSRTL_artsDbCreateWithGuidAndArtsId,
+                                     {guid, elemSize64, artsIdValue}, loc);
+    } else {
+      dbCall = AC->createRuntimeCall(types::ARTSRTL_artsDbCreateWithGuid,
+                                     {guid, elemSize64}, loc);
+    }
+
+    AC->create<memref::StoreOp>(loc, dbCall.getResult(0), dbMemref,
+                                ValueRange{linearIndex});
+  }
+
   void createSingleDb(Value dbMemref, Value guidMemref, Value dbMode,
                       Value route, Value elementSize,
                       std::optional<int64_t> *nextId, Location loc,
                       bool distributedOwnership = false,
-                      ArrayRef<Value> sizes = {},
+                      bool createDb = true, ArrayRef<Value> sizes = {},
                       ArrayRef<Value> indices = {}) const {
     Value reserveRoute = route;
     if (distributedOwnership) {
@@ -1228,54 +1442,34 @@ private:
     auto guid = AC->createRuntimeCall(types::ARTSRTL_artsReserveGuidRoute,
                                       {dbMode, reserveRoute}, loc)
                     .getResult(0);
-    /// Create the DB with GUID
-    auto elemSize64 = AC->castToInt(AC->Int64, elementSize, loc);
-    func::CallOp dbCall;
-    if (nextId && nextId->has_value()) {
-      auto baseArtsIdAttr = AC->getBuilder().getI64IntegerAttr(**nextId);
-      auto baseArtsId =
-          AC->create<arith::ConstantOp>(loc, AC->Int64, baseArtsIdAttr);
+    Value linearIndex = indices.empty()
+                            ? AC->createIndexConstant(0, loc)
+                            : AC->computeLinearIndex(sizes, indices, loc);
 
-      Value artsIdValue;
-      if (!indices.empty()) {
-        /// For multi-DB case: compute runtime arts_id = base + linearIndex
-        /// This ensures each DB in the loop gets a unique ID
-        auto linearIndex = AC->computeLinearIndex(sizes, indices, loc);
-        auto linearIndex64 = AC->castToInt(AC->Int64, linearIndex, loc);
-        artsIdValue = AC->create<arith::AddIOp>(loc, baseArtsId, linearIndex64);
-      } else {
-        /// Single DB case: use base directly
-        artsIdValue = baseArtsId;
-        **nextId = **nextId + 1;
+    /// Store reserved GUID in the linearized guid memref.
+    AC->create<memref::StoreOp>(loc, guid, guidMemref, ValueRange{linearIndex});
+
+    /// Optionally create DB and store pointer in the linearized db memref.
+    if (createDb) {
+      std::optional<int64_t> baseId = std::nullopt;
+      if (nextId && nextId->has_value()) {
+        if (indices.empty()) {
+          baseId = **nextId;
+          **nextId = **nextId + 1;
+        } else {
+          baseId = **nextId;
+        }
       }
-
-      dbCall =
-          AC->createRuntimeCall(types::ARTSRTL_artsDbCreateWithGuidAndArtsId,
-                                {guid, elemSize64, artsIdValue}, loc);
-    } else {
-      dbCall = AC->createRuntimeCall(types::ARTSRTL_artsDbCreateWithGuid,
-                                     {guid, elemSize64}, loc);
-    }
-    auto dbPtr = dbCall.getResult(0);
-
-    /// Store the DB pointer and GUID in the linearized memrefs
-    if (indices.empty()) {
-      auto zeroIndex = AC->createIndexConstant(0, loc);
-      AC->create<memref::StoreOp>(loc, dbPtr, dbMemref, ValueRange{zeroIndex});
-      AC->create<memref::StoreOp>(loc, guid, guidMemref, ValueRange{zeroIndex});
-    } else {
-      auto linearIndex = AC->computeLinearIndex(sizes, indices, loc);
-      AC->create<memref::StoreOp>(loc, guid, guidMemref,
-                                  ValueRange{linearIndex});
-      AC->create<memref::StoreOp>(loc, dbPtr, dbMemref,
-                                  ValueRange{linearIndex});
+      createDbFromReservedGuidAtIndex(dbMemref, guidMemref, linearIndex,
+                                      elementSize, baseId, loc);
     }
   }
 
   void createMultiDbs(Value dbMemref, Value guidMemref, ArrayRef<Value> sizes,
                       Value dbMode, Value route, Value elementSize,
                       std::optional<int64_t> *nextId, Location loc,
-                      bool distributedOwnership = false) const {
+                      bool distributedOwnership = false,
+                      bool createDb = true) const {
     const unsigned rank = sizes.size();
     auto stepConstant = AC->createIndexConstant(1, loc);
 
@@ -1283,7 +1477,8 @@ private:
         [&](unsigned dim, SmallVector<Value, 4> &indices) {
           if (dim == rank) {
             createSingleDb(dbMemref, guidMemref, dbMode, route, elementSize,
-                           nextId, loc, distributedOwnership, sizes, indices);
+                           nextId, loc, distributedOwnership, createDb, sizes,
+                           indices);
             return;
           }
 
@@ -1510,7 +1705,10 @@ namespace {
 struct ConvertArtsToLLVMPass
     : public arts::ConvertArtsToLLVMBase<ConvertArtsToLLVMPass> {
 
-  explicit ConvertArtsToLLVMPass(bool debug = false) : debugMode(debug) {}
+  explicit ConvertArtsToLLVMPass(bool debug = false,
+                                 bool distributedInitPerWorker = false)
+      : debugMode(debug),
+        distributedInitPerWorker(distributedInitPerWorker) {}
 
   void runOnOperation() override;
 
@@ -1521,6 +1719,7 @@ private:
   //// Member variables
   ArtsCodegen *AC = nullptr;
   bool debugMode = false;
+  bool distributedInitPerWorker = false;
 };
 } // namespace
 
@@ -1538,6 +1737,7 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   //// Initialize codegen infrastructure
   auto ownedAC = std::make_unique<ArtsCodegen>(module, debugMode);
   AC = ownedAC.get();
+  AC->setDistributedInitInWorkers(distributedInitPerWorker);
   ARTS_DEBUG_TYPE("ArtsCodegen initialized successfully");
 
   //// Apply patterns with greedy rewriter (two runs)
@@ -1635,7 +1835,13 @@ std::unique_ptr<Pass> createConvertArtsToLLVMPass() {
 }
 
 std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug) {
-  return std::make_unique<ConvertArtsToLLVMPass>(debug);
+  return std::make_unique<ConvertArtsToLLVMPass>(debug, false);
+}
+
+std::unique_ptr<Pass> createConvertArtsToLLVMPass(
+    bool debug, bool distributedInitPerWorker) {
+  return std::make_unique<ConvertArtsToLLVMPass>(debug,
+                                                 distributedInitPerWorker);
 }
 } // namespace arts
 } // namespace mlir

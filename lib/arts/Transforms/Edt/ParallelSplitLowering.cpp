@@ -138,9 +138,8 @@ EdtOp mlir::arts::createContinuationParallel(
   EdtType contType = originalParallel.getType();
   auto contParallel = AC.create<EdtOp>(
       loc, contType, originalParallel.getConcurrency(), routeZero, newDeps);
-
-  if (auto workers = originalParallel.getWorkersAttr())
-    contParallel->setAttr(AttrNames::Operation::Workers, workers);
+  arts::copyWorkerTopologyAttrs(originalParallel.getOperation(),
+                                contParallel.getOperation());
 
   Block &contBlock = contParallel.getBody().front();
   for (auto [i, dep] : llvm::enumerate(newDeps)) {
