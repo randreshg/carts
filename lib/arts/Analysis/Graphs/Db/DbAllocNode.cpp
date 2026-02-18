@@ -25,6 +25,35 @@ using namespace mlir::arts;
 #include "arts/Utils/ArtsDebug.h"
 ARTS_DEBUG_SETUP(db_alloc_node);
 
+namespace {
+
+template <typename NodeT>
+static void collectAcquireNodesRecursive(NodeT *root,
+                                         SmallVectorImpl<NodeT *> &out) {
+  if (!root)
+    return;
+  out.push_back(root);
+  root->forEachChildNode([&](NodeBase *child) {
+    auto *nested = dyn_cast<NodeT>(child);
+    if (!nested)
+      return;
+    collectAcquireNodesRecursive(nested, out);
+  });
+}
+
+template <typename NodeT>
+static SmallVector<NodeT *, 16>
+collectAllAcquireNodes(const SmallVector<std::unique_ptr<DbAcquireNode>, 4>
+                           &topLevelAcquireNodes) {
+  SmallVector<NodeT *, 16> allAcquireNodes;
+  for (const auto &acqNode : topLevelAcquireNodes)
+    collectAcquireNodesRecursive(static_cast<NodeT *>(acqNode.get()),
+                                 allAcquireNodes);
+  return allAcquireNodes;
+}
+
+} // namespace
+
 ///===----------------------------------------------------------------------===///
 // DbAllocNode
 ///===----------------------------------------------------------------------===///
@@ -100,9 +129,12 @@ bool DbAllocNode::isParallelFriendly() const {
   if (accessedInParallelLoop && *accessedInParallelLoop)
     return true;
 
+  SmallVector<const DbAcquireNode *, 16> allAcquireNodes =
+      collectAllAcquireNodes<const DbAcquireNode>(acquireNodes);
+
   /// Offset/size hints from ForLowering indicate parallel partition intent
   /// even when loop metadata is missing.
-  for (const auto &acqNode : acquireNodes) {
+  for (const DbAcquireNode *acqNode : allAcquireNodes) {
     if (!acqNode)
       continue;
     DbAcquireOp acqOp = acqNode->getDbAcquireOp();
@@ -124,13 +156,16 @@ bool DbAllocNode::canBePartitioned() {
     return false;
   };
 
+  SmallVector<DbAcquireNode *, 16> allAcquireNodes =
+      collectAllAcquireNodes<DbAcquireNode>(acquireNodes);
+
   if (hasNonAffineAccesses && *hasNonAffineAccesses) {
     /// Check if any acquire has offset/size hints from ForLowering.
     /// If hints exist, trust ForLowering's parallel loop analysis over
     /// the static non-affine classification (e.g., indirect indexing A[B[i]]
     /// can still be chunkable when the parallel loop structure is valid).
     bool hasAcquireWithHints = false;
-    for (const auto &acqNode : acquireNodes) {
+    for (DbAcquireNode *acqNode : allAcquireNodes) {
       if (!acqNode)
         continue;
       DbAcquireOp acqOp = acqNode->getDbAcquireOp();
@@ -194,16 +229,16 @@ bool DbAllocNode::canBePartitioned() {
     ARTS_DEBUG("  alloc-level metadata inconclusive - deferring to "
                "acquire-level validation");
 
-  if (acquireNodes.empty()) {
+  if (allAcquireNodes.empty()) {
     ARTS_DEBUG("  No acquire nodes - trivially partitionable");
     return true;
   }
 
-  ARTS_DEBUG("  Checking " << acquireNodes.size() << " acquire children...");
+  ARTS_DEBUG("  Checking " << allAcquireNodes.size() << " acquire children...");
   bool anyPassed = false, anyHasStencilBounds = false;
   bool allFailed = true, anyIndirectAccess = false, anyAcquireWithHints = false;
 
-  for (const auto &acqNode : acquireNodes) {
+  for (DbAcquireNode *acqNode : allAcquireNodes) {
     if (!acqNode)
       continue;
 
@@ -272,7 +307,9 @@ bool DbAllocNode::hasSingleWriter() const {
   /// partitioned by dynamic loop hints. Treat as multi-writer.
   int writeCount = 0;
 
-  for (const auto &acqNode : acquireNodes) {
+  SmallVector<const DbAcquireNode *, 16> allAcquireNodes =
+      collectAllAcquireNodes<const DbAcquireNode>(acquireNodes);
+  for (const DbAcquireNode *acqNode : allAcquireNodes) {
     if (!acqNode)
       continue;
     DbAcquireOp acqOp = acqNode->getDbAcquireOp();
@@ -300,7 +337,9 @@ bool DbAllocNode::hasSingleWriter() const {
 }
 
 bool DbAllocNode::hasDynamicWriterOffsets() const {
-  for (const auto &acqNode : acquireNodes) {
+  SmallVector<const DbAcquireNode *, 16> allAcquireNodes =
+      collectAllAcquireNodes<const DbAcquireNode>(acquireNodes);
+  for (const DbAcquireNode *acqNode : allAcquireNodes) {
     if (!acqNode)
       continue;
     DbAcquireOp acqOp = acqNode->getDbAcquireOp();
@@ -320,10 +359,12 @@ bool DbAllocNode::hasDynamicWriterOffsets() const {
 }
 
 bool DbAllocNode::allAcquiresWorkerIndexed() const {
-  if (acquireNodes.empty())
+  SmallVector<const DbAcquireNode *, 16> allAcquireNodes =
+      collectAllAcquireNodes<const DbAcquireNode>(acquireNodes);
+  if (allAcquireNodes.empty())
     return true;
 
-  for (const auto &acqNode : acquireNodes) {
+  for (const DbAcquireNode *acqNode : allAcquireNodes) {
     if (!acqNode)
       continue;
     if (!acqNode->isWorkerIndexedAccess())
@@ -334,11 +375,14 @@ bool DbAllocNode::allAcquiresWorkerIndexed() const {
 }
 
 bool DbAllocNode::canProveNonOverlapping() const {
-  if (acquireNodes.empty())
+  SmallVector<const DbAcquireNode *, 16> allAcquireNodes =
+      collectAllAcquireNodes<const DbAcquireNode>(acquireNodes);
+
+  if (allAcquireNodes.empty())
     return true;
 
-  if (acquireNodes.size() == 1) {
-    const auto *single = acquireNodes.front().get();
+  if (allAcquireNodes.size() == 1) {
+    const auto *single = allAcquireNodes.front();
     if (!single)
       return true;
     if (DatablockUtils::hasStaticHints(single->getDbAcquireOp()))
@@ -366,10 +410,10 @@ bool DbAllocNode::canProveNonOverlapping() const {
   DbAliasAnalysis *aliasAnalysis =
       analysis ? analysis->getAliasAnalysis() : nullptr;
 
-  for (size_t i = 0; i < acquireNodes.size(); ++i) {
-    for (size_t j = i + 1; j < acquireNodes.size(); ++j) {
-      const DbAcquireNode *acqA = acquireNodes[i].get();
-      const DbAcquireNode *acqB = acquireNodes[j].get();
+  for (size_t i = 0; i < allAcquireNodes.size(); ++i) {
+    for (size_t j = i + 1; j < allAcquireNodes.size(); ++j) {
+      const DbAcquireNode *acqA = allAcquireNodes[i];
+      const DbAcquireNode *acqB = allAcquireNodes[j];
       if (!acqA || !acqB)
         continue;
 
@@ -396,7 +440,10 @@ AcquirePatternSummary DbAllocNode::summarizeAcquirePatterns() const {
   bool hasBlockHint = false;
   bool hasIndirect = false;
 
-  for (const auto &acqNode : acquireNodes) {
+  SmallVector<const DbAcquireNode *, 16> allAcquireNodes =
+      collectAllAcquireNodes<const DbAcquireNode>(acquireNodes);
+
+  for (const DbAcquireNode *acqNode : allAcquireNodes) {
     if (!acqNode)
       continue;
     if (DbAcquireOp acqOp = acqNode->getDbAcquireOp()) {

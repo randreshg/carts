@@ -890,6 +890,13 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         if (!acquireOp.getSizes().empty() && acquireOp.getSizes().front())
           elemHintSize = acquireOp.getSizes().front();
 
+        /// Two-level lowering computes node-wide acquire hints for alignment,
+        /// but write-capable dependencies must commit only the worker-local
+        /// iteration span to avoid over-acquiring neighboring DB blocks.
+        if (loopInfo.strategy.kind == DistributionKind::TwoLevel &&
+            parentAcqOp.getMode() != ArtsMode::in)
+          elemHintSize = loopInfo.bounds.iterCount;
+
         /// Stencil task bodies index write-capable dependencies against the
         /// shared stencil base and include the current row upper boundary.
         /// Reserve one extra element in DB-space slice size to avoid dropping
@@ -903,6 +910,20 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       elemOffset = AC->castToIndex(elemOffset, loc);
       elemHintSize = AC->castToIndex(elemHintSize, loc);
       elemHintSize = AC->create<arith::MaxUIOp>(loc, elemHintSize, one);
+
+      /// Keep partition hint ranges worker-local for two-level write acquires.
+      /// DbPartitioning consults partition_* hints; if these remain node-wide
+      /// while offsets/sizes are worker-local, later rewrites may widen the
+      /// write slice back to node scope.
+      if (loopInfo.strategy.kind == DistributionKind::TwoLevel &&
+          parentAcqOp.getMode() != ArtsMode::in) {
+        if (!acquireOp.getPartitionOffsets().empty())
+          acquireOp.getPartitionOffsetsMutable().assign(
+              SmallVector<Value>{elemOffset});
+        if (!acquireOp.getPartitionSizes().empty())
+          acquireOp.getPartitionSizesMutable().assign(
+              SmallVector<Value>{elemHintSize});
+      }
 
       Value startBlock = AC->create<arith::DivUIOp>(loc, elemOffset, blockSpan);
       Value endElem = AC->create<arith::AddIOp>(loc, elemOffset, elemHintSize);

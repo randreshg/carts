@@ -23,6 +23,7 @@
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -90,10 +91,18 @@ static bool hasNestedIterArgLoops(scf::ForOp loop) {
 static bool hasEligibleStores(scf::ForOp loop) {
   bool hasStoreToStackOrHeapAlloc = false;
   bool hasUnsupportedStore = false;
+  Operation *singleStoreRoot = nullptr;
 
   loop.walk([&](memref::StoreOp storeOp) {
     Operation *root = ValueUtils::getUnderlyingOperation(storeOp.getMemRef());
     if (!root || !isa<memref::AllocOp, memref::AllocaOp>(root)) {
+      hasUnsupportedStore = true;
+      return WalkResult::interrupt();
+    }
+
+    if (!singleStoreRoot)
+      singleStoreRoot = root;
+    else if (singleStoreRoot != root) {
       hasUnsupportedStore = true;
       return WalkResult::interrupt();
     }
@@ -103,6 +112,18 @@ static bool hasEligibleStores(scf::ForOp loop) {
   });
 
   return hasStoreToStackOrHeapAlloc && !hasUnsupportedStore;
+}
+
+static bool hasAnyMemoryReads(scf::ForOp loop) {
+  bool hasReads = false;
+  loop.walk([&](Operation *op) {
+    if (isa<memref::LoadOp, affine::AffineLoadOp>(op)) {
+      hasReads = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return hasReads;
 }
 
 static bool isEligibleSerialLoop(scf::ForOp loop, LoopAnalysis *loopAnalysis) {
@@ -134,6 +155,15 @@ static bool isEligibleSerialLoop(scf::ForOp loop, LoopAnalysis *loopAnalysis) {
 
   if (!hasEligibleStores(loop)) {
     ARTS_DEBUG("Skip loop (store target unsupported): " << loop);
+    return false;
+  }
+
+  /// Keep auto-outlining conservative for distributed mode: only outline
+  /// store-only host loops (e.g. initialization). Read-modify/write kernels
+  /// are lowered by the regular parallel pipeline and are error-prone when
+  /// force-outlined through this path.
+  if (hasAnyMemoryReads(loop)) {
+    ARTS_DEBUG("Skip loop (contains memory reads): " << loop);
     return false;
   }
 
@@ -212,7 +242,20 @@ struct SerialEdtifyPass : public arts::SerialEdtifyBase<SerialEdtifyPass> {
       if (funcOp.isDeclaration())
         return;
 
+      bool hasDbControlOps = false;
+      funcOp.walk([&](DbControlOp) {
+        hasDbControlOps = true;
+        return WalkResult::interrupt();
+      });
+
       funcOp.walk([&](scf::ForOp loop) {
+        /// Task-dependency kernels already carry explicit DbControl hints.
+        /// Auto-outlining host loops in these functions perturbs DB partitioning
+        /// and can explode dependency fan-in at runtime.
+        if (hasDbControlOps) {
+          ARTS_DEBUG("Skip loop (function has DbControlOps): " << loop);
+          return;
+        }
         if (!isEligibleSerialLoop(loop, loopAnalysis))
           return;
         candidates.push_back(loop);

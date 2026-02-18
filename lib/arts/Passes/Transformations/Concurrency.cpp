@@ -22,6 +22,7 @@
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
+#include "arts/Utils/OperationAttributes.h"
 
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/IRMapping.h"
@@ -232,10 +233,7 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
     ARTS_INFO("Parallel EDT contains nested tasks - keeping intranode with "
               << threads << " threads");
     edtOp.setConcurrency(EdtConcurrency::intranode);
-    if (threads > 0) {
-      OpBuilder builder(edtOp.getContext());
-      edtOp.setWorkersAttr(workersAttr::get(builder.getContext(), threads));
-    }
+    arts::setWorkers(edtOp.getOperation(), threads);
     return;
   }
 
@@ -294,10 +292,15 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
   }
 
   /// Set the attributes on the EDT operation
-  OpBuilder builder(edtOp.getContext());
   edtOp.setConcurrency(concurrencyType);
-  if (numWorkers > 0)
-    edtOp.setWorkersAttr(workersAttr::get(builder.getContext(), numWorkers));
+  arts::setWorkers(edtOp.getOperation(), numWorkers);
+
+  if (concurrencyType == EdtConcurrency::internode && workerThreads > 0) {
+    arts::setWorkersPerNode(edtOp.getOperation(),
+                            static_cast<int64_t>(workerThreads));
+  } else {
+    arts::setWorkersPerNode(edtOp.getOperation(), 0);
+  }
   ARTS_INFO("Set EDT concurrency="
             << (concurrencyType == EdtConcurrency::internode ? "internode"
                                                              : "intranode")

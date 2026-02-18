@@ -8,10 +8,14 @@
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 
 #include "arts/Utils/ArtsDebug.h"
 ARTS_DEBUG_SETUP(datablock_utils);
@@ -29,6 +33,45 @@ static void getAcquireDependencySlice(DbAcquireOp acquire,
   /// live in a different index space.
   sizesOut.assign(acquire.getSizes().begin(), acquire.getSizes().end());
   offsetsOut.assign(acquire.getOffsets().begin(), acquire.getOffsets().end());
+}
+
+static bool isMemrefForwardingOp(Operation *op, Value source) {
+  if (!op || !source)
+    return false;
+
+  if (auto castOp = dyn_cast<memref::CastOp>(op))
+    return castOp.getSource() == source;
+  if (auto subview = dyn_cast<memref::SubViewOp>(op))
+    return subview.getSource() == source;
+  if (auto view = dyn_cast<memref::ViewOp>(op))
+    return view.getSource() == source;
+  if (auto reinterpret = dyn_cast<memref::ReinterpretCastOp>(op))
+    return reinterpret.getSource() == source;
+  if (auto unrealized = dyn_cast<UnrealizedConversionCastOp>(op))
+    return llvm::is_contained(unrealized.getInputs(), source);
+
+  return false;
+}
+
+static Value getAccessedMemref(Operation *memOp) {
+  if (!memOp)
+    return Value();
+  if (auto load = dyn_cast<memref::LoadOp>(memOp))
+    return load.getMemRef();
+  if (auto store = dyn_cast<memref::StoreOp>(memOp))
+    return store.getMemRef();
+  if (auto load = dyn_cast<affine::AffineLoadOp>(memOp))
+    return load.getMemRef();
+  if (auto store = dyn_cast<affine::AffineStoreOp>(memOp))
+    return store.getMemRef();
+  return Value();
+}
+
+static void appendDynamicSubviewOffsets(memref::SubViewOp subview,
+                                        SmallVector<Value> &chain) {
+  for (OpFoldResult off : subview.getMixedOffsets())
+    if (auto v = off.dyn_cast<Value>())
+      chain.push_back(v);
 }
 
 } // namespace
@@ -121,6 +164,23 @@ Operation *DatablockUtils::getUnderlyingDbAlloc(Value v) {
   if (dbAcquire)
     return getUnderlyingDbAlloc(dbAcquire.getSourcePtr());
   return nullptr;
+}
+
+bool DatablockUtils::isSameMemoryObject(Value lhsMemref, Value rhsMemref) {
+  lhsMemref = ValueUtils::stripNumericCasts(lhsMemref);
+  rhsMemref = ValueUtils::stripNumericCasts(rhsMemref);
+
+  Operation *lhsRoot = getUnderlyingDbAlloc(lhsMemref);
+  Operation *rhsRoot = getUnderlyingDbAlloc(rhsMemref);
+  if (lhsRoot && rhsRoot)
+    return lhsRoot == rhsRoot;
+
+  lhsRoot = ValueUtils::getUnderlyingOperation(lhsMemref);
+  rhsRoot = ValueUtils::getUnderlyingOperation(rhsMemref);
+  if (lhsRoot && rhsRoot)
+    return lhsRoot == rhsRoot;
+
+  return lhsMemref == rhsMemref;
 }
 
 ///===----------------------------------------------------------------------===///
@@ -501,13 +561,124 @@ SmallVector<Value> DatablockUtils::collectFullIndexChain(DbRefOp dbRef,
                                                          Operation *memOp) {
   SmallVector<Value> chain(dbRef.getIndices().begin(),
                            dbRef.getIndices().end());
-  ValueRange memIndices;
-  if (auto load = dyn_cast<memref::LoadOp>(memOp))
-    memIndices = load.getIndices();
-  else if (auto store = dyn_cast<memref::StoreOp>(memOp))
-    memIndices = store.getIndices();
+  Value accessedMemref = getAccessedMemref(memOp);
+  Value anchor = dbRef.getResult();
+
+  SmallVector<Operation *, 8> forwardingOps;
+  DenseSet<Value> visitedMemrefs;
+  Value current = accessedMemref;
+  while (current && current != anchor && visitedMemrefs.insert(current).second) {
+    Operation *def = current.getDefiningOp();
+    if (!def)
+      break;
+
+    if (auto castOp = dyn_cast<memref::CastOp>(def)) {
+      forwardingOps.push_back(def);
+      current = castOp.getSource();
+      continue;
+    }
+    if (auto subview = dyn_cast<memref::SubViewOp>(def)) {
+      forwardingOps.push_back(def);
+      current = subview.getSource();
+      continue;
+    }
+    if (auto view = dyn_cast<memref::ViewOp>(def)) {
+      forwardingOps.push_back(def);
+      current = view.getSource();
+      continue;
+    }
+    if (auto reinterpret = dyn_cast<memref::ReinterpretCastOp>(def)) {
+      forwardingOps.push_back(def);
+      current = reinterpret.getSource();
+      continue;
+    }
+    if (auto unrealized = dyn_cast<UnrealizedConversionCastOp>(def)) {
+      if (unrealized.getInputs().empty())
+        break;
+      forwardingOps.push_back(def);
+      current = unrealized.getInputs().front();
+      continue;
+    }
+    break;
+  }
+
+  for (Operation *op : llvm::reverse(forwardingOps))
+    if (auto subview = dyn_cast<memref::SubViewOp>(op))
+      appendDynamicSubviewOffsets(subview, chain);
+
+  SmallVector<Value> memIndices = getMemoryAccessIndices(memOp);
   chain.append(memIndices.begin(), memIndices.end());
   return chain;
+}
+
+SmallVector<Value> DatablockUtils::getMemoryAccessIndices(Operation *memOp) {
+  if (!memOp)
+    return {};
+
+  if (auto load = dyn_cast<memref::LoadOp>(memOp))
+    return SmallVector<Value>(load.getIndices().begin(),
+                              load.getIndices().end());
+  if (auto store = dyn_cast<memref::StoreOp>(memOp))
+    return SmallVector<Value>(store.getIndices().begin(),
+                              store.getIndices().end());
+  if (auto load = dyn_cast<affine::AffineLoadOp>(memOp))
+    return SmallVector<Value>(load.getMapOperands().begin(),
+                              load.getMapOperands().end());
+  if (auto store = dyn_cast<affine::AffineStoreOp>(memOp))
+    return SmallVector<Value>(store.getMapOperands().begin(),
+                              store.getMapOperands().end());
+  return {};
+}
+
+void DatablockUtils::collectReachableMemoryOps(
+    Value source, llvm::SetVector<Operation *> &memOps, Region *scope) {
+  if (!source)
+    return;
+
+  SmallVector<Value, 16> worklist;
+  DenseSet<Value> visited;
+  worklist.push_back(source);
+
+  while (!worklist.empty()) {
+    Value current = worklist.pop_back_val();
+    if (!visited.insert(current).second)
+      continue;
+
+    for (Operation *user : current.getUsers()) {
+      if (scope && !scope->isAncestor(user->getParentRegion()))
+        continue;
+
+      if (auto load = dyn_cast<memref::LoadOp>(user)) {
+        if (load.getMemRef() == current)
+          memOps.insert(user);
+        continue;
+      }
+      if (auto store = dyn_cast<memref::StoreOp>(user)) {
+        if (store.getMemRef() == current)
+          memOps.insert(user);
+        continue;
+      }
+      if (auto load = dyn_cast<affine::AffineLoadOp>(user)) {
+        if (load.getMemRef() == current)
+          memOps.insert(user);
+        continue;
+      }
+      if (auto store = dyn_cast<affine::AffineStoreOp>(user)) {
+        if (store.getMemRef() == current)
+          memOps.insert(user);
+        continue;
+      }
+
+      if (!isMemrefForwardingOp(user, current))
+        continue;
+      if (user->getNumResults() == 0)
+        continue;
+
+      for (Value result : user->getResults())
+        if (result.getType().isa<MemRefType>())
+          worklist.push_back(result);
+    }
+  }
 }
 
 ///===----------------------------------------------------------------------===///

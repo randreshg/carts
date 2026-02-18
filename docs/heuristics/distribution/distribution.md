@@ -142,6 +142,10 @@ Pattern detection is centralized in analysis APIs, not in lowering passes.
 - `DbAnalysis::analyzeLoopDbAccessPatterns(ForOp)` computes loop summary from DB graph + access bounds.
 - `DbAnalysis::getLoopDistributionPattern(ForOp)` exposes pattern.
 - `ArtsAnalysisManager::getLoopDistributionPattern(Operation *)` is the unified pass-facing API.
+- Pattern-specific IR matching is centralized in
+  `include/arts/Analysis/Db/DbPatternMatchers.h` /
+  `lib/arts/Analysis/Db/DbPatternMatchers.cpp` and reused by analysis and
+  loop-normalization transforms.
 
 ### 4.2 EDT-facing view
 
@@ -184,7 +188,10 @@ Current implementation:
 - New pass: `DistributedDbOwnershipPass`
   (`lib/arts/Passes/Optimizations/DistributedDbOwnership.cpp`).
 - Pipeline placement: `DbPartitioning -> DistributedDbOwnership -> DbPass`
-  (gated by `--distributed-db-ownership` in `carts-compile`).
+  (gated by `--distributed-db` in `carts-compile`).
+- `--distributed-db` also enables serial host loop outlining (`SerialEdtify`) so
+  eligible initialization loops flow through `arts.for` lowering and can satisfy
+  distributed ownership constraints.
 - Lowering support: `ConvertArtsToLLVM` uses round-robin route selection for
   marked multi-DB allocations:
   - route = `linearIndex % artsGetTotalNodes()`
@@ -196,6 +203,9 @@ Current eligibility policy is intentionally conservative:
 - has multiple DB blocks
 - handle uses are restricted to DB dependency flow (`db_acquire`, `db_free`,
   EDT dependency wiring)
+- reject full-range read acquires (`mode=in` with `offset=0`, `size=alloc_size`)
+  because those behave like broadcast inputs and are not safe for current
+  ownership routing
 - allocation is consumed by internode EDTs
 
 Distributed init split is implemented:
@@ -203,8 +213,8 @@ Distributed init split is implemented:
   nodes inside `initPerNode`. Each node reserves the same deterministic GUID
   sequence but only allocates DBs whose GUID encodes its rank.
 - `ConvertArtsToLLVM.cpp` lowers marked multi-DB allocations with
-  `route = linearIndex % artsGetTotalNodes()` and guards `artsDbCreateWithGuid`
-  behind `artsIsGuidLocal`.
+  `route = linearIndex % artsGetTotalNodes()`. Runtime DB creation remains
+  local-only via `artsDbCreateWithGuid(AndArtsId)` semantics.
 
 Future work:
 - distributed free policy beyond current `artsShutdown()` behavior

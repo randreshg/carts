@@ -19,6 +19,7 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -41,6 +42,8 @@ enum class DistributedRejectReason {
   GlobalAllocType,
   SingleBlock,
   UnsupportedShape,
+  ReadOnlyInternodeUse,
+  BroadcastReadAcquire,
   UnsupportedPtrUsers,
   UnsupportedGuidUsers,
   NonEdtAcquireUse,
@@ -64,6 +67,10 @@ static const char *toString(DistributedRejectReason reason) {
     return "single_block";
   case DistributedRejectReason::UnsupportedShape:
     return "unsupported_shape";
+  case DistributedRejectReason::ReadOnlyInternodeUse:
+    return "read_only_internode_use";
+  case DistributedRejectReason::BroadcastReadAcquire:
+    return "broadcast_read_acquire";
   case DistributedRejectReason::UnsupportedPtrUsers:
     return "unsupported_ptr_users";
   case DistributedRejectReason::UnsupportedGuidUsers:
@@ -170,6 +177,43 @@ static bool isUsedByInternodeEdt(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
   return hasInternodeUse;
 }
 
+static bool hasWriterInternodeEdtUse(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
+  func::FuncOp parentFunc = alloc->getParentOfType<func::FuncOp>();
+  if (!parentFunc)
+    return false;
+
+  DbGraph &graph = dbAnalysis.getOrCreateGraph(parentFunc);
+  DbAllocNode *allocNode = graph.getDbAllocNode(alloc);
+  if (!allocNode)
+    return false;
+
+  bool hasInternodeWriter = false;
+  graph.forEachAcquireNode([&](DbAcquireNode *acquireNode) {
+    if (hasInternodeWriter || !acquireNode)
+      return;
+
+    DbAllocNode *rootAlloc = acquireNode->getRootAlloc();
+    if (!rootAlloc || rootAlloc != allocNode)
+      return;
+
+    DbAcquireOp acquireOp = acquireNode->getDbAcquireOp();
+    if (!acquireOp)
+      return;
+    if (acquireOp.getMode() == ArtsMode::in)
+      return;
+
+    EdtOp edt = acquireNode->getEdtUser();
+    if (!edt || edt.getConcurrency() != EdtConcurrency::internode)
+      return;
+    auto pattern = getEdtDistributionPattern(edt.getOperation());
+    if (!pattern || *pattern != EdtDistributionPattern::matmul)
+      return;
+    hasInternodeWriter = true;
+  });
+
+  return hasInternodeWriter;
+}
+
 static bool hasOnlyEdtAcquireUsers(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
   func::FuncOp parentFunc = alloc->getParentOfType<func::FuncOp>();
   if (!parentFunc)
@@ -189,11 +233,78 @@ static bool hasOnlyEdtAcquireUsers(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
     if (!rootAlloc || rootAlloc != allocNode)
       return;
 
-    if (!acquireNode->getEdtUser())
-      allAcquireUsersAreEdts = false;
+    if (acquireNode->getEdtUser())
+      return;
+    allAcquireUsersAreEdts = false;
   });
 
   return allAcquireUsersAreEdts;
+}
+
+static bool hasBroadcastReadAcquireUsers(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
+  func::FuncOp parentFunc = alloc->getParentOfType<func::FuncOp>();
+  if (!parentFunc)
+    return false;
+
+  DbGraph &graph = dbAnalysis.getOrCreateGraph(parentFunc);
+  DbAllocNode *allocNode = graph.getDbAllocNode(alloc);
+  if (!allocNode)
+    return false;
+
+  auto sameOrEqualConstant = [](Value lhs, Value rhs) -> bool {
+    lhs = ValueUtils::stripNumericCasts(lhs);
+    rhs = ValueUtils::stripNumericCasts(rhs);
+    if (lhs == rhs)
+      return true;
+    int64_t lhsConst = 0;
+    int64_t rhsConst = 0;
+    if (!ValueUtils::getConstantIndex(lhs, lhsConst) ||
+        !ValueUtils::getConstantIndex(rhs, rhsConst))
+      return false;
+    return lhsConst == rhsConst;
+  };
+
+  auto isZeroIndex = [](Value value) -> bool {
+    value = ValueUtils::stripNumericCasts(value);
+    int64_t constant = 0;
+    return ValueUtils::getConstantIndex(value, constant) && constant == 0;
+  };
+
+  bool hasBroadcastReadAcquire = false;
+  graph.forEachAcquireNode([&](DbAcquireNode *acquireNode) {
+    if (hasBroadcastReadAcquire || !acquireNode)
+      return;
+
+    DbAllocNode *rootAlloc = acquireNode->getRootAlloc();
+    if (!rootAlloc || rootAlloc != allocNode)
+      return;
+
+    DbAcquireOp acquireOp = acquireNode->getDbAcquireOp();
+    if (!acquireOp || acquireOp.getMode() != ArtsMode::in)
+      return;
+
+    auto allocSizes = alloc.getSizes();
+    auto acquireOffsets = acquireOp.getOffsets();
+    auto acquireSizes = acquireOp.getSizes();
+    if (allocSizes.size() != acquireOffsets.size() ||
+        allocSizes.size() != acquireSizes.size())
+      return;
+
+    bool fullRangeRead = true;
+    for (auto [allocSize, acquireOffset, acquireSize] :
+         llvm::zip_equal(allocSizes, acquireOffsets, acquireSizes)) {
+      if (!isZeroIndex(acquireOffset) ||
+          !sameOrEqualConstant(acquireSize, allocSize)) {
+        fullRangeRead = false;
+        break;
+      }
+    }
+
+    if (fullRangeRead)
+      hasBroadcastReadAcquire = true;
+  });
+
+  return hasBroadcastReadAcquire;
 }
 
 static EligibilityResult
@@ -212,10 +323,10 @@ evaluateDistributedEligibility(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
     return {false, DistributedRejectReason::UnsupportedPtrUsers};
   if (!hasOnlyAllowedHandleUsers(alloc.getGuid()))
     return {false, DistributedRejectReason::UnsupportedGuidUsers};
-  if (!hasOnlyEdtAcquireUsers(alloc, dbAnalysis))
-    return {false, DistributedRejectReason::NonEdtAcquireUse};
   if (!isUsedByInternodeEdt(alloc, dbAnalysis))
     return {false, DistributedRejectReason::NoInternodeEdtUse};
+  if (!hasWriterInternodeEdtUse(alloc, dbAnalysis))
+    return {false, DistributedRejectReason::ReadOnlyInternodeUse};
   return {true, DistributedRejectReason::None};
 }
 

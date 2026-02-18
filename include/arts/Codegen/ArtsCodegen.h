@@ -94,13 +94,19 @@ public:
   void waitOnHandle(Value epochGuid, Location loc);
 
   /// Function creation
-  func::FuncOp insertInitPerWorker(Location loc);
+  func::FuncOp insertInitPerWorker(Location loc, func::FuncOp callback);
   func::FuncOp insertInitPerNode(Location loc, func::FuncOp callback);
-  func::FuncOp insertDistributedDbInitFn(Location loc);
+  func::FuncOp insertDistributedDbInitNodeFn(Location loc);
+  func::FuncOp insertDistributedDbInitWorkerFn(Location loc);
   func::FuncOp insertArtsMainFn(Location loc, func::FuncOp callback);
   func::FuncOp insertMainFn(Location loc);
   void initRT(Location loc);
-  void registerDistributedInitCallback(func::FuncOp callback);
+  void registerDistributedInitNodeCallback(func::FuncOp callback);
+  void registerDistributedInitWorkerCallback(func::FuncOp callback);
+  bool useDistributedInitInWorkers() const { return distributedInitInWorkers; }
+  void setDistributedInitInWorkers(bool value) {
+    distributedInitInWorkers = value;
+  }
 
   /// Helper functions
   Value createFnPtr(func::FuncOp funcOp, Location loc);
@@ -185,7 +191,9 @@ private:
   /// Other Attributes
   llvm::DenseMap<RuntimeFunction, func::FuncOp> runtimeFunctionCache;
   llvm::StringMap<LLVM::GlobalOp> llvmStringGlobals;
-  SmallVector<func::FuncOp, 8> distributedInitCallbacks;
+  SmallVector<func::FuncOp, 8> distributedInitNodeCallbacks;
+  SmallVector<func::FuncOp, 8> distributedInitWorkerCallbacks;
+  bool distributedInitInWorkers = false;
 
   /// Helper functions
   void initializeTypes();

@@ -18,6 +18,7 @@
 ///==========================================================================///
 
 #include "arts/Transforms/Edt/ReductionLowering.h"
+#include "arts/Analysis/DistributionHeuristics.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
 #include "arts/Utils/OperationAttributes.h"
@@ -144,21 +145,9 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
   OpBuilder::InsertionGuard IG(AC->getBuilder());
   AC->setInsertionPoint(parallelEdt);
 
-  /// Use numWorkers from parallel EDT workers attribute
-  Value numWorkers;
-  if (auto workers = parallelEdt->getAttrOfType<workersAttr>(
-          AttrNames::Operation::Workers))
-    numWorkers = AC->createIndexConstant(workers.getValue(), loc);
-  else if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {
-    Value nodes =
-        AC->castToIndex(AC->create<GetTotalNodesOp>(loc).getResult(), loc);
-    Value threads =
-        AC->castToIndex(AC->create<GetTotalWorkersOp>(loc).getResult(), loc);
-    numWorkers = AC->create<arith::MulIOp>(loc, nodes, threads);
-  } else {
-    numWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
-  }
-  numWorkers = AC->castToIndex(numWorkers, loc);
+  /// Resolve worker count consistently with ForLowering distribution.
+  Value numWorkers =
+      DistributionHeuristics::getTotalWorkers(AC, loc, parallelEdt);
 
   Block &parallelBlock = parallelEdt.getBody().front();
   ValueRange parentDeps = parallelEdt.getDependencies();
@@ -444,7 +433,11 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
                            ValueRange{workerIdxI64, partialI64});
     }
 
-    Value combined = AC->create<arith::AddIOp>(loc, accumulator, partialValue);
+    Value combined;
+    if (elemType.isa<FloatType>())
+      combined = AC->create<arith::AddFOp>(loc, accumulator, partialValue);
+    else
+      combined = AC->create<arith::AddIOp>(loc, accumulator, partialValue);
     AC->create<scf::YieldOp>(loc, combined);
 
     AC->setInsertionPointAfter(combineLoop);

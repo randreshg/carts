@@ -13,6 +13,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Value.h"
+#include "llvm/ADT/SetVector.h"
 #include <optional>
 
 namespace mlir {
@@ -41,6 +42,13 @@ public:
   /// Finds the DbAllocOp associated with the given value.
   /// Traces through DbAcquireOp chains to find the root allocation.
   static Operation *getUnderlyingDbAlloc(Value v);
+
+  /// Conservative memory-object identity for memref-like values.
+  /// Preference order:
+  /// 1. Same root DbAllocOp (when both values map to a DB allocation)
+  /// 2. Same underlying defining operation (modulo numeric casts)
+  /// 3. Same SSA value (modulo numeric casts)
+  static bool isSameMemoryObject(Value lhsMemref, Value rhsMemref);
 
   ///===----------------------------------------------------------------------===///
   /// Datablock Size and Offset Extraction
@@ -191,10 +199,21 @@ public:
   ///===----------------------------------------------------------------------===///
 
   /// Collect full index chain from DbRefOp indices plus memory operation
-  /// indices. Returns the combined index chain from [DbRef indices] ++
-  /// [load/store indices].
+  /// indices. For accesses through view-like ops (e.g., subview), dynamic
+  /// forwarding offsets are inserted before terminal memory-op indices.
+  /// Returns a combined chain beginning with DbRef indices.
   static SmallVector<Value> collectFullIndexChain(DbRefOp dbRef,
                                                   Operation *memOp);
+
+  /// Extract index operands from a memory access op.
+  /// Supports memref/affine load/store operations.
+  static SmallVector<Value> getMemoryAccessIndices(Operation *memOp);
+
+  /// Collect load/store operations reachable from source through view-like
+  /// forwarding ops (casts, subviews, etc.). Optionally restrict to a scope.
+  static void collectReachableMemoryOps(Value source,
+                                        llvm::SetVector<Operation *> &memOps,
+                                        Region *scope = nullptr);
 
   ///===----------------------------------------------------------------------===///
   /// Multi-Entry Stencil Pattern Detection

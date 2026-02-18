@@ -836,12 +836,26 @@ Value CreateDbsPass::findParentAcquireSource(EdtOp edt, Operation *dbAllocOp,
     return true;
   };
 
-  /// Check parent EDT's block arguments
-  for (BlockArgument arg : parentBlock->getArguments()) {
-    if (matchesDb(arg)) {
-      ARTS_DEBUG("   - Found matching handle in parent block arguments");
-      return arg;
+  /// Walk outward through enclosing block arguments and look for a handle that
+  /// is already available in scope at the current insertion point.
+  /// This handles nested EDTs inside arts.for/scf.for regions where the
+  /// immediate block has only loop IV arguments.
+  Block *scanBlock = parentBlock;
+  Operation *anchorOp = edt.getOperation();
+
+  while (scanBlock && anchorOp) {
+    for (BlockArgument arg : scanBlock->getArguments()) {
+      if (matchesDb(arg)) {
+        ARTS_DEBUG("   - Found matching handle in enclosing block arguments");
+        return arg;
+      }
     }
+
+    Operation *ownerOp = scanBlock->getParentOp();
+    if (!ownerOp)
+      break;
+    scanBlock = ownerOp->getBlock();
+    anchorOp = ownerOp;
   }
 
   ARTS_DEBUG("   - No existing handle found in parent scope");

@@ -121,12 +121,17 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
   builder.setInsertionPoint(acquire);
   Location loc = acquire.getLoc();
 
-  /// Update source to new allocation
-  acquire.getSourceGuidMutable().assign(newAlloc.getGuid());
-  acquire.getSourcePtrMutable().assign(newAlloc.getPtr());
+  /// Update source to new allocation only for host-side acquires.
+  /// Acquires inside EDT regions must keep their in-scope source chain
+  /// (block-arg/parent-acquire) to satisfy EDT dependency verification.
+  bool inEdtRegion = static_cast<bool>(acquire->getParentOfType<EdtOp>());
+  if (!inEdtRegion) {
+    acquire.getSourceGuidMutable().assign(newAlloc.getGuid());
+    acquire.getSourcePtrMutable().assign(newAlloc.getPtr());
+  }
 
   /// Update acquire's ptr result type to match new source
-  MemRefType newPtrType = newAlloc.getPtr().getType().cast<MemRefType>();
+  MemRefType newPtrType = acquire.getSourcePtr().getType().cast<MemRefType>();
   Type oldAcqPtrType = acquire.getPtr().getType();
   if (oldAcqPtrType != newPtrType) {
     acquire.getPtr().setType(newPtrType);
