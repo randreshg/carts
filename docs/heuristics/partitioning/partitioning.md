@@ -63,7 +63,7 @@ Index mapping always has two levels:
 
 ## 1.1) Relationship to Distributed DB Ownership
 
-`--distributed-db-ownership` is an ownership/routing concern, not a partition
+`--distributed-db` is an ownership/routing concern, not a partition
 mode.
 
 - H1 partitioning still decides DB layout (`coarse`, `block`, `stencil`,

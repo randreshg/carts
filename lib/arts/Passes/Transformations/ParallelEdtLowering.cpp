@@ -223,13 +223,10 @@ private:
         nodes = loopBuilder.create<arith::IndexCastOp>(
             loc, loopBuilder.getIndexType(), nodes);
 
-      Value nodesMinusOne = loopBuilder.create<arith::SubIOp>(loc, nodes, one);
-      Value ceilNumerator =
-          loopBuilder.create<arith::AddIOp>(loc, numWorkers, nodesMinusOne);
       Value workersPerNode =
-          loopBuilder.create<arith::DivUIOp>(loc, ceilNumerator, nodes);
-      workersPerNode =
-          loopBuilder.create<arith::MaxUIOp>(loc, workersPerNode, one);
+          DistributionHeuristics::getWorkersPerNode(loopBuilder, loc,
+                                                    parallelEdt);
+      Value nodesMinusOne = loopBuilder.create<arith::SubIOp>(loc, nodes, one);
 
       Value nodeId =
           loopBuilder.create<arith::DivUIOp>(loc, workerId, workersPerNode);
@@ -247,8 +244,9 @@ private:
     Operation *clonedOp = loopBuilder.clone(*parallelEdt.getOperation());
     auto clonedEdt = cast<EdtOp>(clonedOp);
     clonedEdt.setType(EdtType::task);
-    clonedEdt->removeAttr(AttrNames::Operation::Workers);
-    clonedEdt->removeAttr("nowait");
+    arts::setWorkers(clonedEdt.getOperation(), 0);
+    arts::setWorkersPerNode(clonedEdt.getOperation(), 0);
+    clonedEdt->removeAttr(AttrNames::Operation::Nowait);
 
     /// Update route: internode uses worker route, otherwise keep existing or 0
     Value routeVal = routeWorkers ? workerRoute : clonedEdt.getRoute();
