@@ -16,15 +16,14 @@
 
 #include "../ArtsPassDetails.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"
+#include "arts/Analysis/Db/DbPatternMatchers.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
+#include "arts/Transforms/Loop/LoopNormalizer.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
 #include "arts/Utils/OperationAttributes.h"
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
 
@@ -35,21 +34,6 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
-
-/// Copy loop attributes (arts.id and arts.loop) from source to target
-/// operation.
-static void copyLoopAttributes(Operation *source, Operation *target) {
-  if (!source || !target)
-    return;
-
-  /// Copy arts.id attribute
-  if (auto idAttr = source->getAttr(AttrNames::Operation::ArtsId))
-    target->setAttr(AttrNames::Operation::ArtsId, idAttr);
-
-  /// Copy arts.loop attribute
-  if (auto loopAttr = source->getAttr(AttrNames::LoopMetadata::Name))
-    target->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
-}
 
 /// Clear hasReductions for loops that no longer contain reduction operations
 /// (e.g., init loops created by loop distribution).
@@ -122,67 +106,17 @@ struct LoopReorderingPass
   /// Try to auto-detect matmul-like patterns and apply loop interchange.
   /// Returns true if a transformation was applied.
   bool tryAutoDetectAndReorder(ForOp artsFor) {
-    /// Look for the pattern: arts.for(i) { scf.for(j) { init; scf.for(k) {
-    /// reduce } } }
-
-    /// Find the first scf.for directly inside arts.for
-    scf::ForOp jLoop = nullptr;
-    for (Operation &op : artsFor.getBody()->without_terminator()) {
-      if (auto forOp = dyn_cast<scf::ForOp>(&op)) {
-        jLoop = forOp;
-        break;
-      }
-    }
-
-    if (!jLoop)
-      return false;
-
-    /// Check if j loop has the pattern: init_ops followed by inner scf.for (k)
-    SmallVector<Operation *, 8> initOps;
-    scf::ForOp kLoop = nullptr;
-
-    for (Operation &op : jLoop.getBody()->without_terminator()) {
-      if (auto forOp = dyn_cast<scf::ForOp>(&op)) {
-        kLoop = forOp;
-        break; /// Found the k loop
-      }
-      initOps.push_back(&op);
-    }
-
-    /// Need: init ops present, and a k loop
-    if (initOps.empty() || !kLoop)
-      return false;
-
-    /// Additional heuristic: check if this looks like a reduction (k loop body
-    /// has load-compute-store pattern with accumulation)
-    if (!looksLikeReduction(kLoop))
+    MatmulInitReductionLoopMatch loopMatch;
+    if (!detectMatmulInitReductionLoopNest(artsFor, &AM->getLoopAnalysis(),
+                                           loopMatch))
       return false;
 
     ARTS_DEBUG("Auto-detected matmul pattern in arts.for: "
-               << initOps.size() << " init ops, j-k nest");
+               << loopMatch.initOps.size() << " init ops, j-k nest");
 
     /// Apply the distribution + interchange
-    return interchangeInnerLoopsWithDistribution(artsFor, jLoop, kLoop,
-                                                 initOps);
-  }
-
-  /// Check if a loop body looks like a reduction (load-compute-store pattern)
-  bool looksLikeReduction(scf::ForOp loop) {
-    bool hasLoad = false;
-    bool hasStore = false;
-    bool hasArith = false;
-
-    for (Operation &op : loop.getBody()->without_terminator()) {
-      if (isa<memref::LoadOp, affine::AffineLoadOp>(op))
-        hasLoad = true;
-      if (isa<memref::StoreOp, affine::AffineStoreOp>(op))
-        hasStore = true;
-      if (isa<arith::AddFOp, arith::MulFOp, arith::AddIOp, arith::MulIOp>(op))
-        hasArith = true;
-    }
-
-    /// A reduction typically has loads, arithmetic, and stores
-    return hasLoad && hasStore && hasArith;
+    return interchangeInnerLoopsWithDistribution(
+        artsFor, loopMatch.jLoop, loopMatch.kLoop, loopMatch.initOps);
   }
 
 private:

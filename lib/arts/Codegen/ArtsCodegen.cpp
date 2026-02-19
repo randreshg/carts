@@ -29,6 +29,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 /// Arts
 #include "arts/ArtsDialect.h"
+#include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 /// Debug
@@ -247,11 +248,21 @@ Value ArtsCodegen::getCurrentEdtGuid(Location loc) {
 }
 
 Value ArtsCodegen::getTotalWorkers(Location loc) {
+  if (abstractMachine && abstractMachine->hasValidThreads()) {
+    int runtimeWorkers = abstractMachine->getRuntimeWorkersPerNode();
+    if (runtimeWorkers > 0)
+      return createIntConstant(runtimeWorkers, Int32, loc);
+  }
   func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetTotalWorkers);
   return create<func::CallOp>(loc, func, ArrayRef<Value>{}).getResult(0);
 }
 
 Value ArtsCodegen::getTotalNodes(Location loc) {
+  if (abstractMachine && abstractMachine->hasValidNodeCount()) {
+    int nodeCount = abstractMachine->getNodeCount();
+    if (nodeCount > 0)
+      return createIntConstant(nodeCount, Int32, loc);
+  }
   func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetTotalNodes);
   return create<func::CallOp>(loc, func, ArrayRef<Value>{}).getResult(0);
 }
@@ -306,9 +317,9 @@ func::FuncOp ArtsCodegen::insertInitPerWorker(Location loc,
   if (callback.getNumArguments() == 4) {
     create<func::CallOp>(loc, callback, args);
   } else if (callback.getNumArguments() == 2) {
-    create<func::CallOp>(
-        loc, callback,
-        ValueRange{initPerWorkerFn.getArgument(2), initPerWorkerFn.getArgument(3)});
+    create<func::CallOp>(loc, callback,
+                         ValueRange{initPerWorkerFn.getArgument(2),
+                                    initPerWorkerFn.getArgument(3)});
   } else if (callback.getNumArguments() == 0) {
     create<func::CallOp>(loc, callback, ValueRange{});
   }
@@ -401,8 +412,8 @@ func::FuncOp ArtsCodegen::insertDistributedDbInitWorkerFn(Location loc) {
           module.lookupSymbol<func::FuncOp>("distributed_db_init_worker"))
     return existing;
 
-  auto fn = create<func::FuncOp>(loc, "distributed_db_init_worker",
-                                 InitPerWorkerFn);
+  auto fn =
+      create<func::FuncOp>(loc, "distributed_db_init_worker", InitPerWorkerFn);
   fn.setPrivate();
 
   Block *entryBlock = fn.addEntryBlock();

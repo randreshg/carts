@@ -65,6 +65,8 @@ cross-stage contracts.
 - `LoopReordering`
 - `LoopTransforms`
 - optional `SerialEdtify`
+  - enabled by `--serial-edtify`
+  - also auto-enabled by `--distributed-db`
 - `CSE`
 
 ### 7) create-dbs
@@ -106,7 +108,7 @@ cross-stage contracts.
 - `PolygeistCanonicalize`
 - `CSE`
 - `DbPartitioning`
-- optional `DistributedDbOwnership`
+- optional `DistributedDbOwnership` (enabled by `--distributed-db`)
 - `DbPass`
 - `BlockLoopStripMining` (nested func)
 - `ArtsHoisting`

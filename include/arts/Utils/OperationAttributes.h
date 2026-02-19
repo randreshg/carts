@@ -198,16 +198,18 @@ inline void setWorkers(Operation *op, int64_t workers) {
     op->removeAttr(AttrNames::Operation::Workers);
     return;
   }
-  int64_t clamped = std::min<int64_t>(workers, std::numeric_limits<int32_t>::max());
-  op->setAttr(AttrNames::Operation::Workers,
-              workersAttr::get(op->getContext(), static_cast<int32_t>(clamped)));
+  int64_t clamped =
+      std::min<int64_t>(workers, std::numeric_limits<int32_t>::max());
+  op->setAttr(
+      AttrNames::Operation::Workers,
+      workersAttr::get(op->getContext(), static_cast<int32_t>(clamped)));
 }
 
 inline std::optional<int64_t> getWorkersPerNode(Operation *op) {
   if (!op)
     return std::nullopt;
-  if (auto attr = op->getAttrOfType<IntegerAttr>(
-          AttrNames::Operation::WorkersPerNode))
+  if (auto attr =
+          op->getAttrOfType<IntegerAttr>(AttrNames::Operation::WorkersPerNode))
     return attr.getInt();
   return std::nullopt;
 }

@@ -60,8 +60,7 @@ static bool isStartBlockArithmeticOp(Operation *op) {
   return isa<arith::ConstantIndexOp, arith::ConstantIntOp, arith::DivUIOp,
              arith::DivSIOp, arith::RemUIOp, arith::RemSIOp, arith::AddIOp,
              arith::SubIOp, arith::MulIOp, arith::MaxUIOp, arith::MinUIOp,
-             arith::SelectOp,
-             arith::IndexCastOp>(op);
+             arith::SelectOp, arith::IndexCastOp>(op);
 }
 
 } // namespace

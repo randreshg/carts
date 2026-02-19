@@ -190,8 +190,11 @@ Current implementation:
 - Pipeline placement: `DbPartitioning -> DistributedDbOwnership -> DbPass`
   (gated by `--distributed-db` in `carts-compile`).
 - `--distributed-db` also enables serial host loop outlining (`SerialEdtify`) so
-  eligible initialization loops flow through `arts.for` lowering and can satisfy
-  distributed ownership constraints.
+  eligible host initialization loops flow through `arts.for` lowering and can
+  satisfy distributed ownership constraints.
+  - current auto-outline filter is conservative: top-level host `scf.for`,
+    no `iter_args`, safe loop metadata, store-only body (no memory reads),
+    constant store values, and shared output root with external writer use.
 - Lowering support: `ConvertArtsToLLVM` uses round-robin route selection for
   marked multi-DB allocations:
   - route = `linearIndex % artsGetTotalNodes()`
@@ -201,17 +204,22 @@ Current eligibility policy is intentionally conservative:
 - allocation is host-level (outside `arts.edt`)
 - not `DbAllocType::global`
 - has multiple DB blocks
-- handle uses are restricted to DB dependency flow (`db_acquire`, `db_free`,
-  EDT dependency wiring)
-- reject full-range read acquires (`mode=in` with `offset=0`, `size=alloc_size`)
-  because those behave like broadcast inputs and are not safe for current
-  ownership routing
+- has supported matrix/tensor allocation shape (`elementSizes` rank >= 2)
+- handle uses are restricted to DB dependency flow; `db_ref` / `db_gep` and
+  memref/cast forwarding are allowed only when their result users remain in
+  the allowed flow
+- acquire users must be EDT-backed
 - allocation is consumed by internode EDTs
+- has at least one internode writer access (read-only internode DBs are
+  rejected)
+- reject stencil-style read-only internode uses
 
 Distributed init split is implemented:
 - `ArtsCodegen.cpp` generates a `distributed_db_init` callback that runs on ALL
-  nodes inside `initPerNode`. Each node reserves the same deterministic GUID
-  sequence but only allocates DBs whose GUID encodes its rank.
+  nodes inside `initPerNode` and reserves a deterministic GUID sequence.
+- `ArtsCodegen.cpp` also generates `distributed_db_init_worker` in
+  `initPerWorker`; only the primary local worker performs DB creation, and only
+  for GUIDs whose rank matches the local node (`artsGuidGetRank(guid) == node`).
 - `ConvertArtsToLLVM.cpp` lowers marked multi-DB allocations with
   `route = linearIndex % artsGetTotalNodes()`. Runtime DB creation remains
   local-only via `artsDbCreateWithGuid(AndArtsId)` semantics.

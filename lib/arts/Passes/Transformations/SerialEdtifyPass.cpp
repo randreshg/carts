@@ -16,6 +16,7 @@
 
 #include "../ArtsPassDetails.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"
+#include "arts/Analysis/DistributionHeuristics.h"
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
@@ -126,6 +127,57 @@ static bool hasAnyMemoryReads(scf::ForOp loop) {
   return hasReads;
 }
 
+static bool hasOnlyConstantStoreValues(scf::ForOp loop) {
+  bool hasStores = false;
+  bool hasNonConstantStore = false;
+  loop.walk([&](memref::StoreOp storeOp) {
+    hasStores = true;
+    Value storedValue = ValueUtils::stripNumericCasts(storeOp.getValue());
+    if (!storedValue.getDefiningOp<arith::ConstantOp>()) {
+      hasNonConstantStore = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return hasStores && !hasNonConstantStore;
+}
+
+static Operation *getSingleStoreRoot(scf::ForOp loop) {
+  Operation *storeRoot = nullptr;
+  loop.walk([&](memref::StoreOp storeOp) {
+    storeRoot = ValueUtils::getUnderlyingOperation(storeOp.getMemRef());
+    return WalkResult::interrupt();
+  });
+  return storeRoot;
+}
+
+static bool hasExternalStoreToRoot(scf::ForOp loop, Operation *storeRoot) {
+  if (!loop || !storeRoot)
+    return false;
+
+  func::FuncOp parentFunc = loop->getParentOfType<func::FuncOp>();
+  if (!parentFunc)
+    return false;
+
+  bool foundExternalStore = false;
+  parentFunc.walk([&](memref::StoreOp storeOp) {
+    if (foundExternalStore)
+      return WalkResult::interrupt();
+
+    Operation *root = ValueUtils::getUnderlyingOperation(storeOp.getMemRef());
+    if (root != storeRoot)
+      return WalkResult::advance();
+
+    if (loop->isAncestor(storeOp.getOperation()))
+      return WalkResult::advance();
+
+    foundExternalStore = true;
+    return WalkResult::interrupt();
+  });
+
+  return foundExternalStore;
+}
+
 static bool isEligibleSerialLoop(scf::ForOp loop, LoopAnalysis *loopAnalysis) {
   if (!loop)
     return false;
@@ -158,12 +210,29 @@ static bool isEligibleSerialLoop(scf::ForOp loop, LoopAnalysis *loopAnalysis) {
     return false;
   }
 
+  Operation *storeRoot = getSingleStoreRoot(loop);
+  /// Keep distributed auto-outlining focused on update-form outputs.
+  /// Pure init loops for read-only inputs are prone to over-partitioned
+  /// inter-node writes and are not required for distributed ownership.
+  if (!hasExternalStoreToRoot(loop, storeRoot)) {
+    ARTS_DEBUG("Skip loop (store target has no external writer use): " << loop);
+    return false;
+  }
+
   /// Keep auto-outlining conservative for distributed mode: only outline
   /// store-only host loops (e.g. initialization). Read-modify/write kernels
   /// are lowered by the regular parallel pipeline and are error-prone when
   /// force-outlined through this path.
   if (hasAnyMemoryReads(loop)) {
     ARTS_DEBUG("Skip loop (contains memory reads): " << loop);
+    return false;
+  }
+
+  /// Keep auto-outlining strictly to constant-fill initialization loops.
+  /// Computed-value fills (e.g., 2mm's D init expression) can diverge after
+  /// distribution when ownership/partitioning does not fully align.
+  if (!hasOnlyConstantStoreValues(loop)) {
+    ARTS_DEBUG("Skip loop (non-constant store values): " << loop);
     return false;
   }
 
@@ -193,31 +262,60 @@ static void cloneScfLoopBodyIntoArtsFor(scf::ForOp sourceLoop,
   builder.create<arts::YieldOp>(sourceLoop.getLoc());
 }
 
-static void edtifyLoop(scf::ForOp loop) {
+static void applyMachineWorkerTopology(EdtOp outlinedEdt,
+                                       const ArtsAbstractMachine *machine) {
+  if (!outlinedEdt || outlinedEdt.getConcurrency() != EdtConcurrency::internode)
+    return;
+
+  auto workerConfig =
+      DistributionHeuristics::resolveWorkerConfig(outlinedEdt, machine);
+  if (!workerConfig)
+    return;
+
+  if (workerConfig->totalWorkers > 0)
+    setWorkers(outlinedEdt.getOperation(), workerConfig->totalWorkers);
+  if (workerConfig->workersPerNode > 0)
+    setWorkersPerNode(outlinedEdt.getOperation(), workerConfig->workersPerNode);
+}
+
+static void edtifyLoop(scf::ForOp loop, const ArtsAbstractMachine *machine) {
   Location loc = loop.getLoc();
   OpBuilder builder(loop);
 
-  Value routeZero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
-  auto outlinedEdt = builder.create<EdtOp>(
+  /// Preserve original program order: the outlined EDT must complete before
+  /// subsequent host operations observe loop results.
+  auto epoch = builder.create<EpochOp>(loc);
+  Region &epochRegion = epoch.getRegion();
+  if (epochRegion.empty())
+    epochRegion.push_back(new Block());
+  Block &epochBlock = epochRegion.front();
+  OpBuilder epochBuilder = OpBuilder::atBlockBegin(&epochBlock);
+
+  Value routeZero = epochBuilder.create<arith::ConstantIntOp>(loc, 0, 32);
+  auto outlinedEdt = epochBuilder.create<EdtOp>(
       loc, EdtType::task, EdtConcurrency::internode, routeZero, ValueRange{});
-  outlinedEdt.setNoVerifyAttr(NoVerifyAttr::get(builder.getContext()));
+  outlinedEdt.setNoVerifyAttr(NoVerifyAttr::get(epochBuilder.getContext()));
+  applyMachineWorkerTopology(outlinedEdt, machine);
 
   Block &edtBody = outlinedEdt.getBody().front();
 
-  OpBuilder::InsertionGuard edtGuard(builder);
-  builder.setInsertionPointToStart(&edtBody);
+  OpBuilder::InsertionGuard edtGuard(epochBuilder);
+  epochBuilder.setInsertionPointToStart(&edtBody);
 
-  auto schedAttr =
-      ForScheduleKindAttr::get(builder.getContext(), ForScheduleKind::Static);
-  auto outlinedFor = builder.create<arts::ForOp>(
+  auto schedAttr = ForScheduleKindAttr::get(epochBuilder.getContext(),
+                                            ForScheduleKind::Static);
+  auto outlinedFor = epochBuilder.create<arts::ForOp>(
       loc, ValueRange{loop.getLowerBound()}, ValueRange{loop.getUpperBound()},
       ValueRange{loop.getStep()}, schedAttr, ValueRange{});
 
   copyArtsMetadataAttrs(loop, outlinedFor);
-  cloneScfLoopBodyIntoArtsFor(loop, outlinedFor, builder);
+  cloneScfLoopBodyIntoArtsFor(loop, outlinedFor, epochBuilder);
 
-  builder.setInsertionPointToEnd(&edtBody);
-  builder.create<arts::YieldOp>(loc);
+  epochBuilder.setInsertionPointToEnd(&edtBody);
+  epochBuilder.create<arts::YieldOp>(loc);
+
+  epochBuilder.setInsertionPointToEnd(&epochBlock);
+  epochBuilder.create<arts::YieldOp>(loc);
 
   ARTS_DEBUG("Outlined serial scf.for into arts.edt<task>: " << loop);
   loop.erase();
@@ -229,9 +327,11 @@ struct SerialEdtifyPass : public arts::SerialEdtifyBase<SerialEdtifyPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     LoopAnalysis *loopAnalysis = nullptr;
+    const ArtsAbstractMachine *machine = nullptr;
     if (AM) {
       loopAnalysis = &AM->getLoopAnalysis();
       loopAnalysis->invalidate();
+      machine = &AM->getAbstractMachine();
     }
 
     unsigned numCandidates = 0;
@@ -250,8 +350,8 @@ struct SerialEdtifyPass : public arts::SerialEdtifyBase<SerialEdtifyPass> {
 
       funcOp.walk([&](scf::ForOp loop) {
         /// Task-dependency kernels already carry explicit DbControl hints.
-        /// Auto-outlining host loops in these functions perturbs DB partitioning
-        /// and can explode dependency fan-in at runtime.
+        /// Auto-outlining host loops in these functions perturbs DB
+        /// partitioning and can explode dependency fan-in at runtime.
         if (hasDbControlOps) {
           ARTS_DEBUG("Skip loop (function has DbControlOps): " << loop);
           return;
@@ -267,7 +367,7 @@ struct SerialEdtifyPass : public arts::SerialEdtifyBase<SerialEdtifyPass> {
     for (scf::ForOp loop : candidates) {
       if (!loop || !loop->getBlock())
         continue;
-      edtifyLoop(loop);
+      edtifyLoop(loop, machine);
       ++numConverted;
     }
 

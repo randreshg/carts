@@ -84,6 +84,42 @@ static std::optional<int64_t> getExplicitWorkersPerNodeCount(EdtOp edt) {
   return arts::getWorkersPerNode(edt.getOperation());
 }
 
+ParallelismDecision
+DistributionHeuristics::resolveParallelismFromMachine(
+    const ArtsAbstractMachine *machine) {
+  ParallelismDecision decision;
+  if (!machine)
+    return decision;
+
+  int64_t nodeCount =
+      machine->hasValidNodeCount() ? static_cast<int64_t>(machine->getNodeCount())
+                                   : 0;
+  int64_t workerThreads = machine->getRuntimeWorkersPerNode();
+
+  if (nodeCount > 1) {
+    decision.concurrency = EdtConcurrency::internode;
+    decision.workersPerNode = workerThreads > 0 ? workerThreads : 1;
+    decision.totalWorkers = machine->getRuntimeTotalWorkers();
+    if (decision.totalWorkers <= 0)
+      decision.totalWorkers = nodeCount * decision.workersPerNode;
+    return decision;
+  }
+
+  decision.concurrency = EdtConcurrency::intranode;
+  if (workerThreads > 0) {
+    decision.totalWorkers = workerThreads;
+    decision.workersPerNode = workerThreads;
+    return decision;
+  }
+
+  if (nodeCount == 1) {
+    decision.totalWorkers = 1;
+    decision.workersPerNode = 1;
+  }
+
+  return decision;
+}
+
 std::optional<WorkerConfig> DistributionHeuristics::resolveWorkerConfig(
     EdtOp parallelEdt, const ArtsAbstractMachine *machine) {
   WorkerConfig cfg;
@@ -114,27 +150,21 @@ std::optional<WorkerConfig> DistributionHeuristics::resolveWorkerConfig(
   if (!machine)
     return std::nullopt;
 
-  int threads = machine->hasValidThreads() ? machine->getThreads() : 0;
-  if (threads <= 0)
+  int64_t runtimeWorkersPerNode = machine->getRuntimeWorkersPerNode();
+  if (runtimeWorkersPerNode <= 0)
     return std::nullopt;
 
   if (!cfg.internode) {
-    cfg.totalWorkers = threads;
-    cfg.workersPerNode = threads;
+    cfg.workersPerNode = runtimeWorkersPerNode;
+    cfg.totalWorkers = cfg.workersPerNode;
     return cfg;
   }
 
-  int nodeCount = machine->hasValidNodeCount() ? machine->getNodeCount() : 0;
-  if (nodeCount <= 0)
+  if (!machine->hasValidNodeCount() || machine->getNodeCount() <= 0)
     return std::nullopt;
 
-  int workerThreads =
-      threads - machine->getOutgoingThreads() - machine->getIncomingThreads();
-  if (workerThreads <= 0)
-    workerThreads = 1;
-
-  cfg.workersPerNode = workerThreads;
-  cfg.totalWorkers = static_cast<int64_t>(nodeCount) * workerThreads;
+  cfg.workersPerNode = runtimeWorkersPerNode;
+  cfg.totalWorkers = machine->getRuntimeTotalWorkers();
   if (cfg.totalWorkers <= 0)
     return std::nullopt;
 
@@ -265,8 +295,8 @@ DistributionHeuristics::analyzeStrategy(EdtConcurrency concurrency,
     strategy.kind = DistributionKind::Flat;
     strategy.numNodes = 1;
     if (machine) {
-      strategy.workersPerNode = machine->getThreads();
-      strategy.totalWorkers = machine->getThreads();
+      strategy.workersPerNode = machine->getRuntimeWorkersPerNode();
+      strategy.totalWorkers = strategy.workersPerNode;
     }
     strategy.useDbAlignment = false;
     return strategy;
@@ -276,11 +306,8 @@ DistributionHeuristics::analyzeStrategy(EdtConcurrency concurrency,
   strategy.kind = DistributionKind::TwoLevel;
   if (machine) {
     strategy.numNodes = machine->getNodeCount();
-    int threads = machine->getThreads();
-    int outgoing = machine->getOutgoingThreads();
-    int incoming = machine->getIncomingThreads();
-    strategy.workersPerNode = std::max(1, threads - outgoing - incoming);
-    strategy.totalWorkers = strategy.numNodes * strategy.workersPerNode;
+    strategy.workersPerNode = machine->getRuntimeWorkersPerNode();
+    strategy.totalWorkers = machine->getRuntimeTotalWorkers();
   }
   strategy.useDbAlignment = true;
   return strategy;
@@ -393,9 +420,8 @@ DistributionBounds DistributionHeuristics::computeBounds(
     Value distWorkerId = workerId;
     Value distWorkers = runtimeTotalWorkers;
     if (strategy.kind == DistributionKind::Tiling2D) {
-      Tiling2DWorkerGrid grid =
-          getTiling2DWorkerGrid(AC, loc, workerId, runtimeTotalWorkers,
-                                runtimeWorkersPerNode);
+      Tiling2DWorkerGrid grid = getTiling2DWorkerGrid(
+          AC, loc, workerId, runtimeTotalWorkers, runtimeWorkersPerNode);
       distWorkerId = grid.rowWorkerId;
       distWorkers = grid.rowWorkers;
     }
@@ -645,9 +671,8 @@ DistributionBounds DistributionHeuristics::recomputeBoundsInside(
   Value distWorkerId = workerIdIndex;
   Value distWorkers = totalWorkersIndex;
   if (strategy.kind == DistributionKind::Tiling2D) {
-    Tiling2DWorkerGrid grid =
-        getTiling2DWorkerGrid(AC, loc, workerIdIndex, totalWorkersIndex,
-                              workersPerNode);
+    Tiling2DWorkerGrid grid = getTiling2DWorkerGrid(
+        AC, loc, workerIdIndex, totalWorkersIndex, workersPerNode);
     distWorkerId = grid.rowWorkerId;
     distWorkers = grid.rowWorkers;
   }
@@ -779,11 +804,13 @@ Value DistributionHeuristics::getWorkersPerNode(OpBuilder &builder,
 
   if (auto workers = getExplicitWorkerCount(parallelEdt)) {
     Value totalWorkers = builder.create<arith::ConstantIndexOp>(loc, *workers);
-    Value totalNodes = toIndex(builder.create<GetTotalNodesOp>(loc).getResult());
+    Value totalNodes =
+        toIndex(builder.create<GetTotalNodesOp>(loc).getResult());
     workersPerNode =
         builder.create<arith::DivUIOp>(loc, totalWorkers, totalNodes);
   } else {
-    workersPerNode = toIndex(builder.create<GetTotalWorkersOp>(loc).getResult());
+    workersPerNode =
+        toIndex(builder.create<GetTotalWorkersOp>(loc).getResult());
   }
 
   /// Clamp to at least 1 to prevent division by zero.

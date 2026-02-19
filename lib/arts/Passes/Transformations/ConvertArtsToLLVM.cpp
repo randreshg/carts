@@ -28,6 +28,7 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
+#include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
@@ -1220,8 +1221,8 @@ private:
         workerInitFn = module.lookupSymbol<func::FuncOp>(workerInitSymbol);
         if (!workerInitFn) {
           AC->setInsertionPoint(module);
-          workerInitFn = AC->create<func::FuncOp>(
-              op.getLoc(), workerInitSymbol, AC->InitPerWorkerFn);
+          workerInitFn = AC->create<func::FuncOp>(op.getLoc(), workerInitSymbol,
+                                                  AC->InitPerWorkerFn);
           workerInitFn.setPrivate();
 
           Block *workerEntry = workerInitFn.addEntryBlock();
@@ -1232,8 +1233,10 @@ private:
             if (parentFn.getNumArguments() != 2 ||
                 workerInitFn.getNumArguments() != 4)
               return failure();
-            workerMapper.map(parentFn.getArgument(0), workerInitFn.getArgument(2));
-            workerMapper.map(parentFn.getArgument(1), workerInitFn.getArgument(3));
+            workerMapper.map(parentFn.getArgument(0),
+                             workerInitFn.getArgument(2));
+            workerMapper.map(parentFn.getArgument(1),
+                             workerInitFn.getArgument(3));
           }
 
           llvm::SetVector<Value> workerValuesToClone;
@@ -1288,7 +1291,9 @@ private:
             return failure();
           }
 
-          auto mapWorkerValue = [&](Value v) { return workerMapper.lookupOrNull(v); };
+          auto mapWorkerValue = [&](Value v) {
+            return workerMapper.lookupOrNull(v);
+          };
 
           SmallVector<Value, 4> workerDbSizes;
           workerDbSizes.reserve(dbSizes.size());
@@ -1338,37 +1343,37 @@ private:
           Value workerTotalDbSize = AC->create<arith::MulIOp>(
               op.getLoc(), workerElementSize, workerPayloadSize);
 
-          Value workerNodeId = AC->castToIndex(workerInitFn.getArgument(0),
-                                               op.getLoc());
-          Value workerLocalId = AC->castToIndex(workerInitFn.getArgument(1),
-                                                op.getLoc());
-          Value workersPerNode =
-              AC->castToIndex(AC->getTotalWorkers(op.getLoc()), op.getLoc());
-          Value runtimeTotalNodes =
-              AC->castToIndex(AC->getTotalNodes(op.getLoc()), op.getLoc());
-          Value one = AC->createIndexConstant(1, op.getLoc());
-          workersPerNode =
-              AC->create<arith::MaxUIOp>(op.getLoc(), workersPerNode, one);
-          runtimeTotalNodes =
-              AC->create<arith::MaxUIOp>(op.getLoc(), runtimeTotalNodes, one);
-          /// Reserve/create ownership is per node (route = linearIndex %
-          /// totalNodes). Start from this node's residue class and stripe work
-          /// across local workers so each index is created exactly once.
-          Value workerStart = AC->create<arith::AddIOp>(
-              op.getLoc(),
-              AC->create<arith::MulIOp>(op.getLoc(), workerLocalId,
-                                        runtimeTotalNodes),
-              workerNodeId);
-          Value workerStride = AC->create<arith::MulIOp>(
-              op.getLoc(), runtimeTotalNodes, workersPerNode);
-          auto workerLoop = AC->create<scf::ForOp>(op.getLoc(), workerStart,
-                                                   workerTotalElems, workerStride);
+          Value workerNodeId = workerInitFn.getArgument(0);
+          Value workerLocalId = workerInitFn.getArgument(1);
+          Value zeroLoopIdx = AC->createIndexConstant(0, op.getLoc());
+          Value oneIdx = AC->createIndexConstant(1, op.getLoc());
+          Value zeroI32 = AC->createIntConstant(0, AC->Int32, op.getLoc());
+          Value isPrimaryWorker = AC->create<arith::CmpIOp>(
+              op.getLoc(), arith::CmpIPredicate::eq, workerLocalId, zeroI32);
+          auto primaryWorkerIf =
+              AC->create<scf::IfOp>(op.getLoc(), isPrimaryWorker, false);
+          AC->setInsertionPointToStart(
+              &primaryWorkerIf.getThenRegion().front());
+          auto workerLoop = AC->create<scf::ForOp>(op.getLoc(), zeroLoopIdx,
+                                                   workerTotalElems, oneIdx);
           AC->setInsertionPointToStart(&workerLoop.getRegion().front());
           Value linearIndex = workerLoop.getInductionVar();
+          Value reservedGuid = AC->create<memref::LoadOp>(
+              op.getLoc(), workerGuidBuffer, ValueRange{linearIndex});
+          Value guidRank = AC->createRuntimeCall(types::ARTSRTL_artsGuidGetRank,
+                                                 {reservedGuid}, op.getLoc())
+                               .getResult(0);
+          Value isLocalGuid = AC->create<arith::CmpIOp>(
+              op.getLoc(), arith::CmpIPredicate::eq, guidRank, workerNodeId);
+          auto localGuidIf =
+              AC->create<scf::IfOp>(op.getLoc(), isLocalGuid, false);
+          AC->setInsertionPointToStart(&localGuidIf.getThenRegion().front());
           createDbFromReservedGuidAtIndex(workerPtrBuffer, workerGuidBuffer,
                                           linearIndex, workerTotalDbSize,
                                           callbackNextId, op.getLoc());
+          AC->setInsertionPointAfter(localGuidIf);
           AC->setInsertionPointAfter(workerLoop);
+          AC->setInsertionPointAfter(primaryWorkerIf);
           AC->create<func::ReturnOp>(op.getLoc());
         }
       }
@@ -1404,14 +1409,14 @@ private:
 
     func::CallOp dbCall;
     if (nextId.has_value()) {
-      Value baseArtsId =
-          AC->create<arith::ConstantOp>(loc, AC->Int64,
-                                        AC->getBuilder().getI64IntegerAttr(*nextId));
+      Value baseArtsId = AC->create<arith::ConstantOp>(
+          loc, AC->Int64, AC->getBuilder().getI64IntegerAttr(*nextId));
       Value linearIndex64 = AC->castToInt(AC->Int64, linearIndex, loc);
       Value artsIdValue =
           AC->create<arith::AddIOp>(loc, baseArtsId, linearIndex64);
-      dbCall = AC->createRuntimeCall(types::ARTSRTL_artsDbCreateWithGuidAndArtsId,
-                                     {guid, elemSize64, artsIdValue}, loc);
+      dbCall =
+          AC->createRuntimeCall(types::ARTSRTL_artsDbCreateWithGuidAndArtsId,
+                                {guid, elemSize64, artsIdValue}, loc);
     } else {
       dbCall = AC->createRuntimeCall(types::ARTSRTL_artsDbCreateWithGuid,
                                      {guid, elemSize64}, loc);
@@ -1424,8 +1429,8 @@ private:
   void createSingleDb(Value dbMemref, Value guidMemref, Value dbMode,
                       Value route, Value elementSize,
                       std::optional<int64_t> *nextId, Location loc,
-                      bool distributedOwnership = false,
-                      bool createDb = true, ArrayRef<Value> sizes = {},
+                      bool distributedOwnership = false, bool createDb = true,
+                      ArrayRef<Value> sizes = {},
                       ArrayRef<Value> indices = {}) const {
     Value reserveRoute = route;
     if (distributedOwnership) {
@@ -1706,9 +1711,10 @@ struct ConvertArtsToLLVMPass
     : public arts::ConvertArtsToLLVMBase<ConvertArtsToLLVMPass> {
 
   explicit ConvertArtsToLLVMPass(bool debug = false,
-                                 bool distributedInitPerWorker = false)
-      : debugMode(debug),
-        distributedInitPerWorker(distributedInitPerWorker) {}
+                                 bool distributedInitPerWorker = false,
+                                 const ArtsAbstractMachine *machine = nullptr)
+      : debugMode(debug), distributedInitPerWorker(distributedInitPerWorker),
+        machine(machine) {}
 
   void runOnOperation() override;
 
@@ -1720,6 +1726,7 @@ private:
   ArtsCodegen *AC = nullptr;
   bool debugMode = false;
   bool distributedInitPerWorker = false;
+  const ArtsAbstractMachine *machine = nullptr;
 };
 } // namespace
 
@@ -1738,6 +1745,7 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   auto ownedAC = std::make_unique<ArtsCodegen>(module, debugMode);
   AC = ownedAC.get();
   AC->setDistributedInitInWorkers(distributedInitPerWorker);
+  AC->setAbstractMachine(machine);
   ARTS_DEBUG_TYPE("ArtsCodegen initialized successfully");
 
   //// Apply patterns with greedy rewriter (two runs)
@@ -1838,10 +1846,17 @@ std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug) {
   return std::make_unique<ConvertArtsToLLVMPass>(debug, false);
 }
 
-std::unique_ptr<Pass> createConvertArtsToLLVMPass(
-    bool debug, bool distributedInitPerWorker) {
-  return std::make_unique<ConvertArtsToLLVMPass>(debug,
-                                                 distributedInitPerWorker);
+std::unique_ptr<Pass>
+createConvertArtsToLLVMPass(bool debug, bool distributedInitPerWorker) {
+  return std::make_unique<ConvertArtsToLLVMPass>(
+      debug, distributedInitPerWorker, nullptr);
+}
+
+std::unique_ptr<Pass>
+createConvertArtsToLLVMPass(bool debug, bool distributedInitPerWorker,
+                            const ArtsAbstractMachine *machine) {
+  return std::make_unique<ConvertArtsToLLVMPass>(
+      debug, distributedInitPerWorker, machine);
 }
 } // namespace arts
 } // namespace mlir

@@ -212,7 +212,7 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
                << "\n"
                   "  User type: "
                << (singleUser ? singleUser->getName().getStringRef()
-                               : StringRef("<none>")));
+                              : StringRef("<none>")));
     return;
   }
 
@@ -1048,7 +1048,7 @@ void DbAcquireNode::forEachMemoryAccess(
   collectAccessOperations(dbRefToMemOps);
   for (auto &[dbRef, memOps] : dbRefToMemOps) {
     for (Operation *op : memOps) {
-      bool isStore = isa<memref::StoreOp>(op);
+      bool isStore = isa<memref::StoreOp, affine::AffineStoreOp>(op);
       callback(op, isStore);
     }
   }
@@ -1070,6 +1070,38 @@ bool DbAcquireNode::hasStores() {
       found = true;
   });
   return found;
+}
+
+bool DbAcquireNode::isReadOnlyAccess() {
+  bool sawLoad = false;
+  bool sawStore = false;
+  forEachMemoryAccess([&](Operation *, bool isStore) {
+    if (isStore)
+      sawStore = true;
+    else
+      sawLoad = true;
+  });
+
+  if (sawStore)
+    return false;
+  if (sawLoad)
+    return true;
+
+  DbAcquireOp acqOp = getDbAcquireOp();
+  return acqOp && acqOp.getMode() == ArtsMode::in;
+}
+
+bool DbAcquireNode::isWriterAccess() {
+  bool sawStore = false;
+  forEachMemoryAccess([&](Operation *, bool isStore) {
+    if (isStore)
+      sawStore = true;
+  });
+  if (sawStore)
+    return true;
+
+  DbAcquireOp acqOp = getDbAcquireOp();
+  return acqOp && DatablockUtils::isWriterMode(acqOp.getMode());
 }
 
 bool DbAcquireNode::hasMemoryAccesses() {

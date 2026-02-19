@@ -197,7 +197,10 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
     case omp::ClauseTaskDepend::taskdependin:
       return ArtsMode::in;
     case omp::ClauseTaskDepend::taskdependout:
-      return ArtsMode::out;
+      /// Keep OpenMP "out" dependencies conservative in ARTS mode mapping:
+      /// using inout preserves full producer/consumer ordering across
+      /// runtimes where pure-out release semantics may be weaker.
+      return ArtsMode::inout;
     case omp::ClauseTaskDepend::taskdependinout:
       return ArtsMode::inout;
     }
@@ -389,7 +392,8 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
       rewriter.setInsertionPointToStart(&parallelBody);
       IRMapping mapper;
       Block &src = op.getRegion().front();
-      if (!src.getArguments().empty() && !scfParallel.getInductionVars().empty())
+      if (!src.getArguments().empty() &&
+          !scfParallel.getInductionVars().empty())
         mapper.map(src.getArgument(0), scfParallel.getInductionVars().front());
       for (Operation &srcOp : src.without_terminator())
         rewriter.clone(srcOp, mapper);

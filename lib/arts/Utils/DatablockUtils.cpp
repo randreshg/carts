@@ -567,7 +567,8 @@ SmallVector<Value> DatablockUtils::collectFullIndexChain(DbRefOp dbRef,
   SmallVector<Operation *, 8> forwardingOps;
   DenseSet<Value> visitedMemrefs;
   Value current = accessedMemref;
-  while (current && current != anchor && visitedMemrefs.insert(current).second) {
+  while (current && current != anchor &&
+         visitedMemrefs.insert(current).second) {
     Operation *def = current.getDefiningOp();
     if (!def)
       break;

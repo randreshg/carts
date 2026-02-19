@@ -9,6 +9,7 @@
 
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
@@ -94,6 +95,7 @@ private:
   void setIdAttribute(Operation *op, int64_t id);
 
 private:
+  llvm::DenseMap<Operation *, int64_t> operationCache;
   llvm::StringMap<int64_t> locationCache;
   llvm::DenseSet<int64_t> usedIds;
   int64_t nextId = 1;

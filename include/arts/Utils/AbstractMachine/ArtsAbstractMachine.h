@@ -70,6 +70,21 @@ public:
     return nodeCount == 1 && nodes.size() == 1 && nodes[0] == "localhost";
   }
   int getTotalWorkerThreads() const { return threads * nodeCount; }
+  /// Runtime worker count per node used by ARTS scheduling:
+  ///   distributed: threads - outgoing - incoming (min 1)
+  ///   single-node: threads (min 1)
+  int getRuntimeWorkersPerNode() const {
+    if (nodeCount > 1) {
+      int workers = threads - outgoing - incoming;
+      return workers > 0 ? workers : 1;
+    }
+    return threads > 0 ? threads : 1;
+  }
+  /// Runtime total workers across cluster (nodes * workers-per-node).
+  int getRuntimeTotalWorkers() const {
+    int nodesCount = nodeCount > 0 ? nodeCount : 1;
+    return nodesCount * getRuntimeWorkersPerNode();
+  }
   int getTotalGpuThreads() const { return hasGpuSupport() ? gpu : 0; }
 
   /// Execution Mode (derived from nodeCount/threads)

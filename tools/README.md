@@ -74,6 +74,7 @@ tools/
 | `carts build` | Build CARTS project |
 | `carts check` | Run test suite |
 | `carts check --examples` | Run example compilation+execution tests |
+| `make check-doc-flags` | Check documented `carts-compile` flags vs CLI options |
 | `carts benchmarks` | Build and manage benchmarks |
 | `carts cgeist` | Run cgeist C-to-MLIR frontend |
 | `carts clang` | Compile with LLVM clang and OpenMP |

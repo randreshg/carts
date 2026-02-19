@@ -26,6 +26,26 @@ ARTS_DEBUG_SETUP(metadata_manager);
 using namespace mlir;
 using namespace mlir::arts;
 
+namespace {
+static unsigned getLoopDepth(Operation *loopOp) {
+  unsigned depth = 0;
+  for (Operation *parent = loopOp ? loopOp->getParentOp() : nullptr; parent;
+       parent = parent->getParentOp()) {
+    if (isa<affine::AffineForOp, scf::ForOp, scf::ParallelOp, scf::ForallOp,
+            omp::WsLoopOp, arts::ForOp>(parent))
+      ++depth;
+  }
+  return depth;
+}
+
+static std::optional<int64_t> parseSignedInt(llvm::StringRef text) {
+  int64_t value = 0;
+  if (!llvm::to_integer(text, value))
+    return std::nullopt;
+  return value;
+}
+} // namespace
+
 ////===----------------------------------------------------------------------===////
 /// Metadata Addition
 ////===----------------------------------------------------------------------===////
@@ -283,6 +303,24 @@ bool ArtsMetadataManager::importFromJsonFile(ModuleOp module,
 
 std::string ArtsMetadataManager::exportToJson() const {
   llvm::json::Object root, loops, memrefs, locations, values;
+  auto hasKey = [](const llvm::json::Object &obj, llvm::StringRef key) {
+    for (const auto &entry : obj)
+      if (entry.first.str() == key)
+        return true;
+    return false;
+  };
+  auto makeUniqueKey = [&](const llvm::json::Object &obj,
+                           llvm::StringRef base) {
+    std::string key = base.empty() ? "entry" : base.str();
+    if (!hasKey(obj, key))
+      return key;
+    unsigned suffix = 1;
+    while (true) {
+      std::string candidate = key + "#" + std::to_string(suffix++);
+      if (!hasKey(obj, candidate))
+        return candidate;
+    }
+  };
 
   /// Export all metadata objects to JSON
   for (const auto &entry : metadataMap) {
@@ -295,12 +333,16 @@ std::string ArtsMetadataManager::exportToJson() const {
                           : metadata->toString().str();
 
     StringRef metadataName = metadata->getMetadataName();
-    if (metadataName == AttrNames::LoopMetadata::Name)
+    if (metadataName == AttrNames::LoopMetadata::Name) {
+      key = makeUniqueKey(loops, key);
       loops[key] = std::move(metadataJson);
-    else if (metadataName == AttrNames::MemrefMetadata::Name)
+    } else if (metadataName == AttrNames::MemrefMetadata::Name) {
+      key = makeUniqueKey(memrefs, key);
       memrefs[key] = std::move(metadataJson);
-    else if (metadataName == AttrNames::ValueMetadata::Name)
+    } else if (metadataName == AttrNames::ValueMetadata::Name) {
+      key = makeUniqueKey(values, key);
       values[key] = std::move(metadataJson);
+    }
   }
 
   /// Add all categories to root
@@ -478,16 +520,9 @@ bool ArtsMetadataManager::populateJsonCaches(const llvm::json::Object &root) {
       const auto *obj = entry.second.getAsObject();
       if (!obj)
         continue;
-      auto store = [&](llvm::StringRef key) {
-        loopJsonCache[key.str()] = std::make_unique<llvm::json::Object>(*obj);
-      };
-      store(entry.first);
-      if (auto idVal = obj->getInteger(AttrNames::Metadata::ArtsId)) {
+      loopJsonCache[entry.first] = std::make_unique<llvm::json::Object>(*obj);
+      if (auto idVal = obj->getInteger(AttrNames::Metadata::ArtsId))
         idRegistry.recordUsedId(*idVal);
-        store(std::to_string(*idVal));
-      }
-      if (auto loc = obj->getString(AttrNames::LoopMetadata::LocationKey))
-        store(*loc);
     }
   }
 
@@ -525,23 +560,96 @@ bool ArtsMetadataManager::attachMetadataFromJson(
   if (key.empty())
     return false;
 
-  auto it = cache.find(key);
-  if (it == cache.end())
+  const llvm::json::Object *matched = nullptr;
+  if (isLoop) {
+    const unsigned opLoopDepth = getLoopDepth(op);
+    const auto requestedId = parseSignedInt(key);
+    const auto opLoc = LocationMetadata::fromLocation(op->getLoc());
+    const std::string opLocKey =
+        opLoc.isValid() ? opLoc.getKey().str() : std::string();
+
+    unsigned bestNestingDistance = std::numeric_limits<unsigned>::max();
+    unsigned bestLineDistance = std::numeric_limits<unsigned>::max();
+    std::string bestKey;
+
+    for (const auto &entry : cache) {
+      const llvm::json::Object *obj = entry.second.get();
+      bool matches = entry.first() == key;
+
+      if (!matches && requestedId.has_value()) {
+        if (auto idVal = obj->getInteger(AttrNames::Metadata::ArtsId))
+          matches = (*idVal == *requestedId);
+      }
+      if (!matches && !opLocKey.empty()) {
+        if (auto locKey = obj->getString(AttrNames::LoopMetadata::LocationKey))
+          matches = (*locKey == opLocKey);
+      }
+
+      if (!matches)
+        continue;
+
+      unsigned nestingDistance = std::numeric_limits<unsigned>::max();
+      if (auto jsonNesting =
+              obj->getInteger(AttrNames::LoopMetadata::NestingLevel))
+        nestingDistance = static_cast<unsigned>(
+            std::abs(static_cast<int64_t>(opLoopDepth) - *jsonNesting));
+
+      unsigned lineDistance = std::numeric_limits<unsigned>::max();
+      if (!opLocKey.empty()) {
+        if (auto locKey =
+                obj->getString(AttrNames::LoopMetadata::LocationKey)) {
+          LocationMetadata entryLoc = LocationMetadata::fromKey(*locKey);
+          if (entryLoc.isValid())
+            lineDistance =
+                static_cast<unsigned>(std::abs(static_cast<int>(entryLoc.line) -
+                                               static_cast<int>(opLoc.line)));
+        }
+      }
+
+      if (!matched || nestingDistance < bestNestingDistance ||
+          (nestingDistance == bestNestingDistance &&
+           lineDistance < bestLineDistance) ||
+          (nestingDistance == bestNestingDistance &&
+           lineDistance == bestLineDistance && entry.first() < bestKey)) {
+        matched = obj;
+        bestNestingDistance = nestingDistance;
+        bestLineDistance = lineDistance;
+        bestKey = entry.first().str();
+      }
+    }
+  } else {
+    auto it = cache.find(key);
+    if (it == cache.end())
+      return false;
+    matched = it->second.get();
+  }
+
+  if (!matched)
     return false;
 
   if (isLoop) {
     auto metadata = std::make_unique<LoopMetadata>(op);
-    metadata->importFromJson(*it->second);
+    metadata->importFromJson(*matched);
     initializeMetadata(metadata.get());
     metadata->exportToOp();
     metadataMap[op] = std::move(metadata);
   } else {
     auto metadata = std::make_unique<MemrefMetadata>(op);
-    metadata->importFromJson(*it->second);
+    metadata->importFromJson(*matched);
     initializeMetadata(metadata.get());
     metadata->exportToOp();
     metadataMap[op] = std::move(metadata);
   }
+
+  /// Consume this metadata object from all cache aliases so different
+  /// operations don't reattach the same JSON entry.
+  llvm::SmallVector<std::string, 4> keysToErase;
+  for (const auto &entry : cache) {
+    if (entry.second.get() == matched)
+      keysToErase.push_back(entry.first().str());
+  }
+  for (const std::string &eraseKey : keysToErase)
+    cache.erase(eraseKey);
 
   return true;
 }
@@ -563,7 +671,10 @@ bool ArtsMetadataManager::attachLoopMetadataNearLocation(
 
   llvm::DenseSet<const llvm::json::Object *> visited;
   const llvm::json::Object *bestMatch = nullptr;
+  std::string bestMatchKey;
   unsigned bestDistance = std::numeric_limits<unsigned>::max();
+  unsigned bestNestingDistance = std::numeric_limits<unsigned>::max();
+  const unsigned opLoopDepth = getLoopDepth(op);
   std::string baseFile = LocationMetadata::getBasename(loc.file);
   ARTS_DEBUG("  → searching for baseFile=" << baseFile
                                            << ", line=" << loc.line);
@@ -599,11 +710,33 @@ bool ArtsMetadataManager::attachLoopMetadataNearLocation(
       continue;
     }
 
-    if (bestMatch && distance >= bestDistance)
+    unsigned nestingDistance = std::numeric_limits<unsigned>::max();
+    if (auto jsonNesting =
+            obj->getInteger(AttrNames::LoopMetadata::NestingLevel))
+      nestingDistance = static_cast<unsigned>(
+          std::abs(static_cast<int64_t>(opLoopDepth) - *jsonNesting));
+
+    bool better = false;
+    if (!bestMatch) {
+      better = true;
+    } else if (distance < bestDistance) {
+      better = true;
+    } else if (distance == bestDistance &&
+               nestingDistance < bestNestingDistance) {
+      better = true;
+    } else if (distance == bestDistance &&
+               nestingDistance == bestNestingDistance &&
+               entry.first() < bestMatchKey) {
+      /// Deterministic final tie-break.
+      better = true;
+    }
+    if (!better)
       continue;
 
     bestMatch = obj;
+    bestMatchKey = entry.first().str();
     bestDistance = distance;
+    bestNestingDistance = nestingDistance;
     ARTS_DEBUG("     → new best match!");
   }
 
@@ -615,6 +748,16 @@ bool ArtsMetadataManager::attachLoopMetadataNearLocation(
   initializeMetadata(metadata.get());
   metadata->exportToOp();
   metadataMap[op] = std::move(metadata);
+
+  /// Consume matched metadata object aliases from cache.
+  llvm::SmallVector<std::string, 4> keysToErase;
+  for (const auto &entry : loopJsonCache) {
+    if (entry.second.get() == bestMatch)
+      keysToErase.push_back(entry.first().str());
+  }
+  for (const std::string &eraseKey : keysToErase)
+    loopJsonCache.erase(eraseKey);
+
   ARTS_DEBUG("Attached loop metadata near location " << loc.getKey());
   return true;
 }

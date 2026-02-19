@@ -64,6 +64,17 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
     }
   }
 
+  /// H1.1c: Read-only + full-range block acquires on multi-node -> Coarse.
+  /// When every read acquire spans all blocks, block partitioning gives no
+  /// locality benefit and can inflate dependency wiring.
+  if (!isSingleNode && isReadOnly && ctx.allBlockFullRange) {
+    ARTS_DEBUG("H1.1c applied: Read-only full-range acquires on multi-node "
+               "prefer coarse");
+    return PartitioningDecision::coarse(
+        ctx,
+        "H1.1c: Read-only full-range acquires on multi-node prefer coarse");
+  }
+
   /// H1.2: Mixed Access (Block Writes + Indirect Reads) -> Block
   if (ctx.canBlock && ctx.hasIndirectRead && !ctx.hasIndirectWrite &&
       ctx.hasDirectAccess) {
