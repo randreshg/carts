@@ -138,6 +138,8 @@ public:
 
   bool hasLoads();
   bool hasStores();
+  bool isReadOnlyAccess();
+  bool isWriterAccess();
   bool hasMemoryAccesses();
   size_t countLoads();
   size_t countStores();

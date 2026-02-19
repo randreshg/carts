@@ -229,4 +229,7 @@ clean:
 	make -C $(CARTS_BUILD_DIR) clean -j
 	rm -rf $(CARTS_BUILD_DIR)
 
-.PHONY: all build install postinstall uninstall fulluninstall clean test llvm-runtimes arts-download polygeist-download llvm llvm-lit lit-bootstrap
+check-doc-flags:
+	python3 tools/scripts/check_doc_flags.py
+
+.PHONY: all build install postinstall uninstall fulluninstall clean test llvm-runtimes arts-download polygeist-download llvm llvm-lit lit-bootstrap check-doc-flags

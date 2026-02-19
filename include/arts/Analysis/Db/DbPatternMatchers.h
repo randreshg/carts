@@ -10,10 +10,13 @@
 #include "arts/ArtsDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "llvm/ADT/SmallVector.h"
 #include <optional>
 
 namespace mlir {
 namespace arts {
+
+class LoopAnalysis;
 
 /// Match lb = outerIV + c, where c is a positive constant.
 std::optional<int64_t> matchTriangularOffset(Value lb, Value outerIV);
@@ -23,7 +26,19 @@ bool hasTriangularBoundPattern(ForOp forOp);
 
 /// Detect update-form matmul kernels in arts.for regions:
 ///   C[...] = C[...] + A[...] * B[...]
-bool detectMatmulUpdatePattern(ForOp forOp);
+bool detectMatmulUpdatePattern(ForOp forOp, LoopAnalysis *loopAnalysis);
+
+/// Match result for update-form matmul nests with an init section:
+///   arts.for { scf.for(j) { <init ops>; scf.for(k) { ... } } }
+struct MatmulInitReductionLoopMatch {
+  scf::ForOp jLoop;
+  scf::ForOp kLoop;
+  SmallVector<Operation *, 8> initOps;
+};
+
+/// Detect update-form matmul nest and expose j/k loop structure.
+bool detectMatmulInitReductionLoopNest(ForOp artsFor, LoopAnalysis *loopAnalysis,
+                                       MatmulInitReductionLoopMatch &out);
 
 /// Match result for symmetric triangular loops.
 struct SymmetricTriangularPatternMatch {

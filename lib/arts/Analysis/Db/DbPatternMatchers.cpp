@@ -5,6 +5,7 @@
 ///==========================================================================///
 
 #include "arts/Analysis/Db/DbPatternMatchers.h"
+#include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -98,6 +99,37 @@ static bool containsSameMemoryObject(ArrayRef<Value> memrefs, Value target) {
       return true;
   }
   return false;
+}
+
+static bool hasMatrixLikeStoreIndexing(memref::StoreOp store, ForOp rootFor,
+                                       LoopAnalysis *loopAnalysis) {
+  if (!loopAnalysis)
+    return false;
+
+  SmallVector<LoopNode *> enclosingLoops;
+  loopAnalysis->collectEnclosingLoops(store, enclosingLoops);
+  if (enclosingLoops.empty())
+    return false;
+
+  DenseSet<Operation *> dependentLoops;
+  for (LoopNode *loopNode : enclosingLoops) {
+    if (!loopNode)
+      continue;
+    Operation *loopOp = loopNode->getLoopOp();
+    if (!loopOp)
+      continue;
+    if (loopOp != rootFor.getOperation() && !rootFor->isAncestor(loopOp))
+      continue;
+
+    for (Value index : store.getIndices()) {
+      if (loopNode->dependsOnInductionVarNormalized(index)) {
+        dependentLoops.insert(loopOp);
+        break;
+      }
+    }
+  }
+
+  return dependentLoops.size() >= 2;
 }
 
 static void collectLoadedMemrefs(Value value, DenseSet<Value> &loadedMemrefs,
@@ -214,7 +246,8 @@ bool mlir::arts::hasTriangularBoundPattern(ForOp forOp) {
   return hasTriangularBound;
 }
 
-bool mlir::arts::detectMatmulUpdatePattern(ForOp forOp) {
+bool mlir::arts::detectMatmulUpdatePattern(ForOp forOp,
+                                           LoopAnalysis *loopAnalysis) {
   bool hasMatmulUpdate = false;
   forOp.walk([&](memref::StoreOp store) {
     Value storeValue = ValueUtils::stripNumericCasts(store.getValueToStore());
@@ -235,19 +268,62 @@ bool mlir::arts::detectMatmulUpdatePattern(ForOp forOp) {
     }
 
     Value storeMemref = store.getMemRef();
-    bool matchesUpdateForm =
-        (isAccumulatorTerm(lhs, storeMemref) &&
-         isTwoInputProductTerm(rhs, storeMemref)) ||
-        (isAccumulatorTerm(rhs, storeMemref) &&
-         isTwoInputProductTerm(lhs, storeMemref));
+    bool matchesUpdateForm = (isAccumulatorTerm(lhs, storeMemref) &&
+                              isTwoInputProductTerm(rhs, storeMemref)) ||
+                             (isAccumulatorTerm(rhs, storeMemref) &&
+                              isTwoInputProductTerm(lhs, storeMemref));
 
     if (!matchesUpdateForm)
+      return WalkResult::advance();
+
+    /// Restrict detection to matrix-like updates (e.g., C[i,j] += A[...] *
+    /// B[...]) so GEMV-style loops (ATAX/BiCG) are not misclassified as matmul.
+    if (!hasMatrixLikeStoreIndexing(store, forOp, loopAnalysis))
       return WalkResult::advance();
 
     hasMatmulUpdate = true;
     return WalkResult::interrupt();
   });
   return hasMatmulUpdate;
+}
+
+bool mlir::arts::detectMatmulInitReductionLoopNest(
+    ForOp artsFor, LoopAnalysis *loopAnalysis,
+    MatmulInitReductionLoopMatch &out) {
+  out = {};
+  if (!artsFor)
+    return false;
+
+  if (!detectMatmulUpdatePattern(artsFor, loopAnalysis))
+    return false;
+
+  scf::ForOp jLoop = nullptr;
+  for (Operation &op : artsFor.getBody()->without_terminator()) {
+    if (auto forOp = dyn_cast<scf::ForOp>(&op)) {
+      jLoop = forOp;
+      break;
+    }
+  }
+  if (!jLoop)
+    return false;
+
+  SmallVector<Operation *, 8> initOps;
+  scf::ForOp kLoop = nullptr;
+  for (Operation &op : jLoop.getBody()->without_terminator()) {
+    if (auto forOp = dyn_cast<scf::ForOp>(&op)) {
+      kLoop = forOp;
+      break;
+    }
+    initOps.push_back(&op);
+  }
+
+  if (initOps.empty() || !kLoop)
+    return false;
+
+  out.jLoop = jLoop;
+  out.kLoop = kLoop;
+  out.initOps = initOps;
+  return true;
 }
 
 bool mlir::arts::detectSymmetricTriangularPattern(

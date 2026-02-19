@@ -223,9 +223,8 @@ private:
         nodes = loopBuilder.create<arith::IndexCastOp>(
             loc, loopBuilder.getIndexType(), nodes);
 
-      Value workersPerNode =
-          DistributionHeuristics::getWorkersPerNode(loopBuilder, loc,
-                                                    parallelEdt);
+      Value workersPerNode = DistributionHeuristics::getWorkersPerNode(
+          loopBuilder, loc, parallelEdt);
       Value nodesMinusOne = loopBuilder.create<arith::SubIOp>(loc, nodes, one);
 
       Value nodeId =

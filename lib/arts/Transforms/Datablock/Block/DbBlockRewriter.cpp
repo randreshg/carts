@@ -51,8 +51,7 @@ static bool isStartBlockArithmeticOp(Operation *op) {
   return isa<arith::ConstantIndexOp, arith::ConstantIntOp, arith::DivUIOp,
              arith::DivSIOp, arith::RemUIOp, arith::RemSIOp, arith::AddIOp,
              arith::SubIOp, arith::MulIOp, arith::MaxUIOp, arith::MinUIOp,
-             arith::SelectOp,
-             arith::IndexCastOp>(op);
+             arith::SelectOp, arith::IndexCastOp>(op);
 }
 
 /// Clone a value's definition chain into the EDT body if the value is
@@ -172,7 +171,8 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
 
     /// Prefer explicit element-space partition hints when available.
     /// This keeps DB-space dependency slices narrow for stencil-style acquires
-    /// that were conservatively marked full-range earlier in partition planning.
+    /// that were conservatively marked full-range earlier in partition
+    /// planning.
     if (hasBlockLikeHints && nPartDims == 1) {
       Value bs = plan.getBlockSize(0);
       if (!bs)
@@ -198,7 +198,8 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
                                                    clampedEnd);
       }
 
-      Value blockCount = builder.create<arith::SubIOp>(loc, endBlock, startBlock);
+      Value blockCount =
+          builder.create<arith::SubIOp>(loc, endBlock, startBlock);
       blockCount = builder.create<arith::AddIOp>(loc, blockCount, one);
       if (startAboveMax) {
         startBlock = builder.create<arith::SelectOp>(loc, startAboveMax, zero,
@@ -311,26 +312,28 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
 
     /// Clamp only when the slice starts in-range.
     /// For out-of-range starts (e.g., i-1 at the first row), emit an empty
-    /// dependency slice (size=0) with a safe offset to avoid invalid DB indices.
+    /// dependency slice (size=0) with a safe offset to avoid invalid DB
+    /// indices.
     Value startAboveMax;
     if (d < plan.outerSizes.size()) {
       Value maxBlock =
           builder.create<arith::SubIOp>(loc, plan.outerSizes[d], one);
       startAboveMax = builder.create<arith::CmpIOp>(
           loc, arith::CmpIPredicate::ugt, startBlock, maxBlock);
-      Value clampedEnd = builder.create<arith::MinUIOp>(loc, endBlock, maxBlock);
-      endBlock =
-          builder.create<arith::SelectOp>(loc, startAboveMax, endBlock, clampedEnd);
+      Value clampedEnd =
+          builder.create<arith::MinUIOp>(loc, endBlock, maxBlock);
+      endBlock = builder.create<arith::SelectOp>(loc, startAboveMax, endBlock,
+                                                 clampedEnd);
     }
 
     Value blockCount = builder.create<arith::SubIOp>(loc, endBlock, startBlock);
     blockCount = builder.create<arith::AddIOp>(loc, blockCount, one);
 
     if (startAboveMax) {
-      startBlock = builder.create<arith::SelectOp>(loc, startAboveMax, zero,
-                                                   startBlock);
-      blockCount = builder.create<arith::SelectOp>(loc, startAboveMax, zero,
-                                                   blockCount);
+      startBlock =
+          builder.create<arith::SelectOp>(loc, startAboveMax, zero, startBlock);
+      blockCount =
+          builder.create<arith::SelectOp>(loc, startAboveMax, zero, blockCount);
     }
 
     /// Check if single-block for this dimension

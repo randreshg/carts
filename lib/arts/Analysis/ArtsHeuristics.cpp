@@ -13,6 +13,7 @@
 #include "arts/Transforms/Datablock/DbRewriter.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/EdtUtils.h"
 #include "arts/Utils/Metadata/IdRegistry.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
@@ -188,7 +189,41 @@ HeuristicsConfig::getAcquireDecisions(const PartitioningContext &ctx,
   for (auto [acqNode, offset] : llvm::zip(acquireNodes, partitionOffsets)) {
     AcquireDecision decision;
 
-    if (acqNode && acqNode->needsFullRange(offset)) {
+    bool preserveDistributionContract = false;
+    if (acqNode && offset) {
+      DbAcquireOp acquire = acqNode->getDbAcquireOp();
+      if (acquire) {
+        auto acquireMode = getPartitionMode(acquire.getOperation());
+        bool explicitBlockMode =
+            acquireMode && (*acquireMode == PartitionMode::block ||
+                            *acquireMode == PartitionMode::stencil);
+
+        bool hasDistributionContract = false;
+        if (auto [edt, blockArg] =
+                EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+            edt) {
+          (void)blockArg;
+          hasDistributionContract =
+              getEdtDistributionKind(edt.getOperation()) ||
+              getEdtDistributionPattern(edt.getOperation());
+        }
+
+        bool acquireSelectsLeafDb = false;
+        if (auto ptrTy = acquire.getPtr().getType().dyn_cast<MemRefType>())
+          acquireSelectsLeafDb = !ptrTy.getElementType().isa<MemRefType>();
+
+        if (explicitBlockMode && hasDistributionContract &&
+            acquireSelectsLeafDb &&
+            !acqNode->getPartitionOffsetDim(offset, /*requireLeading=*/false)) {
+          preserveDistributionContract = true;
+          ARTS_DEBUG("H1.7: preserving distribution-contract acquire without "
+                     "forcing full-range");
+        }
+      }
+    }
+
+    if (acqNode && acqNode->needsFullRange(offset) &&
+        !preserveDistributionContract) {
       decision.needsFullRange = true;
       decision.canContributeBlockSize = false;
       decision.rationale = acqNode->hasIndirectAccess()

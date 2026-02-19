@@ -146,8 +146,15 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
   AC->setInsertionPoint(parallelEdt);
 
   /// Resolve worker count consistently with ForLowering distribution.
-  Value numWorkers =
-      DistributionHeuristics::getTotalWorkers(AC, loc, parallelEdt);
+  /// Prefer explicit EDT worker annotations to avoid context-sensitive
+  /// runtime-query cloning when outlining result EDT bodies.
+  Value numWorkers;
+  if (auto explicitWorkers = arts::getWorkers(parallelEdt.getOperation());
+      explicitWorkers && *explicitWorkers > 0) {
+    numWorkers = AC->createIndexConstant(*explicitWorkers, loc);
+  } else {
+    numWorkers = DistributionHeuristics::getTotalWorkers(AC, loc, parallelEdt);
+  }
 
   Block &parallelBlock = parallelEdt.getBody().front();
   ValueRange parentDeps = parallelEdt.getDependencies();

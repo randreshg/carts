@@ -70,6 +70,10 @@ public:
   AcquirePartitionSummary analyzeAcquirePartition(DbAcquireOp acquire,
                                                   OpBuilder &builder);
 
+  /// Return true when producerEdt writes DBs that are later consumed outside
+  /// internode EDT flow.
+  bool hasNonInternodeConsumerForWrittenDb(EdtOp producerEdt);
+
   /// Query DB access patterns through the DB graph interface.
   std::optional<AccessPattern> getAcquireAccessPattern(DbAcquireOp acquire);
   std::optional<DbAccessPattern> getAllocAccessPattern(DbAllocOp alloc);

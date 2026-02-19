@@ -326,14 +326,29 @@ void LoopInfo::initialize() {
   /// Create the block size constant
   blockSize = AC->createIndexConstant(computedBlockSize, loc);
   useRuntimeBlockAlignment = false;
-  if (computedBlockSize == 1 && runtimeBlockSizeHint) {
-    blockSize = AC->castToIndex(runtimeBlockSizeHint, loc);
-    blockSize = AC->create<arith::MaxUIOp>(loc, blockSize, one);
-    /// When block size is provided dynamically, align chunk partitioning to
-    /// block boundaries at runtime. This avoids cross-chunk overlap on
-    /// write-capable block slices for misaligned lower bounds (e.g., stencil
-    /// loops that start at 1 with block size 64).
-    useRuntimeBlockAlignment = true;
+  if (runtimeBlockSizeHint) {
+    Value runtimeBlockSize = AC->castToIndex(runtimeBlockSizeHint, loc);
+    runtimeBlockSize = AC->create<arith::MaxUIOp>(loc, runtimeBlockSize, one);
+
+    /// Respect explicit coarsening hints, but never allow them to go below
+    /// runtime DB-alignment guidance. Smaller chunk sizes can force write
+    /// tasks to span multiple DB blocks and trigger block-level clobbering in
+    /// distributed mode.
+    bool shouldUseRuntimeAlignment = (computedBlockSize == 1);
+    if (!shouldUseRuntimeAlignment) {
+      if (auto runtimeConst =
+              ValueUtils::tryFoldConstantIndex(runtimeBlockSize))
+        shouldUseRuntimeAlignment = (*runtimeConst > computedBlockSize);
+      else
+        shouldUseRuntimeAlignment = true;
+    }
+
+    if (shouldUseRuntimeAlignment) {
+      blockSize = AC->create<arith::MaxUIOp>(loc, blockSize, runtimeBlockSize);
+      /// When runtime alignment contributes to block size selection, align
+      /// chunk partitioning at runtime to keep DB-space slices block-safe.
+      useRuntimeBlockAlignment = true;
+    }
   }
 
   /// Step 2: Compute total iterations
@@ -398,9 +413,7 @@ void ForLoweringPass::runOnOperation() {
       return;
 
     bool hasForOps = false;
-    edt.getBody().walk([&](ForOp) {
-      hasForOps = true;
-    });
+    edt.getBody().walk([&](ForOp) { hasForOps = true; });
 
     if (hasForOps)
       lowerableEdts.push_back(edt);
@@ -936,8 +949,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         startAboveMax = AC->create<arith::CmpIOp>(
             loc, arith::CmpIPredicate::ugt, startBlock, maxBlock);
         Value clampedEnd = AC->create<arith::MinUIOp>(loc, endBlock, maxBlock);
-        endBlock =
-            AC->create<arith::SelectOp>(loc, startAboveMax, endBlock, clampedEnd);
+        endBlock = AC->create<arith::SelectOp>(loc, startAboveMax, endBlock,
+                                               clampedEnd);
       }
 
       Value blockCount = AC->create<arith::SubIOp>(loc, endBlock, startBlock);
