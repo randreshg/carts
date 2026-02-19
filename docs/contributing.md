@@ -14,6 +14,9 @@
 - `docker/` - Container workflows
 - `external/` - Dependencies (ARTS, Polygeist, LLVM)
 
+Compiler layering and ownership rules are documented in:
+- `docs/contributing/compiler-structure.md`
+
 ## Build & Test Commands
 
 ```bash
@@ -27,6 +30,7 @@ carts build --arts --debug             # Build ARTS with debug logging
 carts compile simple.cpp -o simple     # Full compilation pipeline
 carts test                             # Run all tests
 carts check                            # Alias for carts test
+make check-doc-flags                   # Validate docs flags against carts-compile options
 
 # Formatting
 carts format                           # Format tracked C/C++/TableGen files

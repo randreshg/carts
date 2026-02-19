@@ -19,6 +19,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Debug.h"
 
@@ -161,7 +162,7 @@ DbAnalysis::analyzeLoopDbAccessPatterns(ForOp forOp) {
 
   Value loopIV = forBody.getArgument(0);
   summary.hasTriangularBound = hasTriangularBoundPattern(forOp);
-  summary.hasMatmulUpdate = detectMatmulUpdatePattern(forOp);
+  summary.hasMatmulUpdate = detectMatmulUpdatePattern(forOp, getLoopAnalysis());
 
   Region &forRegion = forOp.getRegion();
   EdtOp edt = forOp->getParentOfType<EdtOp>();
@@ -261,13 +262,68 @@ DbAnalysis::getLoopDistributionPattern(ForOp forOp) {
   return analyzeLoopDbAccessPatterns(forOp).distributionPattern;
 }
 
+bool DbAnalysis::hasNonInternodeConsumerForWrittenDb(EdtOp producerEdt) {
+  if (!producerEdt)
+    return false;
+
+  func::FuncOp parentFunc = producerEdt->getParentOfType<func::FuncOp>();
+  if (!parentFunc)
+    return false;
+
+  DbGraph &graph = getOrCreateGraph(parentFunc);
+  llvm::DenseSet<DbAllocNode *> writtenDbAllocs;
+
+  graph.forEachAcquireNode([&](DbAcquireNode *acquireNode) {
+    if (!acquireNode)
+      return;
+
+    if (acquireNode->getEdtUser() != producerEdt)
+      return;
+    if (!acquireNode->isWriterAccess())
+      return;
+
+    if (DbAllocNode *root = acquireNode->getRootAlloc())
+      writtenDbAllocs.insert(root);
+  });
+
+  if (writtenDbAllocs.empty())
+    return false;
+
+  bool hasNonInternodeConsumer = false;
+  graph.forEachAcquireNode([&](DbAcquireNode *acquireNode) {
+    if (hasNonInternodeConsumer || !acquireNode)
+      return;
+
+    DbAllocNode *root = acquireNode->getRootAlloc();
+    if (!root || !writtenDbAllocs.contains(root))
+      return;
+
+    EdtOp consumerEdt = acquireNode->getEdtUser();
+    if (!consumerEdt) {
+      hasNonInternodeConsumer = true;
+      return;
+    }
+
+    if (consumerEdt == producerEdt)
+      return;
+
+    if (consumerEdt.getConcurrency() != EdtConcurrency::internode)
+      hasNonInternodeConsumer = true;
+  });
+
+  return hasNonInternodeConsumer;
+}
+
 DbAnalysis::AcquirePartitionSummary
 DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
   AcquirePartitionSummary info;
   if (!acquire)
     return info;
 
-  info.mode = DatablockUtils::getPartitionModeFromStructure(acquire);
+  if (auto modeAttr = getPartitionMode(acquire.getOperation()))
+    info.mode = *modeAttr;
+  else
+    info.mode = DatablockUtils::getPartitionModeFromStructure(acquire);
   if (info.mode == PartitionMode::coarse) {
     if (!acquire.getPartitionIndices().empty())
       info.mode = PartitionMode::fine_grained;
@@ -407,13 +463,23 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
 
   case PartitionMode::block:
   case PartitionMode::stencil: {
-    if (!acquire.getPartitionOffsets().empty()) {
-      for (Value off : acquire.getPartitionOffsets())
+    /// Prefer explicit partition_* hints when available. If they were already
+    /// materialized into offsets/sizes (post-rewrite acquires), reuse those so
+    /// we do not regress valid block acquires back to coarse.
+    ValueRange effectiveOffsets = acquire.getPartitionOffsets();
+    ValueRange effectiveSizes = acquire.getPartitionSizes();
+    if (effectiveOffsets.empty()) {
+      effectiveOffsets = acquire.getOffsets();
+      effectiveSizes = acquire.getSizes();
+    }
+
+    if (!effectiveOffsets.empty()) {
+      for (Value off : effectiveOffsets)
         info.partitionOffsets.push_back(off);
-      auto sizes = acquire.getPartitionSizes();
       Value one = builder.create<arith::ConstantIndexOp>(acquire.getLoc(), 1);
       for (unsigned i = 0; i < info.partitionOffsets.size(); ++i)
-        info.partitionSizes.push_back(i < sizes.size() ? sizes[i] : one);
+        info.partitionSizes.push_back(
+            i < effectiveSizes.size() ? effectiveSizes[i] : one);
       info.isValid = true;
 
       unsigned offsetIdx = 0;

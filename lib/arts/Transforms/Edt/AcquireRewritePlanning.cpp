@@ -197,8 +197,8 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
           Value totalCols = input.AC->castToIndex(elemSizes[1], input.loc);
           Value colWorkers =
               input.AC->castToIndex(input.tiling2DGrid->colWorkers, input.loc);
-          Value colWorkerId = input.AC->castToIndex(
-              input.tiling2DGrid->colWorkerId, input.loc);
+          Value colWorkerId =
+              input.AC->castToIndex(input.tiling2DGrid->colWorkerId, input.loc);
 
           Value colWorkersMinusOne =
               input.AC->create<arith::SubIOp>(input.loc, colWorkers, one);

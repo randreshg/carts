@@ -103,7 +103,8 @@ validateElementWiseIndices(ArrayRef<AcquirePartitionInfo> acquireInfos,
     if (allocNode) {
       auto *acqNode = allocNode->findAcquireNode(acquire);
       if (!acqNode) {
-        for (DbAcquireNode *candidate : collectAcquireNodesForAlloc(allocNode)) {
+        for (DbAcquireNode *candidate :
+             collectAcquireNodesForAlloc(allocNode)) {
           if (candidate && candidate->getDbAcquireOp() == acquire) {
             acqNode = candidate;
             break;
@@ -155,8 +156,9 @@ getPartitionOffsetsND(DbAcquireNode *acqNode,
   return result;
 }
 
-static void collectAcquireNodesRecursive(DbAcquireNode *acqNode,
-                                         SmallVectorImpl<DbAcquireNode *> &out) {
+static void
+collectAcquireNodesRecursive(DbAcquireNode *acqNode,
+                             SmallVectorImpl<DbAcquireNode *> &out) {
   if (!acqNode)
     return;
   out.push_back(acqNode);
@@ -180,6 +182,17 @@ collectAcquireNodesForAlloc(DbAllocNode *allocNode) {
     collectAcquireNodesRecursive(acqNode, allAcquireNodes);
   });
   return allAcquireNodes;
+}
+
+static bool hasInternodeAcquireUser(ArrayRef<DbAcquireNode *> acquireNodes) {
+  for (DbAcquireNode *acqNode : acquireNodes) {
+    if (!acqNode)
+      continue;
+    EdtOp edt = acqNode->getEdtUser();
+    if (edt && edt.getConcurrency() == EdtConcurrency::internode)
+      return true;
+  }
+  return false;
 }
 
 /// Pick a representative partition offset (prefer non-constant).
@@ -887,7 +900,21 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   /// Step 2: Build PartitioningContext and check for non-leading offsets
   PartitioningContext ctx;
   ctx.machine = &AM->getAbstractMachine();
-  bool canUseBlock = true; /// Assume chunked is possible until proven otherwise
+  bool canUseBlock = true; /// Assume block is possible until proven otherwise
+
+  /// Avoid multinode-style block partitioning when this allocation has no
+  /// internode EDT users. Keep block disabled and rely on existing
+  /// fine-grained/coarse semantics inferred from DB analysis.
+  bool hasInternodeUsers = hasInternodeAcquireUser(allocAcquireNodes);
+  bool isMultinodeMachine = AM->getAbstractMachine().hasValidNodeCount() &&
+                            AM->getAbstractMachine().getNodeCount() > 1;
+  if (isMultinodeMachine && !hasInternodeUsers) {
+    canUseBlock = false;
+    heuristics.recordDecision("Partition-DisableBlockNoInternodeUsers", false,
+                              "no internode EDT users for allocation",
+                              allocOp.getOperation(), {});
+    ARTS_DEBUG("  No internode EDT users - disabling block partitioning");
+  }
 
   if (allocNode) {
     ctx.accessPatterns = allocNode->summarizeAcquirePatterns();
@@ -932,6 +959,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
     /// Build per-acquire capabilities for heuristic voting
     size_t idx = 0;
+    bool preserveExplicitContractLayout = false;
     for (DbAcquireNode *acqNode : allocAcquireNodes) {
       if (!acqNode || idx >= acquireInfos.size())
         continue;
@@ -995,6 +1023,11 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
             ARTS_DEBUG("  Partition offset not mappable by DbAcquireNode, but "
                        "preserving block capability from EDT distribution "
                        "contract");
+            bool acquireSelectsLeafDb = false;
+            if (auto ptrTy = acquire.getPtr().getType().dyn_cast<MemRefType>())
+              acquireSelectsLeafDb = !ptrTy.getElementType().isa<MemRefType>();
+            if (acquireSelectsLeafDb)
+              preserveExplicitContractLayout = true;
           } else {
             ARTS_DEBUG("  Partition offset incompatible with access pattern; "
                        "disabling block capability");
@@ -1027,6 +1060,17 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                  << ", canBlock=" << info.canBlock << ", acquireAttr="
                  << (acquireMode ? static_cast<int>(*acquireMode) : -1));
       ++idx;
+    }
+
+    if (preserveExplicitContractLayout) {
+      ARTS_DEBUG("  Preserving explicit block-contract leaf acquire layout; "
+                 "skipping allocation rewrite");
+      heuristics.recordDecision(
+          "Partition-PreserveLeafContractLayout", true,
+          "leaf acquire uses explicit distributed contract offsets; preserving "
+          "layout",
+          allocOp.getOperation(), {});
+      return allocOp;
     }
 
     /// Collect DbAcquireNode* and partition offsets for heuristic decisions
@@ -1376,14 +1420,15 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     bool allocHasStencilPattern =
         allocPattern && *allocPattern == DbAccessPattern::stencil;
 
-    bool hasReadStencilAcquire = std::any_of(
-        acquireInfos.begin(), acquireInfos.end(), [&](auto &acqInfo) {
-          if (!acqInfo.acquire || acqInfo.acquire.getMode() != ArtsMode::in)
-            return false;
-          if (acqInfo.accessPattern == AccessPattern::Stencil)
-            return true;
-          return allocHasStencilPattern;
-        });
+    bool hasReadStencilAcquire =
+        std::any_of(allocAcquireNodes.begin(), allocAcquireNodes.end(),
+                    [&](DbAcquireNode *acqNode) {
+                      if (!acqNode || !acqNode->isReadOnlyAccess())
+                        return false;
+                      if (acqNode->getAccessPattern() == AccessPattern::Stencil)
+                        return true;
+                      return allocHasStencilPattern;
+                    });
 
     if ((info.haloLeft == 0 || info.haloRight == 0) && hasReadStencilAcquire &&
         allocHasStencilPattern) {

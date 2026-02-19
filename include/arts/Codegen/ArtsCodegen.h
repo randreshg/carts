@@ -23,6 +23,7 @@
 namespace mlir {
 namespace arts {
 using namespace types;
+class ArtsAbstractMachine;
 
 class ArtsCodegen {
 public:
@@ -106,6 +107,12 @@ public:
   bool useDistributedInitInWorkers() const { return distributedInitInWorkers; }
   void setDistributedInitInWorkers(bool value) {
     distributedInitInWorkers = value;
+  }
+  void setAbstractMachine(const ArtsAbstractMachine *machine) {
+    abstractMachine = machine;
+  }
+  const ArtsAbstractMachine *getAbstractMachine() const {
+    return abstractMachine;
   }
 
   /// Helper functions
@@ -194,6 +201,7 @@ private:
   SmallVector<func::FuncOp, 8> distributedInitNodeCallbacks;
   SmallVector<func::FuncOp, 8> distributedInitWorkerCallbacks;
   bool distributedInitInWorkers = false;
+  const ArtsAbstractMachine *abstractMachine = nullptr;
 
   /// Helper functions
   void initializeTypes();

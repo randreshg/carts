@@ -167,6 +167,13 @@ struct WorkerConfig {
   bool internode = false;
 };
 
+/// Machine-derived EDT topology defaults.
+struct ParallelismDecision {
+  EdtConcurrency concurrency = EdtConcurrency::intranode;
+  int64_t totalWorkers = 0;
+  int64_t workersPerNode = 0;
+};
+
 /// 2D worker grid for tiling_2d strategy.
 /// workerId = rowWorkerId * colWorkers + colWorkerId
 struct Tiling2DWorkerGrid {
@@ -246,6 +253,11 @@ public:
   static Value getDispatchWorkerCount(OpBuilder &builder, Location loc,
                                       EdtOp parallelEdt);
 
+  /// Resolve default EDT parallelism from machine topology.
+  /// Used by passes to avoid duplicating node/worker resolution logic.
+  static ParallelismDecision
+  resolveParallelismFromMachine(const ArtsAbstractMachine *machine);
+
   /// Resolve compile-time worker topology for an EDT from attrs + machine.
   /// Returns nullopt when worker count is not computable.
   static std::optional<WorkerConfig>
@@ -269,10 +281,9 @@ public:
   /// Compute row/column worker decomposition for tiling_2d.
   /// Falls back to rowWorkers=totalWorkers, colWorkers=1 when totalWorkers is
   /// not compile-time constant.
-  static Tiling2DWorkerGrid getTiling2DWorkerGrid(ArtsCodegen *AC, Location loc,
-                                                  Value workerId,
-                                                  Value totalWorkers,
-                                                  Value workersPerNode = Value());
+  static Tiling2DWorkerGrid
+  getTiling2DWorkerGrid(ArtsCodegen *AC, Location loc, Value workerId,
+                        Value totalWorkers, Value workersPerNode = Value());
 
 private:
   /// Balanced floor+remainder distribution

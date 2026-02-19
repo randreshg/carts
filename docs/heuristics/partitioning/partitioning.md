@@ -72,6 +72,8 @@ mode.
   `DbAllocOp`s with `distributed`.
 - Lowering then chooses per-block owner routes for marked allocations
   (currently round-robin).
+- `--distributed-db` also enables the distributed init path (reserve in
+  `initPerNode`, owner-local create in `initPerWorker`) for marked DBs.
 
 So, partitioning decides *shape*; distributed ownership decides *which node owns
 each shaped DB entry*.

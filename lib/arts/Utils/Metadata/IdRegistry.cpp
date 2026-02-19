@@ -33,46 +33,49 @@ void IdRegistry::initializeFromModule(ModuleOp module) {
 
   ARTS_DEBUG("IdRegistry: Initializing from module");
 
-  /// Collect all operations with valid locations
+  /// Collect all operations with valid locations.
+  /// Keep duplicate locations as separate entries so loops/memrefs generated
+  /// from macro-expanded source lines still get distinct IDs.
   struct ParsedLoc {
+    Operation *op = nullptr;
     LocationMetadata loc;
+    uint64_t walkOrder = 0;
   };
   llvm::SmallVector<ParsedLoc> locations;
-  llvm::StringMap<bool> seen;
+  uint64_t walkOrder = 0;
 
   module.walk([&](Operation *op) {
     LocationMetadata loc = LocationMetadata::fromLocation(op->getLoc());
+    ++walkOrder;
     if (!loc.isValid() || loc.key.empty() || loc.key == "unknown:0:0")
       return;
-
-    /// Skip duplicates
-    if (seen.count(loc.key))
-      return;
-    seen[loc.key] = true;
-
-    locations.push_back({loc});
+    locations.push_back({op, loc, walkOrder});
   });
 
-  /// Sort by (file, line, column)
+  /// Sort by (file, line, column, original walk order).
   llvm::sort(locations, [](const ParsedLoc &a, const ParsedLoc &b) {
     if (a.loc.file != b.loc.file)
       return a.loc.file < b.loc.file;
     if (a.loc.line != b.loc.line)
       return a.loc.line < b.loc.line;
-    return a.loc.column < b.loc.column;
+    if (a.loc.column != b.loc.column)
+      return a.loc.column < b.loc.column;
+    return a.walkOrder < b.walkOrder;
   });
 
-  /// Assign sequential IDs
+  /// Assign sequential IDs.
   for (const auto &entry : locations) {
-    locationCache[entry.loc.key] = nextId;
+    operationCache[entry.op] = nextId;
+    /// Keep first-seen location -> id for deterministic fallback lookups.
+    locationCache.try_emplace(entry.loc.key, nextId);
     usedIds.insert(nextId);
     ARTS_DEBUG("IdRegistry: ID=" << nextId << " -> " << entry.loc.key);
     nextId++;
   }
 
   initialized = true;
-  ARTS_DEBUG("IdRegistry: Initialized " << locationCache.size()
-                                        << " mappings, next ID: " << nextId);
+  ARTS_DEBUG("IdRegistry: Initialized "
+             << operationCache.size() << " operation IDs, next ID: " << nextId);
 }
 
 void IdRegistry::loadFromJson(llvm::StringRef jsonPath) {
@@ -157,6 +160,7 @@ void IdRegistry::loadFromJsonObject(const llvm::json::Object &root) {
 }
 
 void IdRegistry::reset() {
+  operationCache.clear();
   locationCache.clear();
   usedIds.clear();
   nextId = 1;
@@ -184,6 +188,13 @@ int64_t IdRegistry::getOrCreate(Operation *op) {
   if (auto existing = get(op))
     return existing;
 
+  /// Check precomputed operation cache
+  if (auto it = operationCache.find(op); it != operationCache.end()) {
+    setIdAttribute(op, it->second);
+    usedIds.insert(it->second);
+    return it->second;
+  }
+
   /// Assign from location
   int64_t id = assignFromLocation(op);
   if (id == 0)
@@ -198,6 +209,7 @@ void IdRegistry::set(Operation *op, int64_t id) {
     return;
 
   setIdAttribute(op, id);
+  operationCache[op] = id;
   usedIds.insert(id);
 
   LocationMetadata loc = LocationMetadata::fromLocation(op->getLoc());
@@ -219,6 +231,9 @@ int64_t IdRegistry::computeFromLocation(Operation *op) {
     return existing;
   }
 
+  if (auto it = operationCache.find(op); it != operationCache.end())
+    return it->second;
+
   return assignFromLocation(op);
 }
 
@@ -229,19 +244,30 @@ int64_t IdRegistry::allocateSequential() {
 }
 
 int64_t IdRegistry::assignFromLocation(Operation *op) {
+  if (!op)
+    return 0;
+
+  if (auto it = operationCache.find(op); it != operationCache.end())
+    return it->second;
+
   LocationMetadata loc = LocationMetadata::fromLocation(op->getLoc());
   if (loc.key.empty())
     return 0;
 
-  /// Check cache
+  /// Reuse first-seen location ID only if it has not been consumed by any
+  /// operation. Otherwise allocate a new unique ID for this operation.
   if (auto it = locationCache.find(loc.key); it != locationCache.end()) {
-    ARTS_DEBUG("IdRegistry: Reusing ID=" << it->second << " for " << loc.key);
-    return it->second;
+    if (!usedIds.contains(it->second)) {
+      operationCache[op] = it->second;
+      ARTS_DEBUG("IdRegistry: Reusing ID=" << it->second << " for " << loc.key);
+      return it->second;
+    }
   }
 
-  /// Assign new sequential
+  /// Assign new sequential.
   int64_t id = nextId++;
-  locationCache[loc.key] = id;
+  operationCache[op] = id;
+  locationCache.try_emplace(loc.key, id);
   usedIds.insert(id);
   ARTS_DEBUG("IdRegistry: Assigned new ID=" << id << " for " << loc.key);
   return id;

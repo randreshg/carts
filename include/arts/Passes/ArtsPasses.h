@@ -24,6 +24,7 @@ class DominanceInfo;
 
 namespace arts {
 class ArtsAnalysisManager;
+class ArtsAbstractMachine;
 std::unique_ptr<Pass> createArtsInlinerPass();
 std::unique_ptr<Pass> createCollectMetadataPass();
 std::unique_ptr<Pass> createCollectMetadataPass(bool exportMetadata,
@@ -40,8 +41,11 @@ std::unique_ptr<Pass> createDistributedDbOwnershipPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createCreateEpochsPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug);
-std::unique_ptr<Pass> createConvertArtsToLLVMPass(
-    bool debug, bool distributedInitPerWorker);
+std::unique_ptr<Pass>
+createConvertArtsToLLVMPass(bool debug, bool distributedInitPerWorker);
+std::unique_ptr<Pass>
+createConvertArtsToLLVMPass(bool debug, bool distributedInitPerWorker,
+                            const ArtsAbstractMachine *machine);
 std::unique_ptr<Pass> createEdtInvariantCodeMotionPass();
 std::unique_ptr<Pass> createEdtAllocaSinkingPass();
 std::unique_ptr<Pass> createDataPointerHoistingPass();

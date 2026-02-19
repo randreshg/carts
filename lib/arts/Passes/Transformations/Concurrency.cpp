@@ -18,18 +18,12 @@
 
 #include "../ArtsPassDetails.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"
+#include "arts/Analysis/DistributionHeuristics.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 #include "arts/Utils/OperationAttributes.h"
-
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/IR/IRMapping.h"
-#include "mlir/IR/OpDefinition.h"
-#include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/raw_ostream.h"
+#include <algorithm>
 
 #include "arts/Utils/ArtsDebug.h"
 ARTS_DEBUG_SETUP(concurrency)
@@ -61,6 +55,9 @@ void ConcurrencyPass::runOnOperation() {
 
   /// Get abstractMachine from ArtsAnalysisManager
   abstractMachine = &AM->getAbstractMachine();
+  /// Rebuild DB graph from current IR so concurrency decisions consume
+  /// up-to-date DB read/write users.
+  AM->getDbAnalysis().invalidate();
 
   ARTS_INFO_HEADER(Concurrency);
   ARTS_DEBUG_REGION(module.dump(););
@@ -227,13 +224,26 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
   /// incorrect work distribution (each node would only process its portion
   /// while tasks expect to see the full iteration space).
   bool hasNestedTasks = containsNestedTaskEdts(edtOp);
+  ParallelismDecision machineDecision =
+      DistributionHeuristics::resolveParallelismFromMachine(abstractMachine);
   if (hasNestedTasks) {
-    int threads =
-        abstractMachine->hasValidThreads() ? abstractMachine->getThreads() : 0;
+    int64_t workers = std::max<int64_t>(1, machineDecision.workersPerNode);
     ARTS_INFO("Parallel EDT contains nested tasks - keeping intranode with "
-              << threads << " threads");
+              << workers << " workers");
     edtOp.setConcurrency(EdtConcurrency::intranode);
-    arts::setWorkers(edtOp.getOperation(), threads);
+    arts::setWorkers(edtOp.getOperation(), workers);
+    arts::setWorkersPerNode(edtOp.getOperation(), 0);
+    return;
+  }
+
+  if (AM->getDbAnalysis().hasNonInternodeConsumerForWrittenDb(edtOp)) {
+    int64_t workers = std::max<int64_t>(1, machineDecision.workersPerNode);
+    ARTS_INFO("Parallel EDT writes DB consumed outside internode EDT flow - "
+              "keeping intranode with "
+              << workers << " workers");
+    edtOp.setConcurrency(EdtConcurrency::intranode);
+    arts::setWorkers(edtOp.getOperation(), workers);
+    arts::setWorkersPerNode(edtOp.getOperation(), 0);
     return;
   }
 
@@ -247,40 +257,21 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
         "data when setting parallelism");
   }
 
-  int nodeCount = abstractMachine->hasValidNodeCount()
-                      ? abstractMachine->getNodeCount()
-                      : 0;
-  int threads =
-      abstractMachine->hasValidThreads() ? abstractMachine->getThreads() : 0;
+  int nodeCount =
+      abstractMachine->hasValidNodeCount() ? abstractMachine->getNodeCount() : 0;
+  int workerThreads = static_cast<int>(machineDecision.workersPerNode);
+  numWorkers = static_cast<int>(machineDecision.totalWorkers);
+  concurrencyType = machineDecision.concurrency;
 
-  /// Compute actual worker threads matching the ARTS runtime calculation:
-  /// workerThreads = threads - senderCount - receiverCount
-  /// This must match what artsGetTotalWorkers() returns at runtime.
-  int workerThreads = threads;
-  if (nodeCount > 1 && threads > 0) {
-    int outgoing = abstractMachine->getOutgoingThreads();
-    int incoming = abstractMachine->getIncomingThreads();
-    workerThreads = threads - outgoing - incoming;
-    if (workerThreads <= 0)
-      workerThreads = 1;
-  }
-
-  if (nodeCount > 1) {
-    numWorkers = (threads > 0) ? nodeCount * workerThreads : 0;
-    concurrencyType = EdtConcurrency::internode;
-    ARTS_INFO("Setting EDT parallelism: inter-node across "
-              << nodeCount << " nodes"
-              << (workerThreads > 0
-                      ? " x " + std::to_string(workerThreads) + " workers"
-                      : ""));
-  } else if (threads > 0) {
-    numWorkers = threads;
-    concurrencyType = EdtConcurrency::intranode;
-    ARTS_INFO("Setting EDT parallelism: intra-node across " << threads
-                                                            << " threads");
-  } else if (nodeCount == 1) {
-    numWorkers = 1;
-    concurrencyType = EdtConcurrency::intranode;
+  if (concurrencyType == EdtConcurrency::internode) {
+    ARTS_INFO("Setting EDT parallelism: inter-node across " << nodeCount
+                                                            << " nodes x "
+                                                            << workerThreads
+                                                            << " workers");
+  } else if (numWorkers > 1) {
+    ARTS_INFO("Setting EDT parallelism: intra-node across " << numWorkers
+                                                            << " workers");
+  } else if (numWorkers == 1 && nodeCount == 1) {
     ARTS_INFO("Setting EDT parallelism: single-node execution with 1 worker");
   } else {
     /// Unknown configuration - default to intranode with runtime-determined

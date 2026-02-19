@@ -105,6 +105,30 @@ static void applyBoundsValid(DbAcquireOp acquireOp,
     return;
 
   SmallVector<Value> indicesVec(indices.begin(), indices.end());
+  /// Sanitize DB-space indices for guarded dims so out-of-bounds halo acquires
+  /// never carry negative/overflowed indices into downstream lowering.
+  /// bounds_valid still controls whether the acquire is logically active.
+  for (size_t i = 0; i < boundsCheckFlags.size() && i < indicesVec.size();
+       ++i) {
+    if (boundsCheckFlags[i] == 0 || i >= sourceSizes.size())
+      continue;
+
+    Value idx = indicesVec[i];
+    Value size = sourceSizes[i];
+    Value geZero = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge,
+                                                 idx, zero);
+    Value nonNegative = builder.create<arith::SelectOp>(loc, geZero, idx, zero);
+
+    Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
+    Value hasExtent = builder.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::sgt, size, zero);
+    Value lastIdxRaw = builder.create<arith::SubIOp>(loc, size, one);
+    Value lastIdx =
+        builder.create<arith::SelectOp>(loc, hasExtent, lastIdxRaw, zero);
+    Value clamped = builder.create<arith::MinUIOp>(loc, nonNegative, lastIdx);
+    indicesVec[i] = clamped;
+  }
+
   SmallVector<Value> offsetsVec(acquireOp.getOffsets().begin(),
                                 acquireOp.getOffsets().end());
   SmallVector<Value> sizesVec(acquireOp.getSizes().begin(),
