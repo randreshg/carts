@@ -1,10 +1,10 @@
 // RUN: %carts-compile %S/../../external/carts-benchmarks/polybench/gemm/gemm.mlir --O3 --arts-config %S/../../docker/arts-docker-2node.cfg --distributed-db --stop-at concurrency-opt --debug-only=distributed_db_ownership 2>&1 | %FileCheck %s
 
-// CHECK-COUNT-2: reason=read_only_internode_use
-// CHECK: DistributedDbOwnership marked 1 / {{[1-9][0-9]*}} DbAlloc operations
-// CHECK: %[[OUT_GUID:.*]], %[[OUT_PTR:.*]] = arts.db_alloc{{.*}}distributed
+// CHECK-NOT: reason=read_only_internode_use
+// CHECK: DistributedDbOwnership marked 3 / {{[1-9][0-9]*}} DbAlloc operations
+// CHECK-COUNT-3: arts.db_alloc{{.*}}distributed
 // CHECK: arts.epoch attributes {distribution_kind = #arts.distribution_kind<tiling_2d>, distribution_pattern = #arts.distribution_pattern<matmul>
-// CHECK: %[[MATMUL_OUT_GUID:.*]], %[[MATMUL_OUT_PTR:.*]] = arts.db_acquire[<inout>] (%[[OUT_GUID]] : memref<?xi64>, %[[OUT_PTR]] : memref<?xmemref<?x?xf32>>)
+// CHECK: %[[MATMUL_OUT_GUID:.*]], %[[MATMUL_OUT_PTR:.*]] = arts.db_acquire[<inout>] (%[[OUT_GUID:.*]] : memref<?xi64>, %[[OUT_PTR:.*]] : memref<?xmemref<?x?xf32>>)
 // CHECK: %[[MATMUL_IN0_GUID:.*]], %[[MATMUL_IN0_PTR:.*]] = arts.db_acquire[<in>] (%{{.*}} : memref<?xi64>, %{{.*}} : memref<?xmemref<?x?xf32>>)
 // CHECK: %[[MATMUL_IN1_GUID:.*]], %[[MATMUL_IN1_PTR:.*]] = arts.db_acquire[<in>] (%{{.*}} : memref<?xi64>, %{{.*}} : memref<?xmemref<?x?xf32>>)
 // CHECK: %[[CHK_GUID:.*]], %[[CHK_PTR:.*]] = arts.db_acquire[<in>] (%[[OUT_GUID]] : memref<?xi64>, %[[OUT_PTR]] : memref<?xmemref<?x?xf32>>)
