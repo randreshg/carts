@@ -148,7 +148,9 @@ static bool hasOnlyAllowedHandleUsers(Value rootHandle) {
   return true;
 }
 
-static bool isUsedByInternodeEdt(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
+template <typename PredicateT>
+static bool anyAcquireNodeMatches(DbAllocOp alloc, DbAnalysis &dbAnalysis,
+                                  PredicateT &&predicate) {
   func::FuncOp parentFunc = alloc->getParentOfType<func::FuncOp>();
   if (!parentFunc)
     return false;
@@ -158,90 +160,70 @@ static bool isUsedByInternodeEdt(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
   if (!allocNode)
     return false;
 
-  bool hasInternodeUse = false;
+  bool matched = false;
   graph.forEachAcquireNode([&](DbAcquireNode *acquireNode) {
-    if (hasInternodeUse || !acquireNode)
+    if (matched || !acquireNode)
       return;
-
-    DbAllocNode *rootAlloc = acquireNode->getRootAlloc();
-    if (!rootAlloc || rootAlloc != allocNode)
+    if (acquireNode->getRootAlloc() != allocNode)
       return;
-
-    EdtOp edt = acquireNode->getEdtUser();
-    if (!edt)
-      return;
-    if (edt.getConcurrency() == EdtConcurrency::internode)
-      hasInternodeUse = true;
+    matched = predicate(acquireNode);
   });
 
-  return hasInternodeUse;
+  return matched;
+}
+
+template <typename PredicateT>
+static bool allAcquireNodesMatch(DbAllocOp alloc, DbAnalysis &dbAnalysis,
+                                 PredicateT &&predicate) {
+  func::FuncOp parentFunc = alloc->getParentOfType<func::FuncOp>();
+  if (!parentFunc)
+    return false;
+
+  DbGraph &graph = dbAnalysis.getOrCreateGraph(parentFunc);
+  DbAllocNode *allocNode = graph.getDbAllocNode(alloc);
+  if (!allocNode)
+    return false;
+
+  bool allMatched = true;
+  graph.forEachAcquireNode([&](DbAcquireNode *acquireNode) {
+    if (!allMatched || !acquireNode)
+      return;
+    if (acquireNode->getRootAlloc() != allocNode)
+      return;
+    allMatched = predicate(acquireNode);
+  });
+
+  return allMatched;
+}
+
+static bool isUsedByInternodeEdt(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
+  return anyAcquireNodeMatches(alloc, dbAnalysis, [&](DbAcquireNode *acquireNode) {
+    EdtOp edt = acquireNode->getEdtUser();
+    return edt && edt.getConcurrency() == EdtConcurrency::internode;
+  });
 }
 
 static bool hasWriterInternodeEdtUse(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
-  func::FuncOp parentFunc = alloc->getParentOfType<func::FuncOp>();
-  if (!parentFunc)
-    return false;
-
-  DbGraph &graph = dbAnalysis.getOrCreateGraph(parentFunc);
-  DbAllocNode *allocNode = graph.getDbAllocNode(alloc);
-  if (!allocNode)
-    return false;
-
-  bool hasInternodeWriter = false;
-  graph.forEachAcquireNode([&](DbAcquireNode *acquireNode) {
-    if (hasInternodeWriter || !acquireNode)
-      return;
-
-    DbAllocNode *rootAlloc = acquireNode->getRootAlloc();
-    if (!rootAlloc || rootAlloc != allocNode)
-      return;
-
+  return anyAcquireNodeMatches(alloc, dbAnalysis, [&](DbAcquireNode *acquireNode) {
     DbAcquireOp acquireOp = acquireNode->getDbAcquireOp();
     if (!acquireOp)
-      return;
+      return false;
     if (acquireOp.getMode() == ArtsMode::in)
-      return;
+      return false;
 
     EdtOp edt = acquireNode->getEdtUser();
-    if (!edt || edt.getConcurrency() != EdtConcurrency::internode)
-      return;
-    auto pattern = getEdtDistributionPattern(edt.getOperation());
-    if (!pattern || *pattern != EdtDistributionPattern::matmul)
-      return;
-    hasInternodeWriter = true;
+    return edt && edt.getConcurrency() == EdtConcurrency::internode;
   });
-
-  return hasInternodeWriter;
 }
 
 static bool hasOnlyEdtAcquireUsers(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
-  func::FuncOp parentFunc = alloc->getParentOfType<func::FuncOp>();
-  if (!parentFunc)
-    return false;
-
-  DbGraph &graph = dbAnalysis.getOrCreateGraph(parentFunc);
-  DbAllocNode *allocNode = graph.getDbAllocNode(alloc);
-  if (!allocNode)
-    return false;
-
-  bool allAcquireUsersAreEdts = true;
-  graph.forEachAcquireNode([&](DbAcquireNode *acquireNode) {
-    if (!allAcquireUsersAreEdts || !acquireNode)
-      return;
-
-    DbAllocNode *rootAlloc = acquireNode->getRootAlloc();
-    if (!rootAlloc || rootAlloc != allocNode)
-      return;
-
-    if (acquireNode->getEdtUser())
-      return;
-    allAcquireUsersAreEdts = false;
+  return allAcquireNodesMatch(alloc, dbAnalysis, [&](DbAcquireNode *acquireNode) {
+    return static_cast<bool>(acquireNode->getEdtUser());
   });
-
-  return allAcquireUsersAreEdts;
 }
 
-static bool hasBroadcastReadAcquireUsers(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
+[[maybe_unused]] static bool hasBroadcastReadAcquireUsers(DbAllocOp alloc,
+                                                          DbAnalysis &dbAnalysis) {
   func::FuncOp parentFunc = alloc->getParentOfType<func::FuncOp>();
   if (!parentFunc)
     return false;
@@ -323,6 +305,8 @@ evaluateDistributedEligibility(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
     return {false, DistributedRejectReason::UnsupportedPtrUsers};
   if (!hasOnlyAllowedHandleUsers(alloc.getGuid()))
     return {false, DistributedRejectReason::UnsupportedGuidUsers};
+  if (!hasOnlyEdtAcquireUsers(alloc, dbAnalysis))
+    return {false, DistributedRejectReason::NonEdtAcquireUse};
   if (!isUsedByInternodeEdt(alloc, dbAnalysis))
     return {false, DistributedRejectReason::NoInternodeEdtUse};
   if (!hasWriterInternodeEdtUse(alloc, dbAnalysis))
