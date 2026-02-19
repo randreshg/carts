@@ -62,6 +62,8 @@ Follow LLVM conventions:
    - Document in per-directory README
 
 3. **Always run** `carts test` locally before submitting
+4. **For distributed changes**, run the 3-mode benchmark workflow in:
+   - `docs/testing/benchmark-modes.md`
 
 ## Commit Guidelines
 
