@@ -56,6 +56,10 @@ PROFILE=configs/profile-timing.cfg
 ```
 Omit `--profile` if you want to reuse the currently built ARTS runtime as-is.
 
+Shell note for multiline commands: keep `\` as the last character on each line.
+If you copy/paste with `\ ` (backslash + space), the runner may receive blank
+benchmark names.
+
 6. For SSH multi-node runs, make sure your ARTS config lists all nodes:
 ```ini
 # Example (in /path/to/multi-node.cfg)
@@ -106,6 +110,19 @@ for SIZE in small medium large extralarge; do
     --profile "${PROFILE}" \
     --runs 1
 done
+```
+
+Run all benchmarks with a thread sweep in one command:
+```bash
+carts benchmarks run \
+  --size extralarge \
+  --nodes 1 \
+  --threads 4,8,16,32,64 \
+  --timeout 240 \
+  --arts-config configs/local.cfg \
+  --launcher local \
+  --profile configs/profile-workload.cfg \
+  --runs 1
 ```
 
 ## Mode 2: Multi-Node (No Distributed DB Flag)
