@@ -29,12 +29,13 @@ GCC_TOOLCHAIN ?=
 # When GCC_TOOLCHAIN is set, export env vars so ALL cmake invocations
 # (including LLVM's internal NATIVE sub-build) pick up the correct toolchain.
 ifdef GCC_TOOLCHAIN
-GCC_TOOLCHAIN_ENV = export CFLAGS="--gcc-toolchain=$(GCC_TOOLCHAIN)" CXXFLAGS="--gcc-toolchain=$(GCC_TOOLCHAIN)" LD_LIBRARY_PATH="$(GCC_TOOLCHAIN)/lib64:$$LD_LIBRARY_PATH";
+export CFLAGS   += --gcc-toolchain=$(GCC_TOOLCHAIN)
+export CXXFLAGS += --gcc-toolchain=$(GCC_TOOLCHAIN)
+export LD_LIBRARY_PATH := $(GCC_TOOLCHAIN)/lib64:$(LD_LIBRARY_PATH)
 GCC_TOOLCHAIN_CMAKE_FLAGS = \
 	-DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath,$(GCC_TOOLCHAIN)/lib64" \
 	-DCMAKE_SHARED_LINKER_FLAGS="-Wl,-rpath,$(GCC_TOOLCHAIN)/lib64"
 else
-GCC_TOOLCHAIN_ENV =
 GCC_TOOLCHAIN_CMAKE_FLAGS =
 endif
 
@@ -77,7 +78,6 @@ polygeist-clean:
 
 # LLVM
 llvm:
-	$(GCC_TOOLCHAIN_ENV) \
 	echo "Building LLVM..."; \
 	mkdir -p $(LLVM_BUILD_DIR); \
 	mkdir -p $(LLVM_INSTALL_DIR); \
