@@ -110,7 +110,7 @@ llvm:
 		-DGCC_INSTALL_PREFIX=$(LLVM_GCC_INSTALL_PREFIX) \
 		-DCMAKE_CXX_FLAGS="--gcc-toolchain=$(LLVM_GCC_INSTALL_PREFIX)" \
 		-DCMAKE_C_FLAGS="--gcc-toolchain=$(LLVM_GCC_INSTALL_PREFIX)" \
-		-DCROSS_TOOLCHAIN_FLAGS_NATIVE="-DCMAKE_CXX_FLAGS=--gcc-toolchain=$(LLVM_GCC_INSTALL_PREFIX) -DCMAKE_C_FLAGS=--gcc-toolchain=$(LLVM_GCC_INSTALL_PREFIX)"); \
+		); \
 	ninja -C $(LLVM_BUILD_DIR) llvm-lit; \
 	ninja -C $(LLVM_BUILD_DIR) install; \
 	if [ -f "$(LLVM_BUILD_DIR)/bin/llvm-lit" ]; then \
