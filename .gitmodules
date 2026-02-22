@@ -2,13 +2,16 @@
 	path = external/arts
 	url = https://github.com/randreshg/ARTS.git
 	branch = master
+	shallow = true
 
 [submodule "external/Polygeist"]
 	path = external/Polygeist
 	url = https://github.com/randreshg/Polygeist.git
 	branch = carts
+	shallow = true
 
 [submodule "external/carts-benchmarks"]
 	path = external/carts-benchmarks
 	url = https://github.com/randreshg/carts-benchmarks.git
 	branch = main
+	shallow = true

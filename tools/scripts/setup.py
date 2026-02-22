@@ -41,12 +41,13 @@ def _setup_project() -> bool:
         (project_root / dir_name).mkdir(exist_ok=True)
 
     # Initialize and update submodules
-    print_info("Initializing and updating git submodules (shallow clone)...")
+    print_info("Initializing and updating git submodules...")
     try:
         _run_subprocess(
             [
                 "git", "submodule", "update", "--init", "--recursive",
-                "--depth", "1", "--jobs", "4",
+                "--depth", "1", "--single-branch",
+                "--recommend-shallow", "--jobs", "4",
             ],
             cwd=project_root,
             realtime=True,
