@@ -32,16 +32,17 @@ LLVM_CXX_COMPILER ?= clang++
 # so the just-built clang finds the right libstdc++ headers for runtimes.
 LLVM_GCC_INSTALL_PREFIX ?= $(if $(filter-out clang,$(LLVM_C_COMPILER)),$(shell dirname $(shell dirname $(shell which $(LLVM_C_COMPILER)))))
 
-# Use the LLVM runtimes we built (libc++, compiler-rt) for all downstream builds.
-# On Linux this ensures we use libc++/compiler-rt instead of system libstdc++/libgcc.
-# On macOS these are already the defaults, so these flags are harmless.
-LLVM_RUNTIME_CXX_FLAGS ?= -stdlib=libc++
-LLVM_RUNTIME_LINKER_FLAGS ?= -stdlib=libc++ -rtlib=compiler-rt --ld-path=$(CARTS_LINKER_PATH)
+# Use our installed linker for all downstream cmake builds.
+# NOTE: We do NOT force -stdlib=libc++ or -rtlib=compiler-rt here because
+# polygeist and carts link LLVM static libraries that were built with the
+# bootstrap compiler's default stdlib (libstdc++ on Linux). Forcing libc++
+# would cause undefined symbol errors (e.g., std::__throw_bad_*).
+# The user-facing compile commands (config.py) DO use -stdlib=libc++ because
+# user code and ARTS runtime don't link LLVM static libs.
 LLVM_RUNTIME_CMAKE_FLAGS = \
-	-DCMAKE_CXX_FLAGS="$(LLVM_RUNTIME_CXX_FLAGS)" \
-	-DCMAKE_EXE_LINKER_FLAGS="$(LLVM_RUNTIME_LINKER_FLAGS)" \
-	-DCMAKE_SHARED_LINKER_FLAGS="$(LLVM_RUNTIME_LINKER_FLAGS)" \
-	-DCMAKE_MODULE_LINKER_FLAGS="$(LLVM_RUNTIME_LINKER_FLAGS)"
+	-DCMAKE_EXE_LINKER_FLAGS="--ld-path=$(CARTS_LINKER_PATH)" \
+	-DCMAKE_SHARED_LINKER_FLAGS="--ld-path=$(CARTS_LINKER_PATH)" \
+	-DCMAKE_MODULE_LINKER_FLAGS="--ld-path=$(CARTS_LINKER_PATH)"
 
 # Build Directories
 CARTS_BUILD_DIR = build
