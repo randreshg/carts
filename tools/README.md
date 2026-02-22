@@ -15,10 +15,10 @@ tools/
 
 ## Quick Start
 
-1. **Setup everything automatically:**
+1. **Install everything automatically:**
    ```bash
-   python3 tools/setup/carts-setup.py
-   # The 'carts' command is now available in your PATH
+   carts install
+   # Checks deps, inits submodules, builds LLVM → Polygeist → ARTS → CARTS
    ```
 
 2. **Build the project:**
@@ -80,15 +80,19 @@ tools/
 | `carts clang` | Compile with LLVM clang and OpenMP |
 | `carts clean` | Clean generated files |
 | `carts format` | Format source files |
-| `carts setup` | Set up CARTS environment |
+| `carts install` | Install CARTS: check deps, init submodules, build everything |
 
 ## Individual Tools
 
-### Setup (`tools/setup/carts-setup.py`)
-Automated setup script that installs all dependencies, builds the project, and automatically adds `carts` to your PATH.
+### Install (`carts install`)
+Automated install that checks system dependencies, initializes submodules, and builds the full toolchain (LLVM → Polygeist → ARTS → CARTS).
 
 ```bash
-python3 tools/setup/carts-setup.py --help
+carts install --help
+carts install --check       # Only check dependencies
+carts install --skip-deps   # Skip dependency checking
+carts install --skip-build  # Only check/install deps + init submodules
+carts install --auto        # Auto-install missing deps without prompting
 ```
 
 ### Benchmarks (`carts benchmarks`)
@@ -115,11 +119,7 @@ carts check --examples
 ## Environment Setup
 
 ### Adding carts to PATH
-The setup script automatically adds `carts` to your PATH. If you restart your terminal, you can re-add it with:
-
-```bash
-python3 tools/setup/carts-setup.py --add-to-path
-```
+The install command automatically adds `carts` to your PATH.
 
 ### Environment Variables
 

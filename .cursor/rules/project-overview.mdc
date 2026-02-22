@@ -35,5 +35,5 @@ All CARTS operations should use the `carts` wrapper script:
 carts build          # Build project
 carts cgeist         # C++ to MLIR
 carts compile        # Compile (C++/MLIR/LLVM IR → executable)
-carts setup          # Environment setup
+carts install        # Install: deps, submodules, build all
 ```
