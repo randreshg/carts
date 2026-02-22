@@ -7,8 +7,6 @@ from typing import List, Optional
 import platform as sys_platform
 import os
 
-from carts_styles import print_warning
-
 
 # ============================================================================
 # Constants and Enums
@@ -54,6 +52,7 @@ class PlatformConfig:
     # Include/library paths (auto-detected)
     llvm_include_path: Path = field(default_factory=Path)
     llvm_lib_path: Path = field(default_factory=Path)
+    llvm_cxx_include_path: Path = field(default_factory=Path)
     system_include_path: Optional[Path] = None
     system_cxx_include_path: Optional[Path] = None
     macos_sdk_path: Optional[Path] = None
@@ -74,6 +73,8 @@ class PlatformConfig:
         default_factory=list)    # -l flags for final link
     compile_flags: List[str] = field(
         default_factory=list)        # General compile flags
+    runtime_flags: List[str] = field(
+        default_factory=list)        # LLVM runtime flags (-stdlib, -rtlib, etc.)
     linker_flags: List[str] = field(
         default_factory=list)         # Linker-specific flags
     linker_path: Optional[Path] = None  # Path to LLD linker
@@ -130,6 +131,8 @@ class PlatformConfig:
         """Setup include and library paths."""
         self.llvm_include_path = self.llvm_install_dir / \
             "lib" / "clang" / "18" / "include"
+        self.llvm_cxx_include_path = self.llvm_install_dir / \
+            "include" / "c++" / "v1"
 
         # Detect LLVM library path
         aarch64_path = self.llvm_install_dir / "lib" / "aarch64-unknown-linux-gnu"
@@ -174,53 +177,28 @@ class PlatformConfig:
         if self.arch == "x86_64":
             self.compile_flags.extend(["-fno-pie", "-Wl,-no_pie"])
 
-    @staticmethod
-    def _is_version_dir(name: str) -> bool:
-        """Check if a directory name looks like a version (e.g., '14', '11.4.0')."""
-        parts = name.split(".")
-        return all(part.isdigit() for part in parts)
-
-    @staticmethod
-    def _parse_version(name: str) -> tuple:
-        """Parse a version string into a tuple for comparison (e.g., '11.4.0' -> (11, 4, 0))."""
-        return tuple(int(part) for part in name.split("."))
-
     def _setup_linux_flags(self) -> None:
-        """Setup Linux-specific flags."""
+        """Setup Linux-specific flags.
+
+        Uses LLVM's libc++/compiler-rt/libunwind instead of system libstdc++/libgcc.
+        System C headers (/usr/include) are still used from glibc.
+        """
         self.system_include_path = Path("/usr/include")
 
-        # Detect libstdc++ include path (version directories like /usr/include/c++/14 or /usr/include/c++/11.4.0)
-        cxx_base = Path("/usr/include/c++")
-        if cxx_base.is_dir():
-            libstdcxx_versions = [
-                d for d in cxx_base.iterdir()
-                if d.is_dir() and self._is_version_dir(d.name)
-            ]
-            if libstdcxx_versions:
-                latest = max(libstdcxx_versions, key=lambda p: self._parse_version(p.name))
-                self.system_cxx_include_path = latest
-            else:
-                self.system_cxx_include_path = None
-        else:
-            self.system_cxx_include_path = None
-
-        if self.system_cxx_include_path is None:
-            print_warning(
-                "Could not detect libstdc++ include path. "
-                "C++ compilation may fail. Ensure libstdc++ is installed "
-                "(e.g., 'apt install libstdc++-dev' or 'dnf install libstdc++-devel')."
-            )
-
+        # Use LLVM's libc++ headers instead of system libstdc++
         self.include_flags.extend([
             f"-I{self.system_include_path}",
-            f"-I{self.system_cxx_include_path}",
-        ] if self.system_cxx_include_path else [f"-I{self.system_include_path}"])
+            f"-I{self.llvm_cxx_include_path}",
+        ])
 
         self.clang_library_flags.extend(["-L/usr/lib64", "-L/usr/lib"])
         self.compile_library_flags.extend(["-L/usr/lib64", "-L/usr/lib"])
-        self.clang_libraries.extend(["-lpthread", "-lrt", "-lstdc++"])
-        self.compile_libraries.extend(["-lpthread", "-lrt", "-lstdc++"])
+        self.clang_libraries.extend(["-lpthread", "-lrt"])
+        self.compile_libraries.extend(["-lpthread", "-lrt"])
         self.compile_flags.extend(["-fno-pie", "-no-pie"])
+        self.runtime_flags.extend([
+            "-stdlib=libc++", "-rtlib=compiler-rt", "--unwindlib=libunwind",
+        ])
 
     def _setup_windows_flags(self) -> None:
         """Setup Windows-specific flags."""
@@ -286,8 +264,9 @@ class PlatformConfig:
             "-lcartstest", "-lcartsbenchmarks", "-larts", "-lomp",
         ] + base_libs + [lib for lib in self.compile_libraries if lib not in base_libs]
 
-        # Compile flags
+        # Compile flags — include LLVM runtime flags (-stdlib=libc++ etc.)
         self.compile_flags.insert(0, "-O3")
+        self.compile_flags.extend(self.runtime_flags)
 
     def _detect_linker(self) -> None:
         """Detect and configure the appropriate linker."""
