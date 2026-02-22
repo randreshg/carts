@@ -34,6 +34,9 @@ def build(
     profile: Optional[Path] = typer.Option(
         None, "--profile",
         help="Custom counter profile file path (overrides --counters)"),
+    gcc_toolchain: Optional[str] = typer.Option(
+        None, "--gcc-toolchain",
+        help="Path to GCC toolchain (e.g. /opt/shared/gcc/12.2.0) for systems where system clang picks up an old libstdc++"),
 ):
     """Build CARTS project using system clang."""
     config = get_config()
@@ -97,6 +100,10 @@ def build(
     # Pass platform-specific linker path to make
     if config.linker_path:
         make_vars.append(f'CARTS_LINKER_PATH={config.linker_path}')
+
+    # Pass GCC toolchain path to make (for HPC clusters with old system libstdc++)
+    if gcc_toolchain:
+        make_vars.append(f'GCC_TOOLCHAIN={gcc_toolchain}')
 
     if make_vars:
         console.print(f"Options: [dim]{' '.join(make_vars)}[/dim]")

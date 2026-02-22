@@ -88,12 +88,13 @@ def _setup_project() -> bool:
     for dir_name in [".install", "build", "external"]:
         (project_root / dir_name).mkdir(exist_ok=True)
 
-    print_info("Initializing and updating git submodules (shallow clone)...")
+    print_info("Initializing and updating git submodules...")
     try:
         _run_subprocess(
             [
                 "git", "submodule", "update", "--init", "--recursive",
-                "--depth", "1", "--jobs", "4",
+                "--depth", "1", "--single-branch",
+                "--recommend-shallow", "--jobs", "4",
             ],
             cwd=project_root,
             realtime=True,
@@ -106,7 +107,7 @@ def _setup_project() -> bool:
     return True
 
 
-def _build_project() -> bool:
+def _build_project(gcc_toolchain: str | None = None) -> bool:
     """Build and install the CARTS project using the correct build order."""
     config = get_config()
     project_root = config.carts_dir
@@ -124,11 +125,13 @@ def _build_project() -> bool:
 
     _add_to_path()
 
+    gcc_args = ["--gcc-toolchain", gcc_toolchain] if gcc_toolchain else []
+
     build_steps = [
-        (1, "Building LLVM...", ["carts", "build", "--llvm"]),
-        (2, "Building Polygeist...", ["carts", "build", "--polygeist"]),
-        (3, "Building ARTS runtime...", ["carts", "build", "--arts"]),
-        (4, "Building CARTS...", ["carts", "build"]),
+        (1, "Building LLVM...", ["carts", "build", "--llvm"] + gcc_args),
+        (2, "Building Polygeist...", ["carts", "build", "--polygeist"] + gcc_args),
+        (3, "Building ARTS runtime...", ["carts", "build", "--arts"] + gcc_args),
+        (4, "Building CARTS...", ["carts", "build"] + gcc_args),
     ]
 
     for step_num, description, cmd in build_steps:
@@ -157,6 +160,9 @@ def install(
         False, "--skip-build", help="Skip building (only check/install deps and init submodules)"),
     auto: bool = typer.Option(
         False, "--auto", "-y", help="Auto-install missing deps without prompting"),
+    gcc_toolchain: str = typer.Option(
+        None, "--gcc-toolchain",
+        help="Path to GCC toolchain (e.g. /opt/shared/gcc/12.2.0) for systems where system clang picks up an old libstdc++"),
 ):
     """Install CARTS: check dependencies, init submodules, and build everything."""
     print_header("CARTS Install")
@@ -190,7 +196,7 @@ def install(
 
     # 3. Build everything
     if not skip_build:
-        if not _build_project():
+        if not _build_project(gcc_toolchain=gcc_toolchain):
             print_error("Failed to build project")
             raise typer.Exit(1)
 
