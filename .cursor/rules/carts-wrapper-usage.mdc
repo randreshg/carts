@@ -35,8 +35,8 @@ carts compile simple.ll -o simple
 # Build project
 carts build
 
-# Setup environment
-carts setup --add-to-path
+# Install everything (deps, submodules, build)
+carts install
 
 # Clean generated files
 carts clean
@@ -64,7 +64,7 @@ clang simple.ll -larts -lomp -lrt -lpthread
 | `carts mlir-translate` | MLIR to LLVM IR | `.mlir` | `.ll` |
 | `carts benchmark` | Run benchmarks | - | results |
 | `carts report` | Generate reports | - | reports |
-| `carts setup` | Setup environment | - | - |
+| `carts install` | Install: deps, submodules, build all | - | - |
 | `carts clean` | Clean generated files | - | - |
 
 ## Docker Operations

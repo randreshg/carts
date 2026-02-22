@@ -9,11 +9,8 @@ CARTS is an LLVM/MLIR-based compiler framework that transforms OpenMP C/C++ prog
 ## Quick Start
 
 ```bash
-# Install dependencies, build, and setup PATH
-python3 tools/setup/carts-setup.py
-
-# Build CARTS
-carts build
+# Install everything: check deps, init submodules, build all
+carts install
 
 # Complete pipeline: C++ to executable
 carts compile simple.cpp -o simple
@@ -146,7 +143,7 @@ carts build --arts --debug
 
 - Always use the `carts` wrapper for all operations
 - Project builds with system clang; ARTS uses installed LLVM toolchain
-- Setup script automatically adds `carts` to PATH
+- `carts install` automatically adds `carts` to PATH
 - Generated files (`*.mlir`, `*.ll`, `stages/`) are gitignored
 
 ---
