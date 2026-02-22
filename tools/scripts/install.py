@@ -3,6 +3,7 @@
 import os
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 import typer
 
@@ -107,7 +108,7 @@ def _setup_project() -> bool:
     return True
 
 
-def _build_project(gcc_toolchain: str | None = None) -> bool:
+def _build_project(gcc_toolchain: Optional[str] = None) -> bool:
     """Build and install the CARTS project using the correct build order."""
     config = get_config()
     project_root = config.carts_dir
