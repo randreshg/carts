@@ -24,20 +24,8 @@ LIT_SOURCE_DIR := $(LLVM_DIR)/llvm/utils/lit
 LIT_INSTALL_DIR := $(LLVM_INSTALL_DIR)/utils/lit
 
 CARTS_LINKER_PATH ?= ${LLVM_INSTALL_DIR}/bin/ld.lld
-GCC_TOOLCHAIN ?=
-
-# When GCC_TOOLCHAIN is set, export env vars so ALL cmake invocations
-# (including LLVM's internal NATIVE sub-build) pick up the correct toolchain.
-ifdef GCC_TOOLCHAIN
-export CFLAGS   += --gcc-toolchain=$(GCC_TOOLCHAIN)
-export CXXFLAGS += --gcc-toolchain=$(GCC_TOOLCHAIN)
-export LD_LIBRARY_PATH := $(GCC_TOOLCHAIN)/lib64:$(LD_LIBRARY_PATH)
-GCC_TOOLCHAIN_CMAKE_FLAGS = \
-	-DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath,$(GCC_TOOLCHAIN)/lib64" \
-	-DCMAKE_SHARED_LINKER_FLAGS="-Wl,-rpath,$(GCC_TOOLCHAIN)/lib64"
-else
-GCC_TOOLCHAIN_CMAKE_FLAGS =
-endif
+LLVM_C_COMPILER ?= clang
+LLVM_CXX_COMPILER ?= clang++
 
 # Build Directories
 CARTS_BUILD_DIR=build
@@ -85,8 +73,8 @@ llvm:
 		-S $(LLVM_DIR)/llvm -G Ninja \
 		-DCMAKE_INSTALL_PREFIX=$(LLVM_INSTALL_DIR) \
 		-DCMAKE_BUILD_TYPE=Release \
-		-DCMAKE_C_COMPILER=clang \
-		-DCMAKE_CXX_COMPILER=clang++ \
+		-DCMAKE_C_COMPILER=$(LLVM_C_COMPILER) \
+		-DCMAKE_CXX_COMPILER=$(LLVM_CXX_COMPILER) \
 		-DLLVM_ENABLE_PROJECTS='mlir;clang;lld;openmp' \
 		-DLLVM_ENABLE_RUNTIMES='libcxx;libcxxabi;libunwind;compiler-rt' \
 		-DLLVM_TARGETS_TO_BUILD='host' \
@@ -100,8 +88,7 @@ llvm:
 		-DLLVM_INSTALL_UTILS=ON \
 		-DLLVM_INCLUDE_BENCHMARKS=OFF \
 		-DLLVM_INCLUDE_UTILS=ON \
-		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-		$(GCC_TOOLCHAIN_CMAKE_FLAGS); \
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
 	ninja -C $(LLVM_BUILD_DIR) llvm-lit; \
 	ninja -C $(LLVM_BUILD_DIR) install; \
 	if [ -f "$(LLVM_BUILD_DIR)/bin/llvm-lit" ]; then \
