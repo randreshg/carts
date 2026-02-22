@@ -129,7 +129,7 @@ def build(
     # If polygeist was built and carts has been built before, rebuild carts-compile
     # to pick up the new polygeist. Skip on first install (build dir won't exist yet).
     carts_build_dir = config.carts_dir / "build"
-    if result.returncode == 0 and target == "polygeist" and carts_build_dir.is_dir():
+    if result.returncode == 0 and target == "polygeist" and (carts_build_dir / "build.ninja").is_file():
         print_step("Rebuilding carts-compile after Polygeist update...")
         cmd = ["make"] + make_vars + ["carts-compile-only"]
         result = run_subprocess(cmd, cwd=config.carts_dir, check=False)
