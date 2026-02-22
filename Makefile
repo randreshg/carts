@@ -28,9 +28,9 @@ CARTS_LINKER_PATH ?= $(if $(filter Darwin,$(shell uname)),${LLVM_INSTALL_DIR}/bi
 LLVM_C_COMPILER ?= clang
 LLVM_CXX_COMPILER ?= clang++
 
-# When using GCC to bootstrap LLVM, tell cmake where GCC is installed
-# so the just-built clang finds the right libstdc++ headers for runtimes.
-LLVM_GCC_INSTALL_PREFIX ?= $(if $(filter-out clang,$(LLVM_C_COMPILER)),$(shell dirname $(shell dirname $(shell which $(LLVM_C_COMPILER)))))
+# Auto-detect GCC install prefix so the just-built clang finds the right
+# libstdc++ headers for runtimes.
+LLVM_GCC_INSTALL_PREFIX ?= $(patsubst %/bin/gcc,%,$(shell which gcc 2>/dev/null))
 
 # Use our installed linker for all downstream cmake builds.
 # NOTE: We do NOT force -stdlib=libc++ or -rtlib=compiler-rt here because
