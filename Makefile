@@ -30,7 +30,7 @@ LLVM_CXX_COMPILER ?= clang++
 
 # Auto-detect GCC install prefix so the just-built clang finds the right
 # libstdc++ headers for runtimes.
-LLVM_GCC_INSTALL_PREFIX ?= $(patsubst %/bin/gcc,%,$(shell which gcc 2>/dev/null))
+LLVM_GCC_INSTALL_PREFIX ?= $(if $(filter Linux,$(shell uname)),$(shell gcc -print-search-dirs 2>/dev/null | grep '^install:' | sed 's|^install: ||;s|/lib/gcc/.*||'))
 
 # Use our installed linker for all downstream cmake builds.
 # NOTE: We do NOT force -stdlib=libc++ or -rtlib=compiler-rt here because
@@ -106,7 +106,11 @@ llvm:
 		-DLLVM_INCLUDE_BENCHMARKS=OFF \
 		-DLLVM_INCLUDE_UTILS=ON \
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-		$(if $(LLVM_GCC_INSTALL_PREFIX),-DGCC_INSTALL_PREFIX=$(LLVM_GCC_INSTALL_PREFIX) -DCMAKE_CXX_FLAGS="--gcc-toolchain=$(LLVM_GCC_INSTALL_PREFIX)" -DCMAKE_C_FLAGS="--gcc-toolchain=$(LLVM_GCC_INSTALL_PREFIX)"); \
+		$(if $(LLVM_GCC_INSTALL_PREFIX),\
+		-DGCC_INSTALL_PREFIX=$(LLVM_GCC_INSTALL_PREFIX) \
+		-DCMAKE_CXX_FLAGS="--gcc-toolchain=$(LLVM_GCC_INSTALL_PREFIX)" \
+		-DCMAKE_C_FLAGS="--gcc-toolchain=$(LLVM_GCC_INSTALL_PREFIX)" \
+		-DCROSS_TOOLCHAIN_FLAGS_NATIVE="-DCMAKE_CXX_FLAGS=--gcc-toolchain=$(LLVM_GCC_INSTALL_PREFIX) -DCMAKE_C_FLAGS=--gcc-toolchain=$(LLVM_GCC_INSTALL_PREFIX)"); \
 	ninja -C $(LLVM_BUILD_DIR) llvm-lit; \
 	ninja -C $(LLVM_BUILD_DIR) install; \
 	if [ -f "$(LLVM_BUILD_DIR)/bin/llvm-lit" ]; then \
