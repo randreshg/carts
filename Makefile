@@ -16,14 +16,15 @@ LLVM_DIR ?= ${POLYGEIST_DIR}/llvm-project
 # Install Directories
 INSTALL_DIR ?= ${CARTS_DIR}/.install
 CARTS_INSTALL_DIR ?= ${INSTALL_DIR}/carts
-ARTS_INSTALL_DIR ?=$(INSTALL_DIR)/arts
-LLVM_INSTALL_DIR ?=$(INSTALL_DIR)/llvm
-POLYGEIST_INSTALL_DIR ?=$(INSTALL_DIR)/polygeist
+ARTS_INSTALL_DIR ?= $(INSTALL_DIR)/arts
+LLVM_INSTALL_DIR ?= $(INSTALL_DIR)/llvm
+POLYGEIST_INSTALL_DIR ?= $(INSTALL_DIR)/polygeist
 
 LIT_SOURCE_DIR := $(LLVM_DIR)/llvm/utils/lit
 LIT_INSTALL_DIR := $(LLVM_INSTALL_DIR)/utils/lit
 
-CARTS_LINKER_PATH ?= ${LLVM_INSTALL_DIR}/bin/ld.lld
+# Detect platform-appropriate linker (ld64.lld on macOS, ld.lld on Linux)
+CARTS_LINKER_PATH ?= $(if $(filter Darwin,$(shell uname)),${LLVM_INSTALL_DIR}/bin/ld64.lld,${LLVM_INSTALL_DIR}/bin/ld.lld)
 LLVM_C_COMPILER ?= clang
 LLVM_CXX_COMPILER ?= clang++
 
@@ -31,11 +32,22 @@ LLVM_CXX_COMPILER ?= clang++
 # so the just-built clang finds the right libstdc++ headers for runtimes.
 LLVM_GCC_INSTALL_PREFIX ?= $(if $(filter-out clang,$(LLVM_C_COMPILER)),$(shell dirname $(shell dirname $(shell which $(LLVM_C_COMPILER)))))
 
+# Use the LLVM runtimes we built (libc++, compiler-rt) for all downstream builds.
+# On Linux this ensures we use libc++/compiler-rt instead of system libstdc++/libgcc.
+# On macOS these are already the defaults, so these flags are harmless.
+LLVM_RUNTIME_CXX_FLAGS ?= -stdlib=libc++
+LLVM_RUNTIME_LINKER_FLAGS ?= -stdlib=libc++ -rtlib=compiler-rt --ld-path=$(CARTS_LINKER_PATH)
+LLVM_RUNTIME_CMAKE_FLAGS = \
+	-DCMAKE_CXX_FLAGS="$(LLVM_RUNTIME_CXX_FLAGS)" \
+	-DCMAKE_EXE_LINKER_FLAGS="$(LLVM_RUNTIME_LINKER_FLAGS)" \
+	-DCMAKE_SHARED_LINKER_FLAGS="$(LLVM_RUNTIME_LINKER_FLAGS)" \
+	-DCMAKE_MODULE_LINKER_FLAGS="$(LLVM_RUNTIME_LINKER_FLAGS)"
+
 # Build Directories
-CARTS_BUILD_DIR=build
-ARTS_BUILD_DIR =$(ARTS_DIR)/build
-POLYGEIST_BUILD_DIR =$(POLYGEIST_DIR)/build
-LLVM_BUILD_DIR =$(LLVM_DIR)/build
+CARTS_BUILD_DIR = build
+ARTS_BUILD_DIR = $(ARTS_DIR)/build
+POLYGEIST_BUILD_DIR = $(POLYGEIST_DIR)/build
+LLVM_BUILD_DIR = $(LLVM_DIR)/build
 
 # Targets
 all: install
@@ -61,8 +73,8 @@ polygeist:
 		-DMLIR_DIR=$(LLVM_BUILD_DIR)/lib/cmake/mlir \
 		-DClang_DIR=$(LLVM_BUILD_DIR)/lib/cmake/clang \
 		-DLLVM_EXTERNAL_LIT="$(LLVM_BUILD_DIR)/bin/llvm-lit" \
-		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-		-DPOLYGEIST_USE_LINKER="$(CARTS_LINKER_PATH)";
+		$(LLVM_RUNTIME_CMAKE_FLAGS) \
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON;
 	ninja -C $(POLYGEIST_BUILD_DIR) install;
 polygeist-clean:
 	rm -f -r $(POLYGEIST_BUILD_DIR)
@@ -175,8 +187,8 @@ arts:
 			-DARTS_DEBUG_ENABLED=$(ARTS_DEBUG_ENABLED) \
 			-DCOUNTER_CONFIG_PATH=$(COUNTER_CONFIG_PATH) \
 			-DCMAKE_INSTALL_PREFIX=$(ARTS_INSTALL_DIR) \
-			-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-			-DARTS_USE_LINKER="$(CARTS_LINKER_PATH)"; \
+			$(LLVM_RUNTIME_CMAKE_FLAGS) \
+			-DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
 		echo "$$CURRENT_HASH" > "$(ARTS_CONFIG_HASH_FILE)"; \
 	fi; \
 	make -C $(ARTS_BUILD_DIR) install -j;
@@ -208,8 +220,8 @@ build:
 		-DClang_DIR=$(LLVM_BUILD_DIR)/lib/cmake/clang \
 		-DPOLYGEIST_BUILD_DIR=$(POLYGEIST_BUILD_DIR) \
 		-DPOLYGEIST_DIR=$(POLYGEIST_DIR) \
-		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-		-DCARTS_USE_LINKER="$(CARTS_LINKER_PATH)"
+		$(LLVM_RUNTIME_CMAKE_FLAGS) \
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 	ninja $(NINJA_FLAGS) -C $(CARTS_BUILD_DIR) install
 
 # Build only carts-compile
@@ -239,4 +251,4 @@ clean:
 check-doc-flags:
 	python3 tools/scripts/check_doc_flags.py
 
-.PHONY: all build install postinstall uninstall fulluninstall clean test llvm-runtimes arts-download polygeist-download llvm llvm-lit lit-bootstrap check-doc-flags
+.PHONY: all build install uninstall fulluninstall clean arts-download polygeist-download llvm llvm-lit lit-bootstrap check-doc-flags

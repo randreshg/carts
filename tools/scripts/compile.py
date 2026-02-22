@@ -54,6 +54,7 @@ def cgeist(
 
     # Build command
     cmd = [str(cgeist_bin)]
+    cmd.extend(config.runtime_flags)
     cmd.extend(config.include_flags)
     cmd.extend(config.cgeist_sysroot_flags)
     cmd.append("--raise-scf-to-affine")
@@ -99,6 +100,7 @@ def clang(
 
     # Build command
     cmd = [str(clang_bin)]
+    cmd.extend(config.runtime_flags)
     cmd.extend(config.include_flags)
     cmd.extend(config.clang_sysroot_flags)
     cmd.extend(config.clang_library_flags)
@@ -401,6 +403,7 @@ def _build_cgeist_cmd(
 ) -> List[str]:
     """Build cgeist (C-to-MLIR) command with standard flags."""
     cmd = [str(config.polygeist_install_dir / "bin" / "cgeist")]
+    cmd.extend(config.runtime_flags)
     cmd.extend(config.include_flags)
     cmd.extend(config.cgeist_sysroot_flags)
     cmd.extend(["--raise-scf-to-affine", std_flag, "-O0", "-S",
@@ -423,7 +426,7 @@ def _build_link_cmd(
 ) -> List[str]:
     """Build clang link command for linking with ARTS runtime."""
     cmd = [str(config.llvm_install_dir / "bin" / "clang")]
-    cmd.extend(config.compile_flags)
+    cmd.extend(config.compile_flags)  # includes runtime_flags
     cmd.extend(config.clang_sysroot_flags)
     cmd.extend(config.compile_library_flags)
     cmd.extend(config.linker_flags)
