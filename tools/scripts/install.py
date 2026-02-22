@@ -108,7 +108,7 @@ def _setup_project() -> bool:
     return True
 
 
-def _build_project(gcc_toolchain: Optional[str] = None) -> bool:
+def _build_project(cc: Optional[str] = None, cxx: Optional[str] = None) -> bool:
     """Build and install the CARTS project using the correct build order."""
     config = get_config()
     project_root = config.carts_dir
@@ -126,13 +126,17 @@ def _build_project(gcc_toolchain: Optional[str] = None) -> bool:
 
     _add_to_path()
 
-    gcc_args = ["--gcc-toolchain", gcc_toolchain] if gcc_toolchain else []
+    cc_args = []
+    if cc:
+        cc_args += ["--cc", cc]
+    if cxx:
+        cc_args += ["--cxx", cxx]
 
     build_steps = [
-        (1, "Building LLVM...", ["carts", "build", "--llvm"] + gcc_args),
-        (2, "Building Polygeist...", ["carts", "build", "--polygeist"] + gcc_args),
-        (3, "Building ARTS runtime...", ["carts", "build", "--arts"] + gcc_args),
-        (4, "Building CARTS...", ["carts", "build"] + gcc_args),
+        (1, "Building LLVM...", ["carts", "build", "--llvm"] + cc_args),
+        (2, "Building Polygeist...", ["carts", "build", "--polygeist"]),
+        (3, "Building ARTS runtime...", ["carts", "build", "--arts"]),
+        (4, "Building CARTS...", ["carts", "build"]),
     ]
 
     for step_num, description, cmd in build_steps:
@@ -161,9 +165,12 @@ def install(
         False, "--skip-build", help="Skip building (only check/install deps and init submodules)"),
     auto: bool = typer.Option(
         False, "--auto", "-y", help="Auto-install missing deps without prompting"),
-    gcc_toolchain: str = typer.Option(
-        None, "--gcc-toolchain",
-        help="Path to GCC toolchain (e.g. /opt/shared/gcc/12.2.0) for systems where system clang picks up an old libstdc++"),
+    cc: Optional[str] = typer.Option(
+        None, "--cc",
+        help="C compiler for LLVM bootstrap (default: clang)"),
+    cxx: Optional[str] = typer.Option(
+        None, "--cxx",
+        help="C++ compiler for LLVM bootstrap (default: clang++)"),
 ):
     """Install CARTS: check dependencies, init submodules, and build everything."""
     print_header("CARTS Install")
@@ -197,7 +204,7 @@ def install(
 
     # 3. Build everything
     if not skip_build:
-        if not _build_project(gcc_toolchain=gcc_toolchain):
+        if not _build_project(cc=cc, cxx=cxx):
             print_error("Failed to build project")
             raise typer.Exit(1)
 
