@@ -24,6 +24,8 @@ LIT_SOURCE_DIR := $(LLVM_DIR)/llvm/utils/lit
 LIT_INSTALL_DIR := $(LLVM_INSTALL_DIR)/utils/lit
 
 CARTS_LINKER_PATH ?= ${LLVM_INSTALL_DIR}/bin/ld.lld
+GCC_TOOLCHAIN ?=
+comma := ,
 
 # Build Directories
 CARTS_BUILD_DIR=build
@@ -86,7 +88,12 @@ llvm:
 		-DLLVM_INSTALL_UTILS=ON \
 		-DLLVM_INCLUDE_BENCHMARKS=OFF \
 		-DLLVM_INCLUDE_UTILS=ON \
-		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+		$(if $(GCC_TOOLCHAIN), \
+			-DCMAKE_CXX_FLAGS="--gcc-toolchain=$(GCC_TOOLCHAIN)" \
+			-DCMAKE_C_FLAGS="--gcc-toolchain=$(GCC_TOOLCHAIN)" \
+			-DCMAKE_EXE_LINKER_FLAGS="-Wl$(comma)-rpath$(comma)$(GCC_TOOLCHAIN)/lib64" \
+			-DCMAKE_SHARED_LINKER_FLAGS="-Wl$(comma)-rpath$(comma)$(GCC_TOOLCHAIN)/lib64"); \
 	ninja -C $(LLVM_BUILD_DIR) llvm-lit; \
 	ninja -C $(LLVM_BUILD_DIR) install; \
 	if [ -f "$(LLVM_BUILD_DIR)/bin/llvm-lit" ]; then \
