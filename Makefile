@@ -25,7 +25,18 @@ LIT_INSTALL_DIR := $(LLVM_INSTALL_DIR)/utils/lit
 
 CARTS_LINKER_PATH ?= ${LLVM_INSTALL_DIR}/bin/ld.lld
 GCC_TOOLCHAIN ?=
-comma := ,
+
+# When GCC_TOOLCHAIN is set, export env vars so ALL cmake invocations
+# (including LLVM's internal NATIVE sub-build) pick up the correct toolchain.
+ifdef GCC_TOOLCHAIN
+GCC_TOOLCHAIN_ENV = export CFLAGS="--gcc-toolchain=$(GCC_TOOLCHAIN)" CXXFLAGS="--gcc-toolchain=$(GCC_TOOLCHAIN)" LD_LIBRARY_PATH="$(GCC_TOOLCHAIN)/lib64:$$LD_LIBRARY_PATH";
+GCC_TOOLCHAIN_CMAKE_FLAGS = \
+	-DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath,$(GCC_TOOLCHAIN)/lib64" \
+	-DCMAKE_SHARED_LINKER_FLAGS="-Wl,-rpath,$(GCC_TOOLCHAIN)/lib64"
+else
+GCC_TOOLCHAIN_ENV =
+GCC_TOOLCHAIN_CMAKE_FLAGS =
+endif
 
 # Build Directories
 CARTS_BUILD_DIR=build
@@ -66,6 +77,7 @@ polygeist-clean:
 
 # LLVM
 llvm:
+	$(GCC_TOOLCHAIN_ENV) \
 	echo "Building LLVM..."; \
 	mkdir -p $(LLVM_BUILD_DIR); \
 	mkdir -p $(LLVM_INSTALL_DIR); \
@@ -89,11 +101,7 @@ llvm:
 		-DLLVM_INCLUDE_BENCHMARKS=OFF \
 		-DLLVM_INCLUDE_UTILS=ON \
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-		$(if $(GCC_TOOLCHAIN), \
-			-DCMAKE_CXX_FLAGS="--gcc-toolchain=$(GCC_TOOLCHAIN)" \
-			-DCMAKE_C_FLAGS="--gcc-toolchain=$(GCC_TOOLCHAIN)" \
-			-DCMAKE_EXE_LINKER_FLAGS="-Wl$(comma)-rpath$(comma)$(GCC_TOOLCHAIN)/lib64" \
-			-DCMAKE_SHARED_LINKER_FLAGS="-Wl$(comma)-rpath$(comma)$(GCC_TOOLCHAIN)/lib64"); \
+		$(GCC_TOOLCHAIN_CMAKE_FLAGS); \
 	ninja -C $(LLVM_BUILD_DIR) llvm-lit; \
 	ninja -C $(LLVM_BUILD_DIR) install; \
 	if [ -f "$(LLVM_BUILD_DIR)/bin/llvm-lit" ]; then \
