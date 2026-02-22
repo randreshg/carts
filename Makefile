@@ -27,6 +27,10 @@ CARTS_LINKER_PATH ?= ${LLVM_INSTALL_DIR}/bin/ld.lld
 LLVM_C_COMPILER ?= clang
 LLVM_CXX_COMPILER ?= clang++
 
+# When using GCC to bootstrap LLVM, tell cmake where GCC is installed
+# so the just-built clang finds the right libstdc++ headers for runtimes.
+LLVM_GCC_INSTALL_PREFIX ?= $(if $(filter-out clang,$(LLVM_C_COMPILER)),$(shell dirname $(shell dirname $(shell which $(LLVM_C_COMPILER)))))
+
 # Build Directories
 CARTS_BUILD_DIR=build
 ARTS_BUILD_DIR =$(ARTS_DIR)/build
@@ -88,7 +92,8 @@ llvm:
 		-DLLVM_INSTALL_UTILS=ON \
 		-DLLVM_INCLUDE_BENCHMARKS=OFF \
 		-DLLVM_INCLUDE_UTILS=ON \
-		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+		$(if $(LLVM_GCC_INSTALL_PREFIX),-DGCC_INSTALL_PREFIX=$(LLVM_GCC_INSTALL_PREFIX)); \
 	ninja -C $(LLVM_BUILD_DIR) llvm-lit; \
 	ninja -C $(LLVM_BUILD_DIR) install; \
 	if [ -f "$(LLVM_BUILD_DIR)/bin/llvm-lit" ]; then \
