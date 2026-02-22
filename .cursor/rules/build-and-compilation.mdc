@@ -43,7 +43,7 @@ carts compile <file> [opts]    # Complete pipeline: C++/MLIR/LLVM IR → executa
 carts mlir-translate <file>    # Convert MLIR to LLVM IR
 carts benchmark [opts]         # Run benchmarks
 carts report [opts]            # Generate reports
-carts setup [opts]             # Setup environment
+carts install [opts]           # Install: deps, submodules, build all
 carts clean                    # Clean generated files
 carts -h                       # Show help guide
 ```

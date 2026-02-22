@@ -46,7 +46,7 @@ from scripts.test import test as test_cmd, check as check_cmd
 from scripts.format import format_sources as format_cmd
 from scripts.clean import run_local_clean
 from scripts.examples import examples_app
-from scripts.setup import setup as setup_cmd
+from scripts.install import install as install_cmd
 
 
 # ============================================================================
@@ -102,8 +102,8 @@ app.command(name="check")(check_cmd)
 # Formatting
 app.command(name="format")(format_cmd)
 
-# Setup
-app.command(name="setup")(setup_cmd)
+# Install (deps → submodules → build)
+app.command(name="install")(install_cmd)
 
 # Docker subcommands
 docker_app.callback(invoke_without_command=True)(docker_callback)
