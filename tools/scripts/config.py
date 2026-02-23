@@ -191,7 +191,7 @@ class PlatformConfig:
         self.clang_library_flags.extend(["-L/usr/lib64", "-L/usr/lib"])
         self.compile_library_flags.extend(["-L/usr/lib64", "-L/usr/lib"])
         self.clang_libraries.extend(["-lpthread", "-lrt"])
-        self.compile_libraries.extend(["-lpthread", "-lrt"])
+        self.compile_libraries.extend(["-lpthread", "-lrt", "-lstdc++", "-ldl"])
         self.compile_flags.extend(["-fno-pie", "-no-pie"])
         self.runtime_flags.extend([
             "-stdlib=libc++", "-rtlib=compiler-rt", "--unwindlib=libunwind",
