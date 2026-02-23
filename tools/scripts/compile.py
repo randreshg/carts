@@ -54,7 +54,6 @@ def cgeist(
 
     # Build command
     cmd = [str(cgeist_bin)]
-    cmd.extend(config.runtime_flags)
     cmd.extend(config.include_flags)
     cmd.extend(config.cgeist_sysroot_flags)
     cmd.append("--raise-scf-to-affine")
@@ -403,7 +402,6 @@ def _build_cgeist_cmd(
 ) -> List[str]:
     """Build cgeist (C-to-MLIR) command with standard flags."""
     cmd = [str(config.polygeist_install_dir / "bin" / "cgeist")]
-    cmd.extend(config.runtime_flags)
     cmd.extend(config.include_flags)
     cmd.extend(config.cgeist_sysroot_flags)
     cmd.extend(["--raise-scf-to-affine", std_flag, "-O0", "-S",
