@@ -44,7 +44,8 @@ from scripts.docker import (
 )
 from scripts.test import test as test_cmd, check as check_cmd
 from scripts.format import format_sources as format_cmd
-from scripts.clean import run_local_clean
+from scripts.clean import run_local_clean, run_full_clean
+from scripts.update import update as update_cmd
 from scripts.examples import examples_app
 from scripts.install import install as install_cmd
 
@@ -104,6 +105,9 @@ app.command(name="format")(format_cmd)
 
 # Install (deps → submodules → build)
 app.command(name="install")(install_cmd)
+
+# Update submodules
+app.command(name="update")(update_cmd)
 
 # Docker subcommands
 docker_app.callback(invoke_without_command=True)(docker_callback)
@@ -254,11 +258,15 @@ def analyze(
 
 @app.command()
 def clean(
+    all_builds: bool = typer.Option(
+        False, "--all", "-a", help="Clean all build directories (LLVM, Polygeist, ARTS, CARTS)"),
     docker_clean: bool = typer.Option(
         False, "--docker", "-d", help="Clean Docker artifacts"),
 ):
     """Clean generated files in current directory."""
-    if docker_clean:
+    if all_builds:
+        run_full_clean()
+    elif docker_clean:
         _run_docker_clean()
     else:
         run_local_clean()
@@ -272,7 +280,7 @@ def main():
     """Main entry point."""
     # Set LLVM_SYMBOLIZER_PATH for better stack traces
     config = get_config()
-    symbolizer = config.llvm_install_dir / "bin" / "llvm-symbolizer"
+    symbolizer = config.get_llvm_tool("llvm-symbolizer")
     if symbolizer.is_file():
         os.environ["LLVM_SYMBOLIZER_PATH"] = str(symbolizer)
 

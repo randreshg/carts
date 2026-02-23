@@ -2,7 +2,6 @@
 
 from pathlib import Path
 from typing import Iterable, List, Optional
-import shutil
 import subprocess
 
 import typer
@@ -70,13 +69,8 @@ def _collect_format_files_from_paths(paths: Iterable[Path]) -> List[Path]:
 
 def _resolve_clang_format(config: PlatformConfig) -> Optional[Path]:
     """Find clang-format in install tree first, then in PATH."""
-    install_tool = config.llvm_install_dir / "bin" / "clang-format"
-    if install_tool.is_file():
-        return install_tool
-    path_tool = shutil.which("clang-format")
-    if path_tool:
-        return Path(path_tool)
-    return None
+    tool = config.get_llvm_tool("clang-format", fallback_to_system=True)
+    return tool if tool.is_file() else None
 
 
 def format_sources(

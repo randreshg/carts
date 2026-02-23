@@ -16,9 +16,9 @@ from scripts.run import run_subprocess
 def _resolve_lit_tool_paths(config: PlatformConfig) -> Tuple[Path, Path, Path]:
     """Resolve required test tools from the install tree."""
     return (
-        config.llvm_install_dir / "bin" / "llvm-lit",
-        config.llvm_install_dir / "bin" / "FileCheck",
-        config.carts_install_dir / "bin" / "carts-compile",
+        config.get_llvm_tool("llvm-lit"),
+        config.get_llvm_tool("FileCheck"),
+        config.get_carts_tool("carts-compile"),
     )
 
 

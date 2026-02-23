@@ -4,8 +4,9 @@ from pathlib import Path
 import os
 import shutil
 
-from carts_styles import print_debug, print_info, print_success
-from scripts.config import is_verbose
+from carts_styles import print_debug, print_info, print_success, print_error
+from scripts.config import get_config, is_verbose
+from scripts.run import run_subprocess
 
 
 # Files to clean
@@ -59,3 +60,23 @@ def run_local_clean() -> None:
         print_info("No generated files found to clean")
     else:
         print_success(f"Cleaned {removed_count} files/directories")
+
+
+def run_full_clean() -> None:
+    """Clean all build directories (LLVM, Polygeist, ARTS, CARTS)."""
+    config = get_config()
+    carts_dir = config.carts_dir
+
+    targets = ["llvm-clean", "polygeist-clean", "arts-clean", "clean"]
+
+    for target in targets:
+        print_info(f"Running make {target}...")
+        result = run_subprocess(
+            ["make", target],
+            cwd=carts_dir,
+            check=False,
+        )
+        if result.returncode != 0:
+            print_error(f"make {target} failed (exit {result.returncode})")
+
+    print_success("All build directories cleaned")

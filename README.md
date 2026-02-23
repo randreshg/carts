@@ -52,10 +52,22 @@ carts check                  # Alias for carts test
 carts format                 # Format tracked C/C++/TableGen sources
 carts format --check         # Verify formatting only
 
+# Update submodules
+carts update                 # Update all submodules
+carts update --arts          # Update only ARTS
+carts update --init          # Init + update all submodules
+
+# Clean
+carts clean                  # Clean local generated files
+carts clean --all            # Clean all build directories (LLVM, Polygeist, ARTS, CARTS)
+
+# Examples
+carts examples list          # List available examples
+carts examples run --all     # Run all examples
+
 # Benchmarking
-cd external/carts-benchmarks/kastors/<benchmark>
-../../../tools/run/dump-carts-stages.sh \
-  file.c --outdir ./stages --arts-config ./arts.cfg
+carts benchmarks list                          # List benchmarks
+carts benchmarks run polybench/2mm --size small  # Run a benchmark
 ```
 
 ---

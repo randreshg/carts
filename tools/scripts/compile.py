@@ -47,7 +47,7 @@ def cgeist(
         print_error(f"Input file '{input_file}' not found")
         raise typer.Exit(1)
 
-    cgeist_bin = config.polygeist_install_dir / "bin" / "cgeist"
+    cgeist_bin = config.get_polygeist_tool("cgeist")
     if not cgeist_bin.is_file():
         print_error(f"cgeist not found at {cgeist_bin}")
         raise typer.Exit(1)
@@ -92,7 +92,7 @@ def clang(
         print_error(f"Input file '{input_file}' not found")
         raise typer.Exit(1)
 
-    clang_bin = config.llvm_install_dir / "bin" / "clang"
+    clang_bin = config.get_llvm_tool("clang")
     if not clang_bin.is_file():
         print_error(f"LLVM clang not found at {clang_bin}")
         raise typer.Exit(1)
@@ -129,7 +129,7 @@ def mlir_translate(
     """Run mlir-translate."""
     config = get_config()
 
-    mlir_translate_bin = config.llvm_install_dir / "bin" / "mlir-translate"
+    mlir_translate_bin = config.get_llvm_tool("mlir-translate")
     cmd = [str(mlir_translate_bin)] + args
 
     result = run_subprocess(cmd, check=False)
@@ -324,7 +324,7 @@ def _compile_from_mlir(
 ) -> None:
     """MLIR transformation pipeline."""
     config = get_config()
-    carts_compile_bin = config.carts_install_dir / "bin" / "carts-compile"
+    carts_compile_bin = config.get_carts_tool("carts-compile")
 
     # Pass --help through to carts-compile binary
     if ctx.args and ("--help" in ctx.args or "-h" in ctx.args):
@@ -401,7 +401,7 @@ def _build_cgeist_cmd(
     with_debug_info: bool = False,
 ) -> List[str]:
     """Build cgeist (C-to-MLIR) command with standard flags."""
-    cmd = [str(config.polygeist_install_dir / "bin" / "cgeist")]
+    cmd = [str(config.get_polygeist_tool("cgeist"))]
     cmd.extend(config.include_flags)
     cmd.extend(config.cgeist_sysroot_flags)
     cmd.extend(["--raise-scf-to-affine", std_flag, "-O0", "-S",
@@ -423,7 +423,7 @@ def _build_link_cmd(
     extra_args: List[str],
 ) -> List[str]:
     """Build clang link command for linking with ARTS runtime."""
-    cmd = [str(config.llvm_install_dir / "bin" / "clang")]
+    cmd = [str(config.get_llvm_tool("clang"))]
     cmd.extend(config.compile_flags)  # includes runtime_flags
     cmd.extend(config.clang_sysroot_flags)
     cmd.extend(config.compile_library_flags)
@@ -471,7 +471,7 @@ def _compile_c_simple(
     console.print(f"Mode:   [{Colors.DIM}]Simple ({total_steps}-step)[/{Colors.DIM}]")
     console.print()
 
-    carts_compile_bin = config.carts_install_dir / "bin" / "carts-compile"
+    carts_compile_bin = config.get_carts_tool("carts-compile")
     mlir_file = Path(f"{base_name}.mlir")
     ll_file = Path(f"{base_name}-arts.ll")
 
@@ -585,7 +585,7 @@ def _compile_c_dual(
         f"Mode:   [{Colors.WARNING}]Dual compilation (metadata extraction)[/{Colors.WARNING}]")
     console.print()
 
-    carts_compile_bin = config.carts_install_dir / "bin" / "carts-compile"
+    carts_compile_bin = config.get_carts_tool("carts-compile")
 
     metadata_args: List[str] = []
     i = 0
@@ -712,7 +712,7 @@ def _compile_all_stages(
         print_error(f"Input file '{source_file}' not found")
         raise typer.Exit(1)
 
-    carts_compile_bin = config.carts_install_dir / "bin" / "carts-compile"
+    carts_compile_bin = config.get_carts_tool("carts-compile")
 
     # Determine output directory
     out_dir = output_dir if output_dir else source_file.parent

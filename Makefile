@@ -28,9 +28,8 @@ CARTS_LINKER_PATH ?= $(if $(filter Darwin,$(shell uname)),${LLVM_INSTALL_DIR}/bi
 LLVM_C_COMPILER ?= clang
 LLVM_CXX_COMPILER ?= clang++
 
-# Auto-detect GCC install prefix so the just-built clang finds the right
-# libstdc++ headers for runtimes.
-LLVM_GCC_INSTALL_PREFIX ?= $(if $(filter Linux,$(shell uname)),$(shell gcc -print-search-dirs 2>/dev/null | grep '^install:' | sed 's|^install: ||;s|/lib/gcc/.*||'))
+# GCC install prefix for --gcc-toolchain (passed from build.py via LLVM_GCC_INSTALL_PREFIX=)
+LLVM_GCC_INSTALL_PREFIX ?=
 
 # Use our installed linker for all downstream cmake builds.
 # NOTE: We do NOT force -stdlib=libc++ or -rtlib=compiler-rt here because
@@ -42,7 +41,11 @@ LLVM_GCC_INSTALL_PREFIX ?= $(if $(filter Linux,$(shell uname)),$(shell gcc -prin
 LLVM_RUNTIME_CMAKE_FLAGS = \
 	-DCMAKE_EXE_LINKER_FLAGS="--ld-path=$(CARTS_LINKER_PATH)" \
 	-DCMAKE_SHARED_LINKER_FLAGS="--ld-path=$(CARTS_LINKER_PATH)" \
-	-DCMAKE_MODULE_LINKER_FLAGS="--ld-path=$(CARTS_LINKER_PATH)"
+	-DCMAKE_MODULE_LINKER_FLAGS="--ld-path=$(CARTS_LINKER_PATH)" \
+	$(if $(LLVM_GCC_INSTALL_PREFIX),\
+	-DCMAKE_CXX_FLAGS="--gcc-toolchain=$(LLVM_GCC_INSTALL_PREFIX)" \
+	-DCMAKE_C_FLAGS="--gcc-toolchain=$(LLVM_GCC_INSTALL_PREFIX)" \
+	)
 
 # Build Directories
 CARTS_BUILD_DIR = build
@@ -117,6 +120,11 @@ llvm:
 	if [ -f "$(LLVM_BUILD_DIR)/bin/llvm-lit" ]; then \
 		mkdir -p $(LLVM_INSTALL_DIR)/bin; \
 		cp $(LLVM_BUILD_DIR)/bin/llvm-lit $(LLVM_INSTALL_DIR)/bin/; \
+		echo "Installing lit runtime into $(LIT_INSTALL_DIR)..."; \
+		rm -rf "$(LIT_INSTALL_DIR)"; \
+		mkdir -p "$(LLVM_INSTALL_DIR)/utils"; \
+		cp -a "$(LIT_SOURCE_DIR)" "$(LIT_INSTALL_DIR)"; \
+		find "$(LIT_INSTALL_DIR)" -type d -name "__pycache__" -prune -exec rm -rf {} + >/dev/null 2>&1 || true; \
 	fi
 
 lit-bootstrap:
@@ -135,7 +143,7 @@ lit-bootstrap:
 	@cp -a "$(LIT_SOURCE_DIR)" "$(LIT_INSTALL_DIR)"
 	@find "$(LIT_INSTALL_DIR)" -type d -name "__pycache__" -prune -exec rm -rf {} + >/dev/null 2>&1 || true
 
-llvm-lit: llvm lit-bootstrap
+llvm-lit: llvm
 llvm-clean:
 	rm -rf $(LLVM_BUILD_DIR)
 	rm -f -r $(LLVM_INSTALL_DIR)
@@ -213,7 +221,6 @@ build:
 		echo "Error: Polygeist is not built. Please run 'make polygeist' or 'carts build --polygeist' first."; \
 		exit 1; \
 	fi
-	$(MAKE) lit-bootstrap
 	mkdir -p $(CARTS_BUILD_DIR)
 	mkdir -p $(CARTS_INSTALL_DIR)
 	cmake -B $(CARTS_BUILD_DIR) \

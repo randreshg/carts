@@ -65,7 +65,7 @@ class DepCheckResult:
 
 def get_required_deps() -> List[Dependency]:
     """Return the list of all required dependencies."""
-    return [
+    deps = [
         Dependency(
             name="cmake",
             check_cmd="cmake",
@@ -124,6 +124,17 @@ def get_required_deps() -> List[Dependency]:
             pacman_package="python",
         ),
     ]
+
+    if _detect_platform() == Platform.LINUX:
+        deps.append(Dependency(
+            name="gcc",
+            check_cmd="gcc",
+            apt_package="gcc",
+            dnf_package="gcc",
+            pacman_package="gcc",
+        ))
+
+    return deps
 
 
 # ============================================================================
@@ -186,9 +197,48 @@ def check_dependency(dep: Dependency) -> DepCheckResult:
     )
 
 
+def check_gcc_toolchain() -> Optional[DepCheckResult]:
+    """On Linux, verify gcc can find libstdc++.so (needed for linking CARTS static libs)."""
+    if _detect_platform() != Platform.LINUX:
+        return None
+
+    gcc = shutil.which("gcc")
+    if not gcc:
+        return None  # Already caught by the gcc dependency check
+
+    try:
+        result = subprocess.run(
+            [gcc, "-print-file-name=libstdc++.so"],
+            capture_output=True, text=True, timeout=5,
+        )
+        libstdcxx_path = result.stdout.strip() if result.returncode == 0 else None
+
+        if libstdcxx_path and "/" in libstdcxx_path:
+            dep = Dependency(name="libstdc++", check_cmd="gcc")
+            return DepCheckResult(
+                dep=dep, status=DepStatus.OK,
+                found_version=None, found_path=libstdcxx_path,
+            )
+        else:
+            dep = Dependency(
+                name="libstdc++", check_cmd="gcc",
+                apt_package="libstdc++-dev", dnf_package="libstdc++-devel",
+                pacman_package="gcc",
+            )
+            return DepCheckResult(dep=dep, status=DepStatus.MISSING)
+    except (subprocess.SubprocessError, OSError):
+        return None
+
+
 def check_all_deps() -> List[DepCheckResult]:
     """Check all required dependencies."""
-    return [check_dependency(dep) for dep in get_required_deps()]
+    results = [check_dependency(dep) for dep in get_required_deps()]
+
+    gcc_toolchain = check_gcc_toolchain()
+    if gcc_toolchain:
+        results.append(gcc_toolchain)
+
+    return results
 
 
 # ============================================================================

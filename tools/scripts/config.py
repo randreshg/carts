@@ -79,6 +79,9 @@ class PlatformConfig:
         default_factory=list)         # Linker-specific flags
     linker_path: Optional[Path] = None  # Path to LLD linker
     linker_type: Optional[str] = None   # "lld" or "lld-link"
+    gcc_path: Optional[Path] = None             # Path to gcc binary
+    gcc_install_prefix: Optional[Path] = None   # GCC toolchain root (--gcc-toolchain)
+    gcc_lib_path: Optional[Path] = None         # Directory containing libstdc++.so
 
     @classmethod
     def detect(cls, script_dir: Optional[Path] = None) -> "PlatformConfig":
@@ -127,10 +130,39 @@ class PlatformConfig:
         else:
             raise RuntimeError(f"Unsupported platform: {system}")
 
+    def _resolve_tool(self, install_dir: Path, name: str, *,
+                      fallback_to_system: bool = False) -> Path:
+        """Resolve a tool binary path. Returns expected path even if missing."""
+        installed = install_dir / "bin" / name
+        if installed.is_file() or not fallback_to_system:
+            return installed
+        import shutil
+        system_path = shutil.which(name)
+        return Path(system_path) if system_path else installed
+
+    def get_llvm_tool(self, name: str, *, fallback_to_system: bool = False) -> Path:
+        """Resolve LLVM tool (clang, llvm-lit, FileCheck, etc.)."""
+        return self._resolve_tool(self.llvm_install_dir, name,
+                                  fallback_to_system=fallback_to_system)
+
+    def get_polygeist_tool(self, name: str) -> Path:
+        """Resolve Polygeist tool (cgeist)."""
+        return self._resolve_tool(self.polygeist_install_dir, name)
+
+    def get_carts_tool(self, name: str) -> Path:
+        """Resolve CARTS tool (carts-compile)."""
+        return self._resolve_tool(self.carts_install_dir, name)
+
+    @property
+    def clang_version_dir(self) -> Path:
+        """Auto-detected clang version dir (e.g., .install/llvm/lib/clang/18)."""
+        clang_lib = self.llvm_install_dir / "lib" / "clang"
+        versions = sorted(clang_lib.iterdir()) if clang_lib.is_dir() else []
+        return versions[-1] if versions else clang_lib / "18"
+
     def _setup_paths(self) -> None:
         """Setup include and library paths."""
-        self.llvm_include_path = self.llvm_install_dir / \
-            "lib" / "clang" / "18" / "include"
+        self.llvm_include_path = self.clang_version_dir / "include"
         self.llvm_cxx_include_path = self.llvm_install_dir / \
             "include" / "c++" / "v1"
 
@@ -184,18 +216,59 @@ class PlatformConfig:
         System C headers (/usr/include) are still used from glibc.
         """
         self.system_include_path = Path("/usr/include")
+        self._detect_gcc()
 
         self.include_flags.append(f"-I{self.system_include_path}")
         self.compile_flags.append(f"-I{self.llvm_cxx_include_path}")
 
-        self.clang_library_flags.extend(["-L/usr/lib64", "-L/usr/lib"])
-        self.compile_library_flags.extend(["-L/usr/lib64", "-L/usr/lib"])
+        lib_flags = ["-L/usr/lib64", "-L/usr/lib"]
+        if self.gcc_lib_path:
+            lib_flags.append(f"-L{self.gcc_lib_path}")
+
+        self.clang_library_flags.extend(lib_flags)
+        self.compile_library_flags.extend(lib_flags)
         self.clang_libraries.extend(["-lpthread", "-lrt"])
         self.compile_libraries.extend(["-lpthread", "-lrt", "-lstdc++", "-ldl"])
         self.compile_flags.extend(["-fno-pie", "-no-pie"])
         self.runtime_flags.extend([
             "-stdlib=libc++", "-rtlib=compiler-rt", "--unwindlib=libunwind",
         ])
+
+    def _detect_gcc(self) -> None:
+        """Detect GCC binary, install prefix, and library path."""
+        import shutil
+        import subprocess
+
+        gcc = shutil.which("gcc")
+        if not gcc:
+            return
+        self.gcc_path = Path(gcc)
+
+        try:
+            # Install prefix: e.g. /usr or /opt/gcc/12.2.0
+            result = subprocess.run(
+                [gcc, "-print-search-dirs"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    if line.startswith("install:"):
+                        install_dir = line.split(":", 1)[1].strip().rstrip("/")
+                        idx = install_dir.find("/lib/gcc/")
+                        if idx > 0:
+                            self.gcc_install_prefix = Path(install_dir[:idx])
+                        break
+
+            # Library path: directory containing libstdc++.so
+            result = subprocess.run(
+                [gcc, "-print-file-name=libstdc++.so"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and "/" in result.stdout.strip():
+                self.gcc_lib_path = Path(result.stdout.strip()).parent
+
+        except subprocess.TimeoutExpired:
+            pass
 
     def _setup_windows_flags(self) -> None:
         """Setup Windows-specific flags."""
@@ -271,18 +344,18 @@ class PlatformConfig:
 
         if self.platform == Platform.MACOS:
             linker_candidates = [
-                self.llvm_install_dir / "bin" / "ld64.lld",
-                self.llvm_install_dir / "bin" / "lld",
+                self.get_llvm_tool("ld64.lld"),
+                self.get_llvm_tool("lld"),
             ]
         elif self.platform == Platform.LINUX:
             linker_candidates = [
-                self.llvm_install_dir / "bin" / "ld.lld",
-                self.llvm_install_dir / "bin" / "lld",
+                self.get_llvm_tool("ld.lld"),
+                self.get_llvm_tool("lld"),
             ]
         elif self.platform == Platform.WINDOWS:
             linker_candidates = [
-                self.llvm_install_dir / "bin" / "lld-link.exe",
-                self.llvm_install_dir / "bin" / "lld-link",
+                self.get_llvm_tool("lld-link.exe"),
+                self.get_llvm_tool("lld-link"),
             ]
 
         for candidate in linker_candidates:
