@@ -185,11 +185,8 @@ class PlatformConfig:
         """
         self.system_include_path = Path("/usr/include")
 
-        # Use LLVM's libc++ headers instead of system libstdc++
-        self.include_flags.extend([
-            f"-I{self.system_include_path}",
-            f"-I{self.llvm_cxx_include_path}",
-        ])
+        self.include_flags.append(f"-I{self.system_include_path}")
+        self.compile_flags.append(f"-I{self.llvm_cxx_include_path}")
 
         self.clang_library_flags.extend(["-L/usr/lib64", "-L/usr/lib"])
         self.compile_library_flags.extend(["-L/usr/lib64", "-L/usr/lib"])
