@@ -228,7 +228,9 @@ class PlatformConfig:
         self.clang_library_flags.extend(lib_flags)
         self.compile_library_flags.extend(lib_flags)
         self.clang_libraries.extend(["-lpthread", "-lrt"])
-        self.compile_libraries.extend(["-lpthread", "-lrt", "-lstdc++", "-ldl"])
+        self.compile_libraries.extend([
+            "-lpthread", "-lrt", "-ldl",
+        ])
         self.compile_flags.extend(["-fno-pie", "-no-pie"])
         self.runtime_flags.extend([
             "-stdlib=libc++", "-rtlib=compiler-rt", "--unwindlib=libunwind",
