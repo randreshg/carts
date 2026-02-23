@@ -100,11 +100,13 @@ def build(
             console.print(f"Counter profile: [{Colors.INFO}]{profile_name}[/{Colors.INFO}]")
         make_vars.append(f"COUNTER_CONFIG_PATH={effective_counter_config}")
 
-    # Pass platform-specific linker path to make
+    # Pass platform-specific paths to make
     if config.linker_path:
         make_vars.append(f'CARTS_LINKER_PATH={config.linker_path}')
+    if config.gcc_install_prefix:
+        make_vars.append(f'LLVM_GCC_INSTALL_PREFIX={config.gcc_install_prefix}')
 
-    # Pass bootstrap compiler overrides to make (for HPC clusters with old system libstdc++)
+    # Pass bootstrap compiler overrides to make
     if cc:
         make_vars.append(f'LLVM_C_COMPILER={cc}')
     if cxx:
