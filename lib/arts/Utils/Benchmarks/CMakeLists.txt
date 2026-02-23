@@ -2,8 +2,9 @@ add_library(CartsBenchmarks STATIC
   CartsBenchmarks.cpp
 )
 
-# Compile with -O0 to prevent empty parallel region optimization
-target_compile_options(CartsBenchmarks PRIVATE -O0)
+# -O0: prevent empty parallel region optimization
+# -stdlib=libc++: match the libc++ used at final link time
+target_compile_options(CartsBenchmarks PRIVATE -O0 -stdlib=libc++)
 
 # Enable OpenMP for thread pool warmup (required for single-node ARTS vs OMP comparisons)
 find_package(OpenMP REQUIRED)
