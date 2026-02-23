@@ -448,11 +448,11 @@ def _build_link_cmd(
     cmd.extend(config.clang_sysroot_flags)
     cmd.extend(config.compile_library_flags)
     cmd.extend(config.linker_flags)
-    cmd.extend(config.compile_libraries)
     cmd.append(str(input_file))
     cmd.extend(["-o", str(output_file)])
     if debug:
         cmd.append("-g")
+    cmd.extend(config.compile_libraries)
     cmd.extend(extra_args)
     return cmd
 
