@@ -1,5 +1,6 @@
 """Compile pipeline commands for CARTS CLI."""
 
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
@@ -30,6 +31,84 @@ PIPELINE_STAGES = [
     "pre-lowering",          # Prepare for LLVM lowering
     "arts-to-llvm",          # Final lowering to LLVM IR
 ]
+
+
+def _is_numeric(s: str) -> bool:
+    """Check if a string is a numeric value (including negative)."""
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+
+@dataclass
+class CompileArgs:
+    """Parsed passthrough arguments, classified by pipeline stage.
+
+    Classification is pattern-based so that new ``cl::opt`` flags added to
+    ``carts-compile.cpp`` are automatically forwarded without any Python
+    changes.  The rules are:
+
+    1. A handful of *special* flags are consumed by the Python CLI itself
+       (``-O3``, ``--diagnose``, ``--diagnose-output``).
+    2. Linker flags are recognised by well-known prefixes/names
+       (``-l``, ``-L``, ``-Wl,``, ``-Xlinker``, ``-framework``).
+    3. Short single-dash flags (``-I``, ``-D``, ``-std``, ``-f``, …) go to
+       cgeist.
+    4. Everything else — i.e. any ``--`` long flag — is forwarded to the
+       carts-compile pipeline binary.
+    """
+
+    cgeist: List[str] = field(default_factory=list)    # -I, -D, -std, etc.
+    pipeline: List[str] = field(default_factory=list)   # --arts-config, --partition-*, etc.
+    link: List[str] = field(default_factory=list)        # -l, -L, -Wl, -framework, etc.
+    optimize: bool = False                               # -O3 passthrough
+    diagnose: bool = False                               # --diagnose passthrough
+    diagnose_output: Optional[Path] = None               # --diagnose-output passthrough
+
+    # Linker flag prefixes (single-dash)
+    _LINKER_PREFIXES = ("-l", "-L", "-Wl,")
+    # Linker flags that consume the next argument
+    _LINKER_VALUE_FLAGS = {"-Xlinker", "-framework"}
+
+    @classmethod
+    def parse(cls, args: List[str]) -> "CompileArgs":
+        result = cls()
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            # --- Special flags consumed by the Python CLI ---
+            if arg == "-O3":
+                result.optimize = True
+            elif arg == "--diagnose":
+                result.diagnose = True
+            elif arg == "--diagnose-output":
+                if i + 1 < len(args):
+                    i += 1
+                    result.diagnose_output = Path(args[i])
+            # --- Linker flags ---
+            elif arg.startswith(cls._LINKER_PREFIXES):
+                result.link.append(arg)
+            elif arg in cls._LINKER_VALUE_FLAGS:
+                result.link.append(arg)
+                if i + 1 < len(args):
+                    i += 1
+                    result.link.append(args[i])
+            # --- Long flags (--*) -> pipeline (carts-compile binary) ---
+            elif arg.startswith("--"):
+                result.pipeline.append(arg)
+                # If no "=", the next non-flag token is the value.
+                if "=" not in arg and i + 1 < len(args):
+                    nxt = args[i + 1]
+                    if not nxt.startswith("-") or _is_numeric(nxt):
+                        i += 1
+                        result.pipeline.append(nxt)
+            # --- Everything else -> cgeist (-I, -D, -std, -f, …) ---
+            else:
+                result.cgeist.append(arg)
+            i += 1
+        return result
 
 
 # ============================================================================
@@ -164,10 +243,6 @@ def compile_cmd(
         False, "--diagnose", help="Export diagnostic information"),
     diagnose_output: Optional[Path] = typer.Option(
         None, "--diagnose-output", help="Output file for diagnostics"),
-    run_args: Optional[str] = typer.Option(
-        None, "--run-args", help="Extra arguments for carts-compile binary"),
-    compile_args: Optional[str] = typer.Option(
-        None, "--compile-args", help="Extra arguments for link step"),
 ):
     """Unified compilation command.
 
@@ -185,8 +260,7 @@ def compile_cmd(
     if ext in (".c", ".cpp"):
         _compile_from_c(ctx, input_file, output, optimize, debug, pipeline,
                         all_stages, emit_llvm, collect_metadata,
-                        partition_fallback, diagnose, diagnose_output,
-                        run_args, compile_args)
+                        partition_fallback, diagnose, diagnose_output)
     elif ext == ".mlir":
         _compile_from_mlir(ctx, input_file, output, optimize, debug, pipeline,
                            all_stages, emit_llvm, collect_metadata)
@@ -218,8 +292,6 @@ def _compile_from_c(
     partition_fallback: Optional[str],
     diagnose: bool,
     diagnose_output: Optional[Path],
-    run_args_str: Optional[str],
-    compile_args_str: Optional[str],
 ) -> None:
     """Full pipeline for C/C++ input."""
     config = get_config()
@@ -231,71 +303,19 @@ def _compile_from_c(
     base_name = input_file.stem
     output_name = output if output else Path(f"{base_name}_arts")
 
-    # Parse extra args
-    extra_pipeline_args = run_args_str.split() if run_args_str else []
-    extra_link_args = compile_args_str.split() if compile_args_str else []
+    # Parse passthrough args
+    parsed = CompileArgs.parse(ctx.args or [])
+
+    extra_pipeline_args = parsed.pipeline[:]
+    extra_link_args = parsed.link[:]
+    cgeist_args = parsed.cgeist
+
     if partition_fallback:
         extra_pipeline_args.append(f"--partition-fallback={partition_fallback}")
 
-    # Separate passthrough args into cgeist vs pipeline categories
-    cgeist_args: List[str] = []
-    pipeline_passthrough_args: List[str] = []
-
-    # Args that should go to carts-compile binary, not cgeist
-    pipeline_only_args = {
-        "--arts-config",
-        "--metadata-file",
-        "--concurrency",
-        "--concurrency-opt",
-        "--diagnose",
-        "--diagnose-output",
-        "--debug-only",
-        # Loop transforms (carts-compile flags)
-        "--loop-transforms-enable-matmul",
-        "--loop-transforms-enable-tiling",
-        "--loop-transforms-tile-j",
-        "--loop-transforms-min-trip-count",
-        # Partitioning options
-        "--partition-fallback",
-        "--distributed-db",
-        "--serial-edtify",
-    }
-
-    # Args with a separate value (not =)
-    value_args = {"--arts-config", "--metadata-file", "--debug-only"}
-
-    passthrough_optimize = False
-    passthrough_diagnose = False
-    passthrough_diagnose_output = None
-
-    args_iter = iter(ctx.args) if ctx.args else iter([])
-    for arg in args_iter:
-        if arg == "-O3":
-            passthrough_optimize = True
-        elif arg == "--diagnose":
-            passthrough_diagnose = True
-        elif arg == "--diagnose-output":
-            try:
-                passthrough_diagnose_output = Path(next(args_iter))
-            except StopIteration:
-                pass
-        else:
-            flag_name = arg.split("=", 1)[0]
-            if flag_name in pipeline_only_args:
-                pipeline_passthrough_args.append(arg)
-                if flag_name in value_args and "=" not in arg:
-                    try:
-                        pipeline_passthrough_args.append(next(args_iter))
-                    except StopIteration:
-                        pass
-            else:
-                cgeist_args.append(arg)
-
-    extra_pipeline_args.extend(pipeline_passthrough_args)
-
-    use_dual_mode = optimize or passthrough_optimize
-    use_diagnose = diagnose or passthrough_diagnose
-    final_diagnose_output = diagnose_output or passthrough_diagnose_output
+    use_dual_mode = optimize or parsed.optimize
+    use_diagnose = diagnose or parsed.diagnose
+    final_diagnose_output = diagnose_output or parsed.diagnose_output
 
     if use_dual_mode:
         _compile_c_dual(config, input_file, output_name, debug,
