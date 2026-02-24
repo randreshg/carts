@@ -151,6 +151,42 @@ def _build_project(cc: Optional[str] = None, cxx: Optional[str] = None) -> bool:
     return True
 
 
+def _install_python_envs() -> bool:
+    """Install Python dependencies for CARTS CLI and benchmark tooling."""
+    config = get_config()
+    project_root = config.carts_dir
+
+    if not _check_command_exists("poetry"):
+        print_warning("Poetry not found; skipping Python env bootstrap.")
+        print_info("Install Poetry and run `poetry -C tools install --no-root`")
+        print_info("and `poetry -C external/carts-benchmarks install --no-root`")
+        return True
+
+    install_targets = [
+        ("CARTS CLI environment", project_root / "tools"),
+        ("Benchmark environment", project_root / "external" / "carts-benchmarks"),
+    ]
+
+    for label, directory in install_targets:
+        if not (directory / "pyproject.toml").exists():
+            print_warning(f"Skipping {label}: missing pyproject.toml in {directory}")
+            continue
+        print_info(f"Installing {label} dependencies...")
+        try:
+            _run_subprocess(
+                ["poetry", "install", "--no-root"],
+                cwd=directory,
+                realtime=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError:
+            print_error(f"Failed to install dependencies for {label}")
+            return False
+
+    print_success("Python environments are ready")
+    return True
+
+
 # ============================================================================
 # CLI command
 # ============================================================================
@@ -163,6 +199,11 @@ def install(
         False, "--skip-deps", help="Skip dependency checking entirely"),
     skip_build: bool = typer.Option(
         False, "--skip-build", help="Skip building (only check/install deps and init submodules)"),
+    skip_python_env: bool = typer.Option(
+        False,
+        "--skip-python-env",
+        help="Skip Poetry environment setup for tools and benchmark scripts",
+    ),
     auto: bool = typer.Option(
         False, "--auto", "-y", help="Auto-install missing deps without prompting"),
     cc: Optional[str] = typer.Option(
@@ -202,7 +243,13 @@ def install(
         print_error("Failed to set up project")
         raise typer.Exit(1)
 
-    # 3. Build everything
+    # 3. Python environments
+    if not skip_python_env:
+        if not _install_python_envs():
+            print_error("Failed to set up Python environments")
+            raise typer.Exit(1)
+
+    # 4. Build everything
     if not skip_build:
         if not _build_project(cc=cc, cxx=cxx):
             print_error("Failed to build project")
