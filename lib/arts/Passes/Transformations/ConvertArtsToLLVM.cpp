@@ -30,6 +30,7 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 #include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/Metadata/LoopMetadata.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 /// Others
@@ -399,10 +400,47 @@ private:
     bool isSingle = false;
     Value depStruct = nullptr;
     Value baseOffset = nullptr;
+    Value stencilCenterLinear;
 
     /// Handle both DbAcquireOp and DepDbAcquireOp as sources
     if (auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>()) {
       getDbInfo(dbAcquireOp, dbSizes, dbOffsets, dbIndices, isSingle);
+
+      /// Stencil writer acquires frequently cover [left, center, right] DB
+      /// entries. Recording all entries as WRITE over-serializes adjacent
+      /// blocks. When we can infer the center DB index, keep WRITE only for the
+      /// center and record halo entries as READ.
+      int32_t writeMode = static_cast<int32_t>(DbMode::write);
+      bool writerMode = !acquireMode || *acquireMode == writeMode;
+      bool inInterIterationDepLoop = false;
+      for (Operation *parent = dbAcquireOp->getParentOp(); parent;
+           parent = parent->getParentOp()) {
+        auto forOp = dyn_cast<scf::ForOp>(parent);
+        if (!forOp)
+          continue;
+        auto loopAttr = forOp->getAttrOfType<LoopMetadataAttr>(
+            mlir::arts::AttrNames::LoopMetadata::Name);
+        if (!loopAttr)
+          continue;
+        if (auto hasDeps = loopAttr.getHasInterIterationDeps())
+          inInterIterationDepLoop = hasDeps.getValue();
+        break;
+      }
+
+      auto partitionMode = dbAcquireOp.getPartitionMode();
+      if (writerMode && inInterIterationDepLoop && partitionMode &&
+          *partitionMode == PartitionMode::block &&
+          !dbAcquireOp.getPartitionOffsets().empty() &&
+          !dbAcquireOp.getPartitionSizes().empty()) {
+        Value partOffset =
+            AC->castToIndex(dbAcquireOp.getPartitionOffsets().front(), loc);
+        Value partSize =
+            AC->castToIndex(dbAcquireOp.getPartitionSizes().front(), loc);
+        Value one = AC->createIndexConstant(1, loc);
+        Value safePartSize = AC->create<arith::MaxUIOp>(loc, partSize, one);
+        stencilCenterLinear =
+            AC->create<arith::DivUIOp>(loc, partOffset, safePartSize);
+      }
     } else if (auto depDbAcquireOp = dbGuid.getDefiningOp<DepDbAcquireOp>()) {
       getDbInfo(depDbAcquireOp, dbSizes, dbOffsets, dbIndices, isSingle);
       depStruct = depDbAcquireOp.getDepStruct();
@@ -431,7 +469,8 @@ private:
         [&](Value linearIndex) {
           recordSingleDb(dbGuid, edtGuid, sharedSlotAlloc, linearIndex,
                          accessMode, acquireMode, boundsValid, depStruct,
-                         baseOffset, totalDBs, byteOffset, byteSize, loc);
+                         baseOffset, totalDBs, byteOffset, byteSize,
+                         stencilCenterLinear, loc);
         },
         allocSizes);
   }
@@ -478,7 +517,8 @@ private:
                       Value linearIndex, DepAccessMode accessMode,
                       std::optional<int32_t> acquireMode, Value boundsValid,
                       Value depStruct, Value baseOffset, Value totalDBs,
-                      Value byteOffset, Value byteSize, Location loc) const {
+                      Value byteOffset, Value byteSize,
+                      Value stencilCenterLinear, Location loc) const {
     const bool useDepv = depStruct && baseOffset &&
                          (accessMode == DepAccessMode::from_depv ||
                           dbGuid.getDefiningOp<DepDbAcquireOp>());
@@ -502,8 +542,21 @@ private:
     edtGuidValue = AC->castToInt(AC->Int64, edtGuidValue, loc);
 
     auto currentSlotI32 = AC->create<memref::LoadOp>(loc, slotAlloc);
-    int32_t modeInt = acquireMode.value_or(static_cast<int32_t>(DbMode::write));
+    int32_t readMode = static_cast<int32_t>(DbMode::read);
+    int32_t writeMode = static_cast<int32_t>(DbMode::write);
+    int32_t modeInt = acquireMode.value_or(writeMode);
     Value modeValue = AC->createIntConstant(modeInt, AC->Int32, loc);
+
+    if (stencilCenterLinear && modeInt == writeMode) {
+      Value linearIndexIdx = AC->castToIndex(linearIndex, loc);
+      Value centerIdx = AC->castToIndex(stencilCenterLinear, loc);
+      Value isCenter = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                                 linearIndexIdx, centerIdx);
+      Value readValue = AC->createIntConstant(readMode, AC->Int32, loc);
+      Value writeValue = AC->createIntConstant(writeMode, AC->Int32, loc);
+      modeValue =
+          AC->create<arith::SelectOp>(loc, isCenter, writeValue, readValue);
+    }
 
     /// Prepare ESD values if needed (cast Index to Int64).
     /// byte_size == 0 denotes "no partial slice" and should use full-db deps.

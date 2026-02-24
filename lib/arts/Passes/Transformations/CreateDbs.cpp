@@ -228,6 +228,7 @@ private:
   void collectControlDbOps();
   void createDbAllocOps();
   void createDbAcquireOps(EdtOp edt, SetVector<Value> &externalDeps);
+  ArtsMode inferEdtAccessMode(Operation *underlyingOp, EdtOp edt) const;
   Value findParentAcquireSource(EdtOp edt, Operation *dbAllocOp,
                                 bool requiresIndexedAccess = false);
   void initializeGlobalDbIfNeeded(Operation *alloc, DbAllocOp dbAllocOp,
@@ -295,6 +296,47 @@ private:
 ///===----------------------------------------------------------------------===///
 // Pass Entry Point
 ///===----------------------------------------------------------------------===///
+ArtsMode CreateDbsPass::inferEdtAccessMode(Operation *underlyingOp,
+                                           EdtOp edt) const {
+  if (!underlyingOp || !edt)
+    return ArtsMode::uninitialized;
+
+  bool hasRead = false;
+  bool hasWrite = false;
+
+  edt.walk([&](Operation *op) {
+    if (op->getParentOfType<EdtOp>() != edt)
+      return;
+
+    if (auto load = dyn_cast<memref::LoadOp>(op)) {
+      if (ValueUtils::getUnderlyingOperation(load.getMemref()) == underlyingOp)
+        hasRead = true;
+      return;
+    }
+
+    if (auto store = dyn_cast<memref::StoreOp>(op)) {
+      if (ValueUtils::getUnderlyingOperation(store.getMemref()) == underlyingOp)
+        hasWrite = true;
+      return;
+    }
+
+    if (auto copy = dyn_cast<memref::CopyOp>(op)) {
+      if (ValueUtils::getUnderlyingOperation(copy.getSource()) == underlyingOp)
+        hasRead = true;
+      if (ValueUtils::getUnderlyingOperation(copy.getTarget()) == underlyingOp)
+        hasWrite = true;
+    }
+  });
+
+  if (hasRead && hasWrite)
+    return ArtsMode::inout;
+  if (hasWrite)
+    return ArtsMode::out;
+  if (hasRead)
+    return ArtsMode::in;
+  return ArtsMode::uninitialized;
+}
+
 void CreateDbsPass::runOnOperation() {
   module = getOperation();
   opsToRemove.clear();
@@ -333,12 +375,15 @@ void CreateDbsPass::runOnOperation() {
       /// Check if this EDT has any DbControlOps for this memref
       bool hasControlDb = !info.edtToDeps[edt].empty();
       if (!hasControlDb) {
-        /// No DbControlOps for this memref in this EDT - set to inout
-        ARTS_DEBUG(
-            " - Memref "
-            << *underlyingOp
-            << " used in EDT without DbControlOps, setting to inout mode");
-        info.accessMode = combineAccessModes(info.accessMode, ArtsMode::inout);
+        ArtsMode inferredMode = inferEdtAccessMode(underlyingOp, edt);
+        if (inferredMode == ArtsMode::uninitialized)
+          inferredMode = ArtsMode::inout;
+
+        ARTS_DEBUG(" - Memref "
+                   << *underlyingOp
+                   << " used in EDT without DbControlOps, inferred mode="
+                   << inferredMode);
+        info.accessMode = combineAccessModes(info.accessMode, inferredMode);
       }
     }
   }
@@ -954,16 +999,7 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
     SmallVector<Value> partIndices, partOffsets, partSizes;
     SmallVector<int32_t> indicesSegments, offsetsSegments, sizesSegments;
     SmallVector<int32_t> entryModes;
-    ArtsMode acquireMode = ArtsMode::inout;
-
-    // Helper to combine access modes (most permissive wins)
-    auto combineAccessModes = [](ArtsMode a, ArtsMode b) -> ArtsMode {
-      if (a == ArtsMode::inout || b == ArtsMode::inout)
-        return ArtsMode::inout;
-      if (a == ArtsMode::out || b == ArtsMode::out)
-        return ArtsMode::out;
-      return ArtsMode::in;
-    };
+    ArtsMode acquireMode = ArtsMode::uninitialized;
 
     for (const auto &dep : deps) {
       // Determine mode for this entry
@@ -991,7 +1027,18 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
         partSizes.push_back(v);
 
       // Combine access modes
-      acquireMode = combineAccessModes(acquireMode, dep.mode);
+      acquireMode = ::combineAccessModes(acquireMode, dep.mode);
+    }
+
+    // If this EDT has no explicit db_control hints for the memref, infer
+    // per-EDT access from actual loads/stores before falling back.
+    if (acquireMode == ArtsMode::uninitialized) {
+      acquireMode = inferEdtAccessMode(underlyingOp, edt);
+      if (acquireMode == ArtsMode::uninitialized) {
+        acquireMode = (info.accessMode == ArtsMode::uninitialized)
+                          ? ArtsMode::inout
+                          : info.accessMode;
+      }
     }
 
     // Determine the "primary" partition mode from first entry (for

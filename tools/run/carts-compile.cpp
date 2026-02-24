@@ -446,6 +446,10 @@ void setupArtsToLLVM(PassManager &pm, bool debug, bool distributedInitPerWorker,
                      const arts::ArtsAbstractMachine *machine) {
   pm.addPass(arts::createConvertArtsToLLVMPass(debug, distributedInitPerWorker,
                                                machine));
+  // Db/dep pointer loads are materialized during Arts->LLVM lowering.
+  // Hoist those loop-invariant loads after conversion so vectorization and LICM
+  // can operate on simpler loop bodies.
+  pm.addPass(arts::createDataPointerHoistingPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createMem2Reg());

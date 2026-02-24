@@ -58,14 +58,32 @@ static bool isLoopBackedge(LLVM::CondBrOp condBr, DominanceInfo &domInfo) {
          domInfo.dominates(falseBlock, currentBlock);
 }
 
+/// Collect natural-loop blocks for a backedge latch -> header.
+static SmallPtrSet<Block *, 16> getLoopBlocks(Block *headerBlock,
+                                              Block *latchBlock) {
+  SmallPtrSet<Block *, 16> loopBlocks;
+  SmallVector<Block *, 16> worklist;
+  loopBlocks.insert(headerBlock);
+  if (loopBlocks.insert(latchBlock).second)
+    worklist.push_back(latchBlock);
+
+  while (!worklist.empty()) {
+    Block *block = worklist.pop_back_val();
+    for (Block *pred : block->getPredecessors()) {
+      if (!loopBlocks.insert(pred).second)
+        continue;
+      if (pred != headerBlock)
+        worklist.push_back(pred);
+    }
+  }
+
+  return loopBlocks;
+}
+
 /// Check if a loop is innermost (contains no nested loops).
 static bool isInnermostLoop(Block *headerBlock, Block *latchBlock,
-                            DominanceInfo &domInfo, LLVM::LLVMFuncOp funcOp) {
-  SmallPtrSet<Block *, 16> loopBlocks;
-  for (Block &block : funcOp.getBody()) {
-    if (domInfo.dominates(headerBlock, &block))
-      loopBlocks.insert(&block);
-  }
+                            DominanceInfo &domInfo) {
+  SmallPtrSet<Block *, 16> loopBlocks = getLoopBlocks(headerBlock, latchBlock);
 
   for (Block *block : loopBlocks) {
     if (block == latchBlock)
@@ -120,109 +138,105 @@ static TypeAnalysisResult analyzeLoadTypes(LLVM::LLVMFuncOp funcOp) {
   return {width, doubleCount, floatCount, totalLoads};
 }
 
-/// Add llvm.assume intrinsics for non-negative paramv loads.
-static int addNonNegativeAssumptions(LLVM::LLVMFuncOp funcOp,
-                                     MLIRContext *ctx) {
-  if (funcOp.getNumArguments() < 2)
-    return 0;
+/// Returns true if `value` is dataflow-dependent on `root`.
+/// `followLoads` controls whether load operands are traversed.
+static bool valueDependsOn(Value value, Value root, bool followLoads) {
+  SmallVector<Value, 16> worklist;
+  SmallPtrSet<Value, 32> visited;
+  worklist.push_back(value);
 
-  Value paramv = funcOp.getArgument(1);
-  int assumptionsAdded = 0;
-  OpBuilder builder(ctx);
+  while (!worklist.empty()) {
+    Value current = worklist.pop_back_val();
+    if (!visited.insert(current).second)
+      continue;
+    if (current == root)
+      return true;
 
-  SmallVector<LLVM::LoadOp> paramvLoads;
-  funcOp.walk([&](LLVM::LoadOp loadOp) {
-    Type resultType = loadOp.getResult().getType();
-    if (!resultType.isInteger(64))
-      return;
+    Operation *def = current.getDefiningOp();
+    if (!def)
+      continue;
 
-    Value addr = loadOp.getAddr();
-    while (auto gepOp = addr.getDefiningOp<LLVM::GEPOp>())
-      addr = gepOp.getBase();
-
-    if (addr == paramv)
-      paramvLoads.push_back(loadOp);
-  });
-  auto i64Ty = IntegerType::get(ctx, 64);
-  auto i1Ty = IntegerType::get(ctx, 1);
-
-  for (auto loadOp : paramvLoads) {
-    builder.setInsertionPointAfter(loadOp);
-    auto loc = loadOp.getLoc();
-    auto zero = builder.create<LLVM::ConstantOp>(loc, i64Ty,
-                                                 builder.getI64IntegerAttr(0));
-    auto isNonNeg = builder.create<LLVM::ICmpOp>(
-        loc, i1Ty, LLVM::ICmpPredicate::sge, loadOp.getResult(), zero);
-    builder.create<LLVM::AssumeOp>(loc, isNonNeg);
-    assumptionsAdded++;
+    if (auto gep = dyn_cast<LLVM::GEPOp>(def)) {
+      worklist.push_back(gep.getBase());
+      continue;
+    }
+    if (auto load = dyn_cast<LLVM::LoadOp>(def)) {
+      if (followLoads)
+        worklist.push_back(load.getAddr());
+      continue;
+    }
+    if (auto cast = dyn_cast<UnrealizedConversionCastOp>(def)) {
+      for (Value in : cast.getInputs())
+        worklist.push_back(in);
+      continue;
+    }
   }
 
-  return assumptionsAdded;
+  return false;
 }
 
-/// Collect all blocks belonging to a loop given its header and latch.
-static SmallPtrSet<Block *, 16> getLoopBlocks(Block *headerBlock,
-                                              Block *latchBlock,
-                                              DominanceInfo &domInfo,
-                                              LLVM::LLVMFuncOp funcOp) {
-  SmallPtrSet<Block *, 16> loopBlocks;
-  for (Block &block : funcOp.getBody()) {
-    if (domInfo.dominates(headerBlock, &block))
-      loopBlocks.insert(&block);
+/// Returns true if `value` depends on a loop-varying quantity in this natural
+/// loop. Values defined outside the loop are treated as invariant.
+static bool
+valueDependsOnLoopVariant(Value value,
+                          const SmallPtrSet<Block *, 16> &loopBlocks) {
+  SmallVector<Value, 16> worklist;
+  SmallPtrSet<Value, 32> visited;
+  worklist.push_back(value);
+
+  while (!worklist.empty()) {
+    Value current = worklist.pop_back_val();
+    if (!visited.insert(current).second)
+      continue;
+
+    if (auto blockArg = dyn_cast<BlockArgument>(current)) {
+      if (loopBlocks.contains(blockArg.getOwner()))
+        return true;
+      continue;
+    }
+
+    Operation *def = current.getDefiningOp();
+    if (!def)
+      continue;
+    if (!loopBlocks.contains(def->getBlock()))
+      continue;
+
+    if (isa<LLVM::ConstantOp>(def))
+      continue;
+
+    for (Value operand : def->getOperands())
+      worklist.push_back(operand);
   }
-  return loopBlocks;
+
+  return false;
 }
 
-/// Add fast-math flags to floating-point operations to enable vectorization.
-/// The 'reassoc' flag is critical for reduction vectorization as it allows
-/// LLVM to reorder floating-point operations in loop-carried dependencies.
-static int addFastMathFlagsToFPOps(const SmallPtrSet<Block *, 16> &loopBlocks,
-                                   MLIRContext *ctx) {
-  int count = 0;
-  auto fmfAttr = LLVM::FastmathFlagsAttr::get(
-      ctx, LLVM::FastmathFlags::reassoc | LLVM::FastmathFlags::contract);
+/// Returns true if the loop performs loop-varying dep-array traversal. Purely
+/// invariant dep-array pointer materialization is allowed.
+static bool loopHasVariantDepArrayAccess(Block *headerBlock, Block *latchBlock,
+                                         Value depv) {
+  if (!depv)
+    return false;
 
+  SmallPtrSet<Block *, 16> loopBlocks = getLoopBlocks(headerBlock, latchBlock);
   for (Block *block : loopBlocks) {
-    for (Operation &op : *block) {
-      /// Handle FAddOp
-      if (auto faddOp = dyn_cast<LLVM::FAddOp>(&op)) {
-        auto existing = faddOp.getFastmathFlags();
-        if (existing == LLVM::FastmathFlags::none) {
-          faddOp.setFastmathFlagsAttr(fmfAttr);
-          count++;
-        }
+    for (Operation &opRef : *block) {
+      Operation *op = &opRef;
+      if (auto load = dyn_cast<LLVM::LoadOp>(op)) {
+        if (valueDependsOn(load.getAddr(), depv, /*followLoads=*/false) &&
+            valueDependsOnLoopVariant(load.getAddr(), loopBlocks))
+          return true;
         continue;
       }
-      /// Handle FMulOp
-      if (auto fmulOp = dyn_cast<LLVM::FMulOp>(&op)) {
-        auto existing = fmulOp.getFastmathFlags();
-        if (existing == LLVM::FastmathFlags::none) {
-          fmulOp.setFastmathFlagsAttr(fmfAttr);
-          count++;
-        }
-        continue;
-      }
-      /// Handle FSubOp
-      if (auto fsubOp = dyn_cast<LLVM::FSubOp>(&op)) {
-        auto existing = fsubOp.getFastmathFlags();
-        if (existing == LLVM::FastmathFlags::none) {
-          fsubOp.setFastmathFlagsAttr(fmfAttr);
-          count++;
-        }
-        continue;
-      }
-      /// Handle FDivOp
-      if (auto fdivOp = dyn_cast<LLVM::FDivOp>(&op)) {
-        auto existing = fdivOp.getFastmathFlags();
-        if (existing == LLVM::FastmathFlags::none) {
-          fdivOp.setFastmathFlagsAttr(fmfAttr);
-          count++;
-        }
+      if (auto store = dyn_cast<LLVM::StoreOp>(op)) {
+        if (valueDependsOn(store.getAddr(), depv, /*followLoads=*/false) &&
+            valueDependsOnLoopVariant(store.getAddr(), loopBlocks))
+          return true;
         continue;
       }
     }
   }
-  return count;
+  return false;
 }
 
 /// Determine optimal unroll count based on loop characteristics.
@@ -338,9 +352,7 @@ struct LoopVectorizationHintsPass
     ARTS_INFO_HEADER(LoopVectorizationHintsPass);
 
     int totalHints = 0;
-    int totalAccessGroups = 0;
-    int totalAssumptions = 0;
-    int totalFastMathFlags = 0;
+    int skippedUnsafeLoops = 0;
 
     module.walk([&](LLVM::LLVMFuncOp funcOp) {
       if (!funcOp.getName().starts_with("__arts_edt_"))
@@ -348,15 +360,9 @@ struct LoopVectorizationHintsPass
 
       ARTS_DEBUG_TYPE("Processing EDT function: " << funcOp.getName());
 
-      int assumptionsInFunc = addNonNegativeAssumptions(funcOp, ctx);
-      if (assumptionsInFunc > 0) {
-        ARTS_DEBUG_TYPE("Added "
-                        << assumptionsInFunc
-                        << " non-negative assumptions for paramv loads");
-        totalAssumptions += assumptionsInFunc;
-      }
-
       DominanceInfo domInfo(funcOp);
+      Value depv =
+          (funcOp.getNumArguments() >= 4) ? funcOp.getArgument(3) : Value{};
 
       auto typeInfo = analyzeLoadTypes(funcOp);
 
@@ -369,44 +375,7 @@ struct LoopVectorizationHintsPass
       unsigned unrollCount = determineUnrollCount(typeInfo);
       ARTS_DEBUG_TYPE("Unroll count: " << unrollCount << " (loads="
                                        << typeInfo.totalLoads << ")");
-
-      auto accessGroupId = DistinctAttr::create(UnitAttr::get(ctx));
-      auto accessGroupAttr = LLVM::AccessGroupAttr::get(ctx, accessGroupId);
-
-      int accessGroupsAttached = 0;
-      funcOp.walk([&](Operation *op) {
-        ArrayAttr existingGroups;
-        if (auto loadOp = dyn_cast<LLVM::LoadOp>(op)) {
-          existingGroups = loadOp.getAccessGroupsAttr();
-        } else if (auto storeOp = dyn_cast<LLVM::StoreOp>(op)) {
-          existingGroups = storeOp.getAccessGroupsAttr();
-        } else {
-          return;
-        }
-
-        SmallVector<Attribute> groups;
-        if (existingGroups)
-          groups.append(existingGroups.begin(), existingGroups.end());
-        groups.push_back(accessGroupAttr);
-        auto newGroupsAttr = ArrayAttr::get(ctx, groups);
-
-        if (auto loadOp = dyn_cast<LLVM::LoadOp>(op)) {
-          loadOp.setAccessGroupsAttr(newGroupsAttr);
-          accessGroupsAttached++;
-        } else if (auto storeOp = dyn_cast<LLVM::StoreOp>(op)) {
-          storeOp.setAccessGroupsAttr(newGroupsAttr);
-          accessGroupsAttached++;
-        }
-      });
-
-      if (accessGroupsAttached > 0) {
-        ARTS_DEBUG_TYPE("Attached access group to " << accessGroupsAttached
-                                                    << " memory operations");
-        totalAccessGroups += accessGroupsAttached;
-      }
-
       SmallVector<LLVM::AccessGroupAttr> parallelAccessGroups;
-      parallelAccessGroups.push_back(accessGroupAttr);
 
       auto innermostHints = createInnermostLoopHints(
           ctx, width, interleaveCount, enableScalable, enableMustProgress,
@@ -416,7 +385,6 @@ struct LoopVectorizationHintsPass
 
       int innermostCount = 0;
       int outerCount = 0;
-      int fastMathFlagsInFunc = 0;
 
       funcOp.walk([&](LLVM::BrOp brOp) {
         Block *currentBlock = brOp->getBlock();
@@ -428,18 +396,21 @@ struct LoopVectorizationHintsPass
         if (brOp.getLoopAnnotationAttr())
           return;
 
-        bool innermost =
-            isInnermostLoop(destBlock, currentBlock, domInfo, funcOp);
+        if (loopHasVariantDepArrayAccess(destBlock, currentBlock, depv)) {
+          skippedUnsafeLoops++;
+          ARTS_DEBUG_TYPE("Skipping loop hints in "
+                          << funcOp.getName()
+                          << " (loop-varying dep-array access)");
+          return;
+        }
+
+        bool innermost = isInnermostLoop(destBlock, currentBlock, domInfo);
 
         if (innermost) {
           brOp.setLoopAnnotationAttr(innermostHints);
           innermostCount++;
           ARTS_DEBUG_TYPE("Innermost loop - full vectorization hints at "
                           << brOp.getLoc());
-          /// Add fast-math flags to FP operations in innermost loops
-          auto loopBlocks =
-              getLoopBlocks(destBlock, currentBlock, domInfo, funcOp);
-          fastMathFlagsInFunc += addFastMathFlagsToFPOps(loopBlocks, ctx);
         } else {
           brOp.setLoopAnnotationAttr(outerHints);
           outerCount++;
@@ -461,18 +432,21 @@ struct LoopVectorizationHintsPass
         Block *headerBlock =
             domInfo.dominates(trueBlock, currentBlock) ? trueBlock : falseBlock;
 
-        bool innermost =
-            isInnermostLoop(headerBlock, currentBlock, domInfo, funcOp);
+        if (loopHasVariantDepArrayAccess(headerBlock, currentBlock, depv)) {
+          skippedUnsafeLoops++;
+          ARTS_DEBUG_TYPE("Skipping loop hints in "
+                          << funcOp.getName()
+                          << " (loop-varying dep-array access)");
+          return;
+        }
+
+        bool innermost = isInnermostLoop(headerBlock, currentBlock, domInfo);
 
         if (innermost) {
           condBr.setLoopAnnotationAttr(innermostHints);
           innermostCount++;
           ARTS_DEBUG_TYPE("Innermost loop (cond) - full vectorization hints at "
                           << condBr.getLoc());
-          /// Add fast-math flags to FP operations in innermost loops
-          auto loopBlocks =
-              getLoopBlocks(headerBlock, currentBlock, domInfo, funcOp);
-          fastMathFlagsInFunc += addFastMathFlagsToFPOps(loopBlocks, ctx);
         } else {
           condBr.setLoopAnnotationAttr(outerHints);
           outerCount++;
@@ -480,8 +454,6 @@ struct LoopVectorizationHintsPass
                           << condBr.getLoc());
         }
       });
-
-      totalFastMathFlags += fastMathFlagsInFunc;
 
       int hintsInFunc = innermostCount + outerCount;
       if (hintsInFunc > 0) {
@@ -494,10 +466,8 @@ struct LoopVectorizationHintsPass
     });
 
     ARTS_INFO("Total: attached hints to "
-              << totalHints << " loop backedges, access groups to "
-              << totalAccessGroups << " memory operations, " << totalAssumptions
-              << " non-negative assumptions, fast-math flags to "
-              << totalFastMathFlags << " FP operations");
+              << totalHints << " loop backedges; skipped " << skippedUnsafeLoops
+              << " loop backedges with loop-varying dependency-array access");
     ARTS_INFO_FOOTER(LoopVectorizationHintsPass);
   }
 };
