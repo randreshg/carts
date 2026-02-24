@@ -11,14 +11,6 @@ import sys
 
 import typer
 
-# Import shared styles
-from carts_styles import (
-    console,
-    print_info,
-    print_success,
-    print_debug,
-)
-
 # Import from scripts modules
 from scripts.config import (
     get_config,
@@ -199,60 +191,6 @@ def benchmarks(
     raise typer.Exit(result.returncode)
 
 
-# ============================================================================
-# Analyze Command
-# ============================================================================
-
-@app.command(
-    context_settings={
-        "allow_extra_args": True,
-        "allow_interspersed_args": False,
-        "ignore_unknown_options": True,
-    }
-)
-def analyze(
-    ctx: typer.Context,
-    help_flag: bool = typer.Option(
-        False, "--help", "-h", is_eager=True, help="Show help"),
-):
-    """Analyze benchmark results from completed experiments.
-
-    Commands: summary, export, compare
-
-    Examples:
-      carts analyze summary results/20240115_120530/
-      carts analyze export results/20240115_120530/ -o timing.csv
-      carts analyze compare results/before/ results/after/
-    """
-    config = get_config()
-    benchmark_analyze = (
-        config.carts_dir / "external" / "carts-benchmarks"
-        / "scripts" / "benchmark_analyze.py"
-    )
-
-    if not benchmark_analyze.is_file():
-        from carts_styles import print_error
-        print_error(f"Benchmark analyzer not found at {benchmark_analyze}")
-        raise typer.Exit(1)
-
-    cmd = [sys.executable, str(benchmark_analyze)]
-
-    if help_flag:
-        cmd.append("--help")
-
-    if ctx.args:
-        cmd.extend(ctx.args)
-
-    # Inject PYTHONPATH so analyzer can import carts_styles
-    tools_dir = str(Path(__file__).parent)
-    existing_pythonpath = os.environ.get("PYTHONPATH", "")
-    pythonpath = f"{tools_dir}:{existing_pythonpath}" if existing_pythonpath else tools_dir
-
-    result = run_subprocess(cmd, check=False, env={"PYTHONPATH": pythonpath})
-    raise typer.Exit(result.returncode)
-
-
-# ============================================================================
 # Clean Command
 # ============================================================================
 
