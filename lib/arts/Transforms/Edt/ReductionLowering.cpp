@@ -22,6 +22,7 @@
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
 #include "arts/Utils/OperationAttributes.h"
+#include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -258,17 +259,36 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
 
     Value one = AC->createIndexConstant(1, loc);
     Location loopLoc = redInfo.loopLocation.value_or(loc);
-    auto initLoop = AC->create<scf::ForOp>(loopLoc, zeroIndex, numWorkers, one);
-    if (loopMetadataAttr)
-      initLoop->setAttr(AttrNames::LoopMetadata::Name, loopMetadataAttr);
-    AC->setInsertionPointToStart(initLoop.getBody());
-    Value workerIdx = initLoop.getInductionVar();
 
-    SmallVector<Value> outerIndices{workerIdx};
-    Value partialMemRef = AC->create<DbRefOp>(loc, partialPtr, outerIndices);
-    AC->create<memref::StoreOp>(loc, identity, partialMemRef, innerIndices);
+    /// When numWorkers is a compile-time constant 1, emit straight-line init
+    /// instead of a loop.  A loop from 0 to 1 would use its induction variable
+    /// as a db_ref index, which the verifier rejects for coarse-grained DBs
+    /// (sizes[1]) because the IV is not a constant zero.
+    int64_t numWorkersConst;
+    bool isSingleWorker =
+        ValueUtils::getConstantIndex(numWorkers, numWorkersConst) &&
+        numWorkersConst == 1;
 
-    AC->setInsertionPointAfter(initLoop);
+    if (isSingleWorker) {
+      SmallVector<Value> outerIndices{zeroIndex};
+      Value partialMemRef =
+          AC->create<DbRefOp>(loc, partialPtr, outerIndices);
+      AC->create<memref::StoreOp>(loc, identity, partialMemRef, innerIndices);
+    } else {
+      auto initLoop =
+          AC->create<scf::ForOp>(loopLoc, zeroIndex, numWorkers, one);
+      if (loopMetadataAttr)
+        initLoop->setAttr(AttrNames::LoopMetadata::Name, loopMetadataAttr);
+      AC->setInsertionPointToStart(initLoop.getBody());
+      Value workerIdx = initLoop.getInductionVar();
+
+      SmallVector<Value> outerIndices{workerIdx};
+      Value partialMemRef =
+          AC->create<DbRefOp>(loc, partialPtr, outerIndices);
+      AC->create<memref::StoreOp>(loc, identity, partialMemRef, innerIndices);
+
+      AC->setInsertionPointAfter(initLoop);
+    }
 
     redInfo.partialAccumGuids.push_back(partialGuid);
     redInfo.partialAccumPtrs.push_back(partialPtr);
@@ -417,45 +437,54 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
     Value zeroIdx = AC->createIndexConstant(0, loc);
     Value oneIdx = AC->createIndexConstant(1, loc);
     Location loopLoc = redInfo.loopLocation.value_or(loc);
-    auto combineLoop = AC->create<scf::ForOp>(loopLoc, zeroIdx, numWorkers,
-                                              oneIdx, ValueRange{identity});
-    if (redInfo.loopMetadataAttr)
-      combineLoop->setAttr(AttrNames::LoopMetadata::Name,
-                           redInfo.loopMetadataAttr);
 
-    AC->setInsertionPointToStart(combineLoop.getBody());
-    Value workerIdx = combineLoop.getInductionVar();
-    Value accumulator = combineLoop.getRegionIterArg(0);
+    /// When numWorkers is a compile-time constant 1, emit straight-line
+    /// combine instead of a loop.  A loop from 0 to 1 would use its IV as a
+    /// db_ref index, which the verifier rejects for coarse-grained DBs.
+    int64_t numWorkersConst;
+    bool isSingleWorker =
+        ValueUtils::getConstantIndex(numWorkers, numWorkersConst) &&
+        numWorkersConst == 1;
 
-    Value workerSlot =
-        AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{workerIdx});
-    SmallVector<Value> workerElemIdx{zeroIdx};
-    Value partialValue =
-        AC->create<memref::LoadOp>(loc, workerSlot, workerElemIdx);
+    if (isSingleWorker) {
+      Value workerSlot =
+          AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{zeroIdx});
+      SmallVector<Value> workerElemIdx{zeroIdx};
+      Value partialValue =
+          AC->create<memref::LoadOp>(loc, workerSlot, workerElemIdx);
 
-    if (AC->isDebug()) {
-      Value workerIdxI64 = AC->castToInt(AC->Int64, workerIdx, loc);
-      Value partialI64 = AC->castToInt(AC->Int64, partialValue, loc);
-      AC->createPrintfCall(loc, "agg partial w=%lu val=%lu\\n",
-                           ValueRange{workerIdxI64, partialI64});
-    }
+      SmallVector<Value> finalIndices{zeroIdx};
+      AC->create<memref::StoreOp>(loc, partialValue, finalMemRef,
+                                  finalIndices);
+    } else {
+      auto combineLoop = AC->create<scf::ForOp>(loopLoc, zeroIdx, numWorkers,
+                                                oneIdx, ValueRange{identity});
+      if (redInfo.loopMetadataAttr)
+        combineLoop->setAttr(AttrNames::LoopMetadata::Name,
+                             redInfo.loopMetadataAttr);
 
-    Value combined;
-    if (elemType.isa<FloatType>())
-      combined = AC->create<arith::AddFOp>(loc, accumulator, partialValue);
-    else
-      combined = AC->create<arith::AddIOp>(loc, accumulator, partialValue);
-    AC->create<scf::YieldOp>(loc, combined);
+      AC->setInsertionPointToStart(combineLoop.getBody());
+      Value workerIdx = combineLoop.getInductionVar();
+      Value accumulator = combineLoop.getRegionIterArg(0);
 
-    AC->setInsertionPointAfter(combineLoop);
-    SmallVector<Value> finalIndices{zeroIdx};
-    AC->create<memref::StoreOp>(loc, combineLoop.getResult(0), finalMemRef,
-                                finalIndices);
+      Value workerSlot =
+          AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{workerIdx});
+      SmallVector<Value> workerElemIdx{zeroIdx};
+      Value partialValue =
+          AC->create<memref::LoadOp>(loc, workerSlot, workerElemIdx);
 
-    if (AC->isDebug()) {
-      Value finalValI64 =
-          AC->castToInt(AC->Int64, combineLoop.getResult(0), loc);
-      AC->createPrintfCall(loc, "agg final=%lu\\n", ValueRange{finalValI64});
+      Value combined;
+      if (elemType.isa<FloatType>())
+        combined = AC->create<arith::AddFOp>(loc, accumulator, partialValue);
+      else
+        combined = AC->create<arith::AddIOp>(loc, accumulator, partialValue);
+      AC->create<scf::YieldOp>(loc, combined);
+
+      AC->setInsertionPointAfter(combineLoop);
+      SmallVector<Value> finalIndices{zeroIdx};
+      AC->create<memref::StoreOp>(loc, combineLoop.getResult(0), finalMemRef,
+                                  finalIndices);
+
     }
   }
 
