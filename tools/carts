@@ -17,14 +17,16 @@ fi
 if [[ -f "$CACHE_FILE" ]]; then
     CACHED_PYTHON="$(cat "$CACHE_FILE")"
     if [[ -x "$CACHED_PYTHON" ]]; then
-        exec "$CACHED_PYTHON" "$PYTHON_CLI" "$@"
+        if "$CACHED_PYTHON" -c "import typer, rich, openpyxl" 2>/dev/null; then
+            exec "$CACHED_PYTHON" "$PYTHON_CLI" "$@"
+        fi
     fi
     # Cache invalid, remove it
     rm -f "$CACHE_FILE"
 fi
 
 # Check if system python3 has dependencies
-if python3 -c "import typer, rich" 2>/dev/null; then
+if python3 -c "import typer, rich, openpyxl" 2>/dev/null; then
     echo "python3" > "$CACHE_FILE"
     exec python3 "$PYTHON_CLI" "$@"
 fi
@@ -54,6 +56,7 @@ fi
 echo "Error: Required Python dependencies not installed."
 echo ""
 echo "To install dependencies, run one of:"
-echo "  pip install typer rich"
+echo "  pip install typer rich openpyxl"
 echo "  cd ${SCRIPT_DIR} && poetry install"
+echo "  cd ${SCRIPT_DIR}/../external/carts-benchmarks && poetry install"
 exit 1

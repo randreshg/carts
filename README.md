@@ -22,6 +22,10 @@ carts test
 carts format
 ```
 
+`carts install` also bootstraps Python environments for:
+- `tools/` (CLI commands)
+- `external/carts-benchmarks/` (benchmark runner and analysis tooling)
+
 ## Running Tests
 
 - Use `carts test` (or `carts check`) to run the lit test suites under `tests/`.
@@ -69,6 +73,8 @@ carts examples run --all     # Run all examples
 carts benchmarks list                          # List benchmarks
 carts benchmarks run polybench/2mm --size small  # Run a benchmark
 ```
+
+Benchmark runs auto-generate `report.xlsx` in each results directory.
 
 ---
 
