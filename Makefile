@@ -7,6 +7,10 @@
 VERBOSE ?= 0
 NINJA_FLAGS := $(if $(filter 1,$(VERBOSE)),-v,)
 
+# CMake executable (override via `make CMAKE=/path/to/cmake` or from build.py)
+CMAKE ?= cmake
+CMAKE_CMD := $(CMAKE)
+
 # Source Directories
 CARTS_DIR = ${shell pwd}
 ARTS_DIR ?= ${CARTS_DIR}/external/arts
@@ -68,7 +72,7 @@ polygeist:
 	echo "Building Polygeist..."; \
 	mkdir -p $(POLYGEIST_BUILD_DIR); \
 	mkdir -p $(POLYGEIST_INSTALL_DIR); \
-	cmake -B $(POLYGEIST_BUILD_DIR) \
+	$(CMAKE_CMD) -B $(POLYGEIST_BUILD_DIR) \
 		-S $(POLYGEIST_DIR) -G Ninja \
 		-DCMAKE_INSTALL_PREFIX=$(POLYGEIST_INSTALL_DIR) \
 		-DCMAKE_BUILD_TYPE=Release \
@@ -89,7 +93,7 @@ llvm:
 	echo "Building LLVM..."; \
 	mkdir -p $(LLVM_BUILD_DIR); \
 	mkdir -p $(LLVM_INSTALL_DIR); \
-	cmake -B $(LLVM_BUILD_DIR) \
+	$(CMAKE_CMD) -B $(LLVM_BUILD_DIR) \
 		-S $(LLVM_DIR)/llvm -G Ninja \
 		-DCMAKE_INSTALL_PREFIX=$(LLVM_INSTALL_DIR) \
 		-DCMAKE_BUILD_TYPE=Release \
@@ -189,7 +193,7 @@ arts:
 		echo "ARTS configuration unchanged, skipping cmake..."; \
 	else \
 		echo "Building ARTS (build_type=$(ARTS_BUILD_TYPE), counters=$(ARTS_USE_COUNTERS), metrics=$(ARTS_USE_METRICS), info=$(ARTS_INFO_ENABLED), debug=$(ARTS_DEBUG_ENABLED), counter_config=$(notdir $(COUNTER_CONFIG_PATH)))..."; \
-		cmake -B $(ARTS_BUILD_DIR) -S $(ARTS_DIR) \
+		$(CMAKE_CMD) -B $(ARTS_BUILD_DIR) -S $(ARTS_DIR) \
 			-DCMAKE_C_COMPILER=$(LLVM_INSTALL_DIR)/bin/clang \
 			-DCMAKE_CXX_COMPILER=$(LLVM_INSTALL_DIR)/bin/clang++ \
 			-DCMAKE_BUILD_TYPE=$(ARTS_BUILD_TYPE) \
@@ -223,7 +227,7 @@ build:
 	fi
 	mkdir -p $(CARTS_BUILD_DIR)
 	mkdir -p $(CARTS_INSTALL_DIR)
-	cmake -B $(CARTS_BUILD_DIR) \
+	$(CMAKE_CMD) -B $(CARTS_BUILD_DIR) \
 		-S $(CARTS_DIR) -G Ninja \
 		-DCMAKE_INSTALL_PREFIX=$(CARTS_INSTALL_DIR) \
 		-DCMAKE_BUILD_TYPE=Release \
@@ -246,7 +250,7 @@ carts-compile-only:
 	# Force rebuild carts-compile even if dependencies haven't changed
 	ninja $(NINJA_FLAGS) -C $(CARTS_BUILD_DIR) -t clean carts-compile
 	ninja $(NINJA_FLAGS) -C $(CARTS_BUILD_DIR) carts-compile
-	cmake --install $(CARTS_BUILD_DIR) --component carts-compile
+	$(CMAKE_CMD) --install $(CARTS_BUILD_DIR) --component carts-compile
 
 install: arts-download polygeist-download llvm-lit arts polygeist build
 

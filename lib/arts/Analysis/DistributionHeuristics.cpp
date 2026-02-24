@@ -84,16 +84,15 @@ static std::optional<int64_t> getExplicitWorkersPerNodeCount(EdtOp edt) {
   return arts::getWorkersPerNode(edt.getOperation());
 }
 
-ParallelismDecision
-DistributionHeuristics::resolveParallelismFromMachine(
+ParallelismDecision DistributionHeuristics::resolveParallelismFromMachine(
     const ArtsAbstractMachine *machine) {
   ParallelismDecision decision;
   if (!machine)
     return decision;
 
-  int64_t nodeCount =
-      machine->hasValidNodeCount() ? static_cast<int64_t>(machine->getNodeCount())
-                                   : 0;
+  int64_t nodeCount = machine->hasValidNodeCount()
+                          ? static_cast<int64_t>(machine->getNodeCount())
+                          : 0;
   int64_t workerThreads = machine->getRuntimeWorkersPerNode();
 
   if (nodeCount > 1) {

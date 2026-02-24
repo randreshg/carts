@@ -281,6 +281,50 @@ Value ValueUtils::stripClampOne(Value v) {
   return cur;
 }
 
+Value ValueUtils::stripSelectClamp(Value value, int maxDepth) {
+  if (!value || maxDepth <= 0)
+    return value;
+  value = stripNumericCasts(value);
+
+  auto selectOp = value.getDefiningOp<arith::SelectOp>();
+  if (!selectOp)
+    return value;
+
+  Value trueVal = stripNumericCasts(selectOp.getTrueValue());
+  Value falseVal = stripNumericCasts(selectOp.getFalseValue());
+
+  if (auto cmp = selectOp.getCondition().getDefiningOp<arith::CmpIOp>()) {
+    Value lhs = stripNumericCasts(cmp.getLhs());
+    Value rhs = stripNumericCasts(cmp.getRhs());
+    auto pred = cmp.getPredicate();
+
+    bool isClampCmp = pred == arith::CmpIPredicate::slt ||
+                      pred == arith::CmpIPredicate::ult ||
+                      pred == arith::CmpIPredicate::sgt ||
+                      pred == arith::CmpIPredicate::ugt;
+    if (isClampCmp) {
+      /// Match min/max clamp canonical form:
+      ///   cmp(lhs, rhs) + select(cond, rhs, lhs)
+      if (sameValue(trueVal, rhs) && sameValue(falseVal, lhs))
+        return stripSelectClamp(lhs, maxDepth - 1);
+      /// Also handle the mirrored operand form.
+      if (sameValue(trueVal, lhs) && sameValue(falseVal, rhs))
+        return stripSelectClamp(rhs, maxDepth - 1);
+    }
+  }
+
+  /// Fallback: select(const, x) / select(x, const) behaves like a guarded
+  /// clamp in many lowered index expressions; keep the non-constant side.
+  auto trueConst = getConstantValue(trueVal);
+  auto falseConst = getConstantValue(falseVal);
+  if (trueConst && !falseConst)
+    return stripSelectClamp(falseVal, maxDepth - 1);
+  if (falseConst && !trueConst)
+    return stripSelectClamp(trueVal, maxDepth - 1);
+
+  return value;
+}
+
 bool ValueUtils::areValuesEquivalent(Value a, Value b, int depth) {
   if (!a || !b)
     return false;

@@ -252,6 +252,10 @@ private:
                            OpBuilder &builder,
                            llvm::DenseSet<Operation *> &toRemove);
   Value createConstantIndex(OpBuilder &builder, Location loc, int64_t value);
+  SmallVector<Value> clampDependencyIndices(Value source,
+                                            ArrayRef<Value> indices,
+                                            OpBuilder &builder, Location loc,
+                                            ArrayRef<Value> dimSizes = {});
   ArtsMode convertOmpMode(omp::ClauseTaskDepend mode);
 
   /// Dimension hoisting helpers
@@ -917,6 +921,8 @@ CanonicalizeMemrefsPass::analyzeDepVar(Value depVar, AllocPattern &pattern,
               /// Element-level dependency, sizes = [1, 1, ...]
               for (size_t d = 0; d < info.indices.size(); ++d)
                 info.sizes.push_back(createConstantIndex(builder, loc, 1));
+              info.indices = clampDependencyIndices(
+                  info.source, info.indices, builder, loc, pattern.dimensions);
 
               info.opsToRemove = traceResult->chainOps;
               info.opsToRemove.push_back(store);
@@ -944,6 +950,8 @@ CanonicalizeMemrefsPass::analyzeDepVar(Value depVar, AllocPattern &pattern,
     /// Element-level sizes
     for (size_t d = 0; d < info.indices.size(); ++d)
       info.sizes.push_back(createConstantIndex(builder, loc, 1));
+    info.indices = clampDependencyIndices(info.source, info.indices, builder,
+                                          loc, pattern.dimensions);
 
     info.opsToRemove = traceResult->chainOps;
     info.opsToRemove.push_back(loadOp);
@@ -1672,6 +1680,90 @@ Value CanonicalizeMemrefsPass::createConstantIndex(OpBuilder &builder,
   return builder.create<arith::ConstantIndexOp>(loc, value);
 }
 
+SmallVector<Value> CanonicalizeMemrefsPass::clampDependencyIndices(
+    Value source, ArrayRef<Value> indices, OpBuilder &builder, Location loc,
+    ArrayRef<Value> dimSizes) {
+  SmallVector<Value> clamped;
+  clamped.reserve(indices.size());
+
+  auto sourceType = source.getType().dyn_cast<MemRefType>();
+  if (!sourceType) {
+    clamped.append(indices.begin(), indices.end());
+    return clamped;
+  }
+
+  auto castToType = [&](Value v, Type targetTy) -> Value {
+    if (v.getType() == targetTy)
+      return v;
+    if ((v.getType().isIndex() && isa<IntegerType>(targetTy)) ||
+        (isa<IntegerType>(v.getType()) && targetTy.isIndex()))
+      return builder.create<arith::IndexCastOp>(loc, targetTy, v);
+    return v;
+  };
+
+  auto oneForType = [&](Type ty) -> Value {
+    if (ty.isIndex())
+      return builder.create<arith::ConstantIndexOp>(loc, 1);
+    if (auto intTy = ty.dyn_cast<IntegerType>())
+      return builder.create<arith::ConstantIntOp>(loc, 1, intTy);
+    return Value();
+  };
+
+  auto zeroForType = [&](Type ty) -> Value {
+    if (ty.isIndex())
+      return builder.create<arith::ConstantIndexOp>(loc, 0);
+    if (auto intTy = ty.dyn_cast<IntegerType>())
+      return builder.create<arith::ConstantIntOp>(loc, 0, intTy);
+    return Value();
+  };
+
+  for (auto [dim, idx] : llvm::enumerate(indices)) {
+    Type idxTy = idx.getType();
+    if (!idxTy.isIndex() && !isa<IntegerType>(idxTy)) {
+      clamped.push_back(idx);
+      continue;
+    }
+
+    if (dim >= static_cast<size_t>(sourceType.getRank())) {
+      clamped.push_back(idx);
+      continue;
+    }
+
+    Value zero = zeroForType(idxTy);
+    Value one = oneForType(idxTy);
+    if (!zero || !one) {
+      clamped.push_back(idx);
+      continue;
+    }
+
+    Value dimSize;
+    if (dim < dimSizes.size()) {
+      dimSize = dimSizes[dim];
+    } else if (sourceType.isDynamicDim(dim)) {
+      dimSize = builder.create<memref::DimOp>(loc, source, dim);
+    } else {
+      dimSize = builder.create<arith::ConstantIndexOp>(
+          loc, sourceType.getDimSize(dim));
+    }
+
+    Value dimSizeTyped = castToType(dimSize, idxTy);
+    Value upper = builder.create<arith::SubIOp>(loc, dimSizeTyped, one);
+
+    Value belowZero = builder.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::slt, idx, zero);
+    Value afterLowerClamp =
+        builder.create<arith::SelectOp>(loc, belowZero, zero, idx);
+
+    Value aboveUpper = builder.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::sgt, afterLowerClamp, upper);
+    Value finalIdx = builder.create<arith::SelectOp>(loc, aboveUpper, upper,
+                                                     afterLowerClamp);
+    clamped.push_back(finalIdx);
+  }
+
+  return clamped;
+}
+
 ArtsMode CanonicalizeMemrefsPass::convertOmpMode(omp::ClauseTaskDepend mode) {
   switch (mode) {
   case omp::ClauseTaskDepend::taskdependin:
@@ -1947,6 +2039,8 @@ std::optional<DepInfo> CanonicalizeMemrefsPass::extractDepInfo(
                               loadOp.getIndices().end());
           for (size_t d = 0; d < info.indices.size(); ++d)
             info.sizes.push_back(createConstantIndex(builder, loc, 1));
+          info.indices =
+              clampDependencyIndices(info.source, info.indices, builder, loc);
           return info;
         }
       }
@@ -1996,6 +2090,8 @@ std::optional<DepInfo> CanonicalizeMemrefsPass::extractDepInfo(
     info.indices.append(loadOp.getIndices().begin(), loadOp.getIndices().end());
     for (size_t d = 0; d < info.indices.size(); ++d)
       info.sizes.push_back(createConstantIndex(builder, loc, 1));
+    info.indices =
+        clampDependencyIndices(info.source, info.indices, builder, loc);
     return info;
   }
 
