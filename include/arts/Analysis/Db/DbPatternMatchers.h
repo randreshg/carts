@@ -37,7 +37,8 @@ struct MatmulInitReductionLoopMatch {
 };
 
 /// Detect update-form matmul nest and expose j/k loop structure.
-bool detectMatmulInitReductionLoopNest(ForOp artsFor, LoopAnalysis *loopAnalysis,
+bool detectMatmulInitReductionLoopNest(ForOp artsFor,
+                                       LoopAnalysis *loopAnalysis,
                                        MatmulInitReductionLoopMatch &out);
 
 /// Match result for symmetric triangular loops.

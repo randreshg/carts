@@ -200,8 +200,7 @@ static bool hasOnlyEdtAcquireUsers(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
 
 } // namespace
 
-const char *
-mlir::arts::toString(DistributedDbOwnershipRejectReason reason) {
+const char *mlir::arts::toString(DistributedDbOwnershipRejectReason reason) {
   switch (reason) {
   case DistributedDbOwnershipRejectReason::None:
     return "eligible";
@@ -251,8 +250,7 @@ mlir::arts::evaluateDistributedDbOwnershipEligibility(DbAllocOp alloc,
   if (!isUsedByInternodeEdt(alloc, dbAnalysis))
     return {false, DistributedDbOwnershipRejectReason::NoInternodeEdtUse};
   if (hasStencilReadInternodeEdtUse(alloc, dbAnalysis))
-    return {false,
-            DistributedDbOwnershipRejectReason::StencilReadInternodeUse};
+    return {false, DistributedDbOwnershipRejectReason::StencilReadInternodeUse};
   if (!hasWriterInternodeEdtUse(alloc, dbAnalysis))
     return {false, DistributedDbOwnershipRejectReason::ReadOnlyInternodeUse};
   return {true, DistributedDbOwnershipRejectReason::None};

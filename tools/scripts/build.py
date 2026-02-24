@@ -7,6 +7,7 @@ import typer
 
 from carts_styles import Colors, console, print_header, print_step, print_error, print_success
 from scripts.config import get_config
+from scripts.deps import check_dependency, Dependency, DepStatus
 from scripts.run import run_subprocess
 
 
@@ -111,6 +112,11 @@ def build(
         make_vars.append(f'LLVM_C_COMPILER={cc}')
     if cxx:
         make_vars.append(f'LLVM_CXX_COMPILER={cxx}')
+
+    cmake_dep = Dependency(name="cmake", check_cmd="cmake", min_version=(3, 20))
+    cmake_result = check_dependency(cmake_dep)
+    if cmake_result.status == DepStatus.OK and cmake_result.found_path:
+        make_vars.append(f"CMAKE={cmake_result.found_path}")
 
     if make_vars:
         console.print(f"Options: [dim]{' '.join(make_vars)}[/dim]")

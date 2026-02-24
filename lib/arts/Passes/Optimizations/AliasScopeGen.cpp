@@ -49,6 +49,8 @@
 #include "arts/Utils/ValueUtils.h"
 
 #include "arts/Utils/ArtsDebug.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 ARTS_DEBUG_SETUP(arts_alias_scope_gen);
 
 using namespace mlir;
@@ -61,48 +63,174 @@ constexpr unsigned MaxArraysForAliasScopes = 10;
 
 /// Information about a data pointer loaded from the deps struct
 struct DataPointerInfo {
-  LLVM::LoadOp loadOp;        /// The load op that loads the data pointer
-  Value ptr;                  /// The loaded pointer value
-  int64_t depIndex;           /// Index into deps array (for naming)
+  SmallVector<LLVM::LoadOp, 2>
+      loadOps; /// Load ops that materialize this dependency pointer
+  SmallVector<Value, 2>
+      ptrValues;          /// Loaded pointer SSA values (equivalent dep slot)
+  int64_t depIndex;       /// Slot id (constant dep index or dynamic ordinal)
+  bool isDynamicDepIndex; /// True when this slot comes from a dynamic index
   LLVM::AliasScopeAttr scope; /// Assigned alias scope
 };
+
+struct DataPointerCollectionResult {
+  SmallVector<DataPointerInfo> dataPointers;
+  int skippedUnknownDepLoads = 0;
+};
+
+/// Returns true if this load reads a pointer field from a dependency-struct
+/// GEP.
+static bool isDepStructPointerLoad(LLVM::LoadOp loadOp) {
+  if (!isa<LLVM::LLVMPointerType>(loadOp.getResult().getType()))
+    return false;
+
+  auto gep = loadOp.getAddr().getDefiningOp<LLVM::GEPOp>();
+  if (!gep)
+    return false;
+
+  auto structType = dyn_cast<LLVM::LLVMStructType>(gep.getSourceElementType());
+  if (!structType)
+    return false;
+
+  auto rawIndices = gep.getRawConstantIndices();
+  if (rawIndices.size() < 2)
+    return false;
+
+  int32_t penultimate = rawIndices[rawIndices.size() - 2];
+  int32_t last = rawIndices.back();
+  return penultimate == 0 && last == 2;
+}
+
+struct DepIndexInfo {
+  bool valid = false;
+  std::optional<int64_t> constantIndex;
+  Value dynamicIndex;
+};
+
+/// Try to recover dep index info for a load of depv[idx].ptr.
+static DepIndexInfo extractDepIndexInfo(LLVM::LoadOp loadOp) {
+  DepIndexInfo info;
+
+  /// Prefer LLVM GEP pattern after Arts->LLVM lowering:
+  ///   %depEntry = llvm.getelementptr %depv[%idx]
+  ///   %ptrField = llvm.getelementptr %depEntry[0, 2]
+  ///   %ptr = llvm.load %ptrField : !llvm.ptr
+  if (auto ptrFieldGep = loadOp.getAddr().getDefiningOp<LLVM::GEPOp>()) {
+    if (isDepStructPointerLoad(loadOp)) {
+      if (auto depEntryGep =
+              ptrFieldGep.getBase().getDefiningOp<LLVM::GEPOp>()) {
+        auto depIndices = depEntryGep.getRawConstantIndices();
+        if (depIndices.empty())
+          return info;
+        SmallVector<Value, 4> dynIndices(
+            depEntryGep.getDynamicIndices().begin(),
+            depEntryGep.getDynamicIndices().end());
+        int32_t depIdxRaw = depIndices.back();
+        if (depIdxRaw == LLVM::GEPOp::kDynamicIndex) {
+          unsigned dynPos = 0;
+          for (size_t i = 0; i < depIndices.size(); ++i) {
+            int32_t raw = depIndices[i];
+            if (raw != LLVM::GEPOp::kDynamicIndex)
+              continue;
+            if (dynPos >= dynIndices.size())
+              return info;
+            if (i == depIndices.size() - 1) {
+              info.valid = true;
+              info.dynamicIndex = dynIndices[dynPos];
+              return info;
+            }
+            dynPos++;
+          }
+          return info;
+        }
+        info.valid = true;
+        info.constantIndex = static_cast<int64_t>(depIdxRaw);
+        return info;
+      }
+    }
+  }
+
+  /// Fallback for pre-conversion form.
+  if (auto depGep = loadOp.getAddr().getDefiningOp<DepGepOp>()) {
+    info.valid = true;
+    if (auto cst = ValueUtils::getConstantValue(depGep.getOffset()))
+      info.constantIndex = *cst;
+    else
+      info.dynamicIndex = depGep.getOffset();
+    return info;
+  }
+
+  return info;
+}
 
 static void
 addAlignmentToDataPointerLoads(SmallVectorImpl<DataPointerInfo> &dataPointers) {
   for (auto &info : dataPointers) {
-    if (!info.loadOp.getAlignment()) {
-      info.loadOp.setAlignment(8);
-      ARTS_DEBUG_TYPE("Set alignment=8 on data pointer load for array_"
-                      << info.depIndex);
+    for (auto loadOp : info.loadOps) {
+      if (!loadOp.getAlignment()) {
+        loadOp.setAlignment(8);
+        ARTS_DEBUG_TYPE("Set alignment=8 on data pointer load for array_"
+                        << info.depIndex);
+      }
     }
   }
 }
 
 /// Collect data pointer loads from EDT function
-static SmallVector<DataPointerInfo>
+static DataPointerCollectionResult
 collectDataPointerLoads(LLVM::LLVMFuncOp funcOp) {
-  SmallVector<DataPointerInfo> result;
-  int64_t index = 0;
+  DataPointerCollectionResult result;
+  llvm::DenseMap<int64_t, unsigned> depIndexToSlot;
+  llvm::DenseMap<Value, unsigned> dynamicDepIndexToSlot;
+  unsigned nextDynamicOrdinal = 0;
 
   funcOp.walk([&](LLVM::LoadOp loadOp) {
     if (!isa<LLVM::LLVMPointerType>(loadOp.getResult().getType()))
       return;
 
-    Value addr = loadOp.getAddr();
+    DepIndexInfo depIndexInfo = extractDepIndexInfo(loadOp);
+    if (!depIndexInfo.valid) {
+      if (isDepStructPointerLoad(loadOp))
+        result.skippedUnknownDepLoads++;
+      return;
+    }
 
-    if (auto defOp = addr.getDefiningOp()) {
-      StringRef opName = defOp->getName().getStringRef();
-      if (opName == "arts.dep_gep" || opName == "arts.db_gep") {
-        result.push_back({loadOp, loadOp.getResult(), index++, {}});
+    unsigned slot = 0;
+    if (depIndexInfo.constantIndex) {
+      auto it = depIndexToSlot.find(*depIndexInfo.constantIndex);
+      if (it == depIndexToSlot.end()) {
+        slot = result.dataPointers.size();
+        depIndexToSlot[*depIndexInfo.constantIndex] = slot;
+        DataPointerInfo info;
+        info.depIndex = *depIndexInfo.constantIndex;
+        info.isDynamicDepIndex = false;
+        info.loadOps.push_back(loadOp);
+        info.ptrValues.push_back(loadOp.getResult());
+        result.dataPointers.push_back(std::move(info));
         return;
       }
-
-      if (auto gepOp = dyn_cast<LLVM::GEPOp>(defOp)) {
-        if (auto structType =
-                dyn_cast<LLVM::LLVMStructType>(gepOp.getSourceElementType()))
-          result.push_back({loadOp, loadOp.getResult(), index++, {}});
+      slot = it->second;
+    } else {
+      if (!depIndexInfo.dynamicIndex)
+        return;
+      auto it = dynamicDepIndexToSlot.find(depIndexInfo.dynamicIndex);
+      if (it == dynamicDepIndexToSlot.end()) {
+        slot = result.dataPointers.size();
+        dynamicDepIndexToSlot[depIndexInfo.dynamicIndex] = slot;
+        DataPointerInfo info;
+        info.depIndex = static_cast<int64_t>(nextDynamicOrdinal++);
+        info.isDynamicDepIndex = true;
+        info.loadOps.push_back(loadOp);
+        info.ptrValues.push_back(loadOp.getResult());
+        result.dataPointers.push_back(std::move(info));
+        return;
       }
+      slot = it->second;
     }
+
+    DataPointerInfo &info = result.dataPointers[slot];
+    info.loadOps.push_back(loadOp);
+    if (!llvm::is_contained(info.ptrValues, loadOp.getResult()))
+      info.ptrValues.push_back(loadOp.getResult());
   });
 
   return result;
@@ -119,7 +247,8 @@ static void createAliasScopes(MLIRContext *ctx,
       StringAttr::get(ctx, "ARTS_data_arrays"));
 
   for (auto &info : dataPointers) {
-    std::string scopeDesc = "array_" + std::to_string(info.depIndex);
+    std::string scopeDesc = (info.isDynamicDepIndex ? "array_dyn_" : "array_") +
+                            std::to_string(info.depIndex);
     info.scope =
         LLVM::AliasScopeAttr::get(ctx, DistinctAttr::create(UnitAttr::get(ctx)),
                                   domain, StringAttr::get(ctx, scopeDesc));
@@ -143,30 +272,42 @@ emitScopeDeclarations(LLVM::LLVMFuncOp funcOp,
 }
 
 /// Find which data pointer (if any) a memory access address is derived from
-static DataPointerInfo *
-findSourceDataPointer(Value addr,
-                      SmallVectorImpl<DataPointerInfo> &dataPointers) {
+static SmallVector<DataPointerInfo *, 2>
+findCandidateDataPointers(Value addr,
+                          SmallVectorImpl<DataPointerInfo> &dataPointers) {
+  SmallVector<DataPointerInfo *, 2> result;
   for (auto &info : dataPointers) {
-    if (ValueUtils::isDerivedFromPtr(addr, info.ptr))
-      return &info;
+    bool derived = false;
+    for (Value ptr : info.ptrValues) {
+      if (ValueUtils::isDerivedFromPtr(addr, ptr)) {
+        derived = true;
+        break;
+      }
+    }
+    if (derived)
+      result.push_back(&info);
   }
-  return nullptr;
+  return result;
 }
 
 static void attachAliasScopes(Operation *op, DataPointerInfo &source,
-                              SmallVectorImpl<DataPointerInfo> &allPointers) {
+                              SmallVectorImpl<DataPointerInfo> &allPointers,
+                              bool emitNoAliasScopes) {
   MLIRContext *ctx = op->getContext();
 
   SmallVector<Attribute> aliasScopes = {source.scope};
   auto aliasScopesAttr = ArrayAttr::get(ctx, aliasScopes);
 
-  SmallVector<Attribute> noaliasScopes;
-  for (auto &info : allPointers) {
-    if (&info != &source)
-      noaliasScopes.push_back(info.scope);
+  ArrayAttr noaliasScopesAttr = nullptr;
+  if (emitNoAliasScopes) {
+    SmallVector<Attribute> noaliasScopes;
+    for (auto &info : allPointers) {
+      if (&info != &source)
+        noaliasScopes.push_back(info.scope);
+    }
+    noaliasScopesAttr =
+        noaliasScopes.empty() ? nullptr : ArrayAttr::get(ctx, noaliasScopes);
   }
-  ArrayAttr noaliasScopesAttr =
-      noaliasScopes.empty() ? nullptr : ArrayAttr::get(ctx, noaliasScopes);
 
   if (auto loadOp = dyn_cast<LLVM::LoadOp>(op)) {
     loadOp.setAliasScopesAttr(aliasScopesAttr);
@@ -184,15 +325,16 @@ static void attachAliasScopes(Operation *op, DataPointerInfo &source,
 }
 
 /// Process memory accesses in the function.
-static int
-processMemoryAccesses(LLVM::LLVMFuncOp funcOp,
-                      SmallVectorImpl<DataPointerInfo> &dataPointers) {
+static int processMemoryAccesses(LLVM::LLVMFuncOp funcOp,
+                                 SmallVectorImpl<DataPointerInfo> &dataPointers,
+                                 bool emitNoAliasScopes, int &ambiguousCount) {
   int count = 0;
 
   /// Build set of data pointer values to skip when processing.
   DenseSet<Value> dataPointerValues;
   for (auto &info : dataPointers) {
-    dataPointerValues.insert(info.ptr);
+    for (Value ptr : info.ptrValues)
+      dataPointerValues.insert(ptr);
   }
 
   funcOp.walk([&](Operation *op) {
@@ -215,8 +357,18 @@ processMemoryAccesses(LLVM::LLVMFuncOp funcOp,
     if (!addr)
       return;
 
-    if (auto *source = findSourceDataPointer(addr, dataPointers)) {
-      attachAliasScopes(op, *source, dataPointers);
+    auto matches = findCandidateDataPointers(addr, dataPointers);
+    if (matches.empty())
+      return;
+    if (matches.size() > 1) {
+      ambiguousCount++;
+      ARTS_DEBUG_TYPE("Skipping ambiguous alias-scope assignment in "
+                      << funcOp.getName() << " for op: " << *op);
+      return;
+    }
+
+    if (auto *source = matches.front()) {
+      attachAliasScopes(op, *source, dataPointers, emitNoAliasScopes);
       count++;
     }
   });
@@ -244,6 +396,8 @@ struct AliasScopeGenPass
 
     int totalCount = 0;
     int totalDecls = 0;
+    int totalSkippedDynamic = 0;
+    int totalAmbiguous = 0;
 
     module.walk([&](LLVM::LLVMFuncOp funcOp) {
       if (!funcOp.getName().starts_with("__arts_edt_"))
@@ -251,9 +405,10 @@ struct AliasScopeGenPass
 
       ARTS_DEBUG_TYPE("Processing EDT function: " << funcOp.getName());
 
-      auto dataPointers = collectDataPointerLoads(funcOp);
+      auto collected = collectDataPointerLoads(funcOp);
+      auto &dataPointers = collected.dataPointers;
       if (dataPointers.empty()) {
-        ARTS_INFO("No data pointer loads found in " << funcOp.getName());
+        ARTS_INFO("No dependency pointer loads found in " << funcOp.getName());
         return;
       }
 
@@ -265,8 +420,17 @@ struct AliasScopeGenPass
         return;
       }
 
-      ARTS_INFO("Found " << dataPointers.size() << " data pointer loads in "
-                         << funcOp.getName());
+      int dynamicSlots = 0;
+      for (auto &info : dataPointers)
+        if (info.isDynamicDepIndex)
+          dynamicSlots++;
+      totalSkippedDynamic += collected.skippedUnknownDepLoads;
+      ARTS_INFO("Found " << dataPointers.size()
+                         << " unique dependency pointer slots in "
+                         << funcOp.getName() << " (" << dynamicSlots
+                         << " dynamic), skipped "
+                         << collected.skippedUnknownDepLoads
+                         << " unrecognized dep-pointer loads");
 
       addAlignmentToDataPointerLoads(dataPointers);
 
@@ -274,15 +438,25 @@ struct AliasScopeGenPass
       emitScopeDeclarations(funcOp, dataPointers);
       totalDecls += dataPointers.size();
 
-      int count = processMemoryAccesses(funcOp, dataPointers);
+      bool emitNoAliasScopes = (dataPointers.size() > 1);
+      int ambiguousCount = 0;
+      int count = processMemoryAccesses(funcOp, dataPointers, emitNoAliasScopes,
+                                        ambiguousCount);
       totalCount += count;
+      totalAmbiguous += ambiguousCount;
 
-      ARTS_INFO("Attached alias scopes to " << count << " memory accesses");
+      ARTS_INFO("Attached alias scopes to "
+                << count << " memory accesses (noalias "
+                << (emitNoAliasScopes ? "enabled" : "disabled")
+                << ", ambiguous skipped: " << ambiguousCount << ")");
     });
 
-    ARTS_INFO("Total: emitted " << totalDecls << " scope declarations, "
-                                << "attached alias scopes to " << totalCount
-                                << " memory accesses");
+    ARTS_INFO("Total: emitted "
+              << totalDecls << " scope declarations, "
+              << "attached alias scopes to " << totalCount
+              << " memory accesses, skipped " << totalSkippedDynamic
+              << " unrecognized dep-pointer loads, skipped " << totalAmbiguous
+              << " ambiguous memory accesses");
     ARTS_INFO_FOOTER(AliasScopeGenPass);
   }
 };

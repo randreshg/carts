@@ -51,6 +51,10 @@ public:
   /// Strip numeric casts and max(x, 1) clamping.
   static Value stripClampOne(Value v);
 
+  /// Strip select(cmp(...), x, y) min/max clamp patterns recursively.
+  /// Peels through up to `maxDepth` layers of select-based clamping.
+  static Value stripSelectClamp(Value value, int maxDepth = 8);
+
   /// Shallow structural equivalence for index expressions.
   static bool areValuesEquivalent(Value a, Value b, int depth = 0);
 

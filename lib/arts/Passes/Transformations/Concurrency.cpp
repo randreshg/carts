@@ -257,17 +257,16 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
         "data when setting parallelism");
   }
 
-  int nodeCount =
-      abstractMachine->hasValidNodeCount() ? abstractMachine->getNodeCount() : 0;
+  int nodeCount = abstractMachine->hasValidNodeCount()
+                      ? abstractMachine->getNodeCount()
+                      : 0;
   int workerThreads = static_cast<int>(machineDecision.workersPerNode);
   numWorkers = static_cast<int>(machineDecision.totalWorkers);
   concurrencyType = machineDecision.concurrency;
 
   if (concurrencyType == EdtConcurrency::internode) {
-    ARTS_INFO("Setting EDT parallelism: inter-node across " << nodeCount
-                                                            << " nodes x "
-                                                            << workerThreads
-                                                            << " workers");
+    ARTS_INFO("Setting EDT parallelism: inter-node across "
+              << nodeCount << " nodes x " << workerThreads << " workers");
   } else if (numWorkers > 1) {
     ARTS_INFO("Setting EDT parallelism: intra-node across " << numWorkers
                                                             << " workers");

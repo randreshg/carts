@@ -190,7 +190,11 @@ struct SingleToARTSPattern : public OpRewritePattern<omp::SingleOp> {
 
 /// Pattern to replace `omp.task` with `arts.edt`
 struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
-  using OpRewritePattern::OpRewritePattern;
+  TaskToARTSPattern(MLIRContext *ctx,
+                    const llvm::DenseSet<Value> *writerSources)
+      : OpRewritePattern<omp::TaskOp>(ctx), writerSources(writerSources) {}
+
+  const llvm::DenseSet<Value> *writerSources;
 
   ArtsMode getDbMode(omp::ClauseTaskDepend taskClause) const {
     switch (taskClause) {
@@ -251,6 +255,17 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
             SmallVector<Value>(ompDepOp.getSizes().begin(),
                                ompDepOp.getSizes().end()));
         replaceInRegion(region, depVar, newOmpDep.getResult());
+      }
+
+      /// OpenMP depend(in: X) where no task ever writes X creates no ordering
+      /// edge. Dropping these read-only dependency edges avoids unnecessary
+      /// runtime bookkeeping and reduces sensitivity to dependency noise.
+      bool hasWriter =
+          !writerSources || writerSources->contains(ompDepOp.getSource());
+      if (ompDepOp.getMode() == ArtsMode::in && !hasWriter) {
+        ARTS_DEBUG("  - Skipping read-only dependency for source "
+                   << ompDepOp.getSource());
+        continue;
       }
 
       /// Extract indices and sizes from arts.omp_dep
@@ -769,14 +784,27 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
   ARTS_DEBUG_REGION(module.dump(););
   MLIRContext *context = &getContext();
 
+  /// Record sources that participate in writer dependencies anywhere in this
+  /// module before rewrites mutate the task graph.
+  llvm::DenseSet<Value> writerDepSources;
+  module.walk([&](omp::TaskOp task) {
+    for (Value depVar : task.getDependVars()) {
+      auto dep = depVar.getDefiningOp<OmpDepOp>();
+      if (!dep)
+        continue;
+      if (dep.getMode() == ArtsMode::out || dep.getMode() == ArtsMode::inout)
+        writerDepSources.insert(dep.getSource());
+    }
+  });
+
   /// Add patterns to convert OpenMP operations to Arts operations
   RewritePatternSet patterns(context);
   patterns.add<OMPParallelToArtsPattern, SCFParallelToArtsPattern,
-               MasterToARTSPattern, SingleToARTSPattern, TaskToARTSPattern,
-               TaskloopToARTSPattern, WsloopToARTSPattern,
-               AtomicUpdateToArtsPattern, TerminatorToARTSPattern,
-               BarrierToARTSPattern, TaskwaitToARTSPattern, CallToARTSPattern>(
-      context);
+               MasterToARTSPattern, SingleToARTSPattern, TaskloopToARTSPattern,
+               WsloopToARTSPattern, AtomicUpdateToArtsPattern,
+               TerminatorToARTSPattern, BarrierToARTSPattern,
+               TaskwaitToARTSPattern, CallToARTSPattern>(context);
+  patterns.add<TaskToARTSPattern>(context, &writerDepSources);
   GreedyRewriteConfig config;
   (void)applyPatternsAndFoldGreedily(module, std::move(patterns), config);
 

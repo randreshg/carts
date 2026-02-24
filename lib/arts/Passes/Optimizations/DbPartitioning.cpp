@@ -510,23 +510,39 @@ static SmallVector<Value> getEntryAnchors(DbAcquireOp original, size_t entry) {
   return original.getPartitionOffsetsForEntry(entry);
 }
 
-static bool indexMatchesAnchor(Value idx, Value anchor) {
+static int indexMatchStrength(Value idx, Value anchor) {
   if (!idx || !anchor)
-    return false;
-  if (idx == anchor || ValueUtils::dependsOn(idx, anchor))
-    return true;
+    return 0;
+
+  idx = ValueUtils::stripSelectClamp(idx);
+  anchor = ValueUtils::stripSelectClamp(anchor);
+  idx = ValueUtils::stripNumericCasts(idx);
+  anchor = ValueUtils::stripNumericCasts(anchor);
+
+  if (ValueUtils::sameValue(idx, anchor) ||
+      ValueUtils::areValuesEquivalent(idx, anchor))
+    return 4;
+
+  if (ValueUtils::dependsOn(idx, anchor) || ValueUtils::dependsOn(anchor, idx))
+    return 2;
+
   if (auto cast = idx.getDefiningOp<arith::IndexCastOp>())
-    idx = cast.getIn();
+    idx = ValueUtils::stripSelectClamp(cast.getIn());
   if (auto blockArg = idx.dyn_cast<BlockArgument>()) {
     if (auto forOp = dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp())) {
       if (blockArg == forOp.getInductionVar()) {
         Value lb = forOp.getLowerBound();
-        if (lb == anchor || ValueUtils::dependsOn(lb, anchor))
-          return true;
+        lb = ValueUtils::stripSelectClamp(lb);
+        if (ValueUtils::sameValue(lb, anchor) ||
+            ValueUtils::areValuesEquivalent(lb, anchor) ||
+            ValueUtils::dependsOn(lb, anchor) ||
+            ValueUtils::dependsOn(anchor, lb))
+          return 1;
       }
     }
   }
-  return false;
+
+  return 0;
 }
 
 static int scoreEntry(ArrayRef<Value> indices, ArrayRef<Value> anchors) {
@@ -537,12 +553,7 @@ static int scoreEntry(ArrayRef<Value> indices, ArrayRef<Value> anchors) {
     Value anchor = anchors[d];
     if (!idx || !anchor)
       continue;
-    if (idx == anchor) {
-      score += 2;
-      continue;
-    }
-    if (indexMatchesAnchor(idx, anchor))
-      score += 1;
+    score += indexMatchStrength(idx, anchor);
   }
   return score;
 }

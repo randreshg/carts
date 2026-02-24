@@ -1161,6 +1161,36 @@ DbAcquireNode::getPartitionOffsetDim(Value offset, bool requireLeading) {
     offsetStripped = offsetBase;
   }
 
+  Value normalizedOffset = ValueUtils::stripSelectClamp(offsetStripped);
+  auto matchesPartitionOffset = [&](Value candidate) -> bool {
+    if (!candidate || !normalizedOffset)
+      return false;
+    Value normalizedCandidate =
+        ValueUtils::stripNumericCasts(ValueUtils::stripSelectClamp(candidate));
+    Value normalized = ValueUtils::stripNumericCasts(normalizedOffset);
+    if (ValueUtils::sameValue(normalizedCandidate, normalized) ||
+        ValueUtils::areValuesEquivalent(normalizedCandidate, normalized))
+      return true;
+    return ValueUtils::dependsOn(normalizedCandidate, normalized);
+  };
+
+  auto dependsOnPartitionOffset = [&](Value candidate,
+                                      Value &dependencyRoot) -> bool {
+    dependencyRoot = Value();
+    if (!candidate)
+      return false;
+    if (ValueUtils::dependsOn(candidate, offsetStripped)) {
+      dependencyRoot = offsetStripped;
+      return true;
+    }
+    if (normalizedOffset && normalizedOffset != offsetStripped &&
+        ValueUtils::dependsOn(candidate, normalizedOffset)) {
+      dependencyRoot = normalizedOffset;
+      return true;
+    }
+    return false;
+  };
+
   DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
   collectAccessOperations(dbRefToMemOps);
 
@@ -1199,19 +1229,26 @@ DbAcquireNode::getPartitionOffsetDim(Value offset, bool requireLeading) {
         if (!isConst && firstDynPos < 0)
           firstDynPos = static_cast<int64_t>(i - memrefStart);
 
-        if (ValueUtils::dependsOn(fullChain[i], offsetStripped)) {
-          if (auto stride =
-                  ValueUtils::getOffsetStride(fullChain[i], offsetStripped)) {
-            if (*stride != 1) {
-              ARTS_DEBUG("  partition offset has stride "
-                         << *stride << "; disabling blocked partitioning");
+        Value dependencyRoot;
+        bool directDepends =
+            dependsOnPartitionOffset(fullChain[i], dependencyRoot);
+        bool matchedOffset =
+            directDepends || matchesPartitionOffset(fullChain[i]);
+        if (matchedOffset) {
+          if (directDepends) {
+            if (auto stride =
+                    ValueUtils::getOffsetStride(fullChain[i], dependencyRoot)) {
+              if (*stride != 1) {
+                ARTS_DEBUG("  partition offset has stride "
+                           << *stride << "; disabling blocked partitioning");
+                return std::nullopt;
+              }
+            }
+            if (isIndirectIndex(fullChain[i], dependencyRoot)) {
+              ARTS_DEBUG("  indirect index detected; disabling blocked "
+                         "partitioning");
               return std::nullopt;
             }
-          }
-          if (isIndirectIndex(fullChain[i], offsetStripped)) {
-            ARTS_DEBUG("  indirect index detected; disabling blocked "
-                       "partitioning");
-            return std::nullopt;
           }
           int64_t dim = static_cast<int64_t>(i - memrefStart);
           if (matchedPos >= 0 && matchedPos != dim) {
@@ -1251,7 +1288,9 @@ DbAcquireNode::getPartitionOffsetDim(Value offset, bool requireLeading) {
         Value idx = fullChain[matchedIdxPos];
         int64_t constVal;
         if (!ValueUtils::getConstantIndex(idx, constVal)) {
-          if (isIndirectIndex(idx, offsetStripped)) {
+          Value dependencyRoot;
+          if (dependsOnPartitionOffset(idx, dependencyRoot) &&
+              isIndirectIndex(idx, dependencyRoot)) {
             ARTS_DEBUG("  indirect index detected on partitioned dim; "
                        "disabling blocked partitioning");
             return std::nullopt;
@@ -1261,7 +1300,11 @@ DbAcquireNode::getPartitionOffsetDim(Value offset, bool requireLeading) {
 
       Value idxAtPos =
           matchedIdx ? matchedIdx : fullChain[memrefStart + matchedPos];
-      if (!LoopNode::dependsOnLoopInitNormalized(idxAtPos, offsetStripped)) {
+      bool dependsOnLoopInit =
+          LoopNode::dependsOnLoopInitNormalized(idxAtPos, offsetStripped) ||
+          (normalizedOffset && normalizedOffset != offsetStripped &&
+           LoopNode::dependsOnLoopInitNormalized(idxAtPos, normalizedOffset));
+      if (!dependsOnLoopInit && !matchesPartitionOffset(idxAtPos)) {
         ARTS_DEBUG("  -> returning none (offset not in access pattern)");
         return std::nullopt;
       }
