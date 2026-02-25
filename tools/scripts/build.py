@@ -11,7 +11,7 @@ from scripts.deps import check_dependency, Dependency, DepStatus
 from scripts.run import run_subprocess
 
 
-# Counter profile mapping: level -> config file name (in carts/config/)
+# Counter profile mapping: level -> config file name
 COUNTER_PROFILES = {
     0: "profile-none.cfg",       # All OFF - baseline performance
     1: "profile-timing.cfg",     # Timing only - minimal overhead (DEFAULT)
@@ -94,10 +94,17 @@ def build(
             effective_counter_config = profile.resolve()
             console.print(f"Profile: [{Colors.INFO}]{profile}[/{Colors.INFO}]")
         else:
-            # Use profile based on counters_level (profiles are in carts/config/)
+            # Use profile based on counters_level
             profile_name = COUNTER_PROFILES.get(
                 counters_level, "profile-timing.cfg")
-            effective_counter_config = config.carts_dir / "configs" / profile_name
+            effective_counter_config = (
+                config.carts_dir
+                / "external"
+                / "carts-benchmarks"
+                / "configs"
+                / "profiles"
+                / profile_name
+            )
             console.print(f"Counter profile: [{Colors.INFO}]{profile_name}[/{Colors.INFO}]")
         make_vars.append(f"COUNTER_CONFIG_PATH={effective_counter_config}")
 

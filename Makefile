@@ -162,8 +162,8 @@ ARTS_USE_METRICS ?= OFF
 ARTS_INFO_ENABLED ?= OFF
 ARTS_DEBUG_ENABLED ?= OFF
 # Counter configuration profile (defaults to timing-only for minimal overhead)
-# Available profiles: counter.profile-none.cfg, counter.profile-timing.cfg, counter.profile-artsid-only.cfg, counter.profile-deep.cfg
-COUNTER_CONFIG_PATH ?= configs/profile-timing.cfg
+# Available profiles: profile-none.cfg, profile-timing.cfg, profile-workload.cfg, profile-overhead.cfg, profile-thread-edt.cfg
+COUNTER_CONFIG_PATH ?= external/carts-benchmarks/configs/profiles/profile-timing.cfg
 
 # Configuration hash file for ARTS build caching
 ARTS_CONFIG_HASH_FILE := $(ARTS_BUILD_DIR)/.arts-build-config
