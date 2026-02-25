@@ -27,12 +27,14 @@ from scripts.compile import (
 )
 from scripts.docker import (
     docker_callback,
-    docker_run,
     docker_build,
+    docker_start,
     docker_update,
-    docker_kill,
-    docker_clean_cmd,
-    _run_docker_clean,
+    docker_stop,
+    docker_clean as docker_clean_cmd,
+    docker_commit,
+    docker_status,
+    docker_exec,
 )
 from scripts.test import test as test_cmd, check as check_cmd
 from scripts.format import format_sources as format_cmd
@@ -103,11 +105,17 @@ app.command(name="update")(update_cmd)
 
 # Docker subcommands
 docker_app.callback(invoke_without_command=True)(docker_callback)
-docker_app.command(name="run")(docker_run)
 docker_app.command(name="build")(docker_build)
+docker_app.command(name="start")(docker_start)
 docker_app.command(name="update")(docker_update)
-docker_app.command(name="kill")(docker_kill)
+docker_app.command(name="stop")(docker_stop)
 docker_app.command(name="clean")(docker_clean_cmd)
+docker_app.command(name="commit")(docker_commit)
+docker_app.command(name="status")(docker_status)
+docker_app.command(
+    name="exec",
+    context_settings={"allow_extra_args": True, "allow_interspersed_args": False},
+)(docker_exec)
 
 
 # ============================================================================
@@ -205,7 +213,7 @@ def clean(
     if all_builds:
         run_full_clean()
     elif docker_clean:
-        _run_docker_clean()
+        docker_clean_cmd()
     else:
         run_local_clean()
 
