@@ -1,361 +1,77 @@
-# Docker Multi-Node ARTS Testing
+# CARTS Docker Multi-Node Runtime
 
-This folder contains everything needed to run ARTS tests across multiple Docker containers, simulating a true multi-node environment.
+This directory contains Docker image assets and cluster configuration for running CARTS in a 6-node Slurm-backed local cluster.
 
 ## Prerequisites
 
-### Install Docker Runtime (Colima)
-We use Colima for terminal-only Docker with full CPU access:
+1. Install and start Docker (or Colima on macOS).
 
 ```bash
 brew install colima
-
-# Start Colima with maximum resources for fast compilation
 colima start --cpu 16 --memory 32
 ```
 
-**Important**: Configure Colima with enough resources for fast compilation:
-- **CPU**: Use all available cores (e.g., `--cpu 16` for 16-core Mac)
-- **Memory**: Use at least 16GB (e.g., `--memory 32` for 32GB Mac)
+2. Verify Docker is available:
 
-### Verify Docker is Working
 ```bash
 docker ps
 ```
 
-## Files
+## Layout
 
-- `docker-compose.yml` - Orchestrates 2 ARTS containers (optional, we use manual commands)
-- `Dockerfile` - Optimized base image with ARTS dependencies and SSH setup
-- `docker-build.sh` - **One-time build script** - Creates base image with all dependencies and CARTS pre-built
-- `docker-run.sh` - **Run script** - Loads pre-built image and starts multi-node containers
-- `docker-update.sh` - **Update script** - Pulls latest changes and rebuilds CARTS components
-- `docker-clean.sh` - Cleanup script - Removes all Docker containers and images
-- `run-test.sh` - Helper script to run ARTS tests
-- `.dockerignore` - Reduces build context for faster builds
+- `Dockerfile`: Base image definition (`arts-node-base`)
+- `slurm.conf`: Slurm cluster config copied into the image
+- `arts-docker.cfg`: Primary ARTS runtime config for Docker cluster
+- `arts-docker-2node.cfg`: 2-node variant used by tests
+- `.dockerignore`: Minimal build context
+- `scripts/docker_cli.py`: Python Docker orchestration implementation
 
-## Step-by-Step Setup
+## CLI Commands
 
-### 1. One-Time Build (Run Once)
-```bash
-cd docker
-./docker-build.sh
-```
-
-**What this does**:
-- Builds base Docker image with Ubuntu 22.04 and all dependencies
-- Installs LLVM 18, binutils, and CMake required by CARTS
-- Sets up SSH for passwordless access between containers
-- Clones CARTS repository and runs `carts-setup.py` with all available CPU cores
-- The setup script handles the correct build order automatically
-- Creates `arts-node:built` image with CARTS pre-installed
-
-**Time**: 3-5 minutes (one-time only, with 16 cores and optimizations)
-
-### 2. Start Multi-Node Containers
-```bash
-./docker-run.sh                                         # Start containers only
-./docker-run.sh parallel.c                              # Start containers and run example
-./docker-run.sh matrixmul -- 100 10                     # Start containers and run with runtime arguments
-./docker-run.sh fib --run-args --debug-only=db -- 15    # Start containers and run with build+runtime args
-```
-
-**What this does**:
-- Loads the pre-built `arts-node:built` image
-- Starts 2 containers (arts-node-1 and arts-node-2)
-- Sets up SSH keys between containers
-- Creates multi-node ARTS configuration
-- Tests SSH connectivity
-- **If example file provided**: Builds and executes the example distributedly
-
-**Time**: 30 seconds (very fast)
-
-### 3. Fast Rebuild (For Development)
-```bash
-./docker-fast-rebuild.sh
-```
-
-**What this does**:
-- Skips base image rebuild (uses existing arts-node-base)
-- Only rebuilds CARTS components
-- Perfect for development when you change CARTS code
-- Uses shallow git clone for faster downloads
-
-**Time**: 1-2 minutes (with 16 cores)
-
-### 4. Update CARTS Components (When Needed)
-```bash
-./docker-update.sh                    # Update only changed components
-./docker-update.sh --arts -f          # Force rebuild ARTS component
-./docker-update.sh --llvm -f          # Force rebuild LLVM and dependent components
-./docker-update.sh -f                 # Force rebuild everything
-```
-
-### 5. Commit Container Changes to Image (When Needed)
-```bash
-./docker-commit.sh                    # Commit arts-node-1 state to arts-node:built image
-```
-
-**What this does**:
-- Extracts workspace content from the volume mounted in arts-node-1
-- Creates a temporary container from arts-node-base (without volume mount)
-- Copies workspace content into the container's filesystem at `/opt/carts`
-- Commits the container to update `arts-node:built` image
-- Future volume initializations will use this updated image
-
-**When to use**:
-- After making changes in arts-node-1 that you want to persist in the image
-- Before distributing or backing up the Docker image
-- To update the base image that volumes are initialized from
-
-**Time**: 1-2 minutes (depending on workspace size)
-
-**What this does**:
-- Pulls latest changes from CARTS, Polygeist, ARTS runtime, and LLVM repositories
-- By default, only rebuilds components that have detected changes
-- With force options, rebuilds specified components regardless of changes
-- Rebuilds components with all available CPU cores in correct order:
-  - `carts build --llvm` (when LLVM changes or forced)
-  - `carts build --polygeist` (when Polygeist or LLVM changes)
-  - `carts build --arts` (when ARTS changes or forced)
-  - `carts build` (when CARTS changes or forced)
-- Updates the `arts-node:built` image
-
-**Time**: 2-5 minutes (depending on changes, with 16 cores)
-
-**Force Options**:
-- `--force, -f`: Force rebuild mode (rebuilds everything)
-- `--arts, -a`: Force rebuild ARTS runtime only
-- `--polygeist, -p`: Force rebuild Polygeist compiler only
-- `--llvm, -l`: Force rebuild LLVM compiler (also rebuilds Polygeist)
-- `--carts, -c`: Force rebuild CARTS framework only
-
-## Slurm Simulation Mode
-
-The Docker setup supports simulating a Slurm cluster for testing the `launcher=slurm` code path. All 6 containers run real Slurm daemons (munge, slurmctld, slurmd).
-
-### Quick Tests (Automated from Host)
-```bash
-# Start containers with Slurm and run an example
-./docker-run.sh --slurm parallel.c
-
-# Start containers with Slurm only (no example)
-./docker-run.sh --slurm
-```
-
-### Benchmarks (Interactive from Inside Container)
-```bash
-# Start containers with Slurm
-./docker-run.sh --slurm
-
-# Enter the Slurm controller node
-docker exec -it arts-node-1 bash
-
-# Inside container: check cluster status
-sinfo
-srun --nodes=6 hostname
-
-# Run benchmark pipeline
-cd /opt/carts
-carts benchmarks slurm-run polybench/gemm --nodes=1,2,4,6 --runs=3
-```
-
-### Using carts CLI
-```bash
-carts docker run --slurm parallel.c                  # Run with Slurm
-carts docker run --slurm matrixmul -- 100 10         # With runtime args
-```
-
-### How It Works
-- **Munge**: Authentication daemon with a shared key (baked into Docker image)
-- **slurmctld**: Slurm controller runs on arts-node-1
-- **slurmd**: Slurm worker daemon runs on all 6 nodes
-- **Shared filesystem**: Docker volume at `/opt/carts` mounted identically on all nodes
-- **ARTS config**: Uses `slurm/arts-docker-slurm.cfg` with `launcher=slurm` (ARTS reads `SLURM_*` env vars)
-
-### Rebuilding with Slurm Support
-If the base image was built before Slurm was added:
-```bash
-docker build -t arts-node-base docker/   # ~2 min, no CARTS rebuild needed
-```
-
-## Running Tests
-
-### Method 1: Manual Commands
-```bash
-# Access a container
-docker exec -it arts-node-1 bash
-
-# Run a test using carts wrapper
-cd /opt/carts
-carts compile tests/test/parallel/parallel.c
-./parallel
-```
-
-### Method 2: Using Helper Script
-```bash
-./run-test.sh tests/test/parallel
-```
-
-### Method 3: Using carts docker command
-```bash
-# From host machine
-carts docker --run example.c                    # Run example with default settings
-carts docker --run matrixmul -- 100 10          # Run with runtime arguments: matrix size 100, block size 10
-carts docker --run fib --run-args --debug-only=db -- 15    # Build with debug flags, run fibonacci with input 15
-```
-
-### Method 4: Using docker-run.sh directly
-```bash
-# From docker directory
-./docker-run.sh parallel.c                    # Run example with default settings
-./docker-run.sh matrixmul -- 100 10          # Run with runtime arguments: matrix size 100, block size 10
-./docker-run.sh fib --run-args --debug-only=db -- 15    # Build with debug flags, run fibonacci with input 15
-```
-
-## CARTS Docker Commands
-
-The `carts docker` command provides a unified interface for Docker operations:
+All operations are exposed through the CARTS CLI:
 
 ```bash
-carts docker --run <file> [build_args] [-- runtime_args]    # Run example in Docker containers
-carts docker --update [options]                              # Update and rebuild Docker containers
-carts docker --clean                                         # Clean all Docker containers and images
-carts docker --help                                          # Show help
+carts docker build [--force]
+carts docker start
+carts docker status
+carts docker exec -- sinfo
+carts docker update [--arts|--polygeist|--llvm|--carts] [--force] [--debug|--info]
+carts docker commit
+carts docker stop
+carts docker clean
 ```
 
-### Update Options
+### Command Semantics
 
-The `--update` command supports force rebuild options:
+- `carts docker build`: Builds `arts-node-base`, creates/initializes `carts-workspace`
+- `carts docker start`: Starts 6 containers (`arts-node-1`..`arts-node-6`) and Slurm daemons
+- `carts docker stop`: Stops running CARTS containers and Slurm processes
+- `carts docker commit`: Captures current workspace into `arts-node:built`
+- `carts docker clean`: Removes CARTS Docker containers, images, volumes, and prunes unused Docker state
+
+## Typical Workflow
 
 ```bash
-carts docker --update                    # Update only changed components
-carts docker --update --arts -f         # Force rebuild ARTS component
-carts docker --update --llvm -f         # Force rebuild LLVM and dependent components
-carts docker --update -f                # Force rebuild everything
+# One-time or when rebuilding image/workspace from scratch
+carts docker build
+
+# Start cluster
+carts docker start
+
+# Verify Slurm
+carts docker exec -- sinfo
+carts docker exec -- srun --nodes=6 hostname
+
+# Run benchmark CLI through Slurm mode
+carts docker exec -- carts benchmarks run --slurm polybench/gemm --nodes=1,2,4,6 --runs=3
+
+# Stop or clean
+carts docker stop
+# carts docker clean
 ```
 
-**Available options**:
-- `--arts, -a`: Force rebuild ARTS runtime
-- `--polygeist, -p`: Force rebuild Polygeist compiler
-- `--llvm, -l`: Force rebuild LLVM compiler
-- `--carts, -c`: Force rebuild CARTS framework
-- `--force, -f`: Force rebuild mode (rebuilds everything)
+## Notes
 
-### Argument Separation
-
-The `--run` command supports separating build-time arguments from runtime arguments:
-
-- **Build arguments** (before `--`): Passed to the `carts compile` command (compilation flags, debug options, etc.)
-- **Runtime arguments** (after `--`): Passed to the actual binary execution (program input parameters)
-
-**Examples:**
-```bash
-# Runtime arguments only
-carts docker --run matrixmul -- 100 10
-
-# Build arguments only
-carts docker --run fib --run-args --debug-only=db
-
-# Both build and runtime arguments
-carts docker --run fib --run-args --debug-only=db -- 15
-```
-
-### Script Functionality
-
-Each Docker script has a specific purpose:
-
-- **`docker-build.sh`**: One-time setup script that creates the base Docker image with all CARTS dependencies pre-installed. This script should only be run once initially.
-
-- **`docker-run.sh`**: Starts the multi-node Docker containers and sets up the ARTS runtime environment. This script configures SSH between containers and generates the multi-node ARTS configuration file. If an example file is provided as an argument, it will also build and execute the example distributedly across the containers.
-
-- **`docker-update.sh`**: Intelligent update script that detects changes in CARTS, Polygeist, ARTS runtime, and LLVM repositories. Only rebuilds components that have actually changed, saving time during development.
-
-- **`docker-commit.sh`**: Commits the current state of arts-node-1 container (including workspace volume content) to update the `arts-node:built` image. Use this to persist changes made in containers back to the image for future volume initializations.
-
-- **`docker-clean.sh`**: Complete cleanup script that removes all Docker containers, images, and networks related to CARTS. Use this to reset the Docker environment.
-
-## Container Management
-
-### Check Container Status
-```bash
-docker ps
-```
-
-### Access Container Shell
-```bash
-docker exec -it arts-node-1 bash
-```
-
-### View Container Logs
-```bash
-docker logs arts-node-1
-```
-
-### Stop Containers
-```bash
-docker stop arts-node-1 arts-node-2
-```
-
-### Remove Containers
-```bash
-docker rm arts-node-1 arts-node-2
-```
-
-### Clean Up Everything
-```bash
-./docker-clean.sh
-```
-
-## Shared Workspace
-
-All containers share the same `/opt/carts` directory through a Docker volume named `carts-workspace`:
-- **Shared Directory**: `/opt/carts` (mounted on all containers)
-- **Benefits**: Changes made in any container are immediately visible to all other containers
-- **No Binary Copying**: Binaries built on arts-node-1 are automatically available on all nodes
-- **Development Workflow**: Work on arts-node-1, and all changes are instantly shared
-
-The shared workspace is automatically initialized from the built image on first run.
-
-## Container Details
-
-Each container:
-- **Hostname**: arts-node-1, arts-node-2, arts-node-3, arts-node-4, arts-node-5, arts-node-6
-- **OS**: Ubuntu 22.04
-- **User**: root (for SSH access)
-- **Working Directory**: /opt/carts (shared across all containers)
-- **SSH**: Passwordless SSH between all containers
-- **IP Addresses**: Dynamically assigned by Docker (typically 172.17.0.x)
-
-## ARTS Configuration
-
-The setup generates a multi-node ARTS configuration:
-- **6 nodes** (arts-node-1 through arts-node-6) with Docker-assigned IPs
-- **SSH launcher** for inter-node communication
-- **Port 34739** for ARTS communication
-- **4 threads per node**
-- **Config file**: `/opt/carts/docker/arts-docker.cfg`
-
-## Troubleshooting
-
-### SSH Connectivity Issues
-```bash
-# Test SSH between specific nodes
-docker exec arts-node-1 bash -c "ssh -o StrictHostKeyChecking=no root@172.17.0.3 'echo SSH works!'"
-```
-
-### Container Not Starting
-```bash
-# Check container logs
-docker logs arts-node-1
-
-# Restart a specific container
-docker restart arts-node-1
-```
-
-### Build Issues (during `docker-build.sh`)
-```bash
-# If the build fails in the builder container, you can access it before it's removed:
-docker exec -it arts-node-builder bash
-# Then manually debug the build process in /opt/carts
-```
+- Slurm is always started by `carts docker start`; no SSH launcher path is used.
+- Containers share one Docker volume at `/opt/carts` (`carts-workspace`).
+- `carts docker exec` defaults to node 1; use `--node N` for another node.

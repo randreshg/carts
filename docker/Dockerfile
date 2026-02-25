@@ -3,7 +3,7 @@ FROM ubuntu:22.04
 # Avoid interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install dependencies (SSH server/client, build tools, and compilers)
+# Install dependencies (build tools, compilers, and utilities)
 RUN apt-get update && apt-get install -y \
     build-essential \
     ninja-build \
@@ -67,31 +67,6 @@ RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && \
 # Verify Node.js and npm installation
 RUN node --version && npm --version
 
-# Configure SSH for passwordless access
-RUN mkdir /var/run/sshd && \
-    echo 'root:arts' | chpasswd && \
-    sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
-    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
-
-# Generate SSH host keys (server) and root client keys
-RUN ssh-keygen -A && \
-    mkdir -p /root/.ssh && chmod 700 /root/.ssh && \
-    ssh-keygen -t ed25519 -N "" -f /root/.ssh/id_ed25519 && \
-    cat /root/.ssh/id_ed25519.pub >> /root/.ssh/authorized_keys && \
-    chmod 600 /root/.ssh/authorized_keys
-
-# Pre-seed known_hosts with cluster hostnames using the baked host key
-RUN set -e; \
-    mkdir -p /root/.ssh; chmod 700 /root/.ssh; \
-    HOST_PUB=$(cat /etc/ssh/ssh_host_ed25519_key.pub); \
-    printf "arts-node-1 %s\n" "$HOST_PUB" > /root/.ssh/known_hosts; \
-    printf "arts-node-2 %s\n" "$HOST_PUB" >> /root/.ssh/known_hosts; \
-    printf "arts-node-3 %s\n" "$HOST_PUB" >> /root/.ssh/known_hosts; \
-    printf "arts-node-4 %s\n" "$HOST_PUB" >> /root/.ssh/known_hosts; \
-    printf "arts-node-5 %s\n" "$HOST_PUB" >> /root/.ssh/known_hosts; \
-    printf "arts-node-6 %s\n" "$HOST_PUB" >> /root/.ssh/known_hosts; \
-    chmod 644 /root/.ssh/known_hosts
-
 # Configure git for faster operations
 RUN git config --global init.defaultBranch main \
     && git config --global pull.rebase false \
@@ -118,7 +93,7 @@ RUN mkdir -p /var/spool/slurmctld /var/spool/slurmd /var/log/slurm && \
     chmod 755 /var/spool/slurmctld /var/spool/slurmd /var/log/slurm
 
 # Copy Slurm configuration
-COPY slurm/slurm.conf /etc/slurm/slurm.conf
+COPY slurm.conf /etc/slurm/slurm.conf
 
 # Default working directory
 WORKDIR /root
@@ -127,11 +102,8 @@ WORKDIR /root
 ENV PATH="/opt/carts/tools:$PATH"
 
 
-# Expose SSH port
-EXPOSE 22
-
 # Set working directory
 WORKDIR /workspace
 
-# Command to keep container running and start SSH daemon
-CMD ["/usr/sbin/sshd", "-D"]
+# Keep container running
+CMD ["sleep", "infinity"]

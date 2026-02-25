@@ -37,7 +37,7 @@ carts format                           # Format tracked C/C++/TableGen files
 carts format --check                   # Check formatting without edits
 
 # Docker
-docker/docker-build.sh --smart         # Build with cached layers
+carts docker build                     # Build Docker image + workspace volume
 ```
 
 ## Coding Style
