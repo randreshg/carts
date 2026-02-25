@@ -65,15 +65,19 @@ def docker_update(
         git_branch = os.environ.get("GIT_BRANCH", "mlir")
         print_step("Updating git state and checking component changes")
 
+        update_flags: list[str] = []
+        if force:
+            update_flags.append("--force")
+        if arts:
+            update_flags.append("--arts")
+        if polygeist or llvm:
+            update_flags.append("--polygeist")
+        update_cmd = f"carts update {' '.join(update_flags)}"
+
         update_script = textwrap.dedent(
             f"""
             set -e
             cd /opt/carts
-            declare -A before_commits
-            while read -r commit path; do
-                submodule_name=$(basename "$path")
-                before_commits[$submodule_name]="$commit"
-            done < <(git submodule status --quiet | awk '{{print $1, $2}}')
 
             git config --global --add safe.directory /opt/carts || true
 
@@ -101,23 +105,19 @@ def docker_update(
             else
                 [[ -n "$remote_sha" ]] && echo "CARTS:up_to_date $remote_sha"
             fi
+
+            carts_changed=0
             git reset --hard "origin/$target_branch" || true
+            local_after_reset=$(git rev-parse HEAD 2>/dev/null || echo "")
+            if [[ -n "$local_before" && -n "$local_after_reset" && "$local_before" != "$local_after_reset" ]]; then
+                echo "CARTS:changed"
+                carts_changed=1
+            fi
 
-            git submodule sync --recursive || true
-            git submodule init || true
-            git submodule update --recursive --init --quiet 2>/dev/null || true
-
-            git submodule status --quiet | while read -r line; do
-                commit=$(echo "$line" | awk '{{print $1}}')
-                path=$(echo "$line" | awk '{{print $2}}')
-                submodule_name=$(basename "$path")
-                before_commit=${{before_commits[$submodule_name]}}
-                if [[ "$commit" != "$before_commit" ]]; then
-                    echo "$submodule_name:changed"
-                fi
-            done
-
-            if ! git diff-index --quiet HEAD --; then
+            head_before_update=$(git rev-parse HEAD 2>/dev/null || echo "")
+            {update_cmd}
+            head_after_update=$(git rev-parse HEAD 2>/dev/null || echo "")
+            if [[ -n "$head_before_update" && -n "$head_after_update" && "$head_before_update" != "$head_after_update" && "$carts_changed" -eq 0 ]]; then
                 echo "CARTS:changed"
             fi
             """
@@ -135,33 +135,19 @@ def docker_update(
             if line.startswith("CARTS:"):
                 print_info(line)
 
-        build_llvm = False
-        build_poly = False
-        build_arts = False
-        build_carts = False
-
-        for line in output_lines:
-            if line.startswith("Polygeist:changed") or line.startswith("llvm-project:changed"):
-                build_llvm = True
-                build_poly = True
-            elif line.startswith("arts:changed"):
-                build_arts = True
-            elif line.startswith("CARTS:changed") or line.startswith("CARTS:pulling"):
-                build_carts = True
+        carts_changed = any(
+            line.startswith("CARTS:changed") or line.startswith("CARTS:pulling")
+            for line in output_lines
+        )
+        build_llvm = llvm
+        build_poly = polygeist or llvm
+        build_arts = arts
+        build_carts = carts_rebuild or carts_changed
 
         if force:
             build_llvm = True
             build_poly = True
             build_arts = True
-            build_carts = True
-        elif arts:
-            build_arts = True
-        elif polygeist:
-            build_poly = True
-        elif llvm:
-            build_llvm = True
-            build_poly = True
-        elif carts_rebuild:
             build_carts = True
 
         if not any([build_llvm, build_poly, build_arts, build_carts]):

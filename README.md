@@ -59,7 +59,6 @@ carts format --check         # Verify formatting only
 # Update submodules
 carts update                 # Update all submodules
 carts update --arts          # Update only ARTS
-carts update --init          # Init + update all submodules
 
 # Clean
 carts clean                  # Clean local generated files
