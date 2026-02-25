@@ -45,6 +45,22 @@ def _get_submodule_hash(submodule_path: Path) -> Optional[str]:
     return result.stdout.strip()
 
 
+def _get_pinned_submodule_hash(carts_dir: Path, submodule: str) -> Optional[str]:
+    """Get the submodule commit pinned by the current CARTS HEAD."""
+    result = run_subprocess(
+        ["git", "ls-tree", "HEAD", submodule],
+        cwd=carts_dir,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout:
+        return None
+    parts = result.stdout.strip().split()
+    if len(parts) < 3:
+        return None
+    return parts[2]
+
+
 def update(
     arts: bool = typer.Option(
         False, "--arts", "-a", help="Update ARTS submodule"),
@@ -57,7 +73,7 @@ def update(
     force: bool = typer.Option(
         False, "--force", "-f", help="Discard local changes before updating"),
 ):
-    """Update git submodules to latest remote commits."""
+    """Update git submodules to commits pinned by current CARTS revision."""
     config = get_config()
     carts_dir = config.carts_dir
 
@@ -103,7 +119,7 @@ def update(
         if before_hashes[submodule] is None:
             print_warning(f"Could not read current hash for {submodule}")
 
-    base_cmd = ["git", "submodule", "update", "--remote"]
+    base_cmd = ["git", "submodule", "update"]
     if init:
         base_cmd.extend(["--init", "--recursive"])
 
@@ -123,6 +139,18 @@ def update(
         after_hash = _get_submodule_hash(submodule_path)
         if after_hash is None:
             print_warning(f"Could not read updated hash for {submodule}")
+            continue
+
+        pinned_hash = _get_pinned_submodule_hash(carts_dir, submodule)
+        if pinned_hash is None:
+            print_error(f"Could not read pinned hash for {submodule}")
+            raise typer.Exit(1)
+        if after_hash != pinned_hash:
+            print_error(
+                f"{submodule} did not match pinned commit: expected {pinned_hash}, got {after_hash}"
+            )
+            raise typer.Exit(1)
+
         if before_hashes.get(submodule) != after_hash:
             changed_submodules.add(submodule)
 
