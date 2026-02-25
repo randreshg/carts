@@ -33,7 +33,7 @@ SIZE=small
 ```
 
 4. Prepare ARTS configs:
-- Single-node config example: `configs/local.cfg`
+- Single-node config example: `external/carts-benchmarks/configs/local.cfg`
 - Multi-node config: use your cluster config (ssh/slurm/lsf) with `nodeCount > 1`
 
 Minimal multi-node checklist:
@@ -42,17 +42,17 @@ Minimal multi-node checklist:
 - `nodes` list is valid/reachable
 
 5. Pick a counter profile (optional):
-- `configs/profile-none.cfg` - counters OFF (baseline overhead)
-- `configs/profile-timing.cfg` - timing-only counters
-- `configs/profile-workload.cfg` - workload characterization counters
-- `configs/profile-overhead.cfg` - full overhead counters
-- `configs/profile-thread-edt.cfg` - thread-level EDT activity counters
+- `profile-none.cfg` - counters OFF (baseline overhead)
+- `profile-timing.cfg` - timing-only counters
+- `profile-workload.cfg` - workload characterization counters
+- `profile-overhead.cfg` - full overhead counters
+- `profile-thread-edt.cfg` - thread-level EDT activity counters
 
-Profiles live in: `configs/` (absolute path in this repo: `/opt/carts/configs/`)
+Profiles live in: `external/carts-benchmarks/configs/profiles/`. You can pass just the filename (e.g. `profile-timing.cfg`) and auto-resolution will find it.
 
 Use a profile directly from benchmark runs (this triggers ARTS rebuild):
 ```bash
-PROFILE=configs/profile-timing.cfg
+PROFILE=profile-timing.cfg
 ```
 Omit `--profile` if you want to reuse the currently built ARTS runtime as-is.
 
@@ -78,7 +78,7 @@ carts benchmarks run ${BENCH_SET} \
   --size ${SIZE} \
   --nodes 1 \
   --timeout 240 \
-  --arts-config configs/local.cfg \
+  --arts-config local.cfg \
   --launcher local \
   --profile "${PROFILE}" \
   --runs 1
@@ -92,7 +92,7 @@ carts benchmarks run \
   --size ${SIZE} \
   --nodes 1 \
   --timeout 240 \
-  --arts-config configs/local.cfg \
+  --arts-config local.cfg \
   --launcher local \
   --profile "${PROFILE}" \
   --runs 1
@@ -105,7 +105,7 @@ for SIZE in small medium large extralarge; do
     --size "${SIZE}" \
     --nodes 1 \
     --timeout 240 \
-    --arts-config configs/local.cfg \
+    --arts-config local.cfg \
     --launcher local \
     --profile "${PROFILE}" \
     --runs 1
@@ -119,9 +119,9 @@ carts benchmarks run \
   --nodes 1 \
   --threads 4,8,16,32,64 \
   --timeout 240 \
-  --arts-config configs/local.cfg \
+  --arts-config local.cfg \
   --launcher local \
-  --profile configs/profile-workload.cfg \
+  --profile profile-workload.cfg \
   --runs 1
 ```
 
@@ -218,11 +218,11 @@ done
 Run one mode across all built-in profiles:
 ```bash
 for PROFILE in \
-  configs/profile-none.cfg \
-  configs/profile-timing.cfg \
-  configs/profile-workload.cfg \
-  configs/profile-overhead.cfg \
-  configs/profile-thread-edt.cfg; do
+  profile-none.cfg \
+  profile-timing.cfg \
+  profile-workload.cfg \
+  profile-overhead.cfg \
+  profile-thread-edt.cfg; do
   carts benchmarks run ${BENCH_SET} \
     --size ${SIZE} \
     --nodes 6 \
@@ -243,7 +243,7 @@ carts benchmarks run polybench/gemm \
   --size extralarge \
   --nodes 1 \
   --timeout 240 \
-  --arts-config configs/local.cfg \
+  --arts-config local.cfg \
   --launcher local \
   --runs 1
 ```
@@ -279,7 +279,7 @@ carts benchmarks run polybench/gemm \
   --timeout 240 \
   --arts-config /path/to/multi-node.cfg \
   --launcher ssh \
-  --profile configs/profile-workload.cfg \
+  --profile profile-workload.cfg \
   --arts-exec-args "--distributed-db" \
   --trace \
   --runs 1

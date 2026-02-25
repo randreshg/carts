@@ -1450,7 +1450,7 @@ Use this workflow when multi-node runs hang, timeout, or show uneven work distri
 ### 1. Build ARTS with runtime debug enabled
 
 ```bash
-carts build --arts --debug=2 --profile=configs/profile-workload.cfg
+carts build --arts --debug=2 --profile=profile-workload.cfg
 ```
 
 ### 2. Run a targeted multi-node benchmark with logs retained
