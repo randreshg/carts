@@ -68,8 +68,6 @@ def update(
         False, "--polygeist", "-p", help="Update Polygeist submodule"),
     benchmarks: bool = typer.Option(
         False, "--benchmarks", "-b", help="Update benchmarks submodule"),
-    init: bool = typer.Option(
-        False, "--init", help="Initialize submodules if not present"),
     force: bool = typer.Option(
         False, "--force", "-f", help="Discard local changes before updating"),
 ):
@@ -119,9 +117,7 @@ def update(
         if before_hashes[submodule] is None:
             print_warning(f"Could not read current hash for {submodule}")
 
-    base_cmd = ["git", "submodule", "update"]
-    if init:
-        base_cmd.extend(["--init", "--recursive"])
+    base_cmd = ["git", "submodule", "update", "--init", "--recursive"]
 
     changed_submodules: Set[str] = set()
     for submodule in submodules:
@@ -138,8 +134,8 @@ def update(
         submodule_path = carts_dir / submodule
         after_hash = _get_submodule_hash(submodule_path)
         if after_hash is None:
-            print_warning(f"Could not read updated hash for {submodule}")
-            continue
+            print_error(f"Could not read updated hash for {submodule}")
+            raise typer.Exit(1)
 
         pinned_hash = _get_pinned_submodule_hash(carts_dir, submodule)
         if pinned_hash is None:
