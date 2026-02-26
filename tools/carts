@@ -1,62 +1,57 @@
 #!/bin/bash
 
-# CARTS CLI Wrapper
-# Delegates to Python CLI implementation with cached Python path for fast startup
+# CARTS CLI wrapper
+# Uses the single shared Poetry environment for tools/
+
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_CLI="${SCRIPT_DIR}/carts_cli.py"
-CACHE_FILE="${SCRIPT_DIR}/.python-cache"
+SHARED_PYTHON=""
 
-# Verify Python CLI exists
+has_required_python_deps() {
+    local python_bin="$1"
+    "$python_bin" -c "import typer, rich, openpyxl" 2>/dev/null
+}
+
+get_poetry_python() {
+    poetry -C "$SCRIPT_DIR" env info -e 2>/dev/null || true
+}
+
+ensure_shared_env() {
+    if ! command -v poetry >/dev/null 2>&1; then
+        echo "Error: Poetry is required to bootstrap CARTS Python environment."
+        echo "Install Poetry and run: poetry -C ${SCRIPT_DIR} install --no-root"
+        return 1
+    fi
+
+    if [[ ! -f "${SCRIPT_DIR}/pyproject.toml" ]]; then
+        echo "Error: pyproject.toml not found at ${SCRIPT_DIR}/pyproject.toml"
+        return 1
+    fi
+
+    local poetry_python
+    poetry_python="$(get_poetry_python)"
+    if [[ -n "$poetry_python" ]] && [[ -x "$poetry_python" ]] && has_required_python_deps "$poetry_python"; then
+        SHARED_PYTHON="$poetry_python"
+        return 0
+    fi
+
+    echo "Bootstrapping CARTS Python environment ..."
+    POETRY_VIRTUALENVS_IN_PROJECT=true poetry -C "$SCRIPT_DIR" install --no-root
+
+    poetry_python="$(get_poetry_python)"
+    if [[ -z "$poetry_python" ]] || [[ ! -x "$poetry_python" ]] || ! has_required_python_deps "$poetry_python"; then
+        echo "Error: failed to prepare CARTS Python environment with required dependencies."
+        return 1
+    fi
+    SHARED_PYTHON="$poetry_python"
+}
+
 if [[ ! -f "$PYTHON_CLI" ]]; then
     echo "Error: carts_cli.py not found at $PYTHON_CLI"
     exit 1
 fi
 
-# Fast path: use cached Python if valid
-if [[ -f "$CACHE_FILE" ]]; then
-    CACHED_PYTHON="$(cat "$CACHE_FILE")"
-    if [[ -x "$CACHED_PYTHON" ]]; then
-        if "$CACHED_PYTHON" -c "import typer, rich, openpyxl" 2>/dev/null; then
-            exec "$CACHED_PYTHON" "$PYTHON_CLI" "$@"
-        fi
-    fi
-    # Cache invalid, remove it
-    rm -f "$CACHE_FILE"
-fi
-
-# Check if system python3 has dependencies
-if python3 -c "import typer, rich, openpyxl" 2>/dev/null; then
-    echo "python3" > "$CACHE_FILE"
-    exec python3 "$PYTHON_CLI" "$@"
-fi
-
-# Try with poetry
-if command -v poetry &> /dev/null && [[ -f "${SCRIPT_DIR}/pyproject.toml" ]]; then
-    POETRY_PYTHON="$(poetry -C "$SCRIPT_DIR" env info -e 2>/dev/null)"
-
-    if [[ -x "$POETRY_PYTHON" ]]; then
-        # Cache for next time
-        echo "$POETRY_PYTHON" > "$CACHE_FILE"
-        exec "$POETRY_PYTHON" "$PYTHON_CLI" "$@"
-    fi
-
-    # Dependencies not installed - try to install them
-    echo "Installing CARTS CLI dependencies..."
-    if poetry -C "$SCRIPT_DIR" install --quiet 2>/dev/null; then
-        POETRY_PYTHON="$(poetry -C "$SCRIPT_DIR" env info -e 2>/dev/null)"
-        if [[ -x "$POETRY_PYTHON" ]]; then
-            echo "$POETRY_PYTHON" > "$CACHE_FILE"
-            exec "$POETRY_PYTHON" "$PYTHON_CLI" "$@"
-        fi
-    fi
-fi
-
-# Error: dependencies not available
-echo "Error: Required Python dependencies not installed."
-echo ""
-echo "To install dependencies, run one of:"
-echo "  pip install typer rich openpyxl"
-echo "  cd ${SCRIPT_DIR} && poetry install"
-echo "  cd ${SCRIPT_DIR}/../external/carts-benchmarks && poetry install"
-exit 1
+ensure_shared_env
+exec "$SHARED_PYTHON" "$PYTHON_CLI" "$@"
