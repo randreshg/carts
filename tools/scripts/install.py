@@ -38,6 +38,20 @@ def _check_command_exists(cmd: str) -> bool:
         return False
 
 
+def _get_poetry_python(directory: Path) -> Optional[Path]:
+    """Return the Poetry environment interpreter for a project directory."""
+    result = _run_subprocess(
+        ["poetry", "env", "info", "-e"],
+        cwd=directory,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout:
+        return None
+    path = Path(result.stdout.strip())
+    return path if path.exists() else None
+
+
 def _add_to_path() -> bool:
     """Add CARTS to the user's PATH by adding the carts script location."""
     config = get_config()
@@ -152,38 +166,72 @@ def _build_project(cc: Optional[str] = None, cxx: Optional[str] = None) -> bool:
 
 
 def _install_python_envs() -> bool:
-    """Install Python dependencies for CARTS CLI and benchmark tooling."""
+    """Install a single shared Python environment for CLI and benchmarks."""
     config = get_config()
     project_root = config.carts_dir
+    tools_dir = project_root / "tools"
+    benchmarks_scripts_dir = project_root / "external" / "carts-benchmarks" / "scripts"
+    shared_python: Optional[Path] = None
 
     if not _check_command_exists("poetry"):
-        print_warning("Poetry not found; skipping Python env bootstrap.")
+        print_error("Poetry is required to bootstrap Python environments.")
         print_info("Install Poetry and run `poetry -C tools install --no-root`")
-        print_info("and `poetry -C external/carts-benchmarks install --no-root`")
-        return True
+        return False
 
-    install_targets = [
-        ("CARTS CLI environment", project_root / "tools"),
-        ("Benchmark environment", project_root / "external" / "carts-benchmarks"),
-    ]
+    if not (tools_dir / "pyproject.toml").exists():
+        print_error(f"Missing pyproject.toml in {tools_dir}")
+        return False
 
-    for label, directory in install_targets:
-        if not (directory / "pyproject.toml").exists():
-            print_warning(f"Skipping {label}: missing pyproject.toml in {directory}")
-            continue
-        print_info(f"Installing {label} dependencies...")
+    print_info("Installing shared Python dependencies...")
+    try:
+        _run_subprocess(
+            ["poetry", "install", "--no-root"],
+            cwd=tools_dir,
+            env={"POETRY_VIRTUALENVS_IN_PROJECT": "true"},
+            realtime=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        print_error("Failed to install dependencies for shared environment")
+        return False
+
+    shared_python = _get_poetry_python(tools_dir)
+    if shared_python is None:
+        print_error("Poetry environment interpreter not found after install")
+        return False
+
+    print_info("Verifying shared environment dependencies...")
+    try:
+        _run_subprocess(
+            [str(shared_python), "-c", "import typer, rich, openpyxl"],
+            cwd=project_root,
+            realtime=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        print_error("Dependency verification failed for shared environment")
+        return False
+
+    if benchmarks_scripts_dir.exists():
+        print_info("Verifying benchmark runner imports with shared environment...")
+        verify_code = (
+            f"import sys; "
+            f"sys.path.insert(0, {str(project_root / 'tools')!r}); "
+            f"sys.path.insert(0, {str(benchmarks_scripts_dir)!r}); "
+            "import benchmark_runner"
+        )
         try:
             _run_subprocess(
-                ["poetry", "install", "--no-root"],
-                cwd=directory,
+                [str(shared_python), "-c", verify_code],
+                cwd=project_root,
                 realtime=True,
                 check=True,
             )
         except subprocess.CalledProcessError:
-            print_error(f"Failed to install dependencies for {label}")
+            print_error("Failed to import benchmark runner from shared environment")
             return False
 
-    print_success("Python environments are ready")
+    print_success("Shared Python environment is ready")
     return True
 
 
@@ -202,7 +250,7 @@ def install(
     skip_python_env: bool = typer.Option(
         False,
         "--skip-python-env",
-        help="Skip Poetry environment setup for tools and benchmark scripts",
+        help="Skip shared Poetry environment setup in tools/",
     ),
     auto: bool = typer.Option(
         False, "--auto", "-y", help="Auto-install missing deps without prompting"),
