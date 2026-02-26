@@ -495,16 +495,9 @@ setupPassManager(ModuleOp module, MLIRContext &context,
           module, ArtsConfig, MetadataFile, partitionFallback);
 
   auto &machine = AM->getAbstractMachine();
-  if (!machine.hasConfigFile()) {
-    llvm::errs()
-        << "Error: ARTS configuration file is required.\n"
-        << "Provide --arts-config <path> or place arts.cfg in the working "
-           "directory.\n";
-    return failure();
-  }
-  if (!machine.hasValidNodeCount() || !machine.hasValidThreads()) {
-    llvm::errs() << "Error: arts.cfg must define valid nodeCount (>0) and "
-                    "threads (>0).\n";
+  if (!machine.hasConfigFile() || !machine.isValid()) {
+    ARTS_ERROR("Invalid ARTS configuration. Provide a valid --arts-config path "
+               "or place a valid arts.cfg in the working directory.");
     return failure();
   }
 

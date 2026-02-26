@@ -61,10 +61,11 @@ ArtsAbstractMachine::ArtsAbstractMachine(const std::string &configFile) {
   }
 
   /// Validate the configuration
-  if (!validateConfiguration())
-    ARTS_WARN("Configuration validation failed - using defaults");
-  else
+  if (!validateConfiguration()) {
+    ARTS_ERROR("Configuration validation failed for " << configPath);
+  } else {
     ARTS_INFO("Configuration loaded successfully");
+  }
   ARTS_DEBUG_FOOTER(AbstractMachine);
 }
 
@@ -316,33 +317,55 @@ bool ArtsAbstractMachine::validateConfiguration() {
   ARTS_DEBUG("Validating configuration...");
 
   bool isValid = true;
+  const bool isSlurmLauncher = (launcher == "slurm");
 
   /// Check core requirements
   if (threads <= 0) {
-    ARTS_WARN("Invalid threads value: " << threads << " (must be > 0)");
+    ARTS_ERROR("Invalid threads value: " << threads << " (must be > 0)");
     isValid = false;
   }
 
   if (nodeCount <= 0) {
-    ARTS_WARN("Invalid nodeCount value: " << nodeCount << " (must be > 0)");
+    ARTS_ERROR("Invalid nodeCount value: " << nodeCount << " (must be > 0)");
     isValid = false;
   }
 
-  /// Check nodes consistency
-  if (nodes.empty()) {
-    ARTS_WARN("No nodes specified");
-    isValid = false;
-  } else if (static_cast<int>(nodes.size()) != nodeCount) {
-    ARTS_ERROR("Nodes count (" << nodes.size() << ") doesn't match nodeCount ("
-                               << nodeCount << ")");
-    isValid = false;
+  /// Check nodes consistency for non-SLURM launchers.
+  /// In SLURM mode, node list/master are supplied by scheduler at runtime.
+  if (!isSlurmLauncher) {
+    if (nodes.empty()) {
+      ARTS_ERROR("No nodes specified");
+      isValid = false;
+    } else if (static_cast<int>(nodes.size()) != nodeCount) {
+      ARTS_ERROR("Nodes count (" << nodes.size() << ") doesn't match nodeCount ("
+                                 << nodeCount << ")");
+      isValid = false;
+    }
+
+    if (!nodes.empty() &&
+        std::find(nodes.begin(), nodes.end(), masterNode) == nodes.end()) {
+      ARTS_ERROR("Master node '" << masterNode << "' not found in nodes list");
+      isValid = false;
+    }
   }
 
-  /// Check master node is in nodes list
-  if (!nodes.empty() &&
-      std::find(nodes.begin(), nodes.end(), masterNode) == nodes.end()) {
-    ARTS_ERROR("Master node '" << masterNode << "' not found in nodes list");
-    isValid = false;
+  /// Multi-node requires at least one worker thread after network threads.
+  if (nodeCount > 1) {
+    int minThreads = outgoing + incoming + 1;
+    if (threads < minThreads) {
+      ARTS_ERROR("Invalid multi-node thread topology in " << configPath
+                                                          << ": nodeCount="
+                                                          << nodeCount
+                                                          << ", threads="
+                                                          << threads
+                                                          << ", outgoing="
+                                                          << outgoing
+                                                          << ", incoming="
+                                                          << incoming
+                                                          << ", require threads >= "
+                                                          << minThreads);
+      isValid = false;
+    }
   }
 
   /// Check GPU configuration consistency
@@ -352,7 +375,7 @@ bool ArtsAbstractMachine::validateConfiguration() {
       isValid = false;
     }
     if (scheduler != 3) {
-      ARTS_WARN("GPU support requires scheduler=3, got " << scheduler);
+      ARTS_ERROR("GPU support requires scheduler=3, got " << scheduler);
       isValid = false;
     }
   }
