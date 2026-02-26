@@ -115,9 +115,12 @@ def update(
         submodule_path = carts_dir / submodule
         before_hashes[submodule] = _get_submodule_hash(submodule_path)
         if before_hashes[submodule] is None:
-            print_warning(f"Could not read current hash for {submodule}")
+            print_error(
+                f"{submodule} is not initialized. Run 'carts install' first to initialize submodules."
+            )
+            raise typer.Exit(1)
 
-    base_cmd = ["git", "submodule", "update", "--init", "--recursive"]
+    base_cmd = ["git", "submodule", "update", "--recursive"]
 
     changed_submodules: Set[str] = set()
     for submodule in submodules:
