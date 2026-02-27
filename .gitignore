@@ -52,3 +52,6 @@ external/*/cmake_install.cmake
 __pycache__/
 *.pyc
 *.pyo
+
+# macOS Finder metadata
+.DS_Store
