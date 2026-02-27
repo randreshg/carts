@@ -17,6 +17,7 @@ core.*
 counters/
 perfs/
 results/
+.results/
 .artsPrintLock
 
 # External dependencies
