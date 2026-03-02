@@ -1,11 +1,11 @@
 """Update command logic for CARTS CLI."""
 
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 import typer
 
-from carts_styles import print_info, print_step, print_success, print_warning, print_error
+from carts_styles import print_error, print_info, print_step, print_success, print_warning
 from scripts.config import get_config
 from scripts.run import run_subprocess
 
@@ -15,7 +15,7 @@ def _clean_git_tree(repo_dir: Path, label: str) -> None:
     print_step(f"Cleaning local changes in {label}...")
 
     result = run_subprocess(
-        ["git", "checkout", "."],
+        ["git", "reset", "--hard", "HEAD"],
         cwd=repo_dir,
         check=False,
     )
@@ -45,6 +45,18 @@ def _get_submodule_hash(submodule_path: Path) -> Optional[str]:
     return result.stdout.strip()
 
 
+def _run_git(cwd: Path, args: List[str], fail_message: str) -> None:
+    """Run a git command and exit on failure."""
+    result = run_subprocess(
+        args,
+        cwd=cwd,
+        check=False,
+    )
+    if result.returncode != 0:
+        print_error(fail_message)
+        raise typer.Exit(1)
+
+
 def _get_pinned_submodule_hash(carts_dir: Path, submodule: str) -> Optional[str]:
     """Get the submodule commit pinned by the current CARTS HEAD."""
     result = run_subprocess(
@@ -71,7 +83,7 @@ def update(
     force: bool = typer.Option(
         False, "--force", "-f", help="Discard local changes before updating"),
 ):
-    """Update git submodules to commits pinned by current CARTS revision."""
+    """Update CARTS, submodules, and rebuild affected components."""
     config = get_config()
     carts_dir = config.carts_dir
 
@@ -99,40 +111,35 @@ def update(
                 continue
             _clean_git_tree(submodule_path, submodule)
 
-    # Pull latest CARTS repo changes
-    print_info("Pulling latest CARTS changes...")
-    result = run_subprocess(
+    # Pull latest CARTS repo changes first.
+    print_step("Pulling latest CARTS changes...")
+    _run_git(
+        carts_dir,
         ["git", "pull"],
-        cwd=carts_dir,
-        check=False,
+        "Failed to pull CARTS repository",
     )
-    if result.returncode != 0:
-        print_error("Failed to pull CARTS repository")
-        raise typer.Exit(1)
+
+    # Keep submodule URLs in sync with .gitmodules before updating.
+    print_step("Synchronizing submodule metadata...")
+    _run_git(
+        carts_dir,
+        ["git", "submodule", "sync", "--recursive"],
+        "Failed to sync submodule metadata",
+    )
 
     before_hashes: Dict[str, Optional[str]] = {}
     for submodule in submodules:
         submodule_path = carts_dir / submodule
         before_hashes[submodule] = _get_submodule_hash(submodule_path)
-        if before_hashes[submodule] is None:
-            print_error(
-                f"{submodule} is not initialized. Run 'carts install' first to initialize submodules."
-            )
-            raise typer.Exit(1)
 
-    base_cmd = ["git", "submodule", "update", "--recursive"]
-
-    changed_submodules: Set[str] = set()
+    changed_submodules: List[str] = []
     for submodule in submodules:
-        print_info(f"Updating {submodule}...")
-        result = run_subprocess(
-            base_cmd + [submodule],
-            cwd=carts_dir,
-            check=False,
+        print_step(f"Updating {submodule} to CARTS-pinned commit...")
+        _run_git(
+            carts_dir,
+            ["git", "submodule", "update", "--init", "--recursive", submodule],
+            f"Failed to update {submodule}",
         )
-        if result.returncode != 0:
-            print_error(f"Failed to update {submodule}")
-            raise typer.Exit(1)
 
         submodule_path = carts_dir / submodule
         after_hash = _get_submodule_hash(submodule_path)
@@ -151,15 +158,19 @@ def update(
             raise typer.Exit(1)
 
         if before_hashes.get(submodule) != after_hash:
-            changed_submodules.add(submodule)
+            changed_submodules.append(submodule)
 
     print_success(f"Updated {len(submodules)} submodule(s)")
 
-    if not changed_submodules:
-        print_info("Already up to date")
-        return
+    if changed_submodules:
+        changed_list = ", ".join(changed_submodules)
+        print_info(f"Changed submodules: {changed_list}")
+    else:
+        print_info("Submodule commits were already at pinned revisions")
 
-    if "external/Polygeist" in changed_submodules:
+    # Build requested/updated components so binaries are always in sync
+    # with the checked-out commits after update.
+    if "external/Polygeist" in submodules:
         print_step("Rebuilding Polygeist...")
         result = run_subprocess(
             ["make", "polygeist"],
@@ -181,7 +192,7 @@ def update(
                 print_error("Failed to rebuild carts-compile-only")
                 raise typer.Exit(1)
 
-    if "external/arts" in changed_submodules:
+    if "external/arts" in submodules:
         print_step("Rebuilding ARTS...")
         result = run_subprocess(
             ["make", "arts"],
