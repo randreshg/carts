@@ -10,6 +10,19 @@ from scripts.config import get_config
 from scripts.run import run_subprocess
 
 
+def _get_repo_hash(repo_dir: Path) -> Optional[str]:
+    """Get current HEAD hash for a git repository."""
+    result = run_subprocess(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_dir,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout:
+        return None
+    return result.stdout.strip()
+
+
 def _clean_git_tree(repo_dir: Path, label: str) -> None:
     """Discard local changes and untracked files in a git repository."""
     print_step(f"Cleaning local changes in {label}...")
@@ -112,11 +125,18 @@ def update(
             _clean_git_tree(submodule_path, submodule)
 
     # Pull latest CARTS repo changes first.
+    carts_before_hash = _get_repo_hash(carts_dir)
     print_step("Pulling latest CARTS changes...")
     _run_git(
         carts_dir,
         ["git", "pull"],
         "Failed to pull CARTS repository",
+    )
+    carts_after_hash = _get_repo_hash(carts_dir)
+    carts_changed = (
+        carts_before_hash is not None
+        and carts_after_hash is not None
+        and carts_before_hash != carts_after_hash
     )
 
     # Keep submodule URLs in sync with .gitmodules before updating.
@@ -167,10 +187,19 @@ def update(
         print_info(f"Changed submodules: {changed_list}")
     else:
         print_info("Submodule commits were already at pinned revisions")
+    if carts_changed:
+        print_info("CARTS repository commit changed")
+    else:
+        print_info("CARTS repository commit unchanged")
 
     # Build requested/updated components so binaries are always in sync
     # with the checked-out commits after update.
-    if "external/Polygeist" in submodules:
+    polygeist_changed = "external/Polygeist" in changed_submodules
+    arts_changed = "external/arts" in changed_submodules
+    selected_polygeist = "external/Polygeist" in submodules
+    selected_arts = "external/arts" in submodules
+
+    if selected_polygeist and (polygeist_changed or force):
         print_step("Rebuilding Polygeist...")
         result = run_subprocess(
             ["make", "polygeist"],
@@ -192,7 +221,7 @@ def update(
                 print_error("Failed to rebuild carts-compile-only")
                 raise typer.Exit(1)
 
-    if "external/arts" in submodules:
+    if selected_arts and (arts_changed or force):
         print_step("Rebuilding ARTS...")
         result = run_subprocess(
             ["make", "arts"],
@@ -202,3 +231,17 @@ def update(
         if result.returncode != 0:
             print_error("Failed to rebuild ARTS")
             raise typer.Exit(1)
+
+    rebuild_carts = force or carts_changed or arts_changed or polygeist_changed
+    if rebuild_carts:
+        print_step("Rebuilding CARTS...")
+        result = run_subprocess(
+            ["make", "build"],
+            cwd=carts_dir,
+            check=False,
+        )
+        if result.returncode != 0:
+            print_error("Failed to rebuild CARTS")
+            raise typer.Exit(1)
+
+    print_success("Update complete")
