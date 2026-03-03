@@ -128,7 +128,7 @@ def print_footer(title: str, style: str = "green") -> None:
     # Use HEAVY box matching header style
     console.print(
         Panel(
-            Text(title, style=style),
+            Text.from_markup(title, style=style),
             box=box.HEAVY,
             border_style=style,
             padding=(0, 1),
