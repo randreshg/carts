@@ -1,6 +1,8 @@
 """Compile pipeline commands for CARTS CLI."""
 
 from dataclasses import dataclass, field
+from contextlib import contextmanager
+import os
 from pathlib import Path
 from typing import List, Optional
 
@@ -31,6 +33,27 @@ PIPELINE_STAGES = [
     "pre-lowering",          # Prepare for LLVM lowering
     "arts-to-llvm",          # Final lowering to LLVM IR
 ]
+
+
+@contextmanager
+def _pushd(path: Path):
+    """Temporarily change working directory."""
+    original = Path.cwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(original)
+
+
+def _get_compile_workdir_override() -> Optional[Path]:
+    """Return compile workdir override from environment, if set."""
+    raw = os.environ.get("CARTS_COMPILE_WORKDIR")
+    if not raw:
+        return None
+    workdir = Path(raw).expanduser().resolve()
+    workdir.mkdir(parents=True, exist_ok=True)
+    return workdir
 
 
 def _is_numeric(s: str) -> bool:
@@ -295,6 +318,8 @@ def _compile_from_c(
 ) -> None:
     """Full pipeline for C/C++ input."""
     config = get_config()
+    # Resolve early so changing cwd for artifact isolation does not break input lookup.
+    input_file = input_file.resolve()
 
     if not input_file.is_file():
         print_error(f"Input file '{input_file}' not found")
@@ -317,14 +342,27 @@ def _compile_from_c(
     use_diagnose = diagnose or parsed.diagnose
     final_diagnose_output = diagnose_output or parsed.diagnose_output
 
-    if use_dual_mode:
-        _compile_c_dual(config, input_file, output_name, debug,
-                        extra_pipeline_args, extra_link_args, cgeist_args,
-                        use_diagnose, final_diagnose_output, pipeline)
-    else:
-        _compile_c_simple(config, input_file, output_name, debug,
-                          extra_pipeline_args, extra_link_args, cgeist_args,
-                          use_diagnose, final_diagnose_output, pipeline)
+    workdir_override = _get_compile_workdir_override()
+    if workdir_override is None:
+        if use_dual_mode:
+            _compile_c_dual(config, input_file, output_name, debug,
+                            extra_pipeline_args, extra_link_args, cgeist_args,
+                            use_diagnose, final_diagnose_output, pipeline)
+        else:
+            _compile_c_simple(config, input_file, output_name, debug,
+                              extra_pipeline_args, extra_link_args, cgeist_args,
+                              use_diagnose, final_diagnose_output, pipeline)
+        return
+
+    with _pushd(workdir_override):
+        if use_dual_mode:
+            _compile_c_dual(config, input_file, output_name, debug,
+                            extra_pipeline_args, extra_link_args, cgeist_args,
+                            use_diagnose, final_diagnose_output, pipeline)
+        else:
+            _compile_c_simple(config, input_file, output_name, debug,
+                              extra_pipeline_args, extra_link_args, cgeist_args,
+                              use_diagnose, final_diagnose_output, pipeline)
 
 
 # -----------------------------------------------------------------------------
