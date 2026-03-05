@@ -14,7 +14,7 @@
 #include "../ArtsPassDetails.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
-#include "arts/Analysis/Db/DistributedDbOwnershipPolicy.h"
+#include "arts/Analysis/Db/DistributedDbEligibility.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -54,7 +54,7 @@ struct DistributedDbOwnershipPass
     module.walk([&](DbAllocOp alloc) {
       ++totalAllocs;
       auto eligibility =
-          evaluateDistributedDbOwnershipEligibility(alloc, dbAnalysis);
+          evaluateDistributedDbEligibility(alloc, dbAnalysis);
       setDistributedDbAllocation(alloc.getOperation(), eligibility.eligible);
       if (eligibility.eligible)
         ++markedDistributed;

@@ -1,5 +1,4 @@
-// RUN: not %carts-compile %S/../examples/addition/addition.mlir --O3 --arts-config %t.missing.cfg 2>&1 | %FileCheck %s
+// RUN: not %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %t.missing.cfg 2>&1 | %FileCheck %s
 
-// CHECK: Error: ARTS configuration file is required.
-// CHECK-NEXT: Provide --arts-config <path> or place arts.cfg in the working directory.
-
+// CHECK: No arts.cfg file found at
+// CHECK-NEXT: Invalid ARTS configuration. Provide a valid --arts-config path or place a valid arts.cfg in the working directory.
