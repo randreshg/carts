@@ -15,7 +15,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   Transformations/EdtLowering.cpp
   Transformations/EpochLowering.cpp
   Transformations/ArtsForOptimization.cpp
-  Transformations/SerialEdtifyPass.cpp
+  Transformations/DistributedHostLoopOutliningPass.cpp
   Transformations/EdtDistributionPass.cpp
   Transformations/ForLowering.cpp
   Transformations/ParallelEdtLowering.cpp

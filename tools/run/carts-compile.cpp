@@ -149,13 +149,8 @@ static cl::opt<bool> DistributedDb(
     "distributed-db",
     cl::desc("Attempt distributed DB allocation "
              "(ownership marking + parallel initPerWorker creation; "
-             "auto-enables serial loop EDT outlining for eligible host loops)"),
-    cl::init(false));
-
-/// Serial loop EDTification (before CreateDbs).
-static cl::opt<bool> SerialEdtify(
-    "serial-edtify",
-    cl::desc("Outline eligible host serial loops into arts.edt<parallel>"),
+             "auto-enables distributed host loop outlining for eligible "
+             "producer loops)"),
     cl::init(false));
 
 ///===----------------------------------------------------------------------===///
@@ -335,11 +330,11 @@ void setupLoopReordering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createLoopTransformsPass(
       AM, LoopTransformsEnableMatmul, LoopTransformsEnableTiling,
       LoopTransformsTileJ, LoopTransformsMinTripCount));
-  /// Optional host serial loop outlining. Distributed DB mode requires this to
-  /// lift host-side init loops into arts.for/EDT flow so ownership can be
-  /// inferred from DB acquire dependencies.
-  if (SerialEdtify || DistributedDb)
-    pm.addPass(arts::createSerialEdtifyPass(AM));
+  /// Distributed DB mode lifts eligible host producer loops into the regular
+  /// arts.for/EDT pipeline before CreateDbs so distributed ownership can be
+  /// inferred from the same downstream task/dependency structure.
+  if (DistributedDb)
+    pm.addPass(arts::createDistributedHostLoopOutliningPass(AM));
   pm.addPass(createCSEPass());
 }
 

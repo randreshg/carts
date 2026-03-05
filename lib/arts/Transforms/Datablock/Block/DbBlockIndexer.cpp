@@ -470,11 +470,11 @@ void DbBlockIndexer::transformOps(ArrayRef<Operation *> ops, Value dbPtr,
       continue;
     }
 
-    /// Handle load/store operations
-    if (!isa<memref::LoadOp, memref::StoreOp>(op))
+    auto access = DatablockUtils::getMemoryAccessInfo(op);
+    if (!access)
       continue;
 
-    ValueRange indices = getIndicesFromOp(op);
+    ValueRange indices = access->indices;
     if (indices.empty())
       continue;
 
@@ -506,7 +506,8 @@ void DbBlockIndexer::transformOps(ArrayRef<Operation *> ops, Value dbPtr,
     auto dbRef =
         AC.create<DbRefOp>(loc, elementType, dbPtr, localized.dbRefIndices);
 
-    if (auto load = dyn_cast<memref::LoadOp>(op)) {
+    if (access->isRead()) {
+      auto load = cast<memref::LoadOp>(op);
       auto newLoad = AC.create<memref::LoadOp>(loc, dbRef.getResult(),
                                                localized.memrefIndices);
       load.replaceAllUsesWith(newLoad.getResult());
@@ -530,13 +531,10 @@ void DbBlockIndexer::transformDbRefUsers(
     builder.setInsertionPoint(refUser);
     Location userLoc = refUser->getLoc();
 
-    ValueRange elementIndices;
-    if (auto load = dyn_cast<memref::LoadOp>(refUser))
-      elementIndices = load.getIndices();
-    else if (auto store = dyn_cast<memref::StoreOp>(refUser))
-      elementIndices = store.getIndices();
-    else
+    auto access = DatablockUtils::getMemoryAccessInfo(refUser);
+    if (!access)
       continue;
+    ValueRange elementIndices = access->indices;
 
     if (elementIndices.empty())
       continue;
@@ -570,7 +568,8 @@ void DbBlockIndexer::transformDbRefUsers(
     auto newRef = builder.create<DbRefOp>(userLoc, newElementType, blockArg,
                                           localized.dbRefIndices);
 
-    if (auto load = dyn_cast<memref::LoadOp>(refUser)) {
+    if (access->isRead()) {
+      auto load = cast<memref::LoadOp>(refUser);
       auto newLoad = builder.create<memref::LoadOp>(userLoc, newRef.getResult(),
                                                     localized.memrefIndices);
       load.replaceAllUsesWith(newLoad.getResult());

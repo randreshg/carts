@@ -53,20 +53,6 @@ static bool isMemrefForwardingOp(Operation *op, Value source) {
   return false;
 }
 
-static Value getAccessedMemref(Operation *memOp) {
-  if (!memOp)
-    return Value();
-  if (auto load = dyn_cast<memref::LoadOp>(memOp))
-    return load.getMemRef();
-  if (auto store = dyn_cast<memref::StoreOp>(memOp))
-    return store.getMemRef();
-  if (auto load = dyn_cast<affine::AffineLoadOp>(memOp))
-    return load.getMemRef();
-  if (auto store = dyn_cast<affine::AffineStoreOp>(memOp))
-    return store.getMemRef();
-  return Value();
-}
-
 static void appendDynamicSubviewOffsets(memref::SubViewOp subview,
                                         SmallVector<Value> &chain) {
   for (OpFoldResult off : subview.getMixedOffsets())
@@ -613,26 +599,52 @@ SmallVector<Value> DatablockUtils::collectFullIndexChain(DbRefOp dbRef,
 }
 
 SmallVector<Value> DatablockUtils::getMemoryAccessIndices(Operation *memOp) {
-  if (!memOp)
-    return {};
-
-  if (auto load = dyn_cast<memref::LoadOp>(memOp))
-    return SmallVector<Value>(load.getIndices().begin(),
-                              load.getIndices().end());
-  if (auto store = dyn_cast<memref::StoreOp>(memOp))
-    return SmallVector<Value>(store.getIndices().begin(),
-                              store.getIndices().end());
-  if (auto load = dyn_cast<affine::AffineLoadOp>(memOp))
-    return SmallVector<Value>(load.getMapOperands().begin(),
-                              load.getMapOperands().end());
-  if (auto store = dyn_cast<affine::AffineStoreOp>(memOp))
-    return SmallVector<Value>(store.getMapOperands().begin(),
-                              store.getMapOperands().end());
+  if (auto access = getMemoryAccessInfo(memOp))
+    return access->indices;
   return {};
 }
 
-void DatablockUtils::collectReachableMemoryOps(
-    Value source, llvm::SetVector<Operation *> &memOps, Region *scope) {
+std::optional<DatablockUtils::MemoryAccessInfo>
+DatablockUtils::getMemoryAccessInfo(Operation *memOp) {
+  if (!memOp)
+    return std::nullopt;
+
+  if (auto load = dyn_cast<memref::LoadOp>(memOp))
+    return MemoryAccessInfo{memOp,
+                            load.getMemRef(),
+                            SmallVector<Value>(load.getIndices().begin(),
+                                               load.getIndices().end()),
+                            MemoryAccessKind::Read};
+  if (auto store = dyn_cast<memref::StoreOp>(memOp))
+    return MemoryAccessInfo{memOp,
+                            store.getMemRef(),
+                            SmallVector<Value>(store.getIndices().begin(),
+                                               store.getIndices().end()),
+                            MemoryAccessKind::Write};
+  if (auto load = dyn_cast<affine::AffineLoadOp>(memOp))
+    return MemoryAccessInfo{
+        memOp, load.getMemRef(),
+        SmallVector<Value>(load.getMapOperands().begin(),
+                           load.getMapOperands().end()),
+        MemoryAccessKind::Read};
+  if (auto store = dyn_cast<affine::AffineStoreOp>(memOp))
+    return MemoryAccessInfo{
+        memOp, store.getMemRef(),
+        SmallVector<Value>(store.getMapOperands().begin(),
+                           store.getMapOperands().end()),
+        MemoryAccessKind::Write};
+  return std::nullopt;
+}
+
+Value DatablockUtils::getAccessedMemref(Operation *memOp) {
+  if (auto access = getMemoryAccessInfo(memOp))
+    return access->memref;
+  return Value();
+}
+
+void DatablockUtils::forEachReachableMemoryAccess(
+    Value source, llvm::function_ref<WalkResult(const MemoryAccessInfo &)> fn,
+    Region *scope) {
   if (!source)
     return;
 
@@ -649,24 +661,11 @@ void DatablockUtils::collectReachableMemoryOps(
       if (scope && !scope->isAncestor(user->getParentRegion()))
         continue;
 
-      if (auto load = dyn_cast<memref::LoadOp>(user)) {
-        if (load.getMemRef() == current)
-          memOps.insert(user);
-        continue;
-      }
-      if (auto store = dyn_cast<memref::StoreOp>(user)) {
-        if (store.getMemRef() == current)
-          memOps.insert(user);
-        continue;
-      }
-      if (auto load = dyn_cast<affine::AffineLoadOp>(user)) {
-        if (load.getMemRef() == current)
-          memOps.insert(user);
-        continue;
-      }
-      if (auto store = dyn_cast<affine::AffineStoreOp>(user)) {
-        if (store.getMemRef() == current)
-          memOps.insert(user);
+      if (auto access = getMemoryAccessInfo(user)) {
+        if (access->memref == current) {
+          if (fn(*access).wasInterrupted())
+            return;
+        }
         continue;
       }
 
@@ -680,6 +679,17 @@ void DatablockUtils::collectReachableMemoryOps(
           worklist.push_back(result);
     }
   }
+}
+
+void DatablockUtils::collectReachableMemoryOps(
+    Value source, llvm::SetVector<Operation *> &memOps, Region *scope) {
+  forEachReachableMemoryAccess(
+      source,
+      [&](const MemoryAccessInfo &access) {
+        memOps.insert(access.op);
+        return WalkResult::advance();
+      },
+      scope);
 }
 
 ///===----------------------------------------------------------------------===///

@@ -189,12 +189,12 @@ Current implementation:
   (`lib/arts/Passes/Optimizations/DistributedDbOwnership.cpp`).
 - Pipeline placement: `DbPartitioning -> DistributedDbOwnership -> DbPass`
   (gated by `--distributed-db` in `carts-compile`).
-- `--distributed-db` also enables serial host loop outlining (`SerialEdtify`) so
-  eligible host initialization loops flow through `arts.for` lowering and can
-  satisfy distributed ownership constraints.
+- `--distributed-db` also enables distributed host loop outlining
+  (`DistributedHostLoopOutlining`) so eligible host producer loops flow through
+  `arts.for` lowering and can satisfy distributed ownership constraints.
   - current auto-outline filter is conservative: top-level host `scf.for`,
-    no `iter_args`, safe loop metadata, store-only body (no memory reads),
-    constant store values, and shared output root with external writer use.
+    no `iter_args`, safe loop metadata, a single written root, no self-reads of
+    that root, and a later aligned internode consumer of the written root.
 - Lowering support: `ConvertArtsToLLVM` uses round-robin route selection for
   marked multi-DB allocations:
   - route = `linearIndex % artsGetTotalNodes()`

@@ -13,6 +13,8 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Value.h"
+#include "mlir/IR/Visitors.h"
+#include "llvm/ADT/FunctionExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include <optional>
 
@@ -25,6 +27,18 @@ namespace arts {
 /// Utility class for working with ARTS datablocks (DbAllocOp, DbAcquireOp).
 class DatablockUtils {
 public:
+  enum class MemoryAccessKind { Read, Write };
+
+  struct MemoryAccessInfo {
+    Operation *op = nullptr;
+    Value memref;
+    SmallVector<Value> indices;
+    MemoryAccessKind kind = MemoryAccessKind::Read;
+
+    bool isRead() const { return kind == MemoryAccessKind::Read; }
+    bool isWrite() const { return kind == MemoryAccessKind::Write; }
+  };
+
   ///===----------------------------------------------------------------------===///
   /// Datablock Tracing Utilities
   ///===----------------------------------------------------------------------===///
@@ -209,11 +223,26 @@ public:
   /// Supports memref/affine load/store operations.
   static SmallVector<Value> getMemoryAccessIndices(Operation *memOp);
 
+  /// Return decoded memory-access information for a load/store op.
+  /// Supports memref/affine load/store operations.
+  static std::optional<MemoryAccessInfo> getMemoryAccessInfo(Operation *memOp);
+
+  /// Return the memref/base object accessed by a load/store op.
+  static Value getAccessedMemref(Operation *memOp);
+
   /// Collect load/store operations reachable from source through view-like
   /// forwarding ops (casts, subviews, etc.). Optionally restrict to a scope.
   static void collectReachableMemoryOps(Value source,
                                         llvm::SetVector<Operation *> &memOps,
                                         Region *scope = nullptr);
+
+  /// Visit load/store operations reachable from source through view-like
+  /// forwarding ops (casts, subviews, etc.). The callback may interrupt early.
+  static void
+  forEachReachableMemoryAccess(Value source,
+                               llvm::function_ref<WalkResult(
+                                   const MemoryAccessInfo &)> visitor,
+                               Region *scope = nullptr);
 
   ///===----------------------------------------------------------------------===///
   /// Multi-Entry Stencil Pattern Detection

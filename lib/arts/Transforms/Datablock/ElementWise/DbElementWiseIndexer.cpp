@@ -423,7 +423,8 @@ void DbElementWiseIndexer::transformAccess(
     return;
   }
 
-  if (!isa<memref::LoadOp, memref::StoreOp>(op)) {
+  auto access = DatablockUtils::getMemoryAccessInfo(op);
+  if (!access) {
     ARTS_DEBUG("  Skipping non-load/store op: " << op->getName());
     return;
   }
@@ -432,7 +433,7 @@ void DbElementWiseIndexer::transformAccess(
   AC.setInsertionPoint(op);
   Location loc = op->getLoc();
 
-  ValueRange indices = getIndicesFromOp(op);
+  ValueRange indices = access->indices;
   ARTS_DEBUG("  Indices count: " << indices.size());
   LocalizedIndices localized = splitIndices(indices, AC.getBuilder(), loc);
   ARTS_DEBUG("  dbRefIndices: " << localized.dbRefIndices.size()
@@ -442,7 +443,8 @@ void DbElementWiseIndexer::transformAccess(
   auto dbRef =
       AC.create<DbRefOp>(loc, elementType, dbPtr, localized.dbRefIndices);
 
-  if (auto load = dyn_cast<memref::LoadOp>(op)) {
+  if (access->isRead()) {
+    auto load = cast<memref::LoadOp>(op);
     auto newLoad = AC.create<memref::LoadOp>(loc, dbRef.getResult(),
                                              localized.memrefIndices);
     load.replaceAllUsesWith(newLoad.getResult());
@@ -506,11 +508,11 @@ void DbElementWiseIndexer::transformOps(
       continue;
     }
 
-    /// Handle load/store operations
-    if (!isa<memref::LoadOp, memref::StoreOp>(op))
+    auto access = DatablockUtils::getMemoryAccessInfo(op);
+    if (!access)
       continue;
 
-    ValueRange indices = getIndicesFromOp(op);
+    ValueRange indices = access->indices;
     if (indices.empty()) {
       /// Handle scalar (rank-0) accesses by rewriting with db_ref[0]
       transformAccess(op, dbPtr, elementType, AC, opsToRemove);
@@ -551,7 +553,8 @@ void DbElementWiseIndexer::transformOps(
     auto dbRef =
         AC.create<DbRefOp>(loc, elementType, dbPtr, localized.dbRefIndices);
 
-    if (auto load = dyn_cast<memref::LoadOp>(op)) {
+    if (access->isRead()) {
+      auto load = cast<memref::LoadOp>(op);
       auto newLoad = AC.create<memref::LoadOp>(loc, dbRef.getResult(),
                                                localized.memrefIndices);
       load.replaceAllUsesWith(newLoad.getResult());
@@ -575,13 +578,10 @@ void DbElementWiseIndexer::transformDbRefUsers(
     builder.setInsertionPoint(refUser);
     Location userLoc = refUser->getLoc();
 
-    ValueRange elementIndices;
-    if (auto load = dyn_cast<memref::LoadOp>(refUser))
-      elementIndices = load.getIndices();
-    else if (auto store = dyn_cast<memref::StoreOp>(refUser))
-      elementIndices = store.getIndices();
-    else
+    auto access = DatablockUtils::getMemoryAccessInfo(refUser);
+    if (!access)
       continue;
+    ValueRange elementIndices = access->indices;
 
     if (elementIndices.empty())
       continue;
@@ -624,7 +624,8 @@ void DbElementWiseIndexer::transformDbRefUsers(
     auto newRef = builder.create<DbRefOp>(userLoc, newElementType, blockArg,
                                           localized.dbRefIndices);
 
-    if (auto load = dyn_cast<memref::LoadOp>(refUser)) {
+    if (access->isRead()) {
+      auto load = cast<memref::LoadOp>(refUser);
       auto newLoad = builder.create<memref::LoadOp>(userLoc, newRef.getResult(),
                                                     localized.memrefIndices);
       load.replaceAllUsesWith(newLoad.getResult());

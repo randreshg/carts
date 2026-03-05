@@ -291,19 +291,22 @@ def ArtsForOptimization : Pass<"arts-for-optimization", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createArtsForOptimizationPass(nullptr)";
 }
 
-def SerialEdtify : Pass<"serial-edtify", "mlir::ModuleOp"> {
-  let summary = "Outline eligible host serial loops into ARTS EDTs";
+def DistributedHostLoopOutlining
+    : Pass<"distributed-host-loop-outlining", "mlir::ModuleOp"> {
+  let summary =
+      "Outline eligible host producer loops into distributed ARTS EDTs";
   let description = [{
     Converts eligible host-side scf.for loops (outside existing EDT regions)
-    into arts.edt<parallel> containing arts.for. This makes serial
-    initialization/setup loops flow through the existing distributed
+    into arts.edt<task><internode> containing arts.for. This is used by
+    --distributed-db to lift host producer loops into the regular distributed
     distribution/lowering pipeline.
   }];
   let dependentDialects = [
     "func::FuncDialect", "arts::ArtsDialect", "arith::ArithDialect",
     "scf::SCFDialect", "memref::MemRefDialect"
   ];
-  let constructor = "mlir::arts::createSerialEdtifyPass(nullptr)";
+  let constructor =
+      "mlir::arts::createDistributedHostLoopOutliningPass(nullptr)";
 }
 
 def EdtDistribution : Pass<"edt-distribution", "mlir::ModuleOp"> {

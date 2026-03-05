@@ -11,6 +11,7 @@
 #define ARTS_TRANSFORMS_DATABLOCK_DBINDEXERBASE_H
 
 #include "arts/ArtsDialect.h"
+#include "arts/Utils/DatablockUtils.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
 #include "llvm/ADT/SetVector.h"
@@ -28,10 +29,8 @@ struct LocalizedIndices {
 
 /// Shared helper - extract indices from load/store/ref operations.
 inline ValueRange getIndicesFromOp(Operation *op) {
-  if (auto load = dyn_cast<memref::LoadOp>(op))
-    return load.getIndices();
-  if (auto store = dyn_cast<memref::StoreOp>(op))
-    return store.getIndices();
+  if (auto access = DatablockUtils::getMemoryAccessInfo(op))
+    return access->indices;
   if (auto ref = dyn_cast<DbRefOp>(op))
     return ref.getIndices();
   return {};
