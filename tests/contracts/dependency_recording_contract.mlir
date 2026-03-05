@@ -1,4 +1,4 @@
-// RUN: %carts-compile %S/../examples/addition/addition.mlir --O3 --arts-config %S/../examples/arts.cfg --stop-at pre-lowering | %FileCheck %s --check-prefix=UNIFORM
+// RUN: %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %S/../examples/arts.cfg --stop-at pre-lowering | %FileCheck %s --check-prefix=UNIFORM
 // RUN: %carts-compile %S/../examples/jacobi/for/jacobi-for.mlir --O3 --arts-config %S/../examples/arts.cfg --stop-at pre-lowering | %FileCheck %s --check-prefix=STENCIL
 // RUN: %carts-compile %S/../examples/matrixmul/matrixmul.mlir --O3 --arts-config %S/../examples/arts.cfg --stop-at pre-lowering | %FileCheck %s --check-prefix=MATMUL
 

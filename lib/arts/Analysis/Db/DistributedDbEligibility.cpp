@@ -1,10 +1,10 @@
 ///==========================================================================///
-/// File: DistributedDbOwnershipPolicy.cpp
+/// File: DistributedDbEligibility.cpp
 ///
-/// Eligibility policy for distributed DB ownership marking.
+/// Eligibility analysis for distributed DB ownership marking.
 ///==========================================================================///
 
-#include "arts/Analysis/Db/DistributedDbOwnershipPolicy.h"
+#include "arts/Analysis/Db/DistributedDbEligibility.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
@@ -77,14 +77,10 @@ static bool hasOnlyAllowedHandleUsers(Value rootHandle) {
       }
 
       if (auto dbRefOp = dyn_cast<DbRefOp>(user)) {
-        for (Value result : dbRefOp->getResults())
-          worklist.push_back(result);
         continue;
       }
 
       if (auto dbGepOp = dyn_cast<DbGepOp>(user)) {
-        for (Value result : dbGepOp->getResults())
-          worklist.push_back(result);
         continue;
       }
 
@@ -157,17 +153,6 @@ static bool isUsedByInternodeEdt(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
       });
 }
 
-static bool hasWriterInternodeEdtUse(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
-  return anyAcquireNodeMatches(
-      alloc, dbAnalysis, [&](DbAcquireNode *acquireNode) {
-        if (!acquireNode || !acquireNode->isWriterAccess())
-          return false;
-
-        EdtOp edt = acquireNode->getEdtUser();
-        return edt && edt.getConcurrency() == EdtConcurrency::internode;
-      });
-}
-
 static bool hasStencilReadInternodeEdtUse(DbAllocOp alloc,
                                           DbAnalysis &dbAnalysis) {
   return anyAcquireNodeMatches(
@@ -200,58 +185,55 @@ static bool hasOnlyEdtAcquireUsers(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
 
 } // namespace
 
-const char *mlir::arts::toString(DistributedDbOwnershipRejectReason reason) {
+const char *mlir::arts::toString(DistributedDbEligibilityRejectReason reason) {
   switch (reason) {
-  case DistributedDbOwnershipRejectReason::None:
+  case DistributedDbEligibilityRejectReason::None:
     return "eligible";
-  case DistributedDbOwnershipRejectReason::NestedInEdt:
+  case DistributedDbEligibilityRejectReason::NestedInEdt:
     return "nested_in_edt";
-  case DistributedDbOwnershipRejectReason::GlobalAllocType:
+  case DistributedDbEligibilityRejectReason::GlobalAllocType:
     return "global_alloc";
-  case DistributedDbOwnershipRejectReason::SingleBlock:
+  case DistributedDbEligibilityRejectReason::SingleBlock:
     return "single_block";
-  case DistributedDbOwnershipRejectReason::UnsupportedShape:
+  case DistributedDbEligibilityRejectReason::UnsupportedShape:
     return "unsupported_shape";
-  case DistributedDbOwnershipRejectReason::StencilReadInternodeUse:
+  case DistributedDbEligibilityRejectReason::StencilReadInternodeUse:
     return "stencil_read_internode_use";
-  case DistributedDbOwnershipRejectReason::ReadOnlyInternodeUse:
-    return "read_only_internode_use";
-  case DistributedDbOwnershipRejectReason::UnsupportedPtrUsers:
+  case DistributedDbEligibilityRejectReason::UnsupportedPtrUsers:
     return "unsupported_ptr_users";
-  case DistributedDbOwnershipRejectReason::UnsupportedGuidUsers:
+  case DistributedDbEligibilityRejectReason::UnsupportedGuidUsers:
     return "unsupported_guid_users";
-  case DistributedDbOwnershipRejectReason::NonEdtAcquireUse:
+  case DistributedDbEligibilityRejectReason::NonEdtAcquireUse:
     return "non_edt_acquire_use";
-  case DistributedDbOwnershipRejectReason::NoInternodeEdtUse:
+  case DistributedDbEligibilityRejectReason::NoInternodeEdtUse:
     return "no_internode_edt_use";
   }
   return "unknown";
 }
 
-DistributedDbOwnershipEligibilityResult
-mlir::arts::evaluateDistributedDbOwnershipEligibility(DbAllocOp alloc,
-                                                      DbAnalysis &dbAnalysis) {
+DistributedDbEligibilityResult
+mlir::arts::evaluateDistributedDbEligibility(DbAllocOp alloc,
+                                             DbAnalysis &dbAnalysis) {
   if (!alloc)
-    return {false, DistributedDbOwnershipRejectReason::UnsupportedShape};
+    return {false, DistributedDbEligibilityRejectReason::UnsupportedShape};
   if (alloc->getParentOfType<EdtOp>())
-    return {false, DistributedDbOwnershipRejectReason::NestedInEdt};
+    return {false, DistributedDbEligibilityRejectReason::NestedInEdt};
   if (alloc.getAllocType() == DbAllocType::global)
-    return {false, DistributedDbOwnershipRejectReason::GlobalAllocType};
+    return {false, DistributedDbEligibilityRejectReason::GlobalAllocType};
   if (!hasMultipleAllocationBlocks(alloc))
-    return {false, DistributedDbOwnershipRejectReason::SingleBlock};
+    return {false, DistributedDbEligibilityRejectReason::SingleBlock};
   if (!hasSupportedAllocationShape(alloc))
-    return {false, DistributedDbOwnershipRejectReason::UnsupportedShape};
+    return {false, DistributedDbEligibilityRejectReason::UnsupportedShape};
   if (!hasOnlyAllowedHandleUsers(alloc.getPtr()))
-    return {false, DistributedDbOwnershipRejectReason::UnsupportedPtrUsers};
+    return {false, DistributedDbEligibilityRejectReason::UnsupportedPtrUsers};
   if (!hasOnlyAllowedHandleUsers(alloc.getGuid()))
-    return {false, DistributedDbOwnershipRejectReason::UnsupportedGuidUsers};
+    return {false, DistributedDbEligibilityRejectReason::UnsupportedGuidUsers};
   if (!hasOnlyEdtAcquireUsers(alloc, dbAnalysis))
-    return {false, DistributedDbOwnershipRejectReason::NonEdtAcquireUse};
+    return {false, DistributedDbEligibilityRejectReason::NonEdtAcquireUse};
   if (!isUsedByInternodeEdt(alloc, dbAnalysis))
-    return {false, DistributedDbOwnershipRejectReason::NoInternodeEdtUse};
+    return {false, DistributedDbEligibilityRejectReason::NoInternodeEdtUse};
   if (hasStencilReadInternodeEdtUse(alloc, dbAnalysis))
-    return {false, DistributedDbOwnershipRejectReason::StencilReadInternodeUse};
-  if (!hasWriterInternodeEdtUse(alloc, dbAnalysis))
-    return {false, DistributedDbOwnershipRejectReason::ReadOnlyInternodeUse};
-  return {true, DistributedDbOwnershipRejectReason::None};
+    return {false,
+            DistributedDbEligibilityRejectReason::StencilReadInternodeUse};
+  return {true, DistributedDbEligibilityRejectReason::None};
 }

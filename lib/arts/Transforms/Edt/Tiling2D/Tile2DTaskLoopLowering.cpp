@@ -4,18 +4,20 @@
 ///
 /// Matmul-oriented task loop lowering.
 /// This path keeps ownership-safe row partitioning while applying a dedicated
-/// column-striping rewrite inside each task for matmul-like loop bodies.
+/// contiguous column-slice rewrite inside each task for matmul-like loop
+/// bodies.
 ///
-/// Example transformation (post-clone striping):
+/// Example transformation (post-clone contiguous slicing):
 ///   Before:
 ///     scf.for %j = %c0 to %NJ step %c1 {
 ///       memref.store %v, %C[%globalI, %j] : memref<?x?xf32>
 ///     }
 ///
 ///   After:
-///     %jLowerLane = %c0 + (%colWorkerId * %c1)
-///     %jStepLane = %c1 * %colWorkers
-///     scf.for %j = %jLowerLane to %NJ step %jStepLane {
+///     %colChunk = ceildiv(%NJ, %colWorkers)
+///     %jLowerLane = %c0 + (%colWorkerId * %colChunk)
+///     %jUpperLane = min(%NJ, %jLowerLane + %colChunk)
+///     scf.for %j = %jLowerLane to %jUpperLane step %c1 {
 ///       memref.store %v, %C[%globalI, %j] : memref<?x?xf32>
 ///     }
 ///==========================================================================///
@@ -58,8 +60,53 @@ static bool isColumnLoopForGlobalIter(scf::ForOp loop, Value globalIter) {
   return matches;
 }
 
-static void stripeLoopByColumns(TaskLoopPostCloneInput &input,
-                                scf::ForOp loop) {
+static std::pair<Value, Value>
+computeColumnLaneBounds(TaskLoopPostCloneInput &input, scf::ForOp loop) {
+  ArtsCodegen *AC = input.AC;
+  if (!AC || !loop || !input.innerStripeLane || !input.innerStripeCount)
+    return {};
+
+  OpBuilder &builder = AC->getBuilder();
+  OpBuilder::InsertionGuard guard(builder);
+  Location loc = loop.getLoc();
+  builder.setInsertionPoint(loop);
+  Value one = AC->createIndexConstant(1, loc);
+
+  scf::ForOp domainLoop = loop;
+  for (Operation *parent = loop->getParentOp(); parent;
+       parent = parent->getParentOp()) {
+    auto parentLoop = dyn_cast<scf::ForOp>(parent);
+    if (!parentLoop)
+      continue;
+    if (!ValueUtils::dependsOn(loop.getLowerBound(),
+                               parentLoop.getInductionVar()) &&
+        !ValueUtils::dependsOn(loop.getUpperBound(),
+                               parentLoop.getInductionVar()))
+      continue;
+    domainLoop = parentLoop;
+  }
+
+  Value domainLower = domainLoop.getLowerBound();
+  Value domainUpper = domainLoop.getUpperBound();
+  Value domainExtent =
+      builder.create<arith::SubIOp>(loc, domainUpper, domainLower);
+  Value workersMinusOne =
+      builder.create<arith::SubIOp>(loc, input.innerStripeCount, one);
+  Value adjustedExtent =
+      builder.create<arith::AddIOp>(loc, domainExtent, workersMinusOne);
+  Value laneChunk = builder.create<arith::DivUIOp>(
+      loc, adjustedExtent, input.innerStripeCount);
+  Value laneOffset =
+      builder.create<arith::MulIOp>(loc, input.innerStripeLane, laneChunk);
+  Value laneLower = builder.create<arith::AddIOp>(loc, domainLower, laneOffset);
+  Value laneUpperHint =
+      builder.create<arith::AddIOp>(loc, laneLower, laneChunk);
+  Value laneUpper =
+      builder.create<arith::MinUIOp>(loc, laneUpperHint, domainUpper);
+  return {laneLower, laneUpper};
+}
+
+static void sliceLoopByColumns(TaskLoopPostCloneInput &input, scf::ForOp loop) {
   ArtsCodegen *AC = input.AC;
   if (!AC || !loop || !input.innerStripeLane || !input.innerStripeCount)
     return;
@@ -70,22 +117,22 @@ static void stripeLoopByColumns(TaskLoopPostCloneInput &input,
   OpBuilder &builder = AC->getBuilder();
   OpBuilder::InsertionGuard guard(builder);
   Location loc = loop.getLoc();
+  auto [laneLower, laneUpper] = computeColumnLaneBounds(input, loop);
+  if (!laneLower || !laneUpper)
+    return;
   builder.setInsertionPoint(loop);
-  Value lane = input.innerStripeLane;
-  Value step = loop.getStep();
-  Value laneOffset = builder.create<arith::MulIOp>(loc, lane, step);
-  Value stripedLower =
-      builder.create<arith::AddIOp>(loc, loop.getLowerBound(), laneOffset);
-  Value stripedStep =
-      builder.create<arith::MulIOp>(loc, step, input.innerStripeCount);
+  Value slicedLower =
+      builder.create<arith::MaxUIOp>(loc, loop.getLowerBound(), laneLower);
+  Value slicedUpper =
+      builder.create<arith::MinUIOp>(loc, loop.getUpperBound(), laneUpper);
 
-  scf::ForOp striped = builder.create<scf::ForOp>(
-      loc, stripedLower, loop.getUpperBound(), stripedStep);
-  striped->setAttrs(loop->getAttrs());
+  scf::ForOp sliced = builder.create<scf::ForOp>(
+      loc, slicedLower, slicedUpper, loop.getStep());
+  sliced->setAttrs(loop->getAttrs());
 
   IRMapping map;
-  map.map(loop.getInductionVar(), striped.getInductionVar());
-  builder.setInsertionPointToStart(striped.getBody());
+  map.map(loop.getInductionVar(), sliced.getInductionVar());
+  builder.setInsertionPointToStart(sliced.getBody());
   for (Operation &op : loop.getBody()->without_terminator())
     builder.clone(op, map);
 
@@ -124,8 +171,9 @@ public:
         !input.innerStripeLane || !input.innerStripeCount)
       return;
 
-    auto stripeConst = ValueUtils::tryFoldConstantIndex(input.innerStripeCount);
-    if (!stripeConst || *stripeConst <= 1)
+    auto colWorkersConst =
+        ValueUtils::tryFoldConstantIndex(input.innerStripeCount);
+    if (!colWorkersConst || *colWorkersConst <= 1)
       return;
 
     SmallVector<scf::ForOp, 8> columnLoops;
@@ -139,7 +187,7 @@ public:
     for (scf::ForOp loop : llvm::reverse(columnLoops)) {
       if (!loop || !loop->getBlock())
         continue;
-      stripeLoopByColumns(input, loop);
+      sliceLoopByColumns(input, loop);
     }
   }
 };
