@@ -4,7 +4,7 @@ This guide defines a repeatable 3-mode benchmark workflow:
 
 1. Single node baseline
 2. Multi-node without distributed DB flag
-3. Multi-node with distributed DB flag (`--distributed-db`)
+3. Multi-node with distributed DB ownership enabled (`--compile-args "--distributed-db"`)
 
 Use the same benchmark set and size in all three modes.
 
@@ -171,7 +171,17 @@ done
 
 ## Mode 3: Multi-Node (With Distributed DB Flag)
 
-Run the same setup as Mode 2 but add distributed DB enablement.
+Run the same setup as Mode 2 but add distributed DB ownership enablement.
+
+Important:
+- Multi-node GEMM is distributed in both Mode 2 and Mode 3. The compiler still
+  emits internode `tiling_2d` EDT distribution for the matmul epoch without the
+  flag.
+- `--compile-args "--distributed-db"` changes DB ownership and host-side
+  initialization, not whether the GEMM work itself is distributed.
+- For GEMM today, the flag marks the large `A` and `C` allocations as
+  `distributed`; `B` remains coarse because it is a single-block read-only
+  allocation under the current ownership policy.
 
 ```bash
 carts benchmarks run ${BENCH_SET} \
@@ -181,7 +191,7 @@ carts benchmarks run ${BENCH_SET} \
   --arts-config /path/to/multi-node.cfg \
   --launcher ssh \
   --profile "${PROFILE}" \
-  --arts-exec-args "--distributed-db" \
+  --compile-args "--distributed-db" \
   --runs 1
 ```
 
@@ -196,7 +206,7 @@ carts benchmarks run \
   --arts-config /path/to/multi-node.cfg \
   --launcher ssh \
   --profile "${PROFILE}" \
-  --arts-exec-args "--distributed-db" \
+  --compile-args "--distributed-db" \
   --runs 1
 ```
 
@@ -210,7 +220,7 @@ for SIZE in small medium large extralarge; do
     --arts-config /path/to/multi-node.cfg \
     --launcher ssh \
     --profile "${PROFILE}" \
-    --arts-exec-args "--distributed-db" \
+    --compile-args "--distributed-db" \
     --runs 1
 done
 ```
@@ -230,7 +240,7 @@ for PROFILE in \
     --arts-config /path/to/multi-node.cfg \
     --launcher ssh \
     --profile "${PROFILE}" \
-    --arts-exec-args "--distributed-db" \
+    --compile-args "--distributed-db" \
     --runs 1
 done
 ```
@@ -259,7 +269,7 @@ carts benchmarks run polybench/gemm \
   --runs 1
 ```
 
-Multi-node (distributed DB enabled):
+Multi-node (distributed DB ownership enabled):
 ```bash
 carts benchmarks run polybench/gemm \
   --size extralarge \
@@ -267,7 +277,7 @@ carts benchmarks run polybench/gemm \
   --timeout 240 \
   --arts-config /path/to/multi-node.cfg \
   --launcher ssh \
-  --arts-exec-args "--distributed-db" \
+  --compile-args "--distributed-db" \
   --runs 1
 ```
 
@@ -280,7 +290,7 @@ carts benchmarks run polybench/gemm \
   --arts-config /path/to/multi-node.cfg \
   --launcher ssh \
   --profile profile-workload.cfg \
-  --arts-exec-args "--distributed-db" \
+  --compile-args "--distributed-db" \
   --trace \
   --runs 1
 ```
@@ -294,6 +304,10 @@ For each run, check:
 - pass/fail counts
 - checksum correctness (`YES`)
 - skipped benchmark set (should be consistent across Mode 2 and Mode 3 unless behavior changed)
+- GEMM should show internode distributed matmul execution in both Mode 2 and
+  Mode 3
+- Mode 3 should additionally use distributed DB ownership for eligible GEMM
+  allocations (`A` and `C` today)
 
 ## Recommended Pass Criteria
 
@@ -301,3 +315,5 @@ For each run, check:
 - Mode 2 and Mode 3 both succeed for all expected benchmarks.
 - Checksums remain correct in all modes.
 - Any difference between Mode 2 and Mode 3 is understood and intentional.
+  For GEMM, expected differences are DB ownership/init behavior and possibly
+  performance; task distribution itself should remain internode in both modes.
