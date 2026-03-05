@@ -126,10 +126,8 @@ DenseSet<Operation *> LoopFusionPass::getDbAccesses(ForOp forOp) {
   DenseSet<Operation *> accesses;
   forOp.walk([&](Operation *op) {
     Value memref;
-    if (auto load = dyn_cast<memref::LoadOp>(op))
-      memref = load.getMemRef();
-    else if (auto store = dyn_cast<memref::StoreOp>(op))
-      memref = store.getMemRef();
+    if (auto access = DatablockUtils::getMemoryAccessInfo(op))
+      memref = access->memref;
     else if (auto dbRef = dyn_cast<DbRefOp>(op))
       memref = dbRef.getResult();
     else if (auto acq = dyn_cast<DbAcquireOp>(op))

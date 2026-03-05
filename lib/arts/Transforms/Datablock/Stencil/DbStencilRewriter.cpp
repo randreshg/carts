@@ -580,7 +580,8 @@ void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
 
   bool hasLoadStoreUsers = false;
   for (Operation *user : refUsers) {
-    if (!isa<memref::LoadOp, memref::StoreOp>(user))
+    auto access = DatablockUtils::getMemoryAccessInfo(user);
+    if (!access)
       continue;
 
     hasLoadStoreUsers = true;
@@ -588,12 +589,7 @@ void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
     builder.setInsertionPoint(user);
     Location userLoc = user->getLoc();
 
-    /// Get load/store indices
-    ValueRange loadStoreIndices;
-    if (auto load = dyn_cast<memref::LoadOp>(user))
-      loadStoreIndices = load.getIndices();
-    else if (auto store = dyn_cast<memref::StoreOp>(user))
-      loadStoreIndices = store.getIndices();
+    ValueRange loadStoreIndices = access->indices;
 
     SmallVector<Value> newOuter, newInner;
     auto zero = [&]() {
@@ -651,7 +647,8 @@ void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
         builder.create<DbRefOp>(userLoc, newElementType, newSource, newOuter);
 
     /// Create new load/store with transformed inner indices
-    if (auto load = dyn_cast<memref::LoadOp>(user)) {
+    if (access->isRead()) {
+      auto load = cast<memref::LoadOp>(user);
       auto newLoad = builder.create<memref::LoadOp>(userLoc, newRef, newInner);
       load.replaceAllUsesWith(newLoad.getResult());
     } else if (auto store = dyn_cast<memref::StoreOp>(user)) {

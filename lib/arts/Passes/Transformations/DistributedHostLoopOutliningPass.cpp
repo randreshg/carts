@@ -1,17 +1,9 @@
 ///==========================================================================///
-/// File: SerialEdtifyPass.cpp
+/// File: DistributedHostLoopOutliningPass.cpp
 ///
-/// Outlines eligible host-side serial loops into arts.edt<task> regions so
-/// they flow through the existing distributed ForLowering pipeline.
-///
-/// Example:
-///   Before:
-///     scf.for %i = ... { ... }
-///
-///   After:
-///     arts.edt <task> {
-///       scf.for %i = ... { ... }
-///     }
+/// Outlines eligible host-side loops into arts.edt<task> regions so they can
+/// flow through the normal distributed arts.for lowering path. This is only
+/// intended for --distributed-db mode.
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"
@@ -20,25 +12,24 @@
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
+#include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
-#include "mlir/Support/LogicalResult.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include <cassert>
 
 #include "arts/Utils/ArtsDebug.h"
-ARTS_DEBUG_SETUP(serial_edtify);
+ARTS_DEBUG_SETUP(distributed_host_loop_outlining);
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -47,9 +38,8 @@ namespace {
 
 static bool hasSafeLoopMetadata(scf::ForOp loop, LoopAnalysis *loopAnalysis) {
   if (loopAnalysis) {
-    if (LoopNode *loopNode = loopAnalysis->getOrCreateLoopNode(loop)) {
+    if (LoopNode *loopNode = loopAnalysis->getOrCreateLoopNode(loop))
       return loopNode->isParallelizableByMetadata();
-    }
   }
 
   auto metadata =
@@ -60,14 +50,11 @@ static bool hasSafeLoopMetadata(scf::ForOp loop, LoopAnalysis *loopAnalysis) {
   if (metadata.getPotentiallyParallel() &&
       !metadata.getPotentiallyParallel().getValue())
     return false;
-
   if (metadata.getHasInterIterationDeps() &&
       metadata.getHasInterIterationDeps().getValue())
     return false;
-
   if (metadata.getHasReductions() && metadata.getHasReductions().getValue())
     return false;
-
   if (metadata.getParallelClassification() &&
       metadata.getParallelClassification().getInt() ==
           static_cast<int64_t>(
@@ -89,13 +76,17 @@ static bool hasNestedIterArgLoops(scf::ForOp loop) {
   return hasIterArgs;
 }
 
-static bool hasEligibleStores(scf::ForOp loop) {
-  bool hasStoreToStackOrHeapAlloc = false;
+static Operation *getSingleStoreRoot(scf::ForOp loop) {
+  bool hasStores = false;
   bool hasUnsupportedStore = false;
   Operation *singleStoreRoot = nullptr;
 
-  loop.walk([&](memref::StoreOp storeOp) {
-    Operation *root = ValueUtils::getUnderlyingOperation(storeOp.getMemRef());
+  loop.walk([&](Operation *op) {
+    auto access = DatablockUtils::getMemoryAccessInfo(op);
+    if (!access || !access->isWrite())
+      return WalkResult::advance();
+
+    Operation *root = ValueUtils::getUnderlyingOperation(access->memref);
     if (!root || !isa<memref::AllocOp, memref::AllocaOp>(root)) {
       hasUnsupportedStore = true;
       return WalkResult::interrupt();
@@ -108,50 +99,98 @@ static bool hasEligibleStores(scf::ForOp loop) {
       return WalkResult::interrupt();
     }
 
-    hasStoreToStackOrHeapAlloc = true;
-    return WalkResult::advance();
-  });
-
-  return hasStoreToStackOrHeapAlloc && !hasUnsupportedStore;
-}
-
-static bool hasAnyMemoryReads(scf::ForOp loop) {
-  bool hasReads = false;
-  loop.walk([&](Operation *op) {
-    if (isa<memref::LoadOp, affine::AffineLoadOp>(op)) {
-      hasReads = true;
-      return WalkResult::interrupt();
-    }
-    return WalkResult::advance();
-  });
-  return hasReads;
-}
-
-static bool hasOnlyConstantStoreValues(scf::ForOp loop) {
-  bool hasStores = false;
-  bool hasNonConstantStore = false;
-  loop.walk([&](memref::StoreOp storeOp) {
     hasStores = true;
-    Value storedValue = ValueUtils::stripNumericCasts(storeOp.getValue());
-    if (!storedValue.getDefiningOp<arith::ConstantOp>()) {
-      hasNonConstantStore = true;
-      return WalkResult::interrupt();
-    }
     return WalkResult::advance();
   });
-  return hasStores && !hasNonConstantStore;
+
+  if (!hasStores || hasUnsupportedStore)
+    return nullptr;
+  return singleStoreRoot;
 }
 
-static Operation *getSingleStoreRoot(scf::ForOp loop) {
-  Operation *storeRoot = nullptr;
-  loop.walk([&](memref::StoreOp storeOp) {
-    storeRoot = ValueUtils::getUnderlyingOperation(storeOp.getMemRef());
+static bool hasOnlySupportedEffects(scf::ForOp loop, Operation *storeRoot) {
+  if (!storeRoot)
+    return false;
+
+  bool hasStores = false;
+  bool hasUnsupportedOp = false;
+
+  loop.walk([&](Operation *op) {
+    if (op == loop.getOperation() || isa<scf::YieldOp>(op) ||
+        isa<scf::ForOp, scf::IfOp>(op))
+      return WalkResult::advance();
+
+    if (auto access = DatablockUtils::getMemoryAccessInfo(op)) {
+      Operation *root = ValueUtils::getUnderlyingOperation(access->memref);
+      if (!root) {
+        hasUnsupportedOp = true;
+        return WalkResult::interrupt();
+      }
+
+      if (access->isWrite()) {
+        if (root != storeRoot) {
+          hasUnsupportedOp = true;
+          return WalkResult::interrupt();
+        }
+        hasStores = true;
+        return WalkResult::advance();
+      }
+
+      /// Keep this path focused on producer loops. Reading the same root would
+      /// introduce self-dependence that the original host loop did not model as
+      /// a task dependency.
+      if (root == storeRoot) {
+        hasUnsupportedOp = true;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    }
+
+    if (isa<memref::DimOp, memref::DeallocOp>(op))
+      return WalkResult::advance();
+
+    if (isMemoryEffectFree(op))
+      return WalkResult::advance();
+
+    hasUnsupportedOp = true;
     return WalkResult::interrupt();
   });
-  return storeRoot;
+
+  return hasStores && !hasUnsupportedOp;
 }
 
-static bool hasExternalStoreToRoot(scf::ForOp loop, Operation *storeRoot) {
+static Value getArtsForInductionVar(arts::ForOp forOp) {
+  if (!forOp || forOp.getRegion().empty())
+    return Value();
+  Block &block = forOp.getRegion().front();
+  if (block.getNumArguments() == 0)
+    return Value();
+  return block.getArgument(0);
+}
+
+static Operation *getTopLevelFuncChild(Operation *op, func::FuncOp parentFunc) {
+  if (!op || !parentFunc)
+    return nullptr;
+
+  Operation *cursor = op;
+  while (cursor && cursor->getParentOp() != parentFunc)
+    cursor = cursor->getParentOp();
+  return cursor;
+}
+
+static bool isOrderedAfter(Operation *anchor, Operation *candidate,
+                           func::FuncOp parentFunc) {
+  Operation *anchorTop = getTopLevelFuncChild(anchor, parentFunc);
+  Operation *candidateTop = getTopLevelFuncChild(candidate, parentFunc);
+  if (!anchorTop || !candidateTop)
+    return false;
+  if (anchorTop->getBlock() != candidateTop->getBlock())
+    return false;
+  return anchorTop->isBeforeInBlock(candidateTop);
+}
+
+static bool hasAlignedInternodeForUseAfter(scf::ForOp loop,
+                                           Operation *storeRoot) {
   if (!loop || !storeRoot)
     return false;
 
@@ -159,31 +198,53 @@ static bool hasExternalStoreToRoot(scf::ForOp loop, Operation *storeRoot) {
   if (!parentFunc)
     return false;
 
-  bool foundExternalStore = false;
-  parentFunc.walk([&](memref::StoreOp storeOp) {
-    if (foundExternalStore)
+  bool foundAlignedUse = false;
+  parentFunc.walk([&](Operation *op) {
+    if (foundAlignedUse)
       return WalkResult::interrupt();
 
-    Operation *root = ValueUtils::getUnderlyingOperation(storeOp.getMemRef());
-    if (root != storeRoot)
+    auto access = DatablockUtils::getMemoryAccessInfo(op);
+    if (!access || access->indices.empty())
       return WalkResult::advance();
 
-    if (loop->isAncestor(storeOp.getOperation()))
+    if (ValueUtils::getUnderlyingOperation(access->memref) != storeRoot)
+      return WalkResult::advance();
+    if (!isOrderedAfter(loop.getOperation(), op, parentFunc))
       return WalkResult::advance();
 
-    foundExternalStore = true;
-    return WalkResult::interrupt();
+    auto edtOp = op->getParentOfType<EdtOp>();
+    if (!edtOp || edtOp.getConcurrency() != EdtConcurrency::internode)
+      return WalkResult::advance();
+
+    auto forOp = op->getParentOfType<arts::ForOp>();
+    Value loopIV = getArtsForInductionVar(forOp);
+    if (!loopIV)
+      return WalkResult::advance();
+
+    Value leadingIdx = ValueUtils::stripNumericCasts(access->indices.front());
+    if (ValueUtils::sameValue(leadingIdx, loopIV) ||
+        ValueUtils::dependsOn(leadingIdx, loopIV) ||
+        ValueUtils::dependsOn(loopIV, leadingIdx)) {
+      ARTS_DEBUG("Aligned later internode use found for store root " << *storeRoot
+                                                                     << " via "
+                                                                     << *op);
+      foundAlignedUse = true;
+      return WalkResult::interrupt();
+    }
+
+    return WalkResult::advance();
   });
 
-  return foundExternalStore;
+  return foundAlignedUse;
 }
 
-static bool isEligibleSerialLoop(scf::ForOp loop, LoopAnalysis *loopAnalysis) {
+static bool isEligibleDistributedHostLoop(scf::ForOp loop,
+                                          LoopAnalysis *loopAnalysis) {
   if (!loop)
     return false;
 
-  /// Only edtify host loops. Nested loops are captured when cloning the
-  /// outermost loop body.
+  /// Only outline top-level host loops. Nested loops stay inside the cloned
+  /// body of the selected outer loop.
   if (loop->getParentOfType<EdtOp>() || loop->getParentOfType<arts::ForOp>() ||
       loop->getParentOfType<scf::ForOp>()) {
     ARTS_DEBUG("Skip loop (not host top-level): " << loop);
@@ -205,34 +266,25 @@ static bool isEligibleSerialLoop(scf::ForOp loop, LoopAnalysis *loopAnalysis) {
     return false;
   }
 
-  if (!hasEligibleStores(loop)) {
+  Operation *storeRoot = getSingleStoreRoot(loop);
+  if (!storeRoot) {
     ARTS_DEBUG("Skip loop (store target unsupported): " << loop);
     return false;
   }
 
-  Operation *storeRoot = getSingleStoreRoot(loop);
-  /// Keep distributed auto-outlining focused on update-form outputs.
-  /// Pure init loops for read-only inputs are prone to over-partitioned
-  /// inter-node writes and are not required for distributed ownership.
-  if (!hasExternalStoreToRoot(loop, storeRoot)) {
-    ARTS_DEBUG("Skip loop (store target has no external writer use): " << loop);
+  /// Allow producer/transform loops between EDTs, not just constant init
+  /// loops, but stay conservative on side effects and self-dependences.
+  if (!hasOnlySupportedEffects(loop, storeRoot)) {
+    ARTS_DEBUG("Skip loop (unsupported reads/writes/effects): " << loop);
     return false;
   }
 
-  /// Keep auto-outlining conservative for distributed mode: only outline
-  /// store-only host loops (e.g. initialization). Read-modify/write kernels
-  /// are lowered by the regular parallel pipeline and are error-prone when
-  /// force-outlined through this path.
-  if (hasAnyMemoryReads(loop)) {
-    ARTS_DEBUG("Skip loop (contains memory reads): " << loop);
-    return false;
-  }
-
-  /// Keep auto-outlining strictly to constant-fill initialization loops.
-  /// Computed-value fills (e.g., 2mm's D init expression) can diverge after
-  /// distribution when ownership/partitioning does not fully align.
-  if (!hasOnlyConstantStoreValues(loop)) {
-    ARTS_DEBUG("Skip loop (non-constant store values): " << loop);
+  /// Only outline loops whose written allocation is later consumed by aligned
+  /// internode work. This allows A/C-style GEMM loops and rejects B-style
+  /// loops whose leading dimension is not distributed by the downstream task.
+  if (!hasAlignedInternodeForUseAfter(loop, storeRoot)) {
+    ARTS_DEBUG("Skip loop (no aligned later internode use for store root): "
+               << loop);
     return false;
   }
 
@@ -278,12 +330,12 @@ static void applyMachineWorkerTopology(EdtOp outlinedEdt,
     setWorkersPerNode(outlinedEdt.getOperation(), workerConfig->workersPerNode);
 }
 
-static void edtifyLoop(scf::ForOp loop, const ArtsAbstractMachine *machine) {
+static void outlineLoop(scf::ForOp loop, const ArtsAbstractMachine *machine) {
   Location loc = loop.getLoc();
   OpBuilder builder(loop);
 
-  /// Preserve original program order: the outlined EDT must complete before
-  /// subsequent host operations observe loop results.
+  /// Preserve program order: the outlined EDT must complete before later host
+  /// code observes loop results.
   auto epoch = builder.create<EpochOp>(loc);
   Region &epochRegion = epoch.getRegion();
   if (epochRegion.empty())
@@ -298,7 +350,6 @@ static void edtifyLoop(scf::ForOp loop, const ArtsAbstractMachine *machine) {
   applyMachineWorkerTopology(outlinedEdt, machine);
 
   Block &edtBody = outlinedEdt.getBody().front();
-
   OpBuilder::InsertionGuard edtGuard(epochBuilder);
   epochBuilder.setInsertionPointToStart(&edtBody);
 
@@ -317,12 +368,14 @@ static void edtifyLoop(scf::ForOp loop, const ArtsAbstractMachine *machine) {
   epochBuilder.setInsertionPointToEnd(&epochBlock);
   epochBuilder.create<arts::YieldOp>(loc);
 
-  ARTS_DEBUG("Outlined serial scf.for into arts.edt<task>: " << loop);
+  ARTS_DEBUG("Outlined host scf.for into distributed arts.edt<task>: " << loop);
   loop.erase();
 }
 
-struct SerialEdtifyPass : public arts::SerialEdtifyBase<SerialEdtifyPass> {
-  explicit SerialEdtifyPass(ArtsAnalysisManager *AM) : AM(AM) {}
+struct DistributedHostLoopOutliningPass
+    : public arts::DistributedHostLoopOutliningBase<
+          DistributedHostLoopOutliningPass> {
+  explicit DistributedHostLoopOutliningPass(ArtsAnalysisManager *AM) : AM(AM) {}
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
@@ -333,9 +386,6 @@ struct SerialEdtifyPass : public arts::SerialEdtifyBase<SerialEdtifyPass> {
       loopAnalysis->invalidate();
       machine = &AM->getAbstractMachine();
     }
-
-    unsigned numCandidates = 0;
-    unsigned numConverted = 0;
 
     SmallVector<scf::ForOp> candidates;
     module.walk([&](func::FuncOp funcOp) {
@@ -349,30 +399,30 @@ struct SerialEdtifyPass : public arts::SerialEdtifyBase<SerialEdtifyPass> {
       });
 
       funcOp.walk([&](scf::ForOp loop) {
-        /// Task-dependency kernels already carry explicit DbControl hints.
-        /// Auto-outlining host loops in these functions perturbs DB
-        /// partitioning and can explode dependency fan-in at runtime.
+        /// Task-dependency kernels already carry explicit DB control hints.
+        /// Auto-outlining host loops in those functions would perturb existing
+        /// dependency planning.
         if (hasDbControlOps) {
           ARTS_DEBUG("Skip loop (function has DbControlOps): " << loop);
           return;
         }
-        if (!isEligibleSerialLoop(loop, loopAnalysis))
-          return;
-        candidates.push_back(loop);
+        if (isEligibleDistributedHostLoop(loop, loopAnalysis))
+          candidates.push_back(loop);
       });
     });
 
-    numCandidates = static_cast<unsigned>(candidates.size());
-
+    unsigned numConverted = 0;
+    const unsigned numCandidates = static_cast<unsigned>(candidates.size());
     for (scf::ForOp loop : candidates) {
       if (!loop || !loop->getBlock())
         continue;
-      edtifyLoop(loop, machine);
+      outlineLoop(loop, machine);
       ++numConverted;
     }
 
-    ARTS_INFO("SerialEdtify outlined " << numConverted << " / " << numCandidates
-                                       << " eligible serial loop(s)");
+    ARTS_INFO("DistributedHostLoopOutlining outlined "
+              << numConverted << " / " << numCandidates
+              << " eligible host loop(s)");
   }
 
 private:
@@ -383,8 +433,9 @@ private:
 
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createSerialEdtifyPass(ArtsAnalysisManager *AM) {
-  return std::make_unique<SerialEdtifyPass>(AM);
+std::unique_ptr<Pass>
+createDistributedHostLoopOutliningPass(ArtsAnalysisManager *AM) {
+  return std::make_unique<DistributedHostLoopOutliningPass>(AM);
 }
 } // namespace arts
 } // namespace mlir

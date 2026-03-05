@@ -416,7 +416,8 @@ void DbBlockRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
 
   bool hasLoadStoreUsers = false;
   for (Operation *user : refUsers) {
-    if (!isa<memref::LoadOp, memref::StoreOp>(user))
+    auto access = DatablockUtils::getMemoryAccessInfo(user);
+    if (!access)
       continue;
     hasLoadStoreUsers = true;
 
@@ -424,11 +425,7 @@ void DbBlockRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
     builder.setInsertionPoint(user);
     Location userLoc = user->getLoc();
 
-    ValueRange loadStoreIndices;
-    if (auto load = dyn_cast<memref::LoadOp>(user))
-      loadStoreIndices = load.getIndices();
-    else if (auto store = dyn_cast<memref::StoreOp>(user))
-      loadStoreIndices = store.getIndices();
+    ValueRange loadStoreIndices = access->indices;
 
     LocalizedIndices localized;
     if (!loadStoreIndices.empty()) {
@@ -443,7 +440,8 @@ void DbBlockRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
     auto newRef = builder.create<DbRefOp>(userLoc, newElementType, newSource,
                                           localized.dbRefIndices);
 
-    if (auto load = dyn_cast<memref::LoadOp>(user)) {
+    if (access->isRead()) {
+      auto load = cast<memref::LoadOp>(user);
       auto newLoad = builder.create<memref::LoadOp>(userLoc, newRef.getResult(),
                                                     localized.memrefIndices);
       load.replaceAllUsesWith(newLoad.getResult());

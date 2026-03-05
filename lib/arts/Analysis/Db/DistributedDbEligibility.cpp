@@ -8,9 +8,11 @@
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
+#include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -62,31 +64,82 @@ static bool hasOnlyAllowedHandleUsers(Value rootHandle) {
   SmallVector<Value, 8> worklist{rootHandle};
   llvm::DenseSet<Value> visitedValues;
 
+  auto enqueue = [&](Value value) {
+    if (value)
+      worklist.push_back(value);
+  };
+
+  auto isMemoryUserInsideEdt = [](Operation *user) {
+    return user && static_cast<bool>(user->getParentOfType<EdtOp>());
+  };
+
   while (!worklist.empty()) {
-    Value handle = worklist.pop_back_val();
-    if (!visitedValues.insert(handle).second)
+    Value value = worklist.pop_back_val();
+    if (!visitedValues.insert(value).second)
       continue;
 
-    for (Operation *user : handle.getUsers()) {
-      if (isa<DbAcquireOp, DbFreeOp, EdtOp>(user))
+    for (Operation *user : value.getUsers()) {
+      if (isa<DbAcquireOp, DbFreeOp, DbReleaseOp, EdtOp>(user))
         continue;
 
       if (auto castOp = dyn_cast<memref::CastOp>(user)) {
-        worklist.push_back(castOp.getResult());
+        if (castOp.getSource() == value)
+          enqueue(castOp.getResult());
+        continue;
+      }
+
+      if (auto subview = dyn_cast<memref::SubViewOp>(user)) {
+        if (subview.getSource() == value)
+          enqueue(subview.getResult());
+        continue;
+      }
+
+      if (auto reinterpret = dyn_cast<memref::ReinterpretCastOp>(user)) {
+        if (reinterpret.getSource() == value)
+          enqueue(reinterpret.getResult());
+        continue;
+      }
+
+      if (auto view = dyn_cast<memref::ViewOp>(user)) {
+        if (view.getSource() == value)
+          enqueue(view.getResult());
         continue;
       }
 
       if (auto dbRefOp = dyn_cast<DbRefOp>(user)) {
+        if (dbRefOp.getSource() == value)
+          enqueue(dbRefOp.getResult());
         continue;
       }
 
       if (auto dbGepOp = dyn_cast<DbGepOp>(user)) {
+        if (dbGepOp.getBasePtr() == value)
+          enqueue(dbGepOp.getResult());
         continue;
       }
 
       if (auto unrealized = dyn_cast<UnrealizedConversionCastOp>(user)) {
-        for (Value result : unrealized->getResults())
-          worklist.push_back(result);
+        if (llvm::is_contained(unrealized.getInputs(), value))
+          for (Value result : unrealized->getResults())
+            enqueue(result);
+        continue;
+      }
+
+      if (auto access = DatablockUtils::getMemoryAccessInfo(user)) {
+        if (access->memref == value && isMemoryUserInsideEdt(user))
+          continue;
+        return false;
+      }
+
+      if (isa<memref::DimOp, memref::DeallocOp>(user))
+        continue;
+
+      if (isa<arith::ConstantOp>(user))
+        continue;
+
+      if (isMemoryEffectFree(user)) {
+        for (Value result : user->getResults())
+          enqueue(result);
         continue;
       }
 
