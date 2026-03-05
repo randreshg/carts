@@ -210,17 +210,6 @@ def update(
             print_error("Failed to rebuild Polygeist")
             raise typer.Exit(1)
 
-        if (carts_dir / "build" / "build.ninja").is_file():
-            print_step("Rebuilding carts-compile-only after Polygeist update...")
-            result = run_subprocess(
-                ["make", "carts-compile-only"],
-                cwd=carts_dir,
-                check=False,
-            )
-            if result.returncode != 0:
-                print_error("Failed to rebuild carts-compile-only")
-                raise typer.Exit(1)
-
     if selected_arts and (arts_changed or force):
         print_step("Rebuilding ARTS...")
         result = run_subprocess(
