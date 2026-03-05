@@ -64,9 +64,10 @@ cross-stage contracts.
 - `LoopNormalization`
 - `LoopReordering`
 - `LoopTransforms`
-- optional `SerialEdtify`
-  - enabled by `--serial-edtify`
-  - also auto-enabled by `--distributed-db`
+- `DistributedHostLoopOutlining`
+  - auto-enabled by `--distributed-db`
+  - outlines eligible host producer loops so they flow through the regular
+    distributed `arts.for` pipeline before `CreateDbs`
 - `CSE`
 
 ### 7) create-dbs
