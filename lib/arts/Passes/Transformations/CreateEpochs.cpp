@@ -30,7 +30,6 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/EdtUtils.h"
 /// Other
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
@@ -84,104 +83,51 @@ static void processSyncEdtOp(EdtOp op) {
   wrapEdtInEpoch(op, /*demoteToTask=*/true);
 }
 
-/// Find the nearest common ancestor region between two regions.
-static Region *findCommonRegion(Region *a, Region *b) {
-  if (!a)
-    return b;
-  if (!b)
-    return a;
+static bool containsEdtLaunch(Operation *op) {
+  if (isa<EdtOp>(op))
+    return true;
 
-  SmallPtrSet<Region *, 8> ancestors;
-  for (Region *it = a; it; it = it->getParentRegion())
-    ancestors.insert(it);
-
-  for (Region *it = b; it; it = it->getParentRegion())
-    if (ancestors.contains(it))
-      return it;
-  return nullptr;
-}
-
-/// Find the enclosing scope (EDT or function) for a barrier.
-static Operation *findBarrierScope(BarrierOp barrier) {
-  if (auto edt = barrier->getParentOfType<EdtOp>())
-    return edt;
-  return barrier->getParentOfType<func::FuncOp>();
-}
-
-/// Collect all operations that can reach the barrier within a scope.
-static void collectReachableOps(Operation *scope, BarrierOp barrier,
-                                SmallVectorImpl<Operation *> &reachableOps) {
-  scope->walk([&](Operation *op) {
-    if (op == barrier || op->isProperAncestor(barrier) || isa<YieldOp>(op))
-      return;
-    if (EdtUtils::isReachable(op, barrier))
-      reachableOps.push_back(op);
+  bool found = false;
+  op->walk([&](EdtOp) {
+    found = true;
+    return WalkResult::interrupt();
   });
-}
-
-/// Filter EDTs from reachable ops that are direct children of parentRegion.
-static void collectOpsToMoveIntoEpoch(ArrayRef<Operation *> reachableOps,
-                                      Region *parentRegion, BarrierOp barrier,
-                                      SmallVectorImpl<Operation *> &opsToMove) {
-  DenseSet<Operation *> reachableSet(reachableOps.begin(), reachableOps.end());
-  parentRegion->walk([&](Operation *op) {
-    if (op == barrier || !reachableSet.contains(op))
-      return;
-    if (op->getParentRegion() != parentRegion || !isa<arts::EdtOp>(op))
-      return;
-    opsToMove.push_back(op);
-  });
+  return found;
 }
 
 static void processBarrierOp(BarrierOp barrier) {
   ARTS_DEBUG("Processing BarrierOp");
-  if (!barrier->getBlock())
+  Block *block = barrier->getBlock();
+  if (!block)
     return;
 
-  Operation *scope = findBarrierScope(barrier);
-  if (!scope)
-    return;
-
-  /// Collect operations that can reach this barrier
-  SmallVector<Operation *> reachableOps;
-  collectReachableOps(scope, barrier, reachableOps);
-
-  /// Find common parent region for all reachable ops
-  Region *parentIP = barrier->getParentRegion();
-  for (Operation *op : reachableOps)
-    parentIP = findCommonRegion(parentIP, op->getParentRegion());
-  if (!parentIP)
-    parentIP = barrier->getParentRegion();
-  if (!parentIP || parentIP->empty())
-    return;
-
-  /// Collect EDTs to move into a new epoch
   SmallVector<Operation *, 8> opsToMove;
-  collectOpsToMoveIntoEpoch(reachableOps, parentIP, barrier, opsToMove);
+
+  auto barrierIt = Block::iterator(barrier.getOperation());
+  auto segmentBegin = barrierIt;
+  while (segmentBegin != block->begin()) {
+    auto prev = std::prev(segmentBegin);
+    if (isa<BarrierOp, EpochOp>(*prev))
+      break;
+    segmentBegin = prev;
+  }
+
+  for (auto it = segmentBegin; it != barrierIt; ++it) {
+    Operation *op = &*it;
+    if (!containsEdtLaunch(op))
+      continue;
+    opsToMove.push_back(op);
+  }
 
   if (opsToMove.empty()) {
     barrier.erase();
     return;
   }
 
-  /// Find insertion point (first op to move)
-  Operation *insertionOp = nullptr;
-  for (Operation *op : opsToMove) {
-    if (op->getParentRegion() == parentIP) {
-      insertionOp = op;
-      break;
-    }
-  }
-
-  Block *insertBlock =
-      insertionOp ? insertionOp->getBlock() : &parentIP->front();
-  if (!insertBlock)
-    return;
-
   /// Create epoch and move operations into it
   Location loc = barrier.getLoc();
-  OpBuilder builder(insertBlock, insertionOp ? Block::iterator(insertionOp)
-                                             : insertBlock->begin());
+  Operation *insertionOp = opsToMove.front();
+  OpBuilder builder(block, Block::iterator(insertionOp));
   auto epochOp = builder.create<EpochOp>(loc);
   auto &epochRegion = epochOp.getRegion();
   if (epochRegion.empty())
@@ -218,13 +164,26 @@ void CreateEpochsPass::runOnOperation() {
   /// Process Sync EDT Ops: for each EDT op that is sync, create an epoch op
   /// and move the EDT op inside the epoch op.
   ARTS_DEBUG_HEADER(ProcessSyncEdtOp);
-  module.walk([](EdtOp op) { processSyncEdtOp(op); });
+  SmallVector<EdtOp> syncEdts;
+  module.walk([&](EdtOp op) {
+    if (op.getTypeAttr().getValue() == EdtType::sync)
+      syncEdts.push_back(op);
+  });
+  for (EdtOp op : syncEdts) {
+    if (op->getBlock())
+      processSyncEdtOp(op);
+  }
   ARTS_DEBUG_FOOTER(ProcessSyncEdtOp);
 
   /// Process Barrier Ops: for each barrier, collect all EDTs that are affected
   /// by the barrier and embed them in a new epoch op.
   ARTS_DEBUG_HEADER(ProcessBarrierOp);
-  module.walk([&](BarrierOp barrier) { processBarrierOp(barrier); });
+  SmallVector<BarrierOp> barriers;
+  module.walk([&](BarrierOp barrier) { barriers.push_back(barrier); });
+  for (BarrierOp barrier : barriers) {
+    if (barrier->getBlock())
+      processBarrierOp(barrier);
+  }
   ARTS_DEBUG_FOOTER(ProcessBarrierOp);
 
   ARTS_INFO_FOOTER(CreateEpochsPass);

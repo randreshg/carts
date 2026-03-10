@@ -1068,6 +1068,11 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
         /*partition_offsets=*/partOffsets,
         /*partition_sizes=*/partSizes);
 
+    if (!deps.empty()) {
+      acquireOp->setAttr(AttrNames::Operation::PreserveDependencyMode,
+                         UnitAttr::get(acquireOp.getContext()));
+    }
+
     /// Set segment attributes for multiple partition entries
     acquireOp.setPartitionSegments(indicesSegments, offsetsSegments,
                                    sizesSegments, entryModes);

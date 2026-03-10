@@ -50,6 +50,18 @@ ARTS_DEBUG_SETUP(convert_openmp_to_arts);
 
 using namespace mlir;
 using namespace arts;
+
+static bool hasWorkAfterInParentBlock(Operation *op) {
+  if (!op || !op->getBlock())
+    return false;
+
+  for (Operation *next = op->getNextNode(); next; next = next->getNextNode()) {
+    if (next->hasTrait<OpTrait::IsTerminator>())
+      continue;
+    return true;
+  }
+  return false;
+}
 ///===----------------------------------------------------------------------===///
 // Conversion Patterns
 ///===----------------------------------------------------------------------===///
@@ -71,6 +83,11 @@ struct OMPParallelToArtsPattern : public OpRewritePattern<omp::ParallelOp> {
     /// Move the region's operations.
     Block &old = op.getRegion().front();
     blk.getOperations().splice(blk.end(), old.getOperations());
+
+    if (hasWorkAfterInParentBlock(op.getOperation())) {
+      rewriter.setInsertionPointAfter(parOp);
+      rewriter.create<arts::BarrierOp>(loc);
+    }
 
     /// Remove the original operation.
     rewriter.eraseOp(op);
@@ -132,6 +149,11 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
     /// Terminate parallel EDT body
     rewriter.setInsertionPointToEnd(&parBlk);
     rewriter.create<arts::YieldOp>(loc);
+
+    if (hasWorkAfterInParentBlock(op.getOperation())) {
+      rewriter.setInsertionPointAfter(parEdt);
+      rewriter.create<arts::BarrierOp>(loc);
+    }
 
     /// Remove original scf.parallel
     rewriter.eraseOp(op);
@@ -232,6 +254,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
         return failure();
       }
       Value depVar = task.getDependVars()[i];
+      ArtsMode depMode = getDbMode(depClause.getValue());
 
       /// All dependencies should be arts.omp_dep
       auto ompDepOp = depVar.getDefiningOp<OmpDepOp>();
@@ -249,7 +272,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
         rewriter.setInsertionPointToStart(&region.front());
 
         auto newOmpDep = rewriter.create<OmpDepOp>(
-            loc, ompDepOp.getMode(), ompDepOp.getSource(),
+            loc, depMode, ompDepOp.getSource(),
             SmallVector<Value>(ompDepOp.getIndices().begin(),
                                ompDepOp.getIndices().end()),
             SmallVector<Value>(ompDepOp.getSizes().begin(),
@@ -262,7 +285,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
       /// runtime bookkeeping and reduces sensitivity to dependency noise.
       bool hasWriter =
           !writerSources || writerSources->contains(ompDepOp.getSource());
-      if (ompDepOp.getMode() == ArtsMode::in && !hasWriter) {
+      if (depMode == ArtsMode::in && !hasWriter) {
         ARTS_DEBUG("  - Skipping read-only dependency for source "
                    << ompDepOp.getSource());
         continue;
@@ -309,7 +332,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
                    << " pinned, " << blockSizes.size() << " chunks");
 
         Value dbControl = rewriter.create<DbControlOp>(
-            ompDepOp.getLoc(), ompDepOp.getMode(), ompDepOp.getSource(),
+            ompDepOp.getLoc(), depMode, ompDepOp.getSource(),
             pinnedIndices, chunkOffsets, blockSizes);
         deps.push_back(dbControl);
       }
@@ -359,21 +382,6 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
         break;
       if (isa<scf::ForOp>(cur))
         return true;
-    }
-    return false;
-  }
-
-  /// Returns true when there is meaningful work after `op` in its parent block.
-  /// We ignore terminators because they do not require an explicit barrier.
-  static bool hasWorkAfterInParentBlock(Operation *op) {
-    if (!op || !op->getBlock())
-      return false;
-
-    for (Operation *next = op->getNextNode(); next;
-         next = next->getNextNode()) {
-      if (next->hasTrait<OpTrait::IsTerminator>())
-        continue;
-      return true;
     }
     return false;
   }
