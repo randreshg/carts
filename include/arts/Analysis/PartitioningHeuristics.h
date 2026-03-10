@@ -107,6 +107,13 @@ struct PartitioningContext {
                         [](const AcquireInfo &a) { return a.canBlock; });
   }
 
+  /// Returns true if any later consumer explicitly requests coarse access.
+  bool anyCoarseAcquire() const {
+    return llvm::any_of(acquires, [](const AcquireInfo &a) {
+      return a.partitionMode == PartitionMode::coarse;
+    });
+  }
+
   /// Returns the maximum partition dimension count across all acquires.
   /// Computed from partitionInfos for uniformity analysis in heuristics.
   unsigned maxPinnedDimCount() const {
