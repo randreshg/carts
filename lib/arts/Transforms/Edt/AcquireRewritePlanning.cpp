@@ -14,6 +14,7 @@
 ///==========================================================================///
 
 #include "arts/Transforms/Edt/AcquireRewritePlanning.h"
+#include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
@@ -130,6 +131,42 @@ static bool acquireHasReadAccess(DbAcquireOp acquire) {
   return false;
 }
 
+static bool isSingleNodeExecution(AcquireRewritePlanningInput input) {
+  if (!input.AC)
+    return false;
+
+  if (const ArtsAbstractMachine *machine = input.AC->getAbstractMachine()) {
+    if (machine->hasValidNodeCount())
+      return !machine->isDistributed();
+  }
+
+  ModuleOp module = input.AC->getModule();
+  std::optional<StringRef> configData = getRuntimeConfigData(module);
+  if (!configData)
+    return false;
+
+  SmallVector<StringRef, 32> lines;
+  configData->split(lines, '\n');
+  for (StringRef line : lines) {
+    line = line.trim();
+    if (line.empty() || line.starts_with("#"))
+      continue;
+    if (!line.starts_with("nodeCount"))
+      continue;
+
+    auto eq = line.find('=');
+    if (eq == StringRef::npos)
+      continue;
+
+    int64_t nodeCount = 0;
+    if (line.drop_front(eq + 1).trim().getAsInteger(10, nodeCount))
+      continue;
+    return nodeCount <= 1;
+  }
+
+  return false;
+}
+
 } // namespace
 
 AcquireRewritePlan
@@ -160,6 +197,7 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
 
   bool isSingleElement = false;
   bool needsStencilHalo = false;
+  bool forceCoarseRewrite = plan.rewriteInput.forceCoarse;
   Value stencilExtent;
   SmallVector<Value, 4> extraOffsets;
   SmallVector<Value, 4> extraSizes;
@@ -191,6 +229,17 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
             !isSingleElement &&
             ((patternSaysStencil && modeNeedsPatternStencilHalo) ||
              (strategySaysStencil && strategyNeedsStencilHalo));
+
+        /// Keep single-node self-dependent stencil updates coarse. Rewriting an
+        /// in-place `inout` acquire to block mode here forces DB partitioning
+        /// later, which over-partitions Gauss-Seidel style dependence chains
+        /// such as seidel-2d.
+        if (isSingleNodeExecution(input) && inoutReadsSelf &&
+            (patternSaysStencil || strategySaysStencil)) {
+          forceCoarseRewrite = true;
+          needsStencilHalo = false;
+        }
+
         if (needsStencilHalo)
           stencilExtent = input.AC->castToIndex(elemSizes.front(), input.loc);
 
@@ -232,6 +281,7 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
 
   plan.useStencilRewriter = needsStencilHalo;
   plan.rewriteInput.singleElement = isSingleElement;
+  plan.rewriteInput.forceCoarse = forceCoarseRewrite;
   plan.rewriteInput.stencilExtent = stencilExtent;
   plan.rewriteInput.extraOffsets = std::move(extraOffsets);
   plan.rewriteInput.extraSizes = std::move(extraSizes);
