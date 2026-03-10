@@ -14,14 +14,53 @@ has_required_python_deps() {
     "$python_bin" -c "import typer, rich, openpyxl" 2>/dev/null
 }
 
+pick_existing_python() {
+    local candidates=()
+
+    if [[ -n "${VIRTUAL_ENV:-}" ]] && [[ -x "${VIRTUAL_ENV}/bin/python" ]]; then
+        candidates+=("${VIRTUAL_ENV}/bin/python")
+    fi
+
+    if [[ -x "${SCRIPT_DIR}/.venv/bin/python" ]]; then
+        candidates+=("${SCRIPT_DIR}/.venv/bin/python")
+    fi
+
+    if [[ -x "${SCRIPT_DIR}/../.venv/bin/python" ]]; then
+        candidates+=("${SCRIPT_DIR}/../.venv/bin/python")
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+        candidates+=("$(command -v python3)")
+    fi
+
+    if command -v python >/dev/null 2>&1; then
+        candidates+=("$(command -v python)")
+    fi
+
+    local candidate
+    for candidate in "${candidates[@]}"; do
+        if [[ -n "$candidate" ]] && [[ -x "$candidate" ]] && has_required_python_deps "$candidate"; then
+            SHARED_PYTHON="$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 get_poetry_python() {
     poetry -C "$SCRIPT_DIR" env info -e 2>/dev/null || true
 }
 
 ensure_shared_env() {
+    if pick_existing_python; then
+        return 0
+    fi
+
     if ! command -v poetry >/dev/null 2>&1; then
         echo "Error: Poetry is required to bootstrap CARTS Python environment."
-        echo "Install Poetry and run: poetry -C ${SCRIPT_DIR} install --no-root"
+        echo "Activate a Python environment with typer, rich, and openpyxl installed"
+        echo "or run: poetry -C ${SCRIPT_DIR} install --no-root"
         return 1
     fi
 

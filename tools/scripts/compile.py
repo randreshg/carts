@@ -56,6 +56,67 @@ def _get_compile_workdir_override() -> Optional[Path]:
     return workdir
 
 
+_PATH_VALUE_FLAGS = {
+    "-I",
+    "-isystem",
+    "-iquote",
+    "-idirafter",
+    "-include",
+    "-L",
+    "-F",
+    "-isysroot",
+    "--sysroot",
+}
+_PATH_VALUE_PREFIXES = (
+    "-I",
+    "-L",
+    "-F",
+    "-isystem",
+    "-iquote",
+    "-idirafter",
+    "-include",
+)
+_PATH_EQUALS_PREFIXES = ("--sysroot=",)
+
+
+def _resolve_relative_cli_path(token: str, base_dir: Path) -> str:
+    """Resolve a path-valued CLI token relative to the original invocation cwd."""
+    path = Path(token)
+    if path.is_absolute():
+        return str(path)
+    return str((base_dir / path).resolve())
+
+
+def _normalize_path_flags(args: List[str], base_dir: Path) -> List[str]:
+    """Stabilize path-valued compiler/linker flags before changing cwd."""
+    normalized: List[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in _PATH_VALUE_FLAGS and i + 1 < len(args):
+            normalized.append(arg)
+            i += 1
+            normalized.append(_resolve_relative_cli_path(args[i], base_dir))
+        elif any(arg.startswith(prefix) for prefix in _PATH_EQUALS_PREFIXES):
+            prefix, value = arg.split("=", 1)
+            normalized.append(f"{prefix}={_resolve_relative_cli_path(value, base_dir)}")
+        else:
+            matched_prefix = None
+            for prefix in _PATH_VALUE_PREFIXES:
+                if arg.startswith(prefix) and len(arg) > len(prefix):
+                    matched_prefix = prefix
+                    break
+            if matched_prefix is not None:
+                normalized.append(
+                    matched_prefix
+                    + _resolve_relative_cli_path(arg[len(matched_prefix):], base_dir)
+                )
+            else:
+                normalized.append(arg)
+        i += 1
+    return normalized
+
+
 def _is_numeric(s: str) -> bool:
     """Check if a string is a numeric value (including negative)."""
     try:
@@ -330,10 +391,11 @@ def _compile_from_c(
 
     # Parse passthrough args
     parsed = CompileArgs.parse(ctx.args or [])
+    invocation_cwd = Path.cwd().resolve()
 
     extra_pipeline_args = parsed.pipeline[:]
-    extra_link_args = parsed.link[:]
-    cgeist_args = parsed.cgeist
+    extra_link_args = _normalize_path_flags(parsed.link[:], invocation_cwd)
+    cgeist_args = _normalize_path_flags(parsed.cgeist, invocation_cwd)
 
     if partition_fallback:
         extra_pipeline_args.append(f"--partition-fallback={partition_fallback}")
