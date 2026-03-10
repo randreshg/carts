@@ -55,6 +55,18 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
           ctx, "H1.1: All acquires read-only on single-node prefers coarse");
     }
 
+    /// H1.1a: Any explicit coarse acquire on single-node -> Coarse.
+    /// A later whole-array consumer outweighs any earlier parallel producer on
+    /// a single node. Preserving coarse allocation avoids mixed-mode
+    /// block-localization for values that are fundamentally consumed as a
+    /// single read-mostly input.
+    if (ctx.anyCoarseAcquire()) {
+      ARTS_DEBUG(
+          "H1.1a applied: Single-node coarse acquire prefers coarse");
+      return PartitioningDecision::coarse(
+          ctx, "H1.1a: Single-node coarse acquire prefers coarse");
+    }
+
     /// H1.1b: Read-only + all full-range block acquires -> Coarse
     if (isReadOnly && ctx.allBlockFullRange) {
       ARTS_DEBUG("H1.1b applied: Read-only full-range acquires prefer coarse");
