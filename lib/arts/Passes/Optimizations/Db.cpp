@@ -31,6 +31,7 @@
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 #include <cstdlib>
 
@@ -230,6 +231,12 @@ bool DbPass::adjustDbModes() {
       bool hasStores = acqNode->hasStores();
 
       DbAcquireOp acqOp = acqNode->getDbAcquireOp();
+      if (acqOp->hasAttr(AttrNames::Operation::PreserveDependencyMode)) {
+        ARTS_DEBUG("AcquireOp: " << acqOp
+                                 << " preserving explicit dependency mode "
+                                 << acqOp.getMode());
+        return;
+      }
       ArtsMode newMode = ArtsMode::in;
       if (hasLoads && hasStores)
         newMode = ArtsMode::inout;
