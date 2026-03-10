@@ -1030,7 +1030,15 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         auto dimOpt = acqNode->getPartitionOffsetDim(partitionOffset,
                                                      /*requireLeading=*/false);
         if (!dimOpt) {
-          if (hasDistributionContract && (hasBlockHints || inferredBlock)) {
+          bool writesThroughAcquire =
+              acquire.getMode() == ArtsMode::out ||
+              acquire.getMode() == ArtsMode::inout || acqNode->hasStores();
+          if (writesThroughAcquire) {
+            ARTS_DEBUG("  Partition offset incompatible with write access; "
+                       "disabling block capability");
+            thisAcquireCanBlock = false;
+          } else if (hasDistributionContract &&
+                     (hasBlockHints || inferredBlock)) {
             ARTS_DEBUG("  Partition offset not mappable by DbAcquireNode, but "
                        "preserving block capability from EDT distribution "
                        "contract");

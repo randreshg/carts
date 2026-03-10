@@ -65,6 +65,16 @@ arts::analyzeAccessBoundsFromIndices(ArrayRef<AccessIndexInfo> accesses,
 
     if (!idxForBounds) {
       for (Value idx : access.indexChain) {
+        if (ValueUtils::dependsOn(idx, loopIV) ||
+            ValueUtils::dependsOn(idx, blockBase)) {
+          idxForBounds = idx;
+          break;
+        }
+      }
+    }
+
+    if (!idxForBounds) {
+      for (Value idx : access.indexChain) {
         int64_t constVal = 0;
         if (!ValueUtils::getConstantIndex(idx, constVal)) {
           idxForBounds = idx;
