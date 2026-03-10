@@ -103,14 +103,32 @@ def _setup_hostname_resolution(nodes: List[str]) -> None:
         _docker_exec(node, f"echo -e '{hosts_entries}' >> /etc/hosts", check=False)
 
 
+def _render_slurm_conf(cpu_count: str) -> str:
+    template = (_get_docker_dir() / "slurm.conf").read_text()
+    return template.replace(
+        "NodeName=arts-node-[1-6] CPUs=4 State=UNKNOWN",
+        f"NodeName=arts-node-[1-6] CPUs={cpu_count} State=UNKNOWN",
+    )
+
+
 def _start_slurm_cluster(nodes: List[str]) -> None:
     if not nodes:
         return
 
     print_step("Starting Slurm daemons")
+    docker_cpus = _detect_docker_cpus(default="4")
+    rendered_slurm_conf = _render_slurm_conf(docker_cpus)
 
     for node in nodes:
-        _docker_exec(node, "cp /opt/carts/docker/slurm.conf /etc/slurm/slurm.conf 2>/dev/null || true", check=False)
+        _docker_exec(
+            node,
+            (
+                "cat > /etc/slurm/slurm.conf <<'EOF'\n"
+                f"{rendered_slurm_conf}\n"
+                "EOF"
+            ),
+            check=False,
+        )
         _docker_exec(
             node,
             (
