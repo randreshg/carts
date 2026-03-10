@@ -177,16 +177,20 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
 
         auto accessPattern = getDbAccessPattern(dbAlloc.getOperation());
         const ArtsMode mode = input.parentAcquire.getMode();
-        const bool modeNeedsStencilHalo =
-            mode == ArtsMode::in || (mode == ArtsMode::inout &&
-                                     acquireHasReadAccess(input.parentAcquire));
+        const bool inoutReadsSelf =
+            mode == ArtsMode::inout && acquireHasReadAccess(input.parentAcquire);
+        const bool modeNeedsPatternStencilHalo =
+            mode == ArtsMode::in || inoutReadsSelf;
         const bool patternSaysStencil =
             accessPattern && *accessPattern == DbAccessPattern::stencil;
         const bool strategySaysStencil =
             input.distributionPattern &&
             *input.distributionPattern == EdtDistributionPattern::stencil;
-        needsStencilHalo = !isSingleElement && modeNeedsStencilHalo &&
-                           (patternSaysStencil || strategySaysStencil);
+        const bool strategyNeedsStencilHalo = mode == ArtsMode::in;
+        needsStencilHalo =
+            !isSingleElement &&
+            ((patternSaysStencil && modeNeedsPatternStencilHalo) ||
+             (strategySaysStencil && strategyNeedsStencilHalo));
         if (needsStencilHalo)
           stencilExtent = input.AC->castToIndex(elemSizes.front(), input.loc);
 

@@ -330,10 +330,22 @@ void setupLoopReordering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createLoopTransformsPass(
       AM, LoopTransformsEnableMatmul, LoopTransformsEnableTiling,
       LoopTransformsTileJ, LoopTransformsMinTripCount));
-  /// Distributed DB mode lifts eligible host producer loops into the regular
-  /// arts.for/EDT pipeline before CreateDbs so distributed ownership can be
-  /// inferred from the same downstream task/dependency structure.
-  if (DistributedDb)
+  /// Multinode execution needs eligible host producer loops to flow through
+  /// the regular arts.for/EDT pipeline before CreateDbs; otherwise serial host
+  /// writes between distributed phases bypass the normal DB acquire/release
+  /// coherence path. --distributed-db relies on the same outlining for
+  /// ownership inference, but correctness requires it for general multinode
+  /// block partitioning as well.
+  bool enableDistributedHostLoopOutlining = false;
+  if (AM) {
+    const auto &machine = AM->getAbstractMachine();
+    enableDistributedHostLoopOutlining =
+        DistributedDb ||
+        (machine.hasValidNodeCount() && machine.getNodeCount() > 1);
+  } else {
+    enableDistributedHostLoopOutlining = DistributedDb;
+  }
+  if (enableDistributedHostLoopOutlining)
     pm.addPass(arts::createDistributedHostLoopOutliningPass(AM));
   pm.addPass(createCSEPass());
 }

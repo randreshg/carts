@@ -787,6 +787,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
   SmallVector<Value> taskDeps;
   SmallVector<std::pair<BlockArgument, Value>> parallelArgToAcquire;
+  bool forceOwnerRoute = false;
   ARTS_DEBUG("  - Processing " << parentDeps.size()
                                << " parent dependencies with DB rewiring");
 
@@ -891,7 +892,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       /// must follow the rewritten task acquire window to keep dep indexing
       /// valid inside task EDT bodies.
       const bool useRewrittenWindow =
-          usesStencilHalo || mode == PartitionMode::stencil;
+          parentAcqOp.getMode() == ArtsMode::in &&
+          (usesStencilHalo || mode == PartitionMode::stencil);
       if (useRewrittenWindow) {
         if (!acquireOp.getOffsets().empty() && acquireOp.getOffsets().front())
           elemOffset = acquireOp.getOffsets().front();
@@ -910,14 +912,15 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
             parentAcqOp.getMode() != ArtsMode::in)
           elemHintSize = loopInfo.bounds.iterCount;
 
-        /// Stencil task bodies index write-capable dependencies against the
-        /// shared stencil base and include the current row upper boundary.
-        /// Reserve one extra element in DB-space slice size to avoid dropping
-        /// the terminal block when the last row crosses a block boundary.
+        /// Only true stencil-mode writes need the extra terminal element in
+        /// DB-space. Block-mode write deps use precise worker-local ranges;
+        /// widening them by one can over-acquire a neighboring block and
+        /// clobber a different writer's updates during full-block write-back.
         bool isStencilPattern =
             distributionPattern &&
             *distributionPattern == EdtDistributionPattern::stencil;
-        if (isStencilPattern && parentAcqOp.getMode() != ArtsMode::in)
+        if (isStencilPattern && mode == PartitionMode::stencil &&
+            parentAcqOp.getMode() != ArtsMode::in)
           elemHintSize = AC->create<arith::AddIOp>(loc, elemHintSize, one);
       }
       elemOffset = AC->castToIndex(elemOffset, loc);
@@ -1024,13 +1027,29 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       chunkUsesStencilHalo = useStencilHalo;
     }
 
-    if (distributionPattern &&
+    auto chunkMode = chunkAcqOp.getPartitionMode();
+    bool shouldMarkStencilCenter =
+        distributionPattern &&
         *distributionPattern == EdtDistributionPattern::stencil &&
+        (chunkUsesStencilHalo || chunkAcqOp.getMode() == ArtsMode::in ||
+         (chunkMode && *chunkMode == PartitionMode::stencil));
+    if (shouldMarkStencilCenter &&
         !getStencilCenterOffset(chunkAcqOp.getOperation())) {
       setStencilCenterOffset(chunkAcqOp.getOperation(), 1);
     }
 
     setDbSpaceSliceFromAcquirePlan(chunkAcqOp, chunkUsesStencilHalo);
+
+    if (originalParallel.getConcurrency() == EdtConcurrency::internode &&
+        chunkAcqOp.getMode() != ArtsMode::in &&
+        DatablockUtils::isCoarse(chunkAcqOp)) {
+      auto allocOp = dyn_cast_or_null<DbAllocOp>(
+          DatablockUtils::getUnderlyingDbAlloc(chunkAcqOp.getSourcePtr()));
+      if (allocOp && !hasDistributedDbAllocation(allocOp.getOperation())) {
+        forceOwnerRoute = true;
+        ARTS_DEBUG("    - Coarse write dependency requires owner-local route");
+      }
+    }
 
     Value acquirePtr = chunkAcqOp.getResult(1);
 
@@ -1045,16 +1064,21 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   EdtConcurrency taskConcurrency = originalParallel.getConcurrency();
   Value routeValue;
   if (taskConcurrency == EdtConcurrency::internode) {
-    /// Route to destination node from the global worker id:
-    ///   nodeId = globalWorkerId / workersPerNode
-    /// workersPerNode is always materialized for internode routing.
-    if (!workersPerNode)
-      workersPerNode =
-          DistributionHeuristics::getWorkersPerNode(AC, loc, originalParallel);
-    Value nodeId =
-        AC->create<arith::DivUIOp>(loc, workerIdPlaceholder, workersPerNode);
-    routeValue = AC->castToInt(AC->Int32, nodeId, loc);
-    ARTS_DEBUG("  - Using internode routing by workers-per-node");
+    if (forceOwnerRoute) {
+      routeValue = AC->createIntConstant(0, AC->Int32, loc);
+      ARTS_DEBUG("  - Forcing owner-local routing for coarse write task");
+    } else {
+      /// Route to destination node from the global worker id:
+      ///   nodeId = globalWorkerId / workersPerNode
+      /// workersPerNode is always materialized for internode routing.
+      if (!workersPerNode)
+        workersPerNode = DistributionHeuristics::getWorkersPerNode(
+            AC, loc, originalParallel);
+      Value nodeId =
+          AC->create<arith::DivUIOp>(loc, workerIdPlaceholder, workersPerNode);
+      routeValue = AC->castToInt(AC->Int32, nodeId, loc);
+      ARTS_DEBUG("  - Using internode routing by workers-per-node");
+    }
   } else {
     routeValue = AC->createIntConstant(0, AC->Int32, loc);
   }

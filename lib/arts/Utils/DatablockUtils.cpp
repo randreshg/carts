@@ -49,6 +49,8 @@ static bool isMemrefForwardingOp(Operation *op, Value source) {
     return reinterpret.getSource() == source;
   if (auto unrealized = dyn_cast<UnrealizedConversionCastOp>(op))
     return llvm::is_contained(unrealized.getInputs(), source);
+  if (auto dbRef = dyn_cast<DbRefOp>(op))
+    return dbRef.getSource() == source;
 
   return false;
 }

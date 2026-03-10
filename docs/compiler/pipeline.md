@@ -65,7 +65,7 @@ cross-stage contracts.
 - `LoopReordering`
 - `LoopTransforms`
 - `DistributedHostLoopOutlining`
-  - auto-enabled by `--distributed-db`
+  - auto-enabled by multinode builds and by `--distributed-db`
   - outlines eligible host producer loops so they flow through the regular
     distributed `arts.for` pipeline before `CreateDbs`
 - `CSE`

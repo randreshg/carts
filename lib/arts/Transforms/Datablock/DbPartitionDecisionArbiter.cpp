@@ -161,6 +161,39 @@ PartitionDecisionArbiterResult mlir::arts::arbitrateInitialPartitionDecision(
     DbAllocOp allocOp, HeuristicsConfig &heuristics) {
   PartitionDecisionArbiterResult result;
   result.decision = heuristics.getPartitioningMode(ctx);
+  const bool isDistributedExecution =
+      ctx.machine && ctx.machine->hasValidNodeCount() &&
+      ctx.machine->isDistributed();
+
+  /// Stencil distribution fallback path:
+  /// Some stencil kernels distribute work across a non-leading dimension, so
+  /// acquire-side stencil inference degrades to uniform/full-range and the
+  /// coarse fallback fires even though block partitioning is still safe. This
+  /// is a multinode-only recovery path; on single-node stencil kernels such as
+  /// seidel, forcing block partitioning can over-partition a sequential
+  /// dependence chain that should remain coarse.
+  if (isDistributedExecution && ctx.canBlock &&
+      result.decision.mode == PartitionMode::coarse &&
+      ctx.allBlockFullRange) {
+    DistributionPatternHintSummary distPatterns =
+        summarizeAcquireDistributionPatterns(acquireInfos);
+    bool allocHasStencilPattern = false;
+    if (auto allocPattern = getDbAccessPattern(allocOp.getOperation()))
+      allocHasStencilPattern = *allocPattern == DbAccessPattern::stencil;
+
+    if (distPatterns.hasStencil && !distPatterns.hasOther &&
+        distPatterns.hasReadOnlyAcquire &&
+        (distPatterns.hasStencilAccessPattern || allocHasStencilPattern)) {
+      result.decision = PartitioningDecision::block(
+          ctx, "stencil EDT distribution fallback to block partitioning");
+      heuristics.recordDecision(
+          "Partition-StencilDistributionFallback", true,
+          "preserving block partitioning from stencil EDT distribution hints",
+          allocOp.getOperation(), {});
+      ARTS_DEBUG("  stencil EDT hints + full-range fallback -> forcing block "
+                 "partitioning");
+    }
+  }
 
   /// Stencil hint path:
   /// If all distribution-pattern hints for this allocation are stencil EDTs,
