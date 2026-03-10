@@ -2,8 +2,9 @@
 /// File: DistributedHostLoopOutliningPass.cpp
 ///
 /// Outlines eligible host-side loops into arts.edt<task> regions so they can
-/// flow through the normal distributed arts.for lowering path. This is only
-/// intended for --distributed-db mode.
+/// flow through the normal distributed arts.for lowering path. This is used
+/// for multinode execution in general and is also relied on by
+/// --distributed-db mode.
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"
@@ -159,13 +160,34 @@ static bool hasOnlySupportedEffects(scf::ForOp loop, Operation *storeRoot) {
   return hasStores && !hasUnsupportedOp;
 }
 
-static Value getArtsForInductionVar(arts::ForOp forOp) {
-  if (!forOp || forOp.getRegion().empty())
+static Value getLoopInductionVar(Operation *op) {
+  if (!op)
     return Value();
-  Block &block = forOp.getRegion().front();
-  if (block.getNumArguments() == 0)
-    return Value();
-  return block.getArgument(0);
+
+  if (auto artsFor = dyn_cast<arts::ForOp>(op)) {
+    if (artsFor.getRegion().empty())
+      return Value();
+    Block &block = artsFor.getRegion().front();
+    if (block.getNumArguments() == 0)
+      return Value();
+    return block.getArgument(0);
+  }
+
+  if (auto scfFor = dyn_cast<scf::ForOp>(op))
+    return scfFor.getInductionVar();
+
+  return Value();
+}
+
+static bool edtWillRunInternode(EdtOp edt,
+                                const ArtsAbstractMachine *machine) {
+  if (!edt)
+    return false;
+  if (edt.getConcurrency() == EdtConcurrency::internode)
+    return true;
+  if (!machine || !machine->isDistributed())
+    return false;
+  return edt.getTypeAttr().getValue() == EdtType::parallel;
 }
 
 static Operation *getTopLevelFuncChild(Operation *op, func::FuncOp parentFunc) {
@@ -190,7 +212,8 @@ static bool isOrderedAfter(Operation *anchor, Operation *candidate,
 }
 
 static bool hasAlignedInternodeForUseAfter(scf::ForOp loop,
-                                           Operation *storeRoot) {
+                                           Operation *storeRoot,
+                                           const ArtsAbstractMachine *machine) {
   if (!loop || !storeRoot)
     return false;
 
@@ -213,11 +236,14 @@ static bool hasAlignedInternodeForUseAfter(scf::ForOp loop,
       return WalkResult::advance();
 
     auto edtOp = op->getParentOfType<EdtOp>();
-    if (!edtOp || edtOp.getConcurrency() != EdtConcurrency::internode)
+    if (!edtOp || !edtWillRunInternode(edtOp, machine))
       return WalkResult::advance();
 
-    auto forOp = op->getParentOfType<arts::ForOp>();
-    Value loopIV = getArtsForInductionVar(forOp);
+    Value loopIV;
+    if (auto artsFor = op->getParentOfType<arts::ForOp>())
+      loopIV = getLoopInductionVar(artsFor.getOperation());
+    else if (auto scfFor = op->getParentOfType<scf::ForOp>())
+      loopIV = getLoopInductionVar(scfFor.getOperation());
     if (!loopIV)
       return WalkResult::advance();
 
@@ -225,7 +251,8 @@ static bool hasAlignedInternodeForUseAfter(scf::ForOp loop,
     if (ValueUtils::sameValue(leadingIdx, loopIV) ||
         ValueUtils::dependsOn(leadingIdx, loopIV) ||
         ValueUtils::dependsOn(loopIV, leadingIdx)) {
-      ARTS_DEBUG("Aligned later internode use found for store root " << *storeRoot
+      ARTS_DEBUG("Aligned later multinode use found for store root "
+                 << *storeRoot
                                                                      << " via "
                                                                      << *op);
       foundAlignedUse = true;
@@ -239,7 +266,8 @@ static bool hasAlignedInternodeForUseAfter(scf::ForOp loop,
 }
 
 static bool isEligibleDistributedHostLoop(scf::ForOp loop,
-                                          LoopAnalysis *loopAnalysis) {
+                                          LoopAnalysis *loopAnalysis,
+                                          const ArtsAbstractMachine *machine) {
   if (!loop)
     return false;
 
@@ -282,7 +310,7 @@ static bool isEligibleDistributedHostLoop(scf::ForOp loop,
   /// Only outline loops whose written allocation is later consumed by aligned
   /// internode work. This allows A/C-style GEMM loops and rejects B-style
   /// loops whose leading dimension is not distributed by the downstream task.
-  if (!hasAlignedInternodeForUseAfter(loop, storeRoot)) {
+  if (!hasAlignedInternodeForUseAfter(loop, storeRoot, machine)) {
     ARTS_DEBUG("Skip loop (no aligned later internode use for store root): "
                << loop);
     return false;
@@ -406,7 +434,7 @@ struct DistributedHostLoopOutliningPass
           ARTS_DEBUG("Skip loop (function has DbControlOps): " << loop);
           return;
         }
-        if (isEligibleDistributedHostLoop(loop, loopAnalysis))
+        if (isEligibleDistributedHostLoop(loop, loopAnalysis, machine))
           candidates.push_back(loop);
       });
     });
