@@ -30,7 +30,6 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 #include "arts/Utils/DatablockUtils.h"
-#include "arts/Utils/Metadata/LoopMetadata.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 /// Others
@@ -408,38 +407,19 @@ private:
 
       /// Stencil writer acquires frequently cover [left, center, right] DB
       /// entries. Recording all entries as WRITE over-serializes adjacent
-      /// blocks. When we can infer the center DB index, keep WRITE only for the
-      /// center and record halo entries as READ.
+      /// blocks. Only apply the halo downgrade when stencil lowering
+      /// explicitly marked the center position; generic loop-carried-dependence
+      /// metadata is too broad and misclassifies non-stencil block writers.
       int32_t writeMode = static_cast<int32_t>(DbMode::write);
       bool writerMode = !acquireMode || *acquireMode == writeMode;
-      bool inInterIterationDepLoop = false;
-      for (Operation *parent = dbAcquireOp->getParentOp(); parent;
-           parent = parent->getParentOp()) {
-        auto forOp = dyn_cast<scf::ForOp>(parent);
-        if (!forOp)
-          continue;
-        auto loopAttr = forOp->getAttrOfType<LoopMetadataAttr>(
-            mlir::arts::AttrNames::LoopMetadata::Name);
-        if (!loopAttr)
-          continue;
-        if (auto hasDeps = loopAttr.getHasInterIterationDeps())
-          inInterIterationDepLoop = hasDeps.getValue();
-        break;
-      }
-
       auto partitionMode = dbAcquireOp.getPartitionMode();
-      if (writerMode && inInterIterationDepLoop && partitionMode &&
-          *partitionMode == PartitionMode::block &&
-          !dbAcquireOp.getPartitionOffsets().empty() &&
-          !dbAcquireOp.getPartitionSizes().empty()) {
-        Value partOffset =
-            AC->castToIndex(dbAcquireOp.getPartitionOffsets().front(), loc);
-        Value partSize =
-            AC->castToIndex(dbAcquireOp.getPartitionSizes().front(), loc);
-        Value one = AC->createIndexConstant(1, loc);
-        Value safePartSize = AC->create<arith::MaxUIOp>(loc, partSize, one);
-        stencilCenterLinear =
-            AC->create<arith::DivUIOp>(loc, partOffset, safePartSize);
+      if (writerMode && partitionMode &&
+          (*partitionMode == PartitionMode::block ||
+           *partitionMode == PartitionMode::stencil)) {
+        if (auto centerOffset =
+                getStencilCenterOffset(dbAcquireOp.getOperation())) {
+          stencilCenterLinear = AC->createIndexConstant(*centerOffset, loc);
+        }
       }
     } else if (auto depDbAcquireOp = dbGuid.getDefiningOp<DepDbAcquireOp>()) {
       getDbInfo(depDbAcquireOp, dbSizes, dbOffsets, dbIndices, isSingle);
@@ -1006,7 +986,11 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
     Value totalDbSize =
         AC->create<arith::MulIOp>(loc, elementSize, payloadSize);
     std::optional<int64_t> nextId;
-    nextId = getArtsId(op);
+    if (auto createIdAttr =
+            op->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsCreateId))
+      nextId = createIdAttr.getInt();
+    else
+      nextId = getArtsId(op);
 
     SmallVector<Value> dbSizes, dbOffsets, dbIndices;
     bool isSingleElement = false;

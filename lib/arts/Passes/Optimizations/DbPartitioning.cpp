@@ -1033,20 +1033,23 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
           bool writesThroughAcquire =
               acquire.getMode() == ArtsMode::out ||
               acquire.getMode() == ArtsMode::inout || acqNode->hasStores();
-          if (writesThroughAcquire) {
-            ARTS_DEBUG("  Partition offset incompatible with write access; "
-                       "disabling block capability");
-            thisAcquireCanBlock = false;
-          } else if (hasDistributionContract &&
-                     (hasBlockHints || inferredBlock)) {
+          bool preserveFromExplicitContract =
+              hasDistributionContract && (hasBlockHints || inferredBlock) &&
+              (!writesThroughAcquire || isMultinodeMachine);
+          if (preserveFromExplicitContract) {
             ARTS_DEBUG("  Partition offset not mappable by DbAcquireNode, but "
                        "preserving block capability from EDT distribution "
-                       "contract");
+                       "contract"
+                       << (writesThroughAcquire ? " (write acquire)" : ""));
             bool acquireSelectsLeafDb = false;
             if (auto ptrTy = acquire.getPtr().getType().dyn_cast<MemRefType>())
               acquireSelectsLeafDb = !ptrTy.getElementType().isa<MemRefType>();
             if (acquireSelectsLeafDb)
               preserveExplicitContractLayout = true;
+          } else if (writesThroughAcquire) {
+            ARTS_DEBUG("  Partition offset incompatible with write access; "
+                       "disabling block capability");
+            thisAcquireCanBlock = false;
           } else {
             ARTS_DEBUG("  Partition offset incompatible with access pattern; "
                        "disabling block capability");
