@@ -27,10 +27,8 @@ DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
 
   if (in.singleElement || in.forceCoarse) {
     /// Intentionally drop any worker-local block hints here. For single-node
-    /// stencil-like inout updates, keeping those hints lets DbPartitioning
-    /// recover block/stencil layout later, which reintroduces the Seidel
-    /// correctness failure and a severe Jacobi regression that this coarse
-    /// rewrite is meant to prevent.
+    /// Seidel-like inout updates with cross-element self-reads, keeping those
+    /// hints lets DbPartitioning recover an unsafe block/stencil layout later.
     return in.AC->create<DbAcquireOp>(
         in.loc, in.parentAcquire.getMode(), in.rootGuid, in.rootPtr,
         in.parentAcquire.getPtr().getType(), PartitionMode::coarse,

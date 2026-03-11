@@ -218,7 +218,7 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
             input.analysisManager->getDbAnalysis().hasCrossElementSelfReadInLoop(
                 input.parentAcquire, input.loopOp);
         const bool modeNeedsPatternStencilHalo =
-            mode == ArtsMode::in || inoutReadsSelf;
+            mode == ArtsMode::in || inoutReadsCrossElementSelf;
         const bool patternSaysStencil =
             accessPattern && *accessPattern == DbAccessPattern::stencil;
         const bool strategySaysStencil =
@@ -243,21 +243,15 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
           /// Single-node stencil allocations are a mixed case:
           ///   - Seidel-style in-place stencil updates must stay coarse because
           ///     the same DB is read at cross-element offsets.
-          ///   - Jacobi-style double-buffer outputs can be rewritten to block,
-          ///     but doing so on a stencil-classified allocation regresses
-          ///     badly because the write acquire inherits stencil-oriented
-          ///     partitioning costs without needing halo reads itself.
+          ///   - Jacobi-style double-buffer outputs should stay block
+          ///     partitionable even when the allocation itself is classified as
+          ///     stencil.
           ///   - Uniform allocations with only zero-offset self-reads (e.g.
           ///     specfem += updates) still benefit from block partitioning.
           if (inoutReadsCrossElementSelf &&
               (patternSaysStencil || strategySaysStencil)) {
             ARTS_DEBUG("Keeping single-node inout acquire coarse due to "
                        "cross-element self-read");
-            forceCoarseRewrite = true;
-            needsStencilHalo = false;
-          } else if (patternSaysStencil) {
-            ARTS_DEBUG("Keeping single-node inout acquire coarse on "
-                       "stencil-classified allocation");
             forceCoarseRewrite = true;
             needsStencilHalo = false;
           }
