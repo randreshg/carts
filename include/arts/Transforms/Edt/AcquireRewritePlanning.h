@@ -19,6 +19,7 @@ struct AcquireRewritePlanningInput {
   ArtsCodegen *AC = nullptr;
   Location loc;
 
+  ForOp loopOp;
   DbAcquireOp parentAcquire;
   Value rootGuid;
   Value rootPtr;
