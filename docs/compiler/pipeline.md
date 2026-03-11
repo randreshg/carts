@@ -62,6 +62,7 @@ cross-stage contracts.
 
 ### 6) loop-reordering
 - `LoopNormalization`
+- `JacobiStencilNormalization`
 - `LoopReordering`
 - `LoopTransforms`
 - `DistributedHostLoopOutlining`

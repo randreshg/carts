@@ -434,6 +434,21 @@ def LoopNormalization : Pass<"loop-normalization", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createLoopNormalizationPass(nullptr)";
 }
 
+def JacobiStencilNormalization : Pass<"jacobi-stencil-normalization",
+                                      "mlir::ModuleOp"> {
+  let summary = "Elide redundant copy phases in Jacobi-style stencil loops";
+  let description = [{
+    Detects timestep loops that copy one buffer into another before launching
+    a stencil update, and rewrites them into an alternating-buffer stencil
+    schedule before DB creation.
+  }];
+  let dependentDialects = [
+    "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",
+    "arith::ArithDialect", "scf::SCFDialect"
+  ];
+  let constructor = "mlir::arts::createJacobiStencilNormalizationPass()";
+}
+
 def LoopReordering : Pass<"loop-reordering", "mlir::ModuleOp"> {
   let summary = "Reorder inner loops for cache-optimal access patterns";
   let description = [{
