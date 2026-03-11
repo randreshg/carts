@@ -44,13 +44,9 @@ extern "C" {
 /// Pre-warm OMP thread pool.
 void carts_benchmarks_warmup_omp(void);
 
-/// Benchmark start hook for fair timing comparisons.
-/// - OpenMP reference: warms up the OMP thread pool and may emit `init.omp`.
-/// - ARTS binary: may emit `init.arts` (process start -> entering mainBody).
+/// Benchmark start hook. For OMP: warms up thread pool. For ARTS: no-op.
 void carts_benchmarks_start(void);
 
-/// For OMP: calls extern warmup function to initialize thread pool before
-/// timing. For ARTS: no-op (ARTS initializes at startup).
 #define CARTS_BENCHMARKS_START() carts_benchmarks_start()
 
 #define CARTS_BENCHMARKS_STOP() ((void)0)
