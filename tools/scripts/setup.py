@@ -20,6 +20,10 @@ from scripts.config import get_config
 from scripts.run import run_subprocess as _run_subprocess
 
 
+ARTS_REQUIRED_NESTED_SUBMODULES = ["third_party/hwloc"]
+POLYGEIST_REQUIRED_NESTED_SUBMODULES = ["llvm-project"]
+
+
 def _check_command_exists(cmd: str) -> bool:
     """Check if a command exists in PATH."""
     try:
@@ -59,12 +63,55 @@ def _setup_project() -> bool:
     print_info("Initializing and updating git submodules...")
     try:
         _run_subprocess(
+            ["git", "submodule", "sync", "--recursive"],
+            cwd=project_root,
+            realtime=True,
+            check=True,
+        )
+        _run_subprocess(
             [
-                "git", "submodule", "update", "--init", "--recursive",
+                "git", "submodule", "update", "--init",
                 "--depth", "1", "--single-branch",
                 "--recommend-shallow", "--jobs", "4",
+                "external/arts", "external/Polygeist", "external/carts-benchmarks",
             ],
             cwd=project_root,
+            realtime=True,
+            check=True,
+        )
+        # CARTS only needs the ARTS runtime, not ARTS's OCR benchmark stack.
+        # Avoid cloning those SSH-only benchmark submodules during bootstrap.
+        _run_subprocess(
+            ["git", "submodule", "sync", "--recursive"],
+            cwd=project_root / "external" / "arts",
+            realtime=True,
+            check=True,
+        )
+        _run_subprocess(
+            [
+                "git", "submodule", "update", "--init",
+                "--depth", "1", "--single-branch",
+                "--recommend-shallow", "--jobs", "4",
+                *ARTS_REQUIRED_NESTED_SUBMODULES,
+            ],
+            cwd=project_root / "external" / "arts",
+            realtime=True,
+            check=True,
+        )
+        _run_subprocess(
+            ["git", "submodule", "sync", "--recursive"],
+            cwd=project_root / "external" / "Polygeist",
+            realtime=True,
+            check=True,
+        )
+        _run_subprocess(
+            [
+                "git", "submodule", "update", "--init",
+                "--depth", "1", "--single-branch",
+                "--recommend-shallow", "--jobs", "4",
+                *POLYGEIST_REQUIRED_NESTED_SUBMODULES,
+            ],
+            cwd=project_root / "external" / "Polygeist",
             realtime=True,
             check=True,
         )
