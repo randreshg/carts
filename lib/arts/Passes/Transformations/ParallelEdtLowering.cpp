@@ -197,6 +197,11 @@ private:
     Value zero = arts::createZeroIndex(epochBuilder, loc);
     Value one = arts::createOneIndex(epochBuilder, loc);
 
+    /// Check for compile-time parallel_worker_id placeholders.  These are
+    /// used by reductions and internode routing where work must be mapped
+    /// to specific workers/nodes at compile time.  The check does NOT gate
+    /// the worker count: a parallel EDT always dispatches N tasks so that
+    /// runtime queries like arts.runtime_query<current_worker> work correctly.
     bool hasParallelWorkerPlaceholders = false;
     parallelEdt.walk([&](RuntimeQueryOp queryOp) {
       if (queryOp.getKind() == RuntimeQueryKind::parallelWorkerId) {
@@ -205,13 +210,8 @@ private:
       }
       return WalkResult::advance();
     });
-    if (!hasParallelWorkerPlaceholders) {
-      /// Replicating a parallel EDT body without worker placeholders duplicates
-      /// the same work N times. Keep a single task in that case.
-      numWorkers = one;
-    }
 
-    /// Create a single worker loop to preserve program order
+    /// Create a worker loop that dispatches N task EDTs.
     auto workerLoop =
         epochBuilder.create<scf::ForOp>(loc, zero, numWorkers, one);
     OpBuilder loopBuilder =
