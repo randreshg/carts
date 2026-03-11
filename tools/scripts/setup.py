@@ -79,8 +79,6 @@ def _setup_project() -> bool:
             realtime=True,
             check=True,
         )
-        # CARTS only needs the ARTS runtime, not ARTS's OCR benchmark stack.
-        # Avoid cloning those SSH-only benchmark submodules during bootstrap.
         _run_subprocess(
             ["git", "submodule", "sync", "--recursive"],
             cwd=project_root / "external" / "arts",
