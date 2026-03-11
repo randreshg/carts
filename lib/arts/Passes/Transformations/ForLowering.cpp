@@ -22,6 +22,7 @@
 ///==========================================================================///
 
 #include "../ArtsPassDetails.h"
+#include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/ArtsHeuristics.h"
 #include "arts/Analysis/DistributionHeuristics.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
@@ -278,10 +279,12 @@ static Value createZeroValue(ArtsCodegen *AC, Type elemType, Location loc) {
 
 /// ForLowering Pass Implementation
 struct ForLoweringPass : public arts::ForLoweringBase<ForLoweringPass> {
+  explicit ForLoweringPass(ArtsAnalysisManager *AM = nullptr) : AM(AM) {}
   void runOnOperation() override;
 
 private:
   ModuleOp module;
+  ArtsAnalysisManager *AM = nullptr;
 
   /// Process a parallel EDT containing arts_for operations
   void lowerParallelEdt(EdtOp parallelEdt);
@@ -505,6 +508,8 @@ void ForLoweringPass::lowerParallelEdt(EdtOp parallelEdt) {
   ARTS_DEBUG(" - Deps used after for: " << analysis.depsUsedAfterFor.size());
 
   ArtsCodegen AC(module);
+  if (AM)
+    AC.setAbstractMachine(&AM->getAbstractMachine());
   Location loc = parallelEdt.getLoc();
 
   /// Extract for-body outside the parallel EDT
@@ -875,6 +880,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
     AcquireRewritePlanningInput planningInput{AC,
                                               loc,
+                                              forOp,
                                               parentAcqOp,
                                               rootGuidValue,
                                               rootPtrValue,
@@ -1375,6 +1381,10 @@ namespace mlir {
 namespace arts {
 std::unique_ptr<Pass> createForLoweringPass() {
   return std::make_unique<ForLoweringPass>();
+}
+
+std::unique_ptr<Pass> createForLoweringPass(ArtsAnalysisManager *AM) {
+  return std::make_unique<ForLoweringPass>(AM);
 }
 } // namespace arts
 } // namespace mlir
