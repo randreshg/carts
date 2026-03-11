@@ -14,9 +14,12 @@
 namespace mlir {
 namespace arts {
 
+class ArtsAnalysisManager;
+
 /// Inputs required to plan one rewritten task acquire.
 struct AcquireRewritePlanningInput {
   ArtsCodegen *AC = nullptr;
+  ArtsAnalysisManager *analysisManager = nullptr;
   Location loc;
 
   ForOp loopOp;

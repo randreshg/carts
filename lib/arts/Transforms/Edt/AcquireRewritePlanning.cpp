@@ -14,7 +14,7 @@
 ///==========================================================================///
 
 #include "arts/Transforms/Edt/AcquireRewritePlanning.h"
-#include "arts/Analysis/AccessPatternAnalysis.h"
+#include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/DbUtils.h"
@@ -164,67 +164,6 @@ static bool acquireHasReadAccess(DbAcquireOp acquire) {
   return false;
 }
 
-static bool acquireHasCrossElementSelfRead(DbAcquireOp acquire, ForOp loopOp) {
-  if (!acquire || !loopOp || loopOp.getBody()->getNumArguments() == 0)
-    return false;
-
-  auto edtInfo = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
-  EdtOp edt = edtInfo.first;
-  Value edtArg = edtInfo.second;
-  if (!edt || !edtArg)
-    return false;
-
-  SmallVector<AccessIndexInfo, 16> selfReadAccesses;
-  loopOp.getBody()->walk([&](DbRefOp dbRef) {
-    if (!DbUtils::isSameMemoryObject(dbRef.getSource(), edtArg))
-      return;
-
-    DbUtils::forEachReachableMemoryAccess(
-        dbRef.getResult(),
-        [&](const DbUtils::MemoryAccessInfo &access) {
-          if (access.kind != DbUtils::MemoryAccessKind::Read)
-            return WalkResult::advance();
-
-          SmallVector<Value> indexChain =
-              DbUtils::collectFullIndexChain(dbRef, access.op);
-          if (indexChain.empty())
-            return WalkResult::advance();
-
-          AccessIndexInfo info;
-          info.dbRefPrefix = dbRef.getIndices().size();
-          info.indexChain.append(indexChain.begin(), indexChain.end());
-          selfReadAccesses.push_back(std::move(info));
-          return WalkResult::advance();
-        },
-        &loopOp.getRegion());
-  });
-
-  if (selfReadAccesses.empty()) {
-    ARTS_DEBUG("No self-read accesses found for inout acquire");
-    return false;
-  }
-
-  Value loopIV = loopOp.getBody()->getArgument(0);
-  AccessBoundsResult bounds =
-      analyzeAccessBoundsFromIndices(selfReadAccesses, loopIV, loopIV);
-  const bool hasCrossElementSelfRead =
-      bounds.valid && (bounds.isStencil || bounds.minOffset != 0 ||
-                       bounds.maxOffset != 0);
-
-  ARTS_DEBUG("Self-read bounds for acquire: valid=" << bounds.valid
-                                                    << " min="
-                                                    << bounds.minOffset
-                                                    << " max="
-                                                    << bounds.maxOffset
-                                                    << " stencil="
-                                                    << bounds.isStencil
-                                                    << " variable="
-                                                    << bounds.hasVariableOffset
-                                                    << " -> cross-element="
-                                                    << hasCrossElementSelfRead);
-  return hasCrossElementSelfRead;
-}
-
 } // namespace
 
 AcquireRewritePlan
@@ -275,8 +214,9 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
         const bool inoutReadsSelf = mode == ArtsMode::inout &&
                                     acquireHasReadAccess(input.parentAcquire);
         const bool inoutReadsCrossElementSelf =
-            mode == ArtsMode::inout &&
-            acquireHasCrossElementSelfRead(input.parentAcquire, input.loopOp);
+            mode == ArtsMode::inout && input.analysisManager &&
+            input.analysisManager->getDbAnalysis().hasCrossElementSelfReadInLoop(
+                input.parentAcquire, input.loopOp);
         const bool modeNeedsPatternStencilHalo =
             mode == ArtsMode::in || inoutReadsSelf;
         const bool patternSaysStencil =

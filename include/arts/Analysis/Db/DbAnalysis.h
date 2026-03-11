@@ -69,6 +69,7 @@ public:
   std::optional<EdtDistributionPattern> getLoopDistributionPattern(ForOp forOp);
   AcquirePartitionSummary analyzeAcquirePartition(DbAcquireOp acquire,
                                                   OpBuilder &builder);
+  bool hasCrossElementSelfReadInLoop(DbAcquireOp acquire, ForOp loopOp);
 
   /// Return true when producerEdt writes DBs that are later consumed outside
   /// internode EDT flow.

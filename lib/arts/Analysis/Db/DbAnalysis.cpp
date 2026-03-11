@@ -10,6 +10,8 @@
 #include "arts/Analysis/Db/DbPatternMatchers.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
+#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
+#include "arts/Analysis/Graphs/Edt/EdtNode.h"
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/DbUtils.h"
@@ -572,6 +574,99 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
   }
 
   return info;
+}
+
+bool DbAnalysis::hasCrossElementSelfReadInLoop(DbAcquireOp acquire,
+                                               ForOp loopOp) {
+  if (!acquire || !loopOp)
+    return false;
+
+  func::FuncOp func = acquire->getParentOfType<func::FuncOp>();
+  if (!func)
+    return false;
+
+  DbGraph &dbGraph = getOrCreateGraph(func);
+  DbAcquireNode *acquireNode = dbGraph.getDbAcquireNode(acquire);
+  if (!acquireNode)
+    return false;
+
+  EdtOp edt = acquireNode->getEdtUser();
+  if (!edt || loopOp->getParentOfType<EdtOp>() != edt)
+    return false;
+
+  EdtGraph &edtGraph = getAnalysisManager().getEdtGraph(func);
+  EdtNode *edtNode = edtGraph.getEdtNode(edt);
+  if (!edtNode)
+    return false;
+
+  LoopAnalysis *loopAnalysis = getLoopAnalysis();
+  if (!loopAnalysis)
+    return false;
+  LoopNode *loopNode = loopAnalysis->getLoopNode(loopOp.getOperation());
+  if (!loopNode)
+    return false;
+
+  ArrayRef<LoopNode *> associatedLoops = edtNode->getAssociatedLoops();
+  if (!associatedLoops.empty() &&
+      llvm::find(associatedLoops, loopNode) == associatedLoops.end()) {
+    ARTS_DEBUG("Loop not recorded on EDT node; falling back to structural EDT "
+               "ancestry for cross-element self-read query");
+  }
+
+  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+  acquireNode->collectAccessOperations(dbRefToMemOps);
+  if (dbRefToMemOps.empty())
+    return false;
+
+  Value edtValue = acquireNode->getUseInEdt();
+  Value loopIV = loopNode->getInductionVar();
+  if (!edtValue || !loopIV)
+    return false;
+
+  SmallVector<AccessIndexInfo, 16> selfReadAccesses;
+  for (auto &[dbRef, memOps] : dbRefToMemOps) {
+    if (!DbUtils::isSameMemoryObject(dbRef.getSource(), edtValue))
+      continue;
+
+    for (Operation *memOp : memOps) {
+      if (!memOp || !loopOp.getRegion().isAncestor(memOp->getParentRegion()))
+        continue;
+
+      SmallVector<Value> indexChain =
+          DbUtils::collectFullIndexChain(dbRef, memOp);
+      if (indexChain.empty())
+        continue;
+
+      AccessIndexInfo info;
+      info.dbRefPrefix = dbRef.getIndices().size();
+      info.indexChain.append(indexChain.begin(), indexChain.end());
+      selfReadAccesses.push_back(std::move(info));
+    }
+  }
+
+  if (selfReadAccesses.empty()) {
+    ARTS_DEBUG("No self-read accesses found through DbGraph/EdtGraph analysis");
+    return false;
+  }
+
+  AccessBoundsResult bounds =
+      analyzeAccessBoundsFromIndices(selfReadAccesses, loopIV, loopIV);
+  const bool hasCrossElementSelfRead =
+      bounds.valid && (bounds.isStencil || bounds.minOffset != 0 ||
+                       bounds.maxOffset != 0);
+
+  ARTS_DEBUG("DbAnalysis cross-element self-read: valid=" << bounds.valid
+                                                          << " min="
+                                                          << bounds.minOffset
+                                                          << " max="
+                                                          << bounds.maxOffset
+                                                          << " stencil="
+                                                          << bounds.isStencil
+                                                          << " variable="
+                                                          << bounds.hasVariableOffset
+                                                          << " -> "
+                                                          << hasCrossElementSelfRead);
+  return hasCrossElementSelfRead;
 }
 
 std::optional<AccessPattern>

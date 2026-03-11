@@ -879,6 +879,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
           getEdtDistributionPattern(originalParallel.getOperation());
 
     AcquireRewritePlanningInput planningInput{AC,
+                                              AM,
                                               loc,
                                               forOp,
                                               parentAcqOp,
