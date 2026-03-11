@@ -501,7 +501,7 @@ __ARTS_RTL_ATTRS(arts_get_total_workers, PureAttrs, ZExt, ParamAttrs())
 /// }
 
 ///===----------------------------------------------------------------------===///
-/// Atomics (v2: internal header, snake_case names; not in public API)
+/// Atomics (internal header; not in public API)
 ///===----------------------------------------------------------------------===///
 /// {
 /// unsigned int arts_atomic_swap(volatile unsigned int *destination, unsigned int swap_in);

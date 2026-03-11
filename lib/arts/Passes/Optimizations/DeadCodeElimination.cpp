@@ -249,13 +249,6 @@ struct DeadCodeEliminationPass
     return true;
   }
 
-  bool preservesDependencyMode(Value dep) {
-    if (auto acq = dep.getDefiningOp<DbAcquireOp>()) {
-      return acq->hasAttr(AttrNames::Operation::PreserveDependencyMode);
-    }
-    return false;
-  }
-
   /// Remove unused EDT dependencies and their backing acquires.
   /// This handles "phantom acquires" - acquires for arrays visible in a
   /// parallel scope but not actually accessed in a particular EDT.
@@ -276,11 +269,14 @@ struct DeadCodeEliminationPass
         bool controlOnly = arg.use_empty() || hasOnlyReleaseUses(arg);
         if (!controlOnly)
           continue;
-        if (i < deps.size() && preservesDependencyMode(deps[i])) {
+        if (i < deps.size()) {
+          if (auto acq = deps[i].getDefiningOp<DbAcquireOp>();
+              acq && acq.getPreserveDependency()) {
           ARTS_DEBUG("Keeping control-only dependency " << i
                                                         << " due to explicit "
-                                                           "dependency mode");
-          continue;
+                                                           "dependency edge");
+            continue;
+          }
         }
         unusedArgIndices.push_back(i);
       }

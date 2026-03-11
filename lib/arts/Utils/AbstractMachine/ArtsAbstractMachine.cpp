@@ -114,23 +114,19 @@ bool ArtsAbstractMachine::parseFromFile(const std::string &path) {
 
     /// [ARTS] Section Parsing
     if (inArtsSection) {
-      /// Core Configuration (v2 snake_case keys with legacy camelCase fallback)
-      if (key == "worker_threads" || key == "threads") {
+      if (key == "worker_threads") {
         threads = parseInt(val);
         ARTS_DEBUG("Set threads=" << threads);
-      } else if (key == "tMT") {
-        tMT = parseInt(val, 0);
-        ARTS_DEBUG("Set tMT=" << tMT);
-      } else if (key == "node_count" || key == "nodeCount") {
+      } else if (key == "node_count") {
         nodeCount = parseInt(val);
-        ARTS_DEBUG("Set nodeCount=" << nodeCount);
+        ARTS_DEBUG("Set node_count=" << nodeCount);
       } else if (key == "nodes") {
         nodes = splitCSV(val);
         ARTS_DEBUG("Set nodes=" << val << " (parsed " << nodes.size()
                                 << " nodes)");
-      } else if (key == "master_node" || key == "masterNode") {
+      } else if (key == "master_node") {
         masterNode = val;
-        ARTS_DEBUG("Set masterNode=" << masterNode);
+        ARTS_DEBUG("Set master_node=" << masterNode);
       } else if (key == "launcher") {
         launcher = val;
         ARTS_DEBUG("Set launcher=" << launcher);
@@ -141,81 +137,71 @@ bool ArtsAbstractMachine::parseFromFile(const std::string &path) {
         scheduler = parseInt(val, 0);
       else if (key == "gpu")
         gpu = parseInt(val, 0);
-      else if (key == "gpu_route_table_size" || key == "gpuRouteTableSize")
+      else if (key == "gpu_route_table_size")
         gpuRouteTableSize = parseInt(val, 12);
-      else if (key == "free_db_after_gpu_run" || key == "freeDbAfterGpuRun")
+      else if (key == "free_db_after_gpu_run")
         freeDbAfterGpuRun = parseBool(val, false);
-      else if (key == "delete_zeros_gpu_gc" || key == "deleteZerosGpuGc")
+      else if (key == "delete_zeros_gpu_gc")
         deleteZerosGpuGc = parseBool(val, true);
-      else if (key == "run_gpu_gc_idle" || key == "runGpuGcIdle")
+      else if (key == "run_gpu_gc_idle")
         runGpuGcIdle = parseBool(val, true);
-      else if (key == "run_gpu_gc_pre_edt" || key == "runGpuGcPreEdt")
+      else if (key == "run_gpu_gc_pre_edt")
         runGpuGcPreEdt = parseBool(val, false);
-      else if (key == "gpu_locality" || key == "gpuLocality")
+      else if (key == "gpu_locality")
         gpuLocality = parseInt(val, 0);
-      else if (key == "gpu_fit" || key == "gpuFit")
+      else if (key == "gpu_fit")
         gpuFit = parseInt(val, 0);
-      else if (key == "gpu_lc_sync" || key == "gpuLCSync")
+      else if (key == "gpu_lc_sync")
         gpuLCSync = parseInt(val, 0);
-      else if (key == "gpu_buff_on" || key == "gpuBufferOn")
+      else if (key == "gpu_buff_on")
         gpuBufferOn = parseBool(val, true);
-      else if (key == "gpu_max_memory" || key == "gpuMaxMemory")
+      else if (key == "gpu_max_memory")
         gpuMaxMemory = parseInt(val, -1);
-      else if (key == "gpu_max_edts" || key == "gpuMaxEdts")
+      else if (key == "gpu_max_edts")
         gpuMaxEdts = parseInt(val, -1);
-      else if (key == "gpu_p2p" || key == "gpuP2P")
+      else if (key == "gpu_p2p")
         gpuP2P = parseBool(val, false);
 
       /// Network Configuration
-      else if (key == "sender_threads" || key == "outgoing")
-        outgoing = parseInt(val, 1);
-      else if (key == "receiver_threads" || key == "incoming")
-        incoming = parseInt(val, 1);
-      else if (key == "port_count" || key == "ports")
-        ports = parseInt(val, 1);
+      else if (key == "sender_threads")
+        outgoing = parseInt(val, 0);
+      else if (key == "receiver_threads")
+        incoming = parseInt(val, 0);
+      else if (key == "port_count")
+        ports = parseInt(val, 0);
       else if (key == "protocol")
         protocol = val;
-      else if (key == "default_ports" || key == "port")
+      else if (key == "default_ports")
         port = parseInt(val, 34739);
-      else if (key == "net_interface" || key == "netInterface")
+      else if (key == "net_interface")
         netInterface = val;
 
       /// Hardware Configuration
-      else if (key == "pin" || key == "pinStride")
+      else if (key == "pin")
         pinStride = parseInt(val, 1);
-      else if (key == "printTopology")
-        printTopology = parseBool(val, false);
-      else if (key == "worker_init_deque_size" || key == "workerInitDequeSize")
+      else if (key == "worker_init_deque_size")
         workerInitDequeSize = parseInt(val, 2048);
-      else if (key == "route_table_size" || key == "routeTableSize")
+      else if (key == "route_table_size")
         routeTableSize = parseInt(val, 16);
-      else if (key == "core_dump" || key == "coreDump")
-        coreDump = parseBool(val, true);
+      else if (key == "core_dump")
+        coreDump = parseBool(val, false);
 
       /// Performance Monitoring
-      else if (key == "counter_folder" || key == "counterFolder")
+      else if (key == "counter_folder")
         counterFolder = val;
-      else if (key == "counter_capture_interval" || key == "counterStartPoint")
+      else if (key == "counter_capture_interval")
         counterStartPoint = parseInt(val, 1);
-      else if (key == "kill_mode" || key == "killMode")
+      else if (key == "kill_mode")
         killMode = parseBool(val, false);
-
-      /// Introspection
-      else if (key == "introspectiveConf")
-        introspectiveConf = val;
-      else if (key == "introspectiveFolder")
-        introspectiveFolder = val;
-      else if (key == "introspectiveTraceLevel")
-        introspectiveTraceLevel = parseInt(val, 0);
-      else if (key == "introspectiveStartPoint")
-        introspectiveStartPoint = parseInt(val, 1);
     }
   }
 
   ARTS_DEBUG("Finished parsing configuration file");
-  ARTS_INFO("Final configuration - threads=" << threads
-                                             << ", nodeCount=" << nodeCount
-                                             << ", launcher=" << launcher);
+  ARTS_INFO("Final configuration - worker_threads=" << threads
+                                                    << ", node_count="
+                                                    << nodeCount
+                                                    << ", launcher="
+                                                    << launcher);
   return true;
 }
 
@@ -224,7 +210,8 @@ std::string ArtsAbstractMachine::getMachineDescription() const {
   oss << "ARTS Abstract Machine Configuration:\n";
   oss << "  Execution Mode: " << (isLocalExecution() ? "Local" : "Distributed")
       << "\n";
-  oss << "  Worker Threads: " << threads << " per node\n";
+  oss << "  Configured Worker Threads: " << threads << " per node\n";
+  oss << "  Runtime Workers: " << getRuntimeWorkersPerNode() << " per node\n";
   oss << "  Total Nodes: " << nodeCount << "\n";
   oss << "  Total Worker Threads: " << getTotalWorkerThreads() << "\n";
 
@@ -235,8 +222,6 @@ std::string ArtsAbstractMachine::getMachineDescription() const {
   } else {
     oss << "  GPU Support: Disabled\n";
   }
-
-  oss << "  Temporal Multi-threading: " << tMT << "\n";
   oss << "  Launcher: " << launcher << "\n";
   oss << "  Master Node: " << masterNode << "\n";
 
@@ -256,11 +241,11 @@ std::string ArtsAbstractMachine::getMachineDescription() const {
 std::string ArtsAbstractMachine::getConfigurationSummary() const {
   std::ostringstream oss;
   oss << "Configuration Summary:\n";
-  oss << "  Threading: " << threads << " threads, tMT=" << tMT << "\n";
-  oss << "  Networking: " << outgoing << " outgoing, " << incoming
-      << " incoming threads\n";
-  oss << "  Protocol: " << protocol << " on port " << port << "\n";
-  oss << "  Hardware: pinStride=" << pinStride
+  oss << "  Threading: " << threads << " worker threads per node\n";
+  oss << "  Networking: sender_threads=" << outgoing
+      << ", receiver_threads=" << incoming << "\n";
+  oss << "  Protocol: " << protocol << " on default_ports=" << port << "\n";
+  oss << "  Hardware: pin=" << pinStride
       << ", dequeSize=" << workerInitDequeSize << "\n";
   oss << "  Monitoring: counters in " << counterFolder << "\n";
 
@@ -321,12 +306,12 @@ bool ArtsAbstractMachine::validateConfiguration() {
 
   /// Check core requirements
   if (threads <= 0) {
-    ARTS_ERROR("Invalid threads value: " << threads << " (must be > 0)");
+    ARTS_ERROR("Invalid worker_threads value: " << threads << " (must be > 0)");
     isValid = false;
   }
 
   if (nodeCount <= 0) {
-    ARTS_ERROR("Invalid nodeCount value: " << nodeCount << " (must be > 0)");
+    ARTS_ERROR("Invalid node_count value: " << nodeCount << " (must be > 0)");
     isValid = false;
   }
 
@@ -338,7 +323,7 @@ bool ArtsAbstractMachine::validateConfiguration() {
       isValid = false;
     } else if (static_cast<int>(nodes.size()) != nodeCount) {
       ARTS_ERROR("Nodes count (" << nodes.size()
-                                 << ") doesn't match nodeCount (" << nodeCount
+                                 << ") doesn't match node_count (" << nodeCount
                                  << ")");
       isValid = false;
     }
@@ -346,19 +331,6 @@ bool ArtsAbstractMachine::validateConfiguration() {
     if (!nodes.empty() &&
         std::find(nodes.begin(), nodes.end(), masterNode) == nodes.end()) {
       ARTS_ERROR("Master node '" << masterNode << "' not found in nodes list");
-      isValid = false;
-    }
-  }
-
-  /// Multi-node requires at least one worker thread after network threads.
-  if (nodeCount > 1) {
-    int minThreads = outgoing + incoming + 1;
-    if (threads < minThreads) {
-      ARTS_ERROR("Invalid multi-node thread topology in "
-                 << configPath << ": nodeCount=" << nodeCount
-                 << ", threads=" << threads << ", outgoing=" << outgoing
-                 << ", incoming=" << incoming
-                 << ", require threads >= " << minThreads);
       isValid = false;
     }
   }

@@ -228,12 +228,16 @@ bool DbPass::adjustDbModes() {
       bool hasStores = acqNode->hasStores();
 
       DbAcquireOp acqOp = acqNode->getDbAcquireOp();
-      if (acqOp->hasAttr(AttrNames::Operation::PreserveDependencyMode)) {
+      /// Some acquires already carry an authoritative dependency mode
+      /// (explicit control dependencies, worker-local partial reductions).
+      /// Do not re-infer or optimize those modes from local memory accesses.
+      if (acqOp.getPreserveDepMode()) {
         ARTS_DEBUG("AcquireOp: " << acqOp
                                  << " preserving explicit dependency mode "
                                  << acqOp.getMode());
         return;
       }
+
       ArtsMode newMode = ArtsMode::in;
       if (hasLoads && hasStores)
         newMode = ArtsMode::inout;

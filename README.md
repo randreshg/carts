@@ -39,7 +39,7 @@ carts format
 # Build commands
 carts build                  # Build CARTS
 carts build --clean          # Clean build
-carts build --arts --debug   # Build ARTS with debug logging
+carts build --arts --debug 3 # Build ARTS with full debug logging
 
 # Compilation pipeline
 carts cgeist file.c -fopenmp -S > file.mlir     # C to MLIR
@@ -114,11 +114,15 @@ carts/
 
 ```ini
 [ARTS]
-threads=8                # Number of worker threads
-launcher=ssh             # Launcher type (ssh, mpi, local)
-masterNode=localhost     # Master node
-nodeCount=1              # Number of nodes
+worker_threads=8         # Worker threads per node
+sender_threads=0         # Network sender threads
+receiver_threads=0       # Network receiver threads
+launcher=local           # Launcher type (local, ssh, slurm, lsf)
+master_node=localhost    # Master node
+node_count=1             # Number of nodes
 protocol=tcp             # Communication protocol
+default_ports=34739      # Default runtime port(s)
+counter_folder=./counters
 ```
 
 See `docs/agents.md` for pipeline usage and
@@ -149,8 +153,14 @@ carts compile example.c -o example
 ### Runtime debugging
 
 ```bash
-# Build ARTS with debug logging
-carts build --arts --debug
+# ARTS runtime log levels:
+#   0 = errors only
+#   1 = warnings
+#   2 = info
+#   3 = debug
+
+# Build ARTS with full debug logging
+carts build --arts --debug 3
 
 # Run with ARTS tracing
 ./example

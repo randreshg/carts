@@ -26,7 +26,6 @@ public:
 
   /// Core Machine Configuration
   int getThreads() const { return threads; }
-  int getTemporalMultiThreading() const { return tMT; }
   int getNodeCount() const { return nodeCount; }
   const std::vector<std::string> &getNodes() const { return nodes; }
   const std::string &getMasterNode() const { return masterNode; }
@@ -53,7 +52,6 @@ public:
 
   /// Hardware Configuration
   int getPinStride() const { return pinStride; }
-  bool isPrintTopologyEnabled() const { return printTopology; }
   int getWorkerInitDequeSize() const { return workerInitDequeSize; }
   int getRouteTableSize() const { return routeTableSize; }
   bool isCoreDumpEnabled() const { return coreDump; }
@@ -70,17 +68,17 @@ public:
   bool isLocalExecution() const {
     return nodeCount == 1 && nodes.size() == 1 && nodes[0] == "localhost";
   }
-  int getTotalWorkerThreads() const { return threads * nodeCount; }
+  int getTotalWorkerThreads() const { return getRuntimeTotalWorkers(); }
 
-  /// Runtime worker count per node used by ARTS scheduling:
-  ///   distributed: threads - outgoing - incoming (min 1)
-  ///   single-node: threads (min 1)
+  /// Runtime worker count per node used by ARTS scheduling.
+  /// `worker_threads` is already the worker count on multi-node runs.
+  /// On single-node runs ARTS reclaims sender/receiver threads as workers.
   int getRuntimeWorkersPerNode() const {
-    if (nodeCount > 1) {
-      int workers = threads - outgoing - incoming;
-      return workers > 0 ? workers : 1;
+    int workers = threads;
+    if (nodeCount <= 1) {
+      workers += outgoing + incoming;
     }
-    return threads > 0 ? threads : 1;
+    return workers > 0 ? workers : 1;
   }
   /// Runtime total workers across cluster (nodes * workers-per-node).
   int getRuntimeTotalWorkers() const {
@@ -89,17 +87,17 @@ public:
   }
   int getTotalGpuThreads() const { return hasGpuSupport() ? gpu : 0; }
 
-  /// Execution Mode (derived from nodeCount/threads)
+  /// Execution mode derived from runtime-visible worker concurrency.
   ExecutionMode getExecutionMode() const {
     if (nodeCount > 1)
       return ExecutionMode::InterNode;
-    if (threads > 1)
+    if (getRuntimeWorkersPerNode() > 1)
       return ExecutionMode::IntraNode;
     return ExecutionMode::SingleThreaded;
   }
 
   /// Total parallelism (for threshold calculations)
-  int getTotalParallelism() const { return nodeCount * threads; }
+  int getTotalParallelism() const { return getRuntimeTotalWorkers(); }
 
   /// Should chunking be prioritized? (true for distributed execution)
   bool shouldPrioritizeChunking() const { return nodeCount > 1; }
@@ -132,7 +130,6 @@ private:
 
   /// Core Configuration
   int threads = 1;
-  int tMT = 0;
   int nodeCount = 1;
 
   std::vector<std::string> nodes = {"localhost"};
@@ -156,30 +153,23 @@ private:
   bool gpuP2P = false;
 
   /// Network Configuration
-  int outgoing = 1;
-  int incoming = 1;
-  int ports = 1;
+  int outgoing = 0;
+  int incoming = 0;
+  int ports = 0;
   std::string protocol = "tcp";
   int port = 34739;
   std::string netInterface = "";
 
   /// Hardware Configuration
   int pinStride = 1;
-  bool printTopology = false;
   int workerInitDequeSize = 2048;
   int routeTableSize = 16;
-  bool coreDump = true;
+  bool coreDump = false;
 
   /// Performance Monitoring
-  std::string counterFolder = "./counters/";
+  std::string counterFolder = "./counters";
   int counterStartPoint = 1;
   bool killMode = false;
-
-  /// Introspection (optional)
-  std::string introspectiveConf = "";
-  std::string introspectiveFolder = "./introspective";
-  int introspectiveTraceLevel = 0;
-  int introspectiveStartPoint = 1;
 
   /// Configuration file status
   std::string configPath = "";

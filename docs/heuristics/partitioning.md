@@ -114,6 +114,11 @@ DB mode note (in/out/inout):
 - Db access mode is adjusted by the Db pass based on actual loads/stores.
   "Force inout" style policies should not be needed; if something is read and
   written, it becomes inout automatically.
+- Exception: acquires marked with `preserve_dep_mode` already carry an
+  authoritative dependency contract. We only set this when the compiler already
+  knows the exact mode and should not re-check or optimize it later
+  (currently explicit `DbControlOp`-derived acquires and worker-local partial
+  reduction acquires).
 
 ---
 

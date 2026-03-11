@@ -13,5 +13,5 @@
 [submodule "external/carts-benchmarks"]
 	path = external/carts-benchmarks
 	url = https://github.com/randreshg/carts-benchmarks.git
-	branch = main
+	branch = v2
 	shallow = true

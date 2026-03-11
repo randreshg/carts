@@ -822,6 +822,9 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         /*partition_indices=*/SmallVector<Value>{},
         /*partition_offsets=*/SmallVector<Value>{},
         /*partition_sizes=*/SmallVector<Value>{});
+    /// Worker-local partial reduction acquires already have the exact slot
+    /// access mode and must not be re-inferred later.
+    partialAcqOp.setPreserveDepMode();
 
     reductionTaskDeps.push_back(partialAcqOp.getResult(1));
     reductionVarIndex[redInfo.reductionVars[i]] = i;

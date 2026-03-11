@@ -18,8 +18,9 @@ def docker_update(
     llvm: bool = typer.Option(False, "--llvm", "-l", help="Rebuild LLVM"),
     carts_rebuild: bool = typer.Option(False, "--carts", "-c", help="Rebuild CARTS"),
     force: bool = typer.Option(False, "--force", "-f", help="Force rebuild"),
-    debug_mode: bool = typer.Option(False, "--debug", help="Build ARTS with debug logging"),
-    info_mode: bool = typer.Option(False, "--info", help="Build ARTS with info logging"),
+    debug_level: int = typer.Option(
+        0, "--debug", min=0, max=3,
+        help="ARTS runtime log level: 0=off, 1=warn, 2=info, 3=debug"),
 ):
     """Update Docker workspace and selectively rebuild components."""
     _get_docker_dir()
@@ -157,12 +158,7 @@ def docker_update(
         print_step("Rebuilding changed components")
         arts_mode_arg = ""
         if build_arts:
-            if debug_mode and info_mode:
-                print_warning("Both --debug and --info passed; using --debug")
-            if debug_mode:
-                arts_mode_arg = " --debug 2"
-            elif info_mode:
-                arts_mode_arg = " --debug 1"
+            arts_mode_arg = f" --debug {debug_level}"
 
         rebuild_cmd = textwrap.dedent(
             f"""

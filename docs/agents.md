@@ -23,8 +23,8 @@ This guide teaches agents and developers how to understand, run, and debug CARTS
 # Build CARTS
 carts build
 
-# Build ARTS runtime with debug instrumentation
-carts build --arts --debug=2
+# Build ARTS runtime with full debug logging
+carts build --arts --debug 3
 
 # Generate MLIR from C/C++
 carts cgeist <file>.c -O0 --print-debug-info -S --raise-scf-to-affine           # Sequential
@@ -1448,7 +1448,13 @@ Use this workflow when multi-node runs hang, timeout, or show uneven work distri
 ### 1. Build ARTS with runtime debug enabled
 
 ```bash
-carts build --arts --debug=2 --profile=profile-workload.cfg
+# Raw ARTS runtime levels:
+#   0 = errors only
+#   1 = warnings
+#   2 = info
+#   3 = debug
+
+carts build --arts --debug 3 --profile=profile-workload.cfg
 ```
 
 ### 2. Run a targeted multi-node benchmark with logs retained

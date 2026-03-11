@@ -447,6 +447,22 @@ bool DbAcquireOp::hasExplicitPartitionHints() {
          !getPartitionSizes().empty();
 }
 
+void DbAcquireOp::setPreserveDepMode(bool preserve) {
+  if (preserve) {
+    setPreserveDepModeAttr(PreserveDependencyModeAttr::get(getContext()));
+    return;
+  }
+  (*this)->removeAttr(AttrNames::Operation::PreserveDependencyMode);
+}
+
+void DbAcquireOp::setPreserveDependency(bool preserve) {
+  if (preserve) {
+    setPreserveDependencyAttr(PreserveDependencyAttr::get(getContext()));
+    return;
+  }
+  (*this)->removeAttr(AttrNames::Operation::PreserveDependency);
+}
+
 void DbAcquireOp::copyPartitionSegmentsFrom(DbAcquireOp source) {
   if (!source)
     return;

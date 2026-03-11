@@ -35,7 +35,7 @@ carts docker build [--force]
 carts docker start
 carts docker status
 carts docker exec -- sinfo
-carts docker update [--arts|--polygeist|--llvm|--carts] [--force] [--debug|--info]
+carts docker update [--arts|--polygeist|--llvm|--carts] [--force] [--debug 0|1|2|3]
 carts docker commit
 carts docker stop
 carts docker clean
@@ -43,7 +43,7 @@ carts docker clean
 
 ### Command Semantics
 
-- `carts docker build`: Builds `arts-node-base`, creates/initializes `carts-workspace`
+- `carts docker build`: Builds `arts-node-base`, clones CARTS into `carts-workspace`, and bootstraps it with `carts install --skip-deps`
 - `carts docker start`: Starts 6 containers (`arts-node-1`..`arts-node-6`) and Slurm daemons
 - `carts docker stop`: Stops running CARTS containers and Slurm processes
 - `carts docker commit`: Captures current workspace into `arts-node:built`
@@ -74,4 +74,5 @@ carts docker stop
 
 - Slurm is always started by `carts docker start`; no SSH launcher path is used.
 - Containers share one Docker volume at `/opt/carts` (`carts-workspace`).
+- Docker bootstrap runs through `carts install --skip-deps`, but the container still resolves `carts` from `/opt/carts/tools`.
 - `carts docker exec` defaults to node 1; use `--node N` for another node.

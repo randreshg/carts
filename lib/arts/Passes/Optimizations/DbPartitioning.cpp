@@ -246,8 +246,7 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
     info.accessPattern = acqNode->getAccessPattern();
   info.isValid = summary.isValid;
   info.hasIndirectAccess = summary.hasIndirectAccess;
-  info.preservesDependencyMode =
-      acquire->hasAttr(AttrNames::Operation::PreserveDependencyMode);
+  info.preservesDependencyMode = static_cast<bool>(acquire.getPreserveDepMode());
 
   return info;
 }
@@ -271,6 +270,9 @@ static void resetCoarseAcquireRanges(DbAllocOp allocOp, DbAllocNode *allocNode,
     DbAcquireOp acqOp = acqNode->getDbAcquireOp();
     if (!acqOp)
       continue;
+    /// preserve_dep_mode protects the acquire's access mode contract, not the
+    /// allocation layout. If the allocation fell back to coarse, always reset
+    /// the DB-space slice to match the coarse layout.
     acqOp.getOffsetsMutable().assign(fullOffsets);
     acqOp.getSizesMutable().assign(fullSizes);
     /// Clear partition hints for coarse allocations to avoid redundant
@@ -422,10 +424,10 @@ static SmallVector<DbAcquireOp> createExpandedAcquires(DbAcquireOp original,
     SmallVector<int32_t> entryModes = {static_cast<int32_t>(entryMode)};
     newAcquire.setPartitionSegments(indicesSegs, offsetsSegs, sizesSegs,
                                     entryModes);
-    if (original->hasAttr(AttrNames::Operation::PreserveDependencyMode)) {
-      newAcquire->setAttr(AttrNames::Operation::PreserveDependencyMode,
-                          UnitAttr::get(original.getContext()));
-    }
+    if (original.getPreserveDepMode())
+      newAcquire.setPreserveDepMode();
+    if (original.getPreserveDependency())
+      newAcquire.setPreserveDependency();
 
     expanded.push_back(newAcquire);
     ARTS_DEBUG("    Created expanded acquire: " << newAcquire);
