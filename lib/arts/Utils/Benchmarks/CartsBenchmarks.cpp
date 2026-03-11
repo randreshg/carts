@@ -188,7 +188,7 @@ static int carts_benchmarks_is_arts_binary(void) {
   /// OpenMP reference binaries do not link against ARTS, but CARTS-generated
   /// binaries do. Use symbol presence as a robust discriminator even when
   /// `artsConfig` env var is not set (e.g., using ./arts.cfg in CWD).
-  return dlsym(RTLD_DEFAULT, "artsRT") != nullptr;
+  return dlsym(RTLD_DEFAULT, "arts_rt") != nullptr;
 }
 
 __attribute__((noinline)) static void carts_benchmarks_report_arts_init(void) {

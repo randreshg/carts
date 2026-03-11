@@ -49,8 +49,8 @@ Value createOneIndex(OpBuilder &builder, Location loc) {
 /// Known ARTS runtime query function names that are safe for partitioning.
 /// These functions return deterministic values within an EDT context.
 static const llvm::StringSet<> ArtsRuntimeQueries = {
-    "artsGetCurrentNode", "artsGetTotalNodes", "artsGetCurrentWorker",
-    "artsGetTotalWorkers"};
+    "arts_get_current_node", "arts_get_total_nodes", "arts_get_current_worker",
+    "arts_get_total_workers"};
 
 bool isArtsRuntimeQuery(Value val) {
   if (!val)

@@ -131,41 +131,6 @@ static bool acquireHasReadAccess(DbAcquireOp acquire) {
   return false;
 }
 
-static bool isSingleNodeExecution(AcquireRewritePlanningInput input) {
-  if (!input.AC)
-    return false;
-
-  if (const ArtsAbstractMachine *machine = input.AC->getAbstractMachine()) {
-    if (machine->hasValidNodeCount())
-      return !machine->isDistributed();
-  }
-
-  ModuleOp module = input.AC->getModule();
-  std::optional<StringRef> configData = getRuntimeConfigData(module);
-  if (!configData)
-    return false;
-
-  SmallVector<StringRef, 32> lines;
-  configData->split(lines, '\n');
-  for (StringRef line : lines) {
-    line = line.trim();
-    if (line.empty() || line.starts_with("#"))
-      continue;
-    if (!line.starts_with("nodeCount"))
-      continue;
-
-    auto eq = line.find('=');
-    if (eq == StringRef::npos)
-      continue;
-
-    int64_t nodeCount = 0;
-    if (line.drop_front(eq + 1).trim().getAsInteger(10, nodeCount))
-      continue;
-    return nodeCount <= 1;
-  }
-
-  return false;
-}
 
 } // namespace
 
@@ -233,7 +198,8 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
         /// in-place `inout` acquire to block mode here forces DB partitioning
         /// later, which over-partitions Gauss-Seidel style dependence chains
         /// such as seidel-2d.
-        if (isSingleNodeExecution(input) && inoutReadsSelf &&
+        const ArtsAbstractMachine *machine = input.AC->getAbstractMachine();
+        if (machine && !machine->isDistributed() && inoutReadsSelf &&
             (patternSaysStencil || strategySaysStencil)) {
           forceCoarseRewrite = true;
           needsStencilHalo = false;

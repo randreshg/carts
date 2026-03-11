@@ -670,9 +670,9 @@ def run(
 
         # Parse ARTS config values
         cfg = parse_arts_cfg(effective_config)
-        arts_threads = int(cfg.get("threads", "1"))
-        arts_nodes = int(cfg.get("nodeCount", "1"))
-        arts_launcher = cfg.get("launcher", "ssh")
+        arts_threads = int(cfg.get("worker_threads", cfg.get("threads", "1")))
+        arts_nodes = int(cfg.get("node_count", cfg.get("nodeCount", "1")))
+        arts_launcher = cfg.get("launcher", "local")
         arts_nodes_list = [n.strip() for n in cfg.get("nodes", "localhost").split(",") if n.strip()]
 
         arts_config_items = [f"arts-threads={arts_threads}",
@@ -705,12 +705,18 @@ def run(
 
             example_runtime_args = runtime_args if not all_examples else []
 
+            # Use explicit --arts-config, else per-example local, else global default
+            effective_cfg = arts_config
+            if not effective_cfg:
+                local_cfg = example.path / "arts.cfg"
+                effective_cfg = local_cfg if local_cfg.is_file() else default_arts_config
+
             result = run_single_example(
                 example,
                 verbose=verbose,
                 build_timeout=build_timeout,
                 run_timeout=run_timeout,
-                config_file=arts_config,
+                config_file=effective_cfg,
                 trace=trace,
                 runtime_args=example_runtime_args,
             )
