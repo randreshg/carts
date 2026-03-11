@@ -57,6 +57,11 @@ ARTS_BUILD_DIR = $(ARTS_DIR)/build
 POLYGEIST_BUILD_DIR = $(POLYGEIST_DIR)/build
 LLVM_BUILD_DIR = $(LLVM_DIR)/build
 
+# Shared Docker workspaces can carry stale CMake caches from older branches
+# or build systems. Recreate the build directory before reconfiguring when
+# the cached generator is not Ninja.
+ensure_ninja_build_dir = if [ -f "$(1)/CMakeCache.txt" ] && ! grep -q '^CMAKE_GENERATOR:INTERNAL=Ninja$$' "$(1)/CMakeCache.txt"; then echo "Removing stale CMake build directory $(1) (generator mismatch)..."; rm -rf "$(1)"; fi
+
 # Targets
 all: install
 
@@ -69,6 +74,7 @@ polygeist-download:
 		echo "Polygeist submodule already initialized."; \
 	fi 
 polygeist:
+	@$(call ensure_ninja_build_dir,$(POLYGEIST_BUILD_DIR))
 	echo "Building Polygeist..."; \
 	mkdir -p $(POLYGEIST_BUILD_DIR); \
 	mkdir -p $(POLYGEIST_INSTALL_DIR); \
@@ -90,6 +96,7 @@ polygeist-clean:
 
 # LLVM
 llvm:
+	@$(call ensure_ninja_build_dir,$(LLVM_BUILD_DIR))
 	echo "Building LLVM..."; \
 	mkdir -p $(LLVM_BUILD_DIR); \
 	mkdir -p $(LLVM_INSTALL_DIR); \
@@ -181,6 +188,7 @@ arts-download:
 		echo "ARTS submodule already initialized."; \
 	fi
 arts:
+	@$(call ensure_ninja_build_dir,$(ARTS_BUILD_DIR))
 	@mkdir -p $(ARTS_BUILD_DIR); \
 	mkdir -p $(ARTS_INSTALL_DIR); \
 	CURRENT_HASH=$$(echo "$(ARTS_CONFIG_STRING)" | shasum -a 256 | cut -d' ' -f1); \
@@ -222,6 +230,7 @@ build:
 		echo "Error: Polygeist is not built. Please run 'make polygeist' or 'carts build --polygeist' first."; \
 		exit 1; \
 	fi
+	@$(call ensure_ninja_build_dir,$(CARTS_BUILD_DIR))
 	mkdir -p $(CARTS_BUILD_DIR)
 	mkdir -p $(CARTS_INSTALL_DIR)
 	$(CMAKE_CMD) -B $(CARTS_BUILD_DIR) \
