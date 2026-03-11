@@ -512,6 +512,34 @@ def _compile_from_ll(
 # Compile Pipeline Helpers
 # -----------------------------------------------------------------------------
 
+def _find_arts_config(
+    input_file: Path, pipeline_args: List[str], config: Optional["PlatformConfig"] = None
+) -> Optional[Path]:
+    """Find arts.cfg for the compilation.
+
+    Returns None if the user already supplied --arts-config.  Otherwise
+    checks for arts.cfg next to the input file, then falls back to the
+    default examples config.  When no config is found carts-compile
+    will fail immediately — that is intentional.
+    """
+    for arg in pipeline_args:
+        if arg == "--arts-config" or arg.startswith("--arts-config="):
+            return None
+
+    # Check next to the input file
+    candidate = input_file.parent.resolve() / "arts.cfg"
+    if candidate.is_file():
+        return candidate
+
+    # Fall back to the default examples config
+    if config:
+        default = config.carts_dir / "tests" / "examples" / "arts.cfg"
+        if default.is_file():
+            return default
+
+    return None
+
+
 def _build_cgeist_cmd(
     config: PlatformConfig,
     input_file: Path,
@@ -614,6 +642,9 @@ def _compile_c_simple(
         task = progress.add_task(
             f"[2{step_label} Applying ARTS transformations...", total=None)
         cmd = [str(carts_compile_bin), str(mlir_file), "--O3"]
+        arts_cfg = _find_arts_config(input_file, pipeline_args, config)
+        if arts_cfg:
+            cmd.extend(["--arts-config", str(arts_cfg)])
         if not skip_link:
             cmd.append("--emit-llvm")
         if debug:
@@ -746,6 +777,9 @@ def _compile_c_dual(
         task = progress.add_task(f"[2{step_label} Collecting metadata...", total=None)
         cmd = [str(carts_compile_bin), str(seq_mlir),
                "--collect-metadata", "-o", str(metadata_mlir)]
+        arts_cfg = _find_arts_config(input_file, pipeline_args, config)
+        if arts_cfg and not metadata_args:
+            cmd.extend(["--arts-config", str(arts_cfg)])
         cmd.extend(metadata_args)
         if run_subprocess(cmd, check=False).returncode != 0:
             print_error("Failed to collect metadata")
@@ -770,6 +804,9 @@ def _compile_c_dual(
         # Step 4: Apply ARTS transformations
         task = progress.add_task(f"[4{step_label} ARTS transformations...", total=None)
         cmd = [str(carts_compile_bin), str(par_mlir), "--O3"]
+        arts_cfg = _find_arts_config(input_file, pipeline_args, config)
+        if arts_cfg:
+            cmd.extend(["--arts-config", str(arts_cfg)])
         if not skip_link:
             cmd.append("--emit-llvm")
         if debug:

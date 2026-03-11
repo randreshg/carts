@@ -438,21 +438,38 @@ func::FuncOp ArtsCodegen::insertArtsMainFn(Location loc,
   OpBuilder::InsertionGuard IG(getBuilder());
   setInsertionPoint(module);
 
-  /// Create the function using the "MainEdt" type.
-  auto newFn = create<func::FuncOp>(loc, "artsMain", ArtsMainFn);
+  /// ARTS v2 entry point: main_edt(paramc, paramv, depc, depv).
+  /// The runtime schedules this as an EDT on rank 0 after init.
+  auto newFn = create<func::FuncOp>(loc, "main_edt", ArtsMainFn);
   newFn.setPublic();
 
   /// Create the entry block.
   auto *entryBlock = newFn.addEntryBlock();
   getBuilder().setInsertionPointToStart(entryBlock);
 
-  /// Insert call to 'artsRT' function
+  /// Call the user's mainBody.  If it expects (argc, argv), extract them
+  /// from paramv[0] and paramv[1] (the runtime packs them there as uint64_t).
   auto callArgs = ValueRange{};
-  if (callback.getNumArguments() > 0)
-    callArgs = {newFn.getArgument(0), newFn.getArgument(1)};
+  if (callback.getNumArguments() > 0) {
+    Value paramv = newFn.getArgument(1); // memref<?xi64> (const uint64_t *)
+    Value idx0 = create<arith::ConstantIndexOp>(loc, 0);
+    Value idx1 = create<arith::ConstantIndexOp>(loc, 1);
+    Value argcRaw = create<memref::LoadOp>(loc, paramv, ValueRange{idx0});
+    Value argvRaw = create<memref::LoadOp>(loc, paramv, ValueRange{idx1});
+
+    // argc: truncate uint64_t → i32
+    Type argcTy = callback.getArgumentTypes()[0];
+    Value argc = create<arith::TruncIOp>(loc, argcTy, argcRaw);
+
+    // argv: uint64_t → ptr → memref<?xi8*>
+    Type argvTy = callback.getArgumentTypes()[1];
+    Value argvPtr = create<LLVM::IntToPtrOp>(loc, llvmPtr, argvRaw);
+    Value argv = create<polygeist::Pointer2MemrefOp>(loc, argvTy, argvPtr);
+    callArgs = {argc, argv};
+  }
   create<func::CallOp>(loc, callback, callArgs);
 
-  /// Return
+  /// Shutdown the runtime.
   createRuntimeCall(ARTSRTL_arts_shutdown, {}, loc);
   create<func::ReturnOp>(loc);
   return newFn;
@@ -517,7 +534,7 @@ void ArtsCodegen::initRT(Location loc) {
     insertInitPerWorker(loc, distributedWorkerInitFn);
   }
 
-  /// Insert runtime entry functions (artsMain and main)
+  /// Insert runtime entry functions (main_edt and main)
   insertArtsMainFn(loc, mainFn);
   insertMainFn(loc);
 }

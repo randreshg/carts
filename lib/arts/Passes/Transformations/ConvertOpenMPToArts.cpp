@@ -85,10 +85,9 @@ struct OMPParallelToArtsPattern : public OpRewritePattern<omp::ParallelOp> {
     Block &old = op.getRegion().front();
     blk.getOperations().splice(blk.end(), old.getOperations());
 
-    if (hasWorkAfterInParentBlock(op.getOperation())) {
-      rewriter.setInsertionPointAfter(parOp);
-      rewriter.create<arts::BarrierOp>(loc);
-    }
+    /// No barrier here: ParallelEdtLowering wraps the parallel EDT in an
+    /// epoch + wait_on_epoch, which provides the implicit join semantics
+    /// required by OpenMP parallel regions.
 
     /// Remove the original operation.
     rewriter.eraseOp(op);
