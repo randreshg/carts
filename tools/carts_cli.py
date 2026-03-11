@@ -56,7 +56,10 @@ app = typer.Typer(
 )
 
 # Docker subcommand group
-docker_app = typer.Typer(help="Docker operations for multi-node execution")
+docker_app = typer.Typer(
+    help="Docker operations for multi-node execution",
+    context_settings={"help_option_names": ["--help", "-h"]},
+)
 app.add_typer(docker_app, name="docker")
 
 # Examples subcommand group
