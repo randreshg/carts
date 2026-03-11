@@ -10,6 +10,9 @@ from scripts.config import get_config
 from scripts.run import run_subprocess
 
 
+ARTS_REQUIRED_NESTED_SUBMODULES = ["third_party/hwloc"]
+
+
 def _get_repo_hash(repo_dir: Path) -> Optional[str]:
     """Get current HEAD hash for a git repository."""
     result = run_subprocess(
@@ -86,6 +89,35 @@ def _get_pinned_submodule_hash(carts_dir: Path, submodule: str) -> Optional[str]
     return parts[2]
 
 
+def _update_submodule_checkout(carts_dir: Path, submodule: str) -> None:
+    """Update a top-level submodule and only the nested pieces required by v2."""
+    recursive = submodule != "external/arts"
+    args = ["git", "submodule", "update", "--init"]
+    if recursive:
+        args.append("--recursive")
+    args.append(submodule)
+    _run_git(
+        carts_dir,
+        args,
+        f"Failed to update {submodule}",
+    )
+
+    if submodule != "external/arts":
+        return
+
+    arts_dir = carts_dir / submodule
+    _run_git(
+        arts_dir,
+        ["git", "submodule", "sync", "--recursive"],
+        "Failed to sync nested ARTS submodule metadata",
+    )
+    _run_git(
+        arts_dir,
+        ["git", "submodule", "update", "--init", *ARTS_REQUIRED_NESTED_SUBMODULES],
+        "Failed to update required ARTS nested submodules",
+    )
+
+
 def update(
     arts: bool = typer.Option(
         False, "--arts", "-a", help="Update ARTS submodule"),
@@ -155,11 +187,7 @@ def update(
     changed_submodules: List[str] = []
     for submodule in submodules:
         print_step(f"Updating {submodule} to CARTS-pinned commit...")
-        _run_git(
-            carts_dir,
-            ["git", "submodule", "update", "--init", "--recursive", submodule],
-            f"Failed to update {submodule}",
-        )
+        _update_submodule_checkout(carts_dir, submodule)
 
         submodule_path = carts_dir / submodule
         after_hash = _get_submodule_hash(submodule_path)
