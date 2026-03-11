@@ -15,7 +15,7 @@ def docker_callback(ctx: typer.Context):
     if ctx.invoked_subcommand is None:
         from carts_styles import console
 
-        console.print("Docker command requires a subcommand. Use --help for options.")
+        console.print("Docker command requires a subcommand. Use -h/--help for options.")
         raise typer.Exit(1)
 
 
