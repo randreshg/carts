@@ -28,6 +28,9 @@ struct AcquirePartitionInfo {
   AccessPattern accessPattern = AccessPattern::Unknown;
   bool isValid = false;
   bool hasIndirectAccess = false;
+  /// Explicit task/control dependencies must not be weakened into stencil-only
+  /// ordering later in the partitioning pipeline.
+  bool preservesDependencyMode = false;
   /// For mixed mode: this coarse acquire needs full-range access to chunked
   /// allocation.
   bool needsFullRange = false;
