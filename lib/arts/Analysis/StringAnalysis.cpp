@@ -89,7 +89,7 @@ void StringAnalysis::trackGlobalUsers() {
       while (!worklist.empty()) {
         Value curr = worklist.pop_back_val();
         for (auto *curUser : curr.getUsers()) {
-          // Process pointer arithmetic (GEP) and load operations.
+          /// Process pointer arithmetic (GEP) and load operations.
           if (isa<LLVM::GEPOp, LLVM::LoadOp>(curUser)) {
             for (Value result : curUser->getResults()) {
               globalSources.try_emplace(result, globalOp);

@@ -74,15 +74,22 @@ getTripCountFromConstantBounds(Operation *loopOp) {
 } // namespace
 
 LoopAnalysis::LoopAnalysis(ArtsAnalysisManager &analysisManager)
-    : ArtsAnalysis(analysisManager), module(analysisManager.getModule()) {
-  run();
+    : ArtsAnalysis(analysisManager), module(analysisManager.getModule()) {}
+
+void LoopAnalysis::invalidate() {
+  loopNodes.clear();
+  built = false;
 }
 
-void LoopAnalysis::invalidate() { run(); }
+void LoopAnalysis::ensureAnalyzed() {
+  if (!built)
+    run();
+}
 
 void LoopAnalysis::run() {
   ARTS_DEBUG_HEADER(LoopAnalysis);
 
+  built = true;
   loopNodes.clear();
   module.walk([&](Operation *op) {
     if (!isLoopOperation(op))
@@ -101,7 +108,7 @@ void LoopAnalysis::run() {
 }
 
 ///===----------------------------------------------------------------------===///
-// LoopNode Access (NEW - Metadata-integrated API)
+/// LoopNode Access (NEW - Metadata-integrated API)
 ///===----------------------------------------------------------------------===///
 
 bool LoopAnalysis::isLoopOperation(Operation *op) const {
@@ -110,6 +117,7 @@ bool LoopAnalysis::isLoopOperation(Operation *op) const {
 }
 
 LoopNode *LoopAnalysis::getOrCreateLoopNode(Operation *loopOp) {
+  ensureAnalyzed();
   if (!isLoopOperation(loopOp))
     return nullptr;
 
@@ -123,13 +131,15 @@ LoopNode *LoopAnalysis::getOrCreateLoopNode(Operation *loopOp) {
   return ptr;
 }
 
-LoopNode *LoopAnalysis::getLoopNode(Operation *loopOp) const {
+LoopNode *LoopAnalysis::getLoopNode(Operation *loopOp) {
+  ensureAnalyzed();
   auto it = loopNodes.find(loopOp);
   return it != loopNodes.end() ? it->second.get() : nullptr;
 }
 
 void LoopAnalysis::collectEnclosingLoops(
     Operation *op, SmallVectorImpl<LoopNode *> &enclosingLoops) {
+  ensureAnalyzed();
   for (Operation *p = op->getParentOp(); p; p = p->getParentOp()) {
     if (isLoopOperation(p)) {
       if (LoopNode *node = getLoopNode(p)) {
@@ -143,6 +153,7 @@ void LoopAnalysis::collectEnclosingLoops(
 
 void LoopAnalysis::collectLoopsInOperation(Operation *op,
                                            SmallVectorImpl<LoopNode *> &loops) {
+  ensureAnalyzed();
   op->walk([&](Operation *childOp) {
     if (isLoopOperation(childOp)) {
       if (LoopNode *node = getOrCreateLoopNode(childOp))
@@ -153,6 +164,7 @@ void LoopAnalysis::collectLoopsInOperation(Operation *op,
 
 void LoopAnalysis::collectForLoopsInOperation(
     Operation *op, SmallVectorImpl<LoopNode *> &loops) {
+  ensureAnalyzed();
   op->walk([&](Operation *childOp) {
     if (isa<scf::ForOp>(childOp)) {
       if (LoopNode *node = getOrCreateLoopNode(childOp))
@@ -161,8 +173,8 @@ void LoopAnalysis::collectForLoopsInOperation(
   });
 }
 
-std::optional<int64_t>
-LoopAnalysis::getStaticTripCount(Operation *loopOp) const {
+std::optional<int64_t> LoopAnalysis::getStaticTripCount(Operation *loopOp) {
+  ensureAnalyzed();
   if (!loopOp || !isLoopOperation(loopOp))
     return std::nullopt;
 
@@ -176,6 +188,7 @@ LoopAnalysis::getStaticTripCount(Operation *loopOp) const {
 template <typename LoopOpType>
 void LoopAnalysis::collectLoopsInOperation(Operation *op,
                                            SmallVectorImpl<LoopNode *> &loops) {
+  ensureAnalyzed();
   op->walk([&](Operation *childOp) {
     if (isa<LoopOpType>(childOp)) {
       if (LoopNode *node = getOrCreateLoopNode(childOp))
@@ -190,3 +203,17 @@ template void LoopAnalysis::collectLoopsInOperation<scf::WhileOp>(
     Operation *op, SmallVectorImpl<LoopNode *> &loops);
 template void LoopAnalysis::collectLoopsInOperation<arts::ForOp>(
     Operation *op, SmallVectorImpl<LoopNode *> &loops);
+
+LoopNode *LoopAnalysis::findEnclosingLoopDrivenBy(Operation *op, Value idx) {
+  ensureAnalyzed();
+  for (Operation *parent = op->getParentOp(); parent;
+       parent = parent->getParentOp()) {
+    if (!isLoopOperation(parent))
+      continue;
+    if (LoopNode *node = getLoopNode(parent)) {
+      if (node->dependsOnInductionVar(idx))
+        return node;
+    }
+  }
+  return nullptr;
+}

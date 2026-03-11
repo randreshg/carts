@@ -1,5 +1,5 @@
 ///===----------------------------------------------------------------------===///
-// LoopAnalyzer.cpp - Loop Analysis Implementation
+/// LoopAnalyzer.cpp - Loop Analysis Implementation
 ///===----------------------------------------------------------------------===///
 
 #include "arts/Analysis/Metadata/LoopAnalyzer.h"
@@ -25,7 +25,7 @@ using namespace mlir;
 using namespace mlir::arts;
 
 ///===----------------------------------------------------------------------===///
-// LoopAnalyzer Implementation
+/// LoopAnalyzer Implementation
 ///===----------------------------------------------------------------------===///
 void LoopAnalyzer::analyzeAffineLoop(affine::AffineForOp forOp,
                                      LoopMetadata *metadata) {
@@ -217,7 +217,7 @@ void LoopAnalyzer::analyzeLoopNestDependences(affine::AffineForOp outerLoop,
 }
 
 ///===----------------------------------------------------------------------===///
-// Loop Reordering Analysis
+/// Loop Reordering Analysis
 ///===----------------------------------------------------------------------===///
 
 void LoopAnalyzer::analyzeLoopReordering(affine::AffineForOp outerLoop,

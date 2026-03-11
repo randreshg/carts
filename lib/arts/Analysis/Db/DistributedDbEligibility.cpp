@@ -8,7 +8,7 @@
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
-#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/DbUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -125,7 +125,7 @@ static bool hasOnlyAllowedHandleUsers(Value rootHandle) {
         continue;
       }
 
-      if (auto access = DatablockUtils::getMemoryAccessInfo(user)) {
+      if (auto access = DbUtils::getMemoryAccessInfo(user)) {
         if (access->memref == value && isMemoryUserInsideEdt(user))
           continue;
         return false;

@@ -11,5 +11,3 @@ Primary guides:
 Related notes:
 
 - Single-rank DB granularity: `docs/heuristics/single_rank/db_granularity.md`
-- Multi-rank DB ownership and granularity:
-  `docs/heuristics/multi_rank/db_granularity_and_ownership.md`

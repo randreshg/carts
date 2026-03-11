@@ -543,23 +543,68 @@ def EdtOp : Arts_Op<"edt", [
 ]> {
   let summary = "Event-Driven Task in ARTS";
   let description = [{
-    Defines an ARTS event -
-        driven task(EDT) with : - `dependencies` that specify input /
-                                output memory dependencies(acquired views)
-                                    .
+    Defines an ARTS Event-Driven Task (EDT).
 
-                                The single -
-        block region contains the task body.- if 'parallel' attribute is set,
-        it can spawn multiple tasks.- if 'single' attribute is set,
-        it is guaranteed to run in a single task,
-        even if it is called from a parallel region.-
-            'concurrency' specifies the execution scope
-        : intranode or internode.-
-            'workers' specifies the number of parallel workers to use(optional)
-                .-
-            'nowait' indicates the EDT doesn't require an epoch wrapper (
-                typically used when EDT is already inside an epoch)
-                .
+    An EDT encapsulates a unit of asynchronous work that operates on
+    DataBlocks (DBs) through explicit memory dependencies.
+
+    ### Region Structure
+
+    The operation has a single-block region (`$body`) terminated by an
+    implicit `arts.yield`. The body region contains the task code that
+    executes when all dependencies are satisfied.
+
+    ### Block Arguments and Dependencies
+
+    The body block has one block argument per dependency. Each block argument
+    corresponds positionally to one entry in the `$dependencies` variadic
+    operand list:
+
+    ```
+    arts.edt parallel intranode route(%r) (%acq0, %acq1 : memref<...>, memref<...>) {
+    ^bb0(%arg0: memref<...>, %arg1: memref<...>):
+      // %arg0 corresponds to %acq0, %arg1 corresponds to %acq1
+      ...
+      arts.yield
+    }
+    ```
+
+    At runtime, block arguments receive the acquired views of the
+    corresponding datablocks. The task body must use these block arguments
+    (not the outer dependency values) to access datablock memory.
+
+    ### Invariants (enforced by verifier)
+
+    1. The number of block arguments must equal the number of dependencies.
+    2. Every dependency must be defined by a `DbAcquireOp`.
+    3. MemRef-typed operands inside the body must be one of:
+       - A block argument of this EDT (backed by a DbAcquire).
+       - Defined within the EDT body region itself.
+       - An external `memref.alloca` (sunk into the EDT later in the pipeline).
+       - A `DbAcquireOp` source handle (`sourceGuid` or `sourcePtr`)
+         referencing an outer-scope datablock for nested view derivation.
+    4. External DbAcquire values must not be used directly inside the body;
+       they must be passed as dependencies and accessed via block arguments.
+    5. Nested `EdtOp`s are skipped during verification (they verify
+       independently).
+    6. Setting `no_verify` bypasses all invariant checks (used during
+       intermediate pipeline stages where invariants are temporarily broken).
+
+    ### Attributes
+
+    - `type`: EDT execution type (`parallel`, `single`, `sync`, `task`).
+      - `parallel`: may spawn multiple concurrent task instances.
+      - `single`: guaranteed to run as a single task, even from a parallel
+        region.
+      - `sync`: synchronous execution.
+      - `task`: general task.
+    - `concurrency`: execution scope (`intranode` or `internode`).
+    - `route`: routing value (I32) for task placement.
+    - `workers` (optional): number of parallel workers to use.
+    - `nowait` (optional): indicates the EDT does not require an epoch
+      wrapper (typically used when the EDT is already inside an epoch).
+    - `no_verify` (optional): disables verifier checks for intermediate
+      pipeline states.
   }];
   let arguments = (ins
     EdtTypeAttr:$type,
@@ -694,98 +739,42 @@ def AtomicAddOp : Arts_Op<"atomic_add", [MemoryEffects<[MemWrite]>]> {
 }
 
 ///===----------------------------------------------------------------------===///
-/// arts.get_total_workers
+/// arts.runtime_query
 ///===----------------------------------------------------------------------===///
-def GetTotalWorkersOp : Arts_Op<"get_total_workers", [Pure]> {
-  let summary = "Get the total number of workers in ARTS";
-  let description =
-      [{The `arts
-            .get_total_workers` operation retrieves the total number of workers
-                available in the ARTS runtime environment.}];
-  let results = (outs I32 : $result);
-  let assemblyFormat = "attr-dict `->` type($result)";
-  let skipDefaultBuilders = 1;
-  let builders = [OpBuilder<(ins), [{
-                              $_state.addTypes(
-                                  IntegerType::get($_builder.getContext(), 32));
-                            }]>];
-}
-
-///===----------------------------------------------------------------------===///
-/// arts.get_total_nodes
-///===----------------------------------------------------------------------===///
-def GetTotalNodesOp : Arts_Op<"get_total_nodes", [Pure]> {
-  let summary = "Get the total number of nodes in ARTS";
-  let description =
-      [{The `arts
-            .get_total_nodes` operation retrieves the total number of nodes
-                available in the ARTS runtime environment.}];
-  let results = (outs I32 : $result);
-  let assemblyFormat = "attr-dict `->` type($result)";
-  let skipDefaultBuilders = 1;
-  let builders = [OpBuilder<(ins), [{
-                              $_state.addTypes(
-                                  IntegerType::get($_builder.getContext(), 32));
-                            }]>];
-}
-
-///===----------------------------------------------------------------------===///
-/// arts.get_current_worker
-///===----------------------------------------------------------------------===///
-def GetCurrentWorkerOp : Arts_Op<"get_current_worker", [Pure]> {
-  let summary = "Get the current worker ID in ARTS";
+def RuntimeQueryOp : Arts_Op<"runtime_query", [Pure]> {
+  let summary = "Query the ARTS runtime for topology or identity information";
   let description = [{
-      The `arts
-          .get_current_worker` operation retrieves the ID of the current worker
-              executing the operation in the ARTS runtime environment.}];
-  let results = (outs I32 : $result);
-  let assemblyFormat = "attr-dict `->` type($result)";
-  let skipDefaultBuilders = 1;
-  let builders = [OpBuilder<(ins), [{
-                              $_state.addTypes(
-                                  IntegerType::get($_builder.getContext(), 32));
-                            }]>];
-}
+    The `arts.runtime_query` operation queries the ARTS runtime for information
+    about the execution environment. The `kind` attribute selects what to query:
 
-///===----------------------------------------------------------------------===///
-/// arts.get_current_node
-///===----------------------------------------------------------------------===///
-def GetCurrentNodeOp : Arts_Op<"get_current_node", [Pure]> {
-  let summary = "Get the current node ID in ARTS";
-  let description =
-      [{The `arts
-            .get_current_node` operation retrieves the ID of the current node
-                executing the operation in the ARTS runtime environment.}];
-  let results = (outs I32 : $result);
-  let assemblyFormat = "attr-dict `->` type($result)";
-  let skipDefaultBuilders = 1;
-  let builders = [OpBuilder<(ins), [{
-                              $_state.addTypes(
-                                  IntegerType::get($_builder.getContext(), 32));
-                            }]>];
-}
+    - `total_workers`: Total number of workers available.
+    - `total_nodes`: Total number of nodes available.
+    - `current_worker`: ID of the current worker executing this operation.
+    - `current_node`: ID of the current node executing this operation.
+    - `parallel_worker_id`: Placeholder for the parallel worker ID, replaced by
+      ParallelEdtLowering with the actual worker ID (scf.for induction variable).
+      This allows ForLowering to use the worker ID symbolically before the
+      parallel loop structure is created. Should not appear in final lowered IR.
 
-///===----------------------------------------------------------------------===///
-/// arts.get_parallel_worker_id
-///===----------------------------------------------------------------------===///
-def GetParallelWorkerIdOp : Arts_Op<"get_parallel_worker_id", []> {
-  let summary = "Get the parallel worker ID placeholder";
-  let description = [{
-    The `arts.get_parallel_worker_id` operation is a placeholder that will be
-    replaced by ParallelEdtLowering with the actual worker ID (scf.for induction
-    variable). This allows ForLowering pass to use the worker ID symbolically
-    before the parallel loop structure is created.
-
-    This operation is created by ForLowering and consumed by ParallelEdtLowering.
-    It should not appear in the final lowered IR.
+    For `parallel_worker_id`, the result type is `index`.
+    For all other kinds, the result type is `i32`.
   }];
-  let results = (outs Index : $result);
-  let assemblyFormat = "attr-dict";
+  let arguments = (ins RuntimeQueryKindAttr:$kind);
+  let results = (outs AnyType : $result);
+  let assemblyFormat = "$kind attr-dict `->` type($result)";
   let skipDefaultBuilders = 1;
-  let builders =
-      [OpBuilder<(ins), [{
-                   $_state.addTypes(IndexType::get($_builder.getContext()));
-                 }]>];
+  let builders = [
+    /// Builder for total_workers, total_nodes, current_worker, current_node
+    /// (returns i32)
+    OpBuilder<(ins "RuntimeQueryKind":$kind), [{
+      if (kind == RuntimeQueryKind::parallelWorkerId)
+        $_state.addTypes(IndexType::get($_builder.getContext()));
+      else
+        $_state.addTypes(IntegerType::get($_builder.getContext(), 32));
+      $_state.addAttribute("kind",
+          RuntimeQueryKindAttr::get($_builder.getContext(), kind));
+    }]>
+  ];
 }
 
 ///===----------------------------------------------------------------------===///

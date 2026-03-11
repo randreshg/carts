@@ -1,22 +1,22 @@
 ///==========================================================================///
 /// File: ConvertOpenMPToArts.cpp
-//
-// This file implements a module pass that converts OpenMP ops
-// (omp.parallel, omp.master, omp.task, etc.) into Arts ops
-//
-// Example:
-//   Before:
-//     omp.parallel {
-//       omp.task depend(in: A[i]) depend(out: B[i]) { ... }
-//     }
-//
-//   After:
-//     arts.edt <parallel> {
-//       arts.edt <task> (...) {
-//         arts.db_control ...
-//         ...
-//       }
-//     }
+///
+/// This file implements a module pass that converts OpenMP ops
+/// (omp.parallel, omp.master, omp.task, etc.) into Arts ops
+///
+/// Example:
+///   Before:
+///     omp.parallel {
+///       omp.task depend(in: A[i]) depend(out: B[i]) { ... }
+///     }
+///
+///   After:
+///     arts.edt <parallel> {
+///       arts.edt <task> (...) {
+///         arts.db_control ...
+///         ...
+///       }
+///     }
 ///==========================================================================///
 
 /// Dialects
@@ -33,6 +33,7 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/OperationAttributes.h"
+#include "arts/Utils/RemovalUtils.h"
 #include "arts/Utils/ValueUtils.h"
 /// Others
 #include "mlir/IR/Builders.h"
@@ -63,7 +64,7 @@ static bool hasWorkAfterInParentBlock(Operation *op) {
   return false;
 }
 ///===----------------------------------------------------------------------===///
-// Conversion Patterns
+/// Conversion Patterns
 ///===----------------------------------------------------------------------===///
 /// Pattern to replace `omp.parallel` with `arts.edt` with `parallel` attribute
 struct OMPParallelToArtsPattern : public OpRewritePattern<omp::ParallelOp> {
@@ -332,8 +333,8 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
                    << " pinned, " << blockSizes.size() << " chunks");
 
         Value dbControl = rewriter.create<DbControlOp>(
-            ompDepOp.getLoc(), depMode, ompDepOp.getSource(),
-            pinnedIndices, chunkOffsets, blockSizes);
+            ompDepOp.getLoc(), depMode, ompDepOp.getSource(), pinnedIndices,
+            chunkOffsets, blockSizes);
         deps.push_back(dbControl);
       }
     }
@@ -576,7 +577,7 @@ private:
     SmallVector<Value> zeroIndices;
     zeroIndices.reserve(rank);
     for (unsigned i = 0; i < rank; ++i)
-      zeroIndices.push_back(rewriter.create<arith::ConstantIndexOp>(loc, 0));
+      zeroIndices.push_back(arts::createZeroIndex(rewriter, loc));
 
     Value current =
         rewriter.create<memref::LoadOp>(loc, accumulator, zeroIndices);
@@ -761,13 +762,15 @@ struct CallToARTSPattern : public OpRewritePattern<func::CallOp> {
     if (callee == "omp_get_thread_num") {
       /// Use Worker by default - Concurrency pass will convert to Node for
       /// internode EDTs
-      rewriter.replaceOpWithNewOp<arts::GetCurrentWorkerOp>(callOp);
+      rewriter.replaceOpWithNewOp<arts::RuntimeQueryOp>(
+          callOp, arts::RuntimeQueryKind::currentWorker);
       return success();
     }
     if (callee == "omp_get_num_threads" || callee == "omp_get_max_threads") {
       /// Use Worker by default - Concurrency pass will convert to Node for
       /// internode EDTs
-      rewriter.replaceOpWithNewOp<arts::GetTotalWorkersOp>(callOp);
+      rewriter.replaceOpWithNewOp<arts::RuntimeQueryOp>(
+          callOp, arts::RuntimeQueryKind::totalWorkers);
       return success();
     }
     /// nothing to do, leave the op as-is
@@ -776,7 +779,7 @@ struct CallToARTSPattern : public OpRewritePattern<func::CallOp> {
 };
 
 ///===----------------------------------------------------------------------===///
-// Pass Implementation
+/// Pass Implementation
 ///===----------------------------------------------------------------------===///
 namespace {
 struct ConvertOpenMPToArtsPass
@@ -822,7 +825,7 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
 }
 
 ///===----------------------------------------------------------------------===///
-// Pass creation
+/// Pass creation
 ///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {

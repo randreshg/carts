@@ -10,7 +10,7 @@
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/DbUtils.h"
 #include "arts/Utils/Metadata/ArtsMetadata.h"
 #include "arts/Utils/Metadata/MemrefMetadata.h"
 #include "arts/Utils/OperationAttributes.h"
@@ -55,7 +55,7 @@ collectAllAcquireNodes(const SmallVector<std::unique_ptr<DbAcquireNode>, 4>
 } // namespace
 
 ///===----------------------------------------------------------------------===///
-// DbAllocNode
+/// DbAllocNode
 ///===----------------------------------------------------------------------===///
 DbAllocNode::DbAllocNode(DbAllocOp op, DbAnalysis *analysis)
     : MemrefMetadata(op.getOperation()), dbAllocOp(op), dbFreeOp(nullptr),
@@ -317,14 +317,14 @@ bool DbAllocNode::hasSingleWriter() const {
       continue;
 
     ArtsMode mode = acqOp.getMode();
-    if (!DatablockUtils::isWriterMode(mode))
+    if (!DbUtils::isWriterMode(mode))
       continue;
 
     writeCount++;
     if (writeCount > 1)
       return false;
 
-    if (!DatablockUtils::hasStaticHints(acqOp))
+    if (!DbUtils::hasStaticHints(acqOp))
       return false;
   }
 
@@ -346,10 +346,10 @@ bool DbAllocNode::hasDynamicWriterOffsets() const {
     if (!acqOp)
       continue;
 
-    if (!DatablockUtils::isWriterMode(acqOp.getMode()))
+    if (!DbUtils::isWriterMode(acqOp.getMode()))
       continue;
 
-    if (!DatablockUtils::hasStaticHints(acqOp)) {
+    if (!DbUtils::hasStaticHints(acqOp)) {
       ARTS_DEBUG("Writer acquire has dynamic offset/size hints");
       return true;
     }
@@ -385,7 +385,7 @@ bool DbAllocNode::canProveNonOverlapping() const {
     const auto *single = allAcquireNodes.front();
     if (!single)
       return true;
-    if (DatablockUtils::hasStaticHints(single->getDbAcquireOp()))
+    if (DbUtils::hasStaticHints(single->getDbAcquireOp()))
       return true;
   }
 

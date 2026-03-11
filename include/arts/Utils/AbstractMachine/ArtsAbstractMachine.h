@@ -65,11 +65,13 @@ public:
 
   /// Machine Capability Queries
   bool hasGpuSupport() const { return scheduler == 3 && gpu > 0; }
+  bool isSingleNode() const { return nodeCount == 1; }
   bool isDistributed() const { return nodeCount > 1; }
   bool isLocalExecution() const {
     return nodeCount == 1 && nodes.size() == 1 && nodes[0] == "localhost";
   }
   int getTotalWorkerThreads() const { return threads * nodeCount; }
+
   /// Runtime worker count per node used by ARTS scheduling:
   ///   distributed: threads - outgoing - incoming (min 1)
   ///   single-node: threads (min 1)

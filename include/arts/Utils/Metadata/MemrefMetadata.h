@@ -134,9 +134,9 @@ public:
     NonAffine = 4
   };
 
-  //===-------------------------------------------------------------===//
+  ///===-------------------------------------------------------------===///
   /// Attributes
-  //===-------------------------------------------------------------===//
+  ///===-------------------------------------------------------------===///
   /// Basic type information
   std::optional<int64_t> rank;
   std::string allocationId;
@@ -153,10 +153,10 @@ public:
   /// Canonicalization metadata
   std::optional<bool> shouldCanonicalizeFlag, isCanonicalizedFlag;
 
-  //// Lifetime information
+  /// Lifetime information
   std::optional<int64_t> firstUseId, lastUseId;
 
-  ///// Extended analysis
+  /// Extended analysis
   std::optional<bool> hasUniformAccess, hasStrideOneAccess;
   std::optional<AccessPatternType> dominantAccessPattern;
   std::optional<int64_t> nestingDepth;
@@ -174,9 +174,9 @@ public:
   /// Construct from an allocation operation
   explicit MemrefMetadata(Operation *allocOp);
 
-  //===------------------------------------------------------------------===//
+  ///===------------------------------------------------------------------===///
   /// ArtsMetadata interface
-  //===------------------------------------------------------------------===//
+  ///===------------------------------------------------------------------===///
   StringRef getMetadataName() const override {
     return AttrNames::MemrefMetadata::Name;
   }
@@ -188,9 +188,9 @@ public:
   }
   Attribute getMetadataAttr() const override;
 
-  //===------------------------------------------------------------------===//
+  ///===------------------------------------------------------------------===///
   /// Enum serialization helpers
-  //===------------------------------------------------------------------===//
+  ///===------------------------------------------------------------------===///
   static std::string accessPatternToString(AccessPatternType pattern);
   static std::optional<AccessPatternType>
   stringToAccessPattern(llvm::StringRef str);

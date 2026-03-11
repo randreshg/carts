@@ -9,10 +9,10 @@
 
 #include "arts/Analysis/ArtsHeuristics.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
+#include "arts/Analysis/HeuristicUtils.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Transforms/Datablock/DbRewriter.h"
 #include "arts/Utils/ArtsDebug.h"
-#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/DbUtils.h"
 #include "arts/Utils/EdtUtils.h"
 #include "arts/Utils/Metadata/IdRegistry.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
@@ -58,9 +58,7 @@ HeuristicsConfig::HeuristicsConfig(const ArtsAbstractMachine &machine,
              << isSingleNode() << ", valid=" << isValid());
 }
 
-bool HeuristicsConfig::isSingleNode() const {
-  return machine.getNodeCount() == 1;
-}
+bool HeuristicsConfig::isSingleNode() const { return machine.isSingleNode(); }
 
 bool HeuristicsConfig::isValid() const { return machine.isValid(); }
 
@@ -89,7 +87,7 @@ void HeuristicsConfig::recordDecision(llvm::StringRef heuristic, bool applied,
     if (auto acquireOp = dyn_cast<DbAcquireOp>(op)) {
       /// Trace back to parent DbAllocOp
       if (Operation *allocOp =
-              DatablockUtils::getUnderlyingDbAlloc(acquireOp.getSourcePtr())) {
+              DbUtils::getUnderlyingDbAlloc(acquireOp.getSourcePtr())) {
         allocId = idRegistry.getOrCreate(allocOp);
 
         /// Compute affected DB IDs based on offsets and sizes

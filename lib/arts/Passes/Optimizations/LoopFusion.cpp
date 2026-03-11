@@ -41,7 +41,7 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/DbUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/IRMapping.h"
@@ -115,8 +115,10 @@ private:
 } // namespace
 
 bool LoopFusionPass::haveCompatibleBounds(ForOp a, ForOp b) {
-  return ValueUtils::sameValue(a.getLowerBound()[0], b.getLowerBound()[0]) &&
-         ValueUtils::sameValue(a.getUpperBound()[0], b.getUpperBound()[0]);
+  auto &loopAnalysis = AM->getLoopAnalysis();
+  LoopNode *nodeA = loopAnalysis.getOrCreateLoopNode(a.getOperation());
+  LoopNode *nodeB = loopAnalysis.getOrCreateLoopNode(b.getOperation());
+  return LoopNode::haveCompatibleBounds(nodeA, nodeB);
 }
 
 /// Collects the underlying datablock Operations accessed by a ForOp.
@@ -126,7 +128,7 @@ DenseSet<Operation *> LoopFusionPass::getDbAccesses(ForOp forOp) {
   DenseSet<Operation *> accesses;
   forOp.walk([&](Operation *op) {
     Value memref;
-    if (auto access = DatablockUtils::getMemoryAccessInfo(op))
+    if (auto access = DbUtils::getMemoryAccessInfo(op))
       memref = access->memref;
     else if (auto dbRef = dyn_cast<DbRefOp>(op))
       memref = dbRef.getResult();
@@ -136,7 +138,7 @@ DenseSet<Operation *> LoopFusionPass::getDbAccesses(ForOp forOp) {
       return;
 
     /// Use ArtsUtils to trace to the underlying datablock
-    if (Operation *db = DatablockUtils::getUnderlyingDb(memref)) {
+    if (Operation *db = DbUtils::getUnderlyingDb(memref)) {
       accesses.insert(db);
       ARTS_DEBUG("  Access -> underlying DB: " << *db);
     }

@@ -89,10 +89,10 @@ def DeadCodeElimination : Pass<"arts-dce", "mlir::ModuleOp"> {
 }
 
 def Db : Pass<"db", "mlir::ModuleOp"> {
-  let summary = "Adjust datablock modes based on access patterns";
+  let summary = "Adjust DB modes based on access patterns";
   let description =
       [{Adjusts the mode(in / out / inout)
-            of datablock allocations and acquires based on the actual load /
+            of DB allocations and acquires based on the actual load /
         store operations performed on them.}];
   let dependentDialects =
       ["memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect"];
@@ -100,9 +100,9 @@ def Db : Pass<"db", "mlir::ModuleOp"> {
 }
 
 def DbPartitioning : Pass<"db-partitioning", "mlir::ModuleOp"> {
-  let summary = "Partition datablocks for fine-grained parallel access";
+  let summary = "Partition DBs for fine-grained parallel access";
   let description = [{
-    Transforms coarse-grained datablock allocations to fine-grained (chunked)
+    Transforms coarse-grained DB allocations to fine-grained (chunked)
     allocations for better parallelism. Also handles:
     - Stencil bounds analysis and runtime bounds checking
 
@@ -120,9 +120,9 @@ def DbPartitioning : Pass<"db-partitioning", "mlir::ModuleOp"> {
 
 def DistributedDbOwnership
     : Pass<"distributed-db-ownership", "mlir::ModuleOp"> {
-  let summary = "Mark eligible datablock allocations for distributed ownership";
+  let summary = "Mark eligible DB allocations for distributed ownership";
   let description = [{
-    Selects host-level datablock allocations that are safe to distribute across
+    Selects host-level DB allocations that are safe to distribute across
     nodes and annotates them with the `distributed` attribute for lowering.
   }];
   let dependentDialects =
@@ -140,11 +140,11 @@ def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {
 }
 
 def DbLowering : Pass<"db-lowering", "mlir::ModuleOp"> {
-  let summary = "Lower ARTS DataBlock handles to opaque pointer form";
+  let summary = "Lower ARTS DB handles to opaque pointer form";
   let description =
       [{This pass converts ARTS DataBlocks from typed memrefs to the opaque
             pointer representation required by the runtime
-                .It assumes the datablocks are already in canonical form.}];
+                .It assumes the DBs are already in canonical form.}];
   let dependentDialects = [
     "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
     "arts::ArtsDialect", "arith::ArithDialect", "polygeist::PolygeistDialect"
@@ -266,7 +266,7 @@ def ParallelEdtLowering : Pass<"parallel-edt-lowering", "mlir::ModuleOp"> {
   let description = [{This pass transforms parallel EDT operations that contain
                           loop constructs into epoch -
                       wrapped task graphs
-                          .It must execute before datablock lowering to ensure
+                          .It must execute before DB lowering to ensure
                               proper dependency management.}];
   let dependentDialects = [
     "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
@@ -327,7 +327,7 @@ def ForLowering : Pass<"for-lowering", "mlir::ModuleOp"> {
   let description = [{
     Lowers arts.for operations nested within arts.edt<parallel> by creating a
     symbolic worker-id placeholder, computing chunk bounds, acquiring required
-    datablocks, and generating a task EDT with a local scf.for over the chunk.
+    DBs, and generating a task EDT with a local scf.for over the chunk.
   }];
   let dependentDialects = [
     "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
@@ -367,7 +367,7 @@ def ArtsEpochOpt : Pass<"arts-epoch-opt", "mlir::ModuleOp"> {
     Runs epoch - related
     optimizations:
         1. Epoch fusion -
-            merge independent consecutive epochs when their datablock accesses
+            merge independent consecutive epochs when their DB accesses
                 are independent(no shared writes) 2. Worker loop fusion -
             merge compatible worker loops within epochs when they have identical
                 bounds and no loop -

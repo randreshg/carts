@@ -40,7 +40,7 @@ using namespace mlir::func;
 using namespace mlir::arts;
 
 ///===----------------------------------------------------------------------===///
-// Epoch Lowering Pass Implementation
+/// Epoch Lowering Pass Implementation
 ///===----------------------------------------------------------------------===///
 struct EpochLoweringPass : public arts::EpochLoweringBase<EpochLoweringPass> {
   explicit EpochLoweringPass(bool debug = false) : debugMode(debug) {}
@@ -55,7 +55,7 @@ private:
 };
 
 ///===----------------------------------------------------------------------===///
-// Pass Implementation
+/// Pass Implementation
 ///===----------------------------------------------------------------------===///
 
 void EpochLoweringPass::runOnOperation() {
@@ -158,7 +158,7 @@ void EpochLoweringPass::runOnOperation() {
 }
 
 ///===----------------------------------------------------------------------===///
-// Pass Registration
+/// Pass Registration
 ///===----------------------------------------------------------------------===///
 
 namespace mlir {

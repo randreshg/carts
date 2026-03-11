@@ -19,9 +19,11 @@
 ///==========================================================================///
 
 #include "arts/Analysis/DistributionHeuristics.h"
+#include "arts/Analysis/HeuristicUtils.h"
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Codegen/ArtsCodegen.h"
-#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/DbUtils.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
@@ -42,34 +44,18 @@ using namespace mlir::arts;
 /// ARTS runtime query ops are safe to clone - they return the same value
 /// regardless of where they are emitted.
 static bool isSafeRuntimeQuery(Operation *op) {
-  return isa<GetTotalNodesOp, GetTotalWorkersOp>(op);
+  if (auto queryOp = dyn_cast<RuntimeQueryOp>(op)) {
+    auto kind = queryOp.getKind();
+    return kind == RuntimeQueryKind::totalNodes ||
+           kind == RuntimeQueryKind::totalWorkers;
+  }
+  return false;
 }
 
+/// Coarsening should be skipped for sequential loops (inter-iteration
+/// dependencies or explicit Sequential classification).
 static bool shouldSkipCoarsening(ForOp forOp, LoopNode *loopNode) {
-  if (loopNode) {
-    if (loopNode->hasInterIterationDeps && *loopNode->hasInterIterationDeps)
-      return true;
-    if (loopNode->parallelClassification &&
-        *loopNode->parallelClassification ==
-            LoopMetadata::ParallelClassification::Sequential)
-      return true;
-  }
-
-  if (auto loopAttr = forOp->getAttrOfType<LoopMetadataAttr>(
-          AttrNames::LoopMetadata::Name)) {
-    if (auto depsAttr = loopAttr.getHasInterIterationDeps())
-      if (depsAttr.getValue())
-        return true;
-
-    if (auto classAttr = loopAttr.getParallelClassification()) {
-      if (classAttr.getInt() ==
-          static_cast<int64_t>(
-              LoopMetadata::ParallelClassification::Sequential))
-        return true;
-    }
-  }
-
-  return false;
+  return isSequentialLoop(forOp, loopNode);
 }
 
 static std::optional<int64_t> getExplicitWorkerCount(EdtOp edt) {
@@ -90,15 +76,13 @@ ParallelismDecision DistributionHeuristics::resolveParallelismFromMachine(
   if (!machine)
     return decision;
 
-  int64_t nodeCount = machine->hasValidNodeCount()
-                          ? static_cast<int64_t>(machine->getNodeCount())
-                          : 0;
-  int64_t workerThreads = machine->getRuntimeWorkersPerNode();
+  int64_t nodeCount = (machine ? machine->getNodeCount() : 0);
+  int64_t workerThreads = (machine ? machine->getRuntimeWorkersPerNode() : 0);
 
   if (nodeCount > 1) {
     decision.concurrency = EdtConcurrency::internode;
     decision.workersPerNode = workerThreads > 0 ? workerThreads : 1;
-    decision.totalWorkers = machine->getRuntimeTotalWorkers();
+    decision.totalWorkers = (machine ? machine->getRuntimeTotalWorkers() : 0);
     if (decision.totalWorkers <= 0)
       decision.totalWorkers = nodeCount * decision.workersPerNode;
     return decision;
@@ -132,11 +116,8 @@ std::optional<WorkerConfig> DistributionHeuristics::resolveWorkerConfig(
     if (cfg.internode) {
       if (auto workersPerNode = getExplicitWorkersPerNodeCount(parallelEdt)) {
         cfg.workersPerNode = *workersPerNode;
-      } else if (machine && machine->hasValidNodeCount() &&
-                 machine->getNodeCount() > 0) {
-        cfg.workersPerNode = std::max<int64_t>(
-            1,
-            cfg.totalWorkers / static_cast<int64_t>(machine->getNodeCount()));
+      } else if (int64_t nc = (machine ? machine->getNodeCount() : 0); nc > 0) {
+        cfg.workersPerNode = std::max<int64_t>(1, cfg.totalWorkers / nc);
       }
       if (cfg.workersPerNode <= 0)
         cfg.workersPerNode = 1;
@@ -149,7 +130,8 @@ std::optional<WorkerConfig> DistributionHeuristics::resolveWorkerConfig(
   if (!machine)
     return std::nullopt;
 
-  int64_t runtimeWorkersPerNode = machine->getRuntimeWorkersPerNode();
+  int64_t runtimeWorkersPerNode =
+      (machine ? machine->getRuntimeWorkersPerNode() : 0);
   if (runtimeWorkersPerNode <= 0)
     return std::nullopt;
 
@@ -159,11 +141,11 @@ std::optional<WorkerConfig> DistributionHeuristics::resolveWorkerConfig(
     return cfg;
   }
 
-  if (!machine->hasValidNodeCount() || machine->getNodeCount() <= 0)
+  if ((machine ? machine->getNodeCount() : 0) <= 0)
     return std::nullopt;
 
   cfg.workersPerNode = runtimeWorkersPerNode;
-  cfg.totalWorkers = machine->getRuntimeTotalWorkers();
+  cfg.totalWorkers = (machine ? machine->getRuntimeTotalWorkers() : 0);
   if (cfg.totalWorkers <= 0)
     return std::nullopt;
 
@@ -294,7 +276,8 @@ DistributionHeuristics::analyzeStrategy(EdtConcurrency concurrency,
     strategy.kind = DistributionKind::Flat;
     strategy.numNodes = 1;
     if (machine) {
-      strategy.workersPerNode = machine->getRuntimeWorkersPerNode();
+      strategy.workersPerNode =
+          (machine ? machine->getRuntimeWorkersPerNode() : 0);
       strategy.totalWorkers = strategy.workersPerNode;
     }
     strategy.useDbAlignment = false;
@@ -304,9 +287,10 @@ DistributionHeuristics::analyzeStrategy(EdtConcurrency concurrency,
   /// Internode -> TwoLevel
   strategy.kind = DistributionKind::TwoLevel;
   if (machine) {
-    strategy.numNodes = machine->getNodeCount();
-    strategy.workersPerNode = machine->getRuntimeWorkersPerNode();
-    strategy.totalWorkers = machine->getRuntimeTotalWorkers();
+    strategy.numNodes = (machine ? machine->getNodeCount() : 0);
+    strategy.workersPerNode =
+        (machine ? machine->getRuntimeWorkersPerNode() : 0);
+    strategy.totalWorkers = (machine ? machine->getRuntimeTotalWorkers() : 0);
   }
   strategy.useDbAlignment = true;
   return strategy;
@@ -719,7 +703,7 @@ Value DistributionHeuristics::computeDbAlignmentBlockSize(EdtOp parallelEdt,
   bool isTwoLevel = (parallelEdt.getConcurrency() == EdtConcurrency::internode);
 
   for (Value dep : parallelEdt.getDependencies()) {
-    auto allocInfo = DatablockUtils::traceToDbAlloc(dep);
+    auto allocInfo = DbUtils::traceToDbAlloc(dep);
     if (!allocInfo)
       continue;
     auto [rootGuid, rootPtr] = *allocInfo;
@@ -793,27 +777,29 @@ Value DistributionHeuristics::getWorkersPerNode(OpBuilder &builder,
     return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(), v);
   };
 
-  Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
+  Value one = arts::createOneIndex(builder, loc);
   Value workersPerNode;
 
   if (auto wpnConst = getExplicitWorkersPerNodeCount(parallelEdt)) {
     int64_t clamped = std::max<int64_t>(1, *wpnConst);
-    return builder.create<arith::ConstantIndexOp>(loc, clamped);
+    return arts::createConstantIndex(builder, loc, clamped);
   }
 
   if (auto workers = getExplicitWorkerCount(parallelEdt)) {
-    Value totalWorkers = builder.create<arith::ConstantIndexOp>(loc, *workers);
-    Value totalNodes =
-        toIndex(builder.create<GetTotalNodesOp>(loc).getResult());
+    Value totalWorkers = arts::createConstantIndex(builder, loc, *workers);
+    Value totalNodes = toIndex(
+        builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalNodes)
+            .getResult());
     workersPerNode =
         builder.create<arith::DivUIOp>(loc, totalWorkers, totalNodes);
   } else {
-    workersPerNode =
-        toIndex(builder.create<GetTotalWorkersOp>(loc).getResult());
+    workersPerNode = toIndex(
+        builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalWorkers)
+            .getResult());
   }
 
   /// Clamp to at least 1 to prevent division by zero.
-  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+  Value zero = arts::createZeroIndex(builder, loc);
   Value isZero = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
                                                workersPerNode, zero);
   return builder.create<arith::SelectOp>(loc, isZero, one, workersPerNode);
@@ -835,15 +821,21 @@ Value DistributionHeuristics::getTotalWorkers(OpBuilder &builder, Location loc,
   };
 
   if (auto workers = getExplicitWorkerCount(parallelEdt))
-    return builder.create<arith::ConstantIndexOp>(loc, *workers);
+    return arts::createConstantIndex(builder, loc, *workers);
 
   if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {
-    Value nodes = toIndex(builder.create<GetTotalNodesOp>(loc).getResult());
-    Value threads = toIndex(builder.create<GetTotalWorkersOp>(loc).getResult());
+    Value nodes = toIndex(
+        builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalNodes)
+            .getResult());
+    Value threads = toIndex(
+        builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalWorkers)
+            .getResult());
     return builder.create<arith::MulIOp>(loc, nodes, threads);
   }
 
-  return toIndex(builder.create<GetTotalWorkersOp>(loc).getResult());
+  return toIndex(
+      builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalWorkers)
+          .getResult());
 }
 
 Value DistributionHeuristics::getTotalWorkers(ArtsCodegen *AC, Location loc,
@@ -855,13 +847,17 @@ Value DistributionHeuristics::getDispatchWorkerCount(OpBuilder &builder,
                                                      Location loc,
                                                      EdtOp parallelEdt) {
   if (auto workers = getExplicitWorkerCount(parallelEdt))
-    return builder.create<arith::ConstantIndexOp>(loc, *workers);
+    return arts::createConstantIndex(builder, loc, *workers);
 
   Value workerCount;
   if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {
-    workerCount = builder.create<GetTotalNodesOp>(loc).getResult();
+    workerCount =
+        builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalNodes)
+            .getResult();
   } else {
-    workerCount = builder.create<GetTotalWorkersOp>(loc).getResult();
+    workerCount =
+        builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalWorkers)
+            .getResult();
   }
   if (workerCount.getType().isIndex())
     return workerCount;

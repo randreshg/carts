@@ -20,7 +20,6 @@
 
 #include "arts/Analysis/Graphs/Db/DbAccessPattern.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Transforms/Datablock/DbRewriter.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Value.h"

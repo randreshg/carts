@@ -2,13 +2,14 @@
 /// File: ParallelEdtLowering.cpp
 ///
 /// Lower arts.edt<parallel> into a simple worker loop. The loop induction
-/// variable replaces arts.get_parallel_worker_id placeholders, worker EDTs are
-/// created sequentially, and single EDTs are guarded to run only once
-/// (worker==0) within the loop to preserve program order.
+/// variable replaces arts.runtime_query<parallel_worker_id> placeholders,
+/// worker EDTs are created sequentially, and single EDTs are guarded to run
+/// only once (worker==0) within the loop to preserve program order.
 ///
 /// Example:
 ///   Before:
-///     arts.edt <parallel> (...) { ... arts.get_parallel_worker_id ... }
+///     arts.edt <parallel> (...) { ... arts.runtime_query<parallel_worker_id>
+///     ... }
 ///
 ///   After:
 ///     scf.for %wid = 0 to %workers step 1 {
@@ -21,6 +22,7 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsDebug.h"
+#include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -41,13 +43,15 @@ ARTS_DEBUG_SETUP(parallel_edt_lowering);
 
 namespace {
 
-/// Replace all arts.get_parallel_worker_id operations nested under `op` with
-/// the provided worker value.
+/// Replace all arts.runtime_query<parallel_worker_id> operations nested under
+/// `op` with the provided worker value.
 static void replaceWorkerIds(Operation *op, Value workerId) {
   SmallVector<Operation *> toErase;
-  op->walk([&](GetParallelWorkerIdOp idOp) {
-    idOp.replaceAllUsesWith(workerId);
-    toErase.push_back(idOp.getOperation());
+  op->walk([&](RuntimeQueryOp queryOp) {
+    if (queryOp.getKind() == RuntimeQueryKind::parallelWorkerId) {
+      queryOp.replaceAllUsesWith(workerId);
+      toErase.push_back(queryOp.getOperation());
+    }
   });
   for (Operation *erase : toErase)
     erase->erase();
@@ -69,7 +73,7 @@ static void guardSingleEdts(Operation *op, Value workerId) {
   for (EdtOp edt : singleEdts) {
     builder.setInsertionPoint(edt);
     Location loc = edt.getLoc();
-    Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+    Value zero = arts::createZeroIndex(builder, loc);
     Value isZero = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
                                                  workerId, zero);
 
@@ -190,13 +194,16 @@ private:
 
     Value numWorkers = DistributionHeuristics::getDispatchWorkerCount(
         epochBuilder, loc, parallelEdt);
-    Value zero = epochBuilder.create<arith::ConstantIndexOp>(loc, 0);
-    Value one = epochBuilder.create<arith::ConstantIndexOp>(loc, 1);
+    Value zero = arts::createZeroIndex(epochBuilder, loc);
+    Value one = arts::createOneIndex(epochBuilder, loc);
 
     bool hasParallelWorkerPlaceholders = false;
-    parallelEdt.walk([&](GetParallelWorkerIdOp) {
-      hasParallelWorkerPlaceholders = true;
-      return WalkResult::interrupt();
+    parallelEdt.walk([&](RuntimeQueryOp queryOp) {
+      if (queryOp.getKind() == RuntimeQueryKind::parallelWorkerId) {
+        hasParallelWorkerPlaceholders = true;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
     });
     if (!hasParallelWorkerPlaceholders) {
       /// Replicating a parallel EDT body without worker placeholders duplicates
@@ -218,7 +225,9 @@ private:
         parallelEdt.getConcurrency() == EdtConcurrency::internode;
     if (routeWorkers) {
       Type i32Ty = loopBuilder.getIntegerType(32);
-      Value nodes = loopBuilder.create<GetTotalNodesOp>(loc).getResult();
+      Value nodes =
+          loopBuilder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalNodes)
+              .getResult();
       if (!nodes.getType().isIndex())
         nodes = loopBuilder.create<arith::IndexCastOp>(
             loc, loopBuilder.getIndexType(), nodes);

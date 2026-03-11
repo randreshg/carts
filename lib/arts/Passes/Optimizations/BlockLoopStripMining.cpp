@@ -27,6 +27,8 @@
 
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsDebug.h"
+#include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/LoopUtils.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -65,15 +67,6 @@ static bool getConstIndex(Value v, int64_t &out) {
     return true;
   }
   return false;
-}
-
-static bool isInnermostLoop(scf::ForOp loop) {
-  bool hasNested = false;
-  loop.getBody()->walk([&](scf::ForOp nested) {
-    if (nested != loop)
-      hasNested = true;
-  });
-  return !hasNested;
 }
 
 static std::optional<Value> extractInvariantOffset(Value lhs, Value iv) {
@@ -288,13 +281,13 @@ static bool stripMineLoop(scf::ForOp loop, const LoopBlockInfo &info) {
   if (!origYield)
     return false;
 
-  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
-  Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
-  Value lbVal = builder.create<arith::ConstantIndexOp>(loc, lb);
+  Value zero = arts::createZeroIndex(builder, loc);
+  Value one = arts::createOneIndex(builder, loc);
+  Value lbVal = arts::createConstantIndex(builder, loc, lb);
   Value ubVal = loop.getUpperBound();
   Value bsVal =
       info.blockSizeConst
-          ? builder.create<arith::ConstantIndexOp>(loc, *info.blockSizeConst)
+          ? arts::createConstantIndex(builder, loc, *info.blockSizeConst)
           : ValueUtils::ensureIndexType(info.blockSizeVal, builder, loc);
   Value ubGeLb = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
                                                ubVal, lbVal);
@@ -357,8 +350,7 @@ static bool stripMineLoop(scf::ForOp loop, const LoopBlockInfo &info) {
     divOffsetConst = lb / *info.blockSizeConst;
   Value blockIdx = outer.getInductionVar();
   if (divOffsetConst != 0) {
-    Value offsetVal =
-        builder.create<arith::ConstantIndexOp>(loc, divOffsetConst);
+    Value offsetVal = arts::createConstantIndex(builder, loc, divOffsetConst);
     blockIdx = builder.create<arith::AddIOp>(loc, blockIdx, offsetVal);
   }
   if (info.offsetVal) {
@@ -369,7 +361,7 @@ static bool stripMineLoop(scf::ForOp loop, const LoopBlockInfo &info) {
                    ValueUtils::tryFoldConstantIndex(info.offsetVal)) {
       if (info.blockSizeConst) {
         int64_t offDivConst = *offConst / *info.blockSizeConst;
-        offsetDiv = builder.create<arith::ConstantIndexOp>(loc, offDivConst);
+        offsetDiv = arts::createConstantIndex(builder, loc, offDivConst);
       }
     }
     if (!offsetDiv) {

@@ -1,5 +1,5 @@
 ///===----------------------------------------------------------------------===///
-// MemrefAnalyzer.cpp - Memory Reference Analysis Implementation
+/// MemrefAnalyzer.cpp - Memory Reference Analysis Implementation
 ///===----------------------------------------------------------------------===///
 
 #include "arts/Analysis/Metadata/MemrefAnalyzer.h"
@@ -30,7 +30,7 @@ DimPattern mergePattern(DimPattern current, DimPattern candidate) {
 } // namespace
 
 ///===----------------------------------------------------------------------===///
-// ReuseAnalyzer Implementation
+/// ReuseAnalyzer Implementation
 ///===----------------------------------------------------------------------===///
 
 /// Collect all memory accesses in program order
@@ -136,7 +136,7 @@ ReuseAnalyzer::classifyTemporalLocality(uint64_t reuseDistance) {
 }
 
 ///===----------------------------------------------------------------------===///
-// MemrefAnalyzer Implementation
+/// MemrefAnalyzer Implementation
 ///===----------------------------------------------------------------------===///
 /// Count total accesses (reads + writes) to a memref
 std::pair<uint64_t, uint64_t>

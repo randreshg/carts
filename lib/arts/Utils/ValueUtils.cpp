@@ -965,7 +965,7 @@ Value ValueUtils::traceValueToDominating(Value value, Operation *insertBefore,
   }
   if (auto constIdxOp = dyn_cast<arith::ConstantIndexOp>(defOp)) {
     builder.setInsertionPoint(insertBefore);
-    return builder.create<arith::ConstantIndexOp>(loc, constIdxOp.value());
+    return arts::createConstantIndex(builder, loc, constIdxOp.value());
   }
 
   return nullptr;

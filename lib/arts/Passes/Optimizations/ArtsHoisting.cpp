@@ -35,15 +35,16 @@
 #include "llvm/ADT/SmallVector.h"
 
 #include "arts/Utils/ArtsDebug.h"
+#include "arts/Utils/LoopUtils.h"
 #include "arts/Utils/ValueUtils.h"
 ARTS_DEBUG_SETUP(arts_hoisting);
 
 using namespace mlir;
 using namespace mlir::arts;
 
-//===----------------------------------------------------------------------===//
-// Shared Utilities
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// Shared Utilities
+///===----------------------------------------------------------------------===///
 
 /// Conservative loop invariance check for hoisting safety.
 /// Returns true if: value is null, defined outside loop, OR constant after
@@ -67,12 +68,6 @@ static bool isSafeToHoistNonSpeculatableOp(scf::ForOp loop, Operation *op) {
     return isLoopInvariant(loop, denom) && ValueUtils::isProvablyNonZero(denom);
   }
   return false;
-}
-
-static bool isWorkerLoop(scf::ForOp loop) {
-  bool hasEdt = false;
-  loop.walk([&](EdtOp) { hasEdt = true; });
-  return hasEdt;
 }
 
 /// Hoist loop-invariant pure ops (e.g., div/rem/mod/max) out of inner loops.
@@ -120,9 +115,9 @@ static bool hoistInvariantOpsInEdt(EdtOp edt) {
   return changed;
 }
 
-//===----------------------------------------------------------------------===//
-// Epoch Acquire Hoisting
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// Epoch Acquire Hoisting
+///===----------------------------------------------------------------------===///
 ///
 /// Hoists loop-invariant read-only db_acquire ops out of worker loops in
 /// epochs. Safety: hoist only when ALL runtime operands and partition hints are
@@ -146,7 +141,7 @@ static bool hoistInvariantOpsInEdt(EdtOp edt) {
 ///     arts.db_release %acq                 // single release after loop
 ///   }
 ///
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Rematerialize loop-invariant operands to dominate the insertion point.
 /// Returns false if any operand depends on the loop IV or can't be traced.
@@ -418,9 +413,9 @@ static bool hoistAcquiresInEpoch(EpochOp epoch) {
   return changed;
 }
 
-//===----------------------------------------------------------------------===//
-// DbRef Hoisting
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// DbRef Hoisting
+///===----------------------------------------------------------------------===///
 ///
 /// Hoists loop-invariant db_ref ops out of inner loops, reducing repeated
 /// db_ref creation inside tight loops.
@@ -441,7 +436,7 @@ static bool hoistAcquiresInEpoch(EpochOp epoch) {
 ///     }
 ///   }
 ///
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Checks if a db_ref operation is loop invariant (source and all indices
 /// are defined outside the loop).
@@ -502,9 +497,9 @@ static bool hoistOutsideEdt(func::FuncOp funcOp) {
   return changed;
 }
 
-//===----------------------------------------------------------------------===//
-// Pass Definition
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// Pass Definition
+///===----------------------------------------------------------------------===///
 
 namespace {
 struct ArtsHoistingPass : public arts::ArtsHoistingBase<ArtsHoistingPass> {

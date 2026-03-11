@@ -51,8 +51,8 @@ constexpr StringLiteral OutermostParallelDim = "outermost_parallel_dim";
 /// enabling parallelization of outer loops even when inner loops have deps.
 struct DimensionDependency {
   int64_t dimension = 0;               // 0 = outermost, 1 = next, etc.
-  bool hasCarriedDep = false;          // Does THIS dimension carry deps?
-  std::optional<int64_t> distance;     // Dependence distance if known
+  bool hasCarriedDep = false;          /// Does THIS dimension carry deps?
+  std::optional<int64_t> distance;     /// Dependence distance if known
   SmallVector<Value> dependentMemrefs; // Which memrefs cause deps (optional)
 
   /// For JSON serialization
@@ -68,9 +68,9 @@ struct DimensionDependency {
 ///===----------------------------------------------------------------------===///
 class LoopMetadata : public ArtsMetadata {
 public:
-  //===-------------------------------------------------------------===//
-  // Enums
-  //===-------------------------------------------------------------===//
+  ///===-------------------------------------------------------------===///
+  /// Enums
+  ///===-------------------------------------------------------------===///
   /// Reduction operation kinds
   enum class ReductionKind { Add, Mul, Min, Max, And, Or, Xor, Unknown };
   const char *reductionKindToString(ReductionKind kind) const;
@@ -83,9 +83,9 @@ public:
   ParallelClassification
   stringToParallelClassification(llvm::StringRef str) const;
 
-  //===-------------------------------------------------------------===//
-  // Attributes
-  //===-------------------------------------------------------------===//
+  ///===-------------------------------------------------------------===///
+  /// Attributes
+  ///===-------------------------------------------------------------===///
   /// Parallelism analysis
   bool potentiallyParallel = false, hasReductions = false;
   SmallVector<ReductionKind> reductionKinds;
@@ -124,14 +124,14 @@ public:
   /// j).
   std::optional<int64_t> outermostParallelDim;
 
-  //===-------------------------------------------------------------===//
-  // Constructors
-  //===-------------------------------------------------------------===//
+  ///===-------------------------------------------------------------===///
+  /// Constructors
+  ///===-------------------------------------------------------------===///
   explicit LoopMetadata(Operation *op) : ArtsMetadata(op) {}
 
-  //===-------------------------------------------------------------===//
-  // Interface
-  //===-------------------------------------------------------------===//
+  ///===-------------------------------------------------------------===///
+  /// Interface
+  ///===-------------------------------------------------------------===///
   StringRef getMetadataName() const override {
     return AttrNames::LoopMetadata::Name;
   }
@@ -141,9 +141,9 @@ public:
   void importFromJson(const llvm::json::Object &json) override;
   void exportToJson(llvm::json::Object &json) const override;
 
-  //===-------------------------------------------------------------===//
-  // Attribute Creation Helpers
-  //===-------------------------------------------------------------===//
+  ///===-------------------------------------------------------------===///
+  /// Attribute Creation Helpers
+  ///===-------------------------------------------------------------===///
 
   /// Create LoopMetadataAttr from current state using provided context.
   /// Use this when you need to create an attribute without modifying the
