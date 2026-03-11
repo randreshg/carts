@@ -246,6 +246,8 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
     info.accessPattern = acqNode->getAccessPattern();
   info.isValid = summary.isValid;
   info.hasIndirectAccess = summary.hasIndirectAccess;
+  info.preservesDependencyMode =
+      acquire->hasAttr(AttrNames::Operation::PreserveDependencyMode);
 
   return info;
 }
@@ -420,6 +422,10 @@ static SmallVector<DbAcquireOp> createExpandedAcquires(DbAcquireOp original,
     SmallVector<int32_t> entryModes = {static_cast<int32_t>(entryMode)};
     newAcquire.setPartitionSegments(indicesSegs, offsetsSegs, sizesSegs,
                                     entryModes);
+    if (original->hasAttr(AttrNames::Operation::PreserveDependencyMode)) {
+      newAcquire->setAttr(AttrNames::Operation::PreserveDependencyMode,
+                          UnitAttr::get(original.getContext()));
+    }
 
     expanded.push_back(newAcquire);
     ARTS_DEBUG("    Created expanded acquire: " << newAcquire);

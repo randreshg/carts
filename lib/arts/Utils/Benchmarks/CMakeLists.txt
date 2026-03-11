@@ -2,9 +2,11 @@ add_library(CartsBenchmarks STATIC
   CartsBenchmarks.cpp
 )
 
-# -O0: prevent empty parallel region optimization
-# -stdlib=libc++: match the libc++ used at final link time
-target_compile_options(CartsBenchmarks PRIVATE -O0 -stdlib=libc++)
+# Keep benchmark timing helpers as ordinary out-of-line calls.
+# -O0 prevents local optimization of the warmup/timer bodies.
+# -fno-lto and IPO=FALSE prevent whole-program/LTO rewriting of these calls.
+# -stdlib=libc++ matches the libc++ used at final link time.
+target_compile_options(CartsBenchmarks PRIVATE -O0 -fno-lto -stdlib=libc++)
 
 # Enable OpenMP for thread pool warmup (required for single-node ARTS vs OMP comparisons)
 find_package(OpenMP REQUIRED)
@@ -15,6 +17,7 @@ target_link_libraries(CartsBenchmarks PRIVATE ${CMAKE_DL_LIBS})
 
 set_target_properties(CartsBenchmarks PROPERTIES
   OUTPUT_NAME cartsbenchmarks
+  INTERPROCEDURAL_OPTIMIZATION FALSE
 )
 
 install(TARGETS CartsBenchmarks

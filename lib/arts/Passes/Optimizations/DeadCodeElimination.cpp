@@ -26,6 +26,7 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsDebug.h"
+#include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/RemovalUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -248,6 +249,13 @@ struct DeadCodeEliminationPass
     return true;
   }
 
+  bool preservesDependencyMode(Value dep) {
+    if (auto acq = dep.getDefiningOp<DbAcquireOp>()) {
+      return acq->hasAttr(AttrNames::Operation::PreserveDependencyMode);
+    }
+    return false;
+  }
+
   /// Remove unused EDT dependencies and their backing acquires.
   /// This handles "phantom acquires" - acquires for arrays visible in a
   /// parallel scope but not actually accessed in a particular EDT.
@@ -260,12 +268,21 @@ struct DeadCodeEliminationPass
     module.walk([&](EdtOp edt) {
       Block &body = edt.getBody().front();
       SmallVector<unsigned> unusedArgIndices;
+      ValueRange deps = edt.getDependencies();
 
       /// Find block arguments with no real uses (only DbReleaseOp uses)
       for (unsigned i = 0; i < body.getNumArguments(); ++i) {
         BlockArgument arg = body.getArgument(i);
-        if (arg.use_empty() || hasOnlyReleaseUses(arg))
-          unusedArgIndices.push_back(i);
+        bool controlOnly = arg.use_empty() || hasOnlyReleaseUses(arg);
+        if (!controlOnly)
+          continue;
+        if (i < deps.size() && preservesDependencyMode(deps[i])) {
+          ARTS_DEBUG("Keeping control-only dependency " << i
+                                                        << " due to explicit "
+                                                           "dependency mode");
+          continue;
+        }
+        unusedArgIndices.push_back(i);
       }
 
       if (unusedArgIndices.empty())
@@ -273,8 +290,6 @@ struct DeadCodeEliminationPass
 
       /// Collect acquires to remove (those with single use = this EDT dep)
       SmallVector<DbAcquireOp> acquiresToRemove;
-      ValueRange deps = edt.getDependencies();
-
       for (unsigned idx : unusedArgIndices) {
         if (idx >= deps.size())
           continue;
