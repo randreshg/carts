@@ -78,7 +78,7 @@ carts benchmarks run ${BENCH_SET} \
   --size ${SIZE} \
   --nodes 1 \
   --timeout 240 \
-  --arts-config local.cfg \
+  --arts-config external/carts-benchmarks/configs/local.cfg \
   --launcher local \
   --profile "${PROFILE}" \
   --runs 1
@@ -92,7 +92,7 @@ carts benchmarks run \
   --size ${SIZE} \
   --nodes 1 \
   --timeout 240 \
-  --arts-config local.cfg \
+  --arts-config external/carts-benchmarks/configs/local.cfg \
   --launcher local \
   --profile "${PROFILE}" \
   --runs 1
@@ -105,7 +105,7 @@ for SIZE in small medium large extralarge; do
     --size "${SIZE}" \
     --nodes 1 \
     --timeout 240 \
-    --arts-config local.cfg \
+    --arts-config external/carts-benchmarks/configs/local.cfg \
     --launcher local \
     --profile "${PROFILE}" \
     --runs 1
@@ -117,9 +117,9 @@ Run all benchmarks with a thread sweep in one command:
 carts benchmarks run \
   --size extralarge \
   --nodes 1 \
-  --threads 4,8,16,32,64 \
+  --threads 1,2,4,8,16 \
   --timeout 240 \
-  --arts-config local.cfg \
+  --arts-config external/carts-benchmarks/configs/local.cfg \
   --launcher local \
   --profile profile-workload.cfg \
   --runs 1
@@ -253,7 +253,7 @@ carts benchmarks run polybench/gemm \
   --size extralarge \
   --nodes 1 \
   --timeout 240 \
-  --arts-config local.cfg \
+  --arts-config external/carts-benchmarks/configs/local.cfg \
   --launcher local \
   --runs 1
 ```
