@@ -387,7 +387,7 @@ void setupConcurrency(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 /// EDT distribution and loop lowering passes.
 void setupEdtDistribution(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createEdtDistributionPass(AM));
-  pm.addPass(arts::createForLoweringPass());
+  pm.addPass(arts::createForLoweringPass(AM));
 }
 
 /// Concurrency optimization passes.

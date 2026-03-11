@@ -62,6 +62,7 @@ std::unique_ptr<Pass>
 createDistributedHostLoopOutliningPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createEdtDistributionPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createForLoweringPass();
+std::unique_ptr<Pass> createForLoweringPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createLoopFusionPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createEpochOptPass();
 std::unique_ptr<Pass> createArtsHoistingPass();

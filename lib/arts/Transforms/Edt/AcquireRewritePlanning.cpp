@@ -16,6 +16,7 @@
 #include "arts/Transforms/Edt/AcquireRewritePlanning.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 #include "arts/Utils/DbUtils.h"
+#include "arts/Utils/EdtUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -29,11 +30,30 @@ using namespace mlir::arts;
 
 namespace {
 
+static bool hasReachableReadAccess(Value source, Region &scope) {
+  bool hasRead = false;
+  DbUtils::forEachReachableMemoryAccess(
+      source,
+      [&](const DbUtils::MemoryAccessInfo &access) {
+        if (access.kind == DbUtils::MemoryAccessKind::Read) {
+          hasRead = true;
+          return WalkResult::interrupt();
+        }
+        return WalkResult::advance();
+      },
+      &scope);
+  return hasRead;
+}
+
 static bool acquireHasReadAccess(DbAcquireOp acquire) {
   if (!acquire)
     return false;
 
-  SmallVector<Value, 16> worklist{acquire.getPtr()};
+  auto [edt, edtArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+  if (!edt || !edtArg)
+    return false;
+
+  SmallVector<Value, 16> worklist{edtArg};
   llvm::SmallPtrSet<Value, 32> visited;
 
   auto enqueue = [&](Value value) {
@@ -46,7 +66,13 @@ static bool acquireHasReadAccess(DbAcquireOp acquire) {
     if (!value || !visited.insert(value).second)
       continue;
 
+    if (hasReachableReadAccess(value, edt.getBody()))
+      return true;
+
     for (Operation *user : value.getUsers()) {
+      if (!edt.getBody().isAncestor(user->getParentRegion()))
+        continue;
+
       if (auto load = dyn_cast<memref::LoadOp>(user)) {
         if (load.getMemRef() == value)
           return true;
@@ -59,8 +85,11 @@ static bool acquireHasReadAccess(DbAcquireOp acquire) {
       }
 
       if (auto dbRef = dyn_cast<DbRefOp>(user)) {
-        if (dbRef.getSource() == value)
+        if (dbRef.getSource() == value) {
+          if (hasReachableReadAccess(dbRef.getResult(), edt.getBody()))
+            return true;
           enqueue(dbRef.getResult());
+        }
         continue;
       }
 
@@ -194,12 +223,8 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
             ((patternSaysStencil && modeNeedsPatternStencilHalo) ||
              (strategySaysStencil && strategyNeedsStencilHalo));
 
-        /// Keep single-node self-dependent stencil updates coarse. Rewriting an
-        /// in-place `inout` acquire to block mode here forces DB partitioning
-        /// later, which over-partitions Gauss-Seidel style dependence chains
-        /// such as seidel-2d.
         const ArtsAbstractMachine *machine = input.AC->getAbstractMachine();
-        if (machine && !machine->isDistributed() && inoutReadsSelf &&
+        if (machine && !machine->isDistributed() && mode == ArtsMode::inout &&
             (patternSaysStencil || strategySaysStencil)) {
           forceCoarseRewrite = true;
           needsStencilHalo = false;
