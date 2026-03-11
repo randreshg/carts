@@ -64,15 +64,13 @@ def EdtType : Arts_I32Enum<"EdtType", "ARTS EDT type", [
 def EdtTypeAttr : Arts_I32EnumAttr<"edt_type", EdtType>;
 
 /// Enum info for DB allocation modes
+/// Only `read` and `write` are actively used in the compiler.
+/// Integer values match ARTS runtime constants in ArtsKinds.def.
+/// Removed unused modes: pinned(10), once(11), once_local(12),
+/// gpu_read(13), gpu_write(14), lc(15), lc_sync(17),
+/// lc_no_copy(18), gpu_memset(19). Re-add if GPU/LC support is needed.
 def DbMode : Arts_I32Enum<"DbMode", "ARTS DB allocation mode", [
-  I32EnumAttrCase<"read", 8, "read">, I32EnumAttrCase<"write", 9, "write">,
-  I32EnumAttrCase<"pinned", 10, "pinned">, I32EnumAttrCase<"once", 11, "once">,
-  I32EnumAttrCase<"once_local", 12, "once_local">,
-  I32EnumAttrCase<"gpu_read", 13, "gpu_read">,
-  I32EnumAttrCase<"gpu_write", 14, "gpu_write">,
-  I32EnumAttrCase<"lc", 15, "lc">, I32EnumAttrCase<"lc_sync", 17, "lc_sync">,
-  I32EnumAttrCase<"lc_no_copy", 18, "lc_no_copy">,
-  I32EnumAttrCase<"gpu_memset", 19, "gpu_memset">
+  I32EnumAttrCase<"read", 8, "read">, I32EnumAttrCase<"write", 9, "write">
 ]>;
 
 /// Enum attribute for DB allocation modes
@@ -87,6 +85,10 @@ def DbReleaseType : Arts_I32Enum<"DbReleaseType", "ARTS DB release type", [
 /// Enum attribute for DB release types
 def DbReleaseTypeAttr : Arts_I32EnumAttr<"release_type", DbReleaseType>;
 
+/// NOTE: This enum intentionally duplicates omp::ClauseScheduleKind (from the
+/// OpenMP dialect). Using the OMP dialect enum directly would add a tablegen
+/// dependency on the OMP dialect for ARTS attributes, which is undesirable.
+/// ConvertOpenMPToArts.cpp maps between the two enums at conversion time.
 def ForScheduleKind
     : Arts_I32Enum<"ForScheduleKind", "ARTS for-loop schedule kind", [
       I32EnumAttrCase<"Static", 0, "static">,
@@ -97,6 +99,19 @@ def ForScheduleKind
     ]>;
 
 def ForScheduleKindAttr : Arts_I32EnumAttr<"for_schedule", ForScheduleKind>;
+
+/// Enum info for runtime query kinds (consolidated from 5 individual ops)
+def RuntimeQueryKind
+    : Arts_I32Enum<"RuntimeQueryKind", "ARTS runtime query kind", [
+      I32EnumAttrCase<"totalWorkers", 0, "total_workers">,
+      I32EnumAttrCase<"totalNodes", 1, "total_nodes">,
+      I32EnumAttrCase<"currentWorker", 2, "current_worker">,
+      I32EnumAttrCase<"currentNode", 3, "current_node">,
+      I32EnumAttrCase<"parallelWorkerId", 4, "parallel_worker_id">
+    ]>;
+
+/// Enum attribute for runtime query kinds
+def RuntimeQueryKindAttr : Arts_I32EnumAttr<"runtime_query_kind", RuntimeQueryKind>;
 
 /// Enum info for EDT concurrency types
 def EdtConcurrency

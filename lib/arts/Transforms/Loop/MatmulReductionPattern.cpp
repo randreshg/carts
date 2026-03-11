@@ -412,7 +412,7 @@ static scf::ForOp createTiledForIfBeneficial(
   if (trip < minTripCount)
     return nullptr;
 
-  auto tileStepVal = b.create<arith::ConstantIndexOp>(loc, tileSize);
+  auto tileStepVal = arts::createConstantIndex(b, loc, tileSize);
   auto outer = b.create<scf::ForOp>(loc, originalLoop.getLowerBound(),
                                     originalLoop.getUpperBound(), tileStepVal);
 

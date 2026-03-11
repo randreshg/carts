@@ -84,21 +84,6 @@ private:
   SetVector<Operation *> opsToRemove;
 };
 
-///===----------------------------------------------------------------------===///
-/// Helper Functions for Common Patterns
-///===----------------------------------------------------------------------===///
-
-/// Check if an operation is inside a loop (scf.for or affine.for)
-bool isInsideLoop(Operation *op);
-
-/// Collect all load operations from a memref value
-/// Includes both memref.load and affine.load operations
-SmallVector<Operation *> collectLoads(Value memref);
-
-/// Collect all store operations to a memref value
-/// Includes both memref.store and affine.store operations
-SmallVector<Operation *> collectStores(Value memref);
-
 } // namespace arts
 } // namespace mlir
 

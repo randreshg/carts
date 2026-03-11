@@ -18,6 +18,7 @@
 
 #include "../ArtsPassDetails.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"
+#include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
@@ -39,7 +40,7 @@ using namespace mlir;
 using namespace mlir::arts;
 
 ///===----------------------------------------------------------------------===///
-// VerifyMetadataPass
+/// VerifyMetadataPass
 ///===----------------------------------------------------------------------===///
 
 struct VerifyMetadataPass : public VerifyMetadataBase<VerifyMetadataPass> {
@@ -73,7 +74,7 @@ struct VerifyMetadataPass : public VerifyMetadataBase<VerifyMetadataPass> {
     SmallVector<Operation *> loopsMissingMetadata;
 
     module.walk([&](Operation *op) {
-      if (isa<affine::AffineForOp, scf::ForOp, scf::ParallelOp>(op)) {
+      if (analysisManager->getLoopAnalysis().isLoopOperation(op)) {
         totalLoops++;
         if (mm->getLoopMetadata(op)) {
           loopsWithMetadata++;

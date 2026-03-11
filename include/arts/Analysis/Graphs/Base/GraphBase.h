@@ -75,7 +75,7 @@ public:
   virtual ChildIterator childEnd(NodeBase *node) = 0;
 
 protected:
-  // Protected members for derived classes to manage state.
+  /// Protected members for derived classes to manage state.
   SmallVector<std::unique_ptr<NodeBase>> nodes;
   DenseMap<std::pair<NodeBase *, NodeBase *>, std::unique_ptr<EdgeBase>> edges;
   bool isBuilt = false;

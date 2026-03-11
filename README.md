@@ -44,7 +44,7 @@ carts build --arts --debug   # Build ARTS with debug logging
 # Compilation pipeline
 carts cgeist file.c -fopenmp -S > file.mlir     # C to MLIR
 carts compile file.mlir --arts-config arts.cfg      # Apply CARTS passes
-carts compile file.mlir --pipeline edt-distribution # Stop after strategy selection + ForLowering
+carts compile file.mlir --stop-at=edt-distribution   # Stop after strategy selection + ForLowering
 carts compile file.ll -o file                       # LLVM IR to executable
 carts compile file.c -o file                        # All-in-one
 

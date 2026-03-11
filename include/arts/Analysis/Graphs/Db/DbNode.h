@@ -17,6 +17,15 @@
 #include <optional>
 #include <string>
 
+/// Forward declarations for helper classes
+namespace mlir {
+namespace arts {
+class PartitionBoundsAnalyzer;
+class MemoryAccessClassifier;
+class BlockInfoComputer;
+} // namespace arts
+} // namespace mlir
+
 namespace mlir {
 namespace arts {
 
@@ -26,10 +35,10 @@ class DbAcquireNode;
 class ArtsMetadataManager;
 class LoopNode;
 
-////===----------------------------------------------------------------------===////
+///===----------------------------------------------------------------------===///
 /// DbAllocNode
 /// Represents a `arts.db.alloc` operation in the DB graph.
-////===----------------------------------------------------------------------===////
+///===----------------------------------------------------------------------===///
 class DbAllocNode : public NodeBase, public MemrefMetadata {
 public:
   DbAllocNode(DbAllocOp op, DbAnalysis *analysis);
@@ -95,10 +104,10 @@ private:
   DenseMap<DbAcquireOp, DbAcquireNode *> acquireMap;
 };
 
-////===----------------------------------------------------------------------===////
+///===----------------------------------------------------------------------===///
 /// DbAcquireNode
 /// Represents a `arts.db.acquire` operation in the DB graph.
-////===----------------------------------------------------------------------===////
+///===----------------------------------------------------------------------===///
 class DbAcquireNode : public NodeBase {
 public:
   DbAcquireNode(DbAcquireOp op, NodeBase *parent, DbAllocNode *rootAlloc,
@@ -216,7 +225,33 @@ public:
   /// but accesses span a range) - indicating we should fall back to block mode.
   bool validateElementWisePartitioning();
 
+  /// Internal state accessors used by extracted helper classes.
+  /// These are not part of the public API and should not be called directly.
+  Operation *getEdtUserOp() const { return edtUserOp; }
+  void setStencilBoundsInternal(std::optional<StencilBounds> sb) {
+    stencilBounds = std::move(sb);
+  }
+  void setComputedBlockInfo(std::optional<std::pair<Value, Value>> info) {
+    computedBlockInfo = std::move(info);
+  }
+  std::optional<std::pair<Value, Value>> getComputedBlockInfo() const {
+    return computedBlockInfo;
+  }
+  void setOriginalBounds(std::optional<std::pair<Value, Value>> bounds) {
+    originalBounds = std::move(bounds);
+  }
+  void setHasNonConstantOffset(bool v) { hasNonConstantOffset = v; }
+  bool getHasNonConstantOffset() const { return hasNonConstantOffset; }
+  void setAccessPatternCache(AccessPattern pat) const { accessPattern = pat; }
+  const std::optional<AccessPattern> &getAccessPatternCache() const {
+    return accessPattern;
+  }
+
 private:
+  friend class PartitionBoundsAnalyzer;
+  friend class MemoryAccessClassifier;
+  friend class BlockInfoComputer;
+
   DbAcquireOp dbAcquireOp;
   DbReleaseOp dbReleaseOp{nullptr};
   Operation *op = nullptr;

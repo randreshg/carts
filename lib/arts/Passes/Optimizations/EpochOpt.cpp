@@ -17,7 +17,7 @@
 #include "../ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
-#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/DbUtils.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -26,32 +26,27 @@
 #include "llvm/ADT/STLExtras.h"
 
 #include "arts/Utils/ArtsDebug.h"
+#include "arts/Utils/LoopUtils.h"
 ARTS_DEBUG_SETUP(arts_epoch_opt);
 
 using namespace mlir;
 using namespace mlir::arts;
 
-//===----------------------------------------------------------------------===//
-// Shared Utilities
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// Shared Utilities
+///===----------------------------------------------------------------------===///
 
 using AccessMap = DenseMap<Operation *, bool>;
 
 static bool isWriter(ArtsMode mode) {
   if (mode == ArtsMode::uninitialized)
     return true;
-  return DatablockUtils::isWriterMode(mode);
+  return DbUtils::isWriterMode(mode);
 }
 
-static bool isWorkerLoop(scf::ForOp loop) {
-  bool hasEdt = false;
-  loop.walk([&](EdtOp) { hasEdt = true; });
-  return hasEdt;
-}
-
-//===----------------------------------------------------------------------===//
-// Epoch Fusion
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// Epoch Fusion
+///===----------------------------------------------------------------------===///
 ///
 /// Two epochs can be fused when they access disjoint datablocks, or when any
 /// shared datablocks are read-only in both epochs. This preserves concurrency
@@ -82,14 +77,14 @@ static bool isWorkerLoop(scf::ForOp loop) {
 ///     arts.db_release %acq_b
 ///   }
 ///
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Collects all datablock accesses within an epoch.
 /// Returns a map from allocation to whether any access is a write.
 static AccessMap collectAccesses(EpochOp epoch) {
   AccessMap accesses;
   epoch.walk([&](DbAcquireOp acq) {
-    Operation *alloc = DatablockUtils::getUnderlyingDbAlloc(acq.getPtr());
+    Operation *alloc = DbUtils::getUnderlyingDbAlloc(acq.getPtr());
     if (!alloc)
       return;
     bool write = isWriter(acq.getMode());
@@ -181,9 +176,9 @@ static void processRegionForEpochFusion(Region &region, bool &changed) {
   }
 }
 
-//===----------------------------------------------------------------------===//
-// Worker Loop Fusion
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// Worker Loop Fusion
+///===----------------------------------------------------------------------===///
 ///
 /// Fuses consecutive worker loops inside an arts.epoch when they have identical
 /// bounds and no loop-carried values. This interleaves task launches per worker
@@ -207,14 +202,7 @@ static void processRegionForEpochFusion(Region &region, bool &changed) {
 ///     }
 ///   }
 ///
-//===----------------------------------------------------------------------===//
-
-/// Checks if two SCF for loops have compatible bounds (lower, upper, step).
-static bool haveCompatibleBounds(scf::ForOp a, scf::ForOp b) {
-  return ValueUtils::sameValue(a.getLowerBound(), b.getLowerBound()) &&
-         ValueUtils::sameValue(a.getUpperBound(), b.getUpperBound()) &&
-         ValueUtils::sameValue(a.getStep(), b.getStep());
-}
+///===----------------------------------------------------------------------===///
 
 /// Determines if two worker loops can be fused.
 /// Requirements: both are worker loops, no init args, no results,
@@ -285,9 +273,9 @@ static bool fuseWorkerLoopsInEpoch(EpochOp epoch) {
   return changed;
 }
 
-//===----------------------------------------------------------------------===//
-// Pass Definition
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// Pass Definition
+///===----------------------------------------------------------------------===///
 
 namespace {
 struct EpochOptPass : public arts::ArtsEpochOptBase<EpochOptPass> {

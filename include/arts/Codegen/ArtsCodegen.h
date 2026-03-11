@@ -53,6 +53,34 @@ public:
     ArtsCodegen &AC;
   };
 
+  /// Helper class for building runtime calls with a bound location.
+  ///
+  /// Binds an ArtsCodegen instance and a Location so callers can emit runtime
+  /// calls without repeating the loc argument on every invocation.
+  class RuntimeCallBuilder {
+  public:
+    RuntimeCallBuilder(ArtsCodegen &AC, Location loc) : AC(AC), loc(loc) {}
+
+    /// Emit a runtime call that returns a single result.
+    Value call(types::RuntimeFunction fnID, ArrayRef<Value> args) {
+      return AC.createRuntimeCall(fnID, args, loc).getResult(0);
+    }
+
+    /// Emit a runtime call and return the underlying CallOp.
+    func::CallOp callOp(types::RuntimeFunction fnID, ArrayRef<Value> args) {
+      return AC.createRuntimeCall(fnID, args, loc);
+    }
+
+    /// Emit a void runtime call (result ignored).
+    void callVoid(types::RuntimeFunction fnID, ArrayRef<Value> args) {
+      AC.createRuntimeCall(fnID, args, loc);
+    }
+
+  private:
+    ArtsCodegen &AC;
+    Location loc;
+  };
+
   /// Create an operation of specific op type at the current insertion point.
   template <typename OpTy, typename... Args>
   OpTy create(Location location, Args &&...args) {
@@ -132,6 +160,9 @@ public:
   Value castToInt(Type targetType, Value source, Location loc);
   Value castToVoidPtr(Value source, Location loc);
   Value castToLLVMPtr(Value source, Location loc);
+
+  /// Convenience: cast a value to i64 (shorthand for castToInt(Int64, v, loc)).
+  Value ensureI64(Value source, Location loc);
 
   /// Memref helpers
   LLVM::LLVMPointerType getLLVMPointerType(Value source);

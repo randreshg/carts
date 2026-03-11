@@ -6,7 +6,7 @@
 
 #include "arts/Analysis/Db/DbPatternMatchers.h"
 #include "arts/Analysis/Loop/LoopAnalysis.h"
-#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/DbUtils.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -52,7 +52,7 @@ static bool areSymmetricStores(memref::StoreOp s1, memref::StoreOp s2,
   if (s1.getValueToStore() != s2.getValueToStore())
     return false;
 
-  if (!DatablockUtils::isSameMemoryObject(s1.getMemRef(), s2.getMemRef()))
+  if (!DbUtils::isSameMemoryObject(s1.getMemRef(), s2.getMemRef()))
     return false;
 
   auto idx1 = s1.getIndices();
@@ -82,7 +82,7 @@ static unsigned countDistinctMemoryObjects(ArrayRef<Value> memrefs) {
   for (Value memref : memrefs) {
     bool seen = false;
     for (Value existing : distinct) {
-      if (DatablockUtils::isSameMemoryObject(existing, memref)) {
+      if (DbUtils::isSameMemoryObject(existing, memref)) {
         seen = true;
         break;
       }
@@ -95,7 +95,7 @@ static unsigned countDistinctMemoryObjects(ArrayRef<Value> memrefs) {
 
 static bool containsSameMemoryObject(ArrayRef<Value> memrefs, Value target) {
   for (Value memref : memrefs) {
-    if (DatablockUtils::isSameMemoryObject(memref, target))
+    if (DbUtils::isSameMemoryObject(memref, target))
       return true;
   }
   return false;
@@ -195,10 +195,10 @@ static bool isTwoInputProductTerm(Value value, Value storeMemref) {
 
   Value lhsMemref = lhsMemrefs.front();
   Value rhsMemref = rhsMemrefs.front();
-  if (DatablockUtils::isSameMemoryObject(lhsMemref, rhsMemref))
+  if (DbUtils::isSameMemoryObject(lhsMemref, rhsMemref))
     return false;
-  if (DatablockUtils::isSameMemoryObject(lhsMemref, storeMemref) ||
-      DatablockUtils::isSameMemoryObject(rhsMemref, storeMemref))
+  if (DbUtils::isSameMemoryObject(lhsMemref, storeMemref) ||
+      DbUtils::isSameMemoryObject(rhsMemref, storeMemref))
     return false;
 
   return true;
@@ -387,7 +387,7 @@ bool mlir::arts::detectSymmetricTriangularPattern(
     auto store = dyn_cast<memref::StoreOp>(&op);
     if (!store)
       continue;
-    if (!DatablockUtils::isSameMemoryObject(store.getMemRef(), out.memC))
+    if (!DbUtils::isSameMemoryObject(store.getMemRef(), out.memC))
       continue;
     if (!isDiagonalStore(store, outerIV))
       continue;

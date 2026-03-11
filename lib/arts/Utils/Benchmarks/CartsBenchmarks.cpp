@@ -88,9 +88,10 @@ __attribute__((noinline)) void carts_kernel_timer_start(const char *name) {
 
 __attribute__((noinline)) void carts_kernel_timer_stop(const char *name) {
   const char *kernelName = name ? name : "unnamed";
-  double elapsed_sec = carts_kernel_timer_start_sec == 0.0
-                           ? 0.0
-                           : carts_bench_get_time() - carts_kernel_timer_start_sec;
+  double elapsed_sec =
+      carts_kernel_timer_start_sec == 0.0
+          ? 0.0
+          : carts_bench_get_time() - carts_kernel_timer_start_sec;
   printf("kernel.%s: %.6fs\n", kernelName, elapsed_sec);
   fflush(stdout);
 }
@@ -133,9 +134,10 @@ __attribute__((noinline)) void carts_task_timer_start(const char *name) {
 
 __attribute__((noinline)) void carts_task_timer_stop(const char *name) {
   const char *taskName = name ? name : "unnamed";
-  double elapsed_sec = carts_task_timer_start_sec == 0.0
-                           ? 0.0
-                           : carts_bench_get_time() - carts_task_timer_start_sec;
+  double elapsed_sec =
+      carts_task_timer_start_sec == 0.0
+          ? 0.0
+          : carts_bench_get_time() - carts_task_timer_start_sec;
   printf("task.%s[worker=%d]: %.6fs\n", taskName, carts_benchmarks_worker_id(),
          elapsed_sec);
   fflush(stdout);

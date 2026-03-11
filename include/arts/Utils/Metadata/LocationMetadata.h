@@ -37,9 +37,9 @@ public:
     updateKey();
   }
 
-  //===-------------------------------------------------------------===//
-  // Factory Methods
-  //===-------------------------------------------------------------===//
+  ///===-------------------------------------------------------------===///
+  /// Factory Methods
+  ///===-------------------------------------------------------------===///
 
   /// SINGLE factory method for creating LocationMetadata from MLIR Location
   /// Handles FileLineColLoc, FusedLoc, CallSiteLoc, NameLoc
@@ -51,9 +51,9 @@ public:
   /// Extract basename from a file path
   static std::string getBasename(llvm::StringRef path);
 
-  //===-------------------------------------------------------------===//
-  // JSON Serialization
-  //===-------------------------------------------------------------===//
+  ///===-------------------------------------------------------------===///
+  /// JSON Serialization
+  ///===-------------------------------------------------------------===///
 
   /// Import from JSON (reads "file", "line", "column" fields)
   void importFromJson(const llvm::json::Object &json);
@@ -61,9 +61,9 @@ public:
   /// Export to JSON (writes "file", "line", "column" fields)
   void exportToJson(llvm::json::Object &json) const;
 
-  //===-------------------------------------------------------------===//
-  // Accessors
-  //===-------------------------------------------------------------===//
+  ///===-------------------------------------------------------------===///
+  /// Accessors
+  ///===-------------------------------------------------------------===///
 
   /// Get the location key
   llvm::StringRef getKey() const { return key; }

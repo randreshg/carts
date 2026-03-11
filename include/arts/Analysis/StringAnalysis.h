@@ -19,7 +19,7 @@ namespace mlir {
 namespace arts {
 
 ///===----------------------------------------------------------------------===///
-// StringAnalysis
+/// StringAnalysis
 ///===----------------------------------------------------------------------===///
 class StringAnalysis : public ArtsAnalysis {
 public:

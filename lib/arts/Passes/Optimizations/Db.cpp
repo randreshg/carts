@@ -30,7 +30,7 @@
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/DbUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 #include <cstdlib>
@@ -46,21 +46,18 @@ namespace {
 static bool isLoopFullRange(LoopNode *loop, Value dimSize) {
   if (!loop || !dimSize)
     return false;
-  auto *op = loop->getLoopOp();
-  auto forOp = dyn_cast_or_null<scf::ForOp>(op);
-  if (!forOp)
+
+  Value lb = loop->getLowerBound();
+  Value step = loop->getStep();
+  Value ub = loop->getUpperBound();
+  if (!lb || !step || !ub)
     return false;
 
-  Value lb = ValueUtils::stripNumericCasts(forOp.getLowerBound());
-  if (!ValueUtils::isZeroConstant(lb))
+  if (!ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(lb)))
     return false;
-
-  Value step = ValueUtils::stripNumericCasts(forOp.getStep());
-  if (!ValueUtils::isOneConstant(step))
+  if (!ValueUtils::isOneConstant(ValueUtils::stripNumericCasts(step)))
     return false;
-
-  Value ub = ValueUtils::stripNumericCasts(forOp.getUpperBound());
-  return ValueUtils::sameValue(ub, dimSize);
+  return ValueUtils::sameValue(ValueUtils::stripNumericCasts(ub), dimSize);
 }
 
 static bool isIndexFullCoverage(Value idx, Value dimSize,
@@ -137,7 +134,7 @@ static bool writesFullAllocation(DbAcquireNode *acqNode, DbAllocOp allocOp,
       if (!isa<memref::StoreOp>(memOp))
         continue;
       SmallVector<Value> indexChain =
-          DatablockUtils::collectFullIndexChain(dbRef, memOp);
+          DbUtils::collectFullIndexChain(dbRef, memOp);
       if (indexChain.empty())
         return false;
 
@@ -167,8 +164,8 @@ static bool writesFullAllocation(DbAcquireNode *acqNode, DbAllocOp allocOp,
 } // namespace
 
 ///===----------------------------------------------------------------------===///
-// Pass Implementation
-// Adjust Datablock modes based on access patterns
+/// Pass Implementation
+/// Adjust Datablock modes based on access patterns
 ///===----------------------------------------------------------------------===///
 namespace {
 struct DbPass : public arts::DbBase<DbPass> {

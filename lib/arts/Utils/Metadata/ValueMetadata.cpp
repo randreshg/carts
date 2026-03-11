@@ -1,5 +1,5 @@
 ///===----------------------------------------------------------------------===///
-// ValueMetadata.cpp - Value Source Metadata Management
+/// ValueMetadata.cpp - Value Source Metadata Management
 ///===----------------------------------------------------------------------===///
 
 #include "arts/Utils/Metadata/ValueMetadata.h"
@@ -11,7 +11,7 @@ using namespace mlir;
 using namespace mlir::arts;
 
 ///===----------------------------------------------------------------------===///
-// Utility Methods
+/// Utility Methods
 ///===----------------------------------------------------------------------===///
 
 const char *ValueMetadata::sourceTypeToString() const {
@@ -41,7 +41,7 @@ ValueMetadata::stringToSourceType(llvm::StringRef str) {
 }
 
 ///===----------------------------------------------------------------------===///
-// ArtsMetadata Interface Implementation
+/// ArtsMetadata Interface Implementation
 ///===----------------------------------------------------------------------===///
 
 bool ValueMetadata::importFromOp() {

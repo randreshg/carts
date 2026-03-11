@@ -33,7 +33,8 @@ constexpr StringLiteral ArtsId = "arts.id";
 constexpr StringLiteral ArtsCreateId = "arts.create_id";
 constexpr StringLiteral OutlinedFunc = "outlined_func";
 constexpr StringLiteral Nowait = "nowait";
-constexpr StringLiteral PreserveDependencyMode = "arts.preserve_dependency_mode";
+constexpr StringLiteral PreserveDependencyMode =
+    "arts.preserve_dependency_mode";
 
 /// Partition-related attributes (TableGen-generated names)
 constexpr StringLiteral PartitionMode = "partition_mode";
@@ -94,7 +95,7 @@ inline void setRuntimeConfigData(ModuleOp module, StringRef data) {
                   StringAttr::get(module.getContext(), data));
 }
 
-// Forward declaration - defined in HeuristicsConfig.h
+/// Forward declaration - defined in PartitioningHeuristics.h
 struct PartitioningHint;
 
 /// Merge two DbAccessPattern values, keeping the higher-priority pattern.

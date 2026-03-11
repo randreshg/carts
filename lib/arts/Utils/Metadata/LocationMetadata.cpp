@@ -1,5 +1,5 @@
 ///===----------------------------------------------------------------------===///
-// LocationMetadata.cpp - Source Location Metadata Implementation
+/// LocationMetadata.cpp - Source Location Metadata Implementation
 ///===----------------------------------------------------------------------===///
 
 #include "arts/Utils/Metadata/LocationMetadata.h"
@@ -13,7 +13,7 @@ using namespace mlir;
 using namespace mlir::arts;
 
 ///===----------------------------------------------------------------------===///
-// Interface Implementation
+/// Interface Implementation
 ///===----------------------------------------------------------------------===///
 
 void LocationMetadata::updateKey() {
@@ -48,7 +48,7 @@ void LocationMetadata::exportToJson(llvm::json::Object &json) const {
 }
 
 ///===----------------------------------------------------------------------===///
-// Utility Methods
+/// Utility Methods
 ///===----------------------------------------------------------------------===///
 
 std::string LocationMetadata::getBasename(llvm::StringRef path) {
@@ -59,7 +59,7 @@ std::string LocationMetadata::getBasename(llvm::StringRef path) {
 }
 
 ///===----------------------------------------------------------------------===///
-// Factory Methods
+/// Factory Methods
 ///===----------------------------------------------------------------------===///
 
 /// Helper to check if filename is a C/C++ source file

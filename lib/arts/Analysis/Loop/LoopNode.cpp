@@ -58,14 +58,11 @@ LoopNode::LoopNode(Operation *loopOp, LoopAnalysis *loopAnalysis)
 void LoopNode::print(llvm::raw_ostream &os) const {
   os << "LoopNode(" << hierId << ")";
 
-  if (isa<scf::ForOp>(loopOp))
-    os << " scf.for";
-  else if (isa<arts::ForOp>(loopOp))
-    os << " arts.for";
-  else if (isa<scf::ParallelOp>(loopOp))
-    os << " scf.parallel";
-  else if (isa<scf::WhileOp>(loopOp))
-    os << " scf.while";
+  llvm::TypeSwitch<Operation *>(loopOp)
+      .Case<scf::ForOp>([&](auto) { os << " scf.for"; })
+      .Case<arts::ForOp>([&](auto) { os << " arts.for"; })
+      .Case<scf::ParallelOp>([&](auto) { os << " scf.parallel"; })
+      .Case<scf::WhileOp>([&](auto) { os << " scf.while"; });
 
   if (tripCount.has_value())
     os << " trip=" << tripCount.value();
@@ -75,9 +72,9 @@ void LoopNode::print(llvm::raw_ostream &os) const {
   os << "\n";
 }
 
-//===----------------------------------------------------------------------===//
-// Induction Variable Analysis Implementation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// Induction Variable Analysis Implementation
+///===----------------------------------------------------------------------===///
 
 Value LoopNode::getInductionVar() const {
   return llvm::TypeSwitch<Operation *, Value>(loopOp)
@@ -343,73 +340,131 @@ LoopNode::IVExpr LoopNode::analyzeIndexExpr(Value index) {
 }
 
 std::optional<int64_t> LoopNode::getLowerBoundConstant() const {
-  if (auto forOp = dyn_cast<scf::ForOp>(loopOp)) {
-    if (auto constOp =
-            forOp.getLowerBound().getDefiningOp<arith::ConstantIndexOp>())
-      return constOp.value();
-  } else if (auto whileOp = dyn_cast<scf::WhileOp>(loopOp)) {
-    Value iv = getInductionVar();
-    auto arg = iv.dyn_cast<BlockArgument>();
-    if (!arg)
-      return std::nullopt;
-    unsigned argIndex = arg.getArgNumber();
-    if (argIndex >= whileOp.getInits().size())
-      return std::nullopt;
-    Value init = ValueUtils::stripNumericCasts(whileOp.getInits()[argIndex]);
-    return ValueUtils::getConstantValue(init);
-  }
-  return std::nullopt;
+  return llvm::TypeSwitch<Operation *, std::optional<int64_t>>(loopOp)
+      .Case<scf::ForOp>([](auto op) -> std::optional<int64_t> {
+        if (auto constOp =
+                op.getLowerBound()
+                    .template getDefiningOp<arith::ConstantIndexOp>())
+          return constOp.value();
+        return std::nullopt;
+      })
+      .Case<scf::WhileOp>([this](auto op) -> std::optional<int64_t> {
+        Value iv = getInductionVar();
+        auto arg = iv.dyn_cast<BlockArgument>();
+        if (!arg)
+          return std::nullopt;
+        unsigned argIndex = arg.getArgNumber();
+        if (argIndex >= op.getInits().size())
+          return std::nullopt;
+        Value init = ValueUtils::stripNumericCasts(op.getInits()[argIndex]);
+        return ValueUtils::getConstantValue(init);
+      })
+      .Default([](Operation *) { return std::nullopt; });
 }
 
 std::optional<int64_t> LoopNode::getUpperBoundConstant() const {
-  if (auto forOp = dyn_cast<scf::ForOp>(loopOp)) {
-    if (auto constOp =
-            forOp.getUpperBound().getDefiningOp<arith::ConstantIndexOp>())
-      return constOp.value();
-  } else if (auto whileOp = dyn_cast<scf::WhileOp>(loopOp)) {
-    Value iv = getInductionVar();
-    auto arg = iv.dyn_cast<BlockArgument>();
-    if (!arg)
-      return std::nullopt;
-
-    Block &before = whileOp.getBefore().front();
-    auto condition = dyn_cast<scf::ConditionOp>(before.getTerminator());
-    if (!condition)
-      return std::nullopt;
-
-    SmallVector<Value> bounds;
-    collectWhileBounds(condition.getCondition(), arg, bounds);
-    if (bounds.empty())
-      return std::nullopt;
-
-    std::optional<int64_t> minBound;
-    for (Value bound : bounds) {
-      Value stripped = ValueUtils::stripNumericCasts(bound);
-      auto cst = ValueUtils::getConstantValue(stripped);
-      if (!cst)
+  return llvm::TypeSwitch<Operation *, std::optional<int64_t>>(loopOp)
+      .Case<scf::ForOp>([](auto op) -> std::optional<int64_t> {
+        if (auto constOp =
+                op.getUpperBound()
+                    .template getDefiningOp<arith::ConstantIndexOp>())
+          return constOp.value();
         return std::nullopt;
-      if (!minBound || *cst < *minBound)
-        minBound = *cst;
-    }
-    return minBound;
-  }
-  return std::nullopt;
+      })
+      .Case<scf::WhileOp>([this](auto op) -> std::optional<int64_t> {
+        Value iv = getInductionVar();
+        auto arg = iv.dyn_cast<BlockArgument>();
+        if (!arg)
+          return std::nullopt;
+
+        Block &before = op.getBefore().front();
+        auto condition = dyn_cast<scf::ConditionOp>(before.getTerminator());
+        if (!condition)
+          return std::nullopt;
+
+        SmallVector<Value> bounds;
+        collectWhileBounds(condition.getCondition(), arg, bounds);
+        if (bounds.empty())
+          return std::nullopt;
+
+        std::optional<int64_t> minBound;
+        for (Value bound : bounds) {
+          Value stripped = ValueUtils::stripNumericCasts(bound);
+          auto cst = ValueUtils::getConstantValue(stripped);
+          if (!cst)
+            return std::nullopt;
+          if (!minBound || *cst < *minBound)
+            minBound = *cst;
+        }
+        return minBound;
+      })
+      .Default([](Operation *) { return std::nullopt; });
+}
+
+std::optional<int64_t> LoopNode::getStepConstant() const {
+  return llvm::TypeSwitch<Operation *, std::optional<int64_t>>(loopOp)
+      .Case<scf::ForOp>([](auto op) -> std::optional<int64_t> {
+        if (auto constOp =
+                op.getStep().template getDefiningOp<arith::ConstantIndexOp>())
+          return constOp.value();
+        return std::nullopt;
+      })
+      .Case<arts::ForOp>([](auto op) -> std::optional<int64_t> {
+        auto steps = op.getStep();
+        if (!steps.empty()) {
+          int64_t val;
+          if (ValueUtils::getConstantIndex(steps[0], val))
+            return val;
+        }
+        return std::nullopt;
+      })
+      .Default([](Operation *) { return std::nullopt; });
+}
+
+Value LoopNode::getLowerBound() const {
+  return llvm::TypeSwitch<Operation *, Value>(loopOp)
+      .Case<scf::ForOp>([](auto op) { return op.getLowerBound(); })
+      .Case<arts::ForOp>([](auto op) -> Value {
+        auto lbs = op.getLowerBound();
+        return lbs.empty() ? Value() : lbs[0];
+      })
+      .Default([](Operation *) { return Value(); });
+}
+
+Value LoopNode::getUpperBound() const {
+  return llvm::TypeSwitch<Operation *, Value>(loopOp)
+      .Case<scf::ForOp>([](auto op) { return op.getUpperBound(); })
+      .Case<arts::ForOp>([](auto op) -> Value {
+        auto ubs = op.getUpperBound();
+        return ubs.empty() ? Value() : ubs[0];
+      })
+      .Default([](Operation *) { return Value(); });
+}
+
+Value LoopNode::getStep() const {
+  return llvm::TypeSwitch<Operation *, Value>(loopOp)
+      .Case<scf::ForOp>([](auto op) { return op.getStep(); })
+      .Case<arts::ForOp>([](auto op) -> Value {
+        auto steps = op.getStep();
+        return steps.empty() ? Value() : steps[0];
+      })
+      .Default([](Operation *) { return Value(); });
 }
 
 int LoopNode::getNestingDepth() const {
   int depth = 0;
   for (Operation *parent = loopOp->getParentOp(); parent;
        parent = parent->getParentOp()) {
-    if (isa<scf::ForOp, scf::WhileOp, scf::ParallelOp, affine::AffineForOp>(
-            parent))
+    if (isa<scf::ForOp, scf::WhileOp, scf::ParallelOp, affine::AffineForOp,
+            arts::ForOp>(parent))
       ++depth;
   }
   return depth;
 }
 
-//===----------------------------------------------------------------------===//
-// Loop Classification Methods
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// Loop Classification Methods
+///===----------------------------------------------------------------------===///
 
 bool LoopNode::isInnermostLoop() const {
   if (!loopOp)
@@ -438,48 +493,43 @@ bool LoopNode::haveCompatibleBounds(LoopNode *a, LoopNode *b) {
   if (!a || !b)
     return false;
 
-  auto *opA = a->getLoopOp();
-  auto *opB = b->getLoopOp();
+  Operation *opA = a->getLoopOp();
+  Operation *opB = b->getLoopOp();
 
-  /// Handle scf::ForOp
-  if (auto forA = dyn_cast<scf::ForOp>(opA)) {
-    auto forB = dyn_cast<scf::ForOp>(opB);
-    if (!forB)
-      return false;
+  return llvm::TypeSwitch<Operation *, bool>(opA)
+      .Case<scf::ForOp>([&](auto forA) {
+        auto forB = dyn_cast<scf::ForOp>(opB);
+        if (!forB)
+          return false;
+        return ValueUtils::sameValue(forA.getLowerBound(),
+                                     forB.getLowerBound()) &&
+               ValueUtils::sameValue(forA.getUpperBound(),
+                                     forB.getUpperBound()) &&
+               ValueUtils::sameValue(forA.getStep(), forB.getStep());
+      })
+      .Case<arts::ForOp>([&](auto artsForA) {
+        auto artsForB = dyn_cast<arts::ForOp>(opB);
+        if (!artsForB)
+          return false;
 
-    return ValueUtils::sameValue(forA.getLowerBound(), forB.getLowerBound()) &&
-           ValueUtils::sameValue(forA.getUpperBound(), forB.getUpperBound()) &&
-           ValueUtils::sameValue(forA.getStep(), forB.getStep());
-  }
+        auto lbA = artsForA.getLowerBound();
+        auto lbB = artsForB.getLowerBound();
+        if (lbA.size() != lbB.size())
+          return false;
+        for (size_t i = 0; i < lbA.size(); ++i) {
+          if (!ValueUtils::sameValue(lbA[i], lbB[i]))
+            return false;
+        }
 
-  /// Handle arts::ForOp
-  if (auto artsForA = dyn_cast<arts::ForOp>(opA)) {
-    auto artsForB = dyn_cast<arts::ForOp>(opB);
-    if (!artsForB)
-      return false;
-
-    /// Compare lower bounds
-    auto lbA = artsForA.getLowerBound();
-    auto lbB = artsForB.getLowerBound();
-    if (lbA.size() != lbB.size())
-      return false;
-    for (size_t i = 0; i < lbA.size(); ++i) {
-      if (!ValueUtils::sameValue(lbA[i], lbB[i]))
-        return false;
-    }
-
-    /// Compare upper bounds
-    auto ubA = artsForA.getUpperBound();
-    auto ubB = artsForB.getUpperBound();
-    if (ubA.size() != ubB.size())
-      return false;
-    for (size_t i = 0; i < ubA.size(); ++i) {
-      if (!ValueUtils::sameValue(ubA[i], ubB[i]))
-        return false;
-    }
-
-    return true;
-  }
-
-  return false;
+        auto ubA = artsForA.getUpperBound();
+        auto ubB = artsForB.getUpperBound();
+        if (ubA.size() != ubB.size())
+          return false;
+        for (size_t i = 0; i < ubA.size(); ++i) {
+          if (!ValueUtils::sameValue(ubA[i], ubB[i]))
+            return false;
+        }
+        return true;
+      })
+      .Default([](Operation *) { return false; });
 }

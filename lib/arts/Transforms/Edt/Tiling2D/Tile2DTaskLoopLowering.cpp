@@ -94,8 +94,8 @@ computeColumnLaneBounds(TaskLoopPostCloneInput &input, scf::ForOp loop) {
       builder.create<arith::SubIOp>(loc, input.innerStripeCount, one);
   Value adjustedExtent =
       builder.create<arith::AddIOp>(loc, domainExtent, workersMinusOne);
-  Value laneChunk = builder.create<arith::DivUIOp>(
-      loc, adjustedExtent, input.innerStripeCount);
+  Value laneChunk = builder.create<arith::DivUIOp>(loc, adjustedExtent,
+                                                   input.innerStripeCount);
   Value laneOffset =
       builder.create<arith::MulIOp>(loc, input.innerStripeLane, laneChunk);
   Value laneLower = builder.create<arith::AddIOp>(loc, domainLower, laneOffset);
@@ -126,8 +126,8 @@ static void sliceLoopByColumns(TaskLoopPostCloneInput &input, scf::ForOp loop) {
   Value slicedUpper =
       builder.create<arith::MinUIOp>(loc, loop.getUpperBound(), laneUpper);
 
-  scf::ForOp sliced = builder.create<scf::ForOp>(
-      loc, slicedLower, slicedUpper, loop.getStep());
+  scf::ForOp sliced =
+      builder.create<scf::ForOp>(loc, slicedLower, slicedUpper, loop.getStep());
   sliced->setAttrs(loop->getAttrs());
 
   IRMapping map;

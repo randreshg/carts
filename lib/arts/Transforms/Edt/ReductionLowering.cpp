@@ -19,7 +19,7 @@
 
 #include "arts/Transforms/Edt/ReductionLowering.h"
 #include "arts/Analysis/DistributionHeuristics.h"
-#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/DbUtils.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
@@ -195,7 +195,7 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
 
       if (idx < existingResultPtrs.size()) {
         Value existingPtr = existingResultPtrs[idx];
-        auto allocInfo = DatablockUtils::traceToDbAlloc(existingPtr);
+        auto allocInfo = DbUtils::traceToDbAlloc(existingPtr);
         if (allocInfo) {
           auto [rootGuid, rootPtr] = *allocInfo;
           redInfo.finalResultGuids.push_back(rootGuid);
@@ -271,8 +271,7 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
 
     if (isSingleWorker) {
       SmallVector<Value> outerIndices{zeroIndex};
-      Value partialMemRef =
-          AC->create<DbRefOp>(loc, partialPtr, outerIndices);
+      Value partialMemRef = AC->create<DbRefOp>(loc, partialPtr, outerIndices);
       AC->create<memref::StoreOp>(loc, identity, partialMemRef, innerIndices);
     } else {
       auto initLoop =
@@ -283,8 +282,7 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
       Value workerIdx = initLoop.getInductionVar();
 
       SmallVector<Value> outerIndices{workerIdx};
-      Value partialMemRef =
-          AC->create<DbRefOp>(loc, partialPtr, outerIndices);
+      Value partialMemRef = AC->create<DbRefOp>(loc, partialPtr, outerIndices);
       AC->create<memref::StoreOp>(loc, identity, partialMemRef, innerIndices);
 
       AC->setInsertionPointAfter(initLoop);
@@ -454,8 +452,7 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
           AC->create<memref::LoadOp>(loc, workerSlot, workerElemIdx);
 
       SmallVector<Value> finalIndices{zeroIdx};
-      AC->create<memref::StoreOp>(loc, partialValue, finalMemRef,
-                                  finalIndices);
+      AC->create<memref::StoreOp>(loc, partialValue, finalMemRef, finalIndices);
     } else {
       auto combineLoop = AC->create<scf::ForOp>(loopLoc, zeroIdx, numWorkers,
                                                 oneIdx, ValueRange{identity});
@@ -484,7 +481,6 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
       SmallVector<Value> finalIndices{zeroIdx};
       AC->create<memref::StoreOp>(loc, combineLoop.getResult(0), finalMemRef,
                                   finalIndices);
-
     }
   }
 

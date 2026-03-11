@@ -10,7 +10,7 @@
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/DbUtils.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -140,7 +140,7 @@ DbAcquireNode *DbGraph::getOrCreateAcquireNode(DbAcquireOp op) {
 
   /// Use getUnderlyingDbAlloc to trace through acquires to find the ultimate
   /// DbAllocOp
-  Operation *allocOp = DatablockUtils::getUnderlyingDbAlloc(sourcePtr);
+  Operation *allocOp = DbUtils::getUnderlyingDbAlloc(sourcePtr);
   if (!allocOp) {
     ARTS_ERROR("Cannot get underlying DB alloc for acquire");
     return nullptr;
@@ -156,8 +156,7 @@ DbAcquireNode *DbGraph::getOrCreateAcquireNode(DbAcquireOp op) {
 
   /// Get the immediate underlying DB from sourcePtr to determine if this is a
   /// nested acquire
-  Operation *immediateUnderlying =
-      DatablockUtils::getUnderlyingDb(sourcePtr, 0);
+  Operation *immediateUnderlying = DbUtils::getUnderlyingDb(sourcePtr, 0);
   if (!immediateUnderlying) {
     ARTS_ERROR("Cannot get immediate underlying DB for acquire");
     return nullptr;
@@ -501,8 +500,8 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
       db["arts_id"] = artsId;
 
     /// Partitioning mode
-    PartitionMode partitionMode = DatablockUtils::getPartitionModeFromStructure(
-        allocNode->getDbAllocOp());
+    PartitionMode partitionMode =
+        DbUtils::getPartitionModeFromStructure(allocNode->getDbAllocOp());
     db["partitioning"] = stringifyPartitionMode(partitionMode);
 
     /// Helper: extract static value or null for dynamic
@@ -575,7 +574,7 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
     staticAnalysis["is_parallel_friendly"] = allocNode->isParallelFriendly();
     staticAnalysis["can_be_partitioned"] = allocNode->canBePartitioned();
     staticAnalysis["is_fine_grained"] =
-        DatablockUtils::isFineGrained(allocNode->getDbAllocOp());
+        DbUtils::isFineGrained(allocNode->getDbAllocOp());
 
     /// Twin-diff analysis
     staticAnalysis["has_single_writer"] = allocNode->hasSingleWriter();

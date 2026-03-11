@@ -50,7 +50,7 @@ public:
   }
 
   //===--------------------------------------------------------------------===//
-  // Induction Variable Analysis
+  /// Induction Variable Analysis
   //===--------------------------------------------------------------------===//
 
   /// Get the induction variable for this loop
@@ -79,11 +79,25 @@ public:
   IVExpr analyzeIndexExpr(Value index);
   std::optional<int64_t> getLowerBoundConstant() const;
   std::optional<int64_t> getUpperBoundConstant() const;
+  std::optional<int64_t> getStepConstant() const;
   int getNestingDepth() const;
   void clearIVCache() { ivDependencyCache.clear(); }
 
   //===--------------------------------------------------------------------===//
-  // Loop Classification Methods
+  /// Raw Value Accessors
+  //===--------------------------------------------------------------------===//
+
+  /// Get the lower bound value for this loop.
+  Value getLowerBound() const;
+
+  /// Get the upper bound value for this loop.
+  Value getUpperBound() const;
+
+  /// Get the step value for this loop.
+  Value getStep() const;
+
+  //===--------------------------------------------------------------------===//
+  /// Loop Classification Methods
   //===--------------------------------------------------------------------===//
 
   /// Check if this loop is innermost (contains no nested loops of same type).

@@ -60,16 +60,16 @@ void EdtInvariantCodeMotionPass::runOnOperation() {
     ARTS_INFO("Moved " << movedCount << " operations out of EDT.");
   });
 
-  // if (!changed)
-  //  markAllAnalysesPreserved();
+  /// if (!changed)
+  ///  markAllAnalysesPreserved();
 
   ARTS_INFO_FOOTER(EdtInvariantCodeMotionPass);
   ARTS_DEBUG_REGION(module.dump(););
 }
 
-////===----------------------------------------------------------------------===////
+///===----------------------------------------------------------------------===///
 /// Pass creation
-////===----------------------------------------------------------------------===////
+///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {
 std::unique_ptr<Pass> createEdtInvariantCodeMotionPass() {

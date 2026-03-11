@@ -31,16 +31,21 @@ ArtsAnalysisManager::ArtsAnalysisManager(ModuleOp module,
 ArtsAnalysisManager::~ArtsAnalysisManager() {}
 
 void ArtsAnalysisManager::invalidate() {
-  if (dbAnalysis)
-    dbAnalysis->invalidate();
+  /// Invalidate dependents before dependencies:
+  /// EdtAnalysis depends on DbAnalysis depends on LoopAnalysis
   if (edtAnalysis)
     edtAnalysis->invalidate();
+  if (dbAnalysis)
+    dbAnalysis->invalidate();
   if (loopAnalysis)
     loopAnalysis->invalidate();
   if (stringAnalysis)
     stringAnalysis->invalidate();
+  if (heuristicsConfig)
+    heuristicsConfig->clearDecisions();
   if (metadataManager)
     metadataManager->clear();
+  cachedDiagnosticJson.reset();
 }
 
 DbAnalysis &ArtsAnalysisManager::getDbAnalysis() {
@@ -136,14 +141,16 @@ ArtsAnalysisManager::getLoopDistributionPattern(Operation *loopOp) {
 
 bool ArtsAnalysisManager::invalidateFunction(func::FuncOp func) {
   bool invalidated = false;
-  if (dbAnalysis)
-    invalidated |= dbAnalysis->invalidateGraph(func);
+  /// Invalidate dependents before dependencies
   if (edtAnalysis)
     invalidated |= edtAnalysis->invalidateGraph(func);
+  if (dbAnalysis)
+    invalidated |= dbAnalysis->invalidateGraph(func);
   if (loopAnalysis)
     loopAnalysis->invalidate();
   if (stringAnalysis)
     stringAnalysis->invalidate();
+  cachedDiagnosticJson.reset();
   return invalidated;
 }
 

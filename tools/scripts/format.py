@@ -10,9 +10,10 @@ from carts_styles import console, print_error, print_info, print_success, print_
 from scripts.config import PlatformConfig, get_config
 from scripts.run import run_subprocess
 
-# Source files handled by `carts format`.
+# Source files handled by `carts format`. Only C/C++ are formatted; TableGen
+# (.td) files use different syntax and must not be passed to clang-format.
 FORMAT_SUFFIXES = {
-    ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inc", ".td"
+    ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inc"
 }
 FORMAT_EXCLUDED_DIRS = {
     ".git", ".install", "build", "external", "third_party"
@@ -78,7 +79,7 @@ def format_sources(
         None,
         help=(
             "Files or directories to format. If omitted, formats tracked "
-            "C/C++/TableGen sources in the repo."
+            "C/C++ sources in the repo."
         ),
     ),
     check_only: bool = typer.Option(

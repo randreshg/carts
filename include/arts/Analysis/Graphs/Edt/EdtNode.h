@@ -62,6 +62,12 @@ public:
   /// Check if this EDT has parallel loop metadata
   bool hasParallelLoopMetadata() const;
 
+  /// Check if this EDT contains nested EDT operations
+  bool hasNestedEdts() const;
+
+  /// Check if this EDT contains nested task-type EDT operations
+  bool hasNestedTaskEdts() const;
+
   NodeKind getKind() const override { return NodeKind::EdtTask; }
   static bool classof(const NodeBase *N) {
     return N->getKind() == NodeKind::EdtTask;

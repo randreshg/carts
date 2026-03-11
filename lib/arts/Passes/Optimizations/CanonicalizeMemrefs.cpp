@@ -140,8 +140,8 @@ static Value materializeOpFoldResult(OpFoldResult ofr, OpBuilder &builder,
   if (auto val = ofr.dyn_cast<Value>())
     return val;
   if (auto attr = ofr.dyn_cast<Attribute>())
-    return builder.create<arith::ConstantIndexOp>(
-        loc, attr.cast<IntegerAttr>().getInt());
+    return arts::createConstantIndex(builder, loc,
+                                     attr.cast<IntegerAttr>().getInt());
   return nullptr;
 }
 
@@ -472,8 +472,8 @@ CanonicalizeMemrefsPass::detectPattern(Value alloc) {
           SmallVector<Value> dynSizes;
           for (int64_t d = 0; d < memType.getRank(); ++d) {
             if (memType.isDynamicDim(d)) {
-              dynSizes.push_back(cleanupBuilder.create<arith::ConstantIndexOp>(
-                  loadOp.getLoc(), 0));
+              dynSizes.push_back(
+                  arts::createZeroIndex(cleanupBuilder, loadOp.getLoc()));
             }
           }
           Value repl = cleanupBuilder.create<memref::AllocOp>(
@@ -486,8 +486,8 @@ CanonicalizeMemrefsPass::detectPattern(Value alloc) {
           SmallVector<Value> dynSizes;
           for (int64_t d = 0; d < memType.getRank(); ++d) {
             if (memType.isDynamicDim(d)) {
-              dynSizes.push_back(cleanupBuilder.create<arith::ConstantIndexOp>(
-                  affineLoad.getLoc(), 0));
+              dynSizes.push_back(
+                  arts::createZeroIndex(cleanupBuilder, affineLoad.getLoc()));
             }
           }
           Value repl = cleanupBuilder.create<memref::AllocOp>(
@@ -557,8 +557,8 @@ CanonicalizeMemrefsPass::detectPattern(Value alloc) {
         }
         /// Case 2: rootAlloc is cast from static alloc (e.g., memref<10xf64>)
         else if (underlyingType.hasStaticShape()) {
-          pattern.dimensions.push_back(b.create<arith::ConstantIndexOp>(
-              loc, underlyingType.getDimSize(0)));
+          pattern.dimensions.push_back(
+              arts::createConstantIndex(b, loc, underlyingType.getDimSize(0)));
         } else {
           ARTS_DEBUG("  Cannot get dimension from allocation");
           return std::nullopt;
@@ -566,7 +566,7 @@ CanonicalizeMemrefsPass::detectPattern(Value alloc) {
       } else {
         /// Static dimension in allocType
         pattern.dimensions.push_back(
-            b.create<arith::ConstantIndexOp>(loc, allocType.getDimSize(0)));
+            arts::createConstantIndex(b, loc, allocType.getDimSize(0)));
       }
     }
 
@@ -598,8 +598,8 @@ CanonicalizeMemrefsPass::detectPattern(Value alloc) {
       return std::nullopt;
     }
   } else {
-    outerSize = b.create<arith::ConstantIndexOp>(pattern.rootAlloc.getLoc(),
-                                                 allocType.getDimSize(0));
+    outerSize = arts::createConstantIndex(b, pattern.rootAlloc.getLoc(),
+                                          allocType.getDimSize(0));
   }
   pattern.dimensions.push_back(outerSize);
 
@@ -1677,7 +1677,7 @@ void CanonicalizeMemrefsPass::handleDeallocations(
 Value CanonicalizeMemrefsPass::createConstantIndex(OpBuilder &builder,
                                                    Location loc,
                                                    int64_t value) {
-  return builder.create<arith::ConstantIndexOp>(loc, value);
+  return arts::createConstantIndex(builder, loc, value);
 }
 
 SmallVector<Value> CanonicalizeMemrefsPass::clampDependencyIndices(
@@ -1703,7 +1703,7 @@ SmallVector<Value> CanonicalizeMemrefsPass::clampDependencyIndices(
 
   auto oneForType = [&](Type ty) -> Value {
     if (ty.isIndex())
-      return builder.create<arith::ConstantIndexOp>(loc, 1);
+      return arts::createOneIndex(builder, loc);
     if (auto intTy = ty.dyn_cast<IntegerType>())
       return builder.create<arith::ConstantIntOp>(loc, 1, intTy);
     return Value();
@@ -1711,7 +1711,7 @@ SmallVector<Value> CanonicalizeMemrefsPass::clampDependencyIndices(
 
   auto zeroForType = [&](Type ty) -> Value {
     if (ty.isIndex())
-      return builder.create<arith::ConstantIndexOp>(loc, 0);
+      return arts::createZeroIndex(builder, loc);
     if (auto intTy = ty.dyn_cast<IntegerType>())
       return builder.create<arith::ConstantIntOp>(loc, 0, intTy);
     return Value();
@@ -1742,8 +1742,8 @@ SmallVector<Value> CanonicalizeMemrefsPass::clampDependencyIndices(
     } else if (sourceType.isDynamicDim(dim)) {
       dimSize = builder.create<memref::DimOp>(loc, source, dim);
     } else {
-      dimSize = builder.create<arith::ConstantIndexOp>(
-          loc, sourceType.getDimSize(dim));
+      dimSize =
+          arts::createConstantIndex(builder, loc, sourceType.getDimSize(dim));
     }
 
     Value dimSizeTyped = castToType(dimSize, idxTy);
@@ -1848,8 +1848,8 @@ bool CanonicalizeMemrefsPass::extractNestedAllocations(Value storedVal,
     innerSize = innerAlloc.getDynamicSizes()[0];
   } else {
     OpBuilder innerB(loopOp);
-    innerSize = innerB.create<arith::ConstantIndexOp>(innerAlloc.getLoc(),
-                                                      innerType.getDimSize(0));
+    innerSize = arts::createConstantIndex(innerB, innerAlloc.getLoc(),
+                                          innerType.getDimSize(0));
   }
   pattern.dimensions.push_back(innerSize);
 

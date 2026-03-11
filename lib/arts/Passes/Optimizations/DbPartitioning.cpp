@@ -59,14 +59,14 @@
 #include <cstdint>
 #include <optional>
 
-#include "arts/Transforms/Datablock/DbBlockPlanResolver.h"
-#include "arts/Transforms/Datablock/DbPartitionDecisionArbiter.h"
-#include "arts/Transforms/Datablock/DbPartitionPlanner.h"
-#include "arts/Transforms/Datablock/DbRewriter.h"
-#include "arts/Transforms/Datablock/StencilBoundsLowering.h"
+#include "arts/Transforms/Db/DbBlockPlanResolver.h"
+#include "arts/Transforms/Db/DbPartitionDecisionArbiter.h"
+#include "arts/Transforms/Db/DbPartitionPlanner.h"
+#include "arts/Transforms/Db/DbRewriter.h"
+#include "arts/Transforms/Db/StencilBoundsLowering.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/DbUtils.h"
 #include "arts/Utils/EdtUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 ARTS_DEBUG_SETUP(db_partitioning);
@@ -232,7 +232,7 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
   if (acqNode && acqNode->getAnalysis())
     summary = acqNode->getAnalysis()->analyzeAcquirePartition(acquire, builder);
   else {
-    summary.mode = DatablockUtils::getPartitionModeFromStructure(acquire);
+    summary.mode = DbUtils::getPartitionModeFromStructure(acquire);
     summary.isValid = false;
   }
   info.mode = summary.mode;
@@ -257,7 +257,7 @@ static void resetCoarseAcquireRanges(DbAllocOp allocOp, DbAllocNode *allocNode,
   if (!allocNode || allocOp.getSizes().empty())
     return;
 
-  Value zero = builder.create<arith::ConstantIndexOp>(allocOp.getLoc(), 0);
+  Value zero = arts::createZeroIndex(builder, allocOp.getLoc());
   SmallVector<Value> fullOffsets;
   SmallVector<Value> fullSizes;
   for (Value size : allocOp.getSizes()) {
@@ -472,10 +472,10 @@ static SmallVector<DbRefOp> collectDbRefUsers(BlockArgument arg) {
 
 static SmallVector<Value> collectAccessIndices(DbRefOp dbRef) {
   SetVector<Operation *> memOps;
-  DatablockUtils::collectReachableMemoryOps(dbRef.getResult(), memOps,
-                                            dbRef->getParentRegion());
+  DbUtils::collectReachableMemoryOps(dbRef.getResult(), memOps,
+                                     dbRef->getParentRegion());
   for (Operation *memOp : memOps) {
-    SmallVector<Value> indices = DatablockUtils::getMemoryAccessIndices(memOp);
+    SmallVector<Value> indices = DbUtils::getMemoryAccessIndices(memOp);
     if (!indices.empty())
       return indices;
   }
@@ -483,7 +483,7 @@ static SmallVector<Value> collectAccessIndices(DbRefOp dbRef) {
 }
 
 static SmallVector<Value> collectAccessIndicesFromUser(Operation *refUser) {
-  SmallVector<Value> direct = DatablockUtils::getMemoryAccessIndices(refUser);
+  SmallVector<Value> direct = DbUtils::getMemoryAccessIndices(refUser);
   if (!direct.empty())
     return direct;
 
@@ -491,11 +491,10 @@ static SmallVector<Value> collectAccessIndicesFromUser(Operation *refUser) {
     if (!result.getType().isa<MemRefType>())
       continue;
     SetVector<Operation *> memOps;
-    DatablockUtils::collectReachableMemoryOps(result, memOps,
-                                              refUser->getParentRegion());
+    DbUtils::collectReachableMemoryOps(result, memOps,
+                                       refUser->getParentRegion());
     for (Operation *memOp : memOps) {
-      SmallVector<Value> indices =
-          DatablockUtils::getMemoryAccessIndices(memOp);
+      SmallVector<Value> indices = DbUtils::getMemoryAccessIndices(memOp);
       if (!indices.empty())
         return indices;
     }
@@ -638,8 +637,7 @@ bool DbPartitioningPass::expandMultiEntryAcquires() {
     /// If the stencil entries are explicit fine-grained deps (e.g., u[i-1],
     /// u[i], u[i+1]), prefer expansion to element-wise acquires.
     int64_t minOffset = 0, maxOffset = 0;
-    if (DatablockUtils::hasMultiEntryStencilPattern(original, minOffset,
-                                                    maxOffset)) {
+    if (DbUtils::hasMultiEntryStencilPattern(original, minOffset, maxOffset)) {
       bool allFineGrainedEntries = true;
       for (size_t entryIdx = 0; entryIdx < numEntries; ++entryIdx) {
         if (original.getPartitionEntryMode(entryIdx) !=
@@ -875,7 +873,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   }
 
   /// Already fine-grained by structure - skip
-  if (allocNode && DatablockUtils::isFineGrained(allocNode->getDbAllocOp())) {
+  if (allocNode && DbUtils::isFineGrained(allocNode->getDbAllocOp())) {
     ARTS_DEBUG("  Already fine-grained by structure - SKIP");
     heuristics.recordDecision(
         "Partition-AlreadyFineGrained", false,
@@ -1036,9 +1034,9 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         auto dimOpt = acqNode->getPartitionOffsetDim(partitionOffset,
                                                      /*requireLeading=*/false);
         if (!dimOpt) {
-          bool writesThroughAcquire =
-              acquire.getMode() == ArtsMode::out ||
-              acquire.getMode() == ArtsMode::inout || acqNode->hasStores();
+          bool writesThroughAcquire = acquire.getMode() == ArtsMode::out ||
+                                      acquire.getMode() == ArtsMode::inout ||
+                                      acqNode->hasStores();
           bool preserveFromExplicitContract =
               hasDistributionContract && (hasBlockHints || inferredBlock) &&
               (!writesThroughAcquire || isMultinodeMachine);
@@ -1218,23 +1216,16 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
           continue;
 
         /// For each partition index, try to find the enclosing loop step
+        auto &loopAnalysis = AM->getLoopAnalysis();
         for (Value idx : partitionIndices) {
-          Value blockSize;
-          Operation *parent = info.acquire->getParentOp();
-          while (parent) {
-            if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
-              Value loopIV = forOp.getInductionVar();
-              if (ValueUtils::dependsOn(idx, loopIV)) {
-                blockSize = forOp.getStep();
-                ARTS_DEBUG(
-                    "    Found block size from loop step: " << blockSize);
-                break;
-              }
+          if (LoopNode *drivingLoop = loopAnalysis.findEnclosingLoopDrivenBy(
+                  info.acquire.getOperation(), idx)) {
+            Value blockSize = drivingLoop->getStep();
+            if (blockSize) {
+              ARTS_DEBUG("    Found block size from loop step: " << blockSize);
+              blockSizesForNDBlock.push_back(blockSize);
             }
-            parent = parent->getParentOp();
           }
-          if (blockSize)
-            blockSizesForNDBlock.push_back(blockSize);
         }
         if (!blockSizesForNDBlock.empty())
           break; /// Use first acquire with valid block sizes
@@ -1317,22 +1308,16 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       }
 
       /// For each partition index, try to find the enclosing loop step
+      auto &loopAnalysis = AM->getLoopAnalysis();
       for (Value idx : indicesToCheck) {
-        Value blockSize;
-        Operation *parent = info.acquire->getParentOp();
-        while (parent) {
-          if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
-            Value loopIV = forOp.getInductionVar();
-            if (ValueUtils::dependsOn(idx, loopIV)) {
-              blockSize = forOp.getStep();
-              ARTS_DEBUG("    Found block size from loop step: " << blockSize);
-              break;
-            }
+        if (LoopNode *drivingLoop = loopAnalysis.findEnclosingLoopDrivenBy(
+                info.acquire.getOperation(), idx)) {
+          Value blockSize = drivingLoop->getStep();
+          if (blockSize) {
+            ARTS_DEBUG("    Found block size from loop step: " << blockSize);
+            blockSizesForNDBlock.push_back(blockSize);
           }
-          parent = parent->getParentOp();
         }
-        if (blockSize)
-          blockSizesForNDBlock.push_back(blockSize);
       }
       if (!blockSizesForNDBlock.empty())
         break; /// Use first acquire with valid block sizes
@@ -1412,7 +1397,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
     /// Collect stencil bounds from acquire nodes or multi-entry structure.
     /// For multi-entry stencil acquires (not expanded), extract halo bounds
-    /// from the partition indices pattern using DatablockUtils.
+    /// from the partition indices pattern using DbUtils.
     for (DbAcquireNode *acqNode : allocAcquireNodes) {
       if (!acqNode)
         continue;
@@ -1431,8 +1416,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       /// Second try: for multi-entry stencil acquires, extract from structure
       if (acq.hasMultiplePartitionEntries()) {
         int64_t minOffset = 0, maxOffset = 0;
-        if (DatablockUtils::hasMultiEntryStencilPattern(acq, minOffset,
-                                                        maxOffset)) {
+        if (DbUtils::hasMultiEntryStencilPattern(acq, minOffset, maxOffset)) {
           /// minOffset is negative (left halo), maxOffset is positive (right)
           int64_t haloL = -minOffset;
           int64_t haloR = maxOffset;
@@ -1475,8 +1459,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     if (!allocOp.getElementSizes().empty()) {
       if (auto staticSize =
               arts::extractBlockSizeFromHint(allocOp.getElementSizes()[0]))
-        info.totalRows =
-            builder.create<arith::ConstantIndexOp>(loc, *staticSize);
+        info.totalRows = arts::createConstantIndex(builder, loc, *staticSize);
       else
         info.totalRows = allocOp.getElementSizes()[0];
 
@@ -1485,9 +1468,9 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
           info.totalRows = builder.create<arith::IndexCastOp>(
               loc, builder.getIndexType(), info.totalRows);
 
-        Value haloTotal = builder.create<arith::ConstantIndexOp>(
-            loc, info.haloLeft + info.haloRight);
-        Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+        Value haloTotal = arts::createConstantIndex(
+            builder, loc, info.haloLeft + info.haloRight);
+        Value zero = arts::createZeroIndex(builder, loc);
         Value canSubtract = builder.create<arith::CmpIOp>(
             loc, arith::CmpIPredicate::uge, info.totalRows, haloTotal);
         Value reduced =
@@ -1511,7 +1494,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       decision = PartitioningDecision::blockND(
           ctx, decision.outerRank,
           "Single-sided stencil pattern - using BLOCK instead");
-      stencilInfo = std::nullopt; // Clear stencil info
+      stencilInfo = std::nullopt; /// Clear stencil info
     }
   }
 

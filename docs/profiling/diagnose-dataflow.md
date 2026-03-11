@@ -440,4 +440,3 @@ carts compile input.mlir --diagnose
 
 - [CARTS Heuristics](heuristics/single_rank/db_granularity.md) - DB granularity guidance and partitioning heuristics
 - [CARTS Pipeline Guide](../agents.md) - Full pipeline reference and troubleshooting
-- [Developer Guide](developer-guide.md) - CARTS development guide

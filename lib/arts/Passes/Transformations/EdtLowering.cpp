@@ -31,7 +31,7 @@
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/DbUtils.h"
 #include "arts/Utils/Metadata/IdRegistry.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -71,9 +71,9 @@ using namespace mlir::arts;
 namespace {
 
 ///===----------------------------------------------------------------------===///
-// EdtEnvManager
-// Manages the environment analysis for EDT regions by collecting parameters,
-// constants, and dependencies used in the region.
+/// EdtEnvManager
+/// Manages the environment analysis for EDT regions by collecting parameters,
+/// constants, and dependencies used in the region.
 ///===----------------------------------------------------------------------===///
 class EdtEnvManager {
 public:
@@ -131,7 +131,7 @@ private:
 };
 
 ///===----------------------------------------------------------------------===///
-// EDT Lowering Pass Implementation
+/// EDT Lowering Pass Implementation
 ///===----------------------------------------------------------------------===///
 struct EdtLoweringPass : public arts::EdtLoweringBase<EdtLoweringPass> {
   explicit EdtLoweringPass(uint64_t idStride = IdRegistry::DefaultStride)
@@ -178,7 +178,7 @@ private:
 } // namespace
 
 ///===----------------------------------------------------------------------===///
-// Pass Implementation
+/// Pass Implementation
 ///===----------------------------------------------------------------------===///
 
 void EdtLoweringPass::runOnOperation() {
@@ -270,7 +270,7 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   /// sizes) so depCount matches the slots produced by rec_dep lowering.
   Value depCount = AC->createIntConstant(0, AC->Int32, loc);
   for (Value dep : edtDeps) {
-    SmallVector<Value> sizes = DatablockUtils::getDependencySizesFromDb(dep);
+    SmallVector<Value> sizes = DbUtils::getDependencySizesFromDb(dep);
     Value numElements = AC->create<DbNumElementsOp>(loc, sizes);
     numElements = AC->castToInt(AC->Int32, numElements, loc);
     depCount = AC->create<arith::AddIOp>(loc, depCount, numElements);
@@ -596,7 +596,7 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     Value dep = deps[depIndex];
     /// Handle both DbAcquireOp and DepDbAcquireOp as dependency sources, even
     /// when they are threaded through block arguments.
-    Operation *underlyingDb = DatablockUtils::getUnderlyingDb(dep);
+    Operation *underlyingDb = DbUtils::getUnderlyingDb(dep);
     auto dbAcquireOp = dyn_cast_or_null<DbAcquireOp>(underlyingDb);
     auto depDbAcquireOp = dyn_cast_or_null<DepDbAcquireOp>(underlyingDb);
     if (!dbAcquireOp && !depDbAcquireOp) {
@@ -628,7 +628,7 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     if (dbAcquireOp && !dbAcquireOp.getElementOffsets().empty()) {
       /// Get elementSizes from underlying allocation for stride computation
       auto alloc = dyn_cast_or_null<DbAllocOp>(
-          DatablockUtils::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()));
+          DbUtils::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()));
 
       if (alloc && !alloc.getElementSizes().empty()) {
         auto elementSizes = alloc.getElementSizes();
@@ -645,10 +645,10 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
         /// Compute byte_offset = linearize(element_offsets, elementSizes) *
         /// scalarSize For 2D: byte_offset = (elemOffsets[0] * elementSizes[1] +
         /// elemOffsets[1]) * scalarSize
-        Value linearOffset = AC->create<arith::ConstantIndexOp>(loc, 0);
+        Value linearOffset = AC->createIndexConstant(0, loc);
         for (size_t i = 0; i < elemOffsets.size(); ++i) {
           /// Compute stride for this dimension (product of trailing dims)
-          Value stride = AC->create<arith::ConstantIndexOp>(loc, 1);
+          Value stride = AC->createIndexConstant(1, loc);
           for (size_t j = i + 1; j < elementSizes.size(); ++j) {
             stride = AC->create<arith::MulIOp>(loc, stride, elementSizes[j]);
           }
@@ -660,7 +660,7 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
         byteOffset = AC->create<arith::MulIOp>(loc, linearOffset, scalarSize);
 
         /// Compute byte_size = product(element_sizes) * scalarSize
-        Value totalElements = AC->create<arith::ConstantIndexOp>(loc, 1);
+        Value totalElements = AC->createIndexConstant(1, loc);
         for (Value sz : elemSizes) {
           totalElements = AC->create<arith::MulIOp>(loc, totalElements, sz);
         }
@@ -668,22 +668,22 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
         hasEsdDeps = true;
       } else {
         /// Fallback: no allocation info available
-        byteOffset = AC->create<arith::ConstantIndexOp>(loc, 0);
-        byteSize = AC->create<arith::ConstantIndexOp>(loc, 0);
+        byteOffset = AC->createIndexConstant(0, loc);
+        byteSize = AC->createIndexConstant(0, loc);
       }
     } else {
       /// No partial acquisition - use zero for standard dependency
-      byteOffset = AC->create<arith::ConstantIndexOp>(loc, 0);
-      byteSize = AC->create<arith::ConstantIndexOp>(loc, 0);
+      byteOffset = AC->createIndexConstant(0, loc);
+      byteSize = AC->createIndexConstant(0, loc);
     }
     byteOffsets.push_back(byteOffset);
     byteSizes.push_back(byteSize);
 
     DbAllocOp allocForHint =
-        dyn_cast_or_null<DbAllocOp>(DatablockUtils::getUnderlyingDbAlloc(dep));
+        dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(dep));
     if (dbAcquireOp && !allocForHint)
       allocForHint = dyn_cast<DbAllocOp>(
-          DatablockUtils::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()));
+          DbUtils::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()));
 
     /// Extract acquire mode: Convert ArtsMode to DbMode enum
     ArtsMode artsMode = ArtsMode::inout;
@@ -812,7 +812,7 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
     Value base = AC->createIndexConstant(0, loc);
     for (size_t i = 0; i < depIndex; ++i) {
       SmallVector<Value> prevSizes =
-          DatablockUtils::getDependencySizesFromDb(originalDeps[i]);
+          DbUtils::getDependencySizesFromDb(originalDeps[i]);
       SmallVector<Value> prevResolved = resolveParam(prevSizes, loc);
       Value prevElems = AC->computeTotalElements(prevResolved, loc);
       base = AC->create<arith::AddIOp>(loc, base, prevElems);
@@ -831,14 +831,13 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
     AC->setInsertionPoint(placeholder.getDefiningOp());
     Value baseOffset = computeBaseOffset(depIndex, loc);
     SmallVector<Value> depSizes = resolveParam(
-        DatablockUtils::getDependencySizesFromDb(originalDeps[depIndex]), loc);
+        DbUtils::getDependencySizesFromDb(originalDeps[depIndex]), loc);
     SmallVector<Value> depOffsets = resolveParam(
-        DatablockUtils::getDependencyOffsetsFromDb(originalDeps[depIndex]),
-        loc);
+        DbUtils::getDependencyOffsetsFromDb(originalDeps[depIndex]), loc);
     SmallVector<Value> depStrides = AC->computeStridesFromSizes(depSizes, loc);
 
     /// Replace remaining uses of the dependency placeholder with the dependency
-    bool isSingleElement = DatablockUtils::hasSingleSize(
+    bool isSingleElement = DbUtils::hasSingleSize(
         originalDeps[depIndex].getDefiningOp<DbAcquireOp>());
 
     auto normalizeSliceIndices = [&](ArrayRef<Value> indices) {
@@ -1007,7 +1006,7 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
 }
 
 ///===----------------------------------------------------------------------===///
-// Pass Registration
+/// Pass Registration
 ///===----------------------------------------------------------------------===///
 
 namespace mlir {

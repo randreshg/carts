@@ -29,7 +29,7 @@
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
-#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/DbUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 /// Others
@@ -55,7 +55,7 @@ using namespace mlir;
 using namespace arts;
 
 ///===----------------------------------------------------------------------===///
-// Conversion Patterns
+/// Conversion Patterns
 ///===----------------------------------------------------------------------===///
 
 /// Base class for ARTS to LLVM conversion patterns with shared ArtsCodegen
@@ -69,43 +69,7 @@ public:
       : OpRewritePattern<OpType>(context), AC(ac) {}
 };
 
-///===----------------------------------------------------------------------===///
-/// Helpers for DB sizes and single-element detection
-///===----------------------------------------------------------------------===///
 namespace {
-template <typename OpType>
-static inline void getDbInfo(OpType op, SmallVector<Value> &sizesOut,
-                             SmallVector<Value> &offsetsOut,
-                             SmallVector<Value> &indicesOut,
-                             bool &isSingleElement) {
-  if (auto acqOp = dyn_cast<DbAcquireOp>(op.getOperation())) {
-    sizesOut = DatablockUtils::getDependencySizesFromDb(acqOp.getOperation());
-    offsetsOut =
-        DatablockUtils::getDependencyOffsetsFromDb(acqOp.getOperation());
-    indicesOut.assign(acqOp.getIndices().begin(), acqOp.getIndices().end());
-  } else if (auto depAcqOp = dyn_cast<DepDbAcquireOp>(op.getOperation())) {
-    sizesOut =
-        DatablockUtils::getDependencySizesFromDb(depAcqOp.getOperation());
-    offsetsOut =
-        DatablockUtils::getDependencyOffsetsFromDb(depAcqOp.getOperation());
-    indicesOut.assign(depAcqOp.getIndices().begin(),
-                      depAcqOp.getIndices().end());
-  } else {
-    sizesOut.assign(op.getSizes().begin(), op.getSizes().end());
-    offsetsOut.clear();
-    indicesOut.clear();
-  }
-
-  isSingleElement = false;
-  if (sizesOut.empty()) {
-    isSingleElement = true;
-    return;
-  }
-  if (sizesOut.size() == 1) {
-    isSingleElement = mlir::arts::ValueUtils::isOneConstant(sizesOut[0]);
-  }
-}
-
 static inline DbAllocOp getAllocOpFromGuid(Value dbGuid) {
   if (auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>())
     return dbAcquireOp.getSourceGuid().getDefiningOp<DbAllocOp>();
@@ -116,64 +80,41 @@ static inline DbAllocOp getAllocOpFromGuid(Value dbGuid) {
 
 } // namespace
 
-/// Pattern to convert arts.get_total_workers operations
-struct GetTotalWorkersPattern : public ArtsToLLVMPattern<GetTotalWorkersOp> {
+/// Pattern to convert arts.runtime_query operations to LLVM runtime calls.
+/// Dispatches on the RuntimeQueryKind attribute to call the appropriate
+/// ARTS runtime function (getTotalWorkers, getTotalNodes, etc.).
+struct RuntimeQueryPattern : public ArtsToLLVMPattern<RuntimeQueryOp> {
   using ArtsToLLVMPattern::ArtsToLLVMPattern;
 
-  LogicalResult matchAndRewrite(GetTotalWorkersOp op,
+  LogicalResult matchAndRewrite(RuntimeQueryOp op,
                                 PatternRewriter &rewriter) const override {
-    ARTS_INFO("Lowering GetTotalWorkers Op " << op);
+    ARTS_INFO("Lowering RuntimeQuery Op " << op);
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
-    auto result = AC->getTotalWorkers(op.getLoc());
-    rewriter.replaceOp(op, result);
-    return success();
-  }
-};
-
-/// Pattern to convert arts.get_total_nodes operations
-struct GetTotalNodesPattern : public ArtsToLLVMPattern<GetTotalNodesOp> {
-  using ArtsToLLVMPattern::ArtsToLLVMPattern;
-
-  LogicalResult matchAndRewrite(GetTotalNodesOp op,
-                                PatternRewriter &rewriter) const override {
-    ARTS_INFO("Lowering GetTotalNodes Op " << op);
-    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
-    auto result = AC->getTotalNodes(op.getLoc());
-    rewriter.replaceOp(op, result);
-    return success();
-  }
-};
-
-/// Pattern to convert arts.get_current_worker operations
-struct GetCurrentWorkerPattern : public ArtsToLLVMPattern<GetCurrentWorkerOp> {
-  using ArtsToLLVMPattern::ArtsToLLVMPattern;
-
-  LogicalResult matchAndRewrite(GetCurrentWorkerOp op,
-                                PatternRewriter &rewriter) const override {
-    ARTS_INFO("Lowering GetCurrentWorker Op " << op);
-    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
-    auto result = AC->getCurrentWorker(op.getLoc());
-    rewriter.replaceOp(op, result);
-    return success();
-  }
-};
-
-/// Pattern to convert arts.get_current_node operations
-struct GetCurrentNodePattern : public ArtsToLLVMPattern<GetCurrentNodeOp> {
-  using ArtsToLLVMPattern::ArtsToLLVMPattern;
-
-  LogicalResult matchAndRewrite(GetCurrentNodeOp op,
-                                PatternRewriter &rewriter) const override {
-    ARTS_INFO("Lowering GetCurrentNode Op " << op);
-    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
-    auto result = AC->getCurrentNode(op.getLoc());
+    Value result;
+    switch (op.getKind()) {
+    case RuntimeQueryKind::totalWorkers:
+      result = AC->getTotalWorkers(op.getLoc());
+      break;
+    case RuntimeQueryKind::totalNodes:
+      result = AC->getTotalNodes(op.getLoc());
+      break;
+    case RuntimeQueryKind::currentWorker:
+      result = AC->getCurrentWorker(op.getLoc());
+      break;
+    case RuntimeQueryKind::currentNode:
+      result = AC->getCurrentNode(op.getLoc());
+      break;
+    case RuntimeQueryKind::parallelWorkerId:
+      return op.emitOpError("parallel_worker_id should have been replaced "
+                            "by ParallelEdtLowering before LLVM lowering");
+    }
     rewriter.replaceOp(op, result);
     return success();
   }
 };
 
 ///===----------------------------------------------------------------------===///
-// Event and Barrier Patterns
+/// Event and Barrier Patterns
 ///===----------------------------------------------------------------------===///
 
 /// Pattern to convert arts.barrier operations
@@ -184,7 +125,8 @@ struct BarrierPattern : public ArtsToLLVMPattern<BarrierOp> {
                                 PatternRewriter &rewriter) const override {
     ARTS_INFO("Lowering Barrier Op " << op);
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
-    AC->createRuntimeCall(types::ARTSRTL_artsYield, {}, op.getLoc());
+    ArtsCodegen::RuntimeCallBuilder RCB(*AC, op.getLoc());
+    RCB.callVoid(types::ARTSRTL_artsYield, {});
     rewriter.eraseOp(op);
     return success();
   }
@@ -391,19 +333,22 @@ private:
     return nullptr;
   }
 
-  void recordDepsForDb(Value dbGuid, Value edtGuid, Value sharedSlotAlloc,
-                       DepAccessMode accessMode,
-                       std::optional<int32_t> acquireMode, Value boundsValid,
-                       Value byteOffset, Value byteSize, Location loc) const {
-    SmallVector<Value> dbSizes, dbOffsets, dbIndices;
-    bool isSingle = false;
+  /// Holds extracted dependency info for a single datablock source.
+  struct DepDbInfo {
+    DbLoweringInfo dbInfo;
     Value depStruct = nullptr;
     Value baseOffset = nullptr;
     Value stencilCenterLinear;
+  };
 
-    /// Handle both DbAcquireOp and DepDbAcquireOp as sources
+  /// Extract DB lowering info and stencil metadata from a dbGuid's defining op.
+  DepDbInfo extractDbInfoForDeps(Value dbGuid,
+                                 std::optional<int32_t> acquireMode,
+                                 Location loc) const {
+    DepDbInfo result;
+
     if (auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>()) {
-      getDbInfo(dbAcquireOp, dbSizes, dbOffsets, dbIndices, isSingle);
+      result.dbInfo = DbUtils::extractDbLoweringInfo(dbAcquireOp);
 
       /// Stencil writer acquires frequently cover [left, center, right] DB
       /// entries. Recording all entries as WRITE over-serializes adjacent
@@ -418,41 +363,82 @@ private:
            *partitionMode == PartitionMode::stencil)) {
         if (auto centerOffset =
                 getStencilCenterOffset(dbAcquireOp.getOperation())) {
-          stencilCenterLinear = AC->createIndexConstant(*centerOffset, loc);
+          result.stencilCenterLinear =
+              AC->createIndexConstant(*centerOffset, loc);
         }
       }
     } else if (auto depDbAcquireOp = dbGuid.getDefiningOp<DepDbAcquireOp>()) {
-      getDbInfo(depDbAcquireOp, dbSizes, dbOffsets, dbIndices, isSingle);
-      depStruct = depDbAcquireOp.getDepStruct();
-      baseOffset = depDbAcquireOp.getOffset();
+      result.dbInfo = DbUtils::extractDbLoweringInfo(depDbAcquireOp);
+      result.depStruct = depDbAcquireOp.getDepStruct();
+      result.baseOffset = depDbAcquireOp.getOffset();
     } else {
       ARTS_UNREACHABLE("dbGuid must come from DbAcquireOp or DepDbAcquireOp");
     }
 
-    const bool useDepv = depStruct && baseOffset &&
-                         (accessMode == DepAccessMode::from_depv ||
-                          dbGuid.getDefiningOp<DepDbAcquireOp>());
+    return result;
+  }
 
-    /// Get totalDBs for bounds check (only for stencil cases)
-    Value totalDBs =
-        useDepv ? Value() : getTotalDBsForBoundsCheck(dbGuid, boundsValid);
+  /// Holds bounds-checking and allocation size info for dependency emission.
+  struct DepBoundsInfo {
+    bool useDepv = false;
+    Value totalDBs;
     SmallVector<Value> allocSizes;
-    if (!useDepv) {
+  };
+
+  /// Compute useDepv flag, bounds-check values, and allocation sizes.
+  DepBoundsInfo computeDepBounds(Value dbGuid, const DepDbInfo &depInfo,
+                                 DepAccessMode accessMode,
+                                 Value boundsValid) const {
+    DepBoundsInfo result;
+    result.useDepv = depInfo.depStruct && depInfo.baseOffset &&
+                     (accessMode == DepAccessMode::from_depv ||
+                      dbGuid.getDefiningOp<DepDbAcquireOp>());
+
+    result.totalDBs = result.useDepv
+                          ? Value()
+                          : getTotalDBsForBoundsCheck(dbGuid, boundsValid);
+    if (!result.useDepv) {
       if (auto allocOp = getAllocOpFromGuid(dbGuid)) {
         auto sizes = allocOp.getSizes();
-        allocSizes.assign(sizes.begin(), sizes.end());
+        result.allocSizes.assign(sizes.begin(), sizes.end());
       }
     }
 
+    return result;
+  }
+
+  /// Iterate over DB elements and emit record-dep calls for each index.
+  void emitRecordDepCalls(Value dbGuid, Value edtGuid, Value sharedSlotAlloc,
+                          DepAccessMode accessMode,
+                          std::optional<int32_t> acquireMode, Value boundsValid,
+                          Value byteOffset, Value byteSize,
+                          const DepDbInfo &depInfo, const DepBoundsInfo &bounds,
+                          Location loc) const {
     AC->iterateDbElements(
-        dbGuid, edtGuid, dbSizes, dbOffsets, isSingle, loc,
+        dbGuid, edtGuid, depInfo.dbInfo.sizes, depInfo.dbInfo.offsets,
+        depInfo.dbInfo.isSingleElement, loc,
         [&](Value linearIndex) {
           recordSingleDb(dbGuid, edtGuid, sharedSlotAlloc, linearIndex,
-                         accessMode, acquireMode, boundsValid, depStruct,
-                         baseOffset, totalDBs, byteOffset, byteSize,
-                         stencilCenterLinear, loc);
+                         accessMode, acquireMode, boundsValid,
+                         depInfo.depStruct, depInfo.baseOffset, bounds.totalDBs,
+                         byteOffset, byteSize, depInfo.stencilCenterLinear,
+                         loc);
         },
-        allocSizes);
+        bounds.allocSizes);
+  }
+
+  /// Record all dependencies for a single datablock (orchestrates the three
+  /// helpers above).
+  void recordDepsForDb(Value dbGuid, Value edtGuid, Value sharedSlotAlloc,
+                       DepAccessMode accessMode,
+                       std::optional<int32_t> acquireMode, Value boundsValid,
+                       Value byteOffset, Value byteSize, Location loc) const {
+    DepDbInfo depInfo = extractDbInfoForDeps(dbGuid, acquireMode, loc);
+    DepBoundsInfo bounds =
+        computeDepBounds(dbGuid, depInfo, accessMode, boundsValid);
+    emitRecordDepCalls(dbGuid, edtGuid, sharedSlotAlloc, accessMode,
+                       acquireMode, boundsValid, byteOffset, byteSize, depInfo,
+                       bounds, loc);
   }
 
   /// Emit the appropriate runtime call for recording a dependency.
@@ -470,17 +456,16 @@ private:
       useRecordDepAt = false;
     }
 
+    ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
     if (useRecordDepAt) {
       /// ESD path: partial slice dependency with byte offset/size
-      AC->createRuntimeCall(types::ARTSRTL_artsRecordDepAt,
-                            {dbGuidValue, edtGuidValue, currentSlotI32,
-                             modeValue, byteOffsetI64, byteSizeI64},
-                            loc);
+      RCB.callVoid(types::ARTSRTL_artsRecordDepAt,
+                   {dbGuidValue, edtGuidValue, currentSlotI32, modeValue,
+                    byteOffsetI64, byteSizeI64});
     } else {
       /// Standard path: full datablock dependency
-      AC->createRuntimeCall(
-          types::ARTSRTL_artsRecordDep,
-          {dbGuidValue, edtGuidValue, currentSlotI32, modeValue}, loc);
+      RCB.callVoid(types::ARTSRTL_artsRecordDep,
+                   {dbGuidValue, edtGuidValue, currentSlotI32, modeValue});
     }
   }
 
@@ -519,7 +504,7 @@ private:
       edtGuidValue =
           AC->create<memref::LoadOp>(loc, edtGuid, ValueRange{zeroIndex});
     }
-    edtGuidValue = AC->castToInt(AC->Int64, edtGuidValue, loc);
+    edtGuidValue = AC->ensureI64(edtGuidValue, loc);
 
     auto currentSlotI32 = AC->create<memref::LoadOp>(loc, slotAlloc);
     int32_t readMode = static_cast<int32_t>(DbMode::read);
@@ -544,9 +529,9 @@ private:
         byteOffset && byteSize &&
         !ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(byteSize));
     Value byteOffsetI64 =
-        hasPartialSlice ? AC->castToInt(AC->Int64, byteOffset, loc) : nullptr;
+        hasPartialSlice ? AC->ensureI64(byteOffset, loc) : nullptr;
     Value byteSizeI64 =
-        hasPartialSlice ? AC->castToInt(AC->Int64, byteSize, loc) : nullptr;
+        hasPartialSlice ? AC->ensureI64(byteSize, loc) : nullptr;
 
     if (effectiveBoundsValid) {
       /// GUARDED PATH: boundary workers may have invalid indices
@@ -562,8 +547,9 @@ private:
 
       /// Else: invalid index - signal null dependency
       AC->setInsertionPointToStart(&ifOp.getElseRegion().front());
-      AC->createRuntimeCall(types::ARTSRTL_artsSignalEdtNull,
-                            {edtGuidValue, currentSlotI32}, loc);
+      ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
+      RCB.callVoid(types::ARTSRTL_artsSignalEdtNull,
+                   {edtGuidValue, currentSlotI32});
 
       AC->setInsertionPointAfter(ifOp);
     } else {
@@ -612,20 +598,19 @@ struct IncrementDepPattern : public ArtsToLLVMPattern<IncrementDepOp> {
 private:
   void incLatchForDb(Value dbGuid, Value sharedSlotAlloc,
                      DepAccessMode accessMode, Location loc) const {
-    SmallVector<Value> dbSizes, dbOffsets, dbIndices;
-    bool isSingle = false;
     SmallVector<Value> allocSizes;
 
     /// Extract base offset and dep_struct for this specific dependency
     Value depStruct = nullptr;
     Value baseOffset = nullptr;
+    DbLoweringInfo dbInfo;
 
     /// Handle both DbAcquireOp and DepDbAcquireOp as sources
     if (auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>()) {
-      getDbInfo(dbAcquireOp, dbSizes, dbOffsets, dbIndices, isSingle);
+      dbInfo = DbUtils::extractDbLoweringInfo(dbAcquireOp);
       /// depStruct and baseOffset remain null for DbAcquireOp
     } else if (auto depDbAcquireOp = dbGuid.getDefiningOp<DepDbAcquireOp>()) {
-      getDbInfo(depDbAcquireOp, dbSizes, dbOffsets, dbIndices, isSingle);
+      dbInfo = DbUtils::extractDbLoweringInfo(depDbAcquireOp);
       /// For DepDbAcquireOp, always extract dep_struct and base offset
       depStruct = depDbAcquireOp.getDepStruct();
       baseOffset = depDbAcquireOp.getOffset();
@@ -634,6 +619,10 @@ private:
                  << dbGuid);
       ARTS_UNREACHABLE("dbGuid must come from DbAcquireOp or DepDbAcquireOp");
     }
+    auto &dbSizes = dbInfo.sizes;
+    auto &dbOffsets = dbInfo.offsets;
+    auto &dbIndices = dbInfo.indices;
+    bool isSingle = dbInfo.isSingleElement;
     if (auto allocOp = getAllocOpFromGuid(dbGuid)) {
       auto sizes = allocOp.getSizes();
       allocSizes.assign(sizes.begin(), sizes.end());
@@ -672,8 +661,8 @@ private:
       dbGuidValue =
           AC->create<memref::LoadOp>(loc, dbGuid, ValueRange{linearIndex});
     }
-    AC->createRuntimeCall(types::ARTSRTL_artsDbIncrementLatch, {dbGuidValue},
-                          loc);
+    ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
+    RCB.callVoid(types::ARTSRTL_artsDbIncrementLatch, {dbGuidValue});
 
     /// Increment the shared slot counter for next latch increment
     auto currentSlotI32 = AC->create<memref::LoadOp>(loc, slotAlloc);
@@ -685,7 +674,7 @@ private:
 };
 
 ///===----------------------------------------------------------------------===///
-// EDT  Patterns
+/// EDT  Patterns
 ///===----------------------------------------------------------------------===///
 /// Pattern to convert arts.edt_param_pack operations
 struct EdtParamPackPattern : public ArtsToLLVMPattern<EdtParamPackOp> {
@@ -778,17 +767,17 @@ struct DepGepOpPattern : public ArtsToLLVMPattern<DepGepOp> {
     /// Compute linearized index: offset + sum_i indices[i] * strides[i]
     Value linearIndex = offset;
     if (linearIndex.getType() != AC->Int64)
-      linearIndex = AC->castToInt(AC->Int64, linearIndex, loc);
+      linearIndex = AC->ensureI64(linearIndex, loc);
 
     for (size_t i = 0; i < indices.size(); ++i) {
       Value idx = indices[i];
       if (idx.getType() != AC->Int64)
-        idx = AC->castToInt(AC->Int64, idx, loc);
+        idx = AC->ensureI64(idx, loc);
       Value strideVal = (i < strides.size())
                             ? strides[i]
                             : AC->createIntConstant(1, AC->Int64, loc);
       if (strideVal.getType() != AC->Int64)
-        strideVal = AC->castToInt(AC->Int64, strideVal, loc);
+        strideVal = AC->ensureI64(strideVal, loc);
 
       Value contrib = AC->create<arith::MulIOp>(loc, idx, strideVal);
       linearIndex = AC->create<arith::AddIOp>(loc, linearIndex, contrib);
@@ -855,7 +844,7 @@ struct DbGepOpPattern : public ArtsToLLVMPattern<arts::DbGepOp> {
     /// Compute linear element index using provided strides
     Value linearIdx =
         AC->computeLinearIndexFromStrides(paddedStrides, indices, loc);
-    Value idx64 = AC->castToInt(AC->Int64, linearIdx, loc);
+    Value idx64 = AC->ensureI64(linearIdx, loc);
 
     /// Use typed GEP based on the element type; default to pointer elements
     Type elemTy = baseMT ? baseMT.getElementType() : AC->llvmPtr;
@@ -922,29 +911,25 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
     }
 
     /// Create artsEdtCreate call; prefer arts_id-aware variant when available
+    ArtsCodegen::RuntimeCallBuilder RCB(*AC, op.getLoc());
     func::CallOp callOp;
     if (createIdAttr) {
       if (op.getEpochGuid()) {
-        callOp =
-            AC->createRuntimeCall(types::ARTSRTL_artsEdtCreateWithEpochArtsId,
-                                  {funcPtr, route, paramc, paramv, depc,
-                                   op.getEpochGuid(), artsIdVal},
-                                  op.getLoc());
+        callOp = RCB.callOp(types::ARTSRTL_artsEdtCreateWithEpochArtsId,
+                            {funcPtr, route, paramc, paramv, depc,
+                             op.getEpochGuid(), artsIdVal});
       } else {
-        callOp = AC->createRuntimeCall(
-            types::ARTSRTL_artsEdtCreateWithArtsId,
-            {funcPtr, route, paramc, paramv, depc, artsIdVal}, op.getLoc());
+        callOp = RCB.callOp(types::ARTSRTL_artsEdtCreateWithArtsId,
+                            {funcPtr, route, paramc, paramv, depc, artsIdVal});
       }
     } else {
       if (op.getEpochGuid()) {
-        callOp = AC->createRuntimeCall(
+        callOp = RCB.callOp(
             types::ARTSRTL_artsEdtCreateWithEpoch,
-            {funcPtr, route, paramc, paramv, depc, op.getEpochGuid()},
-            op.getLoc());
+            {funcPtr, route, paramc, paramv, depc, op.getEpochGuid()});
       } else {
-        callOp = AC->createRuntimeCall(types::ARTSRTL_artsEdtCreate,
-                                       {funcPtr, route, paramc, paramv, depc},
-                                       op.getLoc());
+        callOp = RCB.callOp(types::ARTSRTL_artsEdtCreate,
+                            {funcPtr, route, paramc, paramv, depc});
       }
     }
     if (createIdAttr)
@@ -955,7 +940,7 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
 };
 
 ///===----------------------------------------------------------------------===///
-// DB Patterns
+/// DB Patterns
 ///===----------------------------------------------------------------------===///
 /// Pattern to convert arts.db_alloc operations
 struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
@@ -992,9 +977,11 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
     else
       nextId = getArtsId(op);
 
-    SmallVector<Value> dbSizes, dbOffsets, dbIndices;
-    bool isSingleElement = false;
-    getDbInfo(op, dbSizes, dbOffsets, dbIndices, isSingleElement);
+    DbLoweringInfo dbLowering = DbUtils::extractDbLoweringInfo(op);
+    auto &dbSizes = dbLowering.sizes;
+    auto &dbOffsets = dbLowering.offsets;
+    auto &dbIndices = dbLowering.indices;
+    bool isSingleElement = dbLowering.isSingleElement;
 
     if (distributedOwnership) {
       if (failed(lowerDistributedRuntimeDbAlloc(
@@ -1142,8 +1129,11 @@ private:
       }
 
       auto isRuntimeTopologyCall = [](Operation *cloneOp) {
-        if (isa<GetTotalNodesOp, GetTotalWorkersOp>(cloneOp))
-          return true;
+        if (auto queryOp = dyn_cast<RuntimeQueryOp>(cloneOp)) {
+          auto kind = queryOp.getKind();
+          return kind == RuntimeQueryKind::totalNodes ||
+                 kind == RuntimeQueryKind::totalWorkers;
+        }
         auto callOp = dyn_cast<func::CallOp>(cloneOp);
         if (!callOp)
           return false;
@@ -1236,8 +1226,8 @@ private:
         }
         AC->create<func::ReturnOp>(op.getLoc());
       } else {
-        // Reserve deterministic GUIDs once per node; DB creation runs in
-        // initPerWorker.
+        /// Reserve deterministic GUIDs once per node; DB creation runs in
+        /// initPerWorker.
         if (isSingleElement) {
           createSingleDb(ptrBuffer, guidBuffer, callbackDbMode, callbackRoute,
                          callbackTotalDbSize,
@@ -1397,9 +1387,9 @@ private:
           Value linearIndex = workerLoop.getInductionVar();
           Value reservedGuid = AC->create<memref::LoadOp>(
               op.getLoc(), workerGuidBuffer, ValueRange{linearIndex});
-          Value guidRank = AC->createRuntimeCall(types::ARTSRTL_artsGuidGetRank,
-                                                 {reservedGuid}, op.getLoc())
-                               .getResult(0);
+          ArtsCodegen::RuntimeCallBuilder RCB(*AC, op.getLoc());
+          Value guidRank =
+              RCB.call(types::ARTSRTL_artsGuidGetRank, {reservedGuid});
           Value isLocalGuid = AC->create<arith::CmpIOp>(
               op.getLoc(), arith::CmpIPredicate::eq, guidRank, workerNodeId);
           auto localGuidIf =
@@ -1442,21 +1432,21 @@ private:
                                        Location loc) const {
     Value guid =
         AC->create<memref::LoadOp>(loc, guidMemref, ValueRange{linearIndex});
-    Value elemSize64 = AC->castToInt(AC->Int64, elementSize, loc);
+    Value elemSize64 = AC->ensureI64(elementSize, loc);
 
+    ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
     func::CallOp dbCall;
     if (nextId.has_value()) {
       Value baseArtsId = AC->create<arith::ConstantOp>(
           loc, AC->Int64, AC->getBuilder().getI64IntegerAttr(*nextId));
-      Value linearIndex64 = AC->castToInt(AC->Int64, linearIndex, loc);
+      Value linearIndex64 = AC->ensureI64(linearIndex, loc);
       Value artsIdValue =
           AC->create<arith::AddIOp>(loc, baseArtsId, linearIndex64);
-      dbCall =
-          AC->createRuntimeCall(types::ARTSRTL_artsDbCreateWithGuidAndArtsId,
-                                {guid, elemSize64, artsIdValue}, loc);
+      dbCall = RCB.callOp(types::ARTSRTL_artsDbCreateWithGuidAndArtsId,
+                          {guid, elemSize64, artsIdValue});
     } else {
-      dbCall = AC->createRuntimeCall(types::ARTSRTL_artsDbCreateWithGuid,
-                                     {guid, elemSize64}, loc);
+      dbCall =
+          RCB.callOp(types::ARTSRTL_artsDbCreateWithGuid, {guid, elemSize64});
     }
 
     AC->create<memref::StoreOp>(loc, dbCall.getResult(0), dbMemref,
@@ -1481,9 +1471,9 @@ private:
     }
 
     /// Reserve GUID for the DB
-    auto guid = AC->createRuntimeCall(types::ARTSRTL_artsReserveGuidRoute,
-                                      {dbMode, reserveRoute}, loc)
-                    .getResult(0);
+    ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
+    auto guid =
+        RCB.call(types::ARTSRTL_artsReserveGuidRoute, {dbMode, reserveRoute});
     Value linearIndex = indices.empty()
                             ? AC->createIndexConstant(0, loc)
                             : AC->computeLinearIndex(sizes, indices, loc);
@@ -1710,7 +1700,7 @@ struct AllocPattern : public ArtsToLLVMPattern<AllocOp> {
 };
 
 ///===----------------------------------------------------------------------===///
-// Terminator Patterns
+/// Terminator Patterns
 ///===----------------------------------------------------------------------===///
 
 /// Pattern to convert arts.yield operations (terminator)
@@ -1741,7 +1731,7 @@ struct UndefPattern : public ArtsToLLVMPattern<UndefOp> {
 };
 
 ///===----------------------------------------------------------------------===///
-// Pass Implementation
+/// Pass Implementation
 ///===----------------------------------------------------------------------===///
 namespace {
 struct ConvertArtsToLLVMPass
@@ -1768,7 +1758,7 @@ private:
 } // namespace
 
 ///===----------------------------------------------------------------------===///
-// Core Pass Implementation
+/// Core Pass Implementation
 ///===----------------------------------------------------------------------===///
 
 void ConvertArtsToLLVMPass::runOnOperation() {
@@ -1841,8 +1831,7 @@ void ConvertArtsToLLVMPass::populateCorePatterns(RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
 
   /// Runtime helper patterns
-  patterns.add<GetTotalWorkersPattern, GetTotalNodesPattern,
-               GetCurrentWorkerPattern, GetCurrentNodePattern>(context, AC);
+  patterns.add<RuntimeQueryPattern>(context, AC);
 
   /// Synchronization patterns
   patterns.add<BarrierPattern, AtomicAddPattern>(context, AC);
@@ -1871,7 +1860,7 @@ void ConvertArtsToLLVMPass::populateDbPatterns(RewritePatternSet &patterns) {
 }
 
 ///===----------------------------------------------------------------------===///
-// Pass Functions
+/// Pass Functions
 ///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {

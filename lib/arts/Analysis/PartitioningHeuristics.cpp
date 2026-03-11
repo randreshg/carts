@@ -6,6 +6,7 @@
 
 #include "arts/Analysis/PartitioningHeuristics.h"
 #include "arts/Analysis/ArtsHeuristics.h"
+#include "arts/Analysis/HeuristicUtils.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
@@ -35,7 +36,7 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
 
   bool isReadOnly = !ctx.acquires.empty() ? ctx.allReadOnly()
                                           : (ctx.accessMode == ArtsMode::in);
-  bool isSingleNode = machine && machine->getNodeCount() == 1;
+  bool isSingleNode = (machine && machine->isSingleNode());
   bool hasExplicitFineGrained =
       llvm::any_of(ctx.acquires, [](const AcquireInfo &info) {
         if (info.partitionMode == PartitionMode::fine_grained)
@@ -61,8 +62,7 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
     /// block-localization for values that are fundamentally consumed as a
     /// single read-mostly input.
     if (ctx.anyCoarseAcquire()) {
-      ARTS_DEBUG(
-          "H1.1a applied: Single-node coarse acquire prefers coarse");
+      ARTS_DEBUG("H1.1a applied: Single-node coarse acquire prefers coarse");
       return PartitioningDecision::coarse(
           ctx, "H1.1a: Single-node coarse acquire prefers coarse");
     }
@@ -170,7 +170,7 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   }
 
   /// H1.5: Multi-Node -> Fine-Grained for Network Efficiency
-  if (machine && machine->getNodeCount() > 1) {
+  if ((machine && machine->isDistributed())) {
     bool canDoBlock = ctx.canBlock || ctx.anyCanBlock();
     bool canDoElementWise = ctx.canElementWise || ctx.anyCanElementWise();
 

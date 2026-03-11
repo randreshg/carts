@@ -11,7 +11,8 @@
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/Analysis/Loop/LoopAnalysis.h"
-#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/DbUtils.h"
 #include "arts/Utils/EdtUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
@@ -198,7 +199,7 @@ DbAnalysis::analyzeLoopDbAccessPatterns(ForOp forOp) {
         hasLoopAccess = true;
 
         SmallVector<Value> indexChain =
-            DatablockUtils::collectFullIndexChain(dbRef, memOp);
+            DbUtils::collectFullIndexChain(dbRef, memOp);
         if (indexChain.empty())
           continue;
         AccessIndexInfo info;
@@ -323,7 +324,7 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
   if (auto modeAttr = getPartitionMode(acquire.getOperation()))
     info.mode = *modeAttr;
   else
-    info.mode = DatablockUtils::getPartitionModeFromStructure(acquire);
+    info.mode = DbUtils::getPartitionModeFromStructure(acquire);
   if (info.mode == PartitionMode::coarse) {
     if (!acquire.getPartitionIndices().empty())
       info.mode = PartitionMode::fine_grained;
@@ -452,7 +453,7 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
     if (!acquire.getPartitionIndices().empty()) {
       for (Value idx : acquire.getPartitionIndices())
         info.partitionOffsets.push_back(idx);
-      Value one = builder.create<arith::ConstantIndexOp>(acquire.getLoc(), 1);
+      Value one = arts::createOneIndex(builder, acquire.getLoc());
       for (unsigned i = 0; i < info.partitionOffsets.size(); ++i)
         info.partitionSizes.push_back(one);
       info.isValid = true;
@@ -476,7 +477,7 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
     if (!effectiveOffsets.empty()) {
       for (Value off : effectiveOffsets)
         info.partitionOffsets.push_back(off);
-      Value one = builder.create<arith::ConstantIndexOp>(acquire.getLoc(), 1);
+      Value one = arts::createOneIndex(builder, acquire.getLoc());
       for (unsigned i = 0; i < info.partitionOffsets.size(); ++i)
         info.partitionSizes.push_back(
             i < effectiveSizes.size() ? effectiveSizes[i] : one);

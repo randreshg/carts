@@ -699,6 +699,10 @@ Value ArtsCodegen::castToInt(Type targetType, Value source, Location loc) {
   return nullptr;
 }
 
+Value ArtsCodegen::ensureI64(Value source, Location loc) {
+  return castToInt(Int64, source, loc);
+}
+
 Value ArtsCodegen::castToVoidPtr(Value source, Location loc) {
   if (!source.getType().isa<LLVM::LLVMPointerType>())
     source = castToLLVMPtr(source, loc);
@@ -794,7 +798,7 @@ Operation *ArtsCodegen::clone(Operation &op, IRMapping &mapper) {
   return getBuilder().clone(op, mapper);
 }
 ///===----------------------------------------------------------------------===///
-// Memref helpers
+/// Memref helpers
 ///===----------------------------------------------------------------------===///
 
 LLVM::LLVMPointerType ArtsCodegen::getLLVMPointerType(Value source) {
@@ -983,7 +987,7 @@ void ArtsCodegen::iterateMultiDb(Value dbGuid, Value edtGuid,
 }
 
 ///===----------------------------------------------------------------------===///
-// Debug printing helpers
+/// Debug printing helpers
 ///===----------------------------------------------------------------------===///
 
 void ArtsCodegen::printDebugInfo(Location loc, const Twine &message,

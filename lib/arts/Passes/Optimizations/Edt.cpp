@@ -14,6 +14,7 @@
 /// Dialects
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/EdtUtils.h"
+#include "arts/Utils/RemovalUtils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
@@ -125,7 +126,7 @@ void sinkExternalAllocasInEdt(EdtOp edt) {
 } // namespace
 
 ///===----------------------------------------------------------------------===///
-// Pass Implementation
+/// Pass Implementation
 ///===----------------------------------------------------------------------===///
 namespace {
 struct EdtPass : public arts::EdtBase<EdtPass> {
@@ -188,7 +189,7 @@ void EdtPass::runOnOperation() {
 
   if (runAnalysis) {
     ARTS_INFO("Running EDT pass with analysis");
-    // removeBarriers();
+    /// removeBarriers();
   } else {
     ARTS_INFO("Running EDT pass without analysis");
     processSingleEdts();

@@ -1,7 +1,7 @@
 ///==========================================================================///
-// File: ARTSPassDetails.h
-//
-// CARTS pass class details
+/// File: ARTSPassDetails.h
+///
+/// CARTS pass class details
 ///==========================================================================///
 #ifndef DIALECT_CARTS_TRANSFORMS_PASSDETAILS_H
 #define DIALECT_CARTS_TRANSFORMS_PASSDETAILS_H
@@ -15,7 +15,7 @@
 namespace mlir {
 class FunctionOpInterface;
 
-// Forward declaration from Dialect.h
+/// Forward declaration from Dialect.h
 template <typename ConcreteDialect>
 void registerDialect(DialectRegistry &registry);
 

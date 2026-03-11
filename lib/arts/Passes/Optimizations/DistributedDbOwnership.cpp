@@ -53,8 +53,7 @@ struct DistributedDbOwnershipPass
     unsigned markedDistributed = 0;
     module.walk([&](DbAllocOp alloc) {
       ++totalAllocs;
-      auto eligibility =
-          evaluateDistributedDbEligibility(alloc, dbAnalysis);
+      auto eligibility = evaluateDistributedDbEligibility(alloc, dbAnalysis);
       setDistributedDbAllocation(alloc.getOperation(), eligibility.eligible);
       if (eligibility.eligible)
         ++markedDistributed;

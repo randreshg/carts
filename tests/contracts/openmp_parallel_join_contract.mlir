@@ -15,7 +15,7 @@
 // EPOCH: %[[TIMERBUF:.*]] = memref.get_global @_carts_timer_start
 // EPOCH: %[[START:.*]] = call @omp_get_wtime()
 // EPOCH: memref.store %[[START]], %[[TIMERBUF]]
-// EPOCH: %[[WORKERS:.*]] = arts.get_total_workers
+// EPOCH: %[[WORKERS:.*]] = arts.runtime_query <total_workers>
 // EPOCH: %[[EPOCH:.*]] = arts.epoch {
 // EPOCH:   arts.edt <parallel>
 // EPOCH:   llvm.call @printf

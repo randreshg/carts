@@ -15,7 +15,7 @@
 
 #include "arts/Transforms/Edt/AcquireRewritePlanning.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
-#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/DbUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -203,8 +203,7 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
   SmallVector<Value, 4> extraSizes;
   SmallVector<Value, 4> extraHintSizes;
 
-  if (Operation *rootAllocOp =
-          DatablockUtils::getUnderlyingDbAlloc(input.rootPtr)) {
+  if (Operation *rootAllocOp = DbUtils::getUnderlyingDbAlloc(input.rootPtr)) {
     if (auto dbAlloc = dyn_cast<DbAllocOp>(rootAllocOp)) {
       auto elemSizes = dbAlloc.getElementSizes();
       if (!elemSizes.empty()) {
@@ -215,8 +214,8 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
 
         auto accessPattern = getDbAccessPattern(dbAlloc.getOperation());
         const ArtsMode mode = input.parentAcquire.getMode();
-        const bool inoutReadsSelf =
-            mode == ArtsMode::inout && acquireHasReadAccess(input.parentAcquire);
+        const bool inoutReadsSelf = mode == ArtsMode::inout &&
+                                    acquireHasReadAccess(input.parentAcquire);
         const bool modeNeedsPatternStencilHalo =
             mode == ArtsMode::in || inoutReadsSelf;
         const bool patternSaysStencil =

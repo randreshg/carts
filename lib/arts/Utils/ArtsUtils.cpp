@@ -27,6 +27,22 @@ namespace mlir {
 namespace arts {
 
 ///===----------------------------------------------------------------------===///
+/// Constant Index Creation Utilities
+///===----------------------------------------------------------------------===///
+
+Value createConstantIndex(OpBuilder &builder, Location loc, int64_t val) {
+  return builder.create<arith::ConstantIndexOp>(loc, val);
+}
+
+Value createZeroIndex(OpBuilder &builder, Location loc) {
+  return createConstantIndex(builder, loc, 0);
+}
+
+Value createOneIndex(OpBuilder &builder, Location loc) {
+  return createConstantIndex(builder, loc, 1);
+}
+
+///===----------------------------------------------------------------------===///
 /// ARTS Runtime Query Utilities
 ///===----------------------------------------------------------------------===///
 
@@ -46,8 +62,7 @@ bool isArtsRuntimeQuery(Value val) {
     return false;
 
   /// Check for ARTS dialect ops (before lowering to func::CallOp)
-  if (isa<GetCurrentNodeOp, GetTotalNodesOp, GetCurrentWorkerOp,
-          GetTotalWorkersOp, GetParallelWorkerIdOp>(defOp))
+  if (isa<RuntimeQueryOp>(defOp))
     return true;
 
   /// Check for func::CallOp (after lowering)
@@ -255,7 +270,7 @@ void replaceInRegion(Region &region, DenseMap<Value, Value> &rewireMap,
 }
 
 ///===----------------------------------------------------------------------===///
-// Pattern Recognition and Analysis Utilities
+/// Pattern Recognition and Analysis Utilities
 ///===----------------------------------------------------------------------===///
 
 /// Extract block size from ForLowering's size hint.

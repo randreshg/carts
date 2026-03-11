@@ -6,9 +6,6 @@
 #include "arts/Utils/RemovalUtils.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsDebug.h"
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 
 ARTS_DEBUG_SETUP(removal_utils);
@@ -235,35 +232,6 @@ void RemovalUtils::replaceWithUndef(Operation *op, OpBuilder &builder) {
       result.replaceAllUsesWith(undef.getResult());
     }
   }
-}
-
-///===----------------------------------------------------------------------===///
-/// Helper Functions Implementation
-///===----------------------------------------------------------------------===///
-
-bool isInsideLoop(Operation *op) {
-  if (!op)
-    return false;
-  return op->getParentOfType<scf::ForOp>() ||
-         op->getParentOfType<affine::AffineForOp>();
-}
-
-SmallVector<Operation *> collectLoads(Value memref) {
-  SmallVector<Operation *> loads;
-  for (Operation *user : memref.getUsers()) {
-    if (isa<memref::LoadOp, affine::AffineLoadOp>(user))
-      loads.push_back(user);
-  }
-  return loads;
-}
-
-SmallVector<Operation *> collectStores(Value memref) {
-  SmallVector<Operation *> stores;
-  for (Operation *user : memref.getUsers()) {
-    if (isa<memref::StoreOp, affine::AffineStoreOp>(user))
-      stores.push_back(user);
-  }
-  return stores;
 }
 
 } // namespace arts

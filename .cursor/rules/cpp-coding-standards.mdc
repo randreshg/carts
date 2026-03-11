@@ -54,10 +54,10 @@ Follow LLVM coding standards: https://llvm.org/docs/CodingStandards.html
 ```
 
 ### Comment Style
-- Use `///` for class/function documentation
-- Use `//` for inline comments
+- Use `///` for all comments (including inline) for consistency
 - Use `///<` for inline member variable documentation
-- Dont ever add temporary refactoring comments
+- Do not use `//` for standalone or explanatory comments; use `///` throughout
+- Do not add temporary refactoring comments
 - Example:
 ```cpp
 /// Central manager for DB-related analyses across a module.
@@ -130,9 +130,9 @@ Follow LLVM coding standards: https://llvm.org/docs/CodingStandards.html
 ```
 
 ### Comment Style
-- Use `///` for class/function documentation
-- Use `//` for inline comments
+- Use `///` for all comments (including inline) for consistency
 - Use `///<` for inline member variable documentation
+- Do not use `//` for standalone or explanatory comments; use `///` throughout
 - Example:
 ```cpp
 /// Central manager for DB-related analyses across a module.
