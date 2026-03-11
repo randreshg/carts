@@ -148,7 +148,7 @@ bool EdtGraph::areEdtsIndependent(EdtOp a, EdtOp b) {
   const auto &infoA = nodeA->getInfo();
   const auto &infoB = nodeB->getInfo();
 
-  // Primary check: no shared DbAllocOp between the two EDTs
+  /// Primary check: no shared DbAllocOp between the two EDTs
   for (auto db : infoA.dbAllocsRead) {
     if (infoB.dbAllocsRead.contains(db) || infoB.dbAllocsWritten.contains(db))
       return false;
@@ -158,21 +158,21 @@ bool EdtGraph::areEdtsIndependent(EdtOp a, EdtOp b) {
       return false;
   }
 
-  // Optional: Check associated loops for additional dependency info via
-  // LoopMetadata If EDTs have associated loops, check their parallel
-  // classification
+  /// Optional: Check associated loops for additional dependency info via
+  /// LoopMetadata If EDTs have associated loops, check their parallel
+  /// classification
   auto loopsA = nodeA->getAssociatedLoops();
   auto loopsB = nodeB->getAssociatedLoops();
   for (auto *loopA : loopsA) {
     for (auto *loopB : loopsB) {
-      // If loops share any memrefs with loop-carried deps, be conservative
-      // This leverages LoopMetadata's hasInterIterationDeps field
+      /// If loops share any memrefs with loop-carried deps, be conservative
+      /// This leverages LoopMetadata's hasInterIterationDeps field
       if (loopA->hasInterIterationDeps.has_value() &&
           loopA->hasInterIterationDeps.value() &&
           loopB->hasInterIterationDeps.has_value() &&
           loopB->hasInterIterationDeps.value()) {
-        // Both have inter-iteration deps - check if they might conflict
-        // For now, we rely on the dbAllocs check above as primary
+        /// Both have inter-iteration deps - check if they might conflict
+        /// For now, we rely on the dbAllocs check above as primary
       }
     }
   }
@@ -398,11 +398,11 @@ void EdtGraph::populateChildrenCache(NodeBase *node) {
   auto &vec = childrenCache[node];
   vec.clear();
 
-  // Collect children from the node's outgoing edges
+  /// Collect children from the node's outgoing edges
   for (auto *edge : node->getOutEdges())
     vec.push_back(edge->getTo());
 
-  // Sort by hierarchical ID for deterministic order
+  /// Sort by hierarchical ID for deterministic order
   llvm::sort(vec, [&](NodeBase *a, NodeBase *b) {
     auto hierIdA = a ? a->getHierId() : StringRef("");
     auto hierIdB = b ? b->getHierId() : StringRef("");

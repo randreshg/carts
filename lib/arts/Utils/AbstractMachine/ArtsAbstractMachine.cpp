@@ -23,9 +23,9 @@ ARTS_DEBUG_SETUP(abstract_machine);
 namespace mlir {
 namespace arts {
 
-//===----------------------------------------------------------------------===//
-// ArtsAbstractMachine Implementation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// ArtsAbstractMachine Implementation
+///===----------------------------------------------------------------------===///
 
 ArtsAbstractMachine::ArtsAbstractMachine(const std::string &configFile) {
   ARTS_DEBUG_HEADER(AbstractMachine);
@@ -337,8 +337,9 @@ bool ArtsAbstractMachine::validateConfiguration() {
       ARTS_ERROR("No nodes specified");
       isValid = false;
     } else if (static_cast<int>(nodes.size()) != nodeCount) {
-      ARTS_ERROR("Nodes count (" << nodes.size() << ") doesn't match nodeCount ("
-                                 << nodeCount << ")");
+      ARTS_ERROR("Nodes count (" << nodes.size()
+                                 << ") doesn't match nodeCount (" << nodeCount
+                                 << ")");
       isValid = false;
     }
 
@@ -353,17 +354,11 @@ bool ArtsAbstractMachine::validateConfiguration() {
   if (nodeCount > 1) {
     int minThreads = outgoing + incoming + 1;
     if (threads < minThreads) {
-      ARTS_ERROR("Invalid multi-node thread topology in " << configPath
-                                                          << ": nodeCount="
-                                                          << nodeCount
-                                                          << ", threads="
-                                                          << threads
-                                                          << ", outgoing="
-                                                          << outgoing
-                                                          << ", incoming="
-                                                          << incoming
-                                                          << ", require threads >= "
-                                                          << minThreads);
+      ARTS_ERROR("Invalid multi-node thread topology in "
+                 << configPath << ": nodeCount=" << nodeCount
+                 << ", threads=" << threads << ", outgoing=" << outgoing
+                 << ", incoming=" << incoming
+                 << ", require threads >= " << minThreads);
       isValid = false;
     }
   }

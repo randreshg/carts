@@ -18,9 +18,9 @@
 #include <cstdint>
 
 #include "arts/ArtsDialect.h"
-#include "arts/Transforms/Datablock/DbRewriter.h"
+#include "arts/Transforms/Db/DbRewriter.h"
 #include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/DbUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "polygeist/Ops.h"
 
@@ -108,9 +108,7 @@ bool isArtsOp(Operation *op) {
   return isArtsRegion(op) ||
          isa<arts::EdtOp, arts::EpochOp, arts::BarrierOp, arts::AllocOp,
              arts::DbAllocOp, arts::DbAcquireOp, arts::DbReleaseOp,
-             arts::DbFreeOp, arts::DbControlOp, arts::GetTotalWorkersOp,
-             arts::GetTotalNodesOp, arts::GetCurrentWorkerOp,
-             arts::GetCurrentNodeOp>(op);
+             arts::DbFreeOp, arts::DbControlOp, arts::RuntimeQueryOp>(op);
 }
 
 /// Arts Dialect Types
@@ -202,7 +200,7 @@ LogicalResult EdtOp::verify() {
 
       if (llvm::is_contained(blockArgs, operand)) {
         DbAcquireOp underlyingAcquire =
-            dyn_cast<DbAcquireOp>(DatablockUtils::getUnderlyingDb(operand));
+            dyn_cast<DbAcquireOp>(DbUtils::getUnderlyingDb(operand));
         if (!underlyingAcquire) {
           op->emitOpError("EDT region uses block argument '")
               << operand << "' as a DbAcquire value.";
@@ -273,8 +271,8 @@ void DbReleaseOp::build(OpBuilder &builder, OperationState &state,
 void DbDimOp::build(OpBuilder &builder, OperationState &state, Value source,
                     int64_t dim) {
   state.addOperands(source);
-  auto c = builder.create<arith::ConstantIndexOp>(state.location, dim);
-  state.addOperands(c.getResult());
+  Value c = arts::createConstantIndex(builder, state.location, dim);
+  state.addOperands(c);
   state.addTypes(builder.getIndexType());
 }
 
@@ -353,11 +351,10 @@ buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
   Type guidType = MemRefType::get(guidShape, builder.getI64Type());
 
   if (sizes.empty())
-    sizes.push_back(builder.create<arith::ConstantIndexOp>(state.location, 1));
+    sizes.push_back(arts::createOneIndex(builder, state.location));
 
   if (elementSizes.empty())
-    elementSizes.push_back(
-        builder.create<arith::ConstantIndexOp>(state.location, 1));
+    elementSizes.push_back(arts::createOneIndex(builder, state.location));
 
   Type ptrType;
   if (pointerType) {
@@ -630,7 +627,7 @@ static void addDbAcquireOperandsAndAttrs(
   PartitionMode resolvedMode = PartitionMode::coarse;
   if (partitionMode.has_value()) {
     resolvedMode = *partitionMode;
-  } else if (auto *allocOp = DatablockUtils::getUnderlyingDbAlloc(sourcePtr)) {
+  } else if (auto *allocOp = DbUtils::getUnderlyingDbAlloc(sourcePtr)) {
     if (auto parentMode = arts::getPartitionMode(allocOp))
       resolvedMode = *parentMode;
   }
@@ -656,13 +653,13 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
                         SmallVector<Value> partitionSizes, Value boundsValid,
                         SmallVector<Value> elementOffsets,
                         SmallVector<Value> elementSizes) {
-  auto sourceDb = DatablockUtils::getUnderlyingDb(sourcePtr);
+  auto sourceDb = DbUtils::getUnderlyingDb(sourcePtr);
   auto sourceDbAlloc =
-      dyn_cast<DbAllocOp>(DatablockUtils::getUnderlyingDbAlloc(sourcePtr));
+      dyn_cast<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(sourcePtr));
   assert(sourceDb && "Expected sourceDb");
   assert(sourceDbAlloc && "Expected sourceDbAlloc");
 
-  auto sourceSizes = DatablockUtils::getSizesFromDb(sourceDb);
+  auto sourceSizes = DbUtils::getSizesFromDb(sourceDb);
   const uint64_t sourceRank = sourceSizes.size();
   const uint64_t pinnedDims = indices.size();
 
@@ -677,14 +674,12 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
     if (sizes.empty()) {
       sizes.reserve(remainingRank);
       for (uint64_t d = 0; d < remainingRank; ++d)
-        sizes.push_back(
-            builder.create<arith::ConstantIndexOp>(state.location, 1));
+        sizes.push_back(arts::createOneIndex(builder, state.location));
     }
     if (offsets.empty()) {
       offsets.reserve(remainingRank);
       for (uint64_t d = 0; d < remainingRank; ++d)
-        offsets.push_back(
-            builder.create<arith::ConstantIndexOp>(state.location, 0));
+        offsets.push_back(arts::createZeroIndex(builder, state.location));
     }
   }
 
@@ -709,12 +704,10 @@ void DbAcquireOp::build(
   /// Auto-fill sizes/offsets when indices are provided
   if (!indices.empty()) {
     if (sizes.empty())
-      sizes.push_back(
-          builder.create<arith::ConstantIndexOp>(state.location, 1));
+      sizes.push_back(arts::createOneIndex(builder, state.location));
     if (offsets.empty()) {
       for (size_t i = 0; i < sizes.size(); ++i)
-        offsets.push_back(
-            builder.create<arith::ConstantIndexOp>(state.location, 0));
+        offsets.push_back(arts::createZeroIndex(builder, state.location));
     }
   }
 
@@ -743,7 +736,7 @@ LogicalResult DbAcquireOp::verify() {
   if (numIndices == 0 && numSizes == 0)
     return success();
 
-  size_t srcRank = DatablockUtils::getSizesFromDb(getSourcePtr()).size();
+  size_t srcRank = DbUtils::getSizesFromDb(getSourcePtr()).size();
 
   if (numIndices > srcRank) {
     return emitOpError("Number of DB-space indices (")
@@ -765,8 +758,8 @@ LogicalResult DbAcquireOp::verify() {
 
   /// Validate indices are not used on single-element datablocks
   if (numIndices > 0) {
-    Operation *sourceDb = DatablockUtils::getUnderlyingDb(getSourcePtr());
-    if (DatablockUtils::hasSingleSize(sourceDb)) {
+    Operation *sourceDb = DbUtils::getUnderlyingDb(getSourcePtr());
+    if (DbUtils::hasSingleSize(sourceDb)) {
       auto partMode = getPartitionMode();
       bool awaitingPartitioning =
           partMode && (*partMode == PartitionMode::fine_grained ||
@@ -785,7 +778,7 @@ LogicalResult DbAcquireOp::verify() {
 void DbRefOp::build(OpBuilder &builder, OperationState &state, Value source,
                     ArrayRef<Value> indices) {
   DbAllocOp dbAllocOp =
-      dyn_cast<DbAllocOp>(DatablockUtils::getUnderlyingDbAlloc(source));
+      dyn_cast<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(source));
   assert(dbAllocOp && "Expected dbAllocOp");
   state.addTypes(dbAllocOp.getAllocatedElementType());
   state.addOperands(source);
@@ -796,12 +789,12 @@ void DbRefOp::build(OpBuilder &builder, OperationState &state, Value source,
 }
 
 LogicalResult DbRefOp::verify() {
-  auto underlyingDbOp = DatablockUtils::getUnderlyingDb(getSource());
+  auto underlyingDbOp = DbUtils::getUnderlyingDb(getSource());
   if (!underlyingDbOp)
     return emitOpError("source must be a datablock operation\n")
            << *getOperation();
 
-  auto outerSizes = DatablockUtils::getSizesFromDb(underlyingDbOp);
+  auto outerSizes = DbUtils::getSizesFromDb(underlyingDbOp);
   if (getIndices().size() != outerSizes.size()) {
     return emitOpError("expects ")
            << outerSizes.size() << " index operands (got "
@@ -812,7 +805,7 @@ LogicalResult DbRefOp::verify() {
   SmallVector<Value> allocSizes = outerSizes;
   if (auto dbAcquire = dyn_cast<DbAcquireOp>(underlyingDbOp)) {
     if (auto dbAlloc = dyn_cast_or_null<DbAllocOp>(
-            DatablockUtils::getUnderlyingDbAlloc(dbAcquire.getSourcePtr()))) {
+            DbUtils::getUnderlyingDbAlloc(dbAcquire.getSourcePtr()))) {
       allocSizes = SmallVector<Value>(dbAlloc.getSizes().begin(),
                                       dbAlloc.getSizes().end());
     }
@@ -834,7 +827,7 @@ LogicalResult DbRefOp::verify() {
   DbAllocOp dbAllocOp = nullptr;
   if (auto dbAcquire = dyn_cast<DbAcquireOp>(underlyingDbOp)) {
     dbAllocOp = dyn_cast<DbAllocOp>(
-        DatablockUtils::getUnderlyingDbAlloc(dbAcquire.getSourcePtr()));
+        DbUtils::getUnderlyingDbAlloc(dbAcquire.getSourcePtr()));
   } else
     dbAllocOp = dyn_cast<DbAllocOp>(underlyingDbOp);
 

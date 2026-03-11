@@ -20,7 +20,7 @@ namespace mlir {
 namespace arts {
 
 ///===----------------------------------------------------------------------===///
-// AccessAnalyzer - Helper for analyzing memory access operations
+/// AccessAnalyzer - Helper for analyzing memory access operations
 ///===----------------------------------------------------------------------===///
 class AccessAnalyzer {
 public:
@@ -97,7 +97,7 @@ public:
       if (getAccessedMemref(op) != memref)
         return;
 
-      // For affine accesses, check if innermost dimension has stride 1
+      /// For affine accesses, check if innermost dimension has stride 1
       if (auto map = extractAffineMap(op)) {
         if (map->getNumResults() > 0) {
           auto lastResult = map->getResult(map->getNumResults() - 1);

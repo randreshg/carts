@@ -40,22 +40,23 @@
 /// Access Mode Strategy:
 /// Access modes are extracted from DbControlOps (from OpenMP depend clauses).
 /// If no control DB is found, conservatively defaults to inout mode.
-//==========================================================================
+///==========================================================================///
 
 #include "../ArtsPassDetails.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
-#include "arts/Transforms/Datablock/Block/DbBlockIndexer.h"
-#include "arts/Transforms/Datablock/DbRewriter.h"
-#include "arts/Transforms/Datablock/ElementWise/DbElementWiseIndexer.h"
+#include "arts/Transforms/Db/Block/DbBlockIndexer.h"
+#include "arts/Transforms/Db/DbRewriter.h"
+#include "arts/Transforms/Db/ElementWise/DbElementWiseIndexer.h"
 #include "arts/Transforms/DbTransforms.h"
 #include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/DbUtils.h"
 #include "arts/Utils/Metadata/ArtsMetadata.h"
 #include "arts/Utils/Metadata/MemrefMetadata.h"
 #include "arts/Utils/OperationAttributes.h"
+#include "arts/Utils/RemovalUtils.h"
 #include "arts/Utils/ValueUtils.h"
 #include <optional>
 
@@ -85,12 +86,12 @@ using namespace mlir;
 using namespace mlir::arts;
 
 ///===----------------------------------------------------------------------===///
-// Helper Functions
+/// Helper Functions
 ///===----------------------------------------------------------------------===///
 namespace {
 
 ///===----------------------------------------------------------------------===///
-// Pass Implementation
+/// Pass Implementation
 ///===----------------------------------------------------------------------===///
 
 struct CreateDbsPass : public arts::CreateDbsBase<CreateDbsPass> {
@@ -246,7 +247,7 @@ private:
   void rewriteUsesEverywhereCoarse(Operation *alloc, DbAllocOp dbAlloc);
 
   ///===----------------------------------------------------------------------===///
-  /// Helper Functions for Heuristic Decisions
+  //// Helper Functions for Heuristic Decisions
   ///===----------------------------------------------------------------------===///
 
   /// Computes the number of outer DBs for fine-grained allocation.
@@ -294,7 +295,7 @@ private:
 } // namespace
 
 ///===----------------------------------------------------------------------===///
-// Pass Entry Point
+/// Pass Entry Point
 ///===----------------------------------------------------------------------===///
 ArtsMode CreateDbsPass::inferEdtAccessMode(Operation *underlyingOp,
                                            EdtOp edt) const {
@@ -435,7 +436,7 @@ void CreateDbsPass::runOnOperation() {
 }
 
 ///===----------------------------------------------------------------------===///
-// Allocation Type Inference
+/// Allocation Type Inference
 ///===----------------------------------------------------------------------===///
 DbAllocType CreateDbsPass::inferAllocType(Operation *alloc) {
   assert(alloc && "Allocation operation not found");
@@ -453,7 +454,7 @@ DbAllocType CreateDbsPass::inferAllocType(Operation *alloc) {
 }
 
 ///===----------------------------------------------------------------------===///
-// Collect Allocations Used in EDTs
+/// Collect Allocations Used in EDTs
 ///===----------------------------------------------------------------------===///
 void CreateDbsPass::collectMemrefs() {
   memrefInfo.clear();
@@ -503,7 +504,7 @@ void CreateDbsPass::collectMemrefs() {
 }
 
 ///===----------------------------------------------------------------------===///
-// Collect Control DB Operations
+/// Collect Control DB Operations
 ///===----------------------------------------------------------------------===///
 void CreateDbsPass::collectControlDbOps() {
   /// First, extract dependency mode and index information from all db_control
@@ -528,8 +529,7 @@ void CreateDbsPass::collectControlDbOps() {
                << " offsets, " << sizes.size() << " sizes");
 
     /// Get user EDT
-    EdtOp userEdt =
-        dyn_cast_or_null<EdtOp>(DatablockUtils::findUserEdt(dbControl));
+    EdtOp userEdt = dyn_cast_or_null<EdtOp>(DbUtils::findUserEdt(dbControl));
 
     SmallVector<Value, 4> indexValues(indices.begin(), indices.end());
     SmallVector<Value, 4> offsetValues(offsets.begin(), offsets.end());
@@ -860,15 +860,15 @@ Value CreateDbsPass::findParentAcquireSource(EdtOp edt, Operation *dbAllocOp,
     if (!v || v.getType() != targetType)
       return false;
 
-    Operation *db = DatablockUtils::getUnderlyingDbAlloc(v);
+    Operation *db = DbUtils::getUnderlyingDbAlloc(v);
     if (!db || db != dbAllocOp)
       return false;
 
     /// If the caller intends to index into this handle, avoid reusing a
     /// single-element datablock view.
     if (requiresIndexedAccess) {
-      if (Operation *dbOp = DatablockUtils::getUnderlyingDb(v)) {
-        if (DatablockUtils::hasSingleSize(dbOp))
+      if (Operation *dbOp = DbUtils::getUnderlyingDb(v)) {
+        if (DbUtils::hasSingleSize(dbOp))
           return false;
       }
     }
@@ -1002,7 +1002,7 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
     ArtsMode acquireMode = ArtsMode::uninitialized;
 
     for (const auto &dep : deps) {
-      // Determine mode for this entry
+      /// Determine mode for this entry
       PartitionMode entryMode = PartitionMode::coarse;
       if (!dep.indices.empty()) {
         entryMode = PartitionMode::fine_grained;
@@ -1011,27 +1011,27 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       }
       entryModes.push_back(static_cast<int32_t>(entryMode));
 
-      // Add this entry's indices
+      /// Add this entry's indices
       indicesSegments.push_back(static_cast<int32_t>(dep.indices.size()));
       for (Value v : dep.indices)
         partIndices.push_back(v);
 
-      // Add this entry's offsets
+      /// Add this entry's offsets
       offsetsSegments.push_back(static_cast<int32_t>(dep.offsets.size()));
       for (Value v : dep.offsets)
         partOffsets.push_back(v);
 
-      // Add this entry's sizes
+      /// Add this entry's sizes
       sizesSegments.push_back(static_cast<int32_t>(dep.sizes.size()));
       for (Value v : dep.sizes)
         partSizes.push_back(v);
 
-      // Combine access modes
+      /// Combine access modes
       acquireMode = ::combineAccessModes(acquireMode, dep.mode);
     }
 
-    // If this EDT has no explicit db_control hints for the memref, infer
-    // per-EDT access from actual loads/stores before falling back.
+    /// If this EDT has no explicit db_control hints for the memref, infer
+    /// per-EDT access from actual loads/stores before falling back.
     if (acquireMode == ArtsMode::uninitialized) {
       acquireMode = inferEdtAccessMode(underlyingOp, edt);
       if (acquireMode == ArtsMode::uninitialized) {
@@ -1041,8 +1041,8 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       }
     }
 
-    // Determine the "primary" partition mode from first entry (for
-    // compatibility)
+    /// Determine the "primary" partition mode from first entry (for
+    /// compatibility)
     PartitionMode partMode = PartitionMode::coarse;
     if (!entryModes.empty()) {
       partMode = static_cast<PartitionMode>(entryModes[0]);

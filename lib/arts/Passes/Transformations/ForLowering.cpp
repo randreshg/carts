@@ -34,7 +34,7 @@
 #include "arts/Transforms/Edt/ParallelSplitLowering.h"
 #include "arts/Transforms/Edt/ReductionLowering.h"
 #include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/DbUtils.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
@@ -108,6 +108,20 @@ public:
 
 private:
   void initialize();
+
+  /// Phase 1: Determine the block size from PartitioningHint and/or
+  /// the runtime DB-alignment hint. Sets blockSize, useRuntimeBlockAlignment.
+  /// Returns the compile-time block size used for alignment decisions.
+  int64_t computeBlockSize();
+
+  /// Phase 2: Align chunkLowerBound to the nearest block boundary if the
+  /// lower bound is misaligned. Sets chunkLowerBound, useAlignedLowerBound,
+  /// alignmentBlockSize.
+  void alignChunkLowerBound(int64_t computedBlockSize);
+
+  /// Phase 3: Compute totalIterations = ceil((upper - chunkLower) / step)
+  /// and totalChunks = ceil(totalIterations / blockSize).
+  void computeIterationsAndChunks();
 };
 
 using ReductionInfo = ReductionLoweringInfo;
@@ -309,9 +323,24 @@ private:
 /// block distribution. This ensures balanced work with minimal overhead.
 
 void LoopInfo::initialize() {
+  int64_t compiletimeBlockSize = computeBlockSize();
+  alignChunkLowerBound(compiletimeBlockSize);
+  computeIterationsAndChunks();
+}
+
+/// Phase 1: Determine the block size.
+///
+/// Reads the PartitioningHint attached to the for-op and merges it with the
+/// runtime DB-alignment block-size hint. The final blockSize Value is the
+/// maximum of the two so that worker chunks never straddle DB block
+/// boundaries.
+///
+/// Returns the compile-time block size (from the hint) for use in alignment
+/// decisions in subsequent phases.
+int64_t LoopInfo::computeBlockSize() {
   Location loc = forOp.getLoc();
   Value one = AC->createIndexConstant(1, loc);
-  /// Step 1: Determine block size from PartitioningHint or default to 1
+
   int64_t computedBlockSize = 1;
 
   if (auto hint = getPartitioningHint(forOp.getOperation())) {
@@ -323,9 +352,9 @@ void LoopInfo::initialize() {
     }
   }
 
-  /// Create the block size constant
   blockSize = AC->createIndexConstant(computedBlockSize, loc);
   useRuntimeBlockAlignment = false;
+
   if (runtimeBlockSizeHint) {
     Value runtimeBlockSize = AC->castToIndex(runtimeBlockSizeHint, loc);
     runtimeBlockSize = AC->create<arith::MaxUIOp>(loc, runtimeBlockSize, one);
@@ -351,15 +380,22 @@ void LoopInfo::initialize() {
     }
   }
 
-  /// Step 2: Compute total iterations
-  /// totalIterations = ceil((upper - lower) / step)
+  return computedBlockSize;
+}
+
+/// Phase 2: Align the chunk lower bound to the nearest block boundary.
+///
+/// When blockSize > 1 or runtime alignment is active, the lower bound used
+/// for chunking may need to be rounded down so that chunk boundaries align
+/// with DB block boundaries. This avoids overlapping block partitions
+/// (e.g., stencil loops where lowerBound is not a multiple of blockSize).
+void LoopInfo::alignChunkLowerBound(int64_t computedBlockSize) {
+  Location loc = forOp.getLoc();
+
   chunkLowerBound = lowerBound;
   useAlignedLowerBound = false;
   alignmentBlockSize = std::nullopt;
 
-  /// If lower bound is misaligned with block size, align chunking base down
-  /// to the nearest block boundary. This avoids overlapping block partitions
-  /// when lowerBound is not a multiple of blockSize (e.g., stencil loops).
   int64_t alignSize = computedBlockSize;
   if (alignSize > 1)
     alignmentBlockSize = alignSize;
@@ -376,11 +412,20 @@ void LoopInfo::initialize() {
       }
     }
   }
+
   if (useRuntimeBlockAlignment) {
     Value rem = AC->create<arith::RemUIOp>(loc, lowerBound, blockSize);
     chunkLowerBound = AC->create<arith::SubIOp>(loc, lowerBound, rem);
     useAlignedLowerBound = true;
   }
+}
+
+/// Phase 3: Compute total iterations and total chunks.
+///
+///   totalIterations = ceil((upperBound - chunkLowerBound) / loopStep)
+///   totalChunks     = ceil(totalIterations / blockSize)
+void LoopInfo::computeIterationsAndChunks() {
+  Location loc = forOp.getLoc();
 
   Value range = AC->create<arith::SubIOp>(loc, upperBound, chunkLowerBound);
   Value adjustedRange = AC->create<arith::AddIOp>(
@@ -389,9 +434,6 @@ void LoopInfo::initialize() {
                                 AC->createIndexConstant(1, loc)));
   totalIterations = AC->create<arith::DivUIOp>(loc, adjustedRange, loopStep);
 
-  /// Step 3: Compute total chunks based on block size
-  /// Formula: totalChunks = ceil(totalIterations / blockSize)
-  ///        = (totalIterations + blockSize - 1) / blockSize
   Value adjustedIterations = AC->create<arith::AddIOp>(
       loc, totalIterations,
       AC->create<arith::SubIOp>(loc, blockSize,
@@ -400,7 +442,7 @@ void LoopInfo::initialize() {
 }
 
 ///===----------------------------------------------------------------------===///
-// Pass Entry Point
+/// Pass Entry Point
 ///===----------------------------------------------------------------------===///
 
 void ForLoweringPass::runOnOperation() {
@@ -581,7 +623,7 @@ void ForLoweringPass::createResultEdt(ArtsCodegen *AC, ReductionInfo &redInfo,
 }
 
 ///===----------------------------------------------------------------------===///
-// Parallel Region Splitting Implementation
+/// Parallel Region Splitting Implementation
 ///===----------------------------------------------------------------------===///
 void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
                                              EdtOp originalParallel,
@@ -617,8 +659,10 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   /// internode). Used to align worker chunk boundaries to DB block boundaries.
   Value numDbPartitions;
   if (originalParallel.getConcurrency() == EdtConcurrency::internode) {
-    numDbPartitions =
-        AC.castToIndex(AC.create<GetTotalNodesOp>(loc).getResult(), loc);
+    numDbPartitions = AC.castToIndex(
+        AC.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalNodes)
+            .getResult(),
+        loc);
   } else {
     numDbPartitions = numWorkers;
   }
@@ -803,7 +847,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       continue;
 
     /// Rewiring: Trace to DbAllocOp and acquire from there
-    auto allocInfo = DatablockUtils::traceToDbAlloc(parentDep);
+    auto allocInfo = DbUtils::traceToDbAlloc(parentDep);
     if (!allocInfo) {
       ARTS_ERROR("Could not trace dependency " << idx << " to DbAllocOp");
       continue;
@@ -869,11 +913,10 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       DbAllocOp rootAlloc;
       if (auto allocFromGuid = rootGuidValue.getDefiningOp<DbAllocOp>())
         rootAlloc = allocFromGuid;
-      else if (Operation *allocOp =
-                   DatablockUtils::getUnderlyingDbAlloc(rootPtrValue))
+      else if (Operation *allocOp = DbUtils::getUnderlyingDbAlloc(rootPtrValue))
         rootAlloc = dyn_cast<DbAllocOp>(allocOp);
       else if (Operation *allocOp =
-                   DatablockUtils::getUnderlyingDbAlloc(parentAcqOp.getPtr()))
+                   DbUtils::getUnderlyingDbAlloc(parentAcqOp.getPtr()))
         rootAlloc = dyn_cast<DbAllocOp>(allocOp);
 
       if (rootAlloc) {
@@ -1041,10 +1084,9 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     setDbSpaceSliceFromAcquirePlan(chunkAcqOp, chunkUsesStencilHalo);
 
     if (originalParallel.getConcurrency() == EdtConcurrency::internode &&
-        chunkAcqOp.getMode() != ArtsMode::in &&
-        DatablockUtils::isCoarse(chunkAcqOp)) {
+        chunkAcqOp.getMode() != ArtsMode::in && DbUtils::isCoarse(chunkAcqOp)) {
       auto allocOp = dyn_cast_or_null<DbAllocOp>(
-          DatablockUtils::getUnderlyingDbAlloc(chunkAcqOp.getSourcePtr()));
+          DbUtils::getUnderlyingDbAlloc(chunkAcqOp.getSourcePtr()));
       if (allocOp && !hasDistributedDbAllocation(allocOp.getOperation())) {
         forceOwnerRoute = true;
         ARTS_DEBUG("    - Coarse write dependency requires owner-local route");
@@ -1324,7 +1366,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 }
 
 ///===----------------------------------------------------------------------===///
-// Pass creation
+/// Pass creation
 ///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {

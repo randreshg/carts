@@ -65,7 +65,7 @@ using namespace mlir;
 using namespace mlir::arts;
 
 ///===----------------------------------------------------------------------===///
-// CollectMetadataPass
+/// CollectMetadataPass
 ///===----------------------------------------------------------------------===///
 
 struct CollectMetadataPass : public CollectMetadataBase<CollectMetadataPass> {
@@ -289,7 +289,7 @@ private:
 };
 
 ///===----------------------------------------------------------------------===///
-// Pass Registration
+/// Pass Registration
 ///===----------------------------------------------------------------------===///
 
 std::unique_ptr<Pass> mlir::arts::createCollectMetadataPass() {

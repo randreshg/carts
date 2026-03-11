@@ -40,6 +40,8 @@ void EdtAnalysis::analyzeFunc(func::FuncOp func) {
   EdtGraph &edtGraph = getOrCreateEdtGraph(func);
   func.walk([&](EdtOp edt) {
     auto edtNode = edtGraph.getEdtNode(edt);
+    if (!edtNode)
+      return;
     auto &info = edtNode->getInfo();
     info.orderIndex = edtIndex;
     edtOrderIndex[edt] = edtIndex++;
@@ -89,6 +91,8 @@ void EdtAnalysis::print(func::FuncOp func, llvm::raw_ostream &os) {
   EdtGraph &edtGraph = getOrCreateEdtGraph(func);
   func.walk([&](EdtOp edt) {
     auto edtNode = edtGraph.getEdtNode(edt);
+    if (!edtNode)
+      return;
     const EdtInfo &info = edtNode->getInfo();
     os << "  EDT #" << info.orderIndex << ":\n";
     os << "    Total ops: " << info.totalOps << "\n";
@@ -113,6 +117,8 @@ void EdtAnalysis::toJson(func::FuncOp func, llvm::raw_ostream &os) {
   EdtGraph &edtGraph = getOrCreateEdtGraph(func);
   func.walk([&](EdtOp edt) {
     auto edtNode = edtGraph.getEdtNode(edt);
+    if (!edtNode)
+      return;
     const EdtInfo &info = edtNode->getInfo();
 
     if (!first)
@@ -188,6 +194,7 @@ bool EdtAnalysis::invalidateGraph(func::FuncOp func) {
     if (it->second)
       it->second->invalidate();
     edtGraphs.erase(it);
+    analyzed = false;
     return true;
   }
   return false;

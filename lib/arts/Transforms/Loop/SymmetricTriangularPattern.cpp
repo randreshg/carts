@@ -31,6 +31,7 @@
 #include "arts/Analysis/Db/DbPatternMatchers.h"
 #include "arts/Transforms/Loop/LoopNormalizer.h"
 #include "arts/Utils/ArtsDebug.h"
+#include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -83,7 +84,7 @@ LogicalResult SymmetricTriangularPattern::apply(OpBuilder &builder) {
 
   /// Step 1: Create %c0 constant for the new lower bound
   builder.setInsertionPoint(m.jLoop);
-  Value c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
+  Value c0 = arts::createZeroIndex(builder, loc);
 
   /// Step 2: Create new rectangular scf.for with lb=0, same ub and step
   Value ub = m.jLoop.getUpperBound();

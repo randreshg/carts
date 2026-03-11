@@ -46,7 +46,7 @@ public:
   LoopNode *getOrCreateLoopNode(Operation *loopOp);
 
   /// Get existing LoopNode (returns nullptr if not found)
-  LoopNode *getLoopNode(Operation *loopOp) const;
+  LoopNode *getLoopNode(Operation *loopOp);
 
   /// Collect enclosing LoopNodes for a given operation
   void collectEnclosingLoops(Operation *op,
@@ -67,15 +67,22 @@ public:
 
   /// Resolve static trip count for a loop operation when possible.
   /// Uses LoopNode metadata first, then operation attributes/constant bounds.
-  std::optional<int64_t> getStaticTripCount(Operation *loopOp) const;
+  std::optional<int64_t> getStaticTripCount(Operation *loopOp);
+
+  /// Check if an operation is a recognized loop type.
+  bool isLoopOperation(Operation *op) const;
+
+  /// Find the innermost enclosing loop whose induction variable the given
+  /// value depends on. Returns nullptr if no such loop is found.
+  LoopNode *findEnclosingLoopDrivenBy(Operation *op, Value idx);
 
 private:
+  void ensureAnalyzed();
+
   ModuleOp module;
+  bool built = false;
 
   DenseMap<Operation *, std::unique_ptr<LoopNode>> loopNodes;
-
-  /// Helper: Check if an operation is a recognized loop
-  bool isLoopOperation(Operation *op) const;
 };
 
 } // namespace arts

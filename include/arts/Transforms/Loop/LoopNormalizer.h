@@ -17,9 +17,9 @@
 namespace mlir {
 namespace arts {
 
-///===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// LoopPattern - Abstract base for loop normalization patterns
-///===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 class LoopPattern {
 public:
   virtual ~LoopPattern() = default;
@@ -35,9 +35,9 @@ public:
   virtual StringRef getName() const = 0;
 };
 
-///===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Shared utility functions for loop patterns
-///===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Copy loop attributes (arts.id and arts.loop) from source to target op.
 void copyLoopAttributes(Operation *source, Operation *target);
@@ -49,9 +49,9 @@ void updateTripCountMetadata(Operation *loop, int64_t newTripCount);
 /// via arith.addi(outerIV, constant). Returns the constant offset if found.
 std::optional<int64_t> getTriangularOffset(Value lb, Value outerIV);
 
-///===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Pattern factory functions
-///===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Create SymmetricTriangularPattern for triangular→rectangular normalization.
 std::unique_ptr<LoopPattern> createSymmetricTriangularPattern();

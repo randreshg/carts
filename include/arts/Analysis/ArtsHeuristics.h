@@ -16,6 +16,7 @@
 #define ARTS_ANALYSIS_ARTSHEURISTICS_H
 
 #include "arts/Analysis/DistributionHeuristics.h"
+#include "arts/Analysis/HeuristicUtils.h"
 #include "arts/Analysis/PartitioningHeuristics.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 #include "llvm/ADT/SmallVector.h"
@@ -83,6 +84,9 @@ public:
                       const llvm::StringMap<int64_t> &inputs = {});
   llvm::ArrayRef<HeuristicDecision> getDecisions() const;
   void exportDecisionsToJson(llvm::json::OStream &J) const;
+
+  /// Clear accumulated decisions (called on invalidation)
+  void clearDecisions() { decisions.clear(); }
 
 private:
   const mlir::arts::ArtsAbstractMachine &machine;

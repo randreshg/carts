@@ -31,8 +31,6 @@ carts cgeist <file>.c -O0 --print-debug-info -S --raise-scf-to-affine           
 carts cgeist <file>.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine  # Parallel
 
 # Run pipeline (stop at specific stage)
-carts compile <file>.mlir --pipeline=<stage>
-# (equivalent passthrough also works)
 carts compile <file>.mlir --stop-at=<stage>
 
 # Run pipeline (dump all intermediate stages)
@@ -51,7 +49,7 @@ carts compile <file>.c -O3
 carts compile <file>.c -O3 --diagnose
 ```
 
-### Pipeline Stage Names (for --pipeline / --stop-at)
+### Pipeline Stage Names (for --stop-at)
 
 | Stage | Name                   | Purpose                      |
 |-------|------------------------|------------------------------|
@@ -118,7 +116,7 @@ flowchart TB
       S4 --> S5 --> S6
     end
 
-    subgraph P3["Phase 3: Datablock management"]
+    subgraph P3["Phase 3: DB management"]
       direction TB
       S7["7) create-dbs<br/>Create DataBlock allocations"]
       S8["8) db-opt<br/>Optimize DB access modes"]
@@ -180,7 +178,7 @@ flowchart TB
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --pipeline=canonicalize-memrefs
+carts compile <file>.mlir --stop-at=canonicalize-memrefs
 ```
 
 **Passes Executed:**
@@ -260,12 +258,12 @@ carts compile <file>.mlir --initial-cleanup
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --pipeline=openmp-to-arts
+carts compile <file>.mlir --stop-at=openmp-to-arts
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --pipeline=openmp-to-arts --debug-only=convert_openmp_to_arts 2>&1
+carts compile <file>.mlir --stop-at=openmp-to-arts --debug-only=convert_openmp_to_arts 2>&1
 ```
 
 **Passes Executed:**
@@ -310,12 +308,12 @@ arts.edt <parallel> {
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --pipeline=edt-transforms
+carts compile <file>.mlir --stop-at=edt-transforms
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --pipeline=edt-transforms --debug-only=edt 2>&1
+carts compile <file>.mlir --stop-at=edt-transforms --debug-only=edt 2>&1
 ```
 
 **Passes Executed:**
@@ -333,12 +331,12 @@ carts compile <file>.mlir --pipeline=edt-transforms --debug-only=edt 2>&1
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --pipeline=loop-reordering
+carts compile <file>.mlir --stop-at=loop-reordering
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --pipeline=loop-reordering --debug-only=loop_reordering,loop_transforms 2>&1
+carts compile <file>.mlir --stop-at=loop-reordering --debug-only=loop_reordering,loop_transforms 2>&1
 ```
 
 **Passes Executed:**
@@ -390,12 +388,12 @@ scf.for %i = %c0 to %M {
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --pipeline=create-dbs
+carts compile <file>.mlir --stop-at=create-dbs
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --pipeline=create-dbs --debug-only=create_dbs 2>&1
+carts compile <file>.mlir --stop-at=create-dbs --debug-only=create_dbs 2>&1
 ```
 
 **Passes Executed:**
@@ -407,9 +405,9 @@ carts compile <file>.mlir --pipeline=create-dbs --debug-only=create_dbs 2>&1
 
 | Strategy | Outer Dims | Use Case |
 |----------|-----------|----------|
-| Coarse-grained | `sizes=[1]` | Single datablock for entire array |
-| Fine-grained | `sizes=[N]` | One datablock per element |
-| Blocked | `sizes=[numChunks]` | Multiple datablocks matching workers |
+| Coarse-grained | `sizes=[1]` | Single DB for entire array |
+| Fine-grained | `sizes=[N]` | One DB per element |
+| Blocked | `sizes=[numChunks]` | Multiple DBs matching workers |
 
 **What to Look For:**
 ```mlir
@@ -435,12 +433,12 @@ arts.db_free %db : !arts.db<...>
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --pipeline=db-opt
+carts compile <file>.mlir --stop-at=db-opt
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --pipeline=db-opt --debug-only=db 2>&1
+carts compile <file>.mlir --stop-at=db-opt --debug-only=db 2>&1
 ```
 
 **Passes Executed:**
@@ -460,12 +458,12 @@ carts compile <file>.mlir --pipeline=db-opt --debug-only=db 2>&1
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --pipeline=edt-opt
+carts compile <file>.mlir --stop-at=edt-opt
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --pipeline=edt-opt --debug-only=edt,arts_loop_fusion 2>&1
+carts compile <file>.mlir --stop-at=edt-opt --debug-only=edt,arts_loop_fusion 2>&1
 ```
 
 **Passes Executed:**
@@ -1182,7 +1180,7 @@ All passes use the ARTS debug infrastructure with color-coded output:
 
 ```bash
 # Debug loop reordering decisions
-carts compile gemm.mlir --pipeline=loop-reordering --debug-only=loop_reordering 2>&1 | tee debug.log
+carts compile gemm.mlir --stop-at=loop-reordering --debug-only=loop_reordering 2>&1 | tee debug.log
 
 # Debug DB partitioning decisions
 carts compile gemm.mlir --stop-at=concurrency-opt --debug-only=db,db_partitioning 2>&1 | tee debug.log
@@ -1280,7 +1278,7 @@ checksum += fabs(data[i]);
 
 **Symptom:** Compilation or execution takes extremely long.
 
-**Cause:** Element-wise allocation creating millions of tiny datablocks.
+**Cause:** Element-wise allocation creating millions of tiny DBs.
 
 **Fix:** Use blocked allocation with div/mod index transformation:
 ```mlir
@@ -1347,16 +1345,16 @@ carts compile example_seq.mlir --collect-metadata
 carts cgeist example.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine -o example.mlir
 
 # Step 4: Inspect each pipeline stage
-carts compile example.mlir --pipeline=canonicalize-memrefs -o stages/01_canonicalize.mlir
-carts compile example.mlir --pipeline=openmp-to-arts -o stages/04_openmp_to_arts.mlir
-carts compile example.mlir --pipeline=create-dbs -o stages/07_create_dbs.mlir
+carts compile example.mlir --stop-at=canonicalize-memrefs -o stages/01_canonicalize.mlir
+carts compile example.mlir --stop-at=openmp-to-arts -o stages/04_openmp_to_arts.mlir
+carts compile example.mlir --stop-at=create-dbs -o stages/07_create_dbs.mlir
 carts compile example.mlir --stop-at=concurrency-opt -o stages/12_concurrency_opt.mlir
 
 # Or dump all stages at once
 carts compile example.mlir --all-stages -o stages/
 
 # Step 5: Debug specific pass if needed
-carts compile example.mlir --pipeline=create-dbs --debug-only=create_dbs 2>&1 | tee debug_createdb.log
+carts compile example.mlir --stop-at=create-dbs --debug-only=create_dbs 2>&1 | tee debug_createdb.log
 
 # Step 6: Full execution
 carts compile example.c -O3
@@ -1372,7 +1370,7 @@ carts cgeist example.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine 
 carts compile example.mlir --stop-at=concurrency-opt --debug-only=db,db_partitioning 2>&1 | tee db_debug.log
 
 # Look for partitioning decisions in output:
-# [INFO] [db_partitioning] Analyzing datablock partitioning...
+# [INFO] [db_partitioning] Analyzing DB partitioning...
 # [DEBUG] [db_partitioning] H1 heuristic: read-only, keeping coarse
 # [DEBUG] [db_partitioning] H2 heuristic: cost model suggests partition
 

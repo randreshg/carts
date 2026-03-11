@@ -23,9 +23,9 @@ namespace arts {
 /// Utility class for working with MLIR Values, constants, and casts.
 class ValueUtils {
 public:
-  ///===----------------------------------------------------------------------===///
+  ///===----------------------------------------------------------------------===////
   /// Constant Value Analysis
-  ///===----------------------------------------------------------------------===///
+  ///===----------------------------------------------------------------------===////
 
   /// Check if value is defined by a ConstantLike operation.
   static bool isValueConstant(Value val);
@@ -67,9 +67,9 @@ public:
   /// Returns true for non-zero constants or unknown (non-constant) values.
   static bool isNonZeroIndex(Value v);
 
-  ///===----------------------------------------------------------------------===///
+  ///===----------------------------------------------------------------------===////
   /// Value Type Conversion and Casting
-  ///===----------------------------------------------------------------------===///
+  ///===----------------------------------------------------------------------===////
 
   /// Strip through index casts, sign/zero extensions, truncations.
   static Value stripNumericCasts(Value value);
@@ -80,9 +80,9 @@ public:
   /// Cast to index type. Returns null Value for non-integer types.
   static Value ensureIndexType(Value value, OpBuilder &builder, Location loc);
 
-  ///===----------------------------------------------------------------------===///
+  ///===----------------------------------------------------------------------===////
   /// Value Dependencies and Analysis
-  ///===----------------------------------------------------------------------===///
+  ///===----------------------------------------------------------------------===////
 
   /// Check if value depends on base through arithmetic operations.
   static bool dependsOn(Value value, Value base, int depth = 0);
@@ -110,9 +110,9 @@ public:
   /// Extract array index from byte offset pattern: bytes = (index * elemBytes).
   static Value extractArrayIndexFromByteOffset(Value byteOffset, Type elemType);
 
-  ///===----------------------------------------------------------------------===///
+  ///===----------------------------------------------------------------------===////
   /// Underlying Value Tracing
-  ///===----------------------------------------------------------------------===///
+  ///===----------------------------------------------------------------------===////
 
   /// Trace to root allocation through casts, acquires, GEPs, etc.
   static Value getUnderlyingValue(Value v);
@@ -120,9 +120,9 @@ public:
   /// Like getUnderlyingValue but returns the defining operation.
   static Operation *getUnderlyingOperation(Value v);
 
-  ///===----------------------------------------------------------------------===//
+  ///===----------------------------------------------------------------------===///
   /// Value Reconstruction for Dominance
-  ///===----------------------------------------------------------------------===//
+  ///===----------------------------------------------------------------------===///
 
   /// Reconstruct a value at a dominating point by tracing through arithmetic.
   /// Returns the value directly if it already dominates, or nullptr on failure.
@@ -159,9 +159,9 @@ public:
                           llvm::function_ref<Value(Value)> traceValueFn,
                           llvm::function_ref<Value(Value)> traceCondFn);
 
-  ///===----------------------------------------------------------------------===//
+  ///===----------------------------------------------------------------------===///
   /// Value Cloning Utilities
-  ///===----------------------------------------------------------------------===//
+  ///===----------------------------------------------------------------------===///
 
   /// Check if an operation can be safely cloned (constant-like or pure).
   static bool

@@ -6,12 +6,12 @@
 #ifndef ARTS_TRANSFORMS_DBTRANSFORMS_H
 #define ARTS_TRANSFORMS_DBTRANSFORMS_H
 
-#include "arts/Transforms/Datablock/Block/DbBlockIndexer.h"
-#include "arts/Transforms/Datablock/DbBlockPlanResolver.h"
-#include "arts/Transforms/Datablock/DbIndexerBase.h"
-#include "arts/Transforms/Datablock/DbLayoutStrategy.h"
-#include "arts/Transforms/Datablock/DbRewriter.h"
-#include "arts/Transforms/Datablock/ElementWise/DbElementWiseIndexer.h"
-#include "arts/Transforms/Datablock/Stencil/DbStencilIndexer.h"
+#include "arts/Transforms/Db/Block/DbBlockIndexer.h"
+#include "arts/Transforms/Db/DbBlockPlanResolver.h"
+#include "arts/Transforms/Db/DbIndexerBase.h"
+#include "arts/Transforms/Db/DbLayoutStrategy.h"
+#include "arts/Transforms/Db/DbRewriter.h"
+#include "arts/Transforms/Db/ElementWise/DbElementWiseIndexer.h"
+#include "arts/Transforms/Db/Stencil/DbStencilIndexer.h"
 
 #endif /// ARTS_TRANSFORMS_DBTRANSFORMS_H

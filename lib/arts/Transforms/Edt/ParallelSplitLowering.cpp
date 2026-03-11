@@ -17,7 +17,7 @@
 ///==========================================================================///
 
 #include "arts/Transforms/Edt/ParallelSplitLowering.h"
-#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/DbUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 
 #include "arts/Utils/ArtsDebug.h"
@@ -100,7 +100,7 @@ EdtOp mlir::arts::createContinuationParallel(
 
     Value dep = originalDeps[idx];
 
-    auto allocInfo = DatablockUtils::traceToDbAlloc(dep);
+    auto allocInfo = DbUtils::traceToDbAlloc(dep);
     if (!allocInfo) {
       ARTS_ERROR("Could not trace dependency to DbAllocOp for arg " << idx);
       continue;

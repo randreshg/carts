@@ -1,5 +1,5 @@
 ///===----------------------------------------------------------------------===///
-// MemrefMetadata.cpp - Memref/Allocation Metadata Implementation
+/// MemrefMetadata.cpp - Memref/Allocation Metadata Implementation
 ///===----------------------------------------------------------------------===///
 
 #include "arts/Utils/Metadata/MemrefMetadata.h"
@@ -19,7 +19,7 @@ MemrefMetadata::MemrefMetadata(Operation *allocOp)
 }
 
 ///===----------------------------------------------------------------------===///
-// Enum Serialization Helpers
+/// Enum Serialization Helpers
 ///===----------------------------------------------------------------------===///
 
 std::string MemrefMetadata::accessPatternToString(AccessPatternType pattern) {
@@ -150,7 +150,7 @@ MemrefMetadata::stringToDimAccessPattern(llvm::StringRef str) {
 }
 
 ///===----------------------------------------------------------------------===///
-// ArtsMetadata Interface Implementation
+/// ArtsMetadata Interface Implementation
 ///===----------------------------------------------------------------------===///
 
 bool MemrefMetadata::importFromOp() {

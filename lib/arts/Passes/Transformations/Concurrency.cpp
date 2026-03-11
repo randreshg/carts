@@ -19,6 +19,7 @@
 #include "../ArtsPassDetails.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/DistributionHeuristics.h"
+#include "arts/Analysis/Graphs/Edt/EdtNode.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
@@ -81,67 +82,38 @@ void ConcurrencyPass::runOnOperation() {
 void ConcurrencyPass::updateRuntimeQueryOperations() {
   ARTS_DEBUG("Updating runtime query operations");
 
-  /// Collect operations to replace - avoid modifying IR during walk
-  /// which can cause iterator invalidation and dominance issues.
-  SmallVector<GetCurrentWorkerOp, 4> workersToNodes;
-  SmallVector<GetTotalWorkersOp, 4> totalWorkersToNodes;
-  SmallVector<GetCurrentNodeOp, 4> nodesToWorkers;
-  SmallVector<GetTotalNodesOp, 4> totalNodesToWorkers;
+  /// Map of query kind swaps for concurrency remapping:
+  /// internode EDTs: currentWorker -> currentNode, totalWorkers -> totalNodes
+  /// intranode EDTs: currentNode -> currentWorker, totalNodes -> totalWorkers
+  SmallVector<std::pair<RuntimeQueryOp, RuntimeQueryKind>> toReplace;
 
   /// Phase 1: Collect operations to replace
   module.walk([&](EdtOp edtOp) {
     bool isInterNode = (edtOp.getConcurrency() == EdtConcurrency::internode);
 
-    edtOp.walk([&](Operation *op) {
-      if (auto getWorkerOp = dyn_cast<GetCurrentWorkerOp>(op)) {
-        if (isInterNode)
-          workersToNodes.push_back(getWorkerOp);
-      } else if (auto getTotalWorkersOp = dyn_cast<GetTotalWorkersOp>(op)) {
-        if (isInterNode)
-          totalWorkersToNodes.push_back(getTotalWorkersOp);
-      } else if (auto getNodeOp = dyn_cast<GetCurrentNodeOp>(op)) {
-        if (!isInterNode)
-          nodesToWorkers.push_back(getNodeOp);
-      } else if (auto getTotalNodesOp = dyn_cast<GetTotalNodesOp>(op)) {
-        if (!isInterNode)
-          totalNodesToWorkers.push_back(getTotalNodesOp);
+    edtOp.walk([&](RuntimeQueryOp queryOp) {
+      auto kind = queryOp.getKind();
+      if (isInterNode) {
+        if (kind == RuntimeQueryKind::currentWorker)
+          toReplace.emplace_back(queryOp, RuntimeQueryKind::currentNode);
+        else if (kind == RuntimeQueryKind::totalWorkers)
+          toReplace.emplace_back(queryOp, RuntimeQueryKind::totalNodes);
+      } else {
+        if (kind == RuntimeQueryKind::currentNode)
+          toReplace.emplace_back(queryOp, RuntimeQueryKind::currentWorker);
+        else if (kind == RuntimeQueryKind::totalNodes)
+          toReplace.emplace_back(queryOp, RuntimeQueryKind::totalWorkers);
       }
     });
   });
 
   /// Phase 2: Replace collected operations (safe - no iteration happening)
-  for (auto op : workersToNodes) {
-    ARTS_INFO("Replacing arts.get_current_worker with "
-              "arts.get_current_node in internode EDT");
+  for (auto &[op, newKind] : toReplace) {
+    ARTS_INFO("Replacing runtime_query "
+              << stringifyRuntimeQueryKind(op.getKind()) << " with "
+              << stringifyRuntimeQueryKind(newKind));
     OpBuilder builder(op);
-    auto newOp = builder.create<GetCurrentNodeOp>(op.getLoc());
-    op.replaceAllUsesWith(newOp.getResult());
-    op.erase();
-  }
-
-  for (auto op : totalWorkersToNodes) {
-    ARTS_INFO("Replacing arts.get_total_workers with "
-              "arts.get_total_nodes in internode EDT");
-    OpBuilder builder(op);
-    auto newOp = builder.create<GetTotalNodesOp>(op.getLoc());
-    op.replaceAllUsesWith(newOp.getResult());
-    op.erase();
-  }
-
-  for (auto op : nodesToWorkers) {
-    ARTS_INFO("Replacing arts.get_current_node with "
-              "arts.get_current_worker in intranode EDT");
-    OpBuilder builder(op);
-    auto newOp = builder.create<GetCurrentWorkerOp>(op.getLoc());
-    op.replaceAllUsesWith(newOp.getResult());
-    op.erase();
-  }
-
-  for (auto op : totalNodesToWorkers) {
-    ARTS_INFO("Replacing arts.get_total_nodes with "
-              "arts.get_total_workers in intranode EDT");
-    OpBuilder builder(op);
-    auto newOp = builder.create<GetTotalWorkersOp>(op.getLoc());
+    auto newOp = builder.create<RuntimeQueryOp>(op.getLoc(), newKind);
     op.replaceAllUsesWith(newOp.getResult());
     op.erase();
   }
@@ -183,24 +155,6 @@ void ConcurrencyPass::adjustDbModes() {
   });
 }
 
-/// Check if an EDT contains nested task EDTs.
-/// Parallel EDTs with nested tasks should remain intranode to ensure correct
-/// work distribution - task parallelism is designed for local execution.
-static bool containsNestedTaskEdts(EdtOp edtOp) {
-  bool hasNestedTasks = false;
-  edtOp.walk([&](EdtOp nestedEdt) {
-    /// Skip the EDT itself
-    if (nestedEdt == edtOp)
-      return WalkResult::advance();
-    if (nestedEdt.getType() == EdtType::task) {
-      hasNestedTasks = true;
-      return WalkResult::interrupt();
-    }
-    return WalkResult::advance();
-  });
-  return hasNestedTasks;
-}
-
 void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
   /// Only apply to parallel EDTs that don't already have workers attribute set
   if (edtOp.getType() != EdtType::parallel)
@@ -211,7 +165,7 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
     return;
 
   /// If no config file is present, avoid forcing a compile-time worker count.
-  /// Let the runtime query decide (arts.get_total_workers).
+  /// Let the runtime query decide (arts.runtime_query<total_workers>).
   if (!abstractMachine->hasConfigFile()) {
     ARTS_WARN("No arts.cfg; using runtime worker count for parallel EDT");
     edtOp.setConcurrency(EdtConcurrency::intranode);
@@ -223,7 +177,9 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
   /// Distributing a parallel EDT containing tasks across nodes would cause
   /// incorrect work distribution (each node would only process its portion
   /// while tasks expect to see the full iteration space).
-  bool hasNestedTasks = containsNestedTaskEdts(edtOp);
+  auto func = edtOp->getParentOfType<func::FuncOp>();
+  auto *edtNode = func ? AM->getEdtGraph(func).getEdtNode(edtOp) : nullptr;
+  bool hasNestedTasks = edtNode ? edtNode->hasNestedTaskEdts() : false;
   ParallelismDecision machineDecision =
       DistributionHeuristics::resolveParallelismFromMachine(abstractMachine);
   if (hasNestedTasks) {
@@ -274,7 +230,7 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
     ARTS_INFO("Setting EDT parallelism: single-node execution with 1 worker");
   } else {
     /// Unknown configuration - default to intranode with runtime-determined
-    /// workers The EDT will query worker count at runtime via GetTotalWorkersOp
+    /// workers The EDT will query worker count at runtime via RuntimeQueryOp
     numWorkers = 0;
     concurrencyType = EdtConcurrency::intranode;
     ARTS_INFO("Unknown configuration; defaulting to intranode with runtime "
