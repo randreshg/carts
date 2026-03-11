@@ -19,6 +19,7 @@ perfs/
 results/
 .results/
 .artsPrintLock
+.venv/
 
 # External dependencies
 external/*/build/
