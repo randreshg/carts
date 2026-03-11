@@ -90,7 +90,12 @@ def docker_update(
             echo "CARTS:remote $(git config --get remote.origin.url 2>/dev/null || echo unknown)"
             echo "CARTS:branch $target_branch"
 
-            if ! git fetch origin "$target_branch" --prune; then
+            # Older Docker workspace volumes were cloned as single-branch
+            # checkouts and only tracked mlir. Broaden the refspec before
+            # fetching so those workspaces can migrate cleanly to v2.
+            git config --replace-all remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+
+            if ! git fetch origin --prune; then
                 echo "CARTS:fetch_failed"
             fi
             if git show-ref --verify --quiet "refs/heads/$target_branch"; then
