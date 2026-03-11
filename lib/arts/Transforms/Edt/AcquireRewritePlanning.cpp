@@ -14,7 +14,9 @@
 ///==========================================================================///
 
 #include "arts/Transforms/Edt/AcquireRewritePlanning.h"
+#include "arts/Analysis/AccessPatternAnalysis.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
+#include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/DbUtils.h"
 #include "arts/Utils/EdtUtils.h"
 #include "arts/Utils/OperationAttributes.h"
@@ -27,6 +29,8 @@
 
 using namespace mlir;
 using namespace mlir::arts;
+
+ARTS_DEBUG_SETUP(acquire_rewrite_planning);
 
 namespace {
 
@@ -160,6 +164,66 @@ static bool acquireHasReadAccess(DbAcquireOp acquire) {
   return false;
 }
 
+static bool acquireHasCrossElementSelfRead(DbAcquireOp acquire, ForOp loopOp) {
+  if (!acquire || !loopOp || loopOp.getBody()->getNumArguments() == 0)
+    return false;
+
+  auto edtInfo = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+  EdtOp edt = edtInfo.first;
+  Value edtArg = edtInfo.second;
+  if (!edt || !edtArg)
+    return false;
+
+  SmallVector<AccessIndexInfo, 16> selfReadAccesses;
+  loopOp.getBody()->walk([&](DbRefOp dbRef) {
+    if (!DbUtils::isSameMemoryObject(dbRef.getSource(), edtArg))
+      return;
+
+    DbUtils::forEachReachableMemoryAccess(
+        dbRef.getResult(),
+        [&](const DbUtils::MemoryAccessInfo &access) {
+          if (access.kind != DbUtils::MemoryAccessKind::Read)
+            return WalkResult::advance();
+
+          SmallVector<Value> indexChain =
+              DbUtils::collectFullIndexChain(dbRef, access.op);
+          if (indexChain.empty())
+            return WalkResult::advance();
+
+          AccessIndexInfo info;
+          info.dbRefPrefix = dbRef.getIndices().size();
+          info.indexChain.append(indexChain.begin(), indexChain.end());
+          selfReadAccesses.push_back(std::move(info));
+          return WalkResult::advance();
+        },
+        &loopOp.getRegion());
+  });
+
+  if (selfReadAccesses.empty()) {
+    ARTS_DEBUG("No self-read accesses found for inout acquire");
+    return false;
+  }
+
+  Value loopIV = loopOp.getBody()->getArgument(0);
+  AccessBoundsResult bounds =
+      analyzeAccessBoundsFromIndices(selfReadAccesses, loopIV, loopIV);
+  const bool hasCrossElementSelfRead =
+      bounds.valid && (bounds.isStencil || bounds.minOffset != 0 ||
+                       bounds.maxOffset != 0);
+
+  ARTS_DEBUG("Self-read bounds for acquire: valid=" << bounds.valid
+                                                    << " min="
+                                                    << bounds.minOffset
+                                                    << " max="
+                                                    << bounds.maxOffset
+                                                    << " stencil="
+                                                    << bounds.isStencil
+                                                    << " variable="
+                                                    << bounds.hasVariableOffset
+                                                    << " -> cross-element="
+                                                    << hasCrossElementSelfRead);
+  return hasCrossElementSelfRead;
+}
 
 } // namespace
 
@@ -210,6 +274,9 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
         const ArtsMode mode = input.parentAcquire.getMode();
         const bool inoutReadsSelf = mode == ArtsMode::inout &&
                                     acquireHasReadAccess(input.parentAcquire);
+        const bool inoutReadsCrossElementSelf =
+            mode == ArtsMode::inout &&
+            acquireHasCrossElementSelfRead(input.parentAcquire, input.loopOp);
         const bool modeNeedsPatternStencilHalo =
             mode == ArtsMode::in || inoutReadsSelf;
         const bool patternSaysStencil =
@@ -223,11 +290,37 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
             ((patternSaysStencil && modeNeedsPatternStencilHalo) ||
              (strategySaysStencil && strategyNeedsStencilHalo));
 
+        ARTS_DEBUG("Acquire rewrite plan: mode="
+                   << static_cast<int>(mode)
+                   << " patternSaysStencil=" << patternSaysStencil
+                   << " strategySaysStencil=" << strategySaysStencil
+                   << " inoutReadsSelf=" << inoutReadsSelf
+                   << " inoutReadsCrossElementSelf="
+                   << inoutReadsCrossElementSelf);
+
         const ArtsAbstractMachine *machine = input.AC->getAbstractMachine();
-        if (machine && !machine->isDistributed() && mode == ArtsMode::inout &&
-            (patternSaysStencil || strategySaysStencil)) {
-          forceCoarseRewrite = true;
-          needsStencilHalo = false;
+        if (machine && !machine->isDistributed() && mode == ArtsMode::inout) {
+          /// Single-node stencil allocations are a mixed case:
+          ///   - Seidel-style in-place stencil updates must stay coarse because
+          ///     the same DB is read at cross-element offsets.
+          ///   - Jacobi-style double-buffer outputs can be rewritten to block,
+          ///     but doing so on a stencil-classified allocation regresses
+          ///     badly because the write acquire inherits stencil-oriented
+          ///     partitioning costs without needing halo reads itself.
+          ///   - Uniform allocations with only zero-offset self-reads (e.g.
+          ///     specfem += updates) still benefit from block partitioning.
+          if (inoutReadsCrossElementSelf &&
+              (patternSaysStencil || strategySaysStencil)) {
+            ARTS_DEBUG("Keeping single-node inout acquire coarse due to "
+                       "cross-element self-read");
+            forceCoarseRewrite = true;
+            needsStencilHalo = false;
+          } else if (patternSaysStencil) {
+            ARTS_DEBUG("Keeping single-node inout acquire coarse on "
+                       "stencil-classified allocation");
+            forceCoarseRewrite = true;
+            needsStencilHalo = false;
+          }
         }
 
         if (needsStencilHalo)
