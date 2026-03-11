@@ -90,12 +90,9 @@ def docker_build(
                 git config --global gc.auto 256
                 git clone --branch {git_branch} --depth 1 --single-branch --no-tags --progress {git_url} /opt/carts
                 cd /opt/carts
-                cd tools
-                POETRY_VIRTUALENVS_IN_PROJECT=true poetry install --no-root
-                cd /opt/carts
                 export MAKEFLAGS='-j{docker_cpus}'
                 export CMAKE_BUILD_PARALLEL_LEVEL={docker_cpus}
-                python3 -u tools/setup/carts-setup.py
+                carts install --skip-deps
                 """
             ).strip()
             result = _docker_exec("arts-node-builder", build_cmd, check=False)

@@ -957,17 +957,6 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
     const auto &deps = info.edtToDeps[edt];
     const auto &plan = info.rewritePlan.value();
 
-    /// CreateDbs always creates coarse-grained DB-space acquires. The partition
-    /// hints (from DbControlOp depend clauses) tell DbPartitioning how to
-    /// optimize later. This simplifies CreateDbs to focus on:
-    ///   1. Wrapping allocations in datablocks
-    ///   2. Annotating with partition hints for later optimization
-    ///
-    /// DB-space is always coarse: offsets=[0], sizes=[allocSizes]
-    /// Partition hints vary based on access pattern from depend clauses.
-
-    ARTS_DEBUG(" - Creating unified coarse-grained acquire");
-
     /// Deduplicate: one acquire per allocation per EDT
     if (!processedCoarseAllocs.insert(dbAllocOp.getOperation()).second) {
       ARTS_DEBUG("   - Skipping duplicate acquire for already-processed "
@@ -988,158 +977,160 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
         dbSizes.push_back(s);
     }
 
-    /// Collect partition hints from ALL deps (not just first!)
-    /// Each depend clause entry becomes a partition entry:
-    /// - fine_grained: deps have indices (from depend(inout: A[i][j],
-    /// A[i-1][j]))
-    /// - chunked: deps have offsets/sizes (from depend(in: A[off:sz]))
-    /// - coarse: no indices/offsets (from depend(inout: A))
-    ///
-    /// Multiple entries are stored with segment attributes to track boundaries.
-    SmallVector<Value> partIndices, partOffsets, partSizes;
-    SmallVector<int32_t> indicesSegments, offsetsSegments, sizesSegments;
-    SmallVector<int32_t> entryModes;
-    ArtsMode acquireMode = ArtsMode::uninitialized;
-
-    for (const auto &dep : deps) {
-      /// Determine mode for this entry
-      PartitionMode entryMode = PartitionMode::coarse;
-      if (!dep.indices.empty()) {
-        entryMode = PartitionMode::fine_grained;
-      } else if (!dep.offsets.empty() && !dep.sizes.empty()) {
-        entryMode = PartitionMode::block;
-      }
-      entryModes.push_back(static_cast<int32_t>(entryMode));
-
-      /// Add this entry's indices
-      indicesSegments.push_back(static_cast<int32_t>(dep.indices.size()));
-      for (Value v : dep.indices)
-        partIndices.push_back(v);
-
-      /// Add this entry's offsets
-      offsetsSegments.push_back(static_cast<int32_t>(dep.offsets.size()));
-      for (Value v : dep.offsets)
-        partOffsets.push_back(v);
-
-      /// Add this entry's sizes
-      sizesSegments.push_back(static_cast<int32_t>(dep.sizes.size()));
-      for (Value v : dep.sizes)
-        partSizes.push_back(v);
-
-      /// Combine access modes
-      acquireMode = ::combineAccessModes(acquireMode, dep.mode);
-    }
-
-    /// If this EDT has no explicit db_control hints for the memref, infer
-    /// per-EDT access from actual loads/stores before falling back.
-    if (acquireMode == ArtsMode::uninitialized) {
-      acquireMode = inferEdtAccessMode(underlyingOp, edt);
-      if (acquireMode == ArtsMode::uninitialized) {
-        acquireMode = (info.accessMode == ArtsMode::uninitialized)
-                          ? ArtsMode::inout
-                          : info.accessMode;
-      }
-    }
-
-    /// Determine the "primary" partition mode from first entry (for
-    /// compatibility)
-    PartitionMode partMode = PartitionMode::coarse;
-    if (!entryModes.empty()) {
-      partMode = static_cast<PartitionMode>(entryModes[0]);
-    }
-
-    /// Source guid and ptr
-    Value acqGuid = sourceGuid;
-    Value acqPtr = sourcePtr;
-
-    /// Check if there is a parent acquired handle for this memref
-    if (Value availableHandle = findParentAcquireSource(edt, dbAllocOp)) {
-      ARTS_DEBUG("   - Reusing existing datablock handle in parent scope");
-      acqGuid = Value();
-      acqPtr = availableHandle;
-    }
-
-    /// Create coarse DB-space acquire with partition hints for ALL entries
-    auto acquireOp = AC->create<DbAcquireOp>(
-        edt.getLoc(), acquireMode, acqGuid, acqPtr, partMode,
-        /*indices=*/SmallVector<Value>{}, /*offsets=*/dbOffsets,
-        /*sizes=*/dbSizes,
-        /*partition_indices=*/partIndices,
-        /*partition_offsets=*/partOffsets,
-        /*partition_sizes=*/partSizes);
-
-    if (!deps.empty()) {
-      acquireOp->setAttr(AttrNames::Operation::PreserveDependencyMode,
-                         UnitAttr::get(acquireOp.getContext()));
-    }
-
-    /// Set segment attributes for multiple partition entries
-    acquireOp.setPartitionSegments(indicesSegments, offsetsSegments,
-                                   sizesSegments, entryModes);
-
-    ARTS_DEBUG(" - Created acquire with "
-               << deps.size() << " partition entries, "
-               << "primary mode=" << static_cast<int>(partMode) << ": "
-               << acquireOp);
-
-    /// Add block argument for acquired view
-    Value acquirePtr = acquireOp.getPtr();
-    auto sourceType = acquirePtr.getType().dyn_cast<MemRefType>();
-    BlockArgument dbAcquireArg =
-        edt.getBody().front().addArgument(sourceType, edt.getLoc());
-    dependencyOperands.push_back(acquirePtr);
-
-    /// Collect operations to rewrite
-    SmallVector<Operation *> opsToRewrite;
-    llvm::SmallPtrSet<Operation *, 16> seenOps;
-    auto addOpIfNew = [&](Operation *op) {
-      if (!op)
-        return;
-      if (seenOps.insert(op).second)
-        opsToRewrite.push_back(op);
-    };
-
-    bool missingOpsForDeps = false;
-    for (const auto &dep : deps) {
-      if (dep.operations.empty())
-        missingOpsForDeps = true;
-      for (Operation *op : dep.operations)
-        addOpIfNew(op);
-    }
-
-    /// Fallback: collect all operations using this memref in EDT
-    if (opsToRewrite.empty() || missingOpsForDeps) {
-      ARTS_DEBUG(
-          " - Fallback: collecting all operations using this memref in EDT");
-      edt.walk([&](Operation *op) {
-        if (op->getParentOfType<EdtOp>() != edt)
-          return;
-        for (Value operand : op->getOperands()) {
-          Operation *operandUnderlyingOp =
-              ValueUtils::getUnderlyingOperation(operand);
-          if (operandUnderlyingOp == underlyingOp) {
-            addOpIfNew(op);
-            break;
-          }
+    SmallVector<SmallVector<const MemrefInfo::DbDep *, 4>, 4> depGroups;
+    SmallVector<ArtsMode, 4> depGroupModes;
+    if (deps.empty()) {
+      depGroups.emplace_back();
+      depGroupModes.push_back(ArtsMode::uninitialized);
+    } else {
+      for (const auto &dep : deps) {
+        auto it = llvm::find(depGroupModes, dep.mode);
+        if (it == depGroupModes.end()) {
+          depGroupModes.push_back(dep.mode);
+          depGroups.emplace_back();
+          depGroups.back().push_back(&dep);
+          continue;
         }
-      });
-      ARTS_DEBUG(" - Found " << opsToRewrite.size()
-                             << " operations to rewrite");
+        depGroups[std::distance(depGroupModes.begin(), it)].push_back(&dep);
+      }
     }
 
-    /// Rewrite operations using DbRef with coarse DB-space indices
-    /// DbRef uses [0] index since we have 1D coarse allocation
-    if (!opsToRewrite.empty()) {
-      SmallVector<Value> dbRefIndices;
-      dbRefIndices.push_back(AC->createIndexConstant(0, edt.getLoc()));
-      rewriteOpsToUseDbAcquire(edt, opsToRewrite, acquireOp, dbRefIndices,
-                               dbOffsets, dbAcquireArg, plan);
-    }
+    for (auto [groupIdx, depGroup] : llvm::enumerate(depGroups)) {
+      /// CreateDbs always creates coarse-grained DB-space acquires. The
+      /// partition hints (from DbControlOp depend clauses) tell DbPartitioning
+      /// how to optimize later. Keep different access modes in separate
+      /// acquires so downstream rec_dep lowering preserves read vs write slots.
+      ARTS_DEBUG(" - Creating coarse-grained acquire group " << groupIdx
+                                                             << " for mode "
+                                                             << depGroupModes[groupIdx]);
 
-    /// Insert release
-    OpBuilder::InsertionGuard releaseGuard(AC->getBuilder());
-    AC->setInsertionPoint(edt.getBody().front().getTerminator());
-    AC->create<DbReleaseOp>(edt.getLoc(), dbAcquireArg);
+      /// Collect partition hints from this group's deps.
+      SmallVector<Value> partIndices, partOffsets, partSizes;
+      SmallVector<int32_t> indicesSegments, offsetsSegments, sizesSegments;
+      SmallVector<int32_t> entryModes;
+      ArtsMode acquireMode = depGroupModes[groupIdx];
+
+      for (const MemrefInfo::DbDep *dep : depGroup) {
+        PartitionMode entryMode = PartitionMode::coarse;
+        if (!dep->indices.empty()) {
+          entryMode = PartitionMode::fine_grained;
+        } else if (!dep->offsets.empty() && !dep->sizes.empty()) {
+          entryMode = PartitionMode::block;
+        }
+        entryModes.push_back(static_cast<int32_t>(entryMode));
+
+        indicesSegments.push_back(static_cast<int32_t>(dep->indices.size()));
+        for (Value v : dep->indices)
+          partIndices.push_back(v);
+
+        offsetsSegments.push_back(static_cast<int32_t>(dep->offsets.size()));
+        for (Value v : dep->offsets)
+          partOffsets.push_back(v);
+
+        sizesSegments.push_back(static_cast<int32_t>(dep->sizes.size()));
+        for (Value v : dep->sizes)
+          partSizes.push_back(v);
+      }
+
+      /// If this EDT has no explicit db_control hints for the memref, infer
+      /// per-EDT access from actual loads/stores before falling back.
+      if (acquireMode == ArtsMode::uninitialized) {
+        acquireMode = inferEdtAccessMode(underlyingOp, edt);
+        if (acquireMode == ArtsMode::uninitialized) {
+          acquireMode = (info.accessMode == ArtsMode::uninitialized)
+                            ? ArtsMode::inout
+                            : info.accessMode;
+        }
+      }
+
+      PartitionMode partMode = PartitionMode::coarse;
+      if (!entryModes.empty())
+        partMode = static_cast<PartitionMode>(entryModes[0]);
+
+      Value acqGuid = sourceGuid;
+      Value acqPtr = sourcePtr;
+      if (Value availableHandle = findParentAcquireSource(edt, dbAllocOp)) {
+        ARTS_DEBUG("   - Reusing existing datablock handle in parent scope");
+        acqGuid = Value();
+        acqPtr = availableHandle;
+      }
+
+      auto acquireOp = AC->create<DbAcquireOp>(
+          edt.getLoc(), acquireMode, acqGuid, acqPtr, partMode,
+          /*indices=*/SmallVector<Value>{}, /*offsets=*/dbOffsets,
+          /*sizes=*/dbSizes,
+          /*partition_indices=*/partIndices,
+          /*partition_offsets=*/partOffsets,
+          /*partition_sizes=*/partSizes);
+
+      if (!depGroup.empty()) {
+        /// Explicit DbControlOp-derived acquires already carry the exact
+        /// dependency mode contract and the dependency edge itself is
+        /// semantically required even if the local pointer has no uses.
+        acquireOp.setPreserveDepMode();
+        acquireOp.setPreserveDependency();
+      }
+
+      acquireOp.setPartitionSegments(indicesSegments, offsetsSegments,
+                                     sizesSegments, entryModes);
+
+      ARTS_DEBUG(" - Created acquire group with "
+                 << depGroup.size() << " partition entries, primary mode="
+                 << static_cast<int>(partMode) << ": " << acquireOp);
+
+      Value acquirePtr = acquireOp.getPtr();
+      auto sourceType = acquirePtr.getType().dyn_cast<MemRefType>();
+      BlockArgument dbAcquireArg =
+          edt.getBody().front().addArgument(sourceType, edt.getLoc());
+      dependencyOperands.push_back(acquirePtr);
+
+      SmallVector<Operation *> opsToRewrite;
+      llvm::SmallPtrSet<Operation *, 16> seenOps;
+      auto addOpIfNew = [&](Operation *op) {
+        if (!op)
+          return;
+        if (seenOps.insert(op).second)
+          opsToRewrite.push_back(op);
+      };
+
+      bool missingOpsForDeps = deps.empty();
+      for (const MemrefInfo::DbDep *dep : depGroup) {
+        for (Operation *op : dep->operations)
+          addOpIfNew(op);
+      }
+
+      /// Fallback: collect all operations using this memref in EDT when there
+      /// are no explicit dependency entries for the memref.
+      if (opsToRewrite.empty() || missingOpsForDeps) {
+        ARTS_DEBUG(
+            " - Fallback: collecting all operations using this memref in EDT");
+        edt.walk([&](Operation *op) {
+          if (op->getParentOfType<EdtOp>() != edt)
+            return;
+          for (Value operand : op->getOperands()) {
+            Operation *operandUnderlyingOp =
+                ValueUtils::getUnderlyingOperation(operand);
+            if (operandUnderlyingOp == underlyingOp) {
+              addOpIfNew(op);
+              break;
+            }
+          }
+        });
+        ARTS_DEBUG(" - Found " << opsToRewrite.size()
+                               << " operations to rewrite");
+      }
+
+      if (!opsToRewrite.empty()) {
+        SmallVector<Value> dbRefIndices;
+        dbRefIndices.push_back(AC->createIndexConstant(0, edt.getLoc()));
+        rewriteOpsToUseDbAcquire(edt, opsToRewrite, acquireOp, dbRefIndices,
+                                 dbOffsets, dbAcquireArg, plan);
+      }
+
+      OpBuilder::InsertionGuard releaseGuard(AC->getBuilder());
+      AC->setInsertionPoint(edt.getBody().front().getTerminator());
+      AC->create<DbReleaseOp>(edt.getLoc(), dbAcquireArg);
+    }
   }
 
   /// After processing all memrefs, set EDT dependencies

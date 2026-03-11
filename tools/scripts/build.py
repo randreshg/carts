@@ -27,8 +27,8 @@ def build(
         False, "--polygeist", "-p", help="Build only Polygeist"),
     llvm: bool = typer.Option(False, "--llvm", "-l", help="Build only LLVM"),
     debug_level: int = typer.Option(
-        0, "--debug",
-        help="Debug level: 0=off (default), 1=info, 2=full debug"),
+        0, "--debug", min=0, max=3,
+        help="ARTS runtime log level: 0=off, 1=warn, 2=info, 3=debug"),
     counters_level: int = typer.Option(
         0, "--counters",
         help="Counter profile: 0=off (default), 1=timing, 2=workload, 3=overhead"),
@@ -69,15 +69,17 @@ def build(
     # Build make variables
     make_vars = []
 
-    # Debug levels: 0=off, 1=info, 2=full debug
-    if debug_level >= 2:
-        make_vars.extend([
-            "ARTS_DEBUG_ENABLED=ON",
-            "ARTS_INFO_ENABLED=ON",
-            "ARTS_BUILD_TYPE=Debug"
-        ])
-    elif debug_level >= 1:
-        make_vars.append("ARTS_INFO_ENABLED=ON")
+    if arts:
+        # Expose the raw v2 ARTS runtime levels directly:
+        #   0 -> ERROR only
+        #   1 -> WARN
+        #   2 -> INFO
+        #   3 -> DEBUG (+ Debug build)
+        make_vars.append(f"ARTS_LOG_LEVEL={debug_level}")
+        if debug_level >= 3:
+            make_vars.extend([
+                "ARTS_BUILD_TYPE=Debug",
+            ])
 
     # Counter levels: 0=off, 1=artsid, 2=deep
     # Levels 1+ require USE_COUNTERS and USE_METRICS

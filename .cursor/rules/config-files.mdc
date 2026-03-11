@@ -10,60 +10,58 @@ ARTS configuration files use INI format with `[ARTS]` section header.
 
 ### Threading Configuration
 ```ini
-threads=16          # Number of worker threads
-tMT=0              # Temporal multi-threading (0=disabled, max=64)
+worker_threads=16   # Worker threads per node
 ```
 
 ### GPU Support (Future)
 ```ini
-scheduler=3         # GPU scheduler type
-gpu=8              # Number of GPUs
-gpuRouteTableSize=12 # GPU route table size
+scheduler=3             # GPU scheduler type
+gpu=8                   # Number of GPUs
+gpu_route_table_size=12 # GPU route table size
 ```
 
 ### Network Configuration
 ```ini
-outgoing=1         # Outgoing network threads
-incoming=1         # Incoming network threads
-ports=1           # Network ports
+sender_threads=1   # Outgoing network threads
+receiver_threads=1 # Incoming network threads
+port_count=1       # Network ports per node
 ```
 
 ### Launcher Configuration
 ```ini
-launcher=ssh       # Launch method (ssh, slurm, lsf)
-masterNode=localhost # Master node for SSH launcher
-nodeCount=1        # Number of nodes
-nodes=localhost    # Which nodes to run on
+launcher=ssh          # Launch method (local, ssh, slurm, lsf)
+master_node=localhost # Master node for SSH launcher
+node_count=1          # Number of nodes
+nodes=localhost       # Which nodes to run on
 ```
 
 ### Performance Monitoring
 ```ini
-counterFolder=./counters/  # Performance counter directory
-counterStartPoint=1        # Counter start point
-printNodeStats=1          # Print node statistics
+counter_folder=./counters     # Performance counter directory
+counter_capture_interval=100  # Counter capture interval
 ```
 
 ### Memory and Performance
 ```ini
-workerInitDequeSize=2048  # Initial deque size
-routeTableSize=16         # Routing table size
-pinThreads=1             # Hardware pinning
+worker_init_deque_size=2048 # Initial deque size
+route_table_size=16        # Routing table size
+pin=1                      # Hardware pinning
 ```
 
 ## Example Configuration
-See examples in test directories like [test/tasksimple/arts.cfg](mdc:test/tasksimple/arts.cfg):
+See examples in [tests/examples/arts.cfg](mdc:tests/examples/arts.cfg):
 ```ini
 [ARTS]
-threads=16
-tMT=0
-outgoing=1
-incoming=1
-ports=1
-launcher=ssh
-masterNode=localhost
-nodeCount=1
-counterFolder=./counters/
-counterStartPoint=1
+worker_threads=16
+sender_threads=0
+receiver_threads=0
+port_count=1
+launcher=local
+master_node=localhost
+node_count=1
+nodes=localhost
+default_ports=34739
+counter_folder=./counters
 ```
 
 ## Configuration Locations

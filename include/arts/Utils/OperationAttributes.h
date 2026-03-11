@@ -33,8 +33,8 @@ constexpr StringLiteral ArtsId = "arts.id";
 constexpr StringLiteral ArtsCreateId = "arts.create_id";
 constexpr StringLiteral OutlinedFunc = "outlined_func";
 constexpr StringLiteral Nowait = "nowait";
-constexpr StringLiteral PreserveDependencyMode =
-    "arts.preserve_dependency_mode";
+constexpr StringLiteral PreserveDependencyMode = "preserve_dep_mode";
+constexpr StringLiteral PreserveDependency = "preserve_dep";
 
 /// Partition-related attributes (TableGen-generated names)
 constexpr StringLiteral PartitionMode = "partition_mode";

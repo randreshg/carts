@@ -34,11 +34,11 @@ SIZE=small
 
 4. Prepare ARTS configs:
 - Single-node config example: `external/carts-benchmarks/configs/local.cfg`
-- Multi-node config: use your cluster config (ssh/slurm/lsf) with `nodeCount > 1`
+- Multi-node config: use your cluster config (ssh/slurm/lsf) with `node_count > 1`
 
 Minimal multi-node checklist:
 - `launcher` matches your execution mode
-- `nodeCount` matches intended run size
+- `node_count` matches intended run size
 - `nodes` list is valid/reachable
 
 5. Pick a counter profile (optional):
@@ -64,7 +64,7 @@ benchmark names.
 ```ini
 # Example (in /path/to/multi-node.cfg)
 launcher=ssh
-nodeCount=6
+node_count=6
 nodes=node01,node02,node03,node04,node05,node06
 ```
 The `nodes=` list must include every host that will participate in the run.

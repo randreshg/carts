@@ -670,8 +670,8 @@ def run(
 
         # Parse ARTS config values
         cfg = parse_arts_cfg(effective_config)
-        arts_threads = int(cfg.get("worker_threads", cfg.get("threads", "1")))
-        arts_nodes = int(cfg.get("node_count", cfg.get("nodeCount", "1")))
+        arts_threads = int(cfg.get("worker_threads", "1"))
+        arts_nodes = int(cfg.get("node_count", "1"))
         arts_launcher = cfg.get("launcher", "local")
         arts_nodes_list = [n.strip() for n in cfg.get("nodes", "localhost").split(",") if n.strip()]
 
