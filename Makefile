@@ -189,11 +189,11 @@ arts:
 	if [ -f "$(ARTS_CONFIG_HASH_FILE)" ]; then \
 		STORED_HASH=$$(cat "$(ARTS_CONFIG_HASH_FILE)"); \
 	fi; \
-	if [ "$$CURRENT_HASH" = "$$STORED_HASH" ] && [ -f "$(ARTS_BUILD_DIR)/Makefile" ]; then \
+	if [ "$$CURRENT_HASH" = "$$STORED_HASH" ] && [ -f "$(ARTS_BUILD_DIR)/build.ninja" ]; then \
 		echo "ARTS configuration unchanged, skipping cmake..."; \
 	else \
 		echo "Building ARTS (build_type=$(ARTS_BUILD_TYPE), counters=$(ARTS_USE_COUNTERS), metrics=$(ARTS_USE_METRICS), info=$(ARTS_INFO_ENABLED), debug=$(ARTS_DEBUG_ENABLED), counter_config=$(notdir $(COUNTER_CONFIG_PATH)))..."; \
-		$(CMAKE_CMD) -B $(ARTS_BUILD_DIR) -S $(ARTS_DIR) \
+		$(CMAKE_CMD) -B $(ARTS_BUILD_DIR) -S $(ARTS_DIR) -G Ninja \
 			-DCMAKE_C_COMPILER=$(LLVM_INSTALL_DIR)/bin/clang \
 			-DCMAKE_CXX_COMPILER=$(LLVM_INSTALL_DIR)/bin/clang++ \
 			-DCMAKE_BUILD_TYPE=$(ARTS_BUILD_TYPE) \
@@ -209,7 +209,7 @@ arts:
 			-DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
 		echo "$$CURRENT_HASH" > "$(ARTS_CONFIG_HASH_FILE)"; \
 	fi; \
-	make -C $(ARTS_BUILD_DIR) install -j;
+	ninja $(NINJA_FLAGS) -C $(ARTS_BUILD_DIR) install;
 arts-clean:
 	rm -f -r $(ARTS_BUILD_DIR)
 	rm -f -r $(ARTS_INSTALL_DIR)
