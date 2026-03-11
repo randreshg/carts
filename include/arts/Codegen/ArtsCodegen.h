@@ -104,9 +104,8 @@ public:
                                  Location loc);
 
   /// DB management
-  void addDbDep(Value dbGuid, Value edtGuid, Value edtSlot, Location loc);
-  void incrementDbLatchCount(Value dbGuid, Location loc);
-  void decrementDbLatchCount(Value dbGuid, Location loc);
+  void addDbDep(Value dbGuid, Value edtGuid, Value edtSlot, Value mode,
+                Location loc);
 
   /// Epoch management
   Value createEpoch(Value finishEdtGuid, Value finishEdtSlot, Location loc);
@@ -118,7 +117,7 @@ public:
   Value getTotalNodes(Location loc);
   Value getCurrentWorker(Location loc);
   Value getCurrentNode(Location loc);
-  func::CallOp signalEdt(Value edtGuid, Value edtSlot, Value dbGuid,
+  func::CallOp signalEdt(Value edtGuid, Value edtSlot, Value dbGuid, Value mode,
                          Location loc);
   void waitOnHandle(Value epochGuid, Location loc);
 

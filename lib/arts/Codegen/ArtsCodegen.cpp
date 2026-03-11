@@ -210,18 +210,11 @@ func::CallOp ArtsCodegen::createRuntimeCall(RuntimeFunction FnID,
 /// DataBlock management
 
 void ArtsCodegen::addDbDep(Value dbGuid, Value edtGuid, Value edtSlot,
-                           Location loc) {
+                           Value mode, Location loc) {
   auto edtSlotInt = castToInt(Int32, edtSlot, loc);
-  createRuntimeCall(ARTSRTL_artsDbAddDependence, {dbGuid, edtGuid, edtSlotInt},
-                    loc);
-}
-
-void ArtsCodegen::incrementDbLatchCount(Value dbGuid, Location loc) {
-  createRuntimeCall(ARTSRTL_artsDbIncrementLatch, {dbGuid}, loc);
-}
-
-void ArtsCodegen::decrementDbLatchCount(Value dbGuid, Location loc) {
-  createRuntimeCall(ARTSRTL_artsDbDecrementLatch, {dbGuid}, loc);
+  auto modeInt = castToInt(Int32, mode, loc);
+  createRuntimeCall(ARTSRTL_arts_add_dependence,
+                    {dbGuid, edtGuid, edtSlotInt, modeInt}, loc);
 }
 
 /// EDT management
@@ -230,19 +223,19 @@ void ArtsCodegen::decrementDbLatchCount(Value dbGuid, Location loc) {
 Value ArtsCodegen::createEpoch(Value finishEdtGuid, Value finishEdtSlot,
                                Location loc) {
   auto finishEdtSlotInt = castToInt(Int32, finishEdtSlot, loc);
-  return createRuntimeCall(ARTSRTL_artsInitializeAndStartEpoch,
+  return createRuntimeCall(ARTSRTL_arts_initialize_and_start_epoch,
                            {finishEdtGuid, finishEdtSlotInt}, loc)
       .getResult(0);
 }
 
 /// Utils
 Value ArtsCodegen::getCurrentEpochGuid(Location loc) {
-  return createRuntimeCall(ARTSRTL_artsGetCurrentEpochGuid, {}, loc)
+  return createRuntimeCall(ARTSRTL_arts_get_current_epoch_guid, {}, loc)
       .getResult(0);
 }
 
 Value ArtsCodegen::getCurrentEdtGuid(Location loc) {
-  func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetCurrentGuid);
+  func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_arts_get_current_guid);
 
   return create<func::CallOp>(loc, func, ArrayRef<Value>{}).getResult(0);
 }
@@ -253,7 +246,7 @@ Value ArtsCodegen::getTotalWorkers(Location loc) {
     if (runtimeWorkers > 0)
       return createIntConstant(runtimeWorkers, Int32, loc);
   }
-  func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetTotalWorkers);
+  func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_arts_get_total_workers);
   return create<func::CallOp>(loc, func, ArrayRef<Value>{}).getResult(0);
 }
 
@@ -263,29 +256,30 @@ Value ArtsCodegen::getTotalNodes(Location loc) {
     if (nodeCount > 0)
       return createIntConstant(nodeCount, Int32, loc);
   }
-  func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetTotalNodes);
+  func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_arts_get_total_nodes);
   return create<func::CallOp>(loc, func, ArrayRef<Value>{}).getResult(0);
 }
 
 Value ArtsCodegen::getCurrentWorker(Location loc) {
-  func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetCurrentWorker);
+  func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_arts_get_current_worker);
   return create<func::CallOp>(loc, func, ArrayRef<Value>{}).getResult(0);
 }
 
 Value ArtsCodegen::getCurrentNode(Location loc) {
-  func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetCurrentNode);
+  func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_arts_get_current_node);
   return create<func::CallOp>(loc, func, ArrayRef<Value>{}).getResult(0);
 }
 
 func::CallOp ArtsCodegen::signalEdt(Value edtGuid, Value edtSlot, Value dbGuid,
-                                    Location loc) {
+                                    Value mode, Location loc) {
   auto edtSlotInt = castToInt(Int32, edtSlot, loc);
-  return createRuntimeCall(ARTSRTL_artsSignalEdt, {edtGuid, edtSlotInt, dbGuid},
-                           loc);
+  auto modeInt = castToInt(Int32, mode, loc);
+  return createRuntimeCall(ARTSRTL_arts_signal_edt,
+                           {edtGuid, edtSlotInt, dbGuid, modeInt}, loc);
 }
 
 void ArtsCodegen::waitOnHandle(Value epochGuid, Location loc) {
-  createRuntimeCall(ARTSRTL_artsWaitOnHandle, {epochGuid}, loc);
+  createRuntimeCall(ARTSRTL_arts_wait_on_handle, {epochGuid}, loc);
 }
 
 func::FuncOp ArtsCodegen::insertInitPerWorker(Location loc,
@@ -459,7 +453,7 @@ func::FuncOp ArtsCodegen::insertArtsMainFn(Location loc,
   create<func::CallOp>(loc, callback, callArgs);
 
   /// Return
-  createRuntimeCall(ARTSRTL_artsShutdown, {}, loc);
+  createRuntimeCall(ARTSRTL_arts_shutdown, {}, loc);
   create<func::ReturnOp>(loc);
   return newFn;
 }
@@ -496,7 +490,7 @@ func::FuncOp ArtsCodegen::insertMainFn(Location loc) {
   }
 
   /// Insert call to 'artsRT' function
-  createRuntimeCall(ARTSRTL_artsRT,
+  createRuntimeCall(ARTSRTL_arts_rt,
                     {newFn.getArgument(0), newFn.getArgument(1)}, loc);
 
   /// Return 0

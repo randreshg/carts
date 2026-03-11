@@ -11,9 +11,9 @@
 ///     arts.wait_on_epoch %e
 ///
 ///   After:
-///     %g = call @artsEdtCreate(...)
-///     call @artsRecordDep(...)
-///     call @artsWaitOnHandle(...)
+///     %g = call @arts_edt_create(...)
+///     call @arts_add_dependence(...)
+///     call @arts_wait_on_handle(...)
 ///==========================================================================///
 
 /// Dialects
@@ -126,7 +126,7 @@ struct BarrierPattern : public ArtsToLLVMPattern<BarrierOp> {
     ARTS_INFO("Lowering Barrier Op " << op);
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
     ArtsCodegen::RuntimeCallBuilder RCB(*AC, op.getLoc());
-    RCB.callVoid(types::ARTSRTL_artsYield, {});
+    RCB.callVoid(types::ARTSRTL_arts_yield, {});
     rewriter.eraseOp(op);
     return success();
   }
@@ -427,8 +427,7 @@ private:
         bounds.allocSizes);
   }
 
-  /// Record all dependencies for a single datablock (orchestrates the three
-  /// helpers above).
+  /// Record all dependencies for a single datablock
   void recordDepsForDb(Value dbGuid, Value edtGuid, Value sharedSlotAlloc,
                        DepAccessMode accessMode,
                        std::optional<int32_t> acquireMode, Value boundsValid,
@@ -442,8 +441,8 @@ private:
   }
 
   /// Emit the appropriate runtime call for recording a dependency.
-  /// Standard path: artsRecordDep(dbGuid, edtGuid, slot, mode)
-  /// ESD path: artsRecordDepAt(dbGuid, edtGuid, slot, mode, offset, size)
+  /// Standard path: arts_add_dependence(dbGuid, edtGuid, slot, mode)
+  /// ESD path: arts_add_dependence_at(dbGuid, edtGuid, slot, mode, offset, size)
   void emitRecordDepCall(Value dbGuidValue, Value edtGuidValue,
                          Value currentSlotI32, Value modeValue,
                          Value byteOffsetI64, Value byteSizeI64,
@@ -459,12 +458,12 @@ private:
     ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
     if (useRecordDepAt) {
       /// ESD path: partial slice dependency with byte offset/size
-      RCB.callVoid(types::ARTSRTL_artsRecordDepAt,
+      RCB.callVoid(types::ARTSRTL_arts_add_dependence_at,
                    {dbGuidValue, edtGuidValue, currentSlotI32, modeValue,
                     byteOffsetI64, byteSizeI64});
     } else {
       /// Standard path: full datablock dependency
-      RCB.callVoid(types::ARTSRTL_artsRecordDep,
+      RCB.callVoid(types::ARTSRTL_arts_add_dependence,
                    {dbGuidValue, edtGuidValue, currentSlotI32, modeValue});
     }
   }
@@ -473,9 +472,9 @@ private:
   ///
   /// Two main paths:
   /// 1. Guarded (boundsValid set): if-else to handle boundary workers
-  ///    - Then: artsRecordDep[At] for valid indices
-  ///    - Else: artsSignalEdtNull for out-of-bounds
-  /// 2. Unconditional: direct artsRecordDep[At] call
+  ///    - Then: arts_add_dependence[_at] for valid indices
+  ///    - Else: arts_signal_edt_null for out-of-bounds
+  /// 2. Unconditional: direct arts_add_dependence[_at] call
   ///
   /// Within each path, ESD vs standard is handled by emitRecordDepCall.
   void recordSingleDb(Value dbGuid, Value edtGuid, Value slotAlloc,
@@ -548,7 +547,7 @@ private:
       /// Else: invalid index - signal null dependency
       AC->setInsertionPointToStart(&ifOp.getElseRegion().front());
       ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
-      RCB.callVoid(types::ARTSRTL_artsSignalEdtNull,
+      RCB.callVoid(types::ARTSRTL_arts_signal_edt_null,
                    {edtGuidValue, currentSlotI32});
 
       AC->setInsertionPointAfter(ifOp);
@@ -568,108 +567,17 @@ private:
   }
 };
 
-/// Pattern to convert arts.increment_dep operations
+/// Pattern to convert arts.increment_dep operations.
+/// In arts v2, the latch mechanism has been removed. IncrementDepOp is now a
+/// no-op that simply gets erased during lowering.
 struct IncrementDepPattern : public ArtsToLLVMPattern<IncrementDepOp> {
   using ArtsToLLVMPattern::ArtsToLLVMPattern;
 
   LogicalResult matchAndRewrite(IncrementDepOp op,
                                 PatternRewriter &rewriter) const override {
-    ARTS_INFO("Lowering IncrementOutLatch Op " << op);
-    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
-    auto loc = op.getLoc();
-
-    /// Get access mode from attribute
-    auto accessMode = op.getAccessMode();
-
-    /// Create shared slot counter for all latch increments
-    auto slotTy = MemRefType::get({}, AC->Int32);
-    Value sharedSlotAlloc = AC->create<memref::AllocaOp>(loc, slotTy);
-    Value zeroI32 = AC->createIntConstant(0, AC->Int32, loc);
-    AC->create<memref::StoreOp>(loc, zeroI32, sharedSlotAlloc);
-
-    /// Increment latch for each datablock using shared slot counter
-    for (Value dbGuid : op.getDatablocks())
-      incLatchForDb(dbGuid, sharedSlotAlloc, accessMode, loc);
-
+    ARTS_INFO("Erasing IncrementDep Op (latch removed in v2) " << op);
     rewriter.eraseOp(op);
     return success();
-  }
-
-private:
-  void incLatchForDb(Value dbGuid, Value sharedSlotAlloc,
-                     DepAccessMode accessMode, Location loc) const {
-    SmallVector<Value> allocSizes;
-
-    /// Extract base offset and dep_struct for this specific dependency
-    Value depStruct = nullptr;
-    Value baseOffset = nullptr;
-    DbLoweringInfo dbInfo;
-
-    /// Handle both DbAcquireOp and DepDbAcquireOp as sources
-    if (auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>()) {
-      dbInfo = DbUtils::extractDbLoweringInfo(dbAcquireOp);
-      /// depStruct and baseOffset remain null for DbAcquireOp
-    } else if (auto depDbAcquireOp = dbGuid.getDefiningOp<DepDbAcquireOp>()) {
-      dbInfo = DbUtils::extractDbLoweringInfo(depDbAcquireOp);
-      /// For DepDbAcquireOp, always extract dep_struct and base offset
-      depStruct = depDbAcquireOp.getDepStruct();
-      baseOffset = depDbAcquireOp.getOffset();
-    } else {
-      ARTS_ERROR("dbGuid must come from DbAcquireOp or DepDbAcquireOp"
-                 << dbGuid);
-      ARTS_UNREACHABLE("dbGuid must come from DbAcquireOp or DepDbAcquireOp");
-    }
-    auto &dbSizes = dbInfo.sizes;
-    auto &dbOffsets = dbInfo.offsets;
-    auto &dbIndices = dbInfo.indices;
-    bool isSingle = dbInfo.isSingleElement;
-    if (auto allocOp = getAllocOpFromGuid(dbGuid)) {
-      auto sizes = allocOp.getSizes();
-      allocSizes.assign(sizes.begin(), sizes.end());
-    }
-
-    const bool useDepv = depStruct && baseOffset &&
-                         (accessMode == DepAccessMode::from_depv ||
-                          dbGuid.getDefiningOp<DepDbAcquireOp>());
-    /// Use shared slot counter and iterate over all db elements
-    AC->iterateDbElements(
-        dbGuid, Value(), dbSizes, dbOffsets, isSingle, loc,
-        [&](Value linearIndex) {
-          incSingleLatch(dbGuid, sharedSlotAlloc, linearIndex, accessMode,
-                         depStruct, baseOffset, loc);
-        },
-        useDepv ? ArrayRef<Value>() : allocSizes);
-  }
-
-  void incSingleLatch(Value dbGuid, Value slotAlloc, Value linearIndex,
-                      DepAccessMode accessMode, Value depStruct,
-                      Value baseOffset, Location loc) const {
-    /// Load dbGuid value - check if we actually have depStruct (from
-    /// DepDbAcquireOp) or if this specific dependency is from DbAcquireOp
-    Value dbGuidValue;
-    if (depStruct && baseOffset) {
-      /// Access GUID via DepGepOp from EDT depv structure
-      /// Must add baseOffset to linearIndex to get correct position in depv
-      Value finalOffset =
-          AC->create<arith::AddIOp>(loc, baseOffset, linearIndex);
-      auto depGep =
-          AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depStruct,
-                               finalOffset, ValueRange(), ValueRange());
-      dbGuidValue = AC->create<LLVM::LoadOp>(loc, AC->Int64, depGep.getGuid());
-    } else {
-      /// Direct access via memref.load for DbAcquireOp
-      dbGuidValue =
-          AC->create<memref::LoadOp>(loc, dbGuid, ValueRange{linearIndex});
-    }
-    ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
-    RCB.callVoid(types::ARTSRTL_artsDbIncrementLatch, {dbGuidValue});
-
-    /// Increment the shared slot counter for next latch increment
-    auto currentSlotI32 = AC->create<memref::LoadOp>(loc, slotAlloc);
-    auto oneI32 = AC->createIntConstant(1, AC->Int32, loc);
-    auto incrementedSlot =
-        AC->create<arith::AddIOp>(loc, currentSlotI32, oneI32);
-    AC->create<memref::StoreOp>(loc, incrementedSlot, slotAlloc);
   }
 };
 
@@ -786,15 +694,16 @@ struct DepGepOpPattern : public ArtsToLLVMPattern<DepGepOp> {
     Value depEntryPtr = AC->create<LLVM::GEPOp>(
         loc, AC->llvmPtr, AC->ArtsEdtDep, typedDepPtr, ValueRange{linearIndex});
 
-    /// Extract both guid (field #0) and ptr (field #2) from depv
+    /// Extract both guid (field #0) and ptr (field #1) from depv
+    /// v2 arts_edt_dep_t layout: { guid, ptr, mode }
     auto c0 = AC->createIntConstant(0, AC->Int64, loc);
-    auto cPtrIdx = AC->createIntConstant(2, AC->Int64, loc);
+    auto cPtrIdx = AC->createIntConstant(1, AC->Int64, loc);
 
     /// Get the guid pointer (field #0)
     auto guidPtr = AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->ArtsEdtDep,
                                            depEntryPtr, ValueRange{c0, c0});
 
-    /// Get the data pointer (field #2)
+    /// Get the data pointer (field #1)
     auto dataPtr = AC->create<LLVM::GEPOp>(
         loc, AC->llvmPtr, AC->ArtsEdtDep, depEntryPtr, ValueRange{c0, cPtrIdx});
 
@@ -875,62 +784,76 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
     if (!outlined)
       return op.emitError("EDT Outlined function not found");
 
-    /// Build artsEdtCreate arguments; route required, default 0 if missing
+    /// Build arts_edt_create arguments
     auto funcPtr = AC->createFnPtr(outlined, op.getLoc());
-    Value route = op.getRoute();
-    if (!route)
-      route = AC->createIntConstant(0, AC->Int32, op.getLoc());
+    auto loc = op.getLoc();
     auto paramv = op.getParamMemref();
     Value depc = op.getDepCount();
     if (depc && depc.getType() != AC->Int32)
-      depc = AC->castToInt(AC->Int32, depc, op.getLoc());
+      depc = AC->castToInt(AC->Int32, depc, loc);
 
     /// Calculate parameter count from memref size
     Value paramc;
     if (auto memrefType = paramv.getType().dyn_cast<MemRefType>()) {
       if (memrefType.hasStaticShape() && memrefType.getNumElements() == 0) {
-        paramc = AC->createIntConstant(0, AC->Int32, op.getLoc());
+        paramc = AC->createIntConstant(0, AC->Int32, loc);
       } else {
         /// Dynamic memref case - get size from memref
-        auto zeroIndex = AC->createIndexConstant(0, op.getLoc());
+        auto zeroIndex = AC->createIndexConstant(0, loc);
         auto memrefSize =
-            AC->create<memref::DimOp>(op.getLoc(), paramv, zeroIndex);
+            AC->create<memref::DimOp>(loc, paramv, zeroIndex);
         paramc =
-            AC->create<arith::IndexCastOp>(op.getLoc(), AC->Int32, memrefSize);
+            AC->create<arith::IndexCastOp>(loc, AC->Int32, memrefSize);
       }
     } else {
-      paramc = AC->createIntConstant(0, AC->Int32, op.getLoc());
+      paramc = AC->createIntConstant(0, AC->Int32, loc);
     }
+
+    /// Build arts_hint_t struct: { uint32_t route, uint64_t id }
+    Value route = op.getRoute();
+    if (!route)
+      route = AC->createIntConstant(0, AC->Int32, loc);
 
     auto createIdAttr =
         op->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsCreateId);
     Value artsIdVal;
-    if (createIdAttr) {
+    if (createIdAttr)
       artsIdVal =
-          AC->create<arith::ConstantOp>(op.getLoc(), AC->Int64, createIdAttr);
-    }
+          AC->create<arith::ConstantOp>(loc, AC->Int64, createIdAttr);
+    else
+      artsIdVal = AC->createIntConstant(0, AC->Int64, loc);
 
-    /// Create artsEdtCreate call; prefer arts_id-aware variant when available
-    ArtsCodegen::RuntimeCallBuilder RCB(*AC, op.getLoc());
+    /// Stack-allocate arts_hint_t and populate fields
+    Value hintAlloc = AC->create<LLVM::AllocaOp>(
+        loc, AC->llvmPtr, AC->ArtsHintType,
+        AC->createIntConstant(1, AC->Int32, loc));
+    auto c0 = AC->createIntConstant(0, AC->Int32, loc);
+    auto c1 = AC->createIntConstant(1, AC->Int32, loc);
+    /// Store route into field 0
+    Value routeFieldPtr = AC->create<LLVM::GEPOp>(
+        loc, AC->llvmPtr, AC->ArtsHintType, hintAlloc,
+        ValueRange{c0, c0});
+    AC->create<LLVM::StoreOp>(loc, route, routeFieldPtr);
+    /// Store arts_id into field 1
+    Value idFieldPtr = AC->create<LLVM::GEPOp>(
+        loc, AC->llvmPtr, AC->ArtsHintType, hintAlloc,
+        ValueRange{c0, c1});
+    AC->create<LLVM::StoreOp>(loc, artsIdVal, idFieldPtr);
+
+    /// Cast !llvm.ptr to ArtsHintTypePtr memref for runtime call
+    Value hintMemref = AC->create<polygeist::Pointer2MemrefOp>(
+        loc, AC->ArtsHintTypePtr, hintAlloc);
+
+    /// Create arts_edt_create call with hint as last argument
+    ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
     func::CallOp callOp;
-    if (createIdAttr) {
-      if (op.getEpochGuid()) {
-        callOp = RCB.callOp(types::ARTSRTL_artsEdtCreateWithEpochArtsId,
-                            {funcPtr, route, paramc, paramv, depc,
-                             op.getEpochGuid(), artsIdVal});
-      } else {
-        callOp = RCB.callOp(types::ARTSRTL_artsEdtCreateWithArtsId,
-                            {funcPtr, route, paramc, paramv, depc, artsIdVal});
-      }
+    if (op.getEpochGuid()) {
+      callOp = RCB.callOp(
+          types::ARTSRTL_arts_edt_create_with_epoch,
+          {funcPtr, paramc, paramv, depc, op.getEpochGuid(), hintMemref});
     } else {
-      if (op.getEpochGuid()) {
-        callOp = RCB.callOp(
-            types::ARTSRTL_artsEdtCreateWithEpoch,
-            {funcPtr, route, paramc, paramv, depc, op.getEpochGuid()});
-      } else {
-        callOp = RCB.callOp(types::ARTSRTL_artsEdtCreate,
-                            {funcPtr, route, paramc, paramv, depc});
-      }
+      callOp = RCB.callOp(types::ARTSRTL_arts_edt_create,
+                          {funcPtr, paramc, paramv, depc, hintMemref});
     }
     if (createIdAttr)
       callOp->setAttr(AttrNames::Operation::ArtsCreateId, createIdAttr);
@@ -1389,7 +1312,7 @@ private:
               op.getLoc(), workerGuidBuffer, ValueRange{linearIndex});
           ArtsCodegen::RuntimeCallBuilder RCB(*AC, op.getLoc());
           Value guidRank =
-              RCB.call(types::ARTSRTL_artsGuidGetRank, {reservedGuid});
+              RCB.call(types::ARTSRTL_arts_guid_get_rank, {reservedGuid});
           Value isLocalGuid = AC->create<arith::CmpIOp>(
               op.getLoc(), arith::CmpIPredicate::eq, guidRank, workerNodeId);
           auto localGuidIf =
@@ -1434,20 +1357,47 @@ private:
         AC->create<memref::LoadOp>(loc, guidMemref, ValueRange{linearIndex});
     Value elemSize64 = AC->ensureI64(elementSize, loc);
 
-    ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
-    func::CallOp dbCall;
+    /// Build arts_hint_t with arts_id if available
+    Value hintAlloc = AC->create<LLVM::AllocaOp>(
+        loc, AC->llvmPtr, AC->ArtsHintType,
+        AC->createIntConstant(1, AC->Int32, loc));
+    auto c0 = AC->createIntConstant(0, AC->Int32, loc);
+    auto c1 = AC->createIntConstant(1, AC->Int32, loc);
+    /// Store route=0 into field 0
+    Value routeFieldPtr = AC->create<LLVM::GEPOp>(
+        loc, AC->llvmPtr, AC->ArtsHintType, hintAlloc,
+        ValueRange{c0, c0});
+    AC->create<LLVM::StoreOp>(loc, c0, routeFieldPtr);
+    /// Store arts_id into field 1
+    Value artsIdValue;
     if (nextId.has_value()) {
       Value baseArtsId = AC->create<arith::ConstantOp>(
           loc, AC->Int64, AC->getBuilder().getI64IntegerAttr(*nextId));
       Value linearIndex64 = AC->ensureI64(linearIndex, loc);
-      Value artsIdValue =
+      artsIdValue =
           AC->create<arith::AddIOp>(loc, baseArtsId, linearIndex64);
-      dbCall = RCB.callOp(types::ARTSRTL_artsDbCreateWithGuidAndArtsId,
-                          {guid, elemSize64, artsIdValue});
     } else {
-      dbCall =
-          RCB.callOp(types::ARTSRTL_artsDbCreateWithGuid, {guid, elemSize64});
+      artsIdValue = AC->createIntConstant(0, AC->Int64, loc);
     }
+    Value idFieldPtr = AC->create<LLVM::GEPOp>(
+        loc, AC->llvmPtr, AC->ArtsHintType, hintAlloc,
+        ValueRange{c0, c1});
+    AC->create<LLVM::StoreOp>(loc, artsIdValue, idFieldPtr);
+
+    /// Cast !llvm.ptr to ArtsHintTypePtr memref for runtime call
+    Value hintMemref = AC->create<polygeist::Pointer2MemrefOp>(
+        loc, AC->ArtsHintTypePtr, hintAlloc);
+
+    /// db_type = ARTS_DB_DEFAULT (0)
+    Value dbType = AC->createIntConstant(0, AC->Int32, loc);
+    /// data = null (no initial data)
+    Value nullPtr = AC->create<LLVM::ZeroOp>(loc, AC->llvmPtr);
+    Value nullData =
+        AC->create<polygeist::Pointer2MemrefOp>(loc, AC->VoidPtr, nullPtr);
+
+    ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
+    auto dbCall = RCB.callOp(types::ARTSRTL_arts_db_create_with_guid,
+                             {guid, elemSize64, dbType, nullData, hintMemref});
 
     AC->create<memref::StoreOp>(loc, dbCall.getResult(0), dbMemref,
                                 ValueRange{linearIndex});
@@ -1470,10 +1420,11 @@ private:
           AC->create<arith::RemUIOp>(loc, linearIndexI32, totalNodes);
     }
 
-    /// Reserve GUID for the DB
+    /// Reserve GUID for the DB (v2: use ARTS_DB type for all datablocks)
     ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
+    Value dbTypeConst = AC->createIntConstant(ARTS_DB, AC->Int32, loc);
     auto guid =
-        RCB.call(types::ARTSRTL_artsReserveGuidRoute, {dbMode, reserveRoute});
+        RCB.call(types::ARTSRTL_arts_guid_reserve, {dbTypeConst, reserveRoute});
     Value linearIndex = indices.empty()
                             ? AC->createIndexConstant(0, loc)
                             : AC->computeLinearIndex(sizes, indices, loc);

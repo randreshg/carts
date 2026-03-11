@@ -114,21 +114,21 @@ bool ArtsAbstractMachine::parseFromFile(const std::string &path) {
 
     /// [ARTS] Section Parsing
     if (inArtsSection) {
-      /// Core Configuration
-      if (key == "threads") {
+      /// Core Configuration (v2 snake_case keys with legacy camelCase fallback)
+      if (key == "worker_threads" || key == "threads") {
         threads = parseInt(val);
         ARTS_DEBUG("Set threads=" << threads);
       } else if (key == "tMT") {
         tMT = parseInt(val, 0);
         ARTS_DEBUG("Set tMT=" << tMT);
-      } else if (key == "nodeCount") {
+      } else if (key == "node_count" || key == "nodeCount") {
         nodeCount = parseInt(val);
         ARTS_DEBUG("Set nodeCount=" << nodeCount);
       } else if (key == "nodes") {
         nodes = splitCSV(val);
         ARTS_DEBUG("Set nodes=" << val << " (parsed " << nodes.size()
                                 << " nodes)");
-      } else if (key == "masterNode") {
+      } else if (key == "master_node" || key == "masterNode") {
         masterNode = val;
         ARTS_DEBUG("Set masterNode=" << masterNode);
       } else if (key == "launcher") {
@@ -141,63 +141,63 @@ bool ArtsAbstractMachine::parseFromFile(const std::string &path) {
         scheduler = parseInt(val, 0);
       else if (key == "gpu")
         gpu = parseInt(val, 0);
-      else if (key == "gpuRouteTableSize")
+      else if (key == "gpu_route_table_size" || key == "gpuRouteTableSize")
         gpuRouteTableSize = parseInt(val, 12);
-      else if (key == "freeDbAfterGpuRun")
+      else if (key == "free_db_after_gpu_run" || key == "freeDbAfterGpuRun")
         freeDbAfterGpuRun = parseBool(val, false);
-      else if (key == "deleteZerosGpuGc")
+      else if (key == "delete_zeros_gpu_gc" || key == "deleteZerosGpuGc")
         deleteZerosGpuGc = parseBool(val, true);
-      else if (key == "runGpuGcIdle")
+      else if (key == "run_gpu_gc_idle" || key == "runGpuGcIdle")
         runGpuGcIdle = parseBool(val, true);
-      else if (key == "runGpuGcPreEdt")
+      else if (key == "run_gpu_gc_pre_edt" || key == "runGpuGcPreEdt")
         runGpuGcPreEdt = parseBool(val, false);
-      else if (key == "gpuLocality")
+      else if (key == "gpu_locality" || key == "gpuLocality")
         gpuLocality = parseInt(val, 0);
-      else if (key == "gpuFit")
+      else if (key == "gpu_fit" || key == "gpuFit")
         gpuFit = parseInt(val, 0);
-      else if (key == "gpuLCSync")
+      else if (key == "gpu_lc_sync" || key == "gpuLCSync")
         gpuLCSync = parseInt(val, 0);
-      else if (key == "gpuBufferOn")
+      else if (key == "gpu_buff_on" || key == "gpuBufferOn")
         gpuBufferOn = parseBool(val, true);
-      else if (key == "gpuMaxMemory")
+      else if (key == "gpu_max_memory" || key == "gpuMaxMemory")
         gpuMaxMemory = parseInt(val, -1);
-      else if (key == "gpuMaxEdts")
+      else if (key == "gpu_max_edts" || key == "gpuMaxEdts")
         gpuMaxEdts = parseInt(val, -1);
-      else if (key == "gpuP2P")
+      else if (key == "gpu_p2p" || key == "gpuP2P")
         gpuP2P = parseBool(val, false);
 
       /// Network Configuration
-      else if (key == "outgoing")
+      else if (key == "sender_threads" || key == "outgoing")
         outgoing = parseInt(val, 1);
-      else if (key == "incoming")
+      else if (key == "receiver_threads" || key == "incoming")
         incoming = parseInt(val, 1);
-      else if (key == "ports")
+      else if (key == "port_count" || key == "ports")
         ports = parseInt(val, 1);
       else if (key == "protocol")
         protocol = val;
-      else if (key == "port")
+      else if (key == "default_ports" || key == "port")
         port = parseInt(val, 34739);
-      else if (key == "netInterface")
+      else if (key == "net_interface" || key == "netInterface")
         netInterface = val;
 
       /// Hardware Configuration
-      else if (key == "pinStride")
+      else if (key == "pin" || key == "pinStride")
         pinStride = parseInt(val, 1);
       else if (key == "printTopology")
         printTopology = parseBool(val, false);
-      else if (key == "workerInitDequeSize")
+      else if (key == "worker_init_deque_size" || key == "workerInitDequeSize")
         workerInitDequeSize = parseInt(val, 2048);
-      else if (key == "routeTableSize")
+      else if (key == "route_table_size" || key == "routeTableSize")
         routeTableSize = parseInt(val, 16);
-      else if (key == "coreDump")
+      else if (key == "core_dump" || key == "coreDump")
         coreDump = parseBool(val, true);
 
       /// Performance Monitoring
-      else if (key == "counterFolder")
+      else if (key == "counter_folder" || key == "counterFolder")
         counterFolder = val;
-      else if (key == "counterStartPoint")
+      else if (key == "counter_capture_interval" || key == "counterStartPoint")
         counterStartPoint = parseInt(val, 1);
-      else if (key == "killMode")
+      else if (key == "kill_mode" || key == "killMode")
         killMode = parseBool(val, false);
 
       /// Introspection

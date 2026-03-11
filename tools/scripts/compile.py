@@ -702,7 +702,7 @@ def _compile_c_dual(
     else:
         console.print(f"Output: [{Colors.INFO}]{output_name}[/{Colors.INFO}]")
     console.print(
-        f"Mode:   [{Colors.WARNING}]Dual compilation (metadata extraction)[/{Colors.WARNING}]")
+        f"Mode:   [{Colors.WARNING}]Dual compilation[/{Colors.WARNING}]")
     console.print()
 
     carts_compile_bin = config.get_carts_tool("carts-compile")
