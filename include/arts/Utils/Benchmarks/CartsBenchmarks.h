@@ -9,18 +9,39 @@
 ///   #include "arts/Utils/Benchmarks/CartsBenchmarks.h"
 ///
 ///   int main() {
-///     CARTS_KERNEL_TIMER_START("kernel");
-///     kernel_function(...);
-///     CARTS_KERNEL_TIMER_STOP("kernel");
+///     CARTS_BENCHMARKS_START();
+///     CARTS_E2E_TIMER_START("bench");
 ///
-///     double checksum = 0.0; for (int i = 0; i < N; i++)
-///     checksum += data[i];
+///     CARTS_STARTUP_TIMER_START("bench");
+///     float *data = malloc(N * sizeof(float));
+///     init(data);
+///     CARTS_STARTUP_TIMER_STOP();
+///
+///     CARTS_KERNEL_TIMER_START("bench");
+///     kernel_function(data);
+///     CARTS_KERNEL_TIMER_STOP("bench");
+///
+///     CARTS_VERIFICATION_TIMER_START("bench");
+///     double checksum = 0.0;
+///     for (int i = 0; i < N; i++) checksum += data[i];
 ///     CARTS_BENCH_CHECKSUM(checksum);
+///     CARTS_VERIFICATION_TIMER_STOP();
+///
+///     CARTS_CLEANUP_TIMER_START("bench");
+///     free(data);
+///     CARTS_CLEANUP_TIMER_STOP();
+///
+///     CARTS_E2E_TIMER_STOP();
+///     CARTS_BENCHMARKS_STOP();
 ///     return 0;
 ///   }
 ///
 /// Output format:
-///   kernel.name: 0.1234s
+///   startup.bench: 0.123456789s
+///   kernel.bench: 0.123456789s
+///   verification.bench: 0.123456789s
+///   cleanup.bench: 0.123456789s
+///   e2e.bench: 0.123456789s
 ///   checksum: 1.234567e+00
 ///
 /// Note: Link with libcartsbenchmarks (-lcartsbenchmarks) for the
@@ -94,6 +115,37 @@ void carts_bench_timer_print(void);
 #define CARTS_BENCH_TIMER_START() carts_bench_timer_start()
 #define CARTS_BENCH_TIMER_STOP() carts_bench_timer_stop()
 #define CARTS_BENCH_TIMER_PRINT() carts_bench_timer_print()
+
+///===----------------------------------------------------------------------===///
+/// Section Timers (startup, verification, cleanup)
+///
+/// Decompose E2E time into non-overlapping sections:
+///   e2e ≈ startup + kernel + verification + cleanup
+///
+/// Output format:
+///   startup.<name>: 0.123456789s
+///   verification.<name>: 0.123456789s
+///   cleanup.<name>: 0.123456789s
+///===----------------------------------------------------------------------===///
+
+/// Start/stop startup section timer (malloc + initialization).
+void carts_startup_timer_start(const char *name);
+void carts_startup_timer_stop(void);
+
+/// Start/stop verification section timer (checksum computation).
+void carts_verification_timer_start(const char *name);
+void carts_verification_timer_stop(void);
+
+/// Start/stop cleanup section timer (memory deallocation).
+void carts_cleanup_timer_start(const char *name);
+void carts_cleanup_timer_stop(void);
+
+#define CARTS_STARTUP_TIMER_START(name) carts_startup_timer_start(name)
+#define CARTS_STARTUP_TIMER_STOP() carts_startup_timer_stop()
+#define CARTS_VERIFICATION_TIMER_START(name) carts_verification_timer_start(name)
+#define CARTS_VERIFICATION_TIMER_STOP() carts_verification_timer_stop()
+#define CARTS_CLEANUP_TIMER_START(name) carts_cleanup_timer_start(name)
+#define CARTS_CLEANUP_TIMER_STOP() carts_cleanup_timer_stop()
 
 ///===----------------------------------------------------------------------===///
 /// Kernel Timing (for fine-grained measurement)

@@ -24,6 +24,12 @@ extern "C" {
 
 static const char *carts_e2e_timer_name = nullptr;
 static uint64_t carts_e2e_timer_start_ns = 0;
+static const char *carts_startup_timer_name = nullptr;
+static uint64_t carts_startup_timer_start_ns = 0;
+static const char *carts_verification_timer_name = nullptr;
+static uint64_t carts_verification_timer_start_ns = 0;
+static const char *carts_cleanup_timer_name = nullptr;
+static uint64_t carts_cleanup_timer_start_ns = 0;
 static double carts_program_timer_start_sec = 0.0;
 static double carts_kernel_timer_start_sec = 0.0;
 static double carts_kernel_timer_accum_sec = 0.0;
@@ -91,7 +97,7 @@ __attribute__((noinline)) void carts_kernel_timer_stop(const char *name) {
       carts_kernel_timer_start_sec == 0.0
           ? 0.0
           : carts_bench_get_time() - carts_kernel_timer_start_sec;
-  printf("kernel.%s: %.6fs\n", kernelName, elapsed_sec);
+  printf("kernel.%s: %.9fs\n", kernelName, elapsed_sec);
   fflush(stdout);
 }
 
@@ -106,7 +112,56 @@ __attribute__((noinline)) void carts_kernel_timer_accum(const char *name) {
 
 __attribute__((noinline)) void carts_kernel_timer_print(const char *name) {
   const char *kernelName = name ? name : "unnamed";
-  printf("kernel.%s: %.6fs\n", kernelName, carts_kernel_timer_accum_sec);
+  printf("kernel.%s: %.9fs\n", kernelName, carts_kernel_timer_accum_sec);
+  fflush(stdout);
+}
+
+///===----------------------------------------------------------------------===///
+/// Section Timers (startup, verification, cleanup)
+///===----------------------------------------------------------------------===///
+
+__attribute__((noinline)) void carts_startup_timer_start(const char *name) {
+  carts_startup_timer_name = name;
+  carts_startup_timer_start_ns = carts_e2e_timer_get_time_ns();
+}
+
+__attribute__((noinline)) void carts_startup_timer_stop(void) {
+  uint64_t start_ns = carts_startup_timer_start_ns;
+  uint64_t end_ns = carts_e2e_timer_get_time_ns();
+  const char *name =
+      carts_startup_timer_name ? carts_startup_timer_name : "unnamed";
+  double elapsed_sec = start_ns ? (double)(end_ns - start_ns) * 1e-9 : 0.0;
+  printf("startup.%s: %.9fs\n", name, elapsed_sec);
+  fflush(stdout);
+}
+
+__attribute__((noinline)) void carts_verification_timer_start(const char *name) {
+  carts_verification_timer_name = name;
+  carts_verification_timer_start_ns = carts_e2e_timer_get_time_ns();
+}
+
+__attribute__((noinline)) void carts_verification_timer_stop(void) {
+  uint64_t start_ns = carts_verification_timer_start_ns;
+  uint64_t end_ns = carts_e2e_timer_get_time_ns();
+  const char *name =
+      carts_verification_timer_name ? carts_verification_timer_name : "unnamed";
+  double elapsed_sec = start_ns ? (double)(end_ns - start_ns) * 1e-9 : 0.0;
+  printf("verification.%s: %.9fs\n", name, elapsed_sec);
+  fflush(stdout);
+}
+
+__attribute__((noinline)) void carts_cleanup_timer_start(const char *name) {
+  carts_cleanup_timer_name = name;
+  carts_cleanup_timer_start_ns = carts_e2e_timer_get_time_ns();
+}
+
+__attribute__((noinline)) void carts_cleanup_timer_stop(void) {
+  uint64_t start_ns = carts_cleanup_timer_start_ns;
+  uint64_t end_ns = carts_e2e_timer_get_time_ns();
+  const char *name =
+      carts_cleanup_timer_name ? carts_cleanup_timer_name : "unnamed";
+  double elapsed_sec = start_ns ? (double)(end_ns - start_ns) * 1e-9 : 0.0;
+  printf("cleanup.%s: %.9fs\n", name, elapsed_sec);
   fflush(stdout);
 }
 
