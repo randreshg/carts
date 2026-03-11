@@ -24,7 +24,10 @@ Compiler layering and ownership rules are documented in:
 python3 tools/setup/carts-setup.py    # Install prerequisites
 carts build                            # Build CARTS
 carts build --clean                    # Clean build
-carts build --arts --debug             # Build ARTS with debug logging
+carts build --arts --debug 0           # ARTS errors only
+carts build --arts --debug 1           # ARTS warnings
+carts build --arts --debug 2           # ARTS info
+carts build --arts --debug 3           # Build ARTS with full debug logging
 
 # Testing
 carts compile simple.cpp -o simple     # Full compilation pipeline

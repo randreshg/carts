@@ -73,9 +73,8 @@ typedef struct {
 
 ## Configuration
 Runtime configuration is in `arts.cfg` files:
-- `threads=16`: Number of worker threads
+- `worker_threads=16`: Number of worker threads per node
+- `sender_threads=1`, `receiver_threads=1`: Network thread counts for multi-node runs
+- `node_count=4`, `nodes=node01,node02,node03,node04`: Cluster shape
 - `scheduler=3`: GPU scheduler (if GPU enabled)
-- `counterFolder=./counters/`: Performance monitoring
-
-- `scheduler=3`: GPU scheduler (if GPU enabled)
-- `counterFolder=./counters/`: Performance monitoring
+- `counter_folder=./counters`: Performance monitoring

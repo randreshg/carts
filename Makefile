@@ -158,9 +158,8 @@ ARTS_BUILD_TYPE ?= Release
 # Use ARTS_USE_COUNTERS=ON and ARTS_USE_METRICS=ON to enable introspection
 ARTS_USE_COUNTERS ?= OFF
 ARTS_USE_METRICS ?= OFF
-# Logging levels
-ARTS_INFO_ENABLED ?= OFF
-ARTS_DEBUG_ENABLED ?= OFF
+# Logging level: 0=ERROR, 1=+WARN, 2=+INFO, 3=+DEBUG
+ARTS_LOG_LEVEL ?= 1
 # Counter configuration profile (defaults to timing-only for minimal overhead)
 # Available profiles: profile-none.cfg, profile-timing.cfg, profile-workload.cfg, profile-overhead.cfg, profile-thread-edt.cfg
 COUNTER_CONFIG_PATH ?= external/carts-benchmarks/configs/profiles/profile-timing.cfg
@@ -172,7 +171,7 @@ ARTS_CONFIG_HASH_FILE := $(ARTS_BUILD_DIR)/.arts-build-config
 COUNTER_CONFIG_HASH := $(shell md5sum $(COUNTER_CONFIG_PATH) 2>/dev/null | cut -d' ' -f1 || echo "no-config")
 
 # Compute current configuration as a string for hashing
-ARTS_CONFIG_STRING := $(ARTS_BUILD_TYPE)|$(ARTS_USE_COUNTERS)|$(ARTS_USE_METRICS)|$(ARTS_INFO_ENABLED)|$(ARTS_DEBUG_ENABLED)|$(COUNTER_CONFIG_PATH)|$(COUNTER_CONFIG_HASH)|$(CARTS_LINKER_PATH)
+ARTS_CONFIG_STRING := $(ARTS_BUILD_TYPE)|$(ARTS_USE_COUNTERS)|$(ARTS_USE_METRICS)|$(ARTS_LOG_LEVEL)|$(COUNTER_CONFIG_PATH)|$(COUNTER_CONFIG_HASH)|$(CARTS_LINKER_PATH)
 
 arts-download:
 	@if [ ! -d "$(ARTS_DIR)/.git" ]; then \
@@ -192,11 +191,12 @@ arts:
 	if [ "$$CURRENT_HASH" = "$$STORED_HASH" ] && [ -f "$(ARTS_BUILD_DIR)/build.ninja" ]; then \
 		echo "ARTS configuration unchanged, skipping cmake..."; \
 	else \
-		echo "Building ARTS (build_type=$(ARTS_BUILD_TYPE), counters=$(ARTS_USE_COUNTERS), metrics=$(ARTS_USE_METRICS), info=$(ARTS_INFO_ENABLED), debug=$(ARTS_DEBUG_ENABLED), counter_config=$(notdir $(COUNTER_CONFIG_PATH)))..."; \
+		echo "Building ARTS (build_type=$(ARTS_BUILD_TYPE), counters=$(ARTS_USE_COUNTERS), metrics=$(ARTS_USE_METRICS), log_level=$(ARTS_LOG_LEVEL), counter_config=$(notdir $(COUNTER_CONFIG_PATH)))..."; \
 		$(CMAKE_CMD) -B $(ARTS_BUILD_DIR) -S $(ARTS_DIR) -G Ninja \
 			-DCMAKE_C_COMPILER=$(LLVM_INSTALL_DIR)/bin/clang \
 			-DCMAKE_CXX_COMPILER=$(LLVM_INSTALL_DIR)/bin/clang++ \
 			-DCMAKE_BUILD_TYPE=$(ARTS_BUILD_TYPE) \
+			-DARTS_LOG_LEVEL=$(ARTS_LOG_LEVEL) \
 			-DARTS_USE_GPU=OFF \
 			-DARTS_BUILD_BENCHMARKS=OFF \
 			-DARTS_BUILD_TESTS=OFF \

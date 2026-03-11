@@ -125,8 +125,13 @@ EdtOp mlir::arts::createContinuationParallel(
                 : SmallVector<Value>{},
         origAcq ? SmallVector<Value>(origAcq.getPartitionSizes())
                 : SmallVector<Value>{});
-    if (origAcq)
+    if (origAcq) {
       newAcq.copyPartitionSegmentsFrom(origAcq);
+      if (origAcq.getPreserveDepMode())
+        newAcq.setPreserveDepMode();
+      if (origAcq.getPreserveDependency())
+        newAcq.setPreserveDependency();
+    }
 
     newDeps.push_back(newAcq.getPtr());
     origArgIndices.push_back(idx);

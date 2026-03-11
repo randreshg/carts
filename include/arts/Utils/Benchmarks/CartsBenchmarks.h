@@ -80,6 +80,28 @@ void carts_e2e_timer_stop(void);
 #define CARTS_E2E_TIMER_STOP() carts_e2e_timer_stop()
 
 ///===----------------------------------------------------------------------===///
+/// Legacy Phase Timing
+///
+/// Benchmarks still emit explicit startup / verification / cleanup sections,
+/// and the harness parses those prefixes. Keep this compatibility layer even
+/// though the implementation now lives out-of-line.
+///===----------------------------------------------------------------------===///
+
+/// Start a named benchmark phase timer.
+void carts_phase_timer_start(const char *phase, const char *name);
+
+/// Stop a named benchmark phase timer and print elapsed time.
+void carts_phase_timer_stop(const char *phase);
+
+#define CARTS_STARTUP_TIMER_START(name) carts_phase_timer_start("startup", name)
+#define CARTS_STARTUP_TIMER_STOP() carts_phase_timer_stop("startup")
+#define CARTS_VERIFICATION_TIMER_START(name)                                   \
+  carts_phase_timer_start("verification", name)
+#define CARTS_VERIFICATION_TIMER_STOP() carts_phase_timer_stop("verification")
+#define CARTS_CLEANUP_TIMER_START(name) carts_phase_timer_start("cleanup", name)
+#define CARTS_CLEANUP_TIMER_STOP() carts_phase_timer_stop("cleanup")
+
+///===----------------------------------------------------------------------===///
 /// Program-Level Timing
 ///===----------------------------------------------------------------------===///
 

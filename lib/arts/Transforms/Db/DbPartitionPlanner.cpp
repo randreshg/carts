@@ -242,7 +242,13 @@ static void buildBlockRewriteAcquire(const DbAcquirePartitionView &input,
   }
 
   if (input.isValid) {
-    if (plan.numPartitionedDims() > 1) {
+    if (input.partitionOffsets.empty() && input.partitionSizes.empty() &&
+        !input.partitionIndices.empty()) {
+      for (Value idx : input.partitionIndices) {
+        output.partitionInfo.offsets.push_back(idx);
+        output.partitionInfo.sizes.push_back(one);
+      }
+    } else if (plan.numPartitionedDims() > 1) {
       for (Value idx : input.partitionIndices) {
         output.partitionInfo.offsets.push_back(idx);
         unsigned dimIdx = output.partitionInfo.offsets.size() - 1;

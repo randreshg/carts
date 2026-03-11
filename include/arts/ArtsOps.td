@@ -229,6 +229,8 @@ def DbAcquireOp : Arts_Op<"db_acquire", [AttrSizedOperandSegments]> {
     Optional<I1>:$bounds_valid,
     Variadic<Index>:$element_offsets,
     Variadic<Index>:$element_sizes,
+    OptionalAttr<PreserveDependencyModeAttr>:$preserve_dep_mode,
+    OptionalAttr<PreserveDependencyAttr>:$preserve_dependency,
     /// Segment attributes for multiple partition entries
     OptionalAttr<DenseI32ArrayAttr>:$partition_indices_segments,
     OptionalAttr<DenseI32ArrayAttr>:$partition_offsets_segments,
@@ -320,6 +322,14 @@ def DbAcquireOp : Arts_Op<"db_acquire", [AttrSizedOperandSegments]> {
     /// Check if this acquire has partition hints (element-space
     /// indices/offsets/sizes)
     bool hasPartitionHints() { return hasExplicitPartitionHints(); }
+
+    /// Mark or clear the authoritative dependency-mode contract carried by
+    /// this acquire.
+    void setPreserveDepMode(bool preserve = true);
+
+    /// Mark or clear the explicit dependency-edge contract carried by
+    /// this acquire.
+    void setPreserveDependency(bool preserve = true);
 
     /// Check if this acquire has explicit partition hints (including sizes)
     bool hasExplicitPartitionHints();

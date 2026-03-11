@@ -461,6 +461,10 @@ bool EdtPass::convertParallelWithAcquiresToSync(
         SmallVector<Value>(outerAcq.getPartitionOffsets()),
         SmallVector<Value>(outerAcq.getPartitionSizes()));
     newAcq.copyPartitionSegmentsFrom(outerAcq);
+    if (outerAcq.getPreserveDepMode())
+      newAcq.setPreserveDepMode();
+    if (outerAcq.getPreserveDependency())
+      newAcq.setPreserveDependency();
 
     /// Track the mapping and dependency
     oldPtrToNewPtr[outerAcq.getPtr()] = newAcq.getPtr();

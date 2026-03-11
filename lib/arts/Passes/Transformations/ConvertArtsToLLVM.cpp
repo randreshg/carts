@@ -902,8 +902,6 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
 
     DbLoweringInfo dbLowering = DbUtils::extractDbLoweringInfo(op);
     auto &dbSizes = dbLowering.sizes;
-    auto &dbOffsets = dbLowering.offsets;
-    auto &dbIndices = dbLowering.indices;
     bool isSingleElement = dbLowering.isSingleElement;
 
     if (distributedOwnership) {

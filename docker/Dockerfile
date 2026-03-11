@@ -98,8 +98,11 @@ COPY slurm.conf /etc/slurm/slurm.conf
 # Default working directory
 WORKDIR /root
 
-# Environment variables
-ENV PATH="/opt/carts/tools:$PATH"
+# Keep the source-tree CARTS wrapper first. Docker bootstrap uses
+# `carts install`, but the installed `.install/carts/bin/carts` wrapper does
+# not currently ship its Python companion files, so `/opt/carts/tools` remains
+# the authoritative CLI entrypoint inside containers.
+ENV PATH="/opt/carts/tools:/opt/carts/.install/carts/bin:$PATH"
 
 
 # Set working directory

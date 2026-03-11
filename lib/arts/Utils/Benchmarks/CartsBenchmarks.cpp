@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <dlfcn.h>
@@ -23,6 +24,8 @@ extern "C" {
 /// High-Precision Wall Clock Timing
 ///===----------------------------------------------------------------------===///
 
+double carts_bench_get_time(void);
+
 static const char *carts_e2e_timer_name = nullptr;
 static uint64_t carts_e2e_timer_start_ns = 0;
 static double carts_program_timer_start_sec = 0.0;
@@ -30,6 +33,27 @@ static double carts_kernel_timer_start_sec = 0.0;
 static double carts_kernel_timer_accum_sec = 0.0;
 static thread_local double carts_parallel_timer_start_sec = 0.0;
 static thread_local double carts_task_timer_start_sec = 0.0;
+
+struct PhaseTimerState {
+  const char *name;
+  double start_sec;
+};
+
+static PhaseTimerState carts_startup_timer = {nullptr, 0.0};
+static PhaseTimerState carts_verification_timer = {nullptr, 0.0};
+static PhaseTimerState carts_cleanup_timer = {nullptr, 0.0};
+
+static PhaseTimerState *carts_get_phase_timer(const char *phase) {
+  if (!phase)
+    return nullptr;
+  if (std::strcmp(phase, "startup") == 0)
+    return &carts_startup_timer;
+  if (std::strcmp(phase, "verification") == 0)
+    return &carts_verification_timer;
+  if (std::strcmp(phase, "cleanup") == 0)
+    return &carts_cleanup_timer;
+  return nullptr;
+}
 
 static int carts_benchmarks_worker_id(void) {
 #ifdef _OPENMP
@@ -62,6 +86,28 @@ __attribute__((noinline)) void carts_e2e_timer_stop(void) {
   const char *name = carts_e2e_timer_name ? carts_e2e_timer_name : "unnamed";
   double elapsed_sec = start_ns ? (double)(end_ns - start_ns) * 1e-9 : 0.0;
   printf("e2e.%s: %.9fs\n", name, elapsed_sec);
+  fflush(stdout);
+}
+
+__attribute__((noinline)) void carts_phase_timer_start(const char *phase,
+                                                       const char *name) {
+  PhaseTimerState *timer = carts_get_phase_timer(phase);
+  if (!timer)
+    return;
+  timer->name = name;
+  timer->start_sec = carts_bench_get_time();
+}
+
+__attribute__((noinline)) void carts_phase_timer_stop(const char *phase) {
+  PhaseTimerState *timer = carts_get_phase_timer(phase);
+  if (!timer)
+    return;
+
+  const char *phaseName = phase ? phase : "phase";
+  const char *name = timer->name ? timer->name : "unnamed";
+  double elapsed_sec =
+      timer->start_sec == 0.0 ? 0.0 : carts_bench_get_time() - timer->start_sec;
+  printf("%s.%s: %.6fs\n", phaseName, name, elapsed_sec);
   fflush(stdout);
 }
 

@@ -63,14 +63,13 @@ def EdtType : Arts_I32Enum<"EdtType", "ARTS EDT type", [
 /// Enum attribute for EDT types
 def EdtTypeAttr : Arts_I32EnumAttr<"edt_type", EdtType>;
 
-/// Enum info for DB allocation modes
+/// Enum info for compiler DB access modes.
 /// Only `read` and `write` are actively used in the compiler.
-/// Integer values match ARTS runtime constants in ArtsKinds.def.
-/// Removed unused modes: pinned(10), once(11), once_local(12),
-/// gpu_read(13), gpu_write(14), lc(15), lc_sync(17),
-/// lc_no_copy(18), gpu_memset(19). Re-add if GPU/LC support is needed.
-def DbMode : Arts_I32Enum<"DbMode", "ARTS DB allocation mode", [
-  I32EnumAttrCase<"read", 8, "read">, I32EnumAttrCase<"write", 9, "write">
+/// Integer values intentionally match ARTS runtime dependency modes
+/// `DB_MODE_RO` (1) and `DB_MODE_EW` (2) so dependency lowering can pass them
+/// through directly without an extra translation layer.
+def DbMode : Arts_I32Enum<"DbMode", "ARTS DB access mode", [
+  I32EnumAttrCase<"read", 1, "read">, I32EnumAttrCase<"write", 2, "write">
 ]>;
 
 /// Enum attribute for DB allocation modes
@@ -205,6 +204,38 @@ def NoVerifyAttr : AttrDef<ArtsDialect, "NoVerify"> {
                 properly sets up dependencies and block
                     arguments.The attribute is removed after CreateDbPass.}];
   let mnemonic = "no_verify";
+  let assemblyFormat = "";
+}
+
+/// Marker on DbAcquireOp to preserve authoritative dependency mode semantics.
+/// This only protects the acquire's mode from later re-inference/optimization.
+/// It does not by itself imply that the dependency edge must stay live.
+def PreserveDependencyModeAttr
+    : AttrDef<ArtsDialect, "PreserveDependencyMode"> {
+  let summary = "Preserve explicit dependency mode semantics on a DbAcquireOp";
+  let description = [{
+    Marks DbAcquireOps whose access mode should be treated as an explicit
+    dependency contract rather than inferred from loads/stores. This attribute
+    is only set when the compiler already knows the exact mode and later passes
+    should not re-check or optimize it.
+  }];
+  let mnemonic = "preserve_dep_mode";
+  let assemblyFormat = "";
+}
+
+/// Marker on DbAcquireOp to preserve an explicit dependency edge.
+/// This is only set for acquires materialized from explicit DbControlOp/task
+/// dependency contracts whose EDT dependency must not be DCE'd away just
+/// because the local pointer/block argument is otherwise unused.
+def PreserveDependencyAttr : AttrDef<ArtsDialect, "PreserveDependency"> {
+  let summary = "Preserve explicit dependency edge semantics on a DbAcquireOp";
+  let description = [{
+    Marks DbAcquireOps whose EDT dependency edge is semantically required even
+    if the acquired pointer has no local memory uses. This is used for
+    explicit task-control dependencies and is intentionally separate from
+    `preserve_dep_mode`, which only protects access-mode inference.
+  }];
+  let mnemonic = "preserve_dep";
   let assemblyFormat = "";
 }
 
