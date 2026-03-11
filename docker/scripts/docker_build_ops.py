@@ -77,7 +77,7 @@ def docker_build(
 
         if not volume_exists or force:
             git_url = os.environ.get("GIT_URL", "https://github.com/randreshg/carts.git")
-            git_branch = os.environ.get("GIT_BRANCH", "mlir")
+            git_branch = os.environ.get("GIT_BRANCH", "v2")
             print_step(f"Cloning and building CARTS (branch: {git_branch})")
             build_cmd = textwrap.dedent(
                 f"""

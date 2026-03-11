@@ -1,7 +1,7 @@
 [submodule "external/arts"]
 	path = external/arts
 	url = https://github.com/randreshg/ARTS.git
-	branch = master
+	branch = v2
 	shallow = true
 
 [submodule "external/Polygeist"]
