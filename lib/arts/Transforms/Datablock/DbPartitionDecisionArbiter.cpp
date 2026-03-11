@@ -38,6 +38,7 @@ struct DistributionPatternHintSummary {
   bool hasOther = false;
   bool hasReadOnlyAcquire = false;
   bool hasStencilAccessPattern = false;
+  bool hasExplicitControlDeps = false;
 };
 
 static DistributionPatternHintSummary summarizeAcquireDistributionPatterns(
@@ -50,6 +51,8 @@ static DistributionPatternHintSummary summarizeAcquireDistributionPatterns(
 
     if (acquire.getMode() == ArtsMode::in)
       summary.hasReadOnlyAcquire = true;
+    if (info.preservesDependencyMode)
+      summary.hasExplicitControlDeps = true;
     if (info.accessPattern == AccessPattern::Stencil)
       summary.hasStencilAccessPattern = true;
 
@@ -183,6 +186,7 @@ PartitionDecisionArbiterResult mlir::arts::arbitrateInitialPartitionDecision(
 
     if (distPatterns.hasStencil && !distPatterns.hasOther &&
         distPatterns.hasReadOnlyAcquire &&
+        !distPatterns.hasExplicitControlDeps &&
         (distPatterns.hasStencilAccessPattern || allocHasStencilPattern)) {
       result.decision = PartitioningDecision::block(
           ctx, "stencil EDT distribution fallback to block partitioning");
@@ -207,6 +211,7 @@ PartitionDecisionArbiterResult mlir::arts::arbitrateInitialPartitionDecision(
       allocHasStencilPattern = *allocPattern == DbAccessPattern::stencil;
 
     if (distPatterns.hasStencil && distPatterns.hasReadOnlyAcquire &&
+        !distPatterns.hasExplicitControlDeps &&
         (distPatterns.hasStencilAccessPattern || allocHasStencilPattern)) {
       result.decision = PartitioningDecision::stencil(
           ctx, "stencil EDT distribution pattern hint");
@@ -215,6 +220,9 @@ PartitionDecisionArbiterResult mlir::arts::arbitrateInitialPartitionDecision(
           "forcing stencil partition mode from EDT distribution pattern hints",
           allocOp.getOperation(), {});
       ARTS_DEBUG("  stencil EDT hints -> forcing stencil partitioning");
+    } else if (distPatterns.hasExplicitControlDeps && distPatterns.hasStencil) {
+      ARTS_DEBUG("  explicit control deps present -> skipping stencil hint "
+                 "override");
     }
   }
 
