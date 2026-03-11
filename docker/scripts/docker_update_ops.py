@@ -62,7 +62,7 @@ def docker_update(
         print_info("Waiting for update container")
         time.sleep(5)
 
-        git_branch = os.environ.get("GIT_BRANCH", "mlir")
+        git_branch = os.environ.get("GIT_BRANCH", "v2")
         print_step("Updating git state and checking component changes")
 
         update_flags: list[str] = []
@@ -83,7 +83,7 @@ def docker_update(
 
             target_branch="{git_branch}"
             if [[ -z "$target_branch" ]]; then
-                target_branch="mlir"
+                target_branch="v2"
             fi
 
             echo "CARTS:remote $(git config --get remote.origin.url 2>/dev/null || echo unknown)"
