@@ -4,6 +4,7 @@
 /// C benchmark utilities for CARTS benchmarks.
 /// Provides standardized checksum reporting and kernel timing.
 ///
+///
 /// Usage:
 ///   #include "arts/Utils/Benchmarks/CartsBenchmarks.h"
 ///
@@ -29,17 +30,8 @@
 #ifndef CARTS_BENCHMARKS_H
 #define CARTS_BENCHMARKS_H
 
-/// Required for clock_gettime() and CLOCK_MONOTONIC on POSIX systems
-#define _POSIX_C_SOURCE 199309L
-
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <time.h>
-
-#ifdef _OPENMP
-#include <omp.h>
-#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -49,14 +41,12 @@ extern "C" {
 /// Benchmark Start/Stop (call to set up fair timing)
 ///===----------------------------------------------------------------------===///
 
-/// Pre-warm OMP thread pool. Implemented in CartsBenchmarks.cpp (compiled -O0).
+/// Pre-warm OMP thread pool.
 void carts_benchmarks_warmup_omp(void);
 
 /// Benchmark start hook for fair timing comparisons.
-/// This function is safe to call in both ARTS and OpenMP builds:
 /// - OpenMP reference: warms up the OMP thread pool and may emit `init.omp`.
 /// - ARTS binary: may emit `init.arts` (process start -> entering mainBody).
-/// Implemented in CartsBenchmarks.cpp (compiled -O0).
 void carts_benchmarks_start(void);
 
 /// For OMP: calls extern warmup function to initialize thread pool before
@@ -80,92 +70,55 @@ void carts_benchmarks_start(void);
 ///   e2e.kernel_name: 0.123456789s
 ///===----------------------------------------------------------------------===///
 
-/// Global timer state for E2E timing
-static uint64_t _carts_e2e_timer_start_ns = 0;
-static const char *_carts_e2e_timer_name = NULL;
+/// Start E2E timer (stores name and start time in library-side state).
+void carts_e2e_timer_start(const char *name);
 
-/// Get current time in nanoseconds (implemented in CartsBenchmarks.cpp)
-uint64_t carts_e2e_timer_get_time_ns(void);
+/// Stop E2E timer and print elapsed time.
+void carts_e2e_timer_stop(void);
 
-#define CARTS_E2E_TIMER_START(name)                                            \
-  do {                                                                         \
-    _carts_e2e_timer_name = name;                                              \
-    _carts_e2e_timer_start_ns = carts_e2e_timer_get_time_ns();                 \
-  } while (0)
-
-#define CARTS_E2E_TIMER_STOP()                                                 \
-  do {                                                                         \
-    uint64_t elapsed_ns =                                                      \
-        carts_e2e_timer_get_time_ns() - _carts_e2e_timer_start_ns;             \
-    printf("e2e.%s: %.9fs\n", _carts_e2e_timer_name,                           \
-           (double)elapsed_ns * 1e-9);                                         \
-  } while (0)
+#define CARTS_E2E_TIMER_START(name) carts_e2e_timer_start(name)
+#define CARTS_E2E_TIMER_STOP() carts_e2e_timer_stop()
 
 ///===----------------------------------------------------------------------===///
-/// Legacy Timing Utilities (inline - Polygeist compatible)
+/// Program-Level Timing
 ///===----------------------------------------------------------------------===///
-
-/// Global timer start value for program-level timing
-static double _carts_bench_timer_start = 0.0;
-
-/// Kernel timer start value (single kernel at a time)
-static double _carts_kernel_timer_start = 0.0;
-
-/// Accumulated kernel time (for iterative methods)
-static double _carts_kernel_timer_accum = 0.0;
 
 /// Get current wall-clock time in seconds.
-static inline double carts_bench_get_time(void) {
-#ifdef _OPENMP
-  return omp_get_wtime();
-#else
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
-#endif
-}
+double carts_bench_get_time(void);
 
-/// Start program-level timer
-#define CARTS_BENCH_TIMER_START()                                              \
-  _carts_bench_timer_start = carts_bench_get_time()
+/// Start program-level timer.
+void carts_bench_timer_start(void);
 
-/// Get elapsed program time since CARTS_BENCH_TIMER_START()
-#define CARTS_BENCH_TIMER_STOP()                                               \
-  (carts_bench_get_time() - _carts_bench_timer_start)
+/// Return elapsed seconds since carts_bench_timer_start().
+double carts_bench_timer_stop(void);
 
-/// Print program-level elapsed time
-#define CARTS_BENCH_TIMER_PRINT()                                              \
-  printf("time: %.6f\n", CARTS_BENCH_TIMER_STOP())
+/// Print elapsed program time.
+void carts_bench_timer_print(void);
+
+#define CARTS_BENCH_TIMER_START() carts_bench_timer_start()
+#define CARTS_BENCH_TIMER_STOP() carts_bench_timer_stop()
+#define CARTS_BENCH_TIMER_PRINT() carts_bench_timer_print()
 
 ///===----------------------------------------------------------------------===///
 /// Kernel Timing (for fine-grained measurement)
 ///===----------------------------------------------------------------------===///
 
-/// Start timing a kernel (resets accumulator)
-#define CARTS_KERNEL_TIMER_START(name)                                         \
-  do {                                                                         \
-    _carts_kernel_timer_accum = 0.0;                                           \
-    _carts_kernel_timer_start = carts_bench_get_time();                        \
-  } while (0)
+/// Start timing a kernel (resets accumulator).
+void carts_kernel_timer_start(const char *name);
 
-/// Stop kernel timer and print elapsed time
-#define CARTS_KERNEL_TIMER_STOP(name)                                          \
-  do {                                                                         \
-    double elapsed = carts_bench_get_time() - _carts_kernel_timer_start;       \
-    printf("kernel.%s: %.6fs\n", name, elapsed);                               \
-  } while (0)
+/// Stop kernel timer and print elapsed time.
+void carts_kernel_timer_stop(const char *name);
 
-/// Accumulate kernel time (for iterative methods - call each iteration)
-#define CARTS_KERNEL_TIMER_ACCUM(name)                                         \
-  do {                                                                         \
-    _carts_kernel_timer_accum +=                                               \
-        carts_bench_get_time() - _carts_kernel_timer_start;                    \
-    _carts_kernel_timer_start = carts_bench_get_time();                        \
-  } while (0)
+/// Accumulate kernel time (for iterative methods — call each iteration).
+void carts_kernel_timer_accum(const char *name);
 
-/// Print accumulated kernel time (call after all iterations)
-#define CARTS_KERNEL_TIMER_PRINT(name)                                         \
-  printf("kernel.%s: %.6fs\n", name, _carts_kernel_timer_accum)
+/// Print accumulated kernel time (call after all iterations).
+void carts_kernel_timer_print(const char *name);
+
+#define CARTS_KERNEL_TIMER_START(name) carts_kernel_timer_start(name)
+#define CARTS_KERNEL_TIMER_STOP(name) carts_kernel_timer_stop(name)
+#define CARTS_KERNEL_TIMER_ACCUM(name) carts_kernel_timer_accum(name)
+#define CARTS_KERNEL_TIMER_PRINT(name) carts_kernel_timer_print(name)
 
 ///===----------------------------------------------------------------------===///
 /// Parallel Region & Task Timing (thread-safe, per-worker)
@@ -198,34 +151,22 @@ static inline double carts_bench_get_time(void) {
 
 #ifdef CARTS_ENABLE_TIMING
 
-/// Thread-local storage for per-worker timing (C11 _Thread_local)
-/// Each OpenMP thread has its own timer state for thread-safety
-static _Thread_local double _carts_parallel_timer_start = 0.0;
-static _Thread_local double _carts_task_timer_start = 0.0;
+/// Start timing a parallel region.
+void carts_parallel_timer_start(const char *name);
 
-/// Start timing a parallel region (call inside #pragma omp parallel)
-#define CARTS_PARALLEL_TIMER_START(name)                                       \
-  _carts_parallel_timer_start = carts_bench_get_time()
+/// Stop parallel region timer and print elapsed time with worker ID.
+void carts_parallel_timer_stop(const char *name);
 
-/// Stop parallel region timer and print elapsed time with worker ID
-#define CARTS_PARALLEL_TIMER_STOP(name)                                        \
-  do {                                                                         \
-    double elapsed = carts_bench_get_time() - _carts_parallel_timer_start;     \
-    printf("parallel.%s[worker=%d]: %.6fs\n", name, omp_get_thread_num(),      \
-           elapsed);                                                           \
-  } while (0)
+/// Start timing a task.
+void carts_task_timer_start(const char *name);
 
-/// Start timing a task (sequential kernel work inside #pragma omp task)
-#define CARTS_TASK_TIMER_START(name)                                           \
-  _carts_task_timer_start = carts_bench_get_time()
+/// Stop task timer and print elapsed time with worker ID.
+void carts_task_timer_stop(const char *name);
 
-/// Stop task timer and print elapsed time with worker ID
-#define CARTS_TASK_TIMER_STOP(name)                                            \
-  do {                                                                         \
-    double elapsed = carts_bench_get_time() - _carts_task_timer_start;         \
-    printf("task.%s[worker=%d]: %.6fs\n", name, omp_get_thread_num(),          \
-           elapsed);                                                           \
-  } while (0)
+#define CARTS_PARALLEL_TIMER_START(name) carts_parallel_timer_start(name)
+#define CARTS_PARALLEL_TIMER_STOP(name) carts_parallel_timer_stop(name)
+#define CARTS_TASK_TIMER_START(name) carts_task_timer_start(name)
+#define CARTS_TASK_TIMER_STOP(name) carts_task_timer_stop(name)
 
 #else /* !CARTS_ENABLE_TIMING */
 
@@ -237,7 +178,7 @@ static _Thread_local double _carts_task_timer_start = 0.0;
 #endif /* CARTS_ENABLE_TIMING */
 
 ///===----------------------------------------------------------------------===///
-/// Checksum/Result Reporting (implemented in libcartsbenchmarks)
+/// Checksum/Result Reporting
 ///===----------------------------------------------------------------------===///
 
 /// Print checksum as double (most common case)
