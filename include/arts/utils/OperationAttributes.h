@@ -28,42 +28,70 @@ constexpr StringLiteral RuntimeTotalNodes = "arts.runtime_total_nodes";
 namespace Operation {
 using namespace llvm;
 
-/// Common ARTS attributes
-constexpr StringLiteral Workers = "workers";
-constexpr StringLiteral WorkersPerNode = "workers_per_node";
-constexpr StringLiteral ArtsId = "arts.id";
-constexpr StringLiteral ArtsCreateId = "arts.create_id";
-constexpr StringLiteral OutlinedFunc = "outlined_func";
-constexpr StringLiteral Nowait = "nowait";
-constexpr StringLiteral PreserveDependencyMode = "preserve_dep_mode";
-constexpr StringLiteral PreserveDependency = "preserve_dep";
+// === Domain sub-namespaces ===
 
-/// Partition-related attributes (TableGen-generated names)
-constexpr StringLiteral PartitionMode = "partition_mode";
-constexpr StringLiteral PartitionHint = "arts.partition_hint";
-constexpr StringLiteral AccessPattern = "access_pattern";
-constexpr StringLiteral Distributed = "distributed";
-constexpr StringLiteral DistributionKind = "distribution_kind";
-constexpr StringLiteral DistributionPattern = "distribution_pattern";
-constexpr StringLiteral DistributionVersion = "distribution_version";
-constexpr StringLiteral StencilCenterOffset = "stencil_center_offset";
-constexpr StringLiteral ElementStride = "element_stride";
-constexpr StringLiteral LeftHaloArgIdx = "left_halo_arg_idx";
-constexpr StringLiteral RightHaloArgIdx = "right_halo_arg_idx";
+/// Worker topology attributes.
+namespace Worker {
+constexpr StringLiteral Workers("workers");
+constexpr StringLiteral WorkersPerNode("workers_per_node");
+} // namespace Worker
 
-/// DbAllocOp attributes (TableGen-generated names)
-constexpr StringLiteral Mode = "mode";
-constexpr StringLiteral AllocType = "allocType";
-constexpr StringLiteral DbMode = "dbMode";
-constexpr StringLiteral ElementType = "elementType";
+/// Partitioning attributes.
+namespace Partition {
+constexpr StringLiteral PartitionMode("partition_mode");
+constexpr StringLiteral PartitionHint("arts.partition_hint");
+constexpr StringLiteral AccessPattern("access_pattern");
+} // namespace Partition
 
-/// EdtOp attributes (TableGen-generated names)
-constexpr StringLiteral Type = "type";
-constexpr StringLiteral Concurrency = "concurrency";
+/// Distributed execution attributes.
+namespace Distribution {
+constexpr StringLiteral Distributed("distributed");
+constexpr StringLiteral DistributionKind("distribution_kind");
+constexpr StringLiteral DistributionPattern("distribution_pattern");
+constexpr StringLiteral DistributionVersion("distribution_version");
+} // namespace Distribution
+
+/// Stencil operation attributes.
+namespace Stencil {
+constexpr StringLiteral StencilCenterOffset("stencil_center_offset");
+constexpr StringLiteral ElementStride("element_stride");
+constexpr StringLiteral LeftHaloArgIdx("left_halo_arg_idx");
+constexpr StringLiteral RightHaloArgIdx("right_halo_arg_idx");
+} // namespace Stencil
+
+/// Structural metadata attributes.
+namespace Metadata {
+constexpr StringLiteral ArtsId("arts.id");
+constexpr StringLiteral ArtsCreateId("arts.create_id");
+constexpr StringLiteral OutlinedFunc("outlined_func");
+constexpr StringLiteral Nowait("nowait");
+constexpr StringLiteral PreserveDependencyMode("preserve_dep_mode");
+constexpr StringLiteral PreserveDependency("preserve_dep");
+} // namespace Metadata
+
+/// Database/datablock attributes.
+namespace Db {
+constexpr StringLiteral Mode("mode");
+constexpr StringLiteral AllocType("allocType");
+constexpr StringLiteral DbMode("dbMode");
+constexpr StringLiteral ElementType("elementType");
+constexpr StringLiteral Type("type");
+constexpr StringLiteral Concurrency("concurrency");
+} // namespace Db
+
+// === Backward compatibility ===
+using namespace Worker;
+using namespace Partition;
+using namespace Distribution;
+using namespace Stencil;
+using namespace Metadata;
+using namespace Db;
 
 } // namespace Operation
 
 } // namespace AttrNames
+
+// ===== Module-Level Attributes =====
 
 inline std::optional<StringRef> getRuntimeConfigPath(ModuleOp module) {
   if (!module)
@@ -131,93 +159,7 @@ inline void setRuntimeTotalNodes(ModuleOp module, int64_t nodes) {
       IntegerAttr::get(IntegerType::get(module.getContext(), 64), nodes));
 }
 
-/// Forward declaration - defined in PartitioningHeuristics.h
-struct PartitioningHint;
-
-/// Merge two DbAccessPattern values, keeping the higher-priority pattern.
-/// Priority: stencil > indexed > uniform > unknown.
-inline DbAccessPattern mergeDbAccessPattern(DbAccessPattern lhs,
-                                            DbAccessPattern rhs) {
-  auto rank = [](DbAccessPattern p) -> unsigned {
-    switch (p) {
-    case DbAccessPattern::stencil:
-      return 3;
-    case DbAccessPattern::indexed:
-      return 2;
-    case DbAccessPattern::uniform:
-      return 1;
-    case DbAccessPattern::unknown:
-      return 0;
-    }
-    return 0;
-  };
-  return rank(rhs) > rank(lhs) ? rhs : lhs;
-}
-
-inline int64_t getArtsId(Operation *op) {
-  if (!op)
-    return 0;
-  if (auto attr = op->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsId))
-    return attr.getInt();
-  return 0;
-}
-
-inline void setArtsId(Operation *op, int64_t id) {
-  if (!op || id <= 0)
-    return;
-  auto *ctx = op->getContext();
-  auto type = IntegerType::get(ctx, 64);
-  op->setAttr(AttrNames::Operation::ArtsId, IntegerAttr::get(type, id));
-}
-
-inline std::optional<PartitionMode> getPartitionMode(Operation *op) {
-  if (!op)
-    return std::nullopt;
-  if (auto attr = op->getAttrOfType<PartitionModeAttr>(
-          AttrNames::Operation::PartitionMode))
-    return attr.getValue();
-  return std::nullopt;
-}
-
-inline void setPartitionMode(Operation *op, PartitionMode mode) {
-  if (!op)
-    return;
-  op->setAttr(AttrNames::Operation::PartitionMode,
-              PartitionModeAttr::get(op->getContext(), mode));
-}
-
-inline std::optional<DbAccessPattern> getDbAccessPattern(Operation *op) {
-  if (!op)
-    return std::nullopt;
-  if (auto attr = op->getAttrOfType<DbAccessPatternAttr>(
-          AttrNames::Operation::AccessPattern))
-    return attr.getValue();
-  return std::nullopt;
-}
-
-inline void setDbAccessPattern(Operation *op, DbAccessPattern pattern) {
-  if (!op)
-    return;
-  op->setAttr(AttrNames::Operation::AccessPattern,
-              DbAccessPatternAttr::get(op->getContext(), pattern));
-}
-
-inline bool hasDistributedDbAllocation(Operation *op) {
-  if (!op)
-    return false;
-  return op->hasAttr(AttrNames::Operation::Distributed);
-}
-
-inline void setDistributedDbAllocation(Operation *op, bool enabled) {
-  if (!op)
-    return;
-  if (enabled) {
-    op->setAttr(AttrNames::Operation::Distributed,
-                UnitAttr::get(op->getContext()));
-    return;
-  }
-  op->removeAttr(AttrNames::Operation::Distributed);
-}
+// ===== Worker Topology =====
 
 inline std::optional<int64_t> getWorkers(Operation *op) {
   if (!op)
@@ -274,6 +216,86 @@ inline void copyWorkerTopologyAttrs(Operation *from, Operation *to) {
   }
   setWorkers(to, getWorkers(from).value_or(0));
   setWorkersPerNode(to, getWorkersPerNode(from).value_or(0));
+}
+
+// ===== Partitioning =====
+
+inline std::optional<PartitionMode> getPartitionMode(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr = op->getAttrOfType<PartitionModeAttr>(
+          AttrNames::Operation::PartitionMode))
+    return attr.getValue();
+  return std::nullopt;
+}
+
+inline void setPartitionMode(Operation *op, PartitionMode mode) {
+  if (!op)
+    return;
+  op->setAttr(AttrNames::Operation::PartitionMode,
+              PartitionModeAttr::get(op->getContext(), mode));
+}
+
+inline std::optional<DbAccessPattern> getDbAccessPattern(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr = op->getAttrOfType<DbAccessPatternAttr>(
+          AttrNames::Operation::AccessPattern))
+    return attr.getValue();
+  return std::nullopt;
+}
+
+inline void setDbAccessPattern(Operation *op, DbAccessPattern pattern) {
+  if (!op)
+    return;
+  op->setAttr(AttrNames::Operation::AccessPattern,
+              DbAccessPatternAttr::get(op->getContext(), pattern));
+}
+
+/// Forward declaration - defined in PartitioningHeuristics.h
+struct PartitioningHint;
+
+/// Full implementation in HeuristicsConfig.cpp (uses DictionaryAttr).
+std::optional<PartitioningHint> getPartitioningHint(Operation *op);
+void setPartitioningHint(Operation *op, const PartitioningHint &hint);
+
+/// Merge two DbAccessPattern values, keeping the higher-priority pattern.
+/// Priority: stencil > indexed > uniform > unknown.
+inline DbAccessPattern mergeDbAccessPattern(DbAccessPattern lhs,
+                                            DbAccessPattern rhs) {
+  auto rank = [](DbAccessPattern p) -> unsigned {
+    switch (p) {
+    case DbAccessPattern::stencil:
+      return 3;
+    case DbAccessPattern::indexed:
+      return 2;
+    case DbAccessPattern::uniform:
+      return 1;
+    case DbAccessPattern::unknown:
+      return 0;
+    }
+    return 0;
+  };
+  return rank(rhs) > rank(lhs) ? rhs : lhs;
+}
+
+// ===== Distribution =====
+
+inline bool hasDistributedDbAllocation(Operation *op) {
+  if (!op)
+    return false;
+  return op->hasAttr(AttrNames::Operation::Distributed);
+}
+
+inline void setDistributedDbAllocation(Operation *op, bool enabled) {
+  if (!op)
+    return;
+  if (enabled) {
+    op->setAttr(AttrNames::Operation::Distributed,
+                UnitAttr::get(op->getContext()));
+    return;
+  }
+  op->removeAttr(AttrNames::Operation::Distributed);
 }
 
 inline std::optional<EdtDistributionKind>
@@ -336,6 +358,8 @@ inline void copyDistributionAttrs(Operation *source, Operation *dest) {
   else
     dest->removeAttr(AttrNames::Operation::DistributionVersion);
 }
+
+// ===== Stencil & Halo =====
 
 inline std::optional<int64_t> getStencilCenterOffset(Operation *op) {
   if (!op)
@@ -408,9 +432,25 @@ inline void setRightHaloArgIndex(Operation *op, unsigned argIndex) {
               IntegerAttr::get(IndexType::get(op->getContext()), argIndex));
 }
 
-/// Full implementation in HeuristicsConfig.cpp (uses DictionaryAttr).
-std::optional<PartitioningHint> getPartitioningHint(Operation *op);
-void setPartitioningHint(Operation *op, const PartitioningHint &hint);
+// ===== Metadata =====
+
+inline int64_t getArtsId(Operation *op) {
+  if (!op)
+    return 0;
+  if (auto attr = op->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsId))
+    return attr.getInt();
+  return 0;
+}
+
+inline void setArtsId(Operation *op, int64_t id) {
+  if (!op || id <= 0)
+    return;
+  auto *ctx = op->getContext();
+  auto type = IntegerType::get(ctx, 64);
+  op->setAttr(AttrNames::Operation::ArtsId, IntegerAttr::get(type, id));
+}
+
+// ===== Cross-Domain Utilities =====
 
 /// Copy ARTS-specific metadata attributes from source to dest operation.
 /// Copies: arts.id, partition_mode, arts.partition_hint, arts.loop.
