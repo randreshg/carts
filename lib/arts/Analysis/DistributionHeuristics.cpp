@@ -163,6 +163,26 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
   if (tripCount <= 0)
     return std::nullopt;
 
+  int64_t effectiveTripCount = tripCount;
+  bool allowNestedWorkBoost = false;
+  if (auto summary = loopAnalysis.getLoopDbAccessSummary(forOp.getOperation())) {
+    allowNestedWorkBoost =
+        summary->distributionPattern == EdtDistributionPattern::uniform &&
+        summary->allocPatterns.size() <= 4 && !summary->hasStencilOffset &&
+        !summary->hasMatmulUpdate && !summary->hasTriangularBound;
+  }
+  if (allowNestedWorkBoost) {
+    if (auto nestedWork = loopAnalysis.estimateStaticPerfectNestedWork(
+            forOp.getOperation(), 8);
+        nestedWork && *nestedWork > 1) {
+      if (*nestedWork >=
+          std::numeric_limits<int64_t>::max() / effectiveTripCount)
+        effectiveTripCount = std::numeric_limits<int64_t>::max();
+      else
+        effectiveTripCount *= *nestedWork;
+    }
+  }
+
   int64_t minItersPerWorker = 8;
   if (auto parentEdt = forOp->getParentOfType<EdtOp>()) {
     int64_t depCount = static_cast<int64_t>(parentEdt.getDependencies().size());
@@ -174,10 +194,11 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
     }
   }
 
-  if (tripCount >= workerCfg.totalWorkers * minItersPerWorker)
+  if (effectiveTripCount >= workerCfg.totalWorkers * minItersPerWorker)
     return std::nullopt;
 
-  int64_t desiredWorkers = std::max<int64_t>(1, tripCount / minItersPerWorker);
+  int64_t desiredWorkers =
+      std::max<int64_t>(1, effectiveTripCount / minItersPerWorker);
   desiredWorkers = std::min(desiredWorkers, workerCfg.totalWorkers);
 
   int64_t blockSize = (tripCount + desiredWorkers - 1) / desiredWorkers;

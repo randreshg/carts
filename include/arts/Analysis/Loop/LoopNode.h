@@ -83,6 +83,8 @@ public:
   std::optional<int64_t> getLowerBoundConstant() const;
   std::optional<int64_t> getUpperBoundConstant() const;
   std::optional<int64_t> getStepConstant() const;
+  std::optional<int64_t>
+  estimateStaticPerfectNestedWork(int64_t cap = 8) const;
   int getNestingDepth() const;
   void clearIVCache() { ivDependencyCache.clear(); }
 

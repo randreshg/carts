@@ -41,6 +41,21 @@ static std::optional<int64_t> getTripCountFromMetadata(Operation *loopOp,
 
 static std::optional<int64_t>
 getTripCountFromConstantBounds(Operation *loopOp) {
+  if (auto affineFor = dyn_cast<affine::AffineForOp>(loopOp)) {
+    if (affineFor.hasConstantBounds()) {
+      int64_t lb = affineFor.getConstantLowerBound();
+      int64_t ub = affineFor.getConstantUpperBound();
+      int64_t step = affineFor.getStep();
+      if (step > 0) {
+        int64_t span = ub - lb;
+        if (span <= 0)
+          return 0;
+        return (span + step - 1) / step;
+      }
+    }
+    return std::nullopt;
+  }
+
   if (auto artsFor = dyn_cast<arts::ForOp>(loopOp)) {
     if (artsFor.getLowerBound().empty() || artsFor.getUpperBound().empty() ||
         artsFor.getStep().empty())
@@ -184,6 +199,16 @@ std::optional<int64_t> LoopAnalysis::getStaticTripCount(Operation *loopOp) {
     return metadataTripCount;
 
   return getTripCountFromConstantBounds(loopOp);
+}
+
+std::optional<int64_t>
+LoopAnalysis::estimateStaticPerfectNestedWork(Operation *loopOp, int64_t cap) {
+  ensureAnalyzed();
+  if (!loopOp || !isLoopOperation(loopOp))
+    return std::nullopt;
+  if (LoopNode *loopNode = getOrCreateLoopNode(loopOp))
+    return loopNode->estimateStaticPerfectNestedWork(cap);
+  return std::nullopt;
 }
 
 std::optional<DbAnalysis::LoopDbAccessSummary>

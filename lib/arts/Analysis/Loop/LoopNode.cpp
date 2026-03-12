@@ -11,6 +11,7 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/ValueUtils.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -41,6 +42,45 @@ static Value getWhileInductionVar(scf::WhileOp whileOp) {
   }
 
   return before.getArgument(0);
+}
+
+static bool isTransparentNestedWorkOp(Operation *op) {
+  if (!op || op->hasTrait<OpTrait::IsTerminator>())
+    return true;
+  if (isa<scf::ForOp, affine::AffineForOp>(op))
+    return true;
+  return op->getNumRegions() == 0 && mlir::isPure(op);
+}
+
+static Operation *getSingleDirectNestedLoop(Operation *loopOp) {
+  if (!loopOp)
+    return nullptr;
+
+  Region *bodyRegion = nullptr;
+  if (auto scfFor = dyn_cast<scf::ForOp>(loopOp))
+    bodyRegion = &scfFor.getRegion();
+  else if (auto affineFor = dyn_cast<affine::AffineForOp>(loopOp))
+    bodyRegion = &affineFor.getRegion();
+  else if (auto artsFor = dyn_cast<arts::ForOp>(loopOp))
+    bodyRegion = &artsFor.getRegion();
+  else
+    return nullptr;
+
+  if (!bodyRegion || bodyRegion->empty())
+    return nullptr;
+
+  Operation *nestedLoop = nullptr;
+  for (Operation &op : bodyRegion->front().without_terminator()) {
+    if (isa<scf::ForOp, affine::AffineForOp>(op)) {
+      if (nestedLoop)
+        return nullptr;
+      nestedLoop = &op;
+      continue;
+    }
+    if (!isTransparentNestedWorkOp(&op))
+      return nullptr;
+  }
+  return nestedLoop;
 }
 
 LoopNode::LoopNode(Operation *loopOp, LoopAnalysis *loopAnalysis)
@@ -420,6 +460,32 @@ std::optional<int64_t> LoopNode::getStepConstant() const {
         return std::nullopt;
       })
       .Default([](Operation *) { return std::nullopt; });
+}
+
+std::optional<int64_t>
+LoopNode::estimateStaticPerfectNestedWork(int64_t cap) const {
+  if (!loopAnalysis)
+    return std::nullopt;
+
+  int64_t capped = std::max<int64_t>(1, cap);
+  int64_t product = 1;
+  Operation *current = loopOp;
+
+  while (Operation *nested = getSingleDirectNestedLoop(current)) {
+    auto tripCount = loopAnalysis->getStaticTripCount(nested);
+    if (!tripCount || *tripCount <= 0)
+      return product;
+
+    if (product >= capped)
+      return capped;
+    if (*tripCount >= capped / product)
+      return capped;
+
+    product *= *tripCount;
+    current = nested;
+  }
+
+  return product;
 }
 
 Value LoopNode::getLowerBound() const {
