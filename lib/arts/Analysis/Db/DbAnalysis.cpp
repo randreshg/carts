@@ -308,10 +308,13 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
     acqNode = graph.getDbAcquireNode(acquire);
   }
 
-  const DbAcquirePartitionFacts *facts = acqNode ? &acqNode->getPartitionFacts()
-                                                 : nullptr;
+  const DbAcquirePartitionFacts *facts = getAcquirePartitionFacts(acquire);
   if (facts)
     info.hasIndirectAccess = facts->hasIndirectAccess;
+  if (facts) {
+    info.hasDistributionContract = facts->hasDistributionContract;
+    info.partitionDimsFromPeers = facts->partitionDimsFromPeers;
+  }
 
   auto refineSizeFromMinInBlock = [&](Value offset, Value sizeHint) -> Value {
     if (!offset || !sizeHint)
@@ -517,6 +520,22 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
   }
 
   return info;
+}
+
+const DbAcquirePartitionFacts *
+DbAnalysis::getAcquirePartitionFacts(DbAcquireOp acquire) {
+  if (!acquire)
+    return nullptr;
+
+  func::FuncOp func = acquire->getParentOfType<func::FuncOp>();
+  if (!func)
+    return nullptr;
+
+  DbGraph &graph = getOrCreateGraph(func);
+  DbAcquireNode *acqNode = graph.getDbAcquireNode(acquire);
+  if (!acqNode)
+    return nullptr;
+  return &acqNode->getPartitionFacts();
 }
 
 bool DbAnalysis::hasCrossElementSelfReadInLoop(DbAcquireOp acquire,
