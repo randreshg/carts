@@ -895,3 +895,215 @@ bool DbUtils::hasMultiEntryStencilPattern(DbAcquireOp acquire,
 
   return foundStencilDim;
 }
+
+///===----------------------------------------------------------------------===///
+/// Block Size and Malloc Pattern Extraction (free functions)
+///===----------------------------------------------------------------------===///
+
+namespace mlir {
+namespace arts {
+
+std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
+  if (!sizeHint || depth > 4)
+    return std::nullopt;
+
+  /// Case 1: Direct constant
+  int64_t val;
+  if (ValueUtils::getConstantIndex(sizeHint, val))
+    return val;
+
+  /// Case 2/3: minui/minsi pattern - return the larger constant (nominal size)
+  /// Helper to handle min operations uniformly
+  auto handleMinOp = [&](Value lhs, Value rhs) -> std::optional<int64_t> {
+    int64_t lhsVal = 0, rhsVal = 0;
+    bool hasLhs = ValueUtils::getConstantIndex(lhs, lhsVal);
+    bool hasRhs = ValueUtils::getConstantIndex(rhs, rhsVal);
+
+    if (hasLhs && hasRhs)
+      return std::max(lhsVal, rhsVal);
+    if (hasLhs)
+      return lhsVal;
+    if (hasRhs)
+      return rhsVal;
+
+    auto lhsExtracted = extractBlockSizeFromHint(lhs, depth + 1);
+    auto rhsExtracted = extractBlockSizeFromHint(rhs, depth + 1);
+    if (lhsExtracted && rhsExtracted)
+      return std::max(*lhsExtracted, *rhsExtracted);
+    if (lhsExtracted)
+      return lhsExtracted;
+    if (rhsExtracted)
+      return rhsExtracted;
+    return std::nullopt;
+  };
+
+  if (auto minOp = sizeHint.getDefiningOp<arith::MinUIOp>()) {
+    if (auto result = handleMinOp(minOp.getLhs(), minOp.getRhs()))
+      return result;
+  }
+  if (auto minOp = sizeHint.getDefiningOp<arith::MinSIOp>()) {
+    if (auto result = handleMinOp(minOp.getLhs(), minOp.getRhs()))
+      return result;
+  }
+
+  /// Case 4: addi pattern - stencil halo adjustment
+  /// For stencil patterns, blockSize = addi(baseBlockSize, haloAdjustment)
+  /// where haloAdjustment is a small constant (e.g., 2 for i-1, i, i+1 pattern)
+  /// We want to extract baseBlockSize, which is the actual partition block size
+  if (auto addOp = sizeHint.getDefiningOp<arith::AddIOp>()) {
+    int64_t lhsVal = 0, rhsVal = 0;
+    bool hasLhsConst = ValueUtils::getConstantIndex(addOp.getLhs(), lhsVal);
+    bool hasRhsConst = ValueUtils::getConstantIndex(addOp.getRhs(), rhsVal);
+
+    /// If one operand is a small constant (halo adjustment), recurse on the
+    /// other
+    if (hasRhsConst && std::abs(rhsVal) <= 16) {
+      /// rhsVal is halo adjustment, lhs is base block size
+      return extractBlockSizeFromHint(addOp.getLhs(), depth + 1);
+    }
+    if (hasLhsConst && std::abs(lhsVal) <= 16) {
+      /// lhsVal is halo adjustment, rhs is base block size
+      return extractBlockSizeFromHint(addOp.getRhs(), depth + 1);
+    }
+
+    /// Both constants or both large - try both sides
+    auto lhsExtracted = extractBlockSizeFromHint(addOp.getLhs(), depth + 1);
+    auto rhsExtracted = extractBlockSizeFromHint(addOp.getRhs(), depth + 1);
+    if (lhsExtracted)
+      return lhsExtracted;
+    if (rhsExtracted)
+      return rhsExtracted;
+  }
+
+  /// Case 5: maxui pattern - clamp minimum (e.g., MaxUIOp(blockSize, 1))
+  /// Return the larger constant operand as the block size upper bound
+  if (auto maxOp = sizeHint.getDefiningOp<arith::MaxUIOp>()) {
+    int64_t lhsVal = 0, rhsVal = 0;
+    bool hasLhs = ValueUtils::getConstantIndex(maxOp.getLhs(), lhsVal);
+    bool hasRhs = ValueUtils::getConstantIndex(maxOp.getRhs(), rhsVal);
+
+    if (hasLhs && hasRhs)
+      return std::max(lhsVal, rhsVal);
+    if (hasLhs && !hasRhs) {
+      auto rhsExtracted = extractBlockSizeFromHint(maxOp.getRhs(), depth + 1);
+      if (rhsExtracted)
+        return rhsExtracted;
+      return lhsVal;
+    }
+    if (hasRhs && !hasLhs) {
+      auto lhsExtracted = extractBlockSizeFromHint(maxOp.getLhs(), depth + 1);
+      if (lhsExtracted)
+        return lhsExtracted;
+      return rhsVal;
+    }
+
+    /// Recurse for nested maxui
+    auto lhsExtracted = extractBlockSizeFromHint(maxOp.getLhs(), depth + 1);
+    auto rhsExtracted = extractBlockSizeFromHint(maxOp.getRhs(), depth + 1);
+    if (lhsExtracted && rhsExtracted)
+      return std::max(*lhsExtracted, *rhsExtracted);
+    if (lhsExtracted)
+      return lhsExtracted;
+    if (rhsExtracted)
+      return rhsExtracted;
+  }
+
+  return std::nullopt;
+}
+
+std::optional<int64_t> extractBlockSizeForAllocation(Value sizeHint,
+                                                     int depth) {
+  if (!sizeHint || depth > 4)
+    return std::nullopt;
+
+  /// Case 1: Direct constant
+  int64_t val;
+  if (ValueUtils::getConstantIndex(sizeHint, val))
+    return val;
+
+  /// Case 2: minui/minsi pattern - return the larger constant (nominal size)
+  /// Helper to handle min operations uniformly
+  auto handleMinOp = [&](Value lhs, Value rhs) -> std::optional<int64_t> {
+    int64_t lhsVal = 0, rhsVal = 0;
+    bool hasLhs = ValueUtils::getConstantIndex(lhs, lhsVal);
+    bool hasRhs = ValueUtils::getConstantIndex(rhs, rhsVal);
+
+    if (hasLhs && hasRhs)
+      return std::max(lhsVal, rhsVal);
+    if (hasLhs)
+      return lhsVal;
+    if (hasRhs)
+      return rhsVal;
+
+    auto lhsExtracted = extractBlockSizeForAllocation(lhs, depth + 1);
+    auto rhsExtracted = extractBlockSizeForAllocation(rhs, depth + 1);
+    if (lhsExtracted && rhsExtracted)
+      return std::max(*lhsExtracted, *rhsExtracted);
+    if (lhsExtracted)
+      return lhsExtracted;
+    if (rhsExtracted)
+      return rhsExtracted;
+    return std::nullopt;
+  };
+
+  if (auto minOp = sizeHint.getDefiningOp<arith::MinUIOp>()) {
+    if (auto result = handleMinOp(minOp.getLhs(), minOp.getRhs()))
+      return result;
+  }
+  if (auto minOp = sizeHint.getDefiningOp<arith::MinSIOp>()) {
+    if (auto result = handleMinOp(minOp.getLhs(), minOp.getRhs()))
+      return result;
+  }
+
+  /// Case 3: addi pattern - INCLUDE the halo adjustment for allocation
+  /// For stencil patterns: blockSize = addi(baseBlockSize, haloAdjustment)
+  /// Allocation needs full size: base + halo
+  if (auto addOp = sizeHint.getDefiningOp<arith::AddIOp>()) {
+    int64_t lhsVal = 0, rhsVal = 0;
+    bool hasLhsConst = ValueUtils::getConstantIndex(addOp.getLhs(), lhsVal);
+    bool hasRhsConst = ValueUtils::getConstantIndex(addOp.getRhs(), rhsVal);
+
+    /// If one operand is a small constant (halo), add it to the extracted base
+    if (hasRhsConst && std::abs(rhsVal) <= 16) {
+      auto baseSize = extractBlockSizeForAllocation(addOp.getLhs(), depth + 1);
+      if (baseSize)
+        return *baseSize + rhsVal; /// base + halo
+    }
+    if (hasLhsConst && std::abs(lhsVal) <= 16) {
+      auto baseSize = extractBlockSizeForAllocation(addOp.getRhs(), depth + 1);
+      if (baseSize)
+        return *baseSize + lhsVal; /// base + halo
+    }
+
+    /// Both operands non-constant - try both sides
+    auto lhsExtracted =
+        extractBlockSizeForAllocation(addOp.getLhs(), depth + 1);
+    auto rhsExtracted =
+        extractBlockSizeForAllocation(addOp.getRhs(), depth + 1);
+    if (lhsExtracted)
+      return lhsExtracted;
+    if (rhsExtracted)
+      return rhsExtracted;
+  }
+
+  return std::nullopt;
+}
+
+Value extractOriginalSize(Value numerator, Value denominator,
+                          OpBuilder &builder, Location loc) {
+  Value stripped = ValueUtils::stripNumericCasts(numerator);
+  if (auto mul = stripped.getDefiningOp<arith::MulIOp>()) {
+    Value lhs = mul.getLhs();
+    Value rhs = mul.getRhs();
+    if (ValueUtils::scalesAreEquivalent(lhs, denominator))
+      return ValueUtils::castToIndex(ValueUtils::stripNumericCasts(rhs),
+                                     builder, loc);
+    if (ValueUtils::scalesAreEquivalent(rhs, denominator))
+      return ValueUtils::castToIndex(ValueUtils::stripNumericCasts(lhs),
+                                     builder, loc);
+  }
+  return Value();
+}
+
+} // namespace arts
+} // namespace mlir
