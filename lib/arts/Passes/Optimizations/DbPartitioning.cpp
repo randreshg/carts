@@ -1368,23 +1368,14 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     }
   }
 
-  bool allRewriteable =
-      skipAcquireInfoCheck ||
-      std::all_of(acquireInfos.begin(), acquireInfos.end(), [&](auto &info) {
-        /// Full-range acquires don't need offset/size - they get full
-        /// allocation
-        if (info.needsFullRange)
-          return true;
-        return info.isValid && !info.partitionOffsets.empty() &&
-               !info.partitionSizes.empty();
-      });
-  if (!allRewriteable) {
-    ARTS_DEBUG("  Some acquires missing partition info - keeping original");
-    heuristics.recordDecision(
-        "Partition-MissingAcquireInfo", false,
-        "some acquires missing partition info, cannot rewrite allocation",
-        allocOp.getOperation(), {});
-    return allocOp;
+  bool hasMissingAcquireInfo = false;
+  if (!skipAcquireInfoCheck) {
+    hasMissingAcquireInfo = llvm::any_of(acquireInfos, [&](auto &info) {
+      if (info.needsFullRange)
+        return false;
+      return !info.isValid || info.partitionOffsets.empty() ||
+             info.partitionSizes.empty();
+    });
   }
 
   ARTS_DEBUG("  Decision: mode=" << getPartitionModeName(decision.mode)
@@ -1409,6 +1400,36 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         if (blockLikeMode && hasPartitionRange)
           info.needsFullRange = false;
       }
+    }
+  }
+
+  if (hasMissingAcquireInfo) {
+    if (decision.isBlock()) {
+      int64_t widenedAcquires = 0;
+      for (auto &info : acquireInfos) {
+        if (info.needsFullRange)
+          continue;
+        if (info.isValid && !info.partitionOffsets.empty() &&
+            !info.partitionSizes.empty())
+          continue;
+        info.needsFullRange = true;
+        ++widenedAcquires;
+      }
+
+      ARTS_DEBUG("  Some acquires missing partition info - forcing full-range "
+                 "on block allocation");
+      heuristics.recordDecision(
+          "Partition-MissingAcquireInfo", true,
+          "some acquires missing partition info, forcing full-range on block "
+          "allocation",
+          allocOp.getOperation(), {{"widenedAcquires", widenedAcquires}});
+    } else {
+      ARTS_DEBUG("  Some acquires missing partition info - keeping original");
+      heuristics.recordDecision(
+          "Partition-MissingAcquireInfo", false,
+          "some acquires missing partition info, cannot rewrite allocation",
+          allocOp.getOperation(), {});
+      return allocOp;
     }
   }
 
