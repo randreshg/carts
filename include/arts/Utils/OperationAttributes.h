@@ -20,6 +20,8 @@ namespace Module {
 using namespace llvm;
 constexpr StringLiteral RuntimeConfigPath = "arts.runtime_config_path";
 constexpr StringLiteral RuntimeConfigData = "arts.runtime_config_data";
+constexpr StringLiteral RuntimeTotalWorkers = "arts.runtime_total_workers";
+constexpr StringLiteral RuntimeTotalNodes = "arts.runtime_total_nodes";
 } // namespace Module
 
 /// Operation-level attributes used across ARTS passes
@@ -93,6 +95,40 @@ inline void setRuntimeConfigData(ModuleOp module, StringRef data) {
     return;
   module->setAttr(AttrNames::Module::RuntimeConfigData,
                   StringAttr::get(module.getContext(), data));
+}
+
+inline std::optional<int64_t> getRuntimeTotalWorkers(ModuleOp module) {
+  if (!module)
+    return std::nullopt;
+  if (auto attr = module->getAttrOfType<IntegerAttr>(
+          AttrNames::Module::RuntimeTotalWorkers))
+    return attr.getInt();
+  return std::nullopt;
+}
+
+inline void setRuntimeTotalWorkers(ModuleOp module, int64_t workers) {
+  if (!module || workers <= 0)
+    return;
+  module->setAttr(AttrNames::Module::RuntimeTotalWorkers,
+                  IntegerAttr::get(IntegerType::get(module.getContext(), 64),
+                                   workers));
+}
+
+inline std::optional<int64_t> getRuntimeTotalNodes(ModuleOp module) {
+  if (!module)
+    return std::nullopt;
+  if (auto attr = module->getAttrOfType<IntegerAttr>(
+          AttrNames::Module::RuntimeTotalNodes))
+    return attr.getInt();
+  return std::nullopt;
+}
+
+inline void setRuntimeTotalNodes(ModuleOp module, int64_t nodes) {
+  if (!module || nodes <= 0)
+    return;
+  module->setAttr(AttrNames::Module::RuntimeTotalNodes,
+                  IntegerAttr::get(IntegerType::get(module.getContext(), 64),
+                                   nodes));
 }
 
 /// Forward declaration - defined in PartitioningHeuristics.h

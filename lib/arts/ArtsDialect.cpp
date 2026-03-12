@@ -91,6 +91,45 @@ struct RemoveUnusedDbAcquire : public OpRewritePattern<DbAcquireOp> {
     return failure();
   }
 };
+
+struct FoldKnownRuntimeQuery : public OpRewritePattern<RuntimeQueryOp> {
+  using OpRewritePattern<RuntimeQueryOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(RuntimeQueryOp op,
+                                PatternRewriter &rewriter) const override {
+    auto module = op->getParentOfType<ModuleOp>();
+    if (!module)
+      return failure();
+
+    std::optional<int64_t> foldedValue;
+    switch (op.getKind()) {
+    case RuntimeQueryKind::totalWorkers:
+      foldedValue = getRuntimeTotalWorkers(module);
+      break;
+    case RuntimeQueryKind::totalNodes:
+      foldedValue = getRuntimeTotalNodes(module);
+      break;
+    default:
+      return failure();
+    }
+
+    if (!foldedValue || *foldedValue <= 0)
+      return failure();
+
+    Type resultType = op.getType();
+    if (auto indexTy = dyn_cast<IndexType>(resultType)) {
+      (void)indexTy;
+      rewriter.replaceOpWithNewOp<arith::ConstantIndexOp>(op, *foldedValue);
+      return success();
+    }
+    if (auto intTy = dyn_cast<IntegerType>(resultType)) {
+      rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(op, *foldedValue,
+                                                        intTy.getWidth());
+      return success();
+    }
+    return failure();
+  }
+};
 } // namespace
 
 void DbDimOp::getCanonicalizationPatterns(RewritePatternSet &results,
@@ -101,6 +140,11 @@ void DbDimOp::getCanonicalizationPatterns(RewritePatternSet &results,
 void DbAcquireOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                               MLIRContext *context) {
   results.add<RemoveUnusedDbAcquire>(context);
+}
+
+void RuntimeQueryOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                                 MLIRContext *context) {
+  results.add<FoldKnownRuntimeQuery>(context);
 }
 
 bool isArtsRegion(Operation *op) { return isa<EdtOp>(op) || isa<EpochOp>(op); }
