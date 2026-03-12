@@ -123,73 +123,9 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
   }
 
   /// Capture partition hints for analysis.
-  /// Fine-grained mode uses partition indices as element coordinates.
-  /// Block/stencil modes use partition offsets as range starts.
-  auto pickRepresentative = [](ValueRange vals, unsigned &idx) -> Value {
-    idx = 0;
-    for (unsigned i = 0; i < vals.size(); ++i) {
-      Value v = vals[i];
-      if (!v)
-        continue;
-      int64_t c = 0;
-      if (!ValueUtils::getConstantIndex(ValueUtils::stripNumericCasts(v), c)) {
-        idx = i;
-        return v;
-      }
-    }
-    for (unsigned i = 0; i < vals.size(); ++i) {
-      if (vals[i]) {
-        idx = i;
-        return vals[i];
-      }
-    }
-    return Value();
-  };
-
-  unsigned hintIdx = 0;
-  auto hintMode = dbAcquireOp.getPartitionMode();
-  bool preferPartitionIndices =
-      !hintMode || *hintMode == PartitionMode::fine_grained;
-  if (preferPartitionIndices && !dbAcquireOp.getPartitionIndices().empty())
-    partitionOffset =
-        pickRepresentative(dbAcquireOp.getPartitionIndices(), hintIdx);
-  else if (!dbAcquireOp.getPartitionOffsets().empty())
-    partitionOffset =
-        pickRepresentative(dbAcquireOp.getPartitionOffsets(), hintIdx);
-  else if (!dbAcquireOp.getPartitionIndices().empty())
-    partitionOffset =
-        pickRepresentative(dbAcquireOp.getPartitionIndices(), hintIdx);
-  if (!dbAcquireOp.getPartitionSizes().empty()) {
-    if (hintIdx < dbAcquireOp.getPartitionSizes().size())
-      partitionSize = dbAcquireOp.getPartitionSizes()[hintIdx];
-    else
-      partitionSize = dbAcquireOp.getPartitionSizes().front();
-  }
-
-  /// Fallback to DB-space indices/offsets/sizes only when an explicit
-  /// non-coarse partition mode is set (legacy paths or already-partitioned
-  /// acquires).
-  if (!partitionOffset && !partitionSize) {
-    if (auto mode = dbAcquireOp.getPartitionMode();
-        mode &&
-        (*mode == PartitionMode::block || *mode == PartitionMode::stencil ||
-         *mode == PartitionMode::fine_grained)) {
-      unsigned dbIdx = 0;
-      bool preferDbIndices = (*mode == PartitionMode::fine_grained);
-      if (preferDbIndices && !dbAcquireOp.getIndices().empty())
-        partitionOffset = pickRepresentative(dbAcquireOp.getIndices(), dbIdx);
-      else if (!dbAcquireOp.getOffsets().empty())
-        partitionOffset = pickRepresentative(dbAcquireOp.getOffsets(), dbIdx);
-      else if (!dbAcquireOp.getIndices().empty())
-        partitionOffset = pickRepresentative(dbAcquireOp.getIndices(), dbIdx);
-      if (!dbAcquireOp.getSizes().empty()) {
-        if (dbIdx < dbAcquireOp.getSizes().size())
-          partitionSize = dbAcquireOp.getSizes()[dbIdx];
-        else
-          partitionSize = dbAcquireOp.getSizes().front();
-      }
-    }
-  }
+  AcquirePartitionHints hints = extractPartitionHints(dbAcquireOp);
+  partitionOffset = hints.offset;
+  partitionSize = hints.size;
 
   /// Initialize stencil bounds from metadata if present
   if (auto centerOffset = getStencilCenterOffset(op.getOperation())) {
@@ -364,6 +300,11 @@ DbAcquireNode::getPartitionOffsetDim(Value offset, bool requireLeading) {
 
 bool DbAcquireNode::needsFullRange(Value partOffset) {
   return PartitionBoundsAnalyzer::needsFullRange(this, partOffset);
+}
+
+bool DbAcquireNode::shouldPreserveDistributedContract(Value partOffset) {
+  return PartitionBoundsAnalyzer::shouldPreserveDistributedContract(this,
+                                                                   partOffset);
 }
 
 ///===----------------------------------------------------------------------===///

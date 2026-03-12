@@ -2,7 +2,9 @@
 /// File: DbElementWiseIndexer.h
 ///
 /// Index localizer for element-wise (fine-grained) datablock allocation.
-/// Each element of the partitioned dimension gets its own datablock entry.
+/// Each element of the partitioned dimension gets its own datablock entry
+/// when outerRank > 0. When outerRank == 0 (coarse layout), this indexer
+/// behaves as a trivial single-DB localizer and forwards indices unchanged.
 ///
 /// IMPORTANT: elemOffsets are element COORDINATES from partition_indices,
 /// NOT range offsets. They identify which element this EDT owns.

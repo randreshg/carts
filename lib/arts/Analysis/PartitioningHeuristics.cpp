@@ -73,13 +73,17 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// Exception: Defer to H1.B3 for stencil patterns (e.g., Jacobi) where block
   /// partitioning enables efficient halo exchange despite coarse output writes.
   ARTS_DEBUG("H1.C2 check: isSingleNode="
-             << isSingleNode << ", anyCoarseAcquire=" << ctx.anyCoarseAcquire()
+             << isSingleNode
+             << ", anyExplicitCoarseAcquire="
+             << ctx.anyExplicitCoarseAcquire()
              << ", hasStencil=" << patterns.hasStencil);
-  if (isSingleNode && ctx.anyCoarseAcquire() && !patterns.hasStencil) {
+  if (isSingleNode && ctx.anyExplicitCoarseAcquire() &&
+      !patterns.hasStencil) {
     ARTS_DEBUG("H1.C2 applied: Single-node coarse acquire prefers coarse");
     return PartitioningDecision::coarse(
         ctx, "H1.C2: Single-node explicit coarse acquire prefers coarse");
-  } else if (isSingleNode && ctx.anyCoarseAcquire() && patterns.hasStencil) {
+  } else if (isSingleNode && ctx.anyExplicitCoarseAcquire() &&
+             patterns.hasStencil) {
     ARTS_DEBUG("H1.C2 skipped: Stencil pattern detected, deferring to H1.B3");
   }
 
@@ -110,12 +114,13 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// stencil is on a non-partition dimension (e.g., specfem3d: stencil on
   /// i-dim, partition on k-dim). In that case, block partitioning is safe
   /// and avoids the NUMA penalty of a single coarse allocation.
-  if (patterns.hasStencil && isSingleNode && isReadOnly && !ctx.canBlock) {
+  if (patterns.hasStencil && isSingleNode && isReadOnly && !ctx.canBlock &&
+      !ctx.hasDistributedBlockContract()) {
     ARTS_DEBUG("H1.C4 applied: Read-only stencil on single-node -> coarse");
     return PartitioningDecision::coarse(
         ctx, "H1.C4: Read-only stencil on single-node prefers coarse");
   } else if (patterns.hasStencil && isSingleNode && isReadOnly &&
-             ctx.canBlock) {
+             (ctx.canBlock || ctx.hasDistributedBlockContract())) {
     ARTS_DEBUG("H1.C4 skipped: stencil on non-partition dim, block is safe");
   }
 
@@ -143,6 +148,15 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
     ARTS_DEBUG("H1.B2 applied: Mixed direct+indirect writes");
     return PartitioningDecision::block(
         ctx, "H1.B2: Mixed direct+indirect writes with full-range acquires");
+  }
+
+  if (patterns.hasStencil && hasExplicitFineGrained) {
+    unsigned outerRank = ctx.minPinnedDimCount();
+    outerRank = outerRank > 0 ? outerRank : 1;
+    ARTS_DEBUG("H1.B3 skipped: explicit fine-grained hints prefer element-wise");
+    return PartitioningDecision::elementWise(
+        ctx, outerRank,
+        "H1.E1: Explicit fine-grained stencil hints prefer element-wise");
   }
 
   /// H1.B3: Double-buffer stencil (Jacobi-style) → Block

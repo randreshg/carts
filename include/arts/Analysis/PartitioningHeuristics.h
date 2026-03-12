@@ -64,6 +64,8 @@ struct AcquireInfo {
   bool canElementWise = false;
   bool canBlock = false;
   AccessPattern accessPattern = AccessPattern::Unknown;
+  bool hasDistributionContract = false;
+  bool explicitCoarseRequest = false;
 
   /// Unified partition infos from DbAcquireOp::getPartitionInfos()
   /// One entry per depend clause entry on this acquire.
@@ -116,6 +118,21 @@ struct PartitioningContext {
   bool anyCoarseAcquire() const {
     return llvm::any_of(acquires, [](const AcquireInfo &a) {
       return a.partitionMode == PartitionMode::coarse;
+    });
+  }
+
+  /// Returns true if any acquire explicitly requested coarse partitioning.
+  bool anyExplicitCoarseAcquire() const {
+    return llvm::any_of(acquires, [](const AcquireInfo &a) {
+      return a.explicitCoarseRequest;
+    });
+  }
+
+  /// Returns true if any acquire already carries task distribution hints and
+  /// can still participate in block/stencil partitioning.
+  bool hasDistributedBlockContract() const {
+    return llvm::any_of(acquires, [](const AcquireInfo &a) {
+      return a.hasDistributionContract && a.canBlock;
     });
   }
 

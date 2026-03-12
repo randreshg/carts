@@ -41,13 +41,13 @@ static Value createZeroValue(ArtsCodegen *AC, Type elemType, Location loc) {
   if (!elemType)
     return Value();
 
-  if (elemType.isa<IndexType>())
+  if (isa<IndexType>(elemType))
     return AC->createIndexConstant(0, loc);
 
-  if (auto intTy = elemType.dyn_cast<IntegerType>())
+  if (auto intTy = dyn_cast<IntegerType>(elemType))
     return AC->create<arith::ConstantIntOp>(loc, 0, intTy.getWidth());
 
-  if (auto floatTy = elemType.dyn_cast<FloatType>()) {
+  if (auto floatTy = dyn_cast<FloatType>(elemType)) {
     llvm::APFloat zero = llvm::APFloat::getZero(floatTy.getFloatSemantics());
     return AC->create<arith::ConstantFloatOp>(loc, zero, floatTy);
   }
@@ -61,7 +61,7 @@ DenseSet<Value> mlir::arts::detectReductionBlockArgs(ForOp forOp) {
   DenseSet<Value> result;
   forOp.walk([&](memref::StoreOp store) {
     if (auto dbRef = store.getMemRef().getDefiningOp<DbRefOp>()) {
-      if (auto blockArg = dbRef.getSource().dyn_cast<BlockArgument>()) {
+      if (auto blockArg = dyn_cast<BlockArgument>(dbRef.getSource())) {
         result.insert(blockArg);
         ARTS_DEBUG(
             "  - Detected old accumulator block arg in store: " << blockArg);
@@ -101,7 +101,7 @@ void mlir::arts::collectOldAccumulatorDbRefs(
     const DenseSet<Value> &reductionBlockArgs, DenseSet<Operation *> &opsToSkip,
     IRMapping &mapper, Value myAccumulator) {
   forOp.walk([&](DbRefOp dbRef) {
-    if (auto blockArg = dbRef.getSource().dyn_cast<BlockArgument>()) {
+    if (auto blockArg = dyn_cast<BlockArgument>(dbRef.getSource())) {
       if (blockArg.getOwner() == &parallelBlock &&
           reductionBlockArgs.contains(blockArg)) {
         mapper.map(dbRef.getResult(), myAccumulator);
@@ -115,7 +115,7 @@ void mlir::arts::collectOldAccumulatorDbRefs(
 
 ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
     ArtsCodegen *AC, ForOp forOp, EdtOp parallelEdt, Location loc,
-    Attribute loopMetadataAttr, bool splitMode) {
+    Attribute loopMetadataAttr, bool splitMode, Value workerCountOverride) {
   ReductionLoweringInfo redInfo;
   redInfo.loopMetadataAttr = loopMetadataAttr;
   redInfo.loopLocation = forOp.getLoc();
@@ -150,8 +150,10 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
   /// Prefer explicit EDT worker annotations to avoid context-sensitive
   /// runtime-query cloning when outlining result EDT bodies.
   Value numWorkers;
-  if (auto explicitWorkers = arts::getWorkers(parallelEdt.getOperation());
-      explicitWorkers && *explicitWorkers > 0) {
+  if (workerCountOverride) {
+    numWorkers = workerCountOverride;
+  } else if (auto explicitWorkers = arts::getWorkers(parallelEdt.getOperation());
+             explicitWorkers && *explicitWorkers > 0) {
     numWorkers = AC->createIndexConstant(*explicitWorkers, loc);
   } else {
     numWorkers = DistributionHeuristics::getTotalWorkers(AC, loc, parallelEdt);
@@ -176,11 +178,19 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
   Value routeZero = AC->create<arith::ConstantIntOp>(loc, 0, 32);
   Value sizeOne = AC->createIndexConstant(1, loc);
   Value zeroIndex = AC->createIndexConstant(0, loc);
+  auto numWorkersConst = ValueUtils::tryFoldConstantIndex(numWorkers);
+  bool isSingleWorker = numWorkersConst && *numWorkersConst == 1;
+  bool canCombineDirectly =
+      splitMode && isSingleWorker &&
+      llvm::all_of(existingResultPtrs, [](Value ptr) {
+        return static_cast<bool>(DbUtils::traceToDbAlloc(ptr));
+      });
+  redInfo.combineDirectlyInTask = canCombineDirectly;
 
   for (auto [idx, redVar] : llvm::enumerate(reductionAccums)) {
     redInfo.reductionVars.push_back(redVar);
 
-    auto redMemRef = redVar.getType().dyn_cast<MemRefType>();
+    auto redMemRef = dyn_cast<MemRefType>(redVar.getType());
     Type elementType =
         redMemRef ? redMemRef.getElementType() : redVar.getType();
     Value identity = createZeroValue(AC, elementType, loc);
@@ -250,6 +260,20 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
 
     SmallVector<Value> innerIndices{zeroIndex};
 
+    if (canCombineDirectly) {
+      Value finalGuid = redInfo.finalResultGuids[idx];
+      Value finalPtr = redInfo.finalResultPtrs[idx];
+      Value finalMemRef = AC->create<DbRefOp>(loc, finalPtr, innerIndices);
+      AC->create<memref::StoreOp>(loc, identity, finalMemRef, innerIndices);
+
+      redInfo.partialAccumGuids.push_back(finalGuid);
+      redInfo.partialAccumPtrs.push_back(finalPtr);
+
+      ARTS_DEBUG(
+          "  - Reusing final result DB as the worker-local accumulator");
+      continue;
+    }
+
     /// Step 2: Allocate and initialize partial accumulators DB.
     auto allocOp = AC->create<DbAllocOp>(
         loc, ArtsMode::inout, routeZero, DbAllocType::heap, DbMode::write,
@@ -264,11 +288,6 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
     /// instead of a loop.  A loop from 0 to 1 would use its induction variable
     /// as a db_ref index, which the verifier rejects for coarse-grained DBs
     /// (sizes[1]) because the IV is not a constant zero.
-    int64_t numWorkersConst;
-    bool isSingleWorker =
-        ValueUtils::getConstantIndex(numWorkers, numWorkersConst) &&
-        numWorkersConst == 1;
-
     if (isSingleWorker) {
       SmallVector<Value> outerIndices{zeroIndex};
       Value partialMemRef = AC->create<DbRefOp>(loc, partialPtr, outerIndices);
@@ -321,6 +340,8 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
   OpBuilder::InsertionGuard IG(AC->getBuilder());
   if (redInfo.reductionVars.empty())
     return;
+  if (redInfo.combineDirectlyInTask)
+    return;
 
   ARTS_INFO(" - Creating single result EDT to combine partial accumulators");
 
@@ -329,6 +350,11 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
     ARTS_ERROR("Missing numWorkers in ReductionInfo");
     return;
   }
+
+  Value zeroIndex = AC->createIndexConstant(0, loc);
+  Value sizeOne = AC->createIndexConstant(1, loc);
+  auto numWorkersConst = ValueUtils::tryFoldConstantIndex(numWorkers);
+  bool isSingleWorker = numWorkersConst && *numWorkersConst == 1;
 
   SmallVector<Value> partialAcqPtrs;
   partialAcqPtrs.reserve(redInfo.partialAccumPtrs.size());
@@ -342,14 +368,11 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
       continue;
     }
 
-    Value zeroIndex = AC->createIndexConstant(0, loc);
-    SmallVector<Value> partialOffsets{zeroIndex};
-    SmallVector<Value> partialSizes{numWorkers};
-
     auto acqOp = AC->create<DbAcquireOp>(
         loc, ArtsMode::in, partialGuid, partialPtr, PartitionMode::coarse,
-        /*indices=*/SmallVector<Value>{}, /*offsets=*/partialOffsets,
-        /*sizes=*/partialSizes,
+        /*indices=*/SmallVector<Value>{},
+        /*offsets=*/SmallVector<Value>{zeroIndex},
+        /*sizes=*/SmallVector<Value>{numWorkers},
         /*partition_indices=*/SmallVector<Value>{},
         /*partition_offsets=*/SmallVector<Value>{},
         /*partition_sizes=*/SmallVector<Value>{});
@@ -369,15 +392,11 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
       continue;
     }
 
-    Value zeroIndex = AC->createIndexConstant(0, loc);
-    Value sizeOne = AC->createIndexConstant(1, loc);
-    SmallVector<Value> finalOffsets{zeroIndex};
-    SmallVector<Value> finalSizes{sizeOne};
-
     auto acqOp = AC->create<DbAcquireOp>(
         loc, ArtsMode::out, finalGuid, finalPtr, PartitionMode::coarse,
-        /*indices=*/SmallVector<Value>{}, /*offsets=*/finalOffsets,
-        /*sizes=*/finalSizes,
+        /*indices=*/SmallVector<Value>{},
+        /*offsets=*/SmallVector<Value>{zeroIndex},
+        /*sizes=*/SmallVector<Value>{sizeOne},
         /*partition_indices=*/SmallVector<Value>{},
         /*partition_offsets=*/SmallVector<Value>{},
         /*partition_sizes=*/SmallVector<Value>{});
@@ -416,15 +435,16 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
   for (Value dep : edtDeps)
     depBlockArgs.push_back(resultBlock.addArgument(dep.getType(), loc));
 
+  Location loopLoc = redInfo.loopLocation.value_or(loc);
+
   for (uint64_t i = 0; i < reductionCount; i++) {
     BlockArgument partialArg = depBlockArgs[i];
     BlockArgument finalArg = depBlockArgs[partialAcqPtrs.size() + i];
 
-    Value zeroIndex = AC->createIndexConstant(0, loc);
-    SmallVector<Value> indices{zeroIndex};
-    Value finalMemRef = AC->create<DbRefOp>(loc, finalArg, indices);
+    SmallVector<Value> zeroIndices{zeroIndex};
+    Value finalMemRef = AC->create<DbRefOp>(loc, finalArg, zeroIndices);
 
-    auto memType = finalMemRef.getType().cast<MemRefType>();
+    auto memType = cast<MemRefType>(finalMemRef.getType());
     Type elemType = memType.getElementType();
     Value identity = createZeroValue(AC, elemType, loc);
     if (!identity) {
@@ -432,30 +452,18 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
       return;
     }
 
-    Value zeroIdx = AC->createIndexConstant(0, loc);
-    Value oneIdx = AC->createIndexConstant(1, loc);
-    Location loopLoc = redInfo.loopLocation.value_or(loc);
-
     /// When numWorkers is a compile-time constant 1, emit straight-line
     /// combine instead of a loop.  A loop from 0 to 1 would use its IV as a
     /// db_ref index, which the verifier rejects for coarse-grained DBs.
-    int64_t numWorkersConst;
-    bool isSingleWorker =
-        ValueUtils::getConstantIndex(numWorkers, numWorkersConst) &&
-        numWorkersConst == 1;
-
     if (isSingleWorker) {
       Value workerSlot =
-          AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{zeroIdx});
-      SmallVector<Value> workerElemIdx{zeroIdx};
+          AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{zeroIndex});
       Value partialValue =
-          AC->create<memref::LoadOp>(loc, workerSlot, workerElemIdx);
-
-      SmallVector<Value> finalIndices{zeroIdx};
-      AC->create<memref::StoreOp>(loc, partialValue, finalMemRef, finalIndices);
+          AC->create<memref::LoadOp>(loc, workerSlot, zeroIndices);
+      AC->create<memref::StoreOp>(loc, partialValue, finalMemRef, zeroIndices);
     } else {
-      auto combineLoop = AC->create<scf::ForOp>(loopLoc, zeroIdx, numWorkers,
-                                                oneIdx, ValueRange{identity});
+      auto combineLoop = AC->create<scf::ForOp>(
+          loopLoc, zeroIndex, numWorkers, sizeOne, ValueRange{identity});
       if (redInfo.loopMetadataAttr)
         combineLoop->setAttr(AttrNames::LoopMetadata::Name,
                              redInfo.loopMetadataAttr);
@@ -466,21 +474,19 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
 
       Value workerSlot =
           AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{workerIdx});
-      SmallVector<Value> workerElemIdx{zeroIdx};
       Value partialValue =
-          AC->create<memref::LoadOp>(loc, workerSlot, workerElemIdx);
+          AC->create<memref::LoadOp>(loc, workerSlot, zeroIndices);
 
       Value combined;
-      if (elemType.isa<FloatType>())
+      if (isa<FloatType>(elemType))
         combined = AC->create<arith::AddFOp>(loc, accumulator, partialValue);
       else
         combined = AC->create<arith::AddIOp>(loc, accumulator, partialValue);
       AC->create<scf::YieldOp>(loc, combined);
 
       AC->setInsertionPointAfter(combineLoop);
-      SmallVector<Value> finalIndices{zeroIdx};
       AC->create<memref::StoreOp>(loc, combineLoop.getResult(0), finalMemRef,
-                                  finalIndices);
+                                  zeroIndices);
     }
   }
 
@@ -505,7 +511,7 @@ void mlir::arts::finalizeReductionAfterEpoch(ArtsCodegen *AC,
   for (auto [idx, redVar] : llvm::enumerate(redInfo.reductionVars)) {
     if (idx >= redInfo.finalResultPtrs.size())
       continue;
-    auto redMemRefTy = redVar.getType().dyn_cast<MemRefType>();
+    auto redMemRefTy = dyn_cast<MemRefType>(redVar.getType());
     if (!redMemRefTy)
       continue;
 
@@ -522,9 +528,11 @@ void mlir::arts::finalizeReductionAfterEpoch(ArtsCodegen *AC,
     }
   }
 
-  for (uint64_t i = 0; i < redInfo.partialAccumGuids.size(); i++) {
-    AC->create<DbFreeOp>(loc, redInfo.partialAccumGuids[i]);
-    AC->create<DbFreeOp>(loc, redInfo.partialAccumPtrs[i]);
+  if (!redInfo.combineDirectlyInTask) {
+    for (uint64_t i = 0; i < redInfo.partialAccumGuids.size(); i++) {
+      AC->create<DbFreeOp>(loc, redInfo.partialAccumGuids[i]);
+      AC->create<DbFreeOp>(loc, redInfo.partialAccumPtrs[i]);
+    }
   }
 
   for (uint64_t i = 0; i < redInfo.finalResultGuids.size(); i++) {

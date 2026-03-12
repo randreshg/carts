@@ -34,7 +34,10 @@ DbRewriter::DbRewriter(DbAllocOp oldAlloc, ArrayRef<DbRewriteAcquire> acquires,
                        DbRewritePlan &plan)
     : oldAlloc(oldAlloc), acquires(acquires), plan(plan) {}
 
-/// Factory Method - Creates appropriate subclass based on mode
+/// Factory Method - Creates appropriate subclass based on mode.
+/// NOTE: Coarse and fine_grained layouts share the element-wise rewriter.
+///       Coarse uses outerRank=0 (single-DB layout) while fine_grained uses
+///       outerRank>0 for element-wise partitioning along selected dimensions.
 
 std::unique_ptr<DbRewriter>
 DbRewriter::create(DbAllocOp oldAlloc, ArrayRef<DbRewriteAcquire> acquires,
