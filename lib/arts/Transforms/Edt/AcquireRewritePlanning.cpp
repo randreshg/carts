@@ -298,29 +298,20 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
                    << " inoutReadsCrossElementSelf="
                    << inoutReadsCrossElementSelf);
 
-        /// Special handling for single-node execution with inout mode stencils.
-        /// This resolves the semantic conflict between Seidel vs. Jacobi
-        /// patterns.
-        const ArtsAbstractMachine *machine = input.AC->getAbstractMachine();
-        if (machine && !machine->isDistributed() && mode == ArtsMode::inout) {
-          /// Single-node stencil allocations are a mixed case:
-          ///   - Seidel-style in-place stencil updates must stay coarse because
-          ///     the same DB is read at cross-element offsets.
-          ///   - Jacobi-style double-buffer outputs should stay block
-          ///     partitionable even when the allocation itself is classified as
-          ///     stencil.
-          ///   - Uniform allocations with only zero-offset self-reads (e.g.
-          ///     specfem += updates) still benefit from block partitioning.
-          if (inoutReadsCrossElementSelf &&
-              (patternSaysStencil || strategySaysStencil)) {
-            /// CASE 1: True Seidel pattern - must stay coarse for correctness
-            ARTS_DEBUG("Keeping single-node inout acquire coarse due to "
-                       "cross-element self-read (Seidel-style pattern)");
-            forceCoarseRewrite = true;
-            needsStencilHalo = false;
-          }
-          /// CASE 2: Falls through - uniform pattern with self-read is OK
-          /// to partition (forceCoarseRewrite remains false)
+        /// In-place stencil updates (Seidel-style) must stay coarse because
+        /// the same DB is both written and read at cross-element offsets.
+        /// This is unsafe under both single-node and internode lowering:
+        /// block/stencil partitioning can expose stale or missing neighbor
+        /// data while the task is still mutating the source DB in place.
+        ///
+        /// Uniform self-reads without cross-element offsets remain eligible
+        /// for partitioning.
+        if (mode == ArtsMode::inout && inoutReadsCrossElementSelf &&
+            (patternSaysStencil || strategySaysStencil)) {
+          ARTS_DEBUG("Keeping inout acquire coarse due to cross-element "
+                     "self-read (Seidel-style pattern)");
+          forceCoarseRewrite = true;
+          needsStencilHalo = false;
         }
 
         if (needsStencilHalo)
