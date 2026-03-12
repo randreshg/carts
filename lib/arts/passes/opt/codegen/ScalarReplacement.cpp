@@ -32,6 +32,7 @@
 
 #include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
+#include "arts/utils/LoopInvarianceUtils.h"
 #include "polygeist/Ops.h"
 
 ARTS_DEBUG_SETUP(arts_scalar_replacement);
@@ -51,27 +52,10 @@ struct ReductionPattern {
   SmallVector<Value> indices; /// Loop-invariant indices
 };
 
-/// Check if a value is loop-invariant (not dependent on the induction variable)
-static bool isLoopInvariant(Value val, scf::ForOp forOp) {
-  /// Block argument of the loop (induction variable) is NOT invariant
-  if (auto blockArg = dyn_cast<BlockArgument>(val)) {
-    if (blockArg.getOwner() == forOp.getBody())
-      return false;
-  }
-
-  /// Check if defining op is inside the loop
-  if (Operation *defOp = val.getDefiningOp()) {
-    if (forOp.getBody()->findAncestorOpInBlock(*defOp))
-      return false;
-  }
-
-  return true;
-}
-
 /// Check if all indices are loop-invariant
 static bool areIndicesLoopInvariant(ArrayRef<Value> indices, scf::ForOp forOp) {
   for (Value idx : indices) {
-    if (!isLoopInvariant(idx, forOp))
+    if (!isLoopInvariant(forOp, idx))
       return false;
   }
   return true;
@@ -194,7 +178,7 @@ detectReductionPattern(scf::ForOp forOp) {
       /// we can create new loads/stores outside the loop that use it.
       if (loadMemref == storeMemref &&
           indicesEqual(loadIndices, storeIndices) && loadOp->hasOneUse() &&
-          isLoopInvariant(storeMemref, forOp)) {
+          isLoopInvariant(forOp, storeMemref)) {
         pattern.loadOp = loadOp;
         pattern.storeOp = storeOp;
         pattern.reduceOp = accOp;
