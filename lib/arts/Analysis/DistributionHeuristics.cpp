@@ -52,12 +52,6 @@ static bool isSafeRuntimeQuery(Operation *op) {
   return false;
 }
 
-/// Coarsening should be skipped for sequential loops (inter-iteration
-/// dependencies or explicit Sequential classification).
-static bool shouldSkipCoarsening(ForOp forOp, LoopNode *loopNode) {
-  return isSequentialLoop(forOp, loopNode);
-}
-
 static std::optional<int64_t> getExplicitWorkerCount(EdtOp edt) {
   if (!edt)
     return std::nullopt;
@@ -76,13 +70,13 @@ ParallelismDecision DistributionHeuristics::resolveParallelismFromMachine(
   if (!machine)
     return decision;
 
-  int64_t nodeCount = (machine ? machine->getNodeCount() : 0);
-  int64_t workerThreads = (machine ? machine->getRuntimeWorkersPerNode() : 0);
+  int64_t nodeCount = machine->getNodeCount();
+  int64_t workerThreads = machine->getRuntimeWorkersPerNode();
 
   if (nodeCount > 1) {
     decision.concurrency = EdtConcurrency::internode;
     decision.workersPerNode = workerThreads > 0 ? workerThreads : 1;
-    decision.totalWorkers = (machine ? machine->getRuntimeTotalWorkers() : 0);
+    decision.totalWorkers = machine->getRuntimeTotalWorkers();
     if (decision.totalWorkers <= 0)
       decision.totalWorkers = nodeCount * decision.workersPerNode;
     return decision;
@@ -116,7 +110,8 @@ std::optional<WorkerConfig> DistributionHeuristics::resolveWorkerConfig(
     if (cfg.internode) {
       if (auto workersPerNode = getExplicitWorkersPerNodeCount(parallelEdt)) {
         cfg.workersPerNode = *workersPerNode;
-      } else if (int64_t nc = (machine ? machine->getNodeCount() : 0); nc > 0) {
+      } else if (machine && machine->getNodeCount() > 0) {
+        int64_t nc = machine->getNodeCount();
         cfg.workersPerNode = std::max<int64_t>(1, cfg.totalWorkers / nc);
       }
       if (cfg.workersPerNode <= 0)
@@ -130,8 +125,7 @@ std::optional<WorkerConfig> DistributionHeuristics::resolveWorkerConfig(
   if (!machine)
     return std::nullopt;
 
-  int64_t runtimeWorkersPerNode =
-      (machine ? machine->getRuntimeWorkersPerNode() : 0);
+  int64_t runtimeWorkersPerNode = machine->getRuntimeWorkersPerNode();
   if (runtimeWorkersPerNode <= 0)
     return std::nullopt;
 
@@ -141,11 +135,11 @@ std::optional<WorkerConfig> DistributionHeuristics::resolveWorkerConfig(
     return cfg;
   }
 
-  if ((machine ? machine->getNodeCount() : 0) <= 0)
+  if (machine->getNodeCount() <= 0)
     return std::nullopt;
 
   cfg.workersPerNode = runtimeWorkersPerNode;
-  cfg.totalWorkers = (machine ? machine->getRuntimeTotalWorkers() : 0);
+  cfg.totalWorkers = machine->getRuntimeTotalWorkers();
   if (cfg.totalWorkers <= 0)
     return std::nullopt;
 
@@ -158,7 +152,7 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
     return std::nullopt;
 
   LoopNode *loopNode = loopAnalysis.getOrCreateLoopNode(forOp.getOperation());
-  if (shouldSkipCoarsening(forOp, loopNode))
+  if (isSequentialLoop(forOp, loopNode))
     return std::nullopt;
 
   auto tripOpt = loopAnalysis.getStaticTripCount(forOp.getOperation());
@@ -276,8 +270,7 @@ DistributionHeuristics::analyzeStrategy(EdtConcurrency concurrency,
     strategy.kind = DistributionKind::Flat;
     strategy.numNodes = 1;
     if (machine) {
-      strategy.workersPerNode =
-          (machine ? machine->getRuntimeWorkersPerNode() : 0);
+      strategy.workersPerNode = machine->getRuntimeWorkersPerNode();
       strategy.totalWorkers = strategy.workersPerNode;
     }
     strategy.useDbAlignment = false;
@@ -287,10 +280,9 @@ DistributionHeuristics::analyzeStrategy(EdtConcurrency concurrency,
   /// Internode -> TwoLevel
   strategy.kind = DistributionKind::TwoLevel;
   if (machine) {
-    strategy.numNodes = (machine ? machine->getNodeCount() : 0);
-    strategy.workersPerNode =
-        (machine ? machine->getRuntimeWorkersPerNode() : 0);
-    strategy.totalWorkers = (machine ? machine->getRuntimeTotalWorkers() : 0);
+    strategy.numNodes = machine->getNodeCount();
+    strategy.workersPerNode = machine->getRuntimeWorkersPerNode();
+    strategy.totalWorkers = machine->getRuntimeTotalWorkers();
   }
   strategy.useDbAlignment = true;
   return strategy;
@@ -766,17 +758,18 @@ Value DistributionHeuristics::computeDbAlignmentBlockSize(EdtOp parallelEdt,
 /// Workers Per Node
 ///===----------------------------------------------------------------------===///
 
+/// Cast a Value to index type if needed. Returns null Value for null input.
+static Value castToIndexType(OpBuilder &builder, Location loc, Value v) {
+  if (!v)
+    return Value();
+  if (v.getType().isIndex())
+    return v;
+  return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(), v);
+}
+
 Value DistributionHeuristics::getWorkersPerNode(OpBuilder &builder,
                                                 Location loc,
                                                 EdtOp parallelEdt) {
-  auto toIndex = [&](Value v) -> Value {
-    if (!v)
-      return Value();
-    if (v.getType().isIndex())
-      return v;
-    return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(), v);
-  };
-
   Value one = arts::createOneIndex(builder, loc);
   Value workersPerNode;
 
@@ -787,13 +780,15 @@ Value DistributionHeuristics::getWorkersPerNode(OpBuilder &builder,
 
   if (auto workers = getExplicitWorkerCount(parallelEdt)) {
     Value totalWorkers = arts::createConstantIndex(builder, loc, *workers);
-    Value totalNodes = toIndex(
+    Value totalNodes = castToIndexType(
+        builder, loc,
         builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalNodes)
             .getResult());
     workersPerNode =
         builder.create<arith::DivUIOp>(loc, totalWorkers, totalNodes);
   } else {
-    workersPerNode = toIndex(
+    workersPerNode = castToIndexType(
+        builder, loc,
         builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalWorkers)
             .getResult());
   }
@@ -812,28 +807,23 @@ Value DistributionHeuristics::getWorkersPerNode(ArtsCodegen *AC, Location loc,
 
 Value DistributionHeuristics::getTotalWorkers(OpBuilder &builder, Location loc,
                                               EdtOp parallelEdt) {
-  auto toIndex = [&](Value v) -> Value {
-    if (!v)
-      return Value();
-    if (v.getType().isIndex())
-      return v;
-    return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(), v);
-  };
-
   if (auto workers = getExplicitWorkerCount(parallelEdt))
     return arts::createConstantIndex(builder, loc, *workers);
 
   if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {
-    Value nodes = toIndex(
+    Value nodes = castToIndexType(
+        builder, loc,
         builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalNodes)
             .getResult());
-    Value threads = toIndex(
+    Value threads = castToIndexType(
+        builder, loc,
         builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalWorkers)
             .getResult());
     return builder.create<arith::MulIOp>(loc, nodes, threads);
   }
 
-  return toIndex(
+  return castToIndexType(
+      builder, loc,
       builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalWorkers)
           .getResult());
 }
@@ -849,18 +839,61 @@ Value DistributionHeuristics::getDispatchWorkerCount(OpBuilder &builder,
   if (auto workers = getExplicitWorkerCount(parallelEdt))
     return arts::createConstantIndex(builder, loc, *workers);
 
-  Value workerCount;
-  if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {
-    workerCount =
-        builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalNodes)
-            .getResult();
-  } else {
-    workerCount =
-        builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalWorkers)
-            .getResult();
+  RuntimeQueryKind queryKind =
+      parallelEdt.getConcurrency() == EdtConcurrency::internode
+          ? RuntimeQueryKind::totalNodes
+          : RuntimeQueryKind::totalWorkers;
+  Value workerCount =
+      builder.create<RuntimeQueryOp>(loc, queryKind).getResult();
+  return castToIndexType(builder, loc, workerCount);
+}
+
+Value DistributionHeuristics::getForDispatchWorkerCount(
+    ArtsCodegen *AC, Location loc, EdtOp parallelEdt,
+    const DistributionStrategy &strategy, Value totalChunks) {
+  Value one = AC->createIndexConstant(1, loc);
+  Value totalWorkers = getTotalWorkers(AC, loc, parallelEdt);
+  Value clampedDispatch = totalWorkers;
+
+  switch (strategy.kind) {
+  case DistributionKind::Flat:
+  case DistributionKind::BlockCyclic:
+    clampedDispatch = AC->create<arith::MinUIOp>(loc, totalWorkers, totalChunks);
+    break;
+  case DistributionKind::TwoLevel: {
+    Value workersPerNode = getWorkersPerNode(AC, loc, parallelEdt);
+    Value numNodes =
+        AC->create<arith::DivUIOp>(loc, totalWorkers, workersPerNode);
+    Value activeNodes = AC->create<arith::MinUIOp>(loc, numNodes, totalChunks);
+    clampedDispatch =
+        AC->create<arith::MulIOp>(loc, activeNodes, workersPerNode);
+    break;
   }
-  if (workerCount.getType().isIndex())
-    return workerCount;
-  return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
-                                            workerCount);
+  case DistributionKind::Tiling2D: {
+    Value totalWorkersIndex = AC->castToIndex(totalWorkers, loc);
+    auto totalWorkersConst = ValueUtils::tryFoldConstantIndex(totalWorkersIndex);
+    if (!totalWorkersConst)
+      break;
+
+    std::optional<int64_t> workersPerNodeConst = std::nullopt;
+    if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {
+      Value workersPerNode = getWorkersPerNode(AC, loc, parallelEdt);
+      workersPerNodeConst =
+          ValueUtils::tryFoldConstantIndex(AC->castToIndex(workersPerNode, loc));
+    }
+
+    int64_t colWorkersConst =
+        chooseTiling2DColumnWorkers(*totalWorkersConst, workersPerNodeConst);
+    int64_t rowWorkersConst =
+        std::max<int64_t>(1, *totalWorkersConst / colWorkersConst);
+
+    Value rowWorkers = AC->createIndexConstant(rowWorkersConst, loc);
+    Value activeRows = AC->create<arith::MinUIOp>(loc, rowWorkers, totalChunks);
+    Value colWorkers = AC->createIndexConstant(colWorkersConst, loc);
+    clampedDispatch = AC->create<arith::MulIOp>(loc, activeRows, colWorkers);
+    break;
+  }
+  }
+
+  return AC->create<arith::MaxUIOp>(loc, clampedDispatch, one);
 }

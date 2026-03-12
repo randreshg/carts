@@ -327,6 +327,7 @@ void setupEdtTransforms(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 void setupLoopReordering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createLoopNormalizationPass(AM));
   pm.addPass(arts::createJacobiStencilNormalizationPass());
+  pm.addPass(arts::createStencilBoundaryPeelingPass());
   pm.addPass(arts::createLoopReorderingPass(AM));
   pm.addPass(arts::createLoopTransformsPass(
       AM, LoopTransformsEnableMatmul, LoopTransformsEnableTiling,
@@ -398,6 +399,9 @@ void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createDeadCodeEliminationPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
+  /// Scratch DB elimination and DCE can expose new zero-dependency or
+  /// degenerate EDTs; rerun the structural EDT cleanup before epoch shaping.
+  pm.addPass(arts::createEdtPass(AM, /*runAnalysis*/ false));
   pm.addPass(arts::createEpochOptPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());

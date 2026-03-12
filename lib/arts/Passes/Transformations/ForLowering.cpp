@@ -300,7 +300,9 @@ private:
   /// parallel EDT (used when the parallel will be erased in split pattern)
   ReductionInfo allocatePartialAccumulators(ArtsCodegen *AC, ForOp forOp,
                                             EdtOp parallelEdt, Location loc,
-                                            bool splitMode = false);
+                                            bool splitMode = false,
+                                            Value workerCountOverride =
+                                                Value());
 
   void createResultEdt(ArtsCodegen *AC, ReductionInfo &redInfo, Location loc);
 
@@ -617,9 +619,11 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
                                                            ForOp forOp,
                                                            EdtOp parallelEdt,
                                                            Location loc,
-                                                           bool splitMode) {
+                                                           bool splitMode,
+                                                           Value workerCountOverride) {
   return mlir::arts::allocatePartialAccumulators(
-      AC, forOp, parallelEdt, loc, getLoopMetadataAttr(forOp), splitMode);
+      AC, forOp, parallelEdt, loc, getLoopMetadataAttr(forOp), splitMode,
+      workerCountOverride);
 }
 
 void ForLoweringPass::createResultEdt(ArtsCodegen *AC, ReductionInfo &redInfo,
@@ -636,16 +640,6 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
                                              Location loc) {
   ARTS_INFO(" - Lowering arts.for with DB rewiring (split pattern)");
 
-  /// Allocate reduction accumulators (same as before, but place BEFORE epoch)
-  /// Use splitMode=true since we're splitting the parallel EDT and will
-  /// create acquires directly in result/task EDTs
-  ReductionInfo redInfo;
-  if (!forOp.getReductionAccumulators().empty()) {
-    ARTS_INFO(" - Detected reduction(s), allocating partial accumulators");
-    redInfo = allocatePartialAccumulators(&AC, forOp, originalParallel, loc,
-                                          /*splitMode=*/true);
-  }
-
   /// Read distribution strategy selected by EdtDistributionPass.
   /// Fallback to concurrency-driven default when annotation is missing.
   auto strategy = DistributionHeuristics::analyzeStrategy(
@@ -656,26 +650,63 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
     strategy.kind =
         DistributionHeuristics::toDistributionKind(*selectedKindAttr);
 
-  /// Get numWorkers from explicit attrs or runtime queries.
-  Value numWorkers =
-      DistributionHeuristics::getTotalWorkers(&AC, loc, originalParallel);
+  Value zero;
+  Value one;
+  std::optional<LoopInfo> loopInfoStorage;
+  Value dispatchWorkers;
+  ReductionInfo redInfo;
 
-  /// numDbPartitions: the number of DB partition blocks (= numNodes for
-  /// internode). Used to align worker chunk boundaries to DB block boundaries.
-  Value numDbPartitions;
-  if (originalParallel.getConcurrency() == EdtConcurrency::internode) {
-    numDbPartitions = AC.castToIndex(
-        AC.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalNodes)
-            .getResult(),
-        loc);
-  } else {
-    numDbPartitions = numWorkers;
+  {
+    OpBuilder::InsertionGuard guard(AC.getBuilder());
+    /// Values consumed by split-mode reduction allocation must dominate the
+    /// allocs inserted before the original parallel EDT.
+    AC.setInsertionPoint(originalParallel);
+
+    /// Get numWorkers from explicit attrs or runtime queries.
+    Value numWorkers =
+        DistributionHeuristics::getTotalWorkers(&AC, loc, originalParallel);
+
+    /// numDbPartitions: the number of DB partition blocks (= numNodes for
+    /// internode). Used to align worker chunk boundaries to DB block
+    /// boundaries.
+    Value numDbPartitions;
+    if (originalParallel.getConcurrency() == EdtConcurrency::internode) {
+      numDbPartitions = AC.castToIndex(
+          AC.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalNodes)
+              .getResult(),
+          loc);
+    } else {
+      numDbPartitions = numWorkers;
+    }
+
+    zero = AC.createIndexConstant(0, loc);
+    one = AC.createIndexConstant(1, loc);
+
+    /// Determine loop chunking before building the epoch so we can size the
+    /// dispatch loop and any reduction temporaries to the worker lanes that can
+    /// actually receive work.
+    Value runtimeBlockSize =
+        DistributionHeuristics::computeDbAlignmentBlockSize(
+            originalParallel, numDbPartitions, &AC, loc);
+    loopInfoStorage.emplace(&AC, forOp, numWorkers, runtimeBlockSize);
+    LoopInfo &loopInfo = *loopInfoStorage;
+    loopInfo.strategy = strategy;
+    dispatchWorkers = DistributionHeuristics::getForDispatchWorkerCount(
+        &AC, loc, originalParallel, loopInfo.strategy, loopInfo.totalChunks);
+
+    /// Allocate reduction accumulators (same as before, but place BEFORE epoch)
+    /// Use splitMode=true since we're splitting the parallel EDT and will
+    /// create acquires directly in result/task EDTs.
+    if (!forOp.getReductionAccumulators().empty()) {
+      ARTS_INFO(" - Detected reduction(s), allocating partial accumulators");
+      redInfo = allocatePartialAccumulators(&AC, forOp, originalParallel, loc,
+                                            /*splitMode=*/true,
+                                            dispatchWorkers);
+    }
   }
 
-  Value zero = AC.createIndexConstant(0, loc);
-  Value one = AC.createIndexConstant(1, loc);
-
-  /// Create EpochOp wrapper for the for-body
+  /// Create EpochOp wrapper for the for-body at the caller-managed insertion
+  /// point so multiple arts.for regions preserve source order.
   auto forEpoch = AC.create<EpochOp>(loc);
   Region &epochRegion = forEpoch.getRegion();
   if (epochRegion.empty())
@@ -683,19 +714,16 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   Block &epochBlock = epochRegion.front();
   AC.setInsertionPointToStart(&epochBlock);
 
-  /// Worker dispatch loop - creates one task EDT per worker
-  auto workerLoop = AC.create<scf::ForOp>(loc, zero, numWorkers, one);
+  /// Worker dispatch loop - emit only the worker lanes that can receive at
+  /// least one chunk for this loop/distribution strategy.
+  auto workerLoop = AC.create<scf::ForOp>(loc, zero, dispatchWorkers, one);
   AC.setInsertionPointToStart(workerLoop.getBody());
   Value workerIV = workerLoop.getInductionVar();
 
   /// Create task EDT with DB rewiring
-  /// Use DistributionHeuristics for alignment block size
-  Value runtimeBlockSize = DistributionHeuristics::computeDbAlignmentBlockSize(
-      originalParallel, numDbPartitions, &AC, loc);
-  LoopInfo loopInfo(&AC, forOp, numWorkers, runtimeBlockSize);
-  loopInfo.strategy = strategy;
-  EdtOp taskEdt = createTaskEdtWithRewiring(&AC, loopInfo, forOp, workerIV,
-                                            originalParallel, redInfo);
+  EdtOp taskEdt =
+      createTaskEdtWithRewiring(&AC, *loopInfoStorage, forOp, workerIV,
+                                originalParallel, redInfo);
   copyDistributionAttrs(forOp.getOperation(), taskEdt.getOperation());
   copyDistributionAttrs(forOp.getOperation(), forEpoch.getOperation());
 

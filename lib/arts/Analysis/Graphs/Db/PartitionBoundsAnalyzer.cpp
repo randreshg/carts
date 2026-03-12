@@ -18,6 +18,7 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/DbUtils.h"
+#include "arts/Utils/EdtUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -30,6 +31,82 @@ using namespace mlir;
 using namespace mlir::arts;
 #include "arts/Utils/ArtsDebug.h"
 ARTS_DEBUG_SETUP(partition_bounds_analyzer);
+
+///===----------------------------------------------------------------------===///
+/// Shared partition hint extraction
+///===----------------------------------------------------------------------===///
+
+/// Pick a representative value from a range, preferring non-constant values.
+/// Returns the chosen value and sets outIdx to its position.
+static Value pickRepresentativeValue(ValueRange vals, unsigned &outIdx) {
+  outIdx = 0;
+  for (unsigned i = 0; i < vals.size(); ++i) {
+    Value v = vals[i];
+    if (!v)
+      continue;
+    int64_t c = 0;
+    if (!ValueUtils::getConstantIndex(ValueUtils::stripNumericCasts(v), c)) {
+      outIdx = i;
+      return v;
+    }
+  }
+  for (unsigned i = 0; i < vals.size(); ++i) {
+    if (vals[i]) {
+      outIdx = i;
+      return vals[i];
+    }
+  }
+  return Value();
+}
+
+/// Pick the partition size corresponding to a given representative index.
+static Value pickPartitionSize(ValueRange sizes, unsigned idx) {
+  if (sizes.empty())
+    return Value();
+  if (idx < sizes.size())
+    return sizes[idx];
+  return sizes.front();
+}
+
+AcquirePartitionHints mlir::arts::extractPartitionHints(DbAcquireOp acquire) {
+  AcquirePartitionHints hints;
+  unsigned idx = 0;
+
+  auto hintMode = acquire.getPartitionMode();
+  bool preferPartitionIndices =
+      !hintMode || *hintMode == PartitionMode::fine_grained;
+
+  if (preferPartitionIndices && !acquire.getPartitionIndices().empty())
+    hints.offset = pickRepresentativeValue(acquire.getPartitionIndices(), idx);
+  else if (!acquire.getPartitionOffsets().empty())
+    hints.offset = pickRepresentativeValue(acquire.getPartitionOffsets(), idx);
+  else if (!acquire.getPartitionIndices().empty())
+    hints.offset = pickRepresentativeValue(acquire.getPartitionIndices(), idx);
+
+  hints.size = pickPartitionSize(acquire.getPartitionSizes(), idx);
+
+  /// Fallback to DB-space indices/offsets/sizes only when an explicit
+  /// non-coarse partition mode is set (legacy paths or already-partitioned
+  /// acquires).
+  if (!hints.offset && !hints.size) {
+    if (auto mode = acquire.getPartitionMode();
+        mode &&
+        (*mode == PartitionMode::block || *mode == PartitionMode::stencil ||
+         *mode == PartitionMode::fine_grained)) {
+      bool preferDbIndices = (*mode == PartitionMode::fine_grained);
+      if (preferDbIndices && !acquire.getIndices().empty())
+        hints.offset = pickRepresentativeValue(acquire.getIndices(), idx);
+      else if (!acquire.getOffsets().empty())
+        hints.offset = pickRepresentativeValue(acquire.getOffsets(), idx);
+      else if (!acquire.getIndices().empty())
+        hints.offset = pickRepresentativeValue(acquire.getIndices(), idx);
+
+      hints.size = pickPartitionSize(acquire.getSizes(), idx);
+    }
+  }
+
+  return hints;
+}
 
 ///===----------------------------------------------------------------------===///
 /// File-local helpers
@@ -180,74 +257,9 @@ bool PartitionBoundsAnalyzer::computePartitionBounds(DbAcquireNode *node) {
   node->setPartitionInfo(Value(), Value());
   node->setHasNonConstantOffset(false);
 
-  auto pickRepresentative = [&](ValueRange vals, unsigned &idx) -> Value {
-    idx = 0;
-    for (unsigned i = 0; i < vals.size(); ++i) {
-      Value v = vals[i];
-      if (!v)
-        continue;
-      int64_t c = 0;
-      if (!ValueUtils::getConstantIndex(ValueUtils::stripNumericCasts(v), c)) {
-        idx = i;
-        return v;
-      }
-    }
-    for (unsigned i = 0; i < vals.size(); ++i) {
-      if (vals[i]) {
-        idx = i;
-        return vals[i];
-      }
-    }
-    return Value();
-  };
-
-  unsigned offsetIdx = 0;
-  auto hintMode = mutableAcquire.getPartitionMode();
-  bool preferPartitionIndices =
-      !hintMode || *hintMode == PartitionMode::fine_grained;
-
-  Value partitionOffset, partitionSize;
-
-  if (preferPartitionIndices && !mutableAcquire.getPartitionIndices().empty())
-    partitionOffset =
-        pickRepresentative(mutableAcquire.getPartitionIndices(), offsetIdx);
-  else if (!mutableAcquire.getPartitionOffsets().empty())
-    partitionOffset =
-        pickRepresentative(mutableAcquire.getPartitionOffsets(), offsetIdx);
-  else if (!mutableAcquire.getPartitionIndices().empty())
-    partitionOffset =
-        pickRepresentative(mutableAcquire.getPartitionIndices(), offsetIdx);
-  if (!mutableAcquire.getPartitionSizes().empty()) {
-    if (offsetIdx < mutableAcquire.getPartitionSizes().size())
-      partitionSize = mutableAcquire.getPartitionSizes()[offsetIdx];
-    else
-      partitionSize = mutableAcquire.getPartitionSizes().front();
-  }
-
-  if (!partitionOffset && !partitionSize) {
-    if (auto mode = mutableAcquire.getPartitionMode();
-        mode &&
-        (*mode == PartitionMode::block || *mode == PartitionMode::stencil ||
-         *mode == PartitionMode::fine_grained)) {
-      offsetIdx = 0;
-      bool preferDbIndices = (*mode == PartitionMode::fine_grained);
-      if (preferDbIndices && !mutableAcquire.getIndices().empty())
-        partitionOffset =
-            pickRepresentative(mutableAcquire.getIndices(), offsetIdx);
-      else if (!mutableAcquire.getOffsets().empty())
-        partitionOffset =
-            pickRepresentative(mutableAcquire.getOffsets(), offsetIdx);
-      else if (!mutableAcquire.getIndices().empty())
-        partitionOffset =
-            pickRepresentative(mutableAcquire.getIndices(), offsetIdx);
-      if (!mutableAcquire.getSizes().empty()) {
-        if (offsetIdx < mutableAcquire.getSizes().size())
-          partitionSize = mutableAcquire.getSizes()[offsetIdx];
-        else
-          partitionSize = mutableAcquire.getSizes().front();
-      }
-    }
-  }
+  AcquirePartitionHints hints = extractPartitionHints(mutableAcquire);
+  Value partitionOffset = hints.offset;
+  Value partitionSize = hints.size;
 
   node->setPartitionInfo(partitionOffset, partitionSize);
 
@@ -689,4 +701,46 @@ bool PartitionBoundsAnalyzer::needsFullRange(DbAcquireNode *node,
   }
 
   return false;
+}
+
+bool PartitionBoundsAnalyzer::shouldPreserveDistributedContract(
+    DbAcquireNode *node, Value partitionOffset) {
+  if (!node || !partitionOffset)
+    return false;
+
+  DbAcquireOp acquire = node->getDbAcquireOp();
+  if (!acquire)
+    return false;
+
+  auto acquireMode = getPartitionMode(acquire.getOperation());
+  bool explicitBlockMode =
+      acquireMode && (*acquireMode == PartitionMode::block ||
+                      *acquireMode == PartitionMode::stencil);
+  if (!explicitBlockMode)
+    return false;
+
+  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+  (void)blockArg;
+  bool hasDistributionContract =
+      edt && (getEdtDistributionKind(edt.getOperation()) ||
+              getEdtDistributionPattern(edt.getOperation()));
+  if (!hasDistributionContract)
+    return false;
+
+  auto ptrTy = dyn_cast<MemRefType>(acquire.getPtr().getType());
+  if (!ptrTy)
+    return false;
+
+  bool selectsNestedDb = isa<MemRefType>(ptrTy.getElementType());
+  bool selectsLeafDb = !selectsNestedDb;
+  bool readOnlyNestedStencilAcquire =
+      acquire.getMode() == ArtsMode::in && selectsNestedDb &&
+      node->getAccessPattern() == AccessPattern::Stencil &&
+      !node->hasIndirectAccess() && !node->hasStores();
+
+  if (!(selectsLeafDb || readOnlyNestedStencilAcquire))
+    return false;
+
+  return !getPartitionOffsetDim(node, partitionOffset,
+                                /*requireLeading=*/false);
 }

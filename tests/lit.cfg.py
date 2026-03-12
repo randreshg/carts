@@ -4,7 +4,7 @@ Lit configuration for CARTS tests.
 
 This suite relies on the tools installed under `.install/` after running
 `carts build`.  We keep the configuration lightweight so the existing
-`tools/carts check` command can simply invoke `llvm-lit tests`.
+`carts lit` and `carts test` can simply invoke the bundled `llvm-lit`.
 """
 
 import os

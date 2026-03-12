@@ -32,6 +32,7 @@
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "polygeist/Ops.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include "arts/Utils/ArtsDebug.h"
@@ -108,11 +109,43 @@ static bool hoistInvariantOpsInLoop(scf::ForOp loop) {
   return changed;
 }
 
+static unsigned getLoopDepth(scf::ForOp loop) {
+  unsigned depth = 0;
+  for (Operation *parent = loop->getParentOp(); parent;
+       parent = parent->getParentOp())
+    if (isa<scf::ForOp>(parent))
+      ++depth;
+  return depth;
+}
+
+template <typename Predicate>
+static SmallVector<scf::ForOp> collectLoops(Operation *root,
+                                            Predicate &&predicate) {
+  SmallVector<scf::ForOp> loops;
+  root->walk([&](scf::ForOp loop) {
+    if (predicate(loop))
+      loops.push_back(loop);
+  });
+  llvm::sort(loops, [](scf::ForOp lhs, scf::ForOp rhs) {
+    return getLoopDepth(lhs) > getLoopDepth(rhs);
+  });
+  return loops;
+}
+
+/// Run a per-loop hoisting function to fixed point across all given loops.
+template <typename HoistFn>
+static bool hoistFixedPoint(ArrayRef<scf::ForOp> loops, HoistFn &&hoist) {
+  bool changed = false;
+  for (scf::ForOp loop : loops)
+    while (hoist(loop))
+      changed = true;
+  return changed;
+}
+
 /// Process an EDT to hoist loop-invariant pure ops from all loops within it.
 static bool hoistInvariantOpsInEdt(EdtOp edt) {
-  bool changed = false;
-  edt.walk([&](scf::ForOp loop) { changed |= hoistInvariantOpsInLoop(loop); });
-  return changed;
+  return hoistFixedPoint(collectLoops(edt, [](scf::ForOp) { return true; }),
+                         hoistInvariantOpsInLoop);
 }
 
 ///===----------------------------------------------------------------------===///
@@ -456,13 +489,9 @@ static bool hoistDbRefsInLoop(scf::ForOp loop) {
   bool changed = false;
   SmallVector<DbRefOp> refs;
 
-  loop.walk([&](Operation *op) -> WalkResult {
-    if (op != loop.getOperation() && isa<scf::ForOp>(op))
-      return WalkResult::skip();
-    if (auto ref = dyn_cast<DbRefOp>(op))
+  for (Operation &op : loop.getBody()->getOperations())
+    if (auto ref = dyn_cast<DbRefOp>(&op))
       refs.push_back(ref);
-    return WalkResult::advance();
-  });
 
   for (DbRefOp ref : refs) {
     if (!refInvariantInLoop(loop, ref))
@@ -480,20 +509,18 @@ static bool hoistDbRefsInLoop(scf::ForOp loop) {
 /// Processes an EDT to hoist db_refs from all loops within it.
 /// Returns true if any hoisting was performed.
 static bool hoistDbRefsInEdt(EdtOp edt) {
-  bool changed = false;
-  edt.walk([&](scf::ForOp loop) { changed |= hoistDbRefsInLoop(loop); });
-  return changed;
+  return hoistFixedPoint(collectLoops(edt, [](scf::ForOp) { return true; }),
+                         hoistDbRefsInLoop);
 }
 
 /// Hoist loop-invariant ops and db_refs in loops that are NOT inside EDTs.
 static bool hoistOutsideEdt(func::FuncOp funcOp) {
-  bool changed = false;
-  funcOp.walk([&](scf::ForOp loop) {
-    if (loop->getParentOfType<EdtOp>())
-      return;
-    changed |= hoistInvariantOpsInLoop(loop);
-    changed |= hoistDbRefsInLoop(loop);
+  auto loops = collectLoops(funcOp, [](scf::ForOp loop) {
+    return !loop->getParentOfType<EdtOp>();
   });
+
+  bool changed = hoistFixedPoint(loops, hoistInvariantOpsInLoop);
+  changed |= hoistFixedPoint(loops, hoistDbRefsInLoop);
   return changed;
 }
 

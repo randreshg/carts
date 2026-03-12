@@ -33,6 +33,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   Optimizations/ArtsHoisting.cpp
   Optimizations/BlockLoopStripMining.cpp
   Optimizations/JacobiStencilNormalization.cpp
+  Optimizations/StencilBoundaryPeeling.cpp
   Optimizations/LoopFusion.cpp
   Optimizations/LoopNormalization.cpp
   Optimizations/LoopTransforms.cpp

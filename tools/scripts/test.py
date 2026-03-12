@@ -1,7 +1,7 @@
-"""Test and check commands for CARTS CLI."""
+"""Test, check, and lit commands for CARTS CLI."""
 
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 import subprocess
 import os
 import sys
@@ -72,33 +72,11 @@ def _setup_lit_pythonpath(config: PlatformConfig) -> None:
     os.environ["PYTHONPATH"] = os.pathsep.join(deduped_paths)
 
 
-def _run_lit_suite(suite: str, verbose_tests: bool) -> None:
-    """Run a lit suite and terminate the command with its exit code."""
-    config = get_config()
-    print_info("Running CARTS test suite...")
-
+def _resolve_lit_targets(config: PlatformConfig, suite: str) -> List[Path]:
+    """Resolve built-in test paths for a named suite."""
     tests_dir = config.carts_dir / "tests"
     if not tests_dir.is_dir():
         print_error(f"Tests directory not found at {tests_dir}")
-        raise typer.Exit(1)
-
-    llvm_lit, filecheck, carts_compile = _resolve_lit_tool_paths(config)
-
-    missing = []
-    if not llvm_lit.is_file():
-        missing.append(f"llvm-lit ({llvm_lit})")
-    if not filecheck.is_file():
-        missing.append(f"FileCheck ({filecheck})")
-    if not carts_compile.is_file():
-        missing.append(f"carts-compile ({carts_compile})")
-
-    if missing:
-        print_error("Required test tools not found:")
-        for tool in missing:
-            console.print(f"  - {tool}")
-        print_info(
-            "Run `carts build` to install llvm-lit/FileCheck/carts-compile under .install/."
-        )
         raise typer.Exit(1)
 
     suite_aliases = {"arts": "examples"}
@@ -123,6 +101,76 @@ def _run_lit_suite(suite: str, verbose_tests: bool) -> None:
             print_error(f"Test path not found: {test_path}")
             raise typer.Exit(1)
 
+    return test_paths
+
+
+def _ensure_lit_tools(config: PlatformConfig) -> Tuple[Path, Path, Path]:
+    """Fail fast if the bundled lit toolchain is not available."""
+    llvm_lit, filecheck, carts_compile = _resolve_lit_tool_paths(config)
+
+    missing = []
+    if not llvm_lit.is_file():
+        missing.append(f"llvm-lit ({llvm_lit})")
+    if not filecheck.is_file():
+        missing.append(f"FileCheck ({filecheck})")
+    if not carts_compile.is_file():
+        missing.append(f"carts-compile ({carts_compile})")
+
+    if missing:
+        print_error("Required test tools not found:")
+        for tool in missing:
+            console.print(f"  - {tool}")
+        print_info(
+            "Run `carts build` to install llvm-lit/FileCheck/carts-compile under .install/."
+        )
+        raise typer.Exit(1)
+
+    return llvm_lit, filecheck, carts_compile
+
+
+def _run_lit_paths(
+    test_paths: Sequence[Path],
+    verbose_tests: bool,
+    extra_args: Optional[Sequence[str]] = None,
+) -> None:
+    """Run llvm-lit on explicit paths and terminate with its exit code."""
+    config = get_config()
+    print_info("Running CARTS test suite...")
+    llvm_lit, _, _ = _ensure_lit_tools(config)
+    _setup_lit_pythonpath(config)
+
+    display_paths = [Path(path) for path in test_paths]
+    if display_paths:
+        console.print(f"Test suite: [{Colors.INFO}]custom[/{Colors.INFO}]")
+    for path in test_paths:
+        console.print(f"Test path: [dim]{path}[/dim]")
+    console.print()
+
+    cmd = [str(llvm_lit)]
+    if verbose_tests:
+        cmd.append("-v")
+    if extra_args:
+        cmd.extend(extra_args)
+    for path in test_paths:
+        cmd.append(str(path))
+
+    result = run_subprocess(cmd, check=False)
+    console.print()
+    if result.returncode == 0:
+        print_success("CARTS test suite completed successfully!")
+    else:
+        print_error(f"CARTS test suite failed with exit code {result.returncode}")
+    raise typer.Exit(result.returncode)
+
+
+def _run_lit_suite(suite: str, verbose_tests: bool) -> None:
+    """Run a lit suite and terminate the command with its exit code."""
+    config = get_config()
+    test_paths = _resolve_lit_targets(config, suite)
+    effective_suite = {"arts": "examples"}.get(suite, suite)
+
+    print_info("Running CARTS test suite...")
+    _ensure_lit_tools(config)
     _setup_lit_pythonpath(config)
 
     console.print(
@@ -131,7 +179,7 @@ def _run_lit_suite(suite: str, verbose_tests: bool) -> None:
         console.print(f"Test path: [dim]{path}[/dim]")
     console.print()
 
-    cmd = [str(llvm_lit)]
+    cmd = [str(_resolve_lit_tool_paths(config)[0])]
     if verbose_tests:
         cmd.append("-v")
     for path in test_paths:
@@ -186,3 +234,54 @@ def check(
         _run_examples()
     else:
         _run_lit_suite(suite=suite, verbose_tests=verbose_tests)
+
+
+def lit(
+    ctx: typer.Context,
+    suite: str = typer.Option(
+        "contracts",
+        "--suite",
+        "-s",
+        help="Default suite when no explicit paths are passed: contracts, examples, all",
+    ),
+    verbose_tests: bool = typer.Option(
+        False, "--verbose", "-v", help="Verbose lit output"
+    ),
+):
+    """Run the bundled llvm-lit directly.
+
+    Examples:
+      carts lit
+      carts lit tests/contracts/for_dispatch_clamp.mlir
+      carts lit -v tests/contracts
+      carts lit -- --filter=for_lowering tests/contracts
+    """
+    config = get_config()
+    raw_args = list(ctx.args)
+
+    explicit_targets: List[Path] = []
+    passthrough_args: List[str] = []
+    after_double_dash = False
+
+    for arg in raw_args:
+        if after_double_dash:
+            passthrough_args.append(arg)
+            continue
+        if arg == "--":
+            after_double_dash = True
+            continue
+        if arg.startswith("-"):
+            passthrough_args.append(arg)
+            continue
+        explicit_targets.append((config.carts_dir / arg).resolve()
+                                if not Path(arg).is_absolute()
+                                else Path(arg))
+
+    if explicit_targets:
+        _run_lit_paths(explicit_targets, verbose_tests=verbose_tests,
+                       extra_args=passthrough_args)
+        return
+
+    default_paths = _resolve_lit_targets(config, suite)
+    _run_lit_paths(default_paths, verbose_tests=verbose_tests,
+                   extra_args=passthrough_args)

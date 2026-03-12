@@ -1344,9 +1344,22 @@ CanonicalizeMemrefsPass::transformSimpleWrapper(AllocPattern &pattern,
 Value CanonicalizeMemrefsPass::createCanonicalAllocation(
     OpBuilder &builder, Location loc, Type elementType,
     ArrayRef<Value> dimSizes) {
-  SmallVector<int64_t> shape(dimSizes.size(), ShapedType::kDynamic);
+  SmallVector<int64_t> shape;
+  SmallVector<Value> dynamicDims;
+  shape.reserve(dimSizes.size());
+  dynamicDims.reserve(dimSizes.size());
+
+  for (Value dim : dimSizes) {
+    if (auto folded = ValueUtils::tryFoldConstantIndex(dim)) {
+      shape.push_back(*folded);
+      continue;
+    }
+    shape.push_back(ShapedType::kDynamic);
+    dynamicDims.push_back(dim);
+  }
+
   auto memrefType = MemRefType::get(shape, elementType);
-  auto allocOp = builder.create<memref::AllocOp>(loc, memrefType, dimSizes);
+  auto allocOp = builder.create<memref::AllocOp>(loc, memrefType, dynamicDims);
   return allocOp.getResult();
 }
 

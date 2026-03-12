@@ -38,6 +38,7 @@ struct ReductionLoweringInfo {
   SmallVector<Value> hostResultPtrs;
 
   Value numWorkers;
+  bool combineDirectlyInTask = false;
   EdtConcurrency parentConcurrency = EdtConcurrency::intranode;
 };
 
@@ -61,7 +62,9 @@ ReductionLoweringInfo allocatePartialAccumulators(ArtsCodegen *AC, ForOp forOp,
                                                   EdtOp parallelEdt,
                                                   Location loc,
                                                   Attribute loopMetadataAttr,
-                                                  bool splitMode = false);
+                                                  bool splitMode = false,
+                                                  Value workerCountOverride =
+                                                      Value());
 
 /// Create result EDT to combine partial accumulators into final result DBs.
 void createResultEdt(ArtsCodegen *AC, ReductionLoweringInfo &redInfo,

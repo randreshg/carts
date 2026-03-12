@@ -47,6 +47,10 @@ carts compile <file>.c -O3
 
 # Full compilation with diagnostics
 carts compile <file>.c -O3 --diagnose
+
+# Run focused lit regressions with the bundled toolchain
+carts lit tests/contracts/for_dispatch_clamp.mlir
+carts lit --suite contracts
 ```
 
 ### Pipeline Stage Names (for --stop-at)

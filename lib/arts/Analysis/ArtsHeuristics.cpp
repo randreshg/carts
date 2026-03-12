@@ -13,11 +13,9 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/DbUtils.h"
-#include "arts/Utils/EdtUtils.h"
 #include "arts/Utils/Metadata/IdRegistry.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
-#include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include <cstdlib>
@@ -187,37 +185,11 @@ HeuristicsConfig::getAcquireDecisions(const PartitioningContext &ctx,
   for (auto [acqNode, offset] : llvm::zip(acquireNodes, partitionOffsets)) {
     AcquireDecision decision;
 
-    bool preserveDistributionContract = false;
-    if (acqNode && offset) {
-      DbAcquireOp acquire = acqNode->getDbAcquireOp();
-      if (acquire) {
-        auto acquireMode = getPartitionMode(acquire.getOperation());
-        bool explicitBlockMode =
-            acquireMode && (*acquireMode == PartitionMode::block ||
-                            *acquireMode == PartitionMode::stencil);
-
-        bool hasDistributionContract = false;
-        if (auto [edt, blockArg] =
-                EdtUtils::getEdtBlockArgumentForAcquire(acquire);
-            edt) {
-          (void)blockArg;
-          hasDistributionContract =
-              getEdtDistributionKind(edt.getOperation()) ||
-              getEdtDistributionPattern(edt.getOperation());
-        }
-
-        bool acquireSelectsLeafDb = false;
-        if (auto ptrTy = acquire.getPtr().getType().dyn_cast<MemRefType>())
-          acquireSelectsLeafDb = !ptrTy.getElementType().isa<MemRefType>();
-
-        if (explicitBlockMode && hasDistributionContract &&
-            acquireSelectsLeafDb &&
-            !acqNode->getPartitionOffsetDim(offset, /*requireLeading=*/false)) {
-          preserveDistributionContract = true;
-          ARTS_DEBUG("H1.7: preserving distribution-contract acquire without "
-                     "forcing full-range");
-        }
-      }
+    bool preserveDistributionContract =
+        acqNode && acqNode->shouldPreserveDistributedContract(offset);
+    if (preserveDistributionContract) {
+      ARTS_DEBUG("H1.7: preserving distributed acquire without forcing "
+                 "full-range");
     }
 
     if (acqNode && acqNode->needsFullRange(offset) &&
