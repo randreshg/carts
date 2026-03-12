@@ -51,12 +51,16 @@ void DbElementWiseRewriter::transformAcquire(const DbRewriteAcquire &info,
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPoint(acquire);
 
-  /// Update source to new allocation
-  acquire.getSourceGuidMutable().assign(newAlloc.getGuid());
-  acquire.getSourcePtrMutable().assign(newAlloc.getPtr());
+  /// Match block/stencil rewrite semantics: acquires already nested in EDT
+  /// regions must keep their in-scope source chain for dependency validation.
+  bool inEdtRegion = static_cast<bool>(acquire->getParentOfType<EdtOp>());
+  if (!inEdtRegion) {
+    acquire.getSourceGuidMutable().assign(newAlloc.getGuid());
+    acquire.getSourcePtrMutable().assign(newAlloc.getPtr());
+  }
 
   /// Update acquire's ptr result type to match new source
-  MemRefType newPtrType = newAlloc.getPtr().getType().cast<MemRefType>();
+  MemRefType newPtrType = acquire.getSourcePtr().getType().cast<MemRefType>();
   Type oldAcqPtrType = acquire.getPtr().getType();
   if (oldAcqPtrType != newPtrType) {
     acquire.getPtr().setType(newPtrType);
@@ -154,6 +158,7 @@ void DbElementWiseRewriter::transformAcquire(const DbRewriteAcquire &info,
   /// Clear partition hints - they've been consumed by partitioning.
   /// The runtime indices now carry the element coordinates.
   acquire.clearPartitionHints();
+  setPartitionMode(acquire.getOperation(), plan.mode);
 
   /// Store original stride for linearized access (stride = D1 * D2 * ...)
   if (auto staticStride = DbUtils::getStaticElementStride(oldAlloc)) {
