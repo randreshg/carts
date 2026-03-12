@@ -71,8 +71,8 @@ static bool yieldsConstantBool(Block &block, bool expected) {
   auto yield = dyn_cast<scf::YieldOp>(block.getTerminator());
   if (!yield || yield.getNumOperands() != 1)
     return false;
-  if (auto constBool =
-          dyn_cast_or_null<arith::ConstantOp>(yield.getOperand(0).getDefiningOp()))
+  if (auto constBool = dyn_cast_or_null<arith::ConstantOp>(
+          yield.getOperand(0).getDefiningOp()))
     if (auto attr = dyn_cast<BoolAttr>(constBool.getValue()))
       return attr.getValue() == expected;
   return false;
@@ -173,7 +173,8 @@ static bool matchBoundaryPattern(scf::ForOp loop, BoundaryPeelingMatch &match) {
     return fail("second boundary predicate is missing and arm");
 
   auto firstCondIf = firstCondValue.getDefiningOp<scf::IfOp>();
-  if (!firstCondIf || firstCondIf.getNumResults() != 1 || !firstCondIf.elseBlock())
+  if (!firstCondIf || firstCondIf.getNumResults() != 1 ||
+      !firstCondIf.elseBlock())
     return fail("first boundary predicate is not an if");
   if (!yieldsConstantBool(firstCondIf.getThenRegion().front(), true))
     return fail("first boundary if then-branch is not constant true");
@@ -212,11 +213,13 @@ static bool matchBoundaryPattern(scf::ForOp loop, BoundaryPeelingMatch &match) {
   if (!innerCompareValue)
     innerCompareValue = innerIv;
 
-  if (!matchEqConst(firstCondIf.getElseRegion().front().getTerminator()->getOperand(0),
-                    innerCompareValue, *lowerConst))
+  if (!matchEqConst(
+          firstCondIf.getElseRegion().front().getTerminator()->getOperand(0),
+          innerCompareValue, *lowerConst))
     return fail("first boundary else compare is not iv == lower");
-  if (!matchEqConst(lastCondIf.getElseRegion().front().getTerminator()->getOperand(0),
-                    innerCompareValue, *upperConst - 1))
+  if (!matchEqConst(
+          lastCondIf.getElseRegion().front().getTerminator()->getOperand(0),
+          innerCompareValue, *upperConst - 1))
     return fail("second boundary else compare is not iv == upper-1");
 
   match.innerLoop = loop;
@@ -300,8 +303,7 @@ static bool peelBoundaryLoop(BoundaryPeelingMatch &match) {
     return false;
 
   Value rowBoundary = builder.create<arith::OrIOp>(loc, rowIsFirst, rowIsLast);
-  auto splitIf =
-      builder.create<scf::IfOp>(loc, TypeRange{}, rowBoundary, true);
+  auto splitIf = builder.create<scf::IfOp>(loc, TypeRange{}, rowBoundary, true);
 
   builder.setInsertionPointToStart(&splitIf.getThenRegion().front());
   cloneLoopSegment(builder, match, match.finalIf.getThenRegion().front(),

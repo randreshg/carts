@@ -12,7 +12,7 @@
 #ifndef ARTS_TRANSFORMS_EDT_EDTREDUCTIONLOWERING_H
 #define ARTS_TRANSFORMS_EDT_EDTREDUCTIONLOWERING_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/codegen/Codegen.h"
 #include "mlir/IR/Builders.h"
 #include "llvm/ADT/DenseSet.h"
@@ -58,13 +58,11 @@ void collectOldAccumulatorDbRefs(ForOp forOp, Block &parallelBlock,
                                  IRMapping &mapper, Value myAccumulator);
 
 /// Allocate reduction DBs and initialize worker-local partial accumulators.
-ReductionLoweringInfo allocatePartialAccumulators(ArtsCodegen *AC, ForOp forOp,
-                                                  EdtOp parallelEdt,
-                                                  Location loc,
-                                                  Attribute loopMetadataAttr,
-                                                  bool splitMode = false,
-                                                  Value workerCountOverride =
-                                                      Value());
+ReductionLoweringInfo
+allocatePartialAccumulators(ArtsCodegen *AC, ForOp forOp, EdtOp parallelEdt,
+                            Location loc, Attribute loopMetadataAttr,
+                            bool splitMode = false,
+                            Value workerCountOverride = Value());
 
 /// Create result EDT to combine partial accumulators into final result DBs.
 void createResultEdt(ArtsCodegen *AC, ReductionLoweringInfo &redInfo,
@@ -78,4 +76,3 @@ void finalizeReductionAfterEpoch(ArtsCodegen *AC,
 } // namespace mlir
 
 #endif // ARTS_TRANSFORMS_EDT_EDTREDUCTIONLOWERING_H
-

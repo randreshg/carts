@@ -6,7 +6,7 @@
 ///==========================================================================///
 
 #include "arts/analysis/HeuristicUtils.h"
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/loop/LoopNode.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/metadata/LoopMetadata.h"

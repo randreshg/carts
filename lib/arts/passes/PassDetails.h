@@ -6,7 +6,7 @@
 #ifndef DIALECT_CARTS_TRANSFORMS_PASSDETAILS_H
 #define DIALECT_CARTS_TRANSFORMS_PASSDETAILS_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"

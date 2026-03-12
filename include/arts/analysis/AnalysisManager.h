@@ -9,11 +9,11 @@
 #define ARTS_ANALYSIS_ARTSANALYSISMANAGER_H
 
 #include "arts/analysis/HeuristicsConfig.h"
+#include "arts/analysis/StringAnalysis.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/edt/EdtAnalysis.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/analysis/metadata/MetadataManager.h"
-#include "arts/analysis/StringAnalysis.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -68,9 +68,7 @@ public:
 
   /// Get the ARTS abstract machine
   AbstractMachine &getAbstractMachine() { return abstractMachine; }
-  const AbstractMachine &getAbstractMachine() const {
-    return abstractMachine;
-  }
+  const AbstractMachine &getAbstractMachine() const { return abstractMachine; }
 
   /// Get the metadata manager
   MetadataManager &getMetadataManager();

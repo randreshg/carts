@@ -9,7 +9,7 @@
 #ifndef ARTS_TRANSFORMS_LOOP_LOOPNORMALIZER_H
 #define ARTS_TRANSFORMS_LOOP_LOOPNORMALIZER_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "mlir/IR/Builders.h"
 #include "llvm/ADT/StringRef.h"
 #include <memory>

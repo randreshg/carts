@@ -20,9 +20,9 @@
 #include "arts/transforms/edt/EdtReductionLowering.h"
 #include "arts/analysis/DistributionHeuristics.h"
 #include "arts/utils/DbUtils.h"
-#include "arts/utils/metadata/LoopMetadata.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/ValueUtils.h"
+#include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -152,7 +152,8 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
   Value numWorkers;
   if (workerCountOverride) {
     numWorkers = workerCountOverride;
-  } else if (auto explicitWorkers = arts::getWorkers(parallelEdt.getOperation());
+  } else if (auto explicitWorkers =
+                 arts::getWorkers(parallelEdt.getOperation());
              explicitWorkers && *explicitWorkers > 0) {
     numWorkers = AC->createIndexConstant(*explicitWorkers, loc);
   } else {
@@ -269,8 +270,7 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
       redInfo.partialAccumGuids.push_back(finalGuid);
       redInfo.partialAccumPtrs.push_back(finalPtr);
 
-      ARTS_DEBUG(
-          "  - Reusing final result DB as the worker-local accumulator");
+      ARTS_DEBUG("  - Reusing final result DB as the worker-local accumulator");
       continue;
     }
 
@@ -462,8 +462,8 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
           AC->create<memref::LoadOp>(loc, workerSlot, zeroIndices);
       AC->create<memref::StoreOp>(loc, partialValue, finalMemRef, zeroIndices);
     } else {
-      auto combineLoop = AC->create<scf::ForOp>(
-          loopLoc, zeroIndex, numWorkers, sizeOne, ValueRange{identity});
+      auto combineLoop = AC->create<scf::ForOp>(loopLoc, zeroIndex, numWorkers,
+                                                sizeOne, ValueRange{identity});
       if (redInfo.loopMetadataAttr)
         combineLoop->setAttr(AttrNames::LoopMetadata::Name,
                              redInfo.loopMetadataAttr);

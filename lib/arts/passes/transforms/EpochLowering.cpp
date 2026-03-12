@@ -19,9 +19,9 @@
 ///     arts.wait_on_epoch %e
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/codegen/Codegen.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"

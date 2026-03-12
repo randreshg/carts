@@ -22,7 +22,7 @@
 ///==========================================================================///
 
 #include "../../PassDetails.h"
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -515,9 +515,8 @@ static bool hoistDbRefsInEdt(EdtOp edt) {
 
 /// Hoist loop-invariant ops and db_refs in loops that are NOT inside EDTs.
 static bool hoistOutsideEdt(func::FuncOp funcOp) {
-  auto loops = collectLoops(funcOp, [](scf::ForOp loop) {
-    return !loop->getParentOfType<EdtOp>();
-  });
+  auto loops = collectLoops(
+      funcOp, [](scf::ForOp loop) { return !loop->getParentOfType<EdtOp>(); });
 
   bool changed = hoistFixedPoint(loops, hoistInvariantOpsInLoop);
   changed |= hoistFixedPoint(loops, hoistDbRefsInLoop);

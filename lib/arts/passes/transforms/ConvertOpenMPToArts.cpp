@@ -27,13 +27,13 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 /// Arts
-#include "arts/passes/PassDetails.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/HeuristicsConfig.h"
-#include "arts/ArtsDialect.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
-#include "arts/utils/Utils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/RemovalUtils.h"
+#include "arts/utils/Utils.h"
 #include "arts/utils/ValueUtils.h"
 /// Others
 #include "mlir/IR/Builders.h"

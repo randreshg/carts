@@ -10,7 +10,7 @@
 #ifndef CARTS_UTILS_LOOPUTILS_H
 #define CARTS_UTILS_LOOPUTILS_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 

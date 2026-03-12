@@ -287,8 +287,7 @@ int AbstractMachine::parseInt(const std::string &value, int defaultValue) {
   return std::atoi(value.c_str());
 }
 
-bool AbstractMachine::parseBool(const std::string &value,
-                                    bool defaultValue) {
+bool AbstractMachine::parseBool(const std::string &value, bool defaultValue) {
   if (value.empty())
     return defaultValue;
   std::string lower = value;

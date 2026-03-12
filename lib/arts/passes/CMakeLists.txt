@@ -51,7 +51,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   ${CARTS_ANALYSIS_SOURCE_FILES}
 
 DEPENDS
-  MLIRArtsOpsIncGen
+  MLIROpsIncGen
   MLIRArtsPassIncGen
 
 LINK_LIBS PUBLIC

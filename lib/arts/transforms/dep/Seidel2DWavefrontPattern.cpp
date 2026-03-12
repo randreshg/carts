@@ -32,10 +32,10 @@
 /// parallel work as a top-level `arts.for` for the existing ForLowering path.
 ///==========================================================================///
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/transforms/dep/DepTransform.h"
-#include "arts/utils/Utils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/Utils.h"
 #include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -175,7 +175,8 @@ static ForOp getSingleTopLevelFor(EdtOp edt) {
   return result;
 }
 
-static bool matchSeidelWavefront(EdtOp parallelEdt, SeidelWavefrontMatch &match) {
+static bool matchSeidelWavefront(EdtOp parallelEdt,
+                                 SeidelWavefrontMatch &match) {
   match = {};
   if (!parallelEdt || parallelEdt.getType() != EdtType::parallel)
     return false;
@@ -238,15 +239,15 @@ static Value createCeilDivPositive(OpBuilder &builder, Location loc, Value num,
 
 static Value createMinIndex(OpBuilder &builder, Location loc, Value lhs,
                             Value rhs) {
-  Value cmp = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult, lhs,
-                                            rhs);
+  Value cmp =
+      builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult, lhs, rhs);
   return builder.create<arith::SelectOp>(loc, cmp, lhs, rhs);
 }
 
 static Value createMaxIndex(OpBuilder &builder, Location loc, Value lhs,
                             Value rhs) {
-  Value cmp = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt, lhs,
-                                            rhs);
+  Value cmp =
+      builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt, lhs, rhs);
   return builder.create<arith::SelectOp>(loc, cmp, lhs, rhs);
 }
 
@@ -270,19 +271,19 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match) {
   Value numITiles = createCeilDivPositive(builder, loc, iTrip, kTileRows);
   Value numJTiles = createCeilDivPositive(builder, loc, jTrip, kTileCols);
 
-  Value numITilesMinusOne =
-      builder.create<arith::SubIOp>(loc, numITiles, one);
-  Value numJTilesMinusOne =
-      builder.create<arith::SubIOp>(loc, numJTiles, one);
+  Value numITilesMinusOne = builder.create<arith::SubIOp>(loc, numITiles, one);
+  Value numJTilesMinusOne = builder.create<arith::SubIOp>(loc, numJTiles, one);
   Value doubleITilesMinusOne =
       builder.create<arith::MulIOp>(loc, numITilesMinusOne, two);
   Value waveUbExclusive = builder.create<arith::AddIOp>(
-      loc, builder.create<arith::AddIOp>(loc, doubleITilesMinusOne,
-                                         numJTilesMinusOne),
+      loc,
+      builder.create<arith::AddIOp>(loc, doubleITilesMinusOne,
+                                    numJTilesMinusOne),
       one);
 
   auto waveLoop = builder.create<scf::ForOp>(loc, zero, waveUbExclusive, one);
-  copyArtsMetadataAttrs(match.parallelEdt.getOperation(), waveLoop.getOperation());
+  copyArtsMetadataAttrs(match.parallelEdt.getOperation(),
+                        waveLoop.getOperation());
 
   OpBuilder waveBuilder = OpBuilder::atBlockBegin(waveLoop.getBody());
   Value wave = waveLoop.getInductionVar();
@@ -292,10 +293,9 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match) {
   Value biMin = createCeilDivPositive(waveBuilder, loc, clippedTmp, 2);
 
   Value halfWave = waveBuilder.create<arith::DivUIOp>(loc, wave, two);
-  Value biMaxExclusive =
-      createMinIndex(waveBuilder, loc,
-                     waveBuilder.create<arith::AddIOp>(loc, halfWave, one),
-                     numITiles);
+  Value biMaxExclusive = createMinIndex(
+      waveBuilder, loc, waveBuilder.create<arith::AddIOp>(loc, halfWave, one),
+      numITiles);
 
   auto tileParallel = waveBuilder.create<EdtOp>(
       loc, EdtType::parallel, match.parallelEdt.getConcurrency());

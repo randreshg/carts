@@ -19,19 +19,19 @@
 #include "mlir/IR/BuiltinOps.h"
 /// Arts
 #include "../../PassDetails.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/graphs/db/DbGraph.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
-#include "arts/ArtsDialect.h"
 #include "arts/passes/Passes.h"
 /// Other
 #include "mlir/Pass/Pass.h"
 /// Debug
 #include "arts/analysis/graphs/db/DbNode.h"
-#include "arts/utils/Debug.h"
-#include "arts/utils/Utils.h"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/Utils.h"
 #include "arts/utils/ValueUtils.h"
 #include <cstdlib>
 

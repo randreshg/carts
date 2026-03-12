@@ -13,11 +13,11 @@
 ///===----------------------------------------------------------------------===///
 
 #include "../../PassDetails.h"
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
-#include "arts/utils/Utils.h"
 #include "arts/utils/RemovalUtils.h"
+#include "arts/utils/Utils.h"
 #include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"

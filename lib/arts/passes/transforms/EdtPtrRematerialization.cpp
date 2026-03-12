@@ -19,7 +19,7 @@
 #include "mlir/Pass/Pass.h"
 
 /// Arts
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/transforms/edt/EdtPtrRematerialization.h"
 
 /// LLVM

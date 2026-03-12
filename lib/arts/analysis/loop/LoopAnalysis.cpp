@@ -4,7 +4,7 @@
 ///==========================================================================///
 
 #include "arts/analysis/loop/LoopAnalysis.h"
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/analysis/metadata/MetadataManager.h"

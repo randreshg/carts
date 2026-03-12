@@ -23,7 +23,7 @@
 #ifndef ARTS_ANALYSIS_PARTITIONINGHEURISTICS_H
 #define ARTS_ANALYSIS_PARTITIONINGHEURISTICS_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/graphs/db/DbAccessPattern.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
 #include "mlir/IR/BuiltinAttributes.h"

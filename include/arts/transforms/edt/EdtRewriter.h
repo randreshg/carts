@@ -7,7 +7,7 @@
 #ifndef ARTS_TRANSFORMS_EDT_EDTREWRITER_H
 #define ARTS_TRANSFORMS_EDT_EDTREWRITER_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/codegen/Codegen.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Location.h"

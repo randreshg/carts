@@ -4,7 +4,7 @@
 ///==========================================================================///
 
 #include "arts/utils/metadata/LoopMetadata.h"
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 

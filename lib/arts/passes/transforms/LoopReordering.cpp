@@ -15,16 +15,16 @@
 /// Must run BEFORE CreateDbs to preserve SSA relationships.
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbPatternMatchers.h"
 #include "arts/analysis/metadata/MetadataManager.h"
-#include "arts/ArtsDialect.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
 #include "arts/transforms/loop/LoopNormalizer.h"
+#include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/metadata/LoopMetadata.h"
-#include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
 

@@ -7,7 +7,7 @@
 #ifndef ARTS_ANALYSIS_DB_DBANALYSIS_H
 #define ARTS_ANALYSIS_DB_DBANALYSIS_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/Analysis.h"
 #include "arts/analysis/graphs/db/DbAccessPattern.h"
 #include "mlir/Analysis/DataFlowFramework.h"

@@ -7,7 +7,7 @@
 ///   - DbBlockInfoComputer       (block offset/size computation)
 ///==========================================================================///
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/AccessPatternAnalysis.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"

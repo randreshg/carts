@@ -26,10 +26,10 @@
 ///     }
 ///==========================================================================///
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/utils/Debug.h"
-#include "arts/utils/Utils.h"
 #include "arts/utils/LoopUtils.h"
+#include "arts/utils/Utils.h"
 #include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"

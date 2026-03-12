@@ -7,7 +7,7 @@
 #ifndef ARTS_ANALYSIS_EDT_EDTDATAFLOWANALYSIS_H
 #define ARTS_ANALYSIS_EDT_EDTDATAFLOWANALYSIS_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/edt/EdtInfo.h"
 #include "arts/analysis/graphs/db/DbGraph.h"
 #include "arts/analysis/graphs/db/DbNode.h"

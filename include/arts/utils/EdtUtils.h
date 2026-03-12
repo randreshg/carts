@@ -9,7 +9,7 @@
 #ifndef CARTS_UTILS_EDTUTILS_H
 #define CARTS_UTILS_EDTUTILS_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Region.h"

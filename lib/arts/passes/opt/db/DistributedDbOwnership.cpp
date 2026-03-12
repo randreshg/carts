@@ -31,7 +31,8 @@ namespace {
 
 struct DistributedDbOwnershipPass
     : public arts::DistributedDbOwnershipBase<DistributedDbOwnershipPass> {
-  explicit DistributedDbOwnershipPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
+  explicit DistributedDbOwnershipPass(mlir::arts::AnalysisManager *AM)
+      : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }
 

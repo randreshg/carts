@@ -33,7 +33,7 @@
 #include "mlir/IR/OpDefinition.h"
 #include "polygeist/Ops.h"
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/ValueUtils.h"
 

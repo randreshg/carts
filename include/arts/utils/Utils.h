@@ -7,7 +7,7 @@
 #ifndef CARTS_UTILS_ARTSUTILS_H
 #define CARTS_UTILS_ARTSUTILS_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"

@@ -25,8 +25,8 @@
 ///     }
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
 #include "arts/analysis/AnalysisManager.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
 #include "arts/transforms/loop/LoopNormalizer.h"
 #include "arts/utils/Debug.h"

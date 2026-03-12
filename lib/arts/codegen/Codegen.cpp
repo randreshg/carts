@@ -28,9 +28,9 @@
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Transforms/DialectConversion.h"
 /// Arts
-#include "arts/ArtsDialect.h"
-#include "arts/utils/Utils.h"
+#include "arts/Dialect.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/Utils.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
 /// Debug
 

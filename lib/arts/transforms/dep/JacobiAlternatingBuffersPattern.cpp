@@ -20,8 +20,8 @@
 /// the final result buffer remains unchanged after normalization.
 ///==========================================================================///
 
+#include "arts/Dialect.h"
 #include "arts/transforms/dep/DepTransform.h"
-#include "arts/ArtsDialect.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -272,7 +272,8 @@ static EdtOp cloneStencilEdt(EdtOp sourceEdt, Block *targetBlock, Value oldA,
   Block &dst = cloned.getBody().front();
   IRMapping mapper;
 
-  for (auto [srcArg, dstArg] : llvm::zip(src.getArguments(), dst.getArguments()))
+  for (auto [srcArg, dstArg] :
+       llvm::zip(src.getArguments(), dst.getArguments()))
     mapper.map(srcArg, dstArg);
   if (oldA && newA)
     mapper.map(oldA, newA);
@@ -344,8 +345,7 @@ public:
 
 } // namespace
 
-std::unique_ptr<DepTransform>
-createJacobiAlternatingBuffersPattern() {
+std::unique_ptr<DepTransform> createJacobiAlternatingBuffersPattern() {
   return std::make_unique<JacobiAlternatingBuffersPattern>();
 }
 

@@ -7,7 +7,7 @@
 #ifndef ARTS_ANALYSIS_DB_DBPATTERNMATCHERS_H
 #define ARTS_ANALYSIS_DB_DBPATTERNMATCHERS_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "llvm/ADT/SmallVector.h"

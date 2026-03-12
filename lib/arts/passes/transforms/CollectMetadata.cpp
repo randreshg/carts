@@ -27,19 +27,19 @@
 ///
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/metadata/AccessAnalyzer.h"
-#include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/analysis/metadata/DependenceAnalyzer.h"
 #include "arts/analysis/metadata/LoopAnalyzer.h"
 #include "arts/analysis/metadata/MemrefAnalyzer.h"
-#include "arts/ArtsDialect.h"
+#include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/metadata/Metadata.h"
 #include "arts/utils/metadata/LocationMetadata.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 #include "arts/utils/metadata/MemrefMetadata.h"
+#include "arts/utils/metadata/Metadata.h"
 
 #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"

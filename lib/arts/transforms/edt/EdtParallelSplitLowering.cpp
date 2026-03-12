@@ -197,4 +197,3 @@ void mlir::arts::cleanupOriginalParallel(EdtOp originalParallel,
     }
   }
 }
-

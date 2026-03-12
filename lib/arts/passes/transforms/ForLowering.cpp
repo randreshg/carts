@@ -21,24 +21,24 @@
 ///   one `arts.for` inside `arts.edt<parallel>` -> epoch + per-worker task EDTs
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/HeuristicsConfig.h"
 #include "arts/analysis/DistributionHeuristics.h"
+#include "arts/analysis/HeuristicsConfig.h"
 #include "arts/analysis/metadata/MetadataManager.h"
-#include "arts/ArtsDialect.h"
 #include "arts/codegen/Codegen.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
 #include "arts/transforms/edt/AcquireRewritePlanning.h"
-#include "arts/transforms/edt/EdtRewriter.h"
-#include "arts/transforms/edt/EdtTaskLoopLowering.h"
 #include "arts/transforms/edt/EdtParallelSplitLowering.h"
 #include "arts/transforms/edt/EdtReductionLowering.h"
-#include "arts/utils/Utils.h"
+#include "arts/transforms/edt/EdtRewriter.h"
+#include "arts/transforms/edt/EdtTaskLoopLowering.h"
 #include "arts/utils/DbUtils.h"
-#include "arts/utils/metadata/LoopMetadata.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/Utils.h"
 #include "arts/utils/ValueUtils.h"
+#include "arts/utils/metadata/LoopMetadata.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -104,8 +104,8 @@ public:
 
   /// Distribution strategy and bounds from DistributionHeuristics
   DistributionStrategy strategy;
-  DistributionBounds bounds;       ///< Set by computeBounds()
-  DistributionBounds insideBounds; ///< Set by recomputeBoundsInside()
+  DistributionBounds bounds;       ///  Set by computeBounds()
+  DistributionBounds insideBounds; ///  Set by recomputeBoundsInside()
 
 private:
   void initialize();
@@ -279,7 +279,8 @@ static Value createZeroValue(ArtsCodegen *AC, Type elemType, Location loc) {
 
 /// ForLowering Pass Implementation
 struct ForLoweringPass : public arts::ForLoweringBase<ForLoweringPass> {
-  explicit ForLoweringPass(mlir::arts::AnalysisManager *AM = nullptr) : AM(AM) {}
+  explicit ForLoweringPass(mlir::arts::AnalysisManager *AM = nullptr)
+      : AM(AM) {}
   void runOnOperation() override;
 
 private:
@@ -298,11 +299,10 @@ private:
   /// Allocate partial accumulators for reductions (one per worker)
   /// If splitMode is true, skip creating DbAcquireOps as dependencies to the
   /// parallel EDT (used when the parallel will be erased in split pattern)
-  ReductionInfo allocatePartialAccumulators(ArtsCodegen *AC, ForOp forOp,
-                                            EdtOp parallelEdt, Location loc,
-                                            bool splitMode = false,
-                                            Value workerCountOverride =
-                                                Value());
+  ReductionInfo
+  allocatePartialAccumulators(ArtsCodegen *AC, ForOp forOp, EdtOp parallelEdt,
+                              Location loc, bool splitMode = false,
+                              Value workerCountOverride = Value());
 
   void createResultEdt(ArtsCodegen *AC, ReductionInfo &redInfo, Location loc);
 
@@ -615,12 +615,9 @@ void ForLoweringPass::cloneLoopBody(ArtsCodegen *AC, ForOp forOp,
                     << " operations into chunk loop");
 }
 
-ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
-                                                           ForOp forOp,
-                                                           EdtOp parallelEdt,
-                                                           Location loc,
-                                                           bool splitMode,
-                                                           Value workerCountOverride) {
+ReductionInfo ForLoweringPass::allocatePartialAccumulators(
+    ArtsCodegen *AC, ForOp forOp, EdtOp parallelEdt, Location loc,
+    bool splitMode, Value workerCountOverride) {
   return mlir::arts::allocatePartialAccumulators(
       AC, forOp, parallelEdt, loc, getLoopMetadataAttr(forOp), splitMode,
       workerCountOverride);
@@ -699,9 +696,9 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
     /// create acquires directly in result/task EDTs.
     if (!forOp.getReductionAccumulators().empty()) {
       ARTS_INFO(" - Detected reduction(s), allocating partial accumulators");
-      redInfo = allocatePartialAccumulators(&AC, forOp, originalParallel, loc,
-                                            /*splitMode=*/true,
-                                            dispatchWorkers);
+      redInfo =
+          allocatePartialAccumulators(&AC, forOp, originalParallel, loc,
+                                      /*splitMode=*/true, dispatchWorkers);
     }
   }
 
@@ -721,9 +718,8 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   Value workerIV = workerLoop.getInductionVar();
 
   /// Create task EDT with DB rewiring
-  EdtOp taskEdt =
-      createTaskEdtWithRewiring(&AC, *loopInfoStorage, forOp, workerIV,
-                                originalParallel, redInfo);
+  EdtOp taskEdt = createTaskEdtWithRewiring(
+      &AC, *loopInfoStorage, forOp, workerIV, originalParallel, redInfo);
   copyDistributionAttrs(forOp.getOperation(), taskEdt.getOperation());
   copyDistributionAttrs(forOp.getOperation(), forEpoch.getOperation());
 

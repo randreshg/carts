@@ -16,11 +16,11 @@
 ///     pass emits diagnostics and fails if metadata coverage is incomplete
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/analysis/metadata/MetadataManager.h"
-#include "arts/ArtsDialect.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 #include "arts/utils/metadata/MemrefMetadata.h"

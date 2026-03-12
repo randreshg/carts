@@ -7,16 +7,16 @@
 /// --distributed-db mode.
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/DistributionHeuristics.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
-#include "arts/ArtsDialect.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
-#include "arts/utils/metadata/LoopMetadata.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/ValueUtils.h"
+#include "arts/utils/metadata/LoopMetadata.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -380,7 +380,8 @@ static void outlineLoop(scf::ForOp loop, const AbstractMachine *machine) {
 struct DistributedHostLoopOutliningPass
     : public arts::DistributedHostLoopOutliningBase<
           DistributedHostLoopOutliningPass> {
-  explicit DistributedHostLoopOutliningPass(mlir::arts::AnalysisManager *AM) : AM(AM) {}
+  explicit DistributedHostLoopOutliningPass(mlir::arts::AnalysisManager *AM)
+      : AM(AM) {}
 
   void runOnOperation() override {
     ModuleOp module = getOperation();

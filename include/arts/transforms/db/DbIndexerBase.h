@@ -21,7 +21,7 @@
 #ifndef ARTS_TRANSFORMS_DATABLOCK_DBINDEXERBASE_H
 #define ARTS_TRANSFORMS_DATABLOCK_DBINDEXERBASE_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/utils/DbUtils.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"

@@ -7,7 +7,7 @@
 #ifndef ARTS_ANALYSIS_DB_DISTRIBUTEDDBELIGIBILITY_H
 #define ARTS_ANALYSIS_DB_DISTRIBUTEDDBELIGIBILITY_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 
 namespace mlir {
 namespace arts {

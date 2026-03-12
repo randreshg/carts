@@ -7,7 +7,7 @@
 #ifndef ARTS_TRANSFORMS_DATABLOCK_DBLAYOUTSTRATEGY_H
 #define ARTS_TRANSFORMS_DATABLOCK_DBLAYOUTSTRATEGY_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/ArrayRef.h"

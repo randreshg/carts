@@ -3,7 +3,7 @@
 ////===----------------------------------------------------------------------===////
 
 #include "arts/analysis/metadata/MetadataAttacher.h"
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/metadata/MetadataIO.h"
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/analysis/metadata/MetadataRegistry.h"

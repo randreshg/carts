@@ -26,8 +26,8 @@
 #include "mlir/IR/Location.h"
 #include "mlir/Support/LLVM.h"
 /// Arts
+#include "arts/Dialect.h"
 #include "arts/passes/PassDetails.h"
-#include "arts/ArtsDialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/Utils.h"
 /// Other

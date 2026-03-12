@@ -42,22 +42,22 @@
 /// If no control DB is found, conservatively defaults to inout mode.
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/metadata/MetadataManager.h"
-#include "arts/ArtsDialect.h"
 #include "arts/codegen/Codegen.h"
-#include "arts/transforms/db/block/DbBlockIndexer.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/transforms/db/DbRewriter.h"
-#include "arts/transforms/db/elementwise/DbElementWiseIndexer.h"
 #include "arts/transforms/db/DbTransforms.h"
-#include "arts/utils/Utils.h"
+#include "arts/transforms/db/block/DbBlockIndexer.h"
+#include "arts/transforms/db/elementwise/DbElementWiseIndexer.h"
 #include "arts/utils/DbUtils.h"
-#include "arts/utils/metadata/Metadata.h"
-#include "arts/utils/metadata/MemrefMetadata.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/RemovalUtils.h"
+#include "arts/utils/Utils.h"
 #include "arts/utils/ValueUtils.h"
+#include "arts/utils/metadata/MemrefMetadata.h"
+#include "arts/utils/metadata/Metadata.h"
 #include <optional>
 
 #include "arts/passes/Passes.h"

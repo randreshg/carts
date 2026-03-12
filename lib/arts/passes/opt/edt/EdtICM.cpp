@@ -20,7 +20,7 @@
 #include "mlir/Pass/Pass.h"
 
 /// Arts
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 
 /// Others
 #include "arts/transforms/edt/EdtICM.h"

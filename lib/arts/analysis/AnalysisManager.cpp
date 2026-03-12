@@ -19,8 +19,7 @@
 using namespace mlir;
 using namespace mlir::arts;
 
-AnalysisManager::AnalysisManager(ModuleOp module,
-                                 const std::string &configFile,
+AnalysisManager::AnalysisManager(ModuleOp module, const std::string &configFile,
                                  const std::string &metadataFile,
                                  PartitionFallback fallback)
     : module(module), configFile(configFile),
@@ -74,8 +73,7 @@ StringAnalysis &AnalysisManager::getStringAnalysis() {
 
 MetadataManager &AnalysisManager::getMetadataManager() {
   if (!metadataManager) {
-    metadataManager =
-        std::make_unique<MetadataManager>(module.getContext());
+    metadataManager = std::make_unique<MetadataManager>(module.getContext());
     metadataManager->getIdRegistry().initializeFromModule(module);
     metadataManager->importFromJsonFile(module, metadataFile);
   }
@@ -112,8 +110,8 @@ EdtGraph &AnalysisManager::getEdtGraph(func::FuncOp func) {
   return getEdtAnalysis().getOrCreateEdtGraph(func);
 }
 
-std::optional<DbAccessPattern> AnalysisManager::getDbAllocAccessPattern(
-    DbAllocOp alloc) {
+std::optional<DbAccessPattern>
+AnalysisManager::getDbAllocAccessPattern(DbAllocOp alloc) {
   if (!alloc)
     return std::nullopt;
   return getDbAnalysis().getAllocAccessPattern(alloc);
