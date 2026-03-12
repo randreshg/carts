@@ -35,6 +35,7 @@
 
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
+#include "arts/utils/LoopInvarianceUtils.h"
 #include "arts/utils/ValueUtils.h"
 
 #include "arts/utils/Debug.h"
@@ -44,11 +45,6 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
-
-/// Check if a value is defined outside the given region
-static bool isDefinedOutside(Region &region, Value value) {
-  return !region.isAncestor(value.getParentRegion());
-}
 
 /// Check if an LLVM load is loading a data pointer from deps struct.
 /// Pattern: llvm.load from a GEP that accesses the ptr field (offset 2) of
@@ -90,44 +86,6 @@ static bool isDbPtrLoad(LLVM::LoadOp loadOp) {
   if (auto defOp = loadOp.getAddr().getDefiningOp<DbGepOp>())
     return true;
   return false;
-}
-
-/// Check if all operands of an operation are defined outside the given region
-static bool allOperandsDefinedOutside(Operation *op, Region &region) {
-  for (Value operand : op->getOperands()) {
-    if (!isDefinedOutside(region, operand))
-      return false;
-  }
-  return true;
-}
-
-/// Check if all operands dominate the insertion point.
-static bool allOperandsDominate(Operation *op, Operation *insertPoint,
-                                DominanceInfo &domInfo) {
-  for (Value operand : op->getOperands()) {
-    if (!domInfo.properlyDominates(operand, insertPoint))
-      return false;
-  }
-  return true;
-}
-
-static bool isSafeDivRemToHoist(Operation *op, scf::ForOp loop,
-                                DominanceInfo &domInfo) {
-  if (!loop || !loop->isAncestor(op))
-    return false;
-  Value denom;
-  if (auto div = dyn_cast<arith::DivUIOp>(op))
-    denom = div.getRhs();
-  else if (auto rem = dyn_cast<arith::RemUIOp>(op))
-    denom = rem.getRhs();
-  else
-    return false;
-
-  if (!ValueUtils::isProvablyNonZero(denom))
-    return false;
-  if (!allOperandsDominate(op, loop, domInfo))
-    return false;
-  return true;
 }
 
 /// Find the highest loop that can legally hoist the address computation.
