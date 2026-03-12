@@ -173,11 +173,11 @@ __ARTS_FUNCTION_TYPE(EdtFn, Void, Int32, Int64Ptr, Int32, ArtsEdtDepPtr)
 ///               uint32_t depc, arts_edt_dep_t depv[]);
 __ARTS_FUNCTION_TYPE(ArtsMainFn, Void, Int32, Int64Ptr, Int32, ArtsEdtDepPtr)
 
-/// void initPerNode(unsigned int nodeId, int argc, char **argv)
+/// void init_per_node(unsigned int nodeId, int argc, char **argv)
 __ARTS_FUNCTION_TYPE(InitPerNodeFn, Void, Int32, Int32, Int8PtrPtr)
 
-/// void initPerWorker(unsigned int nodeId, unsigned int workerId, int argc,
-///                    char** argv)
+/// void init_per_worker(unsigned int nodeId, unsigned int workerId, int argc,
+///                      char** argv)
 __ARTS_FUNCTION_TYPE(InitPerWorkerFn, Void, Int32, Int32, Int32, Int8PtrPtr)
 
 /// int main(int argc, char** argv)
