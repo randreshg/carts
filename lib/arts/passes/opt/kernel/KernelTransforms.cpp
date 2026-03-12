@@ -13,9 +13,9 @@
 ///   - MatmulReductionPattern
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
-#include "arts/ArtsDialect.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
 #include "arts/transforms/kernel/KernelTransform.h"
 #include "arts/utils/Debug.h"
@@ -30,8 +30,7 @@ namespace {
 struct KernelTransformsPass
     : public arts::KernelTransformsBase<KernelTransformsPass> {
   KernelTransformsPass(mlir::arts::AnalysisManager *AM, bool enableMatmul,
-                           bool enableTiling, int64_t tileJ,
-                           int64_t minTripCount)
+                       bool enableTiling, int64_t tileJ, int64_t minTripCount)
       : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
     this->enableMatmul = enableMatmul;
@@ -65,8 +64,7 @@ struct KernelTransformsPass
       }
     }
 
-    ARTS_INFO("KernelTransformsPass: applied " << rewrites
-                                                   << " rewrite(s)");
+    ARTS_INFO("KernelTransformsPass: applied " << rewrites << " rewrite(s)");
     (void)AM;
     ARTS_INFO_FOOTER(KernelTransformsPass);
   }
@@ -77,9 +75,10 @@ private:
 
 } // namespace
 
-std::unique_ptr<Pass> mlir::arts::createKernelTransformsPass(
-    mlir::arts::AnalysisManager *AM, bool enableMatmul, bool enableTiling,
-    int64_t tileJ, int64_t minTripCount) {
-  return std::make_unique<KernelTransformsPass>(
-      AM, enableMatmul, enableTiling, tileJ, minTripCount);
+std::unique_ptr<Pass>
+mlir::arts::createKernelTransformsPass(mlir::arts::AnalysisManager *AM,
+                                       bool enableMatmul, bool enableTiling,
+                                       int64_t tileJ, int64_t minTripCount) {
+  return std::make_unique<KernelTransformsPass>(AM, enableMatmul, enableTiling,
+                                                tileJ, minTripCount);
 }

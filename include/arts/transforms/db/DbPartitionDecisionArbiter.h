@@ -7,7 +7,7 @@
 #ifndef ARTS_TRANSFORMS_DATABLOCK_DBPARTITIONDECISIONARBITER_H
 #define ARTS_TRANSFORMS_DATABLOCK_DBPARTITIONDECISIONARBITER_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/PartitioningHeuristics.h"
 #include "arts/analysis/graphs/db/DbAccessPattern.h"
 #include "mlir/Support/LLVM.h"

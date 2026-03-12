@@ -3,7 +3,7 @@
 /// Defines utility functions for the ARTS dialect.
 ///==========================================================================///
 #include "arts/utils/Utils.h"
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"

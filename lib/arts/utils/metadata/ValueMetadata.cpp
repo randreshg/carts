@@ -3,7 +3,7 @@
 ///===----------------------------------------------------------------------===///
 
 #include "arts/utils/metadata/ValueMetadata.h"
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "llvm/ADT/StringSwitch.h"
 

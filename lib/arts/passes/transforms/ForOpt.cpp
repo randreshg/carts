@@ -11,14 +11,14 @@
 ///     arts.for ... { ... }  // with tuning attrs/hints for downstream lowering
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/HeuristicsConfig.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
-#include "arts/ArtsDialect.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
-#include "arts/utils/abstract_machine/AbstractMachine.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/abstract_machine/AbstractMachine.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 
@@ -32,7 +32,8 @@ using namespace mlir::arts;
 
 namespace {
 
-static void annotateAccessPatterns(ModuleOp module, mlir::arts::AnalysisManager *AM) {
+static void annotateAccessPatterns(ModuleOp module,
+                                   mlir::arts::AnalysisManager *AM) {
   if (!AM)
     return;
 

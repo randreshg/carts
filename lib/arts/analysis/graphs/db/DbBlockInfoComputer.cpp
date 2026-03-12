@@ -6,6 +6,7 @@
 ///==========================================================================///
 
 #include "arts/analysis/graphs/db/DbBlockInfoComputer.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/AccessPatternAnalysis.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
@@ -13,9 +14,8 @@
 #include "arts/analysis/graphs/db/MemoryAccessClassifier.h"
 #include "arts/analysis/graphs/db/PartitionBoundsAnalyzer.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
-#include "arts/ArtsDialect.h"
-#include "arts/utils/Utils.h"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/Utils.h"
 #include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -105,8 +105,8 @@ static LoopNode *findBestLoopNode(ArrayRef<LoopNode *> loopNodes,
 ///===----------------------------------------------------------------------===///
 
 LogicalResult DbBlockInfoComputer::computeBlockInfo(DbAcquireNode *node,
-                                                  Value &blockOffset,
-                                                  Value &blockSize) {
+                                                    Value &blockOffset,
+                                                    Value &blockSize) {
   DbAcquireOp dbAcquireOp = node->getDbAcquireOp();
   ARTS_DEBUG("computeBlockInfo for acquire: " << dbAcquireOp);
 
@@ -406,9 +406,8 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromWhile(
   return success();
 }
 
-LogicalResult DbBlockInfoComputer::computeBlockInfoFromHints(DbAcquireNode *node,
-                                                           Value &blockOffset,
-                                                           Value &blockSize) {
+LogicalResult DbBlockInfoComputer::computeBlockInfoFromHints(
+    DbAcquireNode *node, Value &blockOffset, Value &blockSize) {
   auto [partitionOffset, partitionSize] = node->getPartitionInfo();
   DbAcquireOp dbAcquireOp = node->getDbAcquireOp();
 

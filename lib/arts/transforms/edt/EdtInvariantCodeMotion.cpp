@@ -11,7 +11,7 @@
 #include <queue>
 
 /// Arts
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/transforms/edt/EdtICM.h"
 
 /// Others

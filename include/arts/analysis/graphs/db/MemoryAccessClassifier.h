@@ -9,7 +9,7 @@
 #ifndef ARTS_ANALYSIS_GRAPHS_DB_MEMORYACCESSCLASSIFIER_H
 #define ARTS_ANALYSIS_GRAPHS_DB_MEMORYACCESSCLASSIFIER_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"

@@ -5,8 +5,8 @@
 /// established stable acquire and dependency structure.
 ///==========================================================================///
 
+#include "arts/Dialect.h"
 #include "arts/passes/PassDetails.h"
-#include "arts/ArtsDialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
@@ -47,9 +47,9 @@ static bool isSingleSizeOne(ValueRange sizes) {
 }
 
 static bool isZeroIndexList(ValueRange values) {
-  return !values.empty() &&
-         llvm::all_of(values,
-                      [](Value v) { return ValueUtils::isZeroConstant(v); });
+  return !values.empty() && llvm::all_of(values, [](Value v) {
+    return ValueUtils::isZeroConstant(v);
+  });
 }
 
 static SmallVector<Value> getDynamicAllocaSizes(DbAllocOp alloc,
@@ -119,8 +119,9 @@ static bool loadsAreInitializedByTask(DbRefOp dbRef, EdtOp edt,
     return false;
 
   for (Operation *load : loads) {
-    bool covered = llvm::any_of(
-        stores, [&](Operation *store) { return domInfo.dominates(store, load); });
+    bool covered = llvm::any_of(stores, [&](Operation *store) {
+      return domInfo.dominates(store, load);
+    });
     if (!covered)
       return false;
   }
@@ -271,8 +272,8 @@ struct DbOptsPass : public arts::DbOptsBase<DbOptsPass> {
             getDynamicAllocaSizes(candidate.alloc, refType);
         Block &entryBlock = use.edt.getBody().front();
         OpBuilder builder(&entryBlock, entryBlock.begin());
-        auto local = builder.create<memref::AllocaOp>(use.dbRef.getLoc(), refType,
-                                                      dynamicSizes);
+        auto local = builder.create<memref::AllocaOp>(use.dbRef.getLoc(),
+                                                      refType, dynamicSizes);
         use.dbRef.getResult().replaceAllUsesWith(local.getMemref());
         use.dbRef.erase();
 

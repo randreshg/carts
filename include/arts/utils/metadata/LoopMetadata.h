@@ -10,7 +10,7 @@
 #ifndef ARTS_UTILS_LOOPMETADATA_H
 #define ARTS_UTILS_LOOPMETADATA_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/utils/metadata/LocationMetadata.h"
 #include "arts/utils/metadata/Metadata.h"
 #include "mlir/IR/Builders.h"

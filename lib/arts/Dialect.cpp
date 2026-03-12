@@ -17,7 +17,7 @@
 #include <cassert>
 #include <cstdint>
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/transforms/db/DbRewriter.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
@@ -30,24 +30,24 @@ using namespace mlir::arts;
 void ArtsDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
-#include "arts/ArtsOps.cpp.inc"
+#include "arts/Ops.cpp.inc"
       >();
 
   addTypes<
 #define GET_TYPEDEF_LIST
-#include "arts/ArtsOpsTypes.cpp.inc"
+#include "arts/OpsTypes.cpp.inc"
       >();
 
   addAttributes<
 #define GET_ATTRDEF_LIST
-#include "arts/ArtsOpsAttributes.cpp.inc"
+#include "arts/OpsAttributes.cpp.inc"
       >();
 }
 
-#include "arts/ArtsOpsDialect.cpp.inc"
+#include "arts/OpsDialect.cpp.inc"
 
 #define GET_OP_CLASSES
-#include "arts/ArtsOps.cpp.inc"
+#include "arts/Ops.cpp.inc"
 
 namespace {
 struct FoldDbDimFromDbOps : public OpRewritePattern<DbDimOp> {
@@ -157,12 +157,12 @@ bool isArtsOp(Operation *op) {
 
 /// Arts Dialect Types
 #define GET_TYPEDEF_CLASSES
-#include "arts/ArtsOpsTypes.cpp.inc"
+#include "arts/OpsTypes.cpp.inc"
 
 #define GET_ATTRDEF_CLASSES
-#include "arts/ArtsOpsAttributes.cpp.inc"
+#include "arts/OpsAttributes.cpp.inc"
 
-#include "arts/ArtsOpsEnums.cpp.inc"
+#include "arts/OpsEnums.cpp.inc"
 
 class UndefToLLVM final : public OpRewritePattern<UndefOp> {
 public:

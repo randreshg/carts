@@ -5,7 +5,7 @@
 ///==========================================================================///
 
 #include "arts/utils/ValueUtils.h"
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"

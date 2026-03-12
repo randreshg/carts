@@ -15,7 +15,7 @@
 ///==========================================================================///
 
 #include "../../PassDetails.h"
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/ValueUtils.h"

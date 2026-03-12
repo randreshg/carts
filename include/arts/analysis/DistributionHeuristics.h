@@ -115,7 +115,7 @@
 #ifndef ARTS_ANALYSIS_DISTRIBUTIONHEURISTICS_H
 #define ARTS_ANALYSIS_DISTRIBUTIONHEURISTICS_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Value.h"
@@ -129,35 +129,35 @@ class LoopAnalysis;
 
 /// H2: Distribution strategy kinds
 enum class DistributionKind {
-  Flat,        ///< Single-level: all workers divide iterations equally
-  TwoLevel,    ///< Two-level: nodes get DB blocks, threads subdivide within
-  BlockCyclic, ///< Cyclic chunks: chunk k -> worker (k % totalWorkers)
-  Tiling2D ///< Matmul-oriented 2D worker grid (row ownership + column striping)
+  Flat,        ///  Single-level: all workers divide iterations equally
+  TwoLevel,    ///  Two-level: nodes get DB blocks, threads subdivide within
+  BlockCyclic, ///  Cyclic chunks: chunk k -> worker (k % totalWorkers)
+  Tiling2D ///  Matmul-oriented 2D worker grid (row ownership + column striping)
 };
 
 /// Machine topology analysis result (compile-time, no IR)
 struct DistributionStrategy {
   DistributionKind kind = DistributionKind::Flat;
-  int64_t numNodes = 1;        ///< Total nodes
-  int64_t workersPerNode = 1;  ///< Worker threads per node
-  int64_t totalWorkers = 1;    ///< numNodes * workersPerNode
-  bool useDbAlignment = false; ///< blockSize > 1 for DB boundary alignment
+  int64_t numNodes = 1;        ///  Total nodes
+  int64_t workersPerNode = 1;  ///  Worker threads per node
+  int64_t totalWorkers = 1;    ///  numNodes * workersPerNode
+  bool useDbAlignment = false; ///  blockSize > 1 for DB boundary alignment
 };
 
 /// Runtime distribution bounds (SSA Values emitted during lowering)
 struct DistributionBounds {
   /// Thread-level: inner loop bounds
-  Value iterStart;     ///< First iteration for this worker
-  Value iterCount;     ///< Actual iteration count
-  Value iterCountHint; ///< Max possible (for sizing)
-  Value hasWork;       ///< i1: does this worker have iterations?
+  Value iterStart;     ///  First iteration for this worker
+  Value iterCount;     ///  Actual iteration count
+  Value iterCountHint; ///  Max possible (for sizing)
+  Value hasWork;       ///  i1: does this worker have iterations?
 
   /// Acquire-level: DB acquire bounds
   /// For Flat: same as thread-level
   /// For TwoLevel: node-level (all threads on same node share same acquire)
-  Value acquireStart;    ///< First iteration of acquire range
-  Value acquireSize;     ///< Actual size
-  Value acquireSizeHint; ///< Max possible (partition_sizes hint)
+  Value acquireStart;    ///  First iteration of acquire range
+  Value acquireSize;     ///  Actual size
+  Value acquireSizeHint; ///  Max possible (partition_sizes hint)
 };
 
 /// Resolved worker topology for an EDT.

@@ -13,7 +13,7 @@
 #include "llvm/IR/InstrTypes.h"
 #include <sys/types.h>
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 
 namespace mlir {
 namespace arts {

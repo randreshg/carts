@@ -30,8 +30,8 @@ namespace arts {
 ///   indexChain = [%i, %j, %k]
 ///   dbRefPrefix = 2  (first 2 indices are from DbRefOp)
 struct AccessIndexInfo {
-  llvm::SmallVector<Value, 8> indexChain; ///< Complete chain of index values
-  unsigned dbRefPrefix = 0; ///< Number of indices from DbRefOp prefix
+  llvm::SmallVector<Value, 8> indexChain; ///  Complete chain of index values
+  unsigned dbRefPrefix = 0; ///  Number of indices from DbRefOp prefix
 };
 
 /// Loop-relative access bounds summary.
@@ -47,12 +47,12 @@ struct AccessIndexInfo {
 ///   - valid: True if analysis succeeded
 ///   - hasVariableOffset: True if non-constant offsets were detected
 struct AccessBoundsResult {
-  int64_t minOffset = 0;    ///< Minimum constant offset found
-  int64_t maxOffset = 0;    ///< Maximum constant offset found
-  int64_t centerOffset = 0; ///< Normalization center (for shifted stencils)
-  bool isStencil = false;   ///< True if min != max (multiple offsets)
-  bool valid = false;       ///< True if analysis completed successfully
-  bool hasVariableOffset = false; ///< True if non-constant offset detected
+  int64_t minOffset = 0;    ///  Minimum constant offset found
+  int64_t maxOffset = 0;    ///  Maximum constant offset found
+  int64_t centerOffset = 0; ///  Normalization center (for shifted stencils)
+  bool isStencil = false;   ///  True if min != max (multiple offsets)
+  bool valid = false;       ///  True if analysis completed successfully
+  bool hasVariableOffset = false; ///  True if non-constant offset detected
 };
 
 /// Normalize stencil bounds around zero for uniformly shifted stencils.

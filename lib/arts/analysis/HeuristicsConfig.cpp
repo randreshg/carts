@@ -8,15 +8,15 @@
 ///==========================================================================///
 
 #include "arts/analysis/HeuristicsConfig.h"
-#include "arts/analysis/graphs/db/DbNode.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/HeuristicUtils.h"
-#include "arts/ArtsDialect.h"
-#include "arts/utils/Debug.h"
+#include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/Debug.h"
+#include "arts/utils/ValueUtils.h"
 #include "arts/utils/metadata/IdRegistry.h"
 #include "arts/utils/metadata/LocationMetadata.h"
 #include "arts/utils/metadata/LoopMetadata.h"
-#include "arts/utils/ValueUtils.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include <cstdlib>
 
@@ -175,8 +175,7 @@ HeuristicsConfig::getPartitioningMode(const PartitioningContext &ctx) {
 /// H1.7: Per-Acquire Decisions
 ///===----------------------------------------------------------------------===///
 
-SmallVector<AcquireDecision>
-HeuristicsConfig::getAcquireDecisions(
+SmallVector<AcquireDecision> HeuristicsConfig::getAcquireDecisions(
     ArrayRef<const DbAcquirePartitionFacts *> acquireFacts) {
   SmallVector<AcquireDecision> decisions;
   decisions.reserve(acquireFacts.size());

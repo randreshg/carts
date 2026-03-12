@@ -98,7 +98,8 @@ private:
 
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createEdtDistributionPass(mlir::arts::AnalysisManager *AM) {
+std::unique_ptr<Pass>
+createEdtDistributionPass(mlir::arts::AnalysisManager *AM) {
   return std::make_unique<EdtDistributionPass>(AM);
 }
 } // namespace arts

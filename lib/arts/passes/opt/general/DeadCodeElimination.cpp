@@ -23,7 +23,7 @@
 ///==========================================================================///
 
 #include "../../PassDetails.h"
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"

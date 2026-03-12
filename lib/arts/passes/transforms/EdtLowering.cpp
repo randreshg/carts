@@ -25,15 +25,15 @@
 /// pass errors out otherwise to avoid bypassing runtime dependency semantics.
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
-#include "arts/ArtsDialect.h"
 #include "arts/codegen/Codegen.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
-#include "arts/utils/Utils.h"
 #include "arts/utils/DbUtils.h"
-#include "arts/utils/metadata/IdRegistry.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/metadata/IdRegistry.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"

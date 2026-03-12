@@ -8,7 +8,7 @@
 #ifndef ARTS_ANALYSIS_HEURISTICUTILS_H
 #define ARTS_ANALYSIS_HEURISTICUTILS_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 
 namespace mlir {
 

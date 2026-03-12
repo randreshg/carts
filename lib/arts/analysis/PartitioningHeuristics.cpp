@@ -5,7 +5,7 @@
 ///==========================================================================///
 
 #include "arts/analysis/PartitioningHeuristics.h"
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/HeuristicUtils.h"
 #include "arts/analysis/HeuristicsConfig.h"
 #include "arts/utils/Debug.h"
