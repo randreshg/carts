@@ -28,7 +28,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   Optimizations/ArtsInliner.cpp
   Optimizations/CanonicalizeMemrefs.cpp
   Optimizations/DataPointerHoisting.cpp
-  Optimizations/EdtScratchDbElimination.cpp
+  Optimizations/DbOpts.cpp
   Optimizations/EdtInvariantCodeMotion.cpp
   Optimizations/EpochOpt.cpp
   Optimizations/ArtsHoisting.cpp

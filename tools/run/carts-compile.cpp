@@ -412,6 +412,7 @@ void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   if (DistributedDb)
     pm.addPass(arts::createDistributedDbOwnershipPass(AM));
   pm.addPass(arts::createDbPass(AM));
+  pm.addPass(arts::createDbOptsPass());
   pm.addNestedPass<func::FuncOp>(arts::createBlockLoopStripMiningPass());
   pm.addPass(arts::createArtsHoistingPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
