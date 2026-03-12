@@ -15,6 +15,7 @@
 #include "arts/analysis/graphs/db/PartitionBoundsAnalyzer.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
