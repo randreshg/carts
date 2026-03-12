@@ -7,7 +7,7 @@
 #ifndef ARTS_ANALYSIS_GRAPHS_DB_DBNODE_H
 #define ARTS_ANALYSIS_GRAPHS_DB_DBNODE_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/graphs/base/NodeBase.h"
 #include "arts/analysis/graphs/db/DbAccessPattern.h"
 #include "arts/utils/metadata/MemrefMetadata.h"

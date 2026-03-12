@@ -7,7 +7,7 @@
 #ifndef ARTS_ANALYSIS_GRAPHS_DB_DBGRAPH_H
 #define ARTS_ANALYSIS_GRAPHS_DB_DBGRAPH_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "llvm/ADT/DenseMap.h"
 #include <functional>

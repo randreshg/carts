@@ -18,17 +18,17 @@
 ///     (users rewritten to the lowered pointer representation)
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/codegen/Codegen.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
 #include "arts/transforms/db/DbLayoutStrategy.h"
-#include "arts/utils/Debug.h"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/Debug.h"
 #include "arts/utils/EdtUtils.h"
-#include "arts/utils/metadata/IdRegistry.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/RemovalUtils.h"
+#include "arts/utils/metadata/IdRegistry.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"

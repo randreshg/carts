@@ -8,7 +8,7 @@
 #ifndef CARTS_CODEGEN_ARTSCODEGEN_H
 #define CARTS_CODEGEN_ARTSCODEGEN_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/codegen/Types.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"

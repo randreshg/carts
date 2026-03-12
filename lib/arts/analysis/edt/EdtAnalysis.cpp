@@ -3,7 +3,7 @@
 ///==========================================================================///
 
 #include "arts/analysis/edt/EdtAnalysis.h"
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/graphs/edt/EdtGraph.h"

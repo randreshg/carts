@@ -4,7 +4,7 @@
 ///==========================================================================///
 
 #include "arts/utils/RemovalUtils.h"
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/utils/Debug.h"
 #include "mlir/IR/Builders.h"
 

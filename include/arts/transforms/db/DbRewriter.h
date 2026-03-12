@@ -8,7 +8,7 @@
 #ifndef ARTS_TRANSFORMS_DATABLOCK_DBREWRITER_H
 #define ARTS_TRANSFORMS_DATABLOCK_DBREWRITER_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/transforms/db/DbIndexerBase.h"
 #include "arts/utils/Utils.h"
 #include "mlir/IR/Builders.h"

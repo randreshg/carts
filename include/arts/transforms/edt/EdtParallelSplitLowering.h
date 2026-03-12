@@ -7,7 +7,7 @@
 #ifndef ARTS_TRANSFORMS_EDT_EDTPARALLELSPLITLOWERING_H
 #define ARTS_TRANSFORMS_EDT_EDTPARALLELSPLITLOWERING_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/codegen/Codegen.h"
 #include "llvm/ADT/SetVector.h"
 
@@ -46,4 +46,3 @@ void cleanupOriginalParallel(EdtOp originalParallel,
 } // namespace mlir
 
 #endif // ARTS_TRANSFORMS_EDT_EDTPARALLELSPLITLOWERING_H
-

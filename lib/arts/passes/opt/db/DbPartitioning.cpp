@@ -35,12 +35,12 @@
 #include "mlir/Support/LLVM.h"
 /// Arts
 #include "../../PassDetails.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/graphs/db/DbGraph.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/analysis/loop/LoopNode.h"
-#include "arts/ArtsDialect.h"
 #include "arts/passes/Passes.h"
 /// Other
 #include "mlir/IR/OpDefinition.h"
@@ -64,11 +64,11 @@
 #include "arts/transforms/db/DbPartitionPlanner.h"
 #include "arts/transforms/db/DbRewriter.h"
 #include "arts/transforms/db/StencilBoundsLowering.h"
-#include "arts/utils/Debug.h"
-#include "arts/utils/Utils.h"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/Debug.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/Utils.h"
 ARTS_DEBUG_SETUP(db_partitioning);
 
 using namespace mlir;
@@ -195,12 +195,11 @@ static bool hasInternodeAcquireUser(ArrayRef<DbAcquireNode *> acquireNodes) {
   return false;
 }
 
-
 /// Analyze a single acquire to determine its partition mode and chunk info.
-static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
-                                                        DbAcquireNode *acqNode,
-                                                        const DbAcquirePartitionFacts *facts,
-                                                        OpBuilder &builder) {
+static AcquirePartitionInfo
+computeAcquirePartitionInfo(DbAcquireOp acquire, DbAcquireNode *acqNode,
+                            const DbAcquirePartitionFacts *facts,
+                            OpBuilder &builder) {
   AcquirePartitionInfo info;
   info.acquire = acquire;
   DbAnalysis::AcquirePartitionSummary summary;
@@ -224,8 +223,7 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
   info.isValid = summary.isValid;
   info.hasIndirectAccess =
       facts ? facts->hasIndirectAccess : summary.hasIndirectAccess;
-  info.hasDistributionContract =
-      facts ? facts->hasDistributionContract : false;
+  info.hasDistributionContract = facts ? facts->hasDistributionContract : false;
   info.preservesDependencyMode =
       static_cast<bool>(acquire.getPreserveDepMode());
 
@@ -976,22 +974,20 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
           idx < acquireFacts.size() ? acquireFacts[idx] : nullptr;
 
       /// Check access patterns for block capability decisions.
-      bool hasIndirect = facts ? facts->hasIndirectAccess
-                               : acqNode->hasIndirectAccess();
+      bool hasIndirect =
+          facts ? facts->hasIndirectAccess : acqNode->hasIndirectAccess();
 
       /// Read partition capability from acquire's attribute.
       /// ForLowering sets this to 'chunked' when adding offset/size hints.
       /// CreateDbs sets this based on DbControlOp analysis.
       auto acquire = acqNode->getDbAcquireOp();
       auto acquireMode = getPartitionMode(acquire.getOperation());
-      bool hasBlockHints =
-          facts ? facts->hasBlockHints
-                : (!acquire.getPartitionOffsets().empty() ||
-                   !acquire.getPartitionSizes().empty());
-      bool inferredBlock =
-          facts ? facts->inferredBlock
-                : (!acqInfo.partitionOffsets.empty() &&
-                   !acqInfo.partitionSizes.empty());
+      bool hasBlockHints = facts ? facts->hasBlockHints
+                                 : (!acquire.getPartitionOffsets().empty() ||
+                                    !acquire.getPartitionSizes().empty());
+      bool inferredBlock = facts ? facts->inferredBlock
+                                 : (!acqInfo.partitionOffsets.empty() &&
+                                    !acqInfo.partitionSizes.empty());
       if (auto blockHint = getPartitioningHint(acquire.getOperation())) {
         if (blockHint->mode == PartitionMode::block && blockHint->blockSize &&
             *blockHint->blockSize > 0) {
@@ -1034,7 +1030,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         thisAcquireCanBlock = true;
       bool thisAcquireCanElementWise =
           (acquireMode && *acquireMode == PartitionMode::fine_grained) ||
-          (facts && llvm::any_of(facts->entries, [](const DbPartitionEntryFact &entry) {
+          (facts &&
+           llvm::any_of(facts->entries, [](const DbPartitionEntryFact &entry) {
              return entry.partition.isFineGrained() &&
                     !entry.partition.indices.empty();
            }));
@@ -1047,22 +1044,20 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       Value partitionOffset =
           DbUtils::pickRepresentativePartitionOffset(offsetVals, &offsetIdx);
       if (partitionOffset) {
-        bool hasUnmappedEntry = facts && llvm::any_of(
-                                            facts->entries,
-                                            [](const DbPartitionEntryFact &entry) {
-                                              return entry.representativeOffset &&
-                                                     !entry.mappedDim;
-                                            });
+        bool hasUnmappedEntry =
+            facts &&
+            llvm::any_of(facts->entries, [](const DbPartitionEntryFact &entry) {
+              return entry.representativeOffset && !entry.mappedDim;
+            });
         if (hasUnmappedEntry) {
           bool writesThroughAcquire = acquire.getMode() == ArtsMode::out ||
                                       acquire.getMode() == ArtsMode::inout ||
                                       acqNode->hasStores();
           bool preserveFromExplicitContract =
-              facts && llvm::any_of(
-                           facts->entries,
-                           [](const DbPartitionEntryFact &entry) {
-                             return entry.preservesDistributedContract;
-                           });
+              facts && llvm::any_of(facts->entries,
+                                    [](const DbPartitionEntryFact &entry) {
+                                      return entry.preservesDistributedContract;
+                                    });
           if (preserveFromExplicitContract) {
             ARTS_DEBUG("  Partition offset not mappable by DbAcquireNode, but "
                        "preserving block capability from EDT distribution "
@@ -1808,7 +1803,8 @@ void DbPartitioningPass::invalidateAndRebuildGraph() {
 
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createDbPartitioningPass(mlir::arts::AnalysisManager *AM) {
+std::unique_ptr<Pass>
+createDbPartitioningPass(mlir::arts::AnalysisManager *AM) {
   return std::make_unique<DbPartitioningPass>(AM);
 }
 } // namespace arts

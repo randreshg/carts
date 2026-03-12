@@ -6,7 +6,7 @@
 ///==========================================================================///
 
 #include "arts/analysis/graphs/db/MemoryAccessClassifier.h"
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Utils.h"

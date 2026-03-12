@@ -5,7 +5,7 @@ add_mlir_dialect_library(MLIRArts
     ${PROJECT_SOURCE_DIR}/include/carts
 
   DEPENDS
-    MLIRArtsOpsIncGen
+    MLIROpsIncGen
 
   LINK_LIBS PUBLIC
     MLIRIR

@@ -7,7 +7,7 @@
 #ifndef ARTS_ANALYSIS_EDT_EDTINFO_H
 #define ARTS_ANALYSIS_EDT_EDTINFO_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Region.h"
 #include "mlir/IR/Value.h"

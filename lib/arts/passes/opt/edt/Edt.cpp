@@ -12,19 +12,19 @@
 ///==========================================================================///
 
 /// Dialects
-#include "arts/utils/Utils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/RemovalUtils.h"
+#include "arts/utils/Utils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Support/LLVM.h"
 /// Arts
-#include "arts/passes/PassDetails.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/graphs/edt/EdtGraph.h"
-#include "arts/ArtsDialect.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
 /// Other
 #include "mlir/IR/Dominance.h"
@@ -878,7 +878,8 @@ bool EdtPass::removeRedundantBarriersWithGraphs(func::FuncOp func,
 ////===----------------------------------------------------------------------===////
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createEdtPass(mlir::arts::AnalysisManager *AM, bool runAnalysis) {
+std::unique_ptr<Pass> createEdtPass(mlir::arts::AnalysisManager *AM,
+                                    bool runAnalysis) {
   return std::make_unique<EdtPass>(AM, runAnalysis);
 }
 std::unique_ptr<Pass> createEdtAllocaSinkingPass() {

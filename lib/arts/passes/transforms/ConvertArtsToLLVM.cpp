@@ -24,14 +24,14 @@
 #include "mlir/IR/Value.h"
 #include "polygeist/Ops.h"
 /// Arts
-#include "arts/passes/PassDetails.h"
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/codegen/Codegen.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
-#include "arts/utils/abstract_machine/AbstractMachine.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/ValueUtils.h"
+#include "arts/utils/abstract_machine/AbstractMachine.h"
 /// Others
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"

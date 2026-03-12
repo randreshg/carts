@@ -7,7 +7,7 @@
 #ifndef ARTS_ANALYSIS_GRAPHS_EDT_EDTGRAPH_H
 #define ARTS_ANALYSIS_GRAPHS_EDT_EDTGRAPH_H
 
-#include "arts/ArtsDialect.h" // For EdtOp
+#include "arts/Dialect.h" // For EdtOp
 #include "arts/analysis/graphs/base/EdgeBase.h"
 #include "arts/analysis/graphs/base/GraphBase.h"
 #include "arts/analysis/graphs/base/GraphTrait.h"

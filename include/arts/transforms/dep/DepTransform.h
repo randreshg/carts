@@ -29,8 +29,7 @@ public:
 
 /// Rewrite Jacobi copy+stencil timestep loops into alternating-buffer stencil
 /// phases before DB creation.
-std::unique_ptr<DepTransform>
-createJacobiAlternatingBuffersPattern();
+std::unique_ptr<DepTransform> createJacobiAlternatingBuffersPattern();
 
 /// Rewrite Seidel-style in-place 2D stencils into a tiled wavefront schedule
 /// after OpenMP-to-ARTS conversion so later task/DB passes see a scalable

@@ -3,7 +3,7 @@
 ///===----------------------------------------------------------------------===///
 
 #include "arts/utils/metadata/MemrefMetadata.h"
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/utils/metadata/Metadata.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"

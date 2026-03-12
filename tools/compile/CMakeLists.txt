@@ -17,7 +17,7 @@ set( LLVM_LINK_COMPONENTS
 )
 
 add_clang_executable(carts-compile
-  carts-compile.cpp
+  compile.cpp
 )
 
 install(
@@ -84,7 +84,7 @@ set(LIBS
 )
 
 target_link_libraries(carts-compile PRIVATE ${LIBS})
-add_dependencies(carts-compile MLIRArtsOpsIncGen MLIRArtsPassIncGen)
+add_dependencies(carts-compile MLIROpsIncGen MLIRArtsPassIncGen)
 
 if(CARTS_ENABLE_TESTS AND CARTS_TESTS_REQUIRE_INSTALLED_RUNNER)
   set(_carts_install_bin_dir ${CMAKE_INSTALL_PREFIX}/${CARTS_TOOLS_DIR})

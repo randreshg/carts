@@ -5,7 +5,7 @@
 ///==========================================================================///
 
 #include "arts/transforms/db/StencilBoundsLowering.h"
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"

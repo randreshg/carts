@@ -2,19 +2,19 @@
 file(GLOB CARTS_ANALYSIS_SOURCE_FILES CONFIGURE_DEPENDS "*.cpp")
 
 # Add the Db subdirectory
-add_subdirectory(Db)
+add_subdirectory(db)
 
 # Add the EDT subdirectory
-add_subdirectory(Edt)
+add_subdirectory(edt)
 
 # Add the Graphs subdirectory
-add_subdirectory(Graphs)
+add_subdirectory(graphs)
 
 # Add the Metadata subdirectory
-add_subdirectory(Metadata)
+add_subdirectory(metadata)
 
 # Add the Loop subdirectory
-add_subdirectory(Loop)
+add_subdirectory(loop)
 
 # Combine all analysis source files
 list(APPEND CARTS_ANALYSIS_SOURCE_FILES ${CARTS_DB_ANALYSIS_SOURCE_FILES})

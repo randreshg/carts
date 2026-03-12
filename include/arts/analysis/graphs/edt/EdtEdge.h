@@ -7,7 +7,7 @@
 #ifndef ARTS_ANALYSIS_GRAPHS_EDT_EDTEDGE_H
 #define ARTS_ANALYSIS_GRAPHS_EDT_EDTEDGE_H
 
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/graphs/base/EdgeBase.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMapInfo.h"

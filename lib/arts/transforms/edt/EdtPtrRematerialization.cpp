@@ -10,7 +10,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
 /// Arts
-#include "arts/ArtsDialect.h"
+#include "arts/Dialect.h"
 #include "arts/transforms/edt/EdtPtrRematerialization.h"
 #include "arts/utils/Utils.h"
 
