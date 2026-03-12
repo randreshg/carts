@@ -29,6 +29,15 @@ config.test_source_root = os.path.dirname(__file__)
 # Run tests in-place so that relative RUN lines keep working.
 config.test_exec_root = config.test_source_root
 
+# Keep llvm-lit resilient to interrupted writes or stray blank lines in the
+# per-suite timing cache.
+test_times_path = os.path.join(config.test_exec_root, ".lit_test_times.txt")
+if os.path.exists(test_times_path):
+    with open(test_times_path, "r") as time_file:
+        cleaned_lines = [line for line in time_file if line.split()]
+    with open(test_times_path, "w") as time_file:
+        time_file.writelines(cleaned_lines)
+
 # Determine locations of the installed toolchains.
 project_root = os.path.dirname(config.test_source_root)
 install_root = os.path.join(project_root, ".install")
