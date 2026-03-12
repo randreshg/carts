@@ -399,8 +399,8 @@ void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createDeadCodeEliminationPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
-  /// Scratch DB elimination and DCE can expose new zero-dependency or
-  /// degenerate EDTs; rerun the structural EDT cleanup before epoch shaping.
+  /// DbPass performs local DB cleanup after mode adjustment, which can expose
+  /// new zero-dependency or degenerate EDTs before epoch shaping.
   pm.addPass(arts::createEdtPass(AM, /*runAnalysis*/ false));
   pm.addPass(arts::createEpochOptPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());

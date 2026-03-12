@@ -1,10 +1,10 @@
 // RUN: %carts-compile %s --O3 --arts-config %S/../examples/arts.cfg --stop-at concurrency-opt | %FileCheck %s
 
 // CHECK-NOT: arts.db_alloc[<inout>, <stack>, <write>, <coarse>, <uniform>]
-// CHECK: %[[LOCAL:.*]] = memref.alloca() : memref<f64>
 // CHECK: arts.edt <task>
 // CHECK-SAME: (%[[OUT_PTR:.*]]) : memref<?xmemref<?xf64>>
 // CHECK: ^bb0(%[[OUT_ARG:.*]]: memref<?xmemref<?xf64>>):
+// CHECK: %[[LOCAL:.*]] = memref.alloca()
 // CHECK: memref.store %{{.*}}, %[[LOCAL]][] : memref<f64>
 // CHECK: %[[VALUE:.*]] = memref.load %[[LOCAL]][] : memref<f64>
 // CHECK: %[[OUT_REF:.*]] = arts.db_ref %[[OUT_ARG]][%{{.*}}] : memref<?xmemref<?xf64>> -> memref<?xf64>

@@ -35,6 +35,8 @@
 #include "arts/Utils/ValueUtils.h"
 #include <cstdlib>
 
+#include "DbOptimizations.h"
+
 ARTS_DEBUG_SETUP(db);
 
 using namespace mlir;
@@ -200,6 +202,10 @@ void DbPass::runOnOperation() {
 
   /// Adjust DB modes based on access patterns
   bool changed = adjustDbModes();
+
+  /// Clean up synthetic task-private scratch DBs while the DB graph facts and
+  /// EDT/block-argument structure are still intact.
+  changed |= eliminateEdtScratchDbs(module);
 
   if (changed) {
     ARTS_INFO(" Module has changed, invalidating analyses");
