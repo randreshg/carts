@@ -50,21 +50,32 @@ struct LoopNormalizationPass
     /// Phase 2: patterns.push_back(createLoopInterchangePattern(AM));
     /// Phase 2: patterns.push_back(createMatmulReductionPattern(AM));
 
-    /// Collect arts.for ops upfront (avoid iterator invalidation)
-    SmallVector<ForOp> artsFors;
-    module.walk([&](ForOp fo) { artsFors.push_back(fo); });
-
     int rewrites = 0;
-    for (ForOp fo : artsFors) {
-      OpBuilder builder(fo);
-      for (auto &pattern : patterns) {
-        if (pattern->match(fo)) {
-          ARTS_DEBUG("Matched " << pattern->getName()
-                                << " pattern on arts.for");
-          if (succeeded(pattern->apply(builder))) {
-            ARTS_INFO("Applied " << pattern->getName() << " pattern");
-            rewrites++;
-            break; /// first match wins per loop
+    bool changed = true;
+    while (changed) {
+      changed = false;
+
+      /// Collect arts.for ops upfront for this round (avoid iterator
+      /// invalidation while still allowing follow-on rewrites on newly created
+      /// arts.for ops in the next round).
+      SmallVector<ForOp> artsFors;
+      module.walk([&](ForOp fo) { artsFors.push_back(fo); });
+
+      for (ForOp fo : artsFors) {
+        if (!fo || !fo->getBlock())
+          continue;
+
+        OpBuilder builder(fo);
+        for (auto &pattern : patterns) {
+          if (pattern->match(fo)) {
+            ARTS_DEBUG("Matched " << pattern->getName()
+                                  << " pattern on arts.for");
+            if (succeeded(pattern->apply(builder))) {
+              ARTS_INFO("Applied " << pattern->getName() << " pattern");
+              rewrites++;
+              changed = true;
+              break; /// first match wins per loop per round
+            }
           }
         }
       }
