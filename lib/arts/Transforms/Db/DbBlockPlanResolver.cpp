@@ -174,23 +174,42 @@ choosePartitionedDims(DbAllocOp allocOp, ArrayRef<AcquirePartitionInfo> infos,
 
   int bestScore = std::numeric_limits<int>::max();
   bool bestFromFine = false;
+  SmallVector<const AcquirePartitionInfo *, 8> preferredInfos;
+  for (const auto &info : infos) {
+    if (!info.hasDistributionContract)
+      continue;
+    if (info.partitionDims.size() != nPartDims)
+      continue;
+    preferredInfos.push_back(&info);
+  }
 
-  for (const auto &candidate : infos) {
-    if (candidate.needsFullRange)
-      continue;
+  auto forEachVotingInfo =
+      [&](llvm::function_ref<void(const AcquirePartitionInfo &)> fn) {
+        if (!preferredInfos.empty()) {
+          for (const AcquirePartitionInfo *info : preferredInfos)
+            fn(*info);
+          return;
+        }
+        for (const auto &info : infos)
+          fn(info);
+      };
+
+  forEachVotingInfo([&](const AcquirePartitionInfo &candidate) {
+    if (preferredInfos.empty() && candidate.needsFullRange)
+      return;
     if (candidate.partitionDims.size() != nPartDims)
-      continue;
+      return;
 
     int score = 0;
-    for (const auto &info : infos) {
-      if (info.needsFullRange)
-        continue;
+    forEachVotingInfo([&](const AcquirePartitionInfo &info) {
+      if (preferredInfos.empty() && info.needsFullRange)
+        return;
       if (info.partitionDims.empty() || info.partitionDims.size() != nPartDims)
-        continue;
+        return;
       if (!dimsEqual(info.partitionDims, candidate.partitionDims)) {
         score += (info.mode == PartitionMode::fine_grained) ? 2 : 1;
       }
-    }
+    });
 
     bool fromFine = candidate.mode == PartitionMode::fine_grained;
     if (score < bestScore ||
@@ -200,7 +219,7 @@ choosePartitionedDims(DbAllocOp allocOp, ArrayRef<AcquirePartitionInfo> infos,
       chosen.assign(candidate.partitionDims.begin(),
                     candidate.partitionDims.end());
     }
-  }
+  });
 
   if (!chosen.empty()) {
     SmallVector<bool> seen(allocOp.getElementSizes().size(), false);

@@ -54,6 +54,11 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
         }
         return false;
       });
+  bool hasTrustedStencilAcquire =
+      llvm::any_of(ctx.acquires, [](const AcquireInfo &info) {
+        return info.accessPattern == AccessPattern::Stencil &&
+               !info.partitionDimsFromPeers;
+      });
 
   ///===--------------------------------------------------------------------===///
   /// Coarse Partitioning Heuristics (H1.C*)
@@ -168,7 +173,8 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   if (patterns.hasStencil && ctx.canBlock) {
     bool hasStencilReads = llvm::any_of(ctx.acquires, [](const AcquireInfo &a) {
       return (a.accessMode == ArtsMode::in) &&
-             (a.accessPattern == AccessPattern::Stencil);
+             (a.accessPattern == AccessPattern::Stencil) &&
+             !a.partitionDimsFromPeers;
     });
     bool hasWriteAcquires =
         llvm::any_of(ctx.acquires, [](const AcquireInfo &a) {
@@ -245,6 +251,12 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   ///===--------------------------------------------------------------------===///
 
   if (patterns.hasStencil) {
+    if (!hasTrustedStencilAcquire && ctx.canBlock) {
+      ARTS_DEBUG("H1.S0 applied: peer-inferred dims keep block mode");
+      return PartitioningDecision::block(
+          ctx, "H1.S0: Peer-inferred partition dims keep block mode");
+    }
+
     /// H1.S1: Stencil unsupported for block → Element-wise fallback
     if (!ctx.canBlock || ctx.hasIndirectAccess) {
       ARTS_DEBUG(

@@ -28,6 +28,7 @@ struct AcquirePartitionInfo {
   AccessPattern accessPattern = AccessPattern::Unknown;
   bool isValid = false;
   bool hasIndirectAccess = false;
+  bool hasDistributionContract = false;
   /// Explicit task/control dependencies must not be weakened into stencil-only
   /// ordering later in the partitioning pipeline.
   bool preservesDependencyMode = false;
