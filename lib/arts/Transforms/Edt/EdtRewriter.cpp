@@ -94,13 +94,29 @@ DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
   SmallVector<Value> dependencySizes(workerHintSizes.begin(),
                                      workerHintSizes.end());
 
-  for (unsigned i = 0; i < in.extraOffsets.size(); ++i) {
-    Value extraOffset = in.extraOffsets[i];
-    Value extraHint =
-        i < in.extraHintSizes.size() ? in.extraHintSizes[i] : Value();
-    Value extraSize = i < in.extraSizes.size() ? in.extraSizes[i] : one;
-    dependencyOffsets.push_back(extraOffset ? extraOffset : zero);
-    dependencySizes.push_back(extraHint ? extraHint : extraSize);
+  /// For read-only acquires, the worker-local range is a planning hint, not
+  /// yet the authoritative dependency slice. Preserve the parent dependency
+  /// range unless stencil halo rewriting explicitly widened the task window.
+  /// This keeps block-planning legality separate from the EDT-local compute
+  /// slice and avoids baking mixed-orientation worker chunks into rec_dep
+  /// ranges too early.
+  bool useParentDependencyRange =
+      in.parentAcquire.getMode() == ArtsMode::in && !applyStencilHalo &&
+      !in.parentAcquire.getOffsets().empty() && !in.parentAcquire.getSizes().empty();
+  if (useParentDependencyRange) {
+    dependencyOffsets.assign(in.parentAcquire.getOffsets().begin(),
+                             in.parentAcquire.getOffsets().end());
+    dependencySizes.assign(in.parentAcquire.getSizes().begin(),
+                           in.parentAcquire.getSizes().end());
+  } else {
+    for (unsigned i = 0; i < in.extraOffsets.size(); ++i) {
+      Value extraOffset = in.extraOffsets[i];
+      Value extraHint =
+          i < in.extraHintSizes.size() ? in.extraHintSizes[i] : Value();
+      Value extraSize = i < in.extraSizes.size() ? in.extraSizes[i] : one;
+      dependencyOffsets.push_back(extraOffset ? extraOffset : zero);
+      dependencySizes.push_back(extraHint ? extraHint : extraSize);
+    }
   }
 
   return in.AC->create<DbAcquireOp>(
