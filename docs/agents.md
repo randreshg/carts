@@ -340,12 +340,13 @@ carts compile <file>.mlir --stop-at=loop-reordering
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --stop-at=loop-reordering --debug-only=loop_reordering,loop_transforms 2>&1
+carts compile <file>.mlir --stop-at=loop-reordering --debug-only=loop_reordering,kernel_transforms 2>&1
 ```
 
 **Passes Executed:**
 - `LoopReordering` - Apply loop interchange transformations
-- `ArtsLoopTransforms` - Matmul transforms + optional tiling (reduction-aware)
+- `ArtsKernelTransforms` - Kernel-form transforms such as matmul reduction
+  distribution
 - `CSE` - Common subexpression elimination
 
 **Critical Ordering:** **MUST run BEFORE create-dbs** because:

@@ -111,22 +111,23 @@ static cl::opt<std::string> DiagnoseOutput(
     "diagnose-output", cl::desc("Output file for diagnostic JSON export"),
     cl::value_desc("filename"), cl::init(".carts-diagnose.json"));
 
-/// Loop transforms options (Stage: loop-reordering)
-static cl::opt<bool> LoopTransformsEnableMatmul(
+/// Kernel transform options (Stage: loop-reordering)
+static cl::opt<bool> KernelTransformsEnableMatmul(
     "loop-transforms-enable-matmul",
     cl::desc("Enable reduction-aware matmul transforms (dot -> update form)"),
     cl::init(true));
 
 static cl::opt<bool>
-    LoopTransformsEnableTiling("loop-transforms-enable-tiling",
-                               cl::desc("Enable tiling for loop transforms"),
-                               cl::init(true));
+    KernelTransformsEnableTiling("loop-transforms-enable-tiling",
+                                 cl::desc("Enable tiling for kernel transforms"),
+                                 cl::init(true));
 
-static cl::opt<int64_t> LoopTransformsTileJ(
+static cl::opt<int64_t> KernelTransformsTileJ(
     "loop-transforms-tile-j",
-    cl::desc("Tile size for j-dimension in loop transforms"), cl::init(64));
+    cl::desc("Tile size for j-dimension in kernel transforms"),
+    cl::init(64));
 
-static cl::opt<int64_t> LoopTransformsMinTripCount(
+static cl::opt<int64_t> KernelTransformsMinTripCount(
     "loop-transforms-min-trip-count",
     cl::desc("Minimum constant trip count required to apply tiling"),
     cl::init(128));
@@ -309,6 +310,7 @@ void setupInitialCleanup(OpPassManager &optPM) {
 /// OpenMP to ARTS conversion pass.
 void setupOpenMPToArts(PassManager &pm) {
   pm.addPass(arts::createConvertOpenMPtoArtsPass());
+  pm.addPass(arts::createArtsDepTransformsPass());
   pm.addPass(arts::createDeadCodeEliminationPass());
   pm.addPass(createCSEPass());
 }
@@ -326,12 +328,11 @@ void setupEdtTransforms(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 /// Loop reordering pass
 void setupLoopReordering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createLoopNormalizationPass(AM));
-  pm.addPass(arts::createArtsDepTransformsPass());
   pm.addPass(arts::createStencilBoundaryPeelingPass());
   pm.addPass(arts::createLoopReorderingPass(AM));
-  pm.addPass(arts::createLoopTransformsPass(
-      AM, LoopTransformsEnableMatmul, LoopTransformsEnableTiling,
-      LoopTransformsTileJ, LoopTransformsMinTripCount));
+  pm.addPass(arts::createArtsKernelTransformsPass(
+      AM, KernelTransformsEnableMatmul, KernelTransformsEnableTiling,
+      KernelTransformsTileJ, KernelTransformsMinTripCount));
   /// Multinode execution needs eligible host producer loops to flow through
   /// the regular arts.for/EDT pipeline before CreateDbs; otherwise serial host
   /// writes between distributed phases bypass the normal DB acquire/release

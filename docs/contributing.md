@@ -68,7 +68,7 @@ Follow LLVM conventions:
 
 3. **Always run** `carts lit tests/contracts/<changed-test>.mlir` for focused compiler changes, and `carts test` before submitting
 4. **For distributed changes**, run the 3-mode benchmark workflow in:
-   - `docs/testing/benchmark-modes.md`
+   - `docs/benchmarks/modes.md`
 
 ## Commit Guidelines
 
