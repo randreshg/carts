@@ -12,6 +12,7 @@
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Edt/EdtAnalysis.h"
 #include "arts/Analysis/Graphs/Db/BlockInfoComputer.h"
+#include "arts/Analysis/Graphs/Db/DbDimAnalyzer.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/Analysis/Graphs/Db/MemoryAccessClassifier.h"
@@ -298,14 +299,13 @@ DbAcquireNode::getPartitionOffsetDim(Value offset, bool requireLeading) {
                                                         requireLeading);
 }
 
-bool DbAcquireNode::needsFullRange(Value partOffset) {
-  return PartitionBoundsAnalyzer::needsFullRange(this, partOffset);
+const DbAcquirePartitionFacts &DbAcquireNode::getPartitionFacts() const {
+  if (!partitionFacts)
+    partitionFacts = DbDimAnalyzer::compute(const_cast<DbAcquireNode *>(this));
+  return *partitionFacts;
 }
 
-bool DbAcquireNode::shouldPreserveDistributedContract(Value partOffset) {
-  return PartitionBoundsAnalyzer::shouldPreserveDistributedContract(this,
-                                                                   partOffset);
-}
+void DbAcquireNode::invalidatePartitionFacts() const { partitionFacts.reset(); }
 
 ///===----------------------------------------------------------------------===///
 /// Block Info Methods -- delegate to BlockInfoComputer

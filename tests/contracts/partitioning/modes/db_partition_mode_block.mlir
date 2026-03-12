@@ -1,3 +1,8 @@
-// RUN: %carts-compile %S/../examples/jacobi/for/jacobi-for.mlir --O3 --arts-config %S/../examples/arts.cfg --stop-at concurrency-opt | %FileCheck %s
+// RUN: %carts-compile %S/../../../examples/rows/chunks/rowchunk.mlir --O3 --arts-config %S/../../../examples/arts.cfg --stop-at concurrency-opt | %FileCheck %s
 
-// CHECK: partitioning(<block>)
+// CHECK-LABEL: func.func @main
+// CHECK: arts.db_alloc[{{.*}}<block>, <uniform>{{.*}}]
+// CHECK: arts.db_acquire[<in>] ({{.*}}) partitioning(<block>, offsets[
+// CHECK-SAME: ]), offsets[
+// CHECK: arts.db_acquire[<inout>] ({{.*}}) partitioning(<block>, offsets[
+// CHECK-SAME: ]), offsets[

@@ -176,37 +176,45 @@ HeuristicsConfig::getPartitioningMode(const PartitioningContext &ctx) {
 ///===----------------------------------------------------------------------===///
 
 SmallVector<AcquireDecision>
-HeuristicsConfig::getAcquireDecisions(const PartitioningContext &ctx,
-                                      ArrayRef<DbAcquireNode *> acquireNodes,
-                                      ArrayRef<Value> partitionOffsets) {
+HeuristicsConfig::getAcquireDecisions(
+    ArrayRef<const DbAcquirePartitionFacts *> acquireFacts) {
   SmallVector<AcquireDecision> decisions;
-  decisions.reserve(acquireNodes.size());
+  decisions.reserve(acquireFacts.size());
 
-  for (auto [acqNode, offset] : llvm::zip(acquireNodes, partitionOffsets)) {
+  for (const DbAcquirePartitionFacts *facts : acquireFacts) {
     AcquireDecision decision;
+    if (!facts) {
+      decisions.push_back(decision);
+      continue;
+    }
 
-    bool preserveDistributionContract =
-        acqNode && acqNode->shouldPreserveDistributedContract(offset);
+    bool preserveDistributionContract = llvm::any_of(
+        facts->entries, [](const DbPartitionEntryFact &entry) {
+          return entry.preservesDistributedContract;
+        });
+    bool needsFullRange =
+        llvm::any_of(facts->entries, [](const DbPartitionEntryFact &entry) {
+          return entry.needsFullRange;
+        });
+
     if (preserveDistributionContract) {
       ARTS_DEBUG("H1.7: preserving distributed acquire without forcing "
                  "full-range");
     }
 
-    if (acqNode && acqNode->needsFullRange(offset) &&
-        !preserveDistributionContract) {
+    if (needsFullRange && !preserveDistributionContract) {
       decision.needsFullRange = true;
       decision.canContributeBlockSize = false;
-      decision.rationale = acqNode->hasIndirectAccess()
+      decision.rationale = facts->hasIndirectAccess
                                ? "indirect access pattern"
                                : "partition offset not in access pattern";
 
       recordDecision("H1.7-AcquireFullRange", true,
                      "acquire needs full range: " + decision.rationale,
-                     acqNode->getDbAcquireOp(), {});
+                     facts->acquire, {});
 
-      ARTS_DEBUG("H1.7: Acquire " << acqNode->getDbAcquireOp()
-                                  << " needs full-range (" << decision.rationale
-                                  << ")");
+      ARTS_DEBUG("H1.7: acquire needs full-range (" << decision.rationale
+                                                    << ")");
     }
 
     decisions.push_back(decision);
