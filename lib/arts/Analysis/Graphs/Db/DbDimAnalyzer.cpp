@@ -5,6 +5,8 @@
 ///==========================================================================///
 
 #include "arts/Analysis/Graphs/Db/DbDimAnalyzer.h"
+#include "arts/Analysis/Db/DbAnalysis.h"
+#include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/MemoryAccessClassifier.h"
 #include "arts/Analysis/Graphs/Db/PartitionBoundsAnalyzer.h"
 #include "arts/Utils/DbUtils.h"
@@ -134,8 +136,118 @@ static void markLeadingDynamicDims(DbAcquireNode *node,
 static bool hasDistributionContract(DbAcquireOp acquire) {
   auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
   (void)blockArg;
-  return edt && (getEdtDistributionKind(edt.getOperation()) ||
-                 getEdtDistributionPattern(edt.getOperation()));
+  if (edt && (getEdtDistributionKind(edt.getOperation()) ||
+              getEdtDistributionPattern(edt.getOperation())))
+    return true;
+
+  if (auto epoch = acquire->getParentOfType<EpochOp>())
+    return getEdtDistributionKind(epoch.getOperation()) ||
+           getEdtDistributionPattern(epoch.getOperation());
+
+  return false;
+}
+
+static SmallVector<unsigned, 4>
+collectMappedEntryDims(ArrayRef<DbPartitionEntryFact> entries) {
+  SmallVector<unsigned, 4> mappedDims;
+  SmallVector<unsigned, 4> seenDims;
+  for (const DbPartitionEntryFact &entry : entries) {
+    if (!entry.representativeOffset || !entry.mappedDim)
+      return {};
+    if (llvm::is_contained(seenDims, *entry.mappedDim))
+      return {};
+
+    seenDims.push_back(*entry.mappedDim);
+    mappedDims.push_back(*entry.mappedDim);
+  }
+  return mappedDims;
+}
+
+static SmallVector<unsigned, 4>
+collectDistributedPeerDims(DbAcquireNode *node) {
+  if (!node || !node->getAnalysis())
+    return {};
+
+  DbAcquireOp acquire = node->getDbAcquireOp();
+  if (!acquire)
+    return {};
+
+  Operation *scope = nullptr;
+  if (auto epoch = acquire->getParentOfType<EpochOp>())
+    scope = epoch.getOperation();
+  else if (auto edt = acquire->getParentOfType<EdtOp>())
+    scope = edt.getOperation();
+  if (!scope)
+    return {};
+
+  func::FuncOp func = acquire->getParentOfType<func::FuncOp>();
+  if (!func)
+    return {};
+
+  DbGraph &graph = node->getAnalysis()->getOrCreateGraph(func);
+  SmallVector<unsigned, 4> agreedDims;
+  bool sawCandidate = false;
+  bool conflict = false;
+
+  scope->walk([&](DbAcquireOp peer) {
+    if (conflict || peer == acquire)
+      return WalkResult::advance();
+
+    DbAcquireNode *peerNode = graph.getDbAcquireNode(peer);
+    if (!peerNode)
+      return WalkResult::advance();
+
+    SmallVector<PartitionInfo, 2> peerEntries = collectPartitionEntries(peer);
+    if (peerEntries.empty())
+      return WalkResult::advance();
+
+    SmallVector<DbPartitionEntryFact, 2> peerEntryFacts;
+    for (const PartitionInfo &peerEntry : peerEntries) {
+      DbPartitionEntryFact fact;
+      std::tie(fact.representativeOffset, fact.representativeSize) =
+          pickRepresentativeRange(peerEntry.mode, peerEntry);
+      if (fact.representativeOffset) {
+        fact.mappedDim = peerNode->getPartitionOffsetDim(
+            fact.representativeOffset, /*requireLeading=*/false);
+      }
+      peerEntryFacts.push_back(std::move(fact));
+    }
+
+    SmallVector<unsigned, 4> peerDims = collectMappedEntryDims(peerEntryFacts);
+    if (peerDims.empty())
+      return WalkResult::advance();
+
+    if (!sawCandidate) {
+      agreedDims = peerDims;
+      sawCandidate = true;
+      return WalkResult::advance();
+    }
+
+    if (agreedDims.size() != peerDims.size() ||
+        !llvm::equal(agreedDims, peerDims))
+      conflict = true;
+    return WalkResult::advance();
+  });
+
+  if (conflict || !sawCandidate)
+    return {};
+  return agreedDims;
+}
+
+static void inferPartitionDims(DbAcquireNode *node, DbAcquirePartitionFacts &facts) {
+  facts.partitionDims = collectMappedEntryDims(facts.entries);
+  if (!facts.partitionDims.empty() || !facts.hasDistributionContract)
+    return;
+
+  bool preservesDistributedContract =
+      llvm::any_of(facts.entries, [](const DbPartitionEntryFact &entry) {
+        return entry.preservesDistributedContract;
+      });
+  if (!preservesDistributedContract)
+    return;
+
+  facts.partitionDims = collectDistributedPeerDims(node);
+  facts.partitionDimsFromPeers = !facts.partitionDims.empty();
 }
 
 } // namespace
@@ -167,8 +279,7 @@ DbAcquirePartitionFacts DbDimAnalyzer::compute(DbAcquireNode *node) {
   markLeadingDynamicDims(node, facts);
 
   SmallVector<PartitionInfo, 2> entries = collectPartitionEntries(acquire);
-  facts.inferredBlock =
-      llvm::any_of(entries, [](const PartitionInfo &entry) {
+  facts.inferredBlock = llvm::any_of(entries, [](const PartitionInfo &entry) {
         return !entry.offsets.empty() && !entry.sizes.empty();
       });
 
@@ -198,6 +309,8 @@ DbAcquirePartitionFacts DbDimAnalyzer::compute(DbAcquireNode *node) {
 
     facts.entries.push_back(std::move(fact));
   }
+
+  inferPartitionDims(node, facts);
 
   for (unsigned dim : fullRangeDims) {
     if (dim < facts.dims.size())
