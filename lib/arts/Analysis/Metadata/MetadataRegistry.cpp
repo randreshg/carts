@@ -53,8 +53,7 @@ MemrefMetadata *MetadataRegistry::getMemrefMetadata(Operation *op) {
   return getMetadata<MemrefMetadata>(op);
 }
 
-const MemrefMetadata *
-MetadataRegistry::getMemrefMetadata(Operation *op) const {
+const MemrefMetadata *MetadataRegistry::getMemrefMetadata(Operation *op) const {
   return getMetadata<MemrefMetadata>(op);
 }
 
@@ -83,8 +82,7 @@ ValueMetadata *MetadataRegistry::getValueMetadata(Operation *op) {
   return getMetadata<ValueMetadata>(op);
 }
 
-const ValueMetadata *
-MetadataRegistry::getValueMetadata(Operation *op) const {
+const ValueMetadata *MetadataRegistry::getValueMetadata(Operation *op) const {
   return getMetadata<ValueMetadata>(op);
 }
 
@@ -150,8 +148,7 @@ void MetadataRegistry::collectFromModule(ModuleOp module) {
 /// Iteration and Inspection
 ///===----------------------------------------------------------------------===///
 
-SmallVector<Operation *>
-MetadataRegistry::getOperationsWithMetadata() const {
+SmallVector<Operation *> MetadataRegistry::getOperationsWithMetadata() const {
   SmallVector<Operation *> ops;
   ops.reserve(metadataMap.size());
 

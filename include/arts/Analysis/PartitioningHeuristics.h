@@ -6,13 +6,18 @@
 /// Decides coarse/block/element-wise allocation strategy for datablocks.
 ///
 /// H1 Partitioning Heuristics (evaluated in priority order):
-///   H1.1: Read-only single-node -> coarse
-///   H1.1b: Read-only + all full-range block acquires -> coarse
-///   H1.2: Mixed access (block writes + indirect reads) -> block
-///   H1.3: Stencil/indexed patterns -> stencil or block/element-wise
-///   H1.4: Uniform direct access -> block
-///   H1.5: Multi-node -> fine-grained for network efficiency
-///   H1.6: Non-uniform access -> coarse
+///   H1.C1: Pointer-of-pointer element type -> coarse
+///   H1.C2: Read-only single-node -> coarse
+///   H1.C3: Any coarse acquire consumer -> coarse
+///   H1.C4: Neither element-wise nor block capable -> coarse
+///   H1.B1: Indirect reads + block writes -> block
+///   H1.B2: Uniform direct access -> block
+///   H1.B3: Double-buffer stencil (Jacobi) -> block
+///   H1.B4: Indexed access with block support -> block
+///   H1.S1: Element-wise stencil -> stencil/ESD
+///   H1.S2: Block-capable stencil -> stencil/ESD
+///   H1.E1: Element-wise capable -> element-wise
+///   H1.F:  Fallback -> coarse or fine-grained (CLI option)
 ///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_PARTITIONINGHEURISTICS_H
@@ -58,6 +63,7 @@ struct AcquireInfo {
   PartitionMode partitionMode = PartitionMode::coarse;
   bool canElementWise = false;
   bool canBlock = false;
+  AccessPattern accessPattern = AccessPattern::Unknown;
 
   /// Unified partition infos from DbAcquireOp::getPartitionInfos()
   /// One entry per depend clause entry on this acquire.

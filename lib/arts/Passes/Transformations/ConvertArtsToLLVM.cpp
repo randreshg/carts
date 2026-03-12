@@ -442,7 +442,8 @@ private:
 
   /// Emit the appropriate runtime call for recording a dependency.
   /// Standard path: arts_add_dependence(dbGuid, edtGuid, slot, mode)
-  /// ESD path: arts_add_dependence_at(dbGuid, edtGuid, slot, mode, offset, size)
+  /// ESD path: arts_add_dependence_at(dbGuid, edtGuid, slot, mode, offset,
+  /// size)
   void emitRecordDepCall(Value dbGuidValue, Value edtGuidValue,
                          Value currentSlotI32, Value modeValue,
                          Value byteOffsetI64, Value byteSizeI64,
@@ -800,10 +801,8 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
       } else {
         /// Dynamic memref case - get size from memref
         auto zeroIndex = AC->createIndexConstant(0, loc);
-        auto memrefSize =
-            AC->create<memref::DimOp>(loc, paramv, zeroIndex);
-        paramc =
-            AC->create<arith::IndexCastOp>(loc, AC->Int32, memrefSize);
+        auto memrefSize = AC->create<memref::DimOp>(loc, paramv, zeroIndex);
+        paramc = AC->create<arith::IndexCastOp>(loc, AC->Int32, memrefSize);
       }
     } else {
       paramc = AC->createIntConstant(0, AC->Int32, loc);
@@ -818,26 +817,23 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
         op->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsCreateId);
     Value artsIdVal;
     if (createIdAttr)
-      artsIdVal =
-          AC->create<arith::ConstantOp>(loc, AC->Int64, createIdAttr);
+      artsIdVal = AC->create<arith::ConstantOp>(loc, AC->Int64, createIdAttr);
     else
       artsIdVal = AC->createIntConstant(0, AC->Int64, loc);
 
     /// Stack-allocate arts_hint_t and populate fields
-    Value hintAlloc = AC->create<LLVM::AllocaOp>(
-        loc, AC->llvmPtr, AC->ArtsHintType,
-        AC->createIntConstant(1, AC->Int32, loc));
+    Value hintAlloc =
+        AC->create<LLVM::AllocaOp>(loc, AC->llvmPtr, AC->ArtsHintType,
+                                   AC->createIntConstant(1, AC->Int32, loc));
     auto c0 = AC->createIntConstant(0, AC->Int32, loc);
     auto c1 = AC->createIntConstant(1, AC->Int32, loc);
     /// Store route into field 0
     Value routeFieldPtr = AC->create<LLVM::GEPOp>(
-        loc, AC->llvmPtr, AC->ArtsHintType, hintAlloc,
-        ValueRange{c0, c0});
+        loc, AC->llvmPtr, AC->ArtsHintType, hintAlloc, ValueRange{c0, c0});
     AC->create<LLVM::StoreOp>(loc, route, routeFieldPtr);
     /// Store arts_id into field 1
     Value idFieldPtr = AC->create<LLVM::GEPOp>(
-        loc, AC->llvmPtr, AC->ArtsHintType, hintAlloc,
-        ValueRange{c0, c1});
+        loc, AC->llvmPtr, AC->ArtsHintType, hintAlloc, ValueRange{c0, c1});
     AC->create<LLVM::StoreOp>(loc, artsIdVal, idFieldPtr);
 
     /// Cast !llvm.ptr to ArtsHintTypePtr memref for runtime call
@@ -1356,15 +1352,14 @@ private:
     Value elemSize64 = AC->ensureI64(elementSize, loc);
 
     /// Build arts_hint_t with arts_id if available
-    Value hintAlloc = AC->create<LLVM::AllocaOp>(
-        loc, AC->llvmPtr, AC->ArtsHintType,
-        AC->createIntConstant(1, AC->Int32, loc));
+    Value hintAlloc =
+        AC->create<LLVM::AllocaOp>(loc, AC->llvmPtr, AC->ArtsHintType,
+                                   AC->createIntConstant(1, AC->Int32, loc));
     auto c0 = AC->createIntConstant(0, AC->Int32, loc);
     auto c1 = AC->createIntConstant(1, AC->Int32, loc);
     /// Store route=0 into field 0
     Value routeFieldPtr = AC->create<LLVM::GEPOp>(
-        loc, AC->llvmPtr, AC->ArtsHintType, hintAlloc,
-        ValueRange{c0, c0});
+        loc, AC->llvmPtr, AC->ArtsHintType, hintAlloc, ValueRange{c0, c0});
     AC->create<LLVM::StoreOp>(loc, c0, routeFieldPtr);
     /// Store arts_id into field 1
     Value artsIdValue;
@@ -1372,14 +1367,12 @@ private:
       Value baseArtsId = AC->create<arith::ConstantOp>(
           loc, AC->Int64, AC->getBuilder().getI64IntegerAttr(*nextId));
       Value linearIndex64 = AC->ensureI64(linearIndex, loc);
-      artsIdValue =
-          AC->create<arith::AddIOp>(loc, baseArtsId, linearIndex64);
+      artsIdValue = AC->create<arith::AddIOp>(loc, baseArtsId, linearIndex64);
     } else {
       artsIdValue = AC->createIntConstant(0, AC->Int64, loc);
     }
     Value idFieldPtr = AC->create<LLVM::GEPOp>(
-        loc, AC->llvmPtr, AC->ArtsHintType, hintAlloc,
-        ValueRange{c0, c1});
+        loc, AC->llvmPtr, AC->ArtsHintType, hintAlloc, ValueRange{c0, c1});
     AC->create<LLVM::StoreOp>(loc, artsIdValue, idFieldPtr);
 
     /// Cast !llvm.ptr to ArtsHintTypePtr memref for runtime call

@@ -34,6 +34,12 @@ ARTS_DEBUG_SETUP(acquire_rewrite_planning);
 
 namespace {
 
+/// Check if a value has any reachable read accesses within a given scope.
+///
+/// This is used to determine if an inout acquire actually reads from the DB
+/// (e.g., in-place updates) vs. just writing to it (e.g., pure output).
+///
+/// Returns: true if any read access is found, false otherwise
 static bool hasReachableReadAccess(Value source, Region &scope) {
   bool hasRead = false;
   DbUtils::forEachReachableMemoryAccess(
@@ -49,6 +55,20 @@ static bool hasReachableReadAccess(Value source, Region &scope) {
   return hasRead;
 }
 
+/// Determine if a DbAcquire operation has any read accesses in its EDT body.
+///
+/// This analyzes the data flow from the acquire's EDT block argument through
+/// casts, views, and other operations to find any load operations or memory
+/// effects that read from the acquired memory.
+///
+/// Key analysis:
+///   - Follows value through casts (memref.cast, memref.subview, etc.)
+///   - Follows value through DbRefOp (ARTS-specific reference operations)
+///   - Checks for explicit loads (memref.load)
+///   - Checks for memory read effects on operations
+///   - Handles nested EDT dependencies
+///
+/// Returns: true if any read access is found, false otherwise
 static bool acquireHasReadAccess(DbAcquireOp acquire) {
   if (!acquire)
     return false;
@@ -57,6 +77,7 @@ static bool acquireHasReadAccess(DbAcquireOp acquire) {
   if (!edt || !edtArg)
     return false;
 
+  /// Work list-based traversal to avoid deep recursion and handle cycles
   SmallVector<Value, 16> worklist{edtArg};
   llvm::SmallPtrSet<Value, 32> visited;
 
@@ -166,8 +187,32 @@ static bool acquireHasReadAccess(DbAcquireOp acquire) {
 
 } // namespace
 
+/// Plan how to rewrite a per-task DbAcquire based on distribution strategy.
+///
+/// This function determines:
+///   1. Whether to use block-based or stencil-based partitioning
+///   2. Extra dimensions for 2D tiling strategies
+///   3. Halo/extent information for stencil patterns
+///   4. Whether to force coarse-grained partitioning for certain patterns
+///
+/// Key decisions:
+///   - Stencil halo rewriting: Enabled for 'in' mode acquires with detected
+///     stencil patterns (multiple offset accesses). Adds halo regions to
+///     localized blocks to satisfy neighbor element dependencies.
+///
+///   - Single-node inout handling: On single-node machines, inout acquires
+///     with cross-element self-reads (Seidel-style stencils) must stay coarse
+///     because the same DB is both read and written at different offsets.
+///     Jacobi-style double-buffer outputs can use block partitioning.
+///
+///   - 2D tiling: For tiling_2d distribution with inout mode, adds column
+///     dimension partitioning to complement row partitioning for owner-
+///     compute layout alignment.
+///
+/// Returns: AcquireRewritePlan with rewrite inputs and stencil flag
 AcquireRewritePlan
 mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
+  /// Helper to create default plan with minimal partitioning
   auto makePlan = [&]() {
     return AcquireRewritePlan{
         AcquireRewriteInput{input.AC, input.loc, input.parentAcquire,
@@ -185,6 +230,7 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
         /*useStencilRewriter=*/false};
   };
 
+  /// Early exit: missing required inputs
   if (!input.AC || !input.parentAcquire)
     return makePlan();
 
@@ -209,22 +255,37 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
           return ValueUtils::getConstantIndex(value, constant) && constant == 1;
         });
 
+        /// Determine if this acquire needs stencil halo handling.
+        /// This is a critical decision point for partitioning correctness.
         auto accessPattern = getDbAccessPattern(dbAlloc.getOperation());
         const ArtsMode mode = input.parentAcquire.getMode();
-        const bool inoutReadsSelf = mode == ArtsMode::inout &&
-                                    acquireHasReadAccess(input.parentAcquire);
+
+        /// Check if this inout acquire reads at cross-element offsets in the
+        /// loop. This distinguishes Seidel-style (A[i] reads from A[i-1]) from
+        /// Jacobi-style (A[i] writes, B[i] reads from B[i-1]).
         const bool inoutReadsCrossElementSelf =
             mode == ArtsMode::inout && input.analysisManager &&
-            input.analysisManager->getDbAnalysis().hasCrossElementSelfReadInLoop(
-                input.parentAcquire, input.loopOp);
+            input.analysisManager->getDbAnalysis()
+                .hasCrossElementSelfReadInLoop(input.parentAcquire,
+                                               input.loopOp);
+
+        /// Determine which modes require stencil halo based on access pattern
         const bool modeNeedsPatternStencilHalo =
             mode == ArtsMode::in || inoutReadsCrossElementSelf;
         const bool patternSaysStencil =
             accessPattern && *accessPattern == DbAccessPattern::stencil;
+
+        /// Check if the EDT distribution strategy indicates stencil pattern
         const bool strategySaysStencil =
             input.distributionPattern &&
             *input.distributionPattern == EdtDistributionPattern::stencil;
+
+        /// Only 'in' mode needs halo for strategy-based stencil detection
         const bool strategyNeedsStencilHalo = mode == ArtsMode::in;
+
+        /// Final decision: enable stencil halo if pattern or strategy indicates
+        /// stencil and the mode permits it (excluding single-element
+        /// allocations)
         needsStencilHalo =
             !isSingleElement &&
             ((patternSaysStencil && modeNeedsPatternStencilHalo) ||
@@ -234,10 +295,12 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
                    << static_cast<int>(mode)
                    << " patternSaysStencil=" << patternSaysStencil
                    << " strategySaysStencil=" << strategySaysStencil
-                   << " inoutReadsSelf=" << inoutReadsSelf
                    << " inoutReadsCrossElementSelf="
                    << inoutReadsCrossElementSelf);
 
+        /// Special handling for single-node execution with inout mode stencils.
+        /// This resolves the semantic conflict between Seidel vs. Jacobi
+        /// patterns.
         const ArtsAbstractMachine *machine = input.AC->getAbstractMachine();
         if (machine && !machine->isDistributed() && mode == ArtsMode::inout) {
           /// Single-node stencil allocations are a mixed case:
@@ -250,11 +313,14 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
           ///     specfem += updates) still benefit from block partitioning.
           if (inoutReadsCrossElementSelf &&
               (patternSaysStencil || strategySaysStencil)) {
+            /// CASE 1: True Seidel pattern - must stay coarse for correctness
             ARTS_DEBUG("Keeping single-node inout acquire coarse due to "
-                       "cross-element self-read");
+                       "cross-element self-read (Seidel-style pattern)");
             forceCoarseRewrite = true;
             needsStencilHalo = false;
           }
+          /// CASE 2: Falls through - uniform pattern with self-read is OK
+          /// to partition (forceCoarseRewrite remains false)
         }
 
         if (needsStencilHalo)

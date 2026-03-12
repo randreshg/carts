@@ -197,11 +197,9 @@ bool ArtsAbstractMachine::parseFromFile(const std::string &path) {
   }
 
   ARTS_DEBUG("Finished parsing configuration file");
-  ARTS_INFO("Final configuration - worker_threads=" << threads
-                                                    << ", node_count="
-                                                    << nodeCount
-                                                    << ", launcher="
-                                                    << launcher);
+  ARTS_INFO("Final configuration - worker_threads="
+            << threads << ", node_count=" << nodeCount
+            << ", launcher=" << launcher);
   return true;
 }
 

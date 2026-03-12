@@ -229,6 +229,15 @@ public:
   /// Find the EDT operation that uses a DbControlOp result.
   static Operation *findUserEdt(DbControlOp dbControl);
 
+  /// Pick a representative partition offset (prefer non-constant).
+  /// Returns the chosen offset and its index via outIdx when provided.
+  static Value pickRepresentativePartitionOffset(ArrayRef<Value> offsets,
+                                                 unsigned *outIdx = nullptr);
+
+  /// Pick the partition size corresponding to the chosen offset index.
+  static Value pickRepresentativePartitionSize(ArrayRef<Value> sizes,
+                                               unsigned idx);
+
   ///===----------------------------------------------------------------------===///
   /// Index Chain Utilities
   ///===----------------------------------------------------------------------===///

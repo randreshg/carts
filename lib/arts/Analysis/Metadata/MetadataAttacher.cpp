@@ -70,8 +70,9 @@ bool MetadataAttacher::ensureLoopMetadata(Operation *op) {
 
   /// 3. Try to attach from cache using arts.id or location
   LocationMetadata loc = LocationMetadata::fromLocation(op->getLoc());
-  ARTS_DEBUG("  -> extracted location: " << loc.getKey() << " (file=" << loc.file
-                                        << ", line=" << loc.line << ")");
+  ARTS_DEBUG("  -> extracted location: " << loc.getKey()
+                                         << " (file=" << loc.file
+                                         << ", line=" << loc.line << ")");
   std::string key;
   if (auto idAttr = op->getAttrOfType<IntegerAttr>(ArtsMetadata::IdAttrName))
     key = std::to_string(idAttr.getInt());
@@ -234,8 +235,8 @@ bool MetadataAttacher::attachLoopMetadataNearLocation(
              << ", tolerance=" << lineTolerance);
   if (!op || !loc.isValid() || lineTolerance == 0) {
     ARTS_DEBUG("  -> early return: op=" << (op ? "valid" : "null")
-                                       << ", loc.isValid=" << loc.isValid()
-                                       << ", tolerance=" << lineTolerance);
+                                        << ", loc.isValid=" << loc.isValid()
+                                        << ", tolerance=" << lineTolerance);
     return false;
   }
 
@@ -253,7 +254,7 @@ bool MetadataAttacher::attachLoopMetadataNearLocation(
   const unsigned opLoopDepth = getLoopDepth(op);
   std::string baseFile = LocationMetadata::getBasename(loc.file);
   ARTS_DEBUG("  -> searching for baseFile=" << baseFile
-                                           << ", line=" << loc.line);
+                                            << ", line=" << loc.line);
 
   for (auto &entry : loopJsonCache) {
     const llvm::json::Object *obj = entry.second.get();
@@ -269,8 +270,8 @@ bool MetadataAttacher::attachLoopMetadataNearLocation(
       continue;
 
     ARTS_DEBUG("  -> candidate: file=" << entryLoc.file
-                                      << ", line=" << entryLoc.line
-                                      << " (vs baseFile=" << baseFile << ")");
+                                       << ", line=" << entryLoc.line
+                                       << " (vs baseFile=" << baseFile << ")");
 
     if (entryLoc.file != baseFile) {
       ARTS_DEBUG("     -> file mismatch, skipping");
@@ -280,7 +281,7 @@ bool MetadataAttacher::attachLoopMetadataNearLocation(
     unsigned distance = static_cast<unsigned>(
         std::abs(static_cast<int>(entryLoc.line) - static_cast<int>(loc.line)));
     ARTS_DEBUG("     -> distance=" << distance
-                                  << ", tolerance=" << lineTolerance);
+                                   << ", tolerance=" << lineTolerance);
     if (distance > lineTolerance) {
       ARTS_DEBUG("     -> distance too large, skipping");
       continue;

@@ -8,13 +8,18 @@
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/Metadata/ArtsMetadata.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
+#include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "llvm/ADT/DenseSet.h"
 #include <algorithm>
+
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(memref_analyzer);
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -225,24 +230,177 @@ bool MemrefAnalyzer::analyzeUniformAccess(Value memref, Operation *scopeOp) {
   return isUniform;
 }
 
+/// Detect stencil access patterns by analyzing memory access offsets.
+///
+/// A stencil pattern is characterized by multiple distinct constant offsets
+/// relative to an induction variable, such as:
+///   - 1D stencil: A[i-1], A[i], A[i+1]  → offsets {-1, 0, 1}
+///   - 2D stencil: B[i-1][j], B[i][j-1], B[i][j], B[i][j+1], B[i+1][j]
+///
+/// This function analyzes both affine and non-affine memory accesses to
+/// extract constant offset patterns.
+///
+/// Returns: true if at least 2 distinct offsets are found (indicating a
+///          stencil pattern), false otherwise
+bool MemrefAnalyzer::hasStencilAccessPattern(Value memref, Operation *scopeOp) {
+  ARTS_DEBUG(
+      "hasStencilAccessPattern() - Starting pattern detection for memref");
+  llvm::DenseSet<int64_t> constantOffsets;
+
+  scopeOp->walk([&](Operation *op) {
+    /// Skip operations that don't access our target memref
+    if (accessAnalyzer.getAccessedMemref(op) != memref)
+      return;
+
+    /// Extract indices from the access operation
+    SmallVector<Value> indices;
+    if (auto load = dyn_cast<memref::LoadOp>(op)) {
+      indices.append(load.getIndices().begin(), load.getIndices().end());
+    } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+      indices.append(store.getIndices().begin(), store.getIndices().end());
+    } else if (auto affineLoad = dyn_cast<affine::AffineLoadOp>(op)) {
+      /// For affine loads, extract constant offsets from the affine map.
+      /// Handles patterns like: affine_map<(d0) -> (d0 + c)> where c is
+      /// constant
+      AffineMap map = affineLoad.getAffineMap();
+      for (AffineExpr expr : map.getResults()) {
+        /// Binary expression: look for additions with constant operands
+        if (auto binExpr = expr.dyn_cast<AffineBinaryOpExpr>()) {
+          if (binExpr.getKind() == AffineExprKind::Add) {
+            if (auto rhsConst =
+                    binExpr.getRHS().dyn_cast<AffineConstantExpr>()) {
+              int64_t offset = rhsConst.getValue();
+              ARTS_DEBUG("  Found affine load offset: " << offset);
+              constantOffsets.insert(offset);
+            }
+          }
+        } else if (expr.dyn_cast<AffineDimExpr>()) {
+          /// Direct dimension access (offset = 0), e.g., affine_map<(d0) ->
+          /// (d0)>
+          ARTS_DEBUG("  Found direct dimension access (offset=0)");
+          constantOffsets.insert(0);
+        }
+      }
+      return;
+    } else if (auto affineStore = dyn_cast<affine::AffineStoreOp>(op)) {
+      AffineMap map = affineStore.getAffineMap();
+      for (AffineExpr expr : map.getResults()) {
+        if (auto binExpr = expr.dyn_cast<AffineBinaryOpExpr>()) {
+          if (binExpr.getKind() == AffineExprKind::Add) {
+            if (auto rhsConst =
+                    binExpr.getRHS().dyn_cast<AffineConstantExpr>()) {
+              int64_t offset = rhsConst.getValue();
+              ARTS_DEBUG("  Found affine store offset: " << offset);
+              constantOffsets.insert(offset);
+            }
+          }
+        } else if (expr.dyn_cast<AffineDimExpr>()) {
+          ARTS_DEBUG("  Found direct dimension access (offset=0)");
+          constantOffsets.insert(0);
+        }
+      }
+      return;
+    } else {
+      /// Not a memory access operation we recognize
+      return;
+    }
+
+    /// For non-affine accesses, try to extract constant offsets from index
+    /// expressions by pattern matching common forms: iv, iv+c, iv-c
+    for (Value idx : indices) {
+      /// Check if this is a simple induction variable (offset = 0)
+      if (auto arg = idx.dyn_cast<BlockArgument>()) {
+        Operation *parent = arg.getOwner()->getParentOp();
+        if (isa<affine::AffineForOp, scf::ForOp>(parent)) {
+          constantOffsets.insert(0);
+          continue;
+        }
+      }
+
+      /// Try to extract constant offset from expressions like:
+      ///   - %idx = arith.addi %iv, %c1 : index   → offset = 1
+      ///   - %idx = arith.subi %iv, %c1 : index   → offset = -1
+      Operation *defOp = idx.getDefiningOp();
+      if (!defOp)
+        continue;
+
+      if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
+        int64_t constVal = 0;
+        /// Check both operands (addition is commutative)
+        if (ValueUtils::getConstantIndex(addOp.getRhs(), constVal)) {
+          constantOffsets.insert(constVal);
+        } else if (ValueUtils::getConstantIndex(addOp.getLhs(), constVal)) {
+          constantOffsets.insert(constVal);
+        }
+      } else if (auto subOp = dyn_cast<arith::SubIOp>(defOp)) {
+        int64_t constVal = 0;
+        /// Only check RHS for subtraction (not commutative)
+        if (ValueUtils::getConstantIndex(subOp.getRhs(), constVal)) {
+          /// Negate the constant for subtraction
+          constantOffsets.insert(-constVal);
+        }
+      }
+    }
+  });
+
+  /// A stencil pattern requires multiple distinct offsets (e.g., -1, 0, +1).
+  /// Single offset or no offsets indicate uniform access, not stencil.
+  ARTS_DEBUG("  Total distinct offsets found: " << constantOffsets.size());
+  if (!constantOffsets.empty()) {
+    ARTS_DEBUG_REGION({
+      ARTS_DBGS() << "  Offsets: {";
+      bool first = true;
+      for (int64_t offset : constantOffsets) {
+        if (!first)
+          ARTS_DBGS() << ", ";
+        ARTS_DBGS() << offset;
+        first = false;
+      }
+      ARTS_DBGS() << "}\n";
+    });
+  }
+
+  /// Threshold: at least 2 distinct offsets indicates stencil pattern
+  bool isStencil = constantOffsets.size() >= 2;
+  ARTS_DEBUG(
+      "  hasStencilAccessPattern result: " << (isStencil ? "true" : "false"));
+  return isStencil;
+}
+
 /// Classify dominant access pattern (sequential, strided, random)
 AccessPatternType
 MemrefAnalyzer::classifyAccessPattern(Value memref, MemrefMetadata *metadata,
                                       Operation *scopeOp) {
+  ARTS_DEBUG("classifyAccessPattern() - Classifying access pattern");
+
+  /// Check for stencil patterns first (must be before sequential check)
+  if (hasStencilAccessPattern(memref, scopeOp)) {
+    ARTS_DEBUG(
+        "  Classification: Stencil (multiple distinct offsets detected)");
+    return AccessPatternType::Stencil;
+  }
+
   /// Check for stride-1 sequential access
-  if (accessAnalyzer.hasStrideOneAccess(memref, scopeOp))
+  if (accessAnalyzer.hasStrideOneAccess(memref, scopeOp)) {
+    ARTS_DEBUG("  Classification: Sequential (stride-1 access)");
     return AccessPatternType::Sequential;
+  }
 
   /// Check for uniform strided access
   if (metadata->allAccessesAffine && *metadata->allAccessesAffine &&
-      analyzeUniformAccess(memref, scopeOp))
+      analyzeUniformAccess(memref, scopeOp)) {
+    ARTS_DEBUG("  Classification: Strided (uniform affine access)");
     return AccessPatternType::Strided;
+  }
 
   /// Check for gather/scatter patterns (non-affine or complex affine)
-  if (metadata->hasNonAffineAccesses && *metadata->hasNonAffineAccesses)
+  if (metadata->hasNonAffineAccesses && *metadata->hasNonAffineAccesses) {
+    ARTS_DEBUG("  Classification: GatherScatter (non-affine accesses)");
     return AccessPatternType::GatherScatter;
+  }
 
   /// Default to random if pattern is unclear
+  ARTS_DEBUG("  Classification: Random (fallback)");
   return AccessPatternType::Random;
 }
 
@@ -291,10 +449,12 @@ void MemrefAnalyzer::analyzeAllocation(Operation *allocOp,
   /// Classify spatial locality based on access pattern
   if (accessAnalyzer.hasStrideOneAccess(memref, scopeOp))
     metadata->spatialLocality = SpatialLocalityLevel::Excellent;
-  else if (metadata->dominantAccessPattern == AccessPatternType::Strided)
-    metadata->spatialLocality = SpatialLocalityLevel::Good;
   else if (metadata->dominantAccessPattern == AccessPatternType::Sequential)
     metadata->spatialLocality = SpatialLocalityLevel::Excellent;
+  else if (metadata->dominantAccessPattern == AccessPatternType::Stencil)
+    metadata->spatialLocality = SpatialLocalityLevel::Good;
+  else if (metadata->dominantAccessPattern == AccessPatternType::Strided)
+    metadata->spatialLocality = SpatialLocalityLevel::Good;
   else
     metadata->spatialLocality = SpatialLocalityLevel::Poor;
 

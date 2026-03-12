@@ -1000,9 +1000,8 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       /// partition hints (from DbControlOp depend clauses) tell DbPartitioning
       /// how to optimize later. Keep different access modes in separate
       /// acquires so downstream rec_dep lowering preserves read vs write slots.
-      ARTS_DEBUG(" - Creating coarse-grained acquire group " << groupIdx
-                                                             << " for mode "
-                                                             << depGroupModes[groupIdx]);
+      ARTS_DEBUG(" - Creating coarse-grained acquire group "
+                 << groupIdx << " for mode " << depGroupModes[groupIdx]);
 
       /// Collect partition hints from this group's deps.
       SmallVector<Value> partIndices, partOffsets, partSizes;

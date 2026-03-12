@@ -191,6 +191,23 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
     }
   }
 
+  /// Initialize stencil bounds from metadata if present
+  if (auto centerOffset = getStencilCenterOffset(op.getOperation())) {
+    /// Stencil pattern with center offset implies symmetric access pattern
+    /// e.g., A[i-1], A[i], A[i+1] has center_offset=1
+    /// Min offset = -centerOffset, Max offset = +centerOffset
+    stencilBounds = StencilBounds::create(-*centerOffset, *centerOffset,
+                                          /*isStencil=*/true, /*valid=*/true);
+    ARTS_DEBUG("DbAcquireNode constructor: Initialized stencil bounds from "
+               "metadata");
+    ARTS_DEBUG("  centerOffset=" << *centerOffset << " -> bounds=["
+                                 << -*centerOffset << ", " << *centerOffset
+                                 << "]");
+  } else {
+    ARTS_DEBUG("DbAcquireNode constructor: No stencil center offset found in "
+               "metadata");
+  }
+
   if (singleUser && isa<DbAcquireOp>(singleUser)) {
     /// Nested acquire; create child node lazily via getOrCreateAcquireNode
     /// The rest of this constructor computes info for this node; nested
@@ -385,12 +402,18 @@ DbAcquireNode::computeBlockInfoFromForLoop(ArrayRef<LoopNode *> loopNodes,
 ///===----------------------------------------------------------------------===///
 
 AccessPattern DbAcquireNode::getAccessPattern() const {
-  if (accessPattern)
+  if (accessPattern) {
+    ARTS_DEBUG("getAccessPattern() - using cached pattern: "
+               << (*accessPattern == AccessPattern::Uniform   ? "Uniform"
+                   : *accessPattern == AccessPattern::Stencil ? "Stencil"
+                   : *accessPattern == AccessPattern::Indexed ? "Indexed"
+                                                              : "Unknown"));
     return *accessPattern;
+  }
 
   DbAcquireOp acqOp = const_cast<DbAcquireOp &>(dbAcquireOp);
 
-  ARTS_DEBUG("getAccessPattern() for: " << acqOp);
+  ARTS_DEBUG("getAccessPattern() - classifying pattern for acquire");
   ARTS_DEBUG(
       "  hasMultiplePartitionEntries: " << acqOp.hasMultiplePartitionEntries());
   ARTS_DEBUG(
@@ -439,8 +462,16 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
   /// hints)
   if (stencilBounds && stencilBounds->valid && stencilBounds->isStencil) {
     ARTS_DEBUG("  -> Returning Stencil (stencilBounds valid and isStencil)");
+    ARTS_DEBUG("     stencilBounds: [" << stencilBounds->minOffset << ", "
+                                       << stencilBounds->maxOffset << "]");
     accessPattern = AccessPattern::Stencil;
     return *accessPattern;
+  } else if (stencilBounds) {
+    ARTS_DEBUG("  stencilBounds exists but not valid/stencil: valid="
+               << stencilBounds->valid
+               << ", isStencil=" << stencilBounds->isStencil);
+  } else {
+    ARTS_DEBUG("  No stencilBounds set");
   }
 
   /// Check multi-entry stencil pattern (only for acquires without partition
@@ -452,12 +483,17 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
     if (DbUtils::hasMultiEntryStencilPattern(acqOp, minOffset, maxOffset)) {
       ARTS_DEBUG("  -> Returning Stencil (multi-entry stencil pattern, not all "
                  "fine-grained)");
+      ARTS_DEBUG("  -> Storing stencil bounds: min=" << minOffset
+                                                     << " max=" << maxOffset);
+      const_cast<DbAcquireNode *>(this)->setStencilBoundsInternal(
+          StencilBounds::create(minOffset, maxOffset,
+                                /*isStencil=*/true, /*valid=*/true));
       accessPattern = AccessPattern::Stencil;
       return *accessPattern;
     }
   }
 
-  ARTS_DEBUG("  [COARSE-CHECK] stencilBounds="
+  ARTS_DEBUG("  [COARSE-IR-WALK-CHECK] stencilBounds="
              << (stencilBounds ? "SET" : "null")
              << " edtUserOp=" << (edtUserOp ? "SET" : "null") << " partMode="
              << (acqOp.getPartitionMode()
@@ -473,6 +509,8 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
     const_cast<DbAcquireNode *>(this)->collectAccessOperations(dbRefToMemOps);
 
     bool stencilFound = false;
+    int64_t globalMinOffset = 0;
+    int64_t globalMaxOffset = 0;
     EdtOp edtUser = const_cast<DbAcquireNode *>(this)->getEdtUser();
     if (edtUser) {
       edtUser.walk([&](ForOp forOp) {
@@ -523,6 +561,8 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
                 ARTS_DEBUG("  Coarse stencil detected: base="
                            << base << " min=" << it->second.first
                            << " max=" << it->second.second);
+                globalMinOffset = it->second.first;
+                globalMaxOffset = it->second.second;
                 stencilFound = true;
               }
             }
@@ -533,9 +573,51 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
 
     if (stencilFound) {
       ARTS_DEBUG("  -> Returning Stencil (coarse acquire IR walk)");
+      ARTS_DEBUG("  -> Storing stencil bounds: min="
+                 << globalMinOffset << " max=" << globalMaxOffset);
+      const_cast<DbAcquireNode *>(this)->setStencilBoundsInternal(
+          StencilBounds::create(globalMinOffset, globalMaxOffset,
+                                /*isStencil=*/true, /*valid=*/true));
       accessPattern = AccessPattern::Stencil;
       return *accessPattern;
     }
+  }
+
+  /// Check alloc-level metadata for pattern hints before falling back to
+  /// Uniform
+  if (rootAlloc && rootAlloc->dominantAccessPattern) {
+    auto allocPattern = *rootAlloc->dominantAccessPattern;
+    const char *patternName =
+        allocPattern == AccessPatternType::Sequential      ? "Sequential"
+        : allocPattern == AccessPatternType::Strided       ? "Strided"
+        : allocPattern == AccessPatternType::Stencil       ? "Stencil"
+        : allocPattern == AccessPatternType::GatherScatter ? "GatherScatter"
+        : allocPattern == AccessPatternType::Random        ? "Random"
+                                                           : "Unknown";
+    ARTS_DEBUG("  alloc metadata dominantAccessPattern: "
+               << patternName
+               << " (enum value: " << static_cast<int>(allocPattern) << ")");
+    /// MemrefMetadata uses AccessPatternType (Sequential/Strided/GatherScatter/
+    /// Random/Unknown) while DbAcquireNode uses AccessPattern (Uniform/Stencil/
+    /// Indexed). Map Stencil type directly.
+    if (allocPattern == AccessPatternType::Stencil &&
+        acqOp.getMode() == ArtsMode::in) {
+      ARTS_DEBUG("  -> Using Stencil from alloc metadata (read-only acquire)");
+      accessPattern = AccessPattern::Stencil;
+      return *accessPattern;
+    } else if (allocPattern == AccessPatternType::Stencil) {
+      ARTS_DEBUG("  -> Skipping alloc Stencil for write/inout acquire");
+    }
+    /// Map GatherScatter/Random to Indexed for indirect patterns.
+    if (allocPattern == AccessPatternType::GatherScatter ||
+        allocPattern == AccessPatternType::Random) {
+      ARTS_DEBUG(
+          "  -> Using Indexed from alloc metadata (GatherScatter/Random)");
+      accessPattern = AccessPattern::Indexed;
+      return *accessPattern;
+    }
+  } else {
+    ARTS_DEBUG("  No alloc-level dominantAccessPattern available");
   }
 
   ARTS_DEBUG("  -> Returning Uniform (fallback)");

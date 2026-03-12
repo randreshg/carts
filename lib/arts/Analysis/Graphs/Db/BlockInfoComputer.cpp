@@ -148,8 +148,8 @@ LogicalResult BlockInfoComputer::computeBlockInfo(DbAcquireNode *node,
     return fullRangeFallback("no EDT user");
   }
 
-  if (!MemoryAccessClassifier::hasMemoryAccesses(node) &&
-      !partitionOffset && !partitionSize)
+  if (!MemoryAccessClassifier::hasMemoryAccesses(node) && !partitionOffset &&
+      !partitionSize)
     return fullRangeFallback("pass-through acquire");
 
   ArtsAnalysisManager &AM = node->getAnalysis()->getAnalysisManager();
@@ -367,10 +367,9 @@ LogicalResult BlockInfoComputer::computeBlockInfoFromWhile(
 
   auto [partitionOffset, partitionSize] = node->getPartitionInfo();
   std::optional<unsigned> partitionDim =
-      partitionOffset
-          ? PartitionBoundsAnalyzer::getPartitionOffsetDim(
-                node, partitionOffset, /*requireLeading=*/false)
-          : std::nullopt;
+      partitionOffset ? PartitionBoundsAnalyzer::getPartitionOffsetDim(
+                            node, partitionOffset, /*requireLeading=*/false)
+                      : std::nullopt;
   AccessBoundsInfo bounds =
       analyzeAccessBoundsLocal(node, initValue, loopIV, partitionDim);
   if (!bounds.valid)
@@ -407,8 +406,9 @@ LogicalResult BlockInfoComputer::computeBlockInfoFromWhile(
   return success();
 }
 
-LogicalResult BlockInfoComputer::computeBlockInfoFromHints(
-    DbAcquireNode *node, Value &blockOffset, Value &blockSize) {
+LogicalResult BlockInfoComputer::computeBlockInfoFromHints(DbAcquireNode *node,
+                                                           Value &blockOffset,
+                                                           Value &blockSize) {
   auto [partitionOffset, partitionSize] = node->getPartitionInfo();
   DbAcquireOp dbAcquireOp = node->getDbAcquireOp();
 
@@ -427,8 +427,8 @@ LogicalResult BlockInfoComputer::computeBlockInfoFromHints(
   }
 
   std::optional<unsigned> partitionDim =
-      PartitionBoundsAnalyzer::getPartitionOffsetDim(
-          node, partitionOffset, /*requireLeading=*/false);
+      PartitionBoundsAnalyzer::getPartitionOffsetDim(node, partitionOffset,
+                                                     /*requireLeading=*/false);
   Value partitionIdx;
   Value firstDynIdx;
   DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
@@ -488,8 +488,9 @@ LogicalResult BlockInfoComputer::computeBlockInfoFromHints(
 
     if (bounds.valid) {
       if (!node->getStencilBounds())
-        node->setStencilBoundsInternal(StencilBounds::create(
-            bounds.minOffset, bounds.maxOffset, bounds.isStencil, bounds.valid));
+        node->setStencilBoundsInternal(
+            StencilBounds::create(bounds.minOffset, bounds.maxOffset,
+                                  bounds.isStencil, bounds.valid));
 
       OpBuilder builder(dbAcquireOp);
       Location loc = dbAcquireOp.getLoc();
@@ -549,10 +550,9 @@ LogicalResult BlockInfoComputer::computeBlockInfoFromForLoop(
 
   auto [partitionOffset, partitionSize] = node->getPartitionInfo();
   std::optional<unsigned> partitionDim =
-      partitionOffset
-          ? PartitionBoundsAnalyzer::getPartitionOffsetDim(
-                node, partitionOffset, /*requireLeading=*/false)
-          : std::nullopt;
+      partitionOffset ? PartitionBoundsAnalyzer::getPartitionOffsetDim(
+                            node, partitionOffset, /*requireLeading=*/false)
+                      : std::nullopt;
 
   auto getLoopUpperBound = [&](LoopNode *ln) -> Value {
     return ln ? ln->getUpperBound() : Value();
@@ -589,7 +589,7 @@ LogicalResult BlockInfoComputer::computeBlockInfoFromForLoop(
 
       SetVector<Operation *> memOps;
       DbUtils::collectReachableMemoryOps(refOp.getResult(), memOps,
-                                                &edtUser.getBody());
+                                         &edtUser.getBody());
       for (Operation *memUser : memOps) {
         if (!loopOp->isAncestor(memUser))
           continue;
@@ -658,18 +658,15 @@ LogicalResult BlockInfoComputer::computeBlockInfoFromForLoop(
       continue;
 
     if (bounds.minOffset < 0) {
-      Value absAdj =
-          arts::createConstantIndex(builder, loc, -bounds.minOffset);
-      Value cond = builder.create<arith::CmpIOp>(
-          loc, arith::CmpIPredicate::uge, adjustedOffset, absAdj);
+      Value absAdj = arts::createConstantIndex(builder, loc, -bounds.minOffset);
+      Value cond = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
+                                                 adjustedOffset, absAdj);
       Value sub = builder.create<arith::SubIOp>(loc, adjustedOffset, absAdj);
       Value zeroIdx = arts::createZeroIndex(builder, loc);
-      adjustedOffset =
-          builder.create<arith::SelectOp>(loc, cond, sub, zeroIdx);
+      adjustedOffset = builder.create<arith::SelectOp>(loc, cond, sub, zeroIdx);
     } else if (bounds.minOffset > 0) {
       Value adj = arts::createConstantIndex(builder, loc, bounds.minOffset);
-      adjustedOffset =
-          builder.create<arith::AddIOp>(loc, adjustedOffset, adj);
+      adjustedOffset = builder.create<arith::AddIOp>(loc, adjustedOffset, adj);
     }
 
     int64_t sizeAdjustment = bounds.maxOffset - bounds.minOffset;

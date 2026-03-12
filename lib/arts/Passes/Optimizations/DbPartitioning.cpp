@@ -195,32 +195,6 @@ static bool hasInternodeAcquireUser(ArrayRef<DbAcquireNode *> acquireNodes) {
   return false;
 }
 
-/// Pick a representative partition offset (prefer non-constant).
-/// Returns the chosen offset and its index via outIdx when provided.
-static Value pickRepresentativePartitionOffset(ArrayRef<Value> offsets,
-                                               unsigned *outIdx = nullptr) {
-  if (outIdx)
-    *outIdx = 0;
-  for (unsigned i = 0; i < offsets.size(); ++i) {
-    Value off = offsets[i];
-    if (!off)
-      continue;
-    int64_t c = 0;
-    if (!ValueUtils::getConstantIndex(ValueUtils::stripNumericCasts(off), c)) {
-      if (outIdx)
-        *outIdx = i;
-      return off;
-    }
-  }
-  for (unsigned i = 0; i < offsets.size(); ++i) {
-    if (offsets[i]) {
-      if (outIdx)
-        *outIdx = i;
-      return offsets[i];
-    }
-  }
-  return Value();
-}
 
 /// Analyze a single acquire to determine its partition mode and chunk info.
 static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
@@ -246,7 +220,8 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
     info.accessPattern = acqNode->getAccessPattern();
   info.isValid = summary.isValid;
   info.hasIndirectAccess = summary.hasIndirectAccess;
-  info.preservesDependencyMode = static_cast<bool>(acquire.getPreserveDepMode());
+  info.preservesDependencyMode =
+      static_cast<bool>(acquire.getPreserveDepMode());
 
   return info;
 }
@@ -1031,7 +1006,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       SmallVector<Value> offsetVals = getPartitionOffsetsND(acqNode, &acqInfo);
       unsigned offsetIdx = 0;
       Value partitionOffset =
-          pickRepresentativePartitionOffset(offsetVals, &offsetIdx);
+          DbUtils::pickRepresentativePartitionOffset(offsetVals, &offsetIdx);
       if (partitionOffset) {
         auto dimOpt = acqNode->getPartitionOffsetDim(partitionOffset,
                                                      /*requireLeading=*/false);
@@ -1080,6 +1055,10 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         const auto &acqPartInfo = acquireInfos[idx];
         info.partitionMode = acqPartInfo.mode;
       }
+
+      /// Populate access pattern for heuristic use
+      if (acqNode)
+        info.accessPattern = acqNode->getAccessPattern();
 
       ctx.acquires.push_back(info);
       ARTS_DEBUG("    Acquire["
