@@ -35,6 +35,42 @@ class DbAcquireNode;
 class ArtsMetadataManager;
 class LoopNode;
 
+/// Per-entry partition legality for one acquire.
+struct DbPartitionEntryFact {
+  PartitionInfo partition;
+  Value representativeOffset;
+  Value representativeSize;
+  std::optional<unsigned> mappedDim;
+  bool needsFullRange = false;
+  bool preservesDistributedContract = false;
+};
+
+/// Per-dimension view of an acquire's partition behavior.
+struct DbDimPartitionFact {
+  unsigned dim = 0;
+  MemrefMetadata::DimAccessPatternType accessPattern =
+      MemrefMetadata::DimAccessPatternType::Unknown;
+  bool isLeadingDynamic = false;
+  bool selectedByPartitionEntry = false;
+  bool needsFullRange = false;
+};
+
+/// Canonical partition facts cached on DbAcquireNode and consumed by
+/// DbAnalysis/DbPartitioning.
+struct DbAcquirePartitionFacts {
+  DbAcquireOp acquire;
+  PartitionMode requestedMode = PartitionMode::coarse;
+  AccessPattern accessPattern = AccessPattern::Unknown;
+  SmallVector<DbPartitionEntryFact, 2> entries;
+  SmallVector<DbDimPartitionFact, 4> dims;
+  bool hasIndirectAccess = false;
+  bool hasDirectAccess = false;
+  bool hasDistributionContract = false;
+  bool explicitCoarseRequest = false;
+  bool hasBlockHints = false;
+  bool inferredBlock = false;
+};
+
 ///===----------------------------------------------------------------------===///
 /// DbAllocNode
 /// Represents a `arts.db.alloc` operation in the DB graph.
@@ -172,17 +208,8 @@ public:
   std::optional<unsigned> getPartitionOffsetDim(Value offset,
                                                 bool requireLeading = false);
 
-  /// Unified check: does this acquire need full-range access on a block alloc?
-  /// Returns true if:
-  ///   1. Has indirect access (can't determine which block)
-  ///   2. Partition offset not in access pattern (except stencil)
-  bool needsFullRange(Value partitionOffset);
-
-  /// Preserve an explicit distributed acquire contract even when the partition
-  /// offset is not visible in the access chain. This is reserved for acquire
-  /// shapes that are already known to be safe, such as leaf DB slices or
-  /// read-only nested stencil inputs.
-  bool shouldPreserveDistributedContract(Value partitionOffset);
+  const DbAcquirePartitionFacts &getPartitionFacts() const;
+  void invalidatePartitionFacts() const;
 
   LogicalResult computeBlockInfo(Value &blockOffset, Value &blockSize);
   LogicalResult computeBlockInfoFromWhile(scf::WhileOp whileOp,
@@ -205,6 +232,7 @@ public:
   void setPartitionInfo(Value offset, Value size) {
     partitionOffset = offset;
     partitionSize = size;
+    invalidatePartitionFacts();
   }
 
   std::pair<Value, Value> getPartitionInfo() const {
@@ -236,19 +264,28 @@ public:
   Operation *getEdtUserOp() const { return edtUserOp; }
   void setStencilBoundsInternal(std::optional<StencilBounds> sb) {
     stencilBounds = std::move(sb);
+    invalidatePartitionFacts();
   }
   void setComputedBlockInfo(std::optional<std::pair<Value, Value>> info) {
     computedBlockInfo = std::move(info);
+    invalidatePartitionFacts();
   }
   std::optional<std::pair<Value, Value>> getComputedBlockInfo() const {
     return computedBlockInfo;
   }
   void setOriginalBounds(std::optional<std::pair<Value, Value>> bounds) {
     originalBounds = std::move(bounds);
+    invalidatePartitionFacts();
   }
-  void setHasNonConstantOffset(bool v) { hasNonConstantOffset = v; }
+  void setHasNonConstantOffset(bool v) {
+    hasNonConstantOffset = v;
+    invalidatePartitionFacts();
+  }
   bool getHasNonConstantOffset() const { return hasNonConstantOffset; }
-  void setAccessPatternCache(AccessPattern pat) const { accessPattern = pat; }
+  void setAccessPatternCache(AccessPattern pat) const {
+    accessPattern = pat;
+    invalidatePartitionFacts();
+  }
   const std::optional<AccessPattern> &getAccessPatternCache() const {
     return accessPattern;
   }
@@ -275,6 +312,7 @@ private:
   std::optional<StencilBounds> stencilBounds;
   bool hasNonConstantOffset = false;
   mutable std::optional<AccessPattern> accessPattern;
+  mutable std::optional<DbAcquirePartitionFacts> partitionFacts;
 
 public:
   uint64_t inCount = 0, outCount = 0;

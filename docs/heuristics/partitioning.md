@@ -97,7 +97,7 @@ Flow of responsibility:
 What each layer owns:
 
 - DbAcquireNode: per-acquire access classification (uniform/indexed/stencil),
-  bounds validity, indirect access flags, and partition dim candidates.
+  bounds validity, indirect access flags, and cached `DbAcquirePartitionFacts`.
 - DbAnalysis: pass-facing acquire partition summary API
   (`analyzeAcquirePartition`) built from DbGraph/DbAcquireNode state.
 - DbAllocNode: aggregation across acquires for one allocation.
@@ -109,6 +109,75 @@ What each layer owns:
   and per-acquire rewrite payloads (keeps mode branching out of DbPartitioning).
 - Rewriters/Indexers: implement the chosen layout and localize indices using
   PartitionInfo + plan.
+
+Important implementation detail:
+- `DbAllocNode` stores direct child acquires in the DB graph.
+- `DbPartitioning` does not only look at those direct children; it recursively
+  walks nested acquire nodes via `collectAcquireNodesForAlloc()` and
+  `collectAcquireNodesRecursive()`.
+- So the pass does visit all acquire nodes reachable from one allocation.
+- The rest of this guide describes the current implementation model. A
+  dimension-first redesign is specified separately in
+  `docs/heuristics/partitioning-redesign.md`.
+
+### 2.1) The Actual Analysis Objects In Code
+
+Today the partitioning pipeline is built from these layers of state:
+
+1. `DbAcquireNode`
+   - Source of truth for one acquire.
+   - Owns cached `DbAcquirePartitionFacts`.
+   - `DbDimAnalyzer` computes:
+     - `DbPartitionEntryFact[]`
+     - `DbDimPartitionFact[]`
+     - direct / indirect access flags
+     - mapped partition dimensions
+     - `needsFullRange`
+     - `preservesDistributedContract`
+
+2. `DbAnalysis::AcquirePartitionSummary`
+   - Returned by `analyzeAcquirePartition(...)`.
+   - Carries:
+     - `mode`
+     - `partitionOffsets`
+     - `partitionSizes`
+     - `partitionDims`
+     - `isValid`
+     - `hasIndirectAccess`
+
+3. `AcquirePartitionInfo`
+   - `DbPartitioning`'s working copy of the acquire summary.
+   - Adds:
+     - `accessPattern`
+     - `preservesDependencyMode`
+     - `needsFullRange`
+
+4. `AcquireInfo` / `PartitioningContext`
+   - The heuristic voting layer.
+   - Consumes facts already prepared by the graph/pipeline.
+   - Does not own canonical legality state.
+
+5. `DbBlockPlanResolver` + `DbPartitionPlanner`
+   - Turn the chosen mode into a concrete rewrite plan:
+     - `blockSizes`
+     - `partitionedDims`
+     - allocation shape
+     - per-acquire rewrite payloads
+
+### 2.2) Current Canonical Model
+
+The analysis model is now:
+
+```text
+per DbAlloc
+  -> per DbAcquire
+     -> per partition entry
+     -> per logical dimension
+```
+
+That information lives in `DbAcquirePartitionFacts` on `DbAcquireNode`.
+`DbAllocNode` aggregates it. `DbPartitioning` translates it into pass-local
+decisions and rewrite payloads.
 
 DB mode note (in/out/inout):
 - Db access mode is adjusted by the Db pass based on actual loads/stores.
@@ -133,9 +202,37 @@ Acquire-level (can differ per acquire):
 - full-range vs single-block acquire, driven by whether the access depends on
   the partition offset (or is indirect).
 
+### 3.0) The Current Pipeline In Code
+
+The actual pass flow is:
+
+1. Build or rebuild the DB graph.
+2. For one `DbAllocOp`, recursively collect all `DbAcquireNode`s.
+3. For each acquire, call `DbAnalysis::analyzeAcquirePartition(...)`.
+4. Convert that into `AcquirePartitionInfo`.
+5. Build `PartitioningContext` for heuristic voting.
+6. Ask heuristics for:
+   - allocation mode
+   - per-acquire `needsFullRange`
+7. Reconcile acquire modes.
+8. Resolve block sizes and `partitionedDims`.
+9. Force safety fallbacks for acquires whose inferred dims disagree with the
+   chosen plan.
+10. Build `DbRewritePlan` and rewrite alloc + acquires.
+
+The important point is that the pass is already split into:
+- analysis that builds acquire facts
+- heuristics that choose allocation mode
+- planning/rewriting that applies the decision
+
+The design corresponding to this flow is captured in
+`docs/heuristics/partitioning-redesign.md`.
+
 ### 3.1 Allocation-Level Heuristics (H1.1-H1.6)
 
-This is the current intent (see `lib/arts/Analysis/ArtsHeuristics.cpp`):
+This is the current intent (see
+`lib/arts/Analysis/PartitioningHeuristics.cpp` and the
+`HeuristicsConfig` wrapper):
 
 - H1.1: Read-only + single-node + no partition capability -> Coarse
 - H1.1b: Read-only + single-node + all block-capable acquires are full-range -> Coarse
@@ -184,6 +281,48 @@ Stencil exception:
   when generic dim inference would otherwise be incomplete.
 - Read-only inputs in the same loop may still follow regular block localization
   rules; only writable ownership is forced to N-D alignment.
+
+### 3.2.1) Current Safety Checks
+
+Today the safety logic is spread across three places:
+
+1. `DbAcquireNode::getPartitionOffsetDim(...)`
+   - proves which access dimension depends on the partition offset
+   - returns `std::nullopt` when the mapping is unknown or unsafe
+
+2. `PartitionBoundsAnalyzer::needsFullRange(...)`
+   - forces full-range for:
+     - indirect access
+     - missing offset dependence
+     - non-leading read-only stencil accesses
+
+3. `DbPartitioning`
+   - after the final block plan is chosen, any acquire whose inferred
+     `partitionDims` disagree with the chosen `partitionedDims` is forced to
+     full-range
+
+This safety net is necessary, but it is later than ideal. The cleaner design is
+to keep per-dimension access proposals all the way into heuristic voting so the
+wrong mode is less likely to be chosen in the first place.
+
+### 3.2.2) Mixed-Dimension Design Example
+
+`vel4sg-base` is the canonical example:
+
+- the parallel loop is over `k`
+- some helper reads are stencil in `i`
+- some helper reads are stencil in `j`
+- only `derivative_z` is stencil in `k`
+
+The correct conclusion is:
+- partition on `k`
+- use block on `k` for arrays that are only stencil in `i/j`
+- use stencil-on-`k` only for arrays that actually read `k +/- 1`
+
+That is the shape the redesigned analysis model should represent directly:
+- candidate partition dimension = `k`
+- per-acquire classification on `k`
+- allocation mode chosen from those per-dimension acquire proposals
 
 ---
 
@@ -898,11 +1037,16 @@ Example access A[i,j,k]:
 ## 10) Where the Meaning Is Implemented
 
 - Analysis (patterns, bounds, partition dims): DbAcquireNode / DbAllocNode
+- Pass-facing acquire summary: `DbAnalysis::analyzeAcquirePartition`
 - Decisions (H1.*): `evaluatePartitioningHeuristics` + H1.7 per-acquire voting
 - Coordination + plan: DbPartitioning
+- Mode reconciliation: `DbPartitionDecisionArbiter`
+- Block sizing + chosen dims: `DbBlockPlanResolver`
 - Layout rewrite: DbRewriter (Block / Fine-grained / Stencil)
 - Index localization: DbBlockIndexer / DbElementWiseIndexer / DbStencilIndexer
 - ESD runtime semantics: byte-slice deps (`artsRecordDepAt`) + pointer signaling
 
 This keeps semantics explicit: heuristics decide the layout, rewriters apply it,
 indexers localize indices, and the runtime implements the ESD transport.
+
+---

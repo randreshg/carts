@@ -505,8 +505,8 @@ std::optional<unsigned> PartitionBoundsAnalyzer::getPartitionOffsetDim(
   MemoryAccessClassifier::collectAccessOperations(node, dbRefToMemOps);
 
   if (dbRefToMemOps.empty()) {
-    ARTS_DEBUG("  -> returning dim 0 (no memory operations)");
-    return 0u;
+    ARTS_DEBUG("  -> returning none (no visible memory operations)");
+    return std::nullopt;
   }
   ARTS_DEBUG("  found " << dbRefToMemOps.size() << " db_ref users with memOps");
 
@@ -623,8 +623,8 @@ std::optional<unsigned> PartitionBoundsAnalyzer::getPartitionOffsetDim(
   }
 
   if (!foundDim) {
-    ARTS_DEBUG("  -> returning dim 0 (no dynamic index)");
-    return 0u;
+    ARTS_DEBUG("  -> returning none (no dynamic index match)");
+    return std::nullopt;
   }
 
   ARTS_DEBUG("  -> returning dim " << *foundDim);

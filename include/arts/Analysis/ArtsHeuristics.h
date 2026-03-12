@@ -32,6 +32,7 @@ class Operation;
 namespace arts {
 
 class IdRegistry;
+struct DbAcquirePartitionFacts;
 
 ///===----------------------------------------------------------------------===///
 /// HeuristicDecision (for ArtsMate diagnostics)
@@ -74,9 +75,7 @@ public:
 
   /// H1.7: Per-acquire partitioning decisions based on canPartitionWithOffset.
   SmallVector<AcquireDecision>
-  getAcquireDecisions(const PartitioningContext &ctx,
-                      ArrayRef<DbAcquireNode *> acquireNodes,
-                      ArrayRef<Value> partitionOffsets);
+  getAcquireDecisions(ArrayRef<const DbAcquirePartitionFacts *> acquireFacts);
 
   /// Decision recording for diagnostics
   void recordDecision(llvm::StringRef heuristic, bool applied,

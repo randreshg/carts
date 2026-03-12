@@ -44,7 +44,9 @@ public:
   static bool canPartitionWithOffset(DbAcquireNode *node, Value offset);
 
   /// Return the access-chain dimension that depends on the partition offset.
-  /// If requireLeading is true, only accept leading dynamic index.
+  /// Returns std::nullopt when the dimension is unknown or incompatible with
+  /// blocked partitioning. If requireLeading is true, only accept the leading
+  /// dynamic index.
   static std::optional<unsigned>
   getPartitionOffsetDim(DbAcquireNode *node, Value offset, bool requireLeading);
 
