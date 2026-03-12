@@ -263,6 +263,52 @@ bool ValueUtils::sameValue(Value a, Value b) {
   return aConst && bConst && *aConst == *bConst;
 }
 
+///===----------------------------------------------------------------------===///
+/// Value Range and Scale Comparison
+///===----------------------------------------------------------------------===///
+
+bool ValueUtils::equalRange(ValueRange a, ValueRange b) {
+  if (a.size() != b.size())
+    return false;
+  for (auto it = a.begin(), jt = b.begin(); it != a.end(); ++it, ++jt) {
+    if (*it != *jt)
+      return false;
+  }
+  return true;
+}
+
+bool ValueUtils::allSameValue(ValueRange values) {
+  if (values.empty())
+    return false;
+  Value first = values[0];
+  return llvm::all_of(values, [&](Value v) { return v == first; });
+}
+
+bool ValueUtils::scalesAreEquivalent(Value lhs, Value rhs) {
+  Value a = stripNumericCasts(lhs);
+  Value b = stripNumericCasts(rhs);
+  if (a == b)
+    return true;
+
+  auto constantValue = [](Value v) -> std::optional<int64_t> {
+    if (auto cIdx = v.getDefiningOp<arith::ConstantIndexOp>())
+      return cIdx.value();
+    if (auto cInt = v.getDefiningOp<arith::ConstantIntOp>())
+      return cInt.value();
+    return std::nullopt;
+  };
+
+  if (auto lhsConst = constantValue(a))
+    if (auto rhsConst = constantValue(b))
+      return lhsConst == rhsConst;
+
+  if (auto lhsType = a.getDefiningOp<polygeist::TypeSizeOp>())
+    if (auto rhsType = b.getDefiningOp<polygeist::TypeSizeOp>())
+      return lhsType.getType() == rhsType.getType();
+
+  return false;
+}
+
 Value ValueUtils::stripClampOne(Value v) {
   Value cur = stripNumericCasts(v);
   while (auto maxOp = cur.getDefiningOp<arith::MaxUIOp>()) {
