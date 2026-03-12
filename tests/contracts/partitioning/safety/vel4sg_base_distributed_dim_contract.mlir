@@ -4,6 +4,7 @@
 // CHECK: arts.db_alloc[<in>, <heap>, <read>, <block>, <uniform>]
 // CHECK: arts.db_acquire[<in>]
 // CHECK-SAME: partitioning(<block>, offsets[
+// CHECK-SAME: offsets[%c0], sizes[
 // CHECK-SAME: stencil_center_offset = 1 : i64
 // CHECK: arts.db_acquire[<inout>]
 // CHECK-SAME: partitioning(<block>, offsets[

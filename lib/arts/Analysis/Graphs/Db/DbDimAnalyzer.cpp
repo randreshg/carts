@@ -239,6 +239,12 @@ static void inferPartitionDims(DbAcquireNode *node, DbAcquirePartitionFacts &fac
   if (!facts.partitionDims.empty() || !facts.hasDistributionContract)
     return;
 
+  // Helper-call-hidden stencil accesses need their own mapped partition dim.
+  // Peer dim inference is too coarse here and can synthesize an unsafe local
+  // slice for arrays that only expose their real access pattern after inlining.
+  if (facts.accessPattern == AccessPattern::Stencil)
+    return;
+
   bool preservesDistributedContract =
       llvm::any_of(facts.entries, [](const DbPartitionEntryFact &entry) {
         return entry.preservesDistributedContract;
