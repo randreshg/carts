@@ -253,6 +253,14 @@ public:
   static Value getDispatchWorkerCount(OpBuilder &builder, Location loc,
                                       EdtOp parallelEdt);
 
+  /// Get dispatch worker count used by ForLowering worker loops.
+  /// Unlike getDispatchWorkerCount, this clamps the emitted worker lanes to the
+  /// subset that can actually receive chunks for the selected strategy.
+  static Value getForDispatchWorkerCount(ArtsCodegen *AC, Location loc,
+                                         EdtOp parallelEdt,
+                                         const DistributionStrategy &strategy,
+                                         Value totalChunks);
+
   /// Resolve default EDT parallelism from machine topology.
   /// Used by passes to avoid duplicating node/worker resolution logic.
   static ParallelismDecision

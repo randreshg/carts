@@ -1,7 +1,10 @@
 ///==========================================================================///
 /// File: DbElementWiseRewriter.cpp
 ///
-/// Element-wise rewriter: each element is a separate datablock.
+/// Element-wise rewriter: each element is a separate datablock when the
+/// allocation is fine-grained (outerRank > 0). Coarse layouts (outerRank == 0)
+/// also use this rewriter, but degenerate to a single-DB layout where db_ref
+/// indices are constant and accesses stay logically coarse.
 ///
 /// Example transformation (N=100 elements, 4 workers):
 ///

@@ -465,7 +465,7 @@ static SmallVector<Value> collectAccessIndicesFromUser(Operation *refUser) {
     return direct;
 
   for (Value result : refUser->getResults()) {
-    if (!result.getType().isa<MemRefType>())
+    if (!isa<MemRefType>(result.getType()))
       continue;
     SetVector<Operation *> memOps;
     DbUtils::collectReachableMemoryOps(result, memOps,
@@ -510,7 +510,7 @@ static int indexMatchStrength(Value idx, Value anchor) {
 
   if (auto cast = idx.getDefiningOp<arith::IndexCastOp>())
     idx = ValueUtils::stripSelectClamp(cast.getIn());
-  if (auto blockArg = idx.dyn_cast<BlockArgument>()) {
+  if (auto blockArg = dyn_cast<BlockArgument>(idx)) {
     if (auto forOp = dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp())) {
       if (blockArg == forOp.getInductionVar()) {
         Value lb = forOp.getLowerBound();
@@ -952,6 +952,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     /// Build per-acquire capabilities for heuristic voting
     size_t idx = 0;
     bool preserveExplicitContractLayout = false;
+    std::optional<int64_t> writerBlockSizeHint;
+    std::optional<int64_t> anyBlockSizeHint;
     for (DbAcquireNode *acqNode : allocAcquireNodes) {
       if (!acqNode || idx >= acquireInfos.size())
         continue;
@@ -970,6 +972,24 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                            !acquire.getPartitionSizes().empty();
       bool inferredBlock =
           !acqInfo.partitionOffsets.empty() && !acqInfo.partitionSizes.empty();
+      if (auto blockHint = getPartitioningHint(acquire.getOperation())) {
+        if (blockHint->mode == PartitionMode::block && blockHint->blockSize &&
+            *blockHint->blockSize > 0) {
+          if (!anyBlockSizeHint)
+            anyBlockSizeHint = blockHint->blockSize;
+          else
+            anyBlockSizeHint =
+                std::min(*anyBlockSizeHint, *blockHint->blockSize);
+
+          if (acquire.getMode() != ArtsMode::in) {
+            if (!writerBlockSizeHint)
+              writerBlockSizeHint = blockHint->blockSize;
+            else
+              writerBlockSizeHint =
+                  std::min(*writerBlockSizeHint, *blockHint->blockSize);
+          }
+        }
+      }
       bool hasDistributionContract = false;
       if (auto [edt, blockArg] =
               EdtUtils::getEdtBlockArgumentForAcquire(acquire);
@@ -1023,8 +1043,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                        "contract"
                        << (writesThroughAcquire ? " (write acquire)" : ""));
             bool acquireSelectsLeafDb = false;
-            if (auto ptrTy = acquire.getPtr().getType().dyn_cast<MemRefType>())
-              acquireSelectsLeafDb = !ptrTy.getElementType().isa<MemRefType>();
+            if (auto ptrTy = dyn_cast<MemRefType>(acquire.getPtr().getType()))
+              acquireSelectsLeafDb = !isa<MemRefType>(ptrTy.getElementType());
             if (acquireSelectsLeafDb)
               preserveExplicitContractLayout = true;
           } else if (writesThroughAcquire) {
@@ -1045,6 +1065,9 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       info.canElementWise =
           thisAcquireCanElementWise || !acquire.getPartitionIndices().empty();
       info.canBlock = canUseBlock && thisAcquireCanBlock;
+      info.hasDistributionContract = hasDistributionContract;
+      info.explicitCoarseRequest =
+          acquireMode && *acquireMode == PartitionMode::coarse;
 
       /// Populate unified partition infos from DbAcquireOp.
       /// Heuristics will compute uniformity and decide outerRank.
@@ -1105,6 +1128,11 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         acquireInfos[i].needsFullRange = true;
       }
     }
+
+    if (writerBlockSizeHint)
+      ctx.blockSize = writerBlockSizeHint;
+    else if (anyBlockSizeHint)
+      ctx.blockSize = anyBlockSizeHint;
   }
 
   /// Step 3: Reconcile per-acquire capabilities into allocation-level mode.
@@ -1143,7 +1171,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     ctx.accessMode = allocOp.getMode();
 
   /// Get memref rank
-  if (auto memrefType = allocOp.getElementType().dyn_cast<MemRefType>()) {
+  if (auto memrefType = dyn_cast<MemRefType>(allocOp.getElementType())) {
     ctx.memrefRank = memrefType.getRank();
     ctx.elementTypeIsMemRef = true;
   } else {

@@ -33,6 +33,8 @@ carts build --arts --debug 3           # Build ARTS with full debug logging
 carts compile simple.cpp -o simple     # Full compilation pipeline
 carts test                             # Run all tests
 carts check                            # Alias for carts test
+carts lit tests/contracts/<file>.mlir  # Run focused lit regressions
+carts lit --suite contracts            # Run the maintained contracts suite
 make check-doc-flags                   # Validate docs flags against carts-compile options
 
 # Formatting
@@ -64,7 +66,7 @@ Follow LLVM conventions:
    - Include source files, `arts.cfg`, and expected MLIR
    - Document in per-directory README
 
-3. **Always run** `carts test` locally before submitting
+3. **Always run** `carts lit tests/contracts/<changed-test>.mlir` for focused compiler changes, and `carts test` before submitting
 4. **For distributed changes**, run the 3-mode benchmark workflow in:
    - `docs/testing/benchmark-modes.md`
 

@@ -36,7 +36,7 @@ from scripts.docker import (
     docker_status,
     docker_exec,
 )
-from scripts.test import test as test_cmd, check as check_cmd
+from scripts.test import test as test_cmd, check as check_cmd, lit as lit_cmd
 from scripts.format import format_sources as format_cmd
 from scripts.clean import run_local_clean, run_full_clean
 from scripts.update import update as update_cmd
@@ -96,6 +96,14 @@ app.command(name="mlir-translate")(mlir_translate_cmd)
 # Testing
 app.command(name="test")(test_cmd)
 app.command(name="check")(check_cmd)
+app.command(
+    name="lit",
+    context_settings={
+        "allow_extra_args": True,
+        "allow_interspersed_args": False,
+        "ignore_unknown_options": True,
+    },
+)(lit_cmd)
 
 # Formatting
 app.command(name="format")(format_cmd)

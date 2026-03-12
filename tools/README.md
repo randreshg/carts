@@ -73,6 +73,7 @@ tools/
 | `carts compile <file.ll> -o out` | Link LLVM IR with ARTS runtime |
 | `carts build` | Build CARTS project |
 | `carts check` | Run test suite |
+| `carts lit [path...]` | Run bundled `llvm-lit` directly |
 | `carts check --examples` | Run example compilation+execution tests |
 | `make check-doc-flags` | Check documented `carts-compile` flags vs CLI options |
 | `carts benchmarks` | Build and manage benchmarks |

@@ -8,6 +8,7 @@
 #ifndef ARTS_ANALYSIS_GRAPHS_DB_PARTITIONBOUNDSANALYZER_H
 #define ARTS_ANALYSIS_GRAPHS_DB_PARTITIONBOUNDSANALYZER_H
 
+#include "arts/ArtsDialect.h"
 #include "mlir/IR/Value.h"
 #include <optional>
 
@@ -15,6 +16,17 @@ namespace mlir {
 namespace arts {
 
 class DbAcquireNode;
+
+/// Result of extracting a representative partition offset/size from an acquire.
+struct AcquirePartitionHints {
+  Value offset;
+  Value size;
+};
+
+/// Extract the representative partition offset and size from a DbAcquireOp.
+/// This logic is shared between the DbAcquireNode constructor and
+/// PartitionBoundsAnalyzer::computePartitionBounds to avoid duplication.
+AcquirePartitionHints extractPartitionHints(DbAcquireOp acquire);
 
 /// PartitionBoundsAnalyzer -- computes partition bounds, validates partition
 /// eligibility, and maps partition offsets to access-chain dimensions.
@@ -42,6 +54,12 @@ public:
 
   /// Check whether this acquire needs full-range access on a block alloc.
   static bool needsFullRange(DbAcquireNode *node, Value partitionOffset);
+
+  /// Preserve explicit distributed acquire contracts for safe acquire shapes
+  /// even when the task partition offset is not directly visible in the access
+  /// chain.
+  static bool shouldPreserveDistributedContract(DbAcquireNode *node,
+                                                Value partitionOffset);
 };
 
 } // namespace arts

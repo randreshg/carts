@@ -178,6 +178,12 @@ public:
   ///   2. Partition offset not in access pattern (except stencil)
   bool needsFullRange(Value partitionOffset);
 
+  /// Preserve an explicit distributed acquire contract even when the partition
+  /// offset is not visible in the access chain. This is reserved for acquire
+  /// shapes that are already known to be safe, such as leaf DB slices or
+  /// read-only nested stencil inputs.
+  bool shouldPreserveDistributedContract(Value partitionOffset);
+
   LogicalResult computeBlockInfo(Value &blockOffset, Value &blockSize);
   LogicalResult computeBlockInfoFromWhile(scf::WhileOp whileOp,
                                           Value &blockOffset, Value &blockSize,
