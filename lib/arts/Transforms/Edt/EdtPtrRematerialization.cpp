@@ -11,8 +11,8 @@
 
 /// Arts
 #include "arts/ArtsDialect.h"
-#include "arts/Transforms/Edt/EdtPtrRematerialization.h"
-#include "arts/Utils/ArtsUtils.h"
+#include "arts/transforms/edt/EdtPtrRematerialization.h"
+#include "arts/utils/Utils.h"
 
 /// Others
 #include "mlir/IR/Operation.h"
@@ -20,7 +20,7 @@
 #include "llvm/ADT/SmallVector.h"
 
 /// LLVM support
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(edt_ptr_rematerialization);
 
 namespace mlir {

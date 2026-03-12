@@ -4,16 +4,16 @@
 /// Runtime stencil-bounds guard lowering for DbAcquireOps.
 ///==========================================================================///
 
-#include "arts/Transforms/Db/StencilBoundsLowering.h"
+#include "arts/transforms/db/StencilBoundsLowering.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DbUtils.h"
-#include "arts/Utils/OperationAttributes.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/utils/DbUtils.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(stencil_bounds_lowering);
 
 using namespace mlir;

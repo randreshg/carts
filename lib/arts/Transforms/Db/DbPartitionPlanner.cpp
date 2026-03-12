@@ -4,11 +4,11 @@
 /// Mode-specialized planning implementations for DbPartitioning.
 ///==========================================================================///
 
-#include "arts/Transforms/Db/DbPartitionPlanner.h"
-#include "arts/Analysis/PartitioningHeuristics.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/OperationAttributes.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/transforms/db/DbPartitionPlanner.h"
+#include "arts/analysis/PartitioningHeuristics.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
 using namespace mlir;

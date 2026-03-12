@@ -7,9 +7,9 @@
 #ifndef ARTS_ANALYSIS_DB_DBANALYSIS_H
 #define ARTS_ANALYSIS_DB_DBANALYSIS_H
 
-#include "arts/Analysis/ArtsAnalysis.h"
-#include "arts/Analysis/Graphs/Db/DbAccessPattern.h"
 #include "arts/ArtsDialect.h"
+#include "arts/analysis/Analysis.h"
+#include "arts/analysis/graphs/db/DbAccessPattern.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
@@ -48,7 +48,7 @@ public:
         EdtDistributionPattern::unknown;
   };
 
-  DbAnalysis(ArtsAnalysisManager &AM);
+  DbAnalysis(AnalysisManager &AM);
 
   ~DbAnalysis();
 

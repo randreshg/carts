@@ -7,9 +7,9 @@
 #ifndef ARTS_ANALYSIS_LOOPNODE_H
 #define ARTS_ANALYSIS_LOOPNODE_H
 
-#include "arts/Analysis/Db/DbAnalysis.h"
-#include "arts/Analysis/Graphs/Base/NodeBase.h"
-#include "arts/Utils/Metadata/LoopMetadata.h"
+#include "arts/analysis/db/DbAnalysis.h"
+#include "arts/analysis/graphs/base/NodeBase.h"
+#include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
@@ -83,8 +83,7 @@ public:
   std::optional<int64_t> getLowerBoundConstant() const;
   std::optional<int64_t> getUpperBoundConstant() const;
   std::optional<int64_t> getStepConstant() const;
-  std::optional<int64_t>
-  estimateStaticPerfectNestedWork(int64_t cap = 8) const;
+  std::optional<int64_t> estimateStaticPerfectNestedWork(int64_t cap = 8) const;
   int getNestingDepth() const;
   void clearIVCache() { ivDependencyCache.clear(); }
 

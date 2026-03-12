@@ -1,4 +1,4 @@
-add_subdirectory(run)
+add_subdirectory(compile)
 
 # Install the main carts wrapper script into the same bin as other tools
 install(

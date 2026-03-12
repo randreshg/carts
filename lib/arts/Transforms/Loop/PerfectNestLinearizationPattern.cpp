@@ -24,14 +24,14 @@
 ///   - no extra ops around the inner loop
 ///==========================================================================///
 
-#include "arts/Transforms/Loop/LoopNormalizer.h"
-#include "arts/Utils/ArtsDebug.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/transforms/loop/LoopNormalizer.h"
+#include "arts/utils/Debug.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 
 ARTS_DEBUG_SETUP(loop_normalization);
 
@@ -68,7 +68,8 @@ static std::optional<int64_t> getConstantUnitTripCount(scf::ForOp loop) {
   return *ub - *lb;
 }
 
-static std::optional<int64_t> getRemainingPerfectNestTripProduct(scf::ForOp loop) {
+static std::optional<int64_t>
+getRemainingPerfectNestTripProduct(scf::ForOp loop) {
   if (!loop)
     return std::nullopt;
 
@@ -120,8 +121,8 @@ static int64_t getRemainingPerfectNestDepth(scf::ForOp loop) {
 
 static bool isZeroReductionFreeArtsFor(ForOp artsFor) {
   auto step = ValueUtils::tryFoldConstantIndex(artsFor.getStep().front());
-  return artsFor.getLowerBound().size() == 1 && artsFor.getUpperBound().size() == 1 &&
-         artsFor.getStep().size() == 1 &&
+  return artsFor.getLowerBound().size() == 1 &&
+         artsFor.getUpperBound().size() == 1 && artsFor.getStep().size() == 1 &&
          artsFor.getReductionAccumulators().empty() && step && *step == 1;
 }
 
@@ -223,10 +224,9 @@ LogicalResult PerfectNestLinearizationPattern::apply(OpBuilder &builder) {
   Value innerTrip = createUnitTripCount(builder, loc, innerLb, innerUb);
   Value totalTrip = builder.create<arith::MulIOp>(loc, outerTrip, innerTrip);
 
-  auto linearFor = builder.create<ForOp>(loc, ValueRange{zero},
-                                         ValueRange{totalTrip},
-                                         ValueRange{one}, nullptr,
-                                         ValueRange{});
+  auto linearFor =
+      builder.create<ForOp>(loc, ValueRange{zero}, ValueRange{totalTrip},
+                            ValueRange{one}, nullptr, ValueRange{});
 
   Region &dstRegion = linearFor.getRegion();
   if (dstRegion.empty())
@@ -237,10 +237,14 @@ LogicalResult PerfectNestLinearizationPattern::apply(OpBuilder &builder) {
 
   OpBuilder bodyBuilder = OpBuilder::atBlockBegin(&dst);
   Value linearIV = dst.getArgument(0);
-  Value outerLinear = bodyBuilder.create<arith::DivUIOp>(loc, linearIV, innerTrip);
-  Value innerLinear = bodyBuilder.create<arith::RemUIOp>(loc, linearIV, innerTrip);
-  Value newOuterIV = bodyBuilder.create<arith::AddIOp>(loc, outerLb, outerLinear);
-  Value newInnerIV = bodyBuilder.create<arith::AddIOp>(loc, innerLb, innerLinear);
+  Value outerLinear =
+      bodyBuilder.create<arith::DivUIOp>(loc, linearIV, innerTrip);
+  Value innerLinear =
+      bodyBuilder.create<arith::RemUIOp>(loc, linearIV, innerTrip);
+  Value newOuterIV =
+      bodyBuilder.create<arith::AddIOp>(loc, outerLb, outerLinear);
+  Value newInnerIV =
+      bodyBuilder.create<arith::AddIOp>(loc, innerLb, innerLinear);
 
   IRMapping mapping;
   mapping.map(outerArtsFor.getRegion().front().getArgument(0), newOuterIV);

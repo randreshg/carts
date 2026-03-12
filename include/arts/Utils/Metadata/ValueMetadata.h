@@ -9,8 +9,8 @@
 #ifndef ARTS_UTILS_VALUEMETADATA_H
 #define ARTS_UTILS_VALUEMETADATA_H
 
-#include "arts/Utils/Metadata/ArtsMetadata.h"
-#include "arts/Utils/Metadata/LocationMetadata.h"
+#include "arts/utils/metadata/LocationMetadata.h"
+#include "arts/utils/metadata/Metadata.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"

@@ -1,6 +1,6 @@
 # Dependence Transforms
 
-`ArtsDepTransforms` owns exact dependence-shape rewrites.
+`DepTransforms` owns exact dependence-shape rewrites.
 
 These transforms preserve program semantics and preserve the same computation
 style, but change the execution schedule so later ARTS passes see a scalable

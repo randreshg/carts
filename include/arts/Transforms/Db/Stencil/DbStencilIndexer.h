@@ -19,7 +19,7 @@
 #ifndef ARTS_TRANSFORMS_DATABLOCK_DBSTENCILINDEXER_H
 #define ARTS_TRANSFORMS_DATABLOCK_DBSTENCILINDEXER_H
 
-#include "arts/Transforms/Db/DbIndexerBase.h"
+#include "arts/transforms/db/DbIndexerBase.h"
 
 namespace mlir {
 namespace arts {

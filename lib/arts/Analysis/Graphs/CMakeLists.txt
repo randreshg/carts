@@ -5,10 +5,10 @@
 file(GLOB CARTS_GRAPHS_SOURCE_FILES "*.cpp")
 
 # Add Db graph subdirectory
-add_subdirectory(Db)
+add_subdirectory(db)
 
 # Add Edt graph subdirectory  
-add_subdirectory(Edt)
+add_subdirectory(edt)
 
 # Combine all graph source files
 list(APPEND CARTS_GRAPHS_SOURCE_FILES ${CARTS_DB_GRAPHS_SOURCE_FILES})

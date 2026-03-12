@@ -7,8 +7,8 @@
 #ifndef ARTS_ANALYSIS_METADATA_METADATAIO_H
 #define ARTS_ANALYSIS_METADATA_METADATAIO_H
 
-#include "arts/Utils/Metadata/ArtsMetadata.h"
-#include "arts/Utils/Metadata/IdRegistry.h"
+#include "arts/utils/metadata/IdRegistry.h"
+#include "arts/utils/metadata/Metadata.h"
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"

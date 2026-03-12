@@ -109,7 +109,7 @@ Cannon and SUMMA remain viable future paths once collective-like orchestration i
 ## 3. Strategy Selection Policy (H2)
 
 Current policy is implemented in
-`DistributionHeuristics::selectDistributionKind` (`lib/arts/Analysis/DistributionHeuristics.cpp`).
+`DistributionHeuristics::selectDistributionKind` (`lib/arts/analysis/DistributionHeuristics.cpp`).
 
 Selection order matters:
 
@@ -140,10 +140,10 @@ Pattern detection is centralized in analysis APIs, not in lowering passes.
 
 - `DbAnalysis::analyzeLoopDbAccessPatterns(ForOp)` computes loop summary from DB graph + access bounds.
 - `DbAnalysis::getLoopDistributionPattern(ForOp)` exposes pattern.
-- `ArtsAnalysisManager::getLoopDistributionPattern(Operation *)` is the unified pass-facing API.
+- `AnalysisManager::getLoopDistributionPattern(Operation *)` is the unified pass-facing API.
 - Pattern-specific IR matching is centralized in
-  `include/arts/Analysis/Db/DbPatternMatchers.h` /
-  `lib/arts/Analysis/Db/DbPatternMatchers.cpp` and reused by analysis and
+  `include/arts/analysis/Db/DbPatternMatchers.h` /
+  `lib/arts/analysis/Db/DbPatternMatchers.cpp` and reused by analysis and
   loop-normalization transforms.
 
 ### 4.2 EDT-facing view
@@ -153,7 +153,7 @@ Pattern detection is centralized in analysis APIs, not in lowering passes.
 
 ### 4.3 Access-pattern unification
 
-- Shared utility: `AccessPatternAnalysis` (`include/arts/Analysis/AccessPatternAnalysis.h`, `lib/arts/Analysis/AccessPatternAnalysis.cpp`)
+- Shared utility: `AccessPatternAnalysis` (`include/arts/analysis/AccessPatternAnalysis.h`, `lib/arts/analysis/AccessPatternAnalysis.cpp`)
 - DB graph nodes and DB analysis both use the same bounds logic.
 
 ## 5. Pipeline Architecture
@@ -166,7 +166,7 @@ Distribution is now a dedicated stage:
 
 Key files:
 - `tools/run/carts-compile.cpp`
-- `lib/arts/Passes/Transformations/EdtDistributionPass.cpp`
+- `lib/arts/passes/Transformations/EdtDistributionPass.cpp`
 
 Useful stop points:
 
@@ -185,7 +185,7 @@ Goal:
 Current implementation:
 - `DbAllocOp` supports a `distributed` marker attribute.
 - New pass: `DistributedDbOwnershipPass`
-  (`lib/arts/Passes/Optimizations/DistributedDbOwnership.cpp`).
+  (`lib/arts/passes/Optimizations/DistributedDbOwnership.cpp`).
 - Pipeline placement: `DbPartitioning -> DistributedDbOwnership -> DbPass`
   (gated by `--distributed-db` in `carts-compile`).
 - `--distributed-db` also enables distributed host loop outlining
@@ -214,9 +214,9 @@ Current eligibility policy is intentionally conservative:
 - reject stencil-style read-only internode uses
 
 Distributed init split is implemented:
-- `ArtsCodegen.cpp` generates a `distributed_db_init` callback that runs on ALL
+- `Codegen.cpp` generates a `distributed_db_init` callback that runs on ALL
   nodes inside `initPerNode` and reserves a deterministic GUID sequence.
-- `ArtsCodegen.cpp` also generates `distributed_db_init_worker` in
+- `Codegen.cpp` also generates `distributed_db_init_worker` in
   `initPerWorker`; only the primary local worker performs DB creation, and only
   for GUIDs whose rank matches the local node (`artsGuidGetRank(guid) == node`).
 - `ConvertArtsToLLVM.cpp` lowers marked multi-DB allocations with
@@ -267,7 +267,7 @@ Future caveat:
   - `BlockEdtRewriter`
   - `StencilEdtRewriter`
 - Strategy-aware planning extracted into:
-  - `AcquireRewritePlanning` (`include/arts/Transforms/Edt/AcquireRewritePlanning.h`, `lib/arts/Transforms/Edt/AcquireRewritePlanning.cpp`)
+  - `AcquireRewritePlanning` (`include/arts/transforms/Edt/AcquireRewritePlanning.h`, `lib/arts/transforms/Edt/AcquireRewritePlanning.cpp`)
 
 ### 9.2 Task loop lowering helpers
 

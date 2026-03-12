@@ -3,7 +3,7 @@
 /// Implementation of LoopMetadata class for loop metadata management.
 ///==========================================================================///
 
-#include "arts/Utils/Metadata/LoopMetadata.h"
+#include "arts/utils/metadata/LoopMetadata.h"
 #include "arts/ArtsDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"

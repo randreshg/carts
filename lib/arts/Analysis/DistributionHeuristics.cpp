@@ -18,15 +18,15 @@
 ///   pattern = matmul    -> kind = tiling_2d
 ///==========================================================================///
 
-#include "arts/Analysis/DistributionHeuristics.h"
-#include "arts/Analysis/HeuristicUtils.h"
-#include "arts/Analysis/Loop/LoopAnalysis.h"
-#include "arts/Codegen/ArtsCodegen.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DbUtils.h"
-#include "arts/Utils/Metadata/LoopMetadata.h"
-#include "arts/Utils/OperationAttributes.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/analysis/DistributionHeuristics.h"
+#include "arts/analysis/HeuristicUtils.h"
+#include "arts/analysis/loop/LoopAnalysis.h"
+#include "arts/codegen/Codegen.h"
+#include "arts/utils/DbUtils.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/ValueUtils.h"
+#include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
 #include <algorithm>
@@ -65,7 +65,7 @@ static std::optional<int64_t> getExplicitWorkersPerNodeCount(EdtOp edt) {
 }
 
 ParallelismDecision DistributionHeuristics::resolveParallelismFromMachine(
-    const ArtsAbstractMachine *machine) {
+    const AbstractMachine *machine) {
   ParallelismDecision decision;
   if (!machine)
     return decision;
@@ -97,8 +97,9 @@ ParallelismDecision DistributionHeuristics::resolveParallelismFromMachine(
   return decision;
 }
 
-std::optional<WorkerConfig> DistributionHeuristics::resolveWorkerConfig(
-    EdtOp parallelEdt, const ArtsAbstractMachine *machine) {
+std::optional<WorkerConfig>
+DistributionHeuristics::resolveWorkerConfig(EdtOp parallelEdt,
+                                            const AbstractMachine *machine) {
   WorkerConfig cfg;
   cfg.internode = parallelEdt.getConcurrency() == EdtConcurrency::internode;
 
@@ -165,7 +166,8 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
 
   int64_t effectiveTripCount = tripCount;
   bool allowNestedWorkBoost = false;
-  if (auto summary = loopAnalysis.getLoopDbAccessSummary(forOp.getOperation())) {
+  if (auto summary =
+          loopAnalysis.getLoopDbAccessSummary(forOp.getOperation())) {
     allowNestedWorkBoost =
         summary->distributionPattern == EdtDistributionPattern::uniform &&
         summary->allocPatterns.size() <= 4 && !summary->hasStencilOffset &&
@@ -293,7 +295,7 @@ Tiling2DWorkerGrid DistributionHeuristics::getTiling2DWorkerGrid(
 
 DistributionStrategy
 DistributionHeuristics::analyzeStrategy(EdtConcurrency concurrency,
-                                        const ArtsAbstractMachine *machine) {
+                                        const AbstractMachine *machine) {
   DistributionStrategy strategy;
 
   if (concurrency == EdtConcurrency::intranode) {
@@ -889,7 +891,8 @@ Value DistributionHeuristics::getForDispatchWorkerCount(
   switch (strategy.kind) {
   case DistributionKind::Flat:
   case DistributionKind::BlockCyclic:
-    clampedDispatch = AC->create<arith::MinUIOp>(loc, totalWorkers, totalChunks);
+    clampedDispatch =
+        AC->create<arith::MinUIOp>(loc, totalWorkers, totalChunks);
     break;
   case DistributionKind::TwoLevel: {
     Value workersPerNode = getWorkersPerNode(AC, loc, parallelEdt);
@@ -902,15 +905,16 @@ Value DistributionHeuristics::getForDispatchWorkerCount(
   }
   case DistributionKind::Tiling2D: {
     Value totalWorkersIndex = AC->castToIndex(totalWorkers, loc);
-    auto totalWorkersConst = ValueUtils::tryFoldConstantIndex(totalWorkersIndex);
+    auto totalWorkersConst =
+        ValueUtils::tryFoldConstantIndex(totalWorkersIndex);
     if (!totalWorkersConst)
       break;
 
     std::optional<int64_t> workersPerNodeConst = std::nullopt;
     if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {
       Value workersPerNode = getWorkersPerNode(AC, loc, parallelEdt);
-      workersPerNodeConst =
-          ValueUtils::tryFoldConstantIndex(AC->castToIndex(workersPerNode, loc));
+      workersPerNodeConst = ValueUtils::tryFoldConstantIndex(
+          AC->castToIndex(workersPerNode, loc));
     }
 
     int64_t colWorkersConst =

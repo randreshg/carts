@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "arts/Utils/Testing/CartsTest.h"
+#include "arts/utils/Testing/CartsTest.h"
 
 int main(int argc, char **argv) {
   CARTS_TIMER_START();

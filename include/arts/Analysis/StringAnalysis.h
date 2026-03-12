@@ -7,7 +7,7 @@
 #ifndef CARTS_ANALYSIS_STRINGANALYSIS_H
 #define CARTS_ANALYSIS_STRINGANALYSIS_H
 
-#include "arts/Analysis/ArtsAnalysis.h"
+#include "arts/analysis/Analysis.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -23,7 +23,7 @@ namespace arts {
 ///===----------------------------------------------------------------------===///
 class StringAnalysis : public ArtsAnalysis {
 public:
-  explicit StringAnalysis(ArtsAnalysisManager &manager);
+  explicit StringAnalysis(AnalysisManager &manager);
 
   void run();
   void invalidate() override;

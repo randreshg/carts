@@ -2,9 +2,9 @@
 /// File: StringAnalysis.cpp
 ///==========================================================================///
 
-#include "arts/Analysis/StringAnalysis.h"
-#include "arts/Analysis/ArtsAnalysisManager.h"
-#include "arts/Utils/ArtsUtils.h"
+#include "arts/analysis/StringAnalysis.h"
+#include "arts/analysis/AnalysisManager.h"
+#include "arts/utils/Utils.h"
 /// Dialects
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -16,13 +16,13 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(string_analysis);
 
 using namespace mlir;
 using namespace arts;
 
-StringAnalysis::StringAnalysis(ArtsAnalysisManager &manager)
+StringAnalysis::StringAnalysis(AnalysisManager &manager)
     : ArtsAnalysis(manager), module(manager.getModule()) {}
 
 void StringAnalysis::run() {

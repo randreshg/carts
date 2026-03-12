@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "arts/Utils/Testing/CartsTest.h"
+#include "arts/utils/Testing/CartsTest.h"
 
 #define MATCH_SCORE 2
 #define MISMATCH_PENALTY -1

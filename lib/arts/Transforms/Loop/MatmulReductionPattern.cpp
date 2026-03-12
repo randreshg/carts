@@ -16,11 +16,11 @@
 /// It changes a reduction-carried matmul kernel into an update form that is
 /// easier for downstream ARTS distribution and DB partitioning to exploit.
 
-#include "arts/Transforms/Kernel/KernelTransform.h"
-#include "arts/Utils/ArtsDebug.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/Metadata/LoopMetadata.h"
-#include "arts/Utils/OperationAttributes.h"
+#include "arts/transforms/kernel/KernelTransform.h"
+#include "arts/utils/Debug.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"

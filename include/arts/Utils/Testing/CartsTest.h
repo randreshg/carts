@@ -5,7 +5,7 @@
 /// Provides consistent test status reporting and timing.
 ///
 /// Usage:
-///   #include "arts/Utils/Testing/CartsTest.h"
+///   #include "arts/utils/testing/CartsTest.h"
 ///
 ///   int main(int argc, char *argv[]) {
 ///       CARTS_TIMER_START();

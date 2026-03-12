@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <time.h>
 
-#include "arts/Utils/Testing/CartsTest.h"
+#include "arts/utils/Testing/CartsTest.h"
 int main(int argc, char *argv[]) {
   CARTS_TIMER_START();
   const int N = (argc >= 2) ? atoi(argv[1]) : 100;

@@ -4,9 +4,9 @@
 /// Layout-aware element pointer computation for datablock lowering.
 ///==========================================================================///
 
-#include "arts/Transforms/Db/DbLayoutStrategy.h"
-#include "arts/Codegen/ArtsCodegen.h"
-#include "arts/Utils/DbUtils.h"
+#include "arts/transforms/db/DbLayoutStrategy.h"
+#include "arts/codegen/Codegen.h"
+#include "arts/utils/DbUtils.h"
 #include "mlir/IR/Operation.h"
 
 using namespace mlir;

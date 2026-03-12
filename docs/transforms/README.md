@@ -25,7 +25,7 @@ Use it to answer three questions:
 ## Source Layout
 
 Pass entrypoints live under domain folders in
-[`lib/arts/Passes/Optimizations`](/Users/randreshg/Documents/carts/lib/arts/Passes/Optimizations):
+[`lib/arts/passes/Optimizations`](/Users/randreshg/Documents/carts/lib/arts/passes/Optimizations):
 
 - `General/`
 - `Dependence/`
@@ -39,7 +39,7 @@ Reusable transform interfaces stay under
 [`include/arts/Transforms`](/Users/randreshg/Documents/carts/include/arts/Transforms)
 with the same domain split:
 
-- `Dependence/DependenceTransform.h`
+- `Dependence/DepTransform.h`
 - `Kernel/KernelTransform.h`
 - `Loop/LoopNormalizer.h`
 - `Db/DbTransforms.h`
@@ -51,10 +51,10 @@ with matching domain folders.
 
 ## Ownership Rules
 
-- `ArtsDepTransforms`
+- `DepTransforms`
   Use for exact dependence-preserving schedule rewrites.
 
-- `ArtsKernelTransforms`
+- `KernelTransforms`
   Use for semantics-preserving kernel-form rewrites that make downstream
   distribution or partitioning better.
 

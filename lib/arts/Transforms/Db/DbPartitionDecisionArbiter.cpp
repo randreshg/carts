@@ -4,13 +4,13 @@
 /// Lightweight arbitration helpers for DbPartitioning decisions.
 ///==========================================================================///
 
-#include "arts/Transforms/Db/DbPartitionDecisionArbiter.h"
-#include "arts/Analysis/ArtsHeuristics.h"
-#include "arts/Utils/EdtUtils.h"
-#include "arts/Utils/OperationAttributes.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/transforms/db/DbPartitionDecisionArbiter.h"
+#include "arts/analysis/HeuristicsConfig.h"
+#include "arts/utils/EdtUtils.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/ValueUtils.h"
 
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(db_partition_decision_arbiter);
 
 using namespace mlir;

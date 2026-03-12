@@ -14,7 +14,7 @@
 ///      append extra partition dimensions to partition_offsets/sizes only
 ///==========================================================================///
 
-#include "arts/Transforms/Edt/EdtRewriter.h"
+#include "arts/transforms/edt/EdtRewriter.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
 using namespace mlir;
@@ -100,9 +100,10 @@ DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
   /// This keeps block-planning legality separate from the EDT-local compute
   /// slice and avoids baking mixed-orientation worker chunks into rec_dep
   /// ranges too early.
-  bool useParentDependencyRange =
-      in.parentAcquire.getMode() == ArtsMode::in && !applyStencilHalo &&
-      !in.parentAcquire.getOffsets().empty() && !in.parentAcquire.getSizes().empty();
+  bool useParentDependencyRange = in.parentAcquire.getMode() == ArtsMode::in &&
+                                  !applyStencilHalo &&
+                                  !in.parentAcquire.getOffsets().empty() &&
+                                  !in.parentAcquire.getSizes().empty();
   if (useParentDependencyRange) {
     dependencyOffsets.assign(in.parentAcquire.getOffsets().begin(),
                              in.parentAcquire.getOffsets().end());

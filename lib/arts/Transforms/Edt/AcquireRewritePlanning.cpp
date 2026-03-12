@@ -13,13 +13,13 @@
 ///       so DbPartitioning can materialize 2D owner layout for outputs.
 ///==========================================================================///
 
-#include "arts/Transforms/Edt/AcquireRewritePlanning.h"
-#include "arts/Analysis/ArtsAnalysisManager.h"
-#include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
-#include "arts/Utils/ArtsDebug.h"
-#include "arts/Utils/DbUtils.h"
-#include "arts/Utils/OperationAttributes.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/transforms/edt/AcquireRewritePlanning.h"
+#include "arts/analysis/AnalysisManager.h"
+#include "arts/utils/DbUtils.h"
+#include "arts/utils/Debug.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/ValueUtils.h"
+#include "arts/utils/abstract_machine/AbstractMachine.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
 using namespace mlir;
@@ -27,9 +27,7 @@ using namespace mlir::arts;
 
 ARTS_DEBUG_SETUP(acquire_rewrite_planning);
 
-namespace {
-
-} // namespace
+namespace {} // namespace
 
 /// Plan how to rewrite a per-task DbAcquire based on distribution strategy.
 ///
@@ -104,9 +102,9 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
         auto accessPattern = getDbAccessPattern(dbAlloc.getOperation());
         std::optional<AccessPattern> acquireAccessPattern;
         if (input.analysisManager) {
-          acquireAccessPattern = input.analysisManager->getDbAnalysis()
-                                     .getAcquireAccessPattern(
-                                         input.parentAcquire);
+          acquireAccessPattern =
+              input.analysisManager->getDbAnalysis().getAcquireAccessPattern(
+                  input.parentAcquire);
         }
         const ArtsMode mode = input.parentAcquire.getMode();
 
@@ -143,20 +141,16 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
             ((patternSaysStencil && modeNeedsPatternStencilHalo) ||
              (strategySaysStencil && strategyNeedsStencilHalo));
 
-        ARTS_DEBUG("Acquire rewrite plan: mode="
-                   << static_cast<int>(mode)
-                   << " patternSaysStencil=" << patternSaysStencil
-                   << " allocPattern="
-                   << (accessPattern
-                           ? static_cast<int>(*accessPattern)
-                           : -1)
-                   << " acquirePattern="
-                   << (acquireAccessPattern
-                           ? static_cast<int>(*acquireAccessPattern)
-                           : -1)
-                   << " strategySaysStencil=" << strategySaysStencil
-                   << " inoutReadsCrossElementSelf="
-                   << inoutReadsCrossElementSelf);
+        ARTS_DEBUG(
+            "Acquire rewrite plan: mode="
+            << static_cast<int>(mode)
+            << " patternSaysStencil=" << patternSaysStencil << " allocPattern="
+            << (accessPattern ? static_cast<int>(*accessPattern) : -1)
+            << " acquirePattern="
+            << (acquireAccessPattern ? static_cast<int>(*acquireAccessPattern)
+                                     : -1)
+            << " strategySaysStencil=" << strategySaysStencil
+            << " inoutReadsCrossElementSelf=" << inoutReadsCrossElementSelf);
 
         /// In-place stencil updates (Seidel-style) must stay coarse because
         /// the same DB is both written and read at cross-element offsets.

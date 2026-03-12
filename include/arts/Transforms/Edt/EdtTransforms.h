@@ -6,11 +6,11 @@
 #ifndef ARTS_TRANSFORMS_EDT_EDTTRANSFORMS_H
 #define ARTS_TRANSFORMS_EDT_EDTTRANSFORMS_H
 
-#include "arts/Transforms/Edt/AcquireRewritePlanning.h"
-#include "arts/Transforms/Edt/EdtInvariantCodeMotion.h"
-#include "arts/Transforms/Edt/EdtPtrRematerialization.h"
-#include "arts/Transforms/Edt/EdtTaskLoopLowering.h"
-#include "arts/Transforms/Edt/ParallelSplitLowering.h"
-#include "arts/Transforms/Edt/ReductionLowering.h"
+#include "arts/transforms/edt/AcquireRewritePlanning.h"
+#include "arts/transforms/edt/EdtICM.h"
+#include "arts/transforms/edt/EdtParallelSplitLowering.h"
+#include "arts/transforms/edt/EdtPtrRematerialization.h"
+#include "arts/transforms/edt/EdtReductionLowering.h"
+#include "arts/transforms/edt/EdtTaskLoopLowering.h"
 
 #endif // ARTS_TRANSFORMS_EDT_EDTTRANSFORMS_H

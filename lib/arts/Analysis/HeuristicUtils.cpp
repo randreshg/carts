@@ -5,11 +5,11 @@
 /// (Distribution) heuristic families.
 ///==========================================================================///
 
-#include "arts/Analysis/HeuristicUtils.h"
-#include "arts/Analysis/Loop/LoopNode.h"
+#include "arts/analysis/HeuristicUtils.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/Metadata/LoopMetadata.h"
-#include "arts/Utils/OperationAttributes.h"
+#include "arts/analysis/loop/LoopNode.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/metadata/LoopMetadata.h"
 
 using namespace mlir;
 using namespace mlir::arts;

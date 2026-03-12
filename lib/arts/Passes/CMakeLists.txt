@@ -4,46 +4,46 @@ message(STATUS "POLYGEIST_LIBRARY_DIR: ${POLYGEIST_BUILD_DIR}/lib")
 
 add_mlir_dialect_library(MLIRArtsTransforms
   # Transformation passes
-  Transformations/CollectMetadata.cpp
-  Transformations/VerifyMetadata.cpp
-  Transformations/CreateDbs.cpp
-  Transformations/CreateEpochs.cpp
-  Transformations/Concurrency.cpp
-  Transformations/ConvertOpenMPToArts.cpp
-  Transformations/ConvertArtsToLLVM.cpp
-  Transformations/DbLowering.cpp
-  Transformations/EdtLowering.cpp
-  Transformations/EpochLowering.cpp
-  Transformations/ArtsForOptimization.cpp
-  Transformations/DistributedHostLoopOutlining.cpp
-  Transformations/EdtDistribution.cpp
-  Transformations/ForLowering.cpp
-  Transformations/ParallelEdtLowering.cpp
-  Transformations/LoopReordering.cpp
-  Transformations/EdtPtrRematerialization.cpp
+  transforms/CollectMetadata.cpp
+  transforms/VerifyMetadata.cpp
+  transforms/CreateDbs.cpp
+  transforms/CreateEpochs.cpp
+  transforms/Concurrency.cpp
+  transforms/ConvertOpenMPToArts.cpp
+  transforms/ConvertArtsToLLVM.cpp
+  transforms/DbLowering.cpp
+  transforms/EdtLowering.cpp
+  transforms/EpochLowering.cpp
+  transforms/ForOpt.cpp
+  transforms/DistributedHostLoopOutlining.cpp
+  transforms/EdtDistribution.cpp
+  transforms/ForLowering.cpp
+  transforms/ParallelEdtLowering.cpp
+  transforms/LoopReordering.cpp
+  transforms/EdtPtrRematerialization.cpp
   
   # Optimization passes
-  Optimizations/General/ArtsInliner.cpp
-  Optimizations/General/CanonicalizeMemrefs.cpp
-  Optimizations/General/DeadCodeElimination.cpp
-  Optimizations/Dependence/ArtsDepTransforms.cpp
-  Optimizations/Kernel/ArtsKernelTransforms.cpp
-  Optimizations/Loop/LoopFusion.cpp
-  Optimizations/Loop/LoopNormalization.cpp
-  Optimizations/Loop/StencilBoundaryPeeling.cpp
-  Optimizations/Db/BlockLoopStripMining.cpp
-  Optimizations/Db/Db.cpp
-  Optimizations/Db/DbOpts.cpp
-  Optimizations/Db/DbPartitioning.cpp
-  Optimizations/Db/DistributedDbOwnership.cpp
-  Optimizations/Edt/Edt.cpp
-  Optimizations/Edt/EdtInvariantCodeMotion.cpp
-  Optimizations/Edt/EpochOpt.cpp
-  Optimizations/CodegenPrep/AliasScopeGen.cpp
-  Optimizations/CodegenPrep/ArtsHoisting.cpp
-  Optimizations/CodegenPrep/DataPointerHoisting.cpp
-  Optimizations/CodegenPrep/LoopVectorizationHints.cpp
-  Optimizations/CodegenPrep/ScalarReplacement.cpp
+  opt/general/Inliner.cpp
+  opt/general/CanonicalizeMemrefs.cpp
+  opt/general/DeadCodeElimination.cpp
+  opt/dep/DepTransforms.cpp
+  opt/kernel/KernelTransforms.cpp
+  opt/loop/LoopFusion.cpp
+  opt/loop/LoopNormalization.cpp
+  opt/loop/StencilBoundaryPeeling.cpp
+  opt/db/BlockLoopStripMining.cpp
+  opt/db/Db.cpp
+  opt/db/DbOpts.cpp
+  opt/db/DbPartitioning.cpp
+  opt/db/DistributedDbOwnership.cpp
+  opt/edt/Edt.cpp
+  opt/edt/EdtICM.cpp
+  opt/edt/EpochOpt.cpp
+  opt/codegen/AliasScopeGen.cpp
+  opt/codegen/Hoisting.cpp
+  opt/codegen/DataPointerHoisting.cpp
+  opt/codegen/LoopVectorizationHints.cpp
+  opt/codegen/ScalarReplacement.cpp
   
   ${CARTS_TRANSFORMS_SOURCE_FILES}
   ${CARTS_UTILS_SOURCE_FILES}

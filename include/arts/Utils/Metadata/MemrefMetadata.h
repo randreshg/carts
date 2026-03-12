@@ -9,10 +9,10 @@
 #ifndef ARTS_UTILS_MEMREFMETADATA_H
 #define ARTS_UTILS_MEMREFMETADATA_H
 
-#include "arts/Utils/Metadata/AccessStats.h"
-#include "arts/Utils/Metadata/ArtsMetadata.h"
-#include "arts/Utils/Metadata/LocationMetadata.h"
-#include "arts/Utils/Metadata/ValueMetadata.h"
+#include "arts/utils/metadata/AccessStats.h"
+#include "arts/utils/metadata/LocationMetadata.h"
+#include "arts/utils/metadata/Metadata.h"
+#include "arts/utils/metadata/ValueMetadata.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"

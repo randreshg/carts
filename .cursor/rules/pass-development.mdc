@@ -5,8 +5,8 @@ alwaysApply: false
 # MLIR Pass Development for CARTS
 
 ## Pass Location and Structure
-- Passes should be in [lib/arts/Passes/](mdc:lib/arts/Passes/)
-- Pass declarations in [include/arts/Passes/](mdc:include/arts/Passes/)
+- Passes should be in [lib/arts/passes/](mdc:lib/arts/passes/)
+- Pass declarations in [include/arts/passes/](mdc:include/arts/passes/)
 - Use `Pass` suffix for pass classes
 - Implement `runOnOperation()` method
 
@@ -30,7 +30,7 @@ struct MyARTSPass : public arts::MyARTSPassBase<MyARTSPass> {
 ```
 
 ## TableGen Pass Registration
-Define passes in [include/arts/Passes/ArtsPasses.td](mdc:include/arts/Passes/ArtsPasses.td):
+Define passes in [include/arts/passes/Passes.td](mdc:include/arts/passes/Passes.td):
 ```tablegen
 def MyARTSPass : Pass<"my-arts-pass", "mlir::ModuleOp"> {
   let summary = "My ARTS pass description";
@@ -75,7 +75,7 @@ LLVM_DEBUG({
 - Handle edge cases gracefully
 
 ## Key ARTS Passes
-Reference these existing passes in [lib/arts/Passes/](mdc:lib/arts/Passes/):
+Reference these existing passes in [lib/arts/passes/](mdc:lib/arts/passes/):
 - `ConvertOpenMPToArts.cpp`: OpenMP to ARTS conversion
 - `ConvertArtsToLLVM.cpp`: ARTS to LLVM conversion
 - `CreateDbs.cpp`: DataBlock identification
@@ -83,8 +83,8 @@ Reference these existing passes in [lib/arts/Passes/](mdc:lib/arts/Passes/):
 # MLIR Pass Development for CARTS
 
 ## Pass Location and Structure
-- Passes should be in [lib/arts/Passes/](mdc:lib/arts/Passes/)
-- Pass declarations in [include/arts/Passes/](mdc:include/arts/Passes/)
+- Passes should be in [lib/arts/passes/](mdc:lib/arts/passes/)
+- Pass declarations in [include/arts/passes/](mdc:include/arts/passes/)
 - Use `Pass` suffix for pass classes
 - Implement `runOnOperation()` method
 
@@ -108,7 +108,7 @@ struct MyARTSPass : public arts::MyARTSPassBase<MyARTSPass> {
 ```
 
 ## TableGen Pass Registration
-Define passes in [include/arts/Passes/ArtsPasses.td](mdc:include/arts/Passes/ArtsPasses.td):
+Define passes in [include/arts/passes/Passes.td](mdc:include/arts/passes/Passes.td):
 ```tablegen
 def MyARTSPass : Pass<"my-arts-pass", "mlir::ModuleOp"> {
   let summary = "My ARTS pass description";
@@ -153,7 +153,7 @@ LLVM_DEBUG({
 - Handle edge cases gracefully
 
 ## Key CARTS Passes
-Reference these existing passes in [lib/arts/Passes/](mdc:lib/arts/Passes/):
+Reference these existing passes in [lib/arts/passes/](mdc:lib/arts/passes/):
 - `ConvertOpenMPToArts.cpp`: OpenMP to ARTS conversion
 - `ConvertArtsToLLVM.cpp`: ARTS to LLVM conversion
 - `CreateDbs.cpp`: DataBlock identification

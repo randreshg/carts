@@ -7,10 +7,10 @@
 #ifndef ARTS_ANALYSIS_GRAPHS_DB_DBNODE_H
 #define ARTS_ANALYSIS_GRAPHS_DB_DBNODE_H
 
-#include "arts/Analysis/Graphs/Base/NodeBase.h"
-#include "arts/Analysis/Graphs/Db/DbAccessPattern.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/Metadata/MemrefMetadata.h"
+#include "arts/analysis/graphs/base/NodeBase.h"
+#include "arts/analysis/graphs/db/DbAccessPattern.h"
+#include "arts/utils/metadata/MemrefMetadata.h"
 #include "llvm/Support/raw_ostream.h"
 #include <functional>
 #include <memory>
@@ -22,7 +22,7 @@ namespace mlir {
 namespace arts {
 class PartitionBoundsAnalyzer;
 class MemoryAccessClassifier;
-class BlockInfoComputer;
+class DbBlockInfoComputer;
 } // namespace arts
 } // namespace mlir
 
@@ -32,7 +32,7 @@ namespace arts {
 /// Forward declarations
 class DbAnalysis;
 class DbAcquireNode;
-class ArtsMetadataManager;
+class MetadataManager;
 class LoopNode;
 
 /// Per-entry partition legality for one acquire.
@@ -295,7 +295,7 @@ public:
 private:
   friend class PartitionBoundsAnalyzer;
   friend class MemoryAccessClassifier;
-  friend class BlockInfoComputer;
+  friend class DbBlockInfoComputer;
 
   DbAcquireOp dbAcquireOp;
   DbReleaseOp dbReleaseOp{nullptr};
