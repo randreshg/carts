@@ -9,6 +9,7 @@
 #define CARTS_ANALYSIS_LOOP_LOOPANALYSIS_H
 
 #include "arts/Analysis/ArtsAnalysis.h"
+#include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Loop/LoopNode.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -68,6 +69,16 @@ public:
   /// Resolve static trip count for a loop operation when possible.
   /// Uses LoopNode metadata first, then operation attributes/constant bounds.
   std::optional<int64_t> getStaticTripCount(Operation *loopOp);
+
+  /// Loop-facing DB analysis helpers backed by DbAnalysis / DbGraph facts.
+  std::optional<DbAnalysis::LoopDbAccessSummary>
+  getLoopDbAccessSummary(Operation *loopOp);
+  const DbAcquirePartitionFacts *getAcquirePartitionFacts(DbAcquireOp acquire);
+  void collectAcquirePartitionFactsInOperation(
+      Operation *op,
+      SmallVectorImpl<const DbAcquirePartitionFacts *> &acquireFacts);
+  bool operationHasDistributedDbContract(Operation *op);
+  bool operationHasPeerInferredPartitionDims(Operation *op);
 
   /// Check if an operation is a recognized loop type.
   bool isLoopOperation(Operation *op) const;

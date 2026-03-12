@@ -5,6 +5,7 @@
 
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"
+#include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsDebug.h"
@@ -183,6 +184,52 @@ std::optional<int64_t> LoopAnalysis::getStaticTripCount(Operation *loopOp) {
     return metadataTripCount;
 
   return getTripCountFromConstantBounds(loopOp);
+}
+
+std::optional<DbAnalysis::LoopDbAccessSummary>
+LoopAnalysis::getLoopDbAccessSummary(Operation *loopOp) {
+  ensureAnalyzed();
+  auto forOp = dyn_cast_or_null<arts::ForOp>(loopOp);
+  if (!forOp)
+    return std::nullopt;
+  return getAnalysisManager().getDbAnalysis().getLoopDbAccessSummary(forOp);
+}
+
+const DbAcquirePartitionFacts *
+LoopAnalysis::getAcquirePartitionFacts(DbAcquireOp acquire) {
+  ensureAnalyzed();
+  return getAnalysisManager().getDbAnalysis().getAcquirePartitionFacts(acquire);
+}
+
+void LoopAnalysis::collectAcquirePartitionFactsInOperation(
+    Operation *op,
+    SmallVectorImpl<const DbAcquirePartitionFacts *> &acquireFacts) {
+  ensureAnalyzed();
+  if (!op)
+    return;
+
+  op->walk([&](DbAcquireOp acquire) {
+    if (const DbAcquirePartitionFacts *facts = getAcquirePartitionFacts(acquire))
+      acquireFacts.push_back(facts);
+  });
+}
+
+bool LoopAnalysis::operationHasDistributedDbContract(Operation *op) {
+  ensureAnalyzed();
+  SmallVector<const DbAcquirePartitionFacts *, 8> acquireFacts;
+  collectAcquirePartitionFactsInOperation(op, acquireFacts);
+  return llvm::any_of(acquireFacts, [](const DbAcquirePartitionFacts *facts) {
+    return facts && facts->hasDistributionContract;
+  });
+}
+
+bool LoopAnalysis::operationHasPeerInferredPartitionDims(Operation *op) {
+  ensureAnalyzed();
+  SmallVector<const DbAcquirePartitionFacts *, 8> acquireFacts;
+  collectAcquirePartitionFactsInOperation(op, acquireFacts);
+  return llvm::any_of(acquireFacts, [](const DbAcquirePartitionFacts *facts) {
+    return facts && facts->partitionDimsFromPeers;
+  });
 }
 
 template <typename LoopOpType>
