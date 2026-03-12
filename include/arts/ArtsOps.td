@@ -771,6 +771,7 @@ def RuntimeQueryOp : Arts_Op<"runtime_query", [Pure]> {
   }];
   let arguments = (ins RuntimeQueryKindAttr:$kind);
   let results = (outs AnyType : $result);
+  let hasCanonicalizer = 1;
   let assemblyFormat = "$kind attr-dict `->` type($result)";
   let skipDefaultBuilders = 1;
   let builders = [
