@@ -308,8 +308,10 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
     acqNode = graph.getDbAcquireNode(acquire);
   }
 
-  if (acqNode)
-    info.hasIndirectAccess = acqNode->hasIndirectAccess();
+  const DbAcquirePartitionFacts *facts = acqNode ? &acqNode->getPartitionFacts()
+                                                 : nullptr;
+  if (facts)
+    info.hasIndirectAccess = facts->hasIndirectAccess;
 
   auto refineSizeFromMinInBlock = [&](Value offset, Value sizeHint) -> Value {
     if (!offset || !sizeHint)
@@ -344,34 +346,24 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
   };
 
   auto inferPartitionDims = [&](AcquirePartitionSummary &summary) {
-    if (!acqNode || summary.partitionOffsets.empty())
+    if (!facts || facts->entries.empty())
       return;
+
     summary.partitionDims.clear();
     SmallVector<unsigned, 4> seen;
-    for (Value off : summary.partitionOffsets) {
-      if (!off) {
+    for (const DbPartitionEntryFact &entry : facts->entries) {
+      if (!entry.representativeOffset || !entry.mappedDim) {
         summary.partitionDims.clear();
         return;
       }
-      auto dimOpt =
-          acqNode->getPartitionOffsetDim(off, /*requireLeading=*/false);
-      if (!dimOpt) {
-        summary.partitionDims.clear();
-        return;
-      }
-      bool alreadySeen = false;
-      for (unsigned seenDim : seen) {
-        if (seenDim == *dimOpt) {
-          alreadySeen = true;
-          break;
-        }
-      }
+      bool alreadySeen = llvm::any_of(
+          seen, [&](unsigned seenDim) { return seenDim == *entry.mappedDim; });
       if (alreadySeen) {
         summary.partitionDims.clear();
         return;
       }
-      seen.push_back(*dimOpt);
-      summary.partitionDims.push_back(*dimOpt);
+      seen.push_back(*entry.mappedDim);
+      summary.partitionDims.push_back(*entry.mappedDim);
     }
   };
 

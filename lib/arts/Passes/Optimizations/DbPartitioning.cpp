@@ -199,6 +199,7 @@ static bool hasInternodeAcquireUser(ArrayRef<DbAcquireNode *> acquireNodes) {
 /// Analyze a single acquire to determine its partition mode and chunk info.
 static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
                                                         DbAcquireNode *acqNode,
+                                                        const DbAcquirePartitionFacts *facts,
                                                         OpBuilder &builder) {
   AcquirePartitionInfo info;
   info.acquire = acquire;
@@ -216,10 +217,13 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
                              summary.partitionSizes.end());
   info.partitionDims.assign(summary.partitionDims.begin(),
                             summary.partitionDims.end());
-  if (acqNode)
+  if (facts)
+    info.accessPattern = facts->accessPattern;
+  else if (acqNode)
     info.accessPattern = acqNode->getAccessPattern();
   info.isValid = summary.isValid;
-  info.hasIndirectAccess = summary.hasIndirectAccess;
+  info.hasIndirectAccess =
+      facts ? facts->hasIndirectAccess : summary.hasIndirectAccess;
   info.preservesDependencyMode =
       static_cast<bool>(acquire.getPreserveDepMode());
 
@@ -868,10 +872,13 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
   /// Step 1: Analyze each acquire's PartitionMode
   SmallVector<AcquirePartitionInfo> acquireInfos;
+  SmallVector<const DbAcquirePartitionFacts *> acquireFacts;
   if (allocNode) {
     for (DbAcquireNode *acqNode : allocAcquireNodes) {
+      const DbAcquirePartitionFacts *facts = &acqNode->getPartitionFacts();
+      acquireFacts.push_back(facts);
       auto info = computeAcquirePartitionInfo(acqNode->getDbAcquireOp(),
-                                              acqNode, builder);
+                                              acqNode, facts, builder);
       if (!info.isValid) {
         ARTS_DEBUG("  Acquire analysis failed for "
                    << acqNode->getDbAcquireOp());
@@ -959,19 +966,26 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         continue;
 
       auto &acqInfo = acquireInfos[idx];
+      const DbAcquirePartitionFacts *facts =
+          idx < acquireFacts.size() ? acquireFacts[idx] : nullptr;
 
       /// Check access patterns for block capability decisions.
-      bool hasIndirect = acqNode->hasIndirectAccess();
+      bool hasIndirect = facts ? facts->hasIndirectAccess
+                               : acqNode->hasIndirectAccess();
 
       /// Read partition capability from acquire's attribute.
       /// ForLowering sets this to 'chunked' when adding offset/size hints.
       /// CreateDbs sets this based on DbControlOp analysis.
       auto acquire = acqNode->getDbAcquireOp();
       auto acquireMode = getPartitionMode(acquire.getOperation());
-      bool hasBlockHints = !acquire.getPartitionOffsets().empty() ||
-                           !acquire.getPartitionSizes().empty();
+      bool hasBlockHints =
+          facts ? facts->hasBlockHints
+                : (!acquire.getPartitionOffsets().empty() ||
+                   !acquire.getPartitionSizes().empty());
       bool inferredBlock =
-          !acqInfo.partitionOffsets.empty() && !acqInfo.partitionSizes.empty();
+          facts ? facts->inferredBlock
+                : (!acqInfo.partitionOffsets.empty() &&
+                   !acqInfo.partitionSizes.empty());
       if (auto blockHint = getPartitioningHint(acquire.getOperation())) {
         if (blockHint->mode == PartitionMode::block && blockHint->blockSize &&
             *blockHint->blockSize > 0) {
@@ -990,14 +1004,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
           }
         }
       }
-      bool hasDistributionContract = false;
-      if (auto [edt, blockArg] =
-              EdtUtils::getEdtBlockArgumentForAcquire(acquire);
-          edt) {
-        (void)blockArg;
-        hasDistributionContract = getEdtDistributionKind(edt.getOperation()) ||
-                                  getEdtDistributionPattern(edt.getOperation());
-      }
+      bool hasDistributionContract =
+          facts ? facts->hasDistributionContract : false;
       bool thisAcquireCanBlock =
           (acquireMode && (*acquireMode == PartitionMode::block ||
                            *acquireMode == PartitionMode::stencil)) ||
@@ -1015,10 +1023,15 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         }
       }
       if (!thisAcquireCanBlock &&
-          acqNode->getAccessPattern() == AccessPattern::Stencil)
+          ((facts && facts->accessPattern == AccessPattern::Stencil) ||
+           acqNode->getAccessPattern() == AccessPattern::Stencil))
         thisAcquireCanBlock = true;
       bool thisAcquireCanElementWise =
-          acquireMode && *acquireMode == PartitionMode::fine_grained;
+          (acquireMode && *acquireMode == PartitionMode::fine_grained) ||
+          (facts && llvm::any_of(facts->entries, [](const DbPartitionEntryFact &entry) {
+             return entry.partition.isFineGrained() &&
+                    !entry.partition.indices.empty();
+           }));
 
       /// If the partition offset does not map to the access pattern, block
       /// partitioning would select the wrong dimension (non-leading) and is
@@ -1028,15 +1041,22 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       Value partitionOffset =
           DbUtils::pickRepresentativePartitionOffset(offsetVals, &offsetIdx);
       if (partitionOffset) {
-        auto dimOpt = acqNode->getPartitionOffsetDim(partitionOffset,
-                                                     /*requireLeading=*/false);
-        if (!dimOpt) {
+        bool hasUnmappedEntry = facts && llvm::any_of(
+                                            facts->entries,
+                                            [](const DbPartitionEntryFact &entry) {
+                                              return entry.representativeOffset &&
+                                                     !entry.mappedDim;
+                                            });
+        if (hasUnmappedEntry) {
           bool writesThroughAcquire = acquire.getMode() == ArtsMode::out ||
                                       acquire.getMode() == ArtsMode::inout ||
                                       acqNode->hasStores();
           bool preserveFromExplicitContract =
-              hasDistributionContract && (hasBlockHints || inferredBlock) &&
-              (!writesThroughAcquire || isMultinodeMachine);
+              facts && llvm::any_of(
+                           facts->entries,
+                           [](const DbPartitionEntryFact &entry) {
+                             return entry.preservesDistributedContract;
+                           });
           if (preserveFromExplicitContract) {
             ARTS_DEBUG("  Partition offset not mappable by DbAcquireNode, but "
                        "preserving block capability from EDT distribution "
@@ -1080,7 +1100,9 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       }
 
       /// Populate access pattern for heuristic use
-      if (acqNode)
+      if (facts)
+        info.accessPattern = facts->accessPattern;
+      else if (acqNode)
         info.accessPattern = acqNode->getAccessPattern();
 
       ctx.acquires.push_back(info);
@@ -1104,22 +1126,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     }
 
     /// Collect DbAcquireNode* and partition offsets for heuristic decisions
-    SmallVector<DbAcquireNode *> acqNodes;
-    SmallVector<Value> partitionOffsets;
-    idx = 0;
-    for (DbAcquireNode *acqNode : allocAcquireNodes) {
-      if (!acqNode)
-        continue;
-      acqNodes.push_back(acqNode);
-      auto offsets = getPartitionOffsetsND(
-          acqNode, idx < acquireInfos.size() ? &acquireInfos[idx] : nullptr);
-      partitionOffsets.push_back(offsets.empty() ? Value() : offsets.front());
-      ++idx;
-    }
-
     /// Get per-acquire decisions from heuristics (calls needsFullRange)
-    auto acquireDecisions =
-        heuristics.getAcquireDecisions(ctx, acqNodes, partitionOffsets);
+    auto acquireDecisions = heuristics.getAcquireDecisions(acquireFacts);
 
     /// Apply decisions to acquireInfos
     for (size_t i = 0; i < acquireDecisions.size() && i < acquireInfos.size();
