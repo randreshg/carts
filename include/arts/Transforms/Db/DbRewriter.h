@@ -179,13 +179,6 @@ protected:
   /// Indexer factory
 
   static std::unique_ptr<DbIndexerBase>
-  createIndexer(const DbRewritePlan &plan, Value startBlock, Value elemOffset,
-                Value elemSize, unsigned outerRank, unsigned innerRank,
-                ValueRange oldElementSizes, OpBuilder &builder, Location loc,
-                Value ownedArg = nullptr, Value leftHaloArg = nullptr,
-                Value rightHaloArg = nullptr);
-
-  static std::unique_ptr<DbIndexerBase>
   createElementWiseIndexer(ArrayRef<Value> elemOffsets, unsigned outerRank,
                            unsigned innerRank, ValueRange oldElementSizes);
 
