@@ -3,14 +3,14 @@
 /// Implementation of LoopAnalysis with LoopNode integration
 ///==========================================================================///
 
-#include "arts/Analysis/Loop/LoopAnalysis.h"
-#include "arts/Analysis/ArtsAnalysisManager.h"
-#include "arts/Analysis/Graphs/Db/DbNode.h"
-#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
+#include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/ArtsDebug.h"
-#include "arts/Utils/OperationAttributes.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/graphs/db/DbNode.h"
+#include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/utils/Debug.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/ValueUtils.h"
 #include <algorithm>
 
 ARTS_DEBUG_SETUP(loop_analysis);
@@ -89,7 +89,7 @@ getTripCountFromConstantBounds(Operation *loopOp) {
 
 } // namespace
 
-LoopAnalysis::LoopAnalysis(ArtsAnalysisManager &analysisManager)
+LoopAnalysis::LoopAnalysis(AnalysisManager &analysisManager)
     : ArtsAnalysis(analysisManager), module(analysisManager.getModule()) {}
 
 void LoopAnalysis::invalidate() {
@@ -234,7 +234,8 @@ void LoopAnalysis::collectAcquirePartitionFactsInOperation(
     return;
 
   op->walk([&](DbAcquireOp acquire) {
-    if (const DbAcquirePartitionFacts *facts = getAcquirePartitionFacts(acquire))
+    if (const DbAcquirePartitionFacts *facts =
+            getAcquirePartitionFacts(acquire))
       acquireFacts.push_back(facts);
   });
 }

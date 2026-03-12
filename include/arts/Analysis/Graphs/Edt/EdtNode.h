@@ -7,9 +7,9 @@
 #ifndef ARTS_ANALYSIS_GRAPHS_EDT_EDTNODE_H
 #define ARTS_ANALYSIS_GRAPHS_EDT_EDTNODE_H
 
-#include "arts/Analysis/Edt/EdtInfo.h"
-#include "arts/Analysis/Graphs/Base/NodeBase.h"
 #include "arts/ArtsDialect.h"
+#include "arts/analysis/edt/EdtInfo.h"
+#include "arts/analysis/graphs/base/NodeBase.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -21,15 +21,15 @@ namespace arts {
 /// Forward declarations
 class LoopNode;
 class LoopAnalysis;
-class ArtsMetadataManager;
-class ArtsAnalysisManager;
+class MetadataManager;
+class AnalysisManager;
 
 ////===----------------------------------------------------------------------===////
 /// EdtNode - represents an EDT operation
 ////===----------------------------------------------------------------------===////
 class EdtNode : public NodeBase {
 public:
-  EdtNode(EdtOp op, ArtsAnalysisManager *AM);
+  EdtNode(EdtOp op, AnalysisManager *AM);
 
   StringRef getHierId() const override { return hierId; }
   void setHierId(std::string id) { hierId = std::move(id); }
@@ -75,7 +75,7 @@ public:
 
 private:
   EdtOp edtOp;
-  ArtsAnalysisManager *analysisManager = nullptr;
+  AnalysisManager *analysisManager = nullptr;
   std::string hierId;
   EdtInfo info;
 

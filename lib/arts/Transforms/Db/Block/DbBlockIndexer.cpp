@@ -36,12 +36,12 @@
 /// handleSubIndexOp override and the localize/localizeLinearized methods.
 ///==========================================================================///
 
-#include "arts/Transforms/Db/Block/DbBlockIndexer.h"
-#include "arts/Codegen/ArtsCodegen.h"
-#include "arts/Utils/ArtsDebug.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DbUtils.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/transforms/db/block/DbBlockIndexer.h"
+#include "arts/codegen/Codegen.h"
+#include "arts/utils/DbUtils.h"
+#include "arts/utils/Debug.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"

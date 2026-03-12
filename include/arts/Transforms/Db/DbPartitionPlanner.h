@@ -11,8 +11,8 @@
 #ifndef ARTS_TRANSFORMS_DATABLOCK_DBPARTITIONPLANNER_H
 #define ARTS_TRANSFORMS_DATABLOCK_DBPARTITIONPLANNER_H
 
-#include "arts/Analysis/Graphs/Db/DbAccessPattern.h"
-#include "arts/Transforms/Db/DbRewriter.h"
+#include "arts/analysis/graphs/db/DbAccessPattern.h"
+#include "arts/transforms/db/DbRewriter.h"
 #include "mlir/IR/Builders.h"
 
 namespace mlir {

@@ -2,12 +2,12 @@
 /// File: EdtAnalysis.cpp
 ///==========================================================================///
 
-#include "arts/Analysis/Edt/EdtAnalysis.h"
-#include "arts/Analysis/ArtsAnalysisManager.h"
-#include "arts/Analysis/Db/DbAnalysis.h"
-#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
+#include "arts/analysis/edt/EdtAnalysis.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/OperationAttributes.h"
+#include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/db/DbAnalysis.h"
+#include "arts/analysis/graphs/edt/EdtGraph.h"
+#include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 
 #include "llvm/Support/raw_ostream.h"
@@ -19,7 +19,7 @@ using namespace arts;
 /// EdtAnalysis
 ///==========================================================================///
 
-EdtAnalysis::EdtAnalysis(ArtsAnalysisManager &AM) : ArtsAnalysis(AM) {
+EdtAnalysis::EdtAnalysis(AnalysisManager &AM) : ArtsAnalysis(AM) {
   assert(AM.getModule() && "Module is required");
 }
 

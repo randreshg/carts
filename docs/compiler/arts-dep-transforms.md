@@ -1,4 +1,4 @@
-# ArtsDepTransforms
+# DepTransforms
 
 Canonical docs for transform ownership now live under
 [`docs/transforms/`](../transforms/README.md).
@@ -6,7 +6,7 @@ Canonical docs for transform ownership now live under
 Use:
 
 - [`../transforms/dependence.md`](../transforms/dependence.md)
-  for `ArtsDepTransforms`
+  for `DepTransforms`
 - [`pipeline.md`](./pipeline.md)
   for stage placement and ordering
 - optional owner/tile metadata when the transform creates tiled wavefronts
@@ -19,7 +19,7 @@ If a transformation is justified by:
 
 - "this loop schedule is semantically valid and exposes a better dependence shape"
 
-it belongs in `ArtsDepTransforms`.
+it belongs in `DepTransforms`.
 
 If it is justified by:
 

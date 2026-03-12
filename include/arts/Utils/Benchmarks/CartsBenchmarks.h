@@ -6,7 +6,7 @@
 ///
 ///
 /// Usage:
-///   #include "arts/Utils/Benchmarks/CartsBenchmarks.h"
+///   #include "arts/utils/benchmarks/CartsBenchmarks.h"
 ///
 ///   int main() {
 ///     CARTS_KERNEL_TIMER_START("kernel");

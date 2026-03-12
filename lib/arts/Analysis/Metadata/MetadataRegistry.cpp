@@ -2,12 +2,12 @@
 /// MetadataRegistry.cpp
 ////===----------------------------------------------------------------------===////
 
-#include "arts/Analysis/Metadata/MetadataRegistry.h"
+#include "arts/analysis/metadata/MetadataRegistry.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/ArtsDebug.h"
-#include "arts/Utils/Metadata/LoopMetadata.h"
-#include "arts/Utils/Metadata/MemrefMetadata.h"
-#include "arts/Utils/Metadata/ValueMetadata.h"
+#include "arts/utils/Debug.h"
+#include "arts/utils/metadata/LoopMetadata.h"
+#include "arts/utils/metadata/MemrefMetadata.h"
+#include "arts/utils/metadata/ValueMetadata.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"

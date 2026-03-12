@@ -1,6 +1,6 @@
 # Kernel Transforms
 
-`ArtsKernelTransforms` owns semantics-preserving kernel-form rewrites.
+`KernelTransforms` owns semantics-preserving kernel-form rewrites.
 
 These transforms change how a kernel is expressed so later ARTS passes can
 distribute, partition, hoist, or localize it better. They are not just loop
@@ -53,7 +53,7 @@ Why it belongs here:
 ## Design Rule
 
 If the transformed kernel looks like a different computational form of the
-same math, it belongs here rather than in `ArtsDepTransforms`.
+same math, it belongs here rather than in `DepTransforms`.
 
 ## Downstream Expectation
 

@@ -28,11 +28,11 @@
 /// partitioning and eliminating cross-partition symmetric writes.
 ///==========================================================================///
 
-#include "arts/Analysis/Db/DbPatternMatchers.h"
-#include "arts/Transforms/Loop/LoopNormalizer.h"
-#include "arts/Utils/ArtsDebug.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/OperationAttributes.h"
+#include "arts/analysis/db/DbPatternMatchers.h"
+#include "arts/transforms/loop/LoopNormalizer.h"
+#include "arts/utils/Debug.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"

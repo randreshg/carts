@@ -9,8 +9,8 @@
 #define ARTS_TRANSFORMS_DATABLOCK_DBREWRITER_H
 
 #include "arts/ArtsDialect.h"
-#include "arts/Transforms/Db/DbIndexerBase.h"
-#include "arts/Utils/ArtsUtils.h"
+#include "arts/transforms/db/DbIndexerBase.h"
+#include "arts/utils/Utils.h"
 #include "mlir/IR/Builders.h"
 #include "llvm/ADT/SmallVector.h"
 #include <memory>

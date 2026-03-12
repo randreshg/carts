@@ -4,10 +4,10 @@
 /// Implementation of utility functions for working with ARTS DBs.
 ///==========================================================================///
 
-#include "arts/Utils/DbUtils.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/OperationAttributes.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/utils/DbUtils.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -17,7 +17,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(datablock_utils);
 
 using namespace mlir;
@@ -575,7 +575,7 @@ Value DbUtils::extractBaseBlockSizeCandidate(Value offsetHint, Value sizeHint,
 }
 
 Value DbUtils::pickRepresentativePartitionOffset(ArrayRef<Value> offsets,
-                                                  unsigned *outIdx) {
+                                                 unsigned *outIdx) {
   if (outIdx)
     *outIdx = 0;
   for (unsigned i = 0; i < offsets.size(); ++i) {

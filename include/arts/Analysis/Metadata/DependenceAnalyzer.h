@@ -7,8 +7,8 @@
 #ifndef ARTS_ANALYSIS_METADATA_DEPENDENCEANALYZER_H
 #define ARTS_ANALYSIS_METADATA_DEPENDENCEANALYZER_H
 
-#include "arts/Analysis/Metadata/AccessAnalyzer.h"
-#include "arts/Utils/Metadata/LoopMetadata.h"
+#include "arts/analysis/metadata/AccessAnalyzer.h"
+#include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"

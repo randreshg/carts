@@ -2,15 +2,15 @@
 /// MetadataAttacher.cpp
 ////===----------------------------------------------------------------------===////
 
-#include "arts/Analysis/Metadata/MetadataAttacher.h"
-#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
-#include "arts/Analysis/Metadata/MetadataIO.h"
-#include "arts/Analysis/Metadata/MetadataRegistry.h"
+#include "arts/analysis/metadata/MetadataAttacher.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/ArtsDebug.h"
-#include "arts/Utils/Metadata/LocationMetadata.h"
-#include "arts/Utils/Metadata/LoopMetadata.h"
-#include "arts/Utils/Metadata/MemrefMetadata.h"
+#include "arts/analysis/metadata/MetadataIO.h"
+#include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/analysis/metadata/MetadataRegistry.h"
+#include "arts/utils/Debug.h"
+#include "arts/utils/metadata/LocationMetadata.h"
+#include "arts/utils/metadata/LoopMetadata.h"
+#include "arts/utils/metadata/MemrefMetadata.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"

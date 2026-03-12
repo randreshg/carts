@@ -2,15 +2,15 @@
 /// MemrefMetadata.cpp - Memref/Allocation Metadata Implementation
 ///===----------------------------------------------------------------------===///
 
-#include "arts/Utils/Metadata/MemrefMetadata.h"
+#include "arts/utils/metadata/MemrefMetadata.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/Metadata/ArtsMetadata.h"
+#include "arts/utils/metadata/Metadata.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "llvm/Support/JSON.h"
 
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(memref_metadata);
 
 using namespace mlir;

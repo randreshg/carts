@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "arts/Utils/Testing/CartsTest.h"
+#include "arts/utils/Testing/CartsTest.h"
 
 /// #define DEBUG 0
 /// 1D stencil computation: output[i] = input[i-1] + input[i] + input[i+1]

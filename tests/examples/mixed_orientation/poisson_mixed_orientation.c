@@ -30,9 +30,8 @@ static void sweep(int nx, int ny, double **f, double **u, double **unew) {
       if (i == 0 || j == 0 || i == nx - 1 || j == ny - 1) {
         unew[i][j] = f[i][j];
       } else {
-        unew[i][j] = 0.25 *
-                     (u[i - 1][j] + u[i][j + 1] + u[i][j - 1] + u[i + 1][j] +
-                      f[i][j]);
+        unew[i][j] = 0.25 * (u[i - 1][j] + u[i][j + 1] + u[i][j - 1] +
+                             u[i + 1][j] + f[i][j]);
       }
     }
   }

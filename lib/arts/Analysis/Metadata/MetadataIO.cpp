@@ -2,13 +2,13 @@
 /// MetadataIO.cpp
 ////===----------------------------------------------------------------------===////
 
-#include "arts/Analysis/Metadata/MetadataIO.h"
-#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
-#include "arts/Analysis/Metadata/MetadataRegistry.h"
-#include "arts/Utils/ArtsDebug.h"
-#include "arts/Utils/Metadata/LoopMetadata.h"
-#include "arts/Utils/Metadata/MemrefMetadata.h"
-#include "arts/Utils/Metadata/ValueMetadata.h"
+#include "arts/analysis/metadata/MetadataIO.h"
+#include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/analysis/metadata/MetadataRegistry.h"
+#include "arts/utils/Debug.h"
+#include "arts/utils/metadata/LoopMetadata.h"
+#include "arts/utils/metadata/MemrefMetadata.h"
+#include "arts/utils/metadata/ValueMetadata.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"

@@ -5,22 +5,22 @@
 /// and eligibility checking extracted from DbAcquireNode.
 ///==========================================================================///
 
-#include "arts/Analysis/Graphs/Db/PartitionBoundsAnalyzer.h"
-#include "arts/Analysis/AccessPatternAnalysis.h"
-#include "arts/Analysis/ArtsAnalysisManager.h"
-#include "arts/Analysis/Db/DbAnalysis.h"
-#include "arts/Analysis/Edt/EdtAnalysis.h"
-#include "arts/Analysis/Graphs/Db/DbNode.h"
-#include "arts/Analysis/Graphs/Db/MemoryAccessClassifier.h"
-#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
-#include "arts/Analysis/Graphs/Edt/EdtNode.h"
-#include "arts/Analysis/Loop/LoopAnalysis.h"
+#include "arts/analysis/graphs/db/PartitionBoundsAnalyzer.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DbUtils.h"
-#include "arts/Utils/EdtUtils.h"
-#include "arts/Utils/OperationAttributes.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/analysis/AccessPatternAnalysis.h"
+#include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/db/DbAnalysis.h"
+#include "arts/analysis/edt/EdtAnalysis.h"
+#include "arts/analysis/graphs/db/DbNode.h"
+#include "arts/analysis/graphs/db/MemoryAccessClassifier.h"
+#include "arts/analysis/graphs/edt/EdtGraph.h"
+#include "arts/analysis/graphs/edt/EdtNode.h"
+#include "arts/analysis/loop/LoopAnalysis.h"
+#include "arts/utils/DbUtils.h"
+#include "arts/utils/EdtUtils.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -29,7 +29,7 @@
 
 using namespace mlir;
 using namespace mlir::arts;
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(partition_bounds_analyzer);
 
 ///===----------------------------------------------------------------------===///
@@ -230,7 +230,7 @@ bool PartitionBoundsAnalyzer::hasValidEdtAndAccesses(DbAcquireNode *node) {
                "evaluation");
   }
 
-  ArtsAnalysisManager &AM = node->getAnalysis()->getAnalysisManager();
+  AnalysisManager &AM = node->getAnalysis()->getAnalysisManager();
   EdtAnalysis &edtAnalysis = AM.getEdtAnalysis();
 
   func::FuncOp func = edt->getParentOfType<func::FuncOp>();
@@ -286,7 +286,7 @@ bool PartitionBoundsAnalyzer::computePartitionBounds(DbAcquireNode *node) {
   analysisOffset = ValueUtils::stripConstantOffset(analysisOffset, nullptr);
 
   node->setOriginalBounds(std::make_pair(partitionOffset, partitionSize));
-  ArtsAnalysisManager &AM = node->getAnalysis()->getAnalysisManager();
+  AnalysisManager &AM = node->getAnalysis()->getAnalysisManager();
   LoopAnalysis &loopAnalysis = AM.getLoopAnalysis();
 
   DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;

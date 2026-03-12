@@ -7,11 +7,11 @@
 #ifndef ARTS_ANALYSIS_EDT_EDTDATAFLOWANALYSIS_H
 #define ARTS_ANALYSIS_EDT_EDTDATAFLOWANALYSIS_H
 
-#include "arts/Analysis/Edt/EdtInfo.h"
-#include "arts/Analysis/Graphs/Db/DbGraph.h"
-#include "arts/Analysis/Graphs/Db/DbNode.h"
-#include "arts/Analysis/Graphs/Edt/EdtEdge.h"
 #include "arts/ArtsDialect.h"
+#include "arts/analysis/edt/EdtInfo.h"
+#include "arts/analysis/graphs/db/DbGraph.h"
+#include "arts/analysis/graphs/db/DbNode.h"
+#include "arts/analysis/graphs/edt/EdtEdge.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
@@ -22,7 +22,7 @@ namespace mlir {
 namespace arts {
 
 class DbAliasAnalysis;
-class ArtsAnalysisManager;
+class AnalysisManager;
 
 struct EdtDependency {
   EdtOp from;
@@ -34,7 +34,7 @@ struct EdtDependency {
 /// dependencies between tasks based on their datablock acquires.
 class EdtDataFlowAnalysis {
 public:
-  EdtDataFlowAnalysis(DbGraph *dbGraph, ArtsAnalysisManager *AM);
+  EdtDataFlowAnalysis(DbGraph *dbGraph, AnalysisManager *AM);
 
   SmallVector<EdtDependency, 16> run(func::FuncOp func);
 

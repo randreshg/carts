@@ -3,15 +3,15 @@
 /// Builds EDT-to-EDT dependencies by tracking datablock acquires.
 ///==========================================================================///
 
-#include "arts/Analysis/Edt/EdtDataFlowAnalysis.h"
+#include "arts/analysis/edt/EdtDataFlowAnalysis.h"
 
-#include "arts/Analysis/ArtsAnalysisManager.h"
-#include "arts/Analysis/Db/DbAliasAnalysis.h"
-#include "arts/Analysis/Db/DbAnalysis.h"
-#include "arts/Analysis/Loop/LoopAnalysis.h"
+#include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/db/DbAliasAnalysis.h"
+#include "arts/analysis/db/DbAnalysis.h"
+#include "arts/analysis/loop/LoopAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(edt_dataflow);
 
 using namespace mlir;
@@ -28,11 +28,10 @@ int IndentScope::depth = 0;
 std::string indent() { return std::string(IndentScope::depth * 2, ' '); }
 } // namespace
 
-EdtDataFlowAnalysis::EdtDataFlowAnalysis(DbGraph *dbGraph,
-                                         ArtsAnalysisManager *AM)
+EdtDataFlowAnalysis::EdtDataFlowAnalysis(DbGraph *dbGraph, AnalysisManager *AM)
     : dbGraph(dbGraph) {
   assert(dbGraph && "DbGraph is required");
-  assert(AM && "ArtsAnalysisManager is required");
+  assert(AM && "AnalysisManager is required");
   aliasAA = AM->getDbAnalysis().getAliasAnalysis();
   assert(aliasAA && "Alias analysis is required");
 }

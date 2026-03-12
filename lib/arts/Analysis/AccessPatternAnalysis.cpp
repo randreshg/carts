@@ -4,8 +4,8 @@
 /// Shared loop-relative memory access bounds analysis.
 ///==========================================================================///
 
-#include "arts/Analysis/AccessPatternAnalysis.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/analysis/AccessPatternAnalysis.h"
+#include "arts/utils/ValueUtils.h"
 #include <algorithm>
 #include <limits>
 
