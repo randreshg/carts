@@ -1,5 +1,5 @@
 ///==========================================================================///
-/// File: JacobiStencilNormalization.cpp
+/// File: JacobiAlternatingBuffersPattern.cpp
 ///
 /// Elide redundant copy phases in Jacobi-style timestep loops before DB
 /// creation. This targets the common copy-then-stencil schedule:
@@ -20,24 +20,20 @@
 /// the final result buffer remains unchanged after normalization.
 ///==========================================================================///
 
-#include "../ArtsPassDetails.h"
+#include "arts/Transforms/Dependence/DependenceTransform.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/DbUtils.h"
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
-#include "mlir/IR/PatternMatch.h"
-#include "mlir/Pass/Pass.h"
-
-#include "arts/Utils/ArtsDebug.h"
-ARTS_DEBUG_SETUP(jacobi_stencil_normalization);
 
 using namespace mlir;
 using namespace mlir::arts;
 
+namespace mlir {
+namespace arts {
 namespace {
 
 struct JacobiLoopMatch {
@@ -276,8 +272,7 @@ static EdtOp cloneStencilEdt(EdtOp sourceEdt, Block *targetBlock, Value oldA,
   Block &dst = cloned.getBody().front();
   IRMapping mapper;
 
-  for (auto [srcArg, dstArg] :
-       llvm::zip(src.getArguments(), dst.getArguments()))
+  for (auto [srcArg, dstArg] : llvm::zip(src.getArguments(), dst.getArguments()))
     mapper.map(srcArg, dstArg);
   if (oldA && newA)
     mapper.map(oldA, newA);
@@ -319,13 +314,9 @@ static bool rewriteJacobiTimeLoop(JacobiLoopMatch &match) {
   return true;
 }
 
-struct JacobiStencilNormalizationPass
-    : public arts::JacobiStencilNormalizationBase<
-          JacobiStencilNormalizationPass> {
-  using Base::Base;
-
-  void runOnOperation() override {
-    ModuleOp module = getOperation();
+class JacobiAlternatingBuffersPattern final : public DependenceTransform {
+public:
+  int run(ModuleOp module) override {
     int rewrites = 0;
     while (true) {
       JacobiLoopMatch match;
@@ -340,24 +331,22 @@ struct JacobiStencilNormalizationPass
       if (!foundMatch)
         break;
 
-      if (rewriteJacobiTimeLoop(match)) {
+      if (rewriteJacobiTimeLoop(match))
         rewrites++;
-        ARTS_INFO("Applied Jacobi stencil normalization");
-      }
     }
+    return rewrites;
+  }
 
-    ARTS_INFO("JacobiStencilNormalizationPass: applied " << rewrites
-                                                         << " rewrite(s)");
+  StringRef getName() const override {
+    return "JacobiAlternatingBuffersPattern";
   }
 };
 
 } // namespace
 
-namespace mlir {
-namespace arts {
-
-std::unique_ptr<Pass> createJacobiStencilNormalizationPass() {
-  return std::make_unique<JacobiStencilNormalizationPass>();
+std::unique_ptr<DependenceTransform>
+createJacobiAlternatingBuffersPattern() {
+  return std::make_unique<JacobiAlternatingBuffersPattern>();
 }
 
 } // namespace arts

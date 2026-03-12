@@ -326,7 +326,7 @@ void setupEdtTransforms(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 /// Loop reordering pass
 void setupLoopReordering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createLoopNormalizationPass(AM));
-  pm.addPass(arts::createJacobiStencilNormalizationPass());
+  pm.addPass(arts::createArtsDepTransformsPass());
   pm.addPass(arts::createStencilBoundaryPeelingPass());
   pm.addPass(arts::createLoopReorderingPass(AM));
   pm.addPass(arts::createLoopTransformsPass(

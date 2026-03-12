@@ -209,7 +209,7 @@ static bool fuseConsecutiveParallelEdts(Block &block) {
 
 /// Processes top-level blocks in a region for parallel EDT fusion.
 /// Does NOT recurse into scf::ForOp bodies to avoid breaking patterns
-/// that JacobiStencilNormalization needs to match (exactly 2 parallel EDTs
+/// that JacobiAlternatingBuffersPattern needs to match (exactly 2 parallel EDTs
 /// inside a time-stepping loop).
 static void processRegionForParallelEdtFusion(Region &region, bool &changed) {
   for (Block &block : region) {
