@@ -5,8 +5,12 @@
 /// Each pattern lives in its own file under lib/arts/Transforms/Loop/ and is
 /// registered here in priority order (first match wins per loop).
 ///
-/// Phase 1: SymmetricTriangularPattern (triangular → rectangular)
-/// Phase 2: LoopInterchangePattern, MatmulReductionPattern (future migration)
+/// Current patterns:
+///   - SymmetricTriangularPattern (triangular → rectangular)
+///   - PerfectNestLinearizationPattern (collapse profitable perfect nests)
+///
+/// Heavier semantic rewrites such as matmul reduction lowering and cache-
+/// oriented loop reordering live in LoopTransforms / LoopReordering, not here.
 ///
 /// Example:
 ///   Before:
@@ -43,12 +47,10 @@ struct LoopNormalizationPass
 
     ARTS_INFO_HEADER(LoopNormalizationPass);
 
-    /// Register all available patterns (order = priority)
+    /// Register structural normalization patterns (order = priority)
     SmallVector<std::unique_ptr<LoopPattern>> patterns;
     patterns.push_back(createSymmetricTriangularPattern());
     patterns.push_back(createPerfectNestLinearizationPattern());
-    /// Phase 2: patterns.push_back(createLoopInterchangePattern(AM));
-    /// Phase 2: patterns.push_back(createMatmulReductionPattern(AM));
 
     int rewrites = 0;
     bool changed = true;

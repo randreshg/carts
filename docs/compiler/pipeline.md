@@ -62,7 +62,8 @@ cross-stage contracts.
 
 ### 6) loop-reordering
 - `LoopNormalization`
-- `JacobiStencilNormalization`
+- `ArtsDepTransforms`
+- `StencilBoundaryPeeling`
 - `LoopReordering`
 - `LoopTransforms`
 - `DistributedHostLoopOutlining`

@@ -446,19 +446,27 @@ def LoopNormalization : Pass<"loop-normalization", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createLoopNormalizationPass(nullptr)";
 }
 
-def JacobiStencilNormalization : Pass<"jacobi-stencil-normalization",
-                                      "mlir::ModuleOp"> {
-  let summary = "Elide redundant copy phases in Jacobi-style stencil loops";
+def ArtsDepTransforms : Pass<"arts-dep-transforms", "mlir::ModuleOp"> {
+  let summary = "Apply dependence-preserving schedule rewrites before DB creation";
   let description = [{
-    Detects timestep loops that copy one buffer into another before launching
-    a stencil update, and rewrites them into an alternating-buffer stencil
-    schedule before DB creation.
+    Groups exact dependence-shape transformations that expose scalable task and
+    DB partitioning opportunities without changing program semantics.
+
+    Current patterns:
+    - JacobiAlternatingBuffersPattern
+      Detects timestep loops that copy one buffer into another before launching
+      a stencil update, and rewrites them into an alternating-buffer schedule.
+
+    Planned patterns:
+    - Seidel2DWavefrontPattern
+      Rewrites in-place Seidel-style 2D stencils into a wavefront/tiled
+      wavefront schedule that avoids coarse full-range serialization.
   }];
   let dependentDialects = [
     "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",
     "arith::ArithDialect", "scf::SCFDialect"
   ];
-  let constructor = "mlir::arts::createJacobiStencilNormalizationPass()";
+  let constructor = "mlir::arts::createArtsDepTransformsPass()";
 }
 
 def StencilBoundaryPeeling : Pass<"stencil-boundary-peeling",
