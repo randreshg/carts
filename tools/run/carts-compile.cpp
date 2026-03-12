@@ -413,6 +413,8 @@ void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
     pm.addPass(arts::createDistributedDbOwnershipPass(AM));
   pm.addPass(arts::createDbPass(AM));
   pm.addPass(arts::createDbOptsPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createCSEPass());
   pm.addNestedPass<func::FuncOp>(arts::createBlockLoopStripMiningPass());
   pm.addPass(arts::createArtsHoistingPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
@@ -523,6 +525,8 @@ setupPassManager(ModuleOp module, MLIRContext &context,
     else
       arts::setRuntimeConfigPath(module, machine.getConfigPath());
   }
+  arts::setRuntimeTotalWorkers(module, machine.getRuntimeTotalWorkers());
+  arts::setRuntimeTotalNodes(module, machine.getNodeCount());
 
   /// Load metadata from JSON file
   (void)AM->getMetadataManager();
