@@ -33,49 +33,6 @@ static bool isTiling2DTaskAcquire(DbAcquireOp acquire) {
   return kind && *kind == EdtDistributionKind::tiling_2d;
 }
 
-struct DistributionPatternHintSummary {
-  bool hasStencil = false;
-  bool hasOther = false;
-  bool hasReadOnlyAcquire = false;
-  bool hasStencilAccessPattern = false;
-  bool hasExplicitControlDeps = false;
-};
-
-static DistributionPatternHintSummary summarizeAcquireDistributionPatterns(
-    ArrayRef<AcquirePartitionInfo> acquireInfos) {
-  DistributionPatternHintSummary summary;
-  for (const auto &info : acquireInfos) {
-    DbAcquireOp acquire = info.acquire;
-    if (!acquire)
-      continue;
-
-    if (acquire.getMode() == ArtsMode::in)
-      summary.hasReadOnlyAcquire = true;
-    if (info.preservesDependencyMode)
-      summary.hasExplicitControlDeps = true;
-    if (info.accessPattern == AccessPattern::Stencil)
-      summary.hasStencilAccessPattern = true;
-
-    auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
-    (void)blockArg;
-    if (!edt)
-      continue;
-
-    auto pattern = getEdtDistributionPattern(edt.getOperation());
-    if (!pattern)
-      continue;
-
-    if (*pattern == EdtDistributionPattern::stencil)
-      summary.hasStencil = true;
-    else
-      summary.hasOther = true;
-
-    if (summary.hasStencil && summary.hasOther)
-      break;
-  }
-  return summary;
-}
-
 } // namespace
 
 bool AcquirePartitionInfo::isConsistentWith(
@@ -164,66 +121,6 @@ PartitionDecisionArbiterResult mlir::arts::arbitrateInitialPartitionDecision(
     DbAllocOp allocOp, HeuristicsConfig &heuristics) {
   PartitionDecisionArbiterResult result;
   result.decision = heuristics.getPartitioningMode(ctx);
-  const bool isDistributedExecution = ctx.machine &&
-                                      ctx.machine->hasValidNodeCount() &&
-                                      ctx.machine->isDistributed();
-
-  /// Stencil distribution fallback path:
-  /// Some stencil kernels distribute work across a non-leading dimension, so
-  /// acquire-side stencil inference degrades to uniform/full-range and the
-  /// coarse fallback fires even though block partitioning is still safe. This
-  /// is a multinode-only recovery path; on single-node stencil kernels such as
-  /// seidel, forcing block partitioning can over-partition a sequential
-  /// dependence chain that should remain coarse.
-  if (isDistributedExecution && ctx.canBlock &&
-      result.decision.mode == PartitionMode::coarse && ctx.allBlockFullRange) {
-    DistributionPatternHintSummary distPatterns =
-        summarizeAcquireDistributionPatterns(acquireInfos);
-    bool allocHasStencilPattern = false;
-    if (auto allocPattern = getDbAccessPattern(allocOp.getOperation()))
-      allocHasStencilPattern = *allocPattern == DbAccessPattern::stencil;
-
-    if (distPatterns.hasStencil && !distPatterns.hasOther &&
-        distPatterns.hasReadOnlyAcquire &&
-        !distPatterns.hasExplicitControlDeps &&
-        (distPatterns.hasStencilAccessPattern || allocHasStencilPattern)) {
-      result.decision = PartitioningDecision::block(
-          ctx, "stencil EDT distribution fallback to block partitioning");
-      heuristics.recordDecision(
-          "Partition-StencilDistributionFallback", true,
-          "preserving block partitioning from stencil EDT distribution hints",
-          allocOp.getOperation(), {});
-      ARTS_DEBUG("  stencil EDT hints + full-range fallback -> forcing block "
-                 "partitioning");
-    }
-  }
-
-  /// Stencil hint path:
-  /// If all distribution-pattern hints for this allocation are stencil EDTs,
-  /// preserve ESD-capable stencil mode even when access-pattern inference
-  /// degrades to uniform.
-  if (ctx.canBlock && result.decision.mode == PartitionMode::block) {
-    DistributionPatternHintSummary distPatterns =
-        summarizeAcquireDistributionPatterns(acquireInfos);
-    bool allocHasStencilPattern = false;
-    if (auto allocPattern = getDbAccessPattern(allocOp.getOperation()))
-      allocHasStencilPattern = *allocPattern == DbAccessPattern::stencil;
-
-    if (distPatterns.hasStencil && distPatterns.hasReadOnlyAcquire &&
-        !distPatterns.hasExplicitControlDeps &&
-        (distPatterns.hasStencilAccessPattern || allocHasStencilPattern)) {
-      result.decision = PartitioningDecision::stencil(
-          ctx, "stencil EDT distribution pattern hint");
-      heuristics.recordDecision(
-          "Partition-StencilDistributionHint", true,
-          "forcing stencil partition mode from EDT distribution pattern hints",
-          allocOp.getOperation(), {});
-      ARTS_DEBUG("  stencil EDT hints -> forcing stencil partitioning");
-    } else if (distPatterns.hasExplicitControlDeps && distPatterns.hasStencil) {
-      ARTS_DEBUG("  explicit control deps present -> skipping stencil hint "
-                 "override");
-    }
-  }
 
   /// tiling_2d owner hint path:
   /// when task-level distribution selected 2D and an inout acquire carries
