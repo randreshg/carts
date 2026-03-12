@@ -30,6 +30,7 @@
 #include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/IR/IRMapping.h"
 
 ARTS_DEBUG_SETUP(loop_normalization);
@@ -142,11 +143,13 @@ public:
 private:
   ForOp outerArtsFor = nullptr;
   scf::ForOp innerLoop = nullptr;
+  SmallVector<Operation *, 4> preludeOps;
 };
 
 bool PerfectNestLinearizationPattern::match(ForOp artsFor) {
   outerArtsFor = nullptr;
   innerLoop = nullptr;
+  preludeOps.clear();
 
   if (!isZeroReductionFreeArtsFor(artsFor))
     return false;
@@ -156,10 +159,23 @@ bool PerfectNestLinearizationPattern::match(ForOp artsFor) {
     return false;
 
   Operation *candidate = nullptr;
+  bool sawCandidate = false;
   for (Operation &op : body.without_terminator()) {
-    if (candidate)
+    if (auto loop = dyn_cast<scf::ForOp>(&op)) {
+      if (candidate)
+        return false;
+      candidate = loop;
+      sawCandidate = true;
+      continue;
+    }
+
+    if (sawCandidate)
       return false;
-    candidate = &op;
+
+    auto effects = dyn_cast<MemoryEffectOpInterface>(&op);
+    if (!effects || !effects.hasNoEffect() || op.getNumRegions() != 0)
+      return false;
+    preludeOps.push_back(&op);
   }
   if (!candidate)
     return false;
@@ -229,6 +245,9 @@ LogicalResult PerfectNestLinearizationPattern::apply(OpBuilder &builder) {
   IRMapping mapping;
   mapping.map(outerArtsFor.getRegion().front().getArgument(0), newOuterIV);
   mapping.map(innerLoop.getInductionVar(), newInnerIV);
+
+  for (Operation *op : preludeOps)
+    bodyBuilder.clone(*op, mapping);
 
   for (Operation &op : innerLoop.getBody()->without_terminator())
     bodyBuilder.clone(op, mapping);
