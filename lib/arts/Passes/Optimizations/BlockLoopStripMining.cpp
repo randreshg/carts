@@ -51,11 +51,13 @@ namespace {
 struct LoopBlockInfo {
   Value blockSizeVal;
   std::optional<int64_t> blockSizeConst;
-  int64_t lbConst = 0;
+  std::optional<int64_t> lowerBoundConst;
+  Value lowerBoundDivHint;
   Value offsetVal;
   Value offsetDivHint;
   SmallVector<arith::DivUIOp> divOps;
-  SmallVector<arith::RemUIOp> remOps;
+  SmallVector<Value> remValues;
+  SmallVector<Operation *> remPatternOps;
 };
 
 static bool getConstIndex(Value v, int64_t &out) {
@@ -82,6 +84,73 @@ static std::optional<Value> extractInvariantOffset(Value lhs, Value iv) {
       return lhsOp;
   }
   return std::nullopt;
+}
+
+static bool recordRemPattern(Value lhs, Value rhs, Value remResult, Value iv,
+                             LoopBlockInfo &info,
+                             ArrayRef<Operation *> patternOps) {
+  auto offsetOpt = extractInvariantOffset(lhs, iv);
+  if (!offsetOpt)
+    return false;
+  Value offset = *offsetOpt;
+  if (offset) {
+    if (!info.offsetVal)
+      info.offsetVal = offset;
+    else if (!ValueUtils::sameValue(info.offsetVal, offset))
+      return false;
+  } else if (info.offsetVal) {
+    return false;
+  }
+
+  Value normalizedRhs = ValueUtils::stripNumericCasts(rhs);
+  if (ValueUtils::dependsOn(normalizedRhs, iv))
+    return false;
+  auto rhsConst = ValueUtils::tryFoldConstantIndex(normalizedRhs);
+  if (rhsConst && *rhsConst <= 1)
+    return false;
+  if (!info.blockSizeVal) {
+    info.blockSizeVal = normalizedRhs;
+    info.blockSizeConst = rhsConst;
+  } else if (info.blockSizeVal != normalizedRhs) {
+    if (!info.blockSizeConst || !rhsConst || *info.blockSizeConst != *rhsConst)
+      return false;
+  }
+
+  info.remValues.push_back(remResult);
+  llvm::append_range(info.remPatternOps, patternOps);
+  return true;
+}
+
+static bool matchNormalizedSignedRemainder(arith::SelectOp selectOp, Value iv,
+                                           LoopBlockInfo &info) {
+  auto rem = selectOp.getFalseValue().getDefiningOp<arith::RemSIOp>();
+  if (!rem)
+    return false;
+  auto cmp = selectOp.getCondition().getDefiningOp<arith::CmpIOp>();
+  auto add = selectOp.getTrueValue().getDefiningOp<arith::AddIOp>();
+  if (!cmp || !add)
+    return false;
+  if (cmp.getPredicate() != arith::CmpIPredicate::slt)
+    return false;
+
+  Value remResult = rem.getResult();
+  if (!ValueUtils::sameValue(ValueUtils::stripNumericCasts(cmp.getLhs()),
+                             remResult) ||
+      !ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(cmp.getRhs())))
+    return false;
+
+  Value addLhs = ValueUtils::stripNumericCasts(add.getLhs());
+  Value addRhs = ValueUtils::stripNumericCasts(add.getRhs());
+  Value rhs = ValueUtils::stripNumericCasts(rem.getRhs());
+  if (!ValueUtils::sameValue(addLhs, remResult) ||
+      !ValueUtils::sameValue(addRhs, rhs))
+    return false;
+
+  SmallVector<Operation *> patternOps = {rem.getOperation(), cmp.getOperation(),
+                                         add.getOperation(),
+                                         selectOp.getOperation()};
+  return recordRemPattern(rem.getLhs(), rem.getRhs(), selectOp.getResult(), iv,
+                          info, patternOps);
 }
 
 static bool isAlignedOffset(Value offset, Value blockSize,
@@ -115,6 +184,26 @@ static bool isAlignedOffset(Value offset, Value blockSize,
   return false;
 }
 
+static bool isAlignedValue(Value value, Value blockSize,
+                           const std::optional<int64_t> &blockSizeConst,
+                           Value *divHint = nullptr) {
+  if (!value)
+    return true;
+
+  value = ValueUtils::stripClampOne(value);
+  if (isAlignedOffset(value, blockSize, blockSizeConst, divHint))
+    return true;
+
+  if (auto add = value.getDefiningOp<arith::AddIOp>()) {
+    Value lhs = ValueUtils::stripClampOne(add.getLhs());
+    Value rhs = ValueUtils::stripClampOne(add.getRhs());
+    return isAlignedValue(lhs, blockSize, blockSizeConst) &&
+           isAlignedValue(rhs, blockSize, blockSizeConst);
+  }
+
+  return false;
+}
+
 static bool dominatesOrInAncestor(Value v, Operation *op,
                                   DominanceInfo &domInfo) {
   if (!v || !op)
@@ -141,17 +230,15 @@ static std::optional<LoopBlockInfo> analyzeLoop(scf::ForOp loop,
                                                 DominanceInfo &domInfo) {
   LoopBlockInfo info;
   Value iv = loop.getInductionVar();
-
-  int64_t lb = 0;
-  if (!getConstIndex(loop.getLowerBound(), lb))
-    return std::nullopt;
-  info.lbConst = lb;
+  Value loopLowerBound = loop.getLowerBound();
 
   /// Require constant step = 1; allow dynamic upper bound.
   int64_t ub = 0, step = 0;
   if (!getConstIndex(loop.getStep(), step) || step != 1)
     return std::nullopt;
-  if (getConstIndex(loop.getUpperBound(), ub) && ub <= lb)
+  info.lowerBoundConst = ValueUtils::tryFoldConstantIndex(loopLowerBound);
+  if (getConstIndex(loop.getUpperBound(), ub) && info.lowerBoundConst &&
+      ub <= *info.lowerBoundConst)
     return std::nullopt;
 
   bool invalid = false;
@@ -187,52 +274,33 @@ static std::optional<LoopBlockInfo> analyzeLoop(scf::ForOp loop,
       return;
     }
     if (auto rem = dyn_cast<arith::RemUIOp>(op)) {
-      auto offsetOpt = extractInvariantOffset(rem.getLhs(), iv);
-      if (!offsetOpt)
-        return;
-      Value offset = *offsetOpt;
-      if (offset) {
-        if (!info.offsetVal)
-          info.offsetVal = offset;
-        else if (!ValueUtils::sameValue(info.offsetVal, offset))
-          invalid = true;
-      } else if (info.offsetVal) {
+      if (!recordRemPattern(rem.getLhs(), rem.getRhs(), rem.getResult(), iv,
+                            info, {rem.getOperation()}))
         invalid = true;
-      }
-      Value rhs = ValueUtils::stripNumericCasts(rem.getRhs());
-      if (ValueUtils::dependsOn(rhs, iv))
+      return;
+    }
+    if (auto select = dyn_cast<arith::SelectOp>(op)) {
+      if (matchNormalizedSignedRemainder(select, iv, info))
         return;
-      auto rhsConst = ValueUtils::tryFoldConstantIndex(rhs);
-      if (rhsConst && *rhsConst <= 1)
-        return;
-      if (!info.blockSizeVal) {
-        info.blockSizeVal = rhs;
-        info.blockSizeConst = rhsConst;
-      } else if (info.blockSizeVal != rhs) {
-        if (!info.blockSizeConst || !rhsConst ||
-            *info.blockSizeConst != *rhsConst)
-          invalid = true;
-      }
-      info.remOps.push_back(rem);
+      return;
+    }
+    if (isa<arith::RemSIOp, arith::CmpIOp>(op)) {
       return;
     }
   });
 
   if (invalid || !info.blockSizeVal)
     return std::nullopt;
-  if (info.divOps.empty() || info.remOps.empty())
+  if (info.divOps.empty() || info.remValues.empty())
     return std::nullopt;
 
   if (info.blockSizeConst && *info.blockSizeConst <= 1)
     return std::nullopt;
-  if (lb != 0) {
-    if (!info.blockSizeConst)
-      return std::nullopt;
-    if ((lb % *info.blockSizeConst) != 0)
-      return std::nullopt;
-  }
   if (!info.blockSizeConst &&
       !dominatesOrInAncestor(info.blockSizeVal, loop, domInfo))
+    return std::nullopt;
+  if (!info.lowerBoundConst &&
+      !dominatesOrInAncestor(loopLowerBound, loop, domInfo))
     return std::nullopt;
   if (info.offsetVal) {
     if (!dominatesOrInAncestor(info.offsetVal, loop, domInfo))
@@ -240,6 +308,24 @@ static std::optional<LoopBlockInfo> analyzeLoop(scf::ForOp loop,
     if (!isAlignedOffset(info.offsetVal, info.blockSizeVal, info.blockSizeConst,
                          &info.offsetDivHint))
       return std::nullopt;
+  }
+  if (!info.lowerBoundConst &&
+      !isAlignedValue(loopLowerBound, info.blockSizeVal, info.blockSizeConst,
+                      &info.lowerBoundDivHint))
+    return std::nullopt;
+  if (info.lowerBoundConst && info.blockSizeConst &&
+      (*info.lowerBoundConst % *info.blockSizeConst) != 0)
+    return std::nullopt;
+  if (info.offsetVal) {
+    auto offsetConst = ValueUtils::tryFoldConstantIndex(info.offsetVal);
+    if (info.lowerBoundConst && offsetConst && info.blockSizeConst) {
+      int64_t effectiveLower = *info.lowerBoundConst + *offsetConst;
+      if ((effectiveLower % *info.blockSizeConst) != 0)
+        return std::nullopt;
+    } else if (!isAlignedValue(info.offsetVal, info.blockSizeVal,
+                               info.blockSizeConst)) {
+      return std::nullopt;
+    }
   }
 
   /// Require at least one db_ref that depends on a matching div op for block
@@ -266,9 +352,7 @@ static std::optional<LoopBlockInfo> analyzeLoop(scf::ForOp loop,
 static bool stripMineLoop(scf::ForOp loop, const LoopBlockInfo &info) {
   Location loc = loop.getLoc();
   OpBuilder builder(loop);
-  int64_t lb = 0, ub = 0, step = 0;
-  if (!getConstIndex(loop.getLowerBound(), lb))
-    return false;
+  int64_t ub = 0, step = 0;
   if (!getConstIndex(loop.getStep(), step) || step != 1)
     return false;
 
@@ -283,7 +367,7 @@ static bool stripMineLoop(scf::ForOp loop, const LoopBlockInfo &info) {
 
   Value zero = arts::createZeroIndex(builder, loc);
   Value one = arts::createOneIndex(builder, loc);
-  Value lbVal = arts::createConstantIndex(builder, loc, lb);
+  Value lbVal = ValueUtils::ensureIndexType(loop.getLowerBound(), builder, loc);
   Value ubVal = loop.getUpperBound();
   Value bsVal =
       info.blockSizeConst
@@ -297,8 +381,9 @@ static bool stripMineLoop(scf::ForOp loop, const LoopBlockInfo &info) {
   Value bsMinusOne = builder.create<arith::SubIOp>(loc, bsVal, one);
   Value tripPlus = builder.create<arith::AddIOp>(loc, tripCount, bsMinusOne);
   Value numBlocksVal = builder.create<arith::DivUIOp>(loc, tripPlus, bsVal);
-  if (info.blockSizeConst && getConstIndex(loop.getUpperBound(), ub)) {
-    int64_t tripCountConst = ub - lb;
+  if (info.blockSizeConst && info.lowerBoundConst &&
+      getConstIndex(loop.getUpperBound(), ub)) {
+    int64_t tripCountConst = ub - *info.lowerBoundConst;
     if (tripCountConst <= *info.blockSizeConst)
       return false;
     int64_t numBlocksConst =
@@ -345,13 +430,16 @@ static bool stripMineLoop(scf::ForOp loop, const LoopBlockInfo &info) {
   }
 
   /// Map div/rem results to outer/inner ivs.
-  int64_t divOffsetConst = 0;
-  if (info.blockSizeConst)
-    divOffsetConst = lb / *info.blockSizeConst;
   Value blockIdx = outer.getInductionVar();
-  if (divOffsetConst != 0) {
-    Value offsetVal = arts::createConstantIndex(builder, loc, divOffsetConst);
-    blockIdx = builder.create<arith::AddIOp>(loc, blockIdx, offsetVal);
+  Value effectiveLowerDiv = nullptr;
+  if (info.lowerBoundDivHint) {
+    effectiveLowerDiv =
+        ValueUtils::ensureIndexType(info.lowerBoundDivHint, builder, loc);
+  } else if (info.lowerBoundConst && info.blockSizeConst) {
+    int64_t lowerDivConst = *info.lowerBoundConst / *info.blockSizeConst;
+    effectiveLowerDiv = arts::createConstantIndex(builder, loc, lowerDivConst);
+  } else {
+    effectiveLowerDiv = builder.create<arith::DivUIOp>(loc, lbVal, bsVal);
   }
   if (info.offsetVal) {
     Value offsetDiv = nullptr;
@@ -369,14 +457,17 @@ static bool stripMineLoop(scf::ForOp loop, const LoopBlockInfo &info) {
           ValueUtils::ensureIndexType(info.offsetVal, builder, loc);
       offsetDiv = builder.create<arith::DivUIOp>(loc, offsetIdx, bsVal);
     }
-    auto offsetDivConst = ValueUtils::tryFoldConstantIndex(offsetDiv);
-    if (!offsetDivConst || *offsetDivConst != 0)
-      blockIdx = builder.create<arith::AddIOp>(loc, blockIdx, offsetDiv);
+    effectiveLowerDiv =
+        builder.create<arith::AddIOp>(loc, effectiveLowerDiv, offsetDiv);
   }
+  auto effectiveLowerDivConst =
+      ValueUtils::tryFoldConstantIndex(effectiveLowerDiv);
+  if (!effectiveLowerDivConst || *effectiveLowerDivConst != 0)
+    blockIdx = builder.create<arith::AddIOp>(loc, blockIdx, effectiveLowerDiv);
   for (auto div : info.divOps)
     mapping.map(div.getResult(), blockIdx);
-  for (auto rem : info.remOps)
-    mapping.map(rem.getResult(), inner.getInductionVar());
+  for (Value rem : info.remValues)
+    mapping.map(rem, inner.getInductionVar());
 
   /// Clone body ops (excluding terminator) into inner loop.
   for (Operation &op : loop.getBody()->without_terminator()) {
@@ -384,10 +475,8 @@ static bool stripMineLoop(scf::ForOp loop, const LoopBlockInfo &info) {
       if (llvm::is_contained(info.divOps, div))
         continue;
     }
-    if (auto rem = dyn_cast<arith::RemUIOp>(&op)) {
-      if (llvm::is_contained(info.remOps, rem))
-        continue;
-    }
+    if (llvm::is_contained(info.remPatternOps, &op))
+      continue;
     builder.clone(op, mapping);
   }
 
