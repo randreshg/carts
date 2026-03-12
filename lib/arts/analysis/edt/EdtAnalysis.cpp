@@ -7,6 +7,9 @@
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/graphs/edt/EdtGraph.h"
+#include "arts/analysis/graphs/edt/EdtNode.h"
+#include "arts/analysis/loop/LoopAnalysis.h"
+#include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 
@@ -148,7 +151,7 @@ EdtGraph &EdtAnalysis::getOrCreateEdtGraph(func::FuncOp func) {
 
   /// Build using DbGraph from DbAnalysis for consistency
   DbGraph &db = getAnalysisManager().getDbAnalysis().getOrCreateGraph(func);
-  auto eg = std::make_unique<EdtGraph>(func, &db, &getAnalysisManager());
+  auto eg = std::make_unique<EdtGraph>(func, &db, this);
   eg->build();
 
   auto *ptr = eg.get();
@@ -209,4 +212,19 @@ void EdtAnalysis::invalidate() {
   allocPatternByOp.clear();
   edtOrderIndex.clear();
   analyzed = false;
+}
+
+EdtNode *EdtAnalysis::getEdtNode(EdtOp op) {
+  auto func = op->getParentOfType<func::FuncOp>();
+  if (!func)
+    return nullptr;
+  return getOrCreateEdtGraph(func).getEdtNode(op);
+}
+
+MetadataManager &EdtAnalysis::getMetadataManager() {
+  return getAnalysisManager().getMetadataManager();
+}
+
+LoopAnalysis &EdtAnalysis::getLoopAnalysis() {
+  return getAnalysisManager().getLoopAnalysis();
 }

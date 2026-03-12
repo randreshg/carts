@@ -6,6 +6,7 @@
 #include "arts/analysis/graphs/edt/EdtGraph.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
+#include "arts/analysis/edt/EdtAnalysis.h"
 #include "arts/analysis/edt/EdtDataFlowAnalysis.h"
 #include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/analysis/graphs/edt/EdtEdge.h"
@@ -40,8 +41,8 @@ StringRef depTypeToString(DbDepType type) {
 }
 } // namespace
 
-EdtGraph::EdtGraph(func::FuncOp func, DbGraph *dbGraph, AnalysisManager *AM)
-    : func(func), dbGraph(dbGraph), analysisManager(AM) {
+EdtGraph::EdtGraph(func::FuncOp func, DbGraph *dbGraph, EdtAnalysis *EA)
+    : func(func), dbGraph(dbGraph), edtAnalysis(EA) {
   ARTS_INFO("Creating EDT graph for function: " << func.getName().str());
 }
 
@@ -89,7 +90,7 @@ NodeBase *EdtGraph::getOrCreateNode(Operation *op) {
     auto it = edtNodes.find(edtOp);
     if (it != edtNodes.end())
       return it->second.get();
-    auto newNode = std::make_unique<EdtNode>(edtOp, analysisManager);
+    auto newNode = std::make_unique<EdtNode>(edtOp, edtAnalysis);
     newNode->setHierId("T" + std::to_string(edtNodes.size() + 1));
     NodeBase *ptr = newNode.get();
     edtNodes[edtOp] = std::move(newNode);
@@ -265,7 +266,7 @@ void EdtGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
     Object edt;
 
     /// ARTS ID
-    int64_t artsId = analysisManager->getMetadataManager().getIdRegistry().get(
+    int64_t artsId = edtAnalysis->getMetadataManager().getIdRegistry().get(
         edtNode->getOp());
     if (artsId != 0)
       edt["arts_id"] = artsId;
@@ -278,7 +279,7 @@ void EdtGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
 
     /// Dependencies from EdtInfo's dbAllocsRead/Written
     Array deps;
-    auto &idRegistry = analysisManager->getMetadataManager().getIdRegistry();
+    auto &idRegistry = edtAnalysis->getMetadataManager().getIdRegistry();
 
     /// Collect all accessed DBs with their modes
     DenseMap<DbAllocOp, std::string> dbModes;
@@ -477,9 +478,9 @@ void EdtGraph::linkEdtsToLoops() {
 void EdtGraph::buildDependencies() {
   ARTS_INFO("Phase 2 - Building EDT dependencies");
   assert(dbGraph && "DbGraph is required to build EDT dependencies");
-  assert(analysisManager &&
-         "AnalysisManager is required to build EDT dependencies");
-  EdtDataFlowAnalysis dataflow(dbGraph, analysisManager);
+  assert(edtAnalysis &&
+         "EdtAnalysis is required to build EDT dependencies");
+  EdtDataFlowAnalysis dataflow(dbGraph, &edtAnalysis->getAnalysisManager());
   auto deps = dataflow.run(func);
 
   unsigned created = 0;

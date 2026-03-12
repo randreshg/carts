@@ -26,12 +26,12 @@ namespace mlir {
 namespace arts {
 
 class EdtDepEdge;
-class AnalysisManager;
+class EdtAnalysis;
 
 /// Represents task dependencies with edges labeled by data blocks.
 class EdtGraph : public GraphBase {
 public:
-  EdtGraph(func::FuncOp func, DbGraph *dbGraph, AnalysisManager *AM);
+  EdtGraph(func::FuncOp func, DbGraph *dbGraph, EdtAnalysis *EA);
 
   void build() override;
   void buildNodesOnly() override;
@@ -64,7 +64,7 @@ public:
 private:
   func::FuncOp func;
   DbGraph *dbGraph;
-  AnalysisManager *analysisManager;
+  EdtAnalysis *edtAnalysis;
   DenseMap<EdtOp, std::unique_ptr<EdtNode>> edtNodes;
   SmallVector<NodeBase *, 8> nodes;
   /// Cache of children per node for GraphBase child iterators.
