@@ -156,12 +156,12 @@ def update(
                 continue
             _clean_git_tree(submodule_path, submodule)
 
-    # Pull latest CARTS repo changes first.
+    # Pull latest CARTS repo changes first (track origin/main explicitly).
     carts_before_hash = _get_repo_hash(carts_dir)
-    print_step("Pulling latest CARTS changes...")
+    print_step("Pulling latest CARTS changes from origin/main...")
     _run_git(
         carts_dir,
-        ["git", "pull"],
+        ["git", "pull", "origin", "main"],
         "Failed to pull CARTS repository",
     )
     carts_after_hash = _get_repo_hash(carts_dir)
