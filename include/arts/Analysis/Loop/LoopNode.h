@@ -7,10 +7,12 @@
 #ifndef ARTS_ANALYSIS_LOOPNODE_H
 #define ARTS_ANALYSIS_LOOPNODE_H
 
+#include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Graphs/Base/NodeBase.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 #include <optional>
 #include <string>
@@ -23,6 +25,7 @@ namespace arts {
 /// Combines graph node capabilities (NodeBase) with loop metadata
 ///==========================================================================///
 class LoopAnalysis;
+struct DbAcquirePartitionFacts;
 class LoopNode : public NodeBase, public LoopMetadata {
 public:
   /// Constructor: automatically imports metadata from operation
@@ -106,11 +109,19 @@ public:
   /// Check if this loop contains EDT operations (worker loop in ARTS).
   bool hasEdt() const;
 
+  /// Loop-scoped DB partition analysis, proxied through LoopAnalysis.
+  std::optional<DbAnalysis::LoopDbAccessSummary> getDbAccessSummary() const;
+  void collectAcquirePartitionFacts(
+      SmallVectorImpl<const DbAcquirePartitionFacts *> &acquireFacts) const;
+  bool hasDistributedDbContract() const;
+  bool hasPeerInferredPartitionDims() const;
+
   /// Check if two loops have compatible bounds for fusion (lower, upper, step).
   static bool haveCompatibleBounds(LoopNode *a, LoopNode *b);
 
 private:
   Operation *loopOp;
+  LoopAnalysis *loopAnalysis = nullptr;
   std::string hierId;
   DenseSet<EdgeBase *> edges;
 

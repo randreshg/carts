@@ -44,7 +44,8 @@ static Value getWhileInductionVar(scf::WhileOp whileOp) {
 }
 
 LoopNode::LoopNode(Operation *loopOp, LoopAnalysis *loopAnalysis)
-    : NodeBase(), LoopMetadata(loopOp), loopOp(loopOp) {
+    : NodeBase(), LoopMetadata(loopOp), loopOp(loopOp),
+      loopAnalysis(loopAnalysis) {
   bool hasMetadata = importFromOp();
   if (!hasMetadata && loopAnalysis) {
     auto &analysisManager = loopAnalysis->getAnalysisManager();
@@ -487,6 +488,29 @@ bool LoopNode::hasEdt() const {
   bool foundEdt = false;
   loopOp->walk([&](EdtOp) { foundEdt = true; });
   return foundEdt;
+}
+
+std::optional<DbAnalysis::LoopDbAccessSummary> LoopNode::getDbAccessSummary() const {
+  if (!loopAnalysis || !loopOp)
+    return std::nullopt;
+  return loopAnalysis->getLoopDbAccessSummary(loopOp);
+}
+
+void LoopNode::collectAcquirePartitionFacts(
+    SmallVectorImpl<const DbAcquirePartitionFacts *> &acquireFacts) const {
+  if (!loopAnalysis || !loopOp)
+    return;
+  loopAnalysis->collectAcquirePartitionFactsInOperation(loopOp, acquireFacts);
+}
+
+bool LoopNode::hasDistributedDbContract() const {
+  return loopAnalysis && loopOp &&
+         loopAnalysis->operationHasDistributedDbContract(loopOp);
+}
+
+bool LoopNode::hasPeerInferredPartitionDims() const {
+  return loopAnalysis && loopOp &&
+         loopAnalysis->operationHasPeerInferredPartitionDims(loopOp);
 }
 
 bool LoopNode::haveCompatibleBounds(LoopNode *a, LoopNode *b) {
