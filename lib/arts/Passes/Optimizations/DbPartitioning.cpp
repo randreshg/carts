@@ -1583,8 +1583,14 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     /// participates in a 1D block plan (partition along rows only).
     if (!partitionedDimsForPlan.empty()) {
       for (auto &info : acquireInfos) {
-        if (info.needsFullRange || info.partitionDims.empty())
+        if (info.needsFullRange)
           continue;
+        if (info.partitionDims.empty()) {
+          info.needsFullRange = true;
+          ARTS_DEBUG("  Acquire missing partition dims under concrete plan; "
+                     "forcing full-range access");
+          continue;
+        }
         bool compatible =
             info.partitionDims.size() >= partitionedDimsForPlan.size();
         if (compatible) {
