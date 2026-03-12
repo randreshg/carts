@@ -60,11 +60,6 @@ std::unique_ptr<LoopPattern> createSymmetricTriangularPattern();
 /// scf.for loops into a single linearized arts.for iteration space.
 std::unique_ptr<LoopPattern> createPerfectNestLinearizationPattern();
 
-/// Create MatmulReductionPattern for dot-product → k-j update distribution.
-std::unique_ptr<LoopPattern>
-createMatmulReductionPattern(bool enableTiling = true, int64_t tileJ = 64,
-                             int64_t minTripCount = 128);
-
 } // namespace arts
 } // namespace mlir
 

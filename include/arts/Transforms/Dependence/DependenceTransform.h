@@ -32,6 +32,11 @@ public:
 std::unique_ptr<DependenceTransform>
 createJacobiAlternatingBuffersPattern();
 
+/// Rewrite Seidel-style in-place 2D stencils into a tiled wavefront schedule
+/// after OpenMP-to-ARTS conversion so later task/DB passes see a scalable
+/// dependence shape.
+std::unique_ptr<DependenceTransform> createSeidel2DWavefrontPattern();
+
 } // namespace arts
 } // namespace mlir
 

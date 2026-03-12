@@ -12,7 +12,11 @@
 ///     C[i,j] = sum                     for j: C[i,j] += a*B[k,j] /// stride-1
 ///==========================================================================///
 
-#include "arts/Transforms/Loop/LoopNormalizer.h"
+/// This file implements a kernel-form transform, not a dependence rewrite.
+/// It changes a reduction-carried matmul kernel into an update form that is
+/// easier for downstream ARTS distribution and DB partitioning to exploit.
+
+#include "arts/Transforms/Kernel/KernelTransform.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
@@ -21,7 +25,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
-ARTS_DEBUG_SETUP(loop_transforms);
+ARTS_DEBUG_SETUP(kernel_transforms);
 
 using namespace mlir;
 using namespace mlir::arts;

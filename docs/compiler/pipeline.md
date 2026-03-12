@@ -49,6 +49,7 @@ cross-stage contracts.
 
 ### 4) openmp-to-arts
 - `ConvertOpenMPtoArts`
+- `ArtsDepTransforms`
 - `DeadCodeElimination`
 - `CSE`
 
@@ -62,10 +63,9 @@ cross-stage contracts.
 
 ### 6) loop-reordering
 - `LoopNormalization`
-- `ArtsDepTransforms`
 - `StencilBoundaryPeeling`
 - `LoopReordering`
-- `LoopTransforms`
+- `ArtsKernelTransforms`
 - `DistributedHostLoopOutlining`
   - auto-enabled by multinode builds and by `--distributed-db`
   - outlines eligible host producer loops so they flow through the regular
@@ -172,5 +172,9 @@ cross-stage contracts.
   `DistributionHeuristics`, `PartitioningHeuristics`, `DbAnalysis`.
 - IR lowering details belong to pass/transform layers:
   `ForLowering`, DB/EDT lowerings, `ConvertArtsToLLVM`.
+- Structural transform ownership is split between:
+  `ArtsDepTransforms` (dependence/schedule rewrites),
+  `ArtsKernelTransforms` (kernel-form rewrites),
+  `LoopNormalization` (shape cleanup only).
 - Type cast helpers should prefer shared utility methods (`ArtsCodegen` or
   `ValueUtils`) instead of pass-local duplicates.

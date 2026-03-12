@@ -50,7 +50,7 @@
 #include "arts/Transforms/Db/Block/DbBlockIndexer.h"
 #include "arts/Transforms/Db/DbRewriter.h"
 #include "arts/Transforms/Db/ElementWise/DbElementWiseIndexer.h"
-#include "arts/Transforms/DbTransforms.h"
+#include "arts/Transforms/Db/DbTransforms.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/DbUtils.h"
 #include "arts/Utils/Metadata/ArtsMetadata.h"

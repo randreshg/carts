@@ -23,27 +23,27 @@ add_mlir_dialect_library(MLIRArtsTransforms
   Transformations/EdtPtrRematerialization.cpp
   
   # Optimization passes
-  Optimizations/AliasScopeGen.cpp
-  Optimizations/DeadCodeElimination.cpp
-  Optimizations/ArtsInliner.cpp
-  Optimizations/CanonicalizeMemrefs.cpp
-  Optimizations/DataPointerHoisting.cpp
-  Optimizations/ArtsDepTransforms.cpp
-  Optimizations/DbOpts.cpp
-  Optimizations/EdtInvariantCodeMotion.cpp
-  Optimizations/EpochOpt.cpp
-  Optimizations/ArtsHoisting.cpp
-  Optimizations/BlockLoopStripMining.cpp
-  Optimizations/StencilBoundaryPeeling.cpp
-  Optimizations/LoopFusion.cpp
-  Optimizations/LoopNormalization.cpp
-  Optimizations/LoopTransforms.cpp
-  Optimizations/LoopVectorizationHints.cpp
-  Optimizations/ScalarReplacement.cpp
-  Optimizations/Db.cpp
-  Optimizations/DbPartitioning.cpp
-  Optimizations/DistributedDbOwnership.cpp
-  Optimizations/Edt.cpp
+  Optimizations/General/ArtsInliner.cpp
+  Optimizations/General/CanonicalizeMemrefs.cpp
+  Optimizations/General/DeadCodeElimination.cpp
+  Optimizations/Dependence/ArtsDepTransforms.cpp
+  Optimizations/Kernel/ArtsKernelTransforms.cpp
+  Optimizations/Loop/LoopFusion.cpp
+  Optimizations/Loop/LoopNormalization.cpp
+  Optimizations/Loop/StencilBoundaryPeeling.cpp
+  Optimizations/Db/BlockLoopStripMining.cpp
+  Optimizations/Db/Db.cpp
+  Optimizations/Db/DbOpts.cpp
+  Optimizations/Db/DbPartitioning.cpp
+  Optimizations/Db/DistributedDbOwnership.cpp
+  Optimizations/Edt/Edt.cpp
+  Optimizations/Edt/EdtInvariantCodeMotion.cpp
+  Optimizations/Edt/EpochOpt.cpp
+  Optimizations/CodegenPrep/AliasScopeGen.cpp
+  Optimizations/CodegenPrep/ArtsHoisting.cpp
+  Optimizations/CodegenPrep/DataPointerHoisting.cpp
+  Optimizations/CodegenPrep/LoopVectorizationHints.cpp
+  Optimizations/CodegenPrep/ScalarReplacement.cpp
   
   ${CARTS_TRANSFORMS_SOURCE_FILES}
   ${CARTS_UTILS_SOURCE_FILES}

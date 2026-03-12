@@ -368,7 +368,8 @@ def ArtsLoopFusion : Pass<"arts-loop-fusion", "mlir::ModuleOp"> {
   }];
   let dependentDialects = [
     "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",
-    "arith::ArithDialect", "scf::SCFDialect"
+    "arith::ArithDialect", "scf::SCFDialect", "omp::OpenMPDialect",
+    "affine::AffineDialect"
   ];
   let constructor = "mlir::arts::createLoopFusionPass(nullptr)";
 }
@@ -449,22 +450,21 @@ def LoopNormalization : Pass<"loop-normalization", "mlir::ModuleOp"> {
 def ArtsDepTransforms : Pass<"arts-dep-transforms", "mlir::ModuleOp"> {
   let summary = "Apply dependence-preserving schedule rewrites before DB creation";
   let description = [{
-    Groups exact dependence-shape transformations that expose scalable task and
-    DB partitioning opportunities without changing program semantics.
+    Groups exact dependence-shape transformations that run on ARTS/scf IR after
+    OpenMP-to-ARTS conversion and expose scalable task and DB partitioning
+    opportunities without changing program semantics.
 
     Current patterns:
+    - Seidel2DWavefrontPattern
+      Rewrites in-place Seidel-style 2D stencils into a tiled weighted
+      wavefront schedule that avoids coarse full-range serialization.
     - JacobiAlternatingBuffersPattern
       Detects timestep loops that copy one buffer into another before launching
       a stencil update, and rewrites them into an alternating-buffer schedule.
-
-    Planned patterns:
-    - Seidel2DWavefrontPattern
-      Rewrites in-place Seidel-style 2D stencils into a wavefront/tiled
-      wavefront schedule that avoids coarse full-range serialization.
   }];
   let dependentDialects = [
     "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",
-    "arith::ArithDialect", "scf::SCFDialect"
+    "arith::ArithDialect", "scf::SCFDialect", "omp::OpenMPDialect"
   ];
   let constructor = "mlir::arts::createArtsDepTransformsPass()";
 }
@@ -504,16 +504,27 @@ def LoopReordering : Pass<"loop-reordering", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createLoopReorderingPass(nullptr)";
 }
 
-def ArtsLoopTransforms : Pass<"arts-loop-transforms", "mlir::ModuleOp"> {
-  let summary = "ARTS-specific reduction distribution for matmul-like patterns";
+def ArtsKernelTransforms : Pass<"arts-kernel-transforms", "mlir::ModuleOp"> {
+  let summary = "ARTS kernel-form transforms that expose better distribution";
   let description = [{
-    Applies ARTS-specific loop transformations for reduction patterns inside arts.for.
+    Applies semantics-preserving kernel-form rewrites that make downstream
+    ARTS distribution, partitioning, and locality optimizations more effective.
+
+    This pass is intentionally separate from:
+    - ArtsDepTransforms: exact schedule/dependence rewrites
+    - LoopNormalization: structural cleanup
+    - BlockLoopStripMining: late DB-aware strip-mining after partitioning
+
+    Current patterns:
+    - MatmulReductionPattern
+      Rewrites dot-product matmul kernels into update form so later passes can
+      tile, distribute, and localize them more effectively.
   }];
   let dependentDialects = [
     "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",
     "arith::ArithDialect", "scf::SCFDialect"
   ];
-  let constructor = "mlir::arts::createLoopTransformsPass(nullptr)";
+  let constructor = "mlir::arts::createArtsKernelTransformsPass(nullptr)";
   let options = [
     Option<"enableMatmul", "enable-matmul", "bool", /*default=*/"true",
            "Enable reduction distribution for matmul-like patterns.">,
