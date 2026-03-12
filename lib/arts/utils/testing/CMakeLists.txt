@@ -11,6 +11,6 @@ install(TARGETS CartsTest
 )
 
 # Install the header file
-install(FILES ${CMAKE_SOURCE_DIR}/include/arts/utils/Testing/CartsTest.h
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/arts/utils/Testing
+install(FILES ${CMAKE_SOURCE_DIR}/include/arts/utils/testing/CartsTest.h
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/arts/utils/testing
 )
