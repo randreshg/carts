@@ -69,6 +69,8 @@ public:
   /// Resolve static trip count for a loop operation when possible.
   /// Uses LoopNode metadata first, then operation attributes/constant bounds.
   std::optional<int64_t> getStaticTripCount(Operation *loopOp);
+  std::optional<int64_t> estimateStaticPerfectNestedWork(Operation *loopOp,
+                                                         int64_t cap = 8);
 
   /// Loop-facing DB analysis helpers backed by DbAnalysis / DbGraph facts.
   std::optional<DbAnalysis::LoopDbAccessSummary>

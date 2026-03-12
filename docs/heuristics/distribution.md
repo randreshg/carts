@@ -296,6 +296,10 @@ This coupling is what keeps data ownership and routed work aligned for
   - the coarsening threshold is not trip-count-only
   - small loops carried by EDTs with many DB dependencies get larger worker
     chunks, because ARTS pays fixed setup cost per EDT and per dependency slot
+  - direct serial perfect nests can count as extra work per outer iteration,
+    but only for low-fanout uniform loops; this avoids over-coarsening
+    batchnorm-like kernels without relaxing granularity for stencil- or
+    multi-array-heavy loops
 
 Passes consume the API; they do not duplicate these heuristics.
 
