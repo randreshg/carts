@@ -188,8 +188,9 @@ HeuristicsConfig::getAcquireDecisions(
       continue;
     }
 
-    bool preserveDistributionContract = llvm::any_of(
-        facts->entries, [](const DbPartitionEntryFact &entry) {
+    bool preserveDistributionContract =
+        !facts->partitionDims.empty() &&
+        llvm::any_of(facts->entries, [](const DbPartitionEntryFact &entry) {
           return entry.preservesDistributedContract;
         });
     bool needsFullRange =

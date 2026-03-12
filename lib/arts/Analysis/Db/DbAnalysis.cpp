@@ -346,25 +346,10 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
   };
 
   auto inferPartitionDims = [&](AcquirePartitionSummary &summary) {
-    if (!facts || facts->entries.empty())
+    if (!facts || facts->partitionDims.empty())
       return;
-
-    summary.partitionDims.clear();
-    SmallVector<unsigned, 4> seen;
-    for (const DbPartitionEntryFact &entry : facts->entries) {
-      if (!entry.representativeOffset || !entry.mappedDim) {
-        summary.partitionDims.clear();
-        return;
-      }
-      bool alreadySeen = llvm::any_of(
-          seen, [&](unsigned seenDim) { return seenDim == *entry.mappedDim; });
-      if (alreadySeen) {
-        summary.partitionDims.clear();
-        return;
-      }
-      seen.push_back(*entry.mappedDim);
-      summary.partitionDims.push_back(*entry.mappedDim);
-    }
+    summary.partitionDims.assign(facts->partitionDims.begin(),
+                                 facts->partitionDims.end());
   };
 
   auto applyTiling2DPartitionDimsFallback =

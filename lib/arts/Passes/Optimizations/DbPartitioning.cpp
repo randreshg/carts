@@ -224,6 +224,8 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
   info.isValid = summary.isValid;
   info.hasIndirectAccess =
       facts ? facts->hasIndirectAccess : summary.hasIndirectAccess;
+  info.hasDistributionContract =
+      facts ? facts->hasDistributionContract : false;
   info.preservesDependencyMode =
       static_cast<bool>(acquire.getPreserveDepMode());
 
@@ -1086,6 +1088,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
           thisAcquireCanElementWise || !acquire.getPartitionIndices().empty();
       info.canBlock = canUseBlock && thisAcquireCanBlock;
       info.hasDistributionContract = hasDistributionContract;
+      info.partitionDimsFromPeers =
+          facts ? facts->partitionDimsFromPeers : false;
       info.explicitCoarseRequest =
           acquireMode && *acquireMode == PartitionMode::coarse;
 

@@ -63,9 +63,11 @@ struct DbAcquirePartitionFacts {
   AccessPattern accessPattern = AccessPattern::Unknown;
   SmallVector<DbPartitionEntryFact, 2> entries;
   SmallVector<DbDimPartitionFact, 4> dims;
+  SmallVector<unsigned, 4> partitionDims;
   bool hasIndirectAccess = false;
   bool hasDirectAccess = false;
   bool hasDistributionContract = false;
+  bool partitionDimsFromPeers = false;
   bool explicitCoarseRequest = false;
   bool hasBlockHints = false;
   bool inferredBlock = false;

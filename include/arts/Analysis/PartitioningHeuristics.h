@@ -65,6 +65,7 @@ struct AcquireInfo {
   bool canBlock = false;
   AccessPattern accessPattern = AccessPattern::Unknown;
   bool hasDistributionContract = false;
+  bool partitionDimsFromPeers = false;
   bool explicitCoarseRequest = false;
 
   /// Unified partition infos from DbAcquireOp::getPartitionInfos()
