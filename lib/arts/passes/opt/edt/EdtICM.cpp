@@ -1,0 +1,79 @@
+///==========================================================================///
+/// File: EdtInvariantCodeMotion.cpp
+///
+/// Hoists loop-invariant computations inside EDT regions to reduce repeated
+/// work and improve downstream simplification opportunities.
+///
+/// Example:
+///   Before:
+///     scf.for %i = ... { %c = arith.addi %N, %M ... use %c }
+///
+///   After:
+///     %c = arith.addi %N, %M
+///     scf.for %i = ... { ... use %c }
+///==========================================================================///
+
+/// Dialects
+#include "arts/passes/PassDetails.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/OpDefinition.h"
+#include "mlir/Pass/Pass.h"
+
+/// Arts
+#include "arts/ArtsDialect.h"
+
+/// Others
+#include "arts/transforms/edt/EdtICM.h"
+
+/// LLVM support
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
+
+#include "arts/utils/Debug.h"
+ARTS_DEBUG_SETUP(edt - invariant - code - motion);
+
+using namespace mlir;
+using namespace mlir::arts;
+
+namespace {
+struct EdtICMPass : public arts::EdtICMBase<EdtICMPass> {
+  void runOnOperation() override;
+};
+} // end anonymous namespace
+
+void EdtICMPass::runOnOperation() {
+  ModuleOp module = getOperation();
+  ARTS_INFO_HEADER(EdtInvariantCodeMotionPass);
+  ARTS_DEBUG_REGION(module.dump(););
+
+  bool changed = false;
+  /// Walk through all EdtOp instances in the module.
+  module.walk([&](arts::EdtOp edtOp) {
+    ARTS_DEBUG_TYPE("Processing EDT:\n" << edtOp);
+
+    /// Use the new function to move invariant code out of this EDT.
+    auto movedCount = moveEdtInvariantCode(edtOp);
+    if (movedCount > 0)
+      changed = true;
+
+    ARTS_INFO("Moved " << movedCount << " operations out of EDT.");
+  });
+
+  /// if (!changed)
+  ///  markAllAnalysesPreserved();
+
+  ARTS_INFO_FOOTER(EdtInvariantCodeMotionPass);
+  ARTS_DEBUG_REGION(module.dump(););
+}
+
+///===----------------------------------------------------------------------===///
+/// Pass creation
+///===----------------------------------------------------------------------===///
+namespace mlir {
+namespace arts {
+std::unique_ptr<Pass> createEdtICMPass() {
+  return std::make_unique<EdtICMPass>();
+}
+
+} // namespace arts
+} // namespace mlir
