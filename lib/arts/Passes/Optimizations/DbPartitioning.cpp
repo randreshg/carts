@@ -1268,14 +1268,18 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
             "block-wise pattern detected, using N-D block partitioning",
             allocOp.getOperation(), {{"numPartitionedDims", (int64_t)nDims}});
       } else {
-        /// No block sizes found - fall back to coarse
-        ARTS_DEBUG("  Cannot extract block sizes - falling back to coarse");
-        heuristics.recordDecision("Partition-ElementWiseFallbackToCoarse",
-                                  false,
-                                  "block-wise pattern but no block sizes found",
-                                  allocOp.getOperation(), {});
-        resetCoarseAcquireRanges(allocOp, allocNode, builder);
-        return allocOp;
+        /// No loop-step block sizes found. Keep the block path alive and let
+        /// the shared resolver synthesize a safe 1-D plan from canonical
+        /// acquire facts or the default machine-derived block size.
+        ARTS_DEBUG("  Cannot extract N-D block sizes - deferring to shared "
+                   "block-plan resolver");
+        decision = PartitioningDecision::block(
+            ctx, "Fallback: block-wise pattern via shared block-plan");
+        heuristics.recordDecision(
+            "Partition-ElementWiseFallbackToBlock", true,
+            "block-wise pattern without explicit loop-step sizes, using "
+            "shared block-plan resolver",
+            allocOp.getOperation(), {});
       }
     }
   }
