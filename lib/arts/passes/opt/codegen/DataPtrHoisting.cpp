@@ -1,5 +1,5 @@
 ///==========================================================================///
-/// File: DataPointerHoisting.cpp
+/// File: DataPtrHoisting.cpp
 ///
 /// This pass hoists data pointer loads from the ARTS deps struct out of loops.
 /// Without this optimization, pointer loads from deps happen O(n^k) times for
@@ -39,7 +39,7 @@
 #include "arts/utils/ValueUtils.h"
 
 #include "arts/utils/Debug.h"
-ARTS_DEBUG_SETUP(arts_data_pointer_hoisting);
+ARTS_DEBUG_SETUP(arts_data_ptr_hoisting);
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -126,16 +126,16 @@ static bool hoistLoadOutOfLoop(LLVM::LoadOp loadOp, scf::ForOp targetLoop) {
   return true;
 }
 
-struct DataPointerHoistingPass
-    : public arts::ArtsDataPointerHoistingBase<DataPointerHoistingPass> {
+struct DataPtrHoistingPass
+    : public arts::ArtsDataPtrHoistingBase<DataPtrHoistingPass> {
   void runOnOperation() override;
 };
 
 } // namespace
 
-void DataPointerHoistingPass::runOnOperation() {
+void DataPtrHoistingPass::runOnOperation() {
   ModuleOp module = getOperation();
-  ARTS_INFO_HEADER(DataPointerHoistingPass);
+  ARTS_INFO_HEADER(DataPtrHoistingPass);
 
   int hoistedCount = 0, divRemHoisted = 0, dbPtrHoisted = 0, m2rHoisted = 0;
   module.walk([&](func::FuncOp funcOp) {
@@ -233,7 +233,7 @@ void DataPointerHoistingPass::runOnOperation() {
                        << " datablock pointer loads out of loops");
   ARTS_INFO("Hoisted " << m2rHoisted << " pointer2memref ops out of loops");
   ARTS_INFO("Hoisted " << divRemHoisted << " div/rem ops out of loops");
-  ARTS_INFO_FOOTER(DataPointerHoistingPass);
+  ARTS_INFO_FOOTER(DataPtrHoistingPass);
 }
 
 ///===----------------------------------------------------------------------===///
@@ -242,8 +242,8 @@ void DataPointerHoistingPass::runOnOperation() {
 namespace mlir {
 namespace arts {
 
-std::unique_ptr<Pass> createDataPointerHoistingPass() {
-  return std::make_unique<DataPointerHoistingPass>();
+std::unique_ptr<Pass> createDataPtrHoistingPass() {
+  return std::make_unique<DataPtrHoistingPass>();
 }
 
 } // namespace arts

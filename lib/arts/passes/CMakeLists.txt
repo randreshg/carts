@@ -41,7 +41,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   opt/edt/EpochOpt.cpp
   opt/codegen/AliasScopeGen.cpp
   opt/codegen/Hoisting.cpp
-  opt/codegen/DataPointerHoisting.cpp
+  opt/codegen/DataPtrHoisting.cpp
   opt/codegen/LoopVectorizationHints.cpp
   opt/codegen/ScalarReplacement.cpp
   

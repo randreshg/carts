@@ -49,7 +49,7 @@ createConvertArtsToLLVMPass(bool debug, bool distributedInitPerWorker,
                             const AbstractMachine *machine);
 std::unique_ptr<Pass> createEdtICMPass();
 std::unique_ptr<Pass> createEdtAllocaSinkingPass();
-std::unique_ptr<Pass> createDataPointerHoistingPass();
+std::unique_ptr<Pass> createDataPtrHoistingPass();
 std::unique_ptr<Pass> createAliasScopeGenPass();
 std::unique_ptr<Pass> createLoopVectorizationHintsPass();
 std::unique_ptr<Pass> createScalarReplacementPass();

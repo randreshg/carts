@@ -215,8 +215,8 @@ def EdtICM : Pass<"arts-edt-icm", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createEdtICMPass()";
 }
 
-def ArtsDataPointerHoisting
-    : Pass<"arts-data-pointer-hoisting", "mlir::ModuleOp"> {
+def ArtsDataPtrHoisting
+    : Pass<"arts-data-ptr-hoisting", "mlir::ModuleOp"> {
   let summary = "Hoist data pointer loads from deps struct out of loops";
   let description = [{
     This pass hoists llvm.load operations that extract data pointers from the
@@ -250,7 +250,7 @@ def ArtsDataPointerHoisting
   }];
   let dependentDialects =
       ["arts::ArtsDialect", "LLVM::LLVMDialect", "scf::SCFDialect"];
-  let constructor = "mlir::arts::createDataPointerHoistingPass()";
+  let constructor = "mlir::arts::createDataPtrHoistingPass()";
 }
 
 def EdtPtrRematerialization
