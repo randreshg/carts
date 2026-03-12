@@ -72,11 +72,10 @@ std::unique_ptr<Pass> createArtsDepTransformsPass();
 std::unique_ptr<Pass> createStencilBoundaryPeelingPass();
 std::unique_ptr<Pass> createLoopNormalizationPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createLoopReorderingPass(ArtsAnalysisManager *AM);
-std::unique_ptr<Pass> createLoopTransformsPass(ArtsAnalysisManager *AM,
-                                               bool enableMatmul = true,
-                                               bool enableTiling = true,
-                                               int64_t tileJ = 64,
-                                               int64_t minTripCount = 128);
+std::unique_ptr<Pass> createArtsKernelTransformsPass(
+    ArtsAnalysisManager *AM, bool enableMatmul = true,
+    bool enableTiling = true, int64_t tileJ = 64,
+    int64_t minTripCount = 128);
 std::unique_ptr<Pass> createVerifyMetadataPass(ArtsAnalysisManager *AM,
                                                bool failOnMissing = false);
 } // namespace arts

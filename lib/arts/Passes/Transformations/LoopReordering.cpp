@@ -10,7 +10,8 @@
 ///     C[i,j] = 0          =>       for k:
 ///     for k: C += A*B                for j: C += A*B      /// B[k,j] stride-1
 ///
-/// See LoopTransforms.cpp for iter_args patterns (e.g., gemm).
+/// See ArtsKernelTransforms.cpp for iter_args/update-form kernel rewrites
+/// (e.g., gemm).
 /// Must run BEFORE CreateDbs to preserve SSA relationships.
 ///==========================================================================///
 
