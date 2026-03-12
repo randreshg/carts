@@ -23,6 +23,7 @@ namespace arts {
 class DbGraph;
 class DbAliasAnalysis;
 class LoopAnalysis;
+struct DbAcquirePartitionFacts;
 
 class DbAnalysis : public ArtsAnalysis {
 public:
@@ -33,6 +34,8 @@ public:
     SmallVector<unsigned> partitionDims;
     bool isValid = false;
     bool hasIndirectAccess = false;
+    bool hasDistributionContract = false;
+    bool partitionDimsFromPeers = false;
   };
 
   struct LoopDbAccessSummary {
@@ -69,6 +72,7 @@ public:
   std::optional<EdtDistributionPattern> getLoopDistributionPattern(ForOp forOp);
   AcquirePartitionSummary analyzeAcquirePartition(DbAcquireOp acquire,
                                                   OpBuilder &builder);
+  const DbAcquirePartitionFacts *getAcquirePartitionFacts(DbAcquireOp acquire);
   bool hasCrossElementSelfReadInLoop(DbAcquireOp acquire, ForOp loopOp);
 
   /// Return true when producerEdt writes DBs that are later consumed outside
