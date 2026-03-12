@@ -1,5 +1,5 @@
 ///==========================================================================///
-/// File: carts-compile.cpp
+/// File: Compile.cpp
 /// Main entry point for the CARTS compilation pipeline tool.
 ///==========================================================================///
 
@@ -444,7 +444,7 @@ void setupPreLowering(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createLoopInvariantCodeMotionPass());
-  pm.addPass(arts::createDataPointerHoistingPass());
+  pm.addPass(arts::createDataPtrHoistingPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(arts::createScalarReplacementPass());
@@ -463,7 +463,7 @@ void setupArtsToLLVM(PassManager &pm, bool debug, bool distributedInitPerWorker,
   // Db/dep pointer loads are materialized during Arts->LLVM lowering.
   // Hoist those loop-invariant loads after conversion so vectorization and LICM
   // can operate on simpler loop bodies.
-  pm.addPass(arts::createDataPointerHoistingPass());
+  pm.addPass(arts::createDataPtrHoistingPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createMem2Reg());

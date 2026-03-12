@@ -89,7 +89,7 @@ carts lit --suite contracts
 --debug-only=arts_alias_scope_gen
 --debug-only=arts_loop_vectorization_hints
 --debug-only=arts_prefetch_hints
---debug-only=arts_data_pointer_hoisting
+--debug-only=arts_data_ptr_hoisting
 ```
 
 ---
@@ -1054,14 +1054,14 @@ carts compile <file>.mlir --stop-at=pre-lowering
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --stop-at=pre-lowering --debug-only=parallel_edt_lowering,db_lowering,edt_lowering,epoch_lowering,arts_data_pointer_hoisting 2>&1
+carts compile <file>.mlir --stop-at=pre-lowering --debug-only=parallel_edt_lowering,db_lowering,edt_lowering,epoch_lowering,arts_data_ptr_hoisting 2>&1
 ```
 
 **Passes Executed:**
 - `ParallelEdtLowering` - Lower parallel EDTs to task graphs
 - `DbLowering` - Lower DataBlocks to opaque pointers
 - `EdtLowering` - Lower EDTs to runtime function calls
-- `DataPointerHoisting` - Hoist data pointer loads out of loops
+- `DataPtrHoisting` - Hoist data pointer loads out of loops
 - `ScalarReplacement` - Memory to register promotion for reductions
 - `EpochLowering` - Lower epochs and propagate GUIDs
 
@@ -1162,7 +1162,7 @@ carts compile <file>.mlir --emit-llvm --debug-only=arts_alias_scope_gen,arts_loo
 | DbLowering | `db_lowering` | 14 | Lower DBs to pointers |
 | EdtLowering | `edt_lowering` | 14 | Lower EDTs to runtime |
 | EpochLowering | `epoch_lowering` | 14 | Lower epochs |
-| DataPointerHoisting | `arts_data_pointer_hoisting` | 14 | Hoist pointer loads |
+| DataPtrHoisting | `arts_data_ptr_hoisting` | 14 | Hoist pointer loads |
 | ScalarReplacement | `scalar_replacement` | 14 | Mem2reg for reductions |
 | ConvertArtsToLLVM | `convert_arts_to_llvm` | 15 | Final ARTS lowering |
 | AliasScopeGen | `arts_alias_scope_gen` | emit-llvm | Alias metadata |
