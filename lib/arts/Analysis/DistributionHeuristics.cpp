@@ -163,11 +163,21 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
   if (tripCount <= 0)
     return std::nullopt;
 
-  constexpr int64_t kMinItersPerWorker = 8;
-  if (tripCount >= workerCfg.totalWorkers * kMinItersPerWorker)
+  int64_t minItersPerWorker = 8;
+  if (auto parentEdt = forOp->getParentOfType<EdtOp>()) {
+    int64_t depCount = static_cast<int64_t>(parentEdt.getDependencies().size());
+    if (depCount > 0) {
+      /// ARTS pays fixed scheduling + dependency-slot setup cost per worker
+      /// EDT. When a loop carries many DB dependencies, keep fewer, larger
+      /// chunks so the useful work per EDT grows with dependency pressure.
+      minItersPerWorker = std::max<int64_t>(minItersPerWorker, depCount * 2);
+    }
+  }
+
+  if (tripCount >= workerCfg.totalWorkers * minItersPerWorker)
     return std::nullopt;
 
-  int64_t desiredWorkers = std::max<int64_t>(1, tripCount / kMinItersPerWorker);
+  int64_t desiredWorkers = std::max<int64_t>(1, tripCount / minItersPerWorker);
   desiredWorkers = std::min(desiredWorkers, workerCfg.totalWorkers);
 
   int64_t blockSize = (tripCount + desiredWorkers - 1) / desiredWorkers;

@@ -293,6 +293,9 @@ This coupling is what keeps data ownership and routed work aligned for
 - dispatch worker count / total worker helpers
 - DB alignment block-size heuristic
 - coarsened block-size hint computation for `arts.for`
+  - the coarsening threshold is not trip-count-only
+  - small loops carried by EDTs with many DB dependencies get larger worker
+    chunks, because ARTS pays fixed setup cost per EDT and per dependency slot
 
 Passes consume the API; they do not duplicate these heuristics.
 
