@@ -99,6 +99,18 @@ def Db : Pass<"db", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createDbPass(nullptr)";
 }
 
+def DbOpts : Pass<"db-opts", "mlir::ModuleOp"> {
+  let summary = "Apply DB-local cleanup optimizations";
+  let description = [{
+    Performs DB-specific cleanups after mode and partition decisions are known.
+    Current optimizations:
+    - Replace task-private single-element scratch DBs with local allocas
+  }];
+  let dependentDialects =
+      ["memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect"];
+  let constructor = "mlir::arts::createDbOptsPass()";
+}
+
 def DbPartitioning : Pass<"db-partitioning", "mlir::ModuleOp"> {
   let summary = "Partition DBs for fine-grained parallel access";
   let description = [{

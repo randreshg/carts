@@ -1,17 +1,13 @@
 ///==========================================================================///
-/// File: EdtScratchDbElimination.cpp
+/// File: DbOpts.cpp
 ///
-/// Replace task-private single-element scratch DBs with local stack allocas.
-///
-/// Some kernels lower scalar temporaries into coarse stack DBs that are then
-/// acquired by every EDT in a parallel epoch. When each task stores to the
-/// scratch before any load and the value never escapes the task group, the DB
-/// only serializes execution and adds runtime overhead. This pass rewrites that
-/// pattern back into a task-local memref.alloca and removes the synthetic DB.
+/// DB-local cleanup optimizations that run after DbPass / DbPartitioning have
+/// established stable acquire and dependency structure.
 ///==========================================================================///
 
-#include "DbOptimizations.h"
+#include "../ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
+#include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/DbUtils.h"
 #include "arts/Utils/EdtUtils.h"
 #include "arts/Utils/OperationAttributes.h"
@@ -22,10 +18,9 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include <algorithm>
-#include <functional>
 
 #include "arts/Utils/ArtsDebug.h"
-ARTS_DEBUG_SETUP(edt_scratch_db_elimination);
+ARTS_DEBUG_SETUP(db_opts);
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -53,7 +48,8 @@ static bool isSingleSizeOne(ValueRange sizes) {
 
 static bool isZeroIndexList(ValueRange values) {
   return !values.empty() &&
-         llvm::all_of(values, [](Value v) { return ValueUtils::isZeroConstant(v); });
+         llvm::all_of(values,
+                      [](Value v) { return ValueUtils::isZeroConstant(v); });
 }
 
 static SmallVector<Value> getDynamicAllocaSizes(DbAllocOp alloc,
@@ -123,9 +119,8 @@ static bool loadsAreInitializedByTask(DbRefOp dbRef, EdtOp edt,
     return false;
 
   for (Operation *load : loads) {
-    bool covered = llvm::any_of(stores, [&](Operation *store) {
-      return domInfo.dominates(store, load);
-    });
+    bool covered = llvm::any_of(
+        stores, [&](Operation *store) { return domInfo.dominates(store, load); });
     if (!covered)
       return false;
   }
@@ -152,7 +147,8 @@ matchScratchCandidate(DbAllocOp alloc, DominanceInfo &domInfo) {
     if (auto acquire = dyn_cast<DbAcquireOp>(user)) {
       if (acquire.getSourcePtr() != alloc.getPtr())
         return false;
-      if (Value srcGuid = acquire.getSourceGuid(); srcGuid && srcGuid != alloc.getGuid())
+      if (Value srcGuid = acquire.getSourceGuid();
+          srcGuid && srcGuid != alloc.getGuid())
         return false;
       if (seenAcquireOps.insert(acquire.getOperation()).second)
         candidate.uses.push_back({acquire, nullptr, nullptr, nullptr});
@@ -176,7 +172,8 @@ matchScratchCandidate(DbAllocOp alloc, DominanceInfo &domInfo) {
     if (auto acquire = dyn_cast<DbAcquireOp>(user)) {
       if (acquire.getSourcePtr() != alloc.getPtr())
         return false;
-      if (Value srcGuid = acquire.getSourceGuid(); !srcGuid || srcGuid != alloc.getGuid())
+      if (Value srcGuid = acquire.getSourceGuid();
+          !srcGuid || srcGuid != alloc.getGuid())
         return false;
       if (seenAcquireOps.insert(acquire.getOperation()).second)
         candidate.uses.push_back({acquire, nullptr, nullptr, nullptr});
@@ -197,7 +194,8 @@ matchScratchCandidate(DbAllocOp alloc, DominanceInfo &domInfo) {
     if (!classifyGuidUser(user))
       return std::nullopt;
 
-  if (candidate.uses.empty() || !matchInitStore(candidate.initRef, candidate.initStore))
+  if (candidate.uses.empty() ||
+      !matchInitStore(candidate.initRef, candidate.initStore))
     return std::nullopt;
 
   for (ScratchUse &use : candidate.uses) {
@@ -214,7 +212,8 @@ matchScratchCandidate(DbAllocOp alloc, DominanceInfo &domInfo) {
       return std::nullopt;
 
     auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
-    if (!edt || !blockArg || acquire.getPtr().use_empty() || !acquire.getPtr().hasOneUse())
+    if (!edt || !blockArg || acquire.getPtr().use_empty() ||
+        !acquire.getPtr().hasOneUse())
       return std::nullopt;
 
     DbRefOp dbRef = nullptr;
@@ -244,85 +243,93 @@ static void eraseIfPresent(Operation *op) {
     op->erase();
 }
 
+struct DbOptsPass : public arts::DbOptsBase<DbOptsPass> {
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    SmallVector<ScratchCandidate, 8> candidates;
+
+    module.walk([&](func::FuncOp func) {
+      DominanceInfo domInfo(func);
+      SmallVector<DbAllocOp, 8> allocs;
+      func.walk([&](DbAllocOp alloc) { allocs.push_back(alloc); });
+      for (DbAllocOp alloc : allocs)
+        if (auto candidate = matchScratchCandidate(alloc, domInfo))
+          candidates.push_back(std::move(*candidate));
+    });
+
+    if (candidates.empty())
+      return;
+
+    unsigned rewrites = 0;
+    for (ScratchCandidate &candidate : candidates) {
+      DenseMap<Operation *, SmallVector<unsigned, 4>> argsToRemove;
+      DenseMap<Operation *, SmallVector<DbAcquireOp, 4>> acquiresToErase;
+
+      for (ScratchUse &use : candidate.uses) {
+        auto refType = cast<MemRefType>(use.dbRef.getResult().getType());
+        SmallVector<Value> dynamicSizes =
+            getDynamicAllocaSizes(candidate.alloc, refType);
+        Block &entryBlock = use.edt.getBody().front();
+        OpBuilder builder(&entryBlock, entryBlock.begin());
+        auto local = builder.create<memref::AllocaOp>(use.dbRef.getLoc(), refType,
+                                                      dynamicSizes);
+        use.dbRef.getResult().replaceAllUsesWith(local.getMemref());
+        use.dbRef.erase();
+
+        SmallVector<Operation *, 4> releases;
+        for (Operation *user : use.blockArg.getUsers())
+          if (isa<DbReleaseOp>(user))
+            releases.push_back(user);
+        for (Operation *release : releases)
+          release->erase();
+
+        argsToRemove[use.edt.getOperation()].push_back(
+            use.blockArg.getArgNumber());
+        acquiresToErase[use.edt.getOperation()].push_back(use.acquire);
+        rewrites++;
+      }
+
+      for (auto &entry : argsToRemove) {
+        auto edt = cast<EdtOp>(entry.first);
+        Block &body = edt.getBody().front();
+        ValueRange deps = edt.getDependencies();
+        SmallVector<unsigned, 4> indices = entry.second;
+        llvm::sort(indices, std::greater<>());
+        indices.erase(std::unique(indices.begin(), indices.end()),
+                      indices.end());
+
+        SmallVector<Value> newDeps;
+        for (unsigned i = 0; i < deps.size(); ++i)
+          if (!llvm::is_contained(indices, i))
+            newDeps.push_back(deps[i]);
+
+        for (unsigned idx : indices)
+          body.eraseArgument(idx);
+        edt.setDependencies(newDeps);
+      }
+
+      for (auto &entry : acquiresToErase) {
+        for (DbAcquireOp acquire : entry.second)
+          if (acquire && acquire.getGuid().use_empty() &&
+              acquire.getPtr().use_empty())
+            acquire.erase();
+      }
+
+      eraseIfPresent(candidate.initStore);
+      eraseIfPresent(candidate.initRef.getOperation());
+      for (DbFreeOp freeOp : candidate.freeOps)
+        eraseIfPresent(freeOp.getOperation());
+      if (candidate.alloc && candidate.alloc.getGuid().use_empty() &&
+          candidate.alloc.getPtr().use_empty())
+        candidate.alloc.erase();
+    }
+
+    ARTS_INFO("DbOptsPass: removed " << rewrites << " scratch DB uses");
+  }
+};
+
 } // namespace
 
-bool mlir::arts::eliminateEdtScratchDbs(ModuleOp module) {
-  SmallVector<ScratchCandidate, 8> candidates;
-
-  module.walk([&](func::FuncOp func) {
-    DominanceInfo domInfo(func);
-    SmallVector<DbAllocOp, 8> allocs;
-    func.walk([&](DbAllocOp alloc) { allocs.push_back(alloc); });
-    for (DbAllocOp alloc : allocs)
-      if (auto candidate = matchScratchCandidate(alloc, domInfo))
-        candidates.push_back(std::move(*candidate));
-  });
-
-  if (candidates.empty())
-    return false;
-
-  unsigned rewrites = 0;
-  for (ScratchCandidate &candidate : candidates) {
-    DenseMap<Operation *, SmallVector<unsigned, 4>> argsToRemove;
-    DenseMap<Operation *, SmallVector<DbAcquireOp, 4>> acquiresToErase;
-
-    for (ScratchUse &use : candidate.uses) {
-      auto refType = cast<MemRefType>(use.dbRef.getResult().getType());
-      SmallVector<Value> dynamicSizes =
-          getDynamicAllocaSizes(candidate.alloc, refType);
-      Block &entryBlock = use.edt.getBody().front();
-      OpBuilder builder(&entryBlock, entryBlock.begin());
-      auto local =
-          builder.create<memref::AllocaOp>(use.dbRef.getLoc(), refType, dynamicSizes);
-      use.dbRef.getResult().replaceAllUsesWith(local.getMemref());
-      use.dbRef.erase();
-
-      SmallVector<Operation *, 4> releases;
-      for (Operation *user : use.blockArg.getUsers())
-        if (isa<DbReleaseOp>(user))
-          releases.push_back(user);
-      for (Operation *release : releases)
-        release->erase();
-
-      argsToRemove[use.edt.getOperation()].push_back(use.blockArg.getArgNumber());
-      acquiresToErase[use.edt.getOperation()].push_back(use.acquire);
-      rewrites++;
-    }
-
-    for (auto &entry : argsToRemove) {
-      auto edt = cast<EdtOp>(entry.first);
-      Block &body = edt.getBody().front();
-      ValueRange deps = edt.getDependencies();
-      SmallVector<unsigned, 4> indices = entry.second;
-      llvm::sort(indices, std::greater<>());
-      indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
-
-      SmallVector<Value> newDeps;
-      for (unsigned i = 0; i < deps.size(); ++i)
-        if (!llvm::is_contained(indices, i))
-          newDeps.push_back(deps[i]);
-
-      for (unsigned idx : indices)
-        body.eraseArgument(idx);
-      edt.setDependencies(newDeps);
-    }
-
-    for (auto &entry : acquiresToErase) {
-      for (DbAcquireOp acquire : entry.second)
-        if (acquire && acquire.getGuid().use_empty() && acquire.getPtr().use_empty())
-          acquire.erase();
-    }
-
-    eraseIfPresent(candidate.initStore);
-    eraseIfPresent(candidate.initRef.getOperation());
-    for (DbFreeOp freeOp : candidate.freeOps)
-      eraseIfPresent(freeOp.getOperation());
-    if (candidate.alloc && candidate.alloc.getGuid().use_empty() &&
-        candidate.alloc.getPtr().use_empty())
-      candidate.alloc.erase();
-  }
-
-  ARTS_INFO("Edt scratch DB elimination removed " << rewrites
-                                                  << " scratch DB uses");
-  return rewrites != 0;
+std::unique_ptr<Pass> mlir::arts::createDbOptsPass() {
+  return std::make_unique<DbOptsPass>();
 }
