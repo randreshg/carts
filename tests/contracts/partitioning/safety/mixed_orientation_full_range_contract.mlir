@@ -1,4 +1,4 @@
-// RUN: sh -c '%S/../../tools/carts compile %S/../examples/mixed_orientation/poisson_mixed_orientation.c --stop-at concurrency-opt --arts-config %S/../examples/arts.cfg || true' | %FileCheck %s
+// RUN: sh -c '%S/../../../../tools/carts compile %S/../../../examples/mixed_orientation/poisson_mixed_orientation.c --stop-at concurrency-opt --arts-config %S/../../../examples/arts.cfg || true' | %FileCheck %s
 
 // CHECK-LABEL: func.func @main
 // CHECK: %[[FG:.*]], %[[FP:.*]] = arts.db_alloc[<inout>, <heap>, <write>, <block>, <uniform>]

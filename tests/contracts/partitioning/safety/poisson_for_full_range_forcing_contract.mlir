@@ -1,4 +1,4 @@
-// RUN: sh -c '%S/../../tools/carts compile %S/../../external/carts-benchmarks/kastors-jacobi/poisson-for/poisson-for.c --stop-at concurrency-opt --arts-config %S/../examples/arts.cfg || true' | %FileCheck %s
+// RUN: sh -c '%S/../../../../tools/carts compile %S/../../../../external/carts-benchmarks/kastors-jacobi/poisson-for/poisson-for.c --stop-at concurrency-opt --arts-config %S/../../../examples/arts.cfg || true' | %FileCheck %s
 
 // CHECK-LABEL: func.func @main
 // CHECK: %[[FG:.*]], %[[FP:.*]] = arts.db_alloc[<inout>, <heap>, <write>, <block>, <uniform>]
