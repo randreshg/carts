@@ -46,6 +46,7 @@ struct LoopNormalizationPass
     /// Register all available patterns (order = priority)
     SmallVector<std::unique_ptr<LoopPattern>> patterns;
     patterns.push_back(createSymmetricTriangularPattern());
+    patterns.push_back(createPerfectNestLinearizationPattern());
     /// Phase 2: patterns.push_back(createLoopInterchangePattern(AM));
     /// Phase 2: patterns.push_back(createMatmulReductionPattern(AM));
 
