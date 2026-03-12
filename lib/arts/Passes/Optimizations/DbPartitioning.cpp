@@ -876,8 +876,12 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   SmallVector<AcquirePartitionInfo> acquireInfos;
   SmallVector<const DbAcquirePartitionFacts *> acquireFacts;
   if (allocNode) {
+    DbAnalysis &dbAnalysis = AM->getDbAnalysis();
     for (DbAcquireNode *acqNode : allocAcquireNodes) {
-      const DbAcquirePartitionFacts *facts = &acqNode->getPartitionFacts();
+      const DbAcquirePartitionFacts *facts =
+          dbAnalysis.getAcquirePartitionFacts(acqNode->getDbAcquireOp());
+      if (!facts)
+        facts = &acqNode->getPartitionFacts();
       acquireFacts.push_back(facts);
       auto info = computeAcquirePartitionInfo(acqNode->getDbAcquireOp(),
                                               acqNode, facts, builder);
