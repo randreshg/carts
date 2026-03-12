@@ -8,8 +8,6 @@
 #define CARTS_UTILS_ARTSUTILS_H
 
 #include "arts/Dialect.h"
-#include "arts/utils/DbUtils.h"
-#include "arts/utils/LoopUtils.h"
 #include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -33,20 +31,6 @@ MemRefType getElementMemRefType(Type elementType, ArrayRef<Value> elementSizes);
 
 /// String Utilities
 std::string sanitizeString(StringRef s);
-
-/// Deprecated Range/Value Comparison Wrappers — use ValueUtils methods instead
-[[deprecated("Use ValueUtils::equalRange instead")]]
-inline bool equalRange(ValueRange a, ValueRange b) {
-  return ValueUtils::equalRange(a, b);
-}
-[[deprecated("Use ValueUtils::allSameValue instead")]]
-inline bool allSameValue(ValueRange values) {
-  return ValueUtils::allSameValue(values);
-}
-[[deprecated("Use ValueUtils::scalesAreEquivalent instead")]]
-inline bool scalesAreEquivalent(Value a, Value b) {
-  return ValueUtils::scalesAreEquivalent(a, b);
-}
 
 /// Access Mode Utilities
 ArtsMode combineAccessModes(ArtsMode mode1, ArtsMode mode2);
