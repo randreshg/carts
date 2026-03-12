@@ -102,6 +102,12 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
         /// Determine if this acquire needs stencil halo handling.
         /// This is a critical decision point for partitioning correctness.
         auto accessPattern = getDbAccessPattern(dbAlloc.getOperation());
+        std::optional<AccessPattern> acquireAccessPattern;
+        if (input.analysisManager) {
+          acquireAccessPattern = input.analysisManager->getDbAnalysis()
+                                     .getAcquireAccessPattern(
+                                         input.parentAcquire);
+        }
         const ArtsMode mode = input.parentAcquire.getMode();
 
         /// Check if this inout acquire reads at cross-element offsets in the
@@ -117,7 +123,9 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
         const bool modeNeedsPatternStencilHalo =
             mode == ArtsMode::in || inoutReadsCrossElementSelf;
         const bool patternSaysStencil =
-            accessPattern && *accessPattern == DbAccessPattern::stencil;
+            (accessPattern && *accessPattern == DbAccessPattern::stencil) ||
+            (acquireAccessPattern &&
+             *acquireAccessPattern == AccessPattern::Stencil);
 
         /// Check if the EDT distribution strategy indicates stencil pattern
         const bool strategySaysStencil =
@@ -138,6 +146,14 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
         ARTS_DEBUG("Acquire rewrite plan: mode="
                    << static_cast<int>(mode)
                    << " patternSaysStencil=" << patternSaysStencil
+                   << " allocPattern="
+                   << (accessPattern
+                           ? static_cast<int>(*accessPattern)
+                           : -1)
+                   << " acquirePattern="
+                   << (acquireAccessPattern
+                           ? static_cast<int>(*acquireAccessPattern)
+                           : -1)
                    << " strategySaysStencil=" << strategySaysStencil
                    << " inoutReadsCrossElementSelf="
                    << inoutReadsCrossElementSelf);
