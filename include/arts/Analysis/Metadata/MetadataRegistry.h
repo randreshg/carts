@@ -8,11 +8,11 @@
 #ifndef ARTS_ANALYSIS_METADATA_METADATAREGISTRY_H
 #define ARTS_ANALYSIS_METADATA_METADATAREGISTRY_H
 
-#include "arts/Utils/Metadata/ArtsMetadata.h"
-#include "arts/Utils/Metadata/IdRegistry.h"
-#include "arts/Utils/Metadata/LoopMetadata.h"
-#include "arts/Utils/Metadata/MemrefMetadata.h"
-#include "arts/Utils/Metadata/ValueMetadata.h"
+#include "arts/utils/metadata/IdRegistry.h"
+#include "arts/utils/metadata/LoopMetadata.h"
+#include "arts/utils/metadata/MemrefMetadata.h"
+#include "arts/utils/metadata/Metadata.h"
+#include "arts/utils/metadata/ValueMetadata.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/DenseMap.h"

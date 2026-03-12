@@ -7,7 +7,7 @@
 #ifndef ARTS_ANALYSIS_GRAPHS_DB_DBDIMANALYZER_H
 #define ARTS_ANALYSIS_GRAPHS_DB_DBDIMANALYZER_H
 
-#include "arts/Analysis/Graphs/Db/DbNode.h"
+#include "arts/analysis/graphs/db/DbNode.h"
 
 namespace mlir {
 namespace arts {

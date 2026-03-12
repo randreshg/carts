@@ -345,7 +345,7 @@ carts compile <file>.mlir --stop-at=loop-reordering --debug-only=loop_reordering
 
 **Passes Executed:**
 - `LoopReordering` - Apply loop interchange transformations
-- `ArtsKernelTransforms` - Kernel-form transforms such as matmul reduction
+- `KernelTransforms` - Kernel-form transforms such as matmul reduction
   distribution
 - `CSE` - Common subexpression elimination
 
@@ -714,7 +714,7 @@ flowchart TB
     Q3 -->|No| R3
 ```
 
-**Key Code Location**: `lib/arts/Passes/Transformations/CreateDbs.cpp:595-750`
+**Key Code Location**: `lib/arts/passes/Transformations/CreateDbs.cpp:595-750`
 
 ```cpp
 // Build PartitioningContext from DbControlOp analysis
@@ -988,8 +988,8 @@ for (int e = 0; e < numElems; e++) {
 Heuristics are centralized in the core analysis layer:
 
 ```
-include/arts/Analysis/ArtsHeuristics.h   # PartitioningDecision, PartitioningContext
-lib/arts/Analysis/ArtsHeuristics.cpp     # evaluatePartitioningHeuristics(...)
+include/arts/analysis/HeuristicsConfig.h   # PartitioningDecision, PartitioningContext
+lib/arts/analysis/HeuristicsConfig.cpp     # evaluatePartitioningHeuristics(...)
 ```
 
 Key entry points:
@@ -1005,7 +1005,7 @@ traceable, while still recording decisions for diagnostics.
 
 | Aspect | Current | Notes |
 |--------|---------|-------|
-| LOC | single file (`ArtsHeuristics.cpp`) | Centralized and traceable |
+| LOC | single file (`HeuristicsConfig.cpp`) | Centralized and traceable |
 | Classes | none (function-based) | Simpler than class registry |
 | Context fields | `PartitioningContext` | Rich enough for H1.x decisions |
 | Evaluation | linear chain | Very fast |
@@ -1021,12 +1021,12 @@ traceable, while still recording decisions for diagnostics.
 
 | Stage | File | Key Lines | Purpose |
 |-------|------|-----------|---------|
-| CreateDbs | `lib/arts/Passes/Transformations/CreateDbs.cpp` | 595-750 | Initial partition mode |
-| ForLowering | `lib/arts/Passes/Transformations/ForLowering.cpp` | task-lowering pipeline | Apply distribution strategy via helper contracts |
-| DbPartitioning | `lib/arts/Passes/Optimizations/DbPartitioning.cpp` | 970-1030 | Per-acquire analysis |
-| DbPartitioning | `lib/arts/Passes/Optimizations/DbPartitioning.cpp` | 1032-1061 | Context aggregation |
-| IV Check | `lib/arts/Analysis/Graphs/Db/DbAcquireNode.cpp` | 923-1001 | canPartitionWithOffset |
-| Heuristics | `lib/arts/Analysis/ArtsHeuristics.cpp` | policy entrypoints | getPartitioningMode + acquire decisions |
+| CreateDbs | `lib/arts/passes/Transformations/CreateDbs.cpp` | 595-750 | Initial partition mode |
+| ForLowering | `lib/arts/passes/Transformations/ForLowering.cpp` | task-lowering pipeline | Apply distribution strategy via helper contracts |
+| DbPartitioning | `lib/arts/passes/Optimizations/DbPartitioning.cpp` | 970-1030 | Per-acquire analysis |
+| DbPartitioning | `lib/arts/passes/Optimizations/DbPartitioning.cpp` | 1032-1061 | Context aggregation |
+| IV Check | `lib/arts/analysis/Graphs/Db/DbAcquireNode.cpp` | 923-1001 | canPartitionWithOffset |
+| Heuristics | `lib/arts/analysis/HeuristicsConfig.cpp` | policy entrypoints | getPartitioningMode + acquire decisions |
 
 ### Stage 13: epochs
 
@@ -1506,10 +1506,10 @@ carts benchmarks run <bench> --nodes 2 --threads 4 --arts-config docker/arts-doc
 
 - **Pipeline Definition:** `tools/run/carts-compile.cpp`
 - **CLI Interface:** `tools/carts_cli.py`
-- **Pass Registry:** `include/arts/Passes/ArtsPasses.td`
-- **Pass Headers:** `include/arts/Passes/ArtsPasses.h`
-- **Debug Macros:** `include/arts/Utils/ArtsDebug.h`
-- **Pass Implementations:** `lib/arts/Passes/*.cpp`
+- **Pass Registry:** `include/arts/passes/Passes.td`
+- **Pass Headers:** `include/arts/passes/Passes.h`
+- **Debug Macros:** `include/arts/utils/Debug.h`
+- **Pass Implementations:** `lib/arts/passes/*.cpp`
 
 ---
 

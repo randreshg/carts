@@ -3,12 +3,12 @@
 ///
 /// Implementation of unified ID registry.
 ///==========================================================================///
-#include "arts/Utils/Metadata/IdRegistry.h"
-#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
-#include "arts/Utils/ArtsDebug.h"
-#include "arts/Utils/Metadata/LocationMetadata.h"
-#include "arts/Utils/Metadata/LoopMetadata.h"
-#include "arts/Utils/Metadata/MemrefMetadata.h"
+#include "arts/utils/metadata/IdRegistry.h"
+#include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/utils/Debug.h"
+#include "arts/utils/metadata/LocationMetadata.h"
+#include "arts/utils/metadata/LoopMetadata.h"
+#include "arts/utils/metadata/MemrefMetadata.h"
 
 #include "mlir/IR/Builders.h"
 #include "llvm/Support/JSON.h"

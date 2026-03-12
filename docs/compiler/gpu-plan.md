@@ -224,11 +224,11 @@ set_source_files_properties(${GPU_SOURCES} PROPERTIES LANGUAGE HIP)
 
 ---
 
-## Phase 2: Port GPU Compiler Passes to v2
+## Phase 2: Port GPU Compiler Passes to main
 
-**Scope**: `lib/arts/Passes/`, `include/arts/`
+**Scope**: `lib/arts/passes/`, `include/arts/`
 
-The GPU pass stack exists on the `gpu` branch. These must land on v2 first.
+The GPU pass stack exists on the `gpu` branch. These must land on `main` first.
 
 ### Passes to port
 
@@ -342,14 +342,14 @@ MOD   Makefile                                            (-DARTS_USE_GPU=ON)
 ### Phase 2 — GPU compiler passes (port from gpu branch)
 
 ```
-NEW   lib/arts/Passes/Analysis/GpuEligibilityAnalysis.cpp
-NEW   lib/arts/Passes/Transformations/GpuForLowering.cpp
-NEW   lib/arts/Passes/Transformations/GpuEdtLowering.cpp
-NEW   lib/arts/Passes/Transformations/GpuCodegen.cpp
-MOD   include/arts/Passes/ArtsPasses.td
-MOD   include/arts/Passes/ArtsPasses.h
+NEW   lib/arts/passes/Analysis/GpuEligibilityAnalysis.cpp
+NEW   lib/arts/passes/Transformations/GpuForLowering.cpp
+NEW   lib/arts/passes/Transformations/GpuEdtLowering.cpp
+NEW   lib/arts/passes/Transformations/GpuCodegen.cpp
+MOD   include/arts/passes/Passes.td
+MOD   include/arts/passes/Passes.h
 MOD   include/arts/ArtsOps.td                    (arts.gpu_edt, arts.gpu_memcpy)
-MOD   lib/arts/Passes/Transformations/ConvertArtsToLLVM.cpp
+MOD   lib/arts/passes/Transformations/ConvertArtsToLLVM.cpp
 MOD   tools/run/carts-compile.cpp                (GPU pass pipeline)
 ```
 
@@ -364,7 +364,7 @@ MOD   tools/carts_cli.py             (pass --gpu-arch to compiler)
 
 ## Constraints
 
-- Phase 2 blocks Phase 3. GPU passes must land on v2 before any codegen work.
+- Phase 2 blocks Phase 3. GPU passes must land on `main` before any codegen work.
 - Phase 1 requires HIP SDK: on NVIDIA machines, `libamdhip64` wraps CUDA (header-only
   on NVIDIA, no ROCm install needed); on AMD machines, ROCm provides HIP natively.
 - `__global__`, `blockIdx`, `threadIdx`, `blockDim` are identical in CUDA and HIP.

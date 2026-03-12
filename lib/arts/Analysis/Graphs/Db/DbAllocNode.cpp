@@ -4,16 +4,16 @@
 /// Implementation of DbAlloc node
 ///==========================================================================///
 
-#include "arts/Analysis/ArtsAnalysisManager.h"
-#include "arts/Analysis/Db/DbAliasAnalysis.h"
-#include "arts/Analysis/Db/DbAnalysis.h"
-#include "arts/Analysis/Graphs/Db/DbNode.h"
-#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DbUtils.h"
-#include "arts/Utils/Metadata/ArtsMetadata.h"
-#include "arts/Utils/Metadata/MemrefMetadata.h"
-#include "arts/Utils/OperationAttributes.h"
+#include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/db/DbAliasAnalysis.h"
+#include "arts/analysis/db/DbAnalysis.h"
+#include "arts/analysis/graphs/db/DbNode.h"
+#include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/utils/DbUtils.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/metadata/MemrefMetadata.h"
+#include "arts/utils/metadata/Metadata.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include <algorithm>
@@ -22,7 +22,7 @@
 using namespace mlir;
 using namespace mlir::arts;
 
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(db_alloc_node);
 
 namespace {
@@ -71,7 +71,7 @@ DbAllocNode::DbAllocNode(DbAllocOp op, DbAnalysis *analysis)
   /// Import metadata from operation attributes, falling back to manager
   bool hasMetadata = importFromOp();
   if (!hasMetadata) {
-    ArtsMetadataManager &metadataManager =
+    MetadataManager &metadataManager =
         analysis->getAnalysisManager().getMetadataManager();
     if (metadataManager.ensureMemrefMetadata(op.getOperation()))
       importFromOp();

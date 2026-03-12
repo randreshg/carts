@@ -23,9 +23,9 @@
 #ifndef ARTS_ANALYSIS_PARTITIONINGHEURISTICS_H
 #define ARTS_ANALYSIS_PARTITIONINGHEURISTICS_H
 
-#include "arts/Analysis/Graphs/Db/DbAccessPattern.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
+#include "arts/analysis/graphs/db/DbAccessPattern.h"
+#include "arts/utils/abstract_machine/AbstractMachine.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/SmallVector.h"
@@ -75,7 +75,7 @@ struct AcquireInfo {
 
 /// Context for partitioning decisions
 struct PartitioningContext {
-  const ArtsAbstractMachine *machine = nullptr;
+  const AbstractMachine *machine = nullptr;
 
   /// DB partitioning capabilities
   bool canElementWise = false, canBlock = false;
@@ -124,9 +124,8 @@ struct PartitioningContext {
 
   /// Returns true if any acquire explicitly requested coarse partitioning.
   bool anyExplicitCoarseAcquire() const {
-    return llvm::any_of(acquires, [](const AcquireInfo &a) {
-      return a.explicitCoarseRequest;
-    });
+    return llvm::any_of(
+        acquires, [](const AcquireInfo &a) { return a.explicitCoarseRequest; });
   }
 
   /// Returns true if any acquire already carries task distribution hints and
@@ -251,7 +250,7 @@ struct PartitioningHint {
 
 /// Evaluate all H1.x heuristics and return partitioning decision
 PartitioningDecision evaluatePartitioningHeuristics(
-    const PartitioningContext &ctx, const ArtsAbstractMachine *machine,
+    const PartitioningContext &ctx, const AbstractMachine *machine,
     PartitionFallback fallback = PartitionFallback::Coarse);
 
 /// PartitioningHint accessors

@@ -7,14 +7,14 @@
 #ifndef ARTS_ANALYSIS_GRAPHS_EDT_EDTGRAPH_H
 #define ARTS_ANALYSIS_GRAPHS_EDT_EDTGRAPH_H
 
-#include "arts/Analysis/Graphs/Base/EdgeBase.h"
-#include "arts/Analysis/Graphs/Base/GraphBase.h"
-#include "arts/Analysis/Graphs/Base/GraphTrait.h"
-#include "arts/Analysis/Graphs/Base/NodeBase.h"
-#include "arts/Analysis/Graphs/Db/DbGraph.h"
-#include "arts/Analysis/Graphs/Edt/EdtEdge.h"
-#include "arts/Analysis/Graphs/Edt/EdtNode.h"
 #include "arts/ArtsDialect.h" // For EdtOp
+#include "arts/analysis/graphs/base/EdgeBase.h"
+#include "arts/analysis/graphs/base/GraphBase.h"
+#include "arts/analysis/graphs/base/GraphTrait.h"
+#include "arts/analysis/graphs/base/NodeBase.h"
+#include "arts/analysis/graphs/db/DbGraph.h"
+#include "arts/analysis/graphs/edt/EdtEdge.h"
+#include "arts/analysis/graphs/edt/EdtNode.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/GraphTraits.h"
@@ -26,12 +26,12 @@ namespace mlir {
 namespace arts {
 
 class EdtDepEdge;
-class ArtsAnalysisManager;
+class AnalysisManager;
 
 /// Represents task dependencies with edges labeled by data blocks.
 class EdtGraph : public GraphBase {
 public:
-  EdtGraph(func::FuncOp func, DbGraph *dbGraph, ArtsAnalysisManager *AM);
+  EdtGraph(func::FuncOp func, DbGraph *dbGraph, AnalysisManager *AM);
 
   void build() override;
   void buildNodesOnly() override;
@@ -64,7 +64,7 @@ public:
 private:
   func::FuncOp func;
   DbGraph *dbGraph;
-  ArtsAnalysisManager *analysisManager;
+  AnalysisManager *analysisManager;
   DenseMap<EdtOp, std::unique_ptr<EdtNode>> edtNodes;
   SmallVector<NodeBase *, 8> nodes;
   /// Cache of children per node for GraphBase child iterators.

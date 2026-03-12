@@ -2,10 +2,10 @@
 /// LoopNormalizer.cpp - Shared utilities for loop normalization patterns
 ///==========================================================================///
 
-#include "arts/Transforms/Loop/LoopNormalizer.h"
-#include "arts/Analysis/Db/DbPatternMatchers.h"
-#include "arts/Utils/Metadata/LoopMetadata.h"
-#include "arts/Utils/OperationAttributes.h"
+#include "arts/transforms/loop/LoopNormalizer.h"
+#include "arts/analysis/db/DbPatternMatchers.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/metadata/LoopMetadata.h"
 
 using namespace mlir;
 using namespace mlir::arts;

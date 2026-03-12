@@ -4,14 +4,14 @@
 /// Utility functions for querying SCF loop properties.
 /// Lightweight inline helpers for worker-loop detection, innermost-loop
 /// checks, and bound compatibility — complements the heavier LoopAnalysis
-/// framework without requiring an ArtsAnalysisManager.
+/// framework without requiring an AnalysisManager.
 ///==========================================================================///
 
 #ifndef CARTS_UTILS_LOOPUTILS_H
 #define CARTS_UTILS_LOOPUTILS_H
 
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
 namespace mlir {

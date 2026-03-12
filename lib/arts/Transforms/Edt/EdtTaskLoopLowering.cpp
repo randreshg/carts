@@ -4,8 +4,8 @@
 /// Factory for strategy-specific task loop lowerers.
 ///==========================================================================///
 
-#include "arts/Transforms/Edt/EdtTaskLoopLowering.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/transforms/edt/EdtTaskLoopLowering.h"
+#include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
 using namespace mlir;

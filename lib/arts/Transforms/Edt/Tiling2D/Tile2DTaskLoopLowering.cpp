@@ -22,8 +22,8 @@
 ///     }
 ///==========================================================================///
 
-#include "arts/Transforms/Edt/EdtTaskLoopLowering.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/transforms/edt/EdtTaskLoopLowering.h"
+#include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "llvm/ADT/STLExtras.h"
@@ -194,7 +194,36 @@ public:
 
 } // namespace
 
-std::unique_ptr<EdtTaskLoopLowering>
-mlir::arts::detail::createTile2DTaskLoopLowering() {
+namespace mlir {
+namespace arts {
+namespace detail {
+
+namespace {
+
+/// Block-style lowering that reuses the shared EdtTaskLoopLowering helpers.
+class BlockTaskLoopLoweringImpl : public EdtTaskLoopLowering {
+public:
+  TaskLoopLoweringResult
+  lower(TaskLoopLoweringInput &input,
+        const TaskLoopLoweringMappedValues &mapped) const override {
+    return lowerBlockStyle(input, mapped);
+  }
+};
+
+} // namespace
+
+std::unique_ptr<EdtTaskLoopLowering> createBlockTaskLoopLowering() {
+  return std::make_unique<BlockTaskLoopLoweringImpl>();
+}
+
+std::unique_ptr<EdtTaskLoopLowering> createBlockCyclicTaskLoopLowering() {
+  return std::make_unique<BlockTaskLoopLoweringImpl>();
+}
+
+std::unique_ptr<EdtTaskLoopLowering> createTile2DTaskLoopLowering() {
   return std::make_unique<Tile2DTaskLoopLowering>();
 }
+
+} // namespace detail
+} // namespace arts
+} // namespace mlir

@@ -4,13 +4,13 @@
 /// Implementation of LoopNode for SCF loop operations with integrated metadata.
 ///==========================================================================///
 
-#include "arts/Analysis/Loop/LoopNode.h"
-#include "arts/Analysis/ArtsAnalysisManager.h"
-#include "arts/Analysis/Loop/LoopAnalysis.h"
-#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
+#include "arts/analysis/loop/LoopNode.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/loop/LoopAnalysis.h"
+#include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -556,7 +556,8 @@ bool LoopNode::hasEdt() const {
   return foundEdt;
 }
 
-std::optional<DbAnalysis::LoopDbAccessSummary> LoopNode::getDbAccessSummary() const {
+std::optional<DbAnalysis::LoopDbAccessSummary>
+LoopNode::getDbAccessSummary() const {
   if (!loopAnalysis || !loopOp)
     return std::nullopt;
   return loopAnalysis->getLoopDbAccessSummary(loopOp);

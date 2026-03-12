@@ -7,8 +7,8 @@
 #ifndef ARTS_ANALYSIS_METADATA_METADATAATTACHER_H
 #define ARTS_ANALYSIS_METADATA_METADATAATTACHER_H
 
-#include "arts/Utils/Metadata/ArtsMetadata.h"
-#include "arts/Utils/Metadata/LocationMetadata.h"
+#include "arts/utils/metadata/LocationMetadata.h"
+#include "arts/utils/metadata/Metadata.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/StringMap.h"

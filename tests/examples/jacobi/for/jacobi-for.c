@@ -13,7 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "arts/Utils/Testing/CartsTest.h"
+#include "arts/utils/Testing/CartsTest.h"
 
 /// Sequential version for verification
 static void sweep_seq(int nx, int ny, double dx, double dy, double **f,

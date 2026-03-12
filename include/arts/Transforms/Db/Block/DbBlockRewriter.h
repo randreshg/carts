@@ -9,7 +9,7 @@
 #ifndef ARTS_TRANSFORMS_DATABLOCK_DBBLOCKREWRITER_H
 #define ARTS_TRANSFORMS_DATABLOCK_DBBLOCKREWRITER_H
 
-#include "arts/Transforms/Db/DbRewriter.h"
+#include "arts/transforms/db/DbRewriter.h"
 
 namespace mlir {
 namespace arts {

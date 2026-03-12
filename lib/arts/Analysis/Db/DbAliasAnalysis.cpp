@@ -3,14 +3,14 @@
 /// Defines alias analysis for DB operations and memory tracking.
 ///==========================================================================///
 
-#include "arts/Analysis/Db/DbAliasAnalysis.h"
-#include "arts/Analysis/Db/DbAnalysis.h"
-#include "arts/Analysis/Graphs/Db/DbGraph.h"
-#include "arts/Analysis/Graphs/Db/DbNode.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/analysis/db/DbAliasAnalysis.h"
+#include "arts/analysis/db/DbAnalysis.h"
+#include "arts/analysis/graphs/db/DbGraph.h"
+#include "arts/analysis/graphs/db/DbNode.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/ValueUtils.h"
 
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(db_alias);
 
 #include <algorithm>

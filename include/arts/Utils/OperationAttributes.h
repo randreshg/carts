@@ -109,9 +109,9 @@ inline std::optional<int64_t> getRuntimeTotalWorkers(ModuleOp module) {
 inline void setRuntimeTotalWorkers(ModuleOp module, int64_t workers) {
   if (!module || workers <= 0)
     return;
-  module->setAttr(AttrNames::Module::RuntimeTotalWorkers,
-                  IntegerAttr::get(IntegerType::get(module.getContext(), 64),
-                                   workers));
+  module->setAttr(
+      AttrNames::Module::RuntimeTotalWorkers,
+      IntegerAttr::get(IntegerType::get(module.getContext(), 64), workers));
 }
 
 inline std::optional<int64_t> getRuntimeTotalNodes(ModuleOp module) {
@@ -126,9 +126,9 @@ inline std::optional<int64_t> getRuntimeTotalNodes(ModuleOp module) {
 inline void setRuntimeTotalNodes(ModuleOp module, int64_t nodes) {
   if (!module || nodes <= 0)
     return;
-  module->setAttr(AttrNames::Module::RuntimeTotalNodes,
-                  IntegerAttr::get(IntegerType::get(module.getContext(), 64),
-                                   nodes));
+  module->setAttr(
+      AttrNames::Module::RuntimeTotalNodes,
+      IntegerAttr::get(IntegerType::get(module.getContext(), 64), nodes));
 }
 
 /// Forward declaration - defined in PartitioningHeuristics.h
@@ -414,7 +414,7 @@ void setPartitioningHint(Operation *op, const PartitioningHint &hint);
 
 /// Copy ARTS-specific metadata attributes from source to dest operation.
 /// Copies: arts.id, partition_mode, arts.partition_hint, arts.loop.
-/// Unlike transferAttributes in ArtsUtils.h which copies ALL attributes, this
+/// Unlike transferAttributes in Utils.h which copies ALL attributes, this
 /// only copies ARTS-specific metadata attributes.
 void copyArtsMetadataAttrs(Operation *source, Operation *dest);
 

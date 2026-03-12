@@ -2,13 +2,13 @@
 /// MemrefAnalyzer.cpp - Memory Reference Analysis Implementation
 ///===----------------------------------------------------------------------===///
 
-#include "arts/Analysis/Metadata/MemrefAnalyzer.h"
-#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
-#include "arts/Analysis/Metadata/DependenceAnalyzer.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/Metadata/ArtsMetadata.h"
-#include "arts/Utils/Metadata/LocationMetadata.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/analysis/metadata/MemrefAnalyzer.h"
+#include "arts/analysis/metadata/DependenceAnalyzer.h"
+#include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/ValueUtils.h"
+#include "arts/utils/metadata/LocationMetadata.h"
+#include "arts/utils/metadata/Metadata.h"
 #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -18,7 +18,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include <algorithm>
 
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(memref_analyzer);
 
 using namespace mlir;

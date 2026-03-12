@@ -4,9 +4,9 @@
 /// Defines utility functions for working with Index and Constant values.
 ///==========================================================================///
 
-#include "arts/Utils/ValueUtils.h"
+#include "arts/utils/ValueUtils.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/ArtsUtils.h"
+#include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"

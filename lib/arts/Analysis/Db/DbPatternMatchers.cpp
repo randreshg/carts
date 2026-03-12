@@ -4,10 +4,10 @@
 /// Shared DB-oriented loop pattern matchers used by analysis passes.
 ///==========================================================================///
 
-#include "arts/Analysis/Db/DbPatternMatchers.h"
-#include "arts/Analysis/Loop/LoopAnalysis.h"
-#include "arts/Utils/DbUtils.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/analysis/db/DbPatternMatchers.h"
+#include "arts/analysis/loop/LoopAnalysis.h"
+#include "arts/utils/DbUtils.h"
+#include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"

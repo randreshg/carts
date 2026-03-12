@@ -9,7 +9,7 @@
 #ifndef CARTS_ANALYSIS_EDTANALYSIS_H
 #define CARTS_ANALYSIS_EDTANALYSIS_H
 
-#include "arts/Analysis/ArtsAnalysis.h"
+#include "arts/analysis/Analysis.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Region.h"
@@ -18,8 +18,8 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 
-#include "arts/Analysis/Edt/EdtInfo.h"
-#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
+#include "arts/analysis/edt/EdtInfo.h"
+#include "arts/analysis/graphs/edt/EdtGraph.h"
 
 namespace mlir {
 namespace arts {
@@ -30,7 +30,7 @@ namespace arts {
 
 class EdtAnalysis : public ArtsAnalysis {
 public:
-  EdtAnalysis(ArtsAnalysisManager &AM);
+  EdtAnalysis(AnalysisManager &AM);
 
   /// Build summaries for all EDTs in the module.
   void analyze();

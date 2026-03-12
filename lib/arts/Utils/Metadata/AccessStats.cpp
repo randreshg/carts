@@ -3,8 +3,8 @@
 ///
 /// Implementation of shared access statistics.
 ///==========================================================================///
-#include "arts/Utils/Metadata/AccessStats.h"
-#include "arts/Utils/Metadata/MemrefMetadata.h"
+#include "arts/utils/metadata/AccessStats.h"
+#include "arts/utils/metadata/MemrefMetadata.h"
 
 using namespace mlir::arts;
 

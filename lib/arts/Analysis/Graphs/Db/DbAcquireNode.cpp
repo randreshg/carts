@@ -4,28 +4,28 @@
 /// Implementation of DbAcquire node -- slim facade that delegates to:
 ///   - PartitionBoundsAnalyzer (partition bound computation)
 ///   - MemoryAccessClassifier  (load/store/indirect/direct detection)
-///   - BlockInfoComputer       (block offset/size computation)
+///   - DbBlockInfoComputer       (block offset/size computation)
 ///==========================================================================///
 
-#include "arts/Analysis/AccessPatternAnalysis.h"
-#include "arts/Analysis/ArtsAnalysisManager.h"
-#include "arts/Analysis/Db/DbAnalysis.h"
-#include "arts/Analysis/Edt/EdtAnalysis.h"
-#include "arts/Analysis/Graphs/Db/BlockInfoComputer.h"
-#include "arts/Analysis/Graphs/Db/DbDimAnalyzer.h"
-#include "arts/Analysis/Graphs/Db/DbGraph.h"
-#include "arts/Analysis/Graphs/Db/DbNode.h"
-#include "arts/Analysis/Graphs/Db/MemoryAccessClassifier.h"
-#include "arts/Analysis/Graphs/Db/PartitionBoundsAnalyzer.h"
-#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
-#include "arts/Analysis/Graphs/Edt/EdtNode.h"
-#include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DbUtils.h"
-#include "arts/Utils/EdtUtils.h"
-#include "arts/Utils/OperationAttributes.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/analysis/AccessPatternAnalysis.h"
+#include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/db/DbAnalysis.h"
+#include "arts/analysis/edt/EdtAnalysis.h"
+#include "arts/analysis/graphs/db/DbBlockInfoComputer.h"
+#include "arts/analysis/graphs/db/DbDimAnalyzer.h"
+#include "arts/analysis/graphs/db/DbGraph.h"
+#include "arts/analysis/graphs/db/DbNode.h"
+#include "arts/analysis/graphs/db/MemoryAccessClassifier.h"
+#include "arts/analysis/graphs/db/PartitionBoundsAnalyzer.h"
+#include "arts/analysis/graphs/edt/EdtGraph.h"
+#include "arts/analysis/graphs/edt/EdtNode.h"
+#include "arts/analysis/loop/LoopAnalysis.h"
+#include "arts/utils/DbUtils.h"
+#include "arts/utils/EdtUtils.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -45,7 +45,7 @@
 
 using namespace mlir;
 using namespace mlir::arts;
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(db_acquire_node);
 
 ///===----------------------------------------------------------------------===///
@@ -308,33 +308,33 @@ const DbAcquirePartitionFacts &DbAcquireNode::getPartitionFacts() const {
 void DbAcquireNode::invalidatePartitionFacts() const { partitionFacts.reset(); }
 
 ///===----------------------------------------------------------------------===///
-/// Block Info Methods -- delegate to BlockInfoComputer
+/// Block Info Methods -- delegate to DbBlockInfoComputer
 ///===----------------------------------------------------------------------===///
 
 LogicalResult DbAcquireNode::computeBlockInfo(Value &blockOffset,
                                               Value &blockSize) {
-  return BlockInfoComputer::computeBlockInfo(this, blockOffset, blockSize);
+  return DbBlockInfoComputer::computeBlockInfo(this, blockOffset, blockSize);
 }
 
 LogicalResult DbAcquireNode::computeBlockInfoFromWhile(scf::WhileOp whileOp,
                                                        Value &blockOffset,
                                                        Value &blockSize,
                                                        Value *offsetForCheck) {
-  return BlockInfoComputer::computeBlockInfoFromWhile(
+  return DbBlockInfoComputer::computeBlockInfoFromWhile(
       this, whileOp, blockOffset, blockSize, offsetForCheck);
 }
 
 LogicalResult DbAcquireNode::computeBlockInfoFromHints(Value &blockOffset,
                                                        Value &blockSize) {
-  return BlockInfoComputer::computeBlockInfoFromHints(this, blockOffset,
-                                                      blockSize);
+  return DbBlockInfoComputer::computeBlockInfoFromHints(this, blockOffset,
+                                                        blockSize);
 }
 
 LogicalResult
 DbAcquireNode::computeBlockInfoFromForLoop(ArrayRef<LoopNode *> loopNodes,
                                            Value &blockOffset, Value &blockSize,
                                            Value *offsetForCheck) {
-  return BlockInfoComputer::computeBlockInfoFromForLoop(
+  return DbBlockInfoComputer::computeBlockInfoFromForLoop(
       this, loopNodes, blockOffset, blockSize, offsetForCheck);
 }
 
@@ -551,7 +551,8 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
           indexedFound |= bounds.hasVariableOffset;
           return;
         }
-        if (bounds.isStencil || bounds.minOffset != 0 || bounds.maxOffset != 0) {
+        if (bounds.isStencil || bounds.minOffset != 0 ||
+            bounds.maxOffset != 0) {
           ARTS_DEBUG("  Nested-loop stencil detected: min="
                      << bounds.minOffset << " max=" << bounds.maxOffset
                      << " stencil=" << bounds.isStencil);

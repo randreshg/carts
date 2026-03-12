@@ -4,13 +4,13 @@
 /// H1 partitioning heuristics evaluation and PartitioningHint utilities.
 ///==========================================================================///
 
-#include "arts/Analysis/PartitioningHeuristics.h"
-#include "arts/Analysis/ArtsHeuristics.h"
-#include "arts/Analysis/HeuristicUtils.h"
+#include "arts/analysis/PartitioningHeuristics.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/ArtsDebug.h"
-#include "arts/Utils/Metadata/LoopMetadata.h"
-#include "arts/Utils/OperationAttributes.h"
+#include "arts/analysis/HeuristicUtils.h"
+#include "arts/analysis/HeuristicsConfig.h"
+#include "arts/utils/Debug.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/IR/BuiltinAttributes.h"
 
 ARTS_DEBUG_SETUP(partitioning_heuristics)
@@ -31,7 +31,7 @@ using namespace mlir::arts;
 
 PartitioningDecision
 mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
-                                           const ArtsAbstractMachine *machine,
+                                           const AbstractMachine *machine,
                                            PartitionFallback fallback) {
   ARTS_DEBUG("evaluatePartitioningHeuristics: canElementWise="
              << ctx.canElementWise << ", canBlock=" << ctx.canBlock
@@ -79,11 +79,9 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// partitioning enables efficient halo exchange despite coarse output writes.
   ARTS_DEBUG("H1.C2 check: isSingleNode="
              << isSingleNode
-             << ", anyExplicitCoarseAcquire="
-             << ctx.anyExplicitCoarseAcquire()
+             << ", anyExplicitCoarseAcquire=" << ctx.anyExplicitCoarseAcquire()
              << ", hasStencil=" << patterns.hasStencil);
-  if (isSingleNode && ctx.anyExplicitCoarseAcquire() &&
-      !patterns.hasStencil) {
+  if (isSingleNode && ctx.anyExplicitCoarseAcquire() && !patterns.hasStencil) {
     ARTS_DEBUG("H1.C2 applied: Single-node coarse acquire prefers coarse");
     return PartitioningDecision::coarse(
         ctx, "H1.C2: Single-node explicit coarse acquire prefers coarse");
@@ -158,7 +156,8 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   if (patterns.hasStencil && hasExplicitFineGrained) {
     unsigned outerRank = ctx.minPinnedDimCount();
     outerRank = outerRank > 0 ? outerRank : 1;
-    ARTS_DEBUG("H1.B3 skipped: explicit fine-grained hints prefer element-wise");
+    ARTS_DEBUG(
+        "H1.B3 skipped: explicit fine-grained hints prefer element-wise");
     return PartitioningDecision::elementWise(
         ctx, outerRank,
         "H1.E1: Explicit fine-grained stencil hints prefer element-wise");

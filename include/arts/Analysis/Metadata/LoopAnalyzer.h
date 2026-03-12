@@ -7,8 +7,8 @@
 #ifndef ARTS_ANALYSIS_METADATA_LOOPANALYZER_H
 #define ARTS_ANALYSIS_METADATA_LOOPANALYZER_H
 
-#include "arts/Analysis/Metadata/DependenceAnalyzer.h"
-#include "arts/Utils/Metadata/LoopMetadata.h"
+#include "arts/analysis/metadata/DependenceAnalyzer.h"
+#include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/IR/Operation.h"
 #include <optional>
@@ -16,7 +16,7 @@
 namespace mlir {
 namespace arts {
 
-class ArtsMetadataManager;
+class MetadataManager;
 
 ///===----------------------------------------------------------------------===///
 /// LoopAnalyzer - Loop analysis
@@ -32,8 +32,7 @@ public:
   /// Analyze loop nest for reordering opportunities.
   /// Only sets reorderNestTo if reordering is beneficial and legal.
   void analyzeLoopReordering(affine::AffineForOp outerLoop,
-                             LoopMetadata *metadata,
-                             ArtsMetadataManager &manager);
+                             LoopMetadata *metadata, MetadataManager &manager);
 
   /// Analyze loop nest for per-dimension dependencies.
   /// Populates dimensionDeps and outermostParallelDim in metadata.

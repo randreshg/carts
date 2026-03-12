@@ -2,7 +2,7 @@
 /// ValueMetadata.cpp - Value Source Metadata Management
 ///===----------------------------------------------------------------------===///
 
-#include "arts/Utils/Metadata/ValueMetadata.h"
+#include "arts/utils/metadata/ValueMetadata.h"
 #include "arts/ArtsDialect.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "llvm/ADT/StringSwitch.h"

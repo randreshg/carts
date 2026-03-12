@@ -47,7 +47,9 @@ def _collect_tracked_format_files(config: PlatformConfig) -> List[Path]:
         if not rel:
             continue
         if _is_format_candidate(rel):
-            files.append(config.carts_dir / rel)
+            abs_path = config.carts_dir / rel
+            if abs_path.is_file():
+                files.append(abs_path)
     return files
 
 

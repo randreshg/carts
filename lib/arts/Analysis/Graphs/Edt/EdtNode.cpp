@@ -3,20 +3,20 @@
 /// Implementation of EDT nodes for graph analysis.
 ///==========================================================================///
 
-#include "arts/Analysis/Graphs/Edt/EdtNode.h"
-#include "arts/Analysis/ArtsAnalysisManager.h"
-#include "arts/Analysis/Loop/LoopAnalysis.h"
-#include "arts/Analysis/Loop/LoopNode.h"
-#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
+#include "arts/analysis/graphs/edt/EdtNode.h"
+#include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/loop/LoopAnalysis.h"
+#include "arts/analysis/loop/LoopNode.h"
+#include "arts/analysis/metadata/MetadataManager.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
 using namespace mlir;
 using namespace mlir::arts;
 
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(edt_node);
 
-EdtNode::EdtNode(EdtOp op, ArtsAnalysisManager *AM)
+EdtNode::EdtNode(EdtOp op, AnalysisManager *AM)
     : NodeBase(), edtOp(op), analysisManager(AM) {
   assert(edtOp.getOperation() && "Operation must always be available");
   if (AM)
@@ -32,7 +32,7 @@ bool EdtNode::hasParallelLoopMetadata() const {
     return false;
 
   LoopAnalysis &loopAnalysis = analysisManager->getLoopAnalysis();
-  ArtsMetadataManager &metadataManager = analysisManager->getMetadataManager();
+  MetadataManager &metadataManager = analysisManager->getMetadataManager();
 
   /// EdtOp is a lightweight wrapper around Operation*; take a mutable copy
   /// so we can call non-const MLIR methods from this const member function.

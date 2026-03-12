@@ -5,12 +5,12 @@
 /// extracted from DbAcquireNode.
 ///==========================================================================///
 
-#include "arts/Analysis/Graphs/Db/MemoryAccessClassifier.h"
-#include "arts/Analysis/Graphs/Db/DbNode.h"
+#include "arts/analysis/graphs/db/MemoryAccessClassifier.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DbUtils.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/analysis/graphs/db/DbNode.h"
+#include "arts/utils/DbUtils.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -21,7 +21,7 @@
 
 using namespace mlir;
 using namespace mlir::arts;
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(memory_access_classifier);
 
 ///===----------------------------------------------------------------------===///

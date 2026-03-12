@@ -4,15 +4,15 @@
 /// Canonical per-entry / per-dimension partition facts for DbAcquireNode.
 ///==========================================================================///
 
-#include "arts/Analysis/Graphs/Db/DbDimAnalyzer.h"
-#include "arts/Analysis/Db/DbAnalysis.h"
-#include "arts/Analysis/Graphs/Db/DbGraph.h"
-#include "arts/Analysis/Graphs/Db/MemoryAccessClassifier.h"
-#include "arts/Analysis/Graphs/Db/PartitionBoundsAnalyzer.h"
-#include "arts/Utils/DbUtils.h"
-#include "arts/Utils/EdtUtils.h"
-#include "arts/Utils/OperationAttributes.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/analysis/graphs/db/DbDimAnalyzer.h"
+#include "arts/analysis/db/DbAnalysis.h"
+#include "arts/analysis/graphs/db/DbGraph.h"
+#include "arts/analysis/graphs/db/MemoryAccessClassifier.h"
+#include "arts/analysis/graphs/db/PartitionBoundsAnalyzer.h"
+#include "arts/utils/DbUtils.h"
+#include "arts/utils/EdtUtils.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/ValueUtils.h"
 #include "llvm/ADT/DenseSet.h"
 
 using namespace mlir;
@@ -56,7 +56,8 @@ pickRepresentativeRange(PartitionMode mode, const PartitionInfo &info) {
   return {offset, size};
 }
 
-static SmallVector<PartitionInfo, 2> collectPartitionEntries(DbAcquireOp acquire) {
+static SmallVector<PartitionInfo, 2>
+collectPartitionEntries(DbAcquireOp acquire) {
   SmallVector<PartitionInfo, 2> entries = acquire.getPartitionInfos();
   if (!entries.empty())
     return entries;
@@ -90,7 +91,8 @@ static unsigned getPartitionRank(DbAcquireNode *node) {
   return allocNode->getDbAllocOp().getElementSizes().size();
 }
 
-static void initializeDimFacts(DbAcquireNode *node, DbAcquirePartitionFacts &facts) {
+static void initializeDimFacts(DbAcquireNode *node,
+                               DbAcquirePartitionFacts &facts) {
   unsigned rank = getPartitionRank(node);
   facts.dims.reserve(rank);
 
@@ -114,12 +116,14 @@ static void markLeadingDynamicDims(DbAcquireNode *node,
 
   for (auto &[dbRef, memOps] : dbRefToMemOps) {
     for (Operation *memOp : memOps) {
-      SmallVector<Value> fullChain = DbUtils::collectFullIndexChain(dbRef, memOp);
+      SmallVector<Value> fullChain =
+          DbUtils::collectFullIndexChain(dbRef, memOp);
       if (fullChain.empty())
         continue;
 
       unsigned memrefStart = dbRef.getIndices().size();
-      for (unsigned chainIdx = memrefStart; chainIdx < fullChain.size(); ++chainIdx) {
+      for (unsigned chainIdx = memrefStart; chainIdx < fullChain.size();
+           ++chainIdx) {
         int64_t constant = 0;
         if (ValueUtils::getConstantIndex(fullChain[chainIdx], constant))
           continue;
@@ -234,7 +238,8 @@ collectDistributedPeerDims(DbAcquireNode *node) {
   return agreedDims;
 }
 
-static void inferPartitionDims(DbAcquireNode *node, DbAcquirePartitionFacts &facts) {
+static void inferPartitionDims(DbAcquireNode *node,
+                               DbAcquirePartitionFacts &facts) {
   facts.partitionDims = collectMappedEntryDims(facts.entries);
   if (!facts.partitionDims.empty() || !facts.hasDistributionContract)
     return;
@@ -273,11 +278,10 @@ DbAcquirePartitionFacts DbDimAnalyzer::compute(DbAcquireNode *node) {
   facts.hasIndirectAccess = node->hasIndirectAccess();
   facts.hasDirectAccess = node->hasDirectAccess();
   facts.hasDistributionContract = hasDistributionContract(acquire);
-  facts.explicitCoarseRequest =
-      facts.requestedMode == PartitionMode::coarse &&
-      acquire.getPartitionIndices().empty() &&
-      acquire.getPartitionOffsets().empty() &&
-      acquire.getPartitionSizes().empty();
+  facts.explicitCoarseRequest = facts.requestedMode == PartitionMode::coarse &&
+                                acquire.getPartitionIndices().empty() &&
+                                acquire.getPartitionOffsets().empty() &&
+                                acquire.getPartitionSizes().empty();
   facts.hasBlockHints = !acquire.getPartitionOffsets().empty() ||
                         !acquire.getPartitionSizes().empty();
 
@@ -286,8 +290,8 @@ DbAcquirePartitionFacts DbDimAnalyzer::compute(DbAcquireNode *node) {
 
   SmallVector<PartitionInfo, 2> entries = collectPartitionEntries(acquire);
   facts.inferredBlock = llvm::any_of(entries, [](const PartitionInfo &entry) {
-        return !entry.offsets.empty() && !entry.sizes.empty();
-      });
+    return !entry.offsets.empty() && !entry.sizes.empty();
+  });
 
   llvm::DenseSet<unsigned> fullRangeDims;
   for (const PartitionInfo &entry : entries) {
@@ -297,9 +301,8 @@ DbAcquirePartitionFacts DbDimAnalyzer::compute(DbAcquireNode *node) {
         pickRepresentativeRange(entry.mode, entry);
 
     if (fact.representativeOffset) {
-      fact.mappedDim =
-          node->getPartitionOffsetDim(fact.representativeOffset,
-                                      /*requireLeading=*/false);
+      fact.mappedDim = node->getPartitionOffsetDim(fact.representativeOffset,
+                                                   /*requireLeading=*/false);
       fact.needsFullRange = PartitionBoundsAnalyzer::needsFullRange(
           node, fact.representativeOffset);
       fact.preservesDistributedContract =

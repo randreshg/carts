@@ -3,17 +3,17 @@
 /// Implementation of EdtGraph for EDT analysis and optimization.
 ///==========================================================================///
 
-#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
-#include "arts/Analysis/ArtsAnalysisManager.h"
-#include "arts/Analysis/Db/DbAnalysis.h"
-#include "arts/Analysis/Edt/EdtDataFlowAnalysis.h"
-#include "arts/Analysis/Graphs/Db/DbNode.h"
-#include "arts/Analysis/Graphs/Edt/EdtEdge.h"
-#include "arts/Analysis/Graphs/Edt/EdtNode.h"
-#include "arts/Analysis/Loop/LoopAnalysis.h"
-#include "arts/Analysis/Loop/LoopNode.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/Metadata/LocationMetadata.h"
+#include "arts/analysis/graphs/edt/EdtGraph.h"
+#include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/db/DbAnalysis.h"
+#include "arts/analysis/edt/EdtDataFlowAnalysis.h"
+#include "arts/analysis/graphs/db/DbNode.h"
+#include "arts/analysis/graphs/edt/EdtEdge.h"
+#include "arts/analysis/graphs/edt/EdtNode.h"
+#include "arts/analysis/loop/LoopAnalysis.h"
+#include "arts/analysis/loop/LoopNode.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/metadata/LocationMetadata.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
@@ -21,7 +21,7 @@
 using namespace mlir;
 using namespace mlir::arts;
 
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(edt_analysis);
 
 namespace {
@@ -40,7 +40,7 @@ StringRef depTypeToString(DbDepType type) {
 }
 } // namespace
 
-EdtGraph::EdtGraph(func::FuncOp func, DbGraph *dbGraph, ArtsAnalysisManager *AM)
+EdtGraph::EdtGraph(func::FuncOp func, DbGraph *dbGraph, AnalysisManager *AM)
     : func(func), dbGraph(dbGraph), analysisManager(AM) {
   ARTS_INFO("Creating EDT graph for function: " << func.getName().str());
 }
@@ -478,7 +478,7 @@ void EdtGraph::buildDependencies() {
   ARTS_INFO("Phase 2 - Building EDT dependencies");
   assert(dbGraph && "DbGraph is required to build EDT dependencies");
   assert(analysisManager &&
-         "ArtsAnalysisManager is required to build EDT dependencies");
+         "AnalysisManager is required to build EDT dependencies");
   EdtDataFlowAnalysis dataflow(dbGraph, analysisManager);
   auto deps = dataflow.run(func);
 

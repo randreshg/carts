@@ -5,14 +5,14 @@
 ///==========================================================================///
 
 /// Dialects
-#include "arts/Utils/ArtsUtils.h"
+#include "arts/utils/Utils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 
 #include <queue>
 
 /// Arts
 #include "arts/ArtsDialect.h"
-#include "arts/Transforms/Edt/EdtInvariantCodeMotion.h"
+#include "arts/transforms/edt/EdtICM.h"
 
 /// Others
 #include "mlir/IR/OpDefinition.h"
@@ -25,7 +25,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(edt_invariant_code_motion);
 
 namespace mlir {

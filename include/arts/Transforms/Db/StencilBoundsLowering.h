@@ -7,7 +7,7 @@
 #ifndef ARTS_TRANSFORMS_DATABLOCK_STENCILBOUNDSLOWERING_H
 #define ARTS_TRANSFORMS_DATABLOCK_STENCILBOUNDSLOWERING_H
 
-#include "arts/Analysis/Loop/LoopAnalysis.h"
+#include "arts/analysis/loop/LoopAnalysis.h"
 #include "mlir/IR/BuiltinOps.h"
 
 namespace mlir {

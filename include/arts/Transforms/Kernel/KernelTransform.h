@@ -6,13 +6,13 @@
 /// These transforms preserve the mathematical result but change how a kernel
 /// is expressed so later ARTS passes can distribute, partition, or localize it
 /// more effectively. This is intentionally separate from dependence/schedule
-/// rewrites in ArtsDepTransforms.
+/// rewrites in DepTransforms.
 ///==========================================================================///
 
 #ifndef ARTS_TRANSFORMS_KERNEL_KERNELTRANSFORM_H
 #define ARTS_TRANSFORMS_KERNEL_KERNELTRANSFORM_H
 
-#include "arts/Transforms/Loop/LoopNormalizer.h"
+#include "arts/transforms/loop/LoopNormalizer.h"
 
 namespace mlir {
 namespace arts {

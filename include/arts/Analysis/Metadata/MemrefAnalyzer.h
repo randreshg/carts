@@ -7,8 +7,8 @@
 #ifndef ARTS_ANALYSIS_METADATA_MEMREFANALYZER_H
 #define ARTS_ANALYSIS_METADATA_MEMREFANALYZER_H
 
-#include "arts/Analysis/Metadata/AccessAnalyzer.h"
-#include "arts/Utils/Metadata/MemrefMetadata.h"
+#include "arts/analysis/metadata/AccessAnalyzer.h"
+#include "arts/utils/metadata/MemrefMetadata.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Operation.h"
@@ -20,7 +20,7 @@
 namespace mlir {
 namespace arts {
 
-class ArtsMetadataManager;
+class MetadataManager;
 class DependenceAnalyzer;
 
 ///===----------------------------------------------------------------------===///
@@ -51,7 +51,7 @@ private:
 class MemrefAnalyzer {
 public:
   MemrefAnalyzer(AccessAnalyzer &accessAnalyzer, ReuseAnalyzer &reuseAnalyzer,
-                 ArtsMetadataManager &metadataManager,
+                 MetadataManager &metadataManager,
                  DependenceAnalyzer &depAnalyzer)
       : accessAnalyzer(accessAnalyzer), reuseAnalyzer(reuseAnalyzer),
         metadataManager(metadataManager), depAnalyzer(depAnalyzer) {}
@@ -62,7 +62,7 @@ public:
 private:
   AccessAnalyzer &accessAnalyzer;
   ReuseAnalyzer &reuseAnalyzer;
-  ArtsMetadataManager &metadataManager;
+  MetadataManager &metadataManager;
   DependenceAnalyzer &depAnalyzer;
 
   std::pair<uint64_t, uint64_t> countAccesses(Value memref, Operation *scopeOp);

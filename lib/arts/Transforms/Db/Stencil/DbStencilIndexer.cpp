@@ -10,12 +10,12 @@
 ///   3. Right halo - partial slice from next chunk (via element_offsets)
 ///==========================================================================///
 
-#include "arts/Transforms/Db/Stencil/DbStencilIndexer.h"
-#include "arts/Codegen/ArtsCodegen.h"
-#include "arts/Utils/ArtsDebug.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DbUtils.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/transforms/db/stencil/DbStencilIndexer.h"
+#include "arts/codegen/Codegen.h"
+#include "arts/utils/DbUtils.h"
+#include "arts/utils/Debug.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"

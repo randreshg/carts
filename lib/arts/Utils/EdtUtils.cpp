@@ -4,8 +4,8 @@
 /// Implementation of utility functions for working with ARTS EDTs.
 ///==========================================================================///
 
-#include "arts/Utils/EdtUtils.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/utils/EdtUtils.h"
+#include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Block.h"
@@ -17,7 +17,7 @@
 #include <functional>
 #include <optional>
 
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(edt_utils);
 [[maybe_unused]] static const auto *kEdtUtilsDebugType = ARTS_DEBUG_TYPE_STR;
 

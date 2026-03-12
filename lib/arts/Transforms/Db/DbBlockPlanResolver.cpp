@@ -4,10 +4,10 @@
 /// Block-plan resolution implementation for DbPartitioning.
 ///==========================================================================///
 
-#include "arts/Transforms/Db/DbBlockPlanResolver.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DbUtils.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/transforms/db/DbBlockPlanResolver.h"
+#include "arts/utils/DbUtils.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Dominance.h"
@@ -21,7 +21,6 @@ namespace {
 static bool isBlockLikeMode(PartitionMode mode) {
   return mode == PartitionMode::block || mode == PartitionMode::stencil;
 }
-
 
 static Value computeDefaultBlockSize(DbAllocOp allocOp, OpBuilder &builder,
                                      Location loc, bool useNodes) {
@@ -101,27 +100,30 @@ static SmallVector<Value> collectCanonicalBlockSizeCandidates(
       continue;
 
     unsigned offsetIdx = 0;
-    Value blockIndex =
-        DbUtils::pickRepresentativePartitionOffset(info.partitionOffsets, &offsetIdx);
-    Value blockSizeVal =
-        DbUtils::pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
+    Value blockIndex = DbUtils::pickRepresentativePartitionOffset(
+        info.partitionOffsets, &offsetIdx);
+    Value blockSizeVal = DbUtils::pickRepresentativePartitionSize(
+        info.partitionSizes, offsetIdx);
 
     if (!blockIndex) {
       unsigned opIdx = 0;
       if (!acquire.getPartitionIndices().empty()) {
         SmallVector<Value> partIndices(acquire.getPartitionIndices().begin(),
                                        acquire.getPartitionIndices().end());
-        blockIndex = DbUtils::pickRepresentativePartitionOffset(partIndices, &opIdx);
+        blockIndex =
+            DbUtils::pickRepresentativePartitionOffset(partIndices, &opIdx);
       } else if (!acquire.getPartitionOffsets().empty()) {
         SmallVector<Value> partOffsets(acquire.getPartitionOffsets().begin(),
                                        acquire.getPartitionOffsets().end());
-        blockIndex = DbUtils::pickRepresentativePartitionOffset(partOffsets, &opIdx);
+        blockIndex =
+            DbUtils::pickRepresentativePartitionOffset(partOffsets, &opIdx);
       }
 
       if (!acquire.getPartitionSizes().empty()) {
         SmallVector<Value> partSizes(acquire.getPartitionSizes().begin(),
                                      acquire.getPartitionSizes().end());
-        blockSizeVal = DbUtils::pickRepresentativePartitionSize(partSizes, opIdx);
+        blockSizeVal =
+            DbUtils::pickRepresentativePartitionSize(partSizes, opIdx);
       }
     }
 

@@ -2,16 +2,16 @@
 /// File: DbGraph.cpp
 /// Implementation of DbGraph for DB operation analysis.
 ///==========================================================================///
-#include "arts/Analysis/Graphs/Db/DbGraph.h"
-#include "arts/Analysis/ArtsAnalysisManager.h"
-#include "arts/Analysis/Db/DbAliasAnalysis.h"
-#include "arts/Analysis/Db/DbAnalysis.h"
-#include "arts/Analysis/Graphs/Db/DbNode.h"
-#include "arts/Analysis/Loop/LoopAnalysis.h"
-#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DbUtils.h"
-#include "arts/Utils/Metadata/LocationMetadata.h"
+#include "arts/analysis/graphs/db/DbGraph.h"
+#include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/db/DbAliasAnalysis.h"
+#include "arts/analysis/db/DbAnalysis.h"
+#include "arts/analysis/graphs/db/DbNode.h"
+#include "arts/analysis/loop/LoopAnalysis.h"
+#include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/utils/DbUtils.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/metadata/LocationMetadata.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "llvm/Support/Debug.h"
@@ -22,7 +22,7 @@
 using namespace mlir;
 using namespace mlir::arts;
 
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(db_graph);
 
 std::string DbGraph::generateAllocId(unsigned id) {

@@ -19,7 +19,7 @@ namespace arts {
 
 /// Forward declarations
 class DbAnalysis;
-class ArtsMetadataManager;
+class MetadataManager;
 
 class DbAllocNode;
 class DbAcquireNode;

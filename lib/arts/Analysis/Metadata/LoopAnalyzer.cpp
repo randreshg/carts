@@ -2,11 +2,11 @@
 /// LoopAnalyzer.cpp - Loop Analysis Implementation
 ///===----------------------------------------------------------------------===///
 
-#include "arts/Analysis/Metadata/LoopAnalyzer.h"
-#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
-#include "arts/Utils/ArtsDebug.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/Metadata/LocationMetadata.h"
+#include "arts/analysis/metadata/LoopAnalyzer.h"
+#include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/utils/Debug.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/metadata/LocationMetadata.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"
@@ -222,7 +222,7 @@ void LoopAnalyzer::analyzeLoopNestDependences(affine::AffineForOp outerLoop,
 
 void LoopAnalyzer::analyzeLoopReordering(affine::AffineForOp outerLoop,
                                          LoopMetadata *metadata,
-                                         ArtsMetadataManager &manager) {
+                                         MetadataManager &manager) {
   /// 1. Extract perfect nest
   SmallVector<affine::AffineForOp, 4> nest;
   affine::getPerfectlyNestedLoops(nest, outerLoop);

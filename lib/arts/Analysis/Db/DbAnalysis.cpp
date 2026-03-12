@@ -3,21 +3,21 @@
 /// Implementation of the DbAnalysis class for DB operation analysis.
 ///==========================================================================///
 
-#include "arts/Analysis/Db/DbAnalysis.h"
-#include "arts/Analysis/AccessPatternAnalysis.h"
-#include "arts/Analysis/ArtsAnalysisManager.h"
-#include "arts/Analysis/Db/DbAliasAnalysis.h"
-#include "arts/Analysis/Db/DbPatternMatchers.h"
-#include "arts/Analysis/Graphs/Db/DbGraph.h"
-#include "arts/Analysis/Graphs/Db/DbNode.h"
-#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
-#include "arts/Analysis/Graphs/Edt/EdtNode.h"
-#include "arts/Analysis/Loop/LoopAnalysis.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DbUtils.h"
-#include "arts/Utils/EdtUtils.h"
-#include "arts/Utils/OperationAttributes.h"
-#include "arts/Utils/ValueUtils.h"
+#include "arts/analysis/db/DbAnalysis.h"
+#include "arts/analysis/AccessPatternAnalysis.h"
+#include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/db/DbAliasAnalysis.h"
+#include "arts/analysis/db/DbPatternMatchers.h"
+#include "arts/analysis/graphs/db/DbGraph.h"
+#include "arts/analysis/graphs/db/DbNode.h"
+#include "arts/analysis/graphs/edt/EdtGraph.h"
+#include "arts/analysis/graphs/edt/EdtNode.h"
+#include "arts/analysis/loop/LoopAnalysis.h"
+#include "arts/utils/DbUtils.h"
+#include "arts/utils/EdtUtils.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/Utils.h"
+#include "arts/utils/ValueUtils.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -26,7 +26,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Debug.h"
 
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(db_analysis);
 
 using namespace mlir;
@@ -57,7 +57,7 @@ static bool isTiling2DTaskAcquire(DbAcquireOp acquire) {
 
 } // namespace
 
-DbAnalysis::DbAnalysis(ArtsAnalysisManager &AM) : ArtsAnalysis(AM) {
+DbAnalysis::DbAnalysis(AnalysisManager &AM) : ArtsAnalysis(AM) {
   ARTS_DEBUG("Initializing DbAnalysis");
   dbAliasAnalysis = std::make_unique<DbAliasAnalysis>(this);
 }
@@ -379,8 +379,8 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
         unsigned offsetIdx = 0;
         Value repOffset = DbUtils::pickRepresentativePartitionOffset(
             info.partitionOffsets, &offsetIdx);
-        Value repSize =
-            DbUtils::pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
+        Value repSize = DbUtils::pickRepresentativePartitionSize(
+            info.partitionSizes, offsetIdx);
         if (Value refined = refineSizeFromMinInBlock(repOffset, repSize)) {
           if (offsetIdx < info.partitionSizes.size())
             info.partitionSizes[offsetIdx] = refined;
@@ -432,10 +432,10 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
       info.isValid = true;
 
       unsigned offsetIdx = 0;
-      Value repOffset =
-          DbUtils::pickRepresentativePartitionOffset(info.partitionOffsets, &offsetIdx);
-      Value repSize =
-          DbUtils::pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
+      Value repOffset = DbUtils::pickRepresentativePartitionOffset(
+          info.partitionOffsets, &offsetIdx);
+      Value repSize = DbUtils::pickRepresentativePartitionSize(
+          info.partitionSizes, offsetIdx);
       if (Value refined = refineSizeFromMinInBlock(repOffset, repSize)) {
         if (offsetIdx < info.partitionSizes.size())
           info.partitionSizes[offsetIdx] = refined;
@@ -449,8 +449,8 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
           bool useLoopSize = false;
           int64_t hintConst = 0;
           int64_t loopConst = 0;
-          Value hintSize =
-              DbUtils::pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
+          Value hintSize = DbUtils::pickRepresentativePartitionSize(
+              info.partitionSizes, offsetIdx);
           Value hintOff = DbUtils::pickRepresentativePartitionOffset(
               info.partitionOffsets, &offsetIdx);
           bool hintIsConst =
@@ -632,8 +632,7 @@ bool DbAnalysis::hasCrossElementSelfReadInLoop(DbAcquireOp acquire,
           analyzeAccessBoundsFromIndices(selfReadAccesses, nestedIV, nestedIV);
       if (hasCrossElementOffset(nestedBounds)) {
         ARTS_DEBUG("DbAnalysis nested self-read fallback: valid="
-                   << nestedBounds.valid
-                   << " min=" << nestedBounds.minOffset
+                   << nestedBounds.valid << " min=" << nestedBounds.minOffset
                    << " max=" << nestedBounds.maxOffset
                    << " stencil=" << nestedBounds.isStencil
                    << " variable=" << nestedBounds.hasVariableOffset);
@@ -684,7 +683,7 @@ DbAnalysis::getAllocAccessPattern(DbAllocOp alloc) {
     return std::nullopt;
 
   /// Check for existing operation attribute first (may have been set by
-  /// ArtsForOptimization pass or other earlier analysis).
+  /// ForOpt pass or other earlier analysis).
   std::optional<DbAccessPattern> attrPattern =
       getDbAccessPattern(alloc.getOperation());
 

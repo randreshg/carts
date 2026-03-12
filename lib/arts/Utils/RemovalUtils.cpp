@@ -3,9 +3,9 @@
 /// Implements the RemovalUtils class for deferred operation removal.
 ///==========================================================================///
 
-#include "arts/Utils/RemovalUtils.h"
+#include "arts/utils/RemovalUtils.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/utils/Debug.h"
 #include "mlir/IR/Builders.h"
 
 ARTS_DEBUG_SETUP(removal_utils);

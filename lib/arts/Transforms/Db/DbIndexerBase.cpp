@@ -12,11 +12,11 @@
 /// - localizeForDbRefUser(): how to localize indices in transformDbRefUsers
 ///==========================================================================///
 
-#include "arts/Transforms/Db/DbIndexerBase.h"
-#include "arts/Codegen/ArtsCodegen.h"
-#include "arts/Utils/ArtsDebug.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DbUtils.h"
+#include "arts/transforms/db/DbIndexerBase.h"
+#include "arts/codegen/Codegen.h"
+#include "arts/utils/DbUtils.h"
+#include "arts/utils/Debug.h"
+#include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "polygeist/Ops.h"

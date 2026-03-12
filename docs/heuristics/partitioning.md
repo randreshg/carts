@@ -231,7 +231,7 @@ The design corresponding to this flow is captured in
 ### 3.1 Allocation-Level Heuristics (H1.1-H1.6)
 
 This is the current intent (see
-`lib/arts/Analysis/PartitioningHeuristics.cpp` and the
+`lib/arts/analysis/PartitioningHeuristics.cpp` and the
 `HeuristicsConfig` wrapper):
 
 - H1.1: Read-only + single-node + no partition capability -> Coarse

@@ -116,7 +116,7 @@
 #define ARTS_ANALYSIS_DISTRIBUTIONHEURISTICS_H
 
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
+#include "arts/utils/abstract_machine/AbstractMachine.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Value.h"
 #include <optional>
@@ -189,7 +189,7 @@ public:
   /// Pure analysis, no IR emission.
   static DistributionStrategy
   analyzeStrategy(EdtConcurrency concurrency,
-                  const ArtsAbstractMachine *machine = nullptr);
+                  const AbstractMachine *machine = nullptr);
 
   /// Select IR distribution kind from machine strategy + detected loop pattern.
   static EdtDistributionKind
@@ -264,13 +264,13 @@ public:
   /// Resolve default EDT parallelism from machine topology.
   /// Used by passes to avoid duplicating node/worker resolution logic.
   static ParallelismDecision
-  resolveParallelismFromMachine(const ArtsAbstractMachine *machine);
+  resolveParallelismFromMachine(const AbstractMachine *machine);
 
   /// Resolve compile-time worker topology for an EDT from attrs + machine.
   /// Returns nullopt when worker count is not computable.
   static std::optional<WorkerConfig>
   resolveWorkerConfig(EdtOp parallelEdt,
-                      const ArtsAbstractMachine *machine = nullptr);
+                      const AbstractMachine *machine = nullptr);
 
   /// Compute an optional coarsened block-size hint for arts.for loops.
   /// Returns nullopt when coarsening should be skipped.

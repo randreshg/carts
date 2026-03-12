@@ -1,4 +1,4 @@
-# ArtsKernelTransforms
+# KernelTransforms
 
 Canonical docs for transform ownership now live under
 [`docs/transforms/`](../transforms/README.md).
@@ -6,6 +6,6 @@ Canonical docs for transform ownership now live under
 Use:
 
 - [`../transforms/kernel.md`](../transforms/kernel.md)
-  for `ArtsKernelTransforms`
+  for `KernelTransforms`
 - [`pipeline.md`](./pipeline.md)
   for stage placement and ordering

@@ -7,19 +7,19 @@
 #ifndef ARTS_TRANSFORMS_EDT_ACQUIREREWRITEPLANNING_H
 #define ARTS_TRANSFORMS_EDT_ACQUIREREWRITEPLANNING_H
 
-#include "arts/Analysis/DistributionHeuristics.h"
-#include "arts/Transforms/Edt/EdtRewriter.h"
+#include "arts/analysis/DistributionHeuristics.h"
+#include "arts/transforms/edt/EdtRewriter.h"
 #include <optional>
 
 namespace mlir {
 namespace arts {
 
-class ArtsAnalysisManager;
+class AnalysisManager;
 
 /// Inputs required to plan one rewritten task acquire.
 struct AcquireRewritePlanningInput {
   ArtsCodegen *AC = nullptr;
-  ArtsAnalysisManager *analysisManager = nullptr;
+  AnalysisManager *analysisManager = nullptr;
   Location loc;
 
   ForOp loopOp;

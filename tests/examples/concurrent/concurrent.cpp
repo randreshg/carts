@@ -4,7 +4,7 @@
 #include <omp.h>
 #include <time.h>
 
-#include "arts/Utils/Testing/CartsTest.h"
+#include "arts/utils/Testing/CartsTest.h"
 
 int main() {
   CARTS_TIMER_START();

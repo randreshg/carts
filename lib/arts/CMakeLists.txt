@@ -1,5 +1,5 @@
 add_mlir_dialect_library(MLIRArts
-  ArtsDialect.cpp
+  Dialect.cpp
 
   ADDITIONAL_HEADER_DIRS
     ${PROJECT_SOURCE_DIR}/include/carts
@@ -16,8 +16,8 @@ add_mlir_dialect_library(MLIRArts
     MLIRSupport
     MLIRSCFTransforms
 )
-add_subdirectory(Utils)
-add_subdirectory(Transforms)
-add_subdirectory(Analysis)
-add_subdirectory(Codegen)
-add_subdirectory(Passes)
+add_subdirectory(utils)
+add_subdirectory(transforms)
+add_subdirectory(analysis)
+add_subdirectory(codegen)
+add_subdirectory(passes)

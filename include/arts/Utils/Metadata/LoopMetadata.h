@@ -11,8 +11,8 @@
 #define ARTS_UTILS_LOOPMETADATA_H
 
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/Metadata/ArtsMetadata.h"
-#include "arts/Utils/Metadata/LocationMetadata.h"
+#include "arts/utils/metadata/LocationMetadata.h"
+#include "arts/utils/metadata/Metadata.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Operation.h"

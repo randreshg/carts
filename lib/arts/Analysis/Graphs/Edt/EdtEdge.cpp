@@ -3,9 +3,9 @@
 /// Implementation of EDT edges for graph analysis.
 ///==========================================================================///
 
-#include "arts/Analysis/Graphs/Edt/EdtEdge.h"
-#include "arts/Analysis/Graphs/Base/NodeBase.h"
-#include "arts/Analysis/Graphs/Db/DbNode.h"
+#include "arts/analysis/graphs/edt/EdtEdge.h"
+#include "arts/analysis/graphs/base/NodeBase.h"
+#include "arts/analysis/graphs/db/DbNode.h"
 
 using namespace mlir::arts;
 

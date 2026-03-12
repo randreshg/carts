@@ -8,9 +8,9 @@
 #ifndef CARTS_ANALYSIS_LOOP_LOOPANALYSIS_H
 #define CARTS_ANALYSIS_LOOP_LOOPANALYSIS_H
 
-#include "arts/Analysis/ArtsAnalysis.h"
-#include "arts/Analysis/Db/DbAnalysis.h"
-#include "arts/Analysis/Loop/LoopNode.h"
+#include "arts/analysis/Analysis.h"
+#include "arts/analysis/db/DbAnalysis.h"
+#include "arts/analysis/loop/LoopNode.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -28,10 +28,10 @@ namespace arts {
 /// Manages all loop operations in the module and provides LoopNode objects
 /// that combine graph structure with rich loop metadata.
 ///===----------------------------------------------------------------------===///
-class ArtsAnalysisManager;
+class AnalysisManager;
 class LoopAnalysis : public ArtsAnalysis {
 public:
-  explicit LoopAnalysis(ArtsAnalysisManager &analysisManager);
+  explicit LoopAnalysis(AnalysisManager &analysisManager);
   ~LoopAnalysis() = default;
 
   /// Build analysis - creates LoopNodes for all loops in module

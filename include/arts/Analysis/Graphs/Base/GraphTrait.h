@@ -7,9 +7,9 @@
 #ifndef ARTS_ANALYSIS_GRAPHS_GRAPHTRAITS_H
 #define ARTS_ANALYSIS_GRAPHS_GRAPHTRAITS_H
 
-#include "arts/Analysis/Graphs/Base/EdgeBase.h"
-#include "arts/Analysis/Graphs/Base/GraphBase.h"
-#include "arts/Analysis/Graphs/Base/NodeBase.h"
+#include "arts/analysis/graphs/base/EdgeBase.h"
+#include "arts/analysis/graphs/base/GraphBase.h"
+#include "arts/analysis/graphs/base/NodeBase.h"
 #include "llvm/ADT/GraphTraits.h"
 #include "llvm/ADT/STLExtras.h"
 

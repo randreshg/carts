@@ -4,7 +4,7 @@
 /// Test for chunk-style OpenMP dependencies.
 ///==========================================================================///
 
-#include "arts/Utils/Testing/CartsTest.h"
+#include "arts/utils/Testing/CartsTest.h"
 #include <stdio.h>
 #include <stdlib.h>
 
