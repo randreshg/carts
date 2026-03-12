@@ -1,6 +1,7 @@
 file(GLOB CARTS_TRANSFORMS_SOURCE_FILES CONFIGURE_DEPENDS
     "*.cpp"
     "Db/*.cpp"
+    "Dependence/*.cpp"
     "Db/Block/*.cpp"
     "Db/ElementWise/*.cpp"
     "Db/Stencil/*.cpp"
