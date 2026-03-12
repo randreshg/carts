@@ -81,6 +81,7 @@ private:
   computeDimAccessPatterns(Value memref, Operation *scopeOp);
   std::optional<int64_t> computeEstimatedAccessBytes(Value memref,
                                                      MemrefMetadata *metadata);
+  bool hasStencilAccessPattern(Value memref, Operation *scopeOp);
 };
 
 } // namespace arts

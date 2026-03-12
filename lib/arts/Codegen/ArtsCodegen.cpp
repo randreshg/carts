@@ -246,7 +246,8 @@ Value ArtsCodegen::getTotalWorkers(Location loc) {
     if (runtimeWorkers > 0)
       return createIntConstant(runtimeWorkers, Int32, loc);
   }
-  func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_arts_get_total_workers);
+  func::FuncOp func =
+      getOrCreateRuntimeFunction(ARTSRTL_arts_get_total_workers);
   return create<func::CallOp>(loc, func, ArrayRef<Value>{}).getResult(0);
 }
 
@@ -261,7 +262,8 @@ Value ArtsCodegen::getTotalNodes(Location loc) {
 }
 
 Value ArtsCodegen::getCurrentWorker(Location loc) {
-  func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_arts_get_current_worker);
+  func::FuncOp func =
+      getOrCreateRuntimeFunction(ARTSRTL_arts_get_current_worker);
   return create<func::CallOp>(loc, func, ArrayRef<Value>{}).getResult(0);
 }
 

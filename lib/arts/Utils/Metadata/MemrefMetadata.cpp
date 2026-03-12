@@ -10,6 +10,9 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "llvm/Support/JSON.h"
 
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(memref_metadata);
+
 using namespace mlir;
 using namespace mlir::arts;
 
@@ -28,6 +31,8 @@ std::string MemrefMetadata::accessPatternToString(AccessPatternType pattern) {
     return "sequential";
   case AccessPatternType::Strided:
     return "strided";
+  case AccessPatternType::Stencil:
+    return "stencil";
   case AccessPatternType::GatherScatter:
     return "gather_scatter";
   case AccessPatternType::Random:
@@ -44,6 +49,8 @@ MemrefMetadata::stringToAccessPattern(llvm::StringRef str) {
     return AccessPatternType::Sequential;
   if (str == "strided")
     return AccessPatternType::Strided;
+  if (str == "stencil")
+    return AccessPatternType::Stencil;
   if (str == "gather_scatter")
     return AccessPatternType::GatherScatter;
   if (str == "random")
@@ -190,10 +197,16 @@ bool MemrefMetadata::importFromOp() {
   /// Import extended access characterization
   hasUniformAccess = getBoolFromAttr(attr.getHasUniformAccess());
   hasStrideOneAccess = getBoolFromAttr(attr.getHasStrideOneAccess());
-  if (auto value = getIntFromAttr(attr.getDominantAccessPattern()))
+  if (auto value = getIntFromAttr(attr.getDominantAccessPattern())) {
     dominantAccessPattern = static_cast<AccessPatternType>(value.value());
-  else
+    ARTS_DEBUG("importFromOp: dominantAccessPattern = "
+               << accessPatternToString(*dominantAccessPattern)
+               << " (enum value: " << static_cast<int>(*dominantAccessPattern)
+               << ")");
+  } else {
     dominantAccessPattern.reset();
+    ARTS_DEBUG("importFromOp: dominantAccessPattern is not set");
+  }
   if (auto nestingDepthVal = getIntFromAttr(attr.getNestingDepth()))
     nestingDepth = *nestingDepthVal;
   accessedInParallelLoop = getBoolFromAttr(attr.getAccessedInParallelLoop());

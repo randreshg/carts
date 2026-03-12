@@ -223,10 +223,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
     case omp::ClauseTaskDepend::taskdependin:
       return ArtsMode::in;
     case omp::ClauseTaskDepend::taskdependout:
-      /// Keep OpenMP "out" dependencies conservative in ARTS mode mapping:
-      /// using inout preserves full producer/consumer ordering across
-      /// runtimes where pure-out release semantics may be weaker.
-      return ArtsMode::inout;
+      return ArtsMode::out;
     case omp::ClauseTaskDepend::taskdependinout:
       return ArtsMode::inout;
     }

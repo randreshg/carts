@@ -25,15 +25,14 @@ class BlockInfoComputer {
 public:
   /// Compute block offset and size for the given acquire node.
   /// Tries hints first, then while-loops, then for-loops.
-  static LogicalResult computeBlockInfo(DbAcquireNode *node,
-                                        Value &blockOffset, Value &blockSize);
+  static LogicalResult computeBlockInfo(DbAcquireNode *node, Value &blockOffset,
+                                        Value &blockSize);
 
   /// Compute block info from an scf::WhileOp.
-  static LogicalResult computeBlockInfoFromWhile(DbAcquireNode *node,
-                                                 scf::WhileOp whileOp,
-                                                 Value &blockOffset,
-                                                 Value &blockSize,
-                                                 Value *offsetForCheck = nullptr);
+  static LogicalResult
+  computeBlockInfoFromWhile(DbAcquireNode *node, scf::WhileOp whileOp,
+                            Value &blockOffset, Value &blockSize,
+                            Value *offsetForCheck = nullptr);
 
   /// Compute block info from partition hints (partitionOffset/partitionSize).
   static LogicalResult computeBlockInfoFromHints(DbAcquireNode *node,
@@ -41,11 +40,10 @@ public:
                                                  Value &blockSize);
 
   /// Compute block info from for-like loops in the EDT body.
-  static LogicalResult computeBlockInfoFromForLoop(DbAcquireNode *node,
-                                                   ArrayRef<LoopNode *> loops,
-                                                   Value &blockOffset,
-                                                   Value &blockSize,
-                                                   Value *offsetForCheck = nullptr);
+  static LogicalResult
+  computeBlockInfoFromForLoop(DbAcquireNode *node, ArrayRef<LoopNode *> loops,
+                              Value &blockOffset, Value &blockSize,
+                              Value *offsetForCheck = nullptr);
 };
 
 } // namespace arts

@@ -574,6 +574,40 @@ Value DbUtils::extractBaseBlockSizeCandidate(Value offsetHint, Value sizeHint,
   return Value();
 }
 
+Value DbUtils::pickRepresentativePartitionOffset(ArrayRef<Value> offsets,
+                                                  unsigned *outIdx) {
+  if (outIdx)
+    *outIdx = 0;
+  for (unsigned i = 0; i < offsets.size(); ++i) {
+    Value off = offsets[i];
+    if (!off)
+      continue;
+    int64_t c = 0;
+    if (!ValueUtils::getConstantIndex(ValueUtils::stripNumericCasts(off), c)) {
+      if (outIdx)
+        *outIdx = i;
+      return off;
+    }
+  }
+  for (unsigned i = 0; i < offsets.size(); ++i) {
+    if (offsets[i]) {
+      if (outIdx)
+        *outIdx = i;
+      return offsets[i];
+    }
+  }
+  return Value();
+}
+
+Value DbUtils::pickRepresentativePartitionSize(ArrayRef<Value> sizes,
+                                               unsigned idx) {
+  if (sizes.empty())
+    return Value();
+  if (idx < sizes.size() && sizes[idx])
+    return sizes[idx];
+  return sizes.front();
+}
+
 Operation *DbUtils::findUserEdt(DbControlOp dbControl) {
   for (Operation *user : dbControl.getResult().getUsers()) {
     if (auto edt = dyn_cast<EdtOp>(user)) {

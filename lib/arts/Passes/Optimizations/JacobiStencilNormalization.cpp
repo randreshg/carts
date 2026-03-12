@@ -144,7 +144,8 @@ static bool matchSimpleCopyFor(ForOp forOp, Value &srcMemref,
 }
 
 static bool matchStencilFor(ForOp forOp, Value expectedInputMemref,
-                            Value expectedOutputMemref, Value &actualInputMemref,
+                            Value expectedOutputMemref,
+                            Value &actualInputMemref,
                             Value &actualOutputMemref) {
   if (!forOp || forOp.getBody()->getNumArguments() != 1)
     return false;
@@ -214,7 +215,8 @@ static bool hasEvenStaticTripCount(scf::ForOp loop) {
 
 static bool matchJacobiTimeLoop(scf::ForOp timeLoop, JacobiLoopMatch &out) {
   out = {};
-  if (!timeLoop || timeLoop.getNumResults() != 0 || !hasEvenStaticTripCount(timeLoop))
+  if (!timeLoop || timeLoop.getNumResults() != 0 ||
+      !hasEvenStaticTripCount(timeLoop))
     return false;
 
   SmallVector<EdtOp, 2> bodyEdts;
@@ -262,20 +264,20 @@ static bool matchJacobiTimeLoop(scf::ForOp timeLoop, JacobiLoopMatch &out) {
 static EdtOp cloneStencilEdt(EdtOp sourceEdt, Block *targetBlock, Value oldA,
                              Value newA, Value oldB, Value newB) {
   Operation *targetTerminator = targetBlock->getTerminator();
-  OpBuilder builder(targetBlock,
-                    targetTerminator ? Block::iterator(targetTerminator)
+  OpBuilder builder(targetBlock, targetTerminator
+                                     ? Block::iterator(targetTerminator)
                                      : targetBlock->end());
-  auto cloned = builder.create<EdtOp>(sourceEdt.getLoc(), sourceEdt.getType(),
-                                      sourceEdt.getConcurrency(),
-                                      sourceEdt.getRoute(),
-                                      sourceEdt.getDependencies());
+  auto cloned = builder.create<EdtOp>(
+      sourceEdt.getLoc(), sourceEdt.getType(), sourceEdt.getConcurrency(),
+      sourceEdt.getRoute(), sourceEdt.getDependencies());
   cloned->setAttrs(sourceEdt->getAttrs());
 
   Block &src = sourceEdt.getBody().front();
   Block &dst = cloned.getBody().front();
   IRMapping mapper;
 
-  for (auto [srcArg, dstArg] : llvm::zip(src.getArguments(), dst.getArguments()))
+  for (auto [srcArg, dstArg] :
+       llvm::zip(src.getArguments(), dst.getArguments()))
     mapper.map(srcArg, dstArg);
   if (oldA && newA)
     mapper.map(oldA, newA);
@@ -299,8 +301,8 @@ static bool rewriteJacobiTimeLoop(JacobiLoopMatch &match) {
   Value two = builder.create<arith::ConstantIntOp>(loc, 2, 64);
   Value one = builder.create<arith::ConstantIntOp>(loc, 1, 64);
   Value rem = builder.create<arith::RemSIOp>(loc, ivI64, two);
-  Value isOdd = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                              rem, one);
+  Value isOdd =
+      builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, rem, one);
 
   auto ifOp = builder.create<scf::IfOp>(loc, TypeRange{}, isOdd,
                                         /*withElseRegion=*/true);

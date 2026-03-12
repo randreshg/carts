@@ -88,6 +88,11 @@ void sinkExternalAllocasInEdt(EdtOp edt) {
       if (auto store = dyn_cast<memref::StoreOp>(user)) {
         if (store.getMemRef() != allocaOp.getResult())
           continue;
+        /// Stores inside the EDT body are private writes (e.g., OpenMP
+        /// private(buffer) lowered by cgeist outside omp.parallel). These
+        /// should not prevent sinking — they are the reason we want to sink.
+        if (edt.getBody().isAncestor(store->getParentRegion()))
+          continue;
         if (!inSameBlock(store.getOperation()) ||
             hasLoopAncestor(store.getOperation())) {
           hasUnsafeStore = true;
@@ -123,6 +128,101 @@ void sinkExternalAllocasInEdt(EdtOp edt) {
     }
   }
 }
+///===----------------------------------------------------------------------===///
+/// Parallel EDT Fusion
+///===----------------------------------------------------------------------===///
+///
+/// Fuses consecutive arts.edt<parallel> operations in the same block into a
+/// single parallel EDT. This merges independent parallel regions that each
+/// contain arts.for loops, reducing epoch overhead (each parallel EDT becomes
+/// a separate epoch later in the pipeline).
+///
+/// BEFORE:
+///   arts.edt <parallel> { arts.for(%0) to(%N) step(%1) { ... } }
+///   arts.edt <parallel> { arts.for(%0) to(%N) step(%1) { ... } }
+///
+/// AFTER:
+///   arts.edt <parallel> {
+///     arts.for(%0) to(%N) step(%1) { ... }
+///     arts.for(%0) to(%N) step(%1) { ... }
+///   }
+///
+///===----------------------------------------------------------------------===///
+
+/// Returns true when a parallel EDT body contains only arts.for ops and the
+/// yield terminator — no barriers, acquires, or other ops that would make
+/// fusion unsafe.
+static bool isParallelEdtFusable(EdtOp edt) {
+  if (edt.getType() != arts::EdtType::parallel)
+    return false;
+  if (!edt.getDependencies().empty())
+    return false;
+  Block &body = edt.getBody().front();
+  for (Operation &op : body) {
+    if (isa<arts::ForOp>(&op))
+      continue;
+    if (isa<arts::YieldOp>(&op))
+      continue;
+    return false;
+  }
+  return true;
+}
+
+/// Fuses consecutive fusable parallel EDTs in a block.
+/// Returns true if any fusion was performed.
+static bool fuseConsecutiveParallelEdts(Block &block) {
+  bool changed = false;
+  for (auto it = block.begin(); it != block.end();) {
+    auto first = dyn_cast<EdtOp>(&*it);
+    if (!first || !isParallelEdtFusable(first)) {
+      ++it;
+      continue;
+    }
+    auto nextIt = std::next(it);
+    if (nextIt == block.end()) {
+      ++it;
+      continue;
+    }
+    auto second = dyn_cast<EdtOp>(&*nextIt);
+    if (!second || !isParallelEdtFusable(second)) {
+      ++it;
+      continue;
+    }
+
+    /// Fuse: move all ops from second body into first body (before terminator)
+    Block &firstBody = first.getBody().front();
+    Block &secondBody = second.getBody().front();
+    Operation *firstTerminator = firstBody.getTerminator();
+
+    for (Operation &op :
+         llvm::make_early_inc_range(secondBody.without_terminator())) {
+      op.moveBefore(firstTerminator);
+    }
+
+    ARTS_DEBUG("Fused consecutive parallel EDTs");
+    second.erase();
+    changed = true;
+    /// Re-run on the same first EDT to chain-fuse.
+  }
+  return changed;
+}
+
+/// Processes top-level blocks in a region for parallel EDT fusion.
+/// Does NOT recurse into scf::ForOp bodies to avoid breaking patterns
+/// that JacobiStencilNormalization needs to match (exactly 2 parallel EDTs
+/// inside a time-stepping loop).
+static void processRegionForParallelEdtFusion(Region &region, bool &changed) {
+  for (Block &block : region) {
+    changed |= fuseConsecutiveParallelEdts(block);
+    for (Operation &op : block) {
+      if (isa<scf::ForOp>(op))
+        continue;
+      for (Region &nested : op.getRegions())
+        processRegionForParallelEdtFusion(nested, changed);
+    }
+  }
+}
+
 } // namespace
 
 ///===----------------------------------------------------------------------===///
@@ -192,6 +292,15 @@ void EdtPass::runOnOperation() {
     /// removeBarriers();
   } else {
     ARTS_INFO("Running EDT pass without analysis");
+
+    /// Fuse consecutive parallel EDTs before any other transformation.
+    /// This merges independent parallel regions (e.g., 7 separate activation
+    /// functions inlined into main) into one, reducing epoch overhead.
+    bool fusionChanged = false;
+    processRegionForParallelEdtFusion(module.getRegion(), fusionChanged);
+    if (fusionChanged)
+      ARTS_INFO("Parallel EDT fusion applied");
+
     processSingleEdts();
     processParallelEdts();
     inlineNoDepEdts();
