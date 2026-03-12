@@ -8,6 +8,8 @@
 #define CARTS_UTILS_ARTSUTILS_H
 
 #include "arts/Dialect.h"
+#include "arts/utils/DbUtils.h"
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -32,10 +34,19 @@ MemRefType getElementMemRefType(Type elementType, ArrayRef<Value> elementSizes);
 /// String Utilities
 std::string sanitizeString(StringRef s);
 
-/// Range and Value Comparison Utilities
-bool equalRange(ValueRange a, ValueRange b);
-bool allSameValue(ValueRange values);
-bool scalesAreEquivalent(Value a, Value b);
+/// Deprecated Range/Value Comparison Wrappers — use ValueUtils methods instead
+[[deprecated("Use ValueUtils::equalRange instead")]]
+inline bool equalRange(ValueRange a, ValueRange b) {
+  return ValueUtils::equalRange(a, b);
+}
+[[deprecated("Use ValueUtils::allSameValue instead")]]
+inline bool allSameValue(ValueRange values) {
+  return ValueUtils::allSameValue(values);
+}
+[[deprecated("Use ValueUtils::scalesAreEquivalent instead")]]
+inline bool scalesAreEquivalent(Value a, Value b) {
+  return ValueUtils::scalesAreEquivalent(a, b);
+}
 
 /// Access Mode Utilities
 ArtsMode combineAccessModes(ArtsMode mode1, ArtsMode mode2);
@@ -47,14 +58,6 @@ Value createOneIndex(OpBuilder &builder, Location loc);
 
 /// ARTS Runtime Query Utilities
 bool isArtsRuntimeQuery(Value val);
-
-/// Pattern Recognition and Analysis Utilities
-std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth = 0);
-std::optional<int64_t> extractBlockSizeForAllocation(Value sizeHint,
-                                                     int depth = 0);
-Value extractOriginalSize(Value numerator, Value denominator,
-                          OpBuilder &builder, Location loc);
-void collectWhileBounds(Value cond, Value iterArg, SmallVector<Value> &bounds);
 
 /// Operation Replacement Utilities
 void replaceUses(Value from, Value to, DominanceInfo &domInfo,

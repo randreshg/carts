@@ -48,6 +48,11 @@ inline bool haveCompatibleBounds(scf::ForOp a, scf::ForOp b) {
          ValueUtils::sameValue(a.getStep(), b.getStep());
 }
 
+/// Collect upper bounds from a while-loop condition for the given iteration
+/// argument. Recursively decomposes AND-ed conditions and extracts bounds
+/// from less-than / greater-than comparisons.
+void collectWhileBounds(Value cond, Value iterArg, SmallVector<Value> &bounds);
+
 } // namespace arts
 } // namespace mlir
 

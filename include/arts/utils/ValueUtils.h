@@ -48,6 +48,21 @@ public:
   /// Check equivalence after stripping casts (same Value or same constant).
   static bool sameValue(Value a, Value b);
 
+  ///===----------------------------------------------------------------------===////
+  /// Value Range and Scale Comparison
+  ///===----------------------------------------------------------------------===////
+
+  /// Compare two ValueRanges for equality (size and element-wise).
+  static bool equalRange(ValueRange a, ValueRange b);
+
+  /// Check if all values in the given range are identical.
+  /// Returns false for empty ranges.
+  static bool allSameValue(ValueRange values);
+
+  /// Check if two values represent equivalent scaling factors.
+  /// Used to recognize patterns like (N * sizeof(T)) / sizeof(T) -> N.
+  static bool scalesAreEquivalent(Value a, Value b);
+
   /// Strip numeric casts and max(x, 1) clamping.
   static Value stripClampOne(Value v);
 

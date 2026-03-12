@@ -293,6 +293,26 @@ public:
                                           int64_t &maxOffset);
 };
 
+///===----------------------------------------------------------------------===///
+/// Block Size and Malloc Pattern Extraction (free functions)
+///===----------------------------------------------------------------------===///
+
+/// Extract block size from ForLowering's size hint.
+/// Handles direct constants, minui/minsi patterns, addi halo patterns,
+/// and maxui clamp patterns with recursive descent up to depth 4.
+std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth = 0);
+
+/// Extract block size INCLUDING halo adjustments for allocation sizing.
+/// Unlike extractBlockSizeFromHint which strips halo for loop bound matching,
+/// this preserves stencil halo adjustments since allocations need the full size.
+std::optional<int64_t> extractBlockSizeForAllocation(Value sizeHint,
+                                                     int depth = 0);
+
+/// Extract original size from (N * scale) / scale pattern.
+/// Common in malloc size calculations: malloc(N * sizeof(T)) / sizeof(T) -> N.
+Value extractOriginalSize(Value numerator, Value denominator,
+                          OpBuilder &builder, Location loc);
+
 } // namespace arts
 } // namespace mlir
 
