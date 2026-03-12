@@ -36,6 +36,7 @@
 #include "llvm/ADT/SmallVector.h"
 
 #include "arts/utils/Debug.h"
+#include "arts/utils/LoopInvarianceUtils.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/ValueUtils.h"
 ARTS_DEBUG_SETUP(arts_hoisting);
@@ -46,30 +47,6 @@ using namespace mlir::arts;
 ///===----------------------------------------------------------------------===///
 /// Shared Utilities
 ///===----------------------------------------------------------------------===///
-
-/// Conservative loop invariance check for hoisting safety.
-/// Returns true if: value is null, defined outside loop, OR constant after
-/// stripping casts.
-static bool isLoopInvariant(scf::ForOp loop, Value v) {
-  if (!v)
-    return true;
-  if (loop.isDefinedOutsideOfLoop(v))
-    return true;
-  Value stripped = ValueUtils::stripNumericCasts(v);
-  return ValueUtils::isValueConstant(stripped);
-}
-
-static bool isSafeToHoistNonSpeculatableOp(scf::ForOp loop, Operation *op) {
-  if (auto div = dyn_cast<arith::DivUIOp>(op)) {
-    Value denom = div.getRhs();
-    return isLoopInvariant(loop, denom) && ValueUtils::isProvablyNonZero(denom);
-  }
-  if (auto rem = dyn_cast<arith::RemUIOp>(op)) {
-    Value denom = rem.getRhs();
-    return isLoopInvariant(loop, denom) && ValueUtils::isProvablyNonZero(denom);
-  }
-  return false;
-}
 
 /// Hoist loop-invariant pure ops (e.g., div/rem/mod/max) out of inner loops.
 static bool hoistInvariantOpsInLoop(scf::ForOp loop) {
@@ -84,7 +61,7 @@ static bool hoistInvariantOpsInLoop(scf::ForOp loop) {
     if (op.getNumRegions() != 0)
       continue;
 
-    if (!mlir::isPure(&op) && !isSafeToHoistNonSpeculatableOp(loop, &op))
+    if (!mlir::isPure(&op) && !isSafeToHoistDivRem(loop, &op))
       continue;
 
     bool allInvariant = true;
