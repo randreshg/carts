@@ -174,7 +174,8 @@ bool PartitionBoundsAnalyzer::hasValidEdtAndAccesses(DbAcquireNode *node) {
 }
 
 bool PartitionBoundsAnalyzer::computePartitionBounds(DbAcquireNode *node) {
-  DbAcquireOp mutableAcquire = DbAcquireOp(node->getDbAcquireOp().getOperation());
+  DbAcquireOp mutableAcquire =
+      DbAcquireOp(node->getDbAcquireOp().getOperation());
 
   node->setPartitionInfo(Value(), Value());
   node->setHasNonConstantOffset(false);
@@ -280,9 +281,9 @@ bool PartitionBoundsAnalyzer::computePartitionBounds(DbAcquireNode *node) {
   MemoryAccessClassifier::collectAccessOperations(node, dbRefToMemOps);
 
   std::optional<unsigned> partitionDim =
-      analysisOffset
-          ? getPartitionOffsetDim(node, analysisOffset, /*requireLeading=*/false)
-          : std::nullopt;
+      analysisOffset ? getPartitionOffsetDim(node, analysisOffset,
+                                             /*requireLeading=*/false)
+                     : std::nullopt;
 
   Value partitionIdx;
   Value firstDynIdx;
@@ -316,7 +317,8 @@ bool PartitionBoundsAnalyzer::computePartitionBounds(DbAcquireNode *node) {
   if (!loopIdx) {
     if (offsetIsZero) {
       ARTS_DEBUG("  No dynamic index - allowing zero-offset partition hints");
-      node->setComputedBlockInfo(std::make_pair(partitionOffset, partitionSize));
+      node->setComputedBlockInfo(
+          std::make_pair(partitionOffset, partitionSize));
       return true;
     }
     ARTS_DEBUG("  No dynamic index - allowing for heuristic evaluation");
@@ -429,10 +431,8 @@ bool PartitionBoundsAnalyzer::canPartitionWithOffset(DbAcquireNode *node,
       .has_value();
 }
 
-std::optional<unsigned>
-PartitionBoundsAnalyzer::getPartitionOffsetDim(DbAcquireNode *node,
-                                               Value offset,
-                                               bool requireLeading) {
+std::optional<unsigned> PartitionBoundsAnalyzer::getPartitionOffsetDim(
+    DbAcquireNode *node, Value offset, bool requireLeading) {
   ARTS_DEBUG("getPartitionOffsetDim called with offset="
              << offset << " requireLeading=" << requireLeading);
   if (!offset) {
@@ -672,9 +672,9 @@ bool PartitionBoundsAnalyzer::needsFullRange(DbAcquireNode *node,
   }
 
   if (!MemoryAccessClassifier::hasStores(node) &&
-      node->getAccessPattern() == AccessPattern::Stencil &&
-      partitionOffset) {
-    if (!getPartitionOffsetDim(node, partitionOffset, /*requireLeading=*/true)) {
+      node->getAccessPattern() == AccessPattern::Stencil && partitionOffset) {
+    if (!getPartitionOffsetDim(node, partitionOffset,
+                               /*requireLeading=*/true)) {
       ARTS_DEBUG(
           "  needsFullRange: stencil access on non-leading partition dim");
       return true;

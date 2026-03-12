@@ -148,8 +148,7 @@ bool arts::isIndirectIndex(Value idx, Value partitionOffset, int depth) {
     return false;
 
   if (auto load = dyn_cast<memref::LoadOp>(defOp)) {
-    bool isDbLoad =
-        DbUtils::getUnderlyingDb(load.getMemref()) != nullptr;
+    bool isDbLoad = DbUtils::getUnderlyingDb(load.getMemref()) != nullptr;
     bool hasDynamicIndex = llvm::any_of(load.getIndices(), [](Value idx) {
       int64_t constVal = 0;
       return !ValueUtils::getConstantIndex(idx, constVal);
@@ -161,10 +160,10 @@ bool arts::isIndirectIndex(Value idx, Value partitionOffset, int depth) {
 
   if (isa<arith::AddIOp, arith::SubIOp, arith::MulIOp, arith::DivSIOp,
           arith::DivUIOp, arith::RemSIOp, arith::RemUIOp, arith::IndexCastOp,
-          arith::IndexCastUIOp, arith::ExtSIOp, arith::ExtUIOp,
-          arith::TruncIOp, arith::MinSIOp, arith::MinUIOp, arith::MaxSIOp,
-          arith::MaxUIOp, arith::SelectOp, arith::CmpIOp, arith::CmpFOp,
-          affine::AffineApplyOp>(defOp)) {
+          arith::IndexCastUIOp, arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp,
+          arith::MinSIOp, arith::MinUIOp, arith::MaxSIOp, arith::MaxUIOp,
+          arith::SelectOp, arith::CmpIOp, arith::CmpFOp, affine::AffineApplyOp>(
+          defOp)) {
     for (Value operand : defOp->getOperands()) {
       if (arts::isIndirectIndex(operand, partitionOffset, depth + 1))
         return true;
@@ -185,8 +184,8 @@ void MemoryAccessClassifier::collectAccessOperations(
   if (!node)
     return;
 
-  Operation *edtUserOp = node->getEdtUser() ? node->getEdtUser().getOperation()
-                                            : nullptr;
+  Operation *edtUserOp =
+      node->getEdtUser() ? node->getEdtUser().getOperation() : nullptr;
   Value useInEdt = node->getUseInEdt();
   if (!edtUserOp || !useInEdt)
     return;
@@ -213,7 +212,7 @@ void MemoryAccessClassifier::collectAccessOperations(
         worklist.push_back(refResult);
         SetVector<Operation *> memOps;
         DbUtils::collectReachableMemoryOps(refResult, memOps,
-                                                  &edtUser.getBody());
+                                           &edtUser.getBody());
         for (Operation *memOp : memOps)
           dbRefToMemOps[dbRef].insert(memOp);
       }
@@ -222,8 +221,7 @@ void MemoryAccessClassifier::collectAccessOperations(
 }
 
 void MemoryAccessClassifier::forEachMemoryAccess(
-    DbAcquireNode *node,
-    llvm::function_ref<void(Operation *, bool)> callback) {
+    DbAcquireNode *node, llvm::function_ref<void(Operation *, bool)> callback) {
   DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
   collectAccessOperations(node, dbRefToMemOps);
   for (auto &[dbRef, memOps] : dbRefToMemOps) {

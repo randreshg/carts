@@ -143,6 +143,10 @@ This is the current intent (see `lib/arts/Analysis/ArtsHeuristics.cpp`):
 - H1.2b: Direct + indirect writes -> Block (indirect uses full-range)
 - H1.3: Stencil patterns -> Stencil (ESD) when block-capable, else fallback
   - Special-case: read-only stencil on single-node -> Coarse (avoid halo overhead)
+- H1.3b: Double-buffer stencil (jacobi-style) -> Block when all writes are uniform
+  - Detects: stencil reads + uniform writes (no cross-element write dependencies)
+  - Enables block partitioning for write phases (no halo overhead)
+  - Preserves ESD for read phases when needed
 - H1.3 (indexed): Indexed patterns -> Block when possible, else element-wise
 - H1.4: Uniform direct access -> Block
 - H1.5: Multi-node -> Prefer Block (else fine-grained) for network efficiency

@@ -15,9 +15,26 @@ namespace mlir {
 namespace arts {
 
 /// Per-acquire data access pattern classification.
+///
+/// This enum characterizes how memory accesses within an EDT acquire relate
+/// to the partition/iteration space:
+///
+///   - Unknown: Pattern could not be determined (conservative default)
+///   - Uniform: Predictable, aligned access (e.g., A[i] where i is loop IV)
+///   - Stencil: Multiple offset accesses (e.g., A[i-1], A[i], A[i+1])
+///   - Indexed: Indirect/irregular access (e.g., A[idx[i]])
+///
+/// These patterns drive partitioning decisions:
+///   - Uniform: Standard block partitioning
+///   - Stencil: Block partitioning with halo regions
+///   - Indexed: May require full-range access or versioning
 enum class AccessPattern { Unknown, Uniform, Stencil, Indexed };
 
 /// Stencil bounds information for halo-aware localization.
+///
+/// Captures the min/max offsets of a stencil pattern to determine halo
+/// region sizes. For example, a 1D 3-point stencil accessing A[i-1], A[i],
+/// A[i+1] would have minOffset=-1, maxOffset=1.
 struct StencilBounds {
   int64_t minOffset = 0, maxOffset = 0;
   bool isStencil = false, valid = false;

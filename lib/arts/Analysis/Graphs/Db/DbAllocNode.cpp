@@ -436,6 +436,7 @@ bool DbAllocNode::canProveNonOverlapping() const {
 }
 
 AcquirePatternSummary DbAllocNode::summarizeAcquirePatterns() const {
+  ARTS_DEBUG("summarizeAcquirePatterns() for alloc " << hierId);
   AcquirePatternSummary summary;
   bool hasBlockHint = false;
   bool hasIndirect = false;
@@ -443,6 +444,7 @@ AcquirePatternSummary DbAllocNode::summarizeAcquirePatterns() const {
   SmallVector<const DbAcquireNode *, 16> allAcquireNodes =
       collectAllAcquireNodes<const DbAcquireNode>(acquireNodes);
 
+  ARTS_DEBUG("  Analyzing " << allAcquireNodes.size() << " acquire nodes");
   for (const DbAcquireNode *acqNode : allAcquireNodes) {
     if (!acqNode)
       continue;
@@ -455,6 +457,11 @@ AcquirePatternSummary DbAllocNode::summarizeAcquirePatterns() const {
         hasBlockHint = true;
     }
     auto pattern = acqNode->getAccessPattern();
+    ARTS_DEBUG("  Acquire node pattern: "
+               << (pattern == AccessPattern::Uniform   ? "Uniform"
+                   : pattern == AccessPattern::Stencil ? "Stencil"
+                   : pattern == AccessPattern::Indexed ? "Indexed"
+                                                       : "Unknown"));
     switch (pattern) {
     case AccessPattern::Uniform:
       summary.hasUniform = true;
@@ -481,6 +488,9 @@ AcquirePatternSummary DbAllocNode::summarizeAcquirePatterns() const {
     summary.hasIndexed = true;
   }
 
+  ARTS_DEBUG("  Summary: hasUniform=" << summary.hasUniform
+                                      << ", hasStencil=" << summary.hasStencil
+                                      << ", hasIndexed=" << summary.hasIndexed);
   return summary;
 }
 

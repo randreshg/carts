@@ -603,6 +603,9 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
       case AccessPatternType::Strided:
         pattern = "strided";
         break;
+      case AccessPatternType::Stencil:
+        pattern = "stencil";
+        break;
       case AccessPatternType::Random:
         pattern = "random";
         break;

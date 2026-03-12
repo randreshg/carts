@@ -33,9 +33,8 @@ public:
 
   /// Return the access-chain dimension that depends on the partition offset.
   /// If requireLeading is true, only accept leading dynamic index.
-  static std::optional<unsigned> getPartitionOffsetDim(DbAcquireNode *node,
-                                                       Value offset,
-                                                       bool requireLeading);
+  static std::optional<unsigned>
+  getPartitionOffsetDim(DbAcquireNode *node, Value offset, bool requireLeading);
 
   /// Check whether this acquire has valid EDT and memory accesses for
   /// partitioning analysis.

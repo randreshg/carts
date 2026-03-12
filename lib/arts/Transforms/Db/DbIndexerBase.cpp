@@ -30,9 +30,10 @@ using namespace mlir::arts;
 /// Default virtual hook implementations
 ///===----------------------------------------------------------------------===///
 
-std::pair<bool, Value>
-DbIndexerBase::detectLinearizedStride(ValueRange indices, Type elementType,
-                                      OpBuilder &builder, Location loc) {
+std::pair<bool, Value> DbIndexerBase::detectLinearizedStride(ValueRange indices,
+                                                             Type elementType,
+                                                             OpBuilder &builder,
+                                                             Location loc) {
   /// Default: check if single index accesses a multi-dimensional MemRefType
   if (indices.size() != 1)
     return {false, Value()};
@@ -49,9 +50,9 @@ DbIndexerBase::detectLinearizedStride(ValueRange indices, Type elementType,
   return {true, stride};
 }
 
-bool DbIndexerBase::handleSubIndexOp(Operation *op, Value dbPtr,
-                                      Type elementType, ArtsCodegen &AC,
-                                      llvm::SetVector<Operation *> &opsToRemove) {
+bool DbIndexerBase::handleSubIndexOp(
+    Operation *op, Value dbPtr, Type elementType, ArtsCodegen &AC,
+    llvm::SetVector<Operation *> &opsToRemove) {
   auto subindex = dyn_cast<polygeist::SubIndexOp>(op);
   if (!subindex)
     return false;
@@ -61,8 +62,7 @@ bool DbIndexerBase::handleSubIndexOp(Operation *op, Value dbPtr,
 
   if (outerRank == 0) {
     /// Coarse mode: keep subindex semantics, just redirect the source.
-    auto dbRef =
-        AC.create<DbRefOp>(loc, elementType, dbPtr, ValueRange{zero});
+    auto dbRef = AC.create<DbRefOp>(loc, elementType, dbPtr, ValueRange{zero});
     subindex.getSourceMutable().assign(dbRef.getResult());
     ARTS_DEBUG("  Redirected subindex source to db_ref (coarse mode)");
     return true;
@@ -91,10 +91,10 @@ bool DbIndexerBase::handleEmptyIndices(
   return false;
 }
 
-LocalizedIndices
-DbIndexerBase::localizeForDbRefUser(ValueRange elementIndices,
-                                    Type newElementType, OpBuilder &builder,
-                                    Location loc) {
+LocalizedIndices DbIndexerBase::localizeForDbRefUser(ValueRange elementIndices,
+                                                     Type newElementType,
+                                                     OpBuilder &builder,
+                                                     Location loc) {
   /// Default: detect linearized access then call localize/localizeLinearized
   auto [isLinearized, stride] =
       detectLinearizedStride(elementIndices, newElementType, builder, loc);

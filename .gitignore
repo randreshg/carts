@@ -11,6 +11,7 @@ core.*
 .cursor/*
 !.cursor/rules/
 .claude/
+.codex/
 .vscode/
 .docs/
 .tasks/
@@ -56,3 +57,4 @@ __pycache__/
 
 # macOS Finder metadata
 .DS_Store
+.investigation/

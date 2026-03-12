@@ -20,6 +20,13 @@ using namespace mlir::arts;
 
 ///===----------------------------------------------------------------------===///
 /// H1: Partitioning Heuristics Evaluation
+///
+/// Organization: Heuristics are grouped by partition mode decision:
+///   - Coarse:       H1.C1-H1.C4
+///   - Block:        H1.B1-H1.B4
+///   - Stencil/ESD:  H1.S1-H1.S3
+///   - Element-Wise: H1.E1-H1.E2
+///   - Fallback:     User preference when no heuristic matches
 ///===----------------------------------------------------------------------===///
 
 PartitioningDecision
@@ -48,155 +55,245 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
         return false;
       });
 
-  /// H1.1: Read-Only Single-Node -> Coarse
-  if (isSingleNode) {
-    if (isReadOnly && !ctx.canBlock && !ctx.canElementWise) {
-      ARTS_DEBUG("H1.1 applied: Read-only single-node prefers coarse");
-      return PartitioningDecision::coarse(
-          ctx, "H1.1: All acquires read-only on single-node prefers coarse");
-    }
+  ///===--------------------------------------------------------------------===///
+  /// Coarse Partitioning Heuristics (H1.C*)
+  ///===--------------------------------------------------------------------===///
 
-    /// H1.1a: Any explicit coarse acquire on single-node -> Coarse.
-    /// A later whole-array consumer outweighs any earlier parallel producer on
-    /// a single node. Preserving coarse allocation avoids mixed-mode
-    /// block-localization for values that are fundamentally consumed as a
-    /// single read-mostly input.
-    if (ctx.anyCoarseAcquire()) {
-      ARTS_DEBUG("H1.1a applied: Single-node coarse acquire prefers coarse");
-      return PartitioningDecision::coarse(
-          ctx, "H1.1a: Single-node coarse acquire prefers coarse");
-    }
-
-    /// H1.1b: Read-only + all full-range block acquires -> Coarse
-    if (isReadOnly && ctx.allBlockFullRange) {
-      ARTS_DEBUG("H1.1b applied: Read-only full-range acquires prefer coarse");
-      return PartitioningDecision::coarse(
-          ctx,
-          "H1.1b: Read-only full-range acquires on single-node prefer coarse");
-    }
-  }
-
-  /// H1.1c: Read-only + full-range block acquires on multi-node -> Coarse.
-  /// When every read acquire spans all blocks, block partitioning gives no
-  /// locality benefit and can inflate dependency wiring.
-  if (!isSingleNode && isReadOnly && ctx.allBlockFullRange) {
-    ARTS_DEBUG("H1.1c applied: Read-only full-range acquires on multi-node "
-               "prefer coarse");
+  /// H1.C1: Read-only single-node without fine-grained support → Coarse
+  if (isSingleNode && isReadOnly && !ctx.canBlock && !ctx.canElementWise) {
+    ARTS_DEBUG("H1.C1 applied: Read-only single-node prefers coarse");
     return PartitioningDecision::coarse(
-        ctx,
-        "H1.1c: Read-only full-range acquires on multi-node prefer coarse");
+        ctx, "H1.C1: Read-only single-node without partitioning support");
   }
 
-  /// H1.2: Mixed Access (Block Writes + Indirect Reads) -> Block
+  /// H1.C2: Explicit coarse acquire on single-node → Coarse
+  /// Rationale: A later whole-array consumer outweighs any earlier parallel
+  /// producer on a single node. Preserving coarse allocation avoids mixed-mode
+  /// block-localization for values fundamentally consumed as single inputs.
+  /// Exception: Defer to H1.B3 for stencil patterns (e.g., Jacobi) where block
+  /// partitioning enables efficient halo exchange despite coarse output writes.
+  ARTS_DEBUG("H1.C2 check: isSingleNode="
+             << isSingleNode << ", anyCoarseAcquire=" << ctx.anyCoarseAcquire()
+             << ", hasStencil=" << patterns.hasStencil);
+  if (isSingleNode && ctx.anyCoarseAcquire() && !patterns.hasStencil) {
+    ARTS_DEBUG("H1.C2 applied: Single-node coarse acquire prefers coarse");
+    return PartitioningDecision::coarse(
+        ctx, "H1.C2: Single-node explicit coarse acquire prefers coarse");
+  } else if (isSingleNode && ctx.anyCoarseAcquire() && patterns.hasStencil) {
+    ARTS_DEBUG("H1.C2 skipped: Stencil pattern detected, deferring to H1.B3");
+  }
+
+  /// H1.C3: Read-only full-range block acquires → Coarse
+  /// Rationale: When every read acquire spans all blocks, block partitioning
+  /// gives no locality benefit and can inflate dependency wiring.
+  /// Exception: When block partitioning IS structurally possible (canBlock)
+  /// and stencil patterns are detected, block partitioning still benefits
+  /// from NUMA-distributed allocation and parallel DB creation — even with
+  /// full-range acquires. This is the specfem3d case: stencil on i-dim,
+  /// partition on k-dim.
+  if (isReadOnly && ctx.allBlockFullRange && !ctx.canBlock) {
+    ARTS_DEBUG("H1.C3 applied: Read-only full-range acquires prefer coarse");
+    return PartitioningDecision::coarse(
+        ctx, isSingleNode
+                 ? "H1.C3: Read-only full-range on single-node prefers coarse"
+                 : "H1.C3: Read-only full-range on multi-node prefers coarse");
+  } else if (isReadOnly && ctx.allBlockFullRange && ctx.canBlock) {
+    ARTS_DEBUG("H1.C3 skipped: canBlock=true, block allocation distributes "
+               "across NUMA nodes even with full-range acquires");
+  }
+
+  /// H1.C4: Read-only stencil on single-node → Coarse (when stencil is on
+  /// partition dim)
+  /// Rationale: Avoid halo exchange overhead on single-node where shared
+  /// memory access is more efficient than block partitioning.
+  /// Exception: When block partitioning is already viable (canBlock), the
+  /// stencil is on a non-partition dimension (e.g., specfem3d: stencil on
+  /// i-dim, partition on k-dim). In that case, block partitioning is safe
+  /// and avoids the NUMA penalty of a single coarse allocation.
+  if (patterns.hasStencil && isSingleNode && isReadOnly && !ctx.canBlock) {
+    ARTS_DEBUG("H1.C4 applied: Read-only stencil on single-node -> coarse");
+    return PartitioningDecision::coarse(
+        ctx, "H1.C4: Read-only stencil on single-node prefers coarse");
+  } else if (patterns.hasStencil && isSingleNode && isReadOnly &&
+             ctx.canBlock) {
+    ARTS_DEBUG("H1.C4 skipped: stencil on non-partition dim, block is safe");
+  }
+
+  /// H1.C5: Non-uniform access without partitioning support → Coarse
+  if (!ctx.isUniformAccess && !ctx.canElementWise && !ctx.canBlock) {
+    ARTS_DEBUG("H1.C5 applied: Non-uniform access prefers coarse");
+    return PartitioningDecision::coarse(
+        ctx, "H1.C5: Non-uniform access without partitioning support");
+  }
+
+  ///===--------------------------------------------------------------------===///
+  /// Block Partitioning Heuristics (H1.B*)
+  ///===--------------------------------------------------------------------===///
+
+  /// H1.B1: Mixed access (block writes + indirect reads) → Block
   if (ctx.canBlock && ctx.hasIndirectRead && !ctx.hasIndirectWrite &&
       ctx.hasDirectAccess) {
-    ARTS_DEBUG("H1.2 applied: Mixed access pattern");
+    ARTS_DEBUG("H1.B1 applied: Mixed block/indirect access");
     return PartitioningDecision::block(
-        ctx, "H1.2: Mixed access (block writes + full-range indirect reads)");
+        ctx, "H1.B1: Mixed access (block writes + full-range indirect reads)");
   }
 
-  /// H1.2b: Mixed Access (Direct + Indirect Writes) -> Block
+  /// H1.B2: Mixed direct + indirect writes → Block
   if (ctx.canBlock && ctx.hasIndirectWrite && ctx.hasDirectAccess) {
-    ARTS_DEBUG("H1.2b applied: Mixed direct+indirect writes");
+    ARTS_DEBUG("H1.B2 applied: Mixed direct+indirect writes");
     return PartitioningDecision::block(
-        ctx,
-        "H1.2b: Mixed direct+indirect writes prefers block with full-range "
-        "indirect acquires");
+        ctx, "H1.B2: Mixed direct+indirect writes with full-range acquires");
   }
 
-  /// H1.3: Stencil/Indexed Patterns
-  if (patterns.hasStencil) {
-    if (hasExplicitFineGrained) {
-      unsigned outerRank = ctx.minPinnedDimCount();
-      outerRank = outerRank > 0 ? outerRank : 1;
-      ARTS_DEBUG("H1.3 applied: Stencil with explicit dependences prefers "
-                 "element-wise");
-      return PartitioningDecision::elementWise(
-          ctx, outerRank,
-          "H1.3: Stencil with explicit dependences prefers element-wise");
-    }
-    if (isSingleNode && isReadOnly) {
-      ARTS_DEBUG(
-          "H1.3 applied: Read-only stencil on single-node prefers coarse");
-      return PartitioningDecision::coarse(
-          ctx, "H1.3: Read-only stencil on single-node prefers coarse");
-    }
+  /// H1.B3: Double-buffer stencil (Jacobi-style) → Block
+  /// Pattern: Stencil reads (mode=in) + uniform writes (mode=out)
+  /// Rationale: Write phases don't need halo exchange, only read phases do.
+  /// Enables block partitioning for writes while preserving locality for reads.
+  ARTS_DEBUG("H1.B3 check: hasStencil=" << patterns.hasStencil
+                                        << ", canBlock=" << ctx.canBlock);
+  if (patterns.hasStencil && ctx.canBlock) {
+    bool hasStencilReads = llvm::any_of(ctx.acquires, [](const AcquireInfo &a) {
+      return (a.accessMode == ArtsMode::in) &&
+             (a.accessPattern == AccessPattern::Stencil);
+    });
+    bool hasWriteAcquires =
+        llvm::any_of(ctx.acquires, [](const AcquireInfo &a) {
+          return (a.accessMode == ArtsMode::out ||
+                  a.accessMode == ArtsMode::inout);
+        });
+    bool allWritesUniform =
+        llvm::all_of(ctx.acquires, [](const AcquireInfo &a) {
+          bool isWrite = (a.accessMode == ArtsMode::out ||
+                          a.accessMode == ArtsMode::inout);
+          return !isWrite || (a.accessPattern == AccessPattern::Uniform ||
+                              a.accessPattern == AccessPattern::Unknown);
+        });
 
+    ARTS_DEBUG("  hasStencilReads="
+               << hasStencilReads << ", hasWriteAcquires=" << hasWriteAcquires
+               << ", allWritesUniform=" << allWritesUniform);
+
+    if (hasStencilReads && hasWriteAcquires && allWritesUniform) {
+      ARTS_DEBUG("H1.B3 applied: Double-buffer stencil -> block");
+      return PartitioningDecision::block(
+          ctx, "H1.B3: Double-buffer stencil (Jacobi) with uniform writes");
+    } else if (hasStencilReads && isReadOnly && ctx.allBlockFullRange) {
+      /// H1.B3b: Read-only stencil with full-range acquires → Block
+      /// Pattern: Stencil on non-partition dimension (e.g., specfem3d: stencil
+      /// on i-dim, partition on k-dim). Block partitioning is structurally
+      /// possible but acquires need full-range because stencil detection can't
+      /// prove the partition dim is independent of the stencil dim.
+      /// Rationale: Block allocation distributes memory across NUMA nodes and
+      /// enables parallel DB creation. Full-range acquires are correct (each
+      /// EDT reads all blocks) — the benefit is in allocation placement, not
+      /// access restriction.
+      ARTS_DEBUG(
+          "H1.B3b applied: RO stencil with full-range -> block for NUMA");
+      return PartitioningDecision::block(
+          ctx, "H1.B3b: Read-only cross-dim stencil prefers block for NUMA");
+    } else {
+      ARTS_DEBUG("H1.B3 not matched - conditions not met");
+    }
+  }
+
+  /// H1.B4: Indexed access with block support → Block
+  if (patterns.hasIndexed && ctx.canBlock) {
+    ARTS_DEBUG("H1.B4 applied: Indexed access with block support");
+    return PartitioningDecision::block(
+        ctx, "H1.B4: Indexed access prefers block when supported");
+  }
+
+  /// H1.B5: Uniform direct access → Block
+  /// Rationale: Standard data-parallel pattern with direct 1:1 index mapping.
+  bool blockSizeFits = !ctx.totalElements || !ctx.blockSize ||
+                       *ctx.totalElements >= *ctx.blockSize;
+  if (ctx.canBlock && ctx.hasDirectAccess && !ctx.hasIndirectAccess &&
+      patterns.hasUniform && !ctx.elementTypeIsMemRef && blockSizeFits) {
+    ARTS_DEBUG("H1.B5 applied: Uniform direct access prefers block");
+    return PartitioningDecision::block(
+        ctx, "H1.B5: Uniform direct access prefers block");
+  }
+
+  /// H1.B6: Multi-node with block support → Block
+  /// Rationale: Block partitioning reduces network communication overhead
+  /// compared to fine-grained partitioning in distributed environments.
+  if (machine && machine->isDistributed()) {
+    bool canDoBlock = ctx.canBlock || ctx.anyCanBlock();
+    if (canDoBlock) {
+      ARTS_DEBUG("H1.B6 applied: Multi-node prefers block");
+      return PartitioningDecision::block(
+          ctx, "H1.B6: Multi-node prefers block for network efficiency");
+    }
+  }
+
+  ///===--------------------------------------------------------------------===///
+  /// Stencil/ESD Partitioning Heuristics (H1.S*)
+  ///===--------------------------------------------------------------------===///
+
+  if (patterns.hasStencil) {
+    /// H1.S1: Stencil unsupported for block → Element-wise fallback
     if (!ctx.canBlock || ctx.hasIndirectAccess) {
-      ARTS_DEBUG("H1.3 applied: Stencil but block unsupported; fallback");
+      ARTS_DEBUG(
+          "H1.S1 applied: Stencil unsupported for block -> element-wise");
       return PartitioningDecision::elementWise(
           ctx, 1,
-          "H1.3: Stencil detected but block unsupported/indirect; fallback to "
-          "element-wise");
+          "H1.S1: Stencil unsupported for block, fallback to element-wise");
     }
 
-    ARTS_DEBUG("H1.3 applied: Stencil uses ESD mode");
+    /// H1.S2: Standard in-place stencil → ESD mode
+    /// Default for stencil patterns that don't match other specializations.
+    ARTS_DEBUG("H1.S2 applied: Standard stencil -> ESD mode");
     return PartitioningDecision::stencil(
         ctx, patterns.hasUniform
-                 ? "H1.3: Mixed (uniform+stencil) uses Stencil mode - block "
-                   "handles both"
-                 : "H1.3: Pure stencil uses ESD mode");
+                 ? "H1.S2: Mixed (uniform+stencil) uses Stencil mode"
+                 : "H1.S2: Pure stencil uses ESD mode");
   }
 
-  if (patterns.hasIndexed) {
-    if (ctx.canBlock) {
-      ARTS_DEBUG("H1.3 applied: Indexed access prefers block when supported");
-      return PartitioningDecision::block(
-          ctx, "H1.3: Indexed access prefers block when supported");
-    }
+  ///===--------------------------------------------------------------------===///
+  /// Element-Wise Partitioning Heuristics (H1.E*)
+  ///===--------------------------------------------------------------------===///
 
+  /// H1.E1: Explicit fine-grained partition hints → Element-wise
+  if (hasExplicitFineGrained) {
+    unsigned outerRank = ctx.minPinnedDimCount();
+    outerRank = outerRank > 0 ? outerRank : 1;
+    ARTS_DEBUG("H1.E1 applied: Explicit fine-grained hints -> element-wise");
+    return PartitioningDecision::elementWise(
+        ctx, outerRank, "H1.E1: Explicit fine-grained partition hints");
+  }
+
+  /// H1.E2: Indexed access without block support → Element-wise
+  if (patterns.hasIndexed) {
     unsigned minDim = ctx.minPinnedDimCount();
     unsigned maxDim = ctx.maxPinnedDimCount();
     unsigned outerRank = minDim > 0 ? minDim : 1;
 
     if (minDim != maxDim && minDim > 0 && maxDim > 0) {
-      ARTS_DEBUG("H1.3: Non-uniform partition indices (min="
+      ARTS_DEBUG("H1.E2: Non-uniform partition indices (min="
                  << minDim << ", max=" << maxDim << "), using min");
     }
-    ARTS_DEBUG("H1.3 applied: Indexed access requires element-wise (outerRank="
+    ARTS_DEBUG("H1.E2 applied: Indexed access requires element-wise (outerRank="
                << outerRank << ")");
     return PartitioningDecision::elementWise(
-        ctx, outerRank, "H1.3: Indexed access requires element-wise");
+        ctx, outerRank, "H1.E2: Indexed access requires element-wise");
   }
 
-  /// H1.4: Uniform direct access -> Block
-  bool blockSizeFits = !ctx.totalElements || !ctx.blockSize ||
-                       *ctx.totalElements >= *ctx.blockSize;
-  if (ctx.canBlock && ctx.hasDirectAccess && !ctx.hasIndirectAccess &&
-      patterns.hasUniform && !ctx.elementTypeIsMemRef && blockSizeFits) {
-    ARTS_DEBUG("H1.4 applied: Uniform direct access prefers block");
-    return PartitioningDecision::block(
-        ctx, "H1.4: Uniform direct access prefers block");
-  }
-
-  /// H1.5: Multi-Node -> Fine-Grained for Network Efficiency
-  if ((machine && machine->isDistributed())) {
-    bool canDoBlock = ctx.canBlock || ctx.anyCanBlock();
+  /// H1.E3: Multi-node with element-wise support → Element-wise
+  if (machine && machine->isDistributed()) {
     bool canDoElementWise = ctx.canElementWise || ctx.anyCanElementWise();
-
-    if (canDoBlock) {
-      ARTS_DEBUG("H1.5 applied: Multi-node prefers block");
-      return PartitioningDecision::block(
-          ctx, "H1.5: Multi-node prefers block for network efficiency");
-    }
-
     if (canDoElementWise) {
-      ARTS_DEBUG("H1.5 applied: Multi-node prefers fine-grained");
+      ARTS_DEBUG("H1.E3 applied: Multi-node prefers fine-grained");
       unsigned outerRank = ctx.minPinnedDimCount();
       outerRank = outerRank > 0 ? outerRank : 1;
       return PartitioningDecision::elementWise(
-          ctx, outerRank, "H1.5: Multi-node prefers fine-grained");
+          ctx, outerRank, "H1.E3: Multi-node fallback to fine-grained");
     }
   }
 
-  /// H1.6: Non-Uniform Access -> Coarse
-  if (!ctx.isUniformAccess && !ctx.canElementWise && !ctx.canBlock) {
-    ARTS_DEBUG("H1.6 applied: Non-uniform access prefers coarse");
-    return PartitioningDecision::coarse(
-        ctx, "H1.6: Non-uniform access prefers coarse");
-  }
+  ///===--------------------------------------------------------------------===///
+  /// Fallback: User Preference
+  ///===--------------------------------------------------------------------===///
 
-  /// Fallback: Respect user partition-fallback preference
   if (fallback == PartitionFallback::FineGrained) {
     ARTS_DEBUG("Fallback applied: No heuristic matched, using fine-grained "
                "(user preference)");

@@ -38,6 +38,7 @@ enum class DimensionSourceType;
 enum class AccessPatternType {
   Sequential,
   Strided,
+  Stencil,
   GatherScatter,
   Random,
   Unknown

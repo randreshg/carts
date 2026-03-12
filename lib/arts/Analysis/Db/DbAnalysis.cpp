@@ -55,40 +55,6 @@ static bool isTiling2DTaskAcquire(DbAcquireOp acquire) {
   return kind && *kind == EdtDistributionKind::tiling_2d;
 }
 
-static Value pickRepresentativePartitionOffset(ArrayRef<Value> offsets,
-                                               unsigned *outIdx = nullptr) {
-  if (outIdx)
-    *outIdx = 0;
-  for (unsigned i = 0; i < offsets.size(); ++i) {
-    Value off = offsets[i];
-    if (!off)
-      continue;
-    int64_t c = 0;
-    if (!ValueUtils::getConstantIndex(ValueUtils::stripNumericCasts(off), c)) {
-      if (outIdx)
-        *outIdx = i;
-      return off;
-    }
-  }
-  for (unsigned i = 0; i < offsets.size(); ++i) {
-    if (offsets[i]) {
-      if (outIdx)
-        *outIdx = i;
-      return offsets[i];
-    }
-  }
-  return Value();
-}
-
-static Value pickRepresentativePartitionSize(ArrayRef<Value> sizes,
-                                             unsigned idx) {
-  if (sizes.empty())
-    return Value();
-  if (idx < sizes.size() && sizes[idx])
-    return sizes[idx];
-  return sizes.front();
-}
-
 } // namespace
 
 DbAnalysis::DbAnalysis(ArtsAnalysisManager &AM) : ArtsAnalysis(AM) {
@@ -431,10 +397,10 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
         info.partitionOffsets.push_back(offset);
         info.partitionSizes.push_back(size);
         unsigned offsetIdx = 0;
-        Value repOffset = pickRepresentativePartitionOffset(
+        Value repOffset = DbUtils::pickRepresentativePartitionOffset(
             info.partitionOffsets, &offsetIdx);
         Value repSize =
-            pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
+            DbUtils::pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
         if (Value refined = refineSizeFromMinInBlock(repOffset, repSize)) {
           if (offsetIdx < info.partitionSizes.size())
             info.partitionSizes[offsetIdx] = refined;
@@ -487,9 +453,9 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
 
       unsigned offsetIdx = 0;
       Value repOffset =
-          pickRepresentativePartitionOffset(info.partitionOffsets, &offsetIdx);
+          DbUtils::pickRepresentativePartitionOffset(info.partitionOffsets, &offsetIdx);
       Value repSize =
-          pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
+          DbUtils::pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
       if (Value refined = refineSizeFromMinInBlock(repOffset, repSize)) {
         if (offsetIdx < info.partitionSizes.size())
           info.partitionSizes[offsetIdx] = refined;
@@ -504,8 +470,8 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
           int64_t hintConst = 0;
           int64_t loopConst = 0;
           Value hintSize =
-              pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
-          Value hintOff = pickRepresentativePartitionOffset(
+              DbUtils::pickRepresentativePartitionSize(info.partitionSizes, offsetIdx);
+          Value hintOff = DbUtils::pickRepresentativePartitionOffset(
               info.partitionOffsets, &offsetIdx);
           bool hintIsConst =
               hintSize && ValueUtils::getConstantIndex(hintSize, hintConst);
@@ -652,20 +618,14 @@ bool DbAnalysis::hasCrossElementSelfReadInLoop(DbAcquireOp acquire,
   AccessBoundsResult bounds =
       analyzeAccessBoundsFromIndices(selfReadAccesses, loopIV, loopIV);
   const bool hasCrossElementSelfRead =
-      bounds.valid && (bounds.isStencil || bounds.minOffset != 0 ||
-                       bounds.maxOffset != 0);
+      bounds.valid &&
+      (bounds.isStencil || bounds.minOffset != 0 || bounds.maxOffset != 0);
 
-  ARTS_DEBUG("DbAnalysis cross-element self-read: valid=" << bounds.valid
-                                                          << " min="
-                                                          << bounds.minOffset
-                                                          << " max="
-                                                          << bounds.maxOffset
-                                                          << " stencil="
-                                                          << bounds.isStencil
-                                                          << " variable="
-                                                          << bounds.hasVariableOffset
-                                                          << " -> "
-                                                          << hasCrossElementSelfRead);
+  ARTS_DEBUG("DbAnalysis cross-element self-read: valid="
+             << bounds.valid << " min=" << bounds.minOffset
+             << " max=" << bounds.maxOffset << " stencil=" << bounds.isStencil
+             << " variable=" << bounds.hasVariableOffset << " -> "
+             << hasCrossElementSelfRead);
   return hasCrossElementSelfRead;
 }
 
@@ -685,11 +645,25 @@ DbAnalysis::getAcquireAccessPattern(DbAcquireOp acquire) {
   return node->getAccessPattern();
 }
 
+/// Determine the access pattern for a DB allocation.
+///
+/// This function combines:
+///   1. Runtime analysis via DbGraph acquire pattern summarization
+///   2. Static metadata from MemrefAnalyzer (dominantAccessPattern)
+///   3. Explicit operation attributes (if already annotated)
+///
+/// Priority order:
+///   - Runtime analysis (most accurate, based on actual IR access patterns)
+///   - Static metadata (from preprocessing/profiling)
+///   - Existing attributes (from previous passes)
+///   - Default to unknown if no information is available
 std::optional<DbAccessPattern>
 DbAnalysis::getAllocAccessPattern(DbAllocOp alloc) {
   if (!alloc)
     return std::nullopt;
 
+  /// Check for existing operation attribute first (may have been set by
+  /// ArtsForOptimization pass or other earlier analysis).
   std::optional<DbAccessPattern> attrPattern =
       getDbAccessPattern(alloc.getOperation());
 
@@ -702,6 +676,9 @@ DbAnalysis::getAllocAccessPattern(DbAllocOp alloc) {
   if (!node)
     return attrPattern;
 
+  /// Runtime analysis: check acquire-level access patterns across all
+  /// acquires of this allocation. This is the most accurate source as it's
+  /// based on actual IR access patterns.
   AcquirePatternSummary summary = node->summarizeAcquirePatterns();
   if (summary.hasStencil)
     return DbAccessPattern::stencil;
@@ -709,7 +686,34 @@ DbAnalysis::getAllocAccessPattern(DbAllocOp alloc) {
     return DbAccessPattern::indexed;
   if (summary.hasUniform)
     return DbAccessPattern::uniform;
+
+  /// Static metadata fallback: check MemrefMetadata dominantAccessPattern.
+  /// This may be set by MemrefAnalyzer during preprocessing and provides
+  /// valuable hints when runtime analysis is inconclusive.
+  if (node->dominantAccessPattern) {
+    AccessPatternType metaPattern = *node->dominantAccessPattern;
+
+    /// Map MemrefMetadata AccessPatternType to DbAccessPattern.
+    /// Note the semantic differences:
+    ///   - AccessPatternType::Stencil → DbAccessPattern::stencil
+    ///     (multiple offset accesses like A[i-1], A[i], A[i+1])
+    ///   - AccessPatternType::Sequential/Strided → DbAccessPattern::uniform
+    ///     (predictable, partitionable patterns)
+    ///   - AccessPatternType::GatherScatter/Random → DbAccessPattern::indexed
+    ///     (indirect/irregular access patterns)
+    if (metaPattern == AccessPatternType::Stencil)
+      return DbAccessPattern::stencil;
+    if (metaPattern == AccessPatternType::Sequential ||
+        metaPattern == AccessPatternType::Strided)
+      return DbAccessPattern::uniform;
+    if (metaPattern == AccessPatternType::GatherScatter ||
+        metaPattern == AccessPatternType::Random)
+      return DbAccessPattern::indexed;
+  }
+
+  /// Fallback to existing attribute if metadata didn't provide a pattern.
   if (attrPattern)
     return attrPattern;
+
   return DbAccessPattern::unknown;
 }

@@ -272,9 +272,9 @@ struct DeadCodeEliminationPass
         if (i < deps.size()) {
           if (auto acq = deps[i].getDefiningOp<DbAcquireOp>();
               acq && acq.getPreserveDependency()) {
-          ARTS_DEBUG("Keeping control-only dependency " << i
-                                                        << " due to explicit "
-                                                           "dependency edge");
+            ARTS_DEBUG("Keeping control-only dependency " << i
+                                                          << " due to explicit "
+                                                             "dependency edge");
             continue;
           }
         }

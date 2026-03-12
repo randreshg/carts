@@ -140,8 +140,7 @@ public:
   const IdRegistry &getIdRegistry() const { return idRegistry; }
 
   /// Direct access to the metadata map (for MetadataIO and MetadataAttacher)
-  llvm::DenseMap<Operation *, std::unique_ptr<ArtsMetadata>> &
-  getMetadataMap() {
+  llvm::DenseMap<Operation *, std::unique_ptr<ArtsMetadata>> &getMetadataMap() {
     return metadataMap;
   }
   const llvm::DenseMap<Operation *, std::unique_ptr<ArtsMetadata>> &
