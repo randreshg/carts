@@ -1,10 +1,10 @@
 // RUN: %carts-compile %S/../../external/carts-benchmarks/polybench/gemm/gemm.mlir --O3 --arts-config %S/../../docker/arts-docker-2node.cfg --distributed-db --stop-at=arts-to-llvm | %FileCheck %s --check-prefix=PAR
 // RUN: %carts-compile %S/../../external/carts-benchmarks/polybench/gemm/gemm.mlir --O3 --arts-config %S/../../docker/arts-docker-2node.cfg --distributed-db --stop-at=pre-lowering | %FileCheck %s --check-prefix=DEPS
 
-// PAR-DAG: func.func @initPerNode(
+// PAR-DAG: func.func @init_per_node(
 // PAR-DAG: call @distributed_db_init(
 // PAR-DAG: func.func private @distributed_db_init(
-// PAR-DAG: func.func @initPerWorker(
+// PAR-DAG: func.func @init_per_worker(
 // PAR-DAG: call @distributed_db_init_worker(
 // PAR-DAG: func.func private @distributed_db_init_worker(
 // PAR-DAG: func.func private @__carts_dist_alloc_{{[0-9]+}}_reserve_init(

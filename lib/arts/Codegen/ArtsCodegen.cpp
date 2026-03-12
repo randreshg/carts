@@ -290,10 +290,10 @@ func::FuncOp ArtsCodegen::insertInitPerWorker(Location loc,
   setInsertionPoint(module);
 
   func::FuncOp initPerWorkerFn =
-      module.lookupSymbol<func::FuncOp>("initPerWorker");
+      module.lookupSymbol<func::FuncOp>("init_per_worker");
   if (!initPerWorkerFn) {
     initPerWorkerFn =
-        create<func::FuncOp>(loc, "initPerWorker", InitPerWorkerFn);
+        create<func::FuncOp>(loc, "init_per_worker", InitPerWorkerFn);
     initPerWorkerFn.setPublic();
     initPerWorkerFn.addEntryBlock();
     getBuilder().setInsertionPointToStart(&initPerWorkerFn.getBody().front());
@@ -328,10 +328,12 @@ func::FuncOp ArtsCodegen::insertInitPerNode(Location loc,
   OpBuilder::InsertionGuard IG(getBuilder());
   setInsertionPoint(module);
 
-  func::FuncOp initPerNodeFn = module.lookupSymbol<func::FuncOp>("initPerNode");
+  func::FuncOp initPerNodeFn =
+      module.lookupSymbol<func::FuncOp>("init_per_node");
   if (!initPerNodeFn) {
     /// Create the function using the InitPerNodeFn type.
-    initPerNodeFn = create<func::FuncOp>(loc, "initPerNode", InitPerNodeFn);
+    initPerNodeFn =
+        create<func::FuncOp>(loc, "init_per_node", InitPerNodeFn);
     initPerNodeFn.setPublic();
     initPerNodeFn.addEntryBlock();
     getBuilder().setInsertionPointToStart(&initPerNodeFn.getBody().front());
