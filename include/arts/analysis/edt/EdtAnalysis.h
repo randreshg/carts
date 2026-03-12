@@ -24,6 +24,9 @@
 namespace mlir {
 namespace arts {
 
+class LoopAnalysis;
+class MetadataManager;
+
 ///==========================================================================///
 /// EdtAnalysis: per-EDT summaries and pairwise affinity metrics
 ///==========================================================================///
@@ -59,6 +62,14 @@ public:
 
   /// Invalidate internal caches
   void invalidate() override;
+
+  /// Convenience: get EDT node by op (derives parent func internally).
+  EdtNode *getEdtNode(EdtOp op);
+
+  /// Expose sub-analyses so that EdtNode / EdtGraph can reach them
+  /// without storing a raw AnalysisManager pointer.
+  MetadataManager &getMetadataManager();
+  LoopAnalysis &getLoopAnalysis();
 
   using ArtsAnalysis::getAnalysisManager;
 

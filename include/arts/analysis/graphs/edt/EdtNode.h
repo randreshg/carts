@@ -22,14 +22,14 @@ namespace arts {
 class LoopNode;
 class LoopAnalysis;
 class MetadataManager;
-class AnalysisManager;
+class EdtAnalysis;
 
 ////===----------------------------------------------------------------------===////
 /// EdtNode - represents an EDT operation
 ////===----------------------------------------------------------------------===////
 class EdtNode : public NodeBase {
 public:
-  EdtNode(EdtOp op, AnalysisManager *AM);
+  EdtNode(EdtOp op, EdtAnalysis *EA);
 
   StringRef getHierId() const override { return hierId; }
   void setHierId(std::string id) { hierId = std::move(id); }
@@ -75,7 +75,7 @@ public:
 
 private:
   EdtOp edtOp;
-  AnalysisManager *analysisManager = nullptr;
+  EdtAnalysis *edtAnalysis = nullptr;
   std::string hierId;
   EdtInfo info;
 

@@ -737,3 +737,17 @@ DbAnalysis::getAllocAccessPattern(DbAllocOp alloc) {
 
   return DbAccessPattern::unknown;
 }
+
+DbAllocNode *DbAnalysis::getDbAllocNode(DbAllocOp alloc) {
+  auto func = alloc->getParentOfType<func::FuncOp>();
+  if (!func)
+    return nullptr;
+  return getOrCreateGraph(func).getDbAllocNode(alloc);
+}
+
+DbAcquireNode *DbAnalysis::getDbAcquireNode(DbAcquireOp acquire) {
+  auto func = acquire->getParentOfType<func::FuncOp>();
+  if (!func)
+    return nullptr;
+  return getOrCreateGraph(func).getDbAcquireNode(acquire);
+}

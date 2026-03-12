@@ -4,7 +4,7 @@
 ///==========================================================================///
 
 #include "arts/analysis/graphs/edt/EdtNode.h"
-#include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/edt/EdtAnalysis.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/analysis/loop/LoopNode.h"
 #include "arts/analysis/metadata/MetadataManager.h"
@@ -16,11 +16,11 @@ using namespace mlir::arts;
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(edt_node);
 
-EdtNode::EdtNode(EdtOp op, AnalysisManager *AM)
-    : NodeBase(), edtOp(op), analysisManager(AM) {
+EdtNode::EdtNode(EdtOp op, EdtAnalysis *EA)
+    : NodeBase(), edtOp(op), edtAnalysis(EA) {
   assert(edtOp.getOperation() && "Operation must always be available");
-  if (AM)
-    AM->getMetadataManager().getIdRegistry().getOrCreate(edtOp);
+  if (EA)
+    EA->getMetadataManager().getIdRegistry().getOrCreate(edtOp);
 }
 
 void EdtNode::print(llvm::raw_ostream &os) const {
@@ -28,11 +28,11 @@ void EdtNode::print(llvm::raw_ostream &os) const {
 }
 
 bool EdtNode::hasParallelLoopMetadata() const {
-  if (!edtOp || !analysisManager)
+  if (!edtOp || !edtAnalysis)
     return false;
 
-  LoopAnalysis &loopAnalysis = analysisManager->getLoopAnalysis();
-  MetadataManager &metadataManager = analysisManager->getMetadataManager();
+  LoopAnalysis &loopAnalysis = edtAnalysis->getLoopAnalysis();
+  MetadataManager &metadataManager = edtAnalysis->getMetadataManager();
 
   /// EdtOp is a lightweight wrapper around Operation*; take a mutable copy
   /// so we can call non-const MLIR methods from this const member function.

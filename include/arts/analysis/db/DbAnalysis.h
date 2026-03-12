@@ -21,6 +21,8 @@ namespace mlir {
 namespace arts {
 
 class DbGraph;
+class DbAllocNode;
+class DbAcquireNode;
 class DbAliasAnalysis;
 class LoopAnalysis;
 struct DbAcquirePartitionFacts;
@@ -82,6 +84,12 @@ public:
   /// Query DB access patterns through the DB graph interface.
   std::optional<AccessPattern> getAcquireAccessPattern(DbAcquireOp acquire);
   std::optional<DbAccessPattern> getAllocAccessPattern(DbAllocOp alloc);
+
+  /// Convenience: get DB alloc node by op (derives parent func internally).
+  DbAllocNode *getDbAllocNode(DbAllocOp alloc);
+  /// Convenience: get DB acquire node by op (derives parent func internally).
+  DbAcquireNode *getDbAcquireNode(DbAcquireOp acquire);
+
   using ArtsAnalysis::getAnalysisManager;
 
 private:
