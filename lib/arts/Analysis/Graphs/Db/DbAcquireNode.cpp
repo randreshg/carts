@@ -444,8 +444,8 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
   bool isFineGrainedHint =
       acqOp.getPartitionMode() &&
       *acqOp.getPartitionMode() == PartitionMode::fine_grained;
-  if (!stencilBounds && edtUserOp && acqOp.getMode() == ArtsMode::in &&
-      !isFineGrainedHint && acqOp.getPartitionIndices().empty()) {
+  if (!stencilBounds && edtUserOp && !isFineGrainedHint &&
+      acqOp.getPartitionIndices().empty()) {
     DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
     const_cast<DbAcquireNode *>(this)->collectAccessOperations(dbRefToMemOps);
 
@@ -520,6 +520,61 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
           StencilBounds::create(globalMinOffset, globalMaxOffset,
                                 /*isStencil=*/true, /*valid=*/true));
       accessPattern = AccessPattern::Stencil;
+      return *accessPattern;
+    }
+
+    SmallVector<AccessIndexInfo, 16> accesses;
+    for (auto &[dbRef, memOps] : dbRefToMemOps) {
+      for (Operation *memOp : memOps) {
+        SmallVector<Value> indexChain =
+            DbUtils::collectFullIndexChain(dbRef, memOp);
+        if (indexChain.empty())
+          continue;
+        AccessIndexInfo info;
+        info.dbRefPrefix = dbRef.getIndices().size();
+        info.indexChain.append(indexChain.begin(), indexChain.end());
+        accesses.push_back(std::move(info));
+      }
+    }
+
+    bool indexedFound = false;
+    if (edtUser && !accesses.empty()) {
+      edtUser.walk([&](scf::ForOp nestedLoop) {
+        if (stencilFound)
+          return;
+        Value nestedIV = nestedLoop.getInductionVar();
+        if (!nestedIV)
+          return;
+        AccessBoundsResult bounds =
+            analyzeAccessBoundsFromIndices(accesses, nestedIV, nestedIV);
+        if (!bounds.valid) {
+          indexedFound |= bounds.hasVariableOffset;
+          return;
+        }
+        if (bounds.isStencil || bounds.minOffset != 0 || bounds.maxOffset != 0) {
+          ARTS_DEBUG("  Nested-loop stencil detected: min="
+                     << bounds.minOffset << " max=" << bounds.maxOffset
+                     << " stencil=" << bounds.isStencil);
+          globalMinOffset = bounds.minOffset;
+          globalMaxOffset = bounds.maxOffset;
+          stencilFound = true;
+        }
+      });
+    }
+
+    if (stencilFound) {
+      ARTS_DEBUG("  -> Returning Stencil (nested-loop access analysis)");
+      ARTS_DEBUG("  -> Storing stencil bounds: min="
+                 << globalMinOffset << " max=" << globalMaxOffset);
+      const_cast<DbAcquireNode *>(this)->setStencilBoundsInternal(
+          StencilBounds::create(globalMinOffset, globalMaxOffset,
+                                /*isStencil=*/true, /*valid=*/true));
+      accessPattern = AccessPattern::Stencil;
+      return *accessPattern;
+    }
+    if (indexedFound) {
+      ARTS_DEBUG("  -> Returning Indexed (nested-loop access analysis)");
+      accessPattern = AccessPattern::Indexed;
       return *accessPattern;
     }
   }

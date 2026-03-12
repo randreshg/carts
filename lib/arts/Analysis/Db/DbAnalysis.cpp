@@ -613,9 +613,34 @@ bool DbAnalysis::hasCrossElementSelfReadInLoop(DbAcquireOp acquire,
 
   AccessBoundsResult bounds =
       analyzeAccessBoundsFromIndices(selfReadAccesses, loopIV, loopIV);
-  const bool hasCrossElementSelfRead =
-      bounds.valid &&
-      (bounds.isStencil || bounds.minOffset != 0 || bounds.maxOffset != 0);
+  auto hasCrossElementOffset = [](const AccessBoundsResult &candidate) {
+    return candidate.valid &&
+           (candidate.isStencil || candidate.minOffset != 0 ||
+            candidate.maxOffset != 0);
+  };
+
+  bool hasCrossElementSelfRead = hasCrossElementOffset(bounds);
+
+  if (!hasCrossElementSelfRead) {
+    loopOp.walk([&](scf::ForOp nestedLoop) {
+      if (hasCrossElementSelfRead || nestedLoop == loopOp)
+        return;
+      Value nestedIV = nestedLoop.getInductionVar();
+      if (!nestedIV)
+        return;
+      AccessBoundsResult nestedBounds =
+          analyzeAccessBoundsFromIndices(selfReadAccesses, nestedIV, nestedIV);
+      if (hasCrossElementOffset(nestedBounds)) {
+        ARTS_DEBUG("DbAnalysis nested self-read fallback: valid="
+                   << nestedBounds.valid
+                   << " min=" << nestedBounds.minOffset
+                   << " max=" << nestedBounds.maxOffset
+                   << " stencil=" << nestedBounds.isStencil
+                   << " variable=" << nestedBounds.hasVariableOffset);
+        hasCrossElementSelfRead = true;
+      }
+    });
+  }
 
   ARTS_DEBUG("DbAnalysis cross-element self-read: valid="
              << bounds.valid << " min=" << bounds.minOffset
