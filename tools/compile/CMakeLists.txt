@@ -17,7 +17,7 @@ set( LLVM_LINK_COMPONENTS
 )
 
 add_clang_executable(carts-compile
-  compile.cpp
+  Compile.cpp
 )
 
 install(

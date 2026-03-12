@@ -138,7 +138,7 @@ cross-stage contracts.
 - `PolygeistCanonicalize`
 - `CSE`
 - `LICM`
-- `DataPointerHoisting`
+- `DataPtrHoisting`
 - `PolygeistCanonicalize`
 - `CSE`
 - `ScalarReplacement`
