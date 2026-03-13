@@ -91,24 +91,26 @@ Partitioning is intentionally split into roles. The rule is:
 
 Flow of responsibility:
 
-  DbAcquireNode  ->  DbAllocNode  ->  Heuristics  ->  DbPartitioning  ->  Rewriters/Indexers
-  (analysis)         (summary)        (decision)      (coordination)     (execution)
+  DbGraph/DbNode  ->  DbAnalysis  ->  DbHeuristics  ->  DbPartitioning  ->  Planner/Rewriter/Indexer
+  (canonical facts)   (facade)        (policy)               (controller)       (execution)
 
 What each layer owns:
 
-- DbAcquireNode: per-acquire access classification (uniform/indexed/stencil),
-  bounds validity, indirect access flags, and cached `DbAcquirePartitionFacts`.
-- DbAnalysis: pass-facing acquire partition summary API
-  (`analyzeAcquirePartition`) built from DbGraph/DbAcquireNode state.
+- DbGraph / DbAcquireNode: canonical per-acquire facts, including access
+  classification, mapped partition dims, indirect/direct flags, and cached
+  `DbAcquirePartitionFacts`.
 - DbAllocNode: aggregation across acquires for one allocation.
-- Heuristics: chooses allocation-level PartitionMode (H1.1-H1.6) and
-  per-acquire full-range decisions (H1.7).
-- DbPartitioning: builds a rewrite plan, legalizes invalid cases, and invokes
-  the correct planner/rewriter/indexer.
+- DbAnalysis: pass-facing facade over the graph (`getAcquirePartitionFacts`,
+  `analyzeAcquirePartition`, loop summaries, access-pattern queries).
+- DbHeuristics + H1 helpers: policy only. They consume snapshots and
+  return decisions; they do not mutate IR or walk DB graphs directly.
+- DbPartitioning: the controller. It visits allocation/acquire nodes, asks
+  DbAnalysis for facts, builds heuristic snapshots, reconciles legality, and
+  forwards the final choice to planners/rewriters.
 - DbPartitionPlanner: mode-specialized plan construction for allocation shape
-  and per-acquire rewrite payloads (keeps mode branching out of DbPartitioning).
-- Rewriters/Indexers: implement the chosen layout and localize indices using
-  PartitionInfo + plan.
+  and per-acquire rewrite payloads.
+- Rewriters/Indexers: execute the chosen layout and localize indices using
+  `PartitionInfo + DbRewritePlan`.
 
 Important implementation detail:
 - `DbAllocNode` stores direct child acquires in the DB graph.
@@ -183,7 +185,7 @@ DB mode note (in/out/inout):
 - Db access mode is adjusted by the Db pass based on actual loads/stores.
   "Force inout" style policies should not be needed; if something is read and
   written, it becomes inout automatically.
-- Exception: acquires marked with `preserve_dep_mode` already carry an
+- Exception: acquires marked with `preserve_access_mode` already carry an
   authoritative dependency contract. We only set this when the compiler already
   knows the exact mode and should not re-check or optimize it later
   (currently explicit `DbControlOp`-derived acquires and worker-local partial
@@ -1040,7 +1042,7 @@ Example access A[i,j,k]:
 - Pass-facing acquire summary: `DbAnalysis::analyzeAcquirePartition`
 - Decisions (H1.*): `evaluatePartitioningHeuristics` + H1.7 per-acquire voting
 - Coordination + plan: DbPartitioning
-- Mode reconciliation: `DbPartitionDecisionArbiter`
+- Mode reconciliation: local controller logic in `DbPartitioning`
 - Block sizing + chosen dims: `DbBlockPlanResolver`
 - Layout rewrite: DbRewriter (Block / Fine-grained / Stencil)
 - Index localization: DbBlockIndexer / DbElementWiseIndexer / DbStencilIndexer

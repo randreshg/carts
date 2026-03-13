@@ -35,7 +35,12 @@ class DbAcquireNode;
 class MetadataManager;
 class LoopNode;
 
-/// Per-entry partition legality for one acquire.
+/// Canonical per-entry partition legality for one acquire.
+///
+/// This is graph-owned state. It captures what the compiler proved about one
+/// depend-clause entry or inferred partition entry, not the final rewrite
+/// payload. DbPartitioning translates these facts into pass-local summaries and
+/// then into planner/rewriter inputs.
 struct DbPartitionEntryFact {
   PartitionInfo partition;
   Value representativeOffset;
@@ -46,6 +51,10 @@ struct DbPartitionEntryFact {
 };
 
 /// Per-dimension view of an acquire's partition behavior.
+///
+/// This stays intentionally small: enough for heuristics/controller logic to
+/// know which dimensions are relevant, without turning DbAcquireNode into a
+/// rewrite-plan object.
 struct DbDimPartitionFact {
   unsigned dim = 0;
   MemrefMetadata::DimAccessPatternType accessPattern =
@@ -55,11 +64,17 @@ struct DbDimPartitionFact {
   bool needsFullRange = false;
 };
 
-/// Canonical partition facts cached on DbAcquireNode and consumed by
-/// DbAnalysis/DbPartitioning.
+/// Canonical per-acquire partition facts cached on DbAcquireNode.
+///
+/// Ownership:
+///   - produced and cached by graph-side analysis
+///   - exposed through DbAnalysis
+///   - consumed by controller passes such as DbPartitioning
+///   - never used directly as the final rewrite contract
 struct DbAcquirePartitionFacts {
   DbAcquireOp acquire;
   PartitionMode requestedMode = PartitionMode::coarse;
+  ArtsDependencePattern depPattern = ArtsDependencePattern::unknown;
   AccessPattern accessPattern = AccessPattern::Unknown;
   SmallVector<DbPartitionEntryFact, 2> entries;
   SmallVector<DbDimPartitionFact, 4> dims;
@@ -145,6 +160,14 @@ private:
 ///===----------------------------------------------------------------------===///
 /// DbAcquireNode
 /// Represents a `arts.db.acquire` operation in the DB graph.
+///
+/// DbAcquireNode is the canonical owner of per-acquire DB facts:
+///   - memory-access classification
+///   - partition legality / mapped dimensions
+///   - cached block/stencil helper results
+///
+/// Passes should prefer reaching this state through DbAnalysis instead of
+/// rebuilding it ad hoc from IR.
 ///===----------------------------------------------------------------------===///
 class DbAcquireNode : public NodeBase {
 public:

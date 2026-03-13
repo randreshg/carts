@@ -20,8 +20,8 @@
 ///   H1.F:  Fallback -> coarse or fine-grained (CLI option)
 ///==========================================================================///
 
-#ifndef ARTS_ANALYSIS_PARTITIONINGHEURISTICS_H
-#define ARTS_ANALYSIS_PARTITIONINGHEURISTICS_H
+#ifndef ARTS_ANALYSIS_HEURISTICS_PARTITIONINGHEURISTICS_H
+#define ARTS_ANALYSIS_HEURISTICS_PARTITIONINGHEURISTICS_H
 
 #include "arts/Dialect.h"
 #include "arts/analysis/graphs/db/DbAccessPattern.h"
@@ -40,8 +40,6 @@ class Operation;
 
 namespace arts {
 
-class DbAcquireNode;
-
 /// Partition fallback strategy (from CLI option --partition-fallback)
 enum class PartitionFallback { Coarse, FineGrained };
 
@@ -57,10 +55,15 @@ struct AcquireDecision {
   std::string rationale;
 };
 
-/// Per-acquire info for heuristic voting.
+/// Heuristic snapshot for one acquire.
+///
+/// DbPartitioning builds this from DbAnalysis/DbGraph facts before calling H1.
+/// The heuristic layer should not need raw DbAcquireNode queries once this
+/// snapshot is filled in.
 struct AcquireInfo {
   ArtsMode accessMode = ArtsMode::uninitialized;
   PartitionMode partitionMode = PartitionMode::coarse;
+  ArtsDependencePattern depPattern = ArtsDependencePattern::unknown;
   bool canElementWise = false;
   bool canBlock = false;
   AccessPattern accessPattern = AccessPattern::Unknown;
@@ -73,7 +76,10 @@ struct AcquireInfo {
   SmallVector<PartitionInfo> partitionInfos;
 };
 
-/// Context for partitioning decisions
+/// Allocation-level heuristic context assembled by the controller pass.
+///
+/// DbPartitioning owns construction of this snapshot. H1 heuristics consume it
+/// as read-only policy input and return a decision; they do not mutate IR.
 struct PartitioningContext {
   const AbstractMachine *machine = nullptr;
 
@@ -91,6 +97,11 @@ struct PartitioningContext {
   bool elementTypeIsMemRef = false;
   /// True if all block-capable acquires require full-range access.
   bool allBlockFullRange = false;
+  /// Structural owner-compute preference prepared by DbPartitioning.
+  /// This is not a guessed policy; it is a controller-supplied fact that an
+  /// existing owner-distribution shape should stay N-D block-aligned.
+  bool preferBlockND = false;
+  unsigned preferredOuterRank = 0;
 
   /// Per-acquire info for voting
   SmallVector<AcquireInfo> acquires;
@@ -263,4 +274,4 @@ void copyArtsMetadataAttrs(Operation *source, Operation *dest);
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_ANALYSIS_PARTITIONINGHEURISTICS_H
+#endif // ARTS_ANALYSIS_HEURISTICS_PARTITIONINGHEURISTICS_H

@@ -753,7 +753,7 @@ flowchart LR
 
     subgraph Lower["ForLowering + strategy helper"]
         TASK["Create worker EDTs"]
-        ACQ["Rewrite DbAcquire ranges<br/>through AcquireRewritePlanning"]
+        ACQ["Rewrite DbAcquire ranges<br/>through local acquire planning"]
     end
 
     Before --> Dist --> Lower
@@ -771,7 +771,7 @@ flowchart LR
 `ForLowering` is orchestration-only:
 - resolve worker topology through `DistributionHeuristics`
 - select `EdtTaskLoopLowering` implementation from `distribution_kind`
-- call acquire rewrite planning (`AcquireRewritePlanning`) and apply rewrites
+- run local acquire rewrite planning and apply rewrites
 - keep strategy-specific bounds and acquire math in strategy classes, not in the pass body
 
 **Fallback behavior**:

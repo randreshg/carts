@@ -548,7 +548,7 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
     else
       db["access_mode"] = "inout";
 
-    /// Heuristic (populated by HeuristicsConfig)
+    /// Heuristic decision (populated by DbHeuristics)
     db["heuristic"] = nullptr;
 
     /// Source location

@@ -28,42 +28,43 @@ constexpr StringLiteral RuntimeTotalNodes = "arts.runtime_total_nodes";
 namespace Operation {
 using namespace llvm;
 
-/// Worker topology attributes.
-namespace Worker {
-constexpr StringLiteral Workers("workers");
-constexpr StringLiteral WorkersPerNode("workers_per_node");
-} // namespace Worker
+/// Common ARTS attributes
+constexpr StringLiteral Workers = "workers";
+constexpr StringLiteral WorkersPerNode = "workers_per_node";
+constexpr StringLiteral ArtsId = "arts.id";
+constexpr StringLiteral ArtsCreateId = "arts.create_id";
+constexpr StringLiteral OutlinedFunc = "outlined_func";
+constexpr StringLiteral Nowait = "nowait";
+constexpr StringLiteral PreserveAccessMode = "preserve_access_mode";
+constexpr StringLiteral PreserveDepEdge = "preserve_dep_edge";
 
-/// Partitioning attributes.
-namespace Partition {
-constexpr StringLiteral PartitionMode("partition_mode");
-constexpr StringLiteral PartitionHint("arts.partition_hint");
-constexpr StringLiteral AccessPattern("access_pattern");
-} // namespace Partition
+/// Partition-related attributes (TableGen-generated names)
+constexpr StringLiteral PartitionMode = "partition_mode";
+constexpr StringLiteral PartitionHint = "arts.partition_hint";
+constexpr StringLiteral AccessPattern = "access_pattern";
+constexpr StringLiteral Distributed = "distributed";
+constexpr StringLiteral DistributionKind = "distribution_kind";
+constexpr StringLiteral DistributionPattern = "distribution_pattern";
+constexpr StringLiteral DepPattern = "depPattern";
+constexpr StringLiteral DistributionVersion = "distribution_version";
+constexpr StringLiteral StencilCenterOffset = "stencil_center_offset";
+constexpr StringLiteral ElementStride = "element_stride";
+constexpr StringLiteral LeftHaloArgIdx = "left_halo_arg_idx";
+constexpr StringLiteral RightHaloArgIdx = "right_halo_arg_idx";
 
-/// Distributed execution attributes.
-namespace Distribution {
-constexpr StringLiteral Distributed("distributed");
-constexpr StringLiteral DistributionKind("distribution_kind");
-constexpr StringLiteral DistributionPattern("distribution_pattern");
-constexpr StringLiteral DistributionVersion("distribution_version");
-} // namespace Distribution
+/// DbAllocOp attributes (TableGen-generated names)
+constexpr StringLiteral Mode = "mode";
+constexpr StringLiteral AllocType = "allocType";
+constexpr StringLiteral DbMode = "dbMode";
+constexpr StringLiteral ElementType = "elementType";
 
-/// Structural metadata attributes.
-namespace Metadata {
-constexpr StringLiteral ArtsId("arts.id");
-constexpr StringLiteral ArtsCreateId("arts.create_id");
-constexpr StringLiteral OutlinedFunc("outlined_func");
-constexpr StringLiteral Nowait("nowait");
-constexpr StringLiteral PreserveDependencyMode("preserve_dep_mode");
-constexpr StringLiteral PreserveDependency("preserve_dep");
-} // namespace Metadata
+/// EdtOp attributes (TableGen-generated names)
+constexpr StringLiteral Type = "type";
+constexpr StringLiteral Concurrency = "concurrency";
 
 } // namespace Operation
 
 } // namespace AttrNames
-
-// ===== Module-Level Attributes =====
 
 inline std::optional<StringRef> getRuntimeConfigPath(ModuleOp module) {
   if (!module)
@@ -131,14 +132,100 @@ inline void setRuntimeTotalNodes(ModuleOp module, int64_t nodes) {
       IntegerAttr::get(IntegerType::get(module.getContext(), 64), nodes));
 }
 
-// ===== Worker Topology =====
+/// Forward declaration - defined in PartitioningHeuristics.h
+struct PartitioningHint;
+
+/// Merge two DbAccessPattern values, keeping the higher-priority pattern.
+/// Priority: stencil > indexed > uniform > unknown.
+inline DbAccessPattern mergeDbAccessPattern(DbAccessPattern lhs,
+                                            DbAccessPattern rhs) {
+  auto rank = [](DbAccessPattern p) -> unsigned {
+    switch (p) {
+    case DbAccessPattern::stencil:
+      return 3;
+    case DbAccessPattern::indexed:
+      return 2;
+    case DbAccessPattern::uniform:
+      return 1;
+    case DbAccessPattern::unknown:
+      return 0;
+    }
+    return 0;
+  };
+  return rank(rhs) > rank(lhs) ? rhs : lhs;
+}
+
+inline int64_t getArtsId(Operation *op) {
+  if (!op)
+    return 0;
+  if (auto attr = op->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsId))
+    return attr.getInt();
+  return 0;
+}
+
+inline void setArtsId(Operation *op, int64_t id) {
+  if (!op || id <= 0)
+    return;
+  auto *ctx = op->getContext();
+  auto type = IntegerType::get(ctx, 64);
+  op->setAttr(AttrNames::Operation::ArtsId, IntegerAttr::get(type, id));
+}
+
+inline std::optional<PartitionMode> getPartitionMode(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr = op->getAttrOfType<PartitionModeAttr>(
+          AttrNames::Operation::PartitionMode))
+    return attr.getValue();
+  return std::nullopt;
+}
+
+inline void setPartitionMode(Operation *op, PartitionMode mode) {
+  if (!op)
+    return;
+  op->setAttr(AttrNames::Operation::PartitionMode,
+              PartitionModeAttr::get(op->getContext(), mode));
+}
+
+inline std::optional<DbAccessPattern> getDbAccessPattern(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr = op->getAttrOfType<DbAccessPatternAttr>(
+          AttrNames::Operation::AccessPattern))
+    return attr.getValue();
+  return std::nullopt;
+}
+
+inline void setDbAccessPattern(Operation *op, DbAccessPattern pattern) {
+  if (!op)
+    return;
+  op->setAttr(AttrNames::Operation::AccessPattern,
+              DbAccessPatternAttr::get(op->getContext(), pattern));
+}
+
+inline bool hasDistributedDbAllocation(Operation *op) {
+  if (!op)
+    return false;
+  return op->hasAttr(AttrNames::Operation::Distributed);
+}
+
+inline void setDistributedDbAllocation(Operation *op, bool enabled) {
+  if (!op)
+    return;
+  if (enabled) {
+    op->setAttr(AttrNames::Operation::Distributed,
+                UnitAttr::get(op->getContext()));
+    return;
+  }
+  op->removeAttr(AttrNames::Operation::Distributed);
+}
 
 inline std::optional<int64_t> getWorkers(Operation *op) {
   if (!op)
     return std::nullopt;
-  if (auto attr = op->getAttrOfType<workersAttr>(AttrNames::Operation::Worker::Workers))
+  if (auto attr = op->getAttrOfType<workersAttr>(AttrNames::Operation::Workers))
     return static_cast<int64_t>(attr.getValue());
-  if (auto attr = op->getAttrOfType<IntegerAttr>(AttrNames::Operation::Worker::Workers))
+  if (auto attr = op->getAttrOfType<IntegerAttr>(AttrNames::Operation::Workers))
     return attr.getInt();
   return std::nullopt;
 }
@@ -147,13 +234,13 @@ inline void setWorkers(Operation *op, int64_t workers) {
   if (!op)
     return;
   if (workers <= 0) {
-    op->removeAttr(AttrNames::Operation::Worker::Workers);
+    op->removeAttr(AttrNames::Operation::Workers);
     return;
   }
   int64_t clamped =
       std::min<int64_t>(workers, std::numeric_limits<int32_t>::max());
   op->setAttr(
-      AttrNames::Operation::Worker::Workers,
+      AttrNames::Operation::Workers,
       workersAttr::get(op->getContext(), static_cast<int32_t>(clamped)));
 }
 
@@ -161,7 +248,7 @@ inline std::optional<int64_t> getWorkersPerNode(Operation *op) {
   if (!op)
     return std::nullopt;
   if (auto attr =
-          op->getAttrOfType<IntegerAttr>(AttrNames::Operation::Worker::WorkersPerNode))
+          op->getAttrOfType<IntegerAttr>(AttrNames::Operation::WorkersPerNode))
     return attr.getInt();
   return std::nullopt;
 }
@@ -170,11 +257,11 @@ inline void setWorkersPerNode(Operation *op, int64_t workersPerNode) {
   if (!op)
     return;
   if (workersPerNode <= 0) {
-    op->removeAttr(AttrNames::Operation::Worker::WorkersPerNode);
+    op->removeAttr(AttrNames::Operation::WorkersPerNode);
     return;
   }
   op->setAttr(
-      AttrNames::Operation::Worker::WorkersPerNode,
+      AttrNames::Operation::WorkersPerNode,
       IntegerAttr::get(IntegerType::get(op->getContext(), 64), workersPerNode));
 }
 
@@ -190,72 +277,12 @@ inline void copyWorkerTopologyAttrs(Operation *from, Operation *to) {
   setWorkersPerNode(to, getWorkersPerNode(from).value_or(0));
 }
 
-// ===== Partitioning =====
-
-inline std::optional<PartitionMode> getPartitionMode(Operation *op) {
-  if (!op)
-    return std::nullopt;
-  if (auto attr = op->getAttrOfType<PartitionModeAttr>(
-          AttrNames::Operation::Partition::PartitionMode))
-    return attr.getValue();
-  return std::nullopt;
-}
-
-inline void setPartitionMode(Operation *op, PartitionMode mode) {
-  if (!op)
-    return;
-  op->setAttr(AttrNames::Operation::Partition::PartitionMode,
-              PartitionModeAttr::get(op->getContext(), mode));
-}
-
-inline std::optional<DbAccessPattern> getDbAccessPattern(Operation *op) {
-  if (!op)
-    return std::nullopt;
-  if (auto attr = op->getAttrOfType<DbAccessPatternAttr>(
-          AttrNames::Operation::Partition::AccessPattern))
-    return attr.getValue();
-  return std::nullopt;
-}
-
-inline void setDbAccessPattern(Operation *op, DbAccessPattern pattern) {
-  if (!op)
-    return;
-  op->setAttr(AttrNames::Operation::Partition::AccessPattern,
-              DbAccessPatternAttr::get(op->getContext(), pattern));
-}
-
-/// Forward declaration - defined in PartitioningHeuristics.h
-struct PartitioningHint;
-
-/// Full implementation in HeuristicsConfig.cpp (uses DictionaryAttr).
-std::optional<PartitioningHint> getPartitioningHint(Operation *op);
-void setPartitioningHint(Operation *op, const PartitioningHint &hint);
-
-// ===== Distribution =====
-
-inline bool hasDistributedDbAllocation(Operation *op) {
-  if (!op)
-    return false;
-  return op->hasAttr(AttrNames::Operation::Distribution::Distributed);
-}
-
-inline void setDistributedDbAllocation(Operation *op, bool enabled) {
-  if (!op)
-    return;
-  if (enabled) {
-    op->setAttr(AttrNames::Operation::Distribution::Distributed,
-                UnitAttr::get(op->getContext()));
-    return;
-  }
-  op->removeAttr(AttrNames::Operation::Distribution::Distributed);
-}
-
 inline std::optional<EdtDistributionKind>
 getEdtDistributionKind(Operation *op) {
   if (!op)
     return std::nullopt;
   if (auto attr = op->getAttrOfType<EdtDistributionKindAttr>(
-          AttrNames::Operation::Distribution::DistributionKind))
+          AttrNames::Operation::DistributionKind))
     return attr.getValue();
   return std::nullopt;
 }
@@ -263,7 +290,7 @@ getEdtDistributionKind(Operation *op) {
 inline void setEdtDistributionKind(Operation *op, EdtDistributionKind kind) {
   if (!op)
     return;
-  op->setAttr(AttrNames::Operation::Distribution::DistributionKind,
+  op->setAttr(AttrNames::Operation::DistributionKind,
               EdtDistributionKindAttr::get(op->getContext(), kind));
 }
 
@@ -272,7 +299,7 @@ getEdtDistributionPattern(Operation *op) {
   if (!op)
     return std::nullopt;
   if (auto attr = op->getAttrOfType<EdtDistributionPatternAttr>(
-          AttrNames::Operation::Distribution::DistributionPattern))
+          AttrNames::Operation::DistributionPattern))
     return attr.getValue();
   return std::nullopt;
 }
@@ -281,11 +308,90 @@ inline void setEdtDistributionPattern(Operation *op,
                                       EdtDistributionPattern pattern) {
   if (!op)
     return;
-  op->setAttr(AttrNames::Operation::Distribution::DistributionPattern,
+  op->setAttr(AttrNames::Operation::DistributionPattern,
               EdtDistributionPatternAttr::get(op->getContext(), pattern));
 }
 
+inline std::optional<ArtsDependencePattern> getDepPattern(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr = op->getAttrOfType<ArtsDependencePatternAttr>(
+          AttrNames::Operation::DepPattern))
+    return attr.getValue();
+  return std::nullopt;
+}
+
+inline void setDepPattern(Operation *op, ArtsDependencePattern pattern) {
+  if (!op)
+    return;
+  op->setAttr(AttrNames::Operation::DepPattern,
+              ArtsDependencePatternAttr::get(op->getContext(), pattern));
+}
+
+inline bool isStencilFamilyDepPattern(ArtsDependencePattern pattern) {
+  switch (pattern) {
+  case ArtsDependencePattern::stencil:
+  case ArtsDependencePattern::wavefront_2d:
+  case ArtsDependencePattern::jacobi_alternating_buffers:
+    return true;
+  case ArtsDependencePattern::unknown:
+  case ArtsDependencePattern::uniform:
+  case ArtsDependencePattern::triangular:
+  case ArtsDependencePattern::matmul:
+    return false;
+  }
+}
+
+inline bool isStencilHaloDepPattern(ArtsDependencePattern pattern) {
+  switch (pattern) {
+  case ArtsDependencePattern::stencil:
+  case ArtsDependencePattern::jacobi_alternating_buffers:
+    return true;
+  case ArtsDependencePattern::unknown:
+  case ArtsDependencePattern::uniform:
+  case ArtsDependencePattern::triangular:
+  case ArtsDependencePattern::matmul:
+  case ArtsDependencePattern::wavefront_2d:
+    return false;
+  }
+}
+
+inline bool isMatmulDepPattern(ArtsDependencePattern pattern) {
+  return pattern == ArtsDependencePattern::matmul;
+}
+
+inline bool isTriangularDepPattern(ArtsDependencePattern pattern) {
+  return pattern == ArtsDependencePattern::triangular;
+}
+
+inline std::optional<ArtsDependencePattern>
+getEffectiveDepPattern(Operation *op) {
+  for (Operation *current = op; current; current = current->getParentOp()) {
+    if (auto pattern = getDepPattern(current))
+      return pattern;
+  }
+  return std::nullopt;
+}
+
+inline void copyDepPatternAttrs(Operation *source, Operation *dest) {
+  if (!source || !dest)
+    return;
+
+  if (auto pattern = getDepPattern(source))
+    setDepPattern(dest, *pattern);
+  else
+    dest->removeAttr(AttrNames::Operation::DepPattern);
+}
+
+/// Copy semantic pattern attributes between operations.
+/// This is the canonical helper for structural rewrites that replace a loop,
+/// EDT, or epoch with an equivalent operation and want downstream passes to
+/// keep seeing the same high-level dependence/distribution family.
 /// Copy distribution_* attributes between operations.
+/// This intentionally transfers only distribution contracts:
+///   - distribution_kind
+///   - distribution_pattern
+///   - distribution_version
 inline void copyDistributionAttrs(Operation *source, Operation *dest) {
   if (!source || !dest)
     return;
@@ -293,75 +399,111 @@ inline void copyDistributionAttrs(Operation *source, Operation *dest) {
   if (auto kind = getEdtDistributionKind(source))
     setEdtDistributionKind(dest, *kind);
   else
-    dest->removeAttr(AttrNames::Operation::Distribution::DistributionKind);
+    dest->removeAttr(AttrNames::Operation::DistributionKind);
 
   if (auto pattern = getEdtDistributionPattern(source))
     setEdtDistributionPattern(dest, *pattern);
   else
-    dest->removeAttr(AttrNames::Operation::Distribution::DistributionPattern);
+    dest->removeAttr(AttrNames::Operation::DistributionPattern);
 
   if (auto version = source->getAttrOfType<IntegerAttr>(
-          AttrNames::Operation::Distribution::DistributionVersion))
-    dest->setAttr(AttrNames::Operation::Distribution::DistributionVersion, version);
+          AttrNames::Operation::DistributionVersion))
+    dest->setAttr(AttrNames::Operation::DistributionVersion, version);
   else
-    dest->removeAttr(AttrNames::Operation::Distribution::DistributionVersion);
+    dest->removeAttr(AttrNames::Operation::DistributionVersion);
 }
 
-// ===== Metadata =====
-
-inline int64_t getArtsId(Operation *op) {
-  if (!op)
-    return 0;
-  if (auto attr = op->getAttrOfType<IntegerAttr>(AttrNames::Operation::Metadata::ArtsId))
-    return attr.getInt();
-  return 0;
+/// Copy semantic pattern attributes between operations.
+/// This is the canonical helper for structural rewrites that replace a loop,
+/// EDT, or epoch with an equivalent operation and want downstream passes to
+/// keep seeing the same high-level dependence/distribution family.
+inline void copyPatternAttrs(Operation *source, Operation *dest) {
+  if (!source || !dest)
+    return;
+  copyDistributionAttrs(source, dest);
+  copyDepPatternAttrs(source, dest);
 }
 
-inline std::optional<int64_t> getArtsCreateId(Operation *op) {
+inline std::optional<int64_t> getStencilCenterOffset(Operation *op) {
   if (!op)
     return std::nullopt;
   if (auto attr = op->getAttrOfType<IntegerAttr>(
-          AttrNames::Operation::Metadata::ArtsCreateId))
+          AttrNames::Operation::StencilCenterOffset))
     return attr.getInt();
   return std::nullopt;
 }
 
-inline void setArtsCreateId(Operation *op, int64_t id) {
-  if (!op || id <= 0)
+inline void setStencilCenterOffset(Operation *op, int64_t centerOffset) {
+  if (!op)
     return;
-  op->setAttr(AttrNames::Operation::Metadata::ArtsCreateId,
-              IntegerAttr::get(IntegerType::get(op->getContext(), 64), id));
+  op->setAttr(
+      AttrNames::Operation::StencilCenterOffset,
+      IntegerAttr::get(IntegerType::get(op->getContext(), 64), centerOffset));
 }
 
-inline std::optional<StringRef> getOutlinedFunc(Operation *op) {
+inline std::optional<int64_t> getElementStride(Operation *op) {
   if (!op)
     return std::nullopt;
-  if (auto attr = op->getAttrOfType<StringAttr>(
-          AttrNames::Operation::Metadata::OutlinedFunc))
-    return attr.getValue();
+  if (auto attr =
+          op->getAttrOfType<IntegerAttr>(AttrNames::Operation::ElementStride))
+    return attr.getInt();
   return std::nullopt;
 }
 
-inline void setOutlinedFunc(Operation *op, StringRef funcName) {
-  if (!op || funcName.empty())
-    return;
-  op->setAttr(AttrNames::Operation::Metadata::OutlinedFunc,
-              StringAttr::get(op->getContext(), funcName));
-}
-
-inline bool hasNowait(Operation *op) {
-  return op && op->hasAttr(AttrNames::Operation::Metadata::Nowait);
-}
-
-inline void setNowait(Operation *op, bool enabled) {
+inline void setElementStride(Operation *op, int64_t stride) {
   if (!op)
     return;
-  if (enabled)
-    op->setAttr(AttrNames::Operation::Metadata::Nowait,
-                UnitAttr::get(op->getContext()));
-  else
-    op->removeAttr(AttrNames::Operation::Metadata::Nowait);
+  op->setAttr(AttrNames::Operation::ElementStride,
+              IntegerAttr::get(IndexType::get(op->getContext()), stride));
 }
+
+inline std::optional<unsigned> getLeftHaloArgIndex(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr = op->getAttrOfType<IntegerAttr>(
+          AttrNames::Operation::LeftHaloArgIdx)) {
+    int64_t value = attr.getInt();
+    if (value >= 0)
+      return static_cast<unsigned>(value);
+  }
+  return std::nullopt;
+}
+
+inline std::optional<unsigned> getRightHaloArgIndex(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr = op->getAttrOfType<IntegerAttr>(
+          AttrNames::Operation::RightHaloArgIdx)) {
+    int64_t value = attr.getInt();
+    if (value >= 0)
+      return static_cast<unsigned>(value);
+  }
+  return std::nullopt;
+}
+
+inline void setLeftHaloArgIndex(Operation *op, unsigned argIndex) {
+  if (!op)
+    return;
+  op->setAttr(AttrNames::Operation::LeftHaloArgIdx,
+              IntegerAttr::get(IndexType::get(op->getContext()), argIndex));
+}
+
+inline void setRightHaloArgIndex(Operation *op, unsigned argIndex) {
+  if (!op)
+    return;
+  op->setAttr(AttrNames::Operation::RightHaloArgIdx,
+              IntegerAttr::get(IndexType::get(op->getContext()), argIndex));
+}
+
+/// Full implementation in PartitioningHeuristics.cpp (uses DictionaryAttr).
+std::optional<PartitioningHint> getPartitioningHint(Operation *op);
+void setPartitioningHint(Operation *op, const PartitioningHint &hint);
+
+/// Copy ARTS-specific metadata attributes from source to dest operation.
+/// Copies: arts.id, partition_mode, arts.partition_hint, arts.loop.
+/// Unlike transferAttributes in Utils.h which copies ALL attributes, this
+/// only copies ARTS-specific metadata attributes.
+void copyArtsMetadataAttrs(Operation *source, Operation *dest);
 
 } // namespace arts
 } // namespace mlir

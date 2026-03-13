@@ -23,7 +23,8 @@
 #include "arts/Dialect.h"
 #include "arts/transforms/dep/DepTransform.h"
 #include "arts/utils/DbUtils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -58,11 +59,11 @@ static bool haveSameBounds(ForOp lhs, ForOp rhs) {
       rhs.getUpperBound().size() != 1 || rhs.getStep().size() != 1)
     return false;
 
-  return ValueAnalysis::sameValue(lhs.getLowerBound().front(),
+  return ValueUtils::sameValue(lhs.getLowerBound().front(),
                                rhs.getLowerBound().front()) &&
-         ValueAnalysis::sameValue(lhs.getUpperBound().front(),
+         ValueUtils::sameValue(lhs.getUpperBound().front(),
                                rhs.getUpperBound().front()) &&
-         ValueAnalysis::sameValue(lhs.getStep().front(), rhs.getStep().front());
+         ValueUtils::sameValue(lhs.getStep().front(), rhs.getStep().front());
 }
 
 static ForOp getSingleTopLevelFor(EdtOp edt) {
@@ -79,6 +80,10 @@ static ForOp getSingleTopLevelFor(EdtOp edt) {
     result = forOp;
   }
   return result;
+}
+
+static void stampJacobiAlternatingBuffers(Operation *op) {
+  setDepPattern(op, ArtsDependencePattern::jacobi_alternating_buffers);
 }
 
 static bool matchSimpleCopyFor(ForOp forOp, Value &srcMemref,
@@ -196,9 +201,9 @@ static bool hasEvenStaticTripCount(scf::ForOp loop) {
   if (!loop)
     return false;
 
-  auto lb = ValueAnalysis::tryFoldConstantIndex(loop.getLowerBound());
-  auto ub = ValueAnalysis::tryFoldConstantIndex(loop.getUpperBound());
-  auto step = ValueAnalysis::tryFoldConstantIndex(loop.getStep());
+  auto lb = ValueUtils::tryFoldConstantIndex(loop.getLowerBound());
+  auto ub = ValueUtils::tryFoldConstantIndex(loop.getUpperBound());
+  auto step = ValueUtils::tryFoldConstantIndex(loop.getStep());
   if (!lb || !ub || !step || *step <= 0)
     return false;
 
@@ -267,6 +272,7 @@ static EdtOp cloneStencilEdt(EdtOp sourceEdt, Block *targetBlock, Value oldA,
       sourceEdt.getLoc(), sourceEdt.getType(), sourceEdt.getConcurrency(),
       sourceEdt.getRoute(), sourceEdt.getDependencies());
   cloned->setAttrs(sourceEdt->getAttrs());
+  stampJacobiAlternatingBuffers(cloned.getOperation());
 
   Block &src = sourceEdt.getBody().front();
   Block &dst = cloned.getBody().front();
@@ -283,6 +289,9 @@ static EdtOp cloneStencilEdt(EdtOp sourceEdt, Block *targetBlock, Value oldA,
   OpBuilder dstBuilder = OpBuilder::atBlockBegin(&dst);
   for (Operation &op : src.getOperations())
     dstBuilder.clone(op, mapper);
+
+  if (ForOp topLevelFor = getSingleTopLevelFor(cloned))
+    stampJacobiAlternatingBuffers(topLevelFor.getOperation());
 
   return cloned;
 }
@@ -302,6 +311,7 @@ static bool rewriteJacobiTimeLoop(JacobiLoopMatch &match) {
 
   auto ifOp = builder.create<scf::IfOp>(loc, TypeRange{}, isOdd,
                                         /*withElseRegion=*/true);
+  stampJacobiAlternatingBuffers(ifOp.getOperation());
 
   cloneStencilEdt(match.stencilEdt, &ifOp.getThenRegion().front(),
                   match.stencilInput, match.stencilOutput, match.stencilOutput,

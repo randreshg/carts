@@ -231,7 +231,7 @@ bool DbPass::adjustDbModes() {
       /// Some acquires already carry an authoritative dependency mode
       /// (explicit control dependencies, worker-local partial reductions).
       /// Do not re-infer or optimize those modes from local memory accesses.
-      if (acqOp.getPreserveDepMode()) {
+      if (acqOp.getPreserveAccessMode()) {
         ARTS_DEBUG("AcquireOp: " << acqOp
                                  << " preserving explicit dependency mode "
                                  << acqOp.getMode());

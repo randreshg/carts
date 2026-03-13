@@ -5,7 +5,7 @@
 ///==========================================================================///
 
 #include "arts/transforms/db/DbPartitionPlanner.h"
-#include "arts/analysis/PartitioningHeuristics.h"
+#include "arts/analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
 #include "arts/analysis/value/ValueAnalysis.h"
@@ -287,9 +287,16 @@ static void buildStencilRewriteAcquire(const DbAcquirePartitionView &input,
   bool allocIsStencil = false;
   if (auto pattern = getDbAccessPattern(allocOp.getOperation()))
     allocIsStencil = *pattern == DbAccessPattern::stencil;
-  bool shouldUseStencil =
-      acquire && acquire.getMode() == ArtsMode::in &&
-      (input.accessPattern == AccessPattern::Stencil || allocIsStencil);
+  ArtsDependencePattern depPattern =
+      getEffectiveDepPattern(acquire.getOperation())
+          .value_or(ArtsDependencePattern::unknown);
+  bool shouldUseStencil = acquire && acquire.getMode() == ArtsMode::in &&
+                          isStencilHaloDepPattern(depPattern);
+  if (!shouldUseStencil) {
+    shouldUseStencil =
+        acquire && acquire.getMode() == ArtsMode::in &&
+        (input.accessPattern == AccessPattern::Stencil || allocIsStencil);
+  }
 
   buildBlockRewriteAcquire(input, allocOp, plan, output, builder);
   if (!shouldUseStencil || !input.isValid || input.needsFullRange) {

@@ -18,8 +18,8 @@
 ///   pattern = matmul    -> kind = tiling_2d
 ///==========================================================================///
 
-#include "arts/analysis/DistributionHeuristics.h"
-#include "arts/analysis/HeuristicUtils.h"
+#include "arts/analysis/heuristics/DistributionHeuristics.h"
+#include "arts/analysis/heuristics/HeuristicUtils.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/utils/DbUtils.h"

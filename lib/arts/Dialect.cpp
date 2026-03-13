@@ -423,7 +423,7 @@ buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
   state.addAttribute("dbMode", dbModeAttr);
   state.addAttribute("elementType", elementTypeAttr);
   state.addAttribute(
-      AttrNames::Operation::Partition::PartitionMode,
+      AttrNames::Operation::PartitionMode,
       PartitionModeAttr::get(builder.getContext(), partitionMode));
 
   state.addOperands(route);
@@ -491,20 +491,37 @@ bool DbAcquireOp::hasExplicitPartitionHints() {
          !getPartitionSizes().empty();
 }
 
-void DbAcquireOp::setPreserveDepMode(bool preserve) {
+void DbAcquireOp::setPreserveAccessMode(bool preserve) {
   if (preserve) {
-    setPreserveDepModeAttr(PreserveDependencyModeAttr::get(getContext()));
+    setPreserveAccessModeAttr(PreserveAccessModeAttr::get(getContext()));
     return;
   }
-  (*this)->removeAttr(AttrNames::Operation::Metadata::PreserveDependencyMode);
+  (*this)->removeAttr(AttrNames::Operation::PreserveAccessMode);
 }
 
-void DbAcquireOp::setPreserveDependency(bool preserve) {
+void DbAcquireOp::setPreserveDepEdge(bool preserve) {
   if (preserve) {
-    setPreserveDependencyAttr(PreserveDependencyAttr::get(getContext()));
+    setPreserveDepEdgeAttr(PreserveDepEdgeAttr::get(getContext()));
     return;
   }
-  (*this)->removeAttr(AttrNames::Operation::Metadata::PreserveDependency);
+  (*this)->removeAttr(AttrNames::Operation::PreserveDepEdge);
+}
+
+void DbAcquireOp::setExplicitDepContract(bool preserve) {
+  setPreserveAccessMode(preserve);
+  setPreserveDepEdge(preserve);
+}
+
+void DbAcquireOp::setDepPattern(ArtsDependencePattern pattern) {
+  arts::setDepPattern(getOperation(), pattern);
+}
+
+void DbAcquireOp::clearDepPattern() {
+  (*this)->removeAttr(AttrNames::Operation::DepPattern);
+}
+
+std::optional<ArtsDependencePattern> DbAcquireOp::getDepPattern() {
+  return arts::getDepPattern(getOperation());
 }
 
 void DbAcquireOp::copyPartitionSegmentsFrom(DbAcquireOp source) {
@@ -692,7 +709,7 @@ static void addDbAcquireOperandsAndAttrs(
       resolvedMode = *parentMode;
   }
   state.addAttribute(
-      AttrNames::Operation::Partition::PartitionMode,
+      AttrNames::Operation::PartitionMode,
       PartitionModeAttr::get(builder.getContext(), resolvedMode));
 }
 
@@ -872,12 +889,12 @@ LogicalResult DbRefOp::verify() {
   }
   bool isCoarse = !allocSizes.empty() && llvm::all_of(allocSizes, [](Value v) {
     int64_t val;
-    return ValueAnalysis::getConstantIndex(v, val) && val == 1;
+    return ValueUtils::getConstantIndex(v, val) && val == 1;
   });
   if (isCoarse) {
     for (Value idx : getIndices()) {
       int64_t val;
-      if (!ValueAnalysis::getConstantIndex(idx, val) || val != 0)
+      if (!ValueUtils::getConstantIndex(idx, val) || val != 0)
         return emitOpError("Coarse-grained datablock expects db_ref indices ")
                << "to be constant zero\n"
                << *getOperation();

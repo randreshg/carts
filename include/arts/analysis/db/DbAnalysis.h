@@ -1,7 +1,13 @@
 ///==========================================================================///
 /// File: DbAnalysis.h
 ///
-/// This file defines the central analysis for DB operations.
+/// This file defines the public DB analysis facade.
+///
+/// Responsibility split:
+///   - DbGraph / DbNode own canonical graph-backed facts.
+///   - DbAnalysis exposes pass-facing queries and lightweight summaries.
+///   - Controller passes should ask DbAnalysis first instead of rebuilding DB
+///     reasoning directly from raw IR or raw node methods.
 ///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_DB_DBANALYSIS_H
@@ -29,6 +35,9 @@ struct DbAcquirePartitionFacts;
 
 class DbAnalysis : public ArtsAnalysis {
 public:
+  /// Pass-facing summary used by DbPartitioning while assembling heuristic and
+  /// planner inputs. This is intentionally derived from graph-backed facts
+  /// rather than a second canonical storage class.
   struct AcquirePartitionSummary {
     PartitionMode mode = PartitionMode::coarse;
     SmallVector<Value> partitionOffsets;
@@ -40,6 +49,8 @@ public:
     bool partitionDimsFromPeers = false;
   };
 
+  /// Loop-facing summary for H2 distribution selection and related consumers.
+  /// This is a query result, not canonical ownership of DB facts.
   struct LoopDbAccessSummary {
     llvm::DenseMap<Operation *, DbAccessPattern> allocPatterns;
     bool hasStencilOffset = false;
