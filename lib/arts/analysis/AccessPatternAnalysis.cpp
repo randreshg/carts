@@ -5,7 +5,7 @@
 ///==========================================================================///
 
 #include "arts/analysis/AccessPatternAnalysis.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include <algorithm>
 #include <limits>
 
@@ -110,8 +110,8 @@ arts::analyzeAccessBoundsFromIndices(ArrayRef<AccessIndexInfo> accesses,
     /// (loopIV/blockBase)
     if (!idxForBounds) {
       for (Value idx : access.indexChain) {
-        if (ValueUtils::dependsOn(idx, loopIV) ||
-            ValueUtils::dependsOn(idx, blockBase)) {
+        if (ValueAnalysis::dependsOn(idx, loopIV) ||
+            ValueAnalysis::dependsOn(idx, blockBase)) {
           idxForBounds = idx;
           break;
         }
@@ -122,7 +122,7 @@ arts::analyzeAccessBoundsFromIndices(ArrayRef<AccessIndexInfo> accesses,
     if (!idxForBounds) {
       for (Value idx : access.indexChain) {
         int64_t constVal = 0;
-        if (!ValueUtils::getConstantIndex(idx, constVal)) {
+        if (!ValueAnalysis::getConstantIndex(idx, constVal)) {
           idxForBounds = idx;
           break;
         }
@@ -136,7 +136,7 @@ arts::analyzeAccessBoundsFromIndices(ArrayRef<AccessIndexInfo> accesses,
     /// Try to extract constant offset from the selected index
     /// Handles patterns like: iv, iv+c, iv-c, blockBase+c, etc.
     auto constOffset =
-        ValueUtils::extractConstantOffset(idxForBounds, loopIV, blockBase);
+        ValueAnalysis::extractConstantOffset(idxForBounds, loopIV, blockBase);
     if (constOffset) {
       foundAny = true;
       bounds.minOffset = std::min(bounds.minOffset, *constOffset);
@@ -148,8 +148,8 @@ arts::analyzeAccessBoundsFromIndices(ArrayRef<AccessIndexInfo> accesses,
     /// both loopIV and blockBase, it's a variable offset pattern.
     /// This indicates indirect or complex affine access that we can't
     /// statically analyze. Mark as variable and return early.
-    if (ValueUtils::dependsOn(idxForBounds, loopIV) &&
-        ValueUtils::dependsOn(idxForBounds, blockBase)) {
+    if (ValueAnalysis::dependsOn(idxForBounds, loopIV) &&
+        ValueAnalysis::dependsOn(idxForBounds, blockBase)) {
       bounds.hasVariableOffset = true;
       return bounds;
     }

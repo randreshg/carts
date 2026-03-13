@@ -500,29 +500,29 @@ static int indexMatchStrength(Value idx, Value anchor) {
   if (!idx || !anchor)
     return 0;
 
-  idx = ValueUtils::stripSelectClamp(idx);
-  anchor = ValueUtils::stripSelectClamp(anchor);
-  idx = ValueUtils::stripNumericCasts(idx);
-  anchor = ValueUtils::stripNumericCasts(anchor);
+  idx = ValueAnalysis::stripSelectClamp(idx);
+  anchor = ValueAnalysis::stripSelectClamp(anchor);
+  idx = ValueAnalysis::stripNumericCasts(idx);
+  anchor = ValueAnalysis::stripNumericCasts(anchor);
 
-  if (ValueUtils::sameValue(idx, anchor) ||
-      ValueUtils::areValuesEquivalent(idx, anchor))
+  if (ValueAnalysis::sameValue(idx, anchor) ||
+      ValueAnalysis::areValuesEquivalent(idx, anchor))
     return 4;
 
-  if (ValueUtils::dependsOn(idx, anchor) || ValueUtils::dependsOn(anchor, idx))
+  if (ValueAnalysis::dependsOn(idx, anchor) || ValueAnalysis::dependsOn(anchor, idx))
     return 2;
 
   if (auto cast = idx.getDefiningOp<arith::IndexCastOp>())
-    idx = ValueUtils::stripSelectClamp(cast.getIn());
+    idx = ValueAnalysis::stripSelectClamp(cast.getIn());
   if (auto blockArg = dyn_cast<BlockArgument>(idx)) {
     if (auto forOp = dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp())) {
       if (blockArg == forOp.getInductionVar()) {
         Value lb = forOp.getLowerBound();
-        lb = ValueUtils::stripSelectClamp(lb);
-        if (ValueUtils::sameValue(lb, anchor) ||
-            ValueUtils::areValuesEquivalent(lb, anchor) ||
-            ValueUtils::dependsOn(lb, anchor) ||
-            ValueUtils::dependsOn(anchor, lb))
+        lb = ValueAnalysis::stripSelectClamp(lb);
+        if (ValueAnalysis::sameValue(lb, anchor) ||
+            ValueAnalysis::areValuesEquivalent(lb, anchor) ||
+            ValueAnalysis::dependsOn(lb, anchor) ||
+            ValueAnalysis::dependsOn(anchor, lb))
           return 1;
       }
     }
@@ -930,7 +930,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
     if (!allocOp.getElementSizes().empty()) {
       int64_t staticFirstDim = 0;
-      if (ValueUtils::getConstantIndex(allocOp.getElementSizes().front(),
+      if (ValueAnalysis::getConstantIndex(allocOp.getElementSizes().front(),
                                        staticFirstDim)) {
         ctx.totalElements = staticFirstDim;
       }
@@ -1292,8 +1292,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     for (Value sz : info.partitionSizes) {
       if (!sz)
         continue;
-      Value stripped = ValueUtils::stripNumericCasts(sz);
-      if (!ValueUtils::isOneConstant(stripped)) {
+      Value stripped = ValueAnalysis::stripNumericCasts(sz);
+      if (!ValueAnalysis::isOneConstant(stripped)) {
         hasExplicitBlockSizes = true;
         break;
       }

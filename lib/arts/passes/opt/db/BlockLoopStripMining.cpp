@@ -30,7 +30,7 @@
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -65,7 +65,7 @@ static bool getConstIndex(Value v, int64_t &out) {
   if (!v)
     return false;
   if (auto folded =
-          ValueUtils::tryFoldConstantIndex(ValueUtils::stripNumericCasts(v))) {
+          ValueAnalysis::tryFoldConstantIndex(ValueAnalysis::stripNumericCasts(v))) {
     out = *folded;
     return true;
   }
@@ -73,15 +73,15 @@ static bool getConstIndex(Value v, int64_t &out) {
 }
 
 static std::optional<Value> extractInvariantOffset(Value lhs, Value iv) {
-  lhs = ValueUtils::stripNumericCasts(lhs);
+  lhs = ValueAnalysis::stripNumericCasts(lhs);
   if (lhs == iv)
     return Value();
   if (auto addOp = lhs.getDefiningOp<arith::AddIOp>()) {
-    Value lhsOp = ValueUtils::stripNumericCasts(addOp.getLhs());
-    Value rhsOp = ValueUtils::stripNumericCasts(addOp.getRhs());
-    if (lhsOp == iv && !ValueUtils::dependsOn(rhsOp, iv))
+    Value lhsOp = ValueAnalysis::stripNumericCasts(addOp.getLhs());
+    Value rhsOp = ValueAnalysis::stripNumericCasts(addOp.getRhs());
+    if (lhsOp == iv && !ValueAnalysis::dependsOn(rhsOp, iv))
       return rhsOp;
-    if (rhsOp == iv && !ValueUtils::dependsOn(lhsOp, iv))
+    if (rhsOp == iv && !ValueAnalysis::dependsOn(lhsOp, iv))
       return lhsOp;
   }
   return std::nullopt;
@@ -97,16 +97,16 @@ static bool recordRemPattern(Value lhs, Value rhs, Value remResult, Value iv,
   if (offset) {
     if (!info.offsetVal)
       info.offsetVal = offset;
-    else if (!ValueUtils::sameValue(info.offsetVal, offset))
+    else if (!ValueAnalysis::sameValue(info.offsetVal, offset))
       return false;
   } else if (info.offsetVal) {
     return false;
   }
 
-  Value normalizedRhs = ValueUtils::stripNumericCasts(rhs);
-  if (ValueUtils::dependsOn(normalizedRhs, iv))
+  Value normalizedRhs = ValueAnalysis::stripNumericCasts(rhs);
+  if (ValueAnalysis::dependsOn(normalizedRhs, iv))
     return false;
-  auto rhsConst = ValueUtils::tryFoldConstantIndex(normalizedRhs);
+  auto rhsConst = ValueAnalysis::tryFoldConstantIndex(normalizedRhs);
   if (rhsConst && *rhsConst <= 1)
     return false;
   if (!info.blockSizeVal) {
@@ -135,16 +135,16 @@ static bool matchNormalizedSignedRemainder(arith::SelectOp selectOp, Value iv,
     return false;
 
   Value remResult = rem.getResult();
-  if (!ValueUtils::sameValue(ValueUtils::stripNumericCasts(cmp.getLhs()),
+  if (!ValueAnalysis::sameValue(ValueAnalysis::stripNumericCasts(cmp.getLhs()),
                              remResult) ||
-      !ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(cmp.getRhs())))
+      !ValueAnalysis::isZeroConstant(ValueAnalysis::stripNumericCasts(cmp.getRhs())))
     return false;
 
-  Value addLhs = ValueUtils::stripNumericCasts(add.getLhs());
-  Value addRhs = ValueUtils::stripNumericCasts(add.getRhs());
-  Value rhs = ValueUtils::stripNumericCasts(rem.getRhs());
-  if (!ValueUtils::sameValue(addLhs, remResult) ||
-      !ValueUtils::sameValue(addRhs, rhs))
+  Value addLhs = ValueAnalysis::stripNumericCasts(add.getLhs());
+  Value addRhs = ValueAnalysis::stripNumericCasts(add.getRhs());
+  Value rhs = ValueAnalysis::stripNumericCasts(rem.getRhs());
+  if (!ValueAnalysis::sameValue(addLhs, remResult) ||
+      !ValueAnalysis::sameValue(addRhs, rhs))
     return false;
 
   SmallVector<Operation *> patternOps = {rem.getOperation(), cmp.getOperation(),
@@ -159,9 +159,9 @@ static bool isAlignedOffset(Value offset, Value blockSize,
                             Value *mulOther = nullptr) {
   if (!offset)
     return true;
-  Value off = ValueUtils::stripClampOne(offset);
-  Value bs = ValueUtils::stripClampOne(blockSize);
-  if (auto offConst = ValueUtils::tryFoldConstantIndex(off)) {
+  Value off = ValueAnalysis::stripClampOne(offset);
+  Value bs = ValueAnalysis::stripClampOne(blockSize);
+  if (auto offConst = ValueAnalysis::tryFoldConstantIndex(off)) {
     if (*offConst == 0)
       return true;
     if (blockSizeConst && *blockSizeConst > 0)
@@ -169,14 +169,14 @@ static bool isAlignedOffset(Value offset, Value blockSize,
     return false;
   }
   if (auto mul = off.getDefiningOp<arith::MulIOp>()) {
-    Value lhs = ValueUtils::stripClampOne(mul.getLhs());
-    Value rhs = ValueUtils::stripClampOne(mul.getRhs());
-    if (ValueUtils::sameValue(lhs, bs)) {
+    Value lhs = ValueAnalysis::stripClampOne(mul.getLhs());
+    Value rhs = ValueAnalysis::stripClampOne(mul.getRhs());
+    if (ValueAnalysis::sameValue(lhs, bs)) {
       if (mulOther)
         *mulOther = rhs;
       return true;
     }
-    if (ValueUtils::sameValue(rhs, bs)) {
+    if (ValueAnalysis::sameValue(rhs, bs)) {
       if (mulOther)
         *mulOther = lhs;
       return true;
@@ -191,13 +191,13 @@ static bool isAlignedValue(Value value, Value blockSize,
   if (!value)
     return true;
 
-  value = ValueUtils::stripClampOne(value);
+  value = ValueAnalysis::stripClampOne(value);
   if (isAlignedOffset(value, blockSize, blockSizeConst, divHint))
     return true;
 
   if (auto add = value.getDefiningOp<arith::AddIOp>()) {
-    Value lhs = ValueUtils::stripClampOne(add.getLhs());
-    Value rhs = ValueUtils::stripClampOne(add.getRhs());
+    Value lhs = ValueAnalysis::stripClampOne(add.getLhs());
+    Value rhs = ValueAnalysis::stripClampOne(add.getRhs());
     return isAlignedValue(lhs, blockSize, blockSizeConst) &&
            isAlignedValue(rhs, blockSize, blockSizeConst);
   }
@@ -237,7 +237,7 @@ static std::optional<LoopBlockInfo> analyzeLoop(scf::ForOp loop,
   int64_t ub = 0, step = 0;
   if (!getConstIndex(loop.getStep(), step) || step != 1)
     return std::nullopt;
-  info.lowerBoundConst = ValueUtils::tryFoldConstantIndex(loopLowerBound);
+  info.lowerBoundConst = ValueAnalysis::tryFoldConstantIndex(loopLowerBound);
   if (getConstIndex(loop.getUpperBound(), ub) && info.lowerBoundConst &&
       ub <= *info.lowerBoundConst)
     return std::nullopt;
@@ -252,15 +252,15 @@ static std::optional<LoopBlockInfo> analyzeLoop(scf::ForOp loop,
       if (offset) {
         if (!info.offsetVal)
           info.offsetVal = offset;
-        else if (!ValueUtils::sameValue(info.offsetVal, offset))
+        else if (!ValueAnalysis::sameValue(info.offsetVal, offset))
           invalid = true;
       } else if (info.offsetVal) {
         invalid = true;
       }
-      Value rhs = ValueUtils::stripNumericCasts(div.getRhs());
-      if (ValueUtils::dependsOn(rhs, iv))
+      Value rhs = ValueAnalysis::stripNumericCasts(div.getRhs());
+      if (ValueAnalysis::dependsOn(rhs, iv))
         return;
-      auto rhsConst = ValueUtils::tryFoldConstantIndex(rhs);
+      auto rhsConst = ValueAnalysis::tryFoldConstantIndex(rhs);
       if (rhsConst && *rhsConst <= 1)
         return;
       if (!info.blockSizeVal) {
@@ -318,7 +318,7 @@ static std::optional<LoopBlockInfo> analyzeLoop(scf::ForOp loop,
       (*info.lowerBoundConst % *info.blockSizeConst) != 0)
     return std::nullopt;
   if (info.offsetVal) {
-    auto offsetConst = ValueUtils::tryFoldConstantIndex(info.offsetVal);
+    auto offsetConst = ValueAnalysis::tryFoldConstantIndex(info.offsetVal);
     if (info.lowerBoundConst && offsetConst && info.blockSizeConst) {
       int64_t effectiveLower = *info.lowerBoundConst + *offsetConst;
       if ((effectiveLower % *info.blockSizeConst) != 0)
@@ -334,9 +334,9 @@ static std::optional<LoopBlockInfo> analyzeLoop(scf::ForOp loop,
   bool hasDbRef = false;
   loop.getBody()->walk([&](DbRefOp ref) {
     for (Value idx : ref.getIndices()) {
-      Value base = ValueUtils::stripNumericCasts(idx);
+      Value base = ValueAnalysis::stripNumericCasts(idx);
       for (auto div : info.divOps) {
-        if (ValueUtils::dependsOn(base, div.getResult())) {
+        if (ValueAnalysis::dependsOn(base, div.getResult())) {
           hasDbRef = true;
           return;
         }
@@ -368,12 +368,12 @@ static bool stripMineLoop(scf::ForOp loop, const LoopBlockInfo &info) {
 
   Value zero = arts::createZeroIndex(builder, loc);
   Value one = arts::createOneIndex(builder, loc);
-  Value lbVal = ValueUtils::ensureIndexType(loop.getLowerBound(), builder, loc);
+  Value lbVal = ValueAnalysis::ensureIndexType(loop.getLowerBound(), builder, loc);
   Value ubVal = loop.getUpperBound();
   Value bsVal =
       info.blockSizeConst
           ? arts::createConstantIndex(builder, loc, *info.blockSizeConst)
-          : ValueUtils::ensureIndexType(info.blockSizeVal, builder, loc);
+          : ValueAnalysis::ensureIndexType(info.blockSizeVal, builder, loc);
   Value ubGeLb = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
                                                ubVal, lbVal);
   Value tripCountRaw = builder.create<arith::SubIOp>(loc, ubVal, lbVal);
@@ -435,7 +435,7 @@ static bool stripMineLoop(scf::ForOp loop, const LoopBlockInfo &info) {
   Value effectiveLowerDiv = nullptr;
   if (info.lowerBoundDivHint) {
     effectiveLowerDiv =
-        ValueUtils::ensureIndexType(info.lowerBoundDivHint, builder, loc);
+        ValueAnalysis::ensureIndexType(info.lowerBoundDivHint, builder, loc);
   } else if (info.lowerBoundConst && info.blockSizeConst) {
     int64_t lowerDivConst = *info.lowerBoundConst / *info.blockSizeConst;
     effectiveLowerDiv = arts::createConstantIndex(builder, loc, lowerDivConst);
@@ -445,9 +445,9 @@ static bool stripMineLoop(scf::ForOp loop, const LoopBlockInfo &info) {
   if (info.offsetVal) {
     Value offsetDiv = nullptr;
     if (info.offsetDivHint) {
-      offsetDiv = ValueUtils::ensureIndexType(info.offsetDivHint, builder, loc);
+      offsetDiv = ValueAnalysis::ensureIndexType(info.offsetDivHint, builder, loc);
     } else if (auto offConst =
-                   ValueUtils::tryFoldConstantIndex(info.offsetVal)) {
+                   ValueAnalysis::tryFoldConstantIndex(info.offsetVal)) {
       if (info.blockSizeConst) {
         int64_t offDivConst = *offConst / *info.blockSizeConst;
         offsetDiv = arts::createConstantIndex(builder, loc, offDivConst);
@@ -455,14 +455,14 @@ static bool stripMineLoop(scf::ForOp loop, const LoopBlockInfo &info) {
     }
     if (!offsetDiv) {
       Value offsetIdx =
-          ValueUtils::ensureIndexType(info.offsetVal, builder, loc);
+          ValueAnalysis::ensureIndexType(info.offsetVal, builder, loc);
       offsetDiv = builder.create<arith::DivUIOp>(loc, offsetIdx, bsVal);
     }
     effectiveLowerDiv =
         builder.create<arith::AddIOp>(loc, effectiveLowerDiv, offsetDiv);
   }
   auto effectiveLowerDivConst =
-      ValueUtils::tryFoldConstantIndex(effectiveLowerDiv);
+      ValueAnalysis::tryFoldConstantIndex(effectiveLowerDiv);
   if (!effectiveLowerDivConst || *effectiveLowerDivConst != 0)
     blockIdx = builder.create<arith::AddIOp>(loc, blockIdx, effectiveLowerDiv);
   for (auto div : info.divOps)

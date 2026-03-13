@@ -9,7 +9,7 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
@@ -47,8 +47,8 @@ static bool isLowerBoundGuaranteedByControlFlow(Operation *op, Value loopIV) {
       continue;
 
     Value lhs = cmp.getLhs(), rhs = cmp.getRhs();
-    if ((matchesIV(lhs) && ValueUtils::isZeroConstant(rhs)) ||
-        (matchesIV(rhs) && ValueUtils::isZeroConstant(lhs))) {
+    if ((matchesIV(lhs) && ValueAnalysis::isZeroConstant(rhs)) ||
+        (matchesIV(rhs) && ValueAnalysis::isZeroConstant(lhs))) {
       ARTS_DEBUG("  Lower bound guaranteed by control flow (else of iv==0)");
       return true;
     }

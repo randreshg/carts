@@ -12,7 +12,7 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "llvm/ADT/DenseSet.h"
 
 using namespace mlir;
@@ -33,7 +33,7 @@ pickRepresentativeRange(PartitionMode mode, const PartitionInfo &info) {
       if (!value)
         continue;
       int64_t constant = 0;
-      if (!ValueUtils::getConstantIndex(ValueUtils::stripNumericCasts(value),
+      if (!ValueAnalysis::getConstantIndex(ValueAnalysis::stripNumericCasts(value),
                                         constant))
         return value;
     }
@@ -125,7 +125,7 @@ static void markLeadingDynamicDims(DbAcquireNode *node,
       for (unsigned chainIdx = memrefStart; chainIdx < fullChain.size();
            ++chainIdx) {
         int64_t constant = 0;
-        if (ValueUtils::getConstantIndex(fullChain[chainIdx], constant))
+        if (ValueAnalysis::getConstantIndex(fullChain[chainIdx], constant))
           continue;
 
         unsigned dim = chainIdx - memrefStart;

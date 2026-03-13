@@ -17,7 +17,7 @@
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -320,19 +320,19 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
     if (!offset || !sizeHint)
       return Value();
     int64_t sizeConst = 0;
-    bool sizeIsConst = ValueUtils::getConstantIndex(sizeHint, sizeConst);
+    bool sizeIsConst = ValueAnalysis::getConstantIndex(sizeHint, sizeConst);
     auto isSameConst = [&](Value v) -> bool {
       int64_t val = 0;
-      return ValueUtils::getConstantIndex(v, val) && val == sizeConst;
+      return ValueAnalysis::getConstantIndex(v, val) && val == sizeConst;
     };
     for (Operation &op : *acquire->getBlock()) {
       Value refined;
       auto tryRefine = [&](Value lhs, Value rhs, Value result) {
         bool lhsIsHint = (lhs == sizeHint) || (sizeIsConst && isSameConst(lhs));
         bool rhsIsHint = (rhs == sizeHint) || (sizeIsConst && isSameConst(rhs));
-        if (lhsIsHint && ValueUtils::dependsOn(rhs, offset))
+        if (lhsIsHint && ValueAnalysis::dependsOn(rhs, offset))
           refined = result;
-        else if (rhsIsHint && ValueUtils::dependsOn(lhs, offset))
+        else if (rhsIsHint && ValueAnalysis::dependsOn(lhs, offset))
           refined = result;
       };
 
@@ -454,31 +454,31 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
           Value hintOff = DbUtils::pickRepresentativePartitionOffset(
               info.partitionOffsets, &offsetIdx);
           bool hintIsConst =
-              hintSize && ValueUtils::getConstantIndex(hintSize, hintConst);
-          bool loopIsConst = ValueUtils::getConstantIndex(loopSize, loopConst);
+              hintSize && ValueAnalysis::getConstantIndex(hintSize, hintConst);
+          bool loopIsConst = ValueAnalysis::getConstantIndex(loopSize, loopConst);
 
           bool offsetRelated = false;
           if (hintOff && loopOffset) {
-            Value hintOffStripped = ValueUtils::stripNumericCasts(hintOff);
-            Value loopOff = ValueUtils::stripNumericCasts(loopOffset);
+            Value hintOffStripped = ValueAnalysis::stripNumericCasts(hintOff);
+            Value loopOff = ValueAnalysis::stripNumericCasts(loopOffset);
             if (hintOffStripped == loopOff)
               offsetRelated = true;
             if (!offsetRelated &&
-                (ValueUtils::dependsOn(loopOff, hintOffStripped) ||
-                 ValueUtils::dependsOn(hintOffStripped, loopOff)))
+                (ValueAnalysis::dependsOn(loopOff, hintOffStripped) ||
+                 ValueAnalysis::dependsOn(hintOffStripped, loopOff)))
               offsetRelated = true;
             if (!offsetRelated) {
               int64_t hintOffConst = 0;
               int64_t loopOffConst = 0;
-              if (ValueUtils::getConstantIndex(hintOffStripped, hintOffConst) &&
-                  ValueUtils::getConstantIndex(loopOff, loopOffConst) &&
+              if (ValueAnalysis::getConstantIndex(hintOffStripped, hintOffConst) &&
+                  ValueAnalysis::getConstantIndex(loopOff, loopOffConst) &&
                   hintOffConst == loopOffConst)
                 offsetRelated = true;
             }
           }
 
           bool loopSizeDependsOnOffset =
-              hintOff && ValueUtils::dependsOn(loopSize, hintOff);
+              hintOff && ValueAnalysis::dependsOn(loopSize, hintOff);
 
           if (loopSizeDependsOnOffset)
             useLoopSize = true;

@@ -5,7 +5,7 @@
 ///==========================================================================///
 
 #include "arts/utils/EdtUtils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Block.h"
@@ -56,7 +56,7 @@ static bool isDefOpInvariant(Region &edtRegion, Value v,
   if (!visited.insert(v).second)
     return true;
 
-  if (ValueUtils::isValueConstant(v))
+  if (ValueAnalysis::isValueConstant(v))
     return true;
 
   if (auto blockArg = v.dyn_cast<BlockArgument>())

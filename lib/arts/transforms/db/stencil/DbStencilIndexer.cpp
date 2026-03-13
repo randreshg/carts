@@ -15,7 +15,7 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -92,7 +92,7 @@ static Value getLinearizedStride(ValueRange indices, Type elementType,
 static Value findAnchor(Value v, int depth = 0) {
   if (!v || depth > 6)
     return v;
-  v = ValueUtils::stripNumericCasts(v);
+  v = ValueAnalysis::stripNumericCasts(v);
   if (auto blockArg = v.dyn_cast<BlockArgument>())
     return blockArg;
   if (Operation *op = v.getDefiningOp()) {
@@ -110,7 +110,7 @@ static unsigned pickPartitionDim(ValueRange indices, Value anchor) {
   if (!anchor || indices.empty())
     return 0;
   for (unsigned i = 0; i < indices.size(); ++i) {
-    if (ValueUtils::dependsOn(indices[i], anchor))
+    if (ValueAnalysis::dependsOn(indices[i], anchor))
       return i;
   }
   return 0;
@@ -246,8 +246,8 @@ void DbStencilIndexer::transformDbRefUsers(
       return false;
     if (a == b)
       return true;
-    a = ValueUtils::stripNumericCasts(a);
-    b = ValueUtils::stripNumericCasts(b);
+    a = ValueAnalysis::stripNumericCasts(a);
+    b = ValueAnalysis::stripNumericCasts(b);
     if (a == b)
       return true;
     if (auto cast = a.getDefiningOp<arith::IndexCastOp>())
@@ -263,8 +263,8 @@ void DbStencilIndexer::transformDbRefUsers(
                              int64_t &rowOffset,
                              bool &includesBaseOffset) -> bool {
     int64_t constOff = 0;
-    Value baseExpr = ValueUtils::stripConstantOffset(rowExpr, &constOff);
-    baseExpr = ValueUtils::stripNumericCasts(baseExpr);
+    Value baseExpr = ValueAnalysis::stripConstantOffset(rowExpr, &constOff);
+    baseExpr = ValueAnalysis::stripNumericCasts(baseExpr);
 
     if (isSameValueWithCasts(baseExpr, rowIV)) {
       rowOffset = constOff;
@@ -273,31 +273,31 @@ void DbStencilIndexer::transformDbRefUsers(
     }
 
     if (auto addOp = baseExpr.getDefiningOp<arith::AddIOp>()) {
-      Value lhs = ValueUtils::stripNumericCasts(addOp.getLhs());
-      Value rhs = ValueUtils::stripNumericCasts(addOp.getRhs());
+      Value lhs = ValueAnalysis::stripNumericCasts(addOp.getLhs());
+      Value rhs = ValueAnalysis::stripNumericCasts(addOp.getRhs());
       bool lhsIsRow = isSameValueWithCasts(lhs, rowIV);
       bool rhsIsRow = isSameValueWithCasts(rhs, rowIV);
       if (lhsIsRow || rhsIsRow) {
         Value other = lhsIsRow ? rhs : lhs;
         if (baseOffsetVal && (other == baseOffsetVal ||
-                              ValueUtils::dependsOn(other, baseOffsetVal))) {
+                              ValueAnalysis::dependsOn(other, baseOffsetVal))) {
           rowOffset = constOff;
           includesBaseOffset = true;
           return true;
         }
-        if (!ValueUtils::dependsOn(other, rowIV)) {
+        if (!ValueAnalysis::dependsOn(other, rowIV)) {
           rowOffset = constOff;
           includesBaseOffset =
-              baseOffsetVal && ValueUtils::dependsOn(other, baseOffsetVal);
+              baseOffsetVal && ValueAnalysis::dependsOn(other, baseOffsetVal);
           return true;
         }
       }
     }
 
-    if (ValueUtils::dependsOn(baseExpr, rowIV)) {
+    if (ValueAnalysis::dependsOn(baseExpr, rowIV)) {
       rowOffset = constOff;
       includesBaseOffset =
-          baseOffsetVal && ValueUtils::dependsOn(baseExpr, baseOffsetVal);
+          baseOffsetVal && ValueAnalysis::dependsOn(baseExpr, baseOffsetVal);
       return true;
     }
 
@@ -342,11 +342,11 @@ void DbStencilIndexer::transformDbRefUsers(
 
     /// If load/store indices don't carry the partition dimension, fall back to
     /// the db_ref indices (common for row-partitioned 2D stencils).
-    if (anchor && !ValueUtils::dependsOn(globalRow, anchor) &&
+    if (anchor && !ValueAnalysis::dependsOn(globalRow, anchor) &&
         !refIndices.empty()) {
       unsigned refPartitionDim = pickPartitionDim(refIndices, anchor);
       Value refRow = refIndices[refPartitionDim];
-      if (refRow == anchor || ValueUtils::dependsOn(refRow, anchor)) {
+      if (refRow == anchor || ValueAnalysis::dependsOn(refRow, anchor)) {
         globalRow = refRow;
       }
     }
@@ -375,11 +375,11 @@ void DbStencilIndexer::transformDbRefUsers(
 
     Value ownedRows = blockSize;
     int64_t stepConst = 0;
-    if (ValueUtils::getConstantIndex(rowLoop.getStep(), stepConst) &&
+    if (ValueAnalysis::getConstantIndex(rowLoop.getStep(), stepConst) &&
         stepConst == 1) {
       Value lb = rowLoop.getLowerBound();
       Value ub = rowLoop.getUpperBound();
-      if (lb && ub && ValueUtils::isZeroConstant(lb))
+      if (lb && ub && ValueAnalysis::isZeroConstant(lb))
         ownedRows = ub;
     }
 
@@ -435,8 +435,8 @@ void DbStencilIndexer::transformDbRefUsers(
   auto tryVersionRowLoop = [&]() -> bool {
     int64_t haloLeftConst = 0;
     int64_t haloRightConst = 0;
-    if (!ValueUtils::getConstantIndex(haloLeft, haloLeftConst) ||
-        !ValueUtils::getConstantIndex(haloRight, haloRightConst))
+    if (!ValueAnalysis::getConstantIndex(haloLeft, haloLeftConst) ||
+        !ValueAnalysis::getConstantIndex(haloRight, haloRightConst))
       return false;
 
     scf::ForOp rowLoop;
@@ -485,11 +485,11 @@ void DbStencilIndexer::transformDbRefUsers(
       }
       Value globalRow = indices[partitionDim];
 
-      if (anchor && !ValueUtils::dependsOn(globalRow, anchor) &&
+      if (anchor && !ValueAnalysis::dependsOn(globalRow, anchor) &&
           !refIndices.empty()) {
         unsigned refPartitionDim = pickPartitionDim(refIndices, anchor);
         Value refRow = refIndices[refPartitionDim];
-        if (refRow == anchor || ValueUtils::dependsOn(refRow, anchor)) {
+        if (refRow == anchor || ValueAnalysis::dependsOn(refRow, anchor)) {
           globalRow = refRow;
         }
       }
@@ -510,7 +510,7 @@ void DbStencilIndexer::transformDbRefUsers(
         auto loop = dyn_cast<scf::ForOp>(parent);
         if (!loop)
           continue;
-        if (ValueUtils::dependsOn(globalRow, loop.getInductionVar())) {
+        if (ValueAnalysis::dependsOn(globalRow, loop.getInductionVar())) {
           foundRow = loop;
           break;
         }
@@ -562,7 +562,7 @@ void DbStencilIndexer::transformDbRefUsers(
       return false;
 
     int64_t stepConst = 0;
-    if (!ValueUtils::getConstantIndex(rowLoop.getStep(), stepConst) ||
+    if (!ValueAnalysis::getConstantIndex(rowLoop.getStep(), stepConst) ||
         stepConst != 1)
       return false;
 
@@ -584,7 +584,7 @@ void DbStencilIndexer::transformDbRefUsers(
       return false;
 
     int64_t blockSzConst = 0;
-    if (!ValueUtils::getConstantIndex(blockSz, blockSzConst))
+    if (!ValueAnalysis::getConstantIndex(blockSz, blockSzConst))
       return false;
     if (leftBand + rightBand > blockSzConst)
       return false;
@@ -795,11 +795,11 @@ void DbStencilIndexer::transformDbRefUsers(
 
     /// If load/store indices don't carry the partition dimension, fall back to
     /// the db_ref indices (common for row-partitioned 2D stencils).
-    if (anchor && !ValueUtils::dependsOn(globalRow, anchor) &&
+    if (anchor && !ValueAnalysis::dependsOn(globalRow, anchor) &&
         !refIndices.empty()) {
       unsigned refPartitionDim = pickPartitionDim(refIndices, anchor);
       Value refRow = refIndices[refPartitionDim];
-      if (refRow == anchor || ValueUtils::dependsOn(refRow, anchor)) {
+      if (refRow == anchor || ValueAnalysis::dependsOn(refRow, anchor)) {
         globalRow = refRow;
       }
     }
@@ -860,7 +860,7 @@ void DbStencilIndexer::transformDbRefUsers(
         auto loop = dyn_cast<scf::ForOp>(parent);
         if (!loop)
           continue;
-        if (ValueUtils::dependsOn(globalRow, loop.getInductionVar())) {
+        if (ValueAnalysis::dependsOn(globalRow, loop.getInductionVar())) {
           rowLoop = loop;
           break;
         }
@@ -878,11 +878,11 @@ void DbStencilIndexer::transformDbRefUsers(
             ownedRows = extentIt->second;
           } else {
             int64_t stepConst = 0;
-            if (ValueUtils::getConstantIndex(rowLoop.getStep(), stepConst) &&
+            if (ValueAnalysis::getConstantIndex(rowLoop.getStep(), stepConst) &&
                 stepConst == 1) {
               Value lb = rowLoop.getLowerBound();
               Value ub = rowLoop.getUpperBound();
-              if (lb && ub && ValueUtils::isZeroConstant(lb))
+              if (lb && ub && ValueAnalysis::isZeroConstant(lb))
                 ownedRows = ub;
             }
             rowExtentCache[rowLoop.getOperation()] = ownedRows;
@@ -960,7 +960,7 @@ void DbStencilIndexer::transformDbRefUsers(
               break;
             if (rowDefOp && loop->isAncestor(rowDefOp))
               break;
-            if (ValueUtils::dependsOn(globalRow, loop.getInductionVar()))
+            if (ValueAnalysis::dependsOn(globalRow, loop.getInductionVar()))
               break;
             hoistAbove = loop;
           }

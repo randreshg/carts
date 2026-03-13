@@ -32,7 +32,7 @@
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include <cstdlib>
 
 ARTS_DEBUG_SETUP(db);
@@ -53,11 +53,11 @@ static bool isLoopFullRange(LoopNode *loop, Value dimSize) {
   if (!lb || !step || !ub)
     return false;
 
-  if (!ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(lb)))
+  if (!ValueAnalysis::isZeroConstant(ValueAnalysis::stripNumericCasts(lb)))
     return false;
-  if (!ValueUtils::isOneConstant(ValueUtils::stripNumericCasts(step)))
+  if (!ValueAnalysis::isOneConstant(ValueAnalysis::stripNumericCasts(step)))
     return false;
-  return ValueUtils::sameValue(ValueUtils::stripNumericCasts(ub), dimSize);
+  return ValueAnalysis::sameValue(ValueAnalysis::stripNumericCasts(ub), dimSize);
 }
 
 static bool isIndexFullCoverage(Value idx, Value dimSize,
@@ -66,14 +66,14 @@ static bool isIndexFullCoverage(Value idx, Value dimSize,
     return false;
 
   auto dimConstOpt =
-      ValueUtils::tryFoldConstantIndex(ValueUtils::stripNumericCasts(dimSize));
+      ValueAnalysis::tryFoldConstantIndex(ValueAnalysis::stripNumericCasts(dimSize));
   if (dimConstOpt && *dimConstOpt == 1)
     return true;
 
-  idx = ValueUtils::stripNumericCasts(idx);
+  idx = ValueAnalysis::stripNumericCasts(idx);
 
   /// Constant index only covers full range if size == 1.
-  auto idxConstOpt = ValueUtils::tryFoldConstantIndex(idx);
+  auto idxConstOpt = ValueAnalysis::tryFoldConstantIndex(idx);
   if (idxConstOpt)
     return dimConstOpt && *dimConstOpt == 1 && *idxConstOpt == 0;
 

@@ -27,7 +27,7 @@
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/IRMapping.h"
@@ -72,7 +72,7 @@ static Value cloneValueIntoEdtIfNeeded(Value val, EdtOp edt, OpBuilder &builder,
     return val;
 
   /// Only clone whitelisted arithmetic operations.
-  if (!ValueUtils::canCloneOperation(defOp, /*allowMemoryEffectFree=*/false,
+  if (!ValueAnalysis::canCloneOperation(defOp, /*allowMemoryEffectFree=*/false,
                                      arts::isStartBlockArithmeticOp))
     return val;
 
@@ -158,13 +158,13 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
   auto isAlignedToBlockDynamic = [&](Value offset, Value bsVal) -> bool {
     if (!offset || !bsVal)
       return false;
-    Value off = ValueUtils::stripNumericCasts(offset);
-    Value bs = ValueUtils::stripClampOne(bsVal);
+    Value off = ValueAnalysis::stripNumericCasts(offset);
+    Value bs = ValueAnalysis::stripClampOne(bsVal);
     if (auto mul = off.getDefiningOp<arith::MulIOp>()) {
-      Value lhs = ValueUtils::stripClampOne(mul.getLhs());
-      Value rhs = ValueUtils::stripClampOne(mul.getRhs());
-      if (ValueUtils::areValuesEquivalent(lhs, bs) ||
-          ValueUtils::areValuesEquivalent(rhs, bs))
+      Value lhs = ValueAnalysis::stripClampOne(mul.getLhs());
+      Value rhs = ValueAnalysis::stripClampOne(mul.getRhs());
+      if (ValueAnalysis::areValuesEquivalent(lhs, bs) ||
+          ValueAnalysis::areValuesEquivalent(rhs, bs))
         return true;
     }
     return false;
@@ -173,15 +173,15 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
   auto isBoundedByBlock = [&](Value sz, Value bsVal) -> bool {
     if (!sz || !bsVal)
       return false;
-    Value s = ValueUtils::stripClampOne(sz);
-    Value bs = ValueUtils::stripClampOne(bsVal);
-    if (ValueUtils::areValuesEquivalent(s, bs))
+    Value s = ValueAnalysis::stripClampOne(sz);
+    Value bs = ValueAnalysis::stripClampOne(bsVal);
+    if (ValueAnalysis::areValuesEquivalent(s, bs))
       return true;
     if (auto minOp = s.getDefiningOp<arith::MinUIOp>()) {
-      Value lhs = ValueUtils::stripClampOne(minOp.getLhs());
-      Value rhs = ValueUtils::stripClampOne(minOp.getRhs());
-      if (ValueUtils::areValuesEquivalent(lhs, bs) ||
-          ValueUtils::areValuesEquivalent(rhs, bs))
+      Value lhs = ValueAnalysis::stripClampOne(minOp.getLhs());
+      Value rhs = ValueAnalysis::stripClampOne(minOp.getRhs());
+      if (ValueAnalysis::areValuesEquivalent(lhs, bs) ||
+          ValueAnalysis::areValuesEquivalent(rhs, bs))
         return true;
     }
     return false;
@@ -191,16 +191,16 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
                               const std::optional<int64_t> &bsConst) -> bool {
     if (!offset || !bsConst || *bsConst <= 0)
       return false;
-    Value stripped = ValueUtils::stripNumericCasts(offset);
-    if (auto c = ValueUtils::getConstantValue(stripped))
+    Value stripped = ValueAnalysis::stripNumericCasts(offset);
+    if (auto c = ValueAnalysis::getConstantValue(stripped))
       return (*c % *bsConst) == 0;
     if (auto mul = stripped.getDefiningOp<arith::MulIOp>()) {
-      Value lhs = ValueUtils::stripNumericCasts(mul.getLhs());
-      Value rhs = ValueUtils::stripNumericCasts(mul.getRhs());
-      if (auto lhsC = ValueUtils::getConstantValue(lhs))
+      Value lhs = ValueAnalysis::stripNumericCasts(mul.getLhs());
+      Value rhs = ValueAnalysis::stripNumericCasts(mul.getRhs());
+      if (auto lhsC = ValueAnalysis::getConstantValue(lhs))
         if ((*lhsC % *bsConst) == 0)
           return true;
-      if (auto rhsC = ValueUtils::getConstantValue(rhs))
+      if (auto rhsC = ValueAnalysis::getConstantValue(rhs))
         if ((*rhsC % *bsConst) == 0)
           return true;
     }
@@ -252,13 +252,13 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
     }
 
     /// Check if single-block for this dimension
-    auto constElemSz = ValueUtils::getConstantValue(elemSz);
+    auto constElemSz = ValueAnalysis::getConstantValue(elemSz);
     auto constElemSzUpper =
         constElemSz ? constElemSz : arts::extractBlockSizeFromHint(elemSz);
     auto constBs = arts::extractBlockSizeFromHint(bs);
     bool isAligned = isAlignedToBlock(elemOff, constBs);
     bool isSingleDim = false;
-    if (auto constBlocks = ValueUtils::tryFoldConstantIndex(blockCount)) {
+    if (auto constBlocks = ValueAnalysis::tryFoldConstantIndex(blockCount)) {
       if (*constBlocks == 1)
         isSingleDim = true;
     }
@@ -300,7 +300,7 @@ void DbBlockRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
   /// Detect allocation-level single-block (same condition as verifier)
   bool allocSingleBlock =
       !plan.outerSizes.empty() && llvm::all_of(plan.outerSizes, [](Value v) {
-        auto val = ValueUtils::tryFoldConstantIndex(v);
+        auto val = ValueAnalysis::tryFoldConstantIndex(v);
         return val && *val == 1;
       });
 
@@ -478,7 +478,7 @@ bool DbBlockRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
   /// This matches the verifier's coarse check exactly.
   bool allocSingleBlock =
       !plan.outerSizes.empty() && llvm::all_of(plan.outerSizes, [](Value v) {
-        auto val = ValueUtils::tryFoldConstantIndex(v);
+        auto val = ValueAnalysis::tryFoldConstantIndex(v);
         return val && *val == 1;
       });
 

@@ -1,10 +1,10 @@
 ///==========================================================================///
-/// File: ValueUtils.cpp
+/// File: ValueAnalysis.cpp
 ///
-/// Defines utility functions for working with Index and Constant values.
+/// Static analysis utilities for MLIR Values, constants, and casts.
 ///==========================================================================///
 
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/Dialect.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -29,7 +29,7 @@ namespace arts {
 /// Value Cloning Utilities
 ///===----------------------------------------------------------------------===///
 
-bool ValueUtils::canCloneOperation(
+bool ValueAnalysis::canCloneOperation(
     Operation *op, bool allowMemoryEffectFree,
     llvm::function_ref<bool(Operation *)> extraAllowed) {
   if (!op)
@@ -41,7 +41,7 @@ bool ValueUtils::canCloneOperation(
   return extraAllowed ? extraAllowed(op) : false;
 }
 
-bool ValueUtils::cloneValuesIntoRegion(
+bool ValueAnalysis::cloneValuesIntoRegion(
     llvm::SetVector<Value> &values, Region *targetRegion, IRMapping &mapper,
     OpBuilder &builder, bool allowMemoryEffectFree,
     llvm::function_ref<bool(Operation *)> extraAllowed) {
@@ -115,14 +115,14 @@ bool ValueUtils::cloneValuesIntoRegion(
 /// Maximum recursion depth for value tracing to prevent stack overflow
 static constexpr unsigned kMaxTraceDepth = 64;
 
-bool ValueUtils::isValueConstant(Value val) {
+bool ValueAnalysis::isValueConstant(Value val) {
   Operation *defOp = val.getDefiningOp();
   if (!defOp)
     return false;
   return defOp->hasTrait<OpTrait::ConstantLike>();
 }
 
-bool ValueUtils::getConstantIndex(Value v, int64_t &out) {
+bool ValueAnalysis::getConstantIndex(Value v, int64_t &out) {
   if (!v)
     return false;
   if (auto c = v.getDefiningOp<arith::ConstantIndexOp>()) {
@@ -138,7 +138,7 @@ bool ValueUtils::getConstantIndex(Value v, int64_t &out) {
   return false;
 }
 
-bool ValueUtils::isNonZeroIndex(Value v) {
+bool ValueAnalysis::isNonZeroIndex(Value v) {
   if (!v)
     return false;
   if (auto c = v.getDefiningOp<arith::ConstantIndexOp>())
@@ -146,14 +146,14 @@ bool ValueUtils::isNonZeroIndex(Value v) {
   return true;
 }
 
-std::optional<int64_t> ValueUtils::getConstantValue(Value v) {
+std::optional<int64_t> ValueAnalysis::getConstantValue(Value v) {
   int64_t val;
   if (getConstantIndex(v, val))
     return val;
   return std::nullopt;
 }
 
-std::optional<int64_t> ValueUtils::tryFoldConstantIndex(Value v,
+std::optional<int64_t> ValueAnalysis::tryFoldConstantIndex(Value v,
                                                         unsigned depth) {
   if (!v || depth > 8)
     return std::nullopt;
@@ -230,7 +230,7 @@ std::optional<int64_t> ValueUtils::tryFoldConstantIndex(Value v,
   return std::nullopt;
 }
 
-std::optional<double> ValueUtils::getConstantFloat(Value v) {
+std::optional<double> ValueAnalysis::getConstantFloat(Value v) {
   if (!v)
     return std::nullopt;
   if (auto c = v.getDefiningOp<arith::ConstantOp>()) {
@@ -241,7 +241,7 @@ std::optional<double> ValueUtils::getConstantFloat(Value v) {
   return std::nullopt;
 }
 
-bool ValueUtils::isConstantEqual(Value v, int64_t val) {
+bool ValueAnalysis::isConstantEqual(Value v, int64_t val) {
   if (auto cst = getConstantValue(v))
     return *cst == val;
   if (auto cst = getConstantFloat(v))
@@ -249,11 +249,11 @@ bool ValueUtils::isConstantEqual(Value v, int64_t val) {
   return false;
 }
 
-bool ValueUtils::isZeroConstant(Value v) { return isConstantEqual(v, 0); }
+bool ValueAnalysis::isZeroConstant(Value v) { return isConstantEqual(v, 0); }
 
-bool ValueUtils::isOneConstant(Value v) { return isConstantEqual(v, 1); }
+bool ValueAnalysis::isOneConstant(Value v) { return isConstantEqual(v, 1); }
 
-bool ValueUtils::sameValue(Value a, Value b) {
+bool ValueAnalysis::sameValue(Value a, Value b) {
   a = stripNumericCasts(a);
   b = stripNumericCasts(b);
   if (a == b)
@@ -267,7 +267,7 @@ bool ValueUtils::sameValue(Value a, Value b) {
 /// Value Range and Scale Comparison
 ///===----------------------------------------------------------------------===///
 
-bool ValueUtils::equalRange(ValueRange a, ValueRange b) {
+bool ValueAnalysis::equalRange(ValueRange a, ValueRange b) {
   if (a.size() != b.size())
     return false;
   for (auto it = a.begin(), jt = b.begin(); it != a.end(); ++it, ++jt) {
@@ -277,14 +277,14 @@ bool ValueUtils::equalRange(ValueRange a, ValueRange b) {
   return true;
 }
 
-bool ValueUtils::allSameValue(ValueRange values) {
+bool ValueAnalysis::allSameValue(ValueRange values) {
   if (values.empty())
     return false;
   Value first = values[0];
   return llvm::all_of(values, [&](Value v) { return v == first; });
 }
 
-bool ValueUtils::scalesAreEquivalent(Value lhs, Value rhs) {
+bool ValueAnalysis::scalesAreEquivalent(Value lhs, Value rhs) {
   Value a = stripNumericCasts(lhs);
   Value b = stripNumericCasts(rhs);
   if (a == b)
@@ -309,7 +309,7 @@ bool ValueUtils::scalesAreEquivalent(Value lhs, Value rhs) {
   return false;
 }
 
-Value ValueUtils::stripClampOne(Value v) {
+Value ValueAnalysis::stripClampOne(Value v) {
   Value cur = stripNumericCasts(v);
   while (auto maxOp = cur.getDefiningOp<arith::MaxUIOp>()) {
     Value lhs = stripNumericCasts(maxOp.getLhs());
@@ -327,7 +327,7 @@ Value ValueUtils::stripClampOne(Value v) {
   return cur;
 }
 
-Value ValueUtils::stripSelectClamp(Value value, int maxDepth) {
+Value ValueAnalysis::stripSelectClamp(Value value, int maxDepth) {
   if (!value || maxDepth <= 0)
     return value;
   value = stripNumericCasts(value);
@@ -371,7 +371,7 @@ Value ValueUtils::stripSelectClamp(Value value, int maxDepth) {
   return value;
 }
 
-bool ValueUtils::areValuesEquivalent(Value a, Value b, int depth) {
+bool ValueAnalysis::areValuesEquivalent(Value a, Value b, int depth) {
   if (!a || !b)
     return false;
   if (a == b)
@@ -419,7 +419,7 @@ bool ValueUtils::areValuesEquivalent(Value a, Value b, int depth) {
   return true;
 }
 
-bool ValueUtils::isConstantAtLeastOne(Value v) {
+bool ValueAnalysis::isConstantAtLeastOne(Value v) {
   if (!v)
     return false;
   v = stripNumericCasts(v);
@@ -433,7 +433,7 @@ bool ValueUtils::isConstantAtLeastOne(Value v) {
   return false;
 }
 
-bool ValueUtils::isProvablyNonZero(Value v, unsigned depth) {
+bool ValueAnalysis::isProvablyNonZero(Value v, unsigned depth) {
   if (!v || depth > 4)
     return false;
   v = stripNumericCasts(v);
@@ -454,7 +454,7 @@ bool ValueUtils::isProvablyNonZero(Value v, unsigned depth) {
 /// Value Type Conversion and Casting
 ///===----------------------------------------------------------------------===///
 
-Value ValueUtils::stripNumericCasts(Value value) {
+Value ValueAnalysis::stripNumericCasts(Value value) {
   while (true) {
     if (auto idxCast = value.getDefiningOp<arith::IndexCastOp>()) {
       value = idxCast.getIn();
@@ -485,7 +485,7 @@ Value ValueUtils::stripNumericCasts(Value value) {
   return value;
 }
 
-Value ValueUtils::castToIndex(Value value, OpBuilder &builder, Location loc) {
+Value ValueAnalysis::castToIndex(Value value, OpBuilder &builder, Location loc) {
   if (!value)
     return value;
   if (value.getType().isIndex())
@@ -496,7 +496,7 @@ Value ValueUtils::castToIndex(Value value, OpBuilder &builder, Location loc) {
   return value;
 }
 
-Value ValueUtils::ensureIndexType(Value value, OpBuilder &builder,
+Value ValueAnalysis::ensureIndexType(Value value, OpBuilder &builder,
                                   Location loc) {
   if (!value)
     return Value();
@@ -512,7 +512,7 @@ Value ValueUtils::ensureIndexType(Value value, OpBuilder &builder,
 /// Value Dependencies and Analysis
 ///===----------------------------------------------------------------------===///
 
-bool ValueUtils::dependsOn(Value value, Value base, int depth) {
+bool ValueAnalysis::dependsOn(Value value, Value base, int depth) {
   if (!value || !base || depth > 8)
     return false;
   if (value == base)
@@ -539,7 +539,7 @@ bool ValueUtils::dependsOn(Value value, Value base, int depth) {
   return false;
 }
 
-std::optional<int64_t> ValueUtils::getOffsetStride(Value idx, Value base,
+std::optional<int64_t> ValueAnalysis::getOffsetStride(Value idx, Value base,
                                                    int depth) {
   if (!idx || !base || depth > 8)
     return std::nullopt;
@@ -641,12 +641,12 @@ static bool isDerivedFromPtrImpl(Value value, Value source,
   return false;
 }
 
-bool ValueUtils::isDerivedFromPtr(Value value, Value source) {
+bool ValueAnalysis::isDerivedFromPtr(Value value, Value source) {
   SmallPtrSet<Value, 16> visited;
   return isDerivedFromPtrImpl(value, source, visited, 0);
 }
 
-std::optional<int64_t> ValueUtils::inferConstantStride(Value globalIndex,
+std::optional<int64_t> ValueAnalysis::inferConstantStride(Value globalIndex,
                                                        Value elemOffset) {
   if (!globalIndex || !elemOffset)
     return std::nullopt;
@@ -671,7 +671,7 @@ std::optional<int64_t> ValueUtils::inferConstantStride(Value globalIndex,
 /// Extract constant offset from an index expression relative to loopIV and
 /// chunkOffset. E.g. chunkOffset + loopIV + 5 yields offset = 5.
 std::optional<int64_t>
-ValueUtils::extractConstantOffset(Value idx, Value loopIV, Value chunkOffset) {
+ValueAnalysis::extractConstantOffset(Value idx, Value loopIV, Value chunkOffset) {
   int64_t accumulator = 0;
   Value current = idx;
 
@@ -736,7 +736,7 @@ ValueUtils::extractConstantOffset(Value idx, Value loopIV, Value chunkOffset) {
   return std::nullopt;
 }
 
-Value ValueUtils::stripConstantOffset(Value value, int64_t *outConst) {
+Value ValueAnalysis::stripConstantOffset(Value value, int64_t *outConst) {
   int64_t accumulator = 0;
   Value current = value;
 
@@ -780,7 +780,7 @@ Value ValueUtils::stripConstantOffset(Value value, int64_t *outConst) {
   return current;
 }
 
-Value ValueUtils::extractArrayIndexFromByteOffset(Value byteOffset,
+Value ValueAnalysis::extractArrayIndexFromByteOffset(Value byteOffset,
                                                   Type elemType) {
   Value idxSource = byteOffset;
   while (auto castOp = idxSource.getDefiningOp<arith::IndexCastOp>())
@@ -874,12 +874,12 @@ static Value getUnderlyingValueImpl(Value v, SmallPtrSet<Value, 16> &visited,
   return nullptr;
 }
 
-Value ValueUtils::getUnderlyingValue(Value v) {
+Value ValueAnalysis::getUnderlyingValue(Value v) {
   SmallPtrSet<Value, 16> visited;
   return getUnderlyingValueImpl(v, visited, 0);
 }
 
-Operation *ValueUtils::getUnderlyingOperation(Value v) {
+Operation *ValueAnalysis::getUnderlyingOperation(Value v) {
   Value underlyingValue = getUnderlyingValue(v);
   return underlyingValue ? underlyingValue.getDefiningOp() : nullptr;
 }
@@ -888,7 +888,7 @@ Operation *ValueUtils::getUnderlyingOperation(Value v) {
 /// Value Reconstruction for Dominance
 ///===----------------------------------------------------------------------===//
 
-Value ValueUtils::traceValueToDominating(Value value, Operation *insertBefore,
+Value ValueAnalysis::traceValueToDominating(Value value, Operation *insertBefore,
                                          OpBuilder &builder,
                                          DominanceInfo &domInfo, Location loc,
                                          unsigned depth) {
@@ -1017,59 +1017,59 @@ Value ValueUtils::traceValueToDominating(Value value, Operation *insertBefore,
   return nullptr;
 }
 
-Value ValueUtils::traceMinSIWithFallback(
+Value ValueAnalysis::traceMinSIWithFallback(
     arith::MinSIOp minOp, Operation *insertBefore, OpBuilder &builder,
     Location loc, llvm::function_ref<Value(Value)> traceValueFn) {
   Value lhsTraced = traceValueFn(minOp.getLhs());
   Value rhsTraced = traceValueFn(minOp.getRhs());
   if (lhsTraced && rhsTraced) {
-    if (ValueUtils::isZeroConstant(lhsTraced))
+    if (ValueAnalysis::isZeroConstant(lhsTraced))
       return rhsTraced;
-    if (ValueUtils::isZeroConstant(rhsTraced))
+    if (ValueAnalysis::isZeroConstant(rhsTraced))
       return lhsTraced;
     builder.setInsertionPoint(insertBefore);
     return builder.create<arith::MinSIOp>(loc, lhsTraced, rhsTraced);
   }
   if (rhsTraced && !lhsTraced) {
-    if (ValueUtils::isZeroConstant(rhsTraced))
+    if (ValueAnalysis::isZeroConstant(rhsTraced))
       return nullptr;
     return rhsTraced;
   }
   if (lhsTraced && !rhsTraced) {
-    if (ValueUtils::isZeroConstant(lhsTraced))
+    if (ValueAnalysis::isZeroConstant(lhsTraced))
       return nullptr;
     return lhsTraced;
   }
   return nullptr;
 }
 
-Value ValueUtils::traceMinUIWithFallback(
+Value ValueAnalysis::traceMinUIWithFallback(
     arith::MinUIOp minOp, Operation *insertBefore, OpBuilder &builder,
     Location loc, llvm::function_ref<Value(Value)> traceValueFn) {
   Value lhsTraced = traceValueFn(minOp.getLhs());
   Value rhsTraced = traceValueFn(minOp.getRhs());
   if (lhsTraced && rhsTraced) {
-    if (ValueUtils::isZeroConstant(lhsTraced))
+    if (ValueAnalysis::isZeroConstant(lhsTraced))
       return rhsTraced;
-    if (ValueUtils::isZeroConstant(rhsTraced))
+    if (ValueAnalysis::isZeroConstant(rhsTraced))
       return lhsTraced;
     builder.setInsertionPoint(insertBefore);
     return builder.create<arith::MinUIOp>(loc, lhsTraced, rhsTraced);
   }
   if (rhsTraced && !lhsTraced) {
-    if (ValueUtils::isZeroConstant(rhsTraced))
+    if (ValueAnalysis::isZeroConstant(rhsTraced))
       return nullptr;
     return rhsTraced;
   }
   if (lhsTraced && !rhsTraced) {
-    if (ValueUtils::isZeroConstant(lhsTraced))
+    if (ValueAnalysis::isZeroConstant(lhsTraced))
       return nullptr;
     return lhsTraced;
   }
   return nullptr;
 }
 
-Value ValueUtils::traceSelectWithFallback(
+Value ValueAnalysis::traceSelectWithFallback(
     arith::SelectOp selectOp, Operation *insertBefore, OpBuilder &builder,
     Location loc, llvm::function_ref<Value(Value)> traceValueFn,
     llvm::function_ref<Value(Value)> traceCondFn) {
@@ -1091,12 +1091,12 @@ Value ValueUtils::traceSelectWithFallback(
   }
 
   if (trueTraced && !falseTraced) {
-    if (ValueUtils::isZeroConstant(trueTraced))
+    if (ValueAnalysis::isZeroConstant(trueTraced))
       return nullptr;
     return trueTraced;
   }
   if (falseTraced && !trueTraced) {
-    if (ValueUtils::isZeroConstant(falseTraced))
+    if (ValueAnalysis::isZeroConstant(falseTraced))
       return nullptr;
     return falseTraced;
   }

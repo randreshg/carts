@@ -18,7 +18,7 @@
 #include "arts/utils/Debug.h"
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -169,7 +169,7 @@ static Value traceWrapperLoadToAlloc(Value val) {
         if (storeOp.getMemref() == wrapper) {
           Value storedVal = storeOp.getValue();
           /// Check if direct allocation (through casts)
-          Value underlying = ValueUtils::getUnderlyingValue(storedVal);
+          Value underlying = ValueAnalysis::getUnderlyingValue(storedVal);
           if (underlying && underlying.getDefiningOp<memref::AllocOp>())
             return underlying;
           /// Otherwise continue tracing through nested loads
@@ -415,7 +415,7 @@ CanonicalizeMemrefsPass::detectPattern(Value alloc) {
           ///   %alloc = memref.alloc() : memref<10xf64>
           ///   %cast = memref.cast %alloc : memref<10xf64> to memref<?xf64>
           ///   memref.store %cast, %wrapper[]
-          Value underlying = ValueUtils::getUnderlyingValue(storedVal);
+          Value underlying = ValueAnalysis::getUnderlyingValue(storedVal);
           if (underlying && underlying.getDefiningOp<memref::AllocOp>()) {
             pattern.wrapperAlloca = alloc;
             pattern.rootAlloc = storedVal; /// Keep cast result for SROA
@@ -544,7 +544,7 @@ CanonicalizeMemrefsPass::detectPattern(Value alloc) {
 
     if (allocType.getRank() >= 1) {
       /// Get underlying allocation (traces through casts)
-      Value underlying = ValueUtils::getUnderlyingValue(pattern.rootAlloc);
+      Value underlying = ValueAnalysis::getUnderlyingValue(pattern.rootAlloc);
       auto underlyingAlloc =
           underlying ? underlying.getDefiningOp<memref::AllocOp>() : nullptr;
       auto underlyingType =
@@ -1350,7 +1350,7 @@ Value CanonicalizeMemrefsPass::createCanonicalAllocation(
   dynamicDims.reserve(dimSizes.size());
 
   for (Value dim : dimSizes) {
-    if (auto folded = ValueUtils::tryFoldConstantIndex(dim)) {
+    if (auto folded = ValueAnalysis::tryFoldConstantIndex(dim)) {
       shape.push_back(*folded);
       continue;
     }
@@ -1836,7 +1836,7 @@ bool CanonicalizeMemrefsPass::extractNestedAllocations(Value storedVal,
   }
 
   /// Trace through casts to find the underlying allocation
-  Value underlying = ValueUtils::getUnderlyingValue(storedVal);
+  Value underlying = ValueAnalysis::getUnderlyingValue(storedVal);
   auto innerAlloc = underlying ? underlying.getDefiningOp<memref::AllocOp>()
                                : storedVal.getDefiningOp<memref::AllocOp>();
   if (!innerAlloc) {

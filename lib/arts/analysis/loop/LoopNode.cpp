@@ -11,7 +11,7 @@
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -170,7 +170,7 @@ bool LoopNode::dependsOnInductionVar(Value v) {
 }
 
 bool LoopNode::dependsOnInductionVarNormalized(Value v) {
-  return dependsOnInductionVar(ValueUtils::stripNumericCasts(v));
+  return dependsOnInductionVar(ValueAnalysis::stripNumericCasts(v));
 }
 
 bool LoopNode::hasExplicitLoopMetadata() const {
@@ -255,15 +255,15 @@ bool LoopNode::dependsOnLoopInit(Value value, Value base) {
 }
 
 bool LoopNode::dependsOnLoopInitNormalized(Value value, Value base) {
-  Value vStripped = ValueUtils::stripNumericCasts(value);
-  Value bStripped = ValueUtils::stripNumericCasts(base);
+  Value vStripped = ValueAnalysis::stripNumericCasts(value);
+  Value bStripped = ValueAnalysis::stripNumericCasts(base);
   return dependsOnLoopInitImpl(vStripped, bStripped, 0);
 }
 
 bool LoopNode::isValueLoopInvariant(Value v) {
   if (!loopOp)
     return false;
-  v = ValueUtils::stripNumericCasts(v);
+  v = ValueAnalysis::stripNumericCasts(v);
 
   llvm::SmallPtrSet<Value, 16> visited;
   std::function<bool(Value)> isInvariant = [&](Value val) -> bool {
@@ -272,7 +272,7 @@ bool LoopNode::isValueLoopInvariant(Value v) {
     if (!visited.insert(val).second)
       return true;
 
-    if (ValueUtils::isValueConstant(val))
+    if (ValueAnalysis::isValueConstant(val))
       return true;
 
     if (auto blockArg = val.dyn_cast<BlockArgument>()) {
@@ -336,12 +336,12 @@ LoopNode::IVExpr LoopNode::analyzeIndexExpr(Value index) {
     Value rhs = addOp.getRhs();
 
     if (lhs == iv) {
-      if (auto constVal = ValueUtils::getConstantValue(rhs)) {
+      if (auto constVal = ValueAnalysis::getConstantValue(rhs)) {
         result.offset = *constVal;
         result.multiplier = 1;
       }
     } else if (rhs == iv) {
-      if (auto constVal = ValueUtils::getConstantValue(lhs)) {
+      if (auto constVal = ValueAnalysis::getConstantValue(lhs)) {
         result.offset = *constVal;
         result.multiplier = 1;
       }
@@ -352,7 +352,7 @@ LoopNode::IVExpr LoopNode::analyzeIndexExpr(Value index) {
   /// Handle arith::SubIOp: iv - constant
   if (auto subOp = dyn_cast<arith::SubIOp>(defOp)) {
     if (subOp.getLhs() == iv) {
-      if (auto constVal = ValueUtils::getConstantValue(subOp.getRhs())) {
+      if (auto constVal = ValueAnalysis::getConstantValue(subOp.getRhs())) {
         result.offset = -(*constVal);
         result.multiplier = 1;
       }
@@ -366,12 +366,12 @@ LoopNode::IVExpr LoopNode::analyzeIndexExpr(Value index) {
     Value rhs = mulOp.getRhs();
 
     if (lhs == iv) {
-      if (auto constVal = ValueUtils::getConstantValue(rhs)) {
+      if (auto constVal = ValueAnalysis::getConstantValue(rhs)) {
         result.offset = 0;
         result.multiplier = *constVal;
       }
     } else if (rhs == iv) {
-      if (auto constVal = ValueUtils::getConstantValue(lhs)) {
+      if (auto constVal = ValueAnalysis::getConstantValue(lhs)) {
         result.offset = 0;
         result.multiplier = *constVal;
       }
@@ -398,8 +398,8 @@ std::optional<int64_t> LoopNode::getLowerBoundConstant() const {
         unsigned argIndex = arg.getArgNumber();
         if (argIndex >= op.getInits().size())
           return std::nullopt;
-        Value init = ValueUtils::stripNumericCasts(op.getInits()[argIndex]);
-        return ValueUtils::getConstantValue(init);
+        Value init = ValueAnalysis::stripNumericCasts(op.getInits()[argIndex]);
+        return ValueAnalysis::getConstantValue(init);
       })
       .Default([](Operation *) { return std::nullopt; });
 }
@@ -431,8 +431,8 @@ std::optional<int64_t> LoopNode::getUpperBoundConstant() const {
 
         std::optional<int64_t> minBound;
         for (Value bound : bounds) {
-          Value stripped = ValueUtils::stripNumericCasts(bound);
-          auto cst = ValueUtils::getConstantValue(stripped);
+          Value stripped = ValueAnalysis::stripNumericCasts(bound);
+          auto cst = ValueAnalysis::getConstantValue(stripped);
           if (!cst)
             return std::nullopt;
           if (!minBound || *cst < *minBound)
@@ -455,7 +455,7 @@ std::optional<int64_t> LoopNode::getStepConstant() const {
         auto steps = op.getStep();
         if (!steps.empty()) {
           int64_t val;
-          if (ValueUtils::getConstantIndex(steps[0], val))
+          if (ValueAnalysis::getConstantIndex(steps[0], val))
             return val;
         }
         return std::nullopt;
@@ -593,11 +593,11 @@ bool LoopNode::haveCompatibleBounds(LoopNode *a, LoopNode *b) {
         auto forB = dyn_cast<scf::ForOp>(opB);
         if (!forB)
           return false;
-        return ValueUtils::sameValue(forA.getLowerBound(),
+        return ValueAnalysis::sameValue(forA.getLowerBound(),
                                      forB.getLowerBound()) &&
-               ValueUtils::sameValue(forA.getUpperBound(),
+               ValueAnalysis::sameValue(forA.getUpperBound(),
                                      forB.getUpperBound()) &&
-               ValueUtils::sameValue(forA.getStep(), forB.getStep());
+               ValueAnalysis::sameValue(forA.getStep(), forB.getStep());
       })
       .Case<arts::ForOp>([&](auto artsForA) {
         auto artsForB = dyn_cast<arts::ForOp>(opB);
@@ -609,7 +609,7 @@ bool LoopNode::haveCompatibleBounds(LoopNode *a, LoopNode *b) {
         if (lbA.size() != lbB.size())
           return false;
         for (size_t i = 0; i < lbA.size(); ++i) {
-          if (!ValueUtils::sameValue(lbA[i], lbB[i]))
+          if (!ValueAnalysis::sameValue(lbA[i], lbB[i]))
             return false;
         }
 
@@ -618,7 +618,7 @@ bool LoopNode::haveCompatibleBounds(LoopNode *a, LoopNode *b) {
         if (ubA.size() != ubB.size())
           return false;
         for (size_t i = 0; i < ubA.size(); ++i) {
-          if (!ValueUtils::sameValue(ubA[i], ubB[i]))
+          if (!ValueAnalysis::sameValue(ubA[i], ubB[i]))
             return false;
         }
         return true;

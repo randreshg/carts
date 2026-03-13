@@ -15,7 +15,7 @@
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -67,7 +67,7 @@ static Operation *getSingleStoreRoot(scf::ForOp loop) {
     if (!access || !access->isWrite())
       return WalkResult::advance();
 
-    Operation *root = ValueUtils::getUnderlyingOperation(access->memref);
+    Operation *root = ValueAnalysis::getUnderlyingOperation(access->memref);
     if (!root || !isa<memref::AllocOp, memref::AllocaOp>(root)) {
       hasUnsupportedStore = true;
       return WalkResult::interrupt();
@@ -102,7 +102,7 @@ static bool hasOnlySupportedEffects(scf::ForOp loop, Operation *storeRoot) {
       return WalkResult::advance();
 
     if (auto access = DbUtils::getMemoryAccessInfo(op)) {
-      Operation *root = ValueUtils::getUnderlyingOperation(access->memref);
+      Operation *root = ValueAnalysis::getUnderlyingOperation(access->memref);
       if (!root) {
         hasUnsupportedOp = true;
         return WalkResult::interrupt();
@@ -209,7 +209,7 @@ static bool hasAlignedInternodeForUseAfter(scf::ForOp loop,
     if (!access || access->indices.empty())
       return WalkResult::advance();
 
-    if (ValueUtils::getUnderlyingOperation(access->memref) != storeRoot)
+    if (ValueAnalysis::getUnderlyingOperation(access->memref) != storeRoot)
       return WalkResult::advance();
     if (!isOrderedAfter(loop.getOperation(), op, parentFunc))
       return WalkResult::advance();
@@ -226,10 +226,10 @@ static bool hasAlignedInternodeForUseAfter(scf::ForOp loop,
     if (!loopIV)
       return WalkResult::advance();
 
-    Value leadingIdx = ValueUtils::stripNumericCasts(access->indices.front());
-    if (ValueUtils::sameValue(leadingIdx, loopIV) ||
-        ValueUtils::dependsOn(leadingIdx, loopIV) ||
-        ValueUtils::dependsOn(loopIV, leadingIdx)) {
+    Value leadingIdx = ValueAnalysis::stripNumericCasts(access->indices.front());
+    if (ValueAnalysis::sameValue(leadingIdx, loopIV) ||
+        ValueAnalysis::dependsOn(leadingIdx, loopIV) ||
+        ValueAnalysis::dependsOn(loopIV, leadingIdx)) {
       ARTS_DEBUG("Aligned later multinode use found for store root "
                  << *storeRoot << " via " << *op);
       foundAlignedUse = true;

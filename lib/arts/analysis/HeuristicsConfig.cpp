@@ -13,7 +13,7 @@
 #include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/metadata/IdRegistry.h"
 #include "arts/utils/metadata/LocationMetadata.h"
 #include "arts/utils/metadata/LoopMetadata.h"
@@ -94,8 +94,8 @@ void HeuristicsConfig::recordDecision(llvm::StringRef heuristic, bool applied,
 
         if (!offsets.empty() && !sizes.empty()) {
           int64_t offset = 0, count = 0;
-          bool offsetKnown = ValueUtils::getConstantIndex(offsets[0], offset);
-          bool sizeKnown = ValueUtils::getConstantIndex(sizes[0], count);
+          bool offsetKnown = ValueAnalysis::getConstantIndex(offsets[0], offset);
+          bool sizeKnown = ValueAnalysis::getConstantIndex(sizes[0], count);
 
           if (offsetKnown && sizeKnown && allocId != 0) {
             for (int64_t i = 0; i < count; i++) {
@@ -117,7 +117,7 @@ void HeuristicsConfig::recordDecision(llvm::StringRef heuristic, bool applied,
               bool allStatic = true;
               for (Value sz : allocSizes) {
                 int64_t dim;
-                if (ValueUtils::getConstantIndex(sz, dim))
+                if (ValueAnalysis::getConstantIndex(sz, dim))
                   totalDBs *= dim;
                 else
                   allStatic = false;

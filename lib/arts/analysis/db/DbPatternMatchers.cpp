@@ -7,7 +7,7 @@
 #include "arts/analysis/db/DbPatternMatchers.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/utils/DbUtils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -138,7 +138,7 @@ static void collectLoadedMemrefs(Value value, DenseSet<Value> &loadedMemrefs,
   if (!def || !visited.insert(def).second)
     return;
 
-  value = ValueUtils::stripNumericCasts(value);
+  value = ValueAnalysis::stripNumericCasts(value);
   if (Operation *strippedDef = value.getDefiningOp())
     def = strippedDef;
 
@@ -163,7 +163,7 @@ static bool isAccumulatorTerm(Value value, Value storeMemref) {
 }
 
 static bool isTwoInputProductTerm(Value value, Value storeMemref) {
-  value = ValueUtils::stripNumericCasts(value);
+  value = ValueAnalysis::stripNumericCasts(value);
   Operation *def = value.getDefiningOp();
   if (!def)
     return false;
@@ -236,8 +236,8 @@ bool mlir::arts::hasTriangularBoundPattern(ForOp forOp) {
   Value outerIV = forOp.getBody()->getArgument(0);
   bool hasTriangularBound = false;
   forOp.walk([&](scf::ForOp nestedFor) {
-    if (ValueUtils::dependsOn(nestedFor.getLowerBound(), outerIV) ||
-        ValueUtils::dependsOn(nestedFor.getUpperBound(), outerIV)) {
+    if (ValueAnalysis::dependsOn(nestedFor.getLowerBound(), outerIV) ||
+        ValueAnalysis::dependsOn(nestedFor.getUpperBound(), outerIV)) {
       hasTriangularBound = true;
       return WalkResult::interrupt();
     }
@@ -250,7 +250,7 @@ bool mlir::arts::detectMatmulUpdatePattern(ForOp forOp,
                                            LoopAnalysis *loopAnalysis) {
   bool hasMatmulUpdate = false;
   forOp.walk([&](memref::StoreOp store) {
-    Value storeValue = ValueUtils::stripNumericCasts(store.getValueToStore());
+    Value storeValue = ValueAnalysis::stripNumericCasts(store.getValueToStore());
     Operation *storeValueDef = storeValue.getDefiningOp();
     if (!storeValueDef)
       return WalkResult::advance();

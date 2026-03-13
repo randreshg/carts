@@ -37,7 +37,7 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -371,7 +371,7 @@ int64_t LoopInfo::computeBlockSize() {
     bool shouldUseRuntimeAlignment = (computedBlockSize == 1);
     if (!shouldUseRuntimeAlignment) {
       if (auto runtimeConst =
-              ValueUtils::tryFoldConstantIndex(runtimeBlockSize))
+              ValueAnalysis::tryFoldConstantIndex(runtimeBlockSize))
         shouldUseRuntimeAlignment = (*runtimeConst > computedBlockSize);
       else
         shouldUseRuntimeAlignment = true;
@@ -406,7 +406,7 @@ void LoopInfo::alignChunkLowerBound(int64_t computedBlockSize) {
     alignmentBlockSize = alignSize;
 
   if (alignmentBlockSize) {
-    if (auto lbConst = ValueUtils::tryFoldConstantIndex(lowerBound)) {
+    if (auto lbConst = ValueAnalysis::tryFoldConstantIndex(lowerBound)) {
       int64_t lbVal = *lbConst;
       int64_t aligned = lbVal - (lbVal % *alignmentBlockSize);
       if (aligned != lbVal) {
@@ -1263,7 +1263,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   auto extraCloneableOps = [](Operation *op) {
     return isa<arts::DbRefOp, memref::LoadOp>(op);
   };
-  if (!ValueUtils::cloneValuesIntoRegion(
+  if (!ValueAnalysis::cloneValuesIntoRegion(
           externalValues, taskEdtRegion, redMapper, AC->getBuilder(),
           /*allowMemoryEffectFree=*/true, extraCloneableOps)) {
     for (Value external : externalValues) {

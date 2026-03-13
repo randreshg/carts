@@ -11,7 +11,7 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Dominance.h"
@@ -43,12 +43,12 @@ struct ScratchCandidate {
 };
 
 static bool isSingleSizeOne(ValueRange sizes) {
-  return sizes.size() == 1 && ValueUtils::isOneConstant(sizes.front());
+  return sizes.size() == 1 && ValueAnalysis::isOneConstant(sizes.front());
 }
 
 static bool isZeroIndexList(ValueRange values) {
   return !values.empty() && llvm::all_of(values, [](Value v) {
-    return ValueUtils::isZeroConstant(v);
+    return ValueAnalysis::isZeroConstant(v);
   });
 }
 
@@ -205,7 +205,7 @@ matchScratchCandidate(DbAllocOp alloc, DominanceInfo &domInfo) {
       return std::nullopt;
     if (!isSingleSizeOne(acquire.getSizes()) ||
         acquire.getOffsets().size() != 1 ||
-        !ValueUtils::isZeroConstant(acquire.getOffsets().front()))
+        !ValueAnalysis::isZeroConstant(acquire.getOffsets().front()))
       return std::nullopt;
 
     auto mode = getPartitionMode(acquire.getOperation());

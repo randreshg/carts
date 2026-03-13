@@ -23,7 +23,7 @@
 ///==========================================================================///
 
 #include "arts/transforms/edt/EdtTaskLoopLowering.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "llvm/ADT/STLExtras.h"
@@ -34,8 +34,8 @@ using namespace mlir::arts;
 namespace {
 
 static bool usesAsColumnOfRow(Value idx0, Value idx1, Value rowIdx, Value iv) {
-  return rowIdx && iv && ValueUtils::dependsOn(idx0, rowIdx) &&
-         ValueUtils::dependsOn(idx1, iv);
+  return rowIdx && iv && ValueAnalysis::dependsOn(idx0, rowIdx) &&
+         ValueAnalysis::dependsOn(idx1, iv);
 }
 
 static bool isColumnLoopForGlobalIter(scf::ForOp loop, Value globalIter) {
@@ -78,9 +78,9 @@ computeColumnLaneBounds(TaskLoopPostCloneInput &input, scf::ForOp loop) {
     auto parentLoop = dyn_cast<scf::ForOp>(parent);
     if (!parentLoop)
       continue;
-    if (!ValueUtils::dependsOn(loop.getLowerBound(),
+    if (!ValueAnalysis::dependsOn(loop.getLowerBound(),
                                parentLoop.getInductionVar()) &&
-        !ValueUtils::dependsOn(loop.getUpperBound(),
+        !ValueAnalysis::dependsOn(loop.getUpperBound(),
                                parentLoop.getInductionVar()))
       continue;
     domainLoop = parentLoop;
@@ -172,7 +172,7 @@ public:
       return;
 
     auto colWorkersConst =
-        ValueUtils::tryFoldConstantIndex(input.innerStripeCount);
+        ValueAnalysis::tryFoldConstantIndex(input.innerStripeCount);
     if (!colWorkersConst || *colWorkersConst <= 1)
       return;
 

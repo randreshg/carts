@@ -41,7 +41,7 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -57,32 +57,32 @@ using namespace mlir::arts;
 ///===----------------------------------------------------------------------===///
 
 static bool isMulOf(Value v, Value a, Value b) {
-  v = ValueUtils::stripClampOne(v);
-  a = ValueUtils::stripClampOne(a);
-  b = ValueUtils::stripClampOne(b);
+  v = ValueAnalysis::stripClampOne(v);
+  a = ValueAnalysis::stripClampOne(a);
+  b = ValueAnalysis::stripClampOne(b);
   if (auto mul = v.getDefiningOp<arith::MulIOp>()) {
-    Value lhs = ValueUtils::stripClampOne(mul.getLhs());
-    Value rhs = ValueUtils::stripClampOne(mul.getRhs());
-    if ((ValueUtils::sameValue(lhs, a) && ValueUtils::sameValue(rhs, b)) ||
-        (ValueUtils::sameValue(lhs, b) && ValueUtils::sameValue(rhs, a)))
+    Value lhs = ValueAnalysis::stripClampOne(mul.getLhs());
+    Value rhs = ValueAnalysis::stripClampOne(mul.getRhs());
+    if ((ValueAnalysis::sameValue(lhs, a) && ValueAnalysis::sameValue(rhs, b)) ||
+        (ValueAnalysis::sameValue(lhs, b) && ValueAnalysis::sameValue(rhs, a)))
       return true;
   }
   return false;
 }
 
 static Value canonicalizeStartBlock(Value startBlock, Value blockSize) {
-  Value sb = ValueUtils::stripClampOne(startBlock);
-  Value bs = ValueUtils::stripClampOne(blockSize);
+  Value sb = ValueAnalysis::stripClampOne(startBlock);
+  Value bs = ValueAnalysis::stripClampOne(blockSize);
   if (auto div = sb.getDefiningOp<arith::DivUIOp>()) {
-    Value lhs = ValueUtils::stripClampOne(div.getLhs());
-    Value rhs = ValueUtils::stripClampOne(div.getRhs());
-    if (ValueUtils::sameValue(rhs, bs)) {
+    Value lhs = ValueAnalysis::stripClampOne(div.getLhs());
+    Value rhs = ValueAnalysis::stripClampOne(div.getRhs());
+    if (ValueAnalysis::sameValue(rhs, bs)) {
       if (auto mul = lhs.getDefiningOp<arith::MulIOp>()) {
-        Value ml = ValueUtils::stripClampOne(mul.getLhs());
-        Value mr = ValueUtils::stripClampOne(mul.getRhs());
-        if (ValueUtils::sameValue(ml, bs))
+        Value ml = ValueAnalysis::stripClampOne(mul.getLhs());
+        Value mr = ValueAnalysis::stripClampOne(mul.getRhs());
+        if (ValueAnalysis::sameValue(ml, bs))
           return mr;
-        if (ValueUtils::sameValue(mr, bs))
+        if (ValueAnalysis::sameValue(mr, bs))
           return ml;
       }
     }
@@ -92,11 +92,11 @@ static Value canonicalizeStartBlock(Value startBlock, Value blockSize) {
 
 static std::optional<Value>
 extractLocalFromBlockBase(Value globalIdx, Value startBlock, Value blockSize) {
-  Value idx = ValueUtils::stripNumericCasts(globalIdx);
+  Value idx = ValueAnalysis::stripNumericCasts(globalIdx);
   Value sb = canonicalizeStartBlock(startBlock, blockSize);
   if (auto add = idx.getDefiningOp<arith::AddIOp>()) {
-    Value lhs = ValueUtils::stripNumericCasts(add.getLhs());
-    Value rhs = ValueUtils::stripNumericCasts(add.getRhs());
+    Value lhs = ValueAnalysis::stripNumericCasts(add.getLhs());
+    Value rhs = ValueAnalysis::stripNumericCasts(add.getRhs());
     if (isMulOf(lhs, sb, blockSize))
       return rhs;
     if (isMulOf(rhs, sb, blockSize))
@@ -113,15 +113,15 @@ static bool isLoopIvBoundedBy(Value idx, Value bs) {
   auto forOp = dyn_cast_or_null<scf::ForOp>(parentOp);
   if (!forOp || forOp.getInductionVar() != barg)
     return false;
-  Value ub = ValueUtils::stripClampOne(forOp.getUpperBound());
-  Value bsStripped = ValueUtils::stripClampOne(bs);
-  if (ValueUtils::sameValue(ub, bsStripped))
+  Value ub = ValueAnalysis::stripClampOne(forOp.getUpperBound());
+  Value bsStripped = ValueAnalysis::stripClampOne(bs);
+  if (ValueAnalysis::sameValue(ub, bsStripped))
     return true;
   if (auto minOp = ub.getDefiningOp<arith::MinUIOp>()) {
-    Value lhs = ValueUtils::stripClampOne(minOp.getLhs());
-    Value rhs = ValueUtils::stripClampOne(minOp.getRhs());
-    if (ValueUtils::sameValue(lhs, bsStripped) ||
-        ValueUtils::sameValue(rhs, bsStripped))
+    Value lhs = ValueAnalysis::stripClampOne(minOp.getLhs());
+    Value rhs = ValueAnalysis::stripClampOne(minOp.getRhs());
+    if (ValueAnalysis::sameValue(lhs, bsStripped) ||
+        ValueAnalysis::sameValue(rhs, bsStripped))
       return true;
   }
   return false;
@@ -209,7 +209,7 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
         if (!allocSingleBlock && !acquireSingleBlock) {
           if (auto local = extractLocalFromBlockBase(globalIdx, sb, bs)) {
             Value localIdxVal =
-                ValueUtils::ensureIndexType(*local, builder, loc);
+                ValueAnalysis::ensureIndexType(*local, builder, loc);
             if (isLoopIvBoundedBy(localIdxVal, bs)) {
               dbRefIdx = zero();
               localIdx = localIdxVal;
@@ -274,7 +274,7 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
     bool simplified = false;
     if (!allocSingleBlock && !acquireSingleBlock) {
       if (auto local = extractLocalFromBlockBase(globalIdx, sb, bs)) {
-        Value localIdxVal = ValueUtils::ensureIndexType(*local, builder, loc);
+        Value localIdxVal = ValueAnalysis::ensureIndexType(*local, builder, loc);
         if (isLoopIvBoundedBy(localIdxVal, bs)) {
           dbRefIdx = zero();
           localIdx = localIdxVal;
