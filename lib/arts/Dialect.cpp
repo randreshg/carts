@@ -22,6 +22,7 @@
 #include "arts/transforms/db/DbRewriter.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
 #include "polygeist/Ops.h"
 
@@ -798,6 +799,54 @@ void DbAcquireOp::build(
                                elementOffsets, elementSizes);
 }
 
+void LoweringContractOp::build(
+    OpBuilder &builder, OperationState &state, Value target,
+    std::optional<ArtsDepPattern> depPattern,
+    std::optional<EdtDistributionKind> distributionKind,
+    std::optional<EdtDistributionPattern> distributionPattern,
+    std::optional<int64_t> distributionVersion, SmallVector<int64_t> ownerDims,
+    SmallVector<int64_t> spatialDims, SmallVector<Value> blockShape,
+    SmallVector<Value> minOffsets, SmallVector<Value> maxOffsets,
+    SmallVector<Value> writeFootprint, bool supportedBlockHalo) {
+  state.addOperands(target);
+  state.addOperands(blockShape);
+  state.addOperands(minOffsets);
+  state.addOperands(maxOffsets);
+  state.addOperands(writeFootprint);
+  state.addAttribute("operandSegmentSizes",
+                     builder.getDenseI32ArrayAttr(
+                         {1, static_cast<int32_t>(blockShape.size()),
+                          static_cast<int32_t>(minOffsets.size()),
+                          static_cast<int32_t>(maxOffsets.size()),
+                          static_cast<int32_t>(writeFootprint.size())}));
+
+  if (depPattern)
+    state.addAttribute("dep_pattern", ArtsDepPatternAttr::get(
+                                          builder.getContext(), *depPattern));
+  if (distributionKind)
+    state.addAttribute(
+        "distribution_kind",
+        EdtDistributionKindAttr::get(builder.getContext(), *distributionKind));
+  if (distributionPattern)
+    state.addAttribute("distribution_pattern",
+                       EdtDistributionPatternAttr::get(builder.getContext(),
+                                                       *distributionPattern));
+  if (distributionVersion) {
+    state.addAttribute(
+        "distribution_version",
+        IntegerAttr::get(IntegerType::get(builder.getContext(), 64),
+                         *distributionVersion));
+  }
+  if (!ownerDims.empty())
+    state.addAttribute("owner_dims", builder.getDenseI64ArrayAttr(ownerDims));
+  if (!spatialDims.empty())
+    state.addAttribute("spatial_dims",
+                       builder.getDenseI64ArrayAttr(spatialDims));
+  if (supportedBlockHalo)
+    state.addAttribute("supported_block_halo",
+                       UnitAttr::get(builder.getContext()));
+}
+
 LogicalResult DbAcquireOp::verify() {
   size_t numSizes = getSizes().size();
   size_t numOffsets = getOffsets().size();
@@ -848,6 +897,38 @@ LogicalResult DbAcquireOp::verify() {
                << *getOperation();
       }
     }
+  }
+
+  return success();
+}
+
+LogicalResult LoweringContractOp::verify() {
+  auto ownerDims = (*this)->getAttrOfType<DenseI64ArrayAttr>("owner_dims");
+  size_t expectedRank = ownerDims ? ownerDims.size() : 0;
+
+  auto verifyRankedOperands = [&](OperandRange values,
+                                  StringRef name) -> LogicalResult {
+    if (expectedRank != 0 && !values.empty() && values.size() != expectedRank)
+      return emitOpError() << name << " rank (" << values.size()
+                           << ") must match owner_dims rank (" << expectedRank
+                           << ")";
+    return success();
+  };
+
+  if (failed(verifyRankedOperands(getBlockShape(), "block_shape")) ||
+      failed(verifyRankedOperands(getMinOffsets(), "min_offsets")) ||
+      failed(verifyRankedOperands(getMaxOffsets(), "max_offsets")) ||
+      failed(verifyRankedOperands(getWriteFootprint(), "write_footprint")))
+    return failure();
+
+  if (getMinOffsets().size() != getMaxOffsets().size())
+    return emitOpError("min_offsets and max_offsets must have the same rank");
+
+  if ((*this)->hasAttr("supported_block_halo")) {
+    auto depPattern = getDepPattern();
+    if (!depPattern || !isStencilFamilyDepPattern(*depPattern))
+      return emitOpError(
+          "supported_block_halo requires a stencil-family dep_pattern");
   }
 
   return success();

@@ -36,6 +36,7 @@
 #include "arts/transforms/edt/EdtRewriter.h"
 #include "arts/transforms/edt/EdtTaskLoopLowering.h"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
@@ -69,7 +70,6 @@ namespace {
 /// Inputs required to plan one rewritten task acquire.
 struct AcquireRewritePlanningInput {
   ArtsCodegen *AC = nullptr;
-  mlir::arts::AnalysisManager *analysisManager = nullptr;
   Location loc;
 
   ForOp loopOp;
@@ -134,16 +134,13 @@ planAcquireRewrite(AcquireRewritePlanningInput input) {
   AcquireRewritePlan plan{makePlan()};
 
   bool isSingleElement = false;
-  bool needsStencilHalo = false;
   bool forceCoarseRewrite = plan.rewriteInput.forceCoarse;
-  bool preserveParentDependencyRange = false;
   Value stencilExtent;
   SmallVector<Value, 4> extraOffsets;
   SmallVector<Value, 4> extraSizes;
   SmallVector<Value, 4> extraHintSizes;
   SmallVector<Value, 4> dimensionExtents;
-  SmallVector<int64_t, 4> haloMinOffsets;
-  SmallVector<int64_t, 4> haloMaxOffsets;
+  AcquireRewriteContract rewriteContract;
 
   if (Operation *rootAllocOp = DbUtils::getUnderlyingDbAlloc(input.rootPtr)) {
     if (auto dbAlloc = dyn_cast<DbAllocOp>(rootAllocOp)) {
@@ -154,125 +151,33 @@ planAcquireRewrite(AcquireRewritePlanningInput input) {
           return ValueAnalysis::getConstantIndex(value, constant) &&
                  constant == 1;
         });
-
-        ArtsDepPattern depPattern =
-            getEffectiveDepPattern(input.parentAcquire.getOperation())
-                .value_or(ArtsDepPattern::unknown);
-        const DbAcquirePartitionFacts *acquireFacts = nullptr;
-        std::optional<AccessPattern> acquireAccessPattern;
-        auto accessPattern = getDbAccessPattern(dbAlloc.getOperation());
-        if (input.analysisManager) {
-          DbAnalysis &dbAnalysis = input.analysisManager->getDbAnalysis();
-          acquireFacts =
-              dbAnalysis.getAcquirePartitionFacts(input.parentAcquire);
-          if (!acquireFacts)
-            acquireAccessPattern =
-                dbAnalysis.getAcquireAccessPattern(input.parentAcquire);
-        }
-        const ArtsMode mode = input.parentAcquire.getMode();
-
-        const bool inoutReadsCrossElementSelf =
-            mode == ArtsMode::inout &&
-            (depPattern == ArtsDepPattern::wavefront_2d ||
-             (input.analysisManager &&
-              input.analysisManager->getDbAnalysis()
-                  .hasCrossElementSelfReadInLoop(input.parentAcquire,
-                                                 input.loopOp)));
-
-        const bool modeNeedsPatternStencilHalo =
-            mode == ArtsMode::in || inoutReadsCrossElementSelf;
-        bool patternSaysStencil = isStencilHaloDepPattern(depPattern);
-        if (!patternSaysStencil && acquireFacts)
-          patternSaysStencil =
-              acquireFacts->accessPattern == AccessPattern::Stencil;
-        if (!patternSaysStencil && acquireAccessPattern)
-          patternSaysStencil = *acquireAccessPattern == AccessPattern::Stencil;
-        if (!patternSaysStencil && accessPattern)
-          patternSaysStencil = *accessPattern == DbAccessPattern::stencil;
-
-        SmallVector<int64_t, 4> ownerDims;
-        if (auto attrOwnerDims =
-                getStencilOwnerDims(input.parentAcquire.getOperation())) {
-          ownerDims.append(attrOwnerDims->begin(), attrOwnerDims->end());
-        } else if (acquireFacts && !acquireFacts->stencilOwnerDims.empty()) {
-          for (unsigned dim : acquireFacts->stencilOwnerDims)
-            ownerDims.push_back(static_cast<int64_t>(dim));
-        }
-        auto minOffsetsAttr =
-            getStencilMinOffsets(input.parentAcquire.getOperation());
-        auto maxOffsetsAttr =
-            getStencilMaxOffsets(input.parentAcquire.getOperation());
-
-        const bool strategySaysStencil =
-            input.distributionPattern &&
-            *input.distributionPattern == EdtDistributionPattern::stencil;
-        const bool strategyNeedsStencilHalo = mode == ArtsMode::in;
-
-        needsStencilHalo =
-            !isSingleElement &&
-            ((patternSaysStencil && modeNeedsPatternStencilHalo) ||
-             (strategySaysStencil && strategyNeedsStencilHalo));
-
-        const bool hasExplicitStencilContract =
-            !ownerDims.empty() || strategySaysStencil || patternSaysStencil;
-        preserveParentDependencyRange =
-            mode == ArtsMode::in && !needsStencilHalo &&
-            !hasExplicitStencilContract && extraOffsets.empty() &&
-            !input.parentAcquire.getOffsets().empty() &&
-            !input.parentAcquire.getSizes().empty();
-
-        ARTS_DEBUG(
-            "Acquire rewrite plan: mode="
-            << static_cast<int>(mode)
-            << " patternSaysStencil=" << patternSaysStencil << " allocPattern="
-            << (accessPattern ? static_cast<int>(*accessPattern) : -1)
-            << " acquirePattern="
-            << (acquireAccessPattern ? static_cast<int>(*acquireAccessPattern)
-                                     : -1)
-            << " strategySaysStencil=" << strategySaysStencil
-            << " inoutReadsCrossElementSelf=" << inoutReadsCrossElementSelf);
-
-        const bool isWavefrontSelfRead =
-            depPattern == ArtsDepPattern::wavefront_2d &&
-            inoutReadsCrossElementSelf;
-        if (mode == ArtsMode::inout && inoutReadsCrossElementSelf &&
-            (patternSaysStencil || strategySaysStencil) &&
-            !isWavefrontSelfRead) {
-          ARTS_DEBUG(
-              "Keeping inout acquire coarse due to generic cross-element "
-              "self-read");
-          forceCoarseRewrite = true;
-          needsStencilHalo = false;
-        }
+        rewriteContract = deriveAcquireRewriteContract(input.parentAcquire);
 
         unsigned primaryOwnerDim = 0;
-        if (!ownerDims.empty() && ownerDims.front() >= 0 &&
-            static_cast<size_t>(ownerDims.front()) < elemSizes.size()) {
-          primaryOwnerDim = static_cast<unsigned>(ownerDims.front());
+        if (!rewriteContract.ownerDims.empty() &&
+            rewriteContract.ownerDims.front() >= 0 &&
+            static_cast<size_t>(rewriteContract.ownerDims.front()) <
+                elemSizes.size()) {
+          primaryOwnerDim =
+              static_cast<unsigned>(rewriteContract.ownerDims.front());
         }
 
         Value primaryExtent =
             input.AC->castToIndex(elemSizes[primaryOwnerDim], input.loc);
-        if (needsStencilHalo)
+        if (rewriteContract.applyStencilHalo)
           stencilExtent = primaryExtent;
         dimensionExtents.push_back(primaryExtent);
-
-        if (minOffsetsAttr && maxOffsetsAttr && !minOffsetsAttr->empty() &&
-            minOffsetsAttr->size() == maxOffsetsAttr->size()) {
-          haloMinOffsets.push_back(minOffsetsAttr->front());
-          haloMaxOffsets.push_back(maxOffsetsAttr->front());
-        } else if (needsStencilHalo) {
-          haloMinOffsets.push_back(-1);
-          haloMaxOffsets.push_back(1);
-        }
 
         if (input.distributionKind == DistributionKind::Tiling2D &&
             elemSizes.size() > 1 && !isSingleElement && input.tiling2DGrid &&
             input.tiling2DGrid->colWorkers) {
           unsigned secondaryOwnerDim = 1;
-          if (ownerDims.size() > 1 && ownerDims[1] >= 0 &&
-              static_cast<size_t>(ownerDims[1]) < elemSizes.size()) {
-            secondaryOwnerDim = static_cast<unsigned>(ownerDims[1]);
+          if (rewriteContract.ownerDims.size() > 1 &&
+              rewriteContract.ownerDims[1] >= 0 &&
+              static_cast<size_t>(rewriteContract.ownerDims[1]) <
+                  elemSizes.size()) {
+            secondaryOwnerDim =
+                static_cast<unsigned>(rewriteContract.ownerDims[1]);
           }
 
           Value totalCols =
@@ -304,31 +209,24 @@ planAcquireRewrite(AcquireRewritePlanningInput input) {
           extraSizes.push_back(colCount);
           extraHintSizes.push_back(colCount);
           dimensionExtents.push_back(totalCols);
-          if (minOffsetsAttr && maxOffsetsAttr && minOffsetsAttr->size() > 1 &&
-              maxOffsetsAttr->size() > 1) {
-            haloMinOffsets.push_back((*minOffsetsAttr)[1]);
-            haloMaxOffsets.push_back((*maxOffsetsAttr)[1]);
-          } else {
-            haloMinOffsets.push_back(0);
-            haloMaxOffsets.push_back(0);
-          }
+          rewriteContract.preserveParentDependencyRange = false;
         }
       }
     }
   }
 
-  plan.useStencilRewriter = needsStencilHalo;
+  plan.useStencilRewriter = rewriteContract.applyStencilHalo;
   plan.rewriteInput.singleElement = isSingleElement;
   plan.rewriteInput.forceCoarse = forceCoarseRewrite;
   plan.rewriteInput.preserveParentDependencyRange =
-      preserveParentDependencyRange;
+      rewriteContract.preserveParentDependencyRange;
   plan.rewriteInput.stencilExtent = stencilExtent;
   plan.rewriteInput.extraOffsets = std::move(extraOffsets);
   plan.rewriteInput.extraSizes = std::move(extraSizes);
   plan.rewriteInput.extraHintSizes = std::move(extraHintSizes);
   plan.rewriteInput.dimensionExtents = std::move(dimensionExtents);
-  plan.rewriteInput.haloMinOffsets = std::move(haloMinOffsets);
-  plan.rewriteInput.haloMaxOffsets = std::move(haloMaxOffsets);
+  plan.rewriteInput.haloMinOffsets = std::move(rewriteContract.haloMinOffsets);
+  plan.rewriteInput.haloMaxOffsets = std::move(rewriteContract.haloMaxOffsets);
   return plan;
 }
 
@@ -375,16 +273,10 @@ static std::optional<TaskAcquireWindow> computeTaskAcquireWindowInBlockSpace(
   /// block window used by DB slice metadata on 1-D / row-owned plans.
   Value elementOffset = plannedElementOffset;
   Value elementSize = plannedElementSizeSeed;
-  ArtsDepPattern depPattern =
-      getEffectiveDepPattern(parentAcquire.getOperation())
-          .value_or(ArtsDepPattern::unknown);
-  const bool useWavefrontInoutWindow =
-      parentAcquire.getMode() == ArtsMode::inout && usesStencilHalo &&
-      depPattern == ArtsDepPattern::wavefront_2d;
+  AcquireRewriteContract rewriteContract =
+      deriveAcquireRewriteContract(parentAcquire);
   const bool useRewrittenWindow =
-      ((parentAcquire.getMode() == ArtsMode::in &&
-        (usesStencilHalo || mode == PartitionMode::stencil)) ||
-       useWavefrontInoutWindow);
+      rewriteContract.usePartitionSliceAsDependencyWindow;
 
   if (useRewrittenWindow) {
     /// For pattern-backed block/stencil contracts, partition_* carries the
@@ -1319,7 +1211,6 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
           getEdtDistributionPattern(originalParallel.getOperation());
 
     AcquireRewritePlanningInput planningInput{AC,
-                                              AM,
                                               loc,
                                               forOp,
                                               parentAcqOp,
@@ -1343,10 +1234,11 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
     auto setDbSpaceSliceFromAcquirePlan = [&](DbAcquireOp acquireOp,
                                               bool usesStencilHalo) {
+      AcquireRewriteContract rewriteContract =
+          deriveAcquireRewriteContract(parentAcqOp);
       bool shouldUseStencilWindow =
           usesStencilHalo ||
-          (parentAcqOp.getMode() == ArtsMode::in && distributionPattern &&
-           *distributionPattern == EdtDistributionPattern::stencil);
+          rewriteContract.usePartitionSliceAsDependencyWindow;
 
       /// Read-only acquires already get their task-local window from
       /// rewriteAcquire(). This helper only updates the DB-space slice metadata
@@ -1370,7 +1262,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       auto window = computeTaskAcquireWindowInBlockSpace(
           AC, loc, parentAcqOp, acquireOp, rootGuidValue, rootPtrValue,
           loopInfo.strategy.kind, distributionPattern, acquireOffsetVal,
-          loopInfo.bounds.iterCount, acquireHintSizeVal, shouldUseStencilWindow);
+          loopInfo.bounds.iterCount, acquireHintSizeVal,
+          shouldUseStencilWindow);
       if (!window)
         return;
 
@@ -1440,6 +1333,10 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
             loc, parentAcqOp.getMode(), rootGuidValue, rootPtrValue,
             parentAcqOp.getPtr().getType(), mode, parentIndices, parentOffsets,
             parentSizes, parentPartIndices, parentPartOffsets, parentPartSizes);
+        copySemanticContractAttrs(parentAcqOp.getOperation(),
+                                  chunkAcqOp.getOperation());
+        copyLoweringContract(parentAcqOp.getPtr(), chunkAcqOp.getPtr(),
+                             AC->getBuilder(), loc);
         chunkAcqOp.copyPartitionSegmentsFrom(parentAcqOp);
       }
 
@@ -1451,18 +1348,18 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     }
 
     auto chunkMode = chunkAcqOp.getPartitionMode();
+    AcquireRewriteContract chunkRewriteContract =
+        deriveAcquireRewriteContract(chunkAcqOp);
     bool shouldMarkStencilCenter =
-        distributionPattern &&
-        *distributionPattern == EdtDistributionPattern::stencil &&
-        (chunkUsesStencilHalo || chunkAcqOp.getMode() == ArtsMode::in ||
-         (chunkMode && *chunkMode == PartitionMode::stencil));
+        chunkRewriteContract.usePartitionSliceAsDependencyWindow ||
+        chunkRewriteContract.applyStencilHalo ||
+        (chunkMode && *chunkMode == PartitionMode::stencil);
     if (shouldMarkStencilCenter &&
         !getStencilCenterOffset(chunkAcqOp.getOperation())) {
       int64_t centerOffset = 1;
-      if (auto minOffsets = getStencilMinOffsets(chunkAcqOp.getOperation());
-          minOffsets && !minOffsets->empty()) {
-        centerOffset = std::max<int64_t>(0, -minOffsets->front());
-      }
+      if (!chunkRewriteContract.haloMinOffsets.empty())
+        centerOffset =
+            std::max<int64_t>(0, -chunkRewriteContract.haloMinOffsets.front());
       setStencilCenterOffset(chunkAcqOp.getOperation(), centerOffset);
     }
 

@@ -1,7 +1,7 @@
 # CARTS Compiler Pipeline (Stage Order)
 
 This document mirrors the actual `carts-compile` stage order in
-`tools/run/carts-compile.cpp`.
+`tools/compile/Compile.cpp`.
 
 Use it as the canonical checklist when auditing pass ordering, ownership, and
 cross-stage contracts.
@@ -12,8 +12,8 @@ cross-stage contracts.
 2. `collect-metadata`
 3. `initial-cleanup`
 4. `openmp-to-arts`
-5. `edt-transforms`
-6. `loop-reordering`
+5. `pattern-pipeline`
+6. `edt-transforms`
 7. `create-dbs`
 8. `db-opt`
 9. `edt-opt`
@@ -49,11 +49,20 @@ cross-stage contracts.
 
 ### 4) openmp-to-arts
 - `ConvertOpenMPtoArts`
-- `DepTransforms`
 - `DeadCodeElimination`
 - `CSE`
 
-### 5) edt-transforms
+### 5) pattern-pipeline
+- `PatternDiscoveryPass(seed)`
+- `DepTransforms`
+- `LoopNormalization`
+- `StencilBoundaryPeeling`
+- `LoopReordering`
+- `PatternDiscoveryPass(refine)`
+- `KernelTransforms`
+- `CSE`
+
+### 6) edt-transforms
 - `EdtPass(runAnalysis=false)`
 - `EdtInvariantCodeMotion`
 - `DeadCodeElimination`
@@ -61,18 +70,12 @@ cross-stage contracts.
 - `CSE`
 - `EdtPtrRematerialization`
 
-### 6) loop-reordering
-- `LoopNormalization`
-- `StencilBoundaryPeeling`
-- `LoopReordering`
-- `KernelTransforms`
+### 7) create-dbs
+- pre-DB contract bridging / lowering-contract seeding
 - `DistributedHostLoopOutlining`
   - auto-enabled by multinode builds and by `--distributed-db`
   - outlines eligible host producer loops so they flow through the regular
     distributed `arts.for` pipeline before `CreateDbs`
-- `CSE`
-
-### 7) create-dbs
 - `CreateDbs`
 - `PolygeistCanonicalize`
 - `CSE`
@@ -168,13 +171,16 @@ cross-stage contracts.
 ## Utility Ownership Notes
 
 - Machine/config parsing belongs to `AbstractMachine`.
-- Pattern and strategy decisions belong to analysis:
-  `DistributionHeuristics`, `PartitioningHeuristics`, `DbAnalysis`.
+- Metadata belongs to `CollectMetadataPass` and the metadata managers.
+- Pattern discovery and refinement belong to the pattern pipeline:
+  `PatternDiscovery`, `DepTransforms`, and `KernelTransforms`.
+- Pattern passes stamp contracts; DB/EDT lowering passes consume those
+  contracts instead of rediscovering supported families from metadata or raw
+  IR structure.
+- Analysis and heuristics should speak the same contract vocabulary whenever a
+  supported family is present:
+  `DistributionHeuristics`, `PartitioningHeuristics`, and `DbAnalysis`.
 - IR lowering details belong to pass/transform layers:
   `ForLowering`, DB/EDT lowerings, `ConvertArtsToLLVM`.
-- Structural transform ownership is split between:
-  `DepTransforms` (dependence/schedule rewrites),
-  `KernelTransforms` (kernel-form rewrites),
-  `LoopNormalization` (shape cleanup only).
 - Type cast helpers should prefer shared utility methods (`ArtsCodegen` or
   `ValueUtils`) instead of pass-local duplicates.

@@ -71,6 +71,31 @@ def ConvertOpenMPToArts : Pass<"convert-openmp-to-arts", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createConvertOpenMPtoArtsPass()";
 }
 
+def PatternDiscovery : Pass<"arts-pattern-discovery", "mlir::ModuleOp"> {
+  let summary = "Seed or refine reusable pre-DB pattern contracts";
+  let description = [{
+    Runs metadata-guided pattern discovery on ARTS IR before DB creation.
+    This pass does not perform the full schedule/kernel rewrite itself.
+    Instead it:
+    - seeds candidate pattern contracts after OpenMP-to-ARTS conversion
+    - refines those contracts after structural cleanup exposes cleaner shapes
+    - normalizes shared contract revision/family metadata for downstream
+      DepTransforms and KernelTransforms
+
+    The pass is intended to run multiple times inside the dedicated pattern
+    pipeline, typically once in seed mode and once in refine mode.
+  }];
+  let dependentDialects = [
+    "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",
+    "arith::ArithDialect", "scf::SCFDialect"
+  ];
+  let options = [
+    Option<"refine", "refine", "bool", /*default=*/"false",
+           "Run in refine mode instead of seed mode.">
+  ];
+  let constructor = "mlir::arts::createPatternDiscoveryPass(nullptr)";
+}
+
 def DeadCodeElimination : Pass<"arts-dce", "mlir::ModuleOp"> {
   let summary = "Remove dead loads, stores, allocas, and symbols";
   let description = [{
@@ -430,10 +455,18 @@ def BlockLoopStripMining : Pass<"block-stripmine", "mlir::func::FuncOp"> {
   let constructor = "mlir::arts::createBlockLoopStripMiningPass()";
 }
 
+///===----------------------------------------------------------------------===///
+/// Pattern Pipeline Passes
+///===----------------------------------------------------------------------===///
+///
+/// These passes together form the dedicated pre-DB semantic pattern pipeline
+/// in the compiler driver. They teach ARTS about kernel/dependence families
+/// before DB creation and before distribution/partitioning lowering.
+
 def LoopNormalization : Pass<"loop-normalization", "mlir::ModuleOp"> {
   let summary = "Pattern-based loop normalization for partitioning";
   let description =
-      [{Applies loop normalization patterns to enable downstream
+      [{Pattern-pipeline pass. Applies loop normalization patterns to enable downstream
             DbPartitioning.Registered patterns include symmetric -
         triangular normalization(
             converts triangular loops with symmetric writes to rectangular form)
@@ -448,6 +481,7 @@ def LoopNormalization : Pass<"loop-normalization", "mlir::ModuleOp"> {
 def DepTransforms : Pass<"arts-dep-transforms", "mlir::ModuleOp"> {
   let summary = "Apply dependence-preserving schedule rewrites before DB creation";
   let description = [{
+    Pattern-pipeline pass.
     Groups exact dependence-shape transformations that run on ARTS/scf IR after
     OpenMP-to-ARTS conversion and expose scalable task and DB partitioning
     opportunities without changing program semantics.
@@ -471,6 +505,7 @@ def StencilBoundaryPeeling : Pass<"stencil-boundary-peeling",
                                   "mlir::ModuleOp"> {
   let summary = "Peel boundary iterations out of stencil inner loops";
   let description = [{
+    Pattern-pipeline pass.
     Detects row-boundary plus column-boundary guard patterns inside inner
     stencil loops and rewrites them into:
     - a boundary-row loop that preserves the original boundary behavior
@@ -490,6 +525,7 @@ def StencilBoundaryPeeling : Pass<"stencil-boundary-peeling",
 def LoopReordering : Pass<"loop-reordering", "mlir::ModuleOp"> {
   let summary = "Reorder inner loops for cache-optimal access patterns";
   let description = [{
+      Pattern-pipeline pass.
       Applies loop reordering transformations based on metadata collected during
           the CollectMetadata phase
               .This pass reads the `reorder_nest_to` field from LoopMetadata(
@@ -505,6 +541,7 @@ def LoopReordering : Pass<"loop-reordering", "mlir::ModuleOp"> {
 def KernelTransforms : Pass<"arts-kernel-transforms", "mlir::ModuleOp"> {
   let summary = "ARTS kernel-form transforms that expose better distribution";
   let description = [{
+    Pattern-pipeline pass.
     Applies semantics-preserving kernel-form rewrites that make downstream
     ARTS distribution, partitioning, and locality optimizations more effective.
 

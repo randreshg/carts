@@ -53,6 +53,7 @@
 #include "arts/transforms/db/block/DbBlockIndexer.h"
 #include "arts/transforms/db/elementwise/DbElementWiseIndexer.h"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/Utils.h"
@@ -714,6 +715,14 @@ void CreateDbsPass::createDbAllocOps() {
         AC->create<DbAllocOp>(loc, mode, route, allocType, dbMode, elementType,
                               sizes, elementSizes, partitionMode);
 
+    {
+      OpBuilder::InsertionGuard contractGuard(AC->getBuilder());
+      AC->setInsertionPointAfter(dbAllocOp);
+      if (auto contractInfo = getLoweringContract(alloc, AC->getBuilder(), loc))
+        upsertLoweringContract(AC->getBuilder(), loc, dbAllocOp.getPtr(),
+                               *contractInfo);
+    }
+
     /// Initialize global DBs
     initializeGlobalDbIfNeeded(alloc, dbAllocOp, sizes, allocType);
 
@@ -1071,6 +1080,14 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       if (auto depPattern = getEffectiveDepPattern(edt.getOperation()))
         acquireOp.setDepPattern(*depPattern);
       copyStencilContractAttrs(edt.getOperation(), acquireOp.getOperation());
+      {
+        OpBuilder::InsertionGuard contractGuard(AC->getBuilder());
+        AC->setInsertionPointAfter(acquireOp);
+        if (auto contractInfo = getLoweringContract(
+                edt.getOperation(), AC->getBuilder(), edt.getLoc()))
+          upsertLoweringContract(AC->getBuilder(), edt.getLoc(),
+                                 acquireOp.getPtr(), *contractInfo);
+      }
 
       if (!depGroup.empty()) {
         /// Explicit DbControlOp-derived acquires already carry the exact

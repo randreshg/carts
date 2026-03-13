@@ -51,7 +51,7 @@ struct KernelTransformsPass
     if (enableElementwisePipeline)
       rewrites += applyElementwisePipelineTransform(module);
 
-    SmallVector<std::unique_ptr<LoopPattern>> patterns;
+    SmallVector<std::unique_ptr<KernelPatternTransform>> patterns;
     patterns.push_back(createStencilTilingNDPattern());
     if (enableMatmul)
       patterns.push_back(
@@ -83,12 +83,10 @@ private:
 
 } // namespace
 
-std::unique_ptr<Pass>
-mlir::arts::createKernelTransformsPass(mlir::arts::AnalysisManager *AM,
-                                       bool enableElementwisePipeline,
-                                       bool enableMatmul, bool enableTiling,
-                                       int64_t tileJ, int64_t minTripCount) {
-  return std::make_unique<KernelTransformsPass>(
-      AM, enableElementwisePipeline, enableMatmul, enableTiling, tileJ,
-      minTripCount);
+std::unique_ptr<Pass> mlir::arts::createKernelTransformsPass(
+    mlir::arts::AnalysisManager *AM, bool enableElementwisePipeline,
+    bool enableMatmul, bool enableTiling, int64_t tileJ, int64_t minTripCount) {
+  return std::make_unique<KernelTransformsPass>(AM, enableElementwisePipeline,
+                                                enableMatmul, enableTiling,
+                                                tileJ, minTripCount);
 }

@@ -31,6 +31,8 @@ std::unique_ptr<Pass> createCollectMetadataPass(bool exportMetadata,
                                                 llvm::StringRef metadataFile);
 std::unique_ptr<Pass> createCanonicalizeMemrefsPass();
 std::unique_ptr<Pass> createConvertOpenMPtoArtsPass();
+std::unique_ptr<Pass> createPatternDiscoveryPass(AnalysisManager *AM,
+                                                 bool refine = false);
 std::unique_ptr<Pass> createDCEPass();
 std::unique_ptr<Pass> createEdtPass(AnalysisManager *AM, bool runAnalysis);
 std::unique_ptr<Pass> createConcurrencyPass(AnalysisManager *AM);
@@ -72,12 +74,11 @@ std::unique_ptr<Pass> createDepTransformsPass();
 std::unique_ptr<Pass> createStencilBoundaryPeelingPass();
 std::unique_ptr<Pass> createLoopNormalizationPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createLoopReorderingPass(AnalysisManager *AM);
-std::unique_ptr<Pass> createKernelTransformsPass(AnalysisManager *AM,
-                                                 bool enableElementwisePipeline = true,
-                                                 bool enableMatmul = true,
-                                                 bool enableTiling = true,
-                                                 int64_t tileJ = 64,
-                                                 int64_t minTripCount = 128);
+std::unique_ptr<Pass>
+createKernelTransformsPass(AnalysisManager *AM,
+                           bool enableElementwisePipeline = true,
+                           bool enableMatmul = true, bool enableTiling = true,
+                           int64_t tileJ = 64, int64_t minTripCount = 128);
 std::unique_ptr<Pass> createVerifyMetadataPass(AnalysisManager *AM,
                                                bool failOnMissing = false);
 } // namespace arts

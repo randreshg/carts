@@ -112,8 +112,6 @@ public:
 
   /// Loop-scoped DB partition analysis, proxied through LoopAnalysis.
   std::optional<DbAnalysis::LoopDbAccessSummary> getDbAccessSummary() const;
-  void collectAcquirePartitionFacts(
-      SmallVectorImpl<const DbAcquirePartitionFacts *> &acquireFacts) const;
   bool hasDistributedDbContract() const;
   bool hasPeerInferredPartitionDims() const;
 

@@ -221,15 +221,12 @@ static bool hasStencilReadInternodeEdtUse(DbAllocOp alloc,
         if (!acquireNode->isReadOnlyAccess())
           return false;
 
-        auto depPattern = getEffectiveDepPattern(acquireOp.getOperation())
-                              .value_or(ArtsDepPattern::unknown);
-        if (isStencilFamilyDepPattern(depPattern) ||
-            getStencilCenterOffset(acquireOp.getOperation()))
+        if (auto contract = dbAnalysis.getAcquireContractSummary(acquireOp);
+            contract && contract->usesStencilSemantics())
           return true;
 
-        if (const DbAcquirePartitionFacts *facts =
-                dbAnalysis.getAcquirePartitionFacts(acquireOp))
-          return facts->accessPattern == AccessPattern::Stencil;
+        if (auto accessPattern = dbAnalysis.getAcquireAccessPattern(acquireOp))
+          return *accessPattern == AccessPattern::Stencil;
 
         return acquireNode->getAccessPattern() == AccessPattern::Stencil;
       });

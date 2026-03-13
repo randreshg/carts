@@ -76,7 +76,8 @@ static bool isUnitStep(Value step) {
 static int64_t resolveWorkerCount(EdtOp parallelEdt) {
   if (!parallelEdt)
     return 1;
-  if (auto workers = getWorkers(parallelEdt.getOperation()); workers && *workers > 0)
+  if (auto workers = getWorkers(parallelEdt.getOperation());
+      workers && *workers > 0)
     return *workers;
   if (auto module = parallelEdt->getParentOfType<ModuleOp>()) {
     if (auto runtimeWorkers = getRuntimeTotalWorkers(module);
@@ -89,17 +90,15 @@ static int64_t resolveWorkerCount(EdtOp parallelEdt) {
 static std::pair<int64_t, int64_t>
 chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
   ForOp rowFor = match.rowFor;
-  auto iTrip = ValueAnalysis::tryFoldConstantIndex(
-      rowFor.getUpperBound().front());
-  auto iLb = ValueAnalysis::tryFoldConstantIndex(
-      rowFor.getLowerBound().front());
+  auto iTrip =
+      ValueAnalysis::tryFoldConstantIndex(rowFor.getUpperBound().front());
+  auto iLb =
+      ValueAnalysis::tryFoldConstantIndex(rowFor.getLowerBound().front());
   auto jTrip = ValueAnalysis::tryFoldConstantIndex(match.innerUpperBound);
   auto jLb = ValueAnalysis::tryFoldConstantIndex(match.innerLowerBound);
 
-  int64_t iExtent =
-      (iTrip && iLb) ? std::max<int64_t>(1, *iTrip - *iLb) : 1;
-  int64_t jExtent =
-      (jTrip && jLb) ? std::max<int64_t>(1, *jTrip - *jLb) : 1;
+  int64_t iExtent = (iTrip && iLb) ? std::max<int64_t>(1, *iTrip - *iLb) : 1;
+  int64_t jExtent = (jTrip && jLb) ? std::max<int64_t>(1, *jTrip - *jLb) : 1;
 
   int64_t workers = resolveWorkerCount(match.parallelEdt);
   workers = std::max<int64_t>(1, workers);
@@ -125,8 +124,7 @@ chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
     int64_t maxRank = 2 * (numITiles - 1) + (numJTiles - 1);
     int64_t bestWidth = 1;
     for (int64_t rank = 0; rank <= maxRank; ++rank) {
-      int64_t minTileI = std::max<int64_t>(
-          0, (rank - (numJTiles - 1) + 1) / 2);
+      int64_t minTileI = std::max<int64_t>(0, (rank - (numJTiles - 1) + 1) / 2);
       int64_t maxTileI = std::min<int64_t>(numITiles - 1, rank / 2);
       if (maxTileI < minTileI)
         continue;
@@ -135,9 +133,8 @@ chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
     return bestWidth;
   };
 
-  int64_t desiredFrontier =
-      std::min<int64_t>(workers,
-                        computeWeightedFrontierWidth(maxRowTiles, maxColTiles));
+  int64_t desiredFrontier = std::min<int64_t>(
+      workers, computeWeightedFrontierWidth(maxRowTiles, maxColTiles));
 
   auto scoreCandidate = [&](int64_t numITiles,
                             int64_t numJTiles) -> long double {
@@ -150,8 +147,7 @@ chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
     // available concurrency from the exact width of those rank frontiers
     // instead of the ordinary anti-diagonal width.
     int64_t tilesPerStep = numITiles * numJTiles;
-    int64_t frontierWidth =
-        computeWeightedFrontierWidth(numITiles, numJTiles);
+    int64_t frontierWidth = computeWeightedFrontierWidth(numITiles, numJTiles);
     int64_t rankCount = computeWeightedRankCount(numITiles, numJTiles);
     long double averageFrontier =
         static_cast<long double>(tilesPerStep) /
@@ -159,14 +155,14 @@ chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
 
     long double frontierPenalty = 0.0L;
     if (frontierWidth < desiredFrontier) {
-      long double gap = static_cast<long double>(desiredFrontier - frontierWidth);
+      long double gap =
+          static_cast<long double>(desiredFrontier - frontierWidth);
       frontierPenalty = gap * gap * 1.0e12L;
     }
 
     long double averagePenalty = 0.0L;
-    long double desiredAverage =
-        std::max<long double>(1.0L, static_cast<long double>(desiredFrontier) *
-                                        0.65L);
+    long double desiredAverage = std::max<long double>(
+        1.0L, static_cast<long double>(desiredFrontier) * 0.65L);
     if (averageFrontier < desiredAverage) {
       long double gap = desiredAverage - averageFrontier;
       averagePenalty = gap * gap * 1.0e8L;
@@ -298,8 +294,7 @@ static bool looksLikeSeidelStencilBody(Operation *innerLoop, Value rowIV,
 
   return loadCount >= 8 && storeCount == 1 && storedMemref &&
          (stencilMemref = storedMemref) && loadMemref == storedMemref &&
-         hasRowMinusOne && hasRowPlusOne &&
-         hasColMinusOne && hasColPlusOne;
+         hasRowMinusOne && hasRowPlusOne && hasColMinusOne && hasColPlusOne;
 }
 
 static ForOp getSingleTopLevelFor(EdtOp edt) {
@@ -432,16 +427,16 @@ static Value createAnd(OpBuilder &builder, Location loc, Value lhs, Value rhs) {
   return builder.create<arith::AndIOp>(loc, lhs, rhs);
 }
 
-static std::pair<Value, Value>
-computeTileBounds(OpBuilder &builder, Location loc, Value tileCoord,
-                  Value baseLowerBound, Value globalUpperBound,
-                  Value tileExtent) {
+static std::pair<Value, Value> computeTileBounds(OpBuilder &builder,
+                                                 Location loc, Value tileCoord,
+                                                 Value baseLowerBound,
+                                                 Value globalUpperBound,
+                                                 Value tileExtent) {
   Value tileStart = builder.create<arith::AddIOp>(
       loc, baseLowerBound,
       builder.create<arith::MulIOp>(loc, tileCoord, tileExtent));
   Value tileEnd = createMinIndex(
-      builder, loc,
-      builder.create<arith::AddIOp>(loc, tileStart, tileExtent),
+      builder, loc, builder.create<arith::AddIOp>(loc, tileStart, tileExtent),
       globalUpperBound);
   return {tileStart, tileEnd};
 }
@@ -451,39 +446,34 @@ static Value createTileControl(OpBuilder &builder, Location loc, Value memref,
                                Value iLb, Value iUb, Value jLb, Value jUb,
                                Value tileRows, Value tileCols,
                                int64_t deltaTileI, int64_t deltaTileJ,
-                               int64_t numITilesConst,
-                               int64_t numJTilesConst) {
+                               int64_t numITilesConst, int64_t numJTilesConst) {
   Value depTileI = tileI;
   Value depTileJ = tileJ;
   Value valid = builder.create<arith::ConstantIntOp>(loc, 1, 1);
   if (deltaTileI != 0) {
-    Value shifted =
-        builder.create<arith::AddIOp>(loc, tileI,
-                                      createConstantIndex(builder, loc,
-                                                          deltaTileI));
+    Value shifted = builder.create<arith::AddIOp>(
+        loc, tileI, createConstantIndex(builder, loc, deltaTileI));
     Value lowerBound = createConstantIndex(builder, loc, 0);
     Value upperBound = createConstantIndex(builder, loc, numITilesConst);
     Value geLower = builder.create<arith::CmpIOp>(
         loc, arith::CmpIPredicate::sge, shifted, lowerBound);
     Value ltUpper = builder.create<arith::CmpIOp>(
         loc, arith::CmpIPredicate::slt, shifted, upperBound);
-    valid = createAnd(builder, loc, valid, createAnd(builder, loc, geLower,
-                                                     ltUpper));
+    valid = createAnd(builder, loc, valid,
+                      createAnd(builder, loc, geLower, ltUpper));
     depTileI = createClampIndex(builder, loc, shifted, 0, numITilesConst - 1);
   }
   if (deltaTileJ != 0) {
-    Value shifted =
-        builder.create<arith::AddIOp>(loc, tileJ,
-                                      createConstantIndex(builder, loc,
-                                                          deltaTileJ));
+    Value shifted = builder.create<arith::AddIOp>(
+        loc, tileJ, createConstantIndex(builder, loc, deltaTileJ));
     Value lowerBound = createConstantIndex(builder, loc, 0);
     Value upperBound = createConstantIndex(builder, loc, numJTilesConst);
     Value geLower = builder.create<arith::CmpIOp>(
         loc, arith::CmpIPredicate::sge, shifted, lowerBound);
     Value ltUpper = builder.create<arith::CmpIOp>(
         loc, arith::CmpIPredicate::slt, shifted, upperBound);
-    valid = createAnd(builder, loc, valid, createAnd(builder, loc, geLower,
-                                                     ltUpper));
+    valid = createAnd(builder, loc, valid,
+                      createAnd(builder, loc, geLower, ltUpper));
     depTileJ = createClampIndex(builder, loc, shifted, 0, numJTilesConst - 1);
   }
 
@@ -549,14 +539,17 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match) {
   Value numITiles = createCeilDivPositive(builder, loc, iTrip, tileRowsConst);
   Value numJTiles = createCeilDivPositive(builder, loc, jTrip, tileColsConst);
   int64_t iExtentConst = std::max<int64_t>(
-      1, ValueAnalysis::tryFoldConstantIndex(match.rowFor.getUpperBound().front())
-                 .value_or(1) -
-             ValueAnalysis::tryFoldConstantIndex(match.rowFor.getLowerBound().front())
-                 .value_or(0));
+      1,
+      ValueAnalysis::tryFoldConstantIndex(match.rowFor.getUpperBound().front())
+              .value_or(1) -
+          ValueAnalysis::tryFoldConstantIndex(
+              match.rowFor.getLowerBound().front())
+              .value_or(0));
   int64_t jExtentConst = std::max<int64_t>(
-      1, ValueAnalysis::tryFoldConstantIndex(match.innerUpperBound).value_or(1) -
-             ValueAnalysis::tryFoldConstantIndex(match.innerLowerBound)
-                 .value_or(0));
+      1,
+      ValueAnalysis::tryFoldConstantIndex(match.innerUpperBound).value_or(1) -
+          ValueAnalysis::tryFoldConstantIndex(match.innerLowerBound)
+              .value_or(0));
   int64_t numITilesConst =
       std::max<int64_t>(1, (iExtentConst + tileRowsConst - 1) / tileRowsConst);
   int64_t numJTilesConst =
@@ -585,18 +578,19 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match) {
       jLb, jUb, tileRows, tileCols, 0, 0, numITilesConst, numJTilesConst));
 
   static constexpr std::pair<int64_t, int64_t> predecessorOffsets[] = {
-      {-1, -1}, {-1, 0}, {-1, 1}, {0, -1},
+      {-1, -1},
+      {-1, 0},
+      {-1, 1},
+      {0, -1},
   };
   for (auto [di, dj] : predecessorOffsets) {
     deps.push_back(createTileControl(
         bjBuilder, loc, match.stencilMemref, ArtsMode::in, bi, bj, iLb, iUb,
-        jLb, jUb, tileRows, tileCols, di, dj, numITilesConst,
-        numJTilesConst));
+        jLb, jUb, tileRows, tileCols, di, dj, numITilesConst, numJTilesConst));
   }
 
-  auto tileTask = bjBuilder.create<EdtOp>(loc, EdtType::task,
-                                          match.parallelEdt.getConcurrency(),
-                                          deps);
+  auto tileTask = bjBuilder.create<EdtOp>(
+      loc, EdtType::task, match.parallelEdt.getConcurrency(), deps);
   tileTask.setNoVerifyAttr(NoVerifyAttr::get(builder.getContext()));
   copyArtsMetadataAttrs(match.parallelEdt.getOperation(),
                         tileTask.getOperation());
@@ -629,7 +623,7 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match) {
   match.parallelEdt.erase();
 }
 
-class Seidel2DWavefrontPattern final : public DepTransform {
+class Seidel2DWavefrontPattern final : public DepPatternTransform {
 public:
   int run(ModuleOp module) override {
     int rewrites = 0;
@@ -652,11 +646,15 @@ public:
   }
 
   StringRef getName() const override { return "Seidel2DWavefrontPattern"; }
+  ArtsDepPattern getFamily() const override {
+    return ArtsDepPattern::wavefront_2d;
+  }
+  int64_t getRevision() const override { return 1; }
 };
 
 } // namespace
 
-std::unique_ptr<DepTransform> createSeidel2DWavefrontPattern() {
+std::unique_ptr<DepPatternTransform> createSeidel2DWavefrontPattern() {
   return std::make_unique<Seidel2DWavefrontPattern>();
 }
 

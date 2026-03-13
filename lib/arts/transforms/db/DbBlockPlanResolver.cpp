@@ -47,8 +47,8 @@ static bool shouldOverdecompose2DStencilFallback(
   });
 }
 
-static Value overdecompose2DStencilBlockSize(Value blockSize, OpBuilder &builder,
-                                             Location loc) {
+static Value overdecompose2DStencilBlockSize(Value blockSize,
+                                             OpBuilder &builder, Location loc) {
   if (!blockSize)
     return blockSize;
   Value one = arts::createOneIndex(builder, loc);
@@ -236,8 +236,8 @@ static SmallVector<Value> collectCanonicalNDBlockSizeCandidates(
     if (!isBlockLikeMode(info.mode) || info.needsFullRange)
       continue;
 
-    unsigned rank =
-        std::min<unsigned>(info.partitionOffsets.size(), info.partitionSizes.size());
+    unsigned rank = std::min<unsigned>(info.partitionOffsets.size(),
+                                       info.partitionSizes.size());
     if (!info.partitionDims.empty())
       rank = std::min<unsigned>(rank, info.partitionDims.size());
     if (rank < 2)
@@ -247,8 +247,8 @@ static SmallVector<Value> collectCanonicalNDBlockSizeCandidates(
     blockSizes.reserve(rank);
     bool failed = false;
     for (unsigned dim = 0; dim < rank; ++dim) {
-      Value candidate =
-          normalizeCandidate(info.partitionOffsets[dim], info.partitionSizes[dim]);
+      Value candidate = normalizeCandidate(info.partitionOffsets[dim],
+                                           info.partitionSizes[dim]);
       if (!candidate) {
         failed = true;
         break;
@@ -295,10 +295,10 @@ static SmallVector<Value> collectContractNDBlockShapeCandidates(
 
     DbAcquireOp acquire = info.acquire;
     auto acquireMode = getPartitionMode(acquire.getOperation());
-    bool blockCapableAcquire =
-        isBlockLikeMode(info.mode) ||
-        (acquireMode && isBlockLikeMode(*acquireMode)) ||
-        info.hasDistributionContract || hasSupportedBlockHalo(acquire.getOperation());
+    bool blockCapableAcquire = isBlockLikeMode(info.mode) ||
+                               (acquireMode && isBlockLikeMode(*acquireMode)) ||
+                               info.hasDistributionContract ||
+                               hasSupportedBlockHalo(acquire.getOperation());
     if (!blockCapableAcquire)
       continue;
 
@@ -306,8 +306,8 @@ static SmallVector<Value> collectContractNDBlockShapeCandidates(
     if (!shapeAttr || shapeAttr->size() < 2)
       continue;
 
-    bool prefersContract =
-        info.hasDistributionContract || hasSupportedBlockHalo(acquire.getOperation());
+    bool prefersContract = info.hasDistributionContract ||
+                           hasSupportedBlockHalo(acquire.getOperation());
     if (!prefersContract && hasPreferredContract)
       continue;
     if (prefersContract && !hasPreferredContract) {
@@ -337,7 +337,8 @@ static SmallVector<Value> collectContractNDBlockShapeCandidates(
     }
   }
 
-  if (!contractShape.empty() && allocOp.getElementSizes().size() >= contractShape.size())
+  if (!contractShape.empty() &&
+      allocOp.getElementSizes().size() >= contractShape.size())
     return contractShape;
   return {};
 }
@@ -496,8 +497,8 @@ mlir::arts::resolveDbBlockPlan(const DbBlockPlanInput &input) {
     if (!blockSizeForPlan) {
       blockSizeForPlan = computeDefaultBlockSize(input.allocOp, builder, loc,
                                                  input.useNodesForFallback);
-      if (shouldOverdecompose2DStencilFallback(input.allocOp, input.acquireInfos,
-                                               result.blockSizes)) {
+      if (shouldOverdecompose2DStencilFallback(
+              input.allocOp, input.acquireInfos, result.blockSizes)) {
         blockSizeForPlan =
             overdecompose2DStencilBlockSize(blockSizeForPlan, builder, loc);
       }

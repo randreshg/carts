@@ -26,9 +26,9 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/EdtUtils.h"
+#include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/RemovalUtils.h"
-#include "arts/utils/StencilAttributes.h"
 #include "arts/utils/metadata/IdRegistry.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -57,37 +57,27 @@ static void normalizeBlockHaloAcquireSlice(ArtsCodegen *AC, DbAcquireOp acquire,
     return;
 
   auto mode = acquire.getPartitionMode();
-  if (!mode || (*mode != PartitionMode::block && *mode != PartitionMode::stencil))
+  if (!mode ||
+      (*mode != PartitionMode::block && *mode != PartitionMode::stencil))
     return;
-  if (!hasSupportedBlockHalo(acquire.getOperation()))
+  auto contractInfo = getLoweringContract(acquire.getPtr());
+  if (!contractInfo || !contractInfo->supportedBlockHalo)
     return;
-  if (acquire.getPartitionOffsets().empty() || acquire.getPartitionSizes().empty())
+  if (acquire.getPartitionOffsets().empty() ||
+      acquire.getPartitionSizes().empty())
     return;
 
-  auto alloc = dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(sourcePtr));
+  auto alloc =
+      dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(sourcePtr));
   if (!alloc)
     return;
 
-  auto ownerDims = getStencilOwnerDims(acquire.getOperation());
   unsigned rank = std::min<unsigned>(acquire.getPartitionOffsets().size(),
                                      acquire.getPartitionSizes().size());
   if (rank == 0)
     return;
 
-  SmallVector<unsigned, 4> dims;
-  if (ownerDims && !ownerDims->empty()) {
-    for (int64_t dim : *ownerDims) {
-      if (dim < 0)
-        continue;
-      dims.push_back(static_cast<unsigned>(dim));
-      if (dims.size() == rank)
-        break;
-    }
-  }
-  if (dims.empty()) {
-    for (unsigned d = 0; d < rank; ++d)
-      dims.push_back(d);
-  }
+  SmallVector<unsigned, 4> dims = resolveContractOwnerDims(*contractInfo, rank);
 
   auto outerSizes = alloc.getSizes();
   auto elementSizes = alloc.getElementSizes();
@@ -107,7 +97,8 @@ static void normalizeBlockHaloAcquireSlice(ArtsCodegen *AC, DbAcquireOp acquire,
 
   for (unsigned i = 0; i < dims.size(); ++i) {
     unsigned dim = dims[i];
-    Value elementOffset = AC->castToIndex(acquire.getPartitionOffsets()[i], loc);
+    Value elementOffset =
+        AC->castToIndex(acquire.getPartitionOffsets()[i], loc);
     Value elementSize = AC->castToIndex(acquire.getPartitionSizes()[i], loc);
     Value blockSpan = AC->castToIndex(elementSizes[dim], loc);
     Value totalBlocks = AC->castToIndex(outerSizes[dim], loc);
@@ -115,15 +106,15 @@ static void normalizeBlockHaloAcquireSlice(ArtsCodegen *AC, DbAcquireOp acquire,
     blockSpan = AC->create<arith::MaxUIOp>(loc, blockSpan, one);
     elementSize = AC->create<arith::MaxUIOp>(loc, elementSize, one);
 
-    Value startBlock = AC->create<arith::DivUIOp>(loc, elementOffset, blockSpan);
+    Value startBlock =
+        AC->create<arith::DivUIOp>(loc, elementOffset, blockSpan);
     Value endElem = AC->create<arith::AddIOp>(loc, elementOffset, elementSize);
     endElem = AC->create<arith::SubIOp>(loc, endElem, one);
     Value endBlock = AC->create<arith::DivUIOp>(loc, endElem, blockSpan);
     Value maxBlock = AC->create<arith::SubIOp>(loc, totalBlocks, one);
     Value startAboveMax = AC->create<arith::CmpIOp>(
         loc, arith::CmpIPredicate::ugt, startBlock, maxBlock);
-    Value clampedEnd =
-        AC->create<arith::MinUIOp>(loc, endBlock, maxBlock);
+    Value clampedEnd = AC->create<arith::MinUIOp>(loc, endBlock, maxBlock);
     endBlock =
         AC->create<arith::SelectOp>(loc, startAboveMax, endBlock, clampedEnd);
 
@@ -247,6 +238,8 @@ void DbLoweringPass::convertDbAllocOps() {
       ARTS_DEBUG("  - DB arts.create_id=" << createId << " (base=" << baseId
                                           << " x stride=" << idStride << ")");
     }
+    copyLoweringContract(oldOp.getPtr(), newOp.getPtr(), AC->getBuilder(),
+                         newOp.getLoc());
     updateAllocUsers(oldOp, newOp);
     opsToRemove.insert(oldOp);
   }
@@ -390,6 +383,8 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
       newAcquireOp->setAttr(attr.getName(), attr.getValue());
   }
   newAcquireOp.copyPartitionSegmentsFrom(acquireOp);
+  copyLoweringContract(acquireOp.getPtr(), newAcquireOp.getPtr(),
+                       AC->getBuilder(), newAcquireOp.getLoc());
   normalizeBlockHaloAcquireSlice(AC, newAcquireOp, sourcePtr);
   ARTS_DEBUG("  - New DbAcquireOp: " << newAcquireOp);
 
