@@ -8,6 +8,16 @@
 ///   1. Owned chunk - the worker's assigned rows
 ///   2. Left halo  - partial slice from previous chunk (via element_offsets)
 ///   3. Right halo - partial slice from next chunk (via element_offsets)
+///
+/// Before:
+///   %v0 = memref.load %ref[%i - 1, %j]
+///   %v1 = memref.load %ref[%i, %j]
+///   %v2 = memref.load %ref[%i + 1, %j]
+///
+/// After:
+///   %v0 = memref.load %left_halo[%local_i - 1, %j]
+///   %v1 = memref.load %owned[%local_i, %j]
+///   %v2 = memref.load %right_halo[%local_i + 1 - %tile, %j]
 ///==========================================================================///
 
 #include "arts/transforms/db/stencil/DbStencilIndexer.h"

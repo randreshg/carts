@@ -697,6 +697,12 @@ static SmallVector<DbAcquireOp> createExpandedAcquires(DbAcquireOp original,
         /*partition_offsets=*/entryOffsets,
         /*partition_sizes=*/entrySizes);
 
+    /// Structural expansion must preserve the same high-level contract that
+    /// downstream DB planning saw on the original multi-entry acquire.
+    copyPatternAttrs(original.getOperation(), newAcquire.getOperation());
+    copyStencilContractAttrs(original.getOperation(), newAcquire.getOperation());
+    copyArtsMetadataAttrs(original.getOperation(), newAcquire.getOperation());
+
     /// Preserve per-entry segmentation for single-entry acquires so
     /// getPartitionInfos() can infer dimensionality.
     SmallVector<int32_t> indicesSegs = {
@@ -1359,6 +1365,9 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
               return entry.representativeOffset && !entry.mappedDim;
             });
         if (hasUnmappedEntry) {
+          bool preserveFromStencilContract =
+              facts && facts->supportedBlockHalo &&
+              !facts->stencilOwnerDims.empty();
           bool writesThroughAcquire = acquire.getMode() == ArtsMode::out ||
                                       acquire.getMode() == ArtsMode::inout ||
                                       acqNode->hasStores();
@@ -1367,10 +1376,13 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                                     [](const DbPartitionEntryFact &entry) {
                                       return entry.preservesDistributedContract;
                                     });
-          if (preserveFromExplicitContract) {
+          if (preserveFromExplicitContract || preserveFromStencilContract) {
             ARTS_DEBUG("  Partition offset not mappable by DbAcquireNode, but "
-                       "preserving block capability from EDT distribution "
-                       "contract"
+                       "preserving block capability from "
+                       << (preserveFromExplicitContract
+                               ? "EDT distribution"
+                               : "N-D stencil halo")
+                       << " contract"
                        << (writesThroughAcquire ? " (write acquire)" : ""));
             bool acquireSelectsLeafDb = false;
             if (auto ptrTy = dyn_cast<MemRefType>(acquire.getPtr().getType()))
@@ -1425,23 +1437,56 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         info.accessPattern = AccessPattern::Stencil;
       }
 
-      if (!ctx.preferBlockND && acquire.getMode() == ArtsMode::inout &&
-          isTiling2DTaskAcquire(acquire) &&
-          acqInfo.partitionSizes.size() >= 2) {
-        Value rowSize = acqInfo.partitionSizes[0];
-        Value colSize = acqInfo.partitionSizes[1];
-        if (rowSize && colSize &&
-            !ValueAnalysis::isZeroConstant(
-                ValueAnalysis::stripNumericCasts(rowSize)) &&
-            !ValueAnalysis::isZeroConstant(
-                ValueAnalysis::stripNumericCasts(colSize))) {
-          ctx.preferBlockND = true;
-          ctx.preferredOuterRank = 2;
-          blockSizesForNDBlock.push_back(rowSize);
-          blockSizesForNDBlock.push_back(colSize);
-          ARTS_DEBUG("    Acquire[" << idx
-                                    << "]: tiling_2d owner hints prefer N-D "
-                                       "block partitioning");
+      if (!ctx.preferBlockND && acqInfo.partitionSizes.size() >= 2) {
+        bool preferContractND = facts && facts->supportedBlockHalo &&
+                                !facts->stencilOwnerDims.empty();
+        bool preferTiling2D =
+            acquire.getMode() == ArtsMode::inout && isTiling2DTaskAcquire(acquire);
+        if (preferContractND || preferTiling2D) {
+          SmallVector<Value> candidateBlockSizes;
+          unsigned targetRank = static_cast<unsigned>(acqInfo.partitionSizes.size());
+          if (preferContractND && !facts->stencilOwnerDims.empty())
+            targetRank = std::min<unsigned>(targetRank, facts->stencilOwnerDims.size());
+          if (preferContractND) {
+            if (auto contractShape =
+                    getStencilBlockShape(acquire.getOperation());
+                contractShape && contractShape->size() >= targetRank &&
+                targetRank >= 2) {
+              candidateBlockSizes.reserve(targetRank);
+              for (unsigned dim = 0; dim < targetRank; ++dim) {
+                int64_t dimSize = (*contractShape)[dim];
+                if (dimSize <= 0) {
+                  candidateBlockSizes.clear();
+                  break;
+                }
+                candidateBlockSizes.push_back(
+                    arts::createConstantIndex(builder, loc, dimSize));
+              }
+            }
+          }
+          if (candidateBlockSizes.empty())
+            candidateBlockSizes.reserve(targetRank);
+          for (unsigned dim = 0; dim < targetRank; ++dim) {
+            if (dim < candidateBlockSizes.size())
+              continue;
+            Value blockSize = acqInfo.partitionSizes[dim];
+            if (!blockSize ||
+                ValueAnalysis::isZeroConstant(
+                    ValueAnalysis::stripNumericCasts(blockSize))) {
+              candidateBlockSizes.clear();
+              break;
+            }
+            candidateBlockSizes.push_back(blockSize);
+          }
+          if (!candidateBlockSizes.empty()) {
+            ctx.preferBlockND = true;
+            ctx.preferredOuterRank = targetRank;
+            blockSizesForNDBlock.assign(candidateBlockSizes.begin(),
+                                        candidateBlockSizes.end());
+            ARTS_DEBUG("    Acquire[" << idx
+                                      << "]: explicit distributed contract "
+                                         "prefers N-D block partitioning");
+          }
         }
       }
 

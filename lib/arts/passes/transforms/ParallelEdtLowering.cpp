@@ -184,13 +184,26 @@ private:
     OpBuilder builder(parallelEdt);
     builder.setInsertionPoint(parallelEdt);
 
-    /// Wrap lowered worker loop in an epoch to provide an explicit
-    auto epochOp = builder.create<EpochOp>(loc);
-    Region &epochRegion = epochOp.getBody();
-    if (epochRegion.empty())
-      epochRegion.push_back(new Block());
-    Block *epochBlock = &epochRegion.front();
-    OpBuilder epochBuilder = OpBuilder::atBlockBegin(epochBlock);
+    const bool reuseEnclosingEpoch =
+        parallelEdt->getParentOfType<EpochOp>() &&
+        getEffectiveDepPattern(parallelEdt.getOperation()) ==
+            ArtsDepPattern::wavefront_2d;
+
+    Block *epochBlock = nullptr;
+    std::optional<EpochOp> epochOp;
+    OpBuilder epochBuilder = builder;
+    if (!reuseEnclosingEpoch) {
+      /// Wrap lowered worker loop in an epoch to provide an explicit
+      epochOp = builder.create<EpochOp>(loc);
+      Region &epochRegion = epochOp->getBody();
+      if (epochRegion.empty())
+        epochRegion.push_back(new Block());
+      epochBlock = &epochRegion.front();
+      epochBuilder = OpBuilder::atBlockBegin(epochBlock);
+    } else {
+      epochBlock = parallelEdt->getBlock();
+      epochBuilder.setInsertionPoint(parallelEdt);
+    }
 
     Value numWorkers = DistributionHeuristics::getDispatchWorkerCount(
         epochBuilder, loc, parallelEdt);
@@ -268,9 +281,11 @@ private:
     if (routeWorkers)
       routeEdtsToWorker(clonedEdt, routeVal);
 
-    /// Finalize the epoch region.
-    epochBuilder.setInsertionPointToEnd(epochBlock);
-    epochBuilder.create<YieldOp>(loc);
+    /// Finalize the explicit epoch region when this lowering created it.
+    if (!reuseEnclosingEpoch) {
+      epochBuilder.setInsertionPointToEnd(epochBlock);
+      epochBuilder.create<YieldOp>(loc);
+    }
 
     parallelEdt.erase();
     ARTS_DEBUG("  Lowered parallel EDT into worker loop form");

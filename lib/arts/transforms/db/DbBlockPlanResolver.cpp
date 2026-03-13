@@ -2,11 +2,22 @@
 /// File: DbBlockPlanResolver.cpp
 ///
 /// Block-plan resolution implementation for DbPartitioning.
+///
+/// Before:
+///   %db = arts.db_alloc ... {partitioning = #arts.partitioning<block>}
+///   %a  = arts.db_acquire %db ... {partition_sizes = []}
+///
+/// After:
+///   %db = arts.db_alloc ... {partitioning = #arts.partitioning<block>,
+///                            element_sizes = [%bx, %by]}
+///   %a  = arts.db_acquire %db ... {partition_sizes = [%bx, %by]}
 ///==========================================================================///
 
 #include "arts/transforms/db/DbBlockPlanResolver.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -20,6 +31,32 @@ namespace {
 
 static bool isBlockLikeMode(PartitionMode mode) {
   return mode == PartitionMode::block || mode == PartitionMode::stencil;
+}
+
+static bool shouldOverdecompose2DStencilFallback(
+    DbAllocOp allocOp, ArrayRef<AcquirePartitionInfo> acquireInfos,
+    ArrayRef<Value> resolvedBlockSizes) {
+  if (!allocOp || allocOp.getElementSizes().size() != 2)
+    return false;
+  if (!resolvedBlockSizes.empty())
+    return false;
+
+  return llvm::any_of(acquireInfos, [](const AcquirePartitionInfo &info) {
+    return isBlockLikeMode(info.mode) && !info.needsFullRange &&
+           info.accessPattern == AccessPattern::Stencil;
+  });
+}
+
+static Value overdecompose2DStencilBlockSize(Value blockSize, OpBuilder &builder,
+                                             Location loc) {
+  if (!blockSize)
+    return blockSize;
+  Value one = arts::createOneIndex(builder, loc);
+  Value two = arts::createConstantIndex(builder, loc, 2);
+  Value adjusted = builder.create<arith::AddIOp>(
+      loc, blockSize, builder.create<arith::SubIOp>(loc, two, one));
+  Value halved = builder.create<arith::DivUIOp>(loc, adjusted, two);
+  return builder.create<arith::MaxUIOp>(loc, halved, one);
 }
 
 static Value computeDefaultBlockSize(DbAllocOp allocOp, OpBuilder &builder,
@@ -158,6 +195,153 @@ static SmallVector<Value> collectCanonicalBlockSizeCandidates(
   return candidates;
 }
 
+static SmallVector<Value> collectCanonicalNDBlockSizeCandidates(
+    DbAllocOp allocOp, ArrayRef<AcquirePartitionInfo> acquireInfos,
+    OpBuilder &builder, DominanceInfo &domInfo, Location loc) {
+  struct RankedCandidate {
+    SmallVector<Value> blockSizes;
+    bool hasContract = false;
+  };
+
+  SmallVector<RankedCandidate> rankedCandidates;
+  unsigned bestRank = 0;
+  bool bestHasContract = false;
+
+  auto normalizeCandidate = [&](Value offsetHint, Value sizeHint) -> Value {
+    Value candidate =
+        DbUtils::extractBaseBlockSizeCandidate(offsetHint, sizeHint);
+    if (!candidate)
+      candidate = sizeHint;
+    if (!candidate)
+      return Value();
+
+    candidate = ValueAnalysis::ensureIndexType(candidate, builder, loc);
+    if (!candidate)
+      return Value();
+
+    if (!domInfo.properlyDominates(candidate, allocOp)) {
+      candidate = ValueAnalysis::traceValueToDominating(candidate, allocOp,
+                                                        builder, domInfo, loc);
+    }
+
+    if (!candidate)
+      return Value();
+    if (ValueAnalysis::isZeroConstant(
+            ValueAnalysis::stripNumericCasts(candidate)))
+      return Value();
+    return candidate;
+  };
+
+  for (const auto &info : acquireInfos) {
+    if (!isBlockLikeMode(info.mode) || info.needsFullRange)
+      continue;
+
+    unsigned rank =
+        std::min<unsigned>(info.partitionOffsets.size(), info.partitionSizes.size());
+    if (!info.partitionDims.empty())
+      rank = std::min<unsigned>(rank, info.partitionDims.size());
+    if (rank < 2)
+      continue;
+
+    SmallVector<Value> blockSizes;
+    blockSizes.reserve(rank);
+    bool failed = false;
+    for (unsigned dim = 0; dim < rank; ++dim) {
+      Value candidate =
+          normalizeCandidate(info.partitionOffsets[dim], info.partitionSizes[dim]);
+      if (!candidate) {
+        failed = true;
+        break;
+      }
+      blockSizes.push_back(candidate);
+    }
+    if (failed || blockSizes.size() < 2)
+      continue;
+
+    bool hasContract = info.hasDistributionContract;
+    if (blockSizes.size() > bestRank ||
+        (blockSizes.size() == bestRank && hasContract && !bestHasContract)) {
+      bestRank = static_cast<unsigned>(blockSizes.size());
+      bestHasContract = hasContract;
+      rankedCandidates.clear();
+    }
+
+    if (blockSizes.size() == bestRank && hasContract == bestHasContract)
+      rankedCandidates.push_back({std::move(blockSizes), hasContract});
+  }
+
+  if (rankedCandidates.empty())
+    return {};
+
+  SmallVector<Value> merged = rankedCandidates.front().blockSizes;
+  for (size_t i = 1; i < rankedCandidates.size(); ++i) {
+    for (unsigned dim = 0; dim < merged.size(); ++dim) {
+      merged[dim] = builder.create<arith::MinUIOp>(
+          loc, merged[dim], rankedCandidates[i].blockSizes[dim]);
+    }
+  }
+  return merged;
+}
+
+static SmallVector<Value> collectContractNDBlockShapeCandidates(
+    DbAllocOp allocOp, ArrayRef<AcquirePartitionInfo> acquireInfos,
+    OpBuilder &builder, Location loc) {
+  SmallVector<Value> contractShape;
+  bool hasPreferredContract = false;
+
+  for (const auto &info : acquireInfos) {
+    if (info.needsFullRange || !info.acquire)
+      continue;
+
+    DbAcquireOp acquire = info.acquire;
+    auto acquireMode = getPartitionMode(acquire.getOperation());
+    bool blockCapableAcquire =
+        isBlockLikeMode(info.mode) ||
+        (acquireMode && isBlockLikeMode(*acquireMode)) ||
+        info.hasDistributionContract || hasSupportedBlockHalo(acquire.getOperation());
+    if (!blockCapableAcquire)
+      continue;
+
+    auto shapeAttr = getStencilBlockShape(acquire.getOperation());
+    if (!shapeAttr || shapeAttr->size() < 2)
+      continue;
+
+    bool prefersContract =
+        info.hasDistributionContract || hasSupportedBlockHalo(acquire.getOperation());
+    if (!prefersContract && hasPreferredContract)
+      continue;
+    if (prefersContract && !hasPreferredContract) {
+      hasPreferredContract = true;
+      contractShape.clear();
+    }
+
+    if (contractShape.empty()) {
+      contractShape.reserve(shapeAttr->size());
+      for (int64_t dimSize : *shapeAttr) {
+        if (dimSize <= 0) {
+          contractShape.clear();
+          break;
+        }
+        contractShape.push_back(createConstantIndex(builder, loc, dimSize));
+      }
+      continue;
+    }
+
+    if (contractShape.size() != shapeAttr->size())
+      continue;
+
+    for (unsigned dim = 0; dim < contractShape.size(); ++dim) {
+      Value dimConst = createConstantIndex(builder, loc, (*shapeAttr)[dim]);
+      contractShape[dim] =
+          builder.create<arith::MinUIOp>(loc, contractShape[dim], dimConst);
+    }
+  }
+
+  if (!contractShape.empty() && allocOp.getElementSizes().size() >= contractShape.size())
+    return contractShape;
+  return {};
+}
+
 static SmallVector<unsigned>
 choosePartitionedDims(DbAllocOp allocOp, ArrayRef<AcquirePartitionInfo> infos,
                       unsigned nPartDims) {
@@ -263,6 +447,18 @@ mlir::arts::resolveDbBlockPlan(const DbBlockPlanInput &input) {
         input.allocOp, input.ndBlockSizeHints, builder, domInfo, loc);
   }
 
+  SmallVector<Value> contractShape = collectContractNDBlockShapeCandidates(
+      input.allocOp, input.acquireInfos, builder, loc);
+  if (result.blockSizes.empty() ||
+      contractShape.size() > result.blockSizes.size()) {
+    result.blockSizes = std::move(contractShape);
+  }
+
+  if (result.blockSizes.empty()) {
+    result.blockSizes = collectCanonicalNDBlockSizeCandidates(
+        input.allocOp, input.acquireInfos, builder, domInfo, loc);
+  }
+
   if (result.blockSizes.empty()) {
     Value blockSizeForPlan;
 
@@ -300,6 +496,11 @@ mlir::arts::resolveDbBlockPlan(const DbBlockPlanInput &input) {
     if (!blockSizeForPlan) {
       blockSizeForPlan = computeDefaultBlockSize(input.allocOp, builder, loc,
                                                  input.useNodesForFallback);
+      if (shouldOverdecompose2DStencilFallback(input.allocOp, input.acquireInfos,
+                                               result.blockSizes)) {
+        blockSizeForPlan =
+            overdecompose2DStencilBlockSize(blockSizeForPlan, builder, loc);
+      }
     }
 
     if (!blockSizeForPlan)

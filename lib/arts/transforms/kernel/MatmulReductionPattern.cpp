@@ -6,10 +6,39 @@
 ///
 /// Example (gemm):
 ///
-///   for j:                           for j: C[i,j] = 0
-///     sum = for k iter_args:   =>    for k:
-///       sum += A[i,k]*B[k,j]           a = A[i,k]                /// hoisted
-///     C[i,j] = sum                     for j: C[i,j] += a*B[k,j] /// stride-1
+///   Before:
+///     for j:
+///       sum = for k iter_args:
+///         sum += A[i,k] * B[k,j]
+///       C[i,j] = sum
+///
+///   After:
+///     for j:
+///       C[i,j] = 0
+///     for k:
+///       a = A[i,k]
+///       for j:
+///         C[i,j] += a * B[k,j]
+///
+///   IR sketch:
+///     Before:
+///       %sum = scf.for %k = %c0 to %K iter_args(%acc = %zero) -> (f64) {
+///         %prod = arith.mulf %a, %b : f64
+///         %next = arith.addf %acc, %prod : f64
+///         scf.yield %next : f64
+///       }
+///       memref.store %sum, %C[%i, %j]
+///
+///     After:
+///       memref.store %zero, %C[%i, %j]
+///       scf.for %k = %c0 to %K {
+///         %a = memref.load %A[%i, %k]
+///         scf.for %j = %c0 to %N {
+///           %old = memref.load %C[%i, %j]
+///           %new = arith.addf %old, %prod
+///           memref.store %new, %C[%i, %j]
+///         }
+///       }
 ///==========================================================================///
 
 /// This file implements a kernel-form transform, not a dependence rewrite.

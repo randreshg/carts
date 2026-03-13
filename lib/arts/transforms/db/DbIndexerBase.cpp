@@ -10,6 +10,14 @@
 /// - handleSubIndexOp(): how to rewrite polygeist::SubIndexOp
 /// - handleEmptyIndices(): how to handle ops with no indices
 /// - localizeForDbRefUser(): how to localize indices in transformDbRefUsers
+///
+/// Before:
+///   %ref = arts.db_ref %db[%c0]
+///   %v = memref.load %ref[%i, %j]
+///
+/// After:
+///   %ref = arts.db_ref %db[%block]
+///   %v = memref.load %ref[%local_i, %local_j]
 ///==========================================================================///
 
 #include "arts/transforms/db/DbIndexerBase.h"

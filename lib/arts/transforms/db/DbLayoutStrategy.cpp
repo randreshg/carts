@@ -2,6 +2,14 @@
 /// File: DbLayoutStrategy.cpp
 ///
 /// Layout-aware element pointer computation for datablock lowering.
+///
+/// Before:
+///   %ref = arts.db_ref %db[%idx]
+///   %elt = arts.db_element_ptr %ref ...
+///
+/// After:
+///   // layout info says "outer blocks + inner element tile"
+///   %elt = arts.db_element_ptr %ref[%block][%inner_offset] ...
 ///==========================================================================///
 
 #include "arts/transforms/db/DbLayoutStrategy.h"
