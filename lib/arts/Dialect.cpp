@@ -18,6 +18,7 @@
 #include <cstdint>
 
 #include "arts/Dialect.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/transforms/db/DbRewriter.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
@@ -889,12 +890,12 @@ LogicalResult DbRefOp::verify() {
   }
   bool isCoarse = !allocSizes.empty() && llvm::all_of(allocSizes, [](Value v) {
     int64_t val;
-    return ValueUtils::getConstantIndex(v, val) && val == 1;
+    return ValueAnalysis::getConstantIndex(v, val) && val == 1;
   });
   if (isCoarse) {
     for (Value idx : getIndices()) {
       int64_t val;
-      if (!ValueUtils::getConstantIndex(idx, val) || val != 0)
+      if (!ValueAnalysis::getConstantIndex(idx, val) || val != 0)
         return emitOpError("Coarse-grained datablock expects db_ref indices ")
                << "to be constant zero\n"
                << *getOperation();

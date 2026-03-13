@@ -2,6 +2,7 @@
 #define CARTS_UTILS_OPERATIONATTRIBUTES_H
 
 #include "arts/Dialect.h"
+#include "arts/utils/StencilAttributes.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -47,10 +48,6 @@ constexpr StringLiteral DistributionKind = "distribution_kind";
 constexpr StringLiteral DistributionPattern = "distribution_pattern";
 constexpr StringLiteral DepPattern = "depPattern";
 constexpr StringLiteral DistributionVersion = "distribution_version";
-constexpr StringLiteral StencilCenterOffset = "stencil_center_offset";
-constexpr StringLiteral ElementStride = "element_stride";
-constexpr StringLiteral LeftHaloArgIdx = "left_halo_arg_idx";
-constexpr StringLiteral RightHaloArgIdx = "right_halo_arg_idx";
 
 /// DbAllocOp attributes (TableGen-generated names)
 constexpr StringLiteral Mode = "mode";
@@ -135,26 +132,6 @@ inline void setRuntimeTotalNodes(ModuleOp module, int64_t nodes) {
 /// Forward declaration - defined in PartitioningHeuristics.h
 struct PartitioningHint;
 
-/// Merge two DbAccessPattern values, keeping the higher-priority pattern.
-/// Priority: stencil > indexed > uniform > unknown.
-inline DbAccessPattern mergeDbAccessPattern(DbAccessPattern lhs,
-                                            DbAccessPattern rhs) {
-  auto rank = [](DbAccessPattern p) -> unsigned {
-    switch (p) {
-    case DbAccessPattern::stencil:
-      return 3;
-    case DbAccessPattern::indexed:
-      return 2;
-    case DbAccessPattern::uniform:
-      return 1;
-    case DbAccessPattern::unknown:
-      return 0;
-    }
-    return 0;
-  };
-  return rank(rhs) > rank(lhs) ? rhs : lhs;
-}
-
 inline int64_t getArtsId(Operation *op) {
   if (!op)
     return 0;
@@ -169,6 +146,61 @@ inline void setArtsId(Operation *op, int64_t id) {
   auto *ctx = op->getContext();
   auto type = IntegerType::get(ctx, 64);
   op->setAttr(AttrNames::Operation::ArtsId, IntegerAttr::get(type, id));
+}
+
+inline std::optional<int64_t> getArtsCreateId(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr =
+          op->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsCreateId))
+    return attr.getInt();
+  return std::nullopt;
+}
+
+inline void setArtsCreateId(Operation *op, int64_t id) {
+  if (!op)
+    return;
+  if (id <= 0) {
+    op->removeAttr(AttrNames::Operation::ArtsCreateId);
+    return;
+  }
+  auto *ctx = op->getContext();
+  auto type = IntegerType::get(ctx, 64);
+  op->setAttr(AttrNames::Operation::ArtsCreateId, IntegerAttr::get(type, id));
+}
+
+inline std::optional<StringRef> getOutlinedFunc(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr =
+          op->getAttrOfType<StringAttr>(AttrNames::Operation::OutlinedFunc))
+    return attr.getValue();
+  return std::nullopt;
+}
+
+inline void setOutlinedFunc(Operation *op, StringRef name) {
+  if (!op)
+    return;
+  if (name.empty()) {
+    op->removeAttr(AttrNames::Operation::OutlinedFunc);
+    return;
+  }
+  op->setAttr(AttrNames::Operation::OutlinedFunc,
+              StringAttr::get(op->getContext(), name));
+}
+
+inline bool hasNowait(Operation *op) {
+  return op && op->hasAttr(AttrNames::Operation::Nowait);
+}
+
+inline void setNowait(Operation *op, bool enabled = true) {
+  if (!op)
+    return;
+  if (enabled) {
+    op->setAttr(AttrNames::Operation::Nowait, UnitAttr::get(op->getContext()));
+    return;
+  }
+  op->removeAttr(AttrNames::Operation::Nowait);
 }
 
 inline std::optional<PartitionMode> getPartitionMode(Operation *op) {
@@ -383,10 +415,6 @@ inline void copyDepPatternAttrs(Operation *source, Operation *dest) {
     dest->removeAttr(AttrNames::Operation::DepPattern);
 }
 
-/// Copy semantic pattern attributes between operations.
-/// This is the canonical helper for structural rewrites that replace a loop,
-/// EDT, or epoch with an equivalent operation and want downstream passes to
-/// keep seeing the same high-level dependence/distribution family.
 /// Copy distribution_* attributes between operations.
 /// This intentionally transfers only distribution contracts:
 ///   - distribution_kind
@@ -422,77 +450,6 @@ inline void copyPatternAttrs(Operation *source, Operation *dest) {
     return;
   copyDistributionAttrs(source, dest);
   copyDepPatternAttrs(source, dest);
-}
-
-inline std::optional<int64_t> getStencilCenterOffset(Operation *op) {
-  if (!op)
-    return std::nullopt;
-  if (auto attr = op->getAttrOfType<IntegerAttr>(
-          AttrNames::Operation::StencilCenterOffset))
-    return attr.getInt();
-  return std::nullopt;
-}
-
-inline void setStencilCenterOffset(Operation *op, int64_t centerOffset) {
-  if (!op)
-    return;
-  op->setAttr(
-      AttrNames::Operation::StencilCenterOffset,
-      IntegerAttr::get(IntegerType::get(op->getContext(), 64), centerOffset));
-}
-
-inline std::optional<int64_t> getElementStride(Operation *op) {
-  if (!op)
-    return std::nullopt;
-  if (auto attr =
-          op->getAttrOfType<IntegerAttr>(AttrNames::Operation::ElementStride))
-    return attr.getInt();
-  return std::nullopt;
-}
-
-inline void setElementStride(Operation *op, int64_t stride) {
-  if (!op)
-    return;
-  op->setAttr(AttrNames::Operation::ElementStride,
-              IntegerAttr::get(IndexType::get(op->getContext()), stride));
-}
-
-inline std::optional<unsigned> getLeftHaloArgIndex(Operation *op) {
-  if (!op)
-    return std::nullopt;
-  if (auto attr = op->getAttrOfType<IntegerAttr>(
-          AttrNames::Operation::LeftHaloArgIdx)) {
-    int64_t value = attr.getInt();
-    if (value >= 0)
-      return static_cast<unsigned>(value);
-  }
-  return std::nullopt;
-}
-
-inline std::optional<unsigned> getRightHaloArgIndex(Operation *op) {
-  if (!op)
-    return std::nullopt;
-  if (auto attr = op->getAttrOfType<IntegerAttr>(
-          AttrNames::Operation::RightHaloArgIdx)) {
-    int64_t value = attr.getInt();
-    if (value >= 0)
-      return static_cast<unsigned>(value);
-  }
-  return std::nullopt;
-}
-
-inline void setLeftHaloArgIndex(Operation *op, unsigned argIndex) {
-  if (!op)
-    return;
-  op->setAttr(AttrNames::Operation::LeftHaloArgIdx,
-              IntegerAttr::get(IndexType::get(op->getContext()), argIndex));
-}
-
-inline void setRightHaloArgIndex(Operation *op, unsigned argIndex) {
-  if (!op)
-    return;
-  op->setAttr(AttrNames::Operation::RightHaloArgIdx,
-              IntegerAttr::get(IndexType::get(op->getContext()), argIndex));
 }
 
 /// Full implementation in PartitioningHeuristics.cpp (uses DictionaryAttr).

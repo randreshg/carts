@@ -8,9 +8,9 @@
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include <algorithm>
 
 ARTS_DEBUG_SETUP(loop_analysis);
@@ -64,7 +64,8 @@ getTripCountFromConstantBounds(Operation *loopOp) {
     int64_t lb = 0, ub = 0, step = 0;
     if (ValueAnalysis::getConstantIndex(artsFor.getLowerBound()[0], lb) &&
         ValueAnalysis::getConstantIndex(artsFor.getUpperBound()[0], ub) &&
-        ValueAnalysis::getConstantIndex(artsFor.getStep()[0], step) && step > 0) {
+        ValueAnalysis::getConstantIndex(artsFor.getStep()[0], step) &&
+        step > 0) {
       int64_t span = ub - lb;
       if (span <= 0)
         return 0;

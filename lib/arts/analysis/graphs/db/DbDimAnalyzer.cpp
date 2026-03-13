@@ -9,10 +9,10 @@
 #include "arts/analysis/graphs/db/DbGraph.h"
 #include "arts/analysis/graphs/db/MemoryAccessClassifier.h"
 #include "arts/analysis/graphs/db/PartitionBoundsAnalyzer.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include "llvm/ADT/DenseSet.h"
 
 using namespace mlir;
@@ -33,8 +33,8 @@ pickRepresentativeRange(PartitionMode mode, const PartitionInfo &info) {
       if (!value)
         continue;
       int64_t constant = 0;
-      if (!ValueAnalysis::getConstantIndex(ValueAnalysis::stripNumericCasts(value),
-                                        constant))
+      if (!ValueAnalysis::getConstantIndex(
+              ValueAnalysis::stripNumericCasts(value), constant))
         return value;
     }
     for (Value value : values) {

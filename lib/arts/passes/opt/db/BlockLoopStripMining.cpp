@@ -27,10 +27,10 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/Utils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -64,8 +64,8 @@ struct LoopBlockInfo {
 static bool getConstIndex(Value v, int64_t &out) {
   if (!v)
     return false;
-  if (auto folded =
-          ValueAnalysis::tryFoldConstantIndex(ValueAnalysis::stripNumericCasts(v))) {
+  if (auto folded = ValueAnalysis::tryFoldConstantIndex(
+          ValueAnalysis::stripNumericCasts(v))) {
     out = *folded;
     return true;
   }
@@ -136,8 +136,9 @@ static bool matchNormalizedSignedRemainder(arith::SelectOp selectOp, Value iv,
 
   Value remResult = rem.getResult();
   if (!ValueAnalysis::sameValue(ValueAnalysis::stripNumericCasts(cmp.getLhs()),
-                             remResult) ||
-      !ValueAnalysis::isZeroConstant(ValueAnalysis::stripNumericCasts(cmp.getRhs())))
+                                remResult) ||
+      !ValueAnalysis::isZeroConstant(
+          ValueAnalysis::stripNumericCasts(cmp.getRhs())))
     return false;
 
   Value addLhs = ValueAnalysis::stripNumericCasts(add.getLhs());
@@ -368,7 +369,8 @@ static bool stripMineLoop(scf::ForOp loop, const LoopBlockInfo &info) {
 
   Value zero = arts::createZeroIndex(builder, loc);
   Value one = arts::createOneIndex(builder, loc);
-  Value lbVal = ValueAnalysis::ensureIndexType(loop.getLowerBound(), builder, loc);
+  Value lbVal =
+      ValueAnalysis::ensureIndexType(loop.getLowerBound(), builder, loc);
   Value ubVal = loop.getUpperBound();
   Value bsVal =
       info.blockSizeConst
@@ -445,7 +447,8 @@ static bool stripMineLoop(scf::ForOp loop, const LoopBlockInfo &info) {
   if (info.offsetVal) {
     Value offsetDiv = nullptr;
     if (info.offsetDivHint) {
-      offsetDiv = ValueAnalysis::ensureIndexType(info.offsetDivHint, builder, loc);
+      offsetDiv =
+          ValueAnalysis::ensureIndexType(info.offsetDivHint, builder, loc);
     } else if (auto offConst =
                    ValueAnalysis::tryFoldConstantIndex(info.offsetVal)) {
       if (info.blockSizeConst) {

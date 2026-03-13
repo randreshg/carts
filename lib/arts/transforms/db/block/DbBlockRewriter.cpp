@@ -20,6 +20,7 @@
 ///==========================================================================///
 
 #include "arts/transforms/db/block/DbBlockRewriter.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/transforms/db/block/DbBlockIndexer.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
@@ -27,7 +28,6 @@
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/Utils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/IRMapping.h"
@@ -73,7 +73,7 @@ static Value cloneValueIntoEdtIfNeeded(Value val, EdtOp edt, OpBuilder &builder,
 
   /// Only clone whitelisted arithmetic operations.
   if (!ValueAnalysis::canCloneOperation(defOp, /*allowMemoryEffectFree=*/false,
-                                     arts::isStartBlockArithmeticOp))
+                                        arts::isStartBlockArithmeticOp))
     return val;
 
   /// Recursively clone operands first.

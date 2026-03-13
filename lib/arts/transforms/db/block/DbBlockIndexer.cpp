@@ -37,11 +37,11 @@
 ///==========================================================================///
 
 #include "arts/transforms/db/block/DbBlockIndexer.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/Utils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -63,7 +63,8 @@ static bool isMulOf(Value v, Value a, Value b) {
   if (auto mul = v.getDefiningOp<arith::MulIOp>()) {
     Value lhs = ValueAnalysis::stripClampOne(mul.getLhs());
     Value rhs = ValueAnalysis::stripClampOne(mul.getRhs());
-    if ((ValueAnalysis::sameValue(lhs, a) && ValueAnalysis::sameValue(rhs, b)) ||
+    if ((ValueAnalysis::sameValue(lhs, a) &&
+         ValueAnalysis::sameValue(rhs, b)) ||
         (ValueAnalysis::sameValue(lhs, b) && ValueAnalysis::sameValue(rhs, a)))
       return true;
   }
@@ -274,7 +275,8 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
     bool simplified = false;
     if (!allocSingleBlock && !acquireSingleBlock) {
       if (auto local = extractLocalFromBlockBase(globalIdx, sb, bs)) {
-        Value localIdxVal = ValueAnalysis::ensureIndexType(*local, builder, loc);
+        Value localIdxVal =
+            ValueAnalysis::ensureIndexType(*local, builder, loc);
         if (isLoopIvBoundedBy(localIdxVal, bs)) {
           dbRefIdx = zero();
           localIdx = localIdxVal;

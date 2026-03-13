@@ -29,13 +29,12 @@
 /// Arts
 #include "arts/Dialect.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/analysis/PartitioningHeuristics.h"
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/Utils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 /// Others
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"

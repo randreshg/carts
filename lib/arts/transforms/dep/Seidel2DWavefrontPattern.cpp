@@ -37,11 +37,11 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
+#include "arts/analysis/heuristics/PartitioningHeuristics.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/transforms/dep/DepTransform.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/analysis/PartitioningHeuristics.h"
 #include "arts/utils/Utils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"

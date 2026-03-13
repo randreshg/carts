@@ -26,16 +26,16 @@
 ///==========================================================================///
 
 #include "arts/transforms/db/stencil/DbStencilRewriter.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/transforms/db/stencil/DbStencilIndexer.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/utils/StencilAttributes.h"
 #include "arts/utils/RemovalUtils.h"
+#include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"

@@ -154,7 +154,7 @@ std::optional<int64_t> ValueAnalysis::getConstantValue(Value v) {
 }
 
 std::optional<int64_t> ValueAnalysis::tryFoldConstantIndex(Value v,
-                                                        unsigned depth) {
+                                                           unsigned depth) {
   if (!v || depth > 8)
     return std::nullopt;
 
@@ -485,7 +485,8 @@ Value ValueAnalysis::stripNumericCasts(Value value) {
   return value;
 }
 
-Value ValueAnalysis::castToIndex(Value value, OpBuilder &builder, Location loc) {
+Value ValueAnalysis::castToIndex(Value value, OpBuilder &builder,
+                                 Location loc) {
   if (!value)
     return value;
   if (value.getType().isIndex())
@@ -497,7 +498,7 @@ Value ValueAnalysis::castToIndex(Value value, OpBuilder &builder, Location loc) 
 }
 
 Value ValueAnalysis::ensureIndexType(Value value, OpBuilder &builder,
-                                  Location loc) {
+                                     Location loc) {
   if (!value)
     return Value();
   if (value.getType().isa<IndexType>())
@@ -540,7 +541,7 @@ bool ValueAnalysis::dependsOn(Value value, Value base, int depth) {
 }
 
 std::optional<int64_t> ValueAnalysis::getOffsetStride(Value idx, Value base,
-                                                   int depth) {
+                                                      int depth) {
   if (!idx || !base || depth > 8)
     return std::nullopt;
 
@@ -647,7 +648,7 @@ bool ValueAnalysis::isDerivedFromPtr(Value value, Value source) {
 }
 
 std::optional<int64_t> ValueAnalysis::inferConstantStride(Value globalIndex,
-                                                       Value elemOffset) {
+                                                          Value elemOffset) {
   if (!globalIndex || !elemOffset)
     return std::nullopt;
 
@@ -670,8 +671,9 @@ std::optional<int64_t> ValueAnalysis::inferConstantStride(Value globalIndex,
 
 /// Extract constant offset from an index expression relative to loopIV and
 /// chunkOffset. E.g. chunkOffset + loopIV + 5 yields offset = 5.
-std::optional<int64_t>
-ValueAnalysis::extractConstantOffset(Value idx, Value loopIV, Value chunkOffset) {
+std::optional<int64_t> ValueAnalysis::extractConstantOffset(Value idx,
+                                                            Value loopIV,
+                                                            Value chunkOffset) {
   int64_t accumulator = 0;
   Value current = idx;
 
@@ -781,7 +783,7 @@ Value ValueAnalysis::stripConstantOffset(Value value, int64_t *outConst) {
 }
 
 Value ValueAnalysis::extractArrayIndexFromByteOffset(Value byteOffset,
-                                                  Type elemType) {
+                                                     Type elemType) {
   Value idxSource = byteOffset;
   while (auto castOp = idxSource.getDefiningOp<arith::IndexCastOp>())
     idxSource = castOp.getIn();
@@ -888,10 +890,11 @@ Operation *ValueAnalysis::getUnderlyingOperation(Value v) {
 /// Value Reconstruction for Dominance
 ///===----------------------------------------------------------------------===//
 
-Value ValueAnalysis::traceValueToDominating(Value value, Operation *insertBefore,
-                                         OpBuilder &builder,
-                                         DominanceInfo &domInfo, Location loc,
-                                         unsigned depth) {
+Value ValueAnalysis::traceValueToDominating(Value value,
+                                            Operation *insertBefore,
+                                            OpBuilder &builder,
+                                            DominanceInfo &domInfo,
+                                            Location loc, unsigned depth) {
   if (!value || depth > 16)
     return nullptr;
 
