@@ -5,7 +5,7 @@
 ///==========================================================================///
 
 #include "arts/transforms/edt/EdtTaskLoopLowering.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
 using namespace mlir;
@@ -23,7 +23,7 @@ EdtTaskLoopLowering::planAcquireRewrite(const TaskLoopLoweringInput &input,
   int64_t stepConst = 0;
   bool stepIsUnit =
       !stepVal ||
-      (ValueUtils::getConstantIndex(stepVal, stepConst) && stepConst == 1);
+      (ValueAnalysis::getConstantIndex(stepVal, stepConst) && stepConst == 1);
 
   Value lowerBoundVal =
       input.chunkLowerBound ? input.chunkLowerBound : input.lowerBound;

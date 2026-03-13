@@ -7,7 +7,7 @@
 #include "arts/transforms/db/DbBlockPlanResolver.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Dominance.h"
@@ -65,7 +65,7 @@ resolveNDBlockHints(DbAllocOp allocOp, ArrayRef<Value> ndHints,
     }
 
     Value traced =
-        ValueUtils::traceValueToDominating(bs, allocOp, builder, domInfo, loc);
+        ValueAnalysis::traceValueToDominating(bs, allocOp, builder, domInfo, loc);
     if (traced) {
       result.push_back(traced);
       continue;
@@ -135,20 +135,20 @@ static SmallVector<Value> collectCanonicalBlockSizeCandidates(
       continue;
 
     Value idxCandidate =
-        ValueUtils::ensureIndexType(baseCandidate, builder, loc);
+        ValueAnalysis::ensureIndexType(baseCandidate, builder, loc);
     if (!idxCandidate)
       continue;
 
     Value domCandidate = idxCandidate;
     if (!domInfo.properlyDominates(domCandidate, allocOp)) {
-      domCandidate = ValueUtils::traceValueToDominating(domCandidate, allocOp,
+      domCandidate = ValueAnalysis::traceValueToDominating(domCandidate, allocOp,
                                                         builder, domInfo, loc);
     }
 
     if (!domCandidate)
       continue;
 
-    if (ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(domCandidate)))
+    if (ValueAnalysis::isZeroConstant(ValueAnalysis::stripNumericCasts(domCandidate)))
       continue;
 
     candidates.push_back(domCandidate);
@@ -290,7 +290,7 @@ mlir::arts::resolveDbBlockPlan(const DbBlockPlanInput &input) {
         if (domInfo.properlyDominates(dynamicCandidate, input.allocOp)) {
           blockSizeForPlan = dynamicCandidate;
         } else {
-          blockSizeForPlan = ValueUtils::traceValueToDominating(
+          blockSizeForPlan = ValueAnalysis::traceValueToDominating(
               dynamicCandidate, input.allocOp, builder, domInfo, loc);
         }
       }
@@ -309,8 +309,8 @@ mlir::arts::resolveDbBlockPlan(const DbBlockPlanInput &input) {
 
   Value one = arts::createOneIndex(builder, loc);
   for (unsigned i = 0; i < result.blockSizes.size(); ++i) {
-    Value stripped = ValueUtils::stripNumericCasts(result.blockSizes[i]);
-    if (ValueUtils::isZeroConstant(stripped))
+    Value stripped = ValueAnalysis::stripNumericCasts(result.blockSizes[i]);
+    if (ValueAnalysis::isZeroConstant(stripped))
       result.blockSizes[i] = one;
     result.blockSizes[i] =
         builder.create<arith::MaxUIOp>(loc, result.blockSizes[i], one);

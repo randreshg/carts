@@ -18,7 +18,7 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
@@ -94,7 +94,7 @@ mlir::arts::planAcquireRewrite(AcquireRewritePlanningInput input) {
       if (!elemSizes.empty()) {
         isSingleElement = llvm::all_of(elemSizes, [](Value value) {
           int64_t constant = 0;
-          return ValueUtils::getConstantIndex(value, constant) && constant == 1;
+          return ValueAnalysis::getConstantIndex(value, constant) && constant == 1;
         });
 
         /// Determine if this acquire needs stencil halo handling.

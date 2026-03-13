@@ -8,7 +8,7 @@
 #include "arts/analysis/HeuristicsConfig.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(db_partition_decision_arbiter);
@@ -47,8 +47,8 @@ bool AcquirePartitionInfo::isConsistentWith(
     Value otherSize = other.partitionSizes.front();
     if (thisSize != otherSize) {
       int64_t lhs = 0, rhs = 0;
-      bool lhsConst = ValueUtils::getConstantIndex(thisSize, lhs);
-      bool rhsConst = ValueUtils::getConstantIndex(otherSize, rhs);
+      bool lhsConst = ValueAnalysis::getConstantIndex(thisSize, lhs);
+      bool rhsConst = ValueAnalysis::getConstantIndex(otherSize, rhs);
       if (!(lhsConst && rhsConst && lhs == rhs))
         return false;
     }
@@ -138,8 +138,8 @@ PartitionDecisionArbiterResult mlir::arts::arbitrateInitialPartitionDecision(
     Value colSize = info.partitionSizes[1];
     if (!rowSize || !colSize)
       continue;
-    if (ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(rowSize)) ||
-        ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(colSize)))
+    if (ValueAnalysis::isZeroConstant(ValueAnalysis::stripNumericCasts(rowSize)) ||
+        ValueAnalysis::isZeroConstant(ValueAnalysis::stripNumericCasts(colSize)))
       continue;
 
     result.blockSizesForNDBlock.push_back(rowSize);

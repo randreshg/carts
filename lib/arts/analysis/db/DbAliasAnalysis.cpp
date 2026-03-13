@@ -8,7 +8,7 @@
 #include "arts/analysis/graphs/db/DbGraph.h"
 #include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(db_alias);
@@ -40,7 +40,7 @@ std::optional<ConstantSlice> extractConstantSlice(DbAcquireOp op) {
     storage.reserve(range.size());
     for (Value v : range) {
       int64_t cst = 0;
-      if (!ValueUtils::getConstantIndex(v, cst))
+      if (!ValueAnalysis::getConstantIndex(v, cst))
         return false;
       storage.push_back(cst);
     }
@@ -269,10 +269,10 @@ Value DbAliasAnalysis::getUnderlyingValue(const NodeBase &node) {
     return op->getResult(0);
   } else if (isa<DbAcquireOp>(op)) {
     Value sourcePtr = cast<DbAcquireOp>(op).getSourcePtr();
-    return ValueUtils::getUnderlyingValue(sourcePtr);
+    return ValueAnalysis::getUnderlyingValue(sourcePtr);
   } else if (isa<DbReleaseOp>(op)) {
     Value source = cast<DbReleaseOp>(op).getSource();
-    return ValueUtils::getUnderlyingValue(source);
+    return ValueAnalysis::getUnderlyingValue(source);
   }
   ARTS_UNREACHABLE("Invalid DB node type");
 }

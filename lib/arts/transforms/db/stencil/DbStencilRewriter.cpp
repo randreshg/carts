@@ -34,7 +34,7 @@
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -155,15 +155,15 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
     auto isBoundedByBlock = [&](Value sz, Value bsVal) -> bool {
       if (!sz || !bsVal)
         return false;
-      Value s = ValueUtils::stripClampOne(sz);
-      Value bs = ValueUtils::stripClampOne(bsVal);
-      if (ValueUtils::areValuesEquivalent(s, bs))
+      Value s = ValueAnalysis::stripClampOne(sz);
+      Value bs = ValueAnalysis::stripClampOne(bsVal);
+      if (ValueAnalysis::areValuesEquivalent(s, bs))
         return true;
       if (auto minOp = s.getDefiningOp<arith::MinUIOp>()) {
-        Value lhs = ValueUtils::stripClampOne(minOp.getLhs());
-        Value rhs = ValueUtils::stripClampOne(minOp.getRhs());
-        if (ValueUtils::areValuesEquivalent(lhs, bs) ||
-            ValueUtils::areValuesEquivalent(rhs, bs))
+        Value lhs = ValueAnalysis::stripClampOne(minOp.getLhs());
+        Value rhs = ValueAnalysis::stripClampOne(minOp.getRhs());
+        if (ValueAnalysis::areValuesEquivalent(lhs, bs) ||
+            ValueAnalysis::areValuesEquivalent(rhs, bs))
           return true;
       }
       return false;
@@ -503,7 +503,7 @@ bool DbStencilRewriter::rebaseEdtUsersAsBlock(DbAcquireOp acquire,
   }
 
   if (!valuesToClone.empty()) {
-    if (!ValueUtils::cloneValuesIntoRegion(
+    if (!ValueAnalysis::cloneValuesIntoRegion(
             valuesToClone, &edtRegion, cloneMapping, builder,
             /*allowMemoryEffectFree=*/false, arts::isStartBlockArithmeticOp))
       return false;

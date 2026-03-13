@@ -21,7 +21,7 @@
 #include "arts/analysis/DistributionHeuristics.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -179,7 +179,7 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
   Value routeZero = AC->create<arith::ConstantIntOp>(loc, 0, 32);
   Value sizeOne = AC->createIndexConstant(1, loc);
   Value zeroIndex = AC->createIndexConstant(0, loc);
-  auto numWorkersConst = ValueUtils::tryFoldConstantIndex(numWorkers);
+  auto numWorkersConst = ValueAnalysis::tryFoldConstantIndex(numWorkers);
   bool isSingleWorker = numWorkersConst && *numWorkersConst == 1;
   bool canCombineDirectly =
       splitMode && isSingleWorker &&
@@ -353,7 +353,7 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
 
   Value zeroIndex = AC->createIndexConstant(0, loc);
   Value sizeOne = AC->createIndexConstant(1, loc);
-  auto numWorkersConst = ValueUtils::tryFoldConstantIndex(numWorkers);
+  auto numWorkersConst = ValueAnalysis::tryFoldConstantIndex(numWorkers);
   bool isSingleWorker = numWorkersConst && *numWorkersConst == 1;
 
   SmallVector<Value> partialAcqPtrs;

@@ -34,7 +34,7 @@
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 /// Others
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -313,7 +313,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
           for (size_t i = 0; i < allIndices.size() && i < allSizes.size();
                ++i) {
             /// Check if this dimension has size == 1 (pinned) or > 1 (chunk)
-            bool isPinned = ValueUtils::isOneConstant(allSizes[i]);
+            bool isPinned = ValueAnalysis::isOneConstant(allSizes[i]);
 
             if (isPinned) {
               pinnedIndices.push_back(allIndices[i]);
@@ -456,7 +456,7 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
     std::optional<int64_t> staticBlockSize;
     if (auto chunk = op.getScheduleChunkVar()) {
       int64_t chunkVal;
-      if (ValueUtils::getConstantIndex(chunk, chunkVal) && chunkVal > 0)
+      if (ValueAnalysis::getConstantIndex(chunk, chunkVal) && chunkVal > 0)
         staticBlockSize = chunkVal;
     }
 
@@ -525,7 +525,7 @@ private:
     assert(module && "Module is required");
 
     for (auto [attr, value] : llvm::zip(reds.getValue(), reductionVars)) {
-      redAccs.push_back(ValueUtils::getUnderlyingValue(value));
+      redAccs.push_back(ValueAnalysis::getUnderlyingValue(value));
       if (auto symRef = dyn_cast<SymbolRefAttr>(attr)) {
         auto decl = dyn_cast_or_null<omp::ReductionDeclareOp>(
             module.lookupSymbol(symRef.getLeafReference()));

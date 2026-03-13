@@ -30,7 +30,7 @@
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
 /// Others
 #include "mlir/IR/Builders.h"
@@ -451,8 +451,8 @@ private:
     bool useRecordDepAt = byteOffsetI64 && byteSizeI64;
     /// byte_sizes=0 marks "no partial slice" for non-ESD dependencies.
     /// Fall back to full-db dependency in that case.
-    if (useRecordDepAt && ValueUtils::isZeroConstant(
-                              ValueUtils::stripNumericCasts(byteSizeI64))) {
+    if (useRecordDepAt && ValueAnalysis::isZeroConstant(
+                              ValueAnalysis::stripNumericCasts(byteSizeI64))) {
       useRecordDepAt = false;
     }
 
@@ -527,7 +527,7 @@ private:
     /// byte_size == 0 denotes "no partial slice" and should use full-db deps.
     bool hasPartialSlice =
         byteOffset && byteSize &&
-        !ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(byteSize));
+        !ValueAnalysis::isZeroConstant(ValueAnalysis::stripNumericCasts(byteSize));
     Value byteOffsetI64 =
         hasPartialSlice ? AC->ensureI64(byteOffset, loc) : nullptr;
     Value byteSizeI64 =
@@ -1058,7 +1058,7 @@ private:
         return callee == "artsGetTotalNodes" || callee == "artsGetTotalWorkers";
       };
 
-      if (!ValueUtils::cloneValuesIntoRegion(
+      if (!ValueAnalysis::cloneValuesIntoRegion(
               valuesToClone, &initFn.getBody(), mapper, AC->getBuilder(),
               /*allowMemoryEffectFree=*/true, isRuntimeTopologyCall)) {
         ARTS_WARN(
@@ -1225,7 +1225,7 @@ private:
             }
           }
 
-          if (!ValueUtils::cloneValuesIntoRegion(
+          if (!ValueAnalysis::cloneValuesIntoRegion(
                   workerValuesToClone, &workerInitFn.getBody(), workerMapper,
                   AC->getBuilder(), /*allowMemoryEffectFree=*/true,
                   isRuntimeTopologyCall)) {
@@ -1555,7 +1555,7 @@ struct DbFreePattern : public ArtsToLLVMPattern<DbFreeOp> {
     ARTS_INFO("Lowering DbFree Op " << op);
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
     Value source = op.getSource();
-    Operation *rootOp = ValueUtils::getUnderlyingOperation(source);
+    Operation *rootOp = ValueAnalysis::getUnderlyingOperation(source);
     if (!isa_and_nonnull<memref::GetGlobalOp>(rootOp))
       AC->create<memref::DeallocOp>(op.getLoc(), source);
     rewriter.eraseOp(op);

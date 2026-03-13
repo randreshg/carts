@@ -7,7 +7,7 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -94,7 +94,7 @@ DbLoweringInfo DbUtils::extractDbLoweringInfo(OpType op) {
     return info;
   }
   if (info.sizes.size() == 1) {
-    info.isSingleElement = ValueUtils::isOneConstant(info.sizes[0]);
+    info.isSingleElement = ValueAnalysis::isOneConstant(info.sizes[0]);
   }
   return info;
 }
@@ -176,7 +176,7 @@ Operation *DbUtils::getUnderlyingDb(Value v, unsigned depth) {
       return getUnderlyingDb(subview.getSource(), depth + 1);
   }
 
-  if (Operation *root = ValueUtils::getUnderlyingOperation(v))
+  if (Operation *root = ValueAnalysis::getUnderlyingOperation(v))
     if (isa<DbAcquireOp, DbAllocOp>(root))
       return root;
 
@@ -196,16 +196,16 @@ Operation *DbUtils::getUnderlyingDbAlloc(Value v) {
 }
 
 bool DbUtils::isSameMemoryObject(Value lhsMemref, Value rhsMemref) {
-  lhsMemref = ValueUtils::stripNumericCasts(lhsMemref);
-  rhsMemref = ValueUtils::stripNumericCasts(rhsMemref);
+  lhsMemref = ValueAnalysis::stripNumericCasts(lhsMemref);
+  rhsMemref = ValueAnalysis::stripNumericCasts(rhsMemref);
 
   Operation *lhsRoot = getUnderlyingDbAlloc(lhsMemref);
   Operation *rhsRoot = getUnderlyingDbAlloc(rhsMemref);
   if (lhsRoot && rhsRoot)
     return lhsRoot == rhsRoot;
 
-  lhsRoot = ValueUtils::getUnderlyingOperation(lhsMemref);
-  rhsRoot = ValueUtils::getUnderlyingOperation(rhsMemref);
+  lhsRoot = ValueAnalysis::getUnderlyingOperation(lhsMemref);
+  rhsRoot = ValueAnalysis::getUnderlyingOperation(rhsMemref);
   if (lhsRoot && rhsRoot)
     return lhsRoot == rhsRoot;
 
@@ -302,7 +302,7 @@ bool DbUtils::hasSingleSize(Operation *dbOp) {
     return false;
 
   auto isOneLike = [](Value size) -> bool {
-    if (ValueUtils::isOneConstant(size))
+    if (ValueAnalysis::isOneConstant(size))
       return true;
 
     auto addOp = size.getDefiningOp<arith::AddIOp>();
@@ -312,9 +312,9 @@ bool DbUtils::hasSingleSize(Operation *dbOp) {
     Value lhs = addOp.getLhs();
     Value rhs = addOp.getRhs();
     Value other;
-    if (ValueUtils::isOneConstant(lhs))
+    if (ValueAnalysis::isOneConstant(lhs))
       other = rhs;
-    else if (ValueUtils::isOneConstant(rhs))
+    else if (ValueAnalysis::isOneConstant(rhs))
       other = lhs;
     else
       return false;
@@ -352,7 +352,7 @@ bool DbUtils::isCoarseGrained(DbAllocOp alloc) {
 
   return llvm::all_of(alloc.getSizes(), [](Value v) {
     int64_t val;
-    return ValueUtils::getConstantIndex(v, val) && val == 1;
+    return ValueAnalysis::getConstantIndex(v, val) && val == 1;
   });
 }
 
@@ -366,7 +366,7 @@ bool DbUtils::isFineGrained(DbAllocOp alloc) {
 
   return llvm::all_of(elementSizes, [](Value v) {
     int64_t cst;
-    return ValueUtils::getConstantIndex(v, cst) && cst == 1;
+    return ValueAnalysis::getConstantIndex(v, cst) && cst == 1;
   });
 }
 
@@ -412,7 +412,7 @@ std::optional<int64_t> DbUtils::getStaticStride(ValueRange sizes) {
   int64_t stride = 1;
   for (size_t i = 1; i < sizes.size(); ++i) {
     int64_t dim;
-    if (!ValueUtils::getConstantIndex(sizes[i], dim))
+    if (!ValueAnalysis::getConstantIndex(sizes[i], dim))
       return std::nullopt;
     stride *= dim;
   }
@@ -480,8 +480,8 @@ bool DbUtils::hasStaticHints(DbAcquireOp acqOp) {
                    ? nullptr
                    : acqOp.getPartitionSizes().front();
   int64_t val = 0;
-  bool offsetConst = !offset || ValueUtils::getConstantIndex(offset, val);
-  bool sizeConst = !size || ValueUtils::getConstantIndex(size, val);
+  bool offsetConst = !offset || ValueAnalysis::getConstantIndex(offset, val);
+  bool sizeConst = !size || ValueAnalysis::getConstantIndex(size, val);
   return offsetConst && sizeConst;
 }
 
@@ -492,9 +492,9 @@ bool DbUtils::isWriterMode(ArtsMode mode) {
 bool DbUtils::dependsOnOffset(Value v, Value offset) {
   if (!v || !offset)
     return false;
-  Value vStripped = ValueUtils::stripNumericCasts(v);
-  Value oStripped = ValueUtils::stripNumericCasts(offset);
-  return ValueUtils::dependsOn(vStripped, oStripped);
+  Value vStripped = ValueAnalysis::stripNumericCasts(v);
+  Value oStripped = ValueAnalysis::stripNumericCasts(offset);
+  return ValueAnalysis::dependsOn(vStripped, oStripped);
 }
 
 Value DbUtils::extractBaseBlockSizeCandidate(Value offsetHint, Value sizeHint,
@@ -553,8 +553,8 @@ Value DbUtils::extractBaseBlockSizeCandidate(Value offsetHint, Value sizeHint,
 
   if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
     int64_t lhsConst = 0, rhsConst = 0;
-    bool lhsIsConst = ValueUtils::getConstantIndex(addOp.getLhs(), lhsConst);
-    bool rhsIsConst = ValueUtils::getConstantIndex(addOp.getRhs(), rhsConst);
+    bool lhsIsConst = ValueAnalysis::getConstantIndex(addOp.getLhs(), lhsConst);
+    bool rhsIsConst = ValueAnalysis::getConstantIndex(addOp.getRhs(), rhsConst);
     if (lhsIsConst && lhsConst >= -16 && lhsConst <= 16)
       return extractBaseBlockSizeCandidate(offsetHint, addOp.getRhs(),
                                            depth + 1);
@@ -565,7 +565,7 @@ Value DbUtils::extractBaseBlockSizeCandidate(Value offsetHint, Value sizeHint,
 
   if (auto subOp = dyn_cast<arith::SubIOp>(defOp)) {
     int64_t rhsConst = 0;
-    if (ValueUtils::getConstantIndex(subOp.getRhs(), rhsConst) &&
+    if (ValueAnalysis::getConstantIndex(subOp.getRhs(), rhsConst) &&
         rhsConst >= -16 && rhsConst <= 16)
       return extractBaseBlockSizeCandidate(offsetHint, subOp.getLhs(),
                                            depth + 1);
@@ -583,7 +583,7 @@ Value DbUtils::pickRepresentativePartitionOffset(ArrayRef<Value> offsets,
     if (!off)
       continue;
     int64_t c = 0;
-    if (!ValueUtils::getConstantIndex(ValueUtils::stripNumericCasts(off), c)) {
+    if (!ValueAnalysis::getConstantIndex(ValueAnalysis::stripNumericCasts(off), c)) {
       if (outIdx)
         *outIdx = i;
       return off;
@@ -777,8 +777,8 @@ std::optional<int64_t> DbUtils::getConstantOffsetBetween(Value idx,
     return 0;
 
   /// Strip numeric casts (index casts, sign/zero extensions, etc.)
-  Value strippedIdx = ValueUtils::stripNumericCasts(idx);
-  Value strippedBase = ValueUtils::stripNumericCasts(base);
+  Value strippedIdx = ValueAnalysis::stripNumericCasts(idx);
+  Value strippedBase = ValueAnalysis::stripNumericCasts(base);
 
   if (strippedIdx == strippedBase)
     return 0;
@@ -787,10 +787,10 @@ std::optional<int64_t> DbUtils::getConstantOffsetBetween(Value idx,
   if (auto addOp = strippedIdx.getDefiningOp<arith::AddIOp>()) {
     int64_t constVal;
     if (addOp.getLhs() == strippedBase &&
-        ValueUtils::getConstantIndex(addOp.getRhs(), constVal))
+        ValueAnalysis::getConstantIndex(addOp.getRhs(), constVal))
       return constVal;
     if (addOp.getRhs() == strippedBase &&
-        ValueUtils::getConstantIndex(addOp.getLhs(), constVal))
+        ValueAnalysis::getConstantIndex(addOp.getLhs(), constVal))
       return constVal;
   }
 
@@ -798,7 +798,7 @@ std::optional<int64_t> DbUtils::getConstantOffsetBetween(Value idx,
   if (auto subOp = strippedIdx.getDefiningOp<arith::SubIOp>()) {
     int64_t constVal;
     if (subOp.getLhs() == strippedBase &&
-        ValueUtils::getConstantIndex(subOp.getRhs(), constVal))
+        ValueAnalysis::getConstantIndex(subOp.getRhs(), constVal))
       return -constVal;
   }
 
@@ -806,17 +806,17 @@ std::optional<int64_t> DbUtils::getConstantOffsetBetween(Value idx,
   if (auto addOp = strippedBase.getDefiningOp<arith::AddIOp>()) {
     int64_t constVal;
     if (addOp.getLhs() == strippedIdx &&
-        ValueUtils::getConstantIndex(addOp.getRhs(), constVal))
+        ValueAnalysis::getConstantIndex(addOp.getRhs(), constVal))
       return -constVal;
     if (addOp.getRhs() == strippedIdx &&
-        ValueUtils::getConstantIndex(addOp.getLhs(), constVal))
+        ValueAnalysis::getConstantIndex(addOp.getLhs(), constVal))
       return -constVal;
   }
 
   if (auto subOp = strippedBase.getDefiningOp<arith::SubIOp>()) {
     int64_t constVal;
     if (subOp.getLhs() == strippedIdx &&
-        ValueUtils::getConstantIndex(subOp.getRhs(), constVal))
+        ValueAnalysis::getConstantIndex(subOp.getRhs(), constVal))
       return constVal;
   }
 
@@ -909,15 +909,15 @@ std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
 
   /// Case 1: Direct constant
   int64_t val;
-  if (ValueUtils::getConstantIndex(sizeHint, val))
+  if (ValueAnalysis::getConstantIndex(sizeHint, val))
     return val;
 
   /// Case 2/3: minui/minsi pattern - return the larger constant (nominal size)
   /// Helper to handle min operations uniformly
   auto handleMinOp = [&](Value lhs, Value rhs) -> std::optional<int64_t> {
     int64_t lhsVal = 0, rhsVal = 0;
-    bool hasLhs = ValueUtils::getConstantIndex(lhs, lhsVal);
-    bool hasRhs = ValueUtils::getConstantIndex(rhs, rhsVal);
+    bool hasLhs = ValueAnalysis::getConstantIndex(lhs, lhsVal);
+    bool hasRhs = ValueAnalysis::getConstantIndex(rhs, rhsVal);
 
     if (hasLhs && hasRhs)
       return std::max(lhsVal, rhsVal);
@@ -952,8 +952,8 @@ std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
   /// We want to extract baseBlockSize, which is the actual partition block size
   if (auto addOp = sizeHint.getDefiningOp<arith::AddIOp>()) {
     int64_t lhsVal = 0, rhsVal = 0;
-    bool hasLhsConst = ValueUtils::getConstantIndex(addOp.getLhs(), lhsVal);
-    bool hasRhsConst = ValueUtils::getConstantIndex(addOp.getRhs(), rhsVal);
+    bool hasLhsConst = ValueAnalysis::getConstantIndex(addOp.getLhs(), lhsVal);
+    bool hasRhsConst = ValueAnalysis::getConstantIndex(addOp.getRhs(), rhsVal);
 
     /// If one operand is a small constant (halo adjustment), recurse on the
     /// other
@@ -979,8 +979,8 @@ std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
   /// Return the larger constant operand as the block size upper bound
   if (auto maxOp = sizeHint.getDefiningOp<arith::MaxUIOp>()) {
     int64_t lhsVal = 0, rhsVal = 0;
-    bool hasLhs = ValueUtils::getConstantIndex(maxOp.getLhs(), lhsVal);
-    bool hasRhs = ValueUtils::getConstantIndex(maxOp.getRhs(), rhsVal);
+    bool hasLhs = ValueAnalysis::getConstantIndex(maxOp.getLhs(), lhsVal);
+    bool hasRhs = ValueAnalysis::getConstantIndex(maxOp.getRhs(), rhsVal);
 
     if (hasLhs && hasRhs)
       return std::max(lhsVal, rhsVal);
@@ -1018,15 +1018,15 @@ std::optional<int64_t> extractBlockSizeForAllocation(Value sizeHint,
 
   /// Case 1: Direct constant
   int64_t val;
-  if (ValueUtils::getConstantIndex(sizeHint, val))
+  if (ValueAnalysis::getConstantIndex(sizeHint, val))
     return val;
 
   /// Case 2: minui/minsi pattern - return the larger constant (nominal size)
   /// Helper to handle min operations uniformly
   auto handleMinOp = [&](Value lhs, Value rhs) -> std::optional<int64_t> {
     int64_t lhsVal = 0, rhsVal = 0;
-    bool hasLhs = ValueUtils::getConstantIndex(lhs, lhsVal);
-    bool hasRhs = ValueUtils::getConstantIndex(rhs, rhsVal);
+    bool hasLhs = ValueAnalysis::getConstantIndex(lhs, lhsVal);
+    bool hasRhs = ValueAnalysis::getConstantIndex(rhs, rhsVal);
 
     if (hasLhs && hasRhs)
       return std::max(lhsVal, rhsVal);
@@ -1060,8 +1060,8 @@ std::optional<int64_t> extractBlockSizeForAllocation(Value sizeHint,
   /// Allocation needs full size: base + halo
   if (auto addOp = sizeHint.getDefiningOp<arith::AddIOp>()) {
     int64_t lhsVal = 0, rhsVal = 0;
-    bool hasLhsConst = ValueUtils::getConstantIndex(addOp.getLhs(), lhsVal);
-    bool hasRhsConst = ValueUtils::getConstantIndex(addOp.getRhs(), rhsVal);
+    bool hasLhsConst = ValueAnalysis::getConstantIndex(addOp.getLhs(), lhsVal);
+    bool hasRhsConst = ValueAnalysis::getConstantIndex(addOp.getRhs(), rhsVal);
 
     /// If one operand is a small constant (halo), add it to the extracted base
     if (hasRhsConst && std::abs(rhsVal) <= 16) {
@@ -1091,15 +1091,15 @@ std::optional<int64_t> extractBlockSizeForAllocation(Value sizeHint,
 
 Value extractOriginalSize(Value numerator, Value denominator,
                           OpBuilder &builder, Location loc) {
-  Value stripped = ValueUtils::stripNumericCasts(numerator);
+  Value stripped = ValueAnalysis::stripNumericCasts(numerator);
   if (auto mul = stripped.getDefiningOp<arith::MulIOp>()) {
     Value lhs = mul.getLhs();
     Value rhs = mul.getRhs();
-    if (ValueUtils::scalesAreEquivalent(lhs, denominator))
-      return ValueUtils::castToIndex(ValueUtils::stripNumericCasts(rhs),
+    if (ValueAnalysis::scalesAreEquivalent(lhs, denominator))
+      return ValueAnalysis::castToIndex(ValueAnalysis::stripNumericCasts(rhs),
                                      builder, loc);
-    if (ValueUtils::scalesAreEquivalent(rhs, denominator))
-      return ValueUtils::castToIndex(ValueUtils::stripNumericCasts(lhs),
+    if (ValueAnalysis::scalesAreEquivalent(rhs, denominator))
+      return ValueAnalysis::castToIndex(ValueAnalysis::stripNumericCasts(lhs),
                                      builder, loc);
   }
   return Value();

@@ -6,7 +6,7 @@
 #include "arts/analysis/metadata/DependenceAnalyzer.h"
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/metadata/LocationMetadata.h"
 #include "arts/utils/metadata/Metadata.h"
 #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
@@ -327,15 +327,15 @@ bool MemrefAnalyzer::hasStencilAccessPattern(Value memref, Operation *scopeOp) {
       if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
         int64_t constVal = 0;
         /// Check both operands (addition is commutative)
-        if (ValueUtils::getConstantIndex(addOp.getRhs(), constVal)) {
+        if (ValueAnalysis::getConstantIndex(addOp.getRhs(), constVal)) {
           constantOffsets.insert(constVal);
-        } else if (ValueUtils::getConstantIndex(addOp.getLhs(), constVal)) {
+        } else if (ValueAnalysis::getConstantIndex(addOp.getLhs(), constVal)) {
           constantOffsets.insert(constVal);
         }
       } else if (auto subOp = dyn_cast<arith::SubIOp>(defOp)) {
         int64_t constVal = 0;
         /// Only check RHS for subtraction (not commutative)
-        if (ValueUtils::getConstantIndex(subOp.getRhs(), constVal)) {
+        if (ValueAnalysis::getConstantIndex(subOp.getRhs(), constVal)) {
           /// Negate the constant for subtraction
           constantOffsets.insert(-constVal);
         }

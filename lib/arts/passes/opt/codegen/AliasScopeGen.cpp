@@ -46,7 +46,7 @@
 
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 
 #include "arts/utils/Debug.h"
 #include "llvm/ADT/DenseMap.h"
@@ -152,7 +152,7 @@ static DepIndexInfo extractDepIndexInfo(LLVM::LoadOp loadOp) {
   /// Fallback for pre-conversion form.
   if (auto depGep = loadOp.getAddr().getDefiningOp<DepGepOp>()) {
     info.valid = true;
-    if (auto cst = ValueUtils::getConstantValue(depGep.getOffset()))
+    if (auto cst = ValueAnalysis::getConstantValue(depGep.getOffset()))
       info.constantIndex = *cst;
     else
       info.dynamicIndex = depGep.getOffset();
@@ -279,7 +279,7 @@ findCandidateDataPointers(Value addr,
   for (auto &info : dataPointers) {
     bool derived = false;
     for (Value ptr : info.ptrValues) {
-      if (ValueUtils::isDerivedFromPtr(addr, ptr)) {
+      if (ValueAnalysis::isDerivedFromPtr(addr, ptr)) {
         derived = true;
         break;
       }

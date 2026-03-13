@@ -10,7 +10,7 @@
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include <algorithm>
 
 ARTS_DEBUG_SETUP(loop_analysis);
@@ -62,9 +62,9 @@ getTripCountFromConstantBounds(Operation *loopOp) {
       return std::nullopt;
 
     int64_t lb = 0, ub = 0, step = 0;
-    if (ValueUtils::getConstantIndex(artsFor.getLowerBound()[0], lb) &&
-        ValueUtils::getConstantIndex(artsFor.getUpperBound()[0], ub) &&
-        ValueUtils::getConstantIndex(artsFor.getStep()[0], step) && step > 0) {
+    if (ValueAnalysis::getConstantIndex(artsFor.getLowerBound()[0], lb) &&
+        ValueAnalysis::getConstantIndex(artsFor.getUpperBound()[0], ub) &&
+        ValueAnalysis::getConstantIndex(artsFor.getStep()[0], step) && step > 0) {
       int64_t span = ub - lb;
       if (span <= 0)
         return 0;
@@ -74,9 +74,9 @@ getTripCountFromConstantBounds(Operation *loopOp) {
 
   if (auto forOp = dyn_cast<scf::ForOp>(loopOp)) {
     int64_t lb = 0, ub = 0, step = 0;
-    if (ValueUtils::getConstantIndex(forOp.getLowerBound(), lb) &&
-        ValueUtils::getConstantIndex(forOp.getUpperBound(), ub) &&
-        ValueUtils::getConstantIndex(forOp.getStep(), step) && step > 0) {
+    if (ValueAnalysis::getConstantIndex(forOp.getLowerBound(), lb) &&
+        ValueAnalysis::getConstantIndex(forOp.getUpperBound(), ub) &&
+        ValueAnalysis::getConstantIndex(forOp.getStep(), step) && step > 0) {
       int64_t span = ub - lb;
       if (span <= 0)
         return 0;

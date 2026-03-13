@@ -36,7 +36,7 @@
 #include "arts/transforms/dep/DepTransform.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -64,7 +64,7 @@ static constexpr int64_t kTileRows = 64;
 static constexpr int64_t kTileCols = 64;
 
 static bool isUnitStep(Value step) {
-  auto c = ValueUtils::tryFoldConstantIndex(step);
+  auto c = ValueAnalysis::tryFoldConstantIndex(step);
   return c && *c == 1;
 }
 
@@ -83,29 +83,29 @@ static Block &getLoopBody(Operation *loopOp) {
 }
 
 static bool matchOffset(Value index, Value iv, int64_t offset) {
-  index = ValueUtils::stripNumericCasts(index);
-  iv = ValueUtils::stripNumericCasts(iv);
-  if (ValueUtils::sameValue(index, iv))
+  index = ValueAnalysis::stripNumericCasts(index);
+  iv = ValueAnalysis::stripNumericCasts(iv);
+  if (ValueAnalysis::sameValue(index, iv))
     return offset == 0;
 
   if (auto addi = index.getDefiningOp<arith::AddIOp>()) {
-    auto lhs = ValueUtils::stripNumericCasts(addi.getLhs());
-    auto rhs = ValueUtils::stripNumericCasts(addi.getRhs());
-    if (ValueUtils::sameValue(lhs, iv)) {
-      auto c = ValueUtils::tryFoldConstantIndex(rhs);
+    auto lhs = ValueAnalysis::stripNumericCasts(addi.getLhs());
+    auto rhs = ValueAnalysis::stripNumericCasts(addi.getRhs());
+    if (ValueAnalysis::sameValue(lhs, iv)) {
+      auto c = ValueAnalysis::tryFoldConstantIndex(rhs);
       return c && *c == offset;
     }
-    if (ValueUtils::sameValue(rhs, iv)) {
-      auto c = ValueUtils::tryFoldConstantIndex(lhs);
+    if (ValueAnalysis::sameValue(rhs, iv)) {
+      auto c = ValueAnalysis::tryFoldConstantIndex(lhs);
       return c && *c == offset;
     }
   }
 
   if (auto subi = index.getDefiningOp<arith::SubIOp>()) {
-    auto lhs = ValueUtils::stripNumericCasts(subi.getLhs());
-    auto rhs = ValueUtils::stripNumericCasts(subi.getRhs());
-    if (ValueUtils::sameValue(lhs, iv)) {
-      auto c = ValueUtils::tryFoldConstantIndex(rhs);
+    auto lhs = ValueAnalysis::stripNumericCasts(subi.getLhs());
+    auto rhs = ValueAnalysis::stripNumericCasts(subi.getRhs());
+    if (ValueAnalysis::sameValue(lhs, iv)) {
+      auto c = ValueAnalysis::tryFoldConstantIndex(rhs);
       return c && -*c == offset;
     }
   }
@@ -116,8 +116,8 @@ static bool matchOffset(Value index, Value iv, int64_t offset) {
 static bool isSeidelStore(memref::StoreOp store, Value rowIV, Value colIV) {
   if (store.getIndices().size() != 2)
     return false;
-  return ValueUtils::sameValue(store.getIndices()[0], rowIV) &&
-         ValueUtils::sameValue(store.getIndices()[1], colIV);
+  return ValueAnalysis::sameValue(store.getIndices()[0], rowIV) &&
+         ValueAnalysis::sameValue(store.getIndices()[1], colIV);
 }
 
 static bool looksLikeSeidelStencilBody(Operation *innerLoop, Value rowIV,

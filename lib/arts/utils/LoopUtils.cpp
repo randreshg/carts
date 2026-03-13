@@ -5,7 +5,7 @@
 ///==========================================================================///
 
 #include "arts/utils/LoopUtils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
 namespace mlir {
@@ -14,15 +14,15 @@ namespace arts {
 void collectWhileBounds(Value cond, Value iterArg, SmallVector<Value> &bounds) {
   if (!cond)
     return;
-  cond = ValueUtils::stripNumericCasts(cond);
+  cond = ValueAnalysis::stripNumericCasts(cond);
   if (auto andOp = cond.getDefiningOp<arith::AndIOp>()) {
     collectWhileBounds(andOp.getLhs(), iterArg, bounds);
     collectWhileBounds(andOp.getRhs(), iterArg, bounds);
     return;
   }
   if (auto cmp = cond.getDefiningOp<arith::CmpIOp>()) {
-    auto lhs = ValueUtils::stripNumericCasts(cmp.getLhs());
-    auto rhs = ValueUtils::stripNumericCasts(cmp.getRhs());
+    auto lhs = ValueAnalysis::stripNumericCasts(cmp.getLhs());
+    auto rhs = ValueAnalysis::stripNumericCasts(cmp.getRhs());
     auto pred = cmp.getPredicate();
     auto isLessPred =
         pred == arith::CmpIPredicate::slt || pred == arith::CmpIPredicate::ult;

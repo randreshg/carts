@@ -25,7 +25,7 @@
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -77,7 +77,7 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
   unsigned long long totalElems = 1;
   for (Value v : dbAcquireOp.getSizes()) {
     int64_t cst = 0;
-    if (!ValueUtils::getConstantIndex(v, cst)) {
+    if (!ValueAnalysis::getConstantIndex(v, cst)) {
       hasUnknown = true;
       break;
     }
@@ -475,7 +475,7 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
             Value idxForBounds;
             for (Value idx : chain) {
               int64_t constVal = 0;
-              if (!ValueUtils::getConstantIndex(idx, constVal)) {
+              if (!ValueAnalysis::getConstantIndex(idx, constVal)) {
                 idxForBounds = idx;
                 break;
               }
@@ -485,11 +485,11 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
 
             int64_t constOffset = 0;
             Value base =
-                ValueUtils::stripConstantOffset(idxForBounds, &constOffset);
+                ValueAnalysis::stripConstantOffset(idxForBounds, &constOffset);
             if (!base)
               continue;
-            base = ValueUtils::stripNumericCasts(base);
-            if (!ValueUtils::dependsOn(base, loopIV))
+            base = ValueAnalysis::stripNumericCasts(base);
+            if (!ValueAnalysis::dependsOn(base, loopIV))
               continue;
 
             auto it = baseOffsetRange.find(base);
@@ -650,7 +650,7 @@ bool DbAcquireNode::isWorkerIndexedAccess() const {
     return false;
 
   int64_t sz = 0;
-  if (!ValueUtils::getConstantIndex(partitionSz, sz) || sz != 1)
+  if (!ValueAnalysis::getConstantIndex(partitionSz, sz) || sz != 1)
     return false;
 
   return isa<BlockArgument>(partitionIdx);
@@ -687,10 +687,10 @@ bool DbAcquireNode::hasDisjointPartitionWith(const DbAcquireNode *other) const {
     return false;
 
   int64_t idxAVal = 0, sizeAVal = 0, idxBVal = 0, sizeBVal = 0;
-  if (ValueUtils::getConstantIndex(partIdxA, idxAVal) &&
-      ValueUtils::getConstantIndex(partSizeA, sizeAVal) &&
-      ValueUtils::getConstantIndex(partIdxB, idxBVal) &&
-      ValueUtils::getConstantIndex(partSizeB, sizeBVal)) {
+  if (ValueAnalysis::getConstantIndex(partIdxA, idxAVal) &&
+      ValueAnalysis::getConstantIndex(partSizeA, sizeAVal) &&
+      ValueAnalysis::getConstantIndex(partIdxB, idxBVal) &&
+      ValueAnalysis::getConstantIndex(partSizeB, sizeBVal)) {
     if (sizeAVal == sizeBVal && idxAVal != idxBVal)
       return true;
     int64_t startA = idxAVal;
@@ -703,9 +703,9 @@ bool DbAcquireNode::hasDisjointPartitionWith(const DbAcquireNode *other) const {
 
   int64_t sizeAConst = 0, sizeBConst = 0;
   bool sizeAIsOne =
-      ValueUtils::getConstantIndex(partSizeA, sizeAConst) && sizeAConst == 1;
+      ValueAnalysis::getConstantIndex(partSizeA, sizeAConst) && sizeAConst == 1;
   bool sizeBIsOne =
-      ValueUtils::getConstantIndex(partSizeB, sizeBConst) && sizeBConst == 1;
+      ValueAnalysis::getConstantIndex(partSizeB, sizeBConst) && sizeBConst == 1;
 
   if (sizeAIsOne && sizeBIsOne) {
     auto blockArgA = dyn_cast<BlockArgument>(partIdxA);
@@ -730,7 +730,7 @@ bool DbAcquireNode::accessIndexDependsOn(Value idx) {
       SmallVector<Value> fullChain =
           DbUtils::collectFullIndexChain(dbRef, memOp);
       for (Value chainIdx : fullChain) {
-        if (ValueUtils::dependsOn(chainIdx, idx))
+        if (ValueAnalysis::dependsOn(chainIdx, idx))
           return true;
       }
     }
