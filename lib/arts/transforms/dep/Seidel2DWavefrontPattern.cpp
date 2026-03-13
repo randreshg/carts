@@ -35,6 +35,7 @@
 #include "arts/Dialect.h"
 #include "arts/transforms/dep/DepTransform.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/analysis/PartitioningHeuristics.h"
 #include "arts/utils/Utils.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"

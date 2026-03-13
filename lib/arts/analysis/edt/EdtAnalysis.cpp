@@ -11,6 +11,7 @@
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/DbUtils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 
 #include "llvm/Support/raw_ostream.h"

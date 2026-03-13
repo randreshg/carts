@@ -29,6 +29,7 @@
 #include "arts/utils/Debug.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/StencilAttributes.h"
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/Utils.h"
 #include "arts/analysis/value/ValueAnalysis.h"

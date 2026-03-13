@@ -371,7 +371,7 @@ namespace arts {
 std::optional<PartitioningHint> getPartitioningHint(Operation *op) {
   if (!op)
     return std::nullopt;
-  if (auto attr = op->getAttr(AttrNames::Operation::PartitionHint))
+  if (auto attr = op->getAttr(AttrNames::Operation::Partition::PartitionHint))
     return PartitioningHint::fromAttribute(attr);
   return std::nullopt;
 }
@@ -379,7 +379,7 @@ std::optional<PartitioningHint> getPartitioningHint(Operation *op) {
 void setPartitioningHint(Operation *op, const PartitioningHint &hint) {
   if (!op)
     return;
-  op->setAttr(AttrNames::Operation::PartitionHint,
+  op->setAttr(AttrNames::Operation::Partition::PartitionHint,
               hint.toAttribute(op->getContext()));
 }
 
@@ -392,19 +392,19 @@ void copyArtsMetadataAttrs(Operation *source, Operation *dest) {
 
   /// Transfer arts.id
   if (auto id =
-          source->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsId)) {
-    dest->setAttr(AttrNames::Operation::ArtsId, id);
+          source->getAttrOfType<IntegerAttr>(AttrNames::Operation::Metadata::ArtsId)) {
+    dest->setAttr(AttrNames::Operation::Metadata::ArtsId, id);
     ARTS_DEBUG("  -> transferred arts.id=" << id.getInt());
   }
 
   /// Transfer partition_mode
   if (auto mode = source->getAttrOfType<PartitionModeAttr>(
-          AttrNames::Operation::PartitionMode))
-    dest->setAttr(AttrNames::Operation::PartitionMode, mode);
+          AttrNames::Operation::Partition::PartitionMode))
+    dest->setAttr(AttrNames::Operation::Partition::PartitionMode, mode);
 
   /// Transfer arts.partition_hint
-  if (auto hint = source->getAttr(AttrNames::Operation::PartitionHint))
-    dest->setAttr(AttrNames::Operation::PartitionHint, hint);
+  if (auto hint = source->getAttr(AttrNames::Operation::Partition::PartitionHint))
+    dest->setAttr(AttrNames::Operation::Partition::PartitionHint, hint);
 
   /// Transfer arts.loop metadata (trip count, parallelism info, etc.)
   if (auto loopAttr = source->getAttr(AttrNames::LoopMetadata::Name))

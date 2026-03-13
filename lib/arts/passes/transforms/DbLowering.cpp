@@ -133,7 +133,7 @@ void DbLoweringPass::convertDbAllocOps() {
     for (auto &attr : oldOp->getAttrs()) {
       if (!attr.getName().getValue().starts_with("arts."))
         continue;
-      if (attr.getName() == AttrNames::Operation::ArtsCreateId)
+      if (attr.getName() == AttrNames::Operation::Metadata::ArtsCreateId)
         continue;
       newOp->setAttr(attr.getName(), attr.getValue());
     }
@@ -149,8 +149,7 @@ void DbLoweringPass::convertDbAllocOps() {
     /// Set create_id = base_id * stride
     if (baseId) {
       int64_t createId = baseId * static_cast<int64_t>(idStride);
-      newOp->setAttr(AttrNames::Operation::ArtsCreateId,
-                     AC->getBuilder().getI64IntegerAttr(createId));
+      setArtsCreateId(newOp, createId);
       ARTS_DEBUG("  - DB arts.create_id=" << createId << " (base=" << baseId
                                           << " x stride=" << idStride << ")");
     }

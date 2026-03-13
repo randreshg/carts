@@ -15,6 +15,7 @@
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/analysis/PartitioningHeuristics.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 

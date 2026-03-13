@@ -30,6 +30,7 @@
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/StencilAttributes.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
 /// Others
@@ -776,7 +777,7 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
     /// Get outlined function name
     auto funcNameAttr =
-        op->getAttrOfType<StringAttr>(AttrNames::Operation::OutlinedFunc);
+        op->getAttrOfType<StringAttr>(AttrNames::Operation::Metadata::OutlinedFunc);
     if (!funcNameAttr)
       return op.emitError("Missing outlined_func attribute");
 
@@ -814,7 +815,7 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
       route = AC->createIntConstant(0, AC->Int32, loc);
 
     auto createIdAttr =
-        op->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsCreateId);
+        op->getAttrOfType<IntegerAttr>(AttrNames::Operation::Metadata::ArtsCreateId);
     Value artsIdVal;
     if (createIdAttr)
       artsIdVal = AC->create<arith::ConstantOp>(loc, AC->Int64, createIdAttr);
@@ -852,7 +853,7 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
                           {funcPtr, paramc, paramv, depc, hintMemref});
     }
     if (createIdAttr)
-      callOp->setAttr(AttrNames::Operation::ArtsCreateId, createIdAttr);
+      callOp->setAttr(AttrNames::Operation::Metadata::ArtsCreateId, createIdAttr);
     rewriter.replaceOp(op, callOp.getResult(0));
     return success();
   }
@@ -891,7 +892,7 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
         AC->create<arith::MulIOp>(loc, elementSize, payloadSize);
     std::optional<int64_t> nextId;
     if (auto createIdAttr =
-            op->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsCreateId))
+            op->getAttrOfType<IntegerAttr>(AttrNames::Operation::Metadata::ArtsCreateId))
       nextId = createIdAttr.getInt();
     else
       nextId = getArtsId(op);
