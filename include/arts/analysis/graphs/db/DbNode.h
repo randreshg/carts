@@ -74,7 +74,7 @@ struct DbDimPartitionFact {
 struct DbAcquirePartitionFacts {
   DbAcquireOp acquire;
   PartitionMode requestedMode = PartitionMode::coarse;
-  ArtsDependencePattern depPattern = ArtsDependencePattern::unknown;
+  ArtsDepPattern depPattern = ArtsDepPattern::unknown;
   AccessPattern accessPattern = AccessPattern::Unknown;
   SmallVector<DbPartitionEntryFact, 2> entries;
   SmallVector<DbDimPartitionFact, 4> dims;

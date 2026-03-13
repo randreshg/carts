@@ -291,7 +291,7 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match) {
   auto waveLoop = builder.create<scf::ForOp>(loc, zero, waveUbExclusive, one);
   copyArtsMetadataAttrs(match.parallelEdt.getOperation(),
                         waveLoop.getOperation());
-  setDepPattern(waveLoop.getOperation(), ArtsDependencePattern::wavefront_2d);
+  setDepPattern(waveLoop.getOperation(), ArtsDepPattern::wavefront_2d);
 
   OpBuilder waveBuilder = OpBuilder::atBlockBegin(waveLoop.getBody());
   Value wave = waveLoop.getInductionVar();
@@ -312,8 +312,7 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match) {
                         tileParallel.getOperation());
   copyWorkerTopologyAttrs(match.parallelEdt.getOperation(),
                           tileParallel.getOperation());
-  setDepPattern(tileParallel.getOperation(),
-                ArtsDependencePattern::wavefront_2d);
+  setDepPattern(tileParallel.getOperation(), ArtsDepPattern::wavefront_2d);
 
   Block &tileParallelBlock = tileParallel.getBody().front();
   OpBuilder tileBuilder = OpBuilder::atBlockBegin(&tileParallelBlock);
@@ -327,7 +326,7 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match) {
       loc, ValueRange{tileRowLb}, ValueRange{tileRowUb}, ValueRange{tileRows},
       /*schedule*/ nullptr, /*reductionAccumulators*/ ValueRange{});
   copyArtsMetadataAttrs(match.rowFor.getOperation(), tileFor.getOperation());
-  setDepPattern(tileFor.getOperation(), ArtsDependencePattern::wavefront_2d);
+  setDepPattern(tileFor.getOperation(), ArtsDepPattern::wavefront_2d);
 
   Region &tileRegion = tileFor.getRegion();
   if (tileRegion.empty())

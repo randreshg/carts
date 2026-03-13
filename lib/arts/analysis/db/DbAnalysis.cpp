@@ -46,38 +46,38 @@ classifyDistributionPattern(const DbAnalysis::LoopDbAccessSummary &summary) {
 }
 
 static std::optional<EdtDistributionPattern>
-distributionPatternFromDepPattern(ArtsDependencePattern pattern) {
+distributionPatternFromDepPattern(ArtsDepPattern pattern) {
   switch (pattern) {
-  case ArtsDependencePattern::unknown:
+  case ArtsDepPattern::unknown:
     return std::nullopt;
-  case ArtsDependencePattern::uniform:
+  case ArtsDepPattern::uniform:
     return EdtDistributionPattern::uniform;
-  case ArtsDependencePattern::stencil:
-  case ArtsDependencePattern::wavefront_2d:
-  case ArtsDependencePattern::jacobi_alternating_buffers:
+  case ArtsDepPattern::stencil:
+  case ArtsDepPattern::wavefront_2d:
+  case ArtsDepPattern::jacobi_alternating_buffers:
     return EdtDistributionPattern::stencil;
-  case ArtsDependencePattern::matmul:
+  case ArtsDepPattern::matmul:
     return EdtDistributionPattern::matmul;
-  case ArtsDependencePattern::triangular:
+  case ArtsDepPattern::triangular:
     return EdtDistributionPattern::triangular;
   }
 }
 
 static void applyDependencePatternHint(DbAnalysis::LoopDbAccessSummary &summary,
-                                       ArtsDependencePattern pattern) {
+                                       ArtsDepPattern pattern) {
   switch (pattern) {
-  case ArtsDependencePattern::unknown:
-  case ArtsDependencePattern::uniform:
+  case ArtsDepPattern::unknown:
+  case ArtsDepPattern::uniform:
     return;
-  case ArtsDependencePattern::stencil:
-  case ArtsDependencePattern::wavefront_2d:
-  case ArtsDependencePattern::jacobi_alternating_buffers:
+  case ArtsDepPattern::stencil:
+  case ArtsDepPattern::wavefront_2d:
+  case ArtsDepPattern::jacobi_alternating_buffers:
     summary.hasStencilAccessHint = true;
     return;
-  case ArtsDependencePattern::matmul:
+  case ArtsDepPattern::matmul:
     summary.hasMatmulUpdate = true;
     return;
-  case ArtsDependencePattern::triangular:
+  case ArtsDepPattern::triangular:
     summary.hasTriangularBound = true;
     return;
   }
@@ -170,7 +170,7 @@ DbAnalysis::analyzeLoopDbAccessPatterns(ForOp forOp) {
   Value loopIV = forBody.getArgument(0);
   summary.hasTriangularBound = hasTriangularBoundPattern(forOp);
   summary.hasMatmulUpdate = detectMatmulUpdatePattern(forOp, getLoopAnalysis());
-  std::optional<ArtsDependencePattern> depPatternHint =
+  std::optional<ArtsDepPattern> depPatternHint =
       getDepPattern(forOp.getOperation());
   if (depPatternHint)
     applyDependencePatternHint(summary, *depPatternHint);

@@ -83,7 +83,7 @@ static ForOp getSingleTopLevelFor(EdtOp edt) {
 }
 
 static void stampJacobiAlternatingBuffers(Operation *op) {
-  setDepPattern(op, ArtsDependencePattern::jacobi_alternating_buffers);
+  setDepPattern(op, ArtsDepPattern::jacobi_alternating_buffers);
 }
 
 static bool matchSimpleCopyFor(ForOp forOp, Value &srcMemref,
