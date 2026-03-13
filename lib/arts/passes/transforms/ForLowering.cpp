@@ -147,9 +147,9 @@ planAcquireRewrite(AcquireRewritePlanningInput input) {
                  constant == 1;
         });
 
-        ArtsDependencePattern depPattern =
+        ArtsDepPattern depPattern =
             getEffectiveDepPattern(input.parentAcquire.getOperation())
-                .value_or(ArtsDependencePattern::unknown);
+                .value_or(ArtsDepPattern::unknown);
         const DbAcquirePartitionFacts *acquireFacts = nullptr;
         std::optional<AccessPattern> acquireAccessPattern;
         auto accessPattern = getDbAccessPattern(dbAlloc.getOperation());
@@ -165,7 +165,7 @@ planAcquireRewrite(AcquireRewritePlanningInput input) {
 
         const bool inoutReadsCrossElementSelf =
             mode == ArtsMode::inout &&
-            (depPattern == ArtsDependencePattern::wavefront_2d ||
+            (depPattern == ArtsDepPattern::wavefront_2d ||
              (input.analysisManager &&
               input.analysisManager->getDbAnalysis()
                   .hasCrossElementSelfReadInLoop(input.parentAcquire,
@@ -204,7 +204,7 @@ planAcquireRewrite(AcquireRewritePlanningInput input) {
             << " inoutReadsCrossElementSelf=" << inoutReadsCrossElementSelf);
 
         const bool isWavefrontSelfRead =
-            depPattern == ArtsDependencePattern::wavefront_2d &&
+            depPattern == ArtsDepPattern::wavefront_2d &&
             inoutReadsCrossElementSelf;
         if (mode == ArtsMode::inout && inoutReadsCrossElementSelf &&
             (patternSaysStencil || strategySaysStencil) &&
@@ -308,12 +308,12 @@ static std::optional<TaskAcquireWindow> computeTaskAcquireWindowInBlockSpace(
   /// block window used by DB slice metadata on 1-D / row-owned plans.
   Value elementOffset = plannedElementOffset;
   Value elementSize = plannedElementSizeSeed;
-  ArtsDependencePattern depPattern =
+  ArtsDepPattern depPattern =
       getEffectiveDepPattern(parentAcquire.getOperation())
-          .value_or(ArtsDependencePattern::unknown);
+          .value_or(ArtsDepPattern::unknown);
   const bool useWavefrontInoutWindow =
       parentAcquire.getMode() == ArtsMode::inout && usesStencilHalo &&
-      depPattern == ArtsDependencePattern::wavefront_2d;
+      depPattern == ArtsDepPattern::wavefront_2d;
   const bool useRewrittenWindow =
       ((parentAcquire.getMode() == ArtsMode::in &&
         (usesStencilHalo || mode == PartitionMode::stencil)) ||

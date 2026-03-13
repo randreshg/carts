@@ -290,9 +290,8 @@ static void buildStencilRewriteAcquire(const DbAcquirePartitionView &input,
   bool allocIsStencil = false;
   if (auto pattern = getDbAccessPattern(allocOp.getOperation()))
     allocIsStencil = *pattern == DbAccessPattern::stencil;
-  ArtsDependencePattern depPattern =
-      getEffectiveDepPattern(acquire.getOperation())
-          .value_or(ArtsDependencePattern::unknown);
+  ArtsDepPattern depPattern = getEffectiveDepPattern(acquire.getOperation())
+                                  .value_or(ArtsDepPattern::unknown);
   bool shouldUseStencil = acquire && acquire.getMode() == ArtsMode::in &&
                           isStencilHaloDepPattern(depPattern);
   if (!shouldUseStencil) {

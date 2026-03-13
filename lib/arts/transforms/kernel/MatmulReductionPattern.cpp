@@ -636,8 +636,7 @@ public:
     ARTS_INFO("Detected reduction dot-product pattern inside arts.for; "
               << "rewriting to k-j update form");
     rewriteReductionDotToKJUpdate(matchResult, effectiveTileJ, minTripCount);
-    setDepPattern(matchResult.outerI.getOperation(),
-                  ArtsDependencePattern::matmul);
+    setDepPattern(matchResult.outerI.getOperation(), ArtsDepPattern::matmul);
     return success();
   }
 

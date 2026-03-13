@@ -63,7 +63,7 @@ struct AcquireDecision {
 struct AcquireInfo {
   ArtsMode accessMode = ArtsMode::uninitialized;
   PartitionMode partitionMode = PartitionMode::coarse;
-  ArtsDependencePattern depPattern = ArtsDependencePattern::unknown;
+  ArtsDepPattern depPattern = ArtsDepPattern::unknown;
   bool canElementWise = false;
   bool canBlock = false;
   AccessPattern accessPattern = AccessPattern::Unknown;

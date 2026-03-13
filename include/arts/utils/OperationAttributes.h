@@ -344,60 +344,59 @@ inline void setEdtDistributionPattern(Operation *op,
               EdtDistributionPatternAttr::get(op->getContext(), pattern));
 }
 
-inline std::optional<ArtsDependencePattern> getDepPattern(Operation *op) {
+inline std::optional<ArtsDepPattern> getDepPattern(Operation *op) {
   if (!op)
     return std::nullopt;
-  if (auto attr = op->getAttrOfType<ArtsDependencePatternAttr>(
+  if (auto attr = op->getAttrOfType<ArtsDepPatternAttr>(
           AttrNames::Operation::DepPattern))
     return attr.getValue();
   return std::nullopt;
 }
 
-inline void setDepPattern(Operation *op, ArtsDependencePattern pattern) {
+inline void setDepPattern(Operation *op, ArtsDepPattern pattern) {
   if (!op)
     return;
   op->setAttr(AttrNames::Operation::DepPattern,
-              ArtsDependencePatternAttr::get(op->getContext(), pattern));
+              ArtsDepPatternAttr::get(op->getContext(), pattern));
 }
 
-inline bool isStencilFamilyDepPattern(ArtsDependencePattern pattern) {
+inline bool isStencilFamilyDepPattern(ArtsDepPattern pattern) {
   switch (pattern) {
-  case ArtsDependencePattern::stencil:
-  case ArtsDependencePattern::wavefront_2d:
-  case ArtsDependencePattern::jacobi_alternating_buffers:
+  case ArtsDepPattern::stencil:
+  case ArtsDepPattern::wavefront_2d:
+  case ArtsDepPattern::jacobi_alternating_buffers:
     return true;
-  case ArtsDependencePattern::unknown:
-  case ArtsDependencePattern::uniform:
-  case ArtsDependencePattern::triangular:
-  case ArtsDependencePattern::matmul:
+  case ArtsDepPattern::unknown:
+  case ArtsDepPattern::uniform:
+  case ArtsDepPattern::triangular:
+  case ArtsDepPattern::matmul:
     return false;
   }
 }
 
-inline bool isStencilHaloDepPattern(ArtsDependencePattern pattern) {
+inline bool isStencilHaloDepPattern(ArtsDepPattern pattern) {
   switch (pattern) {
-  case ArtsDependencePattern::stencil:
-  case ArtsDependencePattern::jacobi_alternating_buffers:
+  case ArtsDepPattern::stencil:
+  case ArtsDepPattern::jacobi_alternating_buffers:
     return true;
-  case ArtsDependencePattern::unknown:
-  case ArtsDependencePattern::uniform:
-  case ArtsDependencePattern::triangular:
-  case ArtsDependencePattern::matmul:
-  case ArtsDependencePattern::wavefront_2d:
+  case ArtsDepPattern::unknown:
+  case ArtsDepPattern::uniform:
+  case ArtsDepPattern::triangular:
+  case ArtsDepPattern::matmul:
+  case ArtsDepPattern::wavefront_2d:
     return false;
   }
 }
 
-inline bool isMatmulDepPattern(ArtsDependencePattern pattern) {
-  return pattern == ArtsDependencePattern::matmul;
+inline bool isMatmulDepPattern(ArtsDepPattern pattern) {
+  return pattern == ArtsDepPattern::matmul;
 }
 
-inline bool isTriangularDepPattern(ArtsDependencePattern pattern) {
-  return pattern == ArtsDependencePattern::triangular;
+inline bool isTriangularDepPattern(ArtsDepPattern pattern) {
+  return pattern == ArtsDepPattern::triangular;
 }
 
-inline std::optional<ArtsDependencePattern>
-getEffectiveDepPattern(Operation *op) {
+inline std::optional<ArtsDepPattern> getEffectiveDepPattern(Operation *op) {
   for (Operation *current = op; current; current = current->getParentOp()) {
     if (auto pattern = getDepPattern(current))
       return pattern;
@@ -444,7 +443,7 @@ inline void copyDistributionAttrs(Operation *source, Operation *dest) {
 /// Copy semantic pattern attributes between operations.
 /// This is the canonical helper for structural rewrites that replace a loop,
 /// EDT, or epoch with an equivalent operation and want downstream passes to
-/// keep seeing the same high-level dependence/distribution family.
+/// keep seeing the same high-level dep/distribution family.
 inline void copyPatternAttrs(Operation *source, Operation *dest) {
   if (!source || !dest)
     return;

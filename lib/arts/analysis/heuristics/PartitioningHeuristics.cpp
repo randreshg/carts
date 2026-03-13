@@ -178,8 +178,7 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   if (patterns.hasStencil && ctx.canBlock) {
     bool hasJacobiDepPattern =
         llvm::any_of(ctx.acquires, [](const AcquireInfo &a) {
-          return a.depPattern ==
-                 ArtsDependencePattern::jacobi_alternating_buffers;
+          return a.depPattern == ArtsDepPattern::jacobi_alternating_buffers;
         });
     bool hasStencilReads = llvm::any_of(ctx.acquires, [](const AcquireInfo &a) {
       return (a.accessMode == ArtsMode::in) &&
@@ -189,8 +188,7 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
     if (!hasStencilReads && hasJacobiDepPattern) {
       hasStencilReads = llvm::any_of(ctx.acquires, [](const AcquireInfo &a) {
         return a.accessMode == ArtsMode::in &&
-               a.depPattern ==
-                   ArtsDependencePattern::jacobi_alternating_buffers;
+               a.depPattern == ArtsDepPattern::jacobi_alternating_buffers;
       });
     }
     bool hasWriteAcquires =

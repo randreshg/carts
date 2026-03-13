@@ -222,7 +222,7 @@ static bool hasStencilReadInternodeEdtUse(DbAllocOp alloc,
           return false;
 
         auto depPattern = getEffectiveDepPattern(acquireOp.getOperation())
-                              .value_or(ArtsDependencePattern::unknown);
+                              .value_or(ArtsDepPattern::unknown);
         if (isStencilFamilyDepPattern(depPattern) ||
             getStencilCenterOffset(acquireOp.getOperation()))
           return true;

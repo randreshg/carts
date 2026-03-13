@@ -513,7 +513,7 @@ void DbAcquireOp::setExplicitDepContract(bool preserve) {
   setPreserveDepEdge(preserve);
 }
 
-void DbAcquireOp::setDepPattern(ArtsDependencePattern pattern) {
+void DbAcquireOp::setDepPattern(ArtsDepPattern pattern) {
   arts::setDepPattern(getOperation(), pattern);
 }
 
@@ -521,7 +521,7 @@ void DbAcquireOp::clearDepPattern() {
   (*this)->removeAttr(AttrNames::Operation::DepPattern);
 }
 
-std::optional<ArtsDependencePattern> DbAcquireOp::getDepPattern() {
+std::optional<ArtsDepPattern> DbAcquireOp::getDepPattern() {
   return arts::getDepPattern(getOperation());
 }
 
