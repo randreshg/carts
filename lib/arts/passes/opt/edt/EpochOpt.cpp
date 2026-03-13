@@ -16,9 +16,9 @@
 
 #include "../../PassDetails.h"
 #include "arts/Dialect.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"

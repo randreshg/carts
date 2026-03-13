@@ -9,9 +9,9 @@
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/Utils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -594,9 +594,9 @@ bool LoopNode::haveCompatibleBounds(LoopNode *a, LoopNode *b) {
         if (!forB)
           return false;
         return ValueAnalysis::sameValue(forA.getLowerBound(),
-                                     forB.getLowerBound()) &&
+                                        forB.getLowerBound()) &&
                ValueAnalysis::sameValue(forA.getUpperBound(),
-                                     forB.getUpperBound()) &&
+                                        forB.getUpperBound()) &&
                ValueAnalysis::sameValue(forA.getStep(), forB.getStep());
       })
       .Case<arts::ForOp>([&](auto artsForA) {

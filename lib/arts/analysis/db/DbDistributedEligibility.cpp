@@ -8,9 +8,9 @@
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/graphs/db/DbGraph.h"
 #include "arts/analysis/graphs/db/DbNode.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/DenseSet.h"
@@ -29,7 +29,7 @@ static bool hasMultipleAllocationBlocks(DbAllocOp alloc) {
     return true;
 
   int64_t blockCount = 0;
-  if (ValueUtils::getConstantIndex(sizes.front(), blockCount))
+  if (ValueAnalysis::getConstantIndex(sizes.front(), blockCount))
     return blockCount > 1;
   return true;
 }
@@ -42,8 +42,8 @@ static bool hasSupportedAllocationShape(DbAllocOp alloc) {
 
   auto isPositiveOrDynamic = [](Value value) -> bool {
     int64_t constant = 0;
-    if (!ValueUtils::getConstantIndex(ValueUtils::stripNumericCasts(value),
-                                      constant))
+    if (!ValueAnalysis::getConstantIndex(
+            ValueAnalysis::stripNumericCasts(value), constant))
       return true;
     return constant > 0;
   };
@@ -224,7 +224,7 @@ static bool hasStencilReadInternodeEdtUse(DbAllocOp alloc,
         auto depPattern = getEffectiveDepPattern(acquireOp.getOperation())
                               .value_or(ArtsDependencePattern::unknown);
         if (isStencilFamilyDepPattern(depPattern) ||
-            acquireOp->hasAttr(AttrNames::Operation::StencilCenterOffset))
+            getStencilCenterOffset(acquireOp.getOperation()))
           return true;
 
         if (const DbAcquirePartitionFacts *facts =

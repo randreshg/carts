@@ -5,9 +5,9 @@
 ///==========================================================================///
 
 #include "arts/transforms/db/DbBlockPlanResolver.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Utils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Dominance.h"
@@ -64,8 +64,8 @@ resolveNDBlockHints(DbAllocOp allocOp, ArrayRef<Value> ndHints,
       continue;
     }
 
-    Value traced =
-        ValueAnalysis::traceValueToDominating(bs, allocOp, builder, domInfo, loc);
+    Value traced = ValueAnalysis::traceValueToDominating(bs, allocOp, builder,
+                                                         domInfo, loc);
     if (traced) {
       result.push_back(traced);
       continue;
@@ -141,14 +141,15 @@ static SmallVector<Value> collectCanonicalBlockSizeCandidates(
 
     Value domCandidate = idxCandidate;
     if (!domInfo.properlyDominates(domCandidate, allocOp)) {
-      domCandidate = ValueAnalysis::traceValueToDominating(domCandidate, allocOp,
-                                                        builder, domInfo, loc);
+      domCandidate = ValueAnalysis::traceValueToDominating(
+          domCandidate, allocOp, builder, domInfo, loc);
     }
 
     if (!domCandidate)
       continue;
 
-    if (ValueAnalysis::isZeroConstant(ValueAnalysis::stripNumericCasts(domCandidate)))
+    if (ValueAnalysis::isZeroConstant(
+            ValueAnalysis::stripNumericCasts(domCandidate)))
       continue;
 
     candidates.push_back(domCandidate);

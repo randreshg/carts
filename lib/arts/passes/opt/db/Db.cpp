@@ -28,11 +28,11 @@
 #include "mlir/Pass/Pass.h"
 /// Debug
 #include "arts/analysis/graphs/db/DbNode.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include <cstdlib>
 
 ARTS_DEBUG_SETUP(db);
@@ -57,7 +57,8 @@ static bool isLoopFullRange(LoopNode *loop, Value dimSize) {
     return false;
   if (!ValueAnalysis::isOneConstant(ValueAnalysis::stripNumericCasts(step)))
     return false;
-  return ValueAnalysis::sameValue(ValueAnalysis::stripNumericCasts(ub), dimSize);
+  return ValueAnalysis::sameValue(ValueAnalysis::stripNumericCasts(ub),
+                                  dimSize);
 }
 
 static bool isIndexFullCoverage(Value idx, Value dimSize,
@@ -65,8 +66,8 @@ static bool isIndexFullCoverage(Value idx, Value dimSize,
   if (!idx || !dimSize)
     return false;
 
-  auto dimConstOpt =
-      ValueAnalysis::tryFoldConstantIndex(ValueAnalysis::stripNumericCasts(dimSize));
+  auto dimConstOpt = ValueAnalysis::tryFoldConstantIndex(
+      ValueAnalysis::stripNumericCasts(dimSize));
   if (dimConstOpt && *dimConstOpt == 1)
     return true;
 

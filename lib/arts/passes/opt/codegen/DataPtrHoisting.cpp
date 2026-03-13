@@ -34,9 +34,9 @@
 #include "polygeist/Ops.h"
 
 #include "arts/Dialect.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/LoopInvarianceUtils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(arts_data_ptr_hoisting);

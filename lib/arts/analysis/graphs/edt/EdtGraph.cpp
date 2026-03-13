@@ -266,8 +266,8 @@ void EdtGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
     Object edt;
 
     /// ARTS ID
-    int64_t artsId = edtAnalysis->getMetadataManager().getIdRegistry().get(
-        edtNode->getOp());
+    int64_t artsId =
+        edtAnalysis->getMetadataManager().getIdRegistry().get(edtNode->getOp());
     if (artsId != 0)
       edt["arts_id"] = artsId;
 
@@ -478,8 +478,7 @@ void EdtGraph::linkEdtsToLoops() {
 void EdtGraph::buildDependencies() {
   ARTS_INFO("Phase 2 - Building EDT dependencies");
   assert(dbGraph && "DbGraph is required to build EDT dependencies");
-  assert(edtAnalysis &&
-         "EdtAnalysis is required to build EDT dependencies");
+  assert(edtAnalysis && "EdtAnalysis is required to build EDT dependencies");
   EdtDataFlowAnalysis dataflow(dbGraph, &edtAnalysis->getAnalysisManager());
   auto deps = dataflow.run(func);
 

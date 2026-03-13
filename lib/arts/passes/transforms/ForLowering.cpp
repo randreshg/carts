@@ -27,6 +27,7 @@
 #include "arts/analysis/heuristics/DistributionHeuristics.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
@@ -38,7 +39,6 @@
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -143,7 +143,8 @@ planAcquireRewrite(AcquireRewritePlanningInput input) {
       if (!elemSizes.empty()) {
         isSingleElement = llvm::all_of(elemSizes, [](Value value) {
           int64_t constant = 0;
-          return ValueUtils::getConstantIndex(value, constant) && constant == 1;
+          return ValueAnalysis::getConstantIndex(value, constant) &&
+                 constant == 1;
         });
 
         ArtsDependencePattern depPattern =

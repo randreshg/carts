@@ -10,13 +10,13 @@
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/heuristics/DistributionHeuristics.h"
+#include "arts/analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/analysis/PartitioningHeuristics.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -227,7 +227,8 @@ static bool hasAlignedInternodeForUseAfter(scf::ForOp loop,
     if (!loopIV)
       return WalkResult::advance();
 
-    Value leadingIdx = ValueAnalysis::stripNumericCasts(access->indices.front());
+    Value leadingIdx =
+        ValueAnalysis::stripNumericCasts(access->indices.front());
     if (ValueAnalysis::sameValue(leadingIdx, loopIV) ||
         ValueAnalysis::dependsOn(leadingIdx, loopIV) ||
         ValueAnalysis::dependsOn(loopIV, leadingIdx)) {

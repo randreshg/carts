@@ -47,6 +47,7 @@
 #include "arts/analysis/heuristics/DbHeuristics.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/analysis/loop/LoopNode.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/passes/Passes.h"
 /// Other
 #include "mlir/IR/OpDefinition.h"
@@ -261,8 +262,8 @@ static bool isAcquireInfoConsistent(const AcquirePartitionInfo &lhs,
 
   int64_t lhsConst = 0;
   int64_t rhsConst = 0;
-  bool lhsIsConst = ValueUtils::getConstantIndex(lhsSize, lhsConst);
-  bool rhsIsConst = ValueUtils::getConstantIndex(rhsSize, rhsConst);
+  bool lhsIsConst = ValueAnalysis::getConstantIndex(lhsSize, lhsConst);
+  bool rhsIsConst = ValueAnalysis::getConstantIndex(rhsSize, rhsConst);
   return lhsIsConst && rhsIsConst && lhsConst == rhsConst;
 }
 
@@ -363,8 +364,8 @@ static bool isLowerBoundGuaranteedByControlFlow(Operation *op, Value loopIV) {
 
     Value lhs = cmp.getLhs();
     Value rhs = cmp.getRhs();
-    if ((matchesIV(lhs) && ValueUtils::isZeroConstant(rhs)) ||
-        (matchesIV(rhs) && ValueUtils::isZeroConstant(lhs)))
+    if ((matchesIV(lhs) && ValueAnalysis::isZeroConstant(rhs)) ||
+        (matchesIV(rhs) && ValueAnalysis::isZeroConstant(lhs)))
       return true;
   }
   return false;
@@ -812,7 +813,8 @@ static int indexMatchStrength(Value idx, Value anchor) {
       ValueAnalysis::areValuesEquivalent(idx, anchor))
     return 4;
 
-  if (ValueAnalysis::dependsOn(idx, anchor) || ValueAnalysis::dependsOn(anchor, idx))
+  if (ValueAnalysis::dependsOn(idx, anchor) ||
+      ValueAnalysis::dependsOn(anchor, idx))
     return 2;
 
   if (auto cast = idx.getDefiningOp<arith::IndexCastOp>())
@@ -1235,7 +1237,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     if (!allocOp.getElementSizes().empty()) {
       int64_t staticFirstDim = 0;
       if (ValueAnalysis::getConstantIndex(allocOp.getElementSizes().front(),
-                                       staticFirstDim)) {
+                                          staticFirstDim)) {
         ctx.totalElements = staticFirstDim;
       }
     }
@@ -1429,10 +1431,10 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         Value rowSize = acqInfo.partitionSizes[0];
         Value colSize = acqInfo.partitionSizes[1];
         if (rowSize && colSize &&
-            !ValueUtils::isZeroConstant(
-                ValueUtils::stripNumericCasts(rowSize)) &&
-            !ValueUtils::isZeroConstant(
-                ValueUtils::stripNumericCasts(colSize))) {
+            !ValueAnalysis::isZeroConstant(
+                ValueAnalysis::stripNumericCasts(rowSize)) &&
+            !ValueAnalysis::isZeroConstant(
+                ValueAnalysis::stripNumericCasts(colSize))) {
           ctx.preferBlockND = true;
           ctx.preferredOuterRank = 2;
           blockSizesForNDBlock.push_back(rowSize);

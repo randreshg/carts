@@ -7,8 +7,8 @@
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/graphs/db/DbGraph.h"
 #include "arts/analysis/graphs/db/DbNode.h"
-#include "arts/utils/Utils.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/Utils.h"
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(db_alias);

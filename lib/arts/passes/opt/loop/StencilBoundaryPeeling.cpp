@@ -28,11 +28,11 @@
 /// exposes row-invariant computations to later hoisting passes.
 ///==========================================================================///
 
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/Utils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -64,7 +64,8 @@ struct BoundaryPeelingMatch {
 static std::optional<int64_t> getConstInt(Value value) {
   if (!value)
     return std::nullopt;
-  return ValueAnalysis::getConstantValue(ValueAnalysis::stripNumericCasts(value));
+  return ValueAnalysis::getConstantValue(
+      ValueAnalysis::stripNumericCasts(value));
 }
 
 static bool yieldsConstantBool(Block &block, bool expected) {

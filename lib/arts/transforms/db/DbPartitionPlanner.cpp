@@ -6,9 +6,9 @@
 
 #include "arts/transforms/db/DbPartitionPlanner.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
 using namespace mlir;
@@ -93,7 +93,8 @@ static void computeBlockShape(DbAllocOp allocOp, ArrayRef<Value> blockSizes,
       if (dim >= elemSizes.size())
         continue;
       Value bs = blockSizes[p];
-      if (!bs || ValueAnalysis::isZeroConstant(ValueAnalysis::stripNumericCasts(bs)))
+      if (!bs ||
+          ValueAnalysis::isZeroConstant(ValueAnalysis::stripNumericCasts(bs)))
         continue;
 
       Value dimSize = elemSizes[dim];
@@ -118,7 +119,8 @@ static void computeBlockShape(DbAllocOp allocOp, ArrayRef<Value> blockSizes,
   } else {
     for (unsigned d = 0; d < nPartDims && d < elemSizes.size(); ++d) {
       Value bs = blockSizes[d];
-      if (!bs || ValueAnalysis::isZeroConstant(ValueAnalysis::stripNumericCasts(bs)))
+      if (!bs ||
+          ValueAnalysis::isZeroConstant(ValueAnalysis::stripNumericCasts(bs)))
         continue;
 
       Value dim = elemSizes[d];
@@ -184,9 +186,10 @@ static void buildElementWiseRewriteAcquire(const DbAcquirePartitionView &input,
   output.partitionInfo.indices.assign(input.partitionIndices.begin(),
                                       input.partitionIndices.end());
 
-  bool hasRange = !input.partitionSizes.empty() &&
-                  !ValueAnalysis::isOneConstant(ValueAnalysis::stripNumericCasts(
-                      input.partitionSizes.front()));
+  bool hasRange =
+      !input.partitionSizes.empty() &&
+      !ValueAnalysis::isOneConstant(
+          ValueAnalysis::stripNumericCasts(input.partitionSizes.front()));
 
   if (output.partitionInfo.indices.empty() && hasRange) {
     output.partitionInfo.offsets.assign(input.partitionOffsets.begin(),

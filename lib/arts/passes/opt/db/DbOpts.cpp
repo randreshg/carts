@@ -6,12 +6,12 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Dominance.h"
