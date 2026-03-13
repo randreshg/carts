@@ -51,8 +51,12 @@ distributionPatternFromDepPattern(ArtsDepPattern pattern) {
   case ArtsDepPattern::unknown:
     return std::nullopt;
   case ArtsDepPattern::uniform:
+  case ArtsDepPattern::elementwise_pipeline:
     return EdtDistributionPattern::uniform;
   case ArtsDepPattern::stencil:
+  case ArtsDepPattern::stencil_tiling_nd:
+  case ArtsDepPattern::cross_dim_stencil_3d:
+  case ArtsDepPattern::higher_order_stencil:
   case ArtsDepPattern::wavefront_2d:
   case ArtsDepPattern::jacobi_alternating_buffers:
     return EdtDistributionPattern::stencil;
@@ -68,8 +72,12 @@ static void applyDependencePatternHint(DbAnalysis::LoopDbAccessSummary &summary,
   switch (pattern) {
   case ArtsDepPattern::unknown:
   case ArtsDepPattern::uniform:
+  case ArtsDepPattern::elementwise_pipeline:
     return;
   case ArtsDepPattern::stencil:
+  case ArtsDepPattern::stencil_tiling_nd:
+  case ArtsDepPattern::cross_dim_stencil_3d:
+  case ArtsDepPattern::higher_order_stencil:
   case ArtsDepPattern::wavefront_2d:
   case ArtsDepPattern::jacobi_alternating_buffers:
     summary.hasStencilAccessHint = true;
@@ -402,6 +410,10 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
       return;
     summary.partitionDims.assign(facts->partitionDims.begin(),
                                  facts->partitionDims.end());
+    if (!summary.partitionOffsets.empty() &&
+        summary.partitionDims.size() > summary.partitionOffsets.size()) {
+      summary.partitionDims.resize(summary.partitionOffsets.size());
+    }
   };
 
   auto applyTiling2DPartitionDimsFallback =

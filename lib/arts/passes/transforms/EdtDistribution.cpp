@@ -28,6 +28,7 @@
 #include "arts/analysis/heuristics/DistributionHeuristics.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/StencilAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include <cassert>
@@ -77,6 +78,13 @@ struct EdtDistributionPass
                 AM->getLoopDistributionPattern(forOp.getOperation()))
           pattern = *analyzedPattern;
         EdtDistributionKind kind = heuristics.chooseKind(strategy, pattern);
+        if (pattern == EdtDistributionPattern::stencil &&
+            hasSupportedBlockHalo(forOp.getOperation())) {
+          if (auto ownerDims = getStencilOwnerDims(forOp.getOperation());
+              ownerDims && ownerDims->size() >= 2) {
+            kind = EdtDistributionKind::tiling_2d;
+          }
+        }
         setEdtDistributionKind(forOp.getOperation(), kind);
         setEdtDistributionPattern(forOp.getOperation(), pattern);
         forOp->setAttr(

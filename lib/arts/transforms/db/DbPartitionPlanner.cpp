@@ -2,6 +2,15 @@
 /// File: DbPartitionPlanner.cpp
 ///
 /// Mode-specialized planning implementations for DbPartitioning.
+///
+/// Before:
+///   %db = arts.db_alloc(%n, %m) : memref<?x?xf64>
+///        {partitioning = #arts.partitioning<stencil>}
+///
+/// After:
+///   %db = arts.db_alloc(%outer_x, %outer_y, %tile_x, %tile_y)
+///        : memref<?x?x?x?xf64>
+///        {partitioning = #arts.partitioning<stencil>}
 ///==========================================================================///
 
 #include "arts/transforms/db/DbPartitionPlanner.h"

@@ -112,6 +112,11 @@ static cl::opt<std::string> DiagnoseOutput(
     cl::value_desc("filename"), cl::init(".carts-diagnose.json"));
 
 /// Kernel transform options (Stage: loop-reordering)
+static cl::opt<bool> KernelTransformsEnableElementwisePipeline(
+    "loop-transforms-enable-elementwise-pipeline",
+    cl::desc("Enable semantic fusion of sibling pointwise loop pipelines"),
+    cl::init(true));
+
 static cl::opt<bool> KernelTransformsEnableMatmul(
     "loop-transforms-enable-matmul",
     cl::desc("Enable reduction-aware matmul transforms (dot -> update form)"),
@@ -329,7 +334,8 @@ void setupLoopReordering(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(arts::createStencilBoundaryPeelingPass());
   pm.addPass(arts::createLoopReorderingPass(AM));
   pm.addPass(arts::createKernelTransformsPass(
-      AM, KernelTransformsEnableMatmul, KernelTransformsEnableTiling,
+      AM, KernelTransformsEnableElementwisePipeline,
+      KernelTransformsEnableMatmul, KernelTransformsEnableTiling,
       KernelTransformsTileJ, KernelTransformsMinTripCount));
   /// Multinode execution needs eligible host producer loops to flow through
   /// the regular arts.for/EDT pipeline before CreateDbs; otherwise serial host

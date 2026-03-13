@@ -195,7 +195,11 @@ def ArtsDepPattern
       I32EnumAttrCase<"triangular", 4, "triangular">,
       I32EnumAttrCase<"wavefront_2d", 5, "wavefront_2d">,
       I32EnumAttrCase<"jacobi_alternating_buffers", 6,
-                      "jacobi_alternating_buffers">
+                      "jacobi_alternating_buffers">,
+      I32EnumAttrCase<"elementwise_pipeline", 7, "elementwise_pipeline">,
+      I32EnumAttrCase<"stencil_tiling_nd", 8, "stencil_tiling_nd">,
+      I32EnumAttrCase<"cross_dim_stencil_3d", 9, "cross_dim_stencil_3d">,
+      I32EnumAttrCase<"higher_order_stencil", 10, "higher_order_stencil">
     ]>;
 def ArtsDepPatternAttr
     : Arts_I32EnumAttr<"dep_pattern", ArtsDepPattern>;

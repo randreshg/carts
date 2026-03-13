@@ -514,6 +514,9 @@ def KernelTransforms : Pass<"arts-kernel-transforms", "mlir::ModuleOp"> {
     - BlockLoopStripMining: late DB-aware strip-mining after partitioning
 
     Current patterns:
+    - ElementwisePipeline
+      Fuses consecutive sibling pointwise loops over the same iteration space
+      into a single kernel pipeline before DB creation.
     - MatmulReductionPattern
       Rewrites dot-product matmul kernels into update form so later passes can
       tile, distribute, and localize them more effectively.
@@ -524,6 +527,9 @@ def KernelTransforms : Pass<"arts-kernel-transforms", "mlir::ModuleOp"> {
   ];
   let constructor = "mlir::arts::createKernelTransformsPass(nullptr)";
   let options = [
+    Option<"enableElementwisePipeline", "enable-elementwise-pipeline", "bool",
+           /*default=*/"true",
+           "Enable pointwise pipeline fusion for sibling loops over the same iteration space.">,
     Option<"enableMatmul", "enable-matmul", "bool", /*default=*/"true",
            "Enable reduction distribution for matmul-like patterns.">,
     Option<"enableTiling", "enable-tiling", "bool", /*default=*/"true",

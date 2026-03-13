@@ -2,6 +2,17 @@
 /// File: EdtTaskLoopLowering.cpp
 ///
 /// Factory for strategy-specific task loop lowerers.
+///
+/// Before:
+///   arts.for (%i = %lb to %ub step %step) { ... }
+///   // no worker-local slice yet
+///
+/// After:
+///   // planner computes one worker slice
+///   %worker_lb = ...
+///   %worker_sz = ...
+///   arts.db_acquire ... {partition_offsets = [%worker_lb],
+///                        partition_sizes = [%worker_sz]}
 ///==========================================================================///
 
 #include "arts/transforms/edt/EdtTaskLoopLowering.h"

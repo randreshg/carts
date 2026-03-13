@@ -15,6 +15,7 @@
 ///==========================================================================///
 
 #include "arts/transforms/edt/EdtRewriter.h"
+#include "arts/utils/StencilAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
 using namespace mlir;
@@ -29,7 +30,7 @@ DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
     /// Intentionally drop any worker-local block hints here. For single-node
     /// Seidel-like inout updates with cross-element self-reads, keeping those
     /// hints lets DbPartitioning recover an unsafe block/stencil layout later.
-    return in.AC->create<DbAcquireOp>(
+    auto coarseAcquire = in.AC->create<DbAcquireOp>(
         in.loc, in.parentAcquire.getMode(), in.rootGuid, in.rootPtr,
         in.parentAcquire.getPtr().getType(), PartitionMode::coarse,
         /*indices=*/SmallVector<Value>{},
@@ -38,6 +39,13 @@ DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
         /*partition_indices=*/SmallVector<Value>{},
         /*partition_offsets=*/SmallVector<Value>{},
         /*partition_sizes=*/SmallVector<Value>{});
+    copyStencilContractAttrs(in.parentAcquire.getOperation(),
+                             coarseAcquire.getOperation());
+    if (in.parentAcquire.getPreserveAccessMode())
+      coarseAcquire.setPreserveAccessMode();
+    if (in.parentAcquire.getPreserveDepEdge())
+      coarseAcquire.setPreserveDepEdge();
+    return coarseAcquire;
   }
 
   Value workerSize = in.acquireSize;
@@ -51,76 +59,110 @@ DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
   SmallVector<Value> workerOffsets = {in.acquireOffset};
   SmallVector<Value> workerSizes = {workerSize};
   SmallVector<Value> workerHintSizes = {workerHintSize};
+  for (unsigned i = 0; i < in.extraOffsets.size(); ++i) {
+    Value extraOffset = in.extraOffsets[i];
+    Value extraSize = i < in.extraSizes.size() ? in.extraSizes[i] : one;
+    Value extraHint =
+        i < in.extraHintSizes.size() ? in.extraHintSizes[i] : extraSize;
+    workerOffsets.push_back(extraOffset ? extraOffset : zero);
+    workerSizes.push_back(extraSize ? extraSize : one);
+    workerHintSizes.push_back(extraHint ? extraHint : extraSize);
+  }
 
-  if (applyStencilHalo && in.stencilExtent) {
-    Value start = workerOffsets.front();
-    Value size = workerSizes.front();
+  auto applyHaloToDim = [&](unsigned dim, int64_t minOffset, int64_t maxOffset,
+                            Value extent) {
+    if (dim >= workerOffsets.size() || !extent)
+      return;
+
+    Value start = workerOffsets[dim];
+    Value size = workerSizes[dim];
     Value end = in.AC->create<arith::AddIOp>(in.loc, start, size);
 
-    Value canShiftLeft = in.AC->create<arith::CmpIOp>(
-        in.loc, arith::CmpIPredicate::uge, start, one);
-    Value startMinusOne = in.AC->create<arith::SubIOp>(in.loc, start, one);
-    Value haloStart = in.AC->create<arith::SelectOp>(in.loc, canShiftLeft,
-                                                     startMinusOne, zero);
+    Value haloStart = start;
+    if (minOffset < 0) {
+      Value leftHalo = in.AC->createIndexConstant(-minOffset, in.loc);
+      Value canShiftLeft = in.AC->create<arith::CmpIOp>(
+          in.loc, arith::CmpIPredicate::uge, start, leftHalo);
+      Value shiftedStart =
+          in.AC->create<arith::SubIOp>(in.loc, start, leftHalo);
+      haloStart = in.AC->create<arith::SelectOp>(in.loc, canShiftLeft,
+                                                 shiftedStart, zero);
+    } else if (minOffset > 0) {
+      Value shift = in.AC->createIndexConstant(minOffset, in.loc);
+      haloStart = in.AC->create<arith::AddIOp>(in.loc, start, shift);
+    }
 
-    Value endPlusOne = in.AC->create<arith::AddIOp>(in.loc, end, one);
-    Value haloEnd =
-        in.AC->create<arith::MinUIOp>(in.loc, endPlusOne, in.stencilExtent);
-    Value haloSize = in.AC->create<arith::SubIOp>(in.loc, haloEnd, haloStart);
+    Value haloEnd = end;
+    if (maxOffset > 0) {
+      Value rightHalo = in.AC->createIndexConstant(maxOffset, in.loc);
+      Value endPlusHalo =
+          in.AC->create<arith::AddIOp>(in.loc, end, rightHalo);
+      haloEnd = in.AC->create<arith::MinUIOp>(in.loc, endPlusHalo, extent);
+    } else if (maxOffset < 0) {
+      Value shrink = in.AC->createIndexConstant(-maxOffset, in.loc);
+      Value canShrink = in.AC->create<arith::CmpIOp>(
+          in.loc, arith::CmpIPredicate::uge, end, shrink);
+      Value shrunkenEnd =
+          in.AC->create<arith::SubIOp>(in.loc, end, shrink);
+      haloEnd = in.AC->create<arith::SelectOp>(in.loc, canShrink, shrunkenEnd,
+                                               zero);
+    }
 
-    workerOffsets.front() = haloStart;
-    workerSizes.front() = haloSize;
-    workerHintSizes.front() = haloSize;
+    Value haloEndAboveStart = in.AC->create<arith::CmpIOp>(
+        in.loc, arith::CmpIPredicate::uge, haloEnd, haloStart);
+    Value rawHaloSize =
+        in.AC->create<arith::SubIOp>(in.loc, haloEnd, haloStart);
+    Value haloSize = in.AC->create<arith::SelectOp>(in.loc, haloEndAboveStart,
+                                                    rawHaloSize, zero);
+    workerOffsets[dim] = haloStart;
+    workerSizes[dim] = haloSize;
+    workerHintSizes[dim] = haloSize;
+  };
+
+  if (applyStencilHalo) {
+    if (!in.dimensionExtents.empty() && !in.haloMinOffsets.empty() &&
+        !in.haloMaxOffsets.empty()) {
+      unsigned haloRank = std::min<unsigned>(
+          workerOffsets.size(),
+          std::min<unsigned>(in.dimensionExtents.size(),
+                             std::min<unsigned>(in.haloMinOffsets.size(),
+                                                in.haloMaxOffsets.size())));
+      for (unsigned dim = 0; dim < haloRank; ++dim)
+        applyHaloToDim(dim, in.haloMinOffsets[dim], in.haloMaxOffsets[dim],
+                       in.dimensionExtents[dim]);
+    } else if (in.stencilExtent) {
+      applyHaloToDim(/*dim=*/0, /*minOffset=*/-1, /*maxOffset=*/1,
+                     in.stencilExtent);
+    }
   }
 
   SmallVector<Value> partitionOffsets(workerOffsets.begin(),
                                       workerOffsets.end());
   SmallVector<Value> partitionHintSizes(workerHintSizes.begin(),
                                         workerHintSizes.end());
-  for (unsigned i = 0; i < in.extraOffsets.size(); ++i) {
-    Value extraOffset = in.extraOffsets[i];
-    Value extraHint =
-        i < in.extraHintSizes.size() ? in.extraHintSizes[i] : Value();
-    Value extraSize = i < in.extraSizes.size() ? in.extraSizes[i] : one;
-    partitionOffsets.push_back(extraOffset ? extraOffset : zero);
-    partitionHintSizes.push_back(extraHint ? extraHint : extraSize);
-  }
 
-  /// Keep dependency slices in element space at this stage.
-  /// DbPartitioning/DbPass own the final DB-space mapping once layout decisions
-  /// are materialized.
-  SmallVector<Value> dependencyOffsets(workerOffsets.begin(),
-                                       workerOffsets.end());
-  SmallVector<Value> dependencySizes(workerHintSizes.begin(),
-                                     workerHintSizes.end());
+  /// Keep dependency slices in element space at this stage, but only along the
+  /// already-materialized DB-space rank. Extra N-D ownership stays in
+  /// partition_* hints until DbPartitioning rewrites the allocation shape.
+  SmallVector<Value> dependencyOffsets = {workerOffsets.front()};
+  SmallVector<Value> dependencySizes = {workerHintSizes.front()};
 
-  /// For read-only acquires, the worker-local range is a planning hint, not
-  /// yet the authoritative dependency slice. Preserve the parent dependency
-  /// range unless stencil halo rewriting explicitly widened the task window.
-  /// This keeps block-planning legality separate from the EDT-local compute
-  /// slice and avoids baking mixed-orientation worker chunks into rec_dep
-  /// ranges too early.
-  bool useParentDependencyRange = in.parentAcquire.getMode() == ArtsMode::in &&
-                                  !applyStencilHalo &&
-                                  !in.parentAcquire.getOffsets().empty() &&
-                                  !in.parentAcquire.getSizes().empty();
+  /// Generic read-only acquires may still preserve the parent dependency
+  /// range. Pattern-backed block/stencil contracts must keep the worker-local
+  /// dependency slice authoritative so later lowering does not widen them back
+  /// to full-range.
+  bool useParentDependencyRange =
+      in.preserveParentDependencyRange && !applyStencilHalo &&
+      !in.parentAcquire.getOffsets().empty() &&
+      !in.parentAcquire.getSizes().empty();
   if (useParentDependencyRange) {
     dependencyOffsets.assign(in.parentAcquire.getOffsets().begin(),
                              in.parentAcquire.getOffsets().end());
     dependencySizes.assign(in.parentAcquire.getSizes().begin(),
                            in.parentAcquire.getSizes().end());
-  } else {
-    for (unsigned i = 0; i < in.extraOffsets.size(); ++i) {
-      Value extraOffset = in.extraOffsets[i];
-      Value extraHint =
-          i < in.extraHintSizes.size() ? in.extraHintSizes[i] : Value();
-      Value extraSize = i < in.extraSizes.size() ? in.extraSizes[i] : one;
-      dependencyOffsets.push_back(extraOffset ? extraOffset : zero);
-      dependencySizes.push_back(extraHint ? extraHint : extraSize);
-    }
   }
 
-  return in.AC->create<DbAcquireOp>(
+  auto blockAcquire = in.AC->create<DbAcquireOp>(
       in.loc, in.parentAcquire.getMode(), in.rootGuid, in.rootPtr,
       in.parentAcquire.getPtr().getType(), PartitionMode::block,
       /*indices=*/
@@ -131,4 +173,11 @@ DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
       /*partition_indices=*/SmallVector<Value>{},
       /*partition_offsets=*/partitionOffsets,
       /*partition_sizes=*/partitionHintSizes);
+  copyStencilContractAttrs(in.parentAcquire.getOperation(),
+                           blockAcquire.getOperation());
+  if (in.parentAcquire.getPreserveAccessMode())
+    blockAcquire.setPreserveAccessMode();
+  if (in.parentAcquire.getPreserveDepEdge())
+    blockAcquire.setPreserveDepEdge();
+  return blockAcquire;
 }

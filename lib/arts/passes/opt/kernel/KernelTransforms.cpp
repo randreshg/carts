@@ -10,6 +10,8 @@
 ///   - BlockLoopStripMining: late DB-aware cleanup after partitioning
 ///
 /// Current ownership:
+///   - elementwise_pipeline
+///   - StencilTilingNDPattern
 ///   - MatmulReductionPattern
 ///==========================================================================///
 
@@ -29,10 +31,12 @@ namespace {
 
 struct KernelTransformsPass
     : public arts::KernelTransformsBase<KernelTransformsPass> {
-  KernelTransformsPass(mlir::arts::AnalysisManager *AM, bool enableMatmul,
+  KernelTransformsPass(mlir::arts::AnalysisManager *AM,
+                       bool enableElementwisePipeline, bool enableMatmul,
                        bool enableTiling, int64_t tileJ, int64_t minTripCount)
       : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
+    this->enableElementwisePipeline = enableElementwisePipeline;
     this->enableMatmul = enableMatmul;
     this->enableTiling = enableTiling;
     this->tileJ = tileJ;
@@ -43,7 +47,12 @@ struct KernelTransformsPass
     ModuleOp module = getOperation();
     ARTS_INFO_HEADER(KernelTransformsPass);
 
+    int rewrites = 0;
+    if (enableElementwisePipeline)
+      rewrites += applyElementwisePipelineTransform(module);
+
     SmallVector<std::unique_ptr<LoopPattern>> patterns;
+    patterns.push_back(createStencilTilingNDPattern());
     if (enableMatmul)
       patterns.push_back(
           createMatmulReductionPattern(enableTiling, tileJ, minTripCount));
@@ -51,7 +60,6 @@ struct KernelTransformsPass
     SmallVector<ForOp, 16> artsFors;
     module.walk([&](ForOp fo) { artsFors.push_back(fo); });
 
-    int rewrites = 0;
     for (ForOp fo : artsFors) {
       OpBuilder builder(fo);
       for (auto &pattern : patterns) {
@@ -77,8 +85,10 @@ private:
 
 std::unique_ptr<Pass>
 mlir::arts::createKernelTransformsPass(mlir::arts::AnalysisManager *AM,
+                                       bool enableElementwisePipeline,
                                        bool enableMatmul, bool enableTiling,
                                        int64_t tileJ, int64_t minTripCount) {
-  return std::make_unique<KernelTransformsPass>(AM, enableMatmul, enableTiling,
-                                                tileJ, minTripCount);
+  return std::make_unique<KernelTransformsPass>(
+      AM, enableElementwisePipeline, enableMatmul, enableTiling, tileJ,
+      minTripCount);
 }

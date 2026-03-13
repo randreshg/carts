@@ -1,5 +1,12 @@
 ///==========================================================================///
 /// LoopNormalizer.cpp - Shared utilities for loop normalization patterns
+///
+/// Before:
+///   %new = arts.for (...) { ... }   // rebuilt loop with no attrs yet
+///
+/// After:
+///   %new = arts.for (...) { ... }
+///          {arts.id = 42, arts.dep_pattern = #arts.dep_pattern<wavefront_2d>}
 ///==========================================================================///
 
 #include "arts/transforms/loop/LoopNormalizer.h"

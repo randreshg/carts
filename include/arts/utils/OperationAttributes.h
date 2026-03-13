@@ -363,6 +363,9 @@ inline void setDepPattern(Operation *op, ArtsDepPattern pattern) {
 inline bool isStencilFamilyDepPattern(ArtsDepPattern pattern) {
   switch (pattern) {
   case ArtsDepPattern::stencil:
+  case ArtsDepPattern::stencil_tiling_nd:
+  case ArtsDepPattern::cross_dim_stencil_3d:
+  case ArtsDepPattern::higher_order_stencil:
   case ArtsDepPattern::wavefront_2d:
   case ArtsDepPattern::jacobi_alternating_buffers:
     return true;
@@ -370,6 +373,7 @@ inline bool isStencilFamilyDepPattern(ArtsDepPattern pattern) {
   case ArtsDepPattern::uniform:
   case ArtsDepPattern::triangular:
   case ArtsDepPattern::matmul:
+  case ArtsDepPattern::elementwise_pipeline:
     return false;
   }
 }
@@ -378,12 +382,34 @@ inline bool isStencilHaloDepPattern(ArtsDepPattern pattern) {
   switch (pattern) {
   case ArtsDepPattern::stencil:
   case ArtsDepPattern::jacobi_alternating_buffers:
+  case ArtsDepPattern::stencil_tiling_nd:
+  case ArtsDepPattern::cross_dim_stencil_3d:
+  case ArtsDepPattern::higher_order_stencil:
     return true;
   case ArtsDepPattern::unknown:
   case ArtsDepPattern::uniform:
   case ArtsDepPattern::triangular:
   case ArtsDepPattern::matmul:
+  case ArtsDepPattern::elementwise_pipeline:
   case ArtsDepPattern::wavefront_2d:
+    return false;
+  }
+}
+
+inline bool isUniformFamilyDepPattern(ArtsDepPattern pattern) {
+  switch (pattern) {
+  case ArtsDepPattern::uniform:
+  case ArtsDepPattern::elementwise_pipeline:
+    return true;
+  case ArtsDepPattern::unknown:
+  case ArtsDepPattern::stencil:
+  case ArtsDepPattern::matmul:
+  case ArtsDepPattern::triangular:
+  case ArtsDepPattern::wavefront_2d:
+  case ArtsDepPattern::jacobi_alternating_buffers:
+  case ArtsDepPattern::stencil_tiling_nd:
+  case ArtsDepPattern::cross_dim_stencil_3d:
+  case ArtsDepPattern::higher_order_stencil:
     return false;
   }
 }

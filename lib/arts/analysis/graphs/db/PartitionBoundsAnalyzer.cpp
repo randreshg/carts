@@ -637,6 +637,19 @@ std::optional<unsigned> PartitionBoundsAnalyzer::getPartitionOffsetDim(
 
 bool PartitionBoundsAnalyzer::needsFullRange(DbAcquireNode *node,
                                              Value partitionOffset) {
+  DbAcquireOp acquire = node ? node->getDbAcquireOp() : DbAcquireOp();
+  bool supportedBlockHalo =
+      acquire && hasSupportedBlockHalo(acquire.getOperation());
+  SmallVector<unsigned, 4> ownerDims;
+  if (acquire) {
+    if (auto attrOwnerDims = getStencilOwnerDims(acquire.getOperation())) {
+      for (int64_t dim : *attrOwnerDims) {
+        if (dim >= 0)
+          ownerDims.push_back(static_cast<unsigned>(dim));
+      }
+    }
+  }
+
   if (partitionOffset) {
     auto dimOpt = getPartitionOffsetDim(node, partitionOffset,
                                         /*requireLeading=*/false);
@@ -691,13 +704,32 @@ bool PartitionBoundsAnalyzer::needsFullRange(DbAcquireNode *node,
       node->getAccessPattern() == AccessPattern::Stencil && partitionOffset) {
     if (!getPartitionOffsetDim(node, partitionOffset,
                                /*requireLeading=*/true)) {
+      auto mappedDim =
+          getPartitionOffsetDim(node, partitionOffset, /*requireLeading=*/false);
+      if (supportedBlockHalo && mappedDim &&
+          llvm::is_contained(ownerDims, *mappedDim)) {
+        ARTS_DEBUG("  needsFullRange: preserving non-leading stencil dim from "
+                   "N-D halo contract");
+      } else {
       ARTS_DEBUG(
           "  needsFullRange: stencil access on non-leading partition dim");
       return true;
+      }
     }
   }
 
   if (!partitionOffset || !canPartitionWithOffset(node, partitionOffset)) {
+    auto mappedDim =
+        partitionOffset
+            ? getPartitionOffsetDim(node, partitionOffset,
+                                    /*requireLeading=*/false)
+            : std::nullopt;
+    if (partitionOffset && supportedBlockHalo && mappedDim &&
+        llvm::is_contained(ownerDims, *mappedDim)) {
+      ARTS_DEBUG("  needsFullRange: trusting N-D halo contract for partition "
+                 "offset");
+      return false;
+    }
     ARTS_DEBUG("  needsFullRange: "
                << (partitionOffset ? "partition offset not in access pattern"
                                    : "no partition offset (needs full range)"));
