@@ -6,8 +6,8 @@
 
 #include "arts/analysis/db/DbPatternMatchers.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
-#include "arts/utils/DbUtils.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/DbUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -250,7 +250,8 @@ bool mlir::arts::detectMatmulUpdatePattern(ForOp forOp,
                                            LoopAnalysis *loopAnalysis) {
   bool hasMatmulUpdate = false;
   forOp.walk([&](memref::StoreOp store) {
-    Value storeValue = ValueAnalysis::stripNumericCasts(store.getValueToStore());
+    Value storeValue =
+        ValueAnalysis::stripNumericCasts(store.getValueToStore());
     Operation *storeValueDef = storeValue.getDefiningOp();
     if (!storeValueDef)
       return WalkResult::advance();

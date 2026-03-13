@@ -13,8 +13,8 @@ using namespace mlir::arts;
 void arts::copyLoopAttributes(Operation *source, Operation *target) {
   if (!source || !target)
     return;
-  if (auto idAttr = source->getAttr(AttrNames::Operation::Metadata::ArtsId))
-    target->setAttr(AttrNames::Operation::Metadata::ArtsId, idAttr);
+  if (auto idAttr = source->getAttr(AttrNames::Operation::ArtsId))
+    target->setAttr(AttrNames::Operation::ArtsId, idAttr);
   if (auto loopAttr = source->getAttr(AttrNames::LoopMetadata::Name))
     target->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
   copyPatternAttrs(source, target);

@@ -5,10 +5,10 @@
 ///==========================================================================///
 
 #include "arts/utils/DbUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -584,7 +584,8 @@ Value DbUtils::pickRepresentativePartitionOffset(ArrayRef<Value> offsets,
     if (!off)
       continue;
     int64_t c = 0;
-    if (!ValueAnalysis::getConstantIndex(ValueAnalysis::stripNumericCasts(off), c)) {
+    if (!ValueAnalysis::getConstantIndex(ValueAnalysis::stripNumericCasts(off),
+                                         c)) {
       if (outIdx)
         *outIdx = i;
       return off;
@@ -1098,10 +1099,10 @@ Value extractOriginalSize(Value numerator, Value denominator,
     Value rhs = mul.getRhs();
     if (ValueAnalysis::scalesAreEquivalent(lhs, denominator))
       return ValueAnalysis::castToIndex(ValueAnalysis::stripNumericCasts(rhs),
-                                     builder, loc);
+                                        builder, loc);
     if (ValueAnalysis::scalesAreEquivalent(rhs, denominator))
       return ValueAnalysis::castToIndex(ValueAnalysis::stripNumericCasts(lhs),
-                                     builder, loc);
+                                        builder, loc);
   }
   return Value();
 }

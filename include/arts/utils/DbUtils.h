@@ -304,7 +304,8 @@ std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth = 0);
 
 /// Extract block size INCLUDING halo adjustments for allocation sizing.
 /// Unlike extractBlockSizeFromHint which strips halo for loop bound matching,
-/// this preserves stencil halo adjustments since allocations need the full size.
+/// this preserves stencil halo adjustments since allocations need the full
+/// size.
 std::optional<int64_t> extractBlockSizeForAllocation(Value sizeHint,
                                                      int depth = 0);
 

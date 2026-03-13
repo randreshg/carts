@@ -45,6 +45,7 @@
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/passes/PassDetails.h"
 #include "arts/transforms/db/DbRewriter.h"
@@ -55,7 +56,6 @@
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/Utils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/metadata/MemrefMetadata.h"
 #include "arts/utils/metadata/Metadata.h"
 #include <optional>
@@ -310,21 +310,25 @@ ArtsMode CreateDbsPass::inferEdtAccessMode(Operation *underlyingOp,
       return;
 
     if (auto load = dyn_cast<memref::LoadOp>(op)) {
-      if (ValueAnalysis::getUnderlyingOperation(load.getMemref()) == underlyingOp)
+      if (ValueAnalysis::getUnderlyingOperation(load.getMemref()) ==
+          underlyingOp)
         hasRead = true;
       return;
     }
 
     if (auto store = dyn_cast<memref::StoreOp>(op)) {
-      if (ValueAnalysis::getUnderlyingOperation(store.getMemref()) == underlyingOp)
+      if (ValueAnalysis::getUnderlyingOperation(store.getMemref()) ==
+          underlyingOp)
         hasWrite = true;
       return;
     }
 
     if (auto copy = dyn_cast<memref::CopyOp>(op)) {
-      if (ValueAnalysis::getUnderlyingOperation(copy.getSource()) == underlyingOp)
+      if (ValueAnalysis::getUnderlyingOperation(copy.getSource()) ==
+          underlyingOp)
         hasRead = true;
-      if (ValueAnalysis::getUnderlyingOperation(copy.getTarget()) == underlyingOp)
+      if (ValueAnalysis::getUnderlyingOperation(copy.getTarget()) ==
+          underlyingOp)
         hasWrite = true;
     }
   });
@@ -367,7 +371,8 @@ void CreateDbsPass::runOnOperation() {
     SetVector<Value> &externalDeps = edtEntry.second;
 
     for (Value externalDep : externalDeps) {
-      Operation *underlyingOp = ValueAnalysis::getUnderlyingOperation(externalDep);
+      Operation *underlyingOp =
+          ValueAnalysis::getUnderlyingOperation(externalDep);
       if (!underlyingOp)
         continue;
 
@@ -472,10 +477,12 @@ void CreateDbsPass::collectMemrefs() {
           continue;
 
         /// Get the underlying value of the memory reference
-        Operation *underlyingOp = ValueAnalysis::getUnderlyingOperation(operand);
+        Operation *underlyingOp =
+            ValueAnalysis::getUnderlyingOperation(operand);
         if (!underlyingOp) {
           if (auto load = operand.getDefiningOp<memref::LoadOp>())
-            underlyingOp = ValueAnalysis::getUnderlyingOperation(load.getMemref());
+            underlyingOp =
+                ValueAnalysis::getUnderlyingOperation(load.getMemref());
         }
         if (!underlyingOp) {
           ARTS_WARN("Skipping value with no underlying operation: " << operand);
@@ -922,7 +929,8 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
   /// For each external value, create acquire and release operations
   for (Value externalDep : externalDeps) {
     /// Locate the underlying operation
-    Operation *underlyingOp = ValueAnalysis::getUnderlyingOperation(externalDep);
+    Operation *underlyingOp =
+        ValueAnalysis::getUnderlyingOperation(externalDep);
     if (!underlyingOp)
       if (auto load = externalDep.getDefiningOp<memref::LoadOp>())
         underlyingOp = ValueAnalysis::getUnderlyingOperation(load.getMemref());

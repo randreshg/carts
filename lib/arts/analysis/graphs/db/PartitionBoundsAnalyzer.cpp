@@ -16,12 +16,12 @@
 #include "arts/analysis/graphs/edt/EdtGraph.h"
 #include "arts/analysis/graphs/edt/EdtNode.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -46,7 +46,8 @@ static Value pickRepresentativeValue(ValueRange vals, unsigned &outIdx) {
     if (!v)
       continue;
     int64_t c = 0;
-    if (!ValueAnalysis::getConstantIndex(ValueAnalysis::stripNumericCasts(v), c)) {
+    if (!ValueAnalysis::getConstantIndex(ValueAnalysis::stripNumericCasts(v),
+                                         c)) {
       outIdx = i;
       return v;
     }
@@ -126,7 +127,8 @@ static LoopNode *findBestLoopNode(ArrayRef<LoopNode *> loopNodes,
   for (LoopNode *loopNode : loopNodes) {
     if (!loopNode->dependsOnInductionVar(firstDynIdx))
       continue;
-    if (!offsetIsZero && !ValueAnalysis::dependsOn(firstDynIdx, partitionOffset))
+    if (!offsetIsZero &&
+        !ValueAnalysis::dependsOn(firstDynIdx, partitionOffset))
       continue;
 
     Value loopIV = loopNode->getInductionVar();
@@ -324,8 +326,8 @@ bool PartitionBoundsAnalyzer::computePartitionBounds(DbAcquireNode *node) {
       break;
   }
 
-  bool offsetIsZero =
-      ValueAnalysis::isZeroConstant(ValueAnalysis::stripNumericCasts(analysisOffset));
+  bool offsetIsZero = ValueAnalysis::isZeroConstant(
+      ValueAnalysis::stripNumericCasts(analysisOffset));
   Value loopIdx = partitionIdx ? partitionIdx : firstDynIdx;
   if (!loopIdx) {
     if (offsetIsZero) {
@@ -453,8 +455,9 @@ std::optional<unsigned> PartitionBoundsAnalyzer::getPartitionOffsetDim(
     return std::nullopt;
   }
   Value offsetStripped = ValueAnalysis::stripNumericCasts(offset);
-  ARTS_DEBUG("  offsetStripped=" << offsetStripped << " isZero="
-                                 << ValueAnalysis::isZeroConstant(offsetStripped));
+  ARTS_DEBUG("  offsetStripped="
+             << offsetStripped
+             << " isZero=" << ValueAnalysis::isZeroConstant(offsetStripped));
 
   int64_t constVal;
   if (ValueAnalysis::getConstantIndex(offsetStripped, constVal)) {
@@ -476,8 +479,8 @@ std::optional<unsigned> PartitionBoundsAnalyzer::getPartitionOffsetDim(
   auto matchesPartitionOffset = [&](Value candidate) -> bool {
     if (!candidate || !normalizedOffset)
       return false;
-    Value normalizedCandidate =
-        ValueAnalysis::stripNumericCasts(ValueAnalysis::stripSelectClamp(candidate));
+    Value normalizedCandidate = ValueAnalysis::stripNumericCasts(
+        ValueAnalysis::stripSelectClamp(candidate));
     Value normalized = ValueAnalysis::stripNumericCasts(normalizedOffset);
     if (ValueAnalysis::sameValue(normalizedCandidate, normalized) ||
         ValueAnalysis::areValuesEquivalent(normalizedCandidate, normalized))
@@ -547,8 +550,8 @@ std::optional<unsigned> PartitionBoundsAnalyzer::getPartitionOffsetDim(
             directDepends || matchesPartitionOffset(fullChain[i]);
         if (matchedOffset) {
           if (directDepends) {
-            if (auto stride =
-                    ValueAnalysis::getOffsetStride(fullChain[i], dependencyRoot)) {
+            if (auto stride = ValueAnalysis::getOffsetStride(fullChain[i],
+                                                             dependencyRoot)) {
               if (*stride != 1) {
                 ARTS_DEBUG("  partition offset has stride "
                            << *stride << "; disabling blocked partitioning");

@@ -13,11 +13,11 @@
 #include "arts/analysis/graphs/edt/EdtGraph.h"
 #include "arts/analysis/graphs/edt/EdtNode.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -504,7 +504,8 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
               info.partitionOffsets, &offsetIdx);
           bool hintIsConst =
               hintSize && ValueAnalysis::getConstantIndex(hintSize, hintConst);
-          bool loopIsConst = ValueAnalysis::getConstantIndex(loopSize, loopConst);
+          bool loopIsConst =
+              ValueAnalysis::getConstantIndex(loopSize, loopConst);
 
           bool offsetRelated = false;
           if (hintOff && loopOffset) {
@@ -519,7 +520,8 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
             if (!offsetRelated) {
               int64_t hintOffConst = 0;
               int64_t loopOffConst = 0;
-              if (ValueAnalysis::getConstantIndex(hintOffStripped, hintOffConst) &&
+              if (ValueAnalysis::getConstantIndex(hintOffStripped,
+                                                  hintOffConst) &&
                   ValueAnalysis::getConstantIndex(loopOff, loopOffConst) &&
                   hintOffConst == loopOffConst)
                 offsetRelated = true;

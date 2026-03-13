@@ -35,10 +35,10 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopInvarianceUtils.h"
 #include "arts/utils/LoopUtils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 ARTS_DEBUG_SETUP(arts_hoisting);
 
 using namespace mlir;
@@ -182,8 +182,8 @@ static bool rematerializeInvariantOperands(Operation *insertBefore,
       return v;
     if (v.getType().isa<MemRefType>())
       return nullptr;
-    return ValueAnalysis::traceValueToDominating(v, insertBefore, builder, domInfo,
-                                              loc);
+    return ValueAnalysis::traceValueToDominating(v, insertBefore, builder,
+                                                 domInfo, loc);
   };
 
   auto replaceIfNeeded = [&](Value v) -> bool {
