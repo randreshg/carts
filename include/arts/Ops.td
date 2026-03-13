@@ -336,10 +336,10 @@ def DbAcquireOp : Arts_Op<"db_acquire", [AttrSizedOperandSegments]> {
     /// itself.
     void setExplicitDepContract(bool preserve = true);
 
-    /// Attach or clear the semantic dependence family for this acquire.
-    void setDepPattern(ArtsDependencePattern pattern);
+    /// Attach or clear the semantic dep family for this acquire.
+    void setDepPattern(ArtsDepPattern pattern);
     void clearDepPattern();
-    std::optional<ArtsDependencePattern> getDepPattern();
+    std::optional<ArtsDepPattern> getDepPattern();
 
     /// Check if this acquire has explicit partition hints (including sizes)
     bool hasExplicitPartitionHints();

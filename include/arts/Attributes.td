@@ -182,12 +182,12 @@ def EdtDistributionPattern
 def EdtDistributionPatternAttr
     : Arts_I32EnumAttr<"distribution_pattern", EdtDistributionPattern>;
 
-/// Canonical dependence/schedule family recognized by ARTS transforms.
+/// Canonical dep/schedule family recognized by ARTS transforms.
 /// Unlike distribution_pattern, this records the semantic rewrite family so
 /// downstream passes do not need to rediscover it from raw memory accesses.
-def ArtsDependencePattern
-    : Arts_I32Enum<"ArtsDependencePattern",
-                   "Canonical dependence/schedule family", [
+def ArtsDepPattern
+    : Arts_I32Enum<"ArtsDepPattern",
+                   "Canonical dep/schedule family", [
       I32EnumAttrCase<"unknown", 0, "unknown">,
       I32EnumAttrCase<"uniform", 1, "uniform">,
       I32EnumAttrCase<"stencil", 2, "stencil">,
@@ -197,8 +197,8 @@ def ArtsDependencePattern
       I32EnumAttrCase<"jacobi_alternating_buffers", 6,
                       "jacobi_alternating_buffers">
     ]>;
-def ArtsDependencePatternAttr
-    : Arts_I32EnumAttr<"dependence_pattern", ArtsDependencePattern>;
+def ArtsDepPatternAttr
+    : Arts_I32EnumAttr<"dep_pattern", ArtsDepPattern>;
 
 /// Integer attribute for storing number of workers for EDT operations
 def WorkersAttr : AttrDef<ArtsDialect, "workers"> {
