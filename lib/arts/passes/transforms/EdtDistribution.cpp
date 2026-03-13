@@ -25,7 +25,7 @@
 
 #include "../PassDetails.h"
 #include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/DistributionHeuristics.h"
+#include "arts/analysis/heuristics/DistributionHeuristics.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/OperationAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -64,8 +64,9 @@ struct EdtDistributionPass
       if (edt.getType() != EdtType::parallel && edt.getType() != EdtType::task)
         return;
 
-      DistributionStrategy strategy = DistributionHeuristics::analyzeStrategy(
-          edt.getConcurrency(), machine);
+      auto &heuristics = AM->getEdtHeuristics();
+      DistributionStrategy strategy =
+          heuristics.chooseStrategy(edt.getConcurrency());
 
       edt.walk([&](ForOp forOp) {
         if (forOp->getParentOfType<EdtOp>() != edt)
@@ -75,8 +76,7 @@ struct EdtDistributionPass
         if (auto analyzedPattern =
                 AM->getLoopDistributionPattern(forOp.getOperation()))
           pattern = *analyzedPattern;
-        EdtDistributionKind kind =
-            DistributionHeuristics::selectDistributionKind(strategy, pattern);
+        EdtDistributionKind kind = heuristics.chooseKind(strategy, pattern);
         setEdtDistributionKind(forOp.getOperation(), kind);
         setEdtDistributionPattern(forOp.getOperation(), pattern);
         forOp->setAttr(

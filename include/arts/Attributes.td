@@ -225,19 +225,19 @@ def NoVerifyAttr : AttrDef<ArtsDialect, "NoVerify"> {
   let assemblyFormat = "";
 }
 
-/// Marker on DbAcquireOp to preserve authoritative dependency mode semantics.
-/// This only protects the acquire's mode from later re-inference/optimization.
-/// It does not by itself imply that the dependency edge must stay live.
-def PreserveDependencyModeAttr
-    : AttrDef<ArtsDialect, "PreserveDependencyMode"> {
-  let summary = "Preserve explicit dependency mode semantics on a DbAcquireOp";
+/// Marker on DbAcquireOp to preserve authoritative access-mode semantics.
+/// This only protects the acquire's in/out/inout mode from later
+/// re-inference/optimization. It does not by itself imply that the dependency
+/// edge must stay live.
+def PreserveAccessModeAttr : AttrDef<ArtsDialect, "PreserveAccessMode"> {
+  let summary = "Preserve explicit access-mode semantics on a DbAcquireOp";
   let description = [{
     Marks DbAcquireOps whose access mode should be treated as an explicit
     dependency contract rather than inferred from loads/stores. This attribute
     is only set when the compiler already knows the exact mode and later passes
     should not re-check or optimize it.
   }];
-  let mnemonic = "preserve_dep_mode";
+  let mnemonic = "preserve_access_mode";
   let assemblyFormat = "";
 }
 
@@ -245,15 +245,15 @@ def PreserveDependencyModeAttr
 /// This is only set for acquires materialized from explicit DbControlOp/task
 /// dependency contracts whose EDT dependency must not be DCE'd away just
 /// because the local pointer/block argument is otherwise unused.
-def PreserveDependencyAttr : AttrDef<ArtsDialect, "PreserveDependency"> {
+def PreserveDepEdgeAttr : AttrDef<ArtsDialect, "PreserveDepEdge"> {
   let summary = "Preserve explicit dependency edge semantics on a DbAcquireOp";
   let description = [{
     Marks DbAcquireOps whose EDT dependency edge is semantically required even
     if the acquired pointer has no local memory uses. This is used for
     explicit task-control dependencies and is intentionally separate from
-    `preserve_dep_mode`, which only protects access-mode inference.
+    `preserve_access_mode`, which only protects access-mode inference.
   }];
-  let mnemonic = "preserve_dep";
+  let mnemonic = "preserve_dep_edge";
   let assemblyFormat = "";
 }
 

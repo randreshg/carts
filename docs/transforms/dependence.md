@@ -89,3 +89,32 @@ Why:
 
 Patterns here should stamp canonical ARTS pattern metadata so later passes do
 not need to rediscover “this is wavefront Seidel” from raw memory accesses.
+
+## `depPattern` Contract
+
+`depPattern` is the short structural tag stamped by dependence or kernel
+transforms. It answers:
+
+- what family of dependence shape this region now follows
+- which downstream heuristics should trust that family first
+
+Examples:
+
+- `jacobi_alternating_buffers`
+- `wavefront_2d`
+- `matmul`
+- `triangular`
+
+This is distinct from the two `DbAcquireOp` preservation flags:
+
+- `preserve_access_mode`
+  Keep the acquire's `in/out/inout` mode authoritative. Later passes must not
+  re-infer it from local loads/stores.
+
+- `preserve_dep_edge`
+  Keep the EDT dependency edge alive even when the acquired pointer is locally
+  unused.
+
+Typical explicit task-control acquires need both flags, so `DbAcquireOp`
+provides `setExplicitDepContract()`. `depPattern` is separate: it is a
+semantic schedule tag, not a liveness or access-mode override.

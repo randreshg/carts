@@ -266,8 +266,9 @@ Future caveat:
 - `EdtRewriter` abstraction:
   - `BlockEdtRewriter`
   - `StencilEdtRewriter`
-- Strategy-aware planning extracted into:
-  - `AcquireRewritePlanning` (`include/arts/transforms/Edt/AcquireRewritePlanning.h`, `lib/arts/transforms/Edt/AcquireRewritePlanning.cpp`)
+- Strategy-aware planning now lives inside `ForLowering` as a local helper.
+  It is not a separate transform-layer API anymore because only `ForLowering`
+  consumes that planning contract.
 
 ### 9.2 Task loop lowering helpers
 

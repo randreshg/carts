@@ -127,10 +127,10 @@ EdtOp mlir::arts::createContinuationParallel(
                 : SmallVector<Value>{});
     if (origAcq) {
       newAcq.copyPartitionSegmentsFrom(origAcq);
-      if (origAcq.getPreserveDepMode())
-        newAcq.setPreserveDepMode();
-      if (origAcq.getPreserveDependency())
-        newAcq.setPreserveDependency();
+      if (origAcq.getPreserveAccessMode())
+        newAcq.setPreserveAccessMode();
+      if (origAcq.getPreserveDepEdge())
+        newAcq.setPreserveDepEdge();
     }
 
     newDeps.push_back(newAcq.getPtr());

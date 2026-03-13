@@ -271,7 +271,7 @@ struct DeadCodeEliminationPass
           continue;
         if (i < deps.size()) {
           if (auto acq = deps[i].getDefiningOp<DbAcquireOp>();
-              acq && acq.getPreserveDependency()) {
+              acq && acq.getPreserveDepEdge()) {
             ARTS_DEBUG("Keeping control-only dependency " << i
                                                           << " due to explicit "
                                                              "dependency edge");

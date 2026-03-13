@@ -258,7 +258,7 @@ private:
     for (unsigned d = 0; d < pinnedDimCount; ++d) {
       /// Conservative
       if (memRefType.isDynamicDim(d))
-        return HeuristicsConfig::kMaxOuterDBs + 1;
+        return DbHeuristics::kMaxOuterDBs + 1;
       outerDBs *= memRefType.getDimSize(d);
     }
     return outerDBs;
@@ -286,7 +286,7 @@ private:
 
     for (unsigned d = pinnedDimCount; d < memRefType.getRank(); ++d) {
       if (memRefType.isDynamicDim(d))
-        return HeuristicsConfig::kMinInnerBytes + 1; /// Assume large enough
+        return DbHeuristics::kMinInnerBytes + 1; /// Assume large enough
       innerBytes *= memRefType.getDimSize(d);
     }
     return innerBytes * elemSize;
@@ -670,8 +670,6 @@ void CreateDbsPass::createDbAllocOps() {
     const unsigned rank = std::max<unsigned>(1, memRefType.getRank());
     const auto accessPatternInfo = info.getAccessPatternInfo();
 
-    auto &heuristics = AM->getHeuristicsConfig();
-
     /// CreateDbs ALWAYS creates COARSE allocations.
     /// The actual partitioning is deferred to DbPartitioning pass.
     /// Partition info is carried by DbAcquireOp's offsets/indices attributes.
@@ -725,7 +723,7 @@ void CreateDbsPass::createDbAllocOps() {
     info.rewritePlan = plan;
 
     /// Record allocation strategy decision for diagnostics
-    heuristics.recordDecision(
+    AM->getDbHeuristics().recordDecision(
         "AllocationStrategy", true, "Coarse allocation", alloc,
         {{"outerRank", 0}, {"innerRank", static_cast<int64_t>(rank)}});
 
@@ -1062,12 +1060,14 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
           /*partition_offsets=*/partOffsets,
           /*partition_sizes=*/partSizes);
 
+      if (auto depPattern = getEffectiveDepPattern(edt.getOperation()))
+        acquireOp.setDepPattern(*depPattern);
+
       if (!depGroup.empty()) {
         /// Explicit DbControlOp-derived acquires already carry the exact
         /// dependency mode contract and the dependency edge itself is
         /// semantically required even if the local pointer has no uses.
-        acquireOp.setPreserveDepMode();
-        acquireOp.setPreserveDependency();
+        acquireOp.setExplicitDepContract();
       }
 
       acquireOp.setPartitionSegments(indicesSegments, offsetsSegments,

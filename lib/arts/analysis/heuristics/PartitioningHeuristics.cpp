@@ -4,10 +4,9 @@
 /// H1 partitioning heuristics evaluation and PartitioningHint utilities.
 ///==========================================================================///
 
-#include "arts/analysis/PartitioningHeuristics.h"
+#include "arts/analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/Dialect.h"
-#include "arts/analysis/HeuristicUtils.h"
-#include "arts/analysis/HeuristicsConfig.h"
+#include "arts/analysis/heuristics/HeuristicUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/metadata/LoopMetadata.h"
@@ -59,6 +58,13 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
         return info.accessPattern == AccessPattern::Stencil &&
                !info.partitionDimsFromPeers;
       });
+  if (!hasTrustedStencilAcquire) {
+    hasTrustedStencilAcquire =
+        llvm::any_of(ctx.acquires, [](const AcquireInfo &info) {
+          return info.accessMode == ArtsMode::in &&
+                 isStencilFamilyDepPattern(info.depPattern);
+        });
+  }
 
   ///===--------------------------------------------------------------------===///
   /// Coarse Partitioning Heuristics (H1.C*)
@@ -170,11 +176,23 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   ARTS_DEBUG("H1.B3 check: hasStencil=" << patterns.hasStencil
                                         << ", canBlock=" << ctx.canBlock);
   if (patterns.hasStencil && ctx.canBlock) {
+    bool hasJacobiDepPattern =
+        llvm::any_of(ctx.acquires, [](const AcquireInfo &a) {
+          return a.depPattern ==
+                 ArtsDependencePattern::jacobi_alternating_buffers;
+        });
     bool hasStencilReads = llvm::any_of(ctx.acquires, [](const AcquireInfo &a) {
       return (a.accessMode == ArtsMode::in) &&
              (a.accessPattern == AccessPattern::Stencil) &&
              !a.partitionDimsFromPeers;
     });
+    if (!hasStencilReads && hasJacobiDepPattern) {
+      hasStencilReads = llvm::any_of(ctx.acquires, [](const AcquireInfo &a) {
+        return a.accessMode == ArtsMode::in &&
+               a.depPattern ==
+                   ArtsDependencePattern::jacobi_alternating_buffers;
+      });
+    }
     bool hasWriteAcquires =
         llvm::any_of(ctx.acquires, [](const AcquireInfo &a) {
           return (a.accessMode == ArtsMode::out ||

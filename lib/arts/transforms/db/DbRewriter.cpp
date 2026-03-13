@@ -6,7 +6,6 @@
 ///==========================================================================///
 
 #include "arts/transforms/db/DbRewriter.h"
-#include "arts/analysis/HeuristicsConfig.h"
 #include "arts/transforms/db/block/DbBlockIndexer.h"
 #include "arts/transforms/db/block/DbBlockRewriter.h"
 #include "arts/transforms/db/elementwise/DbElementWiseIndexer.h"

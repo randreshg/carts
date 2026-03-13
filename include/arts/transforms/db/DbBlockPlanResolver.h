@@ -11,7 +11,7 @@
 #ifndef ARTS_TRANSFORMS_DATABLOCK_DBBLOCKPLANRESOLVER_H
 #define ARTS_TRANSFORMS_DATABLOCK_DBBLOCKPLANRESOLVER_H
 
-#include "arts/transforms/db/DbPartitionDecisionArbiter.h"
+#include "arts/transforms/db/DbPartitionTypes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/Support/LogicalResult.h"
 #include <optional>
