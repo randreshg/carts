@@ -3,6 +3,16 @@
 ///
 /// Abstract base class for datablock allocation transformation.
 /// Provides factory pattern for creating mode-specific rewriters.
+///
+/// Before:
+///   %db = arts.db_alloc(%n) : memref<?xf64>
+///   %a  = arts.db_acquire %db ...
+///   %r  = arts.db_ref %db[%c0]
+///
+/// After:
+///   %db = arts.db_alloc(%outer, %inner) : memref<?x?xf64>
+///   %a  = arts.db_acquire %db ...
+///   %r  = arts.db_ref %db[%block]
 ///==========================================================================///
 
 #include "arts/transforms/db/DbRewriter.h"

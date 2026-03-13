@@ -32,6 +32,7 @@
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/metadata/IdRegistry.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -69,6 +70,99 @@ using namespace mlir::func;
 using namespace mlir::arts;
 
 namespace {
+
+static void normalizeTaskDependencySlice(ArtsCodegen *AC, DbAcquireOp acquire) {
+  if (!AC || !acquire || acquire.getMode() != ArtsMode::in)
+    return;
+
+  auto mode = acquire.getPartitionMode();
+  if (!mode || (*mode != PartitionMode::block && *mode != PartitionMode::stencil))
+    return;
+  if (!hasSupportedBlockHalo(acquire.getOperation()))
+    return;
+  if (acquire.getPartitionOffsets().empty() || acquire.getPartitionSizes().empty())
+    return;
+
+  auto ownerDims = getStencilOwnerDims(acquire.getOperation());
+  unsigned rank = std::min<unsigned>(acquire.getPartitionOffsets().size(),
+                                     acquire.getPartitionSizes().size());
+  if (rank == 0)
+    return;
+
+  auto alloc = dyn_cast_or_null<DbAllocOp>(
+      DbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr()));
+  if (!alloc)
+    return;
+
+  auto outerSizes = alloc.getSizes();
+  auto elementSizes = alloc.getElementSizes();
+  SmallVector<unsigned, 4> dims;
+  if (ownerDims && !ownerDims->empty()) {
+    for (int64_t dim : *ownerDims) {
+      if (dim < 0)
+        continue;
+      dims.push_back(static_cast<unsigned>(dim));
+      if (dims.size() == rank)
+        break;
+    }
+  }
+  if (dims.empty()) {
+    for (unsigned d = 0; d < rank; ++d)
+      dims.push_back(d);
+  }
+
+  if (dims.size() > outerSizes.size() || dims.size() > elementSizes.size())
+    return;
+
+  Location loc = acquire.getLoc();
+  OpBuilder::InsertionGuard guard(AC->getBuilder());
+  AC->setInsertionPoint(acquire);
+
+  Value zero = AC->createIndexConstant(0, loc);
+  Value one = AC->createIndexConstant(1, loc);
+  SmallVector<Value, 4> offsets;
+  SmallVector<Value, 4> sizes;
+  offsets.reserve(dims.size());
+  sizes.reserve(dims.size());
+
+  for (unsigned i = 0; i < dims.size(); ++i) {
+    unsigned ownerDim = dims[i];
+    Value elementOffset =
+        AC->castToIndex(acquire.getPartitionOffsets()[i], loc);
+    Value elementSize =
+        AC->castToIndex(acquire.getPartitionSizes()[i], loc);
+    Value blockSpan = AC->castToIndex(elementSizes[ownerDim], loc);
+    Value totalBlocks = AC->castToIndex(outerSizes[ownerDim], loc);
+
+    blockSpan = AC->create<arith::MaxUIOp>(loc, blockSpan, one);
+    elementSize = AC->create<arith::MaxUIOp>(loc, elementSize, one);
+
+    Value startBlock =
+        AC->create<arith::DivUIOp>(loc, elementOffset, blockSpan);
+    Value endElem = AC->create<arith::AddIOp>(loc, elementOffset, elementSize);
+    endElem = AC->create<arith::SubIOp>(loc, endElem, one);
+    Value endBlock = AC->create<arith::DivUIOp>(loc, endElem, blockSpan);
+    Value maxBlock = AC->create<arith::SubIOp>(loc, totalBlocks, one);
+    Value startAboveMax = AC->create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::ugt, startBlock, maxBlock);
+    Value clampedEnd = AC->create<arith::MinUIOp>(loc, endBlock, maxBlock);
+    endBlock =
+        AC->create<arith::SelectOp>(loc, startAboveMax, endBlock, clampedEnd);
+
+    Value blockCount = AC->create<arith::SubIOp>(loc, endBlock, startBlock);
+    blockCount = AC->create<arith::AddIOp>(loc, blockCount, one);
+    startBlock =
+        AC->create<arith::SelectOp>(loc, startAboveMax, zero, startBlock);
+    blockCount =
+        AC->create<arith::SelectOp>(loc, startAboveMax, zero, blockCount);
+
+    offsets.push_back(startBlock);
+    sizes.push_back(blockCount);
+  }
+
+  acquire.getOffsetsMutable().assign(offsets);
+  acquire.getSizesMutable().assign(sizes);
+}
 
 ///===----------------------------------------------------------------------===///
 /// EdtEnvManager
@@ -264,6 +358,9 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   }
 
   ArrayRef<Value> edtDeps = envManager.getDependencies();
+  for (Value dep : edtDeps)
+    if (auto acquire = dep.getDefiningOp<DbAcquireOp>())
+      normalizeTaskDependencySlice(AC, acquire);
 
   /// Calculate dependency count from the dependency view of each DB.
   /// For partitioned acquires, this uses slice sizes (not full allocation

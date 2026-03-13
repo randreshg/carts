@@ -31,10 +31,18 @@ struct AcquireRewriteInput {
   SmallVector<Value, 4> extraOffsets;
   SmallVector<Value, 4> extraSizes;
   SmallVector<Value, 4> extraHintSizes;
+  /// Per-dimension element extents aligned with the rewritten worker window.
+  /// The first entry corresponds to acquireOffset/acquireSize, trailing entries
+  /// correspond to extraOffsets/extraSizes.
+  SmallVector<Value, 4> dimensionExtents;
+  /// Per-dimension stencil halo contract aligned with dimensionExtents.
+  SmallVector<int64_t, 4> haloMinOffsets;
+  SmallVector<int64_t, 4> haloMaxOffsets;
   Value step;
   bool stepIsUnit = true;
   bool singleElement = false;
   bool forceCoarse = false;
+  bool preserveParentDependencyRange = false;
   Value stencilExtent;
 };
 

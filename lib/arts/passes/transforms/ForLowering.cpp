@@ -113,11 +113,15 @@ planAcquireRewrite(AcquireRewritePlanningInput input) {
                             /*extraOffsets=*/SmallVector<Value, 4>{},
                             /*extraSizes=*/SmallVector<Value, 4>{},
                             /*extraHintSizes=*/SmallVector<Value, 4>{},
+                            /*dimensionExtents=*/SmallVector<Value, 4>{},
+                            /*haloMinOffsets=*/SmallVector<int64_t, 4>{},
+                            /*haloMaxOffsets=*/SmallVector<int64_t, 4>{},
                             input.step, input.stepIsUnit,
                             /*singleElement=*/false,
                             /*forceCoarse=*/
                             input.distributionKind ==
                                 DistributionKind::BlockCyclic,
+                            /*preserveParentDependencyRange=*/false,
                             /*stencilExtent=*/Value()},
         /*useStencilRewriter=*/false};
   };
@@ -132,10 +136,14 @@ planAcquireRewrite(AcquireRewritePlanningInput input) {
   bool isSingleElement = false;
   bool needsStencilHalo = false;
   bool forceCoarseRewrite = plan.rewriteInput.forceCoarse;
+  bool preserveParentDependencyRange = false;
   Value stencilExtent;
   SmallVector<Value, 4> extraOffsets;
   SmallVector<Value, 4> extraSizes;
   SmallVector<Value, 4> extraHintSizes;
+  SmallVector<Value, 4> dimensionExtents;
+  SmallVector<int64_t, 4> haloMinOffsets;
+  SmallVector<int64_t, 4> haloMaxOffsets;
 
   if (Operation *rootAllocOp = DbUtils::getUnderlyingDbAlloc(input.rootPtr)) {
     if (auto dbAlloc = dyn_cast<DbAllocOp>(rootAllocOp)) {
@@ -182,6 +190,19 @@ planAcquireRewrite(AcquireRewritePlanningInput input) {
         if (!patternSaysStencil && accessPattern)
           patternSaysStencil = *accessPattern == DbAccessPattern::stencil;
 
+        SmallVector<int64_t, 4> ownerDims;
+        if (auto attrOwnerDims =
+                getStencilOwnerDims(input.parentAcquire.getOperation())) {
+          ownerDims.append(attrOwnerDims->begin(), attrOwnerDims->end());
+        } else if (acquireFacts && !acquireFacts->stencilOwnerDims.empty()) {
+          for (unsigned dim : acquireFacts->stencilOwnerDims)
+            ownerDims.push_back(static_cast<int64_t>(dim));
+        }
+        auto minOffsetsAttr =
+            getStencilMinOffsets(input.parentAcquire.getOperation());
+        auto maxOffsetsAttr =
+            getStencilMaxOffsets(input.parentAcquire.getOperation());
+
         const bool strategySaysStencil =
             input.distributionPattern &&
             *input.distributionPattern == EdtDistributionPattern::stencil;
@@ -191,6 +212,14 @@ planAcquireRewrite(AcquireRewritePlanningInput input) {
             !isSingleElement &&
             ((patternSaysStencil && modeNeedsPatternStencilHalo) ||
              (strategySaysStencil && strategyNeedsStencilHalo));
+
+        const bool hasExplicitStencilContract =
+            !ownerDims.empty() || strategySaysStencil || patternSaysStencil;
+        preserveParentDependencyRange =
+            mode == ArtsMode::in && !needsStencilHalo &&
+            !hasExplicitStencilContract && extraOffsets.empty() &&
+            !input.parentAcquire.getOffsets().empty() &&
+            !input.parentAcquire.getSizes().empty();
 
         ARTS_DEBUG(
             "Acquire rewrite plan: mode="
@@ -216,14 +245,38 @@ planAcquireRewrite(AcquireRewritePlanningInput input) {
           needsStencilHalo = false;
         }
 
+        unsigned primaryOwnerDim = 0;
+        if (!ownerDims.empty() && ownerDims.front() >= 0 &&
+            static_cast<size_t>(ownerDims.front()) < elemSizes.size()) {
+          primaryOwnerDim = static_cast<unsigned>(ownerDims.front());
+        }
+
+        Value primaryExtent =
+            input.AC->castToIndex(elemSizes[primaryOwnerDim], input.loc);
         if (needsStencilHalo)
-          stencilExtent = input.AC->castToIndex(elemSizes.front(), input.loc);
+          stencilExtent = primaryExtent;
+        dimensionExtents.push_back(primaryExtent);
+
+        if (minOffsetsAttr && maxOffsetsAttr && !minOffsetsAttr->empty() &&
+            minOffsetsAttr->size() == maxOffsetsAttr->size()) {
+          haloMinOffsets.push_back(minOffsetsAttr->front());
+          haloMaxOffsets.push_back(maxOffsetsAttr->front());
+        } else if (needsStencilHalo) {
+          haloMinOffsets.push_back(-1);
+          haloMaxOffsets.push_back(1);
+        }
 
         if (input.distributionKind == DistributionKind::Tiling2D &&
-            input.parentAcquire.getMode() == ArtsMode::inout &&
             elemSizes.size() > 1 && !isSingleElement && input.tiling2DGrid &&
             input.tiling2DGrid->colWorkers) {
-          Value totalCols = input.AC->castToIndex(elemSizes[1], input.loc);
+          unsigned secondaryOwnerDim = 1;
+          if (ownerDims.size() > 1 && ownerDims[1] >= 0 &&
+              static_cast<size_t>(ownerDims[1]) < elemSizes.size()) {
+            secondaryOwnerDim = static_cast<unsigned>(ownerDims[1]);
+          }
+
+          Value totalCols =
+              input.AC->castToIndex(elemSizes[secondaryOwnerDim], input.loc);
           Value colWorkers =
               input.AC->castToIndex(input.tiling2DGrid->colWorkers, input.loc);
           Value colWorkerId =
@@ -250,6 +303,15 @@ planAcquireRewrite(AcquireRewritePlanningInput input) {
           extraOffsets.push_back(colOffset);
           extraSizes.push_back(colCount);
           extraHintSizes.push_back(colCount);
+          dimensionExtents.push_back(totalCols);
+          if (minOffsetsAttr && maxOffsetsAttr && minOffsetsAttr->size() > 1 &&
+              maxOffsetsAttr->size() > 1) {
+            haloMinOffsets.push_back((*minOffsetsAttr)[1]);
+            haloMaxOffsets.push_back((*maxOffsetsAttr)[1]);
+          } else {
+            haloMinOffsets.push_back(0);
+            haloMaxOffsets.push_back(0);
+          }
         }
       }
     }
@@ -258,10 +320,15 @@ planAcquireRewrite(AcquireRewritePlanningInput input) {
   plan.useStencilRewriter = needsStencilHalo;
   plan.rewriteInput.singleElement = isSingleElement;
   plan.rewriteInput.forceCoarse = forceCoarseRewrite;
+  plan.rewriteInput.preserveParentDependencyRange =
+      preserveParentDependencyRange;
   plan.rewriteInput.stencilExtent = stencilExtent;
   plan.rewriteInput.extraOffsets = std::move(extraOffsets);
   plan.rewriteInput.extraSizes = std::move(extraSizes);
   plan.rewriteInput.extraHintSizes = std::move(extraHintSizes);
+  plan.rewriteInput.dimensionExtents = std::move(dimensionExtents);
+  plan.rewriteInput.haloMinOffsets = std::move(haloMinOffsets);
+  plan.rewriteInput.haloMaxOffsets = std::move(haloMaxOffsets);
   return plan;
 }
 
@@ -320,9 +387,20 @@ static std::optional<TaskAcquireWindow> computeTaskAcquireWindowInBlockSpace(
        useWavefrontInoutWindow);
 
   if (useRewrittenWindow) {
-    if (!taskAcquire.getOffsets().empty() && taskAcquire.getOffsets().front())
+    /// For pattern-backed block/stencil contracts, partition_* carries the
+    /// authoritative task-local element-space slice even when offsets/sizes
+    /// still reflect a conservative dependency range.
+    if (!taskAcquire.getPartitionOffsets().empty() &&
+        taskAcquire.getPartitionOffsets().front())
+      elementOffset = taskAcquire.getPartitionOffsets().front();
+    else if (!taskAcquire.getOffsets().empty() &&
+             taskAcquire.getOffsets().front())
       elementOffset = taskAcquire.getOffsets().front();
-    if (!taskAcquire.getSizes().empty() && taskAcquire.getSizes().front())
+
+    if (!taskAcquire.getPartitionSizes().empty() &&
+        taskAcquire.getPartitionSizes().front())
+      elementSize = taskAcquire.getPartitionSizes().front();
+    else if (!taskAcquire.getSizes().empty() && taskAcquire.getSizes().front())
       elementSize = taskAcquire.getSizes().front();
   } else {
     if (!taskAcquire.getSizes().empty() && taskAcquire.getSizes().front())
@@ -651,6 +729,16 @@ void LoopInfo::initialize() {
 int64_t LoopInfo::computeBlockSize() {
   Location loc = forOp.getLoc();
   Value one = AC->createIndexConstant(1, loc);
+
+  if (getEffectiveDepPattern(forOp.getOperation()) ==
+      ArtsDepPattern::wavefront_2d) {
+    /// Wavefront-transformed tile loops already encode their task granularity
+    /// in the loop step. Reusing DB-alignment hints here collapses small wave
+    /// frontiers down to a single chunk, which serializes the schedule.
+    blockSize = one;
+    useRuntimeBlockAlignment = false;
+    return 1;
+  }
 
   int64_t computedBlockSize = 1;
 
@@ -1008,14 +1096,31 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
     }
   }
 
-  /// Create EpochOp wrapper for the for-body at the caller-managed insertion
-  /// point so multiple arts.for regions preserve source order.
-  auto forEpoch = AC.create<EpochOp>(loc);
-  Region &epochRegion = forEpoch.getRegion();
-  if (epochRegion.empty())
-    epochRegion.push_back(new Block());
-  Block &epochBlock = epochRegion.front();
-  AC.setInsertionPointToStart(&epochBlock);
+  auto isWavefrontPattern = [](Operation *op) {
+    return op && getEffectiveDepPattern(op) == ArtsDepPattern::wavefront_2d;
+  };
+  const bool reuseEnclosingEpoch =
+      forOp.getReductionAccumulators().empty() &&
+      originalParallel->getParentOfType<EpochOp>() &&
+      (isWavefrontPattern(forOp.getOperation()) ||
+       isWavefrontPattern(originalParallel.getOperation()) ||
+       isWavefrontPattern(originalParallel->getParentOp()));
+
+  std::optional<EpochOp> forEpoch;
+  Block *epochBlock = nullptr;
+  if (reuseEnclosingEpoch) {
+    epochBlock = originalParallel->getBlock();
+    AC.setInsertionPoint(originalParallel);
+  } else {
+    /// Create EpochOp wrapper for the for-body at the caller-managed insertion
+    /// point so multiple arts.for regions preserve source order.
+    forEpoch = AC.create<EpochOp>(loc);
+    Region &epochRegion = forEpoch->getRegion();
+    if (epochRegion.empty())
+      epochRegion.push_back(new Block());
+    epochBlock = &epochRegion.front();
+    AC.setInsertionPointToStart(epochBlock);
+  }
 
   /// Worker dispatch loop - emit only the worker lanes that can receive at
   /// least one chunk for this loop/distribution strategy.
@@ -1027,7 +1132,8 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   EdtOp taskEdt = createTaskEdtWithRewiring(
       &AC, *loopInfoStorage, forOp, workerIV, originalParallel, redInfo);
   copyPatternAttrs(forOp.getOperation(), taskEdt.getOperation());
-  copyPatternAttrs(forOp.getOperation(), forEpoch.getOperation());
+  if (forEpoch)
+    copyPatternAttrs(forOp.getOperation(), forEpoch->getOperation());
 
   /// After worker loop, create result EDT (if reductions)
   AC.setInsertionPointAfter(workerLoop);
@@ -1035,12 +1141,16 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
     createResultEdt(&AC, redInfo, loc);
   }
 
-  /// Close epoch with yield
-  AC.setInsertionPointToEnd(&epochBlock);
-  AC.create<YieldOp>(loc);
-
-  /// Set insertion point after epoch so subsequent for loops insert correctly.
-  AC.setInsertionPointAfter(forEpoch);
+  if (forEpoch) {
+    /// Close epoch with yield
+    AC.setInsertionPointToEnd(epochBlock);
+    AC.create<YieldOp>(loc);
+    /// Set insertion point after epoch so subsequent for loops insert
+    /// correctly.
+    AC.setInsertionPointAfter(*forEpoch);
+  } else {
+    AC.setInsertionPointAfter(workerLoop);
+  }
   if (!redInfo.reductionVars.empty())
     finalizeReductionAfterEpoch(&AC, redInfo, loc);
 
@@ -1233,11 +1343,26 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
     auto setDbSpaceSliceFromAcquirePlan = [&](DbAcquireOp acquireOp,
                                               bool usesStencilHalo) {
+      bool shouldUseStencilWindow =
+          usesStencilHalo ||
+          (parentAcqOp.getMode() == ArtsMode::in && distributionPattern &&
+           *distributionPattern == EdtDistributionPattern::stencil);
+
       /// Read-only acquires already get their task-local window from
       /// rewriteAcquire(). This helper only updates the DB-space slice metadata
-      /// for write-capable acquires that need explicit block-space windows.
-      if (!acquireOp || parentAcqOp.getMode() == ArtsMode::in)
+      /// for write-capable acquires, plus stencil-contract read acquires that
+      /// must carry a concrete block-space dependency window to avoid
+      /// widening back to full-range during later lowering.
+      if (!acquireOp)
         return;
+      if (parentAcqOp.getMode() == ArtsMode::in && !shouldUseStencilWindow)
+        return;
+      if (parentAcqOp.getMode() != ArtsMode::in &&
+          (acquireOp.getOffsets().size() > 1 ||
+           acquireOp.getPartitionOffsets().size() > 1)) {
+        ARTS_DEBUG("    - Preserving N-D task-local slice metadata");
+        return;
+      }
 
       OpBuilder::InsertionGuard guard(AC->getBuilder());
       AC->setInsertionPoint(acquireOp);
@@ -1245,7 +1370,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       auto window = computeTaskAcquireWindowInBlockSpace(
           AC, loc, parentAcqOp, acquireOp, rootGuidValue, rootPtrValue,
           loopInfo.strategy.kind, distributionPattern, acquireOffsetVal,
-          loopInfo.bounds.iterCount, acquireHintSizeVal, usesStencilHalo);
+          loopInfo.bounds.iterCount, acquireHintSizeVal, shouldUseStencilWindow);
       if (!window)
         return;
 
@@ -1333,7 +1458,12 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
          (chunkMode && *chunkMode == PartitionMode::stencil));
     if (shouldMarkStencilCenter &&
         !getStencilCenterOffset(chunkAcqOp.getOperation())) {
-      setStencilCenterOffset(chunkAcqOp.getOperation(), 1);
+      int64_t centerOffset = 1;
+      if (auto minOffsets = getStencilMinOffsets(chunkAcqOp.getOperation());
+          minOffsets && !minOffsets->empty()) {
+        centerOffset = std::max<int64_t>(0, -minOffsets->front());
+      }
+      setStencilCenterOffset(chunkAcqOp.getOperation(), centerOffset);
     }
 
     setDbSpaceSliceFromAcquirePlan(chunkAcqOp, chunkUsesStencilHalo);

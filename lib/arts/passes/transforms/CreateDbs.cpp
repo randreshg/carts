@@ -1070,6 +1070,7 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
 
       if (auto depPattern = getEffectiveDepPattern(edt.getOperation()))
         acquireOp.setDepPattern(*depPattern);
+      copyStencilContractAttrs(edt.getOperation(), acquireOp.getOperation());
 
       if (!depGroup.empty()) {
         /// Explicit DbControlOp-derived acquires already carry the exact
@@ -1332,27 +1333,43 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
       /// Block mode: Use DbBlockIndexer with stored block size
       ARTS_DEBUG(" - Using DbBlockIndexer with stored plan");
       Location loc = op->getLoc();
-      Value startOffset = acquireOffsets.empty()
-                              ? AC->createIndexConstant(0, loc)
-                              : acquireOffsets[0];
-
-      /// Compute startBlock using stored blockSize from plan
-      Value blockSize = plan.getBlockSize(0);
-      Value startBlock =
-          blockSize ? AC->create<arith::DivUIOp>(loc, startOffset, blockSize)
-                    : AC->createIndexConstant(0, loc);
-
       unsigned chunkOuterRank = plan.outerRank();
       if (chunkOuterRank == 0)
         if (auto acquireOp = dyn_cast<DbAcquireOp>(dbOp))
           chunkOuterRank = acquireOp.getSizes().size();
 
-      /// Build PartitionInfo from blockSize
+      SmallVector<Value> blockSizes;
+      SmallVector<Value> startBlocks;
+      blockSizes.reserve(plan.blockSizes.size());
+      startBlocks.reserve(plan.blockSizes.size());
+
+      Value zero = AC->createIndexConstant(0, loc);
+      for (auto [dimIdx, blockSize] : llvm::enumerate(plan.blockSizes)) {
+        if (!blockSize)
+          continue;
+        blockSizes.push_back(blockSize);
+        Value startOffset =
+            dimIdx < acquireOffsets.size() ? acquireOffsets[dimIdx] : zero;
+        startBlocks.push_back(
+            AC->create<arith::DivUIOp>(loc, startOffset, blockSize));
+      }
+
+      if (blockSizes.empty()) {
+        Value fallbackBlockSize = plan.getBlockSize(0);
+        if (fallbackBlockSize) {
+          blockSizes.push_back(fallbackBlockSize);
+          Value startOffset = acquireOffsets.empty() ? zero : acquireOffsets[0];
+          startBlocks.push_back(
+              AC->create<arith::DivUIOp>(loc, startOffset, fallbackBlockSize));
+        }
+      }
+
+      /// Build PartitionInfo from stored N-D block plan.
       PartitionInfo blockInfo;
       blockInfo.mode = PartitionMode::block;
-      if (blockSize)
-        blockInfo.sizes.push_back(blockSize);
-      SmallVector<Value> startBlocks = {startBlock};
+      blockInfo.sizes.assign(blockSizes.begin(), blockSizes.end());
+      blockInfo.partitionedDims.assign(plan.partitionedDims.begin(),
+                                       plan.partitionedDims.end());
       DbBlockIndexer indexer(blockInfo, startBlocks, chunkOuterRank, innerRank);
       llvm::SetVector<Operation *> localOpsToRemove;
       indexer.transformOps({op}, dbAcquireArg, elementMemRefType, *AC,

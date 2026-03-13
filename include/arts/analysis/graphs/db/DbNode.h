@@ -79,6 +79,7 @@ struct DbAcquirePartitionFacts {
   SmallVector<DbPartitionEntryFact, 2> entries;
   SmallVector<DbDimPartitionFact, 4> dims;
   SmallVector<unsigned, 4> partitionDims;
+  SmallVector<unsigned, 4> stencilOwnerDims;
   bool hasIndirectAccess = false;
   bool hasDirectAccess = false;
   bool hasDistributionContract = false;
@@ -86,6 +87,7 @@ struct DbAcquirePartitionFacts {
   bool explicitCoarseRequest = false;
   bool hasBlockHints = false;
   bool inferredBlock = false;
+  bool supportedBlockHalo = false;
 };
 
 ///===----------------------------------------------------------------------===///

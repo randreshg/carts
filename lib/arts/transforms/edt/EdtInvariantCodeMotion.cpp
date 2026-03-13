@@ -2,6 +2,18 @@
 /// File: EdtInvariantCodeMotion.cpp
 ///
 /// Implementation of EdtInvariantCodeMotion pass.
+///
+/// Before:
+///   arts.edt <task> {
+///     %c = arith.constant 64 : index
+///     %u = arith.addi %n, %c
+///     ... use %u ...
+///   }
+///
+/// After:
+///   %c = arith.constant 64 : index
+///   %u = arith.addi %n, %c
+///   arts.edt <task> { ... use %u ... }
 ///==========================================================================///
 
 /// Dialects

@@ -1,5 +1,15 @@
 ///==========================================================================///=
 /// EdtPtrRematerialization
+///
+/// Before:
+///   %sub = polygeist.subindex %A[%i] : memref<?x?xf64> to memref<?xf64>
+///   arts.edt <task>(%sub) { ... }
+///
+/// After:
+///   arts.edt <task>(%A, %i) {
+///     %sub = polygeist.subindex %A[%i] : memref<?x?xf64> to memref<?xf64>
+///     ...
+///   }
 ///==========================================================================///=
 
 /// Dialects

@@ -176,12 +176,19 @@ inferMappedDimFromDepPattern(const DbAcquirePartitionFacts &facts) {
     /// so later DB partitioning does not have to rediscover it from raw access
     /// expressions.
     return facts.dims.empty() ? std::nullopt : std::optional<unsigned>(0u);
+  case ArtsDepPattern::stencil_tiling_nd:
+  case ArtsDepPattern::cross_dim_stencil_3d:
+  case ArtsDepPattern::higher_order_stencil:
+    if (!facts.stencilOwnerDims.empty())
+      return facts.stencilOwnerDims.front();
+    return std::nullopt;
   case ArtsDepPattern::unknown:
   case ArtsDepPattern::uniform:
   case ArtsDepPattern::stencil:
   case ArtsDepPattern::jacobi_alternating_buffers:
   case ArtsDepPattern::matmul:
   case ArtsDepPattern::triangular:
+  case ArtsDepPattern::elementwise_pipeline:
     return std::nullopt;
   }
 }
@@ -306,6 +313,13 @@ DbAcquirePartitionFacts DbDimAnalyzer::compute(DbAcquireNode *node) {
   facts.hasIndirectAccess = node->hasIndirectAccess();
   facts.hasDirectAccess = node->hasDirectAccess();
   facts.hasDistributionContract = hasDistributionContract(acquire);
+  facts.supportedBlockHalo = hasSupportedBlockHalo(acquire.getOperation());
+  if (auto ownerDims = getStencilOwnerDims(acquire.getOperation())) {
+    for (int64_t dim : *ownerDims) {
+      if (dim >= 0)
+        facts.stencilOwnerDims.push_back(static_cast<unsigned>(dim));
+    }
+  }
   facts.explicitCoarseRequest = facts.requestedMode == PartitionMode::coarse &&
                                 acquire.getPartitionIndices().empty() &&
                                 acquire.getPartitionOffsets().empty() &&
@@ -360,6 +374,12 @@ DbAcquirePartitionFacts DbDimAnalyzer::compute(DbAcquireNode *node) {
   }
 
   inferPartitionDims(node, facts);
+
+  if (facts.partitionDims.empty() && facts.supportedBlockHalo &&
+      !facts.stencilOwnerDims.empty()) {
+    facts.partitionDims.assign(facts.stencilOwnerDims.begin(),
+                               facts.stencilOwnerDims.end());
+  }
 
   for (unsigned dim : fullRangeDims) {
     if (dim < facts.dims.size())

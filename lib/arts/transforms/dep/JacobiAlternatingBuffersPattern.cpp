@@ -18,6 +18,21 @@
 ///
 /// For the current implementation we require an even static timestep count so
 /// the final result buffer remains unchanged after normalization.
+///
+/// Before:
+///   scf.for %t = %c0 to %T {
+///     arts.edt <parallel> { arts.for (...) { memref.store ..., %B[...] } }
+///     arts.edt <parallel> { arts.for (...) { memref.store ..., %A[...] } }
+///   }
+///
+/// After:
+///   scf.for %t = %c0 to %T {
+///     scf.if %odd {
+///       arts.edt <parallel> { arts.for (...) { memref.store ..., %B[...] } }
+///     } else {
+///       arts.edt <parallel> { arts.for (...) { memref.store ..., %A[...] } }
+///     }
+///   }
 ///==========================================================================///
 
 #include "arts/Dialect.h"
