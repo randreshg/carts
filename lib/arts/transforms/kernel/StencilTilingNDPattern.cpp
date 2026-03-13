@@ -25,8 +25,8 @@
 ///      arts.stencil_max_offsets = [1, 0]}
 ///==========================================================================///
 
-#include "arts/transforms/kernel/KernelTransform.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/transforms/kernel/KernelTransform.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
@@ -93,7 +93,8 @@ static bool isPureOp(Operation *op) {
   return op->getNumRegions() == 0;
 }
 
-static std::optional<std::pair<int64_t, int64_t>> getStaticIvRange(scf::ForOp loop) {
+static std::optional<std::pair<int64_t, int64_t>>
+getStaticIvRange(scf::ForOp loop) {
   if (!loop)
     return std::nullopt;
   auto lb = ValueAnalysis::tryFoldConstantIndex(loop.getLowerBound());
@@ -180,9 +181,9 @@ static bool accumulateLinearTerms(Value value, int64_t scale,
     AffineMap map = affineApply.getAffineMap();
     if (map.getNumResults() != 1)
       return false;
-    return accumulateAffineExprTerms(map.getResult(0), affineApply.getOperands(),
-                                     map.getNumDims(), scale, coeffs,
-                                     constant);
+    return accumulateAffineExprTerms(map.getResult(0),
+                                     affineApply.getOperands(),
+                                     map.getNumDims(), scale, coeffs, constant);
   }
 
   if (auto add = value.getDefiningOp<arith::AddIOp>()) {
@@ -373,9 +374,8 @@ static bool buildLinearExpr(Value value, LinearExpr &expr) {
   return true;
 }
 
-static bool buildAffineLinearExpr(AffineExpr affineExpr,
-                                  AffineMap map, ValueRange operands,
-                                  LinearExpr &expr) {
+static bool buildAffineLinearExpr(AffineExpr affineExpr, AffineMap map,
+                                  ValueRange operands, LinearExpr &expr) {
   expr = LinearExpr();
   DenseMap<Value, int64_t> coeffs;
   int64_t constant = 0;
@@ -625,8 +625,7 @@ static bool isOutOfPlaceStencil(ForOp artsFor, MatchResult &result) {
       if (ownerIt->second != static_cast<int64_t>(dim))
         return false;
       unsigned ownerIdx = std::distance(
-          ownerDims.begin(),
-          llvm::find(ownerDims, static_cast<int64_t>(dim)));
+          ownerDims.begin(), llvm::find(ownerDims, static_cast<int64_t>(dim)));
       minOffsets[ownerIdx] = std::min(minOffsets[ownerIdx], expr.minOffset);
       maxOffsets[ownerIdx] = std::max(maxOffsets[ownerIdx], expr.maxOffset);
       hasHalo = hasHalo || expr.minOffset != 0 || expr.maxOffset != 0;
@@ -663,7 +662,7 @@ static bool isOutOfPlaceStencil(ForOp artsFor, MatchResult &result) {
   return true;
 }
 
-class StencilTilingNDPattern final : public LoopPattern {
+class StencilTilingNDPattern final : public KernelPatternTransform {
 public:
   bool match(ForOp artsFor) override {
     matchResult = MatchResult{};
@@ -698,6 +697,10 @@ public:
   }
 
   StringRef getName() const override { return "StencilTilingNDPattern"; }
+  ArtsDepPattern getFamily() const override {
+    return ArtsDepPattern::stencil_tiling_nd;
+  }
+  int64_t getRevision() const override { return 1; }
 
 private:
   MatchResult matchResult;
@@ -705,6 +708,7 @@ private:
 
 } // namespace
 
-std::unique_ptr<LoopPattern> mlir::arts::createStencilTilingNDPattern() {
+std::unique_ptr<KernelPatternTransform>
+mlir::arts::createStencilTilingNDPattern() {
   return std::make_unique<StencilTilingNDPattern>();
 }

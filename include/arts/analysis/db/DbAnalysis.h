@@ -16,6 +16,7 @@
 #include "arts/Dialect.h"
 #include "arts/analysis/Analysis.h"
 #include "arts/analysis/graphs/db/DbAccessPattern.h"
+#include "arts/utils/LoweringContractUtils.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
@@ -47,6 +48,46 @@ public:
     bool hasIndirectAccess = false;
     bool hasDistributionContract = false;
     bool partitionDimsFromPeers = false;
+  };
+
+  /// DB-side refined contract view.
+  /// This keeps the same contract vocabulary used by lowering, but lets
+  /// DbAnalysis strengthen incomplete contracts with graph-backed facts after
+  /// DB creation. Pre-DB pattern passes seed the contract; post-DB analysis
+  /// may refine it, but should not invent a separate contract language.
+  struct AcquireContractSummary {
+    LoweringContractInfo contract;
+    bool refinedByDbAnalysis = false;
+    AccessPattern accessPattern = AccessPattern::Unknown;
+    bool hasIndirectAccess = false;
+    bool hasDirectAccess = false;
+    bool hasBlockHints = false;
+    bool inferredBlock = false;
+    bool hasFineGrainedEntries = false;
+    bool hasUnmappedPartitionEntry = false;
+    bool preservesDistributedContractEntry = false;
+    bool hasDistributionContract = false;
+    bool partitionDimsFromPeers = false;
+
+    bool empty() const {
+      return contract.empty() && accessPattern == AccessPattern::Unknown &&
+             !hasIndirectAccess && !hasDirectAccess && !hasBlockHints &&
+             !inferredBlock && !hasFineGrainedEntries &&
+             !hasUnmappedPartitionEntry &&
+             !preservesDistributedContractEntry &&
+             !hasDistributionContract && !partitionDimsFromPeers;
+    }
+    bool usesStencilSemantics() const {
+      return accessPattern == AccessPattern::Stencil ||
+             contract.isStencilFamily() ||
+             contract.usesStencilDistribution() ||
+             contract.supportsBlockHalo();
+    }
+    bool usesMatmulSemantics() const {
+      return (contract.depPattern &&
+              *contract.depPattern == ArtsDepPattern::matmul) ||
+             accessPattern == AccessPattern::Uniform;
+    }
   };
 
   /// Loop-facing summary for H2 distribution selection and related consumers.
@@ -85,6 +126,13 @@ public:
   std::optional<EdtDistributionPattern> getLoopDistributionPattern(ForOp forOp);
   AcquirePartitionSummary analyzeAcquirePartition(DbAcquireOp acquire,
                                                   OpBuilder &builder);
+  std::optional<AcquireContractSummary>
+  getAcquireContractSummary(DbAcquireOp acquire);
+  bool operationHasDistributedDbContract(Operation *op);
+  bool operationHasPeerInferredPartitionDims(Operation *op);
+  /// Raw partition facts remain available for legality/detail consumers inside
+  /// DB analysis and controller plumbing. Semantic pattern/lowering decisions
+  /// should prefer getAcquireContractSummary().
   const DbAcquirePartitionFacts *getAcquirePartitionFacts(DbAcquireOp acquire);
   bool hasCrossElementSelfReadInLoop(DbAcquireOp acquire, ForOp loopOp);
 

@@ -221,42 +221,17 @@ LoopAnalysis::getLoopDbAccessSummary(Operation *loopOp) {
   return getAnalysisManager().getDbAnalysis().getLoopDbAccessSummary(forOp);
 }
 
-const DbAcquirePartitionFacts *
-LoopAnalysis::getAcquirePartitionFacts(DbAcquireOp acquire) {
-  ensureAnalyzed();
-  return getAnalysisManager().getDbAnalysis().getAcquirePartitionFacts(acquire);
-}
-
-void LoopAnalysis::collectAcquirePartitionFactsInOperation(
-    Operation *op,
-    SmallVectorImpl<const DbAcquirePartitionFacts *> &acquireFacts) {
-  ensureAnalyzed();
-  if (!op)
-    return;
-
-  op->walk([&](DbAcquireOp acquire) {
-    if (const DbAcquirePartitionFacts *facts =
-            getAcquirePartitionFacts(acquire))
-      acquireFacts.push_back(facts);
-  });
-}
-
 bool LoopAnalysis::operationHasDistributedDbContract(Operation *op) {
   ensureAnalyzed();
-  SmallVector<const DbAcquirePartitionFacts *, 8> acquireFacts;
-  collectAcquirePartitionFactsInOperation(op, acquireFacts);
-  return llvm::any_of(acquireFacts, [](const DbAcquirePartitionFacts *facts) {
-    return facts && facts->hasDistributionContract;
-  });
+  return getAnalysisManager().getDbAnalysis().operationHasDistributedDbContract(
+      op);
 }
 
 bool LoopAnalysis::operationHasPeerInferredPartitionDims(Operation *op) {
   ensureAnalyzed();
-  SmallVector<const DbAcquirePartitionFacts *, 8> acquireFacts;
-  collectAcquirePartitionFactsInOperation(op, acquireFacts);
-  return llvm::any_of(acquireFacts, [](const DbAcquirePartitionFacts *facts) {
-    return facts && facts->partitionDimsFromPeers;
-  });
+  return getAnalysisManager()
+      .getDbAnalysis()
+      .operationHasPeerInferredPartitionDims(op);
 }
 
 template <typename LoopOpType>

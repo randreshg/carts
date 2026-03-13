@@ -704,26 +704,25 @@ bool PartitionBoundsAnalyzer::needsFullRange(DbAcquireNode *node,
       node->getAccessPattern() == AccessPattern::Stencil && partitionOffset) {
     if (!getPartitionOffsetDim(node, partitionOffset,
                                /*requireLeading=*/true)) {
-      auto mappedDim =
-          getPartitionOffsetDim(node, partitionOffset, /*requireLeading=*/false);
+      auto mappedDim = getPartitionOffsetDim(node, partitionOffset,
+                                             /*requireLeading=*/false);
       if (supportedBlockHalo && mappedDim &&
           llvm::is_contained(ownerDims, *mappedDim)) {
         ARTS_DEBUG("  needsFullRange: preserving non-leading stencil dim from "
                    "N-D halo contract");
       } else {
-      ARTS_DEBUG(
-          "  needsFullRange: stencil access on non-leading partition dim");
-      return true;
+        ARTS_DEBUG(
+            "  needsFullRange: stencil access on non-leading partition dim");
+        return true;
       }
     }
   }
 
   if (!partitionOffset || !canPartitionWithOffset(node, partitionOffset)) {
-    auto mappedDim =
-        partitionOffset
-            ? getPartitionOffsetDim(node, partitionOffset,
-                                    /*requireLeading=*/false)
-            : std::nullopt;
+    auto mappedDim = partitionOffset
+                         ? getPartitionOffsetDim(node, partitionOffset,
+                                                 /*requireLeading=*/false)
+                         : std::nullopt;
     if (partitionOffset && supportedBlockHalo && mappedDim &&
         llvm::is_contained(ownerDims, *mappedDim)) {
       ARTS_DEBUG("  needsFullRange: trusting N-D halo contract for partition "

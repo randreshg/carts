@@ -29,7 +29,7 @@ struct DepTransformsPass : public arts::DepTransformsBase<DepTransformsPass> {
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    SmallVector<std::unique_ptr<DepTransform>> patterns;
+    SmallVector<std::unique_ptr<DepPatternTransform>> patterns;
     patterns.push_back(createSeidel2DWavefrontPattern());
     patterns.push_back(createJacobiAlternatingBuffersPattern());
 

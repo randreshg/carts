@@ -15,6 +15,8 @@
 ///==========================================================================///
 
 #include "arts/transforms/edt/EdtRewriter.h"
+#include "arts/utils/LoweringContractUtils.h"
+#include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
@@ -39,8 +41,10 @@ DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
         /*partition_indices=*/SmallVector<Value>{},
         /*partition_offsets=*/SmallVector<Value>{},
         /*partition_sizes=*/SmallVector<Value>{});
-    copyStencilContractAttrs(in.parentAcquire.getOperation(),
-                             coarseAcquire.getOperation());
+    copySemanticContractAttrs(in.parentAcquire.getOperation(),
+                              coarseAcquire.getOperation());
+    copyLoweringContract(in.parentAcquire.getPtr(), coarseAcquire.getPtr(),
+                         in.AC->getBuilder(), in.loc);
     if (in.parentAcquire.getPreserveAccessMode())
       coarseAcquire.setPreserveAccessMode();
     if (in.parentAcquire.getPreserveDepEdge())
@@ -95,17 +99,15 @@ DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
     Value haloEnd = end;
     if (maxOffset > 0) {
       Value rightHalo = in.AC->createIndexConstant(maxOffset, in.loc);
-      Value endPlusHalo =
-          in.AC->create<arith::AddIOp>(in.loc, end, rightHalo);
+      Value endPlusHalo = in.AC->create<arith::AddIOp>(in.loc, end, rightHalo);
       haloEnd = in.AC->create<arith::MinUIOp>(in.loc, endPlusHalo, extent);
     } else if (maxOffset < 0) {
       Value shrink = in.AC->createIndexConstant(-maxOffset, in.loc);
       Value canShrink = in.AC->create<arith::CmpIOp>(
           in.loc, arith::CmpIPredicate::uge, end, shrink);
-      Value shrunkenEnd =
-          in.AC->create<arith::SubIOp>(in.loc, end, shrink);
-      haloEnd = in.AC->create<arith::SelectOp>(in.loc, canShrink, shrunkenEnd,
-                                               zero);
+      Value shrunkenEnd = in.AC->create<arith::SubIOp>(in.loc, end, shrink);
+      haloEnd =
+          in.AC->create<arith::SelectOp>(in.loc, canShrink, shrunkenEnd, zero);
     }
 
     Value haloEndAboveStart = in.AC->create<arith::CmpIOp>(
@@ -151,10 +153,10 @@ DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
   /// range. Pattern-backed block/stencil contracts must keep the worker-local
   /// dependency slice authoritative so later lowering does not widen them back
   /// to full-range.
-  bool useParentDependencyRange =
-      in.preserveParentDependencyRange && !applyStencilHalo &&
-      !in.parentAcquire.getOffsets().empty() &&
-      !in.parentAcquire.getSizes().empty();
+  bool useParentDependencyRange = in.preserveParentDependencyRange &&
+                                  !applyStencilHalo &&
+                                  !in.parentAcquire.getOffsets().empty() &&
+                                  !in.parentAcquire.getSizes().empty();
   if (useParentDependencyRange) {
     dependencyOffsets.assign(in.parentAcquire.getOffsets().begin(),
                              in.parentAcquire.getOffsets().end());
@@ -173,8 +175,10 @@ DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
       /*partition_indices=*/SmallVector<Value>{},
       /*partition_offsets=*/partitionOffsets,
       /*partition_sizes=*/partitionHintSizes);
-  copyStencilContractAttrs(in.parentAcquire.getOperation(),
-                           blockAcquire.getOperation());
+  copySemanticContractAttrs(in.parentAcquire.getOperation(),
+                            blockAcquire.getOperation());
+  copyLoweringContract(in.parentAcquire.getPtr(), blockAcquire.getPtr(),
+                       in.AC->getBuilder(), in.loc);
   if (in.parentAcquire.getPreserveAccessMode())
     blockAcquire.setPreserveAccessMode();
   if (in.parentAcquire.getPreserveDepEdge())

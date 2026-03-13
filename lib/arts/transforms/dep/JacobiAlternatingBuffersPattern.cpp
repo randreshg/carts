@@ -340,7 +340,7 @@ static bool rewriteJacobiTimeLoop(JacobiLoopMatch &match) {
   return true;
 }
 
-class JacobiAlternatingBuffersPattern final : public DepTransform {
+class JacobiAlternatingBuffersPattern final : public DepPatternTransform {
 public:
   int run(ModuleOp module) override {
     int rewrites = 0;
@@ -366,11 +366,15 @@ public:
   StringRef getName() const override {
     return "JacobiAlternatingBuffersPattern";
   }
+  ArtsDepPattern getFamily() const override {
+    return ArtsDepPattern::jacobi_alternating_buffers;
+  }
+  int64_t getRevision() const override { return 1; }
 };
 
 } // namespace
 
-std::unique_ptr<DepTransform> createJacobiAlternatingBuffersPattern() {
+std::unique_ptr<DepPatternTransform> createJacobiAlternatingBuffersPattern() {
   return std::make_unique<JacobiAlternatingBuffersPattern>();
 }
 

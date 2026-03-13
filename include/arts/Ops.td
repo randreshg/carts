@@ -392,6 +392,64 @@ def DbAcquireOp : Arts_Op<"db_acquire", [AttrSizedOperandSegments]> {
   }];
 }
 
+def LoweringContractOp : Arts_Op<"lowering_contract",
+                                 [AttrSizedOperandSegments, Pure]> {
+  let summary = "First-class lowering contract associated with a DB value";
+  let description = [{
+    `arts.lowering_contract` carries the high-level partitioning, stencil, and
+    distribution contract selected by upstream pattern detection and contract
+    emission passes. The contract is attached to a datablock pointer-like
+    memref value and is the single downstream source of truth for specialized
+    lowering behavior.
+
+    Static fields remain attributes when they are genuinely compile-time
+    constants (for example `owner_dims` or the dep/distribution family).
+    Potentially dynamic quantities are represented as SSA operands so the
+    contract survives through structural rewrites without being recomputed or
+    forced into attrs.
+  }];
+  let arguments = (ins
+    AnyMemRef:$target,
+    Variadic<Index>:$block_shape,
+    Variadic<Index>:$min_offsets,
+    Variadic<Index>:$max_offsets,
+    Variadic<Index>:$write_footprint,
+    OptionalAttr<ArtsDepPatternAttr>:$dep_pattern,
+    OptionalAttr<EdtDistributionKindAttr>:$distribution_kind,
+    OptionalAttr<EdtDistributionPatternAttr>:$distribution_pattern,
+    OptionalAttr<I64Attr>:$distribution_version,
+    OptionalAttr<DenseI64ArrayAttr>:$owner_dims,
+    OptionalAttr<DenseI64ArrayAttr>:$spatial_dims,
+    OptionalAttr<UnitAttr>:$supported_block_halo
+  );
+  let assemblyFormat = [{
+    `(` $target `:` type($target) `)`
+    (`dep_pattern` `(` $dep_pattern^ `)` )?
+    (`distribution_kind` `(` $distribution_kind^ `)` )?
+    (`distribution_pattern` `(` $distribution_pattern^ `)` )?
+    (`block_shape` `[` $block_shape^ `]` )?
+    (`min_offsets` `[` $min_offsets^ `]` )?
+    (`max_offsets` `[` $max_offsets^ `]` )?
+    (`write_footprint` `[` $write_footprint^ `]` )?
+    attr-dict
+  }];
+  let hasVerifier = 1;
+  let builders = [
+    OpBuilder<(ins "Value":$target,
+                   CArg<"std::optional<ArtsDepPattern>", "std::nullopt">:$depPattern,
+                   CArg<"std::optional<EdtDistributionKind>", "std::nullopt">:$distributionKind,
+                   CArg<"std::optional<EdtDistributionPattern>", "std::nullopt">:$distributionPattern,
+                   CArg<"std::optional<int64_t>", "std::nullopt">:$distributionVersion,
+                   CArg<"SmallVector<int64_t>", "{}">:$ownerDims,
+                   CArg<"SmallVector<int64_t>", "{}">:$spatialDims,
+                   CArg<"SmallVector<Value>", "{}">:$blockShape,
+                   CArg<"SmallVector<Value>", "{}">:$minOffsets,
+                   CArg<"SmallVector<Value>", "{}">:$maxOffsets,
+                   CArg<"SmallVector<Value>", "{}">:$writeFootprint,
+                   CArg<"bool", "false">:$supportedBlockHalo)>
+  ];
+}
+
 def DbRefOp : Arts_Op<"db_ref", [Pure]> {
   let summary = "References an outer datablock element.";
   let description = [{

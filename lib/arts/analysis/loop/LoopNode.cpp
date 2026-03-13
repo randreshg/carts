@@ -564,13 +564,6 @@ LoopNode::getDbAccessSummary() const {
   return loopAnalysis->getLoopDbAccessSummary(loopOp);
 }
 
-void LoopNode::collectAcquirePartitionFacts(
-    SmallVectorImpl<const DbAcquirePartitionFacts *> &acquireFacts) const {
-  if (!loopAnalysis || !loopOp)
-    return;
-  loopAnalysis->collectAcquirePartitionFactsInOperation(loopOp, acquireFacts);
-}
-
 bool LoopNode::hasDistributedDbContract() const {
   return loopAnalysis && loopOp &&
          loopAnalysis->operationHasDistributedDbContract(loopOp);

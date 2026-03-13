@@ -631,7 +631,7 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
 namespace mlir {
 namespace arts {
 
-class MatmulReductionPattern : public LoopPattern {
+class MatmulReductionPattern : public KernelPatternTransform {
 public:
   MatmulReductionPattern(bool enableTiling, int64_t tileJ, int64_t minTripCount)
       : enableTiling(enableTiling), tileJ(tileJ), minTripCount(minTripCount) {}
@@ -670,6 +670,8 @@ public:
   }
 
   StringRef getName() const override { return "matmul-reduction"; }
+  ArtsDepPattern getFamily() const override { return ArtsDepPattern::matmul; }
+  int64_t getRevision() const override { return 1; }
 
 private:
   bool enableTiling;
@@ -678,7 +680,7 @@ private:
   ReductionDotMatch matchResult;
 };
 
-std::unique_ptr<LoopPattern>
+std::unique_ptr<KernelPatternTransform>
 createMatmulReductionPattern(bool enableTiling, int64_t tileJ,
                              int64_t minTripCount) {
   return std::make_unique<MatmulReductionPattern>(enableTiling, tileJ,

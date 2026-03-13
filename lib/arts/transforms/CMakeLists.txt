@@ -8,6 +8,7 @@ file(GLOB CARTS_TRANSFORMS_SOURCE_FILES CONFIGURE_DEPENDS
     "edt/*.cpp"
     "edt/tiling2d/*.cpp"
     "kernel/*.cpp"
+    "pattern/*.cpp"
     "loop/*.cpp"
 )
 

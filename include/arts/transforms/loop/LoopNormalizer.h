@@ -10,6 +10,7 @@
 #define ARTS_TRANSFORMS_LOOP_LOOPNORMALIZER_H
 
 #include "arts/Dialect.h"
+#include "arts/transforms/pattern/PatternTransform.h"
 #include "mlir/IR/Builders.h"
 #include "llvm/ADT/StringRef.h"
 #include <memory>
@@ -20,9 +21,10 @@ namespace arts {
 ///===----------------------------------------------------------------------===///
 /// LoopPattern - Abstract base for loop normalization patterns
 ///===----------------------------------------------------------------------===///
-class LoopPattern {
+class LoopPattern : public PatternTransform {
 public:
   virtual ~LoopPattern() = default;
+  using PatternTransform::apply;
 
   /// Try to match this pattern in the given arts.for.
   /// Returns true if pattern is detected; populates internal match state.
@@ -32,7 +34,7 @@ public:
   virtual LogicalResult apply(OpBuilder &builder) = 0;
 
   /// Name for logging/debugging.
-  virtual StringRef getName() const = 0;
+  virtual StringRef getName() const override = 0;
 };
 
 ///===----------------------------------------------------------------------===///
