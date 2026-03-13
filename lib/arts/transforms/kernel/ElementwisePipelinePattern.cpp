@@ -24,8 +24,8 @@
 ///   }
 ///==========================================================================///
 
-#include "arts/transforms/kernel/KernelTransform.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/transforms/kernel/KernelTransform.h"
 #include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -161,8 +161,7 @@ static bool haveSameIterationSpace(ForOp lhs, ForOp rhs) {
                                   rhs.getLowerBound().front()) &&
          ValueAnalysis::sameValue(lhs.getUpperBound().front(),
                                   rhs.getUpperBound().front()) &&
-         ValueAnalysis::sameValue(lhs.getStep().front(),
-                                  rhs.getStep().front());
+         ValueAnalysis::sameValue(lhs.getStep().front(), rhs.getStep().front());
 }
 
 static bool matchElementwiseStage(ForOp loop, ElementwiseStage &stage) {
@@ -210,7 +209,8 @@ static ForOp fuseStages(SmallVectorImpl<ElementwiseStage> &stages) {
   copyLoopAttributes(first.getOperation(), fused.getOperation());
   copyPatternAttrs(first.getOperation(), fused.getOperation());
   setDepPattern(fused.getOperation(), ArtsDepPattern::elementwise_pipeline);
-  setEdtDistributionPattern(fused.getOperation(), EdtDistributionPattern::uniform);
+  setEdtDistributionPattern(fused.getOperation(),
+                            EdtDistributionPattern::uniform);
 
   Block &dst = fused.getRegion().front();
   Operation *terminator = dst.getTerminator();
@@ -233,7 +233,8 @@ static ForOp fuseStages(SmallVectorImpl<ElementwiseStage> &stages) {
   return fused;
 }
 
-static bool matchSingleLoopElementwiseEdt(EdtOp edt, ElementwiseEdtStage &stage) {
+static bool matchSingleLoopElementwiseEdt(EdtOp edt,
+                                          ElementwiseEdtStage &stage) {
   if (!edt || edt.getType() != EdtType::parallel)
     return false;
 
@@ -269,14 +270,16 @@ static EdtOp fuseEdtStages(SmallVectorImpl<ElementwiseEdtStage> &stages) {
   copyArtsMetadataAttrs(first.getOperation(), fused.getOperation());
   copyWorkerTopologyAttrs(first.getOperation(), fused.getOperation());
   setDepPattern(fused.getOperation(), ArtsDepPattern::elementwise_pipeline);
-  setEdtDistributionPattern(fused.getOperation(), EdtDistributionPattern::uniform);
+  setEdtDistributionPattern(fused.getOperation(),
+                            EdtDistributionPattern::uniform);
 
   Block &dstBlock = fused.getBody().front();
   Operation *terminator = dstBlock.getTerminator();
   OpBuilder bodyBuilder(terminator);
   IRMapping mapping;
   for (size_t stageIdx = 1; stageIdx < stages.size(); ++stageIdx) {
-    for (Operation &op : stages[stageIdx].edt.getBody().front().without_terminator())
+    for (Operation &op :
+         stages[stageIdx].edt.getBody().front().without_terminator())
       bodyBuilder.clone(op, mapping);
   }
   return fused;
@@ -328,9 +331,10 @@ int mlir::arts::applyElementwisePipelineTransform(ModuleOp module) {
               !matchElementwiseStage(nextLoop, nextStage))
             break;
 
-          bool disjointWrites = llvm::all_of(nextStage.writes, [&](Value target) {
-            return !writtenTargets.contains(target);
-          });
+          bool disjointWrites =
+              llvm::all_of(nextStage.writes, [&](Value target) {
+                return !writtenTargets.contains(target);
+              });
           if (!disjointWrites)
             break;
 
@@ -367,7 +371,8 @@ int mlir::arts::applyElementwisePipelineTransform(ModuleOp module) {
       if (changed || !parentBlock)
         break;
 
-      for (auto it = parentBlock->begin(), e = parentBlock->end(); it != e; ++it) {
+      for (auto it = parentBlock->begin(), e = parentBlock->end(); it != e;
+           ++it) {
         auto firstEdt = dyn_cast<EdtOp>(&*it);
         ElementwiseEdtStage firstStage;
         if (!firstEdt || !matchSingleLoopElementwiseEdt(firstEdt, firstStage))
@@ -383,9 +388,11 @@ int mlir::arts::applyElementwisePipelineTransform(ModuleOp module) {
         for (; nextIt != e; ++nextIt) {
           auto nextEdt = dyn_cast<EdtOp>(&*nextIt);
           ElementwiseEdtStage nextStage;
-          if (!nextEdt || nextEdt.getConcurrency() != firstEdt.getConcurrency() ||
+          if (!nextEdt ||
+              nextEdt.getConcurrency() != firstEdt.getConcurrency() ||
               !matchSingleLoopElementwiseEdt(nextEdt, nextStage) ||
-              !haveSameIterationSpace(firstStage.stage.loop, nextStage.stage.loop))
+              !haveSameIterationSpace(firstStage.stage.loop,
+                                      nextStage.stage.loop))
             break;
 
           bool disjointWrites =

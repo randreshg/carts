@@ -17,8 +17,13 @@
 namespace mlir {
 namespace arts {
 
+class KernelPatternTransform : public LoopPattern {
+public:
+  ~KernelPatternTransform() override = default;
+};
+
 /// Create MatmulReductionPattern for dot-product -> k-j update distribution.
-std::unique_ptr<LoopPattern>
+std::unique_ptr<KernelPatternTransform>
 createMatmulReductionPattern(bool enableTiling = true, int64_t tileJ = 64,
                              int64_t minTripCount = 128);
 
@@ -27,7 +32,7 @@ createMatmulReductionPattern(bool enableTiling = true, int64_t tileJ = 64,
 int applyElementwisePipelineTransform(ModuleOp module);
 
 /// Create an N-D stencil contract matcher for out-of-place affine stencils.
-std::unique_ptr<LoopPattern> createStencilTilingNDPattern();
+std::unique_ptr<KernelPatternTransform> createStencilTilingNDPattern();
 
 } // namespace arts
 } // namespace mlir

@@ -16,6 +16,7 @@
 #include "arts/transforms/db/DbPartitionPlanner.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -299,8 +300,18 @@ static void buildStencilRewriteAcquire(const DbAcquirePartitionView &input,
   bool allocIsStencil = false;
   if (auto pattern = getDbAccessPattern(allocOp.getOperation()))
     allocIsStencil = *pattern == DbAccessPattern::stencil;
-  ArtsDepPattern depPattern = getEffectiveDepPattern(acquire.getOperation())
-                                  .value_or(ArtsDepPattern::unknown);
+  ArtsDepPattern depPattern = ArtsDepPattern::unknown;
+  if (auto contract = getLoweringContract(acquire.getPtr());
+      contract && contract->depPattern) {
+    depPattern = *contract->depPattern;
+  } else if (auto semantic = getSemanticContract(acquire.getOperation());
+             semantic && semantic->depPattern) {
+    depPattern = *semantic->depPattern;
+  } else {
+    depPattern =
+        getEffectiveDepPattern(acquire.getOperation())
+            .value_or(ArtsDepPattern::unknown);
+  }
   bool shouldUseStencil = acquire && acquire.getMode() == ArtsMode::in &&
                           isStencilHaloDepPattern(depPattern);
   if (!shouldUseStencil) {

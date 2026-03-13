@@ -111,7 +111,7 @@ static cl::opt<std::string> DiagnoseOutput(
     "diagnose-output", cl::desc("Output file for diagnostic JSON export"),
     cl::value_desc("filename"), cl::init(".carts-diagnose.json"));
 
-/// Kernel transform options (Stage: loop-reordering)
+/// Kernel transform options (Stage: pattern-pipeline)
 static cl::opt<bool> KernelTransformsEnableElementwisePipeline(
     "loop-transforms-enable-elementwise-pipeline",
     cl::desc("Enable semantic fusion of sibling pointwise loop pipelines"),
@@ -165,6 +165,7 @@ enum class PipelineStage {
   InitialCleanup,
   CollectMetadata,
   OpenMPToArts,
+  PatternPipeline,
   EdtTransforms,
   LoopReordering,
   CreateDbs,
@@ -190,10 +191,12 @@ static cl::opt<PipelineStage> StopAt(
                           "Stop after initial cleanup and simplification"),
                clEnumValN(PipelineStage::OpenMPToArts, "openmp-to-arts",
                           "Stop after OpenMP to Arts conversion"),
+               clEnumValN(PipelineStage::PatternPipeline, "pattern-pipeline",
+                          "Stop after the dedicated semantic pattern pipeline"),
                clEnumValN(PipelineStage::EdtTransforms, "edt-transforms",
                           "Stop after EDT transformations"),
                clEnumValN(PipelineStage::LoopReordering, "loop-reordering",
-                          "Stop after loop reordering optimization"),
+                          "Deprecated alias for --stop-at=pattern-pipeline"),
                clEnumValN(PipelineStage::CreateDbs, "create-dbs",
                           "Stop after Dbs creation"),
                clEnumValN(PipelineStage::DbOpt, "db-opt",
@@ -313,7 +316,6 @@ void setupInitialCleanup(OpPassManager &optPM) {
 /// OpenMP to ARTS conversion pass.
 void setupOpenMPToArts(PassManager &pm) {
   pm.addPass(arts::createConvertOpenMPtoArtsPass());
-  pm.addPass(arts::createDepTransformsPass());
   pm.addPass(arts::createDCEPass());
   pm.addPass(createCSEPass());
 }
@@ -328,15 +330,26 @@ void setupEdtTransforms(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(arts::createEdtPtrRematerializationPass());
 }
 
-/// Loop reordering pass
-void setupLoopReordering(PassManager &pm, arts::AnalysisManager *AM) {
+/// Dedicated semantic pattern pipeline that teaches ARTS about supported loop
+/// and dependence families before DB creation.
+void setupPatternPipeline(PassManager &pm, arts::AnalysisManager *AM) {
+  pm.addPass(arts::createPatternDiscoveryPass(AM, /*refine=*/false));
+  pm.addPass(arts::createDepTransformsPass());
   pm.addPass(arts::createLoopNormalizationPass(AM));
   pm.addPass(arts::createStencilBoundaryPeelingPass());
   pm.addPass(arts::createLoopReorderingPass(AM));
+  pm.addPass(arts::createPatternDiscoveryPass(AM, /*refine=*/true));
   pm.addPass(arts::createKernelTransformsPass(
       AM, KernelTransformsEnableElementwisePipeline,
       KernelTransformsEnableMatmul, KernelTransformsEnableTiling,
       KernelTransformsTileJ, KernelTransformsMinTripCount));
+  pm.addPass(createCSEPass());
+}
+
+/// Bridge eligible host producer loops into the regular ARTS loop/EDT path
+/// before DB creation without making this outlining part of the semantic
+/// pattern pipeline itself.
+void setupPreCreateDbsBridging(PassManager &pm, arts::AnalysisManager *AM) {
   /// Multinode execution needs eligible host producer loops to flow through
   /// the regular arts.for/EDT pipeline before CreateDbs; otherwise serial host
   /// writes between distributed phases bypass the normal DB acquire/release
@@ -359,6 +372,7 @@ void setupLoopReordering(PassManager &pm, arts::AnalysisManager *AM) {
 
 /// DB creation pass.
 void setupCreateDbs(PassManager &pm, arts::AnalysisManager *AM) {
+  setupPreCreateDbsBridging(pm, AM);
   pm.addPass(arts::createCreateDbsPass(AM));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
@@ -571,10 +585,11 @@ setupPassManager(ModuleOp module, MLIRContext &context,
        }},
       {PipelineStage::OpenMPToArts, "Error when converting OpenMP to ARTS",
        [&](PassManager &pm) { setupOpenMPToArts(pm); }},
+      {PipelineStage::PatternPipeline,
+       "Error when applying the semantic pattern pipeline",
+       [&](PassManager &pm) { setupPatternPipeline(pm, AM.get()); }},
       {PipelineStage::EdtTransforms, "Error when running EDT transformations",
        [&](PassManager &pm) { setupEdtTransforms(pm, AM.get()); }},
-      {PipelineStage::LoopReordering, "Error when applying loop reordering",
-       [&](PassManager &pm) { setupLoopReordering(pm, AM.get()); }},
       {PipelineStage::CreateDbs, "Error when creating Dbs",
        [&](PassManager &pm) { setupCreateDbs(pm, AM.get()); }},
       {PipelineStage::DbOpt, "Error when optimizing Dbs",
@@ -646,6 +661,8 @@ int main(int argc, char **argv) {
   PipelineStage effectiveStopAt = StopAt;
   if (CollectMetadataFlag)
     effectiveStopAt = PipelineStage::CollectMetadata;
+  else if (effectiveStopAt == PipelineStage::LoopReordering)
+    effectiveStopAt = PipelineStage::PatternPipeline;
 
   /// Set up the dialect registry and MLIR context.
   DialectRegistry registry;

@@ -31,8 +31,8 @@
 #include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/metadata/IdRegistry.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -76,14 +76,16 @@ static void normalizeTaskDependencySlice(ArtsCodegen *AC, DbAcquireOp acquire) {
     return;
 
   auto mode = acquire.getPartitionMode();
-  if (!mode || (*mode != PartitionMode::block && *mode != PartitionMode::stencil))
+  if (!mode ||
+      (*mode != PartitionMode::block && *mode != PartitionMode::stencil))
     return;
-  if (!hasSupportedBlockHalo(acquire.getOperation()))
+  auto contractInfo = getLoweringContract(acquire.getPtr());
+  if (!contractInfo || !contractInfo->supportedBlockHalo)
     return;
-  if (acquire.getPartitionOffsets().empty() || acquire.getPartitionSizes().empty())
+  if (acquire.getPartitionOffsets().empty() ||
+      acquire.getPartitionSizes().empty())
     return;
 
-  auto ownerDims = getStencilOwnerDims(acquire.getOperation());
   unsigned rank = std::min<unsigned>(acquire.getPartitionOffsets().size(),
                                      acquire.getPartitionSizes().size());
   if (rank == 0)
@@ -96,20 +98,7 @@ static void normalizeTaskDependencySlice(ArtsCodegen *AC, DbAcquireOp acquire) {
 
   auto outerSizes = alloc.getSizes();
   auto elementSizes = alloc.getElementSizes();
-  SmallVector<unsigned, 4> dims;
-  if (ownerDims && !ownerDims->empty()) {
-    for (int64_t dim : *ownerDims) {
-      if (dim < 0)
-        continue;
-      dims.push_back(static_cast<unsigned>(dim));
-      if (dims.size() == rank)
-        break;
-    }
-  }
-  if (dims.empty()) {
-    for (unsigned d = 0; d < rank; ++d)
-      dims.push_back(d);
-  }
+  SmallVector<unsigned, 4> dims = resolveContractOwnerDims(*contractInfo, rank);
 
   if (dims.size() > outerSizes.size() || dims.size() > elementSizes.size())
     return;
@@ -129,8 +118,7 @@ static void normalizeTaskDependencySlice(ArtsCodegen *AC, DbAcquireOp acquire) {
     unsigned ownerDim = dims[i];
     Value elementOffset =
         AC->castToIndex(acquire.getPartitionOffsets()[i], loc);
-    Value elementSize =
-        AC->castToIndex(acquire.getPartitionSizes()[i], loc);
+    Value elementSize = AC->castToIndex(acquire.getPartitionSizes()[i], loc);
     Value blockSpan = AC->castToIndex(elementSizes[ownerDim], loc);
     Value totalBlocks = AC->castToIndex(outerSizes[ownerDim], loc);
 

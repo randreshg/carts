@@ -12,6 +12,7 @@
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
+#include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "llvm/ADT/DenseSet.h"
 
@@ -307,19 +308,28 @@ DbAcquirePartitionFacts DbDimAnalyzer::compute(DbAcquireNode *node) {
 
   facts.acquire = acquire;
   facts.requestedMode = getRequestedMode(acquire);
-  if (auto depPattern = getEffectiveDepPattern(acquire.getOperation()))
-    facts.depPattern = *depPattern;
+  if (auto contract = getLoweringContract(acquire.getPtr());
+      contract && contract->depPattern) {
+    facts.depPattern = *contract->depPattern;
+    facts.supportedBlockHalo = contract->supportsBlockHalo();
+    for (unsigned dim :
+         resolveContractOwnerDims(*contract, contract->ownerDims.size()))
+      facts.stencilOwnerDims.push_back(dim);
+  } else {
+    if (auto depPattern = getEffectiveDepPattern(acquire.getOperation()))
+      facts.depPattern = *depPattern;
+    facts.supportedBlockHalo = hasSupportedBlockHalo(acquire.getOperation());
+    if (auto ownerDims = getStencilOwnerDims(acquire.getOperation())) {
+      for (int64_t dim : *ownerDims) {
+        if (dim >= 0)
+          facts.stencilOwnerDims.push_back(static_cast<unsigned>(dim));
+      }
+    }
+  }
   facts.accessPattern = node->getAccessPattern();
   facts.hasIndirectAccess = node->hasIndirectAccess();
   facts.hasDirectAccess = node->hasDirectAccess();
   facts.hasDistributionContract = hasDistributionContract(acquire);
-  facts.supportedBlockHalo = hasSupportedBlockHalo(acquire.getOperation());
-  if (auto ownerDims = getStencilOwnerDims(acquire.getOperation())) {
-    for (int64_t dim : *ownerDims) {
-      if (dim >= 0)
-        facts.stencilOwnerDims.push_back(static_cast<unsigned>(dim));
-    }
-  }
   facts.explicitCoarseRequest = facts.requestedMode == PartitionMode::coarse &&
                                 acquire.getPartitionIndices().empty() &&
                                 acquire.getPartitionOffsets().empty() &&

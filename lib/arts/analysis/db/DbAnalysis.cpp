@@ -101,6 +101,69 @@ static bool isTiling2DTaskAcquire(DbAcquireOp acquire) {
   return kind && *kind == EdtDistributionKind::tiling_2d;
 }
 
+static bool refineContractWithFacts(LoweringContractInfo &contract,
+                                    const DbAcquirePartitionFacts &facts) {
+  bool changed = false;
+
+  if (!contract.depPattern && facts.depPattern != ArtsDepPattern::unknown) {
+    contract.depPattern = facts.depPattern;
+    changed = true;
+  }
+
+  if (!contract.distributionPattern && contract.depPattern) {
+    if (auto pattern = distributionPatternFromDepPattern(*contract.depPattern)) {
+      contract.distributionPattern = *pattern;
+      changed = true;
+    }
+  }
+
+  if (contract.ownerDims.empty()) {
+    ArrayRef<unsigned> dims = facts.stencilOwnerDims;
+    if (dims.empty())
+      dims = facts.partitionDims;
+    if (!dims.empty()) {
+      contract.ownerDims.reserve(dims.size());
+      for (unsigned dim : dims)
+        contract.ownerDims.push_back(static_cast<int64_t>(dim));
+      changed = true;
+    }
+  }
+
+  if (!contract.supportedBlockHalo && facts.supportedBlockHalo) {
+    contract.supportedBlockHalo = true;
+    changed = true;
+  }
+
+  if (!contract.distributionPattern &&
+      facts.accessPattern == AccessPattern::Stencil) {
+    contract.distributionPattern = EdtDistributionPattern::stencil;
+    changed = true;
+    if (!contract.depPattern)
+      contract.depPattern = ArtsDepPattern::stencil;
+  }
+
+  return changed;
+}
+
+static bool hasFineGrainedEntryFacts(const DbAcquirePartitionFacts &facts) {
+  return llvm::any_of(facts.entries, [](const DbPartitionEntryFact &entry) {
+    return entry.partition.isFineGrained() && !entry.partition.indices.empty();
+  });
+}
+
+static bool hasUnmappedPartitionEntryFacts(const DbAcquirePartitionFacts &facts) {
+  return llvm::any_of(facts.entries, [](const DbPartitionEntryFact &entry) {
+    return entry.representativeOffset && !entry.mappedDim;
+  });
+}
+
+static bool hasDistributedContractEntryFacts(
+    const DbAcquirePartitionFacts &facts) {
+  return llvm::any_of(facts.entries, [](const DbPartitionEntryFact &entry) {
+    return entry.preservesDistributedContract;
+  });
+}
+
 } // namespace
 
 DbAnalysis::DbAnalysis(AnalysisManager &AM) : ArtsAnalysis(AM) {
@@ -583,6 +646,81 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
   }
 
   return info;
+}
+
+std::optional<DbAnalysis::AcquireContractSummary>
+DbAnalysis::getAcquireContractSummary(DbAcquireOp acquire) {
+  if (!acquire)
+    return std::nullopt;
+
+  AcquireContractSummary summary;
+  if (auto contract = getLoweringContract(acquire.getPtr()))
+    summary.contract = *contract;
+  else if (auto semantic = getSemanticContract(acquire.getOperation()))
+    summary.contract = *semantic;
+
+  if (const DbAcquirePartitionFacts *facts = getAcquirePartitionFacts(acquire)) {
+    summary.refinedByDbAnalysis =
+        refineContractWithFacts(summary.contract, *facts);
+    summary.accessPattern = facts->accessPattern;
+    summary.hasIndirectAccess = facts->hasIndirectAccess;
+    summary.hasDirectAccess = facts->hasDirectAccess;
+    summary.hasBlockHints = facts->hasBlockHints;
+    summary.inferredBlock = facts->inferredBlock;
+    summary.hasFineGrainedEntries = hasFineGrainedEntryFacts(*facts);
+    summary.hasUnmappedPartitionEntry = hasUnmappedPartitionEntryFacts(*facts);
+    summary.preservesDistributedContractEntry =
+        hasDistributedContractEntryFacts(*facts);
+    summary.hasDistributionContract = facts->hasDistributionContract;
+    summary.partitionDimsFromPeers = facts->partitionDimsFromPeers;
+  }
+
+  if (summary.accessPattern == AccessPattern::Unknown) {
+    if (summary.usesStencilSemantics())
+      summary.accessPattern = AccessPattern::Stencil;
+    else if (summary.usesMatmulSemantics())
+      summary.accessPattern = AccessPattern::Uniform;
+  }
+
+  if (summary.empty())
+    return std::nullopt;
+  return summary;
+}
+
+bool DbAnalysis::operationHasDistributedDbContract(Operation *op) {
+  if (!op)
+    return false;
+
+  bool found = false;
+  op->walk([&](DbAcquireOp acquire) {
+    if (found)
+      return WalkResult::interrupt();
+    if (auto contractSummary = getAcquireContractSummary(acquire);
+        contractSummary && contractSummary->hasDistributionContract) {
+      found = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return found;
+}
+
+bool DbAnalysis::operationHasPeerInferredPartitionDims(Operation *op) {
+  if (!op)
+    return false;
+
+  bool found = false;
+  op->walk([&](DbAcquireOp acquire) {
+    if (found)
+      return WalkResult::interrupt();
+    if (auto contractSummary = getAcquireContractSummary(acquire);
+        contractSummary && contractSummary->partitionDimsFromPeers) {
+      found = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return found;
 }
 
 const DbAcquirePartitionFacts *

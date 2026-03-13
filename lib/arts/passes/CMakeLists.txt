@@ -6,6 +6,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   # Transformation passes
   transforms/CollectMetadata.cpp
   transforms/VerifyMetadata.cpp
+  transforms/PatternDiscovery.cpp
   transforms/CreateDbs.cpp
   transforms/CreateEpochs.cpp
   transforms/Concurrency.cpp

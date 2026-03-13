@@ -48,6 +48,7 @@ constexpr StringLiteral DistributionKind = "distribution_kind";
 constexpr StringLiteral DistributionPattern = "distribution_pattern";
 constexpr StringLiteral DepPattern = "depPattern";
 constexpr StringLiteral DistributionVersion = "distribution_version";
+constexpr StringLiteral PatternRevision = "arts.pattern_revision";
 
 /// DbAllocOp attributes (TableGen-generated names)
 constexpr StringLiteral Mode = "mode";
@@ -430,6 +431,27 @@ inline std::optional<ArtsDepPattern> getEffectiveDepPattern(Operation *op) {
   return std::nullopt;
 }
 
+inline std::optional<int64_t> getPatternRevision(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr =
+          op->getAttrOfType<IntegerAttr>(AttrNames::Operation::PatternRevision))
+    return attr.getInt();
+  return std::nullopt;
+}
+
+inline void setPatternRevision(Operation *op, int64_t revision) {
+  if (!op)
+    return;
+  if (revision <= 0) {
+    op->removeAttr(AttrNames::Operation::PatternRevision);
+    return;
+  }
+  op->setAttr(
+      AttrNames::Operation::PatternRevision,
+      IntegerAttr::get(IntegerType::get(op->getContext(), 64), revision));
+}
+
 inline void copyDepPatternAttrs(Operation *source, Operation *dest) {
   if (!source || !dest)
     return;
@@ -477,15 +499,23 @@ inline void copyPatternAttrs(Operation *source, Operation *dest) {
   copyDepPatternAttrs(source, dest);
 }
 
+/// Full implementation in OperationAttributes.cpp.
+void copyArtsMetadataAttrs(Operation *source, Operation *dest);
+
+/// Copy only the semantic contract attrs that specialized pattern detection
+/// stamps before DB values exist. Structural rewrites should use this helper
+/// when they want to preserve pattern meaning without also copying unrelated
+/// ids or bookkeeping metadata.
+inline void copySemanticContractAttrs(Operation *source, Operation *dest) {
+  if (!source || !dest)
+    return;
+  copyPatternAttrs(source, dest);
+  copyStencilContractAttrs(source, dest);
+}
+
 /// Full implementation in PartitioningHeuristics.cpp (uses DictionaryAttr).
 std::optional<PartitioningHint> getPartitioningHint(Operation *op);
 void setPartitioningHint(Operation *op, const PartitioningHint &hint);
-
-/// Copy ARTS-specific metadata attributes from source to dest operation.
-/// Copies: arts.id, partition_mode, arts.partition_hint, arts.loop.
-/// Unlike transferAttributes in Utils.h which copies ALL attributes, this
-/// only copies ARTS-specific metadata attributes.
-void copyArtsMetadataAttrs(Operation *source, Operation *dest);
 
 } // namespace arts
 } // namespace mlir

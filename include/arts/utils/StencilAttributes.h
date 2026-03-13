@@ -11,9 +11,9 @@
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Operation.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include <optional>
 
 namespace mlir {
@@ -42,14 +42,14 @@ inline ArrayAttr buildI64ArrayAttr(Operation *op, ArrayRef<int64_t> values) {
   SmallVector<Attribute, 8> attrs;
   attrs.reserve(values.size());
   for (int64_t value : values) {
-    attrs.push_back(IntegerAttr::get(IntegerType::get(op->getContext(), 64),
-                                     value));
+    attrs.push_back(
+        IntegerAttr::get(IntegerType::get(op->getContext(), 64), value));
   }
   return ArrayAttr::get(op->getContext(), attrs);
 }
 
-inline std::optional<SmallVector<int64_t, 4>>
-readI64ArrayAttr(Operation *op, StringRef name) {
+inline std::optional<SmallVector<int64_t, 4>> readI64ArrayAttr(Operation *op,
+                                                               StringRef name) {
   if (!op)
     return std::nullopt;
   auto attr = op->getAttrOfType<ArrayAttr>(name);
@@ -140,7 +140,8 @@ inline void setRightHaloArgIndex(Operation *op, unsigned argIndex) {
 
 inline std::optional<SmallVector<int64_t, 4>>
 getStencilMinOffsets(Operation *op) {
-  return readI64ArrayAttr(op, AttrNames::Operation::Stencil::FootprintMinOffsets);
+  return readI64ArrayAttr(op,
+                          AttrNames::Operation::Stencil::FootprintMinOffsets);
 }
 
 inline void setStencilMinOffsets(Operation *op, ArrayRef<int64_t> offsets) {
@@ -152,7 +153,8 @@ inline void setStencilMinOffsets(Operation *op, ArrayRef<int64_t> offsets) {
 
 inline std::optional<SmallVector<int64_t, 4>>
 getStencilMaxOffsets(Operation *op) {
-  return readI64ArrayAttr(op, AttrNames::Operation::Stencil::FootprintMaxOffsets);
+  return readI64ArrayAttr(op,
+                          AttrNames::Operation::Stencil::FootprintMaxOffsets);
 }
 
 inline void setStencilMaxOffsets(Operation *op, ArrayRef<int64_t> offsets) {
@@ -203,7 +205,8 @@ getStencilWriteFootprint(Operation *op) {
   return readI64ArrayAttr(op, AttrNames::Operation::Stencil::WriteFootprint);
 }
 
-inline void setStencilWriteFootprint(Operation *op, ArrayRef<int64_t> footprint) {
+inline void setStencilWriteFootprint(Operation *op,
+                                     ArrayRef<int64_t> footprint) {
   if (!op)
     return;
   op->setAttr(AttrNames::Operation::Stencil::WriteFootprint,

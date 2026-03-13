@@ -75,10 +75,6 @@ public:
   /// Loop-facing DB analysis helpers backed by DbAnalysis / DbGraph facts.
   std::optional<DbAnalysis::LoopDbAccessSummary>
   getLoopDbAccessSummary(Operation *loopOp);
-  const DbAcquirePartitionFacts *getAcquirePartitionFacts(DbAcquireOp acquire);
-  void collectAcquirePartitionFactsInOperation(
-      Operation *op,
-      SmallVectorImpl<const DbAcquirePartitionFacts *> &acquireFacts);
   bool operationHasDistributedDbContract(Operation *op);
   bool operationHasPeerInferredPartitionDims(Operation *op);
 
