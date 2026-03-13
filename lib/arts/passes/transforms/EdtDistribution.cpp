@@ -80,7 +80,7 @@ struct EdtDistributionPass
         setEdtDistributionKind(forOp.getOperation(), kind);
         setEdtDistributionPattern(forOp.getOperation(), pattern);
         forOp->setAttr(
-            AttrNames::Operation::DistributionVersion,
+            AttrNames::Operation::Distribution::DistributionVersion,
             IntegerAttr::get(IntegerType::get(forOp.getContext(), 32), 1));
 
         ARTS_DEBUG("Annotated arts.for with kind="

@@ -133,7 +133,7 @@ private:
 
     /// First, add the outer arts.for
     if (auto idAttr = outerLoop->getAttrOfType<IntegerAttr>(
-            AttrNames::Operation::ArtsId)) {
+            AttrNames::Operation::Metadata::ArtsId)) {
       loopById[idAttr.getInt()] = outerLoop.getOperation();
       loopsInCurrentOrder.push_back(outerLoop.getOperation());
     }
@@ -141,7 +141,7 @@ private:
     /// Walk inner scf.for loops and collect them
     outerLoop->walk([&](scf::ForOp innerFor) {
       if (auto idAttr = innerFor->getAttrOfType<IntegerAttr>(
-              AttrNames::Operation::ArtsId)) {
+              AttrNames::Operation::Metadata::ArtsId)) {
         loopById[idAttr.getInt()] = innerFor.getOperation();
         loopsInCurrentOrder.push_back(innerFor.getOperation());
       }
@@ -378,8 +378,8 @@ private:
         });
 
     /// Copy j loop attributes to init loop (sanitize: init has no reductions)
-    if (auto idAttr = firstInner->getAttr(AttrNames::Operation::ArtsId))
-      initLoop->setAttr(AttrNames::Operation::ArtsId, idAttr);
+    if (auto idAttr = firstInner->getAttr(AttrNames::Operation::Metadata::ArtsId))
+      initLoop->setAttr(AttrNames::Operation::Metadata::ArtsId, idAttr);
     if (auto loopAttr = firstInner->getAttr(AttrNames::LoopMetadata::Name))
       initLoop->setAttr(
           AttrNames::LoopMetadata::Name,

@@ -80,7 +80,7 @@ FailureOr<DbAllocOp> DbRewriter::apply(OpBuilder &builder) {
       plan.outerSizes, plan.innerSizes, partitionMode);
 
   /// 2. Transfer metadata/attributes from old to new allocation
-  transferAttributes(oldAlloc, newAlloc, {AttrNames::Operation::PartitionMode});
+  transferAttributes(oldAlloc, newAlloc, {AttrNames::Operation::Partition::PartitionMode});
 
   /// 3. Rewrite all acquires with their partition info (virtual dispatch)
   for (const auto &info : acquires)
