@@ -7,6 +7,7 @@ file(GLOB CARTS_TRANSFORMS_SOURCE_FILES CONFIGURE_DEPENDS
     "db/stencil/*.cpp"
     "edt/*.cpp"
     "edt/tiling2d/*.cpp"
+    "kernel/*.cpp"
     "loop/*.cpp"
 )
 

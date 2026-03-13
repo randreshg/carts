@@ -45,6 +45,44 @@ classifyDistributionPattern(const DbAnalysis::LoopDbAccessSummary &summary) {
   return EdtDistributionPattern::uniform;
 }
 
+static std::optional<EdtDistributionPattern>
+distributionPatternFromDepPattern(ArtsDependencePattern pattern) {
+  switch (pattern) {
+  case ArtsDependencePattern::unknown:
+    return std::nullopt;
+  case ArtsDependencePattern::uniform:
+    return EdtDistributionPattern::uniform;
+  case ArtsDependencePattern::stencil:
+  case ArtsDependencePattern::wavefront_2d:
+  case ArtsDependencePattern::jacobi_alternating_buffers:
+    return EdtDistributionPattern::stencil;
+  case ArtsDependencePattern::matmul:
+    return EdtDistributionPattern::matmul;
+  case ArtsDependencePattern::triangular:
+    return EdtDistributionPattern::triangular;
+  }
+}
+
+static void applyDependencePatternHint(DbAnalysis::LoopDbAccessSummary &summary,
+                                       ArtsDependencePattern pattern) {
+  switch (pattern) {
+  case ArtsDependencePattern::unknown:
+  case ArtsDependencePattern::uniform:
+    return;
+  case ArtsDependencePattern::stencil:
+  case ArtsDependencePattern::wavefront_2d:
+  case ArtsDependencePattern::jacobi_alternating_buffers:
+    summary.hasStencilAccessHint = true;
+    return;
+  case ArtsDependencePattern::matmul:
+    summary.hasMatmulUpdate = true;
+    return;
+  case ArtsDependencePattern::triangular:
+    summary.hasTriangularBound = true;
+    return;
+  }
+}
+
 static bool isTiling2DTaskAcquire(DbAcquireOp acquire) {
   if (!acquire)
     return false;
@@ -132,6 +170,10 @@ DbAnalysis::analyzeLoopDbAccessPatterns(ForOp forOp) {
   Value loopIV = forBody.getArgument(0);
   summary.hasTriangularBound = hasTriangularBoundPattern(forOp);
   summary.hasMatmulUpdate = detectMatmulUpdatePattern(forOp, getLoopAnalysis());
+  std::optional<ArtsDependencePattern> depPatternHint =
+      getDepPattern(forOp.getOperation());
+  if (depPatternHint)
+    applyDependencePatternHint(summary, *depPatternHint);
 
   Region &forRegion = forOp.getRegion();
   EdtOp edt = forOp->getParentOfType<EdtOp>();
@@ -209,7 +251,14 @@ DbAnalysis::analyzeLoopDbAccessPatterns(ForOp forOp) {
     }
   });
 
-  summary.distributionPattern = classifyDistributionPattern(summary);
+  if (depPatternHint) {
+    if (auto directPattern = distributionPatternFromDepPattern(*depPatternHint))
+      summary.distributionPattern = *directPattern;
+    else
+      summary.distributionPattern = classifyDistributionPattern(summary);
+  } else {
+    summary.distributionPattern = classifyDistributionPattern(summary);
+  }
   loopAccessSummaryByOp[forOp.getOperation()] = summary;
   return summary;
 }

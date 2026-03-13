@@ -112,8 +112,8 @@
 ///
 ///==========================================================================///
 
-#ifndef ARTS_ANALYSIS_DISTRIBUTIONHEURISTICS_H
-#define ARTS_ANALYSIS_DISTRIBUTIONHEURISTICS_H
+#ifndef ARTS_ANALYSIS_HEURISTICS_DISTRIBUTIONHEURISTICS_H
+#define ARTS_ANALYSIS_HEURISTICS_DISTRIBUTIONHEURISTICS_H
 
 #include "arts/Dialect.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
@@ -303,4 +303,4 @@ private:
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_ANALYSIS_DISTRIBUTIONHEURISTICS_H
+#endif // ARTS_ANALYSIS_HEURISTICS_DISTRIBUTIONHEURISTICS_H

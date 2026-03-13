@@ -1,11 +1,16 @@
 ///==========================================================================///
-/// DbPartitioning.cpp - Datablock partitioning decision pass
+/// DbPartitioning.cpp - Datablock partitioning controller pass
 ///
-/// Analyzes allocations and selects partitioning strategies:
-///   Phase 1: Per-acquire analysis (chunk offset/size, capabilities)
-///   Phase 2: Heuristic voting -> RewriterMode
-///   (Coarse/ElementWise/Block/Stencil) Phase 3: Size computation and
-///   rewriter application
+/// Controller responsibilities:
+///   Phase 1: query graph-backed facts from DbAnalysis / DbNode
+///   Phase 2: assemble heuristic snapshots and obtain H1 decisions
+///   Phase 3: reconcile/normalize those decisions for one allocation
+///   Phase 4: build planner inputs and invoke the rewriter
+///
+/// Non-responsibilities:
+///   - does not own canonical per-acquire facts (DbGraph/DbNode do)
+///   - does not choose policy directly (DbHeuristics does)
+///   - does not localize indices directly (rewriters/indexers do)
 ///
 /// Transformation (shape-focused):
 ///   BEFORE:
@@ -39,6 +44,7 @@
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/graphs/db/DbGraph.h"
+#include "arts/analysis/heuristics/DbHeuristics.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/analysis/loop/LoopNode.h"
 #include "arts/passes/Passes.h"
@@ -60,10 +66,9 @@
 #include <optional>
 
 #include "arts/transforms/db/DbBlockPlanResolver.h"
-#include "arts/transforms/db/DbPartitionDecisionArbiter.h"
 #include "arts/transforms/db/DbPartitionPlanner.h"
+#include "arts/transforms/db/DbPartitionTypes.h"
 #include "arts/transforms/db/DbRewriter.h"
-#include "arts/transforms/db/StencilBoundsLowering.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/EdtUtils.h"
@@ -196,6 +201,303 @@ static bool hasInternodeAcquireUser(ArrayRef<DbAcquireNode *> acquireNodes) {
   return false;
 }
 
+static AcquirePatternSummary
+summarizeAcquirePatterns(ArrayRef<const DbAcquirePartitionFacts *> acquireFacts,
+                         DbAllocNode *allocNode) {
+  AcquirePatternSummary summary;
+  bool sawFacts = false;
+
+  for (const DbAcquirePartitionFacts *facts : acquireFacts) {
+    if (!facts)
+      continue;
+    sawFacts = true;
+
+    switch (facts->accessPattern) {
+    case AccessPattern::Uniform:
+      summary.hasUniform = true;
+      break;
+    case AccessPattern::Stencil:
+      summary.hasStencil = true;
+      break;
+    case AccessPattern::Indexed:
+      summary.hasIndexed = true;
+      break;
+    case AccessPattern::Unknown:
+      break;
+    }
+
+    if (facts->hasIndirectAccess)
+      summary.hasIndexed = true;
+    if (isStencilFamilyDepPattern(facts->depPattern))
+      summary.hasStencil = true;
+    if (isMatmulDepPattern(facts->depPattern))
+      summary.hasUniform = true;
+  }
+
+  if (sawFacts)
+    return summary;
+  return allocNode ? allocNode->summarizeAcquirePatterns()
+                   : AcquirePatternSummary{};
+}
+
+static bool isBlockLikeMode(PartitionMode mode) {
+  return mode == PartitionMode::block || mode == PartitionMode::stencil;
+}
+
+static bool isAcquireInfoConsistent(const AcquirePartitionInfo &lhs,
+                                    const AcquirePartitionInfo &rhs) {
+  if (lhs.mode != rhs.mode)
+    return false;
+
+  if (lhs.mode != PartitionMode::block || lhs.partitionSizes.empty() ||
+      rhs.partitionSizes.empty()) {
+    return true;
+  }
+
+  Value lhsSize = lhs.partitionSizes.front();
+  Value rhsSize = rhs.partitionSizes.front();
+  if (lhsSize == rhsSize)
+    return true;
+
+  int64_t lhsConst = 0;
+  int64_t rhsConst = 0;
+  bool lhsIsConst = ValueUtils::getConstantIndex(lhsSize, lhsConst);
+  bool rhsIsConst = ValueUtils::getConstantIndex(rhsSize, rhsConst);
+  return lhsIsConst && rhsIsConst && lhsConst == rhsConst;
+}
+
+struct AcquireModeReconcileResult {
+  bool modesConsistent = true;
+  bool allBlockFullRange = false;
+};
+
+static AcquireModeReconcileResult
+reconcileAcquireModes(PartitioningContext &ctx,
+                      SmallVectorImpl<AcquirePartitionInfo> &acquireInfos,
+                      bool canUseBlock) {
+  AcquireModeReconcileResult result;
+  if (acquireInfos.empty())
+    return result;
+
+  for (size_t i = 1; i < acquireInfos.size(); ++i) {
+    if (!isAcquireInfoConsistent(acquireInfos.front(), acquireInfos[i])) {
+      result.modesConsistent = false;
+      break;
+    }
+  }
+
+  bool anyBlockCapable = false;
+  bool anyBlockNotFullRange = false;
+  size_t count = std::min(ctx.acquires.size(), acquireInfos.size());
+  for (size_t i = 0; i < count; ++i) {
+    if (!ctx.acquires[i].canBlock)
+      continue;
+    anyBlockCapable = true;
+    if (!acquireInfos[i].needsFullRange)
+      anyBlockNotFullRange = true;
+  }
+
+  result.allBlockFullRange = anyBlockCapable && !anyBlockNotFullRange;
+
+  ctx.canElementWise = ctx.anyCanElementWise();
+  ctx.canBlock = canUseBlock && ctx.anyCanBlock();
+  ctx.allBlockFullRange = result.allBlockFullRange;
+  if (!ctx.canBlock)
+    return result;
+
+  bool hasCoarse =
+      llvm::any_of(acquireInfos, [](const AcquirePartitionInfo &i) {
+        return i.mode == PartitionMode::coarse;
+      });
+  bool hasBlock = llvm::any_of(acquireInfos, [](const AcquirePartitionInfo &i) {
+    return isBlockLikeMode(i.mode);
+  });
+
+  if (hasCoarse && hasBlock) {
+    ctx.canElementWise = false;
+    for (auto &info : acquireInfos) {
+      if (info.mode == PartitionMode::coarse)
+        info.needsFullRange = true;
+    }
+  } else if (hasCoarse) {
+    ctx.canElementWise = false;
+  }
+
+  return result;
+}
+
+static bool isTiling2DTaskAcquire(DbAcquireOp acquire) {
+  if (!acquire)
+    return false;
+  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+  (void)blockArg;
+  if (!edt)
+    return false;
+  auto kind = getEdtDistributionKind(edt.getOperation());
+  return kind && *kind == EdtDistributionKind::tiling_2d;
+}
+
+static bool isLowerBoundGuaranteedByControlFlow(Operation *op, Value loopIV) {
+  if (!loopIV)
+    return false;
+
+  auto matchesIV = [&loopIV](Value v) {
+    if (v == loopIV)
+      return true;
+    if (auto cast = v.getDefiningOp<arith::IndexCastOp>())
+      return cast.getIn() == loopIV;
+    return false;
+  };
+
+  for (Operation *parent = op->getParentOp(); parent;
+       parent = parent->getParentOp()) {
+    auto ifOp = dyn_cast<scf::IfOp>(parent);
+    if (!ifOp || ifOp.getElseRegion().empty())
+      continue;
+    if (!ifOp.getElseRegion().isAncestor(op->getParentRegion()))
+      continue;
+
+    auto cmp = ifOp.getCondition().getDefiningOp<arith::CmpIOp>();
+    if (!cmp || cmp.getPredicate() != arith::CmpIPredicate::eq)
+      continue;
+
+    Value lhs = cmp.getLhs();
+    Value rhs = cmp.getRhs();
+    if ((matchesIV(lhs) && ValueUtils::isZeroConstant(rhs)) ||
+        (matchesIV(rhs) && ValueUtils::isZeroConstant(lhs)))
+      return true;
+  }
+  return false;
+}
+
+static void applyBoundsValid(DbAcquireOp acquireOp,
+                             ArrayRef<int64_t> boundsCheckFlags, Value loopIV) {
+  if (acquireOp.hasMultiplePartitionEntries()) {
+    ARTS_DEBUG("  Skipping bounds generation for multi-entry stencil acquire");
+    return;
+  }
+
+  Location loc = acquireOp.getLoc();
+  OpBuilder builder(acquireOp);
+  auto indices = acquireOp.getIndices();
+  SmallVector<Value> sourceSizes =
+      DbUtils::getSizesFromDb(acquireOp.getSourcePtr());
+  bool lowerBoundGuarded =
+      isLowerBoundGuaranteedByControlFlow(acquireOp, loopIV);
+
+  Value zero = arts::createZeroIndex(builder, loc);
+  Value boundsValid;
+  for (size_t i = 0; i < boundsCheckFlags.size() && i < indices.size(); ++i) {
+    if (boundsCheckFlags[i] == 0 || i >= sourceSizes.size())
+      continue;
+
+    Value idx = indices[i];
+    Value size = sourceSizes[i];
+    Value dimValid;
+    if (lowerBoundGuarded) {
+      dimValid = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
+                                               idx, size);
+    } else {
+      Value geZero = builder.create<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::sge, idx, zero);
+      Value ltSize = builder.create<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::slt, idx, size);
+      dimValid = builder.create<arith::AndIOp>(loc, geZero, ltSize);
+    }
+    boundsValid =
+        boundsValid ? builder.create<arith::AndIOp>(loc, boundsValid, dimValid)
+                    : dimValid;
+  }
+
+  if (!boundsValid)
+    return;
+
+  SmallVector<Value> indicesVec(indices.begin(), indices.end());
+  for (size_t i = 0; i < boundsCheckFlags.size() && i < indicesVec.size();
+       ++i) {
+    if (boundsCheckFlags[i] == 0 || i >= sourceSizes.size())
+      continue;
+
+    Value idx = indicesVec[i];
+    Value size = sourceSizes[i];
+    Value geZero = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge,
+                                                 idx, zero);
+    Value nonNegative = builder.create<arith::SelectOp>(loc, geZero, idx, zero);
+    Value one = arts::createOneIndex(builder, loc);
+    Value hasExtent = builder.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::sgt, size, zero);
+    Value lastIdxRaw = builder.create<arith::SubIOp>(loc, size, one);
+    Value lastIdx =
+        builder.create<arith::SelectOp>(loc, hasExtent, lastIdxRaw, zero);
+    indicesVec[i] = builder.create<arith::MinUIOp>(loc, nonNegative, lastIdx);
+  }
+
+  SmallVector<Value> offsetsVec(acquireOp.getOffsets().begin(),
+                                acquireOp.getOffsets().end());
+  SmallVector<Value> sizesVec(acquireOp.getSizes().begin(),
+                              acquireOp.getSizes().end());
+  SmallVector<Value> partIndices(acquireOp.getPartitionIndices().begin(),
+                                 acquireOp.getPartitionIndices().end());
+  SmallVector<Value> partOffsets(acquireOp.getPartitionOffsets().begin(),
+                                 acquireOp.getPartitionOffsets().end());
+  SmallVector<Value> partSizes(acquireOp.getPartitionSizes().begin(),
+                               acquireOp.getPartitionSizes().end());
+
+  auto partitionMode = getPartitionMode(acquireOp.getOperation());
+  auto newAcquire = builder.create<DbAcquireOp>(
+      loc, acquireOp.getMode(), acquireOp.getSourceGuid(),
+      acquireOp.getSourcePtr(), partitionMode, indicesVec, offsetsVec, sizesVec,
+      partIndices, partOffsets, partSizes, boundsValid);
+  transferAttributes(acquireOp.getOperation(), newAcquire.getOperation(),
+                     /*excludes=*/{});
+  newAcquire.copyPartitionSegmentsFrom(acquireOp);
+
+  acquireOp.getGuid().replaceAllUsesWith(newAcquire.getGuid());
+  acquireOp.getPtr().replaceAllUsesWith(newAcquire.getPtr());
+  acquireOp.erase();
+}
+
+static void lowerStencilAcquireBounds(ModuleOp module,
+                                      LoopAnalysis &loopAnalysis) {
+  SmallVector<std::tuple<DbAcquireOp, SmallVector<int64_t>, Value>> pending;
+
+  module.walk([&](DbAcquireOp acquireOp) {
+    if (acquireOp.getBoundsValid())
+      return;
+    auto indices = acquireOp.getIndices();
+    if (indices.empty())
+      return;
+
+    SmallVector<LoopNode *> enclosingLoops;
+    loopAnalysis.collectEnclosingLoops(acquireOp, enclosingLoops);
+    if (enclosingLoops.empty())
+      return;
+
+    LoopNode *loopNode = enclosingLoops.back();
+    SmallVector<int64_t> boundsCheckFlags;
+    bool needsBoundsCheck = false;
+    for (Value idx : indices) {
+      int64_t flag = 0;
+      LoopNode::IVExpr expr = loopNode->analyzeIndexExpr(idx);
+      if (expr.isAnalyzable() && expr.offset.has_value() && *expr.offset != 0) {
+        flag = 1;
+        needsBoundsCheck = true;
+      } else if (expr.dependsOnIV && !expr.isAnalyzable()) {
+        flag = 1;
+        needsBoundsCheck = true;
+      }
+      boundsCheckFlags.push_back(flag);
+    }
+
+    if (needsBoundsCheck)
+      pending.push_back({acquireOp, std::move(boundsCheckFlags),
+                         loopNode->getInductionVar()});
+  });
+
+  for (auto &[acquireOp, flags, loopIV] : pending)
+    applyBoundsValid(acquireOp, flags, loopIV);
+}
+
 /// Analyze a single acquire to determine its partition mode and chunk info.
 static AcquirePartitionInfo
 computeAcquirePartitionInfo(DbAcquireOp acquire, DbAcquireNode *acqNode,
@@ -226,7 +528,7 @@ computeAcquirePartitionInfo(DbAcquireOp acquire, DbAcquireNode *acqNode,
       facts ? facts->hasIndirectAccess : summary.hasIndirectAccess;
   info.hasDistributionContract = facts ? facts->hasDistributionContract : false;
   info.preservesDependencyMode =
-      static_cast<bool>(acquire.getPreserveDepMode());
+      static_cast<bool>(acquire.getPreserveAccessMode());
 
   return info;
 }
@@ -250,9 +552,9 @@ static void resetCoarseAcquireRanges(DbAllocOp allocOp, DbAllocNode *allocNode,
     DbAcquireOp acqOp = acqNode->getDbAcquireOp();
     if (!acqOp)
       continue;
-    /// preserve_dep_mode protects the acquire's access mode contract, not the
-    /// allocation layout. If the allocation fell back to coarse, always reset
-    /// the DB-space slice to match the coarse layout.
+    /// preserve_access_mode protects the acquire's access mode contract, not
+    /// the allocation layout. If the allocation fell back to coarse, always
+    /// reset the DB-space slice to match the coarse layout.
     acqOp.getOffsetsMutable().assign(fullOffsets);
     acqOp.getSizesMutable().assign(fullSizes);
     /// Clear partition hints for coarse allocations to avoid redundant
@@ -404,10 +706,10 @@ static SmallVector<DbAcquireOp> createExpandedAcquires(DbAcquireOp original,
     SmallVector<int32_t> entryModes = {static_cast<int32_t>(entryMode)};
     newAcquire.setPartitionSegments(indicesSegs, offsetsSegs, sizesSegs,
                                     entryModes);
-    if (original.getPreserveDepMode())
-      newAcquire.setPreserveDepMode();
-    if (original.getPreserveDependency())
-      newAcquire.setPreserveDependency();
+    if (original.getPreserveAccessMode())
+      newAcquire.setPreserveAccessMode();
+    if (original.getPreserveDepEdge())
+      newAcquire.setPreserveDepEdge();
 
     expanded.push_back(newAcquire);
     ARTS_DEBUG("    Created expanded acquire: " << newAcquire);
@@ -829,7 +1131,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   if (allocOp.getElementSizes().empty())
     return failure();
 
-  auto &heuristics = AM->getHeuristicsConfig();
+  auto &heuristics = AM->getDbHeuristics();
 
   /// Step 0: Check existing partition attribute
   if (auto existingMode = getPartitionMode(allocOp)) {
@@ -903,6 +1205,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
   /// Step 2: Build PartitioningContext and check for non-leading offsets
   PartitioningContext ctx;
+  SmallVector<Value> blockSizesForNDBlock;
   ctx.machine = &AM->getAbstractMachine();
   bool canUseBlock = true; /// Assume block is possible until proven otherwise
 
@@ -921,7 +1224,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   }
 
   if (allocNode) {
-    ctx.accessPatterns = allocNode->summarizeAcquirePatterns();
+    ctx.accessPatterns = summarizeAcquirePatterns(acquireFacts, allocNode);
     ctx.isUniformAccess = ctx.accessPatterns.hasUniform;
     ARTS_DEBUG("  Access patterns: hasUniform="
                << ctx.accessPatterns.hasUniform
@@ -937,19 +1240,22 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       }
     }
 
-    for (DbAcquireNode *acqNode : allocAcquireNodes) {
-      DbAcquireOp acqOp = acqNode->getDbAcquireOp();
-      if (!acqOp)
+    for (size_t factIdx = 0; factIdx < acquireFacts.size(); ++factIdx) {
+      const DbAcquirePartitionFacts *facts = acquireFacts[factIdx];
+      if (!facts)
         continue;
-      bool hasIndirect = acqNode->hasIndirectAccess();
-      if (hasIndirect) {
+
+      const ArtsMode mode = factIdx < acquireInfos.size()
+                                ? acquireInfos[factIdx].acquire.getMode()
+                                : ArtsMode::uninitialized;
+      if (facts->hasIndirectAccess) {
         ctx.hasIndirectAccess = true;
-        if (acqNode->hasLoads())
+        if (mode == ArtsMode::in || mode == ArtsMode::inout)
           ctx.hasIndirectRead = true;
-        if (acqNode->hasStores())
+        if (mode == ArtsMode::out || mode == ArtsMode::inout)
           ctx.hasIndirectWrite = true;
       }
-      if (acqNode->hasDirectAccess())
+      if (facts->hasDirectAccess)
         ctx.hasDirectAccess = true;
     }
 
@@ -1027,7 +1333,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       }
       if (!thisAcquireCanBlock &&
           ((facts && facts->accessPattern == AccessPattern::Stencil) ||
-           acqNode->getAccessPattern() == AccessPattern::Stencil))
+           (!facts && acqNode->getAccessPattern() == AccessPattern::Stencil)))
         thisAcquireCanBlock = true;
       bool thisAcquireCanElementWise =
           (acquireMode && *acquireMode == PartitionMode::fine_grained) ||
@@ -1108,6 +1414,34 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         info.accessPattern = facts->accessPattern;
       else if (acqNode)
         info.accessPattern = acqNode->getAccessPattern();
+      if (facts)
+        info.depPattern = facts->depPattern;
+
+      if (info.accessPattern == AccessPattern::Unknown &&
+          info.accessMode == ArtsMode::in &&
+          isStencilFamilyDepPattern(info.depPattern)) {
+        info.accessPattern = AccessPattern::Stencil;
+      }
+
+      if (!ctx.preferBlockND && acquire.getMode() == ArtsMode::inout &&
+          isTiling2DTaskAcquire(acquire) &&
+          acqInfo.partitionSizes.size() >= 2) {
+        Value rowSize = acqInfo.partitionSizes[0];
+        Value colSize = acqInfo.partitionSizes[1];
+        if (rowSize && colSize &&
+            !ValueUtils::isZeroConstant(
+                ValueUtils::stripNumericCasts(rowSize)) &&
+            !ValueUtils::isZeroConstant(
+                ValueUtils::stripNumericCasts(colSize))) {
+          ctx.preferBlockND = true;
+          ctx.preferredOuterRank = 2;
+          blockSizesForNDBlock.push_back(rowSize);
+          blockSizesForNDBlock.push_back(colSize);
+          ARTS_DEBUG("    Acquire[" << idx
+                                    << "]: tiling_2d owner hints prefer N-D "
+                                       "block partitioning");
+        }
+      }
 
       ctx.acquires.push_back(info);
       ARTS_DEBUG("    Acquire["
@@ -1131,7 +1465,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
     /// Collect DbAcquireNode* and partition offsets for heuristic decisions
     /// Get per-acquire decisions from heuristics (calls needsFullRange)
-    auto acquireDecisions = heuristics.getAcquireDecisions(acquireFacts);
+    auto acquireDecisions = heuristics.chooseAcquirePolicies(acquireFacts);
 
     /// Apply decisions to acquireInfos
     for (size_t i = 0; i < acquireDecisions.size() && i < acquireInfos.size();
@@ -1192,11 +1526,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   }
 
   /// Step 4: Initial heuristics arbitration.
-  PartitionDecisionArbiterResult arbiterResult =
-      arbitrateInitialPartitionDecision(ctx, acquireInfos, allocOp, heuristics);
-  PartitioningDecision decision = arbiterResult.decision;
-  SmallVector<Value> blockSizesForNDBlock =
-      std::move(arbiterResult.blockSizesForNDBlock);
+  PartitioningDecision decision = heuristics.choosePartitioning(ctx);
 
   if (decision.isCoarse()) {
     ARTS_DEBUG("  Heuristics chose coarse - keeping original");
@@ -1386,6 +1716,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     bool allocHasStencilPattern = false;
     if (auto allocPattern = getDbAccessPattern(allocOp.getOperation()))
       allocHasStencilPattern = *allocPattern == DbAccessPattern::stencil;
+    if (!allocHasStencilPattern)
+      allocHasStencilPattern = ctx.accessPatterns.hasStencil;
 
     if (allocHasStencilPattern) {
       for (auto &info : acquireInfos) {
@@ -1476,17 +1808,27 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
     auto allocPattern = getDbAccessPattern(allocOp.getOperation());
     bool allocHasStencilPattern =
-        allocPattern && *allocPattern == DbAccessPattern::stencil;
+        (allocPattern && *allocPattern == DbAccessPattern::stencil) ||
+        ctx.accessPatterns.hasStencil;
 
-    bool hasReadStencilAcquire =
-        std::any_of(allocAcquireNodes.begin(), allocAcquireNodes.end(),
-                    [&](DbAcquireNode *acqNode) {
-                      if (!acqNode || !acqNode->isReadOnlyAccess())
-                        return false;
-                      if (acqNode->getAccessPattern() == AccessPattern::Stencil)
-                        return true;
-                      return allocHasStencilPattern;
-                    });
+    bool hasReadStencilAcquire = std::any_of(
+        allocAcquireNodes.begin(), allocAcquireNodes.end(),
+        [&](DbAcquireNode *acqNode) {
+          if (!acqNode)
+            return false;
+          if (DbAcquireOp acquire = acqNode->getDbAcquireOp();
+              !acquire || acquire.getMode() != ArtsMode::in)
+            return false;
+          if (auto facts = AM->getDbAnalysis().getAcquirePartitionFacts(
+                  acqNode->getDbAcquireOp())) {
+            if (facts->accessPattern == AccessPattern::Stencil)
+              return true;
+            return isStencilFamilyDepPattern(facts->depPattern);
+          }
+          if (acqNode->getAccessPattern() == AccessPattern::Stencil)
+            return true;
+          return allocHasStencilPattern;
+        });
 
     if ((info.haloLeft == 0 || info.haloRight == 0) && hasReadStencilAcquire &&
         allocHasStencilPattern) {

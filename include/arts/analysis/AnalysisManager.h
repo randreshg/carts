@@ -8,10 +8,11 @@
 #ifndef ARTS_ANALYSIS_ARTSANALYSISMANAGER_H
 #define ARTS_ANALYSIS_ARTSANALYSISMANAGER_H
 
-#include "arts/analysis/HeuristicsConfig.h"
 #include "arts/analysis/StringAnalysis.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/edt/EdtAnalysis.h"
+#include "arts/analysis/heuristics/DbHeuristics.h"
+#include "arts/analysis/heuristics/EdtHeuristics.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
@@ -46,7 +47,8 @@ public:
   EdtAnalysis &getEdtAnalysis();
   LoopAnalysis &getLoopAnalysis();
   StringAnalysis &getStringAnalysis();
-  HeuristicsConfig &getHeuristicsConfig();
+  DbHeuristics &getDbHeuristics();
+  EdtHeuristics &getEdtHeuristics();
 
   /// Graph getters
   DbGraph &getDbGraph(func::FuncOp func);
@@ -118,7 +120,8 @@ private:
 
   std::unique_ptr<DbAnalysis> dbAnalysis;
   std::unique_ptr<EdtAnalysis> edtAnalysis;
-  std::unique_ptr<HeuristicsConfig> heuristicsConfig;
+  std::unique_ptr<DbHeuristics> dbHeuristics;
+  std::unique_ptr<EdtHeuristics> edtHeuristics;
   std::unique_ptr<LoopAnalysis> loopAnalysis;
   std::unique_ptr<StringAnalysis> stringAnalysis;
   std::unique_ptr<MetadataManager> metadataManager;

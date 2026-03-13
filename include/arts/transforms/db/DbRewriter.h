@@ -2,7 +2,14 @@
 /// File: DbRewriter.h
 ///
 /// Abstract base class for datablock allocation transformation.
-/// Provides factory pattern for creating mode-specific rewriters.
+///
+/// Rewriter responsibilities are intentionally narrow:
+///   - apply an already chosen layout
+///   - rewrite acquires/db_refs to match that layout
+///   - delegate index localization to mode-specific indexers
+///
+/// Rewriters do not re-run heuristics or negotiate legality. Those decisions
+/// must be finished before a DbRewritePlan reaches this layer.
 ///==========================================================================///
 
 #ifndef ARTS_TRANSFORMS_DATABLOCK_DBREWRITER_H

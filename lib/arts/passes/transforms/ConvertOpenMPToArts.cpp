@@ -28,7 +28,7 @@
 #include "mlir/IR/BuiltinOps.h"
 /// Arts
 #include "arts/Dialect.h"
-#include "arts/analysis/HeuristicsConfig.h"
+#include "arts/analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/OperationAttributes.h"

@@ -167,6 +167,32 @@ collectMappedEntryDims(ArrayRef<DbPartitionEntryFact> entries) {
   return mappedDims;
 }
 
+static std::optional<unsigned>
+inferMappedDimFromDepPattern(const DbAcquirePartitionFacts &facts) {
+  switch (facts.depPattern) {
+  case ArtsDependencePattern::wavefront_2d:
+    /// The wavefront transform commits to leading-dimension row ownership and
+    /// rewrites the distributed loop into row-space. Preserve that fact here
+    /// so later DB partitioning does not have to rediscover it from raw access
+    /// expressions.
+    return facts.dims.empty() ? std::nullopt : std::optional<unsigned>(0u);
+  case ArtsDependencePattern::unknown:
+  case ArtsDependencePattern::uniform:
+  case ArtsDependencePattern::stencil:
+  case ArtsDependencePattern::jacobi_alternating_buffers:
+  case ArtsDependencePattern::matmul:
+  case ArtsDependencePattern::triangular:
+    return std::nullopt;
+  }
+}
+
+static bool
+shouldPreserveWavefrontRowLocalRange(const DbAcquirePartitionFacts &facts,
+                                     const DbPartitionEntryFact &entry) {
+  return facts.depPattern == ArtsDependencePattern::wavefront_2d &&
+         entry.mappedDim && *entry.mappedDim == 0;
+}
+
 static SmallVector<unsigned, 4>
 collectDistributedPeerDims(DbAcquireNode *node) {
   if (!node || !node->getAnalysis())
@@ -274,6 +300,8 @@ DbAcquirePartitionFacts DbDimAnalyzer::compute(DbAcquireNode *node) {
 
   facts.acquire = acquire;
   facts.requestedMode = getRequestedMode(acquire);
+  if (auto depPattern = getEffectiveDepPattern(acquire.getOperation()))
+    facts.depPattern = *depPattern;
   facts.accessPattern = node->getAccessPattern();
   facts.hasIndirectAccess = node->hasIndirectAccess();
   facts.hasDirectAccess = node->hasDirectAccess();
@@ -303,11 +331,23 @@ DbAcquirePartitionFacts DbDimAnalyzer::compute(DbAcquireNode *node) {
     if (fact.representativeOffset) {
       fact.mappedDim = node->getPartitionOffsetDim(fact.representativeOffset,
                                                    /*requireLeading=*/false);
+      if (!fact.mappedDim)
+        fact.mappedDim = inferMappedDimFromDepPattern(facts);
       fact.needsFullRange = PartitionBoundsAnalyzer::needsFullRange(
           node, fact.representativeOffset);
       fact.preservesDistributedContract =
           PartitionBoundsAnalyzer::shouldPreserveDistributedContract(
               node, fact.representativeOffset);
+
+      if (shouldPreserveWavefrontRowLocalRange(facts, fact)) {
+        /// The wavefront transform already committed the task to a leading-row
+        /// schedule and rewrote the distributed loop into row-space. The raw
+        /// index matcher does not always see that relation through the nested
+        /// inner loops, so keep the task-local range instead of forcing the
+        /// acquire back to full-range.
+        fact.needsFullRange = false;
+        fact.preservesDistributedContract = true;
+      }
     }
 
     if (fact.mappedDim && *fact.mappedDim < facts.dims.size()) {

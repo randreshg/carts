@@ -3,9 +3,12 @@
 ///
 /// Mode-specialized planning functions for DbPartitioning.
 ///
-/// Provides per-mode logic for:
-///   1. allocation shape computation (outer/inner sizes)
-///   2. per-acquire rewrite payload construction
+/// Planner responsibilities:
+///   1. take a controller decision plus normalized acquire views
+///   2. compute allocation layout shape
+///   3. build per-acquire rewrite payloads
+///
+/// The planner does not rerun heuristics and does not inspect raw DB graphs.
 ///==========================================================================///
 
 #ifndef ARTS_TRANSFORMS_DATABLOCK_DBPARTITIONPLANNER_H
@@ -21,6 +24,8 @@ namespace arts {
 struct PartitioningDecision;
 
 /// Per-acquire planning input passed from DbPartitioning into planners.
+///
+/// This is the handoff boundary between controller logic and rewrite planning.
 struct DbAcquirePartitionView {
   DbAcquireOp acquire;
   SmallVector<Value> partitionIndices;

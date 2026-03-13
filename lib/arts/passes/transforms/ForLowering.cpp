@@ -23,13 +23,13 @@
 
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/DistributionHeuristics.h"
-#include "arts/analysis/HeuristicsConfig.h"
+#include "arts/analysis/graphs/db/DbNode.h"
+#include "arts/analysis/heuristics/DistributionHeuristics.h"
+#include "arts/analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
-#include "arts/transforms/edt/AcquireRewritePlanning.h"
 #include "arts/transforms/edt/EdtParallelSplitLowering.h"
 #include "arts/transforms/edt/EdtReductionLowering.h"
 #include "arts/transforms/edt/EdtRewriter.h"
@@ -65,6 +65,310 @@ using namespace mlir::func;
 using namespace mlir::arts;
 
 namespace {
+
+/// Inputs required to plan one rewritten task acquire.
+struct AcquireRewritePlanningInput {
+  ArtsCodegen *AC = nullptr;
+  mlir::arts::AnalysisManager *analysisManager = nullptr;
+  Location loc;
+
+  ForOp loopOp;
+  DbAcquireOp parentAcquire;
+  Value rootGuid;
+  Value rootPtr;
+
+  DistributionKind distributionKind = DistributionKind::Flat;
+  std::optional<EdtDistributionPattern> distributionPattern;
+  std::optional<Tiling2DWorkerGrid> tiling2DGrid;
+
+  Value acquireOffset;
+  Value acquireSize;
+  Value acquireHintSize;
+  Value step;
+  bool stepIsUnit = true;
+};
+
+struct AcquireRewritePlan {
+  AcquireRewriteInput rewriteInput;
+  bool useStencilRewriter = false;
+};
+
+struct TaskAcquireWindow {
+  Value elementOffset;
+  Value elementSize;
+  Value dbOffset;
+  Value dbSize;
+};
+
+/// Plan one task-local acquire rewrite from the already-selected distribution
+/// shape. This stays local to ForLowering because no other pass consumes the
+/// planning contract.
+static AcquireRewritePlan
+planAcquireRewrite(AcquireRewritePlanningInput input) {
+  auto makePlan = [&]() {
+    return AcquireRewritePlan{
+        AcquireRewriteInput{input.AC, input.loc, input.parentAcquire,
+                            input.rootGuid, input.rootPtr, input.acquireOffset,
+                            input.acquireSize, input.acquireHintSize,
+                            /*extraOffsets=*/SmallVector<Value, 4>{},
+                            /*extraSizes=*/SmallVector<Value, 4>{},
+                            /*extraHintSizes=*/SmallVector<Value, 4>{},
+                            input.step, input.stepIsUnit,
+                            /*singleElement=*/false,
+                            /*forceCoarse=*/
+                            input.distributionKind ==
+                                DistributionKind::BlockCyclic,
+                            /*stencilExtent=*/Value()},
+        /*useStencilRewriter=*/false};
+  };
+
+  if (!input.AC || !input.parentAcquire)
+    return makePlan();
+
+  Value zero = input.AC->createIndexConstant(0, input.loc);
+  Value one = input.AC->createIndexConstant(1, input.loc);
+  AcquireRewritePlan plan{makePlan()};
+
+  bool isSingleElement = false;
+  bool needsStencilHalo = false;
+  bool forceCoarseRewrite = plan.rewriteInput.forceCoarse;
+  Value stencilExtent;
+  SmallVector<Value, 4> extraOffsets;
+  SmallVector<Value, 4> extraSizes;
+  SmallVector<Value, 4> extraHintSizes;
+
+  if (Operation *rootAllocOp = DbUtils::getUnderlyingDbAlloc(input.rootPtr)) {
+    if (auto dbAlloc = dyn_cast<DbAllocOp>(rootAllocOp)) {
+      auto elemSizes = dbAlloc.getElementSizes();
+      if (!elemSizes.empty()) {
+        isSingleElement = llvm::all_of(elemSizes, [](Value value) {
+          int64_t constant = 0;
+          return ValueUtils::getConstantIndex(value, constant) && constant == 1;
+        });
+
+        ArtsDependencePattern depPattern =
+            getEffectiveDepPattern(input.parentAcquire.getOperation())
+                .value_or(ArtsDependencePattern::unknown);
+        const DbAcquirePartitionFacts *acquireFacts = nullptr;
+        std::optional<AccessPattern> acquireAccessPattern;
+        auto accessPattern = getDbAccessPattern(dbAlloc.getOperation());
+        if (input.analysisManager) {
+          DbAnalysis &dbAnalysis = input.analysisManager->getDbAnalysis();
+          acquireFacts =
+              dbAnalysis.getAcquirePartitionFacts(input.parentAcquire);
+          if (!acquireFacts)
+            acquireAccessPattern =
+                dbAnalysis.getAcquireAccessPattern(input.parentAcquire);
+        }
+        const ArtsMode mode = input.parentAcquire.getMode();
+
+        const bool inoutReadsCrossElementSelf =
+            mode == ArtsMode::inout &&
+            (depPattern == ArtsDependencePattern::wavefront_2d ||
+             (input.analysisManager &&
+              input.analysisManager->getDbAnalysis()
+                  .hasCrossElementSelfReadInLoop(input.parentAcquire,
+                                                 input.loopOp)));
+
+        const bool modeNeedsPatternStencilHalo =
+            mode == ArtsMode::in || inoutReadsCrossElementSelf;
+        bool patternSaysStencil = isStencilHaloDepPattern(depPattern);
+        if (!patternSaysStencil && acquireFacts)
+          patternSaysStencil =
+              acquireFacts->accessPattern == AccessPattern::Stencil;
+        if (!patternSaysStencil && acquireAccessPattern)
+          patternSaysStencil = *acquireAccessPattern == AccessPattern::Stencil;
+        if (!patternSaysStencil && accessPattern)
+          patternSaysStencil = *accessPattern == DbAccessPattern::stencil;
+
+        const bool strategySaysStencil =
+            input.distributionPattern &&
+            *input.distributionPattern == EdtDistributionPattern::stencil;
+        const bool strategyNeedsStencilHalo = mode == ArtsMode::in;
+
+        needsStencilHalo =
+            !isSingleElement &&
+            ((patternSaysStencil && modeNeedsPatternStencilHalo) ||
+             (strategySaysStencil && strategyNeedsStencilHalo));
+
+        ARTS_DEBUG(
+            "Acquire rewrite plan: mode="
+            << static_cast<int>(mode)
+            << " patternSaysStencil=" << patternSaysStencil << " allocPattern="
+            << (accessPattern ? static_cast<int>(*accessPattern) : -1)
+            << " acquirePattern="
+            << (acquireAccessPattern ? static_cast<int>(*acquireAccessPattern)
+                                     : -1)
+            << " strategySaysStencil=" << strategySaysStencil
+            << " inoutReadsCrossElementSelf=" << inoutReadsCrossElementSelf);
+
+        const bool isWavefrontSelfRead =
+            depPattern == ArtsDependencePattern::wavefront_2d &&
+            inoutReadsCrossElementSelf;
+        if (mode == ArtsMode::inout && inoutReadsCrossElementSelf &&
+            (patternSaysStencil || strategySaysStencil) &&
+            !isWavefrontSelfRead) {
+          ARTS_DEBUG(
+              "Keeping inout acquire coarse due to generic cross-element "
+              "self-read");
+          forceCoarseRewrite = true;
+          needsStencilHalo = false;
+        }
+
+        if (needsStencilHalo)
+          stencilExtent = input.AC->castToIndex(elemSizes.front(), input.loc);
+
+        if (input.distributionKind == DistributionKind::Tiling2D &&
+            input.parentAcquire.getMode() == ArtsMode::inout &&
+            elemSizes.size() > 1 && !isSingleElement && input.tiling2DGrid &&
+            input.tiling2DGrid->colWorkers) {
+          Value totalCols = input.AC->castToIndex(elemSizes[1], input.loc);
+          Value colWorkers =
+              input.AC->castToIndex(input.tiling2DGrid->colWorkers, input.loc);
+          Value colWorkerId =
+              input.AC->castToIndex(input.tiling2DGrid->colWorkerId, input.loc);
+
+          Value colWorkersMinusOne =
+              input.AC->create<arith::SubIOp>(input.loc, colWorkers, one);
+          Value colAdjusted = input.AC->create<arith::AddIOp>(
+              input.loc, totalCols, colWorkersMinusOne);
+          Value colChunk = input.AC->create<arith::DivUIOp>(
+              input.loc, colAdjusted, colWorkers);
+          Value colOffset =
+              input.AC->create<arith::MulIOp>(input.loc, colWorkerId, colChunk);
+
+          Value colNeedZero = input.AC->create<arith::CmpIOp>(
+              input.loc, arith::CmpIPredicate::uge, colOffset, totalCols);
+          Value colRemaining =
+              input.AC->create<arith::SubIOp>(input.loc, totalCols, colOffset);
+          Value colRemainingNonNeg = input.AC->create<arith::SelectOp>(
+              input.loc, colNeedZero, zero, colRemaining);
+          Value colCount = input.AC->create<arith::MinUIOp>(input.loc, colChunk,
+                                                            colRemainingNonNeg);
+
+          extraOffsets.push_back(colOffset);
+          extraSizes.push_back(colCount);
+          extraHintSizes.push_back(colCount);
+        }
+      }
+    }
+  }
+
+  plan.useStencilRewriter = needsStencilHalo;
+  plan.rewriteInput.singleElement = isSingleElement;
+  plan.rewriteInput.forceCoarse = forceCoarseRewrite;
+  plan.rewriteInput.stencilExtent = stencilExtent;
+  plan.rewriteInput.extraOffsets = std::move(extraOffsets);
+  plan.rewriteInput.extraSizes = std::move(extraSizes);
+  plan.rewriteInput.extraHintSizes = std::move(extraHintSizes);
+  return plan;
+}
+
+static std::optional<TaskAcquireWindow> computeTaskAcquireWindowInBlockSpace(
+    ArtsCodegen *AC, Location loc, DbAcquireOp parentAcquire,
+    DbAcquireOp taskAcquire, Value rootGuidValue, Value rootPtrValue,
+    DistributionKind distributionKind,
+    std::optional<EdtDistributionPattern> distributionPattern,
+    Value plannedElementOffset, Value plannedElementSize,
+    Value plannedElementSizeSeed, bool usesStencilHalo) {
+  if (!AC || !parentAcquire || !taskAcquire)
+    return std::nullopt;
+
+  PartitionMode mode =
+      taskAcquire.getPartitionMode().value_or(PartitionMode::coarse);
+  if (mode != PartitionMode::block && mode != PartitionMode::stencil)
+    return std::nullopt;
+
+  Value one = AC->createIndexConstant(1, loc);
+  Value zero = AC->createIndexConstant(0, loc);
+  Value blockSpan = one;
+  Value totalBlocks;
+  DbAllocOp rootAlloc;
+  if (auto allocFromGuid = rootGuidValue.getDefiningOp<DbAllocOp>())
+    rootAlloc = allocFromGuid;
+  else if (Operation *allocOp = DbUtils::getUnderlyingDbAlloc(rootPtrValue))
+    rootAlloc = dyn_cast<DbAllocOp>(allocOp);
+  else if (Operation *allocOp =
+               DbUtils::getUnderlyingDbAlloc(parentAcquire.getPtr()))
+    rootAlloc = dyn_cast<DbAllocOp>(allocOp);
+
+  if (rootAlloc) {
+    auto elementSizes = rootAlloc.getElementSizes();
+    if (!elementSizes.empty() && elementSizes.front())
+      blockSpan = AC->castToIndex(elementSizes.front(), loc);
+    auto outerSizes = rootAlloc.getSizes();
+    if (!outerSizes.empty() && outerSizes.front())
+      totalBlocks = AC->castToIndex(outerSizes.front(), loc);
+  }
+  blockSpan = AC->create<arith::MaxUIOp>(loc, blockSpan, one);
+
+  /// This helper intentionally reasons in leading-dimension block space only.
+  /// It converts the already chosen task-local element window into the single
+  /// block window used by DB slice metadata on 1-D / row-owned plans.
+  Value elementOffset = plannedElementOffset;
+  Value elementSize = plannedElementSizeSeed;
+  ArtsDependencePattern depPattern =
+      getEffectiveDepPattern(parentAcquire.getOperation())
+          .value_or(ArtsDependencePattern::unknown);
+  const bool useWavefrontInoutWindow =
+      parentAcquire.getMode() == ArtsMode::inout && usesStencilHalo &&
+      depPattern == ArtsDependencePattern::wavefront_2d;
+  const bool useRewrittenWindow =
+      ((parentAcquire.getMode() == ArtsMode::in &&
+        (usesStencilHalo || mode == PartitionMode::stencil)) ||
+       useWavefrontInoutWindow);
+
+  if (useRewrittenWindow) {
+    if (!taskAcquire.getOffsets().empty() && taskAcquire.getOffsets().front())
+      elementOffset = taskAcquire.getOffsets().front();
+    if (!taskAcquire.getSizes().empty() && taskAcquire.getSizes().front())
+      elementSize = taskAcquire.getSizes().front();
+  } else {
+    if (!taskAcquire.getSizes().empty() && taskAcquire.getSizes().front())
+      elementSize = taskAcquire.getSizes().front();
+
+    if (distributionKind == DistributionKind::TwoLevel &&
+        parentAcquire.getMode() != ArtsMode::in)
+      elementSize = plannedElementSize;
+
+    bool isStencilPattern =
+        distributionPattern &&
+        *distributionPattern == EdtDistributionPattern::stencil;
+    if (isStencilPattern && mode == PartitionMode::stencil &&
+        parentAcquire.getMode() != ArtsMode::in)
+      elementSize = AC->create<arith::AddIOp>(loc, elementSize, one);
+  }
+
+  elementOffset = AC->castToIndex(elementOffset, loc);
+  elementSize = AC->castToIndex(elementSize, loc);
+  elementSize = AC->create<arith::MaxUIOp>(loc, elementSize, one);
+
+  Value startBlock = AC->create<arith::DivUIOp>(loc, elementOffset, blockSpan);
+  Value endElem = AC->create<arith::AddIOp>(loc, elementOffset, elementSize);
+  endElem = AC->create<arith::SubIOp>(loc, endElem, one);
+  Value endBlock = AC->create<arith::DivUIOp>(loc, endElem, blockSpan);
+
+  Value startAboveMax;
+  if (totalBlocks) {
+    Value maxBlock = AC->create<arith::SubIOp>(loc, totalBlocks, one);
+    startAboveMax = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt,
+                                              startBlock, maxBlock);
+    Value clampedEnd = AC->create<arith::MinUIOp>(loc, endBlock, maxBlock);
+    endBlock =
+        AC->create<arith::SelectOp>(loc, startAboveMax, endBlock, clampedEnd);
+  }
+
+  Value blockCount = AC->create<arith::SubIOp>(loc, endBlock, startBlock);
+  blockCount = AC->create<arith::AddIOp>(loc, blockCount, one);
+  if (startAboveMax) {
+    startBlock =
+        AC->create<arith::SelectOp>(loc, startAboveMax, zero, startBlock);
+    blockCount =
+        AC->create<arith::SelectOp>(loc, startAboveMax, zero, blockCount);
+  }
+
+  return TaskAcquireWindow{elementOffset, elementSize, startBlock, blockCount};
+}
 
 ///===----------------------------------------------------------------------===///
 /// LoopInfo - Information about a loop within a parallel EDT
@@ -721,8 +1025,8 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   /// Create task EDT with DB rewiring
   EdtOp taskEdt = createTaskEdtWithRewiring(
       &AC, *loopInfoStorage, forOp, workerIV, originalParallel, redInfo);
-  copyDistributionAttrs(forOp.getOperation(), taskEdt.getOperation());
-  copyDistributionAttrs(forOp.getOperation(), forEpoch.getOperation());
+  copyPatternAttrs(forOp.getOperation(), taskEdt.getOperation());
+  copyPatternAttrs(forOp.getOperation(), forEpoch.getOperation());
 
   /// After worker loop, create result EDT (if reductions)
   AC.setInsertionPointAfter(workerLoop);
@@ -854,7 +1158,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         /*partition_sizes=*/SmallVector<Value>{});
     /// Worker-local partial reduction acquires already have the exact slot
     /// access mode and must not be re-inferred later.
-    partialAcqOp.setPreserveDepMode();
+    partialAcqOp.setPreserveAccessMode();
 
     reductionTaskDeps.push_back(partialAcqOp.getResult(1));
     reductionVarIndex[redInfo.reductionVars[i]] = i;
@@ -928,82 +1232,21 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
     auto setDbSpaceSliceFromAcquirePlan = [&](DbAcquireOp acquireOp,
                                               bool usesStencilHalo) {
+      /// Read-only acquires already get their task-local window from
+      /// rewriteAcquire(). This helper only updates the DB-space slice metadata
+      /// for write-capable acquires that need explicit block-space windows.
       if (!acquireOp || parentAcqOp.getMode() == ArtsMode::in)
         return;
 
       OpBuilder::InsertionGuard guard(AC->getBuilder());
       AC->setInsertionPoint(acquireOp);
 
-      PartitionMode mode =
-          acquireOp.getPartitionMode().value_or(PartitionMode::coarse);
-      /// Convert element-space task hints to DB-space slice coordinates for
-      /// partitioned acquires. This avoids out-of-range DB dependency slices
-      /// when block/stencil allocations use multi-row blocks.
-      if (mode != PartitionMode::stencil && mode != PartitionMode::block)
+      auto window = computeTaskAcquireWindowInBlockSpace(
+          AC, loc, parentAcqOp, acquireOp, rootGuidValue, rootPtrValue,
+          loopInfo.strategy.kind, distributionPattern, acquireOffsetVal,
+          loopInfo.bounds.iterCount, acquireHintSizeVal, usesStencilHalo);
+      if (!window)
         return;
-
-      Value one = AC->createIndexConstant(1, loc);
-      Value blockSpan = one;
-      Value totalBlocks;
-      DbAllocOp rootAlloc;
-      if (auto allocFromGuid = rootGuidValue.getDefiningOp<DbAllocOp>())
-        rootAlloc = allocFromGuid;
-      else if (Operation *allocOp = DbUtils::getUnderlyingDbAlloc(rootPtrValue))
-        rootAlloc = dyn_cast<DbAllocOp>(allocOp);
-      else if (Operation *allocOp =
-                   DbUtils::getUnderlyingDbAlloc(parentAcqOp.getPtr()))
-        rootAlloc = dyn_cast<DbAllocOp>(allocOp);
-
-      if (rootAlloc) {
-        auto elementSizes = rootAlloc.getElementSizes();
-        if (!elementSizes.empty() && elementSizes.front())
-          blockSpan = AC->castToIndex(elementSizes.front(), loc);
-        auto outerSizes = rootAlloc.getSizes();
-        if (!outerSizes.empty() && outerSizes.front())
-          totalBlocks = AC->castToIndex(outerSizes.front(), loc);
-      }
-      blockSpan = AC->create<arith::MaxUIOp>(loc, blockSpan, one);
-
-      Value elemOffset = acquireOffsetVal;
-      Value elemHintSize = acquireHintSizeVal;
-      /// Stencil slices may widen and shift by halo extent; DB-space slicing
-      /// must follow the rewritten task acquire window to keep dep indexing
-      /// valid inside task EDT bodies.
-      const bool useRewrittenWindow =
-          parentAcqOp.getMode() == ArtsMode::in &&
-          (usesStencilHalo || mode == PartitionMode::stencil);
-      if (useRewrittenWindow) {
-        if (!acquireOp.getOffsets().empty() && acquireOp.getOffsets().front())
-          elemOffset = acquireOp.getOffsets().front();
-        if (!acquireOp.getSizes().empty() && acquireOp.getSizes().front())
-          elemHintSize = acquireOp.getSizes().front();
-      } else {
-        /// Keep block-mode base aligned across dependencies for the same loop
-        /// slice.
-        if (!acquireOp.getSizes().empty() && acquireOp.getSizes().front())
-          elemHintSize = acquireOp.getSizes().front();
-
-        /// Two-level lowering computes node-wide acquire hints for alignment,
-        /// but write-capable dependencies must commit only the worker-local
-        /// iteration span to avoid over-acquiring neighboring DB blocks.
-        if (loopInfo.strategy.kind == DistributionKind::TwoLevel &&
-            parentAcqOp.getMode() != ArtsMode::in)
-          elemHintSize = loopInfo.bounds.iterCount;
-
-        /// Only true stencil-mode writes need the extra terminal element in
-        /// DB-space. Block-mode write deps use precise worker-local ranges;
-        /// widening them by one can over-acquire a neighboring block and
-        /// clobber a different writer's updates during full-block write-back.
-        bool isStencilPattern =
-            distributionPattern &&
-            *distributionPattern == EdtDistributionPattern::stencil;
-        if (isStencilPattern && mode == PartitionMode::stencil &&
-            parentAcqOp.getMode() != ArtsMode::in)
-          elemHintSize = AC->create<arith::AddIOp>(loc, elemHintSize, one);
-      }
-      elemOffset = AC->castToIndex(elemOffset, loc);
-      elemHintSize = AC->castToIndex(elemHintSize, loc);
-      elemHintSize = AC->create<arith::MaxUIOp>(loc, elemHintSize, one);
 
       /// Keep partition hint ranges worker-local for two-level write acquires.
       /// DbPartitioning consults partition_* hints; if these remain node-wide
@@ -1013,38 +1256,14 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
           parentAcqOp.getMode() != ArtsMode::in) {
         if (!acquireOp.getPartitionOffsets().empty())
           acquireOp.getPartitionOffsetsMutable().assign(
-              SmallVector<Value>{elemOffset});
+              SmallVector<Value>{window->elementOffset});
         if (!acquireOp.getPartitionSizes().empty())
           acquireOp.getPartitionSizesMutable().assign(
-              SmallVector<Value>{elemHintSize});
+              SmallVector<Value>{window->elementSize});
       }
-
-      Value startBlock = AC->create<arith::DivUIOp>(loc, elemOffset, blockSpan);
-      Value endElem = AC->create<arith::AddIOp>(loc, elemOffset, elemHintSize);
-      endElem = AC->create<arith::SubIOp>(loc, endElem, one);
-      Value endBlock = AC->create<arith::DivUIOp>(loc, endElem, blockSpan);
-
-      Value startAboveMax;
-      if (totalBlocks) {
-        Value maxBlock = AC->create<arith::SubIOp>(loc, totalBlocks, one);
-        startAboveMax = AC->create<arith::CmpIOp>(
-            loc, arith::CmpIPredicate::ugt, startBlock, maxBlock);
-        Value clampedEnd = AC->create<arith::MinUIOp>(loc, endBlock, maxBlock);
-        endBlock = AC->create<arith::SelectOp>(loc, startAboveMax, endBlock,
-                                               clampedEnd);
-      }
-
-      Value blockCount = AC->create<arith::SubIOp>(loc, endBlock, startBlock);
-      blockCount = AC->create<arith::AddIOp>(loc, blockCount, one);
-      if (startAboveMax) {
-        Value zero = AC->createIndexConstant(0, loc);
-        startBlock =
-            AC->create<arith::SelectOp>(loc, startAboveMax, zero, startBlock);
-        blockCount =
-            AC->create<arith::SelectOp>(loc, startAboveMax, zero, blockCount);
-      }
-      acquireOp.getOffsetsMutable().assign(SmallVector<Value>{startBlock});
-      acquireOp.getSizesMutable().assign(SmallVector<Value>{blockCount});
+      acquireOp.getOffsetsMutable().assign(
+          SmallVector<Value>{window->dbOffset});
+      acquireOp.getSizesMutable().assign(SmallVector<Value>{window->dbSize});
     };
 
     if (parentHasPartitionInfo) {

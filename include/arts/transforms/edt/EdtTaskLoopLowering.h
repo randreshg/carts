@@ -7,7 +7,7 @@
 #ifndef ARTS_TRANSFORMS_EDT_EDTTASKLOOPLOWERING_H
 #define ARTS_TRANSFORMS_EDT_EDTTASKLOOPLOWERING_H
 
-#include "arts/analysis/DistributionHeuristics.h"
+#include "arts/analysis/heuristics/DistributionHeuristics.h"
 #include "arts/codegen/Codegen.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "llvm/ADT/SetVector.h"

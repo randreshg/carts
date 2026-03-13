@@ -10,8 +10,7 @@
 #include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/utils/StencilAttributes.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/DenseSet.h"
@@ -30,7 +29,7 @@ static bool hasMultipleAllocationBlocks(DbAllocOp alloc) {
     return true;
 
   int64_t blockCount = 0;
-  if (ValueAnalysis::getConstantIndex(sizes.front(), blockCount))
+  if (ValueUtils::getConstantIndex(sizes.front(), blockCount))
     return blockCount > 1;
   return true;
 }
@@ -43,7 +42,7 @@ static bool hasSupportedAllocationShape(DbAllocOp alloc) {
 
   auto isPositiveOrDynamic = [](Value value) -> bool {
     int64_t constant = 0;
-    if (!ValueAnalysis::getConstantIndex(ValueAnalysis::stripNumericCasts(value),
+    if (!ValueUtils::getConstantIndex(ValueUtils::stripNumericCasts(value),
                                       constant))
       return true;
     return constant > 0;
@@ -219,14 +218,20 @@ static bool hasStencilReadInternodeEdtUse(DbAllocOp alloc,
         if (!edt || edt.getConcurrency() != EdtConcurrency::internode)
           return false;
 
-        AccessPattern pattern = acquireNode->getAccessPattern();
         if (!acquireNode->isReadOnlyAccess())
           return false;
 
-        bool hasStencilHint =
-            pattern == AccessPattern::Stencil ||
-            acquireOp->hasAttr(AttrNames::Operation::Stencil::StencilCenterOffset);
-        return hasStencilHint;
+        auto depPattern = getEffectiveDepPattern(acquireOp.getOperation())
+                              .value_or(ArtsDependencePattern::unknown);
+        if (isStencilFamilyDepPattern(depPattern) ||
+            acquireOp->hasAttr(AttrNames::Operation::StencilCenterOffset))
+          return true;
+
+        if (const DbAcquirePartitionFacts *facts =
+                dbAnalysis.getAcquirePartitionFacts(acquireOp))
+          return facts->accessPattern == AccessPattern::Stencil;
+
+        return acquireNode->getAccessPattern() == AccessPattern::Stencil;
       });
 }
 

@@ -40,8 +40,8 @@ void AnalysisManager::invalidate() {
     loopAnalysis->invalidate();
   if (stringAnalysis)
     stringAnalysis->invalidate();
-  if (heuristicsConfig)
-    heuristicsConfig->clearDecisions();
+  if (dbHeuristics)
+    dbHeuristics->clearDecisions();
   if (metadataManager)
     metadataManager->clear();
   cachedDiagnosticJson.reset();
@@ -92,14 +92,20 @@ const StringAnalysis &AnalysisManager::getStringAnalysis() const {
   return *stringAnalysis;
 }
 
-HeuristicsConfig &AnalysisManager::getHeuristicsConfig() {
-  if (!heuristicsConfig) {
+DbHeuristics &AnalysisManager::getDbHeuristics() {
+  if (!dbHeuristics) {
     /// Ensure MetadataManager and IdRegistry are initialized first
     auto &idRegistry = getMetadataManager().getIdRegistry();
-    heuristicsConfig = std::make_unique<HeuristicsConfig>(
-        abstractMachine, idRegistry, partitionFallback);
+    dbHeuristics = std::make_unique<DbHeuristics>(abstractMachine, idRegistry,
+                                                  partitionFallback);
   }
-  return *heuristicsConfig;
+  return *dbHeuristics;
+}
+
+EdtHeuristics &AnalysisManager::getEdtHeuristics() {
+  if (!edtHeuristics)
+    edtHeuristics = std::make_unique<EdtHeuristics>(abstractMachine);
+  return *edtHeuristics;
 }
 
 DbGraph &AnalysisManager::getDbGraph(func::FuncOp func) {
@@ -308,7 +314,7 @@ void AnalysisManager::captureDiagnostics() {
   /// Export applied optimizations with PGO-style mapping for ArtsMate
   /// correlation Pattern: compile-time decision -> affected runtime DB IDs
   Array appliedOptimizations;
-  for (const auto &decision : getHeuristicsConfig().getDecisions()) {
+  for (const auto &decision : getDbHeuristics().getDecisions()) {
     if (!decision.applied)
       continue; /// Skip rejected - ArtsMate decides what to suggest
 

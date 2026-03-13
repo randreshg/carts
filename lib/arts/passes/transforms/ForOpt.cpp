@@ -13,7 +13,7 @@
 
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/HeuristicsConfig.h"
+#include "arts/analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"

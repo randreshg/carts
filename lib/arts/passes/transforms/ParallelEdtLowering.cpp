@@ -18,7 +18,7 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/analysis/DistributionHeuristics.h"
+#include "arts/analysis/heuristics/DistributionHeuristics.h"
 #include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"

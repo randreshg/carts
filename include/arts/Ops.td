@@ -229,8 +229,8 @@ def DbAcquireOp : Arts_Op<"db_acquire", [AttrSizedOperandSegments]> {
     Optional<I1>:$bounds_valid,
     Variadic<Index>:$element_offsets,
     Variadic<Index>:$element_sizes,
-    OptionalAttr<PreserveDependencyModeAttr>:$preserve_dep_mode,
-    OptionalAttr<PreserveDependencyAttr>:$preserve_dependency,
+    OptionalAttr<PreserveAccessModeAttr>:$preserve_access_mode,
+    OptionalAttr<PreserveDepEdgeAttr>:$preserve_dep_edge,
     /// Segment attributes for multiple partition entries
     OptionalAttr<DenseI32ArrayAttr>:$partition_indices_segments,
     OptionalAttr<DenseI32ArrayAttr>:$partition_offsets_segments,
@@ -325,11 +325,21 @@ def DbAcquireOp : Arts_Op<"db_acquire", [AttrSizedOperandSegments]> {
 
     /// Mark or clear the authoritative dependency-mode contract carried by
     /// this acquire.
-    void setPreserveDepMode(bool preserve = true);
+    void setPreserveAccessMode(bool preserve = true);
 
     /// Mark or clear the explicit dependency-edge contract carried by
     /// this acquire.
-    void setPreserveDependency(bool preserve = true);
+    void setPreserveDepEdge(bool preserve = true);
+
+    /// Mark or clear the full explicit dependency contract carried by this
+    /// acquire. This preserves both the authoritative mode and the edge
+    /// itself.
+    void setExplicitDepContract(bool preserve = true);
+
+    /// Attach or clear the semantic dependence family for this acquire.
+    void setDepPattern(ArtsDependencePattern pattern);
+    void clearDepPattern();
+    std::optional<ArtsDependencePattern> getDepPattern();
 
     /// Check if this acquire has explicit partition hints (including sizes)
     bool hasExplicitPartitionHints();

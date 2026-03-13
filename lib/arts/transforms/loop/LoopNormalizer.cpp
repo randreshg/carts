@@ -17,6 +17,7 @@ void arts::copyLoopAttributes(Operation *source, Operation *target) {
     target->setAttr(AttrNames::Operation::Metadata::ArtsId, idAttr);
   if (auto loopAttr = source->getAttr(AttrNames::LoopMetadata::Name))
     target->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
+  copyPatternAttrs(source, target);
 }
 
 void arts::updateTripCountMetadata(Operation *loop, int64_t newTripCount) {

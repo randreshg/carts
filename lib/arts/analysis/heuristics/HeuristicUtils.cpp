@@ -5,7 +5,7 @@
 /// (Distribution) heuristic families.
 ///==========================================================================///
 
-#include "arts/analysis/HeuristicUtils.h"
+#include "arts/analysis/heuristics/HeuristicUtils.h"
 #include "arts/Dialect.h"
 #include "arts/analysis/loop/LoopNode.h"
 #include "arts/utils/OperationAttributes.h"

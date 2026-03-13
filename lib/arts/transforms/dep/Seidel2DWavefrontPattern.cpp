@@ -18,7 +18,7 @@
 ///   scf.for %t = ...
 ///     scf.for %wave = 0 .. W {
 ///       arts.edt <parallel> {
-///         arts.for(%tileI = biMin .. biMax) {
+///         arts.for(%tileRow = rowMin .. rowMax step tileRows) {
 ///           scf.for %i in tile
 ///             scf.for %j in tile
 ///               original update
@@ -30,6 +30,10 @@
 /// The weighted wavefront `wave = 2*tileI + tileJ` preserves the `(i-1,j+1)`
 /// dependence that breaks plain anti-diagonals while keeping each wave's
 /// parallel work as a top-level `arts.for` for the existing ForLowering path.
+///
+/// The inner `arts.for` iterates in row-space, not tile-index space. That lets
+/// later acquire planning reuse the normal row-block reasoning instead of
+/// rediscovering a tile-index to row-range mapping.
 ///==========================================================================///
 
 #include "arts/Dialect.h"
@@ -245,11 +249,13 @@ static Value createMinIndex(OpBuilder &builder, Location loc, Value lhs,
   return builder.create<arith::SelectOp>(loc, cmp, lhs, rhs);
 }
 
-static Value createMaxIndex(OpBuilder &builder, Location loc, Value lhs,
-                            Value rhs) {
-  Value cmp =
-      builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt, lhs, rhs);
-  return builder.create<arith::SelectOp>(loc, cmp, lhs, rhs);
+static Value createSubtractOrZero(OpBuilder &builder, Location loc, Value lhs,
+                                  Value rhs) {
+  Value canSubtract =
+      builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge, lhs, rhs);
+  Value diff = builder.create<arith::SubIOp>(loc, lhs, rhs);
+  Value zero = createZeroIndex(builder, loc);
+  return builder.create<arith::SelectOp>(loc, canSubtract, diff, zero);
 }
 
 static void rewriteSeidelWavefront(SeidelWavefrontMatch &match) {
@@ -285,12 +291,13 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match) {
   auto waveLoop = builder.create<scf::ForOp>(loc, zero, waveUbExclusive, one);
   copyArtsMetadataAttrs(match.parallelEdt.getOperation(),
                         waveLoop.getOperation());
+  setDepPattern(waveLoop.getOperation(), ArtsDependencePattern::wavefront_2d);
 
   OpBuilder waveBuilder = OpBuilder::atBlockBegin(waveLoop.getBody());
   Value wave = waveLoop.getInductionVar();
 
-  Value tmp = waveBuilder.create<arith::SubIOp>(loc, wave, numJTilesMinusOne);
-  Value clippedTmp = createMaxIndex(waveBuilder, loc, tmp, zero);
+  Value clippedTmp =
+      createSubtractOrZero(waveBuilder, loc, wave, numJTilesMinusOne);
   Value biMin = createCeilDivPositive(waveBuilder, loc, clippedTmp, 2);
 
   Value halfWave = waveBuilder.create<arith::DivUIOp>(loc, wave, two);
@@ -305,13 +312,22 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match) {
                         tileParallel.getOperation());
   copyWorkerTopologyAttrs(match.parallelEdt.getOperation(),
                           tileParallel.getOperation());
+  setDepPattern(tileParallel.getOperation(),
+                ArtsDependencePattern::wavefront_2d);
 
   Block &tileParallelBlock = tileParallel.getBody().front();
   OpBuilder tileBuilder = OpBuilder::atBlockBegin(&tileParallelBlock);
+  Value tileRowLb = tileBuilder.create<arith::AddIOp>(
+      loc, iLb, tileBuilder.create<arith::MulIOp>(loc, biMin, tileRows));
+  Value tileRowUb = tileBuilder.create<arith::AddIOp>(
+      loc, iLb,
+      tileBuilder.create<arith::MulIOp>(loc, biMaxExclusive, tileRows));
+
   auto tileFor = tileBuilder.create<arts::ForOp>(
-      loc, ValueRange{biMin}, ValueRange{biMaxExclusive}, ValueRange{one},
+      loc, ValueRange{tileRowLb}, ValueRange{tileRowUb}, ValueRange{tileRows},
       /*schedule*/ nullptr, /*reductionAccumulators*/ ValueRange{});
   copyArtsMetadataAttrs(match.rowFor.getOperation(), tileFor.getOperation());
+  setDepPattern(tileFor.getOperation(), ArtsDependencePattern::wavefront_2d);
 
   Region &tileRegion = tileFor.getRegion();
   if (tileRegion.empty())
@@ -321,12 +337,14 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match) {
     tileBlock.addArgument(builder.getIndexType(), loc);
 
   OpBuilder tileLoopBuilder = OpBuilder::atBlockBegin(&tileBlock);
-  Value bi = tileBlock.getArgument(0);
+  Value tileRowBase = tileBlock.getArgument(0);
+  Value biNumerator =
+      tileLoopBuilder.create<arith::SubIOp>(loc, tileRowBase, iLb);
+  Value bi = tileLoopBuilder.create<arith::DivUIOp>(loc, biNumerator, tileRows);
   Value bj = tileLoopBuilder.create<arith::SubIOp>(
       loc, wave, tileLoopBuilder.create<arith::MulIOp>(loc, bi, two));
 
-  Value iStart = tileLoopBuilder.create<arith::AddIOp>(
-      loc, iLb, tileLoopBuilder.create<arith::MulIOp>(loc, bi, tileRows));
+  Value iStart = tileRowBase;
   Value iEnd = createMinIndex(
       tileLoopBuilder, loc,
       tileLoopBuilder.create<arith::AddIOp>(loc, iStart, tileRows), iUb);

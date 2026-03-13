@@ -9,7 +9,7 @@
 
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/DistributionHeuristics.h"
+#include "arts/analysis/heuristics/DistributionHeuristics.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"

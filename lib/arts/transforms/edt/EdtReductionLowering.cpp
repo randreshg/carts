@@ -18,7 +18,7 @@
 ///==========================================================================///
 
 #include "arts/transforms/edt/EdtReductionLowering.h"
-#include "arts/analysis/DistributionHeuristics.h"
+#include "arts/analysis/heuristics/DistributionHeuristics.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/analysis/value/ValueAnalysis.h"
