@@ -20,7 +20,7 @@
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -45,7 +45,7 @@ static Value pickRepresentativeValue(ValueRange vals, unsigned &outIdx) {
     if (!v)
       continue;
     int64_t c = 0;
-    if (!ValueUtils::getConstantIndex(ValueUtils::stripNumericCasts(v), c)) {
+    if (!ValueAnalysis::getConstantIndex(ValueAnalysis::stripNumericCasts(v), c)) {
       outIdx = i;
       return v;
     }
@@ -125,12 +125,12 @@ static LoopNode *findBestLoopNode(ArrayRef<LoopNode *> loopNodes,
   for (LoopNode *loopNode : loopNodes) {
     if (!loopNode->dependsOnInductionVar(firstDynIdx))
       continue;
-    if (!offsetIsZero && !ValueUtils::dependsOn(firstDynIdx, partitionOffset))
+    if (!offsetIsZero && !ValueAnalysis::dependsOn(firstDynIdx, partitionOffset))
       continue;
 
     Value loopIV = loopNode->getInductionVar();
     bool offsetDependsOnIV = !offsetIsZero && partitionOffset &&
-                             ValueUtils::dependsOn(partitionOffset, loopIV);
+                             ValueAnalysis::dependsOn(partitionOffset, loopIV);
     bool isPreferred = !offsetDependsOnIV;
     int depth = loopNode->getNestingDepth();
 
@@ -283,7 +283,7 @@ bool PartitionBoundsAnalyzer::computePartitionBounds(DbAcquireNode *node) {
     return true;
 
   Value analysisOffset = partitionOffset;
-  analysisOffset = ValueUtils::stripConstantOffset(analysisOffset, nullptr);
+  analysisOffset = ValueAnalysis::stripConstantOffset(analysisOffset, nullptr);
 
   node->setOriginalBounds(std::make_pair(partitionOffset, partitionSize));
   AnalysisManager &AM = node->getAnalysis()->getAnalysisManager();
@@ -311,7 +311,7 @@ bool PartitionBoundsAnalyzer::computePartitionBounds(DbAcquireNode *node) {
       }
       for (Value idx : fullChain) {
         int64_t constVal;
-        if (!ValueUtils::getConstantIndex(idx, constVal)) {
+        if (!ValueAnalysis::getConstantIndex(idx, constVal)) {
           firstDynIdx = idx;
           break;
         }
@@ -324,7 +324,7 @@ bool PartitionBoundsAnalyzer::computePartitionBounds(DbAcquireNode *node) {
   }
 
   bool offsetIsZero =
-      ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(analysisOffset));
+      ValueAnalysis::isZeroConstant(ValueAnalysis::stripNumericCasts(analysisOffset));
   Value loopIdx = partitionIdx ? partitionIdx : firstDynIdx;
   if (!loopIdx) {
     if (offsetIsZero) {
@@ -451,12 +451,12 @@ std::optional<unsigned> PartitionBoundsAnalyzer::getPartitionOffsetDim(
     ARTS_DEBUG("  -> returning none (no offset)");
     return std::nullopt;
   }
-  Value offsetStripped = ValueUtils::stripNumericCasts(offset);
+  Value offsetStripped = ValueAnalysis::stripNumericCasts(offset);
   ARTS_DEBUG("  offsetStripped=" << offsetStripped << " isZero="
-                                 << ValueUtils::isZeroConstant(offsetStripped));
+                                 << ValueAnalysis::isZeroConstant(offsetStripped));
 
   int64_t constVal;
-  if (ValueUtils::getConstantIndex(offsetStripped, constVal)) {
+  if (ValueAnalysis::getConstantIndex(offsetStripped, constVal)) {
     ARTS_DEBUG("  -> returning none (constant offset "
                << constVal << " cannot be partition variable)");
     return std::nullopt;
@@ -464,24 +464,24 @@ std::optional<unsigned> PartitionBoundsAnalyzer::getPartitionOffsetDim(
 
   int64_t offsetConst = 0;
   Value offsetBase =
-      ValueUtils::stripConstantOffset(offsetStripped, &offsetConst);
+      ValueAnalysis::stripConstantOffset(offsetStripped, &offsetConst);
   if (offsetBase && offsetBase != offsetStripped) {
     ARTS_DEBUG("  normalized offset base=" << offsetBase
                                            << " const=" << offsetConst);
     offsetStripped = offsetBase;
   }
 
-  Value normalizedOffset = ValueUtils::stripSelectClamp(offsetStripped);
+  Value normalizedOffset = ValueAnalysis::stripSelectClamp(offsetStripped);
   auto matchesPartitionOffset = [&](Value candidate) -> bool {
     if (!candidate || !normalizedOffset)
       return false;
     Value normalizedCandidate =
-        ValueUtils::stripNumericCasts(ValueUtils::stripSelectClamp(candidate));
-    Value normalized = ValueUtils::stripNumericCasts(normalizedOffset);
-    if (ValueUtils::sameValue(normalizedCandidate, normalized) ||
-        ValueUtils::areValuesEquivalent(normalizedCandidate, normalized))
+        ValueAnalysis::stripNumericCasts(ValueAnalysis::stripSelectClamp(candidate));
+    Value normalized = ValueAnalysis::stripNumericCasts(normalizedOffset);
+    if (ValueAnalysis::sameValue(normalizedCandidate, normalized) ||
+        ValueAnalysis::areValuesEquivalent(normalizedCandidate, normalized))
       return true;
-    return ValueUtils::dependsOn(normalizedCandidate, normalized);
+    return ValueAnalysis::dependsOn(normalizedCandidate, normalized);
   };
 
   auto dependsOnPartitionOffset = [&](Value candidate,
@@ -489,12 +489,12 @@ std::optional<unsigned> PartitionBoundsAnalyzer::getPartitionOffsetDim(
     dependencyRoot = Value();
     if (!candidate)
       return false;
-    if (ValueUtils::dependsOn(candidate, offsetStripped)) {
+    if (ValueAnalysis::dependsOn(candidate, offsetStripped)) {
       dependencyRoot = offsetStripped;
       return true;
     }
     if (normalizedOffset && normalizedOffset != offsetStripped &&
-        ValueUtils::dependsOn(candidate, normalizedOffset)) {
+        ValueAnalysis::dependsOn(candidate, normalizedOffset)) {
       dependencyRoot = normalizedOffset;
       return true;
     }
@@ -523,7 +523,7 @@ std::optional<unsigned> PartitionBoundsAnalyzer::getPartitionOffsetDim(
         continue;
 
       for (unsigned i = 0; i < memrefStart; ++i) {
-        if (ValueUtils::dependsOn(fullChain[i], offsetStripped)) {
+        if (ValueAnalysis::dependsOn(fullChain[i], offsetStripped)) {
           ARTS_DEBUG("  partition offset appears in db_ref index; "
                      "disabling blocked partitioning");
           return std::nullopt;
@@ -535,7 +535,7 @@ std::optional<unsigned> PartitionBoundsAnalyzer::getPartitionOffsetDim(
       Value matchedIdx;
       for (unsigned i = memrefStart; i < fullChain.size(); ++i) {
         int64_t constVal = 0;
-        bool isConst = ValueUtils::getConstantIndex(fullChain[i], constVal);
+        bool isConst = ValueAnalysis::getConstantIndex(fullChain[i], constVal);
         if (!isConst && firstDynPos < 0)
           firstDynPos = static_cast<int64_t>(i - memrefStart);
 
@@ -547,7 +547,7 @@ std::optional<unsigned> PartitionBoundsAnalyzer::getPartitionOffsetDim(
         if (matchedOffset) {
           if (directDepends) {
             if (auto stride =
-                    ValueUtils::getOffsetStride(fullChain[i], dependencyRoot)) {
+                    ValueAnalysis::getOffsetStride(fullChain[i], dependencyRoot)) {
               if (*stride != 1) {
                 ARTS_DEBUG("  partition offset has stride "
                            << *stride << "; disabling blocked partitioning");
@@ -591,7 +591,7 @@ std::optional<unsigned> PartitionBoundsAnalyzer::getPartitionOffsetDim(
       if (matchedIdxPos < fullChain.size()) {
         Value idx = fullChain[matchedIdxPos];
         int64_t constVal;
-        if (!ValueUtils::getConstantIndex(idx, constVal)) {
+        if (!ValueAnalysis::getConstantIndex(idx, constVal)) {
           Value dependencyRoot;
           if (dependsOnPartitionOffset(idx, dependencyRoot) &&
               arts::isIndirectIndex(idx, dependencyRoot)) {
@@ -652,7 +652,7 @@ bool PartitionBoundsAnalyzer::needsFullRange(DbAcquireNode *node,
           }
           Value idx = fullChain[idxPos];
           int64_t constVal;
-          if (!ValueUtils::getConstantIndex(idx, constVal) &&
+          if (!ValueAnalysis::getConstantIndex(idx, constVal) &&
               arts::isIndirectIndex(idx, partitionOffset)) {
             indirectInPartitionedDim = true;
             break;

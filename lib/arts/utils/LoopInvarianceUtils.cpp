@@ -7,7 +7,7 @@
 ///==========================================================================///
 
 #include "arts/utils/LoopInvarianceUtils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
 namespace mlir {
@@ -18,20 +18,20 @@ bool isLoopInvariant(scf::ForOp loop, Value v) {
     return true;
   if (loop.isDefinedOutsideOfLoop(v))
     return true;
-  Value stripped = ValueUtils::stripNumericCasts(v);
-  return ValueUtils::isValueConstant(stripped);
+  Value stripped = ValueAnalysis::stripNumericCasts(v);
+  return ValueAnalysis::isValueConstant(stripped);
 }
 
 bool isSafeToHoistDivRem(scf::ForOp loop, Operation *op) {
   if (auto div = dyn_cast<arith::DivUIOp>(op)) {
     Value denom = div.getRhs();
     return isLoopInvariant(loop, denom) &&
-           ValueUtils::isProvablyNonZero(denom);
+           ValueAnalysis::isProvablyNonZero(denom);
   }
   if (auto rem = dyn_cast<arith::RemUIOp>(op)) {
     Value denom = rem.getRhs();
     return isLoopInvariant(loop, denom) &&
-           ValueUtils::isProvablyNonZero(denom);
+           ValueAnalysis::isProvablyNonZero(denom);
   }
   return false;
 }
@@ -48,7 +48,7 @@ bool isSafeDivRemToHoist(Operation *op, scf::ForOp loop,
   else
     return false;
 
-  if (!ValueUtils::isProvablyNonZero(denom))
+  if (!ValueAnalysis::isProvablyNonZero(denom))
     return false;
   if (!allOperandsDominate(op, loop, domInfo))
     return false;

@@ -10,7 +10,7 @@
 #include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -98,24 +98,24 @@ bool arts::isIndirectIndex(Value idx, Value partitionOffset, int depth) {
   if (!idx || depth > 8)
     return false;
 
-  idx = ValueUtils::stripNumericCasts(idx);
-  if (ValueUtils::isValueConstant(idx))
+  idx = ValueAnalysis::stripNumericCasts(idx);
+  if (ValueAnalysis::isValueConstant(idx))
     return false;
 
   if (arts::isArtsRuntimeQuery(idx))
     return false;
 
   if (partitionOffset) {
-    Value offsetStripped = ValueUtils::stripNumericCasts(partitionOffset);
+    Value offsetStripped = ValueAnalysis::stripNumericCasts(partitionOffset);
     if (idx == offsetStripped)
       return false;
   }
 
   if (auto blockArg = idx.dyn_cast<BlockArgument>()) {
     if (partitionOffset) {
-      Value offsetStripped = ValueUtils::stripNumericCasts(partitionOffset);
+      Value offsetStripped = ValueAnalysis::stripNumericCasts(partitionOffset);
       if (offsetStripped == blockArg ||
-          ValueUtils::dependsOn(offsetStripped, blockArg))
+          ValueAnalysis::dependsOn(offsetStripped, blockArg))
         return false;
     }
 
@@ -151,7 +151,7 @@ bool arts::isIndirectIndex(Value idx, Value partitionOffset, int depth) {
     bool isDbLoad = DbUtils::getUnderlyingDb(load.getMemref()) != nullptr;
     bool hasDynamicIndex = llvm::any_of(load.getIndices(), [](Value idx) {
       int64_t constVal = 0;
-      return !ValueUtils::getConstantIndex(idx, constVal);
+      return !ValueAnalysis::getConstantIndex(idx, constVal);
     });
     return isDbLoad || hasDynamicIndex;
   }
@@ -317,7 +317,7 @@ bool MemoryAccessClassifier::hasIndirectAccess(DbAcquireNode *node) {
           DbUtils::collectFullIndexChain(dbRef, memOp);
       for (Value idx : fullChain) {
         int64_t constVal;
-        if (ValueUtils::getConstantIndex(idx, constVal))
+        if (ValueAnalysis::getConstantIndex(idx, constVal))
           continue;
         if (arts::isIndirectIndex(idx, partOffset))
           return true;
@@ -343,7 +343,7 @@ bool MemoryAccessClassifier::hasDirectAccess(DbAcquireNode *node) {
       bool hasIndirect = false;
       for (Value idx : fullChain) {
         int64_t constVal;
-        if (ValueUtils::getConstantIndex(idx, constVal))
+        if (ValueAnalysis::getConstantIndex(idx, constVal))
           continue;
         if (arts::isIndirectIndex(idx, partOffset)) {
           hasIndirect = true;

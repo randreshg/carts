@@ -145,15 +145,15 @@ static bool matchAlphaBeta(Value storeVal, Value sumVal, Value oldCVal,
   outBeta = Value();
 
   auto matchSumTerm = [&](Value v, Value &alpha) -> bool {
-    v = ValueUtils::stripNumericCasts(v);
+    v = ValueAnalysis::stripNumericCasts(v);
     if (v == sumVal) {
       alpha = Value();
       return true;
     }
     Value a, b;
     if (matchMulFOp(v, a, b)) {
-      a = ValueUtils::stripNumericCasts(a);
-      b = ValueUtils::stripNumericCasts(b);
+      a = ValueAnalysis::stripNumericCasts(a);
+      b = ValueAnalysis::stripNumericCasts(b);
       if (a == sumVal) {
         alpha = b;
         return true;
@@ -167,15 +167,15 @@ static bool matchAlphaBeta(Value storeVal, Value sumVal, Value oldCVal,
   };
 
   auto matchCTerm = [&](Value v, Value &beta) -> bool {
-    v = ValueUtils::stripNumericCasts(v);
+    v = ValueAnalysis::stripNumericCasts(v);
     if (v == oldCVal) {
       beta = Value();
       return true;
     }
     Value a, b;
     if (matchMulFOp(v, a, b)) {
-      a = ValueUtils::stripNumericCasts(a);
-      b = ValueUtils::stripNumericCasts(b);
+      a = ValueAnalysis::stripNumericCasts(a);
+      b = ValueAnalysis::stripNumericCasts(b);
       if (a == oldCVal) {
         beta = b;
         return true;
@@ -189,7 +189,7 @@ static bool matchAlphaBeta(Value storeVal, Value sumVal, Value oldCVal,
   };
 
   /// Pattern 1: store = sum (alpha=1, beta=0)
-  if (ValueUtils::stripNumericCasts(storeVal) == sumVal) {
+  if (ValueAnalysis::stripNumericCasts(storeVal) == sumVal) {
     outAlpha = Value();
     outBeta = Value();
     return true;
@@ -199,8 +199,8 @@ static bool matchAlphaBeta(Value storeVal, Value sumVal, Value oldCVal,
   {
     Value a, b;
     if (matchMulFOp(storeVal, a, b)) {
-      a = ValueUtils::stripNumericCasts(a);
-      b = ValueUtils::stripNumericCasts(b);
+      a = ValueAnalysis::stripNumericCasts(a);
+      b = ValueAnalysis::stripNumericCasts(b);
       if (a == sumVal) {
         outAlpha = b;
         outBeta = Value();
@@ -317,7 +317,7 @@ static bool matchMatmulDotInArtsFor(ForOp artsFor, ReductionDotMatch &out) {
     return false;
 
   auto findLoad = [&](Value v) -> memref::LoadOp {
-    v = ValueUtils::stripNumericCasts(v);
+    v = ValueAnalysis::stripNumericCasts(v);
     return v.getDefiningOp<memref::LoadOp>();
   };
   loadA = findLoad(mulLhs);
@@ -404,11 +404,11 @@ static scf::ForOp createTiledForIfBeneficial(
 
   int64_t stepC = 0, lbC = 0, ubC = 0;
   bool hasConstStep =
-      ValueUtils::getConstantIndex(originalLoop.getStep(), stepC);
+      ValueAnalysis::getConstantIndex(originalLoop.getStep(), stepC);
   bool hasConstLb =
-      ValueUtils::getConstantIndex(originalLoop.getLowerBound(), lbC);
+      ValueAnalysis::getConstantIndex(originalLoop.getLowerBound(), lbC);
   bool hasConstUb =
-      ValueUtils::getConstantIndex(originalLoop.getUpperBound(), ubC);
+      ValueAnalysis::getConstantIndex(originalLoop.getUpperBound(), ubC);
   if (!hasConstStep || stepC != 1 || !hasConstLb || !hasConstUb)
     return nullptr;
 
@@ -439,9 +439,9 @@ static bool isTilingApplicable(scf::ForOp loop, int64_t tileSize,
   if (!loop || tileSize <= 1)
     return false;
   int64_t stepC = 0, lbC = 0, ubC = 0;
-  bool hasConstStep = ValueUtils::getConstantIndex(loop.getStep(), stepC);
-  bool hasConstLb = ValueUtils::getConstantIndex(loop.getLowerBound(), lbC);
-  bool hasConstUb = ValueUtils::getConstantIndex(loop.getUpperBound(), ubC);
+  bool hasConstStep = ValueAnalysis::getConstantIndex(loop.getStep(), stepC);
+  bool hasConstLb = ValueAnalysis::getConstantIndex(loop.getLowerBound(), lbC);
+  bool hasConstUb = ValueAnalysis::getConstantIndex(loop.getUpperBound(), ubC);
   if (!hasConstStep || stepC != 1 || !hasConstLb || !hasConstUb)
     return false;
   int64_t trip = ubC - lbC;
@@ -476,9 +476,9 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
     auto cOld =
         ib.create<memref::LoadOp>(iloc, m.memC, ValueRange{iIndex, jIV});
     Value scaled;
-    if (ValueUtils::isZeroConstant(beta)) {
+    if (ValueAnalysis::isZeroConstant(beta)) {
       scaled = zero;
-    } else if (ValueUtils::isOneConstant(beta)) {
+    } else if (ValueAnalysis::isOneConstant(beta)) {
       scaled = cOld;
     } else {
       scaled = createMul(ib, iloc, cOld, beta, kind);
@@ -530,7 +530,7 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
     aLoad = b.create<memref::LoadOp>(loc, m.memA, ValueRange{iIndex, kIV});
 
   Value aAlpha;
-  if (ValueUtils::isOneConstant(alpha))
+  if (ValueAnalysis::isOneConstant(alpha))
     aAlpha = aLoad;
   else
     aAlpha = createMul(b, loc, aLoad, alpha, kind);

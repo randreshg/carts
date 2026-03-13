@@ -48,7 +48,7 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "polygeist/Ops.h"
@@ -111,7 +111,7 @@ LocalizedIndices DbElementWiseIndexer::splitIndices(ValueRange globalIndices,
       if (isMatched[g])
         continue;
       if (globalIndices[g] == partitionIdx ||
-          ValueUtils::dependsOn(globalIndices[g], partitionIdx)) {
+          ValueAnalysis::dependsOn(globalIndices[g], partitionIdx)) {
         matchedGlobalIdx[p] = static_cast<int>(g);
         isMatched[g] = true;
         break;
@@ -130,7 +130,7 @@ LocalizedIndices DbElementWiseIndexer::splitIndices(ValueRange globalIndices,
       if (isMatched[g])
         continue;
       if (globalIndices[g] == baseOffset ||
-          ValueUtils::dependsOn(globalIndices[g], baseOffset)) {
+          ValueAnalysis::dependsOn(globalIndices[g], baseOffset)) {
         foundIdx = static_cast<int>(g);
         isMatched[g] = true;
         break;
@@ -361,7 +361,7 @@ LocalizedIndices DbElementWiseIndexer::localizeForFineGrained(
       if (isMatched[g])
         continue;
       if (globalIndices[g] == partitionIdx ||
-          ValueUtils::dependsOn(globalIndices[g], partitionIdx)) {
+          ValueAnalysis::dependsOn(globalIndices[g], partitionIdx)) {
         matchedGlobalIdx[p] = static_cast<int>(g);
         isMatched[g] = true;
         break;
@@ -379,7 +379,7 @@ LocalizedIndices DbElementWiseIndexer::localizeForFineGrained(
         if (isMatched[g])
           continue;
         if (globalIndices[g] == baseOffset ||
-            ValueUtils::dependsOn(globalIndices[g], baseOffset)) {
+            ValueAnalysis::dependsOn(globalIndices[g], baseOffset)) {
           /// Found a match - localize this dimension
           Value localIdx =
               builder.create<arith::SubIOp>(loc, globalIndices[g], baseOffset);

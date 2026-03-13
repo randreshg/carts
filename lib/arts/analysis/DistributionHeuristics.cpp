@@ -25,7 +25,7 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
@@ -267,10 +267,10 @@ Tiling2DWorkerGrid DistributionHeuristics::getTiling2DWorkerGrid(
   grid.colWorkerId = zero;
 
   if (auto totalWorkersConst =
-          ValueUtils::tryFoldConstantIndex(totalWorkersIndex)) {
+          ValueAnalysis::tryFoldConstantIndex(totalWorkersIndex)) {
     std::optional<int64_t> workersPerNodeConst = std::nullopt;
     if (workersPerNode)
-      workersPerNodeConst = ValueUtils::tryFoldConstantIndex(
+      workersPerNodeConst = ValueAnalysis::tryFoldConstantIndex(
           AC->castToIndex(workersPerNode, loc));
 
     int64_t colWorkersConst =
@@ -556,7 +556,7 @@ DistributionBounds DistributionHeuristics::recomputeBoundsInside(
   collectWithDeps(blockSize);
 
   IRMapping boundsMapper;
-  ValueUtils::cloneValuesIntoRegion(
+  ValueAnalysis::cloneValuesIntoRegion(
       boundsToClone, currentRegion, boundsMapper, AC->getBuilder(),
       /*allowMemoryEffectFree=*/true, isSafeRuntimeQuery);
 
@@ -568,7 +568,7 @@ DistributionBounds DistributionHeuristics::recomputeBoundsInside(
   /// Align lower bound to block boundary if needed
   Value chunkLowerBound = localLowerBound;
   if (alignmentBlockSize) {
-    if (auto lbConst = ValueUtils::tryFoldConstantIndex(localLowerBound)) {
+    if (auto lbConst = ValueAnalysis::tryFoldConstantIndex(localLowerBound)) {
       int64_t aligned = *lbConst - (*lbConst % *alignmentBlockSize);
       if (aligned != *lbConst) {
         chunkLowerBound = AC->createIndexConstant(aligned, loc);
@@ -613,7 +613,7 @@ DistributionBounds DistributionHeuristics::recomputeBoundsInside(
       if (Operation *defOp = wpnIndex.getDefiningOp()) {
         if (!currentRegion->isAncestor(defOp->getParentRegion())) {
           collectWithDeps(wpnIndex);
-          ValueUtils::cloneValuesIntoRegion(
+          ValueAnalysis::cloneValuesIntoRegion(
               boundsToClone, currentRegion, boundsMapper, AC->getBuilder(),
               /*allowMemoryEffectFree=*/true, isSafeRuntimeQuery);
           wpnIndex = boundsMapper.lookupOrDefault(wpnIndex);
@@ -737,7 +737,7 @@ Value DistributionHeuristics::computeDbAlignmentBlockSize(EdtOp parallelEdt,
       continue;
 
     Value elemSize = allocOp.getElementSizes().front();
-    if (auto constElem = ValueUtils::tryFoldConstantIndex(elemSize))
+    if (auto constElem = ValueAnalysis::tryFoldConstantIndex(elemSize))
       if (*constElem <= 1)
         continue;
 
@@ -756,8 +756,8 @@ Value DistributionHeuristics::computeDbAlignmentBlockSize(EdtOp parallelEdt,
 
       bool needsWriteAlignment = false;
       if (allocOp.getMode() != ArtsMode::in) {
-        auto elemConst = ValueUtils::tryFoldConstantIndex(elemSize);
-        auto partConst = ValueUtils::tryFoldConstantIndex(numPartitions);
+        auto elemConst = ValueAnalysis::tryFoldConstantIndex(elemSize);
+        auto partConst = ValueAnalysis::tryFoldConstantIndex(numPartitions);
         if (elemConst && partConst && *partConst > 0) {
           needsWriteAlignment = (*elemConst % *partConst) != 0;
         } else {
@@ -906,14 +906,14 @@ Value DistributionHeuristics::getForDispatchWorkerCount(
   case DistributionKind::Tiling2D: {
     Value totalWorkersIndex = AC->castToIndex(totalWorkers, loc);
     auto totalWorkersConst =
-        ValueUtils::tryFoldConstantIndex(totalWorkersIndex);
+        ValueAnalysis::tryFoldConstantIndex(totalWorkersIndex);
     if (!totalWorkersConst)
       break;
 
     std::optional<int64_t> workersPerNodeConst = std::nullopt;
     if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {
       Value workersPerNode = getWorkersPerNode(AC, loc, parallelEdt);
-      workersPerNodeConst = ValueUtils::tryFoldConstantIndex(
+      workersPerNodeConst = ValueAnalysis::tryFoldConstantIndex(
           AC->castToIndex(workersPerNode, loc));
     }
 

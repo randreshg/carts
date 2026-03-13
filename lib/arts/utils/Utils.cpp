@@ -55,7 +55,7 @@ bool isArtsRuntimeQuery(Value val) {
   if (!val)
     return false;
 
-  val = ValueUtils::stripNumericCasts(val);
+  val = ValueAnalysis::stripNumericCasts(val);
   Operation *defOp = val.getDefiningOp();
   if (!defOp)
     return false;

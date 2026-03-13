@@ -1,11 +1,11 @@
 ///==========================================================================///
-/// File: ValueUtils.h
+/// File: ValueAnalysis.h
 ///
-/// Utility class for working with MLIR Values, constants, and casts.
+/// Static analysis utilities for MLIR Values, constants, and casts.
 ///==========================================================================///
 
-#ifndef CARTS_UTILS_VALUEUTILS_H
-#define CARTS_UTILS_VALUEUTILS_H
+#ifndef CARTS_ANALYSIS_VALUE_VALUEANALYSIS_H
+#define CARTS_ANALYSIS_VALUE_VALUEANALYSIS_H
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
@@ -20,8 +20,8 @@
 namespace mlir {
 namespace arts {
 
-/// Utility class for working with MLIR Values, constants, and casts.
-class ValueUtils {
+/// Static analysis utilities for MLIR Values, constants, and casts.
+class ValueAnalysis {
 public:
   ///===----------------------------------------------------------------------===////
   /// Constant Value Analysis
@@ -193,4 +193,4 @@ public:
 } // namespace arts
 } // namespace mlir
 
-#endif // CARTS_UTILS_VALUEUTILS_H
+#endif // CARTS_ANALYSIS_VALUE_VALUEANALYSIS_H

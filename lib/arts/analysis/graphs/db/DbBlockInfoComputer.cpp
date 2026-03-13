@@ -17,7 +17,7 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
@@ -77,12 +77,12 @@ static LoopNode *findBestLoopNode(ArrayRef<LoopNode *> loopNodes,
   for (LoopNode *loopNode : loopNodes) {
     if (!loopNode->dependsOnInductionVar(firstDynIdx))
       continue;
-    if (!offsetIsZero && !ValueUtils::dependsOn(firstDynIdx, partitionOffset))
+    if (!offsetIsZero && !ValueAnalysis::dependsOn(firstDynIdx, partitionOffset))
       continue;
 
     Value loopIV = loopNode->getInductionVar();
     bool offsetDependsOnIV = !offsetIsZero && partitionOffset &&
-                             ValueUtils::dependsOn(partitionOffset, loopIV);
+                             ValueAnalysis::dependsOn(partitionOffset, loopIV);
     bool isPreferred = !offsetDependsOnIV;
     int depth = loopNode->getNestingDepth();
 
@@ -179,23 +179,23 @@ LogicalResult DbBlockInfoComputer::computeBlockInfo(DbAcquireNode *node,
           bool useLoopSize = false;
           int64_t hintConst = 0;
           int64_t loopConst = 0;
-          bool hintIsConst = ValueUtils::getConstantIndex(blockSize, hintConst);
-          bool loopIsConst = ValueUtils::getConstantIndex(loopSize, loopConst);
+          bool hintIsConst = ValueAnalysis::getConstantIndex(blockSize, hintConst);
+          bool loopIsConst = ValueAnalysis::getConstantIndex(loopSize, loopConst);
           bool offsetRelated = false;
           if (loopOffset && blockOffset) {
-            Value loopOffStripped = ValueUtils::stripNumericCasts(loopOffset);
-            Value blockOffStripped = ValueUtils::stripNumericCasts(blockOffset);
+            Value loopOffStripped = ValueAnalysis::stripNumericCasts(loopOffset);
+            Value blockOffStripped = ValueAnalysis::stripNumericCasts(blockOffset);
             if (loopOffStripped == blockOffStripped)
               offsetRelated = true;
             if (!offsetRelated &&
-                (ValueUtils::dependsOn(loopOffset, blockOffset) ||
-                 ValueUtils::dependsOn(blockOffset, loopOffset)))
+                (ValueAnalysis::dependsOn(loopOffset, blockOffset) ||
+                 ValueAnalysis::dependsOn(blockOffset, loopOffset)))
               offsetRelated = true;
             if (!offsetRelated) {
               int64_t loopOffConst = 0;
               int64_t blockOffConst = 0;
-              if (ValueUtils::getConstantIndex(loopOffStripped, loopOffConst) &&
-                  ValueUtils::getConstantIndex(blockOffStripped,
+              if (ValueAnalysis::getConstantIndex(loopOffStripped, loopOffConst) &&
+                  ValueAnalysis::getConstantIndex(blockOffStripped,
                                                blockOffConst) &&
                   loopOffConst == blockOffConst)
                 offsetRelated = true;
@@ -203,7 +203,7 @@ LogicalResult DbBlockInfoComputer::computeBlockInfo(DbAcquireNode *node,
           }
 
           bool loopSizeDependsOnOffset =
-              blockOffset && ValueUtils::dependsOn(loopSize, blockOffset);
+              blockOffset && ValueAnalysis::dependsOn(loopSize, blockOffset);
 
           if (loopSizeDependsOnOffset)
             useLoopSize = true;
@@ -219,7 +219,7 @@ LogicalResult DbBlockInfoComputer::computeBlockInfo(DbAcquireNode *node,
           }
         }
         if (partitionOffset &&
-            !ValueUtils::dependsOn(blockSize, partitionOffset)) {
+            !ValueAnalysis::dependsOn(blockSize, partitionOffset)) {
           func::FuncOp func = dbAcquireOp->getParentOfType<func::FuncOp>();
           if (func) {
             OpBuilder builder(dbAcquireOp);
@@ -229,11 +229,11 @@ LogicalResult DbBlockInfoComputer::computeBlockInfo(DbAcquireNode *node,
               Value loopUB = loopNode->getUpperBound();
               if (!loopUB)
                 continue;
-              Value ubDom = ValueUtils::traceValueToDominating(
+              Value ubDom = ValueAnalysis::traceValueToDominating(
                   loopUB, dbAcquireOp, builder, domInfo, loc);
               if (!ubDom)
                 continue;
-              if (ValueUtils::dependsOn(ubDom, partitionOffset)) {
+              if (ValueAnalysis::dependsOn(ubDom, partitionOffset)) {
                 blockSize = ubDom;
                 ARTS_DEBUG("  overriding blockSize from loop upper bound: "
                            << blockSize);
@@ -312,24 +312,24 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromWhile(
     return failure();
   DominanceInfo domInfo(func);
 
-  Value initDom = ValueUtils::traceValueToDominating(initValue, dbAcquireOp,
+  Value initDom = ValueAnalysis::traceValueToDominating(initValue, dbAcquireOp,
                                                      builder, domInfo, loc);
   if (!initDom)
     return failure();
 
-  Value startIdx = ValueUtils::ensureIndexType(initDom, builder, loc);
+  Value startIdx = ValueAnalysis::ensureIndexType(initDom, builder, loc);
   if (!startIdx)
     return failure();
 
   SmallVector<Value> blockSizes;
-  Value initStripped = ValueUtils::stripNumericCasts(initValue);
+  Value initStripped = ValueAnalysis::stripNumericCasts(initValue);
   for (Value bound : whileBounds) {
-    Value boundStripped = ValueUtils::stripNumericCasts(bound);
+    Value boundStripped = ValueAnalysis::stripNumericCasts(bound);
     if (auto addOp = boundStripped.getDefiningOp<arith::AddIOp>()) {
       Value lhs = addOp.getLhs();
       Value rhs = addOp.getRhs();
-      Value lhsStripped = ValueUtils::stripNumericCasts(lhs);
-      Value rhsStripped = ValueUtils::stripNumericCasts(rhs);
+      Value lhsStripped = ValueAnalysis::stripNumericCasts(lhs);
+      Value rhsStripped = ValueAnalysis::stripNumericCasts(rhs);
       Value sizeCandidate;
       if (lhsStripped == initStripped)
         sizeCandidate = rhs;
@@ -337,9 +337,9 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromWhile(
         sizeCandidate = lhs;
 
       if (sizeCandidate) {
-        Value sizeDom = ValueUtils::traceValueToDominating(
+        Value sizeDom = ValueAnalysis::traceValueToDominating(
             sizeCandidate, dbAcquireOp, builder, domInfo, loc);
-        Value sizeIdx = ValueUtils::ensureIndexType(sizeDom, builder, loc);
+        Value sizeIdx = ValueAnalysis::ensureIndexType(sizeDom, builder, loc);
         if (sizeIdx) {
           blockSizes.push_back(sizeIdx);
           continue;
@@ -347,9 +347,9 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromWhile(
       }
     }
 
-    Value boundDom = ValueUtils::traceValueToDominating(bound, dbAcquireOp,
+    Value boundDom = ValueAnalysis::traceValueToDominating(bound, dbAcquireOp,
                                                         builder, domInfo, loc);
-    Value boundIdx = ValueUtils::ensureIndexType(boundDom, builder, loc);
+    Value boundIdx = ValueAnalysis::ensureIndexType(boundDom, builder, loc);
     if (!boundIdx)
       continue;
     blockSizes.push_back(
@@ -445,7 +445,7 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromHints(
       }
       for (Value idx : fullChain) {
         int64_t constVal;
-        if (!ValueUtils::getConstantIndex(idx, constVal)) {
+        if (!ValueAnalysis::getConstantIndex(idx, constVal)) {
           firstDynIdx = idx;
           break;
         }
@@ -458,10 +458,10 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromHints(
   }
 
   Value analysisOffset = partitionOffset;
-  analysisOffset = ValueUtils::stripConstantOffset(analysisOffset, nullptr);
+  analysisOffset = ValueAnalysis::stripConstantOffset(analysisOffset, nullptr);
 
   bool offsetIsZero =
-      ValueUtils::isZeroConstant(ValueUtils::stripNumericCasts(analysisOffset));
+      ValueAnalysis::isZeroConstant(ValueAnalysis::stripNumericCasts(analysisOffset));
   Value loopIdx = partitionIdx ? partitionIdx : firstDynIdx;
   if (!loopIdx) {
     if (offsetIsZero) {
@@ -565,7 +565,7 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromForLoop(
       continue;
     Value loopIV = loopNode->getInductionVar();
     auto pickCandidateFromIndex = [&](Value idx) -> Value {
-      Value stripped = ValueUtils::stripNumericCasts(idx);
+      Value stripped = ValueAnalysis::stripNumericCasts(idx);
       if (stripped == loopIV)
         return arts::createZeroIndex(builder, loc);
 
@@ -639,12 +639,12 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromForLoop(
       continue;
     DominanceInfo domInfo(func);
 
-    Value offsetDom = ValueUtils::traceValueToDominating(
+    Value offsetDom = ValueAnalysis::traceValueToDominating(
         offsetCandidate, dbAcquireOp, builder, domInfo, loc);
     Value loopUpperBound = getLoopUpperBound(loopNode);
     if (!loopUpperBound)
       continue;
-    Value sizeDom = ValueUtils::traceValueToDominating(
+    Value sizeDom = ValueAnalysis::traceValueToDominating(
         loopUpperBound, dbAcquireOp, builder, domInfo, loc);
     if (!offsetDom || !sizeDom) {
       ARTS_DEBUG("  offset/size does not dominate for loop at "
@@ -652,8 +652,8 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromForLoop(
       continue;
     }
 
-    Value adjustedOffset = ValueUtils::ensureIndexType(offsetDom, builder, loc);
-    Value adjustedSize = ValueUtils::ensureIndexType(sizeDom, builder, loc);
+    Value adjustedOffset = ValueAnalysis::ensureIndexType(offsetDom, builder, loc);
+    Value adjustedSize = ValueAnalysis::ensureIndexType(sizeDom, builder, loc);
     if (!adjustedOffset || !adjustedSize)
       continue;
 

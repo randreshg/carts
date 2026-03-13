@@ -11,7 +11,7 @@
 #define CARTS_UTILS_LOOPUTILS_H
 
 #include "arts/Dialect.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
 namespace mlir {
@@ -39,13 +39,13 @@ inline bool isInnermostLoop(scf::ForOp loop) {
 }
 
 /// Check whether two scf::ForOp loops have compatible bounds (same lower
-/// bound, upper bound, and step). Uses ValueUtils::sameValue for comparison.
+/// bound, upper bound, and step). Uses ValueAnalysis::sameValue for comparison.
 /// Note: this overload is for scf::ForOp only; arts::ForOp has a separate
 /// bounds API and is handled in LoopFusion directly.
 inline bool haveCompatibleBounds(scf::ForOp a, scf::ForOp b) {
-  return ValueUtils::sameValue(a.getLowerBound(), b.getLowerBound()) &&
-         ValueUtils::sameValue(a.getUpperBound(), b.getUpperBound()) &&
-         ValueUtils::sameValue(a.getStep(), b.getStep());
+  return ValueAnalysis::sameValue(a.getLowerBound(), b.getLowerBound()) &&
+         ValueAnalysis::sameValue(a.getUpperBound(), b.getUpperBound()) &&
+         ValueAnalysis::sameValue(a.getStep(), b.getStep());
 }
 
 /// Collect upper bounds from a while-loop condition for the given iteration

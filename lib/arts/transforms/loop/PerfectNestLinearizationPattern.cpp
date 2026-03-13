@@ -27,7 +27,7 @@
 #include "arts/transforms/loop/LoopNormalizer.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
@@ -44,7 +44,7 @@ namespace arts {
 namespace {
 
 static bool isUnitStrideLoop(scf::ForOp loop) {
-  auto step = ValueUtils::tryFoldConstantIndex(loop.getStep());
+  auto step = ValueAnalysis::tryFoldConstantIndex(loop.getStep());
   return step && *step == 1;
 }
 
@@ -61,8 +61,8 @@ static std::optional<int64_t> getConstantUnitTripCount(scf::ForOp loop) {
   if (!loop || !isUnitStrideLoop(loop))
     return std::nullopt;
 
-  auto lb = ValueUtils::tryFoldConstantIndex(loop.getLowerBound());
-  auto ub = ValueUtils::tryFoldConstantIndex(loop.getUpperBound());
+  auto lb = ValueAnalysis::tryFoldConstantIndex(loop.getLowerBound());
+  auto ub = ValueAnalysis::tryFoldConstantIndex(loop.getUpperBound());
   if (!lb || !ub || *ub < *lb)
     return std::nullopt;
   return *ub - *lb;
@@ -120,7 +120,7 @@ static int64_t getRemainingPerfectNestDepth(scf::ForOp loop) {
 }
 
 static bool isZeroReductionFreeArtsFor(ForOp artsFor) {
-  auto step = ValueUtils::tryFoldConstantIndex(artsFor.getStep().front());
+  auto step = ValueAnalysis::tryFoldConstantIndex(artsFor.getStep().front());
   return artsFor.getLowerBound().size() == 1 &&
          artsFor.getUpperBound().size() == 1 && artsFor.getStep().size() == 1 &&
          artsFor.getReductionAccumulators().empty() && step && *step == 1;
@@ -188,9 +188,9 @@ bool PerfectNestLinearizationPattern::match(ForOp artsFor) {
     return false;
 
   Value outerIV = body.getArgument(0);
-  if (ValueUtils::dependsOn(nested.getLowerBound(), outerIV) ||
-      ValueUtils::dependsOn(nested.getUpperBound(), outerIV) ||
-      ValueUtils::dependsOn(nested.getStep(), outerIV))
+  if (ValueAnalysis::dependsOn(nested.getLowerBound(), outerIV) ||
+      ValueAnalysis::dependsOn(nested.getUpperBound(), outerIV) ||
+      ValueAnalysis::dependsOn(nested.getStep(), outerIV))
     return false;
 
   /// Profitability: only absorb one loop when the remaining perfectly nested
