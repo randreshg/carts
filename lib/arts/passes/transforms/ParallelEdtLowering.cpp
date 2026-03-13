@@ -254,7 +254,7 @@ private:
     clonedEdt.setType(EdtType::task);
     arts::setWorkers(clonedEdt.getOperation(), 0);
     arts::setWorkersPerNode(clonedEdt.getOperation(), 0);
-    clonedEdt->removeAttr(AttrNames::Operation::Nowait);
+    setNowait(clonedEdt, false);
 
     /// Update route: internode uses worker route, otherwise keep existing or 0
     Value routeVal = routeWorkers ? workerRoute : clonedEdt.getRoute();

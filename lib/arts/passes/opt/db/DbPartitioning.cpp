@@ -68,6 +68,7 @@
 #include "arts/utils/Debug.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
 ARTS_DEBUG_SETUP(db_partitioning);
 

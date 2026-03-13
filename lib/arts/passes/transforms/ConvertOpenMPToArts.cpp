@@ -32,6 +32,7 @@
 #include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/analysis/PartitioningHeuristics.h"
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/Utils.h"
 #include "arts/analysis/value/ValueAnalysis.h"

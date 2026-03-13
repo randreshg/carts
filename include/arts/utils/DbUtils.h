@@ -313,6 +313,26 @@ std::optional<int64_t> extractBlockSizeForAllocation(Value sizeHint,
 Value extractOriginalSize(Value numerator, Value denominator,
                           OpBuilder &builder, Location loc);
 
+/// Merge two DbAccessPattern values, keeping the higher-priority pattern.
+/// Priority: stencil > indexed > uniform > unknown.
+inline DbAccessPattern mergeDbAccessPattern(DbAccessPattern lhs,
+                                            DbAccessPattern rhs) {
+  auto rank = [](DbAccessPattern p) -> unsigned {
+    switch (p) {
+    case DbAccessPattern::stencil:
+      return 3;
+    case DbAccessPattern::indexed:
+      return 2;
+    case DbAccessPattern::uniform:
+      return 1;
+    case DbAccessPattern::unknown:
+      return 0;
+    }
+    return 0;
+  };
+  return rank(rhs) > rank(lhs) ? rhs : lhs;
+}
+
 } // namespace arts
 } // namespace mlir
 

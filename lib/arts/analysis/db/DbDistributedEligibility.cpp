@@ -10,6 +10,7 @@
 #include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/StencilAttributes.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -224,7 +225,7 @@ static bool hasStencilReadInternodeEdtUse(DbAllocOp alloc,
 
         bool hasStencilHint =
             pattern == AccessPattern::Stencil ||
-            acquireOp->hasAttr(AttrNames::Operation::StencilCenterOffset);
+            acquireOp->hasAttr(AttrNames::Operation::Stencil::StencilCenterOffset);
         return hasStencilHint;
       });
 }

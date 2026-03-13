@@ -202,7 +202,7 @@ void EdtLoweringPass::runOnOperation() {
         edtOp.setType(EdtType::task);
         arts::setWorkers(edtOp.getOperation(), 0);
         arts::setWorkersPerNode(edtOp.getOperation(), 0);
-        edtOp->removeAttr(AttrNames::Operation::Nowait);
+        setNowait(edtOp, false);
       }
       taskEdts.push_back(edtOp);
     });
@@ -286,8 +286,7 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   EdtCreateOp outlineOp =
       AC->create<EdtCreateOp>(loc, paramPack, depCount, routeVal);
 
-  outlineOp->setAttr(AttrNames::Operation::OutlinedFunc,
-                     AC->getBuilder().getStringAttr(outlinedFunc.getName()));
+  setOutlinedFunc(outlineOp, outlinedFunc.getName());
   int64_t baseId = getArtsId(edtOp);
   if (!baseId)
     baseId = idRegistry.getOrCreate(edtOp.getOperation());
@@ -295,8 +294,7 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   /// Set the create id for the outlined operation
   if (baseId) {
     int64_t createId = baseId * static_cast<int64_t>(idStride);
-    outlineOp->setAttr(AttrNames::Operation::ArtsCreateId,
-                       AC->getBuilder().getI64IntegerAttr(createId));
+    setArtsCreateId(outlineOp, createId);
     ARTS_DEBUG("  - EDT arts.create_id=" << createId << " (base=" << baseId
                                          << " x stride=" << idStride << ")");
   }

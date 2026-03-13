@@ -423,7 +423,7 @@ buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
   state.addAttribute("dbMode", dbModeAttr);
   state.addAttribute("elementType", elementTypeAttr);
   state.addAttribute(
-      AttrNames::Operation::PartitionMode,
+      AttrNames::Operation::Partition::PartitionMode,
       PartitionModeAttr::get(builder.getContext(), partitionMode));
 
   state.addOperands(route);
@@ -496,7 +496,7 @@ void DbAcquireOp::setPreserveDepMode(bool preserve) {
     setPreserveDepModeAttr(PreserveDependencyModeAttr::get(getContext()));
     return;
   }
-  (*this)->removeAttr(AttrNames::Operation::PreserveDependencyMode);
+  (*this)->removeAttr(AttrNames::Operation::Metadata::PreserveDependencyMode);
 }
 
 void DbAcquireOp::setPreserveDependency(bool preserve) {
@@ -504,7 +504,7 @@ void DbAcquireOp::setPreserveDependency(bool preserve) {
     setPreserveDependencyAttr(PreserveDependencyAttr::get(getContext()));
     return;
   }
-  (*this)->removeAttr(AttrNames::Operation::PreserveDependency);
+  (*this)->removeAttr(AttrNames::Operation::Metadata::PreserveDependency);
 }
 
 void DbAcquireOp::copyPartitionSegmentsFrom(DbAcquireOp source) {
@@ -692,7 +692,7 @@ static void addDbAcquireOperandsAndAttrs(
       resolvedMode = *parentMode;
   }
   state.addAttribute(
-      AttrNames::Operation::PartitionMode,
+      AttrNames::Operation::Partition::PartitionMode,
       PartitionModeAttr::get(builder.getContext(), resolvedMode));
 }
 
