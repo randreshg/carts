@@ -18,6 +18,7 @@
 #include <cstdint>
 
 #include "arts/Dialect.h"
+#include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/transforms/db/DbRewriter.h"
 #include "arts/utils/DbUtils.h"
@@ -146,9 +147,9 @@ void RuntimeQueryOp::getCanonicalizationPatterns(RewritePatternSet &results,
 bool isArtsRegion(Operation *op) { return isa<EdtOp>(op) || isa<EpochOp>(op); }
 bool isArtsOp(Operation *op) {
   return isArtsRegion(op) ||
-         isa<arts::BarrierOp, arts::AllocOp, arts::DbAllocOp,
-             arts::DbAcquireOp, arts::DbReleaseOp, arts::DbFreeOp,
-             arts::DbControlOp, arts::RuntimeQueryOp>(op);
+         isa<arts::BarrierOp, arts::AllocOp, arts::DbAllocOp, arts::DbAcquireOp,
+             arts::DbReleaseOp, arts::DbFreeOp, arts::DbControlOp,
+             arts::RuntimeQueryOp>(op);
 }
 
 /// Arts Dialect Types
@@ -824,8 +825,7 @@ void DbAcquireOp::build(
 }
 
 void LoweringContractOp::build(OpBuilder &builder, OperationState &state,
-                               Value target,
-                               const LoweringContractInfo &info) {
+                               Value target, const LoweringContractInfo &info) {
   build(builder, state, target, info.depPattern, info.distributionKind,
         info.distributionPattern, info.distributionVersion,
         SmallVector<int64_t>(info.ownerDims.begin(), info.ownerDims.end()),
@@ -839,7 +839,7 @@ void LoweringContractOp::build(OpBuilder &builder, OperationState &state,
         SmallVector<int64_t>(info.stencilIndependentDims.begin(),
                              info.stencilIndependentDims.end()),
         info.esdByteOffset, info.esdByteSize, info.cachedStartBlock,
-        info.cachedBlockCount, info.postDbRefined, info.inferredDbMode,
+        info.cachedBlockCount, info.postDbRefined,
         info.estimatedTaskCost, info.criticalPathDistance);
 }
 
@@ -856,41 +856,38 @@ void LoweringContractOp::build(
     std::optional<int64_t> esdByteOffset, std::optional<int64_t> esdByteSize,
     std::optional<int64_t> cachedStartBlock,
     std::optional<int64_t> cachedBlockCount, bool postDbRefined,
-    std::optional<int64_t> inferredDbMode,
     std::optional<int64_t> estimatedTaskCost,
-    std::optional<int64_t> criticalPathDistance) {
+    std::optional<int64_t> criticalPathDistance,
+    std::optional<int64_t> contractKind) {
   state.addOperands(target);
   state.addOperands(blockShape);
   state.addOperands(minOffsets);
   state.addOperands(maxOffsets);
   state.addOperands(writeFootprint);
-  state.addAttribute(LoweringContractOp::getOperandSegmentSizesAttrName(
-                         state.name),
-                     builder.getDenseI32ArrayAttr(
-                         {1, static_cast<int32_t>(blockShape.size()),
-                          static_cast<int32_t>(minOffsets.size()),
-                          static_cast<int32_t>(maxOffsets.size()),
-                          static_cast<int32_t>(writeFootprint.size())}));
+  state.addAttribute(
+      LoweringContractOp::getOperandSegmentSizesAttrName(state.name),
+      builder.getDenseI32ArrayAttr(
+          {1, static_cast<int32_t>(blockShape.size()),
+           static_cast<int32_t>(minOffsets.size()),
+           static_cast<int32_t>(maxOffsets.size()),
+           static_cast<int32_t>(writeFootprint.size())}));
 
   auto *ctx = builder.getContext();
   auto i64Type = IntegerType::get(ctx, 64);
 
   if (depPattern)
-    state.addAttribute(
-        AttrNames::Operation::Contract::DepPatternKey,
-        ArtsDepPatternAttr::get(ctx, *depPattern));
+    state.addAttribute(AttrNames::Operation::Contract::DepPatternKey,
+                       ArtsDepPatternAttr::get(ctx, *depPattern));
   if (distributionKind)
-    state.addAttribute(
-        AttrNames::Operation::Contract::DistributionKind,
-        EdtDistributionKindAttr::get(ctx, *distributionKind));
+    state.addAttribute(AttrNames::Operation::Contract::DistributionKind,
+                       EdtDistributionKindAttr::get(ctx, *distributionKind));
   if (distributionPattern)
     state.addAttribute(
         AttrNames::Operation::Contract::DistributionPattern,
         EdtDistributionPatternAttr::get(ctx, *distributionPattern));
   if (distributionVersion)
-    state.addAttribute(
-        AttrNames::Operation::Contract::DistributionVersion,
-        IntegerAttr::get(i64Type, *distributionVersion));
+    state.addAttribute(AttrNames::Operation::Contract::DistributionVersion,
+                       IntegerAttr::get(i64Type, *distributionVersion));
   if (!ownerDims.empty())
     state.addAttribute(AttrNames::Operation::Contract::OwnerDims,
                        builder.getDenseI64ArrayAttr(ownerDims));
@@ -901,9 +898,8 @@ void LoweringContractOp::build(
     state.addAttribute(AttrNames::Operation::Contract::SupportedBlockHalo,
                        UnitAttr::get(ctx));
   if (!stencilIndependentDims.empty())
-    state.addAttribute(
-        AttrNames::Operation::Contract::StencilIndependentDims,
-        builder.getDenseI64ArrayAttr(stencilIndependentDims));
+    state.addAttribute(AttrNames::Operation::Contract::StencilIndependentDims,
+                       builder.getDenseI64ArrayAttr(stencilIndependentDims));
   if (esdByteOffset)
     state.addAttribute(AttrNames::Operation::Contract::EsdByteOffset,
                        IntegerAttr::get(i64Type, *esdByteOffset));
@@ -919,16 +915,15 @@ void LoweringContractOp::build(
   if (postDbRefined)
     state.addAttribute(AttrNames::Operation::Contract::PostDbRefined,
                        UnitAttr::get(ctx));
-  if (inferredDbMode)
-    state.addAttribute(AttrNames::Operation::Contract::InferredDbMode,
-                       IntegerAttr::get(i64Type, *inferredDbMode));
   if (estimatedTaskCost)
     state.addAttribute(AttrNames::Operation::Contract::EstimatedTaskCost,
                        IntegerAttr::get(i64Type, *estimatedTaskCost));
   if (criticalPathDistance)
-    state.addAttribute(
-        AttrNames::Operation::Contract::CriticalPathDistance,
-        IntegerAttr::get(i64Type, *criticalPathDistance));
+    state.addAttribute(AttrNames::Operation::Contract::CriticalPathDistance,
+                       IntegerAttr::get(i64Type, *criticalPathDistance));
+  if (contractKind)
+    state.addAttribute(AttrNames::Operation::Contract::ContractKindKey,
+                       IntegerAttr::get(i64Type, *contractKind));
 }
 
 LogicalResult DbAcquireOp::verify() {
@@ -970,7 +965,7 @@ LogicalResult DbAcquireOp::verify() {
   /// Validate indices are not used on single-element datablocks
   if (numIndices > 0) {
     Operation *sourceDb = DbUtils::getUnderlyingDb(getSourcePtr());
-    if (DbUtils::hasSingleSize(sourceDb)) {
+    if (DbAnalysis::hasSingleSize(sourceDb)) {
       auto partMode = getPartitionMode();
       bool awaitingPartitioning =
           partMode && (*partMode == PartitionMode::fine_grained ||
@@ -987,9 +982,8 @@ LogicalResult DbAcquireOp::verify() {
 }
 
 LogicalResult LoweringContractOp::verify() {
-  auto ownerDims =
-      (*this)->getAttrOfType<DenseI64ArrayAttr>(
-          AttrNames::Operation::Contract::OwnerDims);
+  auto ownerDims = (*this)->getAttrOfType<DenseI64ArrayAttr>(
+      AttrNames::Operation::Contract::OwnerDims);
   size_t expectedRank = ownerDims ? ownerDims.size() : 0;
 
   auto verifyRankedOperands = [&](OperandRange values,

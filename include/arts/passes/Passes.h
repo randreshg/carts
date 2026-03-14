@@ -43,7 +43,8 @@ std::unique_ptr<Pass> createPatternDiscoveryPass(AnalysisManager *AM,
 std::unique_ptr<Pass> createDCEPass();
 
 /// EDT and loop-structure transformation passes.
-std::unique_ptr<Pass> createEdtStructuralOptPass(AnalysisManager *AM, bool runAnalysis);
+std::unique_ptr<Pass> createEdtStructuralOptPass(AnalysisManager *AM,
+                                                 bool runAnalysis);
 std::unique_ptr<Pass> createConcurrencyPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createCreateDbsPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createDbModeTighteningPass(AnalysisManager *AM);

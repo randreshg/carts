@@ -12,7 +12,20 @@
 namespace mlir {
 namespace arts {
 
+/// Discriminator for the high-level computational pattern a lowering contract
+/// represents.  When the field is `Unknown` on a `LoweringContractInfo`,
+/// `getEffectiveKind()` will attempt to derive the kind from `depPattern`.
+enum class ContractKind : int64_t {
+  Unknown = 0,
+  Stencil = 1,
+  Elementwise = 2,
+  Matmul = 3,
+  Triangular = 4,
+  Replicated = 5
+};
+
 struct LoweringContractInfo {
+  ContractKind kind = ContractKind::Unknown;
   std::optional<ArtsDepPattern> depPattern;
   std::optional<EdtDistributionKind> distributionKind;
   std::optional<EdtDistributionPattern> distributionPattern;
@@ -43,9 +56,6 @@ struct LoweringContractInfo {
   // Post-DB refinement marker (DT-1)
   bool postDbRefined = false;
 
-  // Inferred DB mode (EXT-DB-1)
-  std::optional<int64_t> inferredDbMode;
-
   // Task cost estimate (ET-1)
   std::optional<int64_t> estimatedTaskCost;
 
@@ -53,8 +63,8 @@ struct LoweringContractInfo {
   std::optional<int64_t> criticalPathDistance;
 
   bool hasDistributionContract() const {
-    return depPattern || distributionKind || distributionPattern ||
-           distributionVersion;
+    return kind != ContractKind::Unknown || depPattern || distributionKind ||
+           distributionPattern || distributionVersion;
   }
 
   bool hasSpatialContract() const {
@@ -67,12 +77,11 @@ struct LoweringContractInfo {
   }
 
   bool hasRuntimeHints() const {
-    return esdByteOffset || esdByteSize || cachedStartBlock ||
-           cachedBlockCount;
+    return esdByteOffset || esdByteSize || cachedStartBlock || cachedBlockCount;
   }
 
   bool hasAnalysisRefinements() const {
-    return postDbRefined || inferredDbMode || estimatedTaskCost ||
+    return postDbRefined || estimatedTaskCost ||
            criticalPathDistance;
   }
 
@@ -81,7 +90,14 @@ struct LoweringContractInfo {
            !hasRuntimeHints() && !hasAnalysisRefinements();
   }
 
-  bool isStencilFamily() const;
+  /// Resolve the effective ContractKind: returns `kind` when explicitly set,
+  /// otherwise derives from `depPattern`.
+  ContractKind getEffectiveKind() const;
+
+  bool isStencilFamily() const {
+    return getEffectiveKind() == ContractKind::Stencil;
+  }
+
   bool hasOwnerDims() const { return !ownerDims.empty(); }
   bool hasExplicitStencilContract() const;
   bool usesStencilDistribution() const;
@@ -89,20 +105,16 @@ struct LoweringContractInfo {
   std::optional<SmallVector<int64_t, 4>> getStaticBlockShape() const;
   std::optional<SmallVector<int64_t, 4>> getStaticMinOffsets() const;
   std::optional<SmallVector<int64_t, 4>> getStaticMaxOffsets() const;
-  std::optional<SmallVector<int64_t, 4>> getStaticWriteFootprint() const;
 };
 
 struct AcquireRewriteContract {
   bool applyStencilHalo = false;
-  bool preserveParentDependencyRange = false;
-  bool usePartitionSliceAsDependencyWindow = false;
+  bool preserveParentDepRange = false;
+  bool usePartitionSliceAsDepWindow = false;
   SmallVector<int64_t, 4> ownerDims;
   SmallVector<int64_t, 4> haloMinOffsets;
   SmallVector<int64_t, 4> haloMaxOffsets;
 };
-
-/// Collect all LoweringContractOps that target the given value.
-SmallVector<LoweringContractOp> collectLoweringContractOps(Value target);
 
 LoweringContractOp getLoweringContractOp(Value target);
 std::optional<LoweringContractInfo> getLoweringContract(Value target);
@@ -123,7 +135,6 @@ LoweringContractOp upsertLoweringContract(OpBuilder &builder, Location loc,
                                           const LoweringContractInfo &info);
 void copyLoweringContract(Value source, Value target, OpBuilder &builder,
                           Location loc);
-void eraseLoweringContracts(Value target);
 
 } // namespace arts
 } // namespace mlir

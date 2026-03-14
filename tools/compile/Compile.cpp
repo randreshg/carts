@@ -221,7 +221,8 @@ static cl::opt<PipelineStage> StopAt(
 
 static bool shouldExportDetailedDiagnose(PipelineStage stopAt) {
   return stopAt == PipelineStage::Complete ||
-         static_cast<int>(stopAt) >= static_cast<int>(PipelineStage::PreLowering);
+         static_cast<int>(stopAt) >=
+             static_cast<int>(PipelineStage::PreLowering);
 }
 
 ///===----------------------------------------------------------------------===///

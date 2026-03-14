@@ -427,9 +427,9 @@ def LoweringContractOp : Arts_Op<"lowering_contract",
     OptionalAttr<I64Attr>:$cached_start_block,
     OptionalAttr<I64Attr>:$cached_block_count,
     OptionalAttr<UnitAttr>:$post_db_refined,
-    OptionalAttr<I64Attr>:$inferred_db_mode,
     OptionalAttr<I64Attr>:$estimated_task_cost,
-    OptionalAttr<I64Attr>:$critical_path_distance
+    OptionalAttr<I64Attr>:$critical_path_distance,
+    OptionalAttr<I64Attr>:$contract_kind
   );
   let assemblyFormat = [{
     `(` $target `:` type($target) `)`
@@ -466,9 +466,9 @@ def LoweringContractOp : Arts_Op<"lowering_contract",
                    CArg<"std::optional<int64_t>", "std::nullopt">:$cachedStartBlock,
                    CArg<"std::optional<int64_t>", "std::nullopt">:$cachedBlockCount,
                    CArg<"bool", "false">:$postDbRefined,
-                   CArg<"std::optional<int64_t>", "std::nullopt">:$inferredDbMode,
                    CArg<"std::optional<int64_t>", "std::nullopt">:$estimatedTaskCost,
-                   CArg<"std::optional<int64_t>", "std::nullopt">:$criticalPathDistance)>
+                   CArg<"std::optional<int64_t>", "std::nullopt">:$criticalPathDistance,
+                   CArg<"std::optional<int64_t>", "std::nullopt">:$contractKind)>
   ];
 }
 
