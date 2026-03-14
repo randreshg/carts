@@ -1,6 +1,6 @@
 ///==========================================================================///
-/// File: Db.cpp
-/// Pass for DB mode adjustments based on access patterns.
+/// File: DbModeTightening.cpp
+/// Pass for DB mode tightening and storage-type inference.
 /// Partitioning logic has been moved to DbPartitioning.cpp.
 ///
 /// Example:
@@ -35,7 +35,7 @@
 #include "arts/utils/Utils.h"
 #include <cstdlib>
 
-ARTS_DEBUG_SETUP(db);
+ARTS_DEBUG_SETUP(db_mode_tightening);
 
 using namespace mlir;
 using namespace mlir::func;
@@ -76,7 +76,8 @@ static bool isIndexFullCoverage(Value idx, Value dimSize,
   /// Constant index only covers full range if size == 1.
   auto idxConstOpt = ValueAnalysis::tryFoldConstantIndex(idx);
   if (idxConstOpt)
-    return dimConstOpt && *dimConstOpt == 1 && *idxConstOpt == 0;
+    /// A constant index alone cannot cover a non-unit dimension.
+    return false;
 
   LoopNode *best = nullptr;
   LoopNode::IVExpr bestExpr;
@@ -162,15 +163,59 @@ static bool writesFullAllocation(DbAcquireNode *acqNode, DbAllocOp allocOp,
   return true;
 }
 
+/// Recursively collect combined access modes from all acquire levels.
+static void collectModesRecursive(DbAcquireNode *acqNode, ArtsMode &combined) {
+  ArtsMode mode = acqNode->getDbAcquireOp().getMode();
+  combined = combineAccessModes(combined, mode);
+  acqNode->forEachChildNode([&](NodeBase *child) {
+    if (auto *nestedAcq = dyn_cast<DbAcquireNode>(child))
+      collectModesRecursive(nestedAcq, combined);
+  });
+}
+
+/// Recursively check whether any acquire has a distribution contract.
+static void checkDistributedRecursive(DbAcquireNode *acqNode,
+                                      bool &isLocalOnly) {
+  if (!isLocalOnly)
+    return;
+  const DbAcquirePartitionFacts &facts = acqNode->getPartitionFacts();
+  if (facts.hasDistributionContract) {
+    isLocalOnly = false;
+    return;
+  }
+  acqNode->forEachChildNode([&](NodeBase *child) {
+    if (auto *nestedAcq = dyn_cast<DbAcquireNode>(child))
+      checkDistributedRecursive(nestedAcq, isLocalOnly);
+  });
+}
+
+/// Entry for collectAcquiresRecursive: acquire info with program order.
+struct AcquireOrderEntry {
+  unsigned order;
+  DbAcquireNode *node;
+};
+
+/// Recursively collect all acquire nodes with their program order.
+static void collectAcquiresRecursive(DbAcquireNode *acqNode, DbGraph &graph,
+                                     SmallVectorImpl<AcquireOrderEntry> &out) {
+  DbAcquireOp acqOp = acqNode->getDbAcquireOp();
+  unsigned order = graph.getOpOrder(acqOp.getOperation());
+  out.push_back({order, acqNode});
+  acqNode->forEachChildNode([&](NodeBase *child) {
+    if (auto *nestedAcq = dyn_cast<DbAcquireNode>(child))
+      collectAcquiresRecursive(nestedAcq, graph, out);
+  });
+}
+
 } // namespace
 
 ///===----------------------------------------------------------------------===///
 /// Pass Implementation
-/// Adjust Datablock modes based on access patterns
+/// Tighten Datablock access modes and infer storage types
 ///===----------------------------------------------------------------------===///
 namespace {
-struct DbPass : public arts::DbBase<DbPass> {
-  DbPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
+struct DbModeTighteningPass : public arts::DbModeTighteningBase<DbModeTighteningPass> {
+  DbModeTighteningPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }
 
@@ -178,6 +223,9 @@ struct DbPass : public arts::DbBase<DbPass> {
 
   /// Mode adjustment
   bool adjustDbModes();
+
+  /// DB storage-type inference annotations
+  void inferDbStorageTypes();
 
   /// Graph rebuild
   void invalidateAndRebuildGraph();
@@ -188,13 +236,17 @@ private:
 };
 } // namespace
 
-void DbPass::runOnOperation() {
+void DbModeTighteningPass::runOnOperation() {
   module = getOperation();
 
-  ARTS_INFO_HEADER(DbPass);
+  ARTS_INFO_HEADER(DbModeTighteningPass);
   ARTS_DEBUG_REGION(module.dump(););
 
   assert(AM && "AnalysisManager must be provided externally");
+
+  /// TODO(PERF): adjustDbModes and inferDbStorageTypes both perform separate
+  /// module.walk(FuncOp) + getOrCreateGraph. These could be fused into a
+  /// single walk if analysis invalidation between phases is handled carefully.
 
   /// Graph construction and analysis
   invalidateAndRebuildGraph();
@@ -207,7 +259,10 @@ void DbPass::runOnOperation() {
     AM->invalidate();
   }
 
-  ARTS_INFO_FOOTER(DbPass);
+  /// Infer DB storage-type annotations (local_only, read_only_after_init)
+  inferDbStorageTypes();
+
+  ARTS_INFO_FOOTER(DbModeTighteningPass);
   ARTS_DEBUG_REGION(module.dump(););
 }
 
@@ -216,12 +271,13 @@ void DbPass::runOnOperation() {
 /// Based on the collected loads and stores, adjust the DB mode to in, out, or
 /// inout.
 ///===----------------------------------------------------------------------===///
-bool DbPass::adjustDbModes() {
+bool DbModeTighteningPass::adjustDbModes() {
   ARTS_DEBUG_HEADER(AdjustDBModes);
   bool changed = false;
+  bool forceInout = std::getenv("CARTS_FORCE_INOUT") != nullptr;
 
   module.walk([&](func::FuncOp func) {
-    DbGraph &graph = AM->getDbGraph(func);
+    DbGraph &graph = AM->getDbAnalysis().getOrCreateGraph(func);
 
     /// First, adjust per-acquire modes
     graph.forEachAcquireNode([&](DbAcquireNode *acqNode) {
@@ -247,7 +303,7 @@ bool DbPass::adjustDbModes() {
       else
         newMode = ArtsMode::in;
 
-      if (hasStores && std::getenv("CARTS_FORCE_INOUT")) {
+      if (hasStores && forceInout) {
         ARTS_DEBUG("AcquireOp: " << acqOp
                                  << " forcing inout mode (CARTS_FORCE_INOUT)");
         newMode = ArtsMode::inout;
@@ -280,20 +336,9 @@ bool DbPass::adjustDbModes() {
     graph.forEachAllocNode([&](DbAllocNode *allocNode) {
       ArtsMode maxMode = ArtsMode::in;
 
-      /// Recursive helper to collect modes from all acquire levels
-      std::function<void(DbAcquireNode *)> collectModes =
-          [&](DbAcquireNode *acqNode) {
-            ArtsMode mode = acqNode->getDbAcquireOp().getMode();
-            maxMode = combineAccessModes(maxMode, mode);
-            acqNode->forEachChildNode([&](NodeBase *child) {
-              if (auto *nestedAcq = dyn_cast<DbAcquireNode>(child))
-                collectModes(nestedAcq);
-            });
-          };
-
       allocNode->forEachChildNode([&](NodeBase *child) {
         if (auto *acqNode = dyn_cast<DbAcquireNode>(child))
-          collectModes(acqNode);
+          collectModesRecursive(acqNode, maxMode);
       });
 
       /// Update the alloc mode
@@ -314,13 +359,105 @@ bool DbPass::adjustDbModes() {
 }
 
 ///===----------------------------------------------------------------------===///
+/// Infer DB storage-type annotations.
+/// Walks all DbAllocOps and sets UnitAttr annotations based on access patterns:
+///   - arts.local_only: all acquires are intranode (no distributed contract)
+///   - arts.read_only_after_init: after the first write, all subsequent acquires
+///     are read-only
+///===----------------------------------------------------------------------===///
+void DbModeTighteningPass::inferDbStorageTypes() {
+  ARTS_DEBUG_HEADER(InferDbStorageTypes);
+
+  module.walk([&](func::FuncOp func) {
+    DbGraph &graph = AM->getDbAnalysis().getOrCreateGraph(func);
+
+    graph.forEachAllocNode([&](DbAllocNode *allocNode) {
+      DbAllocOp allocOp = allocNode->getDbAllocOp();
+      if (!allocOp)
+        return;
+
+      /// ---------------------------------------------------------------
+      /// 1. Local-only (PIN candidate):
+      ///    A DB is local-only when the alloc itself is not distributed
+      ///    AND none of its acquires have a distribution contract.
+      /// ---------------------------------------------------------------
+      bool isLocalOnly = !hasDistributedDbAllocation(allocOp.getOperation());
+
+      if (isLocalOnly) {
+        /// Check all acquire children (recursively) for distribution contracts
+        allocNode->forEachChildNode([&](NodeBase *child) {
+          if (auto *acqNode = dyn_cast<DbAcquireNode>(child))
+            checkDistributedRecursive(acqNode, isLocalOnly);
+        });
+      }
+
+      if (isLocalOnly) {
+        allocOp->setAttr(AttrNames::Operation::LocalOnly,
+                         UnitAttr::get(allocOp.getContext()));
+        ARTS_DEBUG("AllocOp: " << allocOp
+                               << " => local_only (PIN candidate)");
+      }
+
+      /// ---------------------------------------------------------------
+      /// 2. Read-only-after-write:
+      ///    Collect all acquires with their program order, then check if
+      ///    after the first writer, every subsequent acquire is read-only.
+      /// ---------------------------------------------------------------
+      SmallVector<AcquireOrderEntry> orderedAcquires;
+
+      allocNode->forEachChildNode([&](NodeBase *child) {
+        if (auto *acqNode = dyn_cast<DbAcquireNode>(child))
+          collectAcquiresRecursive(acqNode, graph, orderedAcquires);
+      });
+
+      /// Need at least one acquire to reason about
+      if (orderedAcquires.empty())
+        return;
+
+      /// Sort by program order
+      llvm::sort(orderedAcquires, [](const AcquireOrderEntry &a,
+                                     const AcquireOrderEntry &b) {
+        return a.order < b.order;
+      });
+
+      /// Find the first writer and check all subsequent acquires
+      bool foundWriter = false;
+      bool allReadAfterWrite = true;
+
+      for (const auto &entry : orderedAcquires) {
+        ArtsMode mode = entry.node->getDbAcquireOp().getMode();
+        bool isWriter = DbUtils::isWriterMode(mode);
+
+        if (!foundWriter) {
+          if (isWriter)
+            foundWriter = true;
+          continue;
+        }
+
+        /// After the first writer, all must be read-only
+        if (isWriter) {
+          allReadAfterWrite = false;
+          break;
+        }
+      }
+
+      if (foundWriter && allReadAfterWrite) {
+        allocOp->setAttr(AttrNames::Operation::ReadOnlyAfterInit,
+                         UnitAttr::get(allocOp.getContext()));
+        ARTS_DEBUG("AllocOp: " << allocOp
+                               << " => read_only_after_init (ONCE candidate)");
+      }
+    });
+  });
+
+  ARTS_DEBUG_FOOTER(InferDbStorageTypes);
+}
+
+///===----------------------------------------------------------------------===///
 /// Invalidate and rebuild the graph
 ///===----------------------------------------------------------------------===///
-void DbPass::invalidateAndRebuildGraph() {
-  module.walk([&](func::FuncOp func) {
-    AM->invalidateFunction(func);
-    (void)AM->getDbGraph(func);
-  });
+void DbModeTighteningPass::invalidateAndRebuildGraph() {
+  AM->invalidateAndRebuildGraphs(module);
 }
 
 ////===----------------------------------------------------------------------===////
@@ -328,8 +465,8 @@ void DbPass::invalidateAndRebuildGraph() {
 ////===----------------------------------------------------------------------===////
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createDbPass(mlir::arts::AnalysisManager *AM) {
-  return std::make_unique<DbPass>(AM);
+std::unique_ptr<Pass> createDbModeTighteningPass(mlir::arts::AnalysisManager *AM) {
+  return std::make_unique<DbModeTighteningPass>(AM);
 }
 } // namespace arts
 } // namespace mlir

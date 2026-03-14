@@ -112,27 +112,25 @@ def DeadCodeElimination : Pass<"arts-dce", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createDCEPass()";
 }
 
-def Db : Pass<"db", "mlir::ModuleOp"> {
-  let summary = "Adjust DB modes based on access patterns";
+def DbModeTightening : Pass<"db-mode-tightening", "mlir::ModuleOp"> {
+  let summary = "Tighten DB access modes and infer storage types";
   let description =
-      [{Adjusts the mode(in / out / inout)
+      [{Tightens the access mode (in / out / inout)
             of DB allocations and acquires based on the actual load /
-        store operations performed on them.}];
+        store operations performed on them, and infers storage types.}];
   let dependentDialects =
       ["memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect"];
-  let constructor = "mlir::arts::createDbPass(nullptr)";
+  let constructor = "mlir::arts::createDbModeTighteningPass(nullptr)";
 }
 
-def DbOpts : Pass<"db-opts", "mlir::ModuleOp"> {
-  let summary = "Apply DB-local cleanup optimizations";
+def DbScratchElimination : Pass<"db-scratch-elimination", "mlir::ModuleOp"> {
+  let summary = "Eliminate task-private single-element scratch DBs";
   let description = [{
-    Performs DB-specific cleanups after mode and partition decisions are known.
-    Current optimizations:
-    - Replace task-private single-element scratch DBs with local allocas
+    Replaces task-private single-element scratch DBs with local allocas.
   }];
   let dependentDialects =
       ["memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect"];
-  let constructor = "mlir::arts::createDbOptsPass()";
+  let constructor = "mlir::arts::createDbScratchEliminationPass()";
 }
 
 def DbPartitioning : Pass<"db-partitioning", "mlir::ModuleOp"> {
@@ -154,7 +152,7 @@ def DbPartitioning : Pass<"db-partitioning", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createDbPartitioningPass(nullptr)";
 }
 
-def DistributedDbOwnership
+def DbDistributedOwnership
     : Pass<"distributed-db-ownership", "mlir::ModuleOp"> {
   let summary = "Mark eligible DB allocations for distributed ownership";
   let description = [{
@@ -163,7 +161,28 @@ def DistributedDbOwnership
   }];
   let dependentDialects =
       ["func::FuncDialect", "arts::ArtsDialect", "memref::MemRefDialect"];
-  let constructor = "mlir::arts::createDistributedDbOwnershipPass(nullptr)";
+  let constructor = "mlir::arts::createDbDistributedOwnershipPass(nullptr)";
+}
+
+def DbTransforms : Pass<"db-transforms", "mlir::ModuleOp"> {
+  let summary = "Post-DB transforms (contract persistence, halo, ESD, GUID)";
+  let description = [{
+    Hosts DB-level transformations that run after DB partitioning and
+    distributed ownership decisions are known. Current transforms:
+    - DT-1: Contract persistence -- persist refined AcquireContractSummary
+      back to IR via upsertLoweringContract().
+
+    Placeholder slots:
+    - DT-2: Stencil halo consolidation
+    - DT-3: ESD annotation
+    - DT-4: GUID range allocation
+    - DT-5: Acquire coalescing
+    - DT-6: DB lifetime shortening
+    - DT-7: Dead DB elimination
+  }];
+  let dependentDialects =
+      ["func::FuncDialect", "arts::ArtsDialect"];
+  let constructor = "mlir::arts::createDbTransformsPass(nullptr)";
 }
 
 def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {
@@ -188,13 +207,13 @@ def DbLowering : Pass<"db-lowering", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createDbLoweringPass()";
 }
 
-def Edt : Pass<"edt", "mlir::ModuleOp"> {
+def EdtStructuralOpt : Pass<"edt", "mlir::ModuleOp"> {
   let summary = "Optimize EDTs";
   let dependentDialects = [
     "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
     "arts::ArtsDialect", "arith::ArithDialect", "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createEdtPass(nullptr, true)";
+  let constructor = "mlir::arts::createEdtStructuralOptPass(nullptr, true)";
   let options = [Option<"runAnalysis", "run-analysis", "bool",
                         /*default=*/"true", "Enable EDT analysis.">];
 }
@@ -204,6 +223,21 @@ def EdtAllocaSinking : Pass<"edt-alloca-sinking", "mlir::ModuleOp"> {
   let dependentDialects =
       ["memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect"];
   let constructor = "mlir::arts::createEdtAllocaSinkingPass()";
+}
+
+def EdtTransforms : Pass<"edt-transforms", "mlir::ModuleOp"> {
+  let summary = "Post-DB EDT transforms (granularity, affinity, critical path)";
+  let description = [{
+    Hosts EDT-level transformations that run after DB partitioning and
+    mode decisions are known. Current placeholder slots:
+    - ET-1: Task granularity control
+    - ET-2: Data affinity placement
+    - ET-6: Critical path analysis
+    - EXT-EDT-2: Dead dependency elimination
+  }];
+  let dependentDialects =
+      ["func::FuncDialect", "arts::ArtsDialect"];
+  let constructor = "mlir::arts::createEdtTransformsPass(nullptr)";
 }
 
 def Concurrency : Pass<"concurrency", "mlir::ModuleOp"> {
@@ -398,18 +432,22 @@ def ArtsLoopFusion : Pass<"arts-loop-fusion", "mlir::ModuleOp"> {
 }
 
 def ArtsEpochOpt : Pass<"arts-epoch-opt", "mlir::ModuleOp"> {
-  let summary = "Combined epoch optimizations (fusion + loop fusion)";
+  let summary = "Combined epoch optimizations (narrowing + fusion + loop fusion)";
   let description = [{
-    Runs epoch - related
-    optimizations:
-        1. Epoch fusion -
+    Runs epoch-related optimizations:
+        1. Epoch scope narrowing -
+            split large epochs into smaller independent epochs at positions
+                where no EDT after the cut depends on any EDT before the cut
+        2. Epoch fusion -
             merge independent consecutive epochs when their DB accesses
-                are independent(no shared writes) 2. Worker loop fusion -
+                are independent (no shared writes)
+        3. Worker loop fusion -
             merge compatible worker loops within epochs when they have identical
-                bounds and no loop -
-            carried values
+                bounds and no loop-carried values
   }];
   let options = [
+    Option<"enableEpochNarrowing", "epoch-narrowing", "bool", "true",
+           "Enable epoch scope narrowing">,
     Option<"enableEpochFusion", "epoch-fusion", "bool", "true",
            "Enable epoch fusion">,
     Option<"enableLoopFusion", "loop-fusion", "bool", "true",
@@ -603,6 +641,31 @@ def LoopVectorizationHints
   let constructor = "mlir::arts::createLoopVectorizationHintsPass()";
 }
 
+def ContractValidation : Pass<"contract-validation", "mlir::ModuleOp"> {
+  let summary = "Validate LoweringContractOp integrity across the module";
+  let description = [{
+    Lightweight verification pass that walks all arts.lowering_contract
+    operations and checks structural invariants:
+    - Target value exists and is a valid memref
+    - supported_block_halo requires a stencil-family dep_pattern
+    - min_offsets/max_offsets must have matching rank
+    - block_shape rank > 0 if present
+    - owner_dims values are non-negative
+
+    Also warns about DbAcquireOps carrying stencil attributes with no
+    corresponding LoweringContractOp on the source pointer (orphans).
+
+    Collects per-pattern statistics and optionally fails on errors.
+  }];
+  let dependentDialects =
+      ["memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect"];
+  let options = [
+    Option<"failOnError", "fail-on-error", "bool", "false",
+           "Fail compilation if any contract validation errors are found">
+  ];
+  let constructor = "mlir::arts::createContractValidationPass()";
+}
+
 def VerifyMetadata : Pass<"verify-metadata", "mlir::ModuleOp"> {
   let summary = "Verify metadata coverage for loops and memrefs";
   let description = [{
@@ -617,6 +680,10 @@ def VerifyMetadata : Pass<"verify-metadata", "mlir::ModuleOp"> {
 
     This pass is automatically run when --diagnose is enabled to ensure the
     diagnose output contains complete information for all entities.
+
+    TODO: VerifyMetadataPass is declared but never added to the pipeline in
+    Compile.cpp. Either add it when Diagnose is enabled, or remove the claim
+    from documentation.
   }];
   let dependentDialects = [
     "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",

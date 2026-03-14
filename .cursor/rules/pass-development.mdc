@@ -79,7 +79,7 @@ Reference these existing passes in [lib/arts/passes/](mdc:lib/arts/passes/):
 - `ConvertOpenMPToArts.cpp`: OpenMP to ARTS conversion
 - `ConvertArtsToLLVM.cpp`: ARTS to LLVM conversion
 - `CreateDbs.cpp`: DataBlock identification
-- `Edt.cpp`: EDT optimization
+- `EdtStructuralOpt.cpp`: EDT optimization
 # MLIR Pass Development for CARTS
 
 ## Pass Location and Structure
@@ -157,4 +157,4 @@ Reference these existing passes in [lib/arts/passes/](mdc:lib/arts/passes/):
 - `ConvertOpenMPToArts.cpp`: OpenMP to ARTS conversion
 - `ConvertArtsToLLVM.cpp`: ARTS to LLVM conversion
 - `CreateDbs.cpp`: DataBlock identification
-- `Edt.cpp`: EDT optimization
+- `EdtStructuralOpt.cpp`: EDT optimization

@@ -1,5 +1,5 @@
 ///==========================================================================///
-/// File: DistributedDbOwnership.cpp
+/// File: DbDistributedOwnership.cpp
 ///
 /// Marks eligible DbAlloc operations for distributed ownership lowering.
 ///
@@ -29,9 +29,9 @@ using namespace mlir::arts;
 
 namespace {
 
-struct DistributedDbOwnershipPass
-    : public arts::DistributedDbOwnershipBase<DistributedDbOwnershipPass> {
-  explicit DistributedDbOwnershipPass(mlir::arts::AnalysisManager *AM)
+struct DbDistributedOwnershipPass
+    : public arts::DbDistributedOwnershipBase<DbDistributedOwnershipPass> {
+  explicit DbDistributedOwnershipPass(mlir::arts::AnalysisManager *AM)
       : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }
@@ -56,15 +56,21 @@ struct DistributedDbOwnershipPass
       ++totalAllocs;
       auto eligibility = evaluateDistributedDbEligibility(alloc, dbAnalysis);
       setDistributedDbAllocation(alloc.getOperation(), eligibility.eligible);
-      if (eligibility.eligible)
+      if (eligibility.eligible) {
         ++markedDistributed;
-      else
+        /// Stamp the distribution kind when the eligibility analysis specifies
+        /// one (when a non-default distribution applies).
+        if (eligibility.distributionKind)
+          setEdtDistributionKind(alloc.getOperation(),
+                                *eligibility.distributionKind);
+      } else {
         ARTS_DEBUG("Reject DbAlloc arts.id=" << getArtsId(alloc.getOperation())
                                              << " reason="
                                              << toString(eligibility.reason));
+      }
     });
 
-    ARTS_INFO("DistributedDbOwnership marked " << markedDistributed << " / "
+    ARTS_INFO("DbDistributedOwnership marked " << markedDistributed << " / "
                                                << totalAllocs
                                                << " DbAlloc operations");
   }
@@ -78,8 +84,8 @@ private:
 namespace mlir {
 namespace arts {
 std::unique_ptr<Pass>
-createDistributedDbOwnershipPass(mlir::arts::AnalysisManager *AM) {
-  return std::make_unique<DistributedDbOwnershipPass>(AM);
+createDbDistributedOwnershipPass(mlir::arts::AnalysisManager *AM) {
+  return std::make_unique<DbDistributedOwnershipPass>(AM);
 }
 } // namespace arts
 } // namespace mlir

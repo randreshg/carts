@@ -33,12 +33,15 @@ add_mlir_dialect_library(MLIRArtsTransforms
   opt/loop/LoopNormalization.cpp
   opt/loop/StencilBoundaryPeeling.cpp
   opt/db/BlockLoopStripMining.cpp
-  opt/db/Db.cpp
-  opt/db/DbOpts.cpp
+  opt/db/ContractValidation.cpp
+  opt/db/DbModeTightening.cpp
+  opt/db/DbScratchElimination.cpp
   opt/db/DbPartitioning.cpp
-  opt/db/DistributedDbOwnership.cpp
-  opt/edt/Edt.cpp
+  opt/db/DbTransformsPass.cpp
+  opt/db/DbDistributedOwnership.cpp
+  opt/edt/EdtStructuralOpt.cpp
   opt/edt/EdtICM.cpp
+  opt/edt/EdtTransformsPass.cpp
   opt/edt/EpochOpt.cpp
   opt/codegen/AliasScopeGen.cpp
   opt/codegen/Hoisting.cpp

@@ -5,6 +5,7 @@ file(GLOB CARTS_TRANSFORMS_SOURCE_FILES CONFIGURE_DEPENDS
     "db/block/*.cpp"
     "db/elementwise/*.cpp"
     "db/stencil/*.cpp"
+    "db/transforms/*.cpp"
     "edt/*.cpp"
     "edt/tiling2d/*.cpp"
     "kernel/*.cpp"
