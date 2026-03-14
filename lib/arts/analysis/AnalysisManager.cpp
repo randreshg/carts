@@ -50,19 +50,19 @@ void AnalysisManager::invalidate() {
 DbAnalysis &AnalysisManager::getDbAnalysis() {
   if (!dbAnalysis)
     dbAnalysis = std::make_unique<DbAnalysis>(*this);
-  return *dbAnalysis.get();
+  return *dbAnalysis;
 }
 
 EdtAnalysis &AnalysisManager::getEdtAnalysis() {
   if (!edtAnalysis)
     edtAnalysis = std::make_unique<EdtAnalysis>(*this);
-  return *edtAnalysis.get();
+  return *edtAnalysis;
 }
 
 LoopAnalysis &AnalysisManager::getLoopAnalysis() {
   if (!loopAnalysis)
     loopAnalysis = std::make_unique<LoopAnalysis>(*this);
-  return *loopAnalysis.get();
+  return *loopAnalysis;
 }
 
 StringAnalysis &AnalysisManager::getStringAnalysis() {
@@ -108,14 +108,6 @@ EdtHeuristics &AnalysisManager::getEdtHeuristics() {
   return *edtHeuristics;
 }
 
-DbGraph &AnalysisManager::getDbGraph(func::FuncOp func) {
-  return getDbAnalysis().getOrCreateGraph(func);
-}
-
-EdtGraph &AnalysisManager::getEdtGraph(func::FuncOp func) {
-  return getEdtAnalysis().getOrCreateEdtGraph(func);
-}
-
 std::optional<DbAccessPattern>
 AnalysisManager::getDbAllocAccessPattern(DbAllocOp alloc) {
   if (!alloc)
@@ -143,6 +135,13 @@ AnalysisManager::getLoopDistributionPattern(Operation *loopOp) {
   return getDbAnalysis().getLoopDistributionPattern(forOp);
 }
 
+void AnalysisManager::invalidateAndRebuildGraphs(ModuleOp module) {
+  module.walk([&](func::FuncOp func) {
+    invalidateFunction(func);
+    (void)getDbAnalysis().getOrCreateGraph(func);
+  });
+}
+
 bool AnalysisManager::invalidateFunction(func::FuncOp func) {
   bool invalidated = false;
   /// Invalidate dependents before dependencies
@@ -164,11 +163,19 @@ void AnalysisManager::print(llvm::raw_ostream &os) {
 
   for (auto func : module.getOps<func::FuncOp>()) {
     os << "  Function: " << func.getName() << "\n";
-    os << "    DB Graph: Available\n";
-    os << "    EDT Graph: Available\n";
+    bool hasDbGraph = dbAnalysis != nullptr;
+    bool hasEdtGraph = edtAnalysis != nullptr;
+    os << "    DB Graph: " << (hasDbGraph ? "Available" : "Not built") << "\n";
+    os << "    EDT Graph: " << (hasEdtGraph ? "Available" : "Not built")
+       << "\n";
   }
 }
 
+/// TODO(PERF): captureDiagnostics serializes graphs to JSON strings then parses
+/// them back. Add exportToJsonValue() methods on graph classes to avoid the
+/// roundtrip.
+/// TODO(PERF): captureDiagnostics iterates module functions 3 times. Merge into
+/// a single pass.
 void AnalysisManager::captureDiagnostics() {
   using namespace llvm::json;
 
@@ -218,7 +225,7 @@ void AnalysisManager::captureDiagnostics() {
   for (auto func : module.getOps<func::FuncOp>()) {
     std::string edtJsonStr;
     llvm::raw_string_ostream edtStream(edtJsonStr);
-    getEdtGraph(func).exportToJson(edtStream, /*includeAnalysis=*/true);
+    getEdtAnalysis().getOrCreateEdtGraph(func).exportToJson(edtStream, /*includeAnalysis=*/true);
 
     auto edtArray = llvm::json::parse(edtJsonStr);
     if (edtArray && edtArray->getAsArray()) {
@@ -235,7 +242,7 @@ void AnalysisManager::captureDiagnostics() {
   for (auto func : module.getOps<func::FuncOp>()) {
     std::string dbJsonStr;
     llvm::raw_string_ostream dbStream(dbJsonStr);
-    getDbGraph(func).exportToJson(dbStream, /*includeAnalysis=*/true);
+    getDbAnalysis().getOrCreateGraph(func).exportToJson(dbStream, /*includeAnalysis=*/true);
 
     auto dbArray = llvm::json::parse(dbJsonStr);
     if (dbArray && dbArray->getAsArray()) {
@@ -252,7 +259,7 @@ void AnalysisManager::captureDiagnostics() {
   DenseMap<Operation *, int64_t> loopToEdtMap;
   auto &idRegistry = getMetadataManager().getIdRegistry();
   for (auto func : module.getOps<func::FuncOp>()) {
-    auto &edtGraph = getEdtGraph(func);
+    auto &edtGraph = getEdtAnalysis().getOrCreateEdtGraph(func);
     edtGraph.forEachNode([&](NodeBase *node) {
       auto *edtNode = dyn_cast<EdtNode>(node);
       if (!edtNode)
@@ -362,7 +369,6 @@ void AnalysisManager::exportToJson(llvm::raw_ostream &os,
   if (!includeAnalysis) {
     Object root;
     root["module"] = module.getName() ? module.getName()->str() : "unnamed";
-    root["built"] = built;
     root["valid"] = true;
 
     Array functions;
