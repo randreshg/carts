@@ -27,9 +27,6 @@ class Pass;
 
 namespace arts {
 
-class DbGraph;
-class EdtGraph;
-
 /// Centralized manager for all ARTS analysis objects.
 class AnalysisManager {
 public:
@@ -50,16 +47,15 @@ public:
   DbHeuristics &getDbHeuristics();
   EdtHeuristics &getEdtHeuristics();
 
-  /// Graph getters
-  DbGraph &getDbGraph(func::FuncOp func);
-  EdtGraph &getEdtGraph(func::FuncOp func);
-
   /// Unified analysis queries spanning EDT and DB analyses.
   std::optional<DbAccessPattern> getDbAllocAccessPattern(DbAllocOp alloc);
   std::optional<DbAnalysis::LoopDbAccessSummary>
   getLoopDbAccessSummary(Operation *loopOp);
   std::optional<EdtDistributionPattern>
   getLoopDistributionPattern(Operation *loopOp);
+
+  /// Invalidate and rebuild DB graphs for all functions in the module.
+  void invalidateAndRebuildGraphs(ModuleOp module);
 
   /// Other functions
   bool invalidateFunction(func::FuncOp func);
@@ -116,8 +112,6 @@ private:
   std::string metadataFile;
   AbstractMachine abstractMachine;
   PartitionFallback partitionFallback;
-  bool built = false;
-
   std::unique_ptr<DbAnalysis> dbAnalysis;
   std::unique_ptr<EdtAnalysis> edtAnalysis;
   std::unique_ptr<DbHeuristics> dbHeuristics;
