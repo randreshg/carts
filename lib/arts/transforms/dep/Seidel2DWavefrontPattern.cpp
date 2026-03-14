@@ -36,6 +36,7 @@
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/transforms/dep/DepTransform.h"
+#include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
@@ -64,11 +65,6 @@ struct SeidelWavefrontMatch {
   Value stencilMemref;
   SmallVector<Operation *, 8> preludeOps;
 };
-
-static bool isUnitStep(Value step) {
-  auto c = ValueAnalysis::tryFoldConstantIndex(step);
-  return c && *c == 1;
-}
 
 static int64_t resolveWorkerCount(EdtOp parallelEdt) {
   if (!parallelEdt)
@@ -118,11 +114,10 @@ chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
   /// interior is large enough to sustain it.
   constexpr int64_t minCellsPerTask = 1 << 14;
   int64_t maxTilesByWork = std::max<int64_t>(
-      1, static_cast<int64_t>(std::ceil(totalCells /
-                                        static_cast<long double>(
-                                            minCellsPerTask))));
-  maxTilesByWork = std::min<int64_t>(
-      maxTilesByWork, std::max<int64_t>(4, workers * 2));
+      1, static_cast<int64_t>(std::ceil(
+             totalCells / static_cast<long double>(minCellsPerTask))));
+  maxTilesByWork =
+      std::min<int64_t>(maxTilesByWork, std::max<int64_t>(4, workers * 2));
 
   auto computeWeightedRankCount = [](int64_t numITiles,
                                      int64_t numJTiles) -> int64_t {
@@ -153,8 +148,8 @@ chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
     return std::nullopt;
 
   int64_t desiredFrontier = std::clamp<int64_t>(
-      static_cast<int64_t>(std::ceil(std::sqrt(
-          static_cast<long double>(maxTilesByWork)))),
+      static_cast<int64_t>(
+          std::ceil(std::sqrt(static_cast<long double>(maxTilesByWork)))),
       int64_t{1}, workers);
   long double desiredTasks = static_cast<long double>(maxTilesByWork);
   long double targetWorkPerTask =
@@ -179,7 +174,8 @@ chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
         static_cast<long double>(tilesPerStep) /
         static_cast<long double>(std::max<int64_t>(1, rankCount));
     long double workPerTask =
-        totalCells / static_cast<long double>(std::max<int64_t>(1, tilesPerStep));
+        totalCells /
+        static_cast<long double>(std::max<int64_t>(1, tilesPerStep));
 
     long double frontierPenalty = 0.0L;
     if (frontierWidth < desiredFrontier) {
@@ -212,8 +208,7 @@ chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
         (numITiles == 1 || numJTiles == 1) ? 1.0e15L : 0.0L;
 
     return frontierPenalty + averagePenalty + workPenalty + taskCost +
-           rankCost + shapePenalty +
-           fullRangePenalty;
+           rankCost + shapePenalty + fullRangePenalty;
   };
 
   for (int64_t numITiles = minRowTiles; numITiles <= maxRowTiles; ++numITiles) {
@@ -241,7 +236,7 @@ chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
 
 static bool matchUnitInnerLoop(Operation *op, Value &lb, Value &ub, Value &iv) {
   auto scfFor = dyn_cast<scf::ForOp>(op);
-  if (!scfFor || !isUnitStep(scfFor.getStep()))
+  if (!scfFor || !ValueAnalysis::isOneConstant(scfFor.getStep()))
     return false;
   lb = scfFor.getLowerBound();
   ub = scfFor.getUpperBound();
@@ -341,22 +336,6 @@ static bool looksLikeSeidelStencilBody(Operation *innerLoop, Value rowIV,
          hasRowMinusOne && hasRowPlusOne && hasColMinusOne && hasColPlusOne;
 }
 
-static ForOp getSingleTopLevelFor(EdtOp edt) {
-  if (!edt)
-    return nullptr;
-
-  ForOp result = nullptr;
-  for (Operation &op : edt.getBody().front().without_terminator()) {
-    auto forOp = dyn_cast<ForOp>(&op);
-    if (!forOp)
-      return nullptr;
-    if (result)
-      return nullptr;
-    result = forOp;
-  }
-  return result;
-}
-
 static bool matchSeidelWavefront(EdtOp parallelEdt,
                                  SeidelWavefrontMatch &match) {
   match = {};
@@ -366,7 +345,7 @@ static bool matchSeidelWavefront(EdtOp parallelEdt,
   ForOp rowFor = getSingleTopLevelFor(parallelEdt);
   if (!rowFor || rowFor.getLowerBound().size() != 1 ||
       rowFor.getUpperBound().size() != 1 || rowFor.getStep().size() != 1 ||
-      !isUnitStep(rowFor.getStep().front()))
+      !ValueAnalysis::isOneConstant(rowFor.getStep().front()))
     return false;
 
   Block &body = rowFor.getRegion().front();
@@ -440,11 +419,9 @@ static Value createSubtractOrZero(OpBuilder &builder, Location loc, Value lhs,
 
 static void rewriteSeidelSequential(SeidelWavefrontMatch &match) {
   OpBuilder builder(match.rowFor);
-  auto seqRowFor =
-      builder.create<scf::ForOp>(match.rowFor.getLoc(),
-                                 match.rowFor.getLowerBound().front(),
-                                 match.rowFor.getUpperBound().front(),
-                                 match.rowFor.getStep().front());
+  auto seqRowFor = builder.create<scf::ForOp>(
+      match.rowFor.getLoc(), match.rowFor.getLowerBound().front(),
+      match.rowFor.getUpperBound().front(), match.rowFor.getStep().front());
   copyArtsMetadataAttrs(match.rowFor.getOperation(), seqRowFor.getOperation());
 
   OpBuilder rowBuilder = OpBuilder::atBlockBegin(seqRowFor.getBody());
@@ -457,8 +434,7 @@ static void rewriteSeidelSequential(SeidelWavefrontMatch &match) {
 
   Block &edtBody = match.parallelEdt.getBody().front();
   Operation *insertBefore = match.parallelEdt.getOperation();
-  for (Operation &op :
-       llvm::make_early_inc_range(edtBody.without_terminator()))
+  for (Operation &op : llvm::make_early_inc_range(edtBody.without_terminator()))
     op.moveBefore(insertBefore);
   match.parallelEdt.erase();
 }
@@ -532,7 +508,8 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
                             EdtDistributionPattern::stencil);
   setStencilSpatialDims(tileParallel.getOperation(), {0, 1});
   setStencilOwnerDims(tileParallel.getOperation(), {0, 1});
-  setStencilBlockShape(tileParallel.getOperation(), {tileRowsConst, tileColsConst});
+  setStencilBlockShape(tileParallel.getOperation(),
+                       {tileRowsConst, tileColsConst});
   setStencilMinOffsets(tileParallel.getOperation(), {-1, -1});
   setStencilMaxOffsets(tileParallel.getOperation(), {1, 1});
   setStencilWriteFootprint(tileParallel.getOperation(), {0, 0});

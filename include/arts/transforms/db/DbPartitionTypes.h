@@ -31,7 +31,7 @@ struct AcquirePartitionInfo {
   bool isValid = false;
   bool hasIndirectAccess = false;
   bool hasDistributionContract = false;
-  bool preservesDependencyMode = false;
+  bool preservesDepMode = false;
   bool needsFullRange = false;
 };
 

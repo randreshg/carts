@@ -8,6 +8,7 @@
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/analysis/metadata/MetadataRegistry.h"
 #include "arts/utils/Debug.h"
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/metadata/LocationMetadata.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 #include "arts/utils/metadata/MemrefMetadata.h"
@@ -26,17 +27,6 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
-static unsigned getLoopDepth(Operation *loopOp) {
-  unsigned depth = 0;
-  for (Operation *parent = loopOp ? loopOp->getParentOp() : nullptr; parent;
-       parent = parent->getParentOp()) {
-    if (isa<affine::AffineForOp, scf::ForOp, scf::ParallelOp, scf::ForallOp,
-            omp::WsLoopOp, arts::ForOp>(parent))
-      ++depth;
-  }
-  return depth;
-}
-
 static std::optional<int64_t> parseSignedInt(llvm::StringRef text) {
   int64_t value = 0;
   if (!llvm::to_integer(text, value))

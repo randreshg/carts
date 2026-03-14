@@ -90,10 +90,53 @@ refineAliasWithSlices(const DbAcquireNode *a, const DbAcquireNode *b) {
   return DbAliasAnalysis::AliasResult::MayAlias;
 }
 
+/// Refine overlap using partition offsets/sizes from DbAcquireOp.
+/// These are element-space partition hints (from depend clauses) and are more
+/// reliable than beginIndex/endIndex ordering counters for proving
+/// disjointness.
+std::optional<DbAliasAnalysis::OverlapKind>
+refineOverlapWithPartitionRanges(const DbAcquireNode *a,
+                                 const DbAcquireNode *b) {
+  DbAcquireOp opA = a->getDbAcquireOp();
+  DbAcquireOp opB = b->getDbAcquireOp();
+  if (!opA || !opB)
+    return std::nullopt;
+
+  ValueRange partOffsA = opA.getPartitionOffsets();
+  ValueRange partSzA = opA.getPartitionSizes();
+  ValueRange partOffsB = opB.getPartitionOffsets();
+  ValueRange partSzB = opB.getPartitionSizes();
+
+  if (partOffsA.empty() || partOffsB.empty())
+    return std::nullopt;
+  if (partOffsA.size() != partOffsB.size())
+    return std::nullopt;
+
+  // Check each dimension for disjointness.
+  // If ANY dimension is provably disjoint, the regions are disjoint.
+  for (size_t dim = 0; dim < partOffsA.size(); ++dim) {
+    int64_t offA = 0, szA = 0, offB = 0, szB = 0;
+    bool aConst = ValueAnalysis::getConstantIndex(partOffsA[dim], offA) &&
+                  dim < partSzA.size() &&
+                  ValueAnalysis::getConstantIndex(partSzA[dim], szA);
+    bool bConst = ValueAnalysis::getConstantIndex(partOffsB[dim], offB) &&
+                  dim < partSzB.size() &&
+                  ValueAnalysis::getConstantIndex(partSzB[dim], szB);
+    if (!aConst || !bConst)
+      continue;
+
+    // Disjoint if [offA, offA+szA) and [offB, offB+szB) do not overlap
+    if (offA + szA <= offB || offB + szB <= offA)
+      return DbAliasAnalysis::OverlapKind::Disjoint;
+  }
+  return std::nullopt;
+}
+
 } // namespace
 
 DbAliasAnalysis::DbAliasAnalysis(DbAnalysis *analysis) {
   assert(analysis && "Analysis cannot be null");
+  dbAnalysis = analysis;
 }
 
 static const char *aliasResultToString(DbAliasAnalysis::AliasResult res) {
@@ -241,18 +284,54 @@ DbAliasAnalysis::classifyAlias(const NodeBase &a, const NodeBase &b,
     }
 
     if (acqA && acqB) {
-      ARTS_INFO("  Step 2: Using DbAliasAnalysis::estimateOverlap" << indent);
+      ARTS_INFO("  Step 2a: Using DbAliasAnalysis::estimateOverlap" << indent);
       auto k = estimateOverlap(acqA, acqB);
       const char *kindStr = k == OverlapKind::Disjoint  ? "DISJOINT"
                             : k == OverlapKind::Partial ? "PARTIAL"
                             : k == OverlapKind::Full    ? "FULL"
                                                         : "UNKNOWN";
-      ARTS_INFO("  Step 2 Result: " << kindStr << indent);
+      ARTS_INFO("  Step 2a Result: " << kindStr << indent);
 
       if (k == OverlapKind::Disjoint)
         result = AliasResult::NoAlias;
       else if (k == OverlapKind::Full)
         result = AliasResult::MustAlias;
+    }
+
+    /// Step 2b: Partition range disjointness from depend-clause partition
+    /// offsets/sizes. These are element-space ranges and may prove disjointness
+    /// even when regular offsets/sizes are dynamic or absent.
+    if (result == AliasResult::MayAlias && acqA && acqB) {
+      if (auto partResult = refineOverlapWithPartitionRanges(acqA, acqB)) {
+        if (*partResult == OverlapKind::Disjoint) {
+          ARTS_INFO("  Step 2b: Partition range disjointness -> NoAlias"
+                    << indent);
+          result = AliasResult::NoAlias;
+        }
+      }
+    }
+
+    /// Step 2c: Contract-based refinement via DbAnalysis.
+    /// When both acquires are on the same allocation and have ownerDims from
+    /// their lowering contracts, matching ownerDims with disjoint partition
+    /// ranges proves non-overlap.
+    if (result == AliasResult::MayAlias && acqA && acqB && dbAnalysis) {
+      auto summaryA =
+          dbAnalysis->getAcquireContractSummary(acqA->getDbAcquireOp());
+      auto summaryB =
+          dbAnalysis->getAcquireContractSummary(acqB->getDbAcquireOp());
+      if (summaryA && summaryB && !summaryA->contract.ownerDims.empty() &&
+          !summaryB->contract.ownerDims.empty()) {
+        // Same ownerDims means both acquires partition on the same dimensions.
+        // If we already proved disjointness above (via partition ranges or
+        // slices), we would not reach here. Log the contract info for
+        // diagnostic insight.
+        if (summaryA->contract.ownerDims == summaryB->contract.ownerDims) {
+          ARTS_DEBUG("  Step 2c: Both acquires share ownerDims (count="
+                     << summaryA->contract.ownerDims.size()
+                     << "), partition on same dims");
+        }
+      }
     }
   }
 
@@ -302,6 +381,26 @@ DbAliasAnalysis::estimateOverlap(const DbAcquireNode *a,
 
   if (a->endIndex < b->beginIndex || b->endIndex < a->beginIndex)
     return OverlapKind::Disjoint;
+
+  /// Partition range disjointness: when both acquires have constant partition
+  /// offsets and sizes on the same allocation, check if their partition ranges
+  /// are provably disjoint in any dimension.
+  if (opA && opB && allocA && allocB && allocA == allocB) {
+    if (auto sliceResult = refineAliasWithSlices(a, b)) {
+      if (*sliceResult == AliasResult::NoAlias)
+        return OverlapKind::Disjoint;
+      if (*sliceResult == AliasResult::MustAlias)
+        return OverlapKind::Full;
+    }
+  }
+
+  /// Check partition offsets/sizes (element-space hints from depend clauses).
+  /// These are distinct from regular offsets/sizes and may prove disjointness
+  /// even when the regular slice check above was inconclusive.
+  if (auto partResult = refineOverlapWithPartitionRanges(a, b)) {
+    if (*partResult == OverlapKind::Disjoint)
+      return OverlapKind::Disjoint;
+  }
 
   return OverlapKind::Partial;
 }

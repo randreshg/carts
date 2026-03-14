@@ -28,6 +28,7 @@
 
 #include "../../PassDetails.h"
 #include "arts/Dialect.h"
+#include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
@@ -95,13 +96,7 @@ static bool isWriter(ArtsMode mode) {
 /// Find cut points in an epoch's operation list.
 /// A cut point at index i means ops [0..i) form an independent group from
 /// ops [i..n). Returns indices where cuts can be made.
-static SmallVector<unsigned> findEpochCutPoints(
-    ArrayRef<Operation *> ops) {
-  /// TODO: Epoch narrowing only checks SSA use-def chains for dependencies.
-  /// Two operations within an epoch may have implicit dependencies not
-  /// captured by SSA (e.g., two DbAcquireOps on the same allocation at
-  /// different offsets, or operations referencing the same BlockArgument
-  /// from an outer scope). Consider adding DB-level conflict analysis.
+static SmallVector<unsigned> findEpochCutPoints(ArrayRef<Operation *> ops) {
   SmallVector<unsigned> cutPoints;
   if (ops.size() <= 1)
     return cutPoints;
@@ -153,6 +148,14 @@ static SmallVector<unsigned> findEpochCutPoints(
         checkOperand(operand);
       return WalkResult::advance();
     });
+
+    /// Check DB-level dependencies: if ops[j] and any earlier ops[k]
+    /// access the same DB allocation and at least one is a writer,
+    /// treat them as dependent to prevent unsafe epoch splitting.
+    for (unsigned k = 0; k < j; ++k) {
+      if (DbAnalysis::hasDbConflict(ops[j], ops[k]))
+        depMax = std::max(depMax, k);
+    }
 
     maxDep[j] = depMax;
   }
@@ -310,7 +313,7 @@ static void narrowEpochScopes(ModuleOp module, bool &changed) {
 static AccessMap collectAccesses(EpochOp epoch) {
   AccessMap accesses;
   epoch.walk([&](DbAcquireOp acq) {
-    Operation *alloc = DbUtils::getUnderlyingDbAlloc(acq.getPtr());
+    Operation *alloc = DbUtils::getUnderlyingDbAlloc(acq.getSourcePtr());
     if (!alloc)
       return;
     bool write = isWriter(acq.getMode());
@@ -363,7 +366,10 @@ static bool processBlockForEpochFusion(Block &block) {
   bool changed = false;
   for (auto it = block.begin(); it != block.end();) {
     auto first = dyn_cast<EpochOp>(&*it);
-    if (!first) { ++it; continue; }
+    if (!first) {
+      ++it;
+      continue;
+    }
 
     /// Cache first's accesses for chain-fusion.
     AccessMap firstAccesses = collectAccesses(first);
@@ -466,14 +472,12 @@ static void fuseLoops(scf::ForOp first, scf::ForOp second) {
 /// Fuses consecutive compatible worker loops within an epoch.
 /// Returns true if any fusion was performed.
 static bool fuseWorkerLoopsInEpoch(EpochOp epoch) {
-  /// TODO: Worker loop fusion has no cross-loop data dependency analysis.
-  /// If loop A spawns EDTs that write to a datablock that loop B's EDTs read
-  /// from, fusing removes the implicit barrier between the two loops. Add
-  /// DB access conflict checking between the EDT bodies of both loops.
   Block &body = epoch.getBody().front();
   return fuseConsecutivePairs<scf::ForOp>(
       body,
-      [](scf::ForOp a, scf::ForOp b) { return isFusableWorkerLoop(a, b); },
+      [](scf::ForOp a, scf::ForOp b) {
+        return isFusableWorkerLoop(a, b) && !DbAnalysis::hasDbConflict(a, b);
+      },
       [](scf::ForOp a, scf::ForOp b) {
         ARTS_DEBUG("Fusing consecutive worker loops in epoch");
         fuseLoops(a, b);

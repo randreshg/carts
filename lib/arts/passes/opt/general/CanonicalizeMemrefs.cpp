@@ -252,7 +252,7 @@ private:
                            OpBuilder &builder,
                            llvm::DenseSet<Operation *> &toRemove);
   Value createConstantIndex(OpBuilder &builder, Location loc, int64_t value);
-  SmallVector<Value> clampDependencyIndices(Value source,
+  SmallVector<Value> clampDepIndices(Value source,
                                             ArrayRef<Value> indices,
                                             OpBuilder &builder, Location loc,
                                             ArrayRef<Value> dimSizes = {});
@@ -921,7 +921,7 @@ CanonicalizeMemrefsPass::analyzeDepVar(Value depVar, AllocPattern &pattern,
               /// Element-level dependency, sizes = [1, 1, ...]
               for (size_t d = 0; d < info.indices.size(); ++d)
                 info.sizes.push_back(createConstantIndex(builder, loc, 1));
-              info.indices = clampDependencyIndices(
+              info.indices = clampDepIndices(
                   info.source, info.indices, builder, loc, pattern.dimensions);
 
               info.opsToRemove = traceResult->chainOps;
@@ -950,7 +950,7 @@ CanonicalizeMemrefsPass::analyzeDepVar(Value depVar, AllocPattern &pattern,
     /// Element-level sizes
     for (size_t d = 0; d < info.indices.size(); ++d)
       info.sizes.push_back(createConstantIndex(builder, loc, 1));
-    info.indices = clampDependencyIndices(info.source, info.indices, builder,
+    info.indices = clampDepIndices(info.source, info.indices, builder,
                                           loc, pattern.dimensions);
 
     info.opsToRemove = traceResult->chainOps;
@@ -1693,7 +1693,7 @@ Value CanonicalizeMemrefsPass::createConstantIndex(OpBuilder &builder,
   return arts::createConstantIndex(builder, loc, value);
 }
 
-SmallVector<Value> CanonicalizeMemrefsPass::clampDependencyIndices(
+SmallVector<Value> CanonicalizeMemrefsPass::clampDepIndices(
     Value source, ArrayRef<Value> indices, OpBuilder &builder, Location loc,
     ArrayRef<Value> dimSizes) {
   SmallVector<Value> clamped;
@@ -2022,7 +2022,7 @@ Value CanonicalizeMemrefsPass::hoistValue(Value val, Operation *insertPoint,
 }
 
 ///===----------------------------------------------------------------------===///
-/// General Dependency Handling (All Patterns)
+/// General Dep Handling (All Patterns)
 ///===----------------------------------------------------------------------===///
 
 std::optional<DepInfo> CanonicalizeMemrefsPass::extractDepInfo(
@@ -2053,7 +2053,7 @@ std::optional<DepInfo> CanonicalizeMemrefsPass::extractDepInfo(
           for (size_t d = 0; d < info.indices.size(); ++d)
             info.sizes.push_back(createConstantIndex(builder, loc, 1));
           info.indices =
-              clampDependencyIndices(info.source, info.indices, builder, loc);
+              clampDepIndices(info.source, info.indices, builder, loc);
           return info;
         }
       }
@@ -2104,7 +2104,7 @@ std::optional<DepInfo> CanonicalizeMemrefsPass::extractDepInfo(
     for (size_t d = 0; d < info.indices.size(); ++d)
       info.sizes.push_back(createConstantIndex(builder, loc, 1));
     info.indices =
-        clampDependencyIndices(info.source, info.indices, builder, loc);
+        clampDepIndices(info.source, info.indices, builder, loc);
     return info;
   }
 
@@ -2159,7 +2159,7 @@ void CanonicalizeMemrefsPass::handleDependencies(ModuleOp module,
     }
   });
 
-  ARTS_DEBUG("=== Dependency Handling Complete ===");
+  ARTS_DEBUG("=== Dep Handling Complete ===");
 }
 
 } // namespace

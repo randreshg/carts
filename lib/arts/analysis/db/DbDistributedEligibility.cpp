@@ -211,8 +211,7 @@ collectEligibilityFacts(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
       facts.isStencilFamily = true;
 
     // --- hasInternodeEdtUse (existential) ---
-    bool internode = edt &&
-                     edt.getConcurrency() == EdtConcurrency::internode;
+    bool internode = edt && edt.getConcurrency() == EdtConcurrency::internode;
     if (internode)
       facts.hasInternodeEdtUse = true;
 
@@ -290,9 +289,10 @@ mlir::arts::evaluateDistributedDbEligibility(DbAllocOp alloc,
     /// A stencil-pattern DB is safe for distribution when no writes occur —
     /// each node can hold a complete copy of the data including halo regions.
     /// TODO(DT-5): Lowering must emit arts_add_db_duplicate() to actually
-    /// replicate the data. Until then, this falls through to block distribution.
-    bool readOnly = facts.allAcquiresReadOnly ||
-                    hasReadOnlyAfterInitAttr(alloc);
+    /// replicate the data. Until then, this falls through to block
+    /// distribution.
+    bool readOnly =
+        facts.allAcquiresReadOnly || hasReadOnlyAfterInitAttr(alloc);
     if (readOnly && facts.isStencilFamily)
       return {true, DistributedDbEligibilityRejectReason::None,
               EdtDistributionKind::replicated};

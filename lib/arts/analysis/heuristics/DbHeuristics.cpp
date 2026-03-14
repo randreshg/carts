@@ -161,10 +161,10 @@ SmallVector<AcquireDecision> DbHeuristics::chooseAcquirePolicies(
     /// When a contract summary preserves a distributed contract entry,
     /// treat it as evidence to keep the distribution layout intact.
     if (!preserveDistributionContract && summary &&
-        summary->preservesDistributedContractEntry) {
+        summary->preservesDistributedContractEntry()) {
       preserveDistributionContract = true;
-      ARTS_DEBUG("  chooseAcquirePolicies[" << i
-                 << "]: contract summary preserves distributed contract");
+      ARTS_DEBUG("  chooseAcquirePolicies["
+                 << i << "]: contract summary preserves distributed contract");
     }
 
     bool needsFullRange =
@@ -178,7 +178,8 @@ SmallVector<AcquireDecision> DbHeuristics::chooseAcquirePolicies(
     /// so full-range may not actually be needed.
     if (needsFullRange && summary && !summary->contract.ownerDims.empty() &&
         !facts->hasIndirectAccess) {
-      ARTS_DEBUG("  chooseAcquirePolicies[" << i
+      ARTS_DEBUG("  chooseAcquirePolicies["
+                 << i
                  << "]: contract ownerDims override full-range "
                     "(owner-compute locality known)");
       needsFullRange = false;
@@ -188,8 +189,9 @@ SmallVector<AcquireDecision> DbHeuristics::chooseAcquirePolicies(
     /// the acquire can use halo-aware block access instead of full-range.
     if (needsFullRange && summary &&
         summary->contract.hasExplicitStencilContract() &&
-        summary->hasBlockHints && !facts->hasIndirectAccess) {
-      ARTS_DEBUG("  chooseAcquirePolicies[" << i
+        summary->hasBlockHints() && !facts->hasIndirectAccess) {
+      ARTS_DEBUG("  chooseAcquirePolicies["
+                 << i
                  << "]: stencil contract with block hints overrides "
                     "full-range");
       needsFullRange = false;
@@ -206,10 +208,11 @@ SmallVector<AcquireDecision> DbHeuristics::chooseAcquirePolicies(
     /// If the summary indicates distribution contract information, factor
     /// it into the block-size contribution decision. Acquires with a known
     /// distribution pattern are better candidates for block-size contribution.
-    if (summary && summary->hasDistributionContract &&
+    if (summary && summary->hasDistributionContract() &&
         !decision.canContributeBlockSize) {
       decision.canContributeBlockSize = true;
-      ARTS_DEBUG("  chooseAcquirePolicies[" << i
+      ARTS_DEBUG("  chooseAcquirePolicies["
+                 << i
                  << "]: distribution contract enables block-size contribution");
     }
 

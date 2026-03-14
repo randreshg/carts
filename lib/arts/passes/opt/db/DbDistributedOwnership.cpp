@@ -62,7 +62,7 @@ struct DbDistributedOwnershipPass
         /// one (when a non-default distribution applies).
         if (eligibility.distributionKind)
           setEdtDistributionKind(alloc.getOperation(),
-                                *eligibility.distributionKind);
+                                 *eligibility.distributionKind);
       } else {
         ARTS_DEBUG("Reject DbAlloc arts.id=" << getArtsId(alloc.getOperation())
                                              << " reason="
