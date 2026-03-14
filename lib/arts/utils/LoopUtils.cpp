@@ -6,6 +6,7 @@
 
 #include "arts/utils/LoopUtils.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
 namespace mlir {
@@ -36,6 +37,18 @@ void collectWhileBounds(Value cond, Value iterArg, SmallVector<Value> &bounds) {
       return;
     }
   }
+}
+
+bool hasEnclosingLoop(EdtOp edt) {
+  bool found = false;
+  edt.getBody().walk([&](Operation *op) {
+    if (isa<scf::ForOp, scf::ParallelOp, affine::AffineForOp>(op)) {
+      found = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return found;
 }
 
 } // namespace arts
