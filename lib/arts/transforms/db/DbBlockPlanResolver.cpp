@@ -16,9 +16,11 @@
 #include "arts/transforms/db/DbBlockPlanResolver.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
+#include "arts/transforms/db/DbRewriter.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Dominance.h"
@@ -27,11 +29,10 @@
 using namespace mlir;
 using namespace mlir::arts;
 
-namespace {
+#define DEBUG_TYPE "db_block_plan"
+ARTS_DEBUG_SETUP(db_block_plan);
 
-static bool isBlockLikeMode(PartitionMode mode) {
-  return mode == PartitionMode::block || mode == PartitionMode::stencil;
-}
+namespace {
 
 static bool shouldOverdecompose2DStencilFallback(
     DbAllocOp allocOp, ArrayRef<AcquirePartitionInfo> acquireInfos,
@@ -42,7 +43,7 @@ static bool shouldOverdecompose2DStencilFallback(
     return false;
 
   return llvm::any_of(acquireInfos, [](const AcquirePartitionInfo &info) {
-    return isBlockLikeMode(info.mode) && !info.needsFullRange &&
+    return requiresBlockSize(info.mode) && !info.needsFullRange &&
            info.accessPattern == AccessPattern::Stencil;
   });
 }
@@ -52,10 +53,9 @@ static Value overdecompose2DStencilBlockSize(Value blockSize,
   if (!blockSize)
     return blockSize;
   Value one = arts::createOneIndex(builder, loc);
-  Value two = arts::createConstantIndex(builder, loc, 2);
-  Value adjusted = builder.create<arith::AddIOp>(
-      loc, blockSize, builder.create<arith::SubIOp>(loc, two, one));
-  Value halved = builder.create<arith::DivUIOp>(loc, adjusted, two);
+  Value adjusted = builder.create<arith::AddIOp>(loc, blockSize, one);
+  Value halved = builder.create<arith::DivUIOp>(
+      loc, adjusted, arts::createConstantIndex(builder, loc, 2));
   return builder.create<arith::MaxUIOp>(loc, halved, one);
 }
 
@@ -121,13 +121,42 @@ resolveNDBlockHints(DbAllocOp allocOp, ArrayRef<Value> ndHints,
   return result;
 }
 
+/// Normalize a block size candidate through the standard pipeline:
+/// extract base -> ensure index type -> trace to dominating -> filter zero.
+static Value normalizeBlockSizeCandidate(Value offset, Value size,
+                                         OpBuilder &builder,
+                                         DominanceInfo &domInfo,
+                                         DbAllocOp allocOp, Location loc) {
+  Value candidate = DbUtils::extractBaseBlockSizeCandidate(offset, size);
+  if (!candidate)
+    candidate = size;
+  if (!candidate)
+    return Value();
+
+  candidate = ValueAnalysis::ensureIndexType(candidate, builder, loc);
+  if (!candidate)
+    return Value();
+
+  if (!domInfo.properlyDominates(candidate, allocOp)) {
+    candidate = ValueAnalysis::traceValueToDominating(candidate, allocOp,
+                                                      builder, domInfo, loc);
+  }
+
+  if (!candidate)
+    return Value();
+  if (ValueAnalysis::isZeroConstant(
+          ValueAnalysis::stripNumericCasts(candidate)))
+    return Value();
+  return candidate;
+}
+
 static SmallVector<Value> collectCanonicalBlockSizeCandidates(
     DbAllocOp allocOp, ArrayRef<AcquirePartitionInfo> acquireInfos,
     OpBuilder &builder, DominanceInfo &domInfo, Location loc) {
   SmallVector<Value> candidates;
 
   for (const auto &info : acquireInfos) {
-    if (!isBlockLikeMode(info.mode) || info.partitionSizes.empty())
+    if (!requiresBlockSize(info.mode) || info.partitionSizes.empty())
       continue;
     if (info.needsFullRange)
       continue;
@@ -164,29 +193,10 @@ static SmallVector<Value> collectCanonicalBlockSizeCandidates(
       }
     }
 
-    Value baseCandidate =
-        DbUtils::extractBaseBlockSizeCandidate(blockIndex, blockSizeVal);
-    if (!baseCandidate)
-      baseCandidate = blockSizeVal;
-    if (!baseCandidate)
-      continue;
-
-    Value idxCandidate =
-        ValueAnalysis::ensureIndexType(baseCandidate, builder, loc);
-    if (!idxCandidate)
-      continue;
-
-    Value domCandidate = idxCandidate;
-    if (!domInfo.properlyDominates(domCandidate, allocOp)) {
-      domCandidate = ValueAnalysis::traceValueToDominating(
-          domCandidate, allocOp, builder, domInfo, loc);
-    }
-
+    Value domCandidate = normalizeBlockSizeCandidate(blockIndex, blockSizeVal,
+                                                     builder, domInfo,
+                                                     allocOp, loc);
     if (!domCandidate)
-      continue;
-
-    if (ValueAnalysis::isZeroConstant(
-            ValueAnalysis::stripNumericCasts(domCandidate)))
       continue;
 
     candidates.push_back(domCandidate);
@@ -200,6 +210,7 @@ static SmallVector<Value> collectCanonicalNDBlockSizeCandidates(
     OpBuilder &builder, DominanceInfo &domInfo, Location loc) {
   struct RankedCandidate {
     SmallVector<Value> blockSizes;
+    SmallVector<unsigned> partitionDims;
     bool hasContract = false;
   };
 
@@ -207,33 +218,8 @@ static SmallVector<Value> collectCanonicalNDBlockSizeCandidates(
   unsigned bestRank = 0;
   bool bestHasContract = false;
 
-  auto normalizeCandidate = [&](Value offsetHint, Value sizeHint) -> Value {
-    Value candidate =
-        DbUtils::extractBaseBlockSizeCandidate(offsetHint, sizeHint);
-    if (!candidate)
-      candidate = sizeHint;
-    if (!candidate)
-      return Value();
-
-    candidate = ValueAnalysis::ensureIndexType(candidate, builder, loc);
-    if (!candidate)
-      return Value();
-
-    if (!domInfo.properlyDominates(candidate, allocOp)) {
-      candidate = ValueAnalysis::traceValueToDominating(candidate, allocOp,
-                                                        builder, domInfo, loc);
-    }
-
-    if (!candidate)
-      return Value();
-    if (ValueAnalysis::isZeroConstant(
-            ValueAnalysis::stripNumericCasts(candidate)))
-      return Value();
-    return candidate;
-  };
-
   for (const auto &info : acquireInfos) {
-    if (!isBlockLikeMode(info.mode) || info.needsFullRange)
+    if (!requiresBlockSize(info.mode) || info.needsFullRange)
       continue;
 
     unsigned rank = std::min<unsigned>(info.partitionOffsets.size(),
@@ -247,8 +233,9 @@ static SmallVector<Value> collectCanonicalNDBlockSizeCandidates(
     blockSizes.reserve(rank);
     bool failed = false;
     for (unsigned dim = 0; dim < rank; ++dim) {
-      Value candidate = normalizeCandidate(info.partitionOffsets[dim],
-                                           info.partitionSizes[dim]);
+      Value candidate = normalizeBlockSizeCandidate(
+          info.partitionOffsets[dim], info.partitionSizes[dim], builder,
+          domInfo, allocOp, loc);
       if (!candidate) {
         failed = true;
         break;
@@ -266,21 +253,128 @@ static SmallVector<Value> collectCanonicalNDBlockSizeCandidates(
       rankedCandidates.clear();
     }
 
-    if (blockSizes.size() == bestRank && hasContract == bestHasContract)
-      rankedCandidates.push_back({std::move(blockSizes), hasContract});
+    if (blockSizes.size() == bestRank && hasContract == bestHasContract) {
+      SmallVector<unsigned> dims(info.partitionDims.begin(),
+                                 info.partitionDims.end());
+      rankedCandidates.push_back(
+          {std::move(blockSizes), std::move(dims), hasContract});
+    }
   }
 
   if (rankedCandidates.empty())
     return {};
 
-  SmallVector<Value> merged = rankedCandidates.front().blockSizes;
-  for (size_t i = 1; i < rankedCandidates.size(); ++i) {
-    for (unsigned dim = 0; dim < merged.size(); ++dim) {
-      merged[dim] = builder.create<arith::MinUIOp>(
-          loc, merged[dim], rankedCandidates[i].blockSizes[dim]);
+  // --- Per-dimension independent merge (EXT-PART-4) ---
+  //
+  // Instead of taking global MIN across all candidates for every dimension,
+  // we merge each dimension independently: only candidates that actually
+  // partition a given dimension contribute to that dimension's MIN.
+  //
+  // Example: acquire1 suggests 64x128 (partitions dim 0 only),
+  //          acquire2 suggests 128x64 (partitions dim 1 only).
+  //   Global MIN  -> 64x64   (too conservative)
+  //   Per-dim MIN -> 64x128  (correct: each dim uses its own partitioner)
+
+  unsigned nDims = static_cast<unsigned>(rankedCandidates.front().blockSizes.size());
+
+  // Check whether per-dim analysis is feasible: all candidates must have
+  // partitionDims vectors of the expected rank so we can map positional
+  // block sizes to actual DB dimensions.
+  bool perDimFeasible = true;
+  for (const auto &rc : rankedCandidates) {
+    if (rc.partitionDims.size() != nDims) {
+      perDimFeasible = false;
+      break;
     }
   }
-  return merged;
+
+  // --- Global MIN (fallback / reference) ---
+  SmallVector<Value> globalMerged = rankedCandidates.front().blockSizes;
+  for (size_t i = 1; i < rankedCandidates.size(); ++i) {
+    for (unsigned dim = 0; dim < nDims; ++dim) {
+      globalMerged[dim] = builder.create<arith::MinUIOp>(
+          loc, globalMerged[dim], rankedCandidates[i].blockSizes[dim]);
+    }
+  }
+
+  if (!perDimFeasible || rankedCandidates.size() <= 1) {
+    // Fall back to global MIN when per-dim analysis is not possible or
+    // there is only a single candidate (both strategies are identical).
+    return globalMerged;
+  }
+
+  // --- Per-dimension merge ---
+  // For each positional dimension slot d, determine which candidates
+  // actually partition that slot's DB dimension. A candidate "partitions
+  // dimension d" if its partitionDims[d] matches the consensus DB
+  // dimension for slot d (i.e., the most common mapping).
+  //
+  // We use the first candidate's partitionDims as the reference mapping
+  // (all candidates passed the same bestRank filter, so positional
+  // alignment is expected).
+  ArrayRef<unsigned> refDims = rankedCandidates.front().partitionDims;
+
+  SmallVector<Value> perDimMerged;
+  perDimMerged.reserve(nDims);
+  bool perDimDiffers = false;
+
+  for (unsigned d = 0; d < nDims; ++d) {
+    unsigned targetDbDim = refDims[d];
+    Value mergedVal;
+    unsigned contributorCount = 0;
+
+    for (const auto &rc : rankedCandidates) {
+      // A candidate contributes to this positional slot only if it maps
+      // the same DB dimension at position d.
+      if (rc.partitionDims[d] != targetDbDim)
+        continue;
+      if (!mergedVal) {
+        mergedVal = rc.blockSizes[d];
+      } else {
+        mergedVal =
+            builder.create<arith::MinUIOp>(loc, mergedVal, rc.blockSizes[d]);
+      }
+      ++contributorCount;
+    }
+
+    if (!mergedVal) {
+      // No candidate contributed -- fall back to global MIN for the
+      // entire result to stay safe.
+      ARTS_DEBUG("per-dim merge: no contributors for dim "
+                 << d << " (DB dim " << targetDbDim
+                 << "), falling back to global MIN");
+      return globalMerged;
+    }
+
+    perDimMerged.push_back(mergedVal);
+
+    // Track whether per-dim result would differ from global MIN.
+    if (contributorCount < rankedCandidates.size())
+      perDimDiffers = true;
+  }
+
+  // Emit debug logging when per-dim merge produces a different result.
+  if (perDimDiffers) {
+    ARTS_DEBUG_REGION(
+      ARTS_DBGS() << "[db_block_plan] per-dim merge differs from global MIN "
+                  << "(nDims=" << nDims
+                  << ", candidates=" << rankedCandidates.size() << ")\n";
+      for (unsigned d = 0; d < nDims; ++d) {
+        // Count how many candidates contributed to this dim.
+        unsigned targetDbDim = refDims[d];
+        unsigned count = 0;
+        for (const auto &rc : rankedCandidates) {
+          if (rc.partitionDims[d] == targetDbDim)
+            ++count;
+        }
+        ARTS_DBGS() << "  dim " << d << " (DB dim " << targetDbDim
+                    << "): " << count << "/" << rankedCandidates.size()
+                    << " contributors\n";
+      }
+    );
+  }
+
+  return perDimMerged;
 }
 
 static SmallVector<Value> collectContractNDBlockShapeCandidates(
@@ -295,8 +389,8 @@ static SmallVector<Value> collectContractNDBlockShapeCandidates(
 
     DbAcquireOp acquire = info.acquire;
     auto acquireMode = getPartitionMode(acquire.getOperation());
-    bool blockCapableAcquire = isBlockLikeMode(info.mode) ||
-                               (acquireMode && isBlockLikeMode(*acquireMode)) ||
+    bool blockCapableAcquire = requiresBlockSize(info.mode) ||
+                               (acquireMode && requiresBlockSize(*acquireMode)) ||
                                info.hasDistributionContract ||
                                hasSupportedBlockHalo(acquire.getOperation());
     if (!blockCapableAcquire)
@@ -350,16 +444,6 @@ choosePartitionedDims(DbAllocOp allocOp, ArrayRef<AcquirePartitionInfo> infos,
   if (nPartDims == 0)
     return chosen;
 
-  auto dimsEqual = [](ArrayRef<unsigned> a, ArrayRef<unsigned> b) -> bool {
-    if (a.size() != b.size())
-      return false;
-    for (unsigned i = 0; i < a.size(); ++i) {
-      if (a[i] != b[i])
-        return false;
-    }
-    return true;
-  };
-
   int bestScore = std::numeric_limits<int>::max();
   bool bestFromFine = false;
   SmallVector<const AcquirePartitionInfo *, 8> preferredInfos;
@@ -394,7 +478,7 @@ choosePartitionedDims(DbAllocOp allocOp, ArrayRef<AcquirePartitionInfo> infos,
         return;
       if (info.partitionDims.empty() || info.partitionDims.size() != nPartDims)
         return;
-      if (!dimsEqual(info.partitionDims, candidate.partitionDims)) {
+      if (info.partitionDims != candidate.partitionDims) {
         score += (info.mode == PartitionMode::fine_grained) ? 2 : 1;
       }
     });
