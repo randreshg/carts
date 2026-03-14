@@ -7,6 +7,7 @@
 
 #include "arts/analysis/heuristics/DbHeuristics.h"
 #include "arts/Dialect.h"
+#include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
@@ -69,8 +70,13 @@ void DbHeuristics::recordDecision(llvm::StringRef heuristic, bool applied,
               ValueAnalysis::getConstantIndex(offsets[0], offset);
           bool sizeKnown = ValueAnalysis::getConstantIndex(sizes[0], count);
           if (offsetKnown && sizeKnown && allocId != 0) {
-            for (int64_t i = 0; i < count; ++i)
-              affectedDbIds.push_back(allocId + offset + i);
+            if (count > kMaxOuterDBs) {
+              // Cap: store only the range start for very large DB counts.
+              affectedDbIds.push_back(allocId + offset);
+            } else {
+              for (int64_t i = 0; i < count; ++i)
+                affectedDbIds.push_back(allocId + offset + i);
+            }
           } else if (allocId != 0) {
             affectedDbIds.push_back(allocId);
           }
@@ -88,8 +94,13 @@ void DbHeuristics::recordDecision(llvm::StringRef heuristic, bool applied,
                   allStatic = false;
               }
               if (allStatic) {
-                for (int64_t i = 0; i < totalDbs; ++i)
-                  affectedDbIds.push_back(allocId + i);
+                if (totalDbs > kMaxOuterDBs) {
+                  // Cap: store only the first element for very large DB counts.
+                  affectedDbIds.push_back(allocId);
+                } else {
+                  for (int64_t i = 0; i < totalDbs; ++i)
+                    affectedDbIds.push_back(allocId + i);
+                }
               }
             }
           }
@@ -125,11 +136,16 @@ DbHeuristics::choosePartitioning(const PartitioningContext &ctx) {
 }
 
 SmallVector<AcquireDecision> DbHeuristics::chooseAcquirePolicies(
-    ArrayRef<const DbAcquirePartitionFacts *> acquireFacts) {
+    ArrayRef<const DbAcquirePartitionFacts *> acquireFacts,
+    ArrayRef<const DbAnalysis::AcquireContractSummary *> summaries) {
   SmallVector<AcquireDecision> result;
   result.reserve(acquireFacts.size());
 
-  for (const DbAcquirePartitionFacts *facts : acquireFacts) {
+  for (size_t i = 0; i < acquireFacts.size(); ++i) {
+    const DbAcquirePartitionFacts *facts = acquireFacts[i];
+    const DbAnalysis::AcquireContractSummary *summary =
+        (i < summaries.size()) ? summaries[i] : nullptr;
+
     AcquireDecision decision;
     if (!facts) {
       result.push_back(decision);
@@ -141,17 +157,75 @@ SmallVector<AcquireDecision> DbHeuristics::chooseAcquirePolicies(
         llvm::any_of(facts->entries, [](const DbPartitionEntryFact &entry) {
           return entry.preservesDistributedContract;
         });
+
+    /// When a contract summary preserves a distributed contract entry,
+    /// treat it as evidence to keep the distribution layout intact.
+    if (!preserveDistributionContract && summary &&
+        summary->preservesDistributedContractEntry) {
+      preserveDistributionContract = true;
+      ARTS_DEBUG("  chooseAcquirePolicies[" << i
+                 << "]: contract summary preserves distributed contract");
+    }
+
     bool needsFullRange =
         llvm::any_of(facts->entries, [](const DbPartitionEntryFact &entry) {
           return entry.needsFullRange;
         });
 
+    /// Use contract summary to refine the full-range decision.
+    /// If the summary has ownerDims information, the acquire has a known
+    /// owner-compute relationship that can restrict access to owned blocks,
+    /// so full-range may not actually be needed.
+    if (needsFullRange && summary && !summary->contract.ownerDims.empty() &&
+        !facts->hasIndirectAccess) {
+      ARTS_DEBUG("  chooseAcquirePolicies[" << i
+                 << "]: contract ownerDims override full-range "
+                    "(owner-compute locality known)");
+      needsFullRange = false;
+    }
+
+    /// If the summary indicates stencil semantics with block hints,
+    /// the acquire can use halo-aware block access instead of full-range.
+    if (needsFullRange && summary && summary->usesStencilSemantics() &&
+        summary->hasBlockHints && !facts->hasIndirectAccess) {
+      ARTS_DEBUG("  chooseAcquirePolicies[" << i
+                 << "]: stencil contract with block hints overrides "
+                    "full-range");
+      needsFullRange = false;
+    }
+
+    /// When the contract summary has a refined depPattern, prefer it over
+    /// the raw facts' pattern for rationale reporting.
+    std::optional<ArtsDepPattern> effectiveDepPattern;
+    if (summary && summary->contract.depPattern)
+      effectiveDepPattern = summary->contract.depPattern;
+    else
+      effectiveDepPattern = facts->depPattern;
+
+    /// If the summary indicates distribution contract information, factor
+    /// it into the block-size contribution decision. Acquires with a known
+    /// distribution pattern are better candidates for block-size contribution.
+    if (summary && summary->hasDistributionContract &&
+        !decision.canContributeBlockSize) {
+      decision.canContributeBlockSize = true;
+      ARTS_DEBUG("  chooseAcquirePolicies[" << i
+                 << "]: distribution contract enables block-size contribution");
+    }
+
     if (needsFullRange && !preserveDistributionContract) {
       decision.needsFullRange = true;
       decision.canContributeBlockSize = false;
-      decision.rationale = facts->hasIndirectAccess
-                               ? "indirect access pattern"
-                               : "partition offset not in access pattern";
+
+      if (facts->hasIndirectAccess) {
+        decision.rationale = "indirect access pattern";
+      } else if (effectiveDepPattern &&
+                 *effectiveDepPattern != ArtsDepPattern::unknown) {
+        decision.rationale =
+            "partition offset not in access pattern (depPattern=" +
+            std::string(stringifyArtsDepPattern(*effectiveDepPattern)) + ")";
+      } else {
+        decision.rationale = "partition offset not in access pattern";
+      }
 
       recordDecision("H1.7-AcquireFullRange", true,
                      "acquire needs full range: " + decision.rationale,
