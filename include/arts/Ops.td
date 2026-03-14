@@ -173,6 +173,9 @@ def DbAllocOp : Arts_Op<"db_alloc",
                    CArg<"SmallVector<Value>", "{}">:$elementSizes,
                    CArg<"PartitionMode", "PartitionMode::coarse">:$partitionMode)>
   ];
+  // TODO: Add `let hasVerifier = 1;` to activate the verify() method
+  // implemented in Dialect.cpp. Without it, DbAllocOp invariants
+  // (e.g., non-empty elementSizes) are never checked by MLIR verification.
   let extraClassDeclaration = [{
     MemRefType getAllocatedElementType();
     LogicalResult verify();
@@ -420,7 +423,16 @@ def LoweringContractOp : Arts_Op<"lowering_contract",
     OptionalAttr<I64Attr>:$distribution_version,
     OptionalAttr<DenseI64ArrayAttr>:$owner_dims,
     OptionalAttr<DenseI64ArrayAttr>:$spatial_dims,
-    OptionalAttr<UnitAttr>:$supported_block_halo
+    OptionalAttr<UnitAttr>:$supported_block_halo,
+    OptionalAttr<DenseI64ArrayAttr>:$stencil_independent_dims,
+    OptionalAttr<I64Attr>:$esd_byte_offset,
+    OptionalAttr<I64Attr>:$esd_byte_size,
+    OptionalAttr<I64Attr>:$cached_start_block,
+    OptionalAttr<I64Attr>:$cached_block_count,
+    OptionalAttr<UnitAttr>:$post_db_refined,
+    OptionalAttr<I64Attr>:$inferred_db_mode,
+    OptionalAttr<I64Attr>:$estimated_task_cost,
+    OptionalAttr<I64Attr>:$critical_path_distance
   );
   let assemblyFormat = [{
     `(` $target `:` type($target) `)`
@@ -446,7 +458,16 @@ def LoweringContractOp : Arts_Op<"lowering_contract",
                    CArg<"SmallVector<Value>", "{}">:$minOffsets,
                    CArg<"SmallVector<Value>", "{}">:$maxOffsets,
                    CArg<"SmallVector<Value>", "{}">:$writeFootprint,
-                   CArg<"bool", "false">:$supportedBlockHalo)>
+                   CArg<"bool", "false">:$supportedBlockHalo,
+                   CArg<"SmallVector<int64_t>", "{}">:$stencilIndependentDims,
+                   CArg<"std::optional<int64_t>", "std::nullopt">:$esdByteOffset,
+                   CArg<"std::optional<int64_t>", "std::nullopt">:$esdByteSize,
+                   CArg<"std::optional<int64_t>", "std::nullopt">:$cachedStartBlock,
+                   CArg<"std::optional<int64_t>", "std::nullopt">:$cachedBlockCount,
+                   CArg<"bool", "false">:$postDbRefined,
+                   CArg<"std::optional<int64_t>", "std::nullopt">:$inferredDbMode,
+                   CArg<"std::optional<int64_t>", "std::nullopt">:$estimatedTaskCost,
+                   CArg<"std::optional<int64_t>", "std::nullopt">:$criticalPathDistance)>
   ];
 }
 
