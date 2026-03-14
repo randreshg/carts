@@ -47,6 +47,7 @@ public:
   void resetCache();
 
 private:
+  DbAnalysis *dbAnalysis = nullptr;
   DenseMap<std::pair<Value, Value>, AliasResult> aliasCache;
 };
 

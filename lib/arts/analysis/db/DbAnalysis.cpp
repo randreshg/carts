@@ -91,16 +91,6 @@ static void applyDependencePatternHint(DbAnalysis::LoopDbAccessSummary &summary,
   }
 }
 
-static bool isTiling2DTaskAcquire(DbAcquireOp acquire) {
-  if (!acquire)
-    return false;
-  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
-  if (!edt)
-    return false;
-  auto kind = getEdtDistributionKind(edt.getOperation());
-  return kind && *kind == EdtDistributionKind::tiling_2d;
-}
-
 static bool refineContractWithFacts(LoweringContractInfo &contract,
                                     const DbAcquirePartitionFacts &facts) {
   bool changed = false;
@@ -116,7 +106,8 @@ static bool refineContractWithFacts(LoweringContractInfo &contract,
   }
 
   if (!contract.distributionPattern && contract.depPattern) {
-    if (auto pattern = distributionPatternFromDepPattern(*contract.depPattern)) {
+    if (auto pattern =
+            distributionPatternFromDepPattern(*contract.depPattern)) {
       contract.distributionPattern = *pattern;
       changed = true;
     }
@@ -157,26 +148,18 @@ static bool refineContractWithFacts(LoweringContractInfo &contract,
   return changed;
 }
 
-static bool hasFineGrainedEntryFacts(const DbAcquirePartitionFacts &facts) {
-  return llvm::any_of(facts.entries, [](const DbPartitionEntryFact &entry) {
-    return entry.partition.isFineGrained() && !entry.partition.indices.empty();
-  });
-}
-
-static bool hasUnmappedPartitionEntryFacts(const DbAcquirePartitionFacts &facts) {
-  return llvm::any_of(facts.entries, [](const DbPartitionEntryFact &entry) {
-    return entry.representativeOffset && !entry.mappedDim;
-  });
-}
-
-static bool hasDistributedContractEntryFacts(
-    const DbAcquirePartitionFacts &facts) {
-  return llvm::any_of(facts.entries, [](const DbPartitionEntryFact &entry) {
-    return entry.preservesDistributedContract;
-  });
-}
-
 } // namespace
+
+bool DbAnalysis::isTiling2DTaskAcquire(DbAcquireOp acquire) {
+  if (!acquire)
+    return false;
+  auto [edt, blockArg] = getEdtBlockArgumentForAcquire(acquire);
+  (void)blockArg;
+  if (!edt)
+    return false;
+  auto kind = getEdtDistributionKind(edt.getOperation());
+  return kind && *kind == EdtDistributionKind::tiling_2d;
+}
 
 DbAnalysis::DbAnalysis(AnalysisManager &AM) : ArtsAnalysis(AM) {
   ARTS_DEBUG("Initializing DbAnalysis");
@@ -470,9 +453,10 @@ static void inferPartitionDims(DbAnalysis::AcquirePartitionSummary &summary,
 }
 
 /// For tiling_2d acquires with no partition dims, assign sequential dims.
-static void applyTiling2DPartitionDimsFallback(
-    DbAnalysis::AcquirePartitionSummary &summary, DbAcquireOp acquire) {
-  if (!isTiling2DTaskAcquire(acquire))
+static void
+applyTiling2DPartitionDimsFallback(DbAnalysis::AcquirePartitionSummary &summary,
+                                   DbAcquireOp acquire) {
+  if (!DbAnalysis::isTiling2DTaskAcquire(acquire))
     return;
   if (!summary.partitionDims.empty())
     return;
@@ -498,7 +482,8 @@ static void analyzeCoarsePartition(DbAnalysis::AcquirePartitionSummary &info,
           info.partitionOffsets, &offsetIdx);
       Value repSize = DbUtils::pickRepresentativePartitionSize(
           info.partitionSizes, offsetIdx);
-      if (Value refined = refineSizeFromMinInBlock(acquire, repOffset, repSize)) {
+      if (Value refined =
+              refineSizeFromMinInBlock(acquire, repOffset, repSize)) {
         if (offsetIdx < info.partitionSizes.size())
           info.partitionSizes[offsetIdx] = refined;
         else if (!info.partitionSizes.empty())
@@ -529,10 +514,11 @@ static void analyzeFineGrainedPartition(
 }
 
 /// Analyze partition info for a block/stencil-mode acquire.
-static void analyzeBlockStencilPartition(
-    DbAnalysis::AcquirePartitionSummary &info, DbAcquireOp acquire,
-    DbAcquireNode *acqNode, const DbAcquirePartitionFacts *facts,
-    OpBuilder &builder) {
+static void
+analyzeBlockStencilPartition(DbAnalysis::AcquirePartitionSummary &info,
+                             DbAcquireOp acquire, DbAcquireNode *acqNode,
+                             const DbAcquirePartitionFacts *facts,
+                             OpBuilder &builder) {
   /// Prefer explicit partition_* hints when available. If they were already
   /// materialized into offsets/sizes (post-rewrite acquires), reuse those so
   /// we do not regress valid block acquires back to coarse.
@@ -576,8 +562,7 @@ static void analyzeBlockStencilPartition(
             info.partitionOffsets, &offsetIdx);
         bool hintIsConst =
             hintSize && ValueAnalysis::getConstantIndex(hintSize, hintConst);
-        bool loopIsConst =
-            ValueAnalysis::getConstantIndex(loopSize, loopConst);
+        bool loopIsConst = ValueAnalysis::getConstantIndex(loopSize, loopConst);
 
         bool offsetRelated = false;
         if (hintOff && loopOffset) {
@@ -649,7 +634,7 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
   if (auto modeAttr = getPartitionMode(acquire.getOperation()))
     info.mode = *modeAttr;
   else
-    info.mode = DbUtils::getPartitionModeFromStructure(acquire);
+    info.mode = DbAnalysis::getPartitionModeFromStructure(acquire);
   if (info.mode == PartitionMode::coarse) {
     if (!acquire.getPartitionIndices().empty())
       info.mode = PartitionMode::fine_grained;
@@ -699,23 +684,15 @@ DbAnalysis::getAcquireContractSummary(DbAcquireOp acquire) {
   if (auto semantic = getSemanticContract(acquire.getOperation()))
     mergeLoweringContractInfo(summary.contract, *semantic);
 
-  if (const DbAcquirePartitionFacts *facts = getAcquirePartitionFacts(acquire)) {
+  if (const DbAcquirePartitionFacts *facts =
+          getAcquirePartitionFacts(acquire)) {
     summary.refinedByDbAnalysis =
         refineContractWithFacts(summary.contract, *facts);
     /// FIX-3: Contract persistence is handled by DT-1 in DbTransformsPass
     /// to avoid double-emission when getAcquireContractSummary() is called
     /// multiple times during analysis.
+    summary.facts = facts;
     summary.accessPattern = facts->accessPattern;
-    summary.hasIndirectAccess = facts->hasIndirectAccess;
-    summary.hasDirectAccess = facts->hasDirectAccess;
-    summary.hasBlockHints = facts->hasBlockHints;
-    summary.inferredBlock = facts->inferredBlock;
-    summary.hasFineGrainedEntries = hasFineGrainedEntryFacts(*facts);
-    summary.hasUnmappedPartitionEntry = hasUnmappedPartitionEntryFacts(*facts);
-    summary.preservesDistributedContractEntry =
-        hasDistributedContractEntryFacts(*facts);
-    summary.hasDistributionContract = facts->hasDistributionContract;
-    summary.partitionDimsFromPeers = facts->partitionDimsFromPeers;
   }
 
   if (summary.accessPattern == AccessPattern::Unknown) {
@@ -739,7 +716,7 @@ bool DbAnalysis::operationHasDistributedDbContract(Operation *op) {
     if (found)
       return WalkResult::interrupt();
     if (auto contractSummary = getAcquireContractSummary(acquire);
-        contractSummary && contractSummary->hasDistributionContract) {
+        contractSummary && contractSummary->hasDistributionContract()) {
       found = true;
       return WalkResult::interrupt();
     }
@@ -757,7 +734,7 @@ bool DbAnalysis::operationHasPeerInferredPartitionDims(Operation *op) {
     if (found)
       return WalkResult::interrupt();
     if (auto contractSummary = getAcquireContractSummary(acquire);
-        contractSummary && contractSummary->partitionDimsFromPeers) {
+        contractSummary && contractSummary->partitionDimsFromPeers()) {
       found = true;
       return WalkResult::interrupt();
     }
@@ -800,7 +777,8 @@ bool DbAnalysis::hasCrossElementSelfReadInLoop(DbAcquireOp acquire,
   if (!edt || loopOp->getParentOfType<EdtOp>() != edt)
     return false;
 
-  EdtGraph &edtGraph = getAnalysisManager().getEdtAnalysis().getOrCreateEdtGraph(func);
+  EdtGraph &edtGraph =
+      getAnalysisManager().getEdtAnalysis().getOrCreateEdtGraph(func);
   EdtNode *edtNode = edtGraph.getEdtNode(edt);
   if (!edtNode)
     return false;
@@ -831,7 +809,7 @@ bool DbAnalysis::hasCrossElementSelfReadInLoop(DbAcquireOp acquire,
 
   SmallVector<AccessIndexInfo, 16> selfReadAccesses;
   for (auto &[dbRef, memOps] : dbRefToMemOps) {
-    if (!DbUtils::isSameMemoryObject(dbRef.getSource(), edtValue))
+    if (!DbAnalysis::isSameMemoryObject(dbRef.getSource(), edtValue))
       continue;
 
     for (Operation *memOp : memOps) {
@@ -994,4 +972,319 @@ DbAcquireNode *DbAnalysis::getDbAcquireNode(DbAcquireOp acquire) {
   if (!func)
     return nullptr;
   return getOrCreateGraph(func).getDbAcquireNode(acquire);
+}
+
+bool DbAnalysis::hasDbConflict(Operation *a, Operation *b) {
+  if (!a || !b)
+    return false;
+
+  /// Collect DB accesses for each operation: alloc -> isWriter.
+  DenseMap<Operation *, bool> accessesA;
+  DenseMap<Operation *, bool> accessesB;
+
+  auto collectAccesses = [](Operation *op,
+                            DenseMap<Operation *, bool> &accesses) {
+    op->walk([&](DbAcquireOp acq) {
+      Operation *alloc = DbUtils::getUnderlyingDbAlloc(acq.getSourcePtr());
+      if (!alloc)
+        return;
+      bool write = DbUtils::isWriterMode(acq.getMode());
+      auto it = accesses.find(alloc);
+      if (it == accesses.end())
+        accesses[alloc] = write;
+      else if (write)
+        it->second = true;
+    });
+  };
+
+  collectAccesses(a, accessesA);
+  collectAccesses(b, accessesB);
+
+  /// Check for conflicts: same alloc, at least one writer.
+  for (const auto &entryA : accessesA) {
+    auto it = accessesB.find(entryA.first);
+    if (it == accessesB.end())
+      continue;
+    if (entryA.second || it->second)
+      return true;
+  }
+  return false;
+}
+
+///===----------------------------------------------------------------------===///
+/// Partition / Granularity Queries (static)
+///===----------------------------------------------------------------------===///
+
+PartitionMode DbAnalysis::getPartitionModeFromStructure(DbAcquireOp acquire) {
+  if (auto mode = ::getPartitionMode(acquire.getOperation()))
+    return *mode;
+  return PartitionMode::coarse;
+}
+
+PartitionMode DbAnalysis::getPartitionModeFromStructure(DbAllocOp alloc) {
+  if (auto mode = ::getPartitionMode(alloc.getOperation()))
+    return *mode;
+
+  if (DbAnalysis::isCoarseGrained(alloc))
+    return PartitionMode::coarse;
+
+  return PartitionMode::fine_grained;
+}
+
+bool DbAnalysis::isBlock(DbAcquireOp acquire) {
+  return getPartitionModeFromStructure(acquire) == PartitionMode::block;
+}
+
+bool DbAnalysis::isElementWise(DbAcquireOp acquire) {
+  return getPartitionModeFromStructure(acquire) == PartitionMode::fine_grained;
+}
+
+bool DbAnalysis::isCoarse(DbAcquireOp acquire) {
+  return getPartitionModeFromStructure(acquire) == PartitionMode::coarse;
+}
+
+bool DbAnalysis::isCoarseGrained(DbAllocOp alloc) {
+  if (auto mode = getPartitionMode(alloc.getOperation()))
+    return *mode == PartitionMode::coarse;
+
+  return llvm::all_of(alloc.getSizes(), [](Value v) {
+    int64_t val;
+    return ValueAnalysis::getConstantIndex(v, val) && val == 1;
+  });
+}
+
+bool DbAnalysis::isFineGrained(DbAllocOp alloc) {
+  if (auto mode = getPartitionMode(alloc.getOperation()))
+    return *mode == PartitionMode::fine_grained;
+
+  ValueRange elementSizes = alloc.getElementSizes();
+  if (elementSizes.empty())
+    return false;
+
+  return llvm::all_of(elementSizes, [](Value v) {
+    int64_t cst;
+    return ValueAnalysis::getConstantIndex(v, cst) && cst == 1;
+  });
+}
+
+bool DbAnalysis::hasSingleSize(Operation *dbOp) {
+  if (!dbOp)
+    return false;
+
+  auto isOneLike = [](Value size) -> bool {
+    if (ValueAnalysis::isOneConstant(size))
+      return true;
+
+    auto addOp = size.getDefiningOp<arith::AddIOp>();
+    if (!addOp)
+      return false;
+
+    Value lhs = addOp.getLhs();
+    Value rhs = addOp.getRhs();
+    Value other;
+    if (ValueAnalysis::isOneConstant(lhs))
+      other = rhs;
+    else if (ValueAnalysis::isOneConstant(rhs))
+      other = lhs;
+    else
+      return false;
+
+    auto subOp = other.getDefiningOp<arith::SubIOp>();
+    if (!subOp)
+      return false;
+
+    Value subLhs = subOp.getLhs();
+    Value subRhs = subOp.getRhs();
+    if (subLhs == subRhs)
+      return true;
+
+    if (auto minOp = subLhs.getDefiningOp<arith::MinUIOp>()) {
+      if (minOp.getLhs() == subRhs || minOp.getRhs() == subRhs)
+        return true;
+    }
+    return false;
+  };
+
+  SmallVector<Value> sizes = DbUtils::getSizesFromDb(dbOp);
+  if (sizes.empty())
+    return true;
+
+  for (Value size : sizes) {
+    if (!isOneLike(size))
+      return false;
+  }
+  return true;
+}
+
+///===----------------------------------------------------------------------===///
+/// Semantic Queries (static)
+///===----------------------------------------------------------------------===///
+
+bool DbAnalysis::isSameMemoryObject(Value lhsMemref, Value rhsMemref) {
+  lhsMemref = ValueAnalysis::stripNumericCasts(lhsMemref);
+  rhsMemref = ValueAnalysis::stripNumericCasts(rhsMemref);
+
+  Operation *lhsRoot = DbUtils::getUnderlyingDbAlloc(lhsMemref);
+  Operation *rhsRoot = DbUtils::getUnderlyingDbAlloc(rhsMemref);
+  if (lhsRoot && rhsRoot)
+    return lhsRoot == rhsRoot;
+
+  lhsRoot = ValueAnalysis::getUnderlyingOperation(lhsMemref);
+  rhsRoot = ValueAnalysis::getUnderlyingOperation(rhsMemref);
+  if (lhsRoot && rhsRoot)
+    return lhsRoot == rhsRoot;
+
+  return lhsMemref == rhsMemref;
+}
+
+bool DbAnalysis::hasStaticHints(DbAcquireOp acqOp) {
+  /// Check partition hints (element-space) for static values
+  Value offset = acqOp.getPartitionOffsets().empty()
+                     ? nullptr
+                     : acqOp.getPartitionOffsets().front();
+  Value size = acqOp.getPartitionSizes().empty()
+                   ? nullptr
+                   : acqOp.getPartitionSizes().front();
+  int64_t val = 0;
+  bool offsetConst = !offset || ValueAnalysis::getConstantIndex(offset, val);
+  bool sizeConst = !size || ValueAnalysis::getConstantIndex(size, val);
+  return offsetConst && sizeConst;
+}
+
+Operation *DbAnalysis::findUserEdt(DbControlOp dbControl) {
+  for (Operation *user : dbControl.getResult().getUsers()) {
+    if (auto edt = dyn_cast<EdtOp>(user)) {
+      return edt;
+    }
+  }
+  return nullptr;
+}
+
+std::optional<int64_t> DbAnalysis::getConstantOffsetBetween(Value idx,
+                                                            Value base) {
+  if (!idx || !base)
+    return std::nullopt;
+
+  /// Same value means offset 0
+  if (idx == base)
+    return 0;
+
+  /// Strip numeric casts (index casts, sign/zero extensions, etc.)
+  Value strippedIdx = ValueAnalysis::stripNumericCasts(idx);
+  Value strippedBase = ValueAnalysis::stripNumericCasts(base);
+
+  if (strippedIdx == strippedBase)
+    return 0;
+
+  /// Check if idx = base + constant
+  if (auto addOp = strippedIdx.getDefiningOp<arith::AddIOp>()) {
+    int64_t constVal;
+    if (addOp.getLhs() == strippedBase &&
+        ValueAnalysis::getConstantIndex(addOp.getRhs(), constVal))
+      return constVal;
+    if (addOp.getRhs() == strippedBase &&
+        ValueAnalysis::getConstantIndex(addOp.getLhs(), constVal))
+      return constVal;
+  }
+
+  /// Check if idx = base - constant
+  if (auto subOp = strippedIdx.getDefiningOp<arith::SubIOp>()) {
+    int64_t constVal;
+    if (subOp.getLhs() == strippedBase &&
+        ValueAnalysis::getConstantIndex(subOp.getRhs(), constVal))
+      return -constVal;
+  }
+
+  /// Check the reverse: base = idx + constant means idx = base - constant
+  if (auto addOp = strippedBase.getDefiningOp<arith::AddIOp>()) {
+    int64_t constVal;
+    if (addOp.getLhs() == strippedIdx &&
+        ValueAnalysis::getConstantIndex(addOp.getRhs(), constVal))
+      return -constVal;
+    if (addOp.getRhs() == strippedIdx &&
+        ValueAnalysis::getConstantIndex(addOp.getLhs(), constVal))
+      return -constVal;
+  }
+
+  if (auto subOp = strippedBase.getDefiningOp<arith::SubIOp>()) {
+    int64_t constVal;
+    if (subOp.getLhs() == strippedIdx &&
+        ValueAnalysis::getConstantIndex(subOp.getRhs(), constVal))
+      return constVal;
+  }
+
+  return std::nullopt;
+}
+
+bool DbAnalysis::hasMultiEntryStencilPattern(DbAcquireOp acquire,
+                                             int64_t &minOffset,
+                                             int64_t &maxOffset) {
+  size_t numEntries = acquire.getNumPartitionEntries();
+  if (numEntries < 2)
+    return false;
+
+  /// Get indices for all entries
+  SmallVector<SmallVector<Value>> allIndices;
+  for (size_t i = 0; i < numEntries; ++i) {
+    allIndices.push_back(acquire.getPartitionIndicesForEntry(i));
+  }
+
+  /// All entries must have the same number of indices (same dimensionality)
+  size_t numDims = allIndices[0].size();
+  if (numDims == 0)
+    return false;
+  for (const auto &indices : allIndices) {
+    if (indices.size() != numDims)
+      return false;
+  }
+
+  /// For each dimension, check if indices form a stencil pattern
+  /// A stencil pattern means all indices are base +/- small constant
+  bool foundStencilDim = false;
+  minOffset = 0;
+  maxOffset = 0;
+
+  for (size_t dim = 0; dim < numDims; ++dim) {
+    /// Try each entry as potential base
+    bool dimIsStencil = false;
+    int64_t dimMin = 0, dimMax = 0;
+
+    for (size_t baseEntry = 0; baseEntry < numEntries && !dimIsStencil;
+         ++baseEntry) {
+      Value base = allIndices[baseEntry][dim];
+      if (!base)
+        continue;
+
+      bool allMatch = true;
+      int64_t localMin = 0, localMax = 0;
+
+      for (size_t i = 0; i < numEntries; ++i) {
+        Value idx = allIndices[i][dim];
+        auto offset = getConstantOffsetBetween(idx, base);
+        if (!offset || std::abs(*offset) > 2) {
+          /// Not a small constant offset - not stencil in this dimension
+          allMatch = false;
+          break;
+        }
+        localMin = std::min(localMin, *offset);
+        localMax = std::max(localMax, *offset);
+      }
+
+      if (allMatch && (localMin != localMax)) {
+        /// Found stencil pattern in this dimension
+        dimIsStencil = true;
+        dimMin = localMin;
+        dimMax = localMax;
+      }
+    }
+
+    if (dimIsStencil) {
+      foundStencilDim = true;
+      /// Accumulate bounds (for multi-dimensional stencils, use the widest)
+      minOffset = std::min(minOffset, dimMin);
+      maxOffset = std::max(maxOffset, dimMax);
+    }
+  }
+
+  return foundStencilDim;
 }

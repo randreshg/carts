@@ -155,7 +155,7 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
   }
 
   /// Use utility function to get EDT and block argument
-  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(dbAcquireOp);
+  auto [edt, blockArg] = getEdtBlockArgumentForAcquire(dbAcquireOp);
   edtUserOp = edt.getOperation();
   useInEdt = blockArg;
 
@@ -422,7 +422,7 @@ AccessPattern DbAcquireNode::getAccessPattern() const {
   if (acqOp.hasMultiplePartitionEntries() &&
       !acqOp.hasAllFineGrainedEntries()) {
     int64_t minOffset = 0, maxOffset = 0;
-    if (DbUtils::hasMultiEntryStencilPattern(acqOp, minOffset, maxOffset)) {
+    if (DbAnalysis::hasMultiEntryStencilPattern(acqOp, minOffset, maxOffset)) {
       ARTS_DEBUG("  -> Returning Stencil (multi-entry stencil pattern, not all "
                  "fine-grained)");
       ARTS_DEBUG("  -> Storing stencil bounds: min=" << minOffset

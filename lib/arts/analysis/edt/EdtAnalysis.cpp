@@ -10,9 +10,14 @@
 #include "arts/analysis/graphs/edt/EdtNode.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "llvm/ADT/SmallPtrSet.h"
 
 #include "llvm/Support/raw_ostream.h"
 
@@ -156,7 +161,7 @@ EdtGraph &EdtAnalysis::getOrCreateEdtGraph(func::FuncOp func) {
   eg->build();
 
   auto *ptr = eg.get();
-  const_cast<EdtAnalysis *>(this)->edtGraphs[func] = std::move(eg);
+  edtGraphs[func] = std::move(eg);
   return *ptr;
 }
 
@@ -215,6 +220,22 @@ void EdtAnalysis::invalidate() {
   analyzed = false;
 }
 
+bool EdtAnalysis::isParallelEdtFusable(EdtOp edt) {
+  if (edt.getType() != arts::EdtType::parallel)
+    return false;
+  if (!edt.getDependencies().empty())
+    return false;
+  Block &body = edt.getBody().front();
+  for (Operation &op : body) {
+    if (isa<arts::ForOp>(&op))
+      continue;
+    if (isa<arts::YieldOp>(&op))
+      continue;
+    return false;
+  }
+  return true;
+}
+
 EdtNode *EdtAnalysis::getEdtNode(EdtOp op) {
   auto func = op->getParentOfType<func::FuncOp>();
   if (!func)
@@ -228,4 +249,227 @@ MetadataManager &EdtAnalysis::getMetadataManager() {
 
 LoopAnalysis &EdtAnalysis::getLoopAnalysis() {
   return getAnalysisManager().getLoopAnalysis();
+}
+
+///==========================================================================///
+/// EDT invariance and reachability queries (moved from EdtUtils)
+///==========================================================================///
+
+/// Check if a block argument is invariant with respect to an EDT region.
+static bool isBlockArgInvariant(Region &edtRegion, BlockArgument blockArg) {
+  Block *owner = blockArg.getOwner();
+  if (!owner)
+    return false;
+  Region *ownerRegion = owner->getParent();
+  if (!ownerRegion)
+    return false;
+
+  /// Entry block arguments of the EDT region are considered invariant
+  /// because their defining value is outside the region.
+  if (ownerRegion == &edtRegion && owner == &edtRegion.front())
+    return true;
+
+  /// Block arguments that belong to regions outside of this EDT are also
+  /// treated as invariant inputs.
+  return !edtRegion.isAncestor(ownerRegion);
+}
+
+/// Check if an operation's result is invariant with respect to an EDT region.
+/// Recursive helper for isInvariantInEdt.
+static bool isDefOpInvariant(Region &edtRegion, Value v,
+                             SmallPtrSetImpl<Value> &visited) {
+  if (!v)
+    return false;
+  if (!visited.insert(v).second)
+    return true;
+
+  if (ValueAnalysis::isValueConstant(v))
+    return true;
+
+  if (auto blockArg = v.dyn_cast<BlockArgument>())
+    return isBlockArgInvariant(edtRegion, blockArg);
+
+  Operation *defOp = v.getDefiningOp();
+  if (!defOp)
+    return false;
+
+  if (!edtRegion.isAncestor(defOp->getParentRegion()))
+    return true;
+
+  if (isa<arith::ConstantIndexOp, arith::ConstantIntOp>(defOp))
+    return true;
+
+  if (isa<arith::AddIOp, arith::SubIOp, arith::MulIOp, arith::DivSIOp,
+          arith::DivUIOp, arith::IndexCastOp, arith::ExtSIOp, arith::ExtUIOp,
+          arith::TruncIOp>(defOp)) {
+    for (Value operand : defOp->getOperands())
+      if (!isDefOpInvariant(edtRegion, operand, visited))
+        return false;
+    return true;
+  }
+
+  return false;
+}
+
+bool EdtAnalysis::isInvariantInEdt(Region &edtRegion, Value value) {
+  SmallPtrSet<Value, 16> visited;
+
+  if (!isDefOpInvariant(edtRegion, value, visited))
+    return false;
+
+  /// Check for pointer-like types and their users
+  if (!value.getType().isa<MemRefType, UnrankedMemRefType>())
+    return true;
+
+  for (Operation *user : value.getUsers()) {
+    if (!edtRegion.isAncestor(user->getParentRegion()))
+      continue;
+
+    if (auto store = dyn_cast<memref::StoreOp>(user))
+      if (store.getMemref() == value)
+        return false;
+
+    if (auto atomicRmw = dyn_cast<memref::AtomicRMWOp>(user))
+      if (atomicRmw.getMemref() == value)
+        return false;
+  }
+
+  return true;
+}
+
+bool EdtAnalysis::isReachable(Operation *source, Operation *target) {
+  if (!source || !target)
+    return false;
+  if (source == target)
+    return true;
+
+  if (!source->getBlock() || !target->getBlock())
+    return false;
+
+  if (source->getBlock() == target->getBlock())
+    return source->isBeforeInBlock(target);
+
+  auto srcEdt = source->getParentOfType<EdtOp>();
+  auto tgtEdt = target->getParentOfType<EdtOp>();
+  if (srcEdt != tgtEdt)
+    return false;
+
+  Operation *src = source;
+  Operation *tgt = target;
+  while (true) {
+    if (src->getBlock() == tgt->getBlock())
+      return src->isBeforeInBlock(tgt);
+    if (src == srcEdt && tgt == tgtEdt)
+      break;
+    if (src->getParentOp() != srcEdt)
+      src = src->getParentOp();
+    if (tgt->getParentOp() != tgtEdt)
+      tgt = tgt->getParentOp();
+  }
+  return false;
+}
+
+///==========================================================================///
+/// Reduction pattern analysis (ET-5 helpers)
+///==========================================================================///
+
+std::optional<ReductionOp> EdtAnalysis::classifyReductionOp(Operation *op) {
+  if (!op)
+    return std::nullopt;
+
+  if (isa<arith::AddIOp>(op) || isa<arith::AddFOp>(op))
+    return ReductionOp::ADD;
+
+  if (isa<arith::MinSIOp>(op) || isa<arith::MinUIOp>(op) ||
+      isa<arith::MinimumFOp>(op) || isa<arith::MinNumFOp>(op))
+    return ReductionOp::MIN;
+
+  if (isa<arith::MaxSIOp>(op) || isa<arith::MaxUIOp>(op) ||
+      isa<arith::MaximumFOp>(op) || isa<arith::MaxNumFOp>(op))
+    return ReductionOp::MAX;
+
+  if (isa<arith::OrIOp>(op))
+    return ReductionOp::OR;
+  if (isa<arith::AndIOp>(op))
+    return ReductionOp::AND;
+  if (isa<arith::XOrIOp>(op))
+    return ReductionOp::XOR;
+
+  return std::nullopt;
+}
+
+StringRef EdtAnalysis::reductionOpName(ReductionOp op) {
+  switch (op) {
+  case ReductionOp::ADD:
+    return "add";
+  case ReductionOp::MIN:
+    return "min";
+  case ReductionOp::MAX:
+    return "max";
+  case ReductionOp::OR:
+    return "or";
+  case ReductionOp::AND:
+    return "and";
+  case ReductionOp::XOR:
+    return "xor";
+  }
+  return "unknown";
+}
+
+bool EdtAnalysis::isAtomicCapable(ReductionOp op) {
+  return op == ReductionOp::ADD || op == ReductionOp::MIN ||
+         op == ReductionOp::MAX;
+}
+
+std::optional<ReductionOp> EdtAnalysis::matchLoadModifyStore(Value dbRefResult,
+                                                             Region &edtBody) {
+  SmallVector<Operation *, 4> loads;
+  SmallVector<Operation *, 4> stores;
+
+  DbUtils::forEachReachableMemoryAccess(
+      dbRefResult,
+      [&](const DbUtils::MemoryAccessInfo &access) {
+        if (access.isRead())
+          loads.push_back(access.op);
+        else if (access.isWrite())
+          stores.push_back(access.op);
+        return WalkResult::advance();
+      },
+      &edtBody);
+
+  if (loads.size() != 1 || stores.size() != 1)
+    return std::nullopt;
+
+  Operation *loadOp = loads.front();
+  Operation *storeOp = stores.front();
+
+  Value storedVal;
+  if (auto store = dyn_cast<memref::StoreOp>(storeOp))
+    storedVal = store.getValueToStore();
+  else if (auto store = dyn_cast<affine::AffineStoreOp>(storeOp))
+    storedVal = store.getValueToStore();
+  else
+    return std::nullopt;
+
+  if (!storedVal || !storedVal.getDefiningOp())
+    return std::nullopt;
+
+  Operation *modifyOp = storedVal.getDefiningOp();
+  auto reductionKind = classifyReductionOp(modifyOp);
+  if (!reductionKind)
+    return std::nullopt;
+
+  Value loadResult = loadOp->getResult(0);
+  bool usesLoad = false;
+  for (Value operand : modifyOp->getOperands()) {
+    if (operand == loadResult) {
+      usesLoad = true;
+      break;
+    }
+  }
+
+  if (!usesLoad)
+    return std::nullopt;
+
+  return reductionKind;
 }

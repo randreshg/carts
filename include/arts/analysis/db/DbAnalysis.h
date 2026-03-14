@@ -16,6 +16,7 @@
 #include "arts/Dialect.h"
 #include "arts/analysis/Analysis.h"
 #include "arts/analysis/graphs/db/DbAccessPattern.h"
+#include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -32,7 +33,6 @@ class DbAllocNode;
 class DbAcquireNode;
 class DbAliasAnalysis;
 class LoopAnalysis;
-struct DbAcquirePartitionFacts;
 
 class DbAnalysis : public ArtsAnalysis {
 public:
@@ -58,29 +58,42 @@ public:
   struct AcquireContractSummary {
     LoweringContractInfo contract;
     bool refinedByDbAnalysis = false;
+    /// Kept as a stored field because getAcquireContractSummary() applies
+    /// post-hoc refinement (stencil/matmul fallback) that may differ from
+    /// the raw facts value.
     AccessPattern accessPattern = AccessPattern::Unknown;
-    bool hasIndirectAccess = false;
-    bool hasDirectAccess = false;
-    bool hasBlockHints = false;
-    bool inferredBlock = false;
-    bool hasFineGrainedEntries = false;
-    bool hasUnmappedPartitionEntry = false;
-    bool preservesDistributedContractEntry = false;
-    bool hasDistributionContract = false;
-    bool partitionDimsFromPeers = false;
+    /// Pointer to graph-owned facts. Valid for the lifetime of the DbGraph
+    /// (i.e., within a single pass's runOnOperation()).
+    const DbAcquirePartitionFacts *facts = nullptr;
+
+    /// Delegating accessors — null-safe, return conservative defaults.
+    bool hasIndirectAccess() const { return facts && facts->hasIndirectAccess; }
+    bool hasDirectAccess() const { return facts && facts->hasDirectAccess; }
+    bool hasBlockHints() const { return facts && facts->hasBlockHints; }
+    bool inferredBlock() const { return facts && facts->inferredBlock; }
+    bool hasFineGrainedEntries() const {
+      return facts && facts->hasFineGrainedEntries();
+    }
+    bool hasUnmappedPartitionEntry() const {
+      return facts && facts->hasUnmappedPartitionEntry();
+    }
+    bool preservesDistributedContractEntry() const {
+      return facts && facts->hasDistributedContractEntries();
+    }
+    bool hasDistributionContract() const {
+      return facts && facts->hasDistributionContract;
+    }
+    bool partitionDimsFromPeers() const {
+      return facts && facts->partitionDimsFromPeers;
+    }
 
     bool empty() const {
       return contract.empty() && accessPattern == AccessPattern::Unknown &&
-             !hasIndirectAccess && !hasDirectAccess && !hasBlockHints &&
-             !inferredBlock && !hasFineGrainedEntries &&
-             !hasUnmappedPartitionEntry &&
-             !preservesDistributedContractEntry &&
-             !hasDistributionContract && !partitionDimsFromPeers;
+             !facts;
     }
     bool usesStencilSemantics() const {
       return accessPattern == AccessPattern::Stencil ||
-             contract.isStencilFamily() ||
-             contract.usesStencilDistribution() ||
+             contract.isStencilFamily() || contract.usesStencilDistribution() ||
              contract.supportsBlockHalo();
     }
     bool usesMatmulSemantics() const {
@@ -140,6 +153,12 @@ public:
   /// internode EDT flow.
   bool hasNonInternodeConsumerForWrittenDb(EdtOp producerEdt);
 
+  /// Return true when operations a and b have conflicting DB accesses:
+  /// both access the same underlying DB allocation and at least one is a
+  /// writer. This is a semantic query about DB relationships (conflict
+  /// detection).
+  static bool hasDbConflict(Operation *a, Operation *b);
+
   /// Query DB access patterns through the DB graph interface.
   std::optional<AccessPattern> getAcquireAccessPattern(DbAcquireOp acquire);
   std::optional<DbAccessPattern> getAllocAccessPattern(DbAllocOp alloc);
@@ -150,6 +169,58 @@ public:
   DbAcquireNode *getDbAcquireNode(DbAcquireOp acquire);
 
   using ArtsAnalysis::getAnalysisManager;
+
+  ///===----------------------------------------------------------------------===///
+  /// Partition / Granularity Queries (static)
+  ///===----------------------------------------------------------------------===///
+
+  /// Get partition mode from DbAcquireOp structure.
+  static PartitionMode getPartitionModeFromStructure(DbAcquireOp acquire);
+
+  /// Get partition mode from DbAllocOp structure.
+  static PartitionMode getPartitionModeFromStructure(DbAllocOp alloc);
+
+  /// Check if acquire is in block partition mode.
+  static bool isBlock(DbAcquireOp acquire);
+
+  /// Check if acquire is in element-wise (fine_grained) partition mode.
+  static bool isElementWise(DbAcquireOp acquire);
+
+  /// Check if acquire is in coarse partition mode.
+  static bool isCoarse(DbAcquireOp acquire);
+
+  /// Check if allocation is coarse-grained (all sizes == 1).
+  static bool isCoarseGrained(DbAllocOp alloc);
+
+  /// Check if allocation is fine-grained (partitioned into multiple DBs).
+  static bool isFineGrained(DbAllocOp alloc);
+
+  /// Check if a datablock operation has a single size of 1.
+  static bool hasSingleSize(Operation *dbOp);
+
+  ///===----------------------------------------------------------------------===///
+  /// Semantic Queries (static)
+  ///===----------------------------------------------------------------------===///
+
+  /// Conservative memory-object identity for memref-like values.
+  static bool isSameMemoryObject(Value lhsMemref, Value rhsMemref);
+
+  /// Check if a DbAcquireOp has static (constant) offset and size hints.
+  static bool hasStaticHints(DbAcquireOp acqOp);
+
+  /// Find the EDT operation that uses a DbControlOp result.
+  static Operation *findUserEdt(DbControlOp dbControl);
+
+  /// Check if a multi-entry acquire has a stencil access pattern.
+  static bool hasMultiEntryStencilPattern(DbAcquireOp acquire,
+                                          int64_t &minOffset,
+                                          int64_t &maxOffset);
+
+  /// Try to extract a constant offset between two index values.
+  static std::optional<int64_t> getConstantOffsetBetween(Value idx, Value base);
+
+  /// Returns true if the acquire belongs to an EDT with tiling_2d distribution.
+  static bool isTiling2DTaskAcquire(DbAcquireOp acquire);
 
 private:
   llvm::DenseMap<func::FuncOp, std::unique_ptr<DbGraph>> functionGraphMap;

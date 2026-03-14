@@ -53,7 +53,8 @@ ARTS_DEBUG_SETUP(guid_range_detection);
 using namespace mlir;
 using namespace mlir::arts;
 
-/// Attribute names stamped by this transform (centralized in OperationAttributes.h).
+/// Attribute names stamped by this transform (centralized in
+/// OperationAttributes.h).
 using AttrNames::Operation::GuidRangeTripCount;
 using AttrNames::Operation::HasGuidRangeAlloc;
 
@@ -83,8 +84,7 @@ static std::optional<int64_t> tryComputeStaticTripCount(scf::ForOp forOp) {
 /// Collect all DbAllocOps that are direct children of a ForOp body
 /// (not nested inside inner ForOps).  Returns the count of DbAllocOps
 /// found and stores the single candidate (when count == 1).
-static unsigned collectDirectDbAllocs(scf::ForOp forOp,
-                                      DbAllocOp &candidate) {
+static unsigned collectDirectDbAllocs(scf::ForOp forOp, DbAllocOp &candidate) {
   unsigned count = 0;
   candidate = nullptr;
 
@@ -122,8 +122,8 @@ bool mlir::arts::detectGUIDRangeCandidates(ModuleOp module) {
 
     if (allocCount > 1) {
       ARTS_WARN("ForOp at " << forOp.getLoc() << ": " << allocCount
-                             << " DbAllocOps in body, skipping "
-                             << "(only single-alloc loops supported)");
+                            << " DbAllocOps in body, skipping "
+                            << "(only single-alloc loops supported)");
       return;
     }
 
@@ -143,16 +143,16 @@ bool mlir::arts::detectGUIDRangeCandidates(ModuleOp module) {
 
     if (tripCount > 0) {
       ARTS_INFO("ForOp at " << forOp.getLoc()
-                             << ": marked DbAllocOp with static trip count "
-                             << tripCount);
+                            << ": marked DbAllocOp with static trip count "
+                            << tripCount);
     } else if (tripCount == 0) {
       ARTS_INFO("ForOp at " << forOp.getLoc()
-                             << ": marked DbAllocOp with zero trip count "
-                             << "(loop never executes)");
+                            << ": marked DbAllocOp with zero trip count "
+                            << "(loop never executes)");
     } else {
       ARTS_INFO("ForOp at " << forOp.getLoc()
-                             << ": marked DbAllocOp with dynamic trip count "
-                             << "(bounds not statically analyzable)");
+                            << ": marked DbAllocOp with dynamic trip count "
+                            << "(bounds not statically analyzable)");
     }
   });
 

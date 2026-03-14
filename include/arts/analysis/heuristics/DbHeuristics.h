@@ -57,8 +57,7 @@ public:
   static constexpr int64_t kMinInnerBytes = 64;
 
   PartitioningDecision choosePartitioning(const PartitioningContext &ctx);
-  SmallVector<AcquireDecision>
-  chooseAcquirePolicies(
+  SmallVector<AcquireDecision> chooseAcquirePolicies(
       ArrayRef<const DbAcquirePartitionFacts *> acquireFacts,
       ArrayRef<const DbAnalysis::AcquireContractSummary *> summaries = {});
 

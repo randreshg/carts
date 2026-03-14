@@ -36,9 +36,12 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
+#include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/transforms/dep/DepTransform.h"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/EdtUtils.h"
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -62,41 +65,6 @@ struct JacobiLoopMatch {
   Value stencilInput;
   Value stencilOutput;
 };
-
-static bool isSameMemref(Value lhs, Value rhs) {
-  return lhs && rhs && DbUtils::isSameMemoryObject(lhs, rhs);
-}
-
-static bool haveSameBounds(ForOp lhs, ForOp rhs) {
-  if (!lhs || !rhs)
-    return false;
-  if (lhs.getLowerBound().size() != 1 || lhs.getUpperBound().size() != 1 ||
-      lhs.getStep().size() != 1 || rhs.getLowerBound().size() != 1 ||
-      rhs.getUpperBound().size() != 1 || rhs.getStep().size() != 1)
-    return false;
-
-  return ValueAnalysis::sameValue(lhs.getLowerBound().front(),
-                                  rhs.getLowerBound().front()) &&
-         ValueAnalysis::sameValue(lhs.getUpperBound().front(),
-                                  rhs.getUpperBound().front()) &&
-         ValueAnalysis::sameValue(lhs.getStep().front(), rhs.getStep().front());
-}
-
-static ForOp getSingleTopLevelFor(EdtOp edt) {
-  if (!edt)
-    return nullptr;
-
-  ForOp result = nullptr;
-  for (Operation &op : edt.getBody().front().without_terminator()) {
-    auto forOp = dyn_cast<ForOp>(&op);
-    if (!forOp)
-      return nullptr;
-    if (result)
-      return nullptr;
-    result = forOp;
-  }
-  return result;
-}
 
 static void stampJacobiAlternatingBuffers(Operation *op) {
   setDepPattern(op, ArtsDepPattern::jacobi_alternating_buffers);
@@ -159,7 +127,7 @@ static bool matchSimpleCopyFor(ForOp forOp, Value &srcMemref,
     return false;
   if (store.getIndices()[0] != outerIV || store.getIndices()[1] != innerIV)
     return false;
-  if (isSameMemref(load.getMemRef(), store.getMemRef()))
+  if (DbAnalysis::isSameMemoryObject(load.getMemRef(), store.getMemRef()))
     return false;
 
   srcMemref = load.getMemRef();
@@ -182,7 +150,8 @@ static bool matchStencilFor(ForOp forOp, Value expectedInputMemref,
 
   forOp.walk([&](Operation *op) {
     if (auto store = dyn_cast<memref::StoreOp>(op)) {
-      if (!isSameMemref(store.getMemRef(), expectedOutputMemref)) {
+      if (!DbAnalysis::isSameMemoryObject(store.getMemRef(),
+                                          expectedOutputMemref)) {
         invalid = true;
         return WalkResult::interrupt();
       }
@@ -200,11 +169,12 @@ static bool matchStencilFor(ForOp forOp, Value expectedInputMemref,
     if (!load)
       return WalkResult::advance();
 
-    if (isSameMemref(load.getMemRef(), expectedOutputMemref)) {
+    if (DbAnalysis::isSameMemoryObject(load.getMemRef(),
+                                       expectedOutputMemref)) {
       invalid = true;
       return WalkResult::interrupt();
     }
-    if (isSameMemref(load.getMemRef(), expectedInputMemref)) {
+    if (DbAnalysis::isSameMemoryObject(load.getMemRef(), expectedInputMemref)) {
       if (!actualInputMemref)
         actualInputMemref = load.getMemRef();
       else if (actualInputMemref != load.getMemRef()) {

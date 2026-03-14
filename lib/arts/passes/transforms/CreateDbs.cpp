@@ -44,6 +44,7 @@
 
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
@@ -62,8 +63,8 @@
 #include <optional>
 
 #include "arts/passes/Passes.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -92,7 +93,8 @@ using namespace mlir::arts;
 ///===----------------------------------------------------------------------===///
 namespace {
 
-static ArtsMode getMemrefUserAccessMode(Operation *op, Operation *underlyingOp) {
+static ArtsMode getMemrefUserAccessMode(Operation *op,
+                                        Operation *underlyingOp) {
   if (!op || !underlyingOp)
     return ArtsMode::uninitialized;
 
@@ -100,22 +102,22 @@ static ArtsMode getMemrefUserAccessMode(Operation *op, Operation *underlyingOp) 
   bool hasWrite = false;
 
   if (auto load = dyn_cast<memref::LoadOp>(op)) {
-    hasRead = ValueAnalysis::getUnderlyingOperation(load.getMemref()) ==
-              underlyingOp;
+    hasRead =
+        ValueAnalysis::getUnderlyingOperation(load.getMemref()) == underlyingOp;
   } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
     hasWrite = ValueAnalysis::getUnderlyingOperation(store.getMemref()) ==
                underlyingOp;
   } else if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
-    hasRead = ValueAnalysis::getUnderlyingOperation(load.getMemRef()) ==
-              underlyingOp;
+    hasRead =
+        ValueAnalysis::getUnderlyingOperation(load.getMemRef()) == underlyingOp;
   } else if (auto store = dyn_cast<affine::AffineStoreOp>(op)) {
     hasWrite = ValueAnalysis::getUnderlyingOperation(store.getMemRef()) ==
                underlyingOp;
   } else if (auto copy = dyn_cast<memref::CopyOp>(op)) {
-    hasRead = ValueAnalysis::getUnderlyingOperation(copy.getSource()) ==
-              underlyingOp;
-    hasWrite = ValueAnalysis::getUnderlyingOperation(copy.getTarget()) ==
-               underlyingOp;
+    hasRead =
+        ValueAnalysis::getUnderlyingOperation(copy.getSource()) == underlyingOp;
+    hasWrite =
+        ValueAnalysis::getUnderlyingOperation(copy.getTarget()) == underlyingOp;
   }
 
   if (hasRead && hasWrite)
@@ -598,7 +600,7 @@ void CreateDbsPass::collectControlDbOps() {
                << " offsets, " << sizes.size() << " sizes");
 
     /// Get user EDT
-    EdtOp userEdt = dyn_cast_or_null<EdtOp>(DbUtils::findUserEdt(dbControl));
+    EdtOp userEdt = dyn_cast_or_null<EdtOp>(DbAnalysis::findUserEdt(dbControl));
 
     SmallVector<Value, 4> indexValues(indices.begin(), indices.end());
     SmallVector<Value, 4> offsetValues(offsets.begin(), offsets.end());
@@ -637,19 +639,18 @@ void CreateDbsPass::collectControlDbOps() {
         if (auto load = dyn_cast<memref::LoadOp>(op)) {
           if (ValueAnalysis::getUnderlyingOperation(load.getMemref()) ==
               underlyingOp) {
-            bool matchesControl =
-                controlAccessOffsets ? matchesExplicitStencilAccess(op)
-                                     : indicesMatchPrefix(load.getIndices());
+            bool matchesControl = controlAccessOffsets
+                                      ? matchesExplicitStencilAccess(op)
+                                      : indicesMatchPrefix(load.getIndices());
             if (opMatchesAccessMode(op, underlyingOp, mode) && matchesControl)
               opsToRewrite.push_back(op);
           }
         } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
           if (ValueAnalysis::getUnderlyingOperation(store.getMemref()) ==
               underlyingOp) {
-            bool matchesControl =
-                controlAccessOffsets
-                    ? matchesExplicitStencilAccess(op)
-                    : indicesMatchPrefix(store.getIndices());
+            bool matchesControl = controlAccessOffsets
+                                      ? matchesExplicitStencilAccess(op)
+                                      : indicesMatchPrefix(store.getIndices());
             if (opMatchesAccessMode(op, underlyingOp, mode) && matchesControl)
               opsToRewrite.push_back(op);
           }
@@ -955,7 +956,7 @@ Value CreateDbsPass::findLocalAcquireView(EdtOp edt, Operation *dbAllocOp,
 
     if (requiresIndexedAccess) {
       if (Operation *dbOp = DbUtils::getUnderlyingDb(v)) {
-        if (DbUtils::hasSingleSize(dbOp))
+        if (DbAnalysis::hasSingleSize(dbOp))
           return false;
       }
     }
@@ -999,7 +1000,7 @@ Value CreateDbsPass::findParentAcquireSource(EdtOp edt, Operation *dbAllocOp,
     /// single-element datablock view.
     if (requiresIndexedAccess) {
       if (Operation *dbOp = DbUtils::getUnderlyingDb(v)) {
-        if (DbUtils::hasSingleSize(dbOp))
+        if (DbAnalysis::hasSingleSize(dbOp))
           return false;
       }
     }
@@ -1586,8 +1587,9 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
       auto localized = indexer.localizeForFineGrained(
           load.getIndices(), acquireIndices, acquireOffsets, AC->getBuilder(),
           op->getLoc());
-      auto dbRef = AC->create<DbRefOp>(op->getLoc(), elementMemRefType,
-                                       localAcquireView, localized.dbRefIndices);
+      auto dbRef =
+          AC->create<DbRefOp>(op->getLoc(), elementMemRefType, localAcquireView,
+                              localized.dbRefIndices);
       auto newLoad = AC->create<memref::LoadOp>(op->getLoc(), dbRef,
                                                 localized.memrefIndices);
       load.replaceAllUsesWith(newLoad.getResult());
@@ -1596,8 +1598,9 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
       auto localized = indexer.localizeForFineGrained(
           store.getIndices(), acquireIndices, acquireOffsets, AC->getBuilder(),
           op->getLoc());
-      auto dbRef = AC->create<DbRefOp>(op->getLoc(), elementMemRefType,
-                                       localAcquireView, localized.dbRefIndices);
+      auto dbRef =
+          AC->create<DbRefOp>(op->getLoc(), elementMemRefType, localAcquireView,
+                              localized.dbRefIndices);
       AC->create<memref::StoreOp>(op->getLoc(), store.getValue(), dbRef,
                                   localized.memrefIndices);
       opsToRemove.insert(op);

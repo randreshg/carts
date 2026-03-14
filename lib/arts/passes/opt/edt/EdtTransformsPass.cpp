@@ -12,7 +12,7 @@
 ///              for each EDT and annotate with affinity_db for NUMA-aware
 ///              task placement.
 ///
-///   ET-3:      Dependency chain narrowing -- for stencil/wavefront EDTs,
+///   ET-3:      Dep chain narrowing -- for stencil/wavefront EDTs,
 ///              mark neighbor halo dependencies as narrowable when the
 ///              actual data footprint is smaller than the full DB, enabling
 ///              downstream lowering to use arts_add_dependence_at (ESD).
@@ -33,15 +33,13 @@
 /// LLVM ADT
 #include "llvm/ADT/DenseSet.h"
 /// Dialects
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 /// Arts
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/edt/EdtInfo.h"
 #include "arts/analysis/graphs/base/EdgeBase.h"
 #include "arts/analysis/graphs/base/NodeBase.h"
@@ -93,8 +91,7 @@ constexpr llvm::StringLiteral Tree = "tree";
 constexpr llvm::StringLiteral LocalAccumulate = "local_accumulate";
 } // namespace ReductionStrategyNames
 
-struct EdtTransformsPass
-    : public arts::EdtTransformsBase<EdtTransformsPass> {
+struct EdtTransformsPass : public arts::EdtTransformsBase<EdtTransformsPass> {
   EdtTransformsPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }
@@ -120,7 +117,7 @@ private:
   /// For neighbor halo reads, mark the dependency as narrowable when the
   /// actual data footprint is smaller than the full DB.
   /// Returns the number of narrowed dependencies.
-  unsigned narrowDependencyChains();
+  unsigned narrowDepChains();
 
   /// ET-5: Detect scalar reduction patterns on single-element inout DBs
   /// and annotate EDTs with a strategy recommendation (atomic/tree/
@@ -131,17 +128,17 @@ private:
   /// EXT-EDT-2: Walk all EDTs and remove unused dependency slots.
   /// Returns the number of eliminated dependencies.
   unsigned eliminateDeadDependencies();
-
 };
 } // namespace
 
 /// Iterates EDT dependencies, finds the DbAcquireOp and associated
 /// LoweringContractOp for each, and applies the given mutation to the
 /// contract info before upserting it back.
-static void annotateEdtDependencyContracts(
-    EdtOp edt,
-    function_ref<void(DbAcquireOp acquire, Value ptr,
-                      LoweringContractInfo &info)> mutate) {
+static void
+annotateEdtDepContracts(EdtOp edt,
+                               function_ref<void(DbAcquireOp acquire, Value ptr,
+                                                 LoweringContractInfo &info)>
+                                   mutate) {
   for (Value dep : edt.getDependencies()) {
     auto acquire = dep.getDefiningOp<DbAcquireOp>();
     if (!acquire)
@@ -178,7 +175,7 @@ void EdtTransformsPass::runOnOperation() {
 
   /// TODO(PERF): This pass performs 5 separate module.walk(FuncOp) calls
   /// (runOnOperation, estimateTaskGranularity, placeEdtsByAffinity,
-  /// selectReductionStrategies, narrowDependencyChains). These could be
+  /// selectReductionStrategies, narrowDepChains). These could be
   /// combined into a single walk that collects (FuncOp, EdtGraph&) pairs and
   /// passes them to each sub-pass, eliminating 4 redundant module traversals
   /// and graph lookups.
@@ -267,14 +264,14 @@ void EdtTransformsPass::runOnOperation() {
                                  << " EDTs with reduction strategy");
 
   ///===--------------------------------------------------------------------===///
-  /// ET-3: Dependency chain narrowing
+  /// ET-3: Dep chain narrowing
   ///
   /// For stencil and wavefront EDTs, identify neighbor halo dependencies
   /// whose actual data footprint is smaller than the full DB. Mark these
   /// dependencies as narrowable so downstream lowering can emit
   /// arts_add_dependence_at (ESD) instead of a full-DB dependency.
   ///===--------------------------------------------------------------------===///
-  unsigned et3Count = narrowDependencyChains();
+  unsigned et3Count = narrowDepChains();
   if (et3Count > 0)
     ARTS_INFO("ET-3: narrowed " << et3Count
                                 << " dependency chains for stencil/wavefront");
@@ -288,16 +285,14 @@ void EdtTransformsPass::runOnOperation() {
   ///===--------------------------------------------------------------------===///
   unsigned extEdt2Count = eliminateDeadDependencies();
   if (extEdt2Count > 0)
-    ARTS_INFO("EXT-EDT-2: eliminated " << extEdt2Count
-                                       << " dead dependencies");
+    ARTS_INFO("EXT-EDT-2: eliminated " << extEdt2Count << " dead dependencies");
 
   /// Log summary statistics
   if (totalEdts > 0) {
     ARTS_INFO("EDT transforms summary:"
-              << " edts=" << totalEdts
-              << " avgOps=" << (totalOpsAccum / totalEdts)
-              << " compute:mem range=[" << minComputeToMem << ", "
-              << maxComputeToMem << "]");
+              << " edts=" << totalEdts << " avgOps="
+              << (totalOpsAccum / totalEdts) << " compute:mem range=["
+              << minComputeToMem << ", " << maxComputeToMem << "]");
   } else {
     ARTS_INFO("No EDTs found in module");
   }
@@ -377,13 +372,12 @@ unsigned EdtTransformsPass::estimateTaskGranularity() {
       /// Each dependency value comes from a DbAcquireOp; the contract is
       /// attached to the acquire's pointer result.
       bool annotated = false;
-      annotateEdtDependencyContracts(
-          edt,
-          [&](DbAcquireOp /*acquire*/, Value /*ptr*/,
-              LoweringContractInfo &info) {
-            info.estimatedTaskCost = cost;
-            annotated = true;
-          });
+      annotateEdtDepContracts(edt,
+                                     [&](DbAcquireOp /*acquire*/, Value /*ptr*/,
+                                         LoweringContractInfo &info) {
+                                       info.estimatedTaskCost = cost;
+                                       annotated = true;
+                                     });
 
       if (annotated)
         ++count;
@@ -502,12 +496,10 @@ unsigned EdtTransformsPass::analyzeCriticalPath(func::FuncOp func,
                  IntegerAttr::get(i64Type, dist));
 
     /// Also update LoweringContractOps on the EDT's dependency acquires.
-    annotateEdtDependencyContracts(
+    annotateEdtDepContracts(
         edt,
         [&](DbAcquireOp /*acquire*/, Value /*ptr*/,
-            LoweringContractInfo &info) {
-          info.criticalPathDistance = dist;
-        });
+            LoweringContractInfo &info) { info.criticalPathDistance = dist; });
 
     ++annotated;
 
@@ -516,9 +508,9 @@ unsigned EdtTransformsPass::analyzeCriticalPath(func::FuncOp func,
   }
 
   if (annotated > 0) {
-    ARTS_INFO("ET-6: function " << func.getName() << ": " << annotated
-                                << " EDTs annotated, max critical path depth="
-                                << maxDistance);
+    ARTS_INFO("ET-6: function "
+              << func.getName() << ": " << annotated
+              << " EDTs annotated, max critical path depth=" << maxDistance);
   }
 
   return annotated;
@@ -608,7 +600,7 @@ unsigned EdtTransformsPass::placeEdtsByAffinity() {
       /// Non-distributed (coarse) allocations have no meaningful placement
       /// affinity since they reside in a single location anyway.
       if (!hasDistributedDbAllocation(bestAlloc.getOperation()) &&
-          !DbUtils::isFineGrained(bestAlloc))
+          !DbAnalysis::isFineGrained(bestAlloc))
         return;
 
       /// Annotate the EdtOp with the affinity_db attribute.
@@ -633,13 +625,12 @@ unsigned EdtTransformsPass::placeEdtsByAffinity() {
                    IntegerAttr::get(i64Type, allocId));
       ++count;
 
-      ARTS_DEBUG("ET-2: EDT [" << node->getHierId() << "]"
-                               << " affinity_db=" << allocId
-                               << " (accessBytes=" << bestBytes
-                               << ", distributed="
-                               << hasDistributedDbAllocation(
-                                      bestAlloc.getOperation())
-                               << ")");
+      ARTS_DEBUG("ET-2: EDT ["
+                 << node->getHierId() << "]"
+                 << " affinity_db=" << allocId << " (accessBytes=" << bestBytes
+                 << ", distributed="
+                 << hasDistributedDbAllocation(bestAlloc.getOperation())
+                 << ")");
     });
   });
 
@@ -649,135 +640,6 @@ unsigned EdtTransformsPass::placeEdtsByAffinity() {
 ///===----------------------------------------------------------------------===///
 /// ET-5: Reduction strategy selection
 ///===----------------------------------------------------------------------===///
-
-/// Recognized reduction operations for ET-5.
-enum class ReductionOp {
-  ADD,
-  MIN,
-  MAX,
-  OR,
-  AND,
-  XOR,
-};
-
-/// Try to classify a binary arithmetic operation as a reduction operation.
-/// Returns the ReductionOp kind if the operation is a recognized reduction,
-/// or std::nullopt if it is not.
-static std::optional<ReductionOp> classifyReductionOp(Operation *op) {
-  if (!op)
-    return std::nullopt;
-
-  // Integer and floating-point addition
-  if (isa<arith::AddIOp>(op) || isa<arith::AddFOp>(op))
-    return ReductionOp::ADD;
-
-  // Integer min/max (signed and unsigned)
-  if (isa<arith::MinSIOp>(op) || isa<arith::MinUIOp>(op) ||
-      isa<arith::MinimumFOp>(op) || isa<arith::MinNumFOp>(op))
-    return ReductionOp::MIN;
-
-  if (isa<arith::MaxSIOp>(op) || isa<arith::MaxUIOp>(op) ||
-      isa<arith::MaximumFOp>(op) || isa<arith::MaxNumFOp>(op))
-    return ReductionOp::MAX;
-
-  // Bitwise operations (integer only)
-  if (isa<arith::OrIOp>(op))
-    return ReductionOp::OR;
-  if (isa<arith::AndIOp>(op))
-    return ReductionOp::AND;
-  if (isa<arith::XOrIOp>(op))
-    return ReductionOp::XOR;
-
-  return std::nullopt;
-}
-
-/// Return a string name for the ReductionOp kind.
-static StringRef reductionOpName(ReductionOp op) {
-  switch (op) {
-  case ReductionOp::ADD: return "add";
-  case ReductionOp::MIN: return "min";
-  case ReductionOp::MAX: return "max";
-  case ReductionOp::OR:  return "or";
-  case ReductionOp::AND: return "and";
-  case ReductionOp::XOR: return "xor";
-  }
-  return "unknown";
-}
-
-/// Check whether a reduction operation is suitable for atomic lowering.
-/// ADD, MIN, and MAX map directly to artsAtomic*InArrayDb; bitwise ops
-/// do not have runtime atomic equivalents, so they require tree reduction.
-static bool isAtomicCapable(ReductionOp op) {
-  return op == ReductionOp::ADD || op == ReductionOp::MIN ||
-         op == ReductionOp::MAX;
-}
-
-/// Match a load-modify-store reduction pattern on a DbRefOp result within
-/// an EDT body.  The pattern is:
-///   %val  = memref.load %ref[...]
-///   %new  = <reduction_op> %val, %other   (or %other, %val)
-///   memref.store %new, %ref[...]
-///
-/// Returns the detected ReductionOp, or std::nullopt if the pattern does
-/// not match.  This is deliberately conservative: any deviation from the
-/// exact three-operation chain causes a bail-out.
-static std::optional<ReductionOp>
-matchLoadModifyStore(Value dbRefResult, Region &edtBody) {
-  // Collect all loads and stores on this dbRef within the EDT body.
-  SmallVector<Operation *, 4> loads;
-  SmallVector<Operation *, 4> stores;
-
-  DbUtils::forEachReachableMemoryAccess(
-      dbRefResult,
-      [&](const DbUtils::MemoryAccessInfo &access) {
-        if (access.isRead())
-          loads.push_back(access.op);
-        else if (access.isWrite())
-          stores.push_back(access.op);
-        return WalkResult::advance();
-      },
-      &edtBody);
-
-  // Exactly one load and one store — the canonical scalar reduction shape.
-  if (loads.size() != 1 || stores.size() != 1)
-    return std::nullopt;
-
-  Operation *loadOp = loads.front();
-  Operation *storeOp = stores.front();
-
-  // The store value must be the result of a single reduction operation
-  // whose operand is the loaded value.
-  Value storedVal;
-  if (auto store = dyn_cast<memref::StoreOp>(storeOp))
-    storedVal = store.getValueToStore();
-  else if (auto store = dyn_cast<affine::AffineStoreOp>(storeOp))
-    storedVal = store.getValueToStore();
-  else
-    return std::nullopt;
-
-  if (!storedVal || !storedVal.getDefiningOp())
-    return std::nullopt;
-
-  Operation *modifyOp = storedVal.getDefiningOp();
-  auto reductionKind = classifyReductionOp(modifyOp);
-  if (!reductionKind)
-    return std::nullopt;
-
-  // The reduction op must consume the loaded value as one operand.
-  Value loadResult = loadOp->getResult(0);
-  bool usesLoad = false;
-  for (Value operand : modifyOp->getOperands()) {
-    if (operand == loadResult) {
-      usesLoad = true;
-      break;
-    }
-  }
-
-  if (!usesLoad)
-    return std::nullopt;
-
-  return reductionKind;
-}
 
 unsigned EdtTransformsPass::selectReductionStrategies() {
   /// TODO: arts.reduction_strategy is annotation-only — no lowering pass
@@ -812,7 +674,7 @@ unsigned EdtTransformsPass::selectReductionStrategies() {
 
         // Check that this is a single-element (size=1) DB — the common
         // scalar reduction pattern.
-        if (!DbUtils::hasSingleSize(acquire.getOperation()))
+        if (!DbAnalysis::hasSingleSize(acquire.getOperation()))
           continue;
 
         // Trace back to the DbAllocOp and verify it is also single-element.
@@ -820,12 +682,12 @@ unsigned EdtTransformsPass::selectReductionStrategies() {
         auto allocOp = dyn_cast_or_null<DbAllocOp>(rootOp);
         if (!allocOp)
           continue;
-        if (!DbUtils::isCoarseGrained(allocOp))
+        if (!DbAnalysis::isCoarseGrained(allocOp))
           continue;
 
         // Find the block argument inside the EDT body for this acquire.
         auto [edtForArg, blockArg] =
-            EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+            getEdtBlockArgumentForAcquire(acquire);
         if (!edtForArg || edtForArg != edt || !blockArg)
           continue;
 
@@ -857,26 +719,26 @@ unsigned EdtTransformsPass::selectReductionStrategies() {
 
         // Match the load-modify-store reduction pattern.
         auto reductionKind =
-            matchLoadModifyStore(dbRef.getResult(), edt.getBody());
+            EdtAnalysis::matchLoadModifyStore(dbRef.getResult(), edt.getBody());
         if (!reductionKind)
           continue;
 
         // --- Select strategy ---
         StringRef strategy;
-        bool isLoopNested = hasEnclosingLoop(edt);
+        bool isLoopNested = containsLoop(edt);
 
         if (isLoopNested) {
           // Inside a loop nest: accumulate locally, then do a single
           // atomic update at the end.
           strategy = ReductionStrategyNames::LocalAccumulate;
         } else if (workerCount > 0 && workerCount < kAtomicWorkerThreshold &&
-                   isAtomicCapable(*reductionKind)) {
+                   EdtAnalysis::isAtomicCapable(*reductionKind)) {
           // Small worker count and the op maps to an ARTS atomic intrinsic.
           strategy = ReductionStrategyNames::Atomic;
         } else if (workerCount >= kAtomicWorkerThreshold) {
           // Large worker count: binary tree reduction avoids contention.
           strategy = ReductionStrategyNames::Tree;
-        } else if (isAtomicCapable(*reductionKind)) {
+        } else if (EdtAnalysis::isAtomicCapable(*reductionKind)) {
           // Worker count unknown but op is atomic-capable: default to atomic
           // as the simpler strategy.
           strategy = ReductionStrategyNames::Atomic;
@@ -892,7 +754,8 @@ unsigned EdtTransformsPass::selectReductionStrategies() {
         ++count;
 
         ARTS_DEBUG("ET-5: EDT [" << node->getHierId() << "]"
-                                 << " reduction=" << reductionOpName(*reductionKind)
+                                 << " reduction="
+                                 << EdtAnalysis::reductionOpName(*reductionKind)
                                  << " strategy=" << strategy
                                  << " workerCount=" << workerCount
                                  << " loopNested=" << isLoopNested);
@@ -909,16 +772,17 @@ unsigned EdtTransformsPass::selectReductionStrategies() {
 }
 
 ///===----------------------------------------------------------------------===///
-/// ET-3: Dependency chain narrowing -- helper functions
+/// ET-3: Dep chain narrowing -- helper functions
 ///===----------------------------------------------------------------------===///
 
 /// Mark a dependency as narrowable by setting the NarrowableDep unit attribute.
 /// If `haloFootprint` is non-empty, also sets NarrowableHaloFootprint.
 /// Creates a new LoweringContractOp if one does not exist for the pointer.
-static void markDependencyNarrowable(
-    DbAcquireOp acquire, Value ptr, LoweringContractOp contractOp,
-    std::optional<ArtsDepPattern> edtDepPattern,
-    ArrayRef<int64_t> haloFootprint = {}) {
+static void
+markDepNarrowable(DbAcquireOp acquire, Value ptr,
+                         LoweringContractOp contractOp,
+                         std::optional<ArtsDepPattern> edtDepPattern,
+                         ArrayRef<int64_t> haloFootprint = {}) {
   if (contractOp) {
     contractOp->setAttr(AttrNames::Operation::Contract::NarrowableDep,
                         UnitAttr::get(contractOp.getContext()));
@@ -950,10 +814,10 @@ static void markDependencyNarrowable(
 
 /// Try to narrow a halo dependency with known static footprint or partition
 /// hints. Returns true if the dependency was marked as narrowable.
-static bool tryNarrowHaloDep(
-    DbAcquireOp acquire, Value ptr, LoweringContractOp contractOp,
-    std::optional<ArtsDepPattern> edtDepPattern,
-    std::optional<LoweringContractInfo> existingContract) {
+static bool
+tryNarrowHaloDep(DbAcquireOp acquire, Value ptr, LoweringContractOp contractOp,
+                 std::optional<ArtsDepPattern> edtDepPattern,
+                 std::optional<LoweringContractInfo> existingContract) {
   /// Read the contract's minOffsets/maxOffsets (consolidated by DT-2).
   /// These define the halo overlap region.
   LoweringContractInfo contractInfo =
@@ -980,7 +844,7 @@ static bool tryNarrowHaloDep(
     }
 
     if (hasNonZeroHalo) {
-      markDependencyNarrowable(acquire, ptr, contractOp, edtDepPattern,
+      markDepNarrowable(acquire, ptr, contractOp, edtDepPattern,
                                haloFootprint);
       ARTS_DEBUG("ET-3:   marked halo dependency as narrowable"
                  << " rank=" << rank << " haloFootprint=[" << haloFootprint[0]
@@ -999,7 +863,7 @@ static bool tryNarrowHaloDep(
     /// means it accesses a sub-region. Mark as narrowable
     /// even without exact halo bounds -- the downstream pass
     /// can compute the exact ESD from the partition info.
-    markDependencyNarrowable(acquire, ptr, contractOp, edtDepPattern);
+    markDepNarrowable(acquire, ptr, contractOp, edtDepPattern);
     ARTS_DEBUG("ET-3:   marked partition-hinted dependency as narrowable");
     return true;
   }
@@ -1009,22 +873,22 @@ static bool tryNarrowHaloDep(
 
 /// Try to narrow a wavefront dependency. Returns true if the dependency was
 /// marked as narrowable.
-static bool tryNarrowWavefrontDep(
-    DbAcquireOp acquire, Value ptr, LoweringContractOp contractOp,
-    std::optional<ArtsDepPattern> edtDepPattern) {
+static bool tryNarrowWavefrontDep(DbAcquireOp acquire, Value ptr,
+                                  LoweringContractOp contractOp,
+                                  std::optional<ArtsDepPattern> edtDepPattern) {
   /// For wavefront_2d patterns, each EDT only depends on the diagonal
   /// predecessor, not the full previous row. Mark all read-only
   /// dependencies on the same array as narrowable since the wavefront
   /// cell only needs data from the immediately adjacent diagonal cell.
-  markDependencyNarrowable(acquire, ptr, contractOp, edtDepPattern);
+  markDepNarrowable(acquire, ptr, contractOp, edtDepPattern);
   ARTS_DEBUG("ET-3:   marked wavefront diagonal dependency as narrowable");
   return true;
 }
 
 ///===----------------------------------------------------------------------===///
-/// ET-3: Dependency chain narrowing for stencil/wavefront patterns
+/// ET-3: Dep chain narrowing for stencil/wavefront patterns
 ///===----------------------------------------------------------------------===///
-unsigned EdtTransformsPass::narrowDependencyChains() {
+unsigned EdtTransformsPass::narrowDepChains() {
   /// TODO: narrowable_dep and narrowable_halo_footprint are annotation-only —
   /// no lowering pass currently reads these attributes. Note that DT-3
   /// (in DbTransformsPass) already provides esdByteOffset/esdByteSize for
@@ -1108,9 +972,8 @@ unsigned EdtTransformsPass::narrowDependencyChains() {
 
         /// Skip if already marked narrowable.
         LoweringContractOp contractOp = getLoweringContractOp(ptr);
-        if (contractOp &&
-            contractOp->hasAttr(
-                AttrNames::Operation::Contract::NarrowableDep)) {
+        if (contractOp && contractOp->hasAttr(
+                              AttrNames::Operation::Contract::NarrowableDep)) {
           ARTS_DEBUG("ET-3:   acquire already marked narrowable, skipping");
           continue;
         }
@@ -1233,8 +1096,7 @@ unsigned EdtTransformsPass::eliminateDeadDependencies() {
 ///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass>
-createEdtTransformsPass(mlir::arts::AnalysisManager *AM) {
+std::unique_ptr<Pass> createEdtTransformsPass(mlir::arts::AnalysisManager *AM) {
   return std::make_unique<EdtTransformsPass>(AM);
 }
 } // namespace arts

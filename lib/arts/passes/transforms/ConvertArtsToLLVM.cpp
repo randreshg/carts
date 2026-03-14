@@ -1802,7 +1802,7 @@ void ConvertArtsToLLVMPass::populateCorePatterns(RewritePatternSet &patterns) {
   patterns.add<EdtParamPackPattern, EdtParamUnpackPattern>(context, AC);
   patterns.add<EdtCreatePattern>(context, AC);
 
-  /// Dependency patterns
+  /// Dep patterns
   patterns.add<DepGepOpPattern>(context, AC);
   patterns.add<RecordDepPattern, IncrementDepPattern>(context, AC);
 }

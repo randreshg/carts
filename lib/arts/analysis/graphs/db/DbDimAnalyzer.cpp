@@ -24,7 +24,7 @@ namespace {
 static PartitionMode getRequestedMode(DbAcquireOp acquire) {
   if (auto mode = getPartitionMode(acquire.getOperation()))
     return *mode;
-  return DbUtils::getPartitionModeFromStructure(acquire);
+  return DbAnalysis::getPartitionModeFromStructure(acquire);
 }
 
 static std::pair<Value, Value>
@@ -139,7 +139,7 @@ static void markLeadingDynamicDims(DbAcquireNode *node,
 }
 
 static bool hasDistributionContract(DbAcquireOp acquire) {
-  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+  auto [edt, blockArg] = getEdtBlockArgumentForAcquire(acquire);
   (void)blockArg;
   if (edt && (getEdtDistributionKind(edt.getOperation()) ||
               getEdtDistributionPattern(edt.getOperation())))

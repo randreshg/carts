@@ -36,14 +36,14 @@ EdtDataFlowAnalysis::EdtDataFlowAnalysis(DbGraph *dbGraph, AnalysisManager *AM)
   assert(aliasAA && "Alias analysis is required");
 }
 
-SmallVector<EdtDependency, 16> EdtDataFlowAnalysis::run(func::FuncOp func) {
+SmallVector<EdtDep, 16> EdtDataFlowAnalysis::run(func::FuncOp func) {
   dependencyMap.clear();
   Environment env;
   processRegion(func.getBody(), env);
 
-  using DependencyKey = std::pair<Operation *, Operation *>;
-  using DependencyEntry = std::pair<DependencyKey, SmallVector<DbEdge, 2>>;
-  SmallVector<DependencyEntry, 16> entries;
+  using DepKey = std::pair<Operation *, Operation *>;
+  using DepEntry = std::pair<DepKey, SmallVector<DbEdge, 2>>;
+  SmallVector<DepEntry, 16> entries;
   entries.reserve(dependencyMap.size());
   for (auto &entry : dependencyMap) {
     SmallVector<DbEdge, 2> edges(entry.second.begin(), entry.second.end());
@@ -62,7 +62,7 @@ SmallVector<EdtDependency, 16> EdtDataFlowAnalysis::run(func::FuncOp func) {
     return opOrder.lookup(lhs.first.second) < opOrder.lookup(rhs.first.second);
   });
 
-  SmallVector<EdtDependency, 16> result;
+  SmallVector<EdtDep, 16> result;
   for (auto &entry : entries) {
     Operation *fromOp = entry.first.first;
     Operation *toOp = entry.first.second;
@@ -70,7 +70,7 @@ SmallVector<EdtDependency, 16> EdtDataFlowAnalysis::run(func::FuncOp func) {
     auto to = dyn_cast_or_null<EdtOp>(toOp);
     if (!from || !to || from == to)
       continue;
-    result.push_back(EdtDependency{from, to, entry.second});
+    result.push_back(EdtDep{from, to, entry.second});
   }
   dependencyMap.clear();
   return result;
@@ -139,10 +139,10 @@ EdtDataFlowAnalysis::processEdt(EdtOp edtOp, Environment &env) {
       continue;
 
     for (auto *producer : prodDefs) {
-      auto depType = classifyDependency(producer, consumer);
+      auto depType = classifyDep(producer, consumer);
       if (!depType || *depType != DbDepType::RAW)
         continue;
-      recordDependency(producer, consumer, *depType);
+      recordDep(producer, consumer, *depType);
     }
   }
 
@@ -150,10 +150,10 @@ EdtDataFlowAnalysis::processEdt(EdtOp edtOp, Environment &env) {
   for (auto *writer : outputAcquires) {
     auto prodDefs = findDefinitions(writer, newEnv);
     for (auto *producer : prodDefs) {
-      auto depType = classifyDependency(producer, writer);
+      auto depType = classifyDep(producer, writer);
       if (!depType || *depType != DbDepType::WAW)
         continue;
-      recordDependency(producer, writer, *depType);
+      recordDep(producer, writer, *depType);
     }
 
     DbAllocNode *parentAlloc = writer->getParent();
@@ -182,10 +182,10 @@ EdtDataFlowAnalysis::processEdt(EdtOp edtOp, Environment &env) {
     if (liveReaders.empty())
       continue;
     for (auto *reader : liveReaders) {
-      auto depType = classifyDependency(reader, writer);
+      auto depType = classifyDep(reader, writer);
       if (!depType || *depType != DbDepType::WAR)
         continue;
-      recordDependency(reader, writer, *depType);
+      recordDep(reader, writer, *depType);
     }
     liveReaders.clear();
   }
@@ -303,7 +303,7 @@ bool EdtDataFlowAnalysis::unionInto(Environment &target,
 }
 
 std::optional<DbDepType>
-EdtDataFlowAnalysis::classifyDependency(DbAcquireNode *producer,
+EdtDataFlowAnalysis::classifyDep(DbAcquireNode *producer,
                                         DbAcquireNode *consumer) {
   if (!producer || !consumer)
     return std::nullopt;
@@ -332,7 +332,7 @@ EdtDataFlowAnalysis::classifyDependency(DbAcquireNode *producer,
   return std::nullopt;
 }
 
-void EdtDataFlowAnalysis::recordDependency(DbAcquireNode *producer,
+void EdtDataFlowAnalysis::recordDep(DbAcquireNode *producer,
                                            DbAcquireNode *consumer,
                                            DbDepType depType) {
   if (!producer || !consumer)
@@ -346,9 +346,9 @@ void EdtDataFlowAnalysis::recordDependency(DbAcquireNode *producer,
   dependencyMap[{from.getOperation(), to.getOperation()}].insert(edge);
 }
 
-void EdtDataFlowAnalysis::recordDependency(DbAcquireNode *reader,
+void EdtDataFlowAnalysis::recordDep(DbAcquireNode *reader,
                                            DbAcquireNode *writer) {
-  auto depType = classifyDependency(reader, writer);
+  auto depType = classifyDep(reader, writer);
   if (depType)
-    recordDependency(reader, writer, *depType);
+    recordDep(reader, writer, *depType);
 }

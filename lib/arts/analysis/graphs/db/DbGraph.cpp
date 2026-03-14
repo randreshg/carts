@@ -500,7 +500,7 @@ llvm::json::Value DbGraph::exportToJsonValue(bool includeAnalysis) const {
 
     /// Partitioning mode
     PartitionMode partitionMode =
-        DbUtils::getPartitionModeFromStructure(allocNode->getDbAllocOp());
+        DbAnalysis::getPartitionModeFromStructure(allocNode->getDbAllocOp());
     db["partitioning"] = stringifyPartitionMode(partitionMode);
 
     /// Helper: extract static value or null for dynamic
@@ -573,7 +573,7 @@ llvm::json::Value DbGraph::exportToJsonValue(bool includeAnalysis) const {
     staticAnalysis["is_parallel_friendly"] = allocNode->isParallelFriendly();
     staticAnalysis["can_be_partitioned"] = allocNode->canBePartitioned();
     staticAnalysis["is_fine_grained"] =
-        DbUtils::isFineGrained(allocNode->getDbAllocOp());
+        DbAnalysis::isFineGrained(allocNode->getDbAllocOp());
 
     /// Twin-diff analysis
     staticAnalysis["has_single_writer"] = allocNode->hasSingleWriter();

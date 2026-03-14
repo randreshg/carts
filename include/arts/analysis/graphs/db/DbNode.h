@@ -11,6 +11,7 @@
 #include "arts/analysis/graphs/base/NodeBase.h"
 #include "arts/analysis/graphs/db/DbAccessPattern.h"
 #include "arts/utils/metadata/MemrefMetadata.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <functional>
 #include <memory>
@@ -88,6 +89,24 @@ struct DbAcquirePartitionFacts {
   bool hasBlockHints = false;
   bool inferredBlock = false;
   bool supportedBlockHalo = false;
+
+  /// Query helpers over entries.
+  bool hasFineGrainedEntries() const {
+    return llvm::any_of(entries, [](const DbPartitionEntryFact &entry) {
+      return entry.partition.isFineGrained() &&
+             !entry.partition.indices.empty();
+    });
+  }
+  bool hasUnmappedPartitionEntry() const {
+    return llvm::any_of(entries, [](const DbPartitionEntryFact &entry) {
+      return entry.representativeOffset && !entry.mappedDim;
+    });
+  }
+  bool hasDistributedContractEntries() const {
+    return llvm::any_of(entries, [](const DbPartitionEntryFact &entry) {
+      return entry.preservesDistributedContract;
+    });
+  }
 };
 
 ///===----------------------------------------------------------------------===///
