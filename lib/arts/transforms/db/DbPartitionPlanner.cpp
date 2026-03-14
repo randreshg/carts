@@ -26,10 +26,6 @@ using namespace mlir::arts;
 
 namespace {
 
-static Value makeIndexConst(OpBuilder &builder, Location loc, int64_t v) {
-  return arts::createConstantIndex(builder, loc, v);
-}
-
 static Value firstTotalSize(DbAllocOp allocOp, Value zero) {
   if (allocOp.getElementSizes().empty())
     return zero;
@@ -45,11 +41,11 @@ static void computeCoarseShape(DbAllocOp allocOp,
                                SmallVector<Value> &newInnerSizes) {
   OpBuilder builder(allocOp);
   Location loc = allocOp.getLoc();
-  newOuterSizes.push_back(makeIndexConst(builder, loc, 1));
+  newOuterSizes.push_back(arts::createConstantIndex(builder, loc, 1));
   for (Value dim : allocOp.getElementSizes())
     newInnerSizes.push_back(dim);
   if (newInnerSizes.empty())
-    newInnerSizes.push_back(makeIndexConst(builder, loc, 1));
+    newInnerSizes.push_back(arts::createConstantIndex(builder, loc, 1));
 }
 
 static void computeElementWiseShape(DbAllocOp allocOp,
@@ -67,7 +63,7 @@ static void computeElementWiseShape(DbAllocOp allocOp,
     newInnerSizes.push_back(elemSizes[i]);
 
   if (newInnerSizes.empty())
-    newInnerSizes.push_back(makeIndexConst(builder, loc, 1));
+    newInnerSizes.push_back(arts::createConstantIndex(builder, loc, 1));
 }
 
 static void computeBlockShape(DbAllocOp allocOp, ArrayRef<Value> blockSizes,
@@ -79,11 +75,11 @@ static void computeBlockShape(DbAllocOp allocOp, ArrayRef<Value> blockSizes,
   ValueRange elemSizes = allocOp.getElementSizes();
 
   if (blockSizes.empty()) {
-    newOuterSizes.push_back(makeIndexConst(builder, loc, 1));
+    newOuterSizes.push_back(arts::createConstantIndex(builder, loc, 1));
     for (Value dim : elemSizes)
       newInnerSizes.push_back(dim);
     if (newInnerSizes.empty())
-      newInnerSizes.push_back(makeIndexConst(builder, loc, 1));
+      newInnerSizes.push_back(arts::createConstantIndex(builder, loc, 1));
     return;
   }
 
@@ -151,9 +147,9 @@ static void computeBlockShape(DbAllocOp allocOp, ArrayRef<Value> blockSizes,
   }
 
   if (newOuterSizes.empty())
-    newOuterSizes.push_back(makeIndexConst(builder, loc, 1));
+    newOuterSizes.push_back(arts::createConstantIndex(builder, loc, 1));
   if (newInnerSizes.empty())
-    newInnerSizes.push_back(makeIndexConst(builder, loc, 1));
+    newInnerSizes.push_back(arts::createConstantIndex(builder, loc, 1));
 }
 
 ///===----------------------------------------------------------------------===///
@@ -164,7 +160,7 @@ static void buildCoarseRewriteAcquire(DbAllocOp allocOp,
                                       DbRewriteAcquire &output,
                                       OpBuilder &builder) {
   Location loc = allocOp.getLoc();
-  Value zero = makeIndexConst(builder, loc, 0);
+  Value zero = arts::createConstantIndex(builder, loc, 0);
   Value totalSize = firstTotalSize(allocOp, zero);
 
   output.partitionInfo.offsets.clear();
@@ -179,7 +175,7 @@ static void buildElementWiseRewriteAcquire(const DbAcquirePartitionView &input,
                                            DbRewriteAcquire &output,
                                            OpBuilder &builder) {
   Location loc = allocOp.getLoc();
-  Value zero = makeIndexConst(builder, loc, 0);
+  Value zero = arts::createConstantIndex(builder, loc, 0);
   Value totalSize = firstTotalSize(allocOp, zero);
 
   output.partitionInfo.indices.clear();
@@ -230,8 +226,8 @@ static void buildBlockRewriteAcquire(const DbAcquirePartitionView &input,
                                      DbRewriteAcquire &output,
                                      OpBuilder &builder) {
   Location loc = allocOp.getLoc();
-  Value zero = makeIndexConst(builder, loc, 0);
-  Value one = makeIndexConst(builder, loc, 1);
+  Value zero = arts::createConstantIndex(builder, loc, 0);
+  Value one = arts::createConstantIndex(builder, loc, 1);
   Value totalSize = firstTotalSize(allocOp, zero);
 
   output.partitionInfo.indices.clear();
@@ -308,9 +304,8 @@ static void buildStencilRewriteAcquire(const DbAcquirePartitionView &input,
              semantic && semantic->depPattern) {
     depPattern = *semantic->depPattern;
   } else {
-    depPattern =
-        getEffectiveDepPattern(acquire.getOperation())
-            .value_or(ArtsDepPattern::unknown);
+    depPattern = getEffectiveDepPattern(acquire.getOperation())
+                     .value_or(ArtsDepPattern::unknown);
   }
   bool shouldUseStencil = acquire && acquire.getMode() == ArtsMode::in &&
                           isStencilHaloDepPattern(depPattern);

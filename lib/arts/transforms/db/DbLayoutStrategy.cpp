@@ -13,6 +13,7 @@
 ///==========================================================================///
 
 #include "arts/transforms/db/DbLayoutStrategy.h"
+#include "arts/analysis/db/DbAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/utils/DbUtils.h"
 #include "mlir/IR/Operation.h"
@@ -29,7 +30,7 @@ LayoutInfo mlir::arts::buildLayoutInfo(Value source) {
   if (Operation *rootAllocOp = DbUtils::getUnderlyingDbAlloc(source)) {
     if (auto alloc = dyn_cast<DbAllocOp>(rootAllocOp)) {
       info.alloc = alloc;
-      info.mode = DbUtils::getPartitionModeFromStructure(alloc);
+      info.mode = DbAnalysis::getPartitionModeFromStructure(alloc);
       info.sizes.assign(alloc.getSizes().begin(), alloc.getSizes().end());
       info.elementSizes.assign(alloc.getElementSizes().begin(),
                                alloc.getElementSizes().end());

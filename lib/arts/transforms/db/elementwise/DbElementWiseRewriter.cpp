@@ -67,7 +67,7 @@ void DbElementWiseRewriter::transformAcquire(const DbRewriteAcquire &info,
     acquire.getPtr().setType(newPtrType);
 
     /// Also update EDT block argument type if this acquire feeds an EDT
-    auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+    auto [edt, blockArg] = getEdtBlockArgumentForAcquire(acquire);
     if (blockArg && blockArg.getType() != newPtrType)
       blockArg.setType(newPtrType);
   }
@@ -263,7 +263,7 @@ bool DbElementWiseRewriter::rebaseEdtUsers(DbAcquireOp acquire,
                                            bool /*isSingleChunk*/) {
   ARTS_DEBUG("DbElementWiseRewriter::rebaseEdtUsers");
 
-  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+  auto [edt, blockArg] = getEdtBlockArgumentForAcquire(acquire);
   Value localView = blockArg ? Value(blockArg) : acquire.getPtr();
   if (!localView) {
     edt = acquire->getParentOfType<EdtOp>();

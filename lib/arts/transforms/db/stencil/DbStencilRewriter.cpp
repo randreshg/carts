@@ -96,7 +96,7 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
     acquire.getPtr().setType(newPtrType);
 
     /// Also update EDT block argument type if this acquire feeds an EDT
-    auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+    auto [edt, blockArg] = getEdtBlockArgumentForAcquire(acquire);
     if (blockArg && blockArg.getType() != newPtrType)
       blockArg.setType(newPtrType);
   }
@@ -272,7 +272,7 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
 
     addHaloAcquireToEdt(acquire, leftHalo, builder);
     /// Track left halo block arg index (it's the last one added)
-    auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+    auto [edt, blockArg] = getEdtBlockArgumentForAcquire(acquire);
     if (edt)
       leftHaloArgIdx = edt.getBody().front().getNumArguments() - 1;
     ARTS_DEBUG("  Created left halo acquire, argIdx=" << leftHaloArgIdx);
@@ -301,14 +301,14 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
 
     addHaloAcquireToEdt(acquire, rightHalo, builder);
     /// Track right halo block arg index (it's the last one added)
-    auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+    auto [edt, blockArg] = getEdtBlockArgumentForAcquire(acquire);
     if (edt)
       rightHaloArgIdx = edt.getBody().front().getNumArguments() - 1;
     ARTS_DEBUG("  Created right halo acquire, argIdx=" << rightHaloArgIdx);
   }
 
   /// Store halo block arg indices for the 3-buffer selection approach
-  auto [edt, ownedBlockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+  auto [edt, ownedBlockArg] = getEdtBlockArgumentForAcquire(acquire);
   if (edt && (haloLeftVal > 0 || haloRightVal > 0)) {
     unsigned ownedArgIdx = ownedBlockArg.getArgNumber();
 
@@ -406,10 +406,10 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
                 arts::createConstantIndex(builder, loc, -minOffset);
             Value canShift = builder.create<arith::CmpIOp>(
                 loc, arith::CmpIPredicate::uge, elemOff, haloLeft);
-            Value shifted = builder.create<arith::SubIOp>(loc, elemOff,
-                                                          haloLeft);
-            elemOff = builder.create<arith::SelectOp>(loc, canShift, shifted,
-                                                      zero);
+            Value shifted =
+                builder.create<arith::SubIOp>(loc, elemOff, haloLeft);
+            elemOff =
+                builder.create<arith::SelectOp>(loc, canShift, shifted, zero);
           } else if (minOffset > 0) {
             Value haloShift =
                 arts::createConstantIndex(builder, loc, minOffset);
@@ -474,7 +474,7 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
 
 bool DbStencilRewriter::rebaseEdtUsersAsBlock(DbAcquireOp acquire,
                                               OpBuilder &builder) {
-  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+  auto [edt, blockArg] = getEdtBlockArgumentForAcquire(acquire);
   if (!blockArg)
     return false;
 
@@ -693,7 +693,7 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
                                        bool /*isSingleChunk*/) {
   ARTS_DEBUG("DbStencilRewriter::rebaseEdtUsers (3-buffer mode)");
 
-  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+  auto [edt, blockArg] = getEdtBlockArgumentForAcquire(acquire);
   Value localView = blockArg ? Value(blockArg) : acquire.getPtr();
   if (!edt)
     edt = acquire->getParentOfType<EdtOp>();
@@ -804,7 +804,7 @@ void DbStencilRewriter::addHaloAcquireToEdt(DbAcquireOp originalAcq,
   ARTS_DEBUG("DbStencilRewriter::addHaloAcquireToEdt");
 
   /// Find the EDT that uses the original acquire
-  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(originalAcq);
+  auto [edt, blockArg] = getEdtBlockArgumentForAcquire(originalAcq);
   if (!edt) {
     ARTS_DEBUG("  No EDT found for acquire - skipping halo addition");
     return;

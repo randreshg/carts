@@ -15,12 +15,12 @@
 
 #include "arts/transforms/db/DbBlockPlanResolver.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/transforms/db/DbRewriter.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/transforms/db/DbRewriter.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Dominance.h"
@@ -193,9 +193,8 @@ static SmallVector<Value> collectCanonicalBlockSizeCandidates(
       }
     }
 
-    Value domCandidate = normalizeBlockSizeCandidate(blockIndex, blockSizeVal,
-                                                     builder, domInfo,
-                                                     allocOp, loc);
+    Value domCandidate = normalizeBlockSizeCandidate(
+        blockIndex, blockSizeVal, builder, domInfo, allocOp, loc);
     if (!domCandidate)
       continue;
 
@@ -275,7 +274,8 @@ static SmallVector<Value> collectCanonicalNDBlockSizeCandidates(
   //   Global MIN  -> 64x64   (too conservative)
   //   Per-dim MIN -> 64x128  (correct: each dim uses its own partitioner)
 
-  unsigned nDims = static_cast<unsigned>(rankedCandidates.front().blockSizes.size());
+  unsigned nDims =
+      static_cast<unsigned>(rankedCandidates.front().blockSizes.size());
 
   // Check whether per-dim analysis is feasible: all candidates must have
   // partitionDims vectors of the expected rank so we can map positional
@@ -356,22 +356,21 @@ static SmallVector<Value> collectCanonicalNDBlockSizeCandidates(
   // Emit debug logging when per-dim merge produces a different result.
   if (perDimDiffers) {
     ARTS_DEBUG_REGION(
-      ARTS_DBGS() << "[db_block_plan] per-dim merge differs from global MIN "
-                  << "(nDims=" << nDims
-                  << ", candidates=" << rankedCandidates.size() << ")\n";
-      for (unsigned d = 0; d < nDims; ++d) {
-        // Count how many candidates contributed to this dim.
-        unsigned targetDbDim = refDims[d];
-        unsigned count = 0;
-        for (const auto &rc : rankedCandidates) {
-          if (rc.partitionDims[d] == targetDbDim)
-            ++count;
-        }
-        ARTS_DBGS() << "  dim " << d << " (DB dim " << targetDbDim
-                    << "): " << count << "/" << rankedCandidates.size()
-                    << " contributors\n";
-      }
-    );
+        ARTS_DBGS() << "[db_block_plan] per-dim merge differs from global MIN "
+                    << "(nDims=" << nDims
+                    << ", candidates=" << rankedCandidates.size() << ")\n";
+        for (unsigned d = 0; d < nDims; ++d) {
+          // Count how many candidates contributed to this dim.
+          unsigned targetDbDim = refDims[d];
+          unsigned count = 0;
+          for (const auto &rc : rankedCandidates) {
+            if (rc.partitionDims[d] == targetDbDim)
+              ++count;
+          }
+          ARTS_DBGS() << "  dim " << d << " (DB dim " << targetDbDim
+                      << "): " << count << "/" << rankedCandidates.size()
+                      << " contributors\n";
+        });
   }
 
   return perDimMerged;
@@ -389,10 +388,11 @@ static SmallVector<Value> collectContractNDBlockShapeCandidates(
 
     DbAcquireOp acquire = info.acquire;
     auto acquireMode = getPartitionMode(acquire.getOperation());
-    bool blockCapableAcquire = requiresBlockSize(info.mode) ||
-                               (acquireMode && requiresBlockSize(*acquireMode)) ||
-                               info.hasDistributionContract ||
-                               hasSupportedBlockHalo(acquire.getOperation());
+    bool blockCapableAcquire =
+        requiresBlockSize(info.mode) ||
+        (acquireMode && requiresBlockSize(*acquireMode)) ||
+        info.hasDistributionContract ||
+        hasSupportedBlockHalo(acquire.getOperation());
     if (!blockCapableAcquire)
       continue;
 
