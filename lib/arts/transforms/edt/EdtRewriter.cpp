@@ -153,11 +153,11 @@ DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
   /// range. Pattern-backed block/stencil contracts must keep the worker-local
   /// dependency slice authoritative so later lowering does not widen them back
   /// to full-range.
-  bool useParentDependencyRange = in.preserveParentDependencyRange &&
+  bool useParentDepRange = in.preserveParentDepRange &&
                                   !applyStencilHalo &&
                                   !in.parentAcquire.getOffsets().empty() &&
                                   !in.parentAcquire.getSizes().empty();
-  if (useParentDependencyRange) {
+  if (useParentDepRange) {
     dependencyOffsets.assign(in.parentAcquire.getOffsets().begin(),
                              in.parentAcquire.getOffsets().end());
     dependencySizes.assign(in.parentAcquire.getSizes().begin(),
