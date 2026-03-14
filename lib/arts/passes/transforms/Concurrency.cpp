@@ -178,7 +178,7 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
   /// incorrect work distribution (each node would only process its portion
   /// while tasks expect to see the full iteration space).
   auto func = edtOp->getParentOfType<func::FuncOp>();
-  auto *edtNode = func ? AM->getEdtGraph(func).getEdtNode(edtOp) : nullptr;
+  auto *edtNode = func ? AM->getEdtAnalysis().getEdtNode(edtOp) : nullptr;
   bool hasNestedTasks = edtNode ? edtNode->hasNestedTaskEdts() : false;
   ParallelismDecision machineDecision =
       DistributionHeuristics::resolveParallelismFromMachine(abstractMachine);

@@ -272,6 +272,16 @@ void initializeContext(MLIRContext &context) {
       context);
 }
 
+// TODO(PERF): PolygeistCanonicalizePass is added 26 times throughout the
+// pipeline. Many run back-to-back with only CSE between them. Audit which
+// invocations are actually needed — when IR is already canonical, each
+// invocation is a wasted full-module walk.
+
+// TODO(PERF): CSEPass is added 24 times throughout the pipeline. Many run
+// back-to-back with only PolygeistCanonicalizePass between them. Audit which
+// invocations are actually needed — when IR is already CSE-clean, each
+// invocation is a wasted full-module walk.
+
 /// Inliner and canonicalize memrefs pass.
 void setupCanonicalizeMemrefs(PassManager &pm) {
   OpPassManager &optPM = pm.nest<func::FuncOp>();
@@ -322,7 +332,7 @@ void setupOpenMPToArts(PassManager &pm) {
 
 /// EDT transformation passes.
 void setupEdtTransforms(PassManager &pm, arts::AnalysisManager *AM) {
-  pm.addPass(arts::createEdtPass(AM, false));
+  pm.addPass(arts::createEdtStructuralOptPass(AM, false));
   pm.addPass(arts::createEdtICMPass());
   pm.addPass(arts::createDCEPass());
   pm.addPass(createSymbolDCEPass());
@@ -383,7 +393,7 @@ void setupCreateDbs(PassManager &pm, arts::AnalysisManager *AM) {
 
 /// DB creation and optimization passes.
 void setupDbOpt(PassManager &pm, arts::AnalysisManager *AM) {
-  pm.addPass(arts::createDbPass(AM));
+  pm.addPass(arts::createDbModeTighteningPass(AM));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createMem2Reg());
@@ -392,7 +402,7 @@ void setupDbOpt(PassManager &pm, arts::AnalysisManager *AM) {
 /// EDT optimization passes.
 void setupEdtOpt(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(arts::createEdtPass(AM, /*runAnalysis*/ true));
+  pm.addPass(arts::createEdtStructuralOptPass(AM, /*runAnalysis*/ true));
   pm.addPass(arts::createLoopFusionPass(AM));
   pm.addPass(createCSEPass());
 }
@@ -414,24 +424,33 @@ void setupEdtDistribution(PassManager &pm, arts::AnalysisManager *AM) {
 /// Concurrency optimization passes.
 void setupConcurrencyOpt(PassManager &pm, arts::AnalysisManager *AM) {
   /// EDT optimization
-  pm.addPass(arts::createEdtPass(AM, /*runAnalysis*/ false));
+  pm.addPass(arts::createEdtStructuralOptPass(AM, /*runAnalysis*/ false));
   pm.addPass(arts::createDCEPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
-  /// DbPass performs local DB cleanup after mode adjustment, which can expose
-  /// new zero-dependency or degenerate EDTs before epoch shaping.
-  pm.addPass(arts::createEdtPass(AM, /*runAnalysis*/ false));
+  /// Re-run structural opts after cleanup to catch newly exposed degenerate
+  /// EDTs before epoch shaping.
+  // TODO(PERF): EdtStructuralOptPass runs 4 times in the pipeline. Evaluate
+  // whether the second call at line 408 (setupEdtOpt) is needed.
+  pm.addPass(arts::createEdtStructuralOptPass(AM, /*runAnalysis*/ false));
   pm.addPass(arts::createEpochOptPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
-  /// Partition DBs and run DbPass again to adjust modes.
+  /// Partition DBs and run DbModeTighteningPass again to adjust modes.
   pm.addPass(arts::createDbPartitioningPass(AM));
   /// Run distributed-ownership eligibility while EDT/DB ops are still in
   /// high-level form so analysis can reason about DbAcquire<->Edt users.
   if (DistributedDb)
-    pm.addPass(arts::createDistributedDbOwnershipPass(AM));
-  pm.addPass(arts::createDbPass(AM));
-  pm.addPass(arts::createDbOptsPass());
+    pm.addPass(arts::createDbDistributedOwnershipPass(AM));
+  pm.addPass(arts::createDbTransformsPass(AM));
+  /// DbModeTighteningPass performs local DB cleanup after mode adjustment,
+  /// which can expose new zero-dependency or degenerate EDTs before epoch
+  /// shaping. Mode tightening must run before EDT transforms so ET-2 (affinity)
+  /// and ET-5 (reduction) see accurate writer/reader modes.
+  pm.addPass(arts::createDbModeTighteningPass(AM));
+  pm.addPass(arts::createEdtTransformsPass(AM));
+  pm.addPass(arts::createContractValidationPass());
+  pm.addPass(arts::createDbScratchEliminationPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addNestedPass<func::FuncOp>(arts::createBlockLoopStripMiningPass());
@@ -445,14 +464,17 @@ void setupConcurrencyOpt(PassManager &pm, arts::AnalysisManager *AM) {
 }
 
 /// Epoch creation passes.
-void setupEpochs(PassManager &pm, arts::AnalysisManager *AM) {
+void setupEpochs(PassManager &pm) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createCreateEpochsPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
 }
 
 /// Pre-lowering passes.
-void setupPreLowering(PassManager &pm, arts::AnalysisManager *AM) {
+void setupPreLowering(PassManager &pm) {
+  // TODO(PERF): EdtAllocaSinkingPass runs twice — once inside
+  // setupConcurrencyOpt (line 466) and once here as a standalone pass. When
+  // both run together, alloca sinking happens twice for the same module state.
   pm.addPass(arts::createEdtAllocaSinkingPass());
   pm.addPass(arts::createParallelEdtLoweringPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
@@ -464,6 +486,9 @@ void setupPreLowering(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createLoopInvariantCodeMotionPass());
+  // TODO(DOCS): DataPtrHoistingPass runs twice. The second invocation (in
+  // setupArtsToLLVM) handles loads materialized during Arts->LLVM lowering.
+  // Document why this first invocation is needed.
   pm.addPass(arts::createDataPtrHoistingPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
@@ -603,10 +628,10 @@ setupPassManager(ModuleOp module, MLIRContext &context,
       {PipelineStage::ConcurrencyOpt, "Error when optimizing concurrency",
        [&](PassManager &pm) { setupConcurrencyOpt(pm, AM.get()); }},
       {PipelineStage::Epochs, "Error when creating and optimizing epochs",
-       [&](PassManager &pm) { setupEpochs(pm, AM.get()); }},
+       [&](PassManager &pm) { setupEpochs(pm); }},
       {PipelineStage::PreLowering,
        "Error when pre-lowering DBs, EDTs, and Epochs",
-       [&](PassManager &pm) { setupPreLowering(pm, AM.get()); }},
+       [&](PassManager &pm) { setupPreLowering(pm); }},
       {PipelineStage::ArtsToLLVM, "Error when converting ARTS to LLVM",
        [&](PassManager &pm) {
          setupArtsToLLVM(pm, Debug, DistributedDb, &machine);
@@ -661,8 +686,11 @@ int main(int argc, char **argv) {
   PipelineStage effectiveStopAt = StopAt;
   if (CollectMetadataFlag)
     effectiveStopAt = PipelineStage::CollectMetadata;
-  else if (effectiveStopAt == PipelineStage::LoopReordering)
+  else if (effectiveStopAt == PipelineStage::LoopReordering) {
+    llvm::errs() << "Warning: --stop-at=loop-reordering is deprecated; "
+                    "use --stop-at=pattern-pipeline\n";
     effectiveStopAt = PipelineStage::PatternPipeline;
+  }
 
   /// Set up the dialect registry and MLIR context.
   DialectRegistry registry;
