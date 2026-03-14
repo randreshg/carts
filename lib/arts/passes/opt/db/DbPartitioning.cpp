@@ -108,6 +108,10 @@ validateElementWiseIndices(ArrayRef<AcquirePartitionInfo> acquireInfos,
       continue;
 
     /// Use DbAcquireNode's validation method for the actual check
+    /// TODO(PERF): When findAcquireNode returns null, collectAcquireNodesForAlloc
+    /// is called as a linear fallback inside a loop over acquireInfos, resulting
+    /// in O(N^2) worst case. Pass the already-collected allocAcquireNodes array
+    /// into validateElementWiseIndices.
     if (allocNode) {
       auto *acqNode = allocNode->findAcquireNode(acquire);
       if (!acqNode) {
@@ -164,6 +168,10 @@ getPartitionOffsetsND(DbAcquireNode *acqNode,
   return result;
 }
 
+/// TODO(REUSE): collectAcquireNodesRecursive / collectAcquireNodesForAlloc
+/// duplicate the templatized collectAcquireNodesRecursive in DbAllocNode.cpp
+/// (line ~31). Expose DbAllocNode::collectAllAcquireNodes() as a public method
+/// and remove these local copies.
 static void
 collectAcquireNodesRecursive(DbAcquireNode *acqNode,
                              SmallVectorImpl<DbAcquireNode *> &out) {
@@ -248,8 +256,120 @@ summarizeAcquirePatterns(ArrayRef<DbAcquireNode *> acquireNodes,
                    : AcquirePatternSummary{};
 }
 
-static bool isBlockLikeMode(PartitionMode mode) {
-  return mode == PartitionMode::block || mode == PartitionMode::stencil;
+/// Canonical fallback ordering for per-acquire access pattern retrieval.
+///
+/// Priority (highest to lowest):
+///   1. summary  - AcquireContractSummary (post-DB refined contract view)
+///   2. contract - LoweringContractInfo embedded in summary (stencil inference)
+///   3. node     - DbAcquireNode graph-backed classification
+///   4. facts    - DbAcquirePartitionFacts raw analysis
+///   5. raw attrs - operation attributes on the acquire op
+///
+/// Returns Unknown when no source provides a non-Unknown pattern.
+static AccessPattern getCanonicalAccessPattern(
+    DbAcquireOp acquire,
+    const DbAnalysis::AcquireContractSummary *summary,
+    const DbAcquireNode *acqNode,
+    const DbAcquirePartitionFacts *facts) {
+  // 1. Summary (highest priority - post-DB refined contract view)
+  if (summary && summary->accessPattern != AccessPattern::Unknown) {
+    ARTS_DEBUG("    [canonical-access] resolved from summary: "
+               << static_cast<int>(summary->accessPattern));
+    return summary->accessPattern;
+  }
+  // 2. Contract stencil inference (summary present but accessPattern is Unknown)
+  if (summary && summary->usesStencilSemantics()) {
+    ARTS_DEBUG("    [canonical-access] resolved from contract stencil semantics");
+    return AccessPattern::Stencil;
+  }
+  // 3. Node (graph-backed classification)
+  if (acqNode) {
+    AccessPattern nodePattern = acqNode->getAccessPattern();
+    if (nodePattern != AccessPattern::Unknown) {
+      ARTS_DEBUG("    [canonical-access] resolved from node: "
+                 << static_cast<int>(nodePattern));
+      return nodePattern;
+    }
+  }
+  // 4. Facts (raw analysis)
+  if (facts && facts->accessPattern != AccessPattern::Unknown) {
+    ARTS_DEBUG("    [canonical-access] resolved from facts: "
+               << static_cast<int>(facts->accessPattern));
+    return facts->accessPattern;
+  }
+  // 5. Raw attributes (lowest priority)
+  if (acquire) {
+    if (auto rawPattern = getDbAccessPattern(acquire.getOperation())) {
+      // Map DbAccessPattern to AccessPattern where possible
+      if (*rawPattern == DbAccessPattern::stencil) {
+        ARTS_DEBUG("    [canonical-access] resolved from raw attr: stencil");
+        return AccessPattern::Stencil;
+      }
+      if (*rawPattern == DbAccessPattern::indexed) {
+        ARTS_DEBUG("    [canonical-access] resolved from raw attr: indexed");
+        return AccessPattern::Indexed;
+      }
+      if (*rawPattern == DbAccessPattern::uniform) {
+        ARTS_DEBUG("    [canonical-access] resolved from raw attr: uniform");
+        return AccessPattern::Uniform;
+      }
+    }
+  }
+  ARTS_DEBUG("    [canonical-access] no source resolved; returning Unknown");
+  return AccessPattern::Unknown;
+}
+
+/// Canonical fallback ordering for per-acquire dep pattern retrieval.
+///
+/// Priority (highest to lowest):
+///   1. summary  - LoweringContractInfo::depPattern from AcquireContractSummary
+///   2. node     - (not available for dep pattern today)
+///   3. facts    - DbAcquirePartitionFacts::depPattern
+///   4. raw attrs - operation attributes on the acquire op
+///
+/// Returns ArtsDepPattern::unknown when no source provides a known pattern.
+static ArtsDepPattern getCanonicalDepPattern(
+    DbAcquireOp acquire,
+    const DbAnalysis::AcquireContractSummary *summary,
+    const DbAcquirePartitionFacts *facts) {
+  // 1. Summary contract (highest priority)
+  if (summary && summary->contract.depPattern) {
+    ARTS_DEBUG("    [canonical-dep] resolved from summary contract: "
+               << static_cast<int>(*summary->contract.depPattern));
+    return *summary->contract.depPattern;
+  }
+  // 2. Facts (raw analysis)
+  if (facts && facts->depPattern != ArtsDepPattern::unknown) {
+    ARTS_DEBUG("    [canonical-dep] resolved from facts: "
+               << static_cast<int>(facts->depPattern));
+    return facts->depPattern;
+  }
+  // 3. Raw attributes (lowest priority)
+  if (acquire) {
+    if (auto rawDep = getDepPattern(acquire.getOperation());
+        rawDep && *rawDep != ArtsDepPattern::unknown) {
+      ARTS_DEBUG("    [canonical-dep] resolved from raw attr: "
+                 << static_cast<int>(*rawDep));
+      return *rawDep;
+    }
+  }
+  ARTS_DEBUG("    [canonical-dep] no source resolved; returning unknown");
+  return ArtsDepPattern::unknown;
+}
+
+/// Check whether an acquire has stencil-family access semantics using the
+/// canonical fallback ordering. This consolidates the stencil detection logic
+/// previously duplicated across multiple code paths.
+static bool hasCanonicalStencilSemantics(
+    DbAcquireOp acquire,
+    const DbAnalysis::AcquireContractSummary *summary,
+    const DbAcquireNode *acqNode,
+    const DbAcquirePartitionFacts *facts) {
+  AccessPattern ap = getCanonicalAccessPattern(acquire, summary, acqNode, facts);
+  if (ap == AccessPattern::Stencil)
+    return true;
+  ArtsDepPattern dp = getCanonicalDepPattern(acquire, summary, facts);
+  return isStencilFamilyDepPattern(dp);
 }
 
 static bool isAcquireInfoConsistent(const AcquirePartitionInfo &lhs,
@@ -318,7 +438,7 @@ reconcileAcquireModes(PartitioningContext &ctx,
         return i.mode == PartitionMode::coarse;
       });
   bool hasBlock = llvm::any_of(acquireInfos, [](const AcquirePartitionInfo &i) {
-    return isBlockLikeMode(i.mode);
+    return requiresBlockSize(i.mode);
   });
 
   if (hasCoarse && hasBlock) {
@@ -378,6 +498,9 @@ static bool isLowerBoundGuaranteedByControlFlow(Operation *op, Value loopIV) {
   return false;
 }
 
+/// TODO(PERF): applyBoundsValid has two loops over boundsCheckFlags that create
+/// duplicate CmpIOp (geZero) IR operations. Merge into a single loop or cache
+/// the comparison.
 static void applyBoundsValid(DbAcquireOp acquireOp,
                              ArrayRef<int64_t> boundsCheckFlags, Value loopIV) {
   if (acquireOp.hasMultiplePartitionEntries()) {
@@ -511,6 +634,7 @@ static void lowerStencilAcquireBounds(ModuleOp module,
 static AcquirePartitionInfo
 computeAcquirePartitionInfo(DbAcquireOp acquire, DbAcquireNode *acqNode,
                             const DbAnalysis::AcquireContractSummary *summary,
+                            const DbAcquirePartitionFacts *facts,
                             OpBuilder &builder) {
   AcquirePartitionInfo info;
   info.acquire = acquire;
@@ -529,10 +653,8 @@ computeAcquirePartitionInfo(DbAcquireOp acquire, DbAcquireNode *acqNode,
                              partitionSummary.partitionSizes.end());
   info.partitionDims.assign(partitionSummary.partitionDims.begin(),
                             partitionSummary.partitionDims.end());
-  if (summary)
-    info.accessPattern = summary->accessPattern;
-  else if (acqNode)
-    info.accessPattern = acqNode->getAccessPattern();
+  info.accessPattern =
+      getCanonicalAccessPattern(acquire, summary, acqNode, facts);
   info.isValid = partitionSummary.isValid;
   info.hasIndirectAccess = summary ? summary->hasIndirectAccess
                                    : partitionSummary.hasIndirectAccess;
@@ -577,6 +699,71 @@ static void resetCoarseAcquireRanges(DbAllocOp allocOp, DbAllocNode *allocNode,
     /// Keep acquire partition attribute consistent with coarse allocation.
     setPartitionMode(acqOp.getOperation(), PartitionMode::coarse);
   }
+}
+
+/// EXT-PART-5: Heuristic-to-contract feedback.
+///
+/// After DbPartitioning resolves block sizes and partition dimensions for an
+/// allocation, write the chosen values back into the LoweringContractOp on the
+/// alloc's ptr so downstream passes can see them without re-deriving the
+/// information from scattered attributes.
+///
+/// This reads any existing contract, merges in the resolved blockShape,
+/// ownerDims, and distributionVersion, then upserts the updated contract.
+/// Returns true if a contract was updated.
+static bool feedbackPartitionDecisionToContract(
+    DbAllocOp newAllocOp, ArrayRef<Value> blockSizes,
+    ArrayRef<unsigned> partitionedDims, PartitionMode mode,
+    OpBuilder &builder) {
+  if (!newAllocOp)
+    return false;
+
+  Value allocPtr = newAllocOp.getPtr();
+  if (!allocPtr)
+    return false;
+
+  /// Read the existing contract (if any) to preserve upstream-seeded fields
+  /// such as depPattern, distributionKind, distributionPattern, halo offsets,
+  /// stencilIndependentDims, etc.
+  LoweringContractInfo info;
+  if (auto existing = getLoweringContract(allocPtr))
+    info = *existing;
+
+  /// Populate resolved block shape from the block-plan resolver output.
+  if (!blockSizes.empty()) {
+    info.blockShape.assign(blockSizes.begin(), blockSizes.end());
+  }
+
+  /// Populate ownerDims from the resolved partitioned dimensions.
+  if (!partitionedDims.empty()) {
+    info.ownerDims.clear();
+    info.ownerDims.reserve(partitionedDims.size());
+    for (unsigned dim : partitionedDims)
+      info.ownerDims.push_back(static_cast<int64_t>(dim));
+  }
+
+  /// Bump distributionVersion so downstream passes can detect that the
+  /// contract was enriched by the partitioning heuristic.
+  int64_t currentVersion = info.distributionVersion.value_or(0);
+  info.distributionVersion = currentVersion + 1;
+
+  /// Mark as post-DB refined so consumers can distinguish contracts that
+  /// survived partitioning from pre-partitioning seeds.
+  info.postDbRefined = true;
+
+  /// Guard: if the enriched contract is empty (no meaningful data), skip.
+  if (info.empty())
+    return false;
+
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointAfter(newAllocOp);
+  upsertLoweringContract(builder, newAllocOp.getLoc(), allocPtr, info);
+
+  ARTS_DEBUG("  EXT-PART-5: fed back partition decision to contract"
+             << " (blockShape=" << blockSizes.size()
+             << ", ownerDims=" << partitionedDims.size()
+             << ", version=" << (currentVersion + 1) << ")");
+  return true;
 }
 
 } // namespace
@@ -654,6 +841,8 @@ void DbPartitioningPass::runOnOperation() {
   ARTS_DEBUG_REGION(module.dump(););
 }
 
+/// TODO(REUSE): findEdtUse and EdtAcquireUse duplicate
+/// EdtUtils::getEdtBlockArgumentForAcquire(). Replace with the existing utility.
 namespace {
 struct EdtAcquireUse {
   EdtOp edt = nullptr;
@@ -772,6 +961,9 @@ static SmallVector<DbRefOp> collectDbRefUsers(BlockArgument arg) {
   return refs;
 }
 
+/// TODO(PERF): collectAccessIndices eagerly collects all reachable memory ops
+/// via DbUtils::collectReachableMemoryOps but returns on the first non-empty
+/// indices result. Use walk-with-early-termination instead.
 static SmallVector<Value> collectAccessIndices(DbRefOp dbRef) {
   SetVector<Operation *> memOps;
   DbUtils::collectReachableMemoryOps(dbRef.getResult(), memOps,
@@ -1116,7 +1308,7 @@ bool DbPartitioningPass::partitionDb() {
 
   /// PHASE 1: Partition allocations
   module.walk([&](func::FuncOp func) {
-    DbGraph &graph = AM->getDbGraph(func);
+    DbGraph &graph = AM->getDbAnalysis().getOrCreateGraph(func);
     graph.forEachAllocNode([&](DbAllocNode *allocNode) {
       if (!allocNode)
         return;
@@ -1142,6 +1334,10 @@ bool DbPartitioningPass::partitionDb() {
 }
 
 /// Analyze allocation acquires and apply appropriate partitioning rewriter.
+/// TODO(REFACTOR): partitionAlloc is ~1000 lines. Consider splitting into:
+/// (a) buildPartitionContext (per-acquire capability loop),
+/// (b) resolveStencilAndBlockPlan (stencil info + block-plan resolution),
+/// (c) assembleAndApplyRewritePlan (rewrite plan assembly + application).
 FailureOr<DbAllocOp>
 DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   if (!allocOp || !allocOp.getOperation())
@@ -1213,6 +1409,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                                               contractSummary
                                                   ? &*contractSummary
                                                   : nullptr,
+                                              facts,
                                               builder);
       if (!info.isValid) {
         ARTS_DEBUG("  Acquire analysis failed for "
@@ -1282,7 +1479,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         ctx.hasIndirectAccess = true;
         if (mode == ArtsMode::in || mode == ArtsMode::inout)
           ctx.hasIndirectRead = true;
-        if (mode == ArtsMode::out || mode == ArtsMode::inout)
+        if (DbUtils::isWriterMode(mode))
           ctx.hasIndirectWrite = true;
       }
       if (contractSummary->hasDirectAccess)
@@ -1445,15 +1642,11 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         info.partitionMode = acqPartInfo.mode;
       }
 
-      /// Populate access pattern for heuristic use
-      if (contractSummary)
-        info.accessPattern = contractSummary->accessPattern;
-      else if (acqNode)
-        info.accessPattern = acqNode->getAccessPattern();
-      if (contractSummary && contractSummary->contract.depPattern)
-        info.depPattern = *contractSummary->contract.depPattern;
-      else if (facts)
-        info.depPattern = facts->depPattern;
+      /// Populate access pattern and dep pattern using canonical ordering.
+      info.accessPattern =
+          getCanonicalAccessPattern(acquire, contractSummary, acqNode, facts);
+      info.depPattern =
+          getCanonicalDepPattern(acquire, contractSummary, facts);
 
       if (info.accessPattern == AccessPattern::Unknown &&
           info.accessMode == ArtsMode::in &&
@@ -1541,7 +1734,13 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
     /// Collect DbAcquireNode* and partition offsets for heuristic decisions
     /// Get per-acquire decisions from heuristics (calls needsFullRange)
-    auto acquireDecisions = heuristics.chooseAcquirePolicies(acquireFacts);
+    /// Build contract summary pointer array for heuristics consumption.
+    SmallVector<const DbAnalysis::AcquireContractSummary *> summaryPtrs;
+    summaryPtrs.reserve(acquireContractSummaries.size());
+    for (auto &opt : acquireContractSummaries)
+      summaryPtrs.push_back(opt ? &*opt : nullptr);
+    auto acquireDecisions =
+        heuristics.chooseAcquirePolicies(acquireFacts, summaryPtrs);
 
     /// Apply decisions to acquireInfos
     for (size_t i = 0; i < acquireDecisions.size() && i < acquireInfos.size();
@@ -1788,13 +1987,12 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                                  << ", outerRank=" << decision.outerRank
                                  << ", innerRank=" << decision.innerRank);
 
-  if (decision.mode == PartitionMode::stencil) {
-    bool allocHasStencilPattern = false;
-    if (auto allocPattern = getDbAccessPattern(allocOp.getOperation()))
-      allocHasStencilPattern = *allocPattern == DbAccessPattern::stencil;
-    if (!allocHasStencilPattern)
-      allocHasStencilPattern = ctx.accessPatterns.hasStencil;
+  auto allocPattern = getDbAccessPattern(allocOp.getOperation());
+  bool allocHasStencilPattern =
+      (allocPattern && *allocPattern == DbAccessPattern::stencil) ||
+      ctx.accessPatterns.hasStencil;
 
+  if (decision.mode == PartitionMode::stencil) {
     if (allocHasStencilPattern) {
       for (auto &info : acquireInfos) {
         if (!info.acquire)
@@ -1882,29 +2080,27 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       }
     }
 
-    auto allocPattern = getDbAccessPattern(allocOp.getOperation());
-    bool allocHasStencilPattern =
-        (allocPattern && *allocPattern == DbAccessPattern::stencil) ||
-        ctx.accessPatterns.hasStencil;
-
-    bool hasReadStencilAcquire = std::any_of(
-        allocAcquireNodes.begin(), allocAcquireNodes.end(),
+    /// TODO(PERF): getAcquireContractSummary and getAcquirePartitionFacts are
+    /// queried at line ~1389 and cached in vectors, then re-queried at line
+    /// ~2082 inside hasReadStencilAcquire. Reuse the cached vectors by index.
+    bool hasReadStencilAcquire = llvm::any_of(
+        allocAcquireNodes,
         [&](DbAcquireNode *acqNode) {
           if (!acqNode)
             return false;
           DbAcquireOp acquire = acqNode->getDbAcquireOp();
           if (!acquire || acquire.getMode() != ArtsMode::in)
             return false;
-          if (auto contractSummary =
-                  AM->getDbAnalysis().getAcquireContractSummary(acquire)) {
-            if (contractSummary->usesStencilSemantics())
-              return true;
-          }
-          if (auto accessPattern =
-                  AM->getDbAnalysis().getAcquireAccessPattern(acquire);
-              accessPattern && *accessPattern == AccessPattern::Stencil)
-            return true;
-          if (acqNode->getAccessPattern() == AccessPattern::Stencil)
+          auto contractSummary =
+              AM->getDbAnalysis().getAcquireContractSummary(acquire);
+          const DbAcquirePartitionFacts *acqFacts =
+              AM->getDbAnalysis().getAcquirePartitionFacts(acquire);
+          if (!acqFacts)
+            acqFacts = &acqNode->getPartitionFacts();
+          if (hasCanonicalStencilSemantics(
+                  acquire,
+                  contractSummary ? &*contractSummary : nullptr,
+                  acqNode, acqFacts))
             return true;
           return allocHasStencilPattern;
         });
@@ -2178,6 +2374,15 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
     AM->getMetadataManager().transferMetadata(allocOp, result.value());
 
+    /// EXT-PART-5: Write resolved partition decisions back to the
+    /// LoweringContractOp on the alloc's ptr so downstream passes can read
+    /// the block shape, owner dims, and distribution version directly.
+    if (!decision.isCoarse()) {
+      feedbackPartitionDecisionToContract(result.value(), blockSizesForPlan,
+                                          partitionedDimsForPlan,
+                                          decision.mode, builder);
+    }
+
     /// Coarse allocation: clear partition hints on acquires to avoid
     /// unnecessary per-task hint plumbing and enable invariant hoisting.
     if (decision.isCoarse()) {
@@ -2217,10 +2422,7 @@ void DbPartitioningPass::analyzeStencilBounds() {
 }
 
 void DbPartitioningPass::invalidateAndRebuildGraph() {
-  module.walk([&](func::FuncOp func) {
-    AM->invalidateFunction(func);
-    (void)AM->getDbGraph(func);
-  });
+  AM->invalidateAndRebuildGraphs(module);
 }
 
 namespace mlir {
