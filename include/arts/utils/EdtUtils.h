@@ -10,10 +10,12 @@
 #define CARTS_UTILS_EDTUTILS_H
 
 #include "arts/Dialect.h"
+#include "mlir/IR/Block.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Region.h"
 #include "mlir/IR/Value.h"
+#include "llvm/ADT/STLExtras.h"
 
 namespace mlir {
 class BlockArgument;
@@ -26,6 +28,38 @@ namespace arts {
 class EdtOp;
 class EpochOp;
 class DbAcquireOp;
+
+/// Move all non-terminator operations from src block into dst block,
+/// inserting them before dst's terminator.
+static inline void spliceBodyBeforeTerminator(Block &src, Block &dst) {
+  Operation *terminator = dst.getTerminator();
+  for (Operation &op : llvm::make_early_inc_range(src.without_terminator()))
+    op.moveBefore(terminator);
+}
+
+/// Fuse consecutive pairs of operations of type OpT in a block.
+/// canFuse checks if two consecutive ops can be fused.
+/// doFuse performs the fusion (must erase or modify the second op).
+/// Returns true if any fusion was performed.
+template <typename OpT>
+bool fuseConsecutivePairs(Block &block,
+                          llvm::function_ref<bool(OpT, OpT)> canFuse,
+                          llvm::function_ref<void(OpT, OpT)> doFuse) {
+  bool changed = false;
+  for (auto it = block.begin(); it != block.end();) {
+    auto first = dyn_cast<OpT>(&*it);
+    if (!first) { ++it; continue; }
+    auto nextIt = std::next(it);
+    if (nextIt == block.end()) { ++it; continue; }
+    auto second = dyn_cast<OpT>(&*nextIt);
+    if (!second) { ++it; continue; }
+    if (!canFuse(first, second)) { ++it; continue; }
+    doFuse(first, second);
+    changed = true;
+    // Re-run on same first op to chain-fuse.
+  }
+  return changed;
+}
 
 /// Utility class for working with ARTS EDTs (EdtOp).
 class EdtUtils {

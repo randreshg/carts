@@ -12,6 +12,7 @@
 
 #include "arts/Dialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
 namespace mlir {
@@ -52,6 +53,10 @@ inline bool haveCompatibleBounds(scf::ForOp a, scf::ForOp b) {
 /// argument. Recursively decomposes AND-ed conditions and extracts bounds
 /// from less-than / greater-than comparisons.
 void collectWhileBounds(Value cond, Value iterArg, SmallVector<Value> &bounds);
+
+/// Returns true if the EDT's body contains any loop operations
+/// (scf::ForOp, scf::ParallelOp, affine::AffineForOp).
+bool hasEnclosingLoop(EdtOp edt);
 
 } // namespace arts
 } // namespace mlir

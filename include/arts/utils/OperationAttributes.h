@@ -46,15 +46,53 @@ constexpr StringLiteral AccessPattern = "access_pattern";
 constexpr StringLiteral Distributed = "distributed";
 constexpr StringLiteral DistributionKind = "distribution_kind";
 constexpr StringLiteral DistributionPattern = "distribution_pattern";
-constexpr StringLiteral DepPattern = "depPattern";
+/// ODS-generated attribute name for EdtOp dep pattern
+constexpr StringLiteral DepPatternAttr = "depPattern";
 constexpr StringLiteral DistributionVersion = "distribution_version";
 constexpr StringLiteral PatternRevision = "arts.pattern_revision";
 
 /// DbAllocOp attributes (TableGen-generated names)
+/// NOTE: These attributes use camelCase to match ODS-generated (TableGen)
+/// attribute storage names. All other attributes use snake_case.
 constexpr StringLiteral Mode = "mode";
 constexpr StringLiteral AllocType = "allocType";
 constexpr StringLiteral DbMode = "dbMode";
 constexpr StringLiteral ElementType = "elementType";
+
+/// DB storage-type inference annotations (set by DbModeTighteningPass)
+constexpr StringLiteral LocalOnly = "arts.local_only";
+constexpr StringLiteral ReadOnlyAfterInit = "arts.read_only_after_init";
+
+/// GUID range detection annotations (set by GUIDRangeDetection)
+constexpr StringLiteral GuidRangeTripCount = "guid_range_trip_count";
+constexpr StringLiteral HasGuidRangeAlloc = "has_guid_range_alloc";
+
+/// LoweringContractOp attribute names (used in Dialect.cpp build method)
+namespace Contract {
+using namespace llvm;
+/// Contract attribute name for dep pattern
+constexpr StringLiteral DepPatternKey = "dep_pattern";
+// These are the same as Operation:: versions; kept as aliases for readability.
+constexpr auto DistributionKind = Operation::DistributionKind;
+constexpr auto DistributionPattern = Operation::DistributionPattern;
+constexpr auto DistributionVersion = Operation::DistributionVersion;
+constexpr StringLiteral OwnerDims = "owner_dims";
+constexpr StringLiteral SpatialDims = "spatial_dims";
+constexpr StringLiteral SupportedBlockHalo = "supported_block_halo";
+constexpr StringLiteral StencilIndependentDims = "stencil_independent_dims";
+constexpr StringLiteral EsdByteOffset = "esd_byte_offset";
+constexpr StringLiteral EsdByteSize = "esd_byte_size";
+constexpr StringLiteral CachedStartBlock = "cached_start_block";
+constexpr StringLiteral CachedBlockCount = "cached_block_count";
+constexpr StringLiteral PostDbRefined = "post_db_refined";
+constexpr StringLiteral InferredDbMode = "inferred_db_mode";
+constexpr StringLiteral EstimatedTaskCost = "estimated_task_cost";
+constexpr StringLiteral CriticalPathDistance = "critical_path_distance";
+constexpr StringLiteral AffinityDb = "affinity_db";
+constexpr StringLiteral ReductionStrategy = "arts.reduction_strategy";
+constexpr StringLiteral NarrowableDep = "narrowable_dep";
+constexpr StringLiteral NarrowableHaloFootprint = "narrowable_halo_footprint";
+} // namespace Contract
 
 /// EdtOp attributes (TableGen-generated names)
 constexpr StringLiteral Type = "type";
@@ -349,7 +387,7 @@ inline std::optional<ArtsDepPattern> getDepPattern(Operation *op) {
   if (!op)
     return std::nullopt;
   if (auto attr = op->getAttrOfType<ArtsDepPatternAttr>(
-          AttrNames::Operation::DepPattern))
+          AttrNames::Operation::DepPatternAttr))
     return attr.getValue();
   return std::nullopt;
 }
@@ -357,7 +395,7 @@ inline std::optional<ArtsDepPattern> getDepPattern(Operation *op) {
 inline void setDepPattern(Operation *op, ArtsDepPattern pattern) {
   if (!op)
     return;
-  op->setAttr(AttrNames::Operation::DepPattern,
+  op->setAttr(AttrNames::Operation::DepPatternAttr,
               ArtsDepPatternAttr::get(op->getContext(), pattern));
 }
 
@@ -459,7 +497,7 @@ inline void copyDepPatternAttrs(Operation *source, Operation *dest) {
   if (auto pattern = getDepPattern(source))
     setDepPattern(dest, *pattern);
   else
-    dest->removeAttr(AttrNames::Operation::DepPattern);
+    dest->removeAttr(AttrNames::Operation::DepPatternAttr);
 }
 
 /// Copy distribution_* attributes between operations.
