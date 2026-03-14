@@ -11,7 +11,6 @@
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -134,9 +133,6 @@ static bool hasOnlyAllowedHandleUsers(Value rootHandle) {
       if (isa<memref::DimOp, memref::DeallocOp>(user))
         continue;
 
-      if (isa<arith::ConstantOp>(user))
-        continue;
-
       if (isMemoryEffectFree(user)) {
         for (Value result : user->getResults())
           enqueue(result);
@@ -150,93 +146,86 @@ static bool hasOnlyAllowedHandleUsers(Value rootHandle) {
   return true;
 }
 
-template <typename PredicateT>
-static bool anyAcquireNodeMatches(DbAllocOp alloc, DbAnalysis &dbAnalysis,
-                                  PredicateT &&predicate) {
+/// Returns true when an acquire node uses stencil semantics, checking the
+/// contract summary, the analysis access pattern, and the node access pattern.
+static bool isStencilAcquire(DbAcquireNode *node, DbAnalysis &dbAnalysis) {
+  DbAcquireOp acquireOp = node->getDbAcquireOp();
+  if (!acquireOp)
+    return false;
+
+  if (auto contract = dbAnalysis.getAcquireContractSummary(acquireOp);
+      contract && contract->usesStencilSemantics())
+    return true;
+
+  if (auto accessPattern = dbAnalysis.getAcquireAccessPattern(acquireOp))
+    return *accessPattern == AccessPattern::Stencil;
+
+  return node->getAccessPattern() == AccessPattern::Stencil;
+}
+
+/// Summary of facts collected in a single pass over all acquire nodes
+/// belonging to a given DB allocation.
+struct EligibilityFacts {
+  bool hasInternodeEdtUse = false;
+  bool hasStencilReadInternodeUse = false;
+  bool allAcquiresReadOnly = true;
+  bool isStencilFamily = false;
+  bool allHaveEdtAcquireUsers = true;
+};
+
+/// Performs a single traversal of the acquire nodes for |alloc|, collecting
+/// every fact needed by evaluateDistributedDbEligibility.  Returns std::nullopt
+/// when the parent function or alloc node cannot be resolved.
+static std::optional<EligibilityFacts>
+collectEligibilityFacts(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
   func::FuncOp parentFunc = alloc->getParentOfType<func::FuncOp>();
   if (!parentFunc)
-    return false;
+    return std::nullopt;
 
   DbGraph &graph = dbAnalysis.getOrCreateGraph(parentFunc);
   DbAllocNode *allocNode = graph.getDbAllocNode(alloc);
   if (!allocNode)
-    return false;
+    return std::nullopt;
 
-  bool matched = false;
+  EligibilityFacts facts;
+
   graph.forEachAcquireNode([&](DbAcquireNode *acquireNode) {
-    if (matched || !acquireNode)
+    if (!acquireNode)
       return;
     if (acquireNode->getRootAlloc() != allocNode)
       return;
-    matched = predicate(acquireNode);
+
+    // --- allHaveEdtAcquireUsers (universal) ---
+    EdtOp edt = acquireNode->getEdtUser();
+    if (!edt)
+      facts.allHaveEdtAcquireUsers = false;
+
+    // --- allAcquiresReadOnly (universal) ---
+    bool readOnly = acquireNode->isReadOnlyAccess();
+    if (!readOnly)
+      facts.allAcquiresReadOnly = false;
+
+    // --- isStencilFamily (existential) ---
+    bool stencil = isStencilAcquire(acquireNode, dbAnalysis);
+    if (stencil)
+      facts.isStencilFamily = true;
+
+    // --- hasInternodeEdtUse (existential) ---
+    bool internode = edt &&
+                     edt.getConcurrency() == EdtConcurrency::internode;
+    if (internode)
+      facts.hasInternodeEdtUse = true;
+
+    // --- hasStencilReadInternodeUse (existential) ---
+    if (internode && readOnly && stencil)
+      facts.hasStencilReadInternodeUse = true;
   });
 
-  return matched;
+  return facts;
 }
 
-template <typename PredicateT>
-static bool allAcquireNodesMatch(DbAllocOp alloc, DbAnalysis &dbAnalysis,
-                                 PredicateT &&predicate) {
-  func::FuncOp parentFunc = alloc->getParentOfType<func::FuncOp>();
-  if (!parentFunc)
-    return false;
-
-  DbGraph &graph = dbAnalysis.getOrCreateGraph(parentFunc);
-  DbAllocNode *allocNode = graph.getDbAllocNode(alloc);
-  if (!allocNode)
-    return false;
-
-  bool allMatched = true;
-  graph.forEachAcquireNode([&](DbAcquireNode *acquireNode) {
-    if (!allMatched || !acquireNode)
-      return;
-    if (acquireNode->getRootAlloc() != allocNode)
-      return;
-    allMatched = predicate(acquireNode);
-  });
-
-  return allMatched;
-}
-
-static bool isUsedByInternodeEdt(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
-  return anyAcquireNodeMatches(
-      alloc, dbAnalysis, [&](DbAcquireNode *acquireNode) {
-        EdtOp edt = acquireNode->getEdtUser();
-        return edt && edt.getConcurrency() == EdtConcurrency::internode;
-      });
-}
-
-static bool hasStencilReadInternodeEdtUse(DbAllocOp alloc,
-                                          DbAnalysis &dbAnalysis) {
-  return anyAcquireNodeMatches(
-      alloc, dbAnalysis, [&](DbAcquireNode *acquireNode) {
-        DbAcquireOp acquireOp = acquireNode->getDbAcquireOp();
-        if (!acquireOp)
-          return false;
-
-        EdtOp edt = acquireNode->getEdtUser();
-        if (!edt || edt.getConcurrency() != EdtConcurrency::internode)
-          return false;
-
-        if (!acquireNode->isReadOnlyAccess())
-          return false;
-
-        if (auto contract = dbAnalysis.getAcquireContractSummary(acquireOp);
-            contract && contract->usesStencilSemantics())
-          return true;
-
-        if (auto accessPattern = dbAnalysis.getAcquireAccessPattern(acquireOp))
-          return *accessPattern == AccessPattern::Stencil;
-
-        return acquireNode->getAccessPattern() == AccessPattern::Stencil;
-      });
-}
-
-static bool hasOnlyEdtAcquireUsers(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
-  return allAcquireNodesMatch(
-      alloc, dbAnalysis, [&](DbAcquireNode *acquireNode) {
-        return static_cast<bool>(acquireNode->getEdtUser());
-      });
+static bool hasReadOnlyAfterInitAttr(DbAllocOp alloc) {
+  return alloc->hasAttr(AttrNames::Operation::ReadOnlyAfterInit);
 }
 
 } // namespace
@@ -284,12 +273,31 @@ mlir::arts::evaluateDistributedDbEligibility(DbAllocOp alloc,
     return {false, DistributedDbEligibilityRejectReason::UnsupportedPtrUsers};
   if (!hasOnlyAllowedHandleUsers(alloc.getGuid()))
     return {false, DistributedDbEligibilityRejectReason::UnsupportedGuidUsers};
-  if (!hasOnlyEdtAcquireUsers(alloc, dbAnalysis))
+
+  // Single-pass collection of all acquire-node facts.
+  auto maybeFacts = collectEligibilityFacts(alloc, dbAnalysis);
+  if (!maybeFacts)
     return {false, DistributedDbEligibilityRejectReason::NonEdtAcquireUse};
-  if (!isUsedByInternodeEdt(alloc, dbAnalysis))
+
+  const EligibilityFacts &facts = *maybeFacts;
+
+  if (!facts.allHaveEdtAcquireUsers)
+    return {false, DistributedDbEligibilityRejectReason::NonEdtAcquireUse};
+  if (!facts.hasInternodeEdtUse)
     return {false, DistributedDbEligibilityRejectReason::NoInternodeEdtUse};
-  if (hasStencilReadInternodeEdtUse(alloc, dbAnalysis))
+  if (facts.hasStencilReadInternodeUse) {
+    /// EXT-DIST-1: Allow read-only stencil DBs as replicated distributed DBs.
+    /// A stencil-pattern DB is safe for distribution when no writes occur —
+    /// each node can hold a complete copy of the data including halo regions.
+    /// TODO(DT-5): Lowering must emit arts_add_db_duplicate() to actually
+    /// replicate the data. Until then, this falls through to block distribution.
+    bool readOnly = facts.allAcquiresReadOnly ||
+                    hasReadOnlyAfterInitAttr(alloc);
+    if (readOnly && facts.isStencilFamily)
+      return {true, DistributedDbEligibilityRejectReason::None,
+              EdtDistributionKind::replicated};
     return {false,
             DistributedDbEligibilityRejectReason::StencilReadInternodeUse};
+  }
   return {true, DistributedDbEligibilityRejectReason::None};
 }

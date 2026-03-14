@@ -266,6 +266,9 @@ DbAnalysis::analyzeLoopDbAccessPatterns(ForOp forOp) {
     Operation *allocOp = rootAlloc->getDbAllocOp().getOperation();
 
     DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+    /// TODO(PERF): collectAccessOperations is called per acquire per loop with
+    /// no caching. Cache results on DbAcquireNode to avoid redundant
+    /// computation.
     acqNode->collectAccessOperations(dbRefToMemOps);
 
     SmallVector<AccessIndexInfo, 16> accesses;
@@ -403,6 +406,228 @@ bool DbAnalysis::hasNonInternodeConsumerForWrittenDb(EdtOp producerEdt) {
   return hasNonInternodeConsumer;
 }
 
+/// Scan the acquire's block for MinUIOp/MinSIOp that refines the given
+/// size hint based on an offset dependency.
+/// TODO(PERF): refineSizeFromMinInBlock linearly scans the entire acquire
+/// block for MinUIOp/MinSIOp. Limit search to forward from acquire op, or
+/// cache results per block.
+static Value refineSizeFromMinInBlock(DbAcquireOp acquire, Value offset,
+                                      Value sizeHint) {
+  if (!offset || !sizeHint)
+    return Value();
+  int64_t sizeConst = 0;
+  bool sizeIsConst = ValueAnalysis::getConstantIndex(sizeHint, sizeConst);
+  auto isSameConst = [&](Value v) -> bool {
+    int64_t val = 0;
+    return ValueAnalysis::getConstantIndex(v, val) && val == sizeConst;
+  };
+  for (Operation &op : *acquire->getBlock()) {
+    Value refined;
+    auto tryRefine = [&](Value lhs, Value rhs, Value result) {
+      bool lhsIsHint = (lhs == sizeHint) || (sizeIsConst && isSameConst(lhs));
+      bool rhsIsHint = (rhs == sizeHint) || (sizeIsConst && isSameConst(rhs));
+      if (lhsIsHint && ValueAnalysis::dependsOn(rhs, offset))
+        refined = result;
+      else if (rhsIsHint && ValueAnalysis::dependsOn(lhs, offset))
+        refined = result;
+    };
+
+    if (auto minOp = dyn_cast<arith::MinUIOp>(&op)) {
+      tryRefine(minOp.getLhs(), minOp.getRhs(), minOp.getResult());
+    } else if (auto minOp = dyn_cast<arith::MinSIOp>(&op)) {
+      tryRefine(minOp.getLhs(), minOp.getRhs(), minOp.getResult());
+    }
+
+    if (refined)
+      return refined;
+  }
+  return Value();
+}
+
+/// Apply partition dimension information from facts to the summary.
+static void inferPartitionDims(DbAnalysis::AcquirePartitionSummary &summary,
+                               const DbAcquirePartitionFacts *facts) {
+  if (!facts || facts->partitionDims.empty())
+    return;
+  summary.partitionDims.assign(facts->partitionDims.begin(),
+                               facts->partitionDims.end());
+  if (!summary.partitionOffsets.empty() &&
+      summary.partitionDims.size() > summary.partitionOffsets.size()) {
+    summary.partitionDims.resize(summary.partitionOffsets.size());
+  }
+}
+
+/// For tiling_2d acquires with no partition dims, assign sequential dims.
+static void applyTiling2DPartitionDimsFallback(
+    DbAnalysis::AcquirePartitionSummary &summary, DbAcquireOp acquire) {
+  if (!isTiling2DTaskAcquire(acquire))
+    return;
+  if (!summary.partitionDims.empty())
+    return;
+  if (summary.partitionOffsets.size() < 2)
+    return;
+  summary.partitionDims.clear();
+  for (unsigned d = 0; d < summary.partitionOffsets.size(); ++d)
+    summary.partitionDims.push_back(d);
+}
+
+/// Analyze partition info for a coarse-mode acquire.
+static void analyzeCoarsePartition(DbAnalysis::AcquirePartitionSummary &info,
+                                   DbAcquireOp acquire, DbAcquireNode *acqNode,
+                                   const DbAcquirePartitionFacts *facts) {
+  info.isValid = true;
+  if (acqNode) {
+    Value offset, size;
+    if (succeeded(acqNode->computeBlockInfo(offset, size))) {
+      info.partitionOffsets.push_back(offset);
+      info.partitionSizes.push_back(size);
+      unsigned offsetIdx = 0;
+      Value repOffset = DbUtils::pickRepresentativePartitionOffset(
+          info.partitionOffsets, &offsetIdx);
+      Value repSize = DbUtils::pickRepresentativePartitionSize(
+          info.partitionSizes, offsetIdx);
+      if (Value refined = refineSizeFromMinInBlock(acquire, repOffset, repSize)) {
+        if (offsetIdx < info.partitionSizes.size())
+          info.partitionSizes[offsetIdx] = refined;
+        else if (!info.partitionSizes.empty())
+          info.partitionSizes[0] = refined;
+      }
+      inferPartitionDims(info, facts);
+    } else {
+      info.isValid = false;
+    }
+  } else {
+    info.isValid = false;
+  }
+}
+
+/// Analyze partition info for a fine-grained-mode acquire.
+static void analyzeFineGrainedPartition(
+    DbAnalysis::AcquirePartitionSummary &info, DbAcquireOp acquire,
+    const DbAcquirePartitionFacts *facts, OpBuilder &builder) {
+  if (!acquire.getPartitionIndices().empty()) {
+    for (Value idx : acquire.getPartitionIndices())
+      info.partitionOffsets.push_back(idx);
+    Value one = arts::createOneIndex(builder, acquire.getLoc());
+    for (unsigned i = 0; i < info.partitionOffsets.size(); ++i)
+      info.partitionSizes.push_back(one);
+    info.isValid = true;
+    inferPartitionDims(info, facts);
+  }
+}
+
+/// Analyze partition info for a block/stencil-mode acquire.
+static void analyzeBlockStencilPartition(
+    DbAnalysis::AcquirePartitionSummary &info, DbAcquireOp acquire,
+    DbAcquireNode *acqNode, const DbAcquirePartitionFacts *facts,
+    OpBuilder &builder) {
+  /// Prefer explicit partition_* hints when available. If they were already
+  /// materialized into offsets/sizes (post-rewrite acquires), reuse those so
+  /// we do not regress valid block acquires back to coarse.
+  ValueRange effectiveOffsets = acquire.getPartitionOffsets();
+  ValueRange effectiveSizes = acquire.getPartitionSizes();
+  if (effectiveOffsets.empty()) {
+    effectiveOffsets = acquire.getOffsets();
+    effectiveSizes = acquire.getSizes();
+  }
+
+  if (!effectiveOffsets.empty()) {
+    for (Value off : effectiveOffsets)
+      info.partitionOffsets.push_back(off);
+    Value one = arts::createOneIndex(builder, acquire.getLoc());
+    for (unsigned i = 0; i < info.partitionOffsets.size(); ++i)
+      info.partitionSizes.push_back(
+          i < effectiveSizes.size() ? effectiveSizes[i] : one);
+    info.isValid = true;
+
+    unsigned offsetIdx = 0;
+    Value repOffset = DbUtils::pickRepresentativePartitionOffset(
+        info.partitionOffsets, &offsetIdx);
+    Value repSize = DbUtils::pickRepresentativePartitionSize(
+        info.partitionSizes, offsetIdx);
+    if (Value refined = refineSizeFromMinInBlock(acquire, repOffset, repSize)) {
+      if (offsetIdx < info.partitionSizes.size())
+        info.partitionSizes[offsetIdx] = refined;
+      else if (!info.partitionSizes.empty())
+        info.partitionSizes[0] = refined;
+    }
+
+    if (acqNode) {
+      Value loopOffset, loopSize;
+      if (succeeded(acqNode->computeBlockInfo(loopOffset, loopSize))) {
+        bool useLoopSize = false;
+        int64_t hintConst = 0;
+        int64_t loopConst = 0;
+        Value hintSize = DbUtils::pickRepresentativePartitionSize(
+            info.partitionSizes, offsetIdx);
+        Value hintOff = DbUtils::pickRepresentativePartitionOffset(
+            info.partitionOffsets, &offsetIdx);
+        bool hintIsConst =
+            hintSize && ValueAnalysis::getConstantIndex(hintSize, hintConst);
+        bool loopIsConst =
+            ValueAnalysis::getConstantIndex(loopSize, loopConst);
+
+        bool offsetRelated = false;
+        if (hintOff && loopOffset) {
+          Value hintOffStripped = ValueAnalysis::stripNumericCasts(hintOff);
+          Value loopOff = ValueAnalysis::stripNumericCasts(loopOffset);
+          if (hintOffStripped == loopOff)
+            offsetRelated = true;
+          if (!offsetRelated &&
+              (ValueAnalysis::dependsOn(loopOff, hintOffStripped) ||
+               ValueAnalysis::dependsOn(hintOffStripped, loopOff)))
+            offsetRelated = true;
+          if (!offsetRelated) {
+            int64_t hintOffConst = 0;
+            int64_t loopOffConst = 0;
+            if (ValueAnalysis::getConstantIndex(hintOffStripped,
+                                                hintOffConst) &&
+                ValueAnalysis::getConstantIndex(loopOff, loopOffConst) &&
+                hintOffConst == loopOffConst)
+              offsetRelated = true;
+          }
+        }
+
+        bool loopSizeDependsOnOffset =
+            hintOff && ValueAnalysis::dependsOn(loopSize, hintOff);
+
+        if (loopSizeDependsOnOffset)
+          useLoopSize = true;
+        if (offsetRelated && !loopIsConst)
+          useLoopSize = true;
+        if (offsetRelated && hintIsConst && loopIsConst &&
+            hintConst != loopConst)
+          useLoopSize = true;
+
+        if (useLoopSize) {
+          if (offsetIdx < info.partitionSizes.size())
+            info.partitionSizes[offsetIdx] = loopSize;
+          else if (!info.partitionSizes.empty())
+            info.partitionSizes[0] = loopSize;
+          else
+            info.partitionSizes.push_back(loopSize);
+        }
+      }
+    }
+    inferPartitionDims(info, facts);
+    applyTiling2DPartitionDimsFallback(info, acquire);
+    return;
+  }
+
+  if (acqNode) {
+    Value offset, size;
+    if (succeeded(acqNode->computeBlockInfo(offset, size))) {
+      info.partitionOffsets.push_back(offset);
+      info.partitionSizes.push_back(size);
+      info.isValid = true;
+      inferPartitionDims(info, facts);
+      applyTiling2DPartitionDimsFallback(info, acquire);
+    } else {
+      info.mode = PartitionMode::coarse;
+    }
+  }
+}
+
 DbAnalysis::AcquirePartitionSummary
 DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
   AcquirePartitionSummary info;
@@ -429,220 +654,23 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
   }
 
   const DbAcquirePartitionFacts *facts = getAcquirePartitionFacts(acquire);
-  if (facts)
-    info.hasIndirectAccess = facts->hasIndirectAccess;
   if (facts) {
+    info.hasIndirectAccess = facts->hasIndirectAccess;
     info.hasDistributionContract = facts->hasDistributionContract;
     info.partitionDimsFromPeers = facts->partitionDimsFromPeers;
   }
 
-  auto refineSizeFromMinInBlock = [&](Value offset, Value sizeHint) -> Value {
-    if (!offset || !sizeHint)
-      return Value();
-    int64_t sizeConst = 0;
-    bool sizeIsConst = ValueAnalysis::getConstantIndex(sizeHint, sizeConst);
-    auto isSameConst = [&](Value v) -> bool {
-      int64_t val = 0;
-      return ValueAnalysis::getConstantIndex(v, val) && val == sizeConst;
-    };
-    for (Operation &op : *acquire->getBlock()) {
-      Value refined;
-      auto tryRefine = [&](Value lhs, Value rhs, Value result) {
-        bool lhsIsHint = (lhs == sizeHint) || (sizeIsConst && isSameConst(lhs));
-        bool rhsIsHint = (rhs == sizeHint) || (sizeIsConst && isSameConst(rhs));
-        if (lhsIsHint && ValueAnalysis::dependsOn(rhs, offset))
-          refined = result;
-        else if (rhsIsHint && ValueAnalysis::dependsOn(lhs, offset))
-          refined = result;
-      };
-
-      if (auto minOp = dyn_cast<arith::MinUIOp>(&op)) {
-        tryRefine(minOp.getLhs(), minOp.getRhs(), minOp.getResult());
-      } else if (auto minOp = dyn_cast<arith::MinSIOp>(&op)) {
-        tryRefine(minOp.getLhs(), minOp.getRhs(), minOp.getResult());
-      }
-
-      if (refined)
-        return refined;
-    }
-    return Value();
-  };
-
-  auto inferPartitionDims = [&](AcquirePartitionSummary &summary) {
-    if (!facts || facts->partitionDims.empty())
-      return;
-    summary.partitionDims.assign(facts->partitionDims.begin(),
-                                 facts->partitionDims.end());
-    if (!summary.partitionOffsets.empty() &&
-        summary.partitionDims.size() > summary.partitionOffsets.size()) {
-      summary.partitionDims.resize(summary.partitionOffsets.size());
-    }
-  };
-
-  auto applyTiling2DPartitionDimsFallback =
-      [&](AcquirePartitionSummary &summary) {
-        if (!isTiling2DTaskAcquire(acquire))
-          return;
-        if (!summary.partitionDims.empty())
-          return;
-        if (summary.partitionOffsets.size() < 2)
-          return;
-        summary.partitionDims.clear();
-        for (unsigned d = 0; d < summary.partitionOffsets.size(); ++d)
-          summary.partitionDims.push_back(d);
-      };
-
   switch (info.mode) {
-  case PartitionMode::coarse: {
-    info.isValid = true;
-    if (acqNode) {
-      Value offset, size;
-      if (succeeded(acqNode->computeBlockInfo(offset, size))) {
-        info.partitionOffsets.push_back(offset);
-        info.partitionSizes.push_back(size);
-        unsigned offsetIdx = 0;
-        Value repOffset = DbUtils::pickRepresentativePartitionOffset(
-            info.partitionOffsets, &offsetIdx);
-        Value repSize = DbUtils::pickRepresentativePartitionSize(
-            info.partitionSizes, offsetIdx);
-        if (Value refined = refineSizeFromMinInBlock(repOffset, repSize)) {
-          if (offsetIdx < info.partitionSizes.size())
-            info.partitionSizes[offsetIdx] = refined;
-          else if (!info.partitionSizes.empty())
-            info.partitionSizes[0] = refined;
-        }
-        inferPartitionDims(info);
-      } else {
-        info.isValid = false;
-      }
-    } else {
-      info.isValid = false;
-    }
+  case PartitionMode::coarse:
+    analyzeCoarsePartition(info, acquire, acqNode, facts);
     break;
-  }
-
-  case PartitionMode::fine_grained: {
-    if (!acquire.getPartitionIndices().empty()) {
-      for (Value idx : acquire.getPartitionIndices())
-        info.partitionOffsets.push_back(idx);
-      Value one = arts::createOneIndex(builder, acquire.getLoc());
-      for (unsigned i = 0; i < info.partitionOffsets.size(); ++i)
-        info.partitionSizes.push_back(one);
-      info.isValid = true;
-      inferPartitionDims(info);
-    }
+  case PartitionMode::fine_grained:
+    analyzeFineGrainedPartition(info, acquire, facts, builder);
     break;
-  }
-
   case PartitionMode::block:
-  case PartitionMode::stencil: {
-    /// Prefer explicit partition_* hints when available. If they were already
-    /// materialized into offsets/sizes (post-rewrite acquires), reuse those so
-    /// we do not regress valid block acquires back to coarse.
-    ValueRange effectiveOffsets = acquire.getPartitionOffsets();
-    ValueRange effectiveSizes = acquire.getPartitionSizes();
-    if (effectiveOffsets.empty()) {
-      effectiveOffsets = acquire.getOffsets();
-      effectiveSizes = acquire.getSizes();
-    }
-
-    if (!effectiveOffsets.empty()) {
-      for (Value off : effectiveOffsets)
-        info.partitionOffsets.push_back(off);
-      Value one = arts::createOneIndex(builder, acquire.getLoc());
-      for (unsigned i = 0; i < info.partitionOffsets.size(); ++i)
-        info.partitionSizes.push_back(
-            i < effectiveSizes.size() ? effectiveSizes[i] : one);
-      info.isValid = true;
-
-      unsigned offsetIdx = 0;
-      Value repOffset = DbUtils::pickRepresentativePartitionOffset(
-          info.partitionOffsets, &offsetIdx);
-      Value repSize = DbUtils::pickRepresentativePartitionSize(
-          info.partitionSizes, offsetIdx);
-      if (Value refined = refineSizeFromMinInBlock(repOffset, repSize)) {
-        if (offsetIdx < info.partitionSizes.size())
-          info.partitionSizes[offsetIdx] = refined;
-        else if (!info.partitionSizes.empty())
-          info.partitionSizes[0] = refined;
-      }
-
-      if (acqNode) {
-        Value loopOffset, loopSize;
-        if (succeeded(acqNode->computeBlockInfo(loopOffset, loopSize))) {
-          bool useLoopSize = false;
-          int64_t hintConst = 0;
-          int64_t loopConst = 0;
-          Value hintSize = DbUtils::pickRepresentativePartitionSize(
-              info.partitionSizes, offsetIdx);
-          Value hintOff = DbUtils::pickRepresentativePartitionOffset(
-              info.partitionOffsets, &offsetIdx);
-          bool hintIsConst =
-              hintSize && ValueAnalysis::getConstantIndex(hintSize, hintConst);
-          bool loopIsConst =
-              ValueAnalysis::getConstantIndex(loopSize, loopConst);
-
-          bool offsetRelated = false;
-          if (hintOff && loopOffset) {
-            Value hintOffStripped = ValueAnalysis::stripNumericCasts(hintOff);
-            Value loopOff = ValueAnalysis::stripNumericCasts(loopOffset);
-            if (hintOffStripped == loopOff)
-              offsetRelated = true;
-            if (!offsetRelated &&
-                (ValueAnalysis::dependsOn(loopOff, hintOffStripped) ||
-                 ValueAnalysis::dependsOn(hintOffStripped, loopOff)))
-              offsetRelated = true;
-            if (!offsetRelated) {
-              int64_t hintOffConst = 0;
-              int64_t loopOffConst = 0;
-              if (ValueAnalysis::getConstantIndex(hintOffStripped,
-                                                  hintOffConst) &&
-                  ValueAnalysis::getConstantIndex(loopOff, loopOffConst) &&
-                  hintOffConst == loopOffConst)
-                offsetRelated = true;
-            }
-          }
-
-          bool loopSizeDependsOnOffset =
-              hintOff && ValueAnalysis::dependsOn(loopSize, hintOff);
-
-          if (loopSizeDependsOnOffset)
-            useLoopSize = true;
-          if (offsetRelated && !loopIsConst)
-            useLoopSize = true;
-          if (offsetRelated && hintIsConst && loopIsConst &&
-              hintConst != loopConst)
-            useLoopSize = true;
-
-          if (useLoopSize) {
-            if (offsetIdx < info.partitionSizes.size())
-              info.partitionSizes[offsetIdx] = loopSize;
-            else if (!info.partitionSizes.empty())
-              info.partitionSizes[0] = loopSize;
-            else
-              info.partitionSizes.push_back(loopSize);
-          }
-        }
-      }
-      inferPartitionDims(info);
-      applyTiling2DPartitionDimsFallback(info);
-      break;
-    }
-
-    if (acqNode) {
-      Value offset, size;
-      if (succeeded(acqNode->computeBlockInfo(offset, size))) {
-        info.partitionOffsets.push_back(offset);
-        info.partitionSizes.push_back(size);
-        info.isValid = true;
-        inferPartitionDims(info);
-        applyTiling2DPartitionDimsFallback(info);
-      } else {
-        info.mode = PartitionMode::coarse;
-      }
-    }
+  case PartitionMode::stencil:
+    analyzeBlockStencilPartition(info, acquire, acqNode, facts, builder);
     break;
-  }
   }
 
   return info;
@@ -662,6 +690,9 @@ DbAnalysis::getAcquireContractSummary(DbAcquireOp acquire) {
   if (const DbAcquirePartitionFacts *facts = getAcquirePartitionFacts(acquire)) {
     summary.refinedByDbAnalysis =
         refineContractWithFacts(summary.contract, *facts);
+    /// FIX-3: Contract persistence is handled by DT-1 in DbTransformsPass
+    /// to avoid double-emission when getAcquireContractSummary() is called
+    /// multiple times during analysis.
     summary.accessPattern = facts->accessPattern;
     summary.hasIndirectAccess = facts->hasIndirectAccess;
     summary.hasDirectAccess = facts->hasDirectAccess;
@@ -757,7 +788,7 @@ bool DbAnalysis::hasCrossElementSelfReadInLoop(DbAcquireOp acquire,
   if (!edt || loopOp->getParentOfType<EdtOp>() != edt)
     return false;
 
-  EdtGraph &edtGraph = getAnalysisManager().getEdtGraph(func);
+  EdtGraph &edtGraph = getAnalysisManager().getEdtAnalysis().getOrCreateEdtGraph(func);
   EdtNode *edtNode = edtGraph.getEdtNode(edt);
   if (!edtNode)
     return false;
