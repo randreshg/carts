@@ -61,16 +61,10 @@ struct FoldDbDimFromDbOps : public OpRewritePattern<DbDimOp> {
       return failure();
     int64_t idx = cstIdx.getValue().cast<IntegerAttr>().getInt();
 
-    if (auto dbAlloc = op.getSource().getDefiningOp<DbAllocOp>()) {
-      auto sizes = dbAlloc.getSizes();
-      if ((long long)sizes.size() > idx) {
-        rewriter.replaceOp(op, sizes[idx]);
-        return success();
-      }
-    }
-    if (auto dbAcq = op.getSource().getDefiningOp<DbAcquireOp>()) {
-      auto sizes = dbAcq.getSizes();
-      if ((long long)sizes.size() > idx) {
+    auto defOp = op.getSource().getDefiningOp();
+    if (defOp && (isa<DbAllocOp>(defOp) || isa<DbAcquireOp>(defOp))) {
+      auto sizes = DbUtils::getSizesFromDb(defOp);
+      if (static_cast<int64_t>(sizes.size()) > idx) {
         rewriter.replaceOp(op, sizes[idx]);
         return success();
       }
@@ -119,8 +113,7 @@ struct FoldKnownRuntimeQuery : public OpRewritePattern<RuntimeQueryOp> {
       return failure();
 
     Type resultType = op.getType();
-    if (auto indexTy = dyn_cast<IndexType>(resultType)) {
-      (void)indexTy;
+    if (isa<IndexType>(resultType)) {
       rewriter.replaceOpWithNewOp<arith::ConstantIndexOp>(op, *foldedValue);
       return success();
     }
@@ -152,9 +145,9 @@ void RuntimeQueryOp::getCanonicalizationPatterns(RewritePatternSet &results,
 bool isArtsRegion(Operation *op) { return isa<EdtOp>(op) || isa<EpochOp>(op); }
 bool isArtsOp(Operation *op) {
   return isArtsRegion(op) ||
-         isa<arts::EdtOp, arts::EpochOp, arts::BarrierOp, arts::AllocOp,
-             arts::DbAllocOp, arts::DbAcquireOp, arts::DbReleaseOp,
-             arts::DbFreeOp, arts::DbControlOp, arts::RuntimeQueryOp>(op);
+         isa<arts::BarrierOp, arts::AllocOp, arts::DbAllocOp,
+             arts::DbAcquireOp, arts::DbReleaseOp, arts::DbFreeOp,
+             arts::DbControlOp, arts::RuntimeQueryOp>(op);
 }
 
 /// Arts Dialect Types
@@ -382,6 +375,15 @@ void EdtCreateOp::build(OpBuilder &builder, OperationState &state,
   state.addOperands({param_memref, depCount, route});
 }
 
+/// Helper to compute GUID type from sizes
+static Type computeGuidType(OpBuilder &builder, ArrayRef<Value> sizes) {
+  size_t numDims = sizes.empty() ? 1 : std::max(sizes.size(), size_t(1));
+  SmallVector<int64_t> shape(numDims, ShapedType::kDynamic);
+  return MemRefType::get(shape, builder.getI64Type());
+}
+
+// TODO(REFACTOR): buildDbAllocOpCommon has 11 positional parameters. Consider
+// grouping into a DbAllocBuildInfo struct.
 static void
 buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
                      Value route, DbAllocType allocType, DbMode dbMode,
@@ -389,12 +391,7 @@ buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
                      SmallVector<Value> elementSizes, Type pointerType,
                      PartitionMode partitionMode = PartitionMode::coarse) {
   /// Auto-compute GUID type to match datablock dimensionality
-  /// 0 or 1 size -> memref<?xi64>, n sizes -> memref<?x?x...xi64>
-  SmallVector<int64_t> guidShape;
-  size_t numDims = std::max(sizes.size(), size_t(1));
-  for (size_t i = 0; i < numDims; ++i)
-    guidShape.push_back(ShapedType::kDynamic);
-  Type guidType = MemRefType::get(guidShape, builder.getI64Type());
+  Type guidType = computeGuidType(builder, sizes);
 
   if (sizes.empty())
     sizes.push_back(arts::createOneIndex(builder, state.location));
@@ -434,7 +431,7 @@ buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
   state.addOperands(sizes);
   state.addOperands(elementSizes);
 
-  state.addAttribute("operandSegmentSizes",
+  state.addAttribute(DbAllocOp::getOperandSegmentSizesAttrName(state.name),
                      builder.getDenseI32ArrayAttr(
                          {1, static_cast<int32_t>(address ? 1 : 0),
                           static_cast<int32_t>(sizes.size()),
@@ -519,7 +516,7 @@ void DbAcquireOp::setDepPattern(ArtsDepPattern pattern) {
 }
 
 void DbAcquireOp::clearDepPattern() {
-  (*this)->removeAttr(AttrNames::Operation::DepPattern);
+  (*this)->removeAttr(AttrNames::Operation::DepPatternAttr);
 }
 
 std::optional<ArtsDepPattern> DbAcquireOp::getDepPattern() {
@@ -691,7 +688,7 @@ static void addDbAcquireOperandsAndAttrs(
   state.addOperands(elementSizes);
 
   state.addAttribute(
-      "operandSegmentSizes",
+      DbAcquireOp::getOperandSegmentSizesAttrName(state.name),
       builder.getDenseI32ArrayAttr(
           {sourceGuid ? 1 : 0, 1, static_cast<int32_t>(indices.size()),
            static_cast<int32_t>(offsets.size()),
@@ -713,13 +710,6 @@ static void addDbAcquireOperandsAndAttrs(
   state.addAttribute(
       AttrNames::Operation::PartitionMode,
       PartitionModeAttr::get(builder.getContext(), resolvedMode));
-}
-
-/// Helper to compute GUID type from sizes
-static Type computeGuidType(OpBuilder &builder, ArrayRef<Value> sizes) {
-  size_t numDims = sizes.empty() ? 1 : std::max(sizes.size(), size_t(1));
-  SmallVector<int64_t> shape(numDims, ShapedType::kDynamic);
-  return MemRefType::get(shape, builder.getI64Type());
 }
 
 void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
@@ -799,6 +789,9 @@ void DbAcquireOp::build(
                                elementOffsets, elementSizes);
 }
 
+// TODO(REFACTOR): LoweringContractOp::build has 22+ positional parameters
+// mirroring LoweringContractInfo field-by-field. Add a build overload that
+// accepts const LoweringContractInfo& to reduce argument-ordering bugs.
 void LoweringContractOp::build(
     OpBuilder &builder, OperationState &state, Value target,
     std::optional<ArtsDepPattern> depPattern,
@@ -807,44 +800,83 @@ void LoweringContractOp::build(
     std::optional<int64_t> distributionVersion, SmallVector<int64_t> ownerDims,
     SmallVector<int64_t> spatialDims, SmallVector<Value> blockShape,
     SmallVector<Value> minOffsets, SmallVector<Value> maxOffsets,
-    SmallVector<Value> writeFootprint, bool supportedBlockHalo) {
+    SmallVector<Value> writeFootprint, bool supportedBlockHalo,
+    SmallVector<int64_t> stencilIndependentDims,
+    std::optional<int64_t> esdByteOffset, std::optional<int64_t> esdByteSize,
+    std::optional<int64_t> cachedStartBlock,
+    std::optional<int64_t> cachedBlockCount, bool postDbRefined,
+    std::optional<int64_t> inferredDbMode,
+    std::optional<int64_t> estimatedTaskCost,
+    std::optional<int64_t> criticalPathDistance) {
   state.addOperands(target);
   state.addOperands(blockShape);
   state.addOperands(minOffsets);
   state.addOperands(maxOffsets);
   state.addOperands(writeFootprint);
-  state.addAttribute("operandSegmentSizes",
+  state.addAttribute(getOperandSegmentSizesAttrName(state.name),
                      builder.getDenseI32ArrayAttr(
                          {1, static_cast<int32_t>(blockShape.size()),
                           static_cast<int32_t>(minOffsets.size()),
                           static_cast<int32_t>(maxOffsets.size()),
                           static_cast<int32_t>(writeFootprint.size())}));
 
+  auto *ctx = builder.getContext();
+  auto i64Type = IntegerType::get(ctx, 64);
+
   if (depPattern)
-    state.addAttribute("dep_pattern", ArtsDepPatternAttr::get(
-                                          builder.getContext(), *depPattern));
+    state.addAttribute(
+        AttrNames::Operation::Contract::DepPatternKey,
+        ArtsDepPatternAttr::get(ctx, *depPattern));
   if (distributionKind)
     state.addAttribute(
-        "distribution_kind",
-        EdtDistributionKindAttr::get(builder.getContext(), *distributionKind));
+        AttrNames::Operation::Contract::DistributionKind,
+        EdtDistributionKindAttr::get(ctx, *distributionKind));
   if (distributionPattern)
-    state.addAttribute("distribution_pattern",
-                       EdtDistributionPatternAttr::get(builder.getContext(),
-                                                       *distributionPattern));
-  if (distributionVersion) {
     state.addAttribute(
-        "distribution_version",
-        IntegerAttr::get(IntegerType::get(builder.getContext(), 64),
-                         *distributionVersion));
-  }
+        AttrNames::Operation::Contract::DistributionPattern,
+        EdtDistributionPatternAttr::get(ctx, *distributionPattern));
+  if (distributionVersion)
+    state.addAttribute(
+        AttrNames::Operation::Contract::DistributionVersion,
+        IntegerAttr::get(i64Type, *distributionVersion));
   if (!ownerDims.empty())
-    state.addAttribute("owner_dims", builder.getDenseI64ArrayAttr(ownerDims));
+    state.addAttribute(AttrNames::Operation::Contract::OwnerDims,
+                       builder.getDenseI64ArrayAttr(ownerDims));
   if (!spatialDims.empty())
-    state.addAttribute("spatial_dims",
+    state.addAttribute(AttrNames::Operation::Contract::SpatialDims,
                        builder.getDenseI64ArrayAttr(spatialDims));
   if (supportedBlockHalo)
-    state.addAttribute("supported_block_halo",
-                       UnitAttr::get(builder.getContext()));
+    state.addAttribute(AttrNames::Operation::Contract::SupportedBlockHalo,
+                       UnitAttr::get(ctx));
+  if (!stencilIndependentDims.empty())
+    state.addAttribute(
+        AttrNames::Operation::Contract::StencilIndependentDims,
+        builder.getDenseI64ArrayAttr(stencilIndependentDims));
+  if (esdByteOffset)
+    state.addAttribute(AttrNames::Operation::Contract::EsdByteOffset,
+                       IntegerAttr::get(i64Type, *esdByteOffset));
+  if (esdByteSize)
+    state.addAttribute(AttrNames::Operation::Contract::EsdByteSize,
+                       IntegerAttr::get(i64Type, *esdByteSize));
+  if (cachedStartBlock)
+    state.addAttribute(AttrNames::Operation::Contract::CachedStartBlock,
+                       IntegerAttr::get(i64Type, *cachedStartBlock));
+  if (cachedBlockCount)
+    state.addAttribute(AttrNames::Operation::Contract::CachedBlockCount,
+                       IntegerAttr::get(i64Type, *cachedBlockCount));
+  if (postDbRefined)
+    state.addAttribute(AttrNames::Operation::Contract::PostDbRefined,
+                       UnitAttr::get(ctx));
+  if (inferredDbMode)
+    state.addAttribute(AttrNames::Operation::Contract::InferredDbMode,
+                       IntegerAttr::get(i64Type, *inferredDbMode));
+  if (estimatedTaskCost)
+    state.addAttribute(AttrNames::Operation::Contract::EstimatedTaskCost,
+                       IntegerAttr::get(i64Type, *estimatedTaskCost));
+  if (criticalPathDistance)
+    state.addAttribute(
+        AttrNames::Operation::Contract::CriticalPathDistance,
+        IntegerAttr::get(i64Type, *criticalPathDistance));
 }
 
 LogicalResult DbAcquireOp::verify() {
@@ -903,7 +935,9 @@ LogicalResult DbAcquireOp::verify() {
 }
 
 LogicalResult LoweringContractOp::verify() {
-  auto ownerDims = (*this)->getAttrOfType<DenseI64ArrayAttr>("owner_dims");
+  auto ownerDims =
+      (*this)->getAttrOfType<DenseI64ArrayAttr>(
+          AttrNames::Operation::Contract::OwnerDims);
   size_t expectedRank = ownerDims ? ownerDims.size() : 0;
 
   auto verifyRankedOperands = [&](OperandRange values,
@@ -924,7 +958,7 @@ LogicalResult LoweringContractOp::verify() {
   if (getMinOffsets().size() != getMaxOffsets().size())
     return emitOpError("min_offsets and max_offsets must have the same rank");
 
-  if ((*this)->hasAttr("supported_block_halo")) {
+  if ((*this)->hasAttr(AttrNames::Operation::Contract::SupportedBlockHalo)) {
     auto depPattern = getDepPattern();
     if (!depPattern || !isStencilFamilyDepPattern(*depPattern))
       return emitOpError(
@@ -943,7 +977,7 @@ void DbRefOp::build(OpBuilder &builder, OperationState &state, Value source,
   state.addOperands(source);
   state.addOperands(indices);
   state.addAttribute(
-      "operandSegmentSizes",
+      getOperandSegmentSizesAttrName(state.name),
       builder.getDenseI32ArrayAttr({1, static_cast<int32_t>(indices.size())}));
 }
 
@@ -1069,7 +1103,7 @@ void OmpDepOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
   state.addOperands(indices);
   state.addOperands(sizes);
   state.addAttribute(
-      "operandSegmentSizes",
+      getOperandSegmentSizesAttrName(state.name),
       builder.getDenseI32ArrayAttr({1, static_cast<int32_t>(indices.size()),
                                     static_cast<int32_t>(sizes.size())}));
 }
