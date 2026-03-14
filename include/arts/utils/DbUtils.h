@@ -67,13 +67,6 @@ public:
   /// Traces through DbAcquireOp chains to find the root allocation.
   static Operation *getUnderlyingDbAlloc(Value v);
 
-  /// Conservative memory-object identity for memref-like values.
-  /// Preference order:
-  /// 1. Same root DbAllocOp (when both values map to a DB allocation)
-  /// 2. Same underlying defining operation (modulo numeric casts)
-  /// 3. Same SSA value (modulo numeric casts)
-  static bool isSameMemoryObject(Value lhsMemref, Value rhsMemref);
-
   ///===----------------------------------------------------------------------===////
   /// Datablock Lowering Info Extraction
   ///===----------------------------------------------------------------------===////
@@ -94,69 +87,28 @@ public:
   /// Supports DbAllocOp, DbAcquireOp, and DepDbAcquireOp.
   static SmallVector<Value> getSizesFromDb(Operation *dbOp);
 
-  /// Extract element sizes from a datablock operation.
-  /// Only DbAllocOp has element sizes.
-  static SmallVector<Value> getElementSizesFromDb(Operation *dbOp);
-
   /// Extract sizes from a datablock pointer value.
   /// Traces back to the original DbAllocOp or DbAcquireOp that created it.
-  static SmallVector<Value> getSizesFromDb(Value datablockPtr);
+  static SmallVector<Value> getSizesFromDb(Value dbPtr);
 
   /// Extract the dependency iteration sizes used for EDT dependency counting
   /// and record_dep lowering.
   /// For block/stencil acquires, this prefers a contract-cached DB-space
   /// window when available; otherwise it falls back to the acquire's explicit
   /// DB-space sizes.
-  static SmallVector<Value> getDependencySizesFromDb(Operation *dbOp);
+  static SmallVector<Value> getDepSizesFromDb(Operation *dbOp);
 
   /// Extract dependency iteration sizes from a datablock value.
-  static SmallVector<Value> getDependencySizesFromDb(Value datablockPtr);
+  static SmallVector<Value> getDepSizesFromDb(Value dbPtr);
 
   /// Extract the dependency iteration offsets used for EDT dependency lowering.
   /// For block/stencil acquires, this prefers a contract-cached DB-space
   /// window when available; otherwise it falls back to the acquire's explicit
   /// DB-space offsets.
-  static SmallVector<Value> getDependencyOffsetsFromDb(Operation *dbOp);
+  static SmallVector<Value> getDepOffsetsFromDb(Operation *dbOp);
 
   /// Extract dependency iteration offsets from a datablock value.
-  static SmallVector<Value> getDependencyOffsetsFromDb(Value datablockPtr);
-
-  /// Extract offsets from a datablock pointer value.
-  /// Only DbAcquireOp has offsets.
-  static SmallVector<Value> getOffsetsFromDb(Value datablockPtr);
-
-  /// Check if a datablock operation has a single size of 1.
-  static bool hasSingleSize(Operation *dbOp);
-
-  /// Check if allocation is coarse-grained (all sizes == 1).
-  static bool isCoarseGrained(DbAllocOp alloc);
-
-  /// Check if allocation is fine-grained (partitioned into multiple DBs).
-  static bool isFineGrained(DbAllocOp alloc);
-
-  ///===----------------------------------------------------------------------===////
-  /// Partition Mode Detection
-  ///===----------------------------------------------------------------------===////
-  /// Structure-based mode detection - no attributes needed!
-
-  /// Get partition mode from DbAcquireOp structure.
-  static PartitionMode getPartitionModeFromStructure(DbAcquireOp acquire);
-
-  /// Get partition mode from DbAllocOp
-  static PartitionMode getPartitionModeFromStructure(DbAllocOp alloc);
-
-  static bool isBlock(DbAcquireOp acquire) {
-    return getPartitionModeFromStructure(acquire) == PartitionMode::block;
-  }
-
-  static bool isElementWise(DbAcquireOp acquire) {
-    return getPartitionModeFromStructure(acquire) ==
-           PartitionMode::fine_grained;
-  }
-
-  static bool isCoarse(DbAcquireOp acquire) {
-    return getPartitionModeFromStructure(acquire) == PartitionMode::coarse;
-  }
+  static SmallVector<Value> getDepOffsetsFromDb(Value dbPtr);
 
   ///===----------------------------------------------------------------------===////
   /// Datablock Stride Computation
@@ -182,10 +134,6 @@ public:
   /// This is the stride for linearized access WITHIN each datablock element.
   static std::optional<int64_t> getStaticElementStride(DbAllocOp alloc);
 
-  /// Get outer stride from DbAllocOp (uses getSizes()).
-  /// This is the stride for linearized access ACROSS datablocks.
-  static std::optional<int64_t> getStaticOuterStride(DbAllocOp alloc);
-
   /// Compute stride as a Value (handles both static and dynamic dimensions).
   /// If all trailing dimensions are static, returns an arith::ConstantIndexOp.
   /// If any trailing dimension is dynamic, generates arith::MulIOp chain.
@@ -194,41 +142,22 @@ public:
   static Value getStrideValue(OpBuilder &builder, Location loc,
                               ValueRange sizes);
 
-  /// Get element stride Value from DbAllocOp (uses getElementSizes()).
-  static Value getElementStrideValue(OpBuilder &builder, Location loc,
-                                     DbAllocOp alloc);
-
-  /// Get outer stride Value from DbAllocOp (uses getSizes()).
-  static Value getOuterStrideValue(OpBuilder &builder, Location loc,
-                                   DbAllocOp alloc);
-
   ///===----------------------------------------------------------------------===///
   /// Access Mode and Hints Analysis
   ///===----------------------------------------------------------------------===///
-
-  /// Check if a DbAcquireOp has static (constant) offset and size hints.
-  /// Returns true if both offset and size hints are either empty or constant.
-  static bool hasStaticHints(DbAcquireOp acqOp);
 
   /// Check if an ArtsMode is a writer mode (out or inout).
   static bool isWriterMode(ArtsMode mode);
 
   ///===----------------------------------------------------------------------===///
-  /// Offset Dependency and Block Size Analysis
+  /// Offset Dep and Block Size Analysis
   ///===----------------------------------------------------------------------===///
   /// Functions for analyzing value dependencies on offsets and extracting
   /// base block sizes from size hints.
 
-  /// Check if a value depends on a partition offset (ignoring numeric casts).
-  /// Used to determine data dependencies in index expressions for partitioning.
-  static bool dependsOnOffset(Value v, Value offset);
-
   /// Try to extract an offset-independent base block size from size hints.
   static Value extractBaseBlockSizeCandidate(Value offsetHint, Value sizeHint,
                                              int depth = 0);
-
-  /// Find the EDT operation that uses a DbControlOp result.
-  static Operation *findUserEdt(DbControlOp dbControl);
 
   /// Pick a representative partition offset (prefer non-constant).
   /// Returns the chosen offset and its index via outIdx when provided.
@@ -258,9 +187,6 @@ public:
   /// Supports memref/affine load/store operations.
   static std::optional<MemoryAccessInfo> getMemoryAccessInfo(Operation *memOp);
 
-  /// Return the memref/base object accessed by a load/store op.
-  static Value getAccessedMemref(Operation *memOp);
-
   /// Collect load/store operations reachable from source through view-like
   /// forwarding ops (casts, subviews, etc.). Optionally restrict to a scope.
   static void collectReachableMemoryOps(Value source,
@@ -273,25 +199,6 @@ public:
       Value source,
       llvm::function_ref<WalkResult(const MemoryAccessInfo &)> visitor,
       Region *scope = nullptr);
-
-  ///===----------------------------------------------------------------------===////
-  /// Multi-Entry Stencil Pattern Detection
-  ///===----------------------------------------------------------------------===////
-
-  /// Try to extract a constant offset between two index values.
-  /// Returns the offset if idx = base + constant (or base - constant).
-  /// For stencil patterns like [i-1, i, i+1], this finds the offset from base.
-  static std::optional<int64_t> getConstantOffsetBetween(Value idx, Value base);
-
-  /// Check if a multi-entry acquire has a stencil access pattern.
-  /// Stencil patterns have indices that differ by small constant offsets,
-  /// e.g., [i-1, i, i+1] for a 1D stencil or [i-1, i, i+1] x [j] for 2D.
-  ///
-  /// Returns true if partition indices across entries form a stencil pattern.
-  /// Outputs halo bounds in minOffset (negative for left halo) and maxOffset.
-  static bool hasMultiEntryStencilPattern(DbAcquireOp acquire,
-                                          int64_t &minOffset,
-                                          int64_t &maxOffset);
 };
 
 ///===----------------------------------------------------------------------===///
@@ -302,18 +209,6 @@ public:
 /// Handles direct constants, minui/minsi patterns, addi halo patterns,
 /// and maxui clamp patterns with recursive descent up to depth 4.
 std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth = 0);
-
-/// Extract block size INCLUDING halo adjustments for allocation sizing.
-/// Unlike extractBlockSizeFromHint which strips halo for loop bound matching,
-/// this preserves stencil halo adjustments since allocations need the full
-/// size.
-std::optional<int64_t> extractBlockSizeForAllocation(Value sizeHint,
-                                                     int depth = 0);
-
-/// Extract original size from (N * scale) / scale pattern.
-/// Common in malloc size calculations: malloc(N * sizeof(T)) / sizeof(T) -> N.
-Value extractOriginalSize(Value numerator, Value denominator,
-                          OpBuilder &builder, Location loc);
 
 /// Merge two DbAccessPattern values, keeping the higher-priority pattern.
 /// Priority: stencil > indexed > uniform > unknown.

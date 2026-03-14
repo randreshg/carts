@@ -6,15 +6,11 @@
 
 #include "arts/utils/DbUtils.h"
 #include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/utils/LoweringContractUtils.h"
-#include "arts/utils/OperationAttributes.h"
-#include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -27,16 +23,16 @@ using namespace mlir::arts;
 
 namespace {
 
-static void getAcquireDependencySlice(DbAcquireOp acquire,
+static void getAcquireDepSlice(DbAcquireOp acquire,
                                       SmallVector<Value> &sizesOut,
                                       SmallVector<Value> &offsetsOut) {
-  /// Dependency shape for DB acquires is defined in DB-space by the explicit
-  /// offsets/sizes operands when present.
-  ///
-  /// Cached block windows are a post-DB optimization hint, not a canonical
-  /// dependency slice. They live in block-space and must not flow through the
-  /// generic dependency-offset helpers used by lowering, or consumers like
-  /// EdtLowering will subtract the start block twice.
+  // Dependency shape for DB acquires is defined in DB-space by the explicit
+  // offsets/sizes operands when present.
+  //
+  // Cached block windows are a post-DB optimization hint, not a canonical
+  // dependency slice. They live in block-space and must not flow through the
+  // generic dependency-offset helpers used by lowering, or consumers like
+  // EdtLowering will subtract the start block twice.
   if (!acquire.getOffsets().empty() && !acquire.getSizes().empty()) {
     sizesOut.assign(acquire.getSizes().begin(), acquire.getSizes().end());
     offsetsOut.assign(acquire.getOffsets().begin(), acquire.getOffsets().end());
@@ -74,6 +70,28 @@ static void appendDynamicSubviewOffsets(memref::SubViewOp subview,
       chain.push_back(v);
 }
 
+static bool dependsOnOffset(Value v, Value offset) {
+  if (!v || !offset)
+    return false;
+  Value vStripped = ValueAnalysis::stripNumericCasts(v);
+  Value oStripped = ValueAnalysis::stripNumericCasts(offset);
+  return ValueAnalysis::dependsOn(vStripped, oStripped);
+}
+
+static Value getAccessedMemref(Operation *memOp) {
+  if (!memOp)
+    return Value();
+  if (auto load = dyn_cast<memref::LoadOp>(memOp))
+    return load.getMemRef();
+  if (auto store = dyn_cast<memref::StoreOp>(memOp))
+    return store.getMemRef();
+  if (auto load = dyn_cast<affine::AffineLoadOp>(memOp))
+    return load.getMemRef();
+  if (auto store = dyn_cast<affine::AffineStoreOp>(memOp))
+    return store.getMemRef();
+  return Value();
+}
+
 } // namespace
 
 ///===----------------------------------------------------------------------===///
@@ -86,12 +104,12 @@ DbLoweringInfo DbUtils::extractDbLoweringInfo(OpType op) {
   DbLoweringInfo info;
 
   if (auto acqOp = dyn_cast<DbAcquireOp>(op.getOperation())) {
-    info.sizes = getDependencySizesFromDb(acqOp.getOperation());
-    info.offsets = getDependencyOffsetsFromDb(acqOp.getOperation());
+    info.sizes = getDepSizesFromDb(acqOp.getOperation());
+    info.offsets = getDepOffsetsFromDb(acqOp.getOperation());
     info.indices.assign(acqOp.getIndices().begin(), acqOp.getIndices().end());
   } else if (auto depAcqOp = dyn_cast<DepDbAcquireOp>(op.getOperation())) {
-    info.sizes = getDependencySizesFromDb(depAcqOp.getOperation());
-    info.offsets = getDependencyOffsetsFromDb(depAcqOp.getOperation());
+    info.sizes = getDepSizesFromDb(depAcqOp.getOperation());
+    info.offsets = getDepOffsetsFromDb(depAcqOp.getOperation());
     info.indices.assign(depAcqOp.getIndices().begin(),
                         depAcqOp.getIndices().end());
   } else {
@@ -150,24 +168,24 @@ Operation *DbUtils::getUnderlyingDb(Value v, unsigned depth) {
   if (!v)
     return nullptr;
 
-  /// Prevent infinite recursion from circular acquire chains
+  // Prevent infinite recursion from circular acquire chains
   if (depth > 20) {
     ARTS_WARN("getUnderlyingDb exceeded depth limit");
     return nullptr;
   }
 
-  /// Case 1: Direct DbAllocOp result (either guid or ptr)
+  // Case 1: Direct DbAllocOp result (either guid or ptr)
   if (auto acq = v.getDefiningOp<DbAcquireOp>())
     return acq.getOperation();
   if (auto alloc = v.getDefiningOp<DbAllocOp>())
     return alloc.getOperation();
-  /// Case 2: DbAcquireOp - trace through sourceGuid or sourcePtr
+  // Case 2: DbAcquireOp - trace through sourceGuid or sourcePtr
   if (auto dbLoad = v.getDefiningOp<DbRefOp>())
     return getUnderlyingDb(dbLoad.getSource(), depth + 1);
 
-  /// Case 3: Block argument - trace through parent EDT's dependencies
-  /// If it's a block argument of an EDT, map to the corresponding operand and
-  /// recurse. Block arguments correspond to dependencies.
+  // Case 3: Block argument - trace through parent EDT's dependencies.
+  // If it's a block argument of an EDT, map to the corresponding operand and
+  // recurse. Block arguments correspond to dependencies.
   if (auto blockArg = v.dyn_cast<BlockArgument>()) {
     Block *block = blockArg.getOwner();
     Operation *owner = block->getParentOp();
@@ -207,23 +225,6 @@ Operation *DbUtils::getUnderlyingDbAlloc(Value v) {
   return nullptr;
 }
 
-bool DbUtils::isSameMemoryObject(Value lhsMemref, Value rhsMemref) {
-  lhsMemref = ValueAnalysis::stripNumericCasts(lhsMemref);
-  rhsMemref = ValueAnalysis::stripNumericCasts(rhsMemref);
-
-  Operation *lhsRoot = getUnderlyingDbAlloc(lhsMemref);
-  Operation *rhsRoot = getUnderlyingDbAlloc(rhsMemref);
-  if (lhsRoot && rhsRoot)
-    return lhsRoot == rhsRoot;
-
-  lhsRoot = ValueAnalysis::getUnderlyingOperation(lhsMemref);
-  rhsRoot = ValueAnalysis::getUnderlyingOperation(rhsMemref);
-  if (lhsRoot && rhsRoot)
-    return lhsRoot == rhsRoot;
-
-  return lhsMemref == rhsMemref;
-}
-
 ///===----------------------------------------------------------------------===///
 /// Datablock Size and Offset Extraction
 ///===----------------------------------------------------------------------===///
@@ -244,24 +245,16 @@ SmallVector<Value> DbUtils::getSizesFromDb(Operation *dbOp) {
   return {};
 }
 
-SmallVector<Value> DbUtils::getElementSizesFromDb(Operation *dbOp) {
-  if (auto allocOp = dyn_cast<DbAllocOp>(dbOp)) {
-    return SmallVector<Value>(allocOp.getElementSizes().begin(),
-                              allocOp.getElementSizes().end());
-  }
-  return {};
-}
-
-SmallVector<Value> DbUtils::getSizesFromDb(Value datablockPtr) {
-  /// Use getUnderlyingDb to find the original DB operation
-  Operation *underlyingDb = getUnderlyingDb(datablockPtr);
+SmallVector<Value> DbUtils::getSizesFromDb(Value dbPtr) {
+  // Use getUnderlyingDb to find the original DB operation
+  Operation *underlyingDb = getUnderlyingDb(dbPtr);
   if (!underlyingDb)
     return {};
 
   return getSizesFromDb(underlyingDb);
 }
 
-SmallVector<Value> DbUtils::getDependencySizesFromDb(Operation *dbOp) {
+SmallVector<Value> DbUtils::getDepSizesFromDb(Operation *dbOp) {
   if (auto allocOp = dyn_cast_or_null<DbAllocOp>(dbOp))
     return SmallVector<Value>(allocOp.getSizes().begin(),
                               allocOp.getSizes().end());
@@ -269,7 +262,7 @@ SmallVector<Value> DbUtils::getDependencySizesFromDb(Operation *dbOp) {
   if (auto acquireOp = dyn_cast_or_null<DbAcquireOp>(dbOp)) {
     SmallVector<Value> sizes;
     SmallVector<Value> offsets;
-    getAcquireDependencySlice(acquireOp, sizes, offsets);
+    getAcquireDepSlice(acquireOp, sizes, offsets);
     return sizes;
   }
 
@@ -280,18 +273,18 @@ SmallVector<Value> DbUtils::getDependencySizesFromDb(Operation *dbOp) {
   return {};
 }
 
-SmallVector<Value> DbUtils::getDependencySizesFromDb(Value datablockPtr) {
-  Operation *underlyingDb = getUnderlyingDb(datablockPtr);
+SmallVector<Value> DbUtils::getDepSizesFromDb(Value dbPtr) {
+  Operation *underlyingDb = getUnderlyingDb(dbPtr);
   if (!underlyingDb)
     return {};
-  return getDependencySizesFromDb(underlyingDb);
+  return getDepSizesFromDb(underlyingDb);
 }
 
-SmallVector<Value> DbUtils::getDependencyOffsetsFromDb(Operation *dbOp) {
+SmallVector<Value> DbUtils::getDepOffsetsFromDb(Operation *dbOp) {
   if (auto acquireOp = dyn_cast_or_null<DbAcquireOp>(dbOp)) {
     SmallVector<Value> sizes;
     SmallVector<Value> offsets;
-    getAcquireDependencySlice(acquireOp, sizes, offsets);
+    getAcquireDepSlice(acquireOp, sizes, offsets);
     return offsets;
   }
 
@@ -302,112 +295,11 @@ SmallVector<Value> DbUtils::getDependencyOffsetsFromDb(Operation *dbOp) {
   return {};
 }
 
-SmallVector<Value> DbUtils::getDependencyOffsetsFromDb(Value datablockPtr) {
-  Operation *underlyingDb = getUnderlyingDb(datablockPtr);
+SmallVector<Value> DbUtils::getDepOffsetsFromDb(Value dbPtr) {
+  Operation *underlyingDb = getUnderlyingDb(dbPtr);
   if (!underlyingDb)
     return {};
-  return getDependencyOffsetsFromDb(underlyingDb);
-}
-
-bool DbUtils::hasSingleSize(Operation *dbOp) {
-  if (!dbOp)
-    return false;
-
-  auto isOneLike = [](Value size) -> bool {
-    if (ValueAnalysis::isOneConstant(size))
-      return true;
-
-    auto addOp = size.getDefiningOp<arith::AddIOp>();
-    if (!addOp)
-      return false;
-
-    Value lhs = addOp.getLhs();
-    Value rhs = addOp.getRhs();
-    Value other;
-    if (ValueAnalysis::isOneConstant(lhs))
-      other = rhs;
-    else if (ValueAnalysis::isOneConstant(rhs))
-      other = lhs;
-    else
-      return false;
-
-    auto subOp = other.getDefiningOp<arith::SubIOp>();
-    if (!subOp)
-      return false;
-
-    Value subLhs = subOp.getLhs();
-    Value subRhs = subOp.getRhs();
-    if (subLhs == subRhs)
-      return true;
-
-    if (auto minOp = subLhs.getDefiningOp<arith::MinUIOp>()) {
-      if (minOp.getLhs() == subRhs || minOp.getRhs() == subRhs)
-        return true;
-    }
-    return false;
-  };
-
-  SmallVector<Value> sizes = getSizesFromDb(dbOp);
-  if (sizes.empty())
-    return true;
-
-  for (Value size : sizes) {
-    if (!isOneLike(size))
-      return false;
-  }
-  return true;
-}
-
-bool DbUtils::isCoarseGrained(DbAllocOp alloc) {
-  if (auto mode = getPartitionMode(alloc.getOperation()))
-    return *mode == PartitionMode::coarse;
-
-  return llvm::all_of(alloc.getSizes(), [](Value v) {
-    int64_t val;
-    return ValueAnalysis::getConstantIndex(v, val) && val == 1;
-  });
-}
-
-bool DbUtils::isFineGrained(DbAllocOp alloc) {
-  if (auto mode = getPartitionMode(alloc.getOperation()))
-    return *mode == PartitionMode::fine_grained;
-
-  ValueRange elementSizes = alloc.getElementSizes();
-  if (elementSizes.empty())
-    return false;
-
-  return llvm::all_of(elementSizes, [](Value v) {
-    int64_t cst;
-    return ValueAnalysis::getConstantIndex(v, cst) && cst == 1;
-  });
-}
-
-SmallVector<Value> DbUtils::getOffsetsFromDb(Value datablockPtr) {
-  if (auto *underlyingDb = getUnderlyingDb(datablockPtr))
-    if (auto acquireOp = dyn_cast<DbAcquireOp>(underlyingDb))
-      return SmallVector<Value>(acquireOp.getOffsets().begin(),
-                                acquireOp.getOffsets().end());
-  return {};
-}
-
-///===----------------------------------------------------------------------===///
-/// Partition Mode Detection
-///===----------------------------------------------------------------------===///
-
-PartitionMode DbUtils::getPartitionModeFromStructure(DbAcquireOp acquire) {
-  if (auto mode = ::getPartitionMode(acquire.getOperation()))
-    return *mode;
-  return PartitionMode::coarse;
-}
-
-PartitionMode DbUtils::getPartitionModeFromStructure(DbAllocOp alloc) {
-  if (auto mode = ::getPartitionMode(alloc.getOperation()))
-    return *mode;
-
-  if (isCoarseGrained(alloc))
-    return PartitionMode::coarse;
-
-  return PartitionMode::fine_grained;
+  return getDepOffsetsFromDb(underlyingDb);
 }
 
 ///===----------------------------------------------------------------------===///
@@ -452,10 +344,6 @@ std::optional<int64_t> DbUtils::getStaticElementStride(DbAllocOp alloc) {
   return getStaticStride(alloc.getElementSizes());
 }
 
-std::optional<int64_t> DbUtils::getStaticOuterStride(DbAllocOp alloc) {
-  return getStaticStride(alloc.getSizes());
-}
-
 Value DbUtils::getStrideValue(OpBuilder &builder, Location loc,
                               ValueRange sizes) {
   if (sizes.empty())
@@ -473,40 +361,8 @@ Value DbUtils::getStrideValue(OpBuilder &builder, Location loc,
   return stride;
 }
 
-Value DbUtils::getElementStrideValue(OpBuilder &builder, Location loc,
-                                     DbAllocOp alloc) {
-  return getStrideValue(builder, loc, alloc.getElementSizes());
-}
-
-Value DbUtils::getOuterStrideValue(OpBuilder &builder, Location loc,
-                                   DbAllocOp alloc) {
-  return getStrideValue(builder, loc, alloc.getSizes());
-}
-
-bool DbUtils::hasStaticHints(DbAcquireOp acqOp) {
-  /// Check partition hints (element-space) for static values
-  Value offset = acqOp.getPartitionOffsets().empty()
-                     ? nullptr
-                     : acqOp.getPartitionOffsets().front();
-  Value size = acqOp.getPartitionSizes().empty()
-                   ? nullptr
-                   : acqOp.getPartitionSizes().front();
-  int64_t val = 0;
-  bool offsetConst = !offset || ValueAnalysis::getConstantIndex(offset, val);
-  bool sizeConst = !size || ValueAnalysis::getConstantIndex(size, val);
-  return offsetConst && sizeConst;
-}
-
 bool DbUtils::isWriterMode(ArtsMode mode) {
   return mode == ArtsMode::out || mode == ArtsMode::inout;
-}
-
-bool DbUtils::dependsOnOffset(Value v, Value offset) {
-  if (!v || !offset)
-    return false;
-  Value vStripped = ValueAnalysis::stripNumericCasts(v);
-  Value oStripped = ValueAnalysis::stripNumericCasts(offset);
-  return ValueAnalysis::dependsOn(vStripped, oStripped);
 }
 
 Value DbUtils::extractBaseBlockSizeCandidate(Value offsetHint, Value sizeHint,
@@ -621,15 +477,6 @@ Value DbUtils::pickRepresentativePartitionSize(ArrayRef<Value> sizes,
   return sizes.front();
 }
 
-Operation *DbUtils::findUserEdt(DbControlOp dbControl) {
-  for (Operation *user : dbControl.getResult().getUsers()) {
-    if (auto edt = dyn_cast<EdtOp>(user)) {
-      return edt;
-    }
-  }
-  return nullptr;
-}
-
 SmallVector<Value> DbUtils::collectFullIndexChain(DbRefOp dbRef,
                                                   Operation *memOp) {
   SmallVector<Value> chain(dbRef.getIndices().begin(),
@@ -719,12 +566,6 @@ DbUtils::getMemoryAccessInfo(Operation *memOp) {
   return std::nullopt;
 }
 
-Value DbUtils::getAccessedMemref(Operation *memOp) {
-  if (auto access = getMemoryAccessInfo(memOp))
-    return access->memref;
-  return Value();
-}
-
 void DbUtils::forEachReachableMemoryAccess(
     Value source, llvm::function_ref<WalkResult(const MemoryAccessInfo &)> fn,
     Region *scope) {
@@ -777,139 +618,6 @@ void DbUtils::collectReachableMemoryOps(Value source,
 }
 
 ///===----------------------------------------------------------------------===///
-/// Multi-Entry Stencil Pattern Detection
-///===----------------------------------------------------------------------===///
-
-std::optional<int64_t> DbUtils::getConstantOffsetBetween(Value idx,
-                                                         Value base) {
-  if (!idx || !base)
-    return std::nullopt;
-
-  /// Same value means offset 0
-  if (idx == base)
-    return 0;
-
-  /// Strip numeric casts (index casts, sign/zero extensions, etc.)
-  Value strippedIdx = ValueAnalysis::stripNumericCasts(idx);
-  Value strippedBase = ValueAnalysis::stripNumericCasts(base);
-
-  if (strippedIdx == strippedBase)
-    return 0;
-
-  /// Check if idx = base + constant
-  if (auto addOp = strippedIdx.getDefiningOp<arith::AddIOp>()) {
-    int64_t constVal;
-    if (addOp.getLhs() == strippedBase &&
-        ValueAnalysis::getConstantIndex(addOp.getRhs(), constVal))
-      return constVal;
-    if (addOp.getRhs() == strippedBase &&
-        ValueAnalysis::getConstantIndex(addOp.getLhs(), constVal))
-      return constVal;
-  }
-
-  /// Check if idx = base - constant
-  if (auto subOp = strippedIdx.getDefiningOp<arith::SubIOp>()) {
-    int64_t constVal;
-    if (subOp.getLhs() == strippedBase &&
-        ValueAnalysis::getConstantIndex(subOp.getRhs(), constVal))
-      return -constVal;
-  }
-
-  /// Check the reverse: base = idx + constant means idx = base - constant
-  if (auto addOp = strippedBase.getDefiningOp<arith::AddIOp>()) {
-    int64_t constVal;
-    if (addOp.getLhs() == strippedIdx &&
-        ValueAnalysis::getConstantIndex(addOp.getRhs(), constVal))
-      return -constVal;
-    if (addOp.getRhs() == strippedIdx &&
-        ValueAnalysis::getConstantIndex(addOp.getLhs(), constVal))
-      return -constVal;
-  }
-
-  if (auto subOp = strippedBase.getDefiningOp<arith::SubIOp>()) {
-    int64_t constVal;
-    if (subOp.getLhs() == strippedIdx &&
-        ValueAnalysis::getConstantIndex(subOp.getRhs(), constVal))
-      return constVal;
-  }
-
-  return std::nullopt;
-}
-
-bool DbUtils::hasMultiEntryStencilPattern(DbAcquireOp acquire,
-                                          int64_t &minOffset,
-                                          int64_t &maxOffset) {
-  size_t numEntries = acquire.getNumPartitionEntries();
-  if (numEntries < 2)
-    return false;
-
-  /// Get indices for all entries
-  SmallVector<SmallVector<Value>> allIndices;
-  for (size_t i = 0; i < numEntries; ++i) {
-    allIndices.push_back(acquire.getPartitionIndicesForEntry(i));
-  }
-
-  /// All entries must have the same number of indices (same dimensionality)
-  size_t numDims = allIndices[0].size();
-  if (numDims == 0)
-    return false;
-  for (const auto &indices : allIndices) {
-    if (indices.size() != numDims)
-      return false;
-  }
-
-  /// For each dimension, check if indices form a stencil pattern
-  /// A stencil pattern means all indices are base +/- small constant
-  bool foundStencilDim = false;
-  minOffset = 0;
-  maxOffset = 0;
-
-  for (size_t dim = 0; dim < numDims; ++dim) {
-    /// Try each entry as potential base
-    bool dimIsStencil = false;
-    int64_t dimMin = 0, dimMax = 0;
-
-    for (size_t baseEntry = 0; baseEntry < numEntries && !dimIsStencil;
-         ++baseEntry) {
-      Value base = allIndices[baseEntry][dim];
-      if (!base)
-        continue;
-
-      bool allMatch = true;
-      int64_t localMin = 0, localMax = 0;
-
-      for (size_t i = 0; i < numEntries; ++i) {
-        Value idx = allIndices[i][dim];
-        auto offset = getConstantOffsetBetween(idx, base);
-        if (!offset || std::abs(*offset) > 2) {
-          /// Not a small constant offset - not stencil in this dimension
-          allMatch = false;
-          break;
-        }
-        localMin = std::min(localMin, *offset);
-        localMax = std::max(localMax, *offset);
-      }
-
-      if (allMatch && (localMin != localMax)) {
-        /// Found stencil pattern in this dimension
-        dimIsStencil = true;
-        dimMin = localMin;
-        dimMax = localMax;
-      }
-    }
-
-    if (dimIsStencil) {
-      foundStencilDim = true;
-      /// Accumulate bounds (for multi-dimensional stencils, use the widest)
-      minOffset = std::min(minOffset, dimMin);
-      maxOffset = std::max(maxOffset, dimMax);
-    }
-  }
-
-  return foundStencilDim;
-}
-
-///===----------------------------------------------------------------------===///
 /// Block Size and Malloc Pattern Extraction (free functions)
 ///===----------------------------------------------------------------------===///
 
@@ -920,13 +628,13 @@ std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
   if (!sizeHint || depth > 4)
     return std::nullopt;
 
-  /// Case 1: Direct constant
+  // Case 1: Direct constant
   int64_t val;
   if (ValueAnalysis::getConstantIndex(sizeHint, val))
     return val;
 
-  /// Case 2/3: minui/minsi pattern - return the larger constant (nominal size)
-  /// Helper to handle min operations uniformly
+  // Case 2/3: minui/minsi pattern - return the larger constant (nominal size).
+  // Helper to handle min operations uniformly.
   auto handleMinOp = [&](Value lhs, Value rhs) -> std::optional<int64_t> {
     int64_t lhsVal = 0, rhsVal = 0;
     bool hasLhs = ValueAnalysis::getConstantIndex(lhs, lhsVal);
@@ -959,27 +667,27 @@ std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
       return result;
   }
 
-  /// Case 4: addi pattern - stencil halo adjustment
-  /// For stencil patterns, blockSize = addi(baseBlockSize, haloAdjustment)
-  /// where haloAdjustment is a small constant (e.g., 2 for i-1, i, i+1 pattern)
-  /// We want to extract baseBlockSize, which is the actual partition block size
+  // Case 4: addi pattern - stencil halo adjustment.
+  // For stencil patterns, blockSize = addi(baseBlockSize, haloAdjustment)
+  // where haloAdjustment is a small constant (e.g., 2 for i-1, i, i+1 pattern).
+  // We want to extract baseBlockSize, which is the actual partition block size.
   if (auto addOp = sizeHint.getDefiningOp<arith::AddIOp>()) {
     int64_t lhsVal = 0, rhsVal = 0;
     bool hasLhsConst = ValueAnalysis::getConstantIndex(addOp.getLhs(), lhsVal);
     bool hasRhsConst = ValueAnalysis::getConstantIndex(addOp.getRhs(), rhsVal);
 
-    /// If one operand is a small constant (halo adjustment), recurse on the
-    /// other
+    // If one operand is a small constant (halo adjustment), recurse on the
+    // other.
     if (hasRhsConst && std::abs(rhsVal) <= 16) {
-      /// rhsVal is halo adjustment, lhs is base block size
+      // rhsVal is halo adjustment, lhs is base block size
       return extractBlockSizeFromHint(addOp.getLhs(), depth + 1);
     }
     if (hasLhsConst && std::abs(lhsVal) <= 16) {
-      /// lhsVal is halo adjustment, rhs is base block size
+      // lhsVal is halo adjustment, rhs is base block size
       return extractBlockSizeFromHint(addOp.getRhs(), depth + 1);
     }
 
-    /// Both constants or both large - try both sides
+    // Both constants or both large - try both sides
     auto lhsExtracted = extractBlockSizeFromHint(addOp.getLhs(), depth + 1);
     auto rhsExtracted = extractBlockSizeFromHint(addOp.getRhs(), depth + 1);
     if (lhsExtracted)
@@ -988,8 +696,8 @@ std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
       return rhsExtracted;
   }
 
-  /// Case 5: maxui pattern - clamp minimum (e.g., MaxUIOp(blockSize, 1))
-  /// Return the larger constant operand as the block size upper bound
+  // Case 5: maxui pattern - clamp minimum (e.g., MaxUIOp(blockSize, 1)).
+  // Return the larger constant operand as the block size upper bound.
   if (auto maxOp = sizeHint.getDefiningOp<arith::MaxUIOp>()) {
     int64_t lhsVal = 0, rhsVal = 0;
     bool hasLhs = ValueAnalysis::getConstantIndex(maxOp.getLhs(), lhsVal);
@@ -1010,7 +718,7 @@ std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
       return rhsVal;
     }
 
-    /// Recurse for nested maxui
+    // Recurse for nested maxui
     auto lhsExtracted = extractBlockSizeFromHint(maxOp.getLhs(), depth + 1);
     auto rhsExtracted = extractBlockSizeFromHint(maxOp.getRhs(), depth + 1);
     if (lhsExtracted && rhsExtracted)
@@ -1022,100 +730,6 @@ std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
   }
 
   return std::nullopt;
-}
-
-std::optional<int64_t> extractBlockSizeForAllocation(Value sizeHint,
-                                                     int depth) {
-  if (!sizeHint || depth > 4)
-    return std::nullopt;
-
-  /// Case 1: Direct constant
-  int64_t val;
-  if (ValueAnalysis::getConstantIndex(sizeHint, val))
-    return val;
-
-  /// Case 2: minui/minsi pattern - return the larger constant (nominal size)
-  /// Helper to handle min operations uniformly
-  auto handleMinOp = [&](Value lhs, Value rhs) -> std::optional<int64_t> {
-    int64_t lhsVal = 0, rhsVal = 0;
-    bool hasLhs = ValueAnalysis::getConstantIndex(lhs, lhsVal);
-    bool hasRhs = ValueAnalysis::getConstantIndex(rhs, rhsVal);
-
-    if (hasLhs && hasRhs)
-      return std::max(lhsVal, rhsVal);
-    if (hasLhs)
-      return lhsVal;
-    if (hasRhs)
-      return rhsVal;
-
-    auto lhsExtracted = extractBlockSizeForAllocation(lhs, depth + 1);
-    auto rhsExtracted = extractBlockSizeForAllocation(rhs, depth + 1);
-    if (lhsExtracted && rhsExtracted)
-      return std::max(*lhsExtracted, *rhsExtracted);
-    if (lhsExtracted)
-      return lhsExtracted;
-    if (rhsExtracted)
-      return rhsExtracted;
-    return std::nullopt;
-  };
-
-  if (auto minOp = sizeHint.getDefiningOp<arith::MinUIOp>()) {
-    if (auto result = handleMinOp(minOp.getLhs(), minOp.getRhs()))
-      return result;
-  }
-  if (auto minOp = sizeHint.getDefiningOp<arith::MinSIOp>()) {
-    if (auto result = handleMinOp(minOp.getLhs(), minOp.getRhs()))
-      return result;
-  }
-
-  /// Case 3: addi pattern - INCLUDE the halo adjustment for allocation
-  /// For stencil patterns: blockSize = addi(baseBlockSize, haloAdjustment)
-  /// Allocation needs full size: base + halo
-  if (auto addOp = sizeHint.getDefiningOp<arith::AddIOp>()) {
-    int64_t lhsVal = 0, rhsVal = 0;
-    bool hasLhsConst = ValueAnalysis::getConstantIndex(addOp.getLhs(), lhsVal);
-    bool hasRhsConst = ValueAnalysis::getConstantIndex(addOp.getRhs(), rhsVal);
-
-    /// If one operand is a small constant (halo), add it to the extracted base
-    if (hasRhsConst && std::abs(rhsVal) <= 16) {
-      auto baseSize = extractBlockSizeForAllocation(addOp.getLhs(), depth + 1);
-      if (baseSize)
-        return *baseSize + rhsVal; /// base + halo
-    }
-    if (hasLhsConst && std::abs(lhsVal) <= 16) {
-      auto baseSize = extractBlockSizeForAllocation(addOp.getRhs(), depth + 1);
-      if (baseSize)
-        return *baseSize + lhsVal; /// base + halo
-    }
-
-    /// Both operands non-constant - try both sides
-    auto lhsExtracted =
-        extractBlockSizeForAllocation(addOp.getLhs(), depth + 1);
-    auto rhsExtracted =
-        extractBlockSizeForAllocation(addOp.getRhs(), depth + 1);
-    if (lhsExtracted)
-      return lhsExtracted;
-    if (rhsExtracted)
-      return rhsExtracted;
-  }
-
-  return std::nullopt;
-}
-
-Value extractOriginalSize(Value numerator, Value denominator,
-                          OpBuilder &builder, Location loc) {
-  Value stripped = ValueAnalysis::stripNumericCasts(numerator);
-  if (auto mul = stripped.getDefiningOp<arith::MulIOp>()) {
-    Value lhs = mul.getLhs();
-    Value rhs = mul.getRhs();
-    if (ValueAnalysis::scalesAreEquivalent(lhs, denominator))
-      return ValueAnalysis::castToIndex(ValueAnalysis::stripNumericCasts(rhs),
-                                        builder, loc);
-    if (ValueAnalysis::scalesAreEquivalent(rhs, denominator))
-      return ValueAnalysis::castToIndex(ValueAnalysis::stripNumericCasts(lhs),
-                                        builder, loc);
-  }
-  return Value();
 }
 
 } // namespace arts

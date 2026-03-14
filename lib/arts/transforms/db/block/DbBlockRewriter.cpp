@@ -119,7 +119,7 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
     acquire.getPtr().setType(newPtrType);
 
     /// Also update EDT block argument type if this acquire feeds an EDT
-    auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+    auto [edt, blockArg] = getEdtBlockArgumentForAcquire(acquire);
     if (blockArg && blockArg.getType() != newPtrType)
       blockArg.setType(newPtrType);
   }
@@ -395,7 +395,7 @@ bool DbBlockRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
   ARTS_DEBUG("DbBlockRewriter::rebaseEdtUsers (isSingleBlock=" << isSingleBlock
                                                                << ")");
 
-  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+  auto [edt, blockArg] = getEdtBlockArgumentForAcquire(acquire);
   Value localView = blockArg ? Value(blockArg) : acquire.getPtr();
   if (!edt)
     edt = acquire->getParentOfType<EdtOp>();

@@ -420,10 +420,9 @@ void DbStencilIndexer::transformDbRefUsers(
           leftMemref ? clampIndex(leftIdx, haloLeft, builder, userLoc)
                      : Value();
       if (leftMemref && leftPtrNotNull) {
-        selectedMemref =
-            selectValue(leftPtrNotNull, leftMemref, ownedMemref);
-        selectedRowIdx = selectValue(leftPtrNotNull, clampedLeftIdx,
-                                     selectedRowIdx);
+        selectedMemref = selectValue(leftPtrNotNull, leftMemref, ownedMemref);
+        selectedRowIdx =
+            selectValue(leftPtrNotNull, clampedLeftIdx, selectedRowIdx);
       } else if (leftMemref) {
         selectedMemref = leftMemref;
         selectedRowIdx = clampedLeftIdx;
@@ -435,10 +434,9 @@ void DbStencilIndexer::transformDbRefUsers(
           rightMemref ? clampIndex(rightIdx, haloRight, builder, userLoc)
                       : Value();
       if (rightMemref && rightPtrNotNull) {
-        selectedMemref =
-            selectValue(rightPtrNotNull, rightMemref, ownedMemref);
-        selectedRowIdx = selectValue(rightPtrNotNull, clampedRightIdx,
-                                     selectedRowIdx);
+        selectedMemref = selectValue(rightPtrNotNull, rightMemref, ownedMemref);
+        selectedRowIdx =
+            selectValue(rightPtrNotNull, clampedRightIdx, selectedRowIdx);
       } else if (rightMemref) {
         selectedMemref = rightMemref;
         selectedRowIdx = clampedRightIdx;
