@@ -155,7 +155,7 @@ void LoopMetadata::importFromJson(const llvm::json::Object &json) {
   if (auto *arr = json.getArray(AttrNames::LoopMetadata::DimensionDeps)) {
     for (const auto &e : *arr) {
       if (auto *obj = e.getAsObject()) {
-        DimensionDependency dep;
+        DimensionDep dep;
         dep.importFromJson(*obj);
         dimensionDeps.push_back(dep);
       }
@@ -308,7 +308,7 @@ LoopMetadataAttr LoopMetadata::toAttribute(MLIRContext *ctx) const {
 ///===----------------------------------------------------------------------===///
 /// DimensionDependency JSON serialization
 ///===----------------------------------------------------------------------===///
-void DimensionDependency::importFromJson(const llvm::json::Object &json) {
+void DimensionDep::importFromJson(const llvm::json::Object &json) {
   dimension = json.getInteger("dimension").value_or(0);
   hasCarriedDep = json.getBoolean("has_carried_dep").value_or(false);
   if (auto dist = json.getInteger("distance"))
@@ -317,7 +317,7 @@ void DimensionDependency::importFromJson(const llvm::json::Object &json) {
     distance.reset();
 }
 
-void DimensionDependency::exportToJson(llvm::json::Object &json) const {
+void DimensionDep::exportToJson(llvm::json::Object &json) const {
   json["dimension"] = dimension;
   json["has_carried_dep"] = hasCarriedDep;
   if (distance)

@@ -49,7 +49,7 @@ constexpr StringLiteral OutermostParallelDim = "outermost_parallel_dim";
 /// Per-dimension dependency info for nested loops.
 /// Allows tracking which specific loop dimension carries dependencies,
 /// enabling parallelization of outer loops even when inner loops have deps.
-struct DimensionDependency {
+struct DimensionDep {
   int64_t dimension = 0;               // 0 = outermost, 1 = next, etc.
   bool hasCarriedDep = false;          /// Does THIS dimension carry deps?
   std::optional<int64_t> distance;     /// Dependence distance if known
@@ -93,7 +93,7 @@ public:
   /// Loop structure information
   std::optional<int64_t> tripCount, nestingLevel;
 
-  /// Dependency information
+  /// Dep information
   std::optional<bool> hasInterIterationDeps;
 
   /// Aggregated memref usage information
@@ -115,7 +115,7 @@ public:
   ///   - dimensionDeps[0] = {dim=0, hasCarriedDep=false} // i-loop is parallel
   ///   - dimensionDeps[1] = {dim=1, hasCarriedDep=true}  // j-loop has
   ///   A[i][j-1] dep
-  SmallVector<DimensionDependency> dimensionDeps;
+  SmallVector<DimensionDep> dimensionDeps;
 
   /// The outermost dimension that can be parallelized (0 = outermost).
   /// -1 means no dimension is parallelizable.
