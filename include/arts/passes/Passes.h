@@ -25,6 +25,8 @@ class DominanceInfo;
 namespace arts {
 class AnalysisManager;
 class AbstractMachine;
+// TODO(DOCS): create*Pass factory functions lack documentation comments. Add
+// brief /// doc comments mirroring the summary from Passes.td.
 std::unique_ptr<Pass> createArtsInlinerPass();
 std::unique_ptr<Pass> createCollectMetadataPass();
 std::unique_ptr<Pass> createCollectMetadataPass(bool exportMetadata,
@@ -34,13 +36,14 @@ std::unique_ptr<Pass> createConvertOpenMPtoArtsPass();
 std::unique_ptr<Pass> createPatternDiscoveryPass(AnalysisManager *AM,
                                                  bool refine = false);
 std::unique_ptr<Pass> createDCEPass();
-std::unique_ptr<Pass> createEdtPass(AnalysisManager *AM, bool runAnalysis);
+std::unique_ptr<Pass> createEdtStructuralOptPass(AnalysisManager *AM, bool runAnalysis);
 std::unique_ptr<Pass> createConcurrencyPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createCreateDbsPass(AnalysisManager *AM);
-std::unique_ptr<Pass> createDbPass(AnalysisManager *AM);
-std::unique_ptr<Pass> createDbOptsPass();
+std::unique_ptr<Pass> createDbModeTighteningPass(AnalysisManager *AM);
+std::unique_ptr<Pass> createDbScratchEliminationPass();
 std::unique_ptr<Pass> createDbPartitioningPass(AnalysisManager *AM);
-std::unique_ptr<Pass> createDistributedDbOwnershipPass(AnalysisManager *AM);
+std::unique_ptr<Pass> createDbDistributedOwnershipPass(AnalysisManager *AM);
+std::unique_ptr<Pass> createDbTransformsPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createCreateEpochsPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug);
@@ -79,8 +82,10 @@ createKernelTransformsPass(AnalysisManager *AM,
                            bool enableElementwisePipeline = true,
                            bool enableMatmul = true, bool enableTiling = true,
                            int64_t tileJ = 64, int64_t minTripCount = 128);
+std::unique_ptr<Pass> createEdtTransformsPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createVerifyMetadataPass(AnalysisManager *AM,
                                                bool failOnMissing = false);
+std::unique_ptr<Pass> createContractValidationPass(bool failOnError = false);
 } // namespace arts
 } // namespace mlir
 

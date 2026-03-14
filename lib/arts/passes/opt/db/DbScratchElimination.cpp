@@ -1,8 +1,9 @@
 ///==========================================================================///
-/// File: DbOpts.cpp
+/// File: DbScratchElimination.cpp
 ///
-/// DB-local cleanup optimizations that run after DbPass / DbPartitioning have
-/// established stable acquire and dependency structure.
+/// Eliminate task-private single-element scratch DBs by replacing them with
+/// local allocas.  Runs after DbModeTightening / DbPartitioning have established stable
+/// acquire and dependency structure.
 ///==========================================================================///
 
 #include "arts/Dialect.h"
@@ -20,7 +21,7 @@
 #include <algorithm>
 
 #include "arts/utils/Debug.h"
-ARTS_DEBUG_SETUP(db_opts);
+ARTS_DEBUG_SETUP(db_scratch_elimination);
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -244,15 +245,17 @@ static void eraseIfPresent(Operation *op) {
     op->erase();
 }
 
-struct DbOptsPass : public arts::DbOptsBase<DbOptsPass> {
+struct DbScratchEliminationPass : public arts::DbScratchEliminationBase<DbScratchEliminationPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     SmallVector<ScratchCandidate, 8> candidates;
 
     module.walk([&](func::FuncOp func) {
-      DominanceInfo domInfo(func);
       SmallVector<DbAllocOp, 8> allocs;
       func.walk([&](DbAllocOp alloc) { allocs.push_back(alloc); });
+      if (allocs.empty())
+        return;
+      DominanceInfo domInfo(func);
       for (DbAllocOp alloc : allocs)
         if (auto candidate = matchScratchCandidate(alloc, domInfo))
           candidates.push_back(std::move(*candidate));
@@ -295,16 +298,16 @@ struct DbOptsPass : public arts::DbOptsBase<DbOptsPass> {
         Block &body = edt.getBody().front();
         ValueRange deps = edt.getDependencies();
         SmallVector<unsigned, 4> indices = entry.second;
-        llvm::sort(indices, std::greater<>());
+        llvm::sort(indices);
         indices.erase(std::unique(indices.begin(), indices.end()),
                       indices.end());
 
         SmallVector<Value> newDeps;
         for (unsigned i = 0; i < deps.size(); ++i)
-          if (!llvm::is_contained(indices, i))
+          if (!std::binary_search(indices.begin(), indices.end(), i))
             newDeps.push_back(deps[i]);
 
-        for (unsigned idx : indices)
+        for (unsigned idx : llvm::reverse(indices))
           body.eraseArgument(idx);
         edt.setDependencies(newDeps);
       }
@@ -325,12 +328,12 @@ struct DbOptsPass : public arts::DbOptsBase<DbOptsPass> {
         candidate.alloc.erase();
     }
 
-    ARTS_INFO("DbOptsPass: removed " << rewrites << " scratch DB uses");
+    ARTS_INFO("DbScratchEliminationPass: removed " << rewrites << " scratch DB uses");
   }
 };
 
 } // namespace
 
-std::unique_ptr<Pass> mlir::arts::createDbOptsPass() {
-  return std::make_unique<DbOptsPass>();
+std::unique_ptr<Pass> mlir::arts::createDbScratchEliminationPass() {
+  return std::make_unique<DbScratchEliminationPass>();
 }

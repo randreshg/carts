@@ -14,6 +14,7 @@
 #ifndef ARTS_ANALYSIS_HEURISTICS_DBHEURISTICS_H
 #define ARTS_ANALYSIS_HEURISTICS_DBHEURISTICS_H
 
+#include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
 #include "llvm/ADT/SmallVector.h"
@@ -57,7 +58,9 @@ public:
 
   PartitioningDecision choosePartitioning(const PartitioningContext &ctx);
   SmallVector<AcquireDecision>
-  chooseAcquirePolicies(ArrayRef<const DbAcquirePartitionFacts *> acquireFacts);
+  chooseAcquirePolicies(
+      ArrayRef<const DbAcquirePartitionFacts *> acquireFacts,
+      ArrayRef<const DbAnalysis::AcquireContractSummary *> summaries = {});
 
   void recordDecision(llvm::StringRef heuristic, bool applied,
                       llvm::StringRef rationale, Operation *op,

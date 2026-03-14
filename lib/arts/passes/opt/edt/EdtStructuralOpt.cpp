@@ -1,5 +1,5 @@
 ///==========================================================================///
-/// File: Edt.cpp
+/// File: EdtStructuralOpt.cpp
 ///
 /// EDT analysis/cleanup pass used in multiple pipeline stages.
 ///
@@ -34,7 +34,7 @@
 #include "mlir/Pass/Pass.h"
 /// Debug
 #include "arts/utils/Debug.h"
-ARTS_DEBUG_SETUP(edt);
+ARTS_DEBUG_SETUP(edt_structural_opt);
 
 using namespace mlir;
 using namespace mlir::func;
@@ -171,40 +171,23 @@ static bool isParallelEdtFusable(EdtOp edt) {
 /// Fuses consecutive fusable parallel EDTs in a block.
 /// Returns true if any fusion was performed.
 static bool fuseConsecutiveParallelEdts(Block &block) {
-  bool changed = false;
-  for (auto it = block.begin(); it != block.end();) {
-    auto first = dyn_cast<EdtOp>(&*it);
-    if (!first || !isParallelEdtFusable(first)) {
-      ++it;
-      continue;
-    }
-    auto nextIt = std::next(it);
-    if (nextIt == block.end()) {
-      ++it;
-      continue;
-    }
-    auto second = dyn_cast<EdtOp>(&*nextIt);
-    if (!second || !isParallelEdtFusable(second)) {
-      ++it;
-      continue;
-    }
-
-    /// Fuse: move all ops from second body into first body (before terminator)
-    Block &firstBody = first.getBody().front();
-    Block &secondBody = second.getBody().front();
-    Operation *firstTerminator = firstBody.getTerminator();
-
-    for (Operation &op :
-         llvm::make_early_inc_range(secondBody.without_terminator())) {
-      op.moveBefore(firstTerminator);
-    }
-
-    ARTS_DEBUG("Fused consecutive parallel EDTs");
-    second.erase();
-    changed = true;
-    /// Re-run on the same first EDT to chain-fuse.
-  }
-  return changed;
+  /// TODO: This fusion has no data dependency analysis between fused EDTs.
+  /// Two consecutive parallel EDTs could operate on overlapping datablocks
+  /// (e.g., EDT-A writes to DB_x, EDT-B reads from DB_x). Fusing them removes
+  /// the implicit barrier between them, potentially introducing data races.
+  /// Add shared-DB conflict checking before fusion.
+  return fuseConsecutivePairs<EdtOp>(
+      block,
+      [](EdtOp a, EdtOp b) {
+        return isParallelEdtFusable(a) && isParallelEdtFusable(b);
+      },
+      [](EdtOp a, EdtOp b) {
+        Block &firstBody = a.getBody().front();
+        Block &secondBody = b.getBody().front();
+        spliceBodyBeforeTerminator(secondBody, firstBody);
+        ARTS_DEBUG("Fused consecutive parallel EDTs");
+        b.erase();
+      });
 }
 
 /// Processes top-level blocks in a region for parallel EDT fusion.
@@ -229,8 +212,8 @@ static void processRegionForParallelEdtFusion(Region &region, bool &changed) {
 /// Pass Implementation
 ///===----------------------------------------------------------------------===///
 namespace {
-struct EdtPass : public arts::EdtBase<EdtPass> {
-  EdtPass(mlir::arts::AnalysisManager *AM, bool runAnalysis) : AM(AM) {
+struct EdtStructuralOptPass : public arts::EdtStructuralOptBase<EdtStructuralOptPass> {
+  EdtStructuralOptPass(mlir::arts::AnalysisManager *AM, bool runAnalysis) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
     this->runAnalysis = runAnalysis;
   }
@@ -280,16 +263,22 @@ struct EdtAllocaSinkingPass
 };
 } // namespace
 
-void EdtPass::runOnOperation() {
+void EdtStructuralOptPass::runOnOperation() {
   module = getOperation();
-  ARTS_INFO_HEADER(EdtPass);
+  ARTS_INFO_HEADER(EdtStructuralOptPass);
   ARTS_DEBUG_REGION(module.dump(););
+
+  /// TODO(PERF): This pass walks all EdtOps 4 separate times
+  /// (inlineNoDepEdts, processSingleEdts, processParallelEdts,
+  /// processSyncTaskEdts). These could be combined into a single walk that
+  /// categorizes EDTs by type into buckets, then processes each bucket.
 
   module.walk([&](EdtOp edt) { sinkExternalAllocasInEdt(edt); });
 
   if (runAnalysis) {
     ARTS_INFO("Running EDT pass with analysis");
-    /// removeBarriers();
+    /// IMM-2: Re-enable graph-driven barrier removal (AM is guaranteed non-null).
+    removeBarriers();
   } else {
     ARTS_INFO("Running EDT pass without analysis");
 
@@ -327,11 +316,11 @@ void EdtPass::runOnOperation() {
   removalMgr.removeAllMarked(module, /*recursive=*/true);
   ARTS_DEBUG("removeAllMarked completed");
 
-  ARTS_INFO_FOOTER(EdtPass);
+  ARTS_INFO_FOOTER(EdtStructuralOptPass);
   ARTS_DEBUG_REGION(module.dump(););
 }
 
-bool EdtPass::inlineNoDepEdts() {
+bool EdtStructuralOptPass::inlineNoDepEdts() {
   SmallVector<EdtOp, 8> candidates;
 
   module.walk([&](EdtOp edt) {
@@ -371,10 +360,10 @@ bool EdtPass::inlineNoDepEdts() {
 
 /// Remove unconditional barriers that provide no additional ordering beyond
 /// computed EDT dependencies (graph-informed pruning).
-bool EdtPass::removeBarriers() {
+bool EdtStructuralOptPass::removeBarriers() {
   bool changed = false;
   module.walk([&](func::FuncOp func) {
-    auto &edtGraph = AM->getEdtGraph(func);
+    auto &edtGraph = AM->getEdtAnalysis().getOrCreateEdtGraph(func);
     if (edtGraph.size() == 0)
       return;
 
@@ -383,7 +372,7 @@ bool EdtPass::removeBarriers() {
   return changed;
 }
 
-bool EdtPass::processSingleEdts() {
+bool EdtStructuralOptPass::processSingleEdts() {
   /// Find all single EDTs and remove barriers around them since single EDTs
   /// have implicit barrier semantics
   SmallVector<EdtOp, 8> singleOps;
@@ -402,7 +391,7 @@ bool EdtPass::processSingleEdts() {
   return !singleOps.empty();
 }
 
-bool EdtPass::processParallelEdts() {
+bool EdtStructuralOptPass::processParallelEdts() {
   /// Gather all parallel-EDT ops in the module.
   SmallVector<EdtOp, 8> parallelOps;
   module.walk([&](EdtOp edt) {
@@ -412,14 +401,15 @@ bool EdtPass::processParallelEdts() {
 
   /// Try to convert parallel EDTs into single EDTs if they contain exactly one
   /// child.
+  bool changed = false;
   for (EdtOp op : parallelOps)
-    convertParallelIntoSingle(op);
-  return true;
+    changed |= convertParallelIntoSingle(op);
+  return changed;
 }
 
 /// Converts a parallel EDT region into a sync-task EDT when it contains a
 /// single inner `arts.edt` and no other ops beyond terminators/barriers.
-bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
+bool EdtStructuralOptPass::convertParallelIntoSingle(EdtOp &op) {
   uint32_t numOps = 0;
   EdtOp singleOp = nullptr;
 
@@ -494,7 +484,10 @@ bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
 
 /// Convert parallel EDT with inner acquires to sync EDT by rewiring outer
 /// acquires to use the correct mode and feeding them directly to the sync EDT.
-bool EdtPass::convertParallelWithAcquiresToSync(
+/// TODO(REFACTOR): convertParallelWithAcquiresToSync (~165 lines) manually
+/// builds a sync EDT with block arguments, body cloning, and yield insertion.
+/// Consider reusing createEdtWithMergedDepsAndRegion with precomputed deps.
+bool EdtStructuralOptPass::convertParallelWithAcquiresToSync(
     EdtOp parallelOp, EdtOp singleOp, ArrayRef<DbAcquireOp> innerAcquires,
     ArrayRef<DbReleaseOp> innerReleases, bool needsBarrier) {
 
@@ -665,7 +658,7 @@ bool EdtPass::convertParallelWithAcquiresToSync(
 /// region. Since arts.edt<single> has implicit barrier semantics, explicit
 /// barriers around it are redundant and cause issues with the CreateEpochs
 /// pass.
-void EdtPass::removeBarriersAroundSingleEdt(EdtOp parallelOp, EdtOp singleOp) {
+void EdtStructuralOptPass::removeBarriersAroundSingleEdt(EdtOp parallelOp, EdtOp singleOp) {
   Block *parentBlock = singleOp->getBlock();
   if (!parentBlock)
     return;
@@ -690,7 +683,7 @@ void EdtPass::removeBarriersAroundSingleEdt(EdtOp parallelOp, EdtOp singleOp) {
 
 /// Utility function to create a new EDT operation with merged dependencies
 /// and transfer the region from the source operation.
-EdtOp EdtPass::createEdtWithMergedDepsAndRegion(
+EdtOp EdtStructuralOptPass::createEdtWithMergedDepsAndRegion(
     OpBuilder &builder, Location loc, arts::EdtType newType, EdtOp sourceOp,
     ArrayRef<Value> additionalDeps) {
 
@@ -748,7 +741,7 @@ EdtOp EdtPass::createEdtWithMergedDepsAndRegion(
   return newEdt;
 }
 
-bool EdtPass::processSyncTaskEdts() {
+bool EdtStructuralOptPass::processSyncTaskEdts() {
   /// If the given single EdtOp is not nested within another EdtOp (i.e., is
   /// top-level), and is marked as sync, embed its region's contents in an
   /// arts::EpochOp. This effectively assigns the work to the master thread,
@@ -820,7 +813,7 @@ bool EdtPass::processSyncTaskEdts() {
   return true;
 }
 
-bool EdtPass::removeRedundantBarriersWithGraphs(func::FuncOp func,
+bool EdtStructuralOptPass::removeRedundantBarriersWithGraphs(func::FuncOp func,
                                                 arts::EdtGraph &graph) {
   bool changed = false;
 
@@ -878,9 +871,9 @@ bool EdtPass::removeRedundantBarriersWithGraphs(func::FuncOp func,
 ////===----------------------------------------------------------------------===////
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createEdtPass(mlir::arts::AnalysisManager *AM,
+std::unique_ptr<Pass> createEdtStructuralOptPass(mlir::arts::AnalysisManager *AM,
                                     bool runAnalysis) {
-  return std::make_unique<EdtPass>(AM, runAnalysis);
+  return std::make_unique<EdtStructuralOptPass>(AM, runAnalysis);
 }
 std::unique_ptr<Pass> createEdtAllocaSinkingPass() {
   return std::make_unique<EdtAllocaSinkingPass>();

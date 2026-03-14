@@ -8,6 +8,7 @@
 #define ARTS_ANALYSIS_DB_DISTRIBUTEDDBELIGIBILITY_H
 
 #include "arts/Dialect.h"
+#include <optional>
 
 namespace mlir {
 namespace arts {
@@ -31,6 +32,8 @@ struct DistributedDbEligibilityResult {
   bool eligible = false;
   DistributedDbEligibilityRejectReason reason =
       DistributedDbEligibilityRejectReason::None;
+  /// When set, the pass should stamp this distribution kind on the alloc op.
+  std::optional<EdtDistributionKind> distributionKind = std::nullopt;
 };
 
 const char *toString(DistributedDbEligibilityRejectReason reason);

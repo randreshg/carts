@@ -63,7 +63,7 @@ cross-stage contracts.
 - `CSE`
 
 ### 6) edt-transforms
-- `EdtPass(runAnalysis=false)`
+- `EdtStructuralOptPass(runAnalysis=false)`
 - `EdtInvariantCodeMotion`
 - `DeadCodeElimination`
 - `SymbolDCE`
@@ -84,14 +84,14 @@ cross-stage contracts.
 - `PolygeistCanonicalize`
 
 ### 8) db-opt
-- `DbPass`
+- `DbModeTightening`
 - `PolygeistCanonicalize`
 - `CSE`
 - `Mem2Reg`
 
 ### 9) edt-opt
 - `PolygeistCanonicalize`
-- `EdtPass(runAnalysis=true)`
+- `EdtStructuralOptPass(runAnalysis=true)`
 - `LoopFusion`
 - `CSE`
 
@@ -106,7 +106,7 @@ cross-stage contracts.
 - `ForLowering`
 
 ### 12) concurrency-opt
-- `EdtPass(runAnalysis=false)`
+- `EdtStructuralOptPass(runAnalysis=false)`
 - `DeadCodeElimination`
 - `PolygeistCanonicalize`
 - `CSE`
@@ -114,8 +114,8 @@ cross-stage contracts.
 - `PolygeistCanonicalize`
 - `CSE`
 - `DbPartitioning`
-- optional `DistributedDbOwnership` (enabled by `--distributed-db`)
-- `DbPass`
+- optional `DbDistributedOwnership` (enabled by `--distributed-db`)
+- `DbModeTightening`
 - `BlockLoopStripMining` (nested func)
 - `ArtsHoisting`
 - `PolygeistCanonicalize`

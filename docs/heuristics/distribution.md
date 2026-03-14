@@ -39,7 +39,7 @@ data placement decisions.
 automatically:
 
 1. **Distributes memory like MPI** — each node allocates only its portion of
-   data (via `DistributedDbOwnershipPass` and round-robin route selection in
+   data (via `DbDistributedOwnershipPass` and round-robin route selection in
    `ConvertArtsToLLVM`). Memory capacity scales with node count.
 2. **Distributes computation like AMT** — tasks are routed to nodes based on
    data ownership, with work-stealing for dynamic load balancing. No manual
@@ -184,9 +184,9 @@ Goal:
 
 Current implementation:
 - `DbAllocOp` supports a `distributed` marker attribute.
-- New pass: `DistributedDbOwnershipPass`
-  (`lib/arts/passes/Optimizations/DistributedDbOwnership.cpp`).
-- Pipeline placement: `DbPartitioning -> DistributedDbOwnership -> DbPass`
+- New pass: `DbDistributedOwnershipPass`
+  (`lib/arts/passes/Optimizations/DbDistributedOwnership.cpp`).
+- Pipeline placement: `DbPartitioning -> DbDistributedOwnership -> DbModeTightening`
   (gated by `--distributed-db` in `carts-compile`).
 - `--distributed-db` also enables distributed host loop outlining
   (`DistributedHostLoopOutlining`) so eligible host producer loops flow through
