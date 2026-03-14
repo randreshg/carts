@@ -238,13 +238,20 @@ int64_t DistributionHeuristics::chooseTiling2DColumnWorkers(
   int64_t best = 1;
   double bestDist = std::numeric_limits<double>::infinity();
   double target = std::sqrt(static_cast<double>(totalWorkers));
-  for (int64_t d = 2; d <= totalWorkers; ++d) {
-    if (!validDivisor(d))
+  int64_t sqrtW = static_cast<int64_t>(target);
+  for (int64_t d = 2; d <= sqrtW; ++d) {
+    if (totalWorkers % d != 0)
       continue;
-    double dist = std::fabs(static_cast<double>(d) - target);
-    if (dist < bestDist || (dist == bestDist && d > best)) {
-      best = d;
-      bestDist = dist;
+    int64_t complement = totalWorkers / d;
+    /// Check both d and its complement (totalWorkers/d) as candidates.
+    for (int64_t candidate : {d, complement}) {
+      if (!validDivisor(candidate))
+        continue;
+      double dist = std::fabs(static_cast<double>(candidate) - target);
+      if (dist < bestDist || (dist == bestDist && candidate > best)) {
+        best = candidate;
+        bestDist = dist;
+      }
     }
   }
 
@@ -332,6 +339,8 @@ DistributionHeuristics::toDistributionKind(EdtDistributionKind kind) {
     return DistributionKind::BlockCyclic;
   case EdtDistributionKind::tiling_2d:
     return DistributionKind::Tiling2D;
+  case EdtDistributionKind::replicated:
+    return DistributionKind::Replicated;
   }
   return DistributionKind::Flat;
 }
@@ -352,6 +361,8 @@ EdtDistributionKind DistributionHeuristics::selectDistributionKind(
     return EdtDistributionKind::block_cyclic;
   case DistributionKind::Tiling2D:
     return EdtDistributionKind::tiling_2d;
+  case DistributionKind::Replicated:
+    return EdtDistributionKind::replicated;
   case DistributionKind::Flat:
     break;
   }
@@ -421,7 +432,8 @@ DistributionBounds DistributionHeuristics::computeBounds(
   }
 
   if (strategy.kind == DistributionKind::Flat ||
-      strategy.kind == DistributionKind::Tiling2D) {
+      strategy.kind == DistributionKind::Tiling2D ||
+      strategy.kind == DistributionKind::Replicated) {
     /// Flat: balanced distribution across all workers.
     /// Tiling2D: balanced row distribution across row workers
     /// (worker decomposition handled by getTiling2DWorkerGrid).
@@ -891,6 +903,7 @@ Value DistributionHeuristics::getForDispatchWorkerCount(
   switch (strategy.kind) {
   case DistributionKind::Flat:
   case DistributionKind::BlockCyclic:
+  case DistributionKind::Replicated:
     clampedDispatch =
         AC->create<arith::MinUIOp>(loc, totalWorkers, totalChunks);
     break;

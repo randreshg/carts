@@ -115,6 +115,11 @@ std::unique_ptr<EdtTaskLoopLowering>
 EdtTaskLoopLowering::create(DistributionKind kind) {
   switch (kind) {
   case DistributionKind::Flat:
+  case DistributionKind::Replicated:
+    /// TODO(DT-5): When DB replication lowering is implemented
+    /// (arts_add_db_duplicate), replicated distributions should use a
+    /// broadcast-aware task loop. Until then, use block lowering.
+    return detail::createBlockTaskLoopLowering();
   case DistributionKind::TwoLevel:
     return detail::createBlockTaskLoopLowering();
   case DistributionKind::BlockCyclic:
@@ -122,5 +127,5 @@ EdtTaskLoopLowering::create(DistributionKind kind) {
   case DistributionKind::Tiling2D:
     return detail::createTile2DTaskLoopLowering();
   }
-  return detail::createBlockTaskLoopLowering();
+  llvm_unreachable("unknown DistributionKind");
 }
