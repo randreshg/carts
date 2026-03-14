@@ -141,6 +141,7 @@ public:
   const AbstractMachine *getAbstractMachine() const { return abstractMachine; }
 
   /// Helper functions
+  Value createZeroValue(Type elemType, Location loc);
   Value createFnPtr(func::FuncOp funcOp, Location loc);
   Value createIndexConstant(int64_t value, Location loc);
   Value createIntConstant(int64_t value, Type type, Location loc);

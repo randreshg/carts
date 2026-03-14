@@ -34,6 +34,7 @@
 #include "arts/utils/abstract_machine/AbstractMachine.h"
 /// Debug
 
+#include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -563,6 +564,26 @@ void ArtsCodegen::registerDistributedInitWorkerCallback(func::FuncOp callback) {
 }
 
 /// Helpers
+
+/// Create a zero/identity value matching the provided element type.
+Value ArtsCodegen::createZeroValue(Type elemType, Location loc) {
+  if (!elemType)
+    return Value();
+
+  if (isa<IndexType>(elemType))
+    return createIndexConstant(0, loc);
+
+  if (auto intTy = dyn_cast<IntegerType>(elemType))
+    return create<arith::ConstantIntOp>(loc, 0, intTy.getWidth());
+
+  if (auto floatTy = dyn_cast<FloatType>(elemType)) {
+    llvm::APFloat zero = llvm::APFloat::getZero(floatTy.getFloatSemantics());
+    return create<arith::ConstantFloatOp>(loc, zero, floatTy);
+  }
+
+  return Value();
+}
+
 Value ArtsCodegen::createFnPtr(func::FuncOp funcOp, Location loc) {
   auto FT = funcOp.getFunctionType();
   auto LFT = LLVM::LLVMFunctionType::get(

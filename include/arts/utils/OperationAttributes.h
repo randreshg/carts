@@ -52,14 +52,6 @@ constexpr StringLiteral DepPatternAttr = "depPattern";
 constexpr StringLiteral DistributionVersion = "distribution_version";
 constexpr StringLiteral PatternRevision = "arts.pattern_revision";
 
-/// DbAllocOp attributes (TableGen-generated names)
-/// NOTE: These attributes use camelCase to match ODS-generated (TableGen)
-/// attribute storage names. All other attributes use snake_case.
-constexpr StringLiteral Mode = "mode";
-constexpr StringLiteral AllocType = "allocType";
-constexpr StringLiteral DbMode = "dbMode";
-constexpr StringLiteral ElementType = "elementType";
-
 /// DB storage-type inference annotations (set by DbModeTighteningPass)
 constexpr StringLiteral LocalOnly = "arts.local_only";
 constexpr StringLiteral ReadOnlyAfterInit = "arts.read_only_after_init";
@@ -86,18 +78,14 @@ constexpr StringLiteral EsdByteSize = "esd_byte_size";
 constexpr StringLiteral CachedStartBlock = "cached_start_block";
 constexpr StringLiteral CachedBlockCount = "cached_block_count";
 constexpr StringLiteral PostDbRefined = "post_db_refined";
-constexpr StringLiteral InferredDbMode = "inferred_db_mode";
 constexpr StringLiteral EstimatedTaskCost = "estimated_task_cost";
 constexpr StringLiteral CriticalPathDistance = "critical_path_distance";
 constexpr StringLiteral AffinityDb = "affinity_db";
 constexpr StringLiteral ReductionStrategy = "arts.reduction_strategy";
 constexpr StringLiteral NarrowableDep = "narrowable_dep";
 constexpr StringLiteral NarrowableHaloFootprint = "narrowable_halo_footprint";
+constexpr StringLiteral ContractKindKey = "contract_kind";
 } // namespace Contract
-
-/// EdtOp attributes (TableGen-generated names)
-constexpr StringLiteral Type = "type";
-constexpr StringLiteral Concurrency = "concurrency";
 
 } // namespace Operation
 
@@ -341,17 +329,6 @@ inline bool isLocalityOnly(Operation *op) {
   return op && op->hasAttr(AttrNames::Operation::LocalityOnly);
 }
 
-inline void setLocalityOnly(Operation *op, bool localityOnly = true) {
-  if (!op)
-    return;
-  if (!localityOnly) {
-    op->removeAttr(AttrNames::Operation::LocalityOnly);
-    return;
-  }
-  op->setAttr(AttrNames::Operation::LocalityOnly,
-              UnitAttr::get(op->getContext()));
-}
-
 inline void copyWorkerTopologyAttrs(Operation *from, Operation *to) {
   if (!to)
     return;
@@ -467,14 +444,6 @@ inline bool isUniformFamilyDepPattern(ArtsDepPattern pattern) {
   case ArtsDepPattern::higher_order_stencil:
     return false;
   }
-}
-
-inline bool isMatmulDepPattern(ArtsDepPattern pattern) {
-  return pattern == ArtsDepPattern::matmul;
-}
-
-inline bool isTriangularDepPattern(ArtsDepPattern pattern) {
-  return pattern == ArtsDepPattern::triangular;
 }
 
 inline std::optional<ArtsDepPattern> getEffectiveDepPattern(Operation *op) {
