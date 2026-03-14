@@ -29,17 +29,17 @@ critical to avoid duplication.
 
 | Pass | Stage | What It Does Today |
 | --- | --- | --- |
-| DbPass | db-opt (8), concurrency-opt (12) | Mode tightening: analyzes loads/stores per acquire, sets in/out/inout. Partial writes upgrade to inout. |
-| DbOptsPass | concurrency-opt (12) | Replaces task-private single-element scratch DBs with local allocas. Very narrow scope. |
+| DbModeTightening | db-opt (8), concurrency-opt (12) | Mode tightening: analyzes loads/stores per acquire, sets in/out/inout. Partial writes upgrade to inout. |
+| DbScratchEliminationPass | concurrency-opt (12) | Replaces task-private single-element scratch DBs with local allocas. Very narrow scope. |
 | DbPartitioning | concurrency-opt (12) | THE main DB optimizer. 3-phase heuristic-driven partition mode selection (coarse/block/stencil/fine-grained). Reads DbGraph + DbAnalysis + contracts. |
-| DistributedDbOwnership | concurrency-opt (12) | Marks eligible DbAllocOps with `distributed` UnitAttr for multi-node round-robin allocation. |
+| DbDistributedOwnership | concurrency-opt (12) | Marks eligible DbAllocOps with `distributed` UnitAttr for multi-node round-robin allocation. |
 | BlockLoopStripMining | concurrency-opt (12) | Transforms block-partitioned loops: creates outer block + inner element loops, eliminates O(N) div/rem to O(N/BS). |
 
 **EDT Passes:**
 
 | Pass | Stage | What It Does Today |
 | --- | --- | --- |
-| EdtPass | edt-transforms (6), edt-opt (9), concurrency-opt (12) | 7-stage EDT optimizer: alloca sinking, parallel EDT fusion, barrier removal, parallel-to-sync conversion, sync-to-epoch conversion, no-dep EDT inlining, graph-informed barrier removal. Runs 3+ times. |
+| EdtStructuralOptPass | edt-transforms (6), edt-opt (9), concurrency-opt (12) | 7-stage EDT optimizer: alloca sinking, parallel EDT fusion, barrier removal, parallel-to-sync conversion, sync-to-epoch conversion, no-dep EDT inlining, graph-informed barrier removal. Runs 3+ times. |
 | EpochOpt | concurrency-opt (12) | Epoch fusion (merge epochs with disjoint/read-only shared DBs) + worker loop fusion within epochs. |
 | EdtICM | edt-transforms (6) | Hoists loop-invariant pure operations out of EDT body loops. |
 | EdtPtrRematerialization | edt-transforms (6) | Clones pointer ops into EDT bodies for distributed execution. |
@@ -175,12 +175,12 @@ The runtime has many features the compiler never generates:
 These optimizations belong in existing passes because the pass already owns
 the relevant analysis and IR mutation.
 
-#### Extend DbPass (mode tightening)
+#### Extend DbModeTightening (mode tightening)
 
 | ID | What | Rationale |
 | --- | --- | --- |
-| EXT-DB-1 | **DB mode inference from access contracts.** After full partition/distribution analysis, refine DB allocation mode: read-only-after-write -> `ARTS_DB_READ` (enables routing table caching), local-only -> `ARTS_DB_PIN` (bypass distributed model), single-epoch lifetime -> `ARTS_DB_ONCE` (auto-free). | DbPass already does mode tightening. Adding richer mode selection is a natural extension. |
-| EXT-DB-2 | **Use computed `StencilBounds` in mode decisions.** If stencil bounds prove a DB is only accessed within a local neighborhood, the mode can be more restrictive. | DbPass already reads access patterns from DbGraph. |
+| EXT-DB-1 | **DB mode inference from access contracts.** After full partition/distribution analysis, refine DB allocation mode: read-only-after-write -> `ARTS_DB_READ` (enables routing table caching), local-only -> `ARTS_DB_PIN` (bypass distributed model), single-epoch lifetime -> `ARTS_DB_ONCE` (auto-free). | DbModeTightening already does mode tightening. Adding richer mode selection is a natural extension. |
+| EXT-DB-2 | **Use computed `StencilBounds` in mode decisions.** If stencil bounds prove a DB is only accessed within a local neighborhood, the mode can be more restrictive. | DbModeTightening already reads access patterns from DbGraph. |
 
 #### Extend DbPartitioning
 
@@ -192,19 +192,19 @@ the relevant analysis and IR mutation.
 | EXT-PART-4 | **Per-dimension block plan merge.** Replace global MIN-merge across candidates with per-dimension independent merge. | Fix in DbBlockPlanResolver.cpp:198-284. |
 | EXT-PART-5 | **Heuristic-to-contract feedback.** After partition decisions are final, write chosen blockShape, resolved ownerDims, and distributionVersion back into the contract. | Already in the right pass; just needs write-back. |
 
-#### Extend DistributedDbOwnership
+#### Extend DbDistributedOwnership
 
 | ID | What | Rationale |
 | --- | --- | --- |
 | EXT-DIST-1 | **Allow read-only stencil allocations if producer is distributed.** Currently rejected by eligibility criteria. | Relax existing conservative check. |
 | EXT-DIST-2 | **Writer-aware route selection.** Align DB ownership with known writer EDT location instead of round-robin. | Natural extension of the existing ownership analysis. |
 
-#### Extend EdtPass
+#### Extend EdtStructuralOptPass
 
 | ID | What | Rationale |
 | --- | --- | --- |
-| EXT-EDT-1 | **Complete `inlineNoDepEdts()`.** The function exists but is incomplete. Extend to inline trivial EDT bodies (< 20 ops, no inter-node deps). | EdtPass already has the scaffolding (Stage 6). |
-| EXT-EDT-2 | **Dead dependency elimination.** Walk each EDT body, remove unused dependency slots (acquire in `mode=in` never loaded). | EdtPass already does barrier removal using EdtGraph; dependency elimination is similar analysis. |
+| EXT-EDT-1 | **Complete `inlineNoDepEdts()`.** The function exists but is incomplete. Extend to inline trivial EDT bodies (< 20 ops, no inter-node deps). | EdtStructuralOptPass already has the scaffolding (Stage 6). |
+| EXT-EDT-2 | **Dead dependency elimination.** Walk each EDT body, remove unused dependency slots (acquire in `mode=in` never loaded). | EdtStructuralOptPass already does barrier removal using EdtGraph; dependency elimination is similar analysis. |
 
 #### Extend EpochOpt
 
@@ -219,7 +219,7 @@ pass owns. They go in new `DbTransforms` and `EdtTransforms` pass shells.
 
 #### New DbTransforms Pass
 
-Pipeline placement: after DbPartitioning + DistributedDbOwnership, before DbPass.
+Pipeline placement: after DbPartitioning + DbDistributedOwnership, before DbModeTightening.
 
 ```text
 include/arts/transforms/db/DbTransforms.h     -- base class + context
@@ -239,7 +239,7 @@ lib/arts/passes/opt/db/DbTransformsPass.cpp    -- pass shell
 
 #### New EdtTransforms Pass
 
-Pipeline placement: after DbTransforms, before DbPass.
+Pipeline placement: after DbTransforms, before DbModeTightening.
 
 ```text
 include/arts/transforms/edt/EdtTransforms.h     -- base class + context
@@ -263,7 +263,7 @@ lib/arts/passes/opt/edt/EdtTransformsPass.cpp    -- pass shell
 
 ```text
 Stage 12: concurrency-opt
-  EdtPass(runAnalysis=false)
+  EdtStructuralOptPass(runAnalysis=false)
   DCE, PolygeistCanonicalize, CSE
   EpochOpt                          [+ EXT-EPOCH-1: epoch scope narrowing]
   PolygeistCanonicalize, CSE
@@ -272,7 +272,7 @@ Stage 12: concurrency-opt
                                     [+ FIX-3: persist refinements]
                                     [+ FIX-6: standardize fallbacks]
                                     [+ EXT-PART-1..5: analysis extensions]
-  DistributedDbOwnership            [+ EXT-DIST-1..2: relaxed eligibility]
+  DbDistributedOwnership            [+ EXT-DIST-1..2: relaxed eligibility]
   ──────────────────────────────── NEW ────────────────────────────────
   DbTransforms                      [DT-1..7: contract refinement, ESD,
                                      GUID ranges, replication, atomics]
@@ -280,11 +280,11 @@ Stage 12: concurrency-opt
                                      dep narrowing, overlap, reduction,
                                      critical path, prefetch]
   ──────────────────────────────────────────────────────────────────────
-  DbPass                            [+ EXT-DB-1..2: richer mode inference]
-  DbOptsPass
+  DbModeTightening                            [+ EXT-DB-1..2: richer mode inference]
+  DbScratchElimination
   BlockLoopStripMining
   ArtsHoisting
-  EdtPass(runAnalysis=false)        [+ EXT-EDT-1..2: inlining + dead deps]
+  EdtStructuralOptPass(runAnalysis=false)        [+ EXT-EDT-1..2: inlining + dead deps]
   PolygeistCanonicalize, CSE
   EdtAllocaSinking, DCE, Mem2Reg
 ```
@@ -464,7 +464,7 @@ Validation    Contract validation pass (debug builds)
 | 13 | DbBlockPlanResolver.cpp:36-60 | 2D stencil halving | Medium |
 | 14 | ForLowering.cpp:167-168 | Full-extent stencil halo (ignores actual bounds) | Medium |
 | 15 | ForLowering.cpp:121-123 | Force coarse for BlockCyclic | Medium |
-| 16 | DistributedDbOwnership eligibility | Reject stencil read-only allocations | Medium |
+| 16 | DbDistributedOwnership eligibility | Reject stencil read-only allocations | Medium |
 | 17 | PartitioningHeuristics.cpp:308-320 | Min pinned dims (uneven requirements) | Low |
 | 18 | DbBlockPlanResolver.cpp:286-344 | Static contract shape (ignores dynamic sizes) | Low |
 | 19 | ForLowering.cpp:149-153 | Coarse for single-element arrays | Low |
