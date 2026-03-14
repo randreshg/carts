@@ -20,7 +20,9 @@ class Arts_I32Enum<string name, string description, list<I32EnumAttrCase> cases>
     : I32EnumAttr<name, description, cases> {
   let cppNamespace = "::mlir::arts";
   let genSpecializedAttr = 0;
-} class Arts_I32EnumAttr<string mnemonic, Arts_I32Enum enumInfo>
+}
+
+class Arts_I32EnumAttr<string mnemonic, Arts_I32Enum enumInfo>
     : EnumAttr<ArtsDialect, enumInfo, mnemonic> {
   let assemblyFormat = "`<` $value `>`";
 }
@@ -165,7 +167,8 @@ def EdtDistributionKind
       I32EnumAttrCase<"block", 0, "block">,
       I32EnumAttrCase<"two_level", 1, "two_level">,
       I32EnumAttrCase<"block_cyclic", 2, "block_cyclic">,
-      I32EnumAttrCase<"tiling_2d", 3, "tiling_2d">
+      I32EnumAttrCase<"tiling_2d", 3, "tiling_2d">,
+      I32EnumAttrCase<"replicated", 4, "replicated">
     ]>;
 def EdtDistributionKindAttr
     : Arts_I32EnumAttr<"distribution_kind", EdtDistributionKind>;
@@ -220,11 +223,11 @@ def WorkersAttr : AttrDef<ArtsDialect, "workers"> {
 /// Unit attribute to skip EDT verification during intermediate passes
 def NoVerifyAttr : AttrDef<ArtsDialect, "NoVerify"> {
   let summary = "Skip verification for partially formed EDT";
-  let description =
-      [{Marks an EDT that should skip verification
-            .This is used during ConvertOpenMPToArts before CreateDbPass
-                properly sets up dependencies and block
-                    arguments.The attribute is removed after CreateDbPass.}];
+  let description = [{
+    Marks an EDT that should skip verification. This is used during
+    ConvertOpenMPToArts before CreateDbPass properly sets up dependencies
+    and block arguments. The attribute is removed after CreateDbPass.
+  }];
   let mnemonic = "no_verify";
   let assemblyFormat = "";
 }
