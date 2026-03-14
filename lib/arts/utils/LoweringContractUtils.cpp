@@ -21,10 +21,6 @@ using namespace mlir::arts;
 
 namespace {
 
-static SmallVector<int64_t, 4> toSmallVector(ArrayRef<int64_t> values) {
-  return SmallVector<int64_t, 4>(values.begin(), values.end());
-}
-
 static SmallVector<Value, 4> materializeIndexValues(OpBuilder &builder,
                                                     Location loc,
                                                     ArrayRef<int64_t> values) {
@@ -73,15 +69,23 @@ LoweringContractInfo::getStaticMaxOffsets() const {
   return readConstantIndexValues(maxOffsets);
 }
 
-LoweringContractOp mlir::arts::getLoweringContractOp(Value target) {
+SmallVector<LoweringContractOp>
+mlir::arts::collectLoweringContractOps(Value target) {
+  SmallVector<LoweringContractOp> result;
   if (!target)
-    return nullptr;
-  for (Operation *user : target.getUsers()) {
-    auto contract = dyn_cast<LoweringContractOp>(user);
-    if (contract && contract.getTarget() == target)
-      return contract;
+    return result;
+  for (auto *user : target.getUsers()) {
+    if (auto contract = dyn_cast<LoweringContractOp>(user)) {
+      if (contract.getTarget() == target)
+        result.push_back(contract);
+    }
   }
-  return nullptr;
+  return result;
+}
+
+LoweringContractOp mlir::arts::getLoweringContractOp(Value target) {
+  auto contracts = collectLoweringContractOps(target);
+  return contracts.empty() ? nullptr : contracts.front();
 }
 
 std::optional<LoweringContractInfo>
@@ -100,9 +104,9 @@ mlir::arts::getLoweringContract(Value target) {
   if (auto version = contract.getDistributionVersion())
     info.distributionVersion = static_cast<int64_t>(*version);
   if (auto ownerDims = contract.getOwnerDims())
-    info.ownerDims = toSmallVector(*ownerDims);
+    info.ownerDims = SmallVector<int64_t, 4>(*ownerDims);
   if (auto spatialDims = contract.getSpatialDims())
-    info.spatialDims = toSmallVector(*spatialDims);
+    info.spatialDims = SmallVector<int64_t, 4>(*spatialDims);
   info.blockShape.assign(contract.getBlockShape().begin(),
                          contract.getBlockShape().end());
   info.minOffsets.assign(contract.getMinOffsets().begin(),
@@ -112,6 +116,23 @@ mlir::arts::getLoweringContract(Value target) {
   info.writeFootprint.assign(contract.getWriteFootprint().begin(),
                              contract.getWriteFootprint().end());
   info.supportedBlockHalo = contract.getSupportedBlockHalo().value_or(false);
+  if (auto stencilIndependentDims = contract.getStencilIndependentDims())
+    info.stencilIndependentDims = SmallVector<int64_t, 4>(*stencilIndependentDims);
+  if (auto esdByteOffset = contract.getEsdByteOffset())
+    info.esdByteOffset = static_cast<int64_t>(*esdByteOffset);
+  if (auto esdByteSize = contract.getEsdByteSize())
+    info.esdByteSize = static_cast<int64_t>(*esdByteSize);
+  if (auto cachedStartBlock = contract.getCachedStartBlock())
+    info.cachedStartBlock = static_cast<int64_t>(*cachedStartBlock);
+  if (auto cachedBlockCount = contract.getCachedBlockCount())
+    info.cachedBlockCount = static_cast<int64_t>(*cachedBlockCount);
+  info.postDbRefined = contract.getPostDbRefined().value_or(false);
+  if (auto inferredDbMode = contract.getInferredDbMode())
+    info.inferredDbMode = static_cast<int64_t>(*inferredDbMode);
+  if (auto estimatedTaskCost = contract.getEstimatedTaskCost())
+    info.estimatedTaskCost = static_cast<int64_t>(*estimatedTaskCost);
+  if (auto criticalPathDistance = contract.getCriticalPathDistance())
+    info.criticalPathDistance = static_cast<int64_t>(*criticalPathDistance);
   return info;
 }
 
@@ -225,6 +246,10 @@ bool mlir::arts::prefersContractNDBlock(const LoweringContractInfo &info,
   return true;
 }
 
+// TODO(REFACTOR): upsertLoweringContract forwards 20+ positional arguments
+// matching the builder. This is fragile -- any field ordering change between
+// LoweringContractInfo and build() will silently produce wrong results. Use a
+// struct-based builder overload.
 LoweringContractOp
 mlir::arts::upsertLoweringContract(OpBuilder &builder, Location loc,
                                    Value target,
@@ -232,11 +257,7 @@ mlir::arts::upsertLoweringContract(OpBuilder &builder, Location loc,
   if (!target || info.empty())
     return nullptr;
 
-  SmallVector<Operation *, 2> staleContracts;
-  for (Operation *user : target.getUsers())
-    if (auto contract = dyn_cast<LoweringContractOp>(user))
-      if (contract.getTarget() == target)
-        staleContracts.push_back(contract);
+  auto staleContracts = collectLoweringContractOps(target);
 
   auto contract = builder.create<LoweringContractOp>(
       loc, target, info.depPattern, info.distributionKind,
@@ -248,10 +269,15 @@ mlir::arts::upsertLoweringContract(OpBuilder &builder, Location loc,
       SmallVector<Value>(info.maxOffsets.begin(), info.maxOffsets.end()),
       SmallVector<Value>(info.writeFootprint.begin(),
                          info.writeFootprint.end()),
-      info.supportedBlockHalo);
+      info.supportedBlockHalo,
+      SmallVector<int64_t>(info.stencilIndependentDims.begin(),
+                           info.stencilIndependentDims.end()),
+      info.esdByteOffset, info.esdByteSize, info.cachedStartBlock,
+      info.cachedBlockCount, info.postDbRefined, info.inferredDbMode,
+      info.estimatedTaskCost, info.criticalPathDistance);
 
-  for (Operation *stale : staleContracts)
-    if (stale != contract.getOperation())
+  for (auto stale : staleContracts)
+    if (stale.getOperation() != contract.getOperation())
       stale->erase();
 
   return contract;
@@ -270,11 +296,6 @@ void mlir::arts::copyLoweringContract(Value source, Value target,
 void mlir::arts::eraseLoweringContracts(Value target) {
   if (!target)
     return;
-  SmallVector<Operation *, 2> contracts;
-  for (Operation *user : target.getUsers())
-    if (auto contract = dyn_cast<LoweringContractOp>(user))
-      if (contract.getTarget() == target)
-        contracts.push_back(contract);
-  for (Operation *contract : contracts)
+  for (auto contract : collectLoweringContractOps(target))
     contract->erase();
 }

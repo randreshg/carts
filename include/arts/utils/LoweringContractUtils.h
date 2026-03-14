@@ -25,11 +25,40 @@ struct LoweringContractInfo {
   SmallVector<Value, 4> writeFootprint;
   bool supportedBlockHalo = false;
 
+  // Dimension-aware stencil analysis (EXT-PART-1)
+  SmallVector<int64_t, 4> stencilIndependentDims;
+
+  // ESD annotation (DT-3)
+  std::optional<int64_t> esdByteOffset;
+  std::optional<int64_t> esdByteSize;
+
+  // Cached block window (DT-7)
+  std::optional<int64_t> cachedStartBlock;
+  std::optional<int64_t> cachedBlockCount;
+
+  // Post-DB refinement marker (DT-1)
+  bool postDbRefined = false;
+
+  // Inferred DB mode (EXT-DB-1)
+  std::optional<int64_t> inferredDbMode;
+
+  // Task cost estimate (ET-1)
+  std::optional<int64_t> estimatedTaskCost;
+
+  // Critical path distance (ET-6)
+  std::optional<int64_t> criticalPathDistance;
+
+  // TODO(QUALITY): LoweringContractInfo::empty() checks 15 conditions in a
+  // single expression. Every new field requires manual update or empty() will
+  // be wrong. Consider tracking a field count or using a hasAnyField flag.
   bool empty() const {
     return !depPattern && !distributionKind && !distributionPattern &&
            !distributionVersion && ownerDims.empty() && spatialDims.empty() &&
            blockShape.empty() && minOffsets.empty() && maxOffsets.empty() &&
-           writeFootprint.empty() && !supportedBlockHalo;
+           writeFootprint.empty() && !supportedBlockHalo &&
+           stencilIndependentDims.empty() && !esdByteOffset && !esdByteSize &&
+           !cachedStartBlock && !cachedBlockCount && !postDbRefined &&
+           !inferredDbMode && !estimatedTaskCost && !criticalPathDistance;
   }
 
   bool isStencilFamily() const;
@@ -48,6 +77,9 @@ struct AcquireRewriteContract {
   SmallVector<int64_t, 4> haloMinOffsets;
   SmallVector<int64_t, 4> haloMaxOffsets;
 };
+
+/// Collect all LoweringContractOps that target the given value.
+SmallVector<LoweringContractOp> collectLoweringContractOps(Value target);
 
 LoweringContractOp getLoweringContractOp(Value target);
 std::optional<LoweringContractInfo> getLoweringContract(Value target);
