@@ -342,6 +342,19 @@ private:
     Value stencilCenterLinear;
   };
 
+  /// DepDbAcquireOp addresses dependency storage through depv plus an explicit
+  /// baseOffset. RecordDep therefore iterates the local [0, size) window and
+  /// lets baseOffset select the correct slice in depv.
+  void rebaseDepIterationWindow(DepDbInfo &info, Location loc) const {
+    if (info.dbInfo.sizes.empty())
+      return;
+
+    info.dbInfo.offsets.clear();
+    info.dbInfo.offsets.reserve(info.dbInfo.sizes.size());
+    for (size_t i = 0; i < info.dbInfo.sizes.size(); ++i)
+      info.dbInfo.offsets.push_back(AC->createIndexConstant(0, loc));
+  }
+
   /// Extract DB lowering info and stencil metadata from a dbGuid's defining op.
   DepDbInfo extractDbInfoForDeps(Value dbGuid,
                                  std::optional<int32_t> acquireMode,
@@ -350,7 +363,6 @@ private:
 
     if (auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>()) {
       result.dbInfo = DbUtils::extractDbLoweringInfo(dbAcquireOp);
-
       /// Stencil writer acquires frequently cover [left, center, right] DB
       /// entries. Recording all entries as WRITE over-serializes adjacent
       /// blocks. Only apply the halo downgrade when stencil lowering
@@ -370,6 +382,7 @@ private:
       }
     } else if (auto depDbAcquireOp = dbGuid.getDefiningOp<DepDbAcquireOp>()) {
       result.dbInfo = DbUtils::extractDbLoweringInfo(depDbAcquireOp);
+      rebaseDepIterationWindow(result, loc);
       result.depStruct = depDbAcquireOp.getDepStruct();
       result.baseOffset = depDbAcquireOp.getOffset();
     } else {

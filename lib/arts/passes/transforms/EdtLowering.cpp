@@ -72,23 +72,39 @@ using namespace mlir::arts;
 namespace {
 
 static void normalizeTaskDependencySlice(ArtsCodegen *AC, DbAcquireOp acquire) {
-  if (!AC || !acquire || acquire.getMode() != ArtsMode::in)
+  if (!AC || !acquire)
     return;
 
   auto mode = acquire.getPartitionMode();
   if (!mode ||
       (*mode != PartitionMode::block && *mode != PartitionMode::stencil))
     return;
-  auto contractInfo = getLoweringContract(acquire.getPtr());
-  if (!contractInfo || !contractInfo->supportedBlockHalo)
-    return;
-  if (acquire.getPartitionOffsets().empty() ||
-      acquire.getPartitionSizes().empty())
+  /// For contract-backed block/stencil acquires, partition_* keeps the
+  /// authoritative task-local dependency window in element space. Lowering
+  /// must convert that window into DB-space consistently for both read and
+  /// write-capable acquires; otherwise depCount/rec_dep treat element windows
+  /// as datablock windows and explode dependency fan-in.
+  auto offsetRange = acquire.getPartitionOffsets();
+  auto sizeRange = acquire.getPartitionSizes();
+  if (offsetRange.empty() || sizeRange.empty()) {
+    offsetRange = acquire.getOffsets();
+    sizeRange = acquire.getSizes();
+  }
+  if (offsetRange.empty() || sizeRange.empty())
     return;
 
-  unsigned rank = std::min<unsigned>(acquire.getPartitionOffsets().size(),
-                                     acquire.getPartitionSizes().size());
+  unsigned rank =
+      std::min<unsigned>(offsetRange.size(), sizeRange.size());
   if (rank == 0)
+    return;
+
+  auto contractInfo = getLoweringContract(acquire.getPtr());
+  if (!contractInfo)
+    contractInfo = getSemanticContract(acquire.getOperation());
+  bool hasContractHalo = contractInfo && contractInfo->supportedBlockHalo;
+  bool needsStructuralNormalization =
+      rank > 1 || *mode == PartitionMode::stencil;
+  if (!hasContractHalo && !needsStructuralNormalization)
     return;
 
   auto alloc = dyn_cast_or_null<DbAllocOp>(
@@ -98,7 +114,14 @@ static void normalizeTaskDependencySlice(ArtsCodegen *AC, DbAcquireOp acquire) {
 
   auto outerSizes = alloc.getSizes();
   auto elementSizes = alloc.getElementSizes();
-  SmallVector<unsigned, 4> dims = resolveContractOwnerDims(*contractInfo, rank);
+  SmallVector<unsigned, 4> dims;
+  if (contractInfo) {
+    dims = resolveContractOwnerDims(*contractInfo, rank);
+  } else {
+    dims.reserve(rank);
+    for (unsigned dim = 0; dim < rank; ++dim)
+      dims.push_back(dim);
+  }
 
   if (dims.size() > outerSizes.size() || dims.size() > elementSizes.size())
     return;
@@ -116,9 +139,8 @@ static void normalizeTaskDependencySlice(ArtsCodegen *AC, DbAcquireOp acquire) {
 
   for (unsigned i = 0; i < dims.size(); ++i) {
     unsigned ownerDim = dims[i];
-    Value elementOffset =
-        AC->castToIndex(acquire.getPartitionOffsets()[i], loc);
-    Value elementSize = AC->castToIndex(acquire.getPartitionSizes()[i], loc);
+    Value elementOffset = AC->castToIndex(offsetRange[i], loc);
+    Value elementSize = AC->castToIndex(sizeRange[i], loc);
     Value blockSpan = AC->castToIndex(elementSizes[ownerDim], loc);
     Value totalBlocks = AC->castToIndex(outerSizes[ownerDim], loc);
 
@@ -919,6 +941,12 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         DbUtils::getDependencyOffsetsFromDb(originalDeps[depIndex]), loc);
     SmallVector<Value> depStrides = AC->computeStridesFromSizes(depSizes, loc);
 
+    auto originalAcquire = originalDeps[depIndex].getDefiningOp<DbAcquireOp>();
+    const bool indicesAlreadySliceRelative =
+        originalAcquire && originalAcquire.getPartitionMode() &&
+        (*originalAcquire.getPartitionMode() == PartitionMode::block ||
+         *originalAcquire.getPartitionMode() == PartitionMode::stencil);
+
     /// Replace remaining uses of the dependency placeholder with the dependency
     bool isSingleElement = DbUtils::hasSingleSize(
         originalDeps[depIndex].getDefiningOp<DbAcquireOp>());
@@ -930,7 +958,7 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
       Value zero = AC->createIndexConstant(0, loc);
       for (size_t i = 0; i < indices.size(); ++i) {
         Value idx = indices[i];
-        if (i < depOffsets.size()) {
+        if (!indicesAlreadySliceRelative && i < depOffsets.size()) {
           Value off = depOffsets[i];
           if (off.getType() != idx.getType())
             off = AC->castToInt(idx.getType(), off, loc);
@@ -1028,6 +1056,8 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         AC->setInsertionPoint(op);
         SmallVector<Value> dbGepIndices(dbGep.getIndices().begin(),
                                         dbGep.getIndices().end());
+        dbGepIndices = resolveParam(dbGepIndices, dbGep.getLoc());
+        dbGepIndices = normalizeSliceIndices(dbGepIndices);
         auto depGep =
             AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
                                  baseOffset, dbGepIndices, depStrides);
@@ -1037,6 +1067,8 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         AC->setInsertionPoint(op);
         SmallVector<Value> refIndices(dbRef.getIndices().begin(),
                                       dbRef.getIndices().end());
+        refIndices = resolveParam(refIndices, dbRef.getLoc());
+        refIndices = normalizeSliceIndices(refIndices);
         auto depGep = AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
                                            baseOffset, refIndices, depStrides);
         auto newMemref = AC->create<polygeist::Pointer2MemrefOp>(
@@ -1047,6 +1079,8 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         AC->setInsertionPoint(op);
         SmallVector<Value> storeIndices(store.getIndices().begin(),
                                         store.getIndices().end());
+        storeIndices = resolveParam(storeIndices, store.getLoc());
+        storeIndices = normalizeSliceIndices(storeIndices);
         auto depGep =
             AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
                                  baseOffset, storeIndices, depStrides);
@@ -1056,6 +1090,8 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         AC->setInsertionPoint(op);
         SmallVector<Value> loadIndices(load.getIndices().begin(),
                                        load.getIndices().end());
+        loadIndices = resolveParam(loadIndices, load.getLoc());
+        loadIndices = normalizeSliceIndices(loadIndices);
         auto depGep = AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
                                            baseOffset, loadIndices, depStrides);
         Value loaded =

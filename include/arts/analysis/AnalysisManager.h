@@ -81,6 +81,7 @@ public:
 
   /// Export analysis objects and graphs to JSON
   void exportToJson(llvm::raw_ostream &os, bool includeAnalysis = false);
+  bool hasCapturedDiagnostics() const { return cachedDiagnosticJson.has_value(); }
 
   /// Metadata coverage data
   struct MetadataCoverage {

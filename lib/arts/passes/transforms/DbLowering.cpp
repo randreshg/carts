@@ -63,8 +63,11 @@ static void normalizeBlockHaloAcquireSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   auto contractInfo = getLoweringContract(acquire.getPtr());
   if (!contractInfo || !contractInfo->supportedBlockHalo)
     return;
-  if (acquire.getPartitionOffsets().empty() ||
-      acquire.getPartitionSizes().empty())
+
+  /// Upstream passes already encode the dependency window in DB-space on the
+  /// acquire itself. Recomputing it here from partition hints would
+  /// double-convert block windows for stencil-family reads.
+  if (!acquire.getOffsets().empty() && !acquire.getSizes().empty())
     return;
 
   auto alloc =
@@ -74,6 +77,19 @@ static void normalizeBlockHaloAcquireSlice(ArtsCodegen *AC, DbAcquireOp acquire,
 
   unsigned rank = std::min<unsigned>(acquire.getPartitionOffsets().size(),
                                      acquire.getPartitionSizes().size());
+  if (rank == 0)
+    return;
+
+  AcquireRewriteContract rewriteContract = deriveAcquireRewriteContract(acquire);
+  bool usePartitionSlice = rewriteContract.usePartitionSliceAsDependencyWindow;
+  auto offsetRange = usePartitionSlice ? acquire.getPartitionOffsets()
+                                       : acquire.getOffsets();
+  auto sizeRange =
+      usePartitionSlice ? acquire.getPartitionSizes() : acquire.getSizes();
+  if (offsetRange.empty() || sizeRange.empty())
+    return;
+
+  rank = std::min<unsigned>(offsetRange.size(), sizeRange.size());
   if (rank == 0)
     return;
 
@@ -97,9 +113,8 @@ static void normalizeBlockHaloAcquireSlice(ArtsCodegen *AC, DbAcquireOp acquire,
 
   for (unsigned i = 0; i < dims.size(); ++i) {
     unsigned dim = dims[i];
-    Value elementOffset =
-        AC->castToIndex(acquire.getPartitionOffsets()[i], loc);
-    Value elementSize = AC->castToIndex(acquire.getPartitionSizes()[i], loc);
+    Value elementOffset = AC->castToIndex(offsetRange[i], loc);
+    Value elementSize = AC->castToIndex(sizeRange[i], loc);
     Value blockSpan = AC->castToIndex(elementSizes[dim], loc);
     Value totalBlocks = AC->castToIndex(outerSizes[dim], loc);
 

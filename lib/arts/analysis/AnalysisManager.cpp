@@ -171,11 +171,6 @@ void AnalysisManager::print(llvm::raw_ostream &os) {
   }
 }
 
-/// TODO(PERF): captureDiagnostics serializes graphs to JSON strings then parses
-/// them back. Add exportToJsonValue() methods on graph classes to avoid the
-/// roundtrip.
-/// TODO(PERF): captureDiagnostics iterates module functions 3 times. Merge into
-/// a single pass.
 void AnalysisManager::captureDiagnostics() {
   using namespace llvm::json;
 
@@ -187,14 +182,6 @@ void AnalysisManager::captureDiagnostics() {
   /// Program information
   Object program;
   program["name"] = module.getName() ? module.getName()->str() : "unnamed";
-  /// Try to get source file from first function's location
-  for (auto func : module.getOps<func::FuncOp>()) {
-    auto loc = func.getLoc();
-    if (auto fileLoc = dyn_cast<FileLineColLoc>(loc)) {
-      program["source_file"] = fileLoc.getFilename().str();
-      break;
-    }
-  }
   root["program"] = std::move(program);
 
   /// Machine configuration (expanded)
@@ -220,46 +207,30 @@ void AnalysisManager::captureDiagnostics() {
 
   /// Unified entities array
   Array entities;
+  DenseMap<Operation *, int64_t> loopToEdtMap;
+  auto &idRegistry = getMetadataManager().getIdRegistry();
+  bool capturedSourceFile = false;
 
-  /// Collect EDTs from all functions (entity_type = "edt")
   for (auto func : module.getOps<func::FuncOp>()) {
-    std::string edtJsonStr;
-    llvm::raw_string_ostream edtStream(edtJsonStr);
-    getEdtAnalysis().getOrCreateEdtGraph(func).exportToJson(edtStream, /*includeAnalysis=*/true);
+    if (!capturedSourceFile) {
+      if (auto fileLoc = dyn_cast<FileLineColLoc>(func.getLoc())) {
+        root["program"].getAsObject()->operator[]("source_file") =
+            fileLoc.getFilename().str();
+        capturedSourceFile = true;
+      }
+    }
 
-    auto edtArray = llvm::json::parse(edtJsonStr);
-    if (edtArray && edtArray->getAsArray()) {
-      for (auto &edt : *edtArray->getAsArray()) {
+    auto &edtGraph = getEdtAnalysis().getOrCreateEdtGraph(func);
+    llvm::json::Value edtEntitiesValue =
+        edtGraph.exportToJsonValue(/*includeAnalysis=*/true);
+    if (auto *edtArray = edtEntitiesValue.getAsArray()) {
+      for (auto &edt : *edtArray) {
         if (auto *obj = edt.getAsObject()) {
           (*obj)["entity_type"] = "edt";
           entities.push_back(std::move(edt));
         }
       }
     }
-  }
-
-  /// Collect DBs from all functions (entity_type = "db")
-  for (auto func : module.getOps<func::FuncOp>()) {
-    std::string dbJsonStr;
-    llvm::raw_string_ostream dbStream(dbJsonStr);
-    getDbAnalysis().getOrCreateGraph(func).exportToJson(dbStream, /*includeAnalysis=*/true);
-
-    auto dbArray = llvm::json::parse(dbJsonStr);
-    if (dbArray && dbArray->getAsArray()) {
-      for (auto &db : *dbArray->getAsArray()) {
-        if (auto *obj = db.getAsObject()) {
-          (*obj)["entity_type"] = "db";
-          entities.push_back(std::move(db));
-        }
-      }
-    }
-  }
-
-  /// Build reverse mapping: loop Operation* → containing EDT arts_id
-  DenseMap<Operation *, int64_t> loopToEdtMap;
-  auto &idRegistry = getMetadataManager().getIdRegistry();
-  for (auto func : module.getOps<func::FuncOp>()) {
-    auto &edtGraph = getEdtAnalysis().getOrCreateEdtGraph(func);
     edtGraph.forEachNode([&](NodeBase *node) {
       auto *edtNode = dyn_cast<EdtNode>(node);
       if (!edtNode)
@@ -271,6 +242,18 @@ void AnalysisManager::captureDiagnostics() {
         loopToEdtMap[loop->getOp()] = edtId;
       }
     });
+
+    auto &dbGraph = getDbAnalysis().getOrCreateGraph(func);
+    llvm::json::Value dbEntitiesValue =
+        dbGraph.exportToJsonValue(/*includeAnalysis=*/true);
+    if (auto *dbArray = dbEntitiesValue.getAsArray()) {
+      for (auto &db : *dbArray) {
+        if (auto *obj = db.getAsObject()) {
+          (*obj)["entity_type"] = "db";
+          entities.push_back(std::move(db));
+        }
+      }
+    }
   }
 
   /// Collect loops from MetadataManager (entity_type = "loop")
@@ -311,7 +294,6 @@ void AnalysisManager::captureDiagnostics() {
 
     /// Loop reordering legality (for ArtsMate to know if hint is safe)
     loop["reorder_legal"] = !meta->reorderNestTo.empty();
-    loop["was_reordered"] = false; /// TODO: Track if reordering was applied
 
     entities.push_back(std::move(loop));
   }
@@ -382,6 +364,15 @@ void AnalysisManager::exportToJson(llvm::raw_ostream &os,
       functions.push_back(std::move(funcObj));
     }
     root["functions"] = std::move(functions);
+
+    if (metadataCoverage.hasData) {
+      Object coverage;
+      coverage["loops_analyzed"] = metadataCoverage.loopsAnalyzed;
+      coverage["loops_total"] = metadataCoverage.loopsTotal;
+      coverage["memrefs_analyzed"] = metadataCoverage.memrefsAnalyzed;
+      coverage["memrefs_total"] = metadataCoverage.memrefsTotal;
+      root["metadata_coverage"] = std::move(coverage);
+    }
     os << llvm::json::Value(std::move(root)) << "\n";
     return;
   }

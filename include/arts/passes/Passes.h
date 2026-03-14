@@ -25,17 +25,24 @@ class DominanceInfo;
 namespace arts {
 class AnalysisManager;
 class AbstractMachine;
-// TODO(DOCS): create*Pass factory functions lack documentation comments. Add
-// brief /// doc comments mirroring the summary from Passes.td.
+
+/// General IR cleanup and canonicalization passes.
 std::unique_ptr<Pass> createArtsInlinerPass();
+/// Collect source-level loop/memref metadata used by later analyses.
 std::unique_ptr<Pass> createCollectMetadataPass();
 std::unique_ptr<Pass> createCollectMetadataPass(bool exportMetadata,
                                                 llvm::StringRef metadataFile);
+/// Normalize nested memref patterns into the canonical CARTS form.
 std::unique_ptr<Pass> createCanonicalizeMemrefsPass();
+/// Lower OpenMP regions into high-level ARTS dialect operations.
 std::unique_ptr<Pass> createConvertOpenMPtoArtsPass();
+/// Discover or refine semantic pattern contracts before DB creation.
 std::unique_ptr<Pass> createPatternDiscoveryPass(AnalysisManager *AM,
                                                  bool refine = false);
+/// Eliminate dead ARTS operations and dead helper IR.
 std::unique_ptr<Pass> createDCEPass();
+
+/// EDT and loop-structure transformation passes.
 std::unique_ptr<Pass> createEdtStructuralOptPass(AnalysisManager *AM, bool runAnalysis);
 std::unique_ptr<Pass> createConcurrencyPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createCreateDbsPass(AnalysisManager *AM);
@@ -45,6 +52,8 @@ std::unique_ptr<Pass> createDbPartitioningPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createDbDistributedOwnershipPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createDbTransformsPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createCreateEpochsPass();
+
+/// Lower ARTS dialect operations into LLVM-ready IR.
 std::unique_ptr<Pass> createConvertArtsToLLVMPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug);
 std::unique_ptr<Pass>
@@ -52,6 +61,8 @@ createConvertArtsToLLVMPass(bool debug, bool distributedInitPerWorker);
 std::unique_ptr<Pass>
 createConvertArtsToLLVMPass(bool debug, bool distributedInitPerWorker,
                             const AbstractMachine *machine);
+
+/// EDT-local cleanup and codegen-preparation passes.
 std::unique_ptr<Pass> createEdtICMPass();
 std::unique_ptr<Pass> createEdtAllocaSinkingPass();
 std::unique_ptr<Pass> createDataPtrHoistingPass();
@@ -63,6 +74,8 @@ std::unique_ptr<Pass> createDbLoweringPass(uint64_t idStride = 1000);
 std::unique_ptr<Pass> createEpochLoweringPass();
 std::unique_ptr<Pass> createParallelEdtLoweringPass();
 std::unique_ptr<Pass> createEdtLoweringPass(uint64_t idStride = 1000);
+
+/// High-level scheduling and distribution passes.
 std::unique_ptr<Pass> createForOptPass(AnalysisManager *AM);
 std::unique_ptr<Pass>
 createDistributedHostLoopOutliningPass(AnalysisManager *AM);
@@ -73,6 +86,8 @@ std::unique_ptr<Pass> createLoopFusionPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createEpochOptPass();
 std::unique_ptr<Pass> createHoistingPass();
 std::unique_ptr<Pass> createBlockLoopStripMiningPass();
+
+/// Semantic pattern family passes.
 std::unique_ptr<Pass> createDepTransformsPass();
 std::unique_ptr<Pass> createStencilBoundaryPeelingPass();
 std::unique_ptr<Pass> createLoopNormalizationPass(AnalysisManager *AM);
@@ -83,6 +98,8 @@ createKernelTransformsPass(AnalysisManager *AM,
                            bool enableMatmul = true, bool enableTiling = true,
                            int64_t tileJ = 64, int64_t minTripCount = 128);
 std::unique_ptr<Pass> createEdtTransformsPass(AnalysisManager *AM);
+
+/// Validation passes for metadata and lowering contracts.
 std::unique_ptr<Pass> createVerifyMetadataPass(AnalysisManager *AM,
                                                bool failOnMissing = false);
 std::unique_ptr<Pass> createContractValidationPass(bool failOnError = false);

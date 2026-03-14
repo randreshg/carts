@@ -87,8 +87,10 @@ using namespace mlir::arts;
 
 namespace {
 
-static SmallVector<DbAcquireNode *, 16>
-collectAcquireNodesForAlloc(DbAllocNode *allocNode);
+static bool hasExplicitStencilContract(
+    const DbAnalysis::AcquireContractSummary *summary) {
+  return summary && summary->contract.hasExplicitStencilContract();
+}
 
 /// Validate that element-wise partition indices match actual EDT accesses.
 /// Returns false if this is a block-wise pattern (indices are block corners,
@@ -100,32 +102,27 @@ collectAcquireNodesForAlloc(DbAllocNode *allocNode);
 /// 3. OR partition indices don't appear in EDT body accesses
 static bool
 validateElementWiseIndices(ArrayRef<AcquirePartitionInfo> acquireInfos,
-                           DbAllocNode *allocNode) {
+                           ArrayRef<DbAcquireNode *> allocAcquireNodes) {
+  DenseMap<DbAcquireOp, DbAcquireNode *> acquireNodeMap;
+  acquireNodeMap.reserve(allocAcquireNodes.size());
+  for (DbAcquireNode *acqNode : allocAcquireNodes) {
+    if (!acqNode)
+      continue;
+    DbAcquireOp acquire = acqNode->getDbAcquireOp();
+    if (acquire)
+      acquireNodeMap[acquire] = acqNode;
+  }
+
   for (const auto &info : acquireInfos) {
     DbAcquireOp acquire = info.acquire;
     auto partitionIndices = acquire.getPartitionIndices();
     if (partitionIndices.empty())
       continue;
 
-    /// Use DbAcquireNode's validation method for the actual check
-    /// TODO(PERF): When findAcquireNode returns null, collectAcquireNodesForAlloc
-    /// is called as a linear fallback inside a loop over acquireInfos, resulting
-    /// in O(N^2) worst case. Pass the already-collected allocAcquireNodes array
-    /// into validateElementWiseIndices.
-    if (allocNode) {
-      auto *acqNode = allocNode->findAcquireNode(acquire);
-      if (!acqNode) {
-        for (DbAcquireNode *candidate :
-             collectAcquireNodesForAlloc(allocNode)) {
-          if (candidate && candidate->getDbAcquireOp() == acquire) {
-            acqNode = candidate;
-            break;
-          }
-        }
-      }
-      if (acqNode && !acqNode->validateElementWisePartitioning())
-        return false;
-    }
+    auto it = acquireNodeMap.find(acquire);
+    if (it != acquireNodeMap.end() &&
+        !it->second->validateElementWisePartitioning())
+      return false;
   }
   return true; /// Valid element-wise
 }
@@ -166,38 +163,6 @@ getPartitionOffsetsND(DbAcquireNode *acqNode,
     result.push_back(offset);
 
   return result;
-}
-
-/// TODO(REUSE): collectAcquireNodesRecursive / collectAcquireNodesForAlloc
-/// duplicate the templatized collectAcquireNodesRecursive in DbAllocNode.cpp
-/// (line ~31). Expose DbAllocNode::collectAllAcquireNodes() as a public method
-/// and remove these local copies.
-static void
-collectAcquireNodesRecursive(DbAcquireNode *acqNode,
-                             SmallVectorImpl<DbAcquireNode *> &out) {
-  if (!acqNode)
-    return;
-  out.push_back(acqNode);
-  acqNode->forEachChildNode([&](NodeBase *child) {
-    auto *nested = dyn_cast<DbAcquireNode>(child);
-    if (!nested)
-      return;
-    collectAcquireNodesRecursive(nested, out);
-  });
-}
-
-static SmallVector<DbAcquireNode *, 16>
-collectAcquireNodesForAlloc(DbAllocNode *allocNode) {
-  SmallVector<DbAcquireNode *, 16> allAcquireNodes;
-  if (!allocNode)
-    return allAcquireNodes;
-  allocNode->forEachChildNode([&](NodeBase *child) {
-    auto *acqNode = dyn_cast<DbAcquireNode>(child);
-    if (!acqNode)
-      return;
-    collectAcquireNodesRecursive(acqNode, allAcquireNodes);
-  });
-  return allAcquireNodes;
 }
 
 static bool hasInternodeAcquireUser(ArrayRef<DbAcquireNode *> acquireNodes) {
@@ -244,7 +209,7 @@ summarizeAcquirePatterns(ArrayRef<DbAcquireNode *> acquireNodes,
 
     if (contractSummary->hasIndirectAccess)
       summary.hasIndexed = true;
-    if (contractSummary->usesStencilSemantics())
+    if (hasExplicitStencilContract(&*contractSummary))
       summary.hasStencil = true;
     if (contractSummary->usesMatmulSemantics())
       summary.hasUniform = true;
@@ -278,7 +243,7 @@ static AccessPattern getCanonicalAccessPattern(
     return summary->accessPattern;
   }
   // 2. Contract stencil inference (summary present but accessPattern is Unknown)
-  if (summary && summary->usesStencilSemantics()) {
+  if (hasExplicitStencilContract(summary)) {
     ARTS_DEBUG("    [canonical-access] resolved from contract stencil semantics");
     return AccessPattern::Stencil;
   }
@@ -498,9 +463,6 @@ static bool isLowerBoundGuaranteedByControlFlow(Operation *op, Value loopIV) {
   return false;
 }
 
-/// TODO(PERF): applyBoundsValid has two loops over boundsCheckFlags that create
-/// duplicate CmpIOp (geZero) IR operations. Merge into a single loop or cache
-/// the comparison.
 static void applyBoundsValid(DbAcquireOp acquireOp,
                              ArrayRef<int64_t> boundsCheckFlags, Value loopIV) {
   if (acquireOp.hasMultiplePartitionEntries()) {
@@ -518,19 +480,20 @@ static void applyBoundsValid(DbAcquireOp acquireOp,
 
   Value zero = arts::createZeroIndex(builder, loc);
   Value boundsValid;
+  SmallVector<Value> indicesVec(indices.begin(), indices.end());
   for (size_t i = 0; i < boundsCheckFlags.size() && i < indices.size(); ++i) {
     if (boundsCheckFlags[i] == 0 || i >= sourceSizes.size())
       continue;
 
     Value idx = indices[i];
     Value size = sourceSizes[i];
+    Value geZero = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge,
+                                                 idx, zero);
     Value dimValid;
     if (lowerBoundGuarded) {
       dimValid = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
                                                idx, size);
     } else {
-      Value geZero = builder.create<arith::CmpIOp>(
-          loc, arith::CmpIPredicate::sge, idx, zero);
       Value ltSize = builder.create<arith::CmpIOp>(
           loc, arith::CmpIPredicate::slt, idx, size);
       dimValid = builder.create<arith::AndIOp>(loc, geZero, ltSize);
@@ -538,21 +501,7 @@ static void applyBoundsValid(DbAcquireOp acquireOp,
     boundsValid =
         boundsValid ? builder.create<arith::AndIOp>(loc, boundsValid, dimValid)
                     : dimValid;
-  }
 
-  if (!boundsValid)
-    return;
-
-  SmallVector<Value> indicesVec(indices.begin(), indices.end());
-  for (size_t i = 0; i < boundsCheckFlags.size() && i < indicesVec.size();
-       ++i) {
-    if (boundsCheckFlags[i] == 0 || i >= sourceSizes.size())
-      continue;
-
-    Value idx = indicesVec[i];
-    Value size = sourceSizes[i];
-    Value geZero = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge,
-                                                 idx, zero);
     Value nonNegative = builder.create<arith::SelectOp>(loc, geZero, idx, zero);
     Value one = arts::createOneIndex(builder, loc);
     Value hasExtent = builder.create<arith::CmpIOp>(
@@ -562,6 +511,9 @@ static void applyBoundsValid(DbAcquireOp acquireOp,
         builder.create<arith::SelectOp>(loc, hasExtent, lastIdxRaw, zero);
     indicesVec[i] = builder.create<arith::MinUIOp>(loc, nonNegative, lastIdx);
   }
+
+  if (!boundsValid)
+    return;
 
   SmallVector<Value> offsetsVec(acquireOp.getOffsets().begin(),
                                 acquireOp.getOffsets().end());
@@ -664,6 +616,33 @@ computeAcquirePartitionInfo(DbAcquireOp acquire, DbAcquireNode *acqNode,
   info.preservesDependencyMode =
       static_cast<bool>(acquire.getPreserveAccessMode());
 
+  if (summary && summary->contract.supportsBlockHalo() &&
+      !summary->contract.ownerDims.empty()) {
+    unsigned contractRank = 0;
+    for (int64_t dim : summary->contract.ownerDims) {
+      if (dim >= 0)
+        contractRank = std::max<unsigned>(contractRank,
+                                          static_cast<unsigned>(dim) + 1);
+    }
+    if (contractRank == 0)
+      contractRank = static_cast<unsigned>(summary->contract.ownerDims.size());
+
+    SmallVector<unsigned, 4> contractDims =
+        resolveContractOwnerDims(summary->contract, contractRank);
+    if (!contractDims.empty()) {
+      if (!info.partitionOffsets.empty() &&
+          contractDims.size() > info.partitionOffsets.size())
+        contractDims.resize(info.partitionOffsets.size());
+      info.partitionDims.assign(contractDims.begin(), contractDims.end());
+    }
+
+    if (info.mode == PartitionMode::coarse &&
+        (summary->hasBlockHints || summary->inferredBlock)) {
+      info.mode = summary->contract.isStencilFamily() ? PartitionMode::stencil
+                                                      : PartitionMode::block;
+    }
+  }
+
   return info;
 }
 
@@ -681,7 +660,7 @@ static void resetCoarseAcquireRanges(DbAllocOp allocOp, DbAllocNode *allocNode,
   }
 
   SmallVector<DbAcquireNode *, 16> acquireNodes =
-      collectAcquireNodesForAlloc(allocNode);
+      allocNode->collectAllAcquireNodes();
   for (DbAcquireNode *acqNode : acquireNodes) {
     DbAcquireOp acqOp = acqNode->getDbAcquireOp();
     if (!acqOp)
@@ -730,12 +709,17 @@ static bool feedbackPartitionDecisionToContract(
     info = *existing;
 
   /// Populate resolved block shape from the block-plan resolver output.
-  if (!blockSizes.empty()) {
+  if (!blockSizes.empty() &&
+      (info.ownerDims.empty() || blockSizes.size() == info.ownerDims.size())) {
     info.blockShape.assign(blockSizes.begin(), blockSizes.end());
   }
 
-  /// Populate ownerDims from the resolved partitioned dimensions.
-  if (!partitionedDims.empty()) {
+  /// Populate ownerDims from the resolved partitioned dimensions only when the
+  /// contract does not already carry an explicit higher-rank semantic owner
+  /// shape. For stencil families, ownerDims describe the semantic footprint
+  /// rank and must not be collapsed to a narrower layout choice here.
+  if (!partitionedDims.empty() &&
+      (!info.hasExplicitStencilContract() || info.ownerDims.empty())) {
     info.ownerDims.clear();
     info.ownerDims.reserve(partitionedDims.size());
     for (unsigned dim : partitionedDims)
@@ -750,6 +734,11 @@ static bool feedbackPartitionDecisionToContract(
   /// Mark as post-DB refined so consumers can distinguish contracts that
   /// survived partitioning from pre-partitioning seeds.
   info.postDbRefined = true;
+
+  /// Partitioning may learn a narrower layout than the semantic owner-dim
+  /// footprint carried by stencil contracts. Drop any ranked payload that no
+  /// longer matches the semantic rank before materializing the contract.
+  normalizeLoweringContractInfo(info);
 
   /// Guard: if the enriched contract is empty (no meaningful data), skip.
   if (info.empty())
@@ -841,32 +830,7 @@ void DbPartitioningPass::runOnOperation() {
   ARTS_DEBUG_REGION(module.dump(););
 }
 
-/// TODO(REUSE): findEdtUse and EdtAcquireUse duplicate
-/// EdtUtils::getEdtBlockArgumentForAcquire(). Replace with the existing utility.
 namespace {
-struct EdtAcquireUse {
-  EdtOp edt = nullptr;
-  BlockArgument blockArg;
-};
-
-static EdtAcquireUse findEdtUse(DbAcquireOp acquire) {
-  EdtAcquireUse use;
-  for (Operation *user : acquire.getPtr().getUsers()) {
-    auto edtOp = dyn_cast<EdtOp>(user);
-    if (!edtOp)
-      continue;
-    use.edt = edtOp;
-    for (auto [idx, dep] : llvm::enumerate(edtOp.getDependencies())) {
-      if (dep == acquire.getPtr()) {
-        use.blockArg = edtOp.getBody().front().getArgument(idx);
-        break;
-      }
-    }
-    break;
-  }
-  return use;
-}
-
 static SmallVector<DbAcquireOp> createExpandedAcquires(DbAcquireOp original,
                                                        OpBuilder &builder) {
   SmallVector<DbAcquireOp> expanded;
@@ -961,19 +925,16 @@ static SmallVector<DbRefOp> collectDbRefUsers(BlockArgument arg) {
   return refs;
 }
 
-/// TODO(PERF): collectAccessIndices eagerly collects all reachable memory ops
-/// via DbUtils::collectReachableMemoryOps but returns on the first non-empty
-/// indices result. Use walk-with-early-termination instead.
 static SmallVector<Value> collectAccessIndices(DbRefOp dbRef) {
-  SetVector<Operation *> memOps;
-  DbUtils::collectReachableMemoryOps(dbRef.getResult(), memOps,
-                                     dbRef->getParentRegion());
-  for (Operation *memOp : memOps) {
-    SmallVector<Value> indices = DbUtils::getMemoryAccessIndices(memOp);
-    if (!indices.empty())
-      return indices;
-  }
-  return {};
+  SmallVector<Value> indices;
+  DbUtils::forEachReachableMemoryAccess(
+      dbRef.getResult(),
+      [&](const DbUtils::MemoryAccessInfo &access) {
+        indices = access.indices;
+        return indices.empty() ? WalkResult::advance() : WalkResult::interrupt();
+      },
+      dbRef->getParentRegion());
+  return indices;
 }
 
 static SmallVector<Value> collectAccessIndicesFromUser(Operation *refUser) {
@@ -984,14 +945,17 @@ static SmallVector<Value> collectAccessIndicesFromUser(Operation *refUser) {
   for (Value result : refUser->getResults()) {
     if (!isa<MemRefType>(result.getType()))
       continue;
-    SetVector<Operation *> memOps;
-    DbUtils::collectReachableMemoryOps(result, memOps,
-                                       refUser->getParentRegion());
-    for (Operation *memOp : memOps) {
-      SmallVector<Value> indices = DbUtils::getMemoryAccessIndices(memOp);
-      if (!indices.empty())
-        return indices;
-    }
+    SmallVector<Value> indices;
+    DbUtils::forEachReachableMemoryAccess(
+        result,
+        [&](const DbUtils::MemoryAccessInfo &access) {
+          indices = access.indices;
+          return indices.empty() ? WalkResult::advance()
+                                 : WalkResult::interrupt();
+        },
+        refUser->getParentRegion());
+    if (!indices.empty())
+      return indices;
   }
   return {};
 }
@@ -1166,8 +1130,8 @@ bool DbPartitioningPass::expandMultiEntryAcquires() {
     OpBuilder builder(original);
 
     /// Find the EDT that uses this acquire
-    EdtAcquireUse use = findEdtUse(original);
-    if (!use.edt) {
+    auto [edtUser, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(original);
+    if (!edtUser) {
       ARTS_DEBUG("    No EDT user found, skipping expansion");
       continue;
     }
@@ -1177,16 +1141,15 @@ bool DbPartitioningPass::expandMultiEntryAcquires() {
         createExpandedAcquires(original, builder);
 
     /// Update EDT dependencies: replace original with all expanded acquires
-    use.edt.setDependencies(
-        rebuildEdtDeps(use.edt, original, expandedAcquires));
+    edtUser.setDependencies(rebuildEdtDeps(edtUser, original, expandedAcquires));
 
     /// Add new block arguments for expanded acquires (first replaces original)
-    Type argType = use.blockArg.getType();
+    Type argType = blockArg.getType();
     SmallVector<BlockArgument> newBlockArgs = insertExpandedBlockArgs(
-        use.edt, use.blockArg, numEntries, argType, original.getLoc());
+        edtUser, blockArg, numEntries, argType, original.getLoc());
 
     /// Remap DbRef operations to use their correct block arguments.
-    for (DbRefOp dbRef : collectDbRefUsers(use.blockArg)) {
+    for (DbRefOp dbRef : collectDbRefUsers(blockArg)) {
       SmallVector<Operation *> users(dbRef.getResult().getUsers().begin(),
                                      dbRef.getResult().getUsers().end());
       SmallVector<std::pair<Operation *, size_t>> matchedUsers;
@@ -1275,7 +1238,7 @@ bool DbPartitioningPass::expandMultiEntryAcquires() {
     /// Create db_release operations for new block arguments (entries 1+)
     /// The original block arg (entry 0) already has a release from CreateDbs
     DbReleaseOp existingRelease = nullptr;
-    for (Operation *user : use.blockArg.getUsers()) {
+    for (Operation *user : blockArg.getUsers()) {
       if (auto rel = dyn_cast<DbReleaseOp>(user)) {
         existingRelease = rel;
         break;
@@ -1386,7 +1349,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   builder.setInsertionPoint(allocOp);
 
   SmallVector<DbAcquireNode *, 16> allocAcquireNodes =
-      collectAcquireNodesForAlloc(allocNode);
+      allocNode ? allocNode->collectAllAcquireNodes()
+                : SmallVector<DbAcquireNode *, 16>{};
 
   /// Step 1: Analyze each acquire's PartitionMode
   SmallVector<AcquirePartitionInfo> acquireInfos;
@@ -1509,7 +1473,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
               ? &*acquireContractSummaries[idx]
               : nullptr;
       const DbAcquirePartitionFacts *facts =
-          AM->getDbAnalysis().getAcquirePartitionFacts(acqNode->getDbAcquireOp());
+          idx < acquireFacts.size() ? acquireFacts[idx] : nullptr;
 
       /// Check access patterns for block capability decisions.
       bool hasIndirect =
@@ -1568,8 +1532,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
            (!contractSummary &&
             acqNode->getAccessPattern() == AccessPattern::Stencil)))
         thisAcquireCanBlock = true;
-      if (!thisAcquireCanBlock && contractSummary &&
-          contractSummary->usesStencilSemantics())
+      if (!thisAcquireCanBlock && hasExplicitStencilContract(contractSummary))
         thisAcquireCanBlock = true;
       bool thisAcquireCanElementWise =
           (acquireMode && *acquireMode == PartitionMode::fine_grained) ||
@@ -1672,13 +1635,26 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
           if (preferContractND) {
             if (contractSummary &&
                 prefersContractNDBlock(contractSummary->contract, targetRank)) {
+              auto staticBlockShape =
+                  contractSummary->contract.getStaticBlockShape();
               candidateBlockSizes.reserve(targetRank);
               for (unsigned dim = 0; dim < targetRank; ++dim) {
-                Value blockSize = contractSummary->contract.blockShape[dim];
                 int64_t dimSize = 0;
-                if (!blockSize ||
-                    !ValueAnalysis::getConstantIndex(blockSize, dimSize) ||
-                    dimSize <= 0) {
+                Value blockSize = nullptr;
+                if (dim < contractSummary->contract.blockShape.size())
+                  blockSize = contractSummary->contract.blockShape[dim];
+                if (blockSize) {
+                  if (!ValueAnalysis::getConstantIndex(blockSize, dimSize) ||
+                      dimSize <= 0) {
+                    candidateBlockSizes.clear();
+                    break;
+                  }
+                } else if (staticBlockShape &&
+                           dim < static_cast<unsigned>(staticBlockShape->size()) &&
+                           (*staticBlockShape)[dim] > 0) {
+                  dimSize = (*staticBlockShape)[dim];
+                  blockSize = arts::createConstantIndex(builder, loc, dimSize);
+                } else {
                   candidateBlockSizes.clear();
                   break;
                 }
@@ -1815,6 +1791,25 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     return allocOp;
   }
 
+  bool hasContractBackedStencil = llvm::any_of(
+      acquireContractSummaries, [](const auto &summary) {
+        return summary &&
+               summary->contract.hasExplicitStencilContract();
+      });
+  if (decision.mode == PartitionMode::stencil && !hasContractBackedStencil) {
+    unsigned outerRank = std::max(1u, decision.outerRank);
+    decision = PartitioningDecision::blockND(
+        ctx, outerRank,
+        "Fallback: stencil facts without explicit contract");
+    ARTS_DEBUG("  Downgrading stencil decision to block mode because no "
+               "explicit stencil contract was seeded pre-DB");
+    heuristics.recordDecision(
+        "Partition-StencilDowngradedToBlock", true,
+        "stencil mode requires an explicit pre-DB contract; using block "
+        "partitioning instead",
+        allocOp.getOperation(), {{"outerRank", (int64_t)outerRank}});
+  }
+
   /// Disabled: versioned partitioning path is currently off.
 
   /// For element-wise partitioning, validate that partition indices match
@@ -1826,7 +1821,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   ///   - Loop step as block size per dimension
   bool skipAcquireInfoCheck = false;
   if (decision.isFineGrained() && ctx.accessPatterns.hasIndexed) {
-    bool validElementWise = validateElementWiseIndices(acquireInfos, allocNode);
+    bool validElementWise =
+        validateElementWiseIndices(acquireInfos, allocAcquireNodes);
     if (validElementWise) {
       /// Valid element-wise: we can skip per-acquire partition info check
       skipAcquireInfoCheck = true;
@@ -2080,30 +2076,25 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       }
     }
 
-    /// TODO(PERF): getAcquireContractSummary and getAcquirePartitionFacts are
-    /// queried at line ~1389 and cached in vectors, then re-queried at line
-    /// ~2082 inside hasReadStencilAcquire. Reuse the cached vectors by index.
-    bool hasReadStencilAcquire = llvm::any_of(
-        allocAcquireNodes,
-        [&](DbAcquireNode *acqNode) {
-          if (!acqNode)
-            return false;
-          DbAcquireOp acquire = acqNode->getDbAcquireOp();
-          if (!acquire || acquire.getMode() != ArtsMode::in)
-            return false;
-          auto contractSummary =
-              AM->getDbAnalysis().getAcquireContractSummary(acquire);
-          const DbAcquirePartitionFacts *acqFacts =
-              AM->getDbAnalysis().getAcquirePartitionFacts(acquire);
-          if (!acqFacts)
-            acqFacts = &acqNode->getPartitionFacts();
-          if (hasCanonicalStencilSemantics(
-                  acquire,
-                  contractSummary ? &*contractSummary : nullptr,
-                  acqNode, acqFacts))
-            return true;
-          return allocHasStencilPattern;
-        });
+    bool hasReadStencilAcquire = false;
+    for (auto [acqNode, contractSummary, acqFacts] :
+         llvm::zip_equal(allocAcquireNodes, acquireContractSummaries,
+                         acquireFacts)) {
+      if (!acqNode)
+        continue;
+      DbAcquireOp acquire = acqNode->getDbAcquireOp();
+      if (!acquire || acquire.getMode() != ArtsMode::in)
+        continue;
+      const DbAcquirePartitionFacts *facts = acqFacts ? acqFacts
+                                                      : &acqNode->getPartitionFacts();
+      if (hasCanonicalStencilSemantics(
+              acquire, contractSummary ? &*contractSummary : nullptr, acqNode,
+              facts) ||
+          allocHasStencilPattern) {
+        hasReadStencilAcquire = true;
+        break;
+      }
+    }
 
     if ((info.haloLeft == 0 || info.haloRight == 0) && hasReadStencilAcquire &&
         allocHasStencilPattern) {

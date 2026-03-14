@@ -19,6 +19,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/GraphTraits.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
 
@@ -37,6 +38,7 @@ public:
   void buildNodesOnly() override;
   void invalidate() override;
   void print(llvm::raw_ostream &os) override;
+  llvm::json::Value exportToJsonValue(bool includeAnalysis = false) const;
   void exportToJson(llvm::raw_ostream &os,
                     bool includeAnalysis = false) const override;
   NodeBase *getEntryNode() const override;

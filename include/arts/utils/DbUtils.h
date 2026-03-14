@@ -104,17 +104,18 @@ public:
 
   /// Extract the dependency iteration sizes used for EDT dependency counting
   /// and record_dep lowering.
-  /// For block/stencil acquires that carry partition slices, this returns the
-  /// partition_sizes entry so runtime dependencies are scoped to the task
-  /// slice.
+  /// For block/stencil acquires, this prefers a contract-cached DB-space
+  /// window when available; otherwise it falls back to the acquire's explicit
+  /// DB-space sizes.
   static SmallVector<Value> getDependencySizesFromDb(Operation *dbOp);
 
   /// Extract dependency iteration sizes from a datablock value.
   static SmallVector<Value> getDependencySizesFromDb(Value datablockPtr);
 
   /// Extract the dependency iteration offsets used for EDT dependency lowering.
-  /// For block/stencil acquires with partition slices, this returns the
-  /// partition_offsets entry.
+  /// For block/stencil acquires, this prefers a contract-cached DB-space
+  /// window when available; otherwise it falls back to the acquire's explicit
+  /// DB-space offsets.
   static SmallVector<Value> getDependencyOffsetsFromDb(Operation *dbOp);
 
   /// Extract dependency iteration offsets from a datablock value.

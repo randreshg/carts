@@ -225,7 +225,7 @@ void EdtGraph::print(llvm::raw_ostream &os) {
   }
 }
 
-void EdtGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
+llvm::json::Value EdtGraph::exportToJsonValue(bool includeAnalysis) const {
   using namespace llvm::json;
 
   if (!includeAnalysis) {
@@ -251,8 +251,7 @@ void EdtGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
 
     root["nodes"] = std::move(nodesArr);
     root["edges"] = std::move(edgesArr);
-    os << llvm::json::Value(std::move(root)) << "\n";
-    return;
+    return llvm::json::Value(std::move(root));
   }
 
   /// ArtsMate-compatible EDT entities export
@@ -391,7 +390,11 @@ void EdtGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
     edts.push_back(std::move(edt));
   });
 
-  os << llvm::json::Value(std::move(edts)) << "\n";
+  return llvm::json::Value(std::move(edts));
+}
+
+void EdtGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
+  os << exportToJsonValue(includeAnalysis) << "\n";
 }
 
 /// Helper to populate and sort children cache for a node

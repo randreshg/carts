@@ -173,12 +173,9 @@ def DbAllocOp : Arts_Op<"db_alloc",
                    CArg<"SmallVector<Value>", "{}">:$elementSizes,
                    CArg<"PartitionMode", "PartitionMode::coarse">:$partitionMode)>
   ];
-  // TODO: Add `let hasVerifier = 1;` to activate the verify() method
-  // implemented in Dialect.cpp. Without it, DbAllocOp invariants
-  // (e.g., non-empty elementSizes) are never checked by MLIR verification.
+  let hasVerifier = 1;
   let extraClassDeclaration = [{
     MemRefType getAllocatedElementType();
-    LogicalResult verify();
   }];
 }
 
@@ -446,6 +443,10 @@ def LoweringContractOp : Arts_Op<"lowering_contract",
     attr-dict
   }];
   let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    static void build(OpBuilder &builder, OperationState &state, Value target,
+                      const LoweringContractInfo &info);
+  }];
   let builders = [
     OpBuilder<(ins "Value":$target,
                    CArg<"std::optional<ArtsDepPattern>", "std::nullopt">:$depPattern,
