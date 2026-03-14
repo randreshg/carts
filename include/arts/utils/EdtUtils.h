@@ -1,9 +1,9 @@
 ///==========================================================================///
 /// File: EdtUtils.h
 ///
-/// Utility class for working with ARTS EDTs (EdtOp).
-/// This module consolidates EDT-related utilities including analysis and
-/// block argument queries.
+/// Utility functions for working with ARTS EDTs (EdtOp).
+/// Contains IR manipulation helpers: block splicing, epoch wrapping,
+/// block argument navigation, and consecutive-op fusion.
 ///==========================================================================///
 
 #ifndef CARTS_UTILS_EDTUTILS_H
@@ -13,8 +13,6 @@
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Operation.h"
-#include "mlir/IR/Region.h"
-#include "mlir/IR/Value.h"
 #include "llvm/ADT/STLExtras.h"
 
 namespace mlir {
@@ -31,7 +29,7 @@ class DbAcquireOp;
 
 /// Move all non-terminator operations from src block into dst block,
 /// inserting them before dst's terminator.
-static inline void spliceBodyBeforeTerminator(Block &src, Block &dst) {
+inline void spliceBodyBeforeTerminator(Block &src, Block &dst) {
   Operation *terminator = dst.getTerminator();
   for (Operation &op : llvm::make_early_inc_range(src.without_terminator()))
     op.moveBefore(terminator);
@@ -48,12 +46,24 @@ bool fuseConsecutivePairs(Block &block,
   bool changed = false;
   for (auto it = block.begin(); it != block.end();) {
     auto first = dyn_cast<OpT>(&*it);
-    if (!first) { ++it; continue; }
+    if (!first) {
+      ++it;
+      continue;
+    }
     auto nextIt = std::next(it);
-    if (nextIt == block.end()) { ++it; continue; }
+    if (nextIt == block.end()) {
+      ++it;
+      continue;
+    }
     auto second = dyn_cast<OpT>(&*nextIt);
-    if (!second) { ++it; continue; }
-    if (!canFuse(first, second)) { ++it; continue; }
+    if (!second) {
+      ++it;
+      continue;
+    }
+    if (!canFuse(first, second)) {
+      ++it;
+      continue;
+    }
     doFuse(first, second);
     changed = true;
     // Re-run on same first op to chain-fuse.
@@ -61,31 +71,20 @@ bool fuseConsecutivePairs(Block &block,
   return changed;
 }
 
-/// Utility class for working with ARTS EDTs (EdtOp).
-class EdtUtils {
-public:
-  /// Check if a value is invariant within an EDT region.
-  /// A value is invariant if it is defined outside the region or not modified
-  /// within it.
-  static bool isInvariantInEdt(Region &edtRegion, Value value);
+/// Return the single top-level arts::ForOp inside an EDT body, or nullptr
+/// if there are zero or multiple top-level ForOps, or any non-ForOp
+/// non-terminator operation exists.
+ForOp getSingleTopLevelFor(EdtOp edt);
 
-  /// Checks if the target operation is reachable from the source operation in
-  /// the EDT control flow graph.
-  static bool isReachable(Operation *source, Operation *target);
+/// Wrap all operations (except terminator) in a block inside an EpochOp.
+/// Returns the created EpochOp, or nullptr if no operations to wrap.
+EpochOp wrapBodyInEpoch(Block &body, Location loc);
 
-  /// Check if an EDT contains nested EDTs (tasks/parallel/sync).
-  static bool hasNestedEdt(EdtOp edt);
-
-  /// Wrap all operations (except terminator) in a block inside an EpochOp.
-  /// Returns the created EpochOp, or nullptr if no operations to wrap.
-  static EpochOp wrapBodyInEpoch(Block &body, Location loc);
-
-  /// Finds the EdtOp that uses a DbAcquireOp and returns the corresponding
-  /// block argument. Returns {EdtOp, BlockArgument} pair, or {nullptr,
-  /// BlockArgument()} if not found.
-  static std::pair<EdtOp, BlockArgument>
-  getEdtBlockArgumentForAcquire(DbAcquireOp acquireOp);
-};
+/// Finds the EdtOp that uses a DbAcquireOp and returns the corresponding
+/// block argument. Returns {EdtOp, BlockArgument} pair, or {nullptr,
+/// BlockArgument()} if not found.
+std::pair<EdtOp, BlockArgument>
+getEdtBlockArgumentForAcquire(DbAcquireOp acquireOp);
 
 } // namespace arts
 } // namespace mlir
