@@ -393,17 +393,56 @@ void DbStencilIndexer::transformDbRefUsers(
         ownedRows = ub;
     }
 
-    Value selectedRowIdx = localRow;
+    auto selectValue = [&](Value cond, Value trueVal, Value falseVal) -> Value {
+      bool forceIf = trueVal.getType().isa<MemRefType>();
+      if (!forceIf && cond && cond.getType().isInteger(1))
+        return builder.create<arith::SelectOp>(userLoc, cond, trueVal,
+                                               falseVal);
+      auto ifOp = builder.create<scf::IfOp>(userLoc, trueVal.getType(), cond,
+                                            /*withElseRegion=*/true);
+      {
+        OpBuilder::InsertionGuard g(builder);
+        builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
+        builder.create<scf::YieldOp>(userLoc, trueVal);
+        builder.setInsertionPointToStart(&ifOp.getElseRegion().front());
+        builder.create<scf::YieldOp>(userLoc, falseVal);
+      }
+      return ifOp.getResult(0);
+    };
+
+    Value selectedRowIdx = clampIndex(localRow, ownedRows, builder, userLoc);
     Value selectedMemref = ownedMemref;
 
     if (region == RegionKind::Left && rowOffset < 0) {
-      selectedMemref = leftMemref ? leftMemref : ownedMemref;
-      selectedRowIdx =
+      Value leftIdx =
           builder.create<arith::AddIOp>(userLoc, localRow, haloLeft);
+      Value clampedLeftIdx =
+          leftMemref ? clampIndex(leftIdx, haloLeft, builder, userLoc)
+                     : Value();
+      if (leftMemref && leftPtrNotNull) {
+        selectedMemref =
+            selectValue(leftPtrNotNull, leftMemref, ownedMemref);
+        selectedRowIdx = selectValue(leftPtrNotNull, clampedLeftIdx,
+                                     selectedRowIdx);
+      } else if (leftMemref) {
+        selectedMemref = leftMemref;
+        selectedRowIdx = clampedLeftIdx;
+      }
     } else if (region == RegionKind::Right && rowOffset > 0) {
-      selectedMemref = rightMemref ? rightMemref : ownedMemref;
-      selectedRowIdx =
+      Value rightIdx =
           builder.create<arith::SubIOp>(userLoc, localRow, ownedRows);
+      Value clampedRightIdx =
+          rightMemref ? clampIndex(rightIdx, haloRight, builder, userLoc)
+                      : Value();
+      if (rightMemref && rightPtrNotNull) {
+        selectedMemref =
+            selectValue(rightPtrNotNull, rightMemref, ownedMemref);
+        selectedRowIdx = selectValue(rightPtrNotNull, clampedRightIdx,
+                                     selectedRowIdx);
+      } else if (rightMemref) {
+        selectedMemref = rightMemref;
+        selectedRowIdx = clampedRightIdx;
+      }
     }
 
     /// Build full index lists by replacing the partitioned dimension.

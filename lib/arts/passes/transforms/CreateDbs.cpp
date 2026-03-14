@@ -63,6 +63,7 @@
 
 #include "arts/passes/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -90,6 +91,60 @@ using namespace mlir::arts;
 /// Helper Functions
 ///===----------------------------------------------------------------------===///
 namespace {
+
+static ArtsMode getMemrefUserAccessMode(Operation *op, Operation *underlyingOp) {
+  if (!op || !underlyingOp)
+    return ArtsMode::uninitialized;
+
+  bool hasRead = false;
+  bool hasWrite = false;
+
+  if (auto load = dyn_cast<memref::LoadOp>(op)) {
+    hasRead = ValueAnalysis::getUnderlyingOperation(load.getMemref()) ==
+              underlyingOp;
+  } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+    hasWrite = ValueAnalysis::getUnderlyingOperation(store.getMemref()) ==
+               underlyingOp;
+  } else if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
+    hasRead = ValueAnalysis::getUnderlyingOperation(load.getMemRef()) ==
+              underlyingOp;
+  } else if (auto store = dyn_cast<affine::AffineStoreOp>(op)) {
+    hasWrite = ValueAnalysis::getUnderlyingOperation(store.getMemRef()) ==
+               underlyingOp;
+  } else if (auto copy = dyn_cast<memref::CopyOp>(op)) {
+    hasRead = ValueAnalysis::getUnderlyingOperation(copy.getSource()) ==
+              underlyingOp;
+    hasWrite = ValueAnalysis::getUnderlyingOperation(copy.getTarget()) ==
+               underlyingOp;
+  }
+
+  if (hasRead && hasWrite)
+    return ArtsMode::inout;
+  if (hasWrite)
+    return ArtsMode::out;
+  if (hasRead)
+    return ArtsMode::in;
+  return ArtsMode::uninitialized;
+}
+
+static bool opMatchesAccessMode(Operation *op, Operation *underlyingOp,
+                                ArtsMode requestedMode) {
+  ArtsMode actualMode = getMemrefUserAccessMode(op, underlyingOp);
+  if (actualMode == ArtsMode::uninitialized)
+    return false;
+  if (requestedMode == ArtsMode::inout)
+    return true;
+  return actualMode == requestedMode;
+}
+
+static bool accessModeCanSeedNestedAcquire(ArtsMode availableMode,
+                                           ArtsMode requestedMode) {
+  if (requestedMode == ArtsMode::uninitialized)
+    return true;
+  if (availableMode == ArtsMode::inout)
+    return true;
+  return availableMode == requestedMode;
+}
 
 ///===----------------------------------------------------------------------===///
 /// Pass Implementation
@@ -129,6 +184,7 @@ private:
       ArtsMode mode;
       SmallVector<Value, 4> indices, offsets, sizes;
       SmallVector<Operation *, 4> operations;
+      bool preserveDepEdge = true;
     };
 
     /// Map from EDT operation to all DB accesses for that EDT
@@ -138,9 +194,11 @@ private:
     void addAccess(EdtOp edtOp, ArtsMode mode, SmallVector<Value, 4> indices,
                    SmallVector<Value, 4> offsets = {},
                    SmallVector<Value, 4> sizes = {},
-                   SmallVector<Operation *, 4> operations = {}) {
+                   SmallVector<Operation *, 4> operations = {},
+                   bool preserveDepEdge = true) {
       accessMode = combineAccessModes(accessMode, mode);
-      edtToDeps[edtOp].push_back({mode, indices, offsets, sizes, operations});
+      edtToDeps[edtOp].push_back(
+          {mode, indices, offsets, sizes, operations, preserveDepEdge});
     }
 
     /// Compute index pattern information from stored accesses
@@ -231,7 +289,10 @@ private:
   void createDbAllocOps();
   void createDbAcquireOps(EdtOp edt, SetVector<Value> &externalDeps);
   ArtsMode inferEdtAccessMode(Operation *underlyingOp, EdtOp edt) const;
+  Value findLocalAcquireView(EdtOp edt, Operation *dbAllocOp,
+                             bool requiresIndexedAccess = false);
   Value findParentAcquireSource(EdtOp edt, Operation *dbAllocOp,
+                                ArtsMode requestedMode,
                                 bool requiresIndexedAccess = false);
   void initializeGlobalDbIfNeeded(Operation *alloc, DbAllocOp dbAllocOp,
                                   ArrayRef<Value> sizes, DbAllocType allocType);
@@ -242,7 +303,7 @@ private:
                                 Operation *dbOp,
                                 SmallVector<Value> &acquireIndices,
                                 SmallVector<Value> &acquireOffsets,
-                                BlockArgument dbAcquireArg,
+                                Value localAcquireView,
                                 const DbRewritePlan &plan);
   void rewriteUsesInParentEdt(MemrefInfo &memrefInfo);
   void rewriteUsesEverywhereCoarse(Operation *alloc, DbAllocOp dbAlloc);
@@ -547,6 +608,9 @@ void CreateDbsPass::collectControlDbOps() {
     /// indices
     SmallVector<Operation *, 4> opsToRewrite;
     if (userEdt) {
+      auto controlAccessOffsets =
+          getStencilAccessOffsets(dbControl.getOperation());
+
       /// Helper to check if operation indices match DbControlOp using SSA value
       /// equality This is strict but correct for distinguishing multiple chunks
       /// (e.g., A[i-1], A[i], A[i+1])
@@ -561,18 +625,32 @@ void CreateDbsPass::collectControlDbOps() {
                           opIndices.begin());
       };
 
+      auto matchesExplicitStencilAccess = [&](Operation *op) -> bool {
+        if (!controlAccessOffsets)
+          return false;
+        auto opAccessOffsets = getStencilAccessOffsets(op);
+        return opAccessOffsets && *opAccessOffsets == *controlAccessOffsets;
+      };
+
       /// Walk the user EDT and collect operations that match the indices
       userEdt.walk([&](Operation *op) {
         if (auto load = dyn_cast<memref::LoadOp>(op)) {
           if (ValueAnalysis::getUnderlyingOperation(load.getMemref()) ==
               underlyingOp) {
-            if (indicesMatchPrefix(load.getIndices()))
+            bool matchesControl =
+                controlAccessOffsets ? matchesExplicitStencilAccess(op)
+                                     : indicesMatchPrefix(load.getIndices());
+            if (opMatchesAccessMode(op, underlyingOp, mode) && matchesControl)
               opsToRewrite.push_back(op);
           }
         } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
           if (ValueAnalysis::getUnderlyingOperation(store.getMemref()) ==
               underlyingOp) {
-            if (indicesMatchPrefix(store.getIndices()))
+            bool matchesControl =
+                controlAccessOffsets
+                    ? matchesExplicitStencilAccess(op)
+                    : indicesMatchPrefix(store.getIndices());
+            if (opMatchesAccessMode(op, underlyingOp, mode) && matchesControl)
               opsToRewrite.push_back(op);
           }
         }
@@ -582,8 +660,9 @@ void CreateDbsPass::collectControlDbOps() {
                  << " operations to rewrite for this specific dependency");
     }
 
-    memrefInfo[underlyingOp].addAccess(userEdt, mode, indexValues, offsetValues,
-                                       sizeValues, opsToRewrite);
+    memrefInfo[underlyingOp].addAccess(
+        userEdt, mode, indexValues, offsetValues, sizeValues, opsToRewrite,
+        /*preserveDepEdge=*/!isLocalityOnly(dbControl.getOperation()));
   });
 
   /// Now erase all db_control ops, replacing uses with pointer
@@ -856,7 +935,45 @@ void CreateDbsPass::initializeGlobalDbIfNeeded(Operation *alloc,
 /// Find parent scope's acquired handle for a datablock
 /// Checks if the parent EDT already has an acquired handle for the given
 /// DbAllocOp.
+Value CreateDbsPass::findLocalAcquireView(EdtOp edt, Operation *dbAllocOp,
+                                          bool requiresIndexedAccess) {
+  auto dbAlloc = dyn_cast_or_null<DbAllocOp>(dbAllocOp);
+  if (!dbAlloc || !edt)
+    return nullptr;
+
+  Type targetType = dbAlloc.getPtr().getType();
+  Block &body = edt.getBody().front();
+  auto deps = edt.getDependenciesAsVector();
+
+  auto matchesDb = [&](Value v) -> bool {
+    if (!v || v.getType() != targetType)
+      return false;
+
+    Operation *db = DbUtils::getUnderlyingDbAlloc(v);
+    if (!db || db != dbAllocOp)
+      return false;
+
+    if (requiresIndexedAccess) {
+      if (Operation *dbOp = DbUtils::getUnderlyingDb(v)) {
+        if (DbUtils::hasSingleSize(dbOp))
+          return false;
+      }
+    }
+    return true;
+  };
+
+  for (auto [idx, dep] : llvm::enumerate(deps)) {
+    if (idx >= body.getNumArguments())
+      break;
+    if (matchesDb(dep))
+      return body.getArgument(idx);
+  }
+
+  return nullptr;
+}
+
 Value CreateDbsPass::findParentAcquireSource(EdtOp edt, Operation *dbAllocOp,
+                                             ArtsMode requestedMode,
                                              bool requiresIndexedAccess) {
   auto dbAlloc = dyn_cast_or_null<DbAllocOp>(dbAllocOp);
   if (!dbAlloc)
@@ -891,6 +1008,13 @@ Value CreateDbsPass::findParentAcquireSource(EdtOp edt, Operation *dbAllocOp,
     if (auto *defOp = v.getDefiningOp())
       if (isa<DbAllocOp>(defOp))
         return false;
+
+    if (Operation *dbOp = DbUtils::getUnderlyingDb(v)) {
+      if (auto acquire = dyn_cast<DbAcquireOp>(dbOp)) {
+        if (!accessModeCanSeedNestedAcquire(acquire.getMode(), requestedMode))
+          return false;
+      }
+    }
 
     return true;
   };
@@ -994,29 +1118,56 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
 
     SmallVector<SmallVector<const MemrefInfo::DbDep *, 4>, 4> depGroups;
     SmallVector<ArtsMode, 4> depGroupModes;
+    SmallVector<bool, 4> depGroupPreserveDepEdges;
+    SmallVector<PartitionMode, 4> depGroupPartitionModes;
     if (deps.empty()) {
       depGroups.emplace_back();
       depGroupModes.push_back(ArtsMode::uninitialized);
+      depGroupPreserveDepEdges.push_back(true);
+      depGroupPartitionModes.push_back(PartitionMode::coarse);
     } else {
       for (const auto &dep : deps) {
-        auto it = llvm::find(depGroupModes, dep.mode);
-        if (it == depGroupModes.end()) {
+        PartitionMode depPartitionMode = PartitionMode::coarse;
+        if (!dep.indices.empty()) {
+          depPartitionMode = PartitionMode::fine_grained;
+        } else if (!dep.offsets.empty() && !dep.sizes.empty()) {
+          depPartitionMode = PartitionMode::block;
+        }
+        int groupIndex = -1;
+        for (auto [idx, groupMode] : llvm::enumerate(depGroupModes)) {
+          if (groupMode == dep.mode &&
+              depGroupPreserveDepEdges[idx] == dep.preserveDepEdge &&
+              depGroupPartitionModes[idx] == depPartitionMode) {
+            groupIndex = static_cast<int>(idx);
+            break;
+          }
+        }
+        if (groupIndex < 0) {
           depGroupModes.push_back(dep.mode);
+          depGroupPreserveDepEdges.push_back(dep.preserveDepEdge);
+          depGroupPartitionModes.push_back(depPartitionMode);
           depGroups.emplace_back();
           depGroups.back().push_back(&dep);
           continue;
         }
-        depGroups[std::distance(depGroupModes.begin(), it)].push_back(&dep);
+        depGroups[groupIndex].push_back(&dep);
       }
     }
+
+    /// Track the first dependency-backed local view materialized for this DB
+    /// so locality-only acquires inside the EDT can derive nested views from
+    /// an in-scope handle instead of the outer db_alloc result.
+    Value inScopeAcquireView;
 
     for (auto [groupIdx, depGroup] : llvm::enumerate(depGroups)) {
       /// CreateDbs always creates coarse-grained DB-space acquires. The
       /// partition hints (from DbControlOp depend clauses) tell DbPartitioning
       /// how to optimize later. Keep different access modes in separate
       /// acquires so downstream rec_dep lowering preserves read vs write slots.
+      const bool preserveDepEdge = depGroupPreserveDepEdges[groupIdx];
       ARTS_DEBUG(" - Creating coarse-grained acquire group "
-                 << groupIdx << " for mode " << depGroupModes[groupIdx]);
+                 << groupIdx << " for mode " << depGroupModes[groupIdx]
+                 << ", preserveDepEdge=" << preserveDepEdge);
 
       /// Collect partition hints from this group's deps.
       SmallVector<Value> partIndices, partOffsets, partSizes;
@@ -1063,19 +1214,43 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
 
       Value acqGuid = sourceGuid;
       Value acqPtr = sourcePtr;
-      if (Value availableHandle = findParentAcquireSource(edt, dbAllocOp)) {
-        ARTS_DEBUG("   - Reusing existing datablock handle in parent scope");
+      if (!preserveDepEdge && inScopeAcquireView) {
+        ARTS_DEBUG("   - Reusing existing datablock handle inside EDT");
         acqGuid = Value();
-        acqPtr = availableHandle;
+        acqPtr = inScopeAcquireView;
       }
+      if (acqPtr == sourcePtr)
+        if (Value availableHandle =
+                findParentAcquireSource(edt, dbAllocOp, acquireMode)) {
+          ARTS_DEBUG("   - Reusing existing datablock handle in parent scope");
+          acqGuid = Value();
+          acqPtr = availableHandle;
+        }
 
-      auto acquireOp = AC->create<DbAcquireOp>(
-          edt.getLoc(), acquireMode, acqGuid, acqPtr, partMode,
-          /*indices=*/SmallVector<Value>{}, /*offsets=*/dbOffsets,
-          /*sizes=*/dbSizes,
-          /*partition_indices=*/partIndices,
-          /*partition_offsets=*/partOffsets,
-          /*partition_sizes=*/partSizes);
+      auto createAcquire = [&](Location acquireLoc) {
+        Type ptrType = acqPtr ? acqPtr.getType() : Type();
+        if (DbUtils::getUnderlyingDbAlloc(acqPtr)) {
+          return AC->create<DbAcquireOp>(
+              acquireLoc, acquireMode, acqGuid, acqPtr, partMode,
+              /*indices=*/SmallVector<Value>{}, /*offsets=*/dbOffsets,
+              /*sizes=*/dbSizes,
+              /*partition_indices=*/partIndices,
+              /*partition_offsets=*/partOffsets,
+              /*partition_sizes=*/partSizes);
+        }
+
+        return AC->create<DbAcquireOp>(
+            acquireLoc, acquireMode, acqGuid, acqPtr, ptrType, partMode,
+            /*indices=*/SmallVector<Value>{}, /*offsets=*/dbOffsets,
+            /*sizes=*/dbSizes,
+            /*partition_indices=*/partIndices,
+            /*partition_offsets=*/partOffsets,
+            /*partition_sizes=*/partSizes);
+      };
+
+      if (!preserveDepEdge)
+        AC->setInsertionPointToStart(&edt.getBody().front());
+      auto acquireOp = createAcquire(edt.getLoc());
 
       if (auto depPattern = getEffectiveDepPattern(edt.getOperation()))
         acquireOp.setDepPattern(*depPattern);
@@ -1090,10 +1265,12 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       }
 
       if (!depGroup.empty()) {
-        /// Explicit DbControlOp-derived acquires already carry the exact
-        /// dependency mode contract and the dependency edge itself is
-        /// semantically required even if the local pointer has no uses.
-        acquireOp.setExplicitDepContract();
+        /// Explicit DbControlOp-derived acquires always preserve their access
+        /// mode contract. Only true predecessor controls also preserve the EDT
+        /// dependency edge.
+        acquireOp.setPreserveAccessMode();
+        if (preserveDepEdge)
+          acquireOp.setPreserveDepEdge();
       }
 
       acquireOp.setPartitionSegments(indicesSegments, offsetsSegments,
@@ -1103,11 +1280,16 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
                  << depGroup.size() << " partition entries, primary mode="
                  << static_cast<int>(partMode) << ": " << acquireOp);
 
-      Value acquirePtr = acquireOp.getPtr();
-      auto sourceType = acquirePtr.getType().dyn_cast<MemRefType>();
-      BlockArgument dbAcquireArg =
-          edt.getBody().front().addArgument(sourceType, edt.getLoc());
-      dependencyOperands.push_back(acquirePtr);
+      Value localAcquireView = acquireOp.getPtr();
+      if (preserveDepEdge) {
+        auto sourceType = localAcquireView.getType().dyn_cast<MemRefType>();
+        BlockArgument dbAcquireArg =
+            edt.getBody().front().addArgument(sourceType, edt.getLoc());
+        dependencyOperands.push_back(localAcquireView);
+        localAcquireView = dbAcquireArg;
+        if (!inScopeAcquireView)
+          inScopeAcquireView = localAcquireView;
+      }
 
       SmallVector<Operation *> opsToRewrite;
       llvm::SmallPtrSet<Operation *, 16> seenOps;
@@ -1132,14 +1314,9 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
         edt.walk([&](Operation *op) {
           if (op->getParentOfType<EdtOp>() != edt)
             return;
-          for (Value operand : op->getOperands()) {
-            Operation *operandUnderlyingOp =
-                ValueAnalysis::getUnderlyingOperation(operand);
-            if (operandUnderlyingOp == underlyingOp) {
-              addOpIfNew(op);
-              break;
-            }
-          }
+          if (!opMatchesAccessMode(op, underlyingOp, acquireMode))
+            return;
+          addOpIfNew(op);
         });
         ARTS_DEBUG(" - Found " << opsToRewrite.size()
                                << " operations to rewrite");
@@ -1149,12 +1326,12 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
         SmallVector<Value> dbRefIndices;
         dbRefIndices.push_back(AC->createIndexConstant(0, edt.getLoc()));
         rewriteOpsToUseDbAcquire(edt, opsToRewrite, acquireOp, dbRefIndices,
-                                 dbOffsets, dbAcquireArg, plan);
+                                 dbOffsets, localAcquireView, plan);
       }
 
       OpBuilder::InsertionGuard releaseGuard(AC->getBuilder());
       AC->setInsertionPoint(edt.getBody().front().getTerminator());
-      AC->create<DbReleaseOp>(edt.getLoc(), dbAcquireArg);
+      AC->create<DbReleaseOp>(edt.getLoc(), localAcquireView);
     }
   }
 
@@ -1277,12 +1454,12 @@ void CreateDbsPass::rewriteUsesEverywhereCoarse(Operation *alloc,
 void CreateDbsPass::rewriteOpsToUseDbAcquire(
     EdtOp edt, SmallVector<Operation *> &operations, Operation *dbOp,
     SmallVector<Value> &acquireIndices, SmallVector<Value> &acquireOffsets,
-    BlockArgument dbAcquireArg, const DbRewritePlan &plan) {
+    Value localAcquireView, const DbRewritePlan &plan) {
   ARTS_DEBUG(" - Rewriting " << operations.size() << " operations in EDT");
 
   /// Get the element type from the acquired datablock
   /// For fine-grained: memref<?xmemref<?xT>> -> extract memref<?xT>
-  Type elementMemRefType = dbAcquireArg.getType();
+  Type elementMemRefType = localAcquireView.getType();
   if (auto outerMemrefType = elementMemRefType.dyn_cast<MemRefType>()) {
     if (auto innerMemrefType =
             outerMemrefType.getElementType().dyn_cast<MemRefType>()) {
@@ -1339,7 +1516,7 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
       coarseInfo.mode = PartitionMode::coarse;
       DbElementWiseIndexer indexer(coarseInfo, /*outerRank=*/0, innerRank, {});
       llvm::SetVector<Operation *> localOpsToRemove;
-      indexer.transformOps({op}, dbAcquireArg, elementMemRefType, *AC,
+      indexer.transformOps({op}, localAcquireView, elementMemRefType, *AC,
                            localOpsToRemove);
       for (Operation *toRemove : localOpsToRemove)
         opsToRemove.insert(toRemove);
@@ -1389,7 +1566,7 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
                                        plan.partitionedDims.end());
       DbBlockIndexer indexer(blockInfo, startBlocks, chunkOuterRank, innerRank);
       llvm::SetVector<Operation *> localOpsToRemove;
-      indexer.transformOps({op}, dbAcquireArg, elementMemRefType, *AC,
+      indexer.transformOps({op}, localAcquireView, elementMemRefType, *AC,
                            localOpsToRemove);
       for (Operation *toRemove : localOpsToRemove)
         opsToRemove.insert(toRemove);
@@ -1410,7 +1587,7 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
           load.getIndices(), acquireIndices, acquireOffsets, AC->getBuilder(),
           op->getLoc());
       auto dbRef = AC->create<DbRefOp>(op->getLoc(), elementMemRefType,
-                                       dbAcquireArg, localized.dbRefIndices);
+                                       localAcquireView, localized.dbRefIndices);
       auto newLoad = AC->create<memref::LoadOp>(op->getLoc(), dbRef,
                                                 localized.memrefIndices);
       load.replaceAllUsesWith(newLoad.getResult());
@@ -1420,13 +1597,13 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
           store.getIndices(), acquireIndices, acquireOffsets, AC->getBuilder(),
           op->getLoc());
       auto dbRef = AC->create<DbRefOp>(op->getLoc(), elementMemRefType,
-                                       dbAcquireArg, localized.dbRefIndices);
+                                       localAcquireView, localized.dbRefIndices);
       AC->create<memref::StoreOp>(op->getLoc(), store.getValue(), dbRef,
                                   localized.memrefIndices);
       opsToRemove.insert(op);
     } else {
       llvm::SetVector<Operation *> localOpsToRemove;
-      indexer.transformOps({op}, dbAcquireArg, elementMemRefType, *AC,
+      indexer.transformOps({op}, localAcquireView, elementMemRefType, *AC,
                            localOpsToRemove);
       for (Operation *toRemove : localOpsToRemove)
         opsToRemove.insert(toRemove);

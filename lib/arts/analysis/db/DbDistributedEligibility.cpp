@@ -154,7 +154,7 @@ static bool isStencilAcquire(DbAcquireNode *node, DbAnalysis &dbAnalysis) {
     return false;
 
   if (auto contract = dbAnalysis.getAcquireContractSummary(acquireOp);
-      contract && contract->usesStencilSemantics())
+      contract && contract->contract.hasExplicitStencilContract())
     return true;
 
   if (auto accessPattern = dbAnalysis.getAcquireAccessPattern(acquireOp))

@@ -171,14 +171,16 @@ unsigned DbTransformsPass::persistContracts() {
 
   module.walk([&](func::FuncOp func) {
     DbAnalysis &dbAnalysis = AM->getDbAnalysis();
+    SmallVector<DbAcquireOp, 16> acquires;
+    func.walk([&](DbAcquireOp acquire) { acquires.push_back(acquire); });
 
-    func.walk([&](DbAcquireOp acquire) {
+    for (DbAcquireOp acquire : acquires) {
       auto contractSummary = dbAnalysis.getAcquireContractSummary(acquire);
       if (!contractSummary)
-        return;
+        continue;
 
       if (!contractSummary->refinedByDbAnalysis)
-        return;
+        continue;
 
       /// The contract has been refined by DbAnalysis -- persist it to IR
       /// so that downstream lowering passes can read the refined depPattern,
@@ -190,7 +192,7 @@ unsigned DbTransformsPass::persistContracts() {
       ++count;
 
       ARTS_DEBUG("DT-1: persisted contract for acquire " << acquire);
-    });
+    }
   });
 
   return count;
@@ -205,8 +207,10 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
 
   module.walk([&](func::FuncOp func) {
     DbAnalysis &dbAnalysis = AM->getDbAnalysis();
+    SmallVector<DbAcquireOp, 16> acquires;
+    func.walk([&](DbAcquireOp acquire) { acquires.push_back(acquire); });
 
-    func.walk([&](DbAcquireOp acquire) {
+    for (DbAcquireOp acquire : acquires) {
       /// -----------------------------------------------------------
       /// Step 0: Determine if this acquire is on a stencil-family DB.
       /// Check via the contract first, then fall back to raw attrs.
@@ -224,12 +228,13 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
       /// may have inferred a stencil pattern from graph-backed facts.
       if (!isStencilFamily) {
         auto contractSummary = dbAnalysis.getAcquireContractSummary(acquire);
-        if (contractSummary && contractSummary->usesStencilSemantics())
+        if (contractSummary &&
+            contractSummary->contract.hasExplicitStencilContract())
           isStencilFamily = true;
       }
 
       if (!isStencilFamily)
-        return;
+        continue;
 
       ARTS_DEBUG("DT-2: processing stencil acquire " << acquire);
 
@@ -282,7 +287,7 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
       /// If we have no dimensional information at all, skip.
       if (rank == 0) {
         ARTS_DEBUG("DT-2: no halo bounds available, skipping");
-        return;
+        continue;
       }
 
       /// -----------------------------------------------------------
@@ -342,7 +347,7 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
       }
       if (allZero) {
         ARTS_DEBUG("DT-2: unified bounds are all zero, skipping");
-        return;
+        continue;
       }
 
       /// -----------------------------------------------------------
@@ -391,7 +396,7 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
 
       ARTS_DEBUG("DT-2: consolidated halo for acquire "
                  << acquire << " -> unified min/max with rank=" << rank);
-    });
+    }
   });
 
   return count;
@@ -405,23 +410,26 @@ unsigned DbTransformsPass::annotateESD() {
   unsigned count = 0;
 
   module.walk([&](func::FuncOp func) {
-    func.walk([&](DbAcquireOp acquire) {
+    SmallVector<DbAcquireOp, 16> acquires;
+    func.walk([&](DbAcquireOp acquire) { acquires.push_back(acquire); });
+
+    for (DbAcquireOp acquire : acquires) {
       /// -----------------------------------------------------------
       /// Step 0: Only process block or stencil partitioned acquires.
       /// Coarse acquires touch the full DB and don't benefit from ESD.
       /// -----------------------------------------------------------
       auto partMode = acquire.getPartitionMode();
       if (!partMode)
-        return;
+        continue;
       if (*partMode != PartitionMode::block &&
           *partMode != PartitionMode::stencil)
-        return;
+        continue;
 
       /// Skip acquires that already have ESD annotation.
       auto existingContract = getLoweringContract(acquire.getPtr());
       if (existingContract && existingContract->esdByteOffset &&
           existingContract->esdByteSize)
-        return;
+        continue;
 
       ARTS_DEBUG("DT-3: evaluating acquire " << acquire);
 
@@ -434,7 +442,7 @@ unsigned DbTransformsPass::annotateESD() {
       auto alloc = dyn_cast_or_null<DbAllocOp>(allocOp);
       if (!alloc) {
         ARTS_DEBUG("DT-3: no underlying alloc, skipping");
-        return;
+        continue;
       }
 
       /// Determine scalar element byte size from the allocation's element type.
@@ -443,13 +451,13 @@ unsigned DbTransformsPass::annotateESD() {
         elementType = memrefType.getElementType();
       if (!elementType.isIntOrFloat()) {
         ARTS_DEBUG("DT-3: non-scalar element type, skipping");
-        return;
+        continue;
       }
       int64_t scalarBytes =
           (elementType.getIntOrFloatBitWidth() + 7) / 8;
       if (scalarBytes <= 0) {
         ARTS_DEBUG("DT-3: invalid scalar byte size, skipping");
-        return;
+        continue;
       }
 
       /// Get element sizes from the allocation (inner dimensions of each DB
@@ -457,21 +465,25 @@ unsigned DbTransformsPass::annotateESD() {
       auto allocElementSizes = alloc.getElementSizes();
       if (allocElementSizes.empty()) {
         ARTS_DEBUG("DT-3: no element sizes on alloc, skipping");
-        return;
+        continue;
       }
 
       /// Resolve all element sizes to static constants. If any is dynamic,
       /// we cannot statically compute byte offset/size.
       SmallVector<int64_t, 4> staticElementSizes;
       staticElementSizes.reserve(allocElementSizes.size());
+      bool hasDynamicElementSize = false;
       for (Value sz : allocElementSizes) {
         auto constVal = ValueAnalysis::getConstantValue(sz);
         if (!constVal) {
           ARTS_DEBUG("DT-3: dynamic element size, skipping");
-          return;
+          hasDynamicElementSize = true;
+          break;
         }
         staticElementSizes.push_back(*constVal);
       }
+      if (hasDynamicElementSize)
+        continue;
 
       /// -----------------------------------------------------------
       /// Step 2: Determine the access footprint based on partition
@@ -487,30 +499,38 @@ unsigned DbTransformsPass::annotateESD() {
         auto partSizes = acquire.getPartitionSizes();
         if (partOffsets.empty() || partSizes.empty()) {
           ARTS_DEBUG("DT-3: no partition offsets/sizes, skipping");
-          return;
+          continue;
         }
 
         /// Resolve partition offsets to static constants.
         SmallVector<int64_t, 4> staticOffsets;
+        bool hasDynamicPartitionOffset = false;
         for (Value v : partOffsets) {
           auto c = ValueAnalysis::getConstantValue(v);
           if (!c) {
             ARTS_DEBUG("DT-3: dynamic partition offset, skipping");
-            return;
+            hasDynamicPartitionOffset = true;
+            break;
           }
           staticOffsets.push_back(*c);
         }
+        if (hasDynamicPartitionOffset)
+          continue;
 
         /// Resolve partition sizes to static constants.
         SmallVector<int64_t, 4> staticSizes;
+        bool hasDynamicPartitionSize = false;
         for (Value v : partSizes) {
           auto c = ValueAnalysis::getConstantValue(v);
           if (!c) {
             ARTS_DEBUG("DT-3: dynamic partition size, skipping");
-            return;
+            hasDynamicPartitionSize = true;
+            break;
           }
           staticSizes.push_back(*c);
         }
+        if (hasDynamicPartitionSize)
+          continue;
 
         /// Linearize the offset: for N-D element sizes [d0, d1, ...],
         /// linearOffset = off[0]*d1*d2*... + off[1]*d2*... + ... + off[N-1]
@@ -519,7 +539,7 @@ unsigned DbTransformsPass::annotateESD() {
             std::min<unsigned>(staticOffsets.size(), staticElementSizes.size());
         if (rank == 0) {
           ARTS_DEBUG("DT-3: zero rank, skipping");
-          return;
+          continue;
         }
 
         int64_t linearOffset = 0;
@@ -547,23 +567,32 @@ unsigned DbTransformsPass::annotateESD() {
         auto partSizes = acquire.getPartitionSizes();
         if (partOffsets.empty() || partSizes.empty()) {
           ARTS_DEBUG("DT-3: stencil acquire without partition info, skipping");
-          return;
+          continue;
         }
 
         /// Resolve partition offsets and sizes.
         SmallVector<int64_t, 4> staticOffsets, staticSizes;
+        bool hasDynamicPartitionInfo = false;
         for (Value v : partOffsets) {
           auto c = ValueAnalysis::getConstantValue(v);
-          if (!c)
-            return;
+          if (!c) {
+            hasDynamicPartitionInfo = true;
+            break;
+          }
           staticOffsets.push_back(*c);
         }
+        if (hasDynamicPartitionInfo)
+          continue;
         for (Value v : partSizes) {
           auto c = ValueAnalysis::getConstantValue(v);
-          if (!c)
-            return;
+          if (!c) {
+            hasDynamicPartitionInfo = true;
+            break;
+          }
           staticSizes.push_back(*c);
         }
+        if (hasDynamicPartitionInfo)
+          continue;
 
         /// Apply halo expansion from the contract if available.
         /// The halo extends the partition in each dimension:
@@ -604,7 +633,7 @@ unsigned DbTransformsPass::annotateESD() {
         unsigned rank = std::min<unsigned>(adjustedOffsets.size(),
                                            staticElementSizes.size());
         if (rank == 0)
-          return;
+          continue;
 
         int64_t linearOffset = 0;
         for (unsigned i = 0; i < rank; ++i) {
@@ -629,11 +658,11 @@ unsigned DbTransformsPass::annotateESD() {
       /// -----------------------------------------------------------
       if (esdByteSize <= 0) {
         ARTS_DEBUG("DT-3: computed zero or negative byte size, skipping");
-        return;
+        continue;
       }
       if (esdByteOffset < 0) {
         ARTS_DEBUG("DT-3: computed negative byte offset, skipping");
-        return;
+        continue;
       }
 
       /// Build the updated contract with ESD fields.
@@ -659,7 +688,7 @@ unsigned DbTransformsPass::annotateESD() {
       ARTS_DEBUG("DT-3: annotated ESD for acquire "
                  << acquire << " -> offset=" << esdByteOffset
                  << " size=" << esdByteSize);
-    });
+    }
   });
 
   return count;
@@ -673,20 +702,23 @@ unsigned DbTransformsPass::cacheBlockWindows() {
   unsigned count = 0;
 
   module.walk([&](func::FuncOp func) {
-    func.walk([&](DbAcquireOp acquire) {
+    SmallVector<DbAcquireOp, 16> acquires;
+    func.walk([&](DbAcquireOp acquire) { acquires.push_back(acquire); });
+
+    for (DbAcquireOp acquire : acquires) {
       /// -----------------------------------------------------------
       /// Step 0: Only process block-partitioned acquires.
       /// Stencil and coarse acquires don't use block window caching.
       /// -----------------------------------------------------------
       auto partMode = acquire.getPartitionMode();
       if (!partMode || *partMode != PartitionMode::block)
-        return;
+        continue;
 
       /// Skip acquires that already have cached block window annotation.
       auto existingContract = getLoweringContract(acquire.getPtr());
       if (existingContract && existingContract->cachedStartBlock &&
           existingContract->cachedBlockCount)
-        return;
+        continue;
 
       ARTS_DEBUG("DT-7: evaluating acquire " << acquire);
 
@@ -698,30 +730,38 @@ unsigned DbTransformsPass::cacheBlockWindows() {
       auto partSizes = acquire.getPartitionSizes();
       if (partOffsets.empty() || partSizes.empty()) {
         ARTS_DEBUG("DT-7: no partition offsets/sizes, skipping");
-        return;
+        continue;
       }
 
       SmallVector<int64_t, 4> staticOffsets;
       staticOffsets.reserve(partOffsets.size());
+      bool hasDynamicPartitionOffset = false;
       for (Value v : partOffsets) {
         auto c = ValueAnalysis::getConstantValue(v);
         if (!c) {
           ARTS_DEBUG("DT-7: dynamic partition offset, skipping");
-          return;
+          hasDynamicPartitionOffset = true;
+          break;
         }
         staticOffsets.push_back(*c);
       }
+      if (hasDynamicPartitionOffset)
+        continue;
 
       SmallVector<int64_t, 4> staticSizes;
       staticSizes.reserve(partSizes.size());
+      bool hasDynamicPartitionSize = false;
       for (Value v : partSizes) {
         auto c = ValueAnalysis::getConstantValue(v);
         if (!c) {
           ARTS_DEBUG("DT-7: dynamic partition size, skipping");
-          return;
+          hasDynamicPartitionSize = true;
+          break;
         }
         staticSizes.push_back(*c);
       }
+      if (hasDynamicPartitionSize)
+        continue;
 
       /// -----------------------------------------------------------
       /// Step 2: Resolve block sizes. Try the contract's blockShape
@@ -754,13 +794,13 @@ unsigned DbTransformsPass::cacheBlockWindows() {
         auto alloc = dyn_cast_or_null<DbAllocOp>(allocOp);
         if (!alloc) {
           ARTS_DEBUG("DT-7: no underlying alloc, skipping");
-          return;
+          continue;
         }
 
         auto allocElementSizes = alloc.getElementSizes();
         if (allocElementSizes.empty()) {
           ARTS_DEBUG("DT-7: no element sizes on alloc, skipping");
-          return;
+          continue;
         }
 
         staticBlockSizes.reserve(allocElementSizes.size());
@@ -779,7 +819,7 @@ unsigned DbTransformsPass::cacheBlockWindows() {
 
       if (staticBlockSizes.empty()) {
         ARTS_DEBUG("DT-7: could not resolve block sizes, skipping");
-        return;
+        continue;
       }
 
       /// -----------------------------------------------------------
@@ -802,17 +842,21 @@ unsigned DbTransformsPass::cacheBlockWindows() {
           staticBlockSizes.size());
       if (rank == 0) {
         ARTS_DEBUG("DT-7: zero rank, skipping");
-        return;
+        continue;
       }
 
       /// Validate all block sizes are positive.
+      bool hasInvalidBlockSize = false;
       for (unsigned d = 0; d < rank; ++d) {
         if (staticBlockSizes[d] <= 0) {
           ARTS_DEBUG("DT-7: non-positive block size at dim " << d
                                                              << ", skipping");
-          return;
+          hasInvalidBlockSize = true;
+          break;
         }
       }
+      if (hasInvalidBlockSize)
+        continue;
 
       /// Compute per-dimension block coordinates and block counts.
       SmallVector<int64_t, 4> blockCoords(rank);
@@ -845,11 +889,11 @@ unsigned DbTransformsPass::cacheBlockWindows() {
       /// -----------------------------------------------------------
       if (startBlock < 0) {
         ARTS_DEBUG("DT-7: computed negative start block, skipping");
-        return;
+        continue;
       }
       if (blockCount <= 0) {
         ARTS_DEBUG("DT-7: computed non-positive block count, skipping");
-        return;
+        continue;
       }
 
       LoweringContractInfo newContract =
@@ -874,7 +918,7 @@ unsigned DbTransformsPass::cacheBlockWindows() {
       ARTS_DEBUG("DT-7: cached block window for acquire "
                  << acquire << " -> startBlock=" << startBlock
                  << " blockCount=" << blockCount);
-    });
+    }
   });
 
   return count;

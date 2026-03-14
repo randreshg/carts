@@ -23,6 +23,10 @@ struct LoweringContractInfo {
   SmallVector<Value, 4> minOffsets;
   SmallVector<Value, 4> maxOffsets;
   SmallVector<Value, 4> writeFootprint;
+  SmallVector<int64_t, 4> staticBlockShape;
+  SmallVector<int64_t, 4> staticMinOffsets;
+  SmallVector<int64_t, 4> staticMaxOffsets;
+  SmallVector<int64_t, 4> staticWriteFootprint;
   bool supportedBlockHalo = false;
 
   // Dimension-aware stencil analysis (EXT-PART-1)
@@ -48,25 +52,44 @@ struct LoweringContractInfo {
   // Critical path distance (ET-6)
   std::optional<int64_t> criticalPathDistance;
 
-  // TODO(QUALITY): LoweringContractInfo::empty() checks 15 conditions in a
-  // single expression. Every new field requires manual update or empty() will
-  // be wrong. Consider tracking a field count or using a hasAnyField flag.
+  bool hasDistributionContract() const {
+    return depPattern || distributionKind || distributionPattern ||
+           distributionVersion;
+  }
+
+  bool hasSpatialContract() const {
+    return !ownerDims.empty() || !spatialDims.empty() || !blockShape.empty() ||
+           !minOffsets.empty() || !maxOffsets.empty() ||
+           !writeFootprint.empty() || !staticBlockShape.empty() ||
+           !staticMinOffsets.empty() || !staticMaxOffsets.empty() ||
+           !staticWriteFootprint.empty() || supportedBlockHalo ||
+           !stencilIndependentDims.empty();
+  }
+
+  bool hasRuntimeHints() const {
+    return esdByteOffset || esdByteSize || cachedStartBlock ||
+           cachedBlockCount;
+  }
+
+  bool hasAnalysisRefinements() const {
+    return postDbRefined || inferredDbMode || estimatedTaskCost ||
+           criticalPathDistance;
+  }
+
   bool empty() const {
-    return !depPattern && !distributionKind && !distributionPattern &&
-           !distributionVersion && ownerDims.empty() && spatialDims.empty() &&
-           blockShape.empty() && minOffsets.empty() && maxOffsets.empty() &&
-           writeFootprint.empty() && !supportedBlockHalo &&
-           stencilIndependentDims.empty() && !esdByteOffset && !esdByteSize &&
-           !cachedStartBlock && !cachedBlockCount && !postDbRefined &&
-           !inferredDbMode && !estimatedTaskCost && !criticalPathDistance;
+    return !hasDistributionContract() && !hasSpatialContract() &&
+           !hasRuntimeHints() && !hasAnalysisRefinements();
   }
 
   bool isStencilFamily() const;
   bool hasOwnerDims() const { return !ownerDims.empty(); }
+  bool hasExplicitStencilContract() const;
   bool usesStencilDistribution() const;
   bool supportsBlockHalo() const;
+  std::optional<SmallVector<int64_t, 4>> getStaticBlockShape() const;
   std::optional<SmallVector<int64_t, 4>> getStaticMinOffsets() const;
   std::optional<SmallVector<int64_t, 4>> getStaticMaxOffsets() const;
+  std::optional<SmallVector<int64_t, 4>> getStaticWriteFootprint() const;
 };
 
 struct AcquireRewriteContract {
@@ -86,6 +109,9 @@ std::optional<LoweringContractInfo> getLoweringContract(Value target);
 std::optional<LoweringContractInfo> getSemanticContract(Operation *op);
 std::optional<LoweringContractInfo>
 getLoweringContract(Operation *op, OpBuilder &builder, Location loc);
+void mergeLoweringContractInfo(LoweringContractInfo &dest,
+                               const LoweringContractInfo &src);
+void normalizeLoweringContractInfo(LoweringContractInfo &info);
 AcquireRewriteContract deriveAcquireRewriteContract(DbAcquireOp acquire);
 SmallVector<unsigned, 4>
 resolveContractOwnerDims(const LoweringContractInfo &info, unsigned rank);

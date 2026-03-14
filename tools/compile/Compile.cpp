@@ -219,6 +219,11 @@ static cl::opt<PipelineStage> StopAt(
                           "Run complete pipeline (default)")),
     cl::init(PipelineStage::Complete));
 
+static bool shouldExportDetailedDiagnose(PipelineStage stopAt) {
+  return stopAt == PipelineStage::Complete ||
+         static_cast<int>(stopAt) >= static_cast<int>(PipelineStage::PreLowering);
+}
+
 ///===----------------------------------------------------------------------===///
 // Helper Functions for Initialization and Pass Setup
 ///===----------------------------------------------------------------------===///
@@ -299,7 +304,8 @@ void setupCanonicalizeMemrefs(PassManager &pm) {
 }
 
 /// Metadata collection pass.
-void setupCollectMetadata(PassManager &pm, bool shouldExport = false,
+void setupCollectMetadata(PassManager &pm, arts::AnalysisManager *AM = nullptr,
+                          bool shouldExport = false,
                           StringRef metadataFile = "") {
   std::string actualMetadataFile =
       metadataFile.empty() ? MetadataFile.getValue() : metadataFile.str();
@@ -314,6 +320,8 @@ void setupCollectMetadata(PassManager &pm, bool shouldExport = false,
     pm.addPass(arts::createCollectMetadataPass(true, actualMetadataFile));
   else
     pm.addPass(arts::createCollectMetadataPass());
+  if (AM)
+    pm.addPass(arts::createVerifyMetadataPass(AM));
 }
 
 /// Initial cleanup and simplification passes.
@@ -486,9 +494,9 @@ void setupPreLowering(PassManager &pm) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createLoopInvariantCodeMotionPass());
-  // TODO(DOCS): DataPtrHoistingPass runs twice. The second invocation (in
-  // setupArtsToLLVM) handles loads materialized during Arts->LLVM lowering.
-  // Document why this first invocation is needed.
+  // Hoist loop-invariant DB/dep pointer loads before scalar replacement so the
+  // pre-lowering cleanup sees simpler loop bodies. A second invocation still
+  // runs in setupArtsToLLVM because Arts->LLVM lowering materializes new loads.
   pm.addPass(arts::createDataPtrHoistingPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
@@ -595,13 +603,18 @@ setupPassManager(ModuleOp module, MLIRContext &context,
     return success();
   };
 
+  auto releaseAnalysisManager = [&]() {
+    if (outAM)
+      *outAM = std::move(AM);
+  };
+
   std::vector<StageSpec> stages = {
       {PipelineStage::CanonicalizeMemrefs, "Error when canonicalizing memrefs",
        [&](PassManager &pm) { setupCanonicalizeMemrefs(pm); }},
       {PipelineStage::CollectMetadata, "Error when collecting metadata",
        [&](PassManager &pm) {
          bool shouldExport = (stopAt == PipelineStage::CollectMetadata);
-         setupCollectMetadata(pm, shouldExport);
+         setupCollectMetadata(pm, outAM ? AM.get() : nullptr, shouldExport);
        }},
       {PipelineStage::InitialCleanup, "Error simplifying the IR",
        [&](PassManager &pm) {
@@ -641,8 +654,10 @@ setupPassManager(ModuleOp module, MLIRContext &context,
   for (const StageSpec &spec : stages) {
     if (failed(runStage(spec)))
       return failure();
-    if (stopAt == spec.stage)
+    if (stopAt == spec.stage) {
+      releaseAnalysisManager();
       return success();
+    }
   }
 
   /// Optimizations
@@ -670,8 +685,7 @@ setupPassManager(ModuleOp module, MLIRContext &context,
   }
 
   /// Return analysis manager if requested
-  if (outAM)
-    *outAM = std::move(AM);
+  releaseAnalysisManager();
 
   return success();
 }
@@ -721,6 +735,8 @@ int main(int argc, char **argv) {
 
   /// Export diagnostics if requested
   if (Diagnose && AM) {
+    bool includeAnalysis = shouldExportDetailedDiagnose(effectiveStopAt) &&
+                           AM->hasCapturedDiagnostics();
     if (!DiagnoseOutput.empty()) {
       /// Export to file
       std::error_code EC;
@@ -730,11 +746,11 @@ int main(int argc, char **argv) {
             "Could not open diagnostics output file: " << DiagnoseOutput);
         return 1;
       }
-      AM->exportToJson(outputFile, /*includeAnalysis=*/true);
+      AM->exportToJson(outputFile, includeAnalysis);
       outputFile.close();
     } else {
       /// Export to stdout
-      AM->exportToJson(llvm::outs(), /*includeAnalysis=*/true);
+      AM->exportToJson(llvm::outs(), includeAnalysis);
     }
   }
 

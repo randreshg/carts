@@ -104,8 +104,13 @@ static bool isTiling2DTaskAcquire(DbAcquireOp acquire) {
 static bool refineContractWithFacts(LoweringContractInfo &contract,
                                     const DbAcquirePartitionFacts &facts) {
   bool changed = false;
+  const bool hasSeededContract = !contract.empty();
+  const bool seededStencilSemantics = contract.hasExplicitStencilContract();
 
-  if (!contract.depPattern && facts.depPattern != ArtsDepPattern::unknown) {
+  /// Post-DB analysis should refine the same contract language, not invent a
+  /// new semantic family after the pre-DB pattern pipeline failed to match.
+  if (hasSeededContract && !contract.depPattern &&
+      facts.depPattern != ArtsDepPattern::unknown) {
     contract.depPattern = facts.depPattern;
     changed = true;
   }
@@ -117,24 +122,31 @@ static bool refineContractWithFacts(LoweringContractInfo &contract,
     }
   }
 
-  if (contract.ownerDims.empty()) {
+  if (seededStencilSemantics) {
     ArrayRef<unsigned> dims = facts.stencilOwnerDims;
     if (dims.empty())
       dims = facts.partitionDims;
     if (!dims.empty()) {
-      contract.ownerDims.reserve(dims.size());
+      SmallVector<int64_t, 4> refinedOwnerDims;
+      refinedOwnerDims.reserve(dims.size());
       for (unsigned dim : dims)
-        contract.ownerDims.push_back(static_cast<int64_t>(dim));
-      changed = true;
+        refinedOwnerDims.push_back(static_cast<int64_t>(dim));
+      if (contract.ownerDims != refinedOwnerDims &&
+          (contract.ownerDims.empty() ||
+           refinedOwnerDims.size() >= contract.ownerDims.size())) {
+        contract.ownerDims = std::move(refinedOwnerDims);
+        changed = true;
+      }
     }
   }
 
-  if (!contract.supportedBlockHalo && facts.supportedBlockHalo) {
+  if (seededStencilSemantics && !contract.supportedBlockHalo &&
+      facts.supportedBlockHalo) {
     contract.supportedBlockHalo = true;
     changed = true;
   }
 
-  if (!contract.distributionPattern &&
+  if (seededStencilSemantics && !contract.distributionPattern &&
       facts.accessPattern == AccessPattern::Stencil) {
     contract.distributionPattern = EdtDistributionPattern::stencil;
     changed = true;
@@ -684,8 +696,8 @@ DbAnalysis::getAcquireContractSummary(DbAcquireOp acquire) {
   AcquireContractSummary summary;
   if (auto contract = getLoweringContract(acquire.getPtr()))
     summary.contract = *contract;
-  else if (auto semantic = getSemanticContract(acquire.getOperation()))
-    summary.contract = *semantic;
+  if (auto semantic = getSemanticContract(acquire.getOperation()))
+    mergeLoweringContractInfo(summary.contract, *semantic);
 
   if (const DbAcquirePartitionFacts *facts = getAcquirePartitionFacts(acquire)) {
     summary.refinedByDbAnalysis =

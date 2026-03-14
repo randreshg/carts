@@ -210,9 +210,8 @@ __ARTS_RTL_ATTRS(arts_rt, ControlAttrs, SExt, ParamAttrs(SExt, ReadOnlyPtrAttrs)
 __ARTS_RTL(arts_shutdown, Void)
 __ARTS_RTL_ATTRS(arts_shutdown, ControlAttrs, EmptyAttrs, ParamAttrs())
 
-/// TODO: artsSetConfigPath/artsSetConfigData do not exist in v2 public API
-/// or internal sources. Kept for backward compat with CARTS codegen
-/// insertMainFn(). Remove once codegen is updated to embed config differently.
+/// CARTS still calls these runtime entrypoints from insertMainFn() to hand the
+/// embedded or external runtime configuration blob to ARTS startup.
 /// void artsSetConfigPath(const char *path);
 __ARTS_RTL(artsSetConfigPath, Void, Int8Ptr)
 __ARTS_RTL_ATTRS(artsSetConfigPath, ControlAttrs, EmptyAttrs,

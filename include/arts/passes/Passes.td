@@ -678,12 +678,9 @@ def VerifyMetadata : Pass<"verify-metadata", "mlir::ModuleOp"> {
     any entities missing metadata, and optionally fails compilation if coverage
     is incomplete.
 
-    This pass is automatically run when --diagnose is enabled to ensure the
-    diagnose output contains complete information for all entities.
-
-    TODO: VerifyMetadataPass is declared but never added to the pipeline in
-    Compile.cpp. Either add it when Diagnose is enabled, or remove the claim
-    from documentation.
+    This pass is automatically run from the `collect-metadata` stage when
+    `carts-compile --diagnose` is enabled so the exported diagnose payload
+    includes coverage information for loops and memrefs.
   }];
   let dependentDialects = [
     "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",

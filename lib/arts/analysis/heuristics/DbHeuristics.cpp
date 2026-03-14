@@ -186,7 +186,8 @@ SmallVector<AcquireDecision> DbHeuristics::chooseAcquirePolicies(
 
     /// If the summary indicates stencil semantics with block hints,
     /// the acquire can use halo-aware block access instead of full-range.
-    if (needsFullRange && summary && summary->usesStencilSemantics() &&
+    if (needsFullRange && summary &&
+        summary->contract.hasExplicitStencilContract() &&
         summary->hasBlockHints && !facts->hasIndirectAccess) {
       ARTS_DEBUG("  chooseAcquirePolicies[" << i
                  << "]: stencil contract with block hints overrides "

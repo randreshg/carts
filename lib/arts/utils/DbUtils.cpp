@@ -6,6 +6,7 @@
 
 #include "arts/utils/DbUtils.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
@@ -30,8 +31,18 @@ static void getAcquireDependencySlice(DbAcquireOp acquire,
                                       SmallVector<Value> &sizesOut,
                                       SmallVector<Value> &offsetsOut) {
   /// Dependency shape for DB acquires is defined in DB-space by the explicit
-  /// offsets/sizes operands. Partition hints are loop-iteration hints and can
-  /// live in a different index space.
+  /// offsets/sizes operands when present.
+  ///
+  /// Cached block windows are a post-DB optimization hint, not a canonical
+  /// dependency slice. They live in block-space and must not flow through the
+  /// generic dependency-offset helpers used by lowering, or consumers like
+  /// EdtLowering will subtract the start block twice.
+  if (!acquire.getOffsets().empty() && !acquire.getSizes().empty()) {
+    sizesOut.assign(acquire.getSizes().begin(), acquire.getSizes().end());
+    offsetsOut.assign(acquire.getOffsets().begin(), acquire.getOffsets().end());
+    return;
+  }
+
   sizesOut.assign(acquire.getSizes().begin(), acquire.getSizes().end());
   offsetsOut.assign(acquire.getOffsets().begin(), acquire.getOffsets().end());
 }

@@ -111,6 +111,8 @@ public:
   /// Graph structure management
   DbAcquireNode *getOrCreateAcquireNode(DbAcquireOp op);
   DbAcquireNode *findAcquireNode(DbAcquireOp op) const;
+  SmallVector<DbAcquireNode *, 16> collectAllAcquireNodes();
+  SmallVector<const DbAcquireNode *, 16> collectAllAcquireNodes() const;
   void forEachChildNode(const std::function<void(NodeBase *)> &fn) const;
   size_t getAcquireNodesSize() const { return acquireNodes.size(); }
 

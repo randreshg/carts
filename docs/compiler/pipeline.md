@@ -41,6 +41,7 @@ cross-stage contracts.
 - `replaceAffineCFG` / `RaiseSCFToAffine` (twice, nested func)
 - `CSE` (nested func)
 - `CollectMetadataPass`
+- `VerifyMetadataPass` when `--diagnose` is enabled
 
 ### 3) initial-cleanup
 - `LowerAffine` (nested func)

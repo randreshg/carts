@@ -1,8 +1,8 @@
 ///==========================================================================///
 /// File: Seidel2DWavefrontPattern.cpp
 ///
-/// Rewrite Seidel-style in-place 2D stencils on ARTS IR into a tiled
-/// wavefront schedule after OpenMP-to-ARTS conversion.
+/// Rewrite Seidel-style in-place 2D stencils on ARTS IR into a macro-tiled
+/// dependence DAG after OpenMP-to-ARTS conversion.
 ///
 /// Before:
 ///   scf.for %t = ...
@@ -16,24 +16,20 @@
 ///
 /// After:
 ///   scf.for %t = ...
-///     scf.for %wave = 0 .. W {
-///       arts.edt <parallel> {
-///         arts.for(%tileRow = rowMin .. rowMax step tileRows) {
-///           scf.for %i in tile
-///             scf.for %j in tile
-///               original update
-///         }
-///       }
-///       arts.barrier
+///     arts.epoch {
+///       scf.for %tileI = 0 .. numITiles
+///         scf.for %tileJ = 0 .. numJTiles
+///           arts.edt <task> (%self, %pred[-1,-1], %pred[-1,0],
+///                            %pred[-1,1], %pred[0,-1]) {
+///             scf.for %i in macroTile
+///               scf.for %j in macroTile
+///                 original update
+///           }
 ///     }
 ///
-/// The weighted wavefront `wave = 2*tileI + tileJ` preserves the `(i-1,j+1)`
-/// dependence that breaks plain anti-diagonals while keeping each wave's
-/// parallel work as a top-level `arts.for` for the existing ForLowering path.
-///
-/// The inner `arts.for` iterates in row-space, not tile-index space. That lets
-/// later acquire planning reuse the normal row-block reasoning instead of
-/// rediscovering a tile-index to row-range mapping.
+/// The DAG keeps the Seidel predecessor set explicit through DbControlOps, but
+/// each EDT now covers a macro-tile large enough to amortize launch and
+/// dependence-registration overhead.
 ///==========================================================================///
 
 #include "arts/Dialect.h"
@@ -48,6 +44,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
 #include <cmath>
+#include <optional>
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -87,7 +84,7 @@ static int64_t resolveWorkerCount(EdtOp parallelEdt) {
   return 1;
 }
 
-static std::pair<int64_t, int64_t>
+static std::optional<std::pair<int64_t, int64_t>>
 chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
   ForOp rowFor = match.rowFor;
   auto iTrip =
@@ -112,7 +109,20 @@ chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
 
   int64_t bestNumITiles = 1;
   int64_t bestNumJTiles = 1;
+  bool foundCandidate = false;
   long double bestScore = std::numeric_limits<long double>::infinity();
+  long double totalCells =
+      static_cast<long double>(iExtent) * static_cast<long double>(jExtent);
+  /// Keep enough interior work in each macro-tile to amortize EDT launch and
+  /// dependence setup, but still allow multiple tiles per worker when the
+  /// interior is large enough to sustain it.
+  constexpr int64_t minCellsPerTask = 1 << 14;
+  int64_t maxTilesByWork = std::max<int64_t>(
+      1, static_cast<int64_t>(std::ceil(totalCells /
+                                        static_cast<long double>(
+                                            minCellsPerTask))));
+  maxTilesByWork = std::min<int64_t>(
+      maxTilesByWork, std::max<int64_t>(4, workers * 2));
 
   auto computeWeightedRankCount = [](int64_t numITiles,
                                      int64_t numJTiles) -> int64_t {
@@ -133,8 +143,22 @@ chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
     return bestWidth;
   };
 
-  int64_t desiredFrontier = std::min<int64_t>(
-      workers, computeWeightedFrontierWidth(maxRowTiles, maxColTiles));
+  /// Seidel macro-tiles must amortize EDT launch and dependence-registration
+  /// overhead. Bound the total tile count by a minimum work-per-task target,
+  /// then pick the best weighted-wavefront shape that fits inside that budget.
+  /// If the interior cannot sustain even a 2-D tiled wavefront under that
+  /// budget, fall back to the sequentialized form instead of forcing an
+  /// unprofitable task DAG.
+  if (maxTilesByWork < 4)
+    return std::nullopt;
+
+  int64_t desiredFrontier = std::clamp<int64_t>(
+      static_cast<int64_t>(std::ceil(std::sqrt(
+          static_cast<long double>(maxTilesByWork)))),
+      int64_t{1}, workers);
+  long double desiredTasks = static_cast<long double>(maxTilesByWork);
+  long double targetWorkPerTask =
+      totalCells / std::max<long double>(1.0L, desiredTasks);
 
   auto scoreCandidate = [&](int64_t numITiles,
                             int64_t numJTiles) -> long double {
@@ -147,38 +171,49 @@ chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
     // available concurrency from the exact width of those rank frontiers
     // instead of the ordinary anti-diagonal width.
     int64_t tilesPerStep = numITiles * numJTiles;
+    if (tilesPerStep > maxTilesByWork)
+      return std::numeric_limits<long double>::infinity();
     int64_t frontierWidth = computeWeightedFrontierWidth(numITiles, numJTiles);
     int64_t rankCount = computeWeightedRankCount(numITiles, numJTiles);
     long double averageFrontier =
         static_cast<long double>(tilesPerStep) /
         static_cast<long double>(std::max<int64_t>(1, rankCount));
+    long double workPerTask =
+        totalCells / static_cast<long double>(std::max<int64_t>(1, tilesPerStep));
 
     long double frontierPenalty = 0.0L;
     if (frontierWidth < desiredFrontier) {
       long double gap =
           static_cast<long double>(desiredFrontier - frontierWidth);
-      frontierPenalty = gap * gap * 1.0e12L;
+      frontierPenalty = gap * gap * 1.0e8L;
     }
 
     long double averagePenalty = 0.0L;
     long double desiredAverage = std::max<long double>(
-        1.0L, static_cast<long double>(desiredFrontier) * 0.65L);
+        1.0L, static_cast<long double>(desiredFrontier) * 0.5L);
     if (averageFrontier < desiredAverage) {
       long double gap = desiredAverage - averageFrontier;
-      averagePenalty = gap * gap * 1.0e8L;
+      averagePenalty = gap * gap * 1.0e6L;
     }
 
-    long double taskCost = static_cast<long double>(tilesPerStep) * 1.0e4L;
+    long double workPenalty = 0.0L;
+    if (workPerTask < targetWorkPerTask) {
+      long double gap = targetWorkPerTask - workPerTask;
+      workPenalty = gap * gap * 1.0e3L;
+    }
+
+    long double taskCost = static_cast<long double>(tilesPerStep) * 1.0e3L;
     long double rankCost = static_cast<long double>(rankCount) * 1.0e3L;
     long double shapePenalty =
         std::abs(static_cast<long double>(numJTiles) -
                  (static_cast<long double>(2 * numITiles - 1))) *
-        10.0L;
+        1.0L;
     long double fullRangePenalty =
         (numITiles == 1 || numJTiles == 1) ? 1.0e15L : 0.0L;
 
-    return frontierPenalty + averagePenalty + taskCost + rankCost +
-           shapePenalty + fullRangePenalty;
+    return frontierPenalty + averagePenalty + workPenalty + taskCost +
+           rankCost + shapePenalty +
+           fullRangePenalty;
   };
 
   for (int64_t numITiles = minRowTiles; numITiles <= maxRowTiles; ++numITiles) {
@@ -189,15 +224,19 @@ chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
         bestScore = score;
         bestNumITiles = numITiles;
         bestNumJTiles = numJTiles;
+        foundCandidate = true;
       }
     }
   }
+
+  if (!foundCandidate)
+    return std::nullopt;
 
   int64_t tileRows =
       std::max<int64_t>(1, (iExtent + bestNumITiles - 1) / bestNumITiles);
   int64_t tileCols =
       std::max<int64_t>(1, (jExtent + bestNumJTiles - 1) / bestNumJTiles);
-  return {tileRows, tileCols};
+  return std::make_pair(tileRows, tileCols);
 }
 
 static bool matchUnitInnerLoop(Operation *op, Value &lb, Value &ub, Value &iv) {
@@ -211,7 +250,12 @@ static bool matchUnitInnerLoop(Operation *op, Value &lb, Value &ub, Value &iv) {
 }
 
 static Block &getLoopBody(Operation *loopOp) {
-  return cast<scf::ForOp>(loopOp).getRegion().front();
+  if (auto artsFor = dyn_cast<ForOp>(loopOp))
+    return artsFor.getRegion().front();
+  if (auto scfFor = dyn_cast<scf::ForOp>(loopOp))
+    return scfFor.getRegion().front();
+  llvm::report_fatal_error(
+      "Seidel2DWavefrontPattern expected arts.for or scf.for loop body");
 }
 
 static bool matchOffset(Value index, Value iv, int64_t offset) {
@@ -394,138 +438,40 @@ static Value createSubtractOrZero(OpBuilder &builder, Location loc, Value lhs,
   return builder.create<arith::SelectOp>(loc, canSubtract, diff, zero);
 }
 
-static Value createMaxIndex(OpBuilder &builder, Location loc, Value lhs,
-                            Value rhs) {
-  Value cmp =
-      builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt, lhs, rhs);
-  return builder.create<arith::SelectOp>(loc, cmp, lhs, rhs);
+static void rewriteSeidelSequential(SeidelWavefrontMatch &match) {
+  OpBuilder builder(match.rowFor);
+  auto seqRowFor =
+      builder.create<scf::ForOp>(match.rowFor.getLoc(),
+                                 match.rowFor.getLowerBound().front(),
+                                 match.rowFor.getUpperBound().front(),
+                                 match.rowFor.getStep().front());
+  copyArtsMetadataAttrs(match.rowFor.getOperation(), seqRowFor.getOperation());
+
+  OpBuilder rowBuilder = OpBuilder::atBlockBegin(seqRowFor.getBody());
+  IRMapping rowMap;
+  rowMap.map(match.rowIV, seqRowFor.getInductionVar());
+  for (Operation &op : getLoopBody(match.rowFor).without_terminator())
+    rowBuilder.clone(op, rowMap);
+
+  match.rowFor.erase();
+
+  Block &edtBody = match.parallelEdt.getBody().front();
+  Operation *insertBefore = match.parallelEdt.getOperation();
+  for (Operation &op :
+       llvm::make_early_inc_range(edtBody.without_terminator()))
+    op.moveBefore(insertBefore);
+  match.parallelEdt.erase();
 }
 
-static Value createSignedMinIndex(OpBuilder &builder, Location loc, Value lhs,
-                                  Value rhs) {
-  Value cmp =
-      builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, lhs, rhs);
-  return builder.create<arith::SelectOp>(loc, cmp, lhs, rhs);
-}
-
-static Value createSignedMaxIndex(OpBuilder &builder, Location loc, Value lhs,
-                                  Value rhs) {
-  Value cmp =
-      builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, lhs, rhs);
-  return builder.create<arith::SelectOp>(loc, cmp, lhs, rhs);
-}
-
-static Value createClampIndex(OpBuilder &builder, Location loc, Value value,
-                              int64_t minVal, int64_t maxVal) {
-  Value lower = createConstantIndex(builder, loc, minVal);
-  Value upper = createConstantIndex(builder, loc, maxVal);
-  return createSignedMinIndex(
-      builder, loc, createSignedMaxIndex(builder, loc, value, lower), upper);
-}
-
-static Value createAnd(OpBuilder &builder, Location loc, Value lhs, Value rhs) {
-  return builder.create<arith::AndIOp>(loc, lhs, rhs);
-}
-
-static std::pair<Value, Value> computeTileBounds(OpBuilder &builder,
-                                                 Location loc, Value tileCoord,
-                                                 Value baseLowerBound,
-                                                 Value globalUpperBound,
-                                                 Value tileExtent) {
-  Value tileStart = builder.create<arith::AddIOp>(
-      loc, baseLowerBound,
-      builder.create<arith::MulIOp>(loc, tileCoord, tileExtent));
-  Value tileEnd = createMinIndex(
-      builder, loc, builder.create<arith::AddIOp>(loc, tileStart, tileExtent),
-      globalUpperBound);
-  return {tileStart, tileEnd};
-}
-
-static Value createTileControl(OpBuilder &builder, Location loc, Value memref,
-                               ArtsMode mode, Value tileI, Value tileJ,
-                               Value iLb, Value iUb, Value jLb, Value jUb,
-                               Value tileRows, Value tileCols,
-                               int64_t deltaTileI, int64_t deltaTileJ,
-                               int64_t numITilesConst, int64_t numJTilesConst) {
-  Value depTileI = tileI;
-  Value depTileJ = tileJ;
-  Value valid = builder.create<arith::ConstantIntOp>(loc, 1, 1);
-  if (deltaTileI != 0) {
-    Value shifted = builder.create<arith::AddIOp>(
-        loc, tileI, createConstantIndex(builder, loc, deltaTileI));
-    Value lowerBound = createConstantIndex(builder, loc, 0);
-    Value upperBound = createConstantIndex(builder, loc, numITilesConst);
-    Value geLower = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::sge, shifted, lowerBound);
-    Value ltUpper = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::slt, shifted, upperBound);
-    valid = createAnd(builder, loc, valid,
-                      createAnd(builder, loc, geLower, ltUpper));
-    depTileI = createClampIndex(builder, loc, shifted, 0, numITilesConst - 1);
-  }
-  if (deltaTileJ != 0) {
-    Value shifted = builder.create<arith::AddIOp>(
-        loc, tileJ, createConstantIndex(builder, loc, deltaTileJ));
-    Value lowerBound = createConstantIndex(builder, loc, 0);
-    Value upperBound = createConstantIndex(builder, loc, numJTilesConst);
-    Value geLower = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::sge, shifted, lowerBound);
-    Value ltUpper = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::slt, shifted, upperBound);
-    valid = createAnd(builder, loc, valid,
-                      createAnd(builder, loc, geLower, ltUpper));
-    depTileJ = createClampIndex(builder, loc, shifted, 0, numJTilesConst - 1);
-  }
-
-  auto [depIStart, depIEnd] =
-      computeTileBounds(builder, loc, depTileI, iLb, iUb, tileRows);
-  auto [depJStart, depJEnd] =
-      computeTileBounds(builder, loc, depTileJ, jLb, jUb, tileCols);
-
-  Value depISize = createSubtractOrZero(builder, loc, depIEnd, depIStart);
-  Value depJSize = createSubtractOrZero(builder, loc, depJEnd, depJStart);
-  Value zero = createZeroIndex(builder, loc);
-  Value one = createOneIndex(builder, loc);
-  depISize = createMaxIndex(builder, loc, depISize, one);
-  depJSize = createMaxIndex(builder, loc, depJSize, one);
-  depISize = builder.create<arith::SelectOp>(loc, valid, depISize, zero);
-  depJSize = builder.create<arith::SelectOp>(loc, valid, depJSize, zero);
-
-  return builder
-      .create<DbControlOp>(loc, mode, memref, /*indices=*/SmallVector<Value>{},
-                           /*offsets=*/SmallVector<Value>{depIStart, depJStart},
-                           /*sizes=*/SmallVector<Value>{depISize, depJSize})
-      .getResult();
-}
-
-static void stampSeidelTileTask(Operation *op, int64_t blockRows,
-                                int64_t blockCols) {
-  if (!op)
-    return;
-  setDepPattern(op, ArtsDepPattern::stencil_tiling_nd);
-  setStencilSpatialDims(op, {0, 1});
-  setStencilOwnerDims(op, {0, 1});
-  setStencilBlockShape(op, {blockRows, blockCols});
-  setStencilMinOffsets(op, {-1, -1});
-  setStencilMaxOffsets(op, {1, 1});
-  setStencilWriteFootprint(op, {0, 0});
-  setSupportedBlockHalo(op);
-}
-
-static void rewriteSeidelWavefront(SeidelWavefrontMatch &match) {
+static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
+                                   std::pair<int64_t, int64_t> tileShape) {
   Location loc = match.parallelEdt.getLoc();
   OpBuilder builder(match.parallelEdt);
-  auto [tileRowsConst, tileColsConst] = chooseAdaptiveTileShape(match);
-
-  auto epoch = builder.create<EpochOp>(loc);
-  Region &epochRegion = epoch.getRegion();
-  if (epochRegion.empty())
-    epochRegion.push_back(new Block());
-  Block &epochBlock = epochRegion.front();
-  builder.setInsertionPointToStart(&epochBlock);
+  auto [tileRowsConst, tileColsConst] = tileShape;
 
   Value zero = createZeroIndex(builder, loc);
   Value one = createOneIndex(builder, loc);
+  Value two = createConstantIndex(builder, loc, 2);
   Value tileRows = createConstantIndex(builder, loc, tileRowsConst);
   Value tileCols = createConstantIndex(builder, loc, tileColsConst);
 
@@ -533,72 +479,114 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match) {
   Value iUb = match.rowFor.getUpperBound().front();
   Value jLb = match.innerLowerBound;
   Value jUb = match.innerUpperBound;
-
   Value iTrip = builder.create<arith::SubIOp>(loc, iUb, iLb);
   Value jTrip = builder.create<arith::SubIOp>(loc, jUb, jLb);
   Value numITiles = createCeilDivPositive(builder, loc, iTrip, tileRowsConst);
   Value numJTiles = createCeilDivPositive(builder, loc, jTrip, tileColsConst);
-  int64_t iExtentConst = std::max<int64_t>(
-      1,
-      ValueAnalysis::tryFoldConstantIndex(match.rowFor.getUpperBound().front())
-              .value_or(1) -
-          ValueAnalysis::tryFoldConstantIndex(
-              match.rowFor.getLowerBound().front())
-              .value_or(0));
-  int64_t jExtentConst = std::max<int64_t>(
-      1,
-      ValueAnalysis::tryFoldConstantIndex(match.innerUpperBound).value_or(1) -
-          ValueAnalysis::tryFoldConstantIndex(match.innerLowerBound)
-              .value_or(0));
-  int64_t numITilesConst =
-      std::max<int64_t>(1, (iExtentConst + tileRowsConst - 1) / tileRowsConst);
-  int64_t numJTilesConst =
-      std::max<int64_t>(1, (jExtentConst + tileColsConst - 1) / tileColsConst);
-  int64_t allocRowsConst = std::max<int64_t>(
-      1, (iExtentConst + 2 + numITilesConst - 1) / numITilesConst);
-  int64_t allocColsConst = std::max<int64_t>(
-      1, (jExtentConst + 2 + numJTilesConst - 1) / numJTilesConst);
 
-  auto tileILoop = builder.create<scf::ForOp>(loc, zero, numITiles, one);
-  OpBuilder biBuilder = OpBuilder::atBlockBegin(tileILoop.getBody());
-  Value bi = tileILoop.getInductionVar();
+  Value numITilesMinusOne = builder.create<arith::SubIOp>(loc, numITiles, one);
+  Value numJTilesMinusOne = builder.create<arith::SubIOp>(loc, numJTiles, one);
+  Value doubleITilesMinusOne =
+      builder.create<arith::MulIOp>(loc, numITilesMinusOne, two);
+  Value waveUbExclusive = builder.create<arith::AddIOp>(
+      loc,
+      builder.create<arith::AddIOp>(loc, doubleITilesMinusOne,
+                                    numJTilesMinusOne),
+      one);
 
-  auto tileJLoop = biBuilder.create<scf::ForOp>(loc, zero, numJTiles, one);
-  OpBuilder bjBuilder = OpBuilder::atBlockBegin(tileJLoop.getBody());
-  Value bj = tileJLoop.getInductionVar();
-
-  auto [iStart, iEnd] =
-      computeTileBounds(bjBuilder, loc, bi, iLb, iUb, tileRows);
-  auto [jStart, jEnd] =
-      computeTileBounds(bjBuilder, loc, bj, jLb, jUb, tileCols);
-
-  SmallVector<Value, 9> deps;
-  deps.push_back(createTileControl(
-      bjBuilder, loc, match.stencilMemref, ArtsMode::inout, bi, bj, iLb, iUb,
-      jLb, jUb, tileRows, tileCols, 0, 0, numITilesConst, numJTilesConst));
-
-  static constexpr std::pair<int64_t, int64_t> predecessorOffsets[] = {
-      {-1, -1},
-      {-1, 0},
-      {-1, 1},
-      {0, -1},
-  };
-  for (auto [di, dj] : predecessorOffsets) {
-    deps.push_back(createTileControl(
-        bjBuilder, loc, match.stencilMemref, ArtsMode::in, bi, bj, iLb, iUb,
-        jLb, jUb, tileRows, tileCols, di, dj, numITilesConst, numJTilesConst));
-  }
-
-  auto tileTask = bjBuilder.create<EdtOp>(
-      loc, EdtType::task, match.parallelEdt.getConcurrency(), deps);
-  tileTask.setNoVerifyAttr(NoVerifyAttr::get(builder.getContext()));
+  auto waveLoop = builder.create<scf::ForOp>(loc, zero, waveUbExclusive, one);
   copyArtsMetadataAttrs(match.parallelEdt.getOperation(),
-                        tileTask.getOperation());
-  stampSeidelTileTask(tileTask.getOperation(), allocRowsConst, allocColsConst);
+                        waveLoop.getOperation());
+  setDepPattern(waveLoop.getOperation(), ArtsDepPattern::wavefront_2d);
+  setEdtDistributionPattern(waveLoop.getOperation(),
+                            EdtDistributionPattern::stencil);
+  setStencilSpatialDims(waveLoop.getOperation(), {0, 1});
+  setStencilOwnerDims(waveLoop.getOperation(), {0, 1});
+  setStencilBlockShape(waveLoop.getOperation(), {tileRowsConst, tileColsConst});
+  setStencilMinOffsets(waveLoop.getOperation(), {-1, -1});
+  setStencilMaxOffsets(waveLoop.getOperation(), {1, 1});
+  setStencilWriteFootprint(waveLoop.getOperation(), {0, 0});
+  setSupportedBlockHalo(waveLoop.getOperation());
 
-  Block &taskBody = tileTask.getBody().front();
-  OpBuilder taskBuilder = OpBuilder::atBlockBegin(&taskBody);
-  auto iLoop = taskBuilder.create<scf::ForOp>(loc, iStart, iEnd, one);
+  OpBuilder waveBuilder = OpBuilder::atBlockBegin(waveLoop.getBody());
+  Value wave = waveLoop.getInductionVar();
+
+  Value clippedTmp =
+      createSubtractOrZero(waveBuilder, loc, wave, numJTilesMinusOne);
+  Value biMin = createCeilDivPositive(waveBuilder, loc, clippedTmp, 2);
+
+  Value halfWave = waveBuilder.create<arith::DivUIOp>(loc, wave, two);
+  Value biMaxExclusive = createMinIndex(
+      waveBuilder, loc, waveBuilder.create<arith::AddIOp>(loc, halfWave, one),
+      numITiles);
+
+  auto tileParallel = waveBuilder.create<EdtOp>(
+      loc, EdtType::parallel, match.parallelEdt.getConcurrency());
+  tileParallel.setNoVerifyAttr(NoVerifyAttr::get(builder.getContext()));
+  copyArtsMetadataAttrs(match.parallelEdt.getOperation(),
+                        tileParallel.getOperation());
+  copyWorkerTopologyAttrs(match.parallelEdt.getOperation(),
+                          tileParallel.getOperation());
+  setDepPattern(tileParallel.getOperation(), ArtsDepPattern::wavefront_2d);
+  setEdtDistributionPattern(tileParallel.getOperation(),
+                            EdtDistributionPattern::stencil);
+  setStencilSpatialDims(tileParallel.getOperation(), {0, 1});
+  setStencilOwnerDims(tileParallel.getOperation(), {0, 1});
+  setStencilBlockShape(tileParallel.getOperation(), {tileRowsConst, tileColsConst});
+  setStencilMinOffsets(tileParallel.getOperation(), {-1, -1});
+  setStencilMaxOffsets(tileParallel.getOperation(), {1, 1});
+  setStencilWriteFootprint(tileParallel.getOperation(), {0, 0});
+  setSupportedBlockHalo(tileParallel.getOperation());
+
+  Block &tileParallelBlock = tileParallel.getBody().front();
+  OpBuilder tileBuilder = OpBuilder::atBlockBegin(&tileParallelBlock);
+  Value tileRowLb = tileBuilder.create<arith::AddIOp>(
+      loc, iLb, tileBuilder.create<arith::MulIOp>(loc, biMin, tileRows));
+  Value tileRowUb = tileBuilder.create<arith::AddIOp>(
+      loc, iLb,
+      tileBuilder.create<arith::MulIOp>(loc, biMaxExclusive, tileRows));
+
+  auto tileFor = tileBuilder.create<arts::ForOp>(
+      loc, ValueRange{tileRowLb}, ValueRange{tileRowUb}, ValueRange{tileRows},
+      /*schedule=*/nullptr, /*reductionAccumulators=*/ValueRange{});
+  copyArtsMetadataAttrs(match.rowFor.getOperation(), tileFor.getOperation());
+  setDepPattern(tileFor.getOperation(), ArtsDepPattern::wavefront_2d);
+  setEdtDistributionPattern(tileFor.getOperation(),
+                            EdtDistributionPattern::stencil);
+  setStencilSpatialDims(tileFor.getOperation(), {0, 1});
+  setStencilOwnerDims(tileFor.getOperation(), {0, 1});
+  setStencilBlockShape(tileFor.getOperation(), {tileRowsConst, tileColsConst});
+  setStencilMinOffsets(tileFor.getOperation(), {-1, -1});
+  setStencilMaxOffsets(tileFor.getOperation(), {1, 1});
+  setStencilWriteFootprint(tileFor.getOperation(), {0, 0});
+  setSupportedBlockHalo(tileFor.getOperation());
+
+  Region &tileRegion = tileFor.getRegion();
+  if (tileRegion.empty())
+    tileRegion.push_back(new Block());
+  Block &tileBlock = tileRegion.front();
+  if (tileBlock.getNumArguments() == 0)
+    tileBlock.addArgument(builder.getIndexType(), loc);
+
+  OpBuilder tileLoopBuilder = OpBuilder::atBlockBegin(&tileBlock);
+  Value tileRowBase = tileBlock.getArgument(0);
+  Value biNumerator =
+      tileLoopBuilder.create<arith::SubIOp>(loc, tileRowBase, iLb);
+  Value bi = tileLoopBuilder.create<arith::DivUIOp>(loc, biNumerator, tileRows);
+  Value bj = tileLoopBuilder.create<arith::SubIOp>(
+      loc, wave, tileLoopBuilder.create<arith::MulIOp>(loc, bi, two));
+
+  Value iStart = tileRowBase;
+  Value iEnd = createMinIndex(
+      tileLoopBuilder, loc,
+      tileLoopBuilder.create<arith::AddIOp>(loc, iStart, tileRows), iUb);
+  Value jStart = tileLoopBuilder.create<arith::AddIOp>(
+      loc, jLb, tileLoopBuilder.create<arith::MulIOp>(loc, bj, tileCols));
+  Value jEnd = createMinIndex(
+      tileLoopBuilder, loc,
+      tileLoopBuilder.create<arith::AddIOp>(loc, jStart, tileCols), jUb);
+
+  auto iLoop = tileLoopBuilder.create<scf::ForOp>(loc, iStart, iEnd, one);
   OpBuilder iBuilder = OpBuilder::atBlockBegin(iLoop.getBody());
   IRMapping outerMap;
   outerMap.map(match.rowIV, iLoop.getInductionVar());
@@ -614,11 +602,9 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match) {
   for (Operation &op : getLoopBody(match.innerLoop).without_terminator())
     jBuilder.clone(op, innerMap);
 
-  taskBuilder.setInsertionPointToEnd(&taskBody);
-  taskBuilder.create<arts::YieldOp>(loc);
-
-  OpBuilder epochBuilder = OpBuilder::atBlockEnd(&epochBlock);
-  epochBuilder.create<arts::YieldOp>(loc);
+  tileLoopBuilder.create<arts::YieldOp>(loc);
+  tileBuilder.create<arts::YieldOp>(loc);
+  waveBuilder.create<arts::BarrierOp>(loc);
 
   match.parallelEdt.erase();
 }
@@ -639,8 +625,15 @@ public:
       });
       if (!found)
         break;
-      rewriteSeidelWavefront(match);
+      auto tileShape = chooseAdaptiveTileShape(match);
+      bool usedSequentialFallback = !tileShape;
+      if (usedSequentialFallback)
+        rewriteSeidelSequential(match);
+      else
+        rewriteSeidelWavefront(match, *tileShape);
       rewrites++;
+      if (usedSequentialFallback)
+        return rewrites;
     }
     return rewrites;
   }
