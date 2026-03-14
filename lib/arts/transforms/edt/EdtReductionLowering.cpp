@@ -21,41 +21,17 @@
 #include "arts/analysis/heuristics/DistributionHeuristics.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "llvm/ADT/APFloat.h"
-
-#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(reduction_lowering);
 
 using namespace mlir;
 using namespace mlir::arts;
-
-namespace {
-
-static Value createZeroValue(ArtsCodegen *AC, Type elemType, Location loc) {
-  if (!elemType)
-    return Value();
-
-  if (isa<IndexType>(elemType))
-    return AC->createIndexConstant(0, loc);
-
-  if (auto intTy = dyn_cast<IntegerType>(elemType))
-    return AC->create<arith::ConstantIntOp>(loc, 0, intTy.getWidth());
-
-  if (auto floatTy = dyn_cast<FloatType>(elemType)) {
-    llvm::APFloat zero = llvm::APFloat::getZero(floatTy.getFloatSemantics());
-    return AC->create<arith::ConstantFloatOp>(loc, zero, floatTy);
-  }
-
-  return Value();
-}
-
-} // namespace
 
 DenseSet<Value> mlir::arts::detectReductionBlockArgs(ForOp forOp) {
   DenseSet<Value> result;
@@ -194,7 +170,7 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
     auto redMemRef = dyn_cast<MemRefType>(redVar.getType());
     Type elementType =
         redMemRef ? redMemRef.getElementType() : redVar.getType();
-    Value identity = createZeroValue(AC, elementType, loc);
+    Value identity = AC->createZeroValue(elementType, loc);
     if (!identity) {
       ARTS_ERROR("Unsupported reduction element type for initialization");
       continue;
@@ -446,7 +422,7 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
 
     auto memType = cast<MemRefType>(finalMemRef.getType());
     Type elemType = memType.getElementType();
-    Value identity = createZeroValue(AC, elemType, loc);
+    Value identity = AC->createZeroValue(elemType, loc);
     if (!identity) {
       ARTS_ERROR("Unsupported reduction element type");
       return;
