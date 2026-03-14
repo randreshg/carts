@@ -86,15 +86,6 @@ static bool hoistInvariantOpsInLoop(scf::ForOp loop) {
   return changed;
 }
 
-static unsigned getLoopDepth(scf::ForOp loop) {
-  unsigned depth = 0;
-  for (Operation *parent = loop->getParentOp(); parent;
-       parent = parent->getParentOp())
-    if (isa<scf::ForOp>(parent))
-      ++depth;
-  return depth;
-}
-
 template <typename Predicate>
 static SmallVector<scf::ForOp> collectLoops(Operation *root,
                                             Predicate &&predicate) {

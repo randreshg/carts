@@ -2,7 +2,8 @@
 /// File: DbTransformsPass.cpp
 ///
 /// Post-DB transforms pass. Hosts DB-level transformations that run after
-/// DbDistributedOwnership and before the final DbModeTightening mode tightening.
+/// DbDistributedOwnership and before the final DbModeTightening mode
+/// tightening.
 ///
 /// Current transforms:
 ///   DT-1: Contract persistence -- persist refined AcquireContractSummary
@@ -51,8 +52,7 @@ using namespace mlir::func;
 using namespace mlir::arts;
 
 namespace {
-struct DbTransformsPass
-    : public arts::DbTransformsBase<DbTransformsPass> {
+struct DbTransformsPass : public arts::DbTransformsBase<DbTransformsPass> {
   DbTransformsPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }
@@ -100,7 +100,8 @@ void DbTransformsPass::runOnOperation() {
   ///===------------------------------------------------------------------===///
   unsigned dt2Count = consolidateStencilHalos();
   if (dt2Count > 0)
-    ARTS_INFO("DT-2: consolidated stencil halos on " << dt2Count << " acquires");
+    ARTS_INFO("DT-2: consolidated stencil halos on " << dt2Count
+                                                     << " acquires");
 
   ///===------------------------------------------------------------------===///
   /// DT-3: ESD annotation
@@ -187,8 +188,8 @@ unsigned DbTransformsPass::persistContracts() {
       /// ownerDims, partitionMode, etc. directly from the operation.
       OpBuilder builder(acquire.getContext());
       builder.setInsertionPointAfter(acquire.getOperation());
-      upsertLoweringContract(builder, acquire.getLoc(),
-                             acquire.getPtr(), contractSummary->contract);
+      upsertLoweringContract(builder, acquire.getLoc(), acquire.getPtr(),
+                             contractSummary->contract);
       ++count;
 
       ARTS_DEBUG("DT-1: persisted contract for acquire " << acquire);
@@ -313,14 +314,14 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
       if (rawMinOffsets) {
         for (unsigned d = 0; d < rawMinOffsets->size() && d < rank; ++d)
           unifiedMin[d] = std::min(unifiedMin[d], (*rawMinOffsets)[d]);
-        ARTS_DEBUG("DT-2:   raw min offsets present, size="
-                   << rawMinOffsets->size());
+        ARTS_DEBUG(
+            "DT-2:   raw min offsets present, size=" << rawMinOffsets->size());
       }
       if (rawMaxOffsets) {
         for (unsigned d = 0; d < rawMaxOffsets->size() && d < rank; ++d)
           unifiedMax[d] = std::max(unifiedMax[d], (*rawMaxOffsets)[d]);
-        ARTS_DEBUG("DT-2:   raw max offsets present, size="
-                   << rawMaxOffsets->size());
+        ARTS_DEBUG(
+            "DT-2:   raw max offsets present, size=" << rawMaxOffsets->size());
       }
 
       /// Merge Source C: contract SSA values
@@ -453,8 +454,7 @@ unsigned DbTransformsPass::annotateESD() {
         ARTS_DEBUG("DT-3: non-scalar element type, skipping");
         continue;
       }
-      int64_t scalarBytes =
-          (elementType.getIntOrFloatBitWidth() + 7) / 8;
+      int64_t scalarBytes = (elementType.getIntOrFloatBitWidth() + 7) / 8;
       if (scalarBytes <= 0) {
         ARTS_DEBUG("DT-3: invalid scalar byte size, skipping");
         continue;
@@ -830,8 +830,8 @@ unsigned DbTransformsPass::cacheBlockWindows() {
       ///   blocksInDim[d] = ceil(partitionSize[d] / blockSize[d])
       ///
       /// Then linearize into a single startBlock and blockCount:
-      ///   startBlock = blockCoord[0]*blocksPerDim[1]*... + blockCoord[1]*... + ...
-      ///   blockCount = blocksInDim[0] * blocksInDim[1] * ...
+      ///   startBlock = blockCoord[0]*blocksPerDim[1]*... + blockCoord[1]*... +
+      ///   ... blockCount = blocksInDim[0] * blocksInDim[1] * ...
       ///
       /// For 1-D this reduces to:
       ///   startBlock = partitionOffset[0] / blockSize[0]
@@ -864,8 +864,8 @@ unsigned DbTransformsPass::cacheBlockWindows() {
       for (unsigned d = 0; d < rank; ++d) {
         blockCoords[d] = staticOffsets[d] / staticBlockSizes[d];
         /// ceil division: (size + blockSize - 1) / blockSize
-        blocksPerDim[d] = (staticSizes[d] + staticBlockSizes[d] - 1) /
-                          staticBlockSizes[d];
+        blocksPerDim[d] =
+            (staticSizes[d] + staticBlockSizes[d] - 1) / staticBlockSizes[d];
         if (blocksPerDim[d] <= 0)
           blocksPerDim[d] = 1;
       }
@@ -929,8 +929,7 @@ unsigned DbTransformsPass::cacheBlockWindows() {
 ///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass>
-createDbTransformsPass(mlir::arts::AnalysisManager *AM) {
+std::unique_ptr<Pass> createDbTransformsPass(mlir::arts::AnalysisManager *AM) {
   return std::make_unique<DbTransformsPass>(AM);
 }
 } // namespace arts

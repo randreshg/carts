@@ -162,7 +162,8 @@ static SmallVector<Value> getAccessIndices(Operation *op) {
   } else if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
     indices.append(load.getMapOperands().begin(), load.getMapOperands().end());
   } else if (auto store = dyn_cast<affine::AffineStoreOp>(op)) {
-    indices.append(store.getMapOperands().begin(), store.getMapOperands().end());
+    indices.append(store.getMapOperands().begin(),
+                   store.getMapOperands().end());
   }
   return indices;
 }
@@ -335,7 +336,8 @@ inferExplicitStencilContract(arts::ForOp forOp) {
       bool invariant = false;
       unsigned ivOrdinal = 0;
       int64_t offset = 0;
-      if (!classifySpatialIndex(idx, spatialIvs, invariant, ivOrdinal, offset)) {
+      if (!classifySpatialIndex(idx, spatialIvs, invariant, ivOrdinal,
+                                offset)) {
         outputAlloc = nullptr;
         return;
       }
@@ -422,10 +424,8 @@ static LocalStencilEvidence collectLocalStencilEvidence(arts::ForOp forOp) {
           continue;
 
         int64_t constantOffset = 0;
-        Value base =
-            ValueAnalysis::stripNumericCasts(
-                ValueAnalysis::stripConstantOffset(strippedIndex,
-                                                  &constantOffset));
+        Value base = ValueAnalysis::stripNumericCasts(
+            ValueAnalysis::stripConstantOffset(strippedIndex, &constantOffset));
         if (base != iv)
           continue;
 
@@ -440,8 +440,8 @@ static LocalStencilEvidence collectLocalStencilEvidence(arts::ForOp forOp) {
     for (const auto &offsets : dimOffsets) {
       if (offsets.size() < 2)
         continue;
-      bool hasNonZeroOffset = llvm::any_of(
-          offsets, [](int64_t offset) { return offset != 0; });
+      bool hasNonZeroOffset =
+          llvm::any_of(offsets, [](int64_t offset) { return offset != 0; });
       if (!hasNonZeroOffset)
         continue;
       ++stencilDims;
@@ -679,8 +679,8 @@ struct PatternDiscoveryPass
       if (auto parentEdt = forOp->getParentOfType<arts::EdtOp>()) {
         changed |= stampEdtContract(parentEdt, *chosen, targetRevision);
         if (explicitStencil && isStencilFamilyDepPattern(*chosen))
-          changed |=
-              stampExplicitStencilContract(parentEdt.getOperation(), *explicitStencil);
+          changed |= stampExplicitStencilContract(parentEdt.getOperation(),
+                                                  *explicitStencil);
       }
       if (explicitStencil && isStencilFamilyDepPattern(*chosen))
         changed |= stampExplicitStencilContract(forOp.getOperation(),

@@ -181,6 +181,73 @@ analyzeAccessBounds(DbAcquireNode *node, Value blockOffset, Value loopIV,
                                         partitionDim);
 }
 
+/// Collect the set of array dimensions that carry non-zero stencil offsets
+/// relative to the loop induction variable / partition offset.
+///
+/// For example, given accesses A[i-1][j][k], A[i+1][j][k], A[i][j][k]:
+///   stencil dims = {0}   (dim 0 has offsets -1, +1)
+///
+/// This is used to detect orthogonal stencils: when all stencil dimensions are
+/// disjoint from the partition dimension, the stencil does not cross partition
+/// boundaries and needsFullRange can safely return false.
+static llvm::DenseSet<unsigned> collectStencilDims(DbAcquireNode *node,
+                                                   Value partitionOffset) {
+  llvm::DenseSet<unsigned> stencilDims;
+  if (!node || !partitionOffset)
+    return stencilDims;
+
+  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+  MemoryAccessClassifier::collectAccessOperations(node, dbRefToMemOps);
+
+  // Collect all index chains first.
+  SmallVector<AccessIndexInfo, 16> accesses;
+  for (auto &[dbRef, memOps] : dbRefToMemOps) {
+    for (Operation *memOp : memOps) {
+      SmallVector<Value> fullChain =
+          DbUtils::collectFullIndexChain(dbRef, memOp);
+      if (fullChain.empty())
+        continue;
+      AccessIndexInfo info;
+      info.dbRefPrefix = dbRef.getIndices().size();
+      info.indexChain.append(fullChain.begin(), fullChain.end());
+      accesses.push_back(std::move(info));
+    }
+  }
+
+  if (accesses.empty())
+    return stencilDims;
+
+  // For each memref dimension across all accesses, check if any access has a
+  // non-zero constant offset relative to the partition offset / loop IV.
+  // A dimension is a "stencil dimension" if it carries at least one non-zero
+  // offset.
+  Value normalizedOffset = ValueAnalysis::stripNumericCasts(
+      ValueAnalysis::stripSelectClamp(partitionOffset));
+
+  for (const AccessIndexInfo &access : accesses) {
+    unsigned memrefStart = access.dbRefPrefix;
+    for (unsigned i = memrefStart; i < access.indexChain.size(); ++i) {
+      unsigned dim = i - memrefStart;
+      Value idx = access.indexChain[i];
+      if (!idx)
+        continue;
+
+      // Check if this index depends on the partition offset.
+      if (!ValueAnalysis::dependsOn(idx, normalizedOffset) &&
+          !ValueAnalysis::dependsOn(idx, partitionOffset))
+        continue;
+
+      // Extract constant offset relative to the partition variable.
+      auto constOffset = ValueAnalysis::extractConstantOffset(
+          idx, partitionOffset, normalizedOffset);
+      if (constOffset && *constOffset != 0)
+        stencilDims.insert(dim);
+    }
+  }
+
+  return stencilDims;
+}
+
 ///===----------------------------------------------------------------------===///
 /// PartitionBoundsAnalyzer implementation
 ///===----------------------------------------------------------------------===///
@@ -710,6 +777,23 @@ bool PartitionBoundsAnalyzer::needsFullRange(DbAcquireNode *node,
           llvm::is_contained(ownerDims, *mappedDim)) {
         ARTS_DEBUG("  needsFullRange: preserving non-leading stencil dim from "
                    "N-D halo contract");
+      } else if (mappedDim) {
+        // Check for orthogonal stencil: if the stencil dimensions (those with
+        // non-zero offsets) are all different from the partition dimension, the
+        // stencil does not cross partition boundaries and full range is not
+        // needed. This is the specfem3d case: stencil on i-dim but partition
+        // on k-dim.
+        llvm::DenseSet<unsigned> stencilDims =
+            collectStencilDims(node, partitionOffset);
+        if (!stencilDims.empty() && !stencilDims.contains(*mappedDim)) {
+          ARTS_DEBUG("  needsFullRange: stencil dims "
+                     << "are orthogonal to partition dim " << *mappedDim
+                     << "; full range not needed");
+        } else {
+          ARTS_DEBUG(
+              "  needsFullRange: stencil access on non-leading partition dim");
+          return true;
+        }
       } else {
         ARTS_DEBUG(
             "  needsFullRange: stencil access on non-leading partition dim");
@@ -754,7 +838,7 @@ bool PartitionBoundsAnalyzer::shouldPreserveDistributedContract(
   if (!explicitBlockMode)
     return false;
 
-  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+  auto [edt, blockArg] = getEdtBlockArgumentForAcquire(acquire);
   (void)blockArg;
   bool hasDistributionContract =
       edt && (getEdtDistributionKind(edt.getOperation()) ||

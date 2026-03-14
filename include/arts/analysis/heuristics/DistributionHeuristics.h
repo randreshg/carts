@@ -132,8 +132,9 @@ enum class DistributionKind {
   Flat,        ///  Single-level: all workers divide iterations equally
   TwoLevel,    ///  Two-level: nodes get DB blocks, threads subdivide within
   BlockCyclic, ///  Cyclic chunks: chunk k -> worker (k % totalWorkers)
-  Tiling2D,    ///  Matmul-oriented 2D worker grid (row ownership + column striping)
-  Replicated   ///  Full replication: each node holds a complete copy (read-only)
+  Tiling2D,    ///  Matmul-oriented 2D worker grid (row ownership + column
+               ///  striping)
+  Replicated ///  Full replication: each node holds a complete copy (read-only)
 };
 
 /// Machine topology analysis result (compile-time, no IR)

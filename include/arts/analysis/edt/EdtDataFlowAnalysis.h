@@ -24,7 +24,7 @@ namespace arts {
 class DbAliasAnalysis;
 class AnalysisManager;
 
-struct EdtDependency {
+struct EdtDep {
   EdtOp from;
   EdtOp to;
   SmallVector<DbEdge, 2> edges;
@@ -36,7 +36,7 @@ class EdtDataFlowAnalysis {
 public:
   EdtDataFlowAnalysis(DbGraph *dbGraph, AnalysisManager *AM);
 
-  SmallVector<EdtDependency, 16> run(func::FuncOp func);
+  SmallVector<EdtDep, 16> run(func::FuncOp func);
 
 private:
   struct Environment {
@@ -53,12 +53,12 @@ private:
   SmallVector<DbAcquireNode *> findDefinitions(DbAcquireNode *acquire,
                                                Environment &env);
   bool unionInto(Environment &target, const Environment &source);
-  std::optional<DbDepType> classifyDependency(DbAcquireNode *producer,
+  std::optional<DbDepType> classifyDep(DbAcquireNode *producer,
                                               DbAcquireNode *consumer);
 
-  void recordDependency(DbAcquireNode *producer, DbAcquireNode *consumer,
+  void recordDep(DbAcquireNode *producer, DbAcquireNode *consumer,
                         DbDepType depType);
-  void recordDependency(DbAcquireNode *reader, DbAcquireNode *writer);
+  void recordDep(DbAcquireNode *reader, DbAcquireNode *writer);
 
   DbGraph *dbGraph = nullptr;
   DbAliasAnalysis *aliasAA = nullptr;

@@ -214,7 +214,8 @@ static void collectAcquiresRecursive(DbAcquireNode *acqNode, DbGraph &graph,
 /// Tighten Datablock access modes and infer storage types
 ///===----------------------------------------------------------------------===///
 namespace {
-struct DbModeTighteningPass : public arts::DbModeTighteningBase<DbModeTighteningPass> {
+struct DbModeTighteningPass
+    : public arts::DbModeTighteningBase<DbModeTighteningPass> {
   DbModeTighteningPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }
@@ -362,7 +363,8 @@ bool DbModeTighteningPass::adjustDbModes() {
 /// Infer DB storage-type annotations.
 /// Walks all DbAllocOps and sets UnitAttr annotations based on access patterns:
 ///   - arts.local_only: all acquires are intranode (no distributed contract)
-///   - arts.read_only_after_init: after the first write, all subsequent acquires
+///   - arts.read_only_after_init: after the first write, all subsequent
+///   acquires
 ///     are read-only
 ///===----------------------------------------------------------------------===///
 void DbModeTighteningPass::inferDbStorageTypes() {
@@ -394,8 +396,7 @@ void DbModeTighteningPass::inferDbStorageTypes() {
       if (isLocalOnly) {
         allocOp->setAttr(AttrNames::Operation::LocalOnly,
                          UnitAttr::get(allocOp.getContext()));
-        ARTS_DEBUG("AllocOp: " << allocOp
-                               << " => local_only (PIN candidate)");
+        ARTS_DEBUG("AllocOp: " << allocOp << " => local_only (PIN candidate)");
       }
 
       /// ---------------------------------------------------------------
@@ -415,10 +416,10 @@ void DbModeTighteningPass::inferDbStorageTypes() {
         return;
 
       /// Sort by program order
-      llvm::sort(orderedAcquires, [](const AcquireOrderEntry &a,
-                                     const AcquireOrderEntry &b) {
-        return a.order < b.order;
-      });
+      llvm::sort(orderedAcquires,
+                 [](const AcquireOrderEntry &a, const AcquireOrderEntry &b) {
+                   return a.order < b.order;
+                 });
 
       /// Find the first writer and check all subsequent acquires
       bool foundWriter = false;
@@ -465,7 +466,8 @@ void DbModeTighteningPass::invalidateAndRebuildGraph() {
 ////===----------------------------------------------------------------------===////
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createDbModeTighteningPass(mlir::arts::AnalysisManager *AM) {
+std::unique_ptr<Pass>
+createDbModeTighteningPass(mlir::arts::AnalysisManager *AM) {
   return std::make_unique<DbModeTighteningPass>(AM);
 }
 } // namespace arts

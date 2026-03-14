@@ -111,8 +111,7 @@ struct ContractValidationPass
       if (auto ownerDims = contract.getOwnerDims()) {
         for (int64_t dim : *ownerDims) {
           if (dim < 0) {
-            contract.emitWarning("owner_dims contains negative value: ")
-                << dim;
+            contract.emitWarning("owner_dims contains negative value: ") << dim;
             ++invalidContracts;
             break;
           }
@@ -159,9 +158,9 @@ struct ContractValidationPass
       llvm::errs() << "\n";
     }
 
-    ARTS_INFO("Total contracts: "
-              << totalContracts << ", invalid: " << invalidContracts
-              << ", orphan acquires: " << orphanAcquires);
+    ARTS_INFO("Total contracts: " << totalContracts
+                                  << ", invalid: " << invalidContracts
+                                  << ", orphan acquires: " << orphanAcquires);
 
     /// Fail the pass if requested and there were problems
     if (failOnError && (invalidContracts > 0 || orphanAcquires > 0)) {

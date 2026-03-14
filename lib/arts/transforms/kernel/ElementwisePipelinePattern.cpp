@@ -26,6 +26,7 @@
 
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/transforms/kernel/KernelTransform.h"
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -148,20 +149,6 @@ static bool isAllowedStageOp(Operation *op, Value iv) {
     }
   }
   return true;
-}
-
-static bool haveSameIterationSpace(ForOp lhs, ForOp rhs) {
-  if (!lhs || !rhs || lhs.getLowerBound().size() != 1 ||
-      rhs.getLowerBound().size() != 1 || lhs.getUpperBound().size() != 1 ||
-      rhs.getUpperBound().size() != 1 || lhs.getStep().size() != 1 ||
-      rhs.getStep().size() != 1)
-    return false;
-
-  return ValueAnalysis::sameValue(lhs.getLowerBound().front(),
-                                  rhs.getLowerBound().front()) &&
-         ValueAnalysis::sameValue(lhs.getUpperBound().front(),
-                                  rhs.getUpperBound().front()) &&
-         ValueAnalysis::sameValue(lhs.getStep().front(), rhs.getStep().front());
 }
 
 static bool matchElementwiseStage(ForOp loop, ElementwiseStage &stage) {
@@ -327,7 +314,7 @@ int mlir::arts::applyElementwisePipelineTransform(ModuleOp module) {
             break;
           auto nextLoop = dyn_cast<ForOp>(&nextOp);
           ElementwiseStage nextStage;
-          if (!nextLoop || !haveSameIterationSpace(firstLoop, nextLoop) ||
+          if (!nextLoop || !haveSameBounds(firstLoop, nextLoop) ||
               !matchElementwiseStage(nextLoop, nextStage))
             break;
 
@@ -391,8 +378,7 @@ int mlir::arts::applyElementwisePipelineTransform(ModuleOp module) {
           if (!nextEdt ||
               nextEdt.getConcurrency() != firstEdt.getConcurrency() ||
               !matchSingleLoopElementwiseEdt(nextEdt, nextStage) ||
-              !haveSameIterationSpace(firstStage.stage.loop,
-                                      nextStage.stage.loop))
+              !haveSameBounds(firstStage.stage.loop, nextStage.stage.loop))
             break;
 
           bool disjointWrites =

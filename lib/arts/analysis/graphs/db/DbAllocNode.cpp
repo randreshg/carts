@@ -332,7 +332,7 @@ bool DbAllocNode::hasSingleWriter() const {
     if (writeCount > 1)
       return false;
 
-    if (!DbUtils::hasStaticHints(acqOp))
+    if (!DbAnalysis::hasStaticHints(acqOp))
       return false;
   }
 
@@ -357,7 +357,7 @@ bool DbAllocNode::hasDynamicWriterOffsets() const {
     if (!DbUtils::isWriterMode(acqOp.getMode()))
       continue;
 
-    if (!DbUtils::hasStaticHints(acqOp)) {
+    if (!DbAnalysis::hasStaticHints(acqOp)) {
       ARTS_DEBUG("Writer acquire has dynamic offset/size hints");
       return true;
     }
@@ -393,7 +393,7 @@ bool DbAllocNode::canProveNonOverlapping() const {
     const auto *single = allAcquireNodes.front();
     if (!single)
       return true;
-    if (DbUtils::hasStaticHints(single->getDbAcquireOp()))
+    if (DbAnalysis::hasStaticHints(single->getDbAcquireOp()))
       return true;
   }
 

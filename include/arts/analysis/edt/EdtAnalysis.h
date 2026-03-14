@@ -6,8 +6,8 @@
 /// parameters, and constants.
 ///==========================================================================///
 
-#ifndef CARTS_ANALYSIS_EDTANALYSIS_H
-#define CARTS_ANALYSIS_EDTANALYSIS_H
+#ifndef ARTS_ANALYSIS_EDT_EDTANALYSIS_H
+#define ARTS_ANALYSIS_EDT_EDTANALYSIS_H
 
 #include "arts/analysis/Analysis.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -17,15 +17,31 @@
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/ADT/StringRef.h"
 
 #include "arts/analysis/edt/EdtInfo.h"
 #include "arts/analysis/graphs/edt/EdtGraph.h"
+
+#include <optional>
 
 namespace mlir {
 namespace arts {
 
 class LoopAnalysis;
 class MetadataManager;
+
+///==========================================================================///
+/// ReductionOp: recognized reduction operation kinds
+///==========================================================================///
+
+enum class ReductionOp {
+  ADD,
+  MIN,
+  MAX,
+  OR,
+  AND,
+  XOR,
+};
 
 ///==========================================================================///
 /// EdtAnalysis: per-EDT summaries and pairwise affinity metrics
@@ -63,13 +79,44 @@ public:
   /// Invalidate internal caches
   void invalidate() override;
 
+  /// Check if a parallel EDT is fusable: body contains only arts.for ops
+  /// and the yield terminator, no dependencies, no barriers or acquires.
+  static bool isParallelEdtFusable(EdtOp edt);
+
   /// Convenience: get EDT node by op (derives parent func internally).
   EdtNode *getEdtNode(EdtOp op);
+
+  /// Check if a value is invariant within an EDT region.
+  /// A value is invariant if it is defined outside the region or not modified
+  /// within it.
+  static bool isInvariantInEdt(Region &edtRegion, Value value);
+
+  /// Checks if the target operation is reachable from the source operation in
+  /// the EDT control flow graph.
+  static bool isReachable(Operation *source, Operation *target);
 
   /// Expose sub-analyses so that EdtNode / EdtGraph can reach them
   /// without storing a raw AnalysisManager pointer.
   MetadataManager &getMetadataManager();
   LoopAnalysis &getLoopAnalysis();
+
+  //===--------------------------------------------------------------------===//
+  // Reduction pattern analysis (ET-5 helpers)
+  //===--------------------------------------------------------------------===//
+
+  /// Try to classify a binary arithmetic operation as a reduction operation.
+  static std::optional<ReductionOp> classifyReductionOp(Operation *op);
+
+  /// Return a human-readable string name for a ReductionOp kind.
+  static StringRef reductionOpName(ReductionOp op);
+
+  /// Check whether a reduction operation is suitable for atomic lowering.
+  static bool isAtomicCapable(ReductionOp op);
+
+  /// Match a load-modify-store reduction pattern on a DbRefOp result within
+  /// an EDT body.
+  static std::optional<ReductionOp> matchLoadModifyStore(Value dbRefResult,
+                                                         Region &edtBody);
 
   using ArtsAnalysis::getAnalysisManager;
 
@@ -89,4 +136,4 @@ private:
 } // namespace arts
 } // namespace mlir
 
-#endif // CARTS_ANALYSIS_EDTANALYSIS_H
+#endif // ARTS_ANALYSIS_EDT_EDTANALYSIS_H

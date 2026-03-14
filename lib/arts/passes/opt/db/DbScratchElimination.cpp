@@ -2,11 +2,12 @@
 /// File: DbScratchElimination.cpp
 ///
 /// Eliminate task-private single-element scratch DBs by replacing them with
-/// local allocas.  Runs after DbModeTightening / DbPartitioning have established stable
-/// acquire and dependency structure.
+/// local allocas.  Runs after DbModeTightening / DbPartitioning have
+/// established stable acquire and dependency structure.
 ///==========================================================================///
 
 #include "arts/Dialect.h"
+#include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
@@ -106,7 +107,7 @@ static bool loadsAreInitializedByTask(DbRefOp dbRef, EdtOp edt,
   DbUtils::forEachReachableMemoryAccess(
       dbRef.getResult(),
       [&](const DbUtils::MemoryAccessInfo &access) {
-        if (!DbUtils::isSameMemoryObject(access.memref, dbRef.getResult()))
+        if (!DbAnalysis::isSameMemoryObject(access.memref, dbRef.getResult()))
           return WalkResult::interrupt();
         if (access.isWrite())
           stores.push_back(access.op);
@@ -134,7 +135,7 @@ static std::optional<ScratchCandidate>
 matchScratchCandidate(DbAllocOp alloc, DominanceInfo &domInfo) {
   if (!alloc || alloc.getAllocType() != DbAllocType::stack)
     return std::nullopt;
-  if (!DbUtils::isCoarseGrained(alloc) || !isSingleSizeOne(alloc.getSizes()))
+  if (!DbAnalysis::isCoarseGrained(alloc) || !isSingleSizeOne(alloc.getSizes()))
     return std::nullopt;
 
   auto ptrType = alloc.getPtr().getType().dyn_cast<MemRefType>();
@@ -213,7 +214,7 @@ matchScratchCandidate(DbAllocOp alloc, DominanceInfo &domInfo) {
     if (mode && *mode != PartitionMode::coarse)
       return std::nullopt;
 
-    auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+    auto [edt, blockArg] = getEdtBlockArgumentForAcquire(acquire);
     if (!edt || !blockArg || acquire.getPtr().use_empty() ||
         !acquire.getPtr().hasOneUse())
       return std::nullopt;
@@ -245,7 +246,8 @@ static void eraseIfPresent(Operation *op) {
     op->erase();
 }
 
-struct DbScratchEliminationPass : public arts::DbScratchEliminationBase<DbScratchEliminationPass> {
+struct DbScratchEliminationPass
+    : public arts::DbScratchEliminationBase<DbScratchEliminationPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     SmallVector<ScratchCandidate, 8> candidates;
@@ -328,7 +330,8 @@ struct DbScratchEliminationPass : public arts::DbScratchEliminationBase<DbScratc
         candidate.alloc.erase();
     }
 
-    ARTS_INFO("DbScratchEliminationPass: removed " << rewrites << " scratch DB uses");
+    ARTS_INFO("DbScratchEliminationPass: removed " << rewrites
+                                                   << " scratch DB uses");
   }
 };
 

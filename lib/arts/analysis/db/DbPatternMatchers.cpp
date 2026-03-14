@@ -5,6 +5,7 @@
 ///==========================================================================///
 
 #include "arts/analysis/db/DbPatternMatchers.h"
+#include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
@@ -19,31 +20,6 @@ using namespace mlir::arts;
 
 namespace {
 
-/// Strip arith.index_cast ops to find the underlying value.
-static Value stripIndexCasts(Value v) {
-  while (auto cast = v.getDefiningOp<arith::IndexCastOp>())
-    v = cast.getIn();
-  return v;
-}
-
-/// Check if two values refer to the same SSA value modulo index casts.
-static bool isSameValueModuloCasts(Value a, Value b) {
-  return stripIndexCasts(a) == stripIndexCasts(b);
-}
-
-/// Try to extract a positive integer constant from a Value.
-static std::optional<int64_t> getPositiveConstant(Value v) {
-  v = stripIndexCasts(v);
-  if (auto constIdx = v.getDefiningOp<arith::ConstantIndexOp>())
-    return constIdx.value() > 0 ? std::optional<int64_t>(constIdx.value())
-                                : std::nullopt;
-  if (auto constInt = v.getDefiningOp<arith::ConstantIntOp>()) {
-    int64_t val = constInt.value();
-    return val > 0 ? std::optional<int64_t>(val) : std::nullopt;
-  }
-  return std::nullopt;
-}
-
 /// Check if two stores write the same value to the same memref with
 /// swapped 2D indices: one stores at [outerIV, innerIV] and the other at
 /// [innerIV, outerIV].
@@ -52,7 +28,7 @@ static bool areSymmetricStores(memref::StoreOp s1, memref::StoreOp s2,
   if (s1.getValueToStore() != s2.getValueToStore())
     return false;
 
-  if (!DbUtils::isSameMemoryObject(s1.getMemRef(), s2.getMemRef()))
+  if (!DbAnalysis::isSameMemoryObject(s1.getMemRef(), s2.getMemRef()))
     return false;
 
   auto idx1 = s1.getIndices();
@@ -82,7 +58,7 @@ static unsigned countDistinctMemoryObjects(ArrayRef<Value> memrefs) {
   for (Value memref : memrefs) {
     bool seen = false;
     for (Value existing : distinct) {
-      if (DbUtils::isSameMemoryObject(existing, memref)) {
+      if (DbAnalysis::isSameMemoryObject(existing, memref)) {
         seen = true;
         break;
       }
@@ -95,7 +71,7 @@ static unsigned countDistinctMemoryObjects(ArrayRef<Value> memrefs) {
 
 static bool containsSameMemoryObject(ArrayRef<Value> memrefs, Value target) {
   for (Value memref : memrefs) {
-    if (DbUtils::isSameMemoryObject(memref, target))
+    if (DbAnalysis::isSameMemoryObject(memref, target))
       return true;
   }
   return false;
@@ -195,10 +171,10 @@ static bool isTwoInputProductTerm(Value value, Value storeMemref) {
 
   Value lhsMemref = lhsMemrefs.front();
   Value rhsMemref = rhsMemrefs.front();
-  if (DbUtils::isSameMemoryObject(lhsMemref, rhsMemref))
+  if (DbAnalysis::isSameMemoryObject(lhsMemref, rhsMemref))
     return false;
-  if (DbUtils::isSameMemoryObject(lhsMemref, storeMemref) ||
-      DbUtils::isSameMemoryObject(rhsMemref, storeMemref))
+  if (DbAnalysis::isSameMemoryObject(lhsMemref, storeMemref) ||
+      DbAnalysis::isSameMemoryObject(rhsMemref, storeMemref))
     return false;
 
   return true;
@@ -211,7 +187,7 @@ std::optional<int64_t> mlir::arts::matchTriangularOffset(Value lb,
   if (!lb || !outerIV)
     return std::nullopt;
 
-  Value stripped = stripIndexCasts(lb);
+  Value stripped = ValueAnalysis::stripNumericCasts(lb);
   auto addOp = stripped.getDefiningOp<arith::AddIOp>();
   if (!addOp)
     return std::nullopt;
@@ -219,14 +195,16 @@ std::optional<int64_t> mlir::arts::matchTriangularOffset(Value lb,
   Value lhs = addOp.getLhs();
   Value rhs = addOp.getRhs();
   Value constOperand;
-  if (isSameValueModuloCasts(lhs, outerIV))
+  if (ValueAnalysis::sameValue(lhs, outerIV))
     constOperand = rhs;
-  else if (isSameValueModuloCasts(rhs, outerIV))
+  else if (ValueAnalysis::sameValue(rhs, outerIV))
     constOperand = lhs;
   else
     return std::nullopt;
 
-  return getPositiveConstant(constOperand);
+  auto val = ValueAnalysis::getConstantValue(
+      ValueAnalysis::stripNumericCasts(constOperand));
+  return (val && *val > 0) ? val : std::nullopt;
 }
 
 bool mlir::arts::hasTriangularBoundPattern(ForOp forOp) {
@@ -388,7 +366,7 @@ bool mlir::arts::detectSymmetricTriangularPattern(
     auto store = dyn_cast<memref::StoreOp>(&op);
     if (!store)
       continue;
-    if (!DbUtils::isSameMemoryObject(store.getMemRef(), out.memC))
+    if (!DbAnalysis::isSameMemoryObject(store.getMemRef(), out.memC))
       continue;
     if (!isDiagonalStore(store, outerIV))
       continue;

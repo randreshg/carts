@@ -42,7 +42,7 @@ struct AcquireRewriteInput {
   bool stepIsUnit = true;
   bool singleElement = false;
   bool forceCoarse = false;
-  bool preserveParentDependencyRange = false;
+  bool preserveParentDepRange = false;
   Value stencilExtent;
 };
 

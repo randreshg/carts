@@ -80,10 +80,11 @@ static void normalizeBlockHaloAcquireSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   if (rank == 0)
     return;
 
-  AcquireRewriteContract rewriteContract = deriveAcquireRewriteContract(acquire);
-  bool usePartitionSlice = rewriteContract.usePartitionSliceAsDependencyWindow;
-  auto offsetRange = usePartitionSlice ? acquire.getPartitionOffsets()
-                                       : acquire.getOffsets();
+  AcquireRewriteContract rewriteContract =
+      deriveAcquireRewriteContract(acquire);
+  bool usePartitionSlice = rewriteContract.usePartitionSliceAsDepWindow;
+  auto offsetRange =
+      usePartitionSlice ? acquire.getPartitionOffsets() : acquire.getOffsets();
   auto sizeRange =
       usePartitionSlice ? acquire.getPartitionSizes() : acquire.getSizes();
   if (offsetRange.empty() || sizeRange.empty())
@@ -491,7 +492,7 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
     }
   };
 
-  auto [edtUser, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquireOp);
+  auto [edtUser, blockArg] = getEdtBlockArgumentForAcquire(acquireOp);
   if (!edtUser || !blockArg) {
     ARTS_DEBUG("  - Acquire has no EDT consumer; replacing uses directly");
     rewriteBlockUses(acquireOp.getPtr(), newPtr ? newPtr : acquireOp.getPtr());

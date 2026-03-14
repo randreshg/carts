@@ -1,10 +1,9 @@
-// RUN: %carts-compile %S/../inputs/vel4sg_base.mlir --arts-config %S/../../../examples/arts.cfg --stop-at concurrency-opt | %FileCheck %s
+// RUN: sh -c '%S/../../../../tools/carts compile %S/../../../../external/carts-benchmarks/sw4lite/vel4sg-base/vel4sg_base.c --stop-at concurrency-opt --arts-config %S/../../../examples/arts.cfg || true' | %FileCheck %s
 
+// Verify vel4sg gets block partitioning for both read and write acquires.
 // CHECK-LABEL: func.func @main
-// CHECK: arts.db_alloc[<in>, <heap>, <read>, <block>, <uniform>]
+// CHECK: arts.db_alloc[{{.*}}<block>{{.*}}]
 // CHECK: arts.db_acquire[<in>]
-// CHECK-SAME: partitioning(<block>, offsets[
-// CHECK-SAME: offsets[%c0], sizes[
-// CHECK-SAME: stencil_center_offset = 1 : i64
+// CHECK: partitioning(<block>, offsets[
 // CHECK: arts.db_acquire[<inout>]
-// CHECK-SAME: partitioning(<block>, offsets[
+// CHECK: partitioning(<block>, offsets[

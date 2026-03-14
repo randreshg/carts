@@ -13,7 +13,7 @@
 /// 5. Replace EDT with edt_create call returning GUID
 /// 6. Add dependency management (record_in_dep, increment_out_latch)
 ///
-/// Dependency contract (before/after):
+/// Dep contract (before/after):
 ///   BEFORE:
 ///     %t = arts.edt ... (%dep0, %dep1)
 ///
@@ -27,6 +27,7 @@
 
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/db/DbAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
@@ -71,7 +72,7 @@ using namespace mlir::arts;
 
 namespace {
 
-static void normalizeTaskDependencySlice(ArtsCodegen *AC, DbAcquireOp acquire) {
+static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire) {
   if (!AC || !acquire)
     return;
 
@@ -93,8 +94,7 @@ static void normalizeTaskDependencySlice(ArtsCodegen *AC, DbAcquireOp acquire) {
   if (offsetRange.empty() || sizeRange.empty())
     return;
 
-  unsigned rank =
-      std::min<unsigned>(offsetRange.size(), sizeRange.size());
+  unsigned rank = std::min<unsigned>(offsetRange.size(), sizeRange.size());
   if (rank == 0)
     return;
 
@@ -267,7 +267,7 @@ private:
   void cloneAndRemapEdtBody(Block &sourceBlock, OpBuilder &builder,
                             IRMapping &valueMapping);
 
-  /// Dependency satisfaction
+  /// Dep satisfaction
   LogicalResult insertDepManagement(Location loc, Value edtGuid,
                                     const SmallVector<Value> &deps);
 
@@ -370,14 +370,14 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   ArrayRef<Value> edtDeps = envManager.getDependencies();
   for (Value dep : edtDeps)
     if (auto acquire = dep.getDefiningOp<DbAcquireOp>())
-      normalizeTaskDependencySlice(AC, acquire);
+      normalizeTaskDepSlice(AC, acquire);
 
   /// Calculate dependency count from the dependency view of each DB.
   /// For partitioned acquires, this uses slice sizes (not full allocation
   /// sizes) so depCount matches the slots produced by rec_dep lowering.
   Value depCount = AC->createIntConstant(0, AC->Int32, loc);
   for (Value dep : edtDeps) {
-    SmallVector<Value> sizes = DbUtils::getDependencySizesFromDb(dep);
+    SmallVector<Value> sizes = DbUtils::getDepSizesFromDb(dep);
     Value numElements = AC->create<DbNumElementsOp>(loc, sizes);
     numElements = AC->castToInt(AC->Int32, numElements, loc);
     depCount = AC->create<arith::AddIOp>(loc, depCount, numElements);
@@ -707,7 +707,7 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     if (!dbAcquireOp && !depDbAcquireOp) {
       return mlir::emitError(
                  loc,
-                 "Dependency must be from DbAcquireOp or DepDbAcquireOp, got: ")
+                 "Dep must be from DbAcquireOp or DepDbAcquireOp, got: ")
              << dep;
     }
 
@@ -917,7 +917,7 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
     Value base = AC->createIndexConstant(0, loc);
     for (size_t i = 0; i < depIndex; ++i) {
       SmallVector<Value> prevSizes =
-          DbUtils::getDependencySizesFromDb(originalDeps[i]);
+          DbUtils::getDepSizesFromDb(originalDeps[i]);
       SmallVector<Value> prevResolved = resolveParam(prevSizes, loc);
       Value prevElems = AC->computeTotalElements(prevResolved, loc);
       base = AC->create<arith::AddIOp>(loc, base, prevElems);
@@ -936,9 +936,9 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
     AC->setInsertionPoint(placeholder.getDefiningOp());
     Value baseOffset = computeBaseOffset(depIndex, loc);
     SmallVector<Value> depSizes = resolveParam(
-        DbUtils::getDependencySizesFromDb(originalDeps[depIndex]), loc);
+        DbUtils::getDepSizesFromDb(originalDeps[depIndex]), loc);
     SmallVector<Value> depOffsets = resolveParam(
-        DbUtils::getDependencyOffsetsFromDb(originalDeps[depIndex]), loc);
+        DbUtils::getDepOffsetsFromDb(originalDeps[depIndex]), loc);
     SmallVector<Value> depStrides = AC->computeStridesFromSizes(depSizes, loc);
 
     auto originalAcquire = originalDeps[depIndex].getDefiningOp<DbAcquireOp>();
@@ -948,7 +948,7 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
          *originalAcquire.getPartitionMode() == PartitionMode::stencil);
 
     /// Replace remaining uses of the dependency placeholder with the dependency
-    bool isSingleElement = DbUtils::hasSingleSize(
+    bool isSingleElement = DbAnalysis::hasSingleSize(
         originalDeps[depIndex].getDefiningOp<DbAcquireOp>());
 
     auto normalizeSliceIndices = [&](ArrayRef<Value> indices) {
@@ -1100,7 +1100,7 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         op->erase();
       } else if (auto release = dyn_cast<DbReleaseOp>(op)) {
         /// DbReleaseOp using placeholder can be safely erased
-        /// Dependency management is now handled through depv
+        /// Dep management is now handled through depv
         op->erase();
       }
     }

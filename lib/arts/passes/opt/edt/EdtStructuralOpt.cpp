@@ -12,6 +12,7 @@
 ///==========================================================================///
 
 /// Dialects
+#include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/Utils.h"
@@ -23,6 +24,7 @@
 /// Arts
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/graphs/edt/EdtGraph.h"
 #include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
@@ -149,37 +151,15 @@ void sinkExternalAllocasInEdt(EdtOp edt) {
 ///
 ///===----------------------------------------------------------------------===///
 
-/// Returns true when a parallel EDT body contains only arts.for ops and the
-/// yield terminator — no barriers, acquires, or other ops that would make
-/// fusion unsafe.
-static bool isParallelEdtFusable(EdtOp edt) {
-  if (edt.getType() != arts::EdtType::parallel)
-    return false;
-  if (!edt.getDependencies().empty())
-    return false;
-  Block &body = edt.getBody().front();
-  for (Operation &op : body) {
-    if (isa<arts::ForOp>(&op))
-      continue;
-    if (isa<arts::YieldOp>(&op))
-      continue;
-    return false;
-  }
-  return true;
-}
-
 /// Fuses consecutive fusable parallel EDTs in a block.
 /// Returns true if any fusion was performed.
 static bool fuseConsecutiveParallelEdts(Block &block) {
-  /// TODO: This fusion has no data dependency analysis between fused EDTs.
-  /// Two consecutive parallel EDTs could operate on overlapping datablocks
-  /// (e.g., EDT-A writes to DB_x, EDT-B reads from DB_x). Fusing them removes
-  /// the implicit barrier between them, potentially introducing data races.
-  /// Add shared-DB conflict checking before fusion.
   return fuseConsecutivePairs<EdtOp>(
       block,
       [](EdtOp a, EdtOp b) {
-        return isParallelEdtFusable(a) && isParallelEdtFusable(b);
+        return EdtAnalysis::isParallelEdtFusable(a) &&
+               EdtAnalysis::isParallelEdtFusable(b) &&
+               !DbAnalysis::hasDbConflict(a, b);
       },
       [](EdtOp a, EdtOp b) {
         Block &firstBody = a.getBody().front();
@@ -212,8 +192,10 @@ static void processRegionForParallelEdtFusion(Region &region, bool &changed) {
 /// Pass Implementation
 ///===----------------------------------------------------------------------===///
 namespace {
-struct EdtStructuralOptPass : public arts::EdtStructuralOptBase<EdtStructuralOptPass> {
-  EdtStructuralOptPass(mlir::arts::AnalysisManager *AM, bool runAnalysis) : AM(AM) {
+struct EdtStructuralOptPass
+    : public arts::EdtStructuralOptBase<EdtStructuralOptPass> {
+  EdtStructuralOptPass(mlir::arts::AnalysisManager *AM, bool runAnalysis)
+      : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
     this->runAnalysis = runAnalysis;
   }
@@ -277,7 +259,8 @@ void EdtStructuralOptPass::runOnOperation() {
 
   if (runAnalysis) {
     ARTS_INFO("Running EDT pass with analysis");
-    /// IMM-2: Re-enable graph-driven barrier removal (AM is guaranteed non-null).
+    /// IMM-2: Re-enable graph-driven barrier removal (AM is guaranteed
+    /// non-null).
     removeBarriers();
   } else {
     ARTS_INFO("Running EDT pass without analysis");
@@ -451,7 +434,9 @@ bool EdtStructuralOptPass::convertParallelIntoSingle(EdtOp &op) {
   /// barrier after the single (i.e., not a nowait single).
   Operation *nextOp = singleOp->getNextNode();
   bool hadTrailingBarrier = nextOp && isa<arts::BarrierOp>(nextOp);
-  bool needsBarrier = EdtUtils::hasNestedEdt(singleOp) && hadTrailingBarrier;
+  auto *singleNode = AM->getEdtAnalysis().getEdtNode(singleOp);
+  bool needsBarrier =
+      singleNode && singleNode->hasNestedEdts() && hadTrailingBarrier;
 
   /// If we have inner acquires, use the enhanced conversion path
   if (!innerAcquires.empty()) {
@@ -469,7 +454,7 @@ bool EdtStructuralOptPass::convertParallelIntoSingle(EdtOp &op) {
   /// If nested EDTs were present and we had a trailing barrier, wrap top-level
   /// tasks in an epoch to preserve ordering without relying on barriers.
   if (needsBarrier)
-    EdtUtils::wrapBodyInEpoch(newEdt.getRegion().front(), op.getLoc());
+    wrapBodyInEpoch(newEdt.getRegion().front(), op.getLoc());
 
   /// Replace the parallel EDT with the new EDT and erase the single EDT
   op->replaceAllUsesWith(newEdt);
@@ -614,7 +599,7 @@ bool EdtStructuralOptPass::convertParallelWithAcquiresToSync(
   /// If nested EDTs were present and we had a trailing barrier, wrap top-level
   /// tasks in an epoch to preserve ordering without relying on barriers.
   if (needsBarrier)
-    EdtUtils::wrapBodyInEpoch(syncBody, loc);
+    wrapBodyInEpoch(syncBody, loc);
 
   /// Add yield terminator if needed
   if (syncBody.empty() || !syncBody.back().hasTrait<OpTrait::IsTerminator>())
@@ -658,14 +643,16 @@ bool EdtStructuralOptPass::convertParallelWithAcquiresToSync(
 /// region. Since arts.edt<single> has implicit barrier semantics, explicit
 /// barriers around it are redundant and cause issues with the CreateEpochs
 /// pass.
-void EdtStructuralOptPass::removeBarriersAroundSingleEdt(EdtOp parallelOp, EdtOp singleOp) {
+void EdtStructuralOptPass::removeBarriersAroundSingleEdt(EdtOp parallelOp,
+                                                         EdtOp singleOp) {
   Block *parentBlock = singleOp->getBlock();
   if (!parentBlock)
     return;
 
   /// If the single region spawns nested EDTs (tasks/parallel/sync), we must
   /// keep explicit barriers to preserve ordering for CreateEpochs.
-  if (EdtUtils::hasNestedEdt(singleOp)) {
+  auto *singleNode = AM->getEdtAnalysis().getEdtNode(singleOp);
+  if (singleNode && singleNode->hasNestedEdts()) {
     ARTS_DEBUG("Keeping barriers around single EDT with nested EDTs");
     return;
   }
@@ -813,8 +800,8 @@ bool EdtStructuralOptPass::processSyncTaskEdts() {
   return true;
 }
 
-bool EdtStructuralOptPass::removeRedundantBarriersWithGraphs(func::FuncOp func,
-                                                arts::EdtGraph &graph) {
+bool EdtStructuralOptPass::removeRedundantBarriersWithGraphs(
+    func::FuncOp func, arts::EdtGraph &graph) {
   bool changed = false;
 
   /// Collect barriers within this function and check redundancy
@@ -871,8 +858,8 @@ bool EdtStructuralOptPass::removeRedundantBarriersWithGraphs(func::FuncOp func,
 ////===----------------------------------------------------------------------===////
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createEdtStructuralOptPass(mlir::arts::AnalysisManager *AM,
-                                    bool runAnalysis) {
+std::unique_ptr<Pass>
+createEdtStructuralOptPass(mlir::arts::AnalysisManager *AM, bool runAnalysis) {
   return std::make_unique<EdtStructuralOptPass>(AM, runAnalysis);
 }
 std::unique_ptr<Pass> createEdtAllocaSinkingPass() {
