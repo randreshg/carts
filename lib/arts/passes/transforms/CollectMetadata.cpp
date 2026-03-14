@@ -88,7 +88,7 @@ struct CollectMetadataPass : public CollectMetadataBase<CollectMetadataPass> {
     /// Initialize deterministic sequential ID assignment
     manager->getIdRegistry().reset();
     manager->getIdRegistry().initializeFromModule(module);
-    auto accessAnalyzer = std::make_unique<AccessAnalyzer>(context);
+    auto accessAnalyzer = std::make_unique<AccessAnalyzer>();
     auto depAnalyzer =
         std::make_unique<DependenceAnalyzer>(context, *accessAnalyzer);
     auto reuseAnalyzer = std::make_unique<ReuseAnalyzer>(*accessAnalyzer);

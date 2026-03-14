@@ -5,12 +5,22 @@
 ///==========================================================================///
 
 #include "arts/utils/LoopUtils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 
 namespace mlir {
 namespace arts {
+
+unsigned getLoopDepth(Operation *op) {
+  unsigned depth = 0;
+  for (Operation *parent = op ? op->getParentOp() : nullptr; parent;
+       parent = parent->getParentOp()) {
+    if (isa<affine::AffineForOp, scf::ForOp, scf::ParallelOp, scf::ForallOp,
+            omp::WsLoopOp, arts::ForOp>(parent))
+      ++depth;
+  }
+  return depth;
+}
 
 void collectWhileBounds(Value cond, Value iterArg, SmallVector<Value> &bounds) {
   if (!cond)
@@ -39,7 +49,7 @@ void collectWhileBounds(Value cond, Value iterArg, SmallVector<Value> &bounds) {
   }
 }
 
-bool hasEnclosingLoop(EdtOp edt) {
+bool containsLoop(EdtOp edt) {
   bool found = false;
   edt.getBody().walk([&](Operation *op) {
     if (isa<scf::ForOp, scf::ParallelOp, affine::AffineForOp>(op)) {

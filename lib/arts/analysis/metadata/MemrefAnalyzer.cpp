@@ -504,9 +504,9 @@ MemrefAnalyzer::computeDimAccessPatterns(Value memref, Operation *scopeOp) {
       [&](Value idx, unsigned dim) -> MemrefMetadata::DimAccessPatternType {
     if (!idx)
       return DimPattern::Unknown;
-    if (accessAnalyzer.isConstantIndexValue(idx))
+    if (ValueAnalysis::isValueConstant(idx))
       return DimPattern::Constant;
-    if (dim + 1 == rank && accessAnalyzer.isUnitStrideLike(idx))
+    if (dim + 1 == rank && accessAnalyzer.isUnitStrideIndex(idx))
       return DimPattern::UnitStride;
     if (accessAnalyzer.isAffineIndex(idx))
       return DimPattern::Affine;

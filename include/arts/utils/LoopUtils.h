@@ -7,13 +7,12 @@
 /// framework without requiring an AnalysisManager.
 ///==========================================================================///
 
-#ifndef CARTS_UTILS_LOOPUTILS_H
-#define CARTS_UTILS_LOOPUTILS_H
+#ifndef ARTS_UTILS_LOOPUTILS_H
+#define ARTS_UTILS_LOOPUTILS_H
 
 #include "arts/Dialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
 
 namespace mlir {
 namespace arts {
@@ -23,7 +22,10 @@ namespace arts {
 /// Used by epoch-level passes to identify task-spawning loops.
 inline bool isWorkerLoop(scf::ForOp loop) {
   bool hasEdt = false;
-  loop.walk([&](EdtOp) { hasEdt = true; });
+  loop.walk([&](EdtOp) {
+    hasEdt = true;
+    return WalkResult::interrupt();
+  });
   return hasEdt;
 }
 
@@ -33,8 +35,11 @@ inline bool isWorkerLoop(scf::ForOp loop) {
 inline bool isInnermostLoop(scf::ForOp loop) {
   bool hasNested = false;
   loop.getBody()->walk([&](scf::ForOp nested) {
-    if (nested != loop)
+    if (nested != loop) {
       hasNested = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
   });
   return !hasNested;
 }
@@ -49,16 +54,51 @@ inline bool haveCompatibleBounds(scf::ForOp a, scf::ForOp b) {
          ValueAnalysis::sameValue(a.getStep(), b.getStep());
 }
 
+/// Check whether two arts::ForOp loops have the same iteration space (same
+/// lower bound, upper bound, and step). Uses ValueAnalysis::sameValue for
+/// comparison. Returns false if either loop is null or has multi-dimensional
+/// bounds.
+inline bool haveSameBounds(ForOp a, ForOp b) {
+  if (!a || !b)
+    return false;
+  if (a.getLowerBound().size() != 1 || a.getUpperBound().size() != 1 ||
+      a.getStep().size() != 1 || b.getLowerBound().size() != 1 ||
+      b.getUpperBound().size() != 1 || b.getStep().size() != 1)
+    return false;
+  return ValueAnalysis::sameValue(a.getLowerBound().front(),
+                                  b.getLowerBound().front()) &&
+         ValueAnalysis::sameValue(a.getUpperBound().front(),
+                                  b.getUpperBound().front()) &&
+         ValueAnalysis::sameValue(a.getStep().front(), b.getStep().front());
+}
+
+/// Check whether a value is a loop induction variable (i.e., a BlockArgument
+/// whose parent operation is a loop construct).
+inline bool isLoopInductionVar(Value value) {
+  if (auto arg = dyn_cast<BlockArgument>(value)) {
+    Operation *parent = arg.getOwner()->getParentOp();
+    return parent &&
+           isa<affine::AffineForOp, scf::ForOp, scf::ParallelOp,
+               scf::ForallOp, arts::ForOp>(parent);
+  }
+  return false;
+}
+
 /// Collect upper bounds from a while-loop condition for the given iteration
 /// argument. Recursively decomposes AND-ed conditions and extracts bounds
 /// from less-than / greater-than comparisons.
 void collectWhileBounds(Value cond, Value iterArg, SmallVector<Value> &bounds);
 
+/// Compute the loop nesting depth of an operation by counting how many
+/// enclosing loop operations (scf::ForOp, scf::ParallelOp, scf::ForallOp,
+/// affine::AffineForOp, omp::WsLoopOp, arts::ForOp) surround it.
+unsigned getLoopDepth(Operation *op);
+
 /// Returns true if the EDT's body contains any loop operations
 /// (scf::ForOp, scf::ParallelOp, affine::AffineForOp).
-bool hasEnclosingLoop(EdtOp edt);
+bool containsLoop(EdtOp edt);
 
 } // namespace arts
 } // namespace mlir
 
-#endif // CARTS_UTILS_LOOPUTILS_H
+#endif // ARTS_UTILS_LOOPUTILS_H

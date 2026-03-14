@@ -85,7 +85,7 @@ public:
   std::optional<int64_t> getStepConstant() const;
   std::optional<int64_t> estimateStaticPerfectNestedWork(int64_t cap = 8) const;
   int getNestingDepth() const;
-  void clearIVCache() { ivDependencyCache.clear(); }
+  void clearIVCache() { ivDepCache.clear(); }
 
   //===--------------------------------------------------------------------===//
   /// Raw Value Accessors
@@ -125,7 +125,7 @@ private:
   DenseSet<EdgeBase *> edges;
 
   /// Cache for IV dependency analysis to avoid repeated traversals
-  DenseMap<Value, bool> ivDependencyCache;
+  DenseMap<Value, bool> ivDepCache;
 };
 
 } // namespace arts
