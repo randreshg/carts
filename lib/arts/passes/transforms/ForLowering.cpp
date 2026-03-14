@@ -23,6 +23,7 @@
 
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/graphs/db/DbGraph.h"
 #include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/analysis/heuristics/DistributionHeuristics.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
@@ -80,6 +81,7 @@ struct AcquireRewritePlanningInput {
   DistributionKind distributionKind = DistributionKind::Flat;
   std::optional<EdtDistributionPattern> distributionPattern;
   std::optional<Tiling2DWorkerGrid> tiling2DGrid;
+  AcquireRewriteContract rewriteContract;
 
   Value acquireOffset;
   Value acquireSize;
@@ -99,6 +101,66 @@ struct TaskAcquireWindow {
   Value dbOffset;
   Value dbSize;
 };
+
+/// Derive the acquire rewrite contract from the explicit lowering contract
+/// first, then refine it with post-DB DbAnalysis facts when that contract is
+/// still incomplete.
+///
+/// This keeps ForLowering in the "consume contracts" role:
+/// - explicit contracts remain the primary source of truth
+/// - DbAnalysis may strengthen them using the same contract vocabulary after
+///   DB creation
+static AcquireRewriteContract
+getAcquireRewriteContractForLowering(mlir::arts::AnalysisManager *AM,
+                                     DbAcquireOp acquire) {
+  AcquireRewriteContract contract = deriveAcquireRewriteContract(acquire);
+  if (!AM || !acquire)
+    return contract;
+
+  auto contractSummary = AM->getDbAnalysis().getAcquireContractSummary(acquire);
+  if (!contractSummary)
+    return contract;
+
+  if (contract.ownerDims.empty())
+    contract.ownerDims.assign(contractSummary->contract.ownerDims.begin(),
+                              contractSummary->contract.ownerDims.end());
+
+  if (contract.haloMinOffsets.empty()) {
+    if (auto mins = contractSummary->contract.getStaticMinOffsets())
+      contract.haloMinOffsets = *mins;
+  }
+  if (contract.haloMaxOffsets.empty()) {
+    if (auto maxs = contractSummary->contract.getStaticMaxOffsets())
+      contract.haloMaxOffsets = *maxs;
+  }
+
+  const bool hasExplicitStencilContract =
+      contractSummary->contract.hasExplicitStencilContract();
+  bool supportsStencilHalo =
+      hasExplicitStencilContract &&
+      contractSummary->contract.supportsBlockHalo() &&
+      !contract.haloMinOffsets.empty() && !contract.haloMaxOffsets.empty();
+
+  if (acquire.getMode() == ArtsMode::in && hasExplicitStencilContract &&
+      supportsStencilHalo) {
+    if (contract.haloMinOffsets.empty() && !contract.haloMaxOffsets.empty()) {
+      contract.haloMinOffsets.resize(contract.haloMaxOffsets.size(), 0);
+      for (size_t i = 0; i < contract.haloMaxOffsets.size(); ++i)
+        if (contract.haloMaxOffsets[i] > 0)
+          contract.haloMinOffsets[i] = -contract.haloMaxOffsets[i];
+    } else if (contract.haloMinOffsets.size() == contract.haloMaxOffsets.size()) {
+      for (size_t i = 0; i < contract.haloMinOffsets.size(); ++i)
+        if (contract.haloMinOffsets[i] == 0 && contract.haloMaxOffsets[i] > 0)
+          contract.haloMinOffsets[i] = -contract.haloMaxOffsets[i];
+    }
+
+    contract.applyStencilHalo = true;
+    contract.usePartitionSliceAsDependencyWindow = false;
+    contract.preserveParentDependencyRange = false;
+  }
+
+  return contract;
+}
 
 /// Plan one task-local acquire rewrite from the already-selected distribution
 /// shape. This stays local to ForLowering because no other pass consumes the
@@ -140,7 +202,7 @@ planAcquireRewrite(AcquireRewritePlanningInput input) {
   SmallVector<Value, 4> extraSizes;
   SmallVector<Value, 4> extraHintSizes;
   SmallVector<Value, 4> dimensionExtents;
-  AcquireRewriteContract rewriteContract;
+  AcquireRewriteContract rewriteContract = input.rewriteContract;
 
   if (Operation *rootAllocOp = DbUtils::getUnderlyingDbAlloc(input.rootPtr)) {
     if (auto dbAlloc = dyn_cast<DbAllocOp>(rootAllocOp)) {
@@ -151,8 +213,6 @@ planAcquireRewrite(AcquireRewritePlanningInput input) {
           return ValueAnalysis::getConstantIndex(value, constant) &&
                  constant == 1;
         });
-        rewriteContract = deriveAcquireRewriteContract(input.parentAcquire);
-
         unsigned primaryOwnerDim = 0;
         if (!rewriteContract.ownerDims.empty() &&
             rewriteContract.ownerDims.front() >= 0 &&
@@ -277,23 +337,29 @@ static std::optional<TaskAcquireWindow> computeTaskAcquireWindowInBlockSpace(
       deriveAcquireRewriteContract(parentAcquire);
   const bool useRewrittenWindow =
       rewriteContract.usePartitionSliceAsDependencyWindow;
+  const bool useTaskDependencyWindow =
+      usesStencilHalo || rewriteContract.applyStencilHalo;
 
-  if (useRewrittenWindow) {
-    /// For pattern-backed block/stencil contracts, partition_* carries the
-    /// authoritative task-local element-space slice even when offsets/sizes
-    /// still reflect a conservative dependency range.
-    if (!taskAcquire.getPartitionOffsets().empty() &&
-        taskAcquire.getPartitionOffsets().front())
-      elementOffset = taskAcquire.getPartitionOffsets().front();
-    else if (!taskAcquire.getOffsets().empty() &&
-             taskAcquire.getOffsets().front())
-      elementOffset = taskAcquire.getOffsets().front();
+  if (useRewrittenWindow || useTaskDependencyWindow) {
+    /// Contract-backed acquires already carry the authoritative task-local
+    /// dependency window in one of two places:
+    ///   1. partition_* for families that preserve an owner-aligned element
+    ///      slice there
+    ///   2. offsets/sizes for halo-expanded dependency windows
+    ///
+    /// Recomputing the DB-space window from the planned owner slice would drop
+    /// halo reads at block boundaries and misalign rec_dep slot numbering with
+    /// the outlined EDT's dep_gep base offset.
+    auto offsetRange = useRewrittenWindow ? taskAcquire.getPartitionOffsets()
+                                          : taskAcquire.getOffsets();
+    auto sizeRange = useRewrittenWindow ? taskAcquire.getPartitionSizes()
+                                        : taskAcquire.getSizes();
 
-    if (!taskAcquire.getPartitionSizes().empty() &&
-        taskAcquire.getPartitionSizes().front())
-      elementSize = taskAcquire.getPartitionSizes().front();
-    else if (!taskAcquire.getSizes().empty() && taskAcquire.getSizes().front())
-      elementSize = taskAcquire.getSizes().front();
+    if (!offsetRange.empty() && offsetRange.front())
+      elementOffset = offsetRange.front();
+
+    if (!sizeRange.empty() && sizeRange.front())
+      elementSize = sizeRange.front();
   } else {
     if (!taskAcquire.getSizes().empty() && taskAcquire.getSizes().front())
       elementSize = taskAcquire.getSizes().front();
@@ -1023,9 +1089,9 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   /// Create task EDT with DB rewiring
   EdtOp taskEdt = createTaskEdtWithRewiring(
       &AC, *loopInfoStorage, forOp, workerIV, originalParallel, redInfo);
-  copyPatternAttrs(forOp.getOperation(), taskEdt.getOperation());
+  copySemanticContractAttrs(forOp.getOperation(), taskEdt.getOperation());
   if (forEpoch)
-    copyPatternAttrs(forOp.getOperation(), forEpoch->getOperation());
+    copySemanticContractAttrs(forOp.getOperation(), forEpoch->getOperation());
 
   /// After worker loop, create result EDT (if reductions)
   AC.setInsertionPointAfter(workerLoop);
@@ -1219,6 +1285,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
                                               loopInfo.strategy.kind,
                                               distributionPattern,
                                               tiling2DGrid,
+                                              getAcquireRewriteContractForLowering(
+                                                  AM, parentAcqOp),
                                               acquireOffsetVal,
                                               acquireSizeVal,
                                               acquireHintSizeVal,
@@ -1234,8 +1302,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
     auto setDbSpaceSliceFromAcquirePlan = [&](DbAcquireOp acquireOp,
                                               bool usesStencilHalo) {
-      AcquireRewriteContract rewriteContract =
-          deriveAcquireRewriteContract(parentAcqOp);
+      AcquireRewriteContract rewriteContract = planningInput.rewriteContract;
       bool shouldUseStencilWindow =
           usesStencilHalo ||
           rewriteContract.usePartitionSliceAsDependencyWindow;
@@ -1348,8 +1415,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     }
 
     auto chunkMode = chunkAcqOp.getPartitionMode();
-    AcquireRewriteContract chunkRewriteContract =
-        deriveAcquireRewriteContract(chunkAcqOp);
+    AcquireRewriteContract chunkRewriteContract = planningInput.rewriteContract;
     bool shouldMarkStencilCenter =
         chunkRewriteContract.usePartitionSliceAsDependencyWindow ||
         chunkRewriteContract.applyStencilHalo ||

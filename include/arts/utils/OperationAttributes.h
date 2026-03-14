@@ -38,6 +38,7 @@ constexpr StringLiteral OutlinedFunc = "outlined_func";
 constexpr StringLiteral Nowait = "nowait";
 constexpr StringLiteral PreserveAccessMode = "preserve_access_mode";
 constexpr StringLiteral PreserveDepEdge = "preserve_dep_edge";
+constexpr StringLiteral LocalityOnly = "arts.locality_only";
 
 /// Partition-related attributes (TableGen-generated names)
 constexpr StringLiteral PartitionMode = "partition_mode";
@@ -336,6 +337,21 @@ inline void setWorkersPerNode(Operation *op, int64_t workersPerNode) {
       IntegerAttr::get(IntegerType::get(op->getContext(), 64), workersPerNode));
 }
 
+inline bool isLocalityOnly(Operation *op) {
+  return op && op->hasAttr(AttrNames::Operation::LocalityOnly);
+}
+
+inline void setLocalityOnly(Operation *op, bool localityOnly = true) {
+  if (!op)
+    return;
+  if (!localityOnly) {
+    op->removeAttr(AttrNames::Operation::LocalityOnly);
+    return;
+  }
+  op->setAttr(AttrNames::Operation::LocalityOnly,
+              UnitAttr::get(op->getContext()));
+}
+
 inline void copyWorkerTopologyAttrs(Operation *from, Operation *to) {
   if (!to)
     return;
@@ -535,6 +551,10 @@ inline void copyPatternAttrs(Operation *source, Operation *dest) {
     return;
   copyDistributionAttrs(source, dest);
   copyDepPatternAttrs(source, dest);
+  if (auto revision = getPatternRevision(source))
+    setPatternRevision(dest, *revision);
+  else
+    dest->removeAttr(AttrNames::Operation::PatternRevision);
 }
 
 /// Full implementation in OperationAttributes.cpp.

@@ -122,6 +122,15 @@ DbAcquireNode *DbAllocNode::findAcquireNode(DbAcquireOp op) const {
   return it != acquireMap.end() ? it->second : nullptr;
 }
 
+SmallVector<DbAcquireNode *, 16> DbAllocNode::collectAllAcquireNodes() {
+  return ::collectAllAcquireNodes<DbAcquireNode>(acquireNodes);
+}
+
+SmallVector<const DbAcquireNode *, 16>
+DbAllocNode::collectAllAcquireNodes() const {
+  return ::collectAllAcquireNodes<const DbAcquireNode>(acquireNodes);
+}
+
 bool DbAllocNode::isParallelFriendly() const {
   if (isStringDatablock())
     return false;
@@ -130,7 +139,7 @@ bool DbAllocNode::isParallelFriendly() const {
     return true;
 
   SmallVector<const DbAcquireNode *, 16> allAcquireNodes =
-      collectAllAcquireNodes<const DbAcquireNode>(acquireNodes);
+      collectAllAcquireNodes();
 
   /// Offset/size hints from ForLowering indicate parallel partition intent
   /// even when loop metadata is missing.
@@ -156,8 +165,7 @@ bool DbAllocNode::canBePartitioned() {
     return false;
   };
 
-  SmallVector<DbAcquireNode *, 16> allAcquireNodes =
-      collectAllAcquireNodes<DbAcquireNode>(acquireNodes);
+  SmallVector<DbAcquireNode *, 16> allAcquireNodes = collectAllAcquireNodes();
 
   if (hasNonAffineAccesses && *hasNonAffineAccesses) {
     /// Check if any acquire has offset/size hints from ForLowering.
@@ -308,7 +316,7 @@ bool DbAllocNode::hasSingleWriter() const {
   int writeCount = 0;
 
   SmallVector<const DbAcquireNode *, 16> allAcquireNodes =
-      collectAllAcquireNodes<const DbAcquireNode>(acquireNodes);
+      collectAllAcquireNodes();
   for (const DbAcquireNode *acqNode : allAcquireNodes) {
     if (!acqNode)
       continue;
@@ -338,7 +346,7 @@ bool DbAllocNode::hasSingleWriter() const {
 
 bool DbAllocNode::hasDynamicWriterOffsets() const {
   SmallVector<const DbAcquireNode *, 16> allAcquireNodes =
-      collectAllAcquireNodes<const DbAcquireNode>(acquireNodes);
+      collectAllAcquireNodes();
   for (const DbAcquireNode *acqNode : allAcquireNodes) {
     if (!acqNode)
       continue;
@@ -360,7 +368,7 @@ bool DbAllocNode::hasDynamicWriterOffsets() const {
 
 bool DbAllocNode::allAcquiresWorkerIndexed() const {
   SmallVector<const DbAcquireNode *, 16> allAcquireNodes =
-      collectAllAcquireNodes<const DbAcquireNode>(acquireNodes);
+      collectAllAcquireNodes();
   if (allAcquireNodes.empty())
     return true;
 
@@ -376,7 +384,7 @@ bool DbAllocNode::allAcquiresWorkerIndexed() const {
 
 bool DbAllocNode::canProveNonOverlapping() const {
   SmallVector<const DbAcquireNode *, 16> allAcquireNodes =
-      collectAllAcquireNodes<const DbAcquireNode>(acquireNodes);
+      collectAllAcquireNodes();
 
   if (allAcquireNodes.empty())
     return true;
@@ -442,7 +450,7 @@ AcquirePatternSummary DbAllocNode::summarizeAcquirePatterns() const {
   bool hasIndirect = false;
 
   SmallVector<const DbAcquireNode *, 16> allAcquireNodes =
-      collectAllAcquireNodes<const DbAcquireNode>(acquireNodes);
+      collectAllAcquireNodes();
 
   ARTS_DEBUG("  Analyzing " << allAcquireNodes.size() << " acquire nodes");
   for (const DbAcquireNode *acqNode : allAcquireNodes) {

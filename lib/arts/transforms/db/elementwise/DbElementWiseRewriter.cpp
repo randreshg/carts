@@ -264,19 +264,24 @@ bool DbElementWiseRewriter::rebaseEdtUsers(DbAcquireOp acquire,
   ARTS_DEBUG("DbElementWiseRewriter::rebaseEdtUsers");
 
   auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
-  if (!blockArg)
+  Value localView = blockArg ? Value(blockArg) : acquire.getPtr();
+  if (!localView) {
+    edt = acquire->getParentOfType<EdtOp>();
+    localView = acquire.getPtr();
+  }
+  if (!localView)
     return false;
 
   /// Determine element type from users or allocation
   Type targetType;
-  for (Operation *user : blockArg.getUsers()) {
+  for (Operation *user : localView.getUsers()) {
     if (auto ref = dyn_cast<DbRefOp>(user)) {
       targetType = ref.getResult().getType();
       break;
     }
   }
   if (!targetType) {
-    targetType = blockArg.getType();
+    targetType = localView.getType();
     if (auto outer = targetType.dyn_cast<MemRefType>())
       if (auto inner = outer.getElementType().dyn_cast<MemRefType>())
         targetType = inner;
@@ -286,7 +291,7 @@ bool DbElementWiseRewriter::rebaseEdtUsers(DbAcquireOp acquire,
 
   Type derivedType = targetType;
   if (auto dbAlloc =
-          dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(blockArg)))
+          dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(localView)))
     derivedType = dbAlloc.getAllocatedElementType();
 
   /// Build PartitionInfo for fine-grained mode.
@@ -303,14 +308,14 @@ bool DbElementWiseRewriter::rebaseEdtUsers(DbAcquireOp acquire,
   auto indexer = std::make_unique<DbElementWiseIndexer>(
       info, plan.outerRank(), plan.innerRank(), oldAlloc.getElementSizes());
 
-  SmallVector<Operation *> users(blockArg.getUsers().begin(),
-                                 blockArg.getUsers().end());
+  SmallVector<Operation *> users(localView.getUsers().begin(),
+                                 localView.getUsers().end());
   llvm::SetVector<Operation *> opsToRemove;
   bool rewritten = false;
 
   for (Operation *user : users) {
     if (auto ref = dyn_cast<DbRefOp>(user)) {
-      indexer->transformDbRefUsers(ref, blockArg, derivedType, builder,
+      indexer->transformDbRefUsers(ref, localView, derivedType, builder,
                                    opsToRemove);
       rewritten = true;
     }

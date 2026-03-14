@@ -34,6 +34,7 @@ constexpr StringLiteral BlockShape("stencil_block_shape");
 constexpr StringLiteral WriteFootprint("stencil_write_footprint");
 constexpr StringLiteral HaloContractId("stencil_halo_contract_id");
 constexpr StringLiteral SupportedBlockHalo("stencil_supported_block_halo");
+constexpr StringLiteral AccessOffsets("stencil_access_offsets");
 } // namespace Stencil
 } // namespace Operation
 } // namespace AttrNames
@@ -211,6 +212,19 @@ inline void setStencilWriteFootprint(Operation *op,
     return;
   op->setAttr(AttrNames::Operation::Stencil::WriteFootprint,
               buildI64ArrayAttr(op, footprint));
+}
+
+inline std::optional<SmallVector<int64_t, 4>>
+getStencilAccessOffsets(Operation *op) {
+  return readI64ArrayAttr(op, AttrNames::Operation::Stencil::AccessOffsets);
+}
+
+inline void setStencilAccessOffsets(Operation *op,
+                                    ArrayRef<int64_t> accessOffsets) {
+  if (!op)
+    return;
+  op->setAttr(AttrNames::Operation::Stencil::AccessOffsets,
+              buildI64ArrayAttr(op, accessOffsets));
 }
 
 inline std::optional<int64_t> getStencilHaloContractId(Operation *op) {

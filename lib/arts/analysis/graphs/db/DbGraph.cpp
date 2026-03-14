@@ -454,7 +454,7 @@ void DbGraph::computePeakMetrics() {
   }
 }
 
-void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
+llvm::json::Value DbGraph::exportToJsonValue(bool includeAnalysis) const {
   using namespace llvm::json;
 
   if (!includeAnalysis) {
@@ -478,8 +478,7 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
 
     root["nodes"] = std::move(nodesArr);
     root["edges"] = llvm::json::Array();
-    os << llvm::json::Value(std::move(root)) << "\n";
-    return;
+    return llvm::json::Value(std::move(root));
   }
 
   /// ArtsMate DB entities export
@@ -682,5 +681,9 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
     dbs.push_back(std::move(db));
   }
 
-  os << llvm::json::Value(std::move(dbs)) << "\n";
+  return llvm::json::Value(std::move(dbs));
+}
+
+void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
+  os << exportToJsonValue(includeAnalysis) << "\n";
 }

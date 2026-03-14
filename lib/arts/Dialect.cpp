@@ -21,6 +21,7 @@
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/transforms/db/DbRewriter.h"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
@@ -323,7 +324,7 @@ void DbGepOp::build(OpBuilder &builder, OperationState &state, Type ptr,
   state.addOperands(strides);
   SmallVector<int32_t, 3> segments = {1, (int32_t)indices.size(),
                                       (int32_t)strides.size()};
-  state.addAttribute(getOperandSegmentSizesAttrName(state.name),
+  state.addAttribute(DbGepOp::getOperandSegmentSizesAttrName(state.name),
                      builder.getDenseI32ArrayAttr(segments));
   state.addTypes(ptr);
 }
@@ -382,40 +383,49 @@ static Type computeGuidType(OpBuilder &builder, ArrayRef<Value> sizes) {
   return MemRefType::get(shape, builder.getI64Type());
 }
 
-// TODO(REFACTOR): buildDbAllocOpCommon has 11 positional parameters. Consider
-// grouping into a DbAllocBuildInfo struct.
-static void
-buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
-                     Value route, DbAllocType allocType, DbMode dbMode,
-                     Type elementType, Value address, SmallVector<Value> sizes,
-                     SmallVector<Value> elementSizes, Type pointerType,
-                     PartitionMode partitionMode = PartitionMode::coarse) {
+/// Builder-side bundle for DbAllocOp construction so individual overloads don't
+/// have to thread a long positional argument list into the shared helper.
+struct DbAllocBuildInfo {
+  ArtsMode mode;
+  Value route;
+  DbAllocType allocType;
+  DbMode dbMode;
+  Type elementType;
+  Value address;
+  SmallVector<Value> sizes;
+  SmallVector<Value> elementSizes;
+  Type pointerType;
+  PartitionMode partitionMode = PartitionMode::coarse;
+};
+
+static void buildDbAllocOpCommon(OpBuilder &builder, OperationState &state,
+                                 DbAllocBuildInfo info) {
   /// Auto-compute GUID type to match datablock dimensionality
-  Type guidType = computeGuidType(builder, sizes);
+  Type guidType = computeGuidType(builder, info.sizes);
 
-  if (sizes.empty())
-    sizes.push_back(arts::createOneIndex(builder, state.location));
+  if (info.sizes.empty())
+    info.sizes.push_back(arts::createOneIndex(builder, state.location));
 
-  if (elementSizes.empty())
-    elementSizes.push_back(arts::createOneIndex(builder, state.location));
+  if (info.elementSizes.empty())
+    info.elementSizes.push_back(arts::createOneIndex(builder, state.location));
 
   Type ptrType;
-  if (pointerType) {
-    ptrType = pointerType;
+  if (info.pointerType) {
+    ptrType = info.pointerType;
   } else {
     Type pointerElementType =
-        arts::getElementMemRefType(elementType, elementSizes);
+        arts::getElementMemRefType(info.elementType, info.elementSizes);
     SmallVector<int64_t> shape;
-    shape.assign(sizes.size(), ShapedType::kDynamic);
+    shape.assign(info.sizes.size(), ShapedType::kDynamic);
     ptrType = MemRefType::get(shape, pointerElementType);
   }
   state.addTypes({guidType, ptrType});
 
-  ArtsModeAttr modeAttr = ArtsModeAttr::get(builder.getContext(), mode);
+  ArtsModeAttr modeAttr = ArtsModeAttr::get(builder.getContext(), info.mode);
   DbAllocTypeAttr allocTypeAttr =
-      DbAllocTypeAttr::get(builder.getContext(), allocType);
-  DbModeAttr dbModeAttr = DbModeAttr::get(builder.getContext(), dbMode);
-  TypeAttr elementTypeAttr = TypeAttr::get(elementType);
+      DbAllocTypeAttr::get(builder.getContext(), info.allocType);
+  DbModeAttr dbModeAttr = DbModeAttr::get(builder.getContext(), info.dbMode);
+  TypeAttr elementTypeAttr = TypeAttr::get(info.elementType);
 
   state.addAttribute("mode", modeAttr);
   state.addAttribute("allocType", allocTypeAttr);
@@ -423,19 +433,19 @@ buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
   state.addAttribute("elementType", elementTypeAttr);
   state.addAttribute(
       AttrNames::Operation::PartitionMode,
-      PartitionModeAttr::get(builder.getContext(), partitionMode));
+      PartitionModeAttr::get(builder.getContext(), info.partitionMode));
 
-  state.addOperands(route);
-  if (address)
-    state.addOperands(address);
-  state.addOperands(sizes);
-  state.addOperands(elementSizes);
+  state.addOperands(info.route);
+  if (info.address)
+    state.addOperands(info.address);
+  state.addOperands(info.sizes);
+  state.addOperands(info.elementSizes);
 
   state.addAttribute(DbAllocOp::getOperandSegmentSizesAttrName(state.name),
                      builder.getDenseI32ArrayAttr(
-                         {1, static_cast<int32_t>(address ? 1 : 0),
-                          static_cast<int32_t>(sizes.size()),
-                          static_cast<int32_t>(elementSizes.size())}));
+                         {1, static_cast<int32_t>(info.address ? 1 : 0),
+                          static_cast<int32_t>(info.sizes.size()),
+                          static_cast<int32_t>(info.elementSizes.size())}));
 }
 
 void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
@@ -443,9 +453,17 @@ void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
                       Type elementType, Value address, SmallVector<Value> sizes,
                       SmallVector<Value> elementSizes,
                       PartitionMode partitionMode) {
-  buildDbAllocOpCommon(builder, state, mode, route, allocType, dbMode,
-                       elementType, address, sizes, elementSizes, nullptr,
-                       partitionMode);
+  buildDbAllocOpCommon(builder, state,
+                       {.mode = mode,
+                        .route = route,
+                        .allocType = allocType,
+                        .dbMode = dbMode,
+                        .elementType = elementType,
+                        .address = address,
+                        .sizes = std::move(sizes),
+                        .elementSizes = std::move(elementSizes),
+                        .pointerType = Type{},
+                        .partitionMode = partitionMode});
 }
 
 void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
@@ -453,9 +471,17 @@ void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
                       Type elementType, SmallVector<Value> sizes,
                       SmallVector<Value> elementSizes,
                       PartitionMode partitionMode) {
-  buildDbAllocOpCommon(builder, state, mode, route, allocType, dbMode,
-                       elementType, Value{}, sizes, elementSizes, nullptr,
-                       partitionMode);
+  buildDbAllocOpCommon(builder, state,
+                       {.mode = mode,
+                        .route = route,
+                        .allocType = allocType,
+                        .dbMode = dbMode,
+                        .elementType = elementType,
+                        .address = Value{},
+                        .sizes = std::move(sizes),
+                        .elementSizes = std::move(elementSizes),
+                        .pointerType = Type{},
+                        .partitionMode = partitionMode});
 }
 
 void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
@@ -463,9 +489,17 @@ void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
                       Type elementType, Type pointerType,
                       SmallVector<Value> sizes, SmallVector<Value> elementSizes,
                       PartitionMode partitionMode) {
-  buildDbAllocOpCommon(builder, state, mode, route, allocType, dbMode,
-                       elementType, Value{}, sizes, elementSizes, pointerType,
-                       partitionMode);
+  buildDbAllocOpCommon(builder, state,
+                       {.mode = mode,
+                        .route = route,
+                        .allocType = allocType,
+                        .dbMode = dbMode,
+                        .elementType = elementType,
+                        .address = Value{},
+                        .sizes = std::move(sizes),
+                        .elementSizes = std::move(elementSizes),
+                        .pointerType = pointerType,
+                        .partitionMode = partitionMode});
 }
 
 MemRefType DbAllocOp::getAllocatedElementType() {
@@ -789,9 +823,26 @@ void DbAcquireOp::build(
                                elementOffsets, elementSizes);
 }
 
-// TODO(REFACTOR): LoweringContractOp::build has 22+ positional parameters
-// mirroring LoweringContractInfo field-by-field. Add a build overload that
-// accepts const LoweringContractInfo& to reduce argument-ordering bugs.
+void LoweringContractOp::build(OpBuilder &builder, OperationState &state,
+                               Value target,
+                               const LoweringContractInfo &info) {
+  build(builder, state, target, info.depPattern, info.distributionKind,
+        info.distributionPattern, info.distributionVersion,
+        SmallVector<int64_t>(info.ownerDims.begin(), info.ownerDims.end()),
+        SmallVector<int64_t>(info.spatialDims.begin(), info.spatialDims.end()),
+        SmallVector<Value>(info.blockShape.begin(), info.blockShape.end()),
+        SmallVector<Value>(info.minOffsets.begin(), info.minOffsets.end()),
+        SmallVector<Value>(info.maxOffsets.begin(), info.maxOffsets.end()),
+        SmallVector<Value>(info.writeFootprint.begin(),
+                           info.writeFootprint.end()),
+        info.supportedBlockHalo,
+        SmallVector<int64_t>(info.stencilIndependentDims.begin(),
+                             info.stencilIndependentDims.end()),
+        info.esdByteOffset, info.esdByteSize, info.cachedStartBlock,
+        info.cachedBlockCount, info.postDbRefined, info.inferredDbMode,
+        info.estimatedTaskCost, info.criticalPathDistance);
+}
+
 void LoweringContractOp::build(
     OpBuilder &builder, OperationState &state, Value target,
     std::optional<ArtsDepPattern> depPattern,
@@ -813,7 +864,8 @@ void LoweringContractOp::build(
   state.addOperands(minOffsets);
   state.addOperands(maxOffsets);
   state.addOperands(writeFootprint);
-  state.addAttribute(getOperandSegmentSizesAttrName(state.name),
+  state.addAttribute(LoweringContractOp::getOperandSegmentSizesAttrName(
+                         state.name),
                      builder.getDenseI32ArrayAttr(
                          {1, static_cast<int32_t>(blockShape.size()),
                           static_cast<int32_t>(minOffsets.size()),
@@ -976,9 +1028,6 @@ void DbRefOp::build(OpBuilder &builder, OperationState &state, Value source,
   state.addTypes(dbAllocOp.getAllocatedElementType());
   state.addOperands(source);
   state.addOperands(indices);
-  state.addAttribute(
-      getOperandSegmentSizesAttrName(state.name),
-      builder.getDenseI32ArrayAttr({1, static_cast<int32_t>(indices.size())}));
 }
 
 LogicalResult DbRefOp::verify() {
@@ -1103,7 +1152,7 @@ void OmpDepOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
   state.addOperands(indices);
   state.addOperands(sizes);
   state.addAttribute(
-      getOperandSegmentSizesAttrName(state.name),
+      OmpDepOp::getOperandSegmentSizesAttrName(state.name),
       builder.getDenseI32ArrayAttr({1, static_cast<int32_t>(indices.size()),
                                     static_cast<int32_t>(sizes.size())}));
 }

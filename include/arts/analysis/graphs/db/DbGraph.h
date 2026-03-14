@@ -10,6 +10,7 @@
 #include "arts/Dialect.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/Support/JSON.h"
 #include <functional>
 #include <memory>
 #include <string>
@@ -34,6 +35,7 @@ public:
   void buildNodesOnly();
   void invalidate();
   void print(llvm::raw_ostream &os);
+  llvm::json::Value exportToJsonValue(bool includeAnalysis = false) const;
 
   /// Export graph to JSON
   void exportToJson(llvm::raw_ostream &os, bool includeAnalysis = false) const;

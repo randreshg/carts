@@ -32,6 +32,7 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/EdtUtils.h"
+#include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/StencilAttributes.h"
@@ -370,6 +371,15 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
   } else {
     /// For block-mode fallback acquires on stencil allocations, convert
     /// element-space partition hints into DB-space block slices.
+    auto contract = getLoweringContract(acquire.getPtr());
+    if (!contract)
+      contract = getSemanticContract(acquire.getOperation());
+    auto staticMinOffsets =
+        contract ? contract->getStaticMinOffsets() : std::nullopt;
+    SmallVector<unsigned, 4> ownerDims =
+        contract ? resolveContractOwnerDims(*contract, nPartDims)
+                 : SmallVector<unsigned, 4>{};
+
     const auto &offsets = info.partitionInfo.offsets;
     const auto &sizes = info.partitionInfo.sizes;
     for (unsigned d = 0; d < nPartDims; ++d) {
@@ -381,6 +391,32 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
       Value elemOff = (d < offsets.size() && offsets[d]) ? offsets[d] : zero;
       Value elemSz = (d < sizes.size() && sizes[d]) ? sizes[d] : one;
       elemSz = builder.create<arith::MaxUIOp>(loc, elemSz, one);
+
+      /// Contract-backed stencil reads may carry a halo-expanded span but keep
+      /// the owner-slice base in partitionInfo.offsets. Shift the start back
+      /// by the left halo before converting to DB-space blocks so the block
+      /// window matches the EDT-local dependency layout.
+      if (acquire.getMode() == ArtsMode::in && staticMinOffsets &&
+          d < ownerDims.size()) {
+        unsigned ownerDim = ownerDims[d];
+        if (ownerDim < staticMinOffsets->size()) {
+          int64_t minOffset = (*staticMinOffsets)[ownerDim];
+          if (minOffset < 0) {
+            Value haloLeft =
+                arts::createConstantIndex(builder, loc, -minOffset);
+            Value canShift = builder.create<arith::CmpIOp>(
+                loc, arith::CmpIPredicate::uge, elemOff, haloLeft);
+            Value shifted = builder.create<arith::SubIOp>(loc, elemOff,
+                                                          haloLeft);
+            elemOff = builder.create<arith::SelectOp>(loc, canShift, shifted,
+                                                      zero);
+          } else if (minOffset > 0) {
+            Value haloShift =
+                arts::createConstantIndex(builder, loc, minOffset);
+            elemOff = builder.create<arith::AddIOp>(loc, elemOff, haloShift);
+          }
+        }
+      }
 
       Value startBlock =
           builder.create<arith::DivUIOp>(loc, elemOff, blockSize);
@@ -658,19 +694,22 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
   ARTS_DEBUG("DbStencilRewriter::rebaseEdtUsers (3-buffer mode)");
 
   auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
-  if (!blockArg)
+  Value localView = blockArg ? Value(blockArg) : acquire.getPtr();
+  if (!edt)
+    edt = acquire->getParentOfType<EdtOp>();
+  if (!localView || !edt)
     return false;
 
   /// Determine element type from users or allocation
   Type targetType;
-  for (Operation *user : blockArg.getUsers()) {
+  for (Operation *user : localView.getUsers()) {
     if (auto ref = dyn_cast<DbRefOp>(user)) {
       targetType = ref.getResult().getType();
       break;
     }
   }
   if (!targetType) {
-    targetType = blockArg.getType();
+    targetType = localView.getType();
     if (auto outer = targetType.dyn_cast<MemRefType>())
       if (auto inner = outer.getElementType().dyn_cast<MemRefType>())
         targetType = inner;
@@ -680,7 +719,7 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
 
   Type derivedType = targetType;
   if (auto dbAlloc =
-          dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(blockArg)))
+          dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(localView)))
     derivedType = dbAlloc.getAllocatedElementType();
 
   /// Derive BASE offset for stencil localization.
@@ -736,17 +775,17 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
 
   /// Create stencil indexer with PartitionInfo (base-offset semantics)
   auto indexer = std::make_unique<DbStencilIndexer>(
-      info, haloLeft, haloRight, plan.outerRank(), plan.innerRank(), blockArg,
+      info, haloLeft, haloRight, plan.outerRank(), plan.innerRank(), localView,
       leftHaloArg, rightHaloArg);
 
-  SmallVector<Operation *> users(blockArg.getUsers().begin(),
-                                 blockArg.getUsers().end());
+  SmallVector<Operation *> users(localView.getUsers().begin(),
+                                 localView.getUsers().end());
   llvm::SetVector<Operation *> opsToRemove;
   bool rewritten = false;
 
   for (Operation *user : users) {
     if (auto ref = dyn_cast<DbRefOp>(user)) {
-      indexer->transformDbRefUsers(ref, blockArg, derivedType, builder,
+      indexer->transformDbRefUsers(ref, localView, derivedType, builder,
                                    opsToRemove);
       rewritten = true;
     }

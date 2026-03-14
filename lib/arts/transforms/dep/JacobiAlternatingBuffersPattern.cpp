@@ -40,6 +40,7 @@
 #include "arts/transforms/dep/DepTransform.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/StencilAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -99,6 +100,13 @@ static ForOp getSingleTopLevelFor(EdtOp edt) {
 
 static void stampJacobiAlternatingBuffers(Operation *op) {
   setDepPattern(op, ArtsDepPattern::jacobi_alternating_buffers);
+  setEdtDistributionPattern(op, EdtDistributionPattern::stencil);
+  setStencilSpatialDims(op, {0, 1});
+  setStencilOwnerDims(op, {0});
+  setStencilMinOffsets(op, {-1});
+  setStencilMaxOffsets(op, {1});
+  setStencilWriteFootprint(op, {0});
+  setSupportedBlockHalo(op);
 }
 
 static bool matchSimpleCopyFor(ForOp forOp, Value &srcMemref,

@@ -38,6 +38,8 @@ bool isArtsOp(mlir::Operation *op);
 namespace mlir {
 namespace arts {
 
+struct LoweringContractInfo;
+
 /// Information about a single partition entry.
 struct PartitionInfo {
   PartitionMode mode = PartitionMode::coarse;

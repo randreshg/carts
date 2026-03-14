@@ -131,7 +131,6 @@ static bool collectSpatialNestIvs(ForOp artsFor, SmallVector<Value, 4> &ivs,
   Block *block = artsFor.getBody();
   while (block) {
     SmallVector<Operation *, 2> nestedFors;
-    unsigned pureOpCount = 0;
     for (Operation &op : block->without_terminator()) {
       if (isa<scf::ForOp, affine::AffineForOp>(&op)) {
         nestedFors.push_back(&op);
@@ -139,10 +138,13 @@ static bool collectSpatialNestIvs(ForOp artsFor, SmallVector<Value, 4> &ivs,
       }
       if (!isPureOp(&op))
         return false;
-      pureOpCount++;
     }
 
-    if (nestedFors.size() != 1 || pureOpCount != 0)
+    /// Allow index/scalar setup alongside the single nested spatial loop.
+    /// Real kernels often materialize loop-local arithmetic before descending
+    /// into the next loop, and treating that as a structural mismatch causes
+    /// us to miss reusable stencil families like sw4lite/rhs4sg-base.
+    if (nestedFors.size() != 1)
       break;
 
     Operation *nestedLoop = nestedFors.front();
@@ -584,6 +586,7 @@ static bool isOutOfPlaceStencil(ForOp artsFor, MatchResult &result) {
 
   Value outputMemref = stores.front().rootMemref;
   DenseMap<unsigned, int64_t> ivToOwnerDim;
+  DenseMap<unsigned, unsigned> ivToOwnerAxis;
   SmallVector<int64_t, 4> ownerDims;
 
   for (const LogicalAccess &store : stores) {
@@ -598,8 +601,10 @@ static bool isOutOfPlaceStencil(ForOp artsFor, MatchResult &result) {
       auto [it, inserted] = ivToOwnerDim.try_emplace(expr.ivOrdinal, dim);
       if (!inserted && it->second != static_cast<int64_t>(dim))
         return false;
-      if (inserted)
+      if (inserted) {
+        ivToOwnerAxis[expr.ivOrdinal] = ownerDims.size();
         ownerDims.push_back(dim);
+      }
     }
   }
 
@@ -613,19 +618,23 @@ static bool isOutOfPlaceStencil(ForOp artsFor, MatchResult &result) {
   for (const LogicalAccess &load : loads) {
     if (load.rootMemref == outputMemref)
       return false;
+    DenseSet<unsigned> seenOwnerIvs;
     for (auto [dim, idx] : llvm::enumerate(load.indices)) {
       IndexExpr expr = classifyLoadIndex(idx, spatialIvs, reductionRanges);
       if (!expr.valid)
         return false;
       if (expr.invariant)
         continue;
-      auto ownerIt = ivToOwnerDim.find(expr.ivOrdinal);
-      if (ownerIt == ivToOwnerDim.end())
+      auto ownerIt = ivToOwnerAxis.find(expr.ivOrdinal);
+      if (ownerIt == ivToOwnerAxis.end())
         return false;
-      if (ownerIt->second != static_cast<int64_t>(dim))
+
+      /// Peer arrays may legally drop invariant dimensions, such as the
+      /// leading component axis in sw4lite helper buffers. Require consistent
+      /// owner-IV ordering across arrays, but not identical raw dim numbers.
+      if (!seenOwnerIvs.insert(expr.ivOrdinal).second)
         return false;
-      unsigned ownerIdx = std::distance(
-          ownerDims.begin(), llvm::find(ownerDims, static_cast<int64_t>(dim)));
+      unsigned ownerIdx = ownerIt->second;
       minOffsets[ownerIdx] = std::min(minOffsets[ownerIdx], expr.minOffset);
       maxOffsets[ownerIdx] = std::max(maxOffsets[ownerIdx], expr.maxOffset);
       hasHalo = hasHalo || expr.minOffset != 0 || expr.maxOffset != 0;
