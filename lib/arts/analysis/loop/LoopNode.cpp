@@ -137,26 +137,26 @@ Value LoopNode::getInductionVar() const {
 
 bool LoopNode::dependsOnInductionVar(Value v) {
   /// Check cache first
-  auto it = ivDependencyCache.find(v);
-  if (it != ivDependencyCache.end())
+  auto it = ivDepCache.find(v);
+  if (it != ivDepCache.end())
     return it->second;
 
   Value iv = getInductionVar();
   if (!iv) {
-    ivDependencyCache[v] = false;
+    ivDepCache[v] = false;
     return false;
   }
 
   /// Direct match
   if (v == iv) {
-    ivDependencyCache[v] = true;
+    ivDepCache[v] = true;
     return true;
   }
 
   /// Walk def-use chain
   Operation *defOp = v.getDefiningOp();
   if (!defOp) {
-    ivDependencyCache[v] = false;
+    ivDepCache[v] = false;
     return false;
   }
 
@@ -165,7 +165,7 @@ bool LoopNode::dependsOnInductionVar(Value v) {
     return dependsOnInductionVar(operand);
   });
 
-  ivDependencyCache[v] = depends;
+  ivDepCache[v] = depends;
   return depends;
 }
 

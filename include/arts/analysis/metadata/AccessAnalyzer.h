@@ -7,6 +7,8 @@
 #ifndef ARTS_ANALYSIS_METADATA_ACCESSANALYZER_H
 #define ARTS_ANALYSIS_METADATA_ACCESSANALYZER_H
 
+#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/LoopUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -24,8 +26,6 @@ namespace arts {
 ///===----------------------------------------------------------------------===///
 class AccessAnalyzer {
 public:
-  explicit AccessAnalyzer(MLIRContext *context) : context(context) {}
-
   /// Check if an operation is a memory access (load or store)
   bool isMemoryAccess(Operation *op) const {
     return isa<affine::AffineLoadOp, affine::AffineStoreOp, memref::LoadOp,
@@ -38,10 +38,10 @@ public:
       return true;
     if (auto load = dyn_cast<memref::LoadOp>(op))
       return llvm::all_of(load.getIndices(),
-                          [&](Value idx) { return isAffineIndexExpr(idx); });
+                          [&](Value idx) { return isAffineIndex(idx); });
     if (auto store = dyn_cast<memref::StoreOp>(op))
       return llvm::all_of(store.getIndices(),
-                          [&](Value idx) { return isAffineIndexExpr(idx); });
+                          [&](Value idx) { return isAffineIndex(idx); });
     return false;
   }
 
@@ -53,17 +53,6 @@ public:
   /// Check if an access is a write operation
   bool isWriteAccess(Operation *op) const {
     return isa<affine::AffineStoreOp, memref::StoreOp>(op);
-  }
-
-  /// Inspect whether an index expression is affine.
-  bool isAffineIndex(Value value) const { return isAffineIndexExpr(value); }
-
-  /// Inspect whether an index expression represents unit stride.
-  bool isUnitStrideLike(Value value) const { return isUnitStrideIndex(value); }
-
-  /// Inspect if an index expression is a constant.
-  bool isConstantIndexValue(Value value) const {
-    return isConstantIndex(value);
   }
 
   /// Get the memref being accessed
@@ -101,9 +90,8 @@ public:
       if (auto map = extractAffineMap(op)) {
         if (map->getNumResults() > 0) {
           auto lastResult = map->getResult(map->getNumResults() - 1);
-          if (auto dimExpr = lastResult.dyn_cast<AffineDimExpr>()) {
+          if (lastResult.isa<AffineDimExpr>())
             foundStrideOne = true;
-          }
         }
         return;
       }
@@ -126,41 +114,13 @@ public:
     return foundStrideOne;
   }
 
-private:
-  MLIRContext *context [[maybe_unused]];
-
-  /// Return true if value describes a constant integer/index.
-  bool isConstantIndex(Value value) const {
-    if (auto constOp = value.getDefiningOp<arith::ConstantOp>())
-      return constOp.getValue().isa<IntegerAttr>();
-    return false;
-  }
-
-  /// Strip benign casts when looking at indices.
-  Value stripIndexCasts(Value value) const {
-    if (auto cast = value.getDefiningOp<arith::IndexCastOp>())
-      return stripIndexCasts(cast.getIn());
-    if (auto ext = value.getDefiningOp<arith::ExtSIOp>())
-      return stripIndexCasts(ext.getIn());
-    if (auto trunc = value.getDefiningOp<arith::TruncIOp>())
-      return stripIndexCasts(trunc.getIn());
-    return value;
-  }
-
-  bool isLoopInductionVar(Value value) const {
-    if (auto arg = value.dyn_cast<BlockArgument>()) {
-      Operation *parent = arg.getOwner()->getParentOp();
-      return parent && isa<affine::AffineForOp, scf::ForOp, scf::ParallelOp,
-                           scf::ForallOp>(parent);
-    }
-    return false;
-  }
-
-  bool isAffineIndexExpr(Value value, int depth = 0) const {
+  /// Inspect whether an index expression is affine (induction var, constant,
+  /// or linear combination thereof).
+  bool isAffineIndex(Value value, int depth = 0) const {
     if (depth > 8)
       return false;
-    value = stripIndexCasts(value);
-    if (isLoopInductionVar(value) || isConstantIndex(value))
+    value = ValueAnalysis::stripNumericCasts(value);
+    if (isLoopInductionVar(value) || ValueAnalysis::isValueConstant(value))
       return true;
 
     Operation *def = value.getDefiningOp();
@@ -168,25 +128,27 @@ private:
       return false;
 
     if (auto add = dyn_cast<arith::AddIOp>(def))
-      return isAffineIndexExpr(add.getLhs(), depth + 1) &&
-             isAffineIndexExpr(add.getRhs(), depth + 1);
+      return isAffineIndex(add.getLhs(), depth + 1) &&
+             isAffineIndex(add.getRhs(), depth + 1);
     if (auto sub = dyn_cast<arith::SubIOp>(def))
-      return isAffineIndexExpr(sub.getLhs(), depth + 1) &&
-             isAffineIndexExpr(sub.getRhs(), depth + 1);
+      return isAffineIndex(sub.getLhs(), depth + 1) &&
+             isAffineIndex(sub.getRhs(), depth + 1);
     if (auto mul = dyn_cast<arith::MulIOp>(def)) {
-      if (isConstantIndex(mul.getLhs()))
-        return isAffineIndexExpr(mul.getRhs(), depth + 1);
-      if (isConstantIndex(mul.getRhs()))
-        return isAffineIndexExpr(mul.getLhs(), depth + 1);
+      if (ValueAnalysis::isValueConstant(mul.getLhs()))
+        return isAffineIndex(mul.getRhs(), depth + 1);
+      if (ValueAnalysis::isValueConstant(mul.getRhs()))
+        return isAffineIndex(mul.getLhs(), depth + 1);
       return false;
     }
     return false;
   }
 
+  /// Inspect whether an index expression represents unit stride
+  /// (induction variable plus/minus constant offsets).
   bool isUnitStrideIndex(Value value, int depth = 0) const {
     if (depth > 4)
       return false;
-    value = stripIndexCasts(value);
+    value = ValueAnalysis::stripNumericCasts(value);
     if (isLoopInductionVar(value))
       return true;
 
@@ -195,12 +157,12 @@ private:
       return false;
 
     if (auto add = dyn_cast<arith::AddIOp>(def)) {
-      if (isConstantIndex(add.getLhs()))
+      if (ValueAnalysis::isValueConstant(add.getLhs()))
         return isUnitStrideIndex(add.getRhs(), depth + 1);
-      if (isConstantIndex(add.getRhs()))
+      if (ValueAnalysis::isValueConstant(add.getRhs()))
         return isUnitStrideIndex(add.getLhs(), depth + 1);
     } else if (auto sub = dyn_cast<arith::SubIOp>(def)) {
-      if (isConstantIndex(sub.getRhs()))
+      if (ValueAnalysis::isValueConstant(sub.getRhs()))
         return isUnitStrideIndex(sub.getLhs(), depth + 1);
     }
     return false;

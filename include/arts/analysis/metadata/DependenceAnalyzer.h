@@ -131,7 +131,7 @@ public:
 
   /// Result of per-dimension dependency analysis for a loop nest.
   struct LoopNestDependenceResult {
-    SmallVector<DimensionDependency> dimensionDeps;
+    SmallVector<DimensionDep> dimensionDeps;
     std::optional<int64_t> outermostParallelDim;
   };
 
@@ -170,7 +170,7 @@ public:
     /// Analyze per-dimension dependencies
     result.outermostParallelDim = std::nullopt;
     for (size_t dim = 0; dim < nest.size(); ++dim) {
-      DimensionDependency depInfo;
+      DimensionDep depInfo;
       depInfo.dimension = dim;
 
       /// Check if this specific loop dimension carries dependencies
