@@ -839,8 +839,8 @@ void LoweringContractOp::build(OpBuilder &builder, OperationState &state,
         SmallVector<int64_t>(info.stencilIndependentDims.begin(),
                              info.stencilIndependentDims.end()),
         info.esdByteOffset, info.esdByteSize, info.cachedStartBlock,
-        info.cachedBlockCount, info.postDbRefined,
-        info.estimatedTaskCost, info.criticalPathDistance);
+        info.cachedBlockCount, info.postDbRefined, info.estimatedTaskCost,
+        info.criticalPathDistance);
 }
 
 void LoweringContractOp::build(

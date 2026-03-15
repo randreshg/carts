@@ -199,7 +199,7 @@ static llvm::DenseSet<unsigned> collectStencilDims(DbAcquireNode *node,
   DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
   MemoryAccessClassifier::collectAccessOperations(node, dbRefToMemOps);
 
-  // Collect all index chains first.
+  /// Collect all index chains first.
   SmallVector<AccessIndexInfo, 16> accesses;
   for (auto &[dbRef, memOps] : dbRefToMemOps) {
     for (Operation *memOp : memOps) {
@@ -217,10 +217,8 @@ static llvm::DenseSet<unsigned> collectStencilDims(DbAcquireNode *node,
   if (accesses.empty())
     return stencilDims;
 
-  // For each memref dimension across all accesses, check if any access has a
-  // non-zero constant offset relative to the partition offset / loop IV.
-  // A dimension is a "stencil dimension" if it carries at least one non-zero
-  // offset.
+  /// For each memref dimension, a "stencil dimension" carries at least one
+  /// non-zero constant offset relative to partition offset / loop IV.
   Value normalizedOffset = ValueAnalysis::stripNumericCasts(
       ValueAnalysis::stripSelectClamp(partitionOffset));
 
@@ -232,12 +230,12 @@ static llvm::DenseSet<unsigned> collectStencilDims(DbAcquireNode *node,
       if (!idx)
         continue;
 
-      // Check if this index depends on the partition offset.
+      /// Check if this index depends on the partition offset.
       if (!ValueAnalysis::dependsOn(idx, normalizedOffset) &&
           !ValueAnalysis::dependsOn(idx, partitionOffset))
         continue;
 
-      // Extract constant offset relative to the partition variable.
+      /// Extract constant offset relative to the partition variable.
       auto constOffset = ValueAnalysis::extractConstantOffset(
           idx, partitionOffset, normalizedOffset);
       if (constOffset && *constOffset != 0)
@@ -778,11 +776,8 @@ bool PartitionBoundsAnalyzer::needsFullRange(DbAcquireNode *node,
         ARTS_DEBUG("  needsFullRange: preserving non-leading stencil dim from "
                    "N-D halo contract");
       } else if (mappedDim) {
-        // Check for orthogonal stencil: if the stencil dimensions (those with
-        // non-zero offsets) are all different from the partition dimension, the
-        // stencil does not cross partition boundaries and full range is not
-        // needed. This is the specfem3d case: stencil on i-dim but partition
-        // on k-dim.
+        /// Orthogonal stencil: stencil dims differ from partition dim, so
+        /// stencil does not cross boundaries and full range not needed.
         llvm::DenseSet<unsigned> stencilDims =
             collectStencilDims(node, partitionOffset);
         if (!stencilDims.empty() && !stencilDims.contains(*mappedDim)) {

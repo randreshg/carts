@@ -234,20 +234,19 @@ summarizeAcquirePatterns(ArrayRef<DbAcquireNode *> acquireNodes,
 static AccessPattern getCanonicalAccessPattern(
     DbAcquireOp acquire, const DbAnalysis::AcquireContractSummary *summary,
     const DbAcquireNode *acqNode, const DbAcquirePartitionFacts *facts) {
-  // 1. Summary (highest priority - post-DB refined contract view)
+  /// 1. Summary (highest priority — post-DB refined contract view)
   if (summary && summary->accessPattern != AccessPattern::Unknown) {
     ARTS_DEBUG("    [canonical-access] resolved from summary: "
                << static_cast<int>(summary->accessPattern));
     return summary->accessPattern;
   }
-  // 2. Contract stencil inference (summary present but accessPattern is
-  // Unknown)
+  /// 2. Contract stencil inference (summary present but accessPattern Unknown)
   if (hasExplicitStencilContract(summary)) {
     ARTS_DEBUG(
         "    [canonical-access] resolved from contract stencil semantics");
     return AccessPattern::Stencil;
   }
-  // 3. Node (graph-backed classification)
+  /// 3. Node (graph-backed classification)
   if (acqNode) {
     AccessPattern nodePattern = acqNode->getAccessPattern();
     if (nodePattern != AccessPattern::Unknown) {
@@ -256,16 +255,16 @@ static AccessPattern getCanonicalAccessPattern(
       return nodePattern;
     }
   }
-  // 4. Facts (raw analysis)
+  /// 4. Facts (raw analysis)
   if (facts && facts->accessPattern != AccessPattern::Unknown) {
     ARTS_DEBUG("    [canonical-access] resolved from facts: "
                << static_cast<int>(facts->accessPattern));
     return facts->accessPattern;
   }
-  // 5. Raw attributes (lowest priority)
+  /// 5. Raw attributes (lowest priority)
   if (acquire) {
     if (auto rawPattern = getDbAccessPattern(acquire.getOperation())) {
-      // Map DbAccessPattern to AccessPattern where possible
+      /// Map DbAccessPattern to AccessPattern where possible.
       if (*rawPattern == DbAccessPattern::stencil) {
         ARTS_DEBUG("    [canonical-access] resolved from raw attr: stencil");
         return AccessPattern::Stencil;
@@ -297,19 +296,19 @@ static ArtsDepPattern
 getCanonicalDepPattern(DbAcquireOp acquire,
                        const DbAnalysis::AcquireContractSummary *summary,
                        const DbAcquirePartitionFacts *facts) {
-  // 1. Summary contract (highest priority)
+  /// 1. Summary contract (highest priority)
   if (summary && summary->contract.depPattern) {
     ARTS_DEBUG("    [canonical-dep] resolved from summary contract: "
                << static_cast<int>(*summary->contract.depPattern));
     return *summary->contract.depPattern;
   }
-  // 2. Facts (raw analysis)
+  /// 2. Facts (raw analysis)
   if (facts && facts->depPattern != ArtsDepPattern::unknown) {
     ARTS_DEBUG("    [canonical-dep] resolved from facts: "
                << static_cast<int>(facts->depPattern));
     return facts->depPattern;
   }
-  // 3. Raw attributes (lowest priority)
+  /// 3. Raw attributes (lowest priority)
   if (acquire) {
     if (auto rawDep = getDepPattern(acquire.getOperation());
         rawDep && *rawDep != ArtsDepPattern::unknown) {
@@ -601,8 +600,7 @@ computeAcquirePartitionInfo(DbAcquireOp acquire, DbAcquireNode *acqNode,
   info.hasDistributionContract = summary
                                      ? summary->hasDistributionContract()
                                      : partitionSummary.hasDistributionContract;
-  info.preservesDepMode =
-      static_cast<bool>(acquire.getPreserveAccessMode());
+  info.preservesDepMode = static_cast<bool>(acquire.getPreserveAccessMode());
 
   if (summary && summary->contract.supportsBlockHalo() &&
       !summary->contract.ownerDims.empty()) {
@@ -1121,8 +1119,7 @@ bool DbPartitioningPass::expandMultiEntryAcquires() {
     OpBuilder builder(original);
 
     /// Find the EDT that uses this acquire
-    auto [edtUser, blockArg] =
-        getEdtBlockArgumentForAcquire(original);
+    auto [edtUser, blockArg] = getEdtBlockArgumentForAcquire(original);
     if (!edtUser) {
       ARTS_DEBUG("    No EDT user found, skipping expansion");
       continue;

@@ -71,7 +71,7 @@ void DbHeuristics::recordDecision(llvm::StringRef heuristic, bool applied,
           bool sizeKnown = ValueAnalysis::getConstantIndex(sizes[0], count);
           if (offsetKnown && sizeKnown && allocId != 0) {
             if (count > kMaxOuterDBs) {
-              // Cap: store only the range start for very large DB counts.
+              /// Cap: store only the range start for very large DB counts.
               affectedDbIds.push_back(allocId + offset);
             } else {
               for (int64_t i = 0; i < count; ++i)
@@ -95,7 +95,8 @@ void DbHeuristics::recordDecision(llvm::StringRef heuristic, bool applied,
               }
               if (allStatic) {
                 if (totalDbs > kMaxOuterDBs) {
-                  // Cap: store only the first element for very large DB counts.
+                  /// Cap: store only the first element for very large DB
+                  /// counts.
                   affectedDbIds.push_back(allocId);
                 } else {
                   for (int64_t i = 0; i < totalDbs; ++i)

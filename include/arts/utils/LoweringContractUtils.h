@@ -42,24 +42,24 @@ struct LoweringContractInfo {
   SmallVector<int64_t, 4> staticWriteFootprint;
   bool supportedBlockHalo = false;
 
-  // Dimension-aware stencil analysis (EXT-PART-1)
+  /// Dimension-aware stencil analysis.
   SmallVector<int64_t, 4> stencilIndependentDims;
 
-  // ESD annotation (DT-3)
+  /// ESD annotation (byte offset/size).
   std::optional<int64_t> esdByteOffset;
   std::optional<int64_t> esdByteSize;
 
-  // Cached block window (DT-7)
+  /// Cached block window.
   std::optional<int64_t> cachedStartBlock;
   std::optional<int64_t> cachedBlockCount;
 
-  // Post-DB refinement marker (DT-1)
+  /// Post-DB refinement marker.
   bool postDbRefined = false;
 
-  // Task cost estimate (ET-1)
+  /// Task cost estimate.
   std::optional<int64_t> estimatedTaskCost;
 
-  // Critical path distance (ET-6)
+  /// Critical path distance.
   std::optional<int64_t> criticalPathDistance;
 
   bool hasDistributionContract() const {
@@ -81,8 +81,7 @@ struct LoweringContractInfo {
   }
 
   bool hasAnalysisRefinements() const {
-    return postDbRefined || estimatedTaskCost ||
-           criticalPathDistance;
+    return postDbRefined || estimatedTaskCost || criticalPathDistance;
   }
 
   bool empty() const {

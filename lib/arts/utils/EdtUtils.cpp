@@ -31,7 +31,7 @@ ForOp getSingleTopLevelFor(EdtOp edt) {
 
 std::pair<EdtOp, BlockArgument>
 getEdtBlockArgumentForAcquire(DbAcquireOp acquireOp) {
-  // Find the EDT that uses this acquire's pointer result
+  /// Find the EDT that uses this acquire's pointer result
   EdtOp edtUser = nullptr;
   Value operandValue = nullptr;
 
@@ -47,8 +47,7 @@ getEdtBlockArgumentForAcquire(DbAcquireOp acquireOp) {
   if (!edtUser || !operandValue)
     return {nullptr, nullptr};
 
-  // Find the operand Value in the dependencies range.
-  // The index within dependencies equals the block argument index.
+  /// The index within dependencies equals the block argument index.
   ValueRange deps = edtUser.getDependencies();
   auto depIt = std::find(deps.begin(), deps.end(), operandValue);
   if (depIt == deps.end())
@@ -56,7 +55,7 @@ getEdtBlockArgumentForAcquire(DbAcquireOp acquireOp) {
 
   unsigned blockArgIdx = std::distance(deps.begin(), depIt);
 
-  // Get the block argument
+  /// Get the block argument.
   Block &body = edtUser.getRegion().front();
   if (blockArgIdx >= body.getNumArguments())
     return {nullptr, nullptr};

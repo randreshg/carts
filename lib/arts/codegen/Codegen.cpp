@@ -461,11 +461,11 @@ func::FuncOp ArtsCodegen::insertArtsMainFn(Location loc,
     Value argcRaw = create<memref::LoadOp>(loc, paramv, ValueRange{idx0});
     Value argvRaw = create<memref::LoadOp>(loc, paramv, ValueRange{idx1});
 
-    // argc: truncate uint64_t → i32
+    /// argc: truncate uint64_t to i32
     Type argcTy = callback.getArgumentTypes()[0];
     Value argc = create<arith::TruncIOp>(loc, argcTy, argcRaw);
 
-    // argv: uint64_t → ptr → memref<?xi8*>
+    /// argv: uint64_t to ptr to memref<?xi8*>
     Type argvTy = callback.getArgumentTypes()[1];
     Value argvPtr = create<LLVM::IntToPtrOp>(loc, llvmPtr, argvRaw);
     Value argv = create<polygeist::Pointer2MemrefOp>(loc, argvTy, argvPtr);

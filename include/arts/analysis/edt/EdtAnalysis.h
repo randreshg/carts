@@ -101,7 +101,7 @@ public:
   LoopAnalysis &getLoopAnalysis();
 
   //===--------------------------------------------------------------------===//
-  // Reduction pattern analysis (ET-5 helpers)
+  /// Reduction pattern analysis.
   //===--------------------------------------------------------------------===//
 
   /// Try to classify a binary arithmetic operation as a reduction operation.
