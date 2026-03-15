@@ -24,15 +24,13 @@ using namespace mlir::arts;
 namespace {
 
 static void getAcquireDepSlice(DbAcquireOp acquire,
-                                      SmallVector<Value> &sizesOut,
-                                      SmallVector<Value> &offsetsOut) {
-  // Dependency shape for DB acquires is defined in DB-space by the explicit
-  // offsets/sizes operands when present.
-  //
-  // Cached block windows are a post-DB optimization hint, not a canonical
-  // dependency slice. They live in block-space and must not flow through the
-  // generic dependency-offset helpers used by lowering, or consumers like
-  // EdtLowering will subtract the start block twice.
+                               SmallVector<Value> &sizesOut,
+                               SmallVector<Value> &offsetsOut) {
+  /// Dependency shape for DB acquires is defined in DB-space by the explicit
+  /// offsets/sizes operands when present. Cached block windows are a post-DB
+  /// optimization hint, not a canonical dependency slice; they must not flow
+  /// through generic dependency-offset helpers or EdtLowering will subtract
+  /// the start block twice.
   if (!acquire.getOffsets().empty() && !acquire.getSizes().empty()) {
     sizesOut.assign(acquire.getSizes().begin(), acquire.getSizes().end());
     offsetsOut.assign(acquire.getOffsets().begin(), acquire.getOffsets().end());
@@ -168,24 +166,22 @@ Operation *DbUtils::getUnderlyingDb(Value v, unsigned depth) {
   if (!v)
     return nullptr;
 
-  // Prevent infinite recursion from circular acquire chains
+  /// Prevent infinite recursion from circular acquire chains.
   if (depth > 20) {
     ARTS_WARN("getUnderlyingDb exceeded depth limit");
     return nullptr;
   }
 
-  // Case 1: Direct DbAllocOp result (either guid or ptr)
+  /// Case 1: Direct DbAllocOp result (either guid or ptr).
   if (auto acq = v.getDefiningOp<DbAcquireOp>())
     return acq.getOperation();
   if (auto alloc = v.getDefiningOp<DbAllocOp>())
     return alloc.getOperation();
-  // Case 2: DbAcquireOp - trace through sourceGuid or sourcePtr
+  /// Case 2: DbAcquireOp — trace through sourceGuid or sourcePtr.
   if (auto dbLoad = v.getDefiningOp<DbRefOp>())
     return getUnderlyingDb(dbLoad.getSource(), depth + 1);
 
-  // Case 3: Block argument - trace through parent EDT's dependencies.
-  // If it's a block argument of an EDT, map to the corresponding operand and
-  // recurse. Block arguments correspond to dependencies.
+  /// Case 3: Block argument — map to parent EDT dependency and recurse.
   if (auto blockArg = v.dyn_cast<BlockArgument>()) {
     Block *block = blockArg.getOwner();
     Operation *owner = block->getParentOp();
@@ -246,7 +242,7 @@ SmallVector<Value> DbUtils::getSizesFromDb(Operation *dbOp) {
 }
 
 SmallVector<Value> DbUtils::getSizesFromDb(Value dbPtr) {
-  // Use getUnderlyingDb to find the original DB operation
+  /// Use getUnderlyingDb to find the original DB operation.
   Operation *underlyingDb = getUnderlyingDb(dbPtr);
   if (!underlyingDb)
     return {};
@@ -628,13 +624,12 @@ std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
   if (!sizeHint || depth > 4)
     return std::nullopt;
 
-  // Case 1: Direct constant
+  /// Case 1: Direct constant.
   int64_t val;
   if (ValueAnalysis::getConstantIndex(sizeHint, val))
     return val;
 
-  // Case 2/3: minui/minsi pattern - return the larger constant (nominal size).
-  // Helper to handle min operations uniformly.
+  /// Case 2/3: minui/minsi pattern — return the larger constant (nominal size).
   auto handleMinOp = [&](Value lhs, Value rhs) -> std::optional<int64_t> {
     int64_t lhsVal = 0, rhsVal = 0;
     bool hasLhs = ValueAnalysis::getConstantIndex(lhs, lhsVal);
@@ -667,27 +662,22 @@ std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
       return result;
   }
 
-  // Case 4: addi pattern - stencil halo adjustment.
-  // For stencil patterns, blockSize = addi(baseBlockSize, haloAdjustment)
-  // where haloAdjustment is a small constant (e.g., 2 for i-1, i, i+1 pattern).
-  // We want to extract baseBlockSize, which is the actual partition block size.
+  /// Case 4: addi pattern — stencil halo; extract baseBlockSize from
+  /// addi(baseBlockSize, haloAdjustment) when halo is a small constant.
   if (auto addOp = sizeHint.getDefiningOp<arith::AddIOp>()) {
     int64_t lhsVal = 0, rhsVal = 0;
     bool hasLhsConst = ValueAnalysis::getConstantIndex(addOp.getLhs(), lhsVal);
     bool hasRhsConst = ValueAnalysis::getConstantIndex(addOp.getRhs(), rhsVal);
 
-    // If one operand is a small constant (halo adjustment), recurse on the
-    // other.
+    /// If one operand is a small constant (halo), recurse on the other.
     if (hasRhsConst && std::abs(rhsVal) <= 16) {
-      // rhsVal is halo adjustment, lhs is base block size
       return extractBlockSizeFromHint(addOp.getLhs(), depth + 1);
     }
     if (hasLhsConst && std::abs(lhsVal) <= 16) {
-      // lhsVal is halo adjustment, rhs is base block size
       return extractBlockSizeFromHint(addOp.getRhs(), depth + 1);
     }
 
-    // Both constants or both large - try both sides
+    /// Both constants or both large — try both sides.
     auto lhsExtracted = extractBlockSizeFromHint(addOp.getLhs(), depth + 1);
     auto rhsExtracted = extractBlockSizeFromHint(addOp.getRhs(), depth + 1);
     if (lhsExtracted)
@@ -696,8 +686,8 @@ std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
       return rhsExtracted;
   }
 
-  // Case 5: maxui pattern - clamp minimum (e.g., MaxUIOp(blockSize, 1)).
-  // Return the larger constant operand as the block size upper bound.
+  /// Case 5: maxui pattern — clamp minimum; return larger constant as upper
+  /// bound.
   if (auto maxOp = sizeHint.getDefiningOp<arith::MaxUIOp>()) {
     int64_t lhsVal = 0, rhsVal = 0;
     bool hasLhs = ValueAnalysis::getConstantIndex(maxOp.getLhs(), lhsVal);
@@ -718,7 +708,7 @@ std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
       return rhsVal;
     }
 
-    // Recurse for nested maxui
+    /// Recurse for nested maxui.
     auto lhsExtracted = extractBlockSizeFromHint(maxOp.getLhs(), depth + 1);
     auto rhsExtracted = extractBlockSizeFromHint(maxOp.getRhs(), depth + 1);
     if (lhsExtracted && rhsExtracted)

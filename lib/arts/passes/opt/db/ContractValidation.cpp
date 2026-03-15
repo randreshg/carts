@@ -101,8 +101,8 @@ struct ContractValidationPass
       /// 4. block_shape rank > 0 if present (non-empty means it was set)
       auto blockShape = contract.getBlockShape();
       if (!blockShape.empty() && blockShape.size() == 0) {
-        // This is unreachable by construction, but guards against future
-        // changes that allow empty-but-present block_shape attrs.
+        /// Unreachable by construction; guards against future changes that
+        /// allow empty-but-present block_shape attrs.
         contract.emitWarning("block_shape is present but has rank 0");
         ++invalidContracts;
       }

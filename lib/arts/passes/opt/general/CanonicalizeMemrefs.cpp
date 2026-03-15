@@ -252,10 +252,9 @@ private:
                            OpBuilder &builder,
                            llvm::DenseSet<Operation *> &toRemove);
   Value createConstantIndex(OpBuilder &builder, Location loc, int64_t value);
-  SmallVector<Value> clampDepIndices(Value source,
-                                            ArrayRef<Value> indices,
-                                            OpBuilder &builder, Location loc,
-                                            ArrayRef<Value> dimSizes = {});
+  SmallVector<Value> clampDepIndices(Value source, ArrayRef<Value> indices,
+                                     OpBuilder &builder, Location loc,
+                                     ArrayRef<Value> dimSizes = {});
   ArtsMode convertOmpMode(omp::ClauseTaskDepend mode);
 
   /// Dimension hoisting helpers
@@ -921,8 +920,8 @@ CanonicalizeMemrefsPass::analyzeDepVar(Value depVar, AllocPattern &pattern,
               /// Element-level dependency, sizes = [1, 1, ...]
               for (size_t d = 0; d < info.indices.size(); ++d)
                 info.sizes.push_back(createConstantIndex(builder, loc, 1));
-              info.indices = clampDepIndices(
-                  info.source, info.indices, builder, loc, pattern.dimensions);
+              info.indices = clampDepIndices(info.source, info.indices, builder,
+                                             loc, pattern.dimensions);
 
               info.opsToRemove = traceResult->chainOps;
               info.opsToRemove.push_back(store);
@@ -950,8 +949,8 @@ CanonicalizeMemrefsPass::analyzeDepVar(Value depVar, AllocPattern &pattern,
     /// Element-level sizes
     for (size_t d = 0; d < info.indices.size(); ++d)
       info.sizes.push_back(createConstantIndex(builder, loc, 1));
-    info.indices = clampDepIndices(info.source, info.indices, builder,
-                                          loc, pattern.dimensions);
+    info.indices = clampDepIndices(info.source, info.indices, builder, loc,
+                                   pattern.dimensions);
 
     info.opsToRemove = traceResult->chainOps;
     info.opsToRemove.push_back(loadOp);
@@ -1693,9 +1692,10 @@ Value CanonicalizeMemrefsPass::createConstantIndex(OpBuilder &builder,
   return arts::createConstantIndex(builder, loc, value);
 }
 
-SmallVector<Value> CanonicalizeMemrefsPass::clampDepIndices(
-    Value source, ArrayRef<Value> indices, OpBuilder &builder, Location loc,
-    ArrayRef<Value> dimSizes) {
+SmallVector<Value>
+CanonicalizeMemrefsPass::clampDepIndices(Value source, ArrayRef<Value> indices,
+                                         OpBuilder &builder, Location loc,
+                                         ArrayRef<Value> dimSizes) {
   SmallVector<Value> clamped;
   clamped.reserve(indices.size());
 
@@ -2103,8 +2103,7 @@ std::optional<DepInfo> CanonicalizeMemrefsPass::extractDepInfo(
     info.indices.append(loadOp.getIndices().begin(), loadOp.getIndices().end());
     for (size_t d = 0; d < info.indices.size(); ++d)
       info.sizes.push_back(createConstantIndex(builder, loc, 1));
-    info.indices =
-        clampDepIndices(info.source, info.indices, builder, loc);
+    info.indices = clampDepIndices(info.source, info.indices, builder, loc);
     return info;
   }
 

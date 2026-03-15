@@ -481,8 +481,8 @@ mlir::arts::deriveAcquireRewriteContract(DbAcquireOp acquire) {
        *info->depPattern == ArtsDepPattern::wavefront_2d &&
        info->supportsBlockHalo());
   contract.preserveParentDepRange = acquire.getMode() == ArtsMode::in &&
-                                           !contract.applyStencilHalo &&
-                                           !hasExplicitStencilContract;
+                                    !contract.applyStencilHalo &&
+                                    !hasExplicitStencilContract;
   return contract;
 }
 
@@ -567,4 +567,3 @@ void mlir::arts::copyLoweringContract(Value source, Value target,
     return;
   upsertLoweringContract(builder, loc, target, *info);
 }
-

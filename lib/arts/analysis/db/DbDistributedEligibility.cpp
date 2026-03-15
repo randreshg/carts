@@ -195,27 +195,27 @@ collectEligibilityFacts(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
     if (acquireNode->getRootAlloc() != allocNode)
       return;
 
-    // --- allHaveEdtAcquireUsers (universal) ---
+    /// allHaveEdtAcquireUsers (universal)
     EdtOp edt = acquireNode->getEdtUser();
     if (!edt)
       facts.allHaveEdtAcquireUsers = false;
 
-    // --- allAcquiresReadOnly (universal) ---
+    /// allAcquiresReadOnly (universal)
     bool readOnly = acquireNode->isReadOnlyAccess();
     if (!readOnly)
       facts.allAcquiresReadOnly = false;
 
-    // --- isStencilFamily (existential) ---
+    /// isStencilFamily (existential)
     bool stencil = isStencilAcquire(acquireNode, dbAnalysis);
     if (stencil)
       facts.isStencilFamily = true;
 
-    // --- hasInternodeEdtUse (existential) ---
+    /// hasInternodeEdtUse (existential)
     bool internode = edt && edt.getConcurrency() == EdtConcurrency::internode;
     if (internode)
       facts.hasInternodeEdtUse = true;
 
-    // --- hasStencilReadInternodeUse (existential) ---
+    /// hasStencilReadInternodeUse (existential)
     if (internode && readOnly && stencil)
       facts.hasStencilReadInternodeUse = true;
   });
@@ -273,7 +273,7 @@ mlir::arts::evaluateDistributedDbEligibility(DbAllocOp alloc,
   if (!hasOnlyAllowedHandleUsers(alloc.getGuid()))
     return {false, DistributedDbEligibilityRejectReason::UnsupportedGuidUsers};
 
-  // Single-pass collection of all acquire-node facts.
+  /// Single-pass collection of all acquire-node facts.
   auto maybeFacts = collectEligibilityFacts(alloc, dbAnalysis);
   if (!maybeFacts)
     return {false, DistributedDbEligibilityRejectReason::NonEdtAcquireUse};

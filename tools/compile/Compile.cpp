@@ -50,7 +50,7 @@ using namespace mlir;
 ARTS_DEBUG_SETUP(carts_compile)
 
 ///===----------------------------------------------------------------------===///
-// Interface Attachments
+/// Interface Attachments
 ///===----------------------------------------------------------------------===///
 /// Use the original models for attaching type interfaces.
 class MemRefInsider
@@ -62,7 +62,7 @@ struct PtrElementModel
           PtrElementModel<T>, T> {};
 
 ///===----------------------------------------------------------------------===///
-// Command Line Options
+/// Command Line Options
 ///===----------------------------------------------------------------------===///
 static cl::opt<std::string>
     InputFilename(cl::Positional, cl::desc("<input file>"), cl::init("-"));
@@ -158,7 +158,7 @@ static cl::opt<bool> DistributedDb(
     cl::init(false));
 
 ///===----------------------------------------------------------------------===///
-// Pipeline Stop Options
+/// Pipeline Stop Options
 ///===----------------------------------------------------------------------===///
 enum class PipelineStage {
   CanonicalizeMemrefs,
@@ -226,7 +226,7 @@ static bool shouldExportDetailedDiagnose(PipelineStage stopAt) {
 }
 
 ///===----------------------------------------------------------------------===///
-// Helper Functions for Initialization and Pass Setup
+/// Helper Functions for Initialization and Pass Setup
 ///===----------------------------------------------------------------------===///
 /// Register standard MLIR dialects, passes, and translations.
 void registerDialects(DialectRegistry &registry) {
@@ -278,15 +278,10 @@ void initializeContext(MLIRContext &context) {
       context);
 }
 
-// TODO(PERF): PolygeistCanonicalizePass is added 26 times throughout the
-// pipeline. Many run back-to-back with only CSE between them. Audit which
-// invocations are actually needed — when IR is already canonical, each
-// invocation is a wasted full-module walk.
-
-// TODO(PERF): CSEPass is added 24 times throughout the pipeline. Many run
-// back-to-back with only PolygeistCanonicalizePass between them. Audit which
-// invocations are actually needed — when IR is already CSE-clean, each
-// invocation is a wasted full-module walk.
+/// TODO(PERF): PolygeistCanonicalizePass is added 26 times; audit which
+/// invocations are needed — when IR is already canonical, each is a wasted
+/// walk.
+/// TODO(PERF): CSEPass is added 24 times; audit which invocations are needed.
 
 /// Inliner and canonicalize memrefs pass.
 void setupCanonicalizeMemrefs(PassManager &pm) {
@@ -295,9 +290,9 @@ void setupCanonicalizeMemrefs(PassManager &pm) {
   pm.addPass(createCSEPass());
   pm.addPass(createInlinerPass());
   pm.addPass(arts::createArtsInlinerPass());
-  // pm.addPass(createMem2Reg());
+  /// pm.addPass(createMem2Reg());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  // pm.addPass(createCSEPass());
+  /// pm.addPass(createCSEPass());
 
   pm.addPass(arts::createCanonicalizeMemrefsPass());
   pm.addPass(arts::createDCEPass());
@@ -439,8 +434,8 @@ void setupConcurrencyOpt(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(createCSEPass());
   /// Re-run structural opts after cleanup to catch newly exposed degenerate
   /// EDTs before epoch shaping.
-  // TODO(PERF): EdtStructuralOptPass runs 4 times in the pipeline. Evaluate
-  // whether the second call at line 408 (setupEdtOpt) is needed.
+  /// TODO(PERF): EdtStructuralOptPass runs 4 times; evaluate if second call
+  /// needed.
   pm.addPass(arts::createEdtStructuralOptPass(AM, /*runAnalysis*/ false));
   pm.addPass(arts::createEpochOptPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
@@ -454,8 +449,8 @@ void setupConcurrencyOpt(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(arts::createDbTransformsPass(AM));
   /// DbModeTighteningPass performs local DB cleanup after mode adjustment,
   /// which can expose new zero-dependency or degenerate EDTs before epoch
-  /// shaping. Mode tightening must run before EDT transforms so ET-2 (affinity)
-  /// and ET-5 (reduction) see accurate writer/reader modes.
+  /// shaping. Mode tightening must run before EDT transforms so affinity and
+  /// reduction analysis see accurate writer/reader modes.
   pm.addPass(arts::createDbModeTighteningPass(AM));
   pm.addPass(arts::createEdtTransformsPass(AM));
   pm.addPass(arts::createContractValidationPass());
@@ -481,9 +476,8 @@ void setupEpochs(PassManager &pm) {
 
 /// Pre-lowering passes.
 void setupPreLowering(PassManager &pm) {
-  // TODO(PERF): EdtAllocaSinkingPass runs twice — once inside
-  // setupConcurrencyOpt (line 466) and once here as a standalone pass. When
-  // both run together, alloca sinking happens twice for the same module state.
+  /// TODO(PERF): EdtAllocaSinkingPass runs twice (setupConcurrencyOpt and
+  /// here).
   pm.addPass(arts::createEdtAllocaSinkingPass());
   pm.addPass(arts::createParallelEdtLoweringPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
@@ -495,9 +489,9 @@ void setupPreLowering(PassManager &pm) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createLoopInvariantCodeMotionPass());
-  // Hoist loop-invariant DB/dep pointer loads before scalar replacement so the
-  // pre-lowering cleanup sees simpler loop bodies. A second invocation still
-  // runs in setupArtsToLLVM because Arts->LLVM lowering materializes new loads.
+  /// Hoist loop-invariant DB/dep pointer loads before scalar replacement;
+  /// setupArtsToLLVM runs hoisting again after Arts->LLVM materializes new
+  /// loads.
   pm.addPass(arts::createDataPtrHoistingPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
@@ -514,9 +508,8 @@ void setupArtsToLLVM(PassManager &pm, bool debug, bool distributedInitPerWorker,
                      const arts::AbstractMachine *machine) {
   pm.addPass(arts::createConvertArtsToLLVMPass(debug, distributedInitPerWorker,
                                                machine));
-  // Db/dep pointer loads are materialized during Arts->LLVM lowering.
-  // Hoist those loop-invariant loads after conversion so vectorization and LICM
-  // can operate on simpler loop bodies.
+  /// Hoist loop-invariant loads after Arts->LLVM lowering for
+  /// vectorization/LICM.
   pm.addPass(arts::createDataPtrHoistingPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
@@ -692,7 +685,7 @@ setupPassManager(ModuleOp module, MLIRContext &context,
 }
 
 ///===----------------------------------------------------------------------===///
-// Main Function
+/// Main Function
 ///===----------------------------------------------------------------------===///
 int main(int argc, char **argv) {
   InitLLVM y(argc, argv);

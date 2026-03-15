@@ -706,8 +706,7 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     auto depDbAcquireOp = dyn_cast_or_null<DepDbAcquireOp>(underlyingDb);
     if (!dbAcquireOp && !depDbAcquireOp) {
       return mlir::emitError(
-                 loc,
-                 "Dep must be from DbAcquireOp or DepDbAcquireOp, got: ")
+                 loc, "Dep must be from DbAcquireOp or DepDbAcquireOp, got: ")
              << dep;
     }
 
@@ -935,10 +934,10 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
                                  << "]: " << originalDeps[depIndex]);
     AC->setInsertionPoint(placeholder.getDefiningOp());
     Value baseOffset = computeBaseOffset(depIndex, loc);
-    SmallVector<Value> depSizes = resolveParam(
-        DbUtils::getDepSizesFromDb(originalDeps[depIndex]), loc);
-    SmallVector<Value> depOffsets = resolveParam(
-        DbUtils::getDepOffsetsFromDb(originalDeps[depIndex]), loc);
+    SmallVector<Value> depSizes =
+        resolveParam(DbUtils::getDepSizesFromDb(originalDeps[depIndex]), loc);
+    SmallVector<Value> depOffsets =
+        resolveParam(DbUtils::getDepOffsetsFromDb(originalDeps[depIndex]), loc);
     SmallVector<Value> depStrides = AC->computeStridesFromSizes(depSizes, loc);
 
     auto originalAcquire = originalDeps[depIndex].getDefiningOp<DbAcquireOp>();

@@ -112,8 +112,7 @@ refineOverlapWithPartitionRanges(const DbAcquireNode *a,
   if (partOffsA.size() != partOffsB.size())
     return std::nullopt;
 
-  // Check each dimension for disjointness.
-  // If ANY dimension is provably disjoint, the regions are disjoint.
+  /// If any dimension is provably disjoint, the regions are disjoint.
   for (size_t dim = 0; dim < partOffsA.size(); ++dim) {
     int64_t offA = 0, szA = 0, offB = 0, szB = 0;
     bool aConst = ValueAnalysis::getConstantIndex(partOffsA[dim], offA) &&
@@ -125,7 +124,7 @@ refineOverlapWithPartitionRanges(const DbAcquireNode *a,
     if (!aConst || !bConst)
       continue;
 
-    // Disjoint if [offA, offA+szA) and [offB, offB+szB) do not overlap
+    /// Disjoint if [offA, offA+szA) and [offB, offB+szB) do not overlap.
     if (offA + szA <= offB || offB + szB <= offA)
       return DbAliasAnalysis::OverlapKind::Disjoint;
   }
@@ -322,10 +321,8 @@ DbAliasAnalysis::classifyAlias(const NodeBase &a, const NodeBase &b,
           dbAnalysis->getAcquireContractSummary(acqB->getDbAcquireOp());
       if (summaryA && summaryB && !summaryA->contract.ownerDims.empty() &&
           !summaryB->contract.ownerDims.empty()) {
-        // Same ownerDims means both acquires partition on the same dimensions.
-        // If we already proved disjointness above (via partition ranges or
-        // slices), we would not reach here. Log the contract info for
-        // diagnostic insight.
+        /// Same ownerDims; disjointness was not proved above. Log for
+        /// diagnostics.
         if (summaryA->contract.ownerDims == summaryB->contract.ownerDims) {
           ARTS_DEBUG("  Step 2c: Both acquires share ownerDims (count="
                      << summaryA->contract.ownerDims.size()

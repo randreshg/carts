@@ -66,7 +66,7 @@ bool fuseConsecutivePairs(Block &block,
     }
     doFuse(first, second);
     changed = true;
-    // Re-run on same first op to chain-fuse.
+    /// Re-run on same first op to chain-fuse.
   }
   return changed;
 }

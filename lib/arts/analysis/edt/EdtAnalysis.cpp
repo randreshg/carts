@@ -252,7 +252,7 @@ LoopAnalysis &EdtAnalysis::getLoopAnalysis() {
 }
 
 ///==========================================================================///
-/// EDT invariance and reachability queries (moved from EdtUtils)
+/// EDT invariance and reachability queries.
 ///==========================================================================///
 
 /// Check if a block argument is invariant with respect to an EDT region.
@@ -370,7 +370,7 @@ bool EdtAnalysis::isReachable(Operation *source, Operation *target) {
 }
 
 ///==========================================================================///
-/// Reduction pattern analysis (ET-5 helpers)
+/// Reduction pattern analysis.
 ///==========================================================================///
 
 std::optional<ReductionOp> EdtAnalysis::classifyReductionOp(Operation *op) {

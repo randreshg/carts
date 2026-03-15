@@ -162,9 +162,8 @@ chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
     if (numITiles < minRowTiles || numJTiles < minColTiles)
       return std::numeric_limits<long double>::infinity();
 
-    // The Seidel DAG is ordered by rank = 2*tileI + tileJ. Estimate the
-    // available concurrency from the exact width of those rank frontiers
-    // instead of the ordinary anti-diagonal width.
+    /// Seidel DAG is ordered by rank = 2*tileI + tileJ. Estimate concurrency
+    /// from the exact width of those rank frontiers, not anti-diagonal width.
     int64_t tilesPerStep = numITiles * numJTiles;
     if (tilesPerStep > maxTilesByWork)
       return std::numeric_limits<long double>::infinity();

@@ -263,23 +263,15 @@ static SmallVector<Value> collectCanonicalNDBlockSizeCandidates(
   if (rankedCandidates.empty())
     return {};
 
-  // --- Per-dimension independent merge (EXT-PART-4) ---
-  //
-  // Instead of taking global MIN across all candidates for every dimension,
-  // we merge each dimension independently: only candidates that actually
-  // partition a given dimension contribute to that dimension's MIN.
-  //
-  // Example: acquire1 suggests 64x128 (partitions dim 0 only),
-  //          acquire2 suggests 128x64 (partitions dim 1 only).
-  //   Global MIN  -> 64x64   (too conservative)
-  //   Per-dim MIN -> 64x128  (correct: each dim uses its own partitioner)
-
+  /// Per-dimension independent merge: only candidates that partition a given
+  /// dimension contribute to that dimension's MIN (not global MIN).
+  /// Example: acquire1 64x128 (dim 0), acquire2 128x64 (dim 1) -> per-dim MIN
+  /// 64x128; global MIN would be 64x64.
   unsigned nDims =
       static_cast<unsigned>(rankedCandidates.front().blockSizes.size());
 
-  // Check whether per-dim analysis is feasible: all candidates must have
-  // partitionDims vectors of the expected rank so we can map positional
-  // block sizes to actual DB dimensions.
+  /// All candidates must have partitionDims of expected rank to map block
+  /// sizes to DB dimensions.
   bool perDimFeasible = true;
   for (const auto &rc : rankedCandidates) {
     if (rc.partitionDims.size() != nDims) {
@@ -288,7 +280,7 @@ static SmallVector<Value> collectCanonicalNDBlockSizeCandidates(
     }
   }
 
-  // --- Global MIN (fallback / reference) ---
+  /// Global MIN (fallback when per-dim merge is not applicable).
   SmallVector<Value> globalMerged = rankedCandidates.front().blockSizes;
   for (size_t i = 1; i < rankedCandidates.size(); ++i) {
     for (unsigned dim = 0; dim < nDims; ++dim) {
@@ -298,20 +290,13 @@ static SmallVector<Value> collectCanonicalNDBlockSizeCandidates(
   }
 
   if (!perDimFeasible || rankedCandidates.size() <= 1) {
-    // Fall back to global MIN when per-dim analysis is not possible or
-    // there is only a single candidate (both strategies are identical).
+    /// Fall back to global MIN when per-dim analysis is not possible or
+    /// there is only a single candidate.
     return globalMerged;
   }
 
-  // --- Per-dimension merge ---
-  // For each positional dimension slot d, determine which candidates
-  // actually partition that slot's DB dimension. A candidate "partitions
-  // dimension d" if its partitionDims[d] matches the consensus DB
-  // dimension for slot d (i.e., the most common mapping).
-  //
-  // We use the first candidate's partitionDims as the reference mapping
-  // (all candidates passed the same bestRank filter, so positional
-  // alignment is expected).
+  /// Per-dimension merge: for each slot d, candidates that partition that
+  /// DB dimension contribute; first candidate's partitionDims is the reference.
   ArrayRef<unsigned> refDims = rankedCandidates.front().partitionDims;
 
   SmallVector<Value> perDimMerged;
@@ -324,8 +309,7 @@ static SmallVector<Value> collectCanonicalNDBlockSizeCandidates(
     unsigned contributorCount = 0;
 
     for (const auto &rc : rankedCandidates) {
-      // A candidate contributes to this positional slot only if it maps
-      // the same DB dimension at position d.
+      /// Candidate contributes only if it maps the same DB dimension at slot d.
       if (rc.partitionDims[d] != targetDbDim)
         continue;
       if (!mergedVal) {
@@ -338,8 +322,7 @@ static SmallVector<Value> collectCanonicalNDBlockSizeCandidates(
     }
 
     if (!mergedVal) {
-      // No candidate contributed -- fall back to global MIN for the
-      // entire result to stay safe.
+      /// No candidate contributed; fall back to global MIN for safety.
       ARTS_DEBUG("per-dim merge: no contributors for dim "
                  << d << " (DB dim " << targetDbDim
                  << "), falling back to global MIN");
@@ -348,19 +331,19 @@ static SmallVector<Value> collectCanonicalNDBlockSizeCandidates(
 
     perDimMerged.push_back(mergedVal);
 
-    // Track whether per-dim result would differ from global MIN.
+    /// Track whether per-dim result would differ from global MIN.
     if (contributorCount < rankedCandidates.size())
       perDimDiffers = true;
   }
 
-  // Emit debug logging when per-dim merge produces a different result.
+  /// Emit debug logging when per-dim merge produces a different result.
   if (perDimDiffers) {
     ARTS_DEBUG_REGION(
         ARTS_DBGS() << "[db_block_plan] per-dim merge differs from global MIN "
                     << "(nDims=" << nDims
                     << ", candidates=" << rankedCandidates.size() << ")\n";
         for (unsigned d = 0; d < nDims; ++d) {
-          // Count how many candidates contributed to this dim.
+          /// Count how many candidates contributed to this dim.
           unsigned targetDbDim = refDims[d];
           unsigned count = 0;
           for (const auto &rc : rankedCandidates) {
