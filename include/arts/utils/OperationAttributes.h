@@ -540,6 +540,16 @@ inline void copySemanticContractAttrs(Operation *source, Operation *dest) {
   copyStencilContractAttrs(source, dest);
 }
 
+/// Copy contract attrs
+inline void copyContractAttrs(Operation *source, Operation *dest) {
+  if (!source || !dest)
+    return;
+  copySemanticContractAttrs(source, dest);
+  if (!getDepPattern(dest))
+    if (auto pattern = getEffectiveDepPattern(source))
+      setDepPattern(dest, *pattern);
+}
+
 /// Full implementation in PartitioningHeuristics.cpp (uses DictionaryAttr).
 std::optional<PartitioningHint> getPartitioningHint(Operation *op);
 void setPartitioningHint(Operation *op, const PartitioningHint &hint);
