@@ -666,6 +666,8 @@ public:
               << "rewriting to k-j update form");
     rewriteReductionDotToKJUpdate(matchResult, effectiveTileJ, minTripCount);
     setDepPattern(matchResult.outerI.getOperation(), ArtsDepPattern::matmul);
+    if (auto parentEdt = matchResult.outerI->getParentOfType<EdtOp>())
+      setDepPattern(parentEdt.getOperation(), ArtsDepPattern::matmul);
     return success();
   }
 

@@ -1259,10 +1259,11 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       {
         OpBuilder::InsertionGuard contractGuard(AC->getBuilder());
         AC->setInsertionPointAfter(acquireOp);
+        Value contractTarget = acquireOp.getPtr();
         if (auto contractInfo = getLoweringContract(
                 edt.getOperation(), AC->getBuilder(), edt.getLoc()))
-          upsertLoweringContract(AC->getBuilder(), edt.getLoc(),
-                                 acquireOp.getPtr(), *contractInfo);
+          upsertLoweringContract(AC->getBuilder(), edt.getLoc(), contractTarget,
+                                 *contractInfo);
       }
 
       if (!depGroup.empty()) {

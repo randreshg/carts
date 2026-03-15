@@ -393,7 +393,7 @@ def DbAcquireOp : Arts_Op<"db_acquire", [AttrSizedOperandSegments]> {
 }
 
 def LoweringContractOp : Arts_Op<"lowering_contract",
-                                 [AttrSizedOperandSegments, Pure]> {
+                                 [AttrSizedOperandSegments]> {
   let summary = "First-class lowering contract associated with a DB value";
   let description = [{
     `arts.lowering_contract` carries the high-level partitioning, stencil, and
