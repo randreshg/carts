@@ -1253,9 +1253,7 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
         AC->setInsertionPointToStart(&edt.getBody().front());
       auto acquireOp = createAcquire(edt.getLoc());
 
-      if (auto depPattern = getEffectiveDepPattern(edt.getOperation()))
-        acquireOp.setDepPattern(*depPattern);
-      copyStencilContractAttrs(edt.getOperation(), acquireOp.getOperation());
+      copyContractAttrs(edt.getOperation(), acquireOp.getOperation());
       {
         OpBuilder::InsertionGuard contractGuard(AC->getBuilder());
         AC->setInsertionPointAfter(acquireOp);
