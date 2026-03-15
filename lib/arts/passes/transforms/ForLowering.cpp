@@ -336,8 +336,7 @@ static std::optional<TaskAcquireWindow> computeTaskAcquireWindowInBlockSpace(
   Value elementSize = plannedElementSizeSeed;
   AcquireRewriteContract rewriteContract =
       deriveAcquireRewriteContract(parentAcquire);
-  const bool useRewrittenWindow =
-      rewriteContract.usePartitionSliceAsDepWindow;
+  const bool useRewrittenWindow = rewriteContract.usePartitionSliceAsDepWindow;
   const bool useTaskDepWindow =
       usesStencilHalo || rewriteContract.applyStencilHalo;
 
@@ -1286,8 +1285,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
                                               bool usesStencilHalo) {
       AcquireRewriteContract rewriteContract = planningInput.rewriteContract;
       bool shouldUseStencilWindow =
-          usesStencilHalo ||
-          rewriteContract.usePartitionSliceAsDepWindow;
+          usesStencilHalo || rewriteContract.usePartitionSliceAsDepWindow;
 
       /// Read-only acquires already get their task-local window from
       /// rewriteAcquire(). This helper only updates the DB-space slice metadata

@@ -54,10 +54,10 @@ private:
                                                Environment &env);
   bool unionInto(Environment &target, const Environment &source);
   std::optional<DbDepType> classifyDep(DbAcquireNode *producer,
-                                              DbAcquireNode *consumer);
+                                       DbAcquireNode *consumer);
 
   void recordDep(DbAcquireNode *producer, DbAcquireNode *consumer,
-                        DbDepType depType);
+                 DbDepType depType);
   void recordDep(DbAcquireNode *reader, DbAcquireNode *writer);
 
   DbGraph *dbGraph = nullptr;

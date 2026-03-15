@@ -77,9 +77,8 @@ inline bool haveSameBounds(ForOp a, ForOp b) {
 inline bool isLoopInductionVar(Value value) {
   if (auto arg = dyn_cast<BlockArgument>(value)) {
     Operation *parent = arg.getOwner()->getParentOp();
-    return parent &&
-           isa<affine::AffineForOp, scf::ForOp, scf::ParallelOp,
-               scf::ForallOp, arts::ForOp>(parent);
+    return parent && isa<affine::AffineForOp, scf::ForOp, scf::ParallelOp,
+                         scf::ForallOp, arts::ForOp>(parent);
   }
   return false;
 }

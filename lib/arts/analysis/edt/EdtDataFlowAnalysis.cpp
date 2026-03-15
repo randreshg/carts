@@ -304,7 +304,7 @@ bool EdtDataFlowAnalysis::unionInto(Environment &target,
 
 std::optional<DbDepType>
 EdtDataFlowAnalysis::classifyDep(DbAcquireNode *producer,
-                                        DbAcquireNode *consumer) {
+                                 DbAcquireNode *consumer) {
   if (!producer || !consumer)
     return std::nullopt;
   if (producer->getParent() != consumer->getParent())
@@ -333,8 +333,8 @@ EdtDataFlowAnalysis::classifyDep(DbAcquireNode *producer,
 }
 
 void EdtDataFlowAnalysis::recordDep(DbAcquireNode *producer,
-                                           DbAcquireNode *consumer,
-                                           DbDepType depType) {
+                                    DbAcquireNode *consumer,
+                                    DbDepType depType) {
   if (!producer || !consumer)
     return;
   EdtOp from = producer->getEdtUser();
@@ -347,7 +347,7 @@ void EdtDataFlowAnalysis::recordDep(DbAcquireNode *producer,
 }
 
 void EdtDataFlowAnalysis::recordDep(DbAcquireNode *reader,
-                                           DbAcquireNode *writer) {
+                                    DbAcquireNode *writer) {
   auto depType = classifyDep(reader, writer);
   if (depType)
     recordDep(reader, writer, *depType);

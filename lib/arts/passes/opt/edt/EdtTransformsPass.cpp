@@ -136,9 +136,9 @@ private:
 /// contract info before upserting it back.
 static void
 annotateEdtDepContracts(EdtOp edt,
-                               function_ref<void(DbAcquireOp acquire, Value ptr,
-                                                 LoweringContractInfo &info)>
-                                   mutate) {
+                        function_ref<void(DbAcquireOp acquire, Value ptr,
+                                          LoweringContractInfo &info)>
+                            mutate) {
   for (Value dep : edt.getDependencies()) {
     auto acquire = dep.getDefiningOp<DbAcquireOp>();
     if (!acquire)
@@ -372,12 +372,11 @@ unsigned EdtTransformsPass::estimateTaskGranularity() {
       /// Each dependency value comes from a DbAcquireOp; the contract is
       /// attached to the acquire's pointer result.
       bool annotated = false;
-      annotateEdtDepContracts(edt,
-                                     [&](DbAcquireOp /*acquire*/, Value /*ptr*/,
-                                         LoweringContractInfo &info) {
-                                       info.estimatedTaskCost = cost;
-                                       annotated = true;
-                                     });
+      annotateEdtDepContracts(edt, [&](DbAcquireOp /*acquire*/, Value /*ptr*/,
+                                       LoweringContractInfo &info) {
+        info.estimatedTaskCost = cost;
+        annotated = true;
+      });
 
       if (annotated)
         ++count;
@@ -496,10 +495,10 @@ unsigned EdtTransformsPass::analyzeCriticalPath(func::FuncOp func,
                  IntegerAttr::get(i64Type, dist));
 
     /// Also update LoweringContractOps on the EDT's dependency acquires.
-    annotateEdtDepContracts(
-        edt,
-        [&](DbAcquireOp /*acquire*/, Value /*ptr*/,
-            LoweringContractInfo &info) { info.criticalPathDistance = dist; });
+    annotateEdtDepContracts(edt, [&](DbAcquireOp /*acquire*/, Value /*ptr*/,
+                                     LoweringContractInfo &info) {
+      info.criticalPathDistance = dist;
+    });
 
     ++annotated;
 
@@ -649,7 +648,7 @@ unsigned EdtTransformsPass::selectReductionStrategies() {
   ModuleOp module = getOperation();
   unsigned count = 0;
 
-  // Retrieve worker count from module attributes (set by runtime config).
+  /// Retrieve worker count from module attributes (set by runtime config).
   int64_t workerCount = getRuntimeTotalWorkers(module).value_or(0);
 
   module.walk([&](func::FuncOp func) {
@@ -662,22 +661,21 @@ unsigned EdtTransformsPass::selectReductionStrategies() {
       if (!node)
         return;
 
-      // Walk each dependency acquire for this EDT.
+      /// Walk each dependency acquire for this EDT.
       for (Value dep : edt.getDependencies()) {
         auto acquire = dep.getDefiningOp<DbAcquireOp>();
         if (!acquire)
           continue;
 
-        // Only consider inout acquires — those are the ones that serialize.
+        /// Only consider inout acquires — those are the ones that serialize.
         if (acquire.getMode() != ArtsMode::inout)
           continue;
 
-        // Check that this is a single-element (size=1) DB — the common
-        // scalar reduction pattern.
+        /// Single-element (size=1) DB — the common scalar reduction pattern.
         if (!DbAnalysis::hasSingleSize(acquire.getOperation()))
           continue;
 
-        // Trace back to the DbAllocOp and verify it is also single-element.
+        /// Trace back to the DbAllocOp and verify it is also single-element.
         auto *rootOp = DbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr());
         auto allocOp = dyn_cast_or_null<DbAllocOp>(rootOp);
         if (!allocOp)
@@ -685,14 +683,13 @@ unsigned EdtTransformsPass::selectReductionStrategies() {
         if (!DbAnalysis::isCoarseGrained(allocOp))
           continue;
 
-        // Find the block argument inside the EDT body for this acquire.
-        auto [edtForArg, blockArg] =
-            getEdtBlockArgumentForAcquire(acquire);
+        /// Find the block argument inside the EDT body for this acquire.
+        auto [edtForArg, blockArg] = getEdtBlockArgumentForAcquire(acquire);
         if (!edtForArg || edtForArg != edt || !blockArg)
           continue;
 
-        // Look for a DbRefOp at index [0] on the block argument — this
-        // gives us the memref that the EDT accesses.
+        /// Look for a DbRefOp at index [0] on the block argument for the
+        /// memref.
         DbRefOp dbRef = nullptr;
         for (Operation *user : blockArg.getUsers()) {
           if (isa<DbReleaseOp>(user))
@@ -700,14 +697,14 @@ unsigned EdtTransformsPass::selectReductionStrategies() {
           auto ref = dyn_cast<DbRefOp>(user);
           if (!ref)
             continue;
-          // Accept only zero-index refs (single element access).
+          /// Accept only zero-index refs (single element access).
           if (!ref.getIndices().empty() &&
               !llvm::all_of(ref.getIndices(), [](Value v) {
                 return ValueAnalysis::isZeroConstant(v);
               }))
             continue;
           if (dbRef) {
-            // Multiple DbRefOps — ambiguous; bail out conservatively.
+            /// Multiple DbRefOps — ambiguous; bail out conservatively.
             dbRef = nullptr;
             break;
           }
@@ -717,38 +714,36 @@ unsigned EdtTransformsPass::selectReductionStrategies() {
         if (!dbRef)
           continue;
 
-        // Match the load-modify-store reduction pattern.
+        /// Match the load-modify-store reduction pattern.
         auto reductionKind =
             EdtAnalysis::matchLoadModifyStore(dbRef.getResult(), edt.getBody());
         if (!reductionKind)
           continue;
 
-        // --- Select strategy ---
+        /// Select reduction strategy.
         StringRef strategy;
         bool isLoopNested = containsLoop(edt);
 
         if (isLoopNested) {
-          // Inside a loop nest: accumulate locally, then do a single
-          // atomic update at the end.
+          /// Inside a loop nest: accumulate locally, then single atomic at end.
           strategy = ReductionStrategyNames::LocalAccumulate;
         } else if (workerCount > 0 && workerCount < kAtomicWorkerThreshold &&
                    EdtAnalysis::isAtomicCapable(*reductionKind)) {
-          // Small worker count and the op maps to an ARTS atomic intrinsic.
+          /// Small worker count and op maps to ARTS atomic intrinsic.
           strategy = ReductionStrategyNames::Atomic;
         } else if (workerCount >= kAtomicWorkerThreshold) {
-          // Large worker count: binary tree reduction avoids contention.
+          /// Large worker count: binary tree reduction avoids contention.
           strategy = ReductionStrategyNames::Tree;
         } else if (EdtAnalysis::isAtomicCapable(*reductionKind)) {
-          // Worker count unknown but op is atomic-capable: default to atomic
-          // as the simpler strategy.
+          /// Worker count unknown but op atomic-capable: default to atomic.
           strategy = ReductionStrategyNames::Atomic;
         } else {
-          // Non-atomic-capable op with unknown worker count: tree is the
-          // safe default for associative operations.
+          /// Non-atomic-capable with unknown worker count: tree is safe
+          /// default.
           strategy = ReductionStrategyNames::Tree;
         }
 
-        // Stamp the attribute on the EdtOp.
+        /// Stamp the attribute on the EdtOp.
         edt->setAttr(AttrNames::Operation::Contract::ReductionStrategy,
                      StringAttr::get(edt.getContext(), strategy));
         ++count;
@@ -760,9 +755,7 @@ unsigned EdtTransformsPass::selectReductionStrategies() {
                                  << " workerCount=" << workerCount
                                  << " loopNested=" << isLoopNested);
 
-        // One reduction annotation per EDT is sufficient — if an EDT
-        // reduces multiple scalars, the first match determines the
-        // strategy. Break to the next EDT.
+        /// One reduction annotation per EDT; first match determines strategy.
         break;
       }
     });
@@ -772,17 +765,16 @@ unsigned EdtTransformsPass::selectReductionStrategies() {
 }
 
 ///===----------------------------------------------------------------------===///
-/// ET-3: Dep chain narrowing -- helper functions
+/// Dep chain narrowing helper functions.
 ///===----------------------------------------------------------------------===///
 
 /// Mark a dependency as narrowable by setting the NarrowableDep unit attribute.
 /// If `haloFootprint` is non-empty, also sets NarrowableHaloFootprint.
 /// Creates a new LoweringContractOp if one does not exist for the pointer.
-static void
-markDepNarrowable(DbAcquireOp acquire, Value ptr,
-                         LoweringContractOp contractOp,
-                         std::optional<ArtsDepPattern> edtDepPattern,
-                         ArrayRef<int64_t> haloFootprint = {}) {
+static void markDepNarrowable(DbAcquireOp acquire, Value ptr,
+                              LoweringContractOp contractOp,
+                              std::optional<ArtsDepPattern> edtDepPattern,
+                              ArrayRef<int64_t> haloFootprint = {}) {
   if (contractOp) {
     contractOp->setAttr(AttrNames::Operation::Contract::NarrowableDep,
                         UnitAttr::get(contractOp.getContext()));
@@ -844,8 +836,7 @@ tryNarrowHaloDep(DbAcquireOp acquire, Value ptr, LoweringContractOp contractOp,
     }
 
     if (hasNonZeroHalo) {
-      markDepNarrowable(acquire, ptr, contractOp, edtDepPattern,
-                               haloFootprint);
+      markDepNarrowable(acquire, ptr, contractOp, edtDepPattern, haloFootprint);
       ARTS_DEBUG("ET-3:   marked halo dependency as narrowable"
                  << " rank=" << rank << " haloFootprint=[" << haloFootprint[0]
                  << (rank > 1 ? ", ..." : "") << "]");

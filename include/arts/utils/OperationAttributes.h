@@ -65,7 +65,7 @@ namespace Contract {
 using namespace llvm;
 /// Contract attribute name for dep pattern
 constexpr StringLiteral DepPatternKey = "dep_pattern";
-// These are the same as Operation:: versions; kept as aliases for readability.
+/// These are the same as Operation:: versions; kept as aliases for readability.
 constexpr auto DistributionKind = Operation::DistributionKind;
 constexpr auto DistributionPattern = Operation::DistributionPattern;
 constexpr auto DistributionVersion = Operation::DistributionVersion;
