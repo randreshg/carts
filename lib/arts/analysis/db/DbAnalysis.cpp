@@ -19,8 +19,10 @@
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SetVector.h"
@@ -145,7 +147,44 @@ static bool refineContractWithFacts(LoweringContractInfo &contract,
       contract.depPattern = ArtsDepPattern::stencil;
   }
 
+  if (changed)
+    contract.postDbRefined = true;
+
   return changed;
+}
+
+static LoweringContractInfo buildAcquireContractSeed(DbAcquireOp acquire) {
+  LoweringContractInfo contract;
+  if (!acquire)
+    return contract;
+  if (auto explicitContract = getLoweringContract(acquire.getPtr()))
+    contract = *explicitContract;
+  return contract;
+}
+
+static AccessPattern
+resolveAcquireAccessPattern(const DbAnalysis::AcquireContractSummary &summary) {
+  if (summary.accessPattern != AccessPattern::Unknown)
+    return summary.accessPattern;
+  if (summary.usesStencilSemantics())
+    return AccessPattern::Stencil;
+  if (summary.usesMatmulSemantics())
+    return AccessPattern::Uniform;
+  return AccessPattern::Unknown;
+}
+
+static AccessPattern mapDbAccessPattern(DbAccessPattern pattern) {
+  switch (pattern) {
+  case DbAccessPattern::stencil:
+    return AccessPattern::Stencil;
+  case DbAccessPattern::indexed:
+    return AccessPattern::Indexed;
+  case DbAccessPattern::uniform:
+    return AccessPattern::Uniform;
+  case DbAccessPattern::unknown:
+    return AccessPattern::Unknown;
+  }
+  return AccessPattern::Unknown;
 }
 
 } // namespace
@@ -679,15 +718,16 @@ DbAnalysis::getAcquireContractSummary(DbAcquireOp acquire) {
     return std::nullopt;
 
   AcquireContractSummary summary;
-  if (auto contract = getLoweringContract(acquire.getPtr()))
-    summary.contract = *contract;
-  if (auto semantic = getSemanticContract(acquire.getOperation()))
-    mergeLoweringContractInfo(summary.contract, *semantic);
+  summary.contract = buildAcquireContractSeed(acquire);
 
   if (const DbAcquirePartitionFacts *facts =
           getAcquirePartitionFacts(acquire)) {
-    summary.refinedByDbAnalysis =
-        refineContractWithFacts(summary.contract, *facts);
+    const bool hasPersistedRefinement = summary.contract.postDbRefined;
+    /// Once post-DB refinement is persisted, treat that contract as
+    /// authoritative and avoid rediscovery-driven mutation here.
+    if (!hasPersistedRefinement)
+      summary.refinedByDbAnalysis =
+          refineContractWithFacts(summary.contract, *facts);
     /// FIX-3: Contract persistence is handled by DT-1 in DbTransformsPass
     /// to avoid double-emission when getAcquireContractSummary() is called
     /// multiple times during analysis.
@@ -695,16 +735,203 @@ DbAnalysis::getAcquireContractSummary(DbAcquireOp acquire) {
     summary.accessPattern = facts->accessPattern;
   }
 
-  if (summary.accessPattern == AccessPattern::Unknown) {
-    if (summary.usesStencilSemantics())
-      summary.accessPattern = AccessPattern::Stencil;
-    else if (summary.usesMatmulSemantics())
-      summary.accessPattern = AccessPattern::Uniform;
-  }
+  summary.accessPattern = resolveAcquireAccessPattern(summary);
 
   if (summary.empty())
     return std::nullopt;
   return summary;
+}
+
+AcquireRewriteContract DbAnalysis::getAcquireRewriteContract(DbAcquireOp acquire) {
+  AcquireRewriteContract contract = deriveAcquireRewriteContract(acquire);
+  if (!acquire)
+    return contract;
+
+  auto contractSummary = getAcquireContractSummary(acquire);
+  if (!contractSummary)
+    return contract;
+
+  /// Refined/persisted contract payload is authoritative for owner dims.
+  if (!contractSummary->contract.ownerDims.empty())
+    contract.ownerDims.assign(contractSummary->contract.ownerDims.begin(),
+                              contractSummary->contract.ownerDims.end());
+  else if (contract.ownerDims.empty() && contractSummary->facts) {
+    ArrayRef<unsigned> dims = contractSummary->facts->stencilOwnerDims;
+    if (dims.empty())
+      dims = contractSummary->facts->partitionDims;
+    for (unsigned dim : dims)
+      contract.ownerDims.push_back(static_cast<int64_t>(dim));
+  }
+
+  if (auto mins = contractSummary->contract.getStaticMinOffsets())
+    contract.haloMinOffsets = *mins;
+  if (auto maxs = contractSummary->contract.getStaticMaxOffsets())
+    contract.haloMaxOffsets = *maxs;
+
+  const bool hasExplicitStencilContract =
+      contractSummary->contract.hasExplicitStencilContract();
+  bool supportsStencilHalo = hasExplicitStencilContract &&
+                             contractSummary->contract.supportsBlockHalo() &&
+                             !contract.haloMinOffsets.empty() &&
+                             !contract.haloMaxOffsets.empty();
+
+  if (acquire.getMode() == ArtsMode::in && hasExplicitStencilContract &&
+      supportsStencilHalo) {
+    if (contract.haloMinOffsets.empty() && !contract.haloMaxOffsets.empty()) {
+      contract.haloMinOffsets.resize(contract.haloMaxOffsets.size(), 0);
+      for (size_t i = 0; i < contract.haloMaxOffsets.size(); ++i)
+        if (contract.haloMaxOffsets[i] > 0)
+          contract.haloMinOffsets[i] = -contract.haloMaxOffsets[i];
+    } else if (contract.haloMinOffsets.size() == contract.haloMaxOffsets.size()) {
+      for (size_t i = 0; i < contract.haloMinOffsets.size(); ++i)
+        if (contract.haloMinOffsets[i] == 0 && contract.haloMaxOffsets[i] > 0)
+          contract.haloMinOffsets[i] = -contract.haloMaxOffsets[i];
+    }
+
+    contract.applyStencilHalo = true;
+    contract.usePartitionSliceAsDepWindow = false;
+    contract.preserveParentDepRange = false;
+  }
+
+  return contract;
+}
+
+AccessPattern DbAnalysis::resolveCanonicalAcquireAccessPattern(
+    DbAcquireOp acquire, const AcquireContractSummary *summary,
+    const DbAcquirePartitionFacts *facts) {
+  if (!acquire)
+    return AccessPattern::Unknown;
+
+  std::optional<AcquireContractSummary> ownedSummary;
+  if (!summary) {
+    ownedSummary = getAcquireContractSummary(acquire);
+    if (ownedSummary)
+      summary = &*ownedSummary;
+  }
+
+  if (summary && summary->accessPattern != AccessPattern::Unknown)
+    return summary->accessPattern;
+  if (summary && summary->contract.hasExplicitStencilContract())
+    return AccessPattern::Stencil;
+
+  if (!facts)
+    facts = getAcquirePartitionFacts(acquire);
+  if (facts && facts->accessPattern != AccessPattern::Unknown)
+    return facts->accessPattern;
+
+  if (auto rawPattern = getDbAccessPattern(acquire.getOperation()))
+    return mapDbAccessPattern(*rawPattern);
+
+  return AccessPattern::Unknown;
+}
+
+ArtsDepPattern DbAnalysis::resolveCanonicalAcquireDepPattern(
+    DbAcquireOp acquire, const AcquireContractSummary *summary,
+    const DbAcquirePartitionFacts *facts) {
+  if (!acquire)
+    return ArtsDepPattern::unknown;
+
+  std::optional<AcquireContractSummary> ownedSummary;
+  if (!summary) {
+    ownedSummary = getAcquireContractSummary(acquire);
+    if (ownedSummary)
+      summary = &*ownedSummary;
+  }
+
+  if (summary && summary->contract.depPattern)
+    return *summary->contract.depPattern;
+
+  if (!facts)
+    facts = getAcquirePartitionFacts(acquire);
+  if (facts && facts->depPattern != ArtsDepPattern::unknown)
+    return facts->depPattern;
+
+  if (auto rawPattern = getDepPattern(acquire.getOperation());
+      rawPattern && *rawPattern != ArtsDepPattern::unknown)
+    return *rawPattern;
+
+  return ArtsDepPattern::unknown;
+}
+
+bool DbAnalysis::hasCanonicalAcquireStencilSemantics(
+    DbAcquireOp acquire, const AcquireContractSummary *summary,
+    const DbAcquirePartitionFacts *facts) {
+  if (resolveCanonicalAcquireAccessPattern(acquire, summary, facts) ==
+      AccessPattern::Stencil)
+    return true;
+  ArtsDepPattern depPattern =
+      resolveCanonicalAcquireDepPattern(acquire, summary, facts);
+  return isStencilFamilyDepPattern(depPattern);
+}
+
+ArtsMode DbAnalysis::classifyMemrefUserAccessMode(Operation *op,
+                                                  Operation *underlyingOp) {
+  if (!op || !underlyingOp)
+    return ArtsMode::uninitialized;
+
+  bool hasRead = false;
+  bool hasWrite = false;
+
+  if (auto load = dyn_cast<memref::LoadOp>(op)) {
+    hasRead =
+        ValueAnalysis::getUnderlyingOperation(load.getMemref()) == underlyingOp;
+  } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+    hasWrite = ValueAnalysis::getUnderlyingOperation(store.getMemref()) ==
+               underlyingOp;
+  } else if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
+    hasRead =
+        ValueAnalysis::getUnderlyingOperation(load.getMemRef()) == underlyingOp;
+  } else if (auto store = dyn_cast<affine::AffineStoreOp>(op)) {
+    hasWrite = ValueAnalysis::getUnderlyingOperation(store.getMemRef()) ==
+               underlyingOp;
+  } else if (auto copy = dyn_cast<memref::CopyOp>(op)) {
+    hasRead =
+        ValueAnalysis::getUnderlyingOperation(copy.getSource()) == underlyingOp;
+    hasWrite =
+        ValueAnalysis::getUnderlyingOperation(copy.getTarget()) == underlyingOp;
+  }
+
+  if (hasRead && hasWrite)
+    return ArtsMode::inout;
+  if (hasWrite)
+    return ArtsMode::out;
+  if (hasRead)
+    return ArtsMode::in;
+  return ArtsMode::uninitialized;
+}
+
+bool DbAnalysis::opMatchesAccessMode(Operation *op, Operation *underlyingOp,
+                                     ArtsMode requestedMode) {
+  ArtsMode actualMode = classifyMemrefUserAccessMode(op, underlyingOp);
+  if (actualMode == ArtsMode::uninitialized)
+    return false;
+  if (requestedMode == ArtsMode::inout)
+    return true;
+  return actualMode == requestedMode;
+}
+
+bool DbAnalysis::accessModeCanSeedNestedAcquire(ArtsMode availableMode,
+                                                ArtsMode requestedMode) {
+  if (requestedMode == ArtsMode::uninitialized)
+    return true;
+  if (availableMode == ArtsMode::inout)
+    return true;
+  return availableMode == requestedMode;
+}
+
+ArtsMode DbAnalysis::inferEdtAccessMode(Operation *underlyingOp,
+                                        EdtOp edt) const {
+  if (!underlyingOp || !edt)
+    return ArtsMode::uninitialized;
+
+  ArtsMode combined = ArtsMode::uninitialized;
+  edt.walk([&](Operation *op) {
+    if (op->getParentOfType<EdtOp>() != edt)
+      return;
+    combined = combineAccessModes(
+        combined, DbAnalysis::classifyMemrefUserAccessMode(op, underlyingOp));
+  });
+  return combined;
 }
 
 bool DbAnalysis::operationHasDistributedDbContract(Operation *op) {

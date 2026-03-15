@@ -75,6 +75,8 @@ std::unique_ptr<Pass> createDbLoweringPass(uint64_t idStride = 1000);
 std::unique_ptr<Pass> createEpochLoweringPass();
 std::unique_ptr<Pass> createParallelEdtLoweringPass();
 std::unique_ptr<Pass> createEdtLoweringPass(uint64_t idStride = 1000);
+std::unique_ptr<Pass> createEdtLoweringPass(AnalysisManager *AM,
+                                            uint64_t idStride = 1000);
 std::unique_ptr<Pass> createLoweringContractCleanupPass();
 
 /// High-level scheduling and distribution passes.

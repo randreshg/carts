@@ -234,6 +234,23 @@ static bool collectSpatialNestIvs(arts::ForOp artsFor,
   return !ivs.empty() && spatialBody;
 }
 
+static const LoopMetadata *resolveLoopMetadataForArtsFor(arts::ForOp forOp,
+                                                         MetadataManager &manager) {
+  if (!forOp)
+    return nullptr;
+
+  if (const LoopMetadata *meta = manager.getLoopMetadata(forOp.getOperation()))
+    return meta;
+
+  const LoopMetadata *nestedMeta = nullptr;
+  forOp.getBody()->walk([&](Operation *op) {
+    if (nestedMeta || !isa<scf::ForOp, affine::AffineForOp>(op))
+      return;
+    nestedMeta = manager.getLoopMetadata(op);
+  });
+  return nestedMeta;
+}
+
 static bool classifySpatialIndex(Value index, ArrayRef<Value> spatialIvs,
                                  bool &invariant, unsigned &ivOrdinal,
                                  int64_t &constantOffset) {
@@ -397,9 +414,11 @@ static LocalStencilEvidence collectLocalStencilEvidence(arts::ForOp forOp) {
   if (!body)
     return evidence;
 
-  DenseSet<Value> loopIVs;
-  for (Value arg : body->getArguments())
-    loopIVs.insert(arg);
+  SmallVector<Value, 4> spatialIvs;
+  Block *spatialBody = nullptr;
+  if (!collectSpatialNestIvs(forOp, spatialIvs, spatialBody)) {
+    spatialIvs.append(body->getArguments().begin(), body->getArguments().end());
+  }
 
   DenseMap<Operation *, SmallVector<llvm::DenseSet<int64_t>, 4>> offsetsByAlloc;
 
@@ -419,7 +438,7 @@ static LocalStencilEvidence collectLocalStencilEvidence(arts::ForOp forOp) {
 
     for (auto [dim, index] : llvm::enumerate(indices)) {
       Value strippedIndex = ValueAnalysis::stripNumericCasts(index);
-      for (Value iv : body->getArguments()) {
+      for (Value iv : spatialIvs) {
         if (!ValueAnalysis::dependsOn(strippedIndex, iv) && strippedIndex != iv)
           continue;
 
@@ -461,7 +480,7 @@ static LocalStencilEvidence collectLocalStencilEvidence(arts::ForOp forOp) {
 static DiscoveryEvidence collectEvidence(arts::ForOp forOp,
                                          MetadataManager &manager) {
   DiscoveryEvidence evidence;
-  evidence.loopMeta = manager.getLoopMetadata(forOp.getOperation());
+  evidence.loopMeta = resolveLoopMetadataForArtsFor(forOp, manager);
   if (!evidence.loopMeta)
     return evidence;
   LocalStencilEvidence localStencil = collectLocalStencilEvidence(forOp);

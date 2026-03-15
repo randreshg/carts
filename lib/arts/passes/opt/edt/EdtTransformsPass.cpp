@@ -55,6 +55,7 @@
 #include "arts/utils/OperationAttributes.h"
 /// Debug
 #include "arts/utils/Debug.h"
+#include <algorithm>
 ARTS_DEBUG_SETUP(edt_transforms);
 
 using namespace mlir;
@@ -128,6 +129,16 @@ private:
   /// EXT-EDT-2: Walk all EDTs and remove unused dependency slots.
   /// Returns the number of eliminated dependencies.
   unsigned eliminateDeadDependencies();
+
+  struct ModuleEdtMetrics {
+    unsigned totalEdts = 0;
+    unsigned totalOpsAccum = 0;
+    double maxComputeToMem = 0.0;
+    double minComputeToMem = std::numeric_limits<double>::max();
+  };
+
+  ModuleEdtMetrics gatherModuleEdtFacts();
+  void logModuleEdtSummary(const ModuleEdtMetrics &metrics) const;
 };
 } // namespace
 
@@ -164,65 +175,8 @@ annotateEdtDepContracts(EdtOp edt,
 }
 
 void EdtTransformsPass::runOnOperation() {
-  ModuleOp module = getOperation();
   ARTS_INFO_HEADER(EdtTransformsPass);
-
-  /// Per-module statistics (local to this invocation).
-  unsigned totalEdts = 0;
-  unsigned totalOpsAccum = 0;
-  double maxComputeToMem = 0.0;
-  double minComputeToMem = std::numeric_limits<double>::max();
-
-  /// TODO(PERF): This pass performs 5 separate module.walk(FuncOp) calls
-  /// (runOnOperation, estimateTaskGranularity, placeEdtsByAffinity,
-  /// selectReductionStrategies, narrowDepChains). These could be
-  /// combined into a single walk that collects (FuncOp, EdtGraph&) pairs and
-  /// passes them to each sub-pass, eliminating 4 redundant module traversals
-  /// and graph lookups.
-
-  /// Walk all functions and collect EDT metrics from the EdtGraph.
-  module.walk([&](func::FuncOp func) {
-    auto &edtGraph = AM->getEdtAnalysis().getOrCreateEdtGraph(func);
-    if (edtGraph.size() == 0)
-      return;
-
-    ARTS_DEBUG("Processing function: " << func.getName());
-
-    /// Walk each EDT operation within this function.
-    func.walk([&](EdtOp edt) {
-      EdtNode *node = edtGraph.getEdtNode(edt);
-      if (!node)
-        return;
-
-      const EdtInfo &info = node->getInfo();
-      ++totalEdts;
-      totalOpsAccum += info.totalOps;
-      if (info.computeToMemRatio > maxComputeToMem)
-        maxComputeToMem = info.computeToMemRatio;
-      if (info.computeToMemRatio < minComputeToMem)
-        minComputeToMem = info.computeToMemRatio;
-
-      ARTS_DEBUG("  EDT [" << node->getHierId() << "]"
-                           << " totalOps=" << info.totalOps
-                           << " compute:mem=" << info.computeToMemRatio
-                           << " loads=" << info.numLoads
-                           << " stores=" << info.numStores);
-
-      /// ET-1 metrics collected above; annotation performed after the walk.
-    });
-
-    ///===------------------------------------------------------------------===///
-    /// ET-6: Critical path analysis
-    ///
-    /// Traverse the EdtGraph for this function and compute the longest
-    /// dependency chain via topological sort of the EDT DAG. Annotate
-    /// each EDT with critical_path_distance for runtime priority
-    /// scheduling.
-    ///===------------------------------------------------------------------===///
-    unsigned et6Count = analyzeCriticalPath(func, edtGraph);
-    ARTS_DEBUG("ET-6: Annotated " << et6Count
-                                  << " EDTs with critical path distance");
-  });
+  ModuleEdtMetrics metrics = gatherModuleEdtFacts();
 
   ///===--------------------------------------------------------------------===///
   /// ET-1: Task granularity control
@@ -287,17 +241,63 @@ void EdtTransformsPass::runOnOperation() {
   if (extEdt2Count > 0)
     ARTS_INFO("EXT-EDT-2: eliminated " << extEdt2Count << " dead dependencies");
 
-  /// Log summary statistics
-  if (totalEdts > 0) {
-    ARTS_INFO("EDT transforms summary:"
-              << " edts=" << totalEdts << " avgOps="
-              << (totalOpsAccum / totalEdts) << " compute:mem range=["
-              << minComputeToMem << ", " << maxComputeToMem << "]");
-  } else {
-    ARTS_INFO("No EDTs found in module");
-  }
+  logModuleEdtSummary(metrics);
 
   ARTS_INFO_FOOTER(EdtTransformsPass);
+}
+
+EdtTransformsPass::ModuleEdtMetrics EdtTransformsPass::gatherModuleEdtFacts() {
+  ModuleOp module = getOperation();
+  ModuleEdtMetrics metrics;
+
+  /// Walk all functions, gather EDT metrics, and run ET-6 critical path
+  /// analysis while the graph is already hot.
+  module.walk([&](func::FuncOp func) {
+    auto &edtGraph = AM->getEdtAnalysis().getOrCreateEdtGraph(func);
+    if (edtGraph.size() == 0)
+      return;
+
+    ARTS_DEBUG("Processing function: " << func.getName());
+
+    func.walk([&](EdtOp edt) {
+      EdtNode *node = edtGraph.getEdtNode(edt);
+      if (!node)
+        return;
+
+      const EdtInfo &info = node->getInfo();
+      ++metrics.totalEdts;
+      metrics.totalOpsAccum += info.totalOps;
+      metrics.maxComputeToMem =
+          std::max(metrics.maxComputeToMem, info.computeToMemRatio);
+      metrics.minComputeToMem =
+          std::min(metrics.minComputeToMem, info.computeToMemRatio);
+
+      ARTS_DEBUG("  EDT [" << node->getHierId() << "]"
+                           << " totalOps=" << info.totalOps
+                           << " compute:mem=" << info.computeToMemRatio
+                           << " loads=" << info.numLoads
+                           << " stores=" << info.numStores);
+    });
+
+    unsigned et6Count = analyzeCriticalPath(func, edtGraph);
+    ARTS_DEBUG("ET-6: Annotated " << et6Count
+                                  << " EDTs with critical path distance");
+  });
+
+  return metrics;
+}
+
+void EdtTransformsPass::logModuleEdtSummary(
+    const ModuleEdtMetrics &metrics) const {
+  if (metrics.totalEdts > 0) {
+    ARTS_INFO("EDT transforms summary:"
+              << " edts=" << metrics.totalEdts << " avgOps="
+              << (metrics.totalOpsAccum / metrics.totalEdts)
+              << " compute:mem range=[" << metrics.minComputeToMem << ", "
+              << metrics.maxComputeToMem << "]");
+    return;
+  }
+  ARTS_INFO("No EDTs found in module");
 }
 
 ///===----------------------------------------------------------------------===///

@@ -93,61 +93,6 @@ using namespace mlir::arts;
 ///===----------------------------------------------------------------------===///
 namespace {
 
-static ArtsMode getMemrefUserAccessMode(Operation *op,
-                                        Operation *underlyingOp) {
-  if (!op || !underlyingOp)
-    return ArtsMode::uninitialized;
-
-  bool hasRead = false;
-  bool hasWrite = false;
-
-  if (auto load = dyn_cast<memref::LoadOp>(op)) {
-    hasRead =
-        ValueAnalysis::getUnderlyingOperation(load.getMemref()) == underlyingOp;
-  } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
-    hasWrite = ValueAnalysis::getUnderlyingOperation(store.getMemref()) ==
-               underlyingOp;
-  } else if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
-    hasRead =
-        ValueAnalysis::getUnderlyingOperation(load.getMemRef()) == underlyingOp;
-  } else if (auto store = dyn_cast<affine::AffineStoreOp>(op)) {
-    hasWrite = ValueAnalysis::getUnderlyingOperation(store.getMemRef()) ==
-               underlyingOp;
-  } else if (auto copy = dyn_cast<memref::CopyOp>(op)) {
-    hasRead =
-        ValueAnalysis::getUnderlyingOperation(copy.getSource()) == underlyingOp;
-    hasWrite =
-        ValueAnalysis::getUnderlyingOperation(copy.getTarget()) == underlyingOp;
-  }
-
-  if (hasRead && hasWrite)
-    return ArtsMode::inout;
-  if (hasWrite)
-    return ArtsMode::out;
-  if (hasRead)
-    return ArtsMode::in;
-  return ArtsMode::uninitialized;
-}
-
-static bool opMatchesAccessMode(Operation *op, Operation *underlyingOp,
-                                ArtsMode requestedMode) {
-  ArtsMode actualMode = getMemrefUserAccessMode(op, underlyingOp);
-  if (actualMode == ArtsMode::uninitialized)
-    return false;
-  if (requestedMode == ArtsMode::inout)
-    return true;
-  return actualMode == requestedMode;
-}
-
-static bool accessModeCanSeedNestedAcquire(ArtsMode availableMode,
-                                           ArtsMode requestedMode) {
-  if (requestedMode == ArtsMode::uninitialized)
-    return true;
-  if (availableMode == ArtsMode::inout)
-    return true;
-  return availableMode == requestedMode;
-}
-
 ///===----------------------------------------------------------------------===///
 /// Pass Implementation
 ///===----------------------------------------------------------------------===///
@@ -288,9 +233,16 @@ private:
 
   void collectMemrefs();
   void collectControlDbOps();
+  void reconcileExternalDepAccessModes();
+  void ensureInitializedAccessModes();
   void createDbAllocOps();
+  void lowerEdtExternalDependencies();
+  void cleanupAndFinalize();
+  void projectSemanticContractToDbValue(
+      Operation *sourceOp, Operation *targetOp, Value contractTarget,
+      OperationContractTransferPolicy policy =
+          OperationContractTransferPolicy::PreserveStampedContractOnly);
   void createDbAcquireOps(EdtOp edt, SetVector<Value> &externalDeps);
-  ArtsMode inferEdtAccessMode(Operation *underlyingOp, EdtOp edt) const;
   Value findLocalAcquireView(EdtOp edt, Operation *dbAllocOp,
                              bool requiresIndexedAccess = false);
   Value findParentAcquireSource(EdtOp edt, Operation *dbAllocOp,
@@ -361,51 +313,6 @@ private:
 ///===----------------------------------------------------------------------===///
 /// Pass Entry Point
 ///===----------------------------------------------------------------------===///
-ArtsMode CreateDbsPass::inferEdtAccessMode(Operation *underlyingOp,
-                                           EdtOp edt) const {
-  if (!underlyingOp || !edt)
-    return ArtsMode::uninitialized;
-
-  bool hasRead = false;
-  bool hasWrite = false;
-
-  edt.walk([&](Operation *op) {
-    if (op->getParentOfType<EdtOp>() != edt)
-      return;
-
-    if (auto load = dyn_cast<memref::LoadOp>(op)) {
-      if (ValueAnalysis::getUnderlyingOperation(load.getMemref()) ==
-          underlyingOp)
-        hasRead = true;
-      return;
-    }
-
-    if (auto store = dyn_cast<memref::StoreOp>(op)) {
-      if (ValueAnalysis::getUnderlyingOperation(store.getMemref()) ==
-          underlyingOp)
-        hasWrite = true;
-      return;
-    }
-
-    if (auto copy = dyn_cast<memref::CopyOp>(op)) {
-      if (ValueAnalysis::getUnderlyingOperation(copy.getSource()) ==
-          underlyingOp)
-        hasRead = true;
-      if (ValueAnalysis::getUnderlyingOperation(copy.getTarget()) ==
-          underlyingOp)
-        hasWrite = true;
-    }
-  });
-
-  if (hasRead && hasWrite)
-    return ArtsMode::inout;
-  if (hasWrite)
-    return ArtsMode::out;
-  if (hasRead)
-    return ArtsMode::in;
-  return ArtsMode::uninitialized;
-}
-
 void CreateDbsPass::runOnOperation() {
   module = getOperation();
   opsToRemove.clear();
@@ -427,9 +334,30 @@ void CreateDbsPass::runOnOperation() {
   ARTS_INFO("Phase 2: collect and clean up existing Control DB operations");
   collectControlDbOps();
 
-  /// Phase 3.5: Check for memrefs used without DbControlOps
-  /// For each EDT with external dependencies, check if any memref is used
-  /// without a corresponding DbControlOp. If so, set that memref to inout.
+  /// Phase 3.5: Reconcile missing DbControl hints and fallback access modes.
+  reconcileExternalDepAccessModes();
+  ensureInitializedAccessModes();
+
+  /// Phase 3: Create DbAlloc operations
+  ARTS_INFO("Phase 3: Creating DbAlloc operations for " << memrefInfo.size()
+                                                        << " memrefs");
+  createDbAllocOps();
+
+  /// Phase 4: Process EDTs for dependencies.
+  lowerEdtExternalDependencies();
+
+  /// Phase 5-7: Cleanup and validation post-checks.
+  cleanupAndFinalize();
+
+  AC = nullptr;
+  ARTS_INFO_FOOTER(CreateDbsPass);
+  ARTS_DEBUG_REGION(module.dump(););
+}
+
+void CreateDbsPass::reconcileExternalDepAccessModes() {
+  /// For each EDT with external dependencies, ensure memrefs missing explicit
+  /// DbControl entries still get a conservative access mode inferred from
+  /// concrete memory uses.
   for (auto &edtEntry : edtExternalValues) {
     EdtOp edt = edtEntry.first;
     SetVector<Value> &externalDeps = edtEntry.second;
@@ -441,67 +369,77 @@ void CreateDbsPass::runOnOperation() {
         continue;
 
       MemrefInfo &info = memrefInfo[underlyingOp];
-
-      /// Check if this EDT has any DbControlOps for this memref
       bool hasControlDb = !info.edtToDeps[edt].empty();
-      if (!hasControlDb) {
-        ArtsMode inferredMode = inferEdtAccessMode(underlyingOp, edt);
-        if (inferredMode == ArtsMode::uninitialized)
-          inferredMode = ArtsMode::inout;
+      if (hasControlDb)
+        continue;
 
-        ARTS_DEBUG(" - Memref "
-                   << *underlyingOp
-                   << " used in EDT without DbControlOps, inferred mode="
-                   << inferredMode);
-        info.accessMode = combineAccessModes(info.accessMode, inferredMode);
-      }
+      ArtsMode inferredMode =
+          AM->getDbAnalysis().inferEdtAccessMode(underlyingOp, edt);
+      if (inferredMode == ArtsMode::uninitialized)
+        inferredMode = ArtsMode::inout;
+
+      ARTS_DEBUG(" - Memref "
+                 << *underlyingOp
+                 << " used in EDT without DbControlOps, inferred mode="
+                 << inferredMode);
+      info.accessMode = combineAccessModes(info.accessMode, inferredMode);
     }
   }
+}
 
-  /// Also handle any memrefs that remain completely uninitialized
+void CreateDbsPass::ensureInitializedAccessModes() {
+  /// Any memref that still has no mode evidence falls back to inout to preserve
+  /// dependency correctness.
   for (auto &entry : memrefInfo) {
     MemrefInfo &info = entry.second;
-    if (info.accessMode == ArtsMode::uninitialized) {
-      ARTS_DEBUG(" - Memref "
-                 << *entry.first
-                 << " has no DbControlOps at all, defaulting to inout mode");
-      info.accessMode = ArtsMode::inout;
-    }
+    if (info.accessMode != ArtsMode::uninitialized)
+      continue;
+
+    ARTS_DEBUG(" - Memref "
+               << *entry.first
+               << " has no DbControlOps at all, defaulting to inout mode");
+    info.accessMode = ArtsMode::inout;
   }
+}
 
-  /// Phase 3: Create DbAlloc operations
-  ARTS_INFO("Phase 3: Creating DbAlloc operations for " << memrefInfo.size()
-                                                        << " memrefs");
-  createDbAllocOps();
-
-  /// Phase 4: Process EDTs for dependencies
-  /// Use pre-order walk to naturally visit parents before children.
+void CreateDbsPass::lowerEdtExternalDependencies() {
+  /// Use pre-order walk to visit parent EDTs before nested EDTs so nested
+  /// acquire seeding can reuse in-scope handles when legal.
   ARTS_INFO("Phase 4: Creating DbAcquire operations for "
             << edtExternalValues.size() << " EDTs");
-
   module.walk<WalkOrder::PreOrder>([&](EdtOp edt) {
     auto it = edtExternalValues.find(edt);
     if (it != edtExternalValues.end())
       createDbAcquireOps(edt, it->second);
   });
+}
 
-  /// Phase 5: Clean up legacy allocations
+void CreateDbsPass::cleanupAndFinalize() {
   ARTS_INFO("Phase 5: Cleaning up legacy allocations");
   RemovalUtils removalMgr;
   for (Operation *op : opsToRemove)
     removalMgr.markForRemoval(op);
   removalMgr.removeAllMarked(module, /*recursive=*/true);
 
-  /// Phase 6: Enabling verification for EDTs
+  /// Re-enable verifier on all EDT ops after structural rewrites complete.
   module.walk([](EdtOp edt) { edt.removeNoVerifyAttr(); });
 
-  /// Phase 7: Simplify the module
   DominanceInfo domInfo(module);
   arts::simplifyIR(module, domInfo);
+}
 
-  AC = nullptr;
-  ARTS_INFO_FOOTER(CreateDbsPass);
-  ARTS_DEBUG_REGION(module.dump(););
+void CreateDbsPass::projectSemanticContractToDbValue(
+    Operation *sourceOp, Operation *targetOp, Value contractTarget,
+    OperationContractTransferPolicy policy) {
+  if (!sourceOp || !targetOp || !contractTarget)
+    return;
+
+  transferOperationContract(sourceOp, targetOp, policy);
+
+  OpBuilder::InsertionGuard guard(AC->getBuilder());
+  AC->setInsertionPointAfter(targetOp);
+  transferLoweringContract(sourceOp, contractTarget, AC->getBuilder(),
+                           targetOp->getLoc());
 }
 
 ///===----------------------------------------------------------------------===///
@@ -642,7 +580,8 @@ void CreateDbsPass::collectControlDbOps() {
             bool matchesControl = controlAccessOffsets
                                       ? matchesExplicitStencilAccess(op)
                                       : indicesMatchPrefix(load.getIndices());
-            if (opMatchesAccessMode(op, underlyingOp, mode) && matchesControl)
+            if (DbAnalysis::opMatchesAccessMode(op, underlyingOp, mode) &&
+                matchesControl)
               opsToRewrite.push_back(op);
           }
         } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
@@ -651,7 +590,8 @@ void CreateDbsPass::collectControlDbOps() {
             bool matchesControl = controlAccessOffsets
                                       ? matchesExplicitStencilAccess(op)
                                       : indicesMatchPrefix(store.getIndices());
-            if (opMatchesAccessMode(op, underlyingOp, mode) && matchesControl)
+            if (DbAnalysis::opMatchesAccessMode(op, underlyingOp, mode) &&
+                matchesControl)
               opsToRewrite.push_back(op);
           }
         }
@@ -795,13 +735,8 @@ void CreateDbsPass::createDbAllocOps() {
         AC->create<DbAllocOp>(loc, mode, route, allocType, dbMode, elementType,
                               sizes, elementSizes, partitionMode);
 
-    {
-      OpBuilder::InsertionGuard contractGuard(AC->getBuilder());
-      AC->setInsertionPointAfter(dbAllocOp);
-      if (auto contractInfo = getLoweringContract(alloc, AC->getBuilder(), loc))
-        upsertLoweringContract(AC->getBuilder(), loc, dbAllocOp.getPtr(),
-                               *contractInfo);
-    }
+    projectSemanticContractToDbValue(alloc, dbAllocOp.getOperation(),
+                                     dbAllocOp.getPtr());
 
     /// Initialize global DBs
     initializeGlobalDbIfNeeded(alloc, dbAllocOp, sizes, allocType);
@@ -1012,7 +947,8 @@ Value CreateDbsPass::findParentAcquireSource(EdtOp edt, Operation *dbAllocOp,
 
     if (Operation *dbOp = DbUtils::getUnderlyingDb(v)) {
       if (auto acquire = dyn_cast<DbAcquireOp>(dbOp)) {
-        if (!accessModeCanSeedNestedAcquire(acquire.getMode(), requestedMode))
+        if (!DbAnalysis::accessModeCanSeedNestedAcquire(acquire.getMode(),
+                                                        requestedMode))
           return false;
       }
     }
@@ -1201,7 +1137,7 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       /// If this EDT has no explicit db_control hints for the memref, infer
       /// per-EDT access from actual loads/stores before falling back.
       if (acquireMode == ArtsMode::uninitialized) {
-        acquireMode = inferEdtAccessMode(underlyingOp, edt);
+        acquireMode = AM->getDbAnalysis().inferEdtAccessMode(underlyingOp, edt);
         if (acquireMode == ArtsMode::uninitialized) {
           acquireMode = (info.accessMode == ArtsMode::uninitialized)
                             ? ArtsMode::inout
@@ -1253,16 +1189,9 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
         AC->setInsertionPointToStart(&edt.getBody().front());
       auto acquireOp = createAcquire(edt.getLoc());
 
-      copyContractAttrs(edt.getOperation(), acquireOp.getOperation());
-      {
-        OpBuilder::InsertionGuard contractGuard(AC->getBuilder());
-        AC->setInsertionPointAfter(acquireOp);
-        Value contractTarget = acquireOp.getPtr();
-        if (auto contractInfo = getLoweringContract(
-                edt.getOperation(), AC->getBuilder(), edt.getLoc()))
-          upsertLoweringContract(AC->getBuilder(), edt.getLoc(), contractTarget,
-                                 *contractInfo);
-      }
+      projectSemanticContractToDbValue(
+          edt.getOperation(), acquireOp.getOperation(), acquireOp.getPtr(),
+          OperationContractTransferPolicy::IncludeEffectiveDepPatternFallback);
 
       if (!depGroup.empty()) {
         /// Explicit DbControlOp-derived acquires always preserve their access
@@ -1314,7 +1243,7 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
         edt.walk([&](Operation *op) {
           if (op->getParentOfType<EdtOp>() != edt)
             return;
-          if (!opMatchesAccessMode(op, underlyingOp, acquireMode))
+          if (!DbAnalysis::opMatchesAccessMode(op, underlyingOp, acquireMode))
             return;
           addOpIfNew(op);
         });

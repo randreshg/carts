@@ -180,16 +180,23 @@ unsigned DbTransformsPass::persistContracts() {
       if (!contractSummary)
         continue;
 
-      if (!contractSummary->refinedByDbAnalysis)
+      if (!contractSummary->facts)
         continue;
 
-      /// The contract has been refined by DbAnalysis -- persist it to IR
-      /// so that downstream lowering passes can read the refined depPattern,
-      /// ownerDims, partitionMode, etc. directly from the operation.
+      LoweringContractInfo persistedContract = contractSummary->contract;
+      const bool needsRefinedMarker = !persistedContract.postDbRefined;
+      if (needsRefinedMarker)
+        persistedContract.postDbRefined = true;
+
+      if (!contractSummary->refinedByDbAnalysis && !needsRefinedMarker)
+        continue;
+
+      /// Persist post-DB contract payload on the acquire pointer as the
+      /// canonical source consumed by downstream passes.
       OpBuilder builder(acquire.getContext());
       builder.setInsertionPointAfter(acquire.getOperation());
       upsertLoweringContract(builder, acquire.getLoc(), acquire.getPtr(),
-                             contractSummary->contract);
+                             persistedContract);
       ++count;
 
       ARTS_DEBUG("DT-1: persisted contract for acquire " << acquire);

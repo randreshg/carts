@@ -80,8 +80,8 @@ struct EdtDistributionPass
         EdtDistributionKind kind = heuristics.chooseKind(strategy, pattern);
         if (pattern == EdtDistributionPattern::stencil &&
             hasSupportedBlockHalo(forOp.getOperation())) {
-          if (auto ownerDims = getStencilOwnerDims(forOp.getOperation());
-              ownerDims && ownerDims->size() >= 2) {
+          if (auto blockShape = getStencilBlockShape(forOp.getOperation());
+              blockShape && blockShape->size() >= 2) {
             kind = EdtDistributionKind::tiling_2d;
           }
         }

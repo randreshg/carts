@@ -455,8 +455,6 @@ mlir::arts::deriveAcquireRewriteContract(DbAcquireOp acquire) {
   AcquireRewriteContract contract;
   auto info = getLoweringContract(acquire.getPtr());
   if (!info)
-    info = getSemanticContract(acquire.getOperation());
-  if (!info)
     return contract;
 
   contract.ownerDims.assign(info->ownerDims.begin(), info->ownerDims.end());
@@ -556,6 +554,43 @@ mlir::arts::upsertLoweringContract(OpBuilder &builder, Location loc,
       stale->erase();
 
   return contract;
+}
+
+void mlir::arts::transferOperationContract(
+    Operation *source, Operation *target,
+    OperationContractTransferPolicy policy) {
+  if (!source || !target)
+    return;
+
+  if (policy ==
+      OperationContractTransferPolicy::IncludeEffectiveDepPatternFallback) {
+    copyContractAttrs(source, target);
+    return;
+  }
+  copySemanticContractAttrs(source, target);
+}
+
+void mlir::arts::transferLoweringContract(Operation *source, Value target,
+                                          OpBuilder &builder, Location loc) {
+  if (!source || !target)
+    return;
+
+  if (auto info = getLoweringContract(source, builder, loc))
+    upsertLoweringContract(builder, loc, target, *info);
+}
+
+void mlir::arts::transferValueContract(Value source, Value target,
+                                       OpBuilder &builder, Location loc) {
+  copyLoweringContract(source, target, builder, loc);
+}
+
+void mlir::arts::transferContract(
+    Operation *sourceOp, Operation *targetOp, Value sourceContractTarget,
+    Value targetContractTarget, OpBuilder &builder, Location loc,
+    OperationContractTransferPolicy policy) {
+  transferOperationContract(sourceOp, targetOp, policy);
+  transferValueContract(sourceContractTarget, targetContractTarget, builder,
+                        loc);
 }
 
 void mlir::arts::copyLoweringContract(Value source, Value target,
