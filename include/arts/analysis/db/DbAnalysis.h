@@ -141,6 +141,23 @@ public:
                                                   OpBuilder &builder);
   std::optional<AcquireContractSummary>
   getAcquireContractSummary(DbAcquireOp acquire);
+  AcquireRewriteContract getAcquireRewriteContract(DbAcquireOp acquire);
+  AccessPattern resolveCanonicalAcquireAccessPattern(
+      DbAcquireOp acquire, const AcquireContractSummary *summary = nullptr,
+      const DbAcquirePartitionFacts *facts = nullptr);
+  ArtsDepPattern resolveCanonicalAcquireDepPattern(
+      DbAcquireOp acquire, const AcquireContractSummary *summary = nullptr,
+      const DbAcquirePartitionFacts *facts = nullptr);
+  bool hasCanonicalAcquireStencilSemantics(
+      DbAcquireOp acquire, const AcquireContractSummary *summary = nullptr,
+      const DbAcquirePartitionFacts *facts = nullptr);
+  ArtsMode inferEdtAccessMode(Operation *underlyingOp, EdtOp edt) const;
+  static ArtsMode classifyMemrefUserAccessMode(Operation *op,
+                                               Operation *underlyingOp);
+  static bool opMatchesAccessMode(Operation *op, Operation *underlyingOp,
+                                  ArtsMode requestedMode);
+  static bool accessModeCanSeedNestedAcquire(ArtsMode availableMode,
+                                             ArtsMode requestedMode);
   bool operationHasDistributedDbContract(Operation *op);
   bool operationHasPeerInferredPartitionDims(Operation *op);
   /// Raw partition facts remain available for legality/detail consumers inside

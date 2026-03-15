@@ -41,10 +41,9 @@ DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
         /*partition_indices=*/SmallVector<Value>{},
         /*partition_offsets=*/SmallVector<Value>{},
         /*partition_sizes=*/SmallVector<Value>{});
-    copySemanticContractAttrs(in.parentAcquire.getOperation(),
-                              coarseAcquire.getOperation());
-    copyLoweringContract(in.parentAcquire.getPtr(), coarseAcquire.getPtr(),
-                         in.AC->getBuilder(), in.loc);
+    transferContract(in.parentAcquire.getOperation(),
+                     coarseAcquire.getOperation(), in.parentAcquire.getPtr(),
+                     coarseAcquire.getPtr(), in.AC->getBuilder(), in.loc);
     if (in.parentAcquire.getPreserveAccessMode())
       coarseAcquire.setPreserveAccessMode();
     if (in.parentAcquire.getPreserveDepEdge())
@@ -174,10 +173,9 @@ DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
       /*partition_indices=*/SmallVector<Value>{},
       /*partition_offsets=*/partitionOffsets,
       /*partition_sizes=*/partitionHintSizes);
-  copySemanticContractAttrs(in.parentAcquire.getOperation(),
-                            blockAcquire.getOperation());
-  copyLoweringContract(in.parentAcquire.getPtr(), blockAcquire.getPtr(),
-                       in.AC->getBuilder(), in.loc);
+  transferContract(in.parentAcquire.getOperation(), blockAcquire.getOperation(),
+                   in.parentAcquire.getPtr(), blockAcquire.getPtr(),
+                   in.AC->getBuilder(), in.loc);
   if (in.parentAcquire.getPreserveAccessMode())
     blockAcquire.setPreserveAccessMode();
   if (in.parentAcquire.getPreserveDepEdge())
