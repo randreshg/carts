@@ -584,14 +584,13 @@ static bool isOutOfPlaceStencil(ForOp artsFor, MatchResult &result) {
   if (invalid || loads.empty() || stores.empty())
     return false;
 
-  Value outputMemref = stores.front().rootMemref;
+  DenseSet<Value> outputMemrefs;
   DenseMap<unsigned, int64_t> ivToOwnerDim;
   DenseMap<unsigned, unsigned> ivToOwnerAxis;
   SmallVector<int64_t, 4> ownerDims;
 
   for (const LogicalAccess &store : stores) {
-    if (store.rootMemref != outputMemref)
-      return false;
+    outputMemrefs.insert(store.rootMemref);
     for (auto [dim, idx] : llvm::enumerate(store.indices)) {
       IndexExpr expr = classifyStoreIndex(idx, spatialIvs);
       if (!expr.valid)
@@ -616,7 +615,8 @@ static bool isOutOfPlaceStencil(ForOp artsFor, MatchResult &result) {
   bool hasHalo = false;
 
   for (const LogicalAccess &load : loads) {
-    if (load.rootMemref == outputMemref)
+    const bool readsOutputValue = outputMemrefs.contains(load.rootMemref);
+    if (readsOutputValue)
       return false;
     DenseSet<unsigned> seenOwnerIvs;
     for (auto [dim, idx] : llvm::enumerate(load.indices)) {
@@ -646,12 +646,21 @@ static bool isOutOfPlaceStencil(ForOp artsFor, MatchResult &result) {
 
   int64_t maxAbsOffset = 0;
   unsigned haloDims = 0;
+  bool hasNegativeHalo = false;
+  bool hasPositiveHalo = false;
   for (unsigned i = 0; i < ownerDims.size(); ++i) {
     maxAbsOffset = std::max<int64_t>(maxAbsOffset, std::abs(minOffsets[i]));
     maxAbsOffset = std::max<int64_t>(maxAbsOffset, std::abs(maxOffsets[i]));
+    hasNegativeHalo = hasNegativeHalo || minOffsets[i] < 0;
+    hasPositiveHalo = hasPositiveHalo || maxOffsets[i] > 0;
     if (minOffsets[i] != 0 || maxOffsets[i] != 0)
       haloDims++;
   }
+
+  /// One-sided neighborhoods encode directional dependencies that cannot be
+  /// represented by this out-of-place stencil contract.
+  if (!hasNegativeHalo || !hasPositiveHalo)
+    return false;
 
   ArtsDepPattern pattern = ArtsDepPattern::stencil_tiling_nd;
   if (maxAbsOffset > 1) {
@@ -662,7 +671,7 @@ static bool isOutOfPlaceStencil(ForOp artsFor, MatchResult &result) {
 
   result.artsFor = artsFor;
   result.parentEdt = artsFor->getParentOfType<EdtOp>();
-  result.outputMemref = outputMemref;
+  result.outputMemref = stores.front().rootMemref;
   result.ownerDims = ownerDims;
   result.minOffsets = minOffsets;
   result.maxOffsets = maxOffsets;

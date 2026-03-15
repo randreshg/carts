@@ -469,14 +469,13 @@ void setupConcurrencyOpt(PassManager &pm, arts::AnalysisManager *AM) {
 
 /// Epoch creation passes.
 void setupEpochs(PassManager &pm) {
-  pm.addPass(arts::createLoweringContractCleanupPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createCreateEpochsPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
 }
 
 /// Pre-lowering passes.
-void setupPreLowering(PassManager &pm) {
+void setupPreLowering(PassManager &pm, arts::AnalysisManager *AM) {
   /// TODO(PERF): EdtAllocaSinkingPass runs twice (setupConcurrencyOpt and
   /// here).
   pm.addPass(arts::createEdtAllocaSinkingPass());
@@ -486,7 +485,7 @@ void setupPreLowering(PassManager &pm) {
   pm.addPass(arts::createDbLoweringPass(ArtsIdStride));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
-  pm.addPass(arts::createEdtLoweringPass(ArtsIdStride));
+  pm.addPass(arts::createEdtLoweringPass(AM, ArtsIdStride));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createLoopInvariantCodeMotionPass());
@@ -640,7 +639,7 @@ setupPassManager(ModuleOp module, MLIRContext &context,
        [&](PassManager &pm) { setupEpochs(pm); }},
       {PipelineStage::PreLowering,
        "Error when pre-lowering DBs, EDTs, and Epochs",
-       [&](PassManager &pm) { setupPreLowering(pm); }},
+       [&](PassManager &pm) { setupPreLowering(pm, AM.get()); }},
       {PipelineStage::ArtsToLLVM, "Error when converting ARTS to LLVM",
        [&](PassManager &pm) {
          setupArtsToLLVM(pm, Debug, DistributedDb, &machine);

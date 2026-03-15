@@ -72,7 +72,18 @@ using namespace mlir::arts;
 
 namespace {
 
-static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire) {
+static AcquireRewriteContract
+resolveAcquireRewriteContract(mlir::arts::AnalysisManager *AM,
+                              DbAcquireOp acquire) {
+  if (!acquire)
+    return AcquireRewriteContract{};
+  if (!AM)
+    return deriveAcquireRewriteContract(acquire);
+  return AM->getDbAnalysis().getAcquireRewriteContract(acquire);
+}
+
+static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
+                                  const AcquireRewriteContract &contract) {
   if (!AC || !acquire)
     return;
 
@@ -95,10 +106,9 @@ static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire) {
   if (rank == 0)
     return;
 
-  auto contractInfo = getLoweringContract(acquire.getPtr());
-  if (!contractInfo)
-    contractInfo = getSemanticContract(acquire.getOperation());
-  bool hasContractHalo = contractInfo && contractInfo->supportedBlockHalo;
+  bool hasContractHalo =
+      contract.applyStencilHalo || !contract.haloMinOffsets.empty() ||
+      !contract.haloMaxOffsets.empty();
   bool needsStructuralNormalization =
       rank > 1 || *mode == PartitionMode::stencil;
   if (!hasContractHalo && !needsStructuralNormalization)
@@ -112,13 +122,23 @@ static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire) {
   auto outerSizes = alloc.getSizes();
   auto elementSizes = alloc.getElementSizes();
   SmallVector<unsigned, 4> dims;
-  if (contractInfo) {
-    dims = resolveContractOwnerDims(*contractInfo, rank);
-  } else {
+  if (!contract.ownerDims.empty()) {
+    dims.reserve(rank);
+    for (int64_t ownerDim : contract.ownerDims) {
+      if (ownerDim < 0)
+        continue;
+      dims.push_back(static_cast<unsigned>(ownerDim));
+      if (dims.size() >= rank)
+        break;
+    }
+  }
+  if (dims.empty()) {
     dims.reserve(rank);
     for (unsigned dim = 0; dim < rank; ++dim)
       dims.push_back(dim);
   }
+  if (dims.size() > rank)
+    dims.resize(rank);
 
   if (dims.size() > outerSizes.size() || dims.size() > elementSizes.size())
     return;
@@ -169,6 +189,19 @@ static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire) {
 
   acquire.getOffsetsMutable().assign(offsets);
   acquire.getSizesMutable().assign(sizes);
+}
+
+struct DepSourceInfo {
+  DbAcquireOp dbAcquire;
+  DepDbAcquireOp depDbAcquire;
+};
+
+static DepSourceInfo resolveDepSource(Value dep) {
+  Operation *underlyingDb = DbUtils::getUnderlyingDb(dep);
+  DepSourceInfo info;
+  info.dbAcquire = dyn_cast_or_null<DbAcquireOp>(underlyingDb);
+  info.depDbAcquire = dyn_cast_or_null<DepDbAcquireOp>(underlyingDb);
+  return info;
 }
 
 ///===----------------------------------------------------------------------===///
@@ -235,13 +268,16 @@ private:
 /// EDT Lowering Pass Implementation
 ///===----------------------------------------------------------------------===///
 struct EdtLoweringPass : public arts::EdtLoweringBase<EdtLoweringPass> {
-  explicit EdtLoweringPass(uint64_t idStride = IdRegistry::DefaultStride)
-      : idStride(idStride) {}
+  explicit EdtLoweringPass(mlir::arts::AnalysisManager *AM = nullptr,
+                           uint64_t idStride = IdRegistry::DefaultStride)
+      : idStride(idStride), AM(AM) {}
   void runOnOperation() override;
 
 private:
   /// Core transformation methods
   LogicalResult lowerEdt(EdtOp edtOp);
+  void gatherLowerableTaskEdts(SmallVectorImpl<EdtOp> &taskEdts);
+  Value computeDependencyCount(Location loc, ArrayRef<Value> edtDeps);
 
   /// Function outlining with ARTS signature
   func::FuncOp createOutlinedFunction(EdtOp edtOp, EdtEnvManager &envManager);
@@ -272,6 +308,7 @@ private:
   uint64_t idStride = IdRegistry::DefaultStride;
   unsigned functionCounter = 0;
   ModuleOp module;
+  mlir::arts::AnalysisManager *AM = nullptr;
   ArtsCodegen *AC = nullptr;
   IdRegistry idRegistry;
 };
@@ -290,35 +327,38 @@ void EdtLoweringPass::runOnOperation() {
   ARTS_INFO_HEADER(EdtLoweringPass);
   ARTS_DEBUG_REGION(module.dump(););
 
-  /// Collect and lower all task EDTs
-  {
-    ARTS_DEBUG_HEADER(TaskEdtLowering);
-    SmallVector<EdtOp, 8> taskEdts;
-    module.walk<WalkOrder::PostOrder>([&](EdtOp edtOp) {
-      /// Demote any remaining non-task EDTs (e.g., single) so we can lower
-      /// them uniformly. Parallel EDTs should have been handled by
-      /// ParallelEdtLowering already.
-      if (edtOp.getType() != EdtType::task) {
-        ARTS_DEBUG("Demoting non-task EDT to task: " << edtOp);
-        edtOp.setType(EdtType::task);
-        arts::setWorkers(edtOp.getOperation(), 0);
-        arts::setWorkersPerNode(edtOp.getOperation(), 0);
-        setNowait(edtOp, false);
-      }
-      taskEdts.push_back(edtOp);
-    });
-    ARTS_INFO("Found " << taskEdts.size() << " task EDTs to lower");
-    for (EdtOp edtOp : taskEdts) {
-      if (failed(lowerEdt(edtOp))) {
-        edtOp.emitError("Failed to lower task EDT");
-        return signalPassFailure();
-      }
+  /// Gather candidate EDTs and lower them.
+  ARTS_DEBUG_HEADER(TaskEdtLowering);
+  SmallVector<EdtOp, 8> taskEdts;
+  gatherLowerableTaskEdts(taskEdts);
+  ARTS_INFO("Found " << taskEdts.size() << " task EDTs to lower");
+  for (EdtOp edtOp : taskEdts) {
+    if (failed(lowerEdt(edtOp))) {
+      edtOp.emitError("Failed to lower task EDT");
+      return signalPassFailure();
     }
   }
 
   ARTS_INFO_FOOTER(EdtLoweringPass);
   AC = nullptr;
   ARTS_DEBUG_REGION(module.dump(););
+}
+
+void EdtLoweringPass::gatherLowerableTaskEdts(
+    SmallVectorImpl<EdtOp> &taskEdts) {
+  module.walk<WalkOrder::PostOrder>([&](EdtOp edtOp) {
+    /// Demote any remaining non-task EDTs (e.g., single) so we can lower
+    /// them uniformly. Parallel EDTs should have been handled by
+    /// ParallelEdtLowering already.
+    if (edtOp.getType() != EdtType::task) {
+      ARTS_DEBUG("Demoting non-task EDT to task: " << edtOp);
+      edtOp.setType(EdtType::task);
+      arts::setWorkers(edtOp.getOperation(), 0);
+      arts::setWorkersPerNode(edtOp.getOperation(), 0);
+      setNowait(edtOp, false);
+    }
+    taskEdts.push_back(edtOp);
+  });
 }
 
 ///===----------------------------------------------------------------------===///
@@ -352,10 +392,9 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   /// same DB-space contract.
   for (Value dep : edtDeps)
     if (auto acquire = dep.getDefiningOp<DbAcquireOp>())
-      normalizeTaskDepSlice(AC, acquire);
+      normalizeTaskDepSlice(AC, acquire,
+                            resolveAcquireRewriteContract(AM, acquire));
 
-  /// Create local variables for parameter packing/dedup
-  DenseMap<Value, unsigned> valueToPackIndex;
   SmallVector<Type> packTypes;
 
   /// Create edt outlined function
@@ -373,15 +412,7 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   }
 
   /// Calculate dependency count from the dependency view of each DB.
-  /// For partitioned acquires, this uses slice sizes (not full allocation
-  /// sizes) so depCount matches the slots produced by rec_dep lowering.
-  Value depCount = AC->createIntConstant(0, AC->Int32, loc);
-  for (Value dep : edtDeps) {
-    SmallVector<Value> sizes = DbUtils::getDepSizesFromDb(dep);
-    Value numElements = AC->create<DbNumElementsOp>(loc, sizes);
-    numElements = AC->castToInt(AC->Int32, numElements, loc);
-    depCount = AC->create<arith::AddIOp>(loc, depCount, numElements);
-  }
+  Value depCount = computeDependencyCount(loc, edtDeps);
 
   /// Create the outline operation at the same location as the EDT
   AC->setInsertionPoint(edtOp);
@@ -423,6 +454,20 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   edtOp.erase();
 
   return success();
+}
+
+Value EdtLoweringPass::computeDependencyCount(Location loc,
+                                              ArrayRef<Value> edtDeps) {
+  /// For partitioned acquires, this uses slice sizes (not full allocation
+  /// sizes) so depCount matches the slots produced by rec_dep lowering.
+  Value depCount = AC->createIntConstant(0, AC->Int32, loc);
+  for (Value dep : edtDeps) {
+    SmallVector<Value> sizes = DbUtils::getDepSizesFromDb(dep);
+    Value numElements = AC->create<DbNumElementsOp>(loc, sizes);
+    numElements = AC->castToInt(AC->Int32, numElements, loc);
+    depCount = AC->create<arith::AddIOp>(loc, depCount, numElements);
+  }
+  return depCount;
 }
 
 ///===----------------------------------------------------------------------===///
@@ -697,13 +742,12 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
   SmallVector<int32_t> acquireModes;
   bool hasEsdDeps = false;
 
-  for (unsigned depIndex = 0; depIndex < deps.size(); ++depIndex) {
-    Value dep = deps[depIndex];
+  for (Value dep : deps) {
     /// Handle both DbAcquireOp and DepDbAcquireOp as dependency sources, even
     /// when they are threaded through block arguments.
-    Operation *underlyingDb = DbUtils::getUnderlyingDb(dep);
-    auto dbAcquireOp = dyn_cast_or_null<DbAcquireOp>(underlyingDb);
-    auto depDbAcquireOp = dyn_cast_or_null<DepDbAcquireOp>(underlyingDb);
+    DepSourceInfo depSource = resolveDepSource(dep);
+    auto dbAcquireOp = depSource.dbAcquire;
+    auto depDbAcquireOp = depSource.depDbAcquire;
     if (!dbAcquireOp && !depDbAcquireOp) {
       return mlir::emitError(
                  loc, "Dep must be from DbAcquireOp or DepDbAcquireOp, got: ")
@@ -1131,11 +1175,16 @@ namespace mlir {
 namespace arts {
 
 std::unique_ptr<Pass> createEdtLoweringPass() {
-  return std::make_unique<EdtLoweringPass>();
+  return std::make_unique<EdtLoweringPass>(nullptr);
 }
 
 std::unique_ptr<Pass> createEdtLoweringPass(uint64_t idStride) {
-  return std::make_unique<EdtLoweringPass>(idStride);
+  return std::make_unique<EdtLoweringPass>(nullptr, idStride);
+}
+
+std::unique_ptr<Pass> createEdtLoweringPass(AnalysisManager *AM,
+                                            uint64_t idStride) {
+  return std::make_unique<EdtLoweringPass>(AM, idStride);
 }
 
 } // namespace arts

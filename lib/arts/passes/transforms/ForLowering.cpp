@@ -102,65 +102,41 @@ struct TaskAcquireWindow {
   Value dbSize;
 };
 
-/// Derive the acquire rewrite contract from the explicit lowering contract
-/// first, then refine it with post-DB DbAnalysis facts when that contract is
-/// still incomplete.
-///
-/// This keeps ForLowering in the "consume contracts" role:
-/// - explicit contracts remain the primary source of truth
-/// - DbAnalysis may strengthen them using the same contract vocabulary after
-///   DB creation
+/// Resolve acquire rewrite contracts through shared DB analysis first, then
+/// fall back to direct contract derivation when analysis is unavailable.
 static AcquireRewriteContract
-getAcquireRewriteContractForLowering(mlir::arts::AnalysisManager *AM,
-                                     DbAcquireOp acquire) {
-  AcquireRewriteContract contract = deriveAcquireRewriteContract(acquire);
-  if (!AM || !acquire)
-    return contract;
+resolveAcquireRewriteContract(mlir::arts::AnalysisManager *AM,
+                              DbAcquireOp acquire) {
+  if (!acquire)
+    return AcquireRewriteContract{};
+  if (!AM)
+    return deriveAcquireRewriteContract(acquire);
+  return AM->getDbAnalysis().getAcquireRewriteContract(acquire);
+}
 
-  auto contractSummary = AM->getDbAnalysis().getAcquireContractSummary(acquire);
-  if (!contractSummary)
-    return contract;
+static DistributionStrategy resolveDistributionStrategy(EdtOp originalParallel,
+                                                        ForOp forOp) {
+  /// Prefer explicit distribution_kind stamped by EdtDistributionPass. Fall
+  /// back to concurrency-derived strategy when the annotation is absent.
+  auto strategy = DistributionHeuristics::analyzeStrategy(
+      originalParallel.getConcurrency(), /*machine=*/nullptr);
+  if (auto selectedKind = getEdtDistributionKind(forOp.getOperation()))
+    strategy.kind = DistributionHeuristics::toDistributionKind(*selectedKind);
+  return strategy;
+}
 
-  if (contract.ownerDims.empty())
-    contract.ownerDims.assign(contractSummary->contract.ownerDims.begin(),
-                              contractSummary->contract.ownerDims.end());
-
-  if (contract.haloMinOffsets.empty()) {
-    if (auto mins = contractSummary->contract.getStaticMinOffsets())
-      contract.haloMinOffsets = *mins;
-  }
-  if (contract.haloMaxOffsets.empty()) {
-    if (auto maxs = contractSummary->contract.getStaticMaxOffsets())
-      contract.haloMaxOffsets = *maxs;
-  }
-
-  const bool hasExplicitStencilContract =
-      contractSummary->contract.hasExplicitStencilContract();
-  bool supportsStencilHalo = hasExplicitStencilContract &&
-                             contractSummary->contract.supportsBlockHalo() &&
-                             !contract.haloMinOffsets.empty() &&
-                             !contract.haloMaxOffsets.empty();
-
-  if (acquire.getMode() == ArtsMode::in && hasExplicitStencilContract &&
-      supportsStencilHalo) {
-    if (contract.haloMinOffsets.empty() && !contract.haloMaxOffsets.empty()) {
-      contract.haloMinOffsets.resize(contract.haloMaxOffsets.size(), 0);
-      for (size_t i = 0; i < contract.haloMaxOffsets.size(); ++i)
-        if (contract.haloMaxOffsets[i] > 0)
-          contract.haloMinOffsets[i] = -contract.haloMaxOffsets[i];
-    } else if (contract.haloMinOffsets.size() ==
-               contract.haloMaxOffsets.size()) {
-      for (size_t i = 0; i < contract.haloMinOffsets.size(); ++i)
-        if (contract.haloMinOffsets[i] == 0 && contract.haloMaxOffsets[i] > 0)
-          contract.haloMinOffsets[i] = -contract.haloMaxOffsets[i];
+static std::optional<EdtDistributionPattern>
+resolveDistributionPattern(mlir::arts::AnalysisManager *AM, ForOp forOp,
+                           EdtOp originalParallel) {
+  if (auto pattern = getEdtDistributionPattern(forOp.getOperation()))
+    return pattern;
+  if (AM) {
+    if (auto pattern = AM->getDbAnalysis().getLoopDistributionPattern(forOp);
+        pattern && *pattern != EdtDistributionPattern::unknown) {
+      return pattern;
     }
-
-    contract.applyStencilHalo = true;
-    contract.usePartitionSliceAsDepWindow = false;
-    contract.preserveParentDepRange = false;
   }
-
-  return contract;
+  return getEdtDistributionPattern(originalParallel.getOperation());
 }
 
 /// Plan one task-local acquire rewrite from the already-selected distribution
@@ -297,7 +273,8 @@ static std::optional<TaskAcquireWindow> computeTaskAcquireWindowInBlockSpace(
     DistributionKind distributionKind,
     std::optional<EdtDistributionPattern> distributionPattern,
     Value plannedElementOffset, Value plannedElementSize,
-    Value plannedElementSizeSeed, bool usesStencilHalo) {
+    Value plannedElementSizeSeed, bool usesStencilHalo,
+    const AcquireRewriteContract &rewriteContract) {
   if (!AC || !parentAcquire || !taskAcquire)
     return std::nullopt;
 
@@ -334,8 +311,6 @@ static std::optional<TaskAcquireWindow> computeTaskAcquireWindowInBlockSpace(
   /// block window used by DB slice metadata on 1-D / row-owned plans.
   Value elementOffset = plannedElementOffset;
   Value elementSize = plannedElementSizeSeed;
-  AcquireRewriteContract rewriteContract =
-      deriveAcquireRewriteContract(parentAcquire);
   const bool useRewrittenWindow = rewriteContract.usePartitionSliceAsDepWindow;
   const bool useTaskDepWindow =
       usesStencilHalo || rewriteContract.applyStencilHalo;
@@ -610,6 +585,9 @@ private:
   ModuleOp module;
   mlir::arts::AnalysisManager *AM = nullptr;
 
+  void gatherLowerableEdts(SmallVectorImpl<EdtOp> &lowerableEdts);
+  void lowerCollectedEdts(ArrayRef<EdtOp> lowerableEdts);
+
   /// Process a parallel EDT containing arts_for operations
   void lowerParallelEdt(EdtOp parallelEdt);
 
@@ -786,18 +764,9 @@ void LoopInfo::computeIterationsAndChunks() {
 void ForLoweringPass::runOnOperation() {
   module = getOperation();
 
-  /// Walk EDTs that may carry arts.for and lower them.
+  /// Phase 1: Gather candidate EDTs carrying arts.for operations.
   SmallVector<EdtOp, 4> lowerableEdts;
-  module.walk([&](EdtOp edt) {
-    if (edt.getType() != EdtType::parallel && edt.getType() != EdtType::task)
-      return;
-
-    bool hasForOps = false;
-    edt.getBody().walk([&](ForOp) { hasForOps = true; });
-
-    if (hasForOps)
-      lowerableEdts.push_back(edt);
-  });
+  gatherLowerableEdts(lowerableEdts);
 
   /// Skip pass bookkeeping/logging entirely when no arts.for is present.
   if (lowerableEdts.empty()) {
@@ -808,11 +777,29 @@ void ForLoweringPass::runOnOperation() {
   ARTS_INFO_HEADER(ForLowering);
   ARTS_DEBUG_REGION(module.dump(););
 
-  for (EdtOp parallelEdt : lowerableEdts)
-    lowerParallelEdt(parallelEdt);
+  /// Phase 2-4: Evaluate lowering policy, build rewrite plans, and apply.
+  lowerCollectedEdts(lowerableEdts);
 
   ARTS_INFO_FOOTER(ForLowering);
   ARTS_DEBUG_REGION(module.dump(););
+}
+
+void ForLoweringPass::gatherLowerableEdts(
+    SmallVectorImpl<EdtOp> &lowerableEdts) {
+  module.walk([&](EdtOp edt) {
+    if (edt.getType() != EdtType::parallel && edt.getType() != EdtType::task)
+      return;
+
+    bool hasForOps = false;
+    edt.getBody().walk([&](ForOp) { hasForOps = true; });
+    if (hasForOps)
+      lowerableEdts.push_back(edt);
+  });
+}
+
+void ForLoweringPass::lowerCollectedEdts(ArrayRef<EdtOp> lowerableEdts) {
+  for (EdtOp parallelEdt : lowerableEdts)
+    lowerParallelEdt(parallelEdt);
 }
 
 void ForLoweringPass::lowerParallelEdt(EdtOp parallelEdt) {
@@ -971,14 +958,7 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   ARTS_INFO(" - Lowering arts.for with DB rewiring (split pattern)");
 
   /// Read distribution strategy selected by EdtDistributionPass.
-  /// Fallback to concurrency-driven default when annotation is missing.
-  auto strategy = DistributionHeuristics::analyzeStrategy(
-      originalParallel.getConcurrency(), /*machine=*/nullptr);
-  std::optional<EdtDistributionKind> selectedKindAttr =
-      getEdtDistributionKind(forOp.getOperation());
-  if (selectedKindAttr)
-    strategy.kind =
-        DistributionHeuristics::toDistributionKind(*selectedKindAttr);
+  DistributionStrategy strategy = resolveDistributionStrategy(originalParallel, forOp);
 
   Value zero;
   Value one;
@@ -1070,9 +1050,9 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   /// Create task EDT with DB rewiring
   EdtOp taskEdt = createTaskEdtWithRewiring(
       &AC, *loopInfoStorage, forOp, workerIV, originalParallel, redInfo);
-  copySemanticContractAttrs(forOp.getOperation(), taskEdt.getOperation());
+  transferOperationContract(forOp.getOperation(), taskEdt.getOperation());
   if (forEpoch)
-    copySemanticContractAttrs(forOp.getOperation(), forEpoch->getOperation());
+    transferOperationContract(forOp.getOperation(), forEpoch->getOperation());
 
   /// After worker loop, create result EDT (if reductions)
   AC.setInsertionPointAfter(workerLoop);
@@ -1252,10 +1232,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     bool chunkUsesStencilHalo = false;
 
     std::optional<EdtDistributionPattern> distributionPattern =
-        getEdtDistributionPattern(forOp.getOperation());
-    if (!distributionPattern)
-      distributionPattern =
-          getEdtDistributionPattern(originalParallel.getOperation());
+        resolveDistributionPattern(AM, forOp, originalParallel);
 
     AcquireRewritePlanningInput planningInput{
         AC,
@@ -1267,7 +1244,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         loopInfo.strategy.kind,
         distributionPattern,
         tiling2DGrid,
-        getAcquireRewriteContractForLowering(AM, parentAcqOp),
+        resolveAcquireRewriteContract(AM, parentAcqOp),
         acquireOffsetVal,
         acquireSizeVal,
         acquireHintSizeVal,
@@ -1310,7 +1287,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
           AC, loc, parentAcqOp, acquireOp, rootGuidValue, rootPtrValue,
           loopInfo.strategy.kind, distributionPattern, acquireOffsetVal,
           loopInfo.bounds.iterCount, acquireHintSizeVal,
-          shouldUseStencilWindow);
+          shouldUseStencilWindow, planningInput.rewriteContract);
       if (!window)
         return;
 
@@ -1380,10 +1357,9 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
             loc, parentAcqOp.getMode(), rootGuidValue, rootPtrValue,
             parentAcqOp.getPtr().getType(), mode, parentIndices, parentOffsets,
             parentSizes, parentPartIndices, parentPartOffsets, parentPartSizes);
-        copySemanticContractAttrs(parentAcqOp.getOperation(),
-                                  chunkAcqOp.getOperation());
-        copyLoweringContract(parentAcqOp.getPtr(), chunkAcqOp.getPtr(),
-                             AC->getBuilder(), loc);
+        transferContract(parentAcqOp.getOperation(), chunkAcqOp.getOperation(),
+                         parentAcqOp.getPtr(), chunkAcqOp.getPtr(),
+                         AC->getBuilder(), loc);
         chunkAcqOp.copyPartitionSegmentsFrom(parentAcqOp);
       }
 

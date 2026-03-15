@@ -254,8 +254,8 @@ void DbLoweringPass::convertDbAllocOps() {
       ARTS_DEBUG("  - DB arts.create_id=" << createId << " (base=" << baseId
                                           << " x stride=" << idStride << ")");
     }
-    copyLoweringContract(oldOp.getPtr(), newOp.getPtr(), AC->getBuilder(),
-                         newOp.getLoc());
+    transferValueContract(oldOp.getPtr(), newOp.getPtr(), AC->getBuilder(),
+                          newOp.getLoc());
     updateAllocUsers(oldOp, newOp);
     opsToRemove.insert(oldOp);
   }
@@ -399,8 +399,8 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
       newAcquireOp->setAttr(attr.getName(), attr.getValue());
   }
   newAcquireOp.copyPartitionSegmentsFrom(acquireOp);
-  copyLoweringContract(acquireOp.getPtr(), newAcquireOp.getPtr(),
-                       AC->getBuilder(), newAcquireOp.getLoc());
+  transferValueContract(acquireOp.getPtr(), newAcquireOp.getPtr(),
+                        AC->getBuilder(), newAcquireOp.getLoc());
   normalizeBlockHaloAcquireSlice(AC, newAcquireOp, sourcePtr);
   ARTS_DEBUG("  - New DbAcquireOp: " << newAcquireOp);
 

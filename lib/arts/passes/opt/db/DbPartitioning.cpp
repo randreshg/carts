@@ -221,120 +221,6 @@ summarizeAcquirePatterns(ArrayRef<DbAcquireNode *> acquireNodes,
                    : AcquirePatternSummary{};
 }
 
-/// Canonical fallback ordering for per-acquire access pattern retrieval.
-///
-/// Priority (highest to lowest):
-///   1. summary  - AcquireContractSummary (post-DB refined contract view)
-///   2. contract - LoweringContractInfo embedded in summary (stencil inference)
-///   3. node     - DbAcquireNode graph-backed classification
-///   4. facts    - DbAcquirePartitionFacts raw analysis
-///   5. raw attrs - operation attributes on the acquire op
-///
-/// Returns Unknown when no source provides a non-Unknown pattern.
-static AccessPattern getCanonicalAccessPattern(
-    DbAcquireOp acquire, const DbAnalysis::AcquireContractSummary *summary,
-    const DbAcquireNode *acqNode, const DbAcquirePartitionFacts *facts) {
-  /// 1. Summary (highest priority — post-DB refined contract view)
-  if (summary && summary->accessPattern != AccessPattern::Unknown) {
-    ARTS_DEBUG("    [canonical-access] resolved from summary: "
-               << static_cast<int>(summary->accessPattern));
-    return summary->accessPattern;
-  }
-  /// 2. Contract stencil inference (summary present but accessPattern Unknown)
-  if (hasExplicitStencilContract(summary)) {
-    ARTS_DEBUG(
-        "    [canonical-access] resolved from contract stencil semantics");
-    return AccessPattern::Stencil;
-  }
-  /// 3. Node (graph-backed classification)
-  if (acqNode) {
-    AccessPattern nodePattern = acqNode->getAccessPattern();
-    if (nodePattern != AccessPattern::Unknown) {
-      ARTS_DEBUG("    [canonical-access] resolved from node: "
-                 << static_cast<int>(nodePattern));
-      return nodePattern;
-    }
-  }
-  /// 4. Facts (raw analysis)
-  if (facts && facts->accessPattern != AccessPattern::Unknown) {
-    ARTS_DEBUG("    [canonical-access] resolved from facts: "
-               << static_cast<int>(facts->accessPattern));
-    return facts->accessPattern;
-  }
-  /// 5. Raw attributes (lowest priority)
-  if (acquire) {
-    if (auto rawPattern = getDbAccessPattern(acquire.getOperation())) {
-      /// Map DbAccessPattern to AccessPattern where possible.
-      if (*rawPattern == DbAccessPattern::stencil) {
-        ARTS_DEBUG("    [canonical-access] resolved from raw attr: stencil");
-        return AccessPattern::Stencil;
-      }
-      if (*rawPattern == DbAccessPattern::indexed) {
-        ARTS_DEBUG("    [canonical-access] resolved from raw attr: indexed");
-        return AccessPattern::Indexed;
-      }
-      if (*rawPattern == DbAccessPattern::uniform) {
-        ARTS_DEBUG("    [canonical-access] resolved from raw attr: uniform");
-        return AccessPattern::Uniform;
-      }
-    }
-  }
-  ARTS_DEBUG("    [canonical-access] no source resolved; returning Unknown");
-  return AccessPattern::Unknown;
-}
-
-/// Canonical fallback ordering for per-acquire dep pattern retrieval.
-///
-/// Priority (highest to lowest):
-///   1. summary  - LoweringContractInfo::depPattern from AcquireContractSummary
-///   2. node     - (not available for dep pattern today)
-///   3. facts    - DbAcquirePartitionFacts::depPattern
-///   4. raw attrs - operation attributes on the acquire op
-///
-/// Returns ArtsDepPattern::unknown when no source provides a known pattern.
-static ArtsDepPattern
-getCanonicalDepPattern(DbAcquireOp acquire,
-                       const DbAnalysis::AcquireContractSummary *summary,
-                       const DbAcquirePartitionFacts *facts) {
-  /// 1. Summary contract (highest priority)
-  if (summary && summary->contract.depPattern) {
-    ARTS_DEBUG("    [canonical-dep] resolved from summary contract: "
-               << static_cast<int>(*summary->contract.depPattern));
-    return *summary->contract.depPattern;
-  }
-  /// 2. Facts (raw analysis)
-  if (facts && facts->depPattern != ArtsDepPattern::unknown) {
-    ARTS_DEBUG("    [canonical-dep] resolved from facts: "
-               << static_cast<int>(facts->depPattern));
-    return facts->depPattern;
-  }
-  /// 3. Raw attributes (lowest priority)
-  if (acquire) {
-    if (auto rawDep = getDepPattern(acquire.getOperation());
-        rawDep && *rawDep != ArtsDepPattern::unknown) {
-      ARTS_DEBUG("    [canonical-dep] resolved from raw attr: "
-                 << static_cast<int>(*rawDep));
-      return *rawDep;
-    }
-  }
-  ARTS_DEBUG("    [canonical-dep] no source resolved; returning unknown");
-  return ArtsDepPattern::unknown;
-}
-
-/// Check whether an acquire has stencil-family access semantics using the
-/// canonical fallback ordering. This consolidates the stencil detection logic
-/// previously duplicated across multiple code paths.
-static bool hasCanonicalStencilSemantics(
-    DbAcquireOp acquire, const DbAnalysis::AcquireContractSummary *summary,
-    const DbAcquireNode *acqNode, const DbAcquirePartitionFacts *facts) {
-  AccessPattern ap =
-      getCanonicalAccessPattern(acquire, summary, acqNode, facts);
-  if (ap == AccessPattern::Stencil)
-    return true;
-  ArtsDepPattern dp = getCanonicalDepPattern(acquire, summary, facts);
-  return isStencilFamilyDepPattern(dp);
-}
-
 static bool isAcquireInfoConsistent(const AcquirePartitionInfo &lhs,
                                     const AcquirePartitionInfo &rhs) {
   if (lhs.mode != rhs.mode)
@@ -521,7 +407,7 @@ static void applyBoundsValid(DbAcquireOp acquireOp,
   transferAttributes(acquireOp.getOperation(), newAcquire.getOperation(),
                      /*excludes=*/{});
   newAcquire.copyPartitionSegmentsFrom(acquireOp);
-  copyLoweringContract(acquireOp.getPtr(), newAcquire.getPtr(), builder, loc);
+  transferValueContract(acquireOp.getPtr(), newAcquire.getPtr(), builder, loc);
 
   acquireOp.getGuid().replaceAllUsesWith(newAcquire.getGuid());
   acquireOp.getPtr().replaceAllUsesWith(newAcquire.getPtr());
@@ -571,20 +457,14 @@ static void lowerStencilAcquireBounds(ModuleOp module,
 
 /// Analyze a single acquire to determine its partition mode and chunk info.
 static AcquirePartitionInfo
-computeAcquirePartitionInfo(DbAcquireOp acquire, DbAcquireNode *acqNode,
+computeAcquirePartitionInfo(DbAnalysis &dbAnalysis, DbAcquireOp acquire,
                             const DbAnalysis::AcquireContractSummary *summary,
                             const DbAcquirePartitionFacts *facts,
                             OpBuilder &builder) {
   AcquirePartitionInfo info;
   info.acquire = acquire;
   DbAnalysis::AcquirePartitionSummary partitionSummary;
-  if (acqNode && acqNode->getAnalysis())
-    partitionSummary =
-        acqNode->getAnalysis()->analyzeAcquirePartition(acquire, builder);
-  else {
-    partitionSummary.mode = DbAnalysis::getPartitionModeFromStructure(acquire);
-    partitionSummary.isValid = false;
-  }
+  partitionSummary = dbAnalysis.analyzeAcquirePartition(acquire, builder);
   info.mode = partitionSummary.mode;
   info.partitionOffsets.assign(partitionSummary.partitionOffsets.begin(),
                                partitionSummary.partitionOffsets.end());
@@ -593,7 +473,7 @@ computeAcquirePartitionInfo(DbAcquireOp acquire, DbAcquireNode *acqNode,
   info.partitionDims.assign(partitionSummary.partitionDims.begin(),
                             partitionSummary.partitionDims.end());
   info.accessPattern =
-      getCanonicalAccessPattern(acquire, summary, acqNode, facts);
+      dbAnalysis.resolveCanonicalAcquireAccessPattern(acquire, summary, facts);
   info.isValid = partitionSummary.isValid;
   info.hasIndirectAccess = summary ? summary->hasIndirectAccess()
                                    : partitionSummary.hasIndirectAccess;
@@ -759,6 +639,9 @@ struct DbPartitioningPass
 
   /// Iterates over allocations and applies partitioning rewriters.
   bool partitionDb();
+  bool gatherPartitionFacts();
+  bool evaluatePolicyBuildPlansAndApply();
+  void validateAndPostCheck(bool changed);
 
   ///===--------------------------------------------------------------------===///
   /// Stencil Bounds Analysis
@@ -788,7 +671,6 @@ private:
 } // namespace
 
 void DbPartitioningPass::runOnOperation() {
-  bool changed = false;
   module = getOperation();
 
   ARTS_INFO_HEADER(DbPartitioningPass);
@@ -796,25 +678,37 @@ void DbPartitioningPass::runOnOperation() {
 
   assert(AM && "AnalysisManager must be provided externally");
 
-  /// Phase 0: Expand multi-entry acquires into separate DbAcquireOps.
-  /// This must happen BEFORE graph construction so each acquire can be
-  /// analyzed independently.
-  changed |= expandMultiEntryAcquires();
+  /// Phase 1: Gather facts (IR normalization for analysis + graph rebuild).
+  bool changed = gatherPartitionFacts();
 
-  /// Graph construction and analysis
-  invalidateAndRebuildGraph();
+  /// Phase 2-4: Evaluate policy, build rewrite plans, and apply rewrites.
+  changed |= evaluatePolicyBuildPlansAndApply();
 
-  /// Partition DBs and analyze stencil patterns for bounds checking
-  changed |= partitionDb();
-  analyzeStencilBounds();
-
-  if (changed) {
-    ARTS_INFO(" Module has changed, invalidating analyses");
-    AM->invalidate();
-  }
+  /// Phase 5: Validate/post-check and invalidate stale analyses.
+  validateAndPostCheck(changed);
 
   ARTS_INFO_FOOTER(DbPartitioningPass);
   ARTS_DEBUG_REGION(module.dump(););
+}
+
+bool DbPartitioningPass::gatherPartitionFacts() {
+  /// Expand multi-entry acquires before graph construction so each acquire can
+  /// be analyzed independently.
+  bool changed = expandMultiEntryAcquires();
+  invalidateAndRebuildGraph();
+  return changed;
+}
+
+bool DbPartitioningPass::evaluatePolicyBuildPlansAndApply() {
+  return partitionDb();
+}
+
+void DbPartitioningPass::validateAndPostCheck(bool changed) {
+  analyzeStencilBounds();
+  if (!changed)
+    return;
+  ARTS_INFO(" Module has changed, invalidating analyses");
+  AM->invalidate();
 }
 
 namespace {
@@ -850,9 +744,8 @@ static SmallVector<DbAcquireOp> createExpandedAcquires(DbAcquireOp original,
 
     /// Structural expansion must preserve the same high-level contract that
     /// downstream DB planning saw on the original multi-entry acquire.
-    copySemanticContractAttrs(original.getOperation(),
-                              newAcquire.getOperation());
-    copyLoweringContract(original.getPtr(), newAcquire.getPtr(), builder, loc);
+    transferContract(original.getOperation(), newAcquire.getOperation(),
+                     original.getPtr(), newAcquire.getPtr(), builder, loc);
 
     /// Preserve per-entry segmentation for single-entry acquires so
     /// getPartitionInfos() can infer dimensionality.
@@ -1347,8 +1240,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   SmallVector<const DbAcquirePartitionFacts *> acquireFacts;
   SmallVector<std::optional<DbAnalysis::AcquireContractSummary>, 8>
       acquireContractSummaries;
+  DbAnalysis &dbAnalysis = AM->getDbAnalysis();
   if (allocNode) {
-    DbAnalysis &dbAnalysis = AM->getDbAnalysis();
     for (DbAcquireNode *acqNode : allocAcquireNodes) {
       const DbAcquirePartitionFacts *facts =
           dbAnalysis.getAcquirePartitionFacts(acqNode->getDbAcquireOp());
@@ -1359,7 +1252,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
           dbAnalysis.getAcquireContractSummary(acqNode->getDbAcquireOp());
       acquireContractSummaries.push_back(contractSummary);
       auto info = computeAcquirePartitionInfo(
-          acqNode->getDbAcquireOp(), acqNode,
+          dbAnalysis, acqNode->getDbAcquireOp(),
           contractSummary ? &*contractSummary : nullptr, facts, builder);
       if (!info.isValid) {
         ARTS_DEBUG("  Acquire analysis failed for "
@@ -1607,9 +1500,10 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       }
 
       /// Populate access pattern and dep pattern using canonical ordering.
-      info.accessPattern =
-          getCanonicalAccessPattern(acquire, contractSummary, acqNode, facts);
-      info.depPattern = getCanonicalDepPattern(acquire, contractSummary, facts);
+      info.accessPattern = dbAnalysis.resolveCanonicalAcquireAccessPattern(
+          acquire, contractSummary, facts);
+      info.depPattern = dbAnalysis.resolveCanonicalAcquireDepPattern(
+          acquire, contractSummary, facts);
 
       if (info.accessPattern == AccessPattern::Unknown &&
           info.accessMode == ArtsMode::in &&
@@ -2085,9 +1979,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         continue;
       const DbAcquirePartitionFacts *facts =
           acqFacts ? acqFacts : &acqNode->getPartitionFacts();
-      if (hasCanonicalStencilSemantics(
-              acquire, contractSummary ? &*contractSummary : nullptr, acqNode,
-              facts) ||
+      if (dbAnalysis.hasCanonicalAcquireStencilSemantics(
+              acquire, contractSummary ? &*contractSummary : nullptr, facts) ||
           allocHasStencilPattern) {
         hasReadStencilAcquire = true;
         break;
