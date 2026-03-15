@@ -1560,13 +1560,26 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
             if (acquireSelectsLeafDb)
               preserveExplicitContractLayout = true;
           } else if (writesThroughAcquire) {
-            ARTS_DEBUG("  Partition offset incompatible with write access; "
-                       "disabling block capability");
-            thisAcquireCanBlock = false;
+            bool hasDirectWriteAccess =
+                contractSummary ? contractSummary->hasDirectAccess()
+                                : !acqNode->hasIndirectAccess();
+            bool canPreserveWriteFullRange =
+                !hasIndirect && hasDirectWriteAccess &&
+                (!ctx.totalElements || *ctx.totalElements > 1);
+            if (canPreserveWriteFullRange) {
+              ARTS_DEBUG("  Partition offset incompatible with write access; "
+                         "preserving block capability with full-range write "
+                         "acquire");
+              acqInfo.needsFullRange = true;
+            } else {
+              ARTS_DEBUG("  Partition offset incompatible with write access; "
+                         "disabling block capability");
+              thisAcquireCanBlock = false;
+            }
           } else {
-            ARTS_DEBUG("  Partition offset incompatible with access pattern; "
-                       "disabling block capability");
-            thisAcquireCanBlock = false;
+            ARTS_DEBUG("  Partition offset incompatible with read-only access "
+                       "pattern; preserving block capability with full-range");
+            acqInfo.needsFullRange = true;
           }
         }
       }

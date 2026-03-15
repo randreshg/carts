@@ -415,6 +415,18 @@ def EdtLowering : Pass<"edt-lowering", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createEdtLoweringPass()";
 }
 
+def LoweringContractCleanup : Pass<"lowering-contract-cleanup", "mlir::ModuleOp"> {
+  let summary = "Erase arts.lowering_contract metadata ops before LLVM lowering";
+  let description = [{
+    Removes `arts.lowering_contract` operations after all DB/EDT optimization
+    passes have consumed them. This keeps semantic contracts available through
+    concurrency-opt while ensuring pre-lowering/LLVM translation does not see
+    dialect-only metadata ops.
+  }];
+  let dependentDialects = ["arts::ArtsDialect", "func::FuncDialect"];
+  let constructor = "mlir::arts::createLoweringContractCleanupPass()";
+}
+
 def ArtsLoopFusion : Pass<"arts-loop-fusion", "mlir::ModuleOp"> {
   let summary = "Fuse independent arts.for loops within parallel EDTs";
   let description = [{

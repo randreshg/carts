@@ -15,6 +15,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   transforms/DbLowering.cpp
   transforms/EdtLowering.cpp
   transforms/EpochLowering.cpp
+  transforms/LoweringContractCleanup.cpp
   transforms/ForOpt.cpp
   transforms/DistributedHostLoopOutlining.cpp
   transforms/EdtDistribution.cpp

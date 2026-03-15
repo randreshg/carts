@@ -87,13 +87,20 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
              << isSingleNode
              << ", anyExplicitCoarseAcquire=" << ctx.anyExplicitCoarseAcquire()
              << ", hasStencil=" << patterns.hasStencil);
-  if (isSingleNode && ctx.anyExplicitCoarseAcquire() && !patterns.hasStencil) {
-    ARTS_DEBUG("H1.C2 applied: Single-node coarse acquire prefers coarse");
+  if (isSingleNode && ctx.anyExplicitCoarseAcquire() && !patterns.hasStencil &&
+      !ctx.canBlock && !ctx.canElementWise) {
+    ARTS_DEBUG("H1.C2 applied: Single-node coarse acquire prefers coarse when "
+               "no partitioned plan is feasible");
     return PartitioningDecision::coarse(
-        ctx, "H1.C2: Single-node explicit coarse acquire prefers coarse");
+        ctx, "H1.C2: Single-node explicit coarse acquire with no partitioning "
+             "support");
   } else if (isSingleNode && ctx.anyExplicitCoarseAcquire() &&
              patterns.hasStencil) {
     ARTS_DEBUG("H1.C2 skipped: Stencil pattern detected, deferring to H1.B3");
+  } else if (isSingleNode && ctx.anyExplicitCoarseAcquire() &&
+             (ctx.canBlock || ctx.canElementWise)) {
+    ARTS_DEBUG("H1.C2 skipped: explicit coarse hint overridden by available "
+               "partitioned plan");
   }
 
   /// H1.C3: Read-only full-range block acquires → Coarse
@@ -105,6 +112,16 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// full-range acquires. This is the specfem3d case: stencil on i-dim,
   /// partition on k-dim.
   if (isReadOnly && ctx.allBlockFullRange && !ctx.canBlock) {
+    if (ctx.canElementWise) {
+      unsigned outerRank = ctx.minPinnedDimCount();
+      outerRank = outerRank > 0 ? outerRank : 1;
+      ARTS_DEBUG("H1.C3 applied: Read-only full-range without block support, "
+                 "using element-wise");
+      return PartitioningDecision::elementWise(
+          ctx, outerRank,
+          "H1.C3: Read-only full-range without block support uses "
+          "element-wise");
+    }
     ARTS_DEBUG("H1.C3 applied: Read-only full-range acquires prefer coarse");
     return PartitioningDecision::coarse(
         ctx, isSingleNode
@@ -125,6 +142,16 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// and avoids the NUMA penalty of a single coarse allocation.
   if (patterns.hasStencil && isSingleNode && isReadOnly && !ctx.canBlock &&
       !ctx.hasDistributedBlockContract()) {
+    if (ctx.canElementWise) {
+      unsigned outerRank = ctx.minPinnedDimCount();
+      outerRank = outerRank > 0 ? outerRank : 1;
+      ARTS_DEBUG("H1.C4 applied: Read-only stencil on single-node without "
+                 "block support, using element-wise");
+      return PartitioningDecision::elementWise(
+          ctx, outerRank,
+          "H1.C4: Read-only stencil on single-node without block support uses "
+          "element-wise");
+    }
     ARTS_DEBUG("H1.C4 applied: Read-only stencil on single-node -> coarse");
     return PartitioningDecision::coarse(
         ctx, "H1.C4: Read-only stencil on single-node prefers coarse");

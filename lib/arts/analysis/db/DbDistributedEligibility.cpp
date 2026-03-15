@@ -78,7 +78,8 @@ static bool hasOnlyAllowedHandleUsers(Value rootHandle) {
       continue;
 
     for (Operation *user : value.getUsers()) {
-      if (isa<DbAcquireOp, DbFreeOp, DbReleaseOp, EdtOp>(user))
+      if (isa<DbAcquireOp, DbFreeOp, DbReleaseOp, EdtOp, LoweringContractOp>(
+              user))
         continue;
 
       if (auto castOp = dyn_cast<memref::CastOp>(user)) {

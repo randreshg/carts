@@ -33,6 +33,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/Pass.h"
+#include <algorithm>
 
 ARTS_DEBUG_SETUP(dce);
 
@@ -43,6 +44,36 @@ namespace {
 
 struct DeadCodeEliminationPass
     : public DeadCodeEliminationBase<DeadCodeEliminationPass> {
+
+  static bool isContractUse(Operation *user) {
+    return isa<LoweringContractOp>(user);
+  }
+
+  static bool hasNonContractUse(Value value) {
+    return llvm::any_of(value.getUsers(),
+                        [](Operation *user) { return !isContractUse(user); });
+  }
+
+  static bool hasSingleExpectedNonContractUse(Value value,
+                                              Operation *expectedUser) {
+    unsigned count = 0;
+    for (Operation *user : value.getUsers()) {
+      if (isContractUse(user))
+        continue;
+      if (user != expectedUser)
+        return false;
+      ++count;
+    }
+    return count == 1;
+  }
+
+  static void collectContractUsers(Value value,
+                                   SmallVectorImpl<Operation *> &contracts) {
+    for (Operation *user : value.getUsers()) {
+      if (isContractUse(user))
+        contracts.push_back(user);
+    }
+  }
 
   void runOnOperation() override {
     auto module = getOperation();
@@ -67,7 +98,11 @@ struct DeadCodeEliminationPass
       unsigned removedEdts = removeEmptyEdts(module);
       unsigned removedDbs = removeDeadDbs(module);
       unsigned removedAcquires = removeUnusedAcquires(module);
-      unsigned removedEdtDeps = removeUnusedEdtDependencies(module);
+      /// Conservatively keep EDT dependency operands. Some control-only
+      /// dependency edges encode ordering constraints even when the block
+      /// argument has no direct memory users (for example Jacobi-style
+      /// alternating-buffer pipelines).
+      unsigned removedEdtDeps = 0;
 
       unsigned removed = removedLoads + removedStores + removedAllocas +
                          removedUndefs + removedEdts + removedDbs +
@@ -185,10 +220,17 @@ struct DeadCodeEliminationPass
       for (Value dep : edt.getDependencies()) {
         if (auto acq = dep.getDefiningOp<arts::DbAcquireOp>()) {
           bool ptrOnlyUsedHere =
-              acq.getPtr() == dep && acq.getPtr().hasOneUse();
+              acq.getPtr() == dep &&
+              hasSingleExpectedNonContractUse(acq.getPtr(),
+                                              edt.getOperation());
           bool guidUnused = acq.getGuid().use_empty();
-          if (ptrOnlyUsedHere && guidUnused)
+          if (ptrOnlyUsedHere && guidUnused) {
+            SmallVector<Operation *> contracts;
+            collectContractUsers(acq.getPtr(), contracts);
+            for (Operation *contract : contracts)
+              removalMgr.markForRemoval(contract);
             removalMgr.markForRemoval(acq);
+          }
         }
       }
 
@@ -204,7 +246,12 @@ struct DeadCodeEliminationPass
     RemovalUtils removalMgr;
 
     module.walk([&](DbAllocOp dbAlloc) {
-      if (dbAlloc.getGuid().use_empty() && dbAlloc.getPtr().use_empty()) {
+      if (dbAlloc.getGuid().use_empty() &&
+          !hasNonContractUse(dbAlloc.getPtr())) {
+        SmallVector<Operation *> contracts;
+        collectContractUsers(dbAlloc.getPtr(), contracts);
+        for (Operation *contract : contracts)
+          removalMgr.markForRemoval(contract);
         ARTS_DEBUG("Removing dead db_alloc: " << dbAlloc);
         removalMgr.markForRemoval(dbAlloc);
       }
@@ -220,19 +267,28 @@ struct DeadCodeEliminationPass
   /// in a parallel scope but not actually accessed in a particular EDT.
   unsigned removeUnusedAcquires(ModuleOp module) {
     SmallVector<Operation *> toRemove;
+    SmallVector<Operation *> contractsToRemove;
 
     module.walk([&](DbAcquireOp acquire) {
       /// Check if ptr has any uses at all (memory ops, EDT args, etc.)
-      bool ptrUsed = !acquire.getPtr().use_empty();
+      bool ptrUsed = hasNonContractUse(acquire.getPtr());
 
       /// Check if guid is used (for signaling/dependencies)
       bool guidUsed = !acquire.getGuid().use_empty();
 
       if (!ptrUsed && !guidUsed) {
         ARTS_DEBUG("Removing unused acquire: " << acquire);
+        collectContractUsers(acquire.getPtr(), contractsToRemove);
         toRemove.push_back(acquire);
       }
     });
+
+    std::sort(contractsToRemove.begin(), contractsToRemove.end());
+    contractsToRemove.erase(
+        std::unique(contractsToRemove.begin(), contractsToRemove.end()),
+        contractsToRemove.end());
+    for (auto *contract : contractsToRemove)
+      contract->erase();
 
     for (auto *op : toRemove)
       op->erase();
@@ -286,15 +342,19 @@ struct DeadCodeEliminationPass
 
       /// Collect acquires to remove (those with single use = this EDT dep)
       SmallVector<DbAcquireOp> acquiresToRemove;
+      SmallVector<Operation *> contractsToRemove;
       for (unsigned idx : unusedArgIndices) {
         if (idx >= deps.size())
           continue;
         Value dep = deps[idx];
         if (auto acq = dep.getDefiningOp<DbAcquireOp>()) {
           /// Only remove if ptr has single use (this EDT) and guid unused
-          if (acq.getPtr() == dep && acq.getPtr().hasOneUse() &&
+          if (acq.getPtr() == dep &&
+              hasSingleExpectedNonContractUse(acq.getPtr(),
+                                              edt.getOperation()) &&
               acq.getGuid().use_empty()) {
             acquiresToRemove.push_back(acq);
+            collectContractUsers(acq.getPtr(), contractsToRemove);
             ARTS_DEBUG("Will remove phantom acquire: " << acq);
           }
         }
@@ -331,6 +391,13 @@ struct DeadCodeEliminationPass
       edt.setDependencies(newDeps);
 
       /// Erase unused acquires
+      std::sort(contractsToRemove.begin(), contractsToRemove.end());
+      contractsToRemove.erase(
+          std::unique(contractsToRemove.begin(), contractsToRemove.end()),
+          contractsToRemove.end());
+      for (auto *contract : contractsToRemove)
+        contract->erase();
+
       for (auto acq : acquiresToRemove) {
         acq.erase();
         removed++;

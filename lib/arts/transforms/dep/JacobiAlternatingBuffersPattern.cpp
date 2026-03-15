@@ -294,15 +294,19 @@ static bool rewriteJacobiTimeLoop(JacobiLoopMatch &match) {
   Location loc = match.timeLoop.getLoc();
   Value timeIV = match.timeLoop.getInductionVar();
 
-  Value ivI64 =
-      builder.create<arith::IndexCastOp>(loc, builder.getI64Type(), timeIV);
-  Value two = builder.create<arith::ConstantIntOp>(loc, 2, 64);
-  Value one = builder.create<arith::ConstantIntOp>(loc, 1, 64);
-  Value rem = builder.create<arith::RemSIOp>(loc, ivI64, two);
-  Value isOdd =
-      builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, rem, one);
+  /// Select branches by normalized iteration ordinal instead of absolute
+  /// time-IV parity, so behavior is correct for arbitrary loop lower bounds.
+  Value lb = match.timeLoop.getLowerBound();
+  Value step = match.timeLoop.getStep();
+  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+  Value two = builder.create<arith::ConstantIndexOp>(loc, 2);
+  Value delta = builder.create<arith::SubIOp>(loc, timeIV, lb);
+  Value iterOrdinal = builder.create<arith::DivUIOp>(loc, delta, step);
+  Value rem = builder.create<arith::RemUIOp>(loc, iterOrdinal, two);
+  Value isSwapIter =
+      builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, rem, zero);
 
-  auto ifOp = builder.create<scf::IfOp>(loc, TypeRange{}, isOdd,
+  auto ifOp = builder.create<scf::IfOp>(loc, TypeRange{}, isSwapIter,
                                         /*withElseRegion=*/true);
   stampJacobiAlternatingBuffers(ifOp.getOperation());
 
