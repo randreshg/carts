@@ -469,6 +469,7 @@ void setupConcurrencyOpt(PassManager &pm, arts::AnalysisManager *AM) {
 
 /// Epoch creation passes.
 void setupEpochs(PassManager &pm) {
+  pm.addPass(arts::createLoweringContractCleanupPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createCreateEpochsPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
@@ -499,6 +500,7 @@ void setupPreLowering(PassManager &pm) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(arts::createEpochLoweringPass());
+  pm.addPass(arts::createLoweringContractCleanupPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
 }

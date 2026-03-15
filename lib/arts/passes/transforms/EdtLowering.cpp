@@ -80,17 +80,14 @@ static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire) {
   if (!mode ||
       (*mode != PartitionMode::block && *mode != PartitionMode::stencil))
     return;
-  /// For contract-backed block/stencil acquires, partition_* keeps the
+  /// For contract-backed block/stencil acquires, partition_* is the
   /// authoritative task-local dependency window in element space. Lowering
   /// must convert that window into DB-space consistently for both read and
-  /// write-capable acquires; otherwise depCount/rec_dep treat element windows
-  /// as datablock windows and explode dependency fan-in.
+  /// write-capable acquires; falling back to offsets/sizes risks
+  /// double-normalizing slices that upstream passes already rewrote into
+  /// block space.
   auto offsetRange = acquire.getPartitionOffsets();
   auto sizeRange = acquire.getPartitionSizes();
-  if (offsetRange.empty() || sizeRange.empty()) {
-    offsetRange = acquire.getOffsets();
-    sizeRange = acquire.getSizes();
-  }
   if (offsetRange.empty() || sizeRange.empty())
     return;
 
@@ -348,6 +345,14 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   Location loc = edtOp.getLoc();
   /// Analyze EDT environment (parameters, constants, deps)
   EdtEnvManager envManager(edtOp);
+  ArrayRef<Value> edtDeps = envManager.getDependencies();
+
+  /// Normalize dependency slices before outlining so the packed parameters,
+  /// outlined dep_gep math, depCount, and rec_dep lowering all observe the
+  /// same DB-space contract.
+  for (Value dep : edtDeps)
+    if (auto acquire = dep.getDefiningOp<DbAcquireOp>())
+      normalizeTaskDepSlice(AC, acquire);
 
   /// Create local variables for parameter packing/dedup
   DenseMap<Value, unsigned> valueToPackIndex;
@@ -366,11 +371,6 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
                                      envManager.getParameters().size()))) {
     return edtOp.emitError("Failed to outline region to function");
   }
-
-  ArrayRef<Value> edtDeps = envManager.getDependencies();
-  for (Value dep : edtDeps)
-    if (auto acquire = dep.getDefiningOp<DbAcquireOp>())
-      normalizeTaskDepSlice(AC, acquire);
 
   /// Calculate dependency count from the dependency view of each DB.
   /// For partitioned acquires, this uses slice sizes (not full allocation
