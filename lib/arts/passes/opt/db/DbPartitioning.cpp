@@ -1196,24 +1196,29 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
   /// Step 0: Check existing partition attribute
   if (auto existingMode = getPartitionMode(allocOp)) {
-    /// Only skip if SUCCESSFULLY partitioned (element_wise or chunked)
-    if (*existingMode != PartitionMode::coarse) {
+    /// Fine-grained allocations are already in their terminal shape.
+    /// Rewriting them again adds compile-time churn without improving
+    /// localization.
+    if (*existingMode == PartitionMode::fine_grained) {
       ARTS_DEBUG("  Already partitioned as "
                  << mlir::arts::stringifyPartitionMode(*existingMode)
                  << " - SKIP");
-      heuristics.recordDecision(
-          "Partition-AlreadyPartitioned", false,
-          "allocation already has partition attribute, skipping",
-          allocOp.getOperation(), {});
-      return allocOp; /// Skip - already partitioned!
+      heuristics.recordDecision("Partition-AlreadyPartitioned", false,
+                                "allocation already fine-grained, skipping",
+                                allocOp.getOperation(), {});
+      return allocOp;
     }
-    /// mode == none means CreateDbs couldn't partition - continue to re-analyze
+
+    /// For block/stencil, continue with loop-aware re-analysis.
+    /// CreateDbs establishes an initial partition shape, but DbPartitioning
+    /// still needs a chance to reconcile acquire ranges and EDT-local
+    /// db_ref localization (especially for single-block layouts).
     ARTS_DEBUG("  Partition mode is "
                << mlir::arts::stringifyPartitionMode(*existingMode)
                << " - re-analyzing with loop structure");
     heuristics.recordDecision(
-        "Partition-ReanalyzeNone", true,
-        "CreateDbs set none, attempting loop-based block detection",
+        "Partition-ReanalyzeExisting", true,
+        "re-analyzing existing partition mode with loop-aware rewrite",
         allocOp.getOperation(), {});
   }
 
@@ -1453,9 +1458,9 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
             if (acquireSelectsLeafDb)
               preserveExplicitContractLayout = true;
           } else if (writesThroughAcquire) {
-            bool hasDirectWriteAccess =
-                contractSummary ? contractSummary->hasDirectAccess()
-                                : !acqNode->hasIndirectAccess();
+            bool hasDirectWriteAccess = contractSummary
+                                            ? contractSummary->hasDirectAccess()
+                                            : !acqNode->hasIndirectAccess();
             bool canPreserveWriteFullRange =
                 !hasIndirect && hasDirectWriteAccess &&
                 (!ctx.totalElements || *ctx.totalElements > 1);
@@ -1668,6 +1673,44 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   } else {
     ctx.memrefRank = allocOp.getElementSizes().size();
     ctx.elementTypeIsMemRef = false;
+  }
+
+  /// Preserve tiny read-only stencil coefficient tables as coarse.
+  /// These tables are effectively constants (e.g., finite-difference weights);
+  /// repartitioning them per task can skew coefficient indexing and produce
+  /// thread-count-dependent numerics.
+  auto currentMode = getPartitionMode(allocOp);
+  auto currentPattern = getDbAccessPattern(allocOp.getOperation());
+  if (currentMode && *currentMode == PartitionMode::coarse && currentPattern &&
+      *currentPattern == DbAccessPattern::stencil &&
+      allocOp.getMode() == ArtsMode::in &&
+      allocOp.getDbMode() == DbMode::read) {
+    std::optional<int64_t> staticElementCount = int64_t{1};
+    auto multiplyIfConstant = [&](Value v) {
+      if (!staticElementCount)
+        return;
+      auto folded = ValueAnalysis::tryFoldConstantIndex(v);
+      if (!folded || *folded < 0) {
+        staticElementCount = std::nullopt;
+        return;
+      }
+      *staticElementCount *= *folded;
+    };
+    for (Value v : allocOp.getSizes())
+      multiplyIfConstant(v);
+    for (Value v : allocOp.getElementSizes())
+      multiplyIfConstant(v);
+
+    if (staticElementCount && *staticElementCount > 0 &&
+        *staticElementCount <= 8) {
+      resetCoarseAcquireRanges(allocOp, allocNode, builder);
+      heuristics.recordDecision(
+          "Partition-KeepTinyStencilCoarse", true,
+          "preserving tiny read-only stencil coefficient table as coarse",
+          allocOp.getOperation(),
+          {{"staticElementCount", *staticElementCount}});
+      return allocOp;
+    }
   }
 
   /// Step 4: Initial heuristics arbitration.

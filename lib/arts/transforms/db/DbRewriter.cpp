@@ -155,7 +155,8 @@ DbRewriter::createElementWiseIndexer(ArrayRef<Value> elemOffsets,
 
 std::unique_ptr<DbIndexerBase> DbRewriter::createBlockIndexer(
     ArrayRef<Value> blockSizes, ArrayRef<Value> startBlocks, unsigned outerRank,
-    unsigned innerRank, ArrayRef<unsigned> partitionedDims) {
+    unsigned innerRank, ArrayRef<unsigned> partitionedDims,
+    bool allocSingleBlock, bool acquireSingleBlock, Value dominantZero) {
   ARTS_DEBUG("  Block indexer: outerRank="
              << outerRank << ", innerRank=" << innerRank
              << ", nPartDims=" << blockSizes.size());
@@ -168,7 +169,8 @@ std::unique_ptr<DbIndexerBase> DbRewriter::createBlockIndexer(
     info.partitionedDims.assign(partitionedDims.begin(), partitionedDims.end());
 
   return std::make_unique<DbBlockIndexer>(info, startBlocks, outerRank,
-                                          innerRank);
+                                          innerRank, allocSingleBlock,
+                                          acquireSingleBlock, dominantZero);
 }
 
 std::unique_ptr<DbIndexerBase> DbRewriter::createStencilIndexer(

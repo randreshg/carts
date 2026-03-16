@@ -102,18 +102,6 @@ struct TaskAcquireWindow {
   Value dbSize;
 };
 
-/// Resolve acquire rewrite contracts through shared DB analysis first, then
-/// fall back to direct contract derivation when analysis is unavailable.
-static AcquireRewriteContract
-resolveAcquireRewriteContract(mlir::arts::AnalysisManager *AM,
-                              DbAcquireOp acquire) {
-  if (!acquire)
-    return AcquireRewriteContract{};
-  if (!AM)
-    return deriveAcquireRewriteContract(acquire);
-  return AM->getDbAnalysis().getAcquireRewriteContract(acquire);
-}
-
 static DistributionStrategy resolveDistributionStrategy(EdtOp originalParallel,
                                                         ForOp forOp) {
   /// Prefer explicit distribution_kind stamped by EdtDistributionPass. Fall
@@ -185,11 +173,34 @@ planAcquireRewrite(AcquireRewritePlanningInput input) {
     if (auto dbAlloc = dyn_cast<DbAllocOp>(rootAllocOp)) {
       auto elemSizes = dbAlloc.getElementSizes();
       if (!elemSizes.empty()) {
+        std::optional<int64_t> totalElemCount = int64_t{1};
+        for (Value dim : elemSizes) {
+          auto dimConst = ValueAnalysis::tryFoldConstantIndex(dim);
+          if (!dimConst || *dimConst < 0) {
+            totalElemCount = std::nullopt;
+            break;
+          }
+          *totalElemCount *= *dimConst;
+        }
+
         isSingleElement = llvm::all_of(elemSizes, [](Value value) {
           int64_t constant = 0;
           return ValueAnalysis::getConstantIndex(value, constant) &&
                  constant == 1;
         });
+
+        /// Keep tiny read-only stencil coefficient tables coarse.
+        /// Rewriting these to block slices per task can shift coefficient
+        /// indexing and introduce thread-count-dependent numerics.
+        if (input.parentAcquire.getMode() == ArtsMode::in) {
+          auto allocPattern = getDbAccessPattern(dbAlloc.getOperation());
+          bool tinyReadOnlyStencil =
+              allocPattern && *allocPattern == DbAccessPattern::stencil &&
+              totalElemCount && *totalElemCount > 0 && *totalElemCount <= 8;
+          if (tinyReadOnlyStencil)
+            forceCoarseRewrite = true;
+        }
+
         unsigned primaryOwnerDim = 0;
         if (!rewriteContract.ownerDims.empty() &&
             rewriteContract.ownerDims.front() >= 0 &&
@@ -958,7 +969,8 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   ARTS_INFO(" - Lowering arts.for with DB rewiring (split pattern)");
 
   /// Read distribution strategy selected by EdtDistributionPass.
-  DistributionStrategy strategy = resolveDistributionStrategy(originalParallel, forOp);
+  DistributionStrategy strategy =
+      resolveDistributionStrategy(originalParallel, forOp);
 
   Value zero;
   Value one;
@@ -1286,8 +1298,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       auto window = computeTaskAcquireWindowInBlockSpace(
           AC, loc, parentAcqOp, acquireOp, rootGuidValue, rootPtrValue,
           loopInfo.strategy.kind, distributionPattern, acquireOffsetVal,
-          loopInfo.bounds.iterCount, acquireHintSizeVal,
-          shouldUseStencilWindow, planningInput.rewriteContract);
+          loopInfo.bounds.iterCount, acquireHintSizeVal, shouldUseStencilWindow,
+          planningInput.rewriteContract);
       if (!window)
         return;
 

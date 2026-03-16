@@ -72,16 +72,6 @@ using namespace mlir::arts;
 
 namespace {
 
-static AcquireRewriteContract
-resolveAcquireRewriteContract(mlir::arts::AnalysisManager *AM,
-                              DbAcquireOp acquire) {
-  if (!acquire)
-    return AcquireRewriteContract{};
-  if (!AM)
-    return deriveAcquireRewriteContract(acquire);
-  return AM->getDbAnalysis().getAcquireRewriteContract(acquire);
-}
-
 static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
                                   const AcquireRewriteContract &contract) {
   if (!AC || !acquire)
@@ -106,9 +96,9 @@ static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   if (rank == 0)
     return;
 
-  bool hasContractHalo =
-      contract.applyStencilHalo || !contract.haloMinOffsets.empty() ||
-      !contract.haloMaxOffsets.empty();
+  bool hasContractHalo = contract.applyStencilHalo ||
+                         !contract.haloMinOffsets.empty() ||
+                         !contract.haloMaxOffsets.empty();
   bool needsStructuralNormalization =
       rank > 1 || *mode == PartitionMode::stencil;
   if (!hasContractHalo && !needsStructuralNormalization)
