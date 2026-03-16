@@ -527,7 +527,7 @@ carts compile <file>.mlir --stop-at=concurrency --debug-only=concurrency,arts_fo
 **Purpose:** Select distribution strategy and lower `arts.for` loops.
 
 **Reference Doc:**
-- `docs/heuristics/distribution/distribution.md`
+- `docs/heuristics/distribution.md`
 
 **Run Command:**
 ```bash

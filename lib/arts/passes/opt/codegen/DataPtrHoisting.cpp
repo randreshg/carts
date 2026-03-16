@@ -127,7 +127,7 @@ static bool hoistLoadOutOfLoop(LLVM::LoadOp loadOp, scf::ForOp targetLoop) {
 }
 
 struct DataPtrHoistingPass
-    : public arts::ArtsDataPtrHoistingBase<DataPtrHoistingPass> {
+    : public arts::DataPtrHoistingBase<DataPtrHoistingPass> {
   void runOnOperation() override;
 };
 

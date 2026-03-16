@@ -44,6 +44,7 @@ void AnalysisManager::invalidate() {
     dbHeuristics->clearDecisions();
   if (metadataManager)
     metadataManager->clear();
+  metadataCoverage = MetadataCoverage{};
   cachedDiagnosticJson.reset();
 }
 
@@ -108,13 +109,6 @@ EdtHeuristics &AnalysisManager::getEdtHeuristics() {
   return *edtHeuristics;
 }
 
-std::optional<DbAccessPattern>
-AnalysisManager::getDbAllocAccessPattern(DbAllocOp alloc) {
-  if (!alloc)
-    return std::nullopt;
-  return getDbAnalysis().getAllocAccessPattern(alloc);
-}
-
 std::optional<DbAnalysis::LoopDbAccessSummary>
 AnalysisManager::getLoopDbAccessSummary(Operation *loopOp) {
   if (!loopOp)
@@ -153,6 +147,7 @@ bool AnalysisManager::invalidateFunction(func::FuncOp func) {
     loopAnalysis->invalidate();
   if (stringAnalysis)
     stringAnalysis->invalidate();
+  metadataCoverage = MetadataCoverage{};
   cachedDiagnosticJson.reset();
   return invalidated;
 }

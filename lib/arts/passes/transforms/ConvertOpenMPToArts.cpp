@@ -825,7 +825,7 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
 ///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createConvertOpenMPtoArtsPass() {
+std::unique_ptr<Pass> createConvertOpenMPToArtsPass() {
   return std::make_unique<ConvertOpenMPToArtsPass>();
 }
 } // namespace arts

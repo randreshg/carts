@@ -419,15 +419,10 @@ def LoweringContractOp : Arts_Op<"lowering_contract",
     OptionalAttr<EdtDistributionPatternAttr>:$distribution_pattern,
     OptionalAttr<I64Attr>:$distribution_version,
     OptionalAttr<DenseI64ArrayAttr>:$owner_dims,
-    OptionalAttr<DenseI64ArrayAttr>:$spatial_dims,
     OptionalAttr<UnitAttr>:$supported_block_halo,
+    OptionalAttr<DenseI64ArrayAttr>:$spatial_dims,
     OptionalAttr<DenseI64ArrayAttr>:$stencil_independent_dims,
-    OptionalAttr<I64Attr>:$esd_byte_offset,
-    OptionalAttr<I64Attr>:$esd_byte_size,
-    OptionalAttr<I64Attr>:$cached_start_block,
-    OptionalAttr<I64Attr>:$cached_block_count,
     OptionalAttr<UnitAttr>:$post_db_refined,
-    OptionalAttr<I64Attr>:$estimated_task_cost,
     OptionalAttr<I64Attr>:$critical_path_distance,
     OptionalAttr<I64Attr>:$contract_kind
   );
@@ -454,19 +449,14 @@ def LoweringContractOp : Arts_Op<"lowering_contract",
                    CArg<"std::optional<EdtDistributionPattern>", "std::nullopt">:$distributionPattern,
                    CArg<"std::optional<int64_t>", "std::nullopt">:$distributionVersion,
                    CArg<"SmallVector<int64_t>", "{}">:$ownerDims,
-                   CArg<"SmallVector<int64_t>", "{}">:$spatialDims,
                    CArg<"SmallVector<Value>", "{}">:$blockShape,
                    CArg<"SmallVector<Value>", "{}">:$minOffsets,
                    CArg<"SmallVector<Value>", "{}">:$maxOffsets,
                    CArg<"SmallVector<Value>", "{}">:$writeFootprint,
                    CArg<"bool", "false">:$supportedBlockHalo,
+                   CArg<"SmallVector<int64_t>", "{}">:$spatialDims,
                    CArg<"SmallVector<int64_t>", "{}">:$stencilIndependentDims,
-                   CArg<"std::optional<int64_t>", "std::nullopt">:$esdByteOffset,
-                   CArg<"std::optional<int64_t>", "std::nullopt">:$esdByteSize,
-                   CArg<"std::optional<int64_t>", "std::nullopt">:$cachedStartBlock,
-                   CArg<"std::optional<int64_t>", "std::nullopt">:$cachedBlockCount,
                    CArg<"bool", "false">:$postDbRefined,
-                   CArg<"std::optional<int64_t>", "std::nullopt">:$estimatedTaskCost,
                    CArg<"std::optional<int64_t>", "std::nullopt">:$criticalPathDistance,
                    CArg<"std::optional<int64_t>", "std::nullopt">:$contractKind)>
   ];
@@ -765,16 +755,34 @@ def EpochOp
 ///===----------------------------------------------------------------------===///
 /// arts.create_epoch
 ///===----------------------------------------------------------------------===///
-def CreateEpochOp : Arts_Op<"create_epoch", [MemoryEffects<[MemWrite]>]> {
+def CreateEpochOp : Arts_Op<"create_epoch",
+                            [AttrSizedOperandSegments, MemoryEffects<[MemWrite]>]> {
   let summary = "Create an ARTS epoch and return its GUID";
   let description = [{
     Creates an ARTS epoch and returns its GUID. Unlike arts.epoch which wraps
     a region, this operation simply creates an epoch that can be passed around
     as a value. EDTs can be added to this epoch using EdtCreateOp with the
     epoch parameter. Use WaitOnEpochOp to wait for completion.
+
+    Optionally accepts a finish EDT GUID and slot. When provided, the epoch
+    will signal the given dependency slot of the finish EDT upon completion,
+    instead of requiring an explicit WaitOnEpochOp.
   }];
+  let arguments = (ins
+    Optional<I64>:$finishEdtGuid,
+    Optional<I32>:$finishSlot
+  );
   let results = (outs I64 : $epochGuid);
-  let assemblyFormat = "attr-dict `:` type($epochGuid)";
+
+  let assemblyFormat = [{
+    (`finish` `(` $finishEdtGuid^ `:` type($finishEdtGuid) `,` $finishSlot `:` type($finishSlot) `)`)? attr-dict `:` type($epochGuid)
+  }];
+
+  let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    /// Returns true if this epoch has a finish target (continuation EDT).
+    bool hasFinishTarget() { return getFinishEdtGuid() != nullptr; }
+  }];
 }
 
 ///===----------------------------------------------------------------------===///

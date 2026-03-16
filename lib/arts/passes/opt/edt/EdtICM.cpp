@@ -30,7 +30,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include "arts/utils/Debug.h"
-ARTS_DEBUG_SETUP(edt - invariant - code - motion);
+ARTS_DEBUG_SETUP(edt_icm);
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -43,7 +43,7 @@ struct EdtICMPass : public arts::EdtICMBase<EdtICMPass> {
 
 void EdtICMPass::runOnOperation() {
   ModuleOp module = getOperation();
-  ARTS_INFO_HEADER(EdtInvariantCodeMotionPass);
+  ARTS_INFO_HEADER(EdtICMPass);
   ARTS_DEBUG_REGION(module.dump(););
 
   bool changed = false;

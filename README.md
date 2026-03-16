@@ -126,7 +126,7 @@ counter_folder=./counters
 ```
 
 See `docs/agents.md` for pipeline usage and
-`docs/heuristics/distribution/distribution.md` for distribution strategy details.
+`docs/heuristics/distribution.md` for distribution strategy details.
 
 ---
 

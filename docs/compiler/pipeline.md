@@ -6,7 +6,7 @@ This document mirrors the actual `carts-compile` stage order in
 Use it as the canonical checklist when auditing pass ordering, ownership, and
 cross-stage contracts.
 
-## Stage Order (`--stop-at`)
+## Stage Order (`--stop-at` / `--start-from`)
 
 1. `canonicalize-memrefs`
 2. `collect-metadata`
@@ -24,6 +24,14 @@ cross-stage contracts.
 14. `pre-lowering`
 15. `arts-to-llvm`
 16. `complete`
+
+## Stage Controls
+
+- `--stop-at=<stage>`: run up to and including the selected stage.
+- `--start-from=<stage>`: skip all earlier stages and start at the selected
+  stage.
+- Invalid ranges are rejected: `--start-from` cannot be later than
+  `--stop-at` unless `--stop-at=complete`.
 
 ## Per-Stage Pass Summary
 
@@ -83,6 +91,7 @@ cross-stage contracts.
 - `SymbolDCE`
 - `Mem2Reg`
 - `PolygeistCanonicalize`
+- `VerifyDbCreated`
 
 ### 8) db-opt
 - `DbModeTightening`
@@ -105,18 +114,26 @@ cross-stage contracts.
 ### 11) edt-distribution
 - `EdtDistributionPass`
 - `ForLowering`
+- `VerifyForLowered`
 
 ### 12) concurrency-opt
 - `EdtStructuralOptPass(runAnalysis=false)`
 - `DeadCodeElimination`
 - `PolygeistCanonicalize`
 - `CSE`
+- `EdtStructuralOptPass(runAnalysis=false)` (second cleanup pass)
 - `EpochOpt`
 - `PolygeistCanonicalize`
 - `CSE`
 - `DbPartitioning`
 - optional `DbDistributedOwnership` (enabled by `--distributed-db`)
+- `DbTransforms`
 - `DbModeTightening`
+- `EdtTransforms`
+- `ContractValidation`
+- `DbScratchElimination`
+- `PolygeistCanonicalize`
+- `CSE`
 - `BlockLoopStripMining` (nested func)
 - `ArtsHoisting`
 - `PolygeistCanonicalize`
@@ -149,17 +166,21 @@ cross-stage contracts.
 - `PolygeistCanonicalize`
 - `CSE`
 - `EpochLowering`
+- `LoweringContractCleanup`
 - `PolygeistCanonicalize`
 - `CSE`
+- `VerifyPreLowered`
 
 ### 15) arts-to-llvm
 - `ConvertArtsToLLVM`
+- `DataPtrHoisting`
 - `PolygeistCanonicalize`
 - `CSE`
 - `Mem2Reg`
 - `PolygeistCanonicalize`
 - `ControlFlowSink`
 - `PolygeistCanonicalize`
+- `VerifyLowered`
 
 ### 16) complete extras
 - optional `-O3` function-level cleanup:

@@ -489,7 +489,7 @@ static bool fuseWorkerLoopsInEpoch(EpochOp epoch) {
 ///===----------------------------------------------------------------------===///
 
 namespace {
-struct EpochOptPass : public arts::ArtsEpochOptBase<EpochOptPass> {
+struct EpochOptPass : public arts::EpochOptBase<EpochOptPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     bool changed = false;

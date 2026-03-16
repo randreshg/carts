@@ -35,7 +35,7 @@ std::unique_ptr<Pass> createCollectMetadataPass(bool exportMetadata,
 /// Normalize nested memref patterns into the canonical CARTS form.
 std::unique_ptr<Pass> createCanonicalizeMemrefsPass();
 /// Lower OpenMP regions into high-level ARTS dialect operations.
-std::unique_ptr<Pass> createConvertOpenMPtoArtsPass();
+std::unique_ptr<Pass> createConvertOpenMPToArtsPass();
 /// Discover or refine semantic pattern contracts before DB creation.
 std::unique_ptr<Pass> createPatternDiscoveryPass(AnalysisManager *AM,
                                                  bool refine = false);
@@ -73,6 +73,7 @@ std::unique_ptr<Pass> createScalarReplacementPass();
 std::unique_ptr<Pass> createEdtPtrRematerializationPass();
 std::unique_ptr<Pass> createDbLoweringPass(uint64_t idStride = 1000);
 std::unique_ptr<Pass> createEpochLoweringPass();
+std::unique_ptr<Pass> createEpochContinuationPrepPass();
 std::unique_ptr<Pass> createParallelEdtLoweringPass();
 std::unique_ptr<Pass> createEdtLoweringPass(uint64_t idStride = 1000);
 std::unique_ptr<Pass> createEdtLoweringPass(AnalysisManager *AM,
@@ -107,6 +108,12 @@ std::unique_ptr<Pass> createEdtTransformsPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createVerifyMetadataPass(AnalysisManager *AM,
                                                bool failOnMissing = false);
 std::unique_ptr<Pass> createContractValidationPass(bool failOnError = false);
+
+/// Verification passes at lowering boundaries.
+std::unique_ptr<Pass> createVerifyForLoweredPass();
+std::unique_ptr<Pass> createVerifyDbCreatedPass();
+std::unique_ptr<Pass> createVerifyPreLoweredPass();
+std::unique_ptr<Pass> createVerifyLoweredPass();
 } // namespace arts
 } // namespace mlir
 

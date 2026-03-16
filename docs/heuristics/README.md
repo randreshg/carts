@@ -6,7 +6,7 @@ runtime-design notes.
 Primary guides:
 
 - Partitioning (H1): `docs/heuristics/partitioning/partitioning.md`
-- Distribution (H2): `docs/heuristics/distribution/distribution.md`
+- Distribution (H2): `docs/heuristics/distribution.md`
 
 Related notes:
 

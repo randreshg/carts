@@ -9,7 +9,11 @@
 /// 3. Lower epoch operations to CreateEpochOp + operations + WaitOnEpochOp
 /// 4. Return the epoch GUID for synchronization
 ///
-/// Example:
+/// When an epoch has been marked for continuation (by EpochContinuationPrep),
+/// the pass wires the epoch's finish target to the continuation EDT and
+/// skips emitting WaitOnEpochOp.
+///
+/// Example (standard path):
 ///   Before:
 ///     arts.epoch { ... arts.edt_create ... }
 ///
@@ -17,12 +21,24 @@
 ///     %e = arts.create_epoch
 ///     ... arts.edt_create(..., %e) ...
 ///     arts.wait_on_epoch %e
+///
+/// Example (continuation path):
+///   Before:
+///     arts.epoch { ... arts.edt_create ... } {arts.continuation_for_epoch}
+///     %cont = arts.edt_create(...) {arts.continuation_for_epoch, ...}
+///
+///   After:
+///     %cont = arts.edt_create(...)
+///     %e = arts.create_epoch finish(%cont_guid, %control_slot)
+///     ... arts.edt_create(..., %e) ...
+///     // NO wait_on_epoch
 ///==========================================================================///
 
 #include "arts/Dialect.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
@@ -38,6 +54,11 @@ ARTS_DEBUG_SETUP(epoch_lowering);
 using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
+
+namespace {
+constexpr llvm::StringLiteral kContinuationForEpoch =
+    "arts.continuation_for_epoch";
+} // namespace
 
 ///===----------------------------------------------------------------------===///
 /// Epoch Lowering Pass Implementation
@@ -86,10 +107,60 @@ void EpochLoweringPass::runOnOperation() {
       continue;
     }
 
-    /// Create CreateEpochOp for the epoch
+    /// Check if this epoch has a continuation EDT (set by
+    /// EpochContinuationPrep).
+    bool hasContinuation = epochOp->hasAttr(kContinuationForEpoch);
+    Value finishGuid;
+    Value finishSlot;
+
+    if (hasContinuation) {
+      /// Find the continuation EdtCreateOp after this epoch.
+      /// EpochContinuationPrep placed the continuation arts.edt after the
+      /// epoch, and EdtLowering has since lowered it to an EdtCreateOp.
+      EdtCreateOp contEdtCreate = nullptr;
+      for (Operation *op = epochOp->getNextNode(); op; op = op->getNextNode()) {
+        if (auto edt = dyn_cast<EdtCreateOp>(op)) {
+          if (edt->hasAttr(kContinuationForEpoch)) {
+            contEdtCreate = edt;
+            break;
+          }
+        }
+      }
+
+      if (contEdtCreate) {
+        /// Move the continuation EdtCreateOp and its operand-defining ops
+        /// (e.g., edt_param_pack) to BEFORE the epoch. This ensures
+        /// CreateEpochOp can reference finishGuid/finishSlot while still
+        /// being placed before the worker EDTs inside the epoch.
+        for (Value operand : contEdtCreate->getOperands()) {
+          if (auto *defOp = operand.getDefiningOp())
+            if (defOp->getBlock() == epochOp->getBlock())
+              defOp->moveBefore(epochOp);
+        }
+        contEdtCreate->moveBefore(epochOp);
+
+        finishGuid = contEdtCreate.getGuid();
+        /// The control slot is the LAST slot: depCount - 1 (the control dep
+        /// was added as +1 to depCount by EdtLowering).
+        AC->setInsertionPointAfter(contEdtCreate);
+        Value depCount = contEdtCreate.getDepCount();
+        Value one = AC->createIntConstant(1, AC->Int32, epochOp.getLoc());
+        finishSlot = AC->create<arith::SubIOp>(epochOp.getLoc(), depCount, one);
+        ARTS_INFO("  Continuation path: finish GUID from "
+                  << contEdtCreate << ", control slot = depCount - 1");
+      } else {
+        ARTS_WARN("  Epoch marked for continuation but no continuation "
+                  "EdtCreateOp found; falling back to wait path");
+        hasContinuation = false;
+      }
+    }
+
+    /// Create CreateEpochOp for the epoch (placed just before the epoch).
     AC->setInsertionPoint(epochOp);
     auto createEpochOp = AC->create<CreateEpochOp>(
-        epochOp.getLoc(), IntegerType::get(AC->getContext(), 64));
+        epochOp.getLoc(), IntegerType::get(AC->getContext(), 64),
+        hasContinuation ? finishGuid : Value(),
+        hasContinuation ? finishSlot : Value());
     auto currentEpoch = createEpochOp.getEpochGuid();
 
     /// Find all EdtCreateOp operations within this epoch region and update them
@@ -143,9 +214,13 @@ void EpochLoweringPass::runOnOperation() {
       }
     }
 
-    /// Insert wait on handle
-    AC->setInsertionPointAfter(insertionAfter);
-    AC->create<WaitOnEpochOp>(epochOp.getLoc(), currentEpoch);
+    /// Insert wait on handle ONLY for non-continuation epochs.
+    if (!hasContinuation) {
+      AC->setInsertionPointAfter(insertionAfter);
+      AC->create<WaitOnEpochOp>(epochOp.getLoc(), currentEpoch);
+    } else {
+      ARTS_INFO("  Skipping WaitOnEpochOp (continuation path)");
+    }
 
     /// Replace the epoch operation with its result (the epoch GUID)
     epochOp.replaceAllUsesWith(currentEpoch);

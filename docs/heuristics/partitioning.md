@@ -8,7 +8,7 @@ It focuses on:
 - Where decisions are made (analysis vs heuristics vs rewriting)
 
 Related guide:
-- Distribution (H2): `docs/heuristics/distribution/distribution.md`
+- Distribution (H2): `docs/heuristics/distribution.md`
 - This document covers partitioning (H1) only.
 
 ---

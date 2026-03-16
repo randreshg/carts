@@ -9,6 +9,7 @@ from typing import List, Optional
 import typer
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+from rich.table import Table
 
 from carts_styles import Colors, console, print_header, print_error, print_info, print_success
 from scripts.config import PlatformConfig, get_config
@@ -21,8 +22,8 @@ PIPELINE_STAGES = [
     "collect-metadata",      # Extract loop/array metadata for optimization
     "initial-cleanup",       # Remove dead code, simplify control flow
     "openmp-to-arts",        # Convert OpenMP parallel regions to ARTS EDTs
+    "pattern-pipeline",      # Semantic pattern discovery and kernel transforms
     "edt-transforms",        # Optimize EDT (Event Driven Task) structure
-    "loop-reordering",       # Cache-optimal loop reorder and tiling setup
     "create-dbs",            # Create DataBlocks for inter-task communication
     "db-opt",                # Optimize DataBlock operations
     "edt-opt",               # Further EDT optimizations
@@ -327,6 +328,9 @@ def compile_cmd(
         False, "--diagnose", help="Export diagnostic information"),
     diagnose_output: Optional[Path] = typer.Option(
         None, "--diagnose-output", help="Output file for diagnostics"),
+    start_from: Optional[str] = typer.Option(
+        None, "--start-from",
+        help="Resume pipeline from specified stage (requires saved MLIR)"),
 ):
     """Unified compilation command.
 
@@ -340,14 +344,24 @@ def compile_cmd(
 
     Use --pipeline <stage> to stop after a specific pipeline stage.
     """
+    if pipeline and pipeline not in PIPELINE_STAGES:
+        print_error(f"Unknown pipeline stage: '{pipeline}'")
+        print_info("Available stages (in execution order):")
+        for stage in PIPELINE_STAGES:
+            console.print(f"  - {stage}")
+        raise typer.Exit(1)
+
     ext = input_file.suffix.lower()
     if ext in (".c", ".cpp"):
         _compile_from_c(ctx, input_file, output, optimize, debug, pipeline,
                         all_stages, emit_llvm, collect_metadata,
-                        partition_fallback, diagnose, diagnose_output)
+                        partition_fallback, diagnose, diagnose_output,
+                        start_from)
     elif ext == ".mlir":
         _compile_from_mlir(ctx, input_file, output, optimize, debug, pipeline,
-                           all_stages, emit_llvm, collect_metadata)
+                           all_stages, emit_llvm, collect_metadata,
+                           partition_fallback, diagnose, diagnose_output,
+                           start_from)
     elif ext == ".ll":
         if pipeline:
             print_error("--pipeline is not supported for .ll input (link-only)")
@@ -376,6 +390,7 @@ def _compile_from_c(
     partition_fallback: Optional[str],
     diagnose: bool,
     diagnose_output: Optional[Path],
+    start_from: Optional[str] = None,
 ) -> None:
     """Full pipeline for C/C++ input."""
     config = get_config()
@@ -399,6 +414,8 @@ def _compile_from_c(
 
     if partition_fallback:
         extra_pipeline_args.append(f"--partition-fallback={partition_fallback}")
+    if start_from:
+        extra_pipeline_args.append(f"--start-from={start_from}")
 
     use_dual_mode = optimize or parsed.optimize
     use_diagnose = diagnose or parsed.diagnose
@@ -441,6 +458,10 @@ def _compile_from_mlir(
     all_stages: bool,
     emit_llvm: bool,
     collect_metadata: bool,
+    partition_fallback: Optional[str] = None,
+    diagnose: bool = False,
+    diagnose_output: Optional[Path] = None,
+    start_from: Optional[str] = None,
 ) -> None:
     """MLIR transformation pipeline."""
     config = get_config()
@@ -461,6 +482,11 @@ def _compile_from_mlir(
 
     cmd = [str(carts_compile_bin), str(input_file)]
 
+    # Auto-discover arts.cfg if not explicitly provided
+    arts_cfg = _find_arts_config(input_file, ctx.args or [], config)
+    if arts_cfg:
+        cmd.extend(["--arts-config", str(arts_cfg)])
+
     if optimize:
         cmd.append("--O3")
     if emit_llvm:
@@ -471,6 +497,14 @@ def _compile_from_mlir(
         cmd.append("-g")
     if pipeline:
         cmd.append(f"--stop-at={pipeline}")
+    if partition_fallback:
+        cmd.append(f"--partition-fallback={partition_fallback}")
+    if diagnose:
+        cmd.append("--diagnose")
+    if diagnose_output:
+        cmd.extend(["--diagnose-output", str(diagnose_output)])
+    if start_from:
+        cmd.append(f"--start-from={start_from}")
     if output:
         cmd.extend(["-o", str(output)])
     if ctx.args:
@@ -895,27 +929,48 @@ def _compile_all_stages(
         if config_file.is_file():
             base_cmd.extend(["--arts-config", str(config_file)])
 
+        results = []  # List of (stage_name, success_bool)
+
         # Dump each stage
         for stage in PIPELINE_STAGES:
             progress.update(task, description=f"Stage: {stage}")
             out_file = out_dir / f"{stem}_{stage}.mlir"
             cmd = base_cmd + [f"--stop-at={stage}",
                               "-o", str(out_file)] + extra_args
-            run_subprocess(cmd, check=False)
+            rc = run_subprocess(cmd, check=False).returncode
+            results.append((stage, rc == 0))
             progress.advance(task)
 
         # Final MLIR
         progress.update(task, description="Exporting complete MLIR")
         final_mlir = out_dir / f"{stem}_complete.mlir"
         cmd = base_cmd + ["-o", str(final_mlir)] + extra_args
-        run_subprocess(cmd, check=False)
+        rc = run_subprocess(cmd, check=False).returncode
+        results.append(("complete-mlir", rc == 0))
         progress.advance(task)
 
         # Final LLVM IR
         progress.update(task, description="Exporting LLVM IR")
         final_ll = out_dir / f"{stem}.ll"
         cmd = base_cmd + ["--emit-llvm", "-o", str(final_ll)] + extra_args
-        run_subprocess(cmd, check=False)
+        rc = run_subprocess(cmd, check=False).returncode
+        results.append(("emit-llvm", rc == 0))
         progress.advance(task)
 
+    # Print summary table
+    passed = sum(1 for _, ok in results if ok)
+    failed = sum(1 for _, ok in results if not ok)
+
+    table = Table(title="Pipeline Stage Results")
+    table.add_column("Stage", style="cyan")
+    table.add_column("Status", justify="center")
+    for stage_name, ok in results:
+        status = f"[green]PASS[/green]" if ok else f"[red]FAIL[/red]"
+        table.add_row(stage_name, status)
+    console.print(table)
+
+    console.print(
+        f"\n[green]{passed} passed[/green], [red]{failed} failed[/red] "
+        f"out of {len(results)} stages"
+    )
     print_success(f"Pipeline dumps written to {out_dir}")

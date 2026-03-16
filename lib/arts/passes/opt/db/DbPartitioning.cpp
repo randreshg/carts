@@ -665,6 +665,59 @@ struct DbPartitioningPass
   bool expandMultiEntryAcquires();
 
 private:
+  /// Build per-acquire capability info (canBlock, canElementWise, etc.) and
+  /// populate ctx.acquires for heuristic voting. Returns true if the caller
+  /// should early-return (preserve explicit contract layout).
+  bool buildPerAcquireCapabilities(
+      PartitioningContext &ctx,
+      SmallVectorImpl<AcquirePartitionInfo> &acquireInfos,
+      ArrayRef<DbAcquireNode *> allocAcquireNodes,
+      ArrayRef<std::optional<DbAnalysis::AcquireContractSummary>>
+          acquireContractSummaries,
+      ArrayRef<const DbAcquirePartitionFacts *> acquireFacts,
+      SmallVectorImpl<Value> &blockSizesForNDBlock, DbAllocOp allocOp,
+      DbAllocNode *allocNode, DbAnalysis &dbAnalysis, bool canUseBlock,
+      std::optional<int64_t> &writerBlockSizeHint,
+      std::optional<int64_t> &anyBlockSizeHint, OpBuilder &builder);
+
+  /// Compute stencil halo bounds from acquire nodes and multi-entry structure.
+  /// Returns the computed StencilInfo, or std::nullopt if stencil mode should
+  /// be downgraded (e.g. single-sided halo).
+  std::optional<StencilInfo> computeStencilHaloInfo(
+      DbAllocOp allocOp, DbAllocNode *allocNode,
+      ArrayRef<DbAcquireNode *> allocAcquireNodes,
+      ArrayRef<std::optional<DbAnalysis::AcquireContractSummary>>
+          acquireContractSummaries,
+      ArrayRef<const DbAcquirePartitionFacts *> acquireFacts,
+      SmallVectorImpl<AcquirePartitionInfo> &acquireInfos,
+      bool allocHasStencilPattern, DbAnalysis &dbAnalysis,
+      PartitioningDecision &decision, PartitioningContext &ctx,
+      OpBuilder &builder, Location loc);
+
+  /// Resolve block-plan sizes and partition dimensions, and reconcile
+  /// per-acquire dimension compatibility.
+  bool resolveBlockPlanSizes(
+      SmallVectorImpl<Value> &blockSizesForPlan,
+      SmallVectorImpl<unsigned> &partitionedDimsForPlan,
+      SmallVectorImpl<AcquirePartitionInfo> &acquireInfos,
+      SmallVectorImpl<Value> &blockSizesForNDBlock,
+      PartitioningDecision &decision, PartitioningContext &ctx,
+      std::optional<StencilInfo> &stencilInfo, DbAllocOp allocOp,
+      DbAllocNode *allocNode, DbHeuristics &heuristics, OpBuilder &builder,
+      Location loc);
+
+  /// Assemble the rewrite plan from partition decision and apply it via
+  /// DbRewriter. Returns the rewritten DbAllocOp on success.
+  FailureOr<DbAllocOp> assembleAndApplyRewritePlan(
+      PartitioningDecision &decision,
+      SmallVectorImpl<AcquirePartitionInfo> &acquireInfos,
+      SmallVectorImpl<Value> &blockSizesForPlan,
+      SmallVectorImpl<unsigned> &partitionedDimsForPlan,
+      SmallVectorImpl<Value> &newOuterSizes,
+      SmallVectorImpl<Value> &newInnerSizes,
+      std::optional<StencilInfo> &stencilInfo, DbAllocOp allocOp,
+      DbHeuristics &heuristics, OpBuilder &builder);
+
   ModuleOp module;
   mlir::arts::AnalysisManager *AM = nullptr;
 };
@@ -1343,269 +1396,13 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     }
 
     /// Build per-acquire capabilities for heuristic voting
-    size_t idx = 0;
-    bool preserveExplicitContractLayout = false;
     std::optional<int64_t> writerBlockSizeHint;
     std::optional<int64_t> anyBlockSizeHint;
-    for (DbAcquireNode *acqNode : allocAcquireNodes) {
-      if (!acqNode || idx >= acquireInfos.size())
-        continue;
-
-      auto &acqInfo = acquireInfos[idx];
-      const DbAnalysis::AcquireContractSummary *contractSummary =
-          idx < acquireContractSummaries.size() && acquireContractSummaries[idx]
-              ? &*acquireContractSummaries[idx]
-              : nullptr;
-      const DbAcquirePartitionFacts *facts =
-          idx < acquireFacts.size() ? acquireFacts[idx] : nullptr;
-
-      /// Check access patterns for block capability decisions.
-      bool hasIndirect =
-          facts ? facts->hasIndirectAccess : acqNode->hasIndirectAccess();
-
-      /// Read partition capability from acquire's attribute.
-      /// ForLowering sets this to 'chunked' when adding offset/size hints.
-      /// CreateDbs sets this based on DbControlOp analysis.
-      auto acquire = acqNode->getDbAcquireOp();
-      auto acquireMode = getPartitionMode(acquire.getOperation());
-      bool hasBlockHints = contractSummary
-                               ? contractSummary->hasBlockHints()
-                               : (!acquire.getPartitionOffsets().empty() ||
-                                  !acquire.getPartitionSizes().empty());
-      bool inferredBlock = contractSummary
-                               ? contractSummary->inferredBlock()
-                               : (!acqInfo.partitionOffsets.empty() &&
-                                  !acqInfo.partitionSizes.empty());
-      if (auto blockHint = getPartitioningHint(acquire.getOperation())) {
-        if (blockHint->mode == PartitionMode::block && blockHint->blockSize &&
-            *blockHint->blockSize > 0) {
-          if (!anyBlockSizeHint)
-            anyBlockSizeHint = blockHint->blockSize;
-          else
-            anyBlockSizeHint =
-                std::min(*anyBlockSizeHint, *blockHint->blockSize);
-
-          if (acquire.getMode() != ArtsMode::in) {
-            if (!writerBlockSizeHint)
-              writerBlockSizeHint = blockHint->blockSize;
-            else
-              writerBlockSizeHint =
-                  std::min(*writerBlockSizeHint, *blockHint->blockSize);
-          }
-        }
-      }
-      bool hasDistributionContract =
-          contractSummary ? contractSummary->hasDistributionContract() : false;
-      bool thisAcquireCanBlock =
-          (acquireMode && (*acquireMode == PartitionMode::block ||
-                           *acquireMode == PartitionMode::stencil)) ||
-          hasBlockHints || inferredBlock;
-      /// If access is indirect and no explicit hints exist, still allow block
-      /// partitioning so we can fall back to full-range acquires on a blocked
-      /// allocation (improves parallelism vs coarse).
-      if (!thisAcquireCanBlock &&
-          (hasIndirect || (allocNode && allocNode->hasNonAffineAccesses &&
-                           *allocNode->hasNonAffineAccesses))) {
-        if (!ctx.totalElements || *ctx.totalElements > 1) {
-          thisAcquireCanBlock = true;
-          ARTS_DEBUG("  Non-affine/indirect access without hints; enabling "
-                     "block capability for full-range acquires");
-        }
-      }
-      if (!thisAcquireCanBlock &&
-          ((contractSummary &&
-            contractSummary->accessPattern == AccessPattern::Stencil) ||
-           (!contractSummary &&
-            acqNode->getAccessPattern() == AccessPattern::Stencil)))
-        thisAcquireCanBlock = true;
-      if (!thisAcquireCanBlock && hasExplicitStencilContract(contractSummary))
-        thisAcquireCanBlock = true;
-      bool thisAcquireCanElementWise =
-          (acquireMode && *acquireMode == PartitionMode::fine_grained) ||
-          (contractSummary && contractSummary->hasFineGrainedEntries());
-
-      /// If the partition offset does not map to the access pattern, block
-      /// partitioning would select the wrong dimension (non-leading) and is
-      /// unsafe. Disable block capability in that case.
-      SmallVector<Value> offsetVals = getPartitionOffsetsND(acqNode, &acqInfo);
-      unsigned offsetIdx = 0;
-      Value partitionOffset =
-          DbUtils::pickRepresentativePartitionOffset(offsetVals, &offsetIdx);
-      if (partitionOffset) {
-        bool hasUnmappedEntry =
-            contractSummary && contractSummary->hasUnmappedPartitionEntry();
-        if (hasUnmappedEntry) {
-          bool preserveFromStencilContract =
-              contractSummary &&
-              contractSummary->contract.supportsBlockHalo() &&
-              contractSummary->contract.hasOwnerDims();
-          bool writesThroughAcquire = acquire.getMode() == ArtsMode::out ||
-                                      acquire.getMode() == ArtsMode::inout ||
-                                      acqNode->hasStores();
-          bool preserveFromExplicitContract =
-              contractSummary &&
-              contractSummary->preservesDistributedContractEntry();
-          if (preserveFromExplicitContract || preserveFromStencilContract) {
-            ARTS_DEBUG("  Partition offset not mappable by DbAcquireNode, but "
-                       "preserving block capability from "
-                       << (preserveFromExplicitContract ? "EDT distribution"
-                                                        : "N-D stencil halo")
-                       << " contract"
-                       << (writesThroughAcquire ? " (write acquire)" : ""));
-            bool acquireSelectsLeafDb = false;
-            if (auto ptrTy = dyn_cast<MemRefType>(acquire.getPtr().getType()))
-              acquireSelectsLeafDb = !isa<MemRefType>(ptrTy.getElementType());
-            if (acquireSelectsLeafDb)
-              preserveExplicitContractLayout = true;
-          } else if (writesThroughAcquire) {
-            bool hasDirectWriteAccess = contractSummary
-                                            ? contractSummary->hasDirectAccess()
-                                            : !acqNode->hasIndirectAccess();
-            bool canPreserveWriteFullRange =
-                !hasIndirect && hasDirectWriteAccess &&
-                (!ctx.totalElements || *ctx.totalElements > 1);
-            if (canPreserveWriteFullRange) {
-              ARTS_DEBUG("  Partition offset incompatible with write access; "
-                         "preserving block capability with full-range write "
-                         "acquire");
-              acqInfo.needsFullRange = true;
-            } else {
-              ARTS_DEBUG("  Partition offset incompatible with write access; "
-                         "disabling block capability");
-              thisAcquireCanBlock = false;
-            }
-          } else {
-            ARTS_DEBUG("  Partition offset incompatible with read-only access "
-                       "pattern; preserving block capability with full-range");
-            acqInfo.needsFullRange = true;
-          }
-        }
-      }
-
-      /// Build AcquireInfo for heuristic voting
-      AcquireInfo info;
-      info.accessMode = acquire.getMode();
-      info.canElementWise =
-          thisAcquireCanElementWise || !acquire.getPartitionIndices().empty();
-      info.canBlock = canUseBlock && thisAcquireCanBlock;
-      info.hasDistributionContract = hasDistributionContract;
-      info.partitionDimsFromPeers =
-          contractSummary ? contractSummary->partitionDimsFromPeers() : false;
-      info.explicitCoarseRequest =
-          acquireMode && *acquireMode == PartitionMode::coarse;
-
-      /// Populate unified partition infos from DbAcquireOp.
-      /// Heuristics will compute uniformity and decide outerRank.
-      info.partitionInfos = acquire.getPartitionInfos();
-
-      /// Populate partition mode from AcquirePartitionInfo
-      if (idx < acquireInfos.size()) {
-        const auto &acqPartInfo = acquireInfos[idx];
-        info.partitionMode = acqPartInfo.mode;
-      }
-
-      /// Populate access pattern and dep pattern using canonical ordering.
-      info.accessPattern = dbAnalysis.resolveCanonicalAcquireAccessPattern(
-          acquire, contractSummary, facts);
-      info.depPattern = dbAnalysis.resolveCanonicalAcquireDepPattern(
-          acquire, contractSummary, facts);
-
-      if (info.accessPattern == AccessPattern::Unknown &&
-          info.accessMode == ArtsMode::in &&
-          isStencilFamilyDepPattern(info.depPattern)) {
-        info.accessPattern = AccessPattern::Stencil;
-      }
-
-      if (!ctx.preferBlockND && acqInfo.partitionSizes.size() >= 2) {
-        bool preferContractND = contractSummary &&
-                                contractSummary->contract.supportsBlockHalo() &&
-                                contractSummary->contract.hasOwnerDims();
-        bool preferTiling2D = acquire.getMode() == ArtsMode::inout &&
-                              DbAnalysis::isTiling2DTaskAcquire(acquire);
-        if (preferContractND || preferTiling2D) {
-          SmallVector<Value> candidateBlockSizes;
-          unsigned targetRank =
-              static_cast<unsigned>(acqInfo.partitionSizes.size());
-          if (preferContractND)
-            targetRank = std::min<unsigned>(
-                targetRank, static_cast<unsigned>(
-                                contractSummary->contract.ownerDims.size()));
-          if (preferContractND) {
-            if (contractSummary &&
-                prefersContractNDBlock(contractSummary->contract, targetRank)) {
-              auto staticBlockShape =
-                  contractSummary->contract.getStaticBlockShape();
-              candidateBlockSizes.reserve(targetRank);
-              for (unsigned dim = 0; dim < targetRank; ++dim) {
-                int64_t dimSize = 0;
-                Value blockSize = nullptr;
-                if (dim < contractSummary->contract.blockShape.size())
-                  blockSize = contractSummary->contract.blockShape[dim];
-                if (blockSize) {
-                  if (!ValueAnalysis::getConstantIndex(blockSize, dimSize) ||
-                      dimSize <= 0) {
-                    candidateBlockSizes.clear();
-                    break;
-                  }
-                } else if (staticBlockShape &&
-                           dim < static_cast<unsigned>(
-                                     staticBlockShape->size()) &&
-                           (*staticBlockShape)[dim] > 0) {
-                  dimSize = (*staticBlockShape)[dim];
-                  blockSize = arts::createConstantIndex(builder, loc, dimSize);
-                } else {
-                  candidateBlockSizes.clear();
-                  break;
-                }
-                candidateBlockSizes.push_back(blockSize);
-              }
-            }
-          }
-          if (candidateBlockSizes.empty())
-            candidateBlockSizes.reserve(targetRank);
-          for (unsigned dim = 0; dim < targetRank; ++dim) {
-            if (dim < candidateBlockSizes.size())
-              continue;
-            Value blockSize = acqInfo.partitionSizes[dim];
-            if (!blockSize ||
-                ValueAnalysis::isZeroConstant(
-                    ValueAnalysis::stripNumericCasts(blockSize))) {
-              candidateBlockSizes.clear();
-              break;
-            }
-            candidateBlockSizes.push_back(blockSize);
-          }
-          if (!candidateBlockSizes.empty()) {
-            ctx.preferBlockND = true;
-            ctx.preferredOuterRank = targetRank;
-            blockSizesForNDBlock.assign(candidateBlockSizes.begin(),
-                                        candidateBlockSizes.end());
-            ARTS_DEBUG("    Acquire[" << idx
-                                      << "]: explicit distributed contract "
-                                         "prefers N-D block partitioning");
-          }
-        }
-      }
-
-      ctx.acquires.push_back(info);
-      ARTS_DEBUG("    Acquire["
-                 << idx << "]: mode=" << static_cast<int>(info.accessMode)
-                 << ", canEW=" << info.canElementWise
-                 << ", canBlock=" << info.canBlock << ", acquireAttr="
-                 << (acquireMode ? static_cast<int>(*acquireMode) : -1));
-      ++idx;
-    }
-
-    if (preserveExplicitContractLayout) {
-      ARTS_DEBUG("  Preserving explicit block-contract leaf acquire layout; "
-                 "skipping allocation rewrite");
-      heuristics.recordDecision(
-          "Partition-PreserveLeafContractLayout", true,
-          "leaf acquire uses explicit distributed contract offsets; preserving "
-          "layout",
-          allocOp.getOperation(), {});
+    if (buildPerAcquireCapabilities(
+            ctx, acquireInfos, allocAcquireNodes, acquireContractSummaries,
+            acquireFacts, blockSizesForNDBlock, allocOp, allocNode, dbAnalysis,
+            canUseBlock, writerBlockSizeHint, anyBlockSizeHint, builder))
       return allocOp;
-    }
 
     /// Collect DbAcquireNode* and partition offsets for heuristic decisions
     /// Get per-acquire decisions from heuristics (calls needsFullRange)
@@ -1974,219 +1771,21 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   /// Must be done before computeAllocationShape() for stencil mode.
   std::optional<StencilInfo> stencilInfo;
   if (decision.mode == PartitionMode::stencil && allocNode) {
-    StencilInfo info;
-    info.haloLeft = 0;
-    info.haloRight = 0;
-
-    /// Collect stencil bounds from acquire nodes or multi-entry structure.
-    /// For multi-entry stencil acquires (not expanded), extract halo bounds
-    /// from the partition indices pattern using DbUtils.
-    for (DbAcquireNode *acqNode : allocAcquireNodes) {
-      if (!acqNode)
-        continue;
-      DbAcquireOp acq = acqNode->getDbAcquireOp();
-      if (!acq)
-        continue;
-
-      /// First try: get bounds from DbAcquireNode analysis
-      auto stencilBounds = acqNode->getStencilBounds();
-      if (stencilBounds && stencilBounds->hasHalo()) {
-        info.haloLeft = std::max(info.haloLeft, stencilBounds->haloLeft());
-        info.haloRight = std::max(info.haloRight, stencilBounds->haloRight());
-        continue;
-      }
-
-      /// Second try: for multi-entry stencil acquires, extract from structure
-      if (acq.hasMultiplePartitionEntries()) {
-        int64_t minOffset = 0, maxOffset = 0;
-        if (DbAnalysis::hasMultiEntryStencilPattern(acq, minOffset,
-                                                    maxOffset)) {
-          /// minOffset is negative (left halo), maxOffset is positive (right)
-          int64_t haloL = -minOffset;
-          int64_t haloR = maxOffset;
-          info.haloLeft = std::max(info.haloLeft, haloL);
-          info.haloRight = std::max(info.haloRight, haloR);
-          ARTS_DEBUG("  Extracted stencil bounds from multi-entry: haloLeft="
-                     << haloL << ", haloRight=" << haloR);
-        }
-      }
-    }
-
-    bool hasReadStencilAcquire = false;
-    for (auto [acqNode, contractSummary, acqFacts] : llvm::zip_equal(
-             allocAcquireNodes, acquireContractSummaries, acquireFacts)) {
-      if (!acqNode)
-        continue;
-      DbAcquireOp acquire = acqNode->getDbAcquireOp();
-      if (!acquire || acquire.getMode() != ArtsMode::in)
-        continue;
-      const DbAcquirePartitionFacts *facts =
-          acqFacts ? acqFacts : &acqNode->getPartitionFacts();
-      if (dbAnalysis.hasCanonicalAcquireStencilSemantics(
-              acquire, contractSummary ? &*contractSummary : nullptr, facts) ||
-          allocHasStencilPattern) {
-        hasReadStencilAcquire = true;
-        break;
-      }
-    }
-
-    if ((info.haloLeft == 0 || info.haloRight == 0) && hasReadStencilAcquire &&
-        allocHasStencilPattern) {
-      if (allocPattern && *allocPattern == DbAccessPattern::stencil) {
-        info.haloLeft = std::max<int64_t>(info.haloLeft, 1);
-        info.haloRight = std::max<int64_t>(info.haloRight, 1);
-        ARTS_DEBUG("  Applying stencil halo fallback from db_alloc access "
-                   "pattern: haloLeft="
-                   << info.haloLeft << ", haloRight=" << info.haloRight);
-      }
-    }
-
-    /// Get total rows from first element dimension.
-    /// For stencil loops, the logical owned span excludes halo rows, so use
-    /// (rows - haloLeft - haloRight) when possible.
-    if (!allocOp.getElementSizes().empty()) {
-      if (auto staticSize =
-              arts::extractBlockSizeFromHint(allocOp.getElementSizes()[0]))
-        info.totalRows = arts::createConstantIndex(builder, loc, *staticSize);
-      else
-        info.totalRows = allocOp.getElementSizes()[0];
-
-      if (info.totalRows && (info.haloLeft > 0 || info.haloRight > 0)) {
-        if (!info.totalRows.getType().isIndex())
-          info.totalRows = builder.create<arith::IndexCastOp>(
-              loc, builder.getIndexType(), info.totalRows);
-
-        Value haloTotal = arts::createConstantIndex(
-            builder, loc, info.haloLeft + info.haloRight);
-        Value zero = arts::createZeroIndex(builder, loc);
-        Value canSubtract = builder.create<arith::CmpIOp>(
-            loc, arith::CmpIPredicate::uge, info.totalRows, haloTotal);
-        Value reduced =
-            builder.create<arith::SubIOp>(loc, info.totalRows, haloTotal);
-        info.totalRows =
-            builder.create<arith::SelectOp>(loc, canSubtract, reduced, zero);
-      }
-    }
-
-    stencilInfo = info;
-    ARTS_DEBUG("  Stencil mode (early): haloLeft="
-               << info.haloLeft << ", haloRight=" << info.haloRight);
-
-    /// Check: Require both halos for true ESD stencil mode.
-    /// Single-sided patterns (only left or only right halo) break the
-    /// 3-buffer approach which assumes data from both neighbors exists.
-    if (info.haloLeft == 0 || info.haloRight == 0) {
-      ARTS_DEBUG("  Single-sided halo detected (haloLeft="
-                 << info.haloLeft << ", haloRight=" << info.haloRight
-                 << ") - falling back to BLOCK mode");
-      decision = PartitioningDecision::blockND(
-          ctx, decision.outerRank,
-          "Single-sided stencil pattern - using BLOCK instead");
-      stencilInfo = std::nullopt; /// Clear stencil info
-    }
+    stencilInfo = computeStencilHaloInfo(
+        allocOp, allocNode, allocAcquireNodes, acquireContractSummaries,
+        acquireFacts, acquireInfos, allocHasStencilPattern, dbAnalysis,
+        decision, ctx, builder, loc);
   }
 
-  /// Step 5b: Compute sizes from decision (uses outerRank/innerRank)
-  /// For block mode, resolve block-plan sizes/dimensions behind a dedicated
-  /// contract and keep pass logic orchestration-focused.
+  /// Step 5b: Resolve block-plan sizes and reconcile partition dimensions.
   SmallVector<Value> blockSizesForPlan;
   SmallVector<unsigned> partitionedDimsForPlan;
   if (decision.isBlock()) {
-    bool useNodesForFallback = false;
-    if (AM) {
-      AbstractMachine &machine = AM->getAbstractMachine();
-      if (machine.hasValidNodeCount() && machine.getNodeCount() > 1) {
-        /// Stencil ESD requires block-aligned worker chunk offsets.
-        /// Worker chunks are produced by EDT lowering using worker-level
-        /// decomposition. Keeping stencil fallback sizing worker-based avoids
-        /// misalignment (e.g. node-sized blocks with worker-sized tasks) that
-        /// would otherwise force DbStencilRewriter into block fallback.
-        useNodesForFallback = (decision.mode != PartitionMode::stencil);
-      }
-    }
-
-    DbBlockPlanInput blockPlanInput{allocOp,
-                                    acquireInfos,
-                                    ctx.blockSize,
-                                    /*dynamicBlockSizeHint=*/Value(),
-                                    blockSizesForNDBlock,
-                                    &builder,
-                                    loc,
-                                    useNodesForFallback};
-    auto blockPlanOr = resolveDbBlockPlan(blockPlanInput);
-    if (failed(blockPlanOr) || blockPlanOr->blockSizes.empty()) {
-      ARTS_DEBUG("  No block-plan sizes available - falling back to coarse");
-      heuristics.recordDecision(
-          "Partition-NoBlockSize", false,
-          "block mode requested but no block-plan sizes available",
-          allocOp.getOperation(), {});
-      resetCoarseAcquireRanges(allocOp, allocNode, builder);
+    if (!resolveBlockPlanSizes(blockSizesForPlan, partitionedDimsForPlan,
+                               acquireInfos, blockSizesForNDBlock, decision,
+                               ctx, stencilInfo, allocOp, allocNode, heuristics,
+                               builder, loc))
       return allocOp;
-    }
-
-    blockSizesForPlan = std::move(blockPlanOr->blockSizes);
-    partitionedDimsForPlan = std::move(blockPlanOr->partitionedDims);
-
-    heuristics.recordDecision(
-        "Partition-BlockPlanResolved", true,
-        "resolved block sizes and partition dimensions via block-plan resolver",
-        allocOp.getOperation(),
-        {{"blockDims", static_cast<int64_t>(blockSizesForPlan.size())},
-         {"partitionedDims",
-          static_cast<int64_t>(partitionedDimsForPlan.size())}});
-
-    /// Non-leading partitioning is not supported by stencil ESD. Downgrade
-    /// to block mode when needed.
-    if (decision.mode == PartitionMode::stencil &&
-        !partitionedDimsForPlan.empty()) {
-      bool nonLeading = false;
-      for (unsigned i = 0; i < partitionedDimsForPlan.size(); ++i) {
-        if (partitionedDimsForPlan[i] != i) {
-          nonLeading = true;
-          break;
-        }
-      }
-      if (nonLeading) {
-        decision = PartitioningDecision::blockND(
-            ctx, partitionedDimsForPlan.size(),
-            "Non-leading partition dims: disable stencil ESD");
-        stencilInfo = std::nullopt;
-      }
-    }
-
-    /// If an acquire's inferred partition dims disagree with the chosen plan,
-    /// require full-range to preserve correctness.
-    ///
-    /// Allow acquires to carry extra trailing partition dimensions as long as
-    /// the plan dims are a leading prefix. This is common when a 2D acquire
-    /// participates in a 1D block plan (partition along rows only).
-    if (!partitionedDimsForPlan.empty()) {
-      for (auto &info : acquireInfos) {
-        if (info.needsFullRange)
-          continue;
-        if (info.partitionDims.empty()) {
-          info.needsFullRange = true;
-          ARTS_DEBUG("  Acquire missing partition dims under concrete plan; "
-                     "forcing full-range access");
-          continue;
-        }
-        bool compatible =
-            info.partitionDims.size() >= partitionedDimsForPlan.size();
-        if (compatible) {
-          for (unsigned i = 0; i < partitionedDimsForPlan.size(); ++i) {
-            if (info.partitionDims[i] != partitionedDimsForPlan[i]) {
-              compatible = false;
-              break;
-            }
-          }
-        }
-        if (!compatible) {
-          info.needsFullRange = true;
-          ARTS_DEBUG("  Acquire partition dims mismatch with plan; "
-                     "forcing full-range access");
-        }
-      }
-    }
   }
 
   SmallVector<Value> newOuterSizes, newInnerSizes;
@@ -2202,10 +1801,551 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     return allocOp;
   }
 
-  /// Step 6: Apply DbRewriter
+  /// Steps 6-7: Assemble rewrite plan and apply via DbRewriter.
+  return assembleAndApplyRewritePlan(decision, acquireInfos, blockSizesForPlan,
+                                     partitionedDimsForPlan, newOuterSizes,
+                                     newInnerSizes, stencilInfo, allocOp,
+                                     heuristics, builder);
+}
+
+/// Build per-acquire capability info and populate ctx.acquires for heuristic
+/// voting. Returns true if the caller should early-return the original allocOp
+/// (e.g. when an explicit contract layout must be preserved).
+bool DbPartitioningPass::buildPerAcquireCapabilities(
+    PartitioningContext &ctx,
+    SmallVectorImpl<AcquirePartitionInfo> &acquireInfos,
+    ArrayRef<DbAcquireNode *> allocAcquireNodes,
+    ArrayRef<std::optional<DbAnalysis::AcquireContractSummary>>
+        acquireContractSummaries,
+    ArrayRef<const DbAcquirePartitionFacts *> acquireFacts,
+    SmallVectorImpl<Value> &blockSizesForNDBlock, DbAllocOp allocOp,
+    DbAllocNode *allocNode, DbAnalysis &dbAnalysis, bool canUseBlock,
+    std::optional<int64_t> &writerBlockSizeHint,
+    std::optional<int64_t> &anyBlockSizeHint, OpBuilder &builder) {
+  Location loc = allocOp.getLoc();
+  auto &heuristics = AM->getDbHeuristics();
+
+  size_t idx = 0;
+  bool preserveExplicitContractLayout = false;
+  for (DbAcquireNode *acqNode : allocAcquireNodes) {
+    if (!acqNode || idx >= acquireInfos.size())
+      continue;
+
+    auto &acqInfo = acquireInfos[idx];
+    const DbAnalysis::AcquireContractSummary *contractSummary =
+        idx < acquireContractSummaries.size() && acquireContractSummaries[idx]
+            ? &*acquireContractSummaries[idx]
+            : nullptr;
+    const DbAcquirePartitionFacts *facts =
+        idx < acquireFacts.size() ? acquireFacts[idx] : nullptr;
+
+    /// Check access patterns for block capability decisions.
+    bool hasIndirect =
+        facts ? facts->hasIndirectAccess : acqNode->hasIndirectAccess();
+
+    /// Read partition capability from acquire's attribute.
+    /// ForLowering sets this to 'chunked' when adding offset/size hints.
+    /// CreateDbs sets this based on DbControlOp analysis.
+    auto acquire = acqNode->getDbAcquireOp();
+    auto acquireMode = getPartitionMode(acquire.getOperation());
+    bool hasBlockHints = contractSummary
+                             ? contractSummary->hasBlockHints()
+                             : (!acquire.getPartitionOffsets().empty() ||
+                                !acquire.getPartitionSizes().empty());
+    bool inferredBlock = contractSummary
+                             ? contractSummary->inferredBlock()
+                             : (!acqInfo.partitionOffsets.empty() &&
+                                !acqInfo.partitionSizes.empty());
+    if (auto blockHint = getPartitioningHint(acquire.getOperation())) {
+      if (blockHint->mode == PartitionMode::block && blockHint->blockSize &&
+          *blockHint->blockSize > 0) {
+        if (!anyBlockSizeHint)
+          anyBlockSizeHint = blockHint->blockSize;
+        else
+          anyBlockSizeHint =
+              std::min(*anyBlockSizeHint, *blockHint->blockSize);
+
+        if (acquire.getMode() != ArtsMode::in) {
+          if (!writerBlockSizeHint)
+            writerBlockSizeHint = blockHint->blockSize;
+          else
+            writerBlockSizeHint =
+                std::min(*writerBlockSizeHint, *blockHint->blockSize);
+        }
+      }
+    }
+    bool hasDistributionContract =
+        contractSummary ? contractSummary->hasDistributionContract() : false;
+    bool thisAcquireCanBlock =
+        (acquireMode && (*acquireMode == PartitionMode::block ||
+                         *acquireMode == PartitionMode::stencil)) ||
+        hasBlockHints || inferredBlock;
+    /// If access is indirect and no explicit hints exist, still allow block
+    /// partitioning so we can fall back to full-range acquires on a blocked
+    /// allocation (improves parallelism vs coarse).
+    if (!thisAcquireCanBlock &&
+        (hasIndirect || (allocNode && allocNode->hasNonAffineAccesses &&
+                         *allocNode->hasNonAffineAccesses))) {
+      if (!ctx.totalElements || *ctx.totalElements > 1) {
+        thisAcquireCanBlock = true;
+        ARTS_DEBUG("  Non-affine/indirect access without hints; enabling "
+                   "block capability for full-range acquires");
+      }
+    }
+    if (!thisAcquireCanBlock &&
+        ((contractSummary &&
+          contractSummary->accessPattern == AccessPattern::Stencil) ||
+         (!contractSummary &&
+          acqNode->getAccessPattern() == AccessPattern::Stencil)))
+      thisAcquireCanBlock = true;
+    if (!thisAcquireCanBlock && hasExplicitStencilContract(contractSummary))
+      thisAcquireCanBlock = true;
+    bool thisAcquireCanElementWise =
+        (acquireMode && *acquireMode == PartitionMode::fine_grained) ||
+        (contractSummary && contractSummary->hasFineGrainedEntries());
+
+    /// If the partition offset does not map to the access pattern, block
+    /// partitioning would select the wrong dimension (non-leading) and is
+    /// unsafe. Disable block capability in that case.
+    SmallVector<Value> offsetVals = getPartitionOffsetsND(acqNode, &acqInfo);
+    unsigned offsetIdx = 0;
+    Value partitionOffset =
+        DbUtils::pickRepresentativePartitionOffset(offsetVals, &offsetIdx);
+    if (partitionOffset) {
+      bool hasUnmappedEntry =
+          contractSummary && contractSummary->hasUnmappedPartitionEntry();
+      if (hasUnmappedEntry) {
+        bool preserveFromStencilContract =
+            contractSummary &&
+            contractSummary->contract.supportsBlockHalo() &&
+            contractSummary->contract.hasOwnerDims();
+        bool writesThroughAcquire = acquire.getMode() == ArtsMode::out ||
+                                    acquire.getMode() == ArtsMode::inout ||
+                                    acqNode->hasStores();
+        bool preserveFromExplicitContract =
+            contractSummary &&
+            contractSummary->preservesDistributedContractEntry();
+        if (preserveFromExplicitContract || preserveFromStencilContract) {
+          ARTS_DEBUG("  Partition offset not mappable by DbAcquireNode, but "
+                     "preserving block capability from "
+                     << (preserveFromExplicitContract ? "EDT distribution"
+                                                      : "N-D stencil halo")
+                     << " contract"
+                     << (writesThroughAcquire ? " (write acquire)" : ""));
+          bool acquireSelectsLeafDb = false;
+          if (auto ptrTy = dyn_cast<MemRefType>(acquire.getPtr().getType()))
+            acquireSelectsLeafDb = !isa<MemRefType>(ptrTy.getElementType());
+          if (acquireSelectsLeafDb)
+            preserveExplicitContractLayout = true;
+        } else if (writesThroughAcquire) {
+          bool hasDirectWriteAccess = contractSummary
+                                          ? contractSummary->hasDirectAccess()
+                                          : !acqNode->hasIndirectAccess();
+          bool canPreserveWriteFullRange =
+              !hasIndirect && hasDirectWriteAccess &&
+              (!ctx.totalElements || *ctx.totalElements > 1);
+          if (canPreserveWriteFullRange) {
+            ARTS_DEBUG("  Partition offset incompatible with write access; "
+                       "preserving block capability with full-range write "
+                       "acquire");
+            acqInfo.needsFullRange = true;
+          } else {
+            ARTS_DEBUG("  Partition offset incompatible with write access; "
+                       "disabling block capability");
+            thisAcquireCanBlock = false;
+          }
+        } else {
+          ARTS_DEBUG("  Partition offset incompatible with read-only access "
+                     "pattern; preserving block capability with full-range");
+          acqInfo.needsFullRange = true;
+        }
+      }
+    }
+
+    /// Build AcquireInfo for heuristic voting
+    AcquireInfo info;
+    info.accessMode = acquire.getMode();
+    info.canElementWise =
+        thisAcquireCanElementWise || !acquire.getPartitionIndices().empty();
+    info.canBlock = canUseBlock && thisAcquireCanBlock;
+    info.hasDistributionContract = hasDistributionContract;
+    info.partitionDimsFromPeers =
+        contractSummary ? contractSummary->partitionDimsFromPeers() : false;
+    info.explicitCoarseRequest =
+        acquireMode && *acquireMode == PartitionMode::coarse;
+
+    /// Populate unified partition infos from DbAcquireOp.
+    /// Heuristics will compute uniformity and decide outerRank.
+    info.partitionInfos = acquire.getPartitionInfos();
+
+    /// Populate partition mode from AcquirePartitionInfo
+    if (idx < acquireInfos.size()) {
+      const auto &acqPartInfo = acquireInfos[idx];
+      info.partitionMode = acqPartInfo.mode;
+    }
+
+    /// Populate access pattern and dep pattern using canonical ordering.
+    info.accessPattern = dbAnalysis.resolveCanonicalAcquireAccessPattern(
+        acquire, contractSummary, facts);
+    info.depPattern = dbAnalysis.resolveCanonicalAcquireDepPattern(
+        acquire, contractSummary, facts);
+
+    if (info.accessPattern == AccessPattern::Unknown &&
+        info.accessMode == ArtsMode::in &&
+        isStencilFamilyDepPattern(info.depPattern)) {
+      info.accessPattern = AccessPattern::Stencil;
+    }
+
+    if (!ctx.preferBlockND && acqInfo.partitionSizes.size() >= 2) {
+      bool preferContractND = contractSummary &&
+                              contractSummary->contract.supportsBlockHalo() &&
+                              contractSummary->contract.hasOwnerDims();
+      bool preferTiling2D = acquire.getMode() == ArtsMode::inout &&
+                            DbAnalysis::isTiling2DTaskAcquire(acquire);
+      if (preferContractND || preferTiling2D) {
+        SmallVector<Value> candidateBlockSizes;
+        unsigned targetRank =
+            static_cast<unsigned>(acqInfo.partitionSizes.size());
+        if (preferContractND)
+          targetRank = std::min<unsigned>(
+              targetRank, static_cast<unsigned>(
+                              contractSummary->contract.ownerDims.size()));
+        if (preferContractND) {
+          if (contractSummary &&
+              prefersContractNDBlock(contractSummary->contract, targetRank)) {
+            auto staticBlockShape =
+                contractSummary->contract.getStaticBlockShape();
+            candidateBlockSizes.reserve(targetRank);
+            for (unsigned dim = 0; dim < targetRank; ++dim) {
+              int64_t dimSize = 0;
+              Value blockSize = nullptr;
+              if (dim < contractSummary->contract.blockShape.size())
+                blockSize = contractSummary->contract.blockShape[dim];
+              if (blockSize) {
+                if (!ValueAnalysis::getConstantIndex(blockSize, dimSize) ||
+                    dimSize <= 0) {
+                  candidateBlockSizes.clear();
+                  break;
+                }
+              } else if (staticBlockShape &&
+                         dim < static_cast<unsigned>(
+                                   staticBlockShape->size()) &&
+                         (*staticBlockShape)[dim] > 0) {
+                dimSize = (*staticBlockShape)[dim];
+                blockSize = arts::createConstantIndex(builder, loc, dimSize);
+              } else {
+                candidateBlockSizes.clear();
+                break;
+              }
+              candidateBlockSizes.push_back(blockSize);
+            }
+          }
+        }
+        if (candidateBlockSizes.empty())
+          candidateBlockSizes.reserve(targetRank);
+        for (unsigned dim = 0; dim < targetRank; ++dim) {
+          if (dim < candidateBlockSizes.size())
+            continue;
+          Value blockSize = acqInfo.partitionSizes[dim];
+          if (!blockSize ||
+              ValueAnalysis::isZeroConstant(
+                  ValueAnalysis::stripNumericCasts(blockSize))) {
+            candidateBlockSizes.clear();
+            break;
+          }
+          candidateBlockSizes.push_back(blockSize);
+        }
+        if (!candidateBlockSizes.empty()) {
+          ctx.preferBlockND = true;
+          ctx.preferredOuterRank = targetRank;
+          blockSizesForNDBlock.assign(candidateBlockSizes.begin(),
+                                      candidateBlockSizes.end());
+          ARTS_DEBUG("    Acquire[" << idx
+                                    << "]: explicit distributed contract "
+                                       "prefers N-D block partitioning");
+        }
+      }
+    }
+
+    ctx.acquires.push_back(info);
+    ARTS_DEBUG("    Acquire["
+               << idx << "]: mode=" << static_cast<int>(info.accessMode)
+               << ", canEW=" << info.canElementWise
+               << ", canBlock=" << info.canBlock << ", acquireAttr="
+               << (acquireMode ? static_cast<int>(*acquireMode) : -1));
+    ++idx;
+  }
+
+  if (preserveExplicitContractLayout) {
+    ARTS_DEBUG("  Preserving explicit block-contract leaf acquire layout; "
+               "skipping allocation rewrite");
+    heuristics.recordDecision(
+        "Partition-PreserveLeafContractLayout", true,
+        "leaf acquire uses explicit distributed contract offsets; preserving "
+        "layout",
+        allocOp.getOperation(), {});
+    return true;
+  }
+
+  return false;
+}
+
+/// Compute stencil halo bounds from acquire nodes and multi-entry structure.
+/// Returns the computed StencilInfo, or std::nullopt if stencil mode should
+/// be downgraded (e.g. single-sided halo).
+std::optional<StencilInfo> DbPartitioningPass::computeStencilHaloInfo(
+    DbAllocOp allocOp, DbAllocNode *allocNode,
+    ArrayRef<DbAcquireNode *> allocAcquireNodes,
+    ArrayRef<std::optional<DbAnalysis::AcquireContractSummary>>
+        acquireContractSummaries,
+    ArrayRef<const DbAcquirePartitionFacts *> acquireFacts,
+    SmallVectorImpl<AcquirePartitionInfo> &acquireInfos,
+    bool allocHasStencilPattern, DbAnalysis &dbAnalysis,
+    PartitioningDecision &decision, PartitioningContext &ctx,
+    OpBuilder &builder, Location loc) {
+  StencilInfo info;
+  info.haloLeft = 0;
+  info.haloRight = 0;
+
+  /// Collect stencil bounds from acquire nodes or multi-entry structure.
+  /// For multi-entry stencil acquires (not expanded), extract halo bounds
+  /// from the partition indices pattern using DbUtils.
+  for (DbAcquireNode *acqNode : allocAcquireNodes) {
+    if (!acqNode)
+      continue;
+    DbAcquireOp acq = acqNode->getDbAcquireOp();
+    if (!acq)
+      continue;
+
+    /// First try: get bounds from DbAcquireNode analysis
+    auto stencilBounds = acqNode->getStencilBounds();
+    if (stencilBounds && stencilBounds->hasHalo()) {
+      info.haloLeft = std::max(info.haloLeft, stencilBounds->haloLeft());
+      info.haloRight = std::max(info.haloRight, stencilBounds->haloRight());
+      continue;
+    }
+
+    /// Second try: for multi-entry stencil acquires, extract from structure
+    if (acq.hasMultiplePartitionEntries()) {
+      int64_t minOffset = 0, maxOffset = 0;
+      if (DbAnalysis::hasMultiEntryStencilPattern(acq, minOffset,
+                                                  maxOffset)) {
+        /// minOffset is negative (left halo), maxOffset is positive (right)
+        int64_t haloL = -minOffset;
+        int64_t haloR = maxOffset;
+        info.haloLeft = std::max(info.haloLeft, haloL);
+        info.haloRight = std::max(info.haloRight, haloR);
+        ARTS_DEBUG("  Extracted stencil bounds from multi-entry: haloLeft="
+                   << haloL << ", haloRight=" << haloR);
+      }
+    }
+  }
+
+  bool hasReadStencilAcquire = false;
+  for (auto [acqNode, contractSummary, acqFacts] : llvm::zip_equal(
+           allocAcquireNodes, acquireContractSummaries, acquireFacts)) {
+    if (!acqNode)
+      continue;
+    DbAcquireOp acquire = acqNode->getDbAcquireOp();
+    if (!acquire || acquire.getMode() != ArtsMode::in)
+      continue;
+    const DbAcquirePartitionFacts *facts =
+        acqFacts ? acqFacts : &acqNode->getPartitionFacts();
+    if (dbAnalysis.hasCanonicalAcquireStencilSemantics(
+            acquire, contractSummary ? &*contractSummary : nullptr, facts) ||
+        allocHasStencilPattern) {
+      hasReadStencilAcquire = true;
+      break;
+    }
+  }
+
+  auto allocPattern = getDbAccessPattern(allocOp.getOperation());
+  if ((info.haloLeft == 0 || info.haloRight == 0) && hasReadStencilAcquire &&
+      allocHasStencilPattern) {
+    if (allocPattern && *allocPattern == DbAccessPattern::stencil) {
+      info.haloLeft = std::max<int64_t>(info.haloLeft, 1);
+      info.haloRight = std::max<int64_t>(info.haloRight, 1);
+      ARTS_DEBUG("  Applying stencil halo fallback from db_alloc access "
+                 "pattern: haloLeft="
+                 << info.haloLeft << ", haloRight=" << info.haloRight);
+    }
+  }
+
+  /// Get total rows from first element dimension.
+  /// For stencil loops, the logical owned span excludes halo rows, so use
+  /// (rows - haloLeft - haloRight) when possible.
+  if (!allocOp.getElementSizes().empty()) {
+    if (auto staticSize =
+            arts::extractBlockSizeFromHint(allocOp.getElementSizes()[0]))
+      info.totalRows = arts::createConstantIndex(builder, loc, *staticSize);
+    else
+      info.totalRows = allocOp.getElementSizes()[0];
+
+    if (info.totalRows && (info.haloLeft > 0 || info.haloRight > 0)) {
+      if (!info.totalRows.getType().isIndex())
+        info.totalRows = builder.create<arith::IndexCastOp>(
+            loc, builder.getIndexType(), info.totalRows);
+
+      Value haloTotal = arts::createConstantIndex(
+          builder, loc, info.haloLeft + info.haloRight);
+      Value zero = arts::createZeroIndex(builder, loc);
+      Value canSubtract = builder.create<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::uge, info.totalRows, haloTotal);
+      Value reduced =
+          builder.create<arith::SubIOp>(loc, info.totalRows, haloTotal);
+      info.totalRows =
+          builder.create<arith::SelectOp>(loc, canSubtract, reduced, zero);
+    }
+  }
+
+  ARTS_DEBUG("  Stencil mode (early): haloLeft="
+             << info.haloLeft << ", haloRight=" << info.haloRight);
+
+  /// Check: Require both halos for true ESD stencil mode.
+  /// Single-sided patterns (only left or only right halo) break the
+  /// 3-buffer approach which assumes data from both neighbors exists.
+  if (info.haloLeft == 0 || info.haloRight == 0) {
+    ARTS_DEBUG("  Single-sided halo detected (haloLeft="
+               << info.haloLeft << ", haloRight=" << info.haloRight
+               << ") - falling back to BLOCK mode");
+    decision = PartitioningDecision::blockND(
+        ctx, decision.outerRank,
+        "Single-sided stencil pattern - using BLOCK instead");
+    return std::nullopt;
+  }
+
+  return info;
+}
+
+/// Resolve block-plan sizes and partition dimensions, and reconcile
+/// per-acquire dimension compatibility. Returns false if the caller should
+/// early-return the original allocOp (block plan resolution failed).
+bool DbPartitioningPass::resolveBlockPlanSizes(
+    SmallVectorImpl<Value> &blockSizesForPlan,
+    SmallVectorImpl<unsigned> &partitionedDimsForPlan,
+    SmallVectorImpl<AcquirePartitionInfo> &acquireInfos,
+    SmallVectorImpl<Value> &blockSizesForNDBlock,
+    PartitioningDecision &decision, PartitioningContext &ctx,
+    std::optional<StencilInfo> &stencilInfo, DbAllocOp allocOp,
+    DbAllocNode *allocNode, DbHeuristics &heuristics, OpBuilder &builder,
+    Location loc) {
+  bool useNodesForFallback = false;
+  if (AM) {
+    AbstractMachine &machine = AM->getAbstractMachine();
+    if (machine.hasValidNodeCount() && machine.getNodeCount() > 1) {
+      /// Stencil ESD requires block-aligned worker chunk offsets.
+      /// Worker chunks are produced by EDT lowering using worker-level
+      /// decomposition. Keeping stencil fallback sizing worker-based avoids
+      /// misalignment (e.g. node-sized blocks with worker-sized tasks) that
+      /// would otherwise force DbStencilRewriter into block fallback.
+      useNodesForFallback = (decision.mode != PartitionMode::stencil);
+    }
+  }
+
+  DbBlockPlanInput blockPlanInput{allocOp,
+                                  acquireInfos,
+                                  ctx.blockSize,
+                                  /*dynamicBlockSizeHint=*/Value(),
+                                  blockSizesForNDBlock,
+                                  &builder,
+                                  loc,
+                                  useNodesForFallback};
+  auto blockPlanOr = resolveDbBlockPlan(blockPlanInput);
+  if (failed(blockPlanOr) || blockPlanOr->blockSizes.empty()) {
+    ARTS_DEBUG("  No block-plan sizes available - falling back to coarse");
+    heuristics.recordDecision(
+        "Partition-NoBlockSize", false,
+        "block mode requested but no block-plan sizes available",
+        allocOp.getOperation(), {});
+    resetCoarseAcquireRanges(allocOp, allocNode, builder);
+    return false;
+  }
+
+  blockSizesForPlan.assign(std::make_move_iterator(blockPlanOr->blockSizes.begin()),
+                           std::make_move_iterator(blockPlanOr->blockSizes.end()));
+  partitionedDimsForPlan.assign(
+      std::make_move_iterator(blockPlanOr->partitionedDims.begin()),
+      std::make_move_iterator(blockPlanOr->partitionedDims.end()));
+
+  heuristics.recordDecision(
+      "Partition-BlockPlanResolved", true,
+      "resolved block sizes and partition dimensions via block-plan resolver",
+      allocOp.getOperation(),
+      {{"blockDims", static_cast<int64_t>(blockSizesForPlan.size())},
+       {"partitionedDims",
+        static_cast<int64_t>(partitionedDimsForPlan.size())}});
+
+  /// Non-leading partitioning is not supported by stencil ESD. Downgrade
+  /// to block mode when needed.
+  if (decision.mode == PartitionMode::stencil &&
+      !partitionedDimsForPlan.empty()) {
+    bool nonLeading = false;
+    for (unsigned i = 0; i < partitionedDimsForPlan.size(); ++i) {
+      if (partitionedDimsForPlan[i] != i) {
+        nonLeading = true;
+        break;
+      }
+    }
+    if (nonLeading) {
+      decision = PartitioningDecision::blockND(
+          ctx, partitionedDimsForPlan.size(),
+          "Non-leading partition dims: disable stencil ESD");
+      stencilInfo = std::nullopt;
+    }
+  }
+
+  /// If an acquire's inferred partition dims disagree with the chosen plan,
+  /// require full-range to preserve correctness.
+  ///
+  /// Allow acquires to carry extra trailing partition dimensions as long as
+  /// the plan dims are a leading prefix. This is common when a 2D acquire
+  /// participates in a 1D block plan (partition along rows only).
+  if (!partitionedDimsForPlan.empty()) {
+    for (auto &info : acquireInfos) {
+      if (info.needsFullRange)
+        continue;
+      if (info.partitionDims.empty()) {
+        info.needsFullRange = true;
+        ARTS_DEBUG("  Acquire missing partition dims under concrete plan; "
+                   "forcing full-range access");
+        continue;
+      }
+      bool compatible =
+          info.partitionDims.size() >= partitionedDimsForPlan.size();
+      if (compatible) {
+        for (unsigned i = 0; i < partitionedDimsForPlan.size(); ++i) {
+          if (info.partitionDims[i] != partitionedDimsForPlan[i]) {
+            compatible = false;
+            break;
+          }
+        }
+      }
+      if (!compatible) {
+        info.needsFullRange = true;
+        ARTS_DEBUG("  Acquire partition dims mismatch with plan; "
+                   "forcing full-range access");
+      }
+    }
+  }
+
+  return true;
+}
+
+/// Assemble the rewrite plan from partition decision and apply it via
+/// DbRewriter. Returns the rewritten DbAllocOp on success.
+FailureOr<DbAllocOp> DbPartitioningPass::assembleAndApplyRewritePlan(
+    PartitioningDecision &decision,
+    SmallVectorImpl<AcquirePartitionInfo> &acquireInfos,
+    SmallVectorImpl<Value> &blockSizesForPlan,
+    SmallVectorImpl<unsigned> &partitionedDimsForPlan,
+    SmallVectorImpl<Value> &newOuterSizes,
+    SmallVectorImpl<Value> &newInnerSizes,
+    std::optional<StencilInfo> &stencilInfo, DbAllocOp allocOp,
+    DbHeuristics &heuristics, OpBuilder &builder) {
   DbRewritePlan plan(decision.mode);
-  plan.blockSizes = blockSizesForPlan;
-  plan.partitionedDims = partitionedDimsForPlan;
+  plan.blockSizes.assign(blockSizesForPlan.begin(), blockSizesForPlan.end());
+  plan.partitionedDims.assign(partitionedDimsForPlan.begin(),
+                              partitionedDimsForPlan.end());
   plan.outerSizes.assign(newOuterSizes.begin(), newOuterSizes.end());
   plan.innerSizes.assign(newInnerSizes.begin(), newInnerSizes.end());
 
@@ -2293,7 +2433,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   auto rewriter = DbRewriter::create(allocOp, rewriteAcquires, plan);
   auto result = rewriter->apply(builder);
 
-  /// Step 7: Set partition attribute on new alloc
+  /// Set partition attribute on new alloc
   if (succeeded(result)) {
     setPartitionMode(*result, decision.mode);
 

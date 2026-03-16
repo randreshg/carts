@@ -12,6 +12,7 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Types.h"
 #include "mlir/Support/LLVM.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include <cassert>
@@ -362,6 +363,15 @@ void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
   Region *bodyRegion = state.addRegion();
   Block *bodyBlock = new Block();
   bodyRegion->push_back(bodyBlock);
+}
+
+LogicalResult CreateEpochOp::verify() {
+  bool hasGuid = getFinishEdtGuid() != nullptr;
+  bool hasSlot = getFinishSlot() != nullptr;
+  if (hasGuid != hasSlot)
+    return emitOpError("finishEdtGuid and finishSlot must both be present or "
+                       "both be absent");
+  return success();
 }
 
 void EdtCreateOp::build(OpBuilder &builder, OperationState &state,
@@ -829,18 +839,16 @@ void LoweringContractOp::build(OpBuilder &builder, OperationState &state,
   build(builder, state, target, info.depPattern, info.distributionKind,
         info.distributionPattern, info.distributionVersion,
         SmallVector<int64_t>(info.ownerDims.begin(), info.ownerDims.end()),
-        SmallVector<int64_t>(info.spatialDims.begin(), info.spatialDims.end()),
         SmallVector<Value>(info.blockShape.begin(), info.blockShape.end()),
         SmallVector<Value>(info.minOffsets.begin(), info.minOffsets.end()),
         SmallVector<Value>(info.maxOffsets.begin(), info.maxOffsets.end()),
         SmallVector<Value>(info.writeFootprint.begin(),
                            info.writeFootprint.end()),
         info.supportedBlockHalo,
+        SmallVector<int64_t>(info.spatialDims.begin(), info.spatialDims.end()),
         SmallVector<int64_t>(info.stencilIndependentDims.begin(),
                              info.stencilIndependentDims.end()),
-        info.esdByteOffset, info.esdByteSize, info.cachedStartBlock,
-        info.cachedBlockCount, info.postDbRefined, info.estimatedTaskCost,
-        info.criticalPathDistance);
+        info.postDbRefined, info.criticalPathDistance);
 }
 
 void LoweringContractOp::build(
@@ -849,14 +857,13 @@ void LoweringContractOp::build(
     std::optional<EdtDistributionKind> distributionKind,
     std::optional<EdtDistributionPattern> distributionPattern,
     std::optional<int64_t> distributionVersion, SmallVector<int64_t> ownerDims,
-    SmallVector<int64_t> spatialDims, SmallVector<Value> blockShape,
+    SmallVector<Value> blockShape,
     SmallVector<Value> minOffsets, SmallVector<Value> maxOffsets,
-    SmallVector<Value> writeFootprint, bool supportedBlockHalo,
+    SmallVector<Value> writeFootprint,
+    bool supportedBlockHalo,
+    SmallVector<int64_t> spatialDims,
     SmallVector<int64_t> stencilIndependentDims,
-    std::optional<int64_t> esdByteOffset, std::optional<int64_t> esdByteSize,
-    std::optional<int64_t> cachedStartBlock,
-    std::optional<int64_t> cachedBlockCount, bool postDbRefined,
-    std::optional<int64_t> estimatedTaskCost,
+    bool postDbRefined,
     std::optional<int64_t> criticalPathDistance,
     std::optional<int64_t> contractKind) {
   state.addOperands(target);
@@ -891,33 +898,18 @@ void LoweringContractOp::build(
   if (!ownerDims.empty())
     state.addAttribute(AttrNames::Operation::Contract::OwnerDims,
                        builder.getDenseI64ArrayAttr(ownerDims));
-  if (!spatialDims.empty())
-    state.addAttribute(AttrNames::Operation::Contract::SpatialDims,
-                       builder.getDenseI64ArrayAttr(spatialDims));
   if (supportedBlockHalo)
     state.addAttribute(AttrNames::Operation::Contract::SupportedBlockHalo,
                        UnitAttr::get(ctx));
+  if (!spatialDims.empty())
+    state.addAttribute("spatial_dims",
+                       builder.getDenseI64ArrayAttr(spatialDims));
   if (!stencilIndependentDims.empty())
     state.addAttribute(AttrNames::Operation::Contract::StencilIndependentDims,
                        builder.getDenseI64ArrayAttr(stencilIndependentDims));
-  if (esdByteOffset)
-    state.addAttribute(AttrNames::Operation::Contract::EsdByteOffset,
-                       IntegerAttr::get(i64Type, *esdByteOffset));
-  if (esdByteSize)
-    state.addAttribute(AttrNames::Operation::Contract::EsdByteSize,
-                       IntegerAttr::get(i64Type, *esdByteSize));
-  if (cachedStartBlock)
-    state.addAttribute(AttrNames::Operation::Contract::CachedStartBlock,
-                       IntegerAttr::get(i64Type, *cachedStartBlock));
-  if (cachedBlockCount)
-    state.addAttribute(AttrNames::Operation::Contract::CachedBlockCount,
-                       IntegerAttr::get(i64Type, *cachedBlockCount));
   if (postDbRefined)
     state.addAttribute(AttrNames::Operation::Contract::PostDbRefined,
                        UnitAttr::get(ctx));
-  if (estimatedTaskCost)
-    state.addAttribute(AttrNames::Operation::Contract::EstimatedTaskCost,
-                       IntegerAttr::get(i64Type, *estimatedTaskCost));
   if (criticalPathDistance)
     state.addAttribute(AttrNames::Operation::Contract::CriticalPathDistance,
                        IntegerAttr::get(i64Type, *criticalPathDistance));
@@ -985,6 +977,27 @@ LogicalResult LoweringContractOp::verify() {
   auto ownerDims = (*this)->getAttrOfType<DenseI64ArrayAttr>(
       AttrNames::Operation::Contract::OwnerDims);
   size_t expectedRank = ownerDims ? ownerDims.size() : 0;
+  bool hasRankedPayload = !getBlockShape().empty() || !getMinOffsets().empty() ||
+                          !getMaxOffsets().empty();
+
+  if (expectedRank == 0 && hasRankedPayload)
+    return emitOpError("ranked contract fields require owner_dims");
+
+  if (ownerDims) {
+    llvm::DenseSet<int64_t> seenOwnerDims;
+    auto targetType = dyn_cast<MemRefType>(getTarget().getType());
+    int64_t targetRank = targetType ? static_cast<int64_t>(targetType.getRank())
+                                    : -1;
+    for (int64_t dim : ownerDims.asArrayRef()) {
+      if (dim < 0)
+        return emitOpError("owner_dims must be non-negative");
+      if (targetRank >= 0 && dim >= targetRank)
+        return emitOpError("owner_dims value ")
+               << dim << " exceeds target rank (" << targetRank << ")";
+      if (!seenOwnerDims.insert(dim).second)
+        return emitOpError("owner_dims contains duplicate value: ") << dim;
+    }
+  }
 
   auto verifyRankedOperands = [&](OperandRange values,
                                   StringRef name) -> LogicalResult {
@@ -997,8 +1010,7 @@ LogicalResult LoweringContractOp::verify() {
 
   if (failed(verifyRankedOperands(getBlockShape(), "block_shape")) ||
       failed(verifyRankedOperands(getMinOffsets(), "min_offsets")) ||
-      failed(verifyRankedOperands(getMaxOffsets(), "max_offsets")) ||
-      failed(verifyRankedOperands(getWriteFootprint(), "write_footprint")))
+      failed(verifyRankedOperands(getMaxOffsets(), "max_offsets")))
     return failure();
 
   if (getMinOffsets().size() != getMaxOffsets().size())

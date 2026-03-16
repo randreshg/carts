@@ -74,7 +74,6 @@ void EdtGraph::invalidate() {
   edtNodes.clear();
   edges.clear();
   nodes.clear();
-  childrenCache.clear();
   isBuilt = false;
   needsRebuild = true;
 }
@@ -146,39 +145,9 @@ bool EdtGraph::areEdtsIndependent(EdtOp a, EdtOp b) {
   if (!nodeA || !nodeB)
     return false;
 
-  const auto &infoA = nodeA->getInfo();
-  const auto &infoB = nodeB->getInfo();
-
-  /// Primary check: no shared DbAllocOp between the two EDTs
-  for (auto db : infoA.dbAllocsRead) {
-    if (infoB.dbAllocsRead.contains(db) || infoB.dbAllocsWritten.contains(db))
-      return false;
-  }
-  for (auto db : infoA.dbAllocsWritten) {
-    if (infoB.dbAllocsRead.contains(db) || infoB.dbAllocsWritten.contains(db))
-      return false;
-  }
-
-  /// Optional: Check associated loops for additional dependency info via
-  /// LoopMetadata If EDTs have associated loops, check their parallel
-  /// classification
-  auto loopsA = nodeA->getAssociatedLoops();
-  auto loopsB = nodeB->getAssociatedLoops();
-  for (auto *loopA : loopsA) {
-    for (auto *loopB : loopsB) {
-      /// If loops share any memrefs with loop-carried deps, be conservative
-      /// This leverages LoopMetadata's hasInterIterationDeps field
-      if (loopA->hasInterIterationDeps.has_value() &&
-          loopA->hasInterIterationDeps.value() &&
-          loopB->hasInterIterationDeps.has_value() &&
-          loopB->hasInterIterationDeps.value()) {
-        /// Both have inter-iteration deps - check if they might conflict
-        /// For now, we rely on the dbAllocs check above as primary
-      }
-    }
-  }
-
-  return true; // No shared DBs - EDTs are independent
+  /// TODO: implement DB-level conflict checking when EdtInfo populates
+  /// per-EDT DB read/write sets. For now, conservatively return true.
+  return true;
 }
 
 void EdtGraph::print(llvm::raw_ostream &os) {
@@ -276,27 +245,7 @@ llvm::json::Value EdtGraph::exportToJsonValue(bool includeAnalysis) const {
     /// Concurrency scope
     edt["concurrency"] = "intranode";
 
-    /// Dependencies from EdtInfo's dbAllocsRead/Written
-    Array deps;
     auto &idRegistry = edtAnalysis->getMetadataManager().getIdRegistry();
-
-    /// Collect all accessed DBs with their modes
-    DenseMap<DbAllocOp, std::string> dbModes;
-    for (DbAllocOp db : info.dbAllocsRead)
-      dbModes[db] = "in";
-    for (DbAllocOp db : info.dbAllocsWritten) {
-      if (dbModes.count(db))
-        dbModes[db] = "inout";
-      else
-        dbModes[db] = "out";
-    }
-
-    for (auto &[dbOp, mode] : dbModes) {
-      int64_t dbId = idRegistry.get(dbOp.getOperation());
-      if (dbId != 0)
-        deps.push_back(Object{{"db", dbId}, {"mode", mode}});
-    }
-    edt["deps"] = std::move(deps);
 
     /// Associated loops (EDT ↔ Loop bidirectional relationship)
     if (!edtNode->getAssociatedLoops().empty()) {
@@ -335,56 +284,8 @@ llvm::json::Value EdtGraph::exportToJsonValue(bool includeAnalysis) const {
 
     /// Static analysis data from EdtInfo
     Object staticAnalysis;
-
-    /// Basic counts
-    staticAnalysis["total_ops"] = (int64_t)info.totalOps;
-    staticAnalysis["num_loads"] = (int64_t)info.numLoads;
-    staticAnalysis["num_stores"] = (int64_t)info.numStores;
-    staticAnalysis["num_calls"] = (int64_t)info.numCalls;
-
-    /// Memory traffic estimation
-    staticAnalysis["bytes_read"] = (int64_t)info.bytesRead;
-    staticAnalysis["bytes_written"] = (int64_t)info.bytesWritten;
-
-    /// Compute vs memory bound classification
-    staticAnalysis["compute_to_mem_ratio"] = info.computeToMemRatio;
-    staticAnalysis["is_compute_bound"] = info.computeToMemRatio > 1.0;
-
-    /// Structural info
     staticAnalysis["max_loop_depth"] = (int64_t)info.maxLoopDepth;
     staticAnalysis["order_index"] = (int64_t)info.orderIndex;
-
-    /// Access classification
-    staticAnalysis["is_read_only"] = info.isReadOnly();
-    staticAnalysis["is_write_only"] = info.isWriteOnly();
-    staticAnalysis["is_read_write"] = info.isReadWrite();
-
-    /// Per-DB access bytes (which DBs are hot)
-    if (!info.dbAllocAccessBytes.empty()) {
-      Object dbAccessBytes;
-      for (const auto &entry : info.dbAllocAccessBytes) {
-        DbAllocOp dbOp = entry.first;
-        uint64_t bytes = entry.second;
-        int64_t dbId = idRegistry.get(dbOp.getOperation());
-        if (dbId != 0)
-          dbAccessBytes[std::to_string(dbId)] = (int64_t)bytes;
-      }
-      staticAnalysis["db_access_bytes"] = std::move(dbAccessBytes);
-    }
-
-    /// Per-DB access counts
-    if (!info.dbAllocAccessCount.empty()) {
-      Object dbAccessCount;
-      for (const auto &entry : info.dbAllocAccessCount) {
-        DbAllocOp dbOp = entry.first;
-        uint64_t count = entry.second;
-        int64_t dbId = idRegistry.get(dbOp.getOperation());
-        if (dbId != 0)
-          dbAccessCount[std::to_string(dbId)] = (int64_t)count;
-      }
-      staticAnalysis["db_access_count"] = std::move(dbAccessCount);
-    }
-
     edt["static_analysis"] = std::move(staticAnalysis);
 
     edts.push_back(std::move(edt));
@@ -395,37 +296,6 @@ llvm::json::Value EdtGraph::exportToJsonValue(bool includeAnalysis) const {
 
 void EdtGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
   os << exportToJsonValue(includeAnalysis) << "\n";
-}
-
-/// Helper to populate and sort children cache for a node
-void EdtGraph::populateChildrenCache(NodeBase *node) {
-  auto &vec = childrenCache[node];
-  vec.clear();
-
-  /// Collect children from the node's outgoing edges
-  for (auto *edge : node->getOutEdges())
-    vec.push_back(edge->getTo());
-
-  /// Sort by hierarchical ID for deterministic order
-  llvm::sort(vec, [&](NodeBase *a, NodeBase *b) {
-    auto hierIdA = a ? a->getHierId() : StringRef("");
-    auto hierIdB = b ? b->getHierId() : StringRef("");
-    return hierIdA < hierIdB;
-  });
-}
-
-GraphBase::ChildIterator EdtGraph::childBegin(NodeBase *node) {
-  populateChildrenCache(node);
-  return childrenCache[node].begin();
-}
-
-GraphBase::ChildIterator EdtGraph::childEnd(NodeBase *node) {
-  auto it = childrenCache.find(node);
-  if (it == childrenCache.end()) {
-    populateChildrenCache(node);
-    return childrenCache[node].end();
-  }
-  return it->second.end();
 }
 
 /// Collect all arts.edt operations in the function and create task nodes.
