@@ -8,6 +8,7 @@
 ///==========================================================================///
 
 #include "arts/utils/LoweringContractUtils.h"
+#include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
@@ -484,6 +485,16 @@ mlir::arts::deriveAcquireRewriteContract(DbAcquireOp acquire) {
   return contract;
 }
 
+AcquireRewriteContract
+mlir::arts::resolveAcquireRewriteContract(AnalysisManager *AM,
+                                          DbAcquireOp acquire) {
+  if (!acquire)
+    return AcquireRewriteContract{};
+  if (!AM)
+    return deriveAcquireRewriteContract(acquire);
+  return AM->getDbAnalysis().getAcquireRewriteContract(acquire);
+}
+
 SmallVector<unsigned, 4>
 mlir::arts::resolveContractOwnerDims(const LoweringContractInfo &info,
                                      unsigned rank) {
@@ -584,10 +595,11 @@ void mlir::arts::transferValueContract(Value source, Value target,
   copyLoweringContract(source, target, builder, loc);
 }
 
-void mlir::arts::transferContract(
-    Operation *sourceOp, Operation *targetOp, Value sourceContractTarget,
-    Value targetContractTarget, OpBuilder &builder, Location loc,
-    OperationContractTransferPolicy policy) {
+void mlir::arts::transferContract(Operation *sourceOp, Operation *targetOp,
+                                  Value sourceContractTarget,
+                                  Value targetContractTarget,
+                                  OpBuilder &builder, Location loc,
+                                  OperationContractTransferPolicy policy) {
   transferOperationContract(sourceOp, targetOp, policy);
   transferValueContract(sourceContractTarget, targetContractTarget, builder,
                         loc);

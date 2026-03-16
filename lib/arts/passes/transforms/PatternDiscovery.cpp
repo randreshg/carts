@@ -234,8 +234,8 @@ static bool collectSpatialNestIvs(arts::ForOp artsFor,
   return !ivs.empty() && spatialBody;
 }
 
-static const LoopMetadata *resolveLoopMetadataForArtsFor(arts::ForOp forOp,
-                                                         MetadataManager &manager) {
+static const LoopMetadata *
+resolveLoopMetadataForArtsFor(arts::ForOp forOp, MetadataManager &manager) {
   if (!forOp)
     return nullptr;
 

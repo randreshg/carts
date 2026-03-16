@@ -189,10 +189,11 @@ protected:
   createElementWiseIndexer(ArrayRef<Value> elemOffsets, unsigned outerRank,
                            unsigned innerRank, ValueRange oldElementSizes);
 
-  static std::unique_ptr<DbIndexerBase>
-  createBlockIndexer(ArrayRef<Value> blockSizes, ArrayRef<Value> startBlocks,
-                     unsigned outerRank, unsigned innerRank,
-                     ArrayRef<unsigned> partitionedDims);
+  static std::unique_ptr<DbIndexerBase> createBlockIndexer(
+      ArrayRef<Value> blockSizes, ArrayRef<Value> startBlocks,
+      unsigned outerRank, unsigned innerRank,
+      ArrayRef<unsigned> partitionedDims, bool allocSingleBlock = false,
+      bool acquireSingleBlock = false, Value dominantZero = Value());
 
   static std::unique_ptr<DbIndexerBase>
   createStencilIndexer(const StencilInfo &info, Value blockSize,

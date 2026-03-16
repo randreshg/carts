@@ -742,7 +742,8 @@ DbAnalysis::getAcquireContractSummary(DbAcquireOp acquire) {
   return summary;
 }
 
-AcquireRewriteContract DbAnalysis::getAcquireRewriteContract(DbAcquireOp acquire) {
+AcquireRewriteContract
+DbAnalysis::getAcquireRewriteContract(DbAcquireOp acquire) {
   AcquireRewriteContract contract = deriveAcquireRewriteContract(acquire);
   if (!acquire)
     return contract;
@@ -782,7 +783,8 @@ AcquireRewriteContract DbAnalysis::getAcquireRewriteContract(DbAcquireOp acquire
       for (size_t i = 0; i < contract.haloMaxOffsets.size(); ++i)
         if (contract.haloMaxOffsets[i] > 0)
           contract.haloMinOffsets[i] = -contract.haloMaxOffsets[i];
-    } else if (contract.haloMinOffsets.size() == contract.haloMaxOffsets.size()) {
+    } else if (contract.haloMinOffsets.size() ==
+               contract.haloMaxOffsets.size()) {
       for (size_t i = 0; i < contract.haloMinOffsets.size(); ++i)
         if (contract.haloMinOffsets[i] == 0 && contract.haloMaxOffsets[i] > 0)
           contract.haloMinOffsets[i] = -contract.haloMaxOffsets[i];

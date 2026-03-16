@@ -12,6 +12,8 @@
 namespace mlir {
 namespace arts {
 
+class AnalysisManager;
+
 /// Discriminator for the high-level computational pattern a lowering contract
 /// represents.  When the field is `Unknown` on a `LoweringContractInfo`,
 /// `getEffectiveKind()` will attempt to derive the kind from `depPattern`.
@@ -132,6 +134,8 @@ void mergeLoweringContractInfo(LoweringContractInfo &dest,
                                const LoweringContractInfo &src);
 void normalizeLoweringContractInfo(LoweringContractInfo &info);
 AcquireRewriteContract deriveAcquireRewriteContract(DbAcquireOp acquire);
+AcquireRewriteContract resolveAcquireRewriteContract(AnalysisManager *AM,
+                                                     DbAcquireOp acquire);
 SmallVector<unsigned, 4>
 resolveContractOwnerDims(const LoweringContractInfo &info, unsigned rank);
 bool prefersContractNDBlock(const LoweringContractInfo &info,
