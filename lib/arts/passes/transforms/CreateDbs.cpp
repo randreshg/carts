@@ -548,9 +548,6 @@ void CreateDbsPass::collectControlDbOps() {
     /// indices
     SmallVector<Operation *, 4> opsToRewrite;
     if (userEdt) {
-      auto controlAccessOffsets =
-          getStencilAccessOffsets(dbControl.getOperation());
-
       /// Helper to check if operation indices match DbControlOp using SSA value
       /// equality This is strict but correct for distinguishing multiple chunks
       /// (e.g., A[i-1], A[i], A[i+1])
@@ -565,33 +562,20 @@ void CreateDbsPass::collectControlDbOps() {
                           opIndices.begin());
       };
 
-      auto matchesExplicitStencilAccess = [&](Operation *op) -> bool {
-        if (!controlAccessOffsets)
-          return false;
-        auto opAccessOffsets = getStencilAccessOffsets(op);
-        return opAccessOffsets && *opAccessOffsets == *controlAccessOffsets;
-      };
-
       /// Walk the user EDT and collect operations that match the indices
       userEdt.walk([&](Operation *op) {
         if (auto load = dyn_cast<memref::LoadOp>(op)) {
           if (ValueAnalysis::getUnderlyingOperation(load.getMemref()) ==
               underlyingOp) {
-            bool matchesControl = controlAccessOffsets
-                                      ? matchesExplicitStencilAccess(op)
-                                      : indicesMatchPrefix(load.getIndices());
             if (DbAnalysis::opMatchesAccessMode(op, underlyingOp, mode) &&
-                matchesControl)
+                indicesMatchPrefix(load.getIndices()))
               opsToRewrite.push_back(op);
           }
         } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
           if (ValueAnalysis::getUnderlyingOperation(store.getMemref()) ==
               underlyingOp) {
-            bool matchesControl = controlAccessOffsets
-                                      ? matchesExplicitStencilAccess(op)
-                                      : indicesMatchPrefix(store.getIndices());
             if (DbAnalysis::opMatchesAccessMode(op, underlyingOp, mode) &&
-                matchesControl)
+                indicesMatchPrefix(store.getIndices()))
               opsToRewrite.push_back(op);
           }
         }

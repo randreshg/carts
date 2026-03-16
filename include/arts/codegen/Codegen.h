@@ -103,10 +103,6 @@ public:
   func::CallOp createRuntimeCall(RuntimeFunction FnID, ArrayRef<Value> args,
                                  Location loc);
 
-  /// DB management
-  void addDbDep(Value dbGuid, Value edtGuid, Value edtSlot, Value mode,
-                Location loc);
-
   /// Epoch management
   Value createEpoch(Value finishEdtGuid, Value finishEdtSlot, Location loc);
 
@@ -117,8 +113,6 @@ public:
   Value getTotalNodes(Location loc);
   Value getCurrentWorker(Location loc);
   Value getCurrentNode(Location loc);
-  func::CallOp signalEdt(Value edtGuid, Value edtSlot, Value dbGuid, Value mode,
-                         Location loc);
   void waitOnHandle(Value epochGuid, Location loc);
 
   /// Function creation
@@ -145,18 +139,15 @@ public:
   Value createFnPtr(func::FuncOp funcOp, Location loc);
   Value createIndexConstant(int64_t value, Location loc);
   Value createIntConstant(int64_t value, Type type, Location loc);
-  Value createPtr(Value source, Location loc);
   enum class ParameterCastMode {
     Numeric,
     Bitwise,
   };
   Value castParameter(Type targetType, Value source, Location loc,
                       ParameterCastMode mode = ParameterCastMode::Numeric);
-  Value castPtr(Type targetType, Value source, Location loc);
   Value castToIndex(Value source, Location loc);
   Value castToFloat(Type targetType, Value source, Location loc);
   Value castToInt(Type targetType, Value source, Location loc);
-  Value castToVoidPtr(Value source, Location loc);
   Value castToLLVMPtr(Value source, Location loc);
 
   /// Convenience: cast a value to i64 (shorthand for castToInt(Int64, v, loc)).

@@ -682,10 +682,7 @@ struct PatternDiscoveryPass
           chooseRefinedPattern(existing, candidate, evidence, mode);
 
       if (mode == DiscoveryMode::Refine && explicitStencil) {
-        if (!chosen || !isStencilFamilyDepPattern(*chosen))
-          chosen = explicitStencil->pattern;
-        else
-          chosen = explicitStencil->pattern;
+        chosen = explicitStencil->pattern;
       }
 
       if (!chosen) {

@@ -72,11 +72,6 @@ static constexpr int64_t kSmallTaskThreshold = 64;
 /// multiplies the effective cost of operations inside that loop.
 static constexpr int64_t kLoopDepthMultiplier = 8;
 
-/// Bonus multiplier applied when the compute-to-memory ratio indicates a
-/// compute-bound kernel.  A ratio >= 2.0 is considered compute-bound.
-static constexpr double kComputeBoundThreshold = 2.0;
-static constexpr int64_t kComputeBoundBonus = 2;
-
 /// ET-5: Worker count threshold for choosing atomic vs tree reduction.
 /// Below this threshold, atomic updates are preferred; above, tree reduction
 /// avoids excessive contention on shared cache lines.
@@ -132,9 +127,6 @@ private:
 
   struct ModuleEdtMetrics {
     unsigned totalEdts = 0;
-    unsigned totalOpsAccum = 0;
-    double maxComputeToMem = 0.0;
-    double minComputeToMem = std::numeric_limits<double>::max();
   };
 
   ModuleEdtMetrics gatherModuleEdtFacts();
@@ -264,19 +256,9 @@ EdtTransformsPass::ModuleEdtMetrics EdtTransformsPass::gatherModuleEdtFacts() {
       if (!node)
         return;
 
-      const EdtInfo &info = node->getInfo();
       ++metrics.totalEdts;
-      metrics.totalOpsAccum += info.totalOps;
-      metrics.maxComputeToMem =
-          std::max(metrics.maxComputeToMem, info.computeToMemRatio);
-      metrics.minComputeToMem =
-          std::min(metrics.minComputeToMem, info.computeToMemRatio);
 
-      ARTS_DEBUG("  EDT [" << node->getHierId() << "]"
-                           << " totalOps=" << info.totalOps
-                           << " compute:mem=" << info.computeToMemRatio
-                           << " loads=" << info.numLoads
-                           << " stores=" << info.numStores);
+      ARTS_DEBUG("  EDT [" << node->getHierId() << "]");
     });
 
     unsigned et6Count = analyzeCriticalPath(func, edtGraph);
@@ -290,11 +272,7 @@ EdtTransformsPass::ModuleEdtMetrics EdtTransformsPass::gatherModuleEdtFacts() {
 void EdtTransformsPass::logModuleEdtSummary(
     const ModuleEdtMetrics &metrics) const {
   if (metrics.totalEdts > 0) {
-    ARTS_INFO("EDT transforms summary:"
-              << " edts=" << metrics.totalEdts
-              << " avgOps=" << (metrics.totalOpsAccum / metrics.totalEdts)
-              << " compute:mem range=[" << metrics.minComputeToMem << ", "
-              << metrics.maxComputeToMem << "]");
+    ARTS_INFO("EDT transforms summary: edts=" << metrics.totalEdts);
     return;
   }
   ARTS_INFO("No EDTs found in module");
@@ -319,46 +297,23 @@ unsigned EdtTransformsPass::estimateTaskGranularity() {
 
       const EdtInfo &info = node->getInfo();
 
-      /// ---------------------------------------------------------------
-      /// Cost model:
-      ///   base   = totalOps
-      ///   scaled = base * (loopDepthMultiplier ^ maxLoopDepth)
-      ///   bonus  = scaled * computeBoundBonus  (if compute-bound)
-      ///
-      /// The loop-depth multiplier accounts for the fact that operations
-      /// inside nested loops execute many more times than the static op
-      /// count suggests.  The compute-bound bonus prioritises tasks that
-      /// are likely to benefit from uninterrupted execution.
-      /// ---------------------------------------------------------------
-      int64_t cost = static_cast<int64_t>(info.totalOps);
-
-      /// Scale by loop depth -- each nesting level multiplies by the
-      /// loop depth multiplier.
+      /// Cost model: use loop depth as proxy for task weight.
+      /// TODO: populate EdtInfo with actual op counts for better estimates.
+      int64_t cost = 1;
       if (info.maxLoopDepth > 0) {
         int64_t depthScale = 1;
         for (uint64_t d = 0; d < info.maxLoopDepth; ++d) {
           depthScale *= kLoopDepthMultiplier;
-          /// Guard against overflow for deeply nested loops.
           if (depthScale > 1000000) {
             depthScale = 1000000;
             break;
           }
         }
-        cost *= depthScale;
+        cost = depthScale;
       }
 
-      /// Apply compute-bound bonus.
-      if (info.computeToMemRatio >= kComputeBoundThreshold)
-        cost *= kComputeBoundBonus;
-
-      /// Clamp to a minimum of 1 so the attribute is always meaningful.
-      if (cost <= 0)
-        cost = 1;
-
       ARTS_DEBUG("ET-1: EDT [" << node->getHierId() << "]"
-                               << " totalOps=" << info.totalOps
                                << " maxLoopDepth=" << info.maxLoopDepth
-                               << " compute:mem=" << info.computeToMemRatio
                                << " => estimatedTaskCost=" << cost);
 
       /// Warn about trivially small tasks that may benefit from fusion.
@@ -366,20 +321,8 @@ unsigned EdtTransformsPass::estimateTaskGranularity() {
         edt.emitWarning("ET-1: trivially small task (estimated cost ")
             << cost << " < " << kSmallTaskThreshold
             << "); consider fusing with a neighbour EDT";
-      }
-
-      /// Annotate every dependency's LoweringContractOp with the cost.
-      /// Each dependency value comes from a DbAcquireOp; the contract is
-      /// attached to the acquire's pointer result.
-      bool annotated = false;
-      annotateEdtDepContracts(edt, [&](DbAcquireOp /*acquire*/, Value /*ptr*/,
-                                       LoweringContractInfo &info) {
-        info.estimatedTaskCost = cost;
-        annotated = true;
-      });
-
-      if (annotated)
         ++count;
+      }
     });
   });
 
@@ -532,23 +475,8 @@ unsigned EdtTransformsPass::placeEdtsByAffinity() {
       if (!node)
         return;
 
-      const EdtInfo &info = node->getInfo();
-
-      /// -----------------------------------------------------------------
-      /// Strategy: find the primary write target among this EDT's
-      /// dependency acquires.  We prefer the DbAllocOp with the largest
-      /// access byte count in EdtInfo::dbAllocAccessBytes among those
-      /// that are written (inout/out).  If per-alloc byte counts are
-      /// unavailable, fall back to picking the first writer acquire.
-      /// -----------------------------------------------------------------
-
-      /// Collect candidate DbAllocOps from writer acquires.
-      struct AffinityCandidate {
-        DbAllocOp allocOp;
-        uint64_t accessBytes = 0;
-      };
-      DenseMap<Operation *, AffinityCandidate> candidates;
-
+      /// Find the first writer acquire's root DbAllocOp as affinity target.
+      DbAllocOp bestAlloc = nullptr;
       for (Value dep : edt.getDependencies()) {
         auto acquire = dep.getDefiningOp<DbAcquireOp>();
         if (!acquire)
@@ -564,32 +492,8 @@ unsigned EdtTransformsPass::placeEdtsByAffinity() {
         if (!allocOp)
           continue;
 
-        /// Look up per-alloc access bytes from EdtInfo.
-        uint64_t bytes = 0;
-        auto it = info.dbAllocAccessBytes.find(allocOp);
-        if (it != info.dbAllocAccessBytes.end())
-          bytes = it->second;
-
-        /// Track the best candidate per unique DbAllocOp.
-        auto &entry = candidates[allocOp.getOperation()];
-        if (!entry.allocOp || bytes > entry.accessBytes) {
-          entry.allocOp = allocOp;
-          entry.accessBytes = bytes;
-        }
-      }
-
-      if (candidates.empty())
-        return;
-
-      /// Select the candidate with the highest access bytes.
-      DbAllocOp bestAlloc = nullptr;
-      uint64_t bestBytes = 0;
-      for (auto &kv : candidates) {
-        auto &cand = kv.second;
-        if (!bestAlloc || cand.accessBytes > bestBytes) {
-          bestAlloc = cand.allocOp;
-          bestBytes = cand.accessBytes;
-        }
+        bestAlloc = allocOp;
+        break;
       }
 
       if (!bestAlloc)
@@ -626,8 +530,7 @@ unsigned EdtTransformsPass::placeEdtsByAffinity() {
 
       ARTS_DEBUG("ET-2: EDT ["
                  << node->getHierId() << "]"
-                 << " affinity_db=" << allocId << " (accessBytes=" << bestBytes
-                 << ", distributed="
+                 << " affinity_db=" << allocId << " (distributed="
                  << hasDistributedDbAllocation(bestAlloc.getOperation())
                  << ")");
     });
@@ -769,7 +672,6 @@ unsigned EdtTransformsPass::selectReductionStrategies() {
 ///===----------------------------------------------------------------------===///
 
 /// Mark a dependency as narrowable by setting the NarrowableDep unit attribute.
-/// If `haloFootprint` is non-empty, also sets NarrowableHaloFootprint.
 /// Creates a new LoweringContractOp if one does not exist for the pointer.
 static void markDepNarrowable(DbAcquireOp acquire, Value ptr,
                               LoweringContractOp contractOp,
@@ -778,11 +680,6 @@ static void markDepNarrowable(DbAcquireOp acquire, Value ptr,
   if (contractOp) {
     contractOp->setAttr(AttrNames::Operation::Contract::NarrowableDep,
                         UnitAttr::get(contractOp.getContext()));
-    if (!haloFootprint.empty()) {
-      contractOp->setAttr(
-          AttrNames::Operation::Contract::NarrowableHaloFootprint,
-          buildI64ArrayAttr(contractOp.getOperation(), haloFootprint));
-    }
   } else {
     /// No existing contract -- create one with the marker.
     LoweringContractInfo newInfo;
@@ -795,11 +692,6 @@ static void markDepNarrowable(DbAcquireOp acquire, Value ptr,
     if (newContractOp) {
       newContractOp->setAttr(AttrNames::Operation::Contract::NarrowableDep,
                              UnitAttr::get(newContractOp.getContext()));
-      if (!haloFootprint.empty()) {
-        newContractOp->setAttr(
-            AttrNames::Operation::Contract::NarrowableHaloFootprint,
-            buildI64ArrayAttr(newContractOp.getOperation(), haloFootprint));
-      }
     }
   }
 }
@@ -880,11 +772,8 @@ static bool tryNarrowWavefrontDep(DbAcquireOp acquire, Value ptr,
 /// ET-3: Dep chain narrowing for stencil/wavefront patterns
 ///===----------------------------------------------------------------------===///
 unsigned EdtTransformsPass::narrowDepChains() {
-  /// TODO: narrowable_dep and narrowable_halo_footprint are annotation-only —
-  /// no lowering pass currently reads these attributes. Note that DT-3
-  /// (in DbTransformsPass) already provides esdByteOffset/esdByteSize for
-  /// the same purpose. When lowering for ESD is implemented, ensure these
-  /// two mechanisms are reconciled to avoid conflicting annotations.
+  /// TODO: narrowable_dep is annotation-only —
+  /// no lowering pass currently reads this attribute.
   ModuleOp module = getOperation();
   unsigned count = 0;
 
@@ -952,14 +841,7 @@ unsigned EdtTransformsPass::narrowDepChains() {
         /// This is a read on the same DB array that the EDT writes --
         /// it is a neighbor halo read.
         Value ptr = acquire.getPtr();
-
-        /// Skip if the contract already has ESD annotation (from DT-3).
         auto existingContract = getLoweringContract(ptr);
-        if (existingContract && existingContract->esdByteOffset &&
-            existingContract->esdByteSize) {
-          ARTS_DEBUG("ET-3:   acquire already has ESD annotation, skipping");
-          continue;
-        }
 
         /// Skip if already marked narrowable.
         LoweringContractOp contractOp = getLoweringContractOp(ptr);

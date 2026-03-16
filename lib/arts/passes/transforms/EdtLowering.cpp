@@ -111,24 +111,9 @@ static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
 
   auto outerSizes = alloc.getSizes();
   auto elementSizes = alloc.getElementSizes();
-  SmallVector<unsigned, 4> dims;
-  if (!contract.ownerDims.empty()) {
-    dims.reserve(rank);
-    for (int64_t ownerDim : contract.ownerDims) {
-      if (ownerDim < 0)
-        continue;
-      dims.push_back(static_cast<unsigned>(ownerDim));
-      if (dims.size() >= rank)
-        break;
-    }
-  }
-  if (dims.empty()) {
-    dims.reserve(rank);
-    for (unsigned dim = 0; dim < rank; ++dim)
-      dims.push_back(dim);
-  }
-  if (dims.size() > rank)
-    dims.resize(rank);
+  LoweringContractInfo contractInfo;
+  contractInfo.ownerDims = contract.ownerDims;
+  SmallVector<unsigned, 4> dims = resolveContractOwnerDims(contractInfo, rank);
 
   if (dims.size() > outerSizes.size() || dims.size() > elementSizes.size())
     return;
@@ -404,6 +389,15 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   /// Calculate dependency count from the dependency view of each DB.
   Value depCount = computeDependencyCount(loc, edtDeps);
 
+  /// If this EDT has a control dependency (epoch continuation slot), add +1
+  /// to depCount. The control slot is the last slot, satisfied by the epoch
+  /// finish signal via arts_signal_edt_value.
+  if (edtOp->hasAttr("arts.has_control_dep")) {
+    Value one = AC->createIntConstant(1, AC->Int32, loc);
+    depCount = AC->create<arith::AddIOp>(loc, depCount, one);
+    ARTS_DEBUG("  Adding +1 control dep slot for epoch continuation");
+  }
+
   /// Create the outline operation at the same location as the EDT
   AC->setInsertionPoint(edtOp);
   Value routeVal = edtOp.getRoute();
@@ -415,6 +409,15 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
       AC->create<EdtCreateOp>(loc, paramPack, depCount, routeVal);
 
   setOutlinedFunc(outlineOp, outlinedFunc.getName());
+
+  /// Propagate continuation attributes so EpochLowering can find them.
+  if (edtOp->hasAttr("arts.continuation_for_epoch"))
+    outlineOp->setAttr("arts.continuation_for_epoch",
+                        AC->getBuilder().getUnitAttr());
+  if (edtOp->hasAttr("arts.has_control_dep"))
+    outlineOp->setAttr("arts.has_control_dep",
+                        edtOp->getAttr("arts.has_control_dep"));
+
   int64_t baseId = getArtsId(edtOp);
   if (!baseId)
     baseId = idRegistry.getOrCreate(edtOp.getOperation());

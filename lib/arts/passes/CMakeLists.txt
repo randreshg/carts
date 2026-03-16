@@ -1,11 +1,11 @@
-# Print it here
-message(STATUS "POLYGEIST_INCLUDE_DIR: ${POLYGEIST_BUILD_DIR}/include")
-message(STATUS "POLYGEIST_LIBRARY_DIR: ${POLYGEIST_BUILD_DIR}/lib")
-
 add_mlir_dialect_library(MLIRArtsTransforms
   # Transformation passes
   transforms/CollectMetadata.cpp
   transforms/VerifyMetadata.cpp
+  transforms/VerifyForLowered.cpp
+  transforms/VerifyDbCreated.cpp
+  transforms/VerifyPreLowered.cpp
+  transforms/VerifyLowered.cpp
   transforms/PatternDiscovery.cpp
   transforms/CreateDbs.cpp
   transforms/CreateEpochs.cpp
@@ -15,6 +15,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   transforms/DbLowering.cpp
   transforms/EdtLowering.cpp
   transforms/EpochLowering.cpp
+  transforms/EpochContinuationPrep.cpp
   transforms/LoweringContractCleanup.cpp
   transforms/ForOpt.cpp
   transforms/DistributedHostLoopOutlining.cpp

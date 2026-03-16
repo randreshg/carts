@@ -68,7 +68,7 @@ def ConvertOpenMPToArts : Pass<"convert-openmp-to-arts", "mlir::ModuleOp"> {
     "memref::MemRefDialect", "omp::OpenMPDialect", "LLVM::LLVMDialect",
     "arts::ArtsDialect", "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createConvertOpenMPtoArtsPass()";
+  let constructor = "mlir::arts::createConvertOpenMPToArtsPass()";
 }
 
 def PatternDiscovery : Pass<"arts-pattern-discovery", "mlir::ModuleOp"> {
@@ -207,7 +207,7 @@ def DbLowering : Pass<"db-lowering", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createDbLoweringPass()";
 }
 
-def EdtStructuralOpt : Pass<"edt", "mlir::ModuleOp"> {
+def EdtStructuralOpt : Pass<"edt-structural-opt", "mlir::ModuleOp"> {
   let summary = "Optimize EDTs";
   let dependentDialects = [
     "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
@@ -274,7 +274,7 @@ def EdtICM : Pass<"arts-edt-icm", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createEdtICMPass()";
 }
 
-def ArtsDataPtrHoisting
+def DataPtrHoisting
     : Pass<"arts-data-ptr-hoisting", "mlir::ModuleOp"> {
   let summary = "Hoist data pointer loads from deps struct out of loops";
   let description = [{
@@ -328,6 +328,23 @@ def EpochLowering : Pass<"epoch-lowering", "mlir::ModuleOp"> {
     "arts::ArtsDialect", "arith::ArithDialect", "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createEpochLoweringPass()";
+}
+
+def EpochContinuationPrep : Pass<"epoch-continuation-prep", "mlir::ModuleOp"> {
+  let summary = "Prepare epochs for finish-EDT continuation scheduling";
+  let description = [{
+    Detects safe epoch-wait-tail patterns and outlines the tail into a
+    continuation arts.edt. The continuation EDT receives an extra control
+    dependency slot that the epoch signals upon completion, replacing the
+    blocking arts.wait_on_epoch with ARTS-native finish-EDT scheduling.
+
+    This pass runs AFTER EpochLowering (which produces CreateEpochOp +
+    WaitOnEpochOp) and BEFORE EdtLowering (which outlines arts.edt regions).
+  }];
+  let dependentDialects = [
+    "func::FuncDialect", "arts::ArtsDialect", "arith::ArithDialect"
+  ];
+  let constructor = "mlir::arts::createEpochContinuationPrepPass()";
 }
 
 def ParallelEdtLowering : Pass<"parallel-edt-lowering", "mlir::ModuleOp"> {
@@ -427,7 +444,7 @@ def LoweringContractCleanup : Pass<"lowering-contract-cleanup", "mlir::ModuleOp"
   let constructor = "mlir::arts::createLoweringContractCleanupPass()";
 }
 
-def ArtsLoopFusion : Pass<"arts-loop-fusion", "mlir::ModuleOp"> {
+def LoopFusion : Pass<"arts-loop-fusion", "mlir::ModuleOp"> {
   let summary = "Fuse independent arts.for loops within parallel EDTs";
   let description = [{
     Identifies consecutive arts.for operations within parallel EDTs that:
@@ -443,7 +460,7 @@ def ArtsLoopFusion : Pass<"arts-loop-fusion", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createLoopFusionPass(nullptr)";
 }
 
-def ArtsEpochOpt : Pass<"arts-epoch-opt", "mlir::ModuleOp"> {
+def EpochOpt : Pass<"arts-epoch-opt", "mlir::ModuleOp"> {
   let summary = "Combined epoch optimizations (narrowing + fusion + loop fusion)";
   let description = [{
     Runs epoch-related optimizations:
@@ -470,7 +487,7 @@ def ArtsEpochOpt : Pass<"arts-epoch-opt", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createEpochOptPass()";
 }
 
-def ArtsHoisting : Pass<"arts-hoisting", "mlir::ModuleOp"> {
+def Hoisting : Pass<"arts-hoisting", "mlir::ModuleOp"> {
   let summary = "Hoist loop-invariant ARTS operations";
   let description = [{
     Unified hoisting for ARTS operations:
@@ -702,6 +719,40 @@ def VerifyMetadata : Pass<"verify-metadata", "mlir::ModuleOp"> {
       [Option<"failOnMissing", "fail-on-missing", "bool", "false",
               "Fail compilation if any entities are missing metadata">];
   let constructor = "mlir::arts::createVerifyMetadataPass(nullptr)";
+}
+
+def AliasScopeGen : Pass<"arts-alias-scope-gen", "mlir::ModuleOp"> {
+  let summary = "Generate LLVM alias scope metadata for ARTS data pointers";
+  let dependentDialects = ["LLVM::LLVMDialect"];
+  let constructor = "mlir::arts::createAliasScopeGenPass()";
+}
+
+///===----------------------------------------------------------------------===///
+/// Verification Passes
+///===----------------------------------------------------------------------===///
+
+def VerifyForLowered : Pass<"verify-for-lowered", "mlir::ModuleOp"> {
+  let summary = "Verify all arts.for ops have been lowered";
+  let dependentDialects = ["arts::ArtsDialect"];
+  let constructor = "mlir::arts::createVerifyForLoweredPass()";
+}
+
+def VerifyDbCreated : Pass<"verify-db-created", "mlir::ModuleOp"> {
+  let summary = "Verify DB allocations exist after create-dbs";
+  let dependentDialects = ["arts::ArtsDialect"];
+  let constructor = "mlir::arts::createVerifyDbCreatedPass()";
+}
+
+def VerifyPreLowered : Pass<"verify-pre-lowered", "mlir::ModuleOp"> {
+  let summary = "Verify pre-lowering removed high-level scheduler ops";
+  let dependentDialects = ["arts::ArtsDialect"];
+  let constructor = "mlir::arts::createVerifyPreLoweredPass()";
+}
+
+def VerifyLowered : Pass<"verify-lowered", "mlir::ModuleOp"> {
+  let summary = "Verify no high-level ARTS ops survive past arts-to-llvm";
+  let dependentDialects = ["arts::ArtsDialect"];
+  let constructor = "mlir::arts::createVerifyLoweredPass()";
 }
 
 #endif // CARTS_PASSES

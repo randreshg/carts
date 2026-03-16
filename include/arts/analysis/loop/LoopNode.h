@@ -8,7 +8,6 @@
 #define ARTS_ANALYSIS_LOOPNODE_H
 
 #include "arts/analysis/db/DbAnalysis.h"
-#include "arts/analysis/graphs/base/NodeBase.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/DenseMap.h"
@@ -22,11 +21,10 @@ namespace arts {
 
 ///==========================================================================///
 /// LoopNode - Represents a loop operation with metadata
-/// Combines graph node capabilities (NodeBase) with loop metadata
 ///==========================================================================///
 class LoopAnalysis;
 struct DbAcquirePartitionFacts;
-class LoopNode : public NodeBase, public LoopMetadata {
+class LoopNode : public LoopMetadata {
 public:
   /// Constructor: automatically imports metadata from operation
   explicit LoopNode(Operation *loopOp, LoopAnalysis *loopAnalysis = nullptr);
@@ -34,23 +32,10 @@ public:
   /// Get the underlying loop operation (affine.for, scf.for, scf.parallel)
   Operation *getLoopOp() const { return loopOp; }
 
-  /// NodeBase interface
-  StringRef getHierId() const override { return hierId; }
+  StringRef getHierId() const { return hierId; }
   void setHierId(std::string id) { hierId = id; }
-  void print(llvm::raw_ostream &os) const override;
-  Operation *getOp() const override { return loopOp; }
-
-  void addInEdge(EdgeBase *edge) override { /* unused for loop nodes */
-  }
-  void addOutEdge(EdgeBase *edge) override { /* unused for loop nodes */
-  }
-  const DenseSet<EdgeBase *> &getInEdges() const override { return edges; }
-  const DenseSet<EdgeBase *> &getOutEdges() const override { return edges; }
-
-  NodeKind getKind() const override { return NodeKind::Loop; }
-  static bool classof(const NodeBase *N) {
-    return N->getKind() == NodeKind::Loop;
-  }
+  void print(llvm::raw_ostream &os) const;
+  Operation *getOp() const { return loopOp; }
 
   //===--------------------------------------------------------------------===//
   /// Induction Variable Analysis
@@ -122,7 +107,6 @@ private:
   Operation *loopOp;
   LoopAnalysis *loopAnalysis = nullptr;
   std::string hierId;
-  DenseSet<EdgeBase *> edges;
 
   /// Cache for IV dependency analysis to avoid repeated traversals
   DenseMap<Value, bool> ivDepCache;

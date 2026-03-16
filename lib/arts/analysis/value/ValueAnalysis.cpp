@@ -138,14 +138,6 @@ bool ValueAnalysis::getConstantIndex(Value v, int64_t &out) {
   return false;
 }
 
-bool ValueAnalysis::isNonZeroIndex(Value v) {
-  if (!v)
-    return false;
-  if (auto c = v.getDefiningOp<arith::ConstantIndexOp>())
-    return c.value() != 0;
-  return true;
-}
-
 std::optional<int64_t> ValueAnalysis::getConstantValue(Value v) {
   int64_t val;
   if (getConstantIndex(v, val))
@@ -261,52 +253,6 @@ bool ValueAnalysis::sameValue(Value a, Value b) {
   auto aConst = tryFoldConstantIndex(a);
   auto bConst = tryFoldConstantIndex(b);
   return aConst && bConst && *aConst == *bConst;
-}
-
-///===----------------------------------------------------------------------===///
-/// Value Range and Scale Comparison
-///===----------------------------------------------------------------------===///
-
-bool ValueAnalysis::equalRange(ValueRange a, ValueRange b) {
-  if (a.size() != b.size())
-    return false;
-  for (auto it = a.begin(), jt = b.begin(); it != a.end(); ++it, ++jt) {
-    if (*it != *jt)
-      return false;
-  }
-  return true;
-}
-
-bool ValueAnalysis::allSameValue(ValueRange values) {
-  if (values.empty())
-    return false;
-  Value first = values[0];
-  return llvm::all_of(values, [&](Value v) { return v == first; });
-}
-
-bool ValueAnalysis::scalesAreEquivalent(Value lhs, Value rhs) {
-  Value a = stripNumericCasts(lhs);
-  Value b = stripNumericCasts(rhs);
-  if (a == b)
-    return true;
-
-  auto constantValue = [](Value v) -> std::optional<int64_t> {
-    if (auto cIdx = v.getDefiningOp<arith::ConstantIndexOp>())
-      return cIdx.value();
-    if (auto cInt = v.getDefiningOp<arith::ConstantIntOp>())
-      return cInt.value();
-    return std::nullopt;
-  };
-
-  if (auto lhsConst = constantValue(a))
-    if (auto rhsConst = constantValue(b))
-      return lhsConst == rhsConst;
-
-  if (auto lhsType = a.getDefiningOp<polygeist::TypeSizeOp>())
-    if (auto rhsType = b.getDefiningOp<polygeist::TypeSizeOp>())
-      return lhsType.getType() == rhsType.getType();
-
-  return false;
 }
 
 Value ValueAnalysis::stripClampOne(Value v) {
@@ -647,28 +593,6 @@ bool ValueAnalysis::isDerivedFromPtr(Value value, Value source) {
   return isDerivedFromPtrImpl(value, source, visited, 0);
 }
 
-std::optional<int64_t> ValueAnalysis::inferConstantStride(Value globalIndex,
-                                                          Value elemOffset) {
-  if (!globalIndex || !elemOffset)
-    return std::nullopt;
-
-  Value stripped = stripNumericCasts(globalIndex);
-  auto mulOp = stripped.getDefiningOp<arith::MulIOp>();
-  if (!mulOp)
-    return std::nullopt;
-
-  Value lhs = mulOp.getLhs();
-  Value rhs = mulOp.getRhs();
-
-  int64_t constVal;
-  if (getConstantIndex(lhs, constVal) && dependsOn(rhs, elemOffset))
-    return constVal;
-  if (getConstantIndex(rhs, constVal) && dependsOn(lhs, elemOffset))
-    return constVal;
-
-  return std::nullopt;
-}
-
 /// Extract constant offset from an index expression relative to loopIV and
 /// chunkOffset. E.g. chunkOffset + loopIV + 5 yields offset = 5.
 std::optional<int64_t> ValueAnalysis::extractConstantOffset(Value idx,
@@ -780,35 +704,6 @@ Value ValueAnalysis::stripConstantOffset(Value value, int64_t *outConst) {
   if (outConst)
     *outConst = accumulator;
   return current;
-}
-
-Value ValueAnalysis::extractArrayIndexFromByteOffset(Value byteOffset,
-                                                     Type elemType) {
-  Value idxSource = byteOffset;
-  while (auto castOp = idxSource.getDefiningOp<arith::IndexCastOp>())
-    idxSource = castOp.getIn();
-
-  auto mulOp = idxSource.getDefiningOp<arith::MulIOp>();
-  if (!mulOp)
-    return Value();
-
-  int64_t elemSize = getElementTypeByteSize(elemType);
-  if (elemSize == 0)
-    return Value();
-
-  auto isElementSizeConstant = [elemSize](Value v) -> bool {
-    if (auto constIdx = v.getDefiningOp<arith::ConstantIndexOp>())
-      return constIdx.value() == elemSize;
-    if (auto constInt = v.getDefiningOp<arith::ConstantIntOp>())
-      return constInt.value() == elemSize && constInt.getType().isInteger(64);
-    return false;
-  };
-
-  if (isElementSizeConstant(mulOp.getLhs()))
-    return mulOp.getRhs();
-  if (isElementSizeConstant(mulOp.getRhs()))
-    return mulOp.getLhs();
-  return Value();
 }
 
 ///===----------------------------------------------------------------------===///

@@ -70,20 +70,13 @@ constexpr auto DistributionKind = Operation::DistributionKind;
 constexpr auto DistributionPattern = Operation::DistributionPattern;
 constexpr auto DistributionVersion = Operation::DistributionVersion;
 constexpr StringLiteral OwnerDims = "owner_dims";
-constexpr StringLiteral SpatialDims = "spatial_dims";
 constexpr StringLiteral SupportedBlockHalo = "supported_block_halo";
 constexpr StringLiteral StencilIndependentDims = "stencil_independent_dims";
-constexpr StringLiteral EsdByteOffset = "esd_byte_offset";
-constexpr StringLiteral EsdByteSize = "esd_byte_size";
-constexpr StringLiteral CachedStartBlock = "cached_start_block";
-constexpr StringLiteral CachedBlockCount = "cached_block_count";
 constexpr StringLiteral PostDbRefined = "post_db_refined";
-constexpr StringLiteral EstimatedTaskCost = "estimated_task_cost";
 constexpr StringLiteral CriticalPathDistance = "critical_path_distance";
 constexpr StringLiteral AffinityDb = "affinity_db";
 constexpr StringLiteral ReductionStrategy = "arts.reduction_strategy";
 constexpr StringLiteral NarrowableDep = "narrowable_dep";
-constexpr StringLiteral NarrowableHaloFootprint = "narrowable_halo_footprint";
 constexpr StringLiteral ContractKindKey = "contract_kind";
 } // namespace Contract
 

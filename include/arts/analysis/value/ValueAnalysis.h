@@ -52,17 +52,6 @@ public:
   /// Value Range and Scale Comparison
   ///===----------------------------------------------------------------------===////
 
-  /// Compare two ValueRanges for equality (size and element-wise).
-  static bool equalRange(ValueRange a, ValueRange b);
-
-  /// Check if all values in the given range are identical.
-  /// Returns false for empty ranges.
-  static bool allSameValue(ValueRange values);
-
-  /// Check if two values represent equivalent scaling factors.
-  /// Used to recognize patterns like (N * sizeof(T)) / sizeof(T) -> N.
-  static bool scalesAreEquivalent(Value a, Value b);
-
   /// Strip numeric casts and max(x, 1) clamping.
   static Value stripClampOne(Value v);
 
@@ -78,9 +67,6 @@ public:
 
   /// Recursively prove value is non-zero (for div/rem safety).
   static bool isProvablyNonZero(Value v, unsigned depth = 0);
-
-  /// Returns true for non-zero constants or unknown (non-constant) values.
-  static bool isNonZeroIndex(Value v);
 
   ///===----------------------------------------------------------------------===////
   /// Value Type Conversion and Casting
@@ -111,19 +97,12 @@ public:
   /// GEP, casts, SubView, and similar pointer-manipulating operations.
   static bool isDerivedFromPtr(Value value, Value source);
 
-  /// Infer constant stride from mul(constant, X) where X depends on offset.
-  static std::optional<int64_t> inferConstantStride(Value globalIndex,
-                                                    Value elemOffset);
-
   /// Extract constant offset from expression relative to loopIV + chunkOffset.
   static std::optional<int64_t> extractConstantOffset(Value idx, Value loopIV,
                                                       Value chunkOffset);
 
   /// Strip constant add/sub offsets, returning base and accumulated offset.
   static Value stripConstantOffset(Value value, int64_t *outConst = nullptr);
-
-  /// Extract array index from byte offset pattern: bytes = (index * elemBytes).
-  static Value extractArrayIndexFromByteOffset(Value byteOffset, Type elemType);
 
   ///===----------------------------------------------------------------------===////
   /// Underlying Value Tracing

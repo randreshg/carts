@@ -48,7 +48,6 @@ public:
   EdtHeuristics &getEdtHeuristics();
 
   /// Unified analysis queries spanning EDT and DB analyses.
-  std::optional<DbAccessPattern> getDbAllocAccessPattern(DbAllocOp alloc);
   std::optional<DbAnalysis::LoopDbAccessSummary>
   getLoopDbAccessSummary(Operation *loopOp);
   std::optional<EdtDistributionPattern>

@@ -157,13 +157,24 @@ static cl::opt<bool> DistributedDb(
              "producer loops)"),
     cl::init(false));
 
+/// Enable epoch finish-continuation lowering (replaces blocking
+/// arts_wait_on_handle with ARTS-native finish-EDT continuation scheduling
+/// for eligible epoch patterns). See RFC:
+/// docs/compiler/epoch-finish-continuation-rfc.md
+static cl::opt<bool> EpochFinishContinuation(
+    "arts-epoch-finish-continuation",
+    cl::desc("Enable epoch finish-continuation lowering (replace blocking "
+             "epoch waits with ARTS-native finish-EDT continuation scheduling "
+             "for eligible patterns)"),
+    cl::init(false));
+
 ///===----------------------------------------------------------------------===///
 /// Pipeline Stop Options
 ///===----------------------------------------------------------------------===///
 enum class PipelineStage {
   CanonicalizeMemrefs,
-  InitialCleanup,
   CollectMetadata,
+  InitialCleanup,
   OpenMPToArts,
   PatternPipeline,
   EdtTransforms,
@@ -218,6 +229,81 @@ static cl::opt<PipelineStage> StopAt(
                clEnumValN(PipelineStage::Complete, "complete",
                           "Run complete pipeline (default)")),
     cl::init(PipelineStage::Complete));
+
+static cl::opt<PipelineStage> StartFrom(
+    "start-from", cl::desc("Resume pipeline from specified stage:"),
+    cl::values(clEnumValN(PipelineStage::CanonicalizeMemrefs,
+                          "canonicalize-memrefs",
+                          "Start from canonicalizing memrefs pass (default)"),
+               clEnumValN(PipelineStage::CollectMetadata, "collect-metadata",
+                          "Start from collecting metadata"),
+               clEnumValN(PipelineStage::InitialCleanup, "initial-cleanup",
+                          "Start from initial cleanup and simplification"),
+               clEnumValN(PipelineStage::OpenMPToArts, "openmp-to-arts",
+                          "Start from OpenMP to Arts conversion"),
+               clEnumValN(PipelineStage::PatternPipeline, "pattern-pipeline",
+                          "Start from the semantic pattern pipeline"),
+               clEnumValN(PipelineStage::EdtTransforms, "edt-transforms",
+                          "Start from EDT transformations"),
+               clEnumValN(PipelineStage::CreateDbs, "create-dbs",
+                          "Start from Dbs creation"),
+               clEnumValN(PipelineStage::DbOpt, "db-opt",
+                          "Start from Dbs optimization"),
+               clEnumValN(PipelineStage::EdtOpt, "edt-opt",
+                          "Start from EDT optimizations"),
+               clEnumValN(PipelineStage::Concurrency, "concurrency",
+                          "Start from concurrency"),
+               clEnumValN(PipelineStage::EdtDistribution, "edt-distribution",
+                          "Start from EDT distribution and for lowering"),
+               clEnumValN(PipelineStage::ConcurrencyOpt, "concurrency-opt",
+                          "Start from concurrency optimization"),
+               clEnumValN(PipelineStage::Epochs, "epochs",
+                          "Start from Epochs creation"),
+               clEnumValN(PipelineStage::PreLowering, "pre-lowering",
+                          "Start from pre-lowering transformations"),
+               clEnumValN(PipelineStage::ArtsToLLVM, "arts-to-llvm",
+                          "Start from Arts to LLVM conversion")),
+    cl::init(PipelineStage::CanonicalizeMemrefs));
+
+static llvm::StringRef pipelineStageName(PipelineStage stage) {
+  switch (stage) {
+  case PipelineStage::CanonicalizeMemrefs:
+    return "canonicalize-memrefs";
+  case PipelineStage::CollectMetadata:
+    return "collect-metadata";
+  case PipelineStage::InitialCleanup:
+    return "initial-cleanup";
+  case PipelineStage::OpenMPToArts:
+    return "openmp-to-arts";
+  case PipelineStage::PatternPipeline:
+    return "pattern-pipeline";
+  case PipelineStage::EdtTransforms:
+    return "edt-transforms";
+  case PipelineStage::LoopReordering:
+    return "loop-reordering";
+  case PipelineStage::CreateDbs:
+    return "create-dbs";
+  case PipelineStage::DbOpt:
+    return "db-opt";
+  case PipelineStage::EdtOpt:
+    return "edt-opt";
+  case PipelineStage::Concurrency:
+    return "concurrency";
+  case PipelineStage::EdtDistribution:
+    return "edt-distribution";
+  case PipelineStage::ConcurrencyOpt:
+    return "concurrency-opt";
+  case PipelineStage::Epochs:
+    return "epochs";
+  case PipelineStage::PreLowering:
+    return "pre-lowering";
+  case PipelineStage::ArtsToLLVM:
+    return "arts-to-llvm";
+  case PipelineStage::Complete:
+    return "complete";
+  }
+  return "unknown";
+}
 
 static bool shouldExportDetailedDiagnose(PipelineStage stopAt) {
   return stopAt == PipelineStage::Complete ||
@@ -283,8 +369,15 @@ void initializeContext(MLIRContext &context) {
 /// walk.
 /// TODO(PERF): CSEPass is added 24 times; audit which invocations are needed.
 
+///===----------------------------------------------------------------------===///
+/// Pipeline Builders
+///===----------------------------------------------------------------------===///
+/// Each build*Pipeline function populates a PassManager with the passes for
+/// one logical compilation stage. There is a 1:1 mapping between
+/// PipelineStage enum values and these builders.
+
 /// Inliner and canonicalize memrefs pass.
-void setupCanonicalizeMemrefs(PassManager &pm) {
+void buildCanonicalizeMemrefsPipeline(PassManager &pm) {
   OpPassManager &optPM = pm.nest<func::FuncOp>();
   optPM.addPass(createLowerAffinePass());
   pm.addPass(createCSEPass());
@@ -300,7 +393,7 @@ void setupCanonicalizeMemrefs(PassManager &pm) {
 }
 
 /// Metadata collection pass.
-void setupCollectMetadata(PassManager &pm, arts::AnalysisManager *AM = nullptr,
+void buildCollectMetadataPipeline(PassManager &pm, arts::AnalysisManager *AM = nullptr,
                           bool shouldExport = false,
                           StringRef metadataFile = "") {
   std::string actualMetadataFile =
@@ -321,21 +414,21 @@ void setupCollectMetadata(PassManager &pm, arts::AnalysisManager *AM = nullptr,
 }
 
 /// Initial cleanup and simplification passes.
-void setupInitialCleanup(OpPassManager &optPM) {
+void buildInitialCleanupPipeline(OpPassManager &optPM) {
   optPM.addPass(createLowerAffinePass());
   optPM.addPass(createCSEPass());
   optPM.addPass(polygeist::createCanonicalizeForPass());
 }
 
 /// OpenMP to ARTS conversion pass.
-void setupOpenMPToArts(PassManager &pm) {
-  pm.addPass(arts::createConvertOpenMPtoArtsPass());
+void buildOpenMPToArtsPipeline(PassManager &pm) {
+  pm.addPass(arts::createConvertOpenMPToArtsPass());
   pm.addPass(arts::createDCEPass());
   pm.addPass(createCSEPass());
 }
 
 /// EDT transformation passes.
-void setupEdtTransforms(PassManager &pm, arts::AnalysisManager *AM) {
+void buildEdtTransformsPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(arts::createEdtStructuralOptPass(AM, false));
   pm.addPass(arts::createEdtICMPass());
   pm.addPass(arts::createDCEPass());
@@ -346,7 +439,7 @@ void setupEdtTransforms(PassManager &pm, arts::AnalysisManager *AM) {
 
 /// Dedicated semantic pattern pipeline that teaches ARTS about supported loop
 /// and dependence families before DB creation.
-void setupPatternPipeline(PassManager &pm, arts::AnalysisManager *AM) {
+void buildPatternDiscoveryPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(arts::createPatternDiscoveryPass(AM, /*refine=*/false));
   pm.addPass(arts::createDepTransformsPass());
   pm.addPass(arts::createLoopNormalizationPass(AM));
@@ -363,7 +456,7 @@ void setupPatternPipeline(PassManager &pm, arts::AnalysisManager *AM) {
 /// Bridge eligible host producer loops into the regular ARTS loop/EDT path
 /// before DB creation without making this outlining part of the semantic
 /// pattern pipeline itself.
-void setupPreCreateDbsBridging(PassManager &pm, arts::AnalysisManager *AM) {
+void buildPreCreateDbsBridgingPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   /// Multinode execution needs eligible host producer loops to flow through
   /// the regular arts.for/EDT pipeline before CreateDbs; otherwise serial host
   /// writes between distributed phases bypass the normal DB acquire/release
@@ -385,18 +478,19 @@ void setupPreCreateDbsBridging(PassManager &pm, arts::AnalysisManager *AM) {
 }
 
 /// DB creation pass.
-void setupCreateDbs(PassManager &pm, arts::AnalysisManager *AM) {
-  setupPreCreateDbsBridging(pm, AM);
+void buildCreateDbsPipeline(PassManager &pm, arts::AnalysisManager *AM) {
+  buildPreCreateDbsBridgingPipeline(pm, AM);
   pm.addPass(arts::createCreateDbsPass(AM));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createSymbolDCEPass());
   pm.addPass(createMem2Reg());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(arts::createVerifyDbCreatedPass());
 }
 
 /// DB creation and optimization passes.
-void setupDbOpt(PassManager &pm, arts::AnalysisManager *AM) {
+void buildDbOptPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(arts::createDbModeTighteningPass(AM));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
@@ -404,7 +498,7 @@ void setupDbOpt(PassManager &pm, arts::AnalysisManager *AM) {
 }
 
 /// EDT optimization passes.
-void setupEdtOpt(PassManager &pm, arts::AnalysisManager *AM) {
+void buildEdtOptPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createEdtStructuralOptPass(AM, /*runAnalysis*/ true));
   pm.addPass(arts::createLoopFusionPass(AM));
@@ -412,7 +506,7 @@ void setupEdtOpt(PassManager &pm, arts::AnalysisManager *AM) {
 }
 
 /// Concurrency passes.
-void setupConcurrency(PassManager &pm, arts::AnalysisManager *AM) {
+void buildConcurrencyPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createConcurrencyPass(AM));
   pm.addPass(arts::createForOptPass(AM));
@@ -420,13 +514,14 @@ void setupConcurrency(PassManager &pm, arts::AnalysisManager *AM) {
 }
 
 /// EDT distribution and loop lowering passes.
-void setupEdtDistribution(PassManager &pm, arts::AnalysisManager *AM) {
+void buildEdtDistributionPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(arts::createEdtDistributionPass(AM));
   pm.addPass(arts::createForLoweringPass(AM));
+  pm.addPass(arts::createVerifyForLoweredPass());
 }
 
 /// Concurrency optimization passes.
-void setupConcurrencyOpt(PassManager &pm, arts::AnalysisManager *AM) {
+void buildConcurrencyOptPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   /// EDT optimization
   pm.addPass(arts::createEdtStructuralOptPass(AM, /*runAnalysis*/ false));
   pm.addPass(arts::createDCEPass());
@@ -468,15 +563,17 @@ void setupConcurrencyOpt(PassManager &pm, arts::AnalysisManager *AM) {
 }
 
 /// Epoch creation passes.
-void setupEpochs(PassManager &pm) {
+void buildEpochsPipeline(PassManager &pm, bool enableContinuation) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createCreateEpochsPass());
+  if (enableContinuation)
+    pm.addPass(arts::createEpochContinuationPrepPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
 }
 
 /// Pre-lowering passes.
-void setupPreLowering(PassManager &pm, arts::AnalysisManager *AM) {
-  /// TODO(PERF): EdtAllocaSinkingPass runs twice (setupConcurrencyOpt and
+void buildPreLoweringPipeline(PassManager &pm, arts::AnalysisManager *AM) {
+  /// TODO(PERF): EdtAllocaSinkingPass runs twice (buildConcurrencyOptPipeline and
   /// here).
   pm.addPass(arts::createEdtAllocaSinkingPass());
   pm.addPass(arts::createParallelEdtLoweringPass());
@@ -490,7 +587,7 @@ void setupPreLowering(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(createCSEPass());
   pm.addPass(createLoopInvariantCodeMotionPass());
   /// Hoist loop-invariant DB/dep pointer loads before scalar replacement;
-  /// setupArtsToLLVM runs hoisting again after Arts->LLVM materializes new
+  /// buildArtsToLLVMPipeline runs hoisting again after Arts->LLVM materializes new
   /// loads.
   pm.addPass(arts::createDataPtrHoistingPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
@@ -502,10 +599,11 @@ void setupPreLowering(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(arts::createLoweringContractCleanupPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
+  pm.addPass(arts::createVerifyPreLoweredPass());
 }
 
-/// Setup ARTS to LLVM conversion passes.
-void setupArtsToLLVM(PassManager &pm, bool debug, bool distributedInitPerWorker,
+/// ARTS to LLVM conversion passes.
+void buildArtsToLLVMPipeline(PassManager &pm, bool debug, bool distributedInitPerWorker,
                      const arts::AbstractMachine *machine) {
   pm.addPass(arts::createConvertArtsToLLVMPass(debug, distributedInitPerWorker,
                                                machine));
@@ -518,10 +616,11 @@ void setupArtsToLLVM(PassManager &pm, bool debug, bool distributedInitPerWorker,
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createControlFlowSinkPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(arts::createVerifyLoweredPass());
 }
 
-/// Setup additional optimizations (post-ARTS pipeline).
-void setupAdditionalOptimizations(OpPassManager &optPM) {
+/// Additional optimizations (post-ARTS pipeline).
+void buildAdditionalOptPipeline(OpPassManager &optPM) {
   optPM.addPass(polygeist::createPolygeistCanonicalizePass());
   optPM.addPass(createControlFlowSinkPass());
   optPM.addPass(polygeist::createPolygeistCanonicalizePass());
@@ -530,8 +629,8 @@ void setupAdditionalOptimizations(OpPassManager &optPM) {
   optPM.addPass(polygeist::createPolygeistCanonicalizePass());
 }
 
-/// Setup LLVM IR emission passes.
-void setupLLVMIREmission(PassManager &pm) {
+/// LLVM IR emission passes.
+void buildLLVMIREmissionPipeline(PassManager &pm) {
   pm.addPass(createCSEPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arith::createArithExpandOpsPass());
@@ -542,11 +641,27 @@ void setupLLVMIREmission(PassManager &pm) {
   pm.addPass(createCSEPass());
 }
 
+/// Hooks invoked around each pipeline stage for diagnostics or custom logging.
+struct PipelineHooks {
+  std::function<void(PipelineStage)> beforePhase;
+  std::function<void(PipelineStage, LogicalResult)> afterPhase;
+};
+
 /// Configure the pass manager with the optimization passes.
 LogicalResult
-setupPassManager(ModuleOp module, MLIRContext &context,
+buildPassManager(ModuleOp module, MLIRContext &context,
                  PipelineStage stopAt = PipelineStage::Complete,
-                 std::unique_ptr<arts::AnalysisManager> *outAM = nullptr) {
+                 PipelineStage startFrom = PipelineStage::CanonicalizeMemrefs,
+                 std::unique_ptr<arts::AnalysisManager> *outAM = nullptr,
+                 PipelineHooks *hooks = nullptr) {
+  if (stopAt != PipelineStage::Complete &&
+      static_cast<int>(startFrom) > static_cast<int>(stopAt)) {
+    ARTS_ERROR("Invalid pipeline stage range: --start-from="
+               << pipelineStageName(startFrom) << " is after --stop-at="
+               << pipelineStageName(stopAt));
+    return failure();
+  }
+
   /// Create module-level analysis manager for caching across functions
   arts::PartitionFallback partitionFallback =
       (PartitionFallbackMode == PartitionFallback::Fine)
@@ -575,6 +690,10 @@ setupPassManager(ModuleOp module, MLIRContext &context,
   arts::setRuntimeTotalWorkers(module, machine.getRuntimeTotalWorkers());
   arts::setRuntimeTotalNodes(module, machine.getNodeCount());
 
+  if (machine.getNodeCount() > 1 && !DistributedDb)
+    llvm::errs() << "NOTE: Multi-node execution without --distributed-db: "
+                    "all DBs will be created on their origin node.\n";
+
   /// Load metadata from JSON file
   (void)AM->getMetadataManager();
 
@@ -585,12 +704,20 @@ setupPassManager(ModuleOp module, MLIRContext &context,
   };
 
   auto runStage = [&](const StageSpec &spec) -> LogicalResult {
+    if (hooks && hooks->beforePhase)
+      hooks->beforePhase(spec.stage);
+
     if (spec.stage == PipelineStage::PreLowering && outAM)
       AM->captureDiagnostics();
 
     PassManager pm(&context);
     spec.setup(pm);
-    if (failed(pm.run(module))) {
+    auto result = pm.run(module);
+
+    if (hooks && hooks->afterPhase)
+      hooks->afterPhase(spec.stage, result);
+
+    if (failed(result)) {
       ARTS_ERROR(spec.errorMessage);
       module->dump();
       return failure();
@@ -605,48 +732,50 @@ setupPassManager(ModuleOp module, MLIRContext &context,
 
   std::vector<StageSpec> stages = {
       {PipelineStage::CanonicalizeMemrefs, "Error when canonicalizing memrefs",
-       [&](PassManager &pm) { setupCanonicalizeMemrefs(pm); }},
+       [&](PassManager &pm) { buildCanonicalizeMemrefsPipeline(pm); }},
       {PipelineStage::CollectMetadata, "Error when collecting metadata",
        [&](PassManager &pm) {
          bool shouldExport = (stopAt == PipelineStage::CollectMetadata);
-         setupCollectMetadata(pm, outAM ? AM.get() : nullptr, shouldExport);
+         buildCollectMetadataPipeline(pm, outAM ? AM.get() : nullptr, shouldExport);
        }},
       {PipelineStage::InitialCleanup, "Error simplifying the IR",
        [&](PassManager &pm) {
          OpPassManager &optPM = pm.nest<func::FuncOp>();
-         setupInitialCleanup(optPM);
+         buildInitialCleanupPipeline(optPM);
        }},
       {PipelineStage::OpenMPToArts, "Error when converting OpenMP to ARTS",
-       [&](PassManager &pm) { setupOpenMPToArts(pm); }},
+       [&](PassManager &pm) { buildOpenMPToArtsPipeline(pm); }},
       {PipelineStage::PatternPipeline,
        "Error when applying the semantic pattern pipeline",
-       [&](PassManager &pm) { setupPatternPipeline(pm, AM.get()); }},
+       [&](PassManager &pm) { buildPatternDiscoveryPipeline(pm, AM.get()); }},
       {PipelineStage::EdtTransforms, "Error when running EDT transformations",
-       [&](PassManager &pm) { setupEdtTransforms(pm, AM.get()); }},
+       [&](PassManager &pm) { buildEdtTransformsPipeline(pm, AM.get()); }},
       {PipelineStage::CreateDbs, "Error when creating Dbs",
-       [&](PassManager &pm) { setupCreateDbs(pm, AM.get()); }},
+       [&](PassManager &pm) { buildCreateDbsPipeline(pm, AM.get()); }},
       {PipelineStage::DbOpt, "Error when optimizing Dbs",
-       [&](PassManager &pm) { setupDbOpt(pm, AM.get()); }},
+       [&](PassManager &pm) { buildDbOptPipeline(pm, AM.get()); }},
       {PipelineStage::EdtOpt, "Error when optimizing EDTs",
-       [&](PassManager &pm) { setupEdtOpt(pm, AM.get()); }},
+       [&](PassManager &pm) { buildEdtOptPipeline(pm, AM.get()); }},
       {PipelineStage::Concurrency, "Error when running concurrency",
-       [&](PassManager &pm) { setupConcurrency(pm, AM.get()); }},
+       [&](PassManager &pm) { buildConcurrencyPipeline(pm, AM.get()); }},
       {PipelineStage::EdtDistribution, "Error when running EDT distribution",
-       [&](PassManager &pm) { setupEdtDistribution(pm, AM.get()); }},
+       [&](PassManager &pm) { buildEdtDistributionPipeline(pm, AM.get()); }},
       {PipelineStage::ConcurrencyOpt, "Error when optimizing concurrency",
-       [&](PassManager &pm) { setupConcurrencyOpt(pm, AM.get()); }},
+       [&](PassManager &pm) { buildConcurrencyOptPipeline(pm, AM.get()); }},
       {PipelineStage::Epochs, "Error when creating and optimizing epochs",
-       [&](PassManager &pm) { setupEpochs(pm); }},
+       [&](PassManager &pm) { buildEpochsPipeline(pm, EpochFinishContinuation); }},
       {PipelineStage::PreLowering,
        "Error when pre-lowering DBs, EDTs, and Epochs",
-       [&](PassManager &pm) { setupPreLowering(pm, AM.get()); }},
+       [&](PassManager &pm) { buildPreLoweringPipeline(pm, AM.get()); }},
       {PipelineStage::ArtsToLLVM, "Error when converting ARTS to LLVM",
        [&](PassManager &pm) {
-         setupArtsToLLVM(pm, Debug, DistributedDb, &machine);
+         buildArtsToLLVMPipeline(pm, Debug, DistributedDb, &machine);
        }},
   };
 
   for (const StageSpec &spec : stages) {
+    if (static_cast<int>(spec.stage) < static_cast<int>(startFrom))
+      continue;
     if (failed(runStage(spec)))
       return failure();
     if (stopAt == spec.stage) {
@@ -659,7 +788,7 @@ setupPassManager(ModuleOp module, MLIRContext &context,
   if (Opt) {
     PassManager pm(&context);
     OpPassManager &optPM = pm.nest<func::FuncOp>();
-    setupAdditionalOptimizations(optPM);
+    buildAdditionalOptPipeline(optPM);
 
     if (failed(pm.run(module))) {
       ARTS_ERROR("Error when running classical optimizations");
@@ -671,7 +800,7 @@ setupPassManager(ModuleOp module, MLIRContext &context,
   /// LLVM IR conversion
   if (EmitLLVM) {
     PassManager pm(&context);
-    setupLLVMIREmission(pm);
+    buildLLVMIREmissionPipeline(pm);
     if (failed(pm.run(module))) {
       ARTS_ERROR("Error when emitting LLVM IR");
       module->dump();
@@ -721,10 +850,22 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  /// Set up optional pipeline hooks for diagnostics.
+  PipelineHooks hooks;
+  PipelineHooks *hooksPtr = nullptr;
+  if (Diagnose) {
+    hooks.afterPhase = [](PipelineStage stage, LogicalResult result) {
+      llvm::errs() << "[carts-compile] Stage " << static_cast<int>(stage)
+                   << (succeeded(result) ? " completed" : " FAILED") << "\n";
+    };
+    hooksPtr = &hooks;
+  }
+
   /// Run the pass pipeline once.
   std::unique_ptr<arts::AnalysisManager> AM;
-  if (failed(setupPassManager(module.get(), context, effectiveStopAt,
-                              Diagnose ? &AM : nullptr))) {
+  if (failed(buildPassManager(module.get(), context, effectiveStopAt,
+                              StartFrom, Diagnose ? &AM : nullptr,
+                              hooksPtr))) {
     return 1;
   }
 
