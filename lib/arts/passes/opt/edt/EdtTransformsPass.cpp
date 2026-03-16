@@ -291,8 +291,8 @@ void EdtTransformsPass::logModuleEdtSummary(
     const ModuleEdtMetrics &metrics) const {
   if (metrics.totalEdts > 0) {
     ARTS_INFO("EDT transforms summary:"
-              << " edts=" << metrics.totalEdts << " avgOps="
-              << (metrics.totalOpsAccum / metrics.totalEdts)
+              << " edts=" << metrics.totalEdts
+              << " avgOps=" << (metrics.totalOpsAccum / metrics.totalEdts)
               << " compute:mem range=[" << metrics.minComputeToMem << ", "
               << metrics.maxComputeToMem << "]");
     return;

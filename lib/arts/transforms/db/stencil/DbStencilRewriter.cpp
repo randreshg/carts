@@ -359,8 +359,21 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
       !info.partitionInfo.offsets.empty() || !info.partitionInfo.sizes.empty();
   bool forceFullRangeStencilWriter =
       acquire.getMode() != ArtsMode::in && !hasPartitionSlices;
+  bool forceFullRangeTinyStencilRead = false;
+  if (acquire.getMode() == ArtsMode::in && nPartDims == 1 &&
+      plan.innerRank() <= 1 && !plan.outerSizes.empty()) {
+    if (auto outerBlocks =
+            ValueAnalysis::tryFoldConstantIndex(plan.outerSizes.front())) {
+      forceFullRangeTinyStencilRead = *outerBlocks > 0 && *outerBlocks <= 8;
+    }
+  }
 
-  if (info.isFullRange || forceFullRangeStencilWriter) {
+  if (info.isFullRange || forceFullRangeStencilWriter ||
+      forceFullRangeTinyStencilRead) {
+    if (forceFullRangeTinyStencilRead) {
+      ARTS_DEBUG("  Forcing full-range acquire for tiny 1-D stencil read "
+                 "to keep coefficient indexing stable");
+    }
     for (unsigned d = 0; d < nPartDims; ++d) {
       newOffsets.push_back(zero);
       Value blockCount = (d < plan.outerSizes.size() && plan.outerSizes[d])
@@ -555,9 +568,21 @@ bool DbStencilRewriter::rebaseEdtUsersAsBlock(DbAcquireOp acquire,
       startBlock = zero;
   }
 
+  bool allocSingleBlock =
+      !plan.outerSizes.empty() && llvm::all_of(plan.outerSizes, [](Value v) {
+        auto val = ValueAnalysis::tryFoldConstantIndex(v);
+        return val && *val == 1;
+      });
+  bool acquireSingleBlock = !acquire.getSizes().empty() &&
+                            llvm::all_of(acquire.getSizes(), [](Value v) {
+                              auto val = ValueAnalysis::tryFoldConstantIndex(v);
+                              return val && *val == 1;
+                            });
+
   auto indexer = createBlockIndexer(effectiveBlockSizes, effectiveStartBlocks,
                                     plan.outerRank(), plan.innerRank(),
-                                    plan.partitionedDims);
+                                    plan.partitionedDims, allocSingleBlock,
+                                    acquireSingleBlock, zero);
   if (!indexer)
     return false;
 

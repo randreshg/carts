@@ -221,8 +221,7 @@ struct DeadCodeEliminationPass
         if (auto acq = dep.getDefiningOp<arts::DbAcquireOp>()) {
           bool ptrOnlyUsedHere =
               acq.getPtr() == dep &&
-              hasSingleExpectedNonContractUse(acq.getPtr(),
-                                              edt.getOperation());
+              hasSingleExpectedNonContractUse(acq.getPtr(), edt.getOperation());
           bool guidUnused = acq.getGuid().use_empty();
           if (ptrOnlyUsedHere && guidUnused) {
             SmallVector<Operation *> contracts;

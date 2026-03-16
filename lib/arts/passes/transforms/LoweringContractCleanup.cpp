@@ -23,13 +23,14 @@ struct LoweringContractCleanupPass
   void runOnOperation() override {
     ModuleOp module = getOperation();
     SmallVector<LoweringContractOp, 16> contracts;
-    module.walk([&](LoweringContractOp contract) { contracts.push_back(contract); });
+    module.walk(
+        [&](LoweringContractOp contract) { contracts.push_back(contract); });
 
     for (LoweringContractOp contract : contracts)
       contract.erase();
 
-    ARTS_DEBUG("LoweringContractCleanup removed " << contracts.size()
-                                                  << " lowering_contract op(s)");
+    ARTS_DEBUG("LoweringContractCleanup removed "
+               << contracts.size() << " lowering_contract op(s)");
   }
 };
 
