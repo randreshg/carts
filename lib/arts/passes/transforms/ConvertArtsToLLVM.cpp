@@ -142,8 +142,15 @@ struct CreateEpochPattern : public ArtsToLLVMPattern<CreateEpochOp> {
     ARTS_INFO("Lowering CreateEpoch Op " << op);
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
     auto loc = op.getLoc();
-    auto guid = AC->createIntConstant(0, AC->Int64, loc);
-    auto edtSlot = AC->createIntConstant(DEFAULT_EDT_SLOT, AC->Int32, loc);
+
+    Value guid, edtSlot;
+    if (op.hasFinishTarget()) {
+      guid = op.getFinishEdtGuid();
+      edtSlot = op.getFinishSlot();
+    } else {
+      guid = AC->createIntConstant(0, AC->Int64, loc);
+      edtSlot = AC->createIntConstant(DEFAULT_EDT_SLOT, AC->Int32, loc);
+    }
 
     /// Create epoch guid
     auto epochGuid = AC->createEpoch(guid, edtSlot, loc);
@@ -617,12 +624,12 @@ struct EdtParamPackPattern : public ArtsToLLVMPattern<EdtParamPackOp> {
     /// Check if result type has dynamic dimensions
     bool hasDynamicDims = resultType.getNumDynamicDims() > 0;
 
-    memref::AllocOp allocOp;
+    memref::AllocaOp allocOp;
     if (hasDynamicDims) {
       /// Dynamic memref: allocate with size and store parameters
       auto numParams = AC->createIndexConstant(params.size(), loc);
       allocOp =
-          AC->create<memref::AllocOp>(loc, resultType, ValueRange{numParams});
+          AC->create<memref::AllocaOp>(loc, resultType, ValueRange{numParams});
 
       for (unsigned i = 0; i < params.size(); ++i) {
         auto index = AC->createIndexConstant(i, loc);
@@ -635,7 +642,7 @@ struct EdtParamPackPattern : public ArtsToLLVMPattern<EdtParamPackOp> {
       auto dynamicType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
       auto zeroIndex = AC->createIndexConstant(0, loc);
       allocOp =
-          AC->create<memref::AllocOp>(loc, dynamicType, ValueRange{zeroIndex});
+          AC->create<memref::AllocaOp>(loc, dynamicType, ValueRange{zeroIndex});
     }
 
     rewriter.replaceOp(op, allocOp);

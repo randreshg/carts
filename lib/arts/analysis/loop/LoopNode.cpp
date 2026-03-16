@@ -85,8 +85,7 @@ static Operation *getSingleDirectNestedLoop(Operation *loopOp) {
 }
 
 LoopNode::LoopNode(Operation *loopOp, LoopAnalysis *loopAnalysis)
-    : NodeBase(), LoopMetadata(loopOp), loopOp(loopOp),
-      loopAnalysis(loopAnalysis) {
+    : LoopMetadata(loopOp), loopOp(loopOp), loopAnalysis(loopAnalysis) {
   bool hasMetadata = importFromOp();
   if (!hasMetadata && loopAnalysis) {
     auto &analysisManager = loopAnalysis->getAnalysisManager();

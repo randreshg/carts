@@ -21,7 +21,7 @@ class NodeBase {
 public:
   virtual ~NodeBase() = default;
 
-  enum class NodeKind { DbAlloc, DbAcquire, EdtTask, Loop };
+  enum class NodeKind { DbAlloc, DbAcquire, EdtTask };
 
   /// Get the hierarchical ID (e.g., "A.1" for deps).
   virtual StringRef getHierId() const = 0;

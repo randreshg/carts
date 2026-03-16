@@ -22,8 +22,7 @@ enum class ContractKind : int64_t {
   Stencil = 1,
   Elementwise = 2,
   Matmul = 3,
-  Triangular = 4,
-  Replicated = 5
+  Triangular = 4
 };
 
 struct LoweringContractInfo {
@@ -33,7 +32,6 @@ struct LoweringContractInfo {
   std::optional<EdtDistributionPattern> distributionPattern;
   std::optional<int64_t> distributionVersion;
   SmallVector<int64_t, 4> ownerDims;
-  SmallVector<int64_t, 4> spatialDims;
   SmallVector<Value, 4> blockShape;
   SmallVector<Value, 4> minOffsets;
   SmallVector<Value, 4> maxOffsets;
@@ -41,25 +39,16 @@ struct LoweringContractInfo {
   SmallVector<int64_t, 4> staticBlockShape;
   SmallVector<int64_t, 4> staticMinOffsets;
   SmallVector<int64_t, 4> staticMaxOffsets;
-  SmallVector<int64_t, 4> staticWriteFootprint;
   bool supportedBlockHalo = false;
+
+  /// Spatial dimensions of the contract.
+  SmallVector<int64_t, 4> spatialDims;
 
   /// Dimension-aware stencil analysis.
   SmallVector<int64_t, 4> stencilIndependentDims;
 
-  /// ESD annotation (byte offset/size).
-  std::optional<int64_t> esdByteOffset;
-  std::optional<int64_t> esdByteSize;
-
-  /// Cached block window.
-  std::optional<int64_t> cachedStartBlock;
-  std::optional<int64_t> cachedBlockCount;
-
   /// Post-DB refinement marker.
   bool postDbRefined = false;
-
-  /// Task cost estimate.
-  std::optional<int64_t> estimatedTaskCost;
 
   /// Critical path distance.
   std::optional<int64_t> criticalPathDistance;
@@ -70,25 +59,22 @@ struct LoweringContractInfo {
   }
 
   bool hasSpatialContract() const {
-    return !ownerDims.empty() || !spatialDims.empty() || !blockShape.empty() ||
+    return !ownerDims.empty() || !blockShape.empty() ||
            !minOffsets.empty() || !maxOffsets.empty() ||
-           !writeFootprint.empty() || !staticBlockShape.empty() ||
+           !writeFootprint.empty() || !spatialDims.empty() ||
+           !staticBlockShape.empty() ||
            !staticMinOffsets.empty() || !staticMaxOffsets.empty() ||
-           !staticWriteFootprint.empty() || supportedBlockHalo ||
+           supportedBlockHalo ||
            !stencilIndependentDims.empty();
   }
 
-  bool hasRuntimeHints() const {
-    return esdByteOffset || esdByteSize || cachedStartBlock || cachedBlockCount;
-  }
-
   bool hasAnalysisRefinements() const {
-    return postDbRefined || estimatedTaskCost || criticalPathDistance;
+    return postDbRefined || criticalPathDistance;
   }
 
   bool empty() const {
     return !hasDistributionContract() && !hasSpatialContract() &&
-           !hasRuntimeHints() && !hasAnalysisRefinements();
+           !hasAnalysisRefinements();
   }
 
   /// Resolve the effective ContractKind: returns `kind` when explicitly set,
@@ -130,8 +116,6 @@ std::optional<LoweringContractInfo> getLoweringContract(Value target);
 std::optional<LoweringContractInfo> getSemanticContract(Operation *op);
 std::optional<LoweringContractInfo>
 getLoweringContract(Operation *op, OpBuilder &builder, Location loc);
-void mergeLoweringContractInfo(LoweringContractInfo &dest,
-                               const LoweringContractInfo &src);
 void normalizeLoweringContractInfo(LoweringContractInfo &info);
 AcquireRewriteContract deriveAcquireRewriteContract(DbAcquireOp acquire);
 AcquireRewriteContract resolveAcquireRewriteContract(AnalysisManager *AM,
@@ -157,8 +141,6 @@ void transferContract(
     Value targetContractTarget, OpBuilder &builder, Location loc,
     OperationContractTransferPolicy policy =
         OperationContractTransferPolicy::PreserveStampedContractOnly);
-void copyLoweringContract(Value source, Value target, OpBuilder &builder,
-                          Location loc);
 
 } // namespace arts
 } // namespace mlir

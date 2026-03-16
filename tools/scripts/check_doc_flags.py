@@ -12,7 +12,7 @@ from typing import Dict, Iterable, List, Sequence, Set, Tuple
 
 DEFAULT_DOCS: Sequence[str] = (
     "docs/compiler/pipeline.md",
-    "docs/heuristics/distribution/distribution.md",
+    "docs/heuristics/distribution.md",
     "docs/heuristics/partitioning/partitioning.md",
     "docs/profiling/diagnose-dataflow.md",
 )

@@ -208,16 +208,6 @@ func::CallOp ArtsCodegen::createRuntimeCall(RuntimeFunction FnID,
   return create<func::CallOp>(loc, func, args);
 }
 
-/// DataBlock management
-
-void ArtsCodegen::addDbDep(Value dbGuid, Value edtGuid, Value edtSlot,
-                           Value mode, Location loc) {
-  auto edtSlotInt = castToInt(Int32, edtSlot, loc);
-  auto modeInt = castToInt(Int32, mode, loc);
-  createRuntimeCall(ARTSRTL_arts_add_dependence,
-                    {dbGuid, edtGuid, edtSlotInt, modeInt}, loc);
-}
-
 /// EDT management
 
 /// Epoch
@@ -271,14 +261,6 @@ Value ArtsCodegen::getCurrentWorker(Location loc) {
 Value ArtsCodegen::getCurrentNode(Location loc) {
   func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_arts_get_current_node);
   return create<func::CallOp>(loc, func, ArrayRef<Value>{}).getResult(0);
-}
-
-func::CallOp ArtsCodegen::signalEdt(Value edtGuid, Value edtSlot, Value dbGuid,
-                                    Value mode, Location loc) {
-  auto edtSlotInt = castToInt(Int32, edtSlot, loc);
-  auto modeInt = castToInt(Int32, mode, loc);
-  return createRuntimeCall(ARTSRTL_arts_signal_edt,
-                           {edtGuid, edtSlotInt, dbGuid, modeInt}, loc);
 }
 
 void ArtsCodegen::waitOnHandle(Value epochGuid, Location loc) {
@@ -605,21 +587,6 @@ Value ArtsCodegen::createIntConstant(int64_t value, Type type, Location loc) {
                                    getBuilder().getIntegerAttr(type, value));
 }
 
-Value ArtsCodegen::createPtr(Value source, Location loc) {
-  if (source.getType().isa<LLVM::LLVMPointerType>())
-    return source;
-  /// If it is not a pointer, cast it to a pointer
-  auto srcTy = source.getType().dyn_cast<MemRefType>();
-  /// Return source if not a MemRef type
-  if (!srcTy)
-    return source;
-  auto valPtr = create<polygeist::Memref2PointerOp>(
-      loc, LLVM::LLVMPointerType::get(srcTy), source);
-  auto valTy = mlir::MemRefType::get(srcTy.getShape(), VoidPtr,
-                                     srcTy.getLayout(), srcTy.getMemorySpace());
-  return create<polygeist::Pointer2MemrefOp>(loc, valTy, valPtr);
-}
-
 /// Casting
 Value ArtsCodegen::castParameter(mlir::Type targetType, Value source,
                                  Location loc, ParameterCastMode mode) {
@@ -664,20 +631,6 @@ Value ArtsCodegen::castParameter(mlir::Type targetType, Value source,
   if (targetType.isa<FloatType>())
     return castToFloat(targetType, source, loc);
   return source;
-}
-
-Value ArtsCodegen::castPtr(mlir::Type targetType, Value source, Location loc) {
-  auto srcType = source.getType().dyn_cast<MemRefType>();
-  auto dstType = targetType.dyn_cast<MemRefType>();
-  assert((srcType && dstType) && "Expected memref type");
-
-  /// Cast if the types are compatible
-  if (memref::CastOp::areCastCompatible(srcType, dstType))
-    return create<memref::CastOp>(loc, dstType, source);
-
-  /// If the types are not compatible, cast to LLVM pointer and then to memref
-  return create<polygeist::Pointer2MemrefOp>(loc, targetType,
-                                             createPtr(source, loc));
 }
 
 Value ArtsCodegen::castToIndex(Value source, Location loc) {
@@ -736,12 +689,6 @@ Value ArtsCodegen::castToInt(Type targetType, Value source, Location loc) {
 
 Value ArtsCodegen::ensureI64(Value source, Location loc) {
   return castToInt(Int64, source, loc);
-}
-
-Value ArtsCodegen::castToVoidPtr(Value source, Location loc) {
-  if (!source.getType().isa<LLVM::LLVMPointerType>())
-    source = castToLLVMPtr(source, loc);
-  return create<polygeist::Pointer2MemrefOp>(loc, VoidPtr, source);
 }
 
 Value ArtsCodegen::castToLLVMPtr(Value source, Location loc) {

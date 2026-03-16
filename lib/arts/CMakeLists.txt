@@ -2,7 +2,7 @@ add_mlir_dialect_library(MLIRArts
   Dialect.cpp
 
   ADDITIONAL_HEADER_DIRS
-    ${PROJECT_SOURCE_DIR}/include/carts
+    ${PROJECT_SOURCE_DIR}/include/arts
 
   DEPENDS
     MLIROpsIncGen

@@ -61,7 +61,7 @@ static void normalizeBlockHaloAcquireSlice(ArtsCodegen *AC, DbAcquireOp acquire,
       (*mode != PartitionMode::block && *mode != PartitionMode::stencil))
     return;
   auto contractInfo = getLoweringContract(acquire.getPtr());
-  if (!contractInfo || !contractInfo->supportedBlockHalo)
+  if (!contractInfo || !contractInfo->supportsBlockHalo())
     return;
 
   /// Upstream passes already encode the dependency window in DB-space on the
