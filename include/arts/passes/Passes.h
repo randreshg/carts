@@ -32,8 +32,10 @@ std::unique_ptr<Pass> createArtsInlinerPass();
 std::unique_ptr<Pass> createCollectMetadataPass();
 std::unique_ptr<Pass> createCollectMetadataPass(bool exportMetadata,
                                                 llvm::StringRef metadataFile);
-/// Normalize nested memref patterns into the canonical CARTS form.
-std::unique_ptr<Pass> createCanonicalizeMemrefsPass();
+/// Raise nested pointer allocations to N-dimensional memrefs.
+std::unique_ptr<Pass> createRaiseMemRefDimensionalityPass();
+/// Convert residual OMP task dependencies to arts.omp_dep.
+std::unique_ptr<Pass> createHandleDepsPass();
 /// Lower OpenMP regions into high-level ARTS dialect operations.
 std::unique_ptr<Pass> createConvertOpenMPToArtsPass();
 /// Discover or refine semantic pattern contracts before DB creation.
@@ -67,6 +69,10 @@ createConvertArtsToLLVMPass(bool debug, bool distributedInitPerWorker,
 std::unique_ptr<Pass> createEdtICMPass();
 std::unique_ptr<Pass> createEdtAllocaSinkingPass();
 std::unique_ptr<Pass> createDataPtrHoistingPass();
+std::unique_ptr<Pass> createGuidRangCallOptPass();
+std::unique_ptr<Pass> createRuntimeCallOptPass();
+/// Backward-compatible alias.
+std::unique_ptr<Pass> createGuidRangeCallOptimizationPass();
 std::unique_ptr<Pass> createAliasScopeGenPass();
 std::unique_ptr<Pass> createLoopVectorizationHintsPass();
 std::unique_ptr<Pass> createScalarReplacementPass();

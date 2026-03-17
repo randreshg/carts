@@ -23,7 +23,7 @@
 /// consumed later by lowering.
 ///==========================================================================///
 
-#include "../PassDetails.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/heuristics/DistributionHeuristics.h"
 #include "arts/passes/Passes.h"

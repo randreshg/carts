@@ -13,6 +13,7 @@
 #include "arts/Dialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 
 namespace mlir {
 namespace arts {
@@ -96,6 +97,18 @@ unsigned getLoopDepth(Operation *op);
 /// Returns true if the EDT's body contains any loop operations
 /// (scf::ForOp, scf::ParallelOp, affine::AffineForOp).
 bool containsLoop(EdtOp edt);
+
+/// Return the nearest enclosing loop-like op that contains the given operation.
+/// Searches for scf::ForOp, affine::AffineForOp, omp::WsLoopOp,
+/// scf::ParallelOp, scf::ForallOp, and arts::ForOp.
+inline Operation *findNearestLoop(Operation *op) {
+  for (Operation *cur = op->getParentOp(); cur; cur = cur->getParentOp()) {
+    if (isa<scf::ForOp, affine::AffineForOp, omp::WsLoopOp, scf::ParallelOp,
+            scf::ForallOp, arts::ForOp>(cur))
+      return cur;
+  }
+  return nullptr;
+}
 
 } // namespace arts
 } // namespace mlir

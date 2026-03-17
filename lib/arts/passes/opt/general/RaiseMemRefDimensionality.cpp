@@ -1,7 +1,7 @@
 ///===----------------------------------------------------------------------===///
-/// File: CanonicalizeMemrefs.cpp
+/// File: RaiseMemRefDimensionality.cpp
 ///
-/// This pass canonicalizes memref allocations and OpenMP task dependencies.
+/// This pass raises nested pointer allocations to N-dimensional memrefs and converts OpenMP task dependencies.
 /// It uses a two-phase approach: complete analysis first, then transformation.
 ///
 /// Key features:
@@ -12,15 +12,17 @@
 /// 5. Creates arts.omp_dep with proper indices and sizes
 ///===----------------------------------------------------------------------===///
 
-#include "../../PassDetails.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/Dialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/RemovalUtils.h"
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
@@ -37,7 +39,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include <optional>
 
-ARTS_DEBUG_SETUP(canonicalize_memrefs);
+ARTS_DEBUG_SETUP(raise_memref_dimensionality);
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -76,6 +78,13 @@ struct DepInfo {
   SmallVector<Operation *> opsToRemove;
 };
 
+/// Pre-collected task dependency reference for O(1) lookup
+struct TaskDepRef {
+  omp::TaskOp taskOp;
+  unsigned depIdx;
+  omp::ClauseTaskDepend depMode;
+};
+
 /// Pattern for a nested allocation structure
 struct AllocPattern {
   Value rootAlloc;
@@ -104,46 +113,6 @@ struct AllocPattern {
 ///===----------------------------------------------------------------------===///
 /// Static Helper Functions
 ///===----------------------------------------------------------------------===///
-
-/// Check if alloca is a scalar token container (rank-0 or rank-1 with size ≤ 1)
-static bool isScalarTokenContainer(memref::AllocaOp allocaOp) {
-  auto type = allocaOp.getType().dyn_cast<MemRefType>();
-  if (!type)
-    return false;
-  return type.getRank() == 0 || (type.getRank() == 1 && type.hasStaticShape() &&
-                                 type.getNumElements() <= 1);
-}
-
-/// Return the nearest loop-like op that contains the given operation.
-static Operation *findNearestLoop(Operation *op) {
-  for (Operation *cur = op->getParentOp(); cur; cur = cur->getParentOp()) {
-    if (isa<scf::ForOp, affine::AffineForOp, omp::WsLoopOp>(cur))
-      return cur;
-  }
-  return nullptr;
-}
-
-/// Find the value stored to a token container alloca
-static std::optional<Value> getStoredValueToToken(memref::AllocaOp allocaOp) {
-  for (Operation *user : allocaOp->getUsers()) {
-    if (auto store = dyn_cast<memref::StoreOp>(user)) {
-      if (store.getMemref() == allocaOp.getResult())
-        return store.getValue();
-    }
-  }
-  return std::nullopt;
-}
-
-/// Materialize OpFoldResult to Value
-static Value materializeOpFoldResult(OpFoldResult ofr, OpBuilder &builder,
-                                     Location loc) {
-  if (auto val = ofr.dyn_cast<Value>())
-    return val;
-  if (auto attr = ofr.dyn_cast<Attribute>())
-    return arts::createConstantIndex(builder, loc,
-                                     attr.cast<IntegerAttr>().getInt());
-  return nullptr;
-}
 
 /// Trace a value through wrapper loads back to the root allocation.
 ///   %inner_wrapper = memref.alloca() : memref<memref<?x...>>
@@ -209,15 +178,13 @@ static bool isInnerWrapperOfInlinedPattern(Value alloc) {
 /// Pass Implementation
 ///===----------------------------------------------------------------------===///
 
-struct CanonicalizeMemrefsPass
-    : public arts::CanonicalizeMemrefsBase<CanonicalizeMemrefsPass> {
+struct RaiseMemRefDimensionalityPass
+    : public arts::RaiseMemRefDimensionalityBase<RaiseMemRefDimensionalityPass> {
 
   void runOnOperation() override;
 
 private:
   RemovalUtils removalMgr;
-  DominanceInfo *domInfo = nullptr;
-  OpBuilder *globalBuilder = nullptr;
 
   /// Phase 1: Detect pattern from an allocation
   std::optional<AllocPattern> detectPattern(Value alloc);
@@ -229,7 +196,9 @@ private:
                                   SmallVector<AccessInfo> &accesses);
 
   /// Phase 2b: Collect all OMP dependencies
-  void collectOmpDependencies(AllocPattern &pattern);
+  void collectOmpDependencies(
+      AllocPattern &pattern,
+      const DenseMap<Value, SmallVector<TaskDepRef>> &taskDepsByValue);
   std::optional<DepInfo> analyzeDepVar(Value depVar, AllocPattern &pattern,
                                        omp::TaskOp taskOp, unsigned depIdx,
                                        omp::ClauseTaskDepend depMode);
@@ -250,20 +219,8 @@ private:
   void transferMetadata(Operation *oldAlloc, Operation *newAlloc);
   void handleDeallocations(AllocPattern &pattern, Value ndAlloc,
                            OpBuilder &builder,
-                           llvm::DenseSet<Operation *> &toRemove);
-  Value createConstantIndex(OpBuilder &builder, Location loc, int64_t value);
-  SmallVector<Value> clampDepIndices(Value source, ArrayRef<Value> indices,
-                                     OpBuilder &builder, Location loc,
-                                     ArrayRef<Value> dimSizes = {});
-  ArtsMode convertOmpMode(omp::ClauseTaskDepend mode);
-
-  /// Dimension hoisting helpers
-  Value hoistValue(Value val, Operation *insertPoint, OpBuilder &builder,
-                   DenseMap<Value, Value> &cache);
-  bool isPureClonable(Operation *op);
-
-  /// General dependency handling (handles all patterns including static arrays)
-  void handleDependencies(ModuleOp module, OpBuilder &builder);
+                           llvm::DenseSet<Operation *> &toRemove,
+                           DominanceInfo &domInfo);
 
   /// N-level nested allocation helpers
   bool extractNestedAllocations(Value storedVal, Operation *loopOp,
@@ -271,22 +228,16 @@ private:
                                 int depth);
   bool isLoadFromValue(Value maybeLoad, Value source);
   bool tracesToRootAlloc(Value val, AllocPattern &pattern);
-  std::optional<DepInfo> extractDepInfo(Value depVar, omp::TaskOp taskOp,
-                                        unsigned depIdx,
-                                        omp::ClauseTaskDepend depMode,
-                                        OpBuilder &builder);
 };
 
 ///===----------------------------------------------------------------------===///
 /// Main Entry Point
 ///===----------------------------------------------------------------------===///
 
-void CanonicalizeMemrefsPass::runOnOperation() {
+void RaiseMemRefDimensionalityPass::runOnOperation() {
   ModuleOp module = getOperation();
   MLIRContext *ctx = module.getContext();
-  domInfo = &getAnalysis<DominanceInfo>();
-
-  ARTS_INFO_HEADER(CanonicalizeMemrefsPass);
+  ARTS_INFO_HEADER(RaiseMemRefDimensionalityPass);
   ARTS_DEBUG_REGION(module.dump(););
 
   /// Count initial omp.task operations for validation
@@ -295,8 +246,21 @@ void CanonicalizeMemrefsPass::runOnOperation() {
   ARTS_DEBUG("Initial omp.task count: " << initialTaskCount);
 
   OpBuilder builder(ctx);
-  globalBuilder = &builder;
   removalMgr.clear();
+
+  /// Pre-collect all task dependency references for O(1) pattern lookup
+  DenseMap<Value, SmallVector<TaskDepRef>> taskDepsByValue;
+  module.walk([&](omp::TaskOp taskOp) {
+    auto dependVars = taskOp.getDependVars();
+    auto dependAttrs = taskOp.getDependsAttr();
+    if (dependVars.empty() || !dependAttrs)
+      return;
+    for (unsigned i = 0; i < dependVars.size(); ++i) {
+      Value depVar = dependVars[i];
+      auto depAttr = dependAttrs[i].cast<omp::ClauseTaskDependAttr>();
+      taskDepsByValue[depVar].push_back({taskOp, i, depAttr.getValue()});
+    }
+  });
 
   /// Collect all allocations (potential roots)
   SmallVector<Value> allocations;
@@ -329,13 +293,15 @@ void CanonicalizeMemrefsPass::runOnOperation() {
                                 << " element accesses");
 
       /// Phase 2b: Collect all OMP dependencies (reuse existing function)
-      collectOmpDependencies(*patternOpt);
+      collectOmpDependencies(*patternOpt, taskDepsByValue);
       ARTS_DEBUG("  Collected " << patternOpt->dependencies.size()
                                 << " OMP dependencies");
 
       /// Phase 3: Transform - SROA for simple wrapper
       if (failed(transformSimpleWrapper(*patternOpt, builder))) {
         ARTS_DEBUG("  Failed to transform simple wrapper pattern");
+        signalPassFailure();
+        return;
       }
       continue;
     }
@@ -349,18 +315,17 @@ void CanonicalizeMemrefsPass::runOnOperation() {
                               << " element accesses");
 
     /// Phase 2b: Collect all OMP dependencies
-    collectOmpDependencies(*patternOpt);
+    collectOmpDependencies(*patternOpt, taskDepsByValue);
     ARTS_DEBUG("  Collected " << patternOpt->dependencies.size()
                               << " OMP dependencies");
 
     /// Phase 3: Transform
     if (failed(transformPattern(*patternOpt, builder))) {
       ARTS_DEBUG("  Failed to transform pattern");
+      signalPassFailure();
+      return;
     }
   }
-
-  /// Handle remaining OMP dependencies (static arrays, token containers, etc.)
-  handleDependencies(module, builder);
 
   /// Cleanup
   removalMgr.removeAllMarked(module, /*recursive=*/true);
@@ -371,7 +336,7 @@ void CanonicalizeMemrefsPass::runOnOperation() {
   ARTS_DEBUG("Final omp.task count: " << finalTaskCount);
 
   if (finalTaskCount != initialTaskCount) {
-    module.emitError() << "CanonicalizeMemrefs pass corrupted omp.task "
+    module.emitError() << "RaiseMemRefDimensionality pass corrupted omp.task "
                           "operations: started with "
                        << initialTaskCount << " tasks, ended with "
                        << finalTaskCount << " tasks";
@@ -379,7 +344,7 @@ void CanonicalizeMemrefsPass::runOnOperation() {
     return;
   }
 
-  ARTS_INFO_FOOTER(CanonicalizeMemrefsPass);
+  ARTS_INFO_FOOTER(RaiseMemRefDimensionalityPass);
   ARTS_DEBUG_REGION(module.dump(););
 }
 
@@ -388,7 +353,7 @@ void CanonicalizeMemrefsPass::runOnOperation() {
 ///===----------------------------------------------------------------------===///
 
 std::optional<AllocPattern>
-CanonicalizeMemrefsPass::detectPattern(Value alloc) {
+RaiseMemRefDimensionalityPass::detectPattern(Value alloc) {
   AllocPattern pattern;
   pattern.rootAlloc = alloc;
   pattern.storeToWrapper = nullptr;
@@ -614,7 +579,7 @@ CanonicalizeMemrefsPass::detectPattern(Value alloc) {
   /// Helper lambda to check a store and extract loop/inner alloc
   /// Uses recursive extraction to support N-level nesting
   auto checkStoreForPattern = [&](memref::StoreOp storeOp) -> bool {
-    Operation *loopOp = findNearestLoop(storeOp.getOperation());
+    Operation *loopOp = arts::findNearestLoop(storeOp.getOperation());
     if (!loopOp)
       return false;
     Value storedVal = storeOp.getValue();
@@ -734,7 +699,7 @@ CanonicalizeMemrefsPass::detectPattern(Value alloc) {
 /// Phase 2a: Collect Element Accesses
 ///===----------------------------------------------------------------------===///
 
-void CanonicalizeMemrefsPass::collectAllAccesses(AllocPattern &pattern) {
+void RaiseMemRefDimensionalityPass::collectAllAccesses(AllocPattern &pattern) {
   SmallVector<Value> roots;
   if (pattern.wrapperAlloca)
     roots.push_back(pattern.wrapperAlloca);
@@ -754,7 +719,7 @@ void CanonicalizeMemrefsPass::collectAllAccesses(AllocPattern &pattern) {
   }
 }
 
-void CanonicalizeMemrefsPass::collectAccessesRecursively(
+void RaiseMemRefDimensionalityPass::collectAccessesRecursively(
     Value current, SmallVector<Value> &indices, SmallVector<Operation *> &chain,
     SmallVector<AccessInfo> &accesses) {
 
@@ -822,35 +787,28 @@ void CanonicalizeMemrefsPass::collectAccessesRecursively(
 /// Phase 2b: Collect OMP Dependencies
 ///===----------------------------------------------------------------------===///
 
-void CanonicalizeMemrefsPass::collectOmpDependencies(AllocPattern &pattern) {
-  getOperation().walk([&](omp::TaskOp taskOp) {
-    auto dependVars = taskOp.getDependVars();
-    auto dependAttrs = taskOp.getDependsAttr();
-
-    if (dependVars.empty() || !dependAttrs)
-      return;
-
-    for (unsigned i = 0; i < dependVars.size(); ++i) {
-      Value depVar = dependVars[i];
-      auto depAttr = dependAttrs[i].cast<omp::ClauseTaskDependAttr>();
-      auto depMode = depAttr.getValue();
-
-      auto depInfo = analyzeDepVar(depVar, pattern, taskOp, i, depMode);
-      if (depInfo) {
+void RaiseMemRefDimensionalityPass::collectOmpDependencies(
+    AllocPattern &pattern,
+    const DenseMap<Value, SmallVector<TaskDepRef>> &taskDepsByValue) {
+  for (const auto &entry : taskDepsByValue) {
+    Value depVar = entry.first;
+    for (const auto &ref : entry.second) {
+      auto depInfo =
+          analyzeDepVar(depVar, pattern, ref.taskOp, ref.depIdx, ref.depMode);
+      if (depInfo)
         pattern.dependencies.push_back(std::move(*depInfo));
-      }
     }
-  });
+  }
 }
 
 std::optional<DepInfo>
-CanonicalizeMemrefsPass::analyzeDepVar(Value depVar, AllocPattern &pattern,
+RaiseMemRefDimensionalityPass::analyzeDepVar(Value depVar, AllocPattern &pattern,
                                        omp::TaskOp taskOp, unsigned depIdx,
                                        omp::ClauseTaskDepend depMode) {
   DepInfo info;
   info.taskOp = taskOp;
   info.depVarIndex = depIdx;
-  info.mode = convertOmpMode(depMode);
+  info.mode = arts::convertOmpMode(depMode);
 
   Operation *defOp = depVar.getDefiningOp();
   /// Block arg - skip
@@ -878,7 +836,7 @@ CanonicalizeMemrefsPass::analyzeDepVar(Value depVar, AllocPattern &pattern,
       else {
         auto attr = offset.get<Attribute>().cast<IntegerAttr>();
         info.indices.push_back(
-            createConstantIndex(builder, loc, attr.getInt()));
+            arts::createConstantIndex(builder, loc, attr.getInt()));
       }
     }
 
@@ -888,7 +846,7 @@ CanonicalizeMemrefsPass::analyzeDepVar(Value depVar, AllocPattern &pattern,
         info.sizes.push_back(val);
       else {
         auto attr = size.get<Attribute>().cast<IntegerAttr>();
-        info.sizes.push_back(createConstantIndex(builder, loc, attr.getInt()));
+        info.sizes.push_back(arts::createConstantIndex(builder, loc, attr.getInt()));
       }
     }
 
@@ -919,8 +877,8 @@ CanonicalizeMemrefsPass::analyzeDepVar(Value depVar, AllocPattern &pattern,
 
               /// Element-level dependency, sizes = [1, 1, ...]
               for (size_t d = 0; d < info.indices.size(); ++d)
-                info.sizes.push_back(createConstantIndex(builder, loc, 1));
-              info.indices = clampDepIndices(info.source, info.indices, builder,
+                info.sizes.push_back(arts::createConstantIndex(builder, loc, 1));
+              info.indices = arts::clampDepIndices(info.source, info.indices, builder,
                                              loc, pattern.dimensions);
 
               info.opsToRemove = traceResult->chainOps;
@@ -948,8 +906,8 @@ CanonicalizeMemrefsPass::analyzeDepVar(Value depVar, AllocPattern &pattern,
 
     /// Element-level sizes
     for (size_t d = 0; d < info.indices.size(); ++d)
-      info.sizes.push_back(createConstantIndex(builder, loc, 1));
-    info.indices = clampDepIndices(info.source, info.indices, builder, loc,
+      info.sizes.push_back(arts::createConstantIndex(builder, loc, 1));
+    info.indices = arts::clampDepIndices(info.source, info.indices, builder, loc,
                                    pattern.dimensions);
 
     info.opsToRemove = traceResult->chainOps;
@@ -965,7 +923,7 @@ CanonicalizeMemrefsPass::analyzeDepVar(Value depVar, AllocPattern &pattern,
 
     /// Whole array: indices = [0, 0], sizes = [dim0, dim1]
     for (Value dim : pattern.dimensions) {
-      info.indices.push_back(createConstantIndex(builder, loc, 0));
+      info.indices.push_back(arts::createConstantIndex(builder, loc, 0));
       info.sizes.push_back(dim);
     }
     return info;
@@ -979,7 +937,7 @@ CanonicalizeMemrefsPass::analyzeDepVar(Value depVar, AllocPattern &pattern,
 ///===----------------------------------------------------------------------===///
 
 std::optional<TraceResult>
-CanonicalizeMemrefsPass::traceToPattern(Value val, AllocPattern &pattern) {
+RaiseMemRefDimensionalityPass::traceToPattern(Value val, AllocPattern &pattern) {
   TraceResult result;
 
   /// Direct match to root
@@ -1017,7 +975,7 @@ CanonicalizeMemrefsPass::traceToPattern(Value val, AllocPattern &pattern) {
 }
 
 std::optional<TraceResult>
-CanonicalizeMemrefsPass::traceValueToPattern(Value val, AllocPattern &pattern) {
+RaiseMemRefDimensionalityPass::traceValueToPattern(Value val, AllocPattern &pattern) {
   /// For element values (not memrefs), we look at the defining load
   if (auto loadOp = val.getDefiningOp<memref::LoadOp>()) {
     auto memResult = traceToPattern(loadOp.getMemref(), pattern);
@@ -1045,16 +1003,17 @@ CanonicalizeMemrefsPass::traceValueToPattern(Value val, AllocPattern &pattern) {
 /// Phase 3: Transformation
 ///===----------------------------------------------------------------------===///
 
-LogicalResult CanonicalizeMemrefsPass::transformPattern(AllocPattern &pattern,
+LogicalResult RaiseMemRefDimensionalityPass::transformPattern(AllocPattern &pattern,
                                                         OpBuilder &builder) {
+  OpBuilder::InsertionGuard guard(builder);
+  DominanceInfo localDomInfo(pattern.rootAlloc.getDefiningOp()->getParentOfType<func::FuncOp>());
   Operation *insertPoint = pattern.rootAlloc.getDefiningOp();
 
   /// 1. Hoist all dimensions
-  DenseMap<Value, Value> hoistCache;
   pattern.hoistedDimensions.clear();
 
   for (Value dim : pattern.dimensions) {
-    Value hoisted = hoistValue(dim, insertPoint, builder, hoistCache);
+    Value hoisted = ValueAnalysis::traceValueToDominating(dim, insertPoint, builder, localDomInfo, pattern.rootAlloc.getLoc());
     if (!hoisted) {
       ARTS_DEBUG("  FAILED: Cannot hoist dimension " << dim);
       ARTS_DEBUG(
@@ -1110,6 +1069,13 @@ LogicalResult CanonicalizeMemrefsPass::transformPattern(AllocPattern &pattern,
         toRemove.insert(op);
     }
 
+#ifndef NDEBUG
+    for (Value idx : access.indices) {
+      if (auto *defOp = idx.getDefiningOp())
+        assert(!toRemove.count(defOp) && "index references op marked for removal");
+    }
+#endif
+
     switch (access.kind) {
     case AccessInfo::Kind::ElementLoad: {
       auto loadOp = cast<memref::LoadOp>(access.terminalOp);
@@ -1161,7 +1127,7 @@ LogicalResult CanonicalizeMemrefsPass::transformPattern(AllocPattern &pattern,
   /// - Via wrapper load: %loaded = load %wrapper[] ; dealloc %loaded
   /// - Dealloc loop: for i { %row = load %rootAlloc[i]; dealloc %row } ;
   /// dealloc %rootAlloc
-  handleDeallocations(pattern, ndAlloc, builder, toRemove);
+  handleDeallocations(pattern, ndAlloc, builder, toRemove, localDomInfo);
 
   /// 6. Replace polygeist.memref2pointer (NULL CHECKS)
   /// Handle uses of rootAlloc in null check patterns:
@@ -1260,19 +1226,20 @@ LogicalResult CanonicalizeMemrefsPass::transformPattern(AllocPattern &pattern,
 ///   memref.store %val, %alloc[%i]   /// Direct use of %alloc
 ///
 LogicalResult
-CanonicalizeMemrefsPass::transformSimpleWrapper(AllocPattern &pattern,
+RaiseMemRefDimensionalityPass::transformSimpleWrapper(AllocPattern &pattern,
                                                 OpBuilder &builder) {
+  OpBuilder::InsertionGuard guard(builder);
+  DominanceInfo localDomInfo(pattern.rootAlloc.getDefiningOp()->getParentOfType<func::FuncOp>());
 
   Value actualAlloc = pattern.rootAlloc;
   Value wrapper = pattern.wrapperAlloca;
   Operation *insertPoint = actualAlloc.getDefiningOp();
 
-  /// 1. Hoist dimensions (reuse existing infrastructure)
-  DenseMap<Value, Value> hoistCache;
+  /// 1. Hoist dimensions
   pattern.hoistedDimensions.clear();
 
   for (Value dim : pattern.dimensions) {
-    Value hoisted = hoistValue(dim, insertPoint, builder, hoistCache);
+    Value hoisted = ValueAnalysis::traceValueToDominating(dim, insertPoint, builder, localDomInfo, pattern.rootAlloc.getLoc());
     if (!hoisted) {
       ARTS_DEBUG("  FAILED: Cannot hoist dimension " << dim);
       return failure();
@@ -1328,7 +1295,7 @@ CanonicalizeMemrefsPass::transformSimpleWrapper(AllocPattern &pattern,
 
   /// 6. Handle deallocations (wrapper may have associated deallocs)
   llvm::DenseSet<Operation *> toRemove;
-  handleDeallocations(pattern, actualAlloc, builder, toRemove);
+  handleDeallocations(pattern, actualAlloc, builder, toRemove, localDomInfo);
   for (auto *op : toRemove)
     removalMgr.markForRemoval(op);
 
@@ -1340,7 +1307,7 @@ CanonicalizeMemrefsPass::transformSimpleWrapper(AllocPattern &pattern,
 /// Utilities
 ///===----------------------------------------------------------------------===///
 
-Value CanonicalizeMemrefsPass::createCanonicalAllocation(
+Value RaiseMemRefDimensionalityPass::createCanonicalAllocation(
     OpBuilder &builder, Location loc, Type elementType,
     ArrayRef<Value> dimSizes) {
   SmallVector<int64_t> shape;
@@ -1362,7 +1329,7 @@ Value CanonicalizeMemrefsPass::createCanonicalAllocation(
   return allocOp.getResult();
 }
 
-void CanonicalizeMemrefsPass::transferMetadata(Operation *oldAlloc,
+void RaiseMemRefDimensionalityPass::transferMetadata(Operation *oldAlloc,
                                                Operation *newAlloc) {
   if (!oldAlloc || !newAlloc)
     return;
@@ -1373,9 +1340,9 @@ void CanonicalizeMemrefsPass::transferMetadata(Operation *oldAlloc,
   }
 }
 
-void CanonicalizeMemrefsPass::handleDeallocations(
+void RaiseMemRefDimensionalityPass::handleDeallocations(
     AllocPattern &pattern, Value ndAlloc, OpBuilder &builder,
-    llvm::DenseSet<Operation *> &toRemove) {
+    llvm::DenseSet<Operation *> &toRemove, DominanceInfo &domInfo) {
   /// We need to find and remove the deallocation pattern which can be:
   /// 1. Direct dealloc of rootAlloc
   /// 2. Dealloc loop that frees inner arrays then outer array
@@ -1596,16 +1563,6 @@ void CanonicalizeMemrefsPass::handleDeallocations(
   /// is not a direct user of the pattern values, but contains operations
   /// that use values derived from the pattern through chains of loads.
   {
-    /// Build patternValues set for tracing
-    llvm::DenseSet<Value> patternValues;
-    patternValues.insert(pattern.rootAlloc);
-    if (pattern.wrapperAlloca)
-      patternValues.insert(pattern.wrapperAlloca);
-    for (auto *allocOp : pattern.nestedAllocs) {
-      if (auto alloc = dyn_cast<memref::AllocOp>(allocOp))
-        patternValues.insert(alloc.getResult());
-    }
-
     /// Find parent function and walk all ForOps
     if (auto parentFunc = pattern.rootAlloc.getDefiningOp()
                               ->getParentOfType<func::FuncOp>()) {
@@ -1657,27 +1614,7 @@ void CanonicalizeMemrefsPass::handleDeallocations(
   Operation *ndAllocOp = ndAlloc.getDefiningOp();
   Block *ndAllocBlock = ndAllocOp->getBlock();
 
-  /// Find the last use of ndAlloc in the same block or nested blocks
-  Operation *lastUseInScope = ndAllocOp;
-  for (Operation *user : ndAlloc.getUsers()) {
-    if (toRemove.count(user))
-      continue;
-
-    /// Check if this use is dominated by ndAlloc
-    if (domInfo->dominates(ndAllocOp, user)) {
-      /// Find the ancestor operation that's in the same block as ndAlloc
-      Operation *ancestor = user;
-      while (ancestor && ancestor->getBlock() != ndAllocBlock) {
-        ancestor = ancestor->getParentOp();
-      }
-      if (ancestor && ancestor->isBeforeInBlock(lastUseInScope) == false) {
-        lastUseInScope = ancestor;
-      }
-    }
-  }
-
-  /// Insert dealloc after the last use in the same scope
-  /// We insert at the end of the block, before any terminator
+  /// Insert dealloc at the end of the block, before any terminator
   if (Operation *terminator = ndAllocBlock->getTerminator()) {
     builder.setInsertionPoint(terminator);
     builder.create<memref::DeallocOp>(ndAlloc.getLoc(), ndAlloc);
@@ -1685,115 +1622,12 @@ void CanonicalizeMemrefsPass::handleDeallocations(
   }
 }
 
-Value CanonicalizeMemrefsPass::createConstantIndex(OpBuilder &builder,
-                                                   Location loc,
-                                                   int64_t value) {
-  return arts::createConstantIndex(builder, loc, value);
-}
-
-SmallVector<Value>
-CanonicalizeMemrefsPass::clampDepIndices(Value source, ArrayRef<Value> indices,
-                                         OpBuilder &builder, Location loc,
-                                         ArrayRef<Value> dimSizes) {
-  SmallVector<Value> clamped;
-  clamped.reserve(indices.size());
-
-  auto sourceType = source.getType().dyn_cast<MemRefType>();
-  if (!sourceType) {
-    clamped.append(indices.begin(), indices.end());
-    return clamped;
-  }
-
-  auto castToType = [&](Value v, Type targetTy) -> Value {
-    if (v.getType() == targetTy)
-      return v;
-    if ((v.getType().isIndex() && isa<IntegerType>(targetTy)) ||
-        (isa<IntegerType>(v.getType()) && targetTy.isIndex()))
-      return builder.create<arith::IndexCastOp>(loc, targetTy, v);
-    return v;
-  };
-
-  auto oneForType = [&](Type ty) -> Value {
-    if (ty.isIndex())
-      return arts::createOneIndex(builder, loc);
-    if (auto intTy = ty.dyn_cast<IntegerType>())
-      return builder.create<arith::ConstantIntOp>(loc, 1, intTy);
-    return Value();
-  };
-
-  auto zeroForType = [&](Type ty) -> Value {
-    if (ty.isIndex())
-      return arts::createZeroIndex(builder, loc);
-    if (auto intTy = ty.dyn_cast<IntegerType>())
-      return builder.create<arith::ConstantIntOp>(loc, 0, intTy);
-    return Value();
-  };
-
-  for (auto [dim, idx] : llvm::enumerate(indices)) {
-    Type idxTy = idx.getType();
-    if (!idxTy.isIndex() && !isa<IntegerType>(idxTy)) {
-      clamped.push_back(idx);
-      continue;
-    }
-
-    if (dim >= static_cast<size_t>(sourceType.getRank())) {
-      clamped.push_back(idx);
-      continue;
-    }
-
-    Value zero = zeroForType(idxTy);
-    Value one = oneForType(idxTy);
-    if (!zero || !one) {
-      clamped.push_back(idx);
-      continue;
-    }
-
-    Value dimSize;
-    if (dim < dimSizes.size()) {
-      dimSize = dimSizes[dim];
-    } else if (sourceType.isDynamicDim(dim)) {
-      dimSize = builder.create<memref::DimOp>(loc, source, dim);
-    } else {
-      dimSize =
-          arts::createConstantIndex(builder, loc, sourceType.getDimSize(dim));
-    }
-
-    Value dimSizeTyped = castToType(dimSize, idxTy);
-    Value upper = builder.create<arith::SubIOp>(loc, dimSizeTyped, one);
-
-    Value belowZero = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::slt, idx, zero);
-    Value afterLowerClamp =
-        builder.create<arith::SelectOp>(loc, belowZero, zero, idx);
-
-    Value aboveUpper = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::sgt, afterLowerClamp, upper);
-    Value finalIdx = builder.create<arith::SelectOp>(loc, aboveUpper, upper,
-                                                     afterLowerClamp);
-    clamped.push_back(finalIdx);
-  }
-
-  return clamped;
-}
-
-ArtsMode CanonicalizeMemrefsPass::convertOmpMode(omp::ClauseTaskDepend mode) {
-  switch (mode) {
-  case omp::ClauseTaskDepend::taskdependin:
-    return ArtsMode::in;
-  case omp::ClauseTaskDepend::taskdependout:
-    return ArtsMode::out;
-  case omp::ClauseTaskDepend::taskdependinout:
-    return ArtsMode::inout;
-  }
-  ARTS_UNREACHABLE("Unknown OMP depend mode");
-}
-
 ///===----------------------------------------------------------------------===///
 /// N-Level Nested Allocation Helpers
 ///===----------------------------------------------------------------------===///
 
 /// Check if maybeLoad is a load operation from the given source value
-bool CanonicalizeMemrefsPass::isLoadFromValue(Value maybeLoad, Value source) {
+bool RaiseMemRefDimensionalityPass::isLoadFromValue(Value maybeLoad, Value source) {
   if (auto loadOp = maybeLoad.getDefiningOp<memref::LoadOp>()) {
     return loadOp.getMemref() == source;
   }
@@ -1822,7 +1656,7 @@ bool CanonicalizeMemrefsPass::isLoadFromValue(Value maybeLoad, Value source) {
 /// directly.
 ///
 /// Returns true if a complete pattern was found (reaching scalar element type)
-bool CanonicalizeMemrefsPass::extractNestedAllocations(Value storedVal,
+bool RaiseMemRefDimensionalityPass::extractNestedAllocations(Value storedVal,
                                                        Operation *loopOp,
                                                        memref::StoreOp storeOp,
                                                        AllocPattern &pattern,
@@ -1893,7 +1727,7 @@ bool CanonicalizeMemrefsPass::extractNestedAllocations(Value storedVal,
       return WalkResult::interrupt();
 
     /// Check if this store is inside a nested loop
-    Operation *nestedLoop = findNearestLoop(nestedStore.getOperation());
+    Operation *nestedLoop = arts::findNearestLoop(nestedStore.getOperation());
     if (!nestedLoop || nestedLoop == loopOp) {
       /// Not in a nested loop, skip
       return WalkResult::advance();
@@ -1922,7 +1756,7 @@ bool CanonicalizeMemrefsPass::extractNestedAllocations(Value storedVal,
 }
 
 /// Check if a value traces back to the root allocation through a chain of loads
-bool CanonicalizeMemrefsPass::tracesToRootAlloc(Value val,
+bool RaiseMemRefDimensionalityPass::tracesToRootAlloc(Value val,
                                                 AllocPattern &pattern) {
   constexpr int MAX_TRACE_DEPTH = 10;
   Value current = val;
@@ -1949,217 +1783,6 @@ bool CanonicalizeMemrefsPass::tracesToRootAlloc(Value val,
   return false;
 }
 
-///===----------------------------------------------------------------------===///
-/// Dimension Hoisting
-///===----------------------------------------------------------------------===///
-
-/// Check if an operation is pure and can be safely cloned/hoisted
-bool CanonicalizeMemrefsPass::isPureClonable(Operation *op) {
-  return isa<arith::ConstantOp, arith::AddIOp, arith::SubIOp, arith::MulIOp,
-             arith::DivUIOp, arith::DivSIOp, arith::RemUIOp, arith::RemSIOp,
-             arith::AndIOp, arith::OrIOp, arith::XOrIOp, arith::ShLIOp,
-             arith::ShRUIOp, arith::ShRSIOp, arith::ExtSIOp, arith::ExtUIOp,
-             arith::TruncIOp, arith::IndexCastOp, arith::IndexCastUIOp,
-             polygeist::TypeSizeOp>(op);
-}
-
-/// Recursively hoist a value to before insertPoint.
-/// Returns hoisted value, or nullptr if hoisting is not possible.
-Value CanonicalizeMemrefsPass::hoistValue(Value val, Operation *insertPoint,
-                                          OpBuilder &builder,
-                                          DenseMap<Value, Value> &cache) {
-  /// Check cache first
-  if (cache.count(val))
-    return cache[val];
-
-  /// Check if value already dominates the insertion point
-  if (auto *defOp = val.getDefiningOp()) {
-    if (domInfo->properlyDominates(defOp, insertPoint)) {
-      cache[val] = val;
-      return val;
-    }
-  } else {
-    /// Block argument - check if it dominates
-    if (domInfo->dominates(val.getParentBlock(), insertPoint->getBlock())) {
-      cache[val] = val;
-      return val;
-    }
-    ARTS_DEBUG("  Cannot hoist block argument: " << val);
-    return nullptr; /// Block arg that doesn't dominate - can't hoist
-  }
-
-  Operation *defOp = val.getDefiningOp();
-
-  /// Only hoist pure arithmetic ops
-  if (!isPureClonable(defOp)) {
-    ARTS_DEBUG("  Cannot hoist non-pure op: " << *defOp);
-    return nullptr;
-  }
-
-  /// Recursively hoist all operands
-  SmallVector<Value> hoistedOperands;
-  for (Value operand : defOp->getOperands()) {
-    Value hoisted = hoistValue(operand, insertPoint, builder, cache);
-    if (!hoisted) {
-      ARTS_DEBUG("  Cannot hoist operand: " << operand);
-      return nullptr;
-    }
-    hoistedOperands.push_back(hoisted);
-  }
-
-  /// Clone the op before insertPoint
-  OpBuilder::InsertionGuard guard(builder);
-  builder.setInsertionPoint(insertPoint);
-  Operation *cloned = builder.clone(*defOp);
-  for (unsigned i = 0; i < hoistedOperands.size(); i++)
-    cloned->setOperand(i, hoistedOperands[i]);
-
-  Value result = cloned->getResult(0);
-  cache[val] = result;
-  ARTS_DEBUG("  Hoisted: " << *defOp << " -> " << *cloned);
-  return result;
-}
-
-///===----------------------------------------------------------------------===///
-/// General Dep Handling (All Patterns)
-///===----------------------------------------------------------------------===///
-
-std::optional<DepInfo> CanonicalizeMemrefsPass::extractDepInfo(
-    Value depVar, omp::TaskOp taskOp, unsigned depIdx,
-    omp::ClauseTaskDepend depMode, OpBuilder &builder) {
-
-  /// Skip if already arts.omp_dep
-  if (depVar.getDefiningOp<arts::OmpDepOp>())
-    return std::nullopt;
-
-  DepInfo info;
-  info.taskOp = taskOp;
-  info.depVarIndex = depIdx;
-  info.mode = convertOmpMode(depMode);
-  Location loc = taskOp.getLoc();
-
-  Operation *defOp = depVar.getDefiningOp();
-
-  /// Pattern 1: Token container alloca - follow store→load chain
-  if (auto allocaOp = dyn_cast_or_null<memref::AllocaOp>(defOp)) {
-    if (isScalarTokenContainer(allocaOp)) {
-      if (auto storedVal = getStoredValueToToken(allocaOp)) {
-        /// Stored value should be from a memref.load
-        if (auto loadOp = storedVal->getDefiningOp<memref::LoadOp>()) {
-          info.source = loadOp.getMemref();
-          info.indices.append(loadOp.getIndices().begin(),
-                              loadOp.getIndices().end());
-          for (size_t d = 0; d < info.indices.size(); ++d)
-            info.sizes.push_back(createConstantIndex(builder, loc, 1));
-          info.indices =
-              clampDepIndices(info.source, info.indices, builder, loc);
-          return info;
-        }
-      }
-    }
-    /// Non-token alloca - whole array dependency
-    info.source = depVar;
-    return info;
-  }
-
-  /// Pattern 2: memref.alloc - whole array dependency
-  if (isa_and_nonnull<memref::AllocOp>(defOp)) {
-    info.source = depVar;
-    return info;
-  }
-
-  /// Pattern 2.5: memref.cast - look through to source
-  /// Chunked dependencies generate: subview -> cast -> depend
-  /// We need to look through the cast to find the underlying subview.
-  if (auto castOp = dyn_cast_or_null<memref::CastOp>(defOp)) {
-    Value castSource = castOp.getSource();
-    if (auto subview = castSource.getDefiningOp<memref::SubViewOp>()) {
-      info.source = subview.getSource();
-      for (auto offset : subview.getMixedOffsets())
-        info.indices.push_back(materializeOpFoldResult(offset, builder, loc));
-      for (auto size : subview.getMixedSizes())
-        info.sizes.push_back(materializeOpFoldResult(size, builder, loc));
-      return info;
-    }
-    /// Cast of something other than subview - use cast source as-is
-    info.source = castSource;
-    return info;
-  }
-
-  /// Pattern 3: SubView - chunk dependency
-  if (auto subview = dyn_cast_or_null<memref::SubViewOp>(defOp)) {
-    info.source = subview.getSource();
-    for (auto offset : subview.getMixedOffsets())
-      info.indices.push_back(materializeOpFoldResult(offset, builder, loc));
-    for (auto size : subview.getMixedSizes())
-      info.sizes.push_back(materializeOpFoldResult(size, builder, loc));
-    return info;
-  }
-
-  /// Pattern 4: memref.load - element/row dependency
-  if (auto loadOp = dyn_cast_or_null<memref::LoadOp>(defOp)) {
-    info.source = loadOp.getMemref();
-    info.indices.append(loadOp.getIndices().begin(), loadOp.getIndices().end());
-    for (size_t d = 0; d < info.indices.size(); ++d)
-      info.sizes.push_back(createConstantIndex(builder, loc, 1));
-    info.indices = clampDepIndices(info.source, info.indices, builder, loc);
-    return info;
-  }
-
-  /// Pattern 5: Block argument
-  if (depVar.isa<BlockArgument>()) {
-    info.source = depVar;
-    return info;
-  }
-
-  return std::nullopt;
-}
-
-void CanonicalizeMemrefsPass::handleDependencies(ModuleOp module,
-                                                 OpBuilder &builder) {
-  ARTS_DEBUG("=== Handling Remaining OMP Dependencies ===");
-
-  module.walk([&](omp::TaskOp task) {
-    auto dependVars = task.getDependVars();
-    auto dependAttrs = task.getDependsAttr();
-    if (dependVars.empty() || !dependAttrs)
-      return;
-
-    for (unsigned i = 0; i < dependVars.size(); ++i) {
-      Value depVar = dependVars[i];
-
-      /// Skip already processed (arts.omp_dep)
-      if (depVar.getDefiningOp<arts::OmpDepOp>())
-        continue;
-
-      /// Set insertion point before task - needed for creating constants in
-      /// extractDepInfo
-      builder.setInsertionPoint(task);
-
-      auto depAttr = dependAttrs[i].cast<omp::ClauseTaskDependAttr>();
-      auto depInfo =
-          extractDepInfo(depVar, task, i, depAttr.getValue(), builder);
-      if (!depInfo)
-        continue;
-
-      /// Create arts.omp_dep using DepInfo fields (insertion point already set)
-      auto ompDepOp = builder.create<arts::OmpDepOp>(
-          task.getLoc(),
-          depInfo->source.getType(), /// result type
-          depInfo->mode,             /// ArtsMode
-          depInfo->source,           /// db
-          depInfo->indices,          /// offset
-          depInfo->sizes);           /// size
-
-      task.getDependVarsMutable()[i].set(ompDepOp.getResult());
-      ARTS_DEBUG("  Created arts.omp_dep for task dep "
-                 << i << " with " << depInfo->indices.size() << " indices");
-    }
-  });
-
-  ARTS_DEBUG("=== Dep Handling Complete ===");
-}
-
 } // namespace
 
 ///===----------------------------------------------------------------------===///
@@ -2168,8 +1791,8 @@ void CanonicalizeMemrefsPass::handleDependencies(ModuleOp module,
 
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createCanonicalizeMemrefsPass() {
-  return std::make_unique<CanonicalizeMemrefsPass>();
+std::unique_ptr<Pass> createRaiseMemRefDimensionalityPass() {
+  return std::make_unique<RaiseMemRefDimensionalityPass>();
 }
 } // namespace arts
 } // namespace mlir

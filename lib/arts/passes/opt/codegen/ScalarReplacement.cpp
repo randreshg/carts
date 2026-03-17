@@ -21,7 +21,7 @@
 ///
 ///==========================================================================///
 
-#include "../../PassDetails.h"
+#include "arts/passes/PassDetails.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"

@@ -11,7 +11,7 @@
 ///     %db = arts.db_alloc ... {distributed}
 ///==========================================================================///
 
-#include "../../PassDetails.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/db/DbDistributedEligibility.h"

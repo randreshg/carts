@@ -14,6 +14,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OperationSupport.h"
+#include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/CSE.h"
@@ -28,6 +29,36 @@ namespace arts {
 ///===----------------------------------------------------------------------===///
 /// Value Cloning Utilities
 ///===----------------------------------------------------------------------===///
+
+static std::optional<int64_t> tryFoldTypeSizeBytes(polygeist::TypeSizeOp tsOp) {
+  auto sourceAttr = tsOp.getSourceAttr();
+  if (!sourceAttr)
+    return std::nullopt;
+
+  Type sourceType = sourceAttr.getValue();
+  if (!sourceType)
+    return std::nullopt;
+
+  ModuleOp module = tsOp->getParentOfType<ModuleOp>();
+  if (!module)
+    return std::nullopt;
+
+  DataLayout layout(module);
+
+  /// Polygeist can emit `typeSize` over memref wrappers while the original C
+  /// semantic is `sizeof(pointer)`. Canonicalization does not fold this case
+  /// yet, so we treat memrefs as pointer-sized here.
+  if (sourceType.isa<MemRefType>()) {
+    auto ptrTy = LLVM::LLVMPointerType::get(tsOp.getContext());
+    return static_cast<int64_t>(layout.getTypeSize(ptrTy));
+  }
+
+  if (sourceType.isa<IntegerType, FloatType>() ||
+      LLVM::isCompatibleType(sourceType))
+    return static_cast<int64_t>(layout.getTypeSize(sourceType));
+
+  return std::nullopt;
+}
 
 bool ValueAnalysis::canCloneOperation(
     Operation *op, bool allowMemoryEffectFree,
@@ -153,6 +184,9 @@ std::optional<int64_t> ValueAnalysis::tryFoldConstantIndex(Value v,
   int64_t val;
   if (getConstantIndex(v, val))
     return val;
+
+  if (auto typeSizeOp = v.getDefiningOp<polygeist::TypeSizeOp>())
+    return tryFoldTypeSizeBytes(typeSizeOp);
 
   if (auto cast = v.getDefiningOp<arith::IndexCastOp>()) {
     return tryFoldConstantIndex(cast.getIn(), depth + 1);
@@ -840,6 +874,12 @@ Value ValueAnalysis::traceValueToDominating(Value value,
     return traceBinaryOp(op, insertBefore, builder, loc, trace);
   if (auto op = dyn_cast<arith::XOrIOp>(defOp))
     return traceBinaryOp(op, insertBefore, builder, loc, trace);
+  if (auto op = dyn_cast<arith::ShLIOp>(defOp))
+    return traceBinaryOp(op, insertBefore, builder, loc, trace);
+  if (auto op = dyn_cast<arith::ShRUIOp>(defOp))
+    return traceBinaryOp(op, insertBefore, builder, loc, trace);
+  if (auto op = dyn_cast<arith::ShRSIOp>(defOp))
+    return traceBinaryOp(op, insertBefore, builder, loc, trace);
 
   if (auto cmpOp = dyn_cast<arith::CmpIOp>(defOp)) {
     Value lhs = trace(cmpOp.getLhs());
@@ -910,6 +950,10 @@ Value ValueAnalysis::traceValueToDominating(Value value,
   if (auto constIdxOp = dyn_cast<arith::ConstantIndexOp>(defOp)) {
     builder.setInsertionPoint(insertBefore);
     return arts::createConstantIndex(builder, loc, constIdxOp.value());
+  }
+  if (auto tsOp = dyn_cast<polygeist::TypeSizeOp>(defOp)) {
+    builder.setInsertionPoint(insertBefore);
+    return builder.create<polygeist::TypeSizeOp>(loc, tsOp.getType(), tsOp.getSourceAttr());
   }
 
   return nullptr;

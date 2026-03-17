@@ -48,18 +48,33 @@ def CollectMetadata : Pass<"collect-metadata", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createCollectMetadataPass()";
 }
 
-def CanonicalizeMemrefs : Pass<"canonicalize-memrefs", "mlir::ModuleOp"> {
-  let summary = "Canonicalize memref allocations and accesses";
+def RaiseMemRefDimensionality : Pass<"raise-memref-dimensionality", "mlir::ModuleOp"> {
+  let summary = "Raise nested pointer allocations to N-dimensional memrefs";
   let description = [{
-    This pass canonicalizes memref allocations and accesses for downstream passes.
-    It converts nested array-of-pointer allocations to multi-dimensional memrefs and
-    rewrites pointer-based accesses to direct memref indexed accesses.
+    This pass raises nested array-of-pointer allocations to multi-dimensional memrefs
+    and rewrites pointer-based accesses to direct memref indexed accesses. It also
+    converts OpenMP task dependencies into arts.omp_dep operations.
   }];
   let dependentDialects = [
     "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
     "arts::ArtsDialect", "arith::ArithDialect", "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createCanonicalizeMemrefsPass()";
+  let constructor = "mlir::arts::createRaiseMemRefDimensionalityPass()";
+}
+
+def HandleDeps : Pass<"handle-deps", "mlir::ModuleOp"> {
+  let summary = "Convert residual OMP dependencies to arts.omp_dep";
+  let description = [{
+    Converts remaining OpenMP task dependency variables that were not handled
+    by RaiseMemRefDimensionality into arts.omp_dep operations. Handles static
+    arrays, token containers, subview chunks, direct allocations, and block
+    arguments.
+  }];
+  let dependentDialects = [
+    "memref::MemRefDialect", "func::FuncDialect",
+    "arts::ArtsDialect", "arith::ArithDialect", "polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::arts::createHandleDepsPass()";
 }
 
 def ConvertOpenMPToArts : Pass<"convert-openmp-to-arts", "mlir::ModuleOp"> {
@@ -312,6 +327,67 @@ def DataPtrHoisting
   let constructor = "mlir::arts::createDataPtrHoistingPass()";
 }
 
+def GuidRangCallOpt
+    : Pass<"arts-guid-range-call-opt", "mlir::ModuleOp"> {
+  let summary = "Rewrite per-iteration GUID reserve calls into GUID-range calls";
+  let description = [{
+    Runs after ARTS-to-LLVM lowering and rewrites canonical loops of the form:
+
+      scf.for %i = 0 to N step 1 {
+        %g = call @arts_guid_reserve(...)
+        ...
+      }
+
+    into:
+
+      %range = call @arts_guid_reserve_range(..., N, ...)
+      scf.for %i = 0 to N step 1 {
+        %g = call @arts_guid_from_index(%range, %i)
+        ...
+      }
+
+    This pass is conservative and requires lower-bound 0, step 1,
+    and route(0) to preserve runtime semantics.
+
+    For dynamic trip counts it emits a guarded rewrite:
+    use range reservation only when upperBound > 1 and
+    upperBound <= UINT32_MAX,
+    otherwise preserve per-iteration reserve behavior.
+  }];
+  let dependentDialects = [
+    "func::FuncDialect", "arith::ArithDialect", "scf::SCFDialect",
+    "LLVM::LLVMDialect"
+  ];
+  let constructor = "mlir::arts::createGuidRangCallOptPass()";
+}
+
+def RuntimeCallOpt
+    : Pass<"arts-runtime-call-opt", "mlir::ModuleOp"> {
+  let summary = "Hoist and deduplicate selected pure ARTS runtime calls";
+  let description = [{
+    Runs after ARTS-to-LLVM lowering and optimizes only a conservative set of
+    runtime topology/identity queries that are safe to treat as loop-invariant
+    within a function:
+
+      - arts_get_total_workers
+      - arts_get_total_nodes
+      - arts_get_current_worker
+      - arts_get_current_node
+
+    The pass intentionally ignores stateful runtime calls (guid reserve, DB
+    create, EDT/event signaling, etc.) and only rewrites zero-operand query
+    calls.
+
+    Transformations:
+      1) Hoist loop-invariant calls out of nested `scf.for` loops.
+      2) Deduplicate dominated duplicate calls per callee within a function.
+  }];
+  let dependentDialects = [
+    "func::FuncDialect", "scf::SCFDialect"
+  ];
+  let constructor = "mlir::arts::createRuntimeCallOptPass()";
+}
+
 def EdtPtrRematerialization
     : Pass<"edt-ptr-rematerialization", "mlir::ModuleOp"> {
   let summary = "Rematerialize pointer dependencies in EDTs.";
@@ -338,8 +414,10 @@ def EpochContinuationPrep : Pass<"epoch-continuation-prep", "mlir::ModuleOp"> {
     dependency slot that the epoch signals upon completion, replacing the
     blocking arts.wait_on_epoch with ARTS-native finish-EDT scheduling.
 
-    This pass runs AFTER EpochLowering (which produces CreateEpochOp +
-    WaitOnEpochOp) and BEFORE EdtLowering (which outlines arts.edt regions).
+    This pass runs in high-level ARTS form before lowering:
+    - once in the `epochs` pipeline stage right after `CreateEpochs`
+    - once in `pre-lowering` after `ParallelEdtLowering` so newly created
+      epochs also receive continuation prep
   }];
   let dependentDialects = [
     "func::FuncDialect", "arts::ArtsDialect", "arith::ArithDialect"

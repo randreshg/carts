@@ -11,7 +11,7 @@
 ///   - JacobiAlternatingBuffersPattern
 ///==========================================================================///
 
-#include "../../PassDetails.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
 #include "arts/transforms/dep/DepTransform.h"
 #include "arts/utils/Debug.h"

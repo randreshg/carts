@@ -23,6 +23,7 @@ constexpr StringLiteral RuntimeConfigPath = "arts.runtime_config_path";
 constexpr StringLiteral RuntimeConfigData = "arts.runtime_config_data";
 constexpr StringLiteral RuntimeTotalWorkers = "arts.runtime_total_workers";
 constexpr StringLiteral RuntimeTotalNodes = "arts.runtime_total_nodes";
+constexpr StringLiteral RuntimeStaticWorkers = "arts.runtime_static_workers";
 } // namespace Module
 
 /// Operation-level attributes used across ARTS passes
@@ -131,6 +132,22 @@ inline void setRuntimeTotalWorkers(ModuleOp module, int64_t workers) {
   module->setAttr(
       AttrNames::Module::RuntimeTotalWorkers,
       IntegerAttr::get(IntegerType::get(module.getContext(), 64), workers));
+}
+
+inline bool getRuntimeStaticWorkers(ModuleOp module) {
+  if (!module)
+    return false;
+  if (auto attr = module->getAttrOfType<BoolAttr>(
+          AttrNames::Module::RuntimeStaticWorkers))
+    return attr.getValue();
+  return false;
+}
+
+inline void setRuntimeStaticWorkers(ModuleOp module, bool enabled) {
+  if (!module)
+    return;
+  module->setAttr(AttrNames::Module::RuntimeStaticWorkers,
+                  BoolAttr::get(module.getContext(), enabled));
 }
 
 inline std::optional<int64_t> getRuntimeTotalNodes(ModuleOp module) {

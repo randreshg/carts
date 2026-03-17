@@ -1277,14 +1277,22 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
           usesStencilHalo || rewriteContract.usePartitionSliceAsDepWindow;
 
       /// Read-only acquires already get their task-local window from
-      /// rewriteAcquire(). This helper only updates the DB-space slice metadata
-      /// for write-capable acquires, plus stencil-contract read acquires that
-      /// must carry a concrete block-space dependency window to avoid
-      /// widening back to full-range during later lowering.
+      /// rewriteAcquire(). This helper primarily updates DB-space slice
+      /// metadata for write-capable acquires, but may also synthesize missing
+      /// partition metadata for block/stencil read acquires to avoid
+      /// conservative widening back to full-range later.
       if (!acquireOp)
         return;
-      if (parentAcqOp.getMode() == ArtsMode::in && !shouldUseStencilWindow)
-        return;
+      if (parentAcqOp.getMode() == ArtsMode::in && !shouldUseStencilWindow) {
+        PartitionMode mode =
+            acquireOp.getPartitionMode().value_or(PartitionMode::coarse);
+        bool needsPartitionMetadata =
+            (mode == PartitionMode::block || mode == PartitionMode::stencil) &&
+            (acquireOp.getPartitionOffsets().empty() ||
+             acquireOp.getPartitionSizes().empty());
+        if (!needsPartitionMetadata)
+          return;
+      }
       if (parentAcqOp.getMode() != ArtsMode::in &&
           (acquireOp.getOffsets().size() > 1 ||
            acquireOp.getPartitionOffsets().size() > 1)) {
@@ -1313,6 +1321,14 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
           acquireOp.getPartitionOffsetsMutable().assign(
               SmallVector<Value>{window->elementOffset});
         if (!acquireOp.getPartitionSizes().empty())
+          acquireOp.getPartitionSizesMutable().assign(
+              SmallVector<Value>{window->elementSize});
+      }
+      if (parentAcqOp.getMode() == ArtsMode::in) {
+        if (acquireOp.getPartitionOffsets().empty())
+          acquireOp.getPartitionOffsetsMutable().assign(
+              SmallVector<Value>{window->elementOffset});
+        if (acquireOp.getPartitionSizes().empty())
           acquireOp.getPartitionSizesMutable().assign(
               SmallVector<Value>{window->elementSize});
       }

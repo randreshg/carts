@@ -4,16 +4,17 @@
 ///==========================================================================///
 #include "arts/utils/Utils.h"
 #include "arts/Dialect.h"
+#include "arts/codegen/Types.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/CSE.h"
 #include "mlir/Transforms/RegionUtils.h"
-#include "llvm/ADT/StringSet.h"
 #include <algorithm>
 #include <cassert>
 
@@ -45,12 +46,6 @@ Value createOneIndex(OpBuilder &builder, Location loc) {
 /// ARTS Runtime Query Utilities
 ///===----------------------------------------------------------------------===///
 
-/// Known ARTS runtime query function names that are safe for partitioning.
-/// These functions return deterministic values within an EDT context.
-static const llvm::StringSet<> ArtsRuntimeQueries = {
-    "arts_get_current_node", "arts_get_total_nodes", "arts_get_current_worker",
-    "arts_get_total_workers"};
-
 bool isArtsRuntimeQuery(Value val) {
   if (!val)
     return false;
@@ -65,8 +60,21 @@ bool isArtsRuntimeQuery(Value val) {
     return true;
 
   /// Check for func::CallOp (after lowering)
-  if (auto callOp = dyn_cast<func::CallOp>(defOp))
-    return ArtsRuntimeQueries.contains(callOp.getCallee());
+  if (auto callOp = dyn_cast<func::CallOp>(defOp)) {
+    std::optional<types::RuntimeFunction> fn =
+        types::runtimeFunctionFromName(callOp.getCallee());
+    if (!fn)
+      return false;
+    switch (*fn) {
+    case types::ARTSRTL_arts_get_current_node:
+    case types::ARTSRTL_arts_get_total_nodes:
+    case types::ARTSRTL_arts_get_current_worker:
+    case types::ARTSRTL_arts_get_total_workers:
+      return true;
+    default:
+      return false;
+    }
+  }
 
   return false;
 }
@@ -238,6 +246,109 @@ void transferAttributes(Operation *src, Operation *dst,
     if (!excludeSet.contains(attr.getName().getValue()))
       dst->setAttr(attr.getName(), attr.getValue());
   }
+}
+
+///===----------------------------------------------------------------------===///
+/// OMP Mode Conversion Utilities
+///===----------------------------------------------------------------------===///
+
+ArtsMode convertOmpMode(omp::ClauseTaskDepend mode) {
+  switch (mode) {
+  case omp::ClauseTaskDepend::taskdependin:
+    return ArtsMode::in;
+  case omp::ClauseTaskDepend::taskdependout:
+    return ArtsMode::out;
+  case omp::ClauseTaskDepend::taskdependinout:
+    return ArtsMode::inout;
+  }
+  llvm_unreachable("Unknown OMP depend mode");
+}
+
+///===----------------------------------------------------------------------===///
+/// Dependency Index Clamping Utilities
+///===----------------------------------------------------------------------===///
+
+SmallVector<Value> clampDepIndices(Value source, ArrayRef<Value> indices,
+                                   OpBuilder &builder, Location loc,
+                                   ArrayRef<Value> dimSizes) {
+  SmallVector<Value> clamped;
+  clamped.reserve(indices.size());
+
+  auto sourceType = source.getType().dyn_cast<MemRefType>();
+  if (!sourceType) {
+    clamped.append(indices.begin(), indices.end());
+    return clamped;
+  }
+
+  auto castToType = [&](Value v, Type targetTy) -> Value {
+    if (v.getType() == targetTy)
+      return v;
+    if ((v.getType().isIndex() && isa<IntegerType>(targetTy)) ||
+        (isa<IntegerType>(v.getType()) && targetTy.isIndex()))
+      return builder.create<arith::IndexCastOp>(loc, targetTy, v);
+    return v;
+  };
+
+  auto oneForType = [&](Type ty) -> Value {
+    if (ty.isIndex())
+      return createOneIndex(builder, loc);
+    if (auto intTy = ty.dyn_cast<IntegerType>())
+      return builder.create<arith::ConstantIntOp>(loc, 1, intTy);
+    return Value();
+  };
+
+  auto zeroForType = [&](Type ty) -> Value {
+    if (ty.isIndex())
+      return createZeroIndex(builder, loc);
+    if (auto intTy = ty.dyn_cast<IntegerType>())
+      return builder.create<arith::ConstantIntOp>(loc, 0, intTy);
+    return Value();
+  };
+
+  for (auto [dim, idx] : llvm::enumerate(indices)) {
+    Type idxTy = idx.getType();
+    if (!idxTy.isIndex() && !isa<IntegerType>(idxTy)) {
+      clamped.push_back(idx);
+      continue;
+    }
+
+    if (dim >= static_cast<size_t>(sourceType.getRank())) {
+      clamped.push_back(idx);
+      continue;
+    }
+
+    Value zero = zeroForType(idxTy);
+    Value one = oneForType(idxTy);
+    if (!zero || !one) {
+      clamped.push_back(idx);
+      continue;
+    }
+
+    Value dimSize;
+    if (dim < dimSizes.size()) {
+      dimSize = dimSizes[dim];
+    } else if (sourceType.isDynamicDim(dim)) {
+      dimSize = builder.create<memref::DimOp>(loc, source, dim);
+    } else {
+      dimSize = createConstantIndex(builder, loc, sourceType.getDimSize(dim));
+    }
+
+    Value dimSizeTyped = castToType(dimSize, idxTy);
+    Value upper = builder.create<arith::SubIOp>(loc, dimSizeTyped, one);
+
+    Value belowZero = builder.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::slt, idx, zero);
+    Value afterLowerClamp =
+        builder.create<arith::SelectOp>(loc, belowZero, zero, idx);
+
+    Value aboveUpper = builder.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::sgt, afterLowerClamp, upper);
+    Value finalIdx = builder.create<arith::SelectOp>(loc, aboveUpper, upper,
+                                                     afterLowerClamp);
+    clamped.push_back(finalIdx);
+  }
+
+  return clamped;
 }
 
 } // namespace arts

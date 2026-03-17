@@ -219,15 +219,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
   const llvm::DenseSet<Value> *writerSources;
 
   ArtsMode getDbMode(omp::ClauseTaskDepend taskClause) const {
-    switch (taskClause) {
-    case omp::ClauseTaskDepend::taskdependin:
-      return ArtsMode::in;
-    case omp::ClauseTaskDepend::taskdependout:
-      return ArtsMode::out;
-    case omp::ClauseTaskDepend::taskdependinout:
-      return ArtsMode::inout;
-    }
-    ARTS_UNREACHABLE("Unknown ClauseTaskDepend value");
+    return arts::convertOmpMode(taskClause);
   }
 
   LogicalResult collectTaskDependencies(SmallVector<Value> &deps,
@@ -258,7 +250,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
       if (!ompDepOp) {
         ARTS_ERROR("Expected arts.omp_dep for dependency "
                    << i << ", but got " << *depVar.getDefiningOp()
-                   << ". Make sure CanonicalizeMemrefs runs before this pass.");
+                   << ". Make sure RaiseMemRefDimensionality runs before this pass.");
         return failure();
       }
 

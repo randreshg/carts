@@ -36,6 +36,7 @@
 
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -143,6 +144,67 @@ void ArtsCodegen::applyRuntimeFunctionAttributes(func::FuncOp funcOp,
       funcOp.setArgAttr(argIndex, attrName, unitAttr);
   };
 
+  /// Helper to apply result attributes from a list of attribute names.
+  auto applyResultMLIRAttrs = [&](unsigned resultIndex,
+                                  ArrayRef<StringRef> attrNames) {
+    for (StringRef attrName : attrNames)
+      funcOp.setResultAttr(resultIndex, attrName, unitAttr);
+  };
+
+  /// Ensure memory-effect information survives Func->LLVM lowering and
+  /// LLVM IR translation. Generic unit attrs like `llvm.readnone` are not
+  /// always carried through by downstream translators, while the canonical
+  /// LLVM memory attr is.
+  auto applyReadNoneMemoryAttr = [&]() {
+    auto noModRef = LLVM::ModRefInfo::NoModRef;
+    auto memoryAttr = LLVM::MemoryEffectsAttr::get(getContext(), noModRef,
+                                                   noModRef, noModRef);
+    funcOp->setAttr("memory", memoryAttr);
+  };
+  auto applyReadOnlyMemoryAttr = [&]() {
+    auto ref = LLVM::ModRefInfo::Ref;
+    auto memoryAttr = LLVM::MemoryEffectsAttr::get(getContext(), ref, ref, ref);
+    funcOp->setAttr("memory", memoryAttr);
+  };
+  auto attrSetContains = [](ArrayRef<StringRef> attrs, StringRef attrName) {
+    return llvm::any_of(attrs,
+                        [&](StringRef current) { return current == attrName; });
+  };
+
+  /// Generic LLVM function attrs such as nounwind/nofree/nosync/willreturn
+  /// must be forwarded via the LLVM dialect `passthrough` attribute to survive
+  /// translation to LLVM IR. Keep memory semantics on the canonical `memory`
+  /// attribute above.
+  auto appendFunctionPassthroughAttrs = [&](ArrayRef<StringRef> attrNames) {
+    SmallVector<Attribute, 8> passthroughAttrs;
+    if (auto existing = funcOp->getAttrOfType<ArrayAttr>("passthrough"))
+      passthroughAttrs.append(existing.begin(), existing.end());
+
+    auto hasStringAttr = [&](StringRef value) {
+      return llvm::any_of(passthroughAttrs, [&](Attribute attr) {
+        auto strAttr = dyn_cast<StringAttr>(attr);
+        return strAttr && strAttr.getValue() == value;
+      });
+    };
+
+    for (StringRef attrName : attrNames) {
+      if (attrName == LLVM::LLVMDialect::getReadnoneAttrName() ||
+          attrName == LLVM::LLVMDialect::getReadonlyAttrName())
+        continue;
+
+      StringRef passthroughName = attrName;
+      if (!passthroughName.consume_front("llvm."))
+        continue;
+      if (hasStringAttr(passthroughName))
+        continue;
+      passthroughAttrs.push_back(getBuilder().getStringAttr(passthroughName));
+    }
+
+    if (!passthroughAttrs.empty())
+      funcOp->setAttr("passthrough",
+                      getBuilder().getArrayAttr(passthroughAttrs));
+  };
+
   /// Define attribute sets
 #define ARTS_ATTRS_SET(VarName, AttrList)                                      \
   SmallVector<StringRef> VarName = AttrList;
@@ -153,9 +215,19 @@ void ArtsCodegen::applyRuntimeFunctionAttributes(func::FuncOp funcOp,
 #define ARTS_RTL_ATTRS(Enum, FnAttrSet, RetAttrSet, ArgAttrSets)               \
   case Enum:                                                                   \
     applyMLIRAttrs(FnAttrSet);                                                 \
+    appendFunctionPassthroughAttrs(FnAttrSet);                                 \
     /* Apply argument attributes */                                            \
     for (size_t ArgNo = 0; ArgNo < ArgAttrSets.size(); ++ArgNo)                \
       applyArgMLIRAttrs(ArgNo, ArgAttrSets[ArgNo]);                            \
+    if (funcOp.getNumResults() > 0)                                            \
+      applyResultMLIRAttrs(0, RetAttrSet);                                     \
+    if (attrSetContains(FnAttrSet,                                             \
+                        LLVM::LLVMDialect::getReadnoneAttrName())) {           \
+      applyReadNoneMemoryAttr();                                                \
+    } else if (attrSetContains(FnAttrSet,                                      \
+                               LLVM::LLVMDialect::getReadonlyAttrName())) {    \
+      applyReadOnlyMemoryAttr();                                                \
+    }                                                                           \
     break;
 #define ARTS_RTL_FUNCTIONS
 #define ARTS_RTL(Enum, Name, ReturnType, ...) /// No-op, we only want attributes
@@ -232,7 +304,8 @@ Value ArtsCodegen::getCurrentEdtGuid(Location loc) {
 }
 
 Value ArtsCodegen::getTotalWorkers(Location loc) {
-  if (abstractMachine && abstractMachine->hasValidThreads()) {
+  bool staticWorkers = getRuntimeStaticWorkers(module);
+  if (staticWorkers && abstractMachine && abstractMachine->hasValidThreads()) {
     int runtimeWorkers = abstractMachine->getRuntimeWorkersPerNode();
     if (runtimeWorkers > 0)
       return createIntConstant(runtimeWorkers, Int32, loc);

@@ -27,7 +27,10 @@
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/metadata/LoopMetadata.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include <algorithm>
 #include <cmath>
@@ -62,6 +65,31 @@ static std::optional<int64_t> getExplicitWorkersPerNodeCount(EdtOp edt) {
   if (!edt)
     return std::nullopt;
   return arts::getWorkersPerNode(edt.getOperation());
+}
+
+/// Compute a capped product of static parent-loop trip counts.
+/// Used as a lightweight proxy for repeated dispatch/epoch overhead around a
+/// kernel loop (e.g. benchmark repetition loops).
+static int64_t getRepeatedParentTripProduct(ForOp forOp,
+                                            LoopAnalysis &loopAnalysis) {
+  int64_t product = 1;
+  constexpr int64_t kMaxProduct = 1 << 20;
+  for (Operation *parent = forOp->getParentOp(); parent;
+       parent = parent->getParentOp()) {
+    if (isa<func::FuncOp>(parent))
+      break;
+    if (!isa<scf::ForOp, affine::AffineForOp, ForOp>(parent))
+      continue;
+    auto tripOpt = loopAnalysis.getStaticTripCount(parent);
+    if (!tripOpt || *tripOpt <= 1)
+      continue;
+    if (*tripOpt >= kMaxProduct / product)
+      return kMaxProduct;
+    product *= *tripOpt;
+    if (product >= kMaxProduct)
+      return kMaxProduct;
+  }
+  return product;
 }
 
 ParallelismDecision DistributionHeuristics::resolveParallelismFromMachine(
@@ -166,8 +194,11 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
 
   int64_t effectiveTripCount = tripCount;
   bool allowNestedWorkBoost = false;
+  bool isStencilPattern = false;
   if (auto summary =
           loopAnalysis.getLoopDbAccessSummary(forOp.getOperation())) {
+    isStencilPattern =
+        summary->distributionPattern == EdtDistributionPattern::stencil;
     allowNestedWorkBoost =
         summary->distributionPattern == EdtDistributionPattern::uniform &&
         summary->allocPatterns.size() <= 4 && !summary->hasStencilOffset &&
@@ -194,6 +225,24 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
       /// chunks so the useful work per EDT grows with dependency pressure.
       minItersPerWorker = std::max<int64_t>(minItersPerWorker, depCount * 2);
     }
+  }
+
+  if (isStencilPattern) {
+    /// Stencil kernels with deep inner work can tolerate larger chunks.
+    if (auto nestedWork = loopAnalysis.estimateStaticPerfectNestedWork(
+            forOp.getOperation(), 8);
+        nestedWork && *nestedWork >= 4096)
+      minItersPerWorker = std::max<int64_t>(minItersPerWorker, 16);
+
+    /// Repeated parent loops can multiply create/wait overhead. However,
+    /// epoch-loop amortization may later fold those repeats into EDT bodies.
+    /// Keep this boost moderate so we do not over-coarsen and starve
+    /// parallelism when amortization is available.
+    int64_t repeatProduct = getRepeatedParentTripProduct(forOp, loopAnalysis);
+    if (repeatProduct >= 64)
+      minItersPerWorker = std::max<int64_t>(minItersPerWorker, 16);
+    else if (repeatProduct >= 16)
+      minItersPerWorker = std::max<int64_t>(minItersPerWorker, 12);
   }
 
   if (effectiveTripCount >= workerCfg.totalWorkers * minItersPerWorker)

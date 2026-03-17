@@ -185,13 +185,13 @@ static cl::opt<bool> EpochFinishContinuation(
     cl::desc("Enable epoch finish-continuation lowering (replace blocking "
              "epoch waits with ARTS-native finish-EDT continuation scheduling "
              "for eligible patterns)"),
-    cl::init(false));
+    cl::init(true));
 
 ///===----------------------------------------------------------------------===///
 /// Pipeline Stop Options
 ///===----------------------------------------------------------------------===///
 enum class PipelineStep {
-  CanonicalizeMemrefs,
+  RaiseMemRefDimensionality,
   CollectMetadata,
   InitialCleanup,
   OpenMPToArts,
@@ -211,9 +211,12 @@ enum class PipelineStep {
 
 static cl::opt<PipelineStep> Pipeline(
     "pipeline", cl::desc("Stop pipeline at specified step:"),
-    cl::values(clEnumValN(PipelineStep::CanonicalizeMemrefs,
+    cl::values(clEnumValN(PipelineStep::RaiseMemRefDimensionality,
+                          "raise-memref-dimensionality",
+                          "Stop after the raise-memref-dimensionality pipeline step"),
+               clEnumValN(PipelineStep::RaiseMemRefDimensionality,
                           "canonicalize-memrefs",
-                          "Stop after the canonicalize-memrefs pipeline step"),
+                          "Alias for raise-memref-dimensionality"),
                clEnumValN(PipelineStep::CollectMetadata, "collect-metadata",
                           "Stop after collecting metadata"),
                clEnumValN(PipelineStep::InitialCleanup, "initial-cleanup",
@@ -248,10 +251,13 @@ static cl::opt<PipelineStep> Pipeline(
 
 static cl::opt<PipelineStep> StartFrom(
     "start-from", cl::desc("Resume pipeline from specified step:"),
-    cl::values(clEnumValN(PipelineStep::CanonicalizeMemrefs,
-                          "canonicalize-memrefs",
-                          "Start from the canonicalize-memrefs pipeline step "
+    cl::values(clEnumValN(PipelineStep::RaiseMemRefDimensionality,
+                          "raise-memref-dimensionality",
+                          "Start from the raise-memref-dimensionality pipeline step "
                           "(default)"),
+               clEnumValN(PipelineStep::RaiseMemRefDimensionality,
+                          "canonicalize-memrefs",
+                          "Alias for raise-memref-dimensionality"),
                clEnumValN(PipelineStep::CollectMetadata, "collect-metadata",
                           "Start from collecting metadata"),
                clEnumValN(PipelineStep::InitialCleanup, "initial-cleanup",
@@ -280,7 +286,7 @@ static cl::opt<PipelineStep> StartFrom(
                           "Start from pre-lowering transformations"),
                clEnumValN(PipelineStep::ArtsToLLVM, "arts-to-llvm",
                           "Start from Arts to LLVM conversion")),
-    cl::init(PipelineStep::CanonicalizeMemrefs));
+    cl::init(PipelineStep::RaiseMemRefDimensionality));
 
 static cl::opt<bool> PrintPipelineTokensJSON(
     "print-pipeline-tokens-json",
@@ -292,13 +298,14 @@ static cl::opt<bool> PrintPipelineManifestJSON(
     cl::desc("Print pipeline step/pass manifest as JSON and exit"),
     cl::init(false));
 
-static const std::array<llvm::StringLiteral, 8> kCanonicalizeMemrefsPasses = {
+static const std::array<llvm::StringLiteral, 9> kRaiseMemRefDimensionalityPasses = {
     "LowerAffine(func)",
     "CSE",
     "Inliner",
     "ArtsInliner",
     "PolygeistCanonicalize",
-    "CanonicalizeMemrefs",
+    "RaiseMemRefDimensionality",
+    "HandleDeps",
     "DeadCodeElimination",
     "CSE"};
 static const std::array<llvm::StringLiteral, 7> kCollectMetadataPasses = {
@@ -372,9 +379,10 @@ static const std::array<llvm::StringLiteral, 24> kConcurrencyOptPasses = {
 static const std::array<llvm::StringLiteral, 4> kEpochsPasses = {
     "PolygeistCanonicalize", "CreateEpochs",
     "EpochContinuationPrep (conditional)", "PolygeistCanonicalize"};
-static const std::array<llvm::StringLiteral, 22> kPreLoweringPasses = {
+static const std::array<llvm::StringLiteral, 23> kPreLoweringPasses = {
     "EdtAllocaSinking",
     "ParallelEdtLowering",
+    "EpochContinuationPrep (conditional)",
     "PolygeistCanonicalize",
     "CSE",
     "DbLowering",
@@ -395,8 +403,10 @@ static const std::array<llvm::StringLiteral, 22> kPreLoweringPasses = {
     "PolygeistCanonicalize",
     "CSE",
     "VerifyPreLowered"};
-static const std::array<llvm::StringLiteral, 9> kArtsToLLVMPasses = {
+static const std::array<llvm::StringLiteral, 11> kArtsToLLVMPasses = {
     "ConvertArtsToLLVM",
+    "GuidRangCallOpt",
+    "RuntimeCallOpt",
     "DataPtrHoisting",
     "PolygeistCanonicalize",
     "CSE",
@@ -416,8 +426,8 @@ struct PipelineStepTokenSpec {
 };
 
 static const std::array<PipelineStepTokenSpec, 16> kPipelineStepSpecs = {{
-    {PipelineStep::CanonicalizeMemrefs, "canonicalize-memrefs", true, true,
-     true, kCanonicalizeMemrefsPasses},
+    {PipelineStep::RaiseMemRefDimensionality, "raise-memref-dimensionality", true, true,
+     true, kRaiseMemRefDimensionalityPasses},
     {PipelineStep::CollectMetadata, "collect-metadata", true, true, true,
      kCollectMetadataPasses},
     {PipelineStep::InitialCleanup, "initial-cleanup", true, true, true,
@@ -643,15 +653,16 @@ static void addCanonicalizeAndCSE(PassManager &pm) {
   pm.addPass(createCSEPass());
 }
 
-/// Inliner and canonicalize memrefs pass.
-void buildCanonicalizeMemrefsPipeline(PassManager &pm) {
+/// Raise nested pointer allocations to N-dimensional memrefs.
+void buildRaiseMemRefDimensionalityPipeline(PassManager &pm) {
   OpPassManager &optPM = pm.nest<func::FuncOp>();
   optPM.addPass(createLowerAffinePass());
   pm.addPass(createCSEPass());
   pm.addPass(createInlinerPass());
   pm.addPass(arts::createArtsInlinerPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(arts::createCanonicalizeMemrefsPass());
+  pm.addPass(arts::createRaiseMemRefDimensionalityPass());
+  pm.addPass(arts::createHandleDepsPass());
   pm.addPass(arts::createDCEPass());
   pm.addPass(createCSEPass());
 }
@@ -833,11 +844,14 @@ void buildEpochsPipeline(PassManager &pm, bool enableContinuation) {
 }
 
 /// Pre-lowering passes.
-void buildPreLoweringPipeline(PassManager &pm, arts::AnalysisManager *AM) {
+void buildPreLoweringPipeline(PassManager &pm, arts::AnalysisManager *AM,
+                              bool enableContinuation) {
   /// TODO(PERF): EdtAllocaSinkingPass runs twice (buildConcurrencyOptPipeline
   /// and here).
   pm.addPass(arts::createEdtAllocaSinkingPass());
   pm.addPass(arts::createParallelEdtLoweringPass());
+  if (enableContinuation)
+    pm.addPass(arts::createEpochContinuationPrepPass());
   addCanonicalizeAndCSE(pm);
   pm.addPass(arts::createDbLoweringPass(ArtsIdStride));
   addCanonicalizeAndCSE(pm);
@@ -863,6 +877,8 @@ void buildArtsToLLVMPipeline(PassManager &pm, bool debug,
                              const arts::AbstractMachine *machine) {
   pm.addPass(arts::createConvertArtsToLLVMPass(debug, distributedInitPerWorker,
                                                machine));
+  pm.addPass(arts::createGuidRangCallOptPass());
+  pm.addPass(arts::createRuntimeCallOptPass());
   /// Hoist loop-invariant loads after Arts->LLVM lowering for
   /// vectorization/LICM.
   pm.addPass(arts::createDataPtrHoistingPass());
@@ -906,7 +922,7 @@ struct PipelineHooks {
 LogicalResult
 buildPassManager(ModuleOp module, MLIRContext &context,
                  PipelineStep stopAt = PipelineStep::Complete,
-                 PipelineStep startFrom = PipelineStep::CanonicalizeMemrefs,
+                 PipelineStep startFrom = PipelineStep::RaiseMemRefDimensionality,
                  std::unique_ptr<arts::AnalysisManager> *outAM = nullptr,
                  PipelineHooks *hooks = nullptr) {
   int startIndex = pipelineStepIndex(startFrom);
@@ -993,8 +1009,8 @@ buildPassManager(ModuleOp module, MLIRContext &context,
   };
 
   const std::vector<StepSpec> runtimeSteps = {
-      {PipelineStep::CanonicalizeMemrefs, "Error when canonicalizing memrefs",
-       [&](PassManager &pm) { buildCanonicalizeMemrefsPipeline(pm); }},
+      {PipelineStep::RaiseMemRefDimensionality, "Error when raising memref dimensionality",
+       [&](PassManager &pm) { buildRaiseMemRefDimensionalityPipeline(pm); }},
       {PipelineStep::CollectMetadata, "Error when collecting metadata",
        [&](PassManager &pm) {
          bool shouldExport = (stopAt == PipelineStep::CollectMetadata);
@@ -1031,7 +1047,9 @@ buildPassManager(ModuleOp module, MLIRContext &context,
        }},
       {PipelineStep::PreLowering,
        "Error when pre-lowering DBs, EDTs, and Epochs",
-       [&](PassManager &pm) { buildPreLoweringPipeline(pm, AM.get()); }},
+       [&](PassManager &pm) {
+         buildPreLoweringPipeline(pm, AM.get(), EpochFinishContinuation);
+       }},
       {PipelineStep::ArtsToLLVM, "Error when converting ARTS to LLVM",
        [&](PassManager &pm) {
          buildArtsToLLVMPipeline(pm, Debug, DistributedDb, &machine);

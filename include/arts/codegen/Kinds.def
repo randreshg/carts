@@ -241,6 +241,17 @@ __ARTS_RTL(arts_guid_reserve, ArtsGuid, ArtsType, Int32)
 __ARTS_RTL_ATTRS(arts_guid_reserve, ControlAttrs, EmptyAttrs,
                  ParamAttrs(SExt, ZExt))
 
+/// arts_guid_t arts_guid_reserve_range(arts_type_t type, unsigned int size,
+///                                     unsigned int route);
+__ARTS_RTL(arts_guid_reserve_range, ArtsGuid, ArtsType, Int32, Int32)
+__ARTS_RTL_ATTRS(arts_guid_reserve_range, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(SExt, ZExt, ZExt))
+
+/// arts_guid_t arts_guid_from_index(arts_guid_t range_guid, unsigned int idx);
+__ARTS_RTL(arts_guid_from_index, ArtsGuid, ArtsGuid, Int32)
+__ARTS_RTL_ATTRS(arts_guid_from_index, PureAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, ZExt))
+
 /// unsigned int arts_guid_get_rank(arts_guid_t guid);
 __ARTS_RTL(arts_guid_get_rank, Int32, ArtsGuid)
 __ARTS_RTL_ATTRS(arts_guid_get_rank, PureAttrs, ZExt, ParamAttrs(EmptyAttrs))
