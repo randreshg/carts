@@ -5,18 +5,15 @@ A modern Python CLI with rich terminal output.
 """
 
 from pathlib import Path
-from typing import List, Optional
 import os
 import sys
 
 import typer
+from sniff import Typer, Exit
+from sniff import print_error
 
-# Import from scripts modules
-from scripts.config import (
-    get_config,
-    set_verbose,
-)
-from scripts.run import run_subprocess
+from scripts.platform import get_config, set_verbose
+from scripts import run_subprocess, SUBMODULE_BENCHMARKS
 from scripts.build import build as build_cmd
 from scripts.compile import (
     compile_cmd,
@@ -62,9 +59,13 @@ PASSTHROUGH_NO_INTERSPERSE_CTX = {
     "ignore_unknown_options": True,
 }
 
-app = typer.Typer(
+app = Typer(
     name="carts",
     help="CARTS - Compiler for Asynchronous Runtime Systems",
+    auto_activate=True,
+    add_doctor_command=True,
+    add_version_command=True,
+    add_env_command=True,
     add_completion=False,
     no_args_is_help=True,
     context_settings=HELP_CTX,
@@ -97,15 +98,15 @@ app.command(name="pipeline")(pipeline_cmd)
 
 app.command(
     name="cgeist",
-    context_settings=PASSTHROUGH_CTX
+    context_settings=PASSTHROUGH_NO_INTERSPERSE_CTX
 )(cgeist)
 
 app.command(
     name="clang",
-    context_settings=PASSTHROUGH_CTX
+    context_settings=PASSTHROUGH_NO_INTERSPERSE_CTX
 )(clang)
 
-app.command(name="mlir-translate", context_settings=PASSTHROUGH_CTX)(mlir_translate_cmd)
+app.command(name="mlir-translate", context_settings=PASSTHROUGH_NO_INTERSPERSE_CTX)(mlir_translate_cmd)
 
 # Testing
 app.command(name="test")(test_cmd)
@@ -175,14 +176,12 @@ def benchmarks(
     """
     config = get_config()
     benchmark_runner = (
-        config.carts_dir / "external" / "carts-benchmarks"
-        / "scripts" / "runner.py"
+        config.carts_dir / SUBMODULE_BENCHMARKS / "scripts" / "runner.py"
     )
 
     if not benchmark_runner.is_file():
-        from carts_styles import print_error
         print_error(f"Benchmark runner not found at {benchmark_runner}")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     # Use current Python interpreter (already in poetry env) for faster startup
     cmd = [sys.executable, str(benchmark_runner)]
@@ -191,13 +190,10 @@ def benchmarks(
     if ctx.args:
         cmd.extend(ctx.args)
 
-    # Inject PYTHONPATH so benchmarks can import carts_styles
+    # Inject PYTHONPATH so benchmarks submodule can import carts_styles shim
     tools_dir = str(Path(__file__).parent)
-    existing_pythonpath = os.environ.get("PYTHONPATH", "")
-    pythonpath = f"{tools_dir}:{existing_pythonpath}" if existing_pythonpath else tools_dir
-
-    result = run_subprocess(cmd, check=False, env={"PYTHONPATH": pythonpath})
-    raise typer.Exit(result.returncode)
+    result = run_subprocess(cmd, check=False, env={"PYTHONPATH": tools_dir})
+    raise Exit(result.returncode)
 
 
 # Clean Command
@@ -225,12 +221,6 @@ def clean(
 
 def main():
     """Main entry point."""
-    # Set LLVM_SYMBOLIZER_PATH for better stack traces
-    config = get_config()
-    symbolizer = config.get_llvm_tool("llvm-symbolizer")
-    if symbolizer.is_file():
-        os.environ["LLVM_SYMBOLIZER_PATH"] = str(symbolizer)
-
     app(prog_name="carts")
 
 

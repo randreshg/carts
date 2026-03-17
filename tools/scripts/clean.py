@@ -4,9 +4,9 @@ from pathlib import Path
 import os
 import shutil
 
-from carts_styles import print_debug, print_info, print_success, print_error
-from scripts.config import get_config, is_verbose
-from scripts.run import run_subprocess
+from sniff import print_debug, print_info, print_success, print_error
+from scripts.platform import get_config, is_verbose
+from scripts import run_subprocess
 
 
 # Files to clean

@@ -7,7 +7,7 @@ import time
 
 import typer
 
-from carts_styles import print_error, print_header, print_info, print_step, print_success, print_warning
+from sniff import print_error, print_header, print_info, print_step, print_success, print_warning
 from docker_shared import (
     BASE_IMAGE,
     BUILT_IMAGE,

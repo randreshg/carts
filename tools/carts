@@ -1,96 +1,57 @@
 #!/bin/bash
-
-# CARTS CLI wrapper
-# Uses the single shared Poetry environment for tools/
-
-set -euo pipefail
+# CARTS CLI wrapper — bootstraps the Python venv if needed, then runs carts_cli.py.
+#
+# Preferred: install sniff globally and run directly:
+#   pip install git+https://github.com/randreshg/sniff.git
+#   sniff tools/carts_cli.py install
+#
+# This wrapper provides the same bootstrap for users without sniff.
+set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_CLI="${SCRIPT_DIR}/carts_cli.py"
-SHARED_PYTHON=""
+CARTS_DIR="$(dirname "$SCRIPT_DIR")"
+VENV_DIR="$SCRIPT_DIR/.venv"
 
-has_required_python_deps() {
-    local python_bin="$1"
-    "$python_bin" -c "import typer, rich, openpyxl" 2>/dev/null
-}
+# ---------------------------------------------------------------------------
+# Bootstrap: create the venv automatically on first run
+# ---------------------------------------------------------------------------
+if [ ! -d "$VENV_DIR" ] || [ ! -x "$VENV_DIR/bin/python" ]; then
+    echo "First run — setting up Python environment..."
 
-pick_existing_python() {
-    local candidates=()
+    if command -v poetry &>/dev/null; then
+        POETRY_VIRTUALENVS_IN_PROJECT=true poetry -C "$SCRIPT_DIR" install --no-root --quiet 2>&1 \
+            | grep -v "^$" || true
+    else
+        # Fallback: create venv with pip (no Poetry needed)
+        PYTHON_CMD=""
+        for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
+            if command -v "$candidate" &>/dev/null; then
+                PYTHON_CMD="$candidate"
+                break
+            fi
+        done
 
-    if [[ -n "${VIRTUAL_ENV:-}" ]] && [[ -x "${VIRTUAL_ENV}/bin/python" ]]; then
-        candidates+=("${VIRTUAL_ENV}/bin/python")
-    fi
-
-    if [[ -x "${SCRIPT_DIR}/.venv/bin/python" ]]; then
-        candidates+=("${SCRIPT_DIR}/.venv/bin/python")
-    fi
-
-    if [[ -x "${SCRIPT_DIR}/../.venv/bin/python" ]]; then
-        candidates+=("${SCRIPT_DIR}/../.venv/bin/python")
-    fi
-
-    if command -v python3 >/dev/null 2>&1; then
-        candidates+=("$(command -v python3)")
-    fi
-
-    if command -v python >/dev/null 2>&1; then
-        candidates+=("$(command -v python)")
-    fi
-
-    local candidate
-    for candidate in "${candidates[@]}"; do
-        if [[ -n "$candidate" ]] && [[ -x "$candidate" ]] && has_required_python_deps "$candidate"; then
-            SHARED_PYTHON="$candidate"
-            return 0
+        if [ -z "$PYTHON_CMD" ]; then
+            echo "Error: No Python >= 3.10 found. Install python3 and try again." >&2
+            exit 1
         fi
-    done
 
-    return 1
-}
-
-get_poetry_python() {
-    poetry -C "$SCRIPT_DIR" env info -e 2>/dev/null || true
-}
-
-ensure_shared_env() {
-    if pick_existing_python; then
-        return 0
+        "$PYTHON_CMD" -m venv "$VENV_DIR"
+        "$VENV_DIR/bin/pip" install --quiet typer "rich>=13.7" openpyxl \
+            "sniff[cli] @ git+https://github.com/randreshg/sniff.git@main"
     fi
 
-    if ! command -v poetry >/dev/null 2>&1; then
-        echo "Error: Poetry is required to bootstrap CARTS Python environment."
-        echo "Activate a Python environment with typer, rich, and openpyxl installed"
-        echo "or run: poetry -C ${SCRIPT_DIR} install --no-root"
-        return 1
+    if [ ! -x "$VENV_DIR/bin/python" ]; then
+        echo "Error: Failed to create Python environment at $VENV_DIR" >&2
+        echo "Try manually: poetry -C $SCRIPT_DIR install --no-root" >&2
+        exit 1
     fi
 
-    if [[ ! -f "${SCRIPT_DIR}/pyproject.toml" ]]; then
-        echo "Error: pyproject.toml not found at ${SCRIPT_DIR}/pyproject.toml"
-        return 1
-    fi
-
-    local poetry_python
-    poetry_python="$(get_poetry_python)"
-    if [[ -n "$poetry_python" ]] && [[ -x "$poetry_python" ]] && has_required_python_deps "$poetry_python"; then
-        SHARED_PYTHON="$poetry_python"
-        return 0
-    fi
-
-    echo "Bootstrapping CARTS Python environment ..."
-    POETRY_VIRTUALENVS_IN_PROJECT=true poetry -C "$SCRIPT_DIR" install --no-root
-
-    poetry_python="$(get_poetry_python)"
-    if [[ -z "$poetry_python" ]] || [[ ! -x "$poetry_python" ]] || ! has_required_python_deps "$poetry_python"; then
-        echo "Error: failed to prepare CARTS Python environment with required dependencies."
-        return 1
-    fi
-    SHARED_PYTHON="$poetry_python"
-}
-
-if [[ ! -f "$PYTHON_CLI" ]]; then
-    echo "Error: carts_cli.py not found at $PYTHON_CLI"
-    exit 1
+    echo "Done."
+    echo ""
 fi
 
-ensure_shared_env
-exec "$SHARED_PYTHON" "$PYTHON_CLI" "$@"
+# ---------------------------------------------------------------------------
+# Run carts_cli.py with the venv Python
+# ---------------------------------------------------------------------------
+exec "$VENV_DIR/bin/python" "$SCRIPT_DIR/carts_cli.py" "$@"

@@ -6,6 +6,37 @@ This guide provides comprehensive information about writing code that CARTS can 
 
 Understanding the supported constructs and memory layouts is essential for writing efficient CARTS applications. This guide covers what works, what doesn't, and how to adapt your code for CARTS.
 
+## Getting Started
+
+### Prerequisites
+
+The following tools must be available on your system:
+
+- **cmake** >= 3.20
+- **ninja** (build system)
+- **clang** >= 14 (C/C++ compiler)
+- **python3** >= 3.10
+- **git** with submodule support
+
+Run `carts doctor` to verify that all prerequisites are installed and at the correct versions.
+
+### Installation
+
+```bash
+git clone <repo-url>
+cd carts
+sniff tools/carts_cli.py install      # recommended (pip install git+https://github.com/randreshg/sniff.git)
+./tools/carts install                  # alternative (no extra tools)
+```
+
+Both commands bootstrap the Python environment, fetch submodules, and build the full toolchain. After installation, `carts` is available in your PATH:
+
+```bash
+carts doctor
+```
+
+If `carts doctor` reports issues, resolve them before proceeding.
+
 ## Language Support
 
 CARTS supports:

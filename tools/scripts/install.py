@@ -7,25 +7,17 @@ from typing import Optional
 
 import typer
 
-from carts_styles import (
-    print_error,
-    print_header,
-    print_info,
-    print_step,
-    print_success,
-    print_warning,
+from sniff import EnvironmentActivator
+from sniff import Colors, console, print_error, print_header, print_info, print_step, print_success, print_warning
+from scripts.platform import get_config
+from scripts import (
+    run_subprocess as _run_subprocess,
+    ARTS_NESTED_SUBMODULES,
+    POLYGEIST_NESTED_SUBMODULES,
+    SUBMODULE_ARTS,
+    SUBMODULE_BENCHMARKS,
+    SUBMODULE_POLYGEIST,
 )
-from scripts.config import get_config
-from scripts.deps import (
-    check_all_deps,
-    install_missing_deps,
-    print_dep_report,
-)
-from scripts.run import run_subprocess as _run_subprocess
-
-
-ARTS_REQUIRED_NESTED_SUBMODULES = ["third_party/hwloc"]
-POLYGEIST_REQUIRED_NESTED_SUBMODULES = ["llvm-project"]
 
 
 # ============================================================================
@@ -120,7 +112,7 @@ def _setup_project() -> bool:
                 "git", "submodule", "update", "--init",
                 "--depth", "1", "--single-branch",
                 "--recommend-shallow", "--jobs", "4",
-                "external/arts", "external/Polygeist", "external/carts-benchmarks",
+                SUBMODULE_ARTS, SUBMODULE_POLYGEIST, SUBMODULE_BENCHMARKS,
             ],
             cwd=project_root,
             realtime=True,
@@ -130,7 +122,7 @@ def _setup_project() -> bool:
             [
                 "git", "submodule", "sync", "--recursive",
             ],
-            cwd=project_root / "external" / "arts",
+            cwd=project_root / SUBMODULE_ARTS,
             realtime=True,
             check=True,
         )
@@ -139,9 +131,9 @@ def _setup_project() -> bool:
                 "git", "submodule", "update", "--init",
                 "--depth", "1", "--single-branch",
                 "--recommend-shallow", "--jobs", "4",
-                *ARTS_REQUIRED_NESTED_SUBMODULES,
+                *ARTS_NESTED_SUBMODULES,
             ],
-            cwd=project_root / "external" / "arts",
+            cwd=project_root / SUBMODULE_ARTS,
             realtime=True,
             check=True,
         )
@@ -149,7 +141,7 @@ def _setup_project() -> bool:
             [
                 "git", "submodule", "sync", "--recursive",
             ],
-            cwd=project_root / "external" / "Polygeist",
+            cwd=project_root / SUBMODULE_POLYGEIST,
             realtime=True,
             check=True,
         )
@@ -158,9 +150,9 @@ def _setup_project() -> bool:
                 "git", "submodule", "update", "--init",
                 "--depth", "1", "--single-branch",
                 "--recommend-shallow", "--jobs", "4",
-                *POLYGEIST_REQUIRED_NESTED_SUBMODULES,
+                *POLYGEIST_NESTED_SUBMODULES,
             ],
-            cwd=project_root / "external" / "Polygeist",
+            cwd=project_root / SUBMODULE_POLYGEIST,
             realtime=True,
             check=True,
         )
@@ -181,7 +173,7 @@ def _build_project(cc: Optional[str] = None, cxx: Optional[str] = None) -> bool:
     print_info("Following correct build order:")
 
     # Add carts to PATH for this session
-    print_step("Adding CARTS to PATH...", step_num=0, total=5)
+    print_step("Adding CARTS to PATH...", step_num=0, total=4)
     current_path = os.environ.get("PATH", "")
     if str(carts_script_dir) not in current_path:
         os.environ["PATH"] = f"{carts_script_dir}:{current_path}"
@@ -203,7 +195,7 @@ def _build_project(cc: Optional[str] = None, cxx: Optional[str] = None) -> bool:
     ]
 
     for step_num, description, cmd in build_steps:
-        print_step(description, step_num=step_num, total=5)
+        print_step(description, step_num=step_num, total=4)
         try:
             _run_subprocess(cmd, cwd=project_root, realtime=True, check=True)
         except subprocess.CalledProcessError:
@@ -219,34 +211,35 @@ def _install_python_envs() -> bool:
     config = get_config()
     project_root = config.carts_dir
     tools_dir = project_root / "tools"
-    benchmarks_scripts_dir = project_root / "external" / "carts-benchmarks" / "scripts"
+    benchmarks_scripts_dir = project_root / SUBMODULE_BENCHMARKS / "scripts"
     shared_python: Optional[Path] = None
 
-    if not _check_command_exists("poetry"):
-        print_error("Poetry is required to bootstrap Python environments.")
-        print_info("Install Poetry and run `poetry -C tools install --no-root`")
-        return False
+    venv_python = tools_dir / ".venv" / "bin" / "python"
 
-    if not (tools_dir / "pyproject.toml").exists():
-        print_error(f"Missing pyproject.toml in {tools_dir}")
-        return False
+    if _check_command_exists("poetry") and (tools_dir / "pyproject.toml").exists():
+        print_info("Installing shared Python dependencies...")
+        try:
+            _run_subprocess(
+                ["poetry", "install", "--no-root"],
+                cwd=tools_dir,
+                env={"POETRY_VIRTUALENVS_IN_PROJECT": "true"},
+                realtime=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError:
+            print_error("Failed to install dependencies for shared environment")
+            return False
 
-    print_info("Installing shared Python dependencies...")
-    try:
-        _run_subprocess(
-            ["poetry", "install", "--no-root"],
-            cwd=tools_dir,
-            env={"POETRY_VIRTUALENVS_IN_PROJECT": "true"},
-            realtime=True,
-            check=True,
-        )
-    except subprocess.CalledProcessError:
-        print_error("Failed to install dependencies for shared environment")
-        return False
-
-    shared_python = _get_poetry_python(tools_dir)
-    if shared_python is None:
-        print_error("Poetry environment interpreter not found after install")
+        shared_python = _get_poetry_python(tools_dir)
+        if shared_python is None:
+            print_error("Poetry environment interpreter not found after install")
+            return False
+    elif venv_python.exists():
+        # Venv already bootstrapped by the wrapper script (pip fallback)
+        shared_python = venv_python
+        print_info("Using existing Python environment (bootstrapped by wrapper)")
+    else:
+        print_error("No Python environment found. Run 'sniff tools/carts_cli.py install' or './tools/carts install' to bootstrap it.")
         return False
 
     print_info("Verifying shared environment dependencies...")
@@ -313,24 +306,24 @@ def install(
     """Install CARTS: check dependencies, init submodules, and build everything."""
     print_header("CARTS Install")
 
-    # 1. Dependency checking / installation
+    # 1. Dependency checking via sniff EnvironmentActivator
     if not skip_deps:
-        results = check_all_deps()
-        all_ok = print_dep_report(results)
-
-        if check:
-            raise typer.Exit(0 if all_ok else 1)
-
-        if not all_ok:
-            installed = install_missing_deps(results, auto=auto)
-            if installed:
-                results = check_all_deps()
-                all_ok = print_dep_report(results)
-            if not all_ok:
-                print_error(
-                    "Required dependencies are still missing. Cannot proceed."
-                )
-                raise typer.Exit(1)
+        try:
+            activator = EnvironmentActivator.from_cwd()
+            result = activator.activate()
+            if result.missing_tools:
+                missing = ", ".join(result.missing_tools)
+                console.print(f"\n[{Colors.ERROR}]Missing tools: {missing}[/{Colors.ERROR}]")
+                console.print(f"Run [{Colors.HIGHLIGHT}]carts doctor[/{Colors.HIGHLIGHT}] for detailed diagnostics.\n")
+                if check or not auto:
+                    raise typer.Exit(1)
+            elif check:
+                print_success("All dependencies satisfied")
+                raise typer.Exit(0)
+        except FileNotFoundError:
+            print_warning("No .sniff.toml found — skipping dependency validation")
+            if check:
+                raise typer.Exit(0)
     elif check:
         print_warning("--check and --skip-deps are mutually exclusive")
         raise typer.Exit(1)

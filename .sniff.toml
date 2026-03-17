@@ -1,0 +1,37 @@
+# CARTS environment configuration
+#
+# Quick start (recommended):
+#   pip install git+https://github.com/randreshg/sniff.git
+#   sniff tools/carts_cli.py install
+#
+# Alternative (no sniff required):
+#   ./tools/carts install
+
+[project]
+name = "carts"
+description = "Compiler for Asynchronous Runtime Systems"
+
+[tools]
+cmake       = { command = "cmake",        version = ">=3.20" }
+ninja       = { command = "ninja" }
+make        = { command = "make" }
+git         = { command = "git" }
+clang       = { command = "clang",        version = ">=14" }
+"clang++"   = { command = "clang++" }
+python3     = { command = "python3",      version = ">=3.10" }
+gcc         = { command = "gcc",          optional = true }
+clang-format = { command = "clang-format", optional = true }
+lit         = { command = "lit",          optional = true }
+
+[env]
+CARTS_DIR = "{project}"
+LLVM_SYMBOLIZER_PATH = "{project}/.install/llvm/bin/llvm-symbolizer"
+
+[paths]
+prepend = [
+    "{project}/tools",
+    "{project}/.install/carts/bin",
+    "{project}/.install/llvm/bin",
+    "{project}/.install/arts/bin",
+    "{project}/.install/polygeist/bin",
+]

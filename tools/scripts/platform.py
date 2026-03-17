@@ -1,107 +1,95 @@
-"""Platform configuration and global state for CARTS CLI."""
+"""CARTS platform configuration and project path detection.
 
-from dataclasses import dataclass, field
-from enum import Enum
-from pathlib import Path
-from typing import List, Optional
-import platform as sys_platform
+All environment setup (PATH, env vars, tool versions) is handled by sniff's
+auto_activate mechanism via ``.sniff.toml``.  This module only provides:
+
+* Project path detection (CARTS_DIR, install dirs)
+* CARTS-specific compiler/linker flag construction
+* Tool resolution helpers
+
+Usage::
+
+    from scripts.platform import CartsConfig, get_config
+
+    config = get_config()
+    config.get_llvm_tool("clang")
+"""
+
+from __future__ import annotations
+
 import os
+import shutil
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
 
-
-# ============================================================================
-# Constants and Enums
-# ============================================================================
-
-
-class Platform(Enum):
-    MACOS = "macos"
-    LINUX = "linux"
-    WINDOWS = "windows"
-
-
-# ============================================================================
-# Platform Configuration
-# ============================================================================
+from sniff import PlatformDetector, PlatformInfo
 
 
 @dataclass
-class PlatformConfig:
-    """Platform-specific configuration for CARTS compilation.
+class CartsConfig:
+    """CARTS project paths and compiler flags.
 
-    Auto-detects platform (macOS/Linux/Windows) and configures:
+    Auto-detects platform via ``sniff.PlatformDetector`` and configures:
     - Include paths for system headers and LLVM/ARTS libraries
     - Sysroot flags for cross-compilation support
     - Linker selection (ld64.lld on macOS, ld.lld on Linux)
     - Library paths and runtime dependencies
-
-    Usage: config = PlatformConfig.detect()
     """
 
-    # Platform identification
-    platform: Platform
-    arch: str  # e.g., "arm64", "x86_64"
+    # Platform (from sniff)
+    info: PlatformInfo
 
-    # Installation directories
-    carts_dir: Path              # Root CARTS source directory
-    install_dir: Path            # .install directory
-    llvm_install_dir: Path       # LLVM/Clang installation
-    polygeist_install_dir: Path  # Polygeist (C-to-MLIR) installation
-    arts_install_dir: Path       # ARTS runtime installation
-    carts_install_dir: Path      # CARTS tools installation
+    # Project directories
+    carts_dir: Path
+    install_dir: Path
+    llvm_install_dir: Path
+    polygeist_install_dir: Path
+    arts_install_dir: Path
+    carts_install_dir: Path
 
     # Include/library paths (auto-detected)
     llvm_include_path: Path = field(default_factory=Path)
     llvm_lib_path: Path = field(default_factory=Path)
     llvm_cxx_include_path: Path = field(default_factory=Path)
-    system_include_path: Optional[Path] = None
-    system_cxx_include_path: Optional[Path] = None
-    macos_sdk_path: Optional[Path] = None
+    macos_sdk_path: Path | None = None
 
-    # Compiler flags (populated by _setup_*_flags methods)
-    include_flags: List[str] = field(default_factory=list)        # -I flags
-    cgeist_sysroot_flags: List[str] = field(
-        default_factory=list)  # --sysroot for cgeist
-    clang_sysroot_flags: List[str] = field(
-        default_factory=list)  # -isysroot for clang
-    clang_library_flags: List[str] = field(
-        default_factory=list)  # -L flags for clang
-    compile_library_flags: List[str] = field(
-        default_factory=list)  # -L flags for final link
-    clang_libraries: List[str] = field(
-        default_factory=list)      # -l flags for clang
-    compile_libraries: List[str] = field(
-        default_factory=list)    # -l flags for final link
-    compile_flags: List[str] = field(
-        default_factory=list)        # General compile flags
-    runtime_flags: List[str] = field(
-        default_factory=list)        # LLVM runtime flags (-stdlib, -rtlib, etc.)
-    linker_flags: List[str] = field(
-        default_factory=list)         # Linker-specific flags
-    linker_path: Optional[Path] = None  # Path to LLD linker
-    linker_type: Optional[str] = None   # "lld" or "lld-link"
-    gcc_path: Optional[Path] = None             # Path to gcc binary
-    gcc_install_prefix: Optional[Path] = None   # GCC toolchain root (--gcc-toolchain)
-    gcc_lib_path: Optional[Path] = None         # Directory containing libstdc++.so
+    # Compiler flags
+    include_flags: list[str] = field(default_factory=list)
+    cgeist_sysroot_flags: list[str] = field(default_factory=list)
+    clang_sysroot_flags: list[str] = field(default_factory=list)
+    clang_library_flags: list[str] = field(default_factory=list)
+    compile_library_flags: list[str] = field(default_factory=list)
+    clang_libraries: list[str] = field(default_factory=list)
+    compile_libraries: list[str] = field(default_factory=list)
+    compile_flags: list[str] = field(default_factory=list)
+    runtime_flags: list[str] = field(default_factory=list)
+    linker_flags: list[str] = field(default_factory=list)
+    linker_path: Path | None = None
+    gcc_install_prefix: Path | None = None
+    gcc_lib_path: Path | None = None
+
+    # ------------------------------------------------------------------
+    # Factory
+    # ------------------------------------------------------------------
 
     @classmethod
-    def detect(cls, script_dir: Optional[Path] = None) -> "PlatformConfig":
-        """Auto-detect platform and configure paths."""
+    def detect(cls, script_dir: Path | None = None) -> CartsConfig:
+        """Auto-detect platform and configure paths/flags."""
         if script_dir is None:
             script_dir = Path(__file__).parent.parent.resolve()
 
-        # Determine CARTS_DIR
+        info = PlatformDetector().detect()
+
         if ".install/carts/bin" in str(script_dir):
-            # Running from installed location
             carts_dir = script_dir.parent.parent.parent
         else:
-            # Running from source location (tools/)
             carts_dir = script_dir.parent
 
         install_dir = carts_dir / ".install"
 
         config = cls(
-            platform=cls._detect_platform(),
-            arch=sys_platform.machine() or "unknown",
+            info=info,
             carts_dir=carts_dir,
             install_dir=install_dir,
             llvm_install_dir=install_dir / "llvm",
@@ -117,56 +105,46 @@ class PlatformConfig:
 
         return config
 
-    @staticmethod
-    def _detect_platform() -> Platform:
-        """Detect the current platform."""
-        system = sys_platform.system().lower()
-        if system == "darwin":
-            return Platform.MACOS
-        elif system == "linux":
-            return Platform.LINUX
-        elif system == "windows" or "msys" in os.environ.get("OSTYPE", "").lower():
-            return Platform.WINDOWS
-        else:
-            raise RuntimeError(f"Unsupported platform: {system}")
+    # ------------------------------------------------------------------
+    # Tool resolution
+    # ------------------------------------------------------------------
 
     def _resolve_tool(self, install_dir: Path, name: str, *,
                       fallback_to_system: bool = False) -> Path:
-        """Resolve a tool binary path. Returns expected path even if missing."""
         installed = install_dir / "bin" / name
         if installed.is_file() or not fallback_to_system:
             return installed
-        import shutil
         system_path = shutil.which(name)
         return Path(system_path) if system_path else installed
 
     def get_llvm_tool(self, name: str, *, fallback_to_system: bool = False) -> Path:
-        """Resolve LLVM tool (clang, llvm-lit, FileCheck, etc.)."""
         return self._resolve_tool(self.llvm_install_dir, name,
                                   fallback_to_system=fallback_to_system)
 
     def get_polygeist_tool(self, name: str) -> Path:
-        """Resolve Polygeist tool (cgeist)."""
         return self._resolve_tool(self.polygeist_install_dir, name)
 
     def get_carts_tool(self, name: str) -> Path:
-        """Resolve CARTS tool (carts-compile)."""
         return self._resolve_tool(self.carts_install_dir, name)
+
+    # ------------------------------------------------------------------
+    # Computed properties
+    # ------------------------------------------------------------------
 
     @property
     def clang_version_dir(self) -> Path:
-        """Auto-detected clang version dir (e.g., .install/llvm/lib/clang/18)."""
         clang_lib = self.llvm_install_dir / "lib" / "clang"
         versions = sorted(clang_lib.iterdir()) if clang_lib.is_dir() else []
         return versions[-1] if versions else clang_lib / "18"
 
-    def _setup_paths(self) -> None:
-        """Setup include and library paths."""
-        self.llvm_include_path = self.clang_version_dir / "include"
-        self.llvm_cxx_include_path = self.llvm_install_dir / \
-            "include" / "c++" / "v1"
+    # ------------------------------------------------------------------
+    # Path and flag setup
+    # ------------------------------------------------------------------
 
-        # Detect LLVM library path
+    def _setup_paths(self) -> None:
+        self.llvm_include_path = self.clang_version_dir / "include"
+        self.llvm_cxx_include_path = self.llvm_install_dir / "include" / "c++" / "v1"
+
         aarch64_path = self.llvm_install_dir / "lib" / "aarch64-unknown-linux-gnu"
         x86_64_path = self.llvm_install_dir / "lib" / "x86_64-unknown-linux-gnu"
 
@@ -177,48 +155,37 @@ class PlatformConfig:
         else:
             self.llvm_lib_path = self.llvm_install_dir / "lib"
 
-        # macOS SDK path
         self.macos_sdk_path = Path(
             "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")
 
     def _setup_platform_flags(self) -> None:
-        """Setup platform-specific flags."""
-        if self.platform == Platform.MACOS:
+        if self.info.is_macos:
             self._setup_macos_flags()
-        elif self.platform == Platform.LINUX:
+        elif self.info.is_linux:
             self._setup_linux_flags()
-        elif self.platform == Platform.WINDOWS:
+        elif self.info.is_windows:
             self._setup_windows_flags()
 
     def _setup_macos_flags(self) -> None:
-        """Setup macOS-specific flags."""
         if self.macos_sdk_path and self.macos_sdk_path.exists():
-            self.system_include_path = self.macos_sdk_path / "usr" / "include"
-            self.system_cxx_include_path = self.macos_sdk_path / \
-                "usr" / "include" / "c++" / "v1"
+            sys_include = self.macos_sdk_path / "usr" / "include"
+            sys_cxx_include = sys_include / "c++" / "v1"
 
             self.include_flags.extend([
-                f"-I{self.system_include_path}",
-                f"-I{self.system_cxx_include_path}",
+                f"-I{sys_include}",
+                f"-I{sys_cxx_include}",
             ])
 
             self.cgeist_sysroot_flags = ["--sysroot", str(self.macos_sdk_path)]
             self.clang_sysroot_flags = ["-isysroot", str(self.macos_sdk_path)]
 
-        # No-PIE flags for x86_64
-        if self.arch == "x86_64":
+        if self.info.arch == "x86_64":
             self.compile_flags.extend(["-fno-pie", "-Wl,-no_pie"])
 
     def _setup_linux_flags(self) -> None:
-        """Setup Linux-specific flags.
-
-        Uses LLVM's libc++/compiler-rt/libunwind instead of system libstdc++/libgcc.
-        System C headers (/usr/include) are still used from glibc.
-        """
-        self.system_include_path = Path("/usr/include")
         self._detect_gcc()
 
-        self.include_flags.append(f"-I{self.system_include_path}")
+        self.include_flags.append("-I/usr/include")
         self.compile_flags.append(f"-I{self.llvm_cxx_include_path}")
 
         lib_flags = ["-L/usr/lib64", "-L/usr/lib"]
@@ -228,26 +195,18 @@ class PlatformConfig:
         self.clang_library_flags.extend(lib_flags)
         self.compile_library_flags.extend(lib_flags)
         self.clang_libraries.extend(["-lpthread", "-lrt"])
-        self.compile_libraries.extend([
-            "-lpthread", "-lrt", "-ldl",
-        ])
+        self.compile_libraries.extend(["-lpthread", "-lrt", "-ldl"])
         self.compile_flags.extend(["-fno-pie", "-no-pie"])
         self.runtime_flags.extend([
             "-stdlib=libc++", "-rtlib=compiler-rt", "--unwindlib=libunwind",
         ])
 
     def _detect_gcc(self) -> None:
-        """Detect GCC binary, install prefix, and library path."""
-        import shutil
-        import subprocess
-
         gcc = shutil.which("gcc")
         if not gcc:
             return
-        self.gcc_path = Path(gcc)
 
         try:
-            # Install prefix: e.g. /usr or /opt/gcc/12.2.0
             result = subprocess.run(
                 [gcc, "-print-search-dirs"],
                 capture_output=True, text=True, timeout=5,
@@ -261,7 +220,6 @@ class PlatformConfig:
                             self.gcc_install_prefix = Path(install_dir[:idx])
                         break
 
-            # Library path: directory containing libstdc++.so
             result = subprocess.run(
                 [gcc, "-print-file-name=libstdc++.so"],
                 capture_output=True, text=True, timeout=5,
@@ -273,7 +231,6 @@ class PlatformConfig:
             pass
 
     def _setup_windows_flags(self) -> None:
-        """Setup Windows-specific flags."""
         sdk_dir = os.environ.get(
             "WindowsSdkDir", os.environ.get("WINDOWSSDKDIR", ""))
         sdk_version = os.environ.get(
@@ -307,8 +264,6 @@ class PlatformConfig:
         self.compile_library_flags.extend(self.clang_library_flags)
 
     def _setup_common_flags(self) -> None:
-        """Setup common flags for all platforms."""
-        # Include flags
         self.include_flags.insert(0, f"-I{self.llvm_include_path}")
         self.include_flags.extend([
             f"-I{self.carts_install_dir}/include",
@@ -316,7 +271,6 @@ class PlatformConfig:
             f"-I{self.llvm_install_dir}/include",
         ])
 
-        # Library flags
         base_lib_flags = [
             f"-L{self.carts_install_dir}/lib",
             f"-L{self.carts_install_dir}/lib64",
@@ -329,32 +283,29 @@ class PlatformConfig:
         self.clang_library_flags = base_lib_flags + self.clang_library_flags
         self.compile_library_flags = base_lib_flags + self.compile_library_flags
 
-        # Libraries
         base_libs = ["-lc++", "-lc++abi", "-lunwind"]
         self.clang_libraries = base_libs + self.clang_libraries
         self.compile_libraries = [
             "-lcartstest", "-lcartsbenchmarks", "-larts", "-lomp",
         ] + base_libs + [lib for lib in self.compile_libraries if lib not in base_libs]
 
-        # Compile flags — include LLVM runtime flags (-stdlib=libc++ etc.)
         self.compile_flags.insert(0, "-O3")
         self.compile_flags.extend(self.runtime_flags)
 
     def _detect_linker(self) -> None:
-        """Detect and configure the appropriate linker."""
         linker_candidates = []
 
-        if self.platform == Platform.MACOS:
+        if self.info.is_macos:
             linker_candidates = [
                 self.get_llvm_tool("ld64.lld"),
                 self.get_llvm_tool("lld"),
             ]
-        elif self.platform == Platform.LINUX:
+        elif self.info.is_linux:
             linker_candidates = [
                 self.get_llvm_tool("ld.lld"),
                 self.get_llvm_tool("lld"),
             ]
-        elif self.platform == Platform.WINDOWS:
+        elif self.info.is_windows:
             linker_candidates = [
                 self.get_llvm_tool("lld-link.exe"),
                 self.get_llvm_tool("lld-link"),
@@ -363,19 +314,17 @@ class PlatformConfig:
         for candidate in linker_candidates:
             if candidate.is_file():
                 self.linker_path = candidate
-                self.linker_type = "lld-link" if "lld-link" in candidate.name else "lld"
                 break
 
         if self.linker_path:
-            if self.platform == Platform.WINDOWS:
+            if self.info.is_windows:
                 self.linker_flags.extend(
                     ["-fuse-ld=lld", f"--ld-path={self.linker_path}"])
             else:
                 self.linker_flags.append(f"--ld-path={self.linker_path}")
 
-        # Add rpaths for ELF/Mach-O targets
-        if self.platform in (Platform.LINUX, Platform.MACOS):
-            if self.platform == Platform.LINUX:
+        if self.info.is_linux or self.info.is_macos:
+            if self.info.is_linux:
                 self.linker_flags.append("-Wl,--disable-new-dtags")
 
             rpaths = [
@@ -388,7 +337,7 @@ class PlatformConfig:
                 self.llvm_lib_path,
             ]
 
-            existing = set()
+            existing: set[str] = set()
             for rp in rpaths:
                 rpath_flag = f"-Wl,-rpath,{rp}"
                 if rpath_flag not in existing:
@@ -400,24 +349,22 @@ class PlatformConfig:
 # Global State
 # ============================================================================
 
-_config: Optional[PlatformConfig] = None
+_config: CartsConfig | None = None
 _verbose: bool = False
 
 
-def get_config() -> PlatformConfig:
-    """Get or create the platform configuration."""
+def get_config() -> CartsConfig:
+    """Get or create the platform configuration (singleton)."""
     global _config
     if _config is None:
-        _config = PlatformConfig.detect()
+        _config = CartsConfig.detect()
     return _config
 
 
 def set_verbose(verbose: bool) -> None:
-    """Set verbose mode."""
     global _verbose
     _verbose = verbose
 
 
 def is_verbose() -> bool:
-    """Check if verbose mode is enabled."""
     return _verbose
