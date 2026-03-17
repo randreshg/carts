@@ -25,19 +25,34 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from carts_styles import (
+from sniff import (
     Colors,
+    Symbols,
     console,
     print_debug,
     print_error,
     print_info,
     print_success,
     print_warning,
-    status_symbol,
-    VERSION,
 )
-from scripts.arts_config import parse_arts_cfg
-from scripts.config import get_config
+from scripts.arts_config import (
+    parse_arts_cfg,
+    KEY_LAUNCHER,
+    KEY_NODE_COUNT,
+    KEY_NODES,
+    KEY_WORKER_THREADS,
+)
+from scripts.platform import get_config
+from scripts import (
+    ARTS_CONFIG_FILENAME,
+    format_failed,
+    format_passed,
+    format_skipped,
+    status_symbol,
+)
+
+VERSION = "0.1.0"
+
 
 
 # ============================================================================
@@ -103,7 +118,7 @@ def _get_examples_dir() -> Path:
 def _get_default_arts_config() -> Path:
     """Get the default ARTS config file path."""
     config = get_config()
-    return config.carts_dir / "tests" / "examples" / "arts.cfg"
+    return config.carts_dir / "tests" / "examples" / ARTS_CONFIG_FILENAME
 
 
 def discover_examples(examples_dir: Path) -> List[ExampleInfo]:
@@ -125,7 +140,7 @@ def discover_examples(examples_dir: Path) -> List[ExampleInfo]:
                 if source_files:
                     name = f"{prefix}{item.name}" if prefix else item.name
                     source_file = source_files[0]  # Take first source file
-                    has_config = (item / "arts.cfg").is_file()
+                    has_config = (item / ARTS_CONFIG_FILENAME).is_file()
                     args = []
 
                     examples.append(ExampleInfo(
@@ -297,11 +312,11 @@ def run_example_binary(
 
             # Print output to terminal if trace is enabled
             if trace and output:
-                console.print(f"\n[dim]{'─' * 60}[/dim]")
-                console.print(f"[bold cyan]Output: {executable.name}[/bold cyan]")
-                console.print(f"[dim]{'─' * 60}[/dim]")
+                console.print(f"\n[{Colors.DEBUG}]{'─' * 60}[/{Colors.DEBUG}]")
+                console.print(f"[{Colors.HEADER}]Output: {executable.name}[/{Colors.HEADER}]")
+                console.print(f"[{Colors.DEBUG}]{'─' * 60}[/{Colors.DEBUG}]")
                 console.print(output.strip())
-                console.print(f"[dim]{'─' * 60}[/dim]\n")
+                console.print(f"[{Colors.DEBUG}]{'─' * 60}[/{Colors.DEBUG}]\n")
 
             return process.returncode == 0, duration, process.returncode, output
 
@@ -430,8 +445,8 @@ def create_live_table(
     in_progress: Optional[str] = None,
 ) -> Table:
     """Create a live-updating table showing example progress."""
-    table = Table(box=box.ROUNDED, show_header=True, header_style="bold")
-    table.add_column("Example", style="cyan", width=28)
+    table = Table(box=box.ROUNDED, show_header=True, header_style=Colors.HIGHLIGHT)
+    table.add_column("Example", style=Colors.INFO, width=28)
     table.add_column("Build", justify="center", width=12)
     table.add_column("Run", justify="center", width=12)
     table.add_column("Note", width=40)
@@ -449,10 +464,10 @@ def create_live_table(
             table.add_row(name, build_col, run_col, note_col)
         elif name == in_progress:
             table.add_row(
-                f"[bold]{name}[/]", "[yellow]\u23f3...[/]", "[dim]-[/]", "[dim]-[/]")
+                f"[{Colors.HIGHLIGHT}]{name}[/{Colors.HIGHLIGHT}]", f"[{Colors.WARNING}]{Symbols.RUNNING}...[/{Colors.WARNING}]", f"[{Colors.DEBUG}]-[/{Colors.DEBUG}]", f"[{Colors.DEBUG}]-[/{Colors.DEBUG}]")
         else:
-            table.add_row(f"[dim]{name}[/]", "[dim]-[/]",
-                          "[dim]-[/]", "[dim]-[/]")
+            table.add_row(f"[{Colors.DEBUG}]{name}[/{Colors.DEBUG}]", f"[{Colors.DEBUG}]-[/{Colors.DEBUG}]",
+                          f"[{Colors.DEBUG}]-[/{Colors.DEBUG}]", f"[{Colors.DEBUG}]-[/{Colors.DEBUG}]")
 
     return table
 
@@ -469,10 +484,10 @@ def create_live_summary(
     pending = total - len(results)
 
     text = Text()
-    text.append(f"\u2713 {passed} passed  ", style="green")
-    text.append(f"\u2717 {failed} failed  ", style="red")
-    text.append(f"\u25cb {pending} pending  ", style="dim")
-    text.append(f"\u23f1 {elapsed:.1f}s", style="dim")
+    text.append(f"{Symbols.PASS} {passed} passed  ", style=Colors.SUCCESS)
+    text.append(f"{Symbols.FAIL} {failed} failed  ", style=Colors.ERROR)
+    text.append(f"{Symbols.SKIP} {pending} pending  ", style=Colors.DEBUG)
+    text.append(f"{Symbols.TIMEOUT} {elapsed:.1f}s", style=Colors.DEBUG)
     return text
 
 
@@ -496,12 +511,12 @@ def _create_summary_panel(results: List[ExampleResult], duration: float) -> Pane
     skipped = sum(1 for r in results if r.run_status == "SKIP")
 
     content = (
-        f"[green]\u2713 {passed}[/] passed  "
-        f"[red]\u2717 {failed}[/] failed  "
-        f"[dim]\u25cb {skipped}[/] skipped  "
-        f"[cyan]\u23f1 {duration:.1f}s[/]"
+        f"{format_passed(passed)}  "
+        f"{format_failed(failed)}  "
+        f"{format_skipped(skipped)}  "
+        f"[{Colors.INFO}]{Symbols.TIMEOUT} {duration:.1f}s[/{Colors.INFO}]"
     )
-    return Panel(content, title="Summary", border_style="blue")
+    return Panel(content, title="Summary", border_style=Colors.STEP)
 
 
 # ============================================================================
@@ -533,7 +548,7 @@ def list_examples(
         raise typer.Exit(0)
 
     console.print(
-        f"\n[bold]Available CARTS Examples[/bold] ({len(examples)} total)\n")
+        f"\n[{Colors.HIGHLIGHT}]Available CARTS Examples[/{Colors.HIGHLIGHT}] ({len(examples)} total)\n")
 
     # Group by parent directory
     grouped: Dict[str, List[ExampleInfo]] = {}
@@ -556,7 +571,7 @@ def list_examples(
 
     # Print grouped
     for group in sorted(k for k in grouped.keys() if k):
-        console.print(f"[cyan]{group}:[/cyan]")
+        console.print(f"[{Colors.INFO}]{group}:[/{Colors.INFO}]")
         for ex in grouped[group]:
             if verbose:
                 args_str = " ".join(ex.args) if ex.args else "(none)"
@@ -645,7 +660,7 @@ def run(
     failed = 0
 
     # Print header
-    console.print(f"\n[bold]CARTS Examples Runner v{VERSION}[/]")
+    console.print(f"\n[{Colors.HIGHLIGHT}]CARTS Examples Runner v{VERSION}[/{Colors.HIGHLIGHT}]")
     console.print("\u2501" * 30)
 
     # Show effective ARTS configuration
@@ -661,8 +676,8 @@ def run(
             # Multiple examples: note that each may use its own local config
             effective_config = default_arts_config
             config_source = "default (per-example local configs may override)"
-        elif (sample_example.path / "arts.cfg").exists():
-            effective_config = sample_example.path / "arts.cfg"
+        elif (sample_example.path / ARTS_CONFIG_FILENAME).exists():
+            effective_config = sample_example.path / ARTS_CONFIG_FILENAME
             config_source = "local"
         else:
             effective_config = default_arts_config
@@ -670,10 +685,10 @@ def run(
 
         # Parse ARTS config values
         cfg = parse_arts_cfg(effective_config)
-        arts_threads = int(cfg.get("worker_threads", "1"))
-        arts_nodes = int(cfg.get("node_count", "1"))
-        arts_launcher = cfg.get("launcher", "local")
-        arts_nodes_list = [n.strip() for n in cfg.get("nodes", "localhost").split(",") if n.strip()]
+        arts_threads = int(cfg.get(KEY_WORKER_THREADS, "1"))
+        arts_nodes = int(cfg.get(KEY_NODE_COUNT, "1"))
+        arts_launcher = cfg.get(KEY_LAUNCHER, "local")
+        arts_nodes_list = [n.strip() for n in cfg.get(KEY_NODES, "localhost").split(",") if n.strip()]
 
         arts_config_items = [f"arts-threads={arts_threads}",
                              f"arts-nodes={arts_nodes}",
@@ -686,7 +701,7 @@ def run(
             arts_config_items.append(f"arts-node-list=[{node_display}]")
 
         console.print(f"ARTS Config ({config_source}): {', '.join(arts_config_items)}")
-        console.print(f"Config path: [dim]{effective_config}[/dim]")
+        console.print(f"Config path: [{Colors.DEBUG}]{effective_config}[/{Colors.DEBUG}]")
 
     console.print(f"Examples: {len(examples)}\n")
 
@@ -708,7 +723,7 @@ def run(
             # Use explicit --arts-config, else per-example local, else global default
             effective_cfg = arts_config
             if not effective_cfg:
-                local_cfg = example.path / "arts.cfg"
+                local_cfg = example.path / ARTS_CONFIG_FILENAME
                 effective_cfg = local_cfg if local_cfg.is_file() else default_arts_config
 
             result = run_single_example(

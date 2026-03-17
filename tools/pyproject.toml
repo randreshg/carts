@@ -6,13 +6,11 @@ authors = ["CARTS Team"]
 package-mode = false
 
 [tool.poetry.dependencies]
-python = "^3.9"
+python = "^3.10"
 typer = "^0.15.0"
 rich = "^13.7.0"
 openpyxl = "^3.1.5"
-
-[tool.poetry.scripts]
-carts = "carts_cli:app"
+sniff = {git = "https://github.com/randreshg/sniff.git", branch = "main", extras = ["cli"]}
 
 [build-system]
 requires = ["poetry-core"]

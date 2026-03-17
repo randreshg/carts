@@ -5,12 +5,18 @@ from typing import Dict, List, Optional
 
 import typer
 
-from carts_styles import print_error, print_info, print_step, print_success, print_warning
-from scripts.config import get_config
-from scripts.run import run_subprocess
-
-
-ARTS_REQUIRED_NESTED_SUBMODULES = ["third_party/hwloc"]
+from sniff import print_error, print_info, print_step, print_success, print_warning
+from scripts.platform import get_config
+from scripts import (
+    run_subprocess,
+    ARTS_NESTED_SUBMODULES,
+    MAKE_TARGET_ARTS,
+    MAKE_TARGET_BUILD,
+    MAKE_TARGET_POLYGEIST,
+    SUBMODULE_ARTS,
+    SUBMODULE_BENCHMARKS,
+    SUBMODULE_POLYGEIST,
+)
 
 
 def _get_repo_hash(repo_dir: Path) -> Optional[str]:
@@ -91,7 +97,7 @@ def _get_pinned_submodule_hash(carts_dir: Path, submodule: str) -> Optional[str]
 
 def _update_submodule_checkout(carts_dir: Path, submodule: str) -> None:
     """Update a top-level submodule and only the nested pieces required by v2."""
-    recursive = submodule != "external/arts"
+    recursive = submodule != SUBMODULE_ARTS
     args = ["git", "submodule", "update", "--init"]
     if recursive:
         args.append("--recursive")
@@ -102,7 +108,7 @@ def _update_submodule_checkout(carts_dir: Path, submodule: str) -> None:
         f"Failed to update {submodule}",
     )
 
-    if submodule != "external/arts":
+    if submodule != SUBMODULE_ARTS:
         return
 
     arts_dir = carts_dir / submodule
@@ -113,7 +119,7 @@ def _update_submodule_checkout(carts_dir: Path, submodule: str) -> None:
     )
     _run_git(
         arts_dir,
-        ["git", "submodule", "update", "--init", *ARTS_REQUIRED_NESTED_SUBMODULES],
+        ["git", "submodule", "update", "--init", *ARTS_NESTED_SUBMODULES],
         "Failed to update required ARTS nested submodules",
     )
 
@@ -137,11 +143,11 @@ def update(
 
     submodules: List[str] = []
     if update_all or arts:
-        submodules.append("external/arts")
+        submodules.append(SUBMODULE_ARTS)
     if update_all or polygeist:
-        submodules.append("external/Polygeist")
+        submodules.append(SUBMODULE_POLYGEIST)
     if update_all or benchmarks:
-        submodules.append("external/carts-benchmarks")
+        submodules.append(SUBMODULE_BENCHMARKS)
 
     if force:
         print_warning("Force mode enabled: discarding local changes before update")
@@ -222,15 +228,15 @@ def update(
 
     # Build requested/updated components so binaries are always in sync
     # with the checked-out commits after update.
-    polygeist_changed = "external/Polygeist" in changed_submodules
-    arts_changed = "external/arts" in changed_submodules
-    selected_polygeist = "external/Polygeist" in submodules
-    selected_arts = "external/arts" in submodules
+    polygeist_changed = SUBMODULE_POLYGEIST in changed_submodules
+    arts_changed = SUBMODULE_ARTS in changed_submodules
+    selected_polygeist = SUBMODULE_POLYGEIST in submodules
+    selected_arts = SUBMODULE_ARTS in submodules
 
     if selected_polygeist and (polygeist_changed or force):
         print_step("Rebuilding Polygeist...")
         result = run_subprocess(
-            ["make", "polygeist"],
+            ["make", MAKE_TARGET_POLYGEIST],
             cwd=carts_dir,
             check=False,
         )
@@ -241,7 +247,7 @@ def update(
     if selected_arts and (arts_changed or force):
         print_step("Rebuilding ARTS...")
         result = run_subprocess(
-            ["make", "arts"],
+            ["make", MAKE_TARGET_ARTS],
             cwd=carts_dir,
             check=False,
         )
@@ -253,7 +259,7 @@ def update(
     if rebuild_carts:
         print_step("Rebuilding CARTS...")
         result = run_subprocess(
-            ["make", "build"],
+            ["make", MAKE_TARGET_BUILD],
             cwd=carts_dir,
             check=False,
         )

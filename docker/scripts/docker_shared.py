@@ -15,9 +15,9 @@ if str(TOOLS_DIR) not in sys.path:
 
 import typer
 
-from carts_styles import print_error, print_info, print_step, print_warning
-from scripts.config import get_config
-from scripts.run import run_subprocess
+from sniff import print_error, print_info, print_step, print_warning
+from scripts.platform import get_config
+from scripts import run_subprocess
 
 
 NODES = [f"arts-node-{i}" for i in range(1, 7)]
