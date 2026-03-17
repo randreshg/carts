@@ -385,8 +385,7 @@ static ResolvedRowInfo resolvePartitionRow(ValueRange indices,
   }
 
   /// Handle linearized access: extract row from linear index
-  Value stride =
-      getLinearizedStride(indices, ctx.newElementType, builder, loc);
+  Value stride = getLinearizedStride(indices, ctx.newElementType, builder, loc);
   if (stride) {
     globalRow = builder.create<arith::DivUIOp>(loc, indices[0], stride);
   }
@@ -430,13 +429,12 @@ static void rewriteUserForRegion(Operation *user, StencilRegionKind region,
   Value globalRow = rowInfo.globalRow;
 
   /// Compute localRow = globalRow - baseOffset (using BASE offset semantics)
-  Value baseOffset =
-      ctx.partitionInfo.offsets.empty() ? ctx.zero
-                                        : ctx.partitionInfo.offsets.front();
+  Value baseOffset = ctx.partitionInfo.offsets.empty()
+                         ? ctx.zero
+                         : ctx.partitionInfo.offsets.front();
   Value localRow =
-      baseOffset
-          ? builder.create<arith::SubIOp>(userLoc, globalRow, baseOffset)
-          : globalRow;
+      baseOffset ? builder.create<arith::SubIOp>(userLoc, globalRow, baseOffset)
+                 : globalRow;
 
   int64_t rowOffset = 0;
   bool includesBaseOffset = false;
@@ -458,8 +456,7 @@ static void rewriteUserForRegion(Operation *user, StencilRegionKind region,
   auto selectValue = [&](Value cond, Value trueVal, Value falseVal) -> Value {
     bool forceIf = trueVal.getType().isa<MemRefType>();
     if (!forceIf && cond && cond.getType().isInteger(1))
-      return builder.create<arith::SelectOp>(userLoc, cond, trueVal,
-                                             falseVal);
+      return builder.create<arith::SelectOp>(userLoc, cond, trueVal, falseVal);
     auto ifOp = builder.create<scf::IfOp>(userLoc, trueVal.getType(), cond,
                                           /*withElseRegion=*/true);
     {
@@ -479,9 +476,8 @@ static void rewriteUserForRegion(Operation *user, StencilRegionKind region,
     Value leftIdx =
         builder.create<arith::AddIOp>(userLoc, localRow, ctx.haloLeft);
     Value clampedLeftIdx =
-        ctx.leftMemref
-            ? clampIndex(leftIdx, ctx.haloLeft, builder, userLoc)
-            : Value();
+        ctx.leftMemref ? clampIndex(leftIdx, ctx.haloLeft, builder, userLoc)
+                       : Value();
     if (ctx.leftMemref && ctx.leftPtrNotNull) {
       selectedMemref =
           selectValue(ctx.leftPtrNotNull, ctx.leftMemref, ctx.ownedMemref);
@@ -495,9 +491,8 @@ static void rewriteUserForRegion(Operation *user, StencilRegionKind region,
     Value rightIdx =
         builder.create<arith::SubIOp>(userLoc, localRow, ownedRows);
     Value clampedRightIdx =
-        ctx.rightMemref
-            ? clampIndex(rightIdx, ctx.haloRight, builder, userLoc)
-            : Value();
+        ctx.rightMemref ? clampIndex(rightIdx, ctx.haloRight, builder, userLoc)
+                        : Value();
     if (ctx.rightMemref && ctx.rightPtrNotNull) {
       selectedMemref =
           selectValue(ctx.rightPtrNotNull, ctx.rightMemref, ctx.ownedMemref);
@@ -651,9 +646,9 @@ static bool tryVersionRowLoop(ArrayRef<Operation *> users, OpBuilder &builder,
     else if (innerLoop != foundInner)
       return false;
 
-    Value baseOffset =
-        ctx.partitionInfo.offsets.empty() ? ctx.zero
-                                          : ctx.partitionInfo.offsets.front();
+    Value baseOffset = ctx.partitionInfo.offsets.empty()
+                           ? ctx.zero
+                           : ctx.partitionInfo.offsets.front();
     int64_t rowOffset = 0;
     bool includesBaseOffset = false;
     if (!deriveRowOffset(globalRow, rowLoop.getInductionVar(), baseOffset,
@@ -700,12 +695,12 @@ static bool tryVersionRowLoop(ArrayRef<Operation *> users, OpBuilder &builder,
   Value step = rowLoop.getStep();
   Value zero = arts::createZeroIndex(builder, loopLoc);
 
-  Value baseOffset =
-      ctx.partitionInfo.offsets.empty() ? zero
-                                        : ctx.partitionInfo.offsets.front();
-  Value blockSz =
-      ctx.partitionInfo.sizes.empty() ? Value()
-                                      : ctx.partitionInfo.sizes.front();
+  Value baseOffset = ctx.partitionInfo.offsets.empty()
+                         ? zero
+                         : ctx.partitionInfo.offsets.front();
+  Value blockSz = ctx.partitionInfo.sizes.empty()
+                      ? Value()
+                      : ctx.partitionInfo.sizes.front();
   if (!baseOffset || !blockSz)
     return false;
 
@@ -720,8 +715,7 @@ static bool tryVersionRowLoop(ArrayRef<Operation *> users, OpBuilder &builder,
 
   /// Split at localRow boundaries: left band, middle band, right band.
   Value leftRow = rowIvIsLocal ? zero : baseOffset;
-  Value leftEnd =
-      builder.create<arith::AddIOp>(loopLoc, leftRow, leftBandVal);
+  Value leftEnd = builder.create<arith::AddIOp>(loopLoc, leftRow, leftBandVal);
 
   Value rightEnd =
       rowIvIsLocal
@@ -827,13 +821,12 @@ static void rewriteUserFallback(
 
   /// Compute localRow = globalRow - baseOffset (using BASE offset semantics)
   /// The baseOffset comes from partitionInfo.offsets[0]
-  Value baseOffset =
-      ctx.partitionInfo.offsets.empty() ? ctx.zero
-                                        : ctx.partitionInfo.offsets.front();
+  Value baseOffset = ctx.partitionInfo.offsets.empty()
+                         ? ctx.zero
+                         : ctx.partitionInfo.offsets.front();
   Value localRow =
-      baseOffset
-          ? builder.create<arith::SubIOp>(userLoc, globalRow, baseOffset)
-          : globalRow;
+      baseOffset ? builder.create<arith::SubIOp>(userLoc, globalRow, baseOffset)
+                 : globalRow;
 
   Value ownedIdx = localRow;
 
@@ -962,10 +955,9 @@ static void rewriteUserFallback(
         /// Find a loop to hoist above (if globalRow is invariant to inner
         /// loop).
         Operation *rowDefOp = globalRow.getDefiningOp();
-        Block *rowDefBlock =
-            globalRow.isa<BlockArgument>()
-                ? globalRow.cast<BlockArgument>().getOwner()
-                : (rowDefOp ? rowDefOp->getBlock() : nullptr);
+        Block *rowDefBlock = globalRow.isa<BlockArgument>()
+                                 ? globalRow.cast<BlockArgument>().getOwner()
+                                 : (rowDefOp ? rowDefOp->getBlock() : nullptr);
 
         scf::ForOp hoistAbove;
         for (Operation *parent = user->getParentOp(); parent;
@@ -996,13 +988,12 @@ static void rewriteUserFallback(
 
         /// Recompute row-local indices at the hoist point.
         Value localRowHoisted =
-            baseOffset ? builder.create<arith::SubIOp>(userLoc, globalRow,
-                                                       baseOffset)
-                       : globalRow;
+            baseOffset
+                ? builder.create<arith::SubIOp>(userLoc, globalRow, baseOffset)
+                : globalRow;
 
-        RowSelection selection =
-            buildSelection(builder, userLoc, localRowHoisted,
-                           ctx.blockSize, ctx);
+        RowSelection selection = buildSelection(
+            builder, userLoc, localRowHoisted, ctx.blockSize, ctx);
         selectedMemref = selection.memref;
         selectedRowIdx = selection.rowIdx;
       }
@@ -1012,8 +1003,8 @@ static void rewriteUserFallback(
     }
 
     SmallVector<Value> selectedIndices = buildAccessIndices(selectedRowIdx);
-    auto selectedLoad = builder.create<memref::LoadOp>(
-        userLoc, selectedMemref, selectedIndices);
+    auto selectedLoad = builder.create<memref::LoadOp>(userLoc, selectedMemref,
+                                                       selectedIndices);
 
     auto load = cast<memref::LoadOp>(user);
     load.replaceAllUsesWith(selectedLoad.getResult());
@@ -1139,20 +1130,10 @@ void DbStencilIndexer::transformDbRefUsers(
              << ", right=" << (rightMemref ? "yes" : "no"));
 
   /// Build shared context for helper functions.
-  StencilRewriteContext ctx{ref,
-                            partitionInfo,
-                            elemOffset,
-                            haloLeft,
-                            haloRight,
-                            blockSize,
-                            zero,
-                            newElementType,
-                            ownedMemref,
-                            leftMemref,
-                            rightMemref,
-                            leftPtrNotNull,
-                            rightPtrNotNull,
-                            opsToRemove};
+  StencilRewriteContext ctx{
+      ref,         partitionInfo,  elemOffset,      haloLeft,    haloRight,
+      blockSize,   zero,           newElementType,  ownedMemref, leftMemref,
+      rightMemref, leftPtrNotNull, rightPtrNotNull, opsToRemove};
 
   /// Try row-loop versioning first (splits loop into Left/Middle/Right).
   bool refErasedWithRowLoop = false;

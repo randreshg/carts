@@ -38,12 +38,12 @@
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/ToolOutputFile.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/ADT/StringExtras.h"
 #include <array>
 #include <functional>
 #include <string>
@@ -53,6 +53,14 @@ using namespace llvm;
 using namespace mlir;
 
 ARTS_DEBUG_SETUP(carts_compile)
+
+namespace {
+constexpr const char *kDefaultMetadataFile = ".carts-metadata.json";
+constexpr const char *kDefaultDiagnoseOutput = ".carts-diagnose.json";
+constexpr uint64_t kDefaultArtsIdStride = 1000;
+constexpr int64_t kDefaultKernelTransformsTileJ = 64;
+constexpr int64_t kDefaultKernelTransformsMinTripCount = 128;
+} // namespace
 
 ///===----------------------------------------------------------------------===///
 /// Interface Attachments
@@ -93,9 +101,9 @@ static cl::opt<std::string> ArtsConfig("arts-config",
 static cl::opt<std::string> MetadataFile("metadata-file",
                                          cl::desc("Path to metadata JSON file"),
                                          cl::value_desc("filename"),
-                                         cl::init(".carts-metadata.json"));
+                                         cl::init(kDefaultMetadataFile));
 
-/// Compatibility flag used by carts_cli.py / benchmark scripts.
+/// Shorthand for metadata export in carts_cli.py / benchmark scripts.
 /// Equivalent to --pipeline=collect-metadata.
 static cl::opt<bool> CollectMetadataFlag(
     "collect-metadata",
@@ -105,7 +113,7 @@ static cl::opt<bool> CollectMetadataFlag(
 static cl::opt<uint64_t>
     ArtsIdStride("arts-id-stride",
                  cl::desc("Stride multiplier for arts ids (EDTs/DBs)"),
-                 cl::init(1000));
+                 cl::init(kDefaultArtsIdStride));
 
 static cl::opt<bool>
     Diagnose("diagnose",
@@ -114,10 +122,10 @@ static cl::opt<bool>
 
 static cl::opt<std::string> DiagnoseOutput(
     "diagnose-output", cl::desc("Output file for diagnostic JSON export"),
-    cl::value_desc("filename"), cl::init(".carts-diagnose.json"));
+    cl::value_desc("filename"), cl::init(kDefaultDiagnoseOutput));
 
-static cl::opt<std::string> ArtsOnly(
-    "arts-only",
+static cl::opt<std::string> ArtsDebug(
+    "arts-debug",
     cl::desc("Enable ARTS_INFO/ARTS_DEBUG channels (comma-separated)"),
     cl::value_desc("debug_types"), cl::init(""));
 
@@ -138,12 +146,13 @@ static cl::opt<bool> KernelTransformsEnableTiling(
 
 static cl::opt<int64_t> KernelTransformsTileJ(
     "loop-transforms-tile-j",
-    cl::desc("Tile size for j-dimension in kernel transforms"), cl::init(64));
+    cl::desc("Tile size for j-dimension in kernel transforms"),
+    cl::init(kDefaultKernelTransformsTileJ));
 
 static cl::opt<int64_t> KernelTransformsMinTripCount(
     "loop-transforms-min-trip-count",
     cl::desc("Minimum constant trip count required to apply tiling"),
-    cl::init(128));
+    cl::init(kDefaultKernelTransformsMinTripCount));
 
 /// Partition fallback strategy
 enum class PartitionFallback { Coarse, Fine };
@@ -181,7 +190,7 @@ static cl::opt<bool> EpochFinishContinuation(
 ///===----------------------------------------------------------------------===///
 /// Pipeline Stop Options
 ///===----------------------------------------------------------------------===///
-enum class PipelineStage {
+enum class PipelineStep {
   CanonicalizeMemrefs,
   CollectMetadata,
   InitialCleanup,
@@ -200,77 +209,78 @@ enum class PipelineStage {
   Complete
 };
 
-static cl::opt<PipelineStage> Pipeline(
+static cl::opt<PipelineStep> Pipeline(
     "pipeline", cl::desc("Stop pipeline at specified step:"),
-    cl::values(clEnumValN(PipelineStage::CanonicalizeMemrefs,
+    cl::values(clEnumValN(PipelineStep::CanonicalizeMemrefs,
                           "canonicalize-memrefs",
-                          "Stop after canonicalizing memrefs pass"),
-               clEnumValN(PipelineStage::CollectMetadata, "collect-metadata",
+                          "Stop after the canonicalize-memrefs pipeline step"),
+               clEnumValN(PipelineStep::CollectMetadata, "collect-metadata",
                           "Stop after collecting metadata"),
-               clEnumValN(PipelineStage::InitialCleanup, "initial-cleanup",
+               clEnumValN(PipelineStep::InitialCleanup, "initial-cleanup",
                           "Stop after initial cleanup and simplification"),
-               clEnumValN(PipelineStage::OpenMPToArts, "openmp-to-arts",
+               clEnumValN(PipelineStep::OpenMPToArts, "openmp-to-arts",
                           "Stop after OpenMP to Arts conversion"),
-               clEnumValN(PipelineStage::PatternPipeline, "pattern-pipeline",
+               clEnumValN(PipelineStep::PatternPipeline, "pattern-pipeline",
                           "Stop after the dedicated semantic pattern pipeline"),
-               clEnumValN(PipelineStage::EdtTransforms, "edt-transforms",
+               clEnumValN(PipelineStep::EdtTransforms, "edt-transforms",
                           "Stop after EDT transformations"),
-               clEnumValN(PipelineStage::CreateDbs, "create-dbs",
-                          "Stop after Dbs creation"),
-               clEnumValN(PipelineStage::DbOpt, "db-opt",
-                          "Stop after Dbs optimization"),
-               clEnumValN(PipelineStage::EdtOpt, "edt-opt",
+               clEnumValN(PipelineStep::CreateDbs, "create-dbs",
+                          "Stop after DB creation"),
+               clEnumValN(PipelineStep::DbOpt, "db-opt",
+                          "Stop after DB optimization"),
+               clEnumValN(PipelineStep::EdtOpt, "edt-opt",
                           "Stop after EDT optimizations"),
-               clEnumValN(PipelineStage::Concurrency, "concurrency",
+               clEnumValN(PipelineStep::Concurrency, "concurrency",
                           "Stop after concurrency"),
-               clEnumValN(PipelineStage::EdtDistribution, "edt-distribution",
+               clEnumValN(PipelineStep::EdtDistribution, "edt-distribution",
                           "Stop after EDT distribution and for lowering"),
-               clEnumValN(PipelineStage::ConcurrencyOpt, "concurrency-opt",
+               clEnumValN(PipelineStep::ConcurrencyOpt, "concurrency-opt",
                           "Stop after concurrency optimization"),
-               clEnumValN(PipelineStage::Epochs, "epochs",
+               clEnumValN(PipelineStep::Epochs, "epochs",
                           "Stop after Epochs creation"),
-               clEnumValN(PipelineStage::PreLowering, "pre-lowering",
+               clEnumValN(PipelineStep::PreLowering, "pre-lowering",
                           "Stop after pre-lowering transformations"),
-               clEnumValN(PipelineStage::ArtsToLLVM, "arts-to-llvm",
+               clEnumValN(PipelineStep::ArtsToLLVM, "arts-to-llvm",
                           "Stop after Arts to LLVM conversion"),
-               clEnumValN(PipelineStage::Complete, "complete",
+               clEnumValN(PipelineStep::Complete, "complete",
                           "Run complete pipeline (default)")),
-    cl::init(PipelineStage::Complete));
+    cl::init(PipelineStep::Complete));
 
-static cl::opt<PipelineStage> StartFrom(
+static cl::opt<PipelineStep> StartFrom(
     "start-from", cl::desc("Resume pipeline from specified step:"),
-    cl::values(clEnumValN(PipelineStage::CanonicalizeMemrefs,
+    cl::values(clEnumValN(PipelineStep::CanonicalizeMemrefs,
                           "canonicalize-memrefs",
-                          "Start from canonicalizing memrefs pass (default)"),
-               clEnumValN(PipelineStage::CollectMetadata, "collect-metadata",
+                          "Start from the canonicalize-memrefs pipeline step "
+                          "(default)"),
+               clEnumValN(PipelineStep::CollectMetadata, "collect-metadata",
                           "Start from collecting metadata"),
-               clEnumValN(PipelineStage::InitialCleanup, "initial-cleanup",
+               clEnumValN(PipelineStep::InitialCleanup, "initial-cleanup",
                           "Start from initial cleanup and simplification"),
-               clEnumValN(PipelineStage::OpenMPToArts, "openmp-to-arts",
+               clEnumValN(PipelineStep::OpenMPToArts, "openmp-to-arts",
                           "Start from OpenMP to Arts conversion"),
-               clEnumValN(PipelineStage::PatternPipeline, "pattern-pipeline",
+               clEnumValN(PipelineStep::PatternPipeline, "pattern-pipeline",
                           "Start from the semantic pattern pipeline"),
-               clEnumValN(PipelineStage::EdtTransforms, "edt-transforms",
+               clEnumValN(PipelineStep::EdtTransforms, "edt-transforms",
                           "Start from EDT transformations"),
-               clEnumValN(PipelineStage::CreateDbs, "create-dbs",
-                          "Start from Dbs creation"),
-               clEnumValN(PipelineStage::DbOpt, "db-opt",
-                          "Start from Dbs optimization"),
-               clEnumValN(PipelineStage::EdtOpt, "edt-opt",
+               clEnumValN(PipelineStep::CreateDbs, "create-dbs",
+                          "Start from DB creation"),
+               clEnumValN(PipelineStep::DbOpt, "db-opt",
+                          "Start from DB optimization"),
+               clEnumValN(PipelineStep::EdtOpt, "edt-opt",
                           "Start from EDT optimizations"),
-               clEnumValN(PipelineStage::Concurrency, "concurrency",
+               clEnumValN(PipelineStep::Concurrency, "concurrency",
                           "Start from concurrency"),
-               clEnumValN(PipelineStage::EdtDistribution, "edt-distribution",
+               clEnumValN(PipelineStep::EdtDistribution, "edt-distribution",
                           "Start from EDT distribution and for lowering"),
-               clEnumValN(PipelineStage::ConcurrencyOpt, "concurrency-opt",
+               clEnumValN(PipelineStep::ConcurrencyOpt, "concurrency-opt",
                           "Start from concurrency optimization"),
-               clEnumValN(PipelineStage::Epochs, "epochs",
+               clEnumValN(PipelineStep::Epochs, "epochs",
                           "Start from Epochs creation"),
-               clEnumValN(PipelineStage::PreLowering, "pre-lowering",
+               clEnumValN(PipelineStep::PreLowering, "pre-lowering",
                           "Start from pre-lowering transformations"),
-               clEnumValN(PipelineStage::ArtsToLLVM, "arts-to-llvm",
+               clEnumValN(PipelineStep::ArtsToLLVM, "arts-to-llvm",
                           "Start from Arts to LLVM conversion")),
-    cl::init(PipelineStage::CanonicalizeMemrefs));
+    cl::init(PipelineStep::CanonicalizeMemrefs));
 
 static cl::opt<bool> PrintPipelineTokensJSON(
     "print-pipeline-tokens-json",
@@ -283,66 +293,121 @@ static cl::opt<bool> PrintPipelineManifestJSON(
     cl::init(false));
 
 static const std::array<llvm::StringLiteral, 8> kCanonicalizeMemrefsPasses = {
-    "LowerAffine(func)",      "CSE",         "Inliner", "ArtsInliner",
-    "PolygeistCanonicalize",  "CanonicalizeMemrefs",
-    "DeadCodeElimination",    "CSE"};
+    "LowerAffine(func)",
+    "CSE",
+    "Inliner",
+    "ArtsInliner",
+    "PolygeistCanonicalize",
+    "CanonicalizeMemrefs",
+    "DeadCodeElimination",
+    "CSE"};
 static const std::array<llvm::StringLiteral, 7> kCollectMetadataPasses = {
-    "replaceAffineCFG(func)", "RaiseSCFToAffine(func)",
-    "replaceAffineCFG(func)", "RaiseSCFToAffine(func)", "CSE(func)",
-    "CollectMetadata", "VerifyMetadata (diagnose mode)"};
+    "replaceAffineCFG(func)",
+    "RaiseSCFToAffine(func)",
+    "replaceAffineCFG(func)",
+    "RaiseSCFToAffine(func)",
+    "CSE(func)",
+    "CollectMetadata",
+    "VerifyMetadata (diagnose mode)"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
 static const std::array<llvm::StringLiteral, 3> kOpenMPToArtsPasses = {
     "ConvertOpenMPToArts", "DeadCodeElimination", "CSE"};
 static const std::array<llvm::StringLiteral, 8> kPatternPipelinePasses = {
-    "PatternDiscovery(seed)", "DepTransforms", "LoopNormalization",
-    "StencilBoundaryPeeling", "LoopReordering", "PatternDiscovery(refine)",
-    "KernelTransforms", "CSE"};
+    "PatternDiscovery(seed)", "DepTransforms",
+    "LoopNormalization",      "StencilBoundaryPeeling",
+    "LoopReordering",         "PatternDiscovery(refine)",
+    "KernelTransforms",       "CSE"};
 static const std::array<llvm::StringLiteral, 6> kEdtTransformsPasses = {
-    "EdtStructuralOpt(runAnalysis=false)", "EdtICM", "DeadCodeElimination",
-    "SymbolDCE", "CSE", "EdtPtrRematerialization"};
-static const std::array<llvm::StringLiteral, 8> kCreateDbsPasses = {
-    "DistributedHostLoopOutlining (conditional)", "CreateDbs",
-    "PolygeistCanonicalize", "CSE", "SymbolDCE", "Mem2Reg",
-    "PolygeistCanonicalize", "VerifyDbCreated"};
+    "EdtStructuralOpt(runAnalysis=false)",
+    "EdtICM",
+    "DeadCodeElimination",
+    "SymbolDCE",
+    "CSE",
+    "EdtPtrRematerialization"};
+static const std::array<llvm::StringLiteral, 9> kCreateDbsPasses = {
+    "DistributedHostLoopOutlining (conditional)",
+    "CreateDbs",
+    "CSE (bridge cleanup, conditional)",
+    "PolygeistCanonicalize",
+    "CSE",
+    "SymbolDCE",
+    "Mem2Reg",
+    "PolygeistCanonicalize",
+    "VerifyDbCreated"};
 static const std::array<llvm::StringLiteral, 4> kDbOptPasses = {
     "DbModeTightening", "PolygeistCanonicalize", "CSE", "Mem2Reg"};
 static const std::array<llvm::StringLiteral, 4> kEdtOptPasses = {
     "PolygeistCanonicalize", "EdtStructuralOpt(runAnalysis=true)", "LoopFusion",
     "CSE"};
 static const std::array<llvm::StringLiteral, 4> kConcurrencyPasses = {
-    "PolygeistCanonicalize", "Concurrency", "ForOpt",
-    "PolygeistCanonicalize"};
+    "PolygeistCanonicalize", "Concurrency", "ForOpt", "PolygeistCanonicalize"};
 static const std::array<llvm::StringLiteral, 3> kEdtDistributionPasses = {
     "EdtDistribution", "ForLowering", "VerifyForLowered"};
 static const std::array<llvm::StringLiteral, 24> kConcurrencyOptPasses = {
-    "EdtStructuralOpt(runAnalysis=false)", "DeadCodeElimination",
-    "PolygeistCanonicalize", "CSE",
-    "EdtStructuralOpt(runAnalysis=false)", "EpochOpt",
-    "PolygeistCanonicalize", "CSE", "DbPartitioning",
-    "DbDistributedOwnership (conditional)", "DbTransforms", "DbModeTightening",
-    "EdtTransforms", "ContractValidation", "DbScratchElimination",
-    "PolygeistCanonicalize", "CSE", "BlockLoopStripMining(func)", "Hoisting",
-    "PolygeistCanonicalize", "CSE", "EdtAllocaSinking",
-    "DeadCodeElimination", "Mem2Reg"};
+    "EdtStructuralOpt(runAnalysis=false)",
+    "DeadCodeElimination",
+    "PolygeistCanonicalize",
+    "CSE",
+    "EdtStructuralOpt(runAnalysis=false)",
+    "EpochOpt",
+    "PolygeistCanonicalize",
+    "CSE",
+    "DbPartitioning",
+    "DbDistributedOwnership (conditional)",
+    "DbTransforms",
+    "DbModeTightening",
+    "EdtTransforms",
+    "ContractValidation",
+    "DbScratchElimination",
+    "PolygeistCanonicalize",
+    "CSE",
+    "BlockLoopStripMining(func)",
+    "Hoisting",
+    "PolygeistCanonicalize",
+    "CSE",
+    "EdtAllocaSinking",
+    "DeadCodeElimination",
+    "Mem2Reg"};
 static const std::array<llvm::StringLiteral, 4> kEpochsPasses = {
     "PolygeistCanonicalize", "CreateEpochs",
     "EpochContinuationPrep (conditional)", "PolygeistCanonicalize"};
 static const std::array<llvm::StringLiteral, 22> kPreLoweringPasses = {
-    "EdtAllocaSinking", "ParallelEdtLowering", "PolygeistCanonicalize", "CSE",
-    "DbLowering", "PolygeistCanonicalize", "CSE", "EdtLowering",
-    "PolygeistCanonicalize", "CSE", "LICM", "DataPtrHoisting",
-    "PolygeistCanonicalize", "CSE", "ScalarReplacement",
-    "PolygeistCanonicalize", "CSE", "EpochLowering",
-    "LoweringContractCleanup", "PolygeistCanonicalize", "CSE",
+    "EdtAllocaSinking",
+    "ParallelEdtLowering",
+    "PolygeistCanonicalize",
+    "CSE",
+    "DbLowering",
+    "PolygeistCanonicalize",
+    "CSE",
+    "EdtLowering",
+    "PolygeistCanonicalize",
+    "CSE",
+    "LICM",
+    "DataPtrHoisting",
+    "PolygeistCanonicalize",
+    "CSE",
+    "ScalarReplacement",
+    "PolygeistCanonicalize",
+    "CSE",
+    "EpochLowering",
+    "LoweringContractCleanup",
+    "PolygeistCanonicalize",
+    "CSE",
     "VerifyPreLowered"};
 static const std::array<llvm::StringLiteral, 9> kArtsToLLVMPasses = {
-    "ConvertArtsToLLVM", "DataPtrHoisting", "PolygeistCanonicalize", "CSE",
-    "Mem2Reg", "PolygeistCanonicalize", "ControlFlowSink",
-    "PolygeistCanonicalize", "VerifyLowered"};
+    "ConvertArtsToLLVM",
+    "DataPtrHoisting",
+    "PolygeistCanonicalize",
+    "CSE",
+    "Mem2Reg",
+    "PolygeistCanonicalize",
+    "ControlFlowSink",
+    "PolygeistCanonicalize",
+    "VerifyLowered"};
 
-struct PipelineStageTokenSpec {
-  PipelineStage stage;
+struct PipelineStepTokenSpec {
+  PipelineStep step;
   llvm::StringLiteral token;
   bool allowPipelineStop;
   bool allowStartFrom;
@@ -350,65 +415,65 @@ struct PipelineStageTokenSpec {
   llvm::ArrayRef<llvm::StringLiteral> passes;
 };
 
-static const std::array<PipelineStageTokenSpec, 16> kPipelineStageSpecs = {{
-    {PipelineStage::CanonicalizeMemrefs, "canonicalize-memrefs", true, true,
+static const std::array<PipelineStepTokenSpec, 16> kPipelineStepSpecs = {{
+    {PipelineStep::CanonicalizeMemrefs, "canonicalize-memrefs", true, true,
      true, kCanonicalizeMemrefsPasses},
-    {PipelineStage::CollectMetadata, "collect-metadata", true, true, true,
+    {PipelineStep::CollectMetadata, "collect-metadata", true, true, true,
      kCollectMetadataPasses},
-    {PipelineStage::InitialCleanup, "initial-cleanup", true, true, true,
+    {PipelineStep::InitialCleanup, "initial-cleanup", true, true, true,
      kInitialCleanupPasses},
-    {PipelineStage::OpenMPToArts, "openmp-to-arts", true, true, true,
+    {PipelineStep::OpenMPToArts, "openmp-to-arts", true, true, true,
      kOpenMPToArtsPasses},
-    {PipelineStage::PatternPipeline, "pattern-pipeline", true, true, true,
+    {PipelineStep::PatternPipeline, "pattern-pipeline", true, true, true,
      kPatternPipelinePasses},
-    {PipelineStage::EdtTransforms, "edt-transforms", true, true, true,
+    {PipelineStep::EdtTransforms, "edt-transforms", true, true, true,
      kEdtTransformsPasses},
-    {PipelineStage::CreateDbs, "create-dbs", true, true, true, kCreateDbsPasses},
-    {PipelineStage::DbOpt, "db-opt", true, true, true, kDbOptPasses},
-    {PipelineStage::EdtOpt, "edt-opt", true, true, true, kEdtOptPasses},
-    {PipelineStage::Concurrency, "concurrency", true, true, true,
+    {PipelineStep::CreateDbs, "create-dbs", true, true, true, kCreateDbsPasses},
+    {PipelineStep::DbOpt, "db-opt", true, true, true, kDbOptPasses},
+    {PipelineStep::EdtOpt, "edt-opt", true, true, true, kEdtOptPasses},
+    {PipelineStep::Concurrency, "concurrency", true, true, true,
      kConcurrencyPasses},
-    {PipelineStage::EdtDistribution, "edt-distribution", true, true, true,
+    {PipelineStep::EdtDistribution, "edt-distribution", true, true, true,
      kEdtDistributionPasses},
-    {PipelineStage::ConcurrencyOpt, "concurrency-opt", true, true, true,
+    {PipelineStep::ConcurrencyOpt, "concurrency-opt", true, true, true,
      kConcurrencyOptPasses},
-    {PipelineStage::Epochs, "epochs", true, true, true, kEpochsPasses},
-    {PipelineStage::PreLowering, "pre-lowering", true, true, true,
+    {PipelineStep::Epochs, "epochs", true, true, true, kEpochsPasses},
+    {PipelineStep::PreLowering, "pre-lowering", true, true, true,
      kPreLoweringPasses},
-    {PipelineStage::ArtsToLLVM, "arts-to-llvm", true, true, true,
+    {PipelineStep::ArtsToLLVM, "arts-to-llvm", true, true, true,
      kArtsToLLVMPasses},
-    {PipelineStage::Complete, "complete", true, false, false,
+    {PipelineStep::Complete, "complete", true, false, false,
      llvm::ArrayRef<llvm::StringLiteral>()},
 }};
 
-static const PipelineStageTokenSpec *findPipelineStageSpec(PipelineStage stage) {
-  for (const auto &spec : kPipelineStageSpecs) {
-    if (spec.stage == stage)
+static const PipelineStepTokenSpec *findPipelineStepSpec(PipelineStep step) {
+  for (const auto &spec : kPipelineStepSpecs) {
+    if (spec.step == step)
       return &spec;
   }
   return nullptr;
 }
 
-static int pipelineStageIndex(PipelineStage stage) {
-  for (size_t i = 0; i < kPipelineStageSpecs.size(); ++i) {
-    if (kPipelineStageSpecs[i].stage == stage)
+static int pipelineStepIndex(PipelineStep step) {
+  for (size_t i = 0; i < kPipelineStepSpecs.size(); ++i) {
+    if (kPipelineStepSpecs[i].step == step)
       return static_cast<int>(i);
   }
   return -1;
 }
 
-static llvm::StringRef pipelineStageName(PipelineStage stage) {
-  if (const auto *spec = findPipelineStageSpec(stage))
+static llvm::StringRef pipelineStepName(PipelineStep step) {
+  if (const auto *spec = findPipelineStepSpec(step))
     return spec->token;
   return "unknown";
 }
 
 template <typename Predicate>
-static void printStageTokenArray(llvm::raw_ostream &os, llvm::StringRef key,
-                                 Predicate include) {
+static void printPipelineTokenArray(llvm::raw_ostream &os, llvm::StringRef key,
+                                    Predicate include) {
   os << "  \"" << key << "\": [";
   bool first = true;
-  for (const auto &spec : kPipelineStageSpecs) {
+  for (const auto &spec : kPipelineStepSpecs) {
     if (!include(spec))
       continue;
     if (!first)
@@ -430,53 +495,47 @@ static void printStringArray(llvm::raw_ostream &os,
   os << "]";
 }
 
-static void printStageTokensAsJSON(llvm::raw_ostream &os) {
+static void printPipelineTokensAsJSON(llvm::raw_ostream &os) {
   os << "{\n";
-  printStageTokenArray(os, "pipeline",
-                       [](const PipelineStageTokenSpec &spec) {
-                         return spec.allowPipelineStop;
-                       });
+  printPipelineTokenArray(
+      os, "pipeline",
+      [](const PipelineStepTokenSpec &spec) { return spec.allowPipelineStop; });
   os << ",\n";
-  printStageTokenArray(os, "start_from",
-                       [](const PipelineStageTokenSpec &spec) {
-                         return spec.allowStartFrom;
-                       });
+  printPipelineTokenArray(
+      os, "start_from",
+      [](const PipelineStepTokenSpec &spec) { return spec.allowStartFrom; });
   os << ",\n";
-  printStageTokenArray(os, "pipeline_sequence",
-                       [](const PipelineStageTokenSpec &spec) {
-                         return spec.inPipelineSequence;
-                       });
-  os << ",\n";
-  os << "  \"aliases\": {}\n";
+  printPipelineTokenArray(os, "pipeline_sequence",
+                          [](const PipelineStepTokenSpec &spec) {
+                            return spec.inPipelineSequence;
+                          });
+  os << "\n";
   os << "}\n";
 }
 
 static void printPipelineManifestAsJSON(llvm::raw_ostream &os) {
   os << "{\n";
-  printStageTokenArray(os, "pipeline",
-                       [](const PipelineStageTokenSpec &spec) {
-                         return spec.allowPipelineStop;
-                       });
+  printPipelineTokenArray(
+      os, "pipeline",
+      [](const PipelineStepTokenSpec &spec) { return spec.allowPipelineStop; });
   os << ",\n";
-  printStageTokenArray(os, "start_from",
-                       [](const PipelineStageTokenSpec &spec) {
-                         return spec.allowStartFrom;
-                       });
+  printPipelineTokenArray(
+      os, "start_from",
+      [](const PipelineStepTokenSpec &spec) { return spec.allowStartFrom; });
   os << ",\n";
-  printStageTokenArray(os, "pipeline_sequence",
-                       [](const PipelineStageTokenSpec &spec) {
-                         return spec.inPipelineSequence;
-                       });
+  printPipelineTokenArray(os, "pipeline_sequence",
+                          [](const PipelineStepTokenSpec &spec) {
+                            return spec.inPipelineSequence;
+                          });
   os << ",\n";
-  os << "  \"aliases\": {},\n";
   os << "  \"pipeline_steps\": [\n";
-  bool firstStage = true;
-  for (const auto &spec : kPipelineStageSpecs) {
+  bool firstStep = true;
+  for (const auto &spec : kPipelineStepSpecs) {
     if (!spec.inPipelineSequence)
       continue;
-    if (!firstStage)
+    if (!firstStep)
       os << ",\n";
-    firstStage = false;
+    firstStep = false;
     os << "    {\"name\": \"" << spec.token << "\", \"passes\": ";
     printStringArray(os, spec.passes);
     os << "}";
@@ -485,7 +544,7 @@ static void printPipelineManifestAsJSON(llvm::raw_ostream &os) {
   os << "}\n";
 }
 
-static void configureArtsOnlyDebugChannels(llvm::StringRef channels) {
+static void configureArtsDebugChannels(llvm::StringRef channels) {
   if (channels.empty())
     return;
 
@@ -510,12 +569,13 @@ static void configureArtsOnlyDebugChannels(llvm::StringRef channels) {
   llvm::setCurrentDebugTypes(debugTypes.data(), debugTypes.size());
 }
 
-static bool shouldExportDetailedDiagnose(PipelineStage stopAt) {
-  if (stopAt == PipelineStage::Complete)
+static bool shouldExportDetailedDiagnose(PipelineStep stopAt) {
+  if (stopAt == PipelineStep::Complete)
     return true;
-  int stopIndex = pipelineStageIndex(stopAt);
-  int preLoweringIndex = pipelineStageIndex(PipelineStage::PreLowering);
-  return stopIndex >= 0 && preLoweringIndex >= 0 && stopIndex >= preLoweringIndex;
+  int stopIndex = pipelineStepIndex(stopAt);
+  int preLoweringIndex = pipelineStepIndex(PipelineStep::PreLowering);
+  return stopIndex >= 0 && preLoweringIndex >= 0 &&
+         stopIndex >= preLoweringIndex;
 }
 
 ///===----------------------------------------------------------------------===///
@@ -571,17 +631,17 @@ void initializeContext(MLIRContext &context) {
       context);
 }
 
-/// TODO(PERF): PolygeistCanonicalizePass is added 26 times; audit which
-/// invocations are needed — when IR is already canonical, each is a wasted
-/// walk.
-/// TODO(PERF): CSEPass is added 24 times; audit which invocations are needed.
-
 ///===----------------------------------------------------------------------===///
 /// Pipeline Builders
 ///===----------------------------------------------------------------------===///
 /// Each build*Pipeline function populates a PassManager with the passes for
-/// one logical compilation stage. There is a 1:1 mapping between
-/// PipelineStage enum values and these builders.
+/// one logical compilation step. There is a 1:1 mapping between
+/// PipelineStep enum values and these builders.
+
+static void addCanonicalizeAndCSE(PassManager &pm) {
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createCSEPass());
+}
 
 /// Inliner and canonicalize memrefs pass.
 void buildCanonicalizeMemrefsPipeline(PassManager &pm) {
@@ -590,19 +650,17 @@ void buildCanonicalizeMemrefsPipeline(PassManager &pm) {
   pm.addPass(createCSEPass());
   pm.addPass(createInlinerPass());
   pm.addPass(arts::createArtsInlinerPass());
-  /// pm.addPass(createMem2Reg());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  /// pm.addPass(createCSEPass());
-
   pm.addPass(arts::createCanonicalizeMemrefsPass());
   pm.addPass(arts::createDCEPass());
   pm.addPass(createCSEPass());
 }
 
 /// Metadata collection pass.
-void buildCollectMetadataPipeline(PassManager &pm, arts::AnalysisManager *AM = nullptr,
-                          bool shouldExport = false,
-                          StringRef metadataFile = "") {
+void buildCollectMetadataPipeline(PassManager &pm,
+                                  arts::AnalysisManager *AM = nullptr,
+                                  bool shouldExport = false,
+                                  StringRef metadataFile = "") {
   std::string actualMetadataFile =
       metadataFile.empty() ? MetadataFile.getValue() : metadataFile.str();
   /// Raise to affine first
@@ -646,7 +704,7 @@ void buildEdtTransformsPipeline(PassManager &pm, arts::AnalysisManager *AM) {
 
 /// Dedicated semantic pattern pipeline that teaches ARTS about supported loop
 /// and dependence families before DB creation.
-void buildPatternDiscoveryPipeline(PassManager &pm, arts::AnalysisManager *AM) {
+void buildPatternPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(arts::createPatternDiscoveryPass(AM, /*refine=*/false));
   pm.addPass(arts::createDepTransformsPass());
   pm.addPass(arts::createLoopNormalizationPass(AM));
@@ -663,7 +721,8 @@ void buildPatternDiscoveryPipeline(PassManager &pm, arts::AnalysisManager *AM) {
 /// Bridge eligible host producer loops into the regular ARTS loop/EDT path
 /// before DB creation without making this outlining part of the semantic
 /// pattern pipeline itself.
-void buildPreCreateDbsBridgingPipeline(PassManager &pm, arts::AnalysisManager *AM) {
+void buildPreCreateDbsBridgingPipeline(PassManager &pm,
+                                       arts::AnalysisManager *AM) {
   /// Multinode execution needs eligible host producer loops to flow through
   /// the regular arts.for/EDT pipeline before CreateDbs; otherwise serial host
   /// writes between distributed phases bypass the normal DB acquire/release
@@ -679,17 +738,17 @@ void buildPreCreateDbsBridgingPipeline(PassManager &pm, arts::AnalysisManager *A
   } else {
     enableDistributedHostLoopOutlining = DistributedDb;
   }
-  if (enableDistributedHostLoopOutlining)
+  if (enableDistributedHostLoopOutlining) {
     pm.addPass(arts::createDistributedHostLoopOutliningPass(AM));
-  pm.addPass(createCSEPass());
+    pm.addPass(createCSEPass());
+  }
 }
 
 /// DB creation pass.
 void buildCreateDbsPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   buildPreCreateDbsBridgingPipeline(pm, AM);
   pm.addPass(arts::createCreateDbsPass(AM));
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(createCSEPass());
+  addCanonicalizeAndCSE(pm);
   pm.addPass(createSymbolDCEPass());
   pm.addPass(createMem2Reg());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
@@ -699,8 +758,7 @@ void buildCreateDbsPipeline(PassManager &pm, arts::AnalysisManager *AM) {
 /// DB creation and optimization passes.
 void buildDbOptPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(arts::createDbModeTighteningPass(AM));
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(createCSEPass());
+  addCanonicalizeAndCSE(pm);
   pm.addPass(createMem2Reg());
 }
 
@@ -732,16 +790,14 @@ void buildConcurrencyOptPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   /// EDT optimization
   pm.addPass(arts::createEdtStructuralOptPass(AM, /*runAnalysis*/ false));
   pm.addPass(arts::createDCEPass());
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(createCSEPass());
+  addCanonicalizeAndCSE(pm);
   /// Re-run structural opts after cleanup to catch newly exposed degenerate
   /// EDTs before epoch shaping.
   /// TODO(PERF): EdtStructuralOptPass runs 4 times; evaluate if second call
   /// needed.
   pm.addPass(arts::createEdtStructuralOptPass(AM, /*runAnalysis*/ false));
   pm.addPass(arts::createEpochOptPass());
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(createCSEPass());
+  addCanonicalizeAndCSE(pm);
   /// Partition DBs and run DbModeTighteningPass again to adjust modes.
   pm.addPass(arts::createDbPartitioningPass(AM));
   /// Run distributed-ownership eligibility while EDT/DB ops are still in
@@ -757,12 +813,10 @@ void buildConcurrencyOptPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(arts::createEdtTransformsPass(AM));
   pm.addPass(arts::createContractValidationPass());
   pm.addPass(arts::createDbScratchEliminationPass());
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(createCSEPass());
+  addCanonicalizeAndCSE(pm);
   pm.addNestedPass<func::FuncOp>(arts::createBlockLoopStripMiningPass());
   pm.addPass(arts::createHoistingPass());
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(createCSEPass());
+  addCanonicalizeAndCSE(pm);
   /// Others
   pm.addPass(arts::createEdtAllocaSinkingPass());
   pm.addPass(arts::createDCEPass());
@@ -780,45 +834,39 @@ void buildEpochsPipeline(PassManager &pm, bool enableContinuation) {
 
 /// Pre-lowering passes.
 void buildPreLoweringPipeline(PassManager &pm, arts::AnalysisManager *AM) {
-  /// TODO(PERF): EdtAllocaSinkingPass runs twice (buildConcurrencyOptPipeline and
-  /// here).
+  /// TODO(PERF): EdtAllocaSinkingPass runs twice (buildConcurrencyOptPipeline
+  /// and here).
   pm.addPass(arts::createEdtAllocaSinkingPass());
   pm.addPass(arts::createParallelEdtLoweringPass());
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(createCSEPass());
+  addCanonicalizeAndCSE(pm);
   pm.addPass(arts::createDbLoweringPass(ArtsIdStride));
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(createCSEPass());
+  addCanonicalizeAndCSE(pm);
   pm.addPass(arts::createEdtLoweringPass(AM, ArtsIdStride));
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(createCSEPass());
+  addCanonicalizeAndCSE(pm);
   pm.addPass(createLoopInvariantCodeMotionPass());
   /// Hoist loop-invariant DB/dep pointer loads before scalar replacement;
-  /// buildArtsToLLVMPipeline runs hoisting again after Arts->LLVM materializes new
-  /// loads.
+  /// buildArtsToLLVMPipeline runs hoisting again after Arts->LLVM materializes
+  /// new loads.
   pm.addPass(arts::createDataPtrHoistingPass());
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(createCSEPass());
+  addCanonicalizeAndCSE(pm);
   pm.addPass(arts::createScalarReplacementPass());
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(createCSEPass());
+  addCanonicalizeAndCSE(pm);
   pm.addPass(arts::createEpochLoweringPass());
   pm.addPass(arts::createLoweringContractCleanupPass());
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(createCSEPass());
+  addCanonicalizeAndCSE(pm);
   pm.addPass(arts::createVerifyPreLoweredPass());
 }
 
 /// ARTS to LLVM conversion passes.
-void buildArtsToLLVMPipeline(PassManager &pm, bool debug, bool distributedInitPerWorker,
-                     const arts::AbstractMachine *machine) {
+void buildArtsToLLVMPipeline(PassManager &pm, bool debug,
+                             bool distributedInitPerWorker,
+                             const arts::AbstractMachine *machine) {
   pm.addPass(arts::createConvertArtsToLLVMPass(debug, distributedInitPerWorker,
                                                machine));
   /// Hoist loop-invariant loads after Arts->LLVM lowering for
   /// vectorization/LICM.
   pm.addPass(arts::createDataPtrHoistingPass());
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(createCSEPass());
+  addCanonicalizeAndCSE(pm);
   pm.addPass(createMem2Reg());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createControlFlowSinkPass());
@@ -850,29 +898,29 @@ void buildLLVMIREmissionPipeline(PassManager &pm) {
 
 /// Hooks invoked around each pipeline step for diagnostics or custom logging.
 struct PipelineHooks {
-  std::function<void(PipelineStage)> beforePhase;
-  std::function<void(PipelineStage, LogicalResult)> afterPhase;
+  std::function<void(PipelineStep)> beforeStep;
+  std::function<void(PipelineStep, LogicalResult)> afterStep;
 };
 
 /// Configure the pass manager with the optimization passes.
 LogicalResult
 buildPassManager(ModuleOp module, MLIRContext &context,
-                 PipelineStage stopAt = PipelineStage::Complete,
-                 PipelineStage startFrom = PipelineStage::CanonicalizeMemrefs,
+                 PipelineStep stopAt = PipelineStep::Complete,
+                 PipelineStep startFrom = PipelineStep::CanonicalizeMemrefs,
                  std::unique_ptr<arts::AnalysisManager> *outAM = nullptr,
                  PipelineHooks *hooks = nullptr) {
-  int startIndex = pipelineStageIndex(startFrom);
-  int stopIndex = pipelineStageIndex(stopAt);
+  int startIndex = pipelineStepIndex(startFrom);
+  int stopIndex = pipelineStepIndex(stopAt);
   if (startIndex < 0 || stopIndex < 0) {
     ARTS_ERROR("Invalid pipeline selection: --start-from="
-               << pipelineStageName(startFrom) << ", --pipeline="
-               << pipelineStageName(stopAt));
+               << pipelineStepName(startFrom)
+               << ", --pipeline=" << pipelineStepName(stopAt));
     return failure();
   }
-  if (stopAt != PipelineStage::Complete && startIndex > stopIndex) {
+  if (stopAt != PipelineStep::Complete && startIndex > stopIndex) {
     ARTS_ERROR("Invalid pipeline range: --start-from="
-               << pipelineStageName(startFrom) << " is after --pipeline="
-               << pipelineStageName(stopAt));
+               << pipelineStepName(startFrom)
+               << " is after --pipeline=" << pipelineStepName(stopAt));
     return failure();
   }
 
@@ -911,25 +959,25 @@ buildPassManager(ModuleOp module, MLIRContext &context,
   /// Load metadata from JSON file
   (void)AM->getMetadataManager();
 
-  struct StageSpec {
-    PipelineStage stage;
+  struct StepSpec {
+    PipelineStep step;
     const char *errorMessage;
     std::function<void(PassManager &)> setup;
   };
 
-  auto runStage = [&](const StageSpec &spec) -> LogicalResult {
-    if (hooks && hooks->beforePhase)
-      hooks->beforePhase(spec.stage);
+  auto runStep = [&](const StepSpec &spec) -> LogicalResult {
+    if (hooks && hooks->beforeStep)
+      hooks->beforeStep(spec.step);
 
-    if (spec.stage == PipelineStage::PreLowering && outAM)
+    if (spec.step == PipelineStep::PreLowering && outAM)
       AM->captureDiagnostics();
 
     PassManager pm(&context);
     spec.setup(pm);
     auto result = pm.run(module);
 
-    if (hooks && hooks->afterPhase)
-      hooks->afterPhase(spec.stage, result);
+    if (hooks && hooks->afterStep)
+      hooks->afterStep(spec.step, result);
 
     if (failed(result)) {
       ARTS_ERROR(spec.errorMessage);
@@ -944,72 +992,75 @@ buildPassManager(ModuleOp module, MLIRContext &context,
       *outAM = std::move(AM);
   };
 
-  const std::vector<StageSpec> runtimeStages = {
-      {PipelineStage::CanonicalizeMemrefs, "Error when canonicalizing memrefs",
+  const std::vector<StepSpec> runtimeSteps = {
+      {PipelineStep::CanonicalizeMemrefs, "Error when canonicalizing memrefs",
        [&](PassManager &pm) { buildCanonicalizeMemrefsPipeline(pm); }},
-      {PipelineStage::CollectMetadata, "Error when collecting metadata",
+      {PipelineStep::CollectMetadata, "Error when collecting metadata",
        [&](PassManager &pm) {
-         bool shouldExport = (stopAt == PipelineStage::CollectMetadata);
-         buildCollectMetadataPipeline(pm, outAM ? AM.get() : nullptr, shouldExport);
+         bool shouldExport = (stopAt == PipelineStep::CollectMetadata);
+         buildCollectMetadataPipeline(pm, outAM ? AM.get() : nullptr,
+                                      shouldExport);
        }},
-      {PipelineStage::InitialCleanup, "Error simplifying the IR",
+      {PipelineStep::InitialCleanup, "Error simplifying the IR",
        [&](PassManager &pm) {
          OpPassManager &optPM = pm.nest<func::FuncOp>();
          buildInitialCleanupPipeline(optPM);
        }},
-      {PipelineStage::OpenMPToArts, "Error when converting OpenMP to ARTS",
+      {PipelineStep::OpenMPToArts, "Error when converting OpenMP to ARTS",
        [&](PassManager &pm) { buildOpenMPToArtsPipeline(pm); }},
-      {PipelineStage::PatternPipeline,
+      {PipelineStep::PatternPipeline,
        "Error when applying the semantic pattern pipeline",
-       [&](PassManager &pm) { buildPatternDiscoveryPipeline(pm, AM.get()); }},
-      {PipelineStage::EdtTransforms, "Error when running EDT transformations",
+       [&](PassManager &pm) { buildPatternPipeline(pm, AM.get()); }},
+      {PipelineStep::EdtTransforms, "Error when running EDT transformations",
        [&](PassManager &pm) { buildEdtTransformsPipeline(pm, AM.get()); }},
-      {PipelineStage::CreateDbs, "Error when creating Dbs",
+      {PipelineStep::CreateDbs, "Error when creating DBs",
        [&](PassManager &pm) { buildCreateDbsPipeline(pm, AM.get()); }},
-      {PipelineStage::DbOpt, "Error when optimizing Dbs",
+      {PipelineStep::DbOpt, "Error when optimizing DBs",
        [&](PassManager &pm) { buildDbOptPipeline(pm, AM.get()); }},
-      {PipelineStage::EdtOpt, "Error when optimizing EDTs",
+      {PipelineStep::EdtOpt, "Error when optimizing EDTs",
        [&](PassManager &pm) { buildEdtOptPipeline(pm, AM.get()); }},
-      {PipelineStage::Concurrency, "Error when running concurrency",
+      {PipelineStep::Concurrency, "Error when running concurrency",
        [&](PassManager &pm) { buildConcurrencyPipeline(pm, AM.get()); }},
-      {PipelineStage::EdtDistribution, "Error when running EDT distribution",
+      {PipelineStep::EdtDistribution, "Error when running EDT distribution",
        [&](PassManager &pm) { buildEdtDistributionPipeline(pm, AM.get()); }},
-      {PipelineStage::ConcurrencyOpt, "Error when optimizing concurrency",
+      {PipelineStep::ConcurrencyOpt, "Error when optimizing concurrency",
        [&](PassManager &pm) { buildConcurrencyOptPipeline(pm, AM.get()); }},
-      {PipelineStage::Epochs, "Error when creating and optimizing epochs",
-       [&](PassManager &pm) { buildEpochsPipeline(pm, EpochFinishContinuation); }},
-      {PipelineStage::PreLowering,
+      {PipelineStep::Epochs, "Error when creating and optimizing epochs",
+       [&](PassManager &pm) {
+         buildEpochsPipeline(pm, EpochFinishContinuation);
+       }},
+      {PipelineStep::PreLowering,
        "Error when pre-lowering DBs, EDTs, and Epochs",
        [&](PassManager &pm) { buildPreLoweringPipeline(pm, AM.get()); }},
-      {PipelineStage::ArtsToLLVM, "Error when converting ARTS to LLVM",
+      {PipelineStep::ArtsToLLVM, "Error when converting ARTS to LLVM",
        [&](PassManager &pm) {
          buildArtsToLLVMPipeline(pm, Debug, DistributedDb, &machine);
        }},
   };
 
-  auto findRuntimeStage = [&](PipelineStage stage) -> const StageSpec * {
-    for (const StageSpec &spec : runtimeStages) {
-      if (spec.stage == stage)
+  auto findRuntimeStep = [&](PipelineStep step) -> const StepSpec * {
+    for (const StepSpec &spec : runtimeSteps) {
+      if (spec.step == step)
         return &spec;
     }
     return nullptr;
   };
 
-  for (const auto &stageSpec : kPipelineStageSpecs) {
-    if (!stageSpec.inPipelineSequence)
+  for (const auto &stepSpec : kPipelineStepSpecs) {
+    if (!stepSpec.inPipelineSequence)
       continue;
-    int currentIndex = pipelineStageIndex(stageSpec.stage);
+    int currentIndex = pipelineStepIndex(stepSpec.step);
     if (currentIndex < startIndex)
       continue;
-    const StageSpec *runtimeSpec = findRuntimeStage(stageSpec.stage);
+    const StepSpec *runtimeSpec = findRuntimeStep(stepSpec.step);
     if (!runtimeSpec) {
-      ARTS_ERROR("Missing runtime handler for pipeline step: "
-                 << stageSpec.token);
+      ARTS_ERROR(
+          "Missing runtime handler for pipeline step: " << stepSpec.token);
       return failure();
     }
-    if (failed(runStage(*runtimeSpec)))
+    if (failed(runStep(*runtimeSpec)))
       return failure();
-    if (stopAt == stageSpec.stage) {
+    if (stopAt == stepSpec.step) {
       releaseAnalysisManager();
       return success();
     }
@@ -1051,10 +1102,10 @@ buildPassManager(ModuleOp module, MLIRContext &context,
 int main(int argc, char **argv) {
   InitLLVM y(argc, argv);
   cl::ParseCommandLineOptions(argc, argv, "MLIR Optimization Driver\n");
-  configureArtsOnlyDebugChannels(ArtsOnly);
+  configureArtsDebugChannels(ArtsDebug);
 
   if (PrintPipelineTokensJSON) {
-    printStageTokensAsJSON(llvm::outs());
+    printPipelineTokensAsJSON(llvm::outs());
     return 0;
   }
   if (PrintPipelineManifestJSON) {
@@ -1062,9 +1113,9 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  PipelineStage effectiveStopAt = Pipeline;
+  PipelineStep effectiveStopAt = Pipeline;
   if (CollectMetadataFlag)
-    effectiveStopAt = PipelineStage::CollectMetadata;
+    effectiveStopAt = PipelineStep::CollectMetadata;
 
   /// Set up the dialect registry and MLIR context.
   DialectRegistry registry;
@@ -1090,8 +1141,8 @@ int main(int argc, char **argv) {
   PipelineHooks hooks;
   PipelineHooks *hooksPtr = nullptr;
   if (Diagnose) {
-    hooks.afterPhase = [](PipelineStage stage, LogicalResult result) {
-      llvm::errs() << "[carts-compile] Pipeline " << pipelineStageName(stage)
+    hooks.afterStep = [](PipelineStep step, LogicalResult result) {
+      llvm::errs() << "[carts-compile] Pipeline " << pipelineStepName(step)
                    << (succeeded(result) ? " completed" : " FAILED") << "\n";
     };
     hooksPtr = &hooks;
@@ -1099,9 +1150,8 @@ int main(int argc, char **argv) {
 
   /// Run the pass pipeline once.
   std::unique_ptr<arts::AnalysisManager> AM;
-  if (failed(buildPassManager(module.get(), context, effectiveStopAt,
-                              StartFrom, Diagnose ? &AM : nullptr,
-                              hooksPtr))) {
+  if (failed(buildPassManager(module.get(), context, effectiveStopAt, StartFrom,
+                              Diagnose ? &AM : nullptr, hooksPtr))) {
     return 1;
   }
 

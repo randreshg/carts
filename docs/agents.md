@@ -6,7 +6,7 @@ This guide teaches agents and developers how to understand, run, and debug CARTS
 
 1. [Quick Reference Card](#quick-reference-card)
 2. [Pipeline Overview](#pipeline-overview)
-3. [Pipeline Stages](#pipeline-stages)
+3. [Pipeline Steps](#pipeline-steps)
 4. [Partition Mode Algorithm](#partition-mode-algorithm)
 5. [Pass-Level Debug Reference](#pass-level-debug-reference)
 6. [Common Issues & Troubleshooting](#common-issues--troubleshooting)
@@ -30,17 +30,20 @@ carts build --arts --debug 3
 carts cgeist <file>.c -O0 --print-debug-info -S --raise-scf-to-affine           # Sequential
 carts cgeist <file>.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine  # Parallel
 
-# Run pipeline (stop at specific stage)
-carts compile <file>.mlir --pipeline=<stage>
+# Run pipeline (stop at specific step)
+carts compile <file>.mlir --pipeline=<step>
 
-# Run pipeline (dump all intermediate stages)
-carts compile <file>.mlir --all-pipelines -o ./stages/
+# Run pipeline (dump all intermediate pipeline steps)
+carts compile <file>.mlir --all-pipelines -o ./pipeline_steps/
+
+# Resume from a specific pipeline step (.mlir only)
+carts compile <file>.mlir --start-from=concurrency-opt -o <file>.prelower.mlir
 
 # Collect metadata
 carts compile <file>_seq.mlir --collect-metadata
 
 # Debug a specific pass
-carts compile <file>.mlir --pipeline=<stage> --arts-only=<pass> 2>&1
+carts compile <file>.mlir --pipeline=<step> --arts-debug=<pass> 2>&1
 
 # Full compilation and execution
 carts compile <file>.c -O3
@@ -53,44 +56,35 @@ carts lit tests/contracts/for_dispatch_clamp.mlir
 carts lit --suite contracts
 ```
 
-### Pipeline Stage Names (for --pipeline)
+### Pipeline Steps (CLI Introspection)
 
-| Stage | Name                   | Purpose                      |
-|-------|------------------------|------------------------------|
-| 1 | `canonicalize-memrefs` | Normalize memref operations |
-| 2 | `collect-metadata` | Extract loop/array metadata |
-| 3 | `initial-cleanup` | Remove dead code |
-| 4 | `openmp-to-arts` | Convert OpenMP to ARTS |
-| 5 | `pattern-pipeline` | Semantic pattern discovery + kernel transforms |
-| 6 | `edt-transforms` | Optimize EDT structure |
-| 7 | `create-dbs` | Create DataBlocks |
-| 8 | `db-opt` | Optimize DB modes |
-| 9 | `edt-opt` | EDT fusion |
-| 10 | `concurrency` | Build concurrency graph |
-| 11 | `edt-distribution` | Distribution selection + for lowering |
-| 12 | `concurrency-opt` | DB partitioning |
-| 13 | `epochs` | Epoch synchronization |
-| 14 | `pre-lowering` | Prepare for LLVM |
-| 15 | `arts-to-llvm` | Final LLVM conversion |
-
-### Debug Types (for --arts-only)
+Do not hardcode pipeline-step lists in docs. Query the compiler manifest:
 
 ```bash
---arts-only=collect_metadata
---arts-only=loop_reordering
---arts-only=create_dbs
---arts-only=db
---arts-only=db_partitioning
---arts-only=edt
---arts-only=concurrency
---arts-only=for_lowering
---arts-only=edt_lowering
---arts-only=convert_arts_to_llvm
---arts-only=arts_alias_scope_gen
---arts-only=arts_loop_vectorization_hints
---arts-only=arts_prefetch_hints
---arts-only=arts_data_ptr_hoisting
+# Human-readable order + pass counts
+tools/carts pipeline
+
+# Full machine-readable manifest (pipeline/start_from/passes)
+tools/carts pipeline --json
+
+# Pass list for one pipeline step
+tools/carts pipeline --pipeline=concurrency-opt
 ```
+
+Use these outputs as the source of truth for valid `--pipeline` and
+`--start-from` tokens.
+
+### ARTS Debug Channels (`--arts-debug`)
+
+`--arts-debug` accepts a comma-separated list of compiler debug channels and
+forwards them to `carts-compile`.
+
+```bash
+tools/carts compile example.mlir --pipeline=create-dbs --arts-debug=create_dbs 2>&1
+```
+
+Prefer discovering channels from current compiler output/source instead of
+maintaining static docs lists.
 
 ---
 
@@ -115,8 +109,8 @@ flowchart TB
     subgraph P2["Phase 2: OpenMP → ARTS transformation"]
       direction TB
       S4["4) openmp-to-arts<br/>OMP parallel → ARTS EDTs"]
-      S5["5) edt-transforms<br/>EDT structure optimization"]
-      S6["6) pattern-pipeline<br/>Cache-optimal loop order"]
+      S5["5) pattern-pipeline<br/>Semantic pattern discovery + kernel transforms"]
+      S6["6) edt-transforms<br/>EDT structure optimization"]
       S4 --> S5 --> S6
     end
 
@@ -174,9 +168,9 @@ flowchart TB
 
 ---
 
-## Pipeline Stages
+## Pipeline Steps
 
-### Stage 1: canonicalize-memrefs
+### Step 1: canonicalize-memrefs
 
 **Purpose:** Normalize memref operations and inline functions to prepare for analysis.
 
@@ -204,7 +198,7 @@ carts compile <file>.mlir --pipeline=canonicalize-memrefs
 
 ---
 
-### Stage 2: collect-metadata
+### Step 2: collect-metadata
 
 **Purpose:** Analyze sequential code to extract loop bounds, array dimensions, and access patterns for dual-compilation strategy.
 
@@ -215,7 +209,7 @@ carts compile <file>_seq.mlir --collect-metadata
 
 **Debug Command:**
 ```bash
-carts compile <file>_seq.mlir --collect-metadata --arts-only=collect_metadata 2>&1
+carts compile <file>_seq.mlir --collect-metadata --arts-debug=collect_metadata 2>&1
 ```
 
 **Passes Executed:**
@@ -240,13 +234,13 @@ carts compile <file>_seq.mlir --collect-metadata --arts-only=collect_metadata 2>
 
 ---
 
-### Stage 3: initial-cleanup
+### Step 3: initial-cleanup
 
 **Purpose:** Remove dead code and simplify control flow after metadata collection.
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --initial-cleanup
+carts compile <file>.mlir --pipeline=initial-cleanup
 ```
 
 **Passes Executed:**
@@ -256,7 +250,7 @@ carts compile <file>.mlir --initial-cleanup
 
 ---
 
-### Stage 4: openmp-to-arts
+### Step 4: openmp-to-arts
 
 **Purpose:** Transform OpenMP parallel constructs into ARTS EDT operations.
 
@@ -267,7 +261,7 @@ carts compile <file>.mlir --pipeline=openmp-to-arts
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --pipeline=openmp-to-arts --arts-only=convert_openmp_to_arts 2>&1
+carts compile <file>.mlir --pipeline=openmp-to-arts --arts-debug=convert_openmp_to_arts 2>&1
 ```
 
 **Passes Executed:**
@@ -306,7 +300,7 @@ arts.edt <parallel> {
 
 ---
 
-### Stage 5: edt-transforms
+### Step 6: edt-transforms
 
 **Purpose:** Optimize EDT structure through invariant code motion and pointer rematerialization.
 
@@ -317,7 +311,7 @@ carts compile <file>.mlir --pipeline=edt-transforms
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --pipeline=edt-transforms --arts-only=edt 2>&1
+carts compile <file>.mlir --pipeline=edt-transforms --arts-debug=edt 2>&1
 ```
 
 **Passes Executed:**
@@ -329,7 +323,7 @@ carts compile <file>.mlir --pipeline=edt-transforms --arts-only=edt 2>&1
 
 ---
 
-### Stage 6: pattern-pipeline
+### Step 5: pattern-pipeline
 
 **Purpose:** Reorder inner loops for cache-optimal memory access patterns based on metadata analysis.
 
@@ -340,7 +334,7 @@ carts compile <file>.mlir --pipeline=pattern-pipeline
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --pipeline=pattern-pipeline --arts-only=loop_reordering,kernel_transforms 2>&1
+carts compile <file>.mlir --pipeline=pattern-pipeline --arts-debug=loop_reordering,kernel_transforms 2>&1
 ```
 
 **Passes Executed:**
@@ -387,7 +381,7 @@ scf.for %i = %c0 to %M {
 
 ---
 
-### Stage 7: create-dbs
+### Step 7: create-dbs
 
 **Purpose:** Create DataBlock abstractions for memory shared between EDTs.
 
@@ -398,7 +392,7 @@ carts compile <file>.mlir --pipeline=create-dbs
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --pipeline=create-dbs --arts-only=create_dbs 2>&1
+carts compile <file>.mlir --pipeline=create-dbs --arts-debug=create_dbs 2>&1
 ```
 
 **Passes Executed:**
@@ -432,7 +426,7 @@ arts.db_free %db : !arts.db<...>
 
 ---
 
-### Stage 8: db-opt
+### Step 8: db-opt
 
 **Purpose:** Optimize DataBlock access modes based on actual load/store operations.
 
@@ -443,7 +437,7 @@ carts compile <file>.mlir --pipeline=db-opt
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --pipeline=db-opt --arts-only=db 2>&1
+carts compile <file>.mlir --pipeline=db-opt --arts-debug=db 2>&1
 ```
 
 **Passes Executed:**
@@ -457,7 +451,7 @@ carts compile <file>.mlir --pipeline=db-opt --arts-only=db 2>&1
 
 ---
 
-### Stage 9: edt-opt
+### Step 9: edt-opt
 
 **Purpose:** EDT fusion and further optimization.
 
@@ -468,7 +462,7 @@ carts compile <file>.mlir --pipeline=edt-opt
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --pipeline=edt-opt --arts-only=edt,arts_loop_fusion 2>&1
+carts compile <file>.mlir --pipeline=edt-opt --arts-debug=edt,arts_loop_fusion 2>&1
 ```
 
 **Passes Executed:**
@@ -501,7 +495,7 @@ arts.edt <parallel> {
 
 ---
 
-### Stage 10: concurrency
+### Step 10: concurrency
 
 **Purpose:** Build EDT concurrency graph and apply pre-lowering `arts.for` hints.
 
@@ -512,7 +506,7 @@ carts compile <file>.mlir --pipeline=concurrency
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --pipeline=concurrency --arts-only=concurrency,arts_for_optimization 2>&1
+carts compile <file>.mlir --pipeline=concurrency --arts-debug=concurrency,arts_for_optimization 2>&1
 ```
 
 **Passes Executed:**
@@ -522,7 +516,7 @@ carts compile <file>.mlir --pipeline=concurrency --arts-only=concurrency,arts_fo
 
 ---
 
-### Stage 11: edt-distribution
+### Step 11: edt-distribution
 
 **Purpose:** Select distribution strategy and lower `arts.for` loops.
 
@@ -536,7 +530,7 @@ carts compile <file>.mlir --pipeline=edt-distribution
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --pipeline=edt-distribution --arts-only=edt_distribution,for_lowering 2>&1
+carts compile <file>.mlir --pipeline=edt-distribution --arts-debug=edt_distribution,for_lowering 2>&1
 ```
 
 **Passes Executed:**
@@ -545,12 +539,12 @@ carts compile <file>.mlir --pipeline=edt-distribution --arts-only=edt_distributi
 
 ---
 
-### Stage 12: concurrency-opt
+### Step 12: concurrency-opt
 
 **Purpose:** Optimize concurrent execution with DB partitioning and concurrency rewrites.
 
 **Reference Doc:**
-- `docs/heuristics/partitioning/partitioning.md`
+- `docs/heuristics/partitioning.md`
 
 **Run Command:**
 ```bash
@@ -559,7 +553,7 @@ carts compile <file>.mlir --pipeline=concurrency-opt
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --pipeline=concurrency-opt --arts-only=db,db_partitioning 2>&1
+carts compile <file>.mlir --pipeline=concurrency-opt --arts-debug=db,db_partitioning 2>&1
 ```
 
 **Passes Executed:**
@@ -596,7 +590,7 @@ memref.load/store %ref[%local_idx]
 
 ## Partition Mode Algorithm
 
-This section provides a comprehensive guide to how CARTS determines the partitioning strategy for DataBlocks. The algorithm spans three compilation stages and involves capability analysis, heuristic decision-making, and IR transformation.
+This section provides a comprehensive guide to how CARTS determines the partitioning strategy for DataBlocks. The algorithm spans three pipeline steps and involves capability analysis, heuristic decision-making, and IR transformation.
 
 ### Overview
 
@@ -609,11 +603,11 @@ Partition mode determines how a DataBlock's data is distributed:
 | **ElementWise** | `sizes=[N], elementSizes=[1]` | Fine-grained from depend clauses |
 | **Stencil** | `sizes=[numChunks], elementSizes=[blockSize+halo]` | Stencil patterns with halos |
 
-### Master Flowchart: Three-Stage Partition Mode Assignment
+### Master Flowchart: Three-Step Partition Mode Assignment
 
 ```mermaid
 flowchart TB
-    subgraph Stage7["Stage 7: CreateDbs"]
+    subgraph Step7["Step 7: CreateDbs"]
         direction TB
         S7_1[Identify memrefs escaping to parallel EDTs]
         S7_2{Has DbControlOps<br/>from depend clauses?}
@@ -638,7 +632,7 @@ flowchart TB
         S7_8 --> S7_9
     end
 
-    subgraph Stage11["Stage 11: EdtDistribution + ForLowering"]
+    subgraph Step11["Step 11: EdtDistribution + ForLowering"]
         direction TB
         S11_1[Find arts.for inside parallel EDT]
         S11_2[Classify pattern and select distribution_kind]
@@ -649,7 +643,7 @@ flowchart TB
         S11_1 --> S11_2 --> S11_3 --> S11_4 --> S11_5
     end
 
-    subgraph Stage12["Stage 12: DbPartitioning"]
+    subgraph Step12["Step 12: DbPartitioning"]
         direction TB
         S12_1[For each DbAllocOp]
         S12_2{Already partitioned?<br/>partition != coarse}
@@ -666,12 +660,12 @@ flowchart TB
         S12_4 --> S12_5 --> S12_6 --> S12_7 --> S12_8
     end
 
-    Stage7 --> Stage11 --> Stage12
+    Step7 --> Step11 --> Step12
 ```
 
 ---
 
-### Stage 7: CreateDbs - Initial Partition Mode
+### Step 7: CreateDbs - Initial Partition Mode
 
 CreateDbs analyzes OpenMP `depend` clauses (converted to DbControlOps) to determine initial partitioning capability.
 
@@ -714,7 +708,7 @@ flowchart TB
     Q3 -->|No| R3
 ```
 
-**Key Code Location**: `lib/arts/passes/Transformations/CreateDbs.cpp:595-750`
+**Key Code Location**: `lib/arts/passes/transforms/CreateDbs.cpp`
 
 ```cpp
 // Build PartitioningContext from DbControlOp analysis
@@ -733,9 +727,9 @@ setPartitionMode(dbAllocOp, promotionMode);
 
 ---
 
-### Stage 11 Detail: EdtDistribution + ForLowering
+### Step 11 Detail: EdtDistribution + ForLowering
 
-The distribution stage is split into two responsibilities:
+The distribution step is split into two responsibilities:
 - `EdtDistributionPass` classifies each `arts.for` pattern and sets typed distribution attributes.
 - `ForLowering` consumes those attributes and lowers loops by delegating to strategy-specific task lowerings.
 
@@ -743,7 +737,7 @@ The distribution stage is split into two responsibilities:
 
 ```mermaid
 flowchart LR
-    subgraph Before["After Concurrency Stage"]
+    subgraph Before["After Concurrency Step"]
         FOR["arts.for ..."]
     end
 
@@ -780,7 +774,7 @@ flowchart LR
 
 ---
 
-### Stage 12: DbPartitioning - Final Decision Algorithm
+### Step 12: DbPartitioning - Final Decision Algorithm
 
 DbPartitioning is the final decision point. It analyzes all acquires for an allocation and applies heuristics to choose the optimal partitioning.
 
@@ -985,50 +979,50 @@ for (int e = 0; e < numElems; e++) {
 
 #### Current Structure (as of this codebase)
 
-Heuristics are centralized in the core analysis layer:
+Heuristics live in the analysis heuristics layer:
 
 ```
-include/arts/analysis/HeuristicsConfig.h   # PartitioningDecision, PartitioningContext
-lib/arts/analysis/HeuristicsConfig.cpp     # evaluatePartitioningHeuristics(...)
+include/arts/analysis/heuristics/PartitioningHeuristics.h
+lib/arts/analysis/heuristics/PartitioningHeuristics.cpp
+lib/arts/analysis/heuristics/DbHeuristics.cpp
 ```
 
 Key entry points:
 
 - `evaluatePartitioningHeuristics(...)` returns a `PartitioningDecision`.
-- `HeuristicsConfig::getPartitioningMode(...)` wraps evaluation and records
-  decisions for diagnostics.
-- `HeuristicsConfig::getAcquireDecisions(...)` applies H1.7 (per-acquire
+- `DbHeuristics` integrates heuristic results into DB-mode and partitioning
+  decisions.
+- Partitioning logic applies H1.7 (per-acquire
   full-range decisions).
 
-**Assessment**: The current single-function structure keeps policy clear and
-traceable, while still recording decisions for diagnostics.
+**Assessment**: The current structure keeps policy evaluation centralized in
+`PartitioningHeuristics` while keeping pass-facing behavior in `DbHeuristics`.
 
 | Aspect | Current | Notes |
 |--------|---------|-------|
-| LOC | single file (`HeuristicsConfig.cpp`) | Centralized and traceable |
-| Classes | none (function-based) | Simpler than class registry |
+| Files | `PartitioningHeuristics.cpp` + `DbHeuristics.cpp` | Clear split: policy vs integration |
+| Classes | helper + integration utilities | Keeps pass code lean |
 | Context fields | `PartitioningContext` | Rich enough for H1.x decisions |
 | Evaluation | linear chain | Very fast |
 
 **Why it is reasonable**:
 1. **Extensibility**: Add new branches in `evaluatePartitioningHeuristics(...)`
 2. **Separation**: Heuristics decide; DbPartitioning applies
-3. **Diagnostics**: `recordDecision()` captures rationale for tooling
+3. **Diagnostics**: DB heuristics can attach rationale in one place
 
 ---
 
 ### Key Code References
 
-| Stage | File | Key Lines | Purpose |
-|-------|------|-----------|---------|
-| CreateDbs | `lib/arts/passes/Transformations/CreateDbs.cpp` | 595-750 | Initial partition mode |
-| ForLowering | `lib/arts/passes/Transformations/ForLowering.cpp` | task-lowering pipeline | Apply distribution strategy via helper contracts |
-| DbPartitioning | `lib/arts/passes/Optimizations/DbPartitioning.cpp` | 970-1030 | Per-acquire analysis |
-| DbPartitioning | `lib/arts/passes/Optimizations/DbPartitioning.cpp` | 1032-1061 | Context aggregation |
-| IV Check | `lib/arts/analysis/Graphs/Db/DbAcquireNode.cpp` | 923-1001 | canPartitionWithOffset |
-| Heuristics | `lib/arts/analysis/HeuristicsConfig.cpp` | policy entrypoints | getPartitioningMode + acquire decisions |
+| Step | File | Key Lines | Purpose |
+|------|------|-----------|---------|
+| CreateDbs | `lib/arts/passes/transforms/CreateDbs.cpp` | see `DbControlOp` handling | Initial partition mode |
+| ForLowering | `lib/arts/passes/transforms/ForLowering.cpp` | task-lowering pipeline | Apply distribution strategy via helper contracts |
+| DbPartitioning | `lib/arts/passes/opt/db/DbPartitioning.cpp` | per-acquire + context aggregation | Partitioning rewrite and mode decisions |
+| IV Check | `lib/arts/analysis/graphs/db/DbAcquireNode.cpp` | `canPartitionWithOffset` | Offset legality checks |
+| Heuristics | `lib/arts/analysis/heuristics/PartitioningHeuristics.cpp` | policy entrypoints | H1.x evaluation |
 
-### Stage 13: epochs
+### Step 13: epochs
 
 **Purpose:** Create epoch synchronization for EDT groups.
 
@@ -1043,7 +1037,7 @@ carts compile <file>.mlir --pipeline=epochs
 
 ---
 
-### Stage 14: pre-lowering
+### Step 14: pre-lowering
 
 **Purpose:** Final transformations before LLVM conversion.
 
@@ -1054,7 +1048,7 @@ carts compile <file>.mlir --pipeline=pre-lowering
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --pipeline=pre-lowering --arts-only=parallel_edt_lowering,db_lowering,edt_lowering,epoch_lowering,arts_data_ptr_hoisting 2>&1
+carts compile <file>.mlir --pipeline=pre-lowering --arts-debug=parallel_edt_lowering,db_lowering,edt_lowering,epoch_lowering,arts_data_ptr_hoisting 2>&1
 ```
 
 **Passes Executed:**
@@ -1075,7 +1069,7 @@ carts compile <file>.mlir --pipeline=pre-lowering --arts-only=parallel_edt_lower
 
 ---
 
-### Stage 15: arts-to-llvm
+### Step 15: arts-to-llvm
 
 **Purpose:** Final conversion of ARTS dialect to LLVM dialect.
 
@@ -1088,7 +1082,7 @@ carts compile <file>.mlir
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --arts-only=convert_arts_to_llvm 2>&1
+carts compile <file>.mlir --arts-debug=convert_arts_to_llvm 2>&1
 ```
 
 **Passes Executed:**
@@ -1109,7 +1103,7 @@ carts compile <file>.mlir --emit-llvm
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --emit-llvm --arts-only=arts_alias_scope_gen,arts_loop_vectorization_hints,arts_prefetch_hints 2>&1
+carts compile <file>.mlir --emit-llvm --arts-debug=arts_alias_scope_gen,arts_loop_vectorization_hints,arts_prefetch_hints 2>&1
 ```
 
 **Passes Executed:**
@@ -1142,8 +1136,8 @@ carts compile <file>.mlir --emit-llvm --arts-only=arts_alias_scope_gen,arts_loop
 
 ### Complete Pass Table
 
-| Pass | DEBUG_TYPE | Stage | Purpose |
-|------|-----------|-------|---------|
+| Pass | DEBUG_TYPE | Pipeline Step | Purpose |
+|------|-----------|---------------|---------|
 | CollectMetadata | `collect_metadata` | 2 | Extract loop/array metadata |
 | ConvertOpenMPToArts | `convert_openmp_to_arts` | 4 | OMP → ARTS transformation |
 | CanonicalizeMemrefs | `canonicalize_memrefs` | 1 | Normalize memref operations |
@@ -1185,16 +1179,16 @@ All passes use the ARTS debug infrastructure with color-coded output:
 
 ```bash
 # Debug loop reordering decisions
-carts compile gemm.mlir --pipeline=pattern-pipeline --arts-only=loop_reordering 2>&1 | tee debug.log
+carts compile gemm.mlir --pipeline=pattern-pipeline --arts-debug=loop_reordering 2>&1 | tee debug.log
 
 # Debug DB partitioning decisions
-carts compile gemm.mlir --pipeline=concurrency-opt --arts-only=db,db_partitioning 2>&1 | tee debug.log
+carts compile gemm.mlir --pipeline=concurrency-opt --arts-debug=db,db_partitioning 2>&1 | tee debug.log
 
 # Debug multiple passes
-carts compile gemm.mlir --arts-only=loop_reordering,create_dbs,db_partitioning 2>&1 | tee debug.log
+carts compile gemm.mlir --arts-debug=loop_reordering,create_dbs,db_partitioning 2>&1 | tee debug.log
 
 # Debug post-lowering optimizations
-carts compile gemm.mlir --emit-llvm --arts-only=arts_alias_scope_gen,arts_loop_vectorization_hints,arts_prefetch_hints 2>&1 | tee debug.log
+carts compile gemm.mlir --emit-llvm --arts-debug=arts_alias_scope_gen,arts_loop_vectorization_hints,arts_prefetch_hints 2>&1 | tee debug.log
 ```
 
 ---
@@ -1315,13 +1309,13 @@ checksum += fabs(data[i]);
 
 **Cause:** Loop reordering ran AFTER create-dbs, breaking SSA value relationships.
 
-**Fix:** Ensure pattern-pipeline stage runs BEFORE create-dbs (this is the default order).
+**Fix:** Ensure pattern-pipeline step runs BEFORE create-dbs (this is the default order).
 
 ---
 
 ### 10. Missing Debug Output
 
-**Symptom:** `--arts-only=<pass>` produces no output.
+**Symptom:** `--arts-debug=<pass>` produces no output.
 
 **Cause:** Debug output goes to stderr, not stdout.
 
@@ -1349,17 +1343,17 @@ carts compile example_seq.mlir --collect-metadata
 # Step 3: Generate parallel MLIR
 carts cgeist example.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine -o example.mlir
 
-# Step 4: Inspect each pipeline stage
-carts compile example.mlir --pipeline=canonicalize-memrefs -o stages/01_canonicalize.mlir
-carts compile example.mlir --pipeline=openmp-to-arts -o stages/04_openmp_to_arts.mlir
-carts compile example.mlir --pipeline=create-dbs -o stages/07_create_dbs.mlir
-carts compile example.mlir --pipeline=concurrency-opt -o stages/12_concurrency_opt.mlir
+# Step 4: Inspect each pipeline step
+carts compile example.mlir --pipeline=canonicalize-memrefs -o pipeline_steps/01_canonicalize.mlir
+carts compile example.mlir --pipeline=openmp-to-arts -o pipeline_steps/04_openmp_to_arts.mlir
+carts compile example.mlir --pipeline=create-dbs -o pipeline_steps/07_create_dbs.mlir
+carts compile example.mlir --pipeline=concurrency-opt -o pipeline_steps/12_concurrency_opt.mlir
 
-# Or dump all stages at once
-carts compile example.mlir --all-pipelines -o stages/
+# Or dump all steps at once
+carts compile example.mlir --all-pipelines -o pipeline_steps/
 
 # Step 5: Debug specific pass if needed
-carts compile example.mlir --pipeline=create-dbs --arts-only=create_dbs 2>&1 | tee debug_createdb.log
+carts compile example.mlir --pipeline=create-dbs --arts-debug=create_dbs 2>&1 | tee debug_createdb.log
 
 # Step 6: Full execution
 carts compile example.c -O3
@@ -1372,7 +1366,7 @@ carts compile example.c -O3
 carts cgeist example.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine -o example.mlir
 
 # Stop at concurrency-opt and debug
-carts compile example.mlir --pipeline=concurrency-opt --arts-only=db,db_partitioning 2>&1 | tee db_debug.log
+carts compile example.mlir --pipeline=concurrency-opt --arts-debug=db,db_partitioning 2>&1 | tee db_debug.log
 
 # Look for partitioning decisions in output:
 # [INFO] [db_partitioning] Analyzing DB partitioning...
@@ -1387,7 +1381,7 @@ grep -A2 "arts.db_alloc" example_concurrency-opt.mlir
 
 ```bash
 # Generate LLVM IR with hints
-carts compile example.mlir --emit-llvm --arts-only=arts_loop_vectorization_hints,arts_prefetch_hints 2>&1 | tee vec_debug.log
+carts compile example.mlir --emit-llvm --arts-debug=arts_loop_vectorization_hints,arts_prefetch_hints 2>&1 | tee vec_debug.log
 
 # Look for:
 # [DEBUG] [arts_loop_vectorization_hints] Auto-detected vector width: 8
@@ -1421,29 +1415,17 @@ carts compile example.c -O3 --diagnose --diagnose-output=diag.json
 ### Workflow 5: Full Pipeline Inspection
 
 ```bash
-# Dump all stages + LLVM IR
-carts compile example.mlir --all-pipelines -o stages/
+# Dump all pipeline-step outputs + LLVM IR
+carts compile example.mlir --all-pipelines -o pipeline_steps/
 
-# Files generated:
-# stages/example_canonicalize-memrefs.mlir
-# stages/example_collect-metadata.mlir
-# stages/example_initial-cleanup.mlir
-# stages/example_openmp-to-arts.mlir
-# stages/example_edt-transforms.mlir
-# stages/example_pattern-pipeline.mlir
-# stages/example_create-dbs.mlir
-# stages/example_db-opt.mlir
-# stages/example_edt-opt.mlir
-# stages/example_concurrency.mlir
-# stages/example_edt-distribution.mlir
-# stages/example_concurrency-opt.mlir
-# stages/example_epochs.mlir
-# stages/example_pre-lowering.mlir
-# stages/example_arts-to-llvm.mlir
-# stages/example.ll
+# Inspect generated files without hardcoding step names
+find pipeline_steps -maxdepth 1 -type f | sort
+# Includes one <stem>_<pipeline-step>.mlir per step, plus:
+#   <stem>_complete.mlir
+#   <stem>.ll
 
-# Compare transformation between stages
-diff stages/example_create-dbs.mlir stages/example_concurrency-opt.mlir
+# Compare transformation between pipeline steps
+diff pipeline_steps/example_create-dbs.mlir pipeline_steps/example_concurrency-opt.mlir
 ```
 
 ## Distributed Runtime Debug
@@ -1504,19 +1486,19 @@ carts benchmarks run <bench> --nodes 2 --threads 4 --arts-config docker/arts-doc
 
 ## Reference Files
 
-- **Pipeline Definition:** `tools/run/carts-compile.cpp`
+- **Pipeline Definition:** `tools/compile/Compile.cpp`
 - **CLI Interface:** `tools/carts_cli.py`
 - **Pass Registry:** `include/arts/passes/Passes.td`
 - **Pass Headers:** `include/arts/passes/Passes.h`
 - **Debug Macros:** `include/arts/utils/Debug.h`
-- **Pass Implementations:** `lib/arts/passes/*.cpp`
+- **Pass Implementations:** `lib/arts/passes/transforms/`, `lib/arts/passes/opt/`
 
 ---
 
 ## Version Information
 
 This guide covers CARTS with the following features:
-- 15 pipeline stages
+- 15 pipeline steps
 - 27+ optimization passes
 - New passes: LoopReordering, PrefetchHints, AliasScopeGen, LoopVectorizationHints
 - Dual-compilation metadata strategy

@@ -1,9 +1,5 @@
 # RFC: ARTS-Native Epoch Continuations (Finish-EDT) for CARTS
 
-Date: 2026-03-16
-Status: Draft plan from code/runtime audit
-Execution board: `docs/compiler/epoch-finish-continuation-execution-board.md`
-
 ## 1. Why We Are Doing This
 
 Today CARTS lowers epoch synchronization to a blocking wait path:
@@ -133,7 +129,7 @@ This preserves sequential iteration semantics without blocking worker threads.
 1. Extend `CreateEpochOp` with optional finish target operands:
    - `finishEdtGuid : i64` (optional)
    - `finishSlot : i32` (optional)
-2. Update assembly/verification for backwards compatibility.
+2. Update assembly/verification for the current textual form.
 3. Update `CreateEpochPattern`:
    - if finish operands are present, call runtime with them.
    - else fallback to `(0, DEFAULT_EDT_SLOT)`.

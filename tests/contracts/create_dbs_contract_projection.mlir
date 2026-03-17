@@ -1,7 +1,7 @@
 // RUN: %carts-compile %S/../examples/jacobi/for/jacobi-for.mlir --O3 --arts-config %S/../examples/arts.cfg --pipeline pattern-pipeline | %FileCheck %s --check-prefix=PATTERN
 // RUN: %carts-compile %S/../examples/jacobi/for/jacobi-for.mlir --O3 --arts-config %S/../examples/arts.cfg --pipeline create-dbs | %FileCheck %s --check-prefix=DB
 
-// Ensure pattern-stage semantic attrs survive the full pattern pipeline.
+// Ensure pattern-step semantic attrs survive the full pattern pipeline.
 // PATTERN: depPattern = #arts.dep_pattern<jacobi_alternating_buffers>
 // PATTERN: distribution_pattern = #arts.distribution_pattern<stencil>
 // PATTERN: stencil_min_offsets = [-1]

@@ -55,8 +55,8 @@ cross-step contracts.
 ### 2) collect-metadata
 - `replaceAffineCFG` / `RaiseSCFToAffine` (twice, nested func)
 - `CSE` (nested func)
-- `CollectMetadataPass`
-- `VerifyMetadataPass` when `--diagnose` is enabled
+- `CollectMetadata`
+- `VerifyMetadata` (diagnose mode)
 
 ### 3) initial-cleanup
 - `LowerAffine` (nested func)
@@ -64,23 +64,23 @@ cross-step contracts.
 - `PolygeistCanonicalizeFor` (nested func)
 
 ### 4) openmp-to-arts
-- `ConvertOpenMPtoArts`
+- `ConvertOpenMPToArts`
 - `DeadCodeElimination`
 - `CSE`
 
 ### 5) pattern-pipeline
-- `PatternDiscoveryPass(seed)`
+- `PatternDiscovery(seed)`
 - `DepTransforms`
 - `LoopNormalization`
 - `StencilBoundaryPeeling`
 - `LoopReordering`
-- `PatternDiscoveryPass(refine)`
+- `PatternDiscovery(refine)`
 - `KernelTransforms`
 - `CSE`
 
 ### 6) edt-transforms
-- `EdtStructuralOptPass(runAnalysis=false)`
-- `EdtInvariantCodeMotion`
+- `EdtStructuralOpt(runAnalysis=false)`
+- `EdtICM`
 - `DeadCodeElimination`
 - `SymbolDCE`
 - `CSE`
@@ -93,6 +93,7 @@ cross-step contracts.
   - outlines eligible host producer loops so they flow through the regular
     distributed `arts.for` pipeline before `CreateDbs`
 - `CreateDbs`
+- `CSE` (bridge cleanup, conditional)
 - `PolygeistCanonicalize`
 - `CSE`
 - `SymbolDCE`
@@ -108,27 +109,27 @@ cross-step contracts.
 
 ### 9) edt-opt
 - `PolygeistCanonicalize`
-- `EdtStructuralOptPass(runAnalysis=true)`
+- `EdtStructuralOpt(runAnalysis=true)`
 - `LoopFusion`
 - `CSE`
 
 ### 10) concurrency
 - `PolygeistCanonicalize`
-- `ConcurrencyPass`
-- `ArtsForOptimization`
+- `Concurrency`
+- `ForOpt`
 - `PolygeistCanonicalize`
 
 ### 11) edt-distribution
-- `EdtDistributionPass`
+- `EdtDistribution`
 - `ForLowering`
 - `VerifyForLowered`
 
 ### 12) concurrency-opt
-- `EdtStructuralOptPass(runAnalysis=false)`
+- `EdtStructuralOpt(runAnalysis=false)`
 - `DeadCodeElimination`
 - `PolygeistCanonicalize`
 - `CSE`
-- `EdtStructuralOptPass(runAnalysis=false)` (second cleanup pass)
+- `EdtStructuralOpt(runAnalysis=false)` (second cleanup pass)
 - `EpochOpt`
 - `PolygeistCanonicalize`
 - `CSE`
@@ -142,7 +143,7 @@ cross-step contracts.
 - `PolygeistCanonicalize`
 - `CSE`
 - `BlockLoopStripMining` (nested func)
-- `ArtsHoisting`
+- `Hoisting`
 - `PolygeistCanonicalize`
 - `CSE`
 - `EdtAllocaSinking`
@@ -152,6 +153,7 @@ cross-step contracts.
 ### 13) epochs
 - `PolygeistCanonicalize`
 - `CreateEpochs`
+- `EpochContinuationPrep` (conditional)
 - `PolygeistCanonicalize`
 
 ### 14) pre-lowering

@@ -3,8 +3,7 @@
 ///
 /// Detects out-of-place affine stencil kernels and records an N-D halo-aware
 /// block contract before DB creation so later passes do not fall back to
-/// coarse or full-range simply because the legacy 1-D stencil path cannot
-/// represent the footprint.
+/// coarse or full-range when the full footprint is available.
 ///
 /// Before:
 ///   arts.for (%i = %lb0 to %ub0) {

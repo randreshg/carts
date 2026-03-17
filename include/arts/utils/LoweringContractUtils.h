@@ -59,13 +59,11 @@ struct LoweringContractInfo {
   }
 
   bool hasSpatialContract() const {
-    return !ownerDims.empty() || !blockShape.empty() ||
-           !minOffsets.empty() || !maxOffsets.empty() ||
-           !writeFootprint.empty() || !spatialDims.empty() ||
-           !staticBlockShape.empty() ||
+    return !ownerDims.empty() || !blockShape.empty() || !minOffsets.empty() ||
+           !maxOffsets.empty() || !writeFootprint.empty() ||
+           !spatialDims.empty() || !staticBlockShape.empty() ||
            !staticMinOffsets.empty() || !staticMaxOffsets.empty() ||
-           supportedBlockHalo ||
-           !stencilIndependentDims.empty();
+           supportedBlockHalo || !stencilIndependentDims.empty();
   }
 
   bool hasAnalysisRefinements() const {

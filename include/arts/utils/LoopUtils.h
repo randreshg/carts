@@ -3,7 +3,7 @@
 ///
 /// Utility functions for querying SCF loop properties.
 /// Lightweight inline helpers for worker-loop detection, innermost-loop
-/// checks, and bound compatibility — complements the heavier LoopAnalysis
+/// checks, and bound matching — complements the heavier LoopAnalysis
 /// framework without requiring an AnalysisManager.
 ///==========================================================================///
 
@@ -44,7 +44,7 @@ inline bool isInnermostLoop(scf::ForOp loop) {
   return !hasNested;
 }
 
-/// Check whether two scf::ForOp loops have compatible bounds (same lower
+/// Check whether two scf::ForOp loops have matching bounds (same lower
 /// bound, upper bound, and step). Uses ValueAnalysis::sameValue for comparison.
 /// Note: this overload is for scf::ForOp only; arts::ForOp has a separate
 /// bounds API and is handled in LoopFusion directly.

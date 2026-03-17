@@ -6,8 +6,8 @@
 - `include/arts/` - Public headers
 - `tools/` - User-facing scripts and utilities
   - `carts` - Main wrapper script
-  - `run/` - C++ compilation driver
-  - `setup/` - Environment provisioning
+  - `compile/` - C++ compilation driver (`carts-compile`)
+  - `scripts/` - Python CLI subcommands/helpers
 - `tests/` - Test suites
   - `contracts/` - Pipeline regression tests (MLIR + FileCheck)
   - `examples/` - End-to-end C/C++ tests
@@ -15,13 +15,13 @@
 - `external/` - Dependencies (ARTS, Polygeist, LLVM)
 
 Compiler layering and ownership rules are documented in:
-- `docs/contributing/compiler-structure.md`
+- `docs/compiler/pipeline.md`
 
 ## Build & Test Commands
 
 ```bash
 # Setup and build
-python3 tools/setup/carts-setup.py    # Install prerequisites
+python3 tools/scripts/setup.py         # Install prerequisites
 carts build                            # Build CARTS
 carts build --clean                    # Clean build
 carts build --arts --debug 0           # ARTS errors only
@@ -32,7 +32,6 @@ carts build --arts --debug 3           # Build ARTS with full debug logging
 # Testing
 carts compile simple.cpp -o simple     # Full compilation pipeline
 carts test                             # Run all tests
-carts check                            # Alias for carts test
 carts lit tests/contracts/<file>.mlir  # Run focused lit regressions
 carts lit --suite contracts            # Run the maintained contracts suite
 make check-doc-flags                   # Validate docs flags against carts-compile options

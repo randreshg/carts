@@ -1,4 +1,4 @@
-"""Test, check, and lit commands for CARTS CLI."""
+"""Test and lit commands for CARTS CLI."""
 
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -47,11 +47,6 @@ def _setup_lit_pythonpath(config: PlatformConfig) -> None:
     if (llvm_lit_runtime / "lit").is_dir():
         lit_python_paths.append(str(llvm_lit_runtime))
 
-    # Backward-compatible location used by older bootstrap scripts.
-    llvm_lit_runtime_legacy = config.llvm_install_dir / "llvm" / "utils" / "lit"
-    if (llvm_lit_runtime_legacy / "lit").is_dir():
-        lit_python_paths.append(str(llvm_lit_runtime_legacy))
-
     # 3) Source fallback if user has not bootstrapped install-side lit yet.
     source_lit_runtime = config.carts_dir / "external" / "Polygeist" / \
         "llvm-project" / "llvm" / "utils" / "lit"
@@ -79,21 +74,14 @@ def _resolve_lit_targets(config: PlatformConfig, suite: str) -> List[Path]:
         print_error(f"Tests directory not found at {tests_dir}")
         raise typer.Exit(1)
 
-    suite_aliases = {"arts": "examples"}
-    effective_suite = suite_aliases.get(suite, suite)
-    if suite == "arts":
-        print_info("Suite 'arts' is deprecated; using 'examples'.")
-
-    if effective_suite == "all":
+    if suite == "all":
         # Keep "all" deterministic and green by running maintained lit suites.
         test_paths = [tests_dir / "contracts"]
-    elif effective_suite == "contracts":
+    elif suite == "contracts":
         test_paths = [tests_dir / "contracts"]
-    elif effective_suite == "examples":
-        test_paths = [tests_dir / "examples"]
     else:
         print_error(f"Unknown test suite '{suite}'")
-        print_info("Available suites: all, contracts, examples")
+        print_info("Available suites: all, contracts")
         raise typer.Exit(1)
 
     for test_path in test_paths:
@@ -167,14 +155,13 @@ def _run_lit_suite(suite: str, verbose_tests: bool) -> None:
     """Run a lit suite and terminate the command with its exit code."""
     config = get_config()
     test_paths = _resolve_lit_targets(config, suite)
-    effective_suite = {"arts": "examples"}.get(suite, suite)
 
     print_info("Running CARTS test suite...")
     _ensure_lit_tools(config)
     _setup_lit_pythonpath(config)
 
     console.print(
-        f"Test suite: [{Colors.INFO}]{effective_suite}[/{Colors.INFO}]")
+        f"Test suite: [{Colors.INFO}]{suite}[/{Colors.INFO}]")
     for path in test_paths:
         console.print(f"Test path: [dim]{path}[/dim]")
     console.print()
@@ -194,46 +181,14 @@ def _run_lit_suite(suite: str, verbose_tests: bool) -> None:
     raise typer.Exit(result.returncode)
 
 
-def _run_examples() -> None:
-    """Run the full example compilation+execution test suite."""
-    from scripts.examples import examples_app
-    # Invoke the examples app with "run --all" arguments
-    try:
-        examples_app(["run", "--all"], standalone_mode=False)
-    except SystemExit as e:
-        raise typer.Exit(e.code if e.code else 0)
-
-
 def test(
     suite: str = typer.Option("all", "--suite", "-s",
-                              help="Test suite: all, contracts, examples"),
+                              help="Test suite: all, contracts"),
     verbose_tests: bool = typer.Option(
         False, "-v", help="Verbose test output"),
-    examples: bool = typer.Option(
-        False, "--examples",
-        help="Run full example compilation+execution test suite"),
 ):
     """Run CARTS test suite using llvm-lit."""
-    if examples:
-        _run_examples()
-    else:
-        _run_lit_suite(suite=suite, verbose_tests=verbose_tests)
-
-
-def check(
-    suite: str = typer.Option("all", "--suite", "-s",
-                              help="Test suite: all, contracts, examples"),
-    verbose_tests: bool = typer.Option(
-        False, "-v", help="Verbose test output"),
-    examples: bool = typer.Option(
-        False, "--examples",
-        help="Run full example compilation+execution test suite"),
-):
-    """Alias for `carts test`."""
-    if examples:
-        _run_examples()
-    else:
-        _run_lit_suite(suite=suite, verbose_tests=verbose_tests)
+    _run_lit_suite(suite=suite, verbose_tests=verbose_tests)
 
 
 def lit(
@@ -242,7 +197,7 @@ def lit(
         "contracts",
         "--suite",
         "-s",
-        help="Default suite when no explicit paths are passed: contracts, examples, all",
+        help="Default suite when no explicit paths are passed: contracts, all",
     ),
     verbose_tests: bool = typer.Option(
         False, "--verbose", "-v", help="Verbose lit output"

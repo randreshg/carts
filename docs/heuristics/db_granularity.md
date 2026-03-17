@@ -14,7 +14,7 @@ Primary audiences:
 ### Cost A: per-EDT acquire/release scales with number of dependencies
 
 At runtime, each EDT acquires its dependencies by iterating its `depv` array:
-- `external/arts/core/src/runtime/memory/DbFunctions.c`: `acquireDbs(struct artsEdt *edt)` is a `for (i < depc)` loop.
+- `external/arts/libs/src/core/memory/db.c`: dependency handling iterates per-EDT DB inputs.
 
 So if we make DBs *too fine-grained*, we often increase:
 - number of `db_acquire` ops per EDT
@@ -24,7 +24,7 @@ So if we make DBs *too fine-grained*, we often increase:
 ### Cost B: per-DB metadata/event overhead scales with number of DB objects
 
 Each DB carries persistent tracking structures:
-- `external/arts/core/src/runtime/memory/DbFunctions.c`: DB creation initializes `dbList` (`artsNewDbList()`).
+- `external/arts/libs/src/core/memory/db.c`: DB creation initializes `db_list` (`arts_new_db_list()`).
 - Under `USE_SMART_DB`, each DB also gets a **persistent event** (`artsPersistentEventCreate(...)`).
 
 So if we split an array into many DBs, we also pay for many DB objects' metadata.
@@ -32,7 +32,7 @@ So if we split an array into many DBs, we also pay for many DB objects' metadata
 ## ARTS DB frontiers: the mechanism behind serialization
 
 Each DB maintains a `dbList` (a linked list) of **frontiers**:
-- `external/arts/core/src/runtime/memory/DbList.c`: `artsDbList` starts with a
+- `external/arts/libs/src/core/memory/frontier.c`: DB frontier structures start with a
   single frontier and grows as needed.
 
 A **frontier** is a phase that groups compatible consumers of a DB version:
@@ -76,4 +76,4 @@ multiple disjoint write targets that map to **distinct DBs**.
    Use ESD/halo handling to preserve locality without full-range accesses.
 
 For partitioning mechanics and mode definitions, see
-`docs/heuristics/partitioning/partitioning.md`.
+`docs/heuristics/partitioning.md`.

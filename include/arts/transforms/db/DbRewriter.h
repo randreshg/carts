@@ -81,17 +81,6 @@ struct DbRewriteAcquire {
   ArrayRef<Value> getIndices() const { return partitionInfo.indices; }
   ArrayRef<Value> getOffsets() const { return partitionInfo.offsets; }
   ArrayRef<Value> getSizes() const { return partitionInfo.sizes; }
-
-  /// Legacy accessors for 1D backward compatibility
-  Value getElemOffset() const {
-    if (!partitionInfo.indices.empty())
-      return partitionInfo.indices.front();
-    return partitionInfo.offsets.empty() ? Value()
-                                         : partitionInfo.offsets.front();
-  }
-  Value getElemSize() const {
-    return partitionInfo.sizes.empty() ? Value() : partitionInfo.sizes.front();
-  }
 };
 
 /// Rewriter plan chosen by DbPartitioning.

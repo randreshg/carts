@@ -14,7 +14,6 @@ DEFAULT_DOCS: Sequence[str] = (
     "docs/compiler/pipeline.md",
     "docs/heuristics/distribution.md",
     "docs/heuristics/partitioning.md",
-    "docs/profiling/diagnose-dataflow.md",
 )
 
 OPTION_DECL_RE = re.compile(
@@ -97,10 +96,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     source = Path(args.source)
     if not source.is_absolute():
         source = root / source
-    if not source.is_file() and args.source == "tools/compile/Compile.cpp":
-        legacy_source = root / "tools/run/carts-compile.cpp"
-        if legacy_source.is_file():
-            source = legacy_source
     if not source.is_file():
         print(f"error: source not found: {source}", file=sys.stderr)
         return 2

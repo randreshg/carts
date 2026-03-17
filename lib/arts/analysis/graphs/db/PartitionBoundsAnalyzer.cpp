@@ -88,8 +88,7 @@ AcquirePartitionHints mlir::arts::extractPartitionHints(DbAcquireOp acquire) {
   hints.size = pickPartitionSize(acquire.getPartitionSizes(), idx);
 
   /// Fallback to DB-space indices/offsets/sizes only when an explicit
-  /// non-coarse partition mode is set (legacy paths or already-partitioned
-  /// acquires).
+  /// non-coarse partition mode is set (already-partitioned acquires).
   if (!hints.offset && !hints.size) {
     if (auto mode = acquire.getPartitionMode();
         mode &&

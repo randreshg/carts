@@ -37,14 +37,21 @@ FLAG_ALL_PIPELINES = "--all-pipelines"
 FLAG_HELP = "--help"
 FLAG_PRINT_PIPELINE_TOKENS_JSON = "--print-pipeline-tokens-json"
 FLAG_PRINT_PIPELINE_MANIFEST_JSON = "--print-pipeline-manifest-json"
+FLAG_ARTS_DEBUG = "--arts-debug"
 FLAG_DEBUG_ONLY = "--debug-only"
-FLAG_ARTS_ONLY = "--arts-only"
+FLAG_METADATA_FILE = "--metadata-file"
+FLAG_DEBUG_SYMBOLS = "-g"
+FLAG_HELP_SHORT = "-h"
 CLI_OPTIMIZE_O3 = "-O3"
 FLAG_OUTPUT = "-o"
 DEFAULT_METADATA_FILENAME = ".carts-metadata.json"
 PIPELINE_MANIFEST_FILENAME = "pipeline-manifest.json"
 CGEIST_FLAG_RAISE_AFFINE = "--raise-scf-to-affine"
 CGEIST_FLAG_PRINT_DEBUG_INFO = "--print-debug-info"
+ARTS_CONFIG_FILENAME = "arts.cfg"
+TOOL_CARTS_COMPILE = "carts-compile"
+TOOL_CGEIST = "cgeist"
+TOOL_CLANG = "clang"
 
 
 @dataclass(frozen=True)
@@ -52,7 +59,6 @@ class PipelineTokens:
     pipeline: List[str]
     start_from: List[str]
     pipeline_sequence: List[str]
-    aliases: Dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -69,6 +75,9 @@ class PipelineManifest:
 
 _PIPELINE_TOKENS_CACHE: Optional[PipelineTokens] = None
 _PIPELINE_MANIFEST_CACHE: Optional[PipelineManifest] = None
+_DISALLOWED_PIPELINE_FLAGS = {
+    FLAG_DEBUG_ONLY: FLAG_ARTS_DEBUG,
+}
 
 
 def _dedupe_tokens(tokens: List[str]) -> List[str]:
@@ -82,23 +91,23 @@ def _dedupe_tokens(tokens: List[str]) -> List[str]:
     return deduped
 
 
-def _has_debug_only_flag(args: List[str]) -> bool:
-    """Return True when passthrough args include legacy --debug-only."""
-    i = 0
-    while i < len(args):
-        arg = args[i]
-        if arg == FLAG_DEBUG_ONLY or arg.startswith(f"{FLAG_DEBUG_ONLY}="):
-            return True
-        i += 1
-    return False
-
-
-def _normalize_arts_only(spec: str) -> str:
-    """Normalize `--arts-only` channels and reject empty specs."""
+def _normalize_arts_debug(spec: str) -> str:
+    """Normalize `--arts-debug` channels and reject empty specs."""
     channels = [channel.strip() for channel in spec.split(",") if channel.strip()]
     if not channels:
-        raise ValueError("Invalid --arts-only value.")
+        raise ValueError(
+            "Invalid --arts-debug value. Use comma-separated channels, "
+            "for example --arts-debug=info,debug."
+        )
     return ",".join(channels)
+
+
+def _has_flag(args: List[str], flag: str) -> bool:
+    """Return True when args contain a `--flag` token in either form."""
+    for arg in args:
+        if arg == flag or arg.startswith(f"{flag}="):
+            return True
+    return False
 
 
 def _parse_pipeline_tokens_payload(payload: str) -> PipelineTokens:
@@ -117,15 +126,6 @@ def _parse_pipeline_tokens_payload(payload: str) -> PipelineTokens:
     start_from = require_string_list("start_from")
     pipeline_sequence = require_string_list("pipeline_sequence")
 
-    aliases_raw = data.get("aliases", {})
-    if not isinstance(aliases_raw, dict):
-        raise ValueError("field 'aliases' must be an object")
-    aliases: Dict[str, str] = {}
-    for alias, target in aliases_raw.items():
-        if not isinstance(alias, str) or not isinstance(target, str):
-            raise ValueError("alias keys and values must be strings")
-        aliases[alias] = target
-
     if not pipeline_sequence:
         raise ValueError("field 'pipeline_sequence' cannot be empty")
     if not start_from:
@@ -137,7 +137,6 @@ def _parse_pipeline_tokens_payload(payload: str) -> PipelineTokens:
         pipeline=pipeline,
         start_from=start_from,
         pipeline_sequence=pipeline_sequence,
-        aliases=aliases,
     )
 
 
@@ -170,7 +169,6 @@ def _pipeline_manifest_to_dict(manifest: PipelineManifest) -> Dict[str, object]:
         "pipeline": manifest.tokens.pipeline,
         "start_from": manifest.tokens.start_from,
         "pipeline_sequence": manifest.tokens.pipeline_sequence,
-        "aliases": manifest.tokens.aliases,
         "pipeline_steps": [
             {"name": step.name, "passes": step.passes}
             for step in manifest.steps
@@ -182,7 +180,7 @@ def _query_compiler_json(
     config: PlatformConfig, flag: str, error_message: str
 ) -> str:
     """Run carts-compile JSON endpoint and return stdout payload."""
-    carts_compile_bin = config.get_carts_tool("carts-compile")
+    carts_compile_bin = config.get_carts_tool(TOOL_CARTS_COMPILE)
     if not carts_compile_bin.is_file():
         print_error(f"carts-compile not found at {carts_compile_bin}")
         raise typer.Exit(1)
@@ -367,6 +365,35 @@ def _is_numeric(s: str) -> bool:
         return False
 
 
+def _drop_flag_and_value(args: List[str], flag: str) -> List[str]:
+    """Remove `--flag` tokens from passthrough args, including optional value."""
+    filtered: List[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == flag:
+            i += 1
+            if i < len(args):
+                next_arg = args[i]
+                if not next_arg.startswith("-") or _is_numeric(next_arg):
+                    i += 1
+            continue
+        if arg.startswith(f"{flag}="):
+            i += 1
+            continue
+        filtered.append(arg)
+        i += 1
+    return filtered
+
+
+def _reject_disallowed_pipeline_flags(args: List[str]) -> None:
+    """Reject non-canonical flags that bypass ARTS compile conventions."""
+    for disallowed, replacement in _DISALLOWED_PIPELINE_FLAGS.items():
+        if _has_flag(args, disallowed):
+            print_error(f"Unsupported option: {disallowed}. Use {replacement}.")
+            raise typer.Exit(1)
+
+
 @dataclass
 class CompileArgs:
     """Parsed passthrough arguments, classified by pipeline step.
@@ -451,7 +478,7 @@ def cgeist(
         print_error(f"Input file '{input_file}' not found")
         raise typer.Exit(1)
 
-    cgeist_bin = config.get_polygeist_tool("cgeist")
+    cgeist_bin = config.get_polygeist_tool(TOOL_CGEIST)
     if not cgeist_bin.is_file():
         print_error(f"cgeist not found at {cgeist_bin}")
         raise typer.Exit(1)
@@ -496,7 +523,7 @@ def clang(
         print_error(f"Input file '{input_file}' not found")
         raise typer.Exit(1)
 
-    clang_bin = config.get_llvm_tool("clang")
+    clang_bin = config.get_llvm_tool(TOOL_CLANG)
     if not clang_bin.is_file():
         print_error(f"LLVM clang not found at {clang_bin}")
         raise typer.Exit(1)
@@ -528,13 +555,22 @@ def clang(
 # ============================================================================
 
 def mlir_translate(
-    args: List[str] = typer.Argument(..., help="Arguments for mlir-translate"),
+    ctx: typer.Context,
+    args: Optional[List[str]] = typer.Argument(
+        None, help="Arguments for mlir-translate"),
 ):
     """Run mlir-translate."""
     config = get_config()
 
     mlir_translate_bin = config.get_llvm_tool("mlir-translate")
-    cmd = [str(mlir_translate_bin)] + args
+    translated_args = list(args or [])
+    if ctx.args:
+        translated_args.extend(ctx.args)
+    if not translated_args:
+        print_error("Provide mlir-translate arguments, for example --help.")
+        raise typer.Exit(1)
+
+    cmd = [str(mlir_translate_bin)] + translated_args
 
     result = run_subprocess(cmd, check=False)
     raise typer.Exit(result.returncode)
@@ -594,15 +630,17 @@ def compile_cmd(
     ctx: typer.Context,
     input_file: Path = typer.Argument(..., help="Input file (.c/.cpp/.mlir/.ll)"),
     output: Optional[Path] = typer.Option(
-        None, "-o", help="Output file or directory"),
+        None, "-o",
+        help="Output path (file for normal compile; directory with --all-pipelines)"),
     optimize: bool = typer.Option(
         False, CLI_OPTIMIZE_O3, help="Enable O3 optimizations"),
-    debug: bool = typer.Option(False, "-g", help="Generate debug symbols"),
+    debug: bool = typer.Option(False, FLAG_DEBUG_SYMBOLS, help="Generate debug symbols"),
     pipeline: Optional[str] = typer.Option(
         None, FLAG_PIPELINE,
         help="Stop after pipeline step (e.g., concurrency, edt-distribution)"),
     all_pipelines: bool = typer.Option(
-        False, FLAG_ALL_PIPELINES, help="Dump all pipeline steps"),
+        False, FLAG_ALL_PIPELINES,
+        help="(.mlir input) write one output per pipeline step"),
     emit_llvm: bool = typer.Option(
         False, FLAG_EMIT_LLVM, help="Emit LLVM IR output"),
     collect_metadata: bool = typer.Option(
@@ -614,12 +652,12 @@ def compile_cmd(
         False, FLAG_DIAGNOSE, help="Export diagnostic information"),
     diagnose_output: Optional[Path] = typer.Option(
         None, FLAG_DIAGNOSE_OUTPUT, help="Output file for diagnostics"),
-    arts_only: Optional[str] = typer.Option(
-        None, FLAG_ARTS_ONLY,
-        help="Enable ARTS_INFO/ARTS_DEBUG channels in carts-compile"),
+    arts_debug: Optional[str] = typer.Option(
+        None, FLAG_ARTS_DEBUG,
+        help="Comma-separated ARTS debug channels (example: info,debug)"),
     start_from: Optional[str] = typer.Option(
         None, FLAG_START_FROM,
-        help="Resume pipeline from specified step (requires saved MLIR)"),
+        help="Start pipeline at specified step (input must already match that step)"),
 ):
     """Unified compilation command.
 
@@ -633,9 +671,51 @@ def compile_cmd(
 
     Use --pipeline <step> to stop after a specific pipeline step.
     """
+    passthrough_args = list(ctx.args or [])
+    _reject_disallowed_pipeline_flags(passthrough_args)
+    if arts_debug is not None:
+        passthrough_args = _drop_flag_and_value(passthrough_args, FLAG_ARTS_DEBUG)
+
+    normalized_arts_debug: Optional[str] = None
+    if arts_debug:
+        try:
+            normalized_arts_debug = _normalize_arts_debug(arts_debug)
+        except ValueError as exc:
+            print_error(str(exc))
+            raise typer.Exit(1)
+
+    ext = input_file.suffix.lower()
+    if ext == ".ll":
+        if pipeline:
+            print_error("--pipeline is not supported for .ll input (link-only)")
+            raise typer.Exit(1)
+        if start_from:
+            print_error("--start-from is not supported for .ll input (link-only)")
+            raise typer.Exit(1)
+        if all_pipelines:
+            print_error("--all-pipelines is only supported for .mlir input")
+            raise typer.Exit(1)
+        if emit_llvm or collect_metadata or partition_fallback or diagnose or diagnose_output:
+            print_error(
+                "--emit-llvm, --collect-metadata, --partition-fallback, and diagnose "
+                "options are not supported for .ll input (link-only)"
+            )
+            raise typer.Exit(1)
+        if normalized_arts_debug or _has_flag(passthrough_args, FLAG_ARTS_DEBUG):
+            print_error("--arts-debug is only supported for carts-compile pipeline runs")
+            raise typer.Exit(1)
+        _compile_from_ll(input_file, output, debug, passthrough_args)
+        return
+
+    if ext not in (".c", ".cpp", ".mlir"):
+        print_error(
+            f"Unsupported input '{input_file}'. Supported extensions: "
+            ".c, .cpp, .mlir, .ll."
+        )
+        raise typer.Exit(1)
+
     config = get_config()
     pipeline_tokens = _get_pipeline_tokens(config)
-
     if pipeline and pipeline not in pipeline_tokens.pipeline:
         print_error(f"Unknown pipeline step: '{pipeline}'")
         print_info("Available pipeline steps:")
@@ -648,39 +728,32 @@ def compile_cmd(
         for pipeline_token in pipeline_tokens.start_from:
             console.print(f"  - {pipeline_token}")
         raise typer.Exit(1)
-    if _has_debug_only_flag(ctx.args or []):
-        print_error("Use --arts-only instead of legacy --debug-only.")
-        raise typer.Exit(1)
-    normalized_arts_only: Optional[str] = None
-    if arts_only:
-        try:
-            normalized_arts_only = _normalize_arts_only(arts_only)
-        except ValueError as exc:
-            print_error(str(exc))
-            raise typer.Exit(1)
 
-    ext = input_file.suffix.lower()
     if ext in (".c", ".cpp"):
-        _compile_from_c(ctx, input_file, output, optimize, debug, pipeline,
-                        all_pipelines, emit_llvm, collect_metadata,
+        if all_pipelines:
+            print_error("--all-pipelines is only supported for .mlir input")
+            raise typer.Exit(1)
+        if emit_llvm:
+            print_error("--emit-llvm is only supported for .mlir input")
+            raise typer.Exit(1)
+        if collect_metadata:
+            print_error("--collect-metadata is only supported for .mlir input")
+            raise typer.Exit(1)
+        if start_from:
+            print_error("--start-from is only supported for .mlir input")
+            raise typer.Exit(1)
+        _compile_from_c(input_file, output, optimize, debug, pipeline,
                         partition_fallback, diagnose, diagnose_output,
-                        normalized_arts_only,
-                        start_from)
-    elif ext == ".mlir":
-        _compile_from_mlir(ctx, input_file, output, optimize, debug, pipeline,
+                        normalized_arts_debug, passthrough_args)
+    else:
+        if all_pipelines and (pipeline or start_from):
+            print_error("--all-pipelines cannot be combined with --pipeline or --start-from")
+            raise typer.Exit(1)
+        _compile_from_mlir(input_file, output, optimize, debug, pipeline,
                            all_pipelines, emit_llvm, collect_metadata,
                            partition_fallback, diagnose, diagnose_output,
-                           normalized_arts_only,
-                           start_from)
-    elif ext == ".ll":
-        if pipeline:
-            print_error("--pipeline is not supported for .ll input (link-only)")
-            raise typer.Exit(1)
-        _compile_from_ll(ctx, input_file, output, debug)
-    else:
-        print_error(f"Unsupported file type: {ext}")
-        print_info("Supported types: .c, .cpp, .mlir, .ll")
-        raise typer.Exit(1)
+                           normalized_arts_debug,
+                           start_from, passthrough_args)
 
 
 # -----------------------------------------------------------------------------
@@ -688,20 +761,16 @@ def compile_cmd(
 # -----------------------------------------------------------------------------
 
 def _compile_from_c(
-    ctx: typer.Context,
     input_file: Path,
     output: Optional[Path],
     optimize: bool,
     debug: bool,
     pipeline: Optional[str],
-    all_pipelines: bool,
-    emit_llvm: bool,
-    collect_metadata: bool,
     partition_fallback: Optional[str],
     diagnose: bool,
     diagnose_output: Optional[Path],
-    arts_only: Optional[str],
-    start_from: Optional[str] = None,
+    arts_debug: Optional[str],
+    passthrough_args: List[str],
 ) -> None:
     """Full pipeline for C/C++ input."""
     config = get_config()
@@ -716,7 +785,7 @@ def _compile_from_c(
     output_name = output if output else Path(f"{base_name}_arts")
 
     # Parse passthrough args
-    parsed = CompileArgs.parse(ctx.args or [])
+    parsed = CompileArgs.parse(passthrough_args)
     invocation_cwd = Path.cwd().resolve()
 
     extra_pipeline_args = parsed.pipeline[:]
@@ -725,10 +794,8 @@ def _compile_from_c(
 
     if partition_fallback:
         extra_pipeline_args.append(f"{FLAG_PARTITION_FALLBACK}={partition_fallback}")
-    if start_from:
-        extra_pipeline_args.append(f"{FLAG_START_FROM}={start_from}")
-    if arts_only:
-        extra_pipeline_args.append(f"{FLAG_ARTS_ONLY}={arts_only}")
+    if arts_debug:
+        extra_pipeline_args.append(f"{FLAG_ARTS_DEBUG}={arts_debug}")
 
     enable_pipeline_o3 = optimize or parsed.optimize
     use_diagnose = diagnose or parsed.diagnose
@@ -754,7 +821,6 @@ def _compile_from_c(
 # -----------------------------------------------------------------------------
 
 def _compile_from_mlir(
-    ctx: typer.Context,
     input_file: Path,
     output: Optional[Path],
     optimize: bool,
@@ -766,23 +832,25 @@ def _compile_from_mlir(
     partition_fallback: Optional[str] = None,
     diagnose: bool = False,
     diagnose_output: Optional[Path] = None,
-    arts_only: Optional[str] = None,
+    arts_debug: Optional[str] = None,
     start_from: Optional[str] = None,
+    passthrough_args: Optional[List[str]] = None,
 ) -> None:
     """MLIR transformation pipeline."""
     config = get_config()
-    carts_compile_bin = config.get_carts_tool("carts-compile")
+    carts_compile_bin = config.get_carts_tool(TOOL_CARTS_COMPILE)
+    passthrough_args = passthrough_args or []
 
     # Pass --help through to carts-compile binary
-    if ctx.args and (FLAG_HELP in ctx.args or "-h" in ctx.args):
+    if FLAG_HELP in passthrough_args or FLAG_HELP_SHORT in passthrough_args:
         result = run_subprocess([str(carts_compile_bin), FLAG_HELP], check=False)
         raise typer.Exit(result.returncode)
 
     if all_pipelines:
-        extra_args = list(ctx.args or [])
-        if arts_only:
-            extra_args.append(f"{FLAG_ARTS_ONLY}={arts_only}")
-        _compile_all_pipelines(config, input_file, output, extra_args)
+        extra_args = list(passthrough_args)
+        if arts_debug:
+            extra_args.append(f"{FLAG_ARTS_DEBUG}={arts_debug}")
+        _compile_all_pipelines(config, input_file, output, extra_args, optimize)
         return
 
     if not input_file.is_file():
@@ -792,7 +860,7 @@ def _compile_from_mlir(
     cmd = [str(carts_compile_bin), str(input_file)]
 
     # Auto-discover arts.cfg if not explicitly provided
-    arts_cfg = _find_arts_config(input_file, ctx.args or [], config)
+    arts_cfg = _find_arts_config(input_file, passthrough_args, config)
     if arts_cfg:
         cmd.extend([FLAG_ARTS_CONFIG, str(arts_cfg)])
 
@@ -803,7 +871,7 @@ def _compile_from_mlir(
     if collect_metadata:
         cmd.append(FLAG_COLLECT_METADATA)
     if debug:
-        cmd.append("-g")
+        cmd.append(FLAG_DEBUG_SYMBOLS)
     if pipeline:
         cmd.append(f"{FLAG_PIPELINE}={pipeline}")
     if partition_fallback:
@@ -812,14 +880,14 @@ def _compile_from_mlir(
         cmd.append(FLAG_DIAGNOSE)
     if diagnose_output:
         cmd.extend([FLAG_DIAGNOSE_OUTPUT, str(diagnose_output)])
-    if arts_only:
-        cmd.append(f"{FLAG_ARTS_ONLY}={arts_only}")
+    if arts_debug:
+        cmd.append(f"{FLAG_ARTS_DEBUG}={arts_debug}")
     if start_from:
         cmd.append(f"{FLAG_START_FROM}={start_from}")
     if output:
         cmd.extend([FLAG_OUTPUT, str(output)])
-    if ctx.args:
-        cmd.extend(ctx.args)
+    if passthrough_args:
+        cmd.extend(passthrough_args)
 
     result = run_subprocess(cmd, check=False)
     raise typer.Exit(result.returncode)
@@ -830,10 +898,10 @@ def _compile_from_mlir(
 # -----------------------------------------------------------------------------
 
 def _compile_from_ll(
-    ctx: typer.Context,
     input_file: Path,
     output: Optional[Path],
     debug: bool,
+    passthrough_args: List[str],
 ) -> None:
     """Link LLVM IR with ARTS runtime."""
     config = get_config()
@@ -846,8 +914,13 @@ def _compile_from_ll(
         print_error("-o <output> is required for .ll input")
         raise typer.Exit(1)
 
-    cmd = _build_link_cmd(config, input_file, output, debug,
-                          ctx.args if ctx.args else [])
+    cmd = _build_link_cmd(
+        config,
+        input_file,
+        output,
+        debug,
+        passthrough_args,
+    )
 
     result = run_subprocess(cmd, check=False)
     raise typer.Exit(result.returncode)
@@ -872,17 +945,52 @@ def _find_arts_config(
             return None
 
     # Check next to the input file
-    candidate = input_file.parent.resolve() / "arts.cfg"
+    candidate = input_file.parent.resolve() / ARTS_CONFIG_FILENAME
     if candidate.is_file():
         return candidate
 
     # Fall back to the default examples config
     if config:
-        default = config.carts_dir / "tests" / "examples" / "arts.cfg"
+        default = config.carts_dir / "tests" / "examples" / ARTS_CONFIG_FILENAME
         if default.is_file():
             return default
 
     return None
+
+
+def _collect_flag_args(args: List[str], allowed_flags: List[str]) -> List[str]:
+    """Collect selected long flags in either `--flag value` or `--flag=value` form."""
+    collected: List[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        matched = next((flag for flag in allowed_flags if arg == flag), None)
+        if matched is not None:
+            collected.append(arg)
+            if i + 1 < len(args):
+                next_arg = args[i + 1]
+                if not next_arg.startswith("--") or _is_numeric(next_arg):
+                    collected.append(next_arg)
+                    i += 1
+            i += 1
+            continue
+        if any(arg.startswith(f"{flag}=") for flag in allowed_flags):
+            collected.append(arg)
+        i += 1
+    return collected
+
+
+def _metadata_json_path_from_args(args: List[str]) -> Path:
+    """Return metadata JSON path from passthrough args or default."""
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == FLAG_METADATA_FILE and i + 1 < len(args):
+            return Path(args[i + 1])
+        if arg.startswith(f"{FLAG_METADATA_FILE}="):
+            return Path(arg.split("=", 1)[1])
+        i += 1
+    return Path(DEFAULT_METADATA_FILENAME)
 
 
 def _build_cgeist_cmd(
@@ -894,7 +1002,7 @@ def _build_cgeist_cmd(
     with_debug_info: bool = False,
 ) -> List[str]:
     """Build cgeist (C-to-MLIR) command with standard flags."""
-    cmd = [str(config.get_polygeist_tool("cgeist"))]
+    cmd = [str(config.get_polygeist_tool(TOOL_CGEIST))]
     cmd.extend(config.include_flags)
     cmd.extend(config.cgeist_sysroot_flags)
     cmd.extend([CGEIST_FLAG_RAISE_AFFINE, std_flag, "-O0", "-S",
@@ -916,7 +1024,7 @@ def _build_link_cmd(
     extra_args: List[str],
 ) -> List[str]:
     """Build clang link command for linking with ARTS runtime."""
-    cmd = [str(config.get_llvm_tool("clang"))]
+    cmd = [str(config.get_llvm_tool(TOOL_CLANG))]
     cmd.extend(config.compile_flags)  # includes runtime_flags
     cmd.extend(config.clang_sysroot_flags)
     cmd.extend(config.compile_library_flags)
@@ -924,7 +1032,7 @@ def _build_link_cmd(
     cmd.append(str(input_file))
     cmd.extend(["-o", str(output_file)])
     if debug:
-        cmd.append("-g")
+        cmd.append(FLAG_DEBUG_SYMBOLS)
     cmd.extend(config.compile_libraries)
     cmd.extend(extra_args)
     return cmd
@@ -971,27 +1079,18 @@ def _compile_c_pipeline(
         f"Mode:   [{Colors.WARNING}]Compilation pipeline[/{Colors.WARNING}]")
     console.print()
 
-    carts_compile_bin = config.get_carts_tool("carts-compile")
+    carts_compile_bin = config.get_carts_tool(TOOL_CARTS_COMPILE)
 
-    metadata_args: List[str] = []
-    i = 0
-    while i < len(pipeline_args):
-        arg = pipeline_args[i]
-        if arg == FLAG_ARTS_CONFIG:
-            metadata_args.append(arg)
-            if i + 1 < len(pipeline_args):
-                metadata_args.append(pipeline_args[i + 1])
-                i += 1
-        elif arg.startswith(f"{FLAG_ARTS_CONFIG}="):
-            metadata_args.append(arg)
-        i += 1
+    metadata_args = _collect_flag_args(
+        pipeline_args, [FLAG_ARTS_CONFIG, FLAG_METADATA_FILE]
+    )
 
     # Output file paths
     seq_mlir = Path(f"{base_name}_seq.mlir")
     metadata_mlir = Path(f"{base_name}_arts_metadata.mlir")
     par_mlir = Path(f"{base_name}.mlir")
     ll_file = Path(f"{base_name}-arts.ll")
-    metadata_json = Path(DEFAULT_METADATA_FILENAME)
+    metadata_json = _metadata_json_path_from_args(metadata_args)
 
     with Progress(
         SpinnerColumn(),
@@ -1013,7 +1112,7 @@ def _compile_c_pipeline(
         cmd = [str(carts_compile_bin), str(seq_mlir),
                FLAG_COLLECT_METADATA, FLAG_OUTPUT, str(metadata_mlir)]
         arts_cfg = _find_arts_config(input_file, pipeline_args, config)
-        if arts_cfg and not metadata_args:
+        if arts_cfg and not _has_flag(metadata_args, FLAG_ARTS_CONFIG):
             cmd.extend([FLAG_ARTS_CONFIG, str(arts_cfg)])
         cmd.extend(metadata_args)
         if run_subprocess(cmd, check=False).returncode != 0:
@@ -1023,7 +1122,6 @@ def _compile_c_pipeline(
         if metadata_json.is_file():
             print_success(f"[2{step_label} {metadata_json}")
         else:
-            from carts_styles import print_warning
             print_warning(f"[2{step_label} Metadata file not created")
 
         # Step 3: Parallel compilation (with OpenMP for ARTS transformation)
@@ -1047,7 +1145,7 @@ def _compile_c_pipeline(
         if not skip_link:
             cmd.append(FLAG_EMIT_LLVM)
         if debug:
-            cmd.append("-g")
+            cmd.append(FLAG_DEBUG_SYMBOLS)
         if diagnose:
             cmd.append(FLAG_DIAGNOSE)
             effective_diagnose_output = diagnose_output or Path(
@@ -1100,13 +1198,14 @@ def _compile_all_pipelines(
     source_file: Path,
     output_dir: Optional[Path],
     extra_args: List[str],
+    optimize: bool,
 ) -> None:
     """Run pipeline and dump all intermediate pipeline steps."""
     if not source_file.is_file():
         print_error(f"Input file '{source_file}' not found")
         raise typer.Exit(1)
 
-    carts_compile_bin = config.get_carts_tool("carts-compile")
+    carts_compile_bin = config.get_carts_tool(TOOL_CARTS_COMPILE)
 
     # Determine output directory
     out_dir = output_dir if output_dir else source_file.parent
@@ -1129,13 +1228,14 @@ def _compile_all_pipelines(
     ) as progress:
         task = progress.add_task("Processing pipeline steps...", total=total_steps)
 
-        # Find arts-config if present
-        config_file = source_file.parent / "arts.cfg"
-        base_cmd = [str(carts_compile_bin), str(source_file), FLAG_OPTIMIZE_O3]
-        if config_file.is_file():
-            base_cmd.extend([FLAG_ARTS_CONFIG, str(config_file)])
+        base_cmd = [str(carts_compile_bin), str(source_file)]
+        if optimize:
+            base_cmd.append(FLAG_OPTIMIZE_O3)
+        arts_cfg = _find_arts_config(source_file, extra_args, config)
+        if arts_cfg:
+            base_cmd.extend([FLAG_ARTS_CONFIG, str(arts_cfg)])
 
-        results = []  # List of (stage_name, success_bool)
+        results = []  # List of (pipeline_step, success_bool)
 
         # Dump each pipeline step
         for pipeline_step in pipeline_steps:

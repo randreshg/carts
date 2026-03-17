@@ -129,7 +129,7 @@ validateElementWiseIndices(ArrayRef<AcquirePartitionInfo> acquireInfos,
 
 /// Extract all partition offsets for N-D support.
 /// Unified function that handles both single and multi-dimensional cases.
-/// Use front() on the result for 1-D compatibility.
+/// Use front() on the result for 1-D callers.
 static SmallVector<Value>
 getPartitionOffsetsND(DbAcquireNode *acqNode,
                       const AcquirePartitionInfo *info) {
@@ -695,7 +695,7 @@ private:
       OpBuilder &builder, Location loc);
 
   /// Resolve block-plan sizes and partition dimensions, and reconcile
-  /// per-acquire dimension compatibility.
+  /// per-acquire dimension consistency.
   bool resolveBlockPlanSizes(
       SmallVectorImpl<Value> &blockSizesForPlan,
       SmallVectorImpl<unsigned> &partitionedDimsForPlan,
@@ -1802,10 +1802,9 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   }
 
   /// Steps 6-7: Assemble rewrite plan and apply via DbRewriter.
-  return assembleAndApplyRewritePlan(decision, acquireInfos, blockSizesForPlan,
-                                     partitionedDimsForPlan, newOuterSizes,
-                                     newInnerSizes, stencilInfo, allocOp,
-                                     heuristics, builder);
+  return assembleAndApplyRewritePlan(
+      decision, acquireInfos, blockSizesForPlan, partitionedDimsForPlan,
+      newOuterSizes, newInnerSizes, stencilInfo, allocOp, heuristics, builder);
 }
 
 /// Build per-acquire capability info and populate ctx.acquires for heuristic
@@ -1852,18 +1851,16 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
                              ? contractSummary->hasBlockHints()
                              : (!acquire.getPartitionOffsets().empty() ||
                                 !acquire.getPartitionSizes().empty());
-    bool inferredBlock = contractSummary
-                             ? contractSummary->inferredBlock()
-                             : (!acqInfo.partitionOffsets.empty() &&
-                                !acqInfo.partitionSizes.empty());
+    bool inferredBlock = contractSummary ? contractSummary->inferredBlock()
+                                         : (!acqInfo.partitionOffsets.empty() &&
+                                            !acqInfo.partitionSizes.empty());
     if (auto blockHint = getPartitioningHint(acquire.getOperation())) {
       if (blockHint->mode == PartitionMode::block && blockHint->blockSize &&
           *blockHint->blockSize > 0) {
         if (!anyBlockSizeHint)
           anyBlockSizeHint = blockHint->blockSize;
         else
-          anyBlockSizeHint =
-              std::min(*anyBlockSizeHint, *blockHint->blockSize);
+          anyBlockSizeHint = std::min(*anyBlockSizeHint, *blockHint->blockSize);
 
         if (acquire.getMode() != ArtsMode::in) {
           if (!writerBlockSizeHint)
@@ -1916,8 +1913,7 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
           contractSummary && contractSummary->hasUnmappedPartitionEntry();
       if (hasUnmappedEntry) {
         bool preserveFromStencilContract =
-            contractSummary &&
-            contractSummary->contract.supportsBlockHalo() &&
+            contractSummary && contractSummary->contract.supportsBlockHalo() &&
             contractSummary->contract.hasOwnerDims();
         bool writesThroughAcquire = acquire.getMode() == ArtsMode::out ||
                                     acquire.getMode() == ArtsMode::inout ||
@@ -2028,8 +2024,8 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
                   break;
                 }
               } else if (staticBlockShape &&
-                         dim < static_cast<unsigned>(
-                                   staticBlockShape->size()) &&
+                         dim <
+                             static_cast<unsigned>(staticBlockShape->size()) &&
                          (*staticBlockShape)[dim] > 0) {
                 dimSize = (*staticBlockShape)[dim];
                 blockSize = arts::createConstantIndex(builder, loc, dimSize);
@@ -2047,9 +2043,8 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
           if (dim < candidateBlockSizes.size())
             continue;
           Value blockSize = acqInfo.partitionSizes[dim];
-          if (!blockSize ||
-              ValueAnalysis::isZeroConstant(
-                  ValueAnalysis::stripNumericCasts(blockSize))) {
+          if (!blockSize || ValueAnalysis::isZeroConstant(
+                                ValueAnalysis::stripNumericCasts(blockSize))) {
             candidateBlockSizes.clear();
             break;
           }
@@ -2128,8 +2123,7 @@ std::optional<StencilInfo> DbPartitioningPass::computeStencilHaloInfo(
     /// Second try: for multi-entry stencil acquires, extract from structure
     if (acq.hasMultiplePartitionEntries()) {
       int64_t minOffset = 0, maxOffset = 0;
-      if (DbAnalysis::hasMultiEntryStencilPattern(acq, minOffset,
-                                                  maxOffset)) {
+      if (DbAnalysis::hasMultiEntryStencilPattern(acq, minOffset, maxOffset)) {
         /// minOffset is negative (left halo), maxOffset is positive (right)
         int64_t haloL = -minOffset;
         int64_t haloR = maxOffset;
@@ -2218,7 +2212,7 @@ std::optional<StencilInfo> DbPartitioningPass::computeStencilHaloInfo(
 }
 
 /// Resolve block-plan sizes and partition dimensions, and reconcile
-/// per-acquire dimension compatibility. Returns false if the caller should
+/// per-acquire dimension consistency. Returns false if the caller should
 /// early-return the original allocOp (block plan resolution failed).
 bool DbPartitioningPass::resolveBlockPlanSizes(
     SmallVectorImpl<Value> &blockSizesForPlan,
@@ -2261,8 +2255,9 @@ bool DbPartitioningPass::resolveBlockPlanSizes(
     return false;
   }
 
-  blockSizesForPlan.assign(std::make_move_iterator(blockPlanOr->blockSizes.begin()),
-                           std::make_move_iterator(blockPlanOr->blockSizes.end()));
+  blockSizesForPlan.assign(
+      std::make_move_iterator(blockPlanOr->blockSizes.begin()),
+      std::make_move_iterator(blockPlanOr->blockSizes.end()));
   partitionedDimsForPlan.assign(
       std::make_move_iterator(blockPlanOr->partitionedDims.begin()),
       std::make_move_iterator(blockPlanOr->partitionedDims.end()));

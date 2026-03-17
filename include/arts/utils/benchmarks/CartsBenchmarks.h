@@ -80,11 +80,10 @@ void carts_e2e_timer_stop(void);
 #define CARTS_E2E_TIMER_STOP() carts_e2e_timer_stop()
 
 ///===----------------------------------------------------------------------===///
-/// Legacy Phase Timing
+/// Phase Timing
 ///
 /// Benchmarks still emit explicit startup / verification / cleanup sections,
-/// and the harness parses those prefixes. Keep this compatibility layer even
-/// though the implementation now lives out-of-line.
+/// and the harness parses those prefixes.
 ///===----------------------------------------------------------------------===///
 
 /// Start a named benchmark phase timer.

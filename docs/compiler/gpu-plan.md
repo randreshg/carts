@@ -184,7 +184,7 @@ extern void arts_fini_per_gpu(unsigned int node_id, int dev_id,
                                hipStream_t *stream) ARTS_WEAK_IMPORT;
 ```
 
-**Public API** (`include/public/arts/gpu.h`): No changes — already CUDA-free.
+**Public API** (`external/arts/libs/include/public/arts/gpu.h`): No changes — already CUDA-free.
 Add `|| defined(__HIPCC__)` alongside the existing `#ifdef __CUDACC__` guard.
 
 ### 1.3 CMake changes (`external/arts/CMakeLists.txt`)
@@ -234,10 +234,10 @@ The GPU pass stack exists on the `gpu` branch. These must land on `main` first.
 
 | Pass | File | Role |
 |---|---|---|
-| `GpuEligibilityAnalysis` | `Passes/Analysis/GpuEligibilityAnalysis.cpp` | Marks `arts.for` loops eligible for GPU offload (trip count + footprint + embarrassingly parallel check) |
-| `GpuForLowering` | `Passes/Transformations/GpuForLowering.cpp` | Outlines loop body → `arts.gpu_edt` with `gpu::ThreadIdOp`/`gpu::BlockIdOp` thread indexing; sets DB modes to `gpu_read`/`gpu_write` |
-| `GpuEdtLowering` | `Passes/Transformations/GpuEdtLowering.cpp` | `arts.gpu_edt` → `arts.edt<task><intranode>` + `gpu_launch_config` attribute |
-| `GpuCodegen` | `Passes/Transformations/GpuCodegen.cpp` | Validation: fails if any `arts.gpu_edt` remains |
+| `GpuEligibilityAnalysis` | `lib/arts/passes/opt/general/GpuEligibilityAnalysis.cpp` | Marks `arts.for` loops eligible for GPU offload (trip count + footprint + embarrassingly parallel check) |
+| `GpuForLowering` | `lib/arts/passes/transforms/GpuForLowering.cpp` | Outlines loop body → `arts.gpu_edt` with `gpu::ThreadIdOp`/`gpu::BlockIdOp` thread indexing; sets DB modes to `gpu_read`/`gpu_write` |
+| `GpuEdtLowering` | `lib/arts/passes/transforms/GpuEdtLowering.cpp` | `arts.gpu_edt` → `arts.edt<task><intranode>` + `gpu_launch_config` attribute |
+| `GpuCodegen` | `lib/arts/passes/transforms/GpuCodegen.cpp` | Validation: fails if any `arts.gpu_edt` remains |
 
 Also port from `gpu` branch:
 
@@ -279,7 +279,7 @@ arts_edt_create_gpu(_carts_kernel_saxpy, 0, NULL, 3, grid, block, &hint);
 ARTS receives the function pointer to `_carts_kernel_saxpy`, schedules it as a GPU
 EDT, copies DB data to the GPU, and launches via `hipLaunchKernel(fn_ptr, ...)`.
 
-### Pass pipeline in `carts-compile.cpp`
+### Pass pipeline in `Compile.cpp`
 
 ```
 setupOpenMPToArts()    → GpuEligibilityAnalysis   (--gpu)
@@ -292,7 +292,7 @@ setupArtsToLLVM()      → ConvertArtsToLLVM handles gpu_launch_config
 
 ## Phase 3: GPU Target Selection in CARTS
 
-**Scope**: `tools/run/carts-compile.cpp`, compiler driver
+**Scope**: `tools/compile/Compile.cpp`, compiler driver
 
 With Phase 1+2 in place, the only remaining compiler-side change is selecting the
 right compiler toolchain and architecture:
@@ -343,20 +343,20 @@ MOD   Makefile                                            (-DARTS_USE_GPU=ON)
 
 ```
 NEW   lib/arts/passes/Analysis/GpuEligibilityAnalysis.cpp
-NEW   lib/arts/passes/Transformations/GpuForLowering.cpp
-NEW   lib/arts/passes/Transformations/GpuEdtLowering.cpp
-NEW   lib/arts/passes/Transformations/GpuCodegen.cpp
+NEW   lib/arts/passes/transforms/GpuForLowering.cpp
+NEW   lib/arts/passes/transforms/GpuEdtLowering.cpp
+NEW   lib/arts/passes/transforms/GpuCodegen.cpp
 MOD   include/arts/passes/Passes.td
 MOD   include/arts/passes/Passes.h
 MOD   include/arts/ArtsOps.td                    (arts.gpu_edt, arts.gpu_memcpy)
-MOD   lib/arts/passes/Transformations/ConvertArtsToLLVM.cpp
-MOD   tools/run/carts-compile.cpp                (GPU pass pipeline)
+MOD   lib/arts/passes/transforms/ConvertArtsToLLVM.cpp
+MOD   tools/compile/Compile.cpp                  (GPU pass pipeline)
 ```
 
 ### Phase 3 — Compiler driver
 
 ```
-MOD   tools/run/carts-compile.cpp    (--gpu, --gpu-arch flags)
+MOD   tools/compile/Compile.cpp      (--gpu, --gpu-arch flags)
 MOD   tools/carts_cli.py             (pass --gpu-arch to compiler)
 ```
 

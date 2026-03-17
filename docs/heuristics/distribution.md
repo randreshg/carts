@@ -12,7 +12,7 @@ H2 decides *work distribution* and task loop structure.
 H1 partitioning still decides DB layout/rewrite details.
 
 Related guide:
-- `docs/heuristics/partitioning/partitioning.md`
+- `docs/heuristics/partitioning.md`
 - `docs/compiler/pipeline.md`
 
 ## 0. Motivation: Bridging AMT, OpenMP, and MPI
@@ -109,7 +109,7 @@ Cannon and SUMMA remain viable future paths once collective-like orchestration i
 ## 3. Strategy Selection Policy (H2)
 
 Current policy is implemented in
-`DistributionHeuristics::selectDistributionKind` (`lib/arts/analysis/DistributionHeuristics.cpp`).
+`DistributionHeuristics::selectDistributionKind` (`lib/arts/analysis/heuristics/DistributionHeuristics.cpp`).
 
 Selection order matters:
 
@@ -142,8 +142,8 @@ Pattern detection is centralized in analysis APIs, not in lowering passes.
 - `DbAnalysis::getLoopDistributionPattern(ForOp)` exposes pattern.
 - `AnalysisManager::getLoopDistributionPattern(Operation *)` is the unified pass-facing API.
 - Pattern-specific IR matching is centralized in
-  `include/arts/analysis/Db/DbPatternMatchers.h` /
-  `lib/arts/analysis/Db/DbPatternMatchers.cpp` and reused by analysis and
+  `include/arts/analysis/db/DbPatternMatchers.h` /
+  `lib/arts/analysis/db/DbPatternMatchers.cpp` and reused by analysis and
   loop-normalization transforms.
 
 ### 4.2 EDT-facing view
@@ -158,15 +158,15 @@ Pattern detection is centralized in analysis APIs, not in lowering passes.
 
 ## 5. Pipeline Architecture
 
-Distribution is now a dedicated stage:
+Distribution is now a dedicated pipeline step:
 
 - `concurrency`: prepares parallel structure
 - `edt-distribution`: runs `EdtDistributionPass`, annotates distribution attrs, then `ForLowering`
 - `concurrency-opt`: DB partitioning and downstream optimization
 
 Key files:
-- `tools/run/carts-compile.cpp`
-- `lib/arts/passes/Transformations/EdtDistributionPass.cpp`
+- `tools/compile/Compile.cpp`
+- `lib/arts/passes/transforms/EdtDistribution.cpp`
 
 Useful stop points:
 
@@ -185,7 +185,7 @@ Goal:
 Current implementation:
 - `DbAllocOp` supports a `distributed` marker attribute.
 - New pass: `DbDistributedOwnershipPass`
-  (`lib/arts/passes/Optimizations/DbDistributedOwnership.cpp`).
+  (`lib/arts/passes/opt/db/DbDistributedOwnership.cpp`).
 - Pipeline placement: `DbPartitioning -> DbDistributedOwnership -> DbModeTightening`
   (gated by `--distributed-db` in `carts-compile`).
 - `--distributed-db` also enables distributed host loop outlining
@@ -245,8 +245,8 @@ Question: do loop normalization/reordering transforms harm multi-node distributi
 Current answer: **no for existing 1D outer-loop distribution path**.
 
 Reason:
-- Stage 5-6 transforms mostly target inner serial `scf.for` structure.
-- Distribution stage (`edt-distribution`) runs later and preserves top-level `arts.for` distribution contract.
+- Pipeline steps 5-6 (`pattern-pipeline`, `edt-transforms`) mostly target inner serial `scf.for` structure.
+- The `edt-distribution` pipeline step runs later and preserves top-level `arts.for` distribution contract.
 
 Pass-level summary (current behavior):
 - Loop normalization (triangular-to-rectangular forms): compatible

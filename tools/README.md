@@ -44,13 +44,13 @@ tools/
    # Full pipeline: C → MLIR → LLVM IR → executable
    carts compile simple.c -o simple_arts -O3 --arts-config arts.cfg
 
-   # Stop at a pipeline stage (C input)
+   # Stop at a pipeline step (C input)
    carts compile simple.c --pipeline concurrency --arts-config arts.cfg
 
    # MLIR transformations
    carts compile simple.mlir --O3 --arts-config arts.cfg
 
-   # MLIR transformations, stop at stage
+   # MLIR transformations, stop at a pipeline step
    carts compile simple.mlir --O3 --arts-config arts.cfg --pipeline edt-distribution
 
    # Link LLVM IR with ARTS runtime
@@ -67,14 +67,14 @@ tools/
 | Command | Description |
 |---------|-------------|
 | `carts compile <file.c>` | Full pipeline: C → MLIR → LLVM IR → executable |
-| `carts compile <file.c> --pipeline <stage>` | Full pipeline, stop after MLIR stage |
+| `carts compile <file.c> --pipeline <step>` | Full pipeline, stop after a pipeline step |
 | `carts compile <file.mlir>` | MLIR transformations via carts-compile binary |
-| `carts compile <file.mlir> --pipeline <stage>` | MLIR transformations, stop at stage |
+| `carts compile <file.mlir> --pipeline <step>` | MLIR transformations, stop at a pipeline step |
 | `carts compile <file.ll> -o out` | Link LLVM IR with ARTS runtime |
 | `carts build` | Build CARTS project |
-| `carts check` | Run test suite |
+| `carts test` | Run test suite |
 | `carts lit [path...]` | Run bundled `llvm-lit` directly |
-| `carts check --examples` | Run example compilation+execution tests |
+| `carts examples run --all` | Run example compilation+execution tests |
 | `make check-doc-flags` | Check documented `carts-compile` flags vs CLI options |
 | `carts benchmarks` | Build and manage benchmarks |
 | `carts cgeist` | Run cgeist C-to-MLIR frontend |
@@ -104,12 +104,12 @@ carts benchmarks --help
 carts benchmarks run --help
 ```
 
-### Examples (`carts check --examples`)
+### Examples (`carts examples run --all`)
 Run and test CARTS examples.
 
 ```bash
 # Run all examples
-carts check --examples
+carts examples run --all
 ```
 
 **ARTS Configuration Priority:**

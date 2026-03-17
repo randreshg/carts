@@ -133,43 +133,12 @@ public:
     return nullptr;
   }
 
-  /// Apply a refined contract to IR. Concrete transforms can keep using their
-  /// legacy entry points until they migrate to the phased runner.
+  /// Apply a refined contract to IR.
   virtual LogicalResult apply(const PatternContract &contract,
                               PatternApplyContext &ctx) const {
     (void)contract;
     (void)ctx;
     return failure();
-  }
-
-  /// Legacy compatibility hook used by existing pass plumbing while the
-  /// phased discovery/refine/apply runner is introduced incrementally.
-  virtual int discover(ModuleOp module, AnalysisManager *AM,
-                       PatternDiscoveryMode mode) {
-    PatternDiscoveryContext discoveryCtx;
-    discoveryCtx.module = module;
-    discoveryCtx.analysisManager = AM;
-    discoveryCtx.mode = mode;
-
-    SmallVector<PatternCandidate, 4> candidates;
-    if (failed(discover(discoveryCtx, candidates)))
-      return 0;
-    if (mode != PatternDiscoveryMode::Refine)
-      return static_cast<int>(candidates.size());
-
-    PatternRefineContext refineCtx;
-    refineCtx.module = module;
-    refineCtx.analysisManager = AM;
-
-    int refinedContracts = 0;
-    for (const PatternCandidate &candidate : candidates) {
-      std::unique_ptr<PatternContract> contract = refine(candidate, refineCtx);
-      if (!contract || !candidate.anchor)
-        continue;
-      contract->stamp(candidate.anchor);
-      ++refinedContracts;
-    }
-    return refinedContracts;
   }
 };
 

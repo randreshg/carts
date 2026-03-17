@@ -1,14 +1,10 @@
 # DepTransforms
 
-Canonical docs for transform ownership now live under
-[`docs/transforms/`](../transforms/README.md).
-
 Use:
 
-- [`../transforms/dependence.md`](../transforms/dependence.md)
-  for `DepTransforms`
 - [`pipeline.md`](./pipeline.md)
-  for stage placement and ordering
+  for pipeline-step placement and ordering
+- this document for `DepTransforms` ownership boundaries
 - optional owner/tile metadata when the transform creates tiled wavefronts
 
 `DbPartitioning` should consume those hints. It should not re-derive the schedule transform itself.

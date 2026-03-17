@@ -25,8 +25,8 @@ using namespace mlir::arts;
 /// Forward declarations for internal-only helpers.
 static void mergeLoweringContractInfo(LoweringContractInfo &dest,
                                       const LoweringContractInfo &src);
-static void copyLoweringContract(Value source, Value target,
-                                  OpBuilder &builder, Location loc);
+static void copyLoweringContract(Value source, Value target, OpBuilder &builder,
+                                 Location loc);
 
 namespace {
 
@@ -157,11 +157,10 @@ bool LoweringContractInfo::hasExplicitStencilContract() const {
   /// has attached concrete ownership / halo / block-shape information.
   if (!isStencilFamily())
     return false;
-  return hasOwnerDims() ||
-         !stencilIndependentDims.empty() || !blockShape.empty() ||
-         !minOffsets.empty() || !maxOffsets.empty() ||
-         !staticBlockShape.empty() ||
-         !staticMinOffsets.empty() || !staticMaxOffsets.empty();
+  return hasOwnerDims() || !stencilIndependentDims.empty() ||
+         !blockShape.empty() || !minOffsets.empty() || !maxOffsets.empty() ||
+         !staticBlockShape.empty() || !staticMinOffsets.empty() ||
+         !staticMaxOffsets.empty();
 }
 
 bool LoweringContractInfo::supportsBlockHalo() const {
@@ -565,8 +564,8 @@ void mlir::arts::transferLoweringContract(Operation *source, Value target,
     upsertLoweringContract(builder, loc, target, *info);
 }
 
-static void copyLoweringContract(Value source, Value target,
-                                  OpBuilder &builder, Location loc) {
+static void copyLoweringContract(Value source, Value target, OpBuilder &builder,
+                                 Location loc) {
   if (!source || !target || source == target)
     return;
   auto info = getLoweringContract(source);

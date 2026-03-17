@@ -6,7 +6,7 @@
 #include <ctime>
 #include <omp.h>
 
-#include "arts/utils/Testing/CartsTest.h"
+#include "arts/utils/testing/CartsTest.h"
 
 void print_usage(const char *program_name) {
   printf("Usage: %s [options]\n", program_name);
