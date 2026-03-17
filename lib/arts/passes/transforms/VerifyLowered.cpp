@@ -20,8 +20,7 @@ struct VerifyLoweredPass
   void runOnOperation() override {
     bool found = false;
     getOperation().walk([&](Operation *op) {
-      if (isa<arts::EdtOp, arts::ForOp, arts::DbAllocOp,
-              arts::DbAcquireOp, arts::DbReleaseOp, arts::EpochOp>(op)) {
+      if (isArtsOp(op)) {
         op->emitError("high-level ARTS operation survived past arts-to-llvm");
         found = true;
       }

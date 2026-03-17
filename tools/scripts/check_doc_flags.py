@@ -13,7 +13,7 @@ from typing import Dict, Iterable, List, Sequence, Set, Tuple
 DEFAULT_DOCS: Sequence[str] = (
     "docs/compiler/pipeline.md",
     "docs/heuristics/distribution.md",
-    "docs/heuristics/partitioning/partitioning.md",
+    "docs/heuristics/partitioning.md",
     "docs/profiling/diagnose-dataflow.md",
 )
 
@@ -82,7 +82,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--source",
-        default="tools/run/carts-compile.cpp",
+        default="tools/compile/Compile.cpp",
         help="Path to carts-compile source (default: %(default)s)",
     )
     parser.add_argument(
@@ -97,6 +97,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     source = Path(args.source)
     if not source.is_absolute():
         source = root / source
+    if not source.is_file() and args.source == "tools/compile/Compile.cpp":
+        legacy_source = root / "tools/run/carts-compile.cpp"
+        if legacy_source.is_file():
+            source = legacy_source
     if not source.is_file():
         print(f"error: source not found: {source}", file=sys.stderr)
         return 2

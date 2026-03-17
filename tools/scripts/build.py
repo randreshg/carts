@@ -5,7 +5,16 @@ from typing import Optional
 
 import typer
 
-from carts_styles import Colors, console, print_header, print_step, print_error, print_success
+from carts_styles import (
+    Colors,
+    console,
+    print_header,
+    print_step,
+    print_error,
+    print_success,
+    print_info,
+    print_warning,
+)
 from scripts.config import get_config
 from scripts.deps import check_dependency, Dependency, DepStatus
 from scripts.run import run_subprocess
@@ -18,6 +27,30 @@ COUNTER_PROFILES = {
     2: "profile-workload.cfg",   # Workload characterization at CLUSTER level
     3: "profile-overhead.cfg",   # Full overhead analysis at CLUSTER level
 }
+
+PIPELINE_MANIFEST_FILENAME = "pipeline-manifest.json"
+
+
+def _export_pipeline_manifest(config) -> None:
+    """Export pipeline manifest JSON from carts-compile into install/share."""
+    carts_compile = config.get_carts_tool("carts-compile")
+    if not carts_compile.is_file():
+        return
+
+    result = run_subprocess(
+        [str(carts_compile), "--print-pipeline-manifest-json"],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        print_warning("Skipping pipeline manifest export (carts-compile JSON endpoint failed).")
+        return
+
+    manifest_dir = config.carts_install_dir / "share"
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = manifest_dir / PIPELINE_MANIFEST_FILENAME
+    manifest_path.write_text(result.stdout or "", encoding="utf-8")
+    print_info(f"Exported pipeline manifest: {manifest_path}")
 
 
 def build(
@@ -152,6 +185,7 @@ def build(
         result = run_subprocess(cmd, cwd=config.carts_dir, check=False)
 
     if result.returncode == 0:
+        _export_pipeline_manifest(config)
         print_header("Build Complete")
         print_success("CARTS build completed successfully!")
     else:

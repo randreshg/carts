@@ -2,38 +2,278 @@
 
 from dataclasses import dataclass, field
 from contextlib import contextmanager
+import json
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import typer
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich.table import Table
 
-from carts_styles import Colors, console, print_header, print_error, print_info, print_success
+from carts_styles import (
+    Colors,
+    console,
+    print_header,
+    print_error,
+    print_info,
+    print_success,
+    print_warning,
+)
 from scripts.config import PlatformConfig, get_config
 from scripts.run import run_subprocess, run_command_with_output
 
-# CARTS transformation pipeline stages in execution order.
-# Used by --all-stages to dump intermediate MLIR after each pass.
-PIPELINE_STAGES = [
-    "canonicalize-memrefs",  # Normalize memref operations
-    "collect-metadata",      # Extract loop/array metadata for optimization
-    "initial-cleanup",       # Remove dead code, simplify control flow
-    "openmp-to-arts",        # Convert OpenMP parallel regions to ARTS EDTs
-    "pattern-pipeline",      # Semantic pattern discovery and kernel transforms
-    "edt-transforms",        # Optimize EDT (Event Driven Task) structure
-    "create-dbs",            # Create DataBlocks for inter-task communication
-    "db-opt",                # Optimize DataBlock operations
-    "edt-opt",               # Further EDT optimizations
-    "concurrency",           # Add concurrency annotations
-    "edt-distribution",      # Select distribution strategy, lower arts.for
-    "concurrency-opt",       # Optimize concurrent execution
-    "epochs",                # Add epoch synchronization
-    "pre-lowering",          # Prepare for LLVM lowering
-    "arts-to-llvm",          # Final lowering to LLVM IR
-]
+FLAG_ARTS_CONFIG = "--arts-config"
+FLAG_OPTIMIZE_O3 = "--O3"
+FLAG_EMIT_LLVM = "--emit-llvm"
+FLAG_COLLECT_METADATA = "--collect-metadata"
+FLAG_DIAGNOSE = "--diagnose"
+FLAG_DIAGNOSE_OUTPUT = "--diagnose-output"
+FLAG_START_FROM = "--start-from"
+FLAG_PARTITION_FALLBACK = "--partition-fallback"
+FLAG_PIPELINE = "--pipeline"
+FLAG_ALL_PIPELINES = "--all-pipelines"
+FLAG_HELP = "--help"
+FLAG_PRINT_PIPELINE_TOKENS_JSON = "--print-pipeline-tokens-json"
+FLAG_PRINT_PIPELINE_MANIFEST_JSON = "--print-pipeline-manifest-json"
+FLAG_DEBUG_ONLY = "--debug-only"
+FLAG_ARTS_ONLY = "--arts-only"
+CLI_OPTIMIZE_O3 = "-O3"
+FLAG_OUTPUT = "-o"
+DEFAULT_METADATA_FILENAME = ".carts-metadata.json"
+PIPELINE_MANIFEST_FILENAME = "pipeline-manifest.json"
+CGEIST_FLAG_RAISE_AFFINE = "--raise-scf-to-affine"
+CGEIST_FLAG_PRINT_DEBUG_INFO = "--print-debug-info"
+
+
+@dataclass(frozen=True)
+class PipelineTokens:
+    pipeline: List[str]
+    start_from: List[str]
+    pipeline_sequence: List[str]
+    aliases: Dict[str, str]
+
+
+@dataclass(frozen=True)
+class PipelineManifestStep:
+    name: str
+    passes: List[str]
+
+
+@dataclass(frozen=True)
+class PipelineManifest:
+    tokens: PipelineTokens
+    steps: List[PipelineManifestStep]
+
+
+_PIPELINE_TOKENS_CACHE: Optional[PipelineTokens] = None
+_PIPELINE_MANIFEST_CACHE: Optional[PipelineManifest] = None
+
+
+def _dedupe_tokens(tokens: List[str]) -> List[str]:
+    """Keep token order stable while removing duplicates."""
+    seen = set()
+    deduped: List[str] = []
+    for token in tokens:
+        if token not in seen:
+            seen.add(token)
+            deduped.append(token)
+    return deduped
+
+
+def _has_debug_only_flag(args: List[str]) -> bool:
+    """Return True when passthrough args include legacy --debug-only."""
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == FLAG_DEBUG_ONLY or arg.startswith(f"{FLAG_DEBUG_ONLY}="):
+            return True
+        i += 1
+    return False
+
+
+def _normalize_arts_only(spec: str) -> str:
+    """Normalize `--arts-only` channels and reject empty specs."""
+    channels = [channel.strip() for channel in spec.split(",") if channel.strip()]
+    if not channels:
+        raise ValueError("Invalid --arts-only value.")
+    return ",".join(channels)
+
+
+def _parse_pipeline_tokens_payload(payload: str) -> PipelineTokens:
+    """Parse `carts-compile --print-pipeline-tokens-json` output."""
+    data = json.loads(payload)
+    if not isinstance(data, dict):
+        raise ValueError("root JSON object must be a map")
+
+    def require_string_list(key: str) -> List[str]:
+        value = data.get(key)
+        if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+            raise ValueError(f"field '{key}' must be a list of strings")
+        return _dedupe_tokens(list(value))
+
+    pipeline = require_string_list("pipeline")
+    start_from = require_string_list("start_from")
+    pipeline_sequence = require_string_list("pipeline_sequence")
+
+    aliases_raw = data.get("aliases", {})
+    if not isinstance(aliases_raw, dict):
+        raise ValueError("field 'aliases' must be an object")
+    aliases: Dict[str, str] = {}
+    for alias, target in aliases_raw.items():
+        if not isinstance(alias, str) or not isinstance(target, str):
+            raise ValueError("alias keys and values must be strings")
+        aliases[alias] = target
+
+    if not pipeline_sequence:
+        raise ValueError("field 'pipeline_sequence' cannot be empty")
+    if not start_from:
+        raise ValueError("field 'start_from' cannot be empty")
+    if not pipeline:
+        raise ValueError("field 'pipeline' cannot be empty")
+
+    return PipelineTokens(
+        pipeline=pipeline,
+        start_from=start_from,
+        pipeline_sequence=pipeline_sequence,
+        aliases=aliases,
+    )
+
+
+def _parse_pipeline_manifest_payload(payload: str) -> PipelineManifest:
+    """Parse `carts-compile --print-pipeline-manifest-json` output."""
+    tokens = _parse_pipeline_tokens_payload(payload)
+    data = json.loads(payload)
+    steps_raw = data.get("pipeline_steps")
+    if not isinstance(steps_raw, list):
+        raise ValueError("field 'pipeline_steps' must be a list")
+
+    steps: List[PipelineManifestStep] = []
+    for step_raw in steps_raw:
+        if not isinstance(step_raw, dict):
+            raise ValueError("each pipeline step entry must be an object")
+        name = step_raw.get("name")
+        passes = step_raw.get("passes", [])
+        if not isinstance(name, str):
+            raise ValueError("pipeline step field 'name' must be a string")
+        if not isinstance(passes, list) or not all(isinstance(p, str) for p in passes):
+            raise ValueError("pipeline step field 'passes' must be a list of strings")
+        steps.append(PipelineManifestStep(name=name, passes=list(passes)))
+
+    return PipelineManifest(tokens=tokens, steps=steps)
+
+
+def _pipeline_manifest_to_dict(manifest: PipelineManifest) -> Dict[str, object]:
+    """Convert pipeline manifest dataclass into a JSON-serializable dict."""
+    return {
+        "pipeline": manifest.tokens.pipeline,
+        "start_from": manifest.tokens.start_from,
+        "pipeline_sequence": manifest.tokens.pipeline_sequence,
+        "aliases": manifest.tokens.aliases,
+        "pipeline_steps": [
+            {"name": step.name, "passes": step.passes}
+            for step in manifest.steps
+        ],
+    }
+
+
+def _query_compiler_json(
+    config: PlatformConfig, flag: str, error_message: str
+) -> str:
+    """Run carts-compile JSON endpoint and return stdout payload."""
+    carts_compile_bin = config.get_carts_tool("carts-compile")
+    if not carts_compile_bin.is_file():
+        print_error(f"carts-compile not found at {carts_compile_bin}")
+        raise typer.Exit(1)
+
+    result = run_subprocess(
+        [str(carts_compile_bin), flag],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        print_error(error_message)
+        raise typer.Exit(result.returncode)
+    return result.stdout or ""
+
+
+def _pipeline_manifest_path(config: PlatformConfig) -> Path:
+    """Return installed pipeline manifest path."""
+    return config.carts_install_dir / "share" / PIPELINE_MANIFEST_FILENAME
+
+
+def _load_pipeline_manifest_from_file(config: PlatformConfig) -> Optional[PipelineManifest]:
+    """Load installed pipeline manifest when available."""
+    manifest_path = _pipeline_manifest_path(config)
+    if not manifest_path.is_file():
+        return None
+    try:
+        payload = manifest_path.read_text(encoding="utf-8")
+        return _parse_pipeline_manifest_payload(payload)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print_warning(f"Ignoring invalid pipeline manifest at {manifest_path}: {exc}")
+        return None
+
+
+def _load_pipeline_tokens_from_manifest(config: PlatformConfig) -> Optional[PipelineTokens]:
+    """Load pipeline tokens from installed manifest file when available."""
+    manifest = _load_pipeline_manifest_from_file(config)
+    if manifest is None:
+        return None
+    return manifest.tokens
+
+
+def _get_pipeline_tokens(config: PlatformConfig) -> PipelineTokens:
+    """Load pipeline tokens from carts-compile once per process."""
+    global _PIPELINE_TOKENS_CACHE
+    if _PIPELINE_TOKENS_CACHE is not None:
+        return _PIPELINE_TOKENS_CACHE
+
+    from_manifest = _load_pipeline_tokens_from_manifest(config)
+    if from_manifest is not None:
+        _PIPELINE_TOKENS_CACHE = from_manifest
+        return _PIPELINE_TOKENS_CACHE
+
+    try:
+        payload = _query_compiler_json(
+            config,
+            FLAG_PRINT_PIPELINE_TOKENS_JSON,
+            "Failed to query pipeline tokens from carts-compile. "
+            "Run `tools/carts build` and retry.",
+        )
+        _PIPELINE_TOKENS_CACHE = _parse_pipeline_tokens_payload(payload)
+    except (json.JSONDecodeError, ValueError) as exc:
+        print_error(f"Invalid pipeline token payload from carts-compile: {exc}")
+        raise typer.Exit(1)
+
+    return _PIPELINE_TOKENS_CACHE
+
+
+def _get_pipeline_manifest(config: PlatformConfig) -> PipelineManifest:
+    """Load pipeline manifest from install cache or compiler JSON endpoint."""
+    global _PIPELINE_MANIFEST_CACHE
+    if _PIPELINE_MANIFEST_CACHE is not None:
+        return _PIPELINE_MANIFEST_CACHE
+
+    from_file = _load_pipeline_manifest_from_file(config)
+    if from_file is not None:
+        _PIPELINE_MANIFEST_CACHE = from_file
+        return _PIPELINE_MANIFEST_CACHE
+
+    try:
+        payload = _query_compiler_json(
+            config,
+            FLAG_PRINT_PIPELINE_MANIFEST_JSON,
+            "Failed to query pipeline manifest from carts-compile. "
+            "Run `tools/carts build` and retry.",
+        )
+        _PIPELINE_MANIFEST_CACHE = _parse_pipeline_manifest_payload(payload)
+    except (json.JSONDecodeError, ValueError) as exc:
+        print_error(f"Invalid pipeline manifest payload from carts-compile: {exc}")
+        raise typer.Exit(1)
+
+    return _PIPELINE_MANIFEST_CACHE
 
 
 @contextmanager
@@ -129,7 +369,7 @@ def _is_numeric(s: str) -> bool:
 
 @dataclass
 class CompileArgs:
-    """Parsed passthrough arguments, classified by pipeline stage.
+    """Parsed passthrough arguments, classified by pipeline step.
 
     Classification is pattern-based so that new ``cl::opt`` flags added to
     ``carts-compile.cpp`` are automatically forwarded without any Python
@@ -164,11 +404,11 @@ class CompileArgs:
         while i < len(args):
             arg = args[i]
             # --- Special flags consumed by the Python CLI ---
-            if arg == "-O3":
+            if arg in (CLI_OPTIMIZE_O3, FLAG_OPTIMIZE_O3):
                 result.optimize = True
-            elif arg == "--diagnose":
+            elif arg == FLAG_DIAGNOSE:
                 result.diagnose = True
-            elif arg == "--diagnose-output":
+            elif arg == FLAG_DIAGNOSE_OUTPUT:
                 if i + 1 < len(args):
                     i += 1
                     result.diagnose_output = Path(args[i])
@@ -220,7 +460,7 @@ def cgeist(
     cmd = [str(cgeist_bin)]
     cmd.extend(config.include_flags)
     cmd.extend(config.cgeist_sysroot_flags)
-    cmd.append("--raise-scf-to-affine")
+    cmd.append(CGEIST_FLAG_RAISE_AFFINE)
 
     # Filter out --arts-config (not supported by cgeist) and pass through rest
     if ctx.args:
@@ -229,7 +469,7 @@ def cgeist(
             if skip_next:
                 skip_next = False
                 continue
-            if arg == "--arts-config":
+            if arg == FLAG_ARTS_CONFIG:
                 skip_next = True
                 continue
             cmd.append(arg)
@@ -301,6 +541,52 @@ def mlir_translate(
 
 
 # ============================================================================
+# Pipeline Command
+# ============================================================================
+
+def pipeline(
+    pipeline: Optional[str] = typer.Option(
+        None, FLAG_PIPELINE, help="Show passes for one pipeline step"),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print pipeline manifest JSON"),
+):
+    """Show pipeline steps and passes from carts-compile."""
+    config = get_config()
+    manifest = _get_pipeline_manifest(config)
+
+    if pipeline and pipeline not in manifest.tokens.pipeline_sequence:
+        print_error(f"Unknown pipeline step: '{pipeline}'")
+        print_info("Available pipeline steps:")
+        for token in manifest.tokens.pipeline_sequence:
+            console.print(f"  - {token}")
+        raise typer.Exit(1)
+
+    if json_output:
+        console.print(json.dumps(_pipeline_manifest_to_dict(manifest), indent=2))
+        return
+
+    print_header("CARTS Pipeline")
+    table = Table(title="Pipeline Order")
+    table.add_column("#", style="cyan", justify="right")
+    table.add_column("Pipeline", style="green")
+    table.add_column("Passes", style="magenta", justify="right")
+    selected_pipelines = manifest.steps
+    if pipeline:
+        selected_pipelines = [entry for entry in manifest.steps if entry.name == pipeline]
+    for index, entry in enumerate(manifest.steps, start=1):
+        if pipeline and entry.name != pipeline:
+            continue
+        table.add_row(str(index), entry.name, str(len(entry.passes)))
+    console.print(table)
+
+    for entry in selected_pipelines:
+        console.print()
+        console.print(f"[{Colors.INFO}]{entry.name}[/{Colors.INFO}]")
+        for pass_name in entry.passes:
+            console.print(f"  - {pass_name}")
+
+
+# ============================================================================
 # Compile Command (unified)
 # ============================================================================
 
@@ -310,27 +596,30 @@ def compile_cmd(
     output: Optional[Path] = typer.Option(
         None, "-o", help="Output file or directory"),
     optimize: bool = typer.Option(
-        False, "-O3", help="Enable O3 optimizations"),
+        False, CLI_OPTIMIZE_O3, help="Enable O3 optimizations"),
     debug: bool = typer.Option(False, "-g", help="Generate debug symbols"),
     pipeline: Optional[str] = typer.Option(
-        None, "--pipeline",
-        help="Stop after pipeline stage (e.g., concurrency, edt-distribution)"),
-    all_stages: bool = typer.Option(
-        False, "--all-stages", help="Dump all pipeline stages"),
+        None, FLAG_PIPELINE,
+        help="Stop after pipeline step (e.g., concurrency, edt-distribution)"),
+    all_pipelines: bool = typer.Option(
+        False, FLAG_ALL_PIPELINES, help="Dump all pipeline steps"),
     emit_llvm: bool = typer.Option(
-        False, "--emit-llvm", help="Emit LLVM IR output"),
+        False, FLAG_EMIT_LLVM, help="Emit LLVM IR output"),
     collect_metadata: bool = typer.Option(
-        False, "--collect-metadata", help="Collect and export metadata"),
+        False, FLAG_COLLECT_METADATA, help="Collect and export metadata"),
     partition_fallback: Optional[str] = typer.Option(
-        None, "--partition-fallback",
+        None, FLAG_PARTITION_FALLBACK,
         help="Partition fallback strategy (coarse, fine)"),
     diagnose: bool = typer.Option(
-        False, "--diagnose", help="Export diagnostic information"),
+        False, FLAG_DIAGNOSE, help="Export diagnostic information"),
     diagnose_output: Optional[Path] = typer.Option(
-        None, "--diagnose-output", help="Output file for diagnostics"),
+        None, FLAG_DIAGNOSE_OUTPUT, help="Output file for diagnostics"),
+    arts_only: Optional[str] = typer.Option(
+        None, FLAG_ARTS_ONLY,
+        help="Enable ARTS_INFO/ARTS_DEBUG channels in carts-compile"),
     start_from: Optional[str] = typer.Option(
-        None, "--start-from",
-        help="Resume pipeline from specified stage (requires saved MLIR)"),
+        None, FLAG_START_FROM,
+        help="Resume pipeline from specified step (requires saved MLIR)"),
 ):
     """Unified compilation command.
 
@@ -342,25 +631,46 @@ def compile_cmd(
 
       .ll      Link LLVM IR with ARTS runtime -> executable
 
-    Use --pipeline <stage> to stop after a specific pipeline stage.
+    Use --pipeline <step> to stop after a specific pipeline step.
     """
-    if pipeline and pipeline not in PIPELINE_STAGES:
-        print_error(f"Unknown pipeline stage: '{pipeline}'")
-        print_info("Available stages (in execution order):")
-        for stage in PIPELINE_STAGES:
-            console.print(f"  - {stage}")
+    config = get_config()
+    pipeline_tokens = _get_pipeline_tokens(config)
+
+    if pipeline and pipeline not in pipeline_tokens.pipeline:
+        print_error(f"Unknown pipeline step: '{pipeline}'")
+        print_info("Available pipeline steps:")
+        for pipeline_token in pipeline_tokens.pipeline:
+            console.print(f"  - {pipeline_token}")
         raise typer.Exit(1)
+    if start_from and start_from not in pipeline_tokens.start_from:
+        print_error(f"Unknown start-from pipeline step: '{start_from}'")
+        print_info("Available start-from pipeline steps:")
+        for pipeline_token in pipeline_tokens.start_from:
+            console.print(f"  - {pipeline_token}")
+        raise typer.Exit(1)
+    if _has_debug_only_flag(ctx.args or []):
+        print_error("Use --arts-only instead of legacy --debug-only.")
+        raise typer.Exit(1)
+    normalized_arts_only: Optional[str] = None
+    if arts_only:
+        try:
+            normalized_arts_only = _normalize_arts_only(arts_only)
+        except ValueError as exc:
+            print_error(str(exc))
+            raise typer.Exit(1)
 
     ext = input_file.suffix.lower()
     if ext in (".c", ".cpp"):
         _compile_from_c(ctx, input_file, output, optimize, debug, pipeline,
-                        all_stages, emit_llvm, collect_metadata,
+                        all_pipelines, emit_llvm, collect_metadata,
                         partition_fallback, diagnose, diagnose_output,
+                        normalized_arts_only,
                         start_from)
     elif ext == ".mlir":
         _compile_from_mlir(ctx, input_file, output, optimize, debug, pipeline,
-                           all_stages, emit_llvm, collect_metadata,
+                           all_pipelines, emit_llvm, collect_metadata,
                            partition_fallback, diagnose, diagnose_output,
+                           normalized_arts_only,
                            start_from)
     elif ext == ".ll":
         if pipeline:
@@ -384,12 +694,13 @@ def _compile_from_c(
     optimize: bool,
     debug: bool,
     pipeline: Optional[str],
-    all_stages: bool,
+    all_pipelines: bool,
     emit_llvm: bool,
     collect_metadata: bool,
     partition_fallback: Optional[str],
     diagnose: bool,
     diagnose_output: Optional[Path],
+    arts_only: Optional[str],
     start_from: Optional[str] = None,
 ) -> None:
     """Full pipeline for C/C++ input."""
@@ -413,35 +724,29 @@ def _compile_from_c(
     cgeist_args = _normalize_path_flags(parsed.cgeist, invocation_cwd)
 
     if partition_fallback:
-        extra_pipeline_args.append(f"--partition-fallback={partition_fallback}")
+        extra_pipeline_args.append(f"{FLAG_PARTITION_FALLBACK}={partition_fallback}")
     if start_from:
-        extra_pipeline_args.append(f"--start-from={start_from}")
+        extra_pipeline_args.append(f"{FLAG_START_FROM}={start_from}")
+    if arts_only:
+        extra_pipeline_args.append(f"{FLAG_ARTS_ONLY}={arts_only}")
 
-    use_dual_mode = optimize or parsed.optimize
+    enable_pipeline_o3 = optimize or parsed.optimize
     use_diagnose = diagnose or parsed.diagnose
     final_diagnose_output = diagnose_output or parsed.diagnose_output
 
     workdir_override = _get_compile_workdir_override()
     if workdir_override is None:
-        if use_dual_mode:
-            _compile_c_dual(config, input_file, output_name, debug,
+        _compile_c_pipeline(config, input_file, output_name, debug,
+                            enable_pipeline_o3,
                             extra_pipeline_args, extra_link_args, cgeist_args,
                             use_diagnose, final_diagnose_output, pipeline)
-        else:
-            _compile_c_simple(config, input_file, output_name, debug,
-                              extra_pipeline_args, extra_link_args, cgeist_args,
-                              use_diagnose, final_diagnose_output, pipeline)
         return
 
     with _pushd(workdir_override):
-        if use_dual_mode:
-            _compile_c_dual(config, input_file, output_name, debug,
+        _compile_c_pipeline(config, input_file, output_name, debug,
+                            enable_pipeline_o3,
                             extra_pipeline_args, extra_link_args, cgeist_args,
                             use_diagnose, final_diagnose_output, pipeline)
-        else:
-            _compile_c_simple(config, input_file, output_name, debug,
-                              extra_pipeline_args, extra_link_args, cgeist_args,
-                              use_diagnose, final_diagnose_output, pipeline)
 
 
 # -----------------------------------------------------------------------------
@@ -455,12 +760,13 @@ def _compile_from_mlir(
     optimize: bool,
     debug: bool,
     pipeline: Optional[str],
-    all_stages: bool,
+    all_pipelines: bool,
     emit_llvm: bool,
     collect_metadata: bool,
     partition_fallback: Optional[str] = None,
     diagnose: bool = False,
     diagnose_output: Optional[Path] = None,
+    arts_only: Optional[str] = None,
     start_from: Optional[str] = None,
 ) -> None:
     """MLIR transformation pipeline."""
@@ -468,12 +774,15 @@ def _compile_from_mlir(
     carts_compile_bin = config.get_carts_tool("carts-compile")
 
     # Pass --help through to carts-compile binary
-    if ctx.args and ("--help" in ctx.args or "-h" in ctx.args):
-        result = run_subprocess([str(carts_compile_bin), "--help"], check=False)
+    if ctx.args and (FLAG_HELP in ctx.args or "-h" in ctx.args):
+        result = run_subprocess([str(carts_compile_bin), FLAG_HELP], check=False)
         raise typer.Exit(result.returncode)
 
-    if all_stages:
-        _compile_all_stages(config, input_file, output, ctx.args or [])
+    if all_pipelines:
+        extra_args = list(ctx.args or [])
+        if arts_only:
+            extra_args.append(f"{FLAG_ARTS_ONLY}={arts_only}")
+        _compile_all_pipelines(config, input_file, output, extra_args)
         return
 
     if not input_file.is_file():
@@ -485,28 +794,30 @@ def _compile_from_mlir(
     # Auto-discover arts.cfg if not explicitly provided
     arts_cfg = _find_arts_config(input_file, ctx.args or [], config)
     if arts_cfg:
-        cmd.extend(["--arts-config", str(arts_cfg)])
+        cmd.extend([FLAG_ARTS_CONFIG, str(arts_cfg)])
 
     if optimize:
-        cmd.append("--O3")
+        cmd.append(FLAG_OPTIMIZE_O3)
     if emit_llvm:
-        cmd.append("--emit-llvm")
+        cmd.append(FLAG_EMIT_LLVM)
     if collect_metadata:
-        cmd.append("--collect-metadata")
+        cmd.append(FLAG_COLLECT_METADATA)
     if debug:
         cmd.append("-g")
     if pipeline:
-        cmd.append(f"--stop-at={pipeline}")
+        cmd.append(f"{FLAG_PIPELINE}={pipeline}")
     if partition_fallback:
-        cmd.append(f"--partition-fallback={partition_fallback}")
+        cmd.append(f"{FLAG_PARTITION_FALLBACK}={partition_fallback}")
     if diagnose:
-        cmd.append("--diagnose")
+        cmd.append(FLAG_DIAGNOSE)
     if diagnose_output:
-        cmd.extend(["--diagnose-output", str(diagnose_output)])
+        cmd.extend([FLAG_DIAGNOSE_OUTPUT, str(diagnose_output)])
+    if arts_only:
+        cmd.append(f"{FLAG_ARTS_ONLY}={arts_only}")
     if start_from:
-        cmd.append(f"--start-from={start_from}")
+        cmd.append(f"{FLAG_START_FROM}={start_from}")
     if output:
-        cmd.extend(["-o", str(output)])
+        cmd.extend([FLAG_OUTPUT, str(output)])
     if ctx.args:
         cmd.extend(ctx.args)
 
@@ -557,7 +868,7 @@ def _find_arts_config(
     will fail immediately — that is intentional.
     """
     for arg in pipeline_args:
-        if arg == "--arts-config" or arg.startswith("--arts-config="):
+        if arg == FLAG_ARTS_CONFIG or arg.startswith(f"{FLAG_ARTS_CONFIG}="):
             return None
 
     # Check next to the input file
@@ -586,12 +897,12 @@ def _build_cgeist_cmd(
     cmd = [str(config.get_polygeist_tool("cgeist"))]
     cmd.extend(config.include_flags)
     cmd.extend(config.cgeist_sysroot_flags)
-    cmd.extend(["--raise-scf-to-affine", std_flag, "-O0", "-S",
+    cmd.extend([CGEIST_FLAG_RAISE_AFFINE, std_flag, "-O0", "-S",
                  "-D_POSIX_C_SOURCE=199309L"])  # Required for clock_gettime
     if with_openmp:
         cmd.append("-fopenmp")
     if with_debug_info:
-        cmd.append("--print-debug-info")
+        cmd.append(CGEIST_FLAG_PRINT_DEBUG_INFO)
     cmd.extend(passthrough_args)
     cmd.append(str(input_file))
     return cmd
@@ -619,11 +930,12 @@ def _build_link_cmd(
     return cmd
 
 
-def _compile_c_simple(
+def _compile_c_pipeline(
     config: PlatformConfig,
     input_file: Path,
     output_name: Path,
     debug: bool,
+    enable_pipeline_o3: bool,
     pipeline_args: List[str],
     link_args: List[str],
     passthrough_args: Optional[List[str]] = None,
@@ -631,118 +943,7 @@ def _compile_c_simple(
     diagnose_output: Optional[Path] = None,
     pipeline_stop: Optional[str] = None,
 ) -> None:
-    """Simple pipeline: cgeist -> pipeline -> link.
-
-    When pipeline_stop is set, stops after the MLIR pipeline stage (skips link).
-    """
-    base_name = input_file.stem
-    extension = input_file.suffix
-    std_flag = "-std=c++17" if extension == ".cpp" else "-std=c17"
-    passthrough_args = passthrough_args or []
-    skip_link = pipeline_stop is not None
-
-    total_steps = 2 if skip_link else 3
-    step_label = f"/{total_steps}]"
-
-    print_header("CARTS Compile Pipeline")
-    console.print(f"Input:  [{Colors.INFO}]{input_file}[/{Colors.INFO}]")
-    if skip_link:
-        console.print(f"Stop:   [{Colors.WARNING}]{pipeline_stop}[/{Colors.WARNING}]")
-    else:
-        console.print(f"Output: [{Colors.INFO}]{output_name}[/{Colors.INFO}]")
-    console.print(f"Mode:   [{Colors.DIM}]Simple ({total_steps}-step)[/{Colors.DIM}]")
-    console.print()
-
-    carts_compile_bin = config.get_carts_tool("carts-compile")
-    mlir_file = Path(f"{base_name}.mlir")
-    ll_file = Path(f"{base_name}-arts.ll")
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-    ) as progress:
-        # Step 1: Convert C/C++ to MLIR with OpenMP
-        task = progress.add_task(f"[1{step_label} Converting C to MLIR...", total=None)
-        cmd = _build_cgeist_cmd(
-            config, input_file, std_flag, passthrough_args, with_openmp=True)
-        if run_command_with_output(cmd, mlir_file) != 0:
-            print_error("Failed to convert C to MLIR")
-            raise typer.Exit(1)
-        progress.remove_task(task)
-        print_success(f"[1{step_label} {mlir_file}")
-
-        # Step 2: Apply ARTS transformations
-        task = progress.add_task(
-            f"[2{step_label} Applying ARTS transformations...", total=None)
-        cmd = [str(carts_compile_bin), str(mlir_file), "--O3"]
-        arts_cfg = _find_arts_config(input_file, pipeline_args, config)
-        if arts_cfg:
-            cmd.extend(["--arts-config", str(arts_cfg)])
-        if not skip_link:
-            cmd.append("--emit-llvm")
-        if debug:
-            cmd.append("-g")
-        if diagnose:
-            cmd.append("--diagnose")
-            effective_diagnose_output = diagnose_output or Path(
-                f"{base_name}-diagnose.json")
-            cmd.extend(["--diagnose-output", str(effective_diagnose_output)])
-        if pipeline_stop:
-            cmd.append(f"--stop-at={pipeline_stop}")
-        cmd.extend(pipeline_args)
-
-        out_file = mlir_file.with_suffix(f".{pipeline_stop}.mlir") if skip_link else ll_file
-        if run_command_with_output(cmd, out_file) != 0:
-            print_error("Failed to apply ARTS transformations")
-            raise typer.Exit(1)
-        progress.remove_task(task)
-        print_success(f"[2{step_label} {out_file}")
-
-        if skip_link:
-            console.print()
-            console.print(Panel(
-                f"[{Colors.SUCCESS}]Pipeline output:[/{Colors.SUCCESS}] {out_file}\n"
-                f"[{Colors.DIM}]Stopped at: {pipeline_stop}[/{Colors.DIM}]",
-                title="Success",
-                border_style="green",
-            ))
-            return
-
-        # Step 3: Link with ARTS runtime
-        task = progress.add_task(
-            f"[3{step_label} Linking executable...", total=None)
-        cmd = _build_link_cmd(
-            config, ll_file, output_name, debug, link_args)
-        if run_subprocess(cmd, check=False).returncode != 0:
-            print_error("Failed to link executable")
-            raise typer.Exit(1)
-        progress.remove_task(task)
-        print_success(f"[3{step_label} {output_name}")
-
-    console.print()
-    console.print(Panel(
-        f"[{Colors.SUCCESS}]Generated:[/{Colors.SUCCESS}] {output_name}\n"
-        f"[{Colors.DIM}]MLIR: {mlir_file}[/{Colors.DIM}]\n"
-        f"[{Colors.DIM}]LLVM IR: {ll_file}[/{Colors.DIM}]",
-        title="Success",
-        border_style="green",
-    ))
-
-
-def _compile_c_dual(
-    config: PlatformConfig,
-    input_file: Path,
-    output_name: Path,
-    debug: bool,
-    pipeline_args: List[str],
-    link_args: List[str],
-    passthrough_args: Optional[List[str]] = None,
-    diagnose: bool = False,
-    diagnose_output: Optional[Path] = None,
-    pipeline_stop: Optional[str] = None,
-) -> None:
-    """Dual pipeline with metadata extraction.
+    """C/C++ compilation pipeline with metadata extraction.
 
     Steps:
     1. Sequential compilation (no OpenMP) - for metadata extraction
@@ -767,7 +968,7 @@ def _compile_c_dual(
     else:
         console.print(f"Output: [{Colors.INFO}]{output_name}[/{Colors.INFO}]")
     console.print(
-        f"Mode:   [{Colors.WARNING}]Dual compilation[/{Colors.WARNING}]")
+        f"Mode:   [{Colors.WARNING}]Compilation pipeline[/{Colors.WARNING}]")
     console.print()
 
     carts_compile_bin = config.get_carts_tool("carts-compile")
@@ -776,12 +977,12 @@ def _compile_c_dual(
     i = 0
     while i < len(pipeline_args):
         arg = pipeline_args[i]
-        if arg == "--arts-config":
+        if arg == FLAG_ARTS_CONFIG:
             metadata_args.append(arg)
             if i + 1 < len(pipeline_args):
                 metadata_args.append(pipeline_args[i + 1])
                 i += 1
-        elif arg.startswith("--arts-config="):
+        elif arg.startswith(f"{FLAG_ARTS_CONFIG}="):
             metadata_args.append(arg)
         i += 1
 
@@ -790,7 +991,7 @@ def _compile_c_dual(
     metadata_mlir = Path(f"{base_name}_arts_metadata.mlir")
     par_mlir = Path(f"{base_name}.mlir")
     ll_file = Path(f"{base_name}-arts.ll")
-    metadata_json = Path(".carts-metadata.json")
+    metadata_json = Path(DEFAULT_METADATA_FILENAME)
 
     with Progress(
         SpinnerColumn(),
@@ -810,10 +1011,10 @@ def _compile_c_dual(
         # Step 2: Extract metadata from sequential MLIR
         task = progress.add_task(f"[2{step_label} Collecting metadata...", total=None)
         cmd = [str(carts_compile_bin), str(seq_mlir),
-               "--collect-metadata", "-o", str(metadata_mlir)]
+               FLAG_COLLECT_METADATA, FLAG_OUTPUT, str(metadata_mlir)]
         arts_cfg = _find_arts_config(input_file, pipeline_args, config)
         if arts_cfg and not metadata_args:
-            cmd.extend(["--arts-config", str(arts_cfg)])
+            cmd.extend([FLAG_ARTS_CONFIG, str(arts_cfg)])
         cmd.extend(metadata_args)
         if run_subprocess(cmd, check=False).returncode != 0:
             print_error("Failed to collect metadata")
@@ -837,21 +1038,23 @@ def _compile_c_dual(
 
         # Step 4: Apply ARTS transformations
         task = progress.add_task(f"[4{step_label} ARTS transformations...", total=None)
-        cmd = [str(carts_compile_bin), str(par_mlir), "--O3"]
+        cmd = [str(carts_compile_bin), str(par_mlir)]
+        if enable_pipeline_o3:
+            cmd.append(FLAG_OPTIMIZE_O3)
         arts_cfg = _find_arts_config(input_file, pipeline_args, config)
         if arts_cfg:
-            cmd.extend(["--arts-config", str(arts_cfg)])
+            cmd.extend([FLAG_ARTS_CONFIG, str(arts_cfg)])
         if not skip_link:
-            cmd.append("--emit-llvm")
+            cmd.append(FLAG_EMIT_LLVM)
         if debug:
             cmd.append("-g")
         if diagnose:
-            cmd.append("--diagnose")
+            cmd.append(FLAG_DIAGNOSE)
             effective_diagnose_output = diagnose_output or Path(
                 f"{base_name}-diagnose.json")
-            cmd.extend(["--diagnose-output", str(effective_diagnose_output)])
+            cmd.extend([FLAG_DIAGNOSE_OUTPUT, str(effective_diagnose_output)])
         if pipeline_stop:
-            cmd.append(f"--stop-at={pipeline_stop}")
+            cmd.append(f"{FLAG_PIPELINE}={pipeline_stop}")
         cmd.extend(pipeline_args)
 
         out_file = par_mlir.with_suffix(f".{pipeline_stop}.mlir") if skip_link else ll_file
@@ -892,13 +1095,13 @@ def _compile_c_dual(
     console.print(Panel(files_info, title="Success", border_style="green"))
 
 
-def _compile_all_stages(
+def _compile_all_pipelines(
     config: PlatformConfig,
     source_file: Path,
     output_dir: Optional[Path],
     extra_args: List[str],
 ) -> None:
-    """Run pipeline and dump all intermediate stages."""
+    """Run pipeline and dump all intermediate pipeline steps."""
     if not source_file.is_file():
         print_error(f"Input file '{source_file}' not found")
         raise typer.Exit(1)
@@ -909,8 +1112,11 @@ def _compile_all_stages(
     out_dir = output_dir if output_dir else source_file.parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    pipeline_tokens = _get_pipeline_tokens(config)
+    pipeline_steps = pipeline_tokens.pipeline_sequence
+
     stem = source_file.stem
-    total_steps = 2 + len(PIPELINE_STAGES)
+    total_steps = 2 + len(pipeline_steps)
 
     print_header("CARTS Pipeline Dump")
 
@@ -921,30 +1127,30 @@ def _compile_all_stages(
         TaskProgressColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("Processing stages...", total=total_steps)
+        task = progress.add_task("Processing pipeline steps...", total=total_steps)
 
         # Find arts-config if present
         config_file = source_file.parent / "arts.cfg"
-        base_cmd = [str(carts_compile_bin), str(source_file), "--O3"]
+        base_cmd = [str(carts_compile_bin), str(source_file), FLAG_OPTIMIZE_O3]
         if config_file.is_file():
-            base_cmd.extend(["--arts-config", str(config_file)])
+            base_cmd.extend([FLAG_ARTS_CONFIG, str(config_file)])
 
         results = []  # List of (stage_name, success_bool)
 
-        # Dump each stage
-        for stage in PIPELINE_STAGES:
-            progress.update(task, description=f"Stage: {stage}")
-            out_file = out_dir / f"{stem}_{stage}.mlir"
-            cmd = base_cmd + [f"--stop-at={stage}",
-                              "-o", str(out_file)] + extra_args
+        # Dump each pipeline step
+        for pipeline_step in pipeline_steps:
+            progress.update(task, description=f"Pipeline: {pipeline_step}")
+            out_file = out_dir / f"{stem}_{pipeline_step}.mlir"
+            cmd = base_cmd + [f"{FLAG_PIPELINE}={pipeline_step}",
+                              FLAG_OUTPUT, str(out_file)] + extra_args
             rc = run_subprocess(cmd, check=False).returncode
-            results.append((stage, rc == 0))
+            results.append((pipeline_step, rc == 0))
             progress.advance(task)
 
         # Final MLIR
         progress.update(task, description="Exporting complete MLIR")
         final_mlir = out_dir / f"{stem}_complete.mlir"
-        cmd = base_cmd + ["-o", str(final_mlir)] + extra_args
+        cmd = base_cmd + [FLAG_OUTPUT, str(final_mlir)] + extra_args
         rc = run_subprocess(cmd, check=False).returncode
         results.append(("complete-mlir", rc == 0))
         progress.advance(task)
@@ -952,7 +1158,7 @@ def _compile_all_stages(
         # Final LLVM IR
         progress.update(task, description="Exporting LLVM IR")
         final_ll = out_dir / f"{stem}.ll"
-        cmd = base_cmd + ["--emit-llvm", "-o", str(final_ll)] + extra_args
+        cmd = base_cmd + [FLAG_EMIT_LLVM, FLAG_OUTPUT, str(final_ll)] + extra_args
         rc = run_subprocess(cmd, check=False).returncode
         results.append(("emit-llvm", rc == 0))
         progress.advance(task)
@@ -961,16 +1167,16 @@ def _compile_all_stages(
     passed = sum(1 for _, ok in results if ok)
     failed = sum(1 for _, ok in results if not ok)
 
-    table = Table(title="Pipeline Stage Results")
-    table.add_column("Stage", style="cyan")
+    table = Table(title="Pipeline Results")
+    table.add_column("Pipeline", style="cyan")
     table.add_column("Status", justify="center")
-    for stage_name, ok in results:
+    for pipeline_name, ok in results:
         status = f"[green]PASS[/green]" if ok else f"[red]FAIL[/red]"
-        table.add_row(stage_name, status)
+        table.add_row(pipeline_name, status)
     console.print(table)
 
     console.print(
         f"\n[green]{passed} passed[/green], [red]{failed} failed[/red] "
-        f"out of {len(results)} stages"
+        f"out of {len(results)} pipeline outputs"
     )
     print_success(f"Pipeline dumps written to {out_dir}")

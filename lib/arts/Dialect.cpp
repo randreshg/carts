@@ -977,23 +977,19 @@ LogicalResult LoweringContractOp::verify() {
   auto ownerDims = (*this)->getAttrOfType<DenseI64ArrayAttr>(
       AttrNames::Operation::Contract::OwnerDims);
   size_t expectedRank = ownerDims ? ownerDims.size() : 0;
-  bool hasRankedPayload = !getBlockShape().empty() || !getMinOffsets().empty() ||
-                          !getMaxOffsets().empty();
+  bool hasOffsetOrFootprintPayload =
+      !getMinOffsets().empty() || !getMaxOffsets().empty() ||
+      !getWriteFootprint().empty();
 
-  if (expectedRank == 0 && hasRankedPayload)
-    return emitOpError("ranked contract fields require owner_dims");
+  if (expectedRank == 0 && hasOffsetOrFootprintPayload)
+    return emitOpError(
+        "min_offsets/max_offsets/write_footprint require owner_dims");
 
   if (ownerDims) {
     llvm::DenseSet<int64_t> seenOwnerDims;
-    auto targetType = dyn_cast<MemRefType>(getTarget().getType());
-    int64_t targetRank = targetType ? static_cast<int64_t>(targetType.getRank())
-                                    : -1;
     for (int64_t dim : ownerDims.asArrayRef()) {
       if (dim < 0)
         return emitOpError("owner_dims must be non-negative");
-      if (targetRank >= 0 && dim >= targetRank)
-        return emitOpError("owner_dims value ")
-               << dim << " exceeds target rank (" << targetRank << ")";
       if (!seenOwnerDims.insert(dim).second)
         return emitOpError("owner_dims contains duplicate value: ") << dim;
     }
@@ -1010,7 +1006,8 @@ LogicalResult LoweringContractOp::verify() {
 
   if (failed(verifyRankedOperands(getBlockShape(), "block_shape")) ||
       failed(verifyRankedOperands(getMinOffsets(), "min_offsets")) ||
-      failed(verifyRankedOperands(getMaxOffsets(), "max_offsets")))
+      failed(verifyRankedOperands(getMaxOffsets(), "max_offsets")) ||
+      failed(verifyRankedOperands(getWriteFootprint(), "write_footprint")))
     return failure();
 
   if (getMinOffsets().size() != getMaxOffsets().size())

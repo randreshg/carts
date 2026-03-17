@@ -1,12 +1,19 @@
-# CARTS Compiler Pipeline (Stage Order)
+# CARTS Compiler Pipeline (Pipeline Order)
 
-This document mirrors the actual `carts-compile` stage order in
+This document mirrors the actual `carts-compile` pipeline-step order in
 `tools/compile/Compile.cpp`.
 
 Use it as the canonical checklist when auditing pass ordering, ownership, and
-cross-stage contracts.
+cross-step contracts.
 
-## Stage Order (`--stop-at` / `--start-from`)
+## CLI Introspection
+
+- `tools/carts pipeline`: show pipeline order and pass counts.
+- `tools/carts pipeline --pipeline=<step>`: show passes for one pipeline step.
+- `carts-compile --print-pipeline-manifest-json`: print the machine-readable
+  manifest consumed by the Python CLI.
+
+## Pipeline Order (`--pipeline` / `--start-from`)
 
 1. `canonicalize-memrefs`
 2. `collect-metadata`
@@ -25,15 +32,15 @@ cross-stage contracts.
 15. `arts-to-llvm`
 16. `complete`
 
-## Stage Controls
+## Pipeline Controls
 
-- `--stop-at=<stage>`: run up to and including the selected stage.
-- `--start-from=<stage>`: skip all earlier stages and start at the selected
-  stage.
+- `--pipeline=<step>`: run up to and including the selected pipeline step.
+- `--start-from=<step>`: skip all earlier pipeline steps and start at the
+  selected pipeline step.
 - Invalid ranges are rejected: `--start-from` cannot be later than
-  `--stop-at` unless `--stop-at=complete`.
+  `--pipeline` unless `--pipeline=complete`.
 
-## Per-Stage Pass Summary
+## Per-Step Pass Summary
 
 ### 1) canonicalize-memrefs
 - `LowerAffine` (nested func)

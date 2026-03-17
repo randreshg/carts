@@ -171,9 +171,9 @@ Key files:
 Useful stop points:
 
 ```bash
-carts-compile input.mlir --stop-at=concurrency
-carts-compile input.mlir --stop-at=edt-distribution
-carts-compile input.mlir --stop-at=concurrency-opt
+carts-compile input.mlir --pipeline=concurrency
+carts-compile input.mlir --pipeline=edt-distribution
+carts-compile input.mlir --pipeline=concurrency-opt
 ```
 
 ## 6. Distributed DB Ownership
@@ -310,18 +310,18 @@ Passes consume the API; they do not duplicate these heuristics.
 ninja -C build carts-compile
 
 # Missing config must fail fast
-carts-compile input.mlir --stop-at=concurrency
+carts-compile input.mlir --pipeline=concurrency
 
 # Inspect distribution attributes
-carts-compile gemm.mlir --O3 --arts-config arts.cfg --stop-at=edt-distribution
+carts-compile gemm.mlir --O3 --arts-config arts.cfg --pipeline=edt-distribution
 
 # Multi-node counters
 # (example harness depends on your local benchmark setup)
 ```
 
 Expected checks:
-- no `distribution_*` attrs at `--stop-at=concurrency`
-- `distribution_kind/pattern/version` attrs at `--stop-at=edt-distribution`
+- no `distribution_*` attrs at `--pipeline=concurrency`
+- `distribution_kind/pattern/version` attrs at `--pipeline=edt-distribution`
 - checksums unchanged for benchmark kernels
 - node/thread counters show non-zero work on remote nodes for distributed runs
 
