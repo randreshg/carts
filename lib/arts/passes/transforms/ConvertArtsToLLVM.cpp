@@ -893,8 +893,6 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
     auto loc = op.getLoc();
     Value guidMemref, dbMemref;
 
-    auto dbMode = AC->createIntConstant(
-        static_cast<int>(op.getDbModeAttr().getValue()), AC->Int32, loc);
     Value route = op.getRoute();
     if (!route)
       route = AC->createIntConstant(0, AC->Int32, loc);
@@ -941,7 +939,7 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
           MemRefType::get({ShapedType::kDynamic}, AC->llvmPtr);
       dbMemref = AC->create<memref::AllocOp>(loc, payloadPtrType,
                                              ValueRange{totalElems});
-      createSingleDb(dbMemref, guidMemref, dbMode, route, totalDbSize,
+      createSingleDb(dbMemref, guidMemref, route, totalDbSize,
                      nextId ? &nextId : nullptr, loc, distributedOwnership);
     } else {
       ARTS_DEBUG("Creating multi-dim DB");
@@ -956,7 +954,7 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
           MemRefType::get({ShapedType::kDynamic}, AC->llvmPtr);
       dbMemref = AC->create<memref::AllocOp>(loc, payloadPtrType,
                                              ValueRange{totalElems});
-      createMultiDbs(dbMemref, guidMemref, dbSizes, dbMode, route, totalDbSize,
+      createMultiDbs(dbMemref, guidMemref, dbSizes, route, totalDbSize,
                      nextId ? &nextId : nullptr, loc, distributedOwnership);
     }
 
@@ -1142,22 +1140,19 @@ private:
       }
       Value callbackTotalDbSize = AC->create<arith::MulIOp>(
           op.getLoc(), callbackElementSize, callbackPayloadSize);
-      Value callbackDbMode =
-          AC->createIntConstant(static_cast<int>(op.getDbModeAttr().getValue()),
-                                AC->Int32, op.getLoc());
       Value callbackRoute = AC->createIntConstant(0, AC->Int32, op.getLoc());
       std::optional<int64_t> callbackNextId = nextId;
 
       if (!parallelInit) {
         if (isSingleElement) {
-          createSingleDb(ptrBuffer, guidBuffer, callbackDbMode, callbackRoute,
+          createSingleDb(ptrBuffer, guidBuffer, callbackRoute,
                          callbackTotalDbSize,
                          callbackNextId ? &callbackNextId : nullptr,
                          op.getLoc(),
                          /*distributedOwnership=*/true);
         } else {
-          createMultiDbs(ptrBuffer, guidBuffer, callbackDbSizes, callbackDbMode,
-                         callbackRoute, callbackTotalDbSize,
+          createMultiDbs(ptrBuffer, guidBuffer, callbackDbSizes, callbackRoute,
+                         callbackTotalDbSize,
                          callbackNextId ? &callbackNextId : nullptr,
                          op.getLoc(),
                          /*distributedOwnership=*/true);
@@ -1167,15 +1162,15 @@ private:
         /// Reserve deterministic GUIDs once per node; DB creation runs in
         /// initPerWorker.
         if (isSingleElement) {
-          createSingleDb(ptrBuffer, guidBuffer, callbackDbMode, callbackRoute,
+          createSingleDb(ptrBuffer, guidBuffer, callbackRoute,
                          callbackTotalDbSize,
                          callbackNextId ? &callbackNextId : nullptr,
                          op.getLoc(),
                          /*distributedOwnership=*/true,
                          /*createDb=*/false);
         } else {
-          createMultiDbs(ptrBuffer, guidBuffer, callbackDbSizes, callbackDbMode,
-                         callbackRoute, callbackTotalDbSize,
+          createMultiDbs(ptrBuffer, guidBuffer, callbackDbSizes, callbackRoute,
+                         callbackTotalDbSize,
                          callbackNextId ? &callbackNextId : nullptr,
                          op.getLoc(),
                          /*distributedOwnership=*/true,
@@ -1333,9 +1328,9 @@ private:
           auto localGuidIf =
               AC->create<scf::IfOp>(op.getLoc(), isLocalGuid, false);
           AC->setInsertionPointToStart(&localGuidIf.getThenRegion().front());
-          createDbFromReservedGuidAtIndex(workerPtrBuffer, workerGuidBuffer,
-                                          linearIndex, workerTotalDbSize,
-                                          callbackNextId, op.getLoc());
+          createDbFromGuidAtIndex(workerPtrBuffer, reservedGuid, linearIndex,
+                                  workerTotalDbSize, callbackNextId,
+                                  op.getLoc());
           AC->setInsertionPointAfter(localGuidIf);
           AC->setInsertionPointAfter(workerLoop);
           AC->setInsertionPointAfter(primaryWorkerIf);
@@ -1364,25 +1359,21 @@ private:
     return success();
   }
 
-  void createDbFromReservedGuidAtIndex(Value dbMemref, Value guidMemref,
-                                       Value linearIndex, Value elementSize,
-                                       std::optional<int64_t> nextId,
-                                       Location loc) const {
-    Value guid =
-        AC->create<memref::LoadOp>(loc, guidMemref, ValueRange{linearIndex});
+  void createDbFromGuidAtIndex(Value dbMemref, Value guid, Value linearIndex,
+                               Value elementSize, std::optional<int64_t> nextId,
+                               Location loc) const {
     Value elemSize64 = AC->ensureI64(elementSize, loc);
 
-    /// Build arts_hint_t with arts_id if available
+    /// Build arts_hint_t with arts_id if available.
     Value hintAlloc =
         AC->create<LLVM::AllocaOp>(loc, AC->llvmPtr, AC->ArtsHintType,
                                    AC->createIntConstant(1, AC->Int32, loc));
     auto c0 = AC->createIntConstant(0, AC->Int32, loc);
     auto c1 = AC->createIntConstant(1, AC->Int32, loc);
-    /// Store route=0 into field 0
     Value routeFieldPtr = AC->create<LLVM::GEPOp>(
         loc, AC->llvmPtr, AC->ArtsHintType, hintAlloc, ValueRange{c0, c0});
     AC->create<LLVM::StoreOp>(loc, c0, routeFieldPtr);
-    /// Store arts_id into field 1
+
     Value artsIdValue;
     if (nextId.has_value()) {
       Value baseArtsId = AC->create<arith::ConstantOp>(
@@ -1396,13 +1387,9 @@ private:
         loc, AC->llvmPtr, AC->ArtsHintType, hintAlloc, ValueRange{c0, c1});
     AC->create<LLVM::StoreOp>(loc, artsIdValue, idFieldPtr);
 
-    /// Cast !llvm.ptr to ArtsHintTypePtr memref for runtime call
     Value hintMemref = AC->create<polygeist::Pointer2MemrefOp>(
         loc, AC->ArtsHintTypePtr, hintAlloc);
-
-    /// db_type = ARTS_DB_DEFAULT (0)
     Value dbType = AC->createIntConstant(0, AC->Int32, loc);
-    /// data = null (no initial data)
     Value nullPtr = AC->create<LLVM::ZeroOp>(loc, AC->llvmPtr);
     Value nullData =
         AC->create<polygeist::Pointer2MemrefOp>(loc, AC->VoidPtr, nullPtr);
@@ -1415,17 +1402,25 @@ private:
                                 ValueRange{linearIndex});
   }
 
-  void createSingleDb(Value dbMemref, Value guidMemref, Value dbMode,
+  void createSingleDb(Value dbMemref, Value guidMemref,
                       Value route, Value elementSize,
                       std::optional<int64_t> *nextId, Location loc,
                       bool distributedOwnership = false, bool createDb = true,
                       ArrayRef<Value> sizes = {},
-                      ArrayRef<Value> indices = {}) const {
+                      ArrayRef<Value> indices = {},
+                      std::optional<Value> linearIndexOverride =
+                          std::nullopt) const {
+    Value linearIndex;
+    if (linearIndexOverride.has_value()) {
+      linearIndex = *linearIndexOverride;
+    } else {
+      linearIndex = indices.empty()
+                        ? AC->createIndexConstant(0, loc)
+                        : AC->computeLinearIndex(sizes, indices, loc);
+    }
+
     Value reserveRoute = route;
     if (distributedOwnership) {
-      Value linearIndex = indices.empty()
-                              ? AC->createIndexConstant(0, loc)
-                              : AC->computeLinearIndex(sizes, indices, loc);
       Value linearIndexI32 = AC->castToInt(AC->Int32, linearIndex, loc);
       Value totalNodes = AC->getTotalNodes(loc);
       reserveRoute =
@@ -1437,9 +1432,6 @@ private:
     Value dbTypeConst = AC->createIntConstant(ARTS_DB, AC->Int32, loc);
     auto guid =
         RCB.call(types::ARTSRTL_arts_guid_reserve, {dbTypeConst, reserveRoute});
-    Value linearIndex = indices.empty()
-                            ? AC->createIndexConstant(0, loc)
-                            : AC->computeLinearIndex(sizes, indices, loc);
 
     /// Store reserved GUID in the linearized guid memref.
     AC->create<memref::StoreOp>(loc, guid, guidMemref, ValueRange{linearIndex});
@@ -1448,51 +1440,37 @@ private:
     if (createDb) {
       std::optional<int64_t> baseId = std::nullopt;
       if (nextId && nextId->has_value()) {
-        if (indices.empty()) {
+        if (indices.empty() && !linearIndexOverride.has_value()) {
           baseId = **nextId;
           **nextId = **nextId + 1;
         } else {
           baseId = **nextId;
         }
       }
-      createDbFromReservedGuidAtIndex(dbMemref, guidMemref, linearIndex,
-                                      elementSize, baseId, loc);
+      createDbFromGuidAtIndex(dbMemref, guid, linearIndex, elementSize, baseId,
+                              loc);
     }
   }
 
   void createMultiDbs(Value dbMemref, Value guidMemref, ArrayRef<Value> sizes,
-                      Value dbMode, Value route, Value elementSize,
+                      Value route, Value elementSize,
                       std::optional<int64_t> *nextId, Location loc,
                       bool distributedOwnership = false,
                       bool createDb = true) const {
-    const unsigned rank = sizes.size();
-    auto stepConstant = AC->createIndexConstant(1, loc);
-
-    std::function<void(unsigned, SmallVector<Value, 4> &)> createDbsRecursive =
-        [&](unsigned dim, SmallVector<Value, 4> &indices) {
-          if (dim == rank) {
-            createSingleDb(dbMemref, guidMemref, dbMode, route, elementSize,
-                           nextId, loc, distributedOwnership, createDb, sizes,
-                           indices);
-            return;
-          }
-
-          /// Create loop for current dimension
-          auto lowerBound = AC->createIndexConstant(0, loc);
-          auto upperBound = sizes[dim];
-          auto loopOp =
-              AC->create<scf::ForOp>(loc, lowerBound, upperBound, stepConstant);
-
-          auto &loopBlock = loopOp.getRegion().front();
-          AC->setInsertionPointToStart(&loopBlock);
-          indices.push_back(loopOp.getInductionVar());
-          createDbsRecursive(dim + 1, indices);
-          indices.pop_back();
-          AC->setInsertionPointAfter(loopOp);
-        };
-
-    SmallVector<Value, 4> initIndices;
-    createDbsRecursive(0, initIndices);
+    Value totalElems = AC->computeTotalElements(sizes, loc);
+    /// Keep DB creation always linearized here. The dedicated GuidRangCallOpt
+    /// pass handles reserve->reserve_range promotion centrally after
+    /// ARTS-to-LLVM conversion.
+    auto lowerBound = AC->createIndexConstant(0, loc);
+    auto step = AC->createIndexConstant(1, loc);
+    auto linearLoop = AC->create<scf::ForOp>(loc, lowerBound, totalElems, step);
+    auto &loopBlock = linearLoop.getRegion().front();
+    AC->setInsertionPointToStart(&loopBlock);
+    Value linearIndex = linearLoop.getInductionVar();
+    createSingleDb(dbMemref, guidMemref, route, elementSize, nextId,
+                   loc, distributedOwnership, createDb, /*sizes=*/{},
+                   /*indices=*/{}, /*linearIndexOverride=*/linearIndex);
+    AC->setInsertionPointAfter(linearLoop);
   }
 };
 

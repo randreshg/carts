@@ -103,6 +103,10 @@ struct FoldKnownRuntimeQuery : public OpRewritePattern<RuntimeQueryOp> {
     std::optional<int64_t> foldedValue;
     switch (op.getKind()) {
     case RuntimeQueryKind::totalWorkers:
+      /// Keep worker count dynamic unless the module explicitly requests
+      /// compile-time worker folding (e.g., benchmarking reproducibility).
+      if (!getRuntimeStaticWorkers(module))
+        return failure();
       foldedValue = getRuntimeTotalWorkers(module);
       break;
     case RuntimeQueryKind::totalNodes:

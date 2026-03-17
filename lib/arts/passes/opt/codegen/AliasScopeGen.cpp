@@ -35,7 +35,7 @@
 /// at function entry for LLVM to recognize the alias scopes.
 ///==========================================================================///
 
-#include "../../PassDetails.h"
+#include "arts/passes/PassDetails.h"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMInterfaces.h"

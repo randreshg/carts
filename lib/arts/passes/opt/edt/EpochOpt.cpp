@@ -26,7 +26,7 @@
 ///     arts.epoch { ... ... }   // fused
 ///==========================================================================///
 
-#include "../../PassDetails.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/Dialect.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/value/ValueAnalysis.h"

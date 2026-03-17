@@ -1,5 +1,5 @@
 // RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --arts-epoch-finish-continuation --start-from=epochs --pipeline=pre-lowering | %FileCheck %s --check-prefix=CONT
-// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from=epochs --pipeline=pre-lowering | %FileCheck %s --check-prefix=WAIT
+// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --arts-epoch-finish-continuation=false --start-from=epochs --pipeline=pre-lowering | %FileCheck %s --check-prefix=WAIT
 
 // Test that --arts-epoch-finish-continuation replaces blocking epoch waits with
 // finish-EDT continuation scheduling for eligible patterns.
