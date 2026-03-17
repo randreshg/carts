@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --arts-epoch-finish-continuation --start-from=epochs --stop-at=pre-lowering | %FileCheck %s
+// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --arts-epoch-finish-continuation --start-from=epochs --pipeline=pre-lowering | %FileCheck %s
 
 // Test that --arts-epoch-finish-continuation falls back to blocking wait
 // when an arts.epoch is inside a loop body (Rule 2 rejects loops).

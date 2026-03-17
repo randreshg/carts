@@ -1,4 +1,4 @@
-// RUN: sh -c '%S/../../../../tools/carts compile %S/../../../../external/carts-benchmarks/kastors-jacobi/poisson-for/poisson-for.c --stop-at concurrency-opt --arts-config %S/../../../examples/arts.cfg || true' | %FileCheck %s
+// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %S/../../../../tools/carts compile %S/../../../../external/carts-benchmarks/kastors-jacobi/poisson-for/poisson-for.c --pipeline concurrency-opt --arts-config %S/../../../examples/arts.cfg || true' | %FileCheck %s
 
 // Verify that the poisson-for benchmark gets block partitioning with
 // stencil center offset on the read acquire for the forcing array.

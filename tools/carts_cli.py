@@ -21,6 +21,7 @@ from scripts.run import run_subprocess
 from scripts.build import build as build_cmd
 from scripts.compile import (
     compile_cmd,
+    pipeline as pipeline_cmd,
     cgeist as cgeist_cmd,
     clang as clang_cmd,
     mlir_translate as mlir_translate_cmd,
@@ -82,6 +83,7 @@ app.command(
         "ignore_unknown_options": True,
     },
 )(compile_cmd)
+app.command(name="pipeline")(pipeline_cmd)
 
 app.command(
     context_settings={"allow_extra_args": True, "allow_interspersed_args": False}
@@ -182,7 +184,7 @@ def benchmarks(
     config = get_config()
     benchmark_runner = (
         config.carts_dir / "external" / "carts-benchmarks"
-        / "scripts" / "benchmark_runner.py"
+        / "scripts" / "runner.py"
     )
 
     if not benchmark_runner.is_file():

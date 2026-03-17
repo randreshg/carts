@@ -1,4 +1,4 @@
-// RUN: not %carts-compile %s --O3 --arts-config %S/../examples/arts.cfg --start-from pre-lowering --stop-at pre-lowering 2>&1 | %FileCheck %s
+// RUN: not %carts-compile %s --O3 --arts-config %S/../examples/arts.cfg --start-from pre-lowering --pipeline pre-lowering 2>&1 | %FileCheck %s
 
 // CHECK: high-level scheduler op survived past pre-lowering stage
 

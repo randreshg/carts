@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --O3 --arts-config %S/../examples/arts.cfg --stop-at concurrency-opt | %FileCheck %s
+// RUN: %carts-compile %s --O3 --arts-config %S/../examples/arts.cfg --pipeline concurrency-opt | %FileCheck %s
 
 // Verify that for a jacobi-like 2D stencil pattern:
 // 1. An EDT task is created

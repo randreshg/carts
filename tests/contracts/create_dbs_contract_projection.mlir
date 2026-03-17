@@ -1,5 +1,5 @@
-// RUN: %carts-compile %S/../examples/jacobi/for/jacobi-for.mlir --O3 --arts-config %S/../examples/arts.cfg --stop-at pattern-pipeline | %FileCheck %s --check-prefix=PATTERN
-// RUN: %carts-compile %S/../examples/jacobi/for/jacobi-for.mlir --O3 --arts-config %S/../examples/arts.cfg --stop-at create-dbs | %FileCheck %s --check-prefix=DB
+// RUN: %carts-compile %S/../examples/jacobi/for/jacobi-for.mlir --O3 --arts-config %S/../examples/arts.cfg --pipeline pattern-pipeline | %FileCheck %s --check-prefix=PATTERN
+// RUN: %carts-compile %S/../examples/jacobi/for/jacobi-for.mlir --O3 --arts-config %S/../examples/arts.cfg --pipeline create-dbs | %FileCheck %s --check-prefix=DB
 
 // Ensure pattern-stage semantic attrs survive the full pattern pipeline.
 // PATTERN: depPattern = #arts.dep_pattern<jacobi_alternating_buffers>
