@@ -45,7 +45,7 @@ public:
   /// Logs warnings about unmarked users if verification fails
   LogicalResult verifyAllUsersMarked(Value value, StringRef allocName = "");
 
-  /// Remove all marked operations (legacy, non-recursive)
+  /// Remove all marked operations (non-recursive)
   /// Operations are removed in a safe order to avoid dangling references
   /// Only removes operations that have no uses
   void removeAllMarked();

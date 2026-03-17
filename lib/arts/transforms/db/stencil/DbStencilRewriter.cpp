@@ -57,8 +57,10 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   ///   - chunk index (for owned/halo DB selection).
   /// Prefer explicit offsets for element base. If present, indices carry a
   /// chunk-index hint from ForLowering (non-uniform worker chunks).
-  Value elemOffset = info.getOffsets().empty() ? info.getElemOffset()
-                                               : info.getOffsets().front();
+  Value elemOffset =
+      info.getOffsets().empty()
+          ? (info.getIndices().empty() ? Value() : info.getIndices().front())
+          : info.getOffsets().front();
   Value chunkIndexHint =
       info.getIndices().empty() ? Value() : info.getIndices().front();
 

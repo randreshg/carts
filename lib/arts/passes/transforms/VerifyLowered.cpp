@@ -15,8 +15,7 @@
 using namespace mlir;
 
 namespace {
-struct VerifyLoweredPass
-    : public arts::VerifyLoweredBase<VerifyLoweredPass> {
+struct VerifyLoweredPass : public arts::VerifyLoweredBase<VerifyLoweredPass> {
   void runOnOperation() override {
     bool found = false;
     getOperation().walk([&](Operation *op) {

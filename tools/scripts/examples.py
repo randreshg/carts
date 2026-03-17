@@ -337,7 +337,7 @@ def parse_output_status(output: str) -> Tuple[str, str]:
                     return "PASS", line.strip()
             return "PASS", "CARTS test passed"
 
-    # Check for legacy INCORRECT format
+    # Check for non-tagged failure format
     if "INCORRECT" in output:
         return "FAIL", "reported incorrect result"
 

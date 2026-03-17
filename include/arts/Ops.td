@@ -354,8 +354,7 @@ def DbAcquireOp : Arts_Op<"db_acquire", [AttrSizedOperandSegments]> {
     /// Check if this acquire has multiple partition entries
     bool hasMultiplePartitionEntries();
 
-    /// Get number of partition entries (returns 1 for backward compat if no
-    /// segments)
+    /// Get number of partition entries.
     size_t getNumPartitionEntries();
 
     /// Get the partition mode for a specific entry (uses partition_entry_modes
@@ -678,7 +677,7 @@ def EdtOp : Arts_Op<"edt", [
     5. Nested `EdtOp`s are skipped during verification (they verify
        independently).
     6. Setting `no_verify` bypasses all invariant checks (used during
-       intermediate pipeline stages where invariants are temporarily broken).
+       intermediate pipeline steps where invariants are temporarily broken).
 
     ### Attributes
 

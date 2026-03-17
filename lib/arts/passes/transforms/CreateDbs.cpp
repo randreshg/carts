@@ -415,7 +415,7 @@ void CreateDbsPass::lowerEdtExternalDependencies() {
 }
 
 void CreateDbsPass::cleanupAndFinalize() {
-  ARTS_INFO("Phase 5: Cleaning up legacy allocations");
+  ARTS_INFO("Phase 5: Cleaning up replaced allocations");
   RemovalUtils removalMgr;
   for (Operation *op : opsToRemove)
     removalMgr.markForRemoval(op);

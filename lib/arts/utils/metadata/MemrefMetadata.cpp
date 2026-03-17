@@ -213,7 +213,7 @@ bool MemrefMetadata::importFromOp() {
   hasLoopCarriedDeps = getBoolFromAttr(attr.getHasLoopCarriedDeps());
   if (auto reuseDistanceVal = getIntFromAttr(attr.getReuseDistance()))
     reuseDistance = *reuseDistanceVal;
-  /// Backward compatibility: convert old bool to new enum
+  /// Normalize attribute payload to spatial-locality enum.
   if (attr.getHasGoodSpatialLocality()) {
     spatialLocality = getBoolFromAttr(attr.getHasGoodSpatialLocality())
                           ? SpatialLocalityLevel::Good
@@ -254,8 +254,7 @@ Attribute MemrefMetadata::getMetadataAttr() const {
              : IntegerAttr();
   };
 
-  /// Helper to convert SpatialLocalityLevel enum to BoolAttr (for backward
-  /// compatibility)
+  /// Helper to convert SpatialLocalityLevel enum to BoolAttr.
   auto spatialLocalityToBool = [&]() -> BoolAttr {
     if (!spatialLocality)
       return BoolAttr();
@@ -401,11 +400,6 @@ void MemrefMetadata::importFromJson(const llvm::json::Object &json) {
   if (auto i =
           json.getInteger(AttrNames::MemrefMetadata::HasGoodSpatialLocality))
     spatialLocality = static_cast<SpatialLocalityLevel>(*i);
-  /// Backward compatibility: convert old bool format to enum
-  else if (auto b = json.getBoolean(
-               AttrNames::MemrefMetadata::HasGoodSpatialLocality))
-    spatialLocality =
-        *b ? SpatialLocalityLevel::Good : SpatialLocalityLevel::Poor;
 
   if (auto arr = json.getArray(AttrNames::MemrefMetadata::DimAccessPatterns)) {
     dimAccessPatterns.clear();

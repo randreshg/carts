@@ -210,7 +210,7 @@ struct AtomicAddPattern : public ArtsToLLVMPattern<AtomicAddOp> {
 /// Parameter mapping (from Clang's CGBuiltin.cpp):
 ///   - ptr: First argument
 ///   - min: (type & 2) != 0  (bit 1 of type parameter)
-///   - null_is_unknown: Always true for GCC compatibility
+///   - null_is_unknown: Always true to match GCC semantics
 ///   - dynamic: false (true only for __builtin_dynamic_object_size)
 struct BuiltinObjectSizePattern : public OpRewritePattern<func::CallOp> {
   using OpRewritePattern::OpRewritePattern;

@@ -1,4 +1,4 @@
-// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %S/../../../../tools/carts compile %S/../../../../external/carts-benchmarks/sw4lite/vel4sg-base/vel4sg_base.c --pipeline concurrency-opt --arts-config %S/../../../examples/arts.cfg || true' | %FileCheck %s
+// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %S/../../../../tools/carts compile %S/../../../../external/carts-benchmarks/sw4lite/vel4sg-base/vel4sg_base.c --pipeline concurrency-opt --arts-config %S/../../../examples/arts.cfg >/dev/null && cat %t.compile/vel4sg_base.concurrency-opt.mlir' | %FileCheck %s
 
 // Verify vel4sg gets block partitioning for both read and write acquires.
 // CHECK-LABEL: func.func @main

@@ -35,8 +35,7 @@ public:
   void invalidate();
   void print(llvm::raw_ostream &os);
   llvm::json::Value exportToJsonValue(bool includeAnalysis = false) const;
-  void exportToJson(llvm::raw_ostream &os,
-                    bool includeAnalysis = false) const;
+  void exportToJson(llvm::raw_ostream &os, bool includeAnalysis = false) const;
   NodeBase *getEntryNode() const;
   NodeBase *getOrCreateNode(Operation *op);
   NodeBase *getNode(Operation *op) const;

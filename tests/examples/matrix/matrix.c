@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <time.h>
 
-#include "arts/utils/Testing/CartsTest.h"
+#include "arts/utils/testing/CartsTest.h"
 
 int main(int argc, char *argv[]) {
   CARTS_TIMER_START();

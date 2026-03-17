@@ -118,9 +118,7 @@ Important implementation detail:
   walks nested acquire nodes via `collectAcquireNodesForAlloc()` and
   `collectAcquireNodesRecursive()`.
 - So the pass does visit all acquire nodes reachable from one allocation.
-- The rest of this guide describes the current implementation model. A
-  dimension-first redesign is specified separately in
-  `docs/heuristics/partitioning-redesign.md`.
+- The rest of this guide describes the current implementation model.
 
 ### 2.1) The Actual Analysis Objects In Code
 
@@ -227,14 +225,13 @@ The important point is that the pass is already split into:
 - heuristics that choose allocation mode
 - planning/rewriting that applies the decision
 
-The design corresponding to this flow is captured in
-`docs/heuristics/partitioning-redesign.md`.
+The design corresponding to this flow is captured in this guide.
 
 ### 3.1 Allocation-Level Heuristics (H1.1-H1.6)
 
 This is the current intent (see
-`lib/arts/analysis/PartitioningHeuristics.cpp` and the
-`HeuristicsConfig` wrapper):
+`lib/arts/analysis/heuristics/PartitioningHeuristics.cpp` and the
+`DbHeuristics` wrapper):
 
 - H1.1: Read-only + single-node + no partition capability -> Coarse
 - H1.1b: Read-only + single-node + all block-capable acquires are full-range -> Coarse
