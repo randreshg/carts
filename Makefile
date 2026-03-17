@@ -170,6 +170,8 @@ ARTS_LOG_LEVEL ?= 1
 # Counter configuration profile (defaults to timing-only for minimal overhead)
 # Available profiles: profile-none.cfg, profile-timing.cfg, profile-workload.cfg, profile-overhead.cfg, profile-thread-edt.cfg
 COUNTER_CONFIG_PATH ?= external/carts-benchmarks/configs/profiles/profile-timing.cfg
+# jemalloc allocator — built from source in third_party/jemalloc
+ARTS_USE_JEMALLOC ?= ON
 
 # Configuration hash file for ARTS build caching
 ARTS_CONFIG_HASH_FILE := $(ARTS_BUILD_DIR)/.arts-build-config
@@ -178,7 +180,7 @@ ARTS_CONFIG_HASH_FILE := $(ARTS_BUILD_DIR)/.arts-build-config
 COUNTER_CONFIG_HASH := $(shell md5sum $(COUNTER_CONFIG_PATH) 2>/dev/null | cut -d' ' -f1 || echo "no-config")
 
 # Compute current configuration as a string for hashing
-ARTS_CONFIG_STRING := $(ARTS_BUILD_TYPE)|$(ARTS_USE_COUNTERS)|$(ARTS_USE_METRICS)|$(ARTS_LOG_LEVEL)|$(COUNTER_CONFIG_PATH)|$(COUNTER_CONFIG_HASH)|$(CARTS_LINKER_PATH)
+ARTS_CONFIG_STRING := $(ARTS_BUILD_TYPE)|$(ARTS_USE_COUNTERS)|$(ARTS_USE_METRICS)|$(ARTS_LOG_LEVEL)|$(COUNTER_CONFIG_PATH)|$(COUNTER_CONFIG_HASH)|$(CARTS_LINKER_PATH)|$(ARTS_USE_JEMALLOC)
 
 arts-download:
 	@if [ ! -d "$(ARTS_DIR)/.git" ]; then \
@@ -206,6 +208,7 @@ arts:
 			-DCMAKE_BUILD_TYPE=$(ARTS_BUILD_TYPE) \
 			-DARTS_LOG_LEVEL=$(ARTS_LOG_LEVEL) \
 			-DARTS_USE_GPU=OFF \
+			-DARTS_USE_JEMALLOC=$(ARTS_USE_JEMALLOC) \
 			-DARTS_BUILD_BENCHMARKS=OFF \
 			-DARTS_BUILD_TESTS=OFF \
 			-DARTS_BUILD_EXAMPLES=OFF \
