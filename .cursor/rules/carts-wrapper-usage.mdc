@@ -24,7 +24,7 @@ alwaysApply: false
 carts cgeist simple.cpp -std=c++17 -fopenmp -O0 -S > simple.mlir
 
 # Run ARTS transformations
-carts compile simple.mlir --O3 --arts-opt --emit-llvm
+carts compile simple.mlir --O3 --emit-llvm
 
 # Convert MLIR to LLVM IR
 carts mlir-translate --mlir-to-llvmir simple.mlir > simple.ll
@@ -62,23 +62,22 @@ clang simple.ll -larts -lomp -lrt -lpthread
 | `carts cgeist` | C++ to MLIR conversion | `.cpp` | `.mlir` |
 | `carts compile` | Complete pipeline (compile + link) | `.cpp`, `.mlir`, or `.ll` | executable |
 | `carts mlir-translate` | MLIR to LLVM IR | `.mlir` | `.ll` |
-| `carts benchmark` | Run benchmarks | - | results |
-| `carts report` | Generate reports | - | reports |
+| `carts benchmarks` | Run benchmarks | - | results |
 | `carts install` | Install: deps, submodules, build all | - | - |
 | `carts clean` | Clean generated files | - | - |
 
 ## Docker Operations
 
 ### Docker Commands
-- `carts build --docker`: Build Docker image using `docker/docker-build.sh`
+- `carts docker build`: Build Docker image using `docker/docker-build.sh`
 - `carts clean --docker`: Clean Docker containers and images using `docker/docker-clean.sh`
-- `carts docker --update`: Commit/push repo changes and rebuild Docker image via `docker/docker-update.sh`
-- `carts docker run "example.c" --extraflags`: Start 2-node cluster and run example inside master container
+- `carts docker update`: Commit/push repo changes and rebuild Docker image via `docker/docker-update.sh`
+- `carts docker exec <container> "<command>"`: Run commands inside a running container
 
 ### Docker Workflow
-1. **First time setup**: `carts build --docker` (builds base image)
-2. **Update after changes**: `carts docker --update` (commits changes and rebuilds)
-3. **Run distributed examples**: `carts docker run "tests/test/parallel/parallel.c"`
+1. **First time setup**: `carts docker build` (builds base image)
+2. **Start cluster**: `carts docker start`
+3. **Update after changes**: `carts docker update` (commits changes and rebuilds)
 
 ### Docker Architecture
 - Uses SSH launcher with `launcher=ssh` in `arts.cfg`

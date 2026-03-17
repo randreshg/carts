@@ -143,23 +143,23 @@ if(CARTS_ENABLE_TESTS)
   
   # Create test targets with proper dependencies
   add_custom_target(check
-    COMMAND ${CMAKE_SOURCE_DIR}/tools/carts check
+    COMMAND ${CMAKE_SOURCE_DIR}/tools/carts test
     COMMENT "Running CARTS test suite"
     USES_TERMINAL
     VERBATIM
   )
   
-  # Add convenience target for ARTS tests specifically  
-  add_custom_target(check-arts
-    COMMAND ${CMAKE_SOURCE_DIR}/tools/carts check --suite arts
-    COMMENT "Running CARTS ARTS test suite"
+  # Add convenience target for examples suite.
+  add_custom_target(check-examples
+    COMMAND ${CMAKE_SOURCE_DIR}/tools/carts examples run --all
+    COMMENT "Running CARTS examples test suite"
     USES_TERMINAL
     VERBATIM
   )
   
   # Add verbose test targets
   add_custom_target(check-verbose
-    COMMAND ${CMAKE_SOURCE_DIR}/tools/carts check -v
+    COMMAND ${CMAKE_SOURCE_DIR}/tools/carts test -v
     COMMENT "Running CARTS test suite (verbose)"
     USES_TERMINAL
     VERBATIM
@@ -201,7 +201,7 @@ message_blue(" -- Adding tools")
 add_subdirectory(tools)
 
 if(CARTS_ENABLE_TESTS AND CARTS_TESTS_REQUIRE_INSTALLED_RUNNER)
-  foreach(_carts_test_target check check-arts check-verbose)
+  foreach(_carts_test_target check check-examples check-verbose)
     if(TARGET ${_carts_test_target} AND TARGET carts-compile)
       add_dependencies(${_carts_test_target} carts-compile)
     endif()

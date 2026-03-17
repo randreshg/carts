@@ -857,13 +857,10 @@ void LoweringContractOp::build(
     std::optional<EdtDistributionKind> distributionKind,
     std::optional<EdtDistributionPattern> distributionPattern,
     std::optional<int64_t> distributionVersion, SmallVector<int64_t> ownerDims,
-    SmallVector<Value> blockShape,
-    SmallVector<Value> minOffsets, SmallVector<Value> maxOffsets,
-    SmallVector<Value> writeFootprint,
-    bool supportedBlockHalo,
-    SmallVector<int64_t> spatialDims,
-    SmallVector<int64_t> stencilIndependentDims,
-    bool postDbRefined,
+    SmallVector<Value> blockShape, SmallVector<Value> minOffsets,
+    SmallVector<Value> maxOffsets, SmallVector<Value> writeFootprint,
+    bool supportedBlockHalo, SmallVector<int64_t> spatialDims,
+    SmallVector<int64_t> stencilIndependentDims, bool postDbRefined,
     std::optional<int64_t> criticalPathDistance,
     std::optional<int64_t> contractKind) {
   state.addOperands(target);
@@ -977,9 +974,9 @@ LogicalResult LoweringContractOp::verify() {
   auto ownerDims = (*this)->getAttrOfType<DenseI64ArrayAttr>(
       AttrNames::Operation::Contract::OwnerDims);
   size_t expectedRank = ownerDims ? ownerDims.size() : 0;
-  bool hasOffsetOrFootprintPayload =
-      !getMinOffsets().empty() || !getMaxOffsets().empty() ||
-      !getWriteFootprint().empty();
+  bool hasOffsetOrFootprintPayload = !getMinOffsets().empty() ||
+                                     !getMaxOffsets().empty() ||
+                                     !getWriteFootprint().empty();
 
   if (expectedRank == 0 && hasOffsetOrFootprintPayload)
     return emitOpError(

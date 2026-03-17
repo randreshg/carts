@@ -219,8 +219,7 @@ LogicalResult EpochContinuationPrepPass::transformToContinuation(
   ARTS_DEBUG("  DB acquires captured: " << capturedDbAcquires.size());
 
   /// Step 2: Build the dependency list for the continuation EDT.
-  SmallVector<Value> deps(capturedDbAcquires.begin(),
-                          capturedDbAcquires.end());
+  SmallVector<Value> deps(capturedDbAcquires.begin(), capturedDbAcquires.end());
 
   /// Step 3: Create the continuation arts.edt AFTER the epoch.
   /// It needs to be after the epoch because the deps (DB acquires) are
@@ -229,7 +228,7 @@ LogicalResult EpochContinuationPrepPass::transformToContinuation(
   builder.setInsertionPointAfter(epochOp);
 
   auto edtOp = builder.create<EdtOp>(loc, EdtType::task,
-                                      EdtConcurrency::intranode, deps);
+                                     EdtConcurrency::intranode, deps);
 
   /// Mark continuation EDT with control dependency attribute.
   edtOp->setAttr(kHasControlDep,
@@ -269,7 +268,7 @@ LogicalResult EpochContinuationPrepPass::transformToContinuation(
   epochOp->setAttr(kContinuationForEpoch, builder.getUnitAttr());
 
   ARTS_INFO("  Created continuation EDT with " << deps.size()
-                                                << " DB deps + 1 control dep");
+                                               << " DB deps + 1 control dep");
   return success();
 }
 

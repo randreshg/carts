@@ -60,7 +60,6 @@ private:
 
   /// DT-2: Stencil halo consolidation
   unsigned consolidateStencilHalos();
-
 };
 } // namespace
 

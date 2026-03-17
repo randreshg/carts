@@ -482,8 +482,8 @@ func::FuncOp ArtsCodegen::insertMainFn(Location loc) {
         create<polygeist::Pointer2MemrefOp>(loc, Int8Ptr, dataPtr);
     createRuntimeCall(ARTSRTL_artsSetConfigData, {dataMemref}, loc);
   }
-  /// Fallback: old path-based approach (backward compat for pre-existing
-  /// binaries)
+  /// Fallback to path-based runtime configuration when embedded config data
+  /// is not present.
   else if (auto configPath = getRuntimeConfigPath(module)) {
     Value configGlobal = getOrCreateGlobalLLVMString(loc, *configPath);
     Value configPtr = create<LLVM::BitcastOp>(loc, llvmPtr, configGlobal);

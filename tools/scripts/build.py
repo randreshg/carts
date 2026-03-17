@@ -54,17 +54,17 @@ def _export_pipeline_manifest(config) -> None:
 
 
 def build(
-    clean: bool = typer.Option(False, "--clean", "-c", help="Clean build"),
-    arts: bool = typer.Option(False, "--arts", "-a", help="Build only ARTS"),
+    clean: bool = typer.Option(False, "--clean", "-c", help="Run make clean before building"),
+    arts: bool = typer.Option(False, "--arts", "-a", help="Build only ARTS (mutually exclusive target flag)"),
     polygeist: bool = typer.Option(
-        False, "--polygeist", "-p", help="Build only Polygeist"),
-    llvm: bool = typer.Option(False, "--llvm", "-l", help="Build only LLVM"),
+        False, "--polygeist", "-p", help="Build only Polygeist (mutually exclusive target flag)"),
+    llvm: bool = typer.Option(False, "--llvm", "-l", help="Build only LLVM (mutually exclusive target flag)"),
     debug_level: int = typer.Option(
         0, "--debug", min=0, max=3,
-        help="ARTS runtime log level: 0=off, 1=warn, 2=info, 3=debug"),
+        help="ARTS log level (--arts only): 0=error, 1=warn, 2=info, 3=debug"),
     counters_level: int = typer.Option(
         0, "--counters",
-        help="Counter profile: 0=off (default), 1=timing, 2=workload, 3=overhead"),
+        help="Counter profile (--arts only): 0=off, 1=timing, 2=workload, 3=overhead"),
     profile: Optional[Path] = typer.Option(
         None, "--profile",
         help="Custom counter profile file path (overrides --counters)"),
@@ -85,6 +85,11 @@ def build(
     makefile = config.carts_dir / "Makefile"
     if not makefile.is_file():
         print_error("Makefile not found. Are you in the CARTS project root?")
+        raise typer.Exit(1)
+
+    selected_targets = sum((1 if arts else 0, 1 if polygeist else 0, 1 if llvm else 0))
+    if selected_targets > 1:
+        print_error("Choose only one target flag among --arts, --polygeist, --llvm.")
         raise typer.Exit(1)
 
     # Determine build target

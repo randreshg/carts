@@ -15,15 +15,14 @@ import typer
 from scripts.config import (
     get_config,
     set_verbose,
-    is_verbose,
 )
 from scripts.run import run_subprocess
 from scripts.build import build as build_cmd
 from scripts.compile import (
     compile_cmd,
     pipeline as pipeline_cmd,
-    cgeist as cgeist_cmd,
-    clang as clang_cmd,
+    cgeist,
+    clang,
     mlir_translate as mlir_translate_cmd,
 )
 from scripts.docker import (
@@ -37,7 +36,7 @@ from scripts.docker import (
     docker_status,
     docker_exec,
 )
-from scripts.test import test as test_cmd, check as check_cmd, lit as lit_cmd
+from scripts.test import test as test_cmd, lit as lit_cmd
 from scripts.format import format_sources as format_cmd
 from scripts.clean import run_local_clean, run_full_clean
 from scripts.update import update as update_cmd
@@ -49,22 +48,37 @@ from scripts.install import install as install_cmd
 # CLI Application
 # ============================================================================
 
+HELP_CTX = {"help_option_names": ["--help", "-h"]}
+PASSTHROUGH_CTX = {
+    **HELP_CTX,
+    "allow_extra_args": True,
+    "allow_interspersed_args": True,
+    "ignore_unknown_options": True,
+}
+PASSTHROUGH_NO_INTERSPERSE_CTX = {
+    **HELP_CTX,
+    "allow_extra_args": True,
+    "allow_interspersed_args": False,
+    "ignore_unknown_options": True,
+}
+
 app = typer.Typer(
     name="carts",
     help="CARTS - Compiler for Asynchronous Runtime Systems",
     add_completion=False,
     no_args_is_help=True,
+    context_settings=HELP_CTX,
 )
 
 # Docker subcommand group
 docker_app = typer.Typer(
     help="Docker operations for multi-node execution",
-    context_settings={"help_option_names": ["--help", "-h"]},
+    context_settings=HELP_CTX,
 )
 app.add_typer(docker_app, name="docker")
 
 # Examples subcommand group
-app.add_typer(examples_app, name="examples")
+app.add_typer(examples_app, name="examples", context_settings=HELP_CTX)
 
 
 # ============================================================================
@@ -77,34 +91,27 @@ app.command()(build_cmd)
 # Compile pipeline
 app.command(
     name="compile",
-    context_settings={
-        "allow_extra_args": True,
-        "allow_interspersed_args": False,
-        "ignore_unknown_options": True,
-    },
+    context_settings=PASSTHROUGH_CTX,
 )(compile_cmd)
 app.command(name="pipeline")(pipeline_cmd)
 
 app.command(
-    context_settings={"allow_extra_args": True, "allow_interspersed_args": False}
-)(cgeist_cmd)
+    name="cgeist",
+    context_settings=PASSTHROUGH_CTX
+)(cgeist)
 
 app.command(
-    context_settings={"allow_extra_args": True, "allow_interspersed_args": False}
-)(clang_cmd)
+    name="clang",
+    context_settings=PASSTHROUGH_CTX
+)(clang)
 
-app.command(name="mlir-translate")(mlir_translate_cmd)
+app.command(name="mlir-translate", context_settings=PASSTHROUGH_CTX)(mlir_translate_cmd)
 
 # Testing
 app.command(name="test")(test_cmd)
-app.command(name="check")(check_cmd)
 app.command(
     name="lit",
-    context_settings={
-        "allow_extra_args": True,
-        "allow_interspersed_args": False,
-        "ignore_unknown_options": True,
-    },
+    context_settings=PASSTHROUGH_NO_INTERSPERSE_CTX,
 )(lit_cmd)
 
 # Formatting
@@ -127,7 +134,7 @@ docker_app.command(name="commit")(docker_commit)
 docker_app.command(name="status")(docker_status)
 docker_app.command(
     name="exec",
-    context_settings={"allow_extra_args": True, "allow_interspersed_args": False},
+    context_settings={**HELP_CTX, "allow_extra_args": True, "allow_interspersed_args": False},
 )(docker_exec)
 
 
@@ -137,19 +144,10 @@ docker_app.command(
 
 @app.callback(invoke_without_command=True)
 def main_callback(
-    ctx: typer.Context,
     verbose: bool = typer.Option(
         False, "--verbose", "-v", help="Enable verbose output"),
-    help_flag: bool = typer.Option(
-        False, "--help", "-h", is_eager=True, help="Show help and exit"),
 ):
     """CARTS - Compiler for Asynchronous Runtime Systems"""
-    # Handle -h/--help globally
-    if help_flag:
-        if ctx.invoked_subcommand is None:
-            typer.echo(ctx.get_help())
-            raise typer.Exit()
-
     set_verbose(verbose)
     if verbose:
         os.environ["CARTS_VERBOSE"] = "1"
@@ -160,16 +158,10 @@ def main_callback(
 # ============================================================================
 
 @app.command(
-    context_settings={
-        "allow_extra_args": True,
-        "allow_interspersed_args": False,
-        "ignore_unknown_options": True,
-    }
+    context_settings=PASSTHROUGH_NO_INTERSPERSE_CTX
 )
 def benchmarks(
     ctx: typer.Context,
-    help_flag: bool = typer.Option(
-        False, "--help", "-h", is_eager=True, help="Show help"),
 ):
     """Build and manage CARTS benchmarks.
 
@@ -195,11 +187,7 @@ def benchmarks(
     # Use current Python interpreter (already in poetry env) for faster startup
     cmd = [sys.executable, str(benchmark_runner)]
 
-    # Pass --help to the benchmark runner to show its commands
-    if help_flag:
-        cmd.append("--help")
-
-    # Pass through all extra args (e.g., run, --verbose, --size, etc.)
+    # Pass through all extra args (e.g., run, --verbose, --size, or `-- --help`)
     if ctx.args:
         cmd.extend(ctx.args)
 
@@ -243,7 +231,7 @@ def main():
     if symbolizer.is_file():
         os.environ["LLVM_SYMBOLIZER_PATH"] = str(symbolizer)
 
-    app()
+    app(prog_name="carts")
 
 
 if __name__ == "__main__":

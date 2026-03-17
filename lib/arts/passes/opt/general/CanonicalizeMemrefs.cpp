@@ -1471,8 +1471,7 @@ void CanonicalizeMemrefsPass::handleDeallocations(
     }
   };
 
-  /// Helper to collect all dealloc-related ops starting from a value
-  /// (preserved for compatibility with existing code paths)
+  /// Helper to collect all dealloc-related ops starting from a value.
   std::function<void(Value)> collectDeallocOps = [&](Value val) {
     if (!val)
       return;

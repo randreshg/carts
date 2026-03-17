@@ -413,10 +413,10 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   /// Propagate continuation attributes so EpochLowering can find them.
   if (edtOp->hasAttr("arts.continuation_for_epoch"))
     outlineOp->setAttr("arts.continuation_for_epoch",
-                        AC->getBuilder().getUnitAttr());
+                       AC->getBuilder().getUnitAttr());
   if (edtOp->hasAttr("arts.has_control_dep"))
     outlineOp->setAttr("arts.has_control_dep",
-                        edtOp->getAttr("arts.has_control_dep"));
+                       edtOp->getAttr("arts.has_control_dep"));
 
   int64_t baseId = getArtsId(edtOp);
   if (!baseId)

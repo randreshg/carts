@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <time.h>
 
-#include "arts/utils/Testing/CartsTest.h"
+#include "arts/utils/testing/CartsTest.h"
 
 #define BLOCK_SIZE 16
 #define TOLERANCE 1e-6
