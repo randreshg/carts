@@ -31,16 +31,16 @@ carts cgeist <file>.c -O0 --print-debug-info -S --raise-scf-to-affine           
 carts cgeist <file>.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine  # Parallel
 
 # Run pipeline (stop at specific stage)
-carts compile <file>.mlir --stop-at=<stage>
+carts compile <file>.mlir --pipeline=<stage>
 
 # Run pipeline (dump all intermediate stages)
-carts compile <file>.mlir --all-stages -o ./stages/
+carts compile <file>.mlir --all-pipelines -o ./stages/
 
-# Collect metadata (dual-compilation)
+# Collect metadata
 carts compile <file>_seq.mlir --collect-metadata
 
 # Debug a specific pass
-carts compile <file>.mlir --stop-at=<stage> --debug-only=<pass> 2>&1
+carts compile <file>.mlir --pipeline=<stage> --arts-only=<pass> 2>&1
 
 # Full compilation and execution
 carts compile <file>.c -O3
@@ -53,7 +53,7 @@ carts lit tests/contracts/for_dispatch_clamp.mlir
 carts lit --suite contracts
 ```
 
-### Pipeline Stage Names (for --stop-at)
+### Pipeline Stage Names (for --pipeline)
 
 | Stage | Name                   | Purpose                      |
 |-------|------------------------|------------------------------|
@@ -61,8 +61,8 @@ carts lit --suite contracts
 | 2 | `collect-metadata` | Extract loop/array metadata |
 | 3 | `initial-cleanup` | Remove dead code |
 | 4 | `openmp-to-arts` | Convert OpenMP to ARTS |
-| 5 | `edt-transforms` | Optimize EDT structure |
-| 6 | `loop-reordering` | Cache-optimal loop order |
+| 5 | `pattern-pipeline` | Semantic pattern discovery + kernel transforms |
+| 6 | `edt-transforms` | Optimize EDT structure |
 | 7 | `create-dbs` | Create DataBlocks |
 | 8 | `db-opt` | Optimize DB modes |
 | 9 | `edt-opt` | EDT fusion |
@@ -73,23 +73,23 @@ carts lit --suite contracts
 | 14 | `pre-lowering` | Prepare for LLVM |
 | 15 | `arts-to-llvm` | Final LLVM conversion |
 
-### Debug Types (for --debug-only)
+### Debug Types (for --arts-only)
 
 ```bash
---debug-only=collect_metadata
---debug-only=loop_reordering
---debug-only=create_dbs
---debug-only=db
---debug-only=db_partitioning
---debug-only=edt
---debug-only=concurrency
---debug-only=for_lowering
---debug-only=edt_lowering
---debug-only=convert_arts_to_llvm
---debug-only=arts_alias_scope_gen
---debug-only=arts_loop_vectorization_hints
---debug-only=arts_prefetch_hints
---debug-only=arts_data_ptr_hoisting
+--arts-only=collect_metadata
+--arts-only=loop_reordering
+--arts-only=create_dbs
+--arts-only=db
+--arts-only=db_partitioning
+--arts-only=edt
+--arts-only=concurrency
+--arts-only=for_lowering
+--arts-only=edt_lowering
+--arts-only=convert_arts_to_llvm
+--arts-only=arts_alias_scope_gen
+--arts-only=arts_loop_vectorization_hints
+--arts-only=arts_prefetch_hints
+--arts-only=arts_data_ptr_hoisting
 ```
 
 ---
@@ -116,7 +116,7 @@ flowchart TB
       direction TB
       S4["4) openmp-to-arts<br/>OMP parallel → ARTS EDTs"]
       S5["5) edt-transforms<br/>EDT structure optimization"]
-      S6["6) loop-reordering<br/>Cache-optimal loop order"]
+      S6["6) pattern-pipeline<br/>Cache-optimal loop order"]
       S4 --> S5 --> S6
     end
 
@@ -182,7 +182,7 @@ flowchart TB
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --stop-at=canonicalize-memrefs
+carts compile <file>.mlir --pipeline=canonicalize-memrefs
 ```
 
 **Passes Executed:**
@@ -215,7 +215,7 @@ carts compile <file>_seq.mlir --collect-metadata
 
 **Debug Command:**
 ```bash
-carts compile <file>_seq.mlir --collect-metadata --debug-only=collect_metadata 2>&1
+carts compile <file>_seq.mlir --collect-metadata --arts-only=collect_metadata 2>&1
 ```
 
 **Passes Executed:**
@@ -262,12 +262,12 @@ carts compile <file>.mlir --initial-cleanup
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --stop-at=openmp-to-arts
+carts compile <file>.mlir --pipeline=openmp-to-arts
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --stop-at=openmp-to-arts --debug-only=convert_openmp_to_arts 2>&1
+carts compile <file>.mlir --pipeline=openmp-to-arts --arts-only=convert_openmp_to_arts 2>&1
 ```
 
 **Passes Executed:**
@@ -312,12 +312,12 @@ arts.edt <parallel> {
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --stop-at=edt-transforms
+carts compile <file>.mlir --pipeline=edt-transforms
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --stop-at=edt-transforms --debug-only=edt 2>&1
+carts compile <file>.mlir --pipeline=edt-transforms --arts-only=edt 2>&1
 ```
 
 **Passes Executed:**
@@ -329,18 +329,18 @@ carts compile <file>.mlir --stop-at=edt-transforms --debug-only=edt 2>&1
 
 ---
 
-### Stage 6: loop-reordering
+### Stage 6: pattern-pipeline
 
 **Purpose:** Reorder inner loops for cache-optimal memory access patterns based on metadata analysis.
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --stop-at=loop-reordering
+carts compile <file>.mlir --pipeline=pattern-pipeline
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --stop-at=loop-reordering --debug-only=loop_reordering,kernel_transforms 2>&1
+carts compile <file>.mlir --pipeline=pattern-pipeline --arts-only=loop_reordering,kernel_transforms 2>&1
 ```
 
 **Passes Executed:**
@@ -393,12 +393,12 @@ scf.for %i = %c0 to %M {
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --stop-at=create-dbs
+carts compile <file>.mlir --pipeline=create-dbs
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --stop-at=create-dbs --debug-only=create_dbs 2>&1
+carts compile <file>.mlir --pipeline=create-dbs --arts-only=create_dbs 2>&1
 ```
 
 **Passes Executed:**
@@ -438,12 +438,12 @@ arts.db_free %db : !arts.db<...>
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --stop-at=db-opt
+carts compile <file>.mlir --pipeline=db-opt
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --stop-at=db-opt --debug-only=db 2>&1
+carts compile <file>.mlir --pipeline=db-opt --arts-only=db 2>&1
 ```
 
 **Passes Executed:**
@@ -463,12 +463,12 @@ carts compile <file>.mlir --stop-at=db-opt --debug-only=db 2>&1
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --stop-at=edt-opt
+carts compile <file>.mlir --pipeline=edt-opt
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --stop-at=edt-opt --debug-only=edt,arts_loop_fusion 2>&1
+carts compile <file>.mlir --pipeline=edt-opt --arts-only=edt,arts_loop_fusion 2>&1
 ```
 
 **Passes Executed:**
@@ -507,12 +507,12 @@ arts.edt <parallel> {
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --stop-at=concurrency
+carts compile <file>.mlir --pipeline=concurrency
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --stop-at=concurrency --debug-only=concurrency,arts_for_optimization 2>&1
+carts compile <file>.mlir --pipeline=concurrency --arts-only=concurrency,arts_for_optimization 2>&1
 ```
 
 **Passes Executed:**
@@ -531,12 +531,12 @@ carts compile <file>.mlir --stop-at=concurrency --debug-only=concurrency,arts_fo
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --stop-at=edt-distribution
+carts compile <file>.mlir --pipeline=edt-distribution
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --stop-at=edt-distribution --debug-only=edt_distribution,for_lowering 2>&1
+carts compile <file>.mlir --pipeline=edt-distribution --arts-only=edt_distribution,for_lowering 2>&1
 ```
 
 **Passes Executed:**
@@ -554,12 +554,12 @@ carts compile <file>.mlir --stop-at=edt-distribution --debug-only=edt_distributi
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --stop-at=concurrency-opt
+carts compile <file>.mlir --pipeline=concurrency-opt
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --stop-at=concurrency-opt --debug-only=db,db_partitioning 2>&1
+carts compile <file>.mlir --pipeline=concurrency-opt --arts-only=db,db_partitioning 2>&1
 ```
 
 **Passes Executed:**
@@ -1034,7 +1034,7 @@ traceable, while still recording decisions for diagnostics.
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --stop-at=epochs
+carts compile <file>.mlir --pipeline=epochs
 ```
 
 **Passes Executed:**
@@ -1049,12 +1049,12 @@ carts compile <file>.mlir --stop-at=epochs
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --stop-at=pre-lowering
+carts compile <file>.mlir --pipeline=pre-lowering
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --stop-at=pre-lowering --debug-only=parallel_edt_lowering,db_lowering,edt_lowering,epoch_lowering,arts_data_ptr_hoisting 2>&1
+carts compile <file>.mlir --pipeline=pre-lowering --arts-only=parallel_edt_lowering,db_lowering,edt_lowering,epoch_lowering,arts_data_ptr_hoisting 2>&1
 ```
 
 **Passes Executed:**
@@ -1081,14 +1081,14 @@ carts compile <file>.mlir --stop-at=pre-lowering --debug-only=parallel_edt_lower
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --stop-at=arts-to-llvm
+carts compile <file>.mlir --pipeline=arts-to-llvm
 # or for complete pipeline:
 carts compile <file>.mlir
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --debug-only=convert_arts_to_llvm 2>&1
+carts compile <file>.mlir --arts-only=convert_arts_to_llvm 2>&1
 ```
 
 **Passes Executed:**
@@ -1109,7 +1109,7 @@ carts compile <file>.mlir --emit-llvm
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --emit-llvm --debug-only=arts_alias_scope_gen,arts_loop_vectorization_hints,arts_prefetch_hints 2>&1
+carts compile <file>.mlir --emit-llvm --arts-only=arts_alias_scope_gen,arts_loop_vectorization_hints,arts_prefetch_hints 2>&1
 ```
 
 **Passes Executed:**
@@ -1185,16 +1185,16 @@ All passes use the ARTS debug infrastructure with color-coded output:
 
 ```bash
 # Debug loop reordering decisions
-carts compile gemm.mlir --stop-at=loop-reordering --debug-only=loop_reordering 2>&1 | tee debug.log
+carts compile gemm.mlir --pipeline=pattern-pipeline --arts-only=loop_reordering 2>&1 | tee debug.log
 
 # Debug DB partitioning decisions
-carts compile gemm.mlir --stop-at=concurrency-opt --debug-only=db,db_partitioning 2>&1 | tee debug.log
+carts compile gemm.mlir --pipeline=concurrency-opt --arts-only=db,db_partitioning 2>&1 | tee debug.log
 
 # Debug multiple passes
-carts compile gemm.mlir --debug-only=loop_reordering,create_dbs,db_partitioning 2>&1 | tee debug.log
+carts compile gemm.mlir --arts-only=loop_reordering,create_dbs,db_partitioning 2>&1 | tee debug.log
 
 # Debug post-lowering optimizations
-carts compile gemm.mlir --emit-llvm --debug-only=arts_alias_scope_gen,arts_loop_vectorization_hints,arts_prefetch_hints 2>&1 | tee debug.log
+carts compile gemm.mlir --emit-llvm --arts-only=arts_alias_scope_gen,arts_loop_vectorization_hints,arts_prefetch_hints 2>&1 | tee debug.log
 ```
 
 ---
@@ -1315,13 +1315,13 @@ checksum += fabs(data[i]);
 
 **Cause:** Loop reordering ran AFTER create-dbs, breaking SSA value relationships.
 
-**Fix:** Ensure loop-reordering stage runs BEFORE create-dbs (this is the default order).
+**Fix:** Ensure pattern-pipeline stage runs BEFORE create-dbs (this is the default order).
 
 ---
 
 ### 10. Missing Debug Output
 
-**Symptom:** `--debug-only=<pass>` produces no output.
+**Symptom:** `--arts-only=<pass>` produces no output.
 
 **Cause:** Debug output goes to stderr, not stdout.
 
@@ -1350,16 +1350,16 @@ carts compile example_seq.mlir --collect-metadata
 carts cgeist example.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine -o example.mlir
 
 # Step 4: Inspect each pipeline stage
-carts compile example.mlir --stop-at=canonicalize-memrefs -o stages/01_canonicalize.mlir
-carts compile example.mlir --stop-at=openmp-to-arts -o stages/04_openmp_to_arts.mlir
-carts compile example.mlir --stop-at=create-dbs -o stages/07_create_dbs.mlir
-carts compile example.mlir --stop-at=concurrency-opt -o stages/12_concurrency_opt.mlir
+carts compile example.mlir --pipeline=canonicalize-memrefs -o stages/01_canonicalize.mlir
+carts compile example.mlir --pipeline=openmp-to-arts -o stages/04_openmp_to_arts.mlir
+carts compile example.mlir --pipeline=create-dbs -o stages/07_create_dbs.mlir
+carts compile example.mlir --pipeline=concurrency-opt -o stages/12_concurrency_opt.mlir
 
 # Or dump all stages at once
-carts compile example.mlir --all-stages -o stages/
+carts compile example.mlir --all-pipelines -o stages/
 
 # Step 5: Debug specific pass if needed
-carts compile example.mlir --stop-at=create-dbs --debug-only=create_dbs 2>&1 | tee debug_createdb.log
+carts compile example.mlir --pipeline=create-dbs --arts-only=create_dbs 2>&1 | tee debug_createdb.log
 
 # Step 6: Full execution
 carts compile example.c -O3
@@ -1372,7 +1372,7 @@ carts compile example.c -O3
 carts cgeist example.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine -o example.mlir
 
 # Stop at concurrency-opt and debug
-carts compile example.mlir --stop-at=concurrency-opt --debug-only=db,db_partitioning 2>&1 | tee db_debug.log
+carts compile example.mlir --pipeline=concurrency-opt --arts-only=db,db_partitioning 2>&1 | tee db_debug.log
 
 # Look for partitioning decisions in output:
 # [INFO] [db_partitioning] Analyzing DB partitioning...
@@ -1387,7 +1387,7 @@ grep -A2 "arts.db_alloc" example_concurrency-opt.mlir
 
 ```bash
 # Generate LLVM IR with hints
-carts compile example.mlir --emit-llvm --debug-only=arts_loop_vectorization_hints,arts_prefetch_hints 2>&1 | tee vec_debug.log
+carts compile example.mlir --emit-llvm --arts-only=arts_loop_vectorization_hints,arts_prefetch_hints 2>&1 | tee vec_debug.log
 
 # Look for:
 # [DEBUG] [arts_loop_vectorization_hints] Auto-detected vector width: 8
@@ -1422,7 +1422,7 @@ carts compile example.c -O3 --diagnose --diagnose-output=diag.json
 
 ```bash
 # Dump all stages + LLVM IR
-carts compile example.mlir --all-stages -o stages/
+carts compile example.mlir --all-pipelines -o stages/
 
 # Files generated:
 # stages/example_canonicalize-memrefs.mlir
@@ -1430,7 +1430,7 @@ carts compile example.mlir --all-stages -o stages/
 # stages/example_initial-cleanup.mlir
 # stages/example_openmp-to-arts.mlir
 # stages/example_edt-transforms.mlir
-# stages/example_loop-reordering.mlir
+# stages/example_pattern-pipeline.mlir
 # stages/example_create-dbs.mlir
 # stages/example_db-opt.mlir
 # stages/example_edt-opt.mlir

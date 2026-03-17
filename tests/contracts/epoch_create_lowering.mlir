@@ -1,5 +1,5 @@
-// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from=arts-to-llvm --stop-at=arts-to-llvm | %FileCheck %s --check-prefix=NO-FINISH
-// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from=arts-to-llvm --stop-at=arts-to-llvm | %FileCheck %s --check-prefix=WITH-FINISH
+// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from=arts-to-llvm --pipeline=arts-to-llvm | %FileCheck %s --check-prefix=NO-FINISH
+// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from=arts-to-llvm --pipeline=arts-to-llvm | %FileCheck %s --check-prefix=WITH-FINISH
 
 // Verify CreateEpochOp lowering to arts_initialize_and_start_epoch runtime call
 // in both modes: without finish target (blocking epoch) and with finish target

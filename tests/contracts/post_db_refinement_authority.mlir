@@ -1,7 +1,7 @@
-// RUN: %carts-compile %S/../examples/jacobi/for/jacobi-for.mlir --O3 --arts-config %S/../examples/arts.cfg --stop-at concurrency-opt | %FileCheck %s --check-prefix=STENCIL-CONC
-// RUN: %carts-compile %S/../examples/jacobi/for/jacobi-for.mlir --O3 --arts-config %S/../examples/arts.cfg --stop-at pre-lowering | %FileCheck %s --check-prefix=STENCIL-PRE
-// RUN: %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %S/../examples/arts.cfg --stop-at concurrency-opt | %FileCheck %s --check-prefix=UNIFORM-CONC
-// RUN: %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %S/../examples/arts.cfg --stop-at pre-lowering | %FileCheck %s --check-prefix=UNIFORM-PRE
+// RUN: %carts-compile %S/../examples/jacobi/for/jacobi-for.mlir --O3 --arts-config %S/../examples/arts.cfg --pipeline concurrency-opt | %FileCheck %s --check-prefix=STENCIL-CONC
+// RUN: %carts-compile %S/../examples/jacobi/for/jacobi-for.mlir --O3 --arts-config %S/../examples/arts.cfg --pipeline pre-lowering | %FileCheck %s --check-prefix=STENCIL-PRE
+// RUN: %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %S/../examples/arts.cfg --pipeline concurrency-opt | %FileCheck %s --check-prefix=UNIFORM-CONC
+// RUN: %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %S/../examples/arts.cfg --pipeline pre-lowering | %FileCheck %s --check-prefix=UNIFORM-PRE
 
 // STENCIL-CONC: arts.lowering_contract({{.*}}) dep_pattern(<jacobi_alternating_buffers>) distribution_pattern(<stencil>) {{.*}}post_db_refined
 

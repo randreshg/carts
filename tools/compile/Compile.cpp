@@ -37,11 +37,16 @@
 #include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/ToolOutputFile.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/ADT/StringExtras.h"
+#include <array>
 #include <functional>
+#include <string>
 #include <vector>
 
 using namespace llvm;
@@ -91,7 +96,7 @@ static cl::opt<std::string> MetadataFile("metadata-file",
                                          cl::init(".carts-metadata.json"));
 
 /// Compatibility flag used by carts_cli.py / benchmark scripts.
-/// Equivalent to --stop-at=collect-metadata.
+/// Equivalent to --pipeline=collect-metadata.
 static cl::opt<bool> CollectMetadataFlag(
     "collect-metadata",
     cl::desc("Collect and export metadata, then stop the pipeline"),
@@ -111,7 +116,12 @@ static cl::opt<std::string> DiagnoseOutput(
     "diagnose-output", cl::desc("Output file for diagnostic JSON export"),
     cl::value_desc("filename"), cl::init(".carts-diagnose.json"));
 
-/// Kernel transform options (Stage: pattern-pipeline)
+static cl::opt<std::string> ArtsOnly(
+    "arts-only",
+    cl::desc("Enable ARTS_INFO/ARTS_DEBUG channels (comma-separated)"),
+    cl::value_desc("debug_types"), cl::init(""));
+
+/// Kernel transform options (Pipeline step: pattern-pipeline)
 static cl::opt<bool> KernelTransformsEnableElementwisePipeline(
     "loop-transforms-enable-elementwise-pipeline",
     cl::desc("Enable semantic fusion of sibling pointwise loop pipelines"),
@@ -178,7 +188,6 @@ enum class PipelineStage {
   OpenMPToArts,
   PatternPipeline,
   EdtTransforms,
-  LoopReordering,
   CreateDbs,
   DbOpt,
   EdtOpt,
@@ -191,8 +200,8 @@ enum class PipelineStage {
   Complete
 };
 
-static cl::opt<PipelineStage> StopAt(
-    "stop-at", cl::desc("Stop pipeline at specified stage:"),
+static cl::opt<PipelineStage> Pipeline(
+    "pipeline", cl::desc("Stop pipeline at specified step:"),
     cl::values(clEnumValN(PipelineStage::CanonicalizeMemrefs,
                           "canonicalize-memrefs",
                           "Stop after canonicalizing memrefs pass"),
@@ -206,14 +215,10 @@ static cl::opt<PipelineStage> StopAt(
                           "Stop after the dedicated semantic pattern pipeline"),
                clEnumValN(PipelineStage::EdtTransforms, "edt-transforms",
                           "Stop after EDT transformations"),
-               clEnumValN(PipelineStage::LoopReordering, "loop-reordering",
-                          "Deprecated alias for --stop-at=pattern-pipeline"),
                clEnumValN(PipelineStage::CreateDbs, "create-dbs",
                           "Stop after Dbs creation"),
                clEnumValN(PipelineStage::DbOpt, "db-opt",
                           "Stop after Dbs optimization"),
-               clEnumValN(PipelineStage::Epochs, "epochs",
-                          "Stop after Epochs creation"),
                clEnumValN(PipelineStage::EdtOpt, "edt-opt",
                           "Stop after EDT optimizations"),
                clEnumValN(PipelineStage::Concurrency, "concurrency",
@@ -222,6 +227,8 @@ static cl::opt<PipelineStage> StopAt(
                           "Stop after EDT distribution and for lowering"),
                clEnumValN(PipelineStage::ConcurrencyOpt, "concurrency-opt",
                           "Stop after concurrency optimization"),
+               clEnumValN(PipelineStage::Epochs, "epochs",
+                          "Stop after Epochs creation"),
                clEnumValN(PipelineStage::PreLowering, "pre-lowering",
                           "Stop after pre-lowering transformations"),
                clEnumValN(PipelineStage::ArtsToLLVM, "arts-to-llvm",
@@ -231,7 +238,7 @@ static cl::opt<PipelineStage> StopAt(
     cl::init(PipelineStage::Complete));
 
 static cl::opt<PipelineStage> StartFrom(
-    "start-from", cl::desc("Resume pipeline from specified stage:"),
+    "start-from", cl::desc("Resume pipeline from specified step:"),
     cl::values(clEnumValN(PipelineStage::CanonicalizeMemrefs,
                           "canonicalize-memrefs",
                           "Start from canonicalizing memrefs pass (default)"),
@@ -265,50 +272,250 @@ static cl::opt<PipelineStage> StartFrom(
                           "Start from Arts to LLVM conversion")),
     cl::init(PipelineStage::CanonicalizeMemrefs));
 
-static llvm::StringRef pipelineStageName(PipelineStage stage) {
-  switch (stage) {
-  case PipelineStage::CanonicalizeMemrefs:
-    return "canonicalize-memrefs";
-  case PipelineStage::CollectMetadata:
-    return "collect-metadata";
-  case PipelineStage::InitialCleanup:
-    return "initial-cleanup";
-  case PipelineStage::OpenMPToArts:
-    return "openmp-to-arts";
-  case PipelineStage::PatternPipeline:
-    return "pattern-pipeline";
-  case PipelineStage::EdtTransforms:
-    return "edt-transforms";
-  case PipelineStage::LoopReordering:
-    return "loop-reordering";
-  case PipelineStage::CreateDbs:
-    return "create-dbs";
-  case PipelineStage::DbOpt:
-    return "db-opt";
-  case PipelineStage::EdtOpt:
-    return "edt-opt";
-  case PipelineStage::Concurrency:
-    return "concurrency";
-  case PipelineStage::EdtDistribution:
-    return "edt-distribution";
-  case PipelineStage::ConcurrencyOpt:
-    return "concurrency-opt";
-  case PipelineStage::Epochs:
-    return "epochs";
-  case PipelineStage::PreLowering:
-    return "pre-lowering";
-  case PipelineStage::ArtsToLLVM:
-    return "arts-to-llvm";
-  case PipelineStage::Complete:
-    return "complete";
+static cl::opt<bool> PrintPipelineTokensJSON(
+    "print-pipeline-tokens-json",
+    cl::desc("Print canonical pipeline step tokens as JSON and exit"),
+    cl::init(false));
+
+static cl::opt<bool> PrintPipelineManifestJSON(
+    "print-pipeline-manifest-json",
+    cl::desc("Print pipeline step/pass manifest as JSON and exit"),
+    cl::init(false));
+
+static const std::array<llvm::StringLiteral, 8> kCanonicalizeMemrefsPasses = {
+    "LowerAffine(func)",      "CSE",         "Inliner", "ArtsInliner",
+    "PolygeistCanonicalize",  "CanonicalizeMemrefs",
+    "DeadCodeElimination",    "CSE"};
+static const std::array<llvm::StringLiteral, 7> kCollectMetadataPasses = {
+    "replaceAffineCFG(func)", "RaiseSCFToAffine(func)",
+    "replaceAffineCFG(func)", "RaiseSCFToAffine(func)", "CSE(func)",
+    "CollectMetadata", "VerifyMetadata (diagnose mode)"};
+static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
+    "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
+static const std::array<llvm::StringLiteral, 3> kOpenMPToArtsPasses = {
+    "ConvertOpenMPToArts", "DeadCodeElimination", "CSE"};
+static const std::array<llvm::StringLiteral, 8> kPatternPipelinePasses = {
+    "PatternDiscovery(seed)", "DepTransforms", "LoopNormalization",
+    "StencilBoundaryPeeling", "LoopReordering", "PatternDiscovery(refine)",
+    "KernelTransforms", "CSE"};
+static const std::array<llvm::StringLiteral, 6> kEdtTransformsPasses = {
+    "EdtStructuralOpt(runAnalysis=false)", "EdtICM", "DeadCodeElimination",
+    "SymbolDCE", "CSE", "EdtPtrRematerialization"};
+static const std::array<llvm::StringLiteral, 8> kCreateDbsPasses = {
+    "DistributedHostLoopOutlining (conditional)", "CreateDbs",
+    "PolygeistCanonicalize", "CSE", "SymbolDCE", "Mem2Reg",
+    "PolygeistCanonicalize", "VerifyDbCreated"};
+static const std::array<llvm::StringLiteral, 4> kDbOptPasses = {
+    "DbModeTightening", "PolygeistCanonicalize", "CSE", "Mem2Reg"};
+static const std::array<llvm::StringLiteral, 4> kEdtOptPasses = {
+    "PolygeistCanonicalize", "EdtStructuralOpt(runAnalysis=true)", "LoopFusion",
+    "CSE"};
+static const std::array<llvm::StringLiteral, 4> kConcurrencyPasses = {
+    "PolygeistCanonicalize", "Concurrency", "ForOpt",
+    "PolygeistCanonicalize"};
+static const std::array<llvm::StringLiteral, 3> kEdtDistributionPasses = {
+    "EdtDistribution", "ForLowering", "VerifyForLowered"};
+static const std::array<llvm::StringLiteral, 24> kConcurrencyOptPasses = {
+    "EdtStructuralOpt(runAnalysis=false)", "DeadCodeElimination",
+    "PolygeistCanonicalize", "CSE",
+    "EdtStructuralOpt(runAnalysis=false)", "EpochOpt",
+    "PolygeistCanonicalize", "CSE", "DbPartitioning",
+    "DbDistributedOwnership (conditional)", "DbTransforms", "DbModeTightening",
+    "EdtTransforms", "ContractValidation", "DbScratchElimination",
+    "PolygeistCanonicalize", "CSE", "BlockLoopStripMining(func)", "Hoisting",
+    "PolygeistCanonicalize", "CSE", "EdtAllocaSinking",
+    "DeadCodeElimination", "Mem2Reg"};
+static const std::array<llvm::StringLiteral, 4> kEpochsPasses = {
+    "PolygeistCanonicalize", "CreateEpochs",
+    "EpochContinuationPrep (conditional)", "PolygeistCanonicalize"};
+static const std::array<llvm::StringLiteral, 22> kPreLoweringPasses = {
+    "EdtAllocaSinking", "ParallelEdtLowering", "PolygeistCanonicalize", "CSE",
+    "DbLowering", "PolygeistCanonicalize", "CSE", "EdtLowering",
+    "PolygeistCanonicalize", "CSE", "LICM", "DataPtrHoisting",
+    "PolygeistCanonicalize", "CSE", "ScalarReplacement",
+    "PolygeistCanonicalize", "CSE", "EpochLowering",
+    "LoweringContractCleanup", "PolygeistCanonicalize", "CSE",
+    "VerifyPreLowered"};
+static const std::array<llvm::StringLiteral, 9> kArtsToLLVMPasses = {
+    "ConvertArtsToLLVM", "DataPtrHoisting", "PolygeistCanonicalize", "CSE",
+    "Mem2Reg", "PolygeistCanonicalize", "ControlFlowSink",
+    "PolygeistCanonicalize", "VerifyLowered"};
+
+struct PipelineStageTokenSpec {
+  PipelineStage stage;
+  llvm::StringLiteral token;
+  bool allowPipelineStop;
+  bool allowStartFrom;
+  bool inPipelineSequence;
+  llvm::ArrayRef<llvm::StringLiteral> passes;
+};
+
+static const std::array<PipelineStageTokenSpec, 16> kPipelineStageSpecs = {{
+    {PipelineStage::CanonicalizeMemrefs, "canonicalize-memrefs", true, true,
+     true, kCanonicalizeMemrefsPasses},
+    {PipelineStage::CollectMetadata, "collect-metadata", true, true, true,
+     kCollectMetadataPasses},
+    {PipelineStage::InitialCleanup, "initial-cleanup", true, true, true,
+     kInitialCleanupPasses},
+    {PipelineStage::OpenMPToArts, "openmp-to-arts", true, true, true,
+     kOpenMPToArtsPasses},
+    {PipelineStage::PatternPipeline, "pattern-pipeline", true, true, true,
+     kPatternPipelinePasses},
+    {PipelineStage::EdtTransforms, "edt-transforms", true, true, true,
+     kEdtTransformsPasses},
+    {PipelineStage::CreateDbs, "create-dbs", true, true, true, kCreateDbsPasses},
+    {PipelineStage::DbOpt, "db-opt", true, true, true, kDbOptPasses},
+    {PipelineStage::EdtOpt, "edt-opt", true, true, true, kEdtOptPasses},
+    {PipelineStage::Concurrency, "concurrency", true, true, true,
+     kConcurrencyPasses},
+    {PipelineStage::EdtDistribution, "edt-distribution", true, true, true,
+     kEdtDistributionPasses},
+    {PipelineStage::ConcurrencyOpt, "concurrency-opt", true, true, true,
+     kConcurrencyOptPasses},
+    {PipelineStage::Epochs, "epochs", true, true, true, kEpochsPasses},
+    {PipelineStage::PreLowering, "pre-lowering", true, true, true,
+     kPreLoweringPasses},
+    {PipelineStage::ArtsToLLVM, "arts-to-llvm", true, true, true,
+     kArtsToLLVMPasses},
+    {PipelineStage::Complete, "complete", true, false, false,
+     llvm::ArrayRef<llvm::StringLiteral>()},
+}};
+
+static const PipelineStageTokenSpec *findPipelineStageSpec(PipelineStage stage) {
+  for (const auto &spec : kPipelineStageSpecs) {
+    if (spec.stage == stage)
+      return &spec;
   }
+  return nullptr;
+}
+
+static int pipelineStageIndex(PipelineStage stage) {
+  for (size_t i = 0; i < kPipelineStageSpecs.size(); ++i) {
+    if (kPipelineStageSpecs[i].stage == stage)
+      return static_cast<int>(i);
+  }
+  return -1;
+}
+
+static llvm::StringRef pipelineStageName(PipelineStage stage) {
+  if (const auto *spec = findPipelineStageSpec(stage))
+    return spec->token;
   return "unknown";
 }
 
+template <typename Predicate>
+static void printStageTokenArray(llvm::raw_ostream &os, llvm::StringRef key,
+                                 Predicate include) {
+  os << "  \"" << key << "\": [";
+  bool first = true;
+  for (const auto &spec : kPipelineStageSpecs) {
+    if (!include(spec))
+      continue;
+    if (!first)
+      os << ", ";
+    first = false;
+    os << "\"" << spec.token << "\"";
+  }
+  os << "]";
+}
+
+static void printStringArray(llvm::raw_ostream &os,
+                             llvm::ArrayRef<llvm::StringLiteral> values) {
+  os << "[";
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (i != 0)
+      os << ", ";
+    os << "\"" << values[i] << "\"";
+  }
+  os << "]";
+}
+
+static void printStageTokensAsJSON(llvm::raw_ostream &os) {
+  os << "{\n";
+  printStageTokenArray(os, "pipeline",
+                       [](const PipelineStageTokenSpec &spec) {
+                         return spec.allowPipelineStop;
+                       });
+  os << ",\n";
+  printStageTokenArray(os, "start_from",
+                       [](const PipelineStageTokenSpec &spec) {
+                         return spec.allowStartFrom;
+                       });
+  os << ",\n";
+  printStageTokenArray(os, "pipeline_sequence",
+                       [](const PipelineStageTokenSpec &spec) {
+                         return spec.inPipelineSequence;
+                       });
+  os << ",\n";
+  os << "  \"aliases\": {}\n";
+  os << "}\n";
+}
+
+static void printPipelineManifestAsJSON(llvm::raw_ostream &os) {
+  os << "{\n";
+  printStageTokenArray(os, "pipeline",
+                       [](const PipelineStageTokenSpec &spec) {
+                         return spec.allowPipelineStop;
+                       });
+  os << ",\n";
+  printStageTokenArray(os, "start_from",
+                       [](const PipelineStageTokenSpec &spec) {
+                         return spec.allowStartFrom;
+                       });
+  os << ",\n";
+  printStageTokenArray(os, "pipeline_sequence",
+                       [](const PipelineStageTokenSpec &spec) {
+                         return spec.inPipelineSequence;
+                       });
+  os << ",\n";
+  os << "  \"aliases\": {},\n";
+  os << "  \"pipeline_steps\": [\n";
+  bool firstStage = true;
+  for (const auto &spec : kPipelineStageSpecs) {
+    if (!spec.inPipelineSequence)
+      continue;
+    if (!firstStage)
+      os << ",\n";
+    firstStage = false;
+    os << "    {\"name\": \"" << spec.token << "\", \"passes\": ";
+    printStringArray(os, spec.passes);
+    os << "}";
+  }
+  os << "\n  ]\n";
+  os << "}\n";
+}
+
+static void configureArtsOnlyDebugChannels(llvm::StringRef channels) {
+  if (channels.empty())
+    return;
+
+  llvm::SmallVector<llvm::StringRef, 8> splitChannels;
+  channels.split(splitChannels, ',', -1, false);
+
+  llvm::SmallVector<std::string, 8> ownedChannels;
+  ownedChannels.reserve(splitChannels.size());
+  for (llvm::StringRef channel : splitChannels) {
+    llvm::StringRef trimmed = channel.trim();
+    if (!trimmed.empty())
+      ownedChannels.push_back(trimmed.str());
+  }
+  if (ownedChannels.empty())
+    return;
+
+  llvm::DebugFlag = true;
+  llvm::SmallVector<const char *, 8> debugTypes;
+  debugTypes.reserve(ownedChannels.size());
+  for (const std::string &owned : ownedChannels)
+    debugTypes.push_back(owned.c_str());
+  llvm::setCurrentDebugTypes(debugTypes.data(), debugTypes.size());
+}
+
 static bool shouldExportDetailedDiagnose(PipelineStage stopAt) {
-  return stopAt == PipelineStage::Complete ||
-         static_cast<int>(stopAt) >=
-             static_cast<int>(PipelineStage::PreLowering);
+  if (stopAt == PipelineStage::Complete)
+    return true;
+  int stopIndex = pipelineStageIndex(stopAt);
+  int preLoweringIndex = pipelineStageIndex(PipelineStage::PreLowering);
+  return stopIndex >= 0 && preLoweringIndex >= 0 && stopIndex >= preLoweringIndex;
 }
 
 ///===----------------------------------------------------------------------===///
@@ -641,7 +848,7 @@ void buildLLVMIREmissionPipeline(PassManager &pm) {
   pm.addPass(createCSEPass());
 }
 
-/// Hooks invoked around each pipeline stage for diagnostics or custom logging.
+/// Hooks invoked around each pipeline step for diagnostics or custom logging.
 struct PipelineHooks {
   std::function<void(PipelineStage)> beforePhase;
   std::function<void(PipelineStage, LogicalResult)> afterPhase;
@@ -654,10 +861,17 @@ buildPassManager(ModuleOp module, MLIRContext &context,
                  PipelineStage startFrom = PipelineStage::CanonicalizeMemrefs,
                  std::unique_ptr<arts::AnalysisManager> *outAM = nullptr,
                  PipelineHooks *hooks = nullptr) {
-  if (stopAt != PipelineStage::Complete &&
-      static_cast<int>(startFrom) > static_cast<int>(stopAt)) {
-    ARTS_ERROR("Invalid pipeline stage range: --start-from="
-               << pipelineStageName(startFrom) << " is after --stop-at="
+  int startIndex = pipelineStageIndex(startFrom);
+  int stopIndex = pipelineStageIndex(stopAt);
+  if (startIndex < 0 || stopIndex < 0) {
+    ARTS_ERROR("Invalid pipeline selection: --start-from="
+               << pipelineStageName(startFrom) << ", --pipeline="
+               << pipelineStageName(stopAt));
+    return failure();
+  }
+  if (stopAt != PipelineStage::Complete && startIndex > stopIndex) {
+    ARTS_ERROR("Invalid pipeline range: --start-from="
+               << pipelineStageName(startFrom) << " is after --pipeline="
                << pipelineStageName(stopAt));
     return failure();
   }
@@ -730,7 +944,7 @@ buildPassManager(ModuleOp module, MLIRContext &context,
       *outAM = std::move(AM);
   };
 
-  std::vector<StageSpec> stages = {
+  const std::vector<StageSpec> runtimeStages = {
       {PipelineStage::CanonicalizeMemrefs, "Error when canonicalizing memrefs",
        [&](PassManager &pm) { buildCanonicalizeMemrefsPipeline(pm); }},
       {PipelineStage::CollectMetadata, "Error when collecting metadata",
@@ -773,12 +987,29 @@ buildPassManager(ModuleOp module, MLIRContext &context,
        }},
   };
 
-  for (const StageSpec &spec : stages) {
-    if (static_cast<int>(spec.stage) < static_cast<int>(startFrom))
+  auto findRuntimeStage = [&](PipelineStage stage) -> const StageSpec * {
+    for (const StageSpec &spec : runtimeStages) {
+      if (spec.stage == stage)
+        return &spec;
+    }
+    return nullptr;
+  };
+
+  for (const auto &stageSpec : kPipelineStageSpecs) {
+    if (!stageSpec.inPipelineSequence)
       continue;
-    if (failed(runStage(spec)))
+    int currentIndex = pipelineStageIndex(stageSpec.stage);
+    if (currentIndex < startIndex)
+      continue;
+    const StageSpec *runtimeSpec = findRuntimeStage(stageSpec.stage);
+    if (!runtimeSpec) {
+      ARTS_ERROR("Missing runtime handler for pipeline step: "
+                 << stageSpec.token);
       return failure();
-    if (stopAt == spec.stage) {
+    }
+    if (failed(runStage(*runtimeSpec)))
+      return failure();
+    if (stopAt == stageSpec.stage) {
       releaseAnalysisManager();
       return success();
     }
@@ -820,15 +1051,20 @@ buildPassManager(ModuleOp module, MLIRContext &context,
 int main(int argc, char **argv) {
   InitLLVM y(argc, argv);
   cl::ParseCommandLineOptions(argc, argv, "MLIR Optimization Driver\n");
+  configureArtsOnlyDebugChannels(ArtsOnly);
 
-  PipelineStage effectiveStopAt = StopAt;
+  if (PrintPipelineTokensJSON) {
+    printStageTokensAsJSON(llvm::outs());
+    return 0;
+  }
+  if (PrintPipelineManifestJSON) {
+    printPipelineManifestAsJSON(llvm::outs());
+    return 0;
+  }
+
+  PipelineStage effectiveStopAt = Pipeline;
   if (CollectMetadataFlag)
     effectiveStopAt = PipelineStage::CollectMetadata;
-  else if (effectiveStopAt == PipelineStage::LoopReordering) {
-    llvm::errs() << "Warning: --stop-at=loop-reordering is deprecated; "
-                    "use --stop-at=pattern-pipeline\n";
-    effectiveStopAt = PipelineStage::PatternPipeline;
-  }
 
   /// Set up the dialect registry and MLIR context.
   DialectRegistry registry;
@@ -855,7 +1091,7 @@ int main(int argc, char **argv) {
   PipelineHooks *hooksPtr = nullptr;
   if (Diagnose) {
     hooks.afterPhase = [](PipelineStage stage, LogicalResult result) {
-      llvm::errs() << "[carts-compile] Stage " << static_cast<int>(stage)
+      llvm::errs() << "[carts-compile] Pipeline " << pipelineStageName(stage)
                    << (succeeded(result) ? " completed" : " FAILED") << "\n";
     };
     hooksPtr = &hooks;

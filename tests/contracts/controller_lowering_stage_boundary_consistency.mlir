@@ -1,8 +1,8 @@
-// RUN: %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %S/../examples/arts.cfg --stop-at concurrency-opt | %FileCheck %s --check-prefix=DB-POLICY
-// RUN: %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %S/../examples/arts.cfg --stop-at edt-distribution | %FileCheck %s --check-prefix=EDT-BND
-// RUN: %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %S/../examples/arts.cfg --stop-at pre-lowering | %FileCheck %s --check-prefix=EPOCH-BND
-// RUN: %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %S/inputs/arts_multinode.cfg --stop-at edt-distribution | %FileCheck %s --check-prefix=DIST-EDT
-// RUN: %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %S/inputs/arts_multinode.cfg --stop-at pre-lowering | %FileCheck %s --check-prefix=DIST-PRE
+// RUN: %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %S/../examples/arts.cfg --pipeline concurrency-opt | %FileCheck %s --check-prefix=DB-POLICY
+// RUN: %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %S/../examples/arts.cfg --pipeline edt-distribution | %FileCheck %s --check-prefix=EDT-BND
+// RUN: %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %S/../examples/arts.cfg --pipeline pre-lowering | %FileCheck %s --check-prefix=EPOCH-BND
+// RUN: %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %S/inputs/arts_multinode.cfg --pipeline edt-distribution | %FileCheck %s --check-prefix=DIST-EDT
+// RUN: %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %S/inputs/arts_multinode.cfg --pipeline pre-lowering | %FileCheck %s --check-prefix=DIST-PRE
 
 // DB-POLICY-LABEL: func.func @main
 // DB-POLICY: arts.db_alloc[<inout>, <heap>, <write>, <block>, <uniform>]

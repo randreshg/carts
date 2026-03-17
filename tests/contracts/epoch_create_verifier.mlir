@@ -1,4 +1,4 @@
-// RUN: not %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from=arts-to-llvm --stop-at=arts-to-llvm 2>&1 | %FileCheck %s
+// RUN: not %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from=arts-to-llvm --pipeline=arts-to-llvm 2>&1 | %FileCheck %s
 
 // Verify that CreateEpochOp rejects mismatched finish operands:
 // providing finishEdtGuid without finishSlot must fail verification.

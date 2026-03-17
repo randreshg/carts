@@ -14,7 +14,7 @@ carts compile tests/examples/matrixmul/matrixmul.cpp -O3
 carts compile <file>.mlir --pipeline concurrency-opt
 
 # Debug a specific pass
-carts compile <file>.mlir --pipeline concurrency-opt --debug-only=db_partitioning 2>&1
+carts compile <file>.mlir --pipeline concurrency-opt --arts-only=db_partitioning 2>&1
 ```
 
 For multi-node experiments, pass `--arts-config` at compile time — the config is embedded in the binary.

@@ -1,5 +1,5 @@
-// RUN: %carts-compile %s --O3 --arts-config %S/../examples/arts.cfg --stop-at pattern-pipeline | %FileCheck %s --check-prefix=PATTERN
-// RUN: %carts-compile %s --O3 --arts-config %S/../examples/arts.cfg --stop-at edt-distribution | %FileCheck %s --check-prefix=POLICY
+// RUN: %carts-compile %s --O3 --arts-config %S/../examples/arts.cfg --pipeline pattern-pipeline | %FileCheck %s --check-prefix=PATTERN
+// RUN: %carts-compile %s --O3 --arts-config %S/../examples/arts.cfg --pipeline edt-distribution | %FileCheck %s --check-prefix=POLICY
 
 // PATTERN: depPattern = #arts.dep_pattern<cross_dim_stencil_3d>
 // PATTERN: distribution_pattern = #arts.distribution_pattern<stencil>
