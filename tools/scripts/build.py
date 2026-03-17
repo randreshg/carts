@@ -1,11 +1,12 @@
 """Build command for CARTS CLI."""
 
+import shutil
 from pathlib import Path
 from typing import Optional
 
 import typer
 
-from carts_styles import (
+from sniff import (
     Colors,
     console,
     print_header,
@@ -14,10 +15,21 @@ from carts_styles import (
     print_success,
     print_info,
     print_warning,
+    DependencyChecker,
+    DependencySpec,
 )
-from scripts.config import get_config
-from scripts.deps import check_dependency, Dependency, DepStatus
-from scripts.run import run_subprocess
+from scripts.platform import get_config
+from scripts import (
+    run_subprocess,
+    MAKE_TARGET_ARTS,
+    MAKE_TARGET_BUILD,
+    MAKE_TARGET_CARTS_COMPILE_ONLY,
+    MAKE_TARGET_LLVM,
+    MAKE_TARGET_POLYGEIST,
+    PIPELINE_MANIFEST_FILENAME,
+    SUBMODULE_BENCHMARKS,
+    TOOL_CARTS_COMPILE,
+)
 
 
 # Counter profile mapping: level -> config file name
@@ -28,12 +40,10 @@ COUNTER_PROFILES = {
     3: "profile-overhead.cfg",   # Full overhead analysis at CLUSTER level
 }
 
-PIPELINE_MANIFEST_FILENAME = "pipeline-manifest.json"
-
 
 def _export_pipeline_manifest(config) -> None:
     """Export pipeline manifest JSON from carts-compile into install/share."""
-    carts_compile = config.get_carts_tool("carts-compile")
+    carts_compile = config.get_carts_tool(TOOL_CARTS_COMPILE)
     if not carts_compile.is_file():
         return
 
@@ -80,7 +90,7 @@ def build(
 
     print_header("CARTS Build")
     console.print(
-        f"Platform: [{Colors.INFO}]{config.platform.value}[/{Colors.INFO}] ({config.arch})")
+        f"Platform: [{Colors.INFO}]{config.info.os}[/{Colors.INFO}] ({config.info.arch})")
 
     makefile = config.carts_dir / "Makefile"
     if not makefile.is_file():
@@ -94,13 +104,13 @@ def build(
 
     # Determine build target
     if arts:
-        target = "arts"
+        target = MAKE_TARGET_ARTS
     elif polygeist:
-        target = "polygeist"
+        target = MAKE_TARGET_POLYGEIST
     elif llvm:
-        target = "llvm"
+        target = MAKE_TARGET_LLVM
     else:
-        target = "build"
+        target = MAKE_TARGET_BUILD
 
     console.print(f"Target: [{Colors.INFO}]{target}[/{Colors.INFO}]")
 
@@ -139,8 +149,7 @@ def build(
                 counters_level, "profile-timing.cfg")
             effective_counter_config = (
                 config.carts_dir
-                / "external"
-                / "carts-benchmarks"
+                / SUBMODULE_BENCHMARKS
                 / "configs"
                 / "profiles"
                 / profile_name
@@ -160,13 +169,14 @@ def build(
     if cxx:
         make_vars.append(f'LLVM_CXX_COMPILER={cxx}')
 
-    cmake_dep = Dependency(name="cmake", check_cmd="cmake", min_version=(3, 20))
-    cmake_result = check_dependency(cmake_dep)
-    if cmake_result.status == DepStatus.OK and cmake_result.found_path:
-        make_vars.append(f"CMAKE={cmake_result.found_path}")
+    cmake_spec = DependencySpec(name="cmake", command="cmake", min_version="3.20")
+    cmake_result = DependencyChecker().check(cmake_spec)
+    cmake_path = shutil.which("cmake")
+    if cmake_result.ok and cmake_path:
+        make_vars.append(f"CMAKE={cmake_path}")
 
     if make_vars:
-        console.print(f"Options: [dim]{' '.join(make_vars)}[/dim]")
+        console.print(f"Options: [{Colors.DEBUG}]{' '.join(make_vars)}[/{Colors.DEBUG}]")
 
     console.print()
 
@@ -184,9 +194,9 @@ def build(
     # If polygeist was built and carts has been built before, rebuild carts-compile
     # to pick up the new polygeist. Skip on first install (build dir won't exist yet).
     carts_build_dir = config.carts_dir / "build"
-    if result.returncode == 0 and target == "polygeist" and (carts_build_dir / "build.ninja").is_file():
+    if result.returncode == 0 and target == MAKE_TARGET_POLYGEIST and (carts_build_dir / "build.ninja").is_file():
         print_step("Rebuilding carts-compile after Polygeist update...")
-        cmd = ["make"] + make_vars + ["carts-compile-only"]
+        cmd = ["make"] + make_vars + [MAKE_TARGET_CARTS_COMPILE_ONLY]
         result = run_subprocess(cmd, cwd=config.carts_dir, check=False)
 
     if result.returncode == 0:

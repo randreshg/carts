@@ -12,46 +12,28 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich.table import Table
 
-from carts_styles import (
-    Colors,
-    console,
-    print_header,
-    print_error,
-    print_info,
-    print_success,
-    print_warning,
+from sniff import Colors, console, print_header, print_error, print_info, print_success, print_warning
+from scripts.platform import CartsConfig, get_config, is_verbose
+from scripts import (
+    run_subprocess,
+    run_command_with_output,
+    ARTS_CONFIG_FILENAME,
+    PIPELINE_MANIFEST_FILENAME,
+    TOOL_CARTS_COMPILE,
+    TOOL_CGEIST,
+    TOOL_CLANG,
 )
-from scripts.config import PlatformConfig, get_config
-from scripts.run import run_subprocess, run_command_with_output
 
+# Compiler flags used across multiple functions
 FLAG_ARTS_CONFIG = "--arts-config"
-FLAG_OPTIMIZE_O3 = "--O3"
-FLAG_EMIT_LLVM = "--emit-llvm"
-FLAG_COLLECT_METADATA = "--collect-metadata"
 FLAG_DIAGNOSE = "--diagnose"
 FLAG_DIAGNOSE_OUTPUT = "--diagnose-output"
-FLAG_START_FROM = "--start-from"
-FLAG_PARTITION_FALLBACK = "--partition-fallback"
-FLAG_PIPELINE = "--pipeline"
-FLAG_ALL_PIPELINES = "--all-pipelines"
-FLAG_HELP = "--help"
-FLAG_PRINT_PIPELINE_TOKENS_JSON = "--print-pipeline-tokens-json"
-FLAG_PRINT_PIPELINE_MANIFEST_JSON = "--print-pipeline-manifest-json"
 FLAG_ARTS_DEBUG = "--arts-debug"
 FLAG_DEBUG_ONLY = "--debug-only"
-FLAG_METADATA_FILE = "--metadata-file"
-FLAG_DEBUG_SYMBOLS = "-g"
-FLAG_HELP_SHORT = "-h"
-CLI_OPTIMIZE_O3 = "-O3"
+FLAG_PIPELINE = "--pipeline"
 FLAG_OUTPUT = "-o"
+FLAG_METADATA_FILE = "--metadata-file"
 DEFAULT_METADATA_FILENAME = ".carts-metadata.json"
-PIPELINE_MANIFEST_FILENAME = "pipeline-manifest.json"
-CGEIST_FLAG_RAISE_AFFINE = "--raise-scf-to-affine"
-CGEIST_FLAG_PRINT_DEBUG_INFO = "--print-debug-info"
-ARTS_CONFIG_FILENAME = "arts.cfg"
-TOOL_CARTS_COMPILE = "carts-compile"
-TOOL_CGEIST = "cgeist"
-TOOL_CLANG = "clang"
 
 
 @dataclass(frozen=True)
@@ -79,16 +61,6 @@ _DISALLOWED_PIPELINE_FLAGS = {
     FLAG_DEBUG_ONLY: FLAG_ARTS_DEBUG,
 }
 
-
-def _dedupe_tokens(tokens: List[str]) -> List[str]:
-    """Keep token order stable while removing duplicates."""
-    seen = set()
-    deduped: List[str] = []
-    for token in tokens:
-        if token not in seen:
-            seen.add(token)
-            deduped.append(token)
-    return deduped
 
 
 def _normalize_arts_debug(spec: str) -> str:
@@ -120,7 +92,7 @@ def _parse_pipeline_tokens_payload(payload: str) -> PipelineTokens:
         value = data.get(key)
         if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
             raise ValueError(f"field '{key}' must be a list of strings")
-        return _dedupe_tokens(list(value))
+        return list(dict.fromkeys(value))
 
     pipeline = require_string_list("pipeline")
     start_from = require_string_list("start_from")
@@ -177,7 +149,7 @@ def _pipeline_manifest_to_dict(manifest: PipelineManifest) -> Dict[str, object]:
 
 
 def _query_compiler_json(
-    config: PlatformConfig, flag: str, error_message: str
+    config: CartsConfig, flag: str, error_message: str
 ) -> str:
     """Run carts-compile JSON endpoint and return stdout payload."""
     carts_compile_bin = config.get_carts_tool(TOOL_CARTS_COMPILE)
@@ -196,12 +168,12 @@ def _query_compiler_json(
     return result.stdout or ""
 
 
-def _pipeline_manifest_path(config: PlatformConfig) -> Path:
+def _pipeline_manifest_path(config: CartsConfig) -> Path:
     """Return installed pipeline manifest path."""
     return config.carts_install_dir / "share" / PIPELINE_MANIFEST_FILENAME
 
 
-def _load_pipeline_manifest_from_file(config: PlatformConfig) -> Optional[PipelineManifest]:
+def _load_pipeline_manifest_from_file(config: CartsConfig) -> Optional[PipelineManifest]:
     """Load installed pipeline manifest when available."""
     manifest_path = _pipeline_manifest_path(config)
     if not manifest_path.is_file():
@@ -214,7 +186,7 @@ def _load_pipeline_manifest_from_file(config: PlatformConfig) -> Optional[Pipeli
         return None
 
 
-def _load_pipeline_tokens_from_manifest(config: PlatformConfig) -> Optional[PipelineTokens]:
+def _load_pipeline_tokens_from_manifest(config: CartsConfig) -> Optional[PipelineTokens]:
     """Load pipeline tokens from installed manifest file when available."""
     manifest = _load_pipeline_manifest_from_file(config)
     if manifest is None:
@@ -222,7 +194,7 @@ def _load_pipeline_tokens_from_manifest(config: PlatformConfig) -> Optional[Pipe
     return manifest.tokens
 
 
-def _get_pipeline_tokens(config: PlatformConfig) -> PipelineTokens:
+def _get_pipeline_tokens(config: CartsConfig) -> PipelineTokens:
     """Load pipeline tokens from carts-compile once per process."""
     global _PIPELINE_TOKENS_CACHE
     if _PIPELINE_TOKENS_CACHE is not None:
@@ -236,7 +208,7 @@ def _get_pipeline_tokens(config: PlatformConfig) -> PipelineTokens:
     try:
         payload = _query_compiler_json(
             config,
-            FLAG_PRINT_PIPELINE_TOKENS_JSON,
+            "--print-pipeline-tokens-json",
             "Failed to query pipeline tokens from carts-compile. "
             "Run `tools/carts build` and retry.",
         )
@@ -248,7 +220,7 @@ def _get_pipeline_tokens(config: PlatformConfig) -> PipelineTokens:
     return _PIPELINE_TOKENS_CACHE
 
 
-def _get_pipeline_manifest(config: PlatformConfig) -> PipelineManifest:
+def _get_pipeline_manifest(config: CartsConfig) -> PipelineManifest:
     """Load pipeline manifest from install cache or compiler JSON endpoint."""
     global _PIPELINE_MANIFEST_CACHE
     if _PIPELINE_MANIFEST_CACHE is not None:
@@ -262,7 +234,7 @@ def _get_pipeline_manifest(config: PlatformConfig) -> PipelineManifest:
     try:
         payload = _query_compiler_json(
             config,
-            FLAG_PRINT_PIPELINE_MANIFEST_JSON,
+            "--print-pipeline-manifest-json",
             "Failed to query pipeline manifest from carts-compile. "
             "Run `tools/carts build` and retry.",
         )
@@ -431,7 +403,7 @@ class CompileArgs:
         while i < len(args):
             arg = args[i]
             # --- Special flags consumed by the Python CLI ---
-            if arg in (CLI_OPTIMIZE_O3, FLAG_OPTIMIZE_O3):
+            if arg in ("-O3", "--O3"):
                 result.optimize = True
             elif arg == FLAG_DIAGNOSE:
                 result.diagnose = True
@@ -487,7 +459,7 @@ def cgeist(
     cmd = [str(cgeist_bin)]
     cmd.extend(config.include_flags)
     cmd.extend(config.cgeist_sysroot_flags)
-    cmd.append(CGEIST_FLAG_RAISE_AFFINE)
+    cmd.append("--raise-scf-to-affine")
 
     # Filter out --arts-config (not supported by cgeist) and pass through rest
     if ctx.args:
@@ -603,9 +575,9 @@ def pipeline(
 
     print_header("CARTS Pipeline")
     table = Table(title="Pipeline Order")
-    table.add_column("#", style="cyan", justify="right")
-    table.add_column("Pipeline", style="green")
-    table.add_column("Passes", style="magenta", justify="right")
+    table.add_column("#", style=Colors.INFO, justify="right")
+    table.add_column("Pipeline", style=Colors.SUCCESS)
+    table.add_column("Passes", style=Colors.STEP, justify="right")
     selected_pipelines = manifest.steps
     if pipeline:
         selected_pipelines = [entry for entry in manifest.steps if entry.name == pipeline]
@@ -633,20 +605,20 @@ def compile_cmd(
         None, "-o",
         help="Output path (file for normal compile; directory with --all-pipelines)"),
     optimize: bool = typer.Option(
-        False, CLI_OPTIMIZE_O3, help="Enable O3 optimizations"),
-    debug: bool = typer.Option(False, FLAG_DEBUG_SYMBOLS, help="Generate debug symbols"),
+        False, "-O3", help="Enable O3 optimizations"),
+    debug: bool = typer.Option(False, "-g", help="Generate debug symbols"),
     pipeline: Optional[str] = typer.Option(
         None, FLAG_PIPELINE,
         help="Stop after pipeline step (e.g., concurrency, edt-distribution)"),
     all_pipelines: bool = typer.Option(
-        False, FLAG_ALL_PIPELINES,
+        False, "--all-pipelines",
         help="(.mlir input) write one output per pipeline step"),
     emit_llvm: bool = typer.Option(
-        False, FLAG_EMIT_LLVM, help="Emit LLVM IR output"),
+        False, "--emit-llvm", help="Emit LLVM IR output"),
     collect_metadata: bool = typer.Option(
-        False, FLAG_COLLECT_METADATA, help="Collect and export metadata"),
+        False, "--collect-metadata", help="Collect and export metadata"),
     partition_fallback: Optional[str] = typer.Option(
-        None, FLAG_PARTITION_FALLBACK,
+        None, "--partition-fallback",
         help="Partition fallback strategy (coarse, fine)"),
     diagnose: bool = typer.Option(
         False, FLAG_DIAGNOSE, help="Export diagnostic information"),
@@ -656,7 +628,7 @@ def compile_cmd(
         None, FLAG_ARTS_DEBUG,
         help="Comma-separated ARTS debug channels (example: info,debug)"),
     start_from: Optional[str] = typer.Option(
-        None, FLAG_START_FROM,
+        None, "--start-from",
         help="Start pipeline at specified step (input must already match that step)"),
 ):
     """Unified compilation command.
@@ -793,7 +765,7 @@ def _compile_from_c(
     cgeist_args = _normalize_path_flags(parsed.cgeist, invocation_cwd)
 
     if partition_fallback:
-        extra_pipeline_args.append(f"{FLAG_PARTITION_FALLBACK}={partition_fallback}")
+        extra_pipeline_args.append(f"{"--partition-fallback"}={partition_fallback}")
     if arts_debug:
         extra_pipeline_args.append(f"{FLAG_ARTS_DEBUG}={arts_debug}")
 
@@ -842,8 +814,8 @@ def _compile_from_mlir(
     passthrough_args = passthrough_args or []
 
     # Pass --help through to carts-compile binary
-    if FLAG_HELP in passthrough_args or FLAG_HELP_SHORT in passthrough_args:
-        result = run_subprocess([str(carts_compile_bin), FLAG_HELP], check=False)
+    if "--help" in passthrough_args or "-h" in passthrough_args:
+        result = run_subprocess([str(carts_compile_bin), "--help"], check=False)
         raise typer.Exit(result.returncode)
 
     if all_pipelines:
@@ -865,17 +837,17 @@ def _compile_from_mlir(
         cmd.extend([FLAG_ARTS_CONFIG, str(arts_cfg)])
 
     if optimize:
-        cmd.append(FLAG_OPTIMIZE_O3)
+        cmd.append("--O3")
     if emit_llvm:
-        cmd.append(FLAG_EMIT_LLVM)
+        cmd.append("--emit-llvm")
     if collect_metadata:
-        cmd.append(FLAG_COLLECT_METADATA)
+        cmd.append("--collect-metadata")
     if debug:
-        cmd.append(FLAG_DEBUG_SYMBOLS)
+        cmd.append("-g")
     if pipeline:
         cmd.append(f"{FLAG_PIPELINE}={pipeline}")
     if partition_fallback:
-        cmd.append(f"{FLAG_PARTITION_FALLBACK}={partition_fallback}")
+        cmd.append(f"{"--partition-fallback"}={partition_fallback}")
     if diagnose:
         cmd.append(FLAG_DIAGNOSE)
     if diagnose_output:
@@ -883,7 +855,7 @@ def _compile_from_mlir(
     if arts_debug:
         cmd.append(f"{FLAG_ARTS_DEBUG}={arts_debug}")
     if start_from:
-        cmd.append(f"{FLAG_START_FROM}={start_from}")
+        cmd.append(f"{"--start-from"}={start_from}")
     if output:
         cmd.extend([FLAG_OUTPUT, str(output)])
     if passthrough_args:
@@ -931,7 +903,7 @@ def _compile_from_ll(
 # -----------------------------------------------------------------------------
 
 def _find_arts_config(
-    input_file: Path, pipeline_args: List[str], config: Optional["PlatformConfig"] = None
+    input_file: Path, pipeline_args: List[str], config: Optional["CartsConfig"] = None
 ) -> Optional[Path]:
     """Find arts.cfg for the compilation.
 
@@ -994,7 +966,7 @@ def _metadata_json_path_from_args(args: List[str]) -> Path:
 
 
 def _build_cgeist_cmd(
-    config: PlatformConfig,
+    config: CartsConfig,
     input_file: Path,
     std_flag: str,
     passthrough_args: List[str],
@@ -1005,19 +977,19 @@ def _build_cgeist_cmd(
     cmd = [str(config.get_polygeist_tool(TOOL_CGEIST))]
     cmd.extend(config.include_flags)
     cmd.extend(config.cgeist_sysroot_flags)
-    cmd.extend([CGEIST_FLAG_RAISE_AFFINE, std_flag, "-O0", "-S",
+    cmd.extend(["--raise-scf-to-affine", std_flag, "-O0", "-S",
                  "-D_POSIX_C_SOURCE=199309L"])  # Required for clock_gettime
     if with_openmp:
         cmd.append("-fopenmp")
     if with_debug_info:
-        cmd.append(CGEIST_FLAG_PRINT_DEBUG_INFO)
+        cmd.append("--print-debug-info")
     cmd.extend(passthrough_args)
     cmd.append(str(input_file))
     return cmd
 
 
 def _build_link_cmd(
-    config: PlatformConfig,
+    config: CartsConfig,
     input_file: Path,
     output_file: Path,
     debug: bool,
@@ -1032,14 +1004,14 @@ def _build_link_cmd(
     cmd.append(str(input_file))
     cmd.extend(["-o", str(output_file)])
     if debug:
-        cmd.append(FLAG_DEBUG_SYMBOLS)
+        cmd.append("-g")
     cmd.extend(config.compile_libraries)
     cmd.extend(extra_args)
     return cmd
 
 
 def _compile_c_pipeline(
-    config: PlatformConfig,
+    config: CartsConfig,
     input_file: Path,
     output_name: Path,
     debug: bool,
@@ -1110,7 +1082,7 @@ def _compile_c_pipeline(
         # Step 2: Extract metadata from sequential MLIR
         task = progress.add_task(f"[2{step_label} Collecting metadata...", total=None)
         cmd = [str(carts_compile_bin), str(seq_mlir),
-               FLAG_COLLECT_METADATA, FLAG_OUTPUT, str(metadata_mlir)]
+               "--collect-metadata", FLAG_OUTPUT, str(metadata_mlir)]
         arts_cfg = _find_arts_config(input_file, pipeline_args, config)
         if arts_cfg and not _has_flag(metadata_args, FLAG_ARTS_CONFIG):
             cmd.extend([FLAG_ARTS_CONFIG, str(arts_cfg)])
@@ -1138,14 +1110,14 @@ def _compile_c_pipeline(
         task = progress.add_task(f"[4{step_label} ARTS transformations...", total=None)
         cmd = [str(carts_compile_bin), str(par_mlir)]
         if enable_pipeline_o3:
-            cmd.append(FLAG_OPTIMIZE_O3)
+            cmd.append("--O3")
         arts_cfg = _find_arts_config(input_file, pipeline_args, config)
         if arts_cfg:
             cmd.extend([FLAG_ARTS_CONFIG, str(arts_cfg)])
         if not skip_link:
-            cmd.append(FLAG_EMIT_LLVM)
+            cmd.append("--emit-llvm")
         if debug:
-            cmd.append(FLAG_DEBUG_SYMBOLS)
+            cmd.append("-g")
         if diagnose:
             cmd.append(FLAG_DIAGNOSE)
             effective_diagnose_output = diagnose_output or Path(
@@ -1168,7 +1140,7 @@ def _compile_c_pipeline(
                 f"[{Colors.SUCCESS}]Pipeline output:[/{Colors.SUCCESS}] {out_file}\n"
                 f"[{Colors.DIM}]Stopped at: {pipeline_stop}[/{Colors.DIM}]",
                 title="Success",
-                border_style="green",
+                border_style=Colors.SUCCESS,
             ))
             return
 
@@ -1190,11 +1162,11 @@ def _compile_c_pipeline(
         f"[{Colors.DIM}]Parallel: {par_mlir}[/{Colors.DIM}]\n"
         f"[{Colors.DIM}]LLVM IR: {ll_file}[/{Colors.DIM}]"
     )
-    console.print(Panel(files_info, title="Success", border_style="green"))
+    console.print(Panel(files_info, title="Success", border_style=Colors.SUCCESS))
 
 
 def _compile_all_pipelines(
-    config: PlatformConfig,
+    config: CartsConfig,
     source_file: Path,
     output_dir: Optional[Path],
     extra_args: List[str],
@@ -1230,7 +1202,7 @@ def _compile_all_pipelines(
 
         base_cmd = [str(carts_compile_bin), str(source_file)]
         if optimize:
-            base_cmd.append(FLAG_OPTIMIZE_O3)
+            base_cmd.append("--O3")
         arts_cfg = _find_arts_config(source_file, extra_args, config)
         if arts_cfg:
             base_cmd.extend([FLAG_ARTS_CONFIG, str(arts_cfg)])
@@ -1258,7 +1230,7 @@ def _compile_all_pipelines(
         # Final LLVM IR
         progress.update(task, description="Exporting LLVM IR")
         final_ll = out_dir / f"{stem}.ll"
-        cmd = base_cmd + [FLAG_EMIT_LLVM, FLAG_OUTPUT, str(final_ll)] + extra_args
+        cmd = base_cmd + ["--emit-llvm", FLAG_OUTPUT, str(final_ll)] + extra_args
         rc = run_subprocess(cmd, check=False).returncode
         results.append(("emit-llvm", rc == 0))
         progress.advance(task)
@@ -1268,15 +1240,15 @@ def _compile_all_pipelines(
     failed = sum(1 for _, ok in results if not ok)
 
     table = Table(title="Pipeline Results")
-    table.add_column("Pipeline", style="cyan")
+    table.add_column("Pipeline", style=Colors.INFO)
     table.add_column("Status", justify="center")
     for pipeline_name, ok in results:
-        status = f"[green]PASS[/green]" if ok else f"[red]FAIL[/red]"
+        status = f"[{Colors.SUCCESS}]PASS[/{Colors.SUCCESS}]" if ok else f"[{Colors.ERROR}]FAIL[/{Colors.ERROR}]"
         table.add_row(pipeline_name, status)
     console.print(table)
 
     console.print(
-        f"\n[green]{passed} passed[/green], [red]{failed} failed[/red] "
+        f"\n[{Colors.SUCCESS}]{passed} passed[/{Colors.SUCCESS}], [{Colors.ERROR}]{failed} failed[/{Colors.ERROR}] "
         f"out of {len(results)} pipeline outputs"
     )
     print_success(f"Pipeline dumps written to {out_dir}")

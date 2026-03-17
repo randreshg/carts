@@ -6,9 +6,9 @@ import subprocess
 
 import typer
 
-from carts_styles import console, print_error, print_info, print_success, print_warning
-from scripts.config import PlatformConfig, get_config
-from scripts.run import run_subprocess
+from sniff import console, print_error, print_info, print_success, print_warning
+from scripts.platform import CartsConfig, get_config
+from scripts import run_subprocess, TOOL_CLANG_FORMAT
 
 # Source files handled by `carts format`. Only C/C++ are formatted; TableGen
 # (.td) files use different syntax and must not be passed to clang-format.
@@ -29,7 +29,7 @@ def _is_format_candidate(path: Path) -> bool:
     return True
 
 
-def _collect_tracked_format_files(config: PlatformConfig) -> List[Path]:
+def _collect_tracked_format_files(config: CartsConfig) -> List[Path]:
     """Collect tracked source files to format."""
     try:
         result = subprocess.run(
@@ -70,9 +70,9 @@ def _collect_format_files_from_paths(paths: Iterable[Path]) -> List[Path]:
     return files
 
 
-def _resolve_clang_format(config: PlatformConfig) -> Optional[Path]:
+def _resolve_clang_format(config: CartsConfig) -> Optional[Path]:
     """Find clang-format in install tree first, then in PATH."""
-    tool = config.get_llvm_tool("clang-format", fallback_to_system=True)
+    tool = config.get_llvm_tool(TOOL_CLANG_FORMAT, fallback_to_system=True)
     return tool if tool.is_file() else None
 
 
