@@ -22,7 +22,7 @@
 ///     // dead ops removed
 ///==========================================================================///
 
-#include "../../PassDetails.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
@@ -32,6 +32,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include <algorithm>
 
@@ -98,6 +99,7 @@ struct DeadCodeEliminationPass
       unsigned removedEdts = removeEmptyEdts(module);
       unsigned removedDbs = removeDeadDbs(module);
       unsigned removedAcquires = removeUnusedAcquires(module);
+      unsigned removedPureOps = removeDeadPureOps(module);
       /// Conservatively keep EDT dependency operands. Some control-only
       /// dependency edges encode ordering constraints even when the block
       /// argument has no direct memory users (for example Jacobi-style
@@ -106,7 +108,7 @@ struct DeadCodeEliminationPass
 
       unsigned removed = removedLoads + removedStores + removedAllocas +
                          removedUndefs + removedEdts + removedDbs +
-                         removedAcquires + removedEdtDeps;
+                         removedAcquires + removedPureOps + removedEdtDeps;
       totalRemoved += removed;
       changed = (removed > 0);
     }
@@ -182,6 +184,29 @@ struct DeadCodeEliminationPass
     for (auto *op : toRemove)
       op->erase();
 
+    return toRemove.size();
+  }
+
+  /// Remove trivially-dead, memory-effect-free ops.
+  /// This cleans up residual arithmetic/type-size helper chains that remain
+  /// after structural rewrites.
+  unsigned removeDeadPureOps(ModuleOp module) {
+    SmallVector<Operation *> toRemove;
+
+    module.walk([&](Operation *op) {
+      if (!op || !op->use_empty())
+        return;
+      if (op->hasTrait<OpTrait::IsTerminator>())
+        return;
+      if (!op->getRegions().empty())
+        return;
+      if (!isMemoryEffectFree(op))
+        return;
+      toRemove.push_back(op);
+    });
+
+    for (Operation *op : toRemove)
+      op->erase();
     return toRemove.size();
   }
 

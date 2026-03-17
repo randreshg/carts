@@ -4,10 +4,13 @@
 /// Epoch Continuation Preparation Pass - transforms epoch+tail patterns into
 /// finish-EDT continuation scheduling when safe.
 ///
-/// This pass runs AFTER CreateEpochs but BEFORE the pre-lowering pipeline
-/// (EdtLowering, EpochLowering, etc.). It detects safe "epoch + tail" patterns
-/// and outlines the tail into a continuation arts.edt, allowing the epoch to
-/// use ARTS-native finish-EDT signaling instead of blocking waits.
+/// This pass runs in high-level ARTS form:
+///   1) in the epochs stage after CreateEpochs
+///   2) again in pre-lowering after ParallelEdtLowering (to catch newly
+///      materialized epochs)
+/// It detects safe "epoch + tail" patterns and outlines the tail into a
+/// continuation arts.edt, allowing the epoch to use ARTS-native finish-EDT
+/// signaling instead of blocking waits.
 ///
 /// The pass is gated behind --arts-epoch-finish-continuation.
 ///
@@ -38,14 +41,20 @@
 #include "arts/Dialect.h"
 #include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
+#include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Debug.h"
+#include <optional>
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(epoch_continuation_prep);
@@ -65,6 +74,13 @@ struct EpochContinuationPrepPass
   void runOnOperation() override;
 
 private:
+  /// Detect and rewrite repeated loop patterns:
+  ///   scf.for (repeat) { arts.epoch { ... arts.edt ... } ; timer-tail }
+  /// into:
+  ///   arts.epoch { ... arts.edt(repeat loop inside body) ... } ; timer-tail
+  /// This amortizes epoch create/wait and EDT creation overhead.
+  bool tryAmortizeRepeatedEpochLoop(EpochOp epochOp);
+
   /// Check if an epoch + tail pattern is eligible for continuation.
   bool isEligible(EpochOp epochOp, SmallVectorImpl<Operation *> &tailOps);
 
@@ -89,6 +105,190 @@ static bool isInsideLoop(Operation *op) {
   return false;
 }
 
+/// Return static trip count for an scf.for loop when all bounds are constants.
+static std::optional<int64_t> getStaticTripCount(scf::ForOp forOp) {
+  auto lb = forOp.getLowerBound().getDefiningOp<arith::ConstantIndexOp>();
+  auto ub = forOp.getUpperBound().getDefiningOp<arith::ConstantIndexOp>();
+  auto step = forOp.getStep().getDefiningOp<arith::ConstantIndexOp>();
+  if (!lb || !ub || !step)
+    return std::nullopt;
+  int64_t lbv = lb.value();
+  int64_t ubv = ub.value();
+  int64_t sv = step.value();
+  if (sv <= 0 || ubv <= lbv)
+    return std::nullopt;
+  return (ubv - lbv + sv - 1) / sv;
+}
+
+static bool isKernelTimerTailOp(Operation *op) {
+  auto callOp = dyn_cast<func::CallOp>(op);
+  if (!callOp)
+    return false;
+  return callOp.getCallee().starts_with("carts_kernel_timer_");
+}
+
+static Value stripMemrefWrapperOps(Value value) {
+  while (value) {
+    if (auto castOp = value.getDefiningOp<memref::CastOp>()) {
+      value = castOp.getSource();
+      continue;
+    }
+    if (auto subviewOp = value.getDefiningOp<memref::SubViewOp>()) {
+      value = subviewOp.getSource();
+      continue;
+    }
+    if (auto reinterpretOp = value.getDefiningOp<memref::ReinterpretCastOp>()) {
+      value = reinterpretOp.getSource();
+      continue;
+    }
+    break;
+  }
+  return value;
+}
+
+static std::optional<unsigned> mapMemrefToEdtArg(EdtOp edt, Value memrefValue) {
+  if (!memrefValue)
+    return std::nullopt;
+  Value current = stripMemrefWrapperOps(memrefValue);
+  if (auto dbRef = current.getDefiningOp<DbRefOp>())
+    current = stripMemrefWrapperOps(dbRef.getSource());
+
+  auto blockArg = dyn_cast<BlockArgument>(current);
+  if (!blockArg)
+    return std::nullopt;
+  Block *edtBody = &edt.getBody().front();
+  if (blockArg.getOwner() != edtBody)
+    return std::nullopt;
+  return blockArg.getArgNumber();
+}
+
+static void classifyEdtArgAccesses(EdtOp edt, SmallVectorImpl<bool> &reads,
+                                   SmallVectorImpl<bool> &writes) {
+  reads.assign(edt.getDependencies().size(), false);
+  writes.assign(edt.getDependencies().size(), false);
+
+  auto markRead = [&](Value memrefValue) {
+    auto argIdx = mapMemrefToEdtArg(edt, memrefValue);
+    if (argIdx && *argIdx < reads.size())
+      reads[*argIdx] = true;
+  };
+  auto markWrite = [&](Value memrefValue) {
+    auto argIdx = mapMemrefToEdtArg(edt, memrefValue);
+    if (argIdx && *argIdx < writes.size())
+      writes[*argIdx] = true;
+  };
+
+  edt.walk([&](Operation *nested) {
+    if (auto load = dyn_cast<memref::LoadOp>(nested))
+      markRead(load.getMemRef());
+    else if (auto store = dyn_cast<memref::StoreOp>(nested))
+      markWrite(store.getMemRef());
+    else if (auto affineLoad = dyn_cast<affine::AffineLoadOp>(nested))
+      markRead(affineLoad.getMemRef());
+    else if (auto affineStore = dyn_cast<affine::AffineStoreOp>(nested))
+      markWrite(affineStore.getMemRef());
+  });
+}
+
+static bool canWrapEdtBodyWithRepeatLoop(EdtOp edt) {
+  Block &body = edt.getBody().front();
+  bool seenRelease = false;
+  bool sawRepeatableOp = false;
+  for (Operation &op : body.without_terminator()) {
+    if (isa<DbReleaseOp>(op)) {
+      seenRelease = true;
+      continue;
+    }
+    if (seenRelease)
+      return false;
+    sawRepeatableOp = true;
+  }
+  return sawRepeatableOp;
+}
+
+static void wrapEdtBodyWithRepeatLoop(EdtOp edt, int64_t repeatCount) {
+  if (repeatCount <= 1)
+    return;
+
+  Block &body = edt.getBody().front();
+  SmallVector<Operation *> repeatOps;
+  for (Operation &op : body.without_terminator()) {
+    if (isa<DbReleaseOp>(op))
+      break;
+    repeatOps.push_back(&op);
+  }
+  if (repeatOps.empty())
+    return;
+
+  OpBuilder builder(body.getTerminator());
+  Location loc = edt.getLoc();
+  Value c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
+  Value cN = builder.create<arith::ConstantIndexOp>(loc, repeatCount);
+  Value c1 = builder.create<arith::ConstantIndexOp>(loc, 1);
+  auto repeatFor = builder.create<scf::ForOp>(loc, c0, cN, c1);
+
+  Operation *repeatTerminator = repeatFor.getBody()->getTerminator();
+  for (Operation *op : repeatOps)
+    op->moveBefore(repeatTerminator);
+}
+
+static bool epochSupportsRepetitionAmortization(EpochOp epochOp) {
+  DenseSet<Operation *> readAllocs;
+  DenseSet<Operation *> writeAllocs;
+  bool sawEdt = false;
+  bool safe = true;
+
+  epochOp.walk([&](EdtOp edt) {
+    sawEdt = true;
+    SmallVector<bool> argReads;
+    SmallVector<bool> argWrites;
+    classifyEdtArgAccesses(edt, argReads, argWrites);
+
+    ValueRange deps = edt.getDependencies();
+    if (deps.size() != argReads.size()) {
+      safe = false;
+      return WalkResult::interrupt();
+    }
+
+    for (unsigned i = 0; i < deps.size(); ++i) {
+      auto acq = deps[i].getDefiningOp<DbAcquireOp>();
+      if (!acq) {
+        safe = false;
+        return WalkResult::interrupt();
+      }
+
+      Operation *alloc = DbUtils::getUnderlyingDbAlloc(acq.getSourcePtr());
+      if (!alloc) {
+        safe = false;
+        return WalkResult::interrupt();
+      }
+
+      if (argReads[i] && DbUtils::isWriterMode(acq.getMode())) {
+        safe = false;
+        return WalkResult::interrupt();
+      }
+      if (argWrites[i] && acq.getMode() == ArtsMode::in) {
+        safe = false;
+        return WalkResult::interrupt();
+      }
+
+      if (argReads[i])
+        readAllocs.insert(alloc);
+      if (argWrites[i])
+        writeAllocs.insert(alloc);
+    }
+    return WalkResult::advance();
+  });
+
+  if (!safe || !sawEdt)
+    return false;
+  for (Operation *alloc : writeAllocs) {
+    if (readAllocs.contains(alloc))
+      return false;
+  }
+  return true;
+}
+
 } // namespace
 
 void EpochContinuationPrepPass::runOnOperation() {
@@ -102,8 +302,12 @@ void EpochContinuationPrepPass::runOnOperation() {
 
   ARTS_INFO("Found " << epochOps.size() << " epoch operations to analyze");
 
+  unsigned amortized = 0;
   unsigned transformed = 0;
   for (EpochOp epochOp : epochOps) {
+    if (tryAmortizeRepeatedEpochLoop(epochOp))
+      ++amortized;
+
     SmallVector<Operation *> tailOps;
     if (!isEligible(epochOp, tailOps)) {
       ARTS_DEBUG("  Epoch not eligible for continuation");
@@ -115,8 +319,71 @@ void EpochContinuationPrepPass::runOnOperation() {
       ++transformed;
   }
 
+  ARTS_INFO("Amortized " << amortized << " repeated epoch loop(s)");
   ARTS_INFO("Transformed " << transformed << " epochs to continuation form");
   ARTS_INFO_FOOTER(EpochContinuationPrepPass);
+}
+
+bool EpochContinuationPrepPass::tryAmortizeRepeatedEpochLoop(EpochOp epochOp) {
+  if (!epochOp || !epochOp->getBlock())
+    return false;
+
+  auto repeatLoop = dyn_cast<scf::ForOp>(epochOp->getParentOp());
+  if (!repeatLoop)
+    return false;
+  if (repeatLoop.getNumResults() != 0 || !repeatLoop.getInitArgs().empty())
+    return false;
+  if (!repeatLoop.getInductionVar().use_empty())
+    return false;
+
+  std::optional<int64_t> tripCount = getStaticTripCount(repeatLoop);
+  if (!tripCount || *tripCount < 2)
+    return false;
+
+  Block *loopBody = repeatLoop.getBody();
+  if (epochOp->getBlock() != loopBody)
+    return false;
+
+  bool seenEpoch = false;
+  SmallVector<Operation *> tailOps;
+  for (Operation &op : loopBody->without_terminator()) {
+    if (&op == epochOp.getOperation()) {
+      seenEpoch = true;
+      continue;
+    }
+    if (!seenEpoch)
+      return false;
+    tailOps.push_back(&op);
+  }
+  if (!seenEpoch)
+    return false;
+  for (Operation *tailOp : tailOps) {
+    if (!isKernelTimerTailOp(tailOp))
+      return false;
+  }
+
+  if (!epochSupportsRepetitionAmortization(epochOp))
+    return false;
+
+  SmallVector<EdtOp> edts;
+  epochOp.walk([&](EdtOp edt) { edts.push_back(edt); });
+  if (edts.empty())
+    return false;
+  for (EdtOp edt : edts) {
+    if (!canWrapEdtBodyWithRepeatLoop(edt))
+      return false;
+  }
+
+  for (EdtOp edt : edts)
+    wrapEdtBodyWithRepeatLoop(edt, *tripCount);
+
+  epochOp->moveBefore(repeatLoop);
+  if (repeatLoop.getBody()->without_terminator().empty())
+    repeatLoop.erase();
+
+  ARTS_INFO("  Amortized repeated epoch loop (trip count = " << *tripCount
+                                                             << ")");
+  return true;
 }
 
 bool EpochContinuationPrepPass::isEligible(
@@ -164,6 +431,23 @@ bool EpochContinuationPrepPass::isEligible(
       return false;
   }
 
+  /// Rule 6b: Tail must not capture non-DB external values.
+  /// Continuation EdtOp bodies may only reference their block args/deps.
+  /// Current continuation lowering only maps captured DbAcquire values, so any
+  /// other external capture would violate EdtOp verifier constraints.
+  DenseSet<Operation *> tailOpSet(tailOps.begin(), tailOps.end());
+  for (Operation *op : tailOps) {
+    for (Value operand : op->getOperands()) {
+      auto *defOp = operand.getDefiningOp();
+      if (!defOp)
+        return false;
+      if (tailOpSet.contains(defOp))
+        continue;
+      if (!isa<DbAcquireOp>(defOp))
+        return false;
+    }
+  }
+
   /// Rule 7: The epoch must not already be marked for continuation.
   if (epochOp->hasAttr(kContinuationForEpoch))
     return false;
@@ -171,7 +455,6 @@ bool EpochContinuationPrepPass::isEligible(
   /// Rule 8: The block terminator must not use any values defined by tail ops.
   /// If it does (e.g., `return %result` where %result is from a tail load),
   /// we can't outline the tail without also handling the terminator's liveness.
-  DenseSet<Operation *> tailOpSet(tailOps.begin(), tailOps.end());
   Operation *terminator = block->getTerminator();
   if (terminator) {
     for (Value operand : terminator->getOperands()) {

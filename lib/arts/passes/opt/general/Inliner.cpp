@@ -15,7 +15,7 @@
 ///     }
 ///==========================================================================///
 
-#include "../../PassDetails.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "mlir/Analysis/CallGraph.h"

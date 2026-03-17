@@ -27,7 +27,8 @@ add_mlir_dialect_library(MLIRArtsTransforms
   
   # Optimization passes
   opt/general/Inliner.cpp
-  opt/general/CanonicalizeMemrefs.cpp
+  opt/general/RaiseMemRefDimensionality.cpp
+  opt/general/HandleDeps.cpp
   opt/general/DeadCodeElimination.cpp
   opt/dep/DepTransforms.cpp
   opt/kernel/KernelTransforms.cpp
@@ -48,6 +49,8 @@ add_mlir_dialect_library(MLIRArtsTransforms
   opt/codegen/AliasScopeGen.cpp
   opt/codegen/Hoisting.cpp
   opt/codegen/DataPtrHoisting.cpp
+  opt/codegen/GuidRangCallOpt.cpp
+  opt/codegen/RuntimeCallOpt.cpp
   opt/codegen/LoopVectorizationHints.cpp
   opt/codegen/ScalarReplacement.cpp
   

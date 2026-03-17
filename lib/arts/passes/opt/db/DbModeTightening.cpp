@@ -18,7 +18,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 /// Arts
-#include "../../PassDetails.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/graphs/db/DbGraph.h"

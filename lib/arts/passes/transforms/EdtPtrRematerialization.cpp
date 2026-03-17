@@ -13,7 +13,7 @@
 ///==========================================================================///
 
 /// Dialects
-#include "../PassDetails.h"
+#include "arts/passes/PassDetails.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/Pass/Pass.h"

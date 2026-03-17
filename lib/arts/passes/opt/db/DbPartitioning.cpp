@@ -39,7 +39,7 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
 /// Arts
-#include "../../PassDetails.h"
+#include "arts/passes/PassDetails.h"
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"

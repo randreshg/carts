@@ -11,6 +11,7 @@
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
@@ -75,6 +76,14 @@ inline bool isStartBlockArithmeticOp(Operation *op) {
              arith::SubIOp, arith::MulIOp, arith::MaxUIOp, arith::MinUIOp,
              arith::SelectOp, arith::IndexCastOp>(op);
 }
+
+/// Convert OMP task dependency mode to ARTS access mode.
+ArtsMode convertOmpMode(omp::ClauseTaskDepend mode);
+
+/// Clamp dependency indices to valid memref bounds [0, dimSize-1].
+SmallVector<Value> clampDepIndices(Value source, ArrayRef<Value> indices,
+                                   OpBuilder &builder, Location loc,
+                                   ArrayRef<Value> dimSizes = {});
 
 } // namespace arts
 } // namespace mlir

@@ -15,7 +15,7 @@ cross-step contracts.
 
 ## Pipeline Order (`--pipeline` / `--start-from`)
 
-1. `canonicalize-memrefs`
+1. `raise-memref-dimensionality`
 2. `collect-metadata`
 3. `initial-cleanup`
 4. `openmp-to-arts`
@@ -42,13 +42,14 @@ cross-step contracts.
 
 ## Per-Step Pass Summary
 
-### 1) canonicalize-memrefs
+### 1) raise-memref-dimensionality
 - `LowerAffine` (nested func)
 - `CSE`
 - `Inliner`
 - `ArtsInliner`
 - `PolygeistCanonicalize`
-- `CanonicalizeMemrefs`
+- `RaiseMemRefDimensionality`
+- `HandleDeps`
 - `DeadCodeElimination`
 - `CSE`
 
@@ -182,6 +183,8 @@ cross-step contracts.
 
 ### 15) arts-to-llvm
 - `ConvertArtsToLLVM`
+- `GuidRangCallOpt`
+- `RuntimeCallOpt`
 - `DataPtrHoisting`
 - `PolygeistCanonicalize`
 - `CSE`
