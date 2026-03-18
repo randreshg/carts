@@ -216,6 +216,23 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
     }
   }
 
+  /// Stencil patterns also benefit from nested-work scaling: deep inner
+  /// loops dominate halo-communication overhead, and keeping dispatch
+  /// aligned with DB blocks prevents CDAG frontier write serialization
+  /// (misaligned coarsening causes adjacent EDTs to share write-mode DBs).
+  if (isStencilPattern && !allowNestedWorkBoost) {
+    if (auto nestedWork = loopAnalysis.estimateStaticPerfectNestedWork(
+            forOp.getOperation(), 8);
+        nestedWork && *nestedWork > 1) {
+      int64_t cappedWork = std::min(*nestedWork, (int64_t)1024);
+      if (cappedWork >=
+          std::numeric_limits<int64_t>::max() / effectiveTripCount)
+        effectiveTripCount = std::numeric_limits<int64_t>::max();
+      else
+        effectiveTripCount *= cappedWork;
+    }
+  }
+
   int64_t minItersPerWorker = 8;
   if (auto parentEdt = forOp->getParentOfType<EdtOp>()) {
     int64_t depCount = static_cast<int64_t>(parentEdt.getDependencies().size());
