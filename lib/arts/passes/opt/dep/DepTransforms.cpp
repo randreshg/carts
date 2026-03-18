@@ -17,7 +17,7 @@
 #include "arts/utils/Debug.h"
 #include "mlir/Pass/Pass.h"
 
-ARTS_DEBUG_SETUP(arts_dep_transforms);
+ARTS_DEBUG_SETUP(dep_transforms);
 
 using namespace mlir;
 using namespace mlir::arts;

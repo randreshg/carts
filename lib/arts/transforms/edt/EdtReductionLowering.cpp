@@ -28,7 +28,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-ARTS_DEBUG_SETUP(reduction_lowering);
+ARTS_DEBUG_SETUP(edt_reduction_lowering);
 
 using namespace mlir;
 using namespace mlir::arts;

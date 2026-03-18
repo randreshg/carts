@@ -35,7 +35,7 @@
 #include "arts/utils/LoopInvarianceUtils.h"
 #include "polygeist/Ops.h"
 
-ARTS_DEBUG_SETUP(arts_scalar_replacement);
+ARTS_DEBUG_SETUP(scalar_replacement);
 
 using namespace mlir;
 using namespace mlir::arts;
