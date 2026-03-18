@@ -5,6 +5,9 @@
 ///==========================================================================///
 
 #include "arts/utils/EdtUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include <algorithm>
 
 using namespace mlir;
@@ -83,6 +86,50 @@ EpochOp wrapBodyInEpoch(Block &body, Location loc) {
   builder.create<YieldOp>(loc);
 
   return epochOp;
+}
+
+std::optional<unsigned> mapMemrefToEdtArg(EdtOp edt, Value memrefValue) {
+  if (!memrefValue)
+    return std::nullopt;
+  Value current = ValueAnalysis::stripMemrefViewOps(memrefValue);
+  if (auto dbRef = current.getDefiningOp<DbRefOp>())
+    current = ValueAnalysis::stripMemrefViewOps(dbRef.getSource());
+
+  auto blockArg = dyn_cast<BlockArgument>(current);
+  if (!blockArg)
+    return std::nullopt;
+  Block *edtBody = &edt.getBody().front();
+  if (blockArg.getOwner() != edtBody)
+    return std::nullopt;
+  return blockArg.getArgNumber();
+}
+
+void classifyEdtArgAccesses(EdtOp edt, SmallVectorImpl<bool> &reads,
+                            SmallVectorImpl<bool> &writes) {
+  reads.assign(edt.getDependencies().size(), false);
+  writes.assign(edt.getDependencies().size(), false);
+
+  auto markRead = [&](Value memrefValue) {
+    auto argIdx = mapMemrefToEdtArg(edt, memrefValue);
+    if (argIdx && *argIdx < reads.size())
+      reads[*argIdx] = true;
+  };
+  auto markWrite = [&](Value memrefValue) {
+    auto argIdx = mapMemrefToEdtArg(edt, memrefValue);
+    if (argIdx && *argIdx < writes.size())
+      writes[*argIdx] = true;
+  };
+
+  edt.walk([&](Operation *nested) {
+    if (auto load = dyn_cast<memref::LoadOp>(nested))
+      markRead(load.getMemRef());
+    else if (auto store = dyn_cast<memref::StoreOp>(nested))
+      markWrite(store.getMemRef());
+    else if (auto affineLoad = dyn_cast<affine::AffineLoadOp>(nested))
+      markRead(affineLoad.getMemRef());
+    else if (auto affineStore = dyn_cast<affine::AffineStoreOp>(nested))
+      markWrite(affineStore.getMemRef());
+  });
 }
 
 } // namespace arts

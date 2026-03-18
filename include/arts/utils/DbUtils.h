@@ -149,6 +149,10 @@ public:
   /// Check if an ArtsMode is a writer mode (out or inout).
   static bool isWriterMode(ArtsMode mode);
 
+  /// Convert ArtsMode (in/out/inout) to DbMode (read/write).
+  /// ArtsMode::in maps to DbMode::read; out and inout map to DbMode::write.
+  static DbMode convertArtsModeToDbMode(ArtsMode mode);
+
   ///===----------------------------------------------------------------------===///
   /// Offset Dep and Block Size Analysis
   ///===----------------------------------------------------------------------===///
@@ -200,6 +204,21 @@ public:
       llvm::function_ref<WalkResult(const MemoryAccessInfo &)> visitor,
       Region *scope = nullptr);
 };
+
+///===----------------------------------------------------------------------===///
+/// Element-to-Block Space Slice Conversion
+///===----------------------------------------------------------------------===///
+
+/// Convert element-space offsets and sizes to block-space offsets and sizes.
+/// For each dimension, computes:
+///   startBlock = elementOffset / blockSpan
+///   endBlock   = (elementOffset + elementSize - 1) / blockSpan
+///   blockCount = endBlock - startBlock + 1  (clamped to [0, totalBlocks])
+void convertElementSliceToBlockSlice(
+    OpBuilder &builder, Location loc, ValueRange elementOffsets,
+    ValueRange elementSizes, ValueRange blockSpans,
+    ValueRange totalBlockCounts, SmallVectorImpl<Value> &blockOffsets,
+    SmallVectorImpl<Value> &blockSizes);
 
 ///===----------------------------------------------------------------------===///
 /// Block Size and Malloc Pattern Extraction (free functions)

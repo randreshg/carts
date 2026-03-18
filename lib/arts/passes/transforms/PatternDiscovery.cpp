@@ -117,27 +117,10 @@ static bool isMultiDimStencilMemref(const MemrefMetadata &meta) {
 }
 
 static Operation *resolveAllocLikeSource(Value value) {
-  Value current = value;
-  while (current) {
-    Operation *def = current.getDefiningOp();
-    if (!def)
-      return nullptr;
-    if (isa<memref::AllocOp, memref::AllocaOp>(def))
-      return def;
-    if (auto cast = dyn_cast<memref::CastOp>(def)) {
-      current = cast.getSource();
-      continue;
-    }
-    if (auto subview = dyn_cast<memref::SubViewOp>(def)) {
-      current = subview.getSource();
-      continue;
-    }
-    if (auto reinterpret = dyn_cast<memref::ReinterpretCastOp>(def)) {
-      current = reinterpret.getSource();
-      continue;
-    }
-    return nullptr;
-  }
+  Value stripped = ValueAnalysis::stripMemrefViewOps(value);
+  Operation *def = stripped ? stripped.getDefiningOp() : nullptr;
+  if (def && isa<memref::AllocOp, memref::AllocaOp>(def))
+    return def;
   return nullptr;
 }
 
