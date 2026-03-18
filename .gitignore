@@ -10,7 +10,6 @@ core
 core.*
 .cursor/*
 !.cursor/rules/
-.claude/
 .codex/
 .vscode/
 .docs/
