@@ -12,7 +12,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
 #include "arts/utils/Debug.h"
-ARTS_DEBUG_SETUP(edt_dataflow);
+ARTS_DEBUG_SETUP(edt_data_flow_analysis);
 
 using namespace mlir;
 using namespace mlir::arts;

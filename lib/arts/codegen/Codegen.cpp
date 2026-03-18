@@ -47,7 +47,7 @@
 
 /// DEBUG
 #include "arts/utils/Debug.h"
-ARTS_DEBUG_SETUP(arts_codegen);
+ARTS_DEBUG_SETUP(codegen);
 
 using namespace mlir;
 using namespace mlir::func;

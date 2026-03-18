@@ -37,7 +37,7 @@
 
 #define DEBUG_TYPE "db_stencil"
 
-ARTS_DEBUG_SETUP(db_stencil);
+ARTS_DEBUG_SETUP(db_stencil_indexer);
 
 using namespace mlir;
 using namespace mlir::arts;

@@ -39,7 +39,7 @@
 #include <iterator>
 
 #include "arts/utils/Debug.h"
-ARTS_DEBUG_SETUP(elementwise_pipeline);
+ARTS_DEBUG_SETUP(elementwise_pipeline_pattern);
 
 using namespace mlir;
 using namespace mlir::arts;

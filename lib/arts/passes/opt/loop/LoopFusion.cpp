@@ -47,7 +47,7 @@
 #include "mlir/IR/IRMapping.h"
 
 #include "arts/utils/Debug.h"
-ARTS_DEBUG_SETUP(arts_loop_fusion);
+ARTS_DEBUG_SETUP(loop_fusion);
 
 using namespace mlir;
 using namespace mlir::arts;

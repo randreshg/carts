@@ -40,7 +40,7 @@
 #include "arts/passes/Passes.h"
 
 #include "arts/utils/Debug.h"
-ARTS_DEBUG_SETUP(arts_loop_vectorization_hints);
+ARTS_DEBUG_SETUP(loop_vectorization_hints);
 
 using namespace mlir;
 using namespace mlir::arts;

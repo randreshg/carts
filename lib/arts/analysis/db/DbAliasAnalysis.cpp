@@ -11,7 +11,7 @@
 #include "arts/utils/Utils.h"
 
 #include "arts/utils/Debug.h"
-ARTS_DEBUG_SETUP(db_alias);
+ARTS_DEBUG_SETUP(db_alias_analysis);
 
 #include <algorithm>
 #include <optional>

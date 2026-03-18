@@ -42,7 +42,7 @@
 
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopUtils.h"
-ARTS_DEBUG_SETUP(arts_epoch_opt);
+ARTS_DEBUG_SETUP(epoch_opt);
 
 using namespace mlir;
 using namespace mlir::arts;

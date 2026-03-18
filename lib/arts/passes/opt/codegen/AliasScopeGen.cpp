@@ -51,7 +51,7 @@
 #include "arts/utils/Debug.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
-ARTS_DEBUG_SETUP(arts_alias_scope_gen);
+ARTS_DEBUG_SETUP(alias_scope_gen);
 
 using namespace mlir;
 using namespace mlir::arts;
