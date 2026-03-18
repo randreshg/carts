@@ -21,7 +21,7 @@
 #include "arts/utils/OperationAttributes.h"
 
 #include "arts/utils/Debug.h"
-ARTS_DEBUG_SETUP(parallel_split_lowering);
+ARTS_DEBUG_SETUP(edt_parallel_split_lowering);
 
 using namespace mlir;
 using namespace mlir::arts;

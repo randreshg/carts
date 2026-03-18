@@ -467,7 +467,7 @@ carts compile <file>.mlir --pipeline=edt-opt
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --pipeline=edt-opt --arts-debug=edt,arts_loop_fusion 2>&1
+carts compile <file>.mlir --pipeline=edt-opt --arts-debug=edt,loop_fusion 2>&1
 ```
 
 **Passes Executed:**
@@ -1153,7 +1153,7 @@ carts compile <file>.mlir --emit-llvm --arts-debug=arts_alias_scope_gen,arts_loo
 | Edt | `edt` | 5,9,12 | EDT analysis/optimization |
 | EdtInvariantCodeMotion | `edt_invariant_code_motion` | 5 | Hoist invariant code |
 | EdtPtrRematerialization | `edt_ptr_rematerialization` | 5 | Optimize pointer deps |
-| ArtsLoopFusion | `arts_loop_fusion` | 9 | Fuse independent loops |
+| LoopFusion | `loop_fusion` | 9 | Fuse independent loops |
 | Concurrency | `concurrency` | 10 | Build concurrency graph |
 | ForLowering | `for_lowering` | 11 | Lower arts.for with strategy-selected helpers |
 | CreateEpochs | `create_epochs` | 13 | Create epoch sync |
@@ -1161,13 +1161,13 @@ carts compile <file>.mlir --emit-llvm --arts-debug=arts_alias_scope_gen,arts_loo
 | DbLowering | `db_lowering` | 14 | Lower DBs to pointers |
 | EdtLowering | `edt_lowering` | 14 | Lower EDTs to runtime |
 | EpochLowering | `epoch_lowering` | 14 | Lower epochs |
-| DataPtrHoisting | `arts_data_ptr_hoisting` | 14 | Hoist pointer loads |
+| DataPtrHoisting | `data_ptr_hoisting` | 14 | Hoist pointer loads |
 | ScalarReplacement | `scalar_replacement` | 14 | Mem2reg for reductions |
 | ConvertArtsToLLVM | `convert_arts_to_llvm` | 15 | Final ARTS lowering |
-| AliasScopeGen | `arts_alias_scope_gen` | emit-llvm | Alias metadata |
-| LoopVectorizationHints | `arts_loop_vectorization_hints` | emit-llvm | Loop hints |
-| PrefetchHints | `arts_prefetch_hints` | emit-llvm | Prefetch intrinsics |
-| DeadCodeElimination | `dce` | various | Remove dead code |
+| AliasScopeGen | `alias_scope_gen` | emit-llvm | Alias metadata |
+| LoopVectorizationHints | `loop_vectorization_hints` | emit-llvm | Loop hints |
+| PrefetchHints | `prefetch_hints` | emit-llvm | Prefetch intrinsics |
+| DeadCodeElimination | `dead_code_elimination` | various | Remove dead code |
 
 ### Debug Output Color Coding
 

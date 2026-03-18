@@ -22,7 +22,7 @@
 #include <cassert>
 
 #include "arts/utils/Debug.h"
-ARTS_DEBUG_SETUP(distributed_db_ownership);
+ARTS_DEBUG_SETUP(db_distributed_ownership);
 
 using namespace mlir;
 using namespace mlir::arts;

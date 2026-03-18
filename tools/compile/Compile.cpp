@@ -52,7 +52,7 @@
 using namespace llvm;
 using namespace mlir;
 
-ARTS_DEBUG_SETUP(carts_compile)
+ARTS_DEBUG_SETUP(compile)
 
 namespace {
 constexpr const char *kDefaultMetadataFile = ".carts-metadata.json";

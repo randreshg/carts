@@ -42,7 +42,7 @@
 #include <cstdint>
 #include <optional>
 
-ARTS_DEBUG_SETUP(block_stripmine);
+ARTS_DEBUG_SETUP(block_loop_strip_mining);
 
 using namespace mlir;
 using namespace mlir::arts;

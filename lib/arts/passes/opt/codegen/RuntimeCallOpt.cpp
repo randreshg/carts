@@ -24,7 +24,7 @@
 #include "mlir/IR/Dominance.h"
 #include "llvm/ADT/DenseMap.h"
 
-ARTS_DEBUG_SETUP(arts_runtime_call_opt);
+ARTS_DEBUG_SETUP(runtime_call_opt);
 
 using namespace mlir;
 using namespace mlir::arts;

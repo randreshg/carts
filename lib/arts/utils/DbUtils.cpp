@@ -16,7 +16,7 @@
 #include "llvm/ADT/STLExtras.h"
 
 #include "arts/utils/Debug.h"
-ARTS_DEBUG_SETUP(datablock_utils);
+ARTS_DEBUG_SETUP(db_utils);
 
 using namespace mlir;
 using namespace mlir::arts;

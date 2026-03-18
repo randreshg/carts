@@ -41,7 +41,7 @@
 #include <cstdint>
 #include <limits>
 
-ARTS_DEBUG_SETUP(arts_guid_rang_call_opt);
+ARTS_DEBUG_SETUP(guid_rang_call_opt);
 
 using namespace mlir;
 using namespace mlir::arts;

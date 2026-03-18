@@ -39,7 +39,7 @@
 #include "arts/utils/LoopInvarianceUtils.h"
 
 #include "arts/utils/Debug.h"
-ARTS_DEBUG_SETUP(arts_data_ptr_hoisting);
+ARTS_DEBUG_SETUP(data_ptr_hoisting);
 
 using namespace mlir;
 using namespace mlir::arts;

@@ -36,7 +36,7 @@
 #include "mlir/Pass/Pass.h"
 #include <algorithm>
 
-ARTS_DEBUG_SETUP(dce);
+ARTS_DEBUG_SETUP(dead_code_elimination);
 
 using namespace mlir;
 using namespace mlir::arts;

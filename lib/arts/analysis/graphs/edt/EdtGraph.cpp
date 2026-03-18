@@ -23,7 +23,7 @@ using namespace mlir;
 using namespace mlir::arts;
 
 #include "arts/utils/Debug.h"
-ARTS_DEBUG_SETUP(edt_analysis);
+ARTS_DEBUG_SETUP(edt_graph);
 
 namespace {
 StringRef depTypeToString(DbDepType type) {

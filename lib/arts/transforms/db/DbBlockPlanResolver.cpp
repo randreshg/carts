@@ -30,7 +30,7 @@ using namespace mlir;
 using namespace mlir::arts;
 
 #define DEBUG_TYPE "db_block_plan"
-ARTS_DEBUG_SETUP(db_block_plan);
+ARTS_DEBUG_SETUP(db_block_plan_resolver);
 
 namespace {
 
