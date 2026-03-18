@@ -122,45 +122,20 @@ static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   OpBuilder::InsertionGuard guard(AC->getBuilder());
   AC->setInsertionPoint(acquire);
 
-  Value zero = AC->createIndexConstant(0, loc);
-  Value one = AC->createIndexConstant(1, loc);
-  SmallVector<Value, 4> offsets;
-  SmallVector<Value, 4> sizes;
-  offsets.reserve(dims.size());
-  sizes.reserve(dims.size());
-
+  SmallVector<Value, 4> dimElementOffsets, dimElementSizes;
+  SmallVector<Value, 4> dimBlockSpans, dimTotalBlocks;
   for (unsigned i = 0; i < dims.size(); ++i) {
     unsigned ownerDim = dims[i];
-    Value elementOffset = AC->castToIndex(offsetRange[i], loc);
-    Value elementSize = AC->castToIndex(sizeRange[i], loc);
-    Value blockSpan = AC->castToIndex(elementSizes[ownerDim], loc);
-    Value totalBlocks = AC->castToIndex(outerSizes[ownerDim], loc);
-
-    blockSpan = AC->create<arith::MaxUIOp>(loc, blockSpan, one);
-    elementSize = AC->create<arith::MaxUIOp>(loc, elementSize, one);
-
-    Value startBlock =
-        AC->create<arith::DivUIOp>(loc, elementOffset, blockSpan);
-    Value endElem = AC->create<arith::AddIOp>(loc, elementOffset, elementSize);
-    endElem = AC->create<arith::SubIOp>(loc, endElem, one);
-    Value endBlock = AC->create<arith::DivUIOp>(loc, endElem, blockSpan);
-    Value maxBlock = AC->create<arith::SubIOp>(loc, totalBlocks, one);
-    Value startAboveMax = AC->create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::ugt, startBlock, maxBlock);
-    Value clampedEnd = AC->create<arith::MinUIOp>(loc, endBlock, maxBlock);
-    endBlock =
-        AC->create<arith::SelectOp>(loc, startAboveMax, endBlock, clampedEnd);
-
-    Value blockCount = AC->create<arith::SubIOp>(loc, endBlock, startBlock);
-    blockCount = AC->create<arith::AddIOp>(loc, blockCount, one);
-    startBlock =
-        AC->create<arith::SelectOp>(loc, startAboveMax, zero, startBlock);
-    blockCount =
-        AC->create<arith::SelectOp>(loc, startAboveMax, zero, blockCount);
-
-    offsets.push_back(startBlock);
-    sizes.push_back(blockCount);
+    dimElementOffsets.push_back(offsetRange[i]);
+    dimElementSizes.push_back(sizeRange[i]);
+    dimBlockSpans.push_back(elementSizes[ownerDim]);
+    dimTotalBlocks.push_back(outerSizes[ownerDim]);
   }
+
+  SmallVector<Value, 4> offsets, sizes;
+  convertElementSliceToBlockSlice(AC->getBuilder(), loc, dimElementOffsets,
+                                  dimElementSizes, dimBlockSpans, dimTotalBlocks,
+                                  offsets, sizes);
 
   acquire.getOffsetsMutable().assign(offsets);
   acquire.getSizesMutable().assign(sizes);
@@ -836,7 +811,7 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     /// even if the underlying allocation is WRITE-only. The allocation mode is
     /// only used to narrow (not widen) the access when the arts mode is not
     /// already read.
-    DbMode dbMode = (artsMode == ArtsMode::in) ? DbMode::read : DbMode::write;
+    DbMode dbMode = DbUtils::convertArtsModeToDbMode(artsMode);
     if (allocForHint && dbMode != DbMode::read) {
       DbMode allocMode = allocForHint.getDbMode();
       if (allocMode == DbMode::read || allocMode == DbMode::write)

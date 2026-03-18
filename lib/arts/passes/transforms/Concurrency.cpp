@@ -22,6 +22,7 @@
 #include "arts/analysis/heuristics/DistributionHeuristics.h"
 #include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
+#include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
 #include <algorithm>
@@ -130,8 +131,7 @@ void ConcurrencyPass::adjustDbModes() {
     std::function<void(Operation *)> adjustDbMode = [&](Operation *op) {
       if (auto dbAlloc = dyn_cast<DbAllocOp>(op)) {
         ArtsMode accessMode = dbAlloc.getMode();
-        DbMode newDbMode =
-            (accessMode == ArtsMode::in) ? DbMode::read : DbMode::write;
+        DbMode newDbMode = DbUtils::convertArtsModeToDbMode(accessMode);
 
         /// Update the dbMode attribute
         OpBuilder builder(dbAlloc.getContext());

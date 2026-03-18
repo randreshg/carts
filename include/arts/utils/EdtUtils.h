@@ -86,6 +86,16 @@ EpochOp wrapBodyInEpoch(Block &body, Location loc);
 std::pair<EdtOp, BlockArgument>
 getEdtBlockArgumentForAcquire(DbAcquireOp acquireOp);
 
+/// Map a memref value back to its EDT block argument index by stripping
+/// view-like wrapper ops and DbRefOp.
+std::optional<unsigned> mapMemrefToEdtArg(EdtOp edt, Value memrefValue);
+
+/// Classify each EDT dependency as read, written, or both by walking all
+/// load/store operations in the EDT body and tracing accessed memrefs
+/// back to their block arguments.
+void classifyEdtArgAccesses(EdtOp edt, SmallVectorImpl<bool> &reads,
+                            SmallVectorImpl<bool> &writes);
+
 } // namespace arts
 } // namespace mlir
 

@@ -805,6 +805,34 @@ static Value getUnderlyingValueImpl(Value v, SmallPtrSet<Value, 16> &visited,
   return nullptr;
 }
 
+Value ValueAnalysis::stripMemrefViewOps(Value value) {
+  while (value) {
+    Operation *def = value.getDefiningOp();
+    if (!def)
+      break;
+    if (auto castOp = dyn_cast<memref::CastOp>(def)) {
+      value = castOp.getSource();
+      continue;
+    }
+    if (auto subview = dyn_cast<memref::SubViewOp>(def)) {
+      value = subview.getSource();
+      continue;
+    }
+    if (auto reinterpret = dyn_cast<memref::ReinterpretCastOp>(def)) {
+      value = reinterpret.getSource();
+      continue;
+    }
+    if (auto unrealized = dyn_cast<UnrealizedConversionCastOp>(def)) {
+      if (unrealized.getInputs().size() != 1)
+        break;
+      value = unrealized.getInputs().front();
+      continue;
+    }
+    break;
+  }
+  return value;
+}
+
 Value ValueAnalysis::getUnderlyingValue(Value v) {
   SmallPtrSet<Value, 16> visited;
   return getUnderlyingValueImpl(v, visited, 0);

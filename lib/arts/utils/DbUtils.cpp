@@ -361,6 +361,10 @@ bool DbUtils::isWriterMode(ArtsMode mode) {
   return mode == ArtsMode::out || mode == ArtsMode::inout;
 }
 
+DbMode DbUtils::convertArtsModeToDbMode(ArtsMode mode) {
+  return (mode == ArtsMode::in) ? DbMode::read : DbMode::write;
+}
+
 Value DbUtils::extractBaseBlockSizeCandidate(Value offsetHint, Value sizeHint,
                                              int depth) {
   if (!sizeHint || depth > 6)
@@ -611,6 +615,58 @@ void DbUtils::collectReachableMemoryOps(Value source,
         return WalkResult::advance();
       },
       scope);
+}
+
+///===----------------------------------------------------------------------===///
+/// Block Size and Malloc Pattern Extraction (free functions)
+///===----------------------------------------------------------------------===///
+
+void arts::convertElementSliceToBlockSlice(
+    OpBuilder &builder, Location loc, ValueRange elementOffsets,
+    ValueRange elementSizes, ValueRange blockSpans,
+    ValueRange totalBlockCounts, SmallVectorImpl<Value> &blockOffsets,
+    SmallVectorImpl<Value> &blockSizes) {
+  unsigned rank = std::min({static_cast<unsigned>(elementOffsets.size()),
+                            static_cast<unsigned>(elementSizes.size()),
+                            static_cast<unsigned>(blockSpans.size()),
+                            static_cast<unsigned>(totalBlockCounts.size())});
+  Value zero = createZeroIndex(builder, loc);
+  Value one = createOneIndex(builder, loc);
+  blockOffsets.reserve(rank);
+  blockSizes.reserve(rank);
+
+  for (unsigned i = 0; i < rank; ++i) {
+    Value elementOffset = ValueAnalysis::castToIndex(elementOffsets[i], builder, loc);
+    Value elementSize = ValueAnalysis::castToIndex(elementSizes[i], builder, loc);
+    Value blockSpan = ValueAnalysis::castToIndex(blockSpans[i], builder, loc);
+    Value totalBlocks = ValueAnalysis::castToIndex(totalBlockCounts[i], builder, loc);
+
+    blockSpan = builder.create<arith::MaxUIOp>(loc, blockSpan, one);
+    elementSize = builder.create<arith::MaxUIOp>(loc, elementSize, one);
+
+    Value startBlock =
+        builder.create<arith::DivUIOp>(loc, elementOffset, blockSpan);
+    Value endElem =
+        builder.create<arith::AddIOp>(loc, elementOffset, elementSize);
+    endElem = builder.create<arith::SubIOp>(loc, endElem, one);
+    Value endBlock = builder.create<arith::DivUIOp>(loc, endElem, blockSpan);
+    Value maxBlock = builder.create<arith::SubIOp>(loc, totalBlocks, one);
+    Value startAboveMax = builder.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::ugt, startBlock, maxBlock);
+    Value clampedEnd = builder.create<arith::MinUIOp>(loc, endBlock, maxBlock);
+    endBlock =
+        builder.create<arith::SelectOp>(loc, startAboveMax, endBlock, clampedEnd);
+
+    Value blockCount = builder.create<arith::SubIOp>(loc, endBlock, startBlock);
+    blockCount = builder.create<arith::AddIOp>(loc, blockCount, one);
+    startBlock =
+        builder.create<arith::SelectOp>(loc, startAboveMax, zero, startBlock);
+    blockCount =
+        builder.create<arith::SelectOp>(loc, startAboveMax, zero, blockCount);
+
+    blockOffsets.push_back(startBlock);
+    blockSizes.push_back(blockCount);
+  }
 }
 
 ///===----------------------------------------------------------------------===///
