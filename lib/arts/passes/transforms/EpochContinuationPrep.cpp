@@ -91,6 +91,31 @@ private:
   /// Collect values defined before the tail that are used by tail operations.
   void collectCapturedValues(ArrayRef<Operation *> tailOps, EpochOp epochOp,
                              SetVector<Value> &capturedDbAcquires);
+
+  /// CPS Loop Transform: Convert a time-step loop containing epochs into
+  /// an asynchronous continuation chain using finish-EDT signaling.
+  ///
+  /// Pattern detected:
+  ///   scf.for %t = lb to ub step s {
+  ///     arts.epoch { ... workers ... } : i64    // epoch 1
+  ///     <optional: condition + epoch 2>
+  ///   }
+  ///
+  /// Transformed to:
+  ///   arts.edt cont_last(t) {                   // continuation for last epoch
+  ///     if t_next < ub:
+  ///       epoch1 = arts.epoch { workers }        // next iteration's epoch 1
+  ///     else: done
+  ///   } {arts.has_control_dep, arts.continuation_for_epoch,
+  ///      arts.cps_loop_continuation}
+  ///   ...
+  ///   first_epoch = arts.epoch { workers }        // iteration t=lb
+  ///   // NO loop remains; the continuation chain replaces it
+  ///
+  /// The continuation EDT bodies contain the full epoch setup for the next
+  /// iteration. Each epoch uses finish-EDT targeting the next continuation.
+  /// The chain terminates when the loop bound is reached.
+  bool tryCPSLoopTransform(scf::ForOp forOp);
 };
 
 /// Check if an operation is inside a loop.
@@ -296,7 +321,20 @@ void EpochContinuationPrepPass::runOnOperation() {
 
   ARTS_INFO_HEADER(EpochContinuationPrepPass);
 
-  /// Collect all epoch ops that have tail code after them.
+  /// Phase 0: CPS loop transform — convert time-step loops with epochs into
+  /// async continuation chains. This must run BEFORE individual epoch analysis
+  /// because it restructures loops and creates new epochs.
+  unsigned cpsTransformed = 0;
+  SmallVector<scf::ForOp> forOps;
+  module.walk([&](scf::ForOp forOp) { forOps.push_back(forOp); });
+  for (scf::ForOp forOp : forOps) {
+    if (tryCPSLoopTransform(forOp))
+      ++cpsTransformed;
+  }
+  if (cpsTransformed > 0)
+    ARTS_INFO("CPS-transformed " << cpsTransformed << " epoch loop(s)");
+
+  /// Phase 1: Collect all epoch ops that have tail code after them.
   SmallVector<EpochOp> epochOps;
   module.walk([&](EpochOp epochOp) { epochOps.push_back(epochOp); });
 
@@ -553,6 +591,188 @@ LogicalResult EpochContinuationPrepPass::transformToContinuation(
   ARTS_INFO("  Created continuation EDT with " << deps.size()
                                                << " DB deps + 1 control dep");
   return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Epoch Loop Driver Transform
+//===----------------------------------------------------------------------===//
+
+/// Check whether an operation is pure (no side effects).
+static bool isPureArith(Operation *op) {
+  if (op->hasTrait<OpTrait::IsTerminator>())
+    return true;
+  if (isa<arith::ConstantOp, arith::AddIOp, arith::SubIOp, arith::MulIOp,
+          arith::DivUIOp, arith::DivSIOp, arith::RemUIOp, arith::RemSIOp,
+          arith::CmpIOp, arith::SelectOp, arith::MaxUIOp, arith::MinUIOp,
+          arith::IndexCastOp, arith::IndexCastUIOp, arith::ExtSIOp,
+          arith::ExtUIOp, arith::TruncIOp, arith::SIToFPOp>(op))
+    return true;
+  return false;
+}
+
+/// Check if a loop body contains at least one epoch (directly or in scf.if).
+static bool bodyContainsEpoch(Block &body) {
+  for (Operation &op : body.without_terminator()) {
+    if (isa<EpochOp>(op))
+      return true;
+    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      bool found = false;
+      ifOp.walk([&](EpochOp) { found = true; });
+      if (found)
+        return true;
+    }
+  }
+  return false;
+}
+
+/// Check if the loop body only contains epochs, pure arithmetic, scf.if
+/// wrapping epochs, and no other side-effecting ops.
+static bool bodyIsEpochOnly(Block &body) {
+  for (Operation &op : body.without_terminator()) {
+    if (isa<EpochOp>(op))
+      continue;
+    if (isa<scf::IfOp>(op))
+      continue; // scf.if may wrap epochs — we allow it
+    if (isPureArith(&op))
+      continue;
+    return false; // Side-effecting non-epoch op
+  }
+  return true;
+}
+
+bool EpochContinuationPrepPass::tryCPSLoopTransform(scf::ForOp forOp) {
+  /// Epoch Loop Driver Transform
+  ///
+  /// Wraps a time-step loop containing epochs into a single "loop driver" EDT
+  /// inside a wrapping epoch. The main thread waits once on the outer epoch
+  /// instead of spinning 1000× in the scheduler loop.
+  ///
+  /// Before:
+  ///   scf.for %t = lb to ub step s {
+  ///     arts.epoch { ... workers ... } : i64   // blocking wait ×1000
+  ///     scf.if cond { arts.epoch { ... } }     // blocking wait ×999
+  ///   }
+  ///
+  /// After:
+  ///   arts.epoch {
+  ///     arts.edt <task> (%db_deps...) {
+  ///       scf.for %t = lb to ub step s {       // loop runs inside EDT
+  ///         arts.epoch { ... workers ... }      // cooperative wait
+  ///         scf.if cond { arts.epoch { ... } }  // cooperative wait
+  ///       }
+  ///     }
+  ///   } : i64                                   // single blocking wait
+  ///
+  /// Benefits:
+  ///   - Main thread parks once (eliminates 1000× scheduler contention)
+  ///   - Inner epoch waits are cooperative (EDT runs in scheduler loop,
+  ///     participates in work-stealing while waiting)
+  ///   - All 63 other threads are pure workers
+  ///   - No recursive structures, works with existing pipeline
+
+  /// C1: The loop must have no iter_args.
+  if (forOp.getNumResults() > 0 || !forOp.getInitArgs().empty()) {
+    ARTS_DEBUG("CPS: loop has iter_args, skipping");
+    return false;
+  }
+
+  /// C2: Must not be nested inside another loop.
+  if (isInsideLoop(forOp)) {
+    ARTS_DEBUG("CPS: loop is nested, skipping");
+    return false;
+  }
+
+  /// C3: Loop body must contain at least one epoch.
+  Block &body = *forOp.getBody();
+  if (!bodyContainsEpoch(body)) {
+    ARTS_DEBUG("CPS: no epochs in loop body, skipping");
+    return false;
+  }
+
+  /// C4: Loop body must only contain epochs, pure arithmetic, and scf.if.
+  if (!bodyIsEpochOnly(body)) {
+    ARTS_DEBUG("CPS: non-epoch side effects in loop body, skipping");
+    return false;
+  }
+
+  /// C5: Trip count >= 2.
+  std::optional<int64_t> tripCount = getStaticTripCount(forOp);
+  if (tripCount && *tripCount < 2) {
+    ARTS_DEBUG("CPS: trip count < 2, skipping");
+    return false;
+  }
+
+  /// C6: Epochs must not already be marked for continuation.
+  bool alreadyMarked = false;
+  forOp.walk([&](EpochOp epoch) {
+    if (epoch->hasAttr(kContinuationForEpoch))
+      alreadyMarked = true;
+  });
+  if (alreadyMarked) {
+    ARTS_DEBUG("CPS: epoch already marked for continuation, skipping");
+    return false;
+  }
+
+  ARTS_INFO("CPS: Found eligible time-step loop");
+
+  /// === Transform ===
+
+  OpBuilder builder(forOp->getContext());
+  Location loc = forOp.getLoc();
+
+  /// The driver EDT has no explicit DB dependencies. DB alloc results
+  /// (guid/ptr memrefs) used inside the loop body are automatically captured
+  /// as EDT parameters by EdtLowering's EdtEnvManager. DB acquires are done
+  /// inside the epoch bodies by the inner worker EDTs.
+  SmallVector<Value> deps;
+
+  /// Step 1: Create the wrapping epoch.
+  builder.setInsertionPoint(forOp);
+  auto wrapEpoch = builder.create<EpochOp>(
+      loc, IntegerType::get(builder.getContext(), 64));
+  /// Ensure the epoch region has a block with a yield terminator.
+  Region &epochRegion = wrapEpoch.getRegion();
+  if (epochRegion.empty())
+    epochRegion.emplaceBlock();
+  Block &epochBlock = epochRegion.front();
+  if (epochBlock.empty() ||
+      !epochBlock.back().hasTrait<OpTrait::IsTerminator>()) {
+    OpBuilder yieldBuilder = OpBuilder::atBlockEnd(&epochBlock);
+    yieldBuilder.create<YieldOp>(loc);
+  }
+
+  /// Step 2: Create the loop driver EDT inside the epoch (before the yield).
+  OpBuilder epochBuilder = OpBuilder::atBlockTerminator(&epochBlock);
+
+  auto driverEdt = epochBuilder.create<EdtOp>(loc, EdtType::task,
+                                                EdtConcurrency::intranode, deps);
+
+  /// The EdtOp builder creates a body block but without block arguments
+  /// matching the dependencies. Add them now.
+  Block &edtBlock = driverEdt.getBody().front();
+  for (Value dep : deps)
+    edtBlock.addArgument(dep.getType(), loc);
+
+  /// Step 3: Clone the loop into the driver EDT body.
+
+  /// Map captured values to EDT block arguments.
+  IRMapping edtMapping;
+  for (auto [oldDep, blockArg] : llvm::zip(deps, edtBlock.getArguments()))
+    edtMapping.map(oldDep, blockArg);
+
+  /// Clone the loop into the EDT body.
+  OpBuilder edtBuilder = OpBuilder::atBlockEnd(&edtBlock);
+  edtBuilder.clone(*forOp.getOperation(), edtMapping);
+
+  /// Add yield terminator if not already present.
+  if (edtBlock.empty() || !edtBlock.back().hasTrait<OpTrait::IsTerminator>())
+    edtBuilder.create<YieldOp>(loc);
+
+  /// Step 5: Erase the original loop.
+  forOp.erase();
+
+  ARTS_INFO("CPS: Wrapped time-step loop in epoch+driver EDT");
+  return true;
 }
 
 //===----------------------------------------------------------------------===//
