@@ -105,6 +105,16 @@ public:
   static Value stripConstantOffset(Value value, int64_t *outConst = nullptr);
 
   ///===----------------------------------------------------------------------===////
+  /// Memref View-Like Op Stripping
+  ///===----------------------------------------------------------------------===////
+
+  /// Strip through memref view-like wrapper ops (CastOp, SubViewOp,
+  /// ReinterpretCastOp) without crossing DB or EDT boundaries.
+  /// Unlike getUnderlyingValue, this does NOT trace through DbAcquireOp,
+  /// DbRefOp, DbGepOp, EdtOp block args, LLVM::GEPOp, or polygeist ops.
+  static Value stripMemrefViewOps(Value value);
+
+  ///===----------------------------------------------------------------------===////
   /// Underlying Value Tracing
   ///===----------------------------------------------------------------------===////
 

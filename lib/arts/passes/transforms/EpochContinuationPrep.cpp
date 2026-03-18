@@ -42,6 +42,7 @@
 #include "arts/passes/PassDetails.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -150,69 +151,6 @@ static bool isKernelTimerTailOp(Operation *op) {
   if (!callOp)
     return false;
   return callOp.getCallee().starts_with("carts_kernel_timer_");
-}
-
-static Value stripMemrefWrapperOps(Value value) {
-  while (value) {
-    if (auto castOp = value.getDefiningOp<memref::CastOp>()) {
-      value = castOp.getSource();
-      continue;
-    }
-    if (auto subviewOp = value.getDefiningOp<memref::SubViewOp>()) {
-      value = subviewOp.getSource();
-      continue;
-    }
-    if (auto reinterpretOp = value.getDefiningOp<memref::ReinterpretCastOp>()) {
-      value = reinterpretOp.getSource();
-      continue;
-    }
-    break;
-  }
-  return value;
-}
-
-static std::optional<unsigned> mapMemrefToEdtArg(EdtOp edt, Value memrefValue) {
-  if (!memrefValue)
-    return std::nullopt;
-  Value current = stripMemrefWrapperOps(memrefValue);
-  if (auto dbRef = current.getDefiningOp<DbRefOp>())
-    current = stripMemrefWrapperOps(dbRef.getSource());
-
-  auto blockArg = dyn_cast<BlockArgument>(current);
-  if (!blockArg)
-    return std::nullopt;
-  Block *edtBody = &edt.getBody().front();
-  if (blockArg.getOwner() != edtBody)
-    return std::nullopt;
-  return blockArg.getArgNumber();
-}
-
-static void classifyEdtArgAccesses(EdtOp edt, SmallVectorImpl<bool> &reads,
-                                   SmallVectorImpl<bool> &writes) {
-  reads.assign(edt.getDependencies().size(), false);
-  writes.assign(edt.getDependencies().size(), false);
-
-  auto markRead = [&](Value memrefValue) {
-    auto argIdx = mapMemrefToEdtArg(edt, memrefValue);
-    if (argIdx && *argIdx < reads.size())
-      reads[*argIdx] = true;
-  };
-  auto markWrite = [&](Value memrefValue) {
-    auto argIdx = mapMemrefToEdtArg(edt, memrefValue);
-    if (argIdx && *argIdx < writes.size())
-      writes[*argIdx] = true;
-  };
-
-  edt.walk([&](Operation *nested) {
-    if (auto load = dyn_cast<memref::LoadOp>(nested))
-      markRead(load.getMemRef());
-    else if (auto store = dyn_cast<memref::StoreOp>(nested))
-      markWrite(store.getMemRef());
-    else if (auto affineLoad = dyn_cast<affine::AffineLoadOp>(nested))
-      markRead(affineLoad.getMemRef());
-    else if (auto affineStore = dyn_cast<affine::AffineStoreOp>(nested))
-      markWrite(affineStore.getMemRef());
-  });
 }
 
 static bool canWrapEdtBodyWithRepeatLoop(EdtOp edt) {
