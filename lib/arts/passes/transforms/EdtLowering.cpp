@@ -29,7 +29,11 @@
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/codegen/Codegen.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_EDTLOWERING
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
@@ -217,7 +221,7 @@ private:
 ///===----------------------------------------------------------------------===///
 /// EDT Lowering Pass Implementation
 ///===----------------------------------------------------------------------===///
-struct EdtLoweringPass : public arts::EdtLoweringBase<EdtLoweringPass> {
+struct EdtLoweringPass : public arts::impl::EdtLoweringBase<EdtLoweringPass> {
   explicit EdtLoweringPass(mlir::arts::AnalysisManager *AM = nullptr,
                            uint64_t idStride = IdRegistry::DefaultStride)
       : idStride(idStride), AM(AM) {}

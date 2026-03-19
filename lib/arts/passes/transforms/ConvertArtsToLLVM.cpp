@@ -27,7 +27,11 @@
 #include "arts/Dialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_CONVERTARTSTOLLVM
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
@@ -1676,7 +1680,7 @@ struct UndefPattern : public ArtsToLLVMPattern<UndefOp> {
 ///===----------------------------------------------------------------------===///
 namespace {
 struct ConvertArtsToLLVMPass
-    : public arts::ConvertArtsToLLVMBase<ConvertArtsToLLVMPass> {
+    : public arts::impl::ConvertArtsToLLVMBase<ConvertArtsToLLVMPass> {
 
   explicit ConvertArtsToLLVMPass(bool debug = false,
                                  bool distributedInitPerWorker = false,

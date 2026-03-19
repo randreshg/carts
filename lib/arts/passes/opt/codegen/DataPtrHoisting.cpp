@@ -25,7 +25,11 @@
 /// they don't alias with data stores.
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_DATAPTRHOISTING
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -127,7 +131,7 @@ static bool hoistLoadOutOfLoop(LLVM::LoadOp loadOp, scf::ForOp targetLoop) {
 }
 
 struct DataPtrHoistingPass
-    : public arts::DataPtrHoistingBase<DataPtrHoistingPass> {
+    : public arts::impl::DataPtrHoistingBase<DataPtrHoistingPass> {
   void runOnOperation() override;
 };
 

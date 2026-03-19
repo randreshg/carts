@@ -12,7 +12,11 @@
 /// 5. Creates arts.omp_dep with proper indices and sizes
 ///===----------------------------------------------------------------------===///
 
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_RAISEMEMREFDIMENSIONALITY
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/Dialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/passes/Passes.h"
@@ -179,7 +183,7 @@ static bool isInnerWrapperOfInlinedPattern(Value alloc) {
 ///===----------------------------------------------------------------------===///
 
 struct RaiseMemRefDimensionalityPass
-    : public arts::RaiseMemRefDimensionalityBase<RaiseMemRefDimensionalityPass> {
+    : public arts::impl::RaiseMemRefDimensionalityBase<RaiseMemRefDimensionalityPass> {
 
   void runOnOperation() override;
 

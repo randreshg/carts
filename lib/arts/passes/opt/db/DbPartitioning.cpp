@@ -39,7 +39,11 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
 /// Arts
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_DBPARTITIONING
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
@@ -626,7 +630,7 @@ feedbackPartitionDecisionToContract(DbAllocOp newAllocOp,
 
 namespace {
 struct DbPartitioningPass
-    : public arts::DbPartitioningBase<DbPartitioningPass> {
+    : public arts::impl::DbPartitioningBase<DbPartitioningPass> {
   DbPartitioningPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }

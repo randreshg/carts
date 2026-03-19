@@ -19,7 +19,11 @@
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbPatternMatchers.h"
 #include "arts/analysis/metadata/MetadataManager.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_LOOPREORDERING
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/transforms/loop/LoopNormalizer.h"
 #include "arts/utils/OperationAttributes.h"
@@ -61,7 +65,7 @@ static Attribute sanitizeLoopMetadataForInitLoop(Attribute attr,
 }
 
 struct LoopReorderingPass
-    : public arts::LoopReorderingBase<LoopReorderingPass> {
+    : public arts::impl::LoopReorderingBase<LoopReorderingPass> {
   LoopReorderingPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }

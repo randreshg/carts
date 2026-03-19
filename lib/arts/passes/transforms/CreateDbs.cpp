@@ -48,7 +48,11 @@
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_CREATEDBS
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/transforms/db/DbRewriter.h"
 #include "arts/transforms/db/DbTransforms.h"
 #include "arts/transforms/db/block/DbBlockIndexer.h"
@@ -97,7 +101,7 @@ namespace {
 /// Pass Implementation
 ///===----------------------------------------------------------------------===///
 
-struct CreateDbsPass : public arts::CreateDbsBase<CreateDbsPass> {
+struct CreateDbsPass : public arts::impl::CreateDbsBase<CreateDbsPass> {
   CreateDbsPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }

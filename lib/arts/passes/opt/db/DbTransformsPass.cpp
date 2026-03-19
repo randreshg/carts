@@ -28,7 +28,11 @@
 #include "arts/analysis/graphs/db/DbGraph.h"
 #include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_DBTRANSFORMS
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/transforms/db/transforms/GUIDRangeDetection.h"
 #include "arts/utils/DbUtils.h"
@@ -45,7 +49,7 @@ using namespace mlir::func;
 using namespace mlir::arts;
 
 namespace {
-struct DbTransformsPass : public arts::DbTransformsBase<DbTransformsPass> {
+struct DbTransformsPass : public arts::impl::DbTransformsBase<DbTransformsPass> {
   DbTransformsPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }

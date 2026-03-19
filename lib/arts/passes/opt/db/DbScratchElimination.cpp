@@ -9,7 +9,11 @@
 #include "arts/Dialect.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_DBSCRATCHELIMINATION
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
@@ -247,7 +251,7 @@ static void eraseIfPresent(Operation *op) {
 }
 
 struct DbScratchEliminationPass
-    : public arts::DbScratchEliminationBase<DbScratchEliminationPass> {
+    : public arts::impl::DbScratchEliminationBase<DbScratchEliminationPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     SmallVector<ScratchCandidate, 8> candidates;

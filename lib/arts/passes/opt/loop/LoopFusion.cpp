@@ -38,7 +38,11 @@
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_LOOPFUSION
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Utils.h"
@@ -53,7 +57,7 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
-struct LoopFusionPass : public arts::LoopFusionBase<LoopFusionPass> {
+struct LoopFusionPass : public arts::impl::LoopFusionBase<LoopFusionPass> {
   LoopFusionPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }
