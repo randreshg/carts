@@ -92,7 +92,7 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   setPartitionMode(acquire.getOperation(), PartitionMode::stencil);
 
   /// Update acquire's ptr result type to match new source
-  MemRefType newPtrType = acquire.getSourcePtr().getType().cast<MemRefType>();
+  MemRefType newPtrType = cast<MemRefType>(acquire.getSourcePtr().getType());
   Type oldAcqPtrType = acquire.getPtr().getType();
   if (oldAcqPtrType != newPtrType) {
     acquire.getPtr().setType(newPtrType);
@@ -503,8 +503,8 @@ bool DbStencilRewriter::rebaseEdtUsersAsBlock(DbAcquireOp acquire,
 
   if (!targetType) {
     targetType = blockArg.getType();
-    if (auto outer = targetType.dyn_cast<MemRefType>())
-      if (auto inner = outer.getElementType().dyn_cast<MemRefType>())
+    if (auto outer = dyn_cast<MemRefType>(targetType))
+      if (auto inner = dyn_cast<MemRefType>(outer.getElementType()))
         targetType = inner;
   }
   if (!targetType.isa_and_nonnull<MemRefType>())
@@ -644,7 +644,7 @@ void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
     Value rowIdx;
     bool rowFromLoad = false;
     unsigned elemRank = 0;
-    if (auto memrefTy = newElementType.dyn_cast<MemRefType>())
+    if (auto memrefTy = dyn_cast<MemRefType>(newElementType))
       elemRank = memrefTy.getRank();
 
     bool loadIncludesRow = (loadStoreIndices.size() > 1) || (elemRank == 1);
@@ -737,11 +737,11 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
   }
   if (!targetType) {
     targetType = localView.getType();
-    if (auto outer = targetType.dyn_cast<MemRefType>())
-      if (auto inner = outer.getElementType().dyn_cast<MemRefType>())
+    if (auto outer = dyn_cast<MemRefType>(targetType))
+      if (auto inner = dyn_cast<MemRefType>(outer.getElementType()))
         targetType = inner;
   }
-  if (!targetType || !targetType.isa<MemRefType>())
+  if (!targetType || !isa<MemRefType>(targetType))
     return false;
 
   Type derivedType = targetType;

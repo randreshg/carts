@@ -64,7 +64,7 @@ static Value cloneValueIntoEdtIfNeeded(Value val, EdtOp edt, OpBuilder &builder,
   /// For block arguments from outside, we can't clone them - they must be
   /// passed as EDT parameters by EdtLowering. Return the original and
   /// EdtLowering will handle it.
-  if (val.isa<BlockArgument>())
+  if (isa<BlockArgument>(val))
     return val;
 
   Operation *defOp = val.getDefiningOp();
@@ -113,7 +113,7 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
   }
 
   /// Update acquire's ptr result type to match new source
-  MemRefType newPtrType = acquire.getSourcePtr().getType().cast<MemRefType>();
+  MemRefType newPtrType = cast<MemRefType>(acquire.getSourcePtr().getType());
   Type oldAcqPtrType = acquire.getPtr().getType();
   if (oldAcqPtrType != newPtrType) {
     acquire.getPtr().setType(newPtrType);
@@ -412,8 +412,8 @@ bool DbBlockRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
 
   if (!targetType) {
     targetType = localView.getType();
-    if (auto outer = targetType.dyn_cast<MemRefType>())
-      if (auto inner = outer.getElementType().dyn_cast<MemRefType>())
+    if (auto outer = dyn_cast<MemRefType>(targetType))
+      if (auto inner = dyn_cast<MemRefType>(outer.getElementType()))
         targetType = inner;
   }
   if (!targetType.isa_and_nonnull<MemRefType>())

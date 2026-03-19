@@ -520,7 +520,7 @@ private:
 
     /// Prepare common values
     Value edtGuidValue = edtGuid;
-    if (auto mt = edtGuid.getType().dyn_cast<MemRefType>()) {
+    if (auto mt = dyn_cast<MemRefType>(edtGuid.getType())) {
       auto zeroIndex = AC->createIndexConstant(0, loc);
       edtGuidValue =
           AC->create<memref::LoadOp>(loc, edtGuid, ValueRange{zeroIndex});
@@ -617,7 +617,7 @@ struct EdtParamPackPattern : public ArtsToLLVMPattern<EdtParamPackOp> {
 
     auto loc = op.getLoc();
     auto params = op.getParams();
-    auto resultType = op.getMemref().getType().dyn_cast<MemRefType>();
+    auto resultType = dyn_cast<MemRefType>(op.getMemref().getType());
     if (!resultType)
       return op.emitError("Expected MemRef type for result");
 
@@ -765,7 +765,7 @@ struct DbGepOpPattern : public ArtsToLLVMPattern<arts::DbGepOp> {
 
     /// If base is a memref of pointers, we must load the pointer element;
     /// otherwise we compute the address within the element buffer.
-    auto baseMT = base.getType().dyn_cast<MemRefType>();
+    auto baseMT = dyn_cast<MemRefType>(base.getType());
 
     /// Pad strides with 1s to match indices length
     SmallVector<Value> paddedStrides(strides.begin(), strides.end());
@@ -816,7 +816,7 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
 
     /// Calculate parameter count from memref size
     Value paramc;
-    if (auto memrefType = paramv.getType().dyn_cast<MemRefType>()) {
+    if (auto memrefType = dyn_cast<MemRefType>(paramv.getType())) {
       if (memrefType.hasStaticShape() && memrefType.getNumElements() == 0) {
         paramc = AC->createIntConstant(0, AC->Int32, loc);
       } else {
@@ -1033,7 +1033,7 @@ private:
         if (!visited.insert(value).second || mapper.contains(value))
           return success();
 
-        if (auto blockArg = value.dyn_cast<BlockArgument>())
+        if (auto blockArg = dyn_cast<BlockArgument>(value))
           return mapper.contains(blockArg) ? success() : failure();
 
         Operation *defOp = value.getDefiningOp();
@@ -1209,7 +1209,7 @@ private:
                 workerMapper.contains(value))
               return success();
 
-            if (auto blockArg = value.dyn_cast<BlockArgument>())
+            if (auto blockArg = dyn_cast<BlockArgument>(value))
               return workerMapper.contains(blockArg) ? success() : failure();
 
             Operation *defOp = value.getDefiningOp();
@@ -1502,13 +1502,13 @@ struct DbAcquirePattern : public ArtsToLLVMPattern<DbAcquireOp> {
           AC->computeStridesFromSizes(sourceSizes, loc);
       /// Guid llvm type - underlying storage is always linear (rank-1)
       /// regardless of DbAcquireOp's multi-dimensional sizes
-      auto origGuidMT = op.getGuid().getType().dyn_cast<MemRefType>();
+      auto origGuidMT = dyn_cast<MemRefType>(op.getGuid().getType());
       auto llvmGuidType = LLVM::LLVMPointerType::get(
           AC->getContext(), origGuidMT.getMemorySpaceAsInt());
       auto loadedGuid =
           AC->create<DbGepOp>(loc, llvmGuidType, sourceGuid, indices, strides);
       /// Ptr llvm type - same: underlying storage is linear
-      auto origPtrMT = op.getPtr().getType().dyn_cast<MemRefType>();
+      auto origPtrMT = dyn_cast<MemRefType>(op.getPtr().getType());
       auto llvmPtrType = LLVM::LLVMPointerType::get(
           AC->getContext(), origPtrMT.getMemorySpaceAsInt());
       auto loadedPtr =
@@ -1600,7 +1600,7 @@ struct DbNumElementsPattern : public ArtsToLLVMPattern<DbNumElementsOp> {
     int64_t folded = 1;
     for (Value sz : sizes) {
       if (auto cst = dyn_cast_or_null<arith::ConstantOp>(sz.getDefiningOp())) {
-        if (auto intAttr = cst.getValue().dyn_cast<IntegerAttr>()) {
+        if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue())) {
           folded *= intAttr.getInt();
           continue;
         }
@@ -1633,7 +1633,7 @@ struct AllocPattern : public ArtsToLLVMPattern<AllocOp> {
                                 PatternRewriter &rewriter) const override {
     ARTS_INFO("Lowering Alloc Op " << op);
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
-    auto resultType = op.getResult().getType().dyn_cast<MemRefType>();
+    auto resultType = dyn_cast<MemRefType>(op.getResult().getType());
     if (!resultType)
       return op.emitError("Expected MemRef type for result");
     return success();
@@ -1726,7 +1726,7 @@ void ConvertArtsToLLVMPass::runOnOperation() {
     ARTS_INFO("Running core patterns");
     RewritePatternSet corePatterns(context);
     populateCorePatterns(corePatterns);
-    if (failed(applyPatternsAndFoldGreedily(module, std::move(corePatterns),
+    if (failed(applyPatternsGreedily(module, std::move(corePatterns),
                                             config))) {
       ARTS_ERROR("Failed to apply core ARTS to LLVM conversion patterns");
       return signalPassFailure();
@@ -1738,7 +1738,7 @@ void ConvertArtsToLLVMPass::runOnOperation() {
     ARTS_INFO("Running db patterns");
     RewritePatternSet dbPatterns(context);
     populateDbPatterns(dbPatterns);
-    if (failed(applyPatternsAndFoldGreedily(module, std::move(dbPatterns),
+    if (failed(applyPatternsGreedily(module, std::move(dbPatterns),
                                             config))) {
       ARTS_ERROR("Failed to apply DbAcquire/DbRelease conversion patterns");
       return signalPassFailure();
@@ -1752,7 +1752,7 @@ void ConvertArtsToLLVMPass::runOnOperation() {
     otherPatterns.add<DbAllocPattern, DbFreePattern>(context, AC);
     otherPatterns.add<DbNumElementsPattern>(context, AC);
     otherPatterns.add<YieldPattern, UndefPattern>(context, AC);
-    if (failed(applyPatternsAndFoldGreedily(module, std::move(otherPatterns),
+    if (failed(applyPatternsGreedily(module, std::move(otherPatterns),
                                             config))) {
       ARTS_ERROR("Failed to apply other conversion patterns");
       return signalPassFailure();

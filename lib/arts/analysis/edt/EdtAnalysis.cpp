@@ -271,7 +271,7 @@ static bool isDefOpInvariant(Region &edtRegion, Value v,
   if (ValueAnalysis::isValueConstant(v))
     return true;
 
-  if (auto blockArg = v.dyn_cast<BlockArgument>())
+  if (auto blockArg = dyn_cast<BlockArgument>(v))
     return isBlockArgInvariant(edtRegion, blockArg);
 
   Operation *defOp = v.getDefiningOp();
@@ -303,7 +303,7 @@ bool EdtAnalysis::isInvariantInEdt(Region &edtRegion, Value value) {
     return false;
 
   /// Check for pointer-like types and their users
-  if (!value.getType().isa<MemRefType, UnrankedMemRefType>())
+  if (!isa<MemRefType, UnrankedMemRefType>(value.getType()))
     return true;
 
   for (Operation *user : value.getUsers()) {

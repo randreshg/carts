@@ -46,7 +46,7 @@ std::pair<bool, Value> DbIndexerBase::detectLinearizedStride(ValueRange indices,
   if (indices.size() != 1)
     return {false, Value()};
 
-  auto memrefType = elementType.dyn_cast<MemRefType>();
+  auto memrefType = dyn_cast<MemRefType>(elementType);
   if (!memrefType || memrefType.getRank() < 2)
     return {false, Value()};
 

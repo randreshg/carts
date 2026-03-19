@@ -127,7 +127,7 @@ static Value traceWrapperLoadToAlloc(Value val) {
       break;
 
     Value wrapper = loadOp.getMemref();
-    auto wrapperType = wrapper.getType().dyn_cast<MemRefType>();
+    auto wrapperType = dyn_cast<MemRefType>(wrapper.getType());
     if (!wrapperType || wrapperType.getRank() != 0)
       break;
 
@@ -162,7 +162,7 @@ static bool isInnerWrapperOfInlinedPattern(Value alloc) {
       for (Operation *loadUser : loadOp.getResult().getUsers()) {
         if (auto storeOp = dyn_cast<memref::StoreOp>(loadUser)) {
           auto storeDest = storeOp.getMemref();
-          auto storeDestType = storeDest.getType().dyn_cast<MemRefType>();
+          auto storeDestType = dyn_cast<MemRefType>(storeDest.getType());
           if (storeDestType && storeDestType.getRank() == 0 &&
               storeDest.getDefiningOp<memref::AllocaOp>()) {
             return true;
@@ -257,7 +257,7 @@ void RaiseMemRefDimensionalityPass::runOnOperation() {
       return;
     for (unsigned i = 0; i < dependVars.size(); ++i) {
       Value depVar = dependVars[i];
-      auto depAttr = dependAttrs[i].cast<omp::ClauseTaskDependAttr>();
+      auto depAttr = cast<omp::ClauseTaskDependAttr>(dependAttrs[i]);
       taskDepsByValue[depVar].push_back({taskOp, i, depAttr.getValue()});
     }
   });
@@ -358,13 +358,13 @@ RaiseMemRefDimensionalityPass::detectPattern(Value alloc) {
   pattern.rootAlloc = alloc;
   pattern.storeToWrapper = nullptr;
 
-  auto allocType = alloc.getType().dyn_cast<MemRefType>();
+  auto allocType = dyn_cast<MemRefType>(alloc.getType());
   if (!allocType)
     return std::nullopt;
 
   /// Check for Wrapper Alloca (rank-0 alloca storing the pointer)
   if (allocType.getRank() == 0) {
-    auto elemType = allocType.getElementType().dyn_cast<MemRefType>();
+    auto elemType = dyn_cast<MemRefType>(allocType.getElementType());
     if (!elemType)
       return std::nullopt;
 
@@ -384,7 +384,7 @@ RaiseMemRefDimensionalityPass::detectPattern(Value alloc) {
             pattern.wrapperAlloca = alloc;
             pattern.rootAlloc = storedVal; /// Keep cast result for SROA
             pattern.storeToWrapper = storeOp;
-            allocType = storedVal.getType().cast<MemRefType>();
+            allocType = cast<MemRefType>(storedVal.getType());
             break;
           }
 
@@ -397,10 +397,10 @@ RaiseMemRefDimensionalityPass::detectPattern(Value alloc) {
           ///   memref.store %result, %outer_wrapper[]  /// current store
           if (auto loadOp = storedVal.getDefiningOp<memref::LoadOp>()) {
             Value loadSource = loadOp.getMemref();
-            auto loadSourceType = loadSource.getType().dyn_cast<MemRefType>();
+            auto loadSourceType = dyn_cast<MemRefType>(loadSource.getType());
             /// Check if load source is a rank-0 wrapper alloca
             if (loadSourceType && loadSourceType.getRank() == 0 &&
-                loadSourceType.getElementType().isa<MemRefType>() &&
+                isa<MemRefType>(loadSourceType.getElementType()) &&
                 loadSource.getDefiningOp<memref::AllocaOp>()) {
               /// Trace through inner wrapper to find root allocation
               Value rootAlloc = traceWrapperLoadToAlloc(storedVal);
@@ -409,7 +409,7 @@ RaiseMemRefDimensionalityPass::detectPattern(Value alloc) {
                 pattern.wrapperAlloca = alloc;
                 pattern.rootAlloc = rootAlloc;
                 pattern.storeToWrapper = storeOp;
-                allocType = rootAlloc.getType().cast<MemRefType>();
+                allocType = cast<MemRefType>(rootAlloc.getType());
                 break;
               }
             }
@@ -432,7 +432,7 @@ RaiseMemRefDimensionalityPass::detectPattern(Value alloc) {
       for (Operation *user : llvm::make_early_inc_range(alloc.getUsers())) {
         if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
           cleanupBuilder.setInsertionPoint(loadOp);
-          auto memType = loadOp.getType().cast<MemRefType>();
+          auto memType = cast<MemRefType>(loadOp.getType());
           SmallVector<Value> dynSizes;
           for (int64_t d = 0; d < memType.getRank(); ++d) {
             if (memType.isDynamicDim(d)) {
@@ -446,7 +446,7 @@ RaiseMemRefDimensionalityPass::detectPattern(Value alloc) {
           cleanup.insert(loadOp);
         } else if (auto affineLoad = dyn_cast<affine::AffineLoadOp>(user)) {
           cleanupBuilder.setInsertionPoint(affineLoad);
-          auto memType = affineLoad.getType().cast<MemRefType>();
+          auto memType = cast<MemRefType>(affineLoad.getType());
           SmallVector<Value> dynSizes;
           for (int64_t d = 0; d < memType.getRank(); ++d) {
             if (memType.isDynamicDim(d)) {
@@ -498,7 +498,7 @@ RaiseMemRefDimensionalityPass::detectPattern(Value alloc) {
   ///   /// All uses of %loaded replaced with %alloc
   ///   /// Wrapper alloca removed
   ///
-  if (pattern.wrapperAlloca && !elemType.isa<MemRefType>()) {
+  if (pattern.wrapperAlloca && !isa<MemRefType>(elemType)) {
     ARTS_DEBUG("Detected simple wrapper pattern (1D array)");
 
     /// Get array size from allocation
@@ -512,7 +512,7 @@ RaiseMemRefDimensionalityPass::detectPattern(Value alloc) {
       auto underlyingAlloc =
           underlying ? underlying.getDefiningOp<memref::AllocOp>() : nullptr;
       auto underlyingType =
-          underlying ? underlying.getType().cast<MemRefType>() : allocType;
+          underlying ? cast<MemRefType>(underlying.getType()) : allocType;
 
       if (allocType.isDynamicDim(0)) {
         /// Case 1: underlying alloc has dynamic sizes
@@ -545,7 +545,7 @@ RaiseMemRefDimensionalityPass::detectPattern(Value alloc) {
   /// =======================================================================
   /// Pattern: memref<?xmemref<?xT>> with initialization loop
   /// rootAlloc must be an array of pointers (memref<?xmemref<...>>)
-  if (!elemType.isa<MemRefType>())
+  if (!isa<MemRefType>(elemType))
     return std::nullopt;
 
   /// Get outer dimension size
@@ -723,7 +723,7 @@ void RaiseMemRefDimensionalityPass::collectAccessesRecursively(
     Value current, SmallVector<Value> &indices, SmallVector<Operation *> &chain,
     SmallVector<AccessInfo> &accesses) {
 
-  auto memType = current.getType().dyn_cast<MemRefType>();
+  auto memType = dyn_cast<MemRefType>(current.getType());
   if (!memType)
     return;
 
@@ -746,7 +746,7 @@ void RaiseMemRefDimensionalityPass::collectAccessesRecursively(
       }
       newChain.push_back(loadOp);
 
-      if (loadOp.getType().isa<MemRefType>()) {
+      if (isa<MemRefType>(loadOp.getType())) {
         /// Intermediate load (returns row pointer), recurse
         collectAccessesRecursively(loadOp.getResult(), newIndices, newChain,
                                    accesses);
@@ -764,7 +764,7 @@ void RaiseMemRefDimensionalityPass::collectAccessesRecursively(
         continue;
 
       /// Skip stores of memref values (these are init loop stores)
-      if (storeOp.getValue().getType().isa<MemRefType>())
+      if (isa<MemRefType>(storeOp.getValue().getType()))
         continue;
 
       SmallVector<Value> newIndices = indices;
@@ -831,10 +831,10 @@ RaiseMemRefDimensionalityPass::analyzeDepVar(Value depVar, AllocPattern &pattern
 
     /// Add subview offsets
     for (auto offset : subview.getMixedOffsets()) {
-      if (auto val = offset.dyn_cast<Value>())
+      if (auto val = dyn_cast<Value>(offset))
         info.indices.push_back(val);
       else {
-        auto attr = offset.get<Attribute>().cast<IntegerAttr>();
+        auto attr = cast<IntegerAttr>(offset.get<Attribute>());
         info.indices.push_back(
             arts::createConstantIndex(builder, loc, attr.getInt()));
       }
@@ -842,10 +842,10 @@ RaiseMemRefDimensionalityPass::analyzeDepVar(Value depVar, AllocPattern &pattern
 
     /// Get sizes from subview
     for (auto size : subview.getMixedSizes()) {
-      if (auto val = size.dyn_cast<Value>())
+      if (auto val = dyn_cast<Value>(size))
         info.sizes.push_back(val);
       else {
-        auto attr = size.get<Attribute>().cast<IntegerAttr>();
+        auto attr = cast<IntegerAttr>(size.get<Attribute>());
         info.sizes.push_back(arts::createConstantIndex(builder, loc, attr.getInt()));
       }
     }
@@ -961,7 +961,7 @@ RaiseMemRefDimensionalityPass::traceToPattern(Value val, AllocPattern &pattern) 
       result.chainOps = innerResult->chainOps;
 
       /// Add indices from this load
-      auto memType = loadOp.getMemref().getType().cast<MemRefType>();
+      auto memType = cast<MemRefType>(loadOp.getMemref().getType());
       if (memType.getRank() > 0) {
         result.indices.append(loadOp.getIndices().begin(),
                               loadOp.getIndices().end());
@@ -986,7 +986,7 @@ RaiseMemRefDimensionalityPass::traceValueToPattern(Value val, AllocPattern &patt
       result.chainOps = memResult->chainOps;
 
       /// Add final load indices
-      auto memType = loadOp.getMemref().getType().cast<MemRefType>();
+      auto memType = cast<MemRefType>(loadOp.getMemref().getType());
       if (memType.getRank() > 0) {
         result.indices.append(loadOp.getIndices().begin(),
                               loadOp.getIndices().end());
@@ -1382,7 +1382,7 @@ void RaiseMemRefDimensionalityPass::handleDeallocations(
         return true;
       if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
         /// If load returns a memref (not scalar), recurse
-        if (loadOp.getResult().getType().isa<MemRefType>()) {
+        if (isa<MemRefType>(loadOp.getResult().getType())) {
           if (isEventuallyDeallocated(loadOp.getResult(), depth + 1))
             return true;
         }
@@ -1419,7 +1419,7 @@ void RaiseMemRefDimensionalityPass::handleDeallocations(
         Value loadResult = loadOp.getResult();
 
         /// For memref results, check recursively
-        if (loadResult.getType().isa<MemRefType>()) {
+        if (isa<MemRefType>(loadResult.getType())) {
           eventuallyDeallocated =
               isEventuallyDeallocated(loadResult, depth + 1);
         } else {
@@ -1466,7 +1466,7 @@ void RaiseMemRefDimensionalityPass::handleDeallocations(
         /// Use recursive check for N-level patterns
         bool usedForDealloc = false;
         Value loadResult = loadOp.getResult();
-        if (loadResult.getType().isa<MemRefType>()) {
+        if (isa<MemRefType>(loadResult.getType())) {
           usedForDealloc = isEventuallyDeallocated(loadResult, 0);
         } else {
           /// For scalar loads, check direct dealloc (shouldn't happen)
@@ -1682,7 +1682,7 @@ bool RaiseMemRefDimensionalityPass::extractNestedAllocations(Value storedVal,
   pattern.initStores.push_back(storeOp);
   pattern.nestedAllocs.push_back(innerAlloc);
 
-  auto innerType = innerAlloc.getType().cast<MemRefType>();
+  auto innerType = cast<MemRefType>(innerAlloc.getType());
 
   /// Extract dimension for this level
   Value innerSize;
@@ -1702,7 +1702,7 @@ bool RaiseMemRefDimensionalityPass::extractNestedAllocations(Value storedVal,
   Type elemType = innerType.getElementType();
 
   /// Check if we've reached the final scalar element type
-  if (!elemType.isa<MemRefType>()) {
+  if (!isa<MemRefType>(elemType)) {
     /// Base case: scalar element type - pattern is complete
     pattern.finalElementType = elemType;
     ARTS_DEBUG("  Found scalar element type at depth " << depth << ": "

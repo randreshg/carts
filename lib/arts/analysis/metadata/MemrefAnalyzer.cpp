@@ -265,16 +265,16 @@ bool MemrefAnalyzer::hasStencilAccessPattern(Value memref, Operation *scopeOp) {
       AffineMap map = affineLoad.getAffineMap();
       for (AffineExpr expr : map.getResults()) {
         /// Binary expression: look for additions with constant operands
-        if (auto binExpr = expr.dyn_cast<AffineBinaryOpExpr>()) {
+        if (auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr)) {
           if (binExpr.getKind() == AffineExprKind::Add) {
             if (auto rhsConst =
-                    binExpr.getRHS().dyn_cast<AffineConstantExpr>()) {
+                    dyn_cast<AffineConstantExpr>(binExpr.getRHS())) {
               int64_t offset = rhsConst.getValue();
               ARTS_DEBUG("  Found affine load offset: " << offset);
               constantOffsets.insert(offset);
             }
           }
-        } else if (expr.dyn_cast<AffineDimExpr>()) {
+        } else if (dyn_cast<AffineDimExpr>(expr)) {
           /// Direct dimension access (offset = 0), e.g., affine_map<(d0) ->
           /// (d0)>
           ARTS_DEBUG("  Found direct dimension access (offset=0)");
@@ -285,16 +285,16 @@ bool MemrefAnalyzer::hasStencilAccessPattern(Value memref, Operation *scopeOp) {
     } else if (auto affineStore = dyn_cast<affine::AffineStoreOp>(op)) {
       AffineMap map = affineStore.getAffineMap();
       for (AffineExpr expr : map.getResults()) {
-        if (auto binExpr = expr.dyn_cast<AffineBinaryOpExpr>()) {
+        if (auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr)) {
           if (binExpr.getKind() == AffineExprKind::Add) {
             if (auto rhsConst =
-                    binExpr.getRHS().dyn_cast<AffineConstantExpr>()) {
+                    dyn_cast<AffineConstantExpr>(binExpr.getRHS())) {
               int64_t offset = rhsConst.getValue();
               ARTS_DEBUG("  Found affine store offset: " << offset);
               constantOffsets.insert(offset);
             }
           }
-        } else if (expr.dyn_cast<AffineDimExpr>()) {
+        } else if (dyn_cast<AffineDimExpr>(expr)) {
           ARTS_DEBUG("  Found direct dimension access (offset=0)");
           constantOffsets.insert(0);
         }
@@ -309,7 +309,7 @@ bool MemrefAnalyzer::hasStencilAccessPattern(Value memref, Operation *scopeOp) {
     /// expressions by pattern matching common forms: iv, iv+c, iv-c
     for (Value idx : indices) {
       /// Check if this is a simple induction variable (offset = 0)
-      if (auto arg = idx.dyn_cast<BlockArgument>()) {
+      if (auto arg = dyn_cast<BlockArgument>(idx)) {
         Operation *parent = arg.getOwner()->getParentOp();
         if (isa<affine::AffineForOp, scf::ForOp>(parent)) {
           constantOffsets.insert(0);
@@ -409,7 +409,7 @@ void MemrefAnalyzer::analyzeAllocation(Operation *allocOp,
                                        MemrefMetadata *metadata,
                                        Operation *scopeOp) {
   Value memref = allocOp->getResult(0);
-  auto memrefType = memref.getType().cast<MemRefType>();
+  auto memrefType = cast<MemRefType>(memref.getType());
 
   /// Basic properties
   metadata->rank = memrefType.getRank();
@@ -493,7 +493,7 @@ bool MemrefAnalyzer::hasLoopCarriedDependencies(Value memref) const {
 SmallVector<MemrefMetadata::DimAccessPatternType>
 MemrefAnalyzer::computeDimAccessPatterns(Value memref, Operation *scopeOp) {
   SmallVector<MemrefMetadata::DimAccessPatternType> patterns;
-  auto type = memref.getType().dyn_cast<MemRefType>();
+  auto type = dyn_cast<MemRefType>(memref.getType());
   if (!type)
     return patterns;
 
@@ -553,7 +553,7 @@ MemrefAnalyzer::computeEstimatedAccessBytes(Value memref,
   if (!metadata || !metadata->accessStats.totalAccesses)
     return std::nullopt;
 
-  auto type = memref.getType().dyn_cast<MemRefType>();
+  auto type = dyn_cast<MemRefType>(memref.getType());
   if (!type)
     return std::nullopt;
 

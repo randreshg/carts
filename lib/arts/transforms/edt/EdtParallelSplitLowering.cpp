@@ -63,7 +63,7 @@ void ParallelRegionSplitAnalysis::analyzeDependenciesForSplit(
                                   SetVector<BlockArgument> &result) {
     op->walk([&](Operation *nested) {
       for (Value operand : nested->getOperands()) {
-        if (auto blockArg = operand.dyn_cast<BlockArgument>()) {
+        if (auto blockArg = dyn_cast<BlockArgument>(operand)) {
           if (blockArg.getOwner() == &parallelBlock)
             result.insert(blockArg);
         }
