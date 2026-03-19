@@ -17,7 +17,11 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_CONTRACTVALIDATION
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
@@ -37,7 +41,7 @@ using namespace mlir::arts;
 namespace {
 
 struct ContractValidationPass
-    : public arts::ContractValidationBase<ContractValidationPass> {
+    : public arts::impl::ContractValidationBase<ContractValidationPass> {
 
   ContractValidationPass() = default;
   explicit ContractValidationPass(bool fail) { this->failOnError = fail; }

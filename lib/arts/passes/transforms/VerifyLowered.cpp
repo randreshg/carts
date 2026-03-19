@@ -8,14 +8,18 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_VERIFYLOWERED
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "mlir/Pass/Pass.h"
 
 using namespace mlir;
 
 namespace {
-struct VerifyLoweredPass : public arts::VerifyLoweredBase<VerifyLoweredPass> {
+struct VerifyLoweredPass : public arts::impl::VerifyLoweredBase<VerifyLoweredPass> {
   void runOnOperation() override {
     bool found = false;
     getOperation().walk([&](Operation *op) {

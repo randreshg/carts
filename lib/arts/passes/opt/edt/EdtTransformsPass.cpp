@@ -46,7 +46,11 @@
 #include "arts/analysis/graphs/edt/EdtGraph.h"
 #include "arts/analysis/graphs/edt/EdtNode.h"
 #include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_EDTTRANSFORMS
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
@@ -87,7 +91,7 @@ constexpr llvm::StringLiteral Tree = "tree";
 constexpr llvm::StringLiteral LocalAccumulate = "local_accumulate";
 } // namespace ReductionStrategyNames
 
-struct EdtTransformsPass : public arts::EdtTransformsBase<EdtTransformsPass> {
+struct EdtTransformsPass : public arts::impl::EdtTransformsBase<EdtTransformsPass> {
   EdtTransformsPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }

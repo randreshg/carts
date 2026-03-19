@@ -21,7 +21,11 @@
 ///
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_SCALARREPLACEMENT
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -292,7 +296,7 @@ static LogicalResult transformReduction(ReductionPattern &pattern,
 }
 
 struct ScalarReplacementPass
-    : public ScalarReplacementBase<ScalarReplacementPass> {
+    : public impl::ScalarReplacementBase<ScalarReplacementPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     ARTS_INFO_HEADER(ScalarReplacementPass);

@@ -6,7 +6,11 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_LOWERINGCONTRACTCLEANUP
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -19,7 +23,7 @@ using namespace mlir::arts;
 namespace {
 
 struct LoweringContractCleanupPass
-    : public arts::LoweringContractCleanupBase<LoweringContractCleanupPass> {
+    : public arts::impl::LoweringContractCleanupBase<LoweringContractCleanupPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     SmallVector<LoweringContractOp, 16> contracts;

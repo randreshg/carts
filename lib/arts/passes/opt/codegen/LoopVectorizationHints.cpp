@@ -30,7 +30,11 @@
 ///   }
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_LOOPVECTORIZATIONHINTS
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
@@ -340,7 +344,7 @@ createOuterLoopHints(MLIRContext *ctx, bool mustProgress, unsigned unrollCount,
 }
 
 struct LoopVectorizationHintsPass
-    : public LoopVectorizationHintsBase<LoopVectorizationHintsPass> {
+    : public impl::LoopVectorizationHintsBase<LoopVectorizationHintsPass> {
   unsigned vectorWidth = 0;
   unsigned interleaveCount = 4;
   bool enableScalable = false;

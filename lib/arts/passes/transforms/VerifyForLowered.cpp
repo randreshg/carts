@@ -7,7 +7,11 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_VERIFYFORLOWERED
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "mlir/Pass/Pass.h"
 
@@ -15,7 +19,7 @@ using namespace mlir;
 
 namespace {
 struct VerifyForLoweredPass
-    : public arts::VerifyForLoweredBase<VerifyForLoweredPass> {
+    : public arts::impl::VerifyForLoweredBase<VerifyForLoweredPass> {
   void runOnOperation() override {
     bool found = false;
     getOperation().walk([&](arts::ForOp op) {

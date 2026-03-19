@@ -14,7 +14,11 @@
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_PATTERNDISCOVERY
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/metadata/LoopMetadata.h"
@@ -626,7 +630,7 @@ static bool stampExplicitStencilContract(
 }
 
 struct PatternDiscoveryPass
-    : public arts::PatternDiscoveryBase<PatternDiscoveryPass> {
+    : public arts::impl::PatternDiscoveryBase<PatternDiscoveryPass> {
   PatternDiscoveryPass() = default;
   PatternDiscoveryPass(mlir::arts::AnalysisManager *AM, bool refineMode)
       : analysisManager(AM) {

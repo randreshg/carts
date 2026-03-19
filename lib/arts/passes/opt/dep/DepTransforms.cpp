@@ -11,7 +11,11 @@
 ///   - JacobiAlternatingBuffersPattern
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_DEPTRANSFORMS
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/transforms/dep/DepTransform.h"
 #include "arts/utils/Debug.h"
@@ -24,7 +28,7 @@ using namespace mlir::arts;
 
 namespace {
 
-struct DepTransformsPass : public arts::DepTransformsBase<DepTransformsPass> {
+struct DepTransformsPass : public arts::impl::DepTransformsBase<DepTransformsPass> {
   using Base::Base;
 
   void runOnOperation() override {

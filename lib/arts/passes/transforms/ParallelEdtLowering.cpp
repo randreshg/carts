@@ -19,7 +19,11 @@
 
 #include "arts/Dialect.h"
 #include "arts/analysis/heuristics/DistributionHeuristics.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_PARALLELEDTLOWERING
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
@@ -141,7 +145,7 @@ static void routeEdtsToWorker(Operation *op, Value workerRoute) {
 }
 
 class ParallelEdtLoweringPass
-    : public arts::ParallelEdtLoweringBase<ParallelEdtLoweringPass> {
+    : public arts::impl::ParallelEdtLoweringBase<ParallelEdtLoweringPass> {
 public:
   void runOnOperation() override {
     ModuleOp module = getOperation();

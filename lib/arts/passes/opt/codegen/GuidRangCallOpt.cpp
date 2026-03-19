@@ -30,7 +30,11 @@
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/codegen/Types.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_GUIDRANGCALLOPT
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -73,7 +77,7 @@ static bool isGuidReserveCall(func::CallOp call) {
 }
 
 struct GuidRangCallOptPass
-    : public arts::GuidRangCallOptBase<GuidRangCallOptPass> {
+    : public arts::impl::GuidRangCallOptBase<GuidRangCallOptPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     ArtsCodegen codegen(module, /*debug=*/false);

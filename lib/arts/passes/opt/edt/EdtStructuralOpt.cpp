@@ -26,7 +26,12 @@
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/graphs/edt/EdtGraph.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_EDTALLOCASINKING
+#define GEN_PASS_DEF_EDTSTRUCTURALOPT
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 /// Other
 #include "mlir/IR/Dominance.h"
@@ -193,7 +198,7 @@ static void processRegionForParallelEdtFusion(Region &region, bool &changed) {
 ///===----------------------------------------------------------------------===///
 namespace {
 struct EdtStructuralOptPass
-    : public arts::EdtStructuralOptBase<EdtStructuralOptPass> {
+    : public arts::impl::EdtStructuralOptBase<EdtStructuralOptPass> {
   EdtStructuralOptPass(mlir::arts::AnalysisManager *AM, bool runAnalysis)
       : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
@@ -237,7 +242,7 @@ private:
 };
 
 struct EdtAllocaSinkingPass
-    : public arts::EdtAllocaSinkingBase<EdtAllocaSinkingPass> {
+    : public arts::impl::EdtAllocaSinkingBase<EdtAllocaSinkingPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     module.walk([&](EdtOp edt) { sinkExternalAllocasInEdt(edt); });

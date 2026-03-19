@@ -15,7 +15,11 @@
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_FOROPT
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
@@ -57,7 +61,7 @@ static void annotateAccessPatterns(ModuleOp module,
   });
 }
 
-struct ForOptPass : public arts::ForOptBase<ForOptPass> {
+struct ForOptPass : public arts::impl::ForOptBase<ForOptPass> {
   explicit ForOptPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }

@@ -6,7 +6,11 @@
 /// arrays, token containers, direct memref allocations, block arguments).
 ///===----------------------------------------------------------------------===///
 
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_HANDLEDEPS
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
@@ -59,7 +63,7 @@ static std::optional<Value> getStoredValueToToken(memref::AllocaOp allocaOp) {
   return std::nullopt;
 }
 
-struct HandleDepsPass : public arts::HandleDepsBase<HandleDepsPass> {
+struct HandleDepsPass : public arts::impl::HandleDepsBase<HandleDepsPass> {
   void runOnOperation() override;
 
 private:

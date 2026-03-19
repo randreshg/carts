@@ -19,7 +19,11 @@
 ///    continuation chains, eliminating all inner blocking waits
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_EPOCHOPT
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/Dialect.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/value/ValueAnalysis.h"
@@ -1381,7 +1385,7 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
 ///===----------------------------------------------------------------------===///
 
 namespace {
-struct EpochOptPass : public arts::EpochOptBase<EpochOptPass> {
+struct EpochOptPass : public arts::impl::EpochOptBase<EpochOptPass> {
   EpochOptPass() = default;
 
   EpochOptPass(bool narrowing, bool fusion, bool loopFusion, bool amortization,

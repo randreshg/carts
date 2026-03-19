@@ -7,7 +7,11 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_VERIFYDBCREATED
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "mlir/Pass/Pass.h"
 
@@ -15,7 +19,7 @@ using namespace mlir;
 
 namespace {
 struct VerifyDbCreatedPass
-    : public arts::VerifyDbCreatedBase<VerifyDbCreatedPass> {
+    : public arts::impl::VerifyDbCreatedBase<VerifyDbCreatedPass> {
   void runOnOperation() override {
     auto module = getOperation();
     bool hasEdts = false;

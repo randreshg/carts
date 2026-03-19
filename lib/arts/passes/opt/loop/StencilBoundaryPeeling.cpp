@@ -29,7 +29,11 @@
 ///==========================================================================///
 
 #include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_STENCILBOUNDARYPEELING
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/Utils.h"
@@ -323,7 +327,7 @@ static bool peelBoundaryLoop(BoundaryPeelingMatch &match) {
 }
 
 struct StencilBoundaryPeelingPass
-    : public arts::StencilBoundaryPeelingBase<StencilBoundaryPeelingPass> {
+    : public arts::impl::StencilBoundaryPeelingBase<StencilBoundaryPeelingPass> {
   using Base::Base;
 
   void runOnOperation() override {

@@ -20,7 +20,11 @@
 
 #include "arts/Dialect.h"
 #include "arts/codegen/Codegen.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_DBLOWERING
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/transforms/db/DbLayoutStrategy.h"
 #include "arts/utils/DbUtils.h"
@@ -124,7 +128,7 @@ static void normalizeBlockHaloAcquireSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   acquire.getSizesMutable().assign(sizes);
 }
 
-struct DbLoweringPass : public arts::DbLoweringBase<DbLoweringPass> {
+struct DbLoweringPass : public arts::impl::DbLoweringBase<DbLoweringPass> {
   DbLoweringPass(uint64_t idStride = IdRegistry::DefaultStride)
       : idStride(idStride) {}
   void runOnOperation() override;

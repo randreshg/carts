@@ -18,7 +18,11 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 /// Arts
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_DBMODETIGHTENING
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/graphs/db/DbGraph.h"
@@ -215,7 +219,7 @@ static void collectAcquiresRecursive(DbAcquireNode *acqNode, DbGraph &graph,
 ///===----------------------------------------------------------------------===///
 namespace {
 struct DbModeTighteningPass
-    : public arts::DbModeTighteningBase<DbModeTighteningPass> {
+    : public arts::impl::DbModeTighteningBase<DbModeTighteningPass> {
   DbModeTighteningPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }

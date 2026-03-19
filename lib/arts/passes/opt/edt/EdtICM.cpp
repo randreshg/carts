@@ -14,7 +14,11 @@
 ///==========================================================================///
 
 /// Dialects
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_EDTICM
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/Pass/Pass.h"
@@ -36,7 +40,7 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
-struct EdtICMPass : public arts::EdtICMBase<EdtICMPass> {
+struct EdtICMPass : public arts::impl::EdtICMBase<EdtICMPass> {
   void runOnOperation() override;
 };
 } // end anonymous namespace

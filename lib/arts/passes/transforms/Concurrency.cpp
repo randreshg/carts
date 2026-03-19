@@ -20,7 +20,11 @@
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/graphs/edt/EdtNode.h"
 #include "arts/analysis/heuristics/DistributionHeuristics.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_CONCURRENCY
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
@@ -36,7 +40,7 @@ using namespace mlir::arts;
 ///==========================================================================///
 /// ConcurrencyPass
 ///==========================================================================///
-struct ConcurrencyPass : public ConcurrencyBase<ConcurrencyPass> {
+struct ConcurrencyPass : public impl::ConcurrencyBase<ConcurrencyPass> {
   explicit ConcurrencyPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }

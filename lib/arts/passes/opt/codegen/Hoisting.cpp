@@ -21,7 +21,11 @@
 ///     }
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_HOISTING
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -496,7 +500,7 @@ static bool hoistOutsideEdt(func::FuncOp funcOp) {
 ///===----------------------------------------------------------------------===///
 
 namespace {
-struct ArtsHoistingPass : public arts::HoistingBase<ArtsHoistingPass> {
+struct ArtsHoistingPass : public arts::impl::HoistingBase<ArtsHoistingPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     bool changed = false;

@@ -20,7 +20,11 @@
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/analysis/metadata/MetadataManager.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_VERIFYMETADATA
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 #include "arts/utils/metadata/MemrefMetadata.h"
@@ -43,7 +47,7 @@ using namespace mlir::arts;
 /// VerifyMetadataPass
 ///===----------------------------------------------------------------------===///
 
-struct VerifyMetadataPass : public VerifyMetadataBase<VerifyMetadataPass> {
+struct VerifyMetadataPass : public impl::VerifyMetadataBase<VerifyMetadataPass> {
   mlir::arts::AnalysisManager *analysisManager = nullptr;
 
   VerifyMetadataPass() = default;
