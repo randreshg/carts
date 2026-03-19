@@ -152,10 +152,10 @@ struct ArtsInlinerPass : public arts::ArtsInlinerBase<ArtsInlinerPass> {
         /// Resolve the callable operation
         auto callable = call.getCallableForCallee();
         CallableOpInterface callableOp;
-        if (SymbolRefAttr symRef = callable.dyn_cast<SymbolRefAttr>()) {
+        if (SymbolRefAttr symRef = dyn_cast<SymbolRefAttr>(callable)) {
           callableOp =
               dyn_cast<CallableOpInterface>(module.lookupSymbol(symRef));
-        } else if (auto func = callable.dyn_cast<Value>()) {
+        } else if (auto func = dyn_cast<Value>(callable)) {
           callableOp = dyn_cast<CallableOpInterface>(func.getDefiningOp());
         }
 

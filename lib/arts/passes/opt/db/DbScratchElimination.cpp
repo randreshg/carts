@@ -138,8 +138,8 @@ matchScratchCandidate(DbAllocOp alloc, DominanceInfo &domInfo) {
   if (!DbAnalysis::isCoarseGrained(alloc) || !isSingleSizeOne(alloc.getSizes()))
     return std::nullopt;
 
-  auto ptrType = alloc.getPtr().getType().dyn_cast<MemRefType>();
-  if (!ptrType || !ptrType.getElementType().isa<MemRefType>())
+  auto ptrType = dyn_cast<MemRefType>(alloc.getPtr().getType());
+  if (!ptrType || !isa<MemRefType>(ptrType.getElementType()))
     return std::nullopt;
 
   ScratchCandidate candidate;
@@ -224,7 +224,7 @@ matchScratchCandidate(DbAllocOp alloc, DominanceInfo &domInfo) {
       return std::nullopt;
     if (!edt.getBody().isAncestor(dbRef->getParentRegion()))
       return std::nullopt;
-    auto refType = dbRef.getResult().getType().dyn_cast<MemRefType>();
+    auto refType = dyn_cast<MemRefType>(dbRef.getResult().getType());
     if (!refType)
       return std::nullopt;
     if (getDynamicAllocaSizes(alloc, refType).size() !=

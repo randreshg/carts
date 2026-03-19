@@ -62,7 +62,7 @@ struct FoldDbDimFromDbOps : public OpRewritePattern<DbDimOp> {
     auto cstIdx = op.getDim().getDefiningOp<arith::ConstantIndexOp>();
     if (!cstIdx)
       return failure();
-    int64_t idx = cstIdx.getValue().cast<IntegerAttr>().getInt();
+    int64_t idx = cast<IntegerAttr>(cstIdx.getValue()).getInt();
 
     auto defOp = op.getSource().getDefiningOp();
     if (defOp && (isa<DbAllocOp>(defOp) || isa<DbAcquireOp>(defOp))) {
@@ -241,7 +241,7 @@ LogicalResult EdtOp::verify() {
       return WalkResult::skip();
 
     for (Value operand : op->getOperands()) {
-      if (!operand.getType().isa<MemRefType>())
+      if (!isa<MemRefType>(operand.getType()))
         continue;
 
       if (llvm::is_contained(blockArgs, operand)) {
@@ -518,8 +518,8 @@ void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
 }
 
 MemRefType DbAllocOp::getAllocatedElementType() {
-  auto ptrType = getPtr().getType().cast<MemRefType>();
-  if (auto innerMemRefType = ptrType.getElementType().dyn_cast<MemRefType>())
+  auto ptrType = cast<MemRefType>(getPtr().getType());
+  if (auto innerMemRefType = dyn_cast<MemRefType>(ptrType.getElementType()))
     return innerMemRefType;
 
   return arts::getElementMemRefType(
@@ -802,7 +802,7 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
   }
 
   Type guidType = computeGuidType(builder, sizes);
-  Type ptrType = sourceDbAlloc.getPtr().getType().cast<MemRefType>();
+  Type ptrType = cast<MemRefType>(sourceDbAlloc.getPtr().getType());
 
   addDbAcquireOperandsAndAttrs(builder, state, mode, sourceGuid, sourcePtr,
                                guidType, ptrType, partitionMode, indices,
@@ -1078,7 +1078,7 @@ LogicalResult DbRefOp::verify() {
     dbAllocOp = dyn_cast<DbAllocOp>(underlyingDbOp);
 
   /// Verify output type
-  auto resultType = getResult().getType().cast<MemRefType>();
+  auto resultType = cast<MemRefType>(getResult().getType());
   if (resultType != dbAllocOp.getAllocatedElementType())
     return emitOpError("result type must match source element type\n")
            << *getOperation();

@@ -469,7 +469,7 @@ static void collectExternalValues(Block &sourceBlock, Region *boundaryRegion,
 
     op.walk([&](Operation *nestedOp) {
       for (Value operand : nestedOp->getOperands()) {
-        if (auto blockArg = operand.dyn_cast<BlockArgument>()) {
+        if (auto blockArg = dyn_cast<BlockArgument>(operand)) {
           Region *ownerRegion = blockArg.getOwner()->getParent();
           if (sourceRegion->isAncestor(ownerRegion))
             continue;
@@ -1183,8 +1183,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       continue;
     }
 
-    auto partialPtrType = partialPtr.getType().cast<MemRefType>();
-    auto innerMemrefType = partialPtrType.getElementType().cast<MemRefType>();
+    auto partialPtrType = cast<MemRefType>(partialPtr.getType());
+    auto innerMemrefType = cast<MemRefType>(partialPtrType.getElementType());
 
     /// Acquire the worker's slice of the partial accumulator array
     /// Source directly from DbAllocOp (partialGuid, partialPtr)

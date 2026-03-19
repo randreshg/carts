@@ -41,7 +41,7 @@ struct DepInfo {
 
 /// Check if alloca is a scalar token container (rank-0 or rank-1 with size <= 1)
 static bool isScalarTokenContainer(memref::AllocaOp allocaOp) {
-  auto type = allocaOp.getType().dyn_cast<MemRefType>();
+  auto type = dyn_cast<MemRefType>(allocaOp.getType());
   if (!type)
     return false;
   return type.getRank() == 0 || (type.getRank() == 1 && type.hasStaticShape() &&
@@ -156,7 +156,7 @@ std::optional<DepInfo> HandleDepsPass::extractDepInfo(
   }
 
   /// Pattern 5: Block argument
-  if (depVar.isa<BlockArgument>()) {
+  if (isa<BlockArgument>(depVar)) {
     info.source = depVar;
     return info;
   }
@@ -194,7 +194,7 @@ void HandleDepsPass::runOnOperation() {
       /// extractDepInfo
       builder.setInsertionPoint(task);
 
-      auto depAttr = dependAttrs[i].cast<omp::ClauseTaskDependAttr>();
+      auto depAttr = cast<omp::ClauseTaskDependAttr>(dependAttrs[i]);
       auto depInfo =
           extractDepInfo(depVar, task, i, depAttr.getValue(), builder);
       if (!depInfo)

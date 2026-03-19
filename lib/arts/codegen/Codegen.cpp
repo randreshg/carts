@@ -98,7 +98,7 @@ func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
   case Enum: {                                                                 \
     SmallVector<Type, 4> argumentTypes{__VA_ARGS__};                           \
     auto fnType = getBuilder().getFunctionType(                                \
-        argumentTypes, ReturnType.isa<mlir::NoneType>()                        \
+        argumentTypes, isa<mlir::NoneType>(ReturnType)                        \
                            ? ArrayRef<Type>{}                                  \
                            : ArrayRef<Type>{ReturnType});                      \
     funcOp = module.lookupSymbol<func::FuncOp>(Str);                           \
@@ -655,7 +655,7 @@ Value ArtsCodegen::createIndexConstant(int64_t value, Location loc) {
 }
 
 Value ArtsCodegen::createIntConstant(int64_t value, Type type, Location loc) {
-  assert(type.isa<IntegerType>() && "Expected integer type");
+  assert(isa<IntegerType>(type) && "Expected integer type");
   return create<arith::ConstantOp>(loc, type,
                                    getBuilder().getIntegerAttr(type, value));
 }
@@ -666,8 +666,8 @@ Value ArtsCodegen::castParameter(mlir::Type targetType, Value source,
   assert(targetType.isIntOrIndexOrFloat() && "Target type should be a number");
   if (mode == ParameterCastMode::Bitwise) {
     auto srcType = source.getType();
-    if (auto dstIntType = targetType.dyn_cast<IntegerType>()) {
-      if (auto srcFloatType = srcType.dyn_cast<FloatType>()) {
+    if (auto dstIntType = dyn_cast<IntegerType>(targetType)) {
+      if (auto srcFloatType = dyn_cast<FloatType>(srcType)) {
         unsigned srcBits = srcFloatType.getWidth();
         unsigned dstBits = dstIntType.getWidth();
         if (srcBits == dstBits)
@@ -678,8 +678,8 @@ Value ArtsCodegen::castParameter(mlir::Type targetType, Value source,
           return create<arith::ExtUIOp>(loc, dstIntType, intBits);
         return create<arith::TruncIOp>(loc, dstIntType, intBits);
       }
-    } else if (auto dstFloatType = targetType.dyn_cast<FloatType>()) {
-      if (auto srcIntType = srcType.dyn_cast<IntegerType>()) {
+    } else if (auto dstFloatType = dyn_cast<FloatType>(targetType)) {
+      if (auto srcIntType = dyn_cast<IntegerType>(srcType)) {
         unsigned srcBits = srcIntType.getWidth();
         unsigned dstBits = dstFloatType.getWidth();
         if (srcBits == dstBits)
@@ -695,13 +695,13 @@ Value ArtsCodegen::castParameter(mlir::Type targetType, Value source,
     }
   }
   /// If target type is an integer
-  if (targetType.isa<IntegerType>())
+  if (isa<IntegerType>(targetType))
     return castToInt(targetType, source, loc);
   /// If target type is an index
-  if (targetType.isa<IndexType>())
+  if (isa<IndexType>(targetType))
     return castToIndex(source, loc);
   /// If target type is a float
-  if (targetType.isa<FloatType>())
+  if (isa<FloatType>(targetType))
     return castToFloat(targetType, source, loc);
   return source;
 }
@@ -716,15 +716,15 @@ Value ArtsCodegen::castToIndex(Value source, Location loc) {
 
 Value ArtsCodegen::castToFloat(mlir::Type targetType, Value source,
                                Location loc) {
-  assert(targetType.isa<FloatType>() && "Target type should be a float");
-  if (source.getType().isa<FloatType>())
+  assert(isa<FloatType>(targetType) && "Target type should be a float");
+  if (isa<FloatType>(source.getType()))
     return source;
   /// If it is not a float, cast it to a float.
   return create<arith::SIToFPOp>(loc, targetType, source).getResult();
 }
 
 Value ArtsCodegen::castToInt(Type targetType, Value source, Location loc) {
-  assert(targetType.isa<IntegerType>() &&
+  assert(isa<IntegerType>(targetType) &&
          "Target type should be an integer (e.g. i64, i32, etc.)");
 
   /// If types match exactly, no cast is needed.
@@ -736,12 +736,12 @@ Value ArtsCodegen::castToInt(Type targetType, Value source, Location loc) {
     return create<arith::IndexCastOp>(loc, targetType, source);
 
   /// If source is float => use FPToSIOp
-  if (source.getType().isa<FloatType>())
+  if (isa<FloatType>(source.getType()))
     return create<arith::FPToSIOp>(loc, targetType, source);
 
   /// If source is integer => handle extension or truncation
-  if (auto srcIntType = source.getType().dyn_cast<IntegerType>()) {
-    auto dstIntType = targetType.dyn_cast<IntegerType>();
+  if (auto srcIntType = dyn_cast<IntegerType>(source.getType())) {
+    auto dstIntType = dyn_cast<IntegerType>(targetType);
     if (!dstIntType)
       return source;
     unsigned srcWidth = srcIntType.getWidth();
@@ -857,9 +857,9 @@ Operation *ArtsCodegen::clone(Operation &op, IRMapping &mapper) {
 ///===----------------------------------------------------------------------===///
 
 LLVM::LLVMPointerType ArtsCodegen::getLLVMPointerType(Value source) {
-  if (source.getType().isa<LLVM::LLVMPointerType>())
+  if (isa<LLVM::LLVMPointerType>(source.getType()))
     return nullptr;
-  auto MT = source.getType().dyn_cast<MemRefType>();
+  auto MT = dyn_cast<MemRefType>(source.getType());
   if (!MT)
     return nullptr;
 

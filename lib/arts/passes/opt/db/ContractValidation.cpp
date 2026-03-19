@@ -69,7 +69,7 @@ struct ContractValidationPass
         ++invalidContracts;
         return;
       }
-      if (!target.getType().isa<MemRefType>()) {
+      if (!isa<MemRefType>(target.getType())) {
         contract.emitWarning("lowering_contract target is not a memref type");
         ++invalidContracts;
         return;

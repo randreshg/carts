@@ -171,7 +171,7 @@ static bool rematerializeInvariantOperands(Operation *insertBefore,
       return v;
     if (domInfo.properlyDominates(v, insertBefore))
       return v;
-    if (v.getType().isa<MemRefType>())
+    if (isa<MemRefType>(v.getType()))
       return nullptr;
     return ValueAnalysis::traceValueToDominating(v, insertBefore, builder,
                                                  domInfo, loc);

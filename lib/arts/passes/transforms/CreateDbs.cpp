@@ -294,7 +294,7 @@ private:
                                    unsigned pinnedDimCount) {
     int64_t innerBytes = 1;
     Type elementType = memRefType.getElementType();
-    while (auto nested = elementType.dyn_cast<MemRefType>())
+    while (auto nested = dyn_cast<MemRefType>(elementType))
       elementType = nested.getElementType();
     int64_t elemSize = elementType.isIntOrFloat()
                            ? (elementType.getIntOrFloatBitWidth() + 7) / 8
@@ -475,7 +475,7 @@ void CreateDbsPass::collectMemrefs() {
 
       /// Check all operands of all operations for memory references
       for (Value operand : op->getOperands()) {
-        if (!operand.getType().isa<MemRefType>())
+        if (!isa<MemRefType>(operand.getType()))
           continue;
 
         /// Get the underlying value of the memory reference
@@ -671,9 +671,9 @@ void CreateDbsPass::createDbAllocOps() {
 
     /// Get the element type of the memref
     Value allocValue = alloc->getResult(0);
-    MemRefType memRefType = allocValue.getType().cast<MemRefType>();
+    MemRefType memRefType = cast<MemRefType>(allocValue.getType());
     Type elementType = memRefType.getElementType();
-    while (auto nestedMemRef = elementType.dyn_cast<MemRefType>())
+    while (auto nestedMemRef = dyn_cast<MemRefType>(elementType))
       elementType = nestedMemRef.getElementType();
 
     /// Determine allocation granularity using unified heuristics
@@ -816,7 +816,7 @@ void CreateDbsPass::initializeGlobalDbIfNeeded(Operation *alloc,
     zeroIndices.push_back(AC->createIndexConstant(0, loc));
   Value dbRef = AC->create<DbRefOp>(loc, dbAllocOp.getPtr(), zeroIndices);
 
-  auto memRefType = globalOp.getType().cast<MemRefType>();
+  auto memRefType = cast<MemRefType>(globalOp.getType());
   unsigned rank = memRefType.getRank();
   if (rank == 0) {
     Value initVal = AC->create<memref::LoadOp>(loc, globalMemref);
@@ -1195,7 +1195,7 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
 
       Value localAcquireView = acquireOp.getPtr();
       if (preserveDepEdge) {
-        auto sourceType = localAcquireView.getType().dyn_cast<MemRefType>();
+        auto sourceType = dyn_cast<MemRefType>(localAcquireView.getType());
         BlockArgument dbAcquireArg =
             edt.getBody().front().addArgument(sourceType, edt.getLoc());
         dependencyOperands.push_back(localAcquireView);
@@ -1310,7 +1310,7 @@ void CreateDbsPass::rewriteUsesInParentEdt(MemrefInfo &memrefInfo) {
   /// Fine-grained: db_ref[indices] + load/store[0]
   unsigned outerRank =
       memrefInfo.usedFineGrained ? dbAlloc.getSizes().size() : 0;
-  unsigned innerRank = elementMemRefType.cast<MemRefType>().getRank();
+  unsigned innerRank = cast<MemRefType>(elementMemRefType).getRank();
   /// Coarse allocation: keep indices empty so db_ref uses constant zero
   PartitionInfo info;
   info.mode = PartitionMode::coarse;
@@ -1357,7 +1357,7 @@ void CreateDbsPass::rewriteUsesEverywhereCoarse(Operation *alloc,
   PartitionInfo info;
   info.mode = PartitionMode::coarse;
   DbElementWiseIndexer indexer(
-      info, 0, elementMemRefType.cast<MemRefType>().getRank(), {});
+      info, 0, cast<MemRefType>(elementMemRefType).getRank(), {});
   for (Operation *user : users)
     indexer.transformAccess(user, dbAlloc.getPtr(), elementMemRefType, *AC,
                             opsToRemove);
@@ -1373,9 +1373,9 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
   /// Get the element type from the acquired datablock
   /// For fine-grained: memref<?xmemref<?xT>> -> extract memref<?xT>
   Type elementMemRefType = localAcquireView.getType();
-  if (auto outerMemrefType = elementMemRefType.dyn_cast<MemRefType>()) {
+  if (auto outerMemrefType = dyn_cast<MemRefType>(elementMemRefType)) {
     if (auto innerMemrefType =
-            outerMemrefType.getElementType().dyn_cast<MemRefType>()) {
+            dyn_cast<MemRefType>(outerMemrefType.getElementType())) {
       elementMemRefType = innerMemrefType;
     }
   }
@@ -1384,7 +1384,7 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
   /// Use stored ranks from plan, with fallback for innerRank
   unsigned innerRank = plan.innerRank();
   if (innerRank == 0)
-    if (auto memrefType = elementMemRefType.dyn_cast<MemRefType>())
+    if (auto memrefType = dyn_cast<MemRefType>(elementMemRefType))
       innerRank = memrefType.getRank();
 
   /// Build value mapping from parent EDT block args/acquires to this EDT's args
@@ -1395,7 +1395,7 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
   for (auto [idx, blockArg] : llvm::enumerate(edtBlock.getArguments())) {
     if (idx < deps.size()) {
       Value externalDep = deps[idx];
-      if (auto parentArg = externalDep.dyn_cast<BlockArgument>()) {
+      if (auto parentArg = dyn_cast<BlockArgument>(externalDep)) {
         scopeMapping.map(parentArg, blockArg);
         ARTS_DEBUG("   - Mapping parent block arg to local");
       }

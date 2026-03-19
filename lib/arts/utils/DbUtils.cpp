@@ -64,7 +64,7 @@ static bool isMemrefForwardingOp(Operation *op, Value source) {
 static void appendDynamicSubviewOffsets(memref::SubViewOp subview,
                                         SmallVector<Value> &chain) {
   for (OpFoldResult off : subview.getMixedOffsets())
-    if (auto v = off.dyn_cast<Value>())
+    if (auto v = dyn_cast<Value>(off))
       chain.push_back(v);
 }
 
@@ -149,7 +149,7 @@ std::optional<std::pair<Value, Value>> DbUtils::traceToDbAlloc(Value dep) {
       return traceToDbAlloc(srcPtr);
   }
 
-  if (auto blockArg = dep.dyn_cast<BlockArgument>()) {
+  if (auto blockArg = dyn_cast<BlockArgument>(dep)) {
     Operation *parentOp = blockArg.getOwner()->getParentOp();
     if (auto parentEdt = dyn_cast<EdtOp>(parentOp)) {
       unsigned idx = blockArg.getArgNumber();
@@ -182,7 +182,7 @@ Operation *DbUtils::getUnderlyingDb(Value v, unsigned depth) {
     return getUnderlyingDb(dbLoad.getSource(), depth + 1);
 
   /// Case 3: Block argument — map to parent EDT dependency and recurse.
-  if (auto blockArg = v.dyn_cast<BlockArgument>()) {
+  if (auto blockArg = dyn_cast<BlockArgument>(v)) {
     Block *block = blockArg.getOwner();
     Operation *owner = block->getParentOp();
     if (auto edt = dyn_cast<EdtOp>(owner)) {
@@ -599,7 +599,7 @@ void DbUtils::forEachReachableMemoryAccess(
         continue;
 
       for (Value result : user->getResults())
-        if (result.getType().isa<MemRefType>())
+        if (isa<MemRefType>(result.getType()))
           worklist.push_back(result);
     }
   }

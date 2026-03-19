@@ -48,12 +48,12 @@ static std::optional<int64_t> tryFoldTypeSizeBytes(polygeist::TypeSizeOp tsOp) {
   /// Polygeist can emit `typeSize` over memref wrappers while the original C
   /// semantic is `sizeof(pointer)`. Canonicalization does not fold this case
   /// yet, so we treat memrefs as pointer-sized here.
-  if (sourceType.isa<MemRefType>()) {
+  if (isa<MemRefType>(sourceType)) {
     auto ptrTy = LLVM::LLVMPointerType::get(tsOp.getContext());
     return static_cast<int64_t>(layout.getTypeSize(ptrTy));
   }
 
-  if (sourceType.isa<IntegerType, FloatType>() ||
+  if (isa<IntegerType, FloatType>(sourceType) ||
       LLVM::isCompatibleType(sourceType))
     return static_cast<int64_t>(layout.getTypeSize(sourceType));
 
@@ -104,7 +104,7 @@ bool ValueAnalysis::cloneValuesIntoRegion(
       for (Value operand : defOp->getOperands()) {
         if (mapper.contains(operand))
           continue;
-        if (auto blockArg = operand.dyn_cast<BlockArgument>()) {
+        if (auto blockArg = dyn_cast<BlockArgument>(operand)) {
           Region *ownerRegion = blockArg.getOwner()->getParent();
           if (targetRegion->isAncestor(ownerRegion) ||
               ownerRegion->isAncestor(targetRegion))
@@ -481,9 +481,9 @@ Value ValueAnalysis::ensureIndexType(Value value, OpBuilder &builder,
                                      Location loc) {
   if (!value)
     return Value();
-  if (value.getType().isa<IndexType>())
+  if (isa<IndexType>(value.getType()))
     return value;
-  if (auto intTy = value.getType().dyn_cast<IntegerType>())
+  if (auto intTy = dyn_cast<IntegerType>(value.getType()))
     return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
                                               value);
   return Value();
@@ -858,7 +858,7 @@ Value ValueAnalysis::traceValueToDominating(Value value,
   if (domInfo.properlyDominates(value, insertBefore))
     return value;
 
-  if (auto blockArg = value.dyn_cast<BlockArgument>())
+  if (auto blockArg = dyn_cast<BlockArgument>(value))
     return nullptr;
 
   Operation *defOp = value.getDefiningOp();
@@ -1054,7 +1054,7 @@ Value ValueAnalysis::traceSelectWithFallback(
                                              falseTraced);
     }
     /// Condition doesn't dominate -- use max of arms as safe upper bound.
-    if (trueTraced.getType().isa<IndexType>()) {
+    if (isa<IndexType>(trueTraced.getType())) {
       return builder.create<arith::MaxUIOp>(loc, trueTraced, falseTraced);
     }
     return builder.create<arith::MaxSIOp>(loc, trueTraced, falseTraced);

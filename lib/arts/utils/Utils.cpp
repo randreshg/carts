@@ -274,7 +274,7 @@ SmallVector<Value> clampDepIndices(Value source, ArrayRef<Value> indices,
   SmallVector<Value> clamped;
   clamped.reserve(indices.size());
 
-  auto sourceType = source.getType().dyn_cast<MemRefType>();
+  auto sourceType = dyn_cast<MemRefType>(source.getType());
   if (!sourceType) {
     clamped.append(indices.begin(), indices.end());
     return clamped;
@@ -292,7 +292,7 @@ SmallVector<Value> clampDepIndices(Value source, ArrayRef<Value> indices,
   auto oneForType = [&](Type ty) -> Value {
     if (ty.isIndex())
       return createOneIndex(builder, loc);
-    if (auto intTy = ty.dyn_cast<IntegerType>())
+    if (auto intTy = dyn_cast<IntegerType>(ty))
       return builder.create<arith::ConstantIntOp>(loc, 1, intTy);
     return Value();
   };
@@ -300,7 +300,7 @@ SmallVector<Value> clampDepIndices(Value source, ArrayRef<Value> indices,
   auto zeroForType = [&](Type ty) -> Value {
     if (ty.isIndex())
       return createZeroIndex(builder, loc);
-    if (auto intTy = ty.dyn_cast<IntegerType>())
+    if (auto intTy = dyn_cast<IntegerType>(ty))
       return builder.create<arith::ConstantIntOp>(loc, 0, intTy);
     return Value();
   };

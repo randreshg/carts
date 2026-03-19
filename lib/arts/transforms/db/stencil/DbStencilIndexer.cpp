@@ -87,7 +87,7 @@ static Value getLinearizedStride(ValueRange indices, Type elementType,
   if (indices.size() != 1)
     return nullptr;
 
-  auto memrefType = elementType.dyn_cast<MemRefType>();
+  auto memrefType = dyn_cast<MemRefType>(elementType);
   if (!memrefType || memrefType.getRank() < 2)
     return nullptr;
 
@@ -103,12 +103,12 @@ static Value findAnchor(Value v, int depth = 0) {
   if (!v || depth > 6)
     return v;
   v = ValueAnalysis::stripNumericCasts(v);
-  if (auto blockArg = v.dyn_cast<BlockArgument>())
+  if (auto blockArg = dyn_cast<BlockArgument>(v))
     return blockArg;
   if (Operation *op = v.getDefiningOp()) {
     for (Value operand : op->getOperands()) {
       Value anchor = findAnchor(operand, depth + 1);
-      if (anchor && anchor.isa<BlockArgument>())
+      if (anchor && isa<BlockArgument>(anchor))
         return anchor;
     }
   }
@@ -284,7 +284,7 @@ static RowSelection buildSelection(OpBuilder &selBuilder, Location selLoc,
   Value selectedRowIdx = clampedOwnedIdx;
 
   auto selectValue = [&](Value cond, Value trueVal, Value falseVal) -> Value {
-    bool forceIf = trueVal.getType().isa<MemRefType>();
+    bool forceIf = isa<MemRefType>(trueVal.getType());
     if (!forceIf && cond && cond.getType().isInteger(1))
       return selBuilder.create<arith::SelectOp>(selLoc, cond, trueVal,
                                                 falseVal);
@@ -454,7 +454,7 @@ static void rewriteUserForRegion(Operation *user, StencilRegionKind region,
   }
 
   auto selectValue = [&](Value cond, Value trueVal, Value falseVal) -> Value {
-    bool forceIf = trueVal.getType().isa<MemRefType>();
+    bool forceIf = isa<MemRefType>(trueVal.getType());
     if (!forceIf && cond && cond.getType().isInteger(1))
       return builder.create<arith::SelectOp>(userLoc, cond, trueVal, falseVal);
     auto ifOp = builder.create<scf::IfOp>(userLoc, trueVal.getType(), cond,
@@ -613,7 +613,7 @@ static bool tryVersionRowLoop(ArrayRef<Operation *> users, OpBuilder &builder,
     }
 
     if (indices.size() == 1) {
-      if (auto memrefType = ctx.newElementType.dyn_cast<MemRefType>()) {
+      if (auto memrefType = dyn_cast<MemRefType>(ctx.newElementType)) {
         if (memrefType.getRank() >= 2) {
           auto staticStride = DbUtils::getStaticStride(memrefType);
           if (staticStride && *staticStride > 1)
@@ -955,8 +955,8 @@ static void rewriteUserFallback(
         /// Find a loop to hoist above (if globalRow is invariant to inner
         /// loop).
         Operation *rowDefOp = globalRow.getDefiningOp();
-        Block *rowDefBlock = globalRow.isa<BlockArgument>()
-                                 ? globalRow.cast<BlockArgument>().getOwner()
+        Block *rowDefBlock = isa<BlockArgument>(globalRow)
+                                 ? cast<BlockArgument>(globalRow).getOwner()
                                  : (rowDefOp ? rowDefOp->getBlock() : nullptr);
 
         scf::ForOp hoistAbove;
@@ -1062,7 +1062,7 @@ void DbStencilIndexer::transformDbRefUsers(
   /// Insert DbRefOps at the START of EDT block to ensure dominance for all
   /// users. Users can be in different blocks (loop iterations, branches), so
   /// inserting at users.front() would cause SSA dominance errors.
-  Block *edtBlock = ownedArg.cast<BlockArgument>().getOwner();
+  Block *edtBlock = cast<BlockArgument>(ownedArg).getOwner();
   Location loc = edtBlock->front().getLoc();
   OpBuilder::InsertionGuard topGuard(builder);
   builder.setInsertionPointToStart(edtBlock);

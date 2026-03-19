@@ -292,7 +292,7 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromWhile(
     return failure();
 
   Value loopIV = loopNode->getInductionVar();
-  auto ivArg = loopIV.dyn_cast<BlockArgument>();
+  auto ivArg = dyn_cast<BlockArgument>(loopIV);
   if (!ivArg)
     return failure();
   if (ivArg.getOwner() != &before)

@@ -90,7 +90,7 @@ public:
       if (auto map = extractAffineMap(op)) {
         if (map->getNumResults() > 0) {
           auto lastResult = map->getResult(map->getNumResults() - 1);
-          if (lastResult.isa<AffineDimExpr>())
+          if (isa<AffineDimExpr>(lastResult))
             foundStrideOne = true;
         }
         return;

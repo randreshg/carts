@@ -207,24 +207,24 @@ static bool accumulateAffineExprTerms(AffineExpr expr, ValueRange operands,
                                       int64_t &constant) {
   if (!expr)
     return false;
-  if (auto constExpr = expr.dyn_cast<AffineConstantExpr>()) {
+  if (auto constExpr = dyn_cast<AffineConstantExpr>(expr)) {
     constant += scale * constExpr.getValue();
     return true;
   }
-  if (auto dimExpr = expr.dyn_cast<AffineDimExpr>()) {
+  if (auto dimExpr = dyn_cast<AffineDimExpr>(expr)) {
     if (dimExpr.getPosition() >= operands.size())
       return false;
     return accumulateLinearTerms(operands[dimExpr.getPosition()], scale, coeffs,
                                  constant);
   }
-  if (auto symbolExpr = expr.dyn_cast<AffineSymbolExpr>()) {
+  if (auto symbolExpr = dyn_cast<AffineSymbolExpr>(expr)) {
     unsigned operandIndex = numDims + symbolExpr.getPosition();
     if (operandIndex >= operands.size())
       return false;
     return accumulateLinearTerms(operands[operandIndex], scale, coeffs,
                                  constant);
   }
-  if (auto binary = expr.dyn_cast<AffineBinaryOpExpr>()) {
+  if (auto binary = dyn_cast<AffineBinaryOpExpr>(expr)) {
     if (binary.getKind() == AffineExprKind::Add) {
       return accumulateAffineExprTerms(binary.getLHS(), operands, numDims,
                                        scale, coeffs, constant) &&
@@ -232,11 +232,11 @@ static bool accumulateAffineExprTerms(AffineExpr expr, ValueRange operands,
                                        scale, coeffs, constant);
     }
     if (binary.getKind() == AffineExprKind::Mul) {
-      if (auto lhsConst = binary.getLHS().dyn_cast<AffineConstantExpr>())
+      if (auto lhsConst = dyn_cast<AffineConstantExpr>(binary.getLHS()))
         return accumulateAffineExprTerms(binary.getRHS(), operands, numDims,
                                          scale * lhsConst.getValue(), coeffs,
                                          constant);
-      if (auto rhsConst = binary.getRHS().dyn_cast<AffineConstantExpr>())
+      if (auto rhsConst = dyn_cast<AffineConstantExpr>(binary.getRHS()))
         return accumulateAffineExprTerms(binary.getLHS(), operands, numDims,
                                          scale * rhsConst.getValue(), coeffs,
                                          constant);

@@ -58,8 +58,8 @@ bool canBeHoistedFromEdt(Region &edtRegion, Operation *op) {
 
   /// Do not move pointers or memref operations
   for (Value result : op->getResults()) {
-    if (result.getType().isa<MemRefType>() ||
-        result.getType().isa<LLVM::LLVMPointerType>())
+    if (isa<MemRefType>(result.getType()) ||
+        isa<LLVM::LLVMPointerType>(result.getType()))
       return false;
   }
 

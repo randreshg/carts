@@ -72,16 +72,16 @@ LocationMetadata LocationMetadata::fromLocation(Location loc) {
   LocationMetadata metadata;
 
   /// Try to extract FileLineColLoc directly
-  if (auto fileLoc = loc.dyn_cast<FileLineColLoc>()) {
+  if (auto fileLoc = dyn_cast<FileLineColLoc>(loc)) {
     metadata.file = fileLoc.getFilename().str();
     metadata.line = fileLoc.getLine();
     metadata.column = fileLoc.getColumn();
   }
   /// Handle FusedLoc - may contain C source location
-  else if (auto fusedLoc = loc.dyn_cast<FusedLoc>()) {
+  else if (auto fusedLoc = dyn_cast<FusedLoc>(loc)) {
     /// Try to find a C/C++ source FileLineColLoc
     for (Location subLoc : fusedLoc.getLocations()) {
-      if (auto fileLoc = subLoc.dyn_cast<FileLineColLoc>()) {
+      if (auto fileLoc = dyn_cast<FileLineColLoc>(subLoc)) {
         llvm::StringRef filename = fileLoc.getFilename();
         if (isCSourceFile(filename)) {
           metadata.file = filename.str();
@@ -97,16 +97,16 @@ LocationMetadata LocationMetadata::fromLocation(Location loc) {
       return fromLocation(fusedLoc.getLocations()[0]);
   }
   /// Handle CallSiteLoc - prefer caller location for per-callsite metadata
-  else if (auto callLoc = loc.dyn_cast<CallSiteLoc>()) {
+  else if (auto callLoc = dyn_cast<CallSiteLoc>(loc)) {
     LocationMetadata callerMeta = fromLocation(callLoc.getCaller());
     if (callerMeta.isValid())
       return callerMeta;
     return fromLocation(callLoc.getCallee());
   }
   /// Handle NameLoc - check child location
-  else if (auto nameLoc = loc.dyn_cast<NameLoc>()) {
+  else if (auto nameLoc = dyn_cast<NameLoc>(loc)) {
     Location childLoc = nameLoc.getChildLoc();
-    if (!childLoc.isa<UnknownLoc>()) {
+    if (!isa<UnknownLoc>(childLoc)) {
       LocationMetadata childMeta = fromLocation(childLoc);
       if (childMeta.isValid())
         return childMeta;

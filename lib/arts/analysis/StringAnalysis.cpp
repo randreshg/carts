@@ -71,7 +71,7 @@ void StringAnalysis::ensureAnalyzed() const {
 
 bool StringAnalysis::isStringGlobal(LLVM::GlobalOp globalOp) {
   if (auto attr = globalOp.getValueOrNull()) {
-    if (auto strAttr = attr.dyn_cast<StringAttr>()) {
+    if (auto strAttr = dyn_cast<StringAttr>(attr)) {
       /// We assume a string global is null-terminated.
       return strAttr.getValue().ends_with("\00");
     }
@@ -124,17 +124,17 @@ void StringAnalysis::trackCallOps() {
     if (isStringFunction(callOp.getCallee())) {
       for (Value operand : callOp.getOperands()) {
         /// If operand is a direct memref, cache it.
-        if (operand.getType().isa<MemRefType>()) {
+        if (isa<MemRefType>(operand.getType())) {
           stringMemRefs.insert(operand);
         }
         /// Otherwise, if operand is an LLVM pointer, try to recover the
         /// underlying memref.
-        else if (operand.getType().isa<LLVM::LLVMPointerType>()) {
+        else if (isa<LLVM::LLVMPointerType>(operand.getType())) {
           if (auto defOp = operand.getDefiningOp()) {
             /// Check for polygeist conversion.
             if (isa<polygeist::Pointer2MemrefOp>(defOp)) {
               Value memrefOperand = defOp->getOperand(0);
-              if (memrefOperand.getType().isa<MemRefType>())
+              if (isa<MemRefType>(memrefOperand.getType()))
                 stringMemRefs.insert(memrefOperand);
             }
           }

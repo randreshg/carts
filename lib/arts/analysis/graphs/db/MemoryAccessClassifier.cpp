@@ -111,7 +111,7 @@ bool arts::isIndirectIndex(Value idx, Value partitionOffset, int depth) {
       return false;
   }
 
-  if (auto blockArg = idx.dyn_cast<BlockArgument>()) {
+  if (auto blockArg = dyn_cast<BlockArgument>(idx)) {
     if (partitionOffset) {
       Value offsetStripped = ValueAnalysis::stripNumericCasts(partitionOffset);
       if (offsetStripped == blockArg ||

@@ -218,7 +218,7 @@ static bool dominatesOrInAncestor(Value v, Operation *op,
       return true;
   } else {
     /// Block arguments from ancestor regions are considered in-scope.
-    if (auto arg = v.dyn_cast<BlockArgument>()) {
+    if (auto arg = dyn_cast<BlockArgument>(v)) {
       if (Region *argRegion = arg.getOwner()->getParent())
         if (Region *opRegion = op->getParentRegion())
           if (argRegion->isAncestor(opRegion))

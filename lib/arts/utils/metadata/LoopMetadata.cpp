@@ -93,7 +93,7 @@ bool LoopMetadata::importFromOp() {
   if (reductionKindsAttr) {
     for (auto kind : reductionKindsAttr.getValue())
       reductionKinds.push_back(
-          stringToReductionKind(kind.cast<StringAttr>().str()));
+          stringToReductionKind(cast<StringAttr>(kind).str()));
   }
 
   /// Loop structure information

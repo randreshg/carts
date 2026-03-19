@@ -183,7 +183,7 @@ void DbLoweringPass::convertDbAllocOps() {
     }
 
     const bool alreadyOpaque =
-        oldPtrType.getElementType().isa<LLVM::LLVMPointerType>();
+        isa<LLVM::LLVMPointerType>(oldPtrType.getElementType());
     const bool alreadyHeap = oldOp.getAllocType() == DbAllocType::heap;
     if (alreadyOpaque && alreadyHeap) {
       ARTS_DEBUG("  - Allocation already lowered; skipping");
@@ -259,7 +259,7 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
       SmallVector<Value> dbRefIndices(dbRefOp.getIndices().begin(),
                                       dbRefOp.getIndices().end());
       auto originalMemrefType =
-          dbRefOp.getResult().getType().cast<MemRefType>();
+          cast<MemRefType>(dbRefOp.getResult().getType());
       auto createCastedMemref = [&](Location loc) -> Value {
         Value llvmPtr = getLLVMPtr(newPtr, dbRefIndices, loc);
         auto loadedLlvmPtr =
@@ -388,7 +388,7 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
         SmallVector<Value> dbRefIndices(dbRefOp.getIndices().begin(),
                                         dbRefOp.getIndices().end());
         auto originalMemrefType =
-            dbRefOp.getResult().getType().cast<MemRefType>();
+            cast<MemRefType>(dbRefOp.getResult().getType());
         auto createCastedMemref = [&](Location loc) -> Value {
           Value llvmPtr = getLLVMPtr(replacementBase, dbRefIndices, loc);
           auto loadedLlvmPtr =
