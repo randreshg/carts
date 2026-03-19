@@ -113,7 +113,7 @@ static void ensureNestedEdtCaptures(Operation *op) {
                             edt.getDependencies().end());
     Block &edtBlock = edt.getBody().front();
     for (Value capturedVal : captured) {
-      auto memrefTy = capturedVal.getType().dyn_cast<MemRefType>();
+      auto memrefTy = dyn_cast<MemRefType>(capturedVal.getType());
       if (!memrefTy)
         continue;
       if (llvm::is_contained(deps, capturedVal))

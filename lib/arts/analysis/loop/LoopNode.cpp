@@ -204,7 +204,7 @@ static bool dependsOnLoopInitImpl(Value value, Value base, unsigned depth) {
   if (value == base)
     return true;
 
-  if (auto blockArg = value.dyn_cast<BlockArgument>()) {
+  if (auto blockArg = dyn_cast<BlockArgument>(value)) {
     Operation *parentOp = blockArg.getOwner()->getParentOp();
     if (auto forOp = dyn_cast_or_null<scf::ForOp>(parentOp)) {
       if (blockArg == forOp.getInductionVar())
@@ -274,7 +274,7 @@ bool LoopNode::isValueLoopInvariant(Value v) {
     if (ValueAnalysis::isValueConstant(val))
       return true;
 
-    if (auto blockArg = val.dyn_cast<BlockArgument>()) {
+    if (auto blockArg = dyn_cast<BlockArgument>(val)) {
       Block *owner = blockArg.getOwner();
       if (!owner)
         return false;
@@ -391,7 +391,7 @@ std::optional<int64_t> LoopNode::getLowerBoundConstant() const {
       })
       .Case<scf::WhileOp>([this](auto op) -> std::optional<int64_t> {
         Value iv = getInductionVar();
-        auto arg = iv.dyn_cast<BlockArgument>();
+        auto arg = dyn_cast<BlockArgument>(iv);
         if (!arg)
           return std::nullopt;
         unsigned argIndex = arg.getArgNumber();
@@ -414,7 +414,7 @@ std::optional<int64_t> LoopNode::getUpperBoundConstant() const {
       })
       .Case<scf::WhileOp>([this](auto op) -> std::optional<int64_t> {
         Value iv = getInductionVar();
-        auto arg = iv.dyn_cast<BlockArgument>();
+        auto arg = dyn_cast<BlockArgument>(iv);
         if (!arg)
           return std::nullopt;
 

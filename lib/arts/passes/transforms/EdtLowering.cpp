@@ -753,7 +753,7 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
 
         /// Get scalar type size from the element type
         Type elementType = alloc.getElementType();
-        if (auto memrefType = elementType.dyn_cast<MemRefType>())
+        if (auto memrefType = dyn_cast<MemRefType>(elementType))
           elementType = memrefType.getElementType();
         Value scalarSize = AC->create<polygeist::TypeSizeOp>(
             loc, IndexType::get(AC->getContext()), elementType);
@@ -1033,8 +1033,8 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
     /// or when the element type is itself a memref (block-of-blocks), because
     /// we must index depv, not treat a single dep entry as an array.
     bool isNestedMemref = false;
-    if (auto mt = placeholder.getType().dyn_cast<MemRefType>())
-      isNestedMemref = mt.getElementType().isa<MemRefType>();
+    if (auto mt = dyn_cast<MemRefType>(placeholder.getType()))
+      isNestedMemref = isa<MemRefType>(mt.getElementType());
     bool hasIndexedUsers = llvm::any_of(users, [](Operation *op) {
       return isa<arts::DbRefOp, arts::DbGepOp, memref::LoadOp, memref::StoreOp,
                  polygeist::Memref2PointerOp>(op);

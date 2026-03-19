@@ -556,7 +556,7 @@ private:
 
     Value operand = mapper.lookupOrDefault(redOp.getOperand());
     Value accumulator = mapper.lookupOrDefault(redOp.getAccumulator());
-    auto memType = accumulator.getType().dyn_cast<MemRefType>();
+    auto memType = dyn_cast<MemRefType>(accumulator.getType());
     if (!memType)
       return false;
 
@@ -805,7 +805,7 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
                TaskwaitToARTSPattern, CallToARTSPattern>(context);
   patterns.add<TaskToARTSPattern>(context, &writerDepSources);
   GreedyRewriteConfig config;
-  (void)applyPatternsAndFoldGreedily(module, std::move(patterns), config);
+  (void)applyPatternsGreedily(module, std::move(patterns), config);
 
   RemovalUtils::removeUndefOps(module);
   ARTS_INFO_FOOTER(ConvertOpenMPToArtsPass);

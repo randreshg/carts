@@ -60,7 +60,7 @@ void transferAttributes(Operation *src, Operation *dst,
 /// argument owned by a block in the region, or as the result of an operation
 /// whose parent region is within the given region).
 inline bool isDefinedInRegion(Value val, Region *region) {
-  if (auto blockArg = val.dyn_cast<BlockArgument>())
+  if (auto blockArg = dyn_cast<BlockArgument>(val))
     return region->isAncestor(blockArg.getOwner()->getParent());
   if (Operation *defOp = val.getDefiningOp())
     return region->isAncestor(defOp->getParentRegion());

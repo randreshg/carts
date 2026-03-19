@@ -107,7 +107,7 @@ extractLocalFromBlockBase(Value globalIdx, Value startBlock, Value blockSize) {
 }
 
 static bool isLoopIvBoundedBy(Value idx, Value bs) {
-  auto barg = idx.dyn_cast<BlockArgument>();
+  auto barg = dyn_cast<BlockArgument>(idx);
   if (!barg)
     return false;
   auto *parentOp = barg.getOwner()->getParentOp();
@@ -432,12 +432,12 @@ bool DbBlockIndexer::handleSubIndexOp(
 
   ARTS_DEBUG(
       "  Handling subindex: elementType rank="
-      << (elementType.isa<MemRefType>()
-              ? elementType.cast<MemRefType>().getRank()
+      << (isa<MemRefType>(elementType)
+              ? cast<MemRefType>(elementType).getRank()
               : 0)
       << ", subindex result type rank="
-      << (subindex.getResult().getType().isa<MemRefType>()
-              ? subindex.getResult().getType().cast<MemRefType>().getRank()
+      << (isa<MemRefType>(subindex.getResult().getType())
+              ? cast<MemRefType>(subindex.getResult().getType()).getRank()
               : 0));
 
   SmallVector<Value> dbRefIndices;

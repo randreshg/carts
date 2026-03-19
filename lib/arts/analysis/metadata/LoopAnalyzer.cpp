@@ -86,9 +86,9 @@ void LoopAnalyzer::analyzeSCFLoop(Operation *loopOp, LoopMetadata *metadata) {
               forOp.getUpperBound().getDefiningOp<arith::ConstantOp>()) {
         if (auto stepConst =
                 forOp.getStep().getDefiningOp<arith::ConstantOp>()) {
-          auto lbAttr = lbConst.getValue().dyn_cast<IntegerAttr>();
-          auto ubAttr = ubConst.getValue().dyn_cast<IntegerAttr>();
-          auto stepAttr = stepConst.getValue().dyn_cast<IntegerAttr>();
+          auto lbAttr = dyn_cast<IntegerAttr>(lbConst.getValue());
+          auto ubAttr = dyn_cast<IntegerAttr>(ubConst.getValue());
+          auto stepAttr = dyn_cast<IntegerAttr>(stepConst.getValue());
 
           if (lbAttr && ubAttr && stepAttr) {
             int64_t lb = lbAttr.getInt();

@@ -42,13 +42,13 @@ static bool producesPointerLikeType(Operation *op) {
   for (Value result : op->getResults()) {
     Type resultType = result.getType();
     /// LLVM pointers (e.g., from llvm.getelementptr)
-    if (resultType.isa<LLVM::LLVMPointerType>())
+    if (isa<LLVM::LLVMPointerType>(resultType))
       return true;
     /// MemRef types (e.g., from memref.cast, memref.subview)
-    if (resultType.isa<MemRefType>())
+    if (isa<MemRefType>(resultType))
       return true;
     /// Unranked memref types
-    if (resultType.isa<UnrankedMemRefType>())
+    if (isa<UnrankedMemRefType>(resultType))
       return true;
   }
   return false;
