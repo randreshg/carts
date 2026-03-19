@@ -14,7 +14,8 @@ module {
     %c2 = arith.constant 2 : index
     %c30 = arith.constant 30 : index
     omp.parallel {
-      omp.wsloop for (%i) : index = (%c2) to (%c30) step (%c1) {
+      omp.wsloop {
+        omp.loop_nest (%i) : index = (%c2) to (%c30) step (%c1) {
         scf.for %j = %c2 to %c30 step %c1 {
           scf.for %k = %c2 to %c30 step %c1 {
             %im2 = arith.subi %i, %c2 : index
@@ -38,6 +39,7 @@ module {
           }
         }
         omp.yield
+      }
       }
       omp.terminator
     }
