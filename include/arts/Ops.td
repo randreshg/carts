@@ -800,10 +800,45 @@ def WaitOnEpochOp : Arts_Op<"wait_on_epoch", [MemoryEffects<[MemWrite]>]> {
 }
 
 ///===----------------------------------------------------------------------===///
+/// arts.cps_advance
+///===----------------------------------------------------------------------===///
+def CPSAdvanceOp : Arts_Op<"cps_advance", [
+  SingleBlockImplicitTerminator<"arts::YieldOp">
+]> {
+  let summary = "CPS loop advance placeholder — resolved after EDT outlining";
+  let description = [{
+    Placeholder operation emitted by the CPS chain transform in EpochOpt.
+    Represents the "advance to next iteration" step in a CPS continuation
+    chain. Contains the epoch body (worker spawning code) to be cloned for
+    the next iteration.
+
+    After EdtLowering outlines continuation EDTs, EpochLowering resolves
+    each `arts.cps_advance` by:
+    1. Finding the EdtCreateOp with matching `cps_chain_id`
+    2. Reading its `outlined_func` attribute
+    3. Creating a new EdtCreateOp with the same function but updated params
+    4. Creating a CreateEpochOp with finish target pointing to the new EDT
+    5. Moving worker ops from the epochBody region
+    6. Erasing the cps_advance op
+
+    The `targetChainId` identifies which continuation in the chain to
+    re-create. The `nextIterParams` carry updated loop counter and bounds.
+  }];
+  let arguments = (ins
+    Variadic<AnyType>:$nextIterParams,
+    StrAttr:$targetChainId
+  );
+  let regions = (region SizedRegion<1>:$epochBody);
+  let assemblyFormat = [{
+    `(` $nextIterParams `)` `target` $targetChainId $epochBody attr-dict (`:` type($nextIterParams)^)?
+  }];
+}
+
+///===----------------------------------------------------------------------===///
 /// arts.yield
 ///===----------------------------------------------------------------------===///
 def YieldOp : Arts_Op<"yield", [
-  Pure, ReturnLike, Terminator, ParentOneOf<["EdtOp", "EpochOp", "ForOp"]>
+  Pure, ReturnLike, Terminator, ParentOneOf<["EdtOp", "EpochOp", "ForOp", "CPSAdvanceOp"]>
 ]> {
 
   let summary = "ARTS dialect yield terminator";

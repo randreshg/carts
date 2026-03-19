@@ -79,7 +79,6 @@ std::unique_ptr<Pass> createScalarReplacementPass();
 std::unique_ptr<Pass> createEdtPtrRematerializationPass();
 std::unique_ptr<Pass> createDbLoweringPass(uint64_t idStride = 1000);
 std::unique_ptr<Pass> createEpochLoweringPass();
-std::unique_ptr<Pass> createEpochContinuationPrepPass();
 std::unique_ptr<Pass> createParallelEdtLoweringPass();
 std::unique_ptr<Pass> createEdtLoweringPass(uint64_t idStride = 1000);
 std::unique_ptr<Pass> createEdtLoweringPass(AnalysisManager *AM,
@@ -95,6 +94,17 @@ std::unique_ptr<Pass> createForLoweringPass();
 std::unique_ptr<Pass> createForLoweringPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createLoopFusionPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createEpochOptPass();
+/// Create EpochOpt with explicit scheduling flags.
+/// Structural opts (narrowing/fusion/loop-fusion) are always enabled.
+std::unique_ptr<Pass> createEpochOptPass(bool enableAmortization,
+                                         bool enableContinuation,
+                                         bool enableCPSDriver,
+                                         bool enableCPSChain = false);
+/// Create EpochOpt with scheduling-only flags (structural opts disabled).
+std::unique_ptr<Pass> createEpochOptSchedulingPass(bool enableAmortization,
+                                                    bool enableContinuation,
+                                                    bool enableCPSDriver,
+                                                    bool enableCPSChain = false);
 std::unique_ptr<Pass> createHoistingPass();
 std::unique_ptr<Pass> createBlockLoopStripMiningPass();
 
