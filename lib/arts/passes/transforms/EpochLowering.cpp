@@ -36,7 +36,11 @@
 
 #include "arts/Dialect.h"
 #include "arts/codegen/Codegen.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_EPOCHLOWERING
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -65,7 +69,7 @@ constexpr llvm::StringLiteral kCPSChainId = "arts.cps_chain_id";
 ///===----------------------------------------------------------------------===///
 /// Epoch Lowering Pass Implementation
 ///===----------------------------------------------------------------------===///
-struct EpochLoweringPass : public arts::EpochLoweringBase<EpochLoweringPass> {
+struct EpochLoweringPass : public arts::impl::EpochLoweringBase<EpochLoweringPass> {
   explicit EpochLoweringPass(bool debug = false) : debugMode(debug) {}
 
   void runOnOperation() override;

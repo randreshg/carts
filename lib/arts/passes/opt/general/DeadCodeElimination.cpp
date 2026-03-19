@@ -22,7 +22,11 @@
 ///     // dead ops removed
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_DEADCODEELIMINATION
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
@@ -44,7 +48,7 @@ using namespace mlir::arts;
 namespace {
 
 struct DeadCodeEliminationPass
-    : public DeadCodeEliminationBase<DeadCodeEliminationPass> {
+    : public impl::DeadCodeEliminationBase<DeadCodeEliminationPass> {
 
   static bool isContractUse(Operation *user) {
     return isa<LoweringContractOp>(user);

@@ -11,7 +11,11 @@
 ///     %db = arts.db_alloc ... {distributed}
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_DBDISTRIBUTEDOWNERSHIP
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/db/DbDistributedEligibility.h"
@@ -30,7 +34,7 @@ using namespace mlir::arts;
 namespace {
 
 struct DbDistributedOwnershipPass
-    : public arts::DbDistributedOwnershipBase<DbDistributedOwnershipPass> {
+    : public arts::impl::DbDistributedOwnershipBase<DbDistributedOwnershipPass> {
   explicit DbDistributedOwnershipPass(mlir::arts::AnalysisManager *AM)
       : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");

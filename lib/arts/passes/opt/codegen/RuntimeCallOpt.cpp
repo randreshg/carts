@@ -13,7 +13,11 @@
 ///  2) Deduplicate dominated duplicate calls per callee
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_RUNTIMECALLOPT
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/codegen/Types.h"
 #include "arts/utils/Debug.h"
@@ -60,7 +64,7 @@ static scf::ForOp findHoistTarget(func::CallOp call, DominanceInfo &domInfo) {
   return target;
 }
 
-struct RuntimeCallOptPass : public arts::RuntimeCallOptBase<RuntimeCallOptPass> {
+struct RuntimeCallOptPass : public arts::impl::RuntimeCallOptBase<RuntimeCallOptPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     int hoisted = 0;

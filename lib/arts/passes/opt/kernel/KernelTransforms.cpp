@@ -17,7 +17,11 @@
 
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_KERNELTRANSFORMS
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/transforms/kernel/KernelTransform.h"
 #include "arts/utils/Debug.h"
@@ -30,7 +34,7 @@ using namespace mlir::arts;
 namespace {
 
 struct KernelTransformsPass
-    : public arts::KernelTransformsBase<KernelTransformsPass> {
+    : public arts::impl::KernelTransformsBase<KernelTransformsPass> {
   KernelTransformsPass(mlir::arts::AnalysisManager *AM,
                        bool enableElementwisePipeline, bool enableMatmul,
                        bool enableTiling, int64_t tileJ, int64_t minTripCount)

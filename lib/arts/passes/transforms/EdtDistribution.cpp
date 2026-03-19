@@ -23,7 +23,11 @@
 /// consumed later by lowering.
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_EDTDISTRIBUTION
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/heuristics/DistributionHeuristics.h"
 #include "arts/passes/Passes.h"
@@ -42,7 +46,7 @@ using namespace mlir::arts;
 namespace {
 
 struct EdtDistributionPass
-    : public arts::EdtDistributionBase<EdtDistributionPass> {
+    : public arts::impl::EdtDistributionBase<EdtDistributionPass> {
   explicit EdtDistributionPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }

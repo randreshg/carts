@@ -13,7 +13,11 @@
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_DISTRIBUTEDHOSTLOOPOUTLINING
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
@@ -380,7 +384,7 @@ static void outlineLoop(scf::ForOp loop, const AbstractMachine *machine) {
 }
 
 struct DistributedHostLoopOutliningPass
-    : public arts::DistributedHostLoopOutliningBase<
+    : public arts::impl::DistributedHostLoopOutliningBase<
           DistributedHostLoopOutliningPass> {
   explicit DistributedHostLoopOutliningPass(mlir::arts::AnalysisManager *AM)
       : AM(AM) {}

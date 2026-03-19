@@ -10,7 +10,11 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_VERIFYPRELOWERED
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "mlir/Pass/Pass.h"
 
@@ -18,7 +22,7 @@ using namespace mlir;
 
 namespace {
 struct VerifyPreLoweredPass
-    : public arts::VerifyPreLoweredBase<VerifyPreLoweredPass> {
+    : public arts::impl::VerifyPreLoweredBase<VerifyPreLoweredPass> {
   void runOnOperation() override {
     bool found = false;
     getOperation().walk([&](Operation *op) {

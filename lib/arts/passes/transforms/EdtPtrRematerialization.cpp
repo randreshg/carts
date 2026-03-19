@@ -13,7 +13,11 @@
 ///==========================================================================///
 
 /// Dialects
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_EDTPTRREMATERIALIZATION
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/Pass/Pass.h"
@@ -33,7 +37,7 @@ using namespace mlir::arts;
 
 namespace {
 struct EdtPtrRematerializationPass
-    : public arts::EdtPtrRematerializationBase<EdtPtrRematerializationPass> {
+    : public arts::impl::EdtPtrRematerializationBase<EdtPtrRematerializationPass> {
   void runOnOperation() override;
 };
 } // end anonymous namespace

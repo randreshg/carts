@@ -15,7 +15,11 @@
 ///     }
 ///==========================================================================///
 
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_ARTSINLINER
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "mlir/Analysis/CallGraph.h"
@@ -117,7 +121,7 @@ struct ArtsInlinerInterface : public mlir::InlinerInterface {
   }
 };
 
-struct ArtsInlinerPass : public arts::ArtsInlinerBase<ArtsInlinerPass> {
+struct ArtsInlinerPass : public arts::impl::ArtsInlinerBase<ArtsInlinerPass> {
 
   void runOnOperation() override {
     ModuleOp module = getOperation();

@@ -31,7 +31,11 @@
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_FORLOWERING
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/transforms/edt/EdtParallelSplitLowering.h"
 #include "arts/transforms/edt/EdtReductionLowering.h"
@@ -587,7 +591,7 @@ static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
 }
 
 /// ForLowering Pass Implementation
-struct ForLoweringPass : public arts::ForLoweringBase<ForLoweringPass> {
+struct ForLoweringPass : public arts::impl::ForLoweringBase<ForLoweringPass> {
   explicit ForLoweringPass(mlir::arts::AnalysisManager *AM = nullptr)
       : AM(AM) {}
   void runOnOperation() override;

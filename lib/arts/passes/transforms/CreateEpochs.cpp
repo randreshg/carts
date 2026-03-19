@@ -27,7 +27,11 @@
 #include "mlir/Support/LLVM.h"
 /// Arts
 #include "arts/Dialect.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_CREATEEPOCHS
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/utils/Utils.h"
 /// Other
@@ -151,7 +155,7 @@ static void processBarrierOp(BarrierOp barrier) {
 /// Pass Implementation
 ///==========================================================================///
 namespace {
-struct CreateEpochsPass : public CreateEpochsBase<CreateEpochsPass> {
+struct CreateEpochsPass : public impl::CreateEpochsBase<CreateEpochsPass> {
   void runOnOperation() override;
 };
 } // end namespace

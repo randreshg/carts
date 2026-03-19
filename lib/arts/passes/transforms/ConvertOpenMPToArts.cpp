@@ -30,7 +30,11 @@
 #include "arts/Dialect.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_CONVERTOPENMPTOARTS
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/RemovalUtils.h"
@@ -771,7 +775,7 @@ struct CallToARTSPattern : public OpRewritePattern<func::CallOp> {
 ///===----------------------------------------------------------------------===///
 namespace {
 struct ConvertOpenMPToArtsPass
-    : public arts::ConvertOpenMPToArtsBase<ConvertOpenMPToArtsPass> {
+    : public arts::impl::ConvertOpenMPToArtsBase<ConvertOpenMPToArtsPass> {
   void runOnOperation() override;
 };
 } // namespace

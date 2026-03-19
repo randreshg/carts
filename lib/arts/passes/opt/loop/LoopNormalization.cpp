@@ -26,7 +26,11 @@
 ///==========================================================================///
 
 #include "arts/analysis/AnalysisManager.h"
-#include "arts/passes/PassDetails.h"
+#define GEN_PASS_DEF_LOOPNORMALIZATION
+#include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/transforms/loop/LoopNormalizer.h"
 #include "arts/utils/Debug.h"
@@ -40,7 +44,7 @@ using namespace mlir::arts;
 namespace {
 
 struct LoopNormalizationPass
-    : public arts::LoopNormalizationBase<LoopNormalizationPass> {
+    : public arts::impl::LoopNormalizationBase<LoopNormalizationPass> {
   LoopNormalizationPass(mlir::arts::AnalysisManager *AM) : AM(AM) {}
 
   void runOnOperation() override {
