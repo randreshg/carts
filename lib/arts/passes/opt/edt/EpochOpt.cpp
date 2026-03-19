@@ -15,6 +15,8 @@
 ///    EDTs signaled via epoch's built-in termination mechanism
 /// 6. CPS loop driver - wrap time-step loops containing epochs in a single
 ///    outer epoch+driver EDT
+/// 7. CPS chain - convert time-step loops into fully asynchronous
+///    continuation chains, eliminating all inner blocking waits
 ///==========================================================================///
 
 #include "arts/passes/PassDetails.h"
@@ -1024,32 +1026,39 @@ static bool tryCPSLoopTransform(scf::ForOp forOp) {
 /// CPS Chain Transform
 ///===----------------------------------------------------------------------===///
 ///
-/// Converts a time-step loop containing epochs into a CPS continuation chain.
+/// Converts a time-step loop containing N epochs into a CPS continuation chain.
 /// Instead of blocking waits per iteration, each epoch's completion signals
-/// the next continuation EDT which sets up the next iteration.
+/// the next continuation EDT which sets up the next epoch/iteration.
 ///
-/// Before:
-///   scf.for %t = lb to ub step s {
-///     arts.epoch { ... workers ... } : i64   // blocking wait per iter
-///   }
+/// Case 1 (N=1, e.g. seidel-2d):
+///   launcher → epoch_0(t=0, finish→cont0) → cont0 → epoch_0(t+s, finish→cont0) → ...
 ///
-/// After:
+/// Case 2 (N=2, e.g. jacobi2d, second may be conditional):
+///   launcher → epoch_0(finish→cont0) → cont0 → epoch_1(finish→cont1) → cont1 → advance
+///
+/// Case 3 (N>2, e.g. fdtd-2d):
+///   launcher → epoch_0(finish→cont0) → cont0 → epoch_1(finish→cont1) → ... → contN-1 → advance
+///
+/// Structure: nested continuations inside the launcher EDT. Each continuation
+/// EDT is placed AFTER the epoch it continues, in the same block, so
+/// EpochLowering can find it when wiring the finish target.
+///
 ///   arts.epoch {                              // single outer wait
-///     arts.edt launcher() {                   // sets up first iteration
-///       <first iter epoch body>
-///       arts.yield
-///     }
-///     arts.edt cont(%t, %ub, %step) {         // continuation chain
-///       %t_next = arith.addi %t, %step
-///       %cond = arith.cmpi slt, %t_next, %ub
-///       scf.if %cond {
-///         arts.cps_advance(%t_next, %ub, %step) target "chain_0" {
-///           <cloned epoch body>
+///     arts.edt launcher() {
+///       epoch_0 {continuation_for_epoch} { workers_0 }
+///       arts.edt cont_0 {cps_chain_id="chain_0", ...} {
+///         epoch_1 {continuation_for_epoch} { workers_1 }
+///         arts.edt cont_1 {cps_chain_id="chain_1", ...} {
+///           ... (nested for N>2) ...
+///           arts.edt cont_{N-1} {cps_chain_id="chain_{N-1}", ...} {
+///             t_next = t + step
+///             if (t_next < ub) {
+///               arts.cps_advance("chain_0") { workers_0_clone }
+///             }
+///           }
 ///         }
 ///       }
-///       arts.yield
-///     } {arts.cps_chain_id = "chain_0",
-///        arts.has_control_dep, arts.continuation_for_epoch}
+///     }
 ///   }
 ///
 ///===----------------------------------------------------------------------===///
@@ -1059,34 +1068,123 @@ constexpr llvm::StringLiteral kCPSChainId = "arts.cps_chain_id";
 constexpr llvm::StringLiteral kCPSLoopContinuation =
     "arts.cps_loop_continuation";
 
-/// Collect all epochs directly in a loop body (not nested in other ops).
-static void collectDirectEpochs(Block &body,
-                                SmallVectorImpl<EpochOp> &epochs) {
+/// Epoch slot in a loop body — either a direct epoch or one inside scf.if.
+struct EpochSlot {
+  EpochOp epoch;
+  scf::IfOp wrappingIf; // null if the epoch is not inside an scf.if
+};
+
+/// Collect all epoch "slots" directly in a loop body, in program order.
+/// An epoch slot is either a bare EpochOp or an EpochOp inside an scf.if.
+static void collectEpochSlots(Block &body,
+                              SmallVectorImpl<EpochSlot> &slots) {
   for (Operation &op : body.without_terminator()) {
-    if (auto epoch = dyn_cast<EpochOp>(op))
-      epochs.push_back(epoch);
+    if (auto epoch = dyn_cast<EpochOp>(op)) {
+      slots.push_back({epoch, nullptr});
+    } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      /// Check if the then-branch contains an epoch.
+      for (Operation &thenOp : ifOp.getThenRegion().front()) {
+        if (auto epoch = dyn_cast<EpochOp>(thenOp))
+          slots.push_back({epoch, ifOp});
+      }
+    }
   }
 }
 
 /// Check that an epoch body only has ops that can be cloned into an EDT body.
-/// Specifically: the epoch body must not reference the loop induction variable
-/// in ways that prevent outlining (all uses must be inside epoch body ops).
 static bool epochBodyIsClonable(EpochOp epoch, Value inductionVar) {
-  /// The epoch body can reference the IV — that's fine, it will be passed
-  /// as a parameter to the continuation EDT.
   (void)inductionVar;
   return !epoch.getRegion().empty() &&
          !epoch.getRegion().front().without_terminator().empty();
 }
 
-/// CPS Chain Transform for Case 1: single epoch per iteration.
+/// Check if an operation is one of the epoch slot operations.
+static bool isSlotOp(Operation *op, MutableArrayRef<EpochSlot> slots) {
+  for (auto &slot : slots) {
+    if (op == slot.epoch.getOperation())
+      return true;
+    if (slot.wrappingIf && op == slot.wrappingIf.getOperation())
+      return true;
+  }
+  return false;
+}
+
+/// Clone all non-slot pure arithmetic ops from the loop body.
+static void cloneNonSlotArith(OpBuilder &builder, Block &body,
+                              MutableArrayRef<EpochSlot> slots,
+                              IRMapping &mapping) {
+  for (Operation &op : body.without_terminator()) {
+    if (isSlotOp(&op, slots))
+      continue;
+    Operation *cloned = builder.clone(op, mapping);
+    for (auto [oldRes, newRes] :
+         llvm::zip(op.getResults(), cloned->getResults()))
+      mapping.map(oldRes, newRes);
+  }
+}
+
+/// Ensure a block has a YieldOp terminator. If not, create one.
+static void ensureYieldTerminator(Block &block, Location loc) {
+  if (block.empty() || !block.back().hasTrait<OpTrait::IsTerminator>())
+    OpBuilder::atBlockEnd(&block).create<YieldOp>(loc);
+}
+
+/// Emit the CPS advance logic: check loop bounds, create CPSAdvanceOp.
+/// This is the code in the LAST continuation that advances to the next
+/// iteration by creating a new epoch_0 via self-referential continuation.
+static void emitAdvanceLogic(OpBuilder &builder, Location loc, Value iv,
+                             Value lb, Value ub, Value step, Block &body,
+                             MutableArrayRef<EpochSlot> slots) {
+  /// t_next = lb + step (lb is stand-in for "current t")
+  Value tNext = builder.create<arith::AddIOp>(loc, lb, step);
+  /// cond = t_next < ub
+  Value cond = builder.create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::slt, tNext, ub);
+
+  auto ifOp = builder.create<scf::IfOp>(loc, cond, /*withElse=*/false);
+  {
+    Block &thenBlock = ifOp.getThenRegion().front();
+    OpBuilder thenBuilder = OpBuilder::atBlockTerminator(&thenBlock);
+
+    IRMapping advanceMapping;
+    advanceMapping.map(iv, tNext);
+    cloneNonSlotArith(thenBuilder, body, slots, advanceMapping);
+
+    SmallVector<Value> nextParams = {tNext};
+    auto advance = thenBuilder.create<CPSAdvanceOp>(
+        loc, nextParams, thenBuilder.getStringAttr("chain_0"));
+
+    /// Clone the first epoch's body into the cps_advance region.
+    Region &advanceRegion = advance.getEpochBody();
+    if (advanceRegion.empty())
+      advanceRegion.emplaceBlock();
+    Block &advBlock = advanceRegion.front();
+    ensureYieldTerminator(advBlock, loc);
+    OpBuilder advBuilder = OpBuilder::atBlockTerminator(&advBlock);
+
+    Block &epochBody = slots[0].epoch.getBody().front();
+    for (Operation &epochOp : epochBody.without_terminator())
+      advBuilder.clone(epochOp, advanceMapping);
+  }
+}
+
+/// Mark an EDT as a CPS continuation with the given chain ID.
+static void markAsContinuation(EdtOp edt, OpBuilder &builder,
+                                unsigned chainIdx) {
+  std::string chainId = "chain_" + std::to_string(chainIdx);
+  edt->setAttr(kHasControlDep,
+               builder.getIntegerAttr(builder.getI32Type(), 1));
+  edt->setAttr(kContinuationForEpoch, builder.getUnitAttr());
+  edt->setAttr(kCPSChainId, builder.getStringAttr(chainId));
+  edt->setAttr(kCPSLoopContinuation, builder.getUnitAttr());
+}
+
+/// CPS Chain Transform for N epochs per iteration.
 ///
-/// Pattern:
-///   scf.for %t = lb to ub step s {
-///     arts.epoch { ... workers ... } : i64
-///   }
-///
-/// The loop body has exactly one epoch and optional pure arithmetic.
+/// Handles Cases 1-3: single epoch, multi-epoch with conditional, N sequential.
+/// Continuation EDTs are nested inside the launcher so that each cont_i
+/// appears after epoch_i in the same block — required for EpochLowering to
+/// wire the finish target.
 static bool tryCPSChainTransform(scf::ForOp forOp) {
   /// C1: No iter_args.
   if (forOp.getNumResults() > 0 || !forOp.getInitArgs().empty())
@@ -1103,37 +1201,34 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
 
   Block &body = *forOp.getBody();
 
-  /// C4: Collect direct epochs in the body.
-  SmallVector<EpochOp> epochs;
-  collectDirectEpochs(body, epochs);
-  if (epochs.empty())
+  /// C4: Collect epoch slots in the body.
+  SmallVector<EpochSlot> slots;
+  collectEpochSlots(body, slots);
+  if (slots.empty())
     return false;
 
-  /// Case 1: exactly one epoch.
-  /// TODO: Case 2 (multi-epoch + conditional), Case 3 (N sequential epochs).
-  if (epochs.size() != 1)
-    return false;
-
-  EpochOp epoch = epochs[0];
+  Value iv = forOp.getInductionVar();
 
   /// C5: Already marked? Skip.
-  if (epoch->hasAttr(kContinuationForEpoch))
-    return false;
+  for (const auto &slot : slots)
+    if (slot.epoch->hasAttr(kContinuationForEpoch))
+      return false;
 
-  /// C6: Epoch body must be clonable.
-  Value iv = forOp.getInductionVar();
-  if (!epochBodyIsClonable(epoch, iv))
-    return false;
+  /// C6: All epoch bodies must be clonable.
+  for (const auto &slot : slots)
+    if (!epochBodyIsClonable(slot.epoch, iv))
+      return false;
 
-  /// C7: All non-epoch ops in body must be pure arithmetic.
+  /// C7: All non-slot ops in body must be pure arithmetic.
   for (Operation &op : body.without_terminator()) {
-    if (&op == epoch.getOperation())
+    if (isSlotOp(&op, slots))
       continue;
     if (!isPureArith(&op))
       return false;
   }
 
-  ARTS_INFO("CPS Chain: Found eligible single-epoch loop");
+  unsigned N = slots.size();
+  ARTS_INFO("CPS Chain: Found eligible " << N << "-epoch loop");
 
   /// === Transform ===
 
@@ -1151,158 +1246,133 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
   if (outerRegion.empty())
     outerRegion.emplaceBlock();
   Block &outerBlock = outerRegion.front();
+  /// Ensure the block has a yield terminator.
   if (outerBlock.empty() ||
       !outerBlock.back().hasTrait<OpTrait::IsTerminator>()) {
-    OpBuilder yb = OpBuilder::atBlockEnd(&outerBlock);
-    yb.create<YieldOp>(loc);
+    OpBuilder::atBlockEnd(&outerBlock).create<YieldOp>(loc);
   }
 
-  /// Step 2: Create the continuation EDT (cont1).
-  /// The continuation EDT has NO explicit deps — all values are free vars
-  /// captured by EdtEnvManager. The control dep is added by EpochLowering.
+  /// Step 2: Create the launcher EDT inside the outer epoch.
   OpBuilder outerBuilder = OpBuilder::atBlockTerminator(&outerBlock);
-  SmallVector<Value> contDeps; // empty — free vars captured by EdtEnvManager
-  auto contEdt = outerBuilder.create<EdtOp>(loc, EdtType::task,
-                                             EdtConcurrency::intranode,
-                                             contDeps);
-
-  /// Mark continuation EDT.
-  contEdt->setAttr(kHasControlDep,
-                   outerBuilder.getIntegerAttr(outerBuilder.getI32Type(), 1));
-  contEdt->setAttr(kContinuationForEpoch, outerBuilder.getUnitAttr());
-  contEdt->setAttr(kCPSChainId, outerBuilder.getStringAttr("chain_0"));
-  contEdt->setAttr(kCPSLoopContinuation, outerBuilder.getUnitAttr());
-
-  /// Populate continuation EDT body.
-  /// The continuation receives the current t as a free variable from the
-  /// *previous* iteration's epoch. But at this point, the "previous t" is
-  /// the scf.for IV which will be destroyed. We need to clone the loop body
-  /// using an IRMapping that maps the IV.
-  ///
-  /// Key insight: the continuation EDT body is a CLONE of the loop body
-  /// structure. All references to the loop IV are mapped to a computed
-  /// tNext. All references to lb/ub/step are kept as-is (they're defined
-  /// outside the loop and survive its erasure).
-  Block &contBlock = contEdt.getBody().front();
-  OpBuilder contBuilder(&contBlock, contBlock.begin());
-
-  /// The continuation receives "current t" via the epoch that just finished.
-  /// In the CPS model, the current t is passed through the CPSAdvanceOp's
-  /// nextIterParams. At EpochOpt time, we directly reference lb/ub/step
-  /// (defined outside the loop) and create the IV advance inline.
-  ///
-  /// We clone the loop body into the continuation, mapping IV → tCurrent
-  /// where tCurrent is a function of the iteration. But we need a way to
-  /// get tCurrent at continuation time.
-  ///
-  /// Solution: Create an scf.for-like pattern inside the continuation that
-  /// doesn't actually loop — it's just the "advance" part. The actual
-  /// "tCurrent" comes from the CPSAdvanceOp's nextIterParams, resolved at
-  /// EpochLowering time by reading from the EDT's parameter struct.
-  ///
-  /// For now, the continuation body uses lb/ub/step directly (they survive
-  /// loop erasure). The IV is replaced by a free variable that EdtEnvManager
-  /// captures. We create a placeholder: the continuation will receive the
-  /// "current t" from the previous iteration through an arith.addi chain.
-  ///
-  /// Actually, the simpler approach: clone the entire loop body with IV
-  /// mapped to a fresh value, then wrap in the advance logic. The fresh
-  /// value represents "the t of the iteration that just completed".
-  /// Since we don't have a concrete value yet (it's a runtime parameter),
-  /// we use lb as a stand-in that EdtEnvManager will remap.
-
-  /// Create: %t_next = arith.addi %lb, %step
-  /// (lb is stand-in for "current t"; EdtEnvManager will capture the actual
-  /// runtime value when the continuation fires)
-  Value tNext = contBuilder.create<arith::AddIOp>(loc, lb, step);
-  /// Create: %cond = arith.cmpi slt, %t_next, %ub
-  Value cond = contBuilder.create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::slt, tNext, ub);
-
-  /// Create: scf.if %cond { <advance> }
-  auto ifOp = contBuilder.create<scf::IfOp>(loc, cond, /*withElse=*/false);
-  {
-    Block &thenBlock = ifOp.getThenRegion().front();
-    OpBuilder thenBuilder = OpBuilder::atBlockTerminator(&thenBlock);
-
-    /// Clone all non-epoch body ops (pure arithmetic feeding into epoch),
-    /// remapping the induction variable to tNext.
-    IRMapping advanceMapping;
-    advanceMapping.map(iv, tNext);
-
-    for (Operation &op : body.without_terminator()) {
-      if (&op == epoch.getOperation())
-        continue;
-      Operation *cloned = thenBuilder.clone(op, advanceMapping);
-      for (auto [oldRes, newRes] :
-           llvm::zip(op.getResults(), cloned->getResults()))
-        advanceMapping.map(oldRes, newRes);
-    }
-
-    /// Create arts.cps_advance with the epoch body clone.
-    SmallVector<Value> nextParams = {tNext};
-    auto advance = thenBuilder.create<CPSAdvanceOp>(
-        loc, nextParams, thenBuilder.getStringAttr("chain_0"));
-
-    /// Clone the epoch body into the cps_advance region.
-    Region &advanceRegion = advance.getEpochBody();
-    if (advanceRegion.empty())
-      advanceRegion.emplaceBlock();
-    Block &advBlock = advanceRegion.front();
-    OpBuilder advBuilder(&advBlock, advBlock.begin());
-
-    /// Clone epoch body ops.
-    Block &epochBody = epoch.getBody().front();
-    for (Operation &epochOp : epochBody.without_terminator()) {
-      advBuilder.clone(epochOp, advanceMapping);
-    }
-    /// Add yield terminator.
-    advBuilder.create<YieldOp>(loc);
-  }
-
-  /// Add yield to continuation EDT body.
-  contBuilder.create<YieldOp>(loc);
-
-  /// Step 3: Create the launcher EDT.
-  /// It sets up the first iteration by cloning the epoch body directly.
-  /// The epoch in the launcher will have finish → cont1.
   auto launcherEdt = outerBuilder.create<EdtOp>(loc, EdtType::task,
                                                  EdtConcurrency::intranode,
                                                  SmallVector<Value>{});
   Block &launcherBlock = launcherEdt.getBody().front();
-  OpBuilder launcherBuilder(&launcherBlock, launcherBlock.begin());
+  ensureYieldTerminator(launcherBlock, loc);
+  OpBuilder launcherBuilder = OpBuilder::atBlockTerminator(&launcherBlock);
 
-  /// Clone the first iteration's epoch body.
-  /// Map the IV to lb (first iteration).
+  /// Clone non-slot pure arithmetic into launcher (mapped to first iter).
   IRMapping firstIterMapping;
   firstIterMapping.map(iv, lb);
+  cloneNonSlotArith(launcherBuilder, body, slots, firstIterMapping);
 
-  /// Clone non-epoch pure arithmetic first.
-  for (Operation &op : body.without_terminator()) {
-    if (&op == epoch.getOperation())
-      continue;
-    Operation *cloned = launcherBuilder.clone(op, firstIterMapping);
-    for (auto [oldRes, newRes] :
-         llvm::zip(op.getResults(), cloned->getResults()))
-      firstIterMapping.map(oldRes, newRes);
+  /// Clone epoch_0 into the launcher.
+  Operation *clonedEpoch0Op =
+      launcherBuilder.clone(*slots[0].epoch.getOperation(), firstIterMapping);
+  auto clonedEpoch0 = cast<EpochOp>(clonedEpoch0Op);
+  clonedEpoch0->setAttr(kContinuationForEpoch, launcherBuilder.getUnitAttr());
+
+  /// Step 3: Build the nested continuation chain.
+  /// cont_0 goes after epoch_0 in the launcher block.
+  /// cont_1 goes after epoch_1 inside cont_0's body, etc.
+  /// cont_{N-1} (last) contains the advance logic.
+  ///
+  /// We use atBlockTerminator so new ops are inserted before the implicit
+  /// yield, and the yield always remains last.
+  OpBuilder *currentBuilder = &launcherBuilder;
+
+  for (unsigned i = 0; i < N; ++i) {
+    /// Create continuation EDT cont_i in the current block.
+    auto contEdt = currentBuilder->create<EdtOp>(
+        loc, EdtType::task, EdtConcurrency::intranode, SmallVector<Value>{});
+    markAsContinuation(contEdt, *currentBuilder, i);
+
+    Block &contBlock = contEdt.getBody().front();
+    ensureYieldTerminator(contBlock, loc);
+    OpBuilder contBuilder = OpBuilder::atBlockTerminator(&contBlock);
+
+    if (i == N - 1) {
+      /// Last continuation: emit advance logic (check bounds, CPSAdvanceOp).
+      emitAdvanceLogic(contBuilder, loc, iv, lb, ub, step, body, slots);
+    } else {
+      /// Middle continuation: set up epoch_{i+1} and nest cont_{i+1}.
+      IRMapping contMapping;
+      contMapping.map(iv, lb); // lb is stand-in for "current t"
+      cloneNonSlotArith(contBuilder, body, slots, contMapping);
+
+      EpochSlot &nextSlot = slots[i + 1];
+      if (nextSlot.wrappingIf) {
+        /// Conditional epoch: clone the scf.if, mark the epoch inside its
+        /// then-branch for continuation. The else-branch gets the advance
+        /// logic directly, since the epoch doesn't run.
+        Operation *clonedIfOp =
+            contBuilder.clone(*nextSlot.wrappingIf.getOperation(), contMapping);
+        auto clonedIf = cast<scf::IfOp>(clonedIfOp);
+
+        /// Mark the epoch inside the then-branch for continuation.
+        for (Operation &thenOp : clonedIf.getThenRegion().front()) {
+          if (auto epoch = dyn_cast<EpochOp>(thenOp)) {
+            epoch->setAttr(kContinuationForEpoch, contBuilder.getUnitAttr());
+            break;
+          }
+        }
+
+        /// Need an else-branch with advance logic for when condition is false.
+        if (clonedIf.getElseRegion().empty()) {
+          /// Recreate the if with an else branch.
+          Value ifCond = clonedIf.getCondition();
+          OpBuilder preIfBuilder(clonedIf);
+          auto newIf =
+              preIfBuilder.create<scf::IfOp>(loc, ifCond, /*withElse=*/true);
+
+          /// Move then-block contents to the new if's then-block.
+          Block &oldThenBlock = clonedIf.getThenRegion().front();
+          Block &newThenBlock = newIf.getThenRegion().front();
+          for (Operation &op :
+               llvm::make_early_inc_range(oldThenBlock.without_terminator()))
+            op.moveBefore(newThenBlock.getTerminator());
+
+          /// Emit advance logic in the else-branch.
+          Block &elseBlock = newIf.getElseRegion().front();
+          OpBuilder elseBuilder = OpBuilder::atBlockTerminator(&elseBlock);
+          emitAdvanceLogic(elseBuilder, loc, iv, lb, ub, step, body, slots);
+
+          clonedIf.erase();
+
+          /// Point builder into the new then-block for next continuation.
+          Block &finalThenBlock = newIf.getThenRegion().front();
+          contBuilder.setInsertionPoint(finalThenBlock.getTerminator());
+          currentBuilder = &contBuilder;
+        } else {
+          /// else-branch already exists; add advance logic to it.
+          Block &elseBlock = clonedIf.getElseRegion().front();
+          OpBuilder elseBuilder = OpBuilder::atBlockTerminator(&elseBlock);
+          emitAdvanceLogic(elseBuilder, loc, iv, lb, ub, step, body, slots);
+
+          /// Point builder into the then-block for next continuation.
+          Block &thenBlock = clonedIf.getThenRegion().front();
+          contBuilder.setInsertionPoint(thenBlock.getTerminator());
+          currentBuilder = &contBuilder;
+        }
+      } else {
+        /// Unconditional epoch: clone and mark for continuation.
+        Operation *clonedEpochOp =
+            contBuilder.clone(*nextSlot.epoch.getOperation(), contMapping);
+        cast<EpochOp>(clonedEpochOp)->setAttr(kContinuationForEpoch,
+                                               contBuilder.getUnitAttr());
+        /// Next cont goes after this epoch in the same block.
+        /// contBuilder is already at the terminator position so next
+        /// iteration's create<EdtOp> will be placed before the yield.
+        currentBuilder = &contBuilder;
+      }
+    }
   }
-
-  /// Clone the epoch with its body into the launcher.
-  Operation *clonedEpochOp =
-      launcherBuilder.clone(*epoch.getOperation(), firstIterMapping);
-  auto clonedEpoch = cast<EpochOp>(clonedEpochOp);
-
-  /// Mark this epoch for continuation wiring (finish → cont1).
-  clonedEpoch->setAttr(kContinuationForEpoch,
-                        launcherBuilder.getUnitAttr());
-
-  /// Add yield to launcher body.
-  launcherBuilder.create<YieldOp>(loc);
 
   /// Step 4: Erase the original loop.
   forOp.erase();
 
-  ARTS_INFO("CPS Chain: Transformed single-epoch loop into continuation chain");
+  ARTS_INFO("CPS Chain: Transformed " << N
+                                      << "-epoch loop into continuation chain");
   return true;
 }
 
