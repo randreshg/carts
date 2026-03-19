@@ -378,11 +378,11 @@ static const std::array<llvm::StringLiteral, 24> kConcurrencyOptPasses = {
     "Mem2Reg"};
 static const std::array<llvm::StringLiteral, 4> kEpochsPasses = {
     "PolygeistCanonicalize", "CreateEpochs",
-    "EpochContinuationPrep (conditional)", "PolygeistCanonicalize"};
+    "EpochOpt[scheduling] (conditional)", "PolygeistCanonicalize"};
 static const std::array<llvm::StringLiteral, 23> kPreLoweringPasses = {
     "EdtAllocaSinking",
     "ParallelEdtLowering",
-    "EpochContinuationPrep (conditional)",
+    "EpochOpt[scheduling] (conditional)",
     "PolygeistCanonicalize",
     "CSE",
     "DbLowering",
@@ -838,8 +838,15 @@ void buildConcurrencyOptPipeline(PassManager &pm, arts::AnalysisManager *AM) {
 void buildEpochsPipeline(PassManager &pm, bool enableContinuation) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createCreateEpochsPass());
-  if (enableContinuation)
-    pm.addPass(arts::createEpochContinuationPrepPass());
+  if (enableContinuation) {
+    /// Run EpochOpt with ALL optimizations (structural + scheduling) on the
+    /// newly created epochs. Structural opts at ConcurrencyOpt (step 12) only
+    /// saw early epochs; this is the first time the main batch gets optimized.
+    pm.addPass(arts::createEpochOptPass(/*amortization=*/true,
+                                        /*continuation=*/true,
+                                        /*cpsDriver=*/true,
+                                        /*cpsChain=*/true));
+  }
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
 }
 
@@ -850,8 +857,12 @@ void buildPreLoweringPipeline(PassManager &pm, arts::AnalysisManager *AM,
   /// and here).
   pm.addPass(arts::createEdtAllocaSinkingPass());
   pm.addPass(arts::createParallelEdtLoweringPass());
-  if (enableContinuation)
-    pm.addPass(arts::createEpochContinuationPrepPass());
+  if (enableContinuation) {
+    /// Run scheduling-only EpochOpt for late epochs from ParallelEdtLowering.
+    pm.addPass(arts::createEpochOptSchedulingPass(/*amortization=*/true,
+                                                   /*continuation=*/true,
+                                                   /*cpsDriver=*/true));
+  }
   addCanonicalizeAndCSE(pm);
   pm.addPass(arts::createDbLoweringPass(ArtsIdStride));
   addCanonicalizeAndCSE(pm);

@@ -406,24 +406,6 @@ def EpochLowering : Pass<"epoch-lowering", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createEpochLoweringPass()";
 }
 
-def EpochContinuationPrep : Pass<"epoch-continuation-prep", "mlir::ModuleOp"> {
-  let summary = "Prepare epochs for finish-EDT continuation scheduling";
-  let description = [{
-    Detects safe epoch-wait-tail patterns and outlines the tail into a
-    continuation arts.edt. The continuation EDT receives an extra control
-    dependency slot that the epoch signals upon completion, replacing the
-    blocking arts.wait_on_epoch with ARTS-native finish-EDT scheduling.
-
-    This pass runs in high-level ARTS form before lowering:
-    - once in the `epochs` pipeline stage right after `CreateEpochs`
-    - once in `pre-lowering` after `ParallelEdtLowering` so newly created
-      epochs also receive continuation prep
-  }];
-  let dependentDialects = [
-    "func::FuncDialect", "arts::ArtsDialect", "arith::ArithDialect"
-  ];
-  let constructor = "mlir::arts::createEpochContinuationPrepPass()";
-}
 
 def ParallelEdtLowering : Pass<"parallel-edt-lowering", "mlir::ModuleOp"> {
   let summary = "Lower ARTS parallel EDTs to task graphs";
@@ -539,9 +521,11 @@ def LoopFusion : Pass<"arts-loop-fusion", "mlir::ModuleOp"> {
 }
 
 def EpochOpt : Pass<"arts-epoch-opt", "mlir::ModuleOp"> {
-  let summary = "Combined epoch optimizations (narrowing + fusion + loop fusion)";
+  let summary = "Unified epoch optimizations (structural + scheduling)";
   let description = [{
-    Runs epoch-related optimizations:
+    Runs all epoch-related optimizations:
+
+    Structural optimizations:
         1. Epoch scope narrowing -
             split large epochs into smaller independent epochs at positions
                 where no EDT after the cut depends on any EDT before the cut
@@ -551,6 +535,17 @@ def EpochOpt : Pass<"arts-epoch-opt", "mlir::ModuleOp"> {
         3. Worker loop fusion -
             merge compatible worker loops within epochs when they have identical
                 bounds and no loop-carried values
+
+    Scheduling optimizations (gated by --arts-epoch-finish-continuation):
+        4. Repetition amortization -
+            amortize epoch create/wait overhead for repeated epoch loops by
+            wrapping EDT bodies with repeat loops
+        5. Finish-EDT continuation -
+            outline epoch tail code into continuation EDTs that fire via
+            ARTS-native finish-EDT signaling instead of blocking waits
+        6. CPS loop driver -
+            wrap time-step loops containing epochs in a single outer
+            epoch+driver EDT, eliminating repeated main-thread blocking
   }];
   let options = [
     Option<"enableEpochNarrowing", "epoch-narrowing", "bool", "true",
@@ -558,10 +553,19 @@ def EpochOpt : Pass<"arts-epoch-opt", "mlir::ModuleOp"> {
     Option<"enableEpochFusion", "epoch-fusion", "bool", "true",
            "Enable epoch fusion">,
     Option<"enableLoopFusion", "loop-fusion", "bool", "true",
-           "Enable worker loop fusion">
+           "Enable worker loop fusion">,
+    Option<"enableAmortization", "amortization", "bool", "false",
+           "Enable repetition amortization for repeated epoch loops">,
+    Option<"enableContinuation", "continuation", "bool", "false",
+           "Enable finish-EDT continuation scheduling">,
+    Option<"enableCPSDriver", "cps-driver", "bool", "false",
+           "Enable CPS loop driver transform">,
+    Option<"enableCPSChain", "cps-chain", "bool", "false",
+           "Enable CPS continuation chain transform">
   ];
   let dependentDialects =
-      ["func::FuncDialect", "arts::ArtsDialect", "scf::SCFDialect"];
+      ["func::FuncDialect", "arts::ArtsDialect", "scf::SCFDialect",
+       "arith::ArithDialect"];
   let constructor = "mlir::arts::createEpochOptPass()";
 }
 

@@ -9,5 +9,5 @@
 // CHECK: "pipeline_steps": [
 // CHECK: {"name": "raise-memref-dimensionality", "passes": [{{.*}}"RaiseMemRefDimensionality"{{.*}}]}
 // CHECK: {"name": "create-dbs", "passes": [{{.*}}"CreateDbs"{{.*}}"CSE (bridge cleanup, conditional)"{{.*}}"VerifyDbCreated"{{.*}}]}
-// CHECK: {"name": "epochs", "passes": [{{.*}}"CreateEpochs"{{.*}}"EpochContinuationPrep (conditional)"{{.*}}]}
+// CHECK: {"name": "epochs", "passes": [{{.*}}"CreateEpochs"{{.*}}"EpochOpt[scheduling] (conditional)"{{.*}}]}
 // CHECK: {"name": "arts-to-llvm", "passes": [{{.*}}"ConvertArtsToLLVM"{{.*}}"VerifyLowered"{{.*}}]}
