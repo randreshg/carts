@@ -232,7 +232,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
                                         Location loc) const {
 
     /// Collect the task deps clause
-    auto dependList = task.getDependsAttr();
+    auto dependList = task.getDependKindsAttr();
     if (!dependList) {
       ARTS_DEBUG(" - No dependencies found for task");
       return success();
@@ -361,7 +361,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
 };
 
 /// Pattern to replace `omp.wsloop` with `arts.for` loop
-struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
+struct WsloopToARTSPattern : public OpRewritePattern<omp::WsloopOp> {
   using OpRewritePattern::OpRewritePattern;
 
   /// Returns true when a serial loop is nested inside the current parallel
@@ -379,15 +379,16 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
     return false;
   }
 
-  LogicalResult matchAndRewrite(omp::WsLoopOp op,
+  LogicalResult matchAndRewrite(omp::WsloopOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     ARTS_INFO("Converting omp.wsloop");
 
-    /// Get the loop bounds and step from the wsloop
-    auto lowerBound = op.getLowerBound()[0];
-    auto upperBound = op.getUpperBound()[0];
-    auto step = op.getStep()[0];
+    /// Get the loop bounds and step via the nested LoopNestOp
+    auto loopNest = cast<omp::LoopNestOp>(op.getWrappedLoop());
+    auto lowerBound = loopNest.getLoopLowerBounds()[0];
+    auto upperBound = loopNest.getLoopUpperBounds()[0];
+    auto step = loopNest.getLoopSteps()[0];
 
     /// Nested omp.wsloop inside serial loop nests cannot become nested
     /// arts.for directly because ForLowering only rewrites top-level arts.for
@@ -395,7 +396,7 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
     /// SCFParallelToArts pattern can materialize a nested parallel EDT.
     bool nestedInSerialLoop = hasSerialLoopAncestorInParallelRegion(op);
     bool hasReductions =
-        op.getReductionsAttr() && !op.getReductionsAttr().getValue().empty();
+        op.getReductionSyms() && !op.getReductionSyms()->empty();
     if (nestedInSerialLoop && !hasReductions) {
       ARTS_INFO("  - Nested wsloop fallback: lowering to scf.parallel");
       auto scfParallel = rewriter.create<scf::ParallelOp>(
@@ -407,7 +408,7 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
       Block &parallelBody = scfParallel.getRegion().front();
       rewriter.setInsertionPointToStart(&parallelBody);
       IRMapping mapper;
-      Block &src = op.getRegion().front();
+      Block &src = loopNest.getRegion().front();
       if (!src.getArguments().empty() &&
           !scfParallel.getInductionVars().empty())
         mapper.map(src.getArgument(0), scfParallel.getInductionVars().front());
@@ -421,7 +422,7 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
 
     /// Map OpenMP schedule to Arts ForScheduleKindAttr if present
     arts::ForScheduleKindAttr schedAttr = nullptr;
-    if (auto sched = op.getScheduleVal()) {
+    if (auto sched = op.getScheduleKind()) {
       switch (*sched) {
       case omp::ClauseScheduleKind::Static:
         schedAttr = arts::ForScheduleKindAttr::get(
@@ -450,7 +451,7 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
     /// implement the desired scheduling policy. The loop step should remain the
     /// original iteration step irrespective of the block size.
     std::optional<int64_t> staticBlockSize;
-    if (auto chunk = op.getScheduleChunkVar()) {
+    if (auto chunk = op.getScheduleChunk()) {
       int64_t chunkVal;
       if (ValueAnalysis::getConstantIndex(chunk, chunkVal) && chunkVal > 0)
         staticBlockSize = chunkVal;
@@ -458,7 +459,7 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
 
     /// Collect reduction metadata if present on omp.wsloop
     SmallVector<Value> redAccs;
-    DenseMap<Value, omp::ReductionDeclareOp> reductionDecls;
+    DenseMap<Value, omp::DeclareReductionOp> reductionDecls;
     collectReductionMetadata(op, rewriter, redAccs, reductionDecls);
 
     /// Create `arts.for` and move `omp.wsloop` body
@@ -487,7 +488,7 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
     OpBuilder::InsertionGuard IG(rewriter);
     rewriter.setInsertionPointToStart(&dst);
     IRMapping mapper;
-    Block &src = op.getRegion().front();
+    Block &src = loopNest.getRegion().front();
     if (!src.getArguments().empty())
       mapper.map(src.getArgument(0), dst.getArgument(0));
     moveOps(src, dst, rewriter, mapper, reductionDecls);
@@ -496,7 +497,7 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
     /// OpenMP wsloop has an implicit barrier unless nowait is present.
     /// Emit an explicit ARTS barrier only when there is following work in
     /// the same region that depends on that synchronization.
-    if (!op.getNowaitAttr() && hasWorkAfterInParentBlock(op.getOperation())) {
+    if (!op.getNowait() && hasWorkAfterInParentBlock(op.getOperation())) {
       rewriter.setInsertionPointAfter(forOp);
       rewriter.create<arts::BarrierOp>(loc);
     }
@@ -509,9 +510,9 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
 private:
   /// Collect reduction metadata from the OpenMP wsloop operation
   void collectReductionMetadata(
-      omp::WsLoopOp op, PatternRewriter &rewriter, SmallVector<Value> &redAccs,
-      DenseMap<Value, omp::ReductionDeclareOp> &reductionDecls) const {
-    auto reds = op.getReductionsAttr();
+      omp::WsloopOp op, PatternRewriter &rewriter, SmallVector<Value> &redAccs,
+      DenseMap<Value, omp::DeclareReductionOp> &reductionDecls) const {
+    auto reds = op.getReductionSyms();
     if (!reds)
       return;
 
@@ -520,10 +521,10 @@ private:
     ModuleOp module = op->getParentOfType<ModuleOp>();
     assert(module && "Module is required");
 
-    for (auto [attr, value] : llvm::zip(reds.getValue(), reductionVars)) {
+    for (auto [attr, value] : llvm::zip(*reds, reductionVars)) {
       redAccs.push_back(ValueAnalysis::getUnderlyingValue(value));
       if (auto symRef = dyn_cast<SymbolRefAttr>(attr)) {
-        auto decl = dyn_cast_or_null<omp::ReductionDeclareOp>(
+        auto decl = dyn_cast_or_null<omp::DeclareReductionOp>(
             module.lookupSymbol(symRef.getLeafReference()));
         assert(decl && "Failed to resolve reduction declaration");
         reductionDecls.try_emplace(value, decl);
@@ -531,15 +532,14 @@ private:
     }
   }
 
-  /// Inline reduction operations and move non-reduction operations
+  /// Move non-terminator operations from src block to dst block.
+  /// In LLVM 23 the old omp::ReductionOp was removed; reductions are now
+  /// represented via block arguments on the enclosing wsloop/parallel op,
+  /// so no special inlining is required here.
   void moveOps(Block &src, Block &dst, PatternRewriter &rewriter,
                IRMapping &mapper,
-               DenseMap<Value, omp::ReductionDeclareOp> &reductionDecls) const {
+               DenseMap<Value, omp::DeclareReductionOp> &reductionDecls) const {
     for (Operation &srcOp : src.without_terminator()) {
-      if (auto redOp = dyn_cast<omp::ReductionOp>(&srcOp)) {
-        if (inlineReduction(redOp, rewriter, mapper, reductionDecls))
-          continue;
-      }
       rewriter.clone(srcOp, mapper);
     }
 
@@ -550,41 +550,8 @@ private:
     }
   }
 
-  /// Inline a reduction operation
-  bool inlineReduction(
-      omp::ReductionOp redOp, PatternRewriter &rewriter, IRMapping &mapper,
-      const DenseMap<Value, omp::ReductionDeclareOp> &reductionDecls) const {
-    auto it = reductionDecls.find(redOp.getAccumulator());
-    if (it == reductionDecls.end())
-      return false;
-
-    Value operand = mapper.lookupOrDefault(redOp.getOperand());
-    Value accumulator = mapper.lookupOrDefault(redOp.getAccumulator());
-    auto memType = dyn_cast<MemRefType>(accumulator.getType());
-    if (!memType)
-      return false;
-
-    Location loc = redOp.getLoc();
-    unsigned rank = memType.getRank();
-    SmallVector<Value> zeroIndices;
-    zeroIndices.reserve(rank);
-    for (unsigned i = 0; i < rank; ++i)
-      zeroIndices.push_back(arts::createZeroIndex(rewriter, loc));
-
-    Value current =
-        rewriter.create<memref::LoadOp>(loc, accumulator, zeroIndices);
-
-    Value combined =
-        cloneCombinerRegion(it->second, current, operand, rewriter, loc);
-    if (!combined)
-      return false;
-
-    rewriter.create<memref::StoreOp>(loc, combined, accumulator, zeroIndices);
-    return true;
-  }
-
   /// Clone combiner region for reduction operation
-  Value cloneCombinerRegion(omp::ReductionDeclareOp decl, Value lhs, Value rhs,
+  Value cloneCombinerRegion(omp::DeclareReductionOp decl, Value lhs, Value rhs,
                             PatternRewriter &rewriter, Location loc) const {
     Block &combinerBlock = decl.getReductionRegion().front();
     IRMapping combinerMap;
@@ -699,18 +666,19 @@ struct TaskwaitToARTSPattern : public OpRewritePattern<omp::TaskwaitOp> {
 };
 
 /// Pattern to replace `omp.taskloop` with `arts.for` and EDT creation
-struct TaskloopToARTSPattern : public OpRewritePattern<omp::TaskLoopOp> {
+struct TaskloopToARTSPattern : public OpRewritePattern<omp::TaskloopOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(omp::TaskLoopOp op,
+  LogicalResult matchAndRewrite(omp::TaskloopOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     ARTS_INFO("Converting omp.taskloop to arts.for with EDTs");
 
-    /// Get the loop bounds and step from the taskloop
-    auto lowerBound = op.getLowerBound()[0];
-    auto upperBound = op.getUpperBound()[0];
-    auto step = op.getStep()[0];
+    /// Get the loop bounds and step via the nested LoopNestOp
+    auto loopNest = cast<omp::LoopNestOp>(op.getWrappedLoop());
+    auto lowerBound = loopNest.getLoopLowerBounds()[0];
+    auto upperBound = loopNest.getLoopUpperBounds()[0];
+    auto step = loopNest.getLoopSteps()[0];
 
     /// Create arts.for and move taskloop body
     auto forOp = rewriter.create<arts::ForOp>(
@@ -731,7 +699,7 @@ struct TaskloopToARTSPattern : public OpRewritePattern<omp::TaskLoopOp> {
     OpBuilder::InsertionGuard IG(rewriter);
     rewriter.setInsertionPointToStart(&dst);
     IRMapping mapper;
-    Block &src = op.getRegion().front();
+    Block &src = loopNest.getRegion().front();
     if (!src.getArguments().empty())
       mapper.map(src.getArgument(0), dst.getArgument(0));
     for (Operation &srcOp : src.without_terminator())
@@ -775,7 +743,7 @@ struct CallToARTSPattern : public OpRewritePattern<func::CallOp> {
 ///===----------------------------------------------------------------------===///
 namespace {
 struct ConvertOpenMPToArtsPass
-    : public arts::impl::ConvertOpenMPToArtsBase<ConvertOpenMPToArtsPass> {
+    : public impl::ConvertOpenMPToArtsBase<ConvertOpenMPToArtsPass> {
   void runOnOperation() override;
 };
 } // namespace

@@ -28,7 +28,7 @@ using namespace mlir::arts;
 
 namespace {
 
-struct DepTransformsPass : public arts::impl::DepTransformsBase<DepTransformsPass> {
+struct DepTransformsPass : public impl::DepTransformsBase<DepTransformsPass> {
   using Base::Base;
 
   void runOnOperation() override {

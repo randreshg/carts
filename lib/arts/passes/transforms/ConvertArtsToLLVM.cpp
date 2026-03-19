@@ -251,7 +251,8 @@ struct BuiltinObjectSizePattern : public OpRewritePattern<func::CallOp> {
     /// Create llvm.call_intrinsic for llvm.objectsize
     Type resultType = callOp.getResult(0).getType();
     auto intrinsicOp = rewriter.create<LLVM::CallIntrinsicOp>(
-        loc, resultType, "llvm.objectsize",
+        loc, resultType,
+        StringAttr::get(rewriter.getContext(), "llvm.objectsize"),
         ValueRange{ptr, min, nullIsUnknown, dynamic});
 
     rewriter.replaceOp(callOp, intrinsicOp.getResults());
@@ -1680,7 +1681,7 @@ struct UndefPattern : public ArtsToLLVMPattern<UndefOp> {
 ///===----------------------------------------------------------------------===///
 namespace {
 struct ConvertArtsToLLVMPass
-    : public arts::impl::ConvertArtsToLLVMBase<ConvertArtsToLLVMPass> {
+    : public impl::ConvertArtsToLLVMBase<ConvertArtsToLLVMPass> {
 
   explicit ConvertArtsToLLVMPass(bool debug = false,
                                  bool distributedInitPerWorker = false,
@@ -1722,8 +1723,8 @@ void ConvertArtsToLLVMPass::runOnOperation() {
 
   //// Apply patterns with greedy rewriter (two runs)
   GreedyRewriteConfig config;
-  config.useTopDownTraversal = true;
-  config.enableRegionSimplification = true;
+  config.setUseTopDownTraversal(true);
+  config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Aggressive);
 
   /// Run 1: core patterns
   {

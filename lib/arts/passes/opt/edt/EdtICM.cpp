@@ -40,7 +40,7 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
-struct EdtICMPass : public arts::impl::EdtICMBase<EdtICMPass> {
+struct EdtICMPass : public impl::EdtICMBase<EdtICMPass> {
   void runOnOperation() override;
 };
 } // end anonymous namespace

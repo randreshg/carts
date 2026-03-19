@@ -630,7 +630,7 @@ static bool stampExplicitStencilContract(
 }
 
 struct PatternDiscoveryPass
-    : public arts::impl::PatternDiscoveryBase<PatternDiscoveryPass> {
+    : public impl::PatternDiscoveryBase<PatternDiscoveryPass> {
   PatternDiscoveryPass() = default;
   PatternDiscoveryPass(mlir::arts::AnalysisManager *AM, bool refineMode)
       : analysisManager(AM) {

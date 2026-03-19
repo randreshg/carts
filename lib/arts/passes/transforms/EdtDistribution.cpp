@@ -46,7 +46,7 @@ using namespace mlir::arts;
 namespace {
 
 struct EdtDistributionPass
-    : public arts::impl::EdtDistributionBase<EdtDistributionPass> {
+    : public impl::EdtDistributionBase<EdtDistributionPass> {
   explicit EdtDistributionPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }

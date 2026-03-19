@@ -65,7 +65,7 @@ static Attribute sanitizeLoopMetadataForInitLoop(Attribute attr,
 }
 
 struct LoopReorderingPass
-    : public arts::impl::LoopReorderingBase<LoopReorderingPass> {
+    : public impl::LoopReorderingBase<LoopReorderingPass> {
   LoopReorderingPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }

@@ -91,7 +91,7 @@ static bool isDepStructPointerLoad(LLVM::LoadOp loadOp) {
   if (!gep)
     return false;
 
-  auto structType = dyn_cast<LLVM::LLVMStructType>(gep.getSourceElementType());
+  auto structType = dyn_cast<LLVM::LLVMStructType>(gep.getElemType());
   if (!structType)
     return false;
 

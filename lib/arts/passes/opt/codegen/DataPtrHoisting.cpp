@@ -70,7 +70,7 @@ static bool isDepsPtrLoad(LLVM::LoadOp loadOp) {
     /// Also check for GEP chains that access struct fields
     if (auto gepOp = dyn_cast<LLVM::GEPOp>(defOp)) {
       /// GEP into a struct type accessing field 2 (ptr field)
-      auto sourceType = gepOp.getSourceElementType();
+      auto sourceType = gepOp.getElemType();
       if (auto structType = dyn_cast<LLVM::LLVMStructType>(sourceType)) {
         /// artsEdtDep_t is struct { i64, i32, ptr, i32, i1 }
         /// Field 2 is the ptr field
@@ -131,7 +131,7 @@ static bool hoistLoadOutOfLoop(LLVM::LoadOp loadOp, scf::ForOp targetLoop) {
 }
 
 struct DataPtrHoistingPass
-    : public arts::impl::DataPtrHoistingBase<DataPtrHoistingPass> {
+    : public impl::DataPtrHoistingBase<DataPtrHoistingPass> {
   void runOnOperation() override;
 };
 

@@ -500,7 +500,7 @@ static bool hoistOutsideEdt(func::FuncOp funcOp) {
 ///===----------------------------------------------------------------------===///
 
 namespace {
-struct ArtsHoistingPass : public arts::impl::HoistingBase<ArtsHoistingPass> {
+struct ArtsHoistingPass : public impl::HoistingBase<ArtsHoistingPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     bool changed = false;

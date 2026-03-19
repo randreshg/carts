@@ -69,7 +69,7 @@ constexpr llvm::StringLiteral kCPSChainId = "arts.cps_chain_id";
 ///===----------------------------------------------------------------------===///
 /// Epoch Lowering Pass Implementation
 ///===----------------------------------------------------------------------===///
-struct EpochLoweringPass : public arts::impl::EpochLoweringBase<EpochLoweringPass> {
+struct EpochLoweringPass : public impl::EpochLoweringBase<EpochLoweringPass> {
   explicit EpochLoweringPass(bool debug = false) : debugMode(debug) {}
 
   void runOnOperation() override;

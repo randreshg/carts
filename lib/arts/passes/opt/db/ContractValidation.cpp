@@ -41,7 +41,7 @@ using namespace mlir::arts;
 namespace {
 
 struct ContractValidationPass
-    : public arts::impl::ContractValidationBase<ContractValidationPass> {
+    : public impl::ContractValidationBase<ContractValidationPass> {
 
   ContractValidationPass() = default;
   explicit ContractValidationPass(bool fail) { this->failOnError = fail; }

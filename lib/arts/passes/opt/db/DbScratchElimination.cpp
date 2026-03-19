@@ -251,7 +251,7 @@ static void eraseIfPresent(Operation *op) {
 }
 
 struct DbScratchEliminationPass
-    : public arts::impl::DbScratchEliminationBase<DbScratchEliminationPass> {
+    : public impl::DbScratchEliminationBase<DbScratchEliminationPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     SmallVector<ScratchCandidate, 8> candidates;

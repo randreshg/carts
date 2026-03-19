@@ -84,7 +84,7 @@ struct ArtsInlinerInterface : public mlir::InlinerInterface {
   /// Handle the given inlined terminator by replacing it with a new operation
   /// as necessary.
   void handleTerminator(mlir::Operation *op,
-                        mlir::ArrayRef<mlir::Value> valuesToRepl) const final {
+                        mlir::ValueRange valuesToRepl) const final {
     /// Only "std.return" needs to be handled here.
     auto returnOp = mlir::cast<mlir::func::ReturnOp>(op);
 
@@ -114,14 +114,25 @@ struct ArtsInlinerInterface : public mlir::InlinerInterface {
     return;
   if (targetRegion->empty())
     return;
-  if (inlineCall(interface, caller, callableOp, targetRegion,
+  auto cloneCallback = [](OpBuilder &builder, Region *src, Block *inlineBlock,
+                          Block *postInsertBlock, IRMapping &mapper,
+                          bool shouldCloneInlinedRegion) {
+    Region *insertRegion = inlineBlock->getParent();
+    if (shouldCloneInlinedRegion)
+      src->cloneInto(insertRegion, postInsertBlock->getIterator(), mapper);
+    else
+      insertRegion->getBlocks().splice(postInsertBlock->getIterator(),
+                                       src->getBlocks(), src->begin(),
+                                       src->end());
+  };
+  if (inlineCall(interface, cloneCallback, caller, callableOp, targetRegion,
                  /*shouldCloneInlinedRegion=*/true)
           .succeeded()) {
     caller.erase();
   }
 };
 
-struct ArtsInlinerPass : public arts::impl::ArtsInlinerBase<ArtsInlinerPass> {
+struct ArtsInlinerPass : public impl::ArtsInlinerBase<ArtsInlinerPass> {
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
@@ -186,7 +197,20 @@ struct ArtsInlinerPass : public arts::impl::ArtsInlinerBase<ArtsInlinerPass> {
         ARTS_INFO("Attempting to inline call");
 
         /// Attempt to inline the call
-        if (succeeded(mlir::inlineCall(inliner, call, callableOp,
+        auto cloneCallback =
+            [](OpBuilder &builder, Region *src, Block *inlineBlock,
+               Block *postInsertBlock, IRMapping &mapper,
+               bool shouldCloneInlinedRegion) {
+              Region *insertRegion = inlineBlock->getParent();
+              if (shouldCloneInlinedRegion)
+                src->cloneInto(insertRegion, postInsertBlock->getIterator(),
+                               mapper);
+              else
+                insertRegion->getBlocks().splice(
+                    postInsertBlock->getIterator(), src->getBlocks(),
+                    src->begin(), src->end());
+            };
+        if (succeeded(mlir::inlineCall(inliner, cloneCallback, call, callableOp,
                                        callableOp.getCallableRegion(), true))) {
           ARTS_INFO("Successfully inlined call");
           call.erase();

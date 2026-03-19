@@ -34,7 +34,7 @@ using namespace mlir::arts;
 namespace {
 
 struct DbDistributedOwnershipPass
-    : public arts::impl::DbDistributedOwnershipBase<DbDistributedOwnershipPass> {
+    : public impl::DbDistributedOwnershipBase<DbDistributedOwnershipPass> {
   explicit DbDistributedOwnershipPass(mlir::arts::AnalysisManager *AM)
       : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
