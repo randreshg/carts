@@ -219,7 +219,7 @@ static void collectAcquiresRecursive(DbAcquireNode *acqNode, DbGraph &graph,
 ///===----------------------------------------------------------------------===///
 namespace {
 struct DbModeTighteningPass
-    : public arts::impl::DbModeTighteningBase<DbModeTighteningPass> {
+    : public impl::DbModeTighteningBase<DbModeTighteningPass> {
   DbModeTighteningPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }

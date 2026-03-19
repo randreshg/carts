@@ -19,7 +19,7 @@ using namespace mlir;
 
 namespace {
 struct VerifyDbCreatedPass
-    : public arts::impl::VerifyDbCreatedBase<VerifyDbCreatedPass> {
+    : public impl::VerifyDbCreatedBase<VerifyDbCreatedPass> {
   void runOnOperation() override {
     auto module = getOperation();
     bool hasEdts = false;

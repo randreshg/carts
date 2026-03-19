@@ -101,7 +101,7 @@ namespace {
 /// Pass Implementation
 ///===----------------------------------------------------------------------===///
 
-struct CreateDbsPass : public arts::impl::CreateDbsBase<CreateDbsPass> {
+struct CreateDbsPass : public impl::CreateDbsBase<CreateDbsPass> {
   CreateDbsPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }

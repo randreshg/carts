@@ -36,7 +36,7 @@ void LoopAnalyzer::analyzeAffineLoop(affine::AffineForOp forOp,
   if (forOp.hasConstantBounds()) {
     int64_t lb = forOp.getConstantLowerBound();
     int64_t ub = forOp.getConstantUpperBound();
-    int64_t step = forOp.getStep();
+    int64_t step = forOp.getStepAsInt();
     if (step > 0 && ub > lb)
       metadata->tripCount = (ub - lb + step - 1) / step;
   }

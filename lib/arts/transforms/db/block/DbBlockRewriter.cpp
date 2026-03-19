@@ -416,7 +416,7 @@ bool DbBlockRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
       if (auto inner = dyn_cast<MemRefType>(outer.getElementType()))
         targetType = inner;
   }
-  if (!targetType.isa_and_nonnull<MemRefType>())
+  if (!targetType || !isa<MemRefType>(targetType))
     return false;
 
   Type derivedType = targetType;

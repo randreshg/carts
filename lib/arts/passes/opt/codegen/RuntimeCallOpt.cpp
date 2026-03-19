@@ -64,7 +64,7 @@ static scf::ForOp findHoistTarget(func::CallOp call, DominanceInfo &domInfo) {
   return target;
 }
 
-struct RuntimeCallOptPass : public arts::impl::RuntimeCallOptBase<RuntimeCallOptPass> {
+struct RuntimeCallOptPass : public impl::RuntimeCallOptBase<RuntimeCallOptPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     int hoisted = 0;

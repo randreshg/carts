@@ -145,7 +145,7 @@ static void routeEdtsToWorker(Operation *op, Value workerRoute) {
 }
 
 class ParallelEdtLoweringPass
-    : public arts::impl::ParallelEdtLoweringBase<ParallelEdtLoweringPass> {
+    : public impl::ParallelEdtLoweringBase<ParallelEdtLoweringPass> {
 public:
   void runOnOperation() override {
     ModuleOp module = getOperation();

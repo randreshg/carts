@@ -183,7 +183,7 @@ static bool isInnerWrapperOfInlinedPattern(Value alloc) {
 ///===----------------------------------------------------------------------===///
 
 struct RaiseMemRefDimensionalityPass
-    : public arts::impl::RaiseMemRefDimensionalityBase<RaiseMemRefDimensionalityPass> {
+    : public impl::RaiseMemRefDimensionalityBase<RaiseMemRefDimensionalityPass> {
 
   void runOnOperation() override;
 
@@ -256,7 +256,7 @@ void RaiseMemRefDimensionalityPass::runOnOperation() {
   DenseMap<Value, SmallVector<TaskDepRef>> taskDepsByValue;
   module.walk([&](omp::TaskOp taskOp) {
     auto dependVars = taskOp.getDependVars();
-    auto dependAttrs = taskOp.getDependsAttr();
+    auto dependAttrs = taskOp.getDependKindsAttr();
     if (dependVars.empty() || !dependAttrs)
       return;
     for (unsigned i = 0; i < dependVars.size(); ++i) {
@@ -1171,7 +1171,7 @@ LogicalResult RaiseMemRefDimensionalityPass::transformPattern(AllocPattern &patt
     /// Remove the outermost init loop unless it is an OpenMP wsloop.
     /// Parallel init loops can include non-allocation work, so keep them.
     Operation *outermost = pattern.initLoops[0];
-    if (!isa<omp::WsLoopOp>(outermost)) {
+    if (!isa<omp::WsloopOp>(outermost)) {
       toRemove.insert(outermost);
       ARTS_DEBUG("  Marking outermost init loop for removal (contains "
                  << pattern.initLoops.size() << " nested loops)");

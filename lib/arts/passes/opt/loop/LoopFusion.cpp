@@ -57,7 +57,7 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
-struct LoopFusionPass : public arts::impl::LoopFusionBase<LoopFusionPass> {
+struct LoopFusionPass : public impl::LoopFusionBase<LoopFusionPass> {
   LoopFusionPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }

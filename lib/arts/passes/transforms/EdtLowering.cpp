@@ -221,7 +221,7 @@ private:
 ///===----------------------------------------------------------------------===///
 /// EDT Lowering Pass Implementation
 ///===----------------------------------------------------------------------===///
-struct EdtLoweringPass : public arts::impl::EdtLoweringBase<EdtLoweringPass> {
+struct EdtLoweringPass : public impl::EdtLoweringBase<EdtLoweringPass> {
   explicit EdtLoweringPass(mlir::arts::AnalysisManager *AM = nullptr,
                            uint64_t idStride = IdRegistry::DefaultStride)
       : idStride(idStride), AM(AM) {}

@@ -113,7 +113,7 @@ getStaticIvRange(affine::AffineForOp loop) {
     return std::nullopt;
   int64_t lb = loop.getConstantLowerBound();
   int64_t ub = loop.getConstantUpperBound();
-  int64_t step = loop.getStep();
+  int64_t step = loop.getStepAsInt();
   if (step <= 0 || ub <= lb)
     return std::nullopt;
   return std::make_pair(lb, ub - step);

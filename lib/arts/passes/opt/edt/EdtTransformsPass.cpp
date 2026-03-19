@@ -91,7 +91,7 @@ constexpr llvm::StringLiteral Tree = "tree";
 constexpr llvm::StringLiteral LocalAccumulate = "local_accumulate";
 } // namespace ReductionStrategyNames
 
-struct EdtTransformsPass : public arts::impl::EdtTransformsBase<EdtTransformsPass> {
+struct EdtTransformsPass : public impl::EdtTransformsBase<EdtTransformsPass> {
   EdtTransformsPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }

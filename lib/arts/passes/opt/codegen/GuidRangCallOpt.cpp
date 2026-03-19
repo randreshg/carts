@@ -77,7 +77,7 @@ static bool isGuidReserveCall(func::CallOp call) {
 }
 
 struct GuidRangCallOptPass
-    : public arts::impl::GuidRangCallOptBase<GuidRangCallOptPass> {
+    : public impl::GuidRangCallOptBase<GuidRangCallOptPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     ArtsCodegen codegen(module, /*debug=*/false);

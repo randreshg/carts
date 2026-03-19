@@ -49,7 +49,7 @@ using namespace mlir::func;
 using namespace mlir::arts;
 
 namespace {
-struct DbTransformsPass : public arts::impl::DbTransformsBase<DbTransformsPass> {
+struct DbTransformsPass : public impl::DbTransformsBase<DbTransformsPass> {
   DbTransformsPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }

@@ -158,12 +158,15 @@ void ArtsCodegen::applyRuntimeFunctionAttributes(func::FuncOp funcOp,
   auto applyReadNoneMemoryAttr = [&]() {
     auto noModRef = LLVM::ModRefInfo::NoModRef;
     auto memoryAttr = LLVM::MemoryEffectsAttr::get(getContext(), noModRef,
-                                                   noModRef, noModRef);
+                                                   noModRef, noModRef,
+                                                   noModRef, noModRef,
+                                                   noModRef);
     funcOp->setAttr("memory", memoryAttr);
   };
   auto applyReadOnlyMemoryAttr = [&]() {
     auto ref = LLVM::ModRefInfo::Ref;
-    auto memoryAttr = LLVM::MemoryEffectsAttr::get(getContext(), ref, ref, ref);
+    auto memoryAttr = LLVM::MemoryEffectsAttr::get(getContext(), ref, ref, ref,
+                                                   ref, ref, ref);
     funcOp->setAttr("memory", memoryAttr);
   };
   auto attrSetContains = [](ArrayRef<StringRef> attrs, StringRef attrName) {
@@ -633,7 +636,7 @@ Value ArtsCodegen::createZeroValue(Type elemType, Location loc) {
 
   if (auto floatTy = dyn_cast<FloatType>(elemType)) {
     llvm::APFloat zero = llvm::APFloat::getZero(floatTy.getFloatSemantics());
-    return create<arith::ConstantFloatOp>(loc, zero, floatTy);
+    return create<arith::ConstantFloatOp>(loc, floatTy, zero);
   }
 
   return Value();
@@ -644,7 +647,7 @@ Value ArtsCodegen::createFnPtr(func::FuncOp funcOp, Location loc) {
   auto LFT = LLVM::LLVMFunctionType::get(
       LLVM::LLVMVoidType::get(funcOp.getContext()), FT.getInputs(), false);
   auto getFuncOp = create<polygeist::GetFuncOp>(
-      loc, LLVM::LLVMPointerType::get(LFT), funcOp.getName());
+      loc, LLVM::LLVMPointerType::get(funcOp.getContext()), funcOp.getName());
   return create<polygeist::Pointer2MemrefOp>(
              loc, MemRefType::get({ShapedType::kDynamic}, LFT), getFuncOp)
       .getResult();

@@ -37,7 +37,7 @@ using namespace mlir::arts;
 
 namespace {
 struct EdtPtrRematerializationPass
-    : public arts::impl::EdtPtrRematerializationBase<EdtPtrRematerializationPass> {
+    : public impl::EdtPtrRematerializationBase<EdtPtrRematerializationPass> {
   void runOnOperation() override;
 };
 } // end anonymous namespace
