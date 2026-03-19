@@ -106,8 +106,8 @@ llvm:
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_C_COMPILER=$(LLVM_C_COMPILER) \
 		-DCMAKE_CXX_COMPILER=$(LLVM_CXX_COMPILER) \
-		-DLLVM_ENABLE_PROJECTS='mlir;clang;lld;openmp' \
-		-DLLVM_ENABLE_RUNTIMES='libcxx;libcxxabi;libunwind;compiler-rt' \
+		-DLLVM_ENABLE_PROJECTS='mlir;clang;lld' \
+		-DLLVM_ENABLE_RUNTIMES='libcxx;libcxxabi;libunwind;compiler-rt;openmp' \
 		-DLLVM_TARGETS_TO_BUILD='host' \
 		-DLLVM_OPTIMIZED_TABLEGEN=ON \
 		-DLLVM_ENABLE_ASSERTIONS=ON \
