@@ -23,7 +23,7 @@ using namespace mlir::arts;
 namespace {
 
 struct LoweringContractCleanupPass
-    : public arts::impl::LoweringContractCleanupBase<LoweringContractCleanupPass> {
+    : public impl::LoweringContractCleanupBase<LoweringContractCleanupPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     SmallVector<LoweringContractOp, 16> contracts;

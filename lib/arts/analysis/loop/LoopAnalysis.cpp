@@ -45,7 +45,7 @@ getTripCountFromConstantBounds(Operation *loopOp) {
     if (affineFor.hasConstantBounds()) {
       int64_t lb = affineFor.getConstantLowerBound();
       int64_t ub = affineFor.getConstantUpperBound();
-      int64_t step = affineFor.getStep();
+      int64_t step = affineFor.getStepAsInt();
       if (step > 0) {
         int64_t span = ub - lb;
         if (span <= 0)

@@ -630,7 +630,7 @@ feedbackPartitionDecisionToContract(DbAllocOp newAllocOp,
 
 namespace {
 struct DbPartitioningPass
-    : public arts::impl::DbPartitioningBase<DbPartitioningPass> {
+    : public impl::DbPartitioningBase<DbPartitioningPass> {
   DbPartitioningPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }

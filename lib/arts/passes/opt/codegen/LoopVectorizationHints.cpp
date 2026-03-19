@@ -303,9 +303,9 @@ createInnermostLoopHints(MLIRContext *ctx, unsigned width, unsigned interleave,
       /*unswitch=*/nullptr,
       /*mustProgress=*/mustProgress ? BoolAttr::get(ctx, true) : nullptr,
       /*isVectorized=*/nullptr,
-      /*parallelAccesses=*/accessGroups,
       /*startLoc=*/FusedLoc(),
-      /*endLoc=*/FusedLoc());
+      /*endLoc=*/FusedLoc(),
+      /*parallelAccesses=*/accessGroups);
 }
 
 /// Create light hints for outer loops (no vectorization).
@@ -338,9 +338,9 @@ createOuterLoopHints(MLIRContext *ctx, bool mustProgress, unsigned unrollCount,
       /*unswitch=*/nullptr,
       /*mustProgress=*/mustProgress ? BoolAttr::get(ctx, true) : nullptr,
       /*isVectorized=*/nullptr,
-      /*parallelAccesses=*/accessGroups,
       /*startLoc=*/FusedLoc(),
-      /*endLoc=*/FusedLoc());
+      /*endLoc=*/FusedLoc(),
+      /*parallelAccesses=*/accessGroups);
 }
 
 struct LoopVectorizationHintsPass

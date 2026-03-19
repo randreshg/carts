@@ -591,7 +591,7 @@ static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
 }
 
 /// ForLowering Pass Implementation
-struct ForLoweringPass : public arts::impl::ForLoweringBase<ForLoweringPass> {
+struct ForLoweringPass : public impl::ForLoweringBase<ForLoweringPass> {
   explicit ForLoweringPass(mlir::arts::AnalysisManager *AM = nullptr)
       : AM(AM) {}
   void runOnOperation() override;

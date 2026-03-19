@@ -327,7 +327,7 @@ static bool peelBoundaryLoop(BoundaryPeelingMatch &match) {
 }
 
 struct StencilBoundaryPeelingPass
-    : public arts::impl::StencilBoundaryPeelingBase<StencilBoundaryPeelingPass> {
+    : public impl::StencilBoundaryPeelingBase<StencilBoundaryPeelingPass> {
   using Base::Base;
 
   void runOnOperation() override {

@@ -61,7 +61,7 @@ static void annotateAccessPatterns(ModuleOp module,
   });
 }
 
-struct ForOptPass : public arts::impl::ForOptBase<ForOptPass> {
+struct ForOptPass : public impl::ForOptBase<ForOptPass> {
   explicit ForOptPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }

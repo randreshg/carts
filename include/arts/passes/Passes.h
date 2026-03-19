@@ -11,6 +11,7 @@
 #include "arts/Dialect.h"
 #include "mlir/Conversion/LLVMCommon/LoweringOptions.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Pass/Pass.h"
@@ -162,6 +163,7 @@ namespace polygeist {
 class PolygeistDialect;
 } // namespace polygeist
 
+#define GEN_PASS_DECL
 #define GEN_PASS_REGISTRATION
 #include "arts/passes/Passes.h.inc"
 

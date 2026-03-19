@@ -5,7 +5,7 @@
 
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
-#include "mlir/Dialect/Affine/Passes.h"
+#include "mlir/Dialect/Affine/Transforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/DLTI/DLTI.h"
@@ -15,6 +15,11 @@
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
+#include "mlir/Dialect/Async/IR/Async.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/InitAllDialects.h"
 #include "mlir/InitAllExtensions.h"
@@ -618,7 +623,7 @@ void initializeContext(MLIRContext &context) {
   context.getOrLoadDialect<NVVM::NVVMDialect>();
   context.getOrLoadDialect<ROCDL::ROCDLDialect>();
   context.getOrLoadDialect<gpu::GPUDialect>();
-  context.getOrLoadDialect<omp::OpenMPDialect>();
+  context.getOrLoadDialect<mlir::omp::OpenMPDialect>();
   context.getOrLoadDialect<math::MathDialect>();
   context.getOrLoadDialect<memref::MemRefDialect>();
   context.getOrLoadDialect<linalg::LinalgDialect>();

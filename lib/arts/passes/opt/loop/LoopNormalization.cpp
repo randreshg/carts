@@ -44,7 +44,7 @@ using namespace mlir::arts;
 namespace {
 
 struct LoopNormalizationPass
-    : public arts::impl::LoopNormalizationBase<LoopNormalizationPass> {
+    : public impl::LoopNormalizationBase<LoopNormalizationPass> {
   LoopNormalizationPass(mlir::arts::AnalysisManager *AM) : AM(AM) {}
 
   void runOnOperation() override {

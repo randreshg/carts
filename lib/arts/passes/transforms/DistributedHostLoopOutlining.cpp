@@ -384,7 +384,7 @@ static void outlineLoop(scf::ForOp loop, const AbstractMachine *machine) {
 }
 
 struct DistributedHostLoopOutliningPass
-    : public arts::impl::DistributedHostLoopOutliningBase<
+    : public impl::DistributedHostLoopOutliningBase<
           DistributedHostLoopOutliningPass> {
   explicit DistributedHostLoopOutliningPass(mlir::arts::AnalysisManager *AM)
       : AM(AM) {}

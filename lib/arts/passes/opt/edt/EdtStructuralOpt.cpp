@@ -198,7 +198,7 @@ static void processRegionForParallelEdtFusion(Region &region, bool &changed) {
 ///===----------------------------------------------------------------------===///
 namespace {
 struct EdtStructuralOptPass
-    : public arts::impl::EdtStructuralOptBase<EdtStructuralOptPass> {
+    : public impl::EdtStructuralOptBase<EdtStructuralOptPass> {
   EdtStructuralOptPass(mlir::arts::AnalysisManager *AM, bool runAnalysis)
       : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
@@ -242,7 +242,7 @@ private:
 };
 
 struct EdtAllocaSinkingPass
-    : public arts::impl::EdtAllocaSinkingBase<EdtAllocaSinkingPass> {
+    : public impl::EdtAllocaSinkingBase<EdtAllocaSinkingPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     module.walk([&](EdtOp edt) { sinkExternalAllocasInEdt(edt); });

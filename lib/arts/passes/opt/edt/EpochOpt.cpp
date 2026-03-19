@@ -1385,7 +1385,7 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
 ///===----------------------------------------------------------------------===///
 
 namespace {
-struct EpochOptPass : public arts::impl::EpochOptBase<EpochOptPass> {
+struct EpochOptPass : public impl::EpochOptBase<EpochOptPass> {
   EpochOptPass() = default;
 
   EpochOptPass(bool narrowing, bool fusion, bool loopFusion, bool amortization,

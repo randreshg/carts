@@ -128,7 +128,7 @@ static void normalizeBlockHaloAcquireSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   acquire.getSizesMutable().assign(sizes);
 }
 
-struct DbLoweringPass : public arts::impl::DbLoweringBase<DbLoweringPass> {
+struct DbLoweringPass : public impl::DbLoweringBase<DbLoweringPass> {
   DbLoweringPass(uint64_t idStride = IdRegistry::DefaultStride)
       : idStride(idStride) {}
   void runOnOperation() override;

@@ -16,7 +16,7 @@ unsigned getLoopDepth(Operation *op) {
   for (Operation *parent = op ? op->getParentOp() : nullptr; parent;
        parent = parent->getParentOp()) {
     if (isa<affine::AffineForOp, scf::ForOp, scf::ParallelOp, scf::ForallOp,
-            omp::WsLoopOp, arts::ForOp>(parent))
+            omp::WsloopOp, arts::ForOp>(parent))
       ++depth;
   }
   return depth;

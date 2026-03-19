@@ -34,7 +34,7 @@ using namespace mlir::arts;
 namespace {
 
 struct KernelTransformsPass
-    : public arts::impl::KernelTransformsBase<KernelTransformsPass> {
+    : public impl::KernelTransformsBase<KernelTransformsPass> {
   KernelTransformsPass(mlir::arts::AnalysisManager *AM,
                        bool enableElementwisePipeline, bool enableMatmul,
                        bool enableTiling, int64_t tileJ, int64_t minTripCount)

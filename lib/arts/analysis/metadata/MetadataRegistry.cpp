@@ -276,7 +276,7 @@ bool MetadataRegistry::transferMetadata(Operation *sourceOp,
 
 bool MetadataRegistry::isLoopOp(Operation *op) {
   return isa<affine::AffineForOp, scf::ForOp, scf::ParallelOp, scf::ForallOp,
-             omp::WsLoopOp, arts::ForOp>(op);
+             omp::WsloopOp, arts::ForOp>(op);
 }
 
 bool MetadataRegistry::isMemrefAllocOp(Operation *op) {

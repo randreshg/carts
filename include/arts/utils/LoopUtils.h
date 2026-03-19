@@ -91,7 +91,7 @@ void collectWhileBounds(Value cond, Value iterArg, SmallVector<Value> &bounds);
 
 /// Compute the loop nesting depth of an operation by counting how many
 /// enclosing loop operations (scf::ForOp, scf::ParallelOp, scf::ForallOp,
-/// affine::AffineForOp, omp::WsLoopOp, arts::ForOp) surround it.
+/// affine::AffineForOp, omp::WsloopOp, arts::ForOp) surround it.
 unsigned getLoopDepth(Operation *op);
 
 /// Returns true if the EDT's body contains any loop operations
@@ -99,11 +99,11 @@ unsigned getLoopDepth(Operation *op);
 bool containsLoop(EdtOp edt);
 
 /// Return the nearest enclosing loop-like op that contains the given operation.
-/// Searches for scf::ForOp, affine::AffineForOp, omp::WsLoopOp,
+/// Searches for scf::ForOp, affine::AffineForOp, omp::WsloopOp,
 /// scf::ParallelOp, scf::ForallOp, and arts::ForOp.
 inline Operation *findNearestLoop(Operation *op) {
   for (Operation *cur = op->getParentOp(); cur; cur = cur->getParentOp()) {
-    if (isa<scf::ForOp, affine::AffineForOp, omp::WsLoopOp, scf::ParallelOp,
+    if (isa<scf::ForOp, affine::AffineForOp, omp::WsloopOp, scf::ParallelOp,
             scf::ForallOp, arts::ForOp>(cur))
       return cur;
   }

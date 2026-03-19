@@ -63,7 +63,7 @@ static std::optional<Value> getStoredValueToToken(memref::AllocaOp allocaOp) {
   return std::nullopt;
 }
 
-struct HandleDepsPass : public arts::impl::HandleDepsBase<HandleDepsPass> {
+struct HandleDepsPass : public impl::HandleDepsBase<HandleDepsPass> {
   void runOnOperation() override;
 
 private:
@@ -183,7 +183,7 @@ void HandleDepsPass::runOnOperation() {
 
   module.walk([&](omp::TaskOp task) {
     auto dependVars = task.getDependVars();
-    auto dependAttrs = task.getDependsAttr();
+    auto dependAttrs = task.getDependKindsAttr();
     if (dependVars.empty() || !dependAttrs)
       return;
 
