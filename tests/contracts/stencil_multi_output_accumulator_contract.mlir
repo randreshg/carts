@@ -18,7 +18,8 @@ module attributes {llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i6
     %Out0 = memref.alloc() : memref<32x32x32xf64>
     %Out1 = memref.alloc() : memref<32x32x32xf64>
     omp.parallel {
-      omp.wsloop for (%i) : index = (%c1) to (%c31) step (%c1) {
+      omp.wsloop {
+        omp.loop_nest (%i) : index = (%c1) to (%c31) step (%c1) {
         scf.for %j = %c1 to %c31 step %c1 {
           scf.for %k = %c1 to %c31 step %c1 {
             %im1 = arith.subi %i, %c1 : index
@@ -49,10 +50,12 @@ module attributes {llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i6
         }
         omp.yield
       }
+      }
       omp.terminator
     }
     omp.parallel {
-      omp.wsloop for (%i2) : index = (%c1) to (%c31) step (%c1) {
+      omp.wsloop {
+        omp.loop_nest (%i2) : index = (%c1) to (%c31) step (%c1) {
         scf.for %j2 = %c1 to %c31 step %c1 {
           scf.for %k2 = %c1 to %c31 step %c1 {
             %v = memref.load %Out0[%i2, %j2, %k2] : memref<32x32x32xf64>
@@ -60,6 +63,7 @@ module attributes {llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i6
           }
         }
         omp.yield
+      }
       }
       omp.terminator
     }
