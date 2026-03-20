@@ -190,7 +190,7 @@ static cl::opt<bool> EpochFinishContinuation(
     cl::desc("Enable epoch finish-continuation lowering (replace blocking "
              "epoch waits with ARTS-native finish-EDT continuation scheduling "
              "for eligible patterns)"),
-    cl::init(true));
+    cl::init(false));
 
 ///===----------------------------------------------------------------------===///
 /// Pipeline Stop Options
@@ -922,6 +922,8 @@ void buildLLVMIREmissionPipeline(PassManager &pm) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arith::createArithExpandOpsPass());
   pm.addPass(polygeist::createConvertPolygeistToLLVMPass());
+  pm.addPass(createConvertIndexToLLVMPass());
+  pm.addPass(createReconcileUnrealizedCastsPass());
   pm.addPass(arts::createAliasScopeGenPass());
   pm.addPass(arts::createLoopVectorizationHintsPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
