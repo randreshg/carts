@@ -267,6 +267,11 @@ LogicalResult EdtOp::verify() {
       if (operand.getDefiningOp<memref::AllocaOp>())
         continue;
 
+      /// Allow external DbAllocOp results; EdtEnvManager already captures
+      /// these as dbHandles and packs them through paramv.
+      if (operand.getDefiningOp<DbAllocOp>())
+        continue;
+
       if (externalValues.contains(operand)) {
         op->emitOpError("EDT region uses external DbAcquire value '")
             << operand << "' directly instead of DbAcquire block argument. ";
