@@ -190,6 +190,9 @@ void MemoryAccessClassifier::collectAccessOperations(
   if (!edtUserOp || !useInEdt)
     return;
 
+  if (!edtUserOp->getParentRegion())
+    return;
+
   EdtOp edtUser = node->getEdtUser();
 
   SmallVector<Value, 16> worklist;

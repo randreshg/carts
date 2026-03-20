@@ -20,13 +20,10 @@
 #include "arts/passes/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/Dialect.h"
-#include "arts/passes/Passes.h"
 #include "mlir/Analysis/CallGraph.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/InliningUtils.h"
 #include "llvm/Support/Debug.h"
 
@@ -95,43 +92,6 @@ struct ArtsInlinerInterface : public mlir::InlinerInterface {
   }
 };
 
-[[maybe_unused]] static void inlineCall(mlir::func::CallOp caller) {
-  /// Build the inliner interface.
-  InlinerInterface interface(caller.getContext());
-
-  auto callable = caller.getCallableForCallee();
-  mlir::CallableOpInterface callableOp;
-  if (mlir::SymbolRefAttr symRef =
-          mlir::dyn_cast<mlir::SymbolRefAttr>(callable)) {
-    auto *symbolOp =
-        caller->getParentOfType<mlir::ModuleOp>().lookupSymbol(symRef);
-    callableOp = mlir::dyn_cast_or_null<mlir::CallableOpInterface>(symbolOp);
-  } else {
-    return;
-  }
-  mlir::Region *targetRegion = callableOp.getCallableRegion();
-  if (!targetRegion)
-    return;
-  if (targetRegion->empty())
-    return;
-  auto cloneCallback = [](OpBuilder &builder, Region *src, Block *inlineBlock,
-                          Block *postInsertBlock, IRMapping &mapper,
-                          bool shouldCloneInlinedRegion) {
-    Region *insertRegion = inlineBlock->getParent();
-    if (shouldCloneInlinedRegion)
-      src->cloneInto(insertRegion, postInsertBlock->getIterator(), mapper);
-    else
-      insertRegion->getBlocks().splice(postInsertBlock->getIterator(),
-                                       src->getBlocks(), src->begin(),
-                                       src->end());
-  };
-  if (inlineCall(interface, cloneCallback, caller, callableOp, targetRegion,
-                 /*shouldCloneInlinedRegion=*/true)
-          .succeeded()) {
-    caller.erase();
-  }
-};
-
 struct ArtsInlinerPass : public impl::ArtsInlinerBase<ArtsInlinerPass> {
 
   void runOnOperation() override {
@@ -162,6 +122,25 @@ struct ArtsInlinerPass : public impl::ArtsInlinerBase<ArtsInlinerPass> {
         if (call->getParentOp() == nullptr) {
           ARTS_WARN("Skipping erased call");
           continue;
+        }
+
+        /// Skip calls nested inside OMP operations — the OMP dialect does
+        /// not register a DialectInlinerInterface, so inlining into OMP
+        /// regions causes an assertion failure in allowSingleBlockOptimization.
+        {
+          bool insideOmp = false;
+          for (Operation *ancestor = call->getParentOp(); ancestor;
+               ancestor = ancestor->getParentOp()) {
+            if (ancestor->getDialect() &&
+                ancestor->getDialect()->getNamespace() == "omp") {
+              insideOmp = true;
+              break;
+            }
+          }
+          if (insideOmp) {
+            ARTS_INFO("Skipping call inside OMP region");
+            continue;
+          }
         }
 
         /// Resolve the callable operation
