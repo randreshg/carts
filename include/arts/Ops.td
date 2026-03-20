@@ -920,6 +920,18 @@ def RuntimeQueryOp : Arts_Op<"runtime_query", [Pure]> {
   ];
 }
 
+def GetEdtEpochGuidOp : Arts_Op<"get_edt_epoch_guid", [Pure]> {
+  let summary = "Get the epoch GUID that the current EDT is enrolled in";
+  let description = [{
+    Returns the epoch_guid field from the current EDT structure. This is
+    the epoch that this EDT was enrolled in at creation time, NOT the
+    current epoch from the epoch stack. Used by CPS chain to propagate
+    the outer epoch enrollment through continuation chains.
+  }];
+  let results = (outs I64 : $epochGuid);
+  let assemblyFormat = "attr-dict";
+}
+
 ///===----------------------------------------------------------------------===///
 /// EDT Lowering Operations
 ///===----------------------------------------------------------------------===///

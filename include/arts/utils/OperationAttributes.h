@@ -53,6 +53,12 @@ constexpr StringLiteral DepPatternAttr = "depPattern";
 constexpr StringLiteral DistributionVersion = "distribution_version";
 constexpr StringLiteral PatternRevision = "arts.pattern_revision";
 
+/// Epoch without caller-active count (CPS continuation-path inner epochs)
+constexpr StringLiteral NoStartEpoch = "arts.no_start_epoch";
+
+/// Marks the outer epoch of a CPS chain (the one main waits on)
+constexpr StringLiteral CPSOuterEpoch = "arts.cps_outer_epoch";
+
 /// DB storage-type inference annotations (set by DbModeTighteningPass)
 constexpr StringLiteral LocalOnly = "arts.local_only";
 constexpr StringLiteral ReadOnlyAfterInit = "arts.read_only_after_init";

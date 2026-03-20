@@ -469,11 +469,28 @@ __ARTS_RTL(arts_get_current_epoch_guid, ArtsGuid)
 __ARTS_RTL_ATTRS(arts_get_current_epoch_guid, GetterAttrs, EmptyAttrs,
                  ParamAttrs())
 
+/// arts_guid_t arts_get_edt_epoch_guid();
+__ARTS_RTL(arts_get_edt_epoch_guid, ArtsGuid)
+__ARTS_RTL_ATTRS(arts_get_edt_epoch_guid, GetterAttrs, EmptyAttrs,
+                 ParamAttrs())
+
 /// arts_guid_t arts_initialize_and_start_epoch(arts_guid_t finish_edt_guid,
 ///                                             unsigned int slot);
 __ARTS_RTL(arts_initialize_and_start_epoch, ArtsGuid, ArtsGuid, Int32)
 __ARTS_RTL_ATTRS(arts_initialize_and_start_epoch, ControlAttrs, EmptyAttrs,
                  ParamAttrs(EmptyAttrs, ZExt))
+
+/// arts_guid_t arts_initialize_epoch(unsigned int rank,
+///                                    arts_guid_t finish_edt_guid,
+///                                    unsigned int slot);
+__ARTS_RTL(arts_initialize_epoch, ArtsGuid, Int32, ArtsGuid, Int32)
+__ARTS_RTL_ATTRS(arts_initialize_epoch, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(ZExt, EmptyAttrs, ZExt))
+
+/// bool arts_set_current_epoch_guid(arts_guid_t epoch_guid);
+__ARTS_RTL(arts_set_current_epoch_guid, Int1, ArtsGuid)
+__ARTS_RTL_ATTRS(arts_set_current_epoch_guid, ControlAttrs, ZExt,
+                 ParamAttrs(EmptyAttrs))
 
 /// bool arts_wait_on_handle(arts_guid_t epoch_guid);
 __ARTS_RTL(arts_wait_on_handle, Int1, ArtsGuid)

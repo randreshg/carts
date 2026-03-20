@@ -26,7 +26,7 @@ struct VerifyPreLoweredPass
   void runOnOperation() override {
     bool found = false;
     getOperation().walk([&](Operation *op) {
-      if (isa<arts::EdtOp, arts::ForOp, arts::EpochOp>(op)) {
+      if (isa<arts::EdtOp, arts::ForOp, arts::EpochOp, arts::CPSAdvanceOp>(op)) {
         op->emitError(
             "high-level scheduler op survived past pre-lowering step");
         found = true;

@@ -294,9 +294,26 @@ Value ArtsCodegen::createEpoch(Value finishEdtGuid, Value finishEdtSlot,
       .getResult(0);
 }
 
+Value ArtsCodegen::createEpochNoStart(Value finishEdtGuid,
+                                      Value finishEdtSlot, Location loc) {
+  auto finishEdtSlotInt = castToInt(Int32, finishEdtSlot, loc);
+  auto rank = getCurrentNode(loc);
+  auto epochGuid =
+      createRuntimeCall(ARTSRTL_arts_initialize_epoch,
+                        {rank, finishEdtGuid, finishEdtSlotInt}, loc)
+          .getResult(0);
+  createRuntimeCall(ARTSRTL_arts_set_current_epoch_guid, {epochGuid}, loc);
+  return epochGuid;
+}
+
 /// Utils
 Value ArtsCodegen::getCurrentEpochGuid(Location loc) {
   return createRuntimeCall(ARTSRTL_arts_get_current_epoch_guid, {}, loc)
+      .getResult(0);
+}
+
+Value ArtsCodegen::getEdtEpochGuid(Location loc) {
+  return createRuntimeCall(ARTSRTL_arts_get_edt_epoch_guid, {}, loc)
       .getResult(0);
 }
 

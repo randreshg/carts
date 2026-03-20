@@ -73,6 +73,8 @@ ARTS_DEBUG_SETUP(edt_lowering);
 using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
+using AttrNames::Operation::ContinuationForEpoch;
+using AttrNames::Operation::CPSChainId;
 
 namespace {
 
@@ -186,6 +188,15 @@ public:
 
     /// Classify variables into parameters, constants, and captured values
     for (Value val : capturedValues) {
+      /// DbAllocOp results must NEVER be cloned — they create new DBs.
+      /// Mark them as db handles to be packed as opaque i64 parameters.
+      if (auto defOp = val.getDefiningOp()) {
+        if (isa<DbAllocOp>(defOp)) {
+          dbHandles.insert(val);
+          continue;
+        }
+      }
+
       if (isConstant(val))
         continue;
 
@@ -207,6 +218,7 @@ public:
     return capturedValues.getArrayRef();
   }
   ArrayRef<Value> getDependencies() const { return deps.getArrayRef(); }
+  ArrayRef<Value> getDbHandles() const { return dbHandles.getArrayRef(); }
   const DenseMap<Value, unsigned> &getValueToPackIndex() const {
     return valueToPackIndex;
   }
@@ -214,7 +226,7 @@ public:
 
 private:
   EdtOp edtOp;
-  SetVector<Value> capturedValues, parameters, constants, deps;
+  SetVector<Value> capturedValues, parameters, constants, deps, dbHandles;
   DenseMap<Value, unsigned> valueToPackIndex;
 };
 
@@ -281,7 +293,10 @@ void EdtLoweringPass::runOnOperation() {
   ARTS_INFO_HEADER(EdtLoweringPass);
   ARTS_DEBUG_REGION(module.dump(););
 
-  /// Gather candidate EDTs and lower them.
+  /// Earlier passes may have modified the IR, making cached DbGraph nodes stale.
+  if (AM)
+    AM->getDbAnalysis().invalidate();
+
   ARTS_DEBUG_HEADER(TaskEdtLowering);
   SmallVector<EdtOp, 8> taskEdts;
   gatherLowerableTaskEdts(taskEdts);
@@ -377,7 +392,6 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
     ARTS_DEBUG("  Adding +1 control dep slot for epoch continuation");
   }
 
-  /// Create the outline operation at the same location as the EDT
   AC->setInsertionPoint(edtOp);
   Value routeVal = edtOp.getRoute();
   if (!routeVal)
@@ -390,18 +404,19 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   setOutlinedFunc(outlineOp, outlinedFunc.getName());
 
   /// Propagate continuation attributes so EpochLowering can find them.
-  if (edtOp->hasAttr("arts.continuation_for_epoch"))
-    outlineOp->setAttr("arts.continuation_for_epoch",
+  if (edtOp->hasAttr(ContinuationForEpoch))
+    outlineOp->setAttr(ContinuationForEpoch,
                        AC->getBuilder().getUnitAttr());
   if (edtOp->hasAttr("arts.has_control_dep"))
     outlineOp->setAttr("arts.has_control_dep",
                        edtOp->getAttr("arts.has_control_dep"));
+  if (auto chainId = edtOp->getAttrOfType<StringAttr>(CPSChainId))
+    outlineOp->setAttr(CPSChainId, chainId);
 
   int64_t baseId = getArtsId(edtOp);
   if (!baseId)
     baseId = idRegistry.getOrCreate(edtOp.getOperation());
 
-  /// Set the create id for the outlined operation
   if (baseId) {
     int64_t createId = baseId * static_cast<int64_t>(idStride);
     setArtsCreateId(outlineOp, createId);
@@ -409,20 +424,20 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
                                          << " x stride=" << idStride << ")");
   }
 
-  /// Insert dependency management after the outline op
+  /// Insert dependency management after the outline op.
   Value edtGuid = outlineOp.getGuid();
   AC->setInsertionPointAfter(outlineOp);
   SmallVector<Value> depsVec(edtDeps.begin(), edtDeps.end());
   if (failed(insertDepManagement(loc, edtGuid, depsVec)))
     return edtOp.emitError("Failed to insert dependency management");
 
-  /// Replace all uses of EDT with the outlined function result
+  /// Replace all uses of EDT with the outlined function result.
   if (edtOp->getNumResults() > 0) {
     SmallVector<Value> replacementValues = {outlineOp.getResult()};
     edtOp->replaceAllUsesWith(replacementValues);
   }
 
-  /// Remove original EDT
+  /// Remove original EDT.
   edtOp.erase();
 
   return success();
@@ -489,6 +504,7 @@ Value EdtLoweringPass::packParams(Location loc, EdtEnvManager &envManager,
                                   SmallVector<Type> &packTypes) {
   const auto &parameters = envManager.getParameters();
   const auto &deps = envManager.getDependencies();
+  const auto &dbHandles = envManager.getDbHandles();
 
   SmallVector<Value> packValues;
   auto &valueToPackIndex = envManager.getValueToPackIndex();
@@ -503,6 +519,26 @@ Value EdtLoweringPass::packParams(Location loc, EdtEnvManager &envManager,
     valueToPackIndex.try_emplace(v, packValues.size());
     packTypes.push_back(v.getType());
     packValues.push_back(v);
+  }
+
+  /// Pack DB handle values as opaque i64 parameters. DbAllocOp results
+  /// (memref<Nxi64> GUIDs, memref<Nxmemref<...>> ptrs) must never be cloned —
+  /// cloning creates new datablocks. Convert to raw i64 for transport.
+  for (Value dbHandle : dbHandles) {
+    Value scalar;
+    auto memrefTy = dyn_cast<MemRefType>(dbHandle.getType());
+    /// Both GUID handles (memref<?xi64>) and ptr handles are passed as
+    /// raw pointers (memref → ptr → i64). This preserves the full array
+    /// so that CPS chain continuations can access all block partitions,
+    /// not just element[0].
+    {
+      Value rawPtr = AC->create<polygeist::Memref2PointerOp>(
+          loc, LLVM::LLVMPointerType::get(AC->getContext()), dbHandle);
+      scalar = AC->create<LLVM::PtrToIntOp>(loc, AC->Int64, rawPtr);
+    }
+    valueToPackIndex.try_emplace(dbHandle, packValues.size());
+    packTypes.push_back(AC->Int64);
+    packValues.push_back(scalar);
   }
 
   /// Insert indices/offsets/sizes for deps into packValues if not already
@@ -638,6 +674,26 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
       valueMapping.map(param, unpackedParams[unpackedIndex++]);
   }
 
+  /// Reconstruct DB handles from unpacked i64 values. Each DbAllocOp result
+  /// was packed as a scalar i64; here we recreate the original memref types.
+  for (Value dbHandle : envManager.getDbHandles()) {
+    auto it = envManager.getValueToPackIndex().find(dbHandle);
+    if (it == envManager.getValueToPackIndex().end() ||
+        it->second >= allParams.size())
+      continue;
+    Value packedI64 = allParams[it->second];
+    auto memrefTy = cast<MemRefType>(dbHandle.getType());
+    /// Both GUID and ptr handles were packed as raw pointers (i64).
+    /// Reconstruct memref from the raw pointer.
+    {
+      Value rawPtr =
+          AC->create<LLVM::IntToPtrOp>(loc, AC->llvmPtr, packedI64);
+      Value memrefVal = AC->create<polygeist::Pointer2MemrefOp>(
+          loc, memrefTy, rawPtr);
+      valueMapping.map(dbHandle, memrefVal);
+    }
+  }
+
   /// Clone remaining captured values that are pure and regionless (e.g.,
   /// llvm.getelementptr chains computing format strings) so the outlined
   /// function does not reference parent-scope SSA values.
@@ -669,14 +725,31 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
     if (failed(cloneCaptured(captured)))
       return failure();
 
-  /// Clone EDT body operations into outlined function
+  /// Clone EDT body operations into outlined function.
   builder.setInsertionPointToEnd(entryBlock);
   cloneAndRemapEdtBody(edtBlock, builder, valueMapping);
 
-  /// Add return terminator
   AC->create<func::ReturnOp>(loc);
 
-  /// Transform dependency uses inside outlined region
+  /// Hoist constant-like ops to the front of the entry block. cloneCaptured
+  /// and body cloning may produce constants after their uses; constants have
+  /// no operands so moving them to the top is always safe.
+  {
+    Operation *firstNonConstant = nullptr;
+    SmallVector<Operation *> constantsToHoist;
+    for (Operation &op : *entryBlock) {
+      if (op.hasTrait<OpTrait::ConstantLike>()) {
+        if (firstNonConstant)
+          constantsToHoist.push_back(&op);
+      } else if (!firstNonConstant) {
+        firstNonConstant = &op;
+      }
+    }
+    for (Operation *op : constantsToHoist)
+      op->moveBefore(firstNonConstant);
+  }
+
+  /// Transform dependency uses inside outlined region.
   transformDepUses(originalDeps, depv, allParams, envManager, depPlaceholders);
   return success();
 }

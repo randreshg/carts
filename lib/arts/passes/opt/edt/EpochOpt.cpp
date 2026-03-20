@@ -34,12 +34,14 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -280,6 +282,10 @@ static void narrowEpochScopes(ModuleOp module, bool &changed) {
   for (EpochOp epoch : epochs) {
     /// Skip if the epoch was erased by a previous narrowing.
     if (!epoch->getBlock())
+      continue;
+    /// Skip CPS chain epochs — their internal structure (epoch_0 + cont EDTs)
+    /// must not be split since continuations depend on the enclosing epoch.
+    if (epoch->hasAttr(ContinuationForEpoch))
       continue;
     changed |= narrowEpoch(epoch);
   }
@@ -722,8 +728,14 @@ static bool isEligibleForContinuation(EpochOp epochOp,
   if (!block)
     return false;
 
-  /// Rule 2: The epoch must not be inside a loop (conservative: no CPS yet).
+  /// Rule 2: The epoch must not be inside a loop (loops use CPS chain instead).
   if (isInsideLoop(epochOp))
+    return false;
+
+  /// Rule 2b: Skip epochs already marked for CPS chain continuation — they
+  /// are managed by the CPS chain transform and must not get a second
+  /// continuation EDT.
+  if (epochOp->hasAttr(ContinuationForEpoch))
     return false;
 
   /// Rule 3: The epoch region must not be empty.
@@ -891,6 +903,32 @@ static bool isPureArith(Operation *op) {
   return false;
 }
 
+/// Check if an op is a sequential operation safe to clone into a CPS
+/// continuation body. These ops execute serially on the continuation EDT's
+/// thread after the preceding epoch fires and before the next one starts.
+static bool isCPSSequentialOp(Operation *op) {
+  // Sequential loops (with or without iter_args)
+  if (isa<scf::ForOp>(op))
+    return true;
+  // Function calls (timer, math library, etc.)
+  if (isa<func::CallOp>(op))
+    return true;
+  // Direct memory access
+  if (isa<memref::LoadOp, memref::StoreOp, memref::AllocaOp, memref::AllocOp,
+          memref::DeallocOp, memref::CastOp, memref::SubViewOp>(op))
+    return true;
+  // Pure math ops (absf, exp, sqrt, etc.)
+  if (isa<math::AbsFOp, math::ExpOp, math::Exp2Op, math::SqrtOp,
+          math::TanhOp, math::LogOp, math::Log2Op, math::PowFOp,
+          math::CeilOp, math::FloorOp, math::CosOp, math::SinOp,
+          math::FmaOp, math::RoundOp>(op))
+    return true;
+  // Lowering contract metadata
+  if (isa<LoweringContractOp>(op))
+    return true;
+  return false;
+}
+
 /// Check if a loop body contains at least one epoch (directly or in scf.if).
 static bool bodyContainsEpoch(Block &body) {
   for (Operation &op : body.without_terminator()) {
@@ -907,7 +945,7 @@ static bool bodyContainsEpoch(Block &body) {
 }
 
 /// Check if the loop body only contains epochs, pure arithmetic, scf.if
-/// wrapping epochs, and no other side-effecting ops.
+/// wrapping epochs, DB acquire/release, and no other side-effecting ops.
 static bool bodyIsEpochOnly(Block &body) {
   for (Operation &op : body.without_terminator()) {
     if (isa<EpochOp>(op))
@@ -916,6 +954,8 @@ static bool bodyIsEpochOnly(Block &body) {
       continue; // scf.if may wrap epochs — we allow it
     if (isPureArith(&op))
       continue;
+    if (isa<DbAcquireOp, DbReleaseOp>(op))
+      continue; // DB ops feed into epochs and will be cloned
     return false; // Side-effecting non-epoch op
   }
   return true;
@@ -1035,30 +1075,27 @@ static bool tryCPSLoopTransform(scf::ForOp forOp) {
 /// the next continuation EDT which sets up the next epoch/iteration.
 ///
 /// Case 1 (N=1, e.g. seidel-2d):
-///   launcher → epoch_0(t=0, finish→cont0) → cont0 → epoch_0(t+s, finish→cont0) → ...
+///   epoch_0(t=0, finish→cont0) → cont0 → epoch_0(t+s, finish→cont0) → ...
 ///
 /// Case 2 (N=2, e.g. jacobi2d, second may be conditional):
-///   launcher → epoch_0(finish→cont0) → cont0 → epoch_1(finish→cont1) → cont1 → advance
+///   epoch_0(finish→cont0) → cont0 → epoch_1(finish→cont1) → cont1 → advance
 ///
 /// Case 3 (N>2, e.g. fdtd-2d):
-///   launcher → epoch_0(finish→cont0) → cont0 → epoch_1(finish→cont1) → ... → contN-1 → advance
+///   epoch_0(finish→cont0) → cont0 → epoch_1(finish→cont1) → ... → contN-1 → advance
 ///
-/// Structure: nested continuations inside the launcher EDT. Each continuation
-/// EDT is placed AFTER the epoch it continues, in the same block, so
-/// EpochLowering can find it when wiring the finish target.
+/// Each continuation EDT is placed AFTER the epoch it continues, in the same
+/// block, so EpochLowering can find it when wiring the finish target.
 ///
 ///   arts.epoch {                              // single outer wait
-///     arts.edt launcher() {
-///       epoch_0 {continuation_for_epoch} { workers_0 }
-///       arts.edt cont_0 {cps_chain_id="chain_0", ...} {
-///         epoch_1 {continuation_for_epoch} { workers_1 }
-///         arts.edt cont_1 {cps_chain_id="chain_1", ...} {
-///           ... (nested for N>2) ...
-///           arts.edt cont_{N-1} {cps_chain_id="chain_{N-1}", ...} {
-///             t_next = t + step
-///             if (t_next < ub) {
-///               arts.cps_advance("chain_0") { workers_0_clone }
-///             }
+///     epoch_0 {continuation_for_epoch} { workers_0 }
+///     arts.edt cont_0 {cps_chain_id="chain_0", ...} {
+///       epoch_1 {continuation_for_epoch} { workers_1 }
+///       arts.edt cont_1 {cps_chain_id="chain_1", ...} {
+///         ... (nested for N>2) ...
+///         arts.edt cont_{N-1} {cps_chain_id="chain_{N-1}", ...} {
+///           t_next = t + step
+///           if (t_next < ub) {
+///             arts.cps_advance("chain_0") { workers_0_clone }
 ///           }
 ///         }
 ///       }
@@ -1076,15 +1113,13 @@ struct EpochSlot {
   scf::IfOp wrappingIf; // null if the epoch is not inside an scf.if
 };
 
-/// Collect all epoch "slots" directly in a loop body, in program order.
-/// An epoch slot is either a bare EpochOp or an EpochOp inside an scf.if.
+/// Collect all epoch slots in a loop body, in program order.
 static void collectEpochSlots(Block &body,
                               SmallVectorImpl<EpochSlot> &slots) {
   for (Operation &op : body.without_terminator()) {
     if (auto epoch = dyn_cast<EpochOp>(op)) {
       slots.push_back({epoch, nullptr});
     } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-      /// Check if the then-branch contains an epoch.
       for (Operation &thenOp : ifOp.getThenRegion().front()) {
         if (auto epoch = dyn_cast<EpochOp>(thenOp))
           slots.push_back({epoch, ifOp});
@@ -1093,9 +1128,8 @@ static void collectEpochSlots(Block &body,
   }
 }
 
-/// Check that an epoch body only has ops that can be cloned into an EDT body.
-static bool epochBodyIsClonable(EpochOp epoch, Value inductionVar) {
-  (void)inductionVar;
+/// Check that an epoch body is non-empty (has ops beyond the terminator).
+static bool epochBodyIsClonable(EpochOp epoch) {
   return !epoch.getRegion().empty() &&
          !epoch.getRegion().front().without_terminator().empty();
 }
@@ -1111,12 +1145,18 @@ static bool isSlotOp(Operation *op, MutableArrayRef<EpochSlot> slots) {
   return false;
 }
 
-/// Clone all non-slot pure arithmetic ops from the loop body.
+/// Clone all non-slot pure arithmetic and DB ops from the loop body.
+/// Sequential ops (scf.for, func.call, etc.) are NOT cloned here — they
+/// are placed into specific continuations by the CPS chain transform.
 static void cloneNonSlotArith(OpBuilder &builder, Block &body,
                               MutableArrayRef<EpochSlot> slots,
-                              IRMapping &mapping) {
+                              IRMapping &mapping,
+                              ArrayRef<Operation *> sequentialOps = {}) {
+  DenseSet<Operation *> seqOpSet(sequentialOps.begin(), sequentialOps.end());
   for (Operation &op : body.without_terminator()) {
     if (isSlotOp(&op, slots))
+      continue;
+    if (seqOpSet.contains(&op))
       continue;
     Operation *cloned = builder.clone(op, mapping);
     for (auto [oldRes, newRes] :
@@ -1131,43 +1171,50 @@ static void ensureYieldTerminator(Block &block, Location loc) {
     OpBuilder::atBlockEnd(&block).create<YieldOp>(loc);
 }
 
-/// Emit the CPS advance logic: check loop bounds, create CPSAdvanceOp.
-/// This is the code in the LAST continuation that advances to the next
-/// iteration by creating a new epoch_0 via self-referential continuation.
+/// Emit the CPS advance logic for the last continuation: check loop bounds
+/// and create a CPSAdvanceOp to start the next iteration.
+///
+/// `tCurrent` is the loop lower bound, used only for MLIR-time IRMapping
+/// of cloned worker ops. The actual iteration counter is injected by
+/// EpochLowering as an extra parameter in the param_pack.
 static void emitAdvanceLogic(OpBuilder &builder, Location loc, Value iv,
-                             Value lb, Value ub, Value step, Block &body,
-                             MutableArrayRef<EpochSlot> slots) {
-  /// t_next = lb + step (lb is stand-in for "current t")
-  Value tNext = builder.create<arith::AddIOp>(loc, lb, step);
-  /// cond = t_next < ub
-  Value cond = builder.create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::slt, tNext, ub);
+                             Value tCurrent, Value ub, Value step, Block &body,
+                             MutableArrayRef<EpochSlot> slots,
+                             ArrayRef<Operation *> allSequentialOps = {}) {
+  /// The bounds check (tCurrent + step < ub) cannot be emitted here because
+  /// tCurrent is the lower bound at MLIR construction time, which gets
+  /// constant-folded. Instead, we emit the CPSAdvanceOp unconditionally and
+  /// attach the step and upper bound so that EpochLowering can construct the
+  /// bounds check using the dynamic parameter value at resolution time.
+  ///
+  /// The IRMapping uses tNext to correctly map loop-body arithmetic for the
+  /// cloned worker ops. Since these are inside the CPSAdvance epoch body
+  /// (which runs unconditionally per iteration), using the constant tNext
+  /// here doesn't cause issues — the actual iteration counter comes from
+  /// the param array.
+  Value tNext = builder.create<arith::AddIOp>(loc, tCurrent, step);
+  IRMapping advanceMapping;
+  advanceMapping.map(iv, tNext);
+  cloneNonSlotArith(builder, body, slots, advanceMapping, allSequentialOps);
 
-  auto ifOp = builder.create<scf::IfOp>(loc, cond, /*withElse=*/false);
-  {
-    Block &thenBlock = ifOp.getThenRegion().front();
-    OpBuilder thenBuilder = OpBuilder::atBlockTerminator(&thenBlock);
+  auto i64Ty = IntegerType::get(builder.getContext(), 64);
+  Value stepI64 = builder.create<arith::IndexCastOp>(loc, i64Ty, step);
+  Value ubI64 = builder.create<arith::IndexCastOp>(loc, i64Ty, ub);
+  SmallVector<Value> nextParams = {stepI64, ubI64};
+  auto advance = builder.create<CPSAdvanceOp>(
+      loc, nextParams, builder.getStringAttr("chain_0"));
+  advance->setAttr("arts.cps_additive_params", builder.getUnitAttr());
 
-    IRMapping advanceMapping;
-    advanceMapping.map(iv, tNext);
-    cloneNonSlotArith(thenBuilder, body, slots, advanceMapping);
+  Region &advanceRegion = advance.getEpochBody();
+  if (advanceRegion.empty())
+    advanceRegion.emplaceBlock();
+  Block &advBlock = advanceRegion.front();
+  ensureYieldTerminator(advBlock, loc);
+  OpBuilder advBuilder = OpBuilder::atBlockTerminator(&advBlock);
 
-    SmallVector<Value> nextParams = {tNext};
-    auto advance = thenBuilder.create<CPSAdvanceOp>(
-        loc, nextParams, thenBuilder.getStringAttr("chain_0"));
-
-    /// Clone the first epoch's body into the cps_advance region.
-    Region &advanceRegion = advance.getEpochBody();
-    if (advanceRegion.empty())
-      advanceRegion.emplaceBlock();
-    Block &advBlock = advanceRegion.front();
-    ensureYieldTerminator(advBlock, loc);
-    OpBuilder advBuilder = OpBuilder::atBlockTerminator(&advBlock);
-
-    Block &epochBody = slots[0].epoch.getBody().front();
-    for (Operation &epochOp : epochBody.without_terminator())
-      advBuilder.clone(epochOp, advanceMapping);
-  }
+  Block &epochBody = slots[0].epoch.getBody().front();
+  for (Operation &epochOp : epochBody.without_terminator())
+    advBuilder.clone(epochOp, advanceMapping);
 }
 
 /// Mark an EDT as a CPS continuation with the given chain ID.
@@ -1181,12 +1228,97 @@ static void markAsContinuation(EdtOp edt, OpBuilder &builder,
   edt->setAttr(kCPSLoopContinuation, builder.getUnitAttr());
 }
 
+/// Promote outer-scope memref.alloc ops used by sequential ops to DbAllocOp,
+/// so they can flow through EdtEnvManager's dbHandles → paramv machinery.
+/// Only promotes allocs defined OUTSIDE the loop and still memref::AllocOp
+/// (i.e., not already promoted by CreateDbs at step 7).
+static void promoteAllocsForCPSChain(scf::ForOp forOp,
+                                     ArrayRef<Operation *> sequentialOps,
+                                     MutableArrayRef<EpochSlot> slots) {
+  DenseSet<memref::AllocOp> promotable;
+
+  for (Operation *seqOp : sequentialOps) {
+    for (Value operand : seqOp->getOperands()) {
+      auto allocOp = operand.getDefiningOp<memref::AllocOp>();
+      if (!allocOp)
+        continue;
+      // Only promote allocs defined outside the loop body.
+      if (forOp.getBody()->findAncestorOpInBlock(*allocOp))
+        continue;
+      promotable.insert(allocOp);
+    }
+  }
+
+  if (promotable.empty())
+    return;
+
+  for (memref::AllocOp allocOp : promotable) {
+    Location loc = allocOp.getLoc();
+    OpBuilder builder(allocOp);
+
+    MemRefType memRefType = allocOp.getType();
+    Type elementType = memRefType.getElementType();
+    while (auto nestedMemRef = dyn_cast<MemRefType>(elementType))
+      elementType = nestedMemRef.getElementType();
+
+    unsigned rank = std::max<unsigned>(1, memRefType.getRank());
+    SmallVector<Value> elementSizes;
+    elementSizes.reserve(rank);
+    for (unsigned i = 0; i < rank; ++i) {
+      if (memRefType.getRank() > 0 && memRefType.isDynamicDim(i)) {
+        elementSizes.push_back(allocOp.getDynamicSizes()[i]);
+      } else {
+        int64_t dimSize = memRefType.getRank() == 0
+                              ? 1
+                              : memRefType.getDimSize(i);
+        elementSizes.push_back(
+            builder.create<arith::ConstantIndexOp>(loc, dimSize));
+      }
+    }
+    SmallVector<Value> sizes = {
+        builder.create<arith::ConstantIndexOp>(loc, 1)};
+
+    Value route = builder.create<arith::ConstantOp>(
+        loc, builder.getI32Type(), builder.getI32IntegerAttr(0));
+
+    auto dbAlloc = builder.create<DbAllocOp>(
+        loc, ArtsMode::inout, route, DbAllocType::heap, DbMode::write,
+        elementType, sizes, elementSizes);
+
+    // Replace all uses of the original alloc pointer with the DB pointer.
+    allocOp.getResult().replaceAllUsesWith(dbAlloc.getPtr());
+
+    // Insert db_free after the loop for both guid and ptr.
+    OpBuilder afterLoop(forOp->getNextNode());
+    afterLoop.create<DbFreeOp>(loc, dbAlloc.getGuid());
+    afterLoop.create<DbFreeOp>(loc, dbAlloc.getPtr());
+
+    // Erase associated dealloc and the original alloc.
+    std::optional<Operation *> deallocOp =
+        memref::findDealloc(allocOp.getResult());
+    // findDealloc may have been invalidated by replaceAllUsesWith above,
+    // so also scan for dealloc ops referencing the DB ptr.
+    if (!deallocOp || !*deallocOp) {
+      for (auto *user : dbAlloc.getPtr().getUsers()) {
+        if (isa<memref::DeallocOp>(user)) {
+          user->erase();
+          break;
+        }
+      }
+    } else {
+      (*deallocOp)->erase();
+    }
+
+    ARTS_INFO("CPS Chain: Promoted memref.alloc to DbAllocOp at " << loc);
+    allocOp.erase();
+  }
+}
+
 /// CPS Chain Transform for N epochs per iteration.
 ///
 /// Handles Cases 1-3: single epoch, multi-epoch with conditional, N sequential.
-/// Continuation EDTs are nested inside the launcher so that each cont_i
-/// appears after epoch_i in the same block — required for EpochLowering to
-/// wire the finish target.
+/// Continuation EDTs are nested in the outer epoch so that each cont_i
+/// appears after epoch_i in the same block, as required by EpochLowering.
 static bool tryCPSChainTransform(scf::ForOp forOp) {
   /// C1: No iter_args.
   if (forOp.getNumResults() > 0 || !forOp.getInitArgs().empty())
@@ -1218,21 +1350,74 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
 
   /// C6: All epoch bodies must be clonable.
   for (const auto &slot : slots)
-    if (!epochBodyIsClonable(slot.epoch, iv))
+    if (!epochBodyIsClonable(slot.epoch))
       return false;
 
-  /// C7: All non-slot ops in body must be pure arithmetic.
+  /// C7: All non-slot ops must be pure arithmetic, DB acquire/release,
+  /// or sequential ops safe to clone into continuations. Sequential ops
+  /// (scf.for, func.call, memref ops) execute serially on the continuation
+  /// EDT's thread after the preceding epoch fires.
+  SmallVector<Operation *> sequentialOps;
   for (Operation &op : body.without_terminator()) {
     if (isSlotOp(&op, slots))
       continue;
-    if (!isPureArith(&op))
-      return false;
+    if (isPureArith(&op))
+      continue;
+    if (isa<DbAcquireOp, DbReleaseOp>(op))
+      continue;
+    if (isCPSSequentialOp(&op)) {
+      sequentialOps.push_back(&op);
+      continue;
+    }
+    return false;
   }
 
   unsigned N = slots.size();
-  ARTS_INFO("CPS Chain: Found eligible " << N << "-epoch loop");
+
+  /// Partition sequential ops by which epoch pair they fall between.
+  /// interEpochOps[i] = ops between slot_i and slot_{i+1}
+  /// interEpochOps[N-1] = ops after the last epoch (tail)
+  SmallVector<SmallVector<Operation *>> interEpochOps(N);
+  if (!sequentialOps.empty()) {
+    DenseSet<Operation *> seqOpSet(sequentialOps.begin(),
+                                    sequentialOps.end());
+    unsigned currentSlot = 0;
+    for (Operation &op : body.without_terminator()) {
+      // Track which slot we're past
+      if (isSlotOp(&op, slots)) {
+        for (unsigned s = currentSlot; s < N; ++s) {
+          Operation *slotOp = slots[s].wrappingIf
+                                  ? slots[s].wrappingIf.getOperation()
+                                  : slots[s].epoch.getOperation();
+          if (&op == slotOp) {
+            currentSlot = s + 1;
+            break;
+          }
+        }
+        continue;
+      }
+      if (seqOpSet.contains(&op)) {
+        unsigned group = std::min(currentSlot, N - 1);
+        interEpochOps[group].push_back(&op);
+      }
+    }
+  }
+
+  /// Promote outer-scope memref.alloc ops used by sequential ops to DbAllocOp
+  /// so they flow through EdtEnvManager's paramv machinery.
+  if (!sequentialOps.empty())
+    promoteAllocsForCPSChain(forOp, sequentialOps, slots);
+
+  ARTS_INFO("CPS Chain: Found eligible " << N << "-epoch loop"
+            << (sequentialOps.empty() ? ""
+                                      : " (with sequential ops in body)"));
 
   /// === Transform ===
+  ///
+  /// No launcher EDT: epoch_0 and its workers are placed directly in the
+  /// outer epoch to avoid db_alloc capture issues with EdtLowering's outlining.
+  /// The main thread blocks on the outer epoch; continuations chain subsequent
+  /// iterations asynchronously.
 
   OpBuilder builder(forOp->getContext());
   Location loc = forOp.getLoc();
@@ -1240,67 +1425,82 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
   Value ub = forOp.getUpperBound();
   Value step = forOp.getStep();
 
-  /// Step 1: Create the outer wrapping epoch BEFORE the loop.
+  /// Step 1: Create outer epoch.
   builder.setInsertionPoint(forOp);
+
   auto outerEpoch = builder.create<EpochOp>(
       loc, IntegerType::get(builder.getContext(), 64));
+  outerEpoch->setAttr(ContinuationForEpoch, builder.getUnitAttr());
+  outerEpoch->setAttr(AttrNames::Operation::CPSOuterEpoch,
+                       builder.getUnitAttr());
+
+  /// Store the initial iteration value so EpochLowering can inject it
+  /// as an extra parameter. Using an attribute avoids the iteration
+  /// counter being constant-folded away before EdtLowering packs params.
+  if (auto lbCst = getConstantIntValue(lb))
+    outerEpoch->setAttr("arts.cps_init_iter",
+                         builder.getI64IntegerAttr(*lbCst));
+  else
+    outerEpoch->setAttr("arts.cps_init_iter", builder.getI64IntegerAttr(0));
   Region &outerRegion = outerEpoch.getRegion();
   if (outerRegion.empty())
     outerRegion.emplaceBlock();
   Block &outerBlock = outerRegion.front();
-  /// Ensure the block has a yield terminator.
-  if (outerBlock.empty() ||
-      !outerBlock.back().hasTrait<OpTrait::IsTerminator>()) {
-    OpBuilder::atBlockEnd(&outerBlock).create<YieldOp>(loc);
-  }
+  ensureYieldTerminator(outerBlock, loc);
 
-  /// Step 2: Create the launcher EDT inside the outer epoch.
+  /// Step 2: Clone epoch_0 and its arithmetic into the outer epoch.
+  /// Sequential ops are NOT cloned here — they go into specific continuations.
   OpBuilder outerBuilder = OpBuilder::atBlockTerminator(&outerBlock);
-  auto launcherEdt = outerBuilder.create<EdtOp>(loc, EdtType::task,
-                                                 EdtConcurrency::intranode,
-                                                 SmallVector<Value>{});
-  Block &launcherBlock = launcherEdt.getBody().front();
-  ensureYieldTerminator(launcherBlock, loc);
-  OpBuilder launcherBuilder = OpBuilder::atBlockTerminator(&launcherBlock);
-
-  /// Clone non-slot pure arithmetic into launcher (mapped to first iter).
   IRMapping firstIterMapping;
   firstIterMapping.map(iv, lb);
-  cloneNonSlotArith(launcherBuilder, body, slots, firstIterMapping);
+  cloneNonSlotArith(outerBuilder, body, slots, firstIterMapping,
+                    sequentialOps);
 
-  /// Clone epoch_0 into the launcher.
   Operation *clonedEpoch0Op =
-      launcherBuilder.clone(*slots[0].epoch.getOperation(), firstIterMapping);
+      outerBuilder.clone(*slots[0].epoch.getOperation(), firstIterMapping);
   auto clonedEpoch0 = cast<EpochOp>(clonedEpoch0Op);
-  clonedEpoch0->setAttr(ContinuationForEpoch, launcherBuilder.getUnitAttr());
+  clonedEpoch0->setAttr(ContinuationForEpoch, outerBuilder.getUnitAttr());
 
-  /// Step 3: Build the nested continuation chain.
-  /// cont_0 goes after epoch_0 in the launcher block.
-  /// cont_1 goes after epoch_1 inside cont_0's body, etc.
-  /// cont_{N-1} (last) contains the advance logic.
-  ///
-  /// We use atBlockTerminator so new ops are inserted before the implicit
-  /// yield, and the yield always remains last.
-  OpBuilder *currentBuilder = &launcherBuilder;
+  /// Step 3: Build the nested continuation chain (value-type builder to
+  /// avoid dangling pointers across loop iterations).
+  OpBuilder chainBuilder(outerBuilder);
 
   for (unsigned i = 0; i < N; ++i) {
-    /// Create continuation EDT cont_i in the current block.
-    auto contEdt = currentBuilder->create<EdtOp>(
+    auto contEdt = chainBuilder.create<EdtOp>(
         loc, EdtType::task, EdtConcurrency::intranode, SmallVector<Value>{});
-    markAsContinuation(contEdt, *currentBuilder, i);
+    markAsContinuation(contEdt, chainBuilder, i);
 
     Block &contBlock = contEdt.getBody().front();
     ensureYieldTerminator(contBlock, loc);
     OpBuilder contBuilder = OpBuilder::atBlockTerminator(&contBlock);
 
+    /// Use lb as the iteration counter placeholder for MLIR-time cloning.
+    /// The actual iteration counter is injected as an extra parameter by
+    /// EpochLowering (not captured as an SSA value, which would be
+    /// constant-folded before EdtLowering packs params).
+    Value tCurrent = lb;
+
+    /// Clone inter-epoch sequential ops for this continuation.
+    /// cont_i runs after epoch_i fires; its sequential ops are those
+    /// between epoch_i and epoch_{i+1} in the original loop body.
+    IRMapping contMapping;
+    contMapping.map(iv, tCurrent);
+
     if (i == N - 1) {
-      /// Last continuation: emit advance logic (check bounds, CPSAdvanceOp).
-      emitAdvanceLogic(contBuilder, loc, iv, lb, ub, step, body, slots);
+      /// Last continuation: clone tail sequential ops, then advance.
+      cloneNonSlotArith(contBuilder, body, slots, contMapping,
+                        sequentialOps);
+      for (Operation *seqOp : interEpochOps[N - 1])
+        contBuilder.clone(*seqOp, contMapping);
+      emitAdvanceLogic(contBuilder, loc, iv, tCurrent, ub, step, body,
+                       slots, sequentialOps);
     } else {
-      /// Middle continuation: set up epoch_{i+1} and nest cont_{i+1}.
-      IRMapping contMapping;
-      contMapping.map(iv, lb); // lb is stand-in for "current t"
-      cloneNonSlotArith(contBuilder, body, slots, contMapping);
+      /// Middle continuation: clone inter-epoch sequential ops,
+      /// then set up epoch_{i+1} and nest cont_{i+1}.
+      cloneNonSlotArith(contBuilder, body, slots, contMapping,
+                        sequentialOps);
+      for (Operation *seqOp : interEpochOps[i])
+        contBuilder.clone(*seqOp, contMapping);
 
       EpochSlot &nextSlot = slots[i + 1];
       if (nextSlot.wrappingIf) {
@@ -1311,7 +1511,6 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
             contBuilder.clone(*nextSlot.wrappingIf.getOperation(), contMapping);
         auto clonedIf = cast<scf::IfOp>(clonedIfOp);
 
-        /// Mark the epoch inside the then-branch for continuation.
         for (Operation &thenOp : clonedIf.getThenRegion().front()) {
           if (auto epoch = dyn_cast<EpochOp>(thenOp)) {
             epoch->setAttr(ContinuationForEpoch, contBuilder.getUnitAttr());
@@ -1319,42 +1518,36 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
           }
         }
 
-        /// Need an else-branch with advance logic for when condition is false.
+        /// Add else-branch with advance logic for when condition is false.
         if (clonedIf.getElseRegion().empty()) {
-          /// Recreate the if with an else branch.
           Value ifCond = clonedIf.getCondition();
           OpBuilder preIfBuilder(clonedIf);
           auto newIf =
               preIfBuilder.create<scf::IfOp>(loc, ifCond, /*withElse=*/true);
 
-          /// Move then-block contents to the new if's then-block.
           Block &oldThenBlock = clonedIf.getThenRegion().front();
           Block &newThenBlock = newIf.getThenRegion().front();
           for (Operation &op :
                llvm::make_early_inc_range(oldThenBlock.without_terminator()))
             op.moveBefore(newThenBlock.getTerminator());
 
-          /// Emit advance logic in the else-branch.
           Block &elseBlock = newIf.getElseRegion().front();
           OpBuilder elseBuilder = OpBuilder::atBlockTerminator(&elseBlock);
-          emitAdvanceLogic(elseBuilder, loc, iv, lb, ub, step, body, slots);
+          emitAdvanceLogic(elseBuilder, loc, iv, tCurrent, ub, step, body,
+                           slots, sequentialOps);
 
           clonedIf.erase();
 
-          /// Point builder into the new then-block for next continuation.
           Block &finalThenBlock = newIf.getThenRegion().front();
-          contBuilder.setInsertionPoint(finalThenBlock.getTerminator());
-          currentBuilder = &contBuilder;
+          chainBuilder.setInsertionPoint(finalThenBlock.getTerminator());
         } else {
-          /// else-branch already exists; add advance logic to it.
           Block &elseBlock = clonedIf.getElseRegion().front();
           OpBuilder elseBuilder = OpBuilder::atBlockTerminator(&elseBlock);
-          emitAdvanceLogic(elseBuilder, loc, iv, lb, ub, step, body, slots);
+          emitAdvanceLogic(elseBuilder, loc, iv, tCurrent, ub, step, body,
+                           slots, sequentialOps);
 
-          /// Point builder into the then-block for next continuation.
           Block &thenBlock = clonedIf.getThenRegion().front();
-          contBuilder.setInsertionPoint(thenBlock.getTerminator());
-          currentBuilder = &contBuilder;
+          chainBuilder.setInsertionPoint(thenBlock.getTerminator());
         }
       } else {
         /// Unconditional epoch: clone and mark for continuation.
@@ -1362,10 +1555,7 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
             contBuilder.clone(*nextSlot.epoch.getOperation(), contMapping);
         cast<EpochOp>(clonedEpochOp)->setAttr(ContinuationForEpoch,
                                                contBuilder.getUnitAttr());
-        /// Next cont goes after this epoch in the same block.
-        /// contBuilder is already at the terminator position so next
-        /// iteration's create<EdtOp> will be placed before the yield.
-        currentBuilder = &contBuilder;
+        chainBuilder = contBuilder;
       }
     }
   }
