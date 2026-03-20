@@ -4,7 +4,7 @@ from pathlib import Path
 import os
 import shutil
 
-from sniff import print_debug, print_info, print_success, print_error
+from dekk import print_debug, print_info, print_success, print_error
 from scripts.platform import get_config, is_verbose
 from scripts import run_subprocess
 

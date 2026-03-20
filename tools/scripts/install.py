@@ -5,10 +5,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-import typer
-
-from sniff import EnvironmentActivator
-from sniff import Colors, console, print_error, print_header, print_info, print_step, print_success, print_warning
+from dekk import EnvironmentActivator
+from dekk import Colors, Exit, Option, console, print_error, print_header, print_info, print_step, print_success, print_warning
 from scripts.platform import get_config
 from scripts import (
     run_subprocess as _run_subprocess,
@@ -239,7 +237,7 @@ def _install_python_envs() -> bool:
         shared_python = venv_python
         print_info("Using existing Python environment (bootstrapped by wrapper)")
     else:
-        print_error("No Python environment found. Run 'sniff tools/carts_cli.py install' or './tools/carts install' to bootstrap it.")
+        print_error("No Python environment found. Run 'dekk tools/carts_cli.py install' or './tools/carts install' to bootstrap it.")
         return False
 
     print_info("Verifying shared environment dependencies...")
@@ -283,30 +281,30 @@ def _install_python_envs() -> bool:
 
 
 def install(
-    check: bool = typer.Option(
+    check: bool = Option(
         False, "--check", help="Only check and report dependencies, then exit"),
-    skip_deps: bool = typer.Option(
+    skip_deps: bool = Option(
         False, "--skip-deps", help="Skip dependency checking entirely"),
-    skip_build: bool = typer.Option(
+    skip_build: bool = Option(
         False, "--skip-build", help="Skip building (only check/install deps and init submodules)"),
-    skip_python_env: bool = typer.Option(
+    skip_python_env: bool = Option(
         False,
         "--skip-python-env",
         help="Skip shared Poetry environment setup in tools/",
     ),
-    auto: bool = typer.Option(
+    auto: bool = Option(
         False, "--auto", "-y", help="Auto-install missing deps without prompting"),
-    cc: Optional[str] = typer.Option(
+    cc: Optional[str] = Option(
         None, "--cc",
         help="C compiler for LLVM bootstrap (default: clang)"),
-    cxx: Optional[str] = typer.Option(
+    cxx: Optional[str] = Option(
         None, "--cxx",
         help="C++ compiler for LLVM bootstrap (default: clang++)"),
 ):
     """Install CARTS: check dependencies, init submodules, and build everything."""
     print_header("CARTS Install")
 
-    # 1. Dependency checking via sniff EnvironmentActivator
+    # 1. Dependency checking via dekk EnvironmentActivator
     if not skip_deps:
         try:
             activator = EnvironmentActivator.from_cwd()
@@ -316,33 +314,33 @@ def install(
                 console.print(f"\n[{Colors.ERROR}]Missing tools: {missing}[/{Colors.ERROR}]")
                 console.print(f"Run [{Colors.HIGHLIGHT}]carts doctor[/{Colors.HIGHLIGHT}] for detailed diagnostics.\n")
                 if check or not auto:
-                    raise typer.Exit(1)
+                    raise Exit(1)
             elif check:
                 print_success("All dependencies satisfied")
-                raise typer.Exit(0)
+                raise Exit(0)
         except FileNotFoundError:
-            print_warning("No .sniff.toml found — skipping dependency validation")
+            print_warning("No .dekk.toml found — skipping dependency validation")
             if check:
-                raise typer.Exit(0)
+                raise Exit(0)
     elif check:
         print_warning("--check and --skip-deps are mutually exclusive")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     # 2. Submodules and directories
     if not _setup_project():
         print_error("Failed to set up project")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     # 3. Python environments
     if not skip_python_env:
         if not _install_python_envs():
             print_error("Failed to set up Python environments")
-            raise typer.Exit(1)
+            raise Exit(1)
 
     # 4. Build everything
     if not skip_build:
         if not _build_project(cc=cc, cxx=cxx):
             print_error("Failed to build project")
-            raise typer.Exit(1)
+            raise Exit(1)
 
     print_header("Install Complete!")

@@ -17,7 +17,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import typer
 from rich import box
 from rich.console import Group
 from rich.live import Live
@@ -25,9 +24,14 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from sniff import (
+from dekk import (
+    Argument,
     Colors,
+    Context,
+    Exit,
+    Option,
     Symbols,
+    Typer,
     console,
     print_debug,
     print_error,
@@ -523,7 +527,7 @@ def _create_summary_panel(results: List[ExampleResult], duration: float) -> Pane
 # CLI Application
 # ============================================================================
 
-examples_app = typer.Typer(
+examples_app = Typer(
     help="Run and test CARTS examples",
     no_args_is_help=True,
 )
@@ -531,7 +535,7 @@ examples_app = typer.Typer(
 
 @examples_app.command(name="list")
 def list_examples(
-    verbose: bool = typer.Option(
+    verbose: bool = Option(
         False, "--verbose", "-v", help="Show detailed info"),
 ):
     """List all available CARTS examples."""
@@ -539,13 +543,13 @@ def list_examples(
 
     if not examples_dir.is_dir():
         print_error(f"Examples directory not found: {examples_dir}")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     examples = discover_examples(examples_dir)
 
     if not examples:
         print_warning("No examples found")
-        raise typer.Exit(0)
+        raise Exit(0)
 
     console.print(
         f"\n[{Colors.HIGHLIGHT}]Available CARTS Examples[/{Colors.HIGHLIGHT}] ({len(examples)} total)\n")
@@ -588,21 +592,21 @@ def list_examples(
     }
 )
 def run(
-    ctx: typer.Context,
-    name: Optional[str] = typer.Argument(None, help="Example name to run"),
-    all_examples: bool = typer.Option(
+    ctx: Context,
+    name: Optional[str] = Argument(None, help="Example name to run"),
+    all_examples: bool = Option(
         False, "--all", "-a", help="Run all examples"),
-    verbose: bool = typer.Option(
+    verbose: bool = Option(
         False, "--verbose", "-v", help="Verbose output"),
-    json_output: Optional[Path] = typer.Option(
+    json_output: Optional[Path] = Option(
         None, "--json", "-j", help="Export results to JSON"),
-    build_timeout: int = typer.Option(
+    build_timeout: int = Option(
         120, "--build-timeout", help="Build timeout in seconds"),
-    run_timeout: int = typer.Option(
+    run_timeout: int = Option(
         60, "--run-timeout", help="Run timeout in seconds"),
-    arts_config: Optional[Path] = typer.Option(
+    arts_config: Optional[Path] = Option(
         None, "--arts-config", help="ARTS configuration file to use when running examples"),
-    trace: bool = typer.Option(
+    trace: bool = Option(
         False, "--trace", "-t", help="Print example output to terminal"),
 ):
     """Run CARTS example(s).
@@ -617,7 +621,7 @@ def run(
 
     if not examples_dir.is_dir():
         print_error(f"Examples directory not found: {examples_dir}")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     if all_examples:
         examples = discover_examples(examples_dir)
@@ -626,15 +630,15 @@ def run(
         if not example:
             print_error(f"Example not found: {name}")
             print_info("Use 'carts examples list' to see available examples")
-            raise typer.Exit(1)
+            raise Exit(1)
         examples = [example]
     else:
         print_error("Specify an example name or use --all")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     if not examples:
         print_warning("No examples to run")
-        raise typer.Exit(0)
+        raise Exit(0)
 
     # Extract --arts-config from ctx.args if present and separate runtime arguments
     runtime_args: List[str] = []
@@ -771,15 +775,15 @@ def run(
             json.dump(export_data, f, indent=2)
         print_success(f"Results exported to {json_output}")
 
-    raise typer.Exit(0 if failed == 0 else 1)
+    raise Exit(0 if failed == 0 else 1)
 
 
 @examples_app.command()
 def clean(
-    name: Optional[str] = typer.Argument(None, help="Example name to clean"),
-    all_examples: bool = typer.Option(
+    name: Optional[str] = Argument(None, help="Example name to clean"),
+    all_examples: bool = Option(
         False, "--all", "-a", help="Clean all examples"),
-    verbose: bool = typer.Option(
+    verbose: bool = Option(
         False, "--verbose", "-v", help="Verbose output"),
 ):
     """Clean example build artifacts."""
@@ -787,7 +791,7 @@ def clean(
 
     if not examples_dir.is_dir():
         print_error(f"Examples directory not found: {examples_dir}")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     if all_examples:
         examples = discover_examples(examples_dir)
@@ -795,11 +799,11 @@ def clean(
         example = find_example(examples_dir, name)
         if not example:
             print_error(f"Example not found: {name}")
-            raise typer.Exit(1)
+            raise Exit(1)
         examples = [example]
     else:
         print_error("Specify an example name or use --all")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     cleaned = 0
 
