@@ -4,9 +4,7 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-import typer
-
-from sniff import (
+from dekk import (
     Colors,
     console,
     print_header,
@@ -17,6 +15,8 @@ from sniff import (
     print_warning,
     DependencyChecker,
     DependencySpec,
+    Exit,
+    Option,
 )
 from scripts.platform import get_config
 from scripts import (
@@ -63,24 +63,24 @@ def _export_pipeline_manifest(config) -> None:
 
 
 def build(
-    clean: bool = typer.Option(False, "--clean", "-c", help="Run make clean before building"),
-    arts: bool = typer.Option(False, "--arts", "-a", help="Build only ARTS (mutually exclusive target flag)"),
-    polygeist: bool = typer.Option(
+    clean: bool = Option(False, "--clean", "-c", help="Run make clean before building"),
+    arts: bool = Option(False, "--arts", "-a", help="Build only ARTS (mutually exclusive target flag)"),
+    polygeist: bool = Option(
         False, "--polygeist", "-p", help="Build only Polygeist (mutually exclusive target flag)"),
-    llvm: bool = typer.Option(False, "--llvm", "-l", help="Build only LLVM (mutually exclusive target flag)"),
-    debug_level: int = typer.Option(
+    llvm: bool = Option(False, "--llvm", "-l", help="Build only LLVM (mutually exclusive target flag)"),
+    debug_level: int = Option(
         0, "--debug", min=0, max=3,
         help="ARTS log level (--arts only): 0=error, 1=warn, 2=info, 3=debug"),
-    counters_level: int = typer.Option(
+    counters_level: int = Option(
         0, "--counters",
         help="Counter profile (--arts only): 0=off, 1=timing, 2=workload, 3=overhead"),
-    profile: Optional[Path] = typer.Option(
+    profile: Optional[Path] = Option(
         None, "--profile",
         help="Custom counter profile file path (overrides --counters)"),
-    cc: Optional[str] = typer.Option(
+    cc: Optional[str] = Option(
         None, "--cc",
         help="C compiler for LLVM bootstrap (default: clang)"),
-    cxx: Optional[str] = typer.Option(
+    cxx: Optional[str] = Option(
         None, "--cxx",
         help="C++ compiler for LLVM bootstrap (default: clang++)"),
 ):
@@ -94,12 +94,12 @@ def build(
     makefile = config.carts_dir / "Makefile"
     if not makefile.is_file():
         print_error("Makefile not found. Are you in the CARTS project root?")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     selected_targets = sum((1 if arts else 0, 1 if polygeist else 0, 1 if llvm else 0))
     if selected_targets > 1:
         print_error("Choose only one target flag among --arts, --polygeist, --llvm.")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     # Determine build target
     if arts:
@@ -139,7 +139,7 @@ def build(
             # Use custom profile if provided
             if not profile.exists():
                 print_error(f"Profile not found: {profile}")
-                raise typer.Exit(1)
+                raise Exit(1)
             effective_counter_config = profile.resolve()
             console.print(f"Profile: [{Colors.INFO}]{profile}[/{Colors.INFO}]")
         else:
@@ -197,4 +197,4 @@ def build(
     else:
         print_header("Build Failed")
         print_error("CARTS build failed!")
-        raise typer.Exit(1)
+        raise Exit(1)

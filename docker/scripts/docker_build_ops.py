@@ -9,7 +9,7 @@ import time
 
 import typer
 
-from sniff import print_error, print_header, print_info, print_step, print_success
+from dekk import print_error, print_header, print_info, print_step, print_success
 from docker_shared import (
     BASE_IMAGE,
     WORKSPACE_VOLUME,

@@ -5,9 +5,7 @@ from typing import List, Optional, Sequence, Tuple
 import subprocess
 import os
 
-import typer
-
-from sniff import Colors, console, print_error, print_info, print_success
+from dekk import Colors, Context, Exit, Option, console, print_error, print_info, print_success
 from scripts.platform import CartsConfig, get_config
 from scripts import (
     run_subprocess,
@@ -72,19 +70,19 @@ def _resolve_lit_targets(config: CartsConfig, suite: str) -> List[Path]:
     tests_dir = config.carts_dir / "tests"
     if not tests_dir.is_dir():
         print_error(f"Tests directory not found at {tests_dir}")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     if suite in ("all", "contracts"):
         test_paths = [tests_dir / "contracts"]
     else:
         print_error(f"Unknown test suite '{suite}'")
         print_info("Available suites: all, contracts")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     for test_path in test_paths:
         if not test_path.is_dir():
             print_error(f"Test path not found: {test_path}")
-            raise typer.Exit(1)
+            raise Exit(1)
 
     return test_paths
 
@@ -108,7 +106,7 @@ def _ensure_lit_tools(config: CartsConfig) -> Tuple[Path, Path, Path]:
         print_info(
             "Run `carts build` to install llvm-lit/FileCheck/carts-compile under .install/."
         )
-        raise typer.Exit(1)
+        raise Exit(1)
 
     return llvm_lit, filecheck, carts_compile
 
@@ -144,13 +142,13 @@ def _run_lit(
         print_success("CARTS test suite completed successfully!")
     else:
         print_error(f"CARTS test suite failed with exit code {result.returncode}")
-    raise typer.Exit(result.returncode)
+    raise Exit(result.returncode)
 
 
 def test(
-    suite: str = typer.Option("all", "--suite", "-s",
+    suite: str = Option("all", "--suite", "-s",
                               help="Test suite: all, contracts"),
-    verbose_tests: bool = typer.Option(
+    verbose_tests: bool = Option(
         False, "-v", help="Verbose test output"),
 ):
     """Run CARTS test suite using llvm-lit."""
@@ -160,14 +158,14 @@ def test(
 
 
 def lit(
-    ctx: typer.Context,
-    suite: str = typer.Option(
+    ctx: Context,
+    suite: str = Option(
         "contracts",
         "--suite",
         "-s",
         help="Default suite when no explicit paths are passed: contracts, all",
     ),
-    verbose_tests: bool = typer.Option(
+    verbose_tests: bool = Option(
         False, "--verbose", "-v", help="Verbose lit output"
     ),
 ):

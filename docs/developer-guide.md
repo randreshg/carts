@@ -25,7 +25,7 @@ Run `carts doctor` to verify that all prerequisites are installed and at the cor
 ```bash
 git clone <repo-url>
 cd carts
-sniff tools/carts_cli.py install      # recommended (pip install git+https://github.com/randreshg/sniff.git)
+dekk tools/carts_cli.py install       # recommended (pip install dekk)
 ./tools/carts install                  # alternative (no extra tools)
 ```
 

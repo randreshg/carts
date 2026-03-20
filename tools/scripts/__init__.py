@@ -1,6 +1,6 @@
 """CARTS CLI Scripts - Modular command implementations.
 
-Environment setup (PATH, env vars, tool versions) is handled by sniff's
+Environment setup (PATH, env vars, tool versions) is handled by dekk's
 auto_activate before any command runs.  Scripts just need project paths.
 """
 
@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from sniff import Colors, Exit, Symbols, print_debug, print_error
+from dekk import Colors, Exit, Symbols, print_debug, print_error
 
 from scripts.platform import is_verbose
 
@@ -45,7 +45,7 @@ MAKE_TARGET_POLYGEIST = "polygeist"
 MAKE_TARGET_LLVM = "llvm"
 
 # ---------------------------------------------------------------------------
-# Status formatting — maps status strings to Rich-styled symbols via sniff
+# Status formatting — maps status strings to Rich-styled symbols via dekk
 # ---------------------------------------------------------------------------
 
 _STATUS_STYLES: dict[str, tuple[str, str]] = {
@@ -94,7 +94,7 @@ def run_subprocess(
     """Run a subprocess with optional output capture.
 
     This is the shared subprocess helper used by all CARTS scripts.
-    For long-running operations, prefer ``sniff.run_logged`` instead.
+    For long-running operations, prefer ``dekk.run_logged`` instead.
     """
     if is_verbose():
         print_debug(f"Running: {' '.join(str(c) for c in cmd)}")

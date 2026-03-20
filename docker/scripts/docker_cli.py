@@ -13,7 +13,7 @@ from docker_update_ops import docker_update
 def docker_callback(ctx: typer.Context):
     """Docker operations for multi-node execution."""
     if ctx.invoked_subcommand is None:
-        from sniff import console
+        from dekk import console
 
         console.print("Docker command requires a subcommand. Use -h/--help for options.")
         raise typer.Exit(1)

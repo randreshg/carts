@@ -2,8 +2,8 @@
 
 This guide teaches agents and developers how to understand, run, and debug CARTS optimizations. It covers the complete pipeline from C/C++ source to ARTS runtime executable.
 
-> **Environment note:** The `carts` CLI uses sniff for environment management.
-> Configuration is defined in `.sniff.toml` at the repository root. Run
+> **Environment note:** The `carts` CLI uses dekk for environment management.
+> Configuration is defined in `.dekk.toml` at the repository root. Run
 > `carts doctor` to validate that the development environment is correctly
 > set up before running any commands below.
 

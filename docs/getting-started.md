@@ -41,14 +41,14 @@ There are two ways to install. Both do exactly the same thing: bootstrap a
 Python virtual environment, check system dependencies, init submodules, and
 build the full toolchain.
 
-### Option A: Using sniff (recommended)
+### Option A: Using dekk (recommended)
 
-[sniff](https://github.com/randreshg/sniff) auto-detects your project, creates
+[dekk](https://pypi.org/project/dekk/) auto-detects your project, creates
 a Python environment, and runs the CLI -- no manual setup needed.
 
 ```bash
-pip install git+https://github.com/randreshg/sniff.git
-sniff tools/carts_cli.py install
+pip install dekk
+dekk tools/carts_cli.py install
 ```
 
 ### Option B: Bash wrapper (no extra tools)
@@ -173,7 +173,7 @@ carts/
   external/            Vendored deps (ARTS, Polygeist, LLVM)
   docs/                Architecture and pipeline documentation
   docker/              Multi-node Docker cluster setup
-  .sniff.toml          Environment and dependency configuration
+  .dekk.toml           Environment and dependency configuration
 ```
 
 ## Docker setup (multi-node)

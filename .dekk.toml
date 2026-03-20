@@ -1,10 +1,10 @@
 # CARTS environment configuration
 #
 # Quick start (recommended):
-#   pip install git+https://github.com/randreshg/sniff.git
-#   sniff tools/carts_cli.py install
+#   pip install dekk
+#   dekk tools/carts_cli.py install
 #
-# Alternative (no sniff required):
+# Alternative (no dekk required):
 #   ./tools/carts install
 
 [project]

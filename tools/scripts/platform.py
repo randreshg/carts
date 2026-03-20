@@ -1,7 +1,7 @@
 """CARTS platform configuration and project path detection.
 
-All environment setup (PATH, env vars, tool versions) is handled by sniff's
-auto_activate mechanism via ``.sniff.toml``.  This module only provides:
+All environment setup (PATH, env vars, tool versions) is handled by dekk's
+auto_activate mechanism via ``.dekk.toml``.  This module only provides:
 
 * Project path detection (CARTS_DIR, install dirs)
 * CARTS-specific compiler/linker flag construction
@@ -23,21 +23,21 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from sniff import PlatformDetector, PlatformInfo
+from dekk import PlatformDetector, PlatformInfo
 
 
 @dataclass
 class CartsConfig:
     """CARTS project paths and compiler flags.
 
-    Auto-detects platform via ``sniff.PlatformDetector`` and configures:
+    Auto-detects platform via ``dekk.PlatformDetector`` and configures:
     - Include paths for system headers and LLVM/ARTS libraries
     - Sysroot flags for cross-compilation support
     - Linker selection (ld64.lld on macOS, ld.lld on Linux)
     - Library paths and runtime dependencies
     """
 
-    # Platform (from sniff)
+    # Platform (from dekk)
     info: PlatformInfo
 
     # Project directories

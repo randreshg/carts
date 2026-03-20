@@ -1,11 +1,11 @@
 #!/bin/bash
 # CARTS CLI wrapper — bootstraps the Python venv if needed, then runs carts_cli.py.
 #
-# Preferred: install sniff globally and run directly:
-#   pip install git+https://github.com/randreshg/sniff.git
-#   sniff tools/carts_cli.py install
+# Preferred: install dekk globally and run directly:
+#   pip install dekk
+#   dekk tools/carts_cli.py install
 #
-# This wrapper provides the same bootstrap for users without sniff.
+# This wrapper provides the same bootstrap for users without dekk.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,7 +24,7 @@ if [ ! -d "$VENV_DIR" ] || [ ! -x "$VENV_DIR/bin/python" ]; then
     else
         # Fallback: create venv with pip (no Poetry needed)
         PYTHON_CMD=""
-        for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
+        for candidate in python3.13 python3.12 python3.11 python3; do
             if command -v "$candidate" &>/dev/null; then
                 PYTHON_CMD="$candidate"
                 break
@@ -32,13 +32,12 @@ if [ ! -d "$VENV_DIR" ] || [ ! -x "$VENV_DIR/bin/python" ]; then
         done
 
         if [ -z "$PYTHON_CMD" ]; then
-            echo "Error: No Python >= 3.10 found. Install python3 and try again." >&2
+            echo "Error: No Python >= 3.11 found. Install python3 and try again." >&2
             exit 1
         fi
 
         "$PYTHON_CMD" -m venv "$VENV_DIR"
-        "$VENV_DIR/bin/pip" install --quiet typer "rich>=13.7" openpyxl \
-            "sniff[cli] @ git+https://github.com/randreshg/sniff.git@main"
+        "$VENV_DIR/bin/pip" install --quiet openpyxl "dekk>=1.1.0"
     fi
 
     if [ ! -x "$VENV_DIR/bin/python" ]; then
