@@ -137,6 +137,20 @@ struct BarrierPattern : public ArtsToLLVMPattern<BarrierOp> {
   }
 };
 
+/// Pattern to convert arts.get_edt_epoch_guid operations
+struct GetEdtEpochGuidPattern : public ArtsToLLVMPattern<GetEdtEpochGuidOp> {
+  using ArtsToLLVMPattern::ArtsToLLVMPattern;
+
+  LogicalResult matchAndRewrite(GetEdtEpochGuidOp op,
+                                PatternRewriter &rewriter) const override {
+    ARTS_INFO("Lowering GetEdtEpochGuid Op " << op);
+    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
+    Value result = AC->getEdtEpochGuid(op.getLoc());
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 /// Pattern to convert arts.create_epoch operations
 struct CreateEpochPattern : public ArtsToLLVMPattern<CreateEpochOp> {
   using ArtsToLLVMPattern::ArtsToLLVMPattern;
@@ -157,7 +171,11 @@ struct CreateEpochPattern : public ArtsToLLVMPattern<CreateEpochOp> {
     }
 
     /// Create epoch guid
-    auto epochGuid = AC->createEpoch(guid, edtSlot, loc);
+    Value epochGuid;
+    if (op->hasAttr(AttrNames::Operation::NoStartEpoch))
+      epochGuid = AC->createEpochNoStart(guid, edtSlot, loc);
+    else
+      epochGuid = AC->createEpoch(guid, edtSlot, loc);
     rewriter.replaceOp(op, epochGuid);
     return success();
   }
@@ -1786,7 +1804,8 @@ void ConvertArtsToLLVMPass::populateCorePatterns(RewritePatternSet &patterns) {
   patterns.add<BuiltinObjectSizePattern>(context);
 
   /// Epoch patterns
-  patterns.add<CreateEpochPattern, WaitOnEpochPattern>(context, AC);
+  patterns.add<CreateEpochPattern, WaitOnEpochPattern, GetEdtEpochGuidPattern>(
+      context, AC);
 
   /// EDT patterns
   patterns.add<EdtParamPackPattern, EdtParamUnpackPattern>(context, AC);
