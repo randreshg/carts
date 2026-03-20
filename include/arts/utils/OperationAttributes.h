@@ -57,6 +57,10 @@ constexpr StringLiteral PatternRevision = "arts.pattern_revision";
 constexpr StringLiteral LocalOnly = "arts.local_only";
 constexpr StringLiteral ReadOnlyAfterInit = "arts.read_only_after_init";
 
+/// CPS chain / epoch continuation attributes
+constexpr StringLiteral ContinuationForEpoch = "arts.continuation_for_epoch";
+constexpr StringLiteral CPSChainId = "arts.cps_chain_id";
+
 /// GUID range detection annotations (set by GUIDRangeDetection)
 constexpr StringLiteral GuidRangeTripCount = "guid_range_trip_count";
 constexpr StringLiteral HasGuidRangeAlloc = "has_guid_range_alloc";

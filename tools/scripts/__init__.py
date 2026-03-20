@@ -43,7 +43,6 @@ MAKE_TARGET_BUILD = "build"
 MAKE_TARGET_ARTS = "arts"
 MAKE_TARGET_POLYGEIST = "polygeist"
 MAKE_TARGET_LLVM = "llvm"
-MAKE_TARGET_CARTS_COMPILE_ONLY = "carts-compile-only"
 
 # ---------------------------------------------------------------------------
 # Status formatting — maps status strings to Rich-styled symbols via sniff

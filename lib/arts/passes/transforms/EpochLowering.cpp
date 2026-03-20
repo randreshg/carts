@@ -54,17 +54,14 @@
 #include <memory>
 
 #include "arts/utils/Debug.h"
+#include "arts/utils/OperationAttributes.h"
 ARTS_DEBUG_SETUP(epoch_lowering);
 
 using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
-
-namespace {
-constexpr llvm::StringLiteral kContinuationForEpoch =
-    "arts.continuation_for_epoch";
-constexpr llvm::StringLiteral kCPSChainId = "arts.cps_chain_id";
-} // namespace
+using AttrNames::Operation::ContinuationForEpoch;
+using AttrNames::Operation::CPSChainId;
 
 ///===----------------------------------------------------------------------===///
 /// Epoch Lowering Pass Implementation
@@ -115,7 +112,7 @@ void EpochLoweringPass::runOnOperation() {
 
     /// Check if this epoch has a continuation EDT (set by
     /// EpochOpt).
-    bool hasContinuation = epochOp->hasAttr(kContinuationForEpoch);
+    bool hasContinuation = epochOp->hasAttr(ContinuationForEpoch);
     Value finishGuid;
     Value finishSlot;
 
@@ -126,7 +123,7 @@ void EpochLoweringPass::runOnOperation() {
       EdtCreateOp contEdtCreate = nullptr;
       for (Operation *op = epochOp->getNextNode(); op; op = op->getNextNode()) {
         if (auto edt = dyn_cast<EdtCreateOp>(op)) {
-          if (edt->hasAttr(kContinuationForEpoch)) {
+          if (edt->hasAttr(ContinuationForEpoch)) {
             contEdtCreate = edt;
             break;
           }
@@ -140,10 +137,12 @@ void EpochLoweringPass::runOnOperation() {
         /// being placed before the worker EDTs inside the epoch.
         for (Value operand : contEdtCreate->getOperands()) {
           if (auto *defOp = operand.getDefiningOp())
-            if (defOp->getBlock() == epochOp->getBlock())
+            if (defOp->getBlock() == epochOp->getBlock() &&
+                !defOp->isBeforeInBlock(epochOp))
               defOp->moveBefore(epochOp);
         }
-        contEdtCreate->moveBefore(epochOp);
+        if (!contEdtCreate->isBeforeInBlock(epochOp))
+          contEdtCreate->moveBefore(epochOp);
 
         finishGuid = contEdtCreate.getGuid();
         /// The control slot is the LAST slot: depCount - 1 (the control dep
@@ -250,7 +249,7 @@ void EpochLoweringPass::runOnOperation() {
     /// This is the continuation EDT that was outlined by EdtLowering.
     EdtCreateOp contEdtCreate = nullptr;
     module.walk([&](EdtCreateOp edt) {
-      auto chainAttr = edt->getAttrOfType<StringAttr>(kCPSChainId);
+      auto chainAttr = edt->getAttrOfType<StringAttr>(CPSChainId);
       if (chainAttr && chainAttr.getValue() == targetChainId)
         contEdtCreate = edt;
     });
@@ -263,7 +262,7 @@ void EpochLoweringPass::runOnOperation() {
 
     /// Read the outlined function name — this is the self-referential target.
     auto outlinedFunc =
-        contEdtCreate->getAttrOfType<StringAttr>("outlined_func");
+        contEdtCreate->getAttrOfType<StringAttr>(AttrNames::Operation::OutlinedFunc);
     if (!outlinedFunc) {
       ARTS_WARN("CPS advance: continuation EdtCreateOp has no outlined_func");
       continue;

@@ -185,6 +185,18 @@ else()
   message(FATAL_ERROR "Polygeist library not found")
 endif()
 
+# Create imported targets so CMake tracks the .a files for re-linking
+find_library(MLIR_POLYGEIST_TRANSFORMS_LIB NAMES MLIRPolygeistTransforms PATHS ${POLYGEIST_BUILD_DIR}/lib)
+if(NOT MLIR_POLYGEIST_TRANSFORMS_LIB)
+  message(FATAL_ERROR "MLIRPolygeistTransforms library not found")
+endif()
+
+add_library(MLIRPolygeist STATIC IMPORTED)
+set_target_properties(MLIRPolygeist PROPERTIES IMPORTED_LOCATION ${MLIR_POLYGEIST_LIB})
+
+add_library(MLIRPolygeistTransforms STATIC IMPORTED)
+set_target_properties(MLIRPolygeistTransforms PROPERTIES IMPORTED_LOCATION ${MLIR_POLYGEIST_TRANSFORMS_LIB})
+
 # set(CARTS_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(CARTS_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
 set(CARTS_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/include )

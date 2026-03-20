@@ -23,7 +23,6 @@ from scripts import (
     run_subprocess,
     MAKE_TARGET_ARTS,
     MAKE_TARGET_BUILD,
-    MAKE_TARGET_CARTS_COMPILE_ONLY,
     MAKE_TARGET_LLVM,
     MAKE_TARGET_POLYGEIST,
     PIPELINE_MANIFEST_FILENAME,
@@ -190,14 +189,6 @@ def build(
     cmd = ["make"] + make_vars + [target]
 
     result = run_subprocess(cmd, cwd=config.carts_dir, check=False)
-
-    # If polygeist was built and carts has been built before, rebuild carts-compile
-    # to pick up the new polygeist. Skip on first install (build dir won't exist yet).
-    carts_build_dir = config.carts_dir / "build"
-    if result.returncode == 0 and target == MAKE_TARGET_POLYGEIST and (carts_build_dir / "build.ninja").is_file():
-        print_step("Rebuilding carts-compile after Polygeist update...")
-        cmd = ["make"] + make_vars + [MAKE_TARGET_CARTS_COMPILE_ONLY]
-        result = run_subprocess(cmd, cwd=config.carts_dir, check=False)
 
     if result.returncode == 0:
         _export_pipeline_manifest(config)

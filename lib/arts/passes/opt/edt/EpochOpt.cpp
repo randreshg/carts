@@ -62,8 +62,8 @@ using AccessMap = DenseMap<Operation *, bool>;
 
 /// Attribute names for continuation metadata.
 constexpr llvm::StringLiteral kHasControlDep = "arts.has_control_dep";
-constexpr llvm::StringLiteral kContinuationForEpoch =
-    "arts.continuation_for_epoch";
+using AttrNames::Operation::ContinuationForEpoch;
+using AttrNames::Operation::CPSChainId;
 
 static bool isWriter(ArtsMode mode) {
   if (mode == ArtsMode::uninitialized)
@@ -775,7 +775,7 @@ static bool isEligibleForContinuation(EpochOp epochOp,
   }
 
   /// Rule 7: The epoch must not already be marked for continuation.
-  if (epochOp->hasAttr(kContinuationForEpoch))
+  if (epochOp->hasAttr(ContinuationForEpoch))
     return false;
 
   /// Rule 8: The block terminator must not use any values defined by tail ops.
@@ -834,7 +834,7 @@ static LogicalResult transformToContinuation(EpochOp epochOp,
   edtOp->setAttr(kHasControlDep,
                  builder.getIntegerAttr(builder.getI32Type(), 1));
   /// Mark as continuation for epoch linkage.
-  edtOp->setAttr(kContinuationForEpoch, builder.getUnitAttr());
+  edtOp->setAttr(ContinuationForEpoch, builder.getUnitAttr());
 
   /// Step 4: Populate the EDT body region.
   Block &edtBlock = edtOp.getBody().front();
@@ -862,7 +862,7 @@ static LogicalResult transformToContinuation(EpochOp epochOp,
     op->erase();
 
   /// Step 7: Mark the epoch for continuation wiring by EpochLowering.
-  epochOp->setAttr(kContinuationForEpoch, builder.getUnitAttr());
+  epochOp->setAttr(ContinuationForEpoch, builder.getUnitAttr());
 
   ARTS_INFO("  Created continuation EDT with " << deps.size()
                                                << " DB deps + 1 control dep");
@@ -959,7 +959,7 @@ static bool tryCPSLoopTransform(scf::ForOp forOp) {
   /// C6: Epochs must not already be marked for continuation.
   bool alreadyMarked = false;
   forOp.walk([&](EpochOp epoch) {
-    if (epoch->hasAttr(kContinuationForEpoch))
+    if (epoch->hasAttr(ContinuationForEpoch))
       alreadyMarked = true;
   });
   if (alreadyMarked) {
@@ -1067,8 +1067,6 @@ static bool tryCPSLoopTransform(scf::ForOp forOp) {
 ///
 ///===----------------------------------------------------------------------===///
 
-/// Attribute name for CPS chain identification.
-constexpr llvm::StringLiteral kCPSChainId = "arts.cps_chain_id";
 constexpr llvm::StringLiteral kCPSLoopContinuation =
     "arts.cps_loop_continuation";
 
@@ -1178,8 +1176,8 @@ static void markAsContinuation(EdtOp edt, OpBuilder &builder,
   std::string chainId = "chain_" + std::to_string(chainIdx);
   edt->setAttr(kHasControlDep,
                builder.getIntegerAttr(builder.getI32Type(), 1));
-  edt->setAttr(kContinuationForEpoch, builder.getUnitAttr());
-  edt->setAttr(kCPSChainId, builder.getStringAttr(chainId));
+  edt->setAttr(ContinuationForEpoch, builder.getUnitAttr());
+  edt->setAttr(CPSChainId, builder.getStringAttr(chainId));
   edt->setAttr(kCPSLoopContinuation, builder.getUnitAttr());
 }
 
@@ -1215,7 +1213,7 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
 
   /// C5: Already marked? Skip.
   for (const auto &slot : slots)
-    if (slot.epoch->hasAttr(kContinuationForEpoch))
+    if (slot.epoch->hasAttr(ContinuationForEpoch))
       return false;
 
   /// C6: All epoch bodies must be clonable.
@@ -1274,7 +1272,7 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
   Operation *clonedEpoch0Op =
       launcherBuilder.clone(*slots[0].epoch.getOperation(), firstIterMapping);
   auto clonedEpoch0 = cast<EpochOp>(clonedEpoch0Op);
-  clonedEpoch0->setAttr(kContinuationForEpoch, launcherBuilder.getUnitAttr());
+  clonedEpoch0->setAttr(ContinuationForEpoch, launcherBuilder.getUnitAttr());
 
   /// Step 3: Build the nested continuation chain.
   /// cont_0 goes after epoch_0 in the launcher block.
@@ -1316,7 +1314,7 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
         /// Mark the epoch inside the then-branch for continuation.
         for (Operation &thenOp : clonedIf.getThenRegion().front()) {
           if (auto epoch = dyn_cast<EpochOp>(thenOp)) {
-            epoch->setAttr(kContinuationForEpoch, contBuilder.getUnitAttr());
+            epoch->setAttr(ContinuationForEpoch, contBuilder.getUnitAttr());
             break;
           }
         }
@@ -1362,7 +1360,7 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
         /// Unconditional epoch: clone and mark for continuation.
         Operation *clonedEpochOp =
             contBuilder.clone(*nextSlot.epoch.getOperation(), contMapping);
-        cast<EpochOp>(clonedEpochOp)->setAttr(kContinuationForEpoch,
+        cast<EpochOp>(clonedEpochOp)->setAttr(ContinuationForEpoch,
                                                contBuilder.getUnitAttr());
         /// Next cont goes after this epoch in the same block.
         /// contBuilder is already at the terminator position so next
