@@ -9,15 +9,15 @@ systems.
 
 ## Quick Start
 
-**With [sniff](https://github.com/randreshg/sniff) (recommended):**
+**With [dekk](https://pypi.org/project/dekk/) (recommended):**
 
 ```bash
-pip install git+https://github.com/randreshg/sniff.git
+pip install dekk
 git clone <repo-url> && cd carts
-sniff tools/carts_cli.py install        # Set up everything (deps, submodules, build)
+dekk tools/carts_cli.py install        # Set up everything (deps, submodules, build)
 ```
 
-**Without sniff:**
+**Without dekk:**
 
 ```bash
 git clone <repo-url> && cd carts

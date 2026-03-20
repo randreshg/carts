@@ -4,13 +4,15 @@ CARTS CLI - Compiler for Asynchronous Runtime Systems
 A modern Python CLI with rich terminal output.
 """
 
+from bootstrap_dekk import ensure_dekk_bootstrap
+
+ensure_dekk_bootstrap()
+
 from pathlib import Path
 import os
 import sys
 
-import typer
-from sniff import Typer, Exit
-from sniff import print_error
+from dekk import Context, Exit, Option, Typer, print_error
 
 from scripts.platform import get_config, set_verbose
 from scripts import run_subprocess, SUBMODULE_BENCHMARKS
@@ -59,20 +61,24 @@ PASSTHROUGH_NO_INTERSPERSE_CTX = {
     "ignore_unknown_options": True,
 }
 
+VERSION = "0.1.0"
+
 app = Typer(
     name="carts",
-    help="CARTS - Compiler for Asynchronous Runtime Systems",
     auto_activate=True,
+    fail_fast=False,
     add_doctor_command=True,
     add_version_command=True,
+    project_version=VERSION,
+    help="CARTS - Compiler for Asynchronous Runtime Systems",
+    no_args_is_help=True,
     add_env_command=True,
     add_completion=False,
-    no_args_is_help=True,
     context_settings=HELP_CTX,
 )
 
 # Docker subcommand group
-docker_app = typer.Typer(
+docker_app = Typer(
     help="Docker operations for multi-node execution",
     context_settings=HELP_CTX,
 )
@@ -145,7 +151,7 @@ docker_app.command(
 
 @app.callback(invoke_without_command=True)
 def main_callback(
-    verbose: bool = typer.Option(
+    verbose: bool = Option(
         False, "--verbose", "-v", help="Enable verbose output"),
 ):
     """CARTS - Compiler for Asynchronous Runtime Systems"""
@@ -162,7 +168,7 @@ def main_callback(
     context_settings=PASSTHROUGH_NO_INTERSPERSE_CTX
 )
 def benchmarks(
-    ctx: typer.Context,
+    ctx: Context,
 ):
     """Build and manage CARTS benchmarks.
 
@@ -201,9 +207,9 @@ def benchmarks(
 
 @app.command()
 def clean(
-    all_builds: bool = typer.Option(
+    all_builds: bool = Option(
         False, "--all", "-a", help="Clean all build directories (LLVM, Polygeist, ARTS, CARTS)"),
-    docker_clean: bool = typer.Option(
+    docker_clean: bool = Option(
         False, "--docker", "-d", help="Clean Docker artifacts"),
 ):
     """Clean generated files in current directory."""

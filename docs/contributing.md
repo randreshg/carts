@@ -5,7 +5,7 @@
 - `lib/arts/` - Core MLIR dialect implementation
 - `include/arts/` - Public headers
 - `tools/` - User-facing scripts and utilities
-  - `carts_cli.py` - Main CLI entry point (run via `sniff` or `./tools/carts` wrapper)
+  - `carts_cli.py` - Main CLI entry point (run via `dekk` or `./tools/carts` wrapper)
   - `compile/` - C++ compilation driver (`carts-compile`)
   - `scripts/` - Python CLI subcommands/helpers
 - `tests/` - Test suites
@@ -46,18 +46,18 @@ carts docker build                     # Build Docker image + workspace volume
 
 ## Environment Management
 
-CARTS uses [sniff](https://github.com/randreshg/sniff) for environment management. The environment configuration is defined in `.sniff.toml` at the repository root.
+CARTS uses [dekk](https://pypi.org/project/dekk/) for environment management. The environment configuration is defined in `.dekk.toml` at the repository root.
 
 ### Setup
 
 ```bash
-pip install git+https://github.com/randreshg/sniff.git   # once, globally
-sniff tools/carts_cli.py install                          # bootstrap + build
+pip install dekk                                          # once, globally
+dekk tools/carts_cli.py install                           # bootstrap + build
 ```
 
-sniff auto-detects the project, creates a Python environment from `tools/pyproject.toml`, activates `.sniff.toml` paths/env vars, and runs the CLI. After installation, `carts` is in your PATH.
+dekk auto-detects the project, creates a Python environment from `tools/pyproject.toml`, activates `.dekk.toml` paths/env vars, and runs the CLI. After installation, `carts` is in your PATH.
 
-Alternative without sniff:
+Alternative without dekk:
 
 ```bash
 ./tools/carts install
@@ -72,8 +72,8 @@ carts env                 # Show current environment variables and paths
 
 ### How It Works
 
-- `.sniff.toml` declares the required toolchain versions, environment variables, and paths.
-- When you run `sniff tools/carts_cli.py <command>`, sniff reads `.sniff.toml` and activates the environment (PATH, env vars) before executing.
+- `.dekk.toml` declares the required toolchain versions, environment variables, and paths.
+- When you run `dekk tools/carts_cli.py <command>`, dekk reads `.dekk.toml` and activates the environment (PATH, env vars) before executing.
 - `carts doctor` runs a suite of checks (cmake version, compiler availability, LLVM install, etc.) and reports any issues.
 
 Run `carts doctor` after cloning the repository and whenever you update dependencies to ensure your environment is correctly configured.
@@ -117,5 +117,5 @@ Follow LLVM conventions:
 - Never edit generated files
 - Export `CARTS_VERBOSE=1` to debug wrapper invocations
 - Docker scripts mount shared workspace volume for clean builds
-- Environment configuration lives in `.sniff.toml` at the repo root
+- Environment configuration lives in `.dekk.toml` at the repo root
 - Run `carts doctor` to diagnose environment issues

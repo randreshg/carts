@@ -3,9 +3,7 @@
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import typer
-
-from sniff import print_error, print_info, print_step, print_success, print_warning
+from dekk import Exit, Option, print_error, print_info, print_step, print_success, print_warning
 from scripts.platform import get_config
 from scripts import (
     run_subprocess,
@@ -43,7 +41,7 @@ def _clean_git_tree(repo_dir: Path, label: str) -> None:
     )
     if result.returncode != 0:
         print_error(f"Failed to clean {label}")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     result = run_subprocess(
         ["git", "clean", "-fd"],
@@ -52,7 +50,7 @@ def _clean_git_tree(repo_dir: Path, label: str) -> None:
     )
     if result.returncode != 0:
         print_error(f"Failed to clean {label}")
-        raise typer.Exit(1)
+        raise Exit(1)
 
 
 def _get_submodule_hash(submodule_path: Path) -> Optional[str]:
@@ -76,7 +74,7 @@ def _run_git(cwd: Path, args: List[str], fail_message: str) -> None:
     )
     if result.returncode != 0:
         print_error(fail_message)
-        raise typer.Exit(1)
+        raise Exit(1)
 
 
 def _get_pinned_submodule_hash(carts_dir: Path, submodule: str) -> Optional[str]:
@@ -125,13 +123,13 @@ def _update_submodule_checkout(carts_dir: Path, submodule: str) -> None:
 
 
 def update(
-    arts: bool = typer.Option(
+    arts: bool = Option(
         False, "--arts", "-a", help="Update ARTS submodule"),
-    polygeist: bool = typer.Option(
+    polygeist: bool = Option(
         False, "--polygeist", "-p", help="Update Polygeist submodule"),
-    benchmarks: bool = typer.Option(
+    benchmarks: bool = Option(
         False, "--benchmarks", "-b", help="Update benchmarks submodule"),
-    force: bool = typer.Option(
+    force: bool = Option(
         False, "--force", "-f", help="Discard local changes before updating"),
 ):
     """Update CARTS, submodules, and rebuild affected components."""
@@ -199,17 +197,17 @@ def update(
         after_hash = _get_submodule_hash(submodule_path)
         if after_hash is None:
             print_error(f"Could not read updated hash for {submodule}")
-            raise typer.Exit(1)
+            raise Exit(1)
 
         pinned_hash = _get_pinned_submodule_hash(carts_dir, submodule)
         if pinned_hash is None:
             print_error(f"Could not read pinned hash for {submodule}")
-            raise typer.Exit(1)
+            raise Exit(1)
         if after_hash != pinned_hash:
             print_error(
                 f"{submodule} did not match pinned commit: expected {pinned_hash}, got {after_hash}"
             )
-            raise typer.Exit(1)
+            raise Exit(1)
 
         if before_hashes.get(submodule) != after_hash:
             changed_submodules.append(submodule)
@@ -242,7 +240,7 @@ def update(
         )
         if result.returncode != 0:
             print_error("Failed to rebuild Polygeist")
-            raise typer.Exit(1)
+            raise Exit(1)
 
     if selected_arts and (arts_changed or force):
         print_step("Rebuilding ARTS...")
@@ -253,7 +251,7 @@ def update(
         )
         if result.returncode != 0:
             print_error("Failed to rebuild ARTS")
-            raise typer.Exit(1)
+            raise Exit(1)
 
     rebuild_carts = force or carts_changed or arts_changed or polygeist_changed
     if rebuild_carts:
@@ -265,6 +263,6 @@ def update(
         )
         if result.returncode != 0:
             print_error("Failed to rebuild CARTS")
-            raise typer.Exit(1)
+            raise Exit(1)
 
     print_success("Update complete")

@@ -15,7 +15,7 @@ if str(TOOLS_DIR) not in sys.path:
 
 import typer
 
-from sniff import print_error, print_info, print_step, print_warning
+from dekk import print_error, print_info, print_step, print_warning
 from scripts.platform import get_config
 from scripts import run_subprocess
 

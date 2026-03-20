@@ -7,12 +7,10 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import typer
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich.table import Table
-
-from sniff import Colors, console, print_header, print_error, print_info, print_success, print_warning
+from dekk import Argument, Colors, Context, Exit, Option, console, print_header, print_error, print_info, print_success, print_warning
 from scripts.platform import CartsConfig, get_config, is_verbose
 from scripts import (
     run_subprocess,
@@ -155,7 +153,7 @@ def _query_compiler_json(
     carts_compile_bin = config.get_carts_tool(TOOL_CARTS_COMPILE)
     if not carts_compile_bin.is_file():
         print_error(f"carts-compile not found at {carts_compile_bin}")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     result = run_subprocess(
         [str(carts_compile_bin), flag],
@@ -164,7 +162,7 @@ def _query_compiler_json(
     )
     if result.returncode != 0:
         print_error(error_message)
-        raise typer.Exit(result.returncode)
+        raise Exit(result.returncode)
     return result.stdout or ""
 
 
@@ -215,7 +213,7 @@ def _get_pipeline_tokens(config: CartsConfig) -> PipelineTokens:
         _PIPELINE_TOKENS_CACHE = _parse_pipeline_tokens_payload(payload)
     except (json.JSONDecodeError, ValueError) as exc:
         print_error(f"Invalid pipeline token payload from carts-compile: {exc}")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     return _PIPELINE_TOKENS_CACHE
 
@@ -241,7 +239,7 @@ def _get_pipeline_manifest(config: CartsConfig) -> PipelineManifest:
         _PIPELINE_MANIFEST_CACHE = _parse_pipeline_manifest_payload(payload)
     except (json.JSONDecodeError, ValueError) as exc:
         print_error(f"Invalid pipeline manifest payload from carts-compile: {exc}")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     return _PIPELINE_MANIFEST_CACHE
 
@@ -363,7 +361,7 @@ def _reject_disallowed_pipeline_flags(args: List[str]) -> None:
     for disallowed, replacement in _DISALLOWED_PIPELINE_FLAGS.items():
         if _has_flag(args, disallowed):
             print_error(f"Unsupported option: {disallowed}. Use {replacement}.")
-            raise typer.Exit(1)
+            raise Exit(1)
 
 
 @dataclass
@@ -440,20 +438,20 @@ class CompileArgs:
 # ============================================================================
 
 def cgeist(
-    ctx: typer.Context,
-    input_file: Path = typer.Argument(..., help="Input C/C++ file"),
+    ctx: Context,
+    input_file: Path = Argument(..., help="Input C/C++ file"),
 ):
     """Run cgeist with automatic include paths."""
     config = get_config()
 
     if not input_file.is_file():
         print_error(f"Input file '{input_file}' not found")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     cgeist_bin = config.get_polygeist_tool(TOOL_CGEIST)
     if not cgeist_bin.is_file():
         print_error(f"cgeist not found at {cgeist_bin}")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     # Build command
     cmd = [str(cgeist_bin)]
@@ -476,7 +474,7 @@ def cgeist(
     cmd.append(str(input_file))
 
     result = run_subprocess(cmd, check=False)
-    raise typer.Exit(result.returncode)
+    raise Exit(result.returncode)
 
 
 # ============================================================================
@@ -484,21 +482,21 @@ def cgeist(
 # ============================================================================
 
 def clang(
-    ctx: typer.Context,
-    input_file: Path = typer.Argument(..., help="Input file"),
-    output: Optional[Path] = typer.Option(None, "-o", help="Output file"),
+    ctx: Context,
+    input_file: Path = Argument(..., help="Input file"),
+    output: Optional[Path] = Option(None, "-o", help="Output file"),
 ):
     """Compile C/C++ with LLVM clang and OpenMP."""
     config = get_config()
 
     if not input_file.is_file():
         print_error(f"Input file '{input_file}' not found")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     clang_bin = config.get_llvm_tool(TOOL_CLANG)
     if not clang_bin.is_file():
         print_error(f"LLVM clang not found at {clang_bin}")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     # Build command
     cmd = [str(clang_bin)]
@@ -519,7 +517,7 @@ def clang(
         cmd.extend(ctx.args)
 
     result = run_subprocess(cmd, check=False)
-    raise typer.Exit(result.returncode)
+    raise Exit(result.returncode)
 
 
 # ============================================================================
@@ -527,8 +525,8 @@ def clang(
 # ============================================================================
 
 def mlir_translate(
-    ctx: typer.Context,
-    args: Optional[List[str]] = typer.Argument(
+    ctx: Context,
+    args: Optional[List[str]] = Argument(
         None, help="Arguments for mlir-translate"),
 ):
     """Run mlir-translate."""
@@ -540,12 +538,12 @@ def mlir_translate(
         translated_args.extend(ctx.args)
     if not translated_args:
         print_error("Provide mlir-translate arguments, for example --help.")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     cmd = [str(mlir_translate_bin)] + translated_args
 
     result = run_subprocess(cmd, check=False)
-    raise typer.Exit(result.returncode)
+    raise Exit(result.returncode)
 
 
 # ============================================================================
@@ -553,9 +551,9 @@ def mlir_translate(
 # ============================================================================
 
 def pipeline(
-    pipeline: Optional[str] = typer.Option(
+    pipeline: Optional[str] = Option(
         None, FLAG_PIPELINE, help="Show passes for one pipeline step"),
-    json_output: bool = typer.Option(
+    json_output: bool = Option(
         False, "--json", help="Print pipeline manifest JSON"),
 ):
     """Show pipeline steps and passes from carts-compile."""
@@ -567,7 +565,7 @@ def pipeline(
         print_info("Available pipeline steps:")
         for token in manifest.tokens.pipeline_sequence:
             console.print(f"  - {token}")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     if json_output:
         console.print(json.dumps(_pipeline_manifest_to_dict(manifest), indent=2))
@@ -599,35 +597,35 @@ def pipeline(
 # ============================================================================
 
 def compile_cmd(
-    ctx: typer.Context,
-    input_file: Path = typer.Argument(..., help="Input file (.c/.cpp/.mlir/.ll)"),
-    output: Optional[Path] = typer.Option(
+    ctx: Context,
+    input_file: Path = Argument(..., help="Input file (.c/.cpp/.mlir/.ll)"),
+    output: Optional[Path] = Option(
         None, "-o",
         help="Output path (file for normal compile; directory with --all-pipelines)"),
-    optimize: bool = typer.Option(
+    optimize: bool = Option(
         False, "-O3", help="Enable O3 optimizations"),
-    debug: bool = typer.Option(False, "-g", help="Generate debug symbols"),
-    pipeline: Optional[str] = typer.Option(
+    debug: bool = Option(False, "-g", help="Generate debug symbols"),
+    pipeline: Optional[str] = Option(
         None, FLAG_PIPELINE,
         help="Stop after pipeline step (e.g., concurrency, edt-distribution)"),
-    all_pipelines: bool = typer.Option(
+    all_pipelines: bool = Option(
         False, "--all-pipelines",
         help="(.mlir input) write one output per pipeline step"),
-    emit_llvm: bool = typer.Option(
+    emit_llvm: bool = Option(
         False, "--emit-llvm", help="Emit LLVM IR output"),
-    collect_metadata: bool = typer.Option(
+    collect_metadata: bool = Option(
         False, "--collect-metadata", help="Collect and export metadata"),
-    partition_fallback: Optional[str] = typer.Option(
+    partition_fallback: Optional[str] = Option(
         None, "--partition-fallback",
         help="Partition fallback strategy (coarse, fine)"),
-    diagnose: bool = typer.Option(
+    diagnose: bool = Option(
         False, FLAG_DIAGNOSE, help="Export diagnostic information"),
-    diagnose_output: Optional[Path] = typer.Option(
+    diagnose_output: Optional[Path] = Option(
         None, FLAG_DIAGNOSE_OUTPUT, help="Output file for diagnostics"),
-    arts_debug: Optional[str] = typer.Option(
+    arts_debug: Optional[str] = Option(
         None, FLAG_ARTS_DEBUG,
         help="Comma-separated ARTS debug channels (example: info,debug)"),
-    start_from: Optional[str] = typer.Option(
+    start_from: Optional[str] = Option(
         None, "--start-from",
         help="Start pipeline at specified step (input must already match that step)"),
 ):
@@ -654,28 +652,28 @@ def compile_cmd(
             normalized_arts_debug = _normalize_arts_debug(arts_debug)
         except ValueError as exc:
             print_error(str(exc))
-            raise typer.Exit(1)
+            raise Exit(1)
 
     ext = input_file.suffix.lower()
     if ext == ".ll":
         if pipeline:
             print_error("--pipeline is not supported for .ll input (link-only)")
-            raise typer.Exit(1)
+            raise Exit(1)
         if start_from:
             print_error("--start-from is not supported for .ll input (link-only)")
-            raise typer.Exit(1)
+            raise Exit(1)
         if all_pipelines:
             print_error("--all-pipelines is only supported for .mlir input")
-            raise typer.Exit(1)
+            raise Exit(1)
         if emit_llvm or collect_metadata or partition_fallback or diagnose or diagnose_output:
             print_error(
                 "--emit-llvm, --collect-metadata, --partition-fallback, and diagnose "
                 "options are not supported for .ll input (link-only)"
             )
-            raise typer.Exit(1)
+            raise Exit(1)
         if normalized_arts_debug or _has_flag(passthrough_args, FLAG_ARTS_DEBUG):
             print_error("--arts-debug is only supported for carts-compile pipeline runs")
-            raise typer.Exit(1)
+            raise Exit(1)
         _compile_from_ll(input_file, output, debug, passthrough_args)
         return
 
@@ -684,7 +682,7 @@ def compile_cmd(
             f"Unsupported input '{input_file}'. Supported extensions: "
             ".c, .cpp, .mlir, .ll."
         )
-        raise typer.Exit(1)
+        raise Exit(1)
 
     config = get_config()
     pipeline_tokens = _get_pipeline_tokens(config)
@@ -693,34 +691,34 @@ def compile_cmd(
         print_info("Available pipeline steps:")
         for pipeline_token in pipeline_tokens.pipeline:
             console.print(f"  - {pipeline_token}")
-        raise typer.Exit(1)
+        raise Exit(1)
     if start_from and start_from not in pipeline_tokens.start_from:
         print_error(f"Unknown start-from pipeline step: '{start_from}'")
         print_info("Available start-from pipeline steps:")
         for pipeline_token in pipeline_tokens.start_from:
             console.print(f"  - {pipeline_token}")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     if ext in (".c", ".cpp"):
         if all_pipelines:
             print_error("--all-pipelines is only supported for .mlir input")
-            raise typer.Exit(1)
+            raise Exit(1)
         if emit_llvm:
             print_error("--emit-llvm is only supported for .mlir input")
-            raise typer.Exit(1)
+            raise Exit(1)
         if collect_metadata:
             print_error("--collect-metadata is only supported for .mlir input")
-            raise typer.Exit(1)
+            raise Exit(1)
         if start_from:
             print_error("--start-from is only supported for .mlir input")
-            raise typer.Exit(1)
+            raise Exit(1)
         _compile_from_c(input_file, output, optimize, debug, pipeline,
                         partition_fallback, diagnose, diagnose_output,
                         normalized_arts_debug, passthrough_args)
     else:
         if all_pipelines and (pipeline or start_from):
             print_error("--all-pipelines cannot be combined with --pipeline or --start-from")
-            raise typer.Exit(1)
+            raise Exit(1)
         _compile_from_mlir(input_file, output, optimize, debug, pipeline,
                            all_pipelines, emit_llvm, collect_metadata,
                            partition_fallback, diagnose, diagnose_output,
@@ -751,7 +749,7 @@ def _compile_from_c(
 
     if not input_file.is_file():
         print_error(f"Input file '{input_file}' not found")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     base_name = input_file.stem
     output_name = output if output else Path(f"{base_name}_arts")
@@ -816,7 +814,7 @@ def _compile_from_mlir(
     # Pass --help through to carts-compile binary
     if "--help" in passthrough_args or "-h" in passthrough_args:
         result = run_subprocess([str(carts_compile_bin), "--help"], check=False)
-        raise typer.Exit(result.returncode)
+        raise Exit(result.returncode)
 
     if all_pipelines:
         extra_args = list(passthrough_args)
@@ -827,7 +825,7 @@ def _compile_from_mlir(
 
     if not input_file.is_file():
         print_error(f"Input file '{input_file}' not found")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     cmd = [str(carts_compile_bin), str(input_file)]
 
@@ -862,7 +860,7 @@ def _compile_from_mlir(
         cmd.extend(passthrough_args)
 
     result = run_subprocess(cmd, check=False)
-    raise typer.Exit(result.returncode)
+    raise Exit(result.returncode)
 
 
 # -----------------------------------------------------------------------------
@@ -880,11 +878,11 @@ def _compile_from_ll(
 
     if not input_file.is_file():
         print_error(f"Input file '{input_file}' not found")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     if output is None:
         print_error("-o <output> is required for .ll input")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     cmd = _build_link_cmd(
         config,
@@ -895,7 +893,7 @@ def _compile_from_ll(
     )
 
     result = run_subprocess(cmd, check=False)
-    raise typer.Exit(result.returncode)
+    raise Exit(result.returncode)
 
 
 # -----------------------------------------------------------------------------
@@ -1075,7 +1073,7 @@ def _compile_c_pipeline(
                                 with_openmp=False, with_debug_info=True)
         if run_command_with_output(cmd, seq_mlir) != 0:
             print_error("Failed sequential compilation")
-            raise typer.Exit(1)
+            raise Exit(1)
         progress.remove_task(task)
         print_success(f"[1{step_label} {seq_mlir}")
 
@@ -1089,7 +1087,7 @@ def _compile_c_pipeline(
         cmd.extend(metadata_args)
         if run_subprocess(cmd, check=False).returncode != 0:
             print_error("Failed to collect metadata")
-            raise typer.Exit(1)
+            raise Exit(1)
         progress.remove_task(task)
         if metadata_json.is_file():
             print_success(f"[2{step_label} {metadata_json}")
@@ -1102,7 +1100,7 @@ def _compile_c_pipeline(
                                 with_openmp=True, with_debug_info=True)
         if run_command_with_output(cmd, par_mlir) != 0:
             print_error("Failed parallel compilation")
-            raise typer.Exit(1)
+            raise Exit(1)
         progress.remove_task(task)
         print_success(f"[3{step_label} {par_mlir}")
 
@@ -1130,7 +1128,7 @@ def _compile_c_pipeline(
         out_file = par_mlir.with_suffix(f".{pipeline_stop}.mlir") if skip_link else ll_file
         if run_command_with_output(cmd, out_file) != 0:
             print_error("Failed ARTS transformations")
-            raise typer.Exit(1)
+            raise Exit(1)
         progress.remove_task(task)
         print_success(f"[4{step_label} {out_file}")
 
@@ -1150,7 +1148,7 @@ def _compile_c_pipeline(
             config, ll_file, output_name, debug, link_args)
         if run_subprocess(cmd, check=False).returncode != 0:
             print_error("Failed final linking")
-            raise typer.Exit(1)
+            raise Exit(1)
         progress.remove_task(task)
         print_success(f"[5{step_label} {output_name}")
 
@@ -1175,7 +1173,7 @@ def _compile_all_pipelines(
     """Run pipeline and dump all intermediate pipeline steps."""
     if not source_file.is_file():
         print_error(f"Input file '{source_file}' not found")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     carts_compile_bin = config.get_carts_tool(TOOL_CARTS_COMPILE)
 

@@ -4,7 +4,7 @@ Only `print_footer` is still imported from this module.  Once the
 benchmarks submodule inlines or replaces it, delete this file.
 """
 
-from sniff import Colors, console
+from dekk import Colors, console
 
 
 def print_footer(title: str, style: str = Colors.SUCCESS) -> None:

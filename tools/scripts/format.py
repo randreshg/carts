@@ -4,9 +4,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional
 import subprocess
 
-import typer
-
-from sniff import console, print_error, print_info, print_success, print_warning
+from dekk import Argument, Exit, Option, console, print_error, print_info, print_success, print_warning
 from scripts.platform import CartsConfig, get_config
 from scripts import run_subprocess, TOOL_CLANG_FORMAT
 
@@ -77,16 +75,16 @@ def _resolve_clang_format(config: CartsConfig) -> Optional[Path]:
 
 
 def format_sources(
-    paths: Optional[List[Path]] = typer.Argument(
+    paths: Optional[List[Path]] = Argument(
         None,
         help=(
             "Files or directories to format. If omitted, formats tracked "
             "C/C++ sources in the repo."
         ),
     ),
-    check_only: bool = typer.Option(
+    check_only: bool = Option(
         False, "--check", help="Check formatting without modifying files"),
-    list_files: bool = typer.Option(
+    list_files: bool = Option(
         False, "--list", help="Print the files selected for formatting"),
 ):
     """Format source files with clang-format."""
@@ -95,7 +93,7 @@ def format_sources(
     if not clang_format:
         print_error("clang-format not found in .install/llvm/bin or PATH.")
         print_info("Run `carts build` (or install clang-format) and retry.")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     selected_paths = paths or []
     if selected_paths:
@@ -106,7 +104,7 @@ def format_sources(
     deduped = sorted({f.resolve() for f in files})
     if not deduped:
         print_warning("No eligible source files found for clang-format.")
-        raise typer.Exit(0)
+        raise Exit(0)
 
     if list_files:
         for file_path in deduped:
@@ -131,7 +129,7 @@ def format_sources(
     if failed > 0:
         action = "check" if check_only else "format"
         print_error(f"clang-format {action} failed for {failed} file(s).")
-        raise typer.Exit(1)
+        raise Exit(1)
 
     if check_only:
         print_success("Formatting check passed.")

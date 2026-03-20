@@ -8,7 +8,7 @@ import time
 
 import typer
 
-from sniff import print_error, print_header, print_info, print_step, print_success, print_warning
+from dekk import print_error, print_header, print_info, print_step, print_success, print_warning
 from docker_shared import BASE_IMAGE, WORKSPACE_VOLUME, _detect_docker_cpus, _docker, _docker_exec, _get_docker_dir, _image_exists, _volume_exists
 
 
