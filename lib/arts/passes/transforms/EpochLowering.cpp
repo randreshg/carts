@@ -150,13 +150,7 @@ void EpochLoweringPass::runOnOperation() {
               moveWithDeps(defOp);
           op->moveBefore(epochOp);
         };
-        for (Value operand : contEdtCreate->getOperands())
-          if (auto *defOp = operand.getDefiningOp())
-            if (defOp->getBlock() == epochOp->getBlock() &&
-                !defOp->isBeforeInBlock(epochOp))
-              defOp->moveBefore(epochOp);
-        if (!contEdtCreate->isBeforeInBlock(epochOp))
-          contEdtCreate->moveBefore(epochOp);
+        moveWithDeps(contEdtCreate.getOperation());
 
         finishGuid = contEdtCreate.getGuid();
         /// Control slot = depCount - 1 (EdtLowering added +1 for the control dep).
