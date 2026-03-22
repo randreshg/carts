@@ -467,6 +467,12 @@ mlir::arts::resolveAcquireRewriteContract(AnalysisManager *AM,
     return AcquireRewriteContract{};
   if (!AM)
     return deriveAcquireRewriteContract(acquire);
+  // CPS chain continuations contain cloned acquires not in the analysis graph.
+  // Derive the contract directly from IR attributes instead of looking up
+  // the analysis, which would crash in MemoryAccessClassifier.
+  if (auto parentEdt = acquire->getParentOfType<EdtOp>())
+    if (parentEdt->hasAttr(AttrNames::Operation::CPSChainId))
+      return deriveAcquireRewriteContract(acquire);
   return AM->getDbAnalysis().getAcquireRewriteContract(acquire);
 }
 

@@ -66,6 +66,15 @@ constexpr StringLiteral ReadOnlyAfterInit = "arts.read_only_after_init";
 /// CPS chain / epoch continuation attributes
 constexpr StringLiteral ContinuationForEpoch = "arts.continuation_for_epoch";
 constexpr StringLiteral CPSChainId = "arts.cps_chain_id";
+constexpr StringLiteral CPSOuterEpochParamIdx = "arts.cps_outer_epoch_param_idx";
+constexpr StringLiteral CPSIterCounterParamIdx =
+    "arts.cps_iter_counter_param_idx";
+constexpr StringLiteral CPSParamPerm = "arts.cps_param_perm";
+constexpr StringLiteral CPSInitIter = "arts.cps_init_iter";
+constexpr StringLiteral CPSAdditiveParams = "arts.cps_additive_params";
+constexpr StringLiteral CPSNumCarry = "arts.cps_num_carry";
+constexpr StringLiteral CPSLoopContinuation = "arts.cps_loop_continuation";
+constexpr StringLiteral CPSAdvanceHasIvArg = "arts.cps_advance_has_iv_arg";
 
 /// GUID range detection annotations (set by GUIDRangeDetection)
 constexpr StringLiteral GuidRangeTripCount = "guid_range_trip_count";

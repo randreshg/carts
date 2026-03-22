@@ -58,14 +58,12 @@ using namespace mlir::func;
 using namespace mlir::arts;
 using AttrNames::Operation::ContinuationForEpoch;
 using AttrNames::Operation::CPSChainId;
-
-namespace {
-constexpr llvm::StringLiteral kCPSOuterEpochIdx =
-    "arts.cps_outer_epoch_param_idx";
-constexpr llvm::StringLiteral kCPSIterCounterIdx =
-    "arts.cps_iter_counter_param_idx";
-constexpr llvm::StringLiteral kCPSParamPerm = "arts.cps_param_perm";
-} // namespace
+using AttrNames::Operation::CPSOuterEpochParamIdx;
+using AttrNames::Operation::CPSIterCounterParamIdx;
+using AttrNames::Operation::CPSParamPerm;
+using AttrNames::Operation::CPSInitIter;
+using AttrNames::Operation::CPSAdditiveParams;
+using AttrNames::Operation::CPSAdvanceHasIvArg;
 
 ///===----------------------------------------------------------------------===///
 /// Epoch Lowering Pass Implementation
@@ -247,7 +245,7 @@ void EpochLoweringPass::runOnOperation() {
         epochOp->hasAttr(AttrNames::Operation::CPSOuterEpoch);
     int64_t cpsInitIter = 0;
     if (auto initIterAttr =
-            epochOp->getAttrOfType<IntegerAttr>("arts.cps_init_iter"))
+            epochOp->getAttrOfType<IntegerAttr>(CPSInitIter))
       cpsInitIter = initIterAttr.getInt();
 
     /// Replace the epoch op with the epoch GUID.
@@ -286,9 +284,9 @@ void EpochLoweringPass::runOnOperation() {
               packOp->getLoc(), packOp->getResultTypes()[0], packParams);
           packOp->getResult(0).replaceAllUsesWith(newPack.getMemref());
           packOp->erase();
-          edt->setAttr(kCPSIterCounterIdx,
+          edt->setAttr(CPSIterCounterParamIdx,
                        AC->getBuilder().getI64IntegerAttr(iterIdx));
-          edt->setAttr(kCPSOuterEpochIdx,
+          edt->setAttr(CPSOuterEpochParamIdx,
                        AC->getBuilder().getI64IntegerAttr(epochIdx));
           ARTS_INFO("  Injected iter counter at idx " << iterIdx
                     << ", outer epoch at idx " << epochIdx);
@@ -310,8 +308,8 @@ void EpochLoweringPass::runOnOperation() {
     };
     DenseMap<StringRef, ChainFuncInfo> funcToChainInfo;
     module.walk([&](EdtCreateOp edt) {
-      auto iterAttr = edt->getAttrOfType<IntegerAttr>(kCPSIterCounterIdx);
-      auto epochAttr = edt->getAttrOfType<IntegerAttr>(kCPSOuterEpochIdx);
+      auto iterAttr = edt->getAttrOfType<IntegerAttr>(CPSIterCounterParamIdx);
+      auto epochAttr = edt->getAttrOfType<IntegerAttr>(CPSOuterEpochParamIdx);
       auto funcAttr =
           edt->getAttrOfType<StringAttr>(AttrNames::Operation::OutlinedFunc);
       if (iterAttr && epochAttr && funcAttr)
@@ -326,7 +324,7 @@ void EpochLoweringPass::runOnOperation() {
 
       SmallVector<EdtCreateOp> childChainEdts;
       func.walk([&](EdtCreateOp edt) {
-        if (edt->hasAttr(CPSChainId) && !edt->hasAttr(kCPSOuterEpochIdx))
+        if (edt->hasAttr(CPSChainId) && !edt->hasAttr(CPSOuterEpochParamIdx))
           childChainEdts.push_back(edt);
       });
       if (childChainEdts.empty())
@@ -401,7 +399,7 @@ void EpochLoweringPass::runOnOperation() {
         SmallVector<int64_t> perm;
         for (Value operand : packOp->getOperands())
           perm.push_back(traceToParamIdx(operand));
-        edt->setAttr(kCPSParamPerm,
+        edt->setAttr(CPSParamPerm,
                      AC->getBuilder().getDenseI64ArrayAttr(perm));
 
         SmallVector<Value> packParams(packOp->getOperands());
@@ -414,9 +412,9 @@ void EpochLoweringPass::runOnOperation() {
             packOp->getLoc(), packOp->getResultTypes()[0], packParams);
         packOp->getResult(0).replaceAllUsesWith(newPack.getMemref());
         packOp->erase();
-        edt->setAttr(kCPSIterCounterIdx,
+        edt->setAttr(CPSIterCounterParamIdx,
                      AC->getBuilder().getI64IntegerAttr(newIterIdx));
-        edt->setAttr(kCPSOuterEpochIdx,
+        edt->setAttr(CPSOuterEpochParamIdx,
                      AC->getBuilder().getI64IntegerAttr(newEpochIdx));
         ARTS_INFO("  Injected iter[" << newIterIdx << "], epoch["
                   << newEpochIdx << "] for child chain EDT");
@@ -505,12 +503,31 @@ void EpochLoweringPass::runOnOperation() {
 
     /// Read extra parameters (iter counter + outer epoch GUID) from the raw
     /// parameter memref. These were injected by the CPS propagation above.
+    /// IMPORTANT: Read CPS indices from the LOCAL function's own EdtCreateOp,
+    /// not from the target chain's EdtCreateOp. Each chain function has its
+    /// own CPS param indices based on its own param count.
     Value outerEpochGuid;
     Value curIter;
-    auto outerEpochIdxAttr =
-        contEdtCreate->getAttrOfType<IntegerAttr>(kCPSOuterEpochIdx);
-    auto iterCounterIdxAttr =
-        contEdtCreate->getAttrOfType<IntegerAttr>(kCPSIterCounterIdx);
+    IntegerAttr outerEpochIdxAttr;
+    IntegerAttr iterCounterIdxAttr;
+    if (parentFunc) {
+      module.walk([&](EdtCreateOp edt) {
+        auto funcAttr = edt->getAttrOfType<StringAttr>(
+            AttrNames::Operation::OutlinedFunc);
+        if (funcAttr && funcAttr.getValue() == parentFunc.getName()) {
+          iterCounterIdxAttr =
+              edt->getAttrOfType<IntegerAttr>(CPSIterCounterParamIdx);
+          outerEpochIdxAttr =
+              edt->getAttrOfType<IntegerAttr>(CPSOuterEpochParamIdx);
+        }
+      });
+    }
+    if (!iterCounterIdxAttr)
+      iterCounterIdxAttr =
+          contEdtCreate->getAttrOfType<IntegerAttr>(CPSIterCounterParamIdx);
+    if (!outerEpochIdxAttr)
+      outerEpochIdxAttr =
+          contEdtCreate->getAttrOfType<IntegerAttr>(CPSOuterEpochParamIdx);
     if (localUnpack) {
       Value paramArrayMemref = localUnpack->getOperand(0);
       if (iterCounterIdxAttr) {
@@ -527,7 +544,7 @@ void EpochLoweringPass::runOnOperation() {
       }
     }
 
-    bool isAdditive = advanceOp->hasAttr("arts.cps_additive_params");
+    bool isAdditive = advanceOp->hasAttr(CPSAdditiveParams);
 
     if (!outerEpochGuid) {
       auto outerEpochGuidOp = AC->create<GetEdtEpochGuidOp>(
@@ -578,7 +595,7 @@ void EpochLoweringPass::runOnOperation() {
       });
       if (callerEdt) {
         if (auto permAttr =
-                callerEdt->getAttrOfType<DenseI64ArrayAttr>(kCPSParamPerm)) {
+                callerEdt->getAttrOfType<DenseI64ArrayAttr>(CPSParamPerm)) {
           ArrayRef<int64_t> perm = permAttr.asArrayRef();
           /// Compute inverse permutation: inv[perm[i]] = i.
           invPerm.resize(numUserParams, -1);
@@ -641,8 +658,29 @@ void EpochLoweringPass::runOnOperation() {
         loc, IntegerType::get(AC->getContext(), 64), newContGuid, finishSlot);
     Value epochGuid = innerEpoch.getEpochGuid();
 
-    /// Move worker ops from CPSAdvanceOp's epochBody AFTER the epoch creation.
+    /// If the advance region has a block argument serving as the IV
+    /// placeholder (from wrappingIf support), replace it with the actual
+    /// runtime iteration counter (tNext or curIter).
     Block &advBody = advanceOp.getEpochBody().front();
+    if (advanceOp->hasAttr(CPSAdvanceHasIvArg) &&
+        advBody.getNumArguments() > 0) {
+      Value ivReplacement = tNext ? tNext : curIter;
+      if (ivReplacement) {
+        // Cast to index if needed (block arg is index type).
+        if (ivReplacement.getType() !=
+            advBody.getArgument(0).getType()) {
+          AC->setInsertionPointAfter(ivReplacement.getDefiningOp()
+                                         ? ivReplacement.getDefiningOp()
+                                         : &advBody.front());
+          ivReplacement = AC->create<arith::IndexCastOp>(
+              loc, advBody.getArgument(0).getType(), ivReplacement);
+        }
+        advBody.getArgument(0).replaceAllUsesWith(ivReplacement);
+      }
+      advBody.eraseArgument(0);
+    }
+
+    /// Move worker ops from CPSAdvanceOp's epochBody AFTER the epoch creation.
     SmallVector<Operation *> workerOps;
     for (Operation &op : advBody.without_terminator())
       workerOps.push_back(&op);

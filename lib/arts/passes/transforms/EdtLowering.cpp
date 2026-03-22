@@ -306,6 +306,11 @@ void EdtLoweringPass::runOnOperation() {
       edtOp.emitError("Failed to lower task EDT");
       return signalPassFailure();
     }
+    /// Each lowerEdt call outlines the EDT body, invalidating any cached
+    /// DbGraph nodes that reference block arguments or operations from the
+    /// old EDT body. Invalidate so the next EDT's analysis rebuilds fresh.
+    if (AM)
+      AM->getDbAnalysis().invalidate();
   }
 
   ARTS_INFO_FOOTER(EdtLoweringPass);

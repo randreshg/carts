@@ -66,6 +66,11 @@ using AccessMap = DenseMap<Operation *, bool>;
 constexpr llvm::StringLiteral kHasControlDep = "arts.has_control_dep";
 using AttrNames::Operation::ContinuationForEpoch;
 using AttrNames::Operation::CPSChainId;
+using AttrNames::Operation::CPSAdditiveParams;
+using AttrNames::Operation::CPSNumCarry;
+using AttrNames::Operation::CPSLoopContinuation;
+using AttrNames::Operation::CPSAdvanceHasIvArg;
+using AttrNames::Operation::CPSInitIter;
 
 static bool isWriter(ArtsMode mode) {
   if (mode == ArtsMode::uninitialized)
@@ -1104,8 +1109,8 @@ static bool tryCPSLoopTransform(scf::ForOp forOp) {
 ///
 ///===----------------------------------------------------------------------===///
 
-constexpr llvm::StringLiteral kCPSLoopContinuation =
-    "arts.cps_loop_continuation";
+/// Use centralized constant from OperationAttributes.h.
+constexpr auto kCPSLoopContinuation = CPSLoopContinuation;
 
 /// Epoch slot in a loop body — either a direct epoch or one inside scf.if.
 struct EpochSlot {
@@ -1134,6 +1139,54 @@ static bool epochBodyIsClonable(EpochOp epoch) {
          !epoch.getRegion().front().without_terminator().empty();
 }
 
+/// Collect all external values referenced by any epoch body in the loop.
+/// "External" means defined outside the loop body block. These are the
+/// values that chain_0 captures (since it transitively contains all epochs)
+/// and that must be available in chain_{N-1} for the CPS advance loop-back.
+static SmallVector<Value>
+collectAllEpochExternalValues(Block &loopBody,
+                              MutableArrayRef<EpochSlot> slots) {
+  llvm::SetVector<Value> externals;
+  for (auto &slot : slots) {
+    slot.epoch.getRegion().walk([&](Operation *op) {
+      for (Value operand : op->getOperands()) {
+        if (auto blockArg = dyn_cast<BlockArgument>(operand)) {
+          if (blockArg.getOwner() != &loopBody &&
+              !loopBody.findAncestorOpInBlock(*blockArg.getOwner()->getParentOp()))
+            externals.insert(operand);
+          continue;
+        }
+        Operation *defOp = operand.getDefiningOp();
+        if (!defOp)
+          continue;
+        // Value defined outside the loop body.
+        if (!loopBody.findAncestorOpInBlock(*defOp))
+          externals.insert(operand);
+      }
+    });
+    // Also walk else-branch epochs if wrappingIf has one.
+    if (slot.wrappingIf && !slot.wrappingIf.getElseRegion().empty()) {
+      slot.wrappingIf.getElseRegion().walk([&](Operation *op) {
+        for (Value operand : op->getOperands()) {
+          if (auto blockArg = dyn_cast<BlockArgument>(operand)) {
+            if (blockArg.getOwner() != &loopBody &&
+                !loopBody.findAncestorOpInBlock(
+                    *blockArg.getOwner()->getParentOp()))
+              externals.insert(operand);
+            continue;
+          }
+          Operation *defOp = operand.getDefiningOp();
+          if (!defOp)
+            continue;
+          if (!loopBody.findAncestorOpInBlock(*defOp))
+            externals.insert(operand);
+        }
+      });
+    }
+  }
+  return SmallVector<Value>(externals.begin(), externals.end());
+}
+
 /// Check if an operation is one of the epoch slot operations.
 static bool isSlotOp(Operation *op, MutableArrayRef<EpochSlot> slots) {
   for (auto &slot : slots) {
@@ -1143,6 +1196,56 @@ static bool isSlotOp(Operation *op, MutableArrayRef<EpochSlot> slots) {
       return true;
   }
   return false;
+}
+
+/// Ensure all external values used by an operation are available in the
+/// IRMapping. For values defined outside the loop body, clone their
+/// definition chain if the defining ops have no side effects.
+/// This handles patterns like polygeist.pointer2memref of global addresses.
+static void rematerializeExternalDefs(OpBuilder &builder, Operation *op,
+                                      Block *loopBody, IRMapping &mapping) {
+  // First pass: collect all external ops in dependency order.
+  SmallVector<Operation *> toClone;
+  SmallVector<Value> worklist;
+  DenseSet<Value> visited;
+  DenseSet<Operation *> scheduled;
+
+  for (Value operand : op->getOperands())
+    worklist.push_back(operand);
+
+  while (!worklist.empty()) {
+    Value v = worklist.pop_back_val();
+    if (!visited.insert(v).second)
+      continue;
+    if (mapping.contains(v))
+      continue;
+    if (mlir::isa<BlockArgument>(v))
+      continue;
+    Operation *defOp = v.getDefiningOp();
+    if (!defOp)
+      continue;
+    // Only rematerialize ops defined outside the loop body.
+    if (loopBody->findAncestorOpInBlock(*defOp))
+      continue;
+    // Only rematerialize ops without side effects.
+    if (!isPureArith(defOp) && !mlir::isPure(defOp))
+      continue;
+    if (!scheduled.insert(defOp).second)
+      continue;
+    toClone.push_back(defOp);
+    // Recursively process operands.
+    for (Value inner : defOp->getOperands())
+      worklist.push_back(inner);
+  }
+
+  // Clone in reverse order (dependencies first).
+  for (auto it = toClone.rbegin(); it != toClone.rend(); ++it) {
+    Operation *defOp = *it;
+    Operation *cloned = builder.clone(*defOp, mapping);
+    for (auto [oldRes, newRes] :
+         llvm::zip(defOp->getResults(), cloned->getResults()))
+      mapping.map(oldRes, newRes);
+  }
 }
 
 /// Clone all non-slot pure arithmetic and DB ops from the loop body.
@@ -1180,7 +1283,8 @@ static void ensureYieldTerminator(Block &block, Location loc) {
 static void emitAdvanceLogic(OpBuilder &builder, Location loc, Value iv,
                              Value tCurrent, Value ub, Value step, Block &body,
                              MutableArrayRef<EpochSlot> slots,
-                             ArrayRef<Operation *> allSequentialOps = {}) {
+                             ArrayRef<Operation *> allSequentialOps = {},
+                             ArrayRef<Value> carryValues = {}) {
   /// The bounds check (tCurrent + step < ub) cannot be emitted here because
   /// tCurrent is the lower bound at MLIR construction time, which gets
   /// constant-folded. Instead, we emit the CPSAdvanceOp unconditionally and
@@ -1201,9 +1305,19 @@ static void emitAdvanceLogic(OpBuilder &builder, Location loc, Value iv,
   Value stepI64 = builder.create<arith::IndexCastOp>(loc, i64Ty, step);
   Value ubI64 = builder.create<arith::IndexCastOp>(loc, i64Ty, ub);
   SmallVector<Value> nextParams = {stepI64, ubI64};
+  /// Append carry values to nextIterParams. These are external values from
+  /// epoch bodies that the last continuation must capture so that all values
+  /// needed by chain_0 are available for the CPS advance loop-back.
+  /// The carry values create SSA references inside the continuation EDT body,
+  /// forcing EdtEnvManager to capture them during EDT outlining.
+  for (Value v : carryValues)
+    nextParams.push_back(v);
   auto advance = builder.create<CPSAdvanceOp>(
       loc, nextParams, builder.getStringAttr("chain_0"));
-  advance->setAttr("arts.cps_additive_params", builder.getUnitAttr());
+  advance->setAttr(CPSAdditiveParams, builder.getUnitAttr());
+  if (!carryValues.empty())
+    advance->setAttr(CPSNumCarry,
+                     builder.getI64IntegerAttr(carryValues.size()));
 
   Region &advanceRegion = advance.getEpochBody();
   if (advanceRegion.empty())
@@ -1212,9 +1326,55 @@ static void emitAdvanceLogic(OpBuilder &builder, Location loc, Value iv,
   ensureYieldTerminator(advBlock, loc);
   OpBuilder advBuilder = OpBuilder::atBlockTerminator(&advBlock);
 
-  Block &epochBody = slots[0].epoch.getBody().front();
-  for (Operation &epochOp : epochBody.without_terminator())
-    advBuilder.clone(epochOp, advanceMapping);
+  // If epoch_0 has a wrapping scf.if, clone the entire conditional
+  // so the next iteration can take either branch based on parity.
+  if (slots[0].wrappingIf) {
+    // The wrappingIf condition depends on the induction variable (iv).
+    // advanceMapping maps iv → constant (lb + step), so any iv-dependent
+    // computation becomes constant-foldable. The canonicalize pass would
+    // fold the scf.if to a single branch, losing the parity alternation.
+    //
+    // Fix: add a block argument to the advance region to serve as a
+    // non-constant IV placeholder. This prevents constant folding.
+    // EpochLowering's CPS advance resolver replaces this block arg with
+    // the actual runtime iteration counter from the param array.
+    auto indexTy = IndexType::get(builder.getContext());
+    Value ivPlaceholder = advBlock.addArgument(indexTy, loc);
+    advance->setAttr(CPSAdvanceHasIvArg,
+                     builder.getUnitAttr());
+
+    // Build a fresh mapping for the wrappingIf that uses the placeholder
+    // IV instead of the constant tNext. Clone only the ops needed for
+    // the condition chain (which depend on iv).
+    IRMapping ifMapping;
+    ifMapping.map(iv, ivPlaceholder);
+    // Copy all non-iv mappings from advanceMapping so epoch body ops
+    // can still reference the correct values.
+    for (Operation &op : body.without_terminator()) {
+      if (isSlotOp(&op, slots))
+        continue;
+      // Re-clone non-slot arith using ivPlaceholder instead of constant.
+      Operation *cloned = advBuilder.clone(op, ifMapping);
+      for (auto [oldRes, newRes] :
+           llvm::zip(op.getResults(), cloned->getResults()))
+        ifMapping.map(oldRes, newRes);
+    }
+
+    Operation *clonedIf =
+        advBuilder.clone(*slots[0].wrappingIf.getOperation(), ifMapping);
+    auto ifOp = cast<scf::IfOp>(clonedIf);
+    for (Operation &op : ifOp.getThenRegion().front())
+      if (auto epoch = dyn_cast<EpochOp>(op))
+        epoch->setAttr(ContinuationForEpoch, advBuilder.getUnitAttr());
+    if (!ifOp.getElseRegion().empty())
+      for (Operation &op : ifOp.getElseRegion().front())
+        if (auto epoch = dyn_cast<EpochOp>(op))
+          epoch->setAttr(ContinuationForEpoch, advBuilder.getUnitAttr());
+  } else {
+    Block &epochBody = slots[0].epoch.getBody().front();
+    for (Operation &epochOp : epochBody.without_terminator())
+      advBuilder.clone(epochOp, advanceMapping);
+  }
 }
 
 /// Mark an EDT as a CPS continuation with the given chain ID.
@@ -1237,9 +1397,27 @@ static void promoteAllocsForCPSChain(scf::ForOp forOp,
                                      MutableArrayRef<EpochSlot> slots) {
   DenseSet<memref::AllocOp> promotable;
 
+  /// Helper to trace a memref value through cast/subview ops.
+  auto traceToAlloc = [](Value v) -> memref::AllocOp {
+    while (v) {
+      if (auto alloc = v.getDefiningOp<memref::AllocOp>())
+        return alloc;
+      if (auto cast = v.getDefiningOp<memref::CastOp>()) {
+        v = cast.getSource();
+        continue;
+      }
+      if (auto subview = v.getDefiningOp<memref::SubViewOp>()) {
+        v = subview.getSource();
+        continue;
+      }
+      break;
+    }
+    return nullptr;
+  };
+
   for (Operation *seqOp : sequentialOps) {
     for (Value operand : seqOp->getOperands()) {
-      auto allocOp = operand.getDefiningOp<memref::AllocOp>();
+      auto allocOp = traceToAlloc(operand);
       if (!allocOp)
         continue;
       // Only promote allocs defined outside the loop body.
@@ -1438,10 +1616,10 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
   /// as an extra parameter. Using an attribute avoids the iteration
   /// counter being constant-folded away before EdtLowering packs params.
   if (auto lbCst = getConstantIntValue(lb))
-    outerEpoch->setAttr("arts.cps_init_iter",
+    outerEpoch->setAttr(CPSInitIter,
                          builder.getI64IntegerAttr(*lbCst));
   else
-    outerEpoch->setAttr("arts.cps_init_iter", builder.getI64IntegerAttr(0));
+    outerEpoch->setAttr(CPSInitIter, builder.getI64IntegerAttr(0));
   Region &outerRegion = outerEpoch.getRegion();
   if (outerRegion.empty())
     outerRegion.emplaceBlock();
@@ -1456,10 +1634,34 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
   cloneNonSlotArith(outerBuilder, body, slots, firstIterMapping,
                     sequentialOps);
 
-  Operation *clonedEpoch0Op =
-      outerBuilder.clone(*slots[0].epoch.getOperation(), firstIterMapping);
-  auto clonedEpoch0 = cast<EpochOp>(clonedEpoch0Op);
-  clonedEpoch0->setAttr(ContinuationForEpoch, outerBuilder.getUnitAttr());
+  // If epoch_0 has a wrapping scf.if (parity conditional), clone the
+  // entire conditional so the first iteration selects the correct branch.
+  if (slots[0].wrappingIf) {
+    Operation *clonedIfOp =
+        outerBuilder.clone(*slots[0].wrappingIf.getOperation(),
+                           firstIterMapping);
+    auto clonedIf = cast<scf::IfOp>(clonedIfOp);
+    for (Operation &op : clonedIf.getThenRegion().front())
+      if (auto epoch = dyn_cast<EpochOp>(op))
+        epoch->setAttr(ContinuationForEpoch, outerBuilder.getUnitAttr());
+    if (!clonedIf.getElseRegion().empty())
+      for (Operation &op : clonedIf.getElseRegion().front())
+        if (auto epoch = dyn_cast<EpochOp>(op))
+          epoch->setAttr(ContinuationForEpoch, outerBuilder.getUnitAttr());
+  } else {
+    Operation *clonedEpoch0Op =
+        outerBuilder.clone(*slots[0].epoch.getOperation(), firstIterMapping);
+    auto clonedEpoch0 = cast<EpochOp>(clonedEpoch0Op);
+    clonedEpoch0->setAttr(ContinuationForEpoch, outerBuilder.getUnitAttr());
+  }
+
+  /// Collect external values from ALL epoch bodies. In multi-epoch chains
+  /// (N>2), intermediate continuations may narrow the captured value set.
+  /// The carry values ensure that chain_{N-1}'s CPSAdvance can provide all
+  /// values chain_0 needs for the loop-back.
+  SmallVector<Value> carryValues;
+  if (N > 1)
+    carryValues = collectAllEpochExternalValues(body, slots);
 
   /// Step 3: Build the nested continuation chain (value-type builder to
   /// avoid dangling pointers across loop iterations).
@@ -1490,17 +1692,21 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
       /// Last continuation: clone tail sequential ops, then advance.
       cloneNonSlotArith(contBuilder, body, slots, contMapping,
                         sequentialOps);
-      for (Operation *seqOp : interEpochOps[N - 1])
+      for (Operation *seqOp : interEpochOps[N - 1]) {
+        rematerializeExternalDefs(contBuilder, seqOp, &body, contMapping);
         contBuilder.clone(*seqOp, contMapping);
+      }
       emitAdvanceLogic(contBuilder, loc, iv, tCurrent, ub, step, body,
-                       slots, sequentialOps);
+                       slots, sequentialOps, carryValues);
     } else {
       /// Middle continuation: clone inter-epoch sequential ops,
       /// then set up epoch_{i+1} and nest cont_{i+1}.
       cloneNonSlotArith(contBuilder, body, slots, contMapping,
                         sequentialOps);
-      for (Operation *seqOp : interEpochOps[i])
+      for (Operation *seqOp : interEpochOps[i]) {
+        rematerializeExternalDefs(contBuilder, seqOp, &body, contMapping);
         contBuilder.clone(*seqOp, contMapping);
+      }
 
       EpochSlot &nextSlot = slots[i + 1];
       if (nextSlot.wrappingIf) {
@@ -1534,7 +1740,7 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
           Block &elseBlock = newIf.getElseRegion().front();
           OpBuilder elseBuilder = OpBuilder::atBlockTerminator(&elseBlock);
           emitAdvanceLogic(elseBuilder, loc, iv, tCurrent, ub, step, body,
-                           slots, sequentialOps);
+                           slots, sequentialOps, carryValues);
 
           clonedIf.erase();
 
@@ -1544,7 +1750,7 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
           Block &elseBlock = clonedIf.getElseRegion().front();
           OpBuilder elseBuilder = OpBuilder::atBlockTerminator(&elseBlock);
           emitAdvanceLogic(elseBuilder, loc, iv, tCurrent, ub, step, body,
-                           slots, sequentialOps);
+                           slots, sequentialOps, carryValues);
 
           Block &thenBlock = clonedIf.getThenRegion().front();
           chainBuilder.setInsertionPoint(thenBlock.getTerminator());

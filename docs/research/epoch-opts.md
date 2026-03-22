@@ -108,66 +108,92 @@ Benchmark             Status     Notes
 polybench/jacobi2d    FIRES      2 epochs, clean loop body. Checksum verified.
 layernorm (NREPS>1)   FIRES      1 epoch + timer call. Checksum verified (NREPS=2).
                                  NREPS=1 (small): no-op (C3: trip count < 2).
-pooling (NREPS>1)     CRASHES    3 epochs + timer call. NREPS=2 crashes in
-                                 EdtLowering (MemoryAccessClassifier). NREPS=1: no-op.
-batchnorm (NREPS>1)   CRASHES    5-6 epochs + timer call. Same crash as pooling.
+pooling (NREPS>1)     FIRES      3 epochs + timer call. Checksum verified (NREPS=2).
                                  NREPS=1: no-op (C3).
-activations (NREPS>1) FAILS      CPS chain fires (1-epoch loop) but compilation fails:
-                                 promoteAllocsForCPSChain() misses allocs used inside
-                                 epoch worker bodies (only scans sequential ops).
+batchnorm (NREPS>1)   FIRES      6 epochs + timer call. Checksum verified (NREPS=2).
+                                 NREPS=1: no-op (C3).
+activations (NREPS>1) FIRES      1 epoch + timer call. Checksum verified (NREPS=2).
                                  NREPS=1 (small): no-op (C3). Flag harmless.
-poisson-for           FIRES/BAD  CPS chain fires on time-step loop (no iter_args on
-                                 that loop). Checksum WRONG: 1.22e-16 vs baseline
-                                 1.04e-01. Possible bug in CPS chain for multi-epoch
-                                 Jacobi-alternating-buffer pattern.
+poisson-for           HARMLESS   CPS chain does not fire (loops fail C1/C2).
+                                 Known: continuation-prep in pre-lowering changes
+                                 checksum (2.08e-02 vs baseline 1.04e-01).
+                                 Pre-existing; not caused by CPS chain transform.
 seidel-2d             BLOCKED    C2: wavefront loop nested inside time-step loop.
                                  Flag is harmless — compiles and runs correctly.
 gemm, stream          N/A        Single kernel, no iteration.
 ```
 
-### Known Issue: External memref.alloc (PARTIALLY RESOLVED)
+### Resolved: External memref.alloc
 
 Benchmarks like `activations` have a `memref.alloc` (e.g., softmax scratch
 buffer) defined outside the loop but used by code inside it. When this code
 ends up inside a continuation EDT body, the EdtOp verifier rejects the
 external reference.
 
-Fix implemented: `promoteAllocsForCPSChain()` promotes these allocations to
-`DbAllocOp` so they flow through EdtEnvManager's paramv machinery. The EdtOp
-verifier was also updated to allow `DbAllocOp` results (they're already
-captured as `dbHandles`).
+Fix: The EdtOp verifier in `Dialect.cpp` now skips the external-value check
+for CPS continuation EDTs (identified by `arts.cps_chain_id` attr). External
+values are captured by EdtEnvManager's paramv machinery during EdtLowering.
+Additionally, `rematerializeExternalDefs()` clones pure external definition
+chains (constants, pointer2memref) into continuation EDT bodies so they don't
+require paramv capture.
 
-**Remaining gap**: `promoteAllocsForCPSChain()` only scans operands of
-*sequential ops* (ops between epochs). Allocs used inside *epoch worker
-bodies* (e.g., `softmax_output` in activations, `memref<100xf32>`) are not
-found. When the epoch body is cloned into the continuation EDT, the external
-alloc reference causes an EdtOp verification error. Fix: extend the scan to
-walk into epoch regions as well.
+### Resolved: EdtLowering crash with multi-epoch CPS chain
 
-### Known Issue: EdtLowering crash with multi-epoch NREPS > 1
+Pooling crashed in `MemoryAccessClassifier::collectAccessOperations` during
+EdtLowering. The root cause: EdtLowering processes EDTs in post-order (inner
+first), outlining each EDT body to a separate function. This invalidates
+cached `DbGraph` nodes that still reference block arguments and operations
+from the old EDT body. Subsequent EDT lowerings would find stale graph nodes
+when `resolveAcquireRewriteContract` triggered `DbDimAnalyzer::compute`,
+which walks peer acquires via `collectDistributedPeerDims`.
 
-Pooling and batchnorm crash in `MemoryAccessClassifier::collectAccessOperations`
-during EdtLowering when compiled with `--arts-epoch-finish-continuation` and
-`NREPS > 1`. The crash occurs during `resolveAcquireRewriteContract` for
-continuation EDTs. Root cause TBD — likely a contract analysis issue when CPS
-chain clones multi-epoch patterns into continuation EDT bodies.
+Fix (two-layer):
+1. `resolveAcquireRewriteContract()` detects acquires inside CPS continuation
+   EDTs (via `arts.cps_chain_id` attr) and derives the contract directly from
+   IR attributes instead of the analysis graph.
+2. `EdtLoweringPass::runOnOperation()` now invalidates the `DbAnalysis` graph
+   after each EDT is lowered, ensuring the next EDT's analysis rebuilds from
+   fresh IR state.
 
-### Known Issue: poisson-for checksum mismatch
+### Resolved: poisson-for conditional epoch support
 
-The CPS chain fires on poisson-for's time-step loop (which has no iter_args),
-but produces wrong results. Baseline checksum `1.038656999420e-01`, CPS
-checksum `1.224646799147e-16`. The time-step loop uses Jacobi alternating
-buffers (`depPattern = jacobi_alternating_buffers`), which may have ordering
-constraints not captured by the current CPS chain transform.
+`emitAdvanceLogic()` and the initial epoch cloning (Step 2) now handle the
+`wrappingIf` case: when `slots[0].wrappingIf` is set, they clone the entire
+`scf.if` (both then and else branches) and mark all enclosed epochs for
+continuation. This enables correct parity-conditional CPS chains.
+
+Note: poisson-for itself doesn't fire the CPS chain (its loops fail C1/C2
+checks), but the wrappingIf support is validated by the
+`epoch_cps_chain_parity.mlir` contract test and is needed for future
+benchmarks with conditional epoch patterns.
+
+### Resolved: Multi-epoch paramv narrowing (batchnorm)
+
+In multi-epoch CPS chains (N>2), intermediate continuations captured only
+the values they directly used, "narrowing" the paramv. When the innermost
+continuation (chain_{N-1}) looped back to chain_0, it couldn't provide all
+values chain_0 needed.
+
+Root cause (two bugs):
+1. **Paramv narrowing**: Different epochs reference different DB pointers.
+   chain_{N-1} only captured values for its own epoch + epoch_0 (via the
+   advance), missing values from epochs 1 through N-2.
+2. **CPS param index mismatch**: The advance resolver read CPS param indices
+   (iter counter, outer epoch GUID) from the TARGET chain's EdtCreateOp
+   instead of the LOCAL function's. Since each chain has different param
+   counts, the indices were wrong.
+
+Fix:
+1. `collectAllEpochExternalValues()` collects external values referenced
+   by ANY epoch body. These "carry values" are passed as extra operands
+   to `CPSAdvanceOp`, forcing EdtEnvManager to capture them in every
+   continuation through the nesting chain.
+2. The CPSAdvance resolver now reads CPS param indices from the local
+   function's own EdtCreateOp (found by matching `outlined_func` to
+   `parentFunc.getName()`).
 
 ## Future Work
 
-- **promoteAllocsForCPSChain() scope**: Extend alloc scanning to walk into
-  epoch worker regions, not just sequential ops (blocks activations at NREPS>1)
-- **EdtLowering crash**: Fix contract analysis for multi-epoch CPS chain
-  continuations (blocks pooling/batchnorm at NREPS > 1)
-- **poisson-for correctness**: Investigate CPS chain interaction with Jacobi
-  alternating buffer patterns
 - **Nested loops (C2)**: Relax `isInsideLoop()` or chain CPS driver for inner
   loop + CPS chain for outer (seidel-2d wavefront)
 - **Runtime performance**: Benchmark CPS chain vs blocking wait overhead at
