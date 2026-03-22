@@ -28,7 +28,8 @@ CARTS_DIR = "{project}"
 LLVM_SYMBOLIZER_PATH = "{project}/.install/llvm/bin/llvm-symbolizer"
 
 [paths]
-prepend = [
+bin = [
+    "{project}/.install/bin",
     "{project}/tools",
     "{project}/.install/carts/bin",
     "{project}/.install/llvm/bin",

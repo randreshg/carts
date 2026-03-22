@@ -5,8 +5,9 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from dekk import EnvironmentActivator
+from dekk import BinaryInstaller, EnvironmentActivator
 from dekk import Colors, Exit, Option, console, print_error, print_header, print_info, print_step, print_success, print_warning
+from dekk.envspec import EnvironmentSpec
 from scripts.platform import get_config
 from scripts import (
     run_subprocess as _run_subprocess,
@@ -46,44 +47,52 @@ def _get_poetry_python(directory: Path) -> Optional[Path]:
     return path if path.exists() else None
 
 
-def _add_to_path() -> bool:
-    """Add CARTS to the user's PATH by adding the carts script location."""
+def _install_wrapper() -> bool:
+    """Generate a self-contained wrapper via dekk's BinaryInstaller.
+
+    Creates ``.install/bin/carts`` — a shell script that bakes in all
+    environment variables from ``.dekk.toml`` and execs the Python CLI
+    directly, just like apxm does.  Also updates the shell profile to add
+    ``.install/bin/`` to PATH.
+
+    The wrapper goes into ``.install/bin/`` (not ``.install/``) because
+    ``.install/carts/`` is already a directory holding build artifacts
+    (carts-compile, etc.).
+    """
     config = get_config()
-    carts_script_dir = config.carts_dir / "tools"
+    project_root = config.carts_dir
+    cli_script = project_root / "tools" / "carts_cli.py"
+    spec_file = project_root / ".dekk.toml"
 
-    if not (carts_script_dir / "carts").exists():
-        print_error("CARTS script not found. Please ensure you're in the correct directory.")
+    if not cli_script.exists():
+        print_error("carts_cli.py not found. Please ensure you're in the correct directory.")
         return False
 
-    if _check_command_exists("carts"):
-        print_success("carts command is already available in your PATH")
+    if not spec_file.exists():
+        print_error(".dekk.toml not found at project root.")
+        return False
+
+    # Use the bootstrap venv Python (has dekk installed) so the wrapper
+    # is fully self-contained — no runtime bootstrap needed.
+    bootstrap_python = project_root / ".carts" / "bootstrap-venv" / "bin" / "python3"
+    if not bootstrap_python.exists():
+        bootstrap_python = None  # fall back to no python (will use system)
+
+    try:
+        spec = EnvironmentSpec.from_file(spec_file)
+        install_dir = project_root / ".install" / "bin"
+        res = BinaryInstaller(project_root).install_wrapper(
+            target=cli_script,
+            spec=spec,
+            python=bootstrap_python,
+            name="carts",
+            install_dir=install_dir,
+        )
+        print_success(res.message)
         return True
-
-    shell_profile = None
-    if "zsh" in os.environ.get("SHELL", ""):
-        shell_profile = Path.home() / ".zshrc"
-    elif "bash" in os.environ.get("SHELL", ""):
-        shell_profile = Path.home() / ".bashrc"
-        if not shell_profile.exists():
-            shell_profile = Path.home() / ".bash_profile"
-    else:
-        print_warning("Unsupported shell. Please manually add to your shell profile:")
-        print_info(f'export PATH="{carts_script_dir}:$PATH"')
+    except Exception as e:
+        print_warning(f"Wrapper install failed: {e}")
         return False
-
-    if shell_profile.exists():
-        content = shell_profile.read_text()
-        if str(carts_script_dir) in content:
-            print_info("CARTS is already configured in your shell profile")
-            print_info("Try: source ~/.zshrc (or restart your terminal)")
-            return True
-
-    with open(shell_profile, "a") as f:
-        f.write(f'\n# CARTS\nexport PATH="{carts_script_dir}:$PATH"\n')
-
-    print_success(f"Added CARTS to {shell_profile}")
-    print_info("Run 'source ~/.zshrc' or restart your terminal to use 'carts'")
-    return True
 
 
 def _setup_project() -> bool:
@@ -170,14 +179,13 @@ def _build_project(cc: Optional[str] = None, cxx: Optional[str] = None) -> bool:
     print_info("Building and installing CARTS project...")
     print_info("Following correct build order:")
 
-    # Add carts to PATH for this session
+    # Add carts to PATH for this session (both tools/ and .install/)
     print_step("Adding CARTS to PATH...", step_num=0, total=4)
     current_path = os.environ.get("PATH", "")
-    if str(carts_script_dir) not in current_path:
-        os.environ["PATH"] = f"{carts_script_dir}:{current_path}"
-        print_success(f"Added {carts_script_dir} to PATH for this session")
-
-    _add_to_path()
+    for path_dir in [carts_script_dir, project_root / ".install"]:
+        if str(path_dir) not in current_path:
+            os.environ["PATH"] = f"{path_dir}:{os.environ['PATH']}"
+            print_success(f"Added {path_dir} to PATH for this session")
 
     cc_args = []
     if cc:
@@ -342,5 +350,8 @@ def install(
         if not _build_project(cc=cc, cxx=cxx):
             print_error("Failed to build project")
             raise Exit(1)
+
+    # 5. Generate self-contained wrapper at .install/carts and update PATH
+    _install_wrapper()
 
     print_header("Install Complete!")
