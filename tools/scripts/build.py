@@ -79,10 +79,10 @@ def build(
         help="Custom counter profile file path (overrides --counters)"),
     cc: Optional[str] = Option(
         None, "--cc",
-        help="C compiler for LLVM bootstrap (default: clang)"),
+        help="C compiler for LLVM bootstrap (default: clang; use gcc on systems without clang)"),
     cxx: Optional[str] = Option(
         None, "--cxx",
-        help="C++ compiler for LLVM bootstrap (default: clang++)"),
+        help="C++ compiler for LLVM bootstrap (default: clang++; use g++ with --cc gcc)"),
 ):
     """Build CARTS project using system clang."""
     config = get_config()

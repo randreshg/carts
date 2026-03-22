@@ -209,12 +209,12 @@ struct AtomicAddPattern : public ArtsToLLVMPattern<AtomicAddOp> {
     auto value = op.getValue();
 
     /// Convert memref to LLVM pointer
-    Value llvmPtr = rewriter.create<polygeist::Memref2PointerOp>(
-        loc, LLVM::LLVMPointerType::get(rewriter.getContext()), addr);
+    Value llvmPtr = polygeist::Memref2PointerOp::create(
+        rewriter, loc, LLVM::LLVMPointerType::get(rewriter.getContext()), addr);
 
     /// Create LLVM atomic add operation
-    rewriter.create<LLVM::AtomicRMWOp>(loc, LLVM::AtomicBinOp::add, llvmPtr,
-                                       value, LLVM::AtomicOrdering::seq_cst);
+    LLVM::AtomicRMWOp::create(rewriter, loc, LLVM::AtomicBinOp::add, llvmPtr,
+                              value, LLVM::AtomicOrdering::seq_cst);
 
     rewriter.eraseOp(op);
     return success();
@@ -247,8 +247,9 @@ struct BuiltinObjectSizePattern : public OpRewritePattern<func::CallOp> {
 
     /// Get ptr argument (memref) and convert to llvm.ptr
     Value memrefArg = callOp.getOperand(0);
-    Value ptr = rewriter.create<polygeist::Memref2PointerOp>(
-        loc, LLVM::LLVMPointerType::get(rewriter.getContext()), memrefArg);
+    Value ptr = polygeist::Memref2PointerOp::create(
+        rewriter, loc, LLVM::LLVMPointerType::get(rewriter.getContext()),
+        memrefArg);
 
     Value typeArg = callOp.getOperand(1);
 
@@ -262,14 +263,15 @@ struct BuiltinObjectSizePattern : public OpRewritePattern<func::CallOp> {
 
     /// Create boolean constants for intrinsic parameters
     Type i1Type = rewriter.getI1Type();
-    Value min = rewriter.create<LLVM::ConstantOp>(loc, i1Type, minFlag);
-    Value nullIsUnknown = rewriter.create<LLVM::ConstantOp>(loc, i1Type, true);
-    Value dynamic = rewriter.create<LLVM::ConstantOp>(loc, i1Type, false);
+    Value min = LLVM::ConstantOp::create(rewriter, loc, i1Type, minFlag);
+    Value nullIsUnknown =
+        LLVM::ConstantOp::create(rewriter, loc, i1Type, true);
+    Value dynamic = LLVM::ConstantOp::create(rewriter, loc, i1Type, false);
 
     /// Create llvm.call_intrinsic for llvm.objectsize
     Type resultType = callOp.getResult(0).getType();
-    auto intrinsicOp = rewriter.create<LLVM::CallIntrinsicOp>(
-        loc, resultType,
+    auto intrinsicOp = LLVM::CallIntrinsicOp::create(
+        rewriter, loc, resultType,
         StringAttr::get(rewriter.getContext(), "llvm.objectsize"),
         ValueRange{ptr, min, nullIsUnknown, dynamic});
 

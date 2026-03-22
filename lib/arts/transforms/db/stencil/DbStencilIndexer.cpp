@@ -69,11 +69,11 @@ static Value clampIndex(Value index, Value size, OpBuilder &builder,
 
   Value zero = arts::createZeroIndex(builder, loc);
   Value one = arts::createOneIndex(builder, loc);
-  Value lastValidIdx = builder.create<arith::SubIOp>(loc, size, one);
+  Value lastValidIdx = arith::SubIOp::create(builder, loc, size, one);
 
   /// clamp(index, 0, lastValidIdx)
-  Value clamped = builder.create<arith::MaxSIOp>(loc, index, zero);
-  return builder.create<arith::MinSIOp>(loc, clamped, lastValidIdx);
+  Value clamped = arith::MaxSIOp::create(builder, loc, index, zero);
+  return arith::MinSIOp::create(builder, loc, clamped, lastValidIdx);
 }
 
 ///===----------------------------------------------------------------------===///
@@ -256,19 +256,19 @@ static RowSelection buildSelection(OpBuilder &selBuilder, Location selLoc,
                                    Value localRowVal, Value ownedRowsVal,
                                    const StencilRewriteContext &ctx) {
   Value ownedRows = ownedRowsVal ? ownedRowsVal : ctx.blockSize;
-  Value isLeft = selBuilder.create<arith::CmpIOp>(
-      selLoc, arith::CmpIPredicate::slt, localRowVal, ctx.zero);
-  Value isRight = selBuilder.create<arith::CmpIOp>(
-      selLoc, arith::CmpIPredicate::sge, localRowVal, ownedRows);
-  Value falseI1 = selBuilder.create<arith::ConstantIntOp>(selLoc, 0, 1);
-  Value trueI1 = selBuilder.create<arith::ConstantIntOp>(selLoc, 1, 1);
+  Value isLeft = arith::CmpIOp::create(
+      selBuilder, selLoc, arith::CmpIPredicate::slt, localRowVal, ctx.zero);
+  Value isRight = arith::CmpIOp::create(
+      selBuilder, selLoc, arith::CmpIPredicate::sge, localRowVal, ownedRows);
+  Value falseI1 = arith::ConstantIntOp::create(selBuilder, selLoc, 0, 1);
+  Value trueI1 = arith::ConstantIntOp::create(selBuilder, selLoc, 1, 1);
   Value leftAvail = ctx.leftPtrNotNull ? ctx.leftPtrNotNull : falseI1;
   Value rightAvail = ctx.rightPtrNotNull ? ctx.rightPtrNotNull : falseI1;
   Value leftIdx =
-      selBuilder.create<arith::AddIOp>(selLoc, localRowVal, ctx.haloLeft);
+      arith::AddIOp::create(selBuilder, selLoc, localRowVal, ctx.haloLeft);
   Value ownedIdx = localRowVal;
   Value rightIdx =
-      selBuilder.create<arith::SubIOp>(selLoc, localRowVal, ownedRows);
+      arith::SubIOp::create(selBuilder, selLoc, localRowVal, ownedRows);
 
   Value clampedOwnedIdx = clampIndex(ownedIdx, ownedRows, selBuilder, selLoc);
   Value clampedLeftIdx =
@@ -286,16 +286,16 @@ static RowSelection buildSelection(OpBuilder &selBuilder, Location selLoc,
   auto selectValue = [&](Value cond, Value trueVal, Value falseVal) -> Value {
     bool forceIf = isa<MemRefType>(trueVal.getType());
     if (!forceIf && cond && cond.getType().isInteger(1))
-      return selBuilder.create<arith::SelectOp>(selLoc, cond, trueVal,
-                                                falseVal);
-    auto ifOp = selBuilder.create<scf::IfOp>(selLoc, trueVal.getType(), cond,
-                                             /*withElseRegion=*/true);
+      return arith::SelectOp::create(selBuilder, selLoc, cond, trueVal,
+                                     falseVal);
+    auto ifOp = scf::IfOp::create(selBuilder, selLoc, trueVal.getType(), cond,
+                                  /*withElseRegion=*/true);
     {
       OpBuilder::InsertionGuard g(selBuilder);
       selBuilder.setInsertionPointToStart(&ifOp.getThenRegion().front());
-      selBuilder.create<scf::YieldOp>(selLoc, trueVal);
+      scf::YieldOp::create(selBuilder, selLoc, trueVal);
       selBuilder.setInsertionPointToStart(&ifOp.getElseRegion().front());
-      selBuilder.create<scf::YieldOp>(selLoc, falseVal);
+      scf::YieldOp::create(selBuilder, selLoc, falseVal);
     }
     return ifOp.getResult(0);
   };
@@ -327,12 +327,12 @@ static RowSelection buildSelection(OpBuilder &selBuilder, Location selLoc,
     selectedRowIdx = selectValue(isRight, safeRightIdx, selectedRowIdx);
   }
 
-  Value leftFallbackToOwned = selBuilder.create<arith::AndIOp>(
-      selLoc, isLeft,
-      selBuilder.create<arith::XOrIOp>(selLoc, leftAvail, trueI1));
-  Value rightFallbackToOwned = selBuilder.create<arith::AndIOp>(
-      selLoc, isRight,
-      selBuilder.create<arith::XOrIOp>(selLoc, rightAvail, trueI1));
+  Value leftFallbackToOwned = arith::AndIOp::create(
+      selBuilder, selLoc, isLeft,
+      arith::XOrIOp::create(selBuilder, selLoc, leftAvail, trueI1));
+  Value rightFallbackToOwned = arith::AndIOp::create(
+      selBuilder, selLoc, isRight,
+      arith::XOrIOp::create(selBuilder, selLoc, rightAvail, trueI1));
 
   return {selectedMemref,
           selectedRowIdx,
@@ -387,7 +387,7 @@ static ResolvedRowInfo resolvePartitionRow(ValueRange indices,
   /// Handle linearized access: extract row from linear index
   Value stride = getLinearizedStride(indices, ctx.newElementType, builder, loc);
   if (stride) {
-    globalRow = builder.create<arith::DivUIOp>(loc, indices[0], stride);
+    globalRow = arith::DivUIOp::create(builder, loc, indices[0], stride);
   }
 
   return {partitionDim, globalRow};
@@ -433,7 +433,7 @@ static void rewriteUserForRegion(Operation *user, StencilRegionKind region,
                          ? ctx.zero
                          : ctx.partitionInfo.offsets.front();
   Value localRow =
-      baseOffset ? builder.create<arith::SubIOp>(userLoc, globalRow, baseOffset)
+      baseOffset ? arith::SubIOp::create(builder, userLoc, globalRow, baseOffset)
                  : globalRow;
 
   int64_t rowOffset = 0;
@@ -456,15 +456,15 @@ static void rewriteUserForRegion(Operation *user, StencilRegionKind region,
   auto selectValue = [&](Value cond, Value trueVal, Value falseVal) -> Value {
     bool forceIf = isa<MemRefType>(trueVal.getType());
     if (!forceIf && cond && cond.getType().isInteger(1))
-      return builder.create<arith::SelectOp>(userLoc, cond, trueVal, falseVal);
-    auto ifOp = builder.create<scf::IfOp>(userLoc, trueVal.getType(), cond,
-                                          /*withElseRegion=*/true);
+      return arith::SelectOp::create(builder, userLoc, cond, trueVal, falseVal);
+    auto ifOp = scf::IfOp::create(builder, userLoc, trueVal.getType(), cond,
+                                  /*withElseRegion=*/true);
     {
       OpBuilder::InsertionGuard g(builder);
       builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
-      builder.create<scf::YieldOp>(userLoc, trueVal);
+      scf::YieldOp::create(builder, userLoc, trueVal);
       builder.setInsertionPointToStart(&ifOp.getElseRegion().front());
-      builder.create<scf::YieldOp>(userLoc, falseVal);
+      scf::YieldOp::create(builder, userLoc, falseVal);
     }
     return ifOp.getResult(0);
   };
@@ -474,7 +474,7 @@ static void rewriteUserForRegion(Operation *user, StencilRegionKind region,
 
   if (region == StencilRegionKind::Left && rowOffset < 0) {
     Value leftIdx =
-        builder.create<arith::AddIOp>(userLoc, localRow, ctx.haloLeft);
+        arith::AddIOp::create(builder, userLoc, localRow, ctx.haloLeft);
     Value clampedLeftIdx =
         ctx.leftMemref ? clampIndex(leftIdx, ctx.haloLeft, builder, userLoc)
                        : Value();
@@ -489,7 +489,7 @@ static void rewriteUserForRegion(Operation *user, StencilRegionKind region,
     }
   } else if (region == StencilRegionKind::Right && rowOffset > 0) {
     Value rightIdx =
-        builder.create<arith::SubIOp>(userLoc, localRow, ownedRows);
+        arith::SubIOp::create(builder, userLoc, localRow, ownedRows);
     Value clampedRightIdx =
         ctx.rightMemref ? clampIndex(rightIdx, ctx.haloRight, builder, userLoc)
                         : Value();
@@ -512,9 +512,9 @@ static void rewriteUserForRegion(Operation *user, StencilRegionKind region,
     out.reserve(indices.size());
     if (stride) {
       /// Linearized: re-linearize with rowIdx and extracted column.
-      Value col = builder.create<arith::RemUIOp>(userLoc, indices[0], stride);
-      Value linear = builder.create<arith::MulIOp>(userLoc, rowIdx, stride);
-      linear = builder.create<arith::AddIOp>(userLoc, linear, col);
+      Value col = arith::RemUIOp::create(builder, userLoc, indices[0], stride);
+      Value linear = arith::MulIOp::create(builder, userLoc, rowIdx, stride);
+      linear = arith::AddIOp::create(builder, userLoc, linear, col);
       out.push_back(linear);
       return out;
     }
@@ -529,14 +529,14 @@ static void rewriteUserForRegion(Operation *user, StencilRegionKind region,
 
   SmallVector<Value> selectedIndices = buildAccessIndices(selectedRowIdx);
   if (isLoad) {
-    auto newLoad = builder.create<memref::LoadOp>(userLoc, selectedMemref,
-                                                  selectedIndices);
+    auto newLoad = memref::LoadOp::create(builder, userLoc, selectedMemref,
+                                          selectedIndices);
     auto load = cast<memref::LoadOp>(user);
     load.replaceAllUsesWith(newLoad.getResult());
     ctx.opsToRemove.insert(load);
   } else {
-    builder.create<memref::StoreOp>(userLoc, storeValue, selectedMemref,
-                                    selectedIndices);
+    memref::StoreOp::create(builder, userLoc, storeValue, selectedMemref,
+                            selectedIndices);
     ctx.opsToRemove.insert(user);
   }
 }
@@ -715,31 +715,31 @@ static bool tryVersionRowLoop(ArrayRef<Operation *> users, OpBuilder &builder,
 
   /// Split at localRow boundaries: left band, middle band, right band.
   Value leftRow = rowIvIsLocal ? zero : baseOffset;
-  Value leftEnd = builder.create<arith::AddIOp>(loopLoc, leftRow, leftBandVal);
+  Value leftEnd = arith::AddIOp::create(builder, loopLoc, leftRow, leftBandVal);
 
   Value rightEnd =
       rowIvIsLocal
           ? blockSz
-          : builder.create<arith::AddIOp>(loopLoc, baseOffset, blockSz);
+          : arith::AddIOp::create(builder, loopLoc, baseOffset, blockSz);
   Value rightRow =
-      builder.create<arith::SubIOp>(loopLoc, rightEnd, rightBandVal);
+      arith::SubIOp::create(builder, loopLoc, rightEnd, rightBandVal);
 
   /// Clamp splits to original loop bounds
-  Value leftLb = builder.create<arith::MaxSIOp>(loopLoc, lb, leftRow);
-  Value leftUb = builder.create<arith::MinSIOp>(loopLoc, ub, leftEnd);
+  Value leftLb = arith::MaxSIOp::create(builder, loopLoc, lb, leftRow);
+  Value leftUb = arith::MinSIOp::create(builder, loopLoc, ub, leftEnd);
 
-  Value midLb = builder.create<arith::MaxSIOp>(loopLoc, lb, leftEnd);
-  Value midUb = builder.create<arith::MinSIOp>(loopLoc, ub, rightRow);
+  Value midLb = arith::MaxSIOp::create(builder, loopLoc, lb, leftEnd);
+  Value midUb = arith::MinSIOp::create(builder, loopLoc, ub, rightRow);
 
-  Value rightLb = builder.create<arith::MaxSIOp>(loopLoc, lb, rightRow);
-  Value rightUb = builder.create<arith::MinSIOp>(loopLoc, ub, rightEnd);
+  Value rightLb = arith::MaxSIOp::create(builder, loopLoc, lb, rightRow);
+  Value rightUb = arith::MinSIOp::create(builder, loopLoc, ub, rightEnd);
 
   bool refInRowLoop = rowLoop->isAncestor(ctx.ref.getOperation());
 
   auto cloneRowLoop = [&](Value newLb, Value newUb,
                           StencilRegionKind region) -> scf::ForOp {
     scf::ForOp newLoop =
-        builder.create<scf::ForOp>(loopLoc, newLb, newUb, step);
+        scf::ForOp::create(builder, loopLoc, newLb, newUb, step);
     Block *oldBody = rowLoop.getBody();
     Block *newBody = newLoop.getBody();
 
@@ -825,7 +825,7 @@ static void rewriteUserFallback(
                          ? ctx.zero
                          : ctx.partitionInfo.offsets.front();
   Value localRow =
-      baseOffset ? builder.create<arith::SubIOp>(userLoc, globalRow, baseOffset)
+      baseOffset ? arith::SubIOp::create(builder, userLoc, globalRow, baseOffset)
                  : globalRow;
 
   Value ownedIdx = localRow;
@@ -838,9 +838,9 @@ static void rewriteUserFallback(
     out.reserve(indices.size());
     if (stride) {
       /// Linearized: re-linearize with rowIdx and extracted column.
-      Value col = builder.create<arith::RemUIOp>(userLoc, indices[0], stride);
-      Value linear = builder.create<arith::MulIOp>(userLoc, rowIdx, stride);
-      linear = builder.create<arith::AddIOp>(userLoc, linear, col);
+      Value col = arith::RemUIOp::create(builder, userLoc, indices[0], stride);
+      Value linear = arith::MulIOp::create(builder, userLoc, rowIdx, stride);
+      linear = arith::AddIOp::create(builder, userLoc, linear, col);
       out.push_back(linear);
       return out;
     }
@@ -914,13 +914,13 @@ static void rewriteUserFallback(
           if (rowOffset != 0) {
             Value offVal =
                 arts::createConstantIndex(builder, rowLoc, rowOffset);
-            rowIdx = builder.create<arith::AddIOp>(rowLoc, rowIV, offVal);
+            rowIdx = arith::AddIOp::create(builder, rowLoc, rowIV, offVal);
           }
 
           Value localRowHoisted = rowIdx;
           if (!includesBaseOffset && baseOffset) {
             localRowHoisted =
-                builder.create<arith::SubIOp>(rowLoc, rowIdx, baseOffset);
+                arith::SubIOp::create(builder, rowLoc, rowIdx, baseOffset);
           }
 
           RowSelection selection =
@@ -989,7 +989,7 @@ static void rewriteUserFallback(
         /// Recompute row-local indices at the hoist point.
         Value localRowHoisted =
             baseOffset
-                ? builder.create<arith::SubIOp>(userLoc, globalRow, baseOffset)
+                ? arith::SubIOp::create(builder, userLoc, globalRow, baseOffset)
                 : globalRow;
 
         RowSelection selection = buildSelection(
@@ -1003,8 +1003,8 @@ static void rewriteUserFallback(
     }
 
     SmallVector<Value> selectedIndices = buildAccessIndices(selectedRowIdx);
-    auto selectedLoad = builder.create<memref::LoadOp>(userLoc, selectedMemref,
-                                                       selectedIndices);
+    auto selectedLoad = memref::LoadOp::create(builder, userLoc, selectedMemref,
+                                               selectedIndices);
 
     auto load = cast<memref::LoadOp>(user);
     load.replaceAllUsesWith(selectedLoad.getResult());
@@ -1016,8 +1016,8 @@ static void rewriteUserFallback(
         clampIndex(ownedIdx, ctx.blockSize, builder, userLoc);
     SmallVector<Value> ownedIndices = buildAccessIndices(clampedOwnedIdx);
 
-    builder.create<memref::StoreOp>(userLoc, storeValue, ctx.ownedMemref,
-                                    ownedIndices);
+    memref::StoreOp::create(builder, userLoc, storeValue, ctx.ownedMemref,
+                            ownedIndices);
     ctx.opsToRemove.insert(user);
   }
 }
@@ -1076,21 +1076,21 @@ void DbStencilIndexer::transformDbRefUsers(
   Value ownedMemref, leftMemref, rightMemref;
 
   /// Create owned memref (always needed)
-  auto ownedRef = builder.create<DbRefOp>(loc, newElementType, ownedArg,
-                                          SmallVector<Value>{zero});
+  auto ownedRef = DbRefOp::create(builder, loc, newElementType, ownedArg,
+                                  SmallVector<Value>{zero});
   ownedMemref = ownedRef.getResult();
 
   /// Create left halo memref if available (null at left boundary)
   if (leftHaloArg) {
-    auto leftRef = builder.create<DbRefOp>(loc, newElementType, leftHaloArg,
-                                           SmallVector<Value>{zero});
+    auto leftRef = DbRefOp::create(builder, loc, newElementType, leftHaloArg,
+                                   SmallVector<Value>{zero});
     leftMemref = leftRef.getResult();
   }
 
   /// Create right halo memref if available (null at right boundary)
   if (rightHaloArg) {
-    auto rightRef = builder.create<DbRefOp>(loc, newElementType, rightHaloArg,
-                                            SmallVector<Value>{zero});
+    auto rightRef = DbRefOp::create(builder, loc, newElementType, rightHaloArg,
+                                     SmallVector<Value>{zero});
     rightMemref = rightRef.getResult();
   }
 
@@ -1106,22 +1106,22 @@ void DbStencilIndexer::transformDbRefUsers(
   ///   Right halo: index = localRow - blockSize (0-based within right halo)
 
   auto llvmPtrTy = LLVM::LLVMPointerType::get(builder.getContext());
-  Value nullPtr = builder.create<LLVM::ZeroOp>(loc, llvmPtrTy);
+  Value nullPtr = LLVM::ZeroOp::create(builder, loc, llvmPtrTy);
   Value leftPtrNotNull;
   Value rightPtrNotNull;
 
   if (leftMemref) {
     Value leftPtr =
-        builder.create<polygeist::Memref2PointerOp>(loc, llvmPtrTy, leftMemref);
-    leftPtrNotNull = builder.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ne,
-                                                  leftPtr, nullPtr);
+        polygeist::Memref2PointerOp::create(builder, loc, llvmPtrTy, leftMemref);
+    leftPtrNotNull = LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne,
+                                           leftPtr, nullPtr);
   }
 
   if (rightMemref) {
-    Value rightPtr = builder.create<polygeist::Memref2PointerOp>(loc, llvmPtrTy,
-                                                                 rightMemref);
-    rightPtrNotNull = builder.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ne,
-                                                   rightPtr, nullPtr);
+    Value rightPtr = polygeist::Memref2PointerOp::create(builder, loc, llvmPtrTy,
+                                                         rightMemref);
+    rightPtrNotNull = LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne,
+                                            rightPtr, nullPtr);
   }
 
   ARTS_DEBUG("  Created 3 buffer refs: owned="

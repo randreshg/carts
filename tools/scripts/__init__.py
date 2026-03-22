@@ -23,7 +23,7 @@ SUBMODULE_POLYGEIST = "external/Polygeist"
 SUBMODULE_BENCHMARKS = "external/carts-benchmarks"
 
 # Nested submodules required for each top-level submodule
-ARTS_NESTED_SUBMODULES = ["third_party/hwloc"]
+ARTS_NESTED_SUBMODULES = ["third_party/hwloc", "third_party/jemalloc"]
 POLYGEIST_NESTED_SUBMODULES = ["llvm-project"]
 
 # Tool binary names

@@ -30,14 +30,14 @@ files = [
 
 [[package]]
 name = "dekk"
-version = "1.0.1"
+version = "1.1.0"
 description = "Reusable environment detection, activation, and wrapper tooling for developer CLIs."
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "dekk-1.0.1-py3-none-any.whl", hash = "sha256:ef3793177bd1d3a8134ac6f625eaba83a88a6d14ac52a91d04b7181af03a07b0"},
-    {file = "dekk-1.0.1.tar.gz", hash = "sha256:492a5b9a9acc2e8e8010e0226c9cd18268c44bf1b821ce5e2508bdd363af24ca"},
+    {file = "dekk-1.1.0-py3-none-any.whl", hash = "sha256:aa95e97191e54b0301fece63c25b9439aa14d4a80a88a74cd8318bc1a44aa32f"},
+    {file = "dekk-1.1.0.tar.gz", hash = "sha256:3c1dcc678d9b4316e7060595e34879baed368b872231f3f19f63cd709bbc5631"},
 ]
 
 [package.dependencies]
@@ -302,4 +302,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "1bbe3f8b68ec66be4e34954b4a9e79945fde443af2c4c89fa6117b46561c9dca"
+content-hash = "42f88e3d73c686117f66259eb5dbdce06c633abbb4889ad1a25cc335423e6f28"

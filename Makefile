@@ -1,7 +1,7 @@
 # DESCRIPTION
 # - Makefile for CARTS
 # - Dependencies: ARTS, LLVM, Polygeist
-# - Required: CMake, Ninja, Clang, Clang++
+# - Required: CMake, Ninja; LLVM bootstrap: Clang or GCC (see LLVM_C_COMPILER)
 
 # Build verbosity control (set VERBOSE=1 to enable verbose output)
 VERBOSE ?= 0
@@ -32,16 +32,15 @@ CARTS_LINKER_PATH ?= $(if $(filter Darwin,$(shell uname)),${LLVM_INSTALL_DIR}/bi
 LLVM_C_COMPILER ?= clang
 LLVM_CXX_COMPILER ?= clang++
 
-# GCC install prefix for --gcc-toolchain (passed from build.py via LLVM_GCC_INSTALL_PREFIX=)
+# When set (from build.py), points the bootstrap Clang at a GCC install via
+# --gcc-toolchain
 LLVM_GCC_INSTALL_PREFIX ?=
+# Non-empty when bootstrap C compiler basename looks like clang / clang-N.
+LLVM_BOOTSTRAP_IS_CLANG := $(filter clang%,$(notdir $(LLVM_C_COMPILER)))
+# Use --gcc-toolchain for the llvm target only when we have a prefix and Clang bootstrap.
+LLVM_LLVM_USE_GCC_TOOLCHAIN := $(and $(LLVM_GCC_INSTALL_PREFIX),$(LLVM_BOOTSTRAP_IS_CLANG))
 
 # Use our installed linker for all downstream cmake builds.
-# NOTE: We do NOT force -stdlib=libc++ or -rtlib=compiler-rt here because
-# polygeist and carts link LLVM static libraries that were built with the
-# bootstrap compiler's default stdlib (libstdc++ on Linux). Forcing libc++
-# would cause undefined symbol errors (e.g., std::__throw_bad_*).
-# The user-facing compile commands (config.py) DO use -stdlib=libc++ because
-# user code and ARTS runtime don't link LLVM static libs.
 LLVM_RUNTIME_CMAKE_FLAGS = \
 	-DCMAKE_EXE_LINKER_FLAGS="--ld-path=$(CARTS_LINKER_PATH)" \
 	-DCMAKE_SHARED_LINKER_FLAGS="--ld-path=$(CARTS_LINKER_PATH)" \
@@ -120,13 +119,11 @@ llvm:
 		-DLLVM_INCLUDE_BENCHMARKS=OFF \
 		-DLLVM_INCLUDE_UTILS=ON \
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-		$(if $(LLVM_GCC_INSTALL_PREFIX),\
-		-DGCC_INSTALL_PREFIX=$(LLVM_GCC_INSTALL_PREFIX) \
+		$(if $(LLVM_LLVM_USE_GCC_TOOLCHAIN),\
 		-DCMAKE_CXX_FLAGS="--gcc-toolchain=$(LLVM_GCC_INSTALL_PREFIX)" \
 		-DCMAKE_C_FLAGS="--gcc-toolchain=$(LLVM_GCC_INSTALL_PREFIX)" \
 		-DCROSS_TOOLCHAIN_FLAGS_NATIVE="-DCMAKE_C_COMPILER=$(LLVM_C_COMPILER);-DCMAKE_CXX_COMPILER=$(LLVM_CXX_COMPILER);-DCMAKE_CXX_FLAGS=--gcc-toolchain=$(LLVM_GCC_INSTALL_PREFIX);-DCMAKE_C_FLAGS=--gcc-toolchain=$(LLVM_GCC_INSTALL_PREFIX)" \
 		); \
-	ninja -C $(LLVM_BUILD_DIR) llvm-lit; \
 	ninja -C $(LLVM_BUILD_DIR) install; \
 	if [ -f "$(LLVM_BUILD_DIR)/bin/llvm-lit" ]; then \
 		mkdir -p $(LLVM_INSTALL_DIR)/bin; \
@@ -190,6 +187,10 @@ arts-download:
 		echo "ARTS submodule already initialized."; \
 	fi
 arts:
+	@if [ "$(ARTS_USE_JEMALLOC)" = "ON" ] && [ ! -f "$(ARTS_DIR)/third_party/jemalloc/autogen.sh" ]; then \
+		echo "Initializing jemalloc submodule..."; \
+		cd $(ARTS_DIR) && git submodule update --init --depth 1 third_party/jemalloc; \
+	fi
 	@$(call ensure_ninja_build_dir,$(ARTS_BUILD_DIR))
 	@mkdir -p $(ARTS_BUILD_DIR); \
 	mkdir -p $(ARTS_INSTALL_DIR); \

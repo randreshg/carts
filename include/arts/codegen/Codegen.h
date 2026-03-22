@@ -84,7 +84,7 @@ public:
   /// Create an operation of specific op type at the current insertion point.
   template <typename OpTy, typename... Args>
   OpTy create(Location location, Args &&...args) {
-    return getBuilder().create<OpTy>(location, std::forward<Args>(args)...);
+    return OpTy::create(getBuilder(), location, std::forward<Args>(args)...);
   }
 
   llvm::DataLayout &getLLVMDataLayout() {
