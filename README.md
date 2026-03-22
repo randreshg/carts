@@ -8,17 +8,6 @@ that exploit fine-grained dataflow parallelism on shared-memory and distributed
 systems.
 
 ## Quick Start
-
-**With [dekk](https://pypi.org/project/dekk/) (recommended):**
-
-```bash
-pip install dekk
-git clone <repo-url> && cd carts
-dekk tools/carts_cli.py install        # Set up everything (deps, submodules, build)
-```
-
-**Without dekk:**
-
 ```bash
 git clone <repo-url> && cd carts
 ./tools/carts install                   # Same thing, no extra tools needed
