@@ -3,6 +3,7 @@
 /// Defines the Arts dialect and the operations within it.
 ///==========================================================================///
 
+#include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -285,6 +286,12 @@ LogicalResult EdtOp::verify() {
             operand == dbAcquire.getSourcePtr())
           continue;
       }
+
+      /// CPS chain continuations clone epoch bodies from the original loop,
+      /// which may reference external values (memref.alloc, pointer2memref,
+      /// etc.). These are captured by EdtEnvManager during EdtLowering.
+      if ((*this)->hasAttr(AttrNames::Operation::CPSChainId))
+        continue;
 
       op->emitOpError("EDT region uses external value '")
           << operand << "' that is not a block argument or dependency.\n"

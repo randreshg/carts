@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from=epochs --pipeline=pre-lowering | %FileCheck %s --check-prefix=ON
+// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --arts-epoch-finish-continuation --start-from=epochs --pipeline=pre-lowering | %FileCheck %s --check-prefix=ON
 // RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --arts-epoch-finish-continuation=false --start-from=epochs --pipeline=pre-lowering | %FileCheck %s --check-prefix=OFF
 
 // Verifies that continuation prep also runs after ParallelEdtLowering.
