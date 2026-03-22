@@ -112,9 +112,10 @@ pooling (NREPS>1)     CRASHES    3 epochs + timer call. NREPS=2 crashes in
                                  EdtLowering (MemoryAccessClassifier). NREPS=1: no-op.
 batchnorm (NREPS>1)   CRASHES    5-6 epochs + timer call. Same crash as pooling.
                                  NREPS=1: no-op (C3).
-activations           NO-OP      Single epoch not inside a loop (no NREPS loop in
-                                 kernel). CPS chain requires iterative loop. Flag is
-                                 harmless — compiles and runs correctly, checksum OK.
+activations (NREPS>1) FAILS      CPS chain fires (1-epoch loop) but compilation fails:
+                                 promoteAllocsForCPSChain() misses allocs used inside
+                                 epoch worker bodies (only scans sequential ops).
+                                 NREPS=1 (small): no-op (C3). Flag harmless.
 poisson-for           FIRES/BAD  CPS chain fires on time-step loop (no iter_args on
                                  that loop). Checksum WRONG: 1.22e-16 vs baseline
                                  1.04e-01. Possible bug in CPS chain for multi-epoch
@@ -124,21 +125,24 @@ seidel-2d             BLOCKED    C2: wavefront loop nested inside time-step loop
 gemm, stream          N/A        Single kernel, no iteration.
 ```
 
-### Known Issue: External memref.alloc (RESOLVED)
+### Known Issue: External memref.alloc (PARTIALLY RESOLVED)
 
 Benchmarks like `activations` have a `memref.alloc` (e.g., softmax scratch
-buffer) defined outside the loop but used by sequential code inside it. When
-this sequential code ends up inside a continuation EDT body, the EdtOp verifier
-rejects the external reference.
+buffer) defined outside the loop but used by code inside it. When this code
+ends up inside a continuation EDT body, the EdtOp verifier rejects the
+external reference.
 
 Fix implemented: `promoteAllocsForCPSChain()` promotes these allocations to
 `DbAllocOp` so they flow through EdtEnvManager's paramv machinery. The EdtOp
 verifier was also updated to allow `DbAllocOp` results (they're already
 captured as `dbHandles`).
 
-Note: activations doesn't exercise this path at small size because the epoch is
-not inside a loop (NREPS=1 by default). The fix would be exercised if a future
-benchmark has external allocs AND a multi-iteration loop.
+**Remaining gap**: `promoteAllocsForCPSChain()` only scans operands of
+*sequential ops* (ops between epochs). Allocs used inside *epoch worker
+bodies* (e.g., `softmax_output` in activations, `memref<100xf32>`) are not
+found. When the epoch body is cloned into the continuation EDT, the external
+alloc reference causes an EdtOp verification error. Fix: extend the scan to
+walk into epoch regions as well.
 
 ### Known Issue: EdtLowering crash with multi-epoch NREPS > 1
 
@@ -158,6 +162,8 @@ constraints not captured by the current CPS chain transform.
 
 ## Future Work
 
+- **promoteAllocsForCPSChain() scope**: Extend alloc scanning to walk into
+  epoch worker regions, not just sequential ops (blocks activations at NREPS>1)
 - **EdtLowering crash**: Fix contract analysis for multi-epoch CPS chain
   continuations (blocks pooling/batchnorm at NREPS > 1)
 - **poisson-for correctness**: Investigate CPS chain interaction with Jacobi
