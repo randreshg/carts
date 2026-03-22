@@ -205,7 +205,8 @@ void MemoryAccessClassifier::collectAccessOperations(
       continue;
 
     for (Operation *user : current.getUsers()) {
-      if (!edtUser.getBody().isAncestor(user->getParentRegion()))
+      Region *userRegion = user->getParentRegion();
+      if (!userRegion || !edtUser.getBody().isAncestor(userRegion))
         continue;
 
       if (auto dbRef = dyn_cast<DbRefOp>(user)) {

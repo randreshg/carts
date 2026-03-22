@@ -843,15 +843,12 @@ void buildConcurrencyOptPipeline(PassManager &pm, arts::AnalysisManager *AM) {
 void buildEpochsPipeline(PassManager &pm, bool enableContinuation) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createCreateEpochsPass());
-  if (enableContinuation) {
-    /// Run EpochOpt with ALL optimizations (structural + scheduling) on the
-    /// newly created epochs. Structural opts at ConcurrencyOpt (step 12) only
-    /// saw early epochs; this is the first time the main batch gets optimized.
-    pm.addPass(arts::createEpochOptPass(/*amortization=*/true,
-                                        /*continuation=*/true,
-                                        /*cpsDriver=*/true,
-                                        /*cpsChain=*/true));
-  }
+  /// Run EpochOpt with structural + scheduling optimizations on newly created
+  /// epochs. Amortization is always enabled; continuation/CPS opts are gated.
+  pm.addPass(arts::createEpochOptPass(/*amortization=*/true,
+                                      /*continuation=*/enableContinuation,
+                                      /*cpsDriver=*/enableContinuation,
+                                      /*cpsChain=*/enableContinuation));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
 }
 
