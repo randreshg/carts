@@ -258,7 +258,7 @@ def _install_python_envs() -> bool:
             f"import sys; "
             f"sys.path.insert(0, {str(project_root / 'tools')!r}); "
             f"sys.path.insert(0, {str(benchmarks_scripts_dir)!r}); "
-            "import benchmark_runner"
+            "import runner"
         )
         try:
             _run_subprocess(
