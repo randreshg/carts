@@ -105,17 +105,26 @@ ConvertArtsToLLVM (step 17)→ emits arts_initialize_and_start_epoch, arts_edt_c
 ```
 Benchmark             Status     Notes
 --------------------  ---------  ----------------------------------------
-polybench/jacobi2d    FIRES      2 epochs, clean loop body
-layernorm (NREPS>1)   EXPECTED   1 epoch + timer call
-pooling (NREPS>1)     EXPECTED   3 epochs + timer call
-batchnorm (NREPS>1)   EXPECTED   5-6 epochs + timer call
-activations (NREPS>1) BLOCKED    memref.alloc in sequential tail (pre-existing)
-poisson-for           BLOCKED    C1: iter_args (convergence loop)
-seidel-2d             BLOCKED    C2: nested wavefront loop
-gemm, stream          N/A        Single kernel, no iteration
+polybench/jacobi2d    FIRES      2 epochs, clean loop body. Checksum verified.
+layernorm (NREPS>1)   FIRES      1 epoch + timer call. Checksum verified (NREPS=2).
+                                 NREPS=1 (small): no-op (C3: trip count < 2).
+pooling (NREPS>1)     CRASHES    3 epochs + timer call. NREPS=2 crashes in
+                                 EdtLowering (MemoryAccessClassifier). NREPS=1: no-op.
+batchnorm (NREPS>1)   CRASHES    5-6 epochs + timer call. Same crash as pooling.
+                                 NREPS=1: no-op (C3).
+activations           NO-OP      Single epoch not inside a loop (no NREPS loop in
+                                 kernel). CPS chain requires iterative loop. Flag is
+                                 harmless — compiles and runs correctly, checksum OK.
+poisson-for           FIRES/BAD  CPS chain fires on time-step loop (no iter_args on
+                                 that loop). Checksum WRONG: 1.22e-16 vs baseline
+                                 1.04e-01. Possible bug in CPS chain for multi-epoch
+                                 Jacobi-alternating-buffer pattern.
+seidel-2d             BLOCKED    C2: wavefront loop nested inside time-step loop.
+                                 Flag is harmless — compiles and runs correctly.
+gemm, stream          N/A        Single kernel, no iteration.
 ```
 
-### Known Issue: External memref.alloc
+### Known Issue: External memref.alloc (RESOLVED)
 
 Benchmarks like `activations` have a `memref.alloc` (e.g., softmax scratch
 buffer) defined outside the loop but used by sequential code inside it. When
@@ -127,10 +136,33 @@ Fix implemented: `promoteAllocsForCPSChain()` promotes these allocations to
 verifier was also updated to allow `DbAllocOp` results (they're already
 captured as `dbHandles`).
 
+Note: activations doesn't exercise this path at small size because the epoch is
+not inside a loop (NREPS=1 by default). The fix would be exercised if a future
+benchmark has external allocs AND a multi-iteration loop.
+
+### Known Issue: EdtLowering crash with multi-epoch NREPS > 1
+
+Pooling and batchnorm crash in `MemoryAccessClassifier::collectAccessOperations`
+during EdtLowering when compiled with `--arts-epoch-finish-continuation` and
+`NREPS > 1`. The crash occurs during `resolveAcquireRewriteContract` for
+continuation EDTs. Root cause TBD — likely a contract analysis issue when CPS
+chain clones multi-epoch patterns into continuation EDT bodies.
+
+### Known Issue: poisson-for checksum mismatch
+
+The CPS chain fires on poisson-for's time-step loop (which has no iter_args),
+but produces wrong results. Baseline checksum `1.038656999420e-01`, CPS
+checksum `1.224646799147e-16`. The time-step loop uses Jacobi alternating
+buffers (`depPattern = jacobi_alternating_buffers`), which may have ordering
+constraints not captured by the current CPS chain transform.
+
 ## Future Work
 
-- **iter_args support (C1)**: Transport iteration values through paramv for
-  convergence loops (poisson-for)
-- **Nested loops (C2)**: Use CPS driver for inner loop + CPS chain for outer
-  (seidel-2d wavefront)
-- **Runtime validation**: Benchmark runs to measure sync overhead reduction
+- **EdtLowering crash**: Fix contract analysis for multi-epoch CPS chain
+  continuations (blocks pooling/batchnorm at NREPS > 1)
+- **poisson-for correctness**: Investigate CPS chain interaction with Jacobi
+  alternating buffer patterns
+- **Nested loops (C2)**: Relax `isInsideLoop()` or chain CPS driver for inner
+  loop + CPS chain for outer (seidel-2d wavefront)
+- **Runtime performance**: Benchmark CPS chain vs blocking wait overhead at
+  large scale
