@@ -4,10 +4,21 @@
 .build
 .vscode
 compile_commands.json
-build/
+/build/
 CMakeFiles/
 core
 core.*
+# Agent configs (generated from .carts/ — run `carts agents generate`)
+/CLAUDE.md
+/CODEX.md
+/AGENTS.md
+/.cursorrules
+/.github/copilot-instructions.md
+/.github/instructions/
+/.claude/skills/
+/.claude/rules/
+/.agents.json
+
 .cursor/*
 !.cursor/rules/
 .codex/
