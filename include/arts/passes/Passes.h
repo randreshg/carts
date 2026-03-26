@@ -103,9 +103,9 @@ std::unique_ptr<Pass> createEpochOptPass(bool enableAmortization,
                                          bool enableCPSChain = false);
 /// Create EpochOpt with scheduling-only flags (structural opts disabled).
 std::unique_ptr<Pass> createEpochOptSchedulingPass(bool enableAmortization,
-                                                    bool enableContinuation,
-                                                    bool enableCPSDriver,
-                                                    bool enableCPSChain = false);
+                                                   bool enableContinuation,
+                                                   bool enableCPSDriver,
+                                                   bool enableCPSChain = false);
 std::unique_ptr<Pass> createHoistingPass();
 std::unique_ptr<Pass> createBlockLoopStripMiningPass();
 

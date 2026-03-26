@@ -28,7 +28,7 @@
 #define DEFAULT_EDT_SLOT 0
 
 /// Hint constant: use the node running the current EDT
-#define ARTS_HINT_CURRENT_NODE ((Int32)-1)
+#define ARTS_HINT_CURRENT_NODE ((Int32) - 1)
 
 /// arts_latch_event_slot_t enum values (from arts v2 arts.h)
 #define ARTS_EVENT_LATCH_DECR_SLOT 0
@@ -141,9 +141,10 @@ __ARTS_TYPE(RawPtr, mlir::LLVM::LLVMPointerType::get)
 ///   arts_guid_t guid;
 ///   void *ptr;
 ///   arts_db_access_mode_t mode;
+///   uint32_t flags;
 /// } arts_edt_dep_t;
 __ARTS_STRUCT_TYPE(ArtsEdtDep, arts_edt_dep_t, false, ArtsGuid, llvmPtr,
-                   ArtsType)
+                   ArtsType, Int32)
 
 /// typedef struct {
 ///   unsigned int route;
@@ -204,7 +205,8 @@ __ARTS_FUNCTION_TYPE(MainFn, Int32, Int32, Int8PtrPtr)
 
 /// int arts_rt(int argc, char **argv);
 __ARTS_RTL(arts_rt, Int32, Int32, Int8PtrPtr)
-__ARTS_RTL_ATTRS(arts_rt, ControlAttrs, SExt, ParamAttrs(SExt, ReadOnlyPtrAttrs))
+__ARTS_RTL_ATTRS(arts_rt, ControlAttrs, SExt,
+                 ParamAttrs(SExt, ReadOnlyPtrAttrs))
 
 /// void arts_shutdown();
 __ARTS_RTL(arts_shutdown, Void)
@@ -224,7 +226,8 @@ __ARTS_RTL_ATTRS(artsSetConfigData, ControlAttrs, EmptyAttrs,
 
 /// void *arts_malloc(size_t size);
 __ARTS_RTL(arts_malloc, VoidPtr, SizeTy)
-__ARTS_RTL_ATTRS(arts_malloc, AllocAttrs, ReturnPtrAttrs, ParamAttrs(EmptyAttrs))
+__ARTS_RTL_ATTRS(arts_malloc, AllocAttrs, ReturnPtrAttrs,
+                 ParamAttrs(EmptyAttrs))
 
 /// void *arts_calloc(size_t nmemb, size_t size);
 __ARTS_RTL(arts_calloc, VoidPtr, SizeTy, SizeTy)
@@ -233,8 +236,7 @@ __ARTS_RTL_ATTRS(arts_calloc, AllocAttrs, ReturnPtrAttrs,
 
 /// void arts_free(void *ptr);
 __ARTS_RTL(arts_free, Void, VoidPtr)
-__ARTS_RTL_ATTRS(arts_free, AllocAttrs, EmptyAttrs,
-                 ParamAttrs(ArgPtrAttrs))
+__ARTS_RTL_ATTRS(arts_free, AllocAttrs, EmptyAttrs, ParamAttrs(ArgPtrAttrs))
 
 /// arts_guid_t arts_guid_reserve(arts_type_t type, unsigned int route);
 __ARTS_RTL(arts_guid_reserve, ArtsGuid, ArtsType, Int32)
@@ -275,8 +277,8 @@ __ARTS_RTL_ATTRS(arts_edt_create, ControlAttrs, EmptyAttrs,
                             ReadOnlyPtrAttrs))
 
 /// arts_guid_t arts_edt_create_with_guid(arts_edt_t func_ptr, arts_guid_t guid,
-///                                       uint32_t paramc, const uint64_t *paramv,
-///                                       uint32_t depc);
+///                                       uint32_t paramc, const uint64_t
+///                                       *paramv, uint32_t depc);
 __ARTS_RTL(arts_edt_create_with_guid, ArtsGuid, EdtFnPtr, ArtsGuid, Int32,
            Int64Ptr, Int32)
 __ARTS_RTL_ATTRS(arts_edt_create_with_guid, ControlAttrs, EmptyAttrs,
@@ -284,9 +286,9 @@ __ARTS_RTL_ATTRS(arts_edt_create_with_guid, ControlAttrs, EmptyAttrs,
                             ReadOnlyPtrAttrs, ZExt))
 
 /// arts_guid_t arts_edt_create_with_epoch(arts_edt_t func_ptr, uint32_t paramc,
-///                                        const uint64_t *paramv, uint32_t depc,
-///                                        arts_guid_t epoch_guid,
-///                                        const arts_hint_t *hint);
+///                                        const uint64_t *paramv, uint32_t
+///                                        depc, arts_guid_t epoch_guid, const
+///                                        arts_hint_t *hint);
 __ARTS_RTL(arts_edt_create_with_epoch, ArtsGuid, EdtFnPtr, Int32, Int64Ptr,
            Int32, ArtsGuid, ArtsHintTypePtr)
 __ARTS_RTL_ATTRS(arts_edt_create_with_epoch, ControlAttrs, EmptyAttrs,
@@ -363,13 +365,14 @@ __ARTS_RTL_ATTRS(arts_signal_edt_null, ControlAttrs, EmptyAttrs,
                  ParamAttrs(EmptyAttrs, ZExt))
 /// }
 
-
 ///===----------------------------------------------------------------------===///
-/// Events (v2: unified event API, replaces both old events and persistent events)
+/// Events (v2: unified event API, replaces both old events and persistent
+/// events)
 ///===----------------------------------------------------------------------===///
 /// {
 /// arts_guid_t arts_event_create(unsigned int route, arts_event_types_t type,
-///                               unsigned int latch_count, arts_guid_t data_guid);
+///                               unsigned int latch_count, arts_guid_t
+///                               data_guid);
 __ARTS_RTL(arts_event_create, ArtsGuid, Int32, Int32, Int32, ArtsGuid)
 __ARTS_RTL_ATTRS(arts_event_create, ControlAttrs, EmptyAttrs,
                  ParamAttrs(ZExt, SExt, ZExt, EmptyAttrs))
@@ -400,16 +403,34 @@ __ARTS_RTL(arts_add_dependence, Void, ArtsGuid, ArtsGuid, Int32, Int32)
 __ARTS_RTL_ATTRS(arts_add_dependence, ControlAttrs, EmptyAttrs,
                  ParamAttrs(EmptyAttrs, EmptyAttrs, ZExt, SExt))
 
+/// void arts_add_dependence_ex(arts_guid_t source, arts_guid_t destination,
+///                             uint32_t slot, arts_db_access_mode_t mode,
+///                             uint32_t flags);
+__ARTS_RTL(arts_add_dependence_ex, Void, ArtsGuid, ArtsGuid, Int32, Int32,
+           Int32)
+__ARTS_RTL_ATTRS(arts_add_dependence_ex, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs, ZExt, SExt, ZExt))
+
 /// void arts_add_dependence_at(arts_guid_t source, arts_guid_t destination,
 ///                             uint32_t slot, arts_db_access_mode_t mode,
 ///                             uint64_t byte_offset, uint64_t len);
 __ARTS_RTL(arts_add_dependence_at, Void, ArtsGuid, ArtsGuid, Int32, Int32,
            Int64, Int64)
 __ARTS_RTL_ATTRS(arts_add_dependence_at, ControlAttrs, EmptyAttrs,
-                 ParamAttrs(EmptyAttrs, EmptyAttrs, ZExt, SExt,
-                            EmptyAttrs, EmptyAttrs))
-/// }
+                 ParamAttrs(EmptyAttrs, EmptyAttrs, ZExt, SExt, EmptyAttrs,
+                            EmptyAttrs))
 
+/// void arts_add_dependence_at_ex(arts_guid_t source,
+///                                arts_guid_t destination, uint32_t slot,
+///                                arts_db_access_mode_t mode,
+///                                uint64_t byte_offset, uint64_t len,
+///                                uint32_t flags);
+__ARTS_RTL(arts_add_dependence_at_ex, Void, ArtsGuid, ArtsGuid, Int32, Int32,
+           Int64, Int64, Int32)
+__ARTS_RTL_ATTRS(arts_add_dependence_at_ex, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs, ZExt, SExt, EmptyAttrs,
+                            EmptyAttrs, ZExt))
+/// }
 
 ///===----------------------------------------------------------------------===///
 /// DataBlock (v2: arts_db_types_t replaces artsType_t mode in GUID;
@@ -471,8 +492,7 @@ __ARTS_RTL_ATTRS(arts_get_current_epoch_guid, GetterAttrs, EmptyAttrs,
 
 /// arts_guid_t arts_get_edt_epoch_guid();
 __ARTS_RTL(arts_get_edt_epoch_guid, ArtsGuid)
-__ARTS_RTL_ATTRS(arts_get_edt_epoch_guid, GetterAttrs, EmptyAttrs,
-                 ParamAttrs())
+__ARTS_RTL_ATTRS(arts_get_edt_epoch_guid, GetterAttrs, EmptyAttrs, ParamAttrs())
 
 /// arts_guid_t arts_initialize_and_start_epoch(arts_guid_t finish_edt_guid,
 ///                                             unsigned int slot);
@@ -531,85 +551,122 @@ __ARTS_RTL_ATTRS(arts_get_total_workers, PureAttrs, ZExt, ParamAttrs())
 /// Atomics (internal header; not in public API)
 ///===----------------------------------------------------------------------===///
 /// {
-/// unsigned int arts_atomic_swap(volatile unsigned int *destination, unsigned int swap_in);
+/// unsigned int arts_atomic_swap(volatile unsigned int *destination, unsigned
+/// int swap_in);
 __ARTS_RTL(arts_atomic_swap, Int32, Int32Ptr, Int32)
-__ARTS_RTL_ATTRS(arts_atomic_swap, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs))
+__ARTS_RTL_ATTRS(arts_atomic_swap, ControlAttrs, ZExt,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-/// uint64_t arts_atomic_swap_u64(volatile uint64_t *destination, uint64_t swap_in);
+/// uint64_t arts_atomic_swap_u64(volatile uint64_t *destination, uint64_t
+/// swap_in);
 __ARTS_RTL(arts_atomic_swap_u64, Int64, Int64Ptr, Int64)
-__ARTS_RTL_ATTRS(arts_atomic_swap_u64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
+__ARTS_RTL_ATTRS(arts_atomic_swap_u64, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-/// volatile void *arts_atomic_swap_ptr(volatile void **destination, void *swap_in);
+/// volatile void *arts_atomic_swap_ptr(volatile void **destination, void
+/// *swap_in);
 __ARTS_RTL(arts_atomic_swap_ptr, VoidPtr, VoidPtrPtr, VoidPtr)
-__ARTS_RTL_ATTRS(arts_atomic_swap_ptr, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
+__ARTS_RTL_ATTRS(arts_atomic_swap_ptr, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-/// unsigned int arts_atomic_sub(volatile unsigned int *destination, unsigned int sub_val);
+/// unsigned int arts_atomic_sub(volatile unsigned int *destination, unsigned
+/// int sub_val);
 __ARTS_RTL(arts_atomic_sub, Int32, Int32Ptr, Int32)
-__ARTS_RTL_ATTRS(arts_atomic_sub, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs))
+__ARTS_RTL_ATTRS(arts_atomic_sub, ControlAttrs, ZExt,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-/// unsigned int arts_atomic_add(volatile unsigned int *destination, unsigned int add_val);
+/// unsigned int arts_atomic_add(volatile unsigned int *destination, unsigned
+/// int add_val);
 __ARTS_RTL(arts_atomic_add, Int32, Int32Ptr, Int32)
-__ARTS_RTL_ATTRS(arts_atomic_add, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs))
+__ARTS_RTL_ATTRS(arts_atomic_add, ControlAttrs, ZExt,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-/// unsigned int arts_atomic_fetch_add(volatile unsigned int *destination, unsigned int add_val);
+/// unsigned int arts_atomic_fetch_add(volatile unsigned int *destination,
+/// unsigned int add_val);
 __ARTS_RTL(arts_atomic_fetch_add, Int32, Int32Ptr, Int32)
-__ARTS_RTL_ATTRS(arts_atomic_fetch_add, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs))
+__ARTS_RTL_ATTRS(arts_atomic_fetch_add, ControlAttrs, ZExt,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-/// unsigned int arts_atomic_cswap(volatile unsigned int *destination, unsigned int old_val, unsigned int swap_in);
+/// unsigned int arts_atomic_cswap(volatile unsigned int *destination, unsigned
+/// int old_val, unsigned int swap_in);
 __ARTS_RTL(arts_atomic_cswap, Int32, Int32Ptr, Int32, Int32)
-__ARTS_RTL_ATTRS(arts_atomic_cswap, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs, EmptyAttrs))
+__ARTS_RTL_ATTRS(arts_atomic_cswap, ControlAttrs, ZExt,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs, EmptyAttrs))
 
-/// uint64_t arts_atomic_cswap_u64(volatile uint64_t *destination, uint64_t old_val, uint64_t swap_in);
+/// uint64_t arts_atomic_cswap_u64(volatile uint64_t *destination, uint64_t
+/// old_val, uint64_t swap_in);
 __ARTS_RTL(arts_atomic_cswap_u64, Int64, Int64Ptr, Int64, Int64)
-__ARTS_RTL_ATTRS(arts_atomic_cswap_u64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs, EmptyAttrs))
+__ARTS_RTL_ATTRS(arts_atomic_cswap_u64, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs, EmptyAttrs))
 
-/// volatile void *arts_atomic_cswap_ptr(volatile void **destination, void *old_val, void *swap_in);
+/// volatile void *arts_atomic_cswap_ptr(volatile void **destination, void
+/// *old_val, void *swap_in);
 __ARTS_RTL(arts_atomic_cswap_ptr, VoidPtr, VoidPtrPtr, VoidPtr, VoidPtr)
-__ARTS_RTL_ATTRS(arts_atomic_cswap_ptr, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs, EmptyAttrs))
+__ARTS_RTL_ATTRS(arts_atomic_cswap_ptr, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs, EmptyAttrs))
 
 /// bool arts_atomic_swap_bool(volatile bool *destination, bool value);
 __ARTS_RTL(arts_atomic_swap_bool, Int1, Int1Ptr, Int1)
-__ARTS_RTL_ATTRS(arts_atomic_swap_bool, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, ZExt))
+__ARTS_RTL_ATTRS(arts_atomic_swap_bool, ControlAttrs, ZExt,
+                 ParamAttrs(EmptyAttrs, ZExt))
 
-/// uint64_t arts_atomic_fetch_add_u64(volatile uint64_t *destination, uint64_t add_val);
+/// uint64_t arts_atomic_fetch_add_u64(volatile uint64_t *destination, uint64_t
+/// add_val);
 __ARTS_RTL(arts_atomic_fetch_add_u64, Int64, Int64Ptr, Int64)
-__ARTS_RTL_ATTRS(arts_atomic_fetch_add_u64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
+__ARTS_RTL_ATTRS(arts_atomic_fetch_add_u64, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-/// uint64_t arts_atomic_fetch_sub_u64(volatile uint64_t *destination, uint64_t sub_val);
+/// uint64_t arts_atomic_fetch_sub_u64(volatile uint64_t *destination, uint64_t
+/// sub_val);
 __ARTS_RTL(arts_atomic_fetch_sub_u64, Int64, Int64Ptr, Int64)
-__ARTS_RTL_ATTRS(arts_atomic_fetch_sub_u64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
+__ARTS_RTL_ATTRS(arts_atomic_fetch_sub_u64, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-/// uint64_t arts_atomic_add_u64(volatile uint64_t *destination, uint64_t add_val);
+/// uint64_t arts_atomic_add_u64(volatile uint64_t *destination, uint64_t
+/// add_val);
 __ARTS_RTL(arts_atomic_add_u64, Int64, Int64Ptr, Int64)
-__ARTS_RTL_ATTRS(arts_atomic_add_u64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
+__ARTS_RTL_ATTRS(arts_atomic_add_u64, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-/// uint64_t arts_atomic_sub_u64(volatile uint64_t *destination, uint64_t sub_val);
+/// uint64_t arts_atomic_sub_u64(volatile uint64_t *destination, uint64_t
+/// sub_val);
 __ARTS_RTL(arts_atomic_sub_u64, Int64, Int64Ptr, Int64)
-__ARTS_RTL_ATTRS(arts_atomic_sub_u64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
+__ARTS_RTL_ATTRS(arts_atomic_sub_u64, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs))
 
 /// bool arts_try_lock(volatile unsigned int *lock);
 __ARTS_RTL(arts_try_lock, Int1, Int32Ptr)
 __ARTS_RTL_ATTRS(arts_try_lock, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs))
 
-/// uint64_t arts_atomic_fetch_and_u64(volatile uint64_t *destination, uint64_t add_val);
+/// uint64_t arts_atomic_fetch_and_u64(volatile uint64_t *destination, uint64_t
+/// add_val);
 __ARTS_RTL(arts_atomic_fetch_and_u64, Int64, Int64Ptr, Int64)
-__ARTS_RTL_ATTRS(arts_atomic_fetch_and_u64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
+__ARTS_RTL_ATTRS(arts_atomic_fetch_and_u64, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-/// uint64_t arts_atomic_fetch_or_u64(volatile uint64_t *destination, uint64_t add_val);
+/// uint64_t arts_atomic_fetch_or_u64(volatile uint64_t *destination, uint64_t
+/// add_val);
 __ARTS_RTL(arts_atomic_fetch_or_u64, Int64, Int64Ptr, Int64)
-__ARTS_RTL_ATTRS(arts_atomic_fetch_or_u64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
+__ARTS_RTL_ATTRS(arts_atomic_fetch_or_u64, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-/// uint64_t arts_atomic_fetch_x_or_u64(volatile uint64_t *destination, uint64_t add_val);
+/// uint64_t arts_atomic_fetch_x_or_u64(volatile uint64_t *destination, uint64_t
+/// add_val);
 __ARTS_RTL(arts_atomic_fetch_x_or_u64, Int64, Int64Ptr, Int64)
-__ARTS_RTL_ATTRS(arts_atomic_fetch_x_or_u64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
+__ARTS_RTL_ATTRS(arts_atomic_fetch_x_or_u64, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-/// unsigned int arts_atomic_fetch_or(volatile unsigned int *destination, unsigned int add_val);
+/// unsigned int arts_atomic_fetch_or(volatile unsigned int *destination,
+/// unsigned int add_val);
 __ARTS_RTL(arts_atomic_fetch_or, Int32, Int32Ptr, Int32)
-__ARTS_RTL_ATTRS(arts_atomic_fetch_or, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs))
+__ARTS_RTL_ATTRS(arts_atomic_fetch_or, ControlAttrs, ZExt,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-/// unsigned int arts_atomic_fetch_and(volatile unsigned int *destination, unsigned int add_val);
+/// unsigned int arts_atomic_fetch_and(volatile unsigned int *destination,
+/// unsigned int add_val);
 __ARTS_RTL(arts_atomic_fetch_and, Int32, Int32Ptr, Int32)
-__ARTS_RTL_ATTRS(arts_atomic_fetch_and, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs))
+__ARTS_RTL_ATTRS(arts_atomic_fetch_and, ControlAttrs, ZExt,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs))
 /// }
 
 #undef __ARTS_RTL_ATTRS
@@ -620,7 +677,7 @@ __ARTS_RTL_ATTRS(arts_atomic_fetch_and, ControlAttrs, ZExt, ParamAttrs(EmptyAttr
 ///===----------------------------------------------------------------------===///
 /// Runtime library function attributes
 ///===----------------------------------------------------------------------===///
-/// 
+///
 ///{
 /// Attribute definitions for LLVM function optimization
 #ifndef ARTS_RTL_ATTRS
@@ -636,43 +693,46 @@ __ARTS_RTL_ATTRS(arts_atomic_fetch_and, ControlAttrs, ZExt, ParamAttrs(EmptyAttr
 
 #define __ARTS_ATTRS_SET(VarName, AttrSet) ARTS_ATTRS_SET(VarName, AttrSet)
 
-/// Attribute sets for ARTS runtime functions 
+/// Attribute sets for ARTS runtime functions
 #define ParamAttrs(...) SmallVector<SmallVector<StringRef>>({__VA_ARGS__})
 
 /// Define attribute sets for different function categories
 __ARTS_ATTRS_SET(PureAttrs,
-    SmallVector<StringRef>({"llvm.nounwind", "llvm.readnone", "llvm.nosync", 
-                           "llvm.nofree", "llvm.willreturn"}))
+                 SmallVector<StringRef>({"llvm.nounwind", "llvm.readnone",
+                                         "llvm.nosync", "llvm.nofree",
+                                         "llvm.willreturn"}))
 
 __ARTS_ATTRS_SET(GetterAttrs,
-    SmallVector<StringRef>({"llvm.nounwind", "llvm.readonly", "llvm.nosync",
-                           "llvm.nofree", "llvm.willreturn"}))
+                 SmallVector<StringRef>({"llvm.nounwind", "llvm.readonly",
+                                         "llvm.nosync", "llvm.nofree",
+                                         "llvm.willreturn"}))
 
 __ARTS_ATTRS_SET(AllocAttrs,
-    SmallVector<StringRef>({"llvm.nounwind", "llvm.nosync", "llvm.willreturn"}))
+                 SmallVector<StringRef>({"llvm.nounwind", "llvm.nosync",
+                                         "llvm.willreturn"}))
 
-__ARTS_ATTRS_SET(ControlAttrs,
-    SmallVector<StringRef>({"llvm.nounwind"}))
+__ARTS_ATTRS_SET(ControlAttrs, SmallVector<StringRef>({"llvm.nounwind"}))
 
 __ARTS_ATTRS_SET(ReadOnlyPtrAttrs,
-    SmallVector<StringRef>({"llvm.readonly", "llvm.nofree", "llvm.nocapture"}))
+                 SmallVector<StringRef>({"llvm.readonly", "llvm.nofree",
+                                         "llvm.nocapture"}))
 
 __ARTS_ATTRS_SET(ArgPtrAttrs,
-    SmallVector<StringRef>({"llvm.nocapture", "llvm.nofree"}))
+                 SmallVector<StringRef>({"llvm.nocapture", "llvm.nofree"}))
 
 __ARTS_ATTRS_SET(ReturnPtrAttrs, SmallVector<StringRef>({"llvm.noalias"}))
 
 /// Attributes for EDT deps parameter - enables LLVM LICM to hoist pointer loads
 __ARTS_ATTRS_SET(EdtDepsAttrs,
-    SmallVector<StringRef>({"llvm.noalias", "llvm.readonly", "llvm.nofree", "llvm.nocapture"}))
+                 SmallVector<StringRef>({"llvm.noalias", "llvm.readonly",
+                                         "llvm.nofree", "llvm.nocapture"}))
 
 __ARTS_ATTRS_SET(EmptyAttrs, SmallVector<StringRef>({}))
 
 __ARTS_ATTRS_SET(SExt, SmallVector<StringRef>({"llvm.signext"}))
 __ARTS_ATTRS_SET(ZExt, SmallVector<StringRef>({"llvm.zeroext"}))
 
-
-#undef __ARTS_RTL_ATTRS  
+#undef __ARTS_RTL_ATTRS
 #undef ARTS_RTL_ATTRS
 #undef __ARTS_ATTRS_SET
 #undef ARTS_ATTRS_SET
