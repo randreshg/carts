@@ -13,8 +13,8 @@
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/Support/ErrorHandling.h"
-#include <sys/types.h>
 #include <optional>
+#include <sys/types.h>
 
 #include "arts/Dialect.h"
 

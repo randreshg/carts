@@ -95,6 +95,9 @@ chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
 
   int64_t workers = resolveWorkerCount(match.parallelEdt);
   workers = std::max<int64_t>(1, workers);
+  int64_t tilingLaneMultiplier =
+      std::max<int64_t>(1, DistributionHeuristics::chooseTiling2DColumnWorkers(
+                               workers, std::nullopt));
 
   int64_t minRowTiles = (workers > 1 && iExtent >= 2) ? 2 : 1;
   int64_t minColTiles = (workers > 1 && jExtent >= 2) ? 2 : 1;
@@ -113,11 +116,11 @@ chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
   /// dependence setup, but still allow multiple tiles per worker when the
   /// interior is large enough to sustain it.
   constexpr int64_t minCellsPerTask = 1 << 14;
-  int64_t maxTilesByWork = std::max<int64_t>(
+  int64_t maxTasksByWork = std::max<int64_t>(
       1, static_cast<int64_t>(std::ceil(
              totalCells / static_cast<long double>(minCellsPerTask))));
-  maxTilesByWork =
-      std::min<int64_t>(maxTilesByWork, std::max<int64_t>(4, workers * 2));
+  maxTasksByWork =
+      std::min<int64_t>(maxTasksByWork, std::max<int64_t>(4, workers * 2));
 
   auto computeWeightedRankCount = [](int64_t numITiles,
                                      int64_t numJTiles) -> int64_t {
@@ -138,20 +141,39 @@ chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
     return bestWidth;
   };
 
+  auto computeExpandedWavefrontTasks = [&](int64_t numITiles,
+                                           int64_t numJTiles) -> int64_t {
+    int64_t maxRank = 2 * (numITiles - 1) + (numJTiles - 1);
+    int64_t total = 0;
+    for (int64_t rank = 0; rank <= maxRank; ++rank) {
+      int64_t minTileI =
+          std::max<int64_t>(0, (rank - (numJTiles - 1) + 1) / 2);
+      int64_t maxTileI = std::min<int64_t>(numITiles - 1, rank / 2);
+      if (maxTileI < minTileI)
+        continue;
+      int64_t frontierWidth = maxTileI - minTileI + 1;
+      total += frontierWidth * tilingLaneMultiplier;
+    }
+    return std::max<int64_t>(1, total);
+  };
+
   /// Seidel macro-tiles must amortize EDT launch and dependence-registration
   /// overhead. Bound the total tile count by a minimum work-per-task target,
   /// then pick the best weighted-wavefront shape that fits inside that budget.
+  /// The downstream tiling_2d lowering further expands each wavefront frontier
+  /// across its column-worker lanes, so budget against the effective task count
+  /// seen by the runtime rather than just the raw macro-tile count.
   /// If the interior cannot sustain even a 2-D tiled wavefront under that
   /// budget, fall back to the sequentialized form instead of forcing an
   /// unprofitable task DAG.
-  if (maxTilesByWork < 4)
+  if (maxTasksByWork < 4)
     return std::nullopt;
 
   int64_t desiredFrontier = std::clamp<int64_t>(
       static_cast<int64_t>(
-          std::ceil(std::sqrt(static_cast<long double>(maxTilesByWork)))),
+          std::ceil(std::sqrt(static_cast<long double>(maxTasksByWork)))),
       int64_t{1}, workers);
-  long double desiredTasks = static_cast<long double>(maxTilesByWork);
+  long double desiredTasks = static_cast<long double>(maxTasksByWork);
   long double targetWorkPerTask =
       totalCells / std::max<long double>(1.0L, desiredTasks);
 
@@ -165,21 +187,24 @@ chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
     /// Seidel DAG is ordered by rank = 2*tileI + tileJ. Estimate concurrency
     /// from the exact width of those rank frontiers, not anti-diagonal width.
     int64_t tilesPerStep = numITiles * numJTiles;
-    if (tilesPerStep > maxTilesByWork)
+    int64_t effectiveTasks =
+        computeExpandedWavefrontTasks(numITiles, numJTiles);
+    if (effectiveTasks > maxTasksByWork)
       return std::numeric_limits<long double>::infinity();
     int64_t frontierWidth = computeWeightedFrontierWidth(numITiles, numJTiles);
+    int64_t effectiveFrontierWidth = frontierWidth * tilingLaneMultiplier;
     int64_t rankCount = computeWeightedRankCount(numITiles, numJTiles);
     long double averageFrontier =
-        static_cast<long double>(tilesPerStep) /
+        static_cast<long double>(effectiveTasks) /
         static_cast<long double>(std::max<int64_t>(1, rankCount));
     long double workPerTask =
         totalCells /
-        static_cast<long double>(std::max<int64_t>(1, tilesPerStep));
+        static_cast<long double>(std::max<int64_t>(1, effectiveTasks));
 
     long double frontierPenalty = 0.0L;
-    if (frontierWidth < desiredFrontier) {
-      long double gap =
-          static_cast<long double>(desiredFrontier - frontierWidth);
+    if (effectiveFrontierWidth < desiredFrontier) {
+      long double gap = static_cast<long double>(desiredFrontier -
+                                                 effectiveFrontierWidth);
       frontierPenalty = gap * gap * 1.0e8L;
     }
 
@@ -197,17 +222,24 @@ chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
       workPenalty = gap * gap * 1.0e3L;
     }
 
-    long double taskCost = static_cast<long double>(tilesPerStep) * 1.0e3L;
+    long double taskCost = static_cast<long double>(effectiveTasks) * 1.0e3L;
     long double rankCost = static_cast<long double>(rankCount) * 1.0e3L;
-    long double shapePenalty =
+    /// The downstream tiling_2d lowering assigns one column stripe per
+    /// col-worker lane. Prefer wavefront macro-tile counts that align the
+    /// explicit tile columns with that lane decomposition so each task works on
+    /// one coherent column stripe instead of re-slicing a much wider tile.
+    long double laneAlignmentPenalty =
         std::abs(static_cast<long double>(numJTiles) -
-                 (static_cast<long double>(2 * numITiles - 1))) *
-        1.0L;
+                 static_cast<long double>(tilingLaneMultiplier)) *
+        1.0e5L;
+    long double undersubscribedLanePenalty =
+        (numJTiles < tilingLaneMultiplier) ? 1.0e6L : 0.0L;
     long double fullRangePenalty =
         (numITiles == 1 || numJTiles == 1) ? 1.0e15L : 0.0L;
 
     return frontierPenalty + averagePenalty + workPenalty + taskCost +
-           rankCost + shapePenalty + fullRangePenalty;
+           rankCost + laneAlignmentPenalty + undersubscribedLanePenalty +
+           fullRangePenalty;
   };
 
   for (int64_t numITiles = minRowTiles; numITiles <= maxRowTiles; ++numITiles) {

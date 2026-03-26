@@ -216,9 +216,8 @@ public:
 ///   blockCount = endBlock - startBlock + 1  (clamped to [0, totalBlocks])
 void convertElementSliceToBlockSlice(
     OpBuilder &builder, Location loc, ValueRange elementOffsets,
-    ValueRange elementSizes, ValueRange blockSpans,
-    ValueRange totalBlockCounts, SmallVectorImpl<Value> &blockOffsets,
-    SmallVectorImpl<Value> &blockSizes);
+    ValueRange elementSizes, ValueRange blockSpans, ValueRange totalBlockCounts,
+    SmallVectorImpl<Value> &blockOffsets, SmallVectorImpl<Value> &blockSizes);
 
 ///===----------------------------------------------------------------------===///
 /// Block Size and Malloc Pattern Extraction (free functions)

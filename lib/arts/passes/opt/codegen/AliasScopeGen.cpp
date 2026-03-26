@@ -38,7 +38,6 @@
 #define GEN_PASS_DEF_ALIASCOPEGEN
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -46,6 +45,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/Pass/Pass.h"
 #include "polygeist/Ops.h"
 
 #include "arts/Dialect.h"

@@ -34,6 +34,59 @@ using namespace mlir;
 using namespace arts;
 
 namespace {
+static bool isInsideOmpRegion(Operation *op) {
+  for (Operation *ancestor = op ? op->getParentOp() : nullptr; ancestor;
+       ancestor = ancestor->getParentOp()) {
+    if (ancestor->getDialect() &&
+        ancestor->getDialect()->getNamespace() == "omp")
+      return true;
+  }
+  return false;
+}
+
+/// Conservative fallback for calls inside OMP regions. Generic MLIR inlining
+/// can assert here because the OMP dialect does not register a
+/// DialectInlinerInterface. For single-block func.func callees we can inline by
+/// cloning the body and remapping the return operands directly.
+static LogicalResult inlineSingleBlockFuncCallInOmp(func::CallOp call,
+                                                    func::FuncOp callee) {
+  Region &calleeRegion = callee.getBody();
+  if (!calleeRegion.hasOneBlock())
+    return failure();
+
+  Block &calleeBlock = calleeRegion.front();
+  auto returnOp = dyn_cast<func::ReturnOp>(calleeBlock.getTerminator());
+  if (!returnOp)
+    return failure();
+
+  OpBuilder builder(call);
+  IRMapping mapper;
+  for (auto [arg, operand] :
+       llvm::zip(callee.getArguments(), call.getOperands())) {
+    mapper.map(arg, operand);
+  }
+
+  for (Operation &op : calleeBlock.without_terminator())
+    builder.clone(op, mapper);
+
+  SmallVector<Value> replacementValues;
+  replacementValues.reserve(returnOp.getNumOperands());
+  for (Value retVal : returnOp.getOperands())
+    replacementValues.push_back(mapper.lookupOrDefault(retVal));
+
+  if (call.getNumResults() != replacementValues.size())
+    return failure();
+
+  if (call.getNumResults() == 0) {
+    call.erase();
+    return success();
+  }
+
+  call.replaceAllUsesWith(replacementValues);
+  call.erase();
+  return success();
+}
+
 struct ArtsInlinerInterface : public mlir::InlinerInterface {
   using mlir::InlinerInterface::InlinerInterface;
 
@@ -124,25 +177,6 @@ struct ArtsInlinerPass : public impl::ArtsInlinerBase<ArtsInlinerPass> {
           continue;
         }
 
-        /// Skip calls nested inside OMP operations — the OMP dialect does
-        /// not register a DialectInlinerInterface, so inlining into OMP
-        /// regions causes an assertion failure in allowSingleBlockOptimization.
-        {
-          bool insideOmp = false;
-          for (Operation *ancestor = call->getParentOp(); ancestor;
-               ancestor = ancestor->getParentOp()) {
-            if (ancestor->getDialect() &&
-                ancestor->getDialect()->getNamespace() == "omp") {
-              insideOmp = true;
-              break;
-            }
-          }
-          if (insideOmp) {
-            ARTS_INFO("Skipping call inside OMP region");
-            continue;
-          }
-        }
-
         /// Resolve the callable operation
         auto callable = call.getCallableForCallee();
         CallableOpInterface callableOp;
@@ -155,6 +189,21 @@ struct ArtsInlinerPass : public impl::ArtsInlinerBase<ArtsInlinerPass> {
 
         if (!callableOp || !callableOp.getCallableRegion()) {
           ARTS_WARN("Cannot resolve callable for call");
+          continue;
+        }
+
+        /// Generic MLIR inlining into OMP regions can assert because the OMP
+        /// dialect does not register a DialectInlinerInterface. Use the
+        /// conservative single-block fallback there instead.
+        if (isInsideOmpRegion(call)) {
+          if (auto funcOp = dyn_cast<func::FuncOp>(callableOp.getOperation())) {
+            if (succeeded(inlineSingleBlockFuncCallInOmp(call, funcOp))) {
+              ARTS_INFO("Successfully manually inlined call inside OMP region");
+              changed = true;
+              continue;
+            }
+          }
+          ARTS_INFO("Skipping call inside OMP region");
           continue;
         }
 

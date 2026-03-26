@@ -66,7 +66,8 @@ constexpr StringLiteral ReadOnlyAfterInit = "arts.read_only_after_init";
 /// CPS chain / epoch continuation attributes
 constexpr StringLiteral ContinuationForEpoch = "arts.continuation_for_epoch";
 constexpr StringLiteral CPSChainId = "arts.cps_chain_id";
-constexpr StringLiteral CPSOuterEpochParamIdx = "arts.cps_outer_epoch_param_idx";
+constexpr StringLiteral CPSOuterEpochParamIdx =
+    "arts.cps_outer_epoch_param_idx";
 constexpr StringLiteral CPSIterCounterParamIdx =
     "arts.cps_iter_counter_param_idx";
 constexpr StringLiteral CPSParamPerm = "arts.cps_param_perm";

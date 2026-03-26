@@ -35,8 +35,8 @@
 /// Debug
 
 #include "llvm/ADT/APFloat.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -98,7 +98,7 @@ func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
   case Enum: {                                                                 \
     SmallVector<Type, 4> argumentTypes{__VA_ARGS__};                           \
     auto fnType = getBuilder().getFunctionType(                                \
-        argumentTypes, isa<mlir::NoneType>(ReturnType)                        \
+        argumentTypes, isa<mlir::NoneType>(ReturnType)                         \
                            ? ArrayRef<Type>{}                                  \
                            : ArrayRef<Type>{ReturnType});                      \
     funcOp = module.lookupSymbol<func::FuncOp>(Str);                           \
@@ -157,10 +157,9 @@ void ArtsCodegen::applyRuntimeFunctionAttributes(func::FuncOp funcOp,
   /// LLVM memory attr is.
   auto applyReadNoneMemoryAttr = [&]() {
     auto noModRef = LLVM::ModRefInfo::NoModRef;
-    auto memoryAttr = LLVM::MemoryEffectsAttr::get(getContext(), noModRef,
-                                                   noModRef, noModRef,
-                                                   noModRef, noModRef,
-                                                   noModRef);
+    auto memoryAttr =
+        LLVM::MemoryEffectsAttr::get(getContext(), noModRef, noModRef, noModRef,
+                                     noModRef, noModRef, noModRef);
     funcOp->setAttr("memory", memoryAttr);
   };
   auto applyReadOnlyMemoryAttr = [&]() {
@@ -226,11 +225,11 @@ void ArtsCodegen::applyRuntimeFunctionAttributes(func::FuncOp funcOp,
       applyResultMLIRAttrs(0, RetAttrSet);                                     \
     if (attrSetContains(FnAttrSet,                                             \
                         LLVM::LLVMDialect::getReadnoneAttrName())) {           \
-      applyReadNoneMemoryAttr();                                                \
+      applyReadNoneMemoryAttr();                                               \
     } else if (attrSetContains(FnAttrSet,                                      \
                                LLVM::LLVMDialect::getReadonlyAttrName())) {    \
-      applyReadOnlyMemoryAttr();                                                \
-    }                                                                           \
+      applyReadOnlyMemoryAttr();                                               \
+    }                                                                          \
     break;
 #define ARTS_RTL_FUNCTIONS
 #define ARTS_RTL(Enum, Name, ReturnType, ...) /// No-op, we only want attributes
@@ -294,8 +293,8 @@ Value ArtsCodegen::createEpoch(Value finishEdtGuid, Value finishEdtSlot,
       .getResult(0);
 }
 
-Value ArtsCodegen::createEpochNoStart(Value finishEdtGuid,
-                                      Value finishEdtSlot, Location loc) {
+Value ArtsCodegen::createEpochNoStart(Value finishEdtGuid, Value finishEdtSlot,
+                                      Location loc) {
   auto finishEdtSlotInt = castToInt(Int32, finishEdtSlot, loc);
   auto rank = getCurrentNode(loc);
   auto epochGuid =

@@ -1119,6 +1119,13 @@ LogicalResult RecordDepOp::verify() {
            << ")\n"
            << *getOperation();
 
+  if (auto flags = getDepFlags()) {
+    if (flags->size() != dbCount)
+      return emitOpError("dep_flags entries (")
+             << flags->size() << ") must match datablocks (" << dbCount << ")\n"
+             << *getOperation();
+  }
+
   /// byte_offsets and byte_sizes must be provided together
   if (getByteOffsets().empty() != getByteSizes().empty())
     return emitOpError(

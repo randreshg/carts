@@ -34,9 +34,7 @@
 #define GEN_PASS_DEF_FORLOWERING
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "arts/transforms/edt/EdtParallelSplitLowering.h"
 #include "arts/transforms/edt/EdtReductionLowering.h"
 #include "arts/transforms/edt/EdtRewriter.h"
@@ -47,6 +45,7 @@
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/metadata/LoopMetadata.h"
+#include "mlir/Pass/Pass.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -1546,8 +1545,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
   collectWithDeps(origStep);
   collectWithDeps(origLowerBound);
-  if (loopInfo.useAlignedLowerBound)
-    collectWithDeps(origUpperBound);
+  collectWithDeps(origUpperBound);
   collectWithDeps(chunkLowerBoundVal);
   collectWithDeps(workerOffsetVal);
 

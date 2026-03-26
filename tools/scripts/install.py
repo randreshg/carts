@@ -17,6 +17,7 @@ from scripts import (
     SUBMODULE_BENCHMARKS,
     SUBMODULE_POLYGEIST,
 )
+from scripts.agents import install_repo_skills_to_codex
 
 
 # ============================================================================
@@ -300,6 +301,16 @@ def install(
         "--skip-python-env",
         help="Skip shared Poetry environment setup in tools/",
     ),
+    agents: bool = Option(
+        False,
+        "--agents",
+        help="Also install repo-managed CARTS skills into a Codex-visible skills directory",
+    ),
+    agents_codex_dir: Optional[Path] = Option(
+        None,
+        "--agents-codex-dir",
+        help="Destination for Codex skill install when --agents is used (default: $CODEX_HOME/skills or ~/.codex/skills)",
+    ),
     auto: bool = Option(
         False, "--auto", "-y", help="Auto-install missing deps without prompting"),
     cc: Optional[str] = Option(
@@ -353,5 +364,13 @@ def install(
 
     # 5. Generate self-contained wrapper at .install/carts and update PATH
     _install_wrapper()
+
+    # 6. Optionally install repo-managed agent skills for Codex
+    if agents:
+        try:
+            install_repo_skills_to_codex(codex_dir=agents_codex_dir, force=True)
+        except Exit as exc:
+            print_error(f"Failed to install agent skills: {exc}")
+            raise Exit(1)
 
     print_header("Install Complete!")

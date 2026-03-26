@@ -296,6 +296,9 @@ struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
     auto acquireModesAttr = op.getAcquireModes();
     ArrayRef<int32_t> acquireModeValues =
         acquireModesAttr ? *acquireModesAttr : ArrayRef<int32_t>{};
+    auto depFlagsAttr = op.getDepFlags();
+    ArrayRef<int32_t> depFlagValues =
+        depFlagsAttr ? *depFlagsAttr : ArrayRef<int32_t>{};
 
     /// Get bounds validity flags for stencil boundary guarding
     auto boundsValids = op.getBoundsValids();
@@ -316,6 +319,9 @@ struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
       std::optional<int32_t> acquireMode = std::nullopt;
       if (dbIdx < acquireModeValues.size())
         acquireMode = acquireModeValues[dbIdx];
+      std::optional<int32_t> depFlags = std::nullopt;
+      if (dbIdx < depFlagValues.size())
+        depFlags = depFlagValues[dbIdx];
       /// Get bounds_valid for this dependency if available
       Value boundsValid =
           (dbIdx < boundsValids.size()) ? boundsValids[dbIdx] : Value();
@@ -324,7 +330,7 @@ struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
           (dbIdx < byteOffsets.size()) ? byteOffsets[dbIdx] : Value();
       Value byteSize = (dbIdx < byteSizes.size()) ? byteSizes[dbIdx] : Value();
       recordDepsForDb(dbGuid, edtGuid, sharedSlotAlloc, accessMode, acquireMode,
-                      boundsValid, byteOffset, byteSize, loc);
+                      depFlags, boundsValid, byteOffset, byteSize, loc);
       ++dbIdx;
     }
 
@@ -456,7 +462,8 @@ private:
   /// Iterate over DB elements and emit record-dep calls for each index.
   void emitRecordDepCalls(Value dbGuid, Value edtGuid, Value sharedSlotAlloc,
                           DepAccessMode accessMode,
-                          std::optional<int32_t> acquireMode, Value boundsValid,
+                          std::optional<int32_t> acquireMode,
+                          std::optional<int32_t> depFlags, Value boundsValid,
                           Value byteOffset, Value byteSize,
                           const DepDbInfo &depInfo, const DepBoundsInfo &bounds,
                           Location loc) const {
@@ -465,7 +472,7 @@ private:
         depInfo.dbInfo.isSingleElement, loc,
         [&](Value linearIndex) {
           recordSingleDb(dbGuid, edtGuid, sharedSlotAlloc, linearIndex,
-                         accessMode, acquireMode, boundsValid,
+                         accessMode, acquireMode, depFlags, boundsValid,
                          depInfo.depStruct, depInfo.baseOffset, bounds.totalDBs,
                          byteOffset, byteSize, depInfo.stencilCenterLinear,
                          loc);
@@ -476,14 +483,15 @@ private:
   /// Record all dependencies for a single datablock
   void recordDepsForDb(Value dbGuid, Value edtGuid, Value sharedSlotAlloc,
                        DepAccessMode accessMode,
-                       std::optional<int32_t> acquireMode, Value boundsValid,
+                       std::optional<int32_t> acquireMode,
+                       std::optional<int32_t> depFlags, Value boundsValid,
                        Value byteOffset, Value byteSize, Location loc) const {
     DepDbInfo depInfo = extractDbInfoForDeps(dbGuid, acquireMode, loc);
     DepBoundsInfo bounds =
         computeDepBounds(dbGuid, depInfo, accessMode, boundsValid);
     emitRecordDepCalls(dbGuid, edtGuid, sharedSlotAlloc, accessMode,
-                       acquireMode, boundsValid, byteOffset, byteSize, depInfo,
-                       bounds, loc);
+                       acquireMode, depFlags, boundsValid, byteOffset,
+                       byteSize, depInfo, bounds, loc);
   }
 
   /// Emit the appropriate runtime call for recording a dependency.
@@ -493,6 +501,7 @@ private:
   void emitRecordDepCall(Value dbGuidValue, Value edtGuidValue,
                          Value currentSlotI32, Value modeValue,
                          Value byteOffsetI64, Value byteSizeI64,
+                         std::optional<int32_t> depFlags,
                          Location loc) const {
     bool useRecordDepAt = byteOffsetI64 && byteSizeI64;
     /// byte_sizes=0 marks "no partial slice" for non-ESD dependencies.
@@ -505,13 +514,27 @@ private:
     ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
     if (useRecordDepAt) {
       /// ESD path: partial slice dependency with byte offset/size
-      RCB.callVoid(types::ARTSRTL_arts_add_dependence_at,
-                   {dbGuidValue, edtGuidValue, currentSlotI32, modeValue,
-                    byteOffsetI64, byteSizeI64});
+      if (depFlags && *depFlags != 0) {
+        Value flagsValue = AC->createIntConstant(*depFlags, AC->Int32, loc);
+        RCB.callVoid(types::ARTSRTL_arts_add_dependence_at_ex,
+                     {dbGuidValue, edtGuidValue, currentSlotI32, modeValue,
+                      byteOffsetI64, byteSizeI64, flagsValue});
+      } else {
+        RCB.callVoid(types::ARTSRTL_arts_add_dependence_at,
+                     {dbGuidValue, edtGuidValue, currentSlotI32, modeValue,
+                      byteOffsetI64, byteSizeI64});
+      }
     } else {
       /// Standard path: full datablock dependency
-      RCB.callVoid(types::ARTSRTL_arts_add_dependence,
-                   {dbGuidValue, edtGuidValue, currentSlotI32, modeValue});
+      if (depFlags && *depFlags != 0) {
+        Value flagsValue = AC->createIntConstant(*depFlags, AC->Int32, loc);
+        RCB.callVoid(types::ARTSRTL_arts_add_dependence_ex,
+                     {dbGuidValue, edtGuidValue, currentSlotI32, modeValue,
+                      flagsValue});
+      } else {
+        RCB.callVoid(types::ARTSRTL_arts_add_dependence,
+                     {dbGuidValue, edtGuidValue, currentSlotI32, modeValue});
+      }
     }
   }
 
@@ -526,7 +549,8 @@ private:
   /// Within each path, ESD vs standard is handled by emitRecordDepCall.
   void recordSingleDb(Value dbGuid, Value edtGuid, Value slotAlloc,
                       Value linearIndex, DepAccessMode accessMode,
-                      std::optional<int32_t> acquireMode, Value boundsValid,
+                      std::optional<int32_t> acquireMode,
+                      std::optional<int32_t> depFlags, Value boundsValid,
                       Value depStruct, Value baseOffset, Value totalDBs,
                       Value byteOffset, Value byteSize,
                       Value stencilCenterLinear, Location loc) const {
@@ -589,7 +613,7 @@ private:
       Value dbGuidValue = loadDbGuidValue(dbGuid, linearIndex, useDepv,
                                           depStruct, baseOffset, loc);
       emitRecordDepCall(dbGuidValue, edtGuidValue, currentSlotI32, modeValue,
-                        byteOffsetI64, byteSizeI64, loc);
+                        byteOffsetI64, byteSizeI64, depFlags, loc);
 
       /// Else: invalid index - signal null dependency
       AC->setInsertionPointToStart(&ifOp.getElseRegion().front());
@@ -603,7 +627,7 @@ private:
       Value dbGuidValue = loadDbGuidValue(dbGuid, linearIndex, useDepv,
                                           depStruct, baseOffset, loc);
       emitRecordDepCall(dbGuidValue, edtGuidValue, currentSlotI32, modeValue,
-                        byteOffsetI64, byteSizeI64, loc);
+                        byteOffsetI64, byteSizeI64, depFlags, loc);
     }
 
     /// Increment slot counter

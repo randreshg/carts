@@ -1,7 +1,8 @@
 ///===----------------------------------------------------------------------===///
 /// File: RaiseMemRefDimensionality.cpp
 ///
-/// This pass raises nested pointer allocations to N-dimensional memrefs and converts OpenMP task dependencies.
+/// This pass raises nested pointer allocations to N-dimensional memrefs and
+/// converts OpenMP task dependencies into arts.omp_dep operations.
 /// It uses a two-phase approach: complete analysis first, then transformation.
 ///
 /// Key features:
@@ -37,6 +38,7 @@
 #include "mlir/Pass/Pass.h"
 #include "polygeist/Ops.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -211,11 +213,16 @@ private:
   std::optional<TraceResult> traceToPattern(Value val, AllocPattern &pattern);
   std::optional<TraceResult> traceValueToPattern(Value val,
                                                  AllocPattern &pattern);
+  bool isPatternAliasRoot(Value val, const AllocPattern &pattern) const;
+  void collectOuterWrapperAliases(AllocPattern &pattern);
 
   /// Phase 3: Transform the pattern
   LogicalResult transformPattern(AllocPattern &pattern, OpBuilder &builder);
   LogicalResult transformSimpleWrapper(AllocPattern &pattern,
                                        OpBuilder &builder);
+  void rewriteTracedMemref2PointerUses(AllocPattern &pattern, Value ndAlloc,
+                                       OpBuilder &builder,
+                                       llvm::DenseSet<Operation *> &toRemove);
 
   /// Utilities
   Value createCanonicalAllocation(OpBuilder &builder, Location loc,
@@ -667,34 +674,7 @@ RaiseMemRefDimensionalityPass::detectPattern(Value alloc) {
     return std::nullopt;
   }
 
-  /// Detect outer wrapper aliases: after inlining alloc_Nd(), the pattern is:
-  ///   %loaded = load %innerWrapper[]
-  ///   store %loaded, %outerWrapper[]
-  /// The actual element accesses use %outerWrapper, not %innerWrapper.
-  if (pattern.wrapperAlloca) {
-    for (Operation *wrapperUser : pattern.wrapperAlloca.getUsers()) {
-      if (auto loadOp = dyn_cast<memref::LoadOp>(wrapperUser)) {
-        if (loadOp.getMemref() != pattern.wrapperAlloca)
-          continue;
-        /// This load returns the root allocation value
-        for (Operation *loadUser : loadOp.getResult().getUsers()) {
-          if (auto storeOp = dyn_cast<memref::StoreOp>(loadUser)) {
-            if (storeOp.getValue() != loadOp.getResult())
-              continue;
-            /// Found a store of the loaded value - check if dest is an alloca
-            if (auto outerAlloca =
-                    storeOp.getMemref().getDefiningOp<memref::AllocaOp>()) {
-              /// Skip if it's the same as our wrapper
-              if (outerAlloca.getResult() == pattern.wrapperAlloca)
-                continue;
-              pattern.outerWrapperAliases.push_back(outerAlloca.getResult());
-              ARTS_DEBUG("  Found outer wrapper alias: " << outerAlloca);
-            }
-          }
-        }
-      }
-    }
-  }
+  collectOuterWrapperAliases(pattern);
 
   return pattern;
 }
@@ -704,15 +684,15 @@ RaiseMemRefDimensionalityPass::detectPattern(Value alloc) {
 ///===----------------------------------------------------------------------===///
 
 void RaiseMemRefDimensionalityPass::collectAllAccesses(AllocPattern &pattern) {
-  SmallVector<Value> roots;
+  llvm::SetVector<Value> roots;
   if (pattern.wrapperAlloca)
-    roots.push_back(pattern.wrapperAlloca);
-  roots.push_back(pattern.rootAlloc);
+    roots.insert(pattern.wrapperAlloca);
+  roots.insert(pattern.rootAlloc);
 
   /// Add outer wrapper aliases as roots - element accesses may come through
   /// these after inlining alloc_Nd functions
   for (Value outerWrapper : pattern.outerWrapperAliases)
-    roots.push_back(outerWrapper);
+    roots.insert(outerWrapper);
 
   for (Value root : roots) {
     if (!root)
@@ -944,14 +924,8 @@ std::optional<TraceResult>
 RaiseMemRefDimensionalityPass::traceToPattern(Value val, AllocPattern &pattern) {
   TraceResult result;
 
-  /// Direct match to root
-  if (val == pattern.rootAlloc) {
-    result.canonicalSource = pattern.rootAlloc;
-    return result;
-  }
-
-  /// Direct match to wrapper
-  if (val == pattern.wrapperAlloca) {
+  /// Direct match to root or any alias wrapper that resolves to it.
+  if (isPatternAliasRoot(val, pattern)) {
     result.canonicalSource = pattern.rootAlloc;
     return result;
   }
@@ -1001,6 +975,59 @@ RaiseMemRefDimensionalityPass::traceValueToPattern(Value val, AllocPattern &patt
   }
 
   return std::nullopt;
+}
+
+bool RaiseMemRefDimensionalityPass::isPatternAliasRoot(
+    Value val, const AllocPattern &pattern) const {
+  if (!val)
+    return false;
+  if (val == pattern.rootAlloc || val == pattern.wrapperAlloca)
+    return true;
+  return llvm::is_contained(pattern.outerWrapperAliases, val);
+}
+
+void RaiseMemRefDimensionalityPass::collectOuterWrapperAliases(
+    AllocPattern &pattern) {
+  if (!pattern.wrapperAlloca)
+    return;
+
+  llvm::SetVector<Value> discovered;
+  llvm::SetVector<Value> worklist;
+  worklist.insert(pattern.wrapperAlloca);
+
+  while (!worklist.empty()) {
+    Value wrapper = worklist.pop_back_val();
+
+    for (Operation *wrapperUser : wrapper.getUsers()) {
+      auto loadOp = dyn_cast<memref::LoadOp>(wrapperUser);
+      if (!loadOp || loadOp.getMemref() != wrapper)
+        continue;
+
+      /// This load returns the root allocation value. Track any additional
+      /// wrapper allocas that store the same loaded value so alias chains of
+      /// arbitrary depth continue to trace back to the canonical root.
+      for (Operation *loadUser : loadOp.getResult().getUsers()) {
+        auto storeOp = dyn_cast<memref::StoreOp>(loadUser);
+        if (!storeOp || storeOp.getValue() != loadOp.getResult())
+          continue;
+
+        Value outerWrapper = storeOp.getMemref();
+        auto outerType = dyn_cast<MemRefType>(outerWrapper.getType());
+        if (!outerType || outerType.getRank() != 0 ||
+            !isa<MemRefType>(outerType.getElementType()))
+          continue;
+        if (outerWrapper == pattern.wrapperAlloca)
+          continue;
+
+        if (discovered.insert(outerWrapper)) {
+          worklist.insert(outerWrapper);
+          ARTS_DEBUG("  Found outer wrapper alias: " << outerWrapper);
+        }
+      }
+    }
+  }
+
+  pattern.outerWrapperAliases.assign(discovered.begin(), discovered.end());
 }
 
 ///===----------------------------------------------------------------------===///
@@ -1133,36 +1160,10 @@ LogicalResult RaiseMemRefDimensionalityPass::transformPattern(AllocPattern &patt
   /// dealloc %rootAlloc
   handleDeallocations(pattern, ndAlloc, builder, toRemove, localDomInfo);
 
-  /// 6. Replace polygeist.memref2pointer (NULL CHECKS)
-  /// Handle uses of rootAlloc in null check patterns:
-  /// %ptr = polygeist.memref2pointer %alloc : memref<?x...> to !llvm.ptr
-  /// %cmp = llvm.icmp "eq" %ptr, %null : !llvm.ptr
-  for (Operation *user :
-       llvm::make_early_inc_range(pattern.rootAlloc.getUsers())) {
-    if (auto m2p = dyn_cast<polygeist::Memref2PointerOp>(user)) {
-      builder.setInsertionPoint(m2p);
-      auto newM2P = builder.create<polygeist::Memref2PointerOp>(
-          m2p.getLoc(), m2p.getType(), ndAlloc);
-      m2p.replaceAllUsesWith(newM2P.getResult());
-      toRemove.insert(m2p);
-      ARTS_DEBUG("  Replaced memref2pointer for null check");
-    }
-  }
-
-  /// Also handle via wrapper if applicable
-  if (pattern.wrapperAlloca) {
-    for (Operation *user :
-         llvm::make_early_inc_range(pattern.wrapperAlloca.getUsers())) {
-      if (auto m2p = dyn_cast<polygeist::Memref2PointerOp>(user)) {
-        builder.setInsertionPoint(m2p);
-        auto newM2P = builder.create<polygeist::Memref2PointerOp>(
-            m2p.getLoc(), m2p.getType(), ndAlloc);
-        m2p.replaceAllUsesWith(newM2P.getResult());
-        toRemove.insert(m2p);
-        ARTS_DEBUG("  Replaced memref2pointer (wrapper) for null check");
-      }
-    }
-  }
+  /// 6. Replace traced memref-to-pointer conversions before recursive cleanup.
+  /// Null checks and other pointer-based consumers often use values loaded
+  /// through wrapper alias chains instead of the root allocation directly.
+  rewriteTracedMemref2PointerUses(pattern, ndAlloc, builder, toRemove);
 
   /// 7. Mark old structures for removal
   /// For N-level nesting, we need to remove ALL init loops, not just the
@@ -1208,6 +1209,54 @@ LogicalResult RaiseMemRefDimensionalityPass::transformPattern(AllocPattern &patt
 
   ARTS_DEBUG("  Marked " << toRemove.size() << " operations for removal");
   return success();
+}
+
+void RaiseMemRefDimensionalityPass::rewriteTracedMemref2PointerUses(
+    AllocPattern &pattern, Value ndAlloc, OpBuilder &builder,
+    llvm::DenseSet<Operation *> &toRemove) {
+  auto parentFunc =
+      pattern.rootAlloc.getDefiningOp()->getParentOfType<func::FuncOp>();
+  if (!parentFunc)
+    return;
+
+  SmallVector<polygeist::Memref2PointerOp> memrefToPointers;
+  parentFunc.walk([&](polygeist::Memref2PointerOp op) {
+    memrefToPointers.push_back(op);
+  });
+
+  for (polygeist::Memref2PointerOp m2p : memrefToPointers) {
+    auto sourceType = dyn_cast<MemRefType>(m2p.getSource().getType());
+    if (!sourceType)
+      continue;
+
+    /// Wrapper allocas themselves are just stack slots that hold memref values.
+    /// Rewriting them to the canonical N-D allocation would change semantics.
+    if (sourceType.getRank() == 0 && isa<MemRefType>(sourceType.getElementType()))
+      continue;
+
+    auto traceResult = traceToPattern(m2p.getSource(), pattern);
+    if (!traceResult)
+      continue;
+
+    /// We currently rewrite root-equivalent aliases. Sliced memref-to-pointer
+    /// users need explicit subview materialization, which is a separate path.
+    if (!traceResult->indices.empty()) {
+      ARTS_DEBUG("  Skipping traced memref2pointer with non-empty indices");
+      continue;
+    }
+
+    builder.setInsertionPoint(m2p);
+    auto newM2P = builder.create<polygeist::Memref2PointerOp>(
+        m2p.getLoc(), m2p.getType(), ndAlloc);
+    m2p.replaceAllUsesWith(newM2P.getResult());
+    toRemove.insert(m2p);
+    ARTS_DEBUG("  Replaced traced memref2pointer through alias chain");
+
+    for (Operation *chainOp : traceResult->chainOps) {
+      if (chainOp && chainOp->use_empty())
+        toRemove.insert(chainOp);
+    }
+  }
 }
 
 ///===----------------------------------------------------------------------===///
@@ -1766,12 +1815,9 @@ bool RaiseMemRefDimensionalityPass::tracesToRootAlloc(Value val,
   Value current = val;
 
   for (int i = 0; i < MAX_TRACE_DEPTH; ++i) {
-    /// Check if we've reached the root
-    if (current == pattern.rootAlloc)
-      return true;
-
-    /// Check if we've reached the wrapper (which holds rootAlloc)
-    if (pattern.wrapperAlloca && current == pattern.wrapperAlloca)
+    /// Check if we've reached the root or any alias wrapper that resolves to
+    /// it.
+    if (isPatternAliasRoot(current, pattern))
       return true;
 
     /// Try to trace through a load

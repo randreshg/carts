@@ -1011,6 +1011,8 @@ def RecordDepOp
     - Signals the EDT slot with db_ptr + byte_offset as ARTS_PTR
     - Preserves the original DB GUID for tracking
     When byte_offset is 0, standard artsRecordDep is used.
+
+    The optional dep_flags array stores per-datablock advisory runtime flags.
   }];
   let arguments = (ins
     I64:$edt_guid,
@@ -1019,7 +1021,8 @@ def RecordDepOp
     Variadic<Index>:$byte_offsets,
     Variadic<Index>:$byte_sizes,
     DefaultValuedAttr<DepAccessModeAttr, "::mlir::arts::DepAccessMode::direct">:$access_mode,
-    OptionalAttr<DenseI32ArrayAttr>:$acquire_modes
+    OptionalAttr<DenseI32ArrayAttr>:$acquire_modes,
+    OptionalAttr<DenseI32ArrayAttr>:$dep_flags
   );
   let hasVerifier = 1;
   let assemblyFormat = [{

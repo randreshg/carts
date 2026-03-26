@@ -262,6 +262,23 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
       minItersPerWorker = std::max<int64_t>(minItersPerWorker, 12);
   }
 
+  if (isStencilPattern && !workerCfg.internode) {
+    /// Intranode stencil kernels need enough owned outer iterations per worker
+    /// to keep halo-expanded DB windows aligned with a stable owner span.
+    /// Nested-work boosting is still useful for performance modeling, but it
+    /// must not force the outer owner span below a conservative floor.
+    constexpr int64_t kMinStencilOwnedOuterIters = 8;
+    int64_t maxWorkersByOwnedSpan =
+        std::max<int64_t>(1, tripCount / kMinStencilOwnedOuterIters);
+    if (workerCfg.totalWorkers > maxWorkersByOwnedSpan) {
+      int64_t desiredWorkers = maxWorkersByOwnedSpan;
+      int64_t blockSize = (tripCount + desiredWorkers - 1) / desiredWorkers;
+      blockSize = std::max<int64_t>(1, blockSize);
+      if (blockSize > 1)
+        return blockSize;
+    }
+  }
+
   if (effectiveTripCount >= workerCfg.totalWorkers * minItersPerWorker)
     return std::nullopt;
 
