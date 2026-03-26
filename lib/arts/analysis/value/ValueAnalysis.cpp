@@ -981,7 +981,8 @@ Value ValueAnalysis::traceValueToDominating(Value value,
   }
   if (auto tsOp = dyn_cast<polygeist::TypeSizeOp>(defOp)) {
     builder.setInsertionPoint(insertBefore);
-    return builder.create<polygeist::TypeSizeOp>(loc, tsOp.getType(), tsOp.getSourceAttr());
+    return builder.create<polygeist::TypeSizeOp>(loc, tsOp.getType(),
+                                                 tsOp.getSourceAttr());
   }
 
   return nullptr;

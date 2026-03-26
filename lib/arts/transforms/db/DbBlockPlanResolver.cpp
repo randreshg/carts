@@ -60,7 +60,8 @@ static Value overdecompose2DStencilBlockSize(Value blockSize,
 }
 
 static Value computeDefaultBlockSize(DbAllocOp allocOp, OpBuilder &builder,
-                                     Location loc, bool useNodes) {
+                                     Location loc, bool useNodes,
+                                     bool clampStencilFallbackWorkers) {
   if (allocOp.getElementSizes().empty())
     return nullptr;
 
@@ -78,6 +79,21 @@ static Value computeDefaultBlockSize(DbAllocOp allocOp, OpBuilder &builder,
   Value workers = builder.create<arith::IndexCastUIOp>(
       loc, builder.getIndexType(), parallelI32);
   Value workersClamped = builder.create<arith::MaxUIOp>(loc, workers, one);
+
+  /// Keep fallback stencil block sizing aligned with the same active-worker
+  /// space that ForOpt uses for intranode stencil coarsening. Without this
+  /// cap, >32-thread single-node builds can keep 8-row task chunks while
+  /// shrinking DB blocks to 3 rows, which widens dependency windows and breaks
+  /// Jacobi-style halo schedules.
+  if (clampStencilFallbackWorkers && !useNodes) {
+    Value minOwnedOuterIters = arts::createConstantIndex(builder, loc, 8);
+    Value maxWorkersByOwnedSpan =
+        builder.create<arith::DivUIOp>(loc, elemSize, minOwnedOuterIters);
+    maxWorkersByOwnedSpan =
+        builder.create<arith::MaxUIOp>(loc, maxWorkersByOwnedSpan, one);
+    workersClamped = builder.create<arith::MinUIOp>(
+        loc, workersClamped, maxWorkersByOwnedSpan);
+  }
 
   Value workersMinusOne =
       builder.create<arith::SubIOp>(loc, workersClamped, one);
@@ -562,8 +578,9 @@ mlir::arts::resolveDbBlockPlan(const DbBlockPlanInput &input) {
     }
 
     if (!blockSizeForPlan) {
-      blockSizeForPlan = computeDefaultBlockSize(input.allocOp, builder, loc,
-                                                 input.useNodesForFallback);
+      blockSizeForPlan = computeDefaultBlockSize(
+          input.allocOp, builder, loc, input.useNodesForFallback,
+          input.clampStencilFallbackWorkers);
       if (shouldOverdecompose2DStencilFallback(
               input.allocOp, input.acquireInfos, result.blockSizes)) {
         blockSizeForPlan =

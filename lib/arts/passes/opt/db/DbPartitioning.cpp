@@ -2228,6 +2228,7 @@ bool DbPartitioningPass::resolveBlockPlanSizes(
     DbAllocNode *allocNode, DbHeuristics &heuristics, OpBuilder &builder,
     Location loc) {
   bool useNodesForFallback = false;
+  bool clampStencilFallbackWorkers = false;
   if (AM) {
     AbstractMachine &machine = AM->getAbstractMachine();
     if (machine.hasValidNodeCount() && machine.getNodeCount() > 1) {
@@ -2239,6 +2240,16 @@ bool DbPartitioningPass::resolveBlockPlanSizes(
       useNodesForFallback = (decision.mode != PartitionMode::stencil);
     }
   }
+  if (decision.mode == PartitionMode::stencil) {
+    bool hasInternodeUsers =
+        llvm::any_of(acquireInfos, [](const AcquirePartitionInfo &info) {
+      if (!info.acquire)
+        return false;
+      auto edt = info.acquire->getParentOfType<EdtOp>();
+      return edt && edt.getConcurrency() == EdtConcurrency::internode;
+    });
+    clampStencilFallbackWorkers = !hasInternodeUsers;
+  }
 
   DbBlockPlanInput blockPlanInput{allocOp,
                                   acquireInfos,
@@ -2247,7 +2258,8 @@ bool DbPartitioningPass::resolveBlockPlanSizes(
                                   blockSizesForNDBlock,
                                   &builder,
                                   loc,
-                                  useNodesForFallback};
+                                  useNodesForFallback,
+                                  clampStencilFallbackWorkers};
   auto blockPlanOr = resolveDbBlockPlan(blockPlanInput);
   if (failed(blockPlanOr) || blockPlanOr->blockSizes.empty()) {
     ARTS_DEBUG("  No block-plan sizes available - falling back to coarse");

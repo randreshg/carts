@@ -790,7 +790,9 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
   SmallVector<Value> depGuids, boundsValids;
   SmallVector<Value> byteOffsets, byteSizes;
   SmallVector<int32_t> acquireModes;
+  SmallVector<int32_t> depFlags;
   bool hasEsdDeps = false;
+  bool hasDepFlags = false;
 
   for (Value dep : deps) {
     /// Handle both DbAcquireOp and DepDbAcquireOp as dependency sources, even
@@ -900,6 +902,19 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
         dbMode = allocMode;
     }
     acquireModes.push_back(static_cast<int32_t>(dbMode));
+
+    int32_t depFlagBits = 0;
+    if (allocForHint && hasDistributedDbAllocation(allocForHint.getOperation()) &&
+        dbMode == DbMode::read) {
+      bool duplicateSafe = allocForHint.getDbMode() == DbMode::read ||
+                           allocForHint->hasAttr(
+                               AttrNames::Operation::ReadOnlyAfterInit);
+      if (duplicateSafe) {
+        depFlagBits = 1;
+        hasDepFlags = true;
+      }
+    }
+    depFlags.push_back(depFlagBits);
   }
 
   /// Create dependency management ops with appropriate access mode
@@ -911,6 +926,11 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     acquireAttr =
         DenseI32ArrayAttr::get(AC->getBuilder().getContext(), acquireModes);
 
+  DenseI32ArrayAttr depFlagsAttr;
+  if (hasDepFlags)
+    depFlagsAttr =
+        DenseI32ArrayAttr::get(AC->getBuilder().getContext(), depFlags);
+
   /// Only include byte offsets if we have ESD dependencies
   SmallVector<Value> finalByteOffsets, finalByteSizes;
   if (hasEsdDeps) {
@@ -920,7 +940,7 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
 
   AC->create<RecordDepOp>(loc, edtGuid, depGuids, boundsValids,
                           finalByteOffsets, finalByteSizes, modeAttr,
-                          acquireAttr);
+                          acquireAttr, depFlagsAttr);
 
   return success();
 }

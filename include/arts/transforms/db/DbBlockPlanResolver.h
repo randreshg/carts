@@ -28,6 +28,7 @@ struct DbBlockPlanInput {
   OpBuilder *builder = nullptr;
   Location loc;
   bool useNodesForFallback = false;
+  bool clampStencilFallbackWorkers = false;
 };
 
 struct DbBlockPlanResult {

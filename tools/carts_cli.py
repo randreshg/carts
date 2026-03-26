@@ -41,6 +41,8 @@ from scripts.clean import run_local_clean, run_full_clean
 from scripts.update import update as update_cmd
 from scripts.examples import examples_app
 from scripts.install import install as install_cmd
+from scripts.triage import triage_benchmark
+from scripts.agents import agents_app
 
 
 # ============================================================================
@@ -86,6 +88,7 @@ app.add_typer(docker_app, name="docker")
 
 # Examples subcommand group
 app.add_typer(examples_app, name="examples", context_settings=HELP_CTX)
+app.add_typer(agents_app, name="agents", context_settings=HELP_CTX)
 
 
 # ============================================================================
@@ -113,6 +116,7 @@ app.command(
 )(clang)
 
 app.command(name="mlir-translate", context_settings=PASSTHROUGH_NO_INTERSPERSE_CTX)(mlir_translate_cmd)
+app.command(name="triage-benchmark")(triage_benchmark)
 
 # Testing
 app.command(name="test")(test_cmd)

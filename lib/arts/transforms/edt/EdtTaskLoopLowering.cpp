@@ -74,37 +74,37 @@ TaskLoopLoweringResult EdtTaskLoopLowering::lowerBlockStyle(
   result.iterStart = result.insideBounds.iterStart;
   result.globalBase = mapped.workerBaseOffset;
 
-  Value loopLower = zero;
-  Value loopUpper = result.insideBounds.iterCount;
-  if (input.useAlignedLowerBound) {
-    Value stepClamped =
-        input.AC->create<arith::MaxUIOp>(input.loc, mapped.step, one);
+  /// Derive the task-local loop window from the true loop bounds and the
+  /// worker's aligned base offset. This remains correct for the aligned-down
+  /// chunking case and simplifies to the original [0, iterCount) window when
+  /// the worker base already matches the logical lower bound.
+  Value stepClamped =
+      input.AC->create<arith::MaxUIOp>(input.loc, mapped.step, one);
 
-    auto clampNonNeg = [&](Value v) -> Value {
-      Value isNeg = input.AC->create<arith::CmpIOp>(
-          input.loc, arith::CmpIPredicate::slt, v, zero);
-      return input.AC->create<arith::SelectOp>(input.loc, isNeg, zero, v);
-    };
-    auto ceilDiv = [&](Value num, Value denom) -> Value {
-      Value denomMinusOne =
-          input.AC->create<arith::SubIOp>(input.loc, denom, one);
-      Value adjusted =
-          input.AC->create<arith::AddIOp>(input.loc, num, denomMinusOne);
-      return input.AC->create<arith::DivUIOp>(input.loc, adjusted, denom);
-    };
+  auto clampNonNeg = [&](Value v) -> Value {
+    Value isNeg = input.AC->create<arith::CmpIOp>(
+        input.loc, arith::CmpIPredicate::slt, v, zero);
+    return input.AC->create<arith::SelectOp>(input.loc, isNeg, zero, v);
+  };
+  auto ceilDiv = [&](Value num, Value denom) -> Value {
+    Value denomMinusOne =
+        input.AC->create<arith::SubIOp>(input.loc, denom, one);
+    Value adjusted =
+        input.AC->create<arith::AddIOp>(input.loc, num, denomMinusOne);
+    return input.AC->create<arith::DivUIOp>(input.loc, adjusted, denom);
+  };
 
-    Value diffLower = input.AC->create<arith::SubIOp>(
-        input.loc, mapped.lowerBound, mapped.workerBaseOffset);
-    Value diffUpper = input.AC->create<arith::SubIOp>(
-        input.loc, mapped.upperBound, mapped.workerBaseOffset);
-    Value diffLowerPos = clampNonNeg(diffLower);
-    Value diffUpperPos = clampNonNeg(diffUpper);
+  Value diffLower = input.AC->create<arith::SubIOp>(
+      input.loc, mapped.lowerBound, mapped.workerBaseOffset);
+  Value diffUpper = input.AC->create<arith::SubIOp>(
+      input.loc, mapped.upperBound, mapped.workerBaseOffset);
+  Value diffLowerPos = clampNonNeg(diffLower);
+  Value diffUpperPos = clampNonNeg(diffUpper);
 
-    loopLower = ceilDiv(diffLowerPos, stepClamped);
-    loopUpper = ceilDiv(diffUpperPos, stepClamped);
-    loopUpper = input.AC->create<arith::MinUIOp>(input.loc, loopUpper,
-                                                 result.insideBounds.iterCount);
-  }
+  Value loopLower = ceilDiv(diffLowerPos, stepClamped);
+  Value loopUpper = ceilDiv(diffUpperPos, stepClamped);
+  loopUpper = input.AC->create<arith::MinUIOp>(input.loc, loopUpper,
+                                               result.insideBounds.iterCount);
 
   result.iterLoop =
       input.AC->create<scf::ForOp>(input.loc, loopLower, loopUpper, one);
