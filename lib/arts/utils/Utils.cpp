@@ -42,6 +42,10 @@ Value createOneIndex(OpBuilder &builder, Location loc) {
   return createConstantIndex(builder, loc, 1);
 }
 
+Value createCurrentNodeRoute(OpBuilder &builder, Location loc) {
+  return builder.create<arith::ConstantIntOp>(loc, kCurrentNodeRoute, 32);
+}
+
 ///===----------------------------------------------------------------------===///
 /// ARTS Runtime Query Utilities
 ///===----------------------------------------------------------------------===///

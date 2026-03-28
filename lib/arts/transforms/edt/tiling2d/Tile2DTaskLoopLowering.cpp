@@ -148,7 +148,7 @@ public:
         EdtTaskLoopLowering::planAcquireRewrite(input, chunkOffset);
     result.tiling2DGrid = DistributionHeuristics::getTiling2DWorkerGrid(
         input.AC, input.loc, input.taskWorkerId, input.totalWorkers,
-        input.workersPerNode);
+        input.workersPerNode, input.depPattern);
     return result;
   }
 
@@ -157,7 +157,7 @@ public:
         const TaskLoopLoweringMappedValues &mapped) const override {
     Tiling2DWorkerGrid grid = DistributionHeuristics::getTiling2DWorkerGrid(
         input.AC, input.loc, input.taskWorkerId, input.totalWorkers,
-        input.workersPerNode);
+        input.workersPerNode, input.depPattern);
 
     TaskLoopLoweringResult result = lowerBlockStyle(input, mapped);
     result.innerStripeLane = grid.colWorkerId;

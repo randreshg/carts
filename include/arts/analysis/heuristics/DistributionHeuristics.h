@@ -124,7 +124,9 @@
 namespace mlir {
 namespace arts {
 
+class AnalysisManager;
 class ArtsCodegen;
+class DbAnalysis;
 class LoopAnalysis;
 
 /// H2: Distribution strategy kinds
@@ -185,6 +187,19 @@ struct Tiling2DWorkerGrid {
   Value colWorkerId;
 };
 
+/// Shared chunking plan for lowering one distributed arts.for loop.
+///
+/// This is the H2 policy handoff from heuristics into ForLowering.
+struct LoopChunkPlan {
+  Value blockSize;
+  Value chunkLowerBound;
+  Value totalIterations;
+  Value totalChunks;
+  bool useAlignedLowerBound = false;
+  bool useRuntimeBlockAlignment = false;
+  std::optional<int64_t> alignmentBlockSize;
+};
+
 class DistributionHeuristics {
 public:
   /// H2.1: Analyze machine topology -> distribution strategy
@@ -192,6 +207,18 @@ public:
   static DistributionStrategy
   analyzeStrategy(EdtConcurrency concurrency,
                   const AbstractMachine *machine = nullptr);
+
+  /// Resolve the effective lowering strategy for one arts.for by combining the
+  /// parent EDT topology with any distribution_kind contract stamped on the
+  /// loop itself.
+  static DistributionStrategy resolveLoweringStrategy(EdtOp originalParallel,
+                                                      ForOp forOp);
+
+  /// Resolve the effective distribution pattern for one arts.for.
+  /// Prefer loop-local stamped attrs, then DB analysis, then parent EDT attrs.
+  static std::optional<EdtDistributionPattern>
+  resolveDistributionPattern(AnalysisManager *AM, ForOp forOp,
+                             EdtOp originalParallel);
 
   /// Select IR distribution kind from machine strategy + detected loop pattern.
   static EdtDistributionKind
@@ -211,7 +238,9 @@ public:
                                           Value workerId, Value totalWorkers,
                                           Value workersPerNode,
                                           Value totalIterations,
-                                          Value totalChunks, Value blockSize);
+                                          Value totalChunks, Value blockSize,
+                                          std::optional<ArtsDepPattern>
+                                              depPattern = std::nullopt);
 
   /// H2.3: Recompute bounds inside task EDT (handles SSA dominance)
   /// Clones loop bounds into current region, recomputes distribution.
@@ -220,15 +249,19 @@ public:
       ArtsCodegen *AC, Location loc, const DistributionStrategy &strategy,
       Value workerId, Value insideTotalWorkers, Value workersPerNode,
       Value upperBound, Value lowerBound, Value loopStep, Value blockSize,
-      std::optional<int64_t> alignmentBlockSize, bool useRuntimeBlockAlignment);
+      std::optional<int64_t> alignmentBlockSize,
+      bool useRuntimeBlockAlignment,
+      std::optional<ArtsDepPattern> depPattern = std::nullopt);
 
-  /// Compute DB alignment block size from parallel EDT dependencies.
+  /// Compute DB alignment block size from the loop-carried owner dimension of
+  /// parallel EDT dependencies.
   /// For internode: ceil(arrayDim / numNodes) for ALL arrays.
   /// For intranode: align stencil arrays and write-capable arrays whose
   /// element count is not evenly divisible by worker count.
-  static Value computeDbAlignmentBlockSize(EdtOp parallelEdt,
+  static Value computeDbAlignmentBlockSize(ForOp forOp, EdtOp parallelEdt,
                                            Value numPartitions, ArtsCodegen *AC,
-                                           Location loc);
+                                           Location loc,
+                                           DbAnalysis *dbAnalysis = nullptr);
 
   /// Get workers-per-node runtime Value for internode EDTs.
   static Value getWorkersPerNode(OpBuilder &builder, Location loc,
@@ -261,7 +294,9 @@ public:
   static Value getForDispatchWorkerCount(ArtsCodegen *AC, Location loc,
                                          EdtOp parallelEdt,
                                          const DistributionStrategy &strategy,
-                                         Value totalChunks);
+                                         Value totalChunks,
+                                         std::optional<ArtsDepPattern>
+                                             depPattern = std::nullopt);
 
   /// Resolve default EDT parallelism from machine topology.
   /// Used by passes to avoid duplicating node/worker resolution logic.
@@ -280,6 +315,12 @@ public:
   computeCoarsenedBlockHint(ForOp forOp, LoopAnalysis &loopAnalysis,
                             const WorkerConfig &workerCfg);
 
+  /// Plan block sizing and chunk alignment for one lowered arts.for.
+  /// This centralizes H2 chunking policy so ForLowering only consumes the
+  /// resolved block/chunk plan.
+  static LoopChunkPlan planLoopChunking(ArtsCodegen *AC, ForOp forOp,
+                                        Value runtimeBlockSizeHint = Value());
+
   /// Choose compile-time column worker count for tiling_2d.
   /// Defaults to a near-square divisor of totalWorkers. When workersPerNode is
   /// provided, prefer divisors that keep a row-worker group within one node
@@ -288,12 +329,21 @@ public:
   chooseTiling2DColumnWorkers(int64_t totalWorkers,
                               std::optional<int64_t> workersPerNode);
 
+  /// Choose compile-time column worker count for wavefront_2d tiling.
+  /// Unlike the generic tiling heuristic, this prefers a wider column
+  /// decomposition so weighted wavefront frontiers can saturate more workers.
+  static int64_t
+  chooseWavefront2DColumnWorkers(int64_t totalWorkers,
+                                 std::optional<int64_t> workersPerNode);
+
   /// Compute row/column worker decomposition for tiling_2d.
   /// Falls back to rowWorkers=totalWorkers, colWorkers=1 when totalWorkers is
   /// not compile-time constant.
   static Tiling2DWorkerGrid
   getTiling2DWorkerGrid(ArtsCodegen *AC, Location loc, Value workerId,
-                        Value totalWorkers, Value workersPerNode = Value());
+                        Value totalWorkers, Value workersPerNode = Value(),
+                        std::optional<ArtsDepPattern> depPattern =
+                            std::nullopt);
 
 private:
   /// Balanced floor+remainder distribution

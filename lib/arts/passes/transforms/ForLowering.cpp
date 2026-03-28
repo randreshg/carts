@@ -40,6 +40,7 @@
 #include "arts/transforms/edt/EdtRewriter.h"
 #include "arts/transforms/edt/EdtTaskLoopLowering.h"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
@@ -54,6 +55,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
 
@@ -222,45 +224,49 @@ planAcquireRewrite(AcquireRewritePlanningInput input) {
         if (input.distributionKind == DistributionKind::Tiling2D &&
             elemSizes.size() > 1 && !isSingleElement && input.tiling2DGrid &&
             input.tiling2DGrid->colWorkers) {
-          unsigned secondaryOwnerDim = 1;
-          if (rewriteContract.ownerDims.size() > 1 &&
-              rewriteContract.ownerDims[1] >= 0 &&
-              static_cast<size_t>(rewriteContract.ownerDims[1]) <
-                  elemSizes.size()) {
-            secondaryOwnerDim =
-                static_cast<unsigned>(rewriteContract.ownerDims[1]);
-          }
-
-          Value totalCols =
-              input.AC->castToIndex(elemSizes[secondaryOwnerDim], input.loc);
           Value colWorkers =
               input.AC->castToIndex(input.tiling2DGrid->colWorkers, input.loc);
-          Value colWorkerId =
-              input.AC->castToIndex(input.tiling2DGrid->colWorkerId, input.loc);
+          auto colWorkersConst =
+              ValueAnalysis::tryFoldConstantIndex(colWorkers);
+          if (!colWorkersConst || *colWorkersConst > 1) {
+            unsigned secondaryOwnerDim = 1;
+            if (rewriteContract.ownerDims.size() > 1 &&
+                rewriteContract.ownerDims[1] >= 0 &&
+                static_cast<size_t>(rewriteContract.ownerDims[1]) <
+                    elemSizes.size()) {
+              secondaryOwnerDim =
+                  static_cast<unsigned>(rewriteContract.ownerDims[1]);
+            }
 
-          Value colWorkersMinusOne =
-              input.AC->create<arith::SubIOp>(input.loc, colWorkers, one);
-          Value colAdjusted = input.AC->create<arith::AddIOp>(
-              input.loc, totalCols, colWorkersMinusOne);
-          Value colChunk = input.AC->create<arith::DivUIOp>(
-              input.loc, colAdjusted, colWorkers);
-          Value colOffset =
-              input.AC->create<arith::MulIOp>(input.loc, colWorkerId, colChunk);
+            Value totalCols =
+                input.AC->castToIndex(elemSizes[secondaryOwnerDim], input.loc);
+            Value colWorkerId = input.AC->castToIndex(
+                input.tiling2DGrid->colWorkerId, input.loc);
 
-          Value colNeedZero = input.AC->create<arith::CmpIOp>(
-              input.loc, arith::CmpIPredicate::uge, colOffset, totalCols);
-          Value colRemaining =
-              input.AC->create<arith::SubIOp>(input.loc, totalCols, colOffset);
-          Value colRemainingNonNeg = input.AC->create<arith::SelectOp>(
-              input.loc, colNeedZero, zero, colRemaining);
-          Value colCount = input.AC->create<arith::MinUIOp>(input.loc, colChunk,
-                                                            colRemainingNonNeg);
+            Value colWorkersMinusOne =
+                input.AC->create<arith::SubIOp>(input.loc, colWorkers, one);
+            Value colAdjusted = input.AC->create<arith::AddIOp>(
+                input.loc, totalCols, colWorkersMinusOne);
+            Value colChunk = input.AC->create<arith::DivUIOp>(
+                input.loc, colAdjusted, colWorkers);
+            Value colOffset = input.AC->create<arith::MulIOp>(
+                input.loc, colWorkerId, colChunk);
 
-          extraOffsets.push_back(colOffset);
-          extraSizes.push_back(colCount);
-          extraHintSizes.push_back(colCount);
-          dimensionExtents.push_back(totalCols);
-          rewriteContract.preserveParentDepRange = false;
+            Value colNeedZero = input.AC->create<arith::CmpIOp>(
+                input.loc, arith::CmpIPredicate::uge, colOffset, totalCols);
+            Value colRemaining = input.AC->create<arith::SubIOp>(
+                input.loc, totalCols, colOffset);
+            Value colRemainingNonNeg = input.AC->create<arith::SelectOp>(
+                input.loc, colNeedZero, zero, colRemaining);
+            Value colCount = input.AC->create<arith::MinUIOp>(
+                input.loc, colChunk, colRemainingNonNeg);
+
+            extraOffsets.push_back(colOffset);
+            extraSizes.push_back(colCount);
+            extraHintSizes.push_back(colCount);
+            dimensionExtents.push_back(totalCols);
+            rewriteContract.preserveParentDepRange = false;
+          }
         }
       }
     }
@@ -414,6 +420,7 @@ public:
     lowerBound = forOp.getLowerBound()[0];
     upperBound = forOp.getUpperBound()[0];
     loopStep = forOp.getStep()[0];
+    depPattern = getEffectiveDepPattern(forOp.getOperation());
     totalWorkers = numWorkers;
     initialize();
   }
@@ -432,6 +439,7 @@ public:
   Value runtimeBlockSizeHint;
   /// Distribution information
   Value blockSize, totalWorkers, totalIterations, totalChunks;
+  std::optional<ArtsDepPattern> depPattern;
 
   /// Distribution strategy and bounds from DistributionHeuristics
   DistributionStrategy strategy;
@@ -546,8 +554,26 @@ static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
     Region *allocaRegion = allocaOp->getParentRegion();
     bool allocaVisible =
         allocaRegion && allocaRegion->isAncestor(taskEdtRegion);
-    if (hasStoreOutsideEdt && !hasStoreInEdt && allocaVisible)
+
+    /// Clone safe initialization stores for this alloca when available.
+    SmallVector<memref::StoreOp, 4> initStores;
+    bool hasUnsafeStore = false;
+    for (Operation *user : allocaOp->getUsers()) {
+      if (auto store = dyn_cast<memref::StoreOp>(user)) {
+        if (store.getMemRef() != originalMem)
+          continue;
+        if (!canCloneAllocaInitStore(store, originalMem)) {
+          hasUnsafeStore = true;
+          break;
+        }
+        initStores.push_back(store);
+      }
+    }
+
+    if (hasStoreOutsideEdt && !hasStoreInEdt && allocaVisible &&
+        (hasUnsafeStore || initStores.empty())) {
       continue;
+    }
 
     Operation *clonedOp = builder.clone(*allocaOp.getOperation(), mapper);
     auto newAlloca = cast<memref::AllocaOp>(clonedOp);
@@ -558,32 +584,44 @@ static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
 
     mapper.map(originalMem, clonedMem);
 
-    /// Clone safe initialization stores for this alloca when available.
-    SmallVector<memref::StoreOp, 4> initStores;
-    bool hasUnsafeStore = false;
-    for (Operation *user : allocaOp->getUsers()) {
-      auto hasLoopAncestor = [&](Operation *op) {
-        return op->getParentOfType<scf::ForOp>() ||
-               op->getParentOfType<scf::IfOp>();
-      };
-      if (auto store = dyn_cast<memref::StoreOp>(user)) {
-        if (store.getMemRef() != originalMem)
-          continue;
-        if (store->getBlock() != allocaOp->getBlock() ||
-            hasLoopAncestor(store.getOperation())) {
-          hasUnsafeStore = true;
-          break;
-        }
-        initStores.push_back(store);
-      }
-    }
-
     if (!hasUnsafeStore && !initStores.empty()) {
-      IRMapping storeMapper;
+      IRMapping storeMapper(mapper);
       storeMapper.map(allocaOp.getResult(), newAlloca.getResult());
+      Operation *insertBefore = newAlloca->getNextNode();
+      func::FuncOp parentFunc = taskEdtRegion->getParentOfType<func::FuncOp>();
+      std::optional<DominanceInfo> domInfo;
+      if (insertBefore && parentFunc)
+        domInfo.emplace(parentFunc);
+
       builder.setInsertionPointAfter(newAlloca);
-      for (memref::StoreOp store : initStores)
-        builder.clone(*store.getOperation(), storeMapper);
+      for (memref::StoreOp store : initStores) {
+        IRMapping thisStoreMapper(storeMapper);
+        bool canCloneStore = true;
+        if (insertBefore && domInfo) {
+          for (Value operand : store->getOperands()) {
+            if (operand == originalMem)
+              continue;
+            Value mapped = thisStoreMapper.lookupOrDefault(operand);
+            if (!mapped) {
+              canCloneStore = false;
+              break;
+            }
+            if (domInfo->properlyDominates(mapped, insertBefore) ||
+                domInfo->dominates(mapped, insertBefore))
+              continue;
+            Value rematerialized = ValueAnalysis::traceValueToDominating(
+                mapped, insertBefore, builder, *domInfo, store.getLoc());
+            if (!rematerialized) {
+              canCloneStore = false;
+              break;
+            }
+            thisStoreMapper.map(operand, rematerialized);
+          }
+        }
+        if (!canCloneStore)
+          continue;
+        builder.clone(*store.getOperation(), thisStoreMapper);
+      }
       builder.setInsertionPointToStart(&taskBlock);
     }
   }
@@ -1012,12 +1050,14 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
     /// actually receive work.
     Value runtimeBlockSize =
         DistributionHeuristics::computeDbAlignmentBlockSize(
-            originalParallel, numDbPartitions, &AC, loc);
+            forOp, originalParallel, numDbPartitions, &AC, loc,
+            AM ? &AM->getDbAnalysis() : nullptr);
     loopInfoStorage.emplace(&AC, forOp, numWorkers, runtimeBlockSize);
     LoopInfo &loopInfo = *loopInfoStorage;
     loopInfo.strategy = strategy;
     dispatchWorkers = DistributionHeuristics::getForDispatchWorkerCount(
-        &AC, loc, originalParallel, loopInfo.strategy, loopInfo.totalChunks);
+        &AC, loc, originalParallel, loopInfo.strategy, loopInfo.totalChunks,
+        loopInfo.depPattern);
 
     /// Allocate reduction accumulators (same as before, but place BEFORE epoch)
     /// Use splitMode=true since we're splitting the parallel EDT and will
@@ -1063,9 +1103,8 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   Value workerIV = workerLoop.getInductionVar();
 
   /// Create task EDT with DB rewiring
-  EdtOp taskEdt = createTaskEdtWithRewiring(
-      &AC, *loopInfoStorage, forOp, workerIV, originalParallel, redInfo);
-  transferOperationContract(forOp.getOperation(), taskEdt.getOperation());
+  createTaskEdtWithRewiring(&AC, *loopInfoStorage, forOp, workerIV,
+                            originalParallel, redInfo);
   if (forEpoch)
     transferOperationContract(forOp.getOperation(), forEpoch->getOperation());
 
@@ -1115,7 +1154,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   loopInfo.bounds = DistributionHeuristics::computeBounds(
       AC, loc, loopInfo.strategy, workerIdPlaceholder, loopInfo.totalWorkers,
       workersPerNode, loopInfo.totalIterations, loopInfo.totalChunks,
-      loopInfo.blockSize);
+      loopInfo.blockSize, loopInfo.depPattern);
 
   Value chunkOffset = loopInfo.bounds.iterStart;
   ValueRange parentDeps = originalParallel.getDependencies();
@@ -1139,6 +1178,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
                                       loc,
                                       loopInfo.strategy,
                                       loopInfo.bounds,
+                                      loopInfo.depPattern,
                                       taskWorkerId,
                                       loopInfo.totalWorkers,
                                       workersPerNode,
@@ -1170,6 +1210,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   /// Acquire worker-local partial accumulator slot for reductions
   SmallVector<Value> reductionTaskDeps;
   DenseMap<Value, uint64_t> reductionVarIndex;
+  std::optional<SmallVector<int64_t, 4>> refinedTaskBlockShape;
 
   for (uint64_t i = 0; i < redInfo.reductionVars.size(); i++) {
     /// Use partialAccumPtrs (from DbAllocOp) instead of partialAccumArgs
@@ -1403,6 +1444,12 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
     auto chunkMode = chunkAcqOp.getPartitionMode();
     AcquireRewriteContract chunkRewriteContract = planningInput.rewriteContract;
+    /// Task-local acquires should inherit the loop's semantic contract when
+    /// their parent acquire does not already carry it. This keeps downstream
+    /// analyses and lowering mode-agnostic: they can reason from the acquire's
+    /// own contract instead of pattern-specific branches in ForLowering.
+    inheritSemanticContractAttrs(forOp.getOperation(),
+                                 chunkAcqOp.getOperation());
     bool shouldMarkStencilCenter =
         chunkRewriteContract.usePartitionSliceAsDepWindow ||
         chunkRewriteContract.applyStencilHalo ||
@@ -1414,6 +1461,94 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         centerOffset =
             std::max<int64_t>(0, -chunkRewriteContract.haloMinOffsets.front());
       setStencilCenterOffset(chunkAcqOp.getOperation(), centerOffset);
+    }
+
+    if (loopInfo.strategy.kind == DistributionKind::Tiling2D &&
+        planningInput.tiling2DGrid) {
+      auto inheritedShape = getStencilBlockShape(chunkAcqOp.getOperation());
+      auto rowWorkersConst = planningInput.tiling2DGrid->rowWorkers
+                                 ? ValueAnalysis::tryFoldConstantIndex(
+                                       AC->castToIndex(
+                                           planningInput.tiling2DGrid
+                                               ->rowWorkers,
+                                           loc))
+                                 : std::nullopt;
+      auto colWorkersConst = planningInput.tiling2DGrid->colWorkers
+                                 ? ValueAnalysis::tryFoldConstantIndex(
+                                       AC->castToIndex(
+                                           planningInput.tiling2DGrid
+                                               ->colWorkers,
+                                           loc))
+                                 : std::nullopt;
+      auto rootAlloc = dyn_cast_or_null<DbAllocOp>(
+          DbUtils::getUnderlyingDbAlloc(chunkAcqOp.getSourcePtr()));
+      if (inheritedShape && rootAlloc) {
+        SmallVector<int64_t, 4> staticTaskBlockShape(inheritedShape->begin(),
+                                                     inheritedShape->end());
+        bool refinedShape = false;
+
+        unsigned primaryOwnerDim = 0;
+        if (!chunkRewriteContract.ownerDims.empty() &&
+            chunkRewriteContract.ownerDims.front() >= 0 &&
+            static_cast<size_t>(chunkRewriteContract.ownerDims.front()) <
+                rootAlloc.getElementSizes().size()) {
+          primaryOwnerDim =
+              static_cast<unsigned>(chunkRewriteContract.ownerDims.front());
+        }
+
+        if (rowWorkersConst && *rowWorkersConst > 1 &&
+            !staticTaskBlockShape.empty() &&
+            primaryOwnerDim < rootAlloc.getElementSizes().size()) {
+          if (auto totalRowsConst = ValueAnalysis::tryFoldConstantIndex(
+                  rootAlloc.getElementSizes()[primaryOwnerDim]);
+              totalRowsConst && *totalRowsConst > 0) {
+            int64_t rowChunk =
+                (*totalRowsConst + *rowWorkersConst - 1) / *rowWorkersConst;
+            staticTaskBlockShape[0] = std::max<int64_t>(1, rowChunk);
+            refinedShape = true;
+          }
+        }
+
+        unsigned secondaryOwnerDim = 1;
+        if (chunkRewriteContract.ownerDims.size() > 1 &&
+            chunkRewriteContract.ownerDims[1] >= 0 &&
+            static_cast<size_t>(chunkRewriteContract.ownerDims[1]) <
+                rootAlloc.getElementSizes().size()) {
+          secondaryOwnerDim =
+              static_cast<unsigned>(chunkRewriteContract.ownerDims[1]);
+        }
+
+        if (colWorkersConst && *colWorkersConst > 1 &&
+            staticTaskBlockShape.size() >= 2 &&
+            secondaryOwnerDim < rootAlloc.getElementSizes().size()) {
+          if (auto totalColsConst = ValueAnalysis::tryFoldConstantIndex(
+                  rootAlloc.getElementSizes()[secondaryOwnerDim]);
+              totalColsConst && *totalColsConst > 0) {
+            int64_t colChunk =
+                (*totalColsConst + *colWorkersConst - 1) / *colWorkersConst;
+            staticTaskBlockShape[1] = std::max<int64_t>(1, colChunk);
+            refinedShape = true;
+          }
+        }
+
+        if (refinedShape) {
+          /// Tiling-2D workers refine the inherited stencil owner shape into a
+          /// worker-local owner tile. Reflect that narrower static tile on the
+          /// acquire before DbPartitioning runs so the N-D block planner can
+          /// align allocation blocks with the actual 2-D worker grid instead
+          /// of widening back to the parent stencil tile.
+          setStencilBlockShape(chunkAcqOp.getOperation(), staticTaskBlockShape);
+          refinedTaskBlockShape = staticTaskBlockShape;
+
+          if (auto contract = getLoweringContract(chunkAcqOp.getPtr())) {
+            LoweringContractInfo updated = *contract;
+            updated.staticBlockShape = staticTaskBlockShape;
+            updated.blockShape.clear();
+            upsertLoweringContract(AC->getBuilder(), loc,
+                                   chunkAcqOp.getPtr(), updated);
+          }
+        }
+      }
     }
 
     setDbSpaceSliceFromAcquirePlan(chunkAcqOp, chunkUsesStencilHalo);
@@ -1443,8 +1578,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   Value routeValue;
   if (taskConcurrency == EdtConcurrency::internode) {
     if (forceOwnerRoute) {
-      routeValue = AC->createIntConstant(0, AC->Int32, loc);
-      ARTS_DEBUG("  - Forcing owner-local routing for coarse write task");
+      routeValue = createCurrentNodeRoute(AC->getBuilder(), loc);
+      ARTS_DEBUG("  - Keeping coarse write task on the current owner node");
     } else {
       /// Route to destination node from the global worker id:
       ///   nodeId = globalWorkerId / workersPerNode
@@ -1458,10 +1593,13 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       ARTS_DEBUG("  - Using internode routing by workers-per-node");
     }
   } else {
-    routeValue = AC->createIntConstant(0, AC->Int32, loc);
+    routeValue = createCurrentNodeRoute(AC->getBuilder(), loc);
   }
   auto taskEdt = AC->create<EdtOp>(loc, EdtType::task, taskConcurrency,
                                    routeValue, ValueRange{});
+  transferOperationContract(forOp.getOperation(), taskEdt.getOperation());
+  if (refinedTaskBlockShape)
+    setStencilBlockShape(taskEdt.getOperation(), *refinedTaskBlockShape);
 
   Block &taskBlock = taskEdt.getBody().front();
   AC->setInsertionPointToStart(&taskBlock);

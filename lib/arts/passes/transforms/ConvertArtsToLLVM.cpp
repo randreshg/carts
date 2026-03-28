@@ -34,8 +34,10 @@
 #include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
+#include "arts/utils/Utils.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
 /// Others
 #include "mlir/IR/Builders.h"
@@ -375,10 +377,152 @@ private:
   /// Holds extracted dependency info for a single datablock source.
   struct DepDbInfo {
     DbLoweringInfo dbInfo;
+    SmallVector<Value, 4> allocSizes;
     Value depStruct = nullptr;
     Value baseOffset = nullptr;
     Value stencilCenterLinear;
   };
+
+  Value localLinearToGlobalLinear(Value localLinear, const DbLoweringInfo &dbInfo,
+                                  ArrayRef<Value> allocSizes,
+                                  Location loc) const {
+    if (!localLinear || dbInfo.sizes.empty() || dbInfo.offsets.empty() ||
+        allocSizes.size() < dbInfo.sizes.size() ||
+        dbInfo.offsets.size() < dbInfo.sizes.size()) {
+      return localLinear;
+    }
+
+    unsigned rank = dbInfo.sizes.size();
+    Value one = AC->createIndexConstant(1, loc);
+    Value remaining = AC->castToIndex(localLinear, loc);
+    SmallVector<Value, 4> globalCoords;
+    globalCoords.reserve(rank);
+
+    for (unsigned i = 0; i < rank; ++i) {
+      Value stride = one;
+      for (unsigned j = i + 1; j < rank; ++j)
+        stride =
+            AC->create<arith::MulIOp>(loc, stride, AC->castToIndex(dbInfo.sizes[j], loc));
+
+      Value localCoord = remaining;
+      if (i + 1 < rank) {
+        localCoord = AC->create<arith::DivUIOp>(loc, remaining, stride);
+        remaining = AC->create<arith::RemUIOp>(loc, remaining, stride);
+      }
+
+      Value globalCoord =
+          AC->create<arith::AddIOp>(loc, AC->castToIndex(dbInfo.offsets[i], loc),
+                                    localCoord);
+      globalCoords.push_back(globalCoord);
+    }
+
+    SmallVector<Value, 4> globalExtents;
+    globalExtents.reserve(rank);
+    for (unsigned i = 0; i < rank; ++i)
+      globalExtents.push_back(AC->castToIndex(allocSizes[i], loc));
+    return AC->computeLinearIndex(globalExtents, globalCoords, loc);
+  }
+
+  std::optional<LoweringContractInfo>
+  getAcquireStencilContract(DbAcquireOp dbAcquireOp, Location loc) const {
+    if (!dbAcquireOp)
+      return std::nullopt;
+
+    if (auto info = getLoweringContract(dbAcquireOp.getPtr()))
+      return info;
+    return getLoweringContract(dbAcquireOp.getOperation(), AC->getBuilder(),
+                               loc);
+  }
+
+  Value inferStencilCenterLinearFromContract(DbAcquireOp dbAcquireOp,
+                                             const DbLoweringInfo &dbInfo,
+                                             ArrayRef<Value> allocSizes,
+                                             Location loc) const {
+    if (!dbAcquireOp || dbInfo.sizes.empty())
+      return nullptr;
+
+    auto contract = getAcquireStencilContract(dbAcquireOp, loc);
+    if (!contract || !contract->isStencilFamily() ||
+        contract->minOffsets.empty())
+      return nullptr;
+
+    unsigned rank = std::min<unsigned>(dbInfo.sizes.size(),
+                                       contract->minOffsets.size());
+    if (!contract->writeFootprint.empty())
+      rank = std::min<unsigned>(rank, contract->writeFootprint.size());
+    if (rank == 0)
+      return nullptr;
+
+    Value zero = AC->createIndexConstant(0, loc);
+    Value one = AC->createIndexConstant(1, loc);
+
+    SmallVector<Value, 4> localCoords;
+    localCoords.reserve(rank);
+    for (unsigned i = 0; i < rank; ++i) {
+      Value writeCoord =
+          contract->writeFootprint.empty() ? zero : contract->writeFootprint[i];
+      Value minOffset = contract->minOffsets[i];
+      Value dimSize = AC->castToIndex(dbInfo.sizes[i], loc);
+
+      Value rawCoord =
+          AC->create<arith::SubIOp>(loc, AC->castToIndex(writeCoord, loc),
+                                    AC->castToIndex(minOffset, loc));
+
+      Value nonNegative = AC->create<arith::MaxSIOp>(loc, rawCoord, zero);
+      Value sizeMinusOne = AC->create<arith::SubIOp>(loc, dimSize, one);
+      sizeMinusOne = AC->create<arith::MaxSIOp>(loc, sizeMinusOne, zero);
+      localCoords.push_back(
+          AC->create<arith::MinSIOp>(loc, nonNegative, sizeMinusOne));
+    }
+
+    Value localLinearIndex = zero;
+    for (unsigned i = 0; i < rank; ++i) {
+      Value stride = one;
+      for (unsigned j = i + 1; j < rank; ++j) {
+        stride =
+            AC->create<arith::MulIOp>(loc, stride, AC->castToIndex(dbInfo.sizes[j], loc));
+      }
+      Value contribution =
+          AC->create<arith::MulIOp>(loc, localCoords[i], stride);
+      localLinearIndex =
+          AC->create<arith::AddIOp>(loc, localLinearIndex, contribution);
+    }
+
+    return localLinearToGlobalLinear(localLinearIndex, dbInfo, allocSizes, loc);
+  }
+
+  Value inferSymmetricStencilCenterLinear(int64_t centerOffset,
+                                          const DbLoweringInfo &dbInfo,
+                                          ArrayRef<Value> allocSizes,
+                                          Location loc) const {
+    if (centerOffset < 0 || dbInfo.sizes.empty())
+      return nullptr;
+
+    Value zero = AC->createIndexConstant(0, loc);
+    Value one = AC->createIndexConstant(1, loc);
+    Value center = AC->createIndexConstant(centerOffset, loc);
+
+    Value localLinearIndex = zero;
+    for (unsigned i = 0; i < dbInfo.sizes.size(); ++i) {
+      Value dimSize = AC->castToIndex(dbInfo.sizes[i], loc);
+      Value sizeMinusOne = AC->create<arith::SubIOp>(loc, dimSize, one);
+      sizeMinusOne = AC->create<arith::MaxSIOp>(loc, sizeMinusOne, zero);
+      Value localCoord =
+          AC->create<arith::MinSIOp>(loc, center, sizeMinusOne);
+
+      Value stride = one;
+      for (unsigned j = i + 1; j < dbInfo.sizes.size(); ++j) {
+        stride = AC->create<arith::MulIOp>(
+            loc, stride, AC->castToIndex(dbInfo.sizes[j], loc));
+      }
+      Value contribution =
+          AC->create<arith::MulIOp>(loc, localCoord, stride);
+      localLinearIndex =
+          AC->create<arith::AddIOp>(loc, localLinearIndex, contribution);
+    }
+
+    return localLinearToGlobalLinear(localLinearIndex, dbInfo, allocSizes, loc);
+  }
 
   /// DepDbAcquireOp addresses dependency storage through depv plus an explicit
   /// baseOffset. RecordDep therefore iterates the local [0, size) window and
@@ -401,22 +545,31 @@ private:
 
     if (auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>()) {
       result.dbInfo = DbUtils::extractDbLoweringInfo(dbAcquireOp);
-      /// Stencil writer acquires frequently cover [left, center, right] DB
-      /// entries. Recording all entries as WRITE over-serializes adjacent
-      /// blocks. Only apply the halo downgrade when stencil lowering
-      /// explicitly marked the center position; generic loop-carried-dependence
-      /// metadata is too broad and misclassifies non-stencil block writers.
+      if (auto allocOp = getAllocOpFromGuid(dbGuid))
+        result.allocSizes.assign(allocOp.getSizes().begin(),
+                                 allocOp.getSizes().end());
+      /// Stencil writer acquires frequently cover [halo..., center, halo...]
+      /// DB entries. Recording every entry as WRITE over-serializes adjacent
+      /// blocks. Use the acquire's stencil contract to identify the owned
+      /// center block and downgrade only the non-center entries to read-only.
+      ///
+      /// Prefer the full lowering contract so boundary-clamped windows keep
+      /// the correct owned-center block. stencil_center_offset is only a
+      /// symmetric-radius fallback when richer contract data is unavailable.
       int32_t writeMode = static_cast<int32_t>(DbMode::write);
       bool writerMode = !acquireMode || *acquireMode == writeMode;
       auto partitionMode = dbAcquireOp.getPartitionMode();
       if (writerMode && partitionMode &&
           (*partitionMode == PartitionMode::block ||
            *partitionMode == PartitionMode::stencil)) {
-        if (auto centerOffset =
-                getStencilCenterOffset(dbAcquireOp.getOperation())) {
-          result.stencilCenterLinear =
-              AC->createIndexConstant(*centerOffset, loc);
-        }
+        result.stencilCenterLinear = inferStencilCenterLinearFromContract(
+            dbAcquireOp, result.dbInfo, result.allocSizes, loc);
+        if (!result.stencilCenterLinear)
+          if (auto centerOffset =
+                  getStencilCenterOffset(dbAcquireOp.getOperation())) {
+            result.stencilCenterLinear = inferSymmetricStencilCenterLinear(
+                *centerOffset, result.dbInfo, result.allocSizes, loc);
+          }
       }
     } else if (auto depDbAcquireOp = dbGuid.getDefiningOp<DepDbAcquireOp>()) {
       result.dbInfo = DbUtils::extractDbLoweringInfo(depDbAcquireOp);
@@ -582,15 +735,16 @@ private:
     int32_t modeInt = acquireMode.value_or(writeMode);
     Value modeValue = AC->createIntConstant(modeInt, AC->Int32, loc);
 
+    Value isCenterBlock;
     if (stencilCenterLinear && modeInt == writeMode) {
       Value linearIndexIdx = AC->castToIndex(linearIndex, loc);
       Value centerIdx = AC->castToIndex(stencilCenterLinear, loc);
-      Value isCenter = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                                 linearIndexIdx, centerIdx);
+      isCenterBlock = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                                linearIndexIdx, centerIdx);
       Value readValue = AC->createIntConstant(readMode, AC->Int32, loc);
       Value writeValue = AC->createIntConstant(writeMode, AC->Int32, loc);
-      modeValue =
-          AC->create<arith::SelectOp>(loc, isCenter, writeValue, readValue);
+      modeValue = AC->create<arith::SelectOp>(loc, isCenterBlock, writeValue,
+                                              readValue);
     }
 
     /// Prepare ESD values if needed (cast Index to Int64).
@@ -602,6 +756,17 @@ private:
         hasPartialSlice ? AC->ensureI64(byteOffset, loc) : nullptr;
     Value byteSizeI64 =
         hasPartialSlice ? AC->ensureI64(byteSize, loc) : nullptr;
+    if (hasPartialSlice && isCenterBlock) {
+      /// ARTS only supports sliced DB transport for RO slots. Keep halo
+      /// dependencies as byte slices, but force the owned center block back to
+      /// a whole-DB dependence by zeroing the slice at runtime.
+      Value zeroI64 = AC->createIntConstant(0, AC->Int64, loc);
+      byteOffsetI64 =
+          AC->create<arith::SelectOp>(loc, isCenterBlock, zeroI64,
+                                      byteOffsetI64);
+      byteSizeI64 =
+          AC->create<arith::SelectOp>(loc, isCenterBlock, zeroI64, byteSizeI64);
+    }
 
     if (effectiveBoundsValid) {
       /// GUARDED PATH: boundary workers may have invalid indices
@@ -881,7 +1046,7 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
     /// Build arts_hint_t struct: { uint32_t route, uint64_t id }
     Value route = op.getRoute();
     if (!route)
-      route = AC->createIntConstant(0, AC->Int32, loc);
+      route = createCurrentNodeRoute(AC->getBuilder(), loc);
 
     auto createIdAttr =
         op->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsCreateId);
@@ -944,7 +1109,7 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
 
     Value route = op.getRoute();
     if (!route)
-      route = AC->createIntConstant(0, AC->Int32, loc);
+      route = createCurrentNodeRoute(AC->getBuilder(), loc);
     bool distributedOwnership = hasDistributedDbAllocation(op.getOperation());
     Value elementSize = AC->computeElementTypeSize(op.getElementType(), loc);
 

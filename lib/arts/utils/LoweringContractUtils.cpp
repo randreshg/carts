@@ -282,6 +282,18 @@ mlir::arts::getLoweringContract(Value target) {
   if (auto contractKind = contract.getContractKind())
     info.kind = static_cast<ContractKind>(*contractKind);
 
+  if (auto acquire = originalTarget.getDefiningOp<DbAcquireOp>()) {
+    if (Value sourcePtr = acquire.getSourcePtr();
+        sourcePtr && contract.getTarget() == originalTarget) {
+      /// Acquire-result contracts often persist only local refinements such as
+      /// critical-path distance. Merge the source-pointer contract underneath
+      /// them so consumers still see the authoritative spatial/distribution
+      /// shape without having to special-case acquire results.
+      if (auto inherited = getLoweringContract(sourcePtr))
+        mergeLoweringContractInfo(info, *inherited);
+    }
+  }
+
   if (auto *defOp = originalTarget.getDefiningOp()) {
     if (auto semantic = getSemanticContract(defOp))
       mergeLoweringContractInfo(info, *semantic);

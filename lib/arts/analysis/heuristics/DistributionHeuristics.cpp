@@ -19,6 +19,10 @@
 ///==========================================================================///
 
 #include "arts/analysis/heuristics/DistributionHeuristics.h"
+#include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/db/DbAnalysis.h"
+#include "arts/analysis/graphs/db/DbGraph.h"
+#include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/analysis/heuristics/HeuristicUtils.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/analysis/value/ValueAnalysis.h"
@@ -65,6 +69,60 @@ static std::optional<int64_t> getExplicitWorkersPerNodeCount(EdtOp edt) {
   if (!edt)
     return std::nullopt;
   return arts::getWorkersPerNode(edt.getOperation());
+}
+
+static bool isValidTiling2DColumnDivisor(
+    int64_t totalWorkers, std::optional<int64_t> workersPerNode,
+    int64_t candidate) {
+  if (candidate <= 1 || totalWorkers % candidate != 0)
+    return false;
+  if (!workersPerNode || *workersPerNode <= 0)
+    return true;
+  return (*workersPerNode % candidate) == 0;
+}
+
+static int64_t chooseColumnWorkersNearTarget(
+    int64_t totalWorkers, std::optional<int64_t> workersPerNode,
+    double target) {
+  if (totalWorkers < 4)
+    return 1;
+
+  int64_t best = 1;
+  double bestDist = std::numeric_limits<double>::infinity();
+  int64_t sqrtW = static_cast<int64_t>(std::sqrt(static_cast<double>(totalWorkers)));
+  for (int64_t d = 2; d <= sqrtW; ++d) {
+    if (totalWorkers % d != 0)
+      continue;
+    int64_t complement = totalWorkers / d;
+    /// Check both d and its complement (totalWorkers/d) as candidates.
+    for (int64_t candidate : {d, complement}) {
+      if (!isValidTiling2DColumnDivisor(totalWorkers, workersPerNode,
+                                        candidate))
+        continue;
+      double dist = std::fabs(static_cast<double>(candidate) - target);
+      if (dist < bestDist || (dist == bestDist && candidate > best)) {
+        best = candidate;
+        bestDist = dist;
+      }
+    }
+  }
+
+  return best;
+}
+
+static bool isWavefrontTilingPattern(std::optional<ArtsDepPattern> depPattern) {
+  return depPattern && *depPattern == ArtsDepPattern::wavefront_2d;
+}
+
+static int64_t chooseColumnWorkersForPattern(
+    int64_t totalWorkers, std::optional<int64_t> workersPerNode,
+    std::optional<ArtsDepPattern> depPattern) {
+  if (isWavefrontTilingPattern(depPattern)) {
+    return DistributionHeuristics::chooseWavefront2DColumnWorkers(
+        totalWorkers, workersPerNode);
+  }
+  return DistributionHeuristics::chooseTiling2DColumnWorkers(totalWorkers,
+                                                             workersPerNode);
 }
 
 /// Compute a capped product of static parent-loop trip counts.
@@ -307,43 +365,26 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
 
 int64_t DistributionHeuristics::chooseTiling2DColumnWorkers(
     int64_t totalWorkers, std::optional<int64_t> workersPerNode) {
-  if (totalWorkers < 4)
-    return 1;
-
-  auto validDivisor = [&](int64_t d) -> bool {
-    if (d <= 1 || totalWorkers % d != 0)
-      return false;
-    if (!workersPerNode || *workersPerNode <= 0)
-      return true;
-    return (*workersPerNode % d) == 0;
-  };
-
-  int64_t best = 1;
-  double bestDist = std::numeric_limits<double>::infinity();
   double target = std::sqrt(static_cast<double>(totalWorkers));
-  int64_t sqrtW = static_cast<int64_t>(target);
-  for (int64_t d = 2; d <= sqrtW; ++d) {
-    if (totalWorkers % d != 0)
-      continue;
-    int64_t complement = totalWorkers / d;
-    /// Check both d and its complement (totalWorkers/d) as candidates.
-    for (int64_t candidate : {d, complement}) {
-      if (!validDivisor(candidate))
-        continue;
-      double dist = std::fabs(static_cast<double>(candidate) - target);
-      if (dist < bestDist || (dist == bestDist && candidate > best)) {
-        best = candidate;
-        bestDist = dist;
-      }
-    }
-  }
+  return chooseColumnWorkersNearTarget(totalWorkers, workersPerNode, target);
+}
 
-  return best;
+int64_t DistributionHeuristics::chooseWavefront2DColumnWorkers(
+    int64_t totalWorkers, std::optional<int64_t> workersPerNode) {
+  /// Weighted wavefront frontiers expose much less row-wise concurrency than a
+  /// generic near-square tiling. Bias toward a wider column decomposition so
+  /// Seidel-like ranks can keep more worker lanes active, while still using the
+  /// same node-aligned divisor legality checks as generic tiling_2d.
+  double baseTarget = std::sqrt(static_cast<double>(totalWorkers));
+  double widenedTarget = std::min(static_cast<double>(totalWorkers),
+                                  std::max(2.0, baseTarget * 2.0));
+  return chooseColumnWorkersNearTarget(totalWorkers, workersPerNode,
+                                       widenedTarget);
 }
 
 Tiling2DWorkerGrid DistributionHeuristics::getTiling2DWorkerGrid(
     ArtsCodegen *AC, Location loc, Value workerId, Value totalWorkers,
-    Value workersPerNode) {
+    Value workersPerNode, std::optional<ArtsDepPattern> depPattern) {
   Tiling2DWorkerGrid grid;
   Value one = AC->createIndexConstant(1, loc);
   Value zero = AC->createIndexConstant(0, loc);
@@ -364,7 +405,8 @@ Tiling2DWorkerGrid DistributionHeuristics::getTiling2DWorkerGrid(
           AC->castToIndex(workersPerNode, loc));
 
     int64_t colWorkersConst =
-        chooseTiling2DColumnWorkers(*totalWorkersConst, workersPerNodeConst);
+        chooseColumnWorkersForPattern(*totalWorkersConst, workersPerNodeConst,
+                                      depPattern);
     if (colWorkersConst > 1) {
       grid.colWorkers = AC->createIndexConstant(colWorkersConst, loc);
       grid.rowWorkers =
@@ -409,6 +451,31 @@ DistributionHeuristics::analyzeStrategy(EdtConcurrency concurrency,
   }
   strategy.useDbAlignment = true;
   return strategy;
+}
+
+DistributionStrategy
+DistributionHeuristics::resolveLoweringStrategy(EdtOp originalParallel,
+                                                ForOp forOp) {
+  DistributionStrategy strategy = analyzeStrategy(
+      originalParallel.getConcurrency(), /*machine=*/nullptr);
+  if (auto selectedKind = getEdtDistributionKind(forOp.getOperation()))
+    strategy.kind = toDistributionKind(*selectedKind);
+  return strategy;
+}
+
+std::optional<EdtDistributionPattern>
+DistributionHeuristics::resolveDistributionPattern(AnalysisManager *AM,
+                                                   ForOp forOp,
+                                                   EdtOp originalParallel) {
+  if (auto pattern = getEdtDistributionPattern(forOp.getOperation()))
+    return pattern;
+  if (AM) {
+    if (auto pattern = AM->getDbAnalysis().getLoopDistributionPattern(forOp);
+        pattern && *pattern != EdtDistributionPattern::unknown) {
+      return pattern;
+    }
+  }
+  return getEdtDistributionPattern(originalParallel.getOperation());
 }
 
 DistributionKind
@@ -493,7 +560,8 @@ std::pair<Value, Value> DistributionHeuristics::balancedDistribute(
 DistributionBounds DistributionHeuristics::computeBounds(
     ArtsCodegen *AC, Location loc, const DistributionStrategy &strategy,
     Value workerId, Value runtimeTotalWorkers, Value runtimeWorkersPerNode,
-    Value totalIterations, Value totalChunks, Value blockSize) {
+    Value totalIterations, Value totalChunks, Value blockSize,
+    std::optional<ArtsDepPattern> depPattern) {
   DistributionBounds bounds;
   Value zeroIndex = AC->createIndexConstant(0, loc);
 
@@ -524,7 +592,8 @@ DistributionBounds DistributionHeuristics::computeBounds(
     Value distWorkers = runtimeTotalWorkers;
     if (strategy.kind == DistributionKind::Tiling2D) {
       Tiling2DWorkerGrid grid = getTiling2DWorkerGrid(
-          AC, loc, workerId, runtimeTotalWorkers, runtimeWorkersPerNode);
+          AC, loc, workerId, runtimeTotalWorkers, runtimeWorkersPerNode,
+          depPattern);
       distWorkerId = grid.rowWorkerId;
       distWorkers = grid.rowWorkers;
     }
@@ -621,7 +690,8 @@ DistributionBounds DistributionHeuristics::recomputeBoundsInside(
     ArtsCodegen *AC, Location loc, const DistributionStrategy &strategy,
     Value workerId, Value insideTotalWorkers, Value workersPerNode,
     Value upperBound, Value lowerBound, Value loopStep, Value blockSize,
-    std::optional<int64_t> alignmentBlockSize, bool useRuntimeBlockAlignment) {
+    std::optional<int64_t> alignmentBlockSize, bool useRuntimeBlockAlignment,
+    std::optional<ArtsDepPattern> depPattern) {
 
   Value workerIdIndex = AC->castToIndex(workerId, loc);
   Value totalWorkersIndex = AC->castToIndex(insideTotalWorkers, loc);
@@ -775,7 +845,7 @@ DistributionBounds DistributionHeuristics::recomputeBoundsInside(
   Value distWorkers = totalWorkersIndex;
   if (strategy.kind == DistributionKind::Tiling2D) {
     Tiling2DWorkerGrid grid = getTiling2DWorkerGrid(
-        AC, loc, workerIdIndex, totalWorkersIndex, workersPerNode);
+        AC, loc, workerIdIndex, totalWorkersIndex, workersPerNode, depPattern);
     distWorkerId = grid.rowWorkerId;
     distWorkers = grid.rowWorkers;
   }
@@ -810,29 +880,186 @@ DistributionBounds DistributionHeuristics::recomputeBoundsInside(
 /// DB Alignment Block Size
 ///===----------------------------------------------------------------------===///
 
-Value DistributionHeuristics::computeDbAlignmentBlockSize(EdtOp parallelEdt,
-                                                          Value numPartitions,
-                                                          ArtsCodegen *AC,
-                                                          Location loc) {
-  if (!parallelEdt || !numPartitions)
+static std::optional<unsigned>
+inferLoopMappedDim(DbAcquireNode *acqNode, ForOp forOp) {
+  if (!acqNode || !forOp)
+    return std::nullopt;
+
+  Block &forBody = forOp.getRegion().front();
+  if (forBody.getNumArguments() == 0)
+    return std::nullopt;
+
+  Value loopIV = forBody.getArgument(0);
+  if (auto mappedDim =
+          acqNode->getPartitionOffsetDim(loopIV, /*requireLeading=*/false)) {
+    return mappedDim;
+  }
+
+  Region &forRegion = forOp.getRegion();
+  std::optional<unsigned> mappedDim;
+
+  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+  acqNode->collectAccessOperations(dbRefToMemOps);
+
+  for (auto &[dbRef, memOps] : dbRefToMemOps) {
+    for (Operation *memOp : memOps) {
+      Region *memRegion = memOp ? memOp->getParentRegion() : nullptr;
+      if (!memRegion)
+        continue;
+      if (memRegion != &forRegion && !forRegion.isAncestor(memRegion))
+        continue;
+
+      SmallVector<Value> fullChain =
+          DbUtils::collectFullIndexChain(dbRef, memOp);
+      if (fullChain.empty())
+        continue;
+
+      unsigned memrefStart = dbRef.getIndices().size();
+      if (memrefStart >= fullChain.size())
+        continue;
+
+      SmallVector<unsigned, 2> matchingDims;
+      ArrayRef<Value> memrefChain(fullChain);
+      memrefChain = memrefChain.drop_front(memrefStart);
+      for (auto [dimIdx, indexVal] : llvm::enumerate(memrefChain)) {
+        if (ValueAnalysis::dependsOn(
+                ValueAnalysis::stripNumericCasts(indexVal), loopIV))
+          matchingDims.push_back(dimIdx);
+      }
+
+      /// Alignment must be anchored to a single logical owner dimension.
+      /// Multi-dimensional dependence is ambiguous here; skip the hint rather
+      /// than guessing and potentially forcing overlapping write chunks.
+      if (matchingDims.size() != 1)
+        return std::nullopt;
+
+      unsigned dim = matchingDims.front();
+      if (!mappedDim)
+        mappedDim = dim;
+      else if (*mappedDim != dim)
+        return std::nullopt;
+    }
+  }
+
+  return mappedDim;
+}
+
+static std::optional<unsigned>
+inferLoopMappedDimFromValue(Value dep, ForOp forOp) {
+  if (!dep || !forOp)
+    return std::nullopt;
+
+  Block &forBody = forOp.getRegion().front();
+  if (forBody.getNumArguments() == 0)
+    return std::nullopt;
+
+  Value loopIV = forBody.getArgument(0);
+  Region &forRegion = forOp.getRegion();
+  std::optional<unsigned> mappedDim;
+  llvm::SetVector<Value> sources;
+  sources.insert(dep);
+  for (Operation *user : dep.getUsers()) {
+    auto edt = dyn_cast<EdtOp>(user);
+    if (!edt)
+      continue;
+
+    ValueRange deps = edt.getDependencies();
+    Block &edtBody = edt.getBody().front();
+    unsigned argCount = edtBody.getNumArguments();
+    for (auto [idx, operand] : llvm::enumerate(deps)) {
+      if (operand != dep || idx >= argCount)
+        continue;
+      sources.insert(edtBody.getArgument(static_cast<unsigned>(idx)));
+    }
+  }
+
+  llvm::SetVector<Operation *> memOps;
+  for (Value source : sources)
+    DbUtils::collectReachableMemoryOps(source, memOps, /*scope=*/nullptr);
+
+  for (Operation *memOp : memOps) {
+    Region *memRegion = memOp ? memOp->getParentRegion() : nullptr;
+    if (!memRegion)
+      continue;
+    if (memRegion != &forRegion && !forRegion.isAncestor(memRegion))
+      continue;
+
+    std::optional<DbUtils::MemoryAccessInfo> access =
+        DbUtils::getMemoryAccessInfo(memOp);
+    if (!access || access->indices.empty())
+      continue;
+
+    SmallVector<unsigned, 2> matchingDims;
+    for (auto [dimIdx, indexVal] : llvm::enumerate(access->indices)) {
+      if (ValueAnalysis::dependsOn(
+              ValueAnalysis::stripNumericCasts(indexVal), loopIV))
+        matchingDims.push_back(dimIdx);
+    }
+
+    /// Coarse / direct accesses should still map the worker IV to a single
+    /// logical owner dimension. If we see multiple dependent dimensions, this
+    /// dependency is ambiguous for block alignment and must not drive the hint.
+    if (matchingDims.size() != 1)
+      return std::nullopt;
+
+    unsigned dim = matchingDims.front();
+    if (!mappedDim)
+      mappedDim = dim;
+    else if (*mappedDim != dim)
+      return std::nullopt;
+  }
+
+  return mappedDim;
+}
+
+Value DistributionHeuristics::computeDbAlignmentBlockSize(
+    ForOp forOp, EdtOp parallelEdt, Value numPartitions, ArtsCodegen *AC,
+    Location loc, DbAnalysis *dbAnalysis) {
+  if (!forOp || !parallelEdt || !numPartitions)
     return Value();
 
   Value one = AC->createIndexConstant(1, loc);
   Value hintBlockSize;
 
   bool isTwoLevel = (parallelEdt.getConcurrency() == EdtConcurrency::internode);
+  DbGraph *graph = nullptr;
+  if (dbAnalysis) {
+    if (func::FuncOp func = parallelEdt->getParentOfType<func::FuncOp>())
+      graph = &dbAnalysis->getOrCreateGraph(func);
+  }
 
   for (Value dep : parallelEdt.getDependencies()) {
     auto allocInfo = DbUtils::traceToDbAlloc(dep);
     if (!allocInfo)
       continue;
     auto [rootGuid, rootPtr] = *allocInfo;
+    (void)rootPtr;
     auto allocOp = rootGuid.getDefiningOp<DbAllocOp>();
     if (!allocOp || allocOp.getElementSizes().empty())
       continue;
 
-    Value elemSize = allocOp.getElementSizes().front();
-    if (auto constElem = ValueAnalysis::tryFoldConstantIndex(elemSize))
+    std::optional<unsigned> mappedDim;
+    if (graph) {
+      if (auto acquire =
+              dyn_cast_or_null<DbAcquireOp>(DbUtils::getUnderlyingDb(dep))) {
+        if (DbAcquireNode *acqNode = graph->getDbAcquireNode(acquire))
+          mappedDim = inferLoopMappedDim(acqNode, forOp);
+      }
+    }
+    if (!mappedDim)
+      mappedDim = inferLoopMappedDimFromValue(dep, forOp);
+
+    if (!mappedDim) {
+      if (allocOp.getElementSizes().size() == 1)
+        mappedDim = 0u;
+      else
+        continue;
+    }
+    if (*mappedDim >= allocOp.getElementSizes().size())
+      continue;
+
+    Value ownerExtent = allocOp.getElementSizes()[*mappedDim];
+    if (auto constElem = ValueAnalysis::tryFoldConstantIndex(ownerExtent))
       if (*constElem <= 1)
         continue;
 
@@ -841,35 +1068,31 @@ Value DistributionHeuristics::computeDbAlignmentBlockSize(EdtOp parallelEdt,
     ///
     /// Flat (intranode):
     ///   - Always align stencil arrays.
-    ///   - Align write-capable arrays only when element count is not evenly
-    ///     divisible by worker count. This is the mismatch case where
-    ///     floor+remainder iteration slices can straddle DB block boundaries
-    ///     and create unnecessary cross-chunk dependencies.
+    ///   - Align any write-capable owner-mapped array.
+    ///
+    /// Once DbPartitioning chooses block mode, the runtime reasons at block
+    /// granularity for write ownership. Even when the owner extent divides the
+    /// worker count evenly, a loop that only covers an interior slice (e.g.
+    /// rhs4sg-base runs k in [4, NZ-4)) can still make balanced worker chunks
+    /// straddle adjacent DB blocks unless the loop chunking itself is emitted
+    /// in whole owner blocks.
     if (!isTwoLevel) {
       auto pattern = getDbAccessPattern(allocOp.getOperation());
       bool isStencil = pattern && *pattern == DbAccessPattern::stencil;
+      bool requiresWriteBlockOwnership = allocOp.getMode() != ArtsMode::in;
 
-      bool needsWriteAlignment = false;
-      if (allocOp.getMode() != ArtsMode::in) {
-        auto elemConst = ValueAnalysis::tryFoldConstantIndex(elemSize);
-        auto partConst = ValueAnalysis::tryFoldConstantIndex(numPartitions);
-        if (elemConst && partConst && *partConst > 0) {
-          needsWriteAlignment = (*elemConst % *partConst) != 0;
-        } else {
-          /// Be conservative for dynamic sizes/partition counts.
-          needsWriteAlignment = true;
-        }
-      }
-
-      if (!isStencil && !needsWriteAlignment)
+      if (!isStencil && !requiresWriteBlockOwnership)
         continue;
     }
 
-    elemSize = AC->castToIndex(elemSize, loc);
+    ownerExtent = AC->castToIndex(ownerExtent, loc);
 
-    /// ceil(elemSize / numPartitions) to match DbPartitioning block size
+    /// Match the block span DbPartitioning will later choose for the specific
+    /// owner dimension carried by this loop. This keeps worker chunk boundaries
+    /// aligned with DB block boundaries even when the true loop lower bound is
+    /// not zero (e.g. rhs4sg-base starts at k=4).
     Value adjusted = AC->create<arith::AddIOp>(
-        loc, elemSize, AC->create<arith::SubIOp>(loc, numPartitions, one));
+        loc, ownerExtent, AC->create<arith::SubIOp>(loc, numPartitions, one));
     Value candidate = AC->create<arith::DivUIOp>(loc, adjusted, numPartitions);
     candidate = AC->create<arith::MaxUIOp>(loc, candidate, one);
 
@@ -978,7 +1201,8 @@ Value DistributionHeuristics::getDispatchWorkerCount(OpBuilder &builder,
 
 Value DistributionHeuristics::getForDispatchWorkerCount(
     ArtsCodegen *AC, Location loc, EdtOp parallelEdt,
-    const DistributionStrategy &strategy, Value totalChunks) {
+    const DistributionStrategy &strategy, Value totalChunks,
+    std::optional<ArtsDepPattern> depPattern) {
   Value one = AC->createIndexConstant(1, loc);
   Value totalWorkers = getTotalWorkers(AC, loc, parallelEdt);
   Value clampedDispatch = totalWorkers;
@@ -1014,7 +1238,8 @@ Value DistributionHeuristics::getForDispatchWorkerCount(
     }
 
     int64_t colWorkersConst =
-        chooseTiling2DColumnWorkers(*totalWorkersConst, workersPerNodeConst);
+        chooseColumnWorkersForPattern(*totalWorkersConst, workersPerNodeConst,
+                                      depPattern);
     int64_t rowWorkersConst =
         std::max<int64_t>(1, *totalWorkersConst / colWorkersConst);
 

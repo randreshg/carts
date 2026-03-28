@@ -17,6 +17,7 @@
 #include "arts/analysis/graphs/db/DbAccessPattern.h"
 #include "arts/transforms/db/DbRewriter.h"
 #include "mlir/IR/Builders.h"
+#include <optional>
 
 namespace mlir {
 namespace arts {
@@ -35,6 +36,8 @@ struct DbAcquirePartitionView {
   bool isValid = false;
   bool hasIndirectAccess = false;
   bool needsFullRange = false;
+  std::optional<StencilBounds> graphStencilBounds;
+  std::optional<unsigned> graphStencilOwnerDim;
 };
 
 /// Compute allocation outer/inner sizes for the given partition mode.
