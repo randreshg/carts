@@ -6,6 +6,7 @@
 /// Decides coarse/block/element-wise allocation strategy for datablocks.
 ///
 /// H1 Partitioning Heuristics (evaluated in priority order):
+///   H1.C0: Tiny read-only stencil coefficient table -> coarse
 ///   H1.C1: Pointer-of-pointer element type -> coarse
 ///   H1.C2: Read-only single-node -> coarse
 ///   H1.C3: Any coarse acquire consumer -> coarse
@@ -88,6 +89,12 @@ struct PartitioningContext {
   unsigned pinnedDimCount = 0;
   ArtsMode accessMode = ArtsMode::uninitialized;
   std::optional<int64_t> totalElements, blockSize, depsPerEDT;
+  /// Existing allocation facts carried from the controller.
+  /// These are raw facts about the current alloc shape/state, not policy.
+  std::optional<int64_t> staticElementCount;
+  PartitionMode existingAllocMode = PartitionMode::coarse;
+  DbAccessPattern allocAccessPattern = DbAccessPattern::unknown;
+  DbMode allocDbMode = DbMode::write;
   bool isUniformAccess = false;
   AcquirePatternSummary accessPatterns;
   bool hasIndirectAccess = false, hasIndirectRead = false;

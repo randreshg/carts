@@ -17,6 +17,19 @@ ARTS_DEBUG_SETUP(partitioning_heuristics)
 using namespace mlir;
 using namespace mlir::arts;
 
+namespace {
+
+static bool
+isTinyReadOnlyStencilCoefficientTable(const PartitioningContext &ctx) {
+  return ctx.existingAllocMode == PartitionMode::coarse &&
+         ctx.allocAccessPattern == DbAccessPattern::stencil &&
+         ctx.accessMode == ArtsMode::in && ctx.allocDbMode == DbMode::read &&
+         ctx.staticElementCount && *ctx.staticElementCount > 0 &&
+         *ctx.staticElementCount <= 8;
+}
+
+} // namespace
+
 ///===----------------------------------------------------------------------===///
 /// H1: Partitioning Heuristics Evaluation
 ///
@@ -70,6 +83,17 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// Coarse Partitioning Heuristics (H1.C*)
   ///===--------------------------------------------------------------------===///
 
+  /// H1.C0: Tiny read-only stencil coefficient table -> Coarse
+  /// Rationale: Small constant stencil tables are effectively scalar metadata.
+  /// Repartitioning them can skew coefficient indexing and add dependency
+  /// plumbing without improving locality.
+  if (isTinyReadOnlyStencilCoefficientTable(ctx)) {
+    ARTS_DEBUG("H1.C0 applied: Tiny read-only stencil coefficient table "
+               "prefers coarse");
+    return PartitioningDecision::coarse(
+        ctx, "H1.C0: Tiny read-only stencil coefficient table prefers coarse");
+  }
+
   /// H1.C1: Read-only single-node without fine-grained support → Coarse
   if (isSingleNode && isReadOnly && !ctx.canBlock && !ctx.canElementWise) {
     ARTS_DEBUG("H1.C1 applied: Read-only single-node prefers coarse");
@@ -106,13 +130,19 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// H1.C3: Read-only full-range block acquires → Coarse
   /// Rationale: When every read acquire spans all blocks, block partitioning
   /// gives no locality benefit and can inflate dependency wiring.
-  /// Exception: When block partitioning IS structurally possible (canBlock)
-  /// and stencil patterns are detected, block partitioning still benefits
-  /// from NUMA-distributed allocation and parallel DB creation — even with
-  /// full-range acquires. This is the specfem3d case: stencil on i-dim,
-  /// partition on k-dim.
-  if (isReadOnly && ctx.allBlockFullRange && !ctx.canBlock) {
-    if (ctx.canElementWise) {
+  /// Exception: Keep block on multi-node runs or when stencil semantics are
+  /// explicit and block layout still carries ownership value even with
+  /// full-range acquires (for example cross-dimension stencil cases).
+  /// A generic lowering/distribution contract is not enough to preserve block
+  /// on a single node once every block-capable acquire widened to full-range;
+  /// at that point the contract no longer buys locality for read-only inputs.
+  bool preserveStencilBlockForReadOnlyFullRange =
+      (patterns.hasStencil || hasTrustedStencilAcquire) && !patterns.hasIndexed;
+  bool preserveBlockForReadOnlyFullRange =
+      ctx.canBlock &&
+      (!isSingleNode || preserveStencilBlockForReadOnlyFullRange);
+  if (isReadOnly && ctx.allBlockFullRange && !preserveBlockForReadOnlyFullRange) {
+    if (!ctx.canBlock && ctx.canElementWise) {
       unsigned outerRank = ctx.minPinnedDimCount();
       outerRank = outerRank > 0 ? outerRank : 1;
       ARTS_DEBUG("H1.C3 applied: Read-only full-range without block support, "
@@ -127,9 +157,10 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
         ctx, isSingleNode
                  ? "H1.C3: Read-only full-range on single-node prefers coarse"
                  : "H1.C3: Read-only full-range on multi-node prefers coarse");
-  } else if (isReadOnly && ctx.allBlockFullRange && ctx.canBlock) {
-    ARTS_DEBUG("H1.C3 skipped: canBlock=true, block allocation distributes "
-               "across NUMA nodes even with full-range acquires");
+  } else if (isReadOnly && ctx.allBlockFullRange && preserveBlockForReadOnlyFullRange) {
+    ARTS_DEBUG(
+        "H1.C3 skipped: stencil/distribution semantics keep block layout for "
+        "read-only full-range acquires");
   }
 
   /// H1.C4: Read-only stencil on single-node → Coarse (when stencil is on
@@ -207,6 +238,10 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
         llvm::any_of(ctx.acquires, [](const AcquireInfo &a) {
           return a.depPattern == ArtsDepPattern::jacobi_alternating_buffers;
         });
+    bool hasWavefrontDepPattern =
+        llvm::any_of(ctx.acquires, [](const AcquireInfo &a) {
+          return a.depPattern == ArtsDepPattern::wavefront_2d;
+        });
     bool hasStencilReads = llvm::any_of(ctx.acquires, [](const AcquireInfo &a) {
       return (a.accessMode == ArtsMode::in) &&
              (a.accessPattern == AccessPattern::Stencil) &&
@@ -233,9 +268,13 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
 
     ARTS_DEBUG("  hasStencilReads="
                << hasStencilReads << ", hasWriteAcquires=" << hasWriteAcquires
-               << ", allWritesUniform=" << allWritesUniform);
+               << ", allWritesUniform=" << allWritesUniform
+               << ", hasWavefrontDepPattern=" << hasWavefrontDepPattern);
 
-    if (hasStencilReads && hasWriteAcquires && allWritesUniform) {
+    if (hasWavefrontDepPattern) {
+      ARTS_DEBUG("H1.B3 skipped: wavefront_2d stencil should use stencil "
+                 "mode, not Jacobi block mode");
+    } else if (hasStencilReads && hasWriteAcquires && allWritesUniform) {
       ARTS_DEBUG("H1.B3 applied: Double-buffer stencil -> block");
       return PartitioningDecision::block(
           ctx, "H1.B3: Double-buffer stencil (Jacobi) with uniform writes");
