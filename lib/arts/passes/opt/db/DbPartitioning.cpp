@@ -109,6 +109,26 @@ static std::optional<int64_t> getForcedCoarseAllocId() {
   return static_cast<int64_t>(parsed);
 }
 
+static std::optional<int64_t> computeStaticElementCount(DbAllocOp allocOp) {
+  std::optional<int64_t> staticElementCount = int64_t{1};
+  auto multiplyIfConstant = [&](Value v) {
+    if (!staticElementCount)
+      return;
+    auto folded = ValueAnalysis::tryFoldConstantIndex(v);
+    if (!folded || *folded < 0) {
+      staticElementCount = std::nullopt;
+      return;
+    }
+    *staticElementCount *= *folded;
+  };
+
+  for (Value v : allocOp.getSizes())
+    multiplyIfConstant(v);
+  for (Value v : allocOp.getElementSizes())
+    multiplyIfConstant(v);
+  return staticElementCount;
+}
+
 /// Validate that element-wise partition indices match actual EDT accesses.
 /// Returns false if this is a block-wise pattern (indices are block corners,
 /// but accesses span a range) - indicating we should fall back to block mode.
@@ -1516,43 +1536,16 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     ctx.elementTypeIsMemRef = false;
   }
 
-  /// Preserve tiny read-only stencil coefficient tables as coarse.
-  /// These tables are effectively constants (e.g., finite-difference weights);
-  /// repartitioning them per task can skew coefficient indexing and produce
-  /// thread-count-dependent numerics.
-  auto currentMode = getPartitionMode(allocOp);
-  auto currentPattern = getDbAccessPattern(allocOp.getOperation());
-  if (currentMode && *currentMode == PartitionMode::coarse && currentPattern &&
-      *currentPattern == DbAccessPattern::stencil &&
-      allocOp.getMode() == ArtsMode::in &&
-      allocOp.getDbMode() == DbMode::read) {
-    std::optional<int64_t> staticElementCount = int64_t{1};
-    auto multiplyIfConstant = [&](Value v) {
-      if (!staticElementCount)
-        return;
-      auto folded = ValueAnalysis::tryFoldConstantIndex(v);
-      if (!folded || *folded < 0) {
-        staticElementCount = std::nullopt;
-        return;
-      }
-      *staticElementCount *= *folded;
-    };
-    for (Value v : allocOp.getSizes())
-      multiplyIfConstant(v);
-    for (Value v : allocOp.getElementSizes())
-      multiplyIfConstant(v);
-
-    if (staticElementCount && *staticElementCount > 0 &&
-        *staticElementCount <= 8) {
-      resetCoarseAcquireRanges(allocOp, allocNode, builder);
-      heuristics.recordDecision(
-          "Partition-KeepTinyStencilCoarse", true,
-          "preserving tiny read-only stencil coefficient table as coarse",
-          allocOp.getOperation(),
-          {{"staticElementCount", *staticElementCount}});
-      return allocOp;
-    }
-  }
+  /// Feed raw allocation facts to H1 so the heuristic layer, not the
+  /// controller, decides whether special coarse cases (for example tiny
+  /// read-only stencil coefficient tables) should remain coarse.
+  ctx.staticElementCount = computeStaticElementCount(allocOp);
+  ctx.existingAllocMode =
+      getPartitionMode(allocOp).value_or(PartitionMode::coarse);
+  ctx.allocAccessPattern =
+      getDbAccessPattern(allocOp.getOperation()).value_or(
+          DbAccessPattern::unknown);
+  ctx.allocDbMode = allocOp.getDbMode();
 
   /// Step 4: Initial heuristics arbitration.
   PartitioningDecision decision = heuristics.choosePartitioning(ctx);
