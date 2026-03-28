@@ -718,7 +718,10 @@ void CreateDbsPass::createDbAllocOps() {
     ARTS_DEBUG(" - Partition mode: coarse (to be refined by DbPartitioning)");
 
     /// Create the db_alloc operation
-    auto route = AC->createIntConstant(0, AC->Int32, loc);
+    /// DBs without an explicit route stay on the creating node. Lowering
+    /// materializes this sentinel into the runtime hint instead of pinning the
+    /// allocation to rank 0.
+    auto route = createCurrentNodeRoute(AC->getBuilder(), loc);
     auto dbAllocOp =
         AC->create<DbAllocOp>(loc, mode, route, allocType, dbMode, elementType,
                               sizes, elementSizes, partitionMode);

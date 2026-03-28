@@ -234,6 +234,8 @@ static void buildBlockRewriteAcquire(const DbAcquirePartitionView &input,
   output.partitionInfo.offsets.clear();
   output.partitionInfo.sizes.clear();
   output.partitionInfo.mode = PartitionMode::block;
+  output.graphStencilBounds = input.graphStencilBounds;
+  output.graphStencilOwnerDim = input.graphStencilOwnerDim;
 
   if (input.needsFullRange) {
     output.isFullRange = true;

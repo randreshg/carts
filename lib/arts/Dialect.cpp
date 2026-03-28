@@ -363,7 +363,10 @@ void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
 
 void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
                   EdtConcurrency concurrency, ValueRange dependencies) {
-  Value route = builder.create<arith::ConstantIntOp>(state.location, 0, 32);
+  /// Default EDT placement stays on the current node unless a pass provides
+  /// an explicit route. Using node 0 here would silently bias multi-node
+  /// programs toward rank 0 during lowering.
+  Value route = createCurrentNodeRoute(builder, state.location);
   build(builder, state, type, concurrency, route, dependencies);
 }
 
@@ -392,7 +395,7 @@ LogicalResult CreateEpochOp::verify() {
 
 void EdtCreateOp::build(OpBuilder &builder, OperationState &state,
                         Value param_memref, Value depCount) {
-  Value route = builder.create<arith::ConstantIntOp>(state.location, 0, 32);
+  Value route = createCurrentNodeRoute(builder, state.location);
   state.addTypes(builder.getI64Type());
   state.addOperands({param_memref, depCount, route});
 }

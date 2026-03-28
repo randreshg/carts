@@ -192,6 +192,13 @@ static AccessPattern mapDbAccessPattern(DbAccessPattern pattern) {
 bool DbAnalysis::isTiling2DTaskAcquire(DbAcquireOp acquire) {
   if (!acquire)
     return false;
+  if (auto contract = getLoweringContract(acquire.getPtr())) {
+    if (contract->distributionKind &&
+        *contract->distributionKind == EdtDistributionKind::tiling_2d)
+      return true;
+  }
+  if (auto kind = getEdtDistributionKind(acquire.getOperation()))
+    return *kind == EdtDistributionKind::tiling_2d;
   auto [edt, blockArg] = getEdtBlockArgumentForAcquire(acquire);
   (void)blockArg;
   if (!edt)

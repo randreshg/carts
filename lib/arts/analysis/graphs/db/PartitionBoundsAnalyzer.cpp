@@ -27,6 +27,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
+#include <algorithm>
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -243,6 +244,33 @@ static llvm::DenseSet<unsigned> collectStencilDims(DbAcquireNode *node,
   }
 
   return stencilDims;
+}
+
+/// Read-only affine stencil accesses can stay block-local even when the
+/// partitioned dimension is non-leading. The later stencil-halo rewrite uses
+/// graph-derived min/max offsets to widen the dependency window just enough to
+/// cover the needed neighbors, so full-range is unnecessary here.
+static bool canUseReadOnlyStencilHaloWindow(DbAcquireNode *node,
+                                            std::optional<unsigned> mappedDim,
+                                            Value partitionOffset) {
+  if (!node || !mappedDim || !partitionOffset)
+    return false;
+  if (MemoryAccessClassifier::hasStores(node) ||
+      MemoryAccessClassifier::hasIndirectAccess(node) ||
+      node->getAccessPattern() != AccessPattern::Stencil ||
+      node->getHasNonConstantOffset())
+    return false;
+
+  /// Bounds analysis already measures halo on the partitioned dimension.
+  /// If that graph fact says the read-only stencil needs neighbors, the later
+  /// stencil rewrite can materialize the exact local halo window without
+  /// widening the acquire to the whole allocation.
+  if (auto stencilBounds = node->getStencilBounds())
+    return stencilBounds->hasHalo();
+
+  llvm::DenseSet<unsigned> stencilDims =
+      collectStencilDims(node, partitionOffset);
+  return !stencilDims.empty() && stencilDims.contains(*mappedDim);
 }
 
 ///===----------------------------------------------------------------------===///
@@ -702,10 +730,23 @@ std::optional<unsigned> PartitionBoundsAnalyzer::getPartitionOffsetDim(
 bool PartitionBoundsAnalyzer::needsFullRange(DbAcquireNode *node,
                                              Value partitionOffset) {
   DbAcquireOp acquire = node ? node->getDbAcquireOp() : DbAcquireOp();
-  bool supportedBlockHalo =
-      acquire && hasSupportedBlockHalo(acquire.getOperation());
+  std::optional<LoweringContractInfo> contract =
+      acquire ? getLoweringContract(acquire.getPtr()) : std::nullopt;
+  bool supportedBlockHalo = contract ? contract->supportsBlockHalo()
+                                     : (acquire &&
+                                        hasSupportedBlockHalo(
+                                            acquire.getOperation()));
   SmallVector<unsigned, 4> ownerDims;
-  if (acquire) {
+  if (contract && !contract->ownerDims.empty()) {
+    unsigned rank = 0;
+    for (int64_t dim : contract->ownerDims) {
+      if (dim >= 0)
+        rank = std::max<unsigned>(rank, static_cast<unsigned>(dim) + 1);
+    }
+    if (rank == 0)
+      rank = static_cast<unsigned>(contract->ownerDims.size());
+    ownerDims = resolveContractOwnerDims(*contract, rank);
+  } else if (acquire) {
     if (auto attrOwnerDims = getStencilOwnerDims(acquire.getOperation())) {
       for (int64_t dim : *attrOwnerDims) {
         if (dim >= 0)
@@ -774,6 +815,10 @@ bool PartitionBoundsAnalyzer::needsFullRange(DbAcquireNode *node,
           llvm::is_contained(ownerDims, *mappedDim)) {
         ARTS_DEBUG("  needsFullRange: preserving non-leading stencil dim from "
                    "N-D halo contract");
+      } else if (canUseReadOnlyStencilHaloWindow(node, mappedDim,
+                                                 partitionOffset)) {
+        ARTS_DEBUG("  needsFullRange: preserving read-only stencil halo on "
+                   "non-leading partition dim");
       } else if (mappedDim) {
         /// Orthogonal stencil: stencil dims differ from partition dim, so
         /// stencil does not cross boundaries and full range not needed.
@@ -805,6 +850,11 @@ bool PartitionBoundsAnalyzer::needsFullRange(DbAcquireNode *node,
         llvm::is_contained(ownerDims, *mappedDim)) {
       ARTS_DEBUG("  needsFullRange: trusting N-D halo contract for partition "
                  "offset");
+      return false;
+    }
+    if (canUseReadOnlyStencilHaloWindow(node, mappedDim, partitionOffset)) {
+      ARTS_DEBUG("  needsFullRange: trusting graph-derived read-only stencil "
+                 "halo on partition dim");
       return false;
     }
     ARTS_DEBUG("  needsFullRange: "

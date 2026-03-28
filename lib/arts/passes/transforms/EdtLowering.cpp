@@ -147,6 +147,152 @@ static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   acquire.getSizesMutable().assign(sizes);
 }
 
+struct NormalizedElementSlice {
+  SmallVector<Value, 4> offsets;
+  SmallVector<Value, 4> sizes;
+  Value representable;
+  Value contiguous;
+  Value wholeBlock;
+};
+
+static std::optional<NormalizedElementSlice>
+normalizeCommonElementSlice(ArtsCodegen *AC, DbAcquireOp acquire,
+                            DbAllocOp alloc) {
+  if (!AC || !acquire || !alloc)
+    return std::nullopt;
+
+  auto elemOffsets = acquire.getElementOffsets();
+  auto elemSizes = acquire.getElementSizes();
+  auto depOffsets = acquire.getOffsets();
+  auto depSizes = acquire.getSizes();
+  auto blockSpans = alloc.getElementSizes();
+  unsigned rank = std::min<unsigned>(
+      std::min<unsigned>(elemOffsets.size(), elemSizes.size()),
+      std::min<unsigned>(depOffsets.size(),
+                         std::min<unsigned>(depSizes.size(),
+                                            blockSpans.size())));
+  if (rank == 0)
+    return std::nullopt;
+
+  Location loc = acquire.getLoc();
+  Value zero = AC->createIndexConstant(0, loc);
+  Value one = AC->createIndexConstant(1, loc);
+  Value trueI1 = AC->create<arith::ConstantIntOp>(loc, 1, 1);
+
+  NormalizedElementSlice slice;
+  slice.representable = trueI1;
+  slice.contiguous = AC->create<arith::ConstantIntOp>(loc, 0, 1);
+  slice.wholeBlock = trueI1;
+  slice.offsets.reserve(rank);
+  slice.sizes.reserve(rank);
+
+  auto clampToBlock = [&](Value absolute, Value blockStart, Value blockSpan) {
+    Value inRange = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
+                                              absolute, blockStart);
+    Value shifted = AC->create<arith::SubIOp>(loc, absolute, blockStart);
+    Value nonNegative =
+        AC->create<arith::SelectOp>(loc, inRange, shifted, zero);
+    return AC->create<arith::MinUIOp>(loc, nonNegative, blockSpan);
+  };
+
+  for (unsigned i = 0; i < rank; ++i) {
+    Value globalStart = AC->castToIndex(elemOffsets[i], loc);
+    Value globalSize = AC->castToIndex(elemSizes[i], loc);
+    Value globalEnd = AC->create<arith::AddIOp>(loc, globalStart, globalSize);
+
+    Value blockSpan = AC->castToIndex(blockSpans[i], loc);
+    Value depOffset = AC->castToIndex(depOffsets[i], loc);
+    Value depBlockCount = AC->castToIndex(depSizes[i], loc);
+
+    Value blockStart = AC->create<arith::MulIOp>(loc, depOffset, blockSpan);
+    Value localEncodedStart = AC->create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::ult, globalStart, blockSpan);
+    Value localEncodedEnd = AC->create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::ule, globalEnd, blockSpan);
+    Value sliceAlreadyLocal =
+        AC->create<arith::AndIOp>(loc, localEncodedStart, localEncodedEnd);
+
+    Value singleBlock = AC->create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::ule, depBlockCount, one);
+    Value localStartSingle = clampToBlock(globalStart, blockStart, blockSpan);
+    Value localEndSingle = clampToBlock(globalEnd, blockStart, blockSpan);
+    Value endAfterStart = AC->create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::uge, localEndSingle, localStartSingle);
+    Value rawSingleSize =
+        AC->create<arith::SubIOp>(loc, localEndSingle, localStartSingle);
+    Value localSizeSingle = AC->create<arith::SelectOp>(
+        loc, endAfterStart, rawSingleSize, zero);
+
+    Value blockCountSpan =
+        AC->create<arith::MulIOp>(loc, depBlockCount, blockSpan);
+    Value coveredEnd = AC->create<arith::AddIOp>(loc, blockStart,
+                                                 blockCountSpan);
+    Value coversStart = AC->create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::ule, globalStart, blockStart);
+    Value coversEnd = AC->create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::uge, globalEnd, coveredEnd);
+    Value fullCover =
+        AC->create<arith::AndIOp>(loc, coversStart, coversEnd);
+
+    Value globalRepresentable =
+        AC->create<arith::OrIOp>(loc, singleBlock, fullCover);
+    Value dimRepresentable =
+        AC->create<arith::OrIOp>(loc, sliceAlreadyLocal, globalRepresentable);
+
+    Value normalizedOffsetGlobal =
+        AC->create<arith::SelectOp>(loc, singleBlock, localStartSingle, zero);
+    Value normalizedSizeGlobal = AC->create<arith::SelectOp>(
+        loc, singleBlock, localSizeSingle, blockSpan);
+
+    Value normalizedOffset = AC->create<arith::SelectOp>(
+        loc, sliceAlreadyLocal, globalStart, normalizedOffsetGlobal);
+    Value normalizedSize = AC->create<arith::SelectOp>(
+        loc, sliceAlreadyLocal, globalSize, normalizedSizeGlobal);
+
+    slice.offsets.push_back(normalizedOffset);
+    slice.sizes.push_back(normalizedSize);
+    slice.representable =
+        AC->create<arith::AndIOp>(loc, slice.representable, dimRepresentable);
+
+    Value blockSpanIdx = AC->castToIndex(blockSpans[i], loc);
+    Value zeroOffset = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                                 normalizedOffset, zero);
+    Value fullExtent = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                                 normalizedSize, blockSpanIdx);
+    Value dimWholeBlock = AC->create<arith::AndIOp>(loc, zeroOffset, fullExtent);
+    slice.wholeBlock =
+        AC->create<arith::AndIOp>(loc, slice.wholeBlock, dimWholeBlock);
+  }
+
+  for (unsigned pivot = 0; pivot < rank; ++pivot) {
+    Value pivotContiguous = trueI1;
+    for (unsigned i = 0; i < rank; ++i) {
+      if (i < pivot) {
+        Value fixedOne = AC->create<arith::CmpIOp>(
+            loc, arith::CmpIPredicate::eq, slice.sizes[i], one);
+        pivotContiguous =
+            AC->create<arith::AndIOp>(loc, pivotContiguous, fixedOne);
+        continue;
+      }
+      if (i > pivot) {
+        Value zeroOffset = AC->create<arith::CmpIOp>(
+            loc, arith::CmpIPredicate::eq, slice.offsets[i], zero);
+        Value fullExtent = AC->create<arith::CmpIOp>(
+            loc, arith::CmpIPredicate::eq,
+            AC->castToIndex(blockSpans[i], loc), slice.sizes[i]);
+        Value trailingFull =
+            AC->create<arith::AndIOp>(loc, zeroOffset, fullExtent);
+        pivotContiguous =
+            AC->create<arith::AndIOp>(loc, pivotContiguous, trailingFull);
+      }
+    }
+    slice.contiguous =
+        AC->create<arith::OrIOp>(loc, slice.contiguous, pivotContiguous);
+  }
+
+  return slice;
+}
+
 struct DepSourceInfo {
   DbAcquireOp dbAcquire;
   DepDbAcquireOp depDbAcquire;
@@ -400,7 +546,7 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   AC->setInsertionPoint(edtOp);
   Value routeVal = edtOp.getRoute();
   if (!routeVal)
-    routeVal = AC->createIntConstant(0, AC->Int32, loc);
+    routeVal = createCurrentNodeRoute(AC->getBuilder(), loc);
 
   ARTS_DEBUG("Creating EdtCreateOp");
   EdtCreateOp outlineOp =
@@ -832,8 +978,28 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
 
       if (alloc && !alloc.getElementSizes().empty()) {
         auto elementSizes = alloc.getElementSizes();
-        auto elemOffsets = dbAcquireOp.getElementOffsets();
-        auto elemSizes = dbAcquireOp.getElementSizes();
+        SmallVector<Value, 4> elemOffsets(dbAcquireOp.getElementOffsets().begin(),
+                                          dbAcquireOp.getElementOffsets().end());
+        SmallVector<Value, 4> elemSizes(dbAcquireOp.getElementSizes().begin(),
+                                        dbAcquireOp.getElementSizes().end());
+        Value useSliceTransport =
+            AC->create<arith::ConstantIntOp>(loc, 1, 1);
+        if (auto normalized = normalizeCommonElementSlice(AC, dbAcquireOp, alloc)) {
+          elemOffsets.assign(normalized->offsets.begin(),
+                             normalized->offsets.end());
+          elemSizes.assign(normalized->sizes.begin(), normalized->sizes.end());
+          /// ARTS ESD is copy-based RO transport. If the normalized slice
+          /// still covers the entire local DB block, using
+          /// arts_add_dependence_at would only copy the whole block instead of
+          /// reusing the normal whole-DB dependence path.
+          Value sliceNarrowerThanBlock = AC->create<arith::XOrIOp>(
+              loc, normalized->wholeBlock,
+              AC->create<arith::ConstantIntOp>(loc, 1, 1));
+          Value sliceRepresentable = AC->create<arith::AndIOp>(
+              loc, normalized->representable, normalized->contiguous);
+          useSliceTransport = AC->create<arith::AndIOp>(
+              loc, sliceRepresentable, sliceNarrowerThanBlock);
+        }
 
         /// Get scalar type size from the element type
         Type elementType = alloc.getElementType();
@@ -865,6 +1031,11 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
           totalElements = AC->create<arith::MulIOp>(loc, totalElements, sz);
         }
         byteSize = AC->create<arith::MulIOp>(loc, totalElements, scalarSize);
+        Value zeroIdx = AC->createIndexConstant(0, loc);
+        byteOffset = AC->create<arith::SelectOp>(loc, useSliceTransport,
+                                                 byteOffset, zeroIdx);
+        byteSize = AC->create<arith::SelectOp>(loc, useSliceTransport,
+                                               byteSize, zeroIdx);
         hasEsdDeps = true;
       } else {
         /// Fallback: no allocation info available

@@ -67,6 +67,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include <algorithm>
+#include <cstdlib>
 #include <cstdint>
 #include <optional>
 
@@ -94,6 +95,18 @@ namespace {
 static bool
 hasExplicitStencilContract(const DbAnalysis::AcquireContractSummary *summary) {
   return summary && summary->contract.hasExplicitStencilContract();
+}
+
+static std::optional<int64_t> getForcedCoarseAllocId() {
+  const char *env = std::getenv("CARTS_DEBUG_FORCE_COARSE_ALLOC_ID");
+  if (!env || !*env)
+    return std::nullopt;
+
+  char *end = nullptr;
+  long long parsed = std::strtoll(env, &end, 10);
+  if (end == env || (end && *end != '\0') || parsed <= 0)
+    return std::nullopt;
+  return static_cast<int64_t>(parsed);
 }
 
 /// Validate that element-wise partition indices match actual EDT accesses.
@@ -461,7 +474,8 @@ static void lowerStencilAcquireBounds(ModuleOp module,
 
 /// Analyze a single acquire to determine its partition mode and chunk info.
 static AcquirePartitionInfo
-computeAcquirePartitionInfo(DbAnalysis &dbAnalysis, DbAcquireOp acquire,
+computeAcquirePartitionInfo(DbAnalysis &dbAnalysis, DbAcquireNode *acqNode,
+                            DbAcquireOp acquire,
                             const DbAnalysis::AcquireContractSummary *summary,
                             const DbAcquirePartitionFacts *facts,
                             OpBuilder &builder) {
@@ -510,6 +524,32 @@ computeAcquirePartitionInfo(DbAnalysis &dbAnalysis, DbAcquireOp acquire,
         (summary->hasBlockHints() || summary->inferredBlock())) {
       info.mode = summary->contract.isStencilFamily() ? PartitionMode::stencil
                                                       : PartitionMode::block;
+    }
+  }
+
+  if (acqNode) {
+    if (auto bounds = acqNode->getStencilBounds();
+        bounds && bounds->valid && bounds->hasHalo()) {
+      info.graphStencilBounds = *bounds;
+
+      unsigned offsetIdx = 0;
+      Value repOffset = DbUtils::pickRepresentativePartitionOffset(
+          info.partitionOffsets, &offsetIdx);
+      if (!repOffset) {
+        auto [nodeOffset, nodeSize] = acqNode->getPartitionInfo();
+        (void)nodeSize;
+        repOffset = nodeOffset;
+      }
+
+      if (repOffset) {
+        info.graphStencilOwnerDim =
+            acqNode->getPartitionOffsetDim(repOffset, /*requireLeading=*/false);
+      }
+
+      if (!info.graphStencilOwnerDim && offsetIdx < info.partitionDims.size())
+        info.graphStencilOwnerDim = info.partitionDims[offsetIdx];
+      if (!info.graphStencilOwnerDim && !info.partitionDims.empty())
+        info.graphStencilOwnerDim = info.partitionDims.front();
     }
   }
 
@@ -1298,7 +1338,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                 : SmallVector<DbAcquireNode *, 16>{};
 
   /// Step 1: Analyze each acquire's PartitionMode
-  SmallVector<AcquirePartitionInfo> acquireInfos;
+  SmallVector<AcquirePartitionInfo, 4> acquireInfos;
   SmallVector<const DbAcquirePartitionFacts *> acquireFacts;
   SmallVector<std::optional<DbAnalysis::AcquireContractSummary>, 8>
       acquireContractSummaries;
@@ -1314,7 +1354,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
           dbAnalysis.getAcquireContractSummary(acqNode->getDbAcquireOp());
       acquireContractSummaries.push_back(contractSummary);
       auto info = computeAcquirePartitionInfo(
-          dbAnalysis, acqNode->getDbAcquireOp(),
+          dbAnalysis, acqNode, acqNode->getDbAcquireOp(),
           contractSummary ? &*contractSummary : nullptr, facts, builder);
       if (!info.isValid) {
         ARTS_DEBUG("  Acquire analysis failed for "
@@ -1516,6 +1556,18 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
   /// Step 4: Initial heuristics arbitration.
   PartitioningDecision decision = heuristics.choosePartitioning(ctx);
+
+  if (auto forcedAllocId = getForcedCoarseAllocId();
+      forcedAllocId && getArtsId(allocOp.getOperation()) == *forcedAllocId) {
+    decision = PartitioningDecision::coarse(
+        ctx, "Debug override: forced coarse allocation by arts.id");
+    ARTS_DEBUG("  Forcing coarse allocation via "
+               << "CARTS_DEBUG_FORCE_COARSE_ALLOC_ID=" << *forcedAllocId);
+    heuristics.recordDecision(
+        "Partition-DebugForceCoarse", true,
+        "forced coarse allocation via CARTS_DEBUG_FORCE_COARSE_ALLOC_ID",
+        allocOp.getOperation(), {{"forcedArtsId", *forcedAllocId}});
+  }
 
   if (decision.isCoarse()) {
     ARTS_DEBUG("  Heuristics chose coarse - keeping original");
@@ -2002,7 +2054,17 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
                               contractSummary->contract.hasOwnerDims();
       bool preferTiling2D = acquire.getMode() == ArtsMode::inout &&
                             DbAnalysis::isTiling2DTaskAcquire(acquire);
-      if (preferContractND || preferTiling2D) {
+      bool preferWavefrontStencilMode =
+          info.depPattern == ArtsDepPattern::wavefront_2d &&
+          contractSummary &&
+          contractSummary->contract.hasExplicitStencilContract() &&
+          contractSummary->contract.supportsBlockHalo();
+      if (preferWavefrontStencilMode) {
+        ARTS_DEBUG("    Acquire[" << idx
+                                  << "]: explicit wavefront stencil "
+                                     "contract bypasses N-D block override");
+      }
+      if ((preferContractND || preferTiling2D) && !preferWavefrontStencilMode) {
         SmallVector<Value> candidateBlockSizes;
         unsigned targetRank =
             static_cast<unsigned>(acqInfo.partitionSizes.size());
@@ -2435,6 +2497,8 @@ FailureOr<DbAllocOp> DbPartitioningPass::assembleAndApplyRewritePlan(
     view.isValid = info.isValid;
     view.hasIndirectAccess = info.hasIndirectAccess;
     view.needsFullRange = info.needsFullRange;
+    view.graphStencilBounds = info.graphStencilBounds;
+    view.graphStencilOwnerDim = info.graphStencilOwnerDim;
     buildRewriteAcquire(decision.mode, view, allocOp, plan, rewriteInfo,
                         builder);
 

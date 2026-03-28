@@ -392,8 +392,16 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
     auto staticMinOffsets =
         contract ? contract->getStaticMinOffsets() : std::nullopt;
     SmallVector<unsigned, 4> ownerDims =
-        contract ? resolveContractOwnerDims(*contract, nPartDims)
-                 : SmallVector<unsigned, 4>{};
+        (contract && !contract->ownerDims.empty())
+            ? resolveContractOwnerDims(*contract, nPartDims)
+            : SmallVector<unsigned, 4>{};
+    auto resolveOwnerDim = [&](unsigned d) -> unsigned {
+      if (d < ownerDims.size())
+        return ownerDims[d];
+      if (d < plan.partitionedDims.size())
+        return plan.partitionedDims[d];
+      return d;
+    };
 
     const auto &offsets = info.partitionInfo.offsets;
     const auto &sizes = info.partitionInfo.sizes;
@@ -411,11 +419,8 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
       /// the owner-slice base in partitionInfo.offsets. Shift the start back
       /// by the left halo before converting to DB-space blocks so the block
       /// window matches the EDT-local dependency layout.
-      if (acquire.getMode() == ArtsMode::in && staticMinOffsets &&
-          d < ownerDims.size()) {
-        unsigned ownerDim = ownerDims[d];
-        if (ownerDim < staticMinOffsets->size()) {
-          int64_t minOffset = (*staticMinOffsets)[ownerDim];
+      if (acquire.getMode() == ArtsMode::in) {
+        auto shiftElemOffsetForMin = [&](int64_t minOffset) {
           if (minOffset < 0) {
             Value haloLeft =
                 arts::createConstantIndex(builder, loc, -minOffset);
@@ -425,11 +430,27 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
                 builder.create<arith::SubIOp>(loc, elemOff, haloLeft);
             elemOff =
                 builder.create<arith::SelectOp>(loc, canShift, shifted, zero);
-          } else if (minOffset > 0) {
+            return;
+          }
+          if (minOffset > 0) {
             Value haloShift =
                 arts::createConstantIndex(builder, loc, minOffset);
             elemOff = builder.create<arith::AddIOp>(loc, elemOff, haloShift);
           }
+        };
+
+        unsigned ownerDim = resolveOwnerDim(d);
+        if (staticMinOffsets && ownerDim < staticMinOffsets->size()) {
+          shiftElemOffsetForMin((*staticMinOffsets)[ownerDim]);
+        } else if (info.graphStencilBounds && info.graphStencilBounds->valid &&
+                   info.graphStencilBounds->hasHalo() &&
+                   (!info.graphStencilOwnerDim ||
+                    ownerDim == *info.graphStencilOwnerDim)) {
+          /// Graph-backed fallback for contracts that only persist
+          /// EDT-local fields on the acquire result. PartitionBoundsAnalyzer
+          /// already widened the span; we only need the owner-dim min offset
+          /// here to anchor the DB-space start block correctly.
+          shiftElemOffsetForMin(info.graphStencilBounds->minOffset);
         }
       }
 
@@ -614,11 +635,29 @@ void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
   Type newElementType = newAlloc.getAllocatedElementType();
   Value newSource = (ref.getSource() == oldAlloc.getPtr()) ? newAlloc.getPtr()
                                                            : ref.getSource();
+  bool allocSingleBlock =
+      !plan.outerSizes.empty() && llvm::all_of(plan.outerSizes, [](Value v) {
+        auto val = ValueAnalysis::tryFoldConstantIndex(v);
+        return val && *val == 1;
+      });
 
   /// Collect load/store users of this db_ref
   SmallVector<Operation *> refUsers(ref.getResult().getUsers().begin(),
                                     ref.getResult().getUsers().end());
   RemovalUtils removal;
+
+  unsigned nPartDims = plan.numPartitionedDims();
+  if (nPartDims == 0)
+    nPartDims = 1;
+  Value zero = arts::createZeroIndex(builder, loc);
+  SmallVector<Value> startBlocks;
+  startBlocks.reserve(nPartDims);
+  for (unsigned d = 0; d < nPartDims; ++d)
+    startBlocks.push_back(zero);
+
+  auto indexer = createBlockIndexer(
+      plan.blockSizes, startBlocks, plan.outerRank(), plan.innerRank(),
+      plan.partitionedDims, allocSingleBlock);
 
   bool hasLoadStoreUsers = false;
   for (Operation *user : refUsers) {
@@ -632,68 +671,40 @@ void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
     Location userLoc = user->getLoc();
 
     ValueRange loadStoreIndices = access->indices;
-
-    SmallVector<Value> newOuter, newInner;
-    auto zero = [&]() { return arts::createZeroIndex(builder, userLoc); };
-
-    /// STENCIL: div/mod for chunk selection (owned rows start at 0).
-    /// Prefer row index from load/store when it includes row+col, or when the
-    /// element type is 1D (single index is the row). Otherwise fall back to
-    /// db_ref indices (row-partitioned access with column-only loads).
-    Value cs = plan.getBlockSize(0) ? plan.getBlockSize(0) : zero();
-    Value rowIdx;
-    bool rowFromLoad = false;
-    unsigned elemRank = 0;
-    if (auto memrefTy = dyn_cast<MemRefType>(newElementType))
-      elemRank = memrefTy.getRank();
-
-    bool loadIncludesRow = (loadStoreIndices.size() > 1) || (elemRank == 1);
-
-    if (loadIncludesRow && !loadStoreIndices.empty()) {
-      rowIdx = loadStoreIndices.front();
-      rowFromLoad = true;
-    } else if (!ref.getIndices().empty()) {
-      rowIdx = ref.getIndices().front();
-    } else if (!loadStoreIndices.empty()) {
-      rowIdx = loadStoreIndices.front();
-      rowFromLoad = true;
-    }
-
-    if (rowIdx) {
-      newOuter.push_back(builder.create<arith::DivUIOp>(userLoc, rowIdx, cs));
-
-      /// Inner index = (rowIdx % blockSize)
-      Value rem = builder.create<arith::RemUIOp>(userLoc, rowIdx, cs);
-      newInner.push_back(rem);
-
-      if (rowFromLoad) {
-        for (unsigned i = 1; i < loadStoreIndices.size(); ++i)
-          newInner.push_back(loadStoreIndices[i]);
+    SmallVector<Value> globalIndices;
+    if (!loadStoreIndices.empty()) {
+      if (loadStoreIndices.size() < nPartDims && !ref.getIndices().empty()) {
+        globalIndices.assign(ref.getIndices().begin(), ref.getIndices().end());
+        globalIndices.append(loadStoreIndices.begin(), loadStoreIndices.end());
       } else {
-        for (Value idx : loadStoreIndices)
-          newInner.push_back(idx);
+        globalIndices.assign(loadStoreIndices.begin(), loadStoreIndices.end());
       }
     }
 
-    ARTS_DEBUG("  Outside-EDT remap uses uniform plan block size: " << cs);
+    LocalizedIndices localized =
+        globalIndices.empty() ? LocalizedIndices()
+                              : indexer->localize(globalIndices, builder,
+                                                  userLoc);
+    if (localized.dbRefIndices.empty())
+      localized.dbRefIndices.push_back(arts::createZeroIndex(builder, userLoc));
+    if (localized.memrefIndices.empty())
+      localized.memrefIndices.push_back(
+          arts::createZeroIndex(builder, userLoc));
 
-    if (newOuter.empty())
-      newOuter.push_back(zero());
-    if (newInner.empty())
-      newInner.push_back(zero());
+    ARTS_DEBUG("  Outside-EDT stencil remap uses N-D block indexer");
 
-    /// Create new db_ref with transformed outer indices
-    auto newRef =
-        builder.create<DbRefOp>(userLoc, newElementType, newSource, newOuter);
+    auto newRef = builder.create<DbRefOp>(userLoc, newElementType, newSource,
+                                          localized.dbRefIndices);
 
     /// Create new load/store with transformed inner indices
     if (access->isRead()) {
       auto load = cast<memref::LoadOp>(user);
-      auto newLoad = builder.create<memref::LoadOp>(userLoc, newRef, newInner);
+      auto newLoad = builder.create<memref::LoadOp>(
+          userLoc, newRef, localized.memrefIndices);
       load.replaceAllUsesWith(newLoad.getResult());
     } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
       builder.create<memref::StoreOp>(userLoc, store.getValue(), newRef,
-                                      newInner);
+                                      localized.memrefIndices);
     }
     removal.markForRemoval(user);
   }
@@ -704,10 +715,13 @@ void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
     builder.setInsertionPoint(ref);
     SmallVector<Value> indices(ref.getIndices().begin(),
                                ref.getIndices().end());
-    if (indices.empty())
-      indices.push_back(arts::createZeroIndex(builder, loc));
-    auto newRef =
-        builder.create<DbRefOp>(loc, newElementType, newSource, indices);
+    LocalizedIndices localized =
+        indices.empty() ? LocalizedIndices()
+                        : indexer->localize(indices, builder, loc);
+    if (localized.dbRefIndices.empty())
+      localized.dbRefIndices.push_back(zero);
+    auto newRef = builder.create<DbRefOp>(loc, newElementType, newSource,
+                                          localized.dbRefIndices);
     ref.replaceAllUsesWith(newRef.getResult());
   }
 
