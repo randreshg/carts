@@ -38,6 +38,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 
 #include <cstdint>
 #include <optional>
@@ -48,6 +49,35 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
+
+struct OffsetPatternGroup {
+  int64_t offsetConst = 0;
+  SmallVector<arith::DivUIOp> divOps;
+  SmallVector<Value> remValues;
+  SmallVector<Operation *> remPatternOps;
+};
+
+struct LoopNeighborhoodSegment {
+  int64_t localLowerConst = 0;
+  int64_t localUpperConst = 0;
+  SmallVector<int64_t, 4> blockDeltas;
+  SmallVector<int64_t, 4> localShifts;
+};
+
+struct NeighborhoodPattern {
+  int64_t offsetConst = 0;
+  int64_t blockSizeConst = 0;
+  std::optional<arith::DivUIOp> divOp;
+  Value remResult;
+  SmallVector<Operation *, 4> patternOps;
+};
+
+struct NeighborhoodLoopInfo {
+  int64_t blockSizeConst = 0;
+  unsigned matchedDbRefCount = 0;
+  SmallVector<OffsetPatternGroup, 4> offsetGroups;
+  SmallVector<LoopNeighborhoodSegment, 4> segments;
+};
 
 struct LoopBlockInfo {
   Value blockSizeVal;
@@ -85,6 +115,155 @@ static std::optional<Value> extractInvariantOffset(Value lhs, Value iv) {
       return lhsOp;
   }
   return std::nullopt;
+}
+
+/// Match expressions of the form:
+///   iv
+///   iv + invariant_base
+///   iv + invariant_base +/- constant
+/// and recover only the small neighborhood delta around that base. This lets
+/// neighborhood strip-mining handle Jacobi-style row indices where the loop IV
+/// is first translated by a dynamic block-aligned base and then adjusted by
+/// +/-1 for halo neighbors.
+static std::optional<int64_t>
+extractNeighborhoodConstantOffset(Value value, Value iv) {
+  value = ValueAnalysis::stripNumericCasts(value);
+  if (!value)
+    return std::nullopt;
+  if (ValueAnalysis::sameValue(value, iv))
+    return int64_t{0};
+
+  if (auto add = value.getDefiningOp<arith::AddIOp>()) {
+    Value lhs = ValueAnalysis::stripNumericCasts(add.getLhs());
+    Value rhs = ValueAnalysis::stripNumericCasts(add.getRhs());
+
+    if (auto lhsConst = ValueAnalysis::tryFoldConstantIndex(lhs)) {
+      if (auto rhsOffset = extractNeighborhoodConstantOffset(rhs, iv))
+        return *rhsOffset + *lhsConst;
+    }
+    if (auto rhsConst = ValueAnalysis::tryFoldConstantIndex(rhs)) {
+      if (auto lhsOffset = extractNeighborhoodConstantOffset(lhs, iv))
+        return *lhsOffset + *rhsConst;
+    }
+
+    if (!ValueAnalysis::dependsOn(lhs, iv))
+      return extractNeighborhoodConstantOffset(rhs, iv);
+    if (!ValueAnalysis::dependsOn(rhs, iv))
+      return extractNeighborhoodConstantOffset(lhs, iv);
+    return std::nullopt;
+  }
+
+  if (auto sub = value.getDefiningOp<arith::SubIOp>()) {
+    Value lhs = ValueAnalysis::stripNumericCasts(sub.getLhs());
+    Value rhs = ValueAnalysis::stripNumericCasts(sub.getRhs());
+
+    if (auto rhsConst = ValueAnalysis::tryFoldConstantIndex(rhs)) {
+      if (auto lhsOffset = extractNeighborhoodConstantOffset(lhs, iv))
+        return *lhsOffset - *rhsConst;
+    }
+    return std::nullopt;
+  }
+
+  return std::nullopt;
+}
+
+static OffsetPatternGroup &
+getOrCreateOffsetGroup(NeighborhoodLoopInfo &info, int64_t offsetConst) {
+  for (OffsetPatternGroup &group : info.offsetGroups) {
+    if (group.offsetConst == offsetConst)
+      return group;
+  }
+  info.offsetGroups.push_back(OffsetPatternGroup{offsetConst, {}, {}, {}});
+  return info.offsetGroups.back();
+}
+
+static std::optional<NeighborhoodPattern>
+matchNeighborhoodPattern(Value lhs, Value rhs,
+                         std::optional<arith::DivUIOp> divOp, Value remResult,
+                         Value iv, ArrayRef<Operation *> patternOps) {
+  auto offsetConst = extractNeighborhoodConstantOffset(lhs, iv);
+  if (!offsetConst)
+    return std::nullopt;
+
+  Value normalizedRhs = ValueAnalysis::stripNumericCasts(rhs);
+  if (ValueAnalysis::dependsOn(normalizedRhs, iv))
+    return std::nullopt;
+
+  auto rhsConst = ValueAnalysis::tryFoldConstantIndex(normalizedRhs);
+  if (!rhsConst || *rhsConst <= 1)
+    return std::nullopt;
+
+  if (std::abs(*offsetConst) >= *rhsConst)
+    return std::nullopt;
+
+  NeighborhoodPattern pattern;
+  pattern.offsetConst = *offsetConst;
+  pattern.blockSizeConst = *rhsConst;
+  pattern.divOp = divOp;
+  pattern.remResult = remResult;
+  llvm::append_range(pattern.patternOps, patternOps);
+  return pattern;
+}
+
+static NeighborhoodLoopInfo &
+getOrCreateNeighborhoodFamily(SmallVectorImpl<NeighborhoodLoopInfo> &families,
+                              int64_t blockSizeConst) {
+  for (NeighborhoodLoopInfo &family : families) {
+    if (family.blockSizeConst == blockSizeConst)
+      return family;
+  }
+  NeighborhoodLoopInfo family;
+  family.blockSizeConst = blockSizeConst;
+  families.push_back(std::move(family));
+  return families.back();
+}
+
+static void recordNeighborhoodPattern(NeighborhoodLoopInfo &info,
+                                      const NeighborhoodPattern &pattern) {
+  OffsetPatternGroup &group =
+      getOrCreateOffsetGroup(info, pattern.offsetConst);
+  ARTS_DEBUG("Neighborhood match: offset=" << pattern.offsetConst
+                                           << " blockSize="
+                                           << info.blockSizeConst);
+  if (pattern.divOp)
+    group.divOps.push_back(*pattern.divOp);
+  if (pattern.remResult)
+    group.remValues.push_back(pattern.remResult);
+  llvm::append_range(group.remPatternOps, pattern.patternOps);
+}
+
+static std::optional<NeighborhoodPattern>
+matchNormalizedSignedRemainderNeighborhood(arith::SelectOp selectOp,
+                                           Value iv) {
+  auto rem = selectOp.getFalseValue().getDefiningOp<arith::RemSIOp>();
+  if (!rem)
+    return std::nullopt;
+  auto cmp = selectOp.getCondition().getDefiningOp<arith::CmpIOp>();
+  auto add = selectOp.getTrueValue().getDefiningOp<arith::AddIOp>();
+  if (!cmp || !add)
+    return std::nullopt;
+  if (cmp.getPredicate() != arith::CmpIPredicate::slt)
+    return std::nullopt;
+
+  Value remResult = rem.getResult();
+  if (!ValueAnalysis::sameValue(ValueAnalysis::stripNumericCasts(cmp.getLhs()),
+                                remResult) ||
+      !ValueAnalysis::isZeroConstant(
+          ValueAnalysis::stripNumericCasts(cmp.getRhs())))
+    return std::nullopt;
+
+  Value addLhs = ValueAnalysis::stripNumericCasts(add.getLhs());
+  Value addRhs = ValueAnalysis::stripNumericCasts(add.getRhs());
+  Value rhs = ValueAnalysis::stripNumericCasts(rem.getRhs());
+  if (!ValueAnalysis::sameValue(addLhs, remResult) ||
+      !ValueAnalysis::sameValue(addRhs, rhs))
+    return std::nullopt;
+
+  SmallVector<Operation *> patternOps = {rem.getOperation(), cmp.getOperation(),
+                                         add.getOperation(),
+                                         selectOp.getOperation()};
+  return matchNeighborhoodPattern(rem.getLhs(), rem.getRhs(), std::nullopt,
+                                  selectOp.getResult(), iv, patternOps);
 }
 
 static bool recordRemPattern(Value lhs, Value rhs, Value remResult, Value iv,
@@ -228,8 +407,200 @@ static bool dominatesOrInAncestor(Value v, Operation *op,
   return domInfo.dominates(v, op);
 }
 
-static std::optional<LoopBlockInfo> analyzeLoop(scf::ForOp loop,
-                                                DominanceInfo &domInfo) {
+static SmallVector<LoopNeighborhoodSegment, 4>
+buildNeighborhoodSegments(const NeighborhoodLoopInfo &info) {
+  SmallVector<int64_t, 8> boundaries = {0, info.blockSizeConst};
+  for (const OffsetPatternGroup &group : info.offsetGroups) {
+    int64_t offset = group.offsetConst;
+    if (offset < 0)
+      boundaries.push_back(-offset);
+    else if (offset > 0)
+      boundaries.push_back(info.blockSizeConst - offset);
+  }
+
+  llvm::sort(boundaries);
+  boundaries.erase(std::unique(boundaries.begin(), boundaries.end()),
+                   boundaries.end());
+
+  SmallVector<LoopNeighborhoodSegment, 4> segments;
+  for (size_t idx = 0, e = boundaries.size(); idx + 1 < e; ++idx) {
+    int64_t lowerConst = boundaries[idx];
+    int64_t upperConst = boundaries[idx + 1];
+    if (lowerConst >= upperConst)
+      continue;
+
+    LoopNeighborhoodSegment segment;
+    segment.localLowerConst = lowerConst;
+    segment.localUpperConst = upperConst;
+    segment.blockDeltas.reserve(info.offsetGroups.size());
+    segment.localShifts.reserve(info.offsetGroups.size());
+
+    for (const OffsetPatternGroup &group : info.offsetGroups) {
+      int64_t blockDelta = 0;
+      if (group.offsetConst < 0 && lowerConst < -group.offsetConst) {
+        blockDelta = -1;
+      } else if (group.offsetConst > 0 &&
+                 lowerConst >= info.blockSizeConst - group.offsetConst) {
+        blockDelta = 1;
+      }
+      segment.blockDeltas.push_back(blockDelta);
+      segment.localShifts.push_back(group.offsetConst -
+                                    blockDelta * info.blockSizeConst);
+    }
+
+    segments.push_back(std::move(segment));
+  }
+  return segments;
+}
+
+static unsigned
+countTrackedNeighborhoodPatterns(const NeighborhoodLoopInfo &info) {
+  unsigned count = 0;
+  for (const OffsetPatternGroup &group : info.offsetGroups)
+    count += group.divOps.size() + group.remValues.size();
+  return count;
+}
+
+static bool hasNonZeroNeighborhoodOffset(const NeighborhoodLoopInfo &info) {
+  return llvm::any_of(info.offsetGroups, [](const OffsetPatternGroup &group) {
+    return group.offsetConst != 0;
+  });
+}
+
+static unsigned countNeighborhoodDbRefUsers(scf::ForOp loop,
+                                            const NeighborhoodLoopInfo &info) {
+  SmallVector<Operation *, 8> matchedRefs;
+  loop.getBody()->walk([&](DbRefOp ref) {
+    for (Value idx : ref.getIndices()) {
+      Value base = ValueAnalysis::stripNumericCasts(idx);
+      for (const OffsetPatternGroup &group : info.offsetGroups) {
+        for (auto div : group.divOps) {
+          if (!ValueAnalysis::dependsOn(base, div.getResult()))
+            continue;
+          if (!llvm::is_contained(matchedRefs, ref.getOperation()))
+            matchedRefs.push_back(ref.getOperation());
+          return;
+        }
+      }
+    }
+  });
+  return matchedRefs.size();
+}
+
+static bool finalizeNeighborhoodCandidate(scf::ForOp loop,
+                                          NeighborhoodLoopInfo &info) {
+  if (info.blockSizeConst <= 1 || info.offsetGroups.empty())
+    return false;
+  /// Neighborhood strip-mining is only profitable when the loop carries
+  /// halo-style offsets around the block-local center. Center-only families
+  /// belong to the legacy block strip-miner or later hoisting; rewriting them
+  /// here just adds outer-loop structure without removing any neighborhood
+  /// localization work.
+  if (!hasNonZeroNeighborhoodOffset(info))
+    return false;
+
+  unsigned divCount = 0;
+  unsigned remCount = 0;
+  for (const OffsetPatternGroup &group : info.offsetGroups) {
+    divCount += group.divOps.size();
+    remCount += group.remValues.size();
+  }
+  if (divCount == 0 || remCount == 0)
+    return false;
+
+  llvm::sort(info.offsetGroups, [](const OffsetPatternGroup &lhs,
+                                   const OffsetPatternGroup &rhs) {
+    return lhs.offsetConst < rhs.offsetConst;
+  });
+
+  info.matchedDbRefCount = countNeighborhoodDbRefUsers(loop, info);
+  if (info.matchedDbRefCount == 0)
+    return false;
+
+  info.segments = buildNeighborhoodSegments(info);
+  return !info.segments.empty();
+}
+
+static bool isBetterNeighborhoodCandidate(const NeighborhoodLoopInfo &lhs,
+                                          const NeighborhoodLoopInfo &rhs) {
+  if (lhs.matchedDbRefCount != rhs.matchedDbRefCount)
+    return lhs.matchedDbRefCount > rhs.matchedDbRefCount;
+  if (lhs.offsetGroups.size() != rhs.offsetGroups.size())
+    return lhs.offsetGroups.size() > rhs.offsetGroups.size();
+  return countTrackedNeighborhoodPatterns(lhs) >
+         countTrackedNeighborhoodPatterns(rhs);
+}
+
+static std::optional<NeighborhoodLoopInfo>
+analyzeNeighborhoodLoop(scf::ForOp loop, DominanceInfo &domInfo) {
+  (void)domInfo;
+  Value iv = loop.getInductionVar();
+  SmallVector<NeighborhoodLoopInfo, 4> candidates;
+
+  int64_t step = 0;
+  if (!getConstIndex(loop.getStep(), step) || step != 1) {
+    ARTS_DEBUG("Neighborhood strip-mining skipped: non-unit step");
+    return std::nullopt;
+  }
+
+  auto recordMatch = [&](const NeighborhoodPattern &pattern) {
+    recordNeighborhoodPattern(
+        getOrCreateNeighborhoodFamily(candidates, pattern.blockSizeConst),
+        pattern);
+  };
+
+  /// One loop can carry multiple independent block decompositions, such as
+  /// row and column block indices in a 2-D stencil. Collect families per
+  /// block size and choose the family most tightly coupled to db_ref users
+  /// instead of rejecting on the first unrelated div/rem encountered.
+  loop.getBody()->walk([&](Operation *op) {
+    if (auto div = dyn_cast<arith::DivUIOp>(op)) {
+      if (auto pattern = matchNeighborhoodPattern(div.getLhs(), div.getRhs(),
+                                                  div, Value(), iv, {}))
+        recordMatch(*pattern);
+      return;
+    }
+    if (auto rem = dyn_cast<arith::RemUIOp>(op)) {
+      if (auto pattern =
+              matchNeighborhoodPattern(rem.getLhs(), rem.getRhs(),
+                                       std::nullopt, rem.getResult(), iv,
+                                       {rem.getOperation()}))
+        recordMatch(*pattern);
+      return;
+    }
+    if (auto select = dyn_cast<arith::SelectOp>(op)) {
+      if (auto pattern = matchNormalizedSignedRemainderNeighborhood(select, iv))
+        recordMatch(*pattern);
+      return;
+    }
+    if (isa<arith::RemSIOp, arith::CmpIOp>(op))
+      return;
+  });
+
+  NeighborhoodLoopInfo *bestCandidate = nullptr;
+  for (NeighborhoodLoopInfo &candidate : candidates) {
+    if (!finalizeNeighborhoodCandidate(loop, candidate))
+      continue;
+    if (!bestCandidate ||
+        isBetterNeighborhoodCandidate(candidate, *bestCandidate))
+      bestCandidate = &candidate;
+  }
+
+  if (!bestCandidate) {
+    ARTS_DEBUG("Neighborhood strip-mining skipped: no valid candidate family");
+    return std::nullopt;
+  }
+
+  ARTS_DEBUG("Neighborhood candidate selected: blockSize="
+             << bestCandidate->blockSizeConst << " groups="
+             << bestCandidate->offsetGroups.size() << " dbRefs="
+             << bestCandidate->matchedDbRefCount << " segments="
+             << bestCandidate->segments.size());
+  return *bestCandidate;
+}
+
+static std::optional<LoopBlockInfo> analyzeLegacyLoop(scf::ForOp loop,
+                                                      DominanceInfo &domInfo) {
   LoopBlockInfo info;
   Value iv = loop.getInductionVar();
   Value loopLowerBound = loop.getLowerBound();
@@ -351,7 +722,165 @@ static std::optional<LoopBlockInfo> analyzeLoop(scf::ForOp loop,
   return info;
 }
 
-static bool stripMineLoop(scf::ForOp loop, const LoopBlockInfo &info) {
+static bool stripMineNeighborhoodLoop(scf::ForOp loop,
+                                      const NeighborhoodLoopInfo &info) {
+  Location loc = loop.getLoc();
+  OpBuilder builder(loop);
+
+  int64_t step = 0;
+  if (!getConstIndex(loop.getStep(), step) || step != 1)
+    return false;
+
+  Operation *origTerminator =
+      loop.getBody()->empty() ? nullptr : &loop.getBody()->back();
+  auto origYield = dyn_cast_or_null<scf::YieldOp>(origTerminator);
+  if (!origYield)
+    return false;
+
+  Value zero = arts::createZeroIndex(builder, loc);
+  Value one = arts::createOneIndex(builder, loc);
+  Value lbVal = ValueAnalysis::ensureIndexType(loop.getLowerBound(), builder, loc);
+  Value ubVal = ValueAnalysis::ensureIndexType(loop.getUpperBound(), builder, loc);
+  Value bsVal = arts::createConstantIndex(builder, loc, info.blockSizeConst);
+  Value bsMinusOne = builder.create<arith::SubIOp>(loc, bsVal, one);
+
+  Value blockLower = builder.create<arith::DivUIOp>(loc, lbVal, bsVal);
+  Value ubPlus = builder.create<arith::AddIOp>(loc, ubVal, bsMinusOne);
+  Value blockUpperRaw = builder.create<arith::DivUIOp>(loc, ubPlus, bsVal);
+  Value hasWork = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt,
+                                                ubVal, lbVal);
+  Value blockUpper =
+      builder.create<arith::SelectOp>(loc, hasWork, blockUpperRaw, blockLower);
+
+  auto outer = builder.create<scf::ForOp>(loc, blockLower, blockUpper, one,
+                                          loop.getInitArgs());
+  builder.setInsertionPointToStart(outer.getBody());
+
+  Value blockStart =
+      builder.create<arith::MulIOp>(loc, outer.getInductionVar(), bsVal);
+
+  auto clampToBlock = [&](Value bound) -> Value {
+    Value before = builder.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::uge, blockStart, bound);
+    Value distance = builder.create<arith::SubIOp>(loc, bound, blockStart);
+    Value nonNegative =
+        builder.create<arith::SelectOp>(loc, before, zero, distance);
+    return builder.create<arith::MinUIOp>(loc, nonNegative, bsVal);
+  };
+
+  Value localLower = clampToBlock(lbVal);
+  Value localUpper = clampToBlock(ubVal);
+
+  SmallVector<Operation *> skipOps;
+  skipOps.reserve(info.offsetGroups.size() * 4);
+  for (const OffsetPatternGroup &group : info.offsetGroups) {
+    for (auto div : group.divOps)
+      skipOps.push_back(div);
+    llvm::append_range(skipOps, group.remPatternOps);
+  }
+
+  SmallVector<Value> carriedValues(outer.getRegionIterArgs().begin(),
+                                   outer.getRegionIterArgs().end());
+  for (const LoopNeighborhoodSegment &segmentInfo : info.segments) {
+    Value segLowerConst =
+        arts::createConstantIndex(builder, loc, segmentInfo.localLowerConst);
+    Value segUpperConst =
+        arts::createConstantIndex(builder, loc, segmentInfo.localUpperConst);
+    Value segLower = builder.create<arith::MaxUIOp>(loc, localLower, segLowerConst);
+    Value segUpper = builder.create<arith::MinUIOp>(loc, localUpper, segUpperConst);
+
+    auto inner =
+        builder.create<scf::ForOp>(loc, segLower, segUpper, one, carriedValues);
+    builder.setInsertionPointToStart(inner.getBody());
+
+    Value local = inner.getInductionVar();
+    Value global = builder.create<arith::AddIOp>(loc, blockStart, local);
+
+    IRMapping mapping;
+    mapping.map(loop.getInductionVar(), global);
+
+    auto oldArgs = loop.getRegionIterArgs();
+    auto newArgs = inner.getRegionIterArgs();
+    for (auto it : llvm::zip(oldArgs, newArgs))
+      mapping.map(std::get<0>(it), std::get<1>(it));
+
+    for (auto [groupIndex, group] : llvm::enumerate(info.offsetGroups)) {
+      int64_t blockDelta = segmentInfo.blockDeltas[groupIndex];
+      int64_t localShift = segmentInfo.localShifts[groupIndex];
+
+      Value blockIdx = outer.getInductionVar();
+      if (blockDelta != 0) {
+        Value deltaConst = arts::createConstantIndex(builder, loc, blockDelta);
+        blockIdx = builder.create<arith::AddIOp>(loc, blockIdx, deltaConst);
+      }
+      for (auto div : group.divOps)
+        mapping.map(div.getResult(), blockIdx);
+
+      Value remVal = local;
+      if (localShift != 0) {
+        Value shiftConst = arts::createConstantIndex(builder, loc, localShift);
+        remVal = builder.create<arith::AddIOp>(loc, local, shiftConst);
+      }
+      for (Value rem : group.remValues)
+        mapping.map(rem, remVal);
+    }
+
+    for (Operation &op : loop.getBody()->without_terminator()) {
+      if (auto div = dyn_cast<arith::DivUIOp>(&op)) {
+        bool skipped = false;
+        for (const OffsetPatternGroup &group : info.offsetGroups) {
+          if (llvm::is_contained(group.divOps, div)) {
+            skipped = true;
+            break;
+          }
+        }
+        if (skipped)
+          continue;
+      }
+      if (llvm::is_contained(skipOps, &op))
+        continue;
+      builder.clone(op, mapping);
+    }
+
+    scf::YieldOp innerYield = nullptr;
+    for (Operation &op : *inner.getBody()) {
+      if (auto y = dyn_cast<scf::YieldOp>(&op)) {
+        innerYield = y;
+        break;
+      }
+    }
+    if (innerYield)
+      innerYield.erase();
+    builder.setInsertionPointToEnd(inner.getBody());
+
+    SmallVector<Value> newYieldOperands;
+    newYieldOperands.reserve(origYield.getNumOperands());
+    for (Value v : origYield.getOperands())
+      newYieldOperands.push_back(mapping.lookupOrDefault(v));
+    builder.create<scf::YieldOp>(loc, newYieldOperands);
+
+    builder.setInsertionPointAfter(inner);
+    carriedValues.assign(inner.getResults().begin(), inner.getResults().end());
+  }
+
+  scf::YieldOp outerYield = nullptr;
+  for (Operation &op : *outer.getBody()) {
+    if (auto y = dyn_cast<scf::YieldOp>(&op)) {
+      outerYield = y;
+      break;
+    }
+  }
+  if (outerYield)
+    outerYield.erase();
+  builder.setInsertionPointToEnd(outer.getBody());
+  builder.create<scf::YieldOp>(loc, carriedValues);
+
+  loop.replaceAllUsesWith(outer.getResults());
+  loop.erase();
+  return true;
+}
+
+static bool stripMineLegacyLoop(scf::ForOp loop, const LoopBlockInfo &info) {
   Location loc = loop.getLoc();
   OpBuilder builder(loop);
   int64_t ub = 0, step = 0;
@@ -530,26 +1059,48 @@ struct BlockLoopStripMiningPass
 
   void runOnOperation() override {
     func::FuncOp func = getOperation();
-    DominanceInfo domInfo(func);
+    bool changed = false;
+    do {
+      changed = false;
+      DominanceInfo domInfo(func);
 
-    SmallVector<scf::ForOp> loops;
-    func.walk([&](scf::ForOp loop) { loops.push_back(loop); });
+      /// Re-run a post-order walk after each rewrite instead of holding a
+      /// pre-collected loop list. Neighborhood strip-mining can rewrite
+      /// enclosing loops, so fixed-point traversal avoids stale handles to
+      /// nested loops while still keeping the transform generic.
+      (void)func.walk<WalkOrder::PostOrder>([&](scf::ForOp loop) {
+        if (!loop->getBlock() || loop.getRegion().empty())
+          return WalkResult::advance();
 
-    /// Process inner loops first to avoid invalidating parents.
-    for (auto it = loops.rbegin(); it != loops.rend(); ++it) {
-      scf::ForOp loop = *it;
-      if (!loop)
-        continue;
-      if (!isInnermostLoop(loop))
-        continue;
+        /// Neighborhood-aware strip-mining can safely rewrite enclosing loops
+        /// that carry block-neighborhood div/rem state into nested stencil
+        /// loops. Restrict only the legacy single-dimension block strip-miner
+        /// to innermost loops; otherwise patterns like Seidel keep their
+        /// expensive row-boundary carry math because the relevant loop is not
+        /// the innermost point loop.
+        if (auto neighborhoodInfo = analyzeNeighborhoodLoop(loop, domInfo)) {
+          if (stripMineNeighborhoodLoop(loop, *neighborhoodInfo)) {
+            ARTS_DEBUG("Applied neighborhood-aware block strip-mining to loop");
+            changed = true;
+            return WalkResult::interrupt();
+          }
+        }
 
-      auto info = analyzeLoop(loop, domInfo);
-      if (!info)
-        continue;
+        if (!isInnermostLoop(loop))
+          return WalkResult::advance();
 
-      if (stripMineLoop(loop, *info))
-        ARTS_DEBUG("Applied block strip-mining to loop");
-    }
+        auto info = analyzeLegacyLoop(loop, domInfo);
+        if (!info)
+          return WalkResult::advance();
+
+        if (stripMineLegacyLoop(loop, *info)) {
+          ARTS_DEBUG("Applied block strip-mining to loop");
+          changed = true;
+          return WalkResult::interrupt();
+        }
+        return WalkResult::advance();
+      });
+    } while (changed);
   }
 };
 
