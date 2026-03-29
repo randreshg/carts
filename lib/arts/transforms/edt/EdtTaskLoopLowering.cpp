@@ -66,7 +66,7 @@ TaskLoopLoweringResult EdtTaskLoopLowering::lowerBlockStyle(
   result.innerStripeLane = zero;
   result.innerStripeCount = one;
 
-  result.insideBounds = DistributionHeuristics::recomputeBoundsInside(
+  result.insideBounds = WorkDistributionUtils::recomputeBoundsInside(
       input.AC, input.loc, input.strategy, input.taskWorkerId,
       input.totalWorkers, input.workersPerNode, input.upperBound,
       input.lowerBound, input.loopStep, input.blockSize,

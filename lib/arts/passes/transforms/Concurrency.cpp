@@ -19,7 +19,6 @@
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/graphs/edt/EdtNode.h"
-#include "arts/analysis/heuristics/DistributionHeuristics.h"
 #define GEN_PASS_DEF_CONCURRENCY
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
@@ -184,8 +183,8 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
   auto func = edtOp->getParentOfType<func::FuncOp>();
   auto *edtNode = func ? AM->getEdtAnalysis().getEdtNode(edtOp) : nullptr;
   bool hasNestedTasks = edtNode ? edtNode->hasNestedTaskEdts() : false;
-  ParallelismDecision machineDecision =
-      DistributionHeuristics::resolveParallelismFromMachine(abstractMachine);
+  auto &heuristics = AM->getEdtHeuristics();
+  ParallelismDecision machineDecision = heuristics.resolveParallelism();
   if (hasNestedTasks) {
     int64_t workers = std::max<int64_t>(1, machineDecision.workersPerNode);
     ARTS_INFO("Parallel EDT contains nested tasks - keeping intranode with "

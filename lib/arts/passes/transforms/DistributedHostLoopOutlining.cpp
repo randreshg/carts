@@ -326,12 +326,14 @@ static void cloneScfLoopBodyIntoArtsFor(scf::ForOp sourceLoop,
 }
 
 static void applyMachineWorkerTopology(EdtOp outlinedEdt,
-                                       const AbstractMachine *machine) {
+                                       const AbstractMachine *machine,
+                                       const EdtHeuristics *heuristics) {
   if (!outlinedEdt || outlinedEdt.getConcurrency() != EdtConcurrency::internode)
     return;
 
-  auto workerConfig =
-      DistributionHeuristics::resolveWorkerConfig(outlinedEdt, machine);
+  auto workerConfig = heuristics ? heuristics->resolveWorkerConfig(outlinedEdt)
+                                 : DistributionHeuristics::resolveWorkerConfig(
+                                       outlinedEdt, machine);
   if (!workerConfig)
     return;
 
@@ -341,7 +343,8 @@ static void applyMachineWorkerTopology(EdtOp outlinedEdt,
     setWorkersPerNode(outlinedEdt.getOperation(), workerConfig->workersPerNode);
 }
 
-static void outlineLoop(scf::ForOp loop, const AbstractMachine *machine) {
+static void outlineLoop(scf::ForOp loop, const AbstractMachine *machine,
+                        const EdtHeuristics *heuristics) {
   Location loc = loop.getLoc();
   OpBuilder builder(loop);
 
@@ -358,7 +361,7 @@ static void outlineLoop(scf::ForOp loop, const AbstractMachine *machine) {
   auto outlinedEdt = epochBuilder.create<EdtOp>(
       loc, EdtType::task, EdtConcurrency::internode, routeZero, ValueRange{});
   outlinedEdt.setNoVerifyAttr(NoVerifyAttr::get(epochBuilder.getContext()));
-  applyMachineWorkerTopology(outlinedEdt, machine);
+  applyMachineWorkerTopology(outlinedEdt, machine, heuristics);
 
   Block &edtBody = outlinedEdt.getBody().front();
   OpBuilder::InsertionGuard edtGuard(epochBuilder);
@@ -392,10 +395,12 @@ struct DistributedHostLoopOutliningPass
   void runOnOperation() override {
     ModuleOp module = getOperation();
     LoopAnalysis *loopAnalysis = nullptr;
+    EdtHeuristics *edtHeuristics = nullptr;
     const AbstractMachine *machine = nullptr;
     if (AM) {
       loopAnalysis = &AM->getLoopAnalysis();
       loopAnalysis->invalidate();
+      edtHeuristics = &AM->getEdtHeuristics();
       machine = &AM->getAbstractMachine();
     }
 
@@ -428,7 +433,7 @@ struct DistributedHostLoopOutliningPass
     for (scf::ForOp loop : candidates) {
       if (!loop || !loop->getBlock())
         continue;
-      outlineLoop(loop, machine);
+      outlineLoop(loop, machine, edtHeuristics);
       ++numConverted;
     }
 

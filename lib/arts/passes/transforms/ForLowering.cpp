@@ -39,6 +39,7 @@
 #include "arts/transforms/edt/EdtReductionLowering.h"
 #include "arts/transforms/edt/EdtRewriter.h"
 #include "arts/transforms/edt/EdtTaskLoopLowering.h"
+#include "arts/transforms/edt/WorkDistributionUtils.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
@@ -73,335 +74,6 @@ using namespace mlir::arts;
 
 namespace {
 
-/// Inputs required to plan one rewritten task acquire.
-struct AcquireRewritePlanningInput {
-  ArtsCodegen *AC = nullptr;
-  Location loc;
-
-  ForOp loopOp;
-  DbAcquireOp parentAcquire;
-  Value rootGuid;
-  Value rootPtr;
-
-  DistributionKind distributionKind = DistributionKind::Flat;
-  std::optional<EdtDistributionPattern> distributionPattern;
-  std::optional<Tiling2DWorkerGrid> tiling2DGrid;
-  AcquireRewriteContract rewriteContract;
-
-  Value acquireOffset;
-  Value acquireSize;
-  Value acquireHintSize;
-  Value step;
-  bool stepIsUnit = true;
-};
-
-struct AcquireRewritePlan {
-  AcquireRewriteInput rewriteInput;
-  bool useStencilRewriter = false;
-};
-
-struct TaskAcquireWindow {
-  Value elementOffset;
-  Value elementSize;
-  Value dbOffset;
-  Value dbSize;
-};
-
-static DistributionStrategy resolveDistributionStrategy(EdtOp originalParallel,
-                                                        ForOp forOp) {
-  /// Prefer explicit distribution_kind stamped by EdtDistributionPass. Fall
-  /// back to concurrency-derived strategy when the annotation is absent.
-  auto strategy = DistributionHeuristics::analyzeStrategy(
-      originalParallel.getConcurrency(), /*machine=*/nullptr);
-  if (auto selectedKind = getEdtDistributionKind(forOp.getOperation()))
-    strategy.kind = DistributionHeuristics::toDistributionKind(*selectedKind);
-  return strategy;
-}
-
-static std::optional<EdtDistributionPattern>
-resolveDistributionPattern(mlir::arts::AnalysisManager *AM, ForOp forOp,
-                           EdtOp originalParallel) {
-  if (auto pattern = getEdtDistributionPattern(forOp.getOperation()))
-    return pattern;
-  if (AM) {
-    if (auto pattern = AM->getDbAnalysis().getLoopDistributionPattern(forOp);
-        pattern && *pattern != EdtDistributionPattern::unknown) {
-      return pattern;
-    }
-  }
-  return getEdtDistributionPattern(originalParallel.getOperation());
-}
-
-/// Plan one task-local acquire rewrite from the already-selected distribution
-/// shape. This stays local to ForLowering because no other pass consumes the
-/// planning contract.
-static AcquireRewritePlan
-planAcquireRewrite(AcquireRewritePlanningInput input) {
-  auto makePlan = [&]() {
-    return AcquireRewritePlan{
-        AcquireRewriteInput{input.AC, input.loc, input.parentAcquire,
-                            input.rootGuid, input.rootPtr, input.acquireOffset,
-                            input.acquireSize, input.acquireHintSize,
-                            /*extraOffsets=*/SmallVector<Value, 4>{},
-                            /*extraSizes=*/SmallVector<Value, 4>{},
-                            /*extraHintSizes=*/SmallVector<Value, 4>{},
-                            /*dimensionExtents=*/SmallVector<Value, 4>{},
-                            /*haloMinOffsets=*/SmallVector<int64_t, 4>{},
-                            /*haloMaxOffsets=*/SmallVector<int64_t, 4>{},
-                            input.step, input.stepIsUnit,
-                            /*singleElement=*/false,
-                            /*forceCoarse=*/
-                            input.distributionKind ==
-                                DistributionKind::BlockCyclic,
-                            /*preserveParentDepRange=*/false,
-                            /*stencilExtent=*/Value()},
-        /*useStencilRewriter=*/false};
-  };
-
-  if (!input.AC || !input.parentAcquire)
-    return makePlan();
-
-  Value zero = input.AC->createIndexConstant(0, input.loc);
-  Value one = input.AC->createIndexConstant(1, input.loc);
-  AcquireRewritePlan plan{makePlan()};
-
-  bool isSingleElement = false;
-  bool forceCoarseRewrite = plan.rewriteInput.forceCoarse;
-  Value stencilExtent;
-  SmallVector<Value, 4> extraOffsets;
-  SmallVector<Value, 4> extraSizes;
-  SmallVector<Value, 4> extraHintSizes;
-  SmallVector<Value, 4> dimensionExtents;
-  AcquireRewriteContract rewriteContract = input.rewriteContract;
-
-  if (Operation *rootAllocOp = DbUtils::getUnderlyingDbAlloc(input.rootPtr)) {
-    if (auto dbAlloc = dyn_cast<DbAllocOp>(rootAllocOp)) {
-      auto elemSizes = dbAlloc.getElementSizes();
-      if (!elemSizes.empty()) {
-        std::optional<int64_t> totalElemCount = int64_t{1};
-        for (Value dim : elemSizes) {
-          auto dimConst = ValueAnalysis::tryFoldConstantIndex(dim);
-          if (!dimConst || *dimConst < 0) {
-            totalElemCount = std::nullopt;
-            break;
-          }
-          *totalElemCount *= *dimConst;
-        }
-
-        isSingleElement = llvm::all_of(elemSizes, [](Value value) {
-          int64_t constant = 0;
-          return ValueAnalysis::getConstantIndex(value, constant) &&
-                 constant == 1;
-        });
-
-        /// Keep tiny read-only stencil coefficient tables coarse.
-        /// Rewriting these to block slices per task can shift coefficient
-        /// indexing and introduce thread-count-dependent numerics.
-        if (input.parentAcquire.getMode() == ArtsMode::in) {
-          auto allocPattern = getDbAccessPattern(dbAlloc.getOperation());
-          bool tinyReadOnlyStencil =
-              allocPattern && *allocPattern == DbAccessPattern::stencil &&
-              totalElemCount && *totalElemCount > 0 && *totalElemCount <= 8;
-          if (tinyReadOnlyStencil)
-            forceCoarseRewrite = true;
-        }
-
-        unsigned primaryOwnerDim = 0;
-        if (!rewriteContract.ownerDims.empty() &&
-            rewriteContract.ownerDims.front() >= 0 &&
-            static_cast<size_t>(rewriteContract.ownerDims.front()) <
-                elemSizes.size()) {
-          primaryOwnerDim =
-              static_cast<unsigned>(rewriteContract.ownerDims.front());
-        }
-
-        Value primaryExtent =
-            input.AC->castToIndex(elemSizes[primaryOwnerDim], input.loc);
-        if (rewriteContract.applyStencilHalo)
-          stencilExtent = primaryExtent;
-        dimensionExtents.push_back(primaryExtent);
-
-        if (input.distributionKind == DistributionKind::Tiling2D &&
-            elemSizes.size() > 1 && !isSingleElement && input.tiling2DGrid &&
-            input.tiling2DGrid->colWorkers) {
-          Value colWorkers =
-              input.AC->castToIndex(input.tiling2DGrid->colWorkers, input.loc);
-          auto colWorkersConst =
-              ValueAnalysis::tryFoldConstantIndex(colWorkers);
-          if (!colWorkersConst || *colWorkersConst > 1) {
-            unsigned secondaryOwnerDim = 1;
-            if (rewriteContract.ownerDims.size() > 1 &&
-                rewriteContract.ownerDims[1] >= 0 &&
-                static_cast<size_t>(rewriteContract.ownerDims[1]) <
-                    elemSizes.size()) {
-              secondaryOwnerDim =
-                  static_cast<unsigned>(rewriteContract.ownerDims[1]);
-            }
-
-            Value totalCols =
-                input.AC->castToIndex(elemSizes[secondaryOwnerDim], input.loc);
-            Value colWorkerId = input.AC->castToIndex(
-                input.tiling2DGrid->colWorkerId, input.loc);
-
-            Value colWorkersMinusOne =
-                input.AC->create<arith::SubIOp>(input.loc, colWorkers, one);
-            Value colAdjusted = input.AC->create<arith::AddIOp>(
-                input.loc, totalCols, colWorkersMinusOne);
-            Value colChunk = input.AC->create<arith::DivUIOp>(
-                input.loc, colAdjusted, colWorkers);
-            Value colOffset = input.AC->create<arith::MulIOp>(
-                input.loc, colWorkerId, colChunk);
-
-            Value colNeedZero = input.AC->create<arith::CmpIOp>(
-                input.loc, arith::CmpIPredicate::uge, colOffset, totalCols);
-            Value colRemaining = input.AC->create<arith::SubIOp>(
-                input.loc, totalCols, colOffset);
-            Value colRemainingNonNeg = input.AC->create<arith::SelectOp>(
-                input.loc, colNeedZero, zero, colRemaining);
-            Value colCount = input.AC->create<arith::MinUIOp>(
-                input.loc, colChunk, colRemainingNonNeg);
-
-            extraOffsets.push_back(colOffset);
-            extraSizes.push_back(colCount);
-            extraHintSizes.push_back(colCount);
-            dimensionExtents.push_back(totalCols);
-            rewriteContract.preserveParentDepRange = false;
-          }
-        }
-      }
-    }
-  }
-
-  plan.useStencilRewriter = rewriteContract.applyStencilHalo;
-  plan.rewriteInput.singleElement = isSingleElement;
-  plan.rewriteInput.forceCoarse = forceCoarseRewrite;
-  plan.rewriteInput.preserveParentDepRange =
-      rewriteContract.preserveParentDepRange;
-  plan.rewriteInput.stencilExtent = stencilExtent;
-  plan.rewriteInput.extraOffsets = std::move(extraOffsets);
-  plan.rewriteInput.extraSizes = std::move(extraSizes);
-  plan.rewriteInput.extraHintSizes = std::move(extraHintSizes);
-  plan.rewriteInput.dimensionExtents = std::move(dimensionExtents);
-  plan.rewriteInput.haloMinOffsets = std::move(rewriteContract.haloMinOffsets);
-  plan.rewriteInput.haloMaxOffsets = std::move(rewriteContract.haloMaxOffsets);
-  return plan;
-}
-
-static std::optional<TaskAcquireWindow> computeTaskAcquireWindowInBlockSpace(
-    ArtsCodegen *AC, Location loc, DbAcquireOp parentAcquire,
-    DbAcquireOp taskAcquire, Value rootGuidValue, Value rootPtrValue,
-    DistributionKind distributionKind,
-    std::optional<EdtDistributionPattern> distributionPattern,
-    Value plannedElementOffset, Value plannedElementSize,
-    Value plannedElementSizeSeed, bool usesStencilHalo,
-    const AcquireRewriteContract &rewriteContract) {
-  if (!AC || !parentAcquire || !taskAcquire)
-    return std::nullopt;
-
-  PartitionMode mode =
-      taskAcquire.getPartitionMode().value_or(PartitionMode::coarse);
-  if (mode != PartitionMode::block && mode != PartitionMode::stencil)
-    return std::nullopt;
-
-  Value one = AC->createIndexConstant(1, loc);
-  Value zero = AC->createIndexConstant(0, loc);
-  Value blockSpan = one;
-  Value totalBlocks;
-  DbAllocOp rootAlloc;
-  if (auto allocFromGuid = rootGuidValue.getDefiningOp<DbAllocOp>())
-    rootAlloc = allocFromGuid;
-  else if (Operation *allocOp = DbUtils::getUnderlyingDbAlloc(rootPtrValue))
-    rootAlloc = dyn_cast<DbAllocOp>(allocOp);
-  else if (Operation *allocOp =
-               DbUtils::getUnderlyingDbAlloc(parentAcquire.getPtr()))
-    rootAlloc = dyn_cast<DbAllocOp>(allocOp);
-
-  if (rootAlloc) {
-    auto elementSizes = rootAlloc.getElementSizes();
-    if (!elementSizes.empty() && elementSizes.front())
-      blockSpan = AC->castToIndex(elementSizes.front(), loc);
-    auto outerSizes = rootAlloc.getSizes();
-    if (!outerSizes.empty() && outerSizes.front())
-      totalBlocks = AC->castToIndex(outerSizes.front(), loc);
-  }
-  blockSpan = AC->create<arith::MaxUIOp>(loc, blockSpan, one);
-
-  /// This helper intentionally reasons in leading-dimension block space only.
-  /// It converts the already chosen task-local element window into the single
-  /// block window used by DB slice metadata on 1-D / row-owned plans.
-  Value elementOffset = plannedElementOffset;
-  Value elementSize = plannedElementSizeSeed;
-  const bool useRewrittenWindow = rewriteContract.usePartitionSliceAsDepWindow;
-  const bool useTaskDepWindow =
-      usesStencilHalo || rewriteContract.applyStencilHalo;
-
-  if (useRewrittenWindow || useTaskDepWindow) {
-    /// Contract-backed acquires already carry the authoritative task-local
-    /// dependency window in one of two places:
-    ///   1. partition_* for families that preserve an owner-aligned element
-    ///      slice there
-    ///   2. offsets/sizes for halo-expanded dependency windows
-    ///
-    /// Recomputing the DB-space window from the planned owner slice would drop
-    /// halo reads at block boundaries and misalign rec_dep slot numbering with
-    /// the outlined EDT's dep_gep base offset.
-    auto offsetRange = useRewrittenWindow ? taskAcquire.getPartitionOffsets()
-                                          : taskAcquire.getOffsets();
-    auto sizeRange = useRewrittenWindow ? taskAcquire.getPartitionSizes()
-                                        : taskAcquire.getSizes();
-
-    if (!offsetRange.empty() && offsetRange.front())
-      elementOffset = offsetRange.front();
-
-    if (!sizeRange.empty() && sizeRange.front())
-      elementSize = sizeRange.front();
-  } else {
-    if (!taskAcquire.getSizes().empty() && taskAcquire.getSizes().front())
-      elementSize = taskAcquire.getSizes().front();
-
-    if (distributionKind == DistributionKind::TwoLevel &&
-        parentAcquire.getMode() != ArtsMode::in)
-      elementSize = plannedElementSize;
-
-    bool isStencilPattern =
-        distributionPattern &&
-        *distributionPattern == EdtDistributionPattern::stencil;
-    if (isStencilPattern && mode == PartitionMode::stencil &&
-        parentAcquire.getMode() != ArtsMode::in)
-      elementSize = AC->create<arith::AddIOp>(loc, elementSize, one);
-  }
-
-  elementOffset = AC->castToIndex(elementOffset, loc);
-  elementSize = AC->castToIndex(elementSize, loc);
-  elementSize = AC->create<arith::MaxUIOp>(loc, elementSize, one);
-
-  Value startBlock = AC->create<arith::DivUIOp>(loc, elementOffset, blockSpan);
-  Value endElem = AC->create<arith::AddIOp>(loc, elementOffset, elementSize);
-  endElem = AC->create<arith::SubIOp>(loc, endElem, one);
-  Value endBlock = AC->create<arith::DivUIOp>(loc, endElem, blockSpan);
-
-  Value startAboveMax;
-  if (totalBlocks) {
-    Value maxBlock = AC->create<arith::SubIOp>(loc, totalBlocks, one);
-    startAboveMax = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt,
-                                              startBlock, maxBlock);
-    Value clampedEnd = AC->create<arith::MinUIOp>(loc, endBlock, maxBlock);
-    endBlock =
-        AC->create<arith::SelectOp>(loc, startAboveMax, endBlock, clampedEnd);
-  }
-
-  Value blockCount = AC->create<arith::SubIOp>(loc, endBlock, startBlock);
-  blockCount = AC->create<arith::AddIOp>(loc, blockCount, one);
-  if (startAboveMax) {
-    startBlock =
-        AC->create<arith::SelectOp>(loc, startAboveMax, zero, startBlock);
-    blockCount =
-        AC->create<arith::SelectOp>(loc, startAboveMax, zero, blockCount);
-  }
-
-  return TaskAcquireWindow{elementOffset, elementSize, startBlock, blockCount};
-}
-
 ///===----------------------------------------------------------------------===///
 /// LoopInfo - Information about a loop within a parallel EDT
 ///
@@ -416,13 +88,21 @@ class LoopInfo {
 public:
   LoopInfo(ArtsCodegen *AC, ForOp forOp, Value numWorkers,
            Value runtimeBlockSizeHint = Value())
-      : AC(AC), forOp(forOp), runtimeBlockSizeHint(runtimeBlockSizeHint) {
+      : AC(AC), forOp(forOp) {
     lowerBound = forOp.getLowerBound()[0];
     upperBound = forOp.getUpperBound()[0];
     loopStep = forOp.getStep()[0];
     depPattern = getEffectiveDepPattern(forOp.getOperation());
     totalWorkers = numWorkers;
-    initialize();
+    LoopChunkPlan chunkPlan = WorkDistributionUtils::planLoopChunking(
+        AC, forOp, runtimeBlockSizeHint);
+    blockSize = chunkPlan.blockSize;
+    chunkLowerBound = chunkPlan.chunkLowerBound;
+    totalIterations = chunkPlan.totalIterations;
+    totalChunks = chunkPlan.totalChunks;
+    useAlignedLowerBound = chunkPlan.useAlignedLowerBound;
+    useRuntimeBlockAlignment = chunkPlan.useRuntimeBlockAlignment;
+    alignmentBlockSize = chunkPlan.alignmentBlockSize;
   }
 
   /// Attributes
@@ -436,7 +116,6 @@ public:
   bool useAlignedLowerBound = false;
   bool useRuntimeBlockAlignment = false;
   std::optional<int64_t> alignmentBlockSize;
-  Value runtimeBlockSizeHint;
   /// Distribution information
   Value blockSize, totalWorkers, totalIterations, totalChunks;
   std::optional<ArtsDepPattern> depPattern;
@@ -445,23 +124,6 @@ public:
   DistributionStrategy strategy;
   DistributionBounds bounds;       ///  Set by computeBounds()
   DistributionBounds insideBounds; ///  Set by recomputeBoundsInside()
-
-private:
-  void initialize();
-
-  /// Phase 1: Determine the block size from PartitioningHint and/or
-  /// the runtime DB-alignment hint. Sets blockSize, useRuntimeBlockAlignment.
-  /// Returns the compile-time block size used for alignment decisions.
-  int64_t computeBlockSize();
-
-  /// Phase 2: Align chunkLowerBound to the nearest block boundary if the
-  /// lower bound is misaligned. Sets chunkLowerBound, useAlignedLowerBound,
-  /// alignmentBlockSize.
-  void alignChunkLowerBound(int64_t computedBlockSize);
-
-  /// Phase 3: Compute totalIterations = ceil((upper - chunkLower) / step)
-  /// and totalChunks = ceil(totalIterations / blockSize).
-  void computeIterationsAndChunks();
 };
 
 using ReductionInfo = ReductionLoweringInfo;
@@ -680,135 +342,6 @@ private:
 /// LoopInfo computes how to distribute loop iterations across workers using
 /// block distribution. This ensures balanced work with minimal overhead.
 
-void LoopInfo::initialize() {
-  int64_t compiletimeBlockSize = computeBlockSize();
-  alignChunkLowerBound(compiletimeBlockSize);
-  computeIterationsAndChunks();
-}
-
-/// Phase 1: Determine the block size.
-///
-/// Reads the PartitioningHint attached to the for-op and merges it with the
-/// runtime DB-alignment block-size hint. The final blockSize Value is the
-/// maximum of the two so that worker chunks never straddle DB block
-/// boundaries.
-///
-/// Returns the compile-time block size (from the hint) for use in alignment
-/// decisions in subsequent phases.
-int64_t LoopInfo::computeBlockSize() {
-  Location loc = forOp.getLoc();
-  Value one = AC->createIndexConstant(1, loc);
-
-  if (getEffectiveDepPattern(forOp.getOperation()) ==
-      ArtsDepPattern::wavefront_2d) {
-    /// Wavefront-transformed tile loops already encode their task granularity
-    /// in the loop step. Reusing DB-alignment hints here collapses small wave
-    /// frontiers down to a single chunk, which serializes the schedule.
-    blockSize = one;
-    useRuntimeBlockAlignment = false;
-    return 1;
-  }
-
-  int64_t computedBlockSize = 1;
-
-  if (auto hint = getPartitioningHint(forOp.getOperation())) {
-    if (hint->mode == PartitionMode::block && hint->blockSize &&
-        *hint->blockSize > 0) {
-      computedBlockSize = *hint->blockSize;
-      ARTS_DEBUG(
-          "Using explicit PartitioningHint blockSize=" << computedBlockSize);
-    }
-  }
-
-  blockSize = AC->createIndexConstant(computedBlockSize, loc);
-  useRuntimeBlockAlignment = false;
-
-  if (runtimeBlockSizeHint) {
-    Value runtimeBlockSize = AC->castToIndex(runtimeBlockSizeHint, loc);
-    runtimeBlockSize = AC->create<arith::MaxUIOp>(loc, runtimeBlockSize, one);
-
-    /// Respect explicit coarsening hints, but never allow them to go below
-    /// runtime DB-alignment guidance. Smaller chunk sizes can force write
-    /// tasks to span multiple DB blocks and trigger block-level clobbering in
-    /// distributed mode.
-    bool shouldUseRuntimeAlignment = (computedBlockSize == 1);
-    if (!shouldUseRuntimeAlignment) {
-      if (auto runtimeConst =
-              ValueAnalysis::tryFoldConstantIndex(runtimeBlockSize))
-        shouldUseRuntimeAlignment = (*runtimeConst > computedBlockSize);
-      else
-        shouldUseRuntimeAlignment = true;
-    }
-
-    if (shouldUseRuntimeAlignment) {
-      blockSize = AC->create<arith::MaxUIOp>(loc, blockSize, runtimeBlockSize);
-      /// When runtime alignment contributes to block size selection, align
-      /// chunk partitioning at runtime to keep DB-space slices block-safe.
-      useRuntimeBlockAlignment = true;
-    }
-  }
-
-  return computedBlockSize;
-}
-
-/// Phase 2: Align the chunk lower bound to the nearest block boundary.
-///
-/// When blockSize > 1 or runtime alignment is active, the lower bound used
-/// for chunking may need to be rounded down so that chunk boundaries align
-/// with DB block boundaries. This avoids overlapping block partitions
-/// (e.g., stencil loops where lowerBound is not a multiple of blockSize).
-void LoopInfo::alignChunkLowerBound(int64_t computedBlockSize) {
-  Location loc = forOp.getLoc();
-
-  chunkLowerBound = lowerBound;
-  useAlignedLowerBound = false;
-  alignmentBlockSize = std::nullopt;
-
-  int64_t alignSize = computedBlockSize;
-  if (alignSize > 1)
-    alignmentBlockSize = alignSize;
-
-  if (alignmentBlockSize) {
-    if (auto lbConst = ValueAnalysis::tryFoldConstantIndex(lowerBound)) {
-      int64_t lbVal = *lbConst;
-      int64_t aligned = lbVal - (lbVal % *alignmentBlockSize);
-      if (aligned != lbVal) {
-        useAlignedLowerBound = true;
-        chunkLowerBound = AC->createIndexConstant(aligned, loc);
-        ARTS_DEBUG("Aligning chunk lower bound from " << lbVal << " to "
-                                                      << aligned);
-      }
-    }
-  }
-
-  if (useRuntimeBlockAlignment) {
-    Value rem = AC->create<arith::RemUIOp>(loc, lowerBound, blockSize);
-    chunkLowerBound = AC->create<arith::SubIOp>(loc, lowerBound, rem);
-    useAlignedLowerBound = true;
-  }
-}
-
-/// Phase 3: Compute total iterations and total chunks.
-///
-///   totalIterations = ceil((upperBound - chunkLowerBound) / loopStep)
-///   totalChunks     = ceil(totalIterations / blockSize)
-void LoopInfo::computeIterationsAndChunks() {
-  Location loc = forOp.getLoc();
-
-  Value range = AC->create<arith::SubIOp>(loc, upperBound, chunkLowerBound);
-  Value adjustedRange = AC->create<arith::AddIOp>(
-      loc, range,
-      AC->create<arith::SubIOp>(loc, loopStep,
-                                AC->createIndexConstant(1, loc)));
-  totalIterations = AC->create<arith::DivUIOp>(loc, adjustedRange, loopStep);
-
-  Value adjustedIterations = AC->create<arith::AddIOp>(
-      loc, totalIterations,
-      AC->create<arith::SubIOp>(loc, blockSize,
-                                AC->createIndexConstant(1, loc)));
-  totalChunks = AC->create<arith::DivUIOp>(loc, adjustedIterations, blockSize);
-}
-
 ///===----------------------------------------------------------------------===///
 /// Pass Entry Point
 ///===----------------------------------------------------------------------===///
@@ -1011,7 +544,10 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
 
   /// Read distribution strategy selected by EdtDistributionPass.
   DistributionStrategy strategy =
-      resolveDistributionStrategy(originalParallel, forOp);
+      AM ? AM->getEdtHeuristics().resolveLoweringStrategy(originalParallel,
+                                                          forOp)
+         : DistributionHeuristics::resolveLoweringStrategy(originalParallel,
+                                                           forOp);
 
   Value zero;
   Value one;
@@ -1027,7 +563,7 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
 
     /// Get numWorkers from explicit attrs or runtime queries.
     Value numWorkers =
-        DistributionHeuristics::getTotalWorkers(&AC, loc, originalParallel);
+        WorkDistributionUtils::getTotalWorkers(&AC, loc, originalParallel);
 
     /// numDbPartitions: the number of DB partition blocks (= numNodes for
     /// internode). Used to align worker chunk boundaries to DB block
@@ -1049,13 +585,13 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
     /// dispatch loop and any reduction temporaries to the worker lanes that can
     /// actually receive work.
     Value runtimeBlockSize =
-        DistributionHeuristics::computeDbAlignmentBlockSize(
+        WorkDistributionUtils::computeDbAlignmentBlockSize(
             forOp, originalParallel, numDbPartitions, &AC, loc,
             AM ? &AM->getDbAnalysis() : nullptr);
     loopInfoStorage.emplace(&AC, forOp, numWorkers, runtimeBlockSize);
     LoopInfo &loopInfo = *loopInfoStorage;
     loopInfo.strategy = strategy;
-    dispatchWorkers = DistributionHeuristics::getForDispatchWorkerCount(
+    dispatchWorkers = WorkDistributionUtils::getForDispatchWorkerCount(
         &AC, loc, originalParallel, loopInfo.strategy, loopInfo.totalChunks,
         loopInfo.depPattern);
 
@@ -1139,7 +675,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
   /// Recreate total workers using shared distribution helper.
   loopInfo.totalWorkers =
-      DistributionHeuristics::getTotalWorkers(AC, loc, originalParallel);
+      WorkDistributionUtils::getTotalWorkers(AC, loc, originalParallel);
 
   /// Compute workers-per-node for internode routing and TwoLevel distribution.
   /// Flat may still run in internode mode during debugging/experiments.
@@ -1147,11 +683,11 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   if (loopInfo.strategy.kind == DistributionKind::TwoLevel ||
       originalParallel.getConcurrency() == EdtConcurrency::internode) {
     workersPerNode =
-        DistributionHeuristics::getWorkersPerNode(AC, loc, originalParallel);
+        WorkDistributionUtils::getWorkersPerNode(AC, loc, originalParallel);
   }
 
   /// Compute worker iteration bounds using DistributionHeuristics
-  loopInfo.bounds = DistributionHeuristics::computeBounds(
+  loopInfo.bounds = WorkDistributionUtils::computeBounds(
       AC, loc, loopInfo.strategy, workerIdPlaceholder, loopInfo.totalWorkers,
       workersPerNode, loopInfo.totalIterations, loopInfo.totalChunks,
       loopInfo.blockSize, loopInfo.depPattern);
@@ -1288,12 +824,14 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     bool chunkUsesStencilHalo = false;
 
     std::optional<EdtDistributionPattern> distributionPattern =
-        resolveDistributionPattern(AM, forOp, originalParallel);
+        AM ? AM->getEdtHeuristics().resolveDistributionPattern(forOp,
+                                                               originalParallel)
+           : DistributionHeuristics::resolveDistributionPattern(
+                 nullptr, forOp, originalParallel);
 
-    AcquireRewritePlanningInput planningInput{
+    TaskAcquireRewritePlanInput planningInput{
         AC,
         loc,
-        forOp,
         parentAcqOp,
         rootGuidValue,
         rootPtrValue,
@@ -1307,79 +845,14 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         stepVal,
         stepIsUnit};
 
-    auto createPlannedAcquire = [&]() -> std::pair<DbAcquireOp, bool> {
-      AcquireRewritePlan rewritePlan = planAcquireRewrite(planningInput);
+    auto createPlannedAcquire =
+        [&]() -> std::pair<DbAcquireOp, TaskAcquireRewritePlan> {
+      TaskAcquireRewritePlan rewritePlan = planTaskAcquireRewrite(planningInput);
       DbAcquireOp rewritten = rewriteAcquire(rewritePlan.rewriteInput,
                                              rewritePlan.useStencilRewriter);
-      return {rewritten, rewritePlan.useStencilRewriter};
+      return {rewritten, std::move(rewritePlan)};
     };
-
-    auto setDbSpaceSliceFromAcquirePlan = [&](DbAcquireOp acquireOp,
-                                              bool usesStencilHalo) {
-      AcquireRewriteContract rewriteContract = planningInput.rewriteContract;
-      bool shouldUseStencilWindow =
-          usesStencilHalo || rewriteContract.usePartitionSliceAsDepWindow;
-
-      /// Read-only acquires already get their task-local window from
-      /// rewriteAcquire(). This helper primarily updates DB-space slice
-      /// metadata for write-capable acquires, but may also synthesize missing
-      /// partition metadata for block/stencil read acquires to avoid
-      /// conservative widening back to full-range later.
-      if (!acquireOp)
-        return;
-      if (parentAcqOp.getMode() == ArtsMode::in && !shouldUseStencilWindow) {
-        PartitionMode mode =
-            acquireOp.getPartitionMode().value_or(PartitionMode::coarse);
-        bool needsPartitionMetadata =
-            (mode == PartitionMode::block || mode == PartitionMode::stencil) &&
-            (acquireOp.getPartitionOffsets().empty() ||
-             acquireOp.getPartitionSizes().empty());
-        if (!needsPartitionMetadata)
-          return;
-      }
-      if (parentAcqOp.getMode() != ArtsMode::in &&
-          (acquireOp.getOffsets().size() > 1 ||
-           acquireOp.getPartitionOffsets().size() > 1)) {
-        ARTS_DEBUG("    - Preserving N-D task-local slice metadata");
-        return;
-      }
-
-      OpBuilder::InsertionGuard guard(AC->getBuilder());
-      AC->setInsertionPoint(acquireOp);
-
-      auto window = computeTaskAcquireWindowInBlockSpace(
-          AC, loc, parentAcqOp, acquireOp, rootGuidValue, rootPtrValue,
-          loopInfo.strategy.kind, distributionPattern, acquireOffsetVal,
-          loopInfo.bounds.iterCount, acquireHintSizeVal, shouldUseStencilWindow,
-          planningInput.rewriteContract);
-      if (!window)
-        return;
-
-      /// Keep partition hint ranges worker-local for two-level write acquires.
-      /// DbPartitioning consults partition_* hints; if these remain node-wide
-      /// while offsets/sizes are worker-local, later rewrites may widen the
-      /// write slice back to node scope.
-      if (loopInfo.strategy.kind == DistributionKind::TwoLevel &&
-          parentAcqOp.getMode() != ArtsMode::in) {
-        if (!acquireOp.getPartitionOffsets().empty())
-          acquireOp.getPartitionOffsetsMutable().assign(
-              SmallVector<Value>{window->elementOffset});
-        if (!acquireOp.getPartitionSizes().empty())
-          acquireOp.getPartitionSizesMutable().assign(
-              SmallVector<Value>{window->elementSize});
-      }
-      if (parentAcqOp.getMode() == ArtsMode::in) {
-        if (acquireOp.getPartitionOffsets().empty())
-          acquireOp.getPartitionOffsetsMutable().assign(
-              SmallVector<Value>{window->elementOffset});
-        if (acquireOp.getPartitionSizes().empty())
-          acquireOp.getPartitionSizesMutable().assign(
-              SmallVector<Value>{window->elementSize});
-      }
-      acquireOp.getOffsetsMutable().assign(
-          SmallVector<Value>{window->dbOffset});
-      acquireOp.getSizesMutable().assign(SmallVector<Value>{window->dbSize});
-    };
+    std::optional<SmallVector<int64_t, 4>> plannedTaskBlockShape;
 
     if (parentHasPartitionInfo) {
       /// USER HINT EXISTS - ForLowering RESPECTS it!
@@ -1414,9 +887,10 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       /// planning for rec_dep/depCount correctness.
       if (mode == PartitionMode::block || mode == PartitionMode::stencil ||
           hasExplicitRangeHints) {
-        auto [plannedAcquire, useStencilHalo] = createPlannedAcquire();
+        auto [plannedAcquire, rewritePlan] = createPlannedAcquire();
         chunkAcqOp = plannedAcquire;
-        chunkUsesStencilHalo = useStencilHalo;
+        chunkUsesStencilHalo = rewritePlan.useStencilRewriter;
+        plannedTaskBlockShape = rewritePlan.refinedTaskBlockShape;
         if (parentPartMode)
           setPartitionMode(chunkAcqOp.getOperation(), mode);
         chunkAcqOp.getIndicesMutable().assign(parentIndices);
@@ -1437,121 +911,33 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
     } else {
       /// NO USER HINT - plan strategy-specific acquire rewriting externally.
-      auto [plannedAcquire, useStencilHalo] = createPlannedAcquire();
+      auto [plannedAcquire, rewritePlan] = createPlannedAcquire();
       chunkAcqOp = plannedAcquire;
-      chunkUsesStencilHalo = useStencilHalo;
+      chunkUsesStencilHalo = rewritePlan.useStencilRewriter;
+      plannedTaskBlockShape = rewritePlan.refinedTaskBlockShape;
     }
 
-    auto chunkMode = chunkAcqOp.getPartitionMode();
-    AcquireRewriteContract chunkRewriteContract = planningInput.rewriteContract;
-    /// Task-local acquires should inherit the loop's semantic contract when
-    /// their parent acquire does not already carry it. This keeps downstream
-    /// analyses and lowering mode-agnostic: they can reason from the acquire's
-    /// own contract instead of pattern-specific branches in ForLowering.
-    inheritSemanticContractAttrs(forOp.getOperation(),
-                                 chunkAcqOp.getOperation());
-    bool shouldMarkStencilCenter =
-        chunkRewriteContract.usePartitionSliceAsDepWindow ||
-        chunkRewriteContract.applyStencilHalo ||
-        (chunkMode && *chunkMode == PartitionMode::stencil);
-    if (shouldMarkStencilCenter &&
-        !getStencilCenterOffset(chunkAcqOp.getOperation())) {
-      int64_t centerOffset = 1;
-      if (!chunkRewriteContract.haloMinOffsets.empty())
-        centerOffset =
-            std::max<int64_t>(0, -chunkRewriteContract.haloMinOffsets.front());
-      setStencilCenterOffset(chunkAcqOp.getOperation(), centerOffset);
-    }
+    applyTaskAcquireContractMetadata(forOp.getOperation(), chunkAcqOp,
+                                     planningInput.rewriteContract,
+                                     plannedTaskBlockShape,
+                                     AC->getBuilder(), loc);
+    if (plannedTaskBlockShape)
+      refinedTaskBlockShape = *plannedTaskBlockShape;
 
-    if (loopInfo.strategy.kind == DistributionKind::Tiling2D &&
-        planningInput.tiling2DGrid) {
-      auto inheritedShape = getStencilBlockShape(chunkAcqOp.getOperation());
-      auto rowWorkersConst = planningInput.tiling2DGrid->rowWorkers
-                                 ? ValueAnalysis::tryFoldConstantIndex(
-                                       AC->castToIndex(
-                                           planningInput.tiling2DGrid
-                                               ->rowWorkers,
-                                           loc))
-                                 : std::nullopt;
-      auto colWorkersConst = planningInput.tiling2DGrid->colWorkers
-                                 ? ValueAnalysis::tryFoldConstantIndex(
-                                       AC->castToIndex(
-                                           planningInput.tiling2DGrid
-                                               ->colWorkers,
-                                           loc))
-                                 : std::nullopt;
-      auto rootAlloc = dyn_cast_or_null<DbAllocOp>(
-          DbUtils::getUnderlyingDbAlloc(chunkAcqOp.getSourcePtr()));
-      if (inheritedShape && rootAlloc) {
-        SmallVector<int64_t, 4> staticTaskBlockShape(inheritedShape->begin(),
-                                                     inheritedShape->end());
-        bool refinedShape = false;
-
-        unsigned primaryOwnerDim = 0;
-        if (!chunkRewriteContract.ownerDims.empty() &&
-            chunkRewriteContract.ownerDims.front() >= 0 &&
-            static_cast<size_t>(chunkRewriteContract.ownerDims.front()) <
-                rootAlloc.getElementSizes().size()) {
-          primaryOwnerDim =
-              static_cast<unsigned>(chunkRewriteContract.ownerDims.front());
-        }
-
-        if (rowWorkersConst && *rowWorkersConst > 1 &&
-            !staticTaskBlockShape.empty() &&
-            primaryOwnerDim < rootAlloc.getElementSizes().size()) {
-          if (auto totalRowsConst = ValueAnalysis::tryFoldConstantIndex(
-                  rootAlloc.getElementSizes()[primaryOwnerDim]);
-              totalRowsConst && *totalRowsConst > 0) {
-            int64_t rowChunk =
-                (*totalRowsConst + *rowWorkersConst - 1) / *rowWorkersConst;
-            staticTaskBlockShape[0] = std::max<int64_t>(1, rowChunk);
-            refinedShape = true;
-          }
-        }
-
-        unsigned secondaryOwnerDim = 1;
-        if (chunkRewriteContract.ownerDims.size() > 1 &&
-            chunkRewriteContract.ownerDims[1] >= 0 &&
-            static_cast<size_t>(chunkRewriteContract.ownerDims[1]) <
-                rootAlloc.getElementSizes().size()) {
-          secondaryOwnerDim =
-              static_cast<unsigned>(chunkRewriteContract.ownerDims[1]);
-        }
-
-        if (colWorkersConst && *colWorkersConst > 1 &&
-            staticTaskBlockShape.size() >= 2 &&
-            secondaryOwnerDim < rootAlloc.getElementSizes().size()) {
-          if (auto totalColsConst = ValueAnalysis::tryFoldConstantIndex(
-                  rootAlloc.getElementSizes()[secondaryOwnerDim]);
-              totalColsConst && *totalColsConst > 0) {
-            int64_t colChunk =
-                (*totalColsConst + *colWorkersConst - 1) / *colWorkersConst;
-            staticTaskBlockShape[1] = std::max<int64_t>(1, colChunk);
-            refinedShape = true;
-          }
-        }
-
-        if (refinedShape) {
-          /// Tiling-2D workers refine the inherited stencil owner shape into a
-          /// worker-local owner tile. Reflect that narrower static tile on the
-          /// acquire before DbPartitioning runs so the N-D block planner can
-          /// align allocation blocks with the actual 2-D worker grid instead
-          /// of widening back to the parent stencil tile.
-          setStencilBlockShape(chunkAcqOp.getOperation(), staticTaskBlockShape);
-          refinedTaskBlockShape = staticTaskBlockShape;
-
-          if (auto contract = getLoweringContract(chunkAcqOp.getPtr())) {
-            LoweringContractInfo updated = *contract;
-            updated.staticBlockShape = staticTaskBlockShape;
-            updated.blockShape.clear();
-            upsertLoweringContract(AC->getBuilder(), loc,
-                                   chunkAcqOp.getPtr(), updated);
-          }
-        }
-      }
-    }
-
-    setDbSpaceSliceFromAcquirePlan(chunkAcqOp, chunkUsesStencilHalo);
+    applyTaskAcquireSlicePlan(TaskAcquireSlicePlanInput{
+        AC,
+        loc,
+        parentAcqOp,
+        chunkAcqOp,
+        rootGuidValue,
+        rootPtrValue,
+        loopInfo.strategy.kind,
+        distributionPattern,
+        acquireOffsetVal,
+        loopInfo.bounds.iterCount,
+        acquireHintSizeVal,
+        chunkUsesStencilHalo,
+        planningInput.rewriteContract});
 
     if (originalParallel.getConcurrency() == EdtConcurrency::internode &&
         chunkAcqOp.getMode() != ArtsMode::in &&
@@ -1585,7 +971,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       ///   nodeId = globalWorkerId / workersPerNode
       /// workersPerNode is always materialized for internode routing.
       if (!workersPerNode)
-        workersPerNode = DistributionHeuristics::getWorkersPerNode(
+        workersPerNode = WorkDistributionUtils::getWorkersPerNode(
             AC, loc, originalParallel);
       Value nodeId =
           AC->create<arith::DivUIOp>(loc, workerIdPlaceholder, workersPerNode);
@@ -1631,7 +1017,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   }
 
   Value insideTotalWorkers =
-      DistributionHeuristics::getTotalWorkers(AC, loc, originalParallel);
+      WorkDistributionUtils::getTotalWorkers(AC, loc, originalParallel);
   taskLoopInput.totalWorkers = insideTotalWorkers;
 
   /// Map reduction variables to worker's accumulator slot

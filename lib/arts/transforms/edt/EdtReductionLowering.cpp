@@ -18,8 +18,8 @@
 ///==========================================================================///
 
 #include "arts/transforms/edt/EdtReductionLowering.h"
-#include "arts/analysis/heuristics/DistributionHeuristics.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/transforms/edt/WorkDistributionUtils.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
@@ -133,7 +133,7 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
              explicitWorkers && *explicitWorkers > 0) {
     numWorkers = AC->createIndexConstant(*explicitWorkers, loc);
   } else {
-    numWorkers = DistributionHeuristics::getTotalWorkers(AC, loc, parallelEdt);
+    numWorkers = WorkDistributionUtils::getTotalWorkers(AC, loc, parallelEdt);
   }
 
   Block &parallelBlock = parallelEdt.getBody().front();

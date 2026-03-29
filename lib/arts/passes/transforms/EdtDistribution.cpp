@@ -29,7 +29,6 @@
 #include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/heuristics/DistributionHeuristics.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
@@ -79,16 +78,15 @@ struct EdtDistributionPass
 
         EdtDistributionPattern pattern = EdtDistributionPattern::unknown;
         if (auto analyzedPattern =
-                AM->getLoopDistributionPattern(forOp.getOperation()))
+                heuristics.resolveDistributionPattern(forOp, edt))
           pattern = *analyzedPattern;
         EdtDistributionKind kind = heuristics.chooseKind(strategy, pattern);
-        if (pattern == EdtDistributionPattern::stencil &&
-            hasSupportedBlockHalo(forOp.getOperation())) {
-          if (auto blockShape = getStencilBlockShape(forOp.getOperation());
-              blockShape && blockShape->size() >= 2) {
-            kind = EdtDistributionKind::tiling_2d;
-          }
-        }
+        /// Keep distribution_kind focused on execution decomposition.
+        /// 2-D stencil owner semantics already flow through the stencil/lowering
+        /// contract attrs (owner dims, halo, block shape). Overloading
+        /// `tiling_2d` here forces stencil loops such as Seidel through the
+        /// matmul-oriented Tile2DTaskLoopLowering path even when they only need
+        /// block-style task distribution with N-D ownership preserved.
         setEdtDistributionKind(forOp.getOperation(), kind);
         setEdtDistributionPattern(forOp.getOperation(), pattern);
         forOp->setAttr(
