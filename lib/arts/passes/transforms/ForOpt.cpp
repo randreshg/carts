@@ -14,7 +14,6 @@
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
-#include "arts/analysis/loop/LoopAnalysis.h"
 #define GEN_PASS_DEF_FOROPT
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
@@ -22,11 +21,8 @@
 #include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/utils/abstract_machine/AbstractMachine.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
-
-#include <optional>
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(for_opt);
@@ -68,8 +64,6 @@ struct ForOptPass : public impl::ForOptBase<ForOptPass> {
 
   void runOnOperation() override {
     module = getOperation();
-    abstractMachine = &AM->getAbstractMachine();
-    LoopAnalysis &loopAnalysis = AM->getLoopAnalysis();
 
     ARTS_INFO_HEADER(ForOpt);
     ARTS_DEBUG_REGION(module.dump(););
@@ -80,8 +74,8 @@ struct ForOptPass : public impl::ForOptBase<ForOptPass> {
       if (parallelEdt.getType() != EdtType::parallel)
         return;
 
-      auto workerCfg = DistributionHeuristics::resolveWorkerConfig(
-          parallelEdt, abstractMachine);
+      auto &heuristics = AM->getEdtHeuristics();
+      auto workerCfg = heuristics.resolveWorkerConfig(parallelEdt);
       if (!workerCfg) {
         ARTS_DEBUG("Skipping arts.for optimization (unknown worker count)");
         return;
@@ -95,8 +89,8 @@ struct ForOptPass : public impl::ForOptBase<ForOptPass> {
         if (getPartitioningHint(forOp.getOperation()))
           return;
 
-        auto coarsened = DistributionHeuristics::computeCoarsenedBlockHint(
-            forOp, loopAnalysis, *workerCfg);
+        auto coarsened =
+            heuristics.computeCoarsenedBlockHint(forOp, *workerCfg);
         if (!coarsened)
           return;
 
@@ -116,7 +110,6 @@ struct ForOptPass : public impl::ForOptBase<ForOptPass> {
 
 private:
   mlir::arts::AnalysisManager *AM = nullptr;
-  AbstractMachine *abstractMachine = nullptr;
   ModuleOp module;
 };
 

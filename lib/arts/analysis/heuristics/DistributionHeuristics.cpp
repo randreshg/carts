@@ -1,63 +1,23 @@
 ///==========================================================================///
 /// File: DistributionHeuristics.cpp
 ///
-/// H2 distribution heuristics: machine-aware work distribution.
-///
-/// Implements two distribution strategies:
-///   - Flat: all workers divide iterations equally (intranode)
-///   - TwoLevel: nodes get DB blocks, threads subdivide within (internode)
-///
-/// Example (strategy selection):
-///   BEFORE: edt.parallel <intranode> ...   -> strategy = Flat
-///   BEFORE: edt.parallel <internode> ...   -> strategy = TwoLevel
-///
-/// Example (pattern-to-kind selection):
-///   pattern = uniform   -> kind = block / two_level
-///   pattern = stencil   -> kind = block / two_level (stencil-aware acquire)
-///   pattern = triangular-> kind = block_cyclic / two_level_block_cyclic
-///   pattern = matmul    -> kind = tiling_2d
+/// H2 distribution policy heuristics: machine-aware strategy, pattern, and
+/// worker-topology selection.
 ///==========================================================================///
 
 #include "arts/analysis/heuristics/DistributionHeuristics.h"
 #include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/db/DbAnalysis.h"
-#include "arts/analysis/graphs/db/DbGraph.h"
-#include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/analysis/heuristics/HeuristicUtils.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
-#include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/codegen/Codegen.h"
-#include "arts/utils/DbUtils.h"
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/utils/Utils.h"
-#include "arts/utils/metadata/LoopMetadata.h"
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/IR/Builders.h"
 #include <algorithm>
-#include <cmath>
 #include <limits>
 
 using namespace mlir;
 using namespace mlir::arts;
 
-///===----------------------------------------------------------------------===///
-/// Helpers
-///===----------------------------------------------------------------------===///
-
-/// Check if an operation can be safely cloned into a new region.
-/// ARTS runtime query ops are safe to clone - they return the same value
-/// regardless of where they are emitted.
-static bool isSafeRuntimeQuery(Operation *op) {
-  if (auto queryOp = dyn_cast<RuntimeQueryOp>(op)) {
-    auto kind = queryOp.getKind();
-    return kind == RuntimeQueryKind::totalNodes ||
-           kind == RuntimeQueryKind::totalWorkers;
-  }
-  return false;
-}
+namespace {
 
 static std::optional<int64_t> getExplicitWorkerCount(EdtOp edt) {
   if (!edt)
@@ -71,84 +31,23 @@ static std::optional<int64_t> getExplicitWorkersPerNodeCount(EdtOp edt) {
   return arts::getWorkersPerNode(edt.getOperation());
 }
 
-static bool isValidTiling2DColumnDivisor(
-    int64_t totalWorkers, std::optional<int64_t> workersPerNode,
-    int64_t candidate) {
-  if (candidate <= 1 || totalWorkers % candidate != 0)
-    return false;
-  if (!workersPerNode || *workersPerNode <= 0)
-    return true;
-  return (*workersPerNode % candidate) == 0;
-}
-
-static int64_t chooseColumnWorkersNearTarget(
-    int64_t totalWorkers, std::optional<int64_t> workersPerNode,
-    double target) {
-  if (totalWorkers < 4)
-    return 1;
-
-  int64_t best = 1;
-  double bestDist = std::numeric_limits<double>::infinity();
-  int64_t sqrtW = static_cast<int64_t>(std::sqrt(static_cast<double>(totalWorkers)));
-  for (int64_t d = 2; d <= sqrtW; ++d) {
-    if (totalWorkers % d != 0)
-      continue;
-    int64_t complement = totalWorkers / d;
-    /// Check both d and its complement (totalWorkers/d) as candidates.
-    for (int64_t candidate : {d, complement}) {
-      if (!isValidTiling2DColumnDivisor(totalWorkers, workersPerNode,
-                                        candidate))
-        continue;
-      double dist = std::fabs(static_cast<double>(candidate) - target);
-      if (dist < bestDist || (dist == bestDist && candidate > best)) {
-        best = candidate;
-        bestDist = dist;
-      }
-    }
+static DistributionKind toDistributionKind(EdtDistributionKind kind) {
+  switch (kind) {
+  case EdtDistributionKind::block:
+    return DistributionKind::Flat;
+  case EdtDistributionKind::two_level:
+    return DistributionKind::TwoLevel;
+  case EdtDistributionKind::block_cyclic:
+    return DistributionKind::BlockCyclic;
+  case EdtDistributionKind::tiling_2d:
+    return DistributionKind::Tiling2D;
+  case EdtDistributionKind::replicated:
+    return DistributionKind::Replicated;
   }
-
-  return best;
+  return DistributionKind::Flat;
 }
 
-static bool isWavefrontTilingPattern(std::optional<ArtsDepPattern> depPattern) {
-  return depPattern && *depPattern == ArtsDepPattern::wavefront_2d;
-}
-
-static int64_t chooseColumnWorkersForPattern(
-    int64_t totalWorkers, std::optional<int64_t> workersPerNode,
-    std::optional<ArtsDepPattern> depPattern) {
-  if (isWavefrontTilingPattern(depPattern)) {
-    return DistributionHeuristics::chooseWavefront2DColumnWorkers(
-        totalWorkers, workersPerNode);
-  }
-  return DistributionHeuristics::chooseTiling2DColumnWorkers(totalWorkers,
-                                                             workersPerNode);
-}
-
-/// Compute a capped product of static parent-loop trip counts.
-/// Used as a lightweight proxy for repeated dispatch/epoch overhead around a
-/// kernel loop (e.g. benchmark repetition loops).
-static int64_t getRepeatedParentTripProduct(ForOp forOp,
-                                            LoopAnalysis &loopAnalysis) {
-  int64_t product = 1;
-  constexpr int64_t kMaxProduct = 1 << 20;
-  for (Operation *parent = forOp->getParentOp(); parent;
-       parent = parent->getParentOp()) {
-    if (isa<func::FuncOp>(parent))
-      break;
-    if (!isa<scf::ForOp, affine::AffineForOp, ForOp>(parent))
-      continue;
-    auto tripOpt = loopAnalysis.getStaticTripCount(parent);
-    if (!tripOpt || *tripOpt <= 1)
-      continue;
-    if (*tripOpt >= kMaxProduct / product)
-      return kMaxProduct;
-    product *= *tripOpt;
-    if (product >= kMaxProduct)
-      return kMaxProduct;
-  }
-  return product;
-}
+} // namespace
 
 ParallelismDecision DistributionHeuristics::resolveParallelismFromMachine(
     const AbstractMachine *machine) {
@@ -274,10 +173,6 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
     }
   }
 
-  /// Stencil patterns also benefit from nested-work scaling: deep inner
-  /// loops dominate halo-communication overhead, and keeping dispatch
-  /// aligned with DB blocks prevents CDAG frontier write serialization
-  /// (misaligned coarsening causes adjacent EDTs to share write-mode DBs).
   if (isStencilPattern && !allowNestedWorkBoost) {
     if (auto nestedWork = loopAnalysis.estimateStaticPerfectNestedWork(
             forOp.getOperation(), 8);
@@ -294,26 +189,19 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
   int64_t minItersPerWorker = 8;
   if (auto parentEdt = forOp->getParentOfType<EdtOp>()) {
     int64_t depCount = static_cast<int64_t>(parentEdt.getDependencies().size());
-    if (depCount > 0) {
-      /// ARTS pays fixed scheduling + dependency-slot setup cost per worker
-      /// EDT. When a loop carries many DB dependencies, keep fewer, larger
-      /// chunks so the useful work per EDT grows with dependency pressure.
+    if (depCount > 0)
       minItersPerWorker = std::max<int64_t>(minItersPerWorker, depCount * 2);
-    }
   }
 
   if (isStencilPattern) {
-    /// Stencil kernels with deep inner work can tolerate larger chunks.
     if (auto nestedWork = loopAnalysis.estimateStaticPerfectNestedWork(
             forOp.getOperation(), 8);
-        nestedWork && *nestedWork >= 4096)
+        nestedWork && *nestedWork >= 4096) {
       minItersPerWorker = std::max<int64_t>(minItersPerWorker, 16);
+    }
 
-    /// Repeated parent loops can multiply create/wait overhead. However,
-    /// epoch-loop amortization may later fold those repeats into EDT bodies.
-    /// Keep this boost moderate so we do not over-coarsen and starve
-    /// parallelism when amortization is available.
-    int64_t repeatProduct = getRepeatedParentTripProduct(forOp, loopAnalysis);
+    int64_t repeatProduct =
+        arts::getRepeatedParentTripProduct(forOp.getOperation());
     if (repeatProduct >= 64)
       minItersPerWorker = std::max<int64_t>(minItersPerWorker, 16);
     else if (repeatProduct >= 16)
@@ -321,10 +209,6 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
   }
 
   if (isStencilPattern && !workerCfg.internode) {
-    /// Intranode stencil kernels need enough owned outer iterations per worker
-    /// to keep halo-expanded DB windows aligned with a stable owner span.
-    /// Nested-work boosting is still useful for performance modeling, but it
-    /// must not force the outer owner span below a conservative floor.
     constexpr int64_t kMinStencilOwnedOuterIters = 8;
     int64_t maxWorkersByOwnedSpan =
         std::max<int64_t>(1, tripCount / kMinStencilOwnedOuterIters);
@@ -347,9 +231,6 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
   int64_t blockSize = (tripCount + desiredWorkers - 1) / desiredWorkers;
   blockSize = std::max<int64_t>(1, blockSize);
 
-  /// For internode execution, keep enough chunks so all worker lanes can still
-  /// participate. This preserves distribution while still allowing mild
-  /// coarsening for very small trip counts.
   if (workerCfg.internode) {
     int64_t maxBlockForAllWorkers = tripCount / workerCfg.totalWorkers;
     if (maxBlockForAllWorkers <= 1)
@@ -363,75 +244,12 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
   return blockSize;
 }
 
-int64_t DistributionHeuristics::chooseTiling2DColumnWorkers(
-    int64_t totalWorkers, std::optional<int64_t> workersPerNode) {
-  double target = std::sqrt(static_cast<double>(totalWorkers));
-  return chooseColumnWorkersNearTarget(totalWorkers, workersPerNode, target);
-}
-
-int64_t DistributionHeuristics::chooseWavefront2DColumnWorkers(
-    int64_t totalWorkers, std::optional<int64_t> workersPerNode) {
-  /// Weighted wavefront frontiers expose much less row-wise concurrency than a
-  /// generic near-square tiling. Bias toward a wider column decomposition so
-  /// Seidel-like ranks can keep more worker lanes active, while still using the
-  /// same node-aligned divisor legality checks as generic tiling_2d.
-  double baseTarget = std::sqrt(static_cast<double>(totalWorkers));
-  double widenedTarget = std::min(static_cast<double>(totalWorkers),
-                                  std::max(2.0, baseTarget * 2.0));
-  return chooseColumnWorkersNearTarget(totalWorkers, workersPerNode,
-                                       widenedTarget);
-}
-
-Tiling2DWorkerGrid DistributionHeuristics::getTiling2DWorkerGrid(
-    ArtsCodegen *AC, Location loc, Value workerId, Value totalWorkers,
-    Value workersPerNode, std::optional<ArtsDepPattern> depPattern) {
-  Tiling2DWorkerGrid grid;
-  Value one = AC->createIndexConstant(1, loc);
-  Value zero = AC->createIndexConstant(0, loc);
-
-  Value totalWorkersIndex = AC->castToIndex(totalWorkers, loc);
-  Value workerIdIndex = AC->castToIndex(workerId, loc);
-
-  grid.rowWorkers = totalWorkersIndex;
-  grid.colWorkers = one;
-  grid.rowWorkerId = workerIdIndex;
-  grid.colWorkerId = zero;
-
-  if (auto totalWorkersConst =
-          ValueAnalysis::tryFoldConstantIndex(totalWorkersIndex)) {
-    std::optional<int64_t> workersPerNodeConst = std::nullopt;
-    if (workersPerNode)
-      workersPerNodeConst = ValueAnalysis::tryFoldConstantIndex(
-          AC->castToIndex(workersPerNode, loc));
-
-    int64_t colWorkersConst =
-        chooseColumnWorkersForPattern(*totalWorkersConst, workersPerNodeConst,
-                                      depPattern);
-    if (colWorkersConst > 1) {
-      grid.colWorkers = AC->createIndexConstant(colWorkersConst, loc);
-      grid.rowWorkers =
-          AC->create<arith::DivUIOp>(loc, totalWorkersIndex, grid.colWorkers);
-      grid.rowWorkerId =
-          AC->create<arith::DivUIOp>(loc, workerIdIndex, grid.colWorkers);
-      grid.colWorkerId =
-          AC->create<arith::RemUIOp>(loc, workerIdIndex, grid.colWorkers);
-    }
-  }
-
-  return grid;
-}
-
-///===----------------------------------------------------------------------===///
-/// H2.1: Analyze Machine Topology -> Distribution Strategy
-///===----------------------------------------------------------------------===///
-
 DistributionStrategy
 DistributionHeuristics::analyzeStrategy(EdtConcurrency concurrency,
                                         const AbstractMachine *machine) {
   DistributionStrategy strategy;
 
   if (concurrency == EdtConcurrency::intranode) {
-    /// Flat: all workers divide iterations equally
     strategy.kind = DistributionKind::Flat;
     strategy.numNodes = 1;
     if (machine) {
@@ -442,7 +260,6 @@ DistributionHeuristics::analyzeStrategy(EdtConcurrency concurrency,
     return strategy;
   }
 
-  /// Internode -> TwoLevel
   strategy.kind = DistributionKind::TwoLevel;
   if (machine) {
     strategy.numNodes = machine->getNodeCount();
@@ -470,7 +287,7 @@ DistributionHeuristics::resolveDistributionPattern(AnalysisManager *AM,
   if (auto pattern = getEdtDistributionPattern(forOp.getOperation()))
     return pattern;
   if (AM) {
-    if (auto pattern = AM->getDbAnalysis().getLoopDistributionPattern(forOp);
+    if (auto pattern = AM->getLoopDistributionPattern(forOp.getOperation());
         pattern && *pattern != EdtDistributionPattern::unknown) {
       return pattern;
     }
@@ -478,27 +295,9 @@ DistributionHeuristics::resolveDistributionPattern(AnalysisManager *AM,
   return getEdtDistributionPattern(originalParallel.getOperation());
 }
 
-DistributionKind
-DistributionHeuristics::toDistributionKind(EdtDistributionKind kind) {
-  switch (kind) {
-  case EdtDistributionKind::block:
-    return DistributionKind::Flat;
-  case EdtDistributionKind::two_level:
-    return DistributionKind::TwoLevel;
-  case EdtDistributionKind::block_cyclic:
-    return DistributionKind::BlockCyclic;
-  case EdtDistributionKind::tiling_2d:
-    return DistributionKind::Tiling2D;
-  case EdtDistributionKind::replicated:
-    return DistributionKind::Replicated;
-  }
-  return DistributionKind::Flat;
-}
-
 EdtDistributionKind DistributionHeuristics::selectDistributionKind(
     const DistributionStrategy &strategy, EdtDistributionPattern pattern) {
   if (pattern == EdtDistributionPattern::matmul) {
-    /// Matmul benefits from 2D tile ownership under internode distribution.
     if (strategy.kind == DistributionKind::TwoLevel)
       return EdtDistributionKind::tiling_2d;
     return EdtDistributionKind::block;
@@ -527,729 +326,4 @@ EdtDistributionKind DistributionHeuristics::selectDistributionKind(
     return EdtDistributionKind::block;
   }
   return EdtDistributionKind::block;
-}
-
-///===----------------------------------------------------------------------===///
-/// Balanced Distribution Helper
-///===----------------------------------------------------------------------===///
-
-std::pair<Value, Value> DistributionHeuristics::balancedDistribute(
-    ArtsCodegen *AC, Location loc, Value totalChunks, Value numParticipants,
-    Value participantId) {
-  Value oneIndex = AC->createIndexConstant(1, loc);
-
-  Value base = AC->create<arith::DivUIOp>(loc, totalChunks, numParticipants);
-  Value rem = AC->create<arith::RemUIOp>(loc, totalChunks, numParticipants);
-
-  Value getsExtra = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult,
-                                              participantId, rem);
-  Value count = AC->create<arith::SelectOp>(
-      loc, getsExtra, AC->create<arith::AddIOp>(loc, base, oneIndex), base);
-
-  Value clipped = AC->create<arith::MinUIOp>(loc, participantId, rem);
-  Value start = AC->create<arith::AddIOp>(
-      loc, AC->create<arith::MulIOp>(loc, participantId, base), clipped);
-
-  return {start, count};
-}
-
-///===----------------------------------------------------------------------===///
-/// H2.2: Compute Runtime Bounds
-///===----------------------------------------------------------------------===///
-
-DistributionBounds DistributionHeuristics::computeBounds(
-    ArtsCodegen *AC, Location loc, const DistributionStrategy &strategy,
-    Value workerId, Value runtimeTotalWorkers, Value runtimeWorkersPerNode,
-    Value totalIterations, Value totalChunks, Value blockSize,
-    std::optional<ArtsDepPattern> depPattern) {
-  DistributionBounds bounds;
-  Value zeroIndex = AC->createIndexConstant(0, loc);
-
-  if (strategy.kind == DistributionKind::BlockCyclic) {
-    /// BlockCyclic: chunks are assigned round-robin by chunk id.
-    /// Worker i processes chunk ids: i, i+W, i+2W, ...
-    bounds.iterStart = zeroIndex;
-    bounds.iterCount = zeroIndex;
-    bounds.iterCountHint = zeroIndex;
-    bounds.hasWork = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult,
-                                               workerId, totalChunks);
-
-    /// Conservative acquire bounds: full loop span.
-    /// ForLowering may specialize this further per strategy.
-    bounds.acquireStart = zeroIndex;
-    bounds.acquireSize = totalIterations;
-    bounds.acquireSizeHint = totalIterations;
-    return bounds;
-  }
-
-  if (strategy.kind == DistributionKind::Flat ||
-      strategy.kind == DistributionKind::Tiling2D ||
-      strategy.kind == DistributionKind::Replicated) {
-    /// Flat: balanced distribution across all workers.
-    /// Tiling2D: balanced row distribution across row workers
-    /// (worker decomposition handled by getTiling2DWorkerGrid).
-    Value distWorkerId = workerId;
-    Value distWorkers = runtimeTotalWorkers;
-    if (strategy.kind == DistributionKind::Tiling2D) {
-      Tiling2DWorkerGrid grid = getTiling2DWorkerGrid(
-          AC, loc, workerId, runtimeTotalWorkers, runtimeWorkersPerNode,
-          depPattern);
-      distWorkerId = grid.rowWorkerId;
-      distWorkers = grid.rowWorkers;
-    }
-
-    auto [firstChunkIdx, chunkCount] =
-        balancedDistribute(AC, loc, totalChunks, distWorkers, distWorkerId);
-
-    bounds.iterStart = AC->create<arith::MulIOp>(loc, firstChunkIdx, blockSize);
-    bounds.iterCountHint =
-        AC->create<arith::MulIOp>(loc, chunkCount, blockSize);
-
-    /// Clamp: last worker's iterations may exceed totalIterations
-    Value needZeroIters = AC->create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::uge, bounds.iterStart, totalIterations);
-    Value remainingIters =
-        AC->create<arith::SubIOp>(loc, totalIterations, bounds.iterStart);
-    Value remainingItersNonNeg = AC->create<arith::SelectOp>(
-        loc, needZeroIters, zeroIndex, remainingIters);
-    bounds.iterCount = AC->create<arith::MinUIOp>(loc, bounds.iterCountHint,
-                                                  remainingItersNonNeg);
-
-    bounds.hasWork = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt,
-                                               bounds.iterCount, zeroIndex);
-
-    /// Flat: acquire bounds = iteration bounds
-    bounds.acquireStart = bounds.iterStart;
-    bounds.acquireSize = bounds.iterCount;
-    bounds.acquireSizeHint = bounds.iterCountHint;
-
-    return bounds;
-  }
-
-  /// TwoLevel: hierarchical node -> thread distribution
-  Value numNodes = AC->create<arith::DivUIOp>(loc, runtimeTotalWorkers,
-                                              runtimeWorkersPerNode);
-  Value nodeId =
-      AC->create<arith::DivUIOp>(loc, workerId, runtimeWorkersPerNode);
-  Value localThreadId =
-      AC->create<arith::RemUIOp>(loc, workerId, runtimeWorkersPerNode);
-
-  /// Level 1: distribute chunks across nodes
-  auto [nodeChunkStart, nodeChunkCount] =
-      balancedDistribute(AC, loc, totalChunks, numNodes, nodeId);
-
-  Value nodeStart = AC->create<arith::MulIOp>(loc, nodeChunkStart, blockSize);
-  Value nodeMaxRows = AC->create<arith::MulIOp>(loc, nodeChunkCount, blockSize);
-
-  Value needZeroNode = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
-                                                 nodeStart, totalIterations);
-  Value nodeRemaining =
-      AC->create<arith::SubIOp>(loc, totalIterations, nodeStart);
-  Value nodeRemainingNonNeg =
-      AC->create<arith::SelectOp>(loc, needZeroNode, zeroIndex, nodeRemaining);
-  Value nodeRows =
-      AC->create<arith::MinUIOp>(loc, nodeMaxRows, nodeRemainingNonNeg);
-
-  bounds.acquireStart = nodeStart;
-  bounds.acquireSize = nodeRows;
-  bounds.acquireSizeHint = nodeMaxRows;
-
-  /// Level 2: subdivide node rows across local threads
-  Value oneIndex = AC->createIndexConstant(1, loc);
-  Value adjusted = AC->create<arith::AddIOp>(
-      loc, nodeRows,
-      AC->create<arith::SubIOp>(loc, runtimeWorkersPerNode, oneIndex));
-  Value subBlock =
-      AC->create<arith::DivUIOp>(loc, adjusted, runtimeWorkersPerNode);
-
-  Value localStart = AC->create<arith::MulIOp>(loc, localThreadId, subBlock);
-
-  Value needZeroLocal = AC->create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::uge, localStart, nodeRows);
-  Value localRemaining = AC->create<arith::SubIOp>(loc, nodeRows, localStart);
-  Value localRemainingNonNeg = AC->create<arith::SelectOp>(
-      loc, needZeroLocal, zeroIndex, localRemaining);
-  Value localCount =
-      AC->create<arith::MinUIOp>(loc, subBlock, localRemainingNonNeg);
-
-  bounds.iterStart = AC->create<arith::AddIOp>(loc, nodeStart, localStart);
-  bounds.iterCount = localCount;
-  bounds.iterCountHint = subBlock;
-
-  bounds.hasWork = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt,
-                                             localCount, zeroIndex);
-
-  return bounds;
-}
-
-///===----------------------------------------------------------------------===///
-/// H2.3: Recompute Bounds Inside Task EDT
-///===----------------------------------------------------------------------===///
-
-DistributionBounds DistributionHeuristics::recomputeBoundsInside(
-    ArtsCodegen *AC, Location loc, const DistributionStrategy &strategy,
-    Value workerId, Value insideTotalWorkers, Value workersPerNode,
-    Value upperBound, Value lowerBound, Value loopStep, Value blockSize,
-    std::optional<int64_t> alignmentBlockSize, bool useRuntimeBlockAlignment,
-    std::optional<ArtsDepPattern> depPattern) {
-
-  Value workerIdIndex = AC->castToIndex(workerId, loc);
-  Value totalWorkersIndex = AC->castToIndex(insideTotalWorkers, loc);
-
-  Value oneIndex = AC->createIndexConstant(1, loc);
-  Value zeroIndex = AC->createIndexConstant(0, loc);
-
-  /// Clone loop bounds and their dependencies into the current region
-  SetVector<Value> boundsToClone;
-  Region *currentRegion = AC->getBuilder().getInsertionBlock()->getParent();
-
-  std::function<void(Value)> collectWithDeps = [&](Value val) {
-    if (boundsToClone.contains(val))
-      return;
-    if (Operation *defOp = val.getDefiningOp()) {
-      if (!currentRegion->isAncestor(defOp->getParentRegion())) {
-        for (Value operand : defOp->getOperands())
-          collectWithDeps(operand);
-        boundsToClone.insert(val);
-      }
-    }
-  };
-
-  collectWithDeps(upperBound);
-  collectWithDeps(lowerBound);
-  collectWithDeps(loopStep);
-  collectWithDeps(blockSize);
-
-  IRMapping boundsMapper;
-  ValueAnalysis::cloneValuesIntoRegion(
-      boundsToClone, currentRegion, boundsMapper, AC->getBuilder(),
-      /*allowMemoryEffectFree=*/true, isSafeRuntimeQuery);
-
-  Value localUpperBound = boundsMapper.lookupOrDefault(upperBound);
-  Value localLowerBound = boundsMapper.lookupOrDefault(lowerBound);
-  Value localLoopStep = boundsMapper.lookupOrDefault(loopStep);
-  Value localBlockSize = boundsMapper.lookupOrDefault(blockSize);
-
-  /// Align lower bound to block boundary if needed
-  Value chunkLowerBound = localLowerBound;
-  if (alignmentBlockSize) {
-    if (auto lbConst = ValueAnalysis::tryFoldConstantIndex(localLowerBound)) {
-      int64_t aligned = *lbConst - (*lbConst % *alignmentBlockSize);
-      if (aligned != *lbConst) {
-        chunkLowerBound = AC->createIndexConstant(aligned, loc);
-      }
-    }
-  } else if (useRuntimeBlockAlignment) {
-    Value rem =
-        AC->create<arith::RemUIOp>(loc, localLowerBound, localBlockSize);
-    chunkLowerBound = AC->create<arith::SubIOp>(loc, localLowerBound, rem);
-  }
-
-  Value range =
-      AC->create<arith::SubIOp>(loc, localUpperBound, chunkLowerBound);
-  Value adjustedRange = AC->create<arith::AddIOp>(
-      loc, range, AC->create<arith::SubIOp>(loc, localLoopStep, oneIndex));
-  Value localTotalIterations =
-      AC->create<arith::DivUIOp>(loc, adjustedRange, localLoopStep);
-
-  Value adjustedIterations = AC->create<arith::AddIOp>(
-      loc, localTotalIterations,
-      AC->create<arith::SubIOp>(loc, localBlockSize, oneIndex));
-  Value localTotalChunks =
-      AC->create<arith::DivUIOp>(loc, adjustedIterations, localBlockSize);
-
-  if (strategy.kind == DistributionKind::BlockCyclic) {
-    DistributionBounds bounds;
-    bounds.iterStart = zeroIndex;
-    bounds.iterCount = zeroIndex;
-    bounds.iterCountHint = zeroIndex;
-    bounds.hasWork = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult,
-                                               workerIdIndex, localTotalChunks);
-    bounds.acquireStart = zeroIndex;
-    bounds.acquireSize = localTotalIterations;
-    bounds.acquireSizeHint = localTotalIterations;
-    return bounds;
-  }
-
-  if (strategy.kind == DistributionKind::TwoLevel) {
-    /// Clone workersPerNode into the current region if needed
-    Value wpnIndex = workersPerNode;
-    if (wpnIndex) {
-      if (Operation *defOp = wpnIndex.getDefiningOp()) {
-        if (!currentRegion->isAncestor(defOp->getParentRegion())) {
-          collectWithDeps(wpnIndex);
-          ValueAnalysis::cloneValuesIntoRegion(
-              boundsToClone, currentRegion, boundsMapper, AC->getBuilder(),
-              /*allowMemoryEffectFree=*/true, isSafeRuntimeQuery);
-          wpnIndex = boundsMapper.lookupOrDefault(wpnIndex);
-        }
-      }
-      wpnIndex = AC->castToIndex(wpnIndex, loc);
-    }
-
-    Value numNodes =
-        AC->create<arith::DivUIOp>(loc, totalWorkersIndex, wpnIndex);
-    Value nodeId = AC->create<arith::DivUIOp>(loc, workerIdIndex, wpnIndex);
-    Value localThreadId =
-        AC->create<arith::RemUIOp>(loc, workerIdIndex, wpnIndex);
-
-    /// Level 1: distribute chunks across nodes
-    auto [nodeChunkStart, nodeChunkCount] =
-        balancedDistribute(AC, loc, localTotalChunks, numNodes, nodeId);
-
-    Value nodeStart =
-        AC->create<arith::MulIOp>(loc, nodeChunkStart, localBlockSize);
-    Value nodeMaxRows =
-        AC->create<arith::MulIOp>(loc, nodeChunkCount, localBlockSize);
-
-    Value needZeroNode = AC->create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::uge, nodeStart, localTotalIterations);
-    Value nodeRemaining =
-        AC->create<arith::SubIOp>(loc, localTotalIterations, nodeStart);
-    Value nodeRemainingNonNeg = AC->create<arith::SelectOp>(
-        loc, needZeroNode, zeroIndex, nodeRemaining);
-    Value nodeRows =
-        AC->create<arith::MinUIOp>(loc, nodeMaxRows, nodeRemainingNonNeg);
-
-    /// Level 2: subdivide node rows across local threads
-    Value subAdjusted = AC->create<arith::AddIOp>(
-        loc, nodeRows, AC->create<arith::SubIOp>(loc, wpnIndex, oneIndex));
-    Value subBlock = AC->create<arith::DivUIOp>(loc, subAdjusted, wpnIndex);
-
-    Value localStart = AC->create<arith::MulIOp>(loc, localThreadId, subBlock);
-
-    Value needZeroLocal = AC->create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::uge, localStart, nodeRows);
-    Value localRemaining = AC->create<arith::SubIOp>(loc, nodeRows, localStart);
-    Value localRemainingNonNeg = AC->create<arith::SelectOp>(
-        loc, needZeroLocal, zeroIndex, localRemaining);
-    Value localCount =
-        AC->create<arith::MinUIOp>(loc, subBlock, localRemainingNonNeg);
-
-    DistributionBounds bounds;
-    bounds.iterStart = AC->create<arith::AddIOp>(loc, nodeStart, localStart);
-    bounds.iterCount = localCount;
-    bounds.iterCountHint = subBlock;
-    bounds.hasWork = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt,
-                                               localCount, zeroIndex);
-
-    bounds.acquireStart = nodeStart;
-    bounds.acquireSize = nodeRows;
-    bounds.acquireSizeHint = nodeMaxRows;
-    return bounds;
-  }
-
-  /// Flat: mirror the same balanced floor + remainder mapping.
-  /// Tiling2D: use row-worker decomposition for row ownership.
-  Value distWorkerId = workerIdIndex;
-  Value distWorkers = totalWorkersIndex;
-  if (strategy.kind == DistributionKind::Tiling2D) {
-    Tiling2DWorkerGrid grid = getTiling2DWorkerGrid(
-        AC, loc, workerIdIndex, totalWorkersIndex, workersPerNode, depPattern);
-    distWorkerId = grid.rowWorkerId;
-    distWorkers = grid.rowWorkers;
-  }
-
-  auto [firstChunkIdx, chunkCount] =
-      balancedDistribute(AC, loc, localTotalChunks, distWorkers, distWorkerId);
-
-  DistributionBounds bounds;
-  bounds.iterStart =
-      AC->create<arith::MulIOp>(loc, firstChunkIdx, localBlockSize);
-  bounds.iterCountHint =
-      AC->create<arith::MulIOp>(loc, chunkCount, localBlockSize);
-
-  Value needZeroIters = AC->create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::uge, bounds.iterStart, localTotalIterations);
-  Value remainingIters =
-      AC->create<arith::SubIOp>(loc, localTotalIterations, bounds.iterStart);
-  Value remainingItersNonNeg = AC->create<arith::SelectOp>(
-      loc, needZeroIters, zeroIndex, remainingIters);
-  bounds.iterCount = AC->create<arith::MinUIOp>(loc, bounds.iterCountHint,
-                                                remainingItersNonNeg);
-  bounds.hasWork = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt,
-                                             bounds.iterCount, zeroIndex);
-
-  bounds.acquireStart = bounds.iterStart;
-  bounds.acquireSize = bounds.iterCount;
-  bounds.acquireSizeHint = bounds.iterCountHint;
-  return bounds;
-}
-
-///===----------------------------------------------------------------------===///
-/// DB Alignment Block Size
-///===----------------------------------------------------------------------===///
-
-static std::optional<unsigned>
-inferLoopMappedDim(DbAcquireNode *acqNode, ForOp forOp) {
-  if (!acqNode || !forOp)
-    return std::nullopt;
-
-  Block &forBody = forOp.getRegion().front();
-  if (forBody.getNumArguments() == 0)
-    return std::nullopt;
-
-  Value loopIV = forBody.getArgument(0);
-  if (auto mappedDim =
-          acqNode->getPartitionOffsetDim(loopIV, /*requireLeading=*/false)) {
-    return mappedDim;
-  }
-
-  Region &forRegion = forOp.getRegion();
-  std::optional<unsigned> mappedDim;
-
-  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
-  acqNode->collectAccessOperations(dbRefToMemOps);
-
-  for (auto &[dbRef, memOps] : dbRefToMemOps) {
-    for (Operation *memOp : memOps) {
-      Region *memRegion = memOp ? memOp->getParentRegion() : nullptr;
-      if (!memRegion)
-        continue;
-      if (memRegion != &forRegion && !forRegion.isAncestor(memRegion))
-        continue;
-
-      SmallVector<Value> fullChain =
-          DbUtils::collectFullIndexChain(dbRef, memOp);
-      if (fullChain.empty())
-        continue;
-
-      unsigned memrefStart = dbRef.getIndices().size();
-      if (memrefStart >= fullChain.size())
-        continue;
-
-      SmallVector<unsigned, 2> matchingDims;
-      ArrayRef<Value> memrefChain(fullChain);
-      memrefChain = memrefChain.drop_front(memrefStart);
-      for (auto [dimIdx, indexVal] : llvm::enumerate(memrefChain)) {
-        if (ValueAnalysis::dependsOn(
-                ValueAnalysis::stripNumericCasts(indexVal), loopIV))
-          matchingDims.push_back(dimIdx);
-      }
-
-      /// Alignment must be anchored to a single logical owner dimension.
-      /// Multi-dimensional dependence is ambiguous here; skip the hint rather
-      /// than guessing and potentially forcing overlapping write chunks.
-      if (matchingDims.size() != 1)
-        return std::nullopt;
-
-      unsigned dim = matchingDims.front();
-      if (!mappedDim)
-        mappedDim = dim;
-      else if (*mappedDim != dim)
-        return std::nullopt;
-    }
-  }
-
-  return mappedDim;
-}
-
-static std::optional<unsigned>
-inferLoopMappedDimFromValue(Value dep, ForOp forOp) {
-  if (!dep || !forOp)
-    return std::nullopt;
-
-  Block &forBody = forOp.getRegion().front();
-  if (forBody.getNumArguments() == 0)
-    return std::nullopt;
-
-  Value loopIV = forBody.getArgument(0);
-  Region &forRegion = forOp.getRegion();
-  std::optional<unsigned> mappedDim;
-  llvm::SetVector<Value> sources;
-  sources.insert(dep);
-  for (Operation *user : dep.getUsers()) {
-    auto edt = dyn_cast<EdtOp>(user);
-    if (!edt)
-      continue;
-
-    ValueRange deps = edt.getDependencies();
-    Block &edtBody = edt.getBody().front();
-    unsigned argCount = edtBody.getNumArguments();
-    for (auto [idx, operand] : llvm::enumerate(deps)) {
-      if (operand != dep || idx >= argCount)
-        continue;
-      sources.insert(edtBody.getArgument(static_cast<unsigned>(idx)));
-    }
-  }
-
-  llvm::SetVector<Operation *> memOps;
-  for (Value source : sources)
-    DbUtils::collectReachableMemoryOps(source, memOps, /*scope=*/nullptr);
-
-  for (Operation *memOp : memOps) {
-    Region *memRegion = memOp ? memOp->getParentRegion() : nullptr;
-    if (!memRegion)
-      continue;
-    if (memRegion != &forRegion && !forRegion.isAncestor(memRegion))
-      continue;
-
-    std::optional<DbUtils::MemoryAccessInfo> access =
-        DbUtils::getMemoryAccessInfo(memOp);
-    if (!access || access->indices.empty())
-      continue;
-
-    SmallVector<unsigned, 2> matchingDims;
-    for (auto [dimIdx, indexVal] : llvm::enumerate(access->indices)) {
-      if (ValueAnalysis::dependsOn(
-              ValueAnalysis::stripNumericCasts(indexVal), loopIV))
-        matchingDims.push_back(dimIdx);
-    }
-
-    /// Coarse / direct accesses should still map the worker IV to a single
-    /// logical owner dimension. If we see multiple dependent dimensions, this
-    /// dependency is ambiguous for block alignment and must not drive the hint.
-    if (matchingDims.size() != 1)
-      return std::nullopt;
-
-    unsigned dim = matchingDims.front();
-    if (!mappedDim)
-      mappedDim = dim;
-    else if (*mappedDim != dim)
-      return std::nullopt;
-  }
-
-  return mappedDim;
-}
-
-Value DistributionHeuristics::computeDbAlignmentBlockSize(
-    ForOp forOp, EdtOp parallelEdt, Value numPartitions, ArtsCodegen *AC,
-    Location loc, DbAnalysis *dbAnalysis) {
-  if (!forOp || !parallelEdt || !numPartitions)
-    return Value();
-
-  Value one = AC->createIndexConstant(1, loc);
-  Value hintBlockSize;
-
-  bool isTwoLevel = (parallelEdt.getConcurrency() == EdtConcurrency::internode);
-  DbGraph *graph = nullptr;
-  if (dbAnalysis) {
-    if (func::FuncOp func = parallelEdt->getParentOfType<func::FuncOp>())
-      graph = &dbAnalysis->getOrCreateGraph(func);
-  }
-
-  for (Value dep : parallelEdt.getDependencies()) {
-    auto allocInfo = DbUtils::traceToDbAlloc(dep);
-    if (!allocInfo)
-      continue;
-    auto [rootGuid, rootPtr] = *allocInfo;
-    (void)rootPtr;
-    auto allocOp = rootGuid.getDefiningOp<DbAllocOp>();
-    if (!allocOp || allocOp.getElementSizes().empty())
-      continue;
-
-    std::optional<unsigned> mappedDim;
-    if (graph) {
-      if (auto acquire =
-              dyn_cast_or_null<DbAcquireOp>(DbUtils::getUnderlyingDb(dep))) {
-        if (DbAcquireNode *acqNode = graph->getDbAcquireNode(acquire))
-          mappedDim = inferLoopMappedDim(acqNode, forOp);
-      }
-    }
-    if (!mappedDim)
-      mappedDim = inferLoopMappedDimFromValue(dep, forOp);
-
-    if (!mappedDim) {
-      if (allocOp.getElementSizes().size() == 1)
-        mappedDim = 0u;
-      else
-        continue;
-    }
-    if (*mappedDim >= allocOp.getElementSizes().size())
-      continue;
-
-    Value ownerExtent = allocOp.getElementSizes()[*mappedDim];
-    if (auto constElem = ValueAnalysis::tryFoldConstantIndex(ownerExtent))
-      if (*constElem <= 1)
-        continue;
-
-    /// TwoLevel (internode): align ALL arrays so all workers on the same node
-    /// acquire the same DB block.
-    ///
-    /// Flat (intranode):
-    ///   - Always align stencil arrays.
-    ///   - Align any write-capable owner-mapped array.
-    ///
-    /// Once DbPartitioning chooses block mode, the runtime reasons at block
-    /// granularity for write ownership. Even when the owner extent divides the
-    /// worker count evenly, a loop that only covers an interior slice (e.g.
-    /// rhs4sg-base runs k in [4, NZ-4)) can still make balanced worker chunks
-    /// straddle adjacent DB blocks unless the loop chunking itself is emitted
-    /// in whole owner blocks.
-    if (!isTwoLevel) {
-      auto pattern = getDbAccessPattern(allocOp.getOperation());
-      bool isStencil = pattern && *pattern == DbAccessPattern::stencil;
-      bool requiresWriteBlockOwnership = allocOp.getMode() != ArtsMode::in;
-
-      if (!isStencil && !requiresWriteBlockOwnership)
-        continue;
-    }
-
-    ownerExtent = AC->castToIndex(ownerExtent, loc);
-
-    /// Match the block span DbPartitioning will later choose for the specific
-    /// owner dimension carried by this loop. This keeps worker chunk boundaries
-    /// aligned with DB block boundaries even when the true loop lower bound is
-    /// not zero (e.g. rhs4sg-base starts at k=4).
-    Value adjusted = AC->create<arith::AddIOp>(
-        loc, ownerExtent, AC->create<arith::SubIOp>(loc, numPartitions, one));
-    Value candidate = AC->create<arith::DivUIOp>(loc, adjusted, numPartitions);
-    candidate = AC->create<arith::MaxUIOp>(loc, candidate, one);
-
-    if (!hintBlockSize)
-      hintBlockSize = candidate;
-    else
-      hintBlockSize = AC->create<arith::MinUIOp>(loc, hintBlockSize, candidate);
-  }
-
-  return hintBlockSize;
-}
-
-///===----------------------------------------------------------------------===///
-/// Workers Per Node
-///===----------------------------------------------------------------------===///
-
-/// Cast a Value to index type if needed. Returns null Value for null input.
-static Value castToIndexType(OpBuilder &builder, Location loc, Value v) {
-  if (!v)
-    return Value();
-  if (v.getType().isIndex())
-    return v;
-  return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(), v);
-}
-
-Value DistributionHeuristics::getWorkersPerNode(OpBuilder &builder,
-                                                Location loc,
-                                                EdtOp parallelEdt) {
-  Value one = arts::createOneIndex(builder, loc);
-  Value workersPerNode;
-
-  if (auto wpnConst = getExplicitWorkersPerNodeCount(parallelEdt)) {
-    int64_t clamped = std::max<int64_t>(1, *wpnConst);
-    return arts::createConstantIndex(builder, loc, clamped);
-  }
-
-  if (auto workers = getExplicitWorkerCount(parallelEdt)) {
-    Value totalWorkers = arts::createConstantIndex(builder, loc, *workers);
-    Value totalNodes = castToIndexType(
-        builder, loc,
-        builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalNodes)
-            .getResult());
-    workersPerNode =
-        builder.create<arith::DivUIOp>(loc, totalWorkers, totalNodes);
-  } else {
-    workersPerNode = castToIndexType(
-        builder, loc,
-        builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalWorkers)
-            .getResult());
-  }
-
-  /// Clamp to at least 1 to prevent division by zero.
-  Value zero = arts::createZeroIndex(builder, loc);
-  Value isZero = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                               workersPerNode, zero);
-  return builder.create<arith::SelectOp>(loc, isZero, one, workersPerNode);
-}
-
-Value DistributionHeuristics::getWorkersPerNode(ArtsCodegen *AC, Location loc,
-                                                EdtOp parallelEdt) {
-  return getWorkersPerNode(AC->getBuilder(), loc, parallelEdt);
-}
-
-Value DistributionHeuristics::getTotalWorkers(OpBuilder &builder, Location loc,
-                                              EdtOp parallelEdt) {
-  if (auto workers = getExplicitWorkerCount(parallelEdt))
-    return arts::createConstantIndex(builder, loc, *workers);
-
-  if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {
-    Value nodes = castToIndexType(
-        builder, loc,
-        builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalNodes)
-            .getResult());
-    Value threads = castToIndexType(
-        builder, loc,
-        builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalWorkers)
-            .getResult());
-    return builder.create<arith::MulIOp>(loc, nodes, threads);
-  }
-
-  return castToIndexType(
-      builder, loc,
-      builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalWorkers)
-          .getResult());
-}
-
-Value DistributionHeuristics::getTotalWorkers(ArtsCodegen *AC, Location loc,
-                                              EdtOp parallelEdt) {
-  return getTotalWorkers(AC->getBuilder(), loc, parallelEdt);
-}
-
-Value DistributionHeuristics::getDispatchWorkerCount(OpBuilder &builder,
-                                                     Location loc,
-                                                     EdtOp parallelEdt) {
-  if (auto workers = getExplicitWorkerCount(parallelEdt))
-    return arts::createConstantIndex(builder, loc, *workers);
-
-  RuntimeQueryKind queryKind =
-      parallelEdt.getConcurrency() == EdtConcurrency::internode
-          ? RuntimeQueryKind::totalNodes
-          : RuntimeQueryKind::totalWorkers;
-  Value workerCount =
-      builder.create<RuntimeQueryOp>(loc, queryKind).getResult();
-  return castToIndexType(builder, loc, workerCount);
-}
-
-Value DistributionHeuristics::getForDispatchWorkerCount(
-    ArtsCodegen *AC, Location loc, EdtOp parallelEdt,
-    const DistributionStrategy &strategy, Value totalChunks,
-    std::optional<ArtsDepPattern> depPattern) {
-  Value one = AC->createIndexConstant(1, loc);
-  Value totalWorkers = getTotalWorkers(AC, loc, parallelEdt);
-  Value clampedDispatch = totalWorkers;
-
-  switch (strategy.kind) {
-  case DistributionKind::Flat:
-  case DistributionKind::BlockCyclic:
-  case DistributionKind::Replicated:
-    clampedDispatch =
-        AC->create<arith::MinUIOp>(loc, totalWorkers, totalChunks);
-    break;
-  case DistributionKind::TwoLevel: {
-    Value workersPerNode = getWorkersPerNode(AC, loc, parallelEdt);
-    Value numNodes =
-        AC->create<arith::DivUIOp>(loc, totalWorkers, workersPerNode);
-    Value activeNodes = AC->create<arith::MinUIOp>(loc, numNodes, totalChunks);
-    clampedDispatch =
-        AC->create<arith::MulIOp>(loc, activeNodes, workersPerNode);
-    break;
-  }
-  case DistributionKind::Tiling2D: {
-    Value totalWorkersIndex = AC->castToIndex(totalWorkers, loc);
-    auto totalWorkersConst =
-        ValueAnalysis::tryFoldConstantIndex(totalWorkersIndex);
-    if (!totalWorkersConst)
-      break;
-
-    std::optional<int64_t> workersPerNodeConst = std::nullopt;
-    if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {
-      Value workersPerNode = getWorkersPerNode(AC, loc, parallelEdt);
-      workersPerNodeConst = ValueAnalysis::tryFoldConstantIndex(
-          AC->castToIndex(workersPerNode, loc));
-    }
-
-    int64_t colWorkersConst =
-        chooseColumnWorkersForPattern(*totalWorkersConst, workersPerNodeConst,
-                                      depPattern);
-    int64_t rowWorkersConst =
-        std::max<int64_t>(1, *totalWorkersConst / colWorkersConst);
-
-    Value rowWorkers = AC->createIndexConstant(rowWorkersConst, loc);
-    Value activeRows = AC->create<arith::MinUIOp>(loc, rowWorkers, totalChunks);
-    Value colWorkers = AC->createIndexConstant(colWorkersConst, loc);
-    clampedDispatch = AC->create<arith::MulIOp>(loc, activeRows, colWorkers);
-    break;
-  }
-  }
-
-  return AC->create<arith::MaxUIOp>(loc, clampedDispatch, one);
 }

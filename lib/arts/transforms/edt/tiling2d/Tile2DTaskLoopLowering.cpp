@@ -146,7 +146,7 @@ public:
                      Value chunkOffset) const override {
     TaskAcquirePlanningResult result =
         EdtTaskLoopLowering::planAcquireRewrite(input, chunkOffset);
-    result.tiling2DGrid = DistributionHeuristics::getTiling2DWorkerGrid(
+    result.tiling2DGrid = WorkDistributionUtils::getTiling2DWorkerGrid(
         input.AC, input.loc, input.taskWorkerId, input.totalWorkers,
         input.workersPerNode, input.depPattern);
     return result;
@@ -155,7 +155,7 @@ public:
   TaskLoopLoweringResult
   lower(TaskLoopLoweringInput &input,
         const TaskLoopLoweringMappedValues &mapped) const override {
-    Tiling2DWorkerGrid grid = DistributionHeuristics::getTiling2DWorkerGrid(
+    Tiling2DWorkerGrid grid = WorkDistributionUtils::getTiling2DWorkerGrid(
         input.AC, input.loc, input.taskWorkerId, input.totalWorkers,
         input.workersPerNode, input.depPattern);
 

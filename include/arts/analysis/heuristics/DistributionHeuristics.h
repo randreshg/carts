@@ -1,20 +1,14 @@
 ///==========================================================================///
 /// File: DistributionHeuristics.h
 ///
-/// Machine-aware work distribution heuristics for the CARTS compiler.
+/// Machine-aware work-distribution policy heuristics for the CARTS compiler.
 ///
-/// This module decides HOW loop iterations are distributed across workers
-/// in a distributed task-based runtime. It analyzes the machine topology
-/// (nodes, threads per node, network threads) and selects a distribution
-/// strategy that maximizes utilization at every level of the hierarchy.
+/// This module owns H2 policy selection: machine topology inspection,
+/// distribution-strategy selection, worker-topology defaults, and loop
+/// coarsening hints.
 ///
-/// Heuristic Family:
-///   H2: Distribution - Decide iteration-to-worker mapping
-///
-/// H2 Distribution Heuristics:
-///   H2.1: Machine Analysis    - Inspect topology -> select strategy
-///   H2.2: Compute Bounds      - Emit IR for worker iteration ranges
-///   H2.3: Recompute Inside    - Recompute bounds inside task EDT (SSA)
+/// Lowering-time SSA/runtime materialization for those policies lives in
+/// `arts/transforms/edt/WorkDistributionUtils.h`.
 ///
 ///===----------------------------------------------------------------------===///
 /// Strategies
@@ -117,16 +111,12 @@
 
 #include "arts/Dialect.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
-#include "mlir/IR/Builders.h"
-#include "mlir/IR/Value.h"
 #include <optional>
 
 namespace mlir {
 namespace arts {
 
 class AnalysisManager;
-class ArtsCodegen;
-class DbAnalysis;
 class LoopAnalysis;
 
 /// H2: Distribution strategy kinds
@@ -148,22 +138,6 @@ struct DistributionStrategy {
   bool useDbAlignment = false; ///  blockSize > 1 for DB boundary alignment
 };
 
-/// Runtime distribution bounds (SSA Values emitted during lowering)
-struct DistributionBounds {
-  /// Thread-level: inner loop bounds
-  Value iterStart;     ///  First iteration for this worker
-  Value iterCount;     ///  Actual iteration count
-  Value iterCountHint; ///  Max possible (for sizing)
-  Value hasWork;       ///  i1: does this worker have iterations?
-
-  /// Acquire-level: DB acquire bounds
-  /// For Flat: same as thread-level
-  /// For TwoLevel: node-level (all threads on same node share same acquire)
-  Value acquireStart;    ///  First iteration of acquire range
-  Value acquireSize;     ///  Actual size
-  Value acquireSizeHint; ///  Max possible (partition_sizes hint)
-};
-
 /// Resolved worker topology for an EDT.
 struct WorkerConfig {
   int64_t totalWorkers = 0;
@@ -176,28 +150,6 @@ struct ParallelismDecision {
   EdtConcurrency concurrency = EdtConcurrency::intranode;
   int64_t totalWorkers = 0;
   int64_t workersPerNode = 0;
-};
-
-/// 2D worker grid for tiling_2d strategy.
-/// workerId = rowWorkerId * colWorkers + colWorkerId
-struct Tiling2DWorkerGrid {
-  Value rowWorkers;
-  Value colWorkers;
-  Value rowWorkerId;
-  Value colWorkerId;
-};
-
-/// Shared chunking plan for lowering one distributed arts.for loop.
-///
-/// This is the H2 policy handoff from heuristics into ForLowering.
-struct LoopChunkPlan {
-  Value blockSize;
-  Value chunkLowerBound;
-  Value totalIterations;
-  Value totalChunks;
-  bool useAlignedLowerBound = false;
-  bool useRuntimeBlockAlignment = false;
-  std::optional<int64_t> alignmentBlockSize;
 };
 
 class DistributionHeuristics {
@@ -225,79 +177,6 @@ public:
   selectDistributionKind(const DistributionStrategy &strategy,
                          EdtDistributionPattern pattern);
 
-  /// Convert IR-level distribution enum into lowering strategy enum.
-  static DistributionKind toDistributionKind(EdtDistributionKind kind);
-
-  /// H2.2: Compute runtime bounds for a worker
-  /// Emits arith MLIR ops via ArtsCodegen.
-  /// totalWorkers: runtime SSA Value for total worker count.
-  /// workersPerNode: runtime SSA Value for workers per node (TwoLevel only).
-  ///   For Flat, this parameter is ignored and may be null.
-  static DistributionBounds computeBounds(ArtsCodegen *AC, Location loc,
-                                          const DistributionStrategy &strategy,
-                                          Value workerId, Value totalWorkers,
-                                          Value workersPerNode,
-                                          Value totalIterations,
-                                          Value totalChunks, Value blockSize,
-                                          std::optional<ArtsDepPattern>
-                                              depPattern = std::nullopt);
-
-  /// H2.3: Recompute bounds inside task EDT (handles SSA dominance)
-  /// Clones loop bounds into current region, recomputes distribution.
-  /// workersPerNode: runtime SSA Value for workers per node (TwoLevel only).
-  static DistributionBounds recomputeBoundsInside(
-      ArtsCodegen *AC, Location loc, const DistributionStrategy &strategy,
-      Value workerId, Value insideTotalWorkers, Value workersPerNode,
-      Value upperBound, Value lowerBound, Value loopStep, Value blockSize,
-      std::optional<int64_t> alignmentBlockSize,
-      bool useRuntimeBlockAlignment,
-      std::optional<ArtsDepPattern> depPattern = std::nullopt);
-
-  /// Compute DB alignment block size from the loop-carried owner dimension of
-  /// parallel EDT dependencies.
-  /// For internode: ceil(arrayDim / numNodes) for ALL arrays.
-  /// For intranode: align stencil arrays and write-capable arrays whose
-  /// element count is not evenly divisible by worker count.
-  static Value computeDbAlignmentBlockSize(ForOp forOp, EdtOp parallelEdt,
-                                           Value numPartitions, ArtsCodegen *AC,
-                                           Location loc,
-                                           DbAnalysis *dbAnalysis = nullptr);
-
-  /// Get workers-per-node runtime Value for internode EDTs.
-  static Value getWorkersPerNode(OpBuilder &builder, Location loc,
-                                 EdtOp parallelEdt);
-
-  /// Get workers-per-node runtime Value for internode EDTs.
-  static Value getWorkersPerNode(ArtsCodegen *AC, Location loc,
-                                 EdtOp parallelEdt);
-
-  /// Get total worker count as an index Value for the given EDT.
-  /// Honors explicit workers attribute, otherwise uses runtime queries.
-  static Value getTotalWorkers(OpBuilder &builder, Location loc,
-                               EdtOp parallelEdt);
-
-  /// Get total worker count as an index Value for the given EDT.
-  /// Honors explicit workers attribute, otherwise uses runtime queries.
-  static Value getTotalWorkers(ArtsCodegen *AC, Location loc,
-                               EdtOp parallelEdt);
-
-  /// Get dispatch worker count used by ParallelEdtLowering worker loops.
-  /// Honors explicit workers attribute. Defaults to:
-  ///   - internode: total nodes
-  ///   - intranode: total workers
-  static Value getDispatchWorkerCount(OpBuilder &builder, Location loc,
-                                      EdtOp parallelEdt);
-
-  /// Get dispatch worker count used by ForLowering worker loops.
-  /// Unlike getDispatchWorkerCount, this clamps the emitted worker lanes to the
-  /// subset that can actually receive chunks for the selected strategy.
-  static Value getForDispatchWorkerCount(ArtsCodegen *AC, Location loc,
-                                         EdtOp parallelEdt,
-                                         const DistributionStrategy &strategy,
-                                         Value totalChunks,
-                                         std::optional<ArtsDepPattern>
-                                             depPattern = std::nullopt);
-
   /// Resolve default EDT parallelism from machine topology.
   /// Used by passes to avoid duplicating node/worker resolution logic.
   static ParallelismDecision
@@ -314,42 +193,6 @@ public:
   static std::optional<int64_t>
   computeCoarsenedBlockHint(ForOp forOp, LoopAnalysis &loopAnalysis,
                             const WorkerConfig &workerCfg);
-
-  /// Plan block sizing and chunk alignment for one lowered arts.for.
-  /// This centralizes H2 chunking policy so ForLowering only consumes the
-  /// resolved block/chunk plan.
-  static LoopChunkPlan planLoopChunking(ArtsCodegen *AC, ForOp forOp,
-                                        Value runtimeBlockSizeHint = Value());
-
-  /// Choose compile-time column worker count for tiling_2d.
-  /// Defaults to a near-square divisor of totalWorkers. When workersPerNode is
-  /// provided, prefer divisors that keep a row-worker group within one node
-  /// (colWorkers divides workersPerNode).
-  static int64_t
-  chooseTiling2DColumnWorkers(int64_t totalWorkers,
-                              std::optional<int64_t> workersPerNode);
-
-  /// Choose compile-time column worker count for wavefront_2d tiling.
-  /// Unlike the generic tiling heuristic, this prefers a wider column
-  /// decomposition so weighted wavefront frontiers can saturate more workers.
-  static int64_t
-  chooseWavefront2DColumnWorkers(int64_t totalWorkers,
-                                 std::optional<int64_t> workersPerNode);
-
-  /// Compute row/column worker decomposition for tiling_2d.
-  /// Falls back to rowWorkers=totalWorkers, colWorkers=1 when totalWorkers is
-  /// not compile-time constant.
-  static Tiling2DWorkerGrid
-  getTiling2DWorkerGrid(ArtsCodegen *AC, Location loc, Value workerId,
-                        Value totalWorkers, Value workersPerNode = Value(),
-                        std::optional<ArtsDepPattern> depPattern =
-                            std::nullopt);
-
-private:
-  /// Balanced floor+remainder distribution
-  static std::pair<Value, Value>
-  balancedDistribute(ArtsCodegen *AC, Location loc, Value totalChunks,
-                     Value numParticipants, Value participantId);
 };
 
 } // namespace arts

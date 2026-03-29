@@ -9,10 +9,14 @@
 
 #include "arts/Dialect.h"
 #include "arts/codegen/Codegen.h"
+#include "arts/transforms/edt/WorkDistributionUtils.h"
+#include "arts/utils/LoweringContractUtils.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Location.h"
+#include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/SmallVector.h"
+#include <optional>
 
 namespace mlir {
 namespace arts {
@@ -46,10 +50,68 @@ struct AcquireRewriteInput {
   Value stencilExtent;
 };
 
+/// Shared planner input for one task-local acquire rewrite.
+struct TaskAcquireRewritePlanInput {
+  ArtsCodegen *AC = nullptr;
+  Location loc;
+  DbAcquireOp parentAcquire;
+  Value rootGuid;
+  Value rootPtr;
+  DistributionKind distributionKind = DistributionKind::Flat;
+  std::optional<EdtDistributionPattern> distributionPattern;
+  std::optional<Tiling2DWorkerGrid> tiling2DGrid;
+  AcquireRewriteContract rewriteContract;
+  Value acquireOffset;
+  Value acquireSize;
+  Value acquireHintSize;
+  Value step;
+  bool stepIsUnit = true;
+};
+
+/// Shared planner output for one task-local acquire rewrite.
+struct TaskAcquireRewritePlan {
+  AcquireRewriteInput rewriteInput;
+  bool useStencilRewriter = false;
+  std::optional<SmallVector<int64_t, 4>> refinedTaskBlockShape;
+};
+
+/// Shared input for patching task-local DB slice metadata after acquire
+/// rewriting.
+struct TaskAcquireSlicePlanInput {
+  ArtsCodegen *AC = nullptr;
+  Location loc;
+  DbAcquireOp parentAcquire;
+  DbAcquireOp taskAcquire;
+  Value rootGuid;
+  Value rootPtr;
+  DistributionKind distributionKind = DistributionKind::Flat;
+  std::optional<EdtDistributionPattern> distributionPattern;
+  Value plannedElementOffset;
+  Value plannedElementSize;
+  Value plannedElementSizeSeed;
+  bool usesStencilHalo = false;
+  AcquireRewriteContract rewriteContract;
+};
+
+/// Plan the per-worker acquire rewrite payload from the resolved distribution
+/// and semantic contract.
+TaskAcquireRewritePlan
+planTaskAcquireRewrite(TaskAcquireRewritePlanInput input);
+
 /// Rewrite a parent acquire into a block-partitioned per-worker acquire.
 /// When applyStencilHalo is true, offsets/sizes are expanded with halo
 /// clamping for stencil access patterns.
 DbAcquireOp rewriteAcquire(AcquireRewriteInput &input, bool applyStencilHalo);
+
+/// Apply any task-local DB-space slice updates required after rewriteAcquire.
+void applyTaskAcquireSlicePlan(TaskAcquireSlicePlanInput input);
+
+/// Project semantic contract metadata onto one rewritten task acquire.
+void applyTaskAcquireContractMetadata(
+    Operation *semanticSourceOp, DbAcquireOp taskAcquire,
+    const AcquireRewriteContract &rewriteContract,
+    std::optional<SmallVector<int64_t, 4>> refinedTaskBlockShape,
+    OpBuilder &builder, Location loc);
 
 } // namespace arts
 } // namespace mlir

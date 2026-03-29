@@ -40,6 +40,8 @@ void AnalysisManager::invalidate() {
     loopAnalysis->invalidate();
   if (stringAnalysis)
     stringAnalysis->invalidate();
+  if (edtHeuristics)
+    edtHeuristics->invalidate();
   if (dbHeuristics)
     dbHeuristics->clearDecisions();
   if (metadataManager)
@@ -105,7 +107,7 @@ DbHeuristics &AnalysisManager::getDbHeuristics() {
 
 EdtHeuristics &AnalysisManager::getEdtHeuristics() {
   if (!edtHeuristics)
-    edtHeuristics = std::make_unique<EdtHeuristics>(abstractMachine);
+    edtHeuristics = std::make_unique<EdtHeuristics>(*this);
   return *edtHeuristics;
 }
 

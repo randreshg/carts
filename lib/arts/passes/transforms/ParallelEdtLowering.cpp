@@ -18,13 +18,13 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/analysis/heuristics/DistributionHeuristics.h"
 #define GEN_PASS_DEF_PARALLELEDTLOWERING
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
+#include "arts/transforms/edt/WorkDistributionUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
@@ -209,7 +209,7 @@ private:
       epochBuilder.setInsertionPoint(parallelEdt);
     }
 
-    Value numWorkers = DistributionHeuristics::getDispatchWorkerCount(
+    Value numWorkers = WorkDistributionUtils::getDispatchWorkerCount(
         epochBuilder, loc, parallelEdt);
     Value zero = arts::createZeroIndex(epochBuilder, loc);
     Value one = arts::createOneIndex(epochBuilder, loc);
@@ -249,7 +249,7 @@ private:
         nodes = loopBuilder.create<arith::IndexCastOp>(
             loc, loopBuilder.getIndexType(), nodes);
 
-      Value workersPerNode = DistributionHeuristics::getWorkersPerNode(
+      Value workersPerNode = WorkDistributionUtils::getWorkersPerNode(
           loopBuilder, loc, parallelEdt);
       Value nodesMinusOne = loopBuilder.create<arith::SubIOp>(loc, nodes, one);
 
