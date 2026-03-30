@@ -207,8 +207,7 @@ public:
   /// The plan balances worker saturation against per-task granularity.
   static std::optional<Wavefront2DTilingPlan>
   chooseWavefront2DTilingPlan(int64_t rowExtent, int64_t colExtent,
-                              const WorkerConfig &workerCfg,
-                              int64_t repeatedTripProduct);
+                              const WorkerConfig &workerCfg);
 };
 
 } // namespace arts

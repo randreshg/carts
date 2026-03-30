@@ -78,13 +78,11 @@ chooseWavefrontTilingPlan(SeidelWavefrontMatch &match) {
 
   int64_t iExtent = (iTrip && iLb) ? std::max<int64_t>(1, *iTrip - *iLb) : 1;
   int64_t jExtent = (jTrip && jLb) ? std::max<int64_t>(1, *jTrip - *jLb) : 1;
-  int64_t repeatedTripProduct =
-      arts::getRepeatedParentTripProduct(match.parallelEdt.getOperation());
   WorkerConfig workerCfg =
       DistributionHeuristics::resolveWorkerConfig(match.parallelEdt)
           .value_or(WorkerConfig{1, 1, false});
   return DistributionHeuristics::chooseWavefront2DTilingPlan(
-      iExtent, jExtent, workerCfg, repeatedTripProduct);
+      iExtent, jExtent, workerCfg);
 }
 
 static bool matchUnitInnerLoop(Operation *op, Value &lb, Value &ub, Value &iv) {
