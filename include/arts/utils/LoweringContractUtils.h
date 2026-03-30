@@ -47,6 +47,10 @@ struct LoweringContractInfo {
   /// Dimension-aware stencil analysis.
   SmallVector<int64_t, 4> stencilIndependentDims;
 
+  /// Dependency-range narrowing remains advisory until a lowering pass with an
+  /// exact window planner consumes it.
+  bool narrowableDep = false;
+
   /// Post-DB refinement marker.
   bool postDbRefined = false;
 
@@ -56,6 +60,10 @@ struct LoweringContractInfo {
   bool hasDistributionContract() const {
     return kind != ContractKind::Unknown || depPattern || distributionKind ||
            distributionPattern || distributionVersion;
+  }
+
+  bool hasSemanticContract() const {
+    return hasDistributionContract() || narrowableDep;
   }
 
   bool hasSpatialContract() const {
@@ -71,7 +79,7 @@ struct LoweringContractInfo {
   }
 
   bool empty() const {
-    return !hasDistributionContract() && !hasSpatialContract() &&
+    return !hasSemanticContract() && !hasSpatialContract() &&
            !hasAnalysisRefinements();
   }
 

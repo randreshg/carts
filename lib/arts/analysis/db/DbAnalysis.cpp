@@ -776,15 +776,46 @@ DbAnalysis::getAcquireRewriteContract(DbAcquireOp acquire) {
   if (auto maxs = contractSummary->contract.getStaticMaxOffsets())
     contract.haloMaxOffsets = *maxs;
 
+  /// Pattern-driven N-D contracts remain the preferred source of halo bounds.
+  /// When they are absent, fall back to the graph-backed scalar stencil span
+  /// only for direct single-owner-dim reads. That keeps the generic contract
+  /// path intact while still fixing block-local read windows for cases such as
+  /// k-owned higher-order stencils that were not explicitly pattern-stamped.
+  DbAcquireNode *acqNode = nullptr;
+  if (acquire.getMode() == ArtsMode::in &&
+      (contract.haloMinOffsets.empty() || contract.haloMaxOffsets.empty()) &&
+      contract.ownerDims.size() == 1) {
+    acqNode = getDbAcquireNode(acquire);
+    if (acqNode && acqNode->getAccessPattern() == AccessPattern::Stencil &&
+        !acqNode->hasIndirectAccess()) {
+      if (auto bounds = acqNode->getStencilBounds();
+          bounds && bounds->valid && bounds->hasHalo()) {
+        if (contract.haloMinOffsets.empty())
+          contract.haloMinOffsets.push_back(bounds->minOffset);
+        if (contract.haloMaxOffsets.empty())
+          contract.haloMaxOffsets.push_back(bounds->maxOffset);
+      }
+    }
+  }
+
   const bool hasExplicitStencilContract =
       contractSummary->contract.hasExplicitStencilContract();
   bool supportsStencilHalo = hasExplicitStencilContract &&
                              contractSummary->contract.supportsBlockHalo() &&
                              !contract.haloMinOffsets.empty() &&
                              !contract.haloMaxOffsets.empty();
+  bool supportsGraphHalo = acquire.getMode() == ArtsMode::in &&
+                           !contract.haloMinOffsets.empty() &&
+                           !contract.haloMaxOffsets.empty() &&
+                           contract.ownerDims.size() == 1 &&
+                           acqNode &&
+                           acqNode->getAccessPattern() ==
+                               AccessPattern::Stencil &&
+                           !acqNode->hasIndirectAccess();
 
-  if (acquire.getMode() == ArtsMode::in && hasExplicitStencilContract &&
-      supportsStencilHalo) {
+  if (acquire.getMode() == ArtsMode::in &&
+      ((hasExplicitStencilContract && supportsStencilHalo) ||
+       supportsGraphHalo)) {
     if (contract.haloMinOffsets.empty() && !contract.haloMaxOffsets.empty()) {
       contract.haloMinOffsets.resize(contract.haloMaxOffsets.size(), 0);
       for (size_t i = 0; i < contract.haloMaxOffsets.size(); ++i)

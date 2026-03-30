@@ -46,6 +46,7 @@
 #include "arts/utils/Debug.h"
 #include <limits>
 #include <optional>
+#include "llvm/ADT/StringRef.h"
 ARTS_DEBUG_SETUP(loop_vectorization_hints);
 
 using namespace mlir;
@@ -123,25 +124,95 @@ struct TypeAnalysisResult {
   unsigned totalLoads;
 };
 
-static TypeAnalysisResult analyzeLoadTypes(LLVM::LLVMFuncOp funcOp) {
+static TypeAnalysisResult
+analyzeLoadTypes(const SmallPtrSet<Block *, 16> &loopBlocks) {
   unsigned floatCount = 0, doubleCount = 0, i32Count = 0, totalLoads = 0;
 
-  funcOp.walk([&](LLVM::LoadOp loadOp) {
-    totalLoads++;
-    Type elemType = loadOp.getResult().getType();
-    if (elemType.isF32())
-      floatCount++;
-    else if (elemType.isF64())
-      doubleCount++;
-    else if (elemType.isInteger(32))
-      i32Count++;
-  });
+  for (Block *block : loopBlocks) {
+    for (Operation &opRef : *block) {
+      auto loadOp = dyn_cast<LLVM::LoadOp>(&opRef);
+      if (!loadOp)
+        continue;
+
+      totalLoads++;
+      Type elemType = loadOp.getResult().getType();
+      if (elemType.isF32())
+        floatCount++;
+      else if (elemType.isF64())
+        doubleCount++;
+      else if (elemType.isInteger(32))
+        i32Count++;
+    }
+  }
 
   unsigned width = 8;
   if (doubleCount >= floatCount && doubleCount >= i32Count)
     width = 4;
 
   return {width, doubleCount, floatCount, totalLoads};
+}
+
+static bool hasFloatingPointType(Type type) {
+  if (!type)
+    return false;
+  if (type.isF16() || type.isBF16() || type.isF32() || type.isF64() ||
+      type.isF80() || type.isF128())
+    return true;
+  if (auto vectorType = dyn_cast<VectorType>(type))
+    return hasFloatingPointType(vectorType.getElementType());
+  return false;
+}
+
+static bool operationTouchesFloatingPoint(Operation *op) {
+  for (Value operand : op->getOperands()) {
+    if (hasFloatingPointType(operand.getType()))
+      return true;
+  }
+  for (Value result : op->getResults()) {
+    if (hasFloatingPointType(result.getType()))
+      return true;
+  }
+  return false;
+}
+
+static bool isVectorFriendlyFPIntrinsic(StringRef intrinsic) {
+  return intrinsic.starts_with("llvm.fma") ||
+         intrinsic.starts_with("llvm.fmuladd") ||
+         intrinsic.starts_with("llvm.exp") ||
+         intrinsic.starts_with("llvm.exp2") ||
+         intrinsic.starts_with("llvm.log") ||
+         intrinsic.starts_with("llvm.log2") ||
+         intrinsic.starts_with("llvm.log10") ||
+         intrinsic.starts_with("llvm.sin") ||
+         intrinsic.starts_with("llvm.cos") ||
+         intrinsic.starts_with("llvm.tan") ||
+         intrinsic.starts_with("llvm.tanh") ||
+         intrinsic.starts_with("llvm.pow");
+}
+
+/// Returns true when the innermost loop contains scalar FP calls that are
+/// unlikely to benefit from forced vectorize/unroll metadata.
+static bool
+loopHasCallLikeFloatingPointWork(const SmallPtrSet<Block *, 16> &loopBlocks) {
+  for (Block *block : loopBlocks) {
+    for (Operation &opRef : *block) {
+      if (auto call = dyn_cast<LLVM::CallOp>(&opRef)) {
+        if (operationTouchesFloatingPoint(call))
+          return true;
+        continue;
+      }
+
+      auto intrinsic = dyn_cast<LLVM::CallIntrinsicOp>(&opRef);
+      if (!intrinsic)
+        continue;
+      if (!operationTouchesFloatingPoint(intrinsic))
+        continue;
+      if (isVectorFriendlyFPIntrinsic(intrinsic.getIntrin()))
+        continue;
+      return true;
+    }
+  }
+  return false;
 }
 
 /// Returns true if `value` is dataflow-dependent on `root`.
@@ -624,6 +695,7 @@ struct LoopVectorizationHintsPass
 
     int totalHints = 0;
     int skippedUnsafeLoops = 0;
+    int skippedCallHeavyLoops = 0;
 
     module.walk([&](LLVM::LLVMFuncOp funcOp) {
       if (!funcOp.getName().starts_with("__arts_edt_"))
@@ -634,18 +706,6 @@ struct LoopVectorizationHintsPass
       DominanceInfo domInfo(funcOp);
       Value depv =
           (funcOp.getNumArguments() >= 4) ? funcOp.getArgument(3) : Value{};
-
-      auto typeInfo = analyzeLoadTypes(funcOp);
-
-      unsigned width = vectorWidth;
-      if (width == 0) {
-        width = typeInfo.vectorWidth;
-        ARTS_DEBUG_TYPE("Auto-detected vector width: " << width);
-      }
-
-      unsigned unrollCount = determineUnrollCount(typeInfo);
-      ARTS_DEBUG_TYPE("Unroll count: " << unrollCount << " (loads="
-                                       << typeInfo.totalLoads << ")");
       SmallVector<LLVM::AccessGroupAttr> parallelAccessGroups;
 
       int innermostCount = 0;
@@ -669,7 +729,21 @@ struct LoopVectorizationHintsPass
           return;
         }
 
+        SmallPtrSet<Block *, 16> loopBlocks =
+            getLoopBlocks(destBlock, currentBlock);
         bool innermost = isInnermostLoop(destBlock, currentBlock, domInfo);
+        if (innermost && loopHasCallLikeFloatingPointWork(loopBlocks)) {
+          skippedCallHeavyLoops++;
+          ARTS_DEBUG_TYPE("Skipping innermost loop hints in "
+                          << funcOp.getName()
+                          << " (call-like floating-point work)");
+          return;
+        }
+
+        auto typeInfo = analyzeLoadTypes(loopBlocks);
+        unsigned width = vectorWidth ? vectorWidth : typeInfo.vectorWidth;
+        unsigned unrollCount = determineUnrollCount(typeInfo);
+
         std::optional<unsigned> constantTripCount =
             inferConstantTripCount(destBlock, currentBlock);
         bool fullUnroll =
@@ -719,7 +793,21 @@ struct LoopVectorizationHintsPass
           return;
         }
 
+        SmallPtrSet<Block *, 16> loopBlocks =
+            getLoopBlocks(headerBlock, currentBlock);
         bool innermost = isInnermostLoop(headerBlock, currentBlock, domInfo);
+        if (innermost && loopHasCallLikeFloatingPointWork(loopBlocks)) {
+          skippedCallHeavyLoops++;
+          ARTS_DEBUG_TYPE("Skipping innermost loop hints in "
+                          << funcOp.getName()
+                          << " (call-like floating-point work)");
+          return;
+        }
+
+        auto typeInfo = analyzeLoadTypes(loopBlocks);
+        unsigned width = vectorWidth ? vectorWidth : typeInfo.vectorWidth;
+        unsigned unrollCount = determineUnrollCount(typeInfo);
+
         std::optional<unsigned> constantTripCount =
             inferConstantTripCount(headerBlock, currentBlock);
         bool fullUnroll =
@@ -760,7 +848,10 @@ struct LoopVectorizationHintsPass
 
     ARTS_INFO("Total: attached hints to "
               << totalHints << " loop backedges; skipped " << skippedUnsafeLoops
-              << " loop backedges with loop-varying dependency-array access");
+              << " loop backedges with loop-varying dependency-array access and "
+              << skippedCallHeavyLoops
+              << " innermost loop backedges with call-like floating-point "
+                 "work");
     ARTS_INFO_FOOTER(LoopVectorizationHintsPass);
   }
 };

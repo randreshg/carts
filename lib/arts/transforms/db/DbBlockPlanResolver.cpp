@@ -34,38 +34,27 @@ ARTS_DEBUG_SETUP(db_block_plan_resolver);
 
 namespace {
 
-static bool shouldOverdecompose2DStencilFallback(
-    DbAllocOp allocOp, ArrayRef<AcquirePartitionInfo> acquireInfos,
-    ArrayRef<Value> resolvedBlockSizes) {
-  if (!allocOp || allocOp.getElementSizes().size() != 2)
-    return false;
-  if (!resolvedBlockSizes.empty())
-    return false;
+static SmallVector<unsigned>
+choosePartitionedDims(DbAllocOp allocOp, ArrayRef<AcquirePartitionInfo> infos,
+                      unsigned nPartDims);
 
-  return llvm::any_of(acquireInfos, [](const AcquirePartitionInfo &info) {
-    return requiresBlockSize(info.mode) && !info.needsFullRange &&
-           info.accessPattern == AccessPattern::Stencil;
-  });
-}
-
-static Value overdecompose2DStencilBlockSize(Value blockSize,
-                                             OpBuilder &builder, Location loc) {
-  if (!blockSize)
-    return blockSize;
-  Value one = arts::createOneIndex(builder, loc);
-  Value adjusted = builder.create<arith::AddIOp>(loc, blockSize, one);
-  Value halved = builder.create<arith::DivUIOp>(
-      loc, adjusted, arts::createConstantIndex(builder, loc, 2));
-  return builder.create<arith::MaxUIOp>(loc, halved, one);
-}
-
-static Value computeDefaultBlockSize(DbAllocOp allocOp, OpBuilder &builder,
-                                     Location loc, bool useNodes,
+static Value computeDefaultBlockSize(DbAllocOp allocOp,
+                                     ArrayRef<AcquirePartitionInfo> acquireInfos,
+                                     OpBuilder &builder, Location loc,
+                                     bool useNodes,
                                      bool clampStencilFallbackWorkers) {
   if (allocOp.getElementSizes().empty())
     return nullptr;
 
-  Value elemSize = allocOp.getElementSizes().front();
+  unsigned preferredDim = 0;
+  if (SmallVector<unsigned> partitionedDims =
+          choosePartitionedDims(allocOp, acquireInfos, /*nPartDims=*/1);
+      !partitionedDims.empty() &&
+      partitionedDims.front() < allocOp.getElementSizes().size()) {
+    preferredDim = partitionedDims.front();
+  }
+
+  Value elemSize = allocOp.getElementSizes()[preferredDim];
   if (!elemSize)
     return nullptr;
 
@@ -579,13 +568,14 @@ mlir::arts::resolveDbBlockPlan(const DbBlockPlanInput &input) {
 
     if (!blockSizeForPlan) {
       blockSizeForPlan = computeDefaultBlockSize(
-          input.allocOp, builder, loc, input.useNodesForFallback,
+          input.allocOp, input.acquireInfos, builder, loc,
+          input.useNodesForFallback,
           input.clampStencilFallbackWorkers);
-      if (shouldOverdecompose2DStencilFallback(
-              input.allocOp, input.acquireInfos, result.blockSizes)) {
-        blockSizeForPlan =
-            overdecompose2DStencilBlockSize(blockSizeForPlan, builder, loc);
-      }
+      /// Keep fallback stencil block sizing aligned with the same worker-based
+      /// owner span that ForOpt / ForLowering use to form task chunks.
+      /// Shrinking only the DB block size further does not create additional
+      /// task parallelism; it only makes each task touch more blocks, widening
+      /// acquire spans and inflating db_ref traffic in memory-bound stencils.
     }
 
     if (!blockSizeForPlan)

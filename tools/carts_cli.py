@@ -68,6 +68,11 @@ VERSION = "0.1.0"
 app = Typer(
     name="carts",
     auto_activate=True,
+    # Avoid eager dekk ExecutionContext capture for every command. The
+    # compiler/benchmark commands do not consume that metadata, and the
+    # hardware probe path can stall on systems where rocm-smi misbehaves.
+    # Built-in commands that need the context still request it explicitly.
+    auto_capture_env=False,
     fail_fast=False,
     add_doctor_command=True,
     add_version_command=True,

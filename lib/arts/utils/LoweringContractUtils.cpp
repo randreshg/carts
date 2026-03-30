@@ -260,6 +260,7 @@ mlir::arts::getLoweringContract(Value target) {
     info.distributionPattern = *distributionPattern;
   if (auto version = contract.getDistributionVersion())
     info.distributionVersion = static_cast<int64_t>(*version);
+  info.narrowableDep = contract.getNarrowableDep().value_or(false);
   if (auto ownerDims = contract.getOwnerDims())
     info.ownerDims = SmallVector<int64_t, 4>(*ownerDims);
   info.blockShape.assign(contract.getBlockShape().begin(),
@@ -324,6 +325,11 @@ mlir::arts::getSemanticContract(Operation *op) {
   if (auto spatialDims = getStencilSpatialDims(op))
     info.spatialDims.assign(spatialDims->begin(), spatialDims->end());
   info.supportedBlockHalo = hasSupportedBlockHalo(op);
+  info.narrowableDep =
+      op->hasAttr(AttrNames::Operation::Contract::NarrowableDep);
+  if (auto contractKind = op->getAttrOfType<IntegerAttr>(
+          AttrNames::Operation::Contract::ContractKindKey))
+    info.kind = static_cast<ContractKind>(contractKind.getInt());
   if (info.empty())
     return std::nullopt;
   return info;
@@ -363,6 +369,7 @@ static void mergeLoweringContractInfo(LoweringContractInfo &dest,
     dest.distributionPattern = src.distributionPattern;
   if (!dest.distributionVersion && src.distributionVersion)
     dest.distributionVersion = src.distributionVersion;
+  dest.narrowableDep = dest.narrowableDep || src.narrowableDep;
 
   auto shouldTakeHigherRank = [](size_t current, size_t incoming) -> bool {
     if (incoming == 0)
@@ -442,6 +449,14 @@ AcquireRewriteContract
 mlir::arts::deriveAcquireRewriteContract(DbAcquireOp acquire) {
   AcquireRewriteContract contract;
   auto info = getLoweringContract(acquire.getPtr());
+  if (auto alloc = dyn_cast_or_null<DbAllocOp>(
+          DbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr())))
+    if (auto allocInfo = getLoweringContract(alloc.getPtr())) {
+      if (!info)
+        info = *allocInfo;
+      else
+        mergeLoweringContractInfo(*info, *allocInfo);
+    }
   if (!info)
     return contract;
 
@@ -458,6 +473,12 @@ mlir::arts::deriveAcquireRewriteContract(DbAcquireOp acquire) {
   /// rewritten acquire's offsets/sizes. partition_* remains the owner slice and
   /// would drop the left/right halo if used as the block-dependency window.
   const bool hasExplicitStencilContract = info->hasExplicitStencilContract();
+  /// `narrowable_dep` is advisory, not a standalone window description. Treat
+  /// it as permission to keep the worker-local slice chosen by lowering rather
+  /// than widening a read-only acquire back to the parent dependency range.
+  /// The flag does not synthesize new offsets/sizes by itself.
+  const bool prefersWorkerLocalReadSlice =
+      acquire.getMode() == ArtsMode::in && info->narrowableDep;
   contract.usePartitionSliceAsDepWindow =
       (acquire.getMode() == ArtsMode::in && hasExplicitStencilContract &&
        !contract.applyStencilHalo &&
@@ -468,7 +489,8 @@ mlir::arts::deriveAcquireRewriteContract(DbAcquireOp acquire) {
        info->supportsBlockHalo());
   contract.preserveParentDepRange = acquire.getMode() == ArtsMode::in &&
                                     !contract.applyStencilHalo &&
-                                    !hasExplicitStencilContract;
+                                    !hasExplicitStencilContract &&
+                                    !prefersWorkerLocalReadSlice;
   return contract;
 }
 
@@ -496,10 +518,11 @@ mlir::arts::resolveContractOwnerDims(const LoweringContractInfo &info,
   for (int64_t dim : info.ownerDims) {
     if (dim < 0)
       continue;
-    unsigned converted = static_cast<unsigned>(dim);
-    if (converted >= rank)
-      continue;
-    dims.push_back(converted);
+    /// `rank` is the number of owner dimensions the caller wants to resolve,
+    /// not an upper bound on the physical memref dimension number. Preserving
+    /// the recorded memref dims is critical for N-D block partitions such as
+    /// k-owned 3-D/4-D arrays, where ownerDims may legitimately be [2] or [3].
+    dims.push_back(static_cast<unsigned>(dim));
     if (dims.size() == rank)
       break;
   }

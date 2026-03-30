@@ -5,7 +5,9 @@
 /// same parallel EDT into a single loop when each stage is pointwise over the
 /// same iteration space. The fused loop keeps the original per-stage order and
 /// writes, but downstream passes now see one uniform kernel family instead of
-/// many small parallel phases.
+/// many small parallel phases. Stages are fused only within the same pointwise
+/// compute class so arithmetic-only work is not mixed with scalar-call or
+/// vector-math stages that need different downstream codegen treatment.
 ///
 /// Before:
 ///   edt.parallel {
@@ -278,16 +280,16 @@ int mlir::arts::applyElementwisePipelineTransform(ModuleOp module) {
   if (!module)
     return 0;
 
-  SmallVector<EdtOp, 16> parallelEdts;
-  module.walk([&](EdtOp edt) {
-    if (edt.getType() == EdtType::parallel)
-      parallelEdts.push_back(edt);
-  });
-
   int rewrites = 0;
   bool changed = true;
   while (changed) {
     changed = false;
+    SmallVector<EdtOp, 16> parallelEdts;
+    module.walk([&](EdtOp edt) {
+      if (edt.getType() == EdtType::parallel)
+        parallelEdts.push_back(edt);
+    });
+
     for (EdtOp edt : parallelEdts) {
       if (!edt || !edt->getBlock())
         continue;
@@ -304,6 +306,8 @@ int mlir::arts::applyElementwisePipelineTransform(ModuleOp module) {
 
         SmallVector<ElementwiseStage, 8> stages;
         stages.push_back(firstStage);
+        PointwiseLoopComputeClass firstStageClass =
+            classifyPointwiseLoopCompute(firstLoop);
         DenseSet<Value> writtenTargets;
         for (Value target : firstStage.writes)
           writtenTargets.insert(target);
@@ -316,6 +320,8 @@ int mlir::arts::applyElementwisePipelineTransform(ModuleOp module) {
           ElementwiseStage nextStage;
           if (!nextLoop || !haveSameBounds(firstLoop, nextLoop) ||
               !matchElementwiseStage(nextLoop, nextStage))
+            break;
+          if (classifyPointwiseLoopCompute(nextLoop) != firstStageClass)
             break;
 
           bool disjointWrites =
@@ -367,6 +373,8 @@ int mlir::arts::applyElementwisePipelineTransform(ModuleOp module) {
 
         SmallVector<ElementwiseEdtStage, 8> stages;
         stages.push_back(firstStage);
+        PointwiseLoopComputeClass firstStageClass =
+            classifyPointwiseLoopCompute(firstStage.stage.loop);
         DenseSet<Value> writtenTargets;
         for (Value target : firstStage.stage.writes)
           writtenTargets.insert(target);
@@ -379,6 +387,9 @@ int mlir::arts::applyElementwisePipelineTransform(ModuleOp module) {
               nextEdt.getConcurrency() != firstEdt.getConcurrency() ||
               !matchSingleLoopElementwiseEdt(nextEdt, nextStage) ||
               !haveSameBounds(firstStage.stage.loop, nextStage.stage.loop))
+            break;
+          if (classifyPointwiseLoopCompute(nextStage.stage.loop) !=
+              firstStageClass)
             break;
 
           bool disjointWrites =

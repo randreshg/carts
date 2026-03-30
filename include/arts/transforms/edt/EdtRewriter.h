@@ -57,6 +57,7 @@ struct TaskAcquireRewritePlanInput {
   DbAcquireOp parentAcquire;
   Value rootGuid;
   Value rootPtr;
+  bool forceCoarseRewrite = false;
   DistributionKind distributionKind = DistributionKind::Flat;
   std::optional<EdtDistributionPattern> distributionPattern;
   std::optional<Tiling2DWorkerGrid> tiling2DGrid;

@@ -251,6 +251,17 @@ This is the current intent (see
   `inout` acquire carries valid 2D partition sizes, force `blockND` (2D) so
   output ownership matches the distribution plan
 
+Important H1.C3 nuance:
+- On a single node, a generic lowering/distribution contract does not by itself
+  justify keeping block layout once every block-capable read acquire widened to
+  full-range.
+- Preserve block here only when the remaining structure still carries real
+  value, such as stencil/cross-dimension ownership semantics or multi-node
+  placement.
+- This matters for cases like `sw4lite/rhs4sg-base`, where a read-only input
+  can lose all task-locality benefit even though it still carries block-shaped
+  metadata from earlier lowering.
+
 Current H2 tie-in:
 - Internode `matmul` is currently selected as `tiling_2d` by distribution
   heuristics, so this `blockND` path is expected to trigger for writable output

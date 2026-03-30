@@ -284,15 +284,36 @@ static void inferPartitionDims(DbAcquireNode *node,
   if (facts.accessPattern == AccessPattern::Stencil)
     return;
 
-  bool preservesDistributedContract =
-      llvm::any_of(facts.entries, [](const DbPartitionEntryFact &entry) {
-        return entry.preservesDistributedContract;
-      });
-  if (!preservesDistributedContract)
+  /// Coarse acquires often arrive here without any local partition entry even
+  /// though the surrounding loop has already committed to an N-D worker
+  /// ownership plan. In that case, reuse the scope-wide peer consensus instead
+  /// of falling back to an implicit leading dimension later in ForLowering.
+  ///
+  /// When local entries do exist, keep the older guard and only consult peer
+  /// ownership when at least one entry explicitly preserves the distributed
+  /// contract.
+  bool shouldInferFromPeers = facts.entries.empty();
+  if (!shouldInferFromPeers) {
+    shouldInferFromPeers =
+        llvm::any_of(facts.entries, [](const DbPartitionEntryFact &entry) {
+          return entry.preservesDistributedContract;
+        });
+  }
+  if (!shouldInferFromPeers)
     return;
 
-  facts.partitionDims = collectDistributedPeerDims(node);
-  facts.partitionDimsFromPeers = !facts.partitionDims.empty();
+  SmallVector<unsigned, 4> peerDims = collectDistributedPeerDims(node);
+  if (peerDims.empty())
+    return;
+
+  /// Peer ownership is only usable when it fits this acquire's own logical
+  /// rank. Keep the inference conservative for unrelated helper/coefficient
+  /// DBs that happen to share the same scope.
+  if (llvm::any_of(peerDims, [&](unsigned dim) { return dim >= facts.dims.size(); }))
+    return;
+
+  facts.partitionDims = std::move(peerDims);
+  facts.partitionDimsFromPeers = true;
 }
 
 } // namespace
@@ -388,8 +409,11 @@ DbAcquirePartitionFacts DbDimAnalyzer::compute(DbAcquireNode *node) {
 
   inferPartitionDims(node, facts);
 
-  if (facts.partitionDims.empty() && facts.supportedBlockHalo &&
-      !facts.stencilOwnerDims.empty()) {
+  /// Physical owner dims are part of the contract shape, not part of the ESD
+  /// transport decision. If analysis could not recover a mapped dim directly
+  /// from partition entries, fall back to the explicit owner-dim contract even
+  /// when block-halo transport is disabled.
+  if (facts.partitionDims.empty() && !facts.stencilOwnerDims.empty()) {
     facts.partitionDims.assign(facts.stencilOwnerDims.begin(),
                                facts.stencilOwnerDims.end());
   }

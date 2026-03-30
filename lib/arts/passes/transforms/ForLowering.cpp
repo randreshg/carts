@@ -23,6 +23,7 @@
 
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/AccessPatternAnalysis.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/graphs/db/DbGraph.h"
 #include "arts/analysis/graphs/db/DbNode.h"
@@ -60,6 +61,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include <memory>
@@ -73,6 +75,239 @@ using namespace mlir::func;
 using namespace mlir::arts;
 
 namespace {
+
+static std::optional<unsigned> inferLoopMappedDim(DbAcquireNode *acqNode,
+                                                  ForOp forOp) {
+  if (!acqNode || !forOp)
+    return std::nullopt;
+
+  Block &forBody = forOp.getRegion().front();
+  if (forBody.getNumArguments() == 0)
+    return std::nullopt;
+
+  Value loopIV = forBody.getArgument(0);
+  if (auto mappedDim =
+          acqNode->getPartitionOffsetDim(loopIV, /*requireLeading=*/false)) {
+    return mappedDim;
+  }
+
+  Region &forRegion = forOp.getRegion();
+  std::optional<unsigned> mappedDim;
+  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+  acqNode->collectAccessOperations(dbRefToMemOps);
+
+  for (auto &[dbRef, memOps] : dbRefToMemOps) {
+    for (Operation *memOp : memOps) {
+      Region *memRegion = memOp ? memOp->getParentRegion() : nullptr;
+      if (!memRegion)
+        continue;
+      if (memRegion != &forRegion && !forRegion.isAncestor(memRegion))
+        continue;
+
+      SmallVector<Value> fullChain =
+          DbUtils::collectFullIndexChain(dbRef, memOp);
+      if (fullChain.empty())
+        continue;
+
+      unsigned memrefStart = dbRef.getIndices().size();
+      if (memrefStart >= fullChain.size())
+        continue;
+
+      SmallVector<unsigned, 2> matchingDims;
+      ArrayRef<Value> memrefChain(fullChain);
+      memrefChain = memrefChain.drop_front(memrefStart);
+      for (auto [dimIdx, indexVal] : llvm::enumerate(memrefChain)) {
+        if (ValueAnalysis::dependsOn(
+                ValueAnalysis::stripNumericCasts(indexVal), loopIV))
+          matchingDims.push_back(dimIdx);
+      }
+
+      if (matchingDims.size() != 1)
+        return std::nullopt;
+
+      unsigned dim = matchingDims.front();
+      if (!mappedDim)
+        mappedDim = dim;
+      else if (*mappedDim != dim)
+        return std::nullopt;
+    }
+  }
+
+  return mappedDim;
+}
+
+static std::optional<unsigned> inferLoopMappedDimFromValue(Value dep,
+                                                           ForOp forOp) {
+  if (!dep || !forOp)
+    return std::nullopt;
+
+  Block &forBody = forOp.getRegion().front();
+  if (forBody.getNumArguments() == 0)
+    return std::nullopt;
+
+  Value loopIV = forBody.getArgument(0);
+  Region &forRegion = forOp.getRegion();
+  std::optional<unsigned> mappedDim;
+  llvm::SetVector<Value> sources;
+  sources.insert(dep);
+  for (Operation *user : dep.getUsers()) {
+    auto edt = dyn_cast<EdtOp>(user);
+    if (!edt)
+      continue;
+
+    ValueRange deps = edt.getDependencies();
+    Block &edtBody = edt.getBody().front();
+    unsigned argCount = edtBody.getNumArguments();
+    for (auto [idx, operand] : llvm::enumerate(deps)) {
+      if (operand != dep || idx >= argCount)
+        continue;
+      sources.insert(edtBody.getArgument(static_cast<unsigned>(idx)));
+    }
+  }
+
+  llvm::SetVector<Operation *> memOps;
+  for (Value source : sources)
+    DbUtils::collectReachableMemoryOps(source, memOps, /*scope=*/nullptr);
+
+  for (Operation *memOp : memOps) {
+    Region *memRegion = memOp ? memOp->getParentRegion() : nullptr;
+    if (!memRegion)
+      continue;
+    if (memRegion != &forRegion && !forRegion.isAncestor(memRegion))
+      continue;
+
+    std::optional<DbUtils::MemoryAccessInfo> access =
+        DbUtils::getMemoryAccessInfo(memOp);
+    if (!access || access->indices.empty())
+      continue;
+
+    SmallVector<unsigned, 2> matchingDims;
+    for (auto [dimIdx, indexVal] : llvm::enumerate(access->indices)) {
+      if (ValueAnalysis::dependsOn(
+              ValueAnalysis::stripNumericCasts(indexVal), loopIV))
+        matchingDims.push_back(dimIdx);
+    }
+
+    if (matchingDims.size() != 1)
+      return std::nullopt;
+
+    unsigned dim = matchingDims.front();
+    if (!mappedDim)
+      mappedDim = dim;
+    else if (*mappedDim != dim)
+      return std::nullopt;
+  }
+
+  return mappedDim;
+}
+
+static std::optional<unsigned>
+inferAcquireMappedDim(DbAnalysis *dbAnalysis, DbAcquireOp acquire,
+                      ForOp forOp) {
+  if (!acquire || !forOp)
+    return std::nullopt;
+
+  if (dbAnalysis)
+    if (func::FuncOp func = acquire->getParentOfType<func::FuncOp>()) {
+      DbGraph &graph = dbAnalysis->getOrCreateGraph(func);
+      if (DbAcquireNode *acqNode = graph.getDbAcquireNode(acquire))
+        if (auto mappedDim = inferLoopMappedDim(acqNode, forOp))
+          return mappedDim;
+    }
+
+  return inferLoopMappedDimFromValue(acquire.getPtr(), forOp);
+}
+
+static std::optional<AccessBoundsResult>
+inferLoopHaloBounds(DbAcquireNode *acqNode, ForOp forOp, unsigned mappedDim) {
+  if (!acqNode || !forOp)
+    return std::nullopt;
+
+  Block &forBody = forOp.getRegion().front();
+  if (forBody.getNumArguments() == 0)
+    return std::nullopt;
+
+  if (acqNode->hasIndirectAccess())
+    return std::nullopt;
+
+  Value loopIV = forBody.getArgument(0);
+  Region &forRegion = forOp.getRegion();
+  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+  acqNode->collectAccessOperations(dbRefToMemOps);
+
+  SmallVector<AccessIndexInfo, 16> accesses;
+  for (auto &[dbRef, memOps] : dbRefToMemOps) {
+    for (Operation *memOp : memOps) {
+      Region *memRegion = memOp ? memOp->getParentRegion() : nullptr;
+      if (!memRegion)
+        continue;
+      if (memRegion != &forRegion && !forRegion.isAncestor(memRegion))
+        continue;
+
+      SmallVector<Value> fullChain =
+          DbUtils::collectFullIndexChain(dbRef, memOp);
+      if (fullChain.empty())
+        continue;
+
+      AccessIndexInfo info;
+      info.dbRefPrefix = dbRef.getIndices().size();
+      info.indexChain.append(fullChain.begin(), fullChain.end());
+      accesses.push_back(std::move(info));
+    }
+  }
+
+  if (accesses.empty())
+    return std::nullopt;
+
+  AccessBoundsResult bounds =
+      analyzeAccessBoundsFromIndices(accesses, loopIV, loopIV, mappedDim);
+  if (!bounds.valid || (bounds.minOffset == 0 && bounds.maxOffset == 0))
+    return std::nullopt;
+  return bounds;
+}
+
+static std::optional<AccessBoundsResult>
+inferLoopHaloBoundsFromValue(Value dep, ForOp forOp, unsigned mappedDim) {
+  if (!dep || !forOp)
+    return std::nullopt;
+
+  Block &forBody = forOp.getRegion().front();
+  if (forBody.getNumArguments() == 0)
+    return std::nullopt;
+
+  Value loopIV = forBody.getArgument(0);
+  Region &forRegion = forOp.getRegion();
+  llvm::SetVector<Operation *> memOps;
+  DbUtils::collectReachableMemoryOps(dep, memOps, /*scope=*/nullptr);
+
+  SmallVector<AccessIndexInfo, 16> accesses;
+  for (Operation *memOp : memOps) {
+    Region *memRegion = memOp ? memOp->getParentRegion() : nullptr;
+    if (!memRegion)
+      continue;
+    if (memRegion != &forRegion && !forRegion.isAncestor(memRegion))
+      continue;
+
+    std::optional<DbUtils::MemoryAccessInfo> access =
+        DbUtils::getMemoryAccessInfo(memOp);
+    if (!access || access->indices.empty())
+      continue;
+
+    AccessIndexInfo info;
+    info.dbRefPrefix = 0;
+    info.indexChain.append(access->indices.begin(), access->indices.end());
+    accesses.push_back(std::move(info));
+  }
+
+  if (accesses.empty())
+    return std::nullopt;
+
+  AccessBoundsResult bounds =
+      analyzeAccessBoundsFromIndices(accesses, loopIV, loopIV, mappedDim);
+  if (!bounds.valid || (bounds.minOffset == 0 && bounds.maxOffset == 0))
+    return std::nullopt;
+  return bounds;
+}
 
 ///===----------------------------------------------------------------------===///
 /// LoopInfo - Information about a loop within a parallel EDT
@@ -334,6 +569,7 @@ private:
   EdtOp createTaskEdtWithRewiring(ArtsCodegen *AC, LoopInfo &loopInfo,
                                   ForOp forOp, Value workerIdPlaceholder,
                                   EdtOp originalParallel,
+                                  bool singleDispatchLane,
                                   ReductionInfo &redInfo);
 };
 
@@ -609,6 +845,14 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   auto isWavefrontPattern = [](Operation *op) {
     return op && getEffectiveDepPattern(op) == ArtsDepPattern::wavefront_2d;
   };
+  /// Treat both a truly single-worker topology and a one-lane dispatch clamp
+  /// as the trivial lowering case. The dispatch worker count can remain
+  /// symbolically wrapped in min/max arithmetic even when the topology has
+  /// already collapsed to one worker, so check the resolved worker topology
+  /// as well as the dispatch count itself.
+  const bool singleDispatchLane =
+      ValueAnalysis::isOneConstant(loopInfoStorage->totalWorkers) ||
+      ValueAnalysis::isOneConstant(dispatchWorkers);
   const bool reuseEnclosingEpoch =
       forOp.getReductionAccumulators().empty() &&
       originalParallel->getParentOfType<EpochOp>() &&
@@ -640,7 +884,7 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
 
   /// Create task EDT with DB rewiring
   createTaskEdtWithRewiring(&AC, *loopInfoStorage, forOp, workerIV,
-                            originalParallel, redInfo);
+                            originalParallel, singleDispatchLane, redInfo);
   if (forEpoch)
     transferOperationContract(forOp.getOperation(), forEpoch->getOperation());
 
@@ -668,7 +912,7 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
 
 EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     ArtsCodegen *AC, LoopInfo &loopInfo, ForOp forOp, Value workerIdPlaceholder,
-    EdtOp originalParallel, ReductionInfo &redInfo) {
+    EdtOp originalParallel, bool singleDispatchLane, ReductionInfo &redInfo) {
   Location loc = forOp.getLoc();
 
   ARTS_DEBUG("  Creating task EDT with DB rewiring");
@@ -829,16 +1073,62 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
            : DistributionHeuristics::resolveDistributionPattern(
                  nullptr, forOp, originalParallel);
 
+    AcquireRewriteContract rewriteContract =
+        resolveAcquireRewriteContract(AM, parentAcqOp);
+    std::optional<unsigned> inferredMappedDim;
+    if (rewriteContract.ownerDims.empty())
+      if (auto mappedDim = inferAcquireMappedDim(
+              AM ? &AM->getDbAnalysis() : nullptr, parentAcqOp, forOp)) {
+        rewriteContract.ownerDims.push_back(
+            static_cast<int64_t>(*mappedDim));
+        inferredMappedDim = *mappedDim;
+      }
+
+    std::optional<unsigned> ownerDimForHalo;
+    if (rewriteContract.ownerDims.size() == 1 && rewriteContract.ownerDims[0] >= 0)
+      ownerDimForHalo = static_cast<unsigned>(rewriteContract.ownerDims[0]);
+    else if (inferredMappedDim)
+      ownerDimForHalo = *inferredMappedDim;
+
+    if (parentAcqOp.getMode() == ArtsMode::in && ownerDimForHalo &&
+        rewriteContract.ownerDims.size() <= 1 &&
+        rewriteContract.haloMinOffsets.empty() &&
+        rewriteContract.haloMaxOffsets.empty() && AM) {
+      if (func::FuncOp func = parentAcqOp->getParentOfType<func::FuncOp>()) {
+        DbGraph &graph = AM->getDbAnalysis().getOrCreateGraph(func);
+        if (DbAcquireNode *acqNode = graph.getDbAcquireNode(parentAcqOp))
+          if (auto bounds =
+                  inferLoopHaloBounds(acqNode, forOp, *ownerDimForHalo)) {
+            rewriteContract.haloMinOffsets.push_back(bounds->minOffset);
+            rewriteContract.haloMaxOffsets.push_back(bounds->maxOffset);
+            rewriteContract.applyStencilHalo = true;
+            rewriteContract.preserveParentDepRange = false;
+            rewriteContract.usePartitionSliceAsDepWindow = false;
+          }
+      }
+      if (!rewriteContract.applyStencilHalo)
+        if (auto bounds = inferLoopHaloBoundsFromValue(parentAcqOp.getPtr(),
+                                                       forOp,
+                                                       *ownerDimForHalo)) {
+          rewriteContract.haloMinOffsets.push_back(bounds->minOffset);
+          rewriteContract.haloMaxOffsets.push_back(bounds->maxOffset);
+          rewriteContract.applyStencilHalo = true;
+          rewriteContract.preserveParentDepRange = false;
+          rewriteContract.usePartitionSliceAsDepWindow = false;
+        }
+    }
+
     TaskAcquireRewritePlanInput planningInput{
         AC,
         loc,
         parentAcqOp,
         rootGuidValue,
         rootPtrValue,
+        /*forceCoarseRewrite=*/singleDispatchLane && !parentHasPartitionInfo,
         loopInfo.strategy.kind,
         distributionPattern,
         tiling2DGrid,
-        resolveAcquireRewriteContract(AM, parentAcqOp),
+        rewriteContract,
         acquireOffsetVal,
         acquireSizeVal,
         acquireHintSizeVal,
@@ -893,10 +1183,16 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         plannedTaskBlockShape = rewritePlan.refinedTaskBlockShape;
         if (parentPartMode)
           setPartitionMode(chunkAcqOp.getOperation(), mode);
-        chunkAcqOp.getIndicesMutable().assign(parentIndices);
-        chunkAcqOp.getPartitionIndicesMutable().assign(parentPartIndices);
-        chunkAcqOp.getPartitionOffsetsMutable().assign(parentPartOffsets);
-        chunkAcqOp.getPartitionSizesMutable().assign(parentPartSizes);
+        if (chunkAcqOp.getIndices().empty() && !parentIndices.empty())
+          chunkAcqOp.getIndicesMutable().assign(parentIndices);
+        if (chunkAcqOp.getPartitionIndices().empty() &&
+            !parentPartIndices.empty())
+          chunkAcqOp.getPartitionIndicesMutable().assign(parentPartIndices);
+        if (chunkAcqOp.getPartitionOffsets().empty() &&
+            !parentPartOffsets.empty())
+          chunkAcqOp.getPartitionOffsetsMutable().assign(parentPartOffsets);
+        if (chunkAcqOp.getPartitionSizes().empty() && !parentPartSizes.empty())
+          chunkAcqOp.getPartitionSizesMutable().assign(parentPartSizes);
         chunkAcqOp.copyPartitionSegmentsFrom(parentAcqOp);
       } else {
         chunkAcqOp = AC->create<DbAcquireOp>(
@@ -911,6 +1207,10 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
     } else {
       /// NO USER HINT - plan strategy-specific acquire rewriting externally.
+      /// When the effective dispatch collapses to a single worker, keep the
+      /// compiler-generated task acquire coarse. This preserves the original
+      /// whole-DB contract instead of manufacturing a one-lane block slice
+      /// that later passes may misinterpret as a real partitioning decision.
       auto [plannedAcquire, rewritePlan] = createPlannedAcquire();
       chunkAcqOp = plannedAcquire;
       chunkUsesStencilHalo = rewritePlan.useStencilRewriter;
@@ -955,6 +1255,160 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     taskDeps.push_back(acquirePtr);
     parallelArgToAcquire.push_back({parallelArg, acquirePtr});
     ARTS_DEBUG("    - Created rewired acquire for dep " << idx);
+  }
+
+  /// When the effective dispatch collapses to one non-reduction lane, keep
+  /// all distribution/acquire planning but execute the lowered loop body
+  /// directly in the dispatch path instead of outlining a task EDT. This
+  /// avoids per-iteration task/epoch overhead while preserving the same
+  /// partitioning and contract decisions.
+  if (singleDispatchLane && redInfo.reductionVars.empty()) {
+    Block &forBody = forOp.getRegion().front();
+    Region *directRegion = &ifOp.getThenRegion();
+    Block &directBlock = directRegion->front();
+
+    IRMapping directMapper;
+    for (auto [parallelArg, acquirePtr] : parallelArgToAcquire)
+      directMapper.map(parallelArg, acquirePtr);
+
+    Value insideTotalWorkers =
+        WorkDistributionUtils::getTotalWorkers(AC, loc, originalParallel);
+    taskLoopInput.totalWorkers = insideTotalWorkers;
+
+    DenseSet<Operation *> opsToSkip;
+    SetVector<Value> externalValues;
+    collectExternalValues(forBody, directRegion, externalValues, opsToSkip);
+
+    Value origStep = forOp.getStep()[0];
+    Value origLowerBound = forOp.getLowerBound()[0];
+    Value origUpperBound = forOp.getUpperBound()[0];
+    Value chunkLowerBoundVal =
+        loopInfo.chunkLowerBound ? loopInfo.chunkLowerBound : origLowerBound;
+    Region *forBodyRegion = forBody.getParent();
+    std::function<void(Value)> collectWithDeps = [&](Value val) {
+      if (externalValues.contains(val))
+        return;
+      if (Operation *defOp = val.getDefiningOp()) {
+        if (forBodyRegion->isAncestor(defOp->getParentRegion()))
+          return;
+        if (!directRegion->isAncestor(defOp->getParentRegion())) {
+          for (Value operand : defOp->getOperands())
+            collectWithDeps(operand);
+          externalValues.insert(val);
+        }
+      }
+    };
+
+    collectWithDeps(origStep);
+    collectWithDeps(origLowerBound);
+    collectWithDeps(origUpperBound);
+    collectWithDeps(chunkLowerBoundVal);
+    collectWithDeps(workerOffsetVal);
+    taskLoopLowering->collectExtraExternalValues(taskLoopInput, externalValues);
+
+    SmallVector<Value> valuesToProcess(externalValues.begin(),
+                                       externalValues.end());
+    for (Value val : valuesToProcess)
+      if (Operation *defOp = val.getDefiningOp())
+        for (Value operand : defOp->getOperands())
+          collectWithDeps(operand);
+
+    auto extraCloneableOps = [](Operation *op) {
+      return isa<arts::DbRefOp, memref::LoadOp>(op);
+    };
+    if (!ValueAnalysis::cloneValuesIntoRegion(
+            externalValues, directRegion, directMapper, AC->getBuilder(),
+            /*allowMemoryEffectFree=*/true, extraCloneableOps)) {
+      for (Value external : externalValues) {
+        if (directMapper.contains(external))
+          continue;
+        if (Operation *defOp = external.getDefiningOp())
+          ARTS_DEBUG("  - Uncloned external value op: " << defOp->getName());
+        else
+          ARTS_DEBUG("  - Uncloned external value (no defining op)");
+      }
+      ARTS_WARN("Some external values could not be cloned into the single-lane "
+                "inline lowering");
+    }
+
+    Value stepValMapped = directMapper.lookupOrDefault(origStep);
+    Value origLowerBoundVal = directMapper.lookupOrDefault(origLowerBound);
+    Value origUpperBoundVal = directMapper.lookupOrDefault(origUpperBound);
+    TaskLoopLoweringMappedValues mappedLoopValues;
+    mappedLoopValues.step = stepValMapped;
+    mappedLoopValues.lowerBound = origLowerBoundVal;
+    mappedLoopValues.upperBound = origUpperBoundVal;
+    mappedLoopValues.workerBaseOffset =
+        directMapper.lookupOrDefault(workerOffsetVal);
+    mappedLoopValues.blockSize = directMapper.lookupOrDefault(loopInfo.blockSize);
+    mappedLoopValues.totalIterations =
+        directMapper.lookupOrDefault(loopInfo.totalIterations);
+    mappedLoopValues.totalChunks =
+        directMapper.lookupOrDefault(loopInfo.totalChunks);
+
+    TaskLoopLoweringResult loweredLoop =
+        taskLoopLowering->lower(taskLoopInput, mappedLoopValues);
+    loopInfo.insideBounds = loweredLoop.insideBounds;
+    scf::ForOp iterLoop = loweredLoop.iterLoop;
+
+    if (Attribute loopAttr = getLoopMetadataAttr(forOp))
+      iterLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
+
+    AC->setInsertionPointToStart(iterLoop.getBody());
+
+    Value localIter = iterLoop.getInductionVar();
+    Value globalIterScaled =
+        AC->create<arith::MulIOp>(loc, localIter, stepValMapped);
+    Value globalIdx =
+        AC->create<arith::AddIOp>(loc, loweredLoop.globalBase, globalIterScaled);
+
+    for (Operation &op : forBody.without_terminator()) {
+      for (Value operand : op.getOperands()) {
+        if (auto undef = operand.getDefiningOp<LLVM::UndefOp>()) {
+          Value undefVal = undef.getResult();
+          Type elemType = undefVal.getType();
+          Value identity = AC->createZeroValue(elemType, loc);
+          if (identity)
+            directMapper.map(undefVal, identity);
+        }
+      }
+    }
+
+    if (forBody.getNumArguments() > 0)
+      directMapper.map(forBody.getArgument(0), globalIdx);
+
+    for (Operation &op : forBody.without_terminator()) {
+      if (opsToSkip.contains(&op))
+        continue;
+      if (isa<memref::AllocaOp>(op))
+        AC->clone(op, directMapper);
+    }
+
+    for (Operation &op : forBody.without_terminator()) {
+      if (opsToSkip.contains(&op))
+        continue;
+      if (isa<memref::AllocaOp>(op))
+        continue;
+      AC->clone(op, directMapper);
+    }
+
+    TaskLoopPostCloneInput postCloneInput{AC,
+                                          loc,
+                                          iterLoop,
+                                          globalIdx,
+                                          loweredLoop.innerStripeLane,
+                                          loweredLoop.innerStripeCount};
+    taskLoopLowering->postCloneAdjust(postCloneInput);
+
+    cloneExternalAllocasIntoEdt(directRegion, directBlock, directMapper,
+                                AC->getBuilder());
+
+    AC->setInsertionPointAfter(iterLoop);
+    for (Value dep : taskDeps)
+      AC->create<DbReleaseOp>(loc, dep);
+
+    AC->setInsertionPointAfter(ifOp);
+    return EdtOp();
   }
 
   /// Create task EDT

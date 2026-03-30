@@ -39,8 +39,10 @@
 #include "arts/transforms/db/block/DbBlockIndexer.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
+#include "arts/utils/BlockedAccessUtils.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -52,80 +54,108 @@ ARTS_DEBUG_SETUP(db_transforms);
 using namespace mlir;
 using namespace mlir::arts;
 
-///===----------------------------------------------------------------------===///
-/// Static helpers for block simplification
-///===----------------------------------------------------------------------===///
+struct LoopWindowLocalization {
+  Value dbRefIdx;
+  Value localIdx;
+};
 
-static bool isMulOf(Value v, Value a, Value b) {
-  v = ValueAnalysis::stripClampOne(v);
-  a = ValueAnalysis::stripClampOne(a);
-  b = ValueAnalysis::stripClampOne(b);
-  if (auto mul = v.getDefiningOp<arith::MulIOp>()) {
-    Value lhs = ValueAnalysis::stripClampOne(mul.getLhs());
-    Value rhs = ValueAnalysis::stripClampOne(mul.getRhs());
-    if ((ValueAnalysis::sameValue(lhs, a) &&
-         ValueAnalysis::sameValue(rhs, b)) ||
-        (ValueAnalysis::sameValue(lhs, b) && ValueAnalysis::sameValue(rhs, a)))
-      return true;
-  }
-  return false;
-}
+static std::optional<LoopWindowLocalization>
+tryLocalizeFromLoopWindow(Value globalIdx, Value startBlock, Value blockSize,
+                          OpBuilder &builder, Location loc) {
+  if (!globalIdx || !blockSize)
+    return std::nullopt;
 
-static Value canonicalizeStartBlock(Value startBlock, Value blockSize) {
-  Value sb = ValueAnalysis::stripClampOne(startBlock);
-  Value bs = ValueAnalysis::stripClampOne(blockSize);
-  if (auto div = sb.getDefiningOp<arith::DivUIOp>()) {
-    Value lhs = ValueAnalysis::stripClampOne(div.getLhs());
-    Value rhs = ValueAnalysis::stripClampOne(div.getRhs());
-    if (ValueAnalysis::sameValue(rhs, bs)) {
-      if (auto mul = lhs.getDefiningOp<arith::MulIOp>()) {
-        Value ml = ValueAnalysis::stripClampOne(mul.getLhs());
-        Value mr = ValueAnalysis::stripClampOne(mul.getRhs());
-        if (ValueAnalysis::sameValue(ml, bs))
-          return mr;
-        if (ValueAnalysis::sameValue(mr, bs))
-          return ml;
-      }
+  int64_t constOffset = 0;
+  Value indexedExpr = ValueAnalysis::stripConstantOffset(globalIdx, &constOffset);
+  indexedExpr = ValueAnalysis::stripNumericCasts(indexedExpr);
+
+  auto resolveLoopCarrier = [&](Value candidateIv)
+      -> std::optional<std::pair<scf::ForOp, Value>> {
+    candidateIv = ValueAnalysis::stripNumericCasts(candidateIv);
+    auto loopIv = dyn_cast<BlockArgument>(candidateIv);
+    auto loop = loopIv ? dyn_cast_or_null<scf::ForOp>(loopIv.getOwner()->getParentOp())
+                       : scf::ForOp();
+    if (!loop || loop.getInductionVar() != loopIv)
+      return std::nullopt;
+
+    Value invariantBase;
+    if (!arts::matchLoopInvariantAddend(indexedExpr, loopIv, invariantBase))
+      return std::nullopt;
+
+    return std::make_pair(loop, invariantBase);
+  };
+
+  std::optional<std::pair<scf::ForOp, Value>> loopCarrier =
+      resolveLoopCarrier(indexedExpr);
+  if (!loopCarrier) {
+    if (auto add = indexedExpr.getDefiningOp<arith::AddIOp>()) {
+      loopCarrier = resolveLoopCarrier(add.getLhs());
+      if (!loopCarrier)
+        loopCarrier = resolveLoopCarrier(add.getRhs());
     }
   }
-  return sb;
-}
+  if (!loopCarrier)
+    return std::nullopt;
 
-static std::optional<Value>
-extractLocalFromBlockBase(Value globalIdx, Value startBlock, Value blockSize) {
-  Value idx = ValueAnalysis::stripNumericCasts(globalIdx);
-  Value sb = canonicalizeStartBlock(startBlock, blockSize);
-  if (auto add = idx.getDefiningOp<arith::AddIOp>()) {
-    Value lhs = ValueAnalysis::stripNumericCasts(add.getLhs());
-    Value rhs = ValueAnalysis::stripNumericCasts(add.getRhs());
-    if (isMulOf(lhs, sb, blockSize))
-      return rhs;
-    if (isMulOf(rhs, sb, blockSize))
-      return lhs;
-  }
-  return std::nullopt;
-}
+  auto [loop, invariantBase] = *loopCarrier;
+  auto loopIv = cast<BlockArgument>(loop.getInductionVar());
+  if (!loop || loop.getInductionVar() != loopIv ||
+      !ValueAnalysis::isOneConstant(loop.getStep()) ||
+      !loopWindowFitsSingleBlock(loop, blockSize))
+    return std::nullopt;
 
-static bool isLoopIvBoundedBy(Value idx, Value bs) {
-  auto barg = dyn_cast<BlockArgument>(idx);
-  if (!barg)
-    return false;
-  auto *parentOp = barg.getOwner()->getParentOp();
-  auto forOp = dyn_cast_or_null<scf::ForOp>(parentOp);
-  if (!forOp || forOp.getInductionVar() != barg)
-    return false;
-  Value ub = ValueAnalysis::stripClampOne(forOp.getUpperBound());
-  Value bsStripped = ValueAnalysis::stripClampOne(bs);
-  if (ValueAnalysis::sameValue(ub, bsStripped))
-    return true;
-  if (auto minOp = ub.getDefiningOp<arith::MinUIOp>()) {
-    Value lhs = ValueAnalysis::stripClampOne(minOp.getLhs());
-    Value rhs = ValueAnalysis::stripClampOne(minOp.getRhs());
-    if (ValueAnalysis::sameValue(lhs, bsStripped) ||
-        ValueAnalysis::sameValue(rhs, bsStripped))
-      return true;
+  auto blockSizeConst =
+      ValueAnalysis::tryFoldConstantIndex(ValueAnalysis::stripClampOne(blockSize));
+  if (blockSizeConst && std::abs(constOffset) >= *blockSizeConst)
+    return std::nullopt;
+
+  Value zero = arts::createZeroIndex(builder, loc);
+  Value one = arts::createOneIndex(builder, loc);
+  Value negOne = arts::createConstantIndex(builder, loc, -1);
+
+  Value lb = ValueAnalysis::ensureIndexType(loop.getLowerBound(), builder, loc);
+  Value bs = ValueAnalysis::ensureIndexType(blockSize, builder, loc);
+  Value sb = startBlock ? ValueAnalysis::ensureIndexType(startBlock, builder, loc)
+                        : zero;
+
+  Value anchor = lb;
+  if (invariantBase) {
+    Value base = ValueAnalysis::ensureIndexType(invariantBase, builder, loc);
+    anchor = builder.create<arith::AddIOp>(loc, base, lb);
   }
-  return false;
+
+  Value baseBlock = builder.create<arith::DivUIOp>(loc, anchor, bs);
+  Value baseLocal = builder.create<arith::RemUIOp>(loc, anchor, bs);
+  Value ivDelta = builder.create<arith::SubIOp>(loc, loopIv, lb);
+  Value localRaw = builder.create<arith::AddIOp>(loc, baseLocal, ivDelta);
+  if (constOffset > 0) {
+    localRaw = builder.create<arith::AddIOp>(
+        loc, localRaw, arts::createConstantIndex(builder, loc, constOffset));
+  } else if (constOffset < 0) {
+    localRaw = builder.create<arith::SubIOp>(
+        loc, localRaw, arts::createConstantIndex(builder, loc, -constOffset));
+  }
+
+  Value belowZero = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
+                                                  localRaw, zero);
+  Value aboveBlock = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge,
+                                                   localRaw, bs);
+
+  Value adjust = builder.create<arith::SelectOp>(loc, belowZero, negOne, zero);
+  adjust = builder.create<arith::SelectOp>(loc, aboveBlock, one, adjust);
+
+  Value baseRelBlock = builder.create<arith::SubIOp>(loc, baseBlock, sb);
+  Value dbRefIdx = builder.create<arith::AddIOp>(loc, baseRelBlock, adjust);
+
+  Value localIdx = localRaw;
+  Value localMinusBlock = builder.create<arith::SubIOp>(loc, localRaw, bs);
+  Value localPlusBlock = builder.create<arith::AddIOp>(loc, localRaw, bs);
+  localIdx = builder.create<arith::SelectOp>(loc, belowZero, localPlusBlock,
+                                             localIdx);
+  localIdx = builder.create<arith::SelectOp>(loc, aboveBlock, localMinusBlock,
+                                             localIdx);
+
+  return LoopWindowLocalization{dbRefIdx, localIdx};
 }
 
 ///===----------------------------------------------------------------------===///
@@ -208,6 +238,14 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
         Value localIdx;
         bool simplified = false;
         if (!allocSingleBlock && !acquireSingleBlock) {
+          if (auto loopLocalized =
+                  tryLocalizeFromLoopWindow(globalIdx, sb, bs, builder, loc)) {
+            dbRefIdx = loopLocalized->dbRefIdx;
+            localIdx = loopLocalized->localIdx;
+            simplified = true;
+          }
+        }
+        if (!simplified && !allocSingleBlock && !acquireSingleBlock) {
           if (auto local = extractLocalFromBlockBase(globalIdx, sb, bs)) {
             Value localIdxVal =
                 ValueAnalysis::ensureIndexType(*local, builder, loc);
@@ -274,6 +312,14 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
     Value localIdx;
     bool simplified = false;
     if (!allocSingleBlock && !acquireSingleBlock) {
+      if (auto loopLocalized =
+              tryLocalizeFromLoopWindow(globalIdx, sb, bs, builder, loc)) {
+        dbRefIdx = loopLocalized->dbRefIdx;
+        localIdx = loopLocalized->localIdx;
+        simplified = true;
+      }
+    }
+    if (!simplified && !allocSingleBlock && !acquireSingleBlock) {
       if (auto local = extractLocalFromBlockBase(globalIdx, sb, bs)) {
         Value localIdxVal =
             ValueAnalysis::ensureIndexType(*local, builder, loc);

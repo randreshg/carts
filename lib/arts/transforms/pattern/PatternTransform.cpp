@@ -33,4 +33,6 @@ void StencilNDPatternContract::stamp(Operation *op) const {
   setStencilMinOffsets(op, minOffsets);
   setStencilMaxOffsets(op, maxOffsets);
   setStencilWriteFootprint(op, writeFootprint);
+  if (!blockShape.empty())
+    setStencilBlockShape(op, blockShape);
 }

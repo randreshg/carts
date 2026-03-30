@@ -116,7 +116,9 @@ static void normalizeBlockHaloAcquireSlice(ArtsCodegen *AC, DbAcquireOp acquire,
     dimElementOffsets.push_back(offsetRange[i]);
     dimElementSizes.push_back(sizeRange[i]);
     dimBlockSpans.push_back(elementSizes[dim]);
-    dimTotalBlocks.push_back(outerSizes[dim]);
+    /// DbAllocOp sizes are ordered by owner slot, not by physical memref
+    /// dimension number.
+    dimTotalBlocks.push_back(outerSizes[i]);
   }
 
   SmallVector<Value, 4> offsets, sizes;
@@ -377,6 +379,13 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
     if (attr.getName().getValue().starts_with("arts."))
       newAcquireOp->setAttr(attr.getName(), attr.getValue());
   }
+  /// Rebuilt acquires must preserve the semantic stencil/distribution contract
+  /// in addition to generic `arts.*` bookkeeping. Downstream passes such as
+  /// dep lowering rely on these attrs (or the mirrored value contract) to
+  /// distinguish owned-write entries from read-only halo entries without
+  /// teaching generic lowering code about specific dep families.
+  copySemanticContractAttrs(acquireOp.getOperation(),
+                            newAcquireOp.getOperation());
   newAcquireOp.copyPartitionSegmentsFrom(acquireOp);
   transferValueContract(acquireOp.getPtr(), newAcquireOp.getPtr(),
                         AC->getBuilder(), newAcquireOp.getLoc());

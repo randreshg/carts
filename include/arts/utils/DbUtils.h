@@ -154,6 +154,22 @@ public:
   static DbMode convertArtsModeToDbMode(ArtsMode mode);
 
   ///===----------------------------------------------------------------------===///
+  /// Host-View Safety
+  ///===----------------------------------------------------------------------===///
+
+  /// Returns true when a DB value (or any forwarded host alias/view derived
+  /// from it) escapes to a non-EDT use that requires a contiguous whole-view
+  /// contract. Fragmented layouts such as block/fine-grained cannot preserve
+  /// those uses without additional host-side rewriting, so callers should keep
+  /// the allocation coarse.
+  ///
+  /// Direct host load/store users are considered partitionable because DB
+  /// rewriters can localize those indices. Opaque users such as helper calls,
+  /// dimension queries, pointer casts, and memref copies are treated as unsafe
+  /// and force a coarse layout.
+  static bool hasNonPartitionableHostViewUses(Value dbValue);
+
+  ///===----------------------------------------------------------------------===///
   /// Offset Dep and Block Size Analysis
   ///===----------------------------------------------------------------------===///
   /// Functions for analyzing value dependencies on offsets and extracting

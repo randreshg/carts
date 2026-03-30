@@ -11,7 +11,8 @@
 // CHECK: %[[ACTIVE_ROWS:.+]] = arith.minui %[[NUM_ROWS:.+]], %c64 : index
 // CHECK: %[[DISPATCH:.+]] = arith.maxui %[[ACTIVE_ROWS]], %c1 : index
 // CHECK: scf.for %[[WORKER:.+]] = %c0 to %[[DISPATCH]] step %c1 {
-// CHECK: arts.db_acquire[<inout>] {{.*}} partitioning(<block>), offsets[%{{.+}}, %c0], sizes[%{{.+}}, %c1] {depPattern = #arts.dep_pattern<wavefront_2d>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<stencil>, distribution_version = 1 : i32, stencil_block_shape = [{{.+}}], stencil_center_offset = 1 : i64, stencil_owner_dims = [0, 1]
+// CHECK: arts.db_acquire[<inout>] {{.*}} partitioning(<block>), offsets[%{{.+}}, %c0], sizes[%{{.+}}, %c1] {arts.pattern_revision = 1 : i64, depPattern = #arts.dep_pattern<wavefront_2d>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<stencil>, distribution_version = 1 : i32, stencil_block_shape = [{{[0-9]+}}, {{[0-9]+}}], stencil_center_offset = 1 : i64, stencil_owner_dims = [0, 1], stencil_spatial_dims = [0, 1], stencil_supported_block_halo, stencil_write_footprint = [0, 0]}
+// CHECK-NEXT: arts.lowering_contract(%{{.+}} : memref<?x?x!llvm.ptr>) dep_pattern(<wavefront_2d>) distribution_kind(<block>) distribution_pattern(<stencil>) block_shape[%c{{[0-9]+}}, %c{{[0-9]+}}] min_offsets[%c-1, %c-1] max_offsets[%c1, %c1] write_footprint[%c0, %c0]
 // CHECK: arts.wait_on_epoch %[[EPOCH]] : i64
 
 module {

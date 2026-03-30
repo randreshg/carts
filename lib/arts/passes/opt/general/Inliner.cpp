@@ -21,8 +21,11 @@
 #include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
 #include "mlir/Analysis/CallGraph.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/OpenMP/OpenMPDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Transforms/InliningUtils.h"
 #include "llvm/Support/Debug.h"
@@ -42,6 +45,100 @@ static bool isInsideOmpRegion(Operation *op) {
       return true;
   }
   return false;
+}
+
+static bool containsOmpOp(Operation *op) {
+  bool found = false;
+  op->walk([&](Operation *nested) {
+    if (nested->getDialect() &&
+        nested->getDialect()->getNamespace() == "omp") {
+      found = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return found;
+}
+
+static bool containsSequentialLoopLikeOp(Operation *op) {
+  bool found = false;
+  op->walk([&](Operation *nested) {
+    if (isa<scf::ForOp, scf::WhileOp, scf::ParallelOp, scf::ForallOp,
+            affine::AffineForOp, affine::AffineParallelOp>(nested)) {
+      found = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return found;
+}
+
+static bool hasNestedMemrefType(Type type) {
+  auto memrefType = dyn_cast<MemRefType>(type);
+  return memrefType && isa<MemRefType>(memrefType.getElementType());
+}
+
+static bool hasLayoutSensitiveNestedMemrefSignature(
+    func::CallOp call, CallableOpInterface callableOp) {
+  for (Value operand : call.getOperands()) {
+    if (hasNestedMemrefType(operand.getType()))
+      return true;
+  }
+
+  for (Type resultType : call.getResultTypes()) {
+    if (hasNestedMemrefType(resultType))
+      return true;
+  }
+
+  auto funcOp = dyn_cast_or_null<func::FuncOp>(callableOp.getOperation());
+  if (!funcOp)
+    return false;
+
+  for (BlockArgument arg : funcOp.getArguments()) {
+    if (hasNestedMemrefType(arg.getType()))
+      return true;
+  }
+
+  for (Type resultType : funcOp.getFunctionType().getResults()) {
+    if (hasNestedMemrefType(resultType))
+      return true;
+  }
+
+  return false;
+}
+
+/// Keep early inlining focused on helpers that materially improve ARTS
+/// analysis. Inlining large sequential loop helpers tends to rematerialize
+/// initialized arrays into downstream kernels, which hurts benchmark codegen.
+/// We still inline helpers that carry OpenMP because later passes need that
+/// structure in the caller to expose ARTS parallelism and loop fusion.
+///
+/// Nested-memref helpers are the exception: RaiseMemRefDimensionality changes
+/// the storage layout of those values, so the helper body must be visible in
+/// the caller before that pass runs. Otherwise the call boundary would retain
+/// the stale pre-raise type/layout contract.
+static bool shouldInlineCall(func::CallOp call, CallableOpInterface callableOp) {
+  auto funcOp = dyn_cast_or_null<func::FuncOp>(callableOp.getOperation());
+  if (!funcOp)
+    return true;
+
+  if (hasLayoutSensitiveNestedMemrefSignature(call, callableOp)) {
+    ARTS_INFO("Inlining layout-sensitive nested-memref helper "
+              << funcOp.getSymName());
+    return true;
+  }
+
+  if (containsOmpOp(funcOp))
+    return true;
+
+  if (containsSequentialLoopLikeOp(funcOp)) {
+    ARTS_INFO("Skipping sequential loop helper " << funcOp.getSymName()
+                                                 << " to preserve materialized"
+                                                 << " memory semantics");
+    return false;
+  }
+
+  return true;
 }
 
 /// Conservative fallback for calls inside OMP regions. Generic MLIR inlining
@@ -191,6 +288,9 @@ struct ArtsInlinerPass : public impl::ArtsInlinerBase<ArtsInlinerPass> {
           ARTS_WARN("Cannot resolve callable for call");
           continue;
         }
+
+        if (!shouldInlineCall(call, callableOp))
+          continue;
 
         /// Generic MLIR inlining into OMP regions can assert because the OMP
         /// dialect does not register a DialectInlinerInterface. Use the

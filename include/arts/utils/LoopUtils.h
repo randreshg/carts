@@ -14,9 +14,16 @@
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
+#include <optional>
 
 namespace mlir {
 namespace arts {
+
+enum class PointwiseLoopComputeClass {
+  arithmeticOnly,
+  vectorMath,
+  scalarCall
+};
 
 /// Check whether a scf::ForOp is a "worker loop" (i.e., contains at least one
 /// arts.edt operation anywhere in its body).
@@ -109,6 +116,27 @@ inline Operation *findNearestLoop(Operation *op) {
   }
   return nullptr;
 }
+
+/// Resolve a constant trip count for a loop-like op when all bounds are static.
+/// Returns std::nullopt when the trip count cannot be proven statically.
+std::optional<int64_t> getStaticTripCount(Operation *loopOp);
+
+/// Compute a capped product of static enclosing loop trip counts.
+/// Starts at the parent of `op`, so the operation's own trip count is excluded.
+/// Useful for repeated-dispatch cost models that need a lightweight estimate
+/// of how many times a region is re-entered.
+int64_t getRepeatedParentTripProduct(Operation *op,
+                                     int64_t maxProduct = 1 << 20);
+
+/// Returns true when a pointwise arts.for carries scalar libm-heavy floating
+/// point work (for example transcendentals or scalar FP helper calls). Fusion
+/// passes use this to avoid mixing such loops with arithmetic-only loops,
+/// which would otherwise suppress vectorization on the simple stages.
+PointwiseLoopComputeClass classifyPointwiseLoopCompute(arts::ForOp loop);
+
+/// Convenience wrapper for callers that only need to know whether the loop is
+/// more expensive than plain arithmetic-only pointwise work.
+bool loopHasFusionHostileFpWork(arts::ForOp loop);
 
 } // namespace arts
 } // namespace mlir

@@ -2,7 +2,8 @@
 /// File: LoopFusion.cpp
 ///
 /// Fuses independent arts.for loops within same parallel EDT.
-/// Uses AnalysisManager and LoopAnalysis for independence checking.
+/// Uses AnalysisManager and LoopAnalysis for bounds compatibility while
+/// proving independence from per-loop memory hazards.
 ///
 /// Before (2 separate loops with implicit barrier between them):
 ///   arts.edt <parallel> {
@@ -31,8 +32,8 @@
 ///     }
 ///   }
 ///
-/// This reduces EDT overhead and synchronization costs when loops access
-/// disjoint sets of datablocks.
+/// This reduces EDT overhead and synchronization costs when loops have no
+/// cross-loop write hazards. Shared read-only inputs are allowed.
 ///==========================================================================///
 
 #include "arts/Dialect.h"
@@ -45,10 +46,12 @@
 #include "arts/passes/Passes.h.inc"
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/IRMapping.h"
+#include "llvm/ADT/DenseMap.h"
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(loop_fusion);
@@ -57,6 +60,25 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
+struct AccessSummary {
+  bool reads = false;
+  bool writes = false;
+
+  void record(DbUtils::MemoryAccessKind kind) {
+    if (kind == DbUtils::MemoryAccessKind::Read)
+      reads = true;
+    else
+      writes = true;
+  }
+};
+
+struct LoopAccessSummary {
+  DenseMap<Operation *, AccessSummary> datablocks;
+  DenseMap<Value, AccessSummary> rawMemrefs;
+
+  size_t size() const { return datablocks.size() + rawMemrefs.size(); }
+};
+
 struct LoopFusionPass : public impl::LoopFusionBase<LoopFusionPass> {
   LoopFusionPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
@@ -114,7 +136,7 @@ private:
   bool haveCompatibleBounds(ForOp a, ForOp b);
   bool areIndependent(ForOp a, ForOp b, LoopAnalysis &loopAnalysis);
   void fuseForOps(ForOp first, ForOp second);
-  DenseSet<Operation *> getDbAccesses(ForOp forOp);
+  LoopAccessSummary getAccessSummary(ForOp forOp);
 };
 } // namespace
 
@@ -125,65 +147,81 @@ bool LoopFusionPass::haveCompatibleBounds(ForOp a, ForOp b) {
   return LoopNode::haveCompatibleBounds(nodeA, nodeB);
 }
 
-/// Collects the underlying datablock Operations accessed by a ForOp.
-/// Uses getUnderlyingDb to trace through db_ref, acquire chains, and
-/// block arguments to identify the actual DbAllocOp/DbAcquireOp.
-DenseSet<Operation *> LoopFusionPass::getDbAccesses(ForOp forOp) {
-  DenseSet<Operation *> accesses;
+/// Collect the per-loop read/write summary keyed by the underlying datablock
+/// when available. If an access does not trace to a datablock, fall back to
+/// the raw memref value so non-DB scratch buffers are still treated
+/// conservatively.
+LoopAccessSummary LoopFusionPass::getAccessSummary(ForOp forOp) {
+  LoopAccessSummary accesses;
   forOp.walk([&](Operation *op) {
-    Value memref;
-    if (auto access = DbUtils::getMemoryAccessInfo(op))
-      memref = access->memref;
-    else if (auto dbRef = dyn_cast<DbRefOp>(op))
-      memref = dbRef.getResult();
-    else if (auto acq = dyn_cast<DbAcquireOp>(op))
-      memref = acq.getSourcePtr();
-    else
+    auto access = DbUtils::getMemoryAccessInfo(op);
+    if (!access)
       return;
 
-    /// Use ArtsUtils to trace to the underlying datablock
-    if (Operation *db = DbUtils::getUnderlyingDb(memref)) {
-      accesses.insert(db);
+    if (Operation *db = DbUtils::getUnderlyingDb(access->memref)) {
+      accesses.datablocks[db].record(access->kind);
       ARTS_DEBUG("  Access -> underlying DB: " << *db);
+      return;
     }
+
+    accesses.rawMemrefs[access->memref].record(access->kind);
+    ARTS_DEBUG("  Access -> raw memref: " << access->memref);
   });
-  ARTS_DEBUG("ForOp accesses " << accesses.size() << " unique datablocks");
+  ARTS_DEBUG("ForOp accesses " << accesses.size()
+                               << " unique memory root(s)");
   return accesses;
 }
 
 bool LoopFusionPass::areIndependent(ForOp a, ForOp b,
                                     LoopAnalysis &loopAnalysis) {
-  /// First check: no shared datablock accesses between loops
+  auto loopAClass = classifyPointwiseLoopCompute(a);
+  auto loopBClass = classifyPointwiseLoopCompute(b);
+  if (loopAClass != loopBClass) {
+    ARTS_DEBUG("Loops have different pointwise compute classes - keep "
+               "separate");
+    return false;
+  }
+
+  auto hasCrossLoopHazard = [](const AccessSummary &lhs,
+                               const AccessSummary &rhs) {
+    /// Shared reads are safe to fuse. Any shared writer must preserve the
+    /// existing barrier.
+    return lhs.writes || rhs.writes;
+  };
+
+  /// First check: no shared writable accesses between loops.
   ARTS_INFO("Checking independence between two ForOps");
   ARTS_DEBUG("Loop A:");
-  auto aAccesses = getDbAccesses(a);
+  LoopAccessSummary aAccesses = getAccessSummary(a);
   ARTS_DEBUG("Loop B:");
-  auto bAccesses = getDbAccesses(b);
+  LoopAccessSummary bAccesses = getAccessSummary(b);
 
-  for (Operation *db : aAccesses) {
-    if (bAccesses.contains(db)) {
-      ARTS_DEBUG("Loops share datablock - not independent");
+  for (auto &[db, accessA] : aAccesses.datablocks) {
+    auto it = bAccesses.datablocks.find(db);
+    if (it != bAccesses.datablocks.end() &&
+        hasCrossLoopHazard(accessA, it->second)) {
+      ARTS_DEBUG("Loops share writable datablock - not independent");
       return false;
     }
   }
 
-  /// Second check: use LoopAnalysis to verify no cross-loop dependencies
+  for (auto &[memref, accessA] : aAccesses.rawMemrefs) {
+    auto it = bAccesses.rawMemrefs.find(memref);
+    if (it != bAccesses.rawMemrefs.end() &&
+        hasCrossLoopHazard(accessA, it->second)) {
+      ARTS_DEBUG("Loops share writable raw memref - not independent");
+      return false;
+    }
+  }
+
+  /// Second check: consult loop metadata for diagnostics only. Internal
+  /// loop-carried dependences do not, by themselves, block fusion because the
+  /// fused loop preserves each iteration's program order. Only cross-loop
+  /// hazards matter here.
   LoopNode *loopNodeA = loopAnalysis.getLoopNode(a.getOperation());
   LoopNode *loopNodeB = loopAnalysis.getLoopNode(b.getOperation());
 
   if (loopNodeA && loopNodeB) {
-    /// Check parallel classification from loop metadata
-    auto classA = loopNodeA->parallelClassification;
-    auto classB = loopNodeB->parallelClassification;
-
-    /// If either loop is Sequential due to dependencies, be conservative
-    if (classA == LoopMetadata::ParallelClassification::Sequential ||
-        classB == LoopMetadata::ParallelClassification::Sequential) {
-      ARTS_DEBUG("One of the loops is Sequential - not fusing");
-      return false;
-    }
-
-    /// Check for inter-iteration dependencies
     if (loopNodeA->hasInterIterationDeps.has_value() &&
         loopNodeA->hasInterIterationDeps.value()) {
       ARTS_DEBUG("Loop A has inter-iteration dependencies");

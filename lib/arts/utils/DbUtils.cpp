@@ -13,7 +13,9 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "polygeist/Ops.h"
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(db_utils);
@@ -59,6 +61,10 @@ static bool isMemrefForwardingOp(Operation *op, Value source) {
     return dbRef.getSource() == source;
 
   return false;
+}
+
+static bool isStructuralHostDbUse(Operation *op) {
+  return isa<EdtOp, LoweringContractOp, DbReleaseOp, DbFreeOp>(op);
 }
 
 static void appendDynamicSubviewOffsets(memref::SubViewOp subview,
@@ -365,6 +371,58 @@ DbMode DbUtils::convertArtsModeToDbMode(ArtsMode mode) {
   return (mode == ArtsMode::in) ? DbMode::read : DbMode::write;
 }
 
+bool DbUtils::hasNonPartitionableHostViewUses(Value dbValue) {
+  if (!dbValue)
+    return false;
+
+  SmallVector<Value, 8> worklist{dbValue};
+  llvm::SmallPtrSet<Value, 16> visitedValues;
+
+  while (!worklist.empty()) {
+    Value current = worklist.pop_back_val();
+    if (!current || !visitedValues.insert(current).second)
+      continue;
+
+    for (OpOperand &use : llvm::make_early_inc_range(current.getUses())) {
+      Operation *user = use.getOwner();
+      if (!user || user->getParentOfType<EdtOp>())
+        continue;
+
+      if (isa<memref::DeallocOp>(user))
+        continue;
+
+      if (getMemoryAccessInfo(user))
+        continue;
+
+      if (isMemrefForwardingOp(user, current)) {
+        for (Value result : user->getResults())
+          if (isa<MemRefType>(result.getType()))
+            worklist.push_back(result);
+        continue;
+      }
+
+      /// ARTS dependency plumbing outside an EDT is structural, not a host
+      /// whole-view consumer. Follow acquire ptr results so later opaque host
+      /// uses (for example helper calls on a host acquire) are still detected.
+      if (auto acquire = dyn_cast<DbAcquireOp>(user)) {
+        if (acquire.getSourcePtr() == current &&
+            isa<MemRefType>(acquire.getPtr().getType()))
+          worklist.push_back(acquire.getPtr());
+        continue;
+      }
+
+      if (isStructuralHostDbUse(user))
+        continue;
+
+      ARTS_DEBUG("Host-view veto: non-partitionable host user "
+                 << user->getName() << " on value type " << current.getType());
+      return true;
+    }
+  }
+
+  return false;
+}
+
 Value DbUtils::extractBaseBlockSizeCandidate(Value offsetHint, Value sizeHint,
                                              int depth) {
   if (!sizeHint || depth > 6)
@@ -553,6 +611,17 @@ DbUtils::getMemoryAccessInfo(Operation *memOp) {
                             SmallVector<Value>(store.getIndices().begin(),
                                                store.getIndices().end()),
                             MemoryAccessKind::Write};
+  if (auto load = dyn_cast<polygeist::DynLoadOp>(memOp))
+    return MemoryAccessInfo{
+        memOp, load.getMemref(),
+        SmallVector<Value>(load.getIndices().begin(), load.getIndices().end()),
+        MemoryAccessKind::Read};
+  if (auto store = dyn_cast<polygeist::DynStoreOp>(memOp))
+    return MemoryAccessInfo{
+        memOp, store.getMemref(),
+        SmallVector<Value>(store.getIndices().begin(),
+                           store.getIndices().end()),
+        MemoryAccessKind::Write};
   if (auto load = dyn_cast<affine::AffineLoadOp>(memOp))
     return MemoryAccessInfo{memOp, load.getMemRef(),
                             SmallVector<Value>(load.getMapOperands().begin(),
@@ -681,22 +750,20 @@ std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
     return std::nullopt;
 
   /// Case 1: Direct constant.
-  int64_t val;
-  if (ValueAnalysis::getConstantIndex(sizeHint, val))
-    return val;
+  if (auto folded = ValueAnalysis::tryFoldConstantIndex(sizeHint))
+    return folded;
 
   /// Case 2/3: minui/minsi pattern — return the larger constant (nominal size).
   auto handleMinOp = [&](Value lhs, Value rhs) -> std::optional<int64_t> {
-    int64_t lhsVal = 0, rhsVal = 0;
-    bool hasLhs = ValueAnalysis::getConstantIndex(lhs, lhsVal);
-    bool hasRhs = ValueAnalysis::getConstantIndex(rhs, rhsVal);
+    auto lhsFolded = ValueAnalysis::tryFoldConstantIndex(lhs);
+    auto rhsFolded = ValueAnalysis::tryFoldConstantIndex(rhs);
 
-    if (hasLhs && hasRhs)
-      return std::max(lhsVal, rhsVal);
-    if (hasLhs)
-      return lhsVal;
-    if (hasRhs)
-      return rhsVal;
+    if (lhsFolded && rhsFolded)
+      return std::max(*lhsFolded, *rhsFolded);
+    if (lhsFolded)
+      return lhsFolded;
+    if (rhsFolded)
+      return rhsFolded;
 
     auto lhsExtracted = extractBlockSizeFromHint(lhs, depth + 1);
     auto rhsExtracted = extractBlockSizeFromHint(rhs, depth + 1);
@@ -721,15 +788,14 @@ std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
   /// Case 4: addi pattern — stencil halo; extract baseBlockSize from
   /// addi(baseBlockSize, haloAdjustment) when halo is a small constant.
   if (auto addOp = sizeHint.getDefiningOp<arith::AddIOp>()) {
-    int64_t lhsVal = 0, rhsVal = 0;
-    bool hasLhsConst = ValueAnalysis::getConstantIndex(addOp.getLhs(), lhsVal);
-    bool hasRhsConst = ValueAnalysis::getConstantIndex(addOp.getRhs(), rhsVal);
+    auto lhsFolded = ValueAnalysis::tryFoldConstantIndex(addOp.getLhs());
+    auto rhsFolded = ValueAnalysis::tryFoldConstantIndex(addOp.getRhs());
 
     /// If one operand is a small constant (halo), recurse on the other.
-    if (hasRhsConst && std::abs(rhsVal) <= 16) {
+    if (rhsFolded && std::abs(*rhsFolded) <= 16) {
       return extractBlockSizeFromHint(addOp.getLhs(), depth + 1);
     }
-    if (hasLhsConst && std::abs(lhsVal) <= 16) {
+    if (lhsFolded && std::abs(*lhsFolded) <= 16) {
       return extractBlockSizeFromHint(addOp.getRhs(), depth + 1);
     }
 
@@ -745,23 +811,22 @@ std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
   /// Case 5: maxui pattern — clamp minimum; return larger constant as upper
   /// bound.
   if (auto maxOp = sizeHint.getDefiningOp<arith::MaxUIOp>()) {
-    int64_t lhsVal = 0, rhsVal = 0;
-    bool hasLhs = ValueAnalysis::getConstantIndex(maxOp.getLhs(), lhsVal);
-    bool hasRhs = ValueAnalysis::getConstantIndex(maxOp.getRhs(), rhsVal);
+    auto lhsFolded = ValueAnalysis::tryFoldConstantIndex(maxOp.getLhs());
+    auto rhsFolded = ValueAnalysis::tryFoldConstantIndex(maxOp.getRhs());
 
-    if (hasLhs && hasRhs)
-      return std::max(lhsVal, rhsVal);
-    if (hasLhs && !hasRhs) {
+    if (lhsFolded && rhsFolded)
+      return std::max(*lhsFolded, *rhsFolded);
+    if (lhsFolded && !rhsFolded) {
       auto rhsExtracted = extractBlockSizeFromHint(maxOp.getRhs(), depth + 1);
       if (rhsExtracted)
         return rhsExtracted;
-      return lhsVal;
+      return lhsFolded;
     }
-    if (hasRhs && !hasLhs) {
+    if (rhsFolded && !lhsFolded) {
       auto lhsExtracted = extractBlockSizeFromHint(maxOp.getLhs(), depth + 1);
       if (lhsExtracted)
         return lhsExtracted;
-      return rhsVal;
+      return rhsFolded;
     }
 
     /// Recurse for nested maxui.

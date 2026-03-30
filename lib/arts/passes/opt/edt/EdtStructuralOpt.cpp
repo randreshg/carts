@@ -85,13 +85,6 @@ void sinkExternalAllocasInEdt(EdtOp edt) {
     bool hasUnsafeStore = false;
     SmallVector<memref::StoreOp, 4> initStores;
     for (Operation *user : allocaOp->getUsers()) {
-      auto inSameBlock = [&](Operation *op) {
-        return op->getBlock() == allocaOp->getBlock();
-      };
-      auto hasLoopAncestor = [&](Operation *op) {
-        return op->getParentOfType<scf::ForOp>() ||
-               op->getParentOfType<scf::IfOp>();
-      };
       if (auto store = dyn_cast<memref::StoreOp>(user)) {
         if (store.getMemRef() != allocaOp.getResult())
           continue;
@@ -100,8 +93,7 @@ void sinkExternalAllocasInEdt(EdtOp edt) {
         /// should not prevent sinking — they are the reason we want to sink.
         if (edt.getBody().isAncestor(store->getParentRegion()))
           continue;
-        if (!inSameBlock(store.getOperation()) ||
-            hasLoopAncestor(store.getOperation())) {
+        if (!canCloneAllocaInitStore(store, allocaOp.getResult())) {
           hasUnsafeStore = true;
           break;
         }

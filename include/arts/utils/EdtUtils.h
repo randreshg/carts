@@ -10,6 +10,7 @@
 #define CARTS_UTILS_EDTUTILS_H
 
 #include "arts/Dialect.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Operation.h"
@@ -95,6 +96,11 @@ std::optional<unsigned> mapMemrefToEdtArg(EdtOp edt, Value memrefValue);
 /// back to their block arguments.
 void classifyEdtArgAccesses(EdtOp edt, SmallVectorImpl<bool> &reads,
                             SmallVectorImpl<bool> &writes);
+
+/// Return true when an alloca initialization store can be cloned into an EDT
+/// body without needing its surrounding control flow. This accepts constant or
+/// pure regionless operand chains whose inputs can be captured by the EDT.
+bool canCloneAllocaInitStore(memref::StoreOp store, Value memref);
 
 } // namespace arts
 } // namespace mlir

@@ -145,6 +145,15 @@ struct WorkerConfig {
   bool internode = false;
 };
 
+/// Shared policy result for weighted 2-D wavefront tiling.
+/// This stays in the heuristics layer so semantic wavefront transforms can
+/// reuse one cost model instead of embedding per-pattern worker math.
+struct Wavefront2DTilingPlan {
+  int64_t tileRows = 1;
+  int64_t tileCols = 1;
+  std::optional<int64_t> taskChunkHint;
+};
+
 /// Machine-derived EDT topology defaults.
 struct ParallelismDecision {
   EdtConcurrency concurrency = EdtConcurrency::intranode;
@@ -193,6 +202,13 @@ public:
   static std::optional<int64_t>
   computeCoarsenedBlockHint(ForOp forOp, LoopAnalysis &loopAnalysis,
                             const WorkerConfig &workerCfg);
+
+  /// Choose a shared tiling/chunking plan for weighted 2-D wavefronts.
+  /// The plan balances worker saturation against per-task granularity.
+  static std::optional<Wavefront2DTilingPlan>
+  chooseWavefront2DTilingPlan(int64_t rowExtent, int64_t colExtent,
+                              const WorkerConfig &workerCfg,
+                              int64_t repeatedTripProduct);
 };
 
 } // namespace arts

@@ -1,9 +1,12 @@
 ///==========================================================================///
 /// File: DataPtrHoisting.cpp
 ///
-/// This pass hoists data pointer loads from the ARTS deps struct out of loops.
-/// Without this optimization, pointer loads from deps happen O(n^k) times for
-/// k-nested loops, causing severe performance degradation.
+/// This pass hoists invariant ARTS dep/db pointer views out of loops and
+/// recovers loop-local blocked slices when lowering leaves per-element dep/db
+/// selection inside a worker EDT. Without this optimization, hot loops reload
+/// dependency pointers O(n^k) times for k-nested loops and may rebuild
+/// block-selection math even when the loop already stays inside one owned
+/// blocked slice.
 ///
 /// Before (O(n^2) loads - pointer loaded every iteration):
 ///   scf.for %i = ... {
@@ -42,6 +45,7 @@
 #include "arts/Dialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/passes/Passes.h"
+#include "arts/utils/BlockedAccessUtils.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/LoopInvarianceUtils.h"
 
@@ -130,30 +134,6 @@ static bool rewriteBlockedNeighborLocalIndices(Operation *op, scf::ForOp loop,
                                                Value baseGlobalIndex,
                                                Value blockSize,
                                                Value replacementIndex);
-
-static bool matchLoopInvariantAddend(Value value, Value iv, Value &baseIndex) {
-  value = ValueAnalysis::stripNumericCasts(value);
-  if (ValueAnalysis::sameValue(value, iv)) {
-    baseIndex = Value();
-    return true;
-  }
-
-  auto add = value.getDefiningOp<arith::AddIOp>();
-  if (!add)
-    return false;
-
-  Value lhs = ValueAnalysis::stripNumericCasts(add.getLhs());
-  Value rhs = ValueAnalysis::stripNumericCasts(add.getRhs());
-  if (ValueAnalysis::sameValue(lhs, iv) && !ValueAnalysis::dependsOn(rhs, iv)) {
-    baseIndex = rhs;
-    return true;
-  }
-  if (ValueAnalysis::sameValue(rhs, iv) && !ValueAnalysis::dependsOn(lhs, iv)) {
-    baseIndex = lhs;
-    return true;
-  }
-  return false;
-}
 
 static bool matchGreaterThanConstIcmp(Value cond, Value value,
                                       int64_t threshold) {
@@ -829,6 +809,157 @@ static bool rewriteBlockedNeighborLocalIndices(Operation *op, scf::ForOp loop,
   return false;
 }
 
+static bool matchSingleBlockBlockedDepIndex(Value value, scf::ForOp loop,
+                                            Value &globalIndex,
+                                            Value &blockSize,
+                                            Value &startBlock) {
+  startBlock = Value();
+  value = ValueAnalysis::stripNumericCasts(value);
+
+  if (auto select = value.getDefiningOp<arith::SelectOp>()) {
+    Value trueValue = ValueAnalysis::stripNumericCasts(select.getTrueValue());
+    Value falseValue = ValueAnalysis::stripNumericCasts(select.getFalseValue());
+    if (ValueAnalysis::isZeroConstant(trueValue) &&
+        !ValueAnalysis::dependsOn(select.getCondition(),
+                                  loop.getInductionVar())) {
+      value = falseValue;
+    } else if (ValueAnalysis::isZeroConstant(falseValue) &&
+               !ValueAnalysis::dependsOn(select.getCondition(),
+                                         loop.getInductionVar())) {
+      value = trueValue;
+    }
+  }
+
+  if (auto minOp = value.getDefiningOp<arith::MinUIOp>()) {
+    Value lhs = ValueAnalysis::stripNumericCasts(minOp.getLhs());
+    Value rhs = ValueAnalysis::stripNumericCasts(minOp.getRhs());
+    if (ValueAnalysis::dependsOn(lhs, loop.getInductionVar()) &&
+        isLoopInvariant(loop, rhs)) {
+      value = lhs;
+    } else if (ValueAnalysis::dependsOn(rhs, loop.getInductionVar()) &&
+               isLoopInvariant(loop, lhs)) {
+      value = rhs;
+    }
+  }
+
+  if (auto sub = value.getDefiningOp<arith::SubIOp>()) {
+    Value lhs = ValueAnalysis::stripNumericCasts(sub.getLhs());
+    Value rhs = ValueAnalysis::stripNumericCasts(sub.getRhs());
+    if (!isLoopInvariant(loop, rhs))
+      return false;
+    startBlock = rhs;
+    value = lhs;
+  }
+
+  auto div = value.getDefiningOp<arith::DivUIOp>();
+  if (!div)
+    return false;
+
+  Value lhs = ValueAnalysis::stripNumericCasts(div.getLhs());
+  Value rhs = ValueAnalysis::stripNumericCasts(div.getRhs());
+  if (!isLoopInvariant(loop, rhs))
+    return false;
+
+  globalIndex = lhs;
+  blockSize = rhs;
+  return true;
+}
+
+static Value stripInvariantZeroFallback(Value value, scf::ForOp loop) {
+  value = ValueAnalysis::stripNumericCasts(value);
+  auto select = value.getDefiningOp<arith::SelectOp>();
+  if (!select || ValueAnalysis::dependsOn(select.getCondition(),
+                                          loop.getInductionVar()))
+    return value;
+
+  Value trueValue = ValueAnalysis::stripNumericCasts(select.getTrueValue());
+  Value falseValue = ValueAnalysis::stripNumericCasts(select.getFalseValue());
+  if (ValueAnalysis::isZeroConstant(trueValue))
+    return falseValue;
+  if (ValueAnalysis::isZeroConstant(falseValue))
+    return trueValue;
+  return value;
+}
+
+static bool materializeSingleBlockBlockedDepView(LLVM::LoadOp loadOp,
+                                                 scf::ForOp loop) {
+  auto depGep = loadOp.getAddr().getDefiningOp<DepGepOp>();
+  if (!depGep)
+    return false;
+
+  SmallVector<Value> depIndices(depGep.getIndices().begin(),
+                                depGep.getIndices().end());
+  if (depIndices.empty())
+    return false;
+
+  int varyingIndex = -1;
+  for (auto indexedValue : llvm::enumerate(depIndices)) {
+    if (isLoopInvariant(loop, indexedValue.value()))
+      continue;
+    if (varyingIndex != -1)
+      return false;
+    varyingIndex = static_cast<int>(indexedValue.index());
+  }
+  if (varyingIndex < 0)
+    return false;
+
+  Value globalIndex;
+  Value blockSize;
+  Value startBlock;
+  if (!matchSingleBlockBlockedDepIndex(depIndices[varyingIndex], loop,
+                                       globalIndex, blockSize, startBlock))
+    return false;
+
+  Value baseGlobalIndex;
+  if (!matchLoopInvariantAddend(globalIndex, loop.getInductionVar(),
+                                baseGlobalIndex))
+    return false;
+
+  Value replacementIndex;
+  if (startBlock) {
+    startBlock = stripInvariantZeroFallback(startBlock, loop);
+    auto localIndex =
+        arts::extractLocalFromBlockBase(globalIndex, startBlock, blockSize);
+    if (!localIndex || !arts::isLoopIvBoundedBy(*localIndex, blockSize))
+      return false;
+    replacementIndex = *localIndex;
+  } else {
+    if (baseGlobalIndex ||
+        !ValueAnalysis::isZeroConstant(
+            ValueAnalysis::stripNumericCasts(loop.getLowerBound())) ||
+        !arts::isLoopIvBoundedBy(loop.getInductionVar(), blockSize))
+      return false;
+    replacementIndex = loop.getInductionVar();
+  }
+
+  SmallVector<polygeist::Pointer2MemrefOp> ptr2memrefs;
+  for (Operation *user :
+       llvm::make_early_inc_range(loadOp.getResult().getUsers()))
+    if (auto ptr2memref = dyn_cast<polygeist::Pointer2MemrefOp>(user))
+      ptr2memrefs.push_back(ptr2memref);
+
+  OpBuilder beforeLoop(loop);
+  Location loc = loadOp.getLoc();
+  SmallVector<Value> hoistedIndices(depIndices.begin(), depIndices.end());
+  hoistedIndices[varyingIndex] = createIndexConst(beforeLoop, loc, 0);
+  Value hoistedPtr = buildDepPtrLoad(beforeLoop, loc, depGep, hoistedIndices);
+
+  loadOp.replaceAllUsesWith(hoistedPtr);
+  for (auto ptr2memref : ptr2memrefs) {
+    if (!ptr2memref)
+      continue;
+    for (Operation *user :
+         llvm::make_early_inc_range(ptr2memref.getResult().getUsers()))
+      rewriteBlockedNeighborLocalIndices(user, loop, baseGlobalIndex,
+                                         blockSize, replacementIndex);
+  }
+
+  loadOp.erase();
+  if (depGep->use_empty())
+    depGep.erase();
+  return true;
+}
+
 static bool getSelectOperands(Value value, Value &cond, Value &trueValue,
                               Value &falseValue) {
   value = ValueAnalysis::stripNumericCasts(value);
@@ -1404,7 +1535,8 @@ void DataPtrHoistingPass::runOnOperation() {
   ARTS_INFO_HEADER(DataPtrHoistingPass);
 
   int hoistedCount = 0, divRemHoisted = 0, dbPtrHoisted = 0, m2rHoisted = 0,
-      cachedNeighborPtrLoads = 0, versionedWindowLoops = 0,
+      singleBlockDepViews = 0, cachedNeighborPtrLoads = 0,
+      versionedWindowLoops = 0,
       versionedWindowAccesses = 0;
   module.walk([&](func::FuncOp funcOp) {
     bool isEdt = funcOp.getName().starts_with("__arts_edt_");
@@ -1472,6 +1604,29 @@ void DataPtrHoistingPass::runOnOperation() {
           m2rHoisted++;
         }
       }
+    }
+
+    /// Recover single-owner blocked dep slices before generic memref hoisting.
+    /// When a worker loop already stays within one blocked acquire, the dep
+    /// index is invariant and the loop can reuse the local IV instead of
+    /// rebuilding dep_gep/div/rem per element.
+    SmallVector<std::pair<LLVM::LoadOp, scf::ForOp>> singleBlockDepLoads;
+    if (isEdt) {
+      funcOp.walk([&](LLVM::LoadOp loadOp) {
+        if (!isDepsPtrLoad(loadOp))
+          return;
+        auto loop = loadOp->getParentOfType<scf::ForOp>();
+        if (!loop)
+          return;
+        singleBlockDepLoads.push_back({loadOp, loop});
+      });
+    }
+
+    for (auto &[loadOp, loop] : singleBlockDepLoads) {
+      if (!loadOp || !loop)
+        continue;
+      if (materializeSingleBlockBlockedDepView(loadOp, loop))
+        singleBlockDepViews++;
     }
 
     /// Hoist loop-invariant pointer materializations after the dep/db load
@@ -1565,6 +1720,8 @@ void DataPtrHoistingPass::runOnOperation() {
   ARTS_INFO("Hoisted " << dbPtrHoisted
                        << " datablock pointer loads out of loops");
   ARTS_INFO("Hoisted " << m2rHoisted << " pointer2memref ops out of loops");
+  ARTS_INFO("Recovered " << singleBlockDepViews
+                         << " single-block dep views");
   ARTS_INFO("Hoisted " << divRemHoisted << " div/rem ops out of loops");
   ARTS_INFO("Cached " << cachedNeighborPtrLoads
                       << " loop-window dep pointer loads");
