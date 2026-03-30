@@ -28,6 +28,7 @@
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #define GEN_PASS_DEF_EDTLOWERING
 #include "arts/Dialect.h"
@@ -77,6 +78,9 @@ using AttrNames::Operation::ContinuationForEpoch;
 using AttrNames::Operation::CPSChainId;
 
 namespace {
+
+static constexpr int32_t kArtsDepFlagPreferDuplicate = 1 << 0;
+static constexpr int32_t kArtsDepFlagPreserveShape = 1 << 1;
 
 static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
                                   const AcquireRewriteContract &contract) {
@@ -135,7 +139,10 @@ static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
     dimElementOffsets.push_back(offsetRange[i]);
     dimElementSizes.push_back(sizeRange[i]);
     dimBlockSpans.push_back(elementSizes[ownerDim]);
-    dimTotalBlocks.push_back(outerSizes[ownerDim]);
+    /// DbAllocOp sizes are stored in owner-dimension order, not physical
+    /// memref-dimension order. For a k-owned 4-D array, sizes has one entry
+    /// (the k block count), so indexing it with ownerDim=3 is invalid.
+    dimTotalBlocks.push_back(outerSizes[i]);
   }
 
   SmallVector<Value, 4> offsets, sizes;
@@ -166,12 +173,10 @@ normalizeCommonElementSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   auto depOffsets = acquire.getOffsets();
   auto depSizes = acquire.getSizes();
   auto blockSpans = alloc.getElementSizes();
-  unsigned rank = std::min<unsigned>(
-      std::min<unsigned>(elemOffsets.size(), elemSizes.size()),
-      std::min<unsigned>(depOffsets.size(),
-                         std::min<unsigned>(depSizes.size(),
-                                            blockSpans.size())));
-  if (rank == 0)
+  unsigned ownerRank =
+      std::min<unsigned>(depOffsets.size(), depSizes.size());
+  unsigned physicalRank = blockSpans.size();
+  if (ownerRank == 0 || physicalRank == 0 || elemOffsets.size() != elemSizes.size())
     return std::nullopt;
 
   Location loc = acquire.getLoc();
@@ -179,12 +184,45 @@ normalizeCommonElementSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   Value one = AC->createIndexConstant(1, loc);
   Value trueI1 = AC->create<arith::ConstantIntOp>(loc, 1, 1);
 
+  AcquireRewriteContract contract = deriveAcquireRewriteContract(acquire);
+  LoweringContractInfo contractInfo;
+  contractInfo.ownerDims = contract.ownerDims;
+  SmallVector<unsigned, 4> ownerDims =
+      resolveContractOwnerDims(contractInfo, ownerRank);
+  if (ownerDims.size() != ownerRank)
+    return std::nullopt;
+
+  DenseMap<unsigned, unsigned> ownerSlotForDim;
+  for (unsigned ownerSlot = 0; ownerSlot < ownerDims.size(); ++ownerSlot) {
+    unsigned physicalDim = ownerDims[ownerSlot];
+    if (physicalDim >= physicalRank)
+      return std::nullopt;
+    ownerSlotForDim[physicalDim] = ownerSlot;
+  }
+
+  SmallVector<Value, 4> physicalElemOffsets;
+  SmallVector<Value, 4> physicalElemSizes;
+  if (elemOffsets.size() == physicalRank) {
+    physicalElemOffsets.assign(elemOffsets.begin(), elemOffsets.end());
+    physicalElemSizes.assign(elemSizes.begin(), elemSizes.end());
+  } else if (elemOffsets.size() == ownerRank) {
+    physicalElemOffsets.assign(physicalRank, zero);
+    physicalElemSizes.assign(blockSpans.begin(), blockSpans.end());
+    for (unsigned ownerSlot = 0; ownerSlot < ownerRank; ++ownerSlot) {
+      unsigned physicalDim = ownerDims[ownerSlot];
+      physicalElemOffsets[physicalDim] = elemOffsets[ownerSlot];
+      physicalElemSizes[physicalDim] = elemSizes[ownerSlot];
+    }
+  } else {
+    return std::nullopt;
+  }
+
   NormalizedElementSlice slice;
   slice.representable = trueI1;
   slice.contiguous = AC->create<arith::ConstantIntOp>(loc, 0, 1);
   slice.wholeBlock = trueI1;
-  slice.offsets.reserve(rank);
-  slice.sizes.reserve(rank);
+  slice.offsets.reserve(physicalRank);
+  slice.sizes.reserve(physicalRank);
 
   auto clampToBlock = [&](Value absolute, Value blockStart, Value blockSpan) {
     Value inRange = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
@@ -195,14 +233,18 @@ normalizeCommonElementSlice(ArtsCodegen *AC, DbAcquireOp acquire,
     return AC->create<arith::MinUIOp>(loc, nonNegative, blockSpan);
   };
 
-  for (unsigned i = 0; i < rank; ++i) {
-    Value globalStart = AC->castToIndex(elemOffsets[i], loc);
-    Value globalSize = AC->castToIndex(elemSizes[i], loc);
+  for (unsigned i = 0; i < physicalRank; ++i) {
+    Value globalStart = AC->castToIndex(physicalElemOffsets[i], loc);
+    Value globalSize = AC->castToIndex(physicalElemSizes[i], loc);
     Value globalEnd = AC->create<arith::AddIOp>(loc, globalStart, globalSize);
 
     Value blockSpan = AC->castToIndex(blockSpans[i], loc);
-    Value depOffset = AC->castToIndex(depOffsets[i], loc);
-    Value depBlockCount = AC->castToIndex(depSizes[i], loc);
+    Value depOffset = zero;
+    Value depBlockCount = one;
+    if (auto ownerIt = ownerSlotForDim.find(i); ownerIt != ownerSlotForDim.end()) {
+      depOffset = AC->castToIndex(depOffsets[ownerIt->second], loc);
+      depBlockCount = AC->castToIndex(depSizes[ownerIt->second], loc);
+    }
 
     Value blockStart = AC->create<arith::MulIOp>(loc, depOffset, blockSpan);
     Value localEncodedStart = AC->create<arith::CmpIOp>(
@@ -264,9 +306,9 @@ normalizeCommonElementSlice(ArtsCodegen *AC, DbAcquireOp acquire,
         AC->create<arith::AndIOp>(loc, slice.wholeBlock, dimWholeBlock);
   }
 
-  for (unsigned pivot = 0; pivot < rank; ++pivot) {
+  for (unsigned pivot = 0; pivot < physicalRank; ++pivot) {
     Value pivotContiguous = trueI1;
-    for (unsigned i = 0; i < rank; ++i) {
+    for (unsigned i = 0; i < physicalRank; ++i) {
       if (i < pivot) {
         Value fixedOne = AC->create<arith::CmpIOp>(
             loc, arith::CmpIPredicate::eq, slice.sizes[i], one);
@@ -304,6 +346,23 @@ static DepSourceInfo resolveDepSource(Value dep) {
   info.dbAcquire = dyn_cast_or_null<DbAcquireOp>(underlyingDb);
   info.depDbAcquire = dyn_cast_or_null<DepDbAcquireOp>(underlyingDb);
   return info;
+}
+
+static std::optional<SmallVector<int64_t, 4>>
+getStaticDbOuterShape(Value dbHandle) {
+  auto dbAlloc = dbHandle.getDefiningOp<DbAllocOp>();
+  if (!dbAlloc)
+    return std::nullopt;
+
+  SmallVector<int64_t, 4> shape;
+  shape.reserve(dbAlloc.getSizes().size());
+  for (Value size : dbAlloc.getSizes()) {
+    int64_t constantSize = 0;
+    if (!ValueAnalysis::getConstantIndex(size, constantSize))
+      return std::nullopt;
+    shape.push_back(constantSize);
+  }
+  return shape;
 }
 
 ///===----------------------------------------------------------------------===///
@@ -841,6 +900,10 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
           AC->create<LLVM::IntToPtrOp>(loc, AC->llvmPtr, packedI64);
       Value memrefVal = AC->create<polygeist::Pointer2MemrefOp>(
           loc, memrefTy, rawPtr);
+      /// Preserve compile-time outer layout on rehydrated handles so
+      /// downstream DB lowering can still recover source strides.
+      if (auto staticShape = getStaticDbOuterShape(dbHandle))
+        setDbStaticOuterShape(memrefVal.getDefiningOp(), *staticShape);
       valueMapping.map(dbHandle, memrefVal);
     }
   }
@@ -1081,10 +1144,15 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
                            allocForHint->hasAttr(
                                AttrNames::Operation::ReadOnlyAfterInit);
       if (duplicateSafe) {
-        depFlagBits = 1;
-        hasDepFlags = true;
+        depFlagBits |= kArtsDepFlagPreferDuplicate;
       }
     }
+    if (dbAcquireOp && !dbAcquireOp.getElementOffsets().empty() &&
+        dbMode == DbMode::read) {
+      depFlagBits |= kArtsDepFlagPreserveShape;
+    }
+    if (depFlagBits != 0)
+      hasDepFlags = true;
     depFlags.push_back(depFlagBits);
   }
 

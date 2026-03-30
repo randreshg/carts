@@ -66,6 +66,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cstdlib>
 #include <cstdint>
@@ -91,6 +92,19 @@ using namespace mlir::polygeist;
 using namespace mlir::arts;
 
 namespace {
+
+static bool dbPartitionTraceEnabled() {
+  return std::getenv("CARTS_TRACE_DB_PARTITION") != nullptr;
+}
+
+template <typename... Args>
+static void dbPartitionTrace(Args &&...args) {
+  if (!dbPartitionTraceEnabled())
+    return;
+  llvm::errs() << "[db_partition_trace] ";
+  (llvm::errs() << ... << std::forward<Args>(args));
+  llvm::errs() << "\n";
+}
 
 static bool
 hasExplicitStencilContract(const DbAnalysis::AcquireContractSummary *summary) {
@@ -520,8 +534,11 @@ computeAcquirePartitionInfo(DbAnalysis &dbAnalysis, DbAcquireNode *acqNode,
                                      : partitionSummary.hasDistributionContract;
   info.preservesDepMode = static_cast<bool>(acquire.getPreserveAccessMode());
 
-  if (summary && summary->contract.supportsBlockHalo() &&
-      !summary->contract.ownerDims.empty()) {
+  /// ownerDims describe which physical memref dims participate in the layout.
+  /// They must remain authoritative even when the acquire does not opt into
+  /// halo transport, otherwise non-leading stencil contracts collapse back to
+  /// implicit leading-dim plans during block-plan resolution.
+  if (summary && !summary->contract.ownerDims.empty()) {
     unsigned contractRank = 0;
     for (int64_t dim : summary->contract.ownerDims) {
       if (dim >= 0)
@@ -618,7 +635,8 @@ static void resetCoarseAcquireRanges(DbAllocOp allocOp, DbAllocNode *allocNode,
 /// information from scattered attributes.
 ///
 /// This reads any existing contract, merges in the resolved blockShape,
-/// ownerDims, and distributionVersion, then upserts the updated contract.
+/// ownerDims, and post-DB refinement marker, then upserts the updated
+/// contract.
 /// Returns true if a contract was updated.
 static bool
 feedbackPartitionDecisionToContract(DbAllocOp newAllocOp,
@@ -657,11 +675,6 @@ feedbackPartitionDecisionToContract(DbAllocOp newAllocOp,
       info.ownerDims.push_back(static_cast<int64_t>(dim));
   }
 
-  /// Bump distributionVersion so downstream passes can detect that the
-  /// contract was enriched by the partitioning heuristic.
-  int64_t currentVersion = info.distributionVersion.value_or(0);
-  info.distributionVersion = currentVersion + 1;
-
   /// Mark as post-DB refined so consumers can distinguish contracts that
   /// survived partitioning from pre-partitioning seeds.
   info.postDbRefined = true;
@@ -681,8 +694,7 @@ feedbackPartitionDecisionToContract(DbAllocOp newAllocOp,
 
   ARTS_DEBUG("  EXT-PART-5: fed back partition decision to contract"
              << " (blockShape=" << blockSizes.size()
-             << ", ownerDims=" << partitionedDims.size()
-             << ", version=" << (currentVersion + 1) << ")");
+             << ", ownerDims=" << partitionedDims.size() << ")");
   return true;
 }
 
@@ -1353,6 +1365,16 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   Location loc = allocOp.getLoc();
   builder.setInsertionPoint(allocOp);
 
+  if (DbUtils::hasNonPartitionableHostViewUses(allocOp.getPtr())) {
+    ARTS_DEBUG("  Host-side opaque/full-view users require coarse layout");
+    resetCoarseAcquireRanges(allocOp, allocNode, builder);
+    heuristics.recordDecision(
+        "Partition-UnsafeHostView", false,
+        "host-side opaque/full-view uses require coarse allocation",
+        allocOp.getOperation(), {});
+    return allocOp;
+  }
+
   SmallVector<DbAcquireNode *, 16> allocAcquireNodes =
       allocNode ? allocNode->collectAllAcquireNodes()
                 : SmallVector<DbAcquireNode *, 16>{};
@@ -1549,6 +1571,17 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
   /// Step 4: Initial heuristics arbitration.
   PartitioningDecision decision = heuristics.choosePartitioning(ctx);
+  dbPartitionTrace("alloc=", getArtsId(allocOp.getOperation()),
+                   " patterns(uniform=", ctx.accessPatterns.hasUniform,
+                   ", stencil=", ctx.accessPatterns.hasStencil,
+                   ", indexed=", ctx.accessPatterns.hasIndexed,
+                   ") canBlock=", ctx.canBlock,
+                   " canEW=", ctx.canElementWise,
+                   " hasDirect=", ctx.hasDirectAccess,
+                   " hasIndirect=", ctx.hasIndirectAccess,
+                   " accessMode=", static_cast<int>(ctx.accessMode),
+                   " decision=", getPartitionModeName(decision.mode),
+                   " rationale=", decision.rationale);
 
   if (auto forcedAllocId = getForcedCoarseAllocId();
       forcedAllocId && getArtsId(allocOp.getOperation()) == *forcedAllocId) {
@@ -1900,9 +1933,13 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
                              ? contractSummary->hasBlockHints()
                              : (!acquire.getPartitionOffsets().empty() ||
                                 !acquire.getPartitionSizes().empty());
-    bool inferredBlock = contractSummary ? contractSummary->inferredBlock()
-                                         : (!acqInfo.partitionOffsets.empty() &&
-                                            !acqInfo.partitionSizes.empty());
+    /// Preserve graph-recovered block structure even when a contract summary
+    /// exists but does not carry an explicit inferredBlock bit. Coarse shell
+    /// acquires lowered by distribution often recover their true block window
+    /// only through computeAcquirePartitionInfo()/computeBlockInfo().
+    bool inferredBlock =
+        (contractSummary && contractSummary->inferredBlock()) ||
+        (!acqInfo.partitionOffsets.empty() && !acqInfo.partitionSizes.empty());
     if (auto blockHint = getPartitioningHint(acquire.getOperation())) {
       if (blockHint->mode == PartitionMode::block && blockHint->blockSize &&
           *blockHint->blockSize > 0) {
@@ -2127,6 +2164,20 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
                << ", canEW=" << info.canElementWise
                << ", canBlock=" << info.canBlock << ", acquireAttr="
                << (acquireMode ? static_cast<int>(*acquireMode) : -1));
+    dbPartitionTrace("alloc=", getArtsId(allocOp.getOperation()),
+                     " acquire=", getArtsId(acquire.getOperation()),
+                     " accessMode=", static_cast<int>(info.accessMode),
+                     " accessPattern=", static_cast<int>(info.accessPattern),
+                     " depPattern=", static_cast<int>(info.depPattern),
+                     " canBlock=", info.canBlock,
+                     " canEW=", info.canElementWise,
+                     " hasDirect=", contractSummary
+                                        ? contractSummary->hasDirectAccess()
+                                        : false,
+                     " hasIndirect=", hasIndirect,
+                     " inferredOffsets=", acqInfo.partitionOffsets.size(),
+                     " inferredSizes=", acqInfo.partitionSizes.size(),
+                     " needsFullRange=", acqInfo.needsFullRange);
     ++idx;
   }
 

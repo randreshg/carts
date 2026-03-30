@@ -16,6 +16,7 @@
 #define ARTS_TRANSFORMS_DATABLOCK_DBREWRITER_H
 
 #include "arts/Dialect.h"
+#include "arts/analysis/graphs/db/DbAccessPattern.h"
 #include "arts/transforms/db/DbIndexerBase.h"
 #include "arts/utils/Utils.h"
 #include "mlir/IR/Builders.h"
@@ -76,6 +77,11 @@ struct DbRewriteAcquire {
   PartitionInfo partitionInfo;
   bool isFullRange = false;
   bool skipRebase = false;
+  /// Optional graph-backed halo fact for block fallback on stencil-shaped
+  /// reads. This avoids depending on persisted lowering contracts when the
+  /// controller already proved the precise halo window.
+  std::optional<StencilBounds> graphStencilBounds;
+  std::optional<unsigned> graphStencilOwnerDim;
 
   /// Accessors for partition data (mode-aware)
   ArrayRef<Value> getIndices() const { return partitionInfo.indices; }

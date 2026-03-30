@@ -8,6 +8,8 @@
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "llvm/ADT/DenseSet.h"
 #include <algorithm>
 
 using namespace mlir;
@@ -129,6 +131,58 @@ void classifyEdtArgAccesses(EdtOp edt, SmallVectorImpl<bool> &reads,
       markRead(affineLoad.getMemRef());
     else if (auto affineStore = dyn_cast<affine::AffineStoreOp>(nested))
       markWrite(affineStore.getMemRef());
+  });
+}
+
+namespace {
+static bool isCloneSafeStoreOperand(Value value, Value memref,
+                                    llvm::DenseSet<Operation *> &visited) {
+  if (!value || value == memref)
+    return true;
+
+  if (isa<BlockArgument>(value))
+    return true;
+
+  Operation *defOp = value.getDefiningOp();
+  if (!defOp)
+    return true;
+
+  if (defOp->hasTrait<OpTrait::ConstantLike>())
+    return true;
+
+  if (defOp->getNumRegions() != 0)
+    return false;
+
+  bool hasSideEffects = false;
+  if (auto memEffects = dyn_cast<MemoryEffectOpInterface>(defOp)) {
+    hasSideEffects = memEffects.hasEffect<MemoryEffects::Write>() ||
+                     memEffects.hasEffect<MemoryEffects::Allocate>() ||
+                     memEffects.hasEffect<MemoryEffects::Free>();
+  } else {
+    hasSideEffects = !isMemoryEffectFree(defOp);
+  }
+  if (hasSideEffects)
+    return false;
+
+  if (!visited.insert(defOp).second)
+    return true;
+
+  return llvm::all_of(defOp->getOperands(), [&](Value operand) {
+    return isCloneSafeStoreOperand(operand, memref, visited);
+  });
+}
+} // namespace
+
+bool canCloneAllocaInitStore(memref::StoreOp store, Value memref) {
+  if (!store || store.getMemRef() != memref)
+    return false;
+
+  llvm::DenseSet<Operation *> visited;
+  if (!isCloneSafeStoreOperand(store.getValue(), memref, visited))
+    return false;
+
+  return llvm::all_of(store.getIndices(), [&](Value index) {
+    return isCloneSafeStoreOperand(index, memref, visited);
   });
 }
 

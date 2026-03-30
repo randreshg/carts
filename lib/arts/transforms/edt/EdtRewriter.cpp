@@ -10,18 +10,452 @@
 ///      db_acquire -> partitioning(<block>), worker offsets/sizes
 ///   3. Stencil extension (when enabled):
 ///      expand worker offsets/sizes with halo-aware [start-1, end+1] clamping
-///   4. 2D owner hints:
-///      append extra partition dimensions to partition_offsets/sizes only
+///   4. N-D owner hints:
+///      carry worker-local partition windows in partition_offsets/sizes and
+///      materialize full-rank element_offsets/element_sizes from the semantic
+///      contract when runtime slice dependencies are profitable
 ///==========================================================================///
 
 #include "arts/transforms/edt/EdtRewriter.h"
+#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/DbUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include <algorithm>
 
 using namespace mlir;
 using namespace mlir::arts;
+
+namespace {
+
+struct TaskAcquireWindow {
+  Value elementOffset;
+  Value elementSize;
+  Value dbOffset;
+  Value dbSize;
+};
+
+static DbAllocOp resolveTaskRootAlloc(Value rootGuid, Value rootPtr,
+                                      DbAcquireOp parentAcquire) {
+  if (auto allocFromGuid = rootGuid.getDefiningOp<DbAllocOp>())
+    return allocFromGuid;
+  if (Operation *allocOp = DbUtils::getUnderlyingDbAlloc(rootPtr))
+    return dyn_cast<DbAllocOp>(allocOp);
+  if (parentAcquire)
+    if (Operation *allocOp =
+            DbUtils::getUnderlyingDbAlloc(parentAcquire.getPtr()))
+      return dyn_cast<DbAllocOp>(allocOp);
+  return nullptr;
+}
+
+static std::optional<TaskAcquireWindow>
+computeTaskAcquireWindow(TaskAcquireSlicePlanInput input) {
+  if (!input.AC || !input.parentAcquire || !input.taskAcquire)
+    return std::nullopt;
+
+  PartitionMode mode =
+      input.taskAcquire.getPartitionMode().value_or(PartitionMode::coarse);
+  if (mode != PartitionMode::block && mode != PartitionMode::stencil)
+    return std::nullopt;
+
+  Value one = input.AC->createIndexConstant(1, input.loc);
+  Value zero = input.AC->createIndexConstant(0, input.loc);
+  Value blockSpan = one;
+  Value totalBlocks;
+  DbAllocOp rootAlloc =
+      resolveTaskRootAlloc(input.rootGuid, input.rootPtr, input.parentAcquire);
+
+  if (rootAlloc) {
+    auto elementSizes = rootAlloc.getElementSizes();
+    if (!elementSizes.empty() && elementSizes.front())
+      blockSpan = input.AC->castToIndex(elementSizes.front(), input.loc);
+    auto outerSizes = rootAlloc.getSizes();
+    if (!outerSizes.empty() && outerSizes.front())
+      totalBlocks = input.AC->castToIndex(outerSizes.front(), input.loc);
+  }
+  blockSpan = input.AC->create<arith::MaxUIOp>(input.loc, blockSpan, one);
+
+  /// This helper intentionally reasons in leading-dimension block space only.
+  /// It converts the already chosen task-local element window into the single
+  /// block window used by DB slice metadata on 1-D / row-owned plans.
+  Value elementOffset = input.plannedElementOffset;
+  Value elementSize = input.plannedElementSizeSeed;
+  const bool useRewrittenWindow =
+      input.rewriteContract.usePartitionSliceAsDepWindow;
+  const bool useTaskDepWindow =
+      input.usesStencilHalo || input.rewriteContract.applyStencilHalo;
+
+  if (useRewrittenWindow || useTaskDepWindow) {
+    auto offsetRange = useRewrittenWindow
+                           ? input.taskAcquire.getPartitionOffsets()
+                           : input.taskAcquire.getOffsets();
+    auto sizeRange = useRewrittenWindow
+                         ? input.taskAcquire.getPartitionSizes()
+                         : input.taskAcquire.getSizes();
+
+    if (!offsetRange.empty() && offsetRange.front())
+      elementOffset = offsetRange.front();
+
+    if (!sizeRange.empty() && sizeRange.front())
+      elementSize = sizeRange.front();
+  } else {
+    if (!input.taskAcquire.getSizes().empty() &&
+        input.taskAcquire.getSizes().front())
+      elementSize = input.taskAcquire.getSizes().front();
+
+    if (input.distributionKind == DistributionKind::TwoLevel &&
+        input.parentAcquire.getMode() != ArtsMode::in)
+      elementSize = input.plannedElementSize;
+
+    bool isStencilPattern = input.distributionPattern &&
+                            *input.distributionPattern ==
+                                EdtDistributionPattern::stencil;
+    if (isStencilPattern && mode == PartitionMode::stencil &&
+        input.parentAcquire.getMode() != ArtsMode::in)
+      elementSize = input.AC->create<arith::AddIOp>(input.loc, elementSize,
+                                                    one);
+  }
+
+  elementOffset = input.AC->castToIndex(elementOffset, input.loc);
+  elementSize = input.AC->castToIndex(elementSize, input.loc);
+  elementSize = input.AC->create<arith::MaxUIOp>(input.loc, elementSize, one);
+
+  Value startBlock =
+      input.AC->create<arith::DivUIOp>(input.loc, elementOffset, blockSpan);
+  Value endElem = input.AC->create<arith::AddIOp>(input.loc, elementOffset,
+                                                  elementSize);
+  endElem = input.AC->create<arith::SubIOp>(input.loc, endElem, one);
+  Value endBlock =
+      input.AC->create<arith::DivUIOp>(input.loc, endElem, blockSpan);
+
+  Value startAboveMax;
+  if (totalBlocks) {
+    Value maxBlock = input.AC->create<arith::SubIOp>(input.loc, totalBlocks,
+                                                     one);
+    startAboveMax = input.AC->create<arith::CmpIOp>(
+        input.loc, arith::CmpIPredicate::ugt, startBlock, maxBlock);
+    Value clampedEnd =
+        input.AC->create<arith::MinUIOp>(input.loc, endBlock, maxBlock);
+    endBlock = input.AC->create<arith::SelectOp>(input.loc, startAboveMax,
+                                                 endBlock, clampedEnd);
+  }
+
+  Value blockCount =
+      input.AC->create<arith::SubIOp>(input.loc, endBlock, startBlock);
+  blockCount = input.AC->create<arith::AddIOp>(input.loc, blockCount, one);
+  if (startAboveMax) {
+    startBlock = input.AC->create<arith::SelectOp>(input.loc, startAboveMax,
+                                                   zero, startBlock);
+    blockCount = input.AC->create<arith::SelectOp>(input.loc, startAboveMax,
+                                                   zero, blockCount);
+  }
+
+  return TaskAcquireWindow{elementOffset, elementSize, startBlock, blockCount};
+}
+
+struct TaskElementSlice {
+  SmallVector<Value, 4> offsets;
+  SmallVector<Value, 4> sizes;
+};
+
+static bool shouldMaterializeTaskElementSlice(TaskAcquireSlicePlanInput input) {
+  if (!input.AC || !input.parentAcquire || !input.taskAcquire)
+    return false;
+
+  PartitionMode mode =
+      input.taskAcquire.getPartitionMode().value_or(PartitionMode::coarse);
+  if (mode != PartitionMode::block && mode != PartitionMode::stencil)
+    return false;
+
+  if (input.usesStencilHalo)
+    return input.parentAcquire.getMode() == ArtsMode::in;
+
+  if (input.rewriteContract.usePartitionSliceAsDepWindow) {
+    /// A single element_offsets/element_sizes pair is only sound when the
+    /// entire acquire lowers to one slice shape. Writer-capable stencil
+    /// windows expand into multiple DB slots whose predecessor/successor face
+    /// slices differ per slot, so their ESD byte ranges must be reconstructed
+    /// later from the semantic contract during record-dep lowering.
+    return input.parentAcquire.getMode() == ArtsMode::in;
+  }
+
+  return input.parentAcquire.getMode() == ArtsMode::in &&
+         !input.rewriteContract.preserveParentDepRange;
+}
+
+static std::optional<TaskElementSlice>
+computeTaskElementSlice(TaskAcquireSlicePlanInput input) {
+  if (!shouldMaterializeTaskElementSlice(input))
+    return std::nullopt;
+
+  DbAllocOp rootAlloc =
+      resolveTaskRootAlloc(input.rootGuid, input.rootPtr, input.parentAcquire);
+  SmallVector<Value, 4> blockExtents;
+  std::optional<LoweringContractInfo> taskContract =
+      getLoweringContract(input.taskAcquire.getPtr());
+  if (taskContract) {
+    if (auto staticShape = taskContract->getStaticBlockShape()) {
+      for (int64_t dim : *staticShape)
+        blockExtents.push_back(input.AC->createIndexConstant(dim, input.loc));
+    } else if (!taskContract->blockShape.empty()) {
+      blockExtents.assign(taskContract->blockShape.begin(),
+                          taskContract->blockShape.end());
+    }
+  }
+  if (blockExtents.empty())
+    if (auto staticShape = getStencilBlockShape(input.taskAcquire.getOperation()))
+      for (int64_t dim : *staticShape)
+        blockExtents.push_back(input.AC->createIndexConstant(dim, input.loc));
+  if (blockExtents.empty() && rootAlloc)
+    blockExtents.assign(rootAlloc.getElementSizes().begin(),
+                        rootAlloc.getElementSizes().end());
+  if (blockExtents.empty())
+    return std::nullopt;
+
+  auto elementOffsets = input.taskAcquire.getPartitionOffsets();
+  auto elementSizes = input.taskAcquire.getPartitionSizes();
+  unsigned explicitRank =
+      std::min<unsigned>(elementOffsets.size(), elementSizes.size());
+  if (explicitRank == 0)
+    return std::nullopt;
+
+  LoweringContractInfo contractInfo;
+  if (taskContract && !taskContract->ownerDims.empty())
+    contractInfo.ownerDims = taskContract->ownerDims;
+  else
+    contractInfo.ownerDims = input.rewriteContract.ownerDims;
+  SmallVector<unsigned, 4> explicitDims =
+      resolveContractOwnerDims(contractInfo, explicitRank);
+  if (explicitDims.size() != explicitRank)
+    return std::nullopt;
+
+  Value zero = input.AC->createIndexConstant(0, input.loc);
+  TaskElementSlice slice;
+  slice.offsets.reserve(blockExtents.size());
+  slice.sizes.reserve(blockExtents.size());
+  for (Value extent : blockExtents) {
+    slice.offsets.push_back(zero);
+    slice.sizes.push_back(input.AC->castToIndex(extent, input.loc));
+  }
+
+  for (unsigned i = 0; i < explicitRank; ++i) {
+    unsigned dim = explicitDims[i];
+    if (dim >= blockExtents.size())
+      return std::nullopt;
+    slice.offsets[dim] = input.AC->castToIndex(elementOffsets[i], input.loc);
+    slice.sizes[dim] = input.AC->castToIndex(elementSizes[i], input.loc);
+  }
+
+  return slice;
+}
+
+} // namespace
+
+TaskAcquireRewritePlan
+mlir::arts::planTaskAcquireRewrite(TaskAcquireRewritePlanInput input) {
+  auto makePlan = [&]() {
+    return TaskAcquireRewritePlan{
+        AcquireRewriteInput{input.AC, input.loc, input.parentAcquire,
+                            input.rootGuid, input.rootPtr, input.acquireOffset,
+                            input.acquireSize, input.acquireHintSize,
+                            /*extraOffsets=*/SmallVector<Value, 4>{},
+                            /*extraSizes=*/SmallVector<Value, 4>{},
+                            /*extraHintSizes=*/SmallVector<Value, 4>{},
+                            /*dimensionExtents=*/SmallVector<Value, 4>{},
+                            /*haloMinOffsets=*/SmallVector<int64_t, 4>{},
+                            /*haloMaxOffsets=*/SmallVector<int64_t, 4>{},
+                            input.step, input.stepIsUnit,
+                            /*singleElement=*/false,
+                            /*forceCoarse=*/
+                            input.forceCoarseRewrite ||
+                                input.distributionKind ==
+                                    DistributionKind::BlockCyclic,
+                            /*preserveParentDepRange=*/false,
+                            /*stencilExtent=*/Value()},
+        /*useStencilRewriter=*/false,
+        /*refinedTaskBlockShape=*/std::nullopt};
+  };
+
+  if (!input.AC || !input.parentAcquire)
+    return makePlan();
+
+  Value zero = input.AC->createIndexConstant(0, input.loc);
+  Value one = input.AC->createIndexConstant(1, input.loc);
+  TaskAcquireRewritePlan plan{makePlan()};
+
+  bool isSingleElement = false;
+  bool forceCoarseRewrite = plan.rewriteInput.forceCoarse;
+  Value stencilExtent;
+  SmallVector<Value, 4> extraOffsets;
+  SmallVector<Value, 4> extraSizes;
+  SmallVector<Value, 4> extraHintSizes;
+  SmallVector<Value, 4> dimensionExtents;
+  AcquireRewriteContract rewriteContract = input.rewriteContract;
+
+  if (Operation *rootAllocOp = DbUtils::getUnderlyingDbAlloc(input.rootPtr)) {
+    if (auto dbAlloc = dyn_cast<DbAllocOp>(rootAllocOp)) {
+      auto elemSizes = dbAlloc.getElementSizes();
+      if (!elemSizes.empty()) {
+        std::optional<int64_t> totalElemCount = int64_t{1};
+        for (Value dim : elemSizes) {
+          auto dimConst = ValueAnalysis::tryFoldConstantIndex(dim);
+          if (!dimConst || *dimConst < 0) {
+            totalElemCount = std::nullopt;
+            break;
+          }
+          *totalElemCount *= *dimConst;
+        }
+
+        isSingleElement = llvm::all_of(elemSizes, [](Value value) {
+          int64_t constant = 0;
+          return ValueAnalysis::getConstantIndex(value, constant) &&
+                 constant == 1;
+        });
+
+        /// Keep tiny read-only stencil coefficient tables coarse.
+        /// Rewriting these to block slices per task can shift coefficient
+        /// indexing and introduce thread-count-dependent numerics.
+        if (input.parentAcquire.getMode() == ArtsMode::in) {
+          auto allocPattern = getDbAccessPattern(dbAlloc.getOperation());
+          bool tinyReadOnlyStencil =
+              allocPattern && *allocPattern == DbAccessPattern::stencil &&
+              totalElemCount && *totalElemCount > 0 && *totalElemCount <= 8;
+          if (tinyReadOnlyStencil)
+            forceCoarseRewrite = true;
+        }
+
+        unsigned primaryOwnerDim = 0;
+        if (!rewriteContract.ownerDims.empty() &&
+            rewriteContract.ownerDims.front() >= 0 &&
+            static_cast<size_t>(rewriteContract.ownerDims.front()) <
+                elemSizes.size()) {
+          primaryOwnerDim =
+              static_cast<unsigned>(rewriteContract.ownerDims.front());
+        }
+
+        Value primaryExtent =
+            input.AC->castToIndex(elemSizes[primaryOwnerDim], input.loc);
+        if (rewriteContract.applyStencilHalo)
+          stencilExtent = primaryExtent;
+        dimensionExtents.push_back(primaryExtent);
+
+        if (input.distributionKind == DistributionKind::Tiling2D &&
+            elemSizes.size() > 1 && !isSingleElement && input.tiling2DGrid &&
+            input.tiling2DGrid->colWorkers) {
+          Value colWorkers =
+              input.AC->castToIndex(input.tiling2DGrid->colWorkers, input.loc);
+          auto colWorkersConst =
+              ValueAnalysis::tryFoldConstantIndex(colWorkers);
+          if (!colWorkersConst || *colWorkersConst > 1) {
+            unsigned secondaryOwnerDim = 1;
+            if (rewriteContract.ownerDims.size() > 1 &&
+                rewriteContract.ownerDims[1] >= 0 &&
+                static_cast<size_t>(rewriteContract.ownerDims[1]) <
+                    elemSizes.size()) {
+              secondaryOwnerDim =
+                  static_cast<unsigned>(rewriteContract.ownerDims[1]);
+            }
+
+            Value totalCols =
+                input.AC->castToIndex(elemSizes[secondaryOwnerDim], input.loc);
+            Value colWorkerId = input.AC->castToIndex(
+                input.tiling2DGrid->colWorkerId, input.loc);
+
+            Value colWorkersMinusOne =
+                input.AC->create<arith::SubIOp>(input.loc, colWorkers, one);
+            Value colAdjusted = input.AC->create<arith::AddIOp>(
+                input.loc, totalCols, colWorkersMinusOne);
+            Value colChunk = input.AC->create<arith::DivUIOp>(
+                input.loc, colAdjusted, colWorkers);
+            Value colOffset = input.AC->create<arith::MulIOp>(
+                input.loc, colWorkerId, colChunk);
+
+            Value colNeedZero = input.AC->create<arith::CmpIOp>(
+                input.loc, arith::CmpIPredicate::uge, colOffset, totalCols);
+            Value colRemaining = input.AC->create<arith::SubIOp>(
+                input.loc, totalCols, colOffset);
+            Value colRemainingNonNeg = input.AC->create<arith::SelectOp>(
+                input.loc, colNeedZero, zero, colRemaining);
+            Value colCount = input.AC->create<arith::MinUIOp>(
+                input.loc, colChunk, colRemainingNonNeg);
+
+            extraOffsets.push_back(colOffset);
+            extraSizes.push_back(colCount);
+            extraHintSizes.push_back(colCount);
+            dimensionExtents.push_back(totalCols);
+            rewriteContract.preserveParentDepRange = false;
+
+            auto rowWorkersConst = input.tiling2DGrid->rowWorkers
+                                       ? ValueAnalysis::tryFoldConstantIndex(
+                                             input.AC->castToIndex(
+                                                 input.tiling2DGrid->rowWorkers,
+                                                 input.loc))
+                                       : std::nullopt;
+            SmallVector<int64_t, 4> staticTaskBlockShape;
+            bool refinedShape = false;
+            if (auto inheritedShape = getStencilBlockShape(
+                    input.parentAcquire.getOperation())) {
+              staticTaskBlockShape.assign(inheritedShape->begin(),
+                                          inheritedShape->end());
+            } else if (auto contract = getLoweringContract(
+                           input.parentAcquire.getPtr())) {
+              if (auto inheritedShape = contract->getStaticBlockShape())
+                staticTaskBlockShape.assign(inheritedShape->begin(),
+                                            inheritedShape->end());
+            }
+
+            if (rowWorkersConst && *rowWorkersConst > 1 &&
+                !staticTaskBlockShape.empty() &&
+                primaryOwnerDim < elemSizes.size()) {
+              if (auto totalRowsConst = ValueAnalysis::tryFoldConstantIndex(
+                      elemSizes[primaryOwnerDim]);
+                  totalRowsConst && *totalRowsConst > 0) {
+                int64_t rowChunk =
+                    (*totalRowsConst + *rowWorkersConst - 1) /
+                    *rowWorkersConst;
+                staticTaskBlockShape[0] = std::max<int64_t>(1, rowChunk);
+                refinedShape = true;
+              }
+            }
+
+            if (colWorkersConst && *colWorkersConst > 1 &&
+                staticTaskBlockShape.size() >= 2 &&
+                secondaryOwnerDim < elemSizes.size()) {
+              if (auto totalColsConst = ValueAnalysis::tryFoldConstantIndex(
+                      elemSizes[secondaryOwnerDim]);
+                  totalColsConst && *totalColsConst > 0) {
+                int64_t colChunk =
+                    (*totalColsConst + *colWorkersConst - 1) /
+                    *colWorkersConst;
+                staticTaskBlockShape[1] = std::max<int64_t>(1, colChunk);
+                refinedShape = true;
+              }
+            }
+
+            if (refinedShape)
+              plan.refinedTaskBlockShape = staticTaskBlockShape;
+          }
+        }
+      }
+    }
+  }
+
+  plan.useStencilRewriter = rewriteContract.applyStencilHalo;
+  plan.rewriteInput.singleElement = isSingleElement;
+  plan.rewriteInput.forceCoarse = forceCoarseRewrite;
+  plan.rewriteInput.preserveParentDepRange =
+      rewriteContract.preserveParentDepRange;
+  plan.rewriteInput.stencilExtent = stencilExtent;
+  plan.rewriteInput.extraOffsets = std::move(extraOffsets);
+  plan.rewriteInput.extraSizes = std::move(extraSizes);
+  plan.rewriteInput.extraHintSizes = std::move(extraHintSizes);
+  plan.rewriteInput.dimensionExtents = std::move(dimensionExtents);
+  plan.rewriteInput.haloMinOffsets = std::move(rewriteContract.haloMinOffsets);
+  plan.rewriteInput.haloMaxOffsets = std::move(rewriteContract.haloMaxOffsets);
+  return plan;
+}
 
 DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
                                        bool applyStencilHalo) {
@@ -143,8 +577,9 @@ DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
                                         workerHintSizes.end());
 
   /// Keep dependency slices in element space at this stage, but only along the
-  /// already-materialized DB-space rank. Extra N-D ownership stays in
-  /// partition_* hints until DbPartitioning rewrites the allocation shape.
+  /// already-materialized DB-space rank. The full-rank element slice is
+  /// materialized later from the task-local contract so all strategies share
+  /// one N-D slice construction path before runtime lowering.
   SmallVector<Value> dependencyOffsets = {workerOffsets.front()};
   SmallVector<Value> dependencySizes = {workerHintSizes.front()};
 
@@ -172,7 +607,10 @@ DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
       /*sizes=*/dependencySizes,
       /*partition_indices=*/SmallVector<Value>{},
       /*partition_offsets=*/partitionOffsets,
-      /*partition_sizes=*/partitionHintSizes);
+      /*partition_sizes=*/partitionHintSizes,
+      /*bounds_valid=*/in.parentAcquire.getBoundsValid(),
+      /*element_offsets=*/SmallVector<Value>{},
+      /*element_sizes=*/SmallVector<Value>{});
   transferContract(in.parentAcquire.getOperation(), blockAcquire.getOperation(),
                    in.parentAcquire.getPtr(), blockAcquire.getPtr(),
                    in.AC->getBuilder(), in.loc);
@@ -181,4 +619,139 @@ DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
   if (in.parentAcquire.getPreserveDepEdge())
     blockAcquire.setPreserveDepEdge();
   return blockAcquire;
+}
+
+void mlir::arts::applyTaskAcquireSlicePlan(TaskAcquireSlicePlanInput input) {
+  if (!input.AC || !input.taskAcquire)
+    return;
+
+  bool shouldUseStencilWindow =
+      input.usesStencilHalo || input.rewriteContract.usePartitionSliceAsDepWindow;
+  bool shouldMaterializeElementSlice =
+      shouldMaterializeTaskElementSlice(input);
+  bool shouldUpdateBlockWindow = true;
+
+  /// Read-only acquires already get their task-local window from
+  /// rewriteAcquire(). This helper primarily updates DB-space slice metadata
+  /// for write-capable acquires, but may also synthesize missing partition
+  /// metadata for block/stencil read acquires to avoid conservative widening
+  /// back to full-range later.
+  if (input.parentAcquire.getMode() == ArtsMode::in && !shouldUseStencilWindow) {
+    PartitionMode mode =
+        input.taskAcquire.getPartitionMode().value_or(PartitionMode::coarse);
+    bool needsPartitionMetadata =
+        (mode == PartitionMode::block || mode == PartitionMode::stencil) &&
+        (input.taskAcquire.getPartitionOffsets().empty() ||
+         input.taskAcquire.getPartitionSizes().empty());
+    shouldUpdateBlockWindow = needsPartitionMetadata;
+  }
+  if (input.parentAcquire.getMode() != ArtsMode::in &&
+      (input.taskAcquire.getOffsets().size() > 1 ||
+       input.taskAcquire.getPartitionOffsets().size() > 1)) {
+    shouldUpdateBlockWindow = false;
+  }
+  if (!shouldUpdateBlockWindow && !shouldMaterializeElementSlice)
+    return;
+
+  OpBuilder::InsertionGuard guard(input.AC->getBuilder());
+  input.AC->setInsertionPoint(input.taskAcquire);
+
+  if (shouldUpdateBlockWindow) {
+    auto window = computeTaskAcquireWindow(input);
+    if (!window)
+      return;
+
+    /// Keep partition hint ranges worker-local for two-level write acquires.
+    /// DbPartitioning consults partition_* hints; if these remain node-wide
+    /// while offsets/sizes are worker-local, later rewrites may widen the
+    /// write slice back to node scope.
+    if (input.distributionKind == DistributionKind::TwoLevel &&
+        input.parentAcquire.getMode() != ArtsMode::in) {
+      if (!input.taskAcquire.getPartitionOffsets().empty())
+        input.taskAcquire.getPartitionOffsetsMutable().assign(
+            SmallVector<Value>{window->elementOffset});
+      if (!input.taskAcquire.getPartitionSizes().empty())
+        input.taskAcquire.getPartitionSizesMutable().assign(
+            SmallVector<Value>{window->elementSize});
+    }
+    if (input.parentAcquire.getMode() == ArtsMode::in) {
+      if (input.taskAcquire.getPartitionOffsets().empty())
+        input.taskAcquire.getPartitionOffsetsMutable().assign(
+            SmallVector<Value>{window->elementOffset});
+      if (input.taskAcquire.getPartitionSizes().empty())
+        input.taskAcquire.getPartitionSizesMutable().assign(
+            SmallVector<Value>{window->elementSize});
+    }
+    input.taskAcquire.getOffsetsMutable().assign(
+        SmallVector<Value>{window->dbOffset});
+    input.taskAcquire.getSizesMutable().assign(
+        SmallVector<Value>{window->dbSize});
+  }
+
+  if (shouldMaterializeElementSlice)
+    if (auto slice = computeTaskElementSlice(input)) {
+      input.taskAcquire.getElementOffsetsMutable().assign(slice->offsets);
+      input.taskAcquire.getElementSizesMutable().assign(slice->sizes);
+    }
+}
+
+void mlir::arts::applyTaskAcquireContractMetadata(
+    Operation *semanticSourceOp, DbAcquireOp taskAcquire,
+    const AcquireRewriteContract &rewriteContract,
+    std::optional<SmallVector<int64_t, 4>> refinedTaskBlockShape,
+    OpBuilder &builder, Location loc) {
+  if (!semanticSourceOp || !taskAcquire)
+    return;
+
+  /// Task-local acquires should inherit the loop's semantic contract when
+  /// their parent acquire does not already carry it. This keeps downstream
+  /// analyses and lowering mode-agnostic: they can reason from the acquire's
+  /// own contract instead of pattern-specific branches in ForLowering.
+  inheritSemanticContractAttrs(semanticSourceOp, taskAcquire.getOperation());
+
+  auto chunkMode = taskAcquire.getPartitionMode();
+  bool shouldMarkStencilCenter =
+      rewriteContract.usePartitionSliceAsDepWindow ||
+      rewriteContract.applyStencilHalo ||
+      (chunkMode && *chunkMode == PartitionMode::stencil);
+  if (shouldMarkStencilCenter &&
+      !getStencilCenterOffset(taskAcquire.getOperation())) {
+    int64_t centerOffset = 1;
+    if (!rewriteContract.haloMinOffsets.empty())
+      centerOffset =
+          std::max<int64_t>(0, -rewriteContract.haloMinOffsets.front());
+    setStencilCenterOffset(taskAcquire.getOperation(), centerOffset);
+  }
+
+  /// Task acquires must carry the full stencil halo contract before
+  /// pre-lowering completes. ConvertArtsToLLVM reconstructs per-slot RO halo
+  /// slices from these attrs after block expansion, so dropping min/max
+  /// offsets here widens wavefront-like dependencies back to whole-DB edges.
+  if (!rewriteContract.ownerDims.empty() &&
+      !getStencilOwnerDims(taskAcquire.getOperation()))
+    setStencilOwnerDims(taskAcquire.getOperation(), rewriteContract.ownerDims);
+  if (!rewriteContract.haloMinOffsets.empty() &&
+      !getStencilMinOffsets(taskAcquire.getOperation()))
+    setStencilMinOffsets(taskAcquire.getOperation(),
+                         rewriteContract.haloMinOffsets);
+  if (!rewriteContract.haloMaxOffsets.empty() &&
+      !getStencilMaxOffsets(taskAcquire.getOperation()))
+    setStencilMaxOffsets(taskAcquire.getOperation(),
+                         rewriteContract.haloMaxOffsets);
+
+  if (!refinedTaskBlockShape)
+    return;
+
+  /// Tiling-2D workers refine the inherited stencil owner shape into a
+  /// worker-local owner tile. Reflect that narrower static tile on the
+  /// acquire before DbPartitioning runs so the N-D block planner can align
+  /// allocation blocks with the actual 2-D worker grid instead of widening
+  /// back to the parent stencil tile.
+  setStencilBlockShape(taskAcquire.getOperation(), *refinedTaskBlockShape);
+  if (auto contract = getLoweringContract(taskAcquire.getPtr())) {
+    LoweringContractInfo updated = *contract;
+    updated.staticBlockShape = *refinedTaskBlockShape;
+    updated.blockShape.clear();
+    upsertLoweringContract(builder, loc, taskAcquire.getPtr(), updated);
+  }
 }

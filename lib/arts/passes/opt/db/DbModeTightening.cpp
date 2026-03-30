@@ -300,6 +300,19 @@ bool DbModeTighteningPass::adjustDbModes() {
         return;
       }
 
+      /// If the rewritten IR no longer exposes concrete memory accesses
+      /// through this acquire, do not degrade the previously established
+      /// access contract. Later lowering stages may still rely on that mode
+      /// even when the access path has been rewritten through db_ref users or
+      /// opaque pointer views that this analysis cannot classify precisely.
+      if (!hasLoads && !hasStores) {
+        ARTS_DEBUG("AcquireOp: " << acqOp
+                                 << " has no visible memory accesses; "
+                                    "preserving existing mode "
+                                 << acqOp.getMode());
+        return;
+      }
+
       ArtsMode newMode = ArtsMode::in;
       if (hasLoads && hasStores)
         newMode = ArtsMode::inout;
@@ -340,11 +353,21 @@ bool DbModeTighteningPass::adjustDbModes() {
     /// Then, adjust alloc dbMode - collect modes from all acquires in hierarchy
     graph.forEachAllocNode([&](DbAllocNode *allocNode) {
       ArtsMode maxMode = ArtsMode::in;
+      bool sawAcquireMode = false;
 
       allocNode->forEachChildNode([&](NodeBase *child) {
-        if (auto *acqNode = dyn_cast<DbAcquireNode>(child))
+        if (auto *acqNode = dyn_cast<DbAcquireNode>(child)) {
+          sawAcquireMode = true;
           collectModesRecursive(acqNode, maxMode);
+        }
       });
+
+      if (!sawAcquireMode) {
+        ARTS_DEBUG("AllocOp: " << allocNode->getDbAllocOp()
+                               << " has no child acquires with visible modes; "
+                                  "preserving existing alloc mode");
+        return;
+      }
 
       /// Update the alloc mode
       DbAllocOp allocOp = allocNode->getDbAllocOp();

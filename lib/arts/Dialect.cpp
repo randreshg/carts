@@ -855,6 +855,9 @@ void DbAcquireOp::build(
 
 void LoweringContractOp::build(OpBuilder &builder, OperationState &state,
                                Value target, const LoweringContractInfo &info) {
+  std::optional<int64_t> contractKind;
+  if (info.kind != ContractKind::Unknown)
+    contractKind = static_cast<int64_t>(info.kind);
   build(builder, state, target, info.depPattern, info.distributionKind,
         info.distributionPattern, info.distributionVersion,
         SmallVector<int64_t>(info.ownerDims.begin(), info.ownerDims.end()),
@@ -867,7 +870,8 @@ void LoweringContractOp::build(OpBuilder &builder, OperationState &state,
         SmallVector<int64_t>(info.spatialDims.begin(), info.spatialDims.end()),
         SmallVector<int64_t>(info.stencilIndependentDims.begin(),
                              info.stencilIndependentDims.end()),
-        info.postDbRefined, info.criticalPathDistance);
+        info.narrowableDep, info.postDbRefined, info.criticalPathDistance,
+        contractKind);
 }
 
 void LoweringContractOp::build(
@@ -879,8 +883,8 @@ void LoweringContractOp::build(
     SmallVector<Value> blockShape, SmallVector<Value> minOffsets,
     SmallVector<Value> maxOffsets, SmallVector<Value> writeFootprint,
     bool supportedBlockHalo, SmallVector<int64_t> spatialDims,
-    SmallVector<int64_t> stencilIndependentDims, bool postDbRefined,
-    std::optional<int64_t> criticalPathDistance,
+    SmallVector<int64_t> stencilIndependentDims, bool narrowableDep,
+    bool postDbRefined, std::optional<int64_t> criticalPathDistance,
     std::optional<int64_t> contractKind) {
   state.addOperands(target);
   state.addOperands(blockShape);
@@ -923,6 +927,9 @@ void LoweringContractOp::build(
   if (!stencilIndependentDims.empty())
     state.addAttribute(AttrNames::Operation::Contract::StencilIndependentDims,
                        builder.getDenseI64ArrayAttr(stencilIndependentDims));
+  if (narrowableDep)
+    state.addAttribute(AttrNames::Operation::Contract::NarrowableDep,
+                       UnitAttr::get(ctx));
   if (postDbRefined)
     state.addAttribute(AttrNames::Operation::Contract::PostDbRefined,
                        UnitAttr::get(ctx));

@@ -37,6 +37,7 @@
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/transforms/dep/DepTransform.h"
 #include "arts/utils/EdtUtils.h"
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
@@ -44,7 +45,6 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
-#include <cmath>
 #include <optional>
 
 using namespace mlir;
@@ -66,22 +66,8 @@ struct SeidelWavefrontMatch {
   SmallVector<Operation *, 8> preludeOps;
 };
 
-static int64_t resolveWorkerCount(EdtOp parallelEdt) {
-  if (!parallelEdt)
-    return 1;
-  if (auto workers = getWorkers(parallelEdt.getOperation());
-      workers && *workers > 0)
-    return *workers;
-  if (auto module = parallelEdt->getParentOfType<ModuleOp>()) {
-    if (auto runtimeWorkers = getRuntimeTotalWorkers(module);
-        runtimeWorkers && *runtimeWorkers > 0)
-      return *runtimeWorkers;
-  }
-  return 1;
-}
-
-static std::optional<std::pair<int64_t, int64_t>>
-chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
+static std::optional<Wavefront2DTilingPlan>
+chooseWavefrontTilingPlan(SeidelWavefrontMatch &match) {
   ForOp rowFor = match.rowFor;
   auto iTrip =
       ValueAnalysis::tryFoldConstantIndex(rowFor.getUpperBound().front());
@@ -92,177 +78,13 @@ chooseAdaptiveTileShape(const SeidelWavefrontMatch &match) {
 
   int64_t iExtent = (iTrip && iLb) ? std::max<int64_t>(1, *iTrip - *iLb) : 1;
   int64_t jExtent = (jTrip && jLb) ? std::max<int64_t>(1, *jTrip - *jLb) : 1;
-
-  int64_t workers = resolveWorkerCount(match.parallelEdt);
-  workers = std::max<int64_t>(1, workers);
-  int64_t tilingLaneMultiplier =
-      std::max<int64_t>(1, DistributionHeuristics::chooseTiling2DColumnWorkers(
-                               workers, std::nullopt));
-
-  int64_t minRowTiles = (workers > 1 && iExtent >= 2) ? 2 : 1;
-  int64_t minColTiles = (workers > 1 && jExtent >= 2) ? 2 : 1;
-  int64_t maxRowTiles =
-      std::max<int64_t>(minRowTiles, std::min<int64_t>(iExtent, workers * 2));
-  int64_t maxColTiles =
-      std::max<int64_t>(minColTiles, std::min<int64_t>(jExtent, workers * 4));
-
-  int64_t bestNumITiles = 1;
-  int64_t bestNumJTiles = 1;
-  bool foundCandidate = false;
-  long double bestScore = std::numeric_limits<long double>::infinity();
-  long double totalCells =
-      static_cast<long double>(iExtent) * static_cast<long double>(jExtent);
-  /// Keep enough interior work in each macro-tile to amortize EDT launch and
-  /// dependence setup, but still allow multiple tiles per worker when the
-  /// interior is large enough to sustain it.
-  constexpr int64_t minCellsPerTask = 1 << 14;
-  int64_t maxTasksByWork = std::max<int64_t>(
-      1, static_cast<int64_t>(std::ceil(
-             totalCells / static_cast<long double>(minCellsPerTask))));
-  maxTasksByWork =
-      std::min<int64_t>(maxTasksByWork, std::max<int64_t>(4, workers * 2));
-
-  auto computeWeightedRankCount = [](int64_t numITiles,
-                                     int64_t numJTiles) -> int64_t {
-    return std::max<int64_t>(1, 2 * (numITiles - 1) + numJTiles);
-  };
-
-  auto computeWeightedFrontierWidth = [&](int64_t numITiles,
-                                          int64_t numJTiles) -> int64_t {
-    int64_t maxRank = 2 * (numITiles - 1) + (numJTiles - 1);
-    int64_t bestWidth = 1;
-    for (int64_t rank = 0; rank <= maxRank; ++rank) {
-      int64_t minTileI = std::max<int64_t>(0, (rank - (numJTiles - 1) + 1) / 2);
-      int64_t maxTileI = std::min<int64_t>(numITiles - 1, rank / 2);
-      if (maxTileI < minTileI)
-        continue;
-      bestWidth = std::max<int64_t>(bestWidth, maxTileI - minTileI + 1);
-    }
-    return bestWidth;
-  };
-
-  auto computeExpandedWavefrontTasks = [&](int64_t numITiles,
-                                           int64_t numJTiles) -> int64_t {
-    int64_t maxRank = 2 * (numITiles - 1) + (numJTiles - 1);
-    int64_t total = 0;
-    for (int64_t rank = 0; rank <= maxRank; ++rank) {
-      int64_t minTileI =
-          std::max<int64_t>(0, (rank - (numJTiles - 1) + 1) / 2);
-      int64_t maxTileI = std::min<int64_t>(numITiles - 1, rank / 2);
-      if (maxTileI < minTileI)
-        continue;
-      int64_t frontierWidth = maxTileI - minTileI + 1;
-      total += frontierWidth * tilingLaneMultiplier;
-    }
-    return std::max<int64_t>(1, total);
-  };
-
-  /// Seidel macro-tiles must amortize EDT launch and dependence-registration
-  /// overhead. Bound the total tile count by a minimum work-per-task target,
-  /// then pick the best weighted-wavefront shape that fits inside that budget.
-  /// The downstream tiling_2d lowering further expands each wavefront frontier
-  /// across its column-worker lanes, so budget against the effective task count
-  /// seen by the runtime rather than just the raw macro-tile count.
-  /// If the interior cannot sustain even a 2-D tiled wavefront under that
-  /// budget, fall back to the sequentialized form instead of forcing an
-  /// unprofitable task DAG.
-  if (maxTasksByWork < 4)
-    return std::nullopt;
-
-  int64_t desiredFrontier = std::clamp<int64_t>(
-      static_cast<int64_t>(
-          std::ceil(std::sqrt(static_cast<long double>(maxTasksByWork)))),
-      int64_t{1}, workers);
-  long double desiredTasks = static_cast<long double>(maxTasksByWork);
-  long double targetWorkPerTask =
-      totalCells / std::max<long double>(1.0L, desiredTasks);
-
-  auto scoreCandidate = [&](int64_t numITiles,
-                            int64_t numJTiles) -> long double {
-    if (numITiles <= 0 || numJTiles <= 0)
-      return std::numeric_limits<long double>::infinity();
-    if (numITiles < minRowTiles || numJTiles < minColTiles)
-      return std::numeric_limits<long double>::infinity();
-
-    /// Seidel DAG is ordered by rank = 2*tileI + tileJ. Estimate concurrency
-    /// from the exact width of those rank frontiers, not anti-diagonal width.
-    int64_t tilesPerStep = numITiles * numJTiles;
-    int64_t effectiveTasks =
-        computeExpandedWavefrontTasks(numITiles, numJTiles);
-    if (effectiveTasks > maxTasksByWork)
-      return std::numeric_limits<long double>::infinity();
-    int64_t frontierWidth = computeWeightedFrontierWidth(numITiles, numJTiles);
-    int64_t effectiveFrontierWidth = frontierWidth * tilingLaneMultiplier;
-    int64_t rankCount = computeWeightedRankCount(numITiles, numJTiles);
-    long double averageFrontier =
-        static_cast<long double>(effectiveTasks) /
-        static_cast<long double>(std::max<int64_t>(1, rankCount));
-    long double workPerTask =
-        totalCells /
-        static_cast<long double>(std::max<int64_t>(1, effectiveTasks));
-
-    long double frontierPenalty = 0.0L;
-    if (effectiveFrontierWidth < desiredFrontier) {
-      long double gap = static_cast<long double>(desiredFrontier -
-                                                 effectiveFrontierWidth);
-      frontierPenalty = gap * gap * 1.0e8L;
-    }
-
-    long double averagePenalty = 0.0L;
-    long double desiredAverage = std::max<long double>(
-        1.0L, static_cast<long double>(desiredFrontier) * 0.5L);
-    if (averageFrontier < desiredAverage) {
-      long double gap = desiredAverage - averageFrontier;
-      averagePenalty = gap * gap * 1.0e6L;
-    }
-
-    long double workPenalty = 0.0L;
-    if (workPerTask < targetWorkPerTask) {
-      long double gap = targetWorkPerTask - workPerTask;
-      workPenalty = gap * gap * 1.0e3L;
-    }
-
-    long double taskCost = static_cast<long double>(effectiveTasks) * 1.0e3L;
-    long double rankCost = static_cast<long double>(rankCount) * 1.0e3L;
-    /// The downstream tiling_2d lowering assigns one column stripe per
-    /// col-worker lane. Prefer wavefront macro-tile counts that align the
-    /// explicit tile columns with that lane decomposition so each task works on
-    /// one coherent column stripe instead of re-slicing a much wider tile.
-    long double laneAlignmentPenalty =
-        std::abs(static_cast<long double>(numJTiles) -
-                 static_cast<long double>(tilingLaneMultiplier)) *
-        1.0e5L;
-    long double undersubscribedLanePenalty =
-        (numJTiles < tilingLaneMultiplier) ? 1.0e6L : 0.0L;
-    long double fullRangePenalty =
-        (numITiles == 1 || numJTiles == 1) ? 1.0e15L : 0.0L;
-
-    return frontierPenalty + averagePenalty + workPenalty + taskCost +
-           rankCost + laneAlignmentPenalty + undersubscribedLanePenalty +
-           fullRangePenalty;
-  };
-
-  for (int64_t numITiles = minRowTiles; numITiles <= maxRowTiles; ++numITiles) {
-    for (int64_t numJTiles = minColTiles; numJTiles <= maxColTiles;
-         ++numJTiles) {
-      long double score = scoreCandidate(numITiles, numJTiles);
-      if (score < bestScore) {
-        bestScore = score;
-        bestNumITiles = numITiles;
-        bestNumJTiles = numJTiles;
-        foundCandidate = true;
-      }
-    }
-  }
-
-  if (!foundCandidate)
-    return std::nullopt;
-
-  int64_t tileRows =
-      std::max<int64_t>(1, (iExtent + bestNumITiles - 1) / bestNumITiles);
-  int64_t tileCols =
-      std::max<int64_t>(1, (jExtent + bestNumJTiles - 1) / bestNumJTiles);
-  return std::make_pair(tileRows, tileCols);
+  int64_t repeatedTripProduct =
+      arts::getRepeatedParentTripProduct(match.parallelEdt.getOperation());
+  WorkerConfig workerCfg =
+      DistributionHeuristics::resolveWorkerConfig(match.parallelEdt)
+          .value_or(WorkerConfig{1, 1, false});
+  return DistributionHeuristics::chooseWavefront2DTilingPlan(
+      iExtent, jExtent, workerCfg, repeatedTripProduct);
 }
 
 static bool matchUnitInnerLoop(Operation *op, Value &lb, Value &ub, Value &iv) {
@@ -439,6 +261,13 @@ static Value createMinIndex(OpBuilder &builder, Location loc, Value lhs,
   return builder.create<arith::SelectOp>(loc, cmp, lhs, rhs);
 }
 
+static Value createMaxIndex(OpBuilder &builder, Location loc, Value lhs,
+                            Value rhs) {
+  Value cmp =
+      builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt, lhs, rhs);
+  return builder.create<arith::SelectOp>(loc, cmp, lhs, rhs);
+}
+
 static Value createSubtractOrZero(OpBuilder &builder, Location loc, Value lhs,
                                   Value rhs) {
   Value canSubtract =
@@ -471,10 +300,16 @@ static void rewriteSeidelSequential(SeidelWavefrontMatch &match) {
 }
 
 static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
-                                   std::pair<int64_t, int64_t> tileShape) {
+                                   const Wavefront2DTilingPlan &tilingPlan) {
   Location loc = match.parallelEdt.getLoc();
   OpBuilder builder(match.parallelEdt);
-  auto [tileRowsConst, tileColsConst] = tileShape;
+  int64_t tileRowsConst = tilingPlan.tileRows;
+  int64_t tileColsConst = tilingPlan.tileCols;
+  StencilNDPatternContract wavefrontContract(
+      ArtsDepPattern::wavefront_2d, ArrayRef<int64_t>{0, 1},
+      ArrayRef<int64_t>{-1, -1}, ArrayRef<int64_t>{1, 1},
+      ArrayRef<int64_t>{0, 0}, /*revision=*/1,
+      ArrayRef<int64_t>{tileRowsConst, tileColsConst});
 
   Value zero = createZeroIndex(builder, loc);
   Value one = createOneIndex(builder, loc);
@@ -501,19 +336,22 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
                                     numJTilesMinusOne),
       one);
 
-  auto waveLoop = builder.create<scf::ForOp>(loc, zero, waveUbExclusive, one);
+  /// Keep all wavefront ranks for one Seidel timestep inside a single epoch.
+  /// The DB dependence graph already carries the true cross-rank ordering; a
+  /// barrier after every rank forces unnecessary create/wait cycles and hides
+  /// useful overlap between ready tasks from adjacent ranks.
+  auto epoch = builder.create<EpochOp>(loc);
+  Region &epochRegion = epoch.getRegion();
+  if (epochRegion.empty())
+    epochRegion.push_back(new Block());
+  Block &epochBlock = epochRegion.front();
+
+  OpBuilder epochBuilder = OpBuilder::atBlockBegin(&epochBlock);
+  auto waveLoop = epochBuilder.create<scf::ForOp>(loc, zero, waveUbExclusive,
+                                                  one);
   copyArtsMetadataAttrs(match.parallelEdt.getOperation(),
                         waveLoop.getOperation());
-  setDepPattern(waveLoop.getOperation(), ArtsDepPattern::wavefront_2d);
-  setEdtDistributionPattern(waveLoop.getOperation(),
-                            EdtDistributionPattern::stencil);
-  setStencilSpatialDims(waveLoop.getOperation(), {0, 1});
-  setStencilOwnerDims(waveLoop.getOperation(), {0, 1});
-  setStencilBlockShape(waveLoop.getOperation(), {tileRowsConst, tileColsConst});
-  setStencilMinOffsets(waveLoop.getOperation(), {-1, -1});
-  setStencilMaxOffsets(waveLoop.getOperation(), {1, 1});
-  setStencilWriteFootprint(waveLoop.getOperation(), {0, 0});
-  setSupportedBlockHalo(waveLoop.getOperation());
+  wavefrontContract.stamp(waveLoop.getOperation());
 
   OpBuilder waveBuilder = OpBuilder::atBlockBegin(waveLoop.getBody());
   Value wave = waveLoop.getInductionVar();
@@ -534,40 +372,32 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
                         tileParallel.getOperation());
   copyWorkerTopologyAttrs(match.parallelEdt.getOperation(),
                           tileParallel.getOperation());
-  setDepPattern(tileParallel.getOperation(), ArtsDepPattern::wavefront_2d);
-  setEdtDistributionPattern(tileParallel.getOperation(),
-                            EdtDistributionPattern::stencil);
-  setStencilSpatialDims(tileParallel.getOperation(), {0, 1});
-  setStencilOwnerDims(tileParallel.getOperation(), {0, 1});
-  setStencilBlockShape(tileParallel.getOperation(),
-                       {tileRowsConst, tileColsConst});
-  setStencilMinOffsets(tileParallel.getOperation(), {-1, -1});
-  setStencilMaxOffsets(tileParallel.getOperation(), {1, 1});
-  setStencilWriteFootprint(tileParallel.getOperation(), {0, 0});
-  setSupportedBlockHalo(tileParallel.getOperation());
+  wavefrontContract.stamp(tileParallel.getOperation());
 
   Block &tileParallelBlock = tileParallel.getBody().front();
   OpBuilder tileBuilder = OpBuilder::atBlockBegin(&tileParallelBlock);
-  Value tileRowLb = tileBuilder.create<arith::AddIOp>(
-      loc, iLb, tileBuilder.create<arith::MulIOp>(loc, biMin, tileRows));
-  Value tileRowUb = tileBuilder.create<arith::AddIOp>(
-      loc, iLb,
-      tileBuilder.create<arith::MulIOp>(loc, biMaxExclusive, tileRows));
+  /// Keep the physical wavefront tiles aligned to the absolute DB block grid.
+  /// The stencil iteration space starts at the interior bound (typically 1),
+  /// but DB partitioning still owns full-array blocks starting at coordinate 0.
+  /// If the frontier loop itself is anchored at the interior lower bound, the
+  /// first physical tile straddles two DB blocks and local indices drift by
+  /// one element. Iterate aligned block starts here and clamp the actual loop
+  /// body back to [lb, ub) below.
+  Value tileRowLb =
+      tileBuilder.create<arith::MulIOp>(loc, biMin, tileRows);
+  Value tileRowUb =
+      tileBuilder.create<arith::MulIOp>(loc, biMaxExclusive, tileRows);
 
   auto tileFor = tileBuilder.create<arts::ForOp>(
       loc, ValueRange{tileRowLb}, ValueRange{tileRowUb}, ValueRange{tileRows},
       /*schedule=*/nullptr, /*reductionAccumulators=*/ValueRange{});
-  copyArtsMetadataAttrs(match.rowFor.getOperation(), tileFor.getOperation());
-  setDepPattern(tileFor.getOperation(), ArtsDepPattern::wavefront_2d);
-  setEdtDistributionPattern(tileFor.getOperation(),
-                            EdtDistributionPattern::stencil);
-  setStencilSpatialDims(tileFor.getOperation(), {0, 1});
-  setStencilOwnerDims(tileFor.getOperation(), {0, 1});
-  setStencilBlockShape(tileFor.getOperation(), {tileRowsConst, tileColsConst});
-  setStencilMinOffsets(tileFor.getOperation(), {-1, -1});
-  setStencilMaxOffsets(tileFor.getOperation(), {1, 1});
-  setStencilWriteFootprint(tileFor.getOperation(), {0, 0});
-  setSupportedBlockHalo(tileFor.getOperation());
+  /// This frontier loop is synthetic. It preserves the stencil contract, but
+  /// it does not preserve the source row-loop trip count or other loop
+  /// metadata, so restamp only the contract attrs below.
+  wavefrontContract.stamp(tileFor.getOperation());
+  if (tilingPlan.taskChunkHint)
+    setPartitioningHint(tileFor.getOperation(),
+                        PartitioningHint::block(*tilingPlan.taskChunkHint));
 
   Region &tileRegion = tileFor.getRegion();
   if (tileRegion.empty())
@@ -578,21 +408,20 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
 
   OpBuilder tileLoopBuilder = OpBuilder::atBlockBegin(&tileBlock);
   Value tileRowBase = tileBlock.getArgument(0);
-  Value biNumerator =
-      tileLoopBuilder.create<arith::SubIOp>(loc, tileRowBase, iLb);
-  Value bi = tileLoopBuilder.create<arith::DivUIOp>(loc, biNumerator, tileRows);
+  Value bi = tileLoopBuilder.create<arith::DivUIOp>(loc, tileRowBase, tileRows);
   Value bj = tileLoopBuilder.create<arith::SubIOp>(
       loc, wave, tileLoopBuilder.create<arith::MulIOp>(loc, bi, two));
 
-  Value iStart = tileRowBase;
+  Value iStart = createMaxIndex(tileLoopBuilder, loc, tileRowBase, iLb);
   Value iEnd = createMinIndex(
       tileLoopBuilder, loc,
-      tileLoopBuilder.create<arith::AddIOp>(loc, iStart, tileRows), iUb);
-  Value jStart = tileLoopBuilder.create<arith::AddIOp>(
-      loc, jLb, tileLoopBuilder.create<arith::MulIOp>(loc, bj, tileCols));
+      tileLoopBuilder.create<arith::AddIOp>(loc, tileRowBase, tileRows), iUb);
+  Value tileColBase =
+      tileLoopBuilder.create<arith::MulIOp>(loc, bj, tileCols);
+  Value jStart = createMaxIndex(tileLoopBuilder, loc, tileColBase, jLb);
   Value jEnd = createMinIndex(
       tileLoopBuilder, loc,
-      tileLoopBuilder.create<arith::AddIOp>(loc, jStart, tileCols), jUb);
+      tileLoopBuilder.create<arith::AddIOp>(loc, tileColBase, tileCols), jUb);
 
   auto iLoop = tileLoopBuilder.create<scf::ForOp>(loc, iStart, iEnd, one);
   OpBuilder iBuilder = OpBuilder::atBlockBegin(iLoop.getBody());
@@ -612,7 +441,8 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
 
   tileLoopBuilder.create<arts::YieldOp>(loc);
   tileBuilder.create<arts::YieldOp>(loc);
-  waveBuilder.create<arts::BarrierOp>(loc);
+  epochBuilder.setInsertionPointToEnd(&epochBlock);
+  epochBuilder.create<arts::YieldOp>(loc);
 
   match.parallelEdt.erase();
 }
@@ -633,12 +463,12 @@ public:
       });
       if (!found)
         break;
-      auto tileShape = chooseAdaptiveTileShape(match);
-      bool usedSequentialFallback = !tileShape;
+      auto tilingPlan = chooseWavefrontTilingPlan(match);
+      bool usedSequentialFallback = !tilingPlan;
       if (usedSequentialFallback)
         rewriteSeidelSequential(match);
       else
-        rewriteSeidelWavefront(match, *tileShape);
+        rewriteSeidelWavefront(match, *tilingPlan);
       rewrites++;
       if (usedSequentialFallback)
         return rewrites;

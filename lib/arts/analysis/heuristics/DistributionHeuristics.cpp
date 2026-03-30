@@ -12,6 +12,7 @@
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 using namespace mlir;
@@ -45,6 +46,18 @@ static DistributionKind toDistributionKind(EdtDistributionKind kind) {
     return DistributionKind::Replicated;
   }
   return DistributionKind::Flat;
+}
+
+static int64_t ceilDivPositive(int64_t num, int64_t denom) {
+  if (num <= 0 || denom <= 0)
+    return 1;
+  return 1 + (num - 1) / denom;
+}
+
+static int64_t clampPositive(int64_t value, int64_t minValue,
+                             int64_t maxValue) {
+  return std::clamp(std::max<int64_t>(1, value), std::max<int64_t>(1, minValue),
+                    std::max<int64_t>(1, maxValue));
 }
 
 } // namespace
@@ -108,6 +121,23 @@ DistributionHeuristics::resolveWorkerConfig(EdtOp parallelEdt,
     return cfg;
   }
 
+  if (auto module = parallelEdt->getParentOfType<ModuleOp>()) {
+    if (auto runtimeTotalWorkers = getRuntimeTotalWorkers(module);
+        runtimeTotalWorkers && *runtimeTotalWorkers > 0) {
+      cfg.totalWorkers = *runtimeTotalWorkers;
+      if (!cfg.internode) {
+        cfg.workersPerNode = cfg.totalWorkers;
+      } else if (auto runtimeTotalNodes = getRuntimeTotalNodes(module);
+                 runtimeTotalNodes && *runtimeTotalNodes > 0) {
+        cfg.workersPerNode =
+            std::max<int64_t>(1, cfg.totalWorkers / *runtimeTotalNodes);
+      } else {
+        cfg.workersPerNode = cfg.totalWorkers;
+      }
+      return cfg;
+    }
+  }
+
   if (!machine)
     return std::nullopt;
 
@@ -132,6 +162,91 @@ DistributionHeuristics::resolveWorkerConfig(EdtOp parallelEdt,
   return cfg;
 }
 
+std::optional<Wavefront2DTilingPlan>
+DistributionHeuristics::chooseWavefront2DTilingPlan(
+    int64_t rowExtent, int64_t colExtent, const WorkerConfig &workerCfg,
+    int64_t repeatedTripProduct) {
+  if (rowExtent <= 0 || colExtent <= 0)
+    return std::nullopt;
+
+  int64_t workers = std::max<int64_t>(1, workerCfg.totalWorkers);
+  int64_t minRowTiles = (workers > 1 && rowExtent >= 2) ? 2 : 1;
+  int64_t minColTiles = (workers > 1 && colExtent >= 2) ? 2 : 1;
+  int64_t maxRowTiles =
+      std::max<int64_t>(minRowTiles, std::min<int64_t>(rowExtent, workers * 2));
+  int64_t maxColTiles =
+      std::max<int64_t>(minColTiles, std::min<int64_t>(colExtent, workers * 4));
+
+  /// A weighted 2-D wavefront with rank = 2*row + col only grows its ready
+  /// frontier with the number of row tiles. Wider column grids beyond 2R-1
+  /// mostly add ranks/tasks without improving the maximum ready set.
+  int64_t maxFrontierRows = std::max<int64_t>(
+      minRowTiles,
+      std::min<int64_t>({maxRowTiles, workers, ceilDivPositive(maxColTiles, 2)}));
+  if (maxFrontierRows < minRowTiles)
+    return std::nullopt;
+
+  constexpr int64_t kPreferredMinCellsPerTask = 1 << 15;
+  int64_t repeatedScale = 1;
+  if (repeatedTripProduct >= 64)
+    repeatedScale = 4;
+  else if (repeatedTripProduct >= 16)
+    repeatedScale = 2;
+
+  long double totalCells =
+      static_cast<long double>(rowExtent) * static_cast<long double>(colExtent);
+  int64_t preferredMinCellsPerTask =
+      kPreferredMinCellsPerTask * repeatedScale;
+  int64_t desiredTasksByGranularity = std::max<int64_t>(
+      1, static_cast<int64_t>(std::ceil(
+             totalCells /
+             static_cast<long double>(preferredMinCellsPerTask))));
+  if (desiredTasksByGranularity < 4)
+    return std::nullopt;
+
+  long double discriminant =
+      1.0L + 8.0L * static_cast<long double>(desiredTasksByGranularity);
+  int64_t granularityRows = static_cast<int64_t>(
+      std::ceil((1.0L + std::sqrt(discriminant)) / 4.0L));
+  granularityRows =
+      clampPositive(granularityRows, minRowTiles, maxFrontierRows);
+
+  /// Large weighted wavefronts can underutilize the machine even when the
+  /// per-task granularity looks healthy. Allow a worker-utilization floor as
+  /// long as the physical tiles remain comfortably above a hard minimum size.
+  constexpr int64_t kAbsoluteMinCellsPerTask = 1 << 13;
+  int64_t maxRowsByTileArea = static_cast<int64_t>(std::floor(std::sqrt(
+      totalCells / (2.0L * static_cast<long double>(kAbsoluteMinCellsPerTask)))));
+  maxRowsByTileArea =
+      clampPositive(maxRowsByTileArea, minRowTiles, maxFrontierRows);
+
+  int64_t frontierRows = granularityRows;
+  if (desiredTasksByGranularity >= workers * 2) {
+    int64_t workerSaturationFloor =
+        clampPositive((workers + 1) / 2, minRowTiles, maxRowsByTileArea);
+    frontierRows = std::max(frontierRows, workerSaturationFloor);
+  }
+  frontierRows = clampPositive(frontierRows, minRowTiles, maxRowsByTileArea);
+
+  int64_t targetColTiles =
+      clampPositive(2 * frontierRows - 1, minColTiles, maxColTiles);
+  int64_t tileRows = ceilDivPositive(rowExtent, frontierRows);
+  int64_t tileCols = ceilDivPositive(colExtent, targetColTiles);
+
+  Wavefront2DTilingPlan plan;
+  plan.tileRows = std::max<int64_t>(1, tileRows);
+  plan.tileCols = std::max<int64_t>(1, tileCols);
+
+  int64_t numRowTiles = ceilDivPositive(rowExtent, plan.tileRows);
+  if (numRowTiles > workers) {
+    int64_t chunkTiles = ceilDivPositive(numRowTiles, workers);
+    if (chunkTiles > 1)
+      plan.taskChunkHint = chunkTiles;
+  }
+
+  return plan;
+}
+
 std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
     ForOp forOp, LoopAnalysis &loopAnalysis, const WorkerConfig &workerCfg) {
   if (workerCfg.totalWorkers <= 0)
@@ -152,6 +267,9 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
   int64_t effectiveTripCount = tripCount;
   bool allowNestedWorkBoost = false;
   bool isStencilPattern = false;
+  bool isWavefrontPattern = false;
+  if (auto depPattern = getEffectiveDepPattern(forOp.getOperation()))
+    isWavefrontPattern = *depPattern == ArtsDepPattern::wavefront_2d;
   if (auto summary =
           loopAnalysis.getLoopDbAccessSummary(forOp.getOperation())) {
     isStencilPattern =
@@ -208,7 +326,7 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
       minItersPerWorker = std::max<int64_t>(minItersPerWorker, 12);
   }
 
-  if (isStencilPattern && !workerCfg.internode) {
+  if (isStencilPattern && !isWavefrontPattern && !workerCfg.internode) {
     constexpr int64_t kMinStencilOwnedOuterIters = 8;
     int64_t maxWorkersByOwnedSpan =
         std::max<int64_t>(1, tripCount / kMinStencilOwnedOuterIters);

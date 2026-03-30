@@ -31,6 +31,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
+#include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -52,6 +53,47 @@ using namespace mlir::arts;
 using namespace mlir::omp;
 
 namespace {
+
+static Value getForwardedMemrefAliasSource(Value value) {
+  if (!value)
+    return nullptr;
+
+  Operation *defOp = value.getDefiningOp();
+  if (!defOp)
+    return nullptr;
+
+  if (auto castOp = dyn_cast<memref::CastOp>(defOp))
+    return castOp.getSource();
+  if (auto unrealized = dyn_cast<UnrealizedConversionCastOp>(defOp)) {
+    if (unrealized.getInputs().size() == 1 &&
+        isa<MemRefType>(unrealized.getInputs().front().getType()))
+      return unrealized.getInputs().front();
+  }
+
+  return nullptr;
+}
+
+static Value getForwardedMemrefAliasResult(Operation *user, Value current) {
+  if (!user || !current)
+    return nullptr;
+
+  if (auto castOp = dyn_cast<memref::CastOp>(user))
+    return castOp.getSource() == current ? castOp.getResult() : Value();
+  if (auto unrealized = dyn_cast<UnrealizedConversionCastOp>(user)) {
+    if (unrealized.getInputs().size() == 1 &&
+        unrealized.getInputs().front() == current &&
+        unrealized.getOutputs().size() == 1 &&
+        isa<MemRefType>(unrealized.getOutputs().front().getType()))
+      return unrealized.getOutputs().front();
+  }
+
+  return nullptr;
+}
+
+static bool isMemrefContainerValue(Value value) {
+  auto memrefType = dyn_cast_or_null<MemRefType>(value.getType());
+  return memrefType && isa<MemRefType>(memrefType.getElementType());
+}
 
 ///===----------------------------------------------------------------------===///
 /// Data Structures
@@ -215,6 +257,11 @@ private:
                                                  AllocPattern &pattern);
   bool isPatternAliasRoot(Value val, const AllocPattern &pattern) const;
   void collectOuterWrapperAliases(AllocPattern &pattern);
+  bool recordUnsupportedUse(Operation *op, llvm::Twine reason);
+  bool hasOnlySupportedUseGraph(const AllocPattern &pattern);
+  bool hasOnlySupportedUses(Value value, DenseSet<Value> &visitedValues);
+  bool hasOnlySupportedSubviewUses(Value value,
+                                   DenseSet<Value> &visitedValues);
 
   /// Phase 3: Transform the pattern
   LogicalResult transformPattern(AllocPattern &pattern, OpBuilder &builder);
@@ -239,6 +286,9 @@ private:
                                 int depth);
   bool isLoadFromValue(Value maybeLoad, Value source);
   bool tracesToRootAlloc(Value val, AllocPattern &pattern);
+
+  Operation *unsupportedUseOp = nullptr;
+  std::string unsupportedUseReason;
 };
 
 ///===----------------------------------------------------------------------===///
@@ -318,6 +368,24 @@ void RaiseMemRefDimensionalityPass::runOnOperation() {
     }
 
     /// CASE 2: Nested Allocation Pattern (2D arrays)
+    unsupportedUseOp = nullptr;
+    unsupportedUseReason.clear();
+    if (!hasOnlySupportedUseGraph(*patternOpt)) {
+      ARTS_ERROR("RaiseMemRefDimensionality matched a nested memref pattern "
+                 "but cannot rewrite the full use graph"
+                 << (unsupportedUseReason.empty()
+                         ? ""
+                         : (": " + unsupportedUseReason))
+                 << " at " << patternOpt->rootAlloc.getLoc());
+      if (unsupportedUseOp) {
+        ARTS_ERROR("Unsupported use that blocks nested memref raising: "
+                   << unsupportedUseOp->getName() << " at "
+                   << unsupportedUseOp->getLoc());
+      }
+      signalPassFailure();
+      return;
+    }
+
     ARTS_DEBUG("Found nested allocation pattern: " << alloc);
 
     /// Phase 2a: Collect all element accesses
@@ -711,10 +779,22 @@ void RaiseMemRefDimensionalityPass::collectAccessesRecursively(
   if (!memType)
     return;
 
+  if (Value source = getForwardedMemrefAliasSource(current)) {
+    collectAccessesRecursively(source, indices, chain, accesses);
+    return;
+  }
+
   for (Operation *user : current.getUsers()) {
     /// Skip ops already marked for removal
     if (removalMgr.isMarkedForRemoval(user))
       continue;
+
+    if (Value forwarded = getForwardedMemrefAliasResult(user, current)) {
+      SmallVector<Operation *> newChain = chain;
+      newChain.push_back(user);
+      collectAccessesRecursively(forwarded, indices, newChain, accesses);
+      continue;
+    }
 
     if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
       if (loadOp.getMemref() != current)
@@ -930,6 +1010,9 @@ RaiseMemRefDimensionalityPass::traceToPattern(Value val, AllocPattern &pattern) 
     return result;
   }
 
+  if (Value source = getForwardedMemrefAliasSource(val))
+    return traceToPattern(source, pattern);
+
   /// Check if it's a load from root/wrapper
   if (auto loadOp = val.getDefiningOp<memref::LoadOp>()) {
     auto innerResult = traceToPattern(loadOp.getMemref(), pattern);
@@ -1028,6 +1111,181 @@ void RaiseMemRefDimensionalityPass::collectOuterWrapperAliases(
   }
 
   pattern.outerWrapperAliases.assign(discovered.begin(), discovered.end());
+}
+
+bool RaiseMemRefDimensionalityPass::recordUnsupportedUse(Operation *op,
+                                                         llvm::Twine reason) {
+  if (!unsupportedUseOp) {
+    unsupportedUseOp = op;
+    unsupportedUseReason = reason.str();
+  }
+  if (op)
+    ARTS_DEBUG("  " << unsupportedUseReason << ": " << *op);
+  else
+    ARTS_DEBUG("  " << unsupportedUseReason);
+  return false;
+}
+
+bool RaiseMemRefDimensionalityPass::hasOnlySupportedUseGraph(
+    const AllocPattern &pattern) {
+  DenseSet<Value> visitedValues;
+  llvm::SetVector<Value> roots;
+
+  if (pattern.wrapperAlloca)
+    roots.insert(pattern.wrapperAlloca);
+  roots.insert(pattern.rootAlloc);
+  for (Value outerWrapper : pattern.outerWrapperAliases)
+    roots.insert(outerWrapper);
+
+  for (Value root : roots) {
+    if (!hasOnlySupportedUses(root, visitedValues))
+      return false;
+  }
+
+  return true;
+}
+
+bool RaiseMemRefDimensionalityPass::hasOnlySupportedSubviewUses(
+    Value value, DenseSet<Value> &visitedValues) {
+  if (!value || !isa<MemRefType>(value.getType()))
+    return true;
+  if (!visitedValues.insert(value).second)
+    return true;
+
+  for (Operation *user : value.getUsers()) {
+    if (!user)
+      continue;
+
+    if (Value forwarded = getForwardedMemrefAliasResult(user, value)) {
+      if (!hasOnlySupportedSubviewUses(forwarded, visitedValues))
+        return false;
+      continue;
+    }
+
+    if (auto taskOp = dyn_cast<omp::TaskOp>(user)) {
+      (void)taskOp;
+      continue;
+    }
+
+    if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+      if (loadOp.getMemref() != value) {
+        return recordUnsupportedUse(user,
+                                    "unsupported subview alias user");
+      }
+      if (!isa<MemRefType>(loadOp.getType())) {
+        return recordUnsupportedUse(loadOp,
+                                    "unsupported scalar escape from subview result");
+      }
+      if (!hasOnlySupportedSubviewUses(loadOp.getResult(), visitedValues))
+        return false;
+      continue;
+    }
+
+    if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
+      if (storeOp.getValue() == value &&
+          isMemrefContainerValue(storeOp.getMemref())) {
+        if (!hasOnlySupportedSubviewUses(storeOp.getMemref(), visitedValues))
+          return false;
+        continue;
+      }
+      return recordUnsupportedUse(storeOp, "unsupported subview store escape");
+    }
+
+    if (auto subviewOp = dyn_cast<memref::SubViewOp>(user)) {
+      if (subviewOp.getSource() != value) {
+        return recordUnsupportedUse(subviewOp,
+                                    "unsupported subview alias user");
+      }
+      if (!hasOnlySupportedSubviewUses(subviewOp.getResult(), visitedValues))
+        return false;
+      continue;
+    }
+
+    if (isa<memref::DeallocOp>(user))
+      continue;
+
+    return recordUnsupportedUse(
+        user,
+        llvm::Twine("unsupported subview/dependency escape through ") +
+            user->getName().getStringRef());
+  }
+
+  return true;
+}
+
+bool RaiseMemRefDimensionalityPass::hasOnlySupportedUses(
+    Value value, DenseSet<Value> &visitedValues) {
+  if (!value || !isa<MemRefType>(value.getType()))
+    return true;
+  if (!visitedValues.insert(value).second)
+    return true;
+
+  /// Compile.cpp lowers affine ops before this stage, so the supported graph
+  /// here is the memref/scf form that RaiseMemRefDimensionality actually
+  /// rewrites.
+  for (Operation *user : value.getUsers()) {
+    if (!user)
+      continue;
+
+    if (Value forwarded = getForwardedMemrefAliasResult(user, value)) {
+      if (!hasOnlySupportedUses(forwarded, visitedValues))
+        return false;
+      continue;
+    }
+
+    if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+      if (loadOp.getMemref() != value) {
+        return recordUnsupportedUse(user,
+                                    "unsupported memref load alias user");
+      }
+
+      if (isa<MemRefType>(loadOp.getType()) &&
+          !hasOnlySupportedUses(loadOp.getResult(), visitedValues))
+        return false;
+      continue;
+    }
+
+    if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
+      if (storeOp.getMemref() == value) {
+        continue;
+      }
+
+      if (storeOp.getValue() == value && isMemrefContainerValue(storeOp.getMemref())) {
+        if (!hasOnlySupportedUses(storeOp.getMemref(), visitedValues))
+          return false;
+        continue;
+      }
+
+      return recordUnsupportedUse(storeOp, "unsupported memref store escape");
+    }
+
+    if (auto subviewOp = dyn_cast<memref::SubViewOp>(user)) {
+      if (subviewOp.getSource() != value) {
+        return recordUnsupportedUse(subviewOp,
+                                    "unsupported subview alias user");
+      }
+      if (!hasOnlySupportedSubviewUses(subviewOp.getResult(), visitedValues))
+        return false;
+      continue;
+    }
+
+    if (isa<omp::TaskOp, memref::DeallocOp, polygeist::Memref2PointerOp>(user))
+      continue;
+
+    if (isa<CallOpInterface, func::ReturnOp>(user)) {
+      return recordUnsupportedUse(
+          user,
+          llvm::Twine("unsupported opaque escape through ") +
+              user->getName().getStringRef());
+    }
+
+    return recordUnsupportedUse(
+        user,
+        llvm::Twine("unsupported use in nested-memref raise graph through ") +
+            user->getName().getStringRef());
+  }
+
+  return true;
 }
 
 ///===----------------------------------------------------------------------===///

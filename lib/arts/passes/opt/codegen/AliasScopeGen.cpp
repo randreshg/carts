@@ -81,8 +81,8 @@ struct DataPointerCollectionResult {
   int skippedUnknownDepLoads = 0;
 };
 
-/// Returns true if this load reads a pointer field from a dependency-struct
-/// GEP.
+/// Returns true if this load reads the dependency data-pointer field from an
+/// arts_edt_dep_t entry GEP.
 static bool isDepStructPointerLoad(LLVM::LoadOp loadOp) {
   if (!isa<LLVM::LLVMPointerType>(loadOp.getResult().getType()))
     return false;
@@ -101,7 +101,11 @@ static bool isDepStructPointerLoad(LLVM::LoadOp loadOp) {
 
   int32_t penultimate = rawIndices[rawIndices.size() - 2];
   int32_t last = rawIndices.back();
-  return penultimate == 0 && last == 2;
+
+  /// The dependency pointer field moved from slot 2 in the legacy layout to
+  /// slot 1 in the current v2 layout. Accept both so the pass stays aligned
+  /// with older IR snapshots while recognizing the current lowering.
+  return penultimate == 0 && (last == 1 || last == 2);
 }
 
 struct DepIndexInfo {

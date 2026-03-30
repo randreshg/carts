@@ -77,6 +77,10 @@ constexpr StringLiteral CPSNumCarry = "arts.cps_num_carry";
 constexpr StringLiteral CPSLoopContinuation = "arts.cps_loop_continuation";
 constexpr StringLiteral CPSAdvanceHasIvArg = "arts.cps_advance_has_iv_arg";
 
+/// Preserves compile-time DB outer extents on rehydrated handle values when
+/// outlining breaks the original DbAllocOp def-use chain.
+constexpr StringLiteral DbStaticOuterShape = "arts.db_static_outer_shape";
+
 /// GUID range detection annotations (set by GUIDRangeDetection)
 constexpr StringLiteral GuidRangeTripCount = "guid_range_trip_count";
 constexpr StringLiteral HasGuidRangeAlloc = "has_guid_range_alloc";
@@ -152,6 +156,22 @@ inline void setRuntimeTotalWorkers(ModuleOp module, int64_t workers) {
   module->setAttr(
       AttrNames::Module::RuntimeTotalWorkers,
       IntegerAttr::get(IntegerType::get(module.getContext(), 64), workers));
+}
+
+inline std::optional<SmallVector<int64_t, 4>>
+getDbStaticOuterShape(Operation *op) {
+  return readI64ArrayAttr(op, AttrNames::Operation::DbStaticOuterShape);
+}
+
+inline std::optional<SmallVector<int64_t, 4>> getDbStaticOuterShape(Value value) {
+  return value ? getDbStaticOuterShape(value.getDefiningOp()) : std::nullopt;
+}
+
+inline void setDbStaticOuterShape(Operation *op, ArrayRef<int64_t> shape) {
+  if (!op || shape.empty())
+    return;
+  op->setAttr(AttrNames::Operation::DbStaticOuterShape,
+              buildI64ArrayAttr(op, shape));
 }
 
 inline bool getRuntimeStaticWorkers(ModuleOp module) {
@@ -515,6 +535,13 @@ inline void copyDepPatternAttrs(Operation *source, Operation *dest) {
     dest->removeAttr(AttrNames::Operation::DepPatternAttr);
 }
 
+inline void inheritDepPatternAttrs(Operation *source, Operation *dest) {
+  if (!source || !dest || getDepPattern(dest))
+    return;
+  if (auto pattern = getDepPattern(source))
+    setDepPattern(dest, *pattern);
+}
+
 /// Copy distribution_* attributes between operations.
 /// This intentionally transfers only distribution contracts:
 ///   - distribution_kind
@@ -541,6 +568,24 @@ inline void copyDistributionAttrs(Operation *source, Operation *dest) {
     dest->removeAttr(AttrNames::Operation::DistributionVersion);
 }
 
+inline void inheritDistributionAttrs(Operation *source, Operation *dest) {
+  if (!source || !dest)
+    return;
+
+  if (!getEdtDistributionKind(dest))
+    if (auto kind = getEdtDistributionKind(source))
+      setEdtDistributionKind(dest, *kind);
+
+  if (!getEdtDistributionPattern(dest))
+    if (auto pattern = getEdtDistributionPattern(source))
+      setEdtDistributionPattern(dest, *pattern);
+
+  if (!dest->hasAttr(AttrNames::Operation::DistributionVersion))
+    if (auto version = source->getAttrOfType<IntegerAttr>(
+            AttrNames::Operation::DistributionVersion))
+      dest->setAttr(AttrNames::Operation::DistributionVersion, version);
+}
+
 /// Copy semantic pattern attributes between operations.
 /// This is the canonical helper for structural rewrites that replace a loop,
 /// EDT, or epoch with an equivalent operation and want downstream passes to
@@ -556,7 +601,20 @@ inline void copyPatternAttrs(Operation *source, Operation *dest) {
     dest->removeAttr(AttrNames::Operation::PatternRevision);
 }
 
+inline void inheritPatternAttrs(Operation *source, Operation *dest) {
+  if (!source || !dest)
+    return;
+  inheritDistributionAttrs(source, dest);
+  inheritDepPatternAttrs(source, dest);
+  if (!getPatternRevision(dest))
+    if (auto revision = getPatternRevision(source))
+      setPatternRevision(dest, *revision);
+}
+
 /// Full implementation in OperationAttributes.cpp.
+/// Use only when the destination preserves the same loop semantics/identity as
+/// the source. Structural rewrites that create a new iteration space should
+/// restamp the specific attrs they still mean instead of cloning all metadata.
 void copyArtsMetadataAttrs(Operation *source, Operation *dest);
 
 /// Copy only the semantic contract attrs that specialized pattern detection
@@ -568,6 +626,33 @@ inline void copySemanticContractAttrs(Operation *source, Operation *dest) {
     return;
   copyPatternAttrs(source, dest);
   copyStencilContractAttrs(source, dest);
+  if (auto contractKind = source->getAttrOfType<IntegerAttr>(
+          AttrNames::Operation::Contract::ContractKindKey))
+    dest->setAttr(AttrNames::Operation::Contract::ContractKindKey,
+                  contractKind);
+  else
+    dest->removeAttr(AttrNames::Operation::Contract::ContractKindKey);
+  if (source->hasAttr(AttrNames::Operation::Contract::NarrowableDep))
+    dest->setAttr(AttrNames::Operation::Contract::NarrowableDep,
+                  UnitAttr::get(dest->getContext()));
+  else
+    dest->removeAttr(AttrNames::Operation::Contract::NarrowableDep);
+}
+
+inline void inheritSemanticContractAttrs(Operation *source, Operation *dest) {
+  if (!source || !dest)
+    return;
+  inheritPatternAttrs(source, dest);
+  inheritStencilContractAttrs(source, dest);
+  if (!dest->hasAttr(AttrNames::Operation::Contract::ContractKindKey))
+    if (auto contractKind = source->getAttrOfType<IntegerAttr>(
+            AttrNames::Operation::Contract::ContractKindKey))
+      dest->setAttr(AttrNames::Operation::Contract::ContractKindKey,
+                    contractKind);
+  if (!dest->hasAttr(AttrNames::Operation::Contract::NarrowableDep) &&
+      source->hasAttr(AttrNames::Operation::Contract::NarrowableDep))
+    dest->setAttr(AttrNames::Operation::Contract::NarrowableDep,
+                  UnitAttr::get(dest->getContext()));
 }
 
 /// Copy contract attrs

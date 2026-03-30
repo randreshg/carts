@@ -20,18 +20,20 @@
 ///==========================================================================///
 
 #include "arts/transforms/db/block/DbBlockRewriter.h"
+#include "arts/transforms/db/DbPartitionWindowUtils.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/transforms/db/block/DbBlockIndexer.h"
+#include "arts/utils/BlockedAccessUtils.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/EdtUtils.h"
+#include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/IRMapping.h"
-
 ARTS_DEBUG_SETUP(db_transforms);
 
 using namespace mlir;
@@ -130,6 +132,16 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
   if (nPartDims == 0)
     nPartDims = 1;
 
+  SmallVector<Value> updatedElementOffsets(acquire.getElementOffsets().begin(),
+                                           acquire.getElementOffsets().end());
+  SmallVector<Value> updatedElementSizes(acquire.getElementSizes().begin(),
+                                         acquire.getElementSizes().end());
+  bool canUpdateElementSlice =
+      acquire.getMode() == ArtsMode::in &&
+      updatedElementOffsets.size() == updatedElementSizes.size() &&
+      !updatedElementOffsets.empty();
+  bool elementSliceChanged = false;
+
   /// Mixed mode: full-range coarse acquire on a block allocation.
   if (info.isFullRange) {
     SmallVector<Value> newOffsets, newSizes;
@@ -154,64 +166,15 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
   SmallVector<Value> newOffsets, newSizes;
   bool isSingleBlock = true;
 
-  /// Helper lambda to check dynamic alignment to block size
-  auto isAlignedToBlockDynamic = [&](Value offset, Value bsVal) -> bool {
-    if (!offset || !bsVal)
-      return false;
-    Value off = ValueAnalysis::stripNumericCasts(offset);
-    Value bs = ValueAnalysis::stripClampOne(bsVal);
-    if (auto mul = off.getDefiningOp<arith::MulIOp>()) {
-      Value lhs = ValueAnalysis::stripClampOne(mul.getLhs());
-      Value rhs = ValueAnalysis::stripClampOne(mul.getRhs());
-      if (ValueAnalysis::areValuesEquivalent(lhs, bs) ||
-          ValueAnalysis::areValuesEquivalent(rhs, bs))
-        return true;
-    }
-    return false;
-  };
-  /// Helper lambda to check if size is bounded by block size
-  auto isBoundedByBlock = [&](Value sz, Value bsVal) -> bool {
-    if (!sz || !bsVal)
-      return false;
-    Value s = ValueAnalysis::stripClampOne(sz);
-    Value bs = ValueAnalysis::stripClampOne(bsVal);
-    if (ValueAnalysis::areValuesEquivalent(s, bs))
-      return true;
-    if (auto minOp = s.getDefiningOp<arith::MinUIOp>()) {
-      Value lhs = ValueAnalysis::stripClampOne(minOp.getLhs());
-      Value rhs = ValueAnalysis::stripClampOne(minOp.getRhs());
-      if (ValueAnalysis::areValuesEquivalent(lhs, bs) ||
-          ValueAnalysis::areValuesEquivalent(rhs, bs))
-        return true;
-    }
-    return false;
-  };
-  /// Helper lambda to check static alignment to constant block size
-  auto isAlignedToBlock = [&](Value offset,
-                              const std::optional<int64_t> &bsConst) -> bool {
-    if (!offset || !bsConst || *bsConst <= 0)
-      return false;
-    Value stripped = ValueAnalysis::stripNumericCasts(offset);
-    if (auto c = ValueAnalysis::getConstantValue(stripped))
-      return (*c % *bsConst) == 0;
-    if (auto mul = stripped.getDefiningOp<arith::MulIOp>()) {
-      Value lhs = ValueAnalysis::stripNumericCasts(mul.getLhs());
-      Value rhs = ValueAnalysis::stripNumericCasts(mul.getRhs());
-      if (auto lhsC = ValueAnalysis::getConstantValue(lhs))
-        if ((*lhsC % *bsConst) == 0)
-          return true;
-      if (auto rhsC = ValueAnalysis::getConstantValue(rhs))
-        if ((*rhsC % *bsConst) == 0)
-          return true;
-    }
-    return false;
-  };
-
   for (unsigned d = 0; d < nPartDims; ++d) {
     Value bs = plan.getBlockSize(d);
     if (!bs)
       bs = one;
     bs = builder.create<arith::MaxUIOp>(loc, bs, one);
+    Value totalExtent =
+        (d < plan.outerSizes.size() && plan.outerSizes[d])
+            ? builder.create<arith::MulIOp>(loc, plan.outerSizes[d], bs)
+            : Value();
 
     /// Get element offset and size for this dimension from partitionInfo.
     /// For block mode: offsets are range starts, sizes are range sizes.
@@ -219,6 +182,63 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
     const auto &sizes = info.partitionInfo.sizes;
     Value elemOff = (d < offsets.size() && offsets[d]) ? offsets[d] : zero;
     Value elemSz = (d < sizes.size() && sizes[d]) ? sizes[d] : one;
+
+    /// Block allocations can still serve read-only stencil-shaped acquires.
+    /// In that case partitionInfo.offsets keeps the owner-slice base, while
+    /// the actual dependency span may need a left-halo shift before we convert
+    /// the element-space window into DB-space blocks.
+    if (acquire.getMode() == ArtsMode::in) {
+      auto contract = getLoweringContract(acquire.getPtr());
+      SmallVector<unsigned, 4> ownerDims =
+          (contract && !contract->ownerDims.empty())
+              ? resolveContractOwnerDims(*contract, nPartDims)
+              : SmallVector<unsigned, 4>{};
+      auto resolveOwnerDim = [&](unsigned dim) -> unsigned {
+        if (dim < ownerDims.size())
+          return ownerDims[dim];
+        if (dim < plan.partitionedDims.size())
+          return plan.partitionedDims[dim];
+        return dim;
+      };
+
+      unsigned ownerDim = resolveOwnerDim(d);
+      auto applyHaloWindow = [&](int64_t minOffset, int64_t maxOffset) {
+        ExpandedElementWindow expanded = expandElementWindowWithHalo(
+            builder, loc, elemOff, elemSz, totalExtent, minOffset, maxOffset);
+        elemOff = expanded.offset;
+        elemSz = expanded.size;
+        if (canUpdateElementSlice && ownerDim < updatedElementOffsets.size() &&
+            ownerDim < updatedElementSizes.size()) {
+          updatedElementOffsets[ownerDim] = elemOff;
+          updatedElementSizes[ownerDim] = elemSz;
+          elementSliceChanged = true;
+        }
+      };
+      if (contract) {
+        auto staticMinOffsets = contract->getStaticMinOffsets();
+        auto staticMaxOffsets = contract->getStaticMaxOffsets();
+        if (staticMinOffsets && staticMaxOffsets &&
+            ownerDim < staticMinOffsets->size() &&
+            ownerDim < staticMaxOffsets->size()) {
+          ARTS_DEBUG("  Block rewrite uses contract halo window on dim "
+                     << ownerDim << " for acquire " << acquire);
+          applyHaloWindow((*staticMinOffsets)[ownerDim],
+                          (*staticMaxOffsets)[ownerDim]);
+        } else if (info.graphStencilBounds && info.graphStencilBounds->valid &&
+                   info.graphStencilBounds->hasHalo() &&
+                   (!info.graphStencilOwnerDim ||
+                    ownerDim == *info.graphStencilOwnerDim)) {
+          applyHaloWindow(info.graphStencilBounds->minOffset,
+                          info.graphStencilBounds->maxOffset);
+        }
+      } else if (info.graphStencilBounds && info.graphStencilBounds->valid &&
+                 info.graphStencilBounds->hasHalo() &&
+                 (!info.graphStencilOwnerDim ||
+                  ownerDim == *info.graphStencilOwnerDim)) {
+        applyHaloWindow(info.graphStencilBounds->minOffset,
+                        info.graphStencilBounds->maxOffset);
+      }
+    }
 
     Value startBlock = builder.create<arith::DivUIOp>(loc, elemOff, bs);
     Value endPos = builder.create<arith::AddIOp>(loc, elemOff, elemSz);
@@ -252,11 +272,17 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
     }
 
     /// Check if single-block for this dimension
-    auto constElemSz = ValueAnalysis::getConstantValue(elemSz);
+    auto constElemSz = ValueAnalysis::tryFoldConstantIndex(elemSz);
     auto constElemSzUpper =
         constElemSz ? constElemSz : arts::extractBlockSizeFromHint(elemSz);
     auto constBs = arts::extractBlockSizeFromHint(bs);
-    bool isAligned = isAlignedToBlock(elemOff, constBs);
+    bool isAligned = arts::isAlignedToBlock(elemOff, bs);
+    ARTS_DEBUG("  dim " << d << " elemOff=" << elemOff << " elemSz=" << elemSz
+                        << " bs=" << bs << " blockCount=" << blockCount
+                        << " aligned=" << isAligned
+                        << " constElemSzUpper="
+                        << (constElemSzUpper ? *constElemSzUpper : -1)
+                        << " constBs=" << (constBs ? *constBs : -1));
     bool isSingleDim = false;
     if (auto constBlocks = ValueAnalysis::tryFoldConstantIndex(blockCount)) {
       if (*constBlocks == 1)
@@ -267,11 +293,14 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
         isSingleDim = true;
     }
     if (!isSingleDim) {
-      bool dynAligned = isAlignedToBlockDynamic(elemOff, bs) ||
-                        isAlignedToBlockDynamic(elemOff, elemSz);
-      if (isBoundedByBlock(elemSz, bs) && (isAligned || dynAligned))
+      bool dynAligned =
+          arts::isAlignedToBlock(elemOff, bs) ||
+          arts::isAlignedToBlock(elemOff, elemSz);
+      if (arts::isValueBoundedByBlockSpan(elemSz, bs) &&
+          (isAligned || dynAligned))
         isSingleDim = true;
     }
+    ARTS_DEBUG("    -> singleDim=" << isSingleDim);
     /// Unknown/ambiguous sizes, assume not single block
     if (!isSingleDim)
       isSingleBlock = false;
@@ -284,6 +313,10 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
 
   acquire.getOffsetsMutable().assign(newOffsets);
   acquire.getSizesMutable().assign(newSizes);
+  if (elementSliceChanged) {
+    acquire.getElementOffsetsMutable().assign(updatedElementOffsets);
+    acquire.getElementSizesMutable().assign(updatedElementSizes);
+  }
 
   /// Use mode-aware rebase for block mode EDT users
   if (!info.skipRebase)

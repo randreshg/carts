@@ -75,6 +75,8 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/Interfaces/ViewLikeInterface.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
@@ -96,6 +98,22 @@ using namespace mlir::arts;
 /// Helper Functions
 ///===----------------------------------------------------------------------===///
 namespace {
+
+static bool isForwardingMemrefAliasOp(Operation *op, Value source) {
+  if (auto viewLike = dyn_cast<ViewLikeOpInterface>(op))
+    return viewLike.getViewSource() == source && op->getNumResults() == 1;
+
+  if (auto unrealized = dyn_cast<UnrealizedConversionCastOp>(op)) {
+    return unrealized.getInputs().size() == 1 &&
+           unrealized.getInputs().front() == source &&
+           unrealized.getOutputs().size() == 1;
+  }
+
+  if (auto subindex = dyn_cast<polygeist::SubIndexOp>(op))
+    return subindex.getSource() == source && op->getNumResults() == 1;
+
+  return false;
+}
 
 ///===----------------------------------------------------------------------===///
 /// Pass Implementation
@@ -763,15 +781,10 @@ void CreateDbsPass::createDbAllocOps() {
     if (info.parentEdt) {
       rewriteUsesInParentEdt(info);
     } else {
-      /// Use element-wise indexer with outerRank=0
-      /// Coarse allocation: keep indices empty so db_ref uses constant zero
-      PartitionInfo partInfo;
-      partInfo.mode = PartitionMode::coarse;
-
-      DbElementWiseIndexer indexer(partInfo, 0, rank, {});
-
-      /// Step 1: Rewrite parent region uses (skips EDTs by design)
-      indexer.transformUsesInParentRegion(alloc, dbAllocOp, *AC, opsToRemove);
+      /// Redirect non-EDT aliases/host accesses to the canonical DB-backed
+      /// coarse view so initialization and verification code observe the
+      /// datablock contents instead of a disconnected host allocation.
+      rewriteUsesEverywhereCoarse(alloc, dbAllocOp);
 
       /// Step 2: Rewrite EDT uses without explicit deps
       Type elementMemRefType = dbAllocOp.getAllocatedElementType();
@@ -786,6 +799,9 @@ void CreateDbsPass::createDbAllocOps() {
         }
       }
       if (!edtUsesToRewrite.empty()) {
+        PartitionInfo partInfo;
+        partInfo.mode = PartitionMode::coarse;
+        DbElementWiseIndexer indexer(partInfo, 0, rank, {});
         indexer.transformOps(edtUsesToRewrite, dbAllocOp.getPtr(),
                              elementMemRefType, *AC, opsToRemove);
       }
@@ -1342,32 +1358,104 @@ void CreateDbsPass::rewriteUsesInParentEdt(MemrefInfo &memrefInfo) {
 /// For coarse-grained: all indices go to inner load/store, db_ref gets [0].
 void CreateDbsPass::rewriteUsesEverywhereCoarse(Operation *alloc,
                                                 DbAllocOp dbAlloc) {
-  Type elementMemRefType = dbAlloc.getAllocatedElementType();
-
-  SmallVector<Operation *> users;
-  for (auto &use : alloc->getUses()) {
-    Operation *user = use.getOwner();
-    /// Skip the DbAlloc itself
-    if (user == dbAlloc.getOperation())
-      continue;
-    /// Skip uses inside EDTs; those are rewritten via acquires separately.
-    if (user->getParentOfType<EdtOp>())
-      continue;
-    users.push_back(user);
-  }
-
-  if (users.empty())
+  Value originalValue = alloc->getResult(0);
+  if (!originalValue)
     return;
 
-  /// Coarse-grained: outerCount=0, all indices go to inner load/store
-  /// Keep indices empty so db_ref uses constant zero
-  PartitionInfo info;
-  info.mode = PartitionMode::coarse;
-  DbElementWiseIndexer indexer(
-      info, 0, cast<MemRefType>(elementMemRefType).getRank(), {});
-  for (Operation *user : users)
-    indexer.transformAccess(user, dbAlloc.getPtr(), elementMemRefType, *AC,
-                            opsToRemove);
+  auto shouldRewrite = [&](Operation *user) {
+    return user != dbAlloc.getOperation() && !user->getParentOfType<EdtOp>();
+  };
+
+  bool hasHostUses = false;
+  for (auto &use : originalValue.getUses()) {
+    if (shouldRewrite(use.getOwner())) {
+      hasHostUses = true;
+      break;
+    }
+  }
+  if (!hasHostUses)
+    return;
+
+  auto materializeMemrefAsType = [&](Value value, Type targetType,
+                                     Operation *insertBefore) -> Value {
+    if (!value || value.getType() == targetType)
+      return value;
+    if (!isa<MemRefType>(value.getType()) || !isa<MemRefType>(targetType))
+      return Value();
+
+    OpBuilder::InsertionGuard guard(AC->getBuilder());
+    AC->setInsertionPoint(insertBefore);
+    return AC->create<memref::CastOp>(insertBefore->getLoc(),
+                                      cast<MemRefType>(targetType), value);
+  };
+
+  auto materializeCoarseView = [&](Type targetType,
+                                   Operation *insertBefore) -> Value {
+    OpBuilder::InsertionGuard guard(AC->getBuilder());
+    AC->setInsertionPoint(insertBefore);
+    Value zero = AC->createIndexConstant(0, insertBefore->getLoc());
+    Value view =
+        AC->create<DbRefOp>(insertBefore->getLoc(),
+                            dbAlloc.getAllocatedElementType(), dbAlloc.getPtr(),
+                            ValueRange{zero});
+    return materializeMemrefAsType(view, targetType, insertBefore);
+  };
+
+  std::function<void(Value, Value)> rewriteForwardedUses =
+      [&](Value oldValue, Value replacementValue) {
+        SmallVector<OpOperand *> usesToRewrite;
+        for (OpOperand &use : llvm::make_early_inc_range(oldValue.getUses())) {
+          if (shouldRewrite(use.getOwner()))
+            usesToRewrite.push_back(&use);
+        }
+
+        for (OpOperand *use : usesToRewrite) {
+          Operation *user = use->getOwner();
+
+          if (isa<memref::DeallocOp>(user)) {
+            opsToRemove.insert(user);
+            continue;
+          }
+
+          Value baseReplacement = replacementValue;
+          if (!baseReplacement)
+            baseReplacement = materializeCoarseView(oldValue.getType(), user);
+          if (!baseReplacement)
+            continue;
+
+          if (isForwardingMemrefAliasOp(user, oldValue)) {
+            Value mappedSource =
+                materializeMemrefAsType(baseReplacement, oldValue.getType(),
+                                        user);
+            if (!mappedSource)
+              continue;
+
+            IRMapping mapper;
+            mapper.map(oldValue, mappedSource);
+
+            OpBuilder::InsertionGuard guard(AC->getBuilder());
+            AC->setInsertionPoint(user);
+            Operation *cloned = AC->clone(*user, mapper);
+
+            for (auto [oldResult, newResult] :
+                 llvm::zip(user->getResults(), cloned->getResults()))
+              rewriteForwardedUses(oldResult, newResult);
+
+            if (user->use_empty())
+              opsToRemove.insert(user);
+            continue;
+          }
+
+          Value typedReplacement =
+              materializeMemrefAsType(baseReplacement, oldValue.getType(),
+                                      user);
+          if (!typedReplacement)
+            continue;
+          use->set(typedReplacement);
+        }
+      };
+
+  rewriteForwardedUses(originalValue, Value());
 }
 
 /// Rewrite operations to use DbAcquire

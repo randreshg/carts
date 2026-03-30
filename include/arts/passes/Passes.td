@@ -291,14 +291,19 @@ def EdtICM : Pass<"arts-edt-icm", "mlir::ModuleOp"> {
 
 def DataPtrHoisting
     : Pass<"arts-data-ptr-hoisting", "mlir::ModuleOp"> {
-  let summary = "Hoist data pointer loads from deps struct out of loops";
+  let summary =
+      "Hoist invariant dep/db views and recover loop-local blocked slices";
   let description = [{
-    This pass hoists llvm.load operations that extract data pointers from the
-    ARTS deps struct (artsEdtDep_t.ptr field) to before enclosing loops.
+    This pass hoists invariant llvm.load operations that extract dependency or
+    datablock pointers to before enclosing loops.
 
-    The deps struct contains pointers to data arrays. Without hoisting, these
-    pointer loads happen inside innermost loops (O(n^3) loads for 3-nested loops).
-    With hoisting, the pointers are loaded once before the loop nest (O(1) loads).
+    It also recognizes blocked worker loops that already stay inside a single
+    owned slice and rewrites them to reuse one hoisted dep view plus the local
+    loop IV, instead of rebuilding dep_gep/div/rem selection on every element.
+
+    Without hoisting, these pointer loads happen inside innermost loops
+    (O(n^3) loads for 3-nested loops). With hoisting, the pointers are loaded
+    once before the loop nest (O(1) loads).
 
     This is critical for performance because LLVM's LICM cannot hoist these loads
     without TBAA metadata proving they don't alias with data stores.
@@ -591,12 +596,13 @@ def Hoisting : Pass<"arts-hoisting", "mlir::ModuleOp"> {
 }
 
 def BlockLoopStripMining : Pass<"block-stripmine", "mlir::func::FuncOp"> {
-  let summary = "Strip-mine innermost loops with block-partitioned indexing";
-  let description = [{Matches innermost loops that use div /
-                          rem by a constant block size and block -
-                      partitioned db_ref patterns.Rewrites them into a block
-                          loop and local index loop to remove per -
-                      iteration div / rem overhead and reuse db_ref.}];
+  let summary = "Strip-mine block-partitioned loops to remove div/rem overhead";
+  let description = [{Matches block-partitioned loop indexing patterns and
+                      rewrites them into block-local loops that reuse db_ref.
+                      The legacy path handles innermost 1-D div/rem loops,
+                      while the neighborhood-aware path can also rewrite
+                      enclosing stencil loops that carry block-neighbor
+                      indexing state.}];
   let dependentDialects = [
     "func::FuncDialect", "scf::SCFDialect", "arith::ArithDialect",
     "arts::ArtsDialect"

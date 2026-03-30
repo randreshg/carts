@@ -84,11 +84,13 @@ public:
                            ArrayRef<int64_t> minOffsets,
                            ArrayRef<int64_t> maxOffsets,
                            ArrayRef<int64_t> writeFootprint,
-                           int64_t revision = 1)
+                           int64_t revision = 1,
+                           ArrayRef<int64_t> blockShape = {})
       : family(family), ownerDims(ownerDims.begin(), ownerDims.end()),
         minOffsets(minOffsets.begin(), minOffsets.end()),
         maxOffsets(maxOffsets.begin(), maxOffsets.end()),
         writeFootprint(writeFootprint.begin(), writeFootprint.end()),
+        blockShape(blockShape.begin(), blockShape.end()),
         revision(revision) {}
 
   ArtsDepPattern getFamily() const override { return family; }
@@ -102,6 +104,7 @@ private:
   SmallVector<int64_t, 4> minOffsets;
   SmallVector<int64_t, 4> maxOffsets;
   SmallVector<int64_t, 4> writeFootprint;
+  SmallVector<int64_t, 4> blockShape;
   int64_t revision = 1;
 };
 

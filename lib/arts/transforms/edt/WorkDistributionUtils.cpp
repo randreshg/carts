@@ -52,6 +52,50 @@ static std::optional<int64_t> getExplicitWorkersPerNodeCount(EdtOp edt) {
   return arts::getWorkersPerNode(edt.getOperation());
 }
 
+static std::optional<int64_t> getStaticRuntimeWorkersPerNode(ModuleOp module) {
+  if (!module || !getRuntimeStaticWorkers(module))
+    return std::nullopt;
+
+  auto totalWorkers = getRuntimeTotalWorkers(module);
+  if (!totalWorkers || *totalWorkers <= 0)
+    return std::nullopt;
+
+  int64_t totalNodes = getRuntimeTotalNodes(module).value_or(1);
+  totalNodes = std::max<int64_t>(1, totalNodes);
+  return std::max<int64_t>(1, *totalWorkers / totalNodes);
+}
+
+static std::optional<int64_t> getStaticRuntimeDispatchWorkers(ModuleOp module,
+                                                              EdtOp edt) {
+  if (!module || !edt || !getRuntimeStaticWorkers(module))
+    return std::nullopt;
+
+  if (edt.getConcurrency() == EdtConcurrency::internode) {
+    int64_t totalNodes = getRuntimeTotalNodes(module).value_or(1);
+    return std::max<int64_t>(1, totalNodes);
+  }
+
+  return getStaticRuntimeWorkersPerNode(module);
+}
+
+static std::optional<int64_t> getStaticRuntimeTotalWorkers(ModuleOp module,
+                                                           EdtOp edt) {
+  if (!module || !edt || !getRuntimeStaticWorkers(module))
+    return std::nullopt;
+
+  auto workersPerNode = getStaticRuntimeWorkersPerNode(module);
+  if (!workersPerNode)
+    return std::nullopt;
+
+  if (edt.getConcurrency() == EdtConcurrency::internode) {
+    int64_t totalNodes = getRuntimeTotalNodes(module).value_or(1);
+    totalNodes = std::max<int64_t>(1, totalNodes);
+    return totalNodes * *workersPerNode;
+  }
+
+  return workersPerNode;
+}
+
 static bool isValidTiling2DColumnDivisor(
     int64_t totalWorkers, std::optional<int64_t> workersPerNode,
     int64_t candidate) {
@@ -251,7 +295,7 @@ static Value castToIndexType(OpBuilder &builder, Location loc, Value v) {
     return Value();
   if (v.getType().isIndex())
     return v;
-  return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(), v);
+  return arith::IndexCastOp::create(builder, loc, builder.getIndexType(), v);
 }
 
 } // namespace
@@ -263,6 +307,21 @@ std::pair<Value, Value> WorkDistributionUtils::balancedDistribute(
 
   Value base = AC->create<arith::DivUIOp>(loc, totalChunks, numParticipants);
   Value rem = AC->create<arith::RemUIOp>(loc, totalChunks, numParticipants);
+
+  /// When the chunk count divides evenly, every participant receives exactly
+  /// `base` chunks and the clipped remainder term is provably zero. Emitting
+  /// the generic `participantId < rem ? base + 1 : base` shape in that case
+  /// leaves dead symbolic control in worker-slice bounds, which then obscures
+  /// single-block DB acquires downstream.
+  auto totalChunksConst = ValueAnalysis::tryFoldConstantIndex(totalChunks);
+  auto participantsConst = ValueAnalysis::tryFoldConstantIndex(numParticipants);
+  bool evenlyDivisible =
+      totalChunksConst && participantsConst && *participantsConst > 0 &&
+      (*totalChunksConst % *participantsConst) == 0;
+  if (evenlyDivisible || ValueAnalysis::isZeroConstant(rem)) {
+    Value start = AC->create<arith::MulIOp>(loc, participantId, base);
+    return {start, base};
+  }
 
   Value getsExtra = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult,
                                               participantId, rem);
@@ -774,25 +833,31 @@ Value WorkDistributionUtils::getWorkersPerNode(OpBuilder &builder, Location loc,
     return arts::createConstantIndex(builder, loc, clamped);
   }
 
+  if (auto module = parallelEdt ? parallelEdt->getParentOfType<ModuleOp>()
+                                : ModuleOp();
+      auto staticWorkersPerNode = getStaticRuntimeWorkersPerNode(module)) {
+    return arts::createConstantIndex(builder, loc, *staticWorkersPerNode);
+  }
+
   if (auto workers = getExplicitWorkerCount(parallelEdt)) {
     Value totalWorkers = arts::createConstantIndex(builder, loc, *workers);
     Value totalNodes = castToIndexType(
         builder, loc,
-        builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalNodes)
+        RuntimeQueryOp::create(builder, loc, RuntimeQueryKind::totalNodes)
             .getResult());
     workersPerNode =
-        builder.create<arith::DivUIOp>(loc, totalWorkers, totalNodes);
+        arith::DivUIOp::create(builder, loc, totalWorkers, totalNodes);
   } else {
     workersPerNode = castToIndexType(
         builder, loc,
-        builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalWorkers)
+        RuntimeQueryOp::create(builder, loc, RuntimeQueryKind::totalWorkers)
             .getResult());
   }
 
   Value zero = arts::createZeroIndex(builder, loc);
-  Value isZero = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                               workersPerNode, zero);
-  return builder.create<arith::SelectOp>(loc, isZero, one, workersPerNode);
+  Value isZero = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq,
+                                       workersPerNode, zero);
+  return arith::SelectOp::create(builder, loc, isZero, one, workersPerNode);
 }
 
 Value WorkDistributionUtils::getWorkersPerNode(ArtsCodegen *AC, Location loc,
@@ -805,21 +870,28 @@ Value WorkDistributionUtils::getTotalWorkers(OpBuilder &builder, Location loc,
   if (auto workers = getExplicitWorkerCount(parallelEdt))
     return arts::createConstantIndex(builder, loc, *workers);
 
+  if (auto module = parallelEdt ? parallelEdt->getParentOfType<ModuleOp>()
+                                : ModuleOp();
+      auto staticTotalWorkers =
+          getStaticRuntimeTotalWorkers(module, parallelEdt)) {
+    return arts::createConstantIndex(builder, loc, *staticTotalWorkers);
+  }
+
   if (parallelEdt.getConcurrency() == EdtConcurrency::internode) {
     Value nodes = castToIndexType(
         builder, loc,
-        builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalNodes)
+        RuntimeQueryOp::create(builder, loc, RuntimeQueryKind::totalNodes)
             .getResult());
     Value threads = castToIndexType(
         builder, loc,
-        builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalWorkers)
+        RuntimeQueryOp::create(builder, loc, RuntimeQueryKind::totalWorkers)
             .getResult());
-    return builder.create<arith::MulIOp>(loc, nodes, threads);
+    return arith::MulIOp::create(builder, loc, nodes, threads);
   }
 
   return castToIndexType(
       builder, loc,
-      builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalWorkers)
+      RuntimeQueryOp::create(builder, loc, RuntimeQueryKind::totalWorkers)
           .getResult());
 }
 
@@ -834,12 +906,18 @@ Value WorkDistributionUtils::getDispatchWorkerCount(OpBuilder &builder,
   if (auto workers = getExplicitWorkerCount(parallelEdt))
     return arts::createConstantIndex(builder, loc, *workers);
 
+  if (auto module = parallelEdt ? parallelEdt->getParentOfType<ModuleOp>()
+                                : ModuleOp();
+      auto staticDispatchWorkers =
+          getStaticRuntimeDispatchWorkers(module, parallelEdt)) {
+    return arts::createConstantIndex(builder, loc, *staticDispatchWorkers);
+  }
+
   RuntimeQueryKind queryKind =
       parallelEdt.getConcurrency() == EdtConcurrency::internode
           ? RuntimeQueryKind::totalNodes
           : RuntimeQueryKind::totalWorkers;
-  Value workerCount =
-      builder.create<RuntimeQueryOp>(loc, queryKind).getResult();
+  Value workerCount = RuntimeQueryOp::create(builder, loc, queryKind).getResult();
   return castToIndexType(builder, loc, workerCount);
 }
 

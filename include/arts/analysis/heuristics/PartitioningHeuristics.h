@@ -276,6 +276,8 @@ std::optional<PartitioningHint> getPartitioningHint(Operation *op);
 void setPartitioningHint(Operation *op, const PartitioningHint &hint);
 
 /// Copy ARTS-specific metadata attributes from source to dest operation.
+/// Use only for semantically equivalent rewrites; structural rewrites should
+/// not clone source loop metadata onto a new iteration space.
 void copyArtsMetadataAttrs(Operation *source, Operation *dest);
 
 } // namespace arts

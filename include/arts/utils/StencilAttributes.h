@@ -269,6 +269,31 @@ inline void copyStencilContractAttrs(Operation *source, Operation *dest) {
   }
 }
 
+inline void inheritStencilContractAttrs(Operation *source, Operation *dest) {
+  if (!source || !dest)
+    return;
+
+  for (StringRef attrName : {
+           AttrNames::Operation::Stencil::StencilCenterOffset,
+           AttrNames::Operation::Stencil::ElementStride,
+           AttrNames::Operation::Stencil::LeftHaloArgIdx,
+           AttrNames::Operation::Stencil::RightHaloArgIdx,
+           AttrNames::Operation::Stencil::FootprintMinOffsets,
+           AttrNames::Operation::Stencil::FootprintMaxOffsets,
+           AttrNames::Operation::Stencil::SpatialDims,
+           AttrNames::Operation::Stencil::OwnerDims,
+           AttrNames::Operation::Stencil::BlockShape,
+           AttrNames::Operation::Stencil::WriteFootprint,
+           AttrNames::Operation::Stencil::HaloContractId,
+           AttrNames::Operation::Stencil::SupportedBlockHalo,
+       }) {
+    if (dest->hasAttr(attrName))
+      continue;
+    if (Attribute attr = source->getAttr(attrName))
+      dest->setAttr(attrName, attr);
+  }
+}
+
 } // namespace arts
 } // namespace mlir
 

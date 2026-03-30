@@ -134,6 +134,12 @@ static cl::opt<std::string> ArtsDebug(
     cl::desc("Enable ARTS_INFO/ARTS_DEBUG channels (comma-separated)"),
     cl::value_desc("debug_types"), cl::init(""));
 
+static cl::opt<bool> RuntimeStaticWorkers(
+    "runtime-static-workers",
+    cl::desc("Fold runtime_query<total_workers> to the configured worker count "
+             "when the module embeds a valid ARTS config"),
+    cl::init(false));
+
 /// Kernel transform options (Pipeline step: pattern-pipeline)
 static cl::opt<bool> KernelTransformsEnableElementwisePipeline(
     "loop-transforms-enable-elementwise-pipeline",
@@ -303,10 +309,9 @@ static cl::opt<bool> PrintPipelineManifestJSON(
     cl::desc("Print pipeline step/pass manifest as JSON and exit"),
     cl::init(false));
 
-static const std::array<llvm::StringLiteral, 9> kRaiseMemRefDimensionalityPasses = {
+static const std::array<llvm::StringLiteral, 8> kRaiseMemRefDimensionalityPasses = {
     "LowerAffine(func)",
     "CSE",
-    "Inliner",
     "ArtsInliner",
     "PolygeistCanonicalize",
     "RaiseMemRefDimensionality",
@@ -661,9 +666,11 @@ static void addCanonicalizeAndCSE(PassManager &pm) {
 /// Raise nested pointer allocations to N-dimensional memrefs.
 void buildRaiseMemRefDimensionalityPipeline(PassManager &pm) {
   OpPassManager &optPM = pm.nest<func::FuncOp>();
+  /// Stage contract: normalize affine memory/control ops before the module pass
+  /// runs so RaiseMemRefDimensionality only needs to reason about the
+  /// memref+SCF form produced by the frontend/inliner pipeline.
   optPM.addPass(createLowerAffinePass());
   pm.addPass(createCSEPass());
-  pm.addPass(createInlinerPass());
   pm.addPass(arts::createArtsInlinerPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createRaiseMemRefDimensionalityPass());
@@ -879,7 +886,6 @@ void buildPreLoweringPipeline(PassManager &pm, arts::AnalysisManager *AM,
   pm.addPass(arts::createScalarReplacementPass());
   addCanonicalizeAndCSE(pm);
   pm.addPass(arts::createEpochLoweringPass());
-  pm.addPass(arts::createLoweringContractCleanupPass());
   addCanonicalizeAndCSE(pm);
   pm.addPass(arts::createVerifyPreLoweredPass());
 }
@@ -890,6 +896,10 @@ void buildArtsToLLVMPipeline(PassManager &pm, bool debug,
                              const arts::AbstractMachine *machine) {
   pm.addPass(arts::createConvertArtsToLLVMPass(debug, distributedInitPerWorker,
                                                machine));
+  /// ConvertArtsToLLVM still consults lowering contracts for late dependency
+  /// decisions (for example N-D stencil halo slices). Clean them up only after
+  /// that conversion has consumed them.
+  pm.addPass(arts::createLoweringContractCleanupPass());
   pm.addPass(arts::createGuidRangCallOptPass());
   pm.addPass(arts::createRuntimeCallOptPass());
   /// Hoist loop-invariant loads after Arts->LLVM lowering for
@@ -982,6 +992,7 @@ buildPassManager(ModuleOp module, MLIRContext &context,
   }
   arts::setRuntimeTotalWorkers(module, machine.getRuntimeTotalWorkers());
   arts::setRuntimeTotalNodes(module, machine.getNodeCount());
+  arts::setRuntimeStaticWorkers(module, RuntimeStaticWorkers);
 
   if (machine.getNodeCount() > 1 && !DistributedDb)
     llvm::errs() << "NOTE: Multi-node execution without --distributed-db: "

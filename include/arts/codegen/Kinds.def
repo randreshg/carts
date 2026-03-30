@@ -142,9 +142,11 @@ __ARTS_TYPE(RawPtr, mlir::LLVM::LLVMPointerType::get)
 ///   void *ptr;
 ///   arts_db_access_mode_t mode;
 ///   uint32_t flags;
+///   uint64_t slice_offset;
+///   uint64_t slice_size;
 /// } arts_edt_dep_t;
 __ARTS_STRUCT_TYPE(ArtsEdtDep, arts_edt_dep_t, false, ArtsGuid, llvmPtr,
-                   ArtsType, Int32)
+                   ArtsType, Int32, Int64, Int64)
 
 /// typedef struct {
 ///   unsigned int route;

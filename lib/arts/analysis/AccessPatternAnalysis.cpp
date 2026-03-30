@@ -5,12 +5,303 @@
 ///==========================================================================///
 
 #include "arts/analysis/AccessPatternAnalysis.h"
+#include "arts/Dialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include <algorithm>
 #include <limits>
 
 using namespace mlir;
 using namespace mlir::arts;
+
+namespace {
+
+static constexpr int64_t kMaxSupportedLoopOffsetSpan = 16;
+
+struct RelativeOffsetRange {
+  int64_t minOffset = 0;
+  int64_t maxOffset = 0;
+  bool hasBase = false;
+};
+
+static bool matchesBaseValue(Value candidate, Value base) {
+  if (!candidate || !base)
+    return false;
+  candidate = ValueAnalysis::stripNumericCasts(candidate);
+  base = ValueAnalysis::stripNumericCasts(base);
+  return ValueAnalysis::sameValue(candidate, base) ||
+         ValueAnalysis::areValuesEquivalent(candidate, base);
+}
+
+static bool matchesBasePattern(Value value, Value loopIV, Value blockBase) {
+  if (!value || !loopIV || !blockBase)
+    return false;
+
+  auto addOp =
+      ValueAnalysis::stripNumericCasts(value).getDefiningOp<arith::AddIOp>();
+  if (!addOp)
+    return false;
+
+  Value lhs = ValueAnalysis::stripNumericCasts(addOp.getLhs());
+  Value rhs = ValueAnalysis::stripNumericCasts(addOp.getRhs());
+  return (matchesBaseValue(lhs, loopIV) && matchesBaseValue(rhs, blockBase)) ||
+         (matchesBaseValue(lhs, blockBase) && matchesBaseValue(rhs, loopIV));
+}
+
+static std::optional<RelativeOffsetRange> getSmallLoopOffsetRange(Value value) {
+  auto blockArg =
+      dyn_cast_or_null<BlockArgument>(ValueAnalysis::stripNumericCasts(value));
+  if (!blockArg)
+    return std::nullopt;
+
+  auto buildRange = [&](Value lbVal, Value ubVal,
+                        Value stepVal) -> std::optional<RelativeOffsetRange> {
+    auto lb = ValueAnalysis::tryFoldConstantIndex(lbVal);
+    auto ub = ValueAnalysis::tryFoldConstantIndex(ubVal);
+    auto step = ValueAnalysis::tryFoldConstantIndex(stepVal);
+    if (!lb || !ub || !step || *step == 0)
+      return std::nullopt;
+
+    int64_t minVal = *lb;
+    int64_t maxVal = *lb;
+    if (*step > 0) {
+      if (*lb >= *ub)
+        return std::nullopt;
+      maxVal = *ub - *step;
+    } else {
+      if (*lb <= *ub)
+        return std::nullopt;
+      minVal = *ub - *step;
+    }
+
+    if (maxVal < minVal)
+      std::swap(minVal, maxVal);
+    if (maxVal - minVal > kMaxSupportedLoopOffsetSpan)
+      return std::nullopt;
+
+    return RelativeOffsetRange{minVal, maxVal, /*hasBase=*/false};
+  };
+
+  Operation *parentOp = blockArg.getOwner()->getParentOp();
+  if (!parentOp)
+    return std::nullopt;
+
+  if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+    if (blockArg != forOp.getInductionVar())
+      return std::nullopt;
+    return buildRange(forOp.getLowerBound(), forOp.getUpperBound(),
+                      forOp.getStep());
+  }
+
+  if (auto parallelOp = dyn_cast<scf::ParallelOp>(parentOp)) {
+    for (auto [idx, iv] : llvm::enumerate(parallelOp.getInductionVars())) {
+      if (blockArg != iv)
+        continue;
+      return buildRange(parallelOp.getLowerBound()[idx],
+                        parallelOp.getUpperBound()[idx],
+                        parallelOp.getStep()[idx]);
+    }
+    return std::nullopt;
+  }
+
+  if (auto artsFor = dyn_cast<arts::ForOp>(parentOp)) {
+    for (auto [idx, iv] : llvm::enumerate(artsFor.getBody()->getArguments())) {
+      if (blockArg != iv)
+        continue;
+      return buildRange(artsFor.getLowerBound()[idx],
+                        artsFor.getUpperBound()[idx], artsFor.getStep()[idx]);
+    }
+  }
+
+  return std::nullopt;
+}
+
+static std::optional<RelativeOffsetRange>
+extractRelativeOffsetRange(Value value, Value loopIV, Value blockBase,
+                           unsigned depth = 0) {
+  if (!value || !loopIV || !blockBase || depth > 8)
+    return std::nullopt;
+
+  value = ValueAnalysis::stripNumericCasts(ValueAnalysis::stripSelectClamp(value));
+  loopIV = ValueAnalysis::stripNumericCasts(loopIV);
+  blockBase = ValueAnalysis::stripNumericCasts(blockBase);
+
+  if (matchesBaseValue(value, loopIV) || matchesBaseValue(value, blockBase) ||
+      matchesBasePattern(value, loopIV, blockBase))
+    return RelativeOffsetRange{0, 0, /*hasBase=*/true};
+
+  if (auto constant = ValueAnalysis::tryFoldConstantIndex(value))
+    return RelativeOffsetRange{*constant, *constant, /*hasBase=*/false};
+
+  if (auto loopRange = getSmallLoopOffsetRange(value))
+    return loopRange;
+
+  auto combine = [](const RelativeOffsetRange &lhs,
+                    const RelativeOffsetRange &rhs, bool subtractRhs) {
+    RelativeOffsetRange result;
+    result.hasBase = lhs.hasBase || rhs.hasBase;
+    if (subtractRhs) {
+      result.minOffset = lhs.minOffset - rhs.maxOffset;
+      result.maxOffset = lhs.maxOffset - rhs.minOffset;
+    } else {
+      result.minOffset = lhs.minOffset + rhs.minOffset;
+      result.maxOffset = lhs.maxOffset + rhs.maxOffset;
+    }
+    return result;
+  };
+
+  if (auto add = value.getDefiningOp<arith::AddIOp>()) {
+    auto lhs = extractRelativeOffsetRange(add.getLhs(), loopIV, blockBase,
+                                          depth + 1);
+    auto rhs = extractRelativeOffsetRange(add.getRhs(), loopIV, blockBase,
+                                          depth + 1);
+    if (lhs && rhs)
+      return combine(*lhs, *rhs, /*subtractRhs=*/false);
+    return std::nullopt;
+  }
+
+  if (auto sub = value.getDefiningOp<arith::SubIOp>()) {
+    auto lhs = extractRelativeOffsetRange(sub.getLhs(), loopIV, blockBase,
+                                          depth + 1);
+    auto rhs = extractRelativeOffsetRange(sub.getRhs(), loopIV, blockBase,
+                                          depth + 1);
+    if (lhs && rhs)
+      return combine(*lhs, *rhs, /*subtractRhs=*/true);
+    return std::nullopt;
+  }
+
+  if (auto mul = value.getDefiningOp<arith::MulIOp>()) {
+    auto lhsConst = ValueAnalysis::tryFoldConstantIndex(mul.getLhs());
+    auto rhsConst = ValueAnalysis::tryFoldConstantIndex(mul.getRhs());
+    if (lhsConst) {
+      auto rhs = extractRelativeOffsetRange(mul.getRhs(), loopIV, blockBase,
+                                            depth + 1);
+      if (!rhs)
+        return std::nullopt;
+      int64_t minVal = rhs->minOffset * *lhsConst;
+      int64_t maxVal = rhs->maxOffset * *lhsConst;
+      if (maxVal < minVal)
+        std::swap(minVal, maxVal);
+      return RelativeOffsetRange{minVal, maxVal, rhs->hasBase};
+    }
+    if (rhsConst) {
+      auto lhs = extractRelativeOffsetRange(mul.getLhs(), loopIV, blockBase,
+                                            depth + 1);
+      if (!lhs)
+        return std::nullopt;
+      int64_t minVal = lhs->minOffset * *rhsConst;
+      int64_t maxVal = lhs->maxOffset * *rhsConst;
+      if (maxVal < minVal)
+        std::swap(minVal, maxVal);
+      return RelativeOffsetRange{minVal, maxVal, lhs->hasBase};
+    }
+    return std::nullopt;
+  }
+
+  return std::nullopt;
+}
+
+/// Split blocked accesses often represent one logical owner-dimension index as
+/// a db_ref selector plus an in-block remainder:
+///   selector ~= divui(globalIdx, blockSpan)
+///   localIdx  = remui(globalIdx, blockSpan)
+///
+/// Access-bound analysis cares about the original logical index (`globalIdx`),
+/// not the implementation split. Recovering that dividend keeps stencil/halo
+/// facts stable across blocked DB materialization and later rewrites.
+static Value peelSelectorDividend(Value value, Value divisor,
+                                  unsigned depth = 0) {
+  if (!value || !divisor || depth > 8)
+    return Value();
+
+  value = ValueAnalysis::stripNumericCasts(ValueAnalysis::stripSelectClamp(value));
+  divisor = ValueAnalysis::stripNumericCasts(divisor);
+
+  auto divisorMatches = [&](Value candidate) {
+    candidate = ValueAnalysis::stripNumericCasts(candidate);
+    return ValueAnalysis::sameValue(candidate, divisor) ||
+           ValueAnalysis::areValuesEquivalent(candidate, divisor);
+  };
+
+  if (auto div = value.getDefiningOp<arith::DivUIOp>())
+    if (divisorMatches(div.getRhs()))
+      return div.getLhs();
+  if (auto div = value.getDefiningOp<arith::DivSIOp>())
+    if (divisorMatches(div.getRhs()))
+      return div.getLhs();
+
+  auto recurseBinary = [&](Value lhs, Value rhs) -> Value {
+    if (Value recovered = peelSelectorDividend(lhs, divisor, depth + 1))
+      return recovered;
+    return peelSelectorDividend(rhs, divisor, depth + 1);
+  };
+
+  if (auto add = value.getDefiningOp<arith::AddIOp>())
+    return recurseBinary(add.getLhs(), add.getRhs());
+  if (auto sub = value.getDefiningOp<arith::SubIOp>())
+    return peelSelectorDividend(sub.getLhs(), divisor, depth + 1);
+  if (auto min = value.getDefiningOp<arith::MinUIOp>())
+    return recurseBinary(min.getLhs(), min.getRhs());
+  if (auto min = value.getDefiningOp<arith::MinSIOp>())
+    return recurseBinary(min.getLhs(), min.getRhs());
+  if (auto max = value.getDefiningOp<arith::MaxUIOp>())
+    return recurseBinary(max.getLhs(), max.getRhs());
+  if (auto max = value.getDefiningOp<arith::MaxSIOp>())
+    return recurseBinary(max.getLhs(), max.getRhs());
+  if (auto select = value.getDefiningOp<arith::SelectOp>())
+    return recurseBinary(select.getTrueValue(), select.getFalseValue());
+
+  return Value();
+}
+
+static Value recoverLogicalMemrefIndex(const AccessIndexInfo &access,
+                                       unsigned memrefDim) {
+  if (access.dbRefPrefix == 0)
+    return Value();
+
+  unsigned chainIdx = access.dbRefPrefix + memrefDim;
+  if (chainIdx >= access.indexChain.size())
+    return Value();
+
+  Value localIdx = ValueAnalysis::stripNumericCasts(access.indexChain[chainIdx]);
+  Value dividend;
+  Value divisor;
+  if (auto rem = localIdx.getDefiningOp<arith::RemUIOp>()) {
+    dividend = rem.getLhs();
+    divisor = rem.getRhs();
+  } else if (auto rem = localIdx.getDefiningOp<arith::RemSIOp>()) {
+    dividend = rem.getLhs();
+    divisor = rem.getRhs();
+  } else {
+    return Value();
+  }
+
+  for (unsigned i = 0; i < access.dbRefPrefix; ++i) {
+    Value selectorDividend =
+        peelSelectorDividend(access.indexChain[i], divisor);
+    if (!selectorDividend)
+      continue;
+    if (ValueAnalysis::sameValue(selectorDividend, dividend) ||
+        ValueAnalysis::areValuesEquivalent(selectorDividend, dividend))
+      return dividend;
+  }
+
+  return Value();
+}
+
+static Value getMemrefIndexForBounds(const AccessIndexInfo &access,
+                                     unsigned memrefDim) {
+  if (Value logicalIdx = recoverLogicalMemrefIndex(access, memrefDim))
+    return logicalIdx;
+
+  unsigned chainIdx = access.dbRefPrefix + memrefDim;
+  if (chainIdx >= access.indexChain.size())
+    return Value();
+  return access.indexChain[chainIdx];
+}
+
+} // namespace
 
 /// Normalize stencil bounds to center them around zero.
 ///
@@ -100,16 +391,29 @@ arts::analyzeAccessBoundsFromIndices(ArrayRef<AccessIndexInfo> accesses,
     Value idxForBounds;
 
     /// Priority 1: Use specific dimension if analyzing multi-dim accesses
-    if (partitionDim) {
-      unsigned chainIdx = access.dbRefPrefix + *partitionDim;
-      if (chainIdx < access.indexChain.size())
-        idxForBounds = access.indexChain[chainIdx];
-    }
+    if (partitionDim)
+      idxForBounds = getMemrefIndexForBounds(access, *partitionDim);
 
     /// Priority 2: Find index that depends on our analysis base
     /// (loopIV/blockBase)
     if (!idxForBounds) {
-      for (Value idx : access.indexChain) {
+      for (unsigned i = access.dbRefPrefix; i < access.indexChain.size(); ++i) {
+        Value idx = getMemrefIndexForBounds(access, i - access.dbRefPrefix);
+        if (ValueAnalysis::dependsOn(idx, loopIV) ||
+            ValueAnalysis::dependsOn(idx, blockBase)) {
+          idxForBounds = idx;
+          break;
+        }
+      }
+    }
+
+    /// Prefix db_ref selectors are a fallback only after we fail to recover a
+    /// logical memref-dimension index. Using them first on blocked accesses can
+    /// undercount halos by observing only the chunk selector delta.
+    if (!idxForBounds) {
+      for (unsigned i = 0; i < access.dbRefPrefix && i < access.indexChain.size();
+           ++i) {
+        Value idx = access.indexChain[i];
         if (ValueAnalysis::dependsOn(idx, loopIV) ||
             ValueAnalysis::dependsOn(idx, blockBase)) {
           idxForBounds = idx;
@@ -119,6 +423,17 @@ arts::analyzeAccessBoundsFromIndices(ArrayRef<AccessIndexInfo> accesses,
     }
 
     /// Priority 3: Use any non-constant index as fallback
+    if (!idxForBounds) {
+      for (unsigned i = access.dbRefPrefix; i < access.indexChain.size(); ++i) {
+        Value idx = getMemrefIndexForBounds(access, i - access.dbRefPrefix);
+        int64_t constVal = 0;
+        if (!ValueAnalysis::getConstantIndex(idx, constVal)) {
+          idxForBounds = idx;
+          break;
+        }
+      }
+    }
+
     if (!idxForBounds) {
       for (Value idx : access.indexChain) {
         int64_t constVal = 0;
@@ -141,6 +456,15 @@ arts::analyzeAccessBoundsFromIndices(ArrayRef<AccessIndexInfo> accesses,
       foundAny = true;
       bounds.minOffset = std::min(bounds.minOffset, *constOffset);
       bounds.maxOffset = std::max(bounds.maxOffset, *constOffset);
+      continue;
+    }
+
+    if (auto offsetRange =
+            extractRelativeOffsetRange(idxForBounds, loopIV, blockBase);
+        offsetRange && offsetRange->hasBase) {
+      foundAny = true;
+      bounds.minOffset = std::min(bounds.minOffset, offsetRange->minOffset);
+      bounds.maxOffset = std::max(bounds.maxOffset, offsetRange->maxOffset);
       continue;
     }
 

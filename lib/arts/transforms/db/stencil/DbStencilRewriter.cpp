@@ -26,6 +26,7 @@
 ///==========================================================================///
 
 #include "arts/transforms/db/stencil/DbStencilRewriter.h"
+#include "arts/transforms/db/DbPartitionWindowUtils.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/transforms/db/stencil/DbStencilIndexer.h"
@@ -356,6 +357,15 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
   unsigned nPartDims = plan.numPartitionedDims();
   if (nPartDims == 0)
     nPartDims = 1;
+  SmallVector<Value> updatedElementOffsets(acquire.getElementOffsets().begin(),
+                                           acquire.getElementOffsets().end());
+  SmallVector<Value> updatedElementSizes(acquire.getElementSizes().begin(),
+                                         acquire.getElementSizes().end());
+  bool canUpdateElementSlice =
+      acquire.getMode() == ArtsMode::in &&
+      updatedElementOffsets.size() == updatedElementSizes.size() &&
+      !updatedElementOffsets.empty();
+  bool elementSliceChanged = false;
 
   bool hasPartitionSlices =
       !info.partitionInfo.offsets.empty() || !info.partitionInfo.sizes.empty();
@@ -410,6 +420,11 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
       if (!blockSize)
         blockSize = one;
       blockSize = builder.create<arith::MaxUIOp>(loc, blockSize, one);
+      Value totalExtent =
+          (d < plan.outerSizes.size() && plan.outerSizes[d])
+              ? builder.create<arith::MulIOp>(loc, plan.outerSizes[d],
+                                              blockSize)
+              : Value();
 
       Value elemOff = (d < offsets.size() && offsets[d]) ? offsets[d] : zero;
       Value elemSz = (d < sizes.size() && sizes[d]) ? sizes[d] : one;
@@ -417,40 +432,41 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
 
       /// Contract-backed stencil reads may carry a halo-expanded span but keep
       /// the owner-slice base in partitionInfo.offsets. Shift the start back
-      /// by the left halo before converting to DB-space blocks so the block
+      /// and extend the size before converting to DB-space blocks so the block
       /// window matches the EDT-local dependency layout.
       if (acquire.getMode() == ArtsMode::in) {
-        auto shiftElemOffsetForMin = [&](int64_t minOffset) {
-          if (minOffset < 0) {
-            Value haloLeft =
-                arts::createConstantIndex(builder, loc, -minOffset);
-            Value canShift = builder.create<arith::CmpIOp>(
-                loc, arith::CmpIPredicate::uge, elemOff, haloLeft);
-            Value shifted =
-                builder.create<arith::SubIOp>(loc, elemOff, haloLeft);
-            elemOff =
-                builder.create<arith::SelectOp>(loc, canShift, shifted, zero);
-            return;
-          }
-          if (minOffset > 0) {
-            Value haloShift =
-                arts::createConstantIndex(builder, loc, minOffset);
-            elemOff = builder.create<arith::AddIOp>(loc, elemOff, haloShift);
+        unsigned ownerDim = resolveOwnerDim(d);
+        auto applyHaloWindow = [&](int64_t minOffset, int64_t maxOffset) {
+          ExpandedElementWindow expanded = expandElementWindowWithHalo(
+              builder, loc, elemOff, elemSz, totalExtent, minOffset,
+              maxOffset);
+          elemOff = expanded.offset;
+          elemSz = expanded.size;
+          if (canUpdateElementSlice && ownerDim < updatedElementOffsets.size() &&
+              ownerDim < updatedElementSizes.size()) {
+            updatedElementOffsets[ownerDim] = elemOff;
+            updatedElementSizes[ownerDim] = elemSz;
+            elementSliceChanged = true;
           }
         };
 
-        unsigned ownerDim = resolveOwnerDim(d);
-        if (staticMinOffsets && ownerDim < staticMinOffsets->size()) {
-          shiftElemOffsetForMin((*staticMinOffsets)[ownerDim]);
+        auto staticMaxOffsets =
+            contract ? contract->getStaticMaxOffsets() : std::nullopt;
+        if (staticMinOffsets && staticMaxOffsets &&
+            ownerDim < staticMinOffsets->size() &&
+            ownerDim < staticMaxOffsets->size()) {
+          applyHaloWindow((*staticMinOffsets)[ownerDim],
+                          (*staticMaxOffsets)[ownerDim]);
         } else if (info.graphStencilBounds && info.graphStencilBounds->valid &&
                    info.graphStencilBounds->hasHalo() &&
                    (!info.graphStencilOwnerDim ||
                     ownerDim == *info.graphStencilOwnerDim)) {
           /// Graph-backed fallback for contracts that only persist
           /// EDT-local fields on the acquire result. PartitionBoundsAnalyzer
-          /// already widened the span; we only need the owner-dim min offset
-          /// here to anchor the DB-space start block correctly.
-          shiftElemOffsetForMin(info.graphStencilBounds->minOffset);
+          /// already proved the halo span; reuse the full min/max window here
+          /// so block fallback and slice lowering observe the same footprint.
+          applyHaloWindow(info.graphStencilBounds->minOffset,
+                          info.graphStencilBounds->maxOffset);
         }
       }
 
@@ -499,6 +515,10 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
 
   acquire.getOffsetsMutable().assign(newOffsets);
   acquire.getSizesMutable().assign(newSizes);
+  if (elementSliceChanged) {
+    acquire.getElementOffsetsMutable().assign(updatedElementOffsets);
+    acquire.getElementSizesMutable().assign(updatedElementSizes);
+  }
 
   /// Block fallback must always rebase EDT-side db_ref users into local
   /// block coordinates. Stencil-origin acquires can still carry global-row

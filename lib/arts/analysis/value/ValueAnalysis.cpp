@@ -10,6 +10,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -56,6 +57,86 @@ static std::optional<int64_t> tryFoldTypeSizeBytes(polygeist::TypeSizeOp tsOp) {
   if (isa<IntegerType, FloatType>(sourceType) ||
       LLVM::isCompatibleType(sourceType))
     return static_cast<int64_t>(layout.getTypeSize(sourceType));
+
+  return std::nullopt;
+}
+
+static std::optional<int64_t> tryFoldCmpResult(arith::CmpIOp cmp,
+                                               unsigned depth) {
+  auto lhs = ValueAnalysis::tryFoldConstantIndex(cmp.getLhs(), depth + 1);
+  auto rhs = ValueAnalysis::tryFoldConstantIndex(cmp.getRhs(), depth + 1);
+
+  auto evalCmp = [&](int64_t lhsVal, int64_t rhsVal) -> int64_t {
+    switch (cmp.getPredicate()) {
+    case arith::CmpIPredicate::eq:
+      return lhsVal == rhsVal;
+    case arith::CmpIPredicate::ne:
+      return lhsVal != rhsVal;
+    case arith::CmpIPredicate::slt:
+      return lhsVal < rhsVal;
+    case arith::CmpIPredicate::sle:
+      return lhsVal <= rhsVal;
+    case arith::CmpIPredicate::sgt:
+      return lhsVal > rhsVal;
+    case arith::CmpIPredicate::sge:
+      return lhsVal >= rhsVal;
+    case arith::CmpIPredicate::ult:
+      return static_cast<uint64_t>(lhsVal) < static_cast<uint64_t>(rhsVal);
+    case arith::CmpIPredicate::ule:
+      return static_cast<uint64_t>(lhsVal) <= static_cast<uint64_t>(rhsVal);
+    case arith::CmpIPredicate::ugt:
+      return static_cast<uint64_t>(lhsVal) > static_cast<uint64_t>(rhsVal);
+    case arith::CmpIPredicate::uge:
+      return static_cast<uint64_t>(lhsVal) >= static_cast<uint64_t>(rhsVal);
+    }
+    llvm_unreachable("unsupported cmp predicate");
+  };
+
+  if (lhs && rhs)
+    return evalCmp(*lhs, *rhs);
+
+  Value lhsValue = ValueAnalysis::stripNumericCasts(cmp.getLhs());
+  Value rhsValue = ValueAnalysis::stripNumericCasts(cmp.getRhs());
+  if (ValueAnalysis::sameValue(lhsValue, rhsValue)) {
+    switch (cmp.getPredicate()) {
+    case arith::CmpIPredicate::eq:
+    case arith::CmpIPredicate::sle:
+    case arith::CmpIPredicate::sge:
+    case arith::CmpIPredicate::ule:
+    case arith::CmpIPredicate::uge:
+      return 1;
+    case arith::CmpIPredicate::ne:
+    case arith::CmpIPredicate::slt:
+    case arith::CmpIPredicate::sgt:
+    case arith::CmpIPredicate::ult:
+    case arith::CmpIPredicate::ugt:
+      return 0;
+    }
+  }
+
+  if (auto rhsConst = ValueAnalysis::tryFoldConstantIndex(rhsValue, depth + 1);
+      rhsConst && *rhsConst == 0) {
+    switch (cmp.getPredicate()) {
+    case arith::CmpIPredicate::ult:
+      return 0;
+    case arith::CmpIPredicate::uge:
+      return 1;
+    default:
+      break;
+    }
+  }
+
+  if (auto lhsConst = ValueAnalysis::tryFoldConstantIndex(lhsValue, depth + 1);
+      lhsConst && *lhsConst == 0) {
+    switch (cmp.getPredicate()) {
+    case arith::CmpIPredicate::ugt:
+      return 0;
+    case arith::CmpIPredicate::ule:
+      return 1;
+    default:
+      break;
+    }
+  }
 
   return std::nullopt;
 }
@@ -178,7 +259,11 @@ std::optional<int64_t> ValueAnalysis::getConstantValue(Value v) {
 
 std::optional<int64_t> ValueAnalysis::tryFoldConstantIndex(Value v,
                                                            unsigned depth) {
-  if (!v || depth > 8)
+  /// Work-distribution and DB-shape calculations routinely build longer
+  /// arithmetic chains (nested min/max/div/add trees) before canonicalization.
+  /// Keep this bounded, but allow enough depth to recover compile-time
+  /// constants from those staged expressions.
+  if (!v || depth > 32)
     return std::nullopt;
 
   int64_t val;
@@ -190,6 +275,18 @@ std::optional<int64_t> ValueAnalysis::tryFoldConstantIndex(Value v,
 
   if (auto cast = v.getDefiningOp<arith::IndexCastOp>()) {
     return tryFoldConstantIndex(cast.getIn(), depth + 1);
+  }
+  if (auto cast = v.getDefiningOp<arith::IndexCastUIOp>()) {
+    return tryFoldConstantIndex(cast.getIn(), depth + 1);
+  }
+  if (auto ext = v.getDefiningOp<arith::ExtSIOp>()) {
+    return tryFoldConstantIndex(ext.getIn(), depth + 1);
+  }
+  if (auto ext = v.getDefiningOp<arith::ExtUIOp>()) {
+    return tryFoldConstantIndex(ext.getIn(), depth + 1);
+  }
+  if (auto trunc = v.getDefiningOp<arith::TruncIOp>()) {
+    return tryFoldConstantIndex(trunc.getIn(), depth + 1);
   }
 
   if (auto add = v.getDefiningOp<arith::AddIOp>()) {
@@ -250,6 +347,23 @@ std::optional<int64_t> ValueAnalysis::tryFoldConstantIndex(Value v,
     if (lhs && rhs)
       return std::min<uint64_t>(static_cast<uint64_t>(*lhs),
                                 static_cast<uint64_t>(*rhs));
+    return std::nullopt;
+  }
+
+  if (auto cmp = v.getDefiningOp<arith::CmpIOp>())
+    return tryFoldCmpResult(cmp, depth + 1);
+
+  if (auto select = v.getDefiningOp<arith::SelectOp>()) {
+    auto cond = tryFoldConstantIndex(select.getCondition(), depth + 1);
+    if (cond)
+      return tryFoldConstantIndex((*cond != 0) ? select.getTrueValue()
+                                               : select.getFalseValue(),
+                                  depth + 1);
+
+    auto trueValue = tryFoldConstantIndex(select.getTrueValue(), depth + 1);
+    auto falseValue = tryFoldConstantIndex(select.getFalseValue(), depth + 1);
+    if (trueValue && falseValue && *trueValue == *falseValue)
+      return trueValue;
     return std::nullopt;
   }
 

@@ -776,8 +776,10 @@ static bool tryNarrowWavefrontDep(DbAcquireOp acquire, Value ptr,
 /// ET-3: Dep chain narrowing for stencil/wavefront patterns
 ///===----------------------------------------------------------------------===///
 unsigned EdtTransformsPass::narrowDepChains() {
-  /// TODO: narrowable_dep is annotation-only —
-  /// no lowering pass currently reads this attribute.
+  /// narrowable_dep is consumed conservatively by acquire rewrite planning:
+  /// read-only task acquires keep worker-local dependency windows instead of
+  /// widening back to the parent range when upstream analysis proved that a
+  /// narrower dependence is safe.
   ModuleOp module = getOperation();
   unsigned count = 0;
 

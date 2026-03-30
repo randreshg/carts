@@ -81,7 +81,9 @@ public:
       return facts && facts->hasDistributedContractEntries();
     }
     bool hasDistributionContract() const {
-      return facts && facts->hasDistributionContract;
+      return (facts && facts->hasDistributionContract) ||
+             contract.distributionKind || contract.distributionPattern ||
+             contract.distributionVersion;
     }
     bool partitionDimsFromPeers() const {
       return facts && facts->partitionDimsFromPeers;

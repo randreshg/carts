@@ -249,7 +249,8 @@ build:
 		-DPOLYGEIST_DIR=$(POLYGEIST_DIR) \
 		$(LLVM_RUNTIME_CMAKE_FLAGS) \
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-	ninja $(NINJA_FLAGS) -C $(CARTS_BUILD_DIR) install
+	$(CMAKE_CMD) --build $(CARTS_BUILD_DIR) $(if $(filter 1,$(VERBOSE)),--verbose,)
+	$(CMAKE_CMD) --install $(CARTS_BUILD_DIR)
 
 # Build only carts-compile
 carts-compile-only:

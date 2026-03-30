@@ -690,17 +690,14 @@ public:
     if (!matchResult.artsFor)
       return failure();
 
+    StencilNDPatternContract contract(
+        matchResult.pattern, matchResult.ownerDims, matchResult.minOffsets,
+        matchResult.maxOffsets, matchResult.writeFootprint);
+
     auto stamp = [&](Operation *op) {
       if (!op)
         return;
-      setDepPattern(op, matchResult.pattern);
-      setEdtDistributionPattern(op, EdtDistributionPattern::stencil);
-      setSupportedBlockHalo(op);
-      setStencilSpatialDims(op, matchResult.ownerDims);
-      setStencilOwnerDims(op, matchResult.ownerDims);
-      setStencilMinOffsets(op, matchResult.minOffsets);
-      setStencilMaxOffsets(op, matchResult.maxOffsets);
-      setStencilWriteFootprint(op, matchResult.writeFootprint);
+      contract.stamp(op);
       if (int64_t artsId = getArtsId(matchResult.artsFor.getOperation());
           artsId > 0) {
         setStencilHaloContractId(op, artsId);
