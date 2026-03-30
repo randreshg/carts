@@ -797,6 +797,50 @@ void arts::convertElementSliceToBlockSlice(
   }
 }
 
+void arts::mergeNormalizedBlockSlice(
+    OpBuilder &builder, Location loc, ValueRange existingOffsets,
+    ValueRange existingSizes, ValueRange totalBlockCounts,
+    ValueRange normalizedOffsets, ValueRange normalizedSizes,
+    SmallVectorImpl<Value> &blockOffsets, SmallVectorImpl<Value> &blockSizes) {
+  unsigned ownerRank = existingOffsets.size();
+  ownerRank = std::max(ownerRank, static_cast<unsigned>(existingSizes.size()));
+  ownerRank =
+      std::max(ownerRank, static_cast<unsigned>(totalBlockCounts.size()));
+  ownerRank =
+      std::max(ownerRank, static_cast<unsigned>(normalizedOffsets.size()));
+  ownerRank =
+      std::max(ownerRank, static_cast<unsigned>(normalizedSizes.size()));
+  if (ownerRank == 0) {
+    blockOffsets.clear();
+    blockSizes.clear();
+    return;
+  }
+
+  Value zero = createZeroIndex(builder, loc);
+  Value one = createOneIndex(builder, loc);
+  blockOffsets.assign(ownerRank, zero);
+  blockSizes.assign(ownerRank, one);
+
+  for (unsigned i = 0; i < ownerRank; ++i) {
+    if (i < totalBlockCounts.size() && totalBlockCounts[i])
+      blockSizes[i] = ValueAnalysis::castToIndex(totalBlockCounts[i], builder, loc);
+    if (i < existingOffsets.size() && existingOffsets[i])
+      blockOffsets[i] = ValueAnalysis::castToIndex(existingOffsets[i], builder, loc);
+    if (i < existingSizes.size() && existingSizes[i])
+      blockSizes[i] = ValueAnalysis::castToIndex(existingSizes[i], builder, loc);
+  }
+
+  unsigned normalizedRank =
+      std::min(static_cast<unsigned>(normalizedOffsets.size()),
+               static_cast<unsigned>(normalizedSizes.size()));
+  for (unsigned i = 0; i < normalizedRank; ++i) {
+    blockOffsets[i] =
+        ValueAnalysis::castToIndex(normalizedOffsets[i], builder, loc);
+    blockSizes[i] =
+        ValueAnalysis::castToIndex(normalizedSizes[i], builder, loc);
+  }
+}
+
 ///===----------------------------------------------------------------------===///
 /// Block Size and Malloc Pattern Extraction (free functions)
 ///===----------------------------------------------------------------------===///

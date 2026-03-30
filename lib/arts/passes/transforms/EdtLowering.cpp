@@ -149,9 +149,16 @@ static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   convertElementSliceToBlockSlice(AC->getBuilder(), loc, dimElementOffsets,
                                   dimElementSizes, dimBlockSpans, dimTotalBlocks,
                                   offsets, sizes);
+  SmallVector<Value, 4> mergedOffsets, mergedSizes;
+  /// normalizeTaskDepSlice may refine only a leading owner-space prefix from
+  /// partition_* metadata. Preserve the remaining owner slots so N-D acquires
+  /// keep the same DB rank that DbPartitioning established.
+  mergeNormalizedBlockSlice(AC->getBuilder(), loc, acquire.getOffsets(),
+                            acquire.getSizes(), outerSizes, offsets, sizes,
+                            mergedOffsets, mergedSizes);
 
-  acquire.getOffsetsMutable().assign(offsets);
-  acquire.getSizesMutable().assign(sizes);
+  acquire.getOffsetsMutable().assign(mergedOffsets);
+  acquire.getSizesMutable().assign(mergedSizes);
 }
 
 struct NormalizedElementSlice {

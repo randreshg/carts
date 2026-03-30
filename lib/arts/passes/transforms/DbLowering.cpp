@@ -125,9 +125,13 @@ static void normalizeBlockHaloAcquireSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   convertElementSliceToBlockSlice(AC->getBuilder(), loc, dimElementOffsets,
                                   dimElementSizes, dimBlockSpans, dimTotalBlocks,
                                   offsets, sizes);
+  SmallVector<Value, 4> mergedOffsets, mergedSizes;
+  mergeNormalizedBlockSlice(AC->getBuilder(), loc, acquire.getOffsets(),
+                            acquire.getSizes(), outerSizes, offsets, sizes,
+                            mergedOffsets, mergedSizes);
 
-  acquire.getOffsetsMutable().assign(offsets);
-  acquire.getSizesMutable().assign(sizes);
+  acquire.getOffsetsMutable().assign(mergedOffsets);
+  acquire.getSizesMutable().assign(mergedSizes);
 }
 
 struct DbLoweringPass : public impl::DbLoweringBase<DbLoweringPass> {
