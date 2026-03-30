@@ -237,6 +237,16 @@ void convertElementSliceToBlockSlice(
     ValueRange elementSizes, ValueRange blockSpans, ValueRange totalBlockCounts,
     SmallVectorImpl<Value> &blockOffsets, SmallVectorImpl<Value> &blockSizes);
 
+/// Overlay a normalized owner-space prefix onto an existing DB-space slice
+/// without collapsing the source DB rank. This keeps untouched owner slots at
+/// their current range (or full-range fallback) while replacing the leading
+/// normalized slots produced by convertElementSliceToBlockSlice().
+void mergeNormalizedBlockSlice(
+    OpBuilder &builder, Location loc, ValueRange existingOffsets,
+    ValueRange existingSizes, ValueRange totalBlockCounts,
+    ValueRange normalizedOffsets, ValueRange normalizedSizes,
+    SmallVectorImpl<Value> &blockOffsets, SmallVectorImpl<Value> &blockSizes);
+
 ///===----------------------------------------------------------------------===///
 /// Block Size and Malloc Pattern Extraction (free functions)
 ///===----------------------------------------------------------------------===///
