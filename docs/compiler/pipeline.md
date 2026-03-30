@@ -6,6 +6,9 @@ This document mirrors the actual `carts-compile` pipeline-step order in
 Use it as the canonical checklist when auditing pass ordering, ownership, and
 cross-step contracts.
 
+For an example-driven view of how concrete loop/kernel families travel through
+this pipeline, see [`optimization-patterns.md`](./optimization-patterns.md).
+
 ## CLI Introspection
 
 - `tools/carts pipeline`: show pipeline order and pass counts.
