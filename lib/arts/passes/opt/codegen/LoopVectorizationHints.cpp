@@ -44,6 +44,8 @@
 #include "arts/passes/Passes.h"
 
 #include "arts/utils/Debug.h"
+#include <limits>
+#include <optional>
 ARTS_DEBUG_SETUP(loop_vectorization_hints);
 
 using namespace mlir;
@@ -243,6 +245,268 @@ static bool loopHasVariantDepArrayAccess(Block *headerBlock, Block *latchBlock,
   return false;
 }
 
+static std::optional<int64_t> getConstantIntValue(Value value) {
+  if (!value)
+    return std::nullopt;
+  if (auto constant = value.getDefiningOp<LLVM::ConstantOp>()) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(constant.getValue()))
+      return intAttr.getValue().getSExtValue();
+  }
+  return std::nullopt;
+}
+
+static Value getSuccessorOperandForBlock(Operation *terminator, Block *dest,
+                                         unsigned argIndex) {
+  if (auto brOp = dyn_cast<LLVM::BrOp>(terminator)) {
+    if (brOp.getDest() != dest || argIndex >= brOp.getDestOperands().size())
+      return Value();
+    return brOp.getDestOperands()[argIndex];
+  }
+
+  if (auto condBr = dyn_cast<LLVM::CondBrOp>(terminator)) {
+    if (condBr.getTrueDest() == dest &&
+        argIndex < condBr.getTrueDestOperands().size())
+      return condBr.getTrueDestOperands()[argIndex];
+    if (condBr.getFalseDest() == dest &&
+        argIndex < condBr.getFalseDestOperands().size())
+      return condBr.getFalseDestOperands()[argIndex];
+  }
+
+  return Value();
+}
+
+static bool matchInductionStep(Value update, BlockArgument iv, int64_t &step) {
+  if (!update)
+    return false;
+
+  if (auto addOp = update.getDefiningOp<LLVM::AddOp>()) {
+    if (addOp.getLhs() == iv) {
+      if (auto rhs = getConstantIntValue(addOp.getRhs())) {
+        step = *rhs;
+        return step != 0;
+      }
+    }
+    if (addOp.getRhs() == iv) {
+      if (auto lhs = getConstantIntValue(addOp.getLhs())) {
+        step = *lhs;
+        return step != 0;
+      }
+    }
+  }
+
+  if (auto subOp = update.getDefiningOp<LLVM::SubOp>()) {
+    if (subOp.getLhs() != iv)
+      return false;
+    if (auto rhs = getConstantIntValue(subOp.getRhs())) {
+      step = -*rhs;
+      return step != 0;
+    }
+  }
+
+  return false;
+}
+
+enum class LoopBoundKind {
+  increasingExclusive,
+  increasingInclusive,
+  decreasingExclusive,
+  decreasingInclusive
+};
+
+struct ConstantLoopCondition {
+  BlockArgument inductionVar;
+  int64_t bound;
+  LoopBoundKind kind;
+};
+
+static LLVM::ICmpPredicate invertPredicate(LLVM::ICmpPredicate predicate) {
+  switch (predicate) {
+  case LLVM::ICmpPredicate::eq:
+    return LLVM::ICmpPredicate::ne;
+  case LLVM::ICmpPredicate::ne:
+    return LLVM::ICmpPredicate::eq;
+  case LLVM::ICmpPredicate::slt:
+    return LLVM::ICmpPredicate::sge;
+  case LLVM::ICmpPredicate::sle:
+    return LLVM::ICmpPredicate::sgt;
+  case LLVM::ICmpPredicate::sgt:
+    return LLVM::ICmpPredicate::sle;
+  case LLVM::ICmpPredicate::sge:
+    return LLVM::ICmpPredicate::slt;
+  case LLVM::ICmpPredicate::ult:
+    return LLVM::ICmpPredicate::uge;
+  case LLVM::ICmpPredicate::ule:
+    return LLVM::ICmpPredicate::ugt;
+  case LLVM::ICmpPredicate::ugt:
+    return LLVM::ICmpPredicate::ule;
+  case LLVM::ICmpPredicate::uge:
+    return LLVM::ICmpPredicate::ult;
+  }
+  llvm_unreachable("unexpected icmp predicate");
+}
+
+static std::optional<ConstantLoopCondition>
+matchConstantLoopCondition(LLVM::CondBrOp condBr,
+                           const SmallPtrSet<Block *, 16> &loopBlocks) {
+  Block *trueDest = condBr.getTrueDest();
+  Block *falseDest = condBr.getFalseDest();
+  bool trueInLoop = loopBlocks.contains(trueDest) && trueDest != condBr->getBlock();
+  bool falseInLoop =
+      loopBlocks.contains(falseDest) && falseDest != condBr->getBlock();
+  if (trueInLoop == falseInLoop)
+    return std::nullopt;
+
+  auto icmp = condBr.getCondition().getDefiningOp<LLVM::ICmpOp>();
+  if (!icmp)
+    return std::nullopt;
+
+  LLVM::ICmpPredicate predicate = icmp.getPredicate();
+  if (!trueInLoop)
+    predicate = invertPredicate(predicate);
+
+  Value lhs = icmp.getLhs();
+  Value rhs = icmp.getRhs();
+
+  auto makeCondition = [&](BlockArgument iv, int64_t bound,
+                           LoopBoundKind kind) -> ConstantLoopCondition {
+    return ConstantLoopCondition{iv, bound, kind};
+  };
+
+  if (auto iv = dyn_cast<BlockArgument>(lhs)) {
+    if (auto bound = getConstantIntValue(rhs)) {
+      switch (predicate) {
+      case LLVM::ICmpPredicate::slt:
+      case LLVM::ICmpPredicate::ult:
+        return makeCondition(iv, *bound, LoopBoundKind::increasingExclusive);
+      case LLVM::ICmpPredicate::sle:
+      case LLVM::ICmpPredicate::ule:
+        return makeCondition(iv, *bound, LoopBoundKind::increasingInclusive);
+      case LLVM::ICmpPredicate::sgt:
+      case LLVM::ICmpPredicate::ugt:
+        return makeCondition(iv, *bound, LoopBoundKind::decreasingExclusive);
+      case LLVM::ICmpPredicate::sge:
+      case LLVM::ICmpPredicate::uge:
+        return makeCondition(iv, *bound, LoopBoundKind::decreasingInclusive);
+      default:
+        break;
+      }
+    }
+  }
+
+  if (auto iv = dyn_cast<BlockArgument>(rhs)) {
+    if (auto bound = getConstantIntValue(lhs)) {
+      switch (predicate) {
+      case LLVM::ICmpPredicate::sgt:
+      case LLVM::ICmpPredicate::ugt:
+        return makeCondition(iv, *bound, LoopBoundKind::increasingExclusive);
+      case LLVM::ICmpPredicate::sge:
+      case LLVM::ICmpPredicate::uge:
+        return makeCondition(iv, *bound, LoopBoundKind::increasingInclusive);
+      case LLVM::ICmpPredicate::slt:
+      case LLVM::ICmpPredicate::ult:
+        return makeCondition(iv, *bound, LoopBoundKind::decreasingExclusive);
+      case LLVM::ICmpPredicate::sle:
+      case LLVM::ICmpPredicate::ule:
+        return makeCondition(iv, *bound, LoopBoundKind::decreasingInclusive);
+      default:
+        break;
+      }
+    }
+  }
+
+  return std::nullopt;
+}
+
+static std::optional<unsigned>
+computeConstantTripCount(int64_t start, int64_t step, int64_t bound,
+                         LoopBoundKind kind) {
+  int64_t distance = 0;
+
+  switch (kind) {
+  case LoopBoundKind::increasingExclusive:
+    if (step <= 0)
+      return std::nullopt;
+    distance = bound - start;
+    break;
+  case LoopBoundKind::increasingInclusive:
+    if (step <= 0)
+      return std::nullopt;
+    distance = bound - start + 1;
+    break;
+  case LoopBoundKind::decreasingExclusive:
+    if (step >= 0)
+      return std::nullopt;
+    distance = start - bound;
+    step = -step;
+    break;
+  case LoopBoundKind::decreasingInclusive:
+    if (step >= 0)
+      return std::nullopt;
+    distance = start - bound + 1;
+    step = -step;
+    break;
+  }
+
+  if (distance <= 0)
+    return 0u;
+
+  uint64_t tripCount =
+      (static_cast<uint64_t>(distance) + static_cast<uint64_t>(step) - 1) /
+      static_cast<uint64_t>(step);
+  if (tripCount > std::numeric_limits<unsigned>::max())
+    return std::nullopt;
+  return static_cast<unsigned>(tripCount);
+}
+
+static std::optional<unsigned> inferConstantTripCount(Block *headerBlock,
+                                                      Block *latchBlock) {
+  auto condBr = dyn_cast<LLVM::CondBrOp>(headerBlock->getTerminator());
+  if (!condBr)
+    return std::nullopt;
+
+  SmallPtrSet<Block *, 16> loopBlocks = getLoopBlocks(headerBlock, latchBlock);
+  auto condition = matchConstantLoopCondition(condBr, loopBlocks);
+  if (!condition)
+    return std::nullopt;
+
+  BlockArgument iv = condition->inductionVar;
+  if (iv.getOwner() != headerBlock)
+    return std::nullopt;
+
+  Value startValue;
+  int outsidePredCount = 0;
+  for (Block *pred : headerBlock->getPredecessors()) {
+    if (loopBlocks.contains(pred))
+      continue;
+    Value incoming =
+        getSuccessorOperandForBlock(pred->getTerminator(), headerBlock,
+                                    iv.getArgNumber());
+    if (!incoming)
+      return std::nullopt;
+    startValue = incoming;
+    outsidePredCount++;
+  }
+  if (outsidePredCount != 1)
+    return std::nullopt;
+
+  auto start = getConstantIntValue(startValue);
+  if (!start)
+    return std::nullopt;
+
+  Value update =
+      getSuccessorOperandForBlock(latchBlock->getTerminator(), headerBlock,
+                                  iv.getArgNumber());
+  if (!update)
+    return std::nullopt;
+
+  int64_t step = 0;
+  if (!matchInductionStep(update, iv, step))
+    return std::nullopt;
+
+  return computeConstantTripCount(*start, step, condition->bound,
+                                  condition->kind);
+}
+
 /// Determine optimal unroll count based on loop characteristics.
 static unsigned determineUnrollCount(const TypeAnalysisResult &typeInfo) {
   unsigned cacheLineElements =
@@ -265,7 +529,8 @@ static unsigned determineUnrollCount(const TypeAnalysisResult &typeInfo) {
 static LLVM::LoopAnnotationAttr
 createInnermostLoopHints(MLIRContext *ctx, unsigned width, unsigned interleave,
                          bool scalable, bool mustProgress, unsigned unrollCount,
-                         ArrayRef<LLVM::AccessGroupAttr> accessGroups) {
+                         ArrayRef<LLVM::AccessGroupAttr> accessGroups,
+                         bool fullUnroll) {
   auto vecAttr = LLVM::LoopVectorizeAttr::get(
       ctx,
       /*disable=*/BoolAttr::get(ctx, false),
@@ -282,9 +547,11 @@ createInnermostLoopHints(MLIRContext *ctx, unsigned width, unsigned interleave,
   auto unrollAttr = LLVM::LoopUnrollAttr::get(
       ctx,
       /*disable=*/BoolAttr::get(ctx, false),
-      /*count=*/IntegerAttr::get(IntegerType::get(ctx, 32), unrollCount),
+      /*count=*/fullUnroll ? IntegerAttr()
+                           : IntegerAttr::get(IntegerType::get(ctx, 32),
+                                              unrollCount),
       /*runtimeDisable=*/nullptr,
-      /*full=*/nullptr,
+      /*full=*/fullUnroll ? BoolAttr::get(ctx, true) : nullptr,
       /*followupUnrolled=*/nullptr,
       /*followupRemainder=*/nullptr,
       /*followupAll=*/nullptr);
@@ -381,12 +648,6 @@ struct LoopVectorizationHintsPass
                                        << typeInfo.totalLoads << ")");
       SmallVector<LLVM::AccessGroupAttr> parallelAccessGroups;
 
-      auto innermostHints = createInnermostLoopHints(
-          ctx, width, interleaveCount, enableScalable, enableMustProgress,
-          unrollCount, parallelAccessGroups);
-      auto outerHints = createOuterLoopHints(ctx, enableMustProgress,
-                                             unrollCount, parallelAccessGroups);
-
       int innermostCount = 0;
       int outerCount = 0;
 
@@ -409,14 +670,28 @@ struct LoopVectorizationHintsPass
         }
 
         bool innermost = isInnermostLoop(destBlock, currentBlock, domInfo);
+        std::optional<unsigned> constantTripCount =
+            inferConstantTripCount(destBlock, currentBlock);
+        bool fullUnroll =
+            innermost && constantTripCount && *constantTripCount > 0 &&
+            *constantTripCount <= 8;
+        unsigned loopUnrollCount =
+            fullUnroll ? *constantTripCount : unrollCount;
 
         if (innermost) {
-          brOp.setLoopAnnotationAttr(innermostHints);
+          brOp.setLoopAnnotationAttr(createInnermostLoopHints(
+              ctx, width, interleaveCount, enableScalable,
+              enableMustProgress, loopUnrollCount, parallelAccessGroups,
+              fullUnroll));
           innermostCount++;
           ARTS_DEBUG_TYPE("Innermost loop - full vectorization hints at "
-                          << brOp.getLoc());
+                          << brOp.getLoc()
+                          << (fullUnroll
+                                  ? " with loop-local full unroll"
+                                  : ""));
         } else {
-          brOp.setLoopAnnotationAttr(outerHints);
+          brOp.setLoopAnnotationAttr(createOuterLoopHints(
+              ctx, enableMustProgress, loopUnrollCount, parallelAccessGroups));
           outerCount++;
           ARTS_DEBUG_TYPE("Outer loop - light hints (no vectorization) at "
                           << brOp.getLoc());
@@ -445,14 +720,28 @@ struct LoopVectorizationHintsPass
         }
 
         bool innermost = isInnermostLoop(headerBlock, currentBlock, domInfo);
+        std::optional<unsigned> constantTripCount =
+            inferConstantTripCount(headerBlock, currentBlock);
+        bool fullUnroll =
+            innermost && constantTripCount && *constantTripCount > 0 &&
+            *constantTripCount <= 8;
+        unsigned loopUnrollCount =
+            fullUnroll ? *constantTripCount : unrollCount;
 
         if (innermost) {
-          condBr.setLoopAnnotationAttr(innermostHints);
+          condBr.setLoopAnnotationAttr(createInnermostLoopHints(
+              ctx, width, interleaveCount, enableScalable,
+              enableMustProgress, loopUnrollCount, parallelAccessGroups,
+              fullUnroll));
           innermostCount++;
           ARTS_DEBUG_TYPE("Innermost loop (cond) - full vectorization hints at "
-                          << condBr.getLoc());
+                          << condBr.getLoc()
+                          << (fullUnroll
+                                  ? " with loop-local full unroll"
+                                  : ""));
         } else {
-          condBr.setLoopAnnotationAttr(outerHints);
+          condBr.setLoopAnnotationAttr(createOuterLoopHints(
+              ctx, enableMustProgress, loopUnrollCount, parallelAccessGroups));
           outerCount++;
           ARTS_DEBUG_TYPE("Outer loop (cond) - light hints at "
                           << condBr.getLoc());
