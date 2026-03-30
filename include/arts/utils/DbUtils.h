@@ -165,8 +165,10 @@ public:
   ///
   /// Direct host load/store users are considered partitionable because DB
   /// rewriters can localize those indices. Opaque users such as helper calls,
-  /// dimension queries, pointer casts, and memref copies are treated as unsafe
-  /// and force a coarse layout.
+  /// dimension queries, raw pointer escapes, and memref copies are treated as
+  /// unsafe and force a coarse layout. Pointer casts used only for null/non-
+  /// null checks remain partitionable because they do not observe whole-view
+  /// layout.
   static bool hasNonPartitionableHostViewUses(Value dbValue);
 
   ///===----------------------------------------------------------------------===///

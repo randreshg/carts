@@ -9,6 +9,7 @@
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -65,6 +66,56 @@ static bool isMemrefForwardingOp(Operation *op, Value source) {
 
 static bool isStructuralHostDbUse(Operation *op) {
   return isa<EdtOp, LoweringContractOp, DbReleaseOp, DbFreeOp>(op);
+}
+
+static bool isNullPointerLike(Value value) {
+  if (!value)
+    return false;
+
+  if (isa<BlockArgument>(value))
+    return false;
+
+  Operation *defOp = value.getDefiningOp();
+  if (!defOp)
+    return false;
+
+  if (isa<LLVM::ZeroOp>(defOp))
+    return true;
+
+  if (auto constant = dyn_cast<arith::ConstantOp>(defOp)) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(constant.getValue()))
+      return intAttr.getValue().isZero();
+  }
+
+  return false;
+}
+
+static bool isNullCheckOnlyPointerCast(polygeist::Memref2PointerOp castOp) {
+  if (!castOp)
+    return false;
+
+  for (OpOperand &use : castOp.getResult().getUses()) {
+    auto cmp = dyn_cast<LLVM::ICmpOp>(use.getOwner());
+    if (!cmp)
+      return false;
+
+    auto pred = cmp.getPredicate();
+    if (pred != LLVM::ICmpPredicate::eq && pred != LLVM::ICmpPredicate::ne)
+      return false;
+
+    Value lhs = cmp.getLhs();
+    Value rhs = cmp.getRhs();
+    bool lhsIsCast = lhs == castOp.getResult();
+    bool rhsIsCast = rhs == castOp.getResult();
+    if (!lhsIsCast && !rhsIsCast)
+      return false;
+
+    Value other = lhsIsCast ? rhs : lhs;
+    if (!isNullPointerLike(other))
+      return false;
+  }
+
+  return true;
 }
 
 static void appendDynamicSubviewOffsets(memref::SubViewOp subview,
@@ -399,6 +450,14 @@ bool DbUtils::hasNonPartitionableHostViewUses(Value dbValue) {
           if (isa<MemRefType>(result.getType()))
             worklist.push_back(result);
         continue;
+      }
+
+      /// Pointer casts used only for null/non-null checks do not require a
+      /// contiguous whole-view layout. Keep treating true pointer escapes as
+      /// unsafe, but allow allocation-failure guards on DB-backed views.
+      if (auto memrefToPtr = dyn_cast<polygeist::Memref2PointerOp>(user)) {
+        if (isNullCheckOnlyPointerCast(memrefToPtr))
+          continue;
       }
 
       /// ARTS dependency plumbing outside an EDT is structural, not a host
