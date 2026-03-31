@@ -3,30 +3,30 @@ extern int printf(const char *, ...);
 extern int atoi(const char *);
 
 int main(int argc, char **argv) {
-    int A = 0;
-    int B = 0;
+  int A = 0;
+  int B = 0;
 
-    #pragma omp parallel
+#pragma omp parallel
+  {
+#pragma omp single
     {
-        #pragma omp single
+#pragma omp task shared(A, B)
+      {
+        A = 10;
+
+#pragma omp task shared(B)
         {
-            #pragma omp task shared(A, B)
-            {
-                A = 10;
-
-                #pragma omp task shared(B)
-                {
-                    B = 20;
-                }
-
-                #pragma omp taskwait
-            }
-
-            #pragma omp taskwait
+          B = 20;
         }
-    }
 
-    int sum = A + B;
-    printf("A=%d B=%d sum=%d (expected 30)\n", A, B, sum);
-    return (sum == 30) ? 0 : 1;
+#pragma omp taskwait
+      }
+
+#pragma omp taskwait
+    }
+  }
+
+  int sum = A + B;
+  printf("A=%d B=%d sum=%d (expected 30)\n", A, B, sum);
+  return (sum == 30) ? 0 : 1;
 }

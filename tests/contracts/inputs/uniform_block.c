@@ -6,19 +6,19 @@
 #include <stdlib.h>
 
 int main() {
-    int N = 1024;
-    double *A = (double *)malloc(N * sizeof(double));
+  int N = 1024;
+  double *A = (double *)malloc(N * sizeof(double));
 
-    #pragma omp parallel for
-    for (int i = 0; i < N; i++) {
-        A[i] = (double)i * 2.0;
-    }
+#pragma omp parallel for
+  for (int i = 0; i < N; i++) {
+    A[i] = (double)i * 2.0;
+  }
 
-    double sum = 0.0;
-    for (int i = 0; i < N; i++) {
-        sum += A[i];
-    }
+  double sum = 0.0;
+  for (int i = 0; i < N; i++) {
+    sum += A[i];
+  }
 
-    free(A);
-    return (int)sum;
+  free(A);
+  return (int)sum;
 }

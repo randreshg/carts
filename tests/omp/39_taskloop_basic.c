@@ -4,32 +4,31 @@ extern void free(void *);
 extern int printf(const char *, ...);
 extern int atoi(const char *);
 
-
 int main(int argc, char **argv) {
-    int N = (argc > 1) ? atoi(argv[1]) : 1024;
-    int *A = (int *)malloc(N * sizeof(int));
-    int i;
+  int N = (argc > 1) ? atoi(argv[1]) : 1024;
+  int *A = (int *)malloc(N * sizeof(int));
+  int i;
 
-    for (i = 0; i < N; i++)
-        A[i] = 0;
+  for (i = 0; i < N; i++)
+    A[i] = 0;
 
-    #pragma omp parallel
+#pragma omp parallel
+  {
+#pragma omp single
     {
-        #pragma omp single
-        {
-            #pragma omp taskloop
-            for (i = 0; i < N; i++)
-                A[i] = i + 1;
-        }
+#pragma omp taskloop
+      for (i = 0; i < N; i++)
+        A[i] = i + 1;
     }
+  }
 
-    int sum = 0;
-    for (i = 0; i < N; i++)
-        sum += A[i];
+  int sum = 0;
+  for (i = 0; i < N; i++)
+    sum += A[i];
 
-    int expected = N * (N + 1) / 2;
-    printf("sum = %d (expected %d)\n", sum, expected);
-    free(A);
+  int expected = N * (N + 1) / 2;
+  printf("sum = %d (expected %d)\n", sum, expected);
+  free(A);
 
-    return (sum == expected) ? 0 : 1;
+  return (sum == expected) ? 0 : 1;
 }
