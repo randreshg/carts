@@ -901,6 +901,7 @@ unsigned EdtTransformsPass::eliminateDeadDependencies() {
     SmallVector<unsigned, 4> deadIndices;
     for (unsigned i = 0; i < numArgs; ++i) {
       BlockArgument arg = body.getArgument(i);
+      DbAcquireOp acquire = deps[i].getDefiningOp<DbAcquireOp>();
 
       if (arg.use_empty()) {
         /// Zero uses -- clearly dead.
@@ -909,10 +910,30 @@ unsigned EdtTransformsPass::eliminateDeadDependencies() {
         continue;
       }
 
-      /// NOTE: Release-only dependencies (used only by DbReleaseOps) are NOT
-      /// dead — the acquire→release pair establishes a happens-before
-      /// relationship for synchronization. Removing them would break the
-      /// ARTS CDAG frontier ordering and cause data races.
+      bool releaseOnlyUses = true;
+      for (OpOperand &use : arg.getUses()) {
+        if (!isa<DbReleaseOp>(use.getOwner())) {
+          releaseOnlyUses = false;
+          break;
+        }
+      }
+      if (!releaseOnlyUses)
+        continue;
+
+      /// Release-only acquires that never feed a db_ref or any other task
+      /// computation are stale dependencies. Keep the edge only when an
+      /// upstream transform explicitly stamped it as semantically required.
+      if (acquire && acquire.getPreserveDepEdge()) {
+        ARTS_DEBUG("EXT-EDT-2: keeping release-only dep " << i
+                                                          << " due to "
+                                                             "preserveDepEdge");
+        continue;
+      }
+
+      deadIndices.push_back(i);
+      ARTS_DEBUG("EXT-EDT-2: block arg " << i
+                                          << " is release-only and can be "
+                                             "eliminated");
     }
 
     if (deadIndices.empty())
