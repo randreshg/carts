@@ -389,7 +389,7 @@ static const std::array<llvm::StringLiteral, 24> kConcurrencyOptPasses = {
 static const std::array<llvm::StringLiteral, 4> kEpochsPasses = {
     "PolygeistCanonicalize", "CreateEpochs",
     "EpochOpt[scheduling] (conditional)", "PolygeistCanonicalize"};
-static const std::array<llvm::StringLiteral, 23> kPreLoweringPasses = {
+static const std::array<llvm::StringLiteral, 22> kPreLoweringPasses = {
     "EdtAllocaSinking",
     "ParallelEdtLowering",
     "EpochOpt[scheduling] (conditional)",
@@ -409,12 +409,12 @@ static const std::array<llvm::StringLiteral, 23> kPreLoweringPasses = {
     "PolygeistCanonicalize",
     "CSE",
     "EpochLowering",
-    "LoweringContractCleanup",
     "PolygeistCanonicalize",
     "CSE",
     "VerifyPreLowered"};
-static const std::array<llvm::StringLiteral, 11> kArtsToLLVMPasses = {
+static const std::array<llvm::StringLiteral, 12> kArtsToLLVMPasses = {
     "ConvertArtsToLLVM",
+    "LoweringContractCleanup",
     "GuidRangCallOpt",
     "RuntimeCallOpt",
     "DataPtrHoisting",
