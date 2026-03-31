@@ -20,11 +20,10 @@
 #define GEN_PASS_DEF_KERNELTRANSFORMS
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "arts/transforms/kernel/KernelTransform.h"
 #include "arts/utils/Debug.h"
+#include "mlir/Pass/Pass.h"
 
 ARTS_DEBUG_SETUP(kernel_transforms);
 
@@ -57,9 +56,10 @@ struct KernelTransformsPass
 
     SmallVector<std::unique_ptr<KernelPatternTransform>> patterns;
     patterns.push_back(createStencilTilingNDPattern());
-    if (enableMatmul)
+    if (enableMatmul) {
       patterns.push_back(
           createMatmulReductionPattern(enableTiling, tileJ, minTripCount));
+    }
 
     SmallVector<ForOp, 16> artsFors;
     module.walk([&](ForOp fo) { artsFors.push_back(fo); });

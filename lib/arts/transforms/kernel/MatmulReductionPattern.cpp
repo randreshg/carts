@@ -1,8 +1,7 @@
 ///==========================================================================///
-/// MatmulReductionPattern.cpp - Reduction distribution for matmul patterns
+/// MatmulReductionPattern.cpp - Matmul reduction rewrite and tiling
 ///
 /// Transforms dot-product form to k-j update form for better cache locality.
-/// Handles patterns with scf.for iter_args (e.g., gemm, 2mm, 3mm).
 ///
 /// Example (gemm):
 ///
@@ -53,6 +52,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/IRMapping.h"
 
 ARTS_DEBUG_SETUP(kernel_transforms);
 
@@ -112,7 +112,7 @@ static Value getOrCreateOne(OpBuilder &b, Location loc, Type ty) {
   return Value();
 }
 
-static bool matchMulFOp(Value v, Value &lhs, Value &rhs) {
+static bool matchMulOp(Value v, Value &lhs, Value &rhs) {
   if (!v)
     return false;
   if (auto mul = v.getDefiningOp<arith::MulFOp>()) {
@@ -120,13 +120,23 @@ static bool matchMulFOp(Value v, Value &lhs, Value &rhs) {
     rhs = mul.getRhs();
     return true;
   }
+  if (auto mul = v.getDefiningOp<arith::MulIOp>()) {
+    lhs = mul.getLhs();
+    rhs = mul.getRhs();
+    return true;
+  }
   return false;
 }
 
-static bool matchAddFOp(Value v, Value &lhs, Value &rhs) {
+static bool matchAddOp(Value v, Value &lhs, Value &rhs) {
   if (!v)
     return false;
   if (auto add = v.getDefiningOp<arith::AddFOp>()) {
+    lhs = add.getLhs();
+    rhs = add.getRhs();
+    return true;
+  }
+  if (auto add = v.getDefiningOp<arith::AddIOp>()) {
     lhs = add.getLhs();
     rhs = add.getRhs();
     return true;
@@ -180,7 +190,7 @@ static bool matchAlphaBeta(Value storeVal, Value sumVal, Value oldCVal,
       return true;
     }
     Value a, b;
-    if (matchMulFOp(v, a, b)) {
+    if (matchMulOp(v, a, b)) {
       a = ValueAnalysis::stripNumericCasts(a);
       b = ValueAnalysis::stripNumericCasts(b);
       if (a == sumVal) {
@@ -202,7 +212,7 @@ static bool matchAlphaBeta(Value storeVal, Value sumVal, Value oldCVal,
       return true;
     }
     Value a, b;
-    if (matchMulFOp(v, a, b)) {
+    if (matchMulOp(v, a, b)) {
       a = ValueAnalysis::stripNumericCasts(a);
       b = ValueAnalysis::stripNumericCasts(b);
       if (a == oldCVal) {
@@ -227,7 +237,7 @@ static bool matchAlphaBeta(Value storeVal, Value sumVal, Value oldCVal,
   /// Pattern 1b: store = mul(sum, alpha) (beta=0)
   {
     Value a, b;
-    if (matchMulFOp(storeVal, a, b)) {
+    if (matchMulOp(storeVal, a, b)) {
       a = ValueAnalysis::stripNumericCasts(a);
       b = ValueAnalysis::stripNumericCasts(b);
       if (a == sumVal) {
@@ -245,7 +255,7 @@ static bool matchAlphaBeta(Value storeVal, Value sumVal, Value oldCVal,
 
   /// Pattern 2: store = add(sumTerm, cTerm)
   Value x, y;
-  if (!matchAddFOp(storeVal, x, y))
+  if (!matchAddOp(storeVal, x, y))
     return false;
 
   Value alpha, beta;
