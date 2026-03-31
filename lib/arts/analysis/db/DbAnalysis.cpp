@@ -93,6 +93,23 @@ static void applyDependencePatternHint(DbAnalysis::LoopDbAccessSummary &summary,
   }
 }
 
+static bool canNarrowDirectReadSlice(const LoweringContractInfo &contract,
+                                     const DbAcquirePartitionFacts &facts) {
+  auto acquire = facts.acquire;
+  if (!acquire || acquire.getMode() != ArtsMode::in)
+    return false;
+
+  bool blockLikeRequest =
+      facts.requestedMode == PartitionMode::block ||
+      facts.requestedMode == PartitionMode::stencil;
+  bool hasResolvedOwnerDims =
+      !contract.ownerDims.empty() || !facts.stencilOwnerDims.empty() ||
+      !facts.partitionDims.empty();
+
+  return blockLikeRequest && facts.hasDirectAccess && !facts.hasIndirectAccess &&
+         !facts.hasUnmappedPartitionEntry() && hasResolvedOwnerDims;
+}
+
 static bool refineContractWithFacts(LoweringContractInfo &contract,
                                     const DbAcquirePartitionFacts &facts) {
   bool changed = false;
@@ -145,6 +162,15 @@ static bool refineContractWithFacts(LoweringContractInfo &contract,
     changed = true;
     if (!contract.depPattern)
       contract.depPattern = ArtsDepPattern::stencil;
+  }
+
+  /// Direct read-only block/stencil accesses with a resolved owner dimension
+  /// can safely keep a worker-local dependency slice. Preserve that fact on
+  /// the contract so generic acquire rewriting can narrow the dependency
+  /// window without pattern-specific branches in ForLowering.
+  if (canNarrowDirectReadSlice(contract, facts) && !contract.narrowableDep) {
+    contract.narrowableDep = true;
+    changed = true;
   }
 
   if (changed)
@@ -775,6 +801,12 @@ DbAnalysis::getAcquireRewriteContract(DbAcquireOp acquire) {
     contract.haloMinOffsets = *mins;
   if (auto maxs = contractSummary->contract.getStaticMaxOffsets())
     contract.haloMaxOffsets = *maxs;
+
+  if (contractSummary->contract.narrowableDep ||
+      (contractSummary->facts &&
+       canNarrowDirectReadSlice(contractSummary->contract,
+                                *contractSummary->facts)))
+    contract.preserveParentDepRange = false;
 
   /// Pattern-driven N-D contracts remain the preferred source of halo bounds.
   /// When they are absent, fall back to the graph-backed scalar stencil span

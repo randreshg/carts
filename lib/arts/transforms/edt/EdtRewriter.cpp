@@ -86,8 +86,21 @@ computeTaskAcquireWindow(TaskAcquireSlicePlanInput input) {
       input.rewriteContract.usePartitionSliceAsDepWindow;
   const bool useTaskDepWindow =
       input.usesStencilHalo || input.rewriteContract.applyStencilHalo;
+  const bool useTaskPartitionWindow =
+      !input.taskAcquire.getPartitionOffsets().empty() &&
+      !input.taskAcquire.getPartitionSizes().empty() &&
+      (input.parentAcquire.getMode() != ArtsMode::in ||
+       !input.rewriteContract.preserveParentDepRange || useRewrittenWindow);
 
-  if (useRewrittenWindow || useTaskDepWindow) {
+  if (useTaskPartitionWindow) {
+    auto offsetRange = input.taskAcquire.getPartitionOffsets();
+    auto sizeRange = input.taskAcquire.getPartitionSizes();
+
+    if (!offsetRange.empty() && offsetRange.front())
+      elementOffset = offsetRange.front();
+    if (!sizeRange.empty() && sizeRange.front())
+      elementSize = sizeRange.front();
+  } else if (useTaskDepWindow) {
     auto offsetRange = useRewrittenWindow
                            ? input.taskAcquire.getPartitionOffsets()
                            : input.taskAcquire.getOffsets();
@@ -643,7 +656,9 @@ void mlir::arts::applyTaskAcquireSlicePlan(TaskAcquireSlicePlanInput input) {
         (mode == PartitionMode::block || mode == PartitionMode::stencil) &&
         (input.taskAcquire.getPartitionOffsets().empty() ||
          input.taskAcquire.getPartitionSizes().empty());
-    shouldUpdateBlockWindow = needsPartitionMetadata;
+    shouldUpdateBlockWindow =
+        needsPartitionMetadata ||
+        !input.rewriteContract.preserveParentDepRange;
   }
   if (input.parentAcquire.getMode() != ArtsMode::in &&
       (input.taskAcquire.getOffsets().size() > 1 ||
