@@ -5,21 +5,21 @@ extern int printf(const char *, ...);
 extern int atoi(const char *);
 
 int main(int argc, char **argv) {
-    int A[1];
-    A[0] = 0;
+  int A[1];
+  A[0] = 0;
 
-    #pragma omp parallel
+#pragma omp parallel
+  {
+#pragma omp single
     {
-        #pragma omp single
-        {
-            #pragma omp task
-            {
-                A[0] = 42;
-            }
-            #pragma omp taskwait
-        }
+#pragma omp task
+      {
+        A[0] = 42;
+      }
+#pragma omp taskwait
     }
+  }
 
-    printf("A[0] = %d\n", A[0]);
-    return (A[0] == 42) ? 0 : 1;
+  printf("A[0] = %d\n", A[0]);
+  return (A[0] == 42) ? 0 : 1;
 }

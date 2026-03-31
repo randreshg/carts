@@ -27,8 +27,8 @@ int main(int argc, char *argv[]) {
     for (int j = 0; j < COLS; j++)
       A[i][j] = (float)(i * COLS + j);
 
-      /// Row-parallel operation - should trigger row-chunking
-      /// Each iteration processes one row independently
+  /// Row-parallel operation - should trigger row-chunking
+  /// Each iteration processes one row independently
 #pragma omp parallel for
   for (int i = 0; i < ROWS; i++) {
     for (int j = 0; j < COLS; j++) {

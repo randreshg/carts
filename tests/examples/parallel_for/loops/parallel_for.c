@@ -27,7 +27,7 @@ int main(int argc, char **argv) {
     CARTS_DEBUG_PRINT("a[%d] = %d, b[%d] = %d, c[%d] = %d, d[%d] = %d\n", i,
                       a[i], i, b[i], i, c[i], i, d[i]);
 
-    /// Single parallel region with back-to-back for loops
+  /// Single parallel region with back-to-back for loops
 #pragma omp parallel
   {
 #pragma omp for schedule(static, 4)

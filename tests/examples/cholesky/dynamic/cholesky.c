@@ -156,7 +156,7 @@ int main(int argc, char *argv[]) {
         }
       }
     } /// End k_block loop
-  }   /// End OpenMP single / parallel region
+  } /// End OpenMP single / parallel region
   double parallel_time = omp_get_wtime() - start_time;
   printf("Finished in %f seconds\n", parallel_time);
 

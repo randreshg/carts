@@ -6,30 +6,30 @@ extern int printf(const char *, ...);
 extern int atoi(const char *);
 
 int main(int argc, char **argv) {
-    int N = (argc > 1) ? atoi(argv[1]) : 1024;
-    int *A = (int *)malloc(N * sizeof(int));
-    int multiplier = 0;
+  int N = (argc > 1) ? atoi(argv[1]) : 1024;
+  int *A = (int *)malloc(N * sizeof(int));
+  int multiplier = 0;
 
-    #pragma omp parallel
+#pragma omp parallel
+  {
+#pragma omp single
     {
-        #pragma omp single
-        {
-            multiplier = 5;
-        }
-        /* single has an implicit barrier at exit */
-
-        #pragma omp for
-        for (int i = 0; i < N; i++) {
-            A[i] = i * multiplier;
-        }
+      multiplier = 5;
     }
+    /* single has an implicit barrier at exit */
 
-    /* sum = sum(i*5, i=0..1023) = 5*523776 = 2618880 */
-    long sum = 0;
-    for (int i = 0; i < N; i++)
-        sum += A[i];
+#pragma omp for
+    for (int i = 0; i < N; i++) {
+      A[i] = i * multiplier;
+    }
+  }
 
-    printf("sum = %ld (expected 2618880)\n", sum);
-    free(A);
-    return (sum != 2618880);
+  /* sum = sum(i*5, i=0..1023) = 5*523776 = 2618880 */
+  long sum = 0;
+  for (int i = 0; i < N; i++)
+    sum += A[i];
+
+  printf("sum = %ld (expected 2618880)\n", sum);
+  free(A);
+  return (sum != 2618880);
 }
