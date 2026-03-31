@@ -107,15 +107,15 @@ static bool canNarrowDirectReadSlice(const LoweringContractInfo &contract,
   if (facts.partitionDimsFromPeers)
     return false;
 
-  bool blockLikeRequest =
-      facts.requestedMode == PartitionMode::block ||
-      facts.requestedMode == PartitionMode::stencil;
-  bool hasResolvedOwnerDims =
-      !contract.ownerDims.empty() || !facts.stencilOwnerDims.empty() ||
-      !facts.partitionDims.empty();
+  bool blockLikeRequest = facts.requestedMode == PartitionMode::block ||
+                          facts.requestedMode == PartitionMode::stencil;
+  bool hasResolvedOwnerDims = !contract.ownerDims.empty() ||
+                              !facts.stencilOwnerDims.empty() ||
+                              !facts.partitionDims.empty();
 
-  return blockLikeRequest && facts.hasDirectAccess && !facts.hasIndirectAccess &&
-         !facts.hasUnmappedPartitionEntry() && hasResolvedOwnerDims;
+  return blockLikeRequest && facts.hasDirectAccess &&
+         !facts.hasIndirectAccess && !facts.hasUnmappedPartitionEntry() &&
+         hasResolvedOwnerDims;
 }
 
 static bool refineContractWithFacts(LoweringContractInfo &contract,
@@ -858,14 +858,11 @@ DbAnalysis::getAcquireRewriteContract(DbAcquireOp acquire) {
                              contractSummary->contract.supportsBlockHalo() &&
                              !contract.haloMinOffsets.empty() &&
                              !contract.haloMaxOffsets.empty();
-  bool supportsGraphHalo = acquire.getMode() == ArtsMode::in &&
-                           !contract.haloMinOffsets.empty() &&
-                           !contract.haloMaxOffsets.empty() &&
-                           contract.ownerDims.size() == 1 &&
-                           acqNode &&
-                           acqNode->getAccessPattern() ==
-                               AccessPattern::Stencil &&
-                           !acqNode->hasIndirectAccess();
+  bool supportsGraphHalo =
+      acquire.getMode() == ArtsMode::in && !contract.haloMinOffsets.empty() &&
+      !contract.haloMaxOffsets.empty() && contract.ownerDims.size() == 1 &&
+      acqNode && acqNode->getAccessPattern() == AccessPattern::Stencil &&
+      !acqNode->hasIndirectAccess();
 
   if (acquire.getMode() == ArtsMode::in &&
       ((hasExplicitStencilContract && supportsStencilHalo) ||

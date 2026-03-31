@@ -103,8 +103,7 @@ uint64_t moveEdtInvariantCode(EdtOp edtOp) {
       continue;
 
     /// Check if the op should be moved and can be hoisted
-    ARTS_INFO("Checking op:\n"
-              << "  - " << *op);
+    ARTS_INFO("Checking op:\n" << "  - " << *op);
     if (!canBeHoistedFromEdt(region, op))
       continue;
 

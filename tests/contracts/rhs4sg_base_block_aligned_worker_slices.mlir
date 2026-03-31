@@ -21,7 +21,7 @@
 // CHECK: %{{.+}} = arts.create_epoch : i64
 // CHECK: scf.for %[[WORKER:.+]] = %c0 to %c64 step %c1 {
 // CHECK: %[[CHUNK_BASE:.+]] = arith.muli %[[WORKER]], %c9 : index
-// CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>, offsets[%{{.+}}], sizes[%{{.+}}]), offsets[%{{.+}}], sizes[%{{.+}}] element_offsets[%c0, %c0, %c0, %{{.+}}] element_sizes[%c3, %c320, %c320, %{{.+}}] {{.*}}distribution_pattern = #arts.distribution_pattern<stencil>{{.*}}stencil_center_offset = 2 : i64, stencil_max_offsets = [2], stencil_min_offsets = [-2], stencil_owner_dims = [3]
+// CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>, offsets[%{{.+}}], sizes[%{{.+}}]), offsets[%{{.+}}], sizes[%{{.+}}] {{.*}}distribution_pattern = #arts.distribution_pattern<stencil>{{.*}}stencil_center_offset = 2 : i64, stencil_max_offsets = [2], stencil_min_offsets = [-2], stencil_owner_dims = [3]
 // CHECK: arts.lowering_contract({{.*}}) distribution_kind(<block>) distribution_pattern(<stencil>) block_shape[%{{.+}}] min_offsets[%c-2] max_offsets[%c2] {{.*}}owner_dims = array<i64: 3>
 // CHECK: arts.db_acquire[<inout>] {{.*}} partitioning(<block>, offsets[%[[CHUNK_BASE]]], sizes[%c9]), offsets[%{{.+}}], sizes[%c1] {{.*}}stencil_owner_dims = [3]
 

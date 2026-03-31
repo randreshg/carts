@@ -33,15 +33,14 @@
 #define GEN_PASS_DEF_GUIDRANGCALLOPT
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/Pass/Pass.h"
 #include <cstdint>
 #include <limits>
 
@@ -136,8 +135,7 @@ struct GuidRangCallOptPass
           Value ivI32 = callBuilder.create<arith::IndexCastOp>(
               reserveCall.getLoc(), i32, loop.getInductionVar());
           auto fromIndex = callBuilder.create<func::CallOp>(
-              reserveCall.getLoc(), fromIndexFn,
-              ValueRange{rangeGuid, ivI32});
+              reserveCall.getLoc(), fromIndexFn, ValueRange{rangeGuid, ivI32});
           reserveCall.getResult(0).replaceAllUsesWith(fromIndex.getResult(0));
           reserveCall.erase();
           ++rewrittenStatic;
@@ -153,16 +151,15 @@ struct GuidRangCallOptPass
         Value oneI64 = b.create<arith::ConstantIntOp>(loc, 1, 64);
         Value u32Max = b.create<arith::ConstantIntOp>(
             loc, std::numeric_limits<uint32_t>::max(), 64);
-        Value fitsU32 = b.create<arith::CmpIOp>(
-            loc, arith::CmpIPredicate::ule, ubI64, u32Max);
+        Value fitsU32 = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ule,
+                                                ubI64, u32Max);
         Value moreThanOne = b.create<arith::CmpIOp>(
             loc, arith::CmpIPredicate::ugt, ubI64, oneI64);
-        Value canUseRange =
-            b.create<arith::AndIOp>(loc, fitsU32, moreThanOne);
+        Value canUseRange = b.create<arith::AndIOp>(loc, fitsU32, moreThanOne);
 
-        auto chooseRangeGuid = b.create<scf::IfOp>(loc, TypeRange{i64},
-                                                   canUseRange,
-                                                   /*withElseRegion=*/true);
+        auto chooseRangeGuid =
+            b.create<scf::IfOp>(loc, TypeRange{i64}, canUseRange,
+                                /*withElseRegion=*/true);
         {
           OpBuilder thenBuilder =
               OpBuilder::atBlockBegin(&chooseRangeGuid.getThenRegion().front());
@@ -192,8 +189,7 @@ struct GuidRangCallOptPass
           Value ivI32 = thenBuilder.create<arith::IndexCastOp>(
               reserveCall.getLoc(), i32, loop.getInductionVar());
           auto fromIndex = thenBuilder.create<func::CallOp>(
-              reserveCall.getLoc(), fromIndexFn,
-              ValueRange{rangeGuid, ivI32});
+              reserveCall.getLoc(), fromIndexFn, ValueRange{rangeGuid, ivI32});
           thenBuilder.create<scf::YieldOp>(reserveCall.getLoc(),
                                            fromIndex.getResult(0));
         }
@@ -201,8 +197,7 @@ struct GuidRangCallOptPass
           OpBuilder elseBuilder =
               OpBuilder::atBlockBegin(&chooseGuid.getElseRegion().front());
           auto reserve = elseBuilder.create<func::CallOp>(
-              reserveCall.getLoc(), reserveFn,
-              reserveCall.getOperands());
+              reserveCall.getLoc(), reserveFn, reserveCall.getOperands());
           elseBuilder.create<scf::YieldOp>(reserveCall.getLoc(),
                                            reserve.getResult(0));
         }
@@ -213,10 +208,9 @@ struct GuidRangCallOptPass
       }
     }
 
-    ARTS_INFO("GuidRangCallOpt: rewritten " << rewrittenStatic
-                                            << " static loops and "
-                                            << rewrittenGuarded
-                                            << " guarded dynamic loops");
+    ARTS_INFO("GuidRangCallOpt: rewritten "
+              << rewrittenStatic << " static loops and " << rewrittenGuarded
+              << " guarded dynamic loops");
   }
 };
 

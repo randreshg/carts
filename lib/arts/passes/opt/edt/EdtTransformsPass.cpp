@@ -46,12 +46,6 @@
 #include "arts/analysis/graphs/edt/EdtGraph.h"
 #include "arts/analysis/graphs/edt/EdtNode.h"
 #include "arts/analysis/value/ValueAnalysis.h"
-#define GEN_PASS_DEF_EDTTRANSFORMS
-#include "arts/Dialect.h"
-#include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
-#include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoopUtils.h"
@@ -60,11 +54,15 @@
 /// Debug
 #include "arts/utils/Debug.h"
 #include <algorithm>
-ARTS_DEBUG_SETUP(edt_transforms);
 
 using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
+
+#define GEN_PASS_DEF_EDTTRANSFORMS
+#include "arts/passes/Passes.h.inc"
+
+ARTS_DEBUG_SETUP(edt_transforms);
 
 namespace {
 
@@ -91,7 +89,8 @@ constexpr llvm::StringLiteral Tree = "tree";
 constexpr llvm::StringLiteral LocalAccumulate = "local_accumulate";
 } // namespace ReductionStrategyNames
 
-struct EdtTransformsPass : public impl::EdtTransformsBase<EdtTransformsPass> {
+struct EdtTransformsPass
+    : public ::impl::EdtTransformsBase<EdtTransformsPass> {
   EdtTransformsPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }
@@ -932,8 +931,8 @@ unsigned EdtTransformsPass::eliminateDeadDependencies() {
 
       deadIndices.push_back(i);
       ARTS_DEBUG("EXT-EDT-2: block arg " << i
-                                          << " is release-only and can be "
-                                             "eliminated");
+                                         << " is release-only and can be "
+                                            "eliminated");
     }
 
     if (deadIndices.empty())

@@ -39,12 +39,8 @@
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
-#define GEN_PASS_DEF_LOOPFUSION
-#include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "mlir/Pass/Pass.h"
-#include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/Utils.h"
@@ -54,10 +50,14 @@
 #include "llvm/ADT/DenseMap.h"
 
 #include "arts/utils/Debug.h"
-ARTS_DEBUG_SETUP(loop_fusion);
 
 using namespace mlir;
 using namespace mlir::arts;
+
+#define GEN_PASS_DEF_LOOPFUSION
+#include "arts/passes/Passes.h.inc"
+
+ARTS_DEBUG_SETUP(loop_fusion);
 
 namespace {
 struct AccessSummary {
@@ -79,7 +79,7 @@ struct LoopAccessSummary {
   size_t size() const { return datablocks.size() + rawMemrefs.size(); }
 };
 
-struct LoopFusionPass : public impl::LoopFusionBase<LoopFusionPass> {
+struct LoopFusionPass : public ::impl::LoopFusionBase<LoopFusionPass> {
   LoopFusionPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }
@@ -167,8 +167,7 @@ LoopAccessSummary LoopFusionPass::getAccessSummary(ForOp forOp) {
     accesses.rawMemrefs[access->memref].record(access->kind);
     ARTS_DEBUG("  Access -> raw memref: " << access->memref);
   });
-  ARTS_DEBUG("ForOp accesses " << accesses.size()
-                               << " unique memory root(s)");
+  ARTS_DEBUG("ForOp accesses " << accesses.size() << " unique memory root(s)");
   return accesses;
 }
 

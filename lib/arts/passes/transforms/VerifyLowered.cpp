@@ -11,9 +11,7 @@
 #define GEN_PASS_DEF_VERIFYLOWERED
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "mlir/Pass/Pass.h"
 
 using namespace mlir;

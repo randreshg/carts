@@ -164,13 +164,12 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// can satisfy all consumers. On a single node, prefer a coarse shared input
   /// instead of paying for a block graph that later consumers will widen.
   if (isSingleNode && isReadOnly && ctx.canBlock && !patterns.hasStencil &&
-      hasMixedAuthoritativeReadOnlyOwnerDims(ctx) &&
-      !ctx.preferBlockND && ctx.maxPinnedDimCount() <= 1) {
+      hasMixedAuthoritativeReadOnlyOwnerDims(ctx) && !ctx.preferBlockND &&
+      ctx.maxPinnedDimCount() <= 1) {
     ARTS_DEBUG("H1.C2b applied: Read-only mixed owner dims prefer coarse on "
                "single-node 1-D block candidates");
     return PartitioningDecision::coarse(
-        ctx,
-        "H1.C2b: Read-only mixed owner dims on single-node prefer coarse");
+        ctx, "H1.C2b: Read-only mixed owner dims on single-node prefer coarse");
   }
 
   /// H1.C3: Read-only full-range block acquires → Coarse
@@ -187,7 +186,8 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   bool preserveBlockForReadOnlyFullRange =
       ctx.canBlock &&
       (!isSingleNode || preserveStencilBlockForReadOnlyFullRange);
-  if (isReadOnly && ctx.allBlockFullRange && !preserveBlockForReadOnlyFullRange) {
+  if (isReadOnly && ctx.allBlockFullRange &&
+      !preserveBlockForReadOnlyFullRange) {
     if (!ctx.canBlock && ctx.canElementWise) {
       unsigned outerRank = ctx.minPinnedDimCount();
       outerRank = outerRank > 0 ? outerRank : 1;
@@ -203,7 +203,8 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
         ctx, isSingleNode
                  ? "H1.C3: Read-only full-range on single-node prefers coarse"
                  : "H1.C3: Read-only full-range on multi-node prefers coarse");
-  } else if (isReadOnly && ctx.allBlockFullRange && preserveBlockForReadOnlyFullRange) {
+  } else if (isReadOnly && ctx.allBlockFullRange &&
+             preserveBlockForReadOnlyFullRange) {
     ARTS_DEBUG(
         "H1.C3 skipped: stencil/distribution semantics keep block layout for "
         "read-only full-range acquires");

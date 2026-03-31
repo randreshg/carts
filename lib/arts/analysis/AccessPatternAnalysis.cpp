@@ -123,7 +123,8 @@ extractRelativeOffsetRange(Value value, Value loopIV, Value blockBase,
   if (!value || !loopIV || !blockBase || depth > 8)
     return std::nullopt;
 
-  value = ValueAnalysis::stripNumericCasts(ValueAnalysis::stripSelectClamp(value));
+  value =
+      ValueAnalysis::stripNumericCasts(ValueAnalysis::stripSelectClamp(value));
   loopIV = ValueAnalysis::stripNumericCasts(loopIV);
   blockBase = ValueAnalysis::stripNumericCasts(blockBase);
 
@@ -152,20 +153,20 @@ extractRelativeOffsetRange(Value value, Value loopIV, Value blockBase,
   };
 
   if (auto add = value.getDefiningOp<arith::AddIOp>()) {
-    auto lhs = extractRelativeOffsetRange(add.getLhs(), loopIV, blockBase,
-                                          depth + 1);
-    auto rhs = extractRelativeOffsetRange(add.getRhs(), loopIV, blockBase,
-                                          depth + 1);
+    auto lhs =
+        extractRelativeOffsetRange(add.getLhs(), loopIV, blockBase, depth + 1);
+    auto rhs =
+        extractRelativeOffsetRange(add.getRhs(), loopIV, blockBase, depth + 1);
     if (lhs && rhs)
       return combine(*lhs, *rhs, /*subtractRhs=*/false);
     return std::nullopt;
   }
 
   if (auto sub = value.getDefiningOp<arith::SubIOp>()) {
-    auto lhs = extractRelativeOffsetRange(sub.getLhs(), loopIV, blockBase,
-                                          depth + 1);
-    auto rhs = extractRelativeOffsetRange(sub.getRhs(), loopIV, blockBase,
-                                          depth + 1);
+    auto lhs =
+        extractRelativeOffsetRange(sub.getLhs(), loopIV, blockBase, depth + 1);
+    auto rhs =
+        extractRelativeOffsetRange(sub.getRhs(), loopIV, blockBase, depth + 1);
     if (lhs && rhs)
       return combine(*lhs, *rhs, /*subtractRhs=*/true);
     return std::nullopt;
@@ -215,7 +216,8 @@ static Value peelSelectorDividend(Value value, Value divisor,
   if (!value || !divisor || depth > 8)
     return Value();
 
-  value = ValueAnalysis::stripNumericCasts(ValueAnalysis::stripSelectClamp(value));
+  value =
+      ValueAnalysis::stripNumericCasts(ValueAnalysis::stripSelectClamp(value));
   divisor = ValueAnalysis::stripNumericCasts(divisor);
 
   auto divisorMatches = [&](Value candidate) {
@@ -264,7 +266,8 @@ static Value recoverLogicalMemrefIndex(const AccessIndexInfo &access,
   if (chainIdx >= access.indexChain.size())
     return Value();
 
-  Value localIdx = ValueAnalysis::stripNumericCasts(access.indexChain[chainIdx]);
+  Value localIdx =
+      ValueAnalysis::stripNumericCasts(access.indexChain[chainIdx]);
   Value dividend;
   Value divisor;
   if (auto rem = localIdx.getDefiningOp<arith::RemUIOp>()) {
@@ -411,8 +414,8 @@ arts::analyzeAccessBoundsFromIndices(ArrayRef<AccessIndexInfo> accesses,
     /// logical memref-dimension index. Using them first on blocked accesses can
     /// undercount halos by observing only the chunk selector delta.
     if (!idxForBounds) {
-      for (unsigned i = 0; i < access.dbRefPrefix && i < access.indexChain.size();
-           ++i) {
+      for (unsigned i = 0;
+           i < access.dbRefPrefix && i < access.indexChain.size(); ++i) {
         Value idx = access.indexChain[i];
         if (ValueAnalysis::dependsOn(idx, loopIV) ||
             ValueAnalysis::dependsOn(idx, blockBase)) {

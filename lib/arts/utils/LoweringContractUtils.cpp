@@ -487,10 +487,9 @@ mlir::arts::deriveAcquireRewriteContract(DbAcquireOp acquire) {
       (acquire.getMode() == ArtsMode::inout && info->depPattern &&
        *info->depPattern == ArtsDepPattern::wavefront_2d &&
        info->supportsBlockHalo());
-  contract.preserveParentDepRange = acquire.getMode() == ArtsMode::in &&
-                                    !contract.applyStencilHalo &&
-                                    !hasExplicitStencilContract &&
-                                    !prefersWorkerLocalReadSlice;
+  contract.preserveParentDepRange =
+      acquire.getMode() == ArtsMode::in && !contract.applyStencilHalo &&
+      !hasExplicitStencilContract && !prefersWorkerLocalReadSlice;
   return contract;
 }
 

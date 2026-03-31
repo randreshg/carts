@@ -17,21 +17,15 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/IR/Dominance.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Dominance.h"
 /// Arts
-#define GEN_PASS_DEF_DBMODETIGHTENING
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "mlir/Pass/Pass.h"
-#include "arts/passes/Passes.h.inc"
-#include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/graphs/db/DbGraph.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
-#include "arts/passes/Passes.h"
-/// Other
-#include "mlir/Pass/Pass.h"
 /// Debug
 #include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/analysis/value/ValueAnalysis.h"
@@ -40,13 +34,15 @@
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
-#include <cstdlib>
-
-ARTS_DEBUG_SETUP(db_mode_tightening);
 
 using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
+
+#define GEN_PASS_DEF_DBMODETIGHTENING
+#include "arts/passes/Passes.h.inc"
+
+ARTS_DEBUG_SETUP(db_mode_tightening);
 
 namespace {
 
@@ -61,9 +57,8 @@ static bool isProvablyZeroLoopLowerBound(Value lb) {
 
   Value trueVal = ValueAnalysis::stripNumericCasts(select.getTrueValue());
   Value falseVal = ValueAnalysis::stripNumericCasts(select.getFalseValue());
-  auto cmp =
-      ValueAnalysis::stripNumericCasts(select.getCondition()).getDefiningOp<
-          arith::CmpIOp>();
+  auto cmp = ValueAnalysis::stripNumericCasts(select.getCondition())
+                 .getDefiningOp<arith::CmpIOp>();
   if (!cmp)
     return false;
 
@@ -252,21 +247,21 @@ static std::optional<MemAccessSite> getMemAccessSite(DbRefOp dbRef,
   if (fullIndexChain.empty())
     return std::nullopt;
   if (auto load = dyn_cast<memref::LoadOp>(op))
-    return MemAccessSite{dbRef.getSource(),
-                         SmallVector<Value, 4>(fullIndexChain.begin(),
-                                               fullIndexChain.end())};
+    return MemAccessSite{
+        dbRef.getSource(),
+        SmallVector<Value, 4>(fullIndexChain.begin(), fullIndexChain.end())};
   if (auto store = dyn_cast<memref::StoreOp>(op))
-    return MemAccessSite{dbRef.getSource(),
-                         SmallVector<Value, 4>(fullIndexChain.begin(),
-                                               fullIndexChain.end())};
+    return MemAccessSite{
+        dbRef.getSource(),
+        SmallVector<Value, 4>(fullIndexChain.begin(), fullIndexChain.end())};
   if (auto load = dyn_cast<affine::AffineLoadOp>(op))
-    return MemAccessSite{dbRef.getSource(),
-                         SmallVector<Value, 4>(fullIndexChain.begin(),
-                                               fullIndexChain.end())};
+    return MemAccessSite{
+        dbRef.getSource(),
+        SmallVector<Value, 4>(fullIndexChain.begin(), fullIndexChain.end())};
   if (auto store = dyn_cast<affine::AffineStoreOp>(op))
-    return MemAccessSite{dbRef.getSource(),
-                         SmallVector<Value, 4>(fullIndexChain.begin(),
-                                               fullIndexChain.end())};
+    return MemAccessSite{
+        dbRef.getSource(),
+        SmallVector<Value, 4>(fullIndexChain.begin(), fullIndexChain.end())};
   return std::nullopt;
 }
 
@@ -382,9 +377,11 @@ static void collectAcquiresRecursive(DbAcquireNode *acqNode, DbGraph &graph,
 ///===----------------------------------------------------------------------===///
 namespace {
 struct DbModeTighteningPass
-    : public impl::DbModeTighteningBase<DbModeTighteningPass> {
-  DbModeTighteningPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
+    : public ::impl::DbModeTighteningBase<DbModeTighteningPass> {
+  DbModeTighteningPass(mlir::arts::AnalysisManager *AM, bool forceInout)
+      : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
+    this->forceInout = forceInout;
   }
 
   void runOnOperation() override;
@@ -442,7 +439,6 @@ void DbModeTighteningPass::runOnOperation() {
 bool DbModeTighteningPass::adjustDbModes() {
   ARTS_DEBUG_HEADER(AdjustDBModes);
   bool changed = false;
-  bool forceInout = std::getenv("CARTS_FORCE_INOUT") != nullptr;
 
   module.walk([&](func::FuncOp func) {
     DbGraph &graph = AM->getDbAnalysis().getOrCreateGraph(func);
@@ -669,8 +665,8 @@ void DbModeTighteningPass::invalidateAndRebuildGraph() {
 namespace mlir {
 namespace arts {
 std::unique_ptr<Pass>
-createDbModeTighteningPass(mlir::arts::AnalysisManager *AM) {
-  return std::make_unique<DbModeTighteningPass>(AM);
+createDbModeTighteningPass(mlir::arts::AnalysisManager *AM, bool forceInout) {
+  return std::make_unique<DbModeTighteningPass>(AM, forceInout);
 }
 } // namespace arts
 } // namespace mlir

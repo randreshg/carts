@@ -732,10 +732,9 @@ bool PartitionBoundsAnalyzer::needsFullRange(DbAcquireNode *node,
   DbAcquireOp acquire = node ? node->getDbAcquireOp() : DbAcquireOp();
   std::optional<LoweringContractInfo> contract =
       acquire ? getLoweringContract(acquire.getPtr()) : std::nullopt;
-  bool supportedBlockHalo = contract ? contract->supportsBlockHalo()
-                                     : (acquire &&
-                                        hasSupportedBlockHalo(
-                                            acquire.getOperation()));
+  bool supportedBlockHalo =
+      contract ? contract->supportsBlockHalo()
+               : (acquire && hasSupportedBlockHalo(acquire.getOperation()));
   SmallVector<unsigned, 4> ownerDims;
   if (contract && !contract->ownerDims.empty()) {
     unsigned rank = 0;
@@ -887,7 +886,8 @@ bool PartitionBoundsAnalyzer::shouldPreserveDistributedContract(
       edt ? getEdtDistributionKind(edt.getOperation()) : std::nullopt;
   auto distributionPattern =
       edt ? getEdtDistributionPattern(edt.getOperation()) : std::nullopt;
-  bool hasDistributionContract = edt && (distributionKind || distributionPattern);
+  bool hasDistributionContract =
+      edt && (distributionKind || distributionPattern);
   if (!hasDistributionContract)
     return false;
 

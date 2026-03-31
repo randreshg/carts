@@ -9,11 +9,10 @@
 #define GEN_PASS_DEF_LOWERINGCONTRACTCLEANUP
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/Pass/Pass.h"
 
 ARTS_DEBUG_SETUP(lowering_contract_cleanup);
 

@@ -30,15 +30,14 @@
 #define GEN_PASS_DEF_CONVERTARTSTOLLVM
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
+#include "mlir/Pass/Pass.h"
 /// Others
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -106,7 +105,8 @@ static SmallVector<Value, 4> resolveSourceOuterSizes(Value sourceGuid,
 
   if (auto allocOp = dyn_cast_or_null<DbAllocOp>(sourceGuid.getDefiningOp()))
     sizes.assign(allocOp.getSizes().begin(), allocOp.getSizes().end());
-  else if (auto acqOp = dyn_cast_or_null<DbAcquireOp>(sourceGuid.getDefiningOp()))
+  else if (auto acqOp =
+               dyn_cast_or_null<DbAcquireOp>(sourceGuid.getDefiningOp()))
     sizes.assign(acqOp.getSizes().begin(), acqOp.getSizes().end());
 
   if (sizes.empty())
@@ -116,9 +116,8 @@ static SmallVector<Value, 4> resolveSourceOuterSizes(Value sourceGuid,
   return sizes;
 }
 
-static SmallVector<Value, 4> resolveOuterSizesForGuid(Value dbGuid,
-                                                      ArtsCodegen *AC,
-                                                      Location loc) {
+static SmallVector<Value, 4>
+resolveOuterSizesForGuid(Value dbGuid, ArtsCodegen *AC, Location loc) {
   SmallVector<Value, 4> sizes;
 
   if (auto allocOp = getAllocOpFromGuid(dbGuid)) {
@@ -320,8 +319,7 @@ struct BuiltinObjectSizePattern : public OpRewritePattern<func::CallOp> {
     /// Create boolean constants for intrinsic parameters
     Type i1Type = rewriter.getI1Type();
     Value min = LLVM::ConstantOp::create(rewriter, loc, i1Type, minFlag);
-    Value nullIsUnknown =
-        LLVM::ConstantOp::create(rewriter, loc, i1Type, true);
+    Value nullIsUnknown = LLVM::ConstantOp::create(rewriter, loc, i1Type, true);
     Value dynamic = LLVM::ConstantOp::create(rewriter, loc, i1Type, false);
 
     /// Create llvm.call_intrinsic for llvm.objectsize
@@ -408,8 +406,8 @@ private:
         contract->minOffsets.empty())
       return globalCoords;
 
-    unsigned rank = std::min<unsigned>(dbInfo.sizes.size(),
-                                       contract->minOffsets.size());
+    unsigned rank =
+        std::min<unsigned>(dbInfo.sizes.size(), contract->minOffsets.size());
     if (!contract->writeFootprint.empty())
       rank = std::min<unsigned>(rank, contract->writeFootprint.size());
     if (rank == 0)
@@ -433,19 +431,16 @@ private:
       sizeMinusOne = AC->create<arith::MaxSIOp>(loc, sizeMinusOne, zero);
       Value localCoord =
           AC->create<arith::MinSIOp>(loc, nonNegative, sizeMinusOne);
-      Value globalCoord =
-          AC->create<arith::AddIOp>(loc, AC->castToIndex(dbInfo.offsets[i], loc),
-                                    localCoord);
+      Value globalCoord = AC->create<arith::AddIOp>(
+          loc, AC->castToIndex(dbInfo.offsets[i], loc), localCoord);
       globalCoords.push_back(globalCoord);
     }
 
     return globalCoords;
   }
 
-  SmallVector<Value, 4>
-  inferSymmetricStencilCenterCoords(int64_t centerOffset,
-                                    const DbLoweringInfo &dbInfo,
-                                    Location loc) const {
+  SmallVector<Value, 4> inferSymmetricStencilCenterCoords(
+      int64_t centerOffset, const DbLoweringInfo &dbInfo, Location loc) const {
     SmallVector<Value, 4> globalCoords;
     if (centerOffset < 0 || dbInfo.sizes.empty())
       return globalCoords;
@@ -459,11 +454,9 @@ private:
       Value dimSize = AC->castToIndex(dbInfo.sizes[i], loc);
       Value sizeMinusOne = AC->create<arith::SubIOp>(loc, dimSize, one);
       sizeMinusOne = AC->create<arith::MaxSIOp>(loc, sizeMinusOne, zero);
-      Value localCoord =
-          AC->create<arith::MinSIOp>(loc, center, sizeMinusOne);
-      Value globalCoord =
-          AC->create<arith::AddIOp>(loc, AC->castToIndex(dbInfo.offsets[i], loc),
-                                    localCoord);
+      Value localCoord = AC->create<arith::MinSIOp>(loc, center, sizeMinusOne);
+      Value globalCoord = AC->create<arith::AddIOp>(
+          loc, AC->castToIndex(dbInfo.offsets[i], loc), localCoord);
       globalCoords.push_back(globalCoord);
     }
 
@@ -477,8 +470,8 @@ private:
     for (auto [lhsCoord, rhsCoord] : llvm::zip(lhs, rhs)) {
       Value lhsIdx = AC->castToIndex(lhsCoord, loc);
       Value rhsIdx = AC->castToIndex(rhsCoord, loc);
-      Value dimEqual = AC->create<arith::CmpIOp>(
-          loc, arith::CmpIPredicate::eq, lhsIdx, rhsIdx);
+      Value dimEqual = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                                 lhsIdx, rhsIdx);
       allEqual = AC->create<arith::AndIOp>(loc, allEqual, dimEqual);
     }
     return allEqual;
@@ -529,8 +522,7 @@ private:
     Value storage = guidStorage ? guidStorage : dbGuid;
     auto storageTy = dyn_cast<MemRefType>(storage.getType());
     auto llvmGuidType = LLVM::LLVMPointerType::get(
-        AC->getContext(),
-        storageTy ? storageTy.getMemorySpaceAsInt() : 0);
+        AC->getContext(), storageTy ? storageTy.getMemorySpaceAsInt() : 0);
 
     SmallVector<Value, 4> gepIndices;
     SmallVector<Value, 4> gepStrides;
@@ -542,8 +534,8 @@ private:
       gepIndices.push_back(AC->castToIndex(linearIndex, loc));
     }
 
-    auto guidAddr = AC->create<DbGepOp>(loc, llvmGuidType, storage,
-                                        gepIndices, gepStrides);
+    auto guidAddr =
+        AC->create<DbGepOp>(loc, llvmGuidType, storage, gepIndices, gepStrides);
     return AC->create<LLVM::LoadOp>(loc, AC->Int64, guidAddr);
   }
 
@@ -632,7 +624,8 @@ private:
   inferStencilFaceSliceForSlot(const DepDbInfo &depInfo, Value linearIndex,
                                ArrayRef<Value> directIndices,
                                Location loc) const {
-    if (!depInfo.stencilContract || !depInfo.stencilContract->isStencilFamily() ||
+    if (!depInfo.stencilContract ||
+        !depInfo.stencilContract->isStencilFamily() ||
         !depInfo.stencilContract->supportsBlockHalo() || !depInfo.scalarSize)
       return {Value(), Value()};
 
@@ -648,10 +641,10 @@ private:
     Value selectedSize = zeroSize;
 
     auto applyCandidate = [&](Value match, std::pair<Value, Value> slice) {
-      selectedOffset = AC->create<arith::SelectOp>(loc, match, slice.first,
-                                                   selectedOffset);
-      selectedSize = AC->create<arith::SelectOp>(loc, match, slice.second,
-                                                 selectedSize);
+      selectedOffset =
+          AC->create<arith::SelectOp>(loc, match, slice.first, selectedOffset);
+      selectedSize =
+          AC->create<arith::SelectOp>(loc, match, slice.second, selectedSize);
     };
 
     if (!directIndices.empty() && !depInfo.stencilCenterCoords.empty()) {
@@ -660,10 +653,10 @@ private:
           std::min<unsigned>(
               depInfo.stencilCenterCoords.size(),
               std::min<unsigned>(
-                  depInfo.blockOwnerDims.empty() ? depInfo.blockElementSizes.size()
-                                                 : depInfo.blockOwnerDims.size(),
-                                 std::min<unsigned>(staticMin->size(),
-                                                    staticMax->size()))));
+                  depInfo.blockOwnerDims.empty()
+                      ? depInfo.blockElementSizes.size()
+                      : depInfo.blockOwnerDims.size(),
+                  std::min<unsigned>(staticMin->size(), staticMax->size()))));
       for (unsigned dim = 0; dim < ownerRank; ++dim) {
         unsigned physicalDim =
             depInfo.blockOwnerDims.empty() ? dim : depInfo.blockOwnerDims[dim];
@@ -698,11 +691,10 @@ private:
               depInfo.stencilCenterCoords[dim]);
           Value match =
               AC->create<arith::AndIOp>(loc, sameOtherDims, isLowerNeighbor);
-          applyCandidate(match,
-                         buildFaceSliceByteRange(
-                             AC, depInfo.blockElementSizes, physicalDim,
-                             haloBefore, /*upperFace=*/true,
-                             depInfo.scalarSize, loc));
+          applyCandidate(match, buildFaceSliceByteRange(
+                                    AC, depInfo.blockElementSizes, physicalDim,
+                                    haloBefore, /*upperFace=*/true,
+                                    depInfo.scalarSize, loc));
         }
         if (haloAfter > 0) {
           Value isUpperNeighbor = AC->create<arith::CmpIOp>(
@@ -710,20 +702,20 @@ private:
               depInfo.stencilCenterCoords[dim]);
           Value match =
               AC->create<arith::AndIOp>(loc, sameOtherDims, isUpperNeighbor);
-          applyCandidate(match,
-                         buildFaceSliceByteRange(
-                             AC, depInfo.blockElementSizes, physicalDim,
-                             haloAfter, /*upperFace=*/false,
-                             depInfo.scalarSize, loc));
+          applyCandidate(match, buildFaceSliceByteRange(
+                                    AC, depInfo.blockElementSizes, physicalDim,
+                                    haloAfter, /*upperFace=*/false,
+                                    depInfo.scalarSize, loc));
         }
       }
       return {selectedOffset, selectedSize};
     }
 
     if (depInfo.stencilCenterLinear && !depInfo.blockElementSizes.empty()) {
-      unsigned ownerRank = depInfo.blockOwnerDims.empty()
-                               ? static_cast<unsigned>(staticMin->size())
-                               : static_cast<unsigned>(depInfo.blockOwnerDims.size());
+      unsigned ownerRank =
+          depInfo.blockOwnerDims.empty()
+              ? static_cast<unsigned>(staticMin->size())
+              : static_cast<unsigned>(depInfo.blockOwnerDims.size());
       if (ownerRank != 1)
         return {Value(), Value()};
 
@@ -743,20 +735,20 @@ private:
             loc, arith::CmpIPredicate::ult, AC->castToIndex(linearIndex, loc),
             AC->castToIndex(depInfo.stencilCenterLinear, loc));
         applyCandidate(isLowerNeighbor,
-                       buildFaceSliceByteRange(
-                           AC, depInfo.blockElementSizes, physicalDim,
-                           haloBefore, /*upperFace=*/true, depInfo.scalarSize,
-                           loc));
+                       buildFaceSliceByteRange(AC, depInfo.blockElementSizes,
+                                               physicalDim, haloBefore,
+                                               /*upperFace=*/true,
+                                               depInfo.scalarSize, loc));
       }
       if (haloAfter > 0) {
         Value isUpperNeighbor = AC->create<arith::CmpIOp>(
             loc, arith::CmpIPredicate::ugt, AC->castToIndex(linearIndex, loc),
             AC->castToIndex(depInfo.stencilCenterLinear, loc));
         applyCandidate(isUpperNeighbor,
-                       buildFaceSliceByteRange(
-                           AC, depInfo.blockElementSizes, physicalDim,
-                           haloAfter, /*upperFace=*/false, depInfo.scalarSize,
-                           loc));
+                       buildFaceSliceByteRange(AC, depInfo.blockElementSizes,
+                                               physicalDim, haloAfter,
+                                               /*upperFace=*/false,
+                                               depInfo.scalarSize, loc));
       }
       return {selectedOffset, selectedSize};
     }
@@ -764,7 +756,8 @@ private:
     return {Value(), Value()};
   }
 
-  Value localLinearToGlobalLinear(Value localLinear, const DbLoweringInfo &dbInfo,
+  Value localLinearToGlobalLinear(Value localLinear,
+                                  const DbLoweringInfo &dbInfo,
                                   ArrayRef<Value> allocSizes,
                                   Location loc) const {
     if (!localLinear || dbInfo.sizes.empty() || dbInfo.offsets.empty() ||
@@ -782,8 +775,8 @@ private:
     for (unsigned i = 0; i < rank; ++i) {
       Value stride = one;
       for (unsigned j = i + 1; j < rank; ++j)
-        stride =
-            AC->create<arith::MulIOp>(loc, stride, AC->castToIndex(dbInfo.sizes[j], loc));
+        stride = AC->create<arith::MulIOp>(
+            loc, stride, AC->castToIndex(dbInfo.sizes[j], loc));
 
       Value localCoord = remaining;
       if (i + 1 < rank) {
@@ -791,9 +784,8 @@ private:
         remaining = AC->create<arith::RemUIOp>(loc, remaining, stride);
       }
 
-      Value globalCoord =
-          AC->create<arith::AddIOp>(loc, AC->castToIndex(dbInfo.offsets[i], loc),
-                                    localCoord);
+      Value globalCoord = AC->create<arith::AddIOp>(
+          loc, AC->castToIndex(dbInfo.offsets[i], loc), localCoord);
       globalCoords.push_back(globalCoord);
     }
 
@@ -827,8 +819,8 @@ private:
         contract->minOffsets.empty())
       return nullptr;
 
-    unsigned rank = std::min<unsigned>(dbInfo.sizes.size(),
-                                       contract->minOffsets.size());
+    unsigned rank =
+        std::min<unsigned>(dbInfo.sizes.size(), contract->minOffsets.size());
     if (!contract->writeFootprint.empty())
       rank = std::min<unsigned>(rank, contract->writeFootprint.size());
     if (rank == 0)
@@ -860,8 +852,8 @@ private:
     for (unsigned i = 0; i < rank; ++i) {
       Value stride = one;
       for (unsigned j = i + 1; j < rank; ++j) {
-        stride =
-            AC->create<arith::MulIOp>(loc, stride, AC->castToIndex(dbInfo.sizes[j], loc));
+        stride = AC->create<arith::MulIOp>(
+            loc, stride, AC->castToIndex(dbInfo.sizes[j], loc));
       }
       Value contribution =
           AC->create<arith::MulIOp>(loc, localCoords[i], stride);
@@ -888,16 +880,14 @@ private:
       Value dimSize = AC->castToIndex(dbInfo.sizes[i], loc);
       Value sizeMinusOne = AC->create<arith::SubIOp>(loc, dimSize, one);
       sizeMinusOne = AC->create<arith::MaxSIOp>(loc, sizeMinusOne, zero);
-      Value localCoord =
-          AC->create<arith::MinSIOp>(loc, center, sizeMinusOne);
+      Value localCoord = AC->create<arith::MinSIOp>(loc, center, sizeMinusOne);
 
       Value stride = one;
       for (unsigned j = i + 1; j < dbInfo.sizes.size(); ++j) {
         stride = AC->create<arith::MulIOp>(
             loc, stride, AC->castToIndex(dbInfo.sizes[j], loc));
       }
-      Value contribution =
-          AC->create<arith::MulIOp>(loc, localCoord, stride);
+      Value contribution = AC->create<arith::MulIOp>(loc, localCoord, stride);
       localLinearIndex =
           AC->create<arith::AddIOp>(loc, localLinearIndex, contribution);
     }
@@ -946,9 +936,8 @@ private:
         result.stencilContract = getAcquireStencilContract(dbAcquireOp, loc);
         result.stencilCenterLinear = inferStencilCenterLinearFromContract(
             dbAcquireOp, result.dbInfo, result.allocSizes, loc);
-        result.stencilCenterCoords =
-            inferStencilCenterCoordsFromContract(dbAcquireOp, result.dbInfo,
-                                                 loc);
+        result.stencilCenterCoords = inferStencilCenterCoordsFromContract(
+            dbAcquireOp, result.dbInfo, loc);
         if (!result.stencilCenterLinear)
           if (auto centerOffset =
                   getStencilCenterOffset(dbAcquireOp.getOperation())) {
@@ -973,8 +962,10 @@ private:
                                         allocExtents.end());
 
         unsigned ownerRank = result.dbInfo.sizes.size();
-        if (result.stencilContract && !result.stencilContract->ownerDims.empty())
-          ownerRank = static_cast<unsigned>(result.stencilContract->ownerDims.size());
+        if (result.stencilContract &&
+            !result.stencilContract->ownerDims.empty())
+          ownerRank =
+              static_cast<unsigned>(result.stencilContract->ownerDims.size());
         if (ownerRank != 0) {
           if (result.stencilContract)
             result.blockOwnerDims =
@@ -1045,9 +1036,8 @@ private:
           localCoords.reserve(globalCoords.size());
           for (auto [coord, offset] :
                llvm::zip(globalCoords, depInfo.dbInfo.offsets)) {
-            localCoords.push_back(
-                AC->create<arith::SubIOp>(loc, coord,
-                                          AC->castToIndex(offset, loc)));
+            localCoords.push_back(AC->create<arith::SubIOp>(
+                loc, coord, AC->castToIndex(offset, loc)));
           }
 
           Value linearIndex = bounds.allocSizes.empty()
@@ -1058,18 +1048,17 @@ private:
 
           recordSingleDb(dbGuid, depInfo.guidStorage, edtGuid, sharedSlotAlloc,
                          linearIndex, ArrayRef<Value>(globalCoords),
-                         bounds.allocSizes,
-                         accessMode, acquireMode, depFlags, boundsValid,
-                         depInfo.depStruct,
-                         depInfo.baseOffset, bounds.totalDBs, byteOffset,
-                         byteSize, depInfo.stencilCenterLinear,
+                         bounds.allocSizes, accessMode, acquireMode, depFlags,
+                         boundsValid, depInfo.depStruct, depInfo.baseOffset,
+                         bounds.totalDBs, byteOffset, byteSize,
+                         depInfo.stencilCenterLinear,
                          depInfo.stencilCenterCoords, &depInfo, loc);
           return;
         }
 
         Value lowerBound = depInfo.dbInfo.offsets[dim];
-        Value upperBound = AC->create<arith::AddIOp>(
-            loc, lowerBound, depInfo.dbInfo.sizes[dim]);
+        Value upperBound = AC->create<arith::AddIOp>(loc, lowerBound,
+                                                     depInfo.dbInfo.sizes[dim]);
         auto loopOp = AC->create<scf::ForOp>(loc, lowerBound, upperBound, one);
         Block &loopBlock = loopOp.getRegion().front();
         AC->setInsertionPointToStart(&loopBlock);
@@ -1090,9 +1079,8 @@ private:
           recordSingleDb(dbGuid, depInfo.guidStorage, edtGuid, sharedSlotAlloc,
                          linearIndex, ArrayRef<Value>(), bounds.allocSizes,
                          accessMode, acquireMode, depFlags, boundsValid,
-                         depInfo.depStruct,
-                         depInfo.baseOffset, bounds.totalDBs, byteOffset,
-                         byteSize, depInfo.stencilCenterLinear,
+                         depInfo.depStruct, depInfo.baseOffset, bounds.totalDBs,
+                         byteOffset, byteSize, depInfo.stencilCenterLinear,
                          depInfo.stencilCenterCoords, &depInfo, loc);
         },
         bounds.allocSizes);
@@ -1108,8 +1096,8 @@ private:
     DepBoundsInfo bounds =
         computeDepBounds(dbGuid, depInfo, accessMode, boundsValid);
     emitRecordDepCalls(dbGuid, edtGuid, sharedSlotAlloc, accessMode,
-                       acquireMode, depFlags, boundsValid, byteOffset,
-                       byteSize, depInfo, bounds, loc);
+                       acquireMode, depFlags, boundsValid, byteOffset, byteSize,
+                       depInfo, bounds, loc);
   }
 
   /// Emit the appropriate runtime call for recording a dependency.
@@ -1119,16 +1107,15 @@ private:
   void emitRecordDepCall(Value dbGuidValue, Value edtGuidValue,
                          Value currentSlotI32, Value modeValue,
                          Value byteOffsetI64, Value byteSizeI64,
-                         std::optional<int32_t> depFlags,
-                         Location loc) const {
+                         std::optional<int32_t> depFlags, Location loc) const {
     auto emitWholeDbDep = [&]() {
       ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
       /// Standard path: full datablock dependency
       if (depFlags && *depFlags != 0) {
         Value flagsValue = AC->createIntConstant(*depFlags, AC->Int32, loc);
-        RCB.callVoid(types::ARTSRTL_arts_add_dependence_ex,
-                     {dbGuidValue, edtGuidValue, currentSlotI32, modeValue,
-                      flagsValue});
+        RCB.callVoid(
+            types::ARTSRTL_arts_add_dependence_ex,
+            {dbGuidValue, edtGuidValue, currentSlotI32, modeValue, flagsValue});
       } else {
         RCB.callVoid(types::ARTSRTL_arts_add_dependence,
                      {dbGuidValue, edtGuidValue, currentSlotI32, modeValue});
@@ -1189,19 +1176,15 @@ private:
   /// 2. Unconditional: direct arts_add_dependence[_at] call
   ///
   /// Within each path, ESD vs standard is handled by emitRecordDepCall.
-  void recordSingleDb(Value dbGuid, Value guidStorage, Value edtGuid,
-                      Value slotAlloc, Value linearIndex,
-                      ArrayRef<Value> directIndices,
-                      ArrayRef<Value> directLayoutSizes,
-                      DepAccessMode accessMode,
-                      std::optional<int32_t> acquireMode,
-                      std::optional<int32_t> depFlags, Value boundsValid,
-                      Value depStruct, Value baseOffset, Value totalDBs,
-                      Value byteOffset, Value byteSize,
-                      Value stencilCenterLinear,
-                      ArrayRef<Value> stencilCenterCoords,
-                      const DepDbInfo *depInfo,
-                      Location loc) const {
+  void recordSingleDb(
+      Value dbGuid, Value guidStorage, Value edtGuid, Value slotAlloc,
+      Value linearIndex, ArrayRef<Value> directIndices,
+      ArrayRef<Value> directLayoutSizes, DepAccessMode accessMode,
+      std::optional<int32_t> acquireMode, std::optional<int32_t> depFlags,
+      Value boundsValid, Value depStruct, Value baseOffset, Value totalDBs,
+      Value byteOffset, Value byteSize, Value stencilCenterLinear,
+      ArrayRef<Value> stencilCenterCoords, const DepDbInfo *depInfo,
+      Location loc) const {
     const bool useDepv = depStruct && baseOffset &&
                          (accessMode == DepAccessMode::from_depv ||
                           dbGuid.getDefiningOp<DepDbAcquireOp>());
@@ -1234,8 +1217,7 @@ private:
     if (!stencilCenterCoords.empty() && !directIndices.empty() &&
         stencilCenterCoords.size() == directIndices.size() &&
         modeInt == writeMode) {
-      isCenterBlock =
-          buildCoordsEqual(directIndices, stencilCenterCoords, loc);
+      isCenterBlock = buildCoordsEqual(directIndices, stencilCenterCoords, loc);
       Value readValue = AC->createIntConstant(readMode, AC->Int32, loc);
       Value writeValue = AC->createIntConstant(writeMode, AC->Int32, loc);
       modeValue = AC->create<arith::SelectOp>(loc, isCenterBlock, writeValue,
@@ -1261,11 +1243,11 @@ private:
         depFlags && ((*depFlags & kArtsDepFlagPreserveShape) != 0);
     bool inferredPreserveShape = false;
     bool hasExplicitSlice = byteOffset && byteSize &&
-                           !ValueAnalysis::isZeroConstant(
-                               ValueAnalysis::stripNumericCasts(byteSize));
+                            !ValueAnalysis::isZeroConstant(
+                                ValueAnalysis::stripNumericCasts(byteSize));
     if (!preserveShape && !hasExplicitSlice && depInfo) {
-      auto inferredSlice =
-          inferStencilFaceSliceForSlot(*depInfo, linearIndex, directIndices, loc);
+      auto inferredSlice = inferStencilFaceSliceForSlot(*depInfo, linearIndex,
+                                                        directIndices, loc);
       if (inferredSlice.first && inferredSlice.second) {
         effectiveByteOffset = inferredSlice.first;
         effectiveByteSize = inferredSlice.second;
@@ -1290,10 +1272,10 @@ private:
 
     /// Prepare ESD values if needed (cast Index to Int64).
     /// byte_size == 0 denotes "no partial slice" and should use full-db deps.
-    bool hasPartialSlice = effectiveByteOffset && effectiveByteSize &&
-                           !ValueAnalysis::isZeroConstant(
-                               ValueAnalysis::stripNumericCasts(
-                                   effectiveByteSize));
+    bool hasPartialSlice =
+        effectiveByteOffset && effectiveByteSize &&
+        !ValueAnalysis::isZeroConstant(
+            ValueAnalysis::stripNumericCasts(effectiveByteSize));
     Value byteOffsetI64 =
         hasPartialSlice ? AC->ensureI64(effectiveByteOffset, loc) : nullptr;
     Value byteSizeI64 =
@@ -1303,9 +1285,8 @@ private:
       /// dependencies as byte slices, but force the owned center block back to
       /// a whole-DB dependence by zeroing the slice at runtime.
       Value zeroI64 = AC->createIntConstant(0, AC->Int64, loc);
-      byteOffsetI64 =
-          AC->create<arith::SelectOp>(loc, isCenterBlock, zeroI64,
-                                      byteOffsetI64);
+      byteOffsetI64 = AC->create<arith::SelectOp>(loc, isCenterBlock, zeroI64,
+                                                  byteOffsetI64);
       byteSizeI64 =
           AC->create<arith::SelectOp>(loc, isCenterBlock, zeroI64, byteSizeI64);
     }
@@ -1903,11 +1884,10 @@ private:
 
       if (!parallelInit) {
         if (isSingleElement) {
-          createSingleDb(ptrBuffer, guidBuffer, callbackRoute,
-                         callbackTotalDbSize,
-                         callbackNextId ? &callbackNextId : nullptr,
-                         op.getLoc(),
-                         /*distributedOwnership=*/true);
+          createSingleDb(
+              ptrBuffer, guidBuffer, callbackRoute, callbackTotalDbSize,
+              callbackNextId ? &callbackNextId : nullptr, op.getLoc(),
+              /*distributedOwnership=*/true);
         } else {
           createMultiDbs(ptrBuffer, guidBuffer, callbackDbSizes, callbackRoute,
                          callbackTotalDbSize,
@@ -1920,12 +1900,11 @@ private:
         /// Reserve deterministic GUIDs once per node; DB creation runs in
         /// initPerWorker.
         if (isSingleElement) {
-          createSingleDb(ptrBuffer, guidBuffer, callbackRoute,
-                         callbackTotalDbSize,
-                         callbackNextId ? &callbackNextId : nullptr,
-                         op.getLoc(),
-                         /*distributedOwnership=*/true,
-                         /*createDb=*/false);
+          createSingleDb(
+              ptrBuffer, guidBuffer, callbackRoute, callbackTotalDbSize,
+              callbackNextId ? &callbackNextId : nullptr, op.getLoc(),
+              /*distributedOwnership=*/true,
+              /*createDb=*/false);
         } else {
           createMultiDbs(ptrBuffer, guidBuffer, callbackDbSizes, callbackRoute,
                          callbackTotalDbSize,
@@ -2160,14 +2139,12 @@ private:
                                 ValueRange{linearIndex});
   }
 
-  void createSingleDb(Value dbMemref, Value guidMemref,
-                      Value route, Value elementSize,
-                      std::optional<int64_t> *nextId, Location loc,
-                      bool distributedOwnership = false, bool createDb = true,
-                      ArrayRef<Value> sizes = {},
-                      ArrayRef<Value> indices = {},
-                      std::optional<Value> linearIndexOverride =
-                          std::nullopt) const {
+  void createSingleDb(
+      Value dbMemref, Value guidMemref, Value route, Value elementSize,
+      std::optional<int64_t> *nextId, Location loc,
+      bool distributedOwnership = false, bool createDb = true,
+      ArrayRef<Value> sizes = {}, ArrayRef<Value> indices = {},
+      std::optional<Value> linearIndexOverride = std::nullopt) const {
     Value linearIndex;
     if (linearIndexOverride.has_value()) {
       linearIndex = *linearIndexOverride;
@@ -2225,8 +2202,8 @@ private:
     auto &loopBlock = linearLoop.getRegion().front();
     AC->setInsertionPointToStart(&loopBlock);
     Value linearIndex = linearLoop.getInductionVar();
-    createSingleDb(dbMemref, guidMemref, route, elementSize, nextId,
-                   loc, distributedOwnership, createDb, /*sizes=*/{},
+    createSingleDb(dbMemref, guidMemref, route, elementSize, nextId, loc,
+                   distributedOwnership, createDb, /*sizes=*/{},
                    /*indices=*/{}, /*linearIndexOverride=*/linearIndex);
     AC->setInsertionPointAfter(linearLoop);
   }
@@ -2486,8 +2463,8 @@ void ConvertArtsToLLVMPass::runOnOperation() {
     ARTS_INFO("Running core patterns");
     RewritePatternSet corePatterns(context);
     populateCorePatterns(corePatterns);
-    if (failed(applyPatternsGreedily(module, std::move(corePatterns),
-                                            config))) {
+    if (failed(
+            applyPatternsGreedily(module, std::move(corePatterns), config))) {
       ARTS_ERROR("Failed to apply core ARTS to LLVM conversion patterns");
       return signalPassFailure();
     }
@@ -2498,8 +2475,7 @@ void ConvertArtsToLLVMPass::runOnOperation() {
     ARTS_INFO("Running db patterns");
     RewritePatternSet dbPatterns(context);
     populateDbPatterns(dbPatterns);
-    if (failed(applyPatternsGreedily(module, std::move(dbPatterns),
-                                            config))) {
+    if (failed(applyPatternsGreedily(module, std::move(dbPatterns), config))) {
       ARTS_ERROR("Failed to apply DbAcquire/DbRelease conversion patterns");
       return signalPassFailure();
     }
@@ -2512,8 +2488,8 @@ void ConvertArtsToLLVMPass::runOnOperation() {
     otherPatterns.add<DbAllocPattern, DbFreePattern>(context, AC);
     otherPatterns.add<DbNumElementsPattern>(context, AC);
     otherPatterns.add<YieldPattern, UndefPattern>(context, AC);
-    if (failed(applyPatternsGreedily(module, std::move(otherPatterns),
-                                            config))) {
+    if (failed(
+            applyPatternsGreedily(module, std::move(otherPatterns), config))) {
       ARTS_ERROR("Failed to apply other conversion patterns");
       return signalPassFailure();
     }

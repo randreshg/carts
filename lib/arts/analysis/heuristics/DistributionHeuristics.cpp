@@ -216,20 +216,17 @@ DistributionHeuristics::chooseWavefront2DTilingPlan(
   int64_t effectiveWorkers = std::max<int64_t>(1, workerCfg.totalWorkers);
   int64_t minRowTiles = (effectiveWorkers > 1 && rowExtent >= 2) ? 2 : 1;
   int64_t minColTiles = (effectiveWorkers > 1 && colExtent >= 2) ? 2 : 1;
-  int64_t maxRowTiles =
-      std::max<int64_t>(minRowTiles,
-                        std::min<int64_t>(rowExtent, effectiveWorkers * 2));
-  int64_t maxColTiles =
-      std::max<int64_t>(minColTiles,
-                        std::min<int64_t>(colExtent, effectiveWorkers * 4));
+  int64_t maxRowTiles = std::max<int64_t>(
+      minRowTiles, std::min<int64_t>(rowExtent, effectiveWorkers * 2));
+  int64_t maxColTiles = std::max<int64_t>(
+      minColTiles, std::min<int64_t>(colExtent, effectiveWorkers * 4));
 
   /// A weighted 2-D wavefront with rank = 2*row + col only grows its ready
   /// frontier with the number of row tiles. Wider column grids beyond 2R-1
   /// mostly add ranks/tasks without improving the maximum ready set.
   int64_t maxFrontierRows = std::max<int64_t>(
-      minRowTiles,
-      std::min<int64_t>(
-          {maxRowTiles, effectiveWorkers, ceilDivPositive(maxColTiles, 2)}));
+      minRowTiles, std::min<int64_t>({maxRowTiles, effectiveWorkers,
+                                      ceilDivPositive(maxColTiles, 2)}));
   if (maxFrontierRows < minRowTiles)
     return std::nullopt;
 
@@ -237,16 +234,16 @@ DistributionHeuristics::chooseWavefront2DTilingPlan(
   long double totalCells =
       static_cast<long double>(rowExtent) * static_cast<long double>(colExtent);
   int64_t desiredTasksByGranularity = std::max<int64_t>(
-      1, static_cast<int64_t>(std::ceil(
-             totalCells /
-             static_cast<long double>(kPreferredMinCellsPerTask))));
+      1,
+      static_cast<int64_t>(std::ceil(
+          totalCells / static_cast<long double>(kPreferredMinCellsPerTask))));
   if (desiredTasksByGranularity < 4)
     return std::nullopt;
 
   long double discriminant =
       1.0L + 8.0L * static_cast<long double>(desiredTasksByGranularity);
-  int64_t granularityRows = static_cast<int64_t>(
-      std::ceil((1.0L + std::sqrt(discriminant)) / 4.0L));
+  int64_t granularityRows =
+      static_cast<int64_t>(std::ceil((1.0L + std::sqrt(discriminant)) / 4.0L));
   granularityRows =
       clampPositive(granularityRows, minRowTiles, maxFrontierRows);
 
@@ -254,8 +251,9 @@ DistributionHeuristics::chooseWavefront2DTilingPlan(
   /// per-task granularity looks healthy. Allow a worker-utilization floor as
   /// long as the physical tiles remain comfortably above a hard minimum size.
   constexpr int64_t kAbsoluteMinCellsPerTask = 1 << 13;
-  int64_t maxRowsByTileArea = static_cast<int64_t>(std::floor(std::sqrt(
-      totalCells / (2.0L * static_cast<long double>(kAbsoluteMinCellsPerTask)))));
+  int64_t maxRowsByTileArea = static_cast<int64_t>(std::floor(
+      std::sqrt(totalCells /
+                (2.0L * static_cast<long double>(kAbsoluteMinCellsPerTask)))));
   maxRowsByTileArea =
       clampPositive(maxRowsByTileArea, minRowTiles, maxFrontierRows);
 
@@ -331,9 +329,8 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
   }
   if (auto summary =
           loopAnalysis.getLoopDbAccessSummary(forOp.getOperation())) {
-    isStencilPattern = isStencilPattern ||
-                       summary->distributionPattern ==
-                           EdtDistributionPattern::stencil;
+    isStencilPattern = isStencilPattern || summary->distributionPattern ==
+                                               EdtDistributionPattern::stencil;
     allowNestedWorkBoost =
         !isStencilPattern &&
         summary->distributionPattern == EdtDistributionPattern::uniform &&
@@ -467,8 +464,8 @@ DistributionHeuristics::analyzeStrategy(EdtConcurrency concurrency,
 DistributionStrategy
 DistributionHeuristics::resolveLoweringStrategy(EdtOp originalParallel,
                                                 ForOp forOp) {
-  DistributionStrategy strategy = analyzeStrategy(
-      originalParallel.getConcurrency(), /*machine=*/nullptr);
+  DistributionStrategy strategy =
+      analyzeStrategy(originalParallel.getConcurrency(), /*machine=*/nullptr);
   if (auto selectedKind = getEdtDistributionKind(forOp.getOperation()))
     strategy.kind = toDistributionKind(*selectedKind);
   return strategy;

@@ -18,7 +18,6 @@
 #define GEN_PASS_DEF_ARTSINLINER
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
 #include "mlir/Analysis/CallGraph.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -27,6 +26,7 @@
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/InliningUtils.h"
 #include "llvm/Support/Debug.h"
 
@@ -50,8 +50,7 @@ static bool isInsideOmpRegion(Operation *op) {
 static bool containsOmpOp(Operation *op) {
   bool found = false;
   op->walk([&](Operation *nested) {
-    if (nested->getDialect() &&
-        nested->getDialect()->getNamespace() == "omp") {
+    if (nested->getDialect() && nested->getDialect()->getNamespace() == "omp") {
       found = true;
       return WalkResult::interrupt();
     }
@@ -111,8 +110,9 @@ static bool callOrCalleeUsesType(func::CallOp call,
   return false;
 }
 
-static bool hasLayoutSensitiveNestedMemrefSignature(
-    func::CallOp call, CallableOpInterface callableOp) {
+static bool
+hasLayoutSensitiveNestedMemrefSignature(func::CallOp call,
+                                        CallableOpInterface callableOp) {
   return callOrCalleeUsesType(call, callableOp, hasNestedMemrefType);
 }
 
@@ -137,7 +137,8 @@ static bool hasLayoutSensitiveMemrefSignature(func::CallOp call,
 /// block/stencil DB layout, a remaining full-view helper call would otherwise
 /// force coarse fallback because the callee still expects the original
 /// contiguous memref contract.
-static bool shouldInlineCall(func::CallOp call, CallableOpInterface callableOp) {
+static bool shouldInlineCall(func::CallOp call,
+                             CallableOpInterface callableOp) {
   auto funcOp = dyn_cast_or_null<func::FuncOp>(callableOp.getOperation());
   if (!funcOp)
     return true;
@@ -352,19 +353,19 @@ struct ArtsInlinerPass : public impl::ArtsInlinerBase<ArtsInlinerPass> {
         ARTS_INFO("Attempting to inline call");
 
         /// Attempt to inline the call
-        auto cloneCallback =
-            [](OpBuilder &builder, Region *src, Block *inlineBlock,
-               Block *postInsertBlock, IRMapping &mapper,
-               bool shouldCloneInlinedRegion) {
-              Region *insertRegion = inlineBlock->getParent();
-              if (shouldCloneInlinedRegion)
-                src->cloneInto(insertRegion, postInsertBlock->getIterator(),
-                               mapper);
-              else
-                insertRegion->getBlocks().splice(
-                    postInsertBlock->getIterator(), src->getBlocks(),
-                    src->begin(), src->end());
-            };
+        auto cloneCallback = [](OpBuilder &builder, Region *src,
+                                Block *inlineBlock, Block *postInsertBlock,
+                                IRMapping &mapper,
+                                bool shouldCloneInlinedRegion) {
+          Region *insertRegion = inlineBlock->getParent();
+          if (shouldCloneInlinedRegion)
+            src->cloneInto(insertRegion, postInsertBlock->getIterator(),
+                           mapper);
+          else
+            insertRegion->getBlocks().splice(postInsertBlock->getIterator(),
+                                             src->getBlocks(), src->begin(),
+                                             src->end());
+        };
         if (succeeded(mlir::inlineCall(inliner, cloneCallback, call, callableOp,
                                        callableOp.getCallableRegion(), true))) {
           ARTS_INFO("Successfully inlined call");

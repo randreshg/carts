@@ -54,8 +54,8 @@ DbRewriter::create(DbAllocOp oldAlloc, ArrayRef<DbRewriteAcquire> acquires,
   ARTS_DEBUG("DbRewriter::create mode=" << getPartitionModeName(plan.mode));
   bool useMixedStencilRewriter = false;
   if (plan.mode == PartitionMode::block && plan.stencilInfo) {
-    useMixedStencilRewriter = llvm::any_of(
-        acquires, [](const DbRewriteAcquire &info) {
+    useMixedStencilRewriter =
+        llvm::any_of(acquires, [](const DbRewriteAcquire &info) {
           return info.partitionInfo.mode == PartitionMode::stencil;
         });
   }

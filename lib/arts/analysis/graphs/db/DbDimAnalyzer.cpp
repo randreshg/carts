@@ -309,7 +309,8 @@ static void inferPartitionDims(DbAcquireNode *node,
   /// Peer ownership is only usable when it fits this acquire's own logical
   /// rank. Keep the inference conservative for unrelated helper/coefficient
   /// DBs that happen to share the same scope.
-  if (llvm::any_of(peerDims, [&](unsigned dim) { return dim >= facts.dims.size(); }))
+  if (llvm::any_of(peerDims,
+                   [&](unsigned dim) { return dim >= facts.dims.size(); }))
     return;
 
   facts.partitionDims = std::move(peerDims);

@@ -16,12 +16,11 @@
 #define GEN_PASS_DEF_DISTRIBUTEDHOSTLOOPOUTLINING
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/metadata/LoopMetadata.h"
+#include "mlir/Pass/Pass.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -331,9 +330,10 @@ static void applyMachineWorkerTopology(EdtOp outlinedEdt,
   if (!outlinedEdt || outlinedEdt.getConcurrency() != EdtConcurrency::internode)
     return;
 
-  auto workerConfig = heuristics ? heuristics->resolveWorkerConfig(outlinedEdt)
-                                 : DistributionHeuristics::resolveWorkerConfig(
-                                       outlinedEdt, machine);
+  auto workerConfig =
+      heuristics
+          ? heuristics->resolveWorkerConfig(outlinedEdt)
+          : DistributionHeuristics::resolveWorkerConfig(outlinedEdt, machine);
   if (!workerConfig)
     return;
 

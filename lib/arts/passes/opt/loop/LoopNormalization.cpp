@@ -29,12 +29,11 @@
 #define GEN_PASS_DEF_LOOPNORMALIZATION
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "arts/transforms/loop/LoopNormalizer.h"
 #include "arts/utils/Debug.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Pass/Pass.h"
 
 ARTS_DEBUG_SETUP(loop_normalization);
 

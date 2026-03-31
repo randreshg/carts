@@ -135,6 +135,10 @@ def DbModeTightening : Pass<"db-mode-tightening", "mlir::ModuleOp"> {
         store operations performed on them, and infers storage types.}];
   let dependentDialects =
       ["memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect"];
+  let options = [
+    Option<"forceInout", "force-inout", "bool", "false",
+           "Force all stores to use inout mode (disables mode tightening to out)">
+  ];
   let constructor = "mlir::arts::createDbModeTighteningPass(nullptr)";
 }
 
@@ -163,6 +167,10 @@ def DbPartitioning : Pass<"db-partitioning", "mlir::ModuleOp"> {
     "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
     "arts::ArtsDialect", "arith::ArithDialect", "scf::SCFDialect",
     "polygeist::PolygeistDialect"
+  ];
+  let options = [
+    Option<"forceCoarseAllocId", "force-coarse-alloc-id", "int64_t", "-1",
+           "Force the DB allocation with this arts.id to use coarse partitioning (-1 = disabled)">
   ];
   let constructor = "mlir::arts::createDbPartitioningPass(nullptr)";
 }

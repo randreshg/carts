@@ -19,11 +19,7 @@
 namespace mlir {
 namespace arts {
 
-enum class PointwiseLoopComputeClass {
-  arithmeticOnly,
-  vectorMath,
-  scalarCall
-};
+enum class PointwiseLoopComputeClass { arithmeticOnly, vectorMath, scalarCall };
 
 /// Check whether a scf::ForOp is a "worker loop" (i.e., contains at least one
 /// arts.edt operation anywhere in its body).
@@ -133,10 +129,6 @@ int64_t getRepeatedParentTripProduct(Operation *op,
 /// passes use this to avoid mixing such loops with arithmetic-only loops,
 /// which would otherwise suppress vectorization on the simple stages.
 PointwiseLoopComputeClass classifyPointwiseLoopCompute(arts::ForOp loop);
-
-/// Convenience wrapper for callers that only need to know whether the loop is
-/// more expensive than plain arithmetic-only pointwise work.
-bool loopHasFusionHostileFpWork(arts::ForOp loop);
 
 } // namespace arts
 } // namespace mlir

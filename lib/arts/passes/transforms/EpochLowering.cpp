@@ -32,9 +32,7 @@
 #define GEN_PASS_DEF_EPOCHLOWERING
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -57,13 +55,13 @@ using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
 using AttrNames::Operation::ContinuationForEpoch;
-using AttrNames::Operation::CPSChainId;
-using AttrNames::Operation::CPSOuterEpochParamIdx;
-using AttrNames::Operation::CPSIterCounterParamIdx;
-using AttrNames::Operation::CPSParamPerm;
-using AttrNames::Operation::CPSInitIter;
 using AttrNames::Operation::CPSAdditiveParams;
 using AttrNames::Operation::CPSAdvanceHasIvArg;
+using AttrNames::Operation::CPSChainId;
+using AttrNames::Operation::CPSInitIter;
+using AttrNames::Operation::CPSIterCounterParamIdx;
+using AttrNames::Operation::CPSOuterEpochParamIdx;
+using AttrNames::Operation::CPSParamPerm;
 
 ///===----------------------------------------------------------------------===///
 /// Epoch Lowering Pass Implementation
@@ -151,7 +149,8 @@ void EpochLoweringPass::runOnOperation() {
         moveWithDeps(contEdtCreate.getOperation());
 
         finishGuid = contEdtCreate.getGuid();
-        /// Control slot = depCount - 1 (EdtLowering added +1 for the control dep).
+        /// Control slot = depCount - 1 (EdtLowering added +1 for the control
+        /// dep).
         AC->setInsertionPointAfter(contEdtCreate);
         Value depCount = contEdtCreate.getDepCount();
         Value one = AC->createIntConstant(1, AC->Int32, epochOp.getLoc());
@@ -244,8 +243,7 @@ void EpochLoweringPass::runOnOperation() {
     bool isCPSOuterEpoch =
         epochOp->hasAttr(AttrNames::Operation::CPSOuterEpoch);
     int64_t cpsInitIter = 0;
-    if (auto initIterAttr =
-            epochOp->getAttrOfType<IntegerAttr>(CPSInitIter))
+    if (auto initIterAttr = epochOp->getAttrOfType<IntegerAttr>(CPSInitIter))
       cpsInitIter = initIterAttr.getInt();
 
     /// Replace the epoch op with the epoch GUID.
@@ -256,8 +254,7 @@ void EpochLoweringPass::runOnOperation() {
     /// GUID into all continuation EdtCreateOps' param_packs so they
     /// propagate through the chain.
     if (isCPSOuterEpoch) {
-      func::FuncOp parentFunc =
-          createEpochOp->getParentOfType<func::FuncOp>();
+      func::FuncOp parentFunc = createEpochOp->getParentOfType<func::FuncOp>();
       ARTS_INFO("CPS outer epoch: injecting iter counter + outer GUID "
                 "into chain EDTs");
       if (parentFunc) {
@@ -266,8 +263,7 @@ void EpochLoweringPass::runOnOperation() {
             return;
           }
           ARTS_INFO("  Found chain EDT: " << edt);
-          auto packOp =
-              edt.getParamMemref().getDefiningOp<EdtParamPackOp>();
+          auto packOp = edt.getParamMemref().getDefiningOp<EdtParamPackOp>();
           if (!packOp)
             return;
           /// Build a new param_pack with iter counter + outer epoch GUID
@@ -288,8 +284,8 @@ void EpochLoweringPass::runOnOperation() {
                        AC->getBuilder().getI64IntegerAttr(iterIdx));
           edt->setAttr(CPSOuterEpochParamIdx,
                        AC->getBuilder().getI64IntegerAttr(epochIdx));
-          ARTS_INFO("  Injected iter counter at idx " << iterIdx
-                    << ", outer epoch at idx " << epochIdx);
+          ARTS_INFO("  Injected iter counter at idx "
+                    << iterIdx << ", outer epoch at idx " << epochIdx);
         });
       }
     }
@@ -314,7 +310,7 @@ void EpochLoweringPass::runOnOperation() {
           edt->getAttrOfType<StringAttr>(AttrNames::Operation::OutlinedFunc);
       if (iterAttr && epochAttr && funcAttr)
         funcToChainInfo[funcAttr.getValue()] = {iterAttr.getInt(),
-                                                 epochAttr.getInt()};
+                                                epochAttr.getInt()};
     });
 
     for (auto &[funcName, info] : funcToChainInfo) {
@@ -344,16 +340,16 @@ void EpochLoweringPass::runOnOperation() {
 
       /// Load iter counter from parent's param array.
       Value iterIdxVal = AC->createIndexConstant(info.iterIdx, loc);
-      Value iterCounter = AC->create<memref::LoadOp>(
-          loc, paramArrayMemref, ValueRange{iterIdxVal});
+      Value iterCounter = AC->create<memref::LoadOp>(loc, paramArrayMemref,
+                                                     ValueRange{iterIdxVal});
       /// Load outer epoch GUID from parent's param array.
       Value epochIdxVal = AC->createIndexConstant(info.epochIdx, loc);
       Value outerEpochGuid = AC->create<memref::LoadOp>(
           loc, paramArrayMemref, ValueRange{epochIdxVal});
 
-      ARTS_INFO("CPS propagation: " << funcName
-                << " loading iter[" << info.iterIdx << "], epoch["
-                << info.epochIdx << "]");
+      ARTS_INFO("CPS propagation: " << funcName << " loading iter["
+                                    << info.iterIdx << "], epoch["
+                                    << info.epochIdx << "]");
 
       /// Build a map from parent function's unpack results to their indices.
       DenseMap<Value, int64_t> unpackResultToIdx;
@@ -384,9 +380,8 @@ void EpochLoweringPass::runOnOperation() {
             if (auto loadOp = dyn_cast<memref::LoadOp>(defOp)) {
               if (loadOp.getMemRef() == paramArrayMemref &&
                   loadOp.getIndices().size() == 1) {
-                if (auto idxOp =
-                        loadOp.getIndices()[0]
-                            .getDefiningOp<arith::ConstantIndexOp>())
+                if (auto idxOp = loadOp.getIndices()[0]
+                                     .getDefiningOp<arith::ConstantIndexOp>())
                   return idxOp.value();
               }
             }
@@ -399,8 +394,7 @@ void EpochLoweringPass::runOnOperation() {
         SmallVector<int64_t> perm;
         for (Value operand : packOp->getOperands())
           perm.push_back(traceToParamIdx(operand));
-        edt->setAttr(CPSParamPerm,
-                     AC->getBuilder().getDenseI64ArrayAttr(perm));
+        edt->setAttr(CPSParamPerm, AC->getBuilder().getDenseI64ArrayAttr(perm));
 
         SmallVector<Value> packParams(packOp->getOperands());
         packParams.push_back(iterCounter);
@@ -416,8 +410,8 @@ void EpochLoweringPass::runOnOperation() {
                      AC->getBuilder().getI64IntegerAttr(newIterIdx));
         edt->setAttr(CPSOuterEpochParamIdx,
                      AC->getBuilder().getI64IntegerAttr(newEpochIdx));
-        ARTS_INFO("  Injected iter[" << newIterIdx << "], epoch["
-                  << newEpochIdx << "] for child chain EDT");
+        ARTS_INFO("  Injected iter[" << newIterIdx << "], epoch[" << newEpochIdx
+                                     << "] for child chain EDT");
       }
     }
   }
@@ -445,7 +439,8 @@ void EpochLoweringPass::runOnOperation() {
     }
 
     if (!contEdtCreate) {
-      /// Fall back to module-wide search (target may be in a different function).
+      /// Fall back to module-wide search (target may be in a different
+      /// function).
       module.walk([&](EdtCreateOp edt) {
         auto chainAttr = edt->getAttrOfType<StringAttr>(CPSChainId);
         if (chainAttr && chainAttr.getValue() == targetChainId)
@@ -459,15 +454,15 @@ void EpochLoweringPass::runOnOperation() {
       return signalPassFailure();
     }
 
-    auto outlinedFunc =
-        contEdtCreate->getAttrOfType<StringAttr>(AttrNames::Operation::OutlinedFunc);
+    auto outlinedFunc = contEdtCreate->getAttrOfType<StringAttr>(
+        AttrNames::Operation::OutlinedFunc);
     if (!outlinedFunc) {
       advanceOp.emitError("CPS advance: continuation has no outlined_func");
       return signalPassFailure();
     }
 
-    ARTS_INFO("CPS advance: resolving chain '"
-              << targetChainId << "' → " << outlinedFunc.getValue());
+    ARTS_INFO("CPS advance: resolving chain '" << targetChainId << "' → "
+                                               << outlinedFunc.getValue());
 
     Location loc = advanceOp.getLoc();
     AC->setInsertionPoint(advanceOp);
@@ -512,8 +507,8 @@ void EpochLoweringPass::runOnOperation() {
     IntegerAttr iterCounterIdxAttr;
     if (parentFunc) {
       module.walk([&](EdtCreateOp edt) {
-        auto funcAttr = edt->getAttrOfType<StringAttr>(
-            AttrNames::Operation::OutlinedFunc);
+        auto funcAttr =
+            edt->getAttrOfType<StringAttr>(AttrNames::Operation::OutlinedFunc);
         if (funcAttr && funcAttr.getValue() == parentFunc.getName()) {
           iterCounterIdxAttr =
               edt->getAttrOfType<IntegerAttr>(CPSIterCounterParamIdx);
@@ -533,14 +528,14 @@ void EpochLoweringPass::runOnOperation() {
       if (iterCounterIdxAttr) {
         unsigned idx = iterCounterIdxAttr.getInt();
         Value idxVal = AC->createIndexConstant(idx, loc);
-        curIter = AC->create<memref::LoadOp>(
-            loc, paramArrayMemref, ValueRange{idxVal});
+        curIter = AC->create<memref::LoadOp>(loc, paramArrayMemref,
+                                             ValueRange{idxVal});
       }
       if (outerEpochIdxAttr) {
         unsigned idx = outerEpochIdxAttr.getInt();
         Value idxVal = AC->createIndexConstant(idx, loc);
-        outerEpochGuid = AC->create<memref::LoadOp>(
-            loc, paramArrayMemref, ValueRange{idxVal});
+        outerEpochGuid = AC->create<memref::LoadOp>(loc, paramArrayMemref,
+                                                    ValueRange{idxVal});
       }
     }
 
@@ -561,8 +556,8 @@ void EpochLoweringPass::runOnOperation() {
       if (ub.getType() != curIter.getType())
         ub = AC->create<arith::IndexCastOp>(loc, curIter.getType(), ub);
       tNext = AC->create<arith::AddIOp>(loc, curIter, step);
-      Value cond = AC->create<arith::CmpIOp>(
-          loc, arith::CmpIPredicate::slt, tNext, ub);
+      Value cond =
+          AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, tNext, ub);
       auto ifOp = AC->create<scf::IfOp>(loc, cond, /*withElse=*/false);
       Block &thenBlock = ifOp.getThenRegion().front();
       AC->setInsertionPoint(thenBlock.getTerminator());
@@ -588,8 +583,8 @@ void EpochLoweringPass::runOnOperation() {
       SmallVector<int64_t> invPerm;
       EdtCreateOp callerEdt = nullptr;
       module.walk([&](EdtCreateOp edt) {
-        auto funcAttr = edt->getAttrOfType<StringAttr>(
-            AttrNames::Operation::OutlinedFunc);
+        auto funcAttr =
+            edt->getAttrOfType<StringAttr>(AttrNames::Operation::OutlinedFunc);
         if (funcAttr && funcAttr.getValue() == parentFunc.getName())
           callerEdt = edt;
       });
@@ -643,7 +638,7 @@ void EpochLoweringPass::runOnOperation() {
 
     /// Create the self-referential EdtCreateOp, enrolled in the outer epoch.
     auto newContEdt = AC->create<EdtCreateOp>(loc, paramMemref, localDepCount,
-                                               localRoute, outerEpochGuid);
+                                              localRoute, outerEpochGuid);
     setOutlinedFunc(newContEdt, outlinedFunc.getValue());
     newContEdt->setAttr(ContinuationForEpoch, AC->getBuilder().getUnitAttr());
 
@@ -667,8 +662,7 @@ void EpochLoweringPass::runOnOperation() {
       Value ivReplacement = tNext ? tNext : curIter;
       if (ivReplacement) {
         // Cast to index if needed (block arg is index type).
-        if (ivReplacement.getType() !=
-            advBody.getArgument(0).getType()) {
+        if (ivReplacement.getType() != advBody.getArgument(0).getType()) {
           AC->setInsertionPointAfter(ivReplacement.getDefiningOp()
                                          ? ivReplacement.getDefiningOp()
                                          : &advBody.front());

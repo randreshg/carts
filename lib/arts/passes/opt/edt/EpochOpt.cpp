@@ -21,13 +21,10 @@
 
 #define GEN_PASS_DEF_EPOCHOPT
 #include "arts/Dialect.h"
-#include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
-#include "arts/passes/Passes.h.inc"
-#include "arts/Dialect.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/passes/Passes.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
@@ -65,12 +62,12 @@ using AccessMap = DenseMap<Operation *, bool>;
 /// Attribute names for continuation metadata.
 constexpr llvm::StringLiteral kHasControlDep = "arts.has_control_dep";
 using AttrNames::Operation::ContinuationForEpoch;
-using AttrNames::Operation::CPSChainId;
 using AttrNames::Operation::CPSAdditiveParams;
-using AttrNames::Operation::CPSNumCarry;
-using AttrNames::Operation::CPSLoopContinuation;
 using AttrNames::Operation::CPSAdvanceHasIvArg;
+using AttrNames::Operation::CPSChainId;
 using AttrNames::Operation::CPSInitIter;
+using AttrNames::Operation::CPSLoopContinuation;
+using AttrNames::Operation::CPSNumCarry;
 
 static bool isWriter(ArtsMode mode) {
   if (mode == ArtsMode::uninitialized)
@@ -923,10 +920,9 @@ static bool isCPSSequentialOp(Operation *op) {
           memref::DeallocOp, memref::CastOp, memref::SubViewOp>(op))
     return true;
   // Pure math ops (absf, exp, sqrt, etc.)
-  if (isa<math::AbsFOp, math::ExpOp, math::Exp2Op, math::SqrtOp,
-          math::TanhOp, math::LogOp, math::Log2Op, math::PowFOp,
-          math::CeilOp, math::FloorOp, math::CosOp, math::SinOp,
-          math::FmaOp, math::RoundOp>(op))
+  if (isa<math::AbsFOp, math::ExpOp, math::Exp2Op, math::SqrtOp, math::TanhOp,
+          math::LogOp, math::Log2Op, math::PowFOp, math::CeilOp, math::FloorOp,
+          math::CosOp, math::SinOp, math::FmaOp, math::RoundOp>(op))
     return true;
   // Lowering contract metadata
   if (isa<LoweringContractOp>(op))
@@ -960,7 +956,7 @@ static bool bodyIsEpochOnly(Block &body) {
     if (isPureArith(&op))
       continue;
     if (isa<DbAcquireOp, DbReleaseOp>(op))
-      continue; // DB ops feed into epochs and will be cloned
+      continue;   // DB ops feed into epochs and will be cloned
     return false; // Side-effecting non-epoch op
   }
   return true;
@@ -1024,8 +1020,8 @@ static bool tryCPSLoopTransform(scf::ForOp forOp) {
 
   /// Step 1: Create the wrapping epoch.
   builder.setInsertionPoint(forOp);
-  auto wrapEpoch = builder.create<EpochOp>(
-      loc, IntegerType::get(builder.getContext(), 64));
+  auto wrapEpoch =
+      builder.create<EpochOp>(loc, IntegerType::get(builder.getContext(), 64));
   /// Ensure the epoch region has a block with a yield terminator.
   Region &epochRegion = wrapEpoch.getRegion();
   if (epochRegion.empty())
@@ -1041,7 +1037,7 @@ static bool tryCPSLoopTransform(scf::ForOp forOp) {
   OpBuilder epochBuilder = OpBuilder::atBlockTerminator(&epochBlock);
 
   auto driverEdt = epochBuilder.create<EdtOp>(loc, EdtType::task,
-                                                EdtConcurrency::intranode, deps);
+                                              EdtConcurrency::intranode, deps);
 
   /// The EdtOp builder creates a body block but without block arguments
   /// matching the dependencies. Add them now.
@@ -1086,7 +1082,8 @@ static bool tryCPSLoopTransform(scf::ForOp forOp) {
 ///   epoch_0(finish→cont0) → cont0 → epoch_1(finish→cont1) → cont1 → advance
 ///
 /// Case 3 (N>2, e.g. fdtd-2d):
-///   epoch_0(finish→cont0) → cont0 → epoch_1(finish→cont1) → ... → contN-1 → advance
+///   epoch_0(finish→cont0) → cont0 → epoch_1(finish→cont1) → ... → contN-1 →
+///   advance
 ///
 /// Each continuation EDT is placed AFTER the epoch it continues, in the same
 /// block, so EpochLowering can find it when wiring the finish target.
@@ -1119,8 +1116,7 @@ struct EpochSlot {
 };
 
 /// Collect all epoch slots in a loop body, in program order.
-static void collectEpochSlots(Block &body,
-                              SmallVectorImpl<EpochSlot> &slots) {
+static void collectEpochSlots(Block &body, SmallVectorImpl<EpochSlot> &slots) {
   for (Operation &op : body.without_terminator()) {
     if (auto epoch = dyn_cast<EpochOp>(op)) {
       slots.push_back({epoch, nullptr});
@@ -1152,7 +1148,8 @@ collectAllEpochExternalValues(Block &loopBody,
       for (Value operand : op->getOperands()) {
         if (auto blockArg = dyn_cast<BlockArgument>(operand)) {
           if (blockArg.getOwner() != &loopBody &&
-              !loopBody.findAncestorOpInBlock(*blockArg.getOwner()->getParentOp()))
+              !loopBody.findAncestorOpInBlock(
+                  *blockArg.getOwner()->getParentOp()))
             externals.insert(operand);
           continue;
         }
@@ -1312,8 +1309,8 @@ static void emitAdvanceLogic(OpBuilder &builder, Location loc, Value iv,
   /// forcing EdtEnvManager to capture them during EDT outlining.
   for (Value v : carryValues)
     nextParams.push_back(v);
-  auto advance = builder.create<CPSAdvanceOp>(
-      loc, nextParams, builder.getStringAttr("chain_0"));
+  auto advance = builder.create<CPSAdvanceOp>(loc, nextParams,
+                                              builder.getStringAttr("chain_0"));
   advance->setAttr(CPSAdditiveParams, builder.getUnitAttr());
   if (!carryValues.empty())
     advance->setAttr(CPSNumCarry,
@@ -1340,8 +1337,7 @@ static void emitAdvanceLogic(OpBuilder &builder, Location loc, Value iv,
     // the actual runtime iteration counter from the param array.
     auto indexTy = IndexType::get(builder.getContext());
     Value ivPlaceholder = advBlock.addArgument(indexTy, loc);
-    advance->setAttr(CPSAdvanceHasIvArg,
-                     builder.getUnitAttr());
+    advance->setAttr(CPSAdvanceHasIvArg, builder.getUnitAttr());
 
     // Build a fresh mapping for the wrappingIf that uses the placeholder
     // IV instead of the constant tNext. Clone only the ops needed for
@@ -1379,10 +1375,9 @@ static void emitAdvanceLogic(OpBuilder &builder, Location loc, Value iv,
 
 /// Mark an EDT as a CPS continuation with the given chain ID.
 static void markAsContinuation(EdtOp edt, OpBuilder &builder,
-                                unsigned chainIdx) {
+                               unsigned chainIdx) {
   std::string chainId = "chain_" + std::to_string(chainIdx);
-  edt->setAttr(kHasControlDep,
-               builder.getIntegerAttr(builder.getI32Type(), 1));
+  edt->setAttr(kHasControlDep, builder.getIntegerAttr(builder.getI32Type(), 1));
   edt->setAttr(ContinuationForEpoch, builder.getUnitAttr());
   edt->setAttr(CPSChainId, builder.getStringAttr(chainId));
   edt->setAttr(kCPSLoopContinuation, builder.getUnitAttr());
@@ -1446,22 +1441,20 @@ static void promoteAllocsForCPSChain(scf::ForOp forOp,
       if (memRefType.getRank() > 0 && memRefType.isDynamicDim(i)) {
         elementSizes.push_back(allocOp.getDynamicSizes()[i]);
       } else {
-        int64_t dimSize = memRefType.getRank() == 0
-                              ? 1
-                              : memRefType.getDimSize(i);
+        int64_t dimSize =
+            memRefType.getRank() == 0 ? 1 : memRefType.getDimSize(i);
         elementSizes.push_back(
             builder.create<arith::ConstantIndexOp>(loc, dimSize));
       }
     }
-    SmallVector<Value> sizes = {
-        builder.create<arith::ConstantIndexOp>(loc, 1)};
+    SmallVector<Value> sizes = {builder.create<arith::ConstantIndexOp>(loc, 1)};
 
     Value route = builder.create<arith::ConstantOp>(
         loc, builder.getI32Type(), builder.getI32IntegerAttr(0));
 
-    auto dbAlloc = builder.create<DbAllocOp>(
-        loc, ArtsMode::inout, route, DbAllocType::heap, DbMode::write,
-        elementType, sizes, elementSizes);
+    auto dbAlloc = builder.create<DbAllocOp>(loc, ArtsMode::inout, route,
+                                             DbAllocType::heap, DbMode::write,
+                                             elementType, sizes, elementSizes);
 
     // Replace all uses of the original alloc pointer with the DB pointer.
     allocOp.getResult().replaceAllUsesWith(dbAlloc.getPtr());
@@ -1557,8 +1550,7 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
   /// interEpochOps[N-1] = ops after the last epoch (tail)
   SmallVector<SmallVector<Operation *>> interEpochOps(N);
   if (!sequentialOps.empty()) {
-    DenseSet<Operation *> seqOpSet(sequentialOps.begin(),
-                                    sequentialOps.end());
+    DenseSet<Operation *> seqOpSet(sequentialOps.begin(), sequentialOps.end());
     unsigned currentSlot = 0;
     for (Operation &op : body.without_terminator()) {
       // Track which slot we're past
@@ -1586,9 +1578,9 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
   if (!sequentialOps.empty())
     promoteAllocsForCPSChain(forOp, sequentialOps, slots);
 
-  ARTS_INFO("CPS Chain: Found eligible " << N << "-epoch loop"
-            << (sequentialOps.empty() ? ""
-                                      : " (with sequential ops in body)"));
+  ARTS_INFO("CPS Chain: Found eligible "
+            << N << "-epoch loop"
+            << (sequentialOps.empty() ? "" : " (with sequential ops in body)"));
 
   /// === Transform ===
   ///
@@ -1606,18 +1598,17 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
   /// Step 1: Create outer epoch.
   builder.setInsertionPoint(forOp);
 
-  auto outerEpoch = builder.create<EpochOp>(
-      loc, IntegerType::get(builder.getContext(), 64));
+  auto outerEpoch =
+      builder.create<EpochOp>(loc, IntegerType::get(builder.getContext(), 64));
   outerEpoch->setAttr(ContinuationForEpoch, builder.getUnitAttr());
   outerEpoch->setAttr(AttrNames::Operation::CPSOuterEpoch,
-                       builder.getUnitAttr());
+                      builder.getUnitAttr());
 
   /// Store the initial iteration value so EpochLowering can inject it
   /// as an extra parameter. Using an attribute avoids the iteration
   /// counter being constant-folded away before EdtLowering packs params.
   if (auto lbCst = getConstantIntValue(lb))
-    outerEpoch->setAttr(CPSInitIter,
-                         builder.getI64IntegerAttr(*lbCst));
+    outerEpoch->setAttr(CPSInitIter, builder.getI64IntegerAttr(*lbCst));
   else
     outerEpoch->setAttr(CPSInitIter, builder.getI64IntegerAttr(0));
   Region &outerRegion = outerEpoch.getRegion();
@@ -1631,15 +1622,13 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
   OpBuilder outerBuilder = OpBuilder::atBlockTerminator(&outerBlock);
   IRMapping firstIterMapping;
   firstIterMapping.map(iv, lb);
-  cloneNonSlotArith(outerBuilder, body, slots, firstIterMapping,
-                    sequentialOps);
+  cloneNonSlotArith(outerBuilder, body, slots, firstIterMapping, sequentialOps);
 
   // If epoch_0 has a wrapping scf.if (parity conditional), clone the
   // entire conditional so the first iteration selects the correct branch.
   if (slots[0].wrappingIf) {
-    Operation *clonedIfOp =
-        outerBuilder.clone(*slots[0].wrappingIf.getOperation(),
-                           firstIterMapping);
+    Operation *clonedIfOp = outerBuilder.clone(
+        *slots[0].wrappingIf.getOperation(), firstIterMapping);
     auto clonedIf = cast<scf::IfOp>(clonedIfOp);
     for (Operation &op : clonedIf.getThenRegion().front())
       if (auto epoch = dyn_cast<EpochOp>(op))
@@ -1690,19 +1679,17 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
 
     if (i == N - 1) {
       /// Last continuation: clone tail sequential ops, then advance.
-      cloneNonSlotArith(contBuilder, body, slots, contMapping,
-                        sequentialOps);
+      cloneNonSlotArith(contBuilder, body, slots, contMapping, sequentialOps);
       for (Operation *seqOp : interEpochOps[N - 1]) {
         rematerializeExternalDefs(contBuilder, seqOp, &body, contMapping);
         contBuilder.clone(*seqOp, contMapping);
       }
-      emitAdvanceLogic(contBuilder, loc, iv, tCurrent, ub, step, body,
-                       slots, sequentialOps, carryValues);
+      emitAdvanceLogic(contBuilder, loc, iv, tCurrent, ub, step, body, slots,
+                       sequentialOps, carryValues);
     } else {
       /// Middle continuation: clone inter-epoch sequential ops,
       /// then set up epoch_{i+1} and nest cont_{i+1}.
-      cloneNonSlotArith(contBuilder, body, slots, contMapping,
-                        sequentialOps);
+      cloneNonSlotArith(contBuilder, body, slots, contMapping, sequentialOps);
       for (Operation *seqOp : interEpochOps[i]) {
         rematerializeExternalDefs(contBuilder, seqOp, &body, contMapping);
         contBuilder.clone(*seqOp, contMapping);
@@ -1759,8 +1746,8 @@ static bool tryCPSChainTransform(scf::ForOp forOp) {
         /// Unconditional epoch: clone and mark for continuation.
         Operation *clonedEpochOp =
             contBuilder.clone(*nextSlot.epoch.getOperation(), contMapping);
-        cast<EpochOp>(clonedEpochOp)->setAttr(ContinuationForEpoch,
-                                               contBuilder.getUnitAttr());
+        cast<EpochOp>(clonedEpochOp)
+            ->setAttr(ContinuationForEpoch, contBuilder.getUnitAttr());
         chainBuilder = contBuilder;
       }
     }
@@ -1873,7 +1860,7 @@ struct EpochOptPass : public impl::EpochOptBase<EpochOptPass> {
       }
       if (transformed > 0) {
         ARTS_INFO("Transformed " << transformed
-                                << " epochs to continuation form");
+                                 << " epochs to continuation form");
         changed = true;
       }
     }
@@ -1926,17 +1913,17 @@ std::unique_ptr<Pass> createEpochOptPass() {
 std::unique_ptr<Pass> createEpochOptPass(bool amortization, bool continuation,
                                          bool cpsDriver, bool cpsChain) {
   return std::make_unique<EpochOptPass>(
-      /*narrowing=*/true, /*fusion=*/true, /*loopFusion=*/true,
-      amortization, continuation, cpsDriver, cpsChain);
+      /*narrowing=*/true, /*fusion=*/true, /*loopFusion=*/true, amortization,
+      continuation, cpsDriver, cpsChain);
 }
 
 std::unique_ptr<Pass> createEpochOptSchedulingPass(bool amortization,
-                                                    bool continuation,
-                                                    bool cpsDriver,
-                                                    bool cpsChain) {
+                                                   bool continuation,
+                                                   bool cpsDriver,
+                                                   bool cpsChain) {
   return std::make_unique<EpochOptPass>(
-      /*narrowing=*/false, /*fusion=*/false, /*loopFusion=*/false,
-      amortization, continuation, cpsDriver, cpsChain);
+      /*narrowing=*/false, /*fusion=*/false, /*loopFusion=*/false, amortization,
+      continuation, cpsDriver, cpsChain);
 }
 } // namespace arts
 } // namespace mlir

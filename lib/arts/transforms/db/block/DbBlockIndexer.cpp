@@ -66,15 +66,17 @@ tryLocalizeFromLoopWindow(Value globalIdx, Value startBlock, Value blockSize,
     return std::nullopt;
 
   int64_t constOffset = 0;
-  Value indexedExpr = ValueAnalysis::stripConstantOffset(globalIdx, &constOffset);
+  Value indexedExpr =
+      ValueAnalysis::stripConstantOffset(globalIdx, &constOffset);
   indexedExpr = ValueAnalysis::stripNumericCasts(indexedExpr);
 
-  auto resolveLoopCarrier = [&](Value candidateIv)
-      -> std::optional<std::pair<scf::ForOp, Value>> {
+  auto resolveLoopCarrier =
+      [&](Value candidateIv) -> std::optional<std::pair<scf::ForOp, Value>> {
     candidateIv = ValueAnalysis::stripNumericCasts(candidateIv);
     auto loopIv = dyn_cast<BlockArgument>(candidateIv);
-    auto loop = loopIv ? dyn_cast_or_null<scf::ForOp>(loopIv.getOwner()->getParentOp())
-                       : scf::ForOp();
+    auto loop =
+        loopIv ? dyn_cast_or_null<scf::ForOp>(loopIv.getOwner()->getParentOp())
+               : scf::ForOp();
     if (!loop || loop.getInductionVar() != loopIv)
       return std::nullopt;
 
@@ -104,8 +106,8 @@ tryLocalizeFromLoopWindow(Value globalIdx, Value startBlock, Value blockSize,
       !loopWindowFitsSingleBlock(loop, blockSize))
     return std::nullopt;
 
-  auto blockSizeConst =
-      ValueAnalysis::tryFoldConstantIndex(ValueAnalysis::stripClampOne(blockSize));
+  auto blockSizeConst = ValueAnalysis::tryFoldConstantIndex(
+      ValueAnalysis::stripClampOne(blockSize));
   if (blockSizeConst && std::abs(constOffset) >= *blockSizeConst)
     return std::nullopt;
 
@@ -115,8 +117,9 @@ tryLocalizeFromLoopWindow(Value globalIdx, Value startBlock, Value blockSize,
 
   Value lb = ValueAnalysis::ensureIndexType(loop.getLowerBound(), builder, loc);
   Value bs = ValueAnalysis::ensureIndexType(blockSize, builder, loc);
-  Value sb = startBlock ? ValueAnalysis::ensureIndexType(startBlock, builder, loc)
-                        : zero;
+  Value sb = startBlock
+                 ? ValueAnalysis::ensureIndexType(startBlock, builder, loc)
+                 : zero;
 
   Value anchor = lb;
   if (invariantBase) {
@@ -150,10 +153,10 @@ tryLocalizeFromLoopWindow(Value globalIdx, Value startBlock, Value blockSize,
     return LoopWindowLocalization{baseRelBlock, loopIv};
   }
 
-  Value belowZero = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
-                                                  localRaw, zero);
-  Value aboveBlock = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge,
-                                                   localRaw, bs);
+  Value belowZero = builder.create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::slt, localRaw, zero);
+  Value aboveBlock = builder.create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::sge, localRaw, bs);
 
   Value adjust = builder.create<arith::SelectOp>(loc, belowZero, negOne, zero);
   adjust = builder.create<arith::SelectOp>(loc, aboveBlock, one, adjust);
@@ -163,8 +166,8 @@ tryLocalizeFromLoopWindow(Value globalIdx, Value startBlock, Value blockSize,
   Value localIdx = localRaw;
   Value localMinusBlock = builder.create<arith::SubIOp>(loc, localRaw, bs);
   Value localPlusBlock = builder.create<arith::AddIOp>(loc, localRaw, bs);
-  localIdx = builder.create<arith::SelectOp>(loc, belowZero, localPlusBlock,
-                                             localIdx);
+  localIdx =
+      builder.create<arith::SelectOp>(loc, belowZero, localPlusBlock, localIdx);
   localIdx = builder.create<arith::SelectOp>(loc, aboveBlock, localMinusBlock,
                                              localIdx);
 
@@ -203,8 +206,8 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
     if (!acquireSingleBlock)
       return false;
 
-    if (auto loopLocalized = tryLocalizeFromLoopWindow(globalIdx, startBlock,
-                                                       blockSize, builder, loc)) {
+    if (auto loopLocalized = tryLocalizeFromLoopWindow(
+            globalIdx, startBlock, blockSize, builder, loc)) {
       /// Single-block acquires already select the owning chunk, so blocked
       /// reindexing only needs the in-block coordinate.
       dbRefIdx = zero();
@@ -212,8 +215,8 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
       return true;
     }
 
-    if (auto local = extractLocalFromBlockBase(globalIdx, startBlock,
-                                               blockSize)) {
+    if (auto local =
+            extractLocalFromBlockBase(globalIdx, startBlock, blockSize)) {
       Value localIdxVal = ValueAnalysis::ensureIndexType(*local, builder, loc);
       if (localIdxVal && isLoopIvBoundedBy(localIdxVal, blockSize)) {
         dbRefIdx = zero();
@@ -522,9 +525,8 @@ bool DbBlockIndexer::handleSubIndexOp(
 
   ARTS_DEBUG(
       "  Handling subindex: elementType rank="
-      << (isa<MemRefType>(elementType)
-              ? cast<MemRefType>(elementType).getRank()
-              : 0)
+      << (isa<MemRefType>(elementType) ? cast<MemRefType>(elementType).getRank()
+                                       : 0)
       << ", subindex result type rank="
       << (isa<MemRefType>(subindex.getResult().getType())
               ? cast<MemRefType>(subindex.getResult().getType()).getRank()

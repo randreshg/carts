@@ -33,8 +33,7 @@ namespace {
 
 static bool hasConcreteReadHaloContract(const AcquireRewriteContract &contract,
                                         ArtsMode effectiveMode) {
-  return effectiveMode == ArtsMode::in &&
-         !contract.haloMinOffsets.empty() &&
+  return effectiveMode == ArtsMode::in && !contract.haloMinOffsets.empty() &&
          contract.haloMinOffsets.size() == contract.haloMaxOffsets.size();
 }
 
@@ -94,9 +93,9 @@ computeTaskAcquireWindow(TaskAcquireSlicePlanInput input) {
       input.rewriteContract.usePartitionSliceAsDepWindow;
   const bool hasReadHaloContract =
       hasConcreteReadHaloContract(input.rewriteContract, input.effectiveMode);
-  const bool useTaskDepWindow =
-      input.usesStencilHalo || input.rewriteContract.applyStencilHalo ||
-      hasReadHaloContract;
+  const bool useTaskDepWindow = input.usesStencilHalo ||
+                                input.rewriteContract.applyStencilHalo ||
+                                hasReadHaloContract;
   const bool useTaskPartitionWindow =
       !input.taskAcquire.getPartitionOffsets().empty() &&
       !input.taskAcquire.getPartitionSizes().empty() &&
@@ -115,9 +114,8 @@ computeTaskAcquireWindow(TaskAcquireSlicePlanInput input) {
     auto offsetRange = useRewrittenWindow
                            ? input.taskAcquire.getPartitionOffsets()
                            : input.taskAcquire.getOffsets();
-    auto sizeRange = useRewrittenWindow
-                         ? input.taskAcquire.getPartitionSizes()
-                         : input.taskAcquire.getSizes();
+    auto sizeRange = useRewrittenWindow ? input.taskAcquire.getPartitionSizes()
+                                        : input.taskAcquire.getSizes();
 
     if (!offsetRange.empty() && offsetRange.front())
       elementOffset = offsetRange.front();
@@ -133,13 +131,13 @@ computeTaskAcquireWindow(TaskAcquireSlicePlanInput input) {
         input.effectiveMode != ArtsMode::in)
       elementSize = input.plannedElementSize;
 
-    bool isStencilPattern = input.distributionPattern &&
-                            *input.distributionPattern ==
-                                EdtDistributionPattern::stencil;
+    bool isStencilPattern =
+        input.distributionPattern &&
+        *input.distributionPattern == EdtDistributionPattern::stencil;
     if (isStencilPattern && mode == PartitionMode::stencil &&
         input.effectiveMode != ArtsMode::in)
-      elementSize = input.AC->create<arith::AddIOp>(input.loc, elementSize,
-                                                    one);
+      elementSize =
+          input.AC->create<arith::AddIOp>(input.loc, elementSize, one);
   }
 
   elementOffset = input.AC->castToIndex(elementOffset, input.loc);
@@ -148,16 +146,16 @@ computeTaskAcquireWindow(TaskAcquireSlicePlanInput input) {
 
   Value startBlock =
       input.AC->create<arith::DivUIOp>(input.loc, elementOffset, blockSpan);
-  Value endElem = input.AC->create<arith::AddIOp>(input.loc, elementOffset,
-                                                  elementSize);
+  Value endElem =
+      input.AC->create<arith::AddIOp>(input.loc, elementOffset, elementSize);
   endElem = input.AC->create<arith::SubIOp>(input.loc, endElem, one);
   Value endBlock =
       input.AC->create<arith::DivUIOp>(input.loc, endElem, blockSpan);
 
   Value startAboveMax;
   if (totalBlocks) {
-    Value maxBlock = input.AC->create<arith::SubIOp>(input.loc, totalBlocks,
-                                                     one);
+    Value maxBlock =
+        input.AC->create<arith::SubIOp>(input.loc, totalBlocks, one);
     startAboveMax = input.AC->create<arith::CmpIOp>(
         input.loc, arith::CmpIPredicate::ugt, startBlock, maxBlock);
     Value clampedEnd =
@@ -229,7 +227,8 @@ computeTaskElementSlice(TaskAcquireSlicePlanInput input) {
     }
   }
   if (blockExtents.empty())
-    if (auto staticShape = getStencilBlockShape(input.taskAcquire.getOperation()))
+    if (auto staticShape =
+            getStencilBlockShape(input.taskAcquire.getOperation()))
       for (int64_t dim : *staticShape)
         blockExtents.push_back(input.AC->createIndexConstant(dim, input.loc));
   if (blockExtents.empty() && rootAlloc)
@@ -253,9 +252,9 @@ computeTaskElementSlice(TaskAcquireSlicePlanInput input) {
   /// Element-space task slices need an authoritative mapping from partition
   /// entries back to physical memref dims. Falling back to implicit leading
   /// dims is not a benign heuristic here: it fabricates owner-local slices for
-  /// reduction inputs whose accesses do not actually follow the distributed loop
-  /// IV. When the contract cannot name owner dims, keep the dependency full-
-  /// range and let later passes preserve correctness.
+  /// reduction inputs whose accesses do not actually follow the distributed
+  /// loop IV. When the contract cannot name owner dims, keep the dependency
+  /// full- range and let later passes preserve correctness.
   if (contractInfo.ownerDims.empty())
     return std::nullopt;
   SmallVector<unsigned, 4> explicitDims =
@@ -289,24 +288,23 @@ TaskAcquireRewritePlan
 mlir::arts::planTaskAcquireRewrite(TaskAcquireRewritePlanInput input) {
   auto makePlan = [&]() {
     return TaskAcquireRewritePlan{
-        AcquireRewriteInput{input.AC, input.loc, input.parentAcquire,
-                            input.effectiveMode,
-                            input.rootGuid, input.rootPtr, input.acquireOffset,
-                            input.acquireSize, input.acquireHintSize,
-                            /*extraOffsets=*/SmallVector<Value, 4>{},
-                            /*extraSizes=*/SmallVector<Value, 4>{},
-                            /*extraHintSizes=*/SmallVector<Value, 4>{},
-                            /*dimensionExtents=*/SmallVector<Value, 4>{},
-                            /*haloMinOffsets=*/SmallVector<int64_t, 4>{},
-                            /*haloMaxOffsets=*/SmallVector<int64_t, 4>{},
-                            input.step, input.stepIsUnit,
-                            /*singleElement=*/false,
-                            /*forceCoarse=*/
-                            input.forceCoarseRewrite ||
-                                input.distributionKind ==
-                                    DistributionKind::BlockCyclic,
-                            /*preserveParentDepRange=*/false,
-                            /*stencilExtent=*/Value()},
+        AcquireRewriteInput{
+            input.AC, input.loc, input.parentAcquire, input.effectiveMode,
+            input.rootGuid, input.rootPtr, input.acquireOffset,
+            input.acquireSize, input.acquireHintSize,
+            /*extraOffsets=*/SmallVector<Value, 4>{},
+            /*extraSizes=*/SmallVector<Value, 4>{},
+            /*extraHintSizes=*/SmallVector<Value, 4>{},
+            /*dimensionExtents=*/SmallVector<Value, 4>{},
+            /*haloMinOffsets=*/SmallVector<int64_t, 4>{},
+            /*haloMaxOffsets=*/SmallVector<int64_t, 4>{}, input.step,
+            input.stepIsUnit,
+            /*singleElement=*/false,
+            /*forceCoarse=*/
+            input.forceCoarseRewrite ||
+                input.distributionKind == DistributionKind::BlockCyclic,
+            /*preserveParentDepRange=*/false,
+            /*stencilExtent=*/Value()},
         /*useStencilRewriter=*/false,
         /*refinedTaskBlockShape=*/std::nullopt};
   };
@@ -452,20 +450,19 @@ mlir::arts::planTaskAcquireRewrite(TaskAcquireRewritePlanInput input) {
             dimensionExtents.push_back(totalCols);
             rewriteContract.preserveParentDepRange = false;
 
-            auto rowWorkersConst = input.tiling2DGrid->rowWorkers
-                                       ? ValueAnalysis::tryFoldConstantIndex(
-                                             input.AC->castToIndex(
-                                                 input.tiling2DGrid->rowWorkers,
-                                                 input.loc))
-                                       : std::nullopt;
+            auto rowWorkersConst =
+                input.tiling2DGrid->rowWorkers
+                    ? ValueAnalysis::tryFoldConstantIndex(input.AC->castToIndex(
+                          input.tiling2DGrid->rowWorkers, input.loc))
+                    : std::nullopt;
             SmallVector<int64_t, 4> staticTaskBlockShape;
             bool refinedShape = false;
-            if (auto inheritedShape = getStencilBlockShape(
-                    input.parentAcquire.getOperation())) {
+            if (auto inheritedShape =
+                    getStencilBlockShape(input.parentAcquire.getOperation())) {
               staticTaskBlockShape.assign(inheritedShape->begin(),
                                           inheritedShape->end());
-            } else if (auto contract = getLoweringContract(
-                           input.parentAcquire.getPtr())) {
+            } else if (auto contract =
+                           getLoweringContract(input.parentAcquire.getPtr())) {
               if (auto inheritedShape = contract->getStaticBlockShape())
                 staticTaskBlockShape.assign(inheritedShape->begin(),
                                             inheritedShape->end());
@@ -478,8 +475,7 @@ mlir::arts::planTaskAcquireRewrite(TaskAcquireRewritePlanInput input) {
                       elemSizes[primaryOwnerDim]);
                   totalRowsConst && *totalRowsConst > 0) {
                 int64_t rowChunk =
-                    (*totalRowsConst + *rowWorkersConst - 1) /
-                    *rowWorkersConst;
+                    (*totalRowsConst + *rowWorkersConst - 1) / *rowWorkersConst;
                 staticTaskBlockShape[0] = std::max<int64_t>(1, rowChunk);
                 refinedShape = true;
               }
@@ -492,8 +488,7 @@ mlir::arts::planTaskAcquireRewrite(TaskAcquireRewritePlanInput input) {
                       elemSizes[secondaryOwnerDim]);
                   totalColsConst && *totalColsConst > 0) {
                 int64_t colChunk =
-                    (*totalColsConst + *colWorkersConst - 1) /
-                    *colWorkersConst;
+                    (*totalColsConst + *colWorkersConst - 1) / *colWorkersConst;
                 staticTaskBlockShape[1] = std::max<int64_t>(1, colChunk);
                 refinedShape = true;
               }
@@ -537,7 +532,8 @@ mlir::arts::planTaskAcquireRewrite(TaskAcquireRewritePlanInput input) {
 
             for (unsigned i = 0;
                  !staticTaskBlockShape.empty() && i < mappedOwnerDims; ++i) {
-              auto folded = ValueAnalysis::tryFoldConstantIndex(ownerHintSizes[i]);
+              auto folded =
+                  ValueAnalysis::tryFoldConstantIndex(ownerHintSizes[i]);
               if (!folded) {
                 staticTaskBlockShape.clear();
                 break;
@@ -575,8 +571,7 @@ DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
   Value zero = in.AC->createIndexConstant(0, in.loc);
   Value one = in.AC->createIndexConstant(1, in.loc);
   bool shouldApplyHalo =
-      applyStencilHalo &&
-      in.haloMinOffsets.size() == in.haloMaxOffsets.size();
+      applyStencilHalo && in.haloMinOffsets.size() == in.haloMaxOffsets.size();
   if (!shouldApplyHalo)
     shouldApplyHalo = in.effectiveMode == ArtsMode::in &&
                       !in.haloMinOffsets.empty() &&
@@ -754,10 +749,8 @@ void mlir::arts::applyTaskAcquireSlicePlan(TaskAcquireSlicePlanInput input) {
       hasConcreteReadHaloContract(input.rewriteContract, input.effectiveMode);
   bool shouldUseStencilWindow =
       input.usesStencilHalo || input.rewriteContract.applyStencilHalo ||
-      input.rewriteContract.usePartitionSliceAsDepWindow ||
-      hasReadHaloContract;
-  bool shouldMaterializeElementSlice =
-      shouldMaterializeTaskElementSlice(input);
+      input.rewriteContract.usePartitionSliceAsDepWindow || hasReadHaloContract;
+  bool shouldMaterializeElementSlice = shouldMaterializeTaskElementSlice(input);
   bool shouldUpdateBlockWindow = true;
 
   /// Read-only acquires already get their task-local window from
@@ -773,8 +766,7 @@ void mlir::arts::applyTaskAcquireSlicePlan(TaskAcquireSlicePlanInput input) {
         (input.taskAcquire.getPartitionOffsets().empty() ||
          input.taskAcquire.getPartitionSizes().empty());
     shouldUpdateBlockWindow =
-        needsPartitionMetadata ||
-        !input.rewriteContract.preserveParentDepRange;
+        needsPartitionMetadata || !input.rewriteContract.preserveParentDepRange;
   }
   size_t sourceRank =
       DbUtils::getSizesFromDb(input.taskAcquire.getSourcePtr()).size();
@@ -867,19 +859,20 @@ void mlir::arts::applyTaskAcquireContractMetadata(
   unsigned supportedOwnerRank = 0;
   if (!taskAcquire.getPartitionOffsets().empty() &&
       !taskAcquire.getPartitionSizes().empty())
-    supportedOwnerRank = std::min<unsigned>(
-        taskAcquire.getPartitionOffsets().size(),
-        taskAcquire.getPartitionSizes().size());
+    supportedOwnerRank =
+        std::min<unsigned>(taskAcquire.getPartitionOffsets().size(),
+                           taskAcquire.getPartitionSizes().size());
   else if (!taskAcquire.getOffsets().empty() && !taskAcquire.getSizes().empty())
     supportedOwnerRank = std::min<unsigned>(taskAcquire.getOffsets().size(),
                                             taskAcquire.getSizes().size());
 
-  size_t sourceRank = DbUtils::getSizesFromDb(taskAcquire.getSourcePtr()).size();
+  size_t sourceRank =
+      DbUtils::getSizesFromDb(taskAcquire.getSourcePtr()).size();
   if (sourceRank != 0)
-    supportedOwnerRank = supportedOwnerRank == 0
-                             ? static_cast<unsigned>(sourceRank)
-                             : std::min<unsigned>(supportedOwnerRank,
-                                                  sourceRank);
+    supportedOwnerRank =
+        supportedOwnerRank == 0
+            ? static_cast<unsigned>(sourceRank)
+            : std::min<unsigned>(supportedOwnerRank, sourceRank);
 
   if (supportedOwnerRank != 0 && !taskOwnerDims.empty() &&
       taskOwnerDims.size() > supportedOwnerRank) {
@@ -905,7 +898,8 @@ void mlir::arts::applyTaskAcquireContractMetadata(
   };
 
   SmallVector<int64_t, 4> taskHaloMinOffsets;
-  if (auto existingMinOffsets = getStencilMinOffsets(taskAcquire.getOperation()))
+  if (auto existingMinOffsets =
+          getStencilMinOffsets(taskAcquire.getOperation()))
     taskHaloMinOffsets.assign(existingMinOffsets->begin(),
                               existingMinOffsets->end());
   else
@@ -914,7 +908,8 @@ void mlir::arts::applyTaskAcquireContractMetadata(
   taskHaloMinOffsets = clampRankedStencilVector(std::move(taskHaloMinOffsets));
 
   SmallVector<int64_t, 4> taskHaloMaxOffsets;
-  if (auto existingMaxOffsets = getStencilMaxOffsets(taskAcquire.getOperation()))
+  if (auto existingMaxOffsets =
+          getStencilMaxOffsets(taskAcquire.getOperation()))
     taskHaloMaxOffsets.assign(existingMaxOffsets->begin(),
                               existingMaxOffsets->end());
   else
@@ -927,8 +922,7 @@ void mlir::arts::applyTaskAcquireContractMetadata(
           getStencilWriteFootprint(taskAcquire.getOperation()))
     taskWriteFootprint.assign(existingWriteFootprint->begin(),
                               existingWriteFootprint->end());
-  taskWriteFootprint =
-      clampRankedStencilVector(std::move(taskWriteFootprint));
+  taskWriteFootprint = clampRankedStencilVector(std::move(taskWriteFootprint));
 
   auto chunkMode = taskAcquire.getPartitionMode();
   bool shouldMarkStencilCenter =

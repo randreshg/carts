@@ -62,21 +62,18 @@ public:
   static LoopChunkPlan planLoopChunking(ArtsCodegen *AC, ForOp forOp,
                                         Value runtimeBlockSizeHint = Value());
 
-  static DistributionBounds computeBounds(ArtsCodegen *AC, Location loc,
-                                          const DistributionStrategy &strategy,
-                                          Value workerId, Value totalWorkers,
-                                          Value workersPerNode,
-                                          Value totalIterations,
-                                          Value totalChunks, Value blockSize,
-                                          std::optional<ArtsDepPattern>
-                                              depPattern = std::nullopt);
+  static DistributionBounds
+  computeBounds(ArtsCodegen *AC, Location loc,
+                const DistributionStrategy &strategy, Value workerId,
+                Value totalWorkers, Value workersPerNode, Value totalIterations,
+                Value totalChunks, Value blockSize,
+                std::optional<ArtsDepPattern> depPattern = std::nullopt);
 
   static DistributionBounds recomputeBoundsInside(
       ArtsCodegen *AC, Location loc, const DistributionStrategy &strategy,
       Value workerId, Value insideTotalWorkers, Value workersPerNode,
       Value upperBound, Value lowerBound, Value loopStep, Value blockSize,
-      std::optional<int64_t> alignmentBlockSize,
-      bool useRuntimeBlockAlignment,
+      std::optional<int64_t> alignmentBlockSize, bool useRuntimeBlockAlignment,
       std::optional<ArtsDepPattern> depPattern = std::nullopt);
 
   static Value computeDbAlignmentBlockSize(ForOp forOp, EdtOp parallelEdt,
@@ -97,18 +94,15 @@ public:
   static Value getDispatchWorkerCount(OpBuilder &builder, Location loc,
                                       EdtOp parallelEdt);
 
-  static Value getForDispatchWorkerCount(ArtsCodegen *AC, Location loc,
-                                         EdtOp parallelEdt,
-                                         const DistributionStrategy &strategy,
-                                         Value totalChunks,
-                                         std::optional<ArtsDepPattern>
-                                             depPattern = std::nullopt);
+  static Value getForDispatchWorkerCount(
+      ArtsCodegen *AC, Location loc, EdtOp parallelEdt,
+      const DistributionStrategy &strategy, Value totalChunks,
+      std::optional<ArtsDepPattern> depPattern = std::nullopt);
 
-  static Tiling2DWorkerGrid
-  getTiling2DWorkerGrid(ArtsCodegen *AC, Location loc, Value workerId,
-                        Value totalWorkers, Value workersPerNode = Value(),
-                        std::optional<ArtsDepPattern> depPattern =
-                            std::nullopt);
+  static Tiling2DWorkerGrid getTiling2DWorkerGrid(
+      ArtsCodegen *AC, Location loc, Value workerId, Value totalWorkers,
+      Value workersPerNode = Value(),
+      std::optional<ArtsDepPattern> depPattern = std::nullopt);
 
 private:
   static std::pair<Value, Value>

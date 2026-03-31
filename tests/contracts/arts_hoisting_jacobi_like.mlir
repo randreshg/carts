@@ -9,11 +9,12 @@
 // CHECK: arts.edt <task>
 // CHECK: ^bb0(%arg1: memref<?xmemref<?x?xf32>>, %arg2: memref<?xmemref<?x?xf32>>):
 // CHECK: scf.for %[[ROW_OUTER:.*]] = %{{.*}} to %{{.*}} step %c1 {
-// CHECK: %[[ROW:.*]] = arith.addi %{{.*}}, %[[ROW_OUTER]] : index
-// CHECK: arts.db_ref %arg1[%{{.*}}] : memref<?xmemref<?x?xf32>> -> memref<?x?xf32>
-// CHECK: arts.db_ref %arg1[%{{.*}}] : memref<?xmemref<?x?xf32>> -> memref<?x?xf32>
+
+// Verify db_ref ops are hoisted to the outer (row-block) loop, not the inner column loop
 // CHECK: arts.db_ref %arg1[%{{.*}}] : memref<?xmemref<?x?xf32>> -> memref<?x?xf32>
 // CHECK: arts.db_ref %arg2[%{{.*}}] : memref<?xmemref<?x?xf32>> -> memref<?x?xf32>
+// CHECK: arts.db_ref %arg1[%{{.*}}] : memref<?xmemref<?x?xf32>> -> memref<?x?xf32>
+// CHECK: scf.for %[[ROW:.*]] = %{{.*}} to %{{.*}} step %c1 {
 // CHECK: scf.for %[[COL:.*]] = %{{.*}} to %{{.*}} step %c1 {
 // CHECK-NOT: arts.db_ref
 // CHECK: memref.load {{.*}} : memref<?x?xf32>

@@ -31,8 +31,8 @@
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
-#include <cstdint>
 #include <climits>
+#include <cstdint>
 #include <optional>
 #include <string>
 

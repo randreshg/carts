@@ -302,8 +302,7 @@ static RowSelection buildSelection(OpBuilder &selBuilder, Location selLoc,
   Value rightAvail = ctx.rightPtrNotNull ? ctx.rightPtrNotNull : falseI1;
   Value leftIdx =
       arith::AddIOp::create(selBuilder, selLoc, localRowVal, ctx.haloLeft);
-  Value ownedIdx =
-      clampIndex(localRowVal, ownedMemrefRows, selBuilder, selLoc);
+  Value ownedIdx = clampIndex(localRowVal, ownedMemrefRows, selBuilder, selLoc);
   Value rightIdx =
       arith::SubIOp::create(selBuilder, selLoc, localRowVal, ownedRows);
 
@@ -503,9 +502,8 @@ static void rewriteUserForRegion(Operation *user, StencilRegionKind region,
     return ifOp.getResult(0);
   };
 
-  Value selectedRowIdx =
-      clampIndex(localRow, ctx.blockSize ? ctx.blockSize : ownedRows, builder,
-                 userLoc);
+  Value selectedRowIdx = clampIndex(
+      localRow, ctx.blockSize ? ctx.blockSize : ownedRows, builder, userLoc);
   Value selectedMemref = ctx.ownedMemref;
 
   if (region == StencilRegionKind::Left && rowOffset < 0) {
@@ -753,10 +751,9 @@ static bool tryVersionRowLoop(ArrayRef<Operation *> users, OpBuilder &builder,
   Value leftRow = rowIvIsLocal ? zero : baseOffset;
   Value leftEnd = arith::AddIOp::create(builder, loopLoc, leftRow, leftBandVal);
 
-  Value rightEnd =
-      rowIvIsLocal
-          ? blockSz
-          : arith::AddIOp::create(builder, loopLoc, baseOffset, blockSz);
+  Value rightEnd = rowIvIsLocal ? blockSz
+                                : arith::AddIOp::create(builder, loopLoc,
+                                                        baseOffset, blockSz);
   Value rightRow =
       arith::SubIOp::create(builder, loopLoc, rightEnd, rightBandVal);
 
@@ -1120,7 +1117,7 @@ void DbStencilIndexer::transformDbRefUsers(
   /// Create right halo memref if available (null at right boundary)
   if (rightHaloArg) {
     auto rightRef = DbRefOp::create(builder, loc, newElementType, rightHaloArg,
-                                     SmallVector<Value>{zero});
+                                    SmallVector<Value>{zero});
     rightMemref = rightRef.getResult();
   }
 
@@ -1141,17 +1138,17 @@ void DbStencilIndexer::transformDbRefUsers(
   Value rightPtrNotNull;
 
   if (leftMemref) {
-    Value leftPtr =
-        polygeist::Memref2PointerOp::create(builder, loc, llvmPtrTy, leftMemref);
+    Value leftPtr = polygeist::Memref2PointerOp::create(builder, loc, llvmPtrTy,
+                                                        leftMemref);
     leftPtrNotNull = LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne,
-                                           leftPtr, nullPtr);
+                                          leftPtr, nullPtr);
   }
 
   if (rightMemref) {
-    Value rightPtr = polygeist::Memref2PointerOp::create(builder, loc, llvmPtrTy,
-                                                         rightMemref);
-    rightPtrNotNull = LLVM::ICmpOp::create(builder, loc, LLVM::ICmpPredicate::ne,
-                                            rightPtr, nullPtr);
+    Value rightPtr = polygeist::Memref2PointerOp::create(
+        builder, loc, llvmPtrTy, rightMemref);
+    rightPtrNotNull = LLVM::ICmpOp::create(
+        builder, loc, LLVM::ICmpPredicate::ne, rightPtr, nullPtr);
   }
 
   ARTS_DEBUG("  Created 3 buffer refs: owned="

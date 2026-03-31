@@ -22,15 +22,14 @@
 #define GEN_PASS_DEF_LOOPREORDERING
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "arts/transforms/loop/LoopNormalizer.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/Pass/Pass.h"
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(loop_reordering);

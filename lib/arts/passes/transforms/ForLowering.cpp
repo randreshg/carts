@@ -22,8 +22,8 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/AccessPatternAnalysis.h"
+#include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/graphs/db/DbGraph.h"
 #include "arts/analysis/graphs/db/DbNode.h"
@@ -117,8 +117,8 @@ static std::optional<unsigned> inferLoopMappedDim(DbAcquireNode *acqNode,
       ArrayRef<Value> memrefChain(fullChain);
       memrefChain = memrefChain.drop_front(memrefStart);
       for (auto [dimIdx, indexVal] : llvm::enumerate(memrefChain)) {
-        if (ValueAnalysis::dependsOn(
-                ValueAnalysis::stripNumericCasts(indexVal), loopIV))
+        if (ValueAnalysis::dependsOn(ValueAnalysis::stripNumericCasts(indexVal),
+                                     loopIV))
           matchingDims.push_back(dimIdx);
       }
 
@@ -183,8 +183,8 @@ static std::optional<unsigned> inferLoopMappedDimFromValue(Value dep,
 
     SmallVector<unsigned, 2> matchingDims;
     for (auto [dimIdx, indexVal] : llvm::enumerate(access->indices)) {
-      if (ValueAnalysis::dependsOn(
-              ValueAnalysis::stripNumericCasts(indexVal), loopIV))
+      if (ValueAnalysis::dependsOn(ValueAnalysis::stripNumericCasts(indexVal),
+                                   loopIV))
         matchingDims.push_back(dimIdx);
     }
 
@@ -201,9 +201,9 @@ static std::optional<unsigned> inferLoopMappedDimFromValue(Value dep,
   return mappedDim;
 }
 
-static std::optional<unsigned>
-inferAcquireMappedDim(DbAnalysis *dbAnalysis, DbAcquireOp acquire,
-                      ForOp forOp) {
+static std::optional<unsigned> inferAcquireMappedDim(DbAnalysis *dbAnalysis,
+                                                     DbAcquireOp acquire,
+                                                     ForOp forOp) {
   if (!acquire || !forOp)
     return std::nullopt;
 
@@ -309,7 +309,8 @@ inferLoopHaloBoundsFromValue(Value dep, ForOp forOp, unsigned mappedDim) {
   return bounds;
 }
 
-static std::optional<ArtsMode> inferLoopLocalAccessMode(Value dep, ForOp forOp) {
+static std::optional<ArtsMode> inferLoopLocalAccessMode(Value dep,
+                                                        ForOp forOp) {
   if (!dep || !forOp)
     return std::nullopt;
 
@@ -639,8 +640,9 @@ void ForLoweringPass::gatherLowerableEdts(
     if (edt.getType() != EdtType::parallel && edt.getType() != EdtType::task)
       return;
 
-    bool hasForOps = false;
-    edt.getBody().walk([&](ForOp) { hasForOps = true; });
+    bool hasForOps = edt.getBody()
+                         .walk([&](ForOp) { return WalkResult::interrupt(); })
+                         .wasInterrupted();
     if (hasForOps)
       lowerableEdts.push_back(edt);
   });
@@ -848,10 +850,9 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
     /// Determine loop chunking before building the epoch so we can size the
     /// dispatch loop and any reduction temporaries to the worker lanes that can
     /// actually receive work.
-    Value runtimeBlockSize =
-        WorkDistributionUtils::computeDbAlignmentBlockSize(
-            forOp, originalParallel, numDbPartitions, &AC, loc,
-            AM ? &AM->getDbAnalysis() : nullptr);
+    Value runtimeBlockSize = WorkDistributionUtils::computeDbAlignmentBlockSize(
+        forOp, originalParallel, numDbPartitions, &AC, loc,
+        AM ? &AM->getDbAnalysis() : nullptr);
     loopInfoStorage.emplace(&AC, forOp, numWorkers, runtimeBlockSize);
     LoopInfo &loopInfo = *loopInfoStorage;
     loopInfo.strategy = strategy;
@@ -1137,13 +1138,13 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     if (rewriteContract.ownerDims.empty())
       if (auto mappedDim = inferAcquireMappedDim(
               AM ? &AM->getDbAnalysis() : nullptr, parentAcqOp, forOp)) {
-        rewriteContract.ownerDims.push_back(
-            static_cast<int64_t>(*mappedDim));
+        rewriteContract.ownerDims.push_back(static_cast<int64_t>(*mappedDim));
         inferredMappedDim = *mappedDim;
       }
 
     std::optional<unsigned> ownerDimForHalo;
-    if (rewriteContract.ownerDims.size() == 1 && rewriteContract.ownerDims[0] >= 0)
+    if (rewriteContract.ownerDims.size() == 1 &&
+        rewriteContract.ownerDims[0] >= 0)
       ownerDimForHalo = static_cast<unsigned>(rewriteContract.ownerDims[0]);
     else if (inferredMappedDim)
       ownerDimForHalo = *inferredMappedDim;
@@ -1165,9 +1166,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
           }
       }
       if (!rewriteContract.applyStencilHalo)
-        if (auto bounds = inferLoopHaloBoundsFromValue(parentAcqOp.getPtr(),
-                                                       forOp,
-                                                       *ownerDimForHalo)) {
+        if (auto bounds = inferLoopHaloBoundsFromValue(
+                parentAcqOp.getPtr(), forOp, *ownerDimForHalo)) {
           rewriteContract.haloMinOffsets.push_back(bounds->minOffset);
           rewriteContract.haloMaxOffsets.push_back(bounds->maxOffset);
           rewriteContract.applyStencilHalo = true;
@@ -1194,22 +1194,22 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         stepVal,
         stepIsUnit};
 
-    ARTS_DEBUG("    - Planned contract for dep " << depIndex
-                                                 << ": applyStencilHalo="
-                                                 << rewriteContract.applyStencilHalo
-                                                 << ", preserveParentDepRange="
-                                                 << rewriteContract.preserveParentDepRange
-                                                 << ", parentAcquire="
-                                                 << parentAcqOp);
+    ARTS_DEBUG(
+        "    - Planned contract for dep "
+        << depIndex << ": applyStencilHalo=" << rewriteContract.applyStencilHalo
+        << ", preserveParentDepRange=" << rewriteContract.preserveParentDepRange
+        << ", parentAcquire=" << parentAcqOp);
 
     auto createPlannedAcquire =
         [&]() -> std::pair<DbAcquireOp, TaskAcquireRewritePlan> {
-      TaskAcquireRewritePlan rewritePlan = planTaskAcquireRewrite(planningInput);
+      TaskAcquireRewritePlan rewritePlan =
+          planTaskAcquireRewrite(planningInput);
       DbAcquireOp rewritten = rewriteAcquire(rewritePlan.rewriteInput,
                                              rewritePlan.useStencilRewriter);
       ARTS_DEBUG("    - Planned task acquire for dep "
-                 << depIndex << ": useStencilRewriter="
-                 << rewritePlan.useStencilRewriter << ", acquire=" << rewritten);
+                 << depIndex
+                 << ": useStencilRewriter=" << rewritePlan.useStencilRewriter
+                 << ", acquire=" << rewritten);
       return {rewritten, std::move(rewritePlan)};
     };
     std::optional<SmallVector<int64_t, 4>> plannedTaskBlockShape;
@@ -1287,28 +1287,17 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       plannedTaskBlockShape = rewritePlan.refinedTaskBlockShape;
     }
 
-    applyTaskAcquireContractMetadata(forOp.getOperation(), chunkAcqOp,
-                                     planningInput.rewriteContract,
-                                     plannedTaskBlockShape,
-                                     AC->getBuilder(), loc);
+    applyTaskAcquireContractMetadata(
+        forOp.getOperation(), chunkAcqOp, planningInput.rewriteContract,
+        plannedTaskBlockShape, AC->getBuilder(), loc);
     if (plannedTaskBlockShape)
       refinedTaskBlockShape = *plannedTaskBlockShape;
 
     applyTaskAcquireSlicePlan(TaskAcquireSlicePlanInput{
-        AC,
-        loc,
-        parentAcqOp,
-        chunkAcqOp,
-        effectiveTaskMode,
-        rootGuidValue,
-        rootPtrValue,
-        loopInfo.strategy.kind,
-        distributionPattern,
-        acquireOffsetVal,
-        loopInfo.bounds.iterCount,
-        acquireHintSizeVal,
-        chunkUsesStencilHalo,
-        planningInput.rewriteContract});
+        AC, loc, parentAcqOp, chunkAcqOp, effectiveTaskMode, rootGuidValue,
+        rootPtrValue, loopInfo.strategy.kind, distributionPattern,
+        acquireOffsetVal, loopInfo.bounds.iterCount, acquireHintSizeVal,
+        chunkUsesStencilHalo, planningInput.rewriteContract});
 
     if (originalParallel.getConcurrency() == EdtConcurrency::internode &&
         chunkAcqOp.getMode() != ArtsMode::in &&
@@ -1411,7 +1400,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     mappedLoopValues.upperBound = origUpperBoundVal;
     mappedLoopValues.workerBaseOffset =
         directMapper.lookupOrDefault(workerOffsetVal);
-    mappedLoopValues.blockSize = directMapper.lookupOrDefault(loopInfo.blockSize);
+    mappedLoopValues.blockSize =
+        directMapper.lookupOrDefault(loopInfo.blockSize);
     mappedLoopValues.totalIterations =
         directMapper.lookupOrDefault(loopInfo.totalIterations);
     mappedLoopValues.totalChunks =
@@ -1430,8 +1420,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     Value localIter = iterLoop.getInductionVar();
     Value globalIterScaled =
         AC->create<arith::MulIOp>(loc, localIter, stepValMapped);
-    Value globalIdx =
-        AC->create<arith::AddIOp>(loc, loweredLoop.globalBase, globalIterScaled);
+    Value globalIdx = AC->create<arith::AddIOp>(loc, loweredLoop.globalBase,
+                                                globalIterScaled);
 
     for (Operation &op : forBody.without_terminator()) {
       for (Value operand : op.getOperands()) {
@@ -1496,8 +1486,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       ///   nodeId = globalWorkerId / workersPerNode
       /// workersPerNode is always materialized for internode routing.
       if (!workersPerNode)
-        workersPerNode = WorkDistributionUtils::getWorkersPerNode(
-            AC, loc, originalParallel);
+        workersPerNode =
+            WorkDistributionUtils::getWorkersPerNode(AC, loc, originalParallel);
       Value nodeId =
           AC->create<arith::DivUIOp>(loc, workerIdPlaceholder, workersPerNode);
       routeValue = AC->castToInt(AC->Int32, nodeId, loc);

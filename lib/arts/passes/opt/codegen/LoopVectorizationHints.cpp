@@ -33,20 +33,20 @@
 #define GEN_PASS_DEF_LOOPVECTORIZATIONHINTS
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/Pass/Pass.h"
 
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 
 #include "arts/utils/Debug.h"
+#include "llvm/ADT/StringRef.h"
 #include <limits>
 #include <optional>
-#include "llvm/ADT/StringRef.h"
 ARTS_DEBUG_SETUP(loop_vectorization_hints);
 
 using namespace mlir;
@@ -421,7 +421,8 @@ matchConstantLoopCondition(LLVM::CondBrOp condBr,
                            const SmallPtrSet<Block *, 16> &loopBlocks) {
   Block *trueDest = condBr.getTrueDest();
   Block *falseDest = condBr.getFalseDest();
-  bool trueInLoop = loopBlocks.contains(trueDest) && trueDest != condBr->getBlock();
+  bool trueInLoop =
+      loopBlocks.contains(trueDest) && trueDest != condBr->getBlock();
   bool falseInLoop =
       loopBlocks.contains(falseDest) && falseDest != condBr->getBlock();
   if (trueInLoop == falseInLoop)
@@ -488,9 +489,10 @@ matchConstantLoopCondition(LLVM::CondBrOp condBr,
   return std::nullopt;
 }
 
-static std::optional<unsigned>
-computeConstantTripCount(int64_t start, int64_t step, int64_t bound,
-                         LoopBoundKind kind) {
+static std::optional<unsigned> computeConstantTripCount(int64_t start,
+                                                        int64_t step,
+                                                        int64_t bound,
+                                                        LoopBoundKind kind) {
   int64_t distance = 0;
 
   switch (kind) {
@@ -549,9 +551,8 @@ static std::optional<unsigned> inferConstantTripCount(Block *headerBlock,
   for (Block *pred : headerBlock->getPredecessors()) {
     if (loopBlocks.contains(pred))
       continue;
-    Value incoming =
-        getSuccessorOperandForBlock(pred->getTerminator(), headerBlock,
-                                    iv.getArgNumber());
+    Value incoming = getSuccessorOperandForBlock(
+        pred->getTerminator(), headerBlock, iv.getArgNumber());
     if (!incoming)
       return std::nullopt;
     startValue = incoming;
@@ -564,9 +565,8 @@ static std::optional<unsigned> inferConstantTripCount(Block *headerBlock,
   if (!start)
     return std::nullopt;
 
-  Value update =
-      getSuccessorOperandForBlock(latchBlock->getTerminator(), headerBlock,
-                                  iv.getArgNumber());
+  Value update = getSuccessorOperandForBlock(latchBlock->getTerminator(),
+                                             headerBlock, iv.getArgNumber());
   if (!update)
     return std::nullopt;
 
@@ -618,9 +618,9 @@ createInnermostLoopHints(MLIRContext *ctx, unsigned width, unsigned interleave,
   auto unrollAttr = LLVM::LoopUnrollAttr::get(
       ctx,
       /*disable=*/BoolAttr::get(ctx, false),
-      /*count=*/fullUnroll ? IntegerAttr()
-                           : IntegerAttr::get(IntegerType::get(ctx, 32),
-                                              unrollCount),
+      /*count=*/
+          fullUnroll ? IntegerAttr()
+                     : IntegerAttr::get(IntegerType::get(ctx, 32), unrollCount),
       /*runtimeDisable=*/nullptr,
       /*full=*/fullUnroll ? BoolAttr::get(ctx, true) : nullptr,
       /*followupUnrolled=*/nullptr,
@@ -746,23 +746,20 @@ struct LoopVectorizationHintsPass
 
         std::optional<unsigned> constantTripCount =
             inferConstantTripCount(destBlock, currentBlock);
-        bool fullUnroll =
-            innermost && constantTripCount && *constantTripCount > 0 &&
-            *constantTripCount <= 8;
+        bool fullUnroll = innermost && constantTripCount &&
+                          *constantTripCount > 0 && *constantTripCount <= 8;
         unsigned loopUnrollCount =
             fullUnroll ? *constantTripCount : unrollCount;
 
         if (innermost) {
           brOp.setLoopAnnotationAttr(createInnermostLoopHints(
-              ctx, width, interleaveCount, enableScalable,
-              enableMustProgress, loopUnrollCount, parallelAccessGroups,
-              fullUnroll));
+              ctx, width, interleaveCount, enableScalable, enableMustProgress,
+              loopUnrollCount, parallelAccessGroups, fullUnroll));
           innermostCount++;
-          ARTS_DEBUG_TYPE("Innermost loop - full vectorization hints at "
-                          << brOp.getLoc()
-                          << (fullUnroll
-                                  ? " with loop-local full unroll"
-                                  : ""));
+          ARTS_DEBUG_TYPE(
+              "Innermost loop - full vectorization hints at "
+              << brOp.getLoc()
+              << (fullUnroll ? " with loop-local full unroll" : ""));
         } else {
           brOp.setLoopAnnotationAttr(createOuterLoopHints(
               ctx, enableMustProgress, loopUnrollCount, parallelAccessGroups));
@@ -810,23 +807,20 @@ struct LoopVectorizationHintsPass
 
         std::optional<unsigned> constantTripCount =
             inferConstantTripCount(headerBlock, currentBlock);
-        bool fullUnroll =
-            innermost && constantTripCount && *constantTripCount > 0 &&
-            *constantTripCount <= 8;
+        bool fullUnroll = innermost && constantTripCount &&
+                          *constantTripCount > 0 && *constantTripCount <= 8;
         unsigned loopUnrollCount =
             fullUnroll ? *constantTripCount : unrollCount;
 
         if (innermost) {
           condBr.setLoopAnnotationAttr(createInnermostLoopHints(
-              ctx, width, interleaveCount, enableScalable,
-              enableMustProgress, loopUnrollCount, parallelAccessGroups,
-              fullUnroll));
+              ctx, width, interleaveCount, enableScalable, enableMustProgress,
+              loopUnrollCount, parallelAccessGroups, fullUnroll));
           innermostCount++;
-          ARTS_DEBUG_TYPE("Innermost loop (cond) - full vectorization hints at "
-                          << condBr.getLoc()
-                          << (fullUnroll
-                                  ? " with loop-local full unroll"
-                                  : ""));
+          ARTS_DEBUG_TYPE(
+              "Innermost loop (cond) - full vectorization hints at "
+              << condBr.getLoc()
+              << (fullUnroll ? " with loop-local full unroll" : ""));
         } else {
           condBr.setLoopAnnotationAttr(createOuterLoopHints(
               ctx, enableMustProgress, loopUnrollCount, parallelAccessGroups));
@@ -846,12 +840,13 @@ struct LoopVectorizationHintsPass
       }
     });
 
-    ARTS_INFO("Total: attached hints to "
-              << totalHints << " loop backedges; skipped " << skippedUnsafeLoops
-              << " loop backedges with loop-varying dependency-array access and "
-              << skippedCallHeavyLoops
-              << " innermost loop backedges with call-like floating-point "
-                 "work");
+    ARTS_INFO(
+        "Total: attached hints to "
+        << totalHints << " loop backedges; skipped " << skippedUnsafeLoops
+        << " loop backedges with loop-varying dependency-array access and "
+        << skippedCallHeavyLoops
+        << " innermost loop backedges with call-like floating-point "
+           "work");
     ARTS_INFO_FOOTER(LoopVectorizationHintsPass);
   }
 };

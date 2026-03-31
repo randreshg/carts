@@ -20,8 +20,8 @@
 ///==========================================================================///
 
 #include "arts/transforms/db/block/DbBlockRewriter.h"
-#include "arts/transforms/db/DbPartitionWindowUtils.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/transforms/db/DbPartitionWindowUtils.h"
 #include "arts/transforms/db/block/DbBlockIndexer.h"
 #include "arts/utils/BlockedAccessUtils.h"
 #include "arts/utils/DbUtils.h"
@@ -279,8 +279,7 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
     bool isAligned = arts::isAlignedToBlock(elemOff, bs);
     ARTS_DEBUG("  dim " << d << " elemOff=" << elemOff << " elemSz=" << elemSz
                         << " bs=" << bs << " blockCount=" << blockCount
-                        << " aligned=" << isAligned
-                        << " constElemSzUpper="
+                        << " aligned=" << isAligned << " constElemSzUpper="
                         << (constElemSzUpper ? *constElemSzUpper : -1)
                         << " constBs=" << (constBs ? *constBs : -1));
     bool isSingleDim = false;
@@ -293,9 +292,8 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
         isSingleDim = true;
     }
     if (!isSingleDim) {
-      bool dynAligned =
-          arts::isAlignedToBlock(elemOff, bs) ||
-          arts::isAlignedToBlock(elemOff, elemSz);
+      bool dynAligned = arts::isAlignedToBlock(elemOff, bs) ||
+                        arts::isAlignedToBlock(elemOff, elemSz);
       if (arts::isValueBoundedByBlockSpan(elemSz, bs) &&
           (isAligned || dynAligned))
         isSingleDim = true;
