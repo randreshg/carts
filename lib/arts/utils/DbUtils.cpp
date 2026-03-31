@@ -911,6 +911,15 @@ std::optional<int64_t> extractBlockSizeFromHint(Value sizeHint, int depth) {
       return rhsExtracted;
   }
 
+  /// Case 4b: subi pattern — stencil rewriters often recover the owned
+  /// block span by subtracting a small halo width from an expanded slice.
+  /// Keep extracting the nominal block size from the minuend.
+  if (auto subOp = sizeHint.getDefiningOp<arith::SubIOp>()) {
+    auto rhsFolded = ValueAnalysis::tryFoldConstantIndex(subOp.getRhs());
+    if (rhsFolded && std::abs(*rhsFolded) <= 16)
+      return extractBlockSizeFromHint(subOp.getLhs(), depth + 1);
+  }
+
   /// Case 5: maxui pattern — clamp minimum; return larger constant as upper
   /// bound.
   if (auto maxOp = sizeHint.getDefiningOp<arith::MaxUIOp>()) {

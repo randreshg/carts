@@ -210,8 +210,14 @@ LogicalResult DbBlockInfoComputer::computeBlockInfo(DbAcquireNode *node,
 
           bool loopSizeDependsOnOffset =
               blockOffset && ValueAnalysis::dependsOn(loopSize, blockOffset);
+          bool loopOffsetIsLocalZero =
+              loopOffset &&
+              ValueAnalysis::isZeroConstant(
+                  ValueAnalysis::stripNumericCasts(loopOffset));
 
           if (loopSizeDependsOnOffset)
+            useLoopSize = true;
+          if (loopOffsetIsLocalZero)
             useLoopSize = true;
           if (offsetRelated && !loopIsConst)
             useLoopSize = true;
@@ -377,6 +383,8 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromWhile(
       partitionOffset ? PartitionBoundsAnalyzer::getPartitionOffsetDim(
                             node, partitionOffset, /*requireLeading=*/false)
                       : std::nullopt;
+  if (!partitionDim)
+    partitionDim = node->getPartitionFacts().inferSingleMappedDim();
   AccessBoundsInfo bounds =
       analyzeAccessBoundsLocal(node, initValue, loopIV, partitionDim);
   if (!bounds.valid)
@@ -426,15 +434,15 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromHints(
   if (!node->getOriginalBounds())
     node->setOriginalBounds(std::make_pair(partitionOffset, partitionSize));
 
-  if (!PartitionBoundsAnalyzer::getPartitionOffsetDim(
-          node, partitionOffset, /*requireLeading=*/false)) {
+  std::optional<unsigned> partitionDim =
+      PartitionBoundsAnalyzer::getPartitionOffsetDim(
+          node, partitionOffset, /*requireLeading=*/false);
+  if (!partitionDim)
+    partitionDim = node->getPartitionFacts().inferSingleMappedDim();
+  if (!partitionDim) {
     ARTS_DEBUG("  offset hints not derived from access; failing");
     return failure();
   }
-
-  std::optional<unsigned> partitionDim =
-      PartitionBoundsAnalyzer::getPartitionOffsetDim(node, partitionOffset,
-                                                     /*requireLeading=*/false);
   Value partitionIdx;
   Value firstDynIdx;
   DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
@@ -559,6 +567,8 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromForLoop(
       partitionOffset ? PartitionBoundsAnalyzer::getPartitionOffsetDim(
                             node, partitionOffset, /*requireLeading=*/false)
                       : std::nullopt;
+  if (!partitionDim)
+    partitionDim = node->getPartitionFacts().inferSingleMappedDim();
 
   auto getLoopUpperBound = [&](LoopNode *ln) -> Value {
     return ln ? ln->getUpperBound() : Value();
@@ -692,9 +702,23 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromForLoop(
                                   << blockOffset << " blockSize=" << blockSize);
 
     Value checkOffset = offsetForCheck ? *offsetForCheck : blockOffset;
-    if (!PartitionBoundsAnalyzer::getPartitionOffsetDim(
-            node, checkOffset, /*requireLeading=*/false))
-      return failure();
+    std::optional<unsigned> resolvedDim =
+        PartitionBoundsAnalyzer::getPartitionOffsetDim(
+            node, checkOffset, /*requireLeading=*/false);
+    if (!resolvedDim) {
+      Value normalizedCheck = ValueAnalysis::stripNumericCasts(checkOffset);
+      if (!partitionDim || !ValueAnalysis::isZeroConstant(normalizedCheck)) {
+        ARTS_DEBUG("  refined loop-local offset does not map back to a "
+                   "partition dim");
+        return failure();
+      }
+      /// Local single-block loops often rewrite the owned slice to zero-based
+      /// coordinates. The original acquire hint already identified the
+      /// partitioned dimension, so reuse that dimension instead of rejecting a
+      /// valid local size refinement just because the localized offset became
+      /// zero.
+      resolvedDim = partitionDim;
+    }
     return success();
   }
 

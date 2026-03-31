@@ -111,6 +111,88 @@ hasExplicitStencilContract(const DbAnalysis::AcquireContractSummary *summary) {
   return summary && summary->contract.hasExplicitStencilContract();
 }
 
+/// DbBlockPlanResolver/DbPartitionPlanner model leading-dimension block plans
+/// in two equivalent forms:
+///   1. explicit  : partitionedDims = [0, 1, ...]
+///   2. implicit  : partitionedDims = [] and blockSizes map to leading dims
+///
+/// Mixed block+stencil lowering should accept either form. Rejecting the
+/// implicit form forces otherwise-stencil-compatible block plans down the pure
+/// block rewrite path even though the planner and shape computation can handle
+/// them already.
+static bool isLeadingPrefixPartitionPlan(ArrayRef<unsigned> partitionedDims,
+                                         size_t numPartitionedDims,
+                                         size_t elementRank) {
+  if (numPartitionedDims == 0 || numPartitionedDims > elementRank)
+    return false;
+
+  if (partitionedDims.empty())
+    return true;
+
+  if (partitionedDims.size() != numPartitionedDims)
+    return false;
+
+  for (unsigned i = 0; i < partitionedDims.size(); ++i) {
+    if (partitionedDims[i] != i)
+      return false;
+  }
+  return true;
+}
+
+static bool blockSizeCoversFullExtent(Value blockSize, Value extent) {
+  blockSize = ValueAnalysis::stripNumericCasts(blockSize);
+  extent = ValueAnalysis::stripNumericCasts(extent);
+  if (!blockSize || !extent)
+    return false;
+
+  if (ValueAnalysis::sameValue(blockSize, extent) ||
+      ValueAnalysis::areValuesEquivalent(blockSize, extent))
+    return true;
+
+  auto blockConst = ValueAnalysis::tryFoldConstantIndex(blockSize);
+  auto extentConst = ValueAnalysis::tryFoldConstantIndex(extent);
+  return blockConst && extentConst && *blockConst >= *extentConst;
+}
+
+/// Block plans can preserve the semantic owner rank from a stencil/uniform
+/// contract even when a trailing physical partition dim spans the full extent
+/// of the underlying memref. Carrying that singleton outer dim into the DB
+/// layout only adds an extra level of db_ref indexing and can prevent later
+/// 1-D-owner stencil rewrites from recognizing the simpler physical shape.
+///
+/// Keep the semantic owner rank in lowering contracts, but collapse trailing
+/// physical partition dims whose block size already covers the full extent.
+static void collapseTrailingFullExtentPartitionDims(
+    DbAllocOp allocOp, SmallVectorImpl<Value> &blockSizes,
+    SmallVectorImpl<unsigned> &partitionedDims) {
+  auto elementSizes = allocOp.getElementSizes();
+  if (blockSizes.size() <= 1)
+    return;
+
+  while (blockSizes.size() > 1) {
+    unsigned dim = partitionedDims.empty() ? blockSizes.size() - 1
+                                           : partitionedDims.back();
+    if (dim >= elementSizes.size())
+      break;
+    if (!blockSizeCoversFullExtent(blockSizes.back(), elementSizes[dim]))
+      break;
+
+    ARTS_DEBUG("  Collapsing trailing full-extent partition dim " << dim
+                                                                   << " from "
+                                                                      "block "
+                                                                      "plan");
+    blockSizes.pop_back();
+    if (!partitionedDims.empty())
+      partitionedDims.pop_back();
+    /// Implicit leading-dimension plans keep `partitionedDims` empty. Popping
+    /// only the trailing block size is sufficient because downstream shape
+    /// computation interprets the remaining entries as the surviving leading
+    /// partitioned dims.
+    if (partitionedDims.empty())
+      continue;
+  }
+}
+
 static std::optional<int64_t> getForcedCoarseAllocId() {
   const char *env = std::getenv("CARTS_DEBUG_FORCE_COARSE_ALLOC_ID");
   if (!env || !*env)
@@ -622,6 +704,12 @@ static void resetCoarseAcquireRanges(DbAllocOp allocOp, DbAllocNode *allocNode,
     acqOp.getPartitionIndicesMutable().clear();
     acqOp.getPartitionOffsetsMutable().clear();
     acqOp.getPartitionSizesMutable().clear();
+    /// A coarse fallback invalidates any previously materialized element-space
+    /// slice. Leaving element_offsets/element_sizes behind would later re-create
+    /// byte-sliced dependencies for an acquire whose DB-space contract is now
+    /// whole-range.
+    acqOp.getElementOffsetsMutable().clear();
+    acqOp.getElementSizesMutable().clear();
     /// Keep acquire partition attribute consistent with coarse allocation.
     setPartitionMode(acqOp.getOperation(), PartitionMode::coarse);
   }
@@ -1870,6 +1958,21 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       return allocOp;
   }
 
+  /// Mixed block/stencil lowering keeps the allocation block-partitioned, but
+  /// still needs halo metadata so read-only stencil acquires can take the ESD
+  /// path. Only enable that when the resolved block plan stays on leading
+  /// dimensions, which is the shape DbStencilRewriter supports today.
+  if (!stencilInfo && decision.mode == PartitionMode::block && allocNode &&
+      allocHasStencilPattern &&
+      isLeadingPrefixPartitionPlan(partitionedDimsForPlan,
+                                   blockSizesForPlan.size(),
+                                   allocOp.getElementSizes().size())) {
+    stencilInfo = computeStencilHaloInfo(
+        allocOp, allocNode, allocAcquireNodes, acquireContractSummaries,
+        acquireFacts, acquireInfos, allocHasStencilPattern, dbAnalysis,
+        decision, ctx, builder, loc);
+  }
+
   SmallVector<Value> newOuterSizes, newInnerSizes;
   computeAllocationShape(decision.mode, allocOp, decision, blockSizesForPlan,
                          partitionedDimsForPlan, newOuterSizes, newInnerSizes);
@@ -2050,11 +2153,20 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
     info.canElementWise =
         thisAcquireCanElementWise || !acquire.getPartitionIndices().empty();
     info.canBlock = canUseBlock && thisAcquireCanBlock;
+    info.needsFullRange = acqInfo.needsFullRange;
     info.hasDistributionContract = hasDistributionContract;
     info.partitionDimsFromPeers =
         contractSummary ? contractSummary->partitionDimsFromPeers() : false;
     info.explicitCoarseRequest =
         acquireMode && *acquireMode == PartitionMode::coarse;
+    if (contractSummary && !info.partitionDimsFromPeers &&
+        !contractSummary->contract.ownerDims.empty()) {
+      info.ownerDimsCount = static_cast<uint8_t>(std::min<size_t>(
+          4, contractSummary->contract.ownerDims.size()));
+      for (unsigned dim = 0; dim < info.ownerDimsCount; ++dim)
+        info.ownerDims[dim] =
+            static_cast<int16_t>(contractSummary->contract.ownerDims[dim]);
+    }
 
     /// Populate unified partition infos from DbAcquireOp.
     /// Heuristics will compute uniformity and decide outerRank.
@@ -2384,6 +2496,9 @@ bool DbPartitioningPass::resolveBlockPlanSizes(
       std::make_move_iterator(blockPlanOr->partitionedDims.begin()),
       std::make_move_iterator(blockPlanOr->partitionedDims.end()));
 
+  collapseTrailingFullExtentPartitionDims(allocOp, blockSizesForPlan,
+                                          partitionedDimsForPlan);
+
   heuristics.recordDecision(
       "Partition-BlockPlanResolved", true,
       "resolved block sizes and partition dimensions via block-plan resolver",
@@ -2485,10 +2600,12 @@ FailureOr<DbAllocOp> DbPartitioningPass::assembleAndApplyRewritePlan(
   /// Note: byte_offset/byte_size for ESD is computed in EdtLowering from
   /// element_offsets/element_sizes, using allocation's elementSizes for stride.
 
-  /// Propagate stencil center offset to all acquires when using stencil mode.
-  /// This keeps base offsets aligned for non-stencil accesses (e.g., outputs)
-  /// when loop bounds are shifted (i starts at 1).
-  if (decision.mode == PartitionMode::stencil) {
+  /// Propagate stencil center offset to all acquires when using allocation-wide
+  /// stencil mode or mixed block+stencil rewriting. This keeps base offsets
+  /// aligned for non-stencil accesses (e.g., outputs) when loop bounds are
+  /// shifted (i starts at 1).
+  if (decision.mode == PartitionMode::stencil ||
+      (decision.mode == PartitionMode::block && plan.stencilInfo)) {
     std::optional<int64_t> centerOffset;
     for (auto &info : acquireInfos) {
       if (!info.acquire)
@@ -2512,13 +2629,14 @@ FailureOr<DbAllocOp> DbPartitioningPass::assembleAndApplyRewritePlan(
   /// Include ALL acquires - invalid ones get Coarse fallback (offset=0,
   /// size=totalSize)
   SmallVector<DbRewriteAcquire> rewriteAcquires;
+  bool enableMixedStencilRewrite =
+      decision.mode == PartitionMode::block && plan.stencilInfo.has_value();
   for (auto &info : acquireInfos) {
     if (!info.acquire)
       continue;
 
     DbRewriteAcquire rewriteInfo;
     rewriteInfo.acquire = info.acquire;
-    rewriteInfo.partitionInfo.mode = decision.mode;
 
     if (info.acquire.hasMultiplePartitionEntries()) {
       ARTS_DEBUG("  Rewrite multi-entry acquire offset="
@@ -2543,8 +2661,9 @@ FailureOr<DbAllocOp> DbPartitioningPass::assembleAndApplyRewritePlan(
     view.needsFullRange = info.needsFullRange;
     view.graphStencilBounds = info.graphStencilBounds;
     view.graphStencilOwnerDim = info.graphStencilOwnerDim;
-    buildRewriteAcquire(decision.mode, view, allocOp, plan, rewriteInfo,
-                        builder);
+    PartitionMode rewriteMode =
+        enableMixedStencilRewrite ? PartitionMode::stencil : decision.mode;
+    buildRewriteAcquire(rewriteMode, view, allocOp, plan, rewriteInfo, builder);
 
     rewriteAcquires.push_back(rewriteInfo);
   }

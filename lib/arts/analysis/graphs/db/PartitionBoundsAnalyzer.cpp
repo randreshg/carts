@@ -883,10 +883,11 @@ bool PartitionBoundsAnalyzer::shouldPreserveDistributedContract(
     return false;
 
   auto [edt, blockArg] = getEdtBlockArgumentForAcquire(acquire);
-  (void)blockArg;
-  bool hasDistributionContract =
-      edt && (getEdtDistributionKind(edt.getOperation()) ||
-              getEdtDistributionPattern(edt.getOperation()));
+  auto distributionKind =
+      edt ? getEdtDistributionKind(edt.getOperation()) : std::nullopt;
+  auto distributionPattern =
+      edt ? getEdtDistributionPattern(edt.getOperation()) : std::nullopt;
+  bool hasDistributionContract = edt && (distributionKind || distributionPattern);
   if (!hasDistributionContract)
     return false;
 
@@ -900,10 +901,59 @@ bool PartitionBoundsAnalyzer::shouldPreserveDistributedContract(
       acquire.getMode() == ArtsMode::in && selectsNestedDb &&
       node->getAccessPattern() == AccessPattern::Stencil &&
       !node->hasIndirectAccess() && !node->hasStores();
+  auto selectsConstantLeafFromNestedDb = [&]() {
+    if (!blockArg || !selectsNestedDb)
+      return false;
 
-  if (!(selectsLeafDb || readOnlyNestedStencilAcquire))
+    bool sawDbRef = false;
+    for (Operation *user : blockArg.getUsers()) {
+      if (isa<DbReleaseOp>(user))
+        continue;
+
+      auto ref = dyn_cast<DbRefOp>(user);
+      if (!ref || ref.getSource() != blockArg)
+        return false;
+
+      sawDbRef = true;
+      for (Value idx : ref.getIndices()) {
+        int64_t constantIdx = 0;
+        if (!ValueAnalysis::getConstantIndex(idx, constantIdx) ||
+            constantIdx != 0) {
+          return false;
+        }
+      }
+    }
+
+    return sawDbRef;
+  };
+  bool hasExplicitOwnerDims = false;
+  if (auto contract = getLoweringContract(acquire.getPtr()))
+    hasExplicitOwnerDims = !contract->ownerDims.empty();
+  if (!hasExplicitOwnerDims) {
+    if (auto ownerDims = getStencilOwnerDims(acquire.getOperation()))
+      hasExplicitOwnerDims = !ownerDims->empty();
+  }
+  /// ForLowering/H2 rewrites uniform worker tasks to consume an EDT-local
+  /// nested DB pointer. After that rewrite the outer block offset no longer
+  /// appears in the inner memref access expressions, so raw offset matching
+  /// cannot rediscover the worker-local ownership. Keep the explicit block
+  /// contract narrow: only task-scoped uniform workers with explicit owner
+  /// dims and a single EDT-local leaf selection.
+  bool nestedUniformWorkerAcquire =
+      edt && edt.getType() == EdtType::task && hasExplicitOwnerDims &&
+      selectsConstantLeafFromNestedDb() && !node->hasIndirectAccess() &&
+      distributionKind && *distributionKind == EdtDistributionKind::block &&
+      distributionPattern &&
+      *distributionPattern == EdtDistributionPattern::uniform;
+
+  if (!(selectsLeafDb || readOnlyNestedStencilAcquire ||
+        nestedUniformWorkerAcquire))
     return false;
 
-  return !getPartitionOffsetDim(node, partitionOffset,
-                                /*requireLeading=*/false);
+  auto mappedDim =
+      getPartitionOffsetDim(node, partitionOffset, /*requireLeading=*/false);
+  if (nestedUniformWorkerAcquire)
+    return !mappedDim || !canPartitionWithOffset(node, partitionOffset);
+
+  return !mappedDim;
 }

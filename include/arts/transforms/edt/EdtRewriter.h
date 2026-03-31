@@ -26,6 +26,7 @@ struct AcquireRewriteInput {
   ArtsCodegen *AC = nullptr;
   Location loc;
   DbAcquireOp parentAcquire;
+  ArtsMode effectiveMode = ArtsMode::inout;
   Value rootGuid;
   Value rootPtr;
   Value acquireOffset;
@@ -55,6 +56,7 @@ struct TaskAcquireRewritePlanInput {
   ArtsCodegen *AC = nullptr;
   Location loc;
   DbAcquireOp parentAcquire;
+  ArtsMode effectiveMode = ArtsMode::inout;
   Value rootGuid;
   Value rootPtr;
   bool forceCoarseRewrite = false;
@@ -83,6 +85,7 @@ struct TaskAcquireSlicePlanInput {
   Location loc;
   DbAcquireOp parentAcquire;
   DbAcquireOp taskAcquire;
+  ArtsMode effectiveMode = ArtsMode::inout;
   Value rootGuid;
   Value rootPtr;
   DistributionKind distributionKind = DistributionKind::Flat;

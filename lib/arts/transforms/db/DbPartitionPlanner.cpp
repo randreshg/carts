@@ -329,6 +329,23 @@ static void buildStencilRewriteAcquire(const DbAcquirePartitionView &input,
     output.partitionInfo.indices.assign(input.partitionIndices.begin(),
                                         input.partitionIndices.end());
   }
+
+  auto elementOffsets = acquire.getElementOffsets();
+  auto elementSizes = acquire.getElementSizes();
+  if (!elementOffsets.empty() && elementOffsets.size() == elementSizes.size() &&
+      plan.numPartitionedDims() > 0) {
+    output.partitionInfo.offsets.clear();
+    output.partitionInfo.sizes.clear();
+
+    for (unsigned d = 0; d < plan.numPartitionedDims(); ++d) {
+      unsigned elemDim =
+          d < plan.partitionedDims.size() ? plan.partitionedDims[d] : d;
+      if (elemDim >= elementOffsets.size())
+        break;
+      output.partitionInfo.offsets.push_back(elementOffsets[elemDim]);
+      output.partitionInfo.sizes.push_back(elementSizes[elemDim]);
+    }
+  }
 }
 
 } // namespace

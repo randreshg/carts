@@ -30,6 +30,7 @@
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/transforms/db/stencil/DbStencilIndexer.h"
+#include "arts/utils/BlockedAccessUtils.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/EdtUtils.h"
@@ -107,22 +108,15 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   Value zero = arts::createZeroIndex(builder, loc);
   Value one = arts::createOneIndex(builder, loc);
 
-  /// Base-offset semantics: elemOffset is the owned chunk base.
+  /// Base-offset semantics: elemOffset is the explicit dependency-window base.
   Value baseOffset = elemOffset ? elemOffset : zero;
   if (baseOffset && !baseOffset.getType().isIndex())
     baseOffset = builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
                                                     baseOffset);
-  /// Keep a center-adjusted base for chunk alignment/block-index math.
-  /// Stencil loops often start at 1 (or other shifted center), while block
-  /// boundaries are computed in unshifted element space.
+  /// `baseOffset` is the explicit element-space start of the dependency
+  /// window. It stays in halo-expanded coordinates until we remap it through
+  /// the block plan below.
   Value blockBaseOffset = baseOffset;
-  if (auto center = getStencilCenterOffset(acquire.getOperation())) {
-    if (*center != 0) {
-      Value centerIdx = arts::createConstantIndex(builder, loc, *center);
-      blockBaseOffset =
-          builder.create<arith::SubIOp>(loc, blockBaseOffset, centerIdx);
-    }
-  }
   if (chunkIndexHint && !chunkIndexHint.getType().isIndex())
     chunkIndexHint = builder.create<arith::IndexCastOp>(
         loc, builder.getIndexType(), chunkIndexHint);
@@ -132,9 +126,36 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   /// that disagree with the allocation and cause stencil indexing bugs.
   Value planBlockSize = plan.getBlockSize(0) ? plan.getBlockSize(0) : one;
   planBlockSize = builder.create<arith::MaxUIOp>(loc, planBlockSize, one);
+  SmallVector<Value> ownerBlockShape;
+  Value ownerBlockSpan;
+  if (auto contract = getLoweringContract(acquire.getPtr())) {
+    if (auto staticShape = contract->getStaticBlockShape();
+        staticShape && !staticShape->empty()) {
+      for (int64_t dim : *staticShape)
+        ownerBlockShape.push_back(arts::createConstantIndex(builder, loc, dim));
+    } else if (!contract->blockShape.empty()) {
+      ownerBlockShape.assign(contract->blockShape.begin(),
+                             contract->blockShape.end());
+    }
+  }
+  if (ownerBlockShape.empty())
+    if (auto blockShape = getStencilBlockShape(acquire.getOperation());
+        blockShape && !blockShape->empty()) {
+      for (int64_t dim : *blockShape)
+        ownerBlockShape.push_back(
+            arts::createConstantIndex(builder, loc, dim));
+    }
+  if (!ownerBlockShape.empty())
+    ownerBlockSpan = ownerBlockShape.front();
+  if (ownerBlockSpan && !ownerBlockSpan.getType().isIndex())
+    ownerBlockSpan = builder.create<arith::IndexCastOp>(
+        loc, builder.getIndexType(), ownerBlockSpan);
+  if (ownerBlockSpan)
+    ownerBlockSpan = builder.create<arith::MaxUIOp>(loc, ownerBlockSpan, one);
   ARTS_DEBUG("  baseOffset=" << baseOffset << ", blockBaseOffset="
                              << blockBaseOffset << ", elemOffset=" << elemOffset
-                             << ", planBlockSize=" << planBlockSize);
+                             << ", planBlockSize=" << planBlockSize
+                             << ", ownerBlockSpan=" << ownerBlockSpan);
 
   /// Mixed stencil mode: only read-only stencil acquires should use ESD
   /// 3-buffer lowering. Non-stencil or write-capable acquires are lowered via
@@ -149,48 +170,70 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
              << (plan.stencilInfo ? plan.stencilInfo->hasHalo() : false)
              << ")");
 
+  /// Map the halo-expanded element base back to the owning DB block.
+  /// Boundary tasks clamp the left halo to zero, so `baseOffset + haloLeft`
+  /// is not itself guaranteed to be aligned. Recover the owner block index
+  /// first, then rebuild the aligned owner base from the block plan.
+  Value blockIdxBase = blockBaseOffset;
+  if (haloLeftVal > 0) {
+    Value haloLeftConst = arts::createConstantIndex(builder, loc, haloLeftVal);
+    blockIdxBase =
+        builder.create<arith::AddIOp>(loc, blockIdxBase, haloLeftConst);
+  }
+  Value blockIdx =
+      builder.create<arith::DivUIOp>(loc, blockIdxBase, planBlockSize);
+  Value ownerBaseOffset =
+      builder.create<arith::MulIOp>(loc, blockIdx, planBlockSize);
+
   if (useStencilEsd) {
     /// ESD 3-buffer lowering currently supports one owned DB block per task.
-    /// Derive an owned-span estimate by removing halo width from the hinted
-    /// acquire span and require it to be bounded by one plan block.
+    /// Prefer the worker-local owner block shape carried by the lowering
+    /// contract. Halo-expanded element windows are clamped at domain
+    /// boundaries and do not reliably encode the owned block span there.
     Value elemSize = one;
     if (!info.partitionInfo.sizes.empty() && info.partitionInfo.sizes.front())
       elemSize = info.partitionInfo.sizes.front();
 
-    auto isBoundedByBlock = [&](Value sz, Value bsVal) -> bool {
-      if (!sz || !bsVal)
-        return false;
-      Value s = ValueAnalysis::stripClampOne(sz);
-      Value bs = ValueAnalysis::stripClampOne(bsVal);
-      if (ValueAnalysis::areValuesEquivalent(s, bs))
-        return true;
-      if (auto minOp = s.getDefiningOp<arith::MinUIOp>()) {
-        Value lhs = ValueAnalysis::stripClampOne(minOp.getLhs());
-        Value rhs = ValueAnalysis::stripClampOne(minOp.getRhs());
-        if (ValueAnalysis::areValuesEquivalent(lhs, bs) ||
-            ValueAnalysis::areValuesEquivalent(rhs, bs))
-          return true;
-      }
-      return false;
-    };
-
-    Value ownedSpan = elemSize;
+    Value ownedBaseForAlignment = ownerBaseOffset;
+    Value ownedSpan = ownerBlockSpan ? ownerBlockSpan : elemSize;
     int64_t totalHalo = haloLeftVal + haloRightVal;
-    if (totalHalo > 0) {
+    if (!ownerBlockSpan && totalHalo > 0) {
+      ownedSpan = elemSize;
       Value haloConst = arts::createConstantIndex(builder, loc, totalHalo);
       ownedSpan = builder.create<arith::SubIOp>(loc, ownedSpan, haloConst);
     }
 
     bool singleBlock = false;
-    auto constOwnedSpan = arts::extractBlockSizeFromHint(ownedSpan);
+    auto constElemSzUpper = arts::extractBlockSizeFromHint(ownedSpan);
     auto constPlanBs = arts::extractBlockSizeFromHint(planBlockSize);
-    if (constOwnedSpan && constPlanBs && *constOwnedSpan <= *constPlanBs)
+    bool isAligned =
+        arts::isAlignedToBlock(ownedBaseForAlignment, planBlockSize);
+    if (constElemSzUpper && constPlanBs && *constElemSzUpper <= *constPlanBs &&
+        isAligned)
       singleBlock = true;
-    if (!singleBlock && isBoundedByBlock(ownedSpan, planBlockSize))
+    if (!singleBlock &&
+        arts::isValueBoundedByBlockSpan(ownedSpan, planBlockSize) &&
+        isAligned)
       singleBlock = true;
+    bool hasExplicitBlockHaloContract =
+        hasSupportedBlockHalo(acquire.getOperation());
+    if (!hasExplicitBlockHaloContract) {
+      if (auto contract = getLoweringContract(acquire.getPtr()))
+        hasExplicitBlockHaloContract = contract->supportsBlockHalo();
+    }
+    if (!singleBlock &&
+        arts::isValueBoundedByBlockSpan(ownedSpan, planBlockSize) &&
+        acquire.getMode() == ArtsMode::in && hasExplicitBlockHaloContract) {
+      /// Explicit block-halo contracts already describe one owner block plus
+      /// neighbor halos. When the owned span stays within one plan block, use
+      /// that contract even if the alignment proof is hidden behind clamp /
+      /// select normalization for boundary tasks.
+      singleBlock = true;
+    }
 
     ARTS_DEBUG("  ESD single-block check: singleBlock="
-               << singleBlock << ", ownedSpan=" << ownedSpan);
+               << singleBlock << ", ownedSpan=" << ownedSpan
+               << ", aligned=" << isAligned);
     useStencilEsd = singleBlock;
   }
 
@@ -200,25 +243,39 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
     return;
   }
 
+  /// In 3-buffer mode the owned acquire must describe the owner tile, not the
+  /// original halo-expanded dependency window. The halo rows travel on their
+  /// dedicated left/right acquires and the stencil indexer expects its
+  /// base-offset contract to start at the owner tile.
+  SmallVector<Value> ownedElementOffsets;
+  SmallVector<Value> ownedElementSizes;
+  unsigned ownerRank = std::max<size_t>(plan.innerSizes.size(),
+                                        ownerBlockShape.size());
+  ownedElementOffsets.reserve(ownerRank);
+  ownedElementSizes.reserve(ownerRank);
+  for (unsigned d = 0; d < ownerRank; ++d) {
+    ownedElementOffsets.push_back(zero);
+    Value dimSize =
+        d < ownerBlockShape.size()
+            ? ownerBlockShape[d]
+            : (d < plan.innerSizes.size() && plan.innerSizes[d]
+                   ? plan.innerSizes[d]
+                   : one);
+    if (!dimSize.getType().isIndex())
+      dimSize = builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
+                                                   dimSize);
+    ownedElementSizes.push_back(
+        builder.create<arith::MaxUIOp>(loc, dimSize, one));
+  }
+  acquire.getElementOffsetsMutable().assign(ownedElementOffsets);
+  acquire.getElementSizesMutable().assign(ownedElementSizes);
+
   /// STENCIL MODE with ESD: 3-acquire pattern
   /// Each worker acquires:
   ///   1. Owned chunk (full chunk)
   ///   2. Left halo (partial slice from previous chunk)
   ///   3. Right halo (partial slice from next chunk)
   Value chunkCount = one;
-
-  /// Compute the block index from the element-space base offset that includes
-  /// halo expansion. Normalize to owned-block coordinates first:
-  ///   ownedBase = haloBase + haloLeft - centerShift
-  /// then map to block space.
-  Value blockIdxBase = blockBaseOffset;
-  if (haloLeftVal > 0) {
-    Value haloLeftConst = arts::createConstantIndex(builder, loc, haloLeftVal);
-    blockIdxBase =
-        builder.create<arith::AddIOp>(loc, blockIdxBase, haloLeftConst);
-  }
-  Value blockIdx =
-      builder.create<arith::DivUIOp>(loc, blockIdxBase, planBlockSize);
 
   ARTS_DEBUG("  Stencil ESD: blockIdx=" << blockIdx
                                         << ", haloLeft=" << haloLeftVal
@@ -332,13 +389,10 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   acquire.getOffsetsMutable().assign(newOffsets);
   acquire.getSizesMutable().assign(newSizes);
 
-  /// Use the ForLowering's actual baseOffset as the indexer's base.
-  /// After alignment, baseOffset == blockIdx * planBlockSize. Using the same
-  /// SSA Value that ForLowering embedded in globalRow = add(baseOffset,
-  /// localIter) ensures the stencil indexer's tryVersionRowLoop correctly
-  /// identifies the coordinate system (includesBaseOffset = true) and splits
-  /// loops correctly.
-  rebaseEdtUsers(acquire, builder, baseOffset);
+  /// Rebase the EDT against the owner tile, not the halo-expanded dependency
+  /// window. This keeps local-row selection consistent with the owned tile
+  /// shape carried on the central acquire above.
+  rebaseEdtUsers(acquire, builder, ownerBaseOffset);
 }
 
 void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
@@ -430,10 +484,12 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
       Value elemSz = (d < sizes.size() && sizes[d]) ? sizes[d] : one;
       elemSz = builder.create<arith::MaxUIOp>(loc, elemSz, one);
 
-      /// Contract-backed stencil reads may carry a halo-expanded span but keep
-      /// the owner-slice base in partitionInfo.offsets. Shift the start back
-      /// and extend the size before converting to DB-space blocks so the block
-      /// window matches the EDT-local dependency layout.
+      /// Keep DB-space block windows and element slices conceptually separate.
+      /// Even when the acquire already carries an explicit halo element slice,
+      /// partitionInfo.offsets/sizes still describe the owner slice selected by
+      /// distribution/lowering. Re-expand that owner slice here before
+      /// converting it to DB-space blocks, otherwise boundary tasks can miss a
+      /// halo block even though the element slice metadata looks complete.
       if (acquire.getMode() == ArtsMode::in) {
         unsigned ownerDim = resolveOwnerDim(d);
         auto applyHaloWindow = [&](int64_t minOffset, int64_t maxOffset) {
@@ -797,7 +853,9 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
   Value haloRight =
       arts::createConstantIndex(builder, loc, plan.stencilInfo->haloRight);
 
-  Value blockSize = plan.getBlockSize(0) ? plan.getBlockSize(0) : one;
+  Value blockSize = acquire.getElementSizes().empty()
+                        ? (plan.getBlockSize(0) ? plan.getBlockSize(0) : one)
+                        : acquire.getElementSizes().front();
   if (!blockSize.getType().isIndex())
     blockSize = builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
                                                    blockSize);

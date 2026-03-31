@@ -107,6 +107,50 @@ struct DbAcquirePartitionFacts {
       return entry.preservesDistributedContract;
     });
   }
+
+  /// Return a unique mapped owner dimension when graph-side facts already
+  /// imply one, even if multi-entry acquires could not populate
+  /// `partitionDims` directly.
+  std::optional<unsigned> inferSingleMappedDim() const {
+    if (partitionDims.size() == 1)
+      return partitionDims.front();
+    if (partitionDims.size() > 1)
+      return std::nullopt;
+
+    std::optional<unsigned> inferredDim;
+    auto recordDim = [&](unsigned dim) -> bool {
+      if (!inferredDim) {
+        inferredDim = dim;
+        return true;
+      }
+      return *inferredDim == dim;
+    };
+
+    for (const DbDimPartitionFact &dimFact : dims) {
+      if (!dimFact.selectedByPartitionEntry)
+        continue;
+      if (!recordDim(dimFact.dim))
+        return std::nullopt;
+    }
+    if (inferredDim)
+      return inferredDim;
+
+    for (const DbPartitionEntryFact &entry : entries) {
+      if (!entry.mappedDim)
+        continue;
+      if (!recordDim(*entry.mappedDim))
+        return std::nullopt;
+    }
+    if (inferredDim)
+      return inferredDim;
+
+    if (dims.size() == 1)
+      return dims.front().dim;
+
+    if (stencilOwnerDims.size() == 1)
+      return stencilOwnerDims.front();
+    return std::nullopt;
+  }
 };
 
 ///===----------------------------------------------------------------------===///
