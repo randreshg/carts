@@ -51,7 +51,6 @@
 #define GEN_PASS_DEF_CREATEDBS
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/transforms/db/DbRewriter.h"
 #include "arts/transforms/db/DbTransforms.h"
@@ -64,6 +63,7 @@
 #include "arts/utils/Utils.h"
 #include "arts/utils/metadata/MemrefMetadata.h"
 #include "arts/utils/metadata/Metadata.h"
+#include "mlir/Pass/Pass.h"
 #include <optional>
 
 #include "arts/passes/Passes.h"
@@ -73,13 +73,13 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
-#include "mlir/IR/BuiltinOps.h"
-#include "mlir/Interfaces/ViewLikeInterface.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
+#include "mlir/Interfaces/ViewLikeInterface.h"
 #include "mlir/Pass/Pass.h"
 #include "polygeist/Ops.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -1394,10 +1394,9 @@ void CreateDbsPass::rewriteUsesEverywhereCoarse(Operation *alloc,
     OpBuilder::InsertionGuard guard(AC->getBuilder());
     AC->setInsertionPoint(insertBefore);
     Value zero = AC->createIndexConstant(0, insertBefore->getLoc());
-    Value view =
-        AC->create<DbRefOp>(insertBefore->getLoc(),
-                            dbAlloc.getAllocatedElementType(), dbAlloc.getPtr(),
-                            ValueRange{zero});
+    Value view = AC->create<DbRefOp>(insertBefore->getLoc(),
+                                     dbAlloc.getAllocatedElementType(),
+                                     dbAlloc.getPtr(), ValueRange{zero});
     return materializeMemrefAsType(view, targetType, insertBefore);
   };
 
@@ -1424,9 +1423,8 @@ void CreateDbsPass::rewriteUsesEverywhereCoarse(Operation *alloc,
             continue;
 
           if (isForwardingMemrefAliasOp(user, oldValue)) {
-            Value mappedSource =
-                materializeMemrefAsType(baseReplacement, oldValue.getType(),
-                                        user);
+            Value mappedSource = materializeMemrefAsType(
+                baseReplacement, oldValue.getType(), user);
             if (!mappedSource)
               continue;
 
@@ -1446,9 +1444,8 @@ void CreateDbsPass::rewriteUsesEverywhereCoarse(Operation *alloc,
             continue;
           }
 
-          Value typedReplacement =
-              materializeMemrefAsType(baseReplacement, oldValue.getType(),
-                                      user);
+          Value typedReplacement = materializeMemrefAsType(
+              baseReplacement, oldValue.getType(), user);
           if (!typedReplacement)
             continue;
           use->set(typedReplacement);

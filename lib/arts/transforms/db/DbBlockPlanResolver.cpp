@@ -38,11 +38,11 @@ static SmallVector<unsigned>
 choosePartitionedDims(DbAllocOp allocOp, ArrayRef<AcquirePartitionInfo> infos,
                       unsigned nPartDims);
 
-static Value computeDefaultBlockSize(DbAllocOp allocOp,
-                                     ArrayRef<AcquirePartitionInfo> acquireInfos,
-                                     OpBuilder &builder, Location loc,
-                                     bool useNodes,
-                                     bool clampStencilFallbackWorkers) {
+static Value
+computeDefaultBlockSize(DbAllocOp allocOp,
+                        ArrayRef<AcquirePartitionInfo> acquireInfos,
+                        OpBuilder &builder, Location loc, bool useNodes,
+                        bool clampStencilFallbackWorkers) {
   if (allocOp.getElementSizes().empty())
     return nullptr;
 
@@ -80,8 +80,8 @@ static Value computeDefaultBlockSize(DbAllocOp allocOp,
         builder.create<arith::DivUIOp>(loc, elemSize, minOwnedOuterIters);
     maxWorkersByOwnedSpan =
         builder.create<arith::MaxUIOp>(loc, maxWorkersByOwnedSpan, one);
-    workersClamped = builder.create<arith::MinUIOp>(
-        loc, workersClamped, maxWorkersByOwnedSpan);
+    workersClamped = builder.create<arith::MinUIOp>(loc, workersClamped,
+                                                    maxWorkersByOwnedSpan);
   }
 
   Value workersMinusOne =
@@ -589,8 +589,7 @@ mlir::arts::resolveDbBlockPlan(const DbBlockPlanInput &input) {
     if (!blockSizeForPlan) {
       blockSizeForPlan = computeDefaultBlockSize(
           input.allocOp, input.acquireInfos, builder, loc,
-          input.useNodesForFallback,
-          input.clampStencilFallbackWorkers);
+          input.useNodesForFallback, input.clampStencilFallbackWorkers);
       /// Keep fallback stencil block sizing aligned with the same worker-based
       /// owner span that ForOpt / ForLowering use to form task chunks.
       /// Shrinking only the DB block size further does not create additional

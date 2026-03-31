@@ -5,8 +5,8 @@
 ///==========================================================================///
 
 #include "arts/utils/LoopUtils.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "llvm/ADT/StringRef.h"
 
@@ -24,8 +24,8 @@ static std::optional<int64_t> getStaticTripCount(scf::ForOp loop) {
 }
 
 static std::optional<int64_t> getStaticTripCount(arts::ForOp loop) {
-  if (!loop || loop.getLowerBound().size() != 1 || loop.getUpperBound().size() != 1 ||
-      loop.getStep().size() != 1)
+  if (!loop || loop.getLowerBound().size() != 1 ||
+      loop.getUpperBound().size() != 1 || loop.getStep().size() != 1)
     return std::nullopt;
 
   auto lb = ValueAnalysis::tryFoldConstantIndex(loop.getLowerBound().front());
@@ -43,8 +43,8 @@ static std::optional<int64_t> getStaticTripCount(affine::AffineForOp loop) {
   int64_t step = loop.getStep().getSExtValue();
   if (step <= 0)
     return std::nullopt;
-  int64_t span =
-      std::max<int64_t>(0, loop.getConstantUpperBound() - loop.getConstantLowerBound());
+  int64_t span = std::max<int64_t>(0, loop.getConstantUpperBound() -
+                                          loop.getConstantLowerBound());
   return (span + step - 1) / step;
 }
 
@@ -156,12 +156,10 @@ static bool operationTouchesFloatingPoint(Operation *op) {
 
 static bool isFusionHostileMathOp(Operation *op) {
   llvm::StringRef name = op->getName().getStringRef();
-  return name == "math.exp" || name == "math.exp2" ||
-         name == "math.expm1" || name == "math.log" ||
-         name == "math.log1p" || name == "math.log2" ||
-         name == "math.log10" || name == "math.sin" ||
-         name == "math.cos" || name == "math.tan" ||
-         name == "math.tanh" || name == "math.erf" ||
+  return name == "math.exp" || name == "math.exp2" || name == "math.expm1" ||
+         name == "math.log" || name == "math.log1p" || name == "math.log2" ||
+         name == "math.log10" || name == "math.sin" || name == "math.cos" ||
+         name == "math.tan" || name == "math.tanh" || name == "math.erf" ||
          name == "math.powf";
 }
 
@@ -186,11 +184,6 @@ PointwiseLoopComputeClass classifyPointwiseLoopCompute(arts::ForOp loop) {
     return WalkResult::advance();
   });
   return computeClass;
-}
-
-bool loopHasFusionHostileFpWork(arts::ForOp loop) {
-  return classifyPointwiseLoopCompute(loop) !=
-         PointwiseLoopComputeClass::arithmeticOnly;
 }
 
 } // namespace arts

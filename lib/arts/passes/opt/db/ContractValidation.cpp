@@ -20,12 +20,11 @@
 #define GEN_PASS_DEF_CONTRACTVALIDATION
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
+#include "mlir/Pass/Pass.h"
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"

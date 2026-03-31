@@ -39,12 +39,9 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
 /// Arts
-#define GEN_PASS_DEF_DBPARTITIONING
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "mlir/Pass/Pass.h"
-#include "arts/passes/Passes.h.inc"
-#include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/graphs/db/DbGraph.h"
@@ -52,12 +49,10 @@
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/analysis/loop/LoopNode.h"
 #include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/passes/Passes.h"
 /// Other
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Visitors.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
 /// Debug
 #include "arts/analysis/graphs/db/DbNode.h"
@@ -68,8 +63,8 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
-#include <cstdlib>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 
 #include "arts/transforms/db/DbBlockPlanResolver.h"
@@ -83,7 +78,6 @@
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
-ARTS_DEBUG_SETUP(db_partitioning);
 
 using namespace mlir;
 using namespace mlir::func;
@@ -91,14 +85,20 @@ using namespace mlir::arith;
 using namespace mlir::polygeist;
 using namespace mlir::arts;
 
+#define GEN_PASS_DEF_DBPARTITIONING
+#include "arts/passes/Passes.h.inc"
+
+ARTS_DEBUG_SETUP(db_partitioning);
+
 namespace {
 
 static bool dbPartitionTraceEnabled() {
-  return std::getenv("CARTS_TRACE_DB_PARTITION") != nullptr;
+  static const bool enabled =
+      std::getenv("CARTS_TRACE_DB_PARTITION") != nullptr;
+  return enabled;
 }
 
-template <typename... Args>
-static void dbPartitionTrace(Args &&...args) {
+template <typename... Args> static void dbPartitionTrace(Args &&...args) {
   if (!dbPartitionTraceEnabled())
     return;
   llvm::errs() << "[db_partition_trace] ";
@@ -178,9 +178,9 @@ static void collapseTrailingFullExtentPartitionDims(
       break;
 
     ARTS_DEBUG("  Collapsing trailing full-extent partition dim " << dim
-                                                                   << " from "
-                                                                      "block "
-                                                                      "plan");
+                                                                  << " from "
+                                                                     "block "
+                                                                     "plan");
     blockSizes.pop_back();
     if (!partitionedDims.empty())
       partitionedDims.pop_back();
@@ -191,18 +191,6 @@ static void collapseTrailingFullExtentPartitionDims(
     if (partitionedDims.empty())
       continue;
   }
-}
-
-static std::optional<int64_t> getForcedCoarseAllocId() {
-  const char *env = std::getenv("CARTS_DEBUG_FORCE_COARSE_ALLOC_ID");
-  if (!env || !*env)
-    return std::nullopt;
-
-  char *end = nullptr;
-  long long parsed = std::strtoll(env, &end, 10);
-  if (end == env || (end && *end != '\0') || parsed <= 0)
-    return std::nullopt;
-  return static_cast<int64_t>(parsed);
 }
 
 static std::optional<int64_t> computeStaticElementCount(DbAllocOp allocOp) {
@@ -589,12 +577,10 @@ static void lowerStencilAcquireBounds(ModuleOp module,
 }
 
 /// Analyze a single acquire to determine its partition mode and chunk info.
-static AcquirePartitionInfo
-computeAcquirePartitionInfo(DbAnalysis &dbAnalysis, DbAcquireNode *acqNode,
-                            DbAcquireOp acquire,
-                            const DbAnalysis::AcquireContractSummary *summary,
-                            const DbAcquirePartitionFacts *facts,
-                            OpBuilder &builder) {
+static AcquirePartitionInfo computeAcquirePartitionInfo(
+    DbAnalysis &dbAnalysis, DbAcquireNode *acqNode, DbAcquireOp acquire,
+    const DbAnalysis::AcquireContractSummary *summary,
+    const DbAcquirePartitionFacts *facts, OpBuilder &builder) {
   AcquirePartitionInfo info;
   info.acquire = acquire;
   DbAnalysis::AcquirePartitionSummary partitionSummary;
@@ -705,9 +691,9 @@ static void resetCoarseAcquireRanges(DbAllocOp allocOp, DbAllocNode *allocNode,
     acqOp.getPartitionOffsetsMutable().clear();
     acqOp.getPartitionSizesMutable().clear();
     /// A coarse fallback invalidates any previously materialized element-space
-    /// slice. Leaving element_offsets/element_sizes behind would later re-create
-    /// byte-sliced dependencies for an acquire whose DB-space contract is now
-    /// whole-range.
+    /// slice. Leaving element_offsets/element_sizes behind would later
+    /// re-create byte-sliced dependencies for an acquire whose DB-space
+    /// contract is now whole-range.
     acqOp.getElementOffsetsMutable().clear();
     acqOp.getElementSizesMutable().clear();
     /// Keep acquire partition attribute consistent with coarse allocation.
@@ -790,7 +776,7 @@ feedbackPartitionDecisionToContract(DbAllocOp newAllocOp,
 
 namespace {
 struct DbPartitioningPass
-    : public impl::DbPartitioningBase<DbPartitioningPass> {
+    : public ::impl::DbPartitioningBase<DbPartitioningPass> {
   DbPartitioningPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }
@@ -1652,9 +1638,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   ctx.staticElementCount = computeStaticElementCount(allocOp);
   ctx.existingAllocMode =
       getPartitionMode(allocOp).value_or(PartitionMode::coarse);
-  ctx.allocAccessPattern =
-      getDbAccessPattern(allocOp.getOperation()).value_or(
-          DbAccessPattern::unknown);
+  ctx.allocAccessPattern = getDbAccessPattern(allocOp.getOperation())
+                               .value_or(DbAccessPattern::unknown);
   ctx.allocDbMode = allocOp.getDbMode();
 
   /// Step 4: Initial heuristics arbitration.
@@ -1663,24 +1648,23 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                    " patterns(uniform=", ctx.accessPatterns.hasUniform,
                    ", stencil=", ctx.accessPatterns.hasStencil,
                    ", indexed=", ctx.accessPatterns.hasIndexed,
-                   ") canBlock=", ctx.canBlock,
-                   " canEW=", ctx.canElementWise,
+                   ") canBlock=", ctx.canBlock, " canEW=", ctx.canElementWise,
                    " hasDirect=", ctx.hasDirectAccess,
                    " hasIndirect=", ctx.hasIndirectAccess,
                    " accessMode=", static_cast<int>(ctx.accessMode),
                    " decision=", getPartitionModeName(decision.mode),
                    " rationale=", decision.rationale);
 
-  if (auto forcedAllocId = getForcedCoarseAllocId();
-      forcedAllocId && getArtsId(allocOp.getOperation()) == *forcedAllocId) {
+  if (forceCoarseAllocId >= 0 &&
+      getArtsId(allocOp.getOperation()) == forceCoarseAllocId) {
     decision = PartitioningDecision::coarse(
         ctx, "Debug override: forced coarse allocation by arts.id");
     ARTS_DEBUG("  Forcing coarse allocation via "
-               << "CARTS_DEBUG_FORCE_COARSE_ALLOC_ID=" << *forcedAllocId);
+               << "--force-coarse-alloc-id=" << forceCoarseAllocId);
     heuristics.recordDecision(
         "Partition-DebugForceCoarse", true,
-        "forced coarse allocation via CARTS_DEBUG_FORCE_COARSE_ALLOC_ID",
-        allocOp.getOperation(), {{"forcedArtsId", *forcedAllocId}});
+        "forced coarse allocation via --force-coarse-alloc-id",
+        allocOp.getOperation(), {{"forcedArtsId", forceCoarseAllocId}});
   }
 
   if (decision.isCoarse()) {
@@ -2161,8 +2145,8 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
         acquireMode && *acquireMode == PartitionMode::coarse;
     if (contractSummary && !info.partitionDimsFromPeers &&
         !contractSummary->contract.ownerDims.empty()) {
-      info.ownerDimsCount = static_cast<uint8_t>(std::min<size_t>(
-          4, contractSummary->contract.ownerDims.size()));
+      info.ownerDimsCount = static_cast<uint8_t>(
+          std::min<size_t>(4, contractSummary->contract.ownerDims.size()));
       for (unsigned dim = 0; dim < info.ownerDimsCount; ++dim)
         info.ownerDims[dim] =
             static_cast<int16_t>(contractSummary->contract.ownerDims[dim]);
@@ -2197,8 +2181,7 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
       bool preferTiling2D = acquire.getMode() == ArtsMode::inout &&
                             DbAnalysis::isTiling2DTaskAcquire(acquire);
       bool preferWavefrontStencilMode =
-          info.depPattern == ArtsDepPattern::wavefront_2d &&
-          contractSummary &&
+          info.depPattern == ArtsDepPattern::wavefront_2d && contractSummary &&
           contractSummary->contract.hasExplicitStencilContract() &&
           contractSummary->contract.supportsBlockHalo();
       if (preferWavefrontStencilMode) {
@@ -2282,10 +2265,9 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
                      " accessPattern=", static_cast<int>(info.accessPattern),
                      " depPattern=", static_cast<int>(info.depPattern),
                      " canBlock=", info.canBlock,
-                     " canEW=", info.canElementWise,
-                     " hasDirect=", contractSummary
-                                        ? contractSummary->hasDirectAccess()
-                                        : false,
+                     " canEW=", info.canElementWise, " hasDirect=",
+                     contractSummary ? contractSummary->hasDirectAccess()
+                                     : false,
                      " hasIndirect=", hasIndirect,
                      " inferredOffsets=", acqInfo.partitionOffsets.size(),
                      " inferredSizes=", acqInfo.partitionSizes.size(),
@@ -2461,11 +2443,11 @@ bool DbPartitioningPass::resolveBlockPlanSizes(
   if (decision.mode == PartitionMode::stencil) {
     bool hasInternodeUsers =
         llvm::any_of(acquireInfos, [](const AcquirePartitionInfo &info) {
-      if (!info.acquire)
-        return false;
-      auto edt = info.acquire->getParentOfType<EdtOp>();
-      return edt && edt.getConcurrency() == EdtConcurrency::internode;
-    });
+          if (!info.acquire)
+            return false;
+          auto edt = info.acquire->getParentOfType<EdtOp>();
+          return edt && edt.getConcurrency() == EdtConcurrency::internode;
+        });
     clampStencilFallbackWorkers = !hasInternodeUsers;
   }
 

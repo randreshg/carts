@@ -24,7 +24,6 @@ namespace arts {
 class LoopPattern : public PatternTransform {
 public:
   virtual ~LoopPattern() = default;
-  using PatternTransform::apply;
 
   /// Try to match this pattern in the given arts.for.
   /// Returns true if pattern is detected; populates internal match state.

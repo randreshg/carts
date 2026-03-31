@@ -8,8 +8,8 @@
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/graphs/db/DbGraph.h"
 #include "arts/analysis/graphs/db/DbNode.h"
-#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
@@ -121,9 +121,9 @@ static std::optional<int64_t> getStaticRuntimeTotalWorkers(ModuleOp module,
   return workersPerNode;
 }
 
-static bool isValidTiling2DColumnDivisor(
-    int64_t totalWorkers, std::optional<int64_t> workersPerNode,
-    int64_t candidate) {
+static bool isValidTiling2DColumnDivisor(int64_t totalWorkers,
+                                         std::optional<int64_t> workersPerNode,
+                                         int64_t candidate) {
   if (candidate <= 1 || totalWorkers % candidate != 0)
     return false;
   if (!workersPerNode || *workersPerNode <= 0)
@@ -131,9 +131,10 @@ static bool isValidTiling2DColumnDivisor(
   return (*workersPerNode % candidate) == 0;
 }
 
-static int64_t chooseColumnWorkersNearTarget(
-    int64_t totalWorkers, std::optional<int64_t> workersPerNode,
-    double target) {
+static int64_t
+chooseColumnWorkersNearTarget(int64_t totalWorkers,
+                              std::optional<int64_t> workersPerNode,
+                              double target) {
   if (totalWorkers < 4)
     return 1;
 
@@ -162,14 +163,16 @@ static bool isWavefrontTilingPattern(std::optional<ArtsDepPattern> depPattern) {
   return depPattern && *depPattern == ArtsDepPattern::wavefront_2d;
 }
 
-static int64_t chooseTiling2DColumnWorkers(
-    int64_t totalWorkers, std::optional<int64_t> workersPerNode) {
+static int64_t
+chooseTiling2DColumnWorkers(int64_t totalWorkers,
+                            std::optional<int64_t> workersPerNode) {
   double target = std::sqrt(static_cast<double>(totalWorkers));
   return chooseColumnWorkersNearTarget(totalWorkers, workersPerNode, target);
 }
 
-static int64_t chooseWavefront2DColumnWorkers(
-    int64_t totalWorkers, std::optional<int64_t> workersPerNode) {
+static int64_t
+chooseWavefront2DColumnWorkers(int64_t totalWorkers,
+                               std::optional<int64_t> workersPerNode) {
   /// Weighted wavefront frontiers expose less row-wise concurrency than a
   /// near-square tiling. Bias toward wider column decomposition while keeping
   /// the same node-aligned divisor legality checks as generic tiling_2d.
@@ -180,9 +183,10 @@ static int64_t chooseWavefront2DColumnWorkers(
                                        widenedTarget);
 }
 
-static int64_t chooseColumnWorkersForPattern(
-    int64_t totalWorkers, std::optional<int64_t> workersPerNode,
-    std::optional<ArtsDepPattern> depPattern) {
+static int64_t
+chooseColumnWorkersForPattern(int64_t totalWorkers,
+                              std::optional<int64_t> workersPerNode,
+                              std::optional<ArtsDepPattern> depPattern) {
   if (isWavefrontTilingPattern(depPattern))
     return chooseWavefront2DColumnWorkers(totalWorkers, workersPerNode);
   return chooseTiling2DColumnWorkers(totalWorkers, workersPerNode);
@@ -230,8 +234,8 @@ static std::optional<unsigned> inferLoopMappedDim(DbAcquireNode *acqNode,
       ArrayRef<Value> memrefChain(fullChain);
       memrefChain = memrefChain.drop_front(memrefStart);
       for (auto [dimIdx, indexVal] : llvm::enumerate(memrefChain)) {
-        if (ValueAnalysis::dependsOn(
-                ValueAnalysis::stripNumericCasts(indexVal), loopIV))
+        if (ValueAnalysis::dependsOn(ValueAnalysis::stripNumericCasts(indexVal),
+                                     loopIV))
           matchingDims.push_back(dimIdx);
       }
 
@@ -296,8 +300,8 @@ static std::optional<unsigned> inferLoopMappedDimFromValue(Value dep,
 
     SmallVector<unsigned, 2> matchingDims;
     for (auto [dimIdx, indexVal] : llvm::enumerate(access->indices)) {
-      if (ValueAnalysis::dependsOn(
-              ValueAnalysis::stripNumericCasts(indexVal), loopIV))
+      if (ValueAnalysis::dependsOn(ValueAnalysis::stripNumericCasts(indexVal),
+                                   loopIV))
         matchingDims.push_back(dimIdx);
     }
 
@@ -340,9 +344,9 @@ std::pair<Value, Value> WorkDistributionUtils::balancedDistribute(
   /// single-block DB acquires downstream.
   auto totalChunksConst = ValueAnalysis::tryFoldConstantIndex(totalChunks);
   auto participantsConst = ValueAnalysis::tryFoldConstantIndex(numParticipants);
-  bool evenlyDivisible =
-      totalChunksConst && participantsConst && *participantsConst > 0 &&
-      (*totalChunksConst % *participantsConst) == 0;
+  bool evenlyDivisible = totalChunksConst && participantsConst &&
+                         *participantsConst > 0 &&
+                         (*totalChunksConst % *participantsConst) == 0;
   if (evenlyDivisible || ValueAnalysis::isZeroConstant(rem)) {
     Value start = AC->create<arith::MulIOp>(loc, participantId, base);
     return {start, base};
@@ -360,9 +364,9 @@ std::pair<Value, Value> WorkDistributionUtils::balancedDistribute(
   return {start, count};
 }
 
-LoopChunkPlan WorkDistributionUtils::planLoopChunking(ArtsCodegen *AC,
-                                                      ForOp forOp,
-                                                      Value runtimeBlockSizeHint) {
+LoopChunkPlan
+WorkDistributionUtils::planLoopChunking(ArtsCodegen *AC, ForOp forOp,
+                                        Value runtimeBlockSizeHint) {
   LoopChunkPlan plan;
   if (!AC || !forOp)
     return plan;
@@ -433,8 +437,7 @@ LoopChunkPlan WorkDistributionUtils::planLoopChunking(ArtsCodegen *AC,
   Value range =
       AC->create<arith::SubIOp>(loc, upperBound, plan.chunkLowerBound);
   Value adjustedRange = AC->create<arith::AddIOp>(
-      loc, range,
-      AC->create<arith::SubIOp>(loc, loopStep, one));
+      loc, range, AC->create<arith::SubIOp>(loc, loopStep, one));
   plan.totalIterations =
       AC->create<arith::DivUIOp>(loc, adjustedRange, loopStep);
 
@@ -469,9 +472,8 @@ Tiling2DWorkerGrid WorkDistributionUtils::getTiling2DWorkerGrid(
           AC->castToIndex(workersPerNode, loc));
     }
 
-    int64_t colWorkersConst =
-        chooseColumnWorkersForPattern(*totalWorkersConst, workersPerNodeConst,
-                                      depPattern);
+    int64_t colWorkersConst = chooseColumnWorkersForPattern(
+        *totalWorkersConst, workersPerNodeConst, depPattern);
     if (colWorkersConst > 1) {
       grid.colWorkers = AC->createIndexConstant(colWorkersConst, loc);
       grid.rowWorkers =
@@ -512,9 +514,9 @@ DistributionBounds WorkDistributionUtils::computeBounds(
     Value distWorkerId = workerId;
     Value distWorkers = runtimeTotalWorkers;
     if (strategy.kind == DistributionKind::Tiling2D) {
-      Tiling2DWorkerGrid grid = getTiling2DWorkerGrid(
-          AC, loc, workerId, runtimeTotalWorkers, runtimeWorkersPerNode,
-          depPattern);
+      Tiling2DWorkerGrid grid =
+          getTiling2DWorkerGrid(AC, loc, workerId, runtimeTotalWorkers,
+                                runtimeWorkersPerNode, depPattern);
       distWorkerId = grid.rowWorkerId;
       distWorkers = grid.rowWorkers;
     }
@@ -853,10 +855,9 @@ Value WorkDistributionUtils::computeDbAlignmentBlockSize(
     /// span, keep that explicit hint instead of shrinking the loop back to a
     /// one-block-per-worker fallback.
     Value advisory = AC->createIndexConstant(*loopBlockHint, loc);
-    hintBlockSize = hintBlockSize
-                        ? AC->create<arith::MaxUIOp>(loc, hintBlockSize,
-                                                     advisory)
-                        : advisory;
+    hintBlockSize =
+        hintBlockSize ? AC->create<arith::MaxUIOp>(loc, hintBlockSize, advisory)
+                      : advisory;
   }
 
   return hintBlockSize;
@@ -872,8 +873,8 @@ Value WorkDistributionUtils::getWorkersPerNode(OpBuilder &builder, Location loc,
     return arts::createConstantIndex(builder, loc, clamped);
   }
 
-  if (auto module = parallelEdt ? parallelEdt->getParentOfType<ModuleOp>()
-                                : ModuleOp();
+  if (auto module =
+          parallelEdt ? parallelEdt->getParentOfType<ModuleOp>() : ModuleOp();
       auto staticWorkersPerNode = getStaticRuntimeWorkersPerNode(module)) {
     return arts::createConstantIndex(builder, loc, *staticWorkersPerNode);
   }
@@ -909,8 +910,8 @@ Value WorkDistributionUtils::getTotalWorkers(OpBuilder &builder, Location loc,
   if (auto workers = getExplicitWorkerCount(parallelEdt))
     return arts::createConstantIndex(builder, loc, *workers);
 
-  if (auto module = parallelEdt ? parallelEdt->getParentOfType<ModuleOp>()
-                                : ModuleOp();
+  if (auto module =
+          parallelEdt ? parallelEdt->getParentOfType<ModuleOp>() : ModuleOp();
       auto staticTotalWorkers =
           getStaticRuntimeTotalWorkers(module, parallelEdt)) {
     return arts::createConstantIndex(builder, loc, *staticTotalWorkers);
@@ -945,8 +946,8 @@ Value WorkDistributionUtils::getDispatchWorkerCount(OpBuilder &builder,
   if (auto workers = getExplicitWorkerCount(parallelEdt))
     return arts::createConstantIndex(builder, loc, *workers);
 
-  if (auto module = parallelEdt ? parallelEdt->getParentOfType<ModuleOp>()
-                                : ModuleOp();
+  if (auto module =
+          parallelEdt ? parallelEdt->getParentOfType<ModuleOp>() : ModuleOp();
       auto staticDispatchWorkers =
           getStaticRuntimeDispatchWorkers(module, parallelEdt)) {
     return arts::createConstantIndex(builder, loc, *staticDispatchWorkers);
@@ -956,7 +957,8 @@ Value WorkDistributionUtils::getDispatchWorkerCount(OpBuilder &builder,
       parallelEdt.getConcurrency() == EdtConcurrency::internode
           ? RuntimeQueryKind::totalNodes
           : RuntimeQueryKind::totalWorkers;
-  Value workerCount = RuntimeQueryOp::create(builder, loc, queryKind).getResult();
+  Value workerCount =
+      RuntimeQueryOp::create(builder, loc, queryKind).getResult();
   return castToIndexType(builder, loc, workerCount);
 }
 
@@ -998,9 +1000,8 @@ Value WorkDistributionUtils::getForDispatchWorkerCount(
           AC->castToIndex(workersPerNode, loc));
     }
 
-    int64_t colWorkersConst =
-        chooseColumnWorkersForPattern(*totalWorkersConst, workersPerNodeConst,
-                                      depPattern);
+    int64_t colWorkersConst = chooseColumnWorkersForPattern(
+        *totalWorkersConst, workersPerNodeConst, depPattern);
     int64_t rowWorkersConst =
         std::max<int64_t>(1, *totalWorkersConst / colWorkersConst);
 

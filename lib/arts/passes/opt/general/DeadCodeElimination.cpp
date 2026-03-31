@@ -25,10 +25,7 @@
 #define GEN_PASS_DEF_DEADCODEELIMINATION
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/Dialect.h"
-#include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/RemovalUtils.h"

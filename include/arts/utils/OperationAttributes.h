@@ -101,6 +101,7 @@ constexpr StringLiteral PostDbRefined = "post_db_refined";
 constexpr StringLiteral CriticalPathDistance = "critical_path_distance";
 constexpr StringLiteral AffinityDb = "affinity_db";
 constexpr StringLiteral ReductionStrategy = "arts.reduction_strategy";
+constexpr StringLiteral SpatialDims = "spatial_dims";
 constexpr StringLiteral NarrowableDep = "narrowable_dep";
 constexpr StringLiteral ContractKindKey = "contract_kind";
 } // namespace Contract
@@ -163,7 +164,8 @@ getDbStaticOuterShape(Operation *op) {
   return readI64ArrayAttr(op, AttrNames::Operation::DbStaticOuterShape);
 }
 
-inline std::optional<SmallVector<int64_t, 4>> getDbStaticOuterShape(Value value) {
+inline std::optional<SmallVector<int64_t, 4>>
+getDbStaticOuterShape(Value value) {
   return value ? getDbStaticOuterShape(value.getDefiningOp()) : std::nullopt;
 }
 
@@ -611,7 +613,7 @@ inline void inheritPatternAttrs(Operation *source, Operation *dest) {
       setPatternRevision(dest, *revision);
 }
 
-/// Full implementation in OperationAttributes.cpp.
+/// Full implementation in PartitioningHeuristics.cpp.
 /// Use only when the destination preserves the same loop semantics/identity as
 /// the source. Structural rewrites that create a new iteration space should
 /// restamp the specific attrs they still mean instead of cloning all metadata.

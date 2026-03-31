@@ -23,9 +23,7 @@
 #define GEN_PASS_DEF_DBLOWERING
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "arts/transforms/db/DbLayoutStrategy.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
@@ -123,8 +121,8 @@ static void normalizeBlockHaloAcquireSlice(ArtsCodegen *AC, DbAcquireOp acquire,
 
   SmallVector<Value, 4> offsets, sizes;
   convertElementSliceToBlockSlice(AC->getBuilder(), loc, dimElementOffsets,
-                                  dimElementSizes, dimBlockSpans, dimTotalBlocks,
-                                  offsets, sizes);
+                                  dimElementSizes, dimBlockSpans,
+                                  dimTotalBlocks, offsets, sizes);
   SmallVector<Value, 4> mergedOffsets, mergedSizes;
   mergeNormalizedBlockSlice(AC->getBuilder(), loc, acquire.getOffsets(),
                             acquire.getSizes(), outerSizes, offsets, sizes,
@@ -268,8 +266,7 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
     if (auto dbRefOp = dyn_cast<DbRefOp>(userOp)) {
       SmallVector<Value> dbRefIndices(dbRefOp.getIndices().begin(),
                                       dbRefOp.getIndices().end());
-      auto originalMemrefType =
-          cast<MemRefType>(dbRefOp.getResult().getType());
+      auto originalMemrefType = cast<MemRefType>(dbRefOp.getResult().getType());
       auto createCastedMemref = [&](Location loc) -> Value {
         Value llvmPtr = getLLVMPtr(newPtr, dbRefIndices, loc);
         auto loadedLlvmPtr =

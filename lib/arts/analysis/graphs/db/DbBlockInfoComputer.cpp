@@ -211,9 +211,8 @@ LogicalResult DbBlockInfoComputer::computeBlockInfo(DbAcquireNode *node,
           bool loopSizeDependsOnOffset =
               blockOffset && ValueAnalysis::dependsOn(loopSize, blockOffset);
           bool loopOffsetIsLocalZero =
-              loopOffset &&
-              ValueAnalysis::isZeroConstant(
-                  ValueAnalysis::stripNumericCasts(loopOffset));
+              loopOffset && ValueAnalysis::isZeroConstant(
+                                ValueAnalysis::stripNumericCasts(loopOffset));
 
           if (loopSizeDependsOnOffset)
             useLoopSize = true;
@@ -435,8 +434,8 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromHints(
     node->setOriginalBounds(std::make_pair(partitionOffset, partitionSize));
 
   std::optional<unsigned> partitionDim =
-      PartitionBoundsAnalyzer::getPartitionOffsetDim(
-          node, partitionOffset, /*requireLeading=*/false);
+      PartitionBoundsAnalyzer::getPartitionOffsetDim(node, partitionOffset,
+                                                     /*requireLeading=*/false);
   if (!partitionDim)
     partitionDim = node->getPartitionFacts().inferSingleMappedDim();
   if (!partitionDim) {

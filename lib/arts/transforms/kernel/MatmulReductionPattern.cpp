@@ -90,12 +90,10 @@ enum class ReductionKind {
   Unknown,
   FAdd, /// sum += A*B (float)
   IAdd, /// sum += A*B (integer)
-  FMul, /// product *= A*B (float, future)
-  IMul, /// product *= A*B (integer, future)
 };
 
 static bool isFloatReduction(ReductionKind kind) {
-  return kind == ReductionKind::FAdd || kind == ReductionKind::FMul;
+  return kind == ReductionKind::FAdd;
 }
 
 static Value getOrCreateZero(OpBuilder &b, Location loc, Type ty) {

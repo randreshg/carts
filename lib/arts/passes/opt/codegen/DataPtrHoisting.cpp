@@ -31,7 +31,6 @@
 #define GEN_PASS_DEF_DATAPTRHOISTING
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -40,14 +39,15 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/OpDefinition.h"
+#include "mlir/Pass/Pass.h"
 #include "polygeist/Ops.h"
 
 #include "arts/Dialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/BlockedAccessUtils.h"
-#include "arts/utils/LoopUtils.h"
 #include "arts/utils/LoopInvarianceUtils.h"
+#include "arts/utils/LoopUtils.h"
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(data_ptr_hoisting);
@@ -137,7 +137,8 @@ static bool rewriteBlockedNeighborLocalIndices(Operation *op, scf::ForOp loop,
 
 static bool matchGreaterThanConstIcmp(Value cond, Value value,
                                       int64_t threshold) {
-  auto cmp = ValueAnalysis::stripNumericCasts(cond).getDefiningOp<arith::CmpIOp>();
+  auto cmp =
+      ValueAnalysis::stripNumericCasts(cond).getDefiningOp<arith::CmpIOp>();
   if (!cmp)
     return false;
 
@@ -150,19 +151,23 @@ static bool matchGreaterThanConstIcmp(Value cond, Value value,
   switch (cmp.getPredicate()) {
   case arith::CmpIPredicate::ugt:
   case arith::CmpIPredicate::sgt:
-    return rhsConst && ValueAnalysis::areValuesEquivalent(lhs, normalizedValue) &&
+    return rhsConst &&
+           ValueAnalysis::areValuesEquivalent(lhs, normalizedValue) &&
            *rhsConst >= threshold;
   case arith::CmpIPredicate::uge:
   case arith::CmpIPredicate::sge:
-    return rhsConst && ValueAnalysis::areValuesEquivalent(lhs, normalizedValue) &&
+    return rhsConst &&
+           ValueAnalysis::areValuesEquivalent(lhs, normalizedValue) &&
            *rhsConst > threshold;
   case arith::CmpIPredicate::ult:
   case arith::CmpIPredicate::slt:
-    return lhsConst && ValueAnalysis::areValuesEquivalent(rhs, normalizedValue) &&
+    return lhsConst &&
+           ValueAnalysis::areValuesEquivalent(rhs, normalizedValue) &&
            *lhsConst >= threshold;
   case arith::CmpIPredicate::ule:
   case arith::CmpIPredicate::sle:
-    return lhsConst && ValueAnalysis::areValuesEquivalent(rhs, normalizedValue) &&
+    return lhsConst &&
+           ValueAnalysis::areValuesEquivalent(rhs, normalizedValue) &&
            *lhsConst > threshold;
   default:
     return false;
@@ -208,8 +213,9 @@ static bool getSingleHopOffsetThreshold(scf::ForOp loop, int64_t &threshold) {
   return true;
 }
 
-static bool matchBlockedNeighborCarryIndex(Value value, scf::ForOp loop,
-                                           BlockedNeighborCarryPattern &pattern) {
+static bool
+matchBlockedNeighborCarryIndex(Value value, scf::ForOp loop,
+                               BlockedNeighborCarryPattern &pattern) {
   pattern = {};
   value = ValueAnalysis::stripNumericCasts(value);
 
@@ -217,7 +223,8 @@ static bool matchBlockedNeighborCarryIndex(Value value, scf::ForOp loop,
     Value trueValue = ValueAnalysis::stripNumericCasts(select.getTrueValue());
     Value falseValue = ValueAnalysis::stripNumericCasts(select.getFalseValue());
     if (ValueAnalysis::isZeroConstant(trueValue) &&
-        !ValueAnalysis::dependsOn(select.getCondition(), loop.getInductionVar())) {
+        !ValueAnalysis::dependsOn(select.getCondition(),
+                                  loop.getInductionVar())) {
       pattern.forceZeroCond = select.getCondition();
       pattern.forceZeroWhenTrue = true;
       value = falseValue;
@@ -274,7 +281,8 @@ static bool matchBlockedNeighborCarryIndex(Value value, scf::ForOp loop,
     return false;
   if (baseGlobalIndex && !isLoopInvariant(loop, baseGlobalIndex))
     return false;
-  if (pattern.blockBaseOffset && !isLoopInvariant(loop, pattern.blockBaseOffset))
+  if (pattern.blockBaseOffset &&
+      !isLoopInvariant(loop, pattern.blockBaseOffset))
     return false;
   if (pattern.clampMax && !isLoopInvariant(loop, pattern.clampMax))
     return false;
@@ -381,8 +389,8 @@ static Value buildLoopInvariantI1Not(OpBuilder &builder, Location loc,
   return builder.create<arith::XOrIOp>(loc, cond, trueConst);
 }
 
-static Value buildLoopInvariantI1And(OpBuilder &builder, Location loc, Value lhs,
-                                     Value rhs) {
+static Value buildLoopInvariantI1And(OpBuilder &builder, Location loc,
+                                     Value lhs, Value rhs) {
   if (!lhs)
     return rhs;
   if (!rhs)
@@ -397,8 +405,9 @@ static Value buildGuardedDepPtrLoad(OpBuilder &builder, Location loc,
                                     DepGepOp depGep, ArrayRef<Value> indices,
                                     Value guard, Value fallbackPtr);
 
-static Value buildNormalizedForceZeroCond(OpBuilder &builder, Location loc,
-                                          const BlockedNeighborCarryPattern &pattern) {
+static Value
+buildNormalizedForceZeroCond(OpBuilder &builder, Location loc,
+                             const BlockedNeighborCarryPattern &pattern) {
   if (!pattern.forceZeroCond)
     return Value();
   if (pattern.forceZeroWhenTrue)
@@ -406,12 +415,13 @@ static Value buildNormalizedForceZeroCond(OpBuilder &builder, Location loc,
   return buildLoopInvariantI1Not(builder, loc, pattern.forceZeroCond);
 }
 
-static Value buildBlockedNeighborCenterIndex(OpBuilder &builder, Location loc,
-                                             const BlockedNeighborCarryPattern &pattern,
-                                             Value zero) {
+static Value
+buildBlockedNeighborCenterIndex(OpBuilder &builder, Location loc,
+                                const BlockedNeighborCarryPattern &pattern,
+                                Value zero) {
   Value baseGlobal = pattern.baseGlobalIndex
-                         ? ValueAnalysis::ensureIndexType(pattern.baseGlobalIndex,
-                                                          builder, loc)
+                         ? ValueAnalysis::ensureIndexType(
+                               pattern.baseGlobalIndex, builder, loc)
                          : zero;
   Value blockSize =
       ValueAnalysis::ensureIndexType(pattern.blockSize, builder, loc);
@@ -438,14 +448,16 @@ static Value buildBlockedNeighborCenterIndex(OpBuilder &builder, Location loc,
   return centerIndex;
 }
 
-static bool canHoistBlockedNeighborCacheAcross(
-    scf::ForOp loop, int varyingIndex, ArrayRef<Value> indices,
-    const BlockedNeighborCarryPattern &pattern) {
+static bool
+canHoistBlockedNeighborCacheAcross(scf::ForOp loop, int varyingIndex,
+                                   ArrayRef<Value> indices,
+                                   const BlockedNeighborCarryPattern &pattern) {
   auto invariantTo = [&](Value value) {
     return !value || isLoopInvariant(loop, value);
   };
 
-  if (!invariantTo(pattern.baseGlobalIndex) || !invariantTo(pattern.blockSize) ||
+  if (!invariantTo(pattern.baseGlobalIndex) ||
+      !invariantTo(pattern.blockSize) ||
       !invariantTo(pattern.blockBaseOffset) || !invariantTo(pattern.clampMax) ||
       !invariantTo(pattern.forceZeroCond))
     return false;
@@ -459,9 +471,10 @@ static bool canHoistBlockedNeighborCacheAcross(
   return true;
 }
 
-static scf::ForOp findBlockedNeighborCacheHoistLoop(
-    scf::ForOp loop, int varyingIndex, ArrayRef<Value> indices,
-    const BlockedNeighborCarryPattern &pattern) {
+static scf::ForOp
+findBlockedNeighborCacheHoistLoop(scf::ForOp loop, int varyingIndex,
+                                  ArrayRef<Value> indices,
+                                  const BlockedNeighborCarryPattern &pattern) {
   scf::ForOp hoistLoop = loop;
   for (Operation *parent = loop->getParentOp(); parent;
        parent = parent->getParentOp()) {
@@ -482,7 +495,8 @@ static bool materializeBlockedNeighborPtrCache(LLVM::LoadOp loadOp,
   if (!depGep)
     return false;
 
-  SmallVector<Value> indices(depGep.getIndices().begin(), depGep.getIndices().end());
+  SmallVector<Value> indices(depGep.getIndices().begin(),
+                             depGep.getIndices().end());
   if (indices.empty())
     return false;
 
@@ -494,7 +508,8 @@ static bool materializeBlockedNeighborPtrCache(LLVM::LoadOp loadOp,
       return false;
     varyingIndex = static_cast<int>(it.index());
   }
-  if (varyingIndex < 0 || static_cast<size_t>(varyingIndex + 1) != indices.size())
+  if (varyingIndex < 0 ||
+      static_cast<size_t>(varyingIndex + 1) != indices.size())
     return false;
 
   BlockedNeighborCarryPattern pattern;
@@ -515,16 +530,18 @@ static bool materializeBlockedNeighborPtrCache(LLVM::LoadOp loadOp,
   Value blockSize =
       ValueAnalysis::ensureIndexType(pattern.blockSize, beforeLoop, loc);
   Value baseGlobal = pattern.baseGlobalIndex
-                         ? ValueAnalysis::ensureIndexType(pattern.baseGlobalIndex,
-                                                          beforeLoop, loc)
+                         ? ValueAnalysis::ensureIndexType(
+                               pattern.baseGlobalIndex, beforeLoop, loc)
                          : zero;
   Value centerIndex =
       buildBlockedNeighborCenterIndex(beforeLoop, loc, pattern, zero);
   if (!blockSize || !centerIndex)
     return false;
 
-  Value centerDiv = beforeLoop.create<arith::DivUIOp>(loc, baseGlobal, blockSize);
-  Value blockStart = beforeLoop.create<arith::MulIOp>(loc, centerDiv, blockSize);
+  Value centerDiv =
+      beforeLoop.create<arith::DivUIOp>(loc, baseGlobal, blockSize);
+  Value blockStart =
+      beforeLoop.create<arith::MulIOp>(loc, centerDiv, blockSize);
 
   SmallVector<Value> centerIndices(indices.begin(), indices.end());
   centerIndices.back() = centerIndex;
@@ -542,7 +559,8 @@ static bool materializeBlockedNeighborPtrCache(LLVM::LoadOp loadOp,
     if (normalizedForceZeroCond) {
       Value notSingle =
           buildLoopInvariantI1Not(beforeLoop, loc, normalizedForceZeroCond);
-      canUseNeg = buildLoopInvariantI1And(beforeLoop, loc, canUseNeg, notSingle);
+      canUseNeg =
+          buildLoopInvariantI1And(beforeLoop, loc, canUseNeg, notSingle);
     }
     negPtr = buildGuardedDepPtrLoad(beforeLoop, loc, depGep, negIndices,
                                     canUseNeg, centerPtr);
@@ -561,27 +579,31 @@ static bool materializeBlockedNeighborPtrCache(LLVM::LoadOp loadOp,
     if (normalizedForceZeroCond) {
       Value notSingle =
           buildLoopInvariantI1Not(beforeLoop, loc, normalizedForceZeroCond);
-      canUsePos = buildLoopInvariantI1And(beforeLoop, loc, canUsePos, notSingle);
+      canUsePos =
+          buildLoopInvariantI1And(beforeLoop, loc, canUsePos, notSingle);
     }
     posPtr = buildGuardedDepPtrLoad(beforeLoop, loc, depGep, posIndices,
                                     canUsePos, centerPtr);
   }
 
   OpBuilder atLoad(loadOp);
-  Value loopIv = ValueAnalysis::ensureIndexType(loop.getInductionVar(), atLoad, loc);
+  Value loopIv =
+      ValueAnalysis::ensureIndexType(loop.getInductionVar(), atLoad, loc);
   Value candidateGlobal = atLoad.create<arith::AddIOp>(loc, baseGlobal, loopIv);
-  Value nextBlockStart = atLoad.create<arith::AddIOp>(loc, blockStart, blockSize);
-  Value belowCond = atLoad.create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::ult, candidateGlobal, blockStart);
+  Value nextBlockStart =
+      atLoad.create<arith::AddIOp>(loc, blockStart, blockSize);
+  Value belowCond = atLoad.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult,
+                                                 candidateGlobal, blockStart);
   Value aboveCond = atLoad.create<arith::CmpIOp>(
       loc, arith::CmpIPredicate::uge, candidateGlobal, nextBlockStart);
-  Value localIndex = atLoad.create<arith::SubIOp>(loc, candidateGlobal, blockStart);
+  Value localIndex =
+      atLoad.create<arith::SubIOp>(loc, candidateGlobal, blockStart);
   Value negLocal = atLoad.create<arith::AddIOp>(loc, localIndex, blockSize);
   Value posLocal = atLoad.create<arith::SubIOp>(loc, localIndex, blockSize);
-  Value selectedLocal = atLoad.create<arith::SelectOp>(loc, belowCond, negLocal,
-                                                       localIndex);
-  selectedLocal = atLoad.create<arith::SelectOp>(loc, aboveCond, posLocal,
-                                                 selectedLocal);
+  Value selectedLocal =
+      atLoad.create<arith::SelectOp>(loc, belowCond, negLocal, localIndex);
+  selectedLocal =
+      atLoad.create<arith::SelectOp>(loc, aboveCond, posLocal, selectedLocal);
 
   Value selectedPtr = centerPtr;
   Type ptrType = loadOp.getType();
@@ -605,16 +627,17 @@ static bool materializeBlockedNeighborPtrCache(LLVM::LoadOp loadOp,
   return true;
 }
 
-static Value buildNeighborCandidateIndex(OpBuilder &builder, Location loc,
-                                         const NeighborCarryIndexPattern &pattern,
-                                         int64_t adjust) {
+static Value
+buildNeighborCandidateIndex(OpBuilder &builder, Location loc,
+                            const NeighborCarryIndexPattern &pattern,
+                            int64_t adjust) {
   Value result = pattern.baseIndex;
   if (adjust > 0) {
-    result =
-        builder.create<arith::AddIOp>(loc, result, createIndexConst(builder, loc, adjust));
+    result = builder.create<arith::AddIOp>(
+        loc, result, createIndexConst(builder, loc, adjust));
   } else if (adjust < 0) {
-    result = builder.create<arith::SubIOp>(loc, result,
-                                           createIndexConst(builder, loc, -adjust));
+    result = builder.create<arith::SubIOp>(
+        loc, result, createIndexConst(builder, loc, -adjust));
   }
   if (pattern.clampMax)
     result = builder.create<arith::MinUIOp>(loc, result, pattern.clampMax);
@@ -628,10 +651,9 @@ static Value buildNeighborCandidateIndex(OpBuilder &builder, Location loc,
 
 static Value buildDepPtrLoad(OpBuilder &builder, Location loc, DepGepOp depGep,
                              ArrayRef<Value> indices) {
-  auto newDepGep =
-      builder.create<DepGepOp>(loc, depGep.getGuid().getType(),
-                               depGep.getPtr().getType(), depGep.getDepStruct(),
-                               depGep.getOffset(), indices, depGep.getStrides());
+  auto newDepGep = builder.create<DepGepOp>(
+      loc, depGep.getGuid().getType(), depGep.getPtr().getType(),
+      depGep.getDepStruct(), depGep.getOffset(), indices, depGep.getStrides());
   return builder.create<LLVM::LoadOp>(loc, depGep.getPtr().getType(),
                                       newDepGep.getPtr());
 }
@@ -717,7 +739,8 @@ static std::optional<MemoryAccessInfo> getMemoryAccessInfo(Operation *op) {
 
   if (auto dynLoad = dyn_cast<polygeist::DynLoadOp>(op)) {
     info.memref = dynLoad.getMemref();
-    info.indices.assign(dynLoad.getIndices().begin(), dynLoad.getIndices().end());
+    info.indices.assign(dynLoad.getIndices().begin(),
+                        dynLoad.getIndices().end());
     info.sizes.assign(dynLoad.getSizes().begin(), dynLoad.getSizes().end());
     info.resultType = dynLoad.getType();
     info.isLoad = true;
@@ -726,7 +749,8 @@ static std::optional<MemoryAccessInfo> getMemoryAccessInfo(Operation *op) {
 
   if (auto dynStore = dyn_cast<polygeist::DynStoreOp>(op)) {
     info.memref = dynStore.getMemref();
-    info.indices.assign(dynStore.getIndices().begin(), dynStore.getIndices().end());
+    info.indices.assign(dynStore.getIndices().begin(),
+                        dynStore.getIndices().end());
     info.sizes.assign(dynStore.getSizes().begin(), dynStore.getSizes().end());
     info.storedValue = dynStore.getValue();
     info.isStore = true;
@@ -750,7 +774,8 @@ static bool matchBlockedNeighborLocalIndex(Value value, scf::ForOp loop,
     return false;
 
   Value matchedBase;
-  if (!matchLoopInvariantAddend(rem.getLhs(), loop.getInductionVar(), matchedBase))
+  if (!matchLoopInvariantAddend(rem.getLhs(), loop.getInductionVar(),
+                                matchedBase))
     return false;
   if (!baseGlobalIndex || !matchedBase)
     return !baseGlobalIndex && !matchedBase;
@@ -771,7 +796,8 @@ static bool rewriteBlockedNeighborLocalIndices(Operation *op, scf::ForOp loop,
   SmallVector<Value> newIndices(memInfo.indices.begin(), memInfo.indices.end());
   bool changed = false;
   for (Value &index : newIndices) {
-    if (!matchBlockedNeighborLocalIndex(index, loop, baseGlobalIndex, blockSize))
+    if (!matchBlockedNeighborLocalIndex(index, loop, baseGlobalIndex,
+                                        blockSize))
       continue;
     index = replacementIndex;
     changed = true;
@@ -782,7 +808,8 @@ static bool rewriteBlockedNeighborLocalIndices(Operation *op, scf::ForOp loop,
   OpBuilder builder(op);
   Location loc = op->getLoc();
   if (auto load = dyn_cast<memref::LoadOp>(op)) {
-    auto newLoad = builder.create<memref::LoadOp>(loc, memInfo.memref, newIndices);
+    auto newLoad =
+        builder.create<memref::LoadOp>(loc, memInfo.memref, newIndices);
     load.replaceAllUsesWith(newLoad.getResult());
     load.erase();
     return true;
@@ -801,8 +828,8 @@ static bool rewriteBlockedNeighborLocalIndices(Operation *op, scf::ForOp loop,
     return true;
   }
   if (auto dynStore = dyn_cast<polygeist::DynStoreOp>(op)) {
-    builder.create<polygeist::DynStoreOp>(loc, memInfo.storedValue, memInfo.memref,
-                                          newIndices, memInfo.sizes);
+    builder.create<polygeist::DynStoreOp>(
+        loc, memInfo.storedValue, memInfo.memref, newIndices, memInfo.sizes);
     dynStore.erase();
     return true;
   }
@@ -868,8 +895,8 @@ static bool matchSingleBlockBlockedDepIndex(Value value, scf::ForOp loop,
 static Value stripInvariantZeroFallback(Value value, scf::ForOp loop) {
   value = ValueAnalysis::stripNumericCasts(value);
   auto select = value.getDefiningOp<arith::SelectOp>();
-  if (!select || ValueAnalysis::dependsOn(select.getCondition(),
-                                          loop.getInductionVar()))
+  if (!select ||
+      ValueAnalysis::dependsOn(select.getCondition(), loop.getInductionVar()))
     return value;
 
   Value trueValue = ValueAnalysis::stripNumericCasts(select.getTrueValue());
@@ -950,8 +977,8 @@ static bool materializeSingleBlockBlockedDepView(LLVM::LoadOp loadOp,
       continue;
     for (Operation *user :
          llvm::make_early_inc_range(ptr2memref.getResult().getUsers()))
-      rewriteBlockedNeighborLocalIndices(user, loop, baseGlobalIndex,
-                                         blockSize, replacementIndex);
+      rewriteBlockedNeighborLocalIndices(user, loop, baseGlobalIndex, blockSize,
+                                         replacementIndex);
   }
 
   loadOp.erase();
@@ -982,7 +1009,8 @@ static bool getSelectOperands(Value value, Value &cond, Value &trueValue,
 }
 
 static bool matchLowerBoundaryCond(Value cond, Value candidate) {
-  auto cmp = ValueAnalysis::stripNumericCasts(cond).getDefiningOp<arith::CmpIOp>();
+  auto cmp =
+      ValueAnalysis::stripNumericCasts(cond).getDefiningOp<arith::CmpIOp>();
   if (!cmp)
     return false;
 
@@ -1005,7 +1033,8 @@ static bool matchLowerBoundaryCond(Value cond, Value candidate) {
 }
 
 static bool matchUpperBoundaryCond(Value cond, Value candidate) {
-  auto cmp = ValueAnalysis::stripNumericCasts(cond).getDefiningOp<arith::CmpIOp>();
+  auto cmp =
+      ValueAnalysis::stripNumericCasts(cond).getDefiningOp<arith::CmpIOp>();
   if (!cmp)
     return false;
 
@@ -1068,7 +1097,8 @@ static bool matchBoundaryIndexPattern(Value value, scf::ForOp loop,
                                          innerTrue, innerFalse, chain);
   }
 
-  if (!matched && getSelectOperands(outerTrue, innerCond, innerTrue, innerFalse)) {
+  if (!matched &&
+      getSelectOperands(outerTrue, innerCond, innerTrue, innerFalse)) {
     matched = tryBuildBoundaryIndexChain(outerCond, outerFalse, innerCond,
                                          innerTrue, innerFalse, chain);
   }
@@ -1077,9 +1107,8 @@ static bool matchBoundaryIndexPattern(Value value, scf::ForOp loop,
     return false;
 
   int64_t offset = 0;
-  Value baseExpr =
-      ValueAnalysis::stripConstantOffset(ValueAnalysis::stripNumericCasts(chain.midValue),
-                                         &offset);
+  Value baseExpr = ValueAnalysis::stripConstantOffset(
+      ValueAnalysis::stripNumericCasts(chain.midValue), &offset);
   if (!baseExpr || !ValueAnalysis::dependsOn(baseExpr, loop.getInductionVar()))
     return false;
 
@@ -1163,10 +1192,9 @@ matchLoopWindowAccess(Operation *op, scf::ForOp loop) {
     pattern.partitionDim = indexedValue.index();
 
     BoundarySelectChain ptrChain;
-    if (ptr2memref &&
-        matchBoundaryPointerChain(ptr2memref.getSource(),
-                                  indexPattern.chain.lowCond,
-                                  indexPattern.chain.highCond, ptrChain)) {
+    if (ptr2memref && matchBoundaryPointerChain(
+                          ptr2memref.getSource(), indexPattern.chain.lowCond,
+                          indexPattern.chain.highCond, ptrChain)) {
       if (!isLoopInvariant(loop, ptrChain.lowValue) ||
           !isLoopInvariant(loop, ptrChain.midValue) ||
           !isLoopInvariant(loop, ptrChain.highValue))
@@ -1189,7 +1217,8 @@ matchLoopWindowAccess(Operation *op, scf::ForOp loop) {
   return std::nullopt;
 }
 
-static Value chooseBoundaryRegionValue(BoundaryLoopRegion region, int64_t offset,
+static Value chooseBoundaryRegionValue(BoundaryLoopRegion region,
+                                       int64_t offset,
                                        const BoundarySelectChain &chain) {
   switch (region) {
   case BoundaryLoopRegion::Left:
@@ -1212,14 +1241,12 @@ static bool rewriteLoopWindowAccess(Operation *op, scf::ForOp loop,
   Location loc = op->getLoc();
   OpBuilder builder(op);
 
-  Value selectedIndex =
-      chooseBoundaryRegionValue(region, pattern.indexPattern.offset,
-                                pattern.indexPattern.chain);
+  Value selectedIndex = chooseBoundaryRegionValue(
+      region, pattern.indexPattern.offset, pattern.indexPattern.chain);
   Value newMemref = pattern.memInfo.memref;
   if (pattern.hasBoundaryPtrChain) {
-    Value selectedPtr =
-        chooseBoundaryRegionValue(region, pattern.indexPattern.offset,
-                                  pattern.ptrChain);
+    Value selectedPtr = chooseBoundaryRegionValue(
+        region, pattern.indexPattern.offset, pattern.ptrChain);
     newMemref = builder.create<polygeist::Pointer2MemrefOp>(
         loc, pattern.ptr2memref.getType(), selectedPtr);
   }
@@ -1277,7 +1304,8 @@ static scf::ForOp cloneLoopWindowSegment(OpBuilder &builder, scf::ForOp loop,
   return newLoop;
 }
 
-static int rewriteLoopWindowSegment(scf::ForOp loop, BoundaryLoopRegion region) {
+static int rewriteLoopWindowSegment(scf::ForOp loop,
+                                    BoundaryLoopRegion region) {
   SmallVector<Operation *> ops;
   for (Operation &op : loop.getBody()->without_terminator())
     ops.push_back(&op);
@@ -1296,8 +1324,8 @@ static bool versionLoopWindowAccesses(scf::ForOp loop, int &rewrittenAccesses) {
 
   auto stepConst = ValueAnalysis::tryFoldConstantIndex(loop.getStep());
   if (!stepConst || *stepConst != 1) {
-    ARTS_DEBUG("versionLoopWindowAccesses: skip loop " << loop
-                                                       << " due to non-unit step");
+    ARTS_DEBUG("versionLoopWindowAccesses: skip loop "
+               << loop << " due to non-unit step");
     return false;
   }
 
@@ -1314,18 +1342,18 @@ static bool versionLoopWindowAccesses(scf::ForOp loop, int &rewrittenAccesses) {
     const LoopWindowAccessPattern &pattern = *patternOr;
     if (!canonicalBase)
       canonicalBase = pattern.indexPattern.baseExpr;
-    else if (!ValueAnalysis::areValuesEquivalent(canonicalBase,
-                                                 pattern.indexPattern.baseExpr)) {
+    else if (!ValueAnalysis::areValuesEquivalent(
+                 canonicalBase, pattern.indexPattern.baseExpr)) {
       ARTS_DEBUG("versionLoopWindowAccesses: canonical base mismatch in loop "
                  << loop << " current=" << canonicalBase
                  << " incoming=" << pattern.indexPattern.baseExpr);
       continue;
     }
 
-    leftBand =
-        std::max<int64_t>(leftBand, std::max<int64_t>(0, -pattern.indexPattern.offset));
-    rightBand =
-        std::max<int64_t>(rightBand, std::max<int64_t>(0, pattern.indexPattern.offset));
+    leftBand = std::max<int64_t>(
+        leftBand, std::max<int64_t>(0, -pattern.indexPattern.offset));
+    rightBand = std::max<int64_t>(
+        rightBand, std::max<int64_t>(0, pattern.indexPattern.offset));
     matchedAccesses++;
   }
 
@@ -1347,15 +1375,16 @@ static bool versionLoopWindowAccesses(scf::ForOp loop, int &rewrittenAccesses) {
   }
 
   Value leftUb = builder.create<arith::AddIOp>(loc, lb, leftSize);
-  Value remainingAfterLeft = builder.create<arith::SubIOp>(loc, tripCount, leftSize);
+  Value remainingAfterLeft =
+      builder.create<arith::SubIOp>(loc, tripCount, leftSize);
 
   Value middleSize = remainingAfterLeft;
   if (rightBand > 0) {
     Value rightBandVal = createIndexConst(builder, loc, rightBand);
     Value hasInterior = builder.create<arith::CmpIOp>(
         loc, arith::CmpIPredicate::ugt, remainingAfterLeft, rightBandVal);
-    Value trimmed = builder.create<arith::SubIOp>(loc, remainingAfterLeft,
-                                                  rightBandVal);
+    Value trimmed =
+        builder.create<arith::SubIOp>(loc, remainingAfterLeft, rightBandVal);
     middleSize =
         builder.create<arith::SelectOp>(loc, hasInterior, trimmed, zero);
   }
@@ -1365,10 +1394,10 @@ static bool versionLoopWindowAccesses(scf::ForOp loop, int &rewrittenAccesses) {
   scf::ForOp leftLoop = cloneLoopWindowSegment(builder, loop, lb, leftUb);
   scf::ForOp middleLoop =
       cloneLoopWindowSegment(builder, loop, leftUb, middleUb);
-  scf::ForOp rightLoop =
-      cloneLoopWindowSegment(builder, loop, middleUb, ub);
+  scf::ForOp rightLoop = cloneLoopWindowSegment(builder, loop, middleUb, ub);
 
-  rewrittenAccesses += rewriteLoopWindowSegment(leftLoop, BoundaryLoopRegion::Left);
+  rewrittenAccesses +=
+      rewriteLoopWindowSegment(leftLoop, BoundaryLoopRegion::Left);
   rewrittenAccesses +=
       rewriteLoopWindowSegment(middleLoop, BoundaryLoopRegion::Middle);
   rewrittenAccesses +=
@@ -1383,7 +1412,8 @@ static bool materializeNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop) {
   if (!depGep)
     return false;
 
-  SmallVector<Value> indices(depGep.getIndices().begin(), depGep.getIndices().end());
+  SmallVector<Value> indices(depGep.getIndices().begin(),
+                             depGep.getIndices().end());
   if (indices.empty())
     return false;
 
@@ -1395,7 +1425,8 @@ static bool materializeNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop) {
       return false;
     varyingIndex = static_cast<int>(it.index());
   }
-  if (varyingIndex < 0 || static_cast<size_t>(varyingIndex + 1) != indices.size())
+  if (varyingIndex < 0 ||
+      static_cast<size_t>(varyingIndex + 1) != indices.size())
     return false;
 
   NeighborCarryIndexPattern pattern;
@@ -1422,7 +1453,8 @@ static bool materializeNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop) {
     if (pattern.forceZeroCond) {
       Value notSingle =
           buildLoopInvariantI1Not(beforeLoop, loc, pattern.forceZeroCond);
-      canUseNeg = buildLoopInvariantI1And(beforeLoop, loc, canUseNeg, notSingle);
+      canUseNeg =
+          buildLoopInvariantI1And(beforeLoop, loc, canUseNeg, notSingle);
     }
     negPtr = buildGuardedDepPtrLoad(beforeLoop, loc, depGep, negIndices,
                                     canUseNeg, centerPtr);
@@ -1440,7 +1472,8 @@ static bool materializeNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop) {
     if (pattern.forceZeroCond) {
       Value notSingle =
           buildLoopInvariantI1Not(beforeLoop, loc, pattern.forceZeroCond);
-      canUsePos = buildLoopInvariantI1And(beforeLoop, loc, canUsePos, notSingle);
+      canUsePos =
+          buildLoopInvariantI1And(beforeLoop, loc, canUsePos, notSingle);
     }
     posPtr = buildGuardedDepPtrLoad(beforeLoop, loc, depGep, posIndices,
                                     canUsePos, centerPtr);
@@ -1536,8 +1569,7 @@ void DataPtrHoistingPass::runOnOperation() {
 
   int hoistedCount = 0, divRemHoisted = 0, dbPtrHoisted = 0, m2rHoisted = 0,
       singleBlockDepViews = 0, cachedNeighborPtrLoads = 0,
-      versionedWindowLoops = 0,
-      versionedWindowAccesses = 0;
+      versionedWindowLoops = 0, versionedWindowAccesses = 0;
   module.walk([&](func::FuncOp funcOp) {
     bool isEdt = funcOp.getName().starts_with("__arts_edt_");
     SmallVector<std::pair<LLVM::LoadOp, scf::ForOp>> loadsToHoist;
@@ -1720,8 +1752,7 @@ void DataPtrHoistingPass::runOnOperation() {
   ARTS_INFO("Hoisted " << dbPtrHoisted
                        << " datablock pointer loads out of loops");
   ARTS_INFO("Hoisted " << m2rHoisted << " pointer2memref ops out of loops");
-  ARTS_INFO("Recovered " << singleBlockDepViews
-                         << " single-block dep views");
+  ARTS_INFO("Recovered " << singleBlockDepViews << " single-block dep views");
   ARTS_INFO("Hoisted " << divRemHoisted << " div/rem ops out of loops");
   ARTS_INFO("Cached " << cachedNeighborPtrLoads
                       << " loop-window dep pointer loads");

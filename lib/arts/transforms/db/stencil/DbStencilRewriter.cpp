@@ -26,9 +26,9 @@
 ///==========================================================================///
 
 #include "arts/transforms/db/stencil/DbStencilRewriter.h"
-#include "arts/transforms/db/DbPartitionWindowUtils.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
+#include "arts/transforms/db/DbPartitionWindowUtils.h"
 #include "arts/transforms/db/stencil/DbStencilIndexer.h"
 #include "arts/utils/BlockedAccessUtils.h"
 #include "arts/utils/DbUtils.h"
@@ -142,8 +142,7 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
     if (auto blockShape = getStencilBlockShape(acquire.getOperation());
         blockShape && !blockShape->empty()) {
       for (int64_t dim : *blockShape)
-        ownerBlockShape.push_back(
-            arts::createConstantIndex(builder, loc, dim));
+        ownerBlockShape.push_back(arts::createConstantIndex(builder, loc, dim));
     }
   if (!ownerBlockShape.empty())
     ownerBlockSpan = ownerBlockShape.front();
@@ -212,8 +211,7 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
         isAligned)
       singleBlock = true;
     if (!singleBlock &&
-        arts::isValueBoundedByBlockSpan(ownedSpan, planBlockSize) &&
-        isAligned)
+        arts::isValueBoundedByBlockSpan(ownedSpan, planBlockSize) && isAligned)
       singleBlock = true;
     bool hasExplicitBlockHaloContract =
         hasSupportedBlockHalo(acquire.getOperation());
@@ -249,18 +247,17 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   /// base-offset contract to start at the owner tile.
   SmallVector<Value> ownedElementOffsets;
   SmallVector<Value> ownedElementSizes;
-  unsigned ownerRank = std::max<size_t>(plan.innerSizes.size(),
-                                        ownerBlockShape.size());
+  unsigned ownerRank =
+      std::max<size_t>(plan.innerSizes.size(), ownerBlockShape.size());
   ownedElementOffsets.reserve(ownerRank);
   ownedElementSizes.reserve(ownerRank);
   for (unsigned d = 0; d < ownerRank; ++d) {
     ownedElementOffsets.push_back(zero);
-    Value dimSize =
-        d < ownerBlockShape.size()
-            ? ownerBlockShape[d]
-            : (d < plan.innerSizes.size() && plan.innerSizes[d]
-                   ? plan.innerSizes[d]
-                   : one);
+    Value dimSize = d < ownerBlockShape.size()
+                        ? ownerBlockShape[d]
+                        : (d < plan.innerSizes.size() && plan.innerSizes[d]
+                               ? plan.innerSizes[d]
+                               : one);
     if (!dimSize.getType().isIndex())
       dimSize = builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
                                                    dimSize);
@@ -474,11 +471,10 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
       if (!blockSize)
         blockSize = one;
       blockSize = builder.create<arith::MaxUIOp>(loc, blockSize, one);
-      Value totalExtent =
-          (d < plan.outerSizes.size() && plan.outerSizes[d])
-              ? builder.create<arith::MulIOp>(loc, plan.outerSizes[d],
-                                              blockSize)
-              : Value();
+      Value totalExtent = (d < plan.outerSizes.size() && plan.outerSizes[d])
+                              ? builder.create<arith::MulIOp>(
+                                    loc, plan.outerSizes[d], blockSize)
+                              : Value();
 
       Value elemOff = (d < offsets.size() && offsets[d]) ? offsets[d] : zero;
       Value elemSz = (d < sizes.size() && sizes[d]) ? sizes[d] : one;
@@ -494,11 +490,11 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
         unsigned ownerDim = resolveOwnerDim(d);
         auto applyHaloWindow = [&](int64_t minOffset, int64_t maxOffset) {
           ExpandedElementWindow expanded = expandElementWindowWithHalo(
-              builder, loc, elemOff, elemSz, totalExtent, minOffset,
-              maxOffset);
+              builder, loc, elemOff, elemSz, totalExtent, minOffset, maxOffset);
           elemOff = expanded.offset;
           elemSz = expanded.size;
-          if (canUpdateElementSlice && ownerDim < updatedElementOffsets.size() &&
+          if (canUpdateElementSlice &&
+              ownerDim < updatedElementOffsets.size() &&
               ownerDim < updatedElementSizes.size()) {
             updatedElementOffsets[ownerDim] = elemOff;
             updatedElementSizes[ownerDim] = elemSz;
@@ -731,9 +727,9 @@ void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
   for (unsigned d = 0; d < nPartDims; ++d)
     startBlocks.push_back(zero);
 
-  auto indexer = createBlockIndexer(
-      plan.blockSizes, startBlocks, plan.outerRank(), plan.innerRank(),
-      plan.partitionedDims, allocSingleBlock);
+  auto indexer = createBlockIndexer(plan.blockSizes, startBlocks,
+                                    plan.outerRank(), plan.innerRank(),
+                                    plan.partitionedDims, allocSingleBlock);
 
   bool hasLoadStoreUsers = false;
   for (Operation *user : refUsers) {
@@ -758,9 +754,9 @@ void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
     }
 
     LocalizedIndices localized =
-        globalIndices.empty() ? LocalizedIndices()
-                              : indexer->localize(globalIndices, builder,
-                                                  userLoc);
+        globalIndices.empty()
+            ? LocalizedIndices()
+            : indexer->localize(globalIndices, builder, userLoc);
     if (localized.dbRefIndices.empty())
       localized.dbRefIndices.push_back(arts::createZeroIndex(builder, userLoc));
     if (localized.memrefIndices.empty())
@@ -775,8 +771,8 @@ void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
     /// Create new load/store with transformed inner indices
     if (access->isRead()) {
       auto load = cast<memref::LoadOp>(user);
-      auto newLoad = builder.create<memref::LoadOp>(
-          userLoc, newRef, localized.memrefIndices);
+      auto newLoad = builder.create<memref::LoadOp>(userLoc, newRef,
+                                                    localized.memrefIndices);
       load.replaceAllUsesWith(newLoad.getResult());
     } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
       builder.create<memref::StoreOp>(userLoc, store.getValue(), newRef,
@@ -791,9 +787,9 @@ void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
     builder.setInsertionPoint(ref);
     SmallVector<Value> indices(ref.getIndices().begin(),
                                ref.getIndices().end());
-    LocalizedIndices localized =
-        indices.empty() ? LocalizedIndices()
-                        : indexer->localize(indices, builder, loc);
+    LocalizedIndices localized = indices.empty()
+                                     ? LocalizedIndices()
+                                     : indexer->localize(indices, builder, loc);
     if (localized.dbRefIndices.empty())
       localized.dbRefIndices.push_back(zero);
     auto newRef = builder.create<DbRefOp>(loc, newElementType, newSource,

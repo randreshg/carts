@@ -13,17 +13,13 @@
 /// 5. Creates arts.omp_dep with proper indices and sizes
 ///===----------------------------------------------------------------------===///
 
-#define GEN_PASS_DEF_RAISEMEMREFDIMENSIONALITY
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "mlir/Pass/Pass.h"
-#include "arts/passes/Passes.h.inc"
-#include "arts/Dialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
-#include "arts/utils/RemovalUtils.h"
 #include "arts/utils/LoopUtils.h"
+#include "arts/utils/RemovalUtils.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -31,26 +27,28 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
-#include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
-#include "mlir/Pass/Pass.h"
+#include "mlir/Interfaces/CallInterfaces.h"
 #include "polygeist/Ops.h"
 #include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
 #include <optional>
 
-ARTS_DEBUG_SETUP(raise_memref_dimensionality);
-
 using namespace mlir;
 using namespace mlir::arts;
 using namespace mlir::omp;
+
+#define GEN_PASS_DEF_RAISEMEMREFDIMENSIONALITY
+#include "arts/passes/Passes.h.inc"
+
+ARTS_DEBUG_SETUP(raise_memref_dimensionality);
 
 namespace {
 
@@ -227,7 +225,8 @@ static bool isInnerWrapperOfInlinedPattern(Value alloc) {
 ///===----------------------------------------------------------------------===///
 
 struct RaiseMemRefDimensionalityPass
-    : public impl::RaiseMemRefDimensionalityBase<RaiseMemRefDimensionalityPass> {
+    : public ::impl::RaiseMemRefDimensionalityBase<
+          RaiseMemRefDimensionalityPass> {
 
   void runOnOperation() override;
 
@@ -260,8 +259,7 @@ private:
   bool recordUnsupportedUse(Operation *op, llvm::Twine reason);
   bool hasOnlySupportedUseGraph(const AllocPattern &pattern);
   bool hasOnlySupportedUses(Value value, DenseSet<Value> &visitedValues);
-  bool hasOnlySupportedSubviewUses(Value value,
-                                   DenseSet<Value> &visitedValues);
+  bool hasOnlySupportedSubviewUses(Value value, DenseSet<Value> &visitedValues);
 
   /// Phase 3: Transform the pattern
   LogicalResult transformPattern(AllocPattern &pattern, OpBuilder &builder);
@@ -371,12 +369,11 @@ void RaiseMemRefDimensionalityPass::runOnOperation() {
     unsupportedUseOp = nullptr;
     unsupportedUseReason.clear();
     if (!hasOnlySupportedUseGraph(*patternOpt)) {
-      ARTS_ERROR("RaiseMemRefDimensionality matched a nested memref pattern "
-                 "but cannot rewrite the full use graph"
-                 << (unsupportedUseReason.empty()
-                         ? ""
-                         : (": " + unsupportedUseReason))
-                 << " at " << patternOpt->rootAlloc.getLoc());
+      ARTS_ERROR(
+          "RaiseMemRefDimensionality matched a nested memref pattern "
+          "but cannot rewrite the full use graph"
+          << (unsupportedUseReason.empty() ? "" : (": " + unsupportedUseReason))
+          << " at " << patternOpt->rootAlloc.getLoc());
       if (unsupportedUseOp) {
         ARTS_ERROR("Unsupported use that blocks nested memref raising: "
                    << unsupportedUseOp->getName() << " at "
@@ -865,10 +862,9 @@ void RaiseMemRefDimensionalityPass::collectOmpDependencies(
   }
 }
 
-std::optional<DepInfo>
-RaiseMemRefDimensionalityPass::analyzeDepVar(Value depVar, AllocPattern &pattern,
-                                       omp::TaskOp taskOp, unsigned depIdx,
-                                       omp::ClauseTaskDepend depMode) {
+std::optional<DepInfo> RaiseMemRefDimensionalityPass::analyzeDepVar(
+    Value depVar, AllocPattern &pattern, omp::TaskOp taskOp, unsigned depIdx,
+    omp::ClauseTaskDepend depMode) {
   DepInfo info;
   info.taskOp = taskOp;
   info.depVarIndex = depIdx;
@@ -910,7 +906,8 @@ RaiseMemRefDimensionalityPass::analyzeDepVar(Value depVar, AllocPattern &pattern
         info.sizes.push_back(val);
       else {
         auto attr = cast<IntegerAttr>(size.get<Attribute>());
-        info.sizes.push_back(arts::createConstantIndex(builder, loc, attr.getInt()));
+        info.sizes.push_back(
+            arts::createConstantIndex(builder, loc, attr.getInt()));
       }
     }
 
@@ -941,9 +938,10 @@ RaiseMemRefDimensionalityPass::analyzeDepVar(Value depVar, AllocPattern &pattern
 
               /// Element-level dependency, sizes = [1, 1, ...]
               for (size_t d = 0; d < info.indices.size(); ++d)
-                info.sizes.push_back(arts::createConstantIndex(builder, loc, 1));
-              info.indices = arts::clampDepIndices(info.source, info.indices, builder,
-                                             loc, pattern.dimensions);
+                info.sizes.push_back(
+                    arts::createConstantIndex(builder, loc, 1));
+              info.indices = arts::clampDepIndices(
+                  info.source, info.indices, builder, loc, pattern.dimensions);
 
               info.opsToRemove = traceResult->chainOps;
               info.opsToRemove.push_back(store);
@@ -971,8 +969,8 @@ RaiseMemRefDimensionalityPass::analyzeDepVar(Value depVar, AllocPattern &pattern
     /// Element-level sizes
     for (size_t d = 0; d < info.indices.size(); ++d)
       info.sizes.push_back(arts::createConstantIndex(builder, loc, 1));
-    info.indices = arts::clampDepIndices(info.source, info.indices, builder, loc,
-                                   pattern.dimensions);
+    info.indices = arts::clampDepIndices(info.source, info.indices, builder,
+                                         loc, pattern.dimensions);
 
     info.opsToRemove = traceResult->chainOps;
     info.opsToRemove.push_back(loadOp);
@@ -1001,7 +999,8 @@ RaiseMemRefDimensionalityPass::analyzeDepVar(Value depVar, AllocPattern &pattern
 ///===----------------------------------------------------------------------===///
 
 std::optional<TraceResult>
-RaiseMemRefDimensionalityPass::traceToPattern(Value val, AllocPattern &pattern) {
+RaiseMemRefDimensionalityPass::traceToPattern(Value val,
+                                              AllocPattern &pattern) {
   TraceResult result;
 
   /// Direct match to root or any alias wrapper that resolves to it.
@@ -1036,7 +1035,8 @@ RaiseMemRefDimensionalityPass::traceToPattern(Value val, AllocPattern &pattern) 
 }
 
 std::optional<TraceResult>
-RaiseMemRefDimensionalityPass::traceValueToPattern(Value val, AllocPattern &pattern) {
+RaiseMemRefDimensionalityPass::traceValueToPattern(Value val,
+                                                   AllocPattern &pattern) {
   /// For element values (not memrefs), we look at the defining load
   if (auto loadOp = val.getDefiningOp<memref::LoadOp>()) {
     auto memResult = traceToPattern(loadOp.getMemref(), pattern);
@@ -1169,12 +1169,11 @@ bool RaiseMemRefDimensionalityPass::hasOnlySupportedSubviewUses(
 
     if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
       if (loadOp.getMemref() != value) {
-        return recordUnsupportedUse(user,
-                                    "unsupported subview alias user");
+        return recordUnsupportedUse(user, "unsupported subview alias user");
       }
       if (!isa<MemRefType>(loadOp.getType())) {
-        return recordUnsupportedUse(loadOp,
-                                    "unsupported scalar escape from subview result");
+        return recordUnsupportedUse(
+            loadOp, "unsupported scalar escape from subview result");
       }
       if (!hasOnlySupportedSubviewUses(loadOp.getResult(), visitedValues))
         return false;
@@ -1205,9 +1204,8 @@ bool RaiseMemRefDimensionalityPass::hasOnlySupportedSubviewUses(
       continue;
 
     return recordUnsupportedUse(
-        user,
-        llvm::Twine("unsupported subview/dependency escape through ") +
-            user->getName().getStringRef());
+        user, llvm::Twine("unsupported subview/dependency escape through ") +
+                  user->getName().getStringRef());
   }
 
   return true;
@@ -1235,8 +1233,7 @@ bool RaiseMemRefDimensionalityPass::hasOnlySupportedUses(
 
     if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
       if (loadOp.getMemref() != value) {
-        return recordUnsupportedUse(user,
-                                    "unsupported memref load alias user");
+        return recordUnsupportedUse(user, "unsupported memref load alias user");
       }
 
       if (isa<MemRefType>(loadOp.getType()) &&
@@ -1250,7 +1247,8 @@ bool RaiseMemRefDimensionalityPass::hasOnlySupportedUses(
         continue;
       }
 
-      if (storeOp.getValue() == value && isMemrefContainerValue(storeOp.getMemref())) {
+      if (storeOp.getValue() == value &&
+          isMemrefContainerValue(storeOp.getMemref())) {
         if (!hasOnlySupportedUses(storeOp.getMemref(), visitedValues))
           return false;
         continue;
@@ -1274,9 +1272,8 @@ bool RaiseMemRefDimensionalityPass::hasOnlySupportedUses(
 
     if (isa<CallOpInterface, func::ReturnOp>(user)) {
       return recordUnsupportedUse(
-          user,
-          llvm::Twine("unsupported opaque escape through ") +
-              user->getName().getStringRef());
+          user, llvm::Twine("unsupported opaque escape through ") +
+                    user->getName().getStringRef());
     }
 
     return recordUnsupportedUse(
@@ -1292,17 +1289,20 @@ bool RaiseMemRefDimensionalityPass::hasOnlySupportedUses(
 /// Phase 3: Transformation
 ///===----------------------------------------------------------------------===///
 
-LogicalResult RaiseMemRefDimensionalityPass::transformPattern(AllocPattern &pattern,
-                                                        OpBuilder &builder) {
+LogicalResult
+RaiseMemRefDimensionalityPass::transformPattern(AllocPattern &pattern,
+                                                OpBuilder &builder) {
   OpBuilder::InsertionGuard guard(builder);
-  DominanceInfo localDomInfo(pattern.rootAlloc.getDefiningOp()->getParentOfType<func::FuncOp>());
+  DominanceInfo localDomInfo(
+      pattern.rootAlloc.getDefiningOp()->getParentOfType<func::FuncOp>());
   Operation *insertPoint = pattern.rootAlloc.getDefiningOp();
 
   /// 1. Hoist all dimensions
   pattern.hoistedDimensions.clear();
 
   for (Value dim : pattern.dimensions) {
-    Value hoisted = ValueAnalysis::traceValueToDominating(dim, insertPoint, builder, localDomInfo, pattern.rootAlloc.getLoc());
+    Value hoisted = ValueAnalysis::traceValueToDominating(
+        dim, insertPoint, builder, localDomInfo, pattern.rootAlloc.getLoc());
     if (!hoisted) {
       ARTS_DEBUG("  FAILED: Cannot hoist dimension " << dim);
       ARTS_DEBUG(
@@ -1361,7 +1361,8 @@ LogicalResult RaiseMemRefDimensionalityPass::transformPattern(AllocPattern &patt
 #ifndef NDEBUG
     for (Value idx : access.indices) {
       if (auto *defOp = idx.getDefiningOp())
-        assert(!toRemove.count(defOp) && "index references op marked for removal");
+        assert(!toRemove.count(defOp) &&
+               "index references op marked for removal");
     }
 #endif
 
@@ -1478,9 +1479,8 @@ void RaiseMemRefDimensionalityPass::rewriteTracedMemref2PointerUses(
     return;
 
   SmallVector<polygeist::Memref2PointerOp> memrefToPointers;
-  parentFunc.walk([&](polygeist::Memref2PointerOp op) {
-    memrefToPointers.push_back(op);
-  });
+  parentFunc.walk(
+      [&](polygeist::Memref2PointerOp op) { memrefToPointers.push_back(op); });
 
   for (polygeist::Memref2PointerOp m2p : memrefToPointers) {
     auto sourceType = dyn_cast<MemRefType>(m2p.getSource().getType());
@@ -1489,7 +1489,8 @@ void RaiseMemRefDimensionalityPass::rewriteTracedMemref2PointerUses(
 
     /// Wrapper allocas themselves are just stack slots that hold memref values.
     /// Rewriting them to the canonical N-D allocation would change semantics.
-    if (sourceType.getRank() == 0 && isa<MemRefType>(sourceType.getElementType()))
+    if (sourceType.getRank() == 0 &&
+        isa<MemRefType>(sourceType.getElementType()))
       continue;
 
     auto traceResult = traceToPattern(m2p.getSource(), pattern);
@@ -1538,9 +1539,10 @@ void RaiseMemRefDimensionalityPass::rewriteTracedMemref2PointerUses(
 ///
 LogicalResult
 RaiseMemRefDimensionalityPass::transformSimpleWrapper(AllocPattern &pattern,
-                                                OpBuilder &builder) {
+                                                      OpBuilder &builder) {
   OpBuilder::InsertionGuard guard(builder);
-  DominanceInfo localDomInfo(pattern.rootAlloc.getDefiningOp()->getParentOfType<func::FuncOp>());
+  DominanceInfo localDomInfo(
+      pattern.rootAlloc.getDefiningOp()->getParentOfType<func::FuncOp>());
 
   Value actualAlloc = pattern.rootAlloc;
   Value wrapper = pattern.wrapperAlloca;
@@ -1550,7 +1552,8 @@ RaiseMemRefDimensionalityPass::transformSimpleWrapper(AllocPattern &pattern,
   pattern.hoistedDimensions.clear();
 
   for (Value dim : pattern.dimensions) {
-    Value hoisted = ValueAnalysis::traceValueToDominating(dim, insertPoint, builder, localDomInfo, pattern.rootAlloc.getLoc());
+    Value hoisted = ValueAnalysis::traceValueToDominating(
+        dim, insertPoint, builder, localDomInfo, pattern.rootAlloc.getLoc());
     if (!hoisted) {
       ARTS_DEBUG("  FAILED: Cannot hoist dimension " << dim);
       return failure();
@@ -1641,7 +1644,7 @@ Value RaiseMemRefDimensionalityPass::createCanonicalAllocation(
 }
 
 void RaiseMemRefDimensionalityPass::transferMetadata(Operation *oldAlloc,
-                                               Operation *newAlloc) {
+                                                     Operation *newAlloc) {
   if (!oldAlloc || !newAlloc)
     return;
   for (auto namedAttr : oldAlloc->getAttrs()) {
@@ -1938,7 +1941,8 @@ void RaiseMemRefDimensionalityPass::handleDeallocations(
 ///===----------------------------------------------------------------------===///
 
 /// Check if maybeLoad is a load operation from the given source value
-bool RaiseMemRefDimensionalityPass::isLoadFromValue(Value maybeLoad, Value source) {
+bool RaiseMemRefDimensionalityPass::isLoadFromValue(Value maybeLoad,
+                                                    Value source) {
   if (auto loadOp = maybeLoad.getDefiningOp<memref::LoadOp>()) {
     return loadOp.getMemref() == source;
   }
@@ -1967,11 +1971,9 @@ bool RaiseMemRefDimensionalityPass::isLoadFromValue(Value maybeLoad, Value sourc
 /// directly.
 ///
 /// Returns true if a complete pattern was found (reaching scalar element type)
-bool RaiseMemRefDimensionalityPass::extractNestedAllocations(Value storedVal,
-                                                       Operation *loopOp,
-                                                       memref::StoreOp storeOp,
-                                                       AllocPattern &pattern,
-                                                       int depth) {
+bool RaiseMemRefDimensionalityPass::extractNestedAllocations(
+    Value storedVal, Operation *loopOp, memref::StoreOp storeOp,
+    AllocPattern &pattern, int depth) {
   /// Limit recursion depth to prevent infinite loops
   constexpr int MAX_DEPTH = 10;
   if (depth >= MAX_DEPTH) {
@@ -2068,7 +2070,7 @@ bool RaiseMemRefDimensionalityPass::extractNestedAllocations(Value storedVal,
 
 /// Check if a value traces back to the root allocation through a chain of loads
 bool RaiseMemRefDimensionalityPass::tracesToRootAlloc(Value val,
-                                                AllocPattern &pattern) {
+                                                      AllocPattern &pattern) {
   constexpr int MAX_TRACE_DEPTH = 10;
   Value current = val;
 

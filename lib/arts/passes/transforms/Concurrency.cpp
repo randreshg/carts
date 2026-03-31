@@ -22,12 +22,11 @@
 #define GEN_PASS_DEF_CONCURRENCY
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
+#include "mlir/Pass/Pass.h"
 #include <algorithm>
 
 #include "arts/utils/Debug.h"

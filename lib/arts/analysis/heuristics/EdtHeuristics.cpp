@@ -4,8 +4,8 @@
 /// EDT heuristic policy: distribution strategy and kind selection.
 ///==========================================================================///
 
-#include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/heuristics/EdtHeuristics.h"
+#include "arts/analysis/AnalysisManager.h"
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -31,11 +31,13 @@ ParallelismDecision EdtHeuristics::resolveParallelism() const {
 
 std::optional<WorkerConfig>
 EdtHeuristics::resolveWorkerConfig(EdtOp parallelEdt) const {
-  return DistributionHeuristics::resolveWorkerConfig(parallelEdt, &getMachine());
+  return DistributionHeuristics::resolveWorkerConfig(parallelEdt,
+                                                     &getMachine());
 }
 
-DistributionStrategy EdtHeuristics::resolveLoweringStrategy(
-    EdtOp originalParallel, ForOp forOp) const {
+DistributionStrategy
+EdtHeuristics::resolveLoweringStrategy(EdtOp originalParallel,
+                                       ForOp forOp) const {
   return DistributionHeuristics::resolveLoweringStrategy(originalParallel,
                                                          forOp);
 }

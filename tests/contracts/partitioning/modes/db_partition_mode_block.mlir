@@ -4,5 +4,5 @@
 // CHECK: arts.db_alloc[{{.*}}<block>, <uniform>{{.*}}]
 // CHECK: arts.db_acquire[<in>] ({{.*}}) partitioning(<block>, offsets[
 // CHECK-SAME: ]), offsets[
-// CHECK: arts.db_acquire[<inout>] ({{.*}}) partitioning(<block>, offsets[
+// CHECK: arts.db_acquire[<out>] ({{.*}}) partitioning(<block>, offsets[
 // CHECK-SAME: ]), offsets[

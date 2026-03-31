@@ -8,18 +8,18 @@
 #include "mlir/Dialect/Affine/Transforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
+#include "mlir/Dialect/Async/IR/Async.h"
 #include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/Math/IR/Math.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/OpenMP/OpenMPDialect.h"
-#include "mlir/Dialect/Async/IR/Async.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/InitAllDialects.h"
 #include "mlir/InitAllExtensions.h"
@@ -222,81 +222,81 @@ enum class PipelineStep {
 
 static cl::opt<PipelineStep> Pipeline(
     "pipeline", cl::desc("Stop pipeline at specified step:"),
-    cl::values(clEnumValN(PipelineStep::RaiseMemRefDimensionality,
-                          "raise-memref-dimensionality",
-                          "Stop after the raise-memref-dimensionality pipeline step"),
-               clEnumValN(PipelineStep::RaiseMemRefDimensionality,
-                          "canonicalize-memrefs",
-                          "Alias for raise-memref-dimensionality"),
-               clEnumValN(PipelineStep::CollectMetadata, "collect-metadata",
-                          "Stop after collecting metadata"),
-               clEnumValN(PipelineStep::InitialCleanup, "initial-cleanup",
-                          "Stop after initial cleanup and simplification"),
-               clEnumValN(PipelineStep::OpenMPToArts, "openmp-to-arts",
-                          "Stop after OpenMP to Arts conversion"),
-               clEnumValN(PipelineStep::PatternPipeline, "pattern-pipeline",
-                          "Stop after the dedicated semantic pattern pipeline"),
-               clEnumValN(PipelineStep::EdtTransforms, "edt-transforms",
-                          "Stop after EDT transformations"),
-               clEnumValN(PipelineStep::CreateDbs, "create-dbs",
-                          "Stop after DB creation"),
-               clEnumValN(PipelineStep::DbOpt, "db-opt",
-                          "Stop after DB optimization"),
-               clEnumValN(PipelineStep::EdtOpt, "edt-opt",
-                          "Stop after EDT optimizations"),
-               clEnumValN(PipelineStep::Concurrency, "concurrency",
-                          "Stop after concurrency"),
-               clEnumValN(PipelineStep::EdtDistribution, "edt-distribution",
-                          "Stop after EDT distribution and for lowering"),
-               clEnumValN(PipelineStep::ConcurrencyOpt, "concurrency-opt",
-                          "Stop after concurrency optimization"),
-               clEnumValN(PipelineStep::Epochs, "epochs",
-                          "Stop after Epochs creation"),
-               clEnumValN(PipelineStep::PreLowering, "pre-lowering",
-                          "Stop after pre-lowering transformations"),
-               clEnumValN(PipelineStep::ArtsToLLVM, "arts-to-llvm",
-                          "Stop after Arts to LLVM conversion"),
-               clEnumValN(PipelineStep::Complete, "complete",
-                          "Run complete pipeline (default)")),
+    cl::values(
+        clEnumValN(PipelineStep::RaiseMemRefDimensionality,
+                   "raise-memref-dimensionality",
+                   "Stop after the raise-memref-dimensionality pipeline step"),
+        clEnumValN(PipelineStep::RaiseMemRefDimensionality,
+                   "canonicalize-memrefs",
+                   "Alias for raise-memref-dimensionality"),
+        clEnumValN(PipelineStep::CollectMetadata, "collect-metadata",
+                   "Stop after collecting metadata"),
+        clEnumValN(PipelineStep::InitialCleanup, "initial-cleanup",
+                   "Stop after initial cleanup and simplification"),
+        clEnumValN(PipelineStep::OpenMPToArts, "openmp-to-arts",
+                   "Stop after OpenMP to Arts conversion"),
+        clEnumValN(PipelineStep::PatternPipeline, "pattern-pipeline",
+                   "Stop after the dedicated semantic pattern pipeline"),
+        clEnumValN(PipelineStep::EdtTransforms, "edt-transforms",
+                   "Stop after EDT transformations"),
+        clEnumValN(PipelineStep::CreateDbs, "create-dbs",
+                   "Stop after DB creation"),
+        clEnumValN(PipelineStep::DbOpt, "db-opt", "Stop after DB optimization"),
+        clEnumValN(PipelineStep::EdtOpt, "edt-opt",
+                   "Stop after EDT optimizations"),
+        clEnumValN(PipelineStep::Concurrency, "concurrency",
+                   "Stop after concurrency"),
+        clEnumValN(PipelineStep::EdtDistribution, "edt-distribution",
+                   "Stop after EDT distribution and for lowering"),
+        clEnumValN(PipelineStep::ConcurrencyOpt, "concurrency-opt",
+                   "Stop after concurrency optimization"),
+        clEnumValN(PipelineStep::Epochs, "epochs",
+                   "Stop after Epochs creation"),
+        clEnumValN(PipelineStep::PreLowering, "pre-lowering",
+                   "Stop after pre-lowering transformations"),
+        clEnumValN(PipelineStep::ArtsToLLVM, "arts-to-llvm",
+                   "Stop after Arts to LLVM conversion"),
+        clEnumValN(PipelineStep::Complete, "complete",
+                   "Run complete pipeline (default)")),
     cl::init(PipelineStep::Complete));
 
 static cl::opt<PipelineStep> StartFrom(
     "start-from", cl::desc("Resume pipeline from specified step:"),
-    cl::values(clEnumValN(PipelineStep::RaiseMemRefDimensionality,
-                          "raise-memref-dimensionality",
-                          "Start from the raise-memref-dimensionality pipeline step "
-                          "(default)"),
-               clEnumValN(PipelineStep::RaiseMemRefDimensionality,
-                          "canonicalize-memrefs",
-                          "Alias for raise-memref-dimensionality"),
-               clEnumValN(PipelineStep::CollectMetadata, "collect-metadata",
-                          "Start from collecting metadata"),
-               clEnumValN(PipelineStep::InitialCleanup, "initial-cleanup",
-                          "Start from initial cleanup and simplification"),
-               clEnumValN(PipelineStep::OpenMPToArts, "openmp-to-arts",
-                          "Start from OpenMP to Arts conversion"),
-               clEnumValN(PipelineStep::PatternPipeline, "pattern-pipeline",
-                          "Start from the semantic pattern pipeline"),
-               clEnumValN(PipelineStep::EdtTransforms, "edt-transforms",
-                          "Start from EDT transformations"),
-               clEnumValN(PipelineStep::CreateDbs, "create-dbs",
-                          "Start from DB creation"),
-               clEnumValN(PipelineStep::DbOpt, "db-opt",
-                          "Start from DB optimization"),
-               clEnumValN(PipelineStep::EdtOpt, "edt-opt",
-                          "Start from EDT optimizations"),
-               clEnumValN(PipelineStep::Concurrency, "concurrency",
-                          "Start from concurrency"),
-               clEnumValN(PipelineStep::EdtDistribution, "edt-distribution",
-                          "Start from EDT distribution and for lowering"),
-               clEnumValN(PipelineStep::ConcurrencyOpt, "concurrency-opt",
-                          "Start from concurrency optimization"),
-               clEnumValN(PipelineStep::Epochs, "epochs",
-                          "Start from Epochs creation"),
-               clEnumValN(PipelineStep::PreLowering, "pre-lowering",
-                          "Start from pre-lowering transformations"),
-               clEnumValN(PipelineStep::ArtsToLLVM, "arts-to-llvm",
-                          "Start from Arts to LLVM conversion")),
+    cl::values(
+        clEnumValN(PipelineStep::RaiseMemRefDimensionality,
+                   "raise-memref-dimensionality",
+                   "Start from the raise-memref-dimensionality pipeline step "
+                   "(default)"),
+        clEnumValN(PipelineStep::RaiseMemRefDimensionality,
+                   "canonicalize-memrefs",
+                   "Alias for raise-memref-dimensionality"),
+        clEnumValN(PipelineStep::CollectMetadata, "collect-metadata",
+                   "Start from collecting metadata"),
+        clEnumValN(PipelineStep::InitialCleanup, "initial-cleanup",
+                   "Start from initial cleanup and simplification"),
+        clEnumValN(PipelineStep::OpenMPToArts, "openmp-to-arts",
+                   "Start from OpenMP to Arts conversion"),
+        clEnumValN(PipelineStep::PatternPipeline, "pattern-pipeline",
+                   "Start from the semantic pattern pipeline"),
+        clEnumValN(PipelineStep::EdtTransforms, "edt-transforms",
+                   "Start from EDT transformations"),
+        clEnumValN(PipelineStep::CreateDbs, "create-dbs",
+                   "Start from DB creation"),
+        clEnumValN(PipelineStep::DbOpt, "db-opt", "Start from DB optimization"),
+        clEnumValN(PipelineStep::EdtOpt, "edt-opt",
+                   "Start from EDT optimizations"),
+        clEnumValN(PipelineStep::Concurrency, "concurrency",
+                   "Start from concurrency"),
+        clEnumValN(PipelineStep::EdtDistribution, "edt-distribution",
+                   "Start from EDT distribution and for lowering"),
+        clEnumValN(PipelineStep::ConcurrencyOpt, "concurrency-opt",
+                   "Start from concurrency optimization"),
+        clEnumValN(PipelineStep::Epochs, "epochs",
+                   "Start from Epochs creation"),
+        clEnumValN(PipelineStep::PreLowering, "pre-lowering",
+                   "Start from pre-lowering transformations"),
+        clEnumValN(PipelineStep::ArtsToLLVM, "arts-to-llvm",
+                   "Start from Arts to LLVM conversion")),
     cl::init(PipelineStep::RaiseMemRefDimensionality));
 
 static cl::opt<bool> PrintPipelineTokensJSON(
@@ -309,15 +309,15 @@ static cl::opt<bool> PrintPipelineManifestJSON(
     cl::desc("Print pipeline step/pass manifest as JSON and exit"),
     cl::init(false));
 
-static const std::array<llvm::StringLiteral, 8> kRaiseMemRefDimensionalityPasses = {
-    "LowerAffine(func)",
-    "CSE",
-    "ArtsInliner",
-    "PolygeistCanonicalize",
-    "RaiseMemRefDimensionality",
-    "HandleDeps",
-    "DeadCodeElimination",
-    "CSE"};
+static const std::array<llvm::StringLiteral, 8>
+    kRaiseMemRefDimensionalityPasses = {"LowerAffine(func)",
+                                        "CSE",
+                                        "ArtsInliner",
+                                        "PolygeistCanonicalize",
+                                        "RaiseMemRefDimensionality",
+                                        "HandleDeps",
+                                        "DeadCodeElimination",
+                                        "CSE"};
 static const std::array<llvm::StringLiteral, 7> kCollectMetadataPasses = {
     "replaceAffineCFG(func)",
     "RaiseSCFToAffine(func)",
@@ -436,8 +436,8 @@ struct PipelineStepTokenSpec {
 };
 
 static const std::array<PipelineStepTokenSpec, 16> kPipelineStepSpecs = {{
-    {PipelineStep::RaiseMemRefDimensionality, "raise-memref-dimensionality", true, true,
-     true, kRaiseMemRefDimensionalityPasses},
+    {PipelineStep::RaiseMemRefDimensionality, "raise-memref-dimensionality",
+     true, true, true, kRaiseMemRefDimensionalityPasses},
     {PipelineStep::CollectMetadata, "collect-metadata", true, true, true,
      kCollectMetadataPasses},
     {PipelineStep::InitialCleanup, "initial-cleanup", true, true, true,
@@ -571,7 +571,8 @@ static void configureArtsDebugChannels(llvm::StringRef channels) {
   llvm::SmallVector<llvm::StringRef, 8> splitChannels;
   channels.split(splitChannels, ',', -1, false);
 
-  llvm::SmallVector<std::string, 8> ownedChannels;
+  static llvm::SmallVector<std::string, 8> ownedChannels;
+  ownedChannels.clear();
   ownedChannels.reserve(splitChannels.size());
   for (llvm::StringRef channel : splitChannels) {
     llvm::StringRef trimmed = channel.trim();
@@ -869,8 +870,8 @@ void buildPreLoweringPipeline(PassManager &pm, arts::AnalysisManager *AM,
   if (enableContinuation) {
     /// Run scheduling-only EpochOpt for late epochs from ParallelEdtLowering.
     pm.addPass(arts::createEpochOptSchedulingPass(/*amortization=*/true,
-                                                   /*continuation=*/true,
-                                                   /*cpsDriver=*/true));
+                                                  /*continuation=*/true,
+                                                  /*cpsDriver=*/true));
   }
   addCanonicalizeAndCSE(pm);
   pm.addPass(arts::createDbLoweringPass(ArtsIdStride));
@@ -944,12 +945,12 @@ struct PipelineHooks {
 };
 
 /// Configure the pass manager with the optimization passes.
-LogicalResult
-buildPassManager(ModuleOp module, MLIRContext &context,
-                 PipelineStep stopAt = PipelineStep::Complete,
-                 PipelineStep startFrom = PipelineStep::RaiseMemRefDimensionality,
-                 std::unique_ptr<arts::AnalysisManager> *outAM = nullptr,
-                 PipelineHooks *hooks = nullptr) {
+LogicalResult buildPassManager(
+    ModuleOp module, MLIRContext &context,
+    PipelineStep stopAt = PipelineStep::Complete,
+    PipelineStep startFrom = PipelineStep::RaiseMemRefDimensionality,
+    std::unique_ptr<arts::AnalysisManager> *outAM = nullptr,
+    PipelineHooks *hooks = nullptr) {
   int startIndex = pipelineStepIndex(startFrom);
   int stopIndex = pipelineStepIndex(stopAt);
   if (startIndex < 0 || stopIndex < 0) {
@@ -1035,7 +1036,8 @@ buildPassManager(ModuleOp module, MLIRContext &context,
   };
 
   const std::vector<StepSpec> runtimeSteps = {
-      {PipelineStep::RaiseMemRefDimensionality, "Error when raising memref dimensionality",
+      {PipelineStep::RaiseMemRefDimensionality,
+       "Error when raising memref dimensionality",
        [&](PassManager &pm) { buildRaiseMemRefDimensionalityPipeline(pm); }},
       {PipelineStep::CollectMetadata, "Error when collecting metadata",
        [&](PassManager &pm) {

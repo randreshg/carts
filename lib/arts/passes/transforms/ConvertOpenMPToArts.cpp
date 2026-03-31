@@ -33,12 +33,11 @@
 #define GEN_PASS_DEF_CONVERTOPENMPTOARTS
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/Utils.h"
+#include "mlir/Pass/Pass.h"
 /// Others
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -252,9 +251,10 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
       /// All dependencies should be arts.omp_dep
       auto ompDepOp = depVar.getDefiningOp<OmpDepOp>();
       if (!ompDepOp) {
-        ARTS_ERROR("Expected arts.omp_dep for dependency "
-                   << i << ", but got " << *depVar.getDefiningOp()
-                   << ". Make sure RaiseMemRefDimensionality runs before this pass.");
+        ARTS_ERROR(
+            "Expected arts.omp_dep for dependency "
+            << i << ", but got " << *depVar.getDefiningOp()
+            << ". Make sure RaiseMemRefDimensionality runs before this pass.");
         return failure();
       }
 

@@ -23,29 +23,28 @@
 #include "mlir/Support/LLVM.h"
 /// Arts
 #include "arts/Dialect.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/graphs/edt/EdtGraph.h"
-#define GEN_PASS_DEF_EDTALLOCASINKING
-#define GEN_PASS_DEF_EDTSTRUCTURALOPT
-#include "arts/Dialect.h"
-#include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
-#include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 /// Other
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Visitors.h"
-#include "mlir/Pass/Pass.h"
 /// Debug
 #include "arts/utils/Debug.h"
-ARTS_DEBUG_SETUP(edt_structural_opt);
 
 using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
+
+#define GEN_PASS_DEF_EDTALLOCASINKING
+#define GEN_PASS_DEF_EDTSTRUCTURALOPT
+#include "arts/passes/Passes.h.inc"
+
+ARTS_DEBUG_SETUP(edt_structural_opt);
 
 namespace {
 void sinkExternalAllocasInEdt(EdtOp edt) {
@@ -190,7 +189,7 @@ static void processRegionForParallelEdtFusion(Region &region, bool &changed) {
 ///===----------------------------------------------------------------------===///
 namespace {
 struct EdtStructuralOptPass
-    : public impl::EdtStructuralOptBase<EdtStructuralOptPass> {
+    : public ::impl::EdtStructuralOptBase<EdtStructuralOptPass> {
   EdtStructuralOptPass(mlir::arts::AnalysisManager *AM, bool runAnalysis)
       : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
@@ -234,7 +233,7 @@ private:
 };
 
 struct EdtAllocaSinkingPass
-    : public impl::EdtAllocaSinkingBase<EdtAllocaSinkingPass> {
+    : public ::impl::EdtAllocaSinkingBase<EdtAllocaSinkingPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     module.walk([&](EdtOp edt) { sinkExternalAllocasInEdt(edt); });

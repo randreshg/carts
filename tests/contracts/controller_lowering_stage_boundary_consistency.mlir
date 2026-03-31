@@ -9,18 +9,18 @@
 // DB-POLICY: arts.lowering_contract(
 // DB-POLICY-SAME: block_shape[
 // DB-POLICY-SAME: owner_dims = array<i64: 0>, post_db_refined
-// DB-POLICY: arts.db_acquire[<inout>] {{.*}}partitioning(<block>, offsets[
+// DB-POLICY: arts.db_acquire[<out>] {{.*}}partitioning(<block>, offsets[
 // DB-POLICY-SAME: ), offsets[
 
 // EDT-BND-LABEL: func.func @main
 // EDT-BND: arts.epoch attributes {distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32}
 // EDT-BND: arts.db_acquire[<out>] {{.*}}partitioning(<block>, offsets[
 // EDT-BND-SAME: ), offsets[
-// EDT-BND: arts.edt <task> <intranode> route(%{{.*}}) {{.*}}attributes {distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32}
+// EDT-BND: arts.edt <task> <intranode> route(%{{.*}}) {{.*}}attributes {distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [128]}
 
 // EPOCH-BND-LABEL: func.func @main
 // EPOCH-BND: %[[EPOCH:.+]] = arts.create_epoch : i64
-// EPOCH-BND: arts.db_acquire[<inout>] {{.*}}partitioning(<block>, offsets[
+// EPOCH-BND: arts.db_acquire[<out>] {{.*}}partitioning(<block>, offsets[
 // EPOCH-BND-SAME: ), offsets[
 // EPOCH-BND: %[[TASK:.+]] = arts.edt_create({{.*}}) depCount(%{{.*}}) route(%{{.*}}) epoch(%[[EPOCH]] : i64)
 // EPOCH-BND: arts.rec_dep %[[TASK]]

@@ -36,14 +36,13 @@
 #define GEN_PASS_DEF_COLLECTMETADATA
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/metadata/LocationMetadata.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 #include "arts/utils/metadata/MemrefMetadata.h"
 #include "arts/utils/metadata/Metadata.h"
+#include "mlir/Pass/Pass.h"
 
 #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"
@@ -72,7 +71,8 @@ using namespace mlir::arts;
 /// CollectMetadataPass
 ///===----------------------------------------------------------------------===///
 
-struct CollectMetadataPass : public impl::CollectMetadataBase<CollectMetadataPass> {
+struct CollectMetadataPass
+    : public impl::CollectMetadataBase<CollectMetadataPass> {
   CollectMetadataPass() = default;
   CollectMetadataPass(bool exportMetadata, llvm::StringRef metadataFile)
       : CollectMetadataBase() {

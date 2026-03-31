@@ -15,17 +15,16 @@
 
 #define GEN_PASS_DEF_RUNTIMECALLOPT
 #include "arts/Dialect.h"
-#include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
-#include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "arts/codegen/Types.h"
+#include "arts/passes/Passes.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopInvarianceUtils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseMap.h"
 
 ARTS_DEBUG_SETUP(runtime_call_opt);
@@ -64,7 +63,8 @@ static scf::ForOp findHoistTarget(func::CallOp call, DominanceInfo &domInfo) {
   return target;
 }
 
-struct RuntimeCallOptPass : public impl::RuntimeCallOptBase<RuntimeCallOptPass> {
+struct RuntimeCallOptPass
+    : public impl::RuntimeCallOptBase<RuntimeCallOptPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     int hoisted = 0;

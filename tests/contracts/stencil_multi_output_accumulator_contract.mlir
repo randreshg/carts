@@ -5,9 +5,9 @@
 // PATTERN: distribution_pattern = #arts.distribution_pattern<stencil>
 
 // POLICY-DAG: arts.db_acquire[<in>] {{.*}}partitioning(<block>{{.*}}depPattern = #arts.dep_pattern<cross_dim_stencil_3d>{{.*}}distribution_pattern = #arts.distribution_pattern<stencil>
-// POLICY-DAG: arts.db_acquire[<inout>] {{.*}}partitioning(<block>{{.*}}depPattern = #arts.dep_pattern<cross_dim_stencil_3d>{{.*}}distribution_pattern = #arts.distribution_pattern<stencil>
-// POLICY-DAG: arts.epoch attributes {depPattern = #arts.dep_pattern<cross_dim_stencil_3d>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<stencil>
-// POLICY-DAG: arts.edt <task> <intranode> route(%{{.*}}) {{.*}}attributes {depPattern = #arts.dep_pattern<cross_dim_stencil_3d>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<stencil>
+// POLICY-DAG: arts.db_acquire[<out>] {{.*}}partitioning(<block>{{.*}}depPattern = #arts.dep_pattern<cross_dim_stencil_3d>{{.*}}distribution_pattern = #arts.distribution_pattern<stencil>
+// POLICY-DAG: arts.epoch attributes {{{.*}}depPattern = #arts.dep_pattern<cross_dim_stencil_3d>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<stencil>
+// POLICY-DAG: arts.edt <task> <intranode> route(%{{.*}}) {{.*}}attributes {{{.*}}depPattern = #arts.dep_pattern<cross_dim_stencil_3d>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<stencil>
 
 module attributes {llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu"} {
   func.func @main() -> f64 {

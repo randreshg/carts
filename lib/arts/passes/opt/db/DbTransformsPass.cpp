@@ -31,15 +31,14 @@
 #define GEN_PASS_DEF_DBTRANSFORMS
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "arts/transforms/db/transforms/GUIDRangeDetection.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
+#include "mlir/Pass/Pass.h"
 /// Debug
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(db_transforms);

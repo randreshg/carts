@@ -50,7 +50,8 @@ std::unique_ptr<Pass> createEdtStructuralOptPass(AnalysisManager *AM,
                                                  bool runAnalysis);
 std::unique_ptr<Pass> createConcurrencyPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createCreateDbsPass(AnalysisManager *AM);
-std::unique_ptr<Pass> createDbModeTighteningPass(AnalysisManager *AM);
+std::unique_ptr<Pass> createDbModeTighteningPass(AnalysisManager *AM,
+                                                 bool forceInout = false);
 std::unique_ptr<Pass> createDbScratchEliminationPass();
 std::unique_ptr<Pass> createDbPartitioningPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createDbDistributedOwnershipPass(AnalysisManager *AM);

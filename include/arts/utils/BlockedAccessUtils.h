@@ -209,9 +209,8 @@ inline bool isKnownNonNegative(Value value, unsigned depth = 0) {
     return false;
 
   if (auto cond = detail::tryFoldBool(select.getCondition()))
-    return isKnownNonNegative(*cond ? select.getTrueValue()
-                                    : select.getFalseValue(),
-                              depth + 1);
+    return isKnownNonNegative(
+        *cond ? select.getTrueValue() : select.getFalseValue(), depth + 1);
 
   Value trueValue = ValueAnalysis::stripNumericCasts(select.getTrueValue());
   Value falseValue = ValueAnalysis::stripNumericCasts(select.getFalseValue());
@@ -219,9 +218,8 @@ inline bool isKnownNonNegative(Value value, unsigned depth = 0) {
     return isKnownNonNegative(trueValue, depth + 1) &&
            isKnownNonNegative(falseValue, depth + 1);
 
-  auto cmp =
-      ValueAnalysis::stripNumericCasts(select.getCondition()).getDefiningOp<
-          arith::CmpIOp>();
+  auto cmp = ValueAnalysis::stripNumericCasts(select.getCondition())
+                 .getDefiningOp<arith::CmpIOp>();
   if (!cmp)
     return false;
 
@@ -256,9 +254,8 @@ inline bool isKnownNonPositive(Value value, unsigned depth = 0) {
 
   if (auto select = value.getDefiningOp<arith::SelectOp>()) {
     if (auto cond = detail::tryFoldBool(select.getCondition()))
-      return isKnownNonPositive(*cond ? select.getTrueValue()
-                                      : select.getFalseValue(),
-                                depth + 1);
+      return isKnownNonPositive(
+          *cond ? select.getTrueValue() : select.getFalseValue(), depth + 1);
     return isKnownNonPositive(select.getTrueValue(), depth + 1) &&
            isKnownNonPositive(select.getFalseValue(), depth + 1);
   }
@@ -294,9 +291,9 @@ inline bool isValueBoundedByBlockSpan(Value value, Value blockSize,
 
   if (auto selectOp = value.getDefiningOp<arith::SelectOp>()) {
     if (auto cond = detail::tryFoldBool(selectOp.getCondition())) {
-      return isValueBoundedByBlockSpan(
-          *cond ? selectOp.getTrueValue() : selectOp.getFalseValue(),
-          blockSize, depth + 1);
+      return isValueBoundedByBlockSpan(*cond ? selectOp.getTrueValue()
+                                             : selectOp.getFalseValue(),
+                                       blockSize, depth + 1);
     }
     return isValueBoundedByBlockSpan(selectOp.getTrueValue(), blockSize,
                                      depth + 1) &&
@@ -404,8 +401,7 @@ inline bool isAlignedToBlock(Value offset, Value blockSize) {
   if (auto mul = off.getDefiningOp<arith::MulIOp>()) {
     Value lhs = ValueAnalysis::stripClampOne(mul.getLhs());
     Value rhs = ValueAnalysis::stripClampOne(mul.getRhs());
-    if (ValueAnalysis::sameValue(lhs, bs) ||
-        ValueAnalysis::sameValue(rhs, bs))
+    if (ValueAnalysis::sameValue(lhs, bs) || ValueAnalysis::sameValue(rhs, bs))
       return true;
   }
 

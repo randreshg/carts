@@ -13,9 +13,7 @@
 #define GEN_PASS_DEF_VERIFYPRELOWERED
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "mlir/Pass/Pass.h"
 
 using namespace mlir;
@@ -26,7 +24,8 @@ struct VerifyPreLoweredPass
   void runOnOperation() override {
     bool found = false;
     getOperation().walk([&](Operation *op) {
-      if (isa<arts::EdtOp, arts::ForOp, arts::EpochOp, arts::CPSAdvanceOp>(op)) {
+      if (isa<arts::EdtOp, arts::ForOp, arts::EpochOp, arts::CPSAdvanceOp>(
+              op)) {
         op->emitError(
             "high-level scheduler op survived past pre-lowering step");
         found = true;

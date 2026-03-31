@@ -33,9 +33,7 @@
 #define GEN_PASS_DEF_EDTLOWERING
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
@@ -146,8 +144,8 @@ static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
 
   SmallVector<Value, 4> offsets, sizes;
   convertElementSliceToBlockSlice(AC->getBuilder(), loc, dimElementOffsets,
-                                  dimElementSizes, dimBlockSpans, dimTotalBlocks,
-                                  offsets, sizes);
+                                  dimElementSizes, dimBlockSpans,
+                                  dimTotalBlocks, offsets, sizes);
   SmallVector<Value, 4> mergedOffsets, mergedSizes;
   /// normalizeTaskDepSlice may refine only a leading owner-space prefix from
   /// partition_* metadata. Preserve the remaining owner slots so N-D acquires
@@ -179,10 +177,10 @@ normalizeCommonElementSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   auto depOffsets = acquire.getOffsets();
   auto depSizes = acquire.getSizes();
   auto blockSpans = alloc.getElementSizes();
-  unsigned ownerRank =
-      std::min<unsigned>(depOffsets.size(), depSizes.size());
+  unsigned ownerRank = std::min<unsigned>(depOffsets.size(), depSizes.size());
   unsigned physicalRank = blockSpans.size();
-  if (ownerRank == 0 || physicalRank == 0 || elemOffsets.size() != elemSizes.size())
+  if (ownerRank == 0 || physicalRank == 0 ||
+      elemOffsets.size() != elemSizes.size())
     return std::nullopt;
 
   Location loc = acquire.getLoc();
@@ -247,7 +245,8 @@ normalizeCommonElementSlice(ArtsCodegen *AC, DbAcquireOp acquire,
     Value blockSpan = AC->castToIndex(blockSpans[i], loc);
     Value depOffset = zero;
     Value depBlockCount = one;
-    if (auto ownerIt = ownerSlotForDim.find(i); ownerIt != ownerSlotForDim.end()) {
+    if (auto ownerIt = ownerSlotForDim.find(i);
+        ownerIt != ownerSlotForDim.end()) {
       depOffset = AC->castToIndex(depOffsets[ownerIt->second], loc);
       depBlockCount = AC->castToIndex(depSizes[ownerIt->second], loc);
     }
@@ -268,19 +267,18 @@ normalizeCommonElementSlice(ArtsCodegen *AC, DbAcquireOp acquire,
         loc, arith::CmpIPredicate::uge, localEndSingle, localStartSingle);
     Value rawSingleSize =
         AC->create<arith::SubIOp>(loc, localEndSingle, localStartSingle);
-    Value localSizeSingle = AC->create<arith::SelectOp>(
-        loc, endAfterStart, rawSingleSize, zero);
+    Value localSizeSingle =
+        AC->create<arith::SelectOp>(loc, endAfterStart, rawSingleSize, zero);
 
     Value blockCountSpan =
         AC->create<arith::MulIOp>(loc, depBlockCount, blockSpan);
-    Value coveredEnd = AC->create<arith::AddIOp>(loc, blockStart,
-                                                 blockCountSpan);
+    Value coveredEnd =
+        AC->create<arith::AddIOp>(loc, blockStart, blockCountSpan);
     Value coversStart = AC->create<arith::CmpIOp>(
         loc, arith::CmpIPredicate::ule, globalStart, blockStart);
-    Value coversEnd = AC->create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::uge, globalEnd, coveredEnd);
-    Value fullCover =
-        AC->create<arith::AndIOp>(loc, coversStart, coversEnd);
+    Value coversEnd = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
+                                                globalEnd, coveredEnd);
+    Value fullCover = AC->create<arith::AndIOp>(loc, coversStart, coversEnd);
 
     Value globalRepresentable =
         AC->create<arith::OrIOp>(loc, singleBlock, fullCover);
@@ -307,7 +305,8 @@ normalizeCommonElementSlice(ArtsCodegen *AC, DbAcquireOp acquire,
                                                  normalizedOffset, zero);
     Value fullExtent = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
                                                  normalizedSize, blockSpanIdx);
-    Value dimWholeBlock = AC->create<arith::AndIOp>(loc, zeroOffset, fullExtent);
+    Value dimWholeBlock =
+        AC->create<arith::AndIOp>(loc, zeroOffset, fullExtent);
     slice.wholeBlock =
         AC->create<arith::AndIOp>(loc, slice.wholeBlock, dimWholeBlock);
   }
@@ -326,8 +325,8 @@ normalizeCommonElementSlice(ArtsCodegen *AC, DbAcquireOp acquire,
         Value zeroOffset = AC->create<arith::CmpIOp>(
             loc, arith::CmpIPredicate::eq, slice.offsets[i], zero);
         Value fullExtent = AC->create<arith::CmpIOp>(
-            loc, arith::CmpIPredicate::eq,
-            AC->castToIndex(blockSpans[i], loc), slice.sizes[i]);
+            loc, arith::CmpIPredicate::eq, AC->castToIndex(blockSpans[i], loc),
+            slice.sizes[i]);
         Value trailingFull =
             AC->create<arith::AndIOp>(loc, zeroOffset, fullExtent);
         pivotContiguous =
@@ -504,7 +503,8 @@ void EdtLoweringPass::runOnOperation() {
   ARTS_INFO_HEADER(EdtLoweringPass);
   ARTS_DEBUG_REGION(module.dump(););
 
-  /// Earlier passes may have modified the IR, making cached DbGraph nodes stale.
+  /// Earlier passes may have modified the IR, making cached DbGraph nodes
+  /// stale.
   if (AM)
     AM->getDbAnalysis().invalidate();
 
@@ -621,8 +621,7 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
 
   /// Propagate continuation attributes so EpochLowering can find them.
   if (edtOp->hasAttr(ContinuationForEpoch))
-    outlineOp->setAttr(ContinuationForEpoch,
-                       AC->getBuilder().getUnitAttr());
+    outlineOp->setAttr(ContinuationForEpoch, AC->getBuilder().getUnitAttr());
   if (edtOp->hasAttr("arts.has_control_dep"))
     outlineOp->setAttr("arts.has_control_dep",
                        edtOp->getAttr("arts.has_control_dep"));
@@ -902,10 +901,9 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
     /// Both GUID and ptr handles were packed as raw pointers (i64).
     /// Reconstruct memref from the raw pointer.
     {
-      Value rawPtr =
-          AC->create<LLVM::IntToPtrOp>(loc, AC->llvmPtr, packedI64);
-      Value memrefVal = AC->create<polygeist::Pointer2MemrefOp>(
-          loc, memrefTy, rawPtr);
+      Value rawPtr = AC->create<LLVM::IntToPtrOp>(loc, AC->llvmPtr, packedI64);
+      Value memrefVal =
+          AC->create<polygeist::Pointer2MemrefOp>(loc, memrefTy, rawPtr);
       /// Preserve compile-time outer layout on rehydrated handles so
       /// downstream DB lowering can still recover source strides.
       if (auto staticShape = getStaticDbOuterShape(dbHandle))
@@ -1047,13 +1045,14 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
 
       if (alloc && !alloc.getElementSizes().empty()) {
         auto elementSizes = alloc.getElementSizes();
-        SmallVector<Value, 4> elemOffsets(dbAcquireOp.getElementOffsets().begin(),
-                                          dbAcquireOp.getElementOffsets().end());
+        SmallVector<Value, 4> elemOffsets(
+            dbAcquireOp.getElementOffsets().begin(),
+            dbAcquireOp.getElementOffsets().end());
         SmallVector<Value, 4> elemSizes(dbAcquireOp.getElementSizes().begin(),
                                         dbAcquireOp.getElementSizes().end());
-        Value useSliceTransport =
-            AC->create<arith::ConstantIntOp>(loc, 1, 1);
-        if (auto normalized = normalizeCommonElementSlice(AC, dbAcquireOp, alloc)) {
+        Value useSliceTransport = AC->create<arith::ConstantIntOp>(loc, 1, 1);
+        if (auto normalized =
+                normalizeCommonElementSlice(AC, dbAcquireOp, alloc)) {
           elemOffsets.assign(normalized->offsets.begin(),
                              normalized->offsets.end());
           elemSizes.assign(normalized->sizes.begin(), normalized->sizes.end());
@@ -1066,8 +1065,8 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
               AC->create<arith::ConstantIntOp>(loc, 1, 1));
           Value sliceRepresentable = AC->create<arith::AndIOp>(
               loc, normalized->representable, normalized->contiguous);
-          useSliceTransport = AC->create<arith::AndIOp>(
-              loc, sliceRepresentable, sliceNarrowerThanBlock);
+          useSliceTransport = AC->create<arith::AndIOp>(loc, sliceRepresentable,
+                                                        sliceNarrowerThanBlock);
         }
 
         /// Get scalar type size from the element type
@@ -1103,8 +1102,8 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
         Value zeroIdx = AC->createIndexConstant(0, loc);
         byteOffset = AC->create<arith::SelectOp>(loc, useSliceTransport,
                                                  byteOffset, zeroIdx);
-        byteSize = AC->create<arith::SelectOp>(loc, useSliceTransport,
-                                               byteSize, zeroIdx);
+        byteSize = AC->create<arith::SelectOp>(loc, useSliceTransport, byteSize,
+                                               zeroIdx);
         hasEsdDeps = true;
       } else {
         /// Fallback: no allocation info available
@@ -1144,11 +1143,12 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     acquireModes.push_back(static_cast<int32_t>(dbMode));
 
     int32_t depFlagBits = 0;
-    if (allocForHint && hasDistributedDbAllocation(allocForHint.getOperation()) &&
+    if (allocForHint &&
+        hasDistributedDbAllocation(allocForHint.getOperation()) &&
         dbMode == DbMode::read) {
-      bool duplicateSafe = allocForHint.getDbMode() == DbMode::read ||
-                           allocForHint->hasAttr(
-                               AttrNames::Operation::ReadOnlyAfterInit);
+      bool duplicateSafe =
+          allocForHint.getDbMode() == DbMode::read ||
+          allocForHint->hasAttr(AttrNames::Operation::ReadOnlyAfterInit);
       if (duplicateSafe) {
         depFlagBits |= kArtsDepFlagPreferDuplicate;
       }

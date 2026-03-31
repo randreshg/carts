@@ -11,52 +11,15 @@
 #define ARTS_TRANSFORMS_PATTERN_PATTERNTRANSFORM_H
 
 #include "arts/Dialect.h"
-#include "arts/analysis/AnalysisManager.h"
-#include "mlir/IR/Builders.h"
 #include "mlir/IR/Operation.h"
-#include "mlir/Support/LogicalResult.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
-#include <memory>
 
 namespace mlir {
 namespace arts {
 
 class PatternContract;
-
-enum class PatternDiscoveryMode {
-  Seed,
-  Refine,
-};
-
-enum class PatternPhase {
-  discovery,
-  refine,
-  apply,
-};
-
-struct PatternContext {
-  ModuleOp module = nullptr;
-  AnalysisManager *analysisManager = nullptr;
-};
-
-struct PatternDiscoveryContext : public PatternContext {
-  PatternDiscoveryMode mode = PatternDiscoveryMode::Seed;
-};
-
-struct PatternRefineContext : public PatternContext {};
-
-struct PatternApplyContext : public PatternContext {
-  OpBuilder *builder = nullptr;
-};
-
-struct PatternCandidate {
-  Operation *anchor = nullptr;
-  int priority = 0;
-
-  explicit operator bool() const { return anchor != nullptr; }
-};
 
 /// Common semantic contract shared by all pre-DB pattern families.
 class PatternContract {
@@ -72,12 +35,6 @@ public:
   virtual void stamp(ArrayRef<Operation *> ops) const;
 };
 
-class UniformPatternContract final : public PatternContract {
-public:
-  ArtsDepPattern getFamily() const override { return ArtsDepPattern::uniform; }
-  StringRef getName() const override { return "uniform"; }
-};
-
 class StencilNDPatternContract final : public PatternContract {
 public:
   StencilNDPatternContract(ArtsDepPattern family, ArrayRef<int64_t> ownerDims,
@@ -90,8 +47,7 @@ public:
         minOffsets(minOffsets.begin(), minOffsets.end()),
         maxOffsets(maxOffsets.begin(), maxOffsets.end()),
         writeFootprint(writeFootprint.begin(), writeFootprint.end()),
-        blockShape(blockShape.begin(), blockShape.end()),
-        revision(revision) {}
+        blockShape(blockShape.begin(), blockShape.end()), revision(revision) {}
 
   ArtsDepPattern getFamily() const override { return family; }
   int64_t getRevision() const override { return revision; }
@@ -117,32 +73,6 @@ public:
   virtual ArtsDepPattern getFamily() const { return ArtsDepPattern::unknown; }
   virtual int64_t getRevision() const { return 1; }
   virtual StringRef getName() const = 0;
-
-  /// Discover structural candidates without mutating IR.
-  virtual LogicalResult
-  discover(const PatternDiscoveryContext &ctx,
-           SmallVectorImpl<PatternCandidate> &candidates) const {
-    (void)ctx;
-    (void)candidates;
-    return success();
-  }
-
-  /// Refine a previously discovered candidate into a typed semantic contract.
-  virtual std::unique_ptr<PatternContract>
-  refine(const PatternCandidate &candidate,
-         const PatternRefineContext &ctx) const {
-    (void)candidate;
-    (void)ctx;
-    return nullptr;
-  }
-
-  /// Apply a refined contract to IR.
-  virtual LogicalResult apply(const PatternContract &contract,
-                              PatternApplyContext &ctx) const {
-    (void)contract;
-    (void)ctx;
-    return failure();
-  }
 };
 
 /// Shared base for dependence/schedule transforms.

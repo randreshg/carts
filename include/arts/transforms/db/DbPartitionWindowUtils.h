@@ -43,14 +43,13 @@ expandElementWindowWithHalo(OpBuilder &builder, Location loc, Value elemOffset,
     start = builder.create<arith::AddIOp>(loc, start, shift);
   }
 
-  Value end =
-      builder.create<arith::AddIOp>(loc, elemOffset, elemSize);
+  Value end = builder.create<arith::AddIOp>(loc, elemOffset, elemSize);
   if (maxOffset > 0) {
     Value haloRight = arts::createConstantIndex(builder, loc, maxOffset);
     Value endPlusHalo = builder.create<arith::AddIOp>(loc, end, haloRight);
-    end = totalExtent ? builder.create<arith::MinUIOp>(loc, endPlusHalo,
-                                                        totalExtent)
-                      : endPlusHalo;
+    end = totalExtent
+              ? builder.create<arith::MinUIOp>(loc, endPlusHalo, totalExtent)
+              : endPlusHalo;
   } else if (maxOffset < 0) {
     Value shrink = arts::createConstantIndex(builder, loc, -maxOffset);
     Value canShrink = builder.create<arith::CmpIOp>(
@@ -59,8 +58,8 @@ expandElementWindowWithHalo(OpBuilder &builder, Location loc, Value elemOffset,
     end = builder.create<arith::SelectOp>(loc, canShrink, shrunken, zero);
   }
 
-  Value endAfterStart = builder.create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::uge, end, start);
+  Value endAfterStart =
+      builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge, end, start);
   Value rawSize = builder.create<arith::SubIOp>(loc, end, start);
   Value size =
       builder.create<arith::SelectOp>(loc, endAfterStart, rawSize, zero);

@@ -13,10 +13,10 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
-#include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/SmallPtrSet.h"
-#include "llvm/ADT/STLExtras.h"
 #include "polygeist/Ops.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(db_utils);
@@ -29,17 +29,6 @@ namespace {
 static void getAcquireDepSlice(DbAcquireOp acquire,
                                SmallVector<Value> &sizesOut,
                                SmallVector<Value> &offsetsOut) {
-  /// Dependency shape for DB acquires is defined in DB-space by the explicit
-  /// offsets/sizes operands when present. Cached block windows are a post-DB
-  /// optimization hint, not a canonical dependency slice; they must not flow
-  /// through generic dependency-offset helpers or EdtLowering will subtract
-  /// the start block twice.
-  if (!acquire.getOffsets().empty() && !acquire.getSizes().empty()) {
-    sizesOut.assign(acquire.getSizes().begin(), acquire.getSizes().end());
-    offsetsOut.assign(acquire.getOffsets().begin(), acquire.getOffsets().end());
-    return;
-  }
-
   sizesOut.assign(acquire.getSizes().begin(), acquire.getSizes().end());
   offsetsOut.assign(acquire.getOffsets().begin(), acquire.getOffsets().end());
 }
@@ -676,11 +665,10 @@ DbUtils::getMemoryAccessInfo(Operation *memOp) {
         SmallVector<Value>(load.getIndices().begin(), load.getIndices().end()),
         MemoryAccessKind::Read};
   if (auto store = dyn_cast<polygeist::DynStoreOp>(memOp))
-    return MemoryAccessInfo{
-        memOp, store.getMemref(),
-        SmallVector<Value>(store.getIndices().begin(),
-                           store.getIndices().end()),
-        MemoryAccessKind::Write};
+    return MemoryAccessInfo{memOp, store.getMemref(),
+                            SmallVector<Value>(store.getIndices().begin(),
+                                               store.getIndices().end()),
+                            MemoryAccessKind::Write};
   if (auto load = dyn_cast<affine::AffineLoadOp>(memOp))
     return MemoryAccessInfo{memOp, load.getMemRef(),
                             SmallVector<Value>(load.getMapOperands().begin(),
@@ -751,9 +739,8 @@ void DbUtils::collectReachableMemoryOps(Value source,
 
 void arts::convertElementSliceToBlockSlice(
     OpBuilder &builder, Location loc, ValueRange elementOffsets,
-    ValueRange elementSizes, ValueRange blockSpans,
-    ValueRange totalBlockCounts, SmallVectorImpl<Value> &blockOffsets,
-    SmallVectorImpl<Value> &blockSizes) {
+    ValueRange elementSizes, ValueRange blockSpans, ValueRange totalBlockCounts,
+    SmallVectorImpl<Value> &blockOffsets, SmallVectorImpl<Value> &blockSizes) {
   unsigned rank = std::min({static_cast<unsigned>(elementOffsets.size()),
                             static_cast<unsigned>(elementSizes.size()),
                             static_cast<unsigned>(blockSpans.size()),
@@ -764,10 +751,13 @@ void arts::convertElementSliceToBlockSlice(
   blockSizes.reserve(rank);
 
   for (unsigned i = 0; i < rank; ++i) {
-    Value elementOffset = ValueAnalysis::castToIndex(elementOffsets[i], builder, loc);
-    Value elementSize = ValueAnalysis::castToIndex(elementSizes[i], builder, loc);
+    Value elementOffset =
+        ValueAnalysis::castToIndex(elementOffsets[i], builder, loc);
+    Value elementSize =
+        ValueAnalysis::castToIndex(elementSizes[i], builder, loc);
     Value blockSpan = ValueAnalysis::castToIndex(blockSpans[i], builder, loc);
-    Value totalBlocks = ValueAnalysis::castToIndex(totalBlockCounts[i], builder, loc);
+    Value totalBlocks =
+        ValueAnalysis::castToIndex(totalBlockCounts[i], builder, loc);
 
     blockSpan = builder.create<arith::MaxUIOp>(loc, blockSpan, one);
     elementSize = builder.create<arith::MaxUIOp>(loc, elementSize, one);
@@ -782,8 +772,8 @@ void arts::convertElementSliceToBlockSlice(
     Value startAboveMax = builder.create<arith::CmpIOp>(
         loc, arith::CmpIPredicate::ugt, startBlock, maxBlock);
     Value clampedEnd = builder.create<arith::MinUIOp>(loc, endBlock, maxBlock);
-    endBlock =
-        builder.create<arith::SelectOp>(loc, startAboveMax, endBlock, clampedEnd);
+    endBlock = builder.create<arith::SelectOp>(loc, startAboveMax, endBlock,
+                                               clampedEnd);
 
     Value blockCount = builder.create<arith::SubIOp>(loc, endBlock, startBlock);
     blockCount = builder.create<arith::AddIOp>(loc, blockCount, one);
@@ -823,11 +813,14 @@ void arts::mergeNormalizedBlockSlice(
 
   for (unsigned i = 0; i < ownerRank; ++i) {
     if (i < totalBlockCounts.size() && totalBlockCounts[i])
-      blockSizes[i] = ValueAnalysis::castToIndex(totalBlockCounts[i], builder, loc);
+      blockSizes[i] =
+          ValueAnalysis::castToIndex(totalBlockCounts[i], builder, loc);
     if (i < existingOffsets.size() && existingOffsets[i])
-      blockOffsets[i] = ValueAnalysis::castToIndex(existingOffsets[i], builder, loc);
+      blockOffsets[i] =
+          ValueAnalysis::castToIndex(existingOffsets[i], builder, loc);
     if (i < existingSizes.size() && existingSizes[i])
-      blockSizes[i] = ValueAnalysis::castToIndex(existingSizes[i], builder, loc);
+      blockSizes[i] =
+          ValueAnalysis::castToIndex(existingSizes[i], builder, loc);
   }
 
   unsigned normalizedRank =

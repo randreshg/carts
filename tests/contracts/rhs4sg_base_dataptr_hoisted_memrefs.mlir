@@ -3,12 +3,16 @@
 // Check that DataPtrHoisting treats invariant pointer2memref materializations
 // as first-class hoist candidates so the EDT body reuses memrefs instead of
 // rebuilding them inside the hot inner stencil loops.
+//
+// RHS (4-D) is hoisted before the outer block loop.  MU, LA (3-D) and CENTER
+// (4-D) are hoisted to the outer block loop (their pointers depend on the block
+// index), but stay outside the inner stencil loops.
 
 // CHECK-LABEL: func.func private @__arts_edt_1
-// CHECK: %[[MU_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?xf32>
-// CHECK: %[[LA_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?xf32>
 // CHECK: %[[RHS_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?x?xf32>
 // CHECK: scf.for %{{.+}} = %{{.+}} to %{{.+}} step %c1 {
+// CHECK:   %[[MU_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?xf32>
+// CHECK:   %[[LA_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?xf32>
 // CHECK:   %[[CENTER_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?x?xf32>
 // CHECK:   scf.for %{{.+}} = %{{.+}} to %{{.+}} step %c1 {
 // CHECK:     scf.for %{{.+}} = %c4 to %c36 step %c1 {

@@ -922,7 +922,7 @@ void LoweringContractOp::build(
     state.addAttribute(AttrNames::Operation::Contract::SupportedBlockHalo,
                        UnitAttr::get(ctx));
   if (!spatialDims.empty())
-    state.addAttribute("spatial_dims",
+    state.addAttribute(AttrNames::Operation::Contract::SpatialDims,
                        builder.getDenseI64ArrayAttr(spatialDims));
   if (!stencilIndependentDims.empty())
     state.addAttribute(AttrNames::Operation::Contract::StencilIndependentDims,

@@ -25,11 +25,9 @@
 
 #define GEN_PASS_DEF_EDTDISTRIBUTION
 #include "arts/Dialect.h"
-#include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
-#include "arts/passes/Passes.h.inc"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/passes/Passes.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -82,11 +80,12 @@ struct EdtDistributionPass
           pattern = *analyzedPattern;
         EdtDistributionKind kind = heuristics.chooseKind(strategy, pattern);
         /// Keep distribution_kind focused on execution decomposition.
-        /// 2-D stencil owner semantics already flow through the stencil/lowering
-        /// contract attrs (owner dims, halo, block shape). Overloading
-        /// `tiling_2d` here forces stencil loops such as Seidel through the
-        /// matmul-oriented Tile2DTaskLoopLowering path even when they only need
-        /// block-style task distribution with N-D ownership preserved.
+        /// 2-D stencil owner semantics already flow through the
+        /// stencil/lowering contract attrs (owner dims, halo, block shape).
+        /// Overloading `tiling_2d` here forces stencil loops such as Seidel
+        /// through the matmul-oriented Tile2DTaskLoopLowering path even when
+        /// they only need block-style task distribution with N-D ownership
+        /// preserved.
         setEdtDistributionKind(forOp.getOperation(), kind);
         setEdtDistributionPattern(forOp.getOperation(), pattern);
         forOp->setAttr(

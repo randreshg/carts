@@ -1,18 +1,16 @@
 ///===----------------------------------------------------------------------===///
 /// File: HandleDeps.cpp
 ///
-/// This pass converts residual OMP task dependencies to arts.omp_dep operations.
-/// It handles dependencies not covered by RaiseMemRefDimensionality (e.g., static
-/// arrays, token containers, direct memref allocations, block arguments).
+/// This pass converts residual OMP task dependencies to arts.omp_dep
+/// operations. It handles dependencies not covered by RaiseMemRefDimensionality
+/// (e.g., static arrays, token containers, direct memref allocations, block
+/// arguments).
 ///===----------------------------------------------------------------------===///
 
 #define GEN_PASS_DEF_HANDLEDEPS
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/Dialect.h"
-#include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -43,7 +41,8 @@ struct DepInfo {
   SmallVector<Operation *> opsToRemove;
 };
 
-/// Check if alloca is a scalar token container (rank-0 or rank-1 with size <= 1)
+/// Check if alloca is a scalar token container (rank-0 or rank-1 with size <=
+/// 1)
 static bool isScalarTokenContainer(memref::AllocaOp allocaOp) {
   auto type = dyn_cast<MemRefType>(allocaOp.getType());
   if (!type)
@@ -77,9 +76,10 @@ private:
 /// extractDepInfo
 ///===----------------------------------------------------------------------===///
 
-std::optional<DepInfo> HandleDepsPass::extractDepInfo(
-    Value depVar, omp::TaskOp taskOp, unsigned depIdx,
-    omp::ClauseTaskDepend depMode, OpBuilder &builder) {
+std::optional<DepInfo>
+HandleDepsPass::extractDepInfo(Value depVar, omp::TaskOp taskOp,
+                               unsigned depIdx, omp::ClauseTaskDepend depMode,
+                               OpBuilder &builder) {
 
   /// Skip if already arts.omp_dep
   if (depVar.getDefiningOp<arts::OmpDepOp>())
@@ -129,9 +129,11 @@ std::optional<DepInfo> HandleDepsPass::extractDepInfo(
     if (auto subview = castSource.getDefiningOp<memref::SubViewOp>()) {
       info.source = subview.getSource();
       for (auto offset : subview.getMixedOffsets())
-        info.indices.push_back(getValueOrCreateConstantIndexOp(builder, loc, offset));
+        info.indices.push_back(
+            getValueOrCreateConstantIndexOp(builder, loc, offset));
       for (auto size : subview.getMixedSizes())
-        info.sizes.push_back(getValueOrCreateConstantIndexOp(builder, loc, size));
+        info.sizes.push_back(
+            getValueOrCreateConstantIndexOp(builder, loc, size));
       return info;
     }
     /// Cast of something other than subview - use cast source as-is
@@ -143,7 +145,8 @@ std::optional<DepInfo> HandleDepsPass::extractDepInfo(
   if (auto subview = dyn_cast_or_null<memref::SubViewOp>(defOp)) {
     info.source = subview.getSource();
     for (auto offset : subview.getMixedOffsets())
-      info.indices.push_back(getValueOrCreateConstantIndexOp(builder, loc, offset));
+      info.indices.push_back(
+          getValueOrCreateConstantIndexOp(builder, loc, offset));
     for (auto size : subview.getMixedSizes())
       info.sizes.push_back(getValueOrCreateConstantIndexOp(builder, loc, size));
     return info;
@@ -155,7 +158,8 @@ std::optional<DepInfo> HandleDepsPass::extractDepInfo(
     info.indices.append(loadOp.getIndices().begin(), loadOp.getIndices().end());
     for (size_t d = 0; d < info.indices.size(); ++d)
       info.sizes.push_back(arts::createConstantIndex(builder, loc, 1));
-    info.indices = arts::clampDepIndices(info.source, info.indices, builder, loc);
+    info.indices =
+        arts::clampDepIndices(info.source, info.indices, builder, loc);
     return info;
   }
 
