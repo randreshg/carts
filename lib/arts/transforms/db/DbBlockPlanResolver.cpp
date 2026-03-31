@@ -388,6 +388,25 @@ static SmallVector<Value> collectContractNDBlockShapeCandidates(
     if (!shapeAttr || shapeAttr->size() < 2)
       continue;
 
+    /// `stencil_block_shape` describes the full logical task tile, not
+    /// necessarily the number of DB dimensions that this acquire proved safe to
+    /// partition. For row-owned Jacobi/Poisson-style contracts we routinely
+    /// carry a 2-D block shape like [rows, cols] while only one owner
+    /// dimension is actually distributed. Promoting that full shape directly to
+    /// an N-D DB plan manufactures extra outer DB dimensions and later
+    /// mismatches task acquires that correctly operate on a 1-D owner space.
+    unsigned supportedRank = 0;
+    if (!info.partitionDims.empty())
+      supportedRank = static_cast<unsigned>(info.partitionDims.size());
+    else
+      supportedRank = std::min<unsigned>(
+          static_cast<unsigned>(info.partitionOffsets.size()),
+          static_cast<unsigned>(info.partitionSizes.size()));
+    supportedRank = std::min<unsigned>(
+        supportedRank, static_cast<unsigned>(shapeAttr->size()));
+    if (supportedRank < 2)
+      continue;
+
     bool prefersContract = info.hasDistributionContract ||
                            hasSupportedBlockHalo(acquire.getOperation());
     if (!prefersContract && hasPreferredContract)
@@ -398,8 +417,9 @@ static SmallVector<Value> collectContractNDBlockShapeCandidates(
     }
 
     if (contractShape.empty()) {
-      contractShape.reserve(shapeAttr->size());
-      for (int64_t dimSize : *shapeAttr) {
+      contractShape.reserve(supportedRank);
+      for (unsigned dim = 0; dim < supportedRank; ++dim) {
+        int64_t dimSize = (*shapeAttr)[dim];
         if (dimSize <= 0) {
           contractShape.clear();
           break;
@@ -409,10 +429,10 @@ static SmallVector<Value> collectContractNDBlockShapeCandidates(
       continue;
     }
 
-    if (contractShape.size() != shapeAttr->size())
+    if (contractShape.size() != supportedRank)
       continue;
 
-    for (unsigned dim = 0; dim < contractShape.size(); ++dim) {
+    for (unsigned dim = 0; dim < supportedRank; ++dim) {
       Value dimConst = createConstantIndex(builder, loc, (*shapeAttr)[dim]);
       contractShape[dim] =
           builder.create<arith::MinUIOp>(loc, contractShape[dim], dimConst);

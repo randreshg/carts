@@ -99,6 +99,14 @@ static bool canNarrowDirectReadSlice(const LoweringContractInfo &contract,
   if (!acquire || acquire.getMode() != ArtsMode::in)
     return false;
 
+  /// Scope-wide peer consensus is useful for allocation-level partitioning, but
+  /// it does not prove that this specific acquire's read footprint is owner-
+  /// local. Narrowing a direct read slice on top of peer-inferred dims is
+  /// unsound for reduction-style consumers such as B[k][j] in row-owned matmul
+  /// tasks: the acquire is direct, yet it still needs the full reduction range.
+  if (facts.partitionDimsFromPeers)
+    return false;
+
   bool blockLikeRequest =
       facts.requestedMode == PartitionMode::block ||
       facts.requestedMode == PartitionMode::stencil;
@@ -622,7 +630,21 @@ analyzeBlockStencilPartition(DbAnalysis::AcquirePartitionSummary &info,
         info.partitionSizes[0] = refined;
     }
 
-    if (acqNode) {
+    /// For read-only stencil inputs, ForLowering already materializes the
+    /// exact halo-expanded slice in partition_offsets/sizes. Re-running graph
+    /// bounds refinement here double-expands that window and breaks the later
+    /// ESD lowering contract.
+    bool trustExplicitHaloSlice =
+        acquire.getMode() == ArtsMode::in &&
+        !acquire.getElementOffsets().empty() &&
+        acquire.getElementOffsets().size() == acquire.getElementSizes().size();
+    if (!trustExplicitHaloSlice) {
+      trustExplicitHaloSlice = facts && facts->supportedBlockHalo &&
+                               facts->accessPattern == AccessPattern::Stencil &&
+                               acquire.getMode() == ArtsMode::in;
+    }
+
+    if (acqNode && !trustExplicitHaloSlice) {
       Value loopOffset, loopSize;
       if (succeeded(acqNode->computeBlockInfo(loopOffset, loopSize))) {
         bool useLoopSize = false;

@@ -52,6 +52,31 @@ static std::optional<int64_t> getExplicitWorkersPerNodeCount(EdtOp edt) {
   return arts::getWorkersPerNode(edt.getOperation());
 }
 
+static std::optional<int64_t> getExplicitLoopBlockHint(ForOp forOp) {
+  if (!forOp)
+    return std::nullopt;
+  if (auto hint = getPartitioningHint(forOp.getOperation()))
+    if (hint->mode == PartitionMode::block && hint->blockSize &&
+        *hint->blockSize > 0)
+      return hint->blockSize;
+  return std::nullopt;
+}
+
+static bool shouldHonorLoopBlockHintForDbAlignment(ForOp forOp,
+                                                   EdtOp parallelEdt) {
+  if (!forOp || !parallelEdt)
+    return false;
+  if (parallelEdt.getConcurrency() != EdtConcurrency::intranode)
+    return false;
+
+  if (auto depPattern = getEffectiveDepPattern(forOp.getOperation()))
+    return isStencilFamilyDepPattern(*depPattern) &&
+           *depPattern != ArtsDepPattern::wavefront_2d;
+  if (auto pattern = getEdtDistributionPattern(forOp.getOperation()))
+    return *pattern == EdtDistributionPattern::stencil;
+  return false;
+}
+
 static std::optional<int64_t> getStaticRuntimeWorkersPerNode(ModuleOp module) {
   if (!module || !getRuntimeStaticWorkers(module))
     return std::nullopt;
@@ -818,6 +843,20 @@ Value WorkDistributionUtils::computeDbAlignmentBlockSize(
       hintBlockSize = candidate;
     else
       hintBlockSize = AC->create<arith::MinUIOp>(loc, hintBlockSize, candidate);
+  }
+
+  if (auto loopBlockHint = getExplicitLoopBlockHint(forOp);
+      loopBlockHint &&
+      shouldHonorLoopBlockHintForDbAlignment(forOp, parallelEdt)) {
+    /// This helper computes a fallback owner-alignment size from the current
+    /// dependency layout. When ForOpt already chose a stronger stencil owner
+    /// span, keep that explicit hint instead of shrinking the loop back to a
+    /// one-block-per-worker fallback.
+    Value advisory = AC->createIndexConstant(*loopBlockHint, loc);
+    hintBlockSize = hintBlockSize
+                        ? AC->create<arith::MaxUIOp>(loc, hintBlockSize,
+                                                     advisory)
+                        : advisory;
   }
 
   return hintBlockSize;

@@ -80,7 +80,6 @@ using AttrNames::Operation::CPSChainId;
 namespace {
 
 static constexpr int32_t kArtsDepFlagPreferDuplicate = 1 << 0;
-static constexpr int32_t kArtsDepFlagPreserveShape = 1 << 1;
 
 static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
                                   const AcquireRewriteContract &contract) {
@@ -1154,10 +1153,14 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
         depFlagBits |= kArtsDepFlagPreferDuplicate;
       }
     }
-    if (dbAcquireOp && !dbAcquireOp.getElementOffsets().empty() &&
-        dbMode == DbMode::read) {
-      depFlagBits |= kArtsDepFlagPreserveShape;
-    }
+    /// Explicit element slices already encode the producer/consumer contract.
+    /// When upstream rewrites localize the consumer to a compact halo view,
+    /// forcing "preserve shape" here would discard the byte slice later in
+    /// ConvertArtsToLLVM and hand the task a whole DB block instead.
+    ///
+    /// Keep preserve-shape as a late-lowering inference only, for cases where
+    /// ConvertArtsToLLVM derives a face slice after consumer indexing has
+    /// already been fixed to full-block coordinates.
     if (depFlagBits != 0)
       hasDepFlags = true;
     depFlags.push_back(depFlagBits);

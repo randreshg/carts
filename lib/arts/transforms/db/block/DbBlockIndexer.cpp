@@ -125,7 +125,15 @@ tryLocalizeFromLoopWindow(Value globalIdx, Value startBlock, Value blockSize,
   }
 
   Value baseBlock = builder.create<arith::DivUIOp>(loc, anchor, bs);
-  Value baseLocal = builder.create<arith::RemUIOp>(loc, anchor, bs);
+  Value baseLocal;
+  if (invariantBase && arts::isAlignedToBlock(invariantBase, bs) &&
+      arts::isKnownNonNegative(lb)) {
+    /// When the invariant portion is already aligned to a block boundary, the
+    /// in-block coordinate starts at the loop lower bound itself.
+    baseLocal = lb;
+  } else {
+    baseLocal = builder.create<arith::RemUIOp>(loc, anchor, bs);
+  }
   Value ivDelta = builder.create<arith::SubIOp>(loc, loopIv, lb);
   Value localRaw = builder.create<arith::AddIOp>(loc, baseLocal, ivDelta);
   if (constOffset > 0) {
@@ -136,6 +144,12 @@ tryLocalizeFromLoopWindow(Value globalIdx, Value startBlock, Value blockSize,
         loc, localRaw, arts::createConstantIndex(builder, loc, -constOffset));
   }
 
+  Value baseRelBlock = builder.create<arith::SubIOp>(loc, baseBlock, sb);
+  if (constOffset == 0 && ValueAnalysis::sameValue(baseLocal, lb) &&
+      arts::isKnownNonNegative(lb) && arts::isLoopIvBoundedBy(loopIv, bs)) {
+    return LoopWindowLocalization{baseRelBlock, loopIv};
+  }
+
   Value belowZero = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
                                                   localRaw, zero);
   Value aboveBlock = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge,
@@ -144,7 +158,6 @@ tryLocalizeFromLoopWindow(Value globalIdx, Value startBlock, Value blockSize,
   Value adjust = builder.create<arith::SelectOp>(loc, belowZero, negOne, zero);
   adjust = builder.create<arith::SelectOp>(loc, aboveBlock, one, adjust);
 
-  Value baseRelBlock = builder.create<arith::SubIOp>(loc, baseBlock, sb);
   Value dbRefIdx = builder.create<arith::AddIOp>(loc, baseRelBlock, adjust);
 
   Value localIdx = localRaw;
@@ -184,6 +197,33 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
     return dominantZero ? dominantZero : arts::createZeroIndex(builder, loc);
   };
   auto one = [&]() { return arts::createOneIndex(builder, loc); };
+  auto trySimplifySingleBlockLocal = [&](Value globalIdx, Value startBlock,
+                                         Value blockSize, Value &dbRefIdx,
+                                         Value &localIdx) -> bool {
+    if (!acquireSingleBlock)
+      return false;
+
+    if (auto loopLocalized = tryLocalizeFromLoopWindow(globalIdx, startBlock,
+                                                       blockSize, builder, loc)) {
+      /// Single-block acquires already select the owning chunk, so blocked
+      /// reindexing only needs the in-block coordinate.
+      dbRefIdx = zero();
+      localIdx = loopLocalized->localIdx;
+      return true;
+    }
+
+    if (auto local = extractLocalFromBlockBase(globalIdx, startBlock,
+                                               blockSize)) {
+      Value localIdxVal = ValueAnalysis::ensureIndexType(*local, builder, loc);
+      if (localIdxVal && isLoopIvBoundedBy(localIdxVal, blockSize)) {
+        dbRefIdx = zero();
+        localIdx = localIdxVal;
+        return true;
+      }
+    }
+
+    return false;
+  };
 
   unsigned nPartDims = numPartitionedDims();
   ARTS_DEBUG("DbBlockIndexer::localize with "
@@ -237,6 +277,8 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
         Value dbRefIdx;
         Value localIdx;
         bool simplified = false;
+        if (trySimplifySingleBlockLocal(globalIdx, sb, bs, dbRefIdx, localIdx))
+          simplified = true;
         if (!allocSingleBlock && !acquireSingleBlock) {
           if (auto loopLocalized =
                   tryLocalizeFromLoopWindow(globalIdx, sb, bs, builder, loc)) {
@@ -311,6 +353,8 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
     Value dbRefIdx;
     Value localIdx;
     bool simplified = false;
+    if (trySimplifySingleBlockLocal(globalIdx, sb, bs, dbRefIdx, localIdx))
+      simplified = true;
     if (!allocSingleBlock && !acquireSingleBlock) {
       if (auto loopLocalized =
               tryLocalizeFromLoopWindow(globalIdx, sb, bs, builder, loc)) {

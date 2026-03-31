@@ -309,6 +309,34 @@ inferLoopHaloBoundsFromValue(Value dep, ForOp forOp, unsigned mappedDim) {
   return bounds;
 }
 
+static std::optional<ArtsMode> inferLoopLocalAccessMode(Value dep, ForOp forOp) {
+  if (!dep || !forOp)
+    return std::nullopt;
+
+  Region &forRegion = forOp.getRegion();
+  llvm::SetVector<Operation *> memOps;
+  DbUtils::collectReachableMemoryOps(dep, memOps, &forRegion);
+
+  bool hasLoads = false;
+  bool hasStores = false;
+  for (Operation *memOp : memOps) {
+    if (!DbUtils::getMemoryAccessInfo(memOp))
+      continue;
+    if (isa<memref::StoreOp, affine::AffineStoreOp>(memOp))
+      hasStores = true;
+    else
+      hasLoads = true;
+  }
+
+  if (!hasLoads && !hasStores)
+    return std::nullopt;
+  if (hasLoads && hasStores)
+    return ArtsMode::inout;
+  if (hasStores)
+    return ArtsMode::out;
+  return ArtsMode::in;
+}
+
 ///===----------------------------------------------------------------------===///
 /// LoopInfo - Information about a loop within a parallel EDT
 ///
@@ -1039,9 +1067,10 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
                                << " parent dependencies with DB rewiring");
 
   for (auto [idx, parentDep] : llvm::enumerate(parentDeps)) {
+    size_t depIndex = idx;
     auto parentAcqOp = parentDep.getDefiningOp<DbAcquireOp>();
     if (!parentAcqOp) {
-      ARTS_DEBUG("    - Dep " << idx << ": Not a DbAcquireOp, skipping");
+      ARTS_DEBUG("    - Dep " << depIndex << ": Not a DbAcquireOp, skipping");
       continue;
     }
 
@@ -1052,7 +1081,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     /// Rewiring: Trace to DbAllocOp and acquire from there
     auto allocInfo = DbUtils::traceToDbAlloc(parentDep);
     if (!allocInfo) {
-      ARTS_ERROR("Could not trace dependency " << idx << " to DbAllocOp");
+      ARTS_ERROR("Could not trace dependency " << depIndex << " to DbAllocOp");
       continue;
     }
     auto [rootGuid, rootPtr] = *allocInfo;
@@ -1063,6 +1092,10 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     /// DbControlOp). If hints exist, the user provided explicit partitioning,
     /// so ForLowering RESPECTS the user's intent and does NOT override.
     bool parentHasPartitionInfo = parentAcqOp.hasExplicitPartitionHints();
+
+    ArtsMode effectiveTaskMode = parentAcqOp.getMode();
+    if (auto localMode = inferLoopLocalAccessMode(parallelArg, forOp))
+      effectiveTaskMode = *localMode;
 
     DbAcquireOp chunkAcqOp;
     bool chunkUsesStencilHalo = false;
@@ -1075,6 +1108,31 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
     AcquireRewriteContract rewriteContract =
         resolveAcquireRewriteContract(AM, parentAcqOp);
+    if (auto loopContract = getSemanticContract(forOp.getOperation())) {
+      if (rewriteContract.ownerDims.empty() && !loopContract->ownerDims.empty())
+        rewriteContract.ownerDims.assign(loopContract->ownerDims.begin(),
+                                         loopContract->ownerDims.end());
+      if (rewriteContract.haloMinOffsets.empty())
+        if (auto mins = loopContract->getStaticMinOffsets())
+          rewriteContract.haloMinOffsets = *mins;
+      if (rewriteContract.haloMaxOffsets.empty())
+        if (auto maxs = loopContract->getStaticMaxOffsets())
+          rewriteContract.haloMaxOffsets = *maxs;
+
+      /// Task-acquire window planning happens before the loop contract is
+      /// copied onto the rewritten acquire. If the parent acquire does not yet
+      /// carry the full stencil halo contract, seed it from the `arts.for`
+      /// contract here so rewriteAcquire() widens the worker-local read slice
+      /// instead of preserving only the owner tile.
+      if (effectiveTaskMode == ArtsMode::in &&
+          loopContract->supportedBlockHalo &&
+          !rewriteContract.haloMinOffsets.empty() &&
+          !rewriteContract.haloMaxOffsets.empty()) {
+        rewriteContract.applyStencilHalo = true;
+        rewriteContract.preserveParentDepRange = false;
+        rewriteContract.usePartitionSliceAsDepWindow = false;
+      }
+    }
     std::optional<unsigned> inferredMappedDim;
     if (rewriteContract.ownerDims.empty())
       if (auto mappedDim = inferAcquireMappedDim(
@@ -1090,7 +1148,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     else if (inferredMappedDim)
       ownerDimForHalo = *inferredMappedDim;
 
-    if (parentAcqOp.getMode() == ArtsMode::in && ownerDimForHalo &&
+    if (effectiveTaskMode == ArtsMode::in && ownerDimForHalo &&
         rewriteContract.ownerDims.size() <= 1 &&
         rewriteContract.haloMinOffsets.empty() &&
         rewriteContract.haloMaxOffsets.empty() && AM) {
@@ -1122,6 +1180,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         AC,
         loc,
         parentAcqOp,
+        effectiveTaskMode,
         rootGuidValue,
         rootPtrValue,
         /*forceCoarseRewrite=*/singleDispatchLane && !parentHasPartitionInfo,
@@ -1135,11 +1194,22 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         stepVal,
         stepIsUnit};
 
+    ARTS_DEBUG("    - Planned contract for dep " << depIndex
+                                                 << ": applyStencilHalo="
+                                                 << rewriteContract.applyStencilHalo
+                                                 << ", preserveParentDepRange="
+                                                 << rewriteContract.preserveParentDepRange
+                                                 << ", parentAcquire="
+                                                 << parentAcqOp);
+
     auto createPlannedAcquire =
         [&]() -> std::pair<DbAcquireOp, TaskAcquireRewritePlan> {
       TaskAcquireRewritePlan rewritePlan = planTaskAcquireRewrite(planningInput);
       DbAcquireOp rewritten = rewriteAcquire(rewritePlan.rewriteInput,
                                              rewritePlan.useStencilRewriter);
+      ARTS_DEBUG("    - Planned task acquire for dep "
+                 << depIndex << ": useStencilRewriter="
+                 << rewritePlan.useStencilRewriter << ", acquire=" << rewritten);
       return {rewritten, std::move(rewritePlan)};
     };
     std::optional<SmallVector<int64_t, 4>> plannedTaskBlockShape;
@@ -1229,6 +1299,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         loc,
         parentAcqOp,
         chunkAcqOp,
+        effectiveTaskMode,
         rootGuidValue,
         rootPtrValue,
         loopInfo.strategy.kind,

@@ -12,10 +12,12 @@
 ///==========================================================================///
 
 /// Dialects
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/BuiltinOps.h"
 /// Arts
 #define GEN_PASS_DEF_DBMODETIGHTENING
@@ -33,6 +35,7 @@
 /// Debug
 #include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/BlockedAccessUtils.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
@@ -47,6 +50,45 @@ using namespace mlir::arts;
 
 namespace {
 
+static bool isProvablyZeroLoopLowerBound(Value lb) {
+  lb = ValueAnalysis::stripNumericCasts(lb);
+  if (ValueAnalysis::isZeroConstant(lb))
+    return true;
+
+  auto select = lb.getDefiningOp<arith::SelectOp>();
+  if (!select)
+    return false;
+
+  Value trueVal = ValueAnalysis::stripNumericCasts(select.getTrueValue());
+  Value falseVal = ValueAnalysis::stripNumericCasts(select.getFalseValue());
+  auto cmp =
+      ValueAnalysis::stripNumericCasts(select.getCondition()).getDefiningOp<
+          arith::CmpIOp>();
+  if (!cmp)
+    return false;
+
+  Value lhs = ValueAnalysis::stripNumericCasts(cmp.getLhs());
+  Value rhs = ValueAnalysis::stripNumericCasts(cmp.getRhs());
+  auto pred = cmp.getPredicate();
+
+  auto matchesZeroClamp = [&](Value zeroArm, Value otherArm) {
+    if (!ValueAnalysis::isZeroConstant(zeroArm) ||
+        !arts::isKnownNonPositive(otherArm))
+      return false;
+    return ((pred == arith::CmpIPredicate::slt ||
+             pred == arith::CmpIPredicate::ult) &&
+            ValueAnalysis::sameValue(lhs, otherArm) &&
+            ValueAnalysis::isZeroConstant(rhs)) ||
+           ((pred == arith::CmpIPredicate::sgt ||
+             pred == arith::CmpIPredicate::ugt) &&
+            ValueAnalysis::sameValue(rhs, otherArm) &&
+            ValueAnalysis::isZeroConstant(lhs));
+  };
+
+  return matchesZeroClamp(trueVal, falseVal) ||
+         matchesZeroClamp(falseVal, trueVal);
+}
+
 static bool isLoopFullRange(LoopNode *loop, Value dimSize) {
   if (!loop || !dimSize)
     return false;
@@ -57,12 +99,11 @@ static bool isLoopFullRange(LoopNode *loop, Value dimSize) {
   if (!lb || !step || !ub)
     return false;
 
-  if (!ValueAnalysis::isZeroConstant(ValueAnalysis::stripNumericCasts(lb)))
+  if (!isProvablyZeroLoopLowerBound(lb))
     return false;
   if (!ValueAnalysis::isOneConstant(ValueAnalysis::stripNumericCasts(step)))
     return false;
-  return ValueAnalysis::sameValue(ValueAnalysis::stripNumericCasts(ub),
-                                  dimSize);
+  return arts::areEquivalentOwnedSliceExtents(ub, dimSize);
 }
 
 static bool isIndexFullCoverage(Value idx, Value dimSize,
@@ -111,6 +152,37 @@ static bool isIndexFullCoverage(Value idx, Value dimSize,
   return isLoopFullRange(best, dimSize);
 }
 
+static SmallVector<Value> getEffectiveSliceDimSizes(DbAcquireNode *acqNode,
+                                                    DbAllocOp allocOp) {
+  SmallVector<Value> dimSizes(allocOp.getElementSizes().begin(),
+                              allocOp.getElementSizes().end());
+  if (!acqNode || !allocOp || dimSizes.empty())
+    return dimSizes;
+
+  const DbAcquirePartitionFacts &facts = acqNode->getPartitionFacts();
+  for (const DbPartitionEntryFact &entry : facts.entries) {
+    if (!entry.mappedDim || !entry.representativeSize)
+      continue;
+    if (*entry.mappedDim < dimSizes.size())
+      dimSizes[*entry.mappedDim] = entry.representativeSize;
+  }
+
+  if (std::optional<unsigned> dim = facts.inferSingleMappedDim()) {
+    Value blockOffset;
+    Value blockSize;
+    if (succeeded(acqNode->computeBlockInfo(blockOffset, blockSize)) &&
+        blockSize) {
+      if (*dim < dimSizes.size()) {
+        /// Graph-side block info refines the nominal block size to the
+        /// acquire's actual owned slice, including dynamic tail blocks.
+        dimSizes[*dim] = blockSize;
+      }
+    }
+  }
+
+  return dimSizes;
+}
+
 static bool writesFullAllocation(DbAcquireNode *acqNode, DbAllocOp allocOp,
                                  LoopAnalysis &loopAnalysis) {
   if (!acqNode || !allocOp)
@@ -130,8 +202,8 @@ static bool writesFullAllocation(DbAcquireNode *acqNode, DbAllocOp allocOp,
   if (dbRefToMemOps.empty())
     return true;
 
-  ValueRange elemSizes = allocOp.getElementSizes();
-  if (elemSizes.empty())
+  SmallVector<Value> dimSizes = getEffectiveSliceDimSizes(acqNode, allocOp);
+  if (dimSizes.empty())
     return true;
 
   for (auto &entry : dbRefToMemOps) {
@@ -149,18 +221,109 @@ static bool writesFullAllocation(DbAcquireNode *acqNode, DbAllocOp allocOp,
         return false;
 
       unsigned memrefRank = indexChain.size() - memrefStart;
-      unsigned sizeRank = elemSizes.size();
+      unsigned sizeRank = dimSizes.size();
       unsigned checkRank = std::min(memrefRank, sizeRank);
 
       for (unsigned d = 0; d < checkRank; ++d) {
         Value idx = indexChain[memrefStart + d];
-        Value dimSize = elemSizes[d];
+        Value dimSize = dimSizes[d];
         if (!isIndexFullCoverage(idx, dimSize, loops))
           return false;
       }
 
       if (memrefRank != sizeRank)
         return false;
+    }
+  }
+
+  return true;
+}
+
+struct MemAccessSite {
+  Value source;
+  SmallVector<Value, 4> fullIndexChain;
+};
+
+static std::optional<MemAccessSite> getMemAccessSite(DbRefOp dbRef,
+                                                     Operation *op) {
+  if (!dbRef || !op)
+    return std::nullopt;
+  SmallVector<Value> fullIndexChain = DbUtils::collectFullIndexChain(dbRef, op);
+  if (fullIndexChain.empty())
+    return std::nullopt;
+  if (auto load = dyn_cast<memref::LoadOp>(op))
+    return MemAccessSite{dbRef.getSource(),
+                         SmallVector<Value, 4>(fullIndexChain.begin(),
+                                               fullIndexChain.end())};
+  if (auto store = dyn_cast<memref::StoreOp>(op))
+    return MemAccessSite{dbRef.getSource(),
+                         SmallVector<Value, 4>(fullIndexChain.begin(),
+                                               fullIndexChain.end())};
+  if (auto load = dyn_cast<affine::AffineLoadOp>(op))
+    return MemAccessSite{dbRef.getSource(),
+                         SmallVector<Value, 4>(fullIndexChain.begin(),
+                                               fullIndexChain.end())};
+  if (auto store = dyn_cast<affine::AffineStoreOp>(op))
+    return MemAccessSite{dbRef.getSource(),
+                         SmallVector<Value, 4>(fullIndexChain.begin(),
+                                               fullIndexChain.end())};
+  return std::nullopt;
+}
+
+static bool sameMemAccessSite(const MemAccessSite &lhs,
+                              const MemAccessSite &rhs) {
+  if (!ValueAnalysis::sameValue(lhs.source, rhs.source) ||
+      lhs.fullIndexChain.size() != rhs.fullIndexChain.size())
+    return false;
+  for (auto [lhsIdx, rhsIdx] :
+       llvm::zip(lhs.fullIndexChain, rhs.fullIndexChain)) {
+    if (!ValueAnalysis::sameValue(lhsIdx, rhsIdx))
+      return false;
+  }
+  return true;
+}
+
+static bool loadsAreSatisfiedByDominatingStores(DbAcquireNode *acqNode,
+                                                func::FuncOp func) {
+  if (!acqNode || !func)
+    return false;
+
+  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+  acqNode->collectAccessOperations(dbRefToMemOps);
+  if (dbRefToMemOps.empty())
+    return false;
+
+  SmallVector<std::pair<Operation *, MemAccessSite>, 8> stores;
+  SmallVector<std::pair<Operation *, MemAccessSite>, 8> loads;
+  for (auto &entry : dbRefToMemOps) {
+    DbRefOp dbRef = entry.first;
+    for (Operation *memOp : entry.second) {
+      auto site = getMemAccessSite(dbRef, memOp);
+      if (!site)
+        continue;
+      if (isa<memref::StoreOp, affine::AffineStoreOp>(memOp))
+        stores.push_back({memOp, std::move(*site)});
+      else if (isa<memref::LoadOp, affine::AffineLoadOp>(memOp))
+        loads.push_back({memOp, std::move(*site)});
+    }
+  }
+
+  if (stores.empty() || loads.empty())
+    return false;
+
+  DominanceInfo domInfo(func);
+  for (auto &[loadOp, loadSite] : loads) {
+    bool covered = false;
+    for (auto &[storeOp, storeSite] : stores) {
+      if (!domInfo.dominates(storeOp, loadOp))
+        continue;
+      if (!sameMemAccessSite(storeSite, loadSite))
+        continue;
+      covered = true;
+      break;
+    }
+    if (!covered) {
+      return false;
     }
   }
 
@@ -313,13 +476,23 @@ bool DbModeTighteningPass::adjustDbModes() {
         return;
       }
 
+      bool loadsCoveredByLocalStores =
+          hasLoads && hasStores &&
+          loadsAreSatisfiedByDominatingStores(acqNode, func);
+
       ArtsMode newMode = ArtsMode::in;
-      if (hasLoads && hasStores)
-        newMode = ArtsMode::inout;
-      else if (hasStores)
+      if (hasStores && (!hasLoads || loadsCoveredByLocalStores))
         newMode = ArtsMode::out;
+      else if (hasLoads && hasStores)
+        newMode = ArtsMode::inout;
       else
         newMode = ArtsMode::in;
+
+      if (loadsCoveredByLocalStores) {
+        ARTS_DEBUG("AcquireOp: " << acqOp
+                                 << " reloads only task-local stored values; "
+                                    "treating access as out");
+      }
 
       if (hasStores && forceInout) {
         ARTS_DEBUG("AcquireOp: " << acqOp
@@ -331,7 +504,9 @@ bool DbModeTighteningPass::adjustDbModes() {
         DbAllocNode *allocNode = acqNode->getRootAlloc();
         DbAllocOp allocOp = allocNode ? allocNode->getDbAllocOp() : DbAllocOp();
         LoopAnalysis &loopAnalysis = AM->getLoopAnalysis();
-        if (allocOp && !writesFullAllocation(acqNode, allocOp, loopAnalysis)) {
+        bool fullWrite =
+            !allocOp || writesFullAllocation(acqNode, allocOp, loopAnalysis);
+        if (allocOp && !fullWrite) {
           ARTS_DEBUG("AcquireOp: " << acqOp
                                    << " writes partial region; upgrading to "
                                       "inout to preserve untouched elements");

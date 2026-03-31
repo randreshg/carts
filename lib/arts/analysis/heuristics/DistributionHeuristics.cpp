@@ -59,6 +59,48 @@ static int64_t clampPositive(int64_t value, int64_t minValue,
                     std::max<int64_t>(1, maxValue));
 }
 
+static int64_t estimateNestedLoopWork(LoopAnalysis &loopAnalysis, ForOp forOp) {
+  if (!forOp)
+    return 1;
+
+  if (auto perfectWork =
+          loopAnalysis.estimateStaticPerfectNestedWork(forOp.getOperation(), 8);
+      perfectWork && *perfectWork > 1) {
+    return *perfectWork;
+  }
+
+  int64_t maxNestedTrip = 1;
+  forOp.walk([&](scf::ForOp nestedFor) {
+    if (nestedFor == forOp)
+      return;
+    if (auto trip = loopAnalysis.getStaticTripCount(nestedFor.getOperation()))
+      maxNestedTrip = std::max(maxNestedTrip, *trip);
+  });
+  return maxNestedTrip;
+}
+
+static int64_t estimateStencilIterationWork(LoopAnalysis &loopAnalysis,
+                                            ForOp forOp, int64_t cap) {
+  if (!forOp)
+    return 1;
+
+  int64_t boundedCap = std::max<int64_t>(1, cap);
+  if (auto perfectWork = loopAnalysis.estimateStaticPerfectNestedWork(
+          forOp.getOperation(), boundedCap);
+      perfectWork && *perfectWork > 1) {
+    return *perfectWork;
+  }
+
+  int64_t maxNestedTrip = 1;
+  forOp.walk([&](scf::ForOp nestedFor) {
+    if (nestedFor == forOp)
+      return;
+    if (auto trip = loopAnalysis.getStaticTripCount(nestedFor.getOperation()))
+      maxNestedTrip = std::max(maxNestedTrip, *trip);
+  });
+  return std::min(maxNestedTrip, boundedCap);
+}
+
 } // namespace
 
 ParallelismDecision DistributionHeuristics::resolveParallelismFromMachine(
@@ -227,6 +269,17 @@ DistributionHeuristics::chooseWavefront2DTilingPlan(
 
   int64_t targetColTiles =
       clampPositive(2 * frontierRows - 1, minColTiles, maxColTiles);
+  /// Weighted 2-D wavefronts only expose at most `frontierRows` ready tasks at
+  /// a time. Wider column grids mainly add extra anti-diagonal ranks and EDT
+  /// overhead without increasing peak parallelism, so keep a soft budget on
+  /// the total tiles per timestep.
+  constexpr int64_t kPreferredMaxTilesPerWorker = 10;
+  int64_t maxTilesPerStep = std::max<int64_t>(
+      effectiveWorkers, effectiveWorkers * kPreferredMaxTilesPerWorker);
+  int64_t maxColTilesByBudget =
+      clampPositive(maxTilesPerStep / frontierRows, minColTiles, maxColTiles);
+  targetColTiles = std::min(targetColTiles, maxColTilesByBudget);
+
   int64_t tileRows = ceilDivPositive(rowExtent, frontierRows);
   int64_t tileCols = ceilDivPositive(colExtent, targetColTiles);
 
@@ -265,34 +318,48 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
   bool allowNestedWorkBoost = false;
   bool isStencilPattern = false;
   bool isWavefrontPattern = false;
-  if (auto depPattern = getEffectiveDepPattern(forOp.getOperation()))
+  int64_t repeatedTripProduct = 1;
+  int64_t nestedLoopWork = estimateNestedLoopWork(loopAnalysis, forOp);
+  constexpr int64_t kPreferredMinCellsPerStencilTask = 1 << 21;
+  int64_t stencilIterationWork = 1;
+  if (auto depPattern = getEffectiveDepPattern(forOp.getOperation())) {
     isWavefrontPattern = *depPattern == ArtsDepPattern::wavefront_2d;
+    /// The loop access summary is not always populated yet when ForOpt runs.
+    /// Fall back to the semantic dep-pattern contract so Jacobi/stencil loops
+    /// still take the stencil coarsening path before lowering.
+    isStencilPattern = isStencilFamilyDepPattern(*depPattern);
+  }
   if (auto summary =
           loopAnalysis.getLoopDbAccessSummary(forOp.getOperation())) {
-    isStencilPattern =
-        summary->distributionPattern == EdtDistributionPattern::stencil;
+    isStencilPattern = isStencilPattern ||
+                       summary->distributionPattern ==
+                           EdtDistributionPattern::stencil;
     allowNestedWorkBoost =
+        !isStencilPattern &&
         summary->distributionPattern == EdtDistributionPattern::uniform &&
         summary->allocPatterns.size() <= 4 && !summary->hasStencilOffset &&
         !summary->hasMatmulUpdate && !summary->hasTriangularBound;
   }
+  if (isStencilPattern) {
+    /// Keep the generic nested-work signal aggressively capped, but estimate
+    /// stencil inner-loop work with a larger budget so repeated N-D stencils
+    /// can coarsen their owned strips from real per-iteration work.
+    stencilIterationWork = estimateStencilIterationWork(
+        loopAnalysis, forOp, kPreferredMinCellsPerStencilTask);
+  }
   if (allowNestedWorkBoost) {
-    if (auto nestedWork = loopAnalysis.estimateStaticPerfectNestedWork(
-            forOp.getOperation(), 8);
-        nestedWork && *nestedWork > 1) {
-      if (*nestedWork >=
+    if (nestedLoopWork > 1) {
+      if (nestedLoopWork >=
           std::numeric_limits<int64_t>::max() / effectiveTripCount)
         effectiveTripCount = std::numeric_limits<int64_t>::max();
       else
-        effectiveTripCount *= *nestedWork;
+        effectiveTripCount *= nestedLoopWork;
     }
   }
 
   if (isStencilPattern && !allowNestedWorkBoost) {
-    if (auto nestedWork = loopAnalysis.estimateStaticPerfectNestedWork(
-            forOp.getOperation(), 8);
-        nestedWork && *nestedWork > 1) {
-      int64_t cappedWork = std::min(*nestedWork, (int64_t)1024);
+    if (nestedLoopWork > 1) {
+      int64_t cappedWork = std::min(nestedLoopWork, (int64_t)1024);
       if (cappedWork >=
           std::numeric_limits<int64_t>::max() / effectiveTripCount)
         effectiveTripCount = std::numeric_limits<int64_t>::max();
@@ -309,24 +376,36 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
   }
 
   if (isStencilPattern) {
-    if (auto nestedWork = loopAnalysis.estimateStaticPerfectNestedWork(
-            forOp.getOperation(), 8);
-        nestedWork && *nestedWork >= 4096) {
+    if (std::max(nestedLoopWork, stencilIterationWork) >= 4096) {
       minItersPerWorker = std::max<int64_t>(minItersPerWorker, 16);
     }
 
-    int64_t repeatProduct =
+    repeatedTripProduct =
         arts::getRepeatedParentTripProduct(forOp.getOperation());
-    if (repeatProduct >= 64)
+    if (repeatedTripProduct >= 64)
       minItersPerWorker = std::max<int64_t>(minItersPerWorker, 16);
-    else if (repeatProduct >= 16)
+    else if (repeatedTripProduct >= 16)
       minItersPerWorker = std::max<int64_t>(minItersPerWorker, 12);
   }
 
   if (isStencilPattern && !isWavefrontPattern && !workerCfg.internode) {
-    constexpr int64_t kMinStencilOwnedOuterIters = 8;
+    int64_t minOwnedOuterIters = 8;
+
+    /// Large stencil strips amortize better with fewer, larger owned tiles
+    /// once each outer iteration already carries substantial inner-loop work.
+    /// Without this floor, wide Jacobi/Poisson-style grids can still create
+    /// one EDT per worker even though each strip already spans millions of
+    /// cells.
+    if (repeatedTripProduct >= 64 && stencilIterationWork >= 4096) {
+      int64_t innerWork = std::max<int64_t>(1, stencilIterationWork);
+      int64_t minOwnedByWork =
+          ceilDivPositive(kPreferredMinCellsPerStencilTask, innerWork);
+      minOwnedOuterIters =
+          std::max<int64_t>(minOwnedOuterIters, minOwnedByWork);
+    }
+
     int64_t maxWorkersByOwnedSpan =
-        std::max<int64_t>(1, tripCount / kMinStencilOwnedOuterIters);
+        std::max<int64_t>(1, tripCount / minOwnedOuterIters);
     if (workerCfg.totalWorkers > maxWorkersByOwnedSpan) {
       int64_t desiredWorkers = maxWorkersByOwnedSpan;
       int64_t blockSize = (tripCount + desiredWorkers - 1) / desiredWorkers;

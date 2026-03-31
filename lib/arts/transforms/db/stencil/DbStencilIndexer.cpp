@@ -225,6 +225,41 @@ static bool deriveRowOffset(Value rowExpr, Value rowIV, Value baseOffsetVal,
   return false;
 }
 
+/// Materialize an owner-local row coordinate from an access expression.
+/// Some partitioned tasks already iterate in owner-local coordinates while
+/// others still carry the owner base in the row expression. Only subtract the
+/// owner base when the expression is known to include it.
+static Value materializeLocalRow(Value rowExpr, Value baseOffset,
+                                 bool includesBaseOffset, OpBuilder &builder,
+                                 Location loc) {
+  if (!rowExpr)
+    return Value();
+  if (!baseOffset || !includesBaseOffset ||
+      ValueAnalysis::isZeroConstant(
+          ValueAnalysis::stripNumericCasts(baseOffset)))
+    return rowExpr;
+  return arith::SubIOp::create(builder, loc, rowExpr, baseOffset);
+}
+
+/// Best-effort fallback when we cannot recover the exact row-loop contract.
+/// Preserve already-local row expressions and only subtract the owner base
+/// when the expression visibly depends on it.
+static Value maybeMaterializeLocalRow(Value rowExpr, Value baseOffset,
+                                      OpBuilder &builder, Location loc) {
+  if (!rowExpr || !baseOffset ||
+      ValueAnalysis::isZeroConstant(
+          ValueAnalysis::stripNumericCasts(baseOffset)))
+    return rowExpr;
+
+  Value strippedRow = ValueAnalysis::stripNumericCasts(rowExpr);
+  Value strippedBase = ValueAnalysis::stripNumericCasts(baseOffset);
+  if (ValueAnalysis::areValuesEquivalent(strippedRow, strippedBase) ||
+      ValueAnalysis::dependsOn(strippedRow, strippedBase))
+    return arith::SubIOp::create(builder, loc, rowExpr, baseOffset);
+
+  return rowExpr;
+}
+
 ///===----------------------------------------------------------------------===///
 /// Row selection types
 ///===----------------------------------------------------------------------===///
@@ -256,6 +291,7 @@ static RowSelection buildSelection(OpBuilder &selBuilder, Location selLoc,
                                    Value localRowVal, Value ownedRowsVal,
                                    const StencilRewriteContext &ctx) {
   Value ownedRows = ownedRowsVal ? ownedRowsVal : ctx.blockSize;
+  Value ownedMemrefRows = ctx.blockSize ? ctx.blockSize : ownedRows;
   Value isLeft = arith::CmpIOp::create(
       selBuilder, selLoc, arith::CmpIPredicate::slt, localRowVal, ctx.zero);
   Value isRight = arith::CmpIOp::create(
@@ -266,7 +302,8 @@ static RowSelection buildSelection(OpBuilder &selBuilder, Location selLoc,
   Value rightAvail = ctx.rightPtrNotNull ? ctx.rightPtrNotNull : falseI1;
   Value leftIdx =
       arith::AddIOp::create(selBuilder, selLoc, localRowVal, ctx.haloLeft);
-  Value ownedIdx = localRowVal;
+  Value ownedIdx =
+      clampIndex(localRowVal, ownedMemrefRows, selBuilder, selLoc);
   Value rightIdx =
       arith::SubIOp::create(selBuilder, selLoc, localRowVal, ownedRows);
 
@@ -428,20 +465,17 @@ static void rewriteUserForRegion(Operation *user, StencilRegionKind region,
   unsigned partitionDim = rowInfo.partitionDim;
   Value globalRow = rowInfo.globalRow;
 
-  /// Compute localRow = globalRow - baseOffset (using BASE offset semantics)
   Value baseOffset = ctx.partitionInfo.offsets.empty()
                          ? ctx.zero
                          : ctx.partitionInfo.offsets.front();
-  Value localRow =
-      baseOffset ? arith::SubIOp::create(builder, userLoc, globalRow, baseOffset)
-                 : globalRow;
-
   int64_t rowOffset = 0;
   bool includesBaseOffset = false;
   if (!deriveRowOffset(globalRow, rowLoop.getInductionVar(), baseOffset,
                        rowOffset, includesBaseOffset)) {
     return;
   }
+  Value localRow = materializeLocalRow(globalRow, baseOffset,
+                                       includesBaseOffset, builder, userLoc);
 
   Value ownedRows = ctx.blockSize;
   int64_t stepConst = 0;
@@ -469,7 +503,9 @@ static void rewriteUserForRegion(Operation *user, StencilRegionKind region,
     return ifOp.getResult(0);
   };
 
-  Value selectedRowIdx = clampIndex(localRow, ownedRows, builder, userLoc);
+  Value selectedRowIdx =
+      clampIndex(localRow, ctx.blockSize ? ctx.blockSize : ownedRows, builder,
+                 userLoc);
   Value selectedMemref = ctx.ownedMemref;
 
   if (region == StencilRegionKind::Left && rowOffset < 0) {
@@ -819,14 +855,11 @@ static void rewriteUserFallback(
   unsigned partitionDim = rowInfo.partitionDim;
   Value globalRow = rowInfo.globalRow;
 
-  /// Compute localRow = globalRow - baseOffset (using BASE offset semantics)
-  /// The baseOffset comes from partitionInfo.offsets[0]
   Value baseOffset = ctx.partitionInfo.offsets.empty()
                          ? ctx.zero
                          : ctx.partitionInfo.offsets.front();
   Value localRow =
-      baseOffset ? arith::SubIOp::create(builder, userLoc, globalRow, baseOffset)
-                 : globalRow;
+      maybeMaterializeLocalRow(globalRow, baseOffset, builder, userLoc);
 
   Value ownedIdx = localRow;
 
@@ -882,6 +915,8 @@ static void rewriteUserFallback(
       bool includesBaseOffset = false;
       if (deriveRowOffset(globalRow, rowIV, baseOffset, rowOffset,
                           includesBaseOffset)) {
+        ownedIdx = materializeLocalRow(globalRow, baseOffset,
+                                       includesBaseOffset, builder, userLoc);
         Value ownedRows = ctx.blockSize;
         auto extentIt = rowExtentCache.find(rowLoop.getOperation());
         if (extentIt != rowExtentCache.end()) {
@@ -917,11 +952,8 @@ static void rewriteUserFallback(
             rowIdx = arith::AddIOp::create(builder, rowLoc, rowIV, offVal);
           }
 
-          Value localRowHoisted = rowIdx;
-          if (!includesBaseOffset && baseOffset) {
-            localRowHoisted =
-                arith::SubIOp::create(builder, rowLoc, rowIdx, baseOffset);
-          }
+          Value localRowHoisted = materializeLocalRow(
+              rowIdx, baseOffset, includesBaseOffset, builder, rowLoc);
 
           RowSelection selection =
               buildSelection(builder, rowLoc, localRowHoisted, ownedRows, ctx);
@@ -988,9 +1020,7 @@ static void rewriteUserFallback(
 
         /// Recompute row-local indices at the hoist point.
         Value localRowHoisted =
-            baseOffset
-                ? arith::SubIOp::create(builder, userLoc, globalRow, baseOffset)
-                : globalRow;
+            maybeMaterializeLocalRow(globalRow, baseOffset, builder, userLoc);
 
         RowSelection selection = buildSelection(
             builder, userLoc, localRowHoisted, ctx.blockSize, ctx);

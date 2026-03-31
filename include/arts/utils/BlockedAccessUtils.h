@@ -164,15 +164,45 @@ inline std::optional<Value> extractLocalFromBlockBase(Value globalIndex,
 }
 
 /// Check whether the value is known to be non-negative.
-inline bool isKnownNonNegative(Value value) {
+inline bool isKnownNonNegative(Value value, unsigned depth = 0) {
+  if (!value || depth > 8)
+    return false;
   value = ValueAnalysis::stripNumericCasts(value);
 
   if (auto folded = ValueAnalysis::tryFoldConstantIndex(value))
     return *folded >= 0;
 
+  if (auto barg = dyn_cast<BlockArgument>(value)) {
+    auto forOp = dyn_cast_or_null<scf::ForOp>(barg.getOwner()->getParentOp());
+    if (forOp && forOp.getInductionVar() == barg &&
+        isKnownNonNegative(forOp.getLowerBound(), depth + 1) &&
+        ValueAnalysis::isConstantAtLeastOne(forOp.getStep()))
+      return true;
+  }
+
   if (auto maxOp = value.getDefiningOp<arith::MaxUIOp>())
     return ValueAnalysis::isZeroConstant(maxOp.getLhs()) ||
-           ValueAnalysis::isZeroConstant(maxOp.getRhs());
+           ValueAnalysis::isZeroConstant(maxOp.getRhs()) ||
+           (isKnownNonNegative(maxOp.getLhs(), depth + 1) &&
+            isKnownNonNegative(maxOp.getRhs(), depth + 1));
+
+  if (auto addOp = value.getDefiningOp<arith::AddIOp>())
+    return isKnownNonNegative(addOp.getLhs(), depth + 1) &&
+           isKnownNonNegative(addOp.getRhs(), depth + 1);
+
+  if (auto mulOp = value.getDefiningOp<arith::MulIOp>()) {
+    Value lhs = ValueAnalysis::stripNumericCasts(mulOp.getLhs());
+    Value rhs = ValueAnalysis::stripNumericCasts(mulOp.getRhs());
+    if (auto lhsConst = ValueAnalysis::tryFoldConstantIndex(lhs))
+      return *lhsConst >= 0 && isKnownNonNegative(rhs, depth + 1);
+    if (auto rhsConst = ValueAnalysis::tryFoldConstantIndex(rhs))
+      return *rhsConst >= 0 && isKnownNonNegative(lhs, depth + 1);
+    return isKnownNonNegative(lhs, depth + 1) &&
+           isKnownNonNegative(rhs, depth + 1);
+  }
+
+  if (isa<arith::DivUIOp, arith::RemUIOp>(value.getDefiningOp()))
+    return true;
 
   auto select = value.getDefiningOp<arith::SelectOp>();
   if (!select)
@@ -180,12 +210,14 @@ inline bool isKnownNonNegative(Value value) {
 
   if (auto cond = detail::tryFoldBool(select.getCondition()))
     return isKnownNonNegative(*cond ? select.getTrueValue()
-                                    : select.getFalseValue());
+                                    : select.getFalseValue(),
+                              depth + 1);
 
   Value trueValue = ValueAnalysis::stripNumericCasts(select.getTrueValue());
   Value falseValue = ValueAnalysis::stripNumericCasts(select.getFalseValue());
   if (!ValueAnalysis::isZeroConstant(trueValue))
-    return false;
+    return isKnownNonNegative(trueValue, depth + 1) &&
+           isKnownNonNegative(falseValue, depth + 1);
 
   auto cmp =
       ValueAnalysis::stripNumericCasts(select.getCondition()).getDefiningOp<
@@ -207,6 +239,31 @@ inline bool isKnownNonNegative(Value value) {
   default:
     return false;
   }
+}
+
+/// Check whether the value is known to be non-positive.
+inline bool isKnownNonPositive(Value value, unsigned depth = 0) {
+  if (!value || depth > 8)
+    return false;
+  value = ValueAnalysis::stripNumericCasts(value);
+
+  if (auto folded = ValueAnalysis::tryFoldConstantIndex(value))
+    return *folded <= 0;
+
+  if (auto subOp = value.getDefiningOp<arith::SubIOp>())
+    return ValueAnalysis::isZeroConstant(subOp.getLhs()) &&
+           isKnownNonNegative(subOp.getRhs(), depth + 1);
+
+  if (auto select = value.getDefiningOp<arith::SelectOp>()) {
+    if (auto cond = detail::tryFoldBool(select.getCondition()))
+      return isKnownNonPositive(*cond ? select.getTrueValue()
+                                      : select.getFalseValue(),
+                                depth + 1);
+    return isKnownNonPositive(select.getTrueValue(), depth + 1) &&
+           isKnownNonPositive(select.getFalseValue(), depth + 1);
+  }
+
+  return false;
 }
 
 /// Prove that the value is bounded by the block span.
@@ -247,6 +304,16 @@ inline bool isValueBoundedByBlockSpan(Value value, Value blockSize,
                                      depth + 1);
   }
 
+  /// Owned stencil slices commonly materialize as
+  /// `haloExpandedSpan - haloWidth`. If the expanded span is already known to
+  /// fit within the block and the subtrahend is non-negative, the result must
+  /// also fit within the same block.
+  if (auto subOp = value.getDefiningOp<arith::SubIOp>()) {
+    if (isValueBoundedByBlockSpan(subOp.getLhs(), blockSize, depth + 1) &&
+        isKnownNonNegative(subOp.getRhs(), depth + 1))
+      return true;
+  }
+
   if (auto mulOp = value.getDefiningOp<arith::MulIOp>()) {
     Value lhs = ValueAnalysis::stripClampOne(mulOp.getLhs());
     Value rhs = ValueAnalysis::stripClampOne(mulOp.getRhs());
@@ -259,6 +326,63 @@ inline bool isValueBoundedByBlockSpan(Value value, Value blockSize,
   }
 
   return false;
+}
+
+/// Normalize common owned-slice extent expressions that show up after blocked
+/// lowering, such as `maxui(blockSize, 1)` and redundant `minui` nesting from
+/// tail-clamp rewrites. This keeps later proofs mode-agnostic while accepting
+/// equivalent IR shapes.
+inline Value normalizeOwnedSliceExtent(Value value, unsigned depth = 0) {
+  if (!value || depth > 8)
+    return value;
+
+  value = ValueAnalysis::stripNumericCasts(value);
+  value = ValueAnalysis::stripClampOne(value);
+  value = ValueAnalysis::stripSelectClamp(value);
+  value = ValueAnalysis::stripClampOne(value);
+
+  auto normalizeMin = [&](arith::MinUIOp minOp) -> Value {
+    Value lhs = normalizeOwnedSliceExtent(minOp.getLhs(), depth + 1);
+    Value rhs = normalizeOwnedSliceExtent(minOp.getRhs(), depth + 1);
+    auto same = [&](Value a, Value b) {
+      return ValueAnalysis::sameValue(a, b) ||
+             ValueAnalysis::areValuesEquivalent(a, b);
+    };
+
+    if (same(lhs, rhs))
+      return lhs;
+
+    if (auto nested = rhs.getDefiningOp<arith::MinUIOp>()) {
+      Value nestedLhs = normalizeOwnedSliceExtent(nested.getLhs(), depth + 1);
+      Value nestedRhs = normalizeOwnedSliceExtent(nested.getRhs(), depth + 1);
+      if (same(lhs, nestedLhs) || same(lhs, nestedRhs))
+        return rhs;
+    }
+
+    if (auto nested = lhs.getDefiningOp<arith::MinUIOp>()) {
+      Value nestedLhs = normalizeOwnedSliceExtent(nested.getLhs(), depth + 1);
+      Value nestedRhs = normalizeOwnedSliceExtent(nested.getRhs(), depth + 1);
+      if (same(rhs, nestedLhs) || same(rhs, nestedRhs))
+        return lhs;
+    }
+
+    return value;
+  };
+
+  if (auto minOp = value.getDefiningOp<arith::MinUIOp>())
+    return normalizeMin(minOp);
+
+  return value;
+}
+
+inline bool areEquivalentOwnedSliceExtents(Value lhs, Value rhs) {
+  if (!lhs || !rhs)
+    return false;
+
+  lhs = normalizeOwnedSliceExtent(lhs);
+  rhs = normalizeOwnedSliceExtent(rhs);
+  return ValueAnalysis::sameValue(lhs, rhs) ||
+         ValueAnalysis::areValuesEquivalent(lhs, rhs);
 }
 
 /// Check whether the offset is aligned to a block boundary.
@@ -337,18 +461,13 @@ inline bool isLoopIvBoundedBy(Value idx, Value blockSize) {
   if (!forOp || forOp.getInductionVar() != barg)
     return false;
 
+  Value lb = ValueAnalysis::stripNumericCasts(forOp.getLowerBound());
   Value ub = ValueAnalysis::stripClampOne(forOp.getUpperBound());
   Value bs = ValueAnalysis::stripClampOne(blockSize);
-  if (ValueAnalysis::sameValue(ub, bs))
-    return true;
 
-  auto minOp = ub.getDefiningOp<arith::MinUIOp>();
-  if (!minOp)
+  if (!isKnownNonNegative(lb))
     return false;
-
-  Value lhs = ValueAnalysis::stripClampOne(minOp.getLhs());
-  Value rhs = ValueAnalysis::stripClampOne(minOp.getRhs());
-  return ValueAnalysis::sameValue(lhs, bs) || ValueAnalysis::sameValue(rhs, bs);
+  return isValueBoundedByBlockSpan(ub, bs);
 }
 
 } // namespace arts

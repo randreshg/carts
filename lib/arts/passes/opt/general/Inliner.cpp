@@ -78,15 +78,19 @@ static bool hasNestedMemrefType(Type type) {
   return memrefType && isa<MemRefType>(memrefType.getElementType());
 }
 
-static bool hasLayoutSensitiveNestedMemrefSignature(
-    func::CallOp call, CallableOpInterface callableOp) {
+static bool hasMemrefType(Type type) { return isa<MemRefType>(type); }
+
+template <typename TypePredicate>
+static bool callOrCalleeUsesType(func::CallOp call,
+                                 CallableOpInterface callableOp,
+                                 TypePredicate predicate) {
   for (Value operand : call.getOperands()) {
-    if (hasNestedMemrefType(operand.getType()))
+    if (predicate(operand.getType()))
       return true;
   }
 
   for (Type resultType : call.getResultTypes()) {
-    if (hasNestedMemrefType(resultType))
+    if (predicate(resultType))
       return true;
   }
 
@@ -95,16 +99,26 @@ static bool hasLayoutSensitiveNestedMemrefSignature(
     return false;
 
   for (BlockArgument arg : funcOp.getArguments()) {
-    if (hasNestedMemrefType(arg.getType()))
+    if (predicate(arg.getType()))
       return true;
   }
 
   for (Type resultType : funcOp.getFunctionType().getResults()) {
-    if (hasNestedMemrefType(resultType))
+    if (predicate(resultType))
       return true;
   }
 
   return false;
+}
+
+static bool hasLayoutSensitiveNestedMemrefSignature(
+    func::CallOp call, CallableOpInterface callableOp) {
+  return callOrCalleeUsesType(call, callableOp, hasNestedMemrefType);
+}
+
+static bool hasLayoutSensitiveMemrefSignature(func::CallOp call,
+                                              CallableOpInterface callableOp) {
+  return callOrCalleeUsesType(call, callableOp, hasMemrefType);
 }
 
 /// Keep early inlining focused on helpers that materially improve ARTS
@@ -117,6 +131,12 @@ static bool hasLayoutSensitiveNestedMemrefSignature(
 /// the storage layout of those values, so the helper body must be visible in
 /// the caller before that pass runs. Otherwise the call boundary would retain
 /// the stale pre-raise type/layout contract.
+///
+/// The same reasoning applies to plain memref helper functions that survive
+/// into DB creation/partitioning. Once a caller-side allocation is promoted to
+/// block/stencil DB layout, a remaining full-view helper call would otherwise
+/// force coarse fallback because the callee still expects the original
+/// contiguous memref contract.
 static bool shouldInlineCall(func::CallOp call, CallableOpInterface callableOp) {
   auto funcOp = dyn_cast_or_null<func::FuncOp>(callableOp.getOperation());
   if (!funcOp)
@@ -124,6 +144,13 @@ static bool shouldInlineCall(func::CallOp call, CallableOpInterface callableOp) 
 
   if (hasLayoutSensitiveNestedMemrefSignature(call, callableOp)) {
     ARTS_INFO("Inlining layout-sensitive nested-memref helper "
+              << funcOp.getSymName());
+    return true;
+  }
+
+  if (hasLayoutSensitiveMemrefSignature(call, callableOp) &&
+      containsSequentialLoopLikeOp(funcOp)) {
+    ARTS_INFO("Inlining layout-sensitive memref helper "
               << funcOp.getSymName());
     return true;
   }

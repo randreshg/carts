@@ -31,6 +31,7 @@
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include <cstdint>
 #include <climits>
 #include <optional>
 #include <string>
@@ -67,10 +68,16 @@ struct AcquireInfo {
   ArtsDepPattern depPattern = ArtsDepPattern::unknown;
   bool canElementWise = false;
   bool canBlock = false;
+  bool needsFullRange = false;
   AccessPattern accessPattern = AccessPattern::Unknown;
   bool hasDistributionContract = false;
   bool partitionDimsFromPeers = false;
   bool explicitCoarseRequest = false;
+  /// Compact authoritative owner-dim summary taken from the lowering contract.
+  /// Peer-inferred dims are intentionally excluded: they are useful for
+  /// allocation voting, but not strong enough to prove phase-local ownership.
+  uint8_t ownerDimsCount = 0;
+  int16_t ownerDims[4] = {-1, -1, -1, -1};
 
   /// Unified partition infos from DbAcquireOp::getPartitionInfos()
   /// One entry per depend clause entry on this acquire.

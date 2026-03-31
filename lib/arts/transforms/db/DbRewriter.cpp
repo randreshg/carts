@@ -52,6 +52,13 @@ std::unique_ptr<DbRewriter>
 DbRewriter::create(DbAllocOp oldAlloc, ArrayRef<DbRewriteAcquire> acquires,
                    DbRewritePlan &plan) {
   ARTS_DEBUG("DbRewriter::create mode=" << getPartitionModeName(plan.mode));
+  bool useMixedStencilRewriter = false;
+  if (plan.mode == PartitionMode::block && plan.stencilInfo) {
+    useMixedStencilRewriter = llvm::any_of(
+        acquires, [](const DbRewriteAcquire &info) {
+          return info.partitionInfo.mode == PartitionMode::stencil;
+        });
+  }
 
   switch (plan.mode) {
   case PartitionMode::fine_grained:
@@ -59,6 +66,8 @@ DbRewriter::create(DbAllocOp oldAlloc, ArrayRef<DbRewriteAcquire> acquires,
     return std::make_unique<DbElementWiseRewriter>(oldAlloc, acquires, plan);
 
   case PartitionMode::block:
+    if (useMixedStencilRewriter)
+      return std::make_unique<DbStencilRewriter>(oldAlloc, acquires, plan);
     return std::make_unique<DbBlockRewriter>(oldAlloc, acquires, plan);
 
   case PartitionMode::stencil:
