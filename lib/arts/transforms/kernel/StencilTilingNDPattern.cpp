@@ -722,6 +722,17 @@ private:
 
 } // namespace
 
+std::optional<StencilNDPatternContract>
+mlir::arts::matchExplicitStencilNDContract(ForOp artsFor, int64_t revision) {
+  MatchResult match;
+  if (!isOutOfPlaceStencil(artsFor, match))
+    return std::nullopt;
+
+  return StencilNDPatternContract(match.pattern, match.ownerDims,
+                                  match.minOffsets, match.maxOffsets,
+                                  match.writeFootprint, revision);
+}
+
 std::unique_ptr<KernelPatternTransform>
 mlir::arts::createStencilTilingNDPattern() {
   return std::make_unique<StencilTilingNDPattern>();

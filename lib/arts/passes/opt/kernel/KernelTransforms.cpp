@@ -48,17 +48,19 @@ struct KernelTransformsPass
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
+    auto &metadataManager = AM->getMetadataManager();
     ARTS_INFO_HEADER(KernelTransformsPass);
 
     int rewrites = 0;
     if (enableElementwisePipeline)
-      rewrites += applyElementwisePipelineTransform(module);
+      rewrites += applyElementwisePipelineTransform(module, metadataManager);
 
     SmallVector<std::unique_ptr<KernelPatternTransform>> patterns;
     patterns.push_back(createStencilTilingNDPattern());
     if (enableMatmul) {
       patterns.push_back(
-          createMatmulReductionPattern(enableTiling, tileJ, minTripCount));
+          createMatmulReductionPattern(enableTiling, tileJ, minTripCount,
+                                       metadataManager));
     }
 
     SmallVector<ForOp, 16> artsFors;

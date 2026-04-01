@@ -14,6 +14,7 @@
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/transforms/kernel/KernelTransform.h"
 #define GEN_PASS_DEF_PATTERNDISCOVERY
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
@@ -60,15 +61,6 @@ struct DiscoveryEvidence {
 
 static int64_t revisionForMode(DiscoveryMode mode) {
   return mode == DiscoveryMode::Refine ? 2 : 1;
-}
-
-static std::optional<EdtDistributionPattern>
-distributionPatternFor(ArtsDepPattern pattern) {
-  if (isStencilFamilyDepPattern(pattern))
-    return EdtDistributionPattern::stencil;
-  if (isUniformFamilyDepPattern(pattern))
-    return EdtDistributionPattern::uniform;
-  return std::nullopt;
 }
 
 static bool isLoopParallelCandidate(const LoopMetadata &meta) {
@@ -157,15 +149,7 @@ static SmallVector<Value> getAccessIndices(Operation *op) {
 struct LocalStencilEvidence {
   bool isStencil = false;
   bool isMultiDimStencil = false;
-  struct ExplicitContract {
-    ArtsDepPattern pattern = ArtsDepPattern::unknown;
-    SmallVector<int64_t, 4> spatialDims;
-    SmallVector<int64_t, 4> ownerDims;
-    SmallVector<int64_t, 4> minOffsets;
-    SmallVector<int64_t, 4> maxOffsets;
-    SmallVector<int64_t, 4> writeFootprint;
-  };
-  std::optional<ExplicitContract> explicitContract;
+  std::optional<StencilNDPatternContract> explicitContract;
 };
 
 static bool isPureOp(Operation *op) {
@@ -237,162 +221,13 @@ resolveLoopMetadataForArtsFor(arts::ForOp forOp, MetadataManager &manager) {
   return nestedMeta;
 }
 
-static bool classifySpatialIndex(Value index, ArrayRef<Value> spatialIvs,
-                                 bool &invariant, unsigned &ivOrdinal,
-                                 int64_t &constantOffset) {
-  invariant = false;
-  ivOrdinal = 0;
-  constantOffset = 0;
-
-  Value strippedIndex = ValueAnalysis::stripNumericCasts(index);
-  bool matched = false;
-  for (unsigned i = 0; i < spatialIvs.size(); ++i) {
-    Value iv = spatialIvs[i];
-    if (!ValueAnalysis::dependsOn(strippedIndex, iv) && strippedIndex != iv)
-      continue;
-
-    int64_t offset = 0;
-    Value base = ValueAnalysis::stripNumericCasts(
-        ValueAnalysis::stripConstantOffset(strippedIndex, &offset));
-    if (base != iv)
-      return false;
-    if (matched)
-      return false;
-
-    matched = true;
-    ivOrdinal = i;
-    constantOffset = offset;
-  }
-
-  invariant = !matched;
-  return true;
-}
-
-static std::optional<LocalStencilEvidence::ExplicitContract>
-inferExplicitStencilContract(arts::ForOp forOp) {
-  SmallVector<Value, 4> spatialIvs;
-  Block *spatialBody = nullptr;
-  if (!collectSpatialNestIvs(forOp, spatialIvs, spatialBody))
-    return std::nullopt;
-
-  Operation *outputAlloc = nullptr;
-  DenseMap<unsigned, int64_t> ivToOwnerDim;
-  DenseMap<unsigned, unsigned> ivToOwnerAxis;
-  SmallVector<int64_t, 4> ownerDims;
-
-  for (Operation &op : spatialBody->getOperations()) {
-    if (!isa<memref::StoreOp, affine::AffineStoreOp>(op))
-      continue;
-    Value memref = getAccessedMemref(&op);
-    Operation *allocLike = resolveAllocLikeSource(memref);
-    if (!allocLike)
-      return std::nullopt;
-    if (!outputAlloc)
-      outputAlloc = allocLike;
-    else if (outputAlloc != allocLike)
-      return std::nullopt;
-
-    SmallVector<Value> indices = getAccessIndices(&op);
-    for (auto [dim, idx] : llvm::enumerate(indices)) {
-      bool invariant = false;
-      unsigned ivOrdinal = 0;
-      int64_t offset = 0;
-      if (!classifySpatialIndex(idx, spatialIvs, invariant, ivOrdinal, offset))
-        return std::nullopt;
-      if (invariant)
-        continue;
-      if (offset != 0)
-        return std::nullopt;
-      auto [it, inserted] = ivToOwnerDim.try_emplace(ivOrdinal, dim);
-      if (!inserted && it->second != static_cast<int64_t>(dim))
-        return std::nullopt;
-      if (inserted) {
-        ivToOwnerAxis[ivOrdinal] = ownerDims.size();
-        ownerDims.push_back(dim);
-      }
-    }
-  }
-
-  if (!outputAlloc || ownerDims.size() < 2)
-    return std::nullopt;
-
-  SmallVector<int64_t, 4> minOffsets(ownerDims.size(), 0);
-  SmallVector<int64_t, 4> maxOffsets(ownerDims.size(), 0);
-  bool hasHalo = false;
-
-  spatialBody->walk([&](Operation *op) {
-    if (!isa<memref::LoadOp, affine::AffineLoadOp>(op))
-      return;
-    Value memref = getAccessedMemref(op);
-    Operation *allocLike = resolveAllocLikeSource(memref);
-    if (!allocLike)
-      return;
-    if (allocLike == outputAlloc) {
-      hasHalo = false;
-      outputAlloc = nullptr;
-      return;
-    }
-
-    DenseSet<unsigned> seenOwnerIvs;
-    SmallVector<Value> indices = getAccessIndices(op);
-    for (Value idx : indices) {
-      bool invariant = false;
-      unsigned ivOrdinal = 0;
-      int64_t offset = 0;
-      if (!classifySpatialIndex(idx, spatialIvs, invariant, ivOrdinal,
-                                offset)) {
-        outputAlloc = nullptr;
-        return;
-      }
-      if (invariant)
-        continue;
-      auto ownerIt = ivToOwnerAxis.find(ivOrdinal);
-      if (ownerIt == ivToOwnerAxis.end()) {
-        outputAlloc = nullptr;
-        return;
-      }
-      if (!seenOwnerIvs.insert(ivOrdinal).second) {
-        outputAlloc = nullptr;
-        return;
-      }
-      unsigned ownerIdx = ownerIt->second;
-      minOffsets[ownerIdx] = std::min(minOffsets[ownerIdx], offset);
-      maxOffsets[ownerIdx] = std::max(maxOffsets[ownerIdx], offset);
-      hasHalo = hasHalo || offset != 0;
-    }
-  });
-
-  if (!outputAlloc || !hasHalo)
-    return std::nullopt;
-
-  unsigned haloDims = 0;
-  int64_t maxAbsOffset = 0;
-  for (unsigned i = 0; i < ownerDims.size(); ++i) {
-    if (minOffsets[i] != 0 || maxOffsets[i] != 0)
-      ++haloDims;
-    maxAbsOffset = std::max<int64_t>(maxAbsOffset, std::abs(minOffsets[i]));
-    maxAbsOffset = std::max<int64_t>(maxAbsOffset, std::abs(maxOffsets[i]));
-  }
-
-  LocalStencilEvidence::ExplicitContract contract;
-  contract.ownerDims = ownerDims;
-  contract.spatialDims = ownerDims;
-  contract.minOffsets = minOffsets;
-  contract.maxOffsets = maxOffsets;
-  contract.writeFootprint.assign(ownerDims.size(), 0);
-  contract.pattern = ArtsDepPattern::stencil_tiling_nd;
-  if (maxAbsOffset > 1)
-    contract.pattern = ArtsDepPattern::higher_order_stencil;
-  else if (ownerDims.size() >= 3 && haloDims >= 2)
-    contract.pattern = ArtsDepPattern::cross_dim_stencil_3d;
-  return contract;
-}
-
-static LocalStencilEvidence collectLocalStencilEvidence(arts::ForOp forOp) {
+static LocalStencilEvidence collectLocalStencilEvidence(arts::ForOp forOp,
+                                                        int64_t revision) {
   LocalStencilEvidence evidence;
-  if (auto explicitContract = inferExplicitStencilContract(forOp)) {
+  if (auto explicitContract =
+          matchExplicitStencilNDContract(forOp, revision)) {
     evidence.isStencil = true;
-    evidence.isMultiDimStencil = explicitContract->ownerDims.size() >= 2;
+    evidence.isMultiDimStencil = explicitContract->isMultiDimensional();
     evidence.explicitContract = std::move(explicitContract);
     return evidence;
   }
@@ -464,12 +299,12 @@ static LocalStencilEvidence collectLocalStencilEvidence(arts::ForOp forOp) {
 }
 
 static DiscoveryEvidence collectEvidence(arts::ForOp forOp,
-                                         MetadataManager &manager) {
+                                         MetadataManager &manager,
+                                         const LocalStencilEvidence &localStencil) {
   DiscoveryEvidence evidence;
   evidence.loopMeta = resolveLoopMetadataForArtsFor(forOp, manager);
   if (!evidence.loopMeta)
     return evidence;
-  LocalStencilEvidence localStencil = collectLocalStencilEvidence(forOp);
 
   evidence.loopAllowsParallelFamily =
       isLoopParallelCandidate(*evidence.loopMeta);
@@ -573,7 +408,7 @@ static bool stampEdtContract(arts::EdtOp edt, ArtsDepPattern depPattern,
     setDepPattern(edt.getOperation(), depPattern);
     changed = true;
   }
-  if (auto distPattern = distributionPatternFor(depPattern)) {
+  if (auto distPattern = getDistributionPatternForDepPattern(depPattern)) {
     std::optional<EdtDistributionPattern> existing =
         getEdtDistributionPattern(edt.getOperation());
     if (!existing || *existing != *distPattern) {
@@ -590,49 +425,11 @@ static bool stampEdtContract(arts::EdtOp edt, ArtsDepPattern depPattern,
   return changed;
 }
 
-static bool stampExplicitStencilContract(
-    Operation *op, const LocalStencilEvidence::ExplicitContract &contract) {
-  if (!op)
-    return false;
-
-  bool changed = false;
-  if (auto existing = getStencilSpatialDims(op);
-      !existing || *existing != contract.spatialDims) {
-    setStencilSpatialDims(op, contract.spatialDims);
-    changed = true;
-  }
-  if (auto existing = getStencilOwnerDims(op);
-      !existing || *existing != contract.ownerDims) {
-    setStencilOwnerDims(op, contract.ownerDims);
-    changed = true;
-  }
-  if (auto existing = getStencilMinOffsets(op);
-      !existing || *existing != contract.minOffsets) {
-    setStencilMinOffsets(op, contract.minOffsets);
-    changed = true;
-  }
-  if (auto existing = getStencilMaxOffsets(op);
-      !existing || *existing != contract.maxOffsets) {
-    setStencilMaxOffsets(op, contract.maxOffsets);
-    changed = true;
-  }
-  if (auto existing = getStencilWriteFootprint(op);
-      !existing || *existing != contract.writeFootprint) {
-    setStencilWriteFootprint(op, contract.writeFootprint);
-    changed = true;
-  }
-  if (!hasSupportedBlockHalo(op)) {
-    setSupportedBlockHalo(op);
-    changed = true;
-  }
-  return changed;
-}
-
 struct PatternDiscoveryPass
     : public impl::PatternDiscoveryBase<PatternDiscoveryPass> {
-  PatternDiscoveryPass() = default;
   PatternDiscoveryPass(mlir::arts::AnalysisManager *AM, bool refineMode)
       : analysisManager(AM) {
+    assert(AM && "AnalysisManager must be provided externally");
     this->refine = refineMode;
   }
 
@@ -640,26 +437,20 @@ struct PatternDiscoveryPass
     ModuleOp module = getOperation();
     DiscoveryMode mode = refine ? DiscoveryMode::Refine : DiscoveryMode::Seed;
     int64_t targetRevision = revisionForMode(mode);
-
-    std::unique_ptr<MetadataManager> localMetadata;
-    MetadataManager *manager = nullptr;
-    if (analysisManager) {
-      manager = &analysisManager->getMetadataManager();
-    } else {
-      localMetadata = std::make_unique<MetadataManager>(&getContext());
-      localMetadata->importFromOperations(module);
-      manager = localMetadata.get();
-    }
+    auto &manager = analysisManager->getMetadataManager();
 
     int seeded = 0;
     int revised = 0;
     int skipped = 0;
 
     module.walk([&](arts::ForOp forOp) {
-      DiscoveryEvidence evidence = collectEvidence(forOp, *manager);
-      std::optional<LocalStencilEvidence::ExplicitContract> explicitStencil;
+      LocalStencilEvidence localStencil =
+          collectLocalStencilEvidence(forOp, targetRevision);
+      DiscoveryEvidence evidence =
+          collectEvidence(forOp, manager, localStencil);
+      std::optional<StencilNDPatternContract> explicitStencil;
       if (mode == DiscoveryMode::Refine)
-        explicitStencil = collectLocalStencilEvidence(forOp).explicitContract;
+        explicitStencil = localStencil.explicitContract;
       std::optional<ArtsDepPattern> existing =
           getDepPattern(forOp.getOperation());
       std::optional<ArtsDepPattern> candidate =
@@ -668,7 +459,7 @@ struct PatternDiscoveryPass
           chooseRefinedPattern(existing, candidate, evidence, mode);
 
       if (mode == DiscoveryMode::Refine && explicitStencil) {
-        chosen = explicitStencil->pattern;
+        chosen = explicitStencil->getFamily();
       }
 
       if (!chosen) {
@@ -676,17 +467,30 @@ struct PatternDiscoveryPass
         return;
       }
 
-      bool changed =
-          stampPatternContract(forOp.getOperation(), *chosen, targetRevision);
-      if (auto parentEdt = forOp->getParentOfType<arts::EdtOp>()) {
-        changed |= stampEdtContract(parentEdt, *chosen, targetRevision);
-        if (explicitStencil && isStencilFamilyDepPattern(*chosen))
-          changed |= stampExplicitStencilContract(parentEdt.getOperation(),
-                                                  *explicitStencil);
+      auto stampExplicitContract =
+          [](Operation *op, const StencilNDPatternContract &contract) {
+            if (!op)
+              return false;
+            DictionaryAttr before = op->getAttrDictionary();
+            contract.stamp(op);
+            return before != op->getAttrDictionary();
+          };
+
+      bool changed = false;
+      if (explicitStencil && isStencilFamilyDepPattern(*chosen)) {
+        changed |= stampExplicitContract(forOp.getOperation(), *explicitStencil);
+      } else {
+        changed =
+            stampPatternContract(forOp.getOperation(), *chosen, targetRevision);
       }
-      if (explicitStencil && isStencilFamilyDepPattern(*chosen))
-        changed |= stampExplicitStencilContract(forOp.getOperation(),
-                                                *explicitStencil);
+      if (auto parentEdt = forOp->getParentOfType<arts::EdtOp>()) {
+        if (explicitStencil && isStencilFamilyDepPattern(*chosen)) {
+          changed |=
+              stampExplicitContract(parentEdt.getOperation(), *explicitStencil);
+        } else {
+          changed |= stampEdtContract(parentEdt, *chosen, targetRevision);
+        }
+      }
 
       if (!existing && changed) {
         ++seeded;

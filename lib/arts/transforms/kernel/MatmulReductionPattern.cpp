@@ -44,11 +44,11 @@
 /// It changes a reduction-carried matmul kernel into an update form that is
 /// easier for downstream ARTS distribution and DB partitioning to exploit.
 
+#include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/transforms/kernel/KernelTransform.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -61,28 +61,9 @@ using namespace mlir::arts;
 
 namespace {
 
-static Attribute sanitizeLoopMetadataNoReductions(Attribute attr,
-                                                  MLIRContext *ctx) {
-  if (!attr || !ctx)
-    return attr;
-  auto loopAttr = dyn_cast<LoopMetadataAttr>(attr);
-  if (!loopAttr)
-    return attr;
-
-  if (!loopAttr.getHasReductions() || !loopAttr.getHasReductions().getValue())
-    return attr;
-
-  return LoopMetadataAttr::get(
-      ctx,
-      /*potentiallyParallel=*/loopAttr.getPotentiallyParallel(),
-      /*hasReductions=*/BoolAttr::get(ctx, false),
-      /*reductionKinds=*/ArrayAttr(),
-      /*tripCount=*/loopAttr.getTripCount(),
-      /*nestingLevel=*/loopAttr.getNestingLevel(),
-      /*hasInterIterationDeps=*/loopAttr.getHasInterIterationDeps(),
-      /*memrefsWithLoopCarriedDeps=*/loopAttr.getMemrefsWithLoopCarriedDeps(),
-      /*parallelClassification=*/loopAttr.getParallelClassification(),
-      /*locationKey=*/loopAttr.getLocationKey());
+static void clearReductionLoopFacts(LoopMetadata &metadata) {
+  metadata.hasReductions = false;
+  metadata.reductionKinds.clear();
 }
 
 /// Reduction operation kind - supports both float and integer operations.
@@ -486,7 +467,9 @@ static bool isTilingApplicable(scf::ForOp loop, int64_t tileSize,
 }
 
 static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
-                                          int64_t tileJ, int64_t minTripCount) {
+                                          int64_t tileJ,
+                                          int64_t minTripCount,
+                                          MetadataManager &metadataManager) {
   scf::ForOp jLoop = m.jLoop;
   scf::ForOp kLoop = m.kLoop;
 
@@ -550,11 +533,8 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
   /// Create k loop: for k: a = alpha*A[i,k]; for j: C[i,j] += a*B[k,j]
   auto newK = b.create<scf::ForOp>(loc, kLoop.getLowerBound(),
                                    kLoop.getUpperBound(), kLoop.getStep());
-  if (auto idAttr = kLoop->getAttr(AttrNames::Operation::ArtsId))
-    newK->setAttr(AttrNames::Operation::ArtsId, idAttr);
-  if (auto loopAttr = kLoop->getAttr(AttrNames::LoopMetadata::Name))
-    newK->setAttr(AttrNames::LoopMetadata::Name,
-                  sanitizeLoopMetadataNoReductions(loopAttr, b.getContext()));
+  metadataManager.rewriteLoopMetadata(kLoop.getOperation(), newK.getOperation(),
+                                      clearReductionLoopFacts);
 
   b.setInsertionPointToStart(newK.getBody());
   Value kIV = newK.getInductionVar();
@@ -603,12 +583,9 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
               })) {
         for (Operation &op : tiledUpdateOuter.getBody()->without_terminator()) {
           if (auto innerJ = dyn_cast<scf::ForOp>(&op)) {
-            if (auto idAttr = jLoop->getAttr(AttrNames::Operation::ArtsId))
-              innerJ->setAttr(AttrNames::Operation::ArtsId, idAttr);
-            if (auto loopAttr = jLoop->getAttr(AttrNames::LoopMetadata::Name))
-              innerJ->setAttr(
-                  AttrNames::LoopMetadata::Name,
-                  sanitizeLoopMetadataNoReductions(loopAttr, b.getContext()));
+            metadataManager.rewriteLoopMetadata(jLoop.getOperation(),
+                                                innerJ.getOperation(),
+                                                clearReductionLoopFacts);
             break;
           }
         }
@@ -619,12 +596,9 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
     if (!createdTiledUpdate) {
       auto newJ = b.create<scf::ForOp>(loc, jLoop.getLowerBound(),
                                        jLoop.getUpperBound(), jLoop.getStep());
-      if (auto idAttr = jLoop->getAttr(AttrNames::Operation::ArtsId))
-        newJ->setAttr(AttrNames::Operation::ArtsId, idAttr);
-      if (auto loopAttr = jLoop->getAttr(AttrNames::LoopMetadata::Name))
-        newJ->setAttr(
-            AttrNames::LoopMetadata::Name,
-            sanitizeLoopMetadataNoReductions(loopAttr, b.getContext()));
+      metadataManager.rewriteLoopMetadata(jLoop.getOperation(),
+                                          newJ.getOperation(),
+                                          clearReductionLoopFacts);
       b.setInsertionPointToStart(newJ.getBody());
       emitUpdateBody(b, loc, newJ.getInductionVar());
     }
@@ -641,8 +615,10 @@ namespace arts {
 
 class MatmulReductionPattern : public KernelPatternTransform {
 public:
-  MatmulReductionPattern(bool enableTiling, int64_t tileJ, int64_t minTripCount)
-      : enableTiling(enableTiling), tileJ(tileJ), minTripCount(minTripCount) {}
+  MatmulReductionPattern(bool enableTiling, int64_t tileJ, int64_t minTripCount,
+                         MetadataManager &metadataManager)
+      : enableTiling(enableTiling), tileJ(tileJ), minTripCount(minTripCount),
+        metadataManager(metadataManager) {}
 
   bool match(ForOp artsFor) override {
     matchResult = {};
@@ -672,7 +648,8 @@ public:
     int64_t effectiveTileJ = enableTiling ? tileJ : 1;
     ARTS_INFO("Detected reduction dot-product pattern inside arts.for; "
               << "rewriting to k-j update form");
-    rewriteReductionDotToKJUpdate(matchResult, effectiveTileJ, minTripCount);
+    rewriteReductionDotToKJUpdate(matchResult, effectiveTileJ, minTripCount,
+                                  metadataManager);
     setDepPattern(matchResult.outerI.getOperation(), ArtsDepPattern::matmul);
     if (auto parentEdt = matchResult.outerI->getParentOfType<EdtOp>())
       setDepPattern(parentEdt.getOperation(), ArtsDepPattern::matmul);
@@ -687,14 +664,17 @@ private:
   bool enableTiling;
   int64_t tileJ;
   int64_t minTripCount;
+  MetadataManager &metadataManager;
   ReductionDotMatch matchResult;
 };
 
 std::unique_ptr<KernelPatternTransform>
 createMatmulReductionPattern(bool enableTiling, int64_t tileJ,
-                             int64_t minTripCount) {
+                             int64_t minTripCount,
+                             MetadataManager &metadataManager) {
   return std::make_unique<MatmulReductionPattern>(enableTiling, tileJ,
-                                                  minTripCount);
+                                                  minTripCount,
+                                                  metadataManager);
 }
 
 } // namespace arts
