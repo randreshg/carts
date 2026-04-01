@@ -9,6 +9,7 @@
 #include "arts/analysis/metadata/MetadataRegistry.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopUtils.h"
+#include "arts/utils/OperationAttributes.h"
 #include "arts/utils/metadata/LocationMetadata.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 #include "arts/utils/metadata/MemrefMetadata.h"
@@ -25,15 +26,6 @@ ARTS_DEBUG_SETUP(metadata_attacher);
 
 using namespace mlir;
 using namespace mlir::arts;
-
-namespace {
-static std::optional<int64_t> parseSignedInt(llvm::StringRef text) {
-  int64_t value = 0;
-  if (!llvm::to_integer(text, value))
-    return std::nullopt;
-  return value;
-}
-} // namespace
 
 ///===----------------------------------------------------------------------===///
 /// Ensure Methods
@@ -116,6 +108,31 @@ bool MetadataAttacher::ensureMemrefMetadata(Operation *op) {
 bool MetadataAttacher::attachMetadataFromJson(
     Operation *op, llvm::StringRef key,
     llvm::StringMap<std::unique_ptr<llvm::json::Object>> &cache, bool isLoop) {
+  auto parseSignedInt = [](llvm::StringRef text) -> std::optional<int64_t> {
+    int64_t value = 0;
+    if (!llvm::to_integer(text, value))
+      return std::nullopt;
+    return value;
+  };
+  auto getJsonLoopTripCount =
+      [](const llvm::json::Object &json) -> std::optional<int64_t> {
+    if (auto tripCount = json.getInteger(AttrNames::LoopMetadata::TripCount))
+      return *tripCount;
+    return std::nullopt;
+  };
+  auto hasCompatibleStaticTripCount =
+      [&](const llvm::json::Object &json) -> bool {
+    if (!op)
+      return false;
+
+    std::optional<int64_t> opTripCount = getStaticTripCount(op);
+    std::optional<int64_t> jsonTripCount = getJsonLoopTripCount(json);
+    if (!opTripCount || !jsonTripCount)
+      return true;
+
+    return *opTripCount == *jsonTripCount;
+  };
+
   if (!io.loadJsonCache())
     return false;
 
@@ -132,25 +149,43 @@ bool MetadataAttacher::attachMetadataFromJson(
     const std::string opLocKey =
         opLoc.isValid() ? opLoc.getKey().str() : std::string();
 
+    unsigned bestMatchClass = std::numeric_limits<unsigned>::max();
+    uint64_t bestIdDistance = std::numeric_limits<uint64_t>::max();
     unsigned bestNestingDistance = std::numeric_limits<unsigned>::max();
     unsigned bestLineDistance = std::numeric_limits<unsigned>::max();
     std::string bestKey;
 
     for (const auto &entry : cache) {
       const llvm::json::Object *obj = entry.second.get();
-      bool matches = entry.first() == key;
-
-      if (!matches && requestedId.has_value()) {
-        if (auto idVal = obj->getInteger(AttrNames::Metadata::ArtsId))
-          matches = (*idVal == *requestedId);
-      }
-      if (!matches && !opLocKey.empty()) {
-        if (auto locKey = obj->getString(AttrNames::LoopMetadata::LocationKey))
-          matches = (*locKey == opLocKey);
-      }
-
-      if (!matches)
+      if (!hasCompatibleStaticTripCount(*obj)) {
+        ARTS_DEBUG("  -> rejecting loop metadata candidate due to trip-count "
+                   << "mismatch: op="
+                   << *getStaticTripCount(op)
+                   << ", json=" << *getJsonLoopTripCount(*obj));
         continue;
+      }
+
+      unsigned matchClass = 3;
+      if (entry.first() == key) {
+        matchClass = 0;
+      } else if (requestedId.has_value()) {
+        if (auto idVal = obj->getInteger(AttrNames::Metadata::ArtsId)) {
+          if (*idVal == *requestedId)
+            matchClass = 1;
+        }
+      }
+      if (matchClass == 3 && !opLocKey.empty()) {
+        if (auto locKey = obj->getString(AttrNames::LoopMetadata::LocationKey);
+            locKey && *locKey == opLocKey)
+          matchClass = 2;
+      }
+
+      uint64_t idDistance = std::numeric_limits<uint64_t>::max();
+      if (requestedId.has_value()) {
+        if (auto idVal = obj->getInteger(AttrNames::Metadata::ArtsId))
+          idDistance = static_cast<uint64_t>(
+              std::abs(*requestedId - static_cast<int64_t>(*idVal)));
+      }
 
       unsigned nestingDistance = std::numeric_limits<unsigned>::max();
       if (auto jsonNesting =
@@ -170,12 +205,19 @@ bool MetadataAttacher::attachMetadataFromJson(
         }
       }
 
-      if (!matched || nestingDistance < bestNestingDistance ||
-          (nestingDistance == bestNestingDistance &&
-           lineDistance < bestLineDistance) ||
-          (nestingDistance == bestNestingDistance &&
-           lineDistance == bestLineDistance && entry.first() < bestKey)) {
+      if (!matched || matchClass < bestMatchClass ||
+          (matchClass == bestMatchClass && lineDistance < bestLineDistance) ||
+          (matchClass == bestMatchClass && lineDistance == bestLineDistance &&
+           nestingDistance < bestNestingDistance) ||
+          (matchClass == bestMatchClass && lineDistance == bestLineDistance &&
+           nestingDistance == bestNestingDistance &&
+           idDistance < bestIdDistance) ||
+          (matchClass == bestMatchClass && lineDistance == bestLineDistance &&
+           nestingDistance == bestNestingDistance &&
+           idDistance == bestIdDistance && entry.first() < bestKey)) {
         matched = obj;
+        bestMatchClass = matchClass;
+        bestIdDistance = idDistance;
         bestNestingDistance = nestingDistance;
         bestLineDistance = lineDistance;
         bestKey = entry.first().str();
@@ -197,12 +239,14 @@ bool MetadataAttacher::attachMetadataFromJson(
     registry.initializeMetadata(metadata.get());
     metadata->exportToOp();
     metadataMap[op] = std::move(metadata);
+    setMetadataProvenance(op, MetadataProvenanceKind::Recovered);
   } else {
     auto metadata = std::make_unique<MemrefMetadata>(op);
     metadata->importFromJson(*matched);
     registry.initializeMetadata(metadata.get());
     metadata->exportToOp();
     metadataMap[op] = std::move(metadata);
+    setMetadataProvenance(op, MetadataProvenanceKind::Recovered);
   }
 
   /// Consume this metadata object from all cache aliases so different
@@ -220,6 +264,25 @@ bool MetadataAttacher::attachMetadataFromJson(
 
 bool MetadataAttacher::attachLoopMetadataNearLocation(
     Operation *op, const LocationMetadata &loc, unsigned lineTolerance) {
+  auto getJsonLoopTripCount =
+      [](const llvm::json::Object &json) -> std::optional<int64_t> {
+    if (auto tripCount = json.getInteger(AttrNames::LoopMetadata::TripCount))
+      return *tripCount;
+    return std::nullopt;
+  };
+  auto hasCompatibleStaticTripCount =
+      [&](const llvm::json::Object &json) -> bool {
+    if (!op)
+      return false;
+
+    std::optional<int64_t> opTripCount = getStaticTripCount(op);
+    std::optional<int64_t> jsonTripCount = getJsonLoopTripCount(json);
+    if (!opTripCount || !jsonTripCount)
+      return true;
+
+    return *opTripCount == *jsonTripCount;
+  };
+
   ARTS_DEBUG("attachLoopMetadataNearLocation: op="
              << op->getName() << ", loc=" << loc.getKey()
              << ", tolerance=" << lineTolerance);
@@ -277,6 +340,11 @@ bool MetadataAttacher::attachLoopMetadataNearLocation(
       continue;
     }
 
+    if (!hasCompatibleStaticTripCount(*obj)) {
+      ARTS_DEBUG("     -> trip-count mismatch, skipping");
+      continue;
+    }
+
     unsigned nestingDistance = std::numeric_limits<unsigned>::max();
     if (auto jsonNesting =
             obj->getInteger(AttrNames::LoopMetadata::NestingLevel))
@@ -315,6 +383,7 @@ bool MetadataAttacher::attachLoopMetadataNearLocation(
   registry.initializeMetadata(metadata.get());
   metadata->exportToOp();
   metadataMap[op] = std::move(metadata);
+  setMetadataProvenance(op, MetadataProvenanceKind::Recovered);
 
   /// Consume matched metadata object aliases from cache.
   llvm::SmallVector<std::string, 4> keysToErase;

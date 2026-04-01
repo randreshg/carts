@@ -5,6 +5,8 @@
 #include "arts/analysis/metadata/MetadataRegistry.h"
 #include "arts/Dialect.h"
 #include "arts/utils/Debug.h"
+#include "arts/utils/LoopUtils.h"
+#include "arts/utils/metadata/LocationMetadata.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 #include "arts/utils/metadata/MemrefMetadata.h"
 #include "arts/utils/metadata/ValueMetadata.h"
@@ -20,6 +22,104 @@ ARTS_DEBUG_SETUP(metadata_registry);
 
 using namespace mlir;
 using namespace mlir::arts;
+
+namespace {
+
+static bool refreshLoopMetadataFactsImpl(LoopMetadata &metadata, Operation *op) {
+  if (!op)
+    return false;
+
+  metadata.setOperation(op);
+  metadata.locationMetadata = LocationMetadata::fromLocation(op->getLoc());
+  metadata.nestingLevel = static_cast<int64_t>(getLoopDepth(op));
+
+  if (std::optional<int64_t> tripCount = getStaticTripCount(op))
+    metadata.tripCount = *tripCount;
+  else
+    metadata.tripCount.reset();
+
+  return true;
+}
+
+static void seedLoopMetadataDefaults(LoopMetadata &metadata, Operation *op) {
+  if (!op)
+    return;
+
+  if (isa<arts::ForOp, scf::ParallelOp, scf::ForallOp, omp::WsloopOp>(op)) {
+    metadata.potentiallyParallel = true;
+    metadata.parallelClassification =
+        LoopMetadata::ParallelClassification::Likely;
+  }
+
+  if (auto artsFor = dyn_cast<arts::ForOp>(op)) {
+    if (!artsFor.getReductionAccumulators().empty())
+      metadata.hasReductions = true;
+  }
+}
+
+static bool refreshMemrefMetadataFactsImpl(MemrefMetadata &metadata,
+                                           Operation *op) {
+  if (!op)
+    return false;
+  metadata.setOperation(op);
+  return true;
+}
+
+static bool refreshValueMetadataFactsImpl(ValueMetadata &metadata,
+                                          Operation *op) {
+  if (!op)
+    return false;
+  metadata.setOperation(op);
+  metadata.location = LocationMetadata::fromLocation(op->getLoc());
+  return true;
+}
+
+static bool refreshMetadataFactsImpl(ArtsMetadata &metadata, Operation *op) {
+  StringRef metadataName = metadata.getMetadataName();
+  if (metadataName == AttrNames::LoopMetadata::Name)
+    return refreshLoopMetadataFactsImpl(static_cast<LoopMetadata &>(metadata),
+                                        op);
+  if (metadataName == AttrNames::MemrefMetadata::Name)
+    return refreshMemrefMetadataFactsImpl(
+        static_cast<MemrefMetadata &>(metadata), op);
+  if (metadataName == AttrNames::ValueMetadata::Name)
+    return refreshValueMetadataFactsImpl(static_cast<ValueMetadata &>(metadata),
+                                         op);
+  metadata.setOperation(op);
+  return true;
+}
+
+static std::unique_ptr<ArtsMetadata> createMetadataEntryForOperation(
+    Operation *op) {
+  if (!op)
+    return nullptr;
+
+  if (MetadataRegistry::isLoopOp(op)) {
+    auto metadata = std::make_unique<LoopMetadata>(op);
+    if (op->hasAttr(AttrNames::LoopMetadata::Name))
+      metadata->importFromOp();
+    else
+      seedLoopMetadataDefaults(*metadata, op);
+    return metadata;
+  }
+
+  if (MetadataRegistry::isMemrefAllocOp(op)) {
+    auto metadata = std::make_unique<MemrefMetadata>(op);
+    if (op->hasAttr(AttrNames::MemrefMetadata::Name))
+      metadata->importFromOp();
+    return metadata;
+  }
+
+  if (op->hasAttr(AttrNames::ValueMetadata::Name)) {
+    auto metadata = std::make_unique<ValueMetadata>(op);
+    metadata->importFromOp();
+    return metadata;
+  }
+
+  return nullptr;
+}
+
+} // namespace
 
 ////===----------------------------------------------------------------------===////
 /// Metadata Addition
@@ -270,6 +370,59 @@ bool MetadataRegistry::transferMetadata(Operation *sourceOp,
   return true;
 }
 
+bool MetadataRegistry::replaceMetadataForRewrite(Operation *sourceOp,
+                                                 Operation *targetOp) {
+  if (!sourceOp || !targetOp)
+    return false;
+
+  auto it = metadataMap.find(sourceOp);
+  if (it == metadataMap.end())
+    return false;
+
+  std::unique_ptr<ArtsMetadata> metadata = std::move(it->second);
+  metadataMap.erase(it);
+  if (!metadata)
+    return false;
+
+  if (!refreshMetadataFactsImpl(*metadata, targetOp))
+    return false;
+
+  ArtsId preservedId = metadata->getMetadataId();
+  if (preservedId.has_value())
+    idRegistry.set(targetOp, preservedId.value());
+  else
+    metadata->setMetadataId(assignOperationId(targetOp));
+
+  metadata->exportToOp();
+  metadataMap[targetOp] = std::move(metadata);
+  return true;
+}
+
+bool MetadataRegistry::refreshMetadata(Operation *op) {
+  if (!op)
+    return false;
+
+  auto it = metadataMap.find(op);
+  if (it == metadataMap.end()) {
+    std::unique_ptr<ArtsMetadata> created = createMetadataEntryForOperation(op);
+    if (!created)
+      return false;
+
+    initializeMetadata(created.get());
+    if (!refreshMetadataFactsImpl(*created, op))
+      return false;
+    created->exportToOp();
+    metadataMap[op] = std::move(created);
+    return true;
+  }
+
+  if (!refreshMetadataFactsImpl(*it->second, op))
+    return false;
+
+  it->second->exportToOp();
+  return true;
+}
+
 ///===----------------------------------------------------------------------===///
 /// Operation Classification
 ///===----------------------------------------------------------------------===///
@@ -306,6 +459,13 @@ void MetadataRegistry::importFromOperation(Operation *op) {
       initializeMetadata(memrefMeta.get());
       ARTS_DEBUG("Imported MemrefMetadata for operation: " << op->getName());
       metadataMap[op] = std::move(memrefMeta);
+    }
+  } else if (op->hasAttr(AttrNames::ValueMetadata::Name)) {
+    auto valueMeta = std::make_unique<ValueMetadata>(op);
+    if (valueMeta->importFromOp()) {
+      initializeMetadata(valueMeta.get());
+      ARTS_DEBUG("Imported ValueMetadata for operation: " << op->getName());
+      metadataMap[op] = std::move(valueMeta);
     }
   }
 }

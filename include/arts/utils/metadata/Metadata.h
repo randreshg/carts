@@ -9,6 +9,7 @@
 #ifndef ARTS_UTILS_ARTSMETADATA_H
 #define ARTS_UTILS_ARTSMETADATA_H
 
+#include "arts/utils/OperationAttributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -47,6 +48,7 @@ public:
     if (attr)
       op_->setAttr(getMetadataName(), attr);
     exportIdToOp();
+    ensureMetadataProvenance(op_, MetadataProvenanceKind::Exact);
   };
 
   /// Import/export metadata to/from JSON

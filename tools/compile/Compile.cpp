@@ -125,6 +125,12 @@ static cl::opt<bool>
              cl::desc("Export diagnostic information about compilation"),
              cl::init(false));
 
+static cl::opt<bool> VerifyMetadataIntegrityInput(
+    "verify-metadata-integrity",
+    cl::desc("Run metadata integrity verification on the current input module "
+             "and stop"),
+    cl::init(false));
+
 static cl::opt<std::string> DiagnoseOutput(
     "diagnose-output", cl::desc("Output file for diagnostic JSON export"),
     cl::value_desc("filename"), cl::init(kDefaultDiagnoseOutput));
@@ -318,14 +324,15 @@ static const std::array<llvm::StringLiteral, 8>
                                         "HandleDeps",
                                         "DeadCodeElimination",
                                         "CSE"};
-static const std::array<llvm::StringLiteral, 7> kCollectMetadataPasses = {
+static const std::array<llvm::StringLiteral, 8> kCollectMetadataPasses = {
     "replaceAffineCFG(func)",
     "RaiseSCFToAffine(func)",
     "replaceAffineCFG(func)",
     "RaiseSCFToAffine(func)",
     "CSE(func)",
     "CollectMetadata",
-    "VerifyMetadata (diagnose mode)"};
+    "VerifyMetadata (diagnose mode)",
+    "VerifyMetadataIntegrity (diagnose mode)"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
 static const std::array<llvm::StringLiteral, 3> kOpenMPToArtsPasses = {
@@ -698,8 +705,10 @@ void buildCollectMetadataPipeline(PassManager &pm,
     pm.addPass(arts::createCollectMetadataPass(true, actualMetadataFile));
   else
     pm.addPass(arts::createCollectMetadataPass());
-  if (AM)
+  if (AM) {
     pm.addPass(arts::createVerifyMetadataPass(AM));
+    pm.addPass(arts::createVerifyMetadataIntegrityPass(AM));
+  }
 }
 
 /// Initial cleanup and simplification passes.
@@ -1189,6 +1198,24 @@ int main(int argc, char **argv) {
   /// Set up optional pipeline hooks for diagnostics.
   PipelineHooks hooks;
   PipelineHooks *hooksPtr = nullptr;
+  if (VerifyMetadataIntegrityInput) {
+    arts::PartitionFallback partitionFallback =
+        (PartitionFallbackMode == PartitionFallback::Fine)
+            ? arts::PartitionFallback::FineGrained
+            : arts::PartitionFallback::Coarse;
+    auto verifyAM = std::make_unique<arts::AnalysisManager>(
+        module.get(), ArtsConfig, MetadataFile, partitionFallback);
+    PassManager verifyPM(&context);
+    verifyPM.addPass(
+        arts::createVerifyMetadataIntegrityPass(/*AM=*/verifyAM.get(),
+                                                /*failOnError=*/true));
+    if (failed(verifyPM.run(module.get()))) {
+      ARTS_ERROR("Metadata integrity verification failed");
+      return 1;
+    }
+    return 0;
+  }
+
   if (Diagnose) {
     hooks.afterStep = [](PipelineStep step, LogicalResult result) {
       llvm::errs() << "[carts-compile] Pipeline " << pipelineStepName(step)
