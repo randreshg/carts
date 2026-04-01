@@ -11,9 +11,13 @@
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
+#include "arts/utils/Debug.h"
 #include "mlir/Pass/Pass.h"
 
 using namespace mlir;
+using mlir::arts::debugStream;
+
+ARTS_DEBUG_SETUP(verify_db_created);
 
 namespace {
 struct VerifyDbCreatedPass
@@ -25,8 +29,7 @@ struct VerifyDbCreatedPass
     module.walk([&](arts::EdtOp) { hasEdts = true; });
     module.walk([&](arts::DbAllocOp) { hasDbs = true; });
     if (hasEdts && !hasDbs)
-      llvm::errs() << "[verify-db-created] Warning: EDTs found but no DB "
-                      "allocations after create-dbs stage\n";
+      ARTS_WARN("EDTs found but no DB allocations after create-dbs stage");
   }
 };
 } // namespace

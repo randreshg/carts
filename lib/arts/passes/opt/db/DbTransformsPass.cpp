@@ -1,19 +1,20 @@
 ///==========================================================================///
 /// File: DbTransformsPass.cpp
 ///
-/// Post-DB transforms pass. Hosts DB-level transformations that run after
-/// DbDistributedOwnership and before the final DbModeTightening mode
-/// tightening.
+/// Post-DB transforms pass. Hosts DB-level transformations after partitioning
+/// and ownership decisions, and is also re-run after EDT cleanup so DB-root
+/// lifetime cleanup stays in the DB layer.
 ///
 /// Current transforms:
 ///   DT-1: Contract persistence -- persist refined AcquireContractSummary
 ///         back to IR via upsertLoweringContract().
 ///   DT-2: Stencil halo consolidation -- unify halo bounds from graph
 ///         analysis, raw IR attrs, and contract into unified min/max offsets.
-/// Placeholder transform slots:
-///   DT-4: GUID range allocation
-///   DT-5: DB replication (artsAddDbDuplicate for read-heavy DBs)
-///   DT-6: Atomic reduction recognition (artsAtomicAddInArrayDb)
+///   DT-4: GUID range allocation -- mark batch-GUID candidates.
+///   DT-6: DB lifetime shortening -- remove cleanup-only acquire chains once
+///         the reachable DB-use graph proves they feed no computation.
+///   DT-7: Dead DB elimination -- remove root DBs whose reachable use graph is
+///         entirely cleanup/forwarding plumbing.
 ///
 ///==========================================================================///
 
@@ -36,6 +37,7 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/RemovalUtils.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Pass/Pass.h"
@@ -63,11 +65,24 @@ private:
 
   /// DT-2: Stencil halo consolidation
   unsigned consolidateStencilHalos();
+
+  /// DT-6: Cleanup-only acquire elimination
+  unsigned shortenDbLifetimes();
+
+  /// DT-7: Root DB cleanup once no semantic users remain
+  unsigned eliminateDeadDbs();
 };
 } // namespace
 
 void DbTransformsPass::runOnOperation() {
   ARTS_INFO_HEADER(DbTransformsPass);
+
+  /// DbTransforms runs immediately after IR-mutating DB/EDT passes in the
+  /// concurrency-opt pipeline and is also re-run later after additional
+  /// cleanup. Always refresh shared analyses up front so node lookups and
+  /// access classification never observe stale graph state.
+  AM->getEdtAnalysis().invalidate();
+  AM->getDbAnalysis().invalidate();
 
   ///===------------------------------------------------------------------===///
   /// DT-1: Contract persistence
@@ -108,25 +123,26 @@ void DbTransformsPass::runOnOperation() {
   }
 
   ///===------------------------------------------------------------------===///
-  /// DT-5: DB replication
+  /// DT-6: DB lifetime shortening
   ///
-  /// Identify DBs with high read count from multiple nodes, emit
-  /// artsAddDbDuplicate() to replicate to consumer nodes.
-  /// Placeholder -- no transform applied yet.
+  /// Remove cleanup-only acquire subgraphs after proving through the reachable
+  /// DB-use graph that they do not feed computation, task dependencies, or
+  /// other semantic consumers.
   ///===------------------------------------------------------------------===///
+  unsigned dt6Count = shortenDbLifetimes();
+  if (dt6Count > 0)
+    ARTS_INFO("DT-6: shortened " << dt6Count
+                                 << " cleanup-only acquire lifetimes");
 
   ///===------------------------------------------------------------------===///
-  /// DT-6: Atomic reduction recognition
+  /// DT-7: Dead DB elimination
   ///
-  /// Detect scalar reductions in EDT bodies, emit
-  /// artsAtomicAddInArrayDb() instead of per-worker accumulator +
-  /// finalization EDT.
-  /// Placeholder -- no transform applied yet.
-  ///
-  /// TODO(DT-6): Placeholder — no transform implemented. Detect scalar
-  /// reductions in EDT bodies and emit artsAtomicAddInArrayDb() instead
-  /// of per-worker accumulator + finalization EDT.
+  /// Remove root DB chains when the full reachable DB-use graph is reduced to
+  /// forwarding and cleanup plumbing only.
   ///===------------------------------------------------------------------===///
+  unsigned dt7Count = eliminateDeadDbs();
+  if (dt7Count > 0)
+    ARTS_INFO("DT-7: eliminated " << dt7Count << " dead DB roots");
 
   ARTS_INFO_FOOTER(DbTransformsPass);
 }
@@ -187,54 +203,19 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
     func.walk([&](DbAcquireOp acquire) { acquires.push_back(acquire); });
 
     for (DbAcquireOp acquire : acquires) {
-      /// -----------------------------------------------------------
-      /// Step 0: Determine if this acquire is on a stencil-family DB.
-      /// Check via the contract first, then fall back to raw attrs.
-      /// -----------------------------------------------------------
-      auto contractOpt = getLoweringContract(acquire.getPtr());
-      auto rawDepPattern = getDepPattern(acquire.getOperation());
-
-      bool isStencilFamily = false;
-      if (contractOpt && contractOpt->depPattern)
-        isStencilFamily = isStencilFamilyDepPattern(*contractOpt->depPattern);
-      if (!isStencilFamily && rawDepPattern)
-        isStencilFamily = isStencilFamilyDepPattern(*rawDepPattern);
-
-      /// Also check via the AcquireContractSummary from DbAnalysis which
-      /// may have inferred a stencil pattern from graph-backed facts.
-      if (!isStencilFamily) {
-        auto contractSummary = dbAnalysis.getAcquireContractSummary(acquire);
-        if (contractSummary &&
-            contractSummary->contract.hasExplicitStencilContract())
-          isStencilFamily = true;
-      }
-
-      if (!isStencilFamily)
+      auto contractSummary = dbAnalysis.getAcquireContractSummary(acquire);
+      if (!contractSummary || !contractSummary->usesStencilSemantics())
         continue;
 
       ARTS_DEBUG("DT-2: processing stencil acquire " << acquire);
 
-      /// -----------------------------------------------------------
-      /// Step 1: Gather halo bounds from all three sources.
-      ///
-      /// Source A: Graph analysis (PartitionBoundsAnalyzer's StencilBounds)
-      /// Source B: Raw IR attrs (stencil_min_offsets / stencil_max_offsets)
-      /// Source C: Existing LoweringContractOp's minOffsets/maxOffsets
-      ///
-      /// Each source provides a per-dimension min/max vector. We take
-      /// the conservative union: min of mins, max of maxes.
-      /// -----------------------------------------------------------
-
-      /// Determine spatial rank from whichever source has the most dims.
       unsigned rank = 0;
 
-      /// Source A: graph analysis StencilBounds (1-D scalar bounds)
       std::optional<StencilBounds> graphBounds;
       DbAcquireNode *acqNode = dbAnalysis.getDbAcquireNode(acquire);
       if (acqNode)
         graphBounds = acqNode->getStencilBounds();
 
-      /// Source B: raw IR attrs
       auto rawMinOffsets = getStencilMinOffsets(acquire.getOperation());
       auto rawMaxOffsets = getStencilMaxOffsets(acquire.getOperation());
       if (rawMinOffsets)
@@ -242,41 +223,26 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
       if (rawMaxOffsets)
         rank = std::max(rank, static_cast<unsigned>(rawMaxOffsets->size()));
 
-      /// Source C: existing contract SSA values (read as static constants)
       std::optional<SmallVector<int64_t, 4>> contractStaticMins;
       std::optional<SmallVector<int64_t, 4>> contractStaticMaxs;
-      if (contractOpt) {
-        contractStaticMins = contractOpt->getStaticMinOffsets();
-        contractStaticMaxs = contractOpt->getStaticMaxOffsets();
-        if (contractStaticMins)
-          rank =
-              std::max(rank, static_cast<unsigned>(contractStaticMins->size()));
-        if (contractStaticMaxs)
-          rank =
-              std::max(rank, static_cast<unsigned>(contractStaticMaxs->size()));
-      }
+      contractStaticMins = contractSummary->contract.getStaticMinOffsets();
+      contractStaticMaxs = contractSummary->contract.getStaticMaxOffsets();
+      if (contractStaticMins)
+        rank = std::max(rank, static_cast<unsigned>(contractStaticMins->size()));
+      if (contractStaticMaxs)
+        rank = std::max(rank, static_cast<unsigned>(contractStaticMaxs->size()));
 
-      /// Graph analysis is 1-D; promote to rank if we have a rank > 0.
       if (graphBounds && graphBounds->valid && rank == 0)
         rank = 1;
 
-      /// If we have no dimensional information at all, skip.
       if (rank == 0) {
         ARTS_DEBUG("DT-2: no halo bounds available, skipping");
         continue;
       }
 
-      /// -----------------------------------------------------------
-      /// Step 2: Compute conservative union across all sources.
-      ///
-      /// For each dimension d:
-      ///   unified_min[d] = min(sourceA_min[d], sourceB_min[d], sourceC_min[d])
-      ///   unified_max[d] = max(sourceA_max[d], sourceB_max[d], sourceC_max[d])
-      /// -----------------------------------------------------------
       SmallVector<int64_t, 4> unifiedMin(rank, 0);
       SmallVector<int64_t, 4> unifiedMax(rank, 0);
 
-      /// Merge Source A: graph analysis (1-D scalar -> dimension 0)
       if (graphBounds && graphBounds->valid) {
         unifiedMin[0] = std::min(unifiedMin[0], graphBounds->minOffset);
         unifiedMax[0] = std::max(unifiedMax[0], graphBounds->maxOffset);
@@ -285,7 +251,6 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
                                                 << graphBounds->maxOffset);
       }
 
-      /// Merge Source B: raw IR attrs
       if (rawMinOffsets) {
         for (unsigned d = 0; d < rawMinOffsets->size() && d < rank; ++d)
           unifiedMin[d] = std::min(unifiedMin[d], (*rawMinOffsets)[d]);
@@ -299,7 +264,6 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
             "DT-2:   raw max offsets present, size=" << rawMaxOffsets->size());
       }
 
-      /// Merge Source C: contract SSA values
       if (contractStaticMins) {
         for (unsigned d = 0; d < contractStaticMins->size() && d < rank; ++d)
           unifiedMin[d] = std::min(unifiedMin[d], (*contractStaticMins)[d]);
@@ -313,7 +277,6 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
                    << contractStaticMaxs->size());
       }
 
-      /// Check if unified bounds are all zeros (no halo at all).
       bool allZero = true;
       for (unsigned d = 0; d < rank; ++d) {
         if (unifiedMin[d] != 0 || unifiedMax[d] != 0) {
@@ -326,18 +289,13 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
         continue;
       }
 
-      /// -----------------------------------------------------------
-      /// Step 3: Write unified bounds into the contract via
-      ///         upsertLoweringContract().
-      /// -----------------------------------------------------------
-      LoweringContractInfo newContract =
-          contractOpt.value_or(LoweringContractInfo{});
+      LoweringContractInfo newContract = contractSummary->contract;
+      if (newContract.kind == ContractKind::Unknown &&
+          contractSummary->usesStencilSemantics())
+        newContract.kind = ContractKind::Stencil;
+      if (!newContract.distributionPattern && contractSummary->usesStencilSemantics())
+        newContract.distributionPattern = EdtDistributionPattern::stencil;
 
-      /// If the contract had no depPattern, try to populate it from raw attrs.
-      if (!newContract.depPattern && rawDepPattern)
-        newContract.depPattern = *rawDepPattern;
-
-      /// Materialize the unified offset vectors as SSA index constants.
       OpBuilder builder(acquire.getContext());
       builder.setInsertionPointAfter(acquire.getOperation());
       Location loc = acquire.getLoc();
@@ -360,10 +318,6 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
 
       upsertLoweringContract(builder, loc, acquire.getPtr(), newContract);
 
-      /// -----------------------------------------------------------
-      /// Step 4: Remove redundant raw stencil attrs from the acquire.
-      ///         These are now consolidated into the contract.
-      /// -----------------------------------------------------------
       Operation *acquireOp = acquire.getOperation();
       acquireOp->removeAttr(AttrNames::Operation::Stencil::FootprintMinOffsets);
       acquireOp->removeAttr(AttrNames::Operation::Stencil::FootprintMaxOffsets);
@@ -376,6 +330,118 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
   });
 
   return count;
+}
+
+///===----------------------------------------------------------------------===///
+/// DT-6: DB lifetime shortening
+///===----------------------------------------------------------------------===///
+unsigned DbTransformsPass::shortenDbLifetimes() {
+  ModuleOp module = getOperation();
+  unsigned removedAcquireChains = 0;
+
+  module.walk([&](func::FuncOp func) {
+    DbAnalysis &dbAnalysis = AM->getDbAnalysis();
+    (void)dbAnalysis.getOrCreateGraph(func);
+
+    SmallVector<DbAcquireOp, 16> acquires;
+    func.walk([&](DbAcquireOp acquire) { acquires.push_back(acquire); });
+
+    llvm::SetVector<Operation *> opsToRemove;
+    DenseSet<Operation *> scheduledRoots;
+
+    for (DbAcquireOp acquire : acquires) {
+      if (!acquire || scheduledRoots.contains(acquire.getOperation()))
+        continue;
+
+      DbAcquireNode *acquireNode = dbAnalysis.getDbAcquireNode(acquire);
+      if (!acquireNode)
+        continue;
+
+      llvm::SetVector<Operation *> cleanupChain;
+      if (!DbUtils::collectCleanupOnlyUseChain(acquire.getGuid(),
+                                               cleanupChain))
+        continue;
+      if (!DbUtils::collectCleanupOnlyUseChain(acquire.getPtr(), cleanupChain))
+        continue;
+
+      cleanupChain.insert(acquire.getOperation());
+      for (Operation *op : cleanupChain) {
+        opsToRemove.insert(op);
+        if (isa<DbAcquireOp>(op))
+          scheduledRoots.insert(op);
+      }
+
+      ++removedAcquireChains;
+      ARTS_DEBUG("DT-6: removing cleanup-only acquire chain rooted at "
+                 << acquireNode->getHierId());
+    }
+
+    if (opsToRemove.empty())
+      return;
+
+    RemovalUtils removalMgr;
+    for (Operation *op : opsToRemove)
+      removalMgr.markForRemoval(op);
+    removalMgr.removeAllMarked(module, /*recursive=*/true);
+    AM->invalidateFunction(func);
+  });
+
+  return removedAcquireChains;
+}
+
+///===----------------------------------------------------------------------===///
+/// DT-7: Dead DB elimination
+///===----------------------------------------------------------------------===///
+unsigned DbTransformsPass::eliminateDeadDbs() {
+  ModuleOp module = getOperation();
+  unsigned removedRoots = 0;
+
+  module.walk([&](func::FuncOp func) {
+    DbAnalysis &dbAnalysis = AM->getDbAnalysis();
+    (void)dbAnalysis.getOrCreateGraph(func);
+
+    SmallVector<DbAllocOp, 16> allocs;
+    func.walk([&](DbAllocOp alloc) { allocs.push_back(alloc); });
+
+    llvm::SetVector<Operation *> opsToRemove;
+    DenseSet<Operation *> scheduledRoots;
+
+    for (DbAllocOp alloc : allocs) {
+      if (!alloc || scheduledRoots.contains(alloc.getOperation()))
+        continue;
+
+      DbAllocNode *allocNode = dbAnalysis.getDbAllocNode(alloc);
+      if (!allocNode)
+        continue;
+
+      llvm::SetVector<Operation *> cleanupChain;
+      if (!DbUtils::collectCleanupOnlyUseChain(alloc.getGuid(), cleanupChain))
+        continue;
+      if (!DbUtils::collectCleanupOnlyUseChain(alloc.getPtr(), cleanupChain))
+        continue;
+
+      cleanupChain.insert(alloc.getOperation());
+      for (Operation *op : cleanupChain) {
+        opsToRemove.insert(op);
+        if (isa<DbAllocOp>(op))
+          scheduledRoots.insert(op);
+      }
+
+      ++removedRoots;
+      ARTS_DEBUG("DT-7: removing dead DB root " << allocNode->getHierId());
+    }
+
+    if (opsToRemove.empty())
+      return;
+
+    RemovalUtils removalMgr;
+    for (Operation *op : opsToRemove)
+      removalMgr.markForRemoval(op);
+    removalMgr.removeAllMarked(module, /*recursive=*/true);
+    AM->invalidateFunction(func);
+  });
+
+  return removedRoots;
 }
 
 ///===----------------------------------------------------------------------===///

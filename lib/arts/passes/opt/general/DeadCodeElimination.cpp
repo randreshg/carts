@@ -12,6 +12,9 @@
 /// - Unused acquires (db_acquire with no memory ops and unused guid)
 /// - Unused EDT dependencies (EDT block args with no uses + backing acquires)
 ///
+/// DB lifetime cleanup that depends on forwarding/cleanup use graphs stays in
+/// DbTransformsPass and EdtTransformsPass; this pass only removes raw-dead IR.
+///
 /// Example:
 ///   Before:
 ///     %u = arts.undef ...
@@ -271,7 +274,7 @@ struct DeadCodeEliminationPass
     RemovalUtils removalMgr;
 
     module.walk([&](DbAllocOp dbAlloc) {
-      if (dbAlloc.getGuid().use_empty() &&
+      if (!hasNonContractUse(dbAlloc.getGuid()) &&
           !hasNonContractUse(dbAlloc.getPtr())) {
         SmallVector<Operation *> contracts;
         collectContractUsers(dbAlloc.getPtr(), contracts);
@@ -291,34 +294,23 @@ struct DeadCodeEliminationPass
   /// This handles "phantom acquires" - acquires generated for arrays visible
   /// in a parallel scope but not actually accessed in a particular EDT.
   unsigned removeUnusedAcquires(ModuleOp module) {
-    SmallVector<Operation *> toRemove;
-    SmallVector<Operation *> contractsToRemove;
+    RemovalUtils removalMgr;
 
     module.walk([&](DbAcquireOp acquire) {
-      /// Check if ptr has any uses at all (memory ops, EDT args, etc.)
-      bool ptrUsed = hasNonContractUse(acquire.getPtr());
-
-      /// Check if guid is used (for signaling/dependencies)
-      bool guidUsed = !acquire.getGuid().use_empty();
-
-      if (!ptrUsed && !guidUsed) {
+      if (!hasNonContractUse(acquire.getPtr()) &&
+          !hasNonContractUse(acquire.getGuid())) {
         ARTS_DEBUG("Removing unused acquire: " << acquire);
-        collectContractUsers(acquire.getPtr(), contractsToRemove);
-        toRemove.push_back(acquire);
+        SmallVector<Operation *> contracts;
+        collectContractUsers(acquire.getPtr(), contracts);
+        for (Operation *contract : contracts)
+          removalMgr.markForRemoval(contract);
+        removalMgr.markForRemoval(acquire);
       }
     });
 
-    std::sort(contractsToRemove.begin(), contractsToRemove.end());
-    contractsToRemove.erase(
-        std::unique(contractsToRemove.begin(), contractsToRemove.end()),
-        contractsToRemove.end());
-    for (auto *contract : contractsToRemove)
-      contract->erase();
-
-    for (auto *op : toRemove)
-      op->erase();
-
-    return toRemove.size();
+    auto opsToRemoveSize = removalMgr.getOpsToRemove().size();
+    removalMgr.removeAllMarked(module, /*recursive=*/true);
+    return opsToRemoveSize;
   }
 
   /// Check if a block argument has only DbReleaseOp uses (no real memory ops)

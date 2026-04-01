@@ -51,6 +51,7 @@
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/RemovalUtils.h"
 /// Debug
 #include "arts/utils/Debug.h"
 #include <algorithm>
@@ -895,60 +896,41 @@ unsigned EdtTransformsPass::eliminateDeadDependencies() {
     if (deps.size() != numArgs)
       return;
 
-    /// Identify dead block arguments: those with zero uses, or whose
-    /// only uses are DbReleaseOps.
+    /// Identify dead block arguments whose reachable use graph reduces to
+    /// forwarding and cleanup only.
     SmallVector<unsigned, 4> deadIndices;
+    llvm::SetVector<Operation *> cleanupOpsToErase;
     for (unsigned i = 0; i < numArgs; ++i) {
       BlockArgument arg = body.getArgument(i);
       DbAcquireOp acquire = deps[i].getDefiningOp<DbAcquireOp>();
 
-      if (arg.use_empty()) {
-        /// Zero uses -- clearly dead.
-        deadIndices.push_back(i);
-        ARTS_DEBUG("EXT-EDT-2: block arg " << i << " of EDT has zero uses");
-        continue;
-      }
-
-      bool releaseOnlyUses = true;
-      for (OpOperand &use : arg.getUses()) {
-        if (!isa<DbReleaseOp>(use.getOwner())) {
-          releaseOnlyUses = false;
-          break;
-        }
-      }
-      if (!releaseOnlyUses)
+      llvm::SetVector<Operation *> cleanupChain;
+      if (!DbUtils::collectCleanupOnlyUseChain(arg, cleanupChain,
+                                               &edt.getRegion()))
         continue;
 
-      /// Release-only acquires that never feed a db_ref or any other task
-      /// computation are stale dependencies. Keep the edge only when an
-      /// upstream transform explicitly stamped it as semantically required.
       if (acquire && acquire.getPreserveDepEdge()) {
-        ARTS_DEBUG("EXT-EDT-2: keeping release-only dep " << i
+        ARTS_DEBUG("EXT-EDT-2: keeping cleanup-only dep " << i
                                                           << " due to "
                                                              "preserveDepEdge");
         continue;
       }
 
       deadIndices.push_back(i);
+      for (Operation *op : cleanupChain)
+        cleanupOpsToErase.insert(op);
       ARTS_DEBUG("EXT-EDT-2: block arg " << i
-                                         << " is release-only and can be "
+                                         << " is cleanup-only and can be "
                                             "eliminated");
     }
 
     if (deadIndices.empty())
       return;
 
-    /// Erase DbReleaseOps that use dead block arguments before removing
-    /// the arguments (otherwise the uses would dangle).
-    for (unsigned idx : deadIndices) {
-      BlockArgument arg = body.getArgument(idx);
-      SmallVector<Operation *, 4> releasesToErase;
-      for (OpOperand &use : arg.getUses())
-        if (isa<DbReleaseOp>(use.getOwner()))
-          releasesToErase.push_back(use.getOwner());
-      for (Operation *rel : releasesToErase)
-        rel->erase();
-    }
+    RemovalUtils removalMgr;
+    for (Operation *op : cleanupOpsToErase)
+      removalMgr.markForRemoval(op);
+    removalMgr.removeAllMarked(module, /*recursive=*/true);
 
     /// Build the new dependency list, excluding dead indices.
     /// Remove block arguments in reverse order to avoid index invalidation.

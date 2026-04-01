@@ -6,9 +6,11 @@
 
 #include "arts/utils/EdtUtils.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/DenseSet.h"
 #include <algorithm>
 
@@ -184,6 +186,39 @@ bool canCloneAllocaInitStore(memref::StoreOp store, Value memref) {
   return llvm::all_of(store.getIndices(), [&](Value index) {
     return isCloneSafeStoreOperand(index, memref, visited);
   });
+}
+
+void classifyEdtUserValues(ArrayRef<Value> userValues,
+                           llvm::SetVector<Value> &parameters,
+                           llvm::SetVector<Value> &constants,
+                           llvm::SetVector<Value> &dbHandles) {
+  for (Value val : userValues) {
+    if (auto *defOp = val.getDefiningOp()) {
+      if (isa<DbAllocOp>(defOp)) {
+        dbHandles.insert(val);
+        continue;
+      }
+      if (isa<arith::ConstantOp>(defOp)) {
+        constants.insert(val);
+        continue;
+      }
+    }
+
+    if (val.getType().isIntOrIndexOrFloat())
+      parameters.insert(val);
+  }
+}
+
+void analyzeEdtCapturedValues(EdtOp edt, llvm::SetVector<Value> &capturedValues,
+                              llvm::SetVector<Value> &parameters,
+                              llvm::SetVector<Value> &constants,
+                              llvm::SetVector<Value> &dbHandles) {
+  if (!edt)
+    return;
+
+  getUsedValuesDefinedAbove(edt.getRegion(), capturedValues);
+  classifyEdtUserValues(capturedValues.getArrayRef(), parameters, constants,
+                        dbHandles);
 }
 
 } // namespace arts

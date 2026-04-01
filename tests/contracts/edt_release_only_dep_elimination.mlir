@@ -25,6 +25,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : 
     arts.edt <task> <intranode> route(%c0_i32) (%dep_ptr_0, %dep_ptr_1, %dep_ptr_2) : memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>> attributes {arts.id = 100 : i64, no_verify = #arts.no_verify} {
     ^bb0(%arg0: memref<?xmemref<?xf64>>, %arg1: memref<?xmemref<?xf64>>, %arg2: memref<?xmemref<?xf64>>):
       %src = arts.db_ref %arg0[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
+      %dead = arts.db_ref %arg1[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
       %dst = arts.db_ref %arg2[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
       %value = memref.load %src[%c0] : memref<?xf64>
       memref.store %value, %dst[%c0] : memref<?xf64>
