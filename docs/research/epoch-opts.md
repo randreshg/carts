@@ -66,8 +66,9 @@ GUIDs, norm, finish GUID) through `depv`. The compiler uses `paramv` instead
 ### Pass: EpochOpt (step 13)
 
 The transform lives in `tryCPSChainTransform()` in
-`lib/arts/passes/opt/edt/EpochOpt.cpp`. It is gated by the
-`--arts-epoch-finish-continuation` flag.
+`lib/arts/passes/opt/edt/EpochOpt.cpp`. It is enabled by default through the
+`--arts-epoch-finish-continuation` pipeline switch and can be disabled with
+`--arts-epoch-finish-continuation=false` for debugging or IR-diff isolation.
 
 ### Eligibility Checks
 

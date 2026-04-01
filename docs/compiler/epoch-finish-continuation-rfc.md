@@ -119,10 +119,16 @@ This preserves sequential iteration semantics without blocking worker threads.
 
 ### Phase 0: Safety and Pre-Reqs
 
-1. Keep current wait path as default behavior.
-2. Add a flag (example: `--arts-epoch-finish-continuation`) for opt-in.
+1. Keep the wait path available as a fallback for ineligible patterns and IR
+   debugging.
+2. Expose a compiler switch (`--arts-epoch-finish-continuation`) so the
+   behavior can be forced on or off explicitly.
 3. Fix distributed metadata continuity gap before broad distributed enablement:
    - ensure `distribution_kind` and other required attrs survive DB rewrites.
+
+Implementation note: the current compiler enables finish-continuation by
+default and uses `--arts-epoch-finish-continuation=false` as the explicit
+opt-out path.
 
 ### Phase 1: IR Plumbing for Finish Targets
 

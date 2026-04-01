@@ -97,13 +97,24 @@ std::unique_ptr<Pass> createForLoweringPass();
 std::unique_ptr<Pass> createForLoweringPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createLoopFusionPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createEpochOptPass();
+std::unique_ptr<Pass> createEpochOptPass(AnalysisManager *AM);
 /// Create EpochOpt with explicit scheduling flags.
 /// Structural opts (narrowing/fusion/loop-fusion) are always enabled.
+std::unique_ptr<Pass> createEpochOptPass(AnalysisManager *AM,
+                                         bool enableAmortization,
+                                         bool enableContinuation,
+                                         bool enableCPSDriver,
+                                         bool enableCPSChain = false);
 std::unique_ptr<Pass> createEpochOptPass(bool enableAmortization,
                                          bool enableContinuation,
                                          bool enableCPSDriver,
                                          bool enableCPSChain = false);
 /// Create EpochOpt with scheduling-only flags (structural opts disabled).
+std::unique_ptr<Pass> createEpochOptSchedulingPass(AnalysisManager *AM,
+                                                   bool enableAmortization,
+                                                   bool enableContinuation,
+                                                   bool enableCPSDriver,
+                                                   bool enableCPSChain = false);
 std::unique_ptr<Pass> createEpochOptSchedulingPass(bool enableAmortization,
                                                    bool enableContinuation,
                                                    bool enableCPSDriver,
