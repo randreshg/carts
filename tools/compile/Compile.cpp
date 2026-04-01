@@ -56,6 +56,7 @@
 
 using namespace llvm;
 using namespace mlir;
+using mlir::arts::debugStream;
 
 ARTS_DEBUG_SETUP(compile)
 
@@ -199,10 +200,10 @@ static cl::opt<bool> DistributedDb(
 /// docs/compiler/epoch-finish-continuation-rfc.md
 static cl::opt<bool> EpochFinishContinuation(
     "arts-epoch-finish-continuation",
-    cl::desc("Enable epoch finish-continuation lowering (replace blocking "
-             "epoch waits with ARTS-native finish-EDT continuation scheduling "
-             "for eligible patterns)"),
-    cl::init(false));
+    cl::desc("Enable epoch finish-continuation lowering (default: on; replace "
+             "blocking epoch waits with ARTS-native finish-EDT continuation "
+             "scheduling for eligible patterns)"),
+    cl::init(true));
 
 ///===----------------------------------------------------------------------===///
 /// Pipeline Stop Options
@@ -368,7 +369,7 @@ static const std::array<llvm::StringLiteral, 4> kConcurrencyPasses = {
     "PolygeistCanonicalize", "Concurrency", "ForOpt", "PolygeistCanonicalize"};
 static const std::array<llvm::StringLiteral, 3> kEdtDistributionPasses = {
     "EdtDistribution", "ForLowering", "VerifyForLowered"};
-static const std::array<llvm::StringLiteral, 24> kConcurrencyOptPasses = {
+static const std::array<llvm::StringLiteral, 25> kConcurrencyOptPasses = {
     "EdtStructuralOpt(runAnalysis=false)",
     "DeadCodeElimination",
     "PolygeistCanonicalize",
@@ -382,6 +383,7 @@ static const std::array<llvm::StringLiteral, 24> kConcurrencyOptPasses = {
     "DbTransforms",
     "DbModeTightening",
     "EdtTransforms",
+    "DbTransforms",
     "ContractValidation",
     "DbScratchElimination",
     "PolygeistCanonicalize",
@@ -830,7 +832,7 @@ void buildConcurrencyOptPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   /// TODO(PERF): EdtStructuralOptPass runs 4 times; evaluate if second call
   /// needed.
   pm.addPass(arts::createEdtStructuralOptPass(AM, /*runAnalysis*/ false));
-  pm.addPass(arts::createEpochOptPass());
+  pm.addPass(arts::createEpochOptPass(AM));
   addCanonicalizeAndCSE(pm);
   /// Partition DBs and run DbModeTighteningPass again to adjust modes.
   pm.addPass(arts::createDbPartitioningPass(AM));
@@ -861,12 +863,14 @@ void buildConcurrencyOptPipeline(PassManager &pm, arts::AnalysisManager *AM) {
 }
 
 /// Epoch creation passes.
-void buildEpochsPipeline(PassManager &pm, bool enableContinuation) {
+void buildEpochsPipeline(PassManager &pm, arts::AnalysisManager *AM,
+                         bool enableContinuation) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createCreateEpochsPass());
   /// Run EpochOpt with structural + scheduling optimizations on newly created
   /// epochs. Amortization is always enabled; continuation/CPS opts are gated.
-  pm.addPass(arts::createEpochOptPass(/*amortization=*/true,
+  pm.addPass(arts::createEpochOptPass(AM,
+                                      /*amortization=*/true,
                                       /*continuation=*/enableContinuation,
                                       /*cpsDriver=*/enableContinuation,
                                       /*cpsChain=*/enableContinuation));
@@ -882,7 +886,8 @@ void buildPreLoweringPipeline(PassManager &pm, arts::AnalysisManager *AM,
   pm.addPass(arts::createParallelEdtLoweringPass());
   if (enableContinuation) {
     /// Run scheduling-only EpochOpt for late epochs from ParallelEdtLowering.
-    pm.addPass(arts::createEpochOptSchedulingPass(/*amortization=*/true,
+    pm.addPass(arts::createEpochOptSchedulingPass(AM,
+                                                  /*amortization=*/true,
                                                   /*continuation=*/true,
                                                   /*cpsDriver=*/true));
   }
@@ -1009,8 +1014,8 @@ LogicalResult buildPassManager(
   arts::setRuntimeStaticWorkers(module, RuntimeStaticWorkers);
 
   if (machine.getNodeCount() > 1 && !DistributedDb)
-    llvm::errs() << "NOTE: Multi-node execution without --distributed-db: "
-                    "all DBs will be created on their origin node.\n";
+    ARTS_WARN("Multi-node execution without --distributed-db: all DBs will "
+              "be created on their origin node");
 
   /// Load metadata from JSON file
   (void)AM->getMetadataManager();
@@ -1084,7 +1089,7 @@ LogicalResult buildPassManager(
        [&](PassManager &pm) { buildConcurrencyOptPipeline(pm, AM.get()); }},
       {PipelineStep::Epochs, "Error when creating and optimizing epochs",
        [&](PassManager &pm) {
-         buildEpochsPipeline(pm, EpochFinishContinuation);
+         buildEpochsPipeline(pm, AM.get(), EpochFinishContinuation);
        }},
       {PipelineStep::PreLowering,
        "Error when pre-lowering DBs, EDTs, and Epochs",
@@ -1161,7 +1166,13 @@ LogicalResult buildPassManager(
 int main(int argc, char **argv) {
   InitLLVM y(argc, argv);
   cl::ParseCommandLineOptions(argc, argv, "MLIR Optimization Driver\n");
-  configureArtsDebugChannels(ArtsDebug);
+  std::string effectiveArtsDebug = ArtsDebug;
+  if (Diagnose) {
+    if (!effectiveArtsDebug.empty())
+      effectiveArtsDebug += ",";
+    effectiveArtsDebug += "compile";
+  }
+  configureArtsDebugChannels(effectiveArtsDebug);
 
   if (PrintPipelineTokensJSON) {
     printPipelineTokensAsJSON(llvm::outs());
@@ -1219,8 +1230,9 @@ int main(int argc, char **argv) {
 
   if (Diagnose) {
     hooks.afterStep = [](PipelineStep step, LogicalResult result) {
-      llvm::errs() << "[carts-compile] Pipeline " << pipelineStepName(step)
-                   << (succeeded(result) ? " completed" : " FAILED") << "\n";
+      ARTS_INFO("Pipeline " << pipelineStepName(step)
+                            << (succeeded(result) ? " completed"
+                                                  : " FAILED"));
     };
     hooksPtr = &hooks;
   }

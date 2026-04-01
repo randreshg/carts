@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --O3 --arts-config %S/../examples/arts.cfg --pipeline=pre-lowering | %FileCheck %s
+// RUN: %carts-compile %s --O3 --arts-config %S/../examples/arts.cfg --arts-epoch-finish-continuation=false --pipeline=pre-lowering | %FileCheck %s
 
 // Conv3d-like repeated-epoch amortization:
 // - Detect repetition loop around a single epoch + kernel timer tail

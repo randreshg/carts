@@ -1,8 +1,10 @@
+// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from=epochs --pipeline=pre-lowering | %FileCheck %s --check-prefix=CONT
 // RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --arts-epoch-finish-continuation --start-from=epochs --pipeline=pre-lowering | %FileCheck %s --check-prefix=CONT
 // RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --arts-epoch-finish-continuation=false --start-from=epochs --pipeline=pre-lowering | %FileCheck %s --check-prefix=WAIT
 
 // Test that --arts-epoch-finish-continuation replaces blocking epoch waits with
-// finish-EDT continuation scheduling for eligible patterns.
+// finish-EDT continuation scheduling for eligible patterns. The no-flag case
+// must match the enabled behavior because continuation is default-on.
 //
 // Input: arts.epoch with an EDT + tail code (func.call to extern void function).
 // The tail is side-effect-only and the return value is defined before the epoch.

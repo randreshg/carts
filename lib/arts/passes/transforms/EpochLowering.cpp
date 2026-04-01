@@ -35,6 +35,7 @@
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -49,6 +50,7 @@
 
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
+#include "polygeist/Ops.h"
 ARTS_DEBUG_SETUP(epoch_lowering);
 
 using namespace mlir;
@@ -60,6 +62,7 @@ using AttrNames::Operation::CPSAdvanceHasIvArg;
 using AttrNames::Operation::CPSChainId;
 using AttrNames::Operation::CPSInitIter;
 using AttrNames::Operation::CPSIterCounterParamIdx;
+using AttrNames::Operation::CPSNumCarry;
 using AttrNames::Operation::CPSOuterEpochParamIdx;
 using AttrNames::Operation::CPSParamPerm;
 
@@ -299,22 +302,32 @@ void EpochLoweringPass::runOnOperation() {
   /// permutations that the CPSAdvance resolver needs.
   {
     struct ChainFuncInfo {
+      StringAttr funcName;
       int64_t iterIdx;
       int64_t epochIdx;
     };
-    DenseMap<StringRef, ChainFuncInfo> funcToChainInfo;
+    SmallVector<ChainFuncInfo> worklist;
+    DenseSet<StringAttr> queuedFuncs;
+
+    auto enqueueChainFunc = [&](StringAttr funcName, int64_t iterIdx,
+                                int64_t epochIdx) {
+      if (!funcName || !queuedFuncs.insert(funcName).second)
+        return;
+      worklist.push_back({funcName, iterIdx, epochIdx});
+    };
+
     module.walk([&](EdtCreateOp edt) {
       auto iterAttr = edt->getAttrOfType<IntegerAttr>(CPSIterCounterParamIdx);
       auto epochAttr = edt->getAttrOfType<IntegerAttr>(CPSOuterEpochParamIdx);
       auto funcAttr =
           edt->getAttrOfType<StringAttr>(AttrNames::Operation::OutlinedFunc);
       if (iterAttr && epochAttr && funcAttr)
-        funcToChainInfo[funcAttr.getValue()] = {iterAttr.getInt(),
-                                                epochAttr.getInt()};
+        enqueueChainFunc(funcAttr, iterAttr.getInt(), epochAttr.getInt());
     });
 
-    for (auto &[funcName, info] : funcToChainInfo) {
-      auto func = module.lookupSymbol<func::FuncOp>(funcName);
+    while (!worklist.empty()) {
+      ChainFuncInfo info = worklist.pop_back_val();
+      auto func = module.lookupSymbol<func::FuncOp>(info.funcName.getValue());
       if (!func)
         continue;
 
@@ -331,12 +344,22 @@ void EpochLoweringPass::runOnOperation() {
         if (!unpackOp)
           unpackOp = op;
       });
-      if (!unpackOp)
-        continue;
 
       Location loc = func.getLoc();
-      AC->setInsertionPointAfter(unpackOp);
-      Value paramArrayMemref = unpackOp->getOperand(0);
+      Value paramArrayMemref;
+      if (unpackOp) {
+        AC->setInsertionPointAfter(unpackOp);
+        paramArrayMemref = unpackOp->getOperand(0);
+      } else if (func.getNumArguments() > 1) {
+        Value candidate = func.getArgument(1);
+        if (auto memrefType = dyn_cast<MemRefType>(candidate.getType());
+            memrefType && memrefType.getElementType().isInteger(64)) {
+          AC->setInsertionPointToStart(&func.front());
+          paramArrayMemref = candidate;
+        }
+      }
+      if (!paramArrayMemref)
+        continue;
 
       /// Load iter counter from parent's param array.
       Value iterIdxVal = AC->createIndexConstant(info.iterIdx, loc);
@@ -347,14 +370,16 @@ void EpochLoweringPass::runOnOperation() {
       Value outerEpochGuid = AC->create<memref::LoadOp>(
           loc, paramArrayMemref, ValueRange{epochIdxVal});
 
-      ARTS_INFO("CPS propagation: " << funcName << " loading iter["
+      ARTS_INFO("CPS propagation: " << info.funcName.getValue()
+                                    << " loading iter["
                                     << info.iterIdx << "], epoch["
                                     << info.epochIdx << "]");
 
       /// Build a map from parent function's unpack results to their indices.
       DenseMap<Value, int64_t> unpackResultToIdx;
-      for (unsigned i = 0; i < unpackOp->getNumResults(); ++i)
-        unpackResultToIdx[unpackOp->getResult(i)] = i;
+      if (unpackOp)
+        for (unsigned i = 0; i < unpackOp->getNumResults(); ++i)
+          unpackResultToIdx[unpackOp->getResult(i)] = i;
 
       for (EdtCreateOp edt : childChainEdts) {
         auto packOp = edt.getParamMemref().getDefiningOp<EdtParamPackOp>();
@@ -412,6 +437,10 @@ void EpochLoweringPass::runOnOperation() {
                      AC->getBuilder().getI64IntegerAttr(newEpochIdx));
         ARTS_INFO("  Injected iter[" << newIterIdx << "], epoch[" << newEpochIdx
                                      << "] for child chain EDT");
+
+        if (auto childFuncAttr =
+                edt->getAttrOfType<StringAttr>(AttrNames::Operation::OutlinedFunc))
+          enqueueChainFunc(childFuncAttr, newIterIdx, newEpochIdx);
       }
     }
   }
@@ -563,18 +592,48 @@ void EpochLoweringPass::runOnOperation() {
       AC->setInsertionPoint(thenBlock.getTerminator());
     }
 
-    /// Build the param_pack using localUnpack results with a permutation
-    /// to match the target chain function's expected param layout.
-    ///
-    /// Chain functions may have different DB handle orderings (e.g., chain_0
-    /// has [guidB, ptrB, guidA, ptrA] while chain_1 has [guidA, ptrA, guidB,
-    /// ptrB]). The permutation was computed during CPS propagation by tracing
-    /// each child chain's pack operands back to the parent's unpack results.
-    ///
-    /// perm[i] = j means: child param[i] = parent param[j].
-    /// Inverse: inv[j] = i means: parent param[j] = child param[i].
+    auto materializeLoopBackParam = [&](Value value) -> Value {
+      auto memrefType = dyn_cast<MemRefType>(value.getType());
+      if (!memrefType)
+        return value;
+
+      Value rawPtr = AC->create<polygeist::Memref2PointerOp>(
+          loc, LLVM::LLVMPointerType::get(AC->getContext()), value);
+      return AC->create<LLVM::PtrToIntOp>(loc, AC->Int64, rawPtr);
+    };
+
+    bool hasCanonicalLoopBackContract = advanceOp->hasAttr(CPSNumCarry);
+    SmallVector<Value> canonicalLoopBackParams;
+    if (auto numCarryAttr = advanceOp->getAttrOfType<IntegerAttr>(CPSNumCarry)) {
+      unsigned paramStart = (isAdditive && nextParams.size() >= 2) ? 2 : 0;
+      unsigned available = nextParams.size() > paramStart
+                               ? nextParams.size() - paramStart
+                               : 0;
+      unsigned carryCount =
+          std::min<unsigned>(numCarryAttr.getInt(), available);
+      canonicalLoopBackParams.reserve(carryCount);
+      for (unsigned i = 0; i < carryCount; ++i)
+        canonicalLoopBackParams.push_back(
+            materializeLoopBackParam(nextParams[paramStart + i]));
+    }
+
+    /// Prefer the canonical loop-back parameter contract carried by
+    /// CPSAdvanceOp. Older IR that lacks the contract falls back to the
+    /// local permutation-based reconstruction.
     Value paramMemref;
-    if (localUnpack) {
+    if (hasCanonicalLoopBackContract) {
+      SmallVector<Value> newPackParams(canonicalLoopBackParams.begin(),
+                                       canonicalLoopBackParams.end());
+      if (tNext)
+        newPackParams.push_back(tNext);
+      else if (curIter)
+        newPackParams.push_back(curIter);
+      if (outerEpochGuid)
+        newPackParams.push_back(outerEpochGuid);
+      auto packType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
+      paramMemref =
+          AC->create<EdtParamPackOp>(loc, packType, newPackParams).getMemref();
+    } else if (localUnpack) {
       auto unpackResults = localUnpack.getResults();
       unsigned numUserParams = unpackResults.size();
 
