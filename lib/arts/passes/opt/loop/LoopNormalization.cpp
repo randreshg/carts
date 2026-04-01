@@ -44,17 +44,20 @@ namespace {
 
 struct LoopNormalizationPass
     : public impl::LoopNormalizationBase<LoopNormalizationPass> {
-  LoopNormalizationPass(mlir::arts::AnalysisManager *AM) : AM(AM) {}
+  LoopNormalizationPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
+    assert(AM && "AnalysisManager must be provided externally");
+  }
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
+    auto &metadataManager = AM->getMetadataManager();
 
     ARTS_INFO_HEADER(LoopNormalizationPass);
 
     /// Register structural normalization patterns (order = priority)
     SmallVector<std::unique_ptr<LoopPattern>> patterns;
-    patterns.push_back(createSymmetricTriangularPattern());
-    patterns.push_back(createPerfectNestLinearizationPattern());
+    patterns.push_back(createSymmetricTriangularPattern(metadataManager));
+    patterns.push_back(createPerfectNestLinearizationPattern(metadataManager));
 
     int rewrites = 0;
     bool changed = true;
@@ -92,7 +95,7 @@ struct LoopNormalizationPass
   }
 
 private:
-  [[maybe_unused]] mlir::arts::AnalysisManager *AM;
+  mlir::arts::AnalysisManager *AM;
 };
 
 } // namespace

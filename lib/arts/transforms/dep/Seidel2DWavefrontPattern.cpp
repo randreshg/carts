@@ -35,6 +35,7 @@
 #include "arts/Dialect.h"
 #include "arts/analysis/heuristics/DistributionHeuristics.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
+#include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/transforms/dep/DepTransform.h"
 #include "arts/utils/EdtUtils.h"
@@ -272,12 +273,15 @@ static Value createSubtractOrZero(OpBuilder &builder, Location loc, Value lhs,
   return builder.create<arith::SelectOp>(loc, canSubtract, diff, zero);
 }
 
-static void rewriteSeidelSequential(SeidelWavefrontMatch &match) {
+static void rewriteSeidelSequential(SeidelWavefrontMatch &match,
+                                    MetadataManager &metadataManager) {
   OpBuilder builder(match.rowFor);
   auto seqRowFor = builder.create<scf::ForOp>(
       match.rowFor.getLoc(), match.rowFor.getLowerBound().front(),
       match.rowFor.getUpperBound().front(), match.rowFor.getStep().front());
-  copyArtsMetadataAttrs(match.rowFor.getOperation(), seqRowFor.getOperation());
+  metadataManager.rewriteLoopMetadata(match.rowFor.getOperation(),
+                                      seqRowFor.getOperation());
+  copyPatternAttrs(match.rowFor.getOperation(), seqRowFor.getOperation());
 
   OpBuilder rowBuilder = OpBuilder::atBlockBegin(seqRowFor.getBody());
   IRMapping rowMap;
@@ -344,8 +348,6 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
   OpBuilder epochBuilder = OpBuilder::atBlockBegin(&epochBlock);
   auto waveLoop =
       epochBuilder.create<scf::ForOp>(loc, zero, waveUbExclusive, one);
-  copyArtsMetadataAttrs(match.parallelEdt.getOperation(),
-                        waveLoop.getOperation());
   wavefrontContract.stamp(waveLoop.getOperation());
 
   OpBuilder waveBuilder = OpBuilder::atBlockBegin(waveLoop.getBody());
@@ -363,8 +365,6 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
   auto tileParallel = waveBuilder.create<EdtOp>(
       loc, EdtType::parallel, match.parallelEdt.getConcurrency());
   tileParallel.setNoVerifyAttr(NoVerifyAttr::get(builder.getContext()));
-  copyArtsMetadataAttrs(match.parallelEdt.getOperation(),
-                        tileParallel.getOperation());
   copyWorkerTopologyAttrs(match.parallelEdt.getOperation(),
                           tileParallel.getOperation());
   wavefrontContract.stamp(tileParallel.getOperation());
@@ -442,6 +442,9 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
 
 class Seidel2DWavefrontPattern final : public DepPatternTransform {
 public:
+  explicit Seidel2DWavefrontPattern(MetadataManager &metadataManager)
+      : metadataManager(metadataManager) {}
+
   int run(ModuleOp module) override {
     int rewrites = 0;
     while (true) {
@@ -459,7 +462,7 @@ public:
       auto tilingPlan = chooseWavefrontTilingPlan(match);
       bool usedSequentialFallback = !tilingPlan;
       if (usedSequentialFallback)
-        rewriteSeidelSequential(match);
+        rewriteSeidelSequential(match, metadataManager);
       else
         rewriteSeidelWavefront(match, *tilingPlan);
       rewrites++;
@@ -474,12 +477,16 @@ public:
     return ArtsDepPattern::wavefront_2d;
   }
   int64_t getRevision() const override { return 1; }
+
+private:
+  MetadataManager &metadataManager;
 };
 
 } // namespace
 
-std::unique_ptr<DepPatternTransform> createSeidel2DWavefrontPattern() {
-  return std::make_unique<Seidel2DWavefrontPattern>();
+std::unique_ptr<DepPatternTransform>
+createSeidel2DWavefrontPattern(MetadataManager &metadataManager) {
+  return std::make_unique<Seidel2DWavefrontPattern>(metadataManager);
 }
 
 } // namespace arts

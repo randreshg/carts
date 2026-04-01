@@ -28,6 +28,8 @@
 #include "mlir/IR/BuiltinOps.h"
 /// Arts
 #include "arts/Dialect.h"
+#include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #define GEN_PASS_DEF_CONVERTOPENMPTOARTS
@@ -66,6 +68,13 @@ static bool hasWorkAfterInParentBlock(Operation *op) {
   }
   return false;
 }
+
+static void carryRewriteMetadata(Operation *sourceOp, Operation *targetOp,
+                                 MetadataManager &metadataManager) {
+  if (!sourceOp || !targetOp)
+    return;
+  metadataManager.rewriteMetadata(sourceOp, targetOp);
+}
 ///===----------------------------------------------------------------------===///
 /// Conversion Patterns
 ///===----------------------------------------------------------------------===///
@@ -101,7 +110,10 @@ struct OMPParallelToArtsPattern : public OpRewritePattern<omp::ParallelOp> {
 /// Pattern to replace `scf.parallel` with an `arts.edt` with `parallel`
 /// attribute
 struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
-  using OpRewritePattern::OpRewritePattern;
+  SCFParallelToArtsPattern(MLIRContext *context,
+                           MetadataManager &metadataManager)
+      : OpRewritePattern<scf::ParallelOp>(context),
+        metadataManager(metadataManager) {}
 
   LogicalResult matchAndRewrite(scf::ParallelOp op,
                                 PatternRewriter &rewriter) const override {
@@ -126,8 +138,7 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
         /*schedule*/ nullptr,
         /*reductionAccumulators*/ ValueRange{});
 
-    /// Transfer metadata attributes (arts.loop, arts.id, etc.) from source
-    copyArtsMetadataAttrs(op, artsFor);
+    carryRewriteMetadata(op, artsFor, metadataManager);
 
     Region &dstRegion = artsFor.getRegion();
     if (dstRegion.empty())
@@ -162,6 +173,9 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
     rewriter.eraseOp(op);
     return success();
   }
+
+private:
+  MetadataManager &metadataManager;
 };
 
 /// Pattern to replace `omp.master` with `arts.edt` with `single` attribute
@@ -362,7 +376,10 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
 
 /// Pattern to replace `omp.wsloop` with `arts.for` loop
 struct WsloopToARTSPattern : public OpRewritePattern<omp::WsloopOp> {
-  using OpRewritePattern::OpRewritePattern;
+  WsloopToARTSPattern(MLIRContext *context,
+                      MetadataManager &metadataManager)
+      : OpRewritePattern<omp::WsloopOp>(context),
+        metadataManager(metadataManager) {}
 
   /// Returns true when a serial loop is nested inside the current parallel
   /// region. We stop at the nearest parallel boundary (omp.parallel before
@@ -402,7 +419,7 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsloopOp> {
       auto scfParallel = rewriter.create<scf::ParallelOp>(
           loc, ValueRange{lowerBound}, ValueRange{upperBound},
           ValueRange{step});
-      copyArtsMetadataAttrs(op, scfParallel);
+      carryRewriteMetadata(op, scfParallel, metadataManager);
 
       OpBuilder::InsertionGuard IG(rewriter);
       Block &parallelBody = scfParallel.getRegion().front();
@@ -467,8 +484,7 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsloopOp> {
         loc, ValueRange{lowerBound}, ValueRange{upperBound}, ValueRange{step},
         schedAttr, ValueRange{redAccs});
 
-    /// Transfer metadata attributes (arts.loop, arts.id, etc.) from source
-    copyArtsMetadataAttrs(op, forOp);
+    carryRewriteMetadata(op, forOp, metadataManager);
 
     /// Set partitioning hint if block size is present
     if (staticBlockSize) {
@@ -566,6 +582,8 @@ private:
       return Value();
     return combinerMap.lookup(yieldOp.getOperand(0));
   }
+
+  MetadataManager &metadataManager;
 };
 
 /// Pattern to convert a subset of omp.atomic.update to arts.atomic_add
@@ -667,7 +685,9 @@ struct TaskwaitToARTSPattern : public OpRewritePattern<omp::TaskwaitOp> {
 
 /// Pattern to replace `omp.taskloop` with `arts.for` and EDT creation
 struct TaskloopToARTSPattern : public OpRewritePattern<omp::TaskloopOp> {
-  using OpRewritePattern::OpRewritePattern;
+  TaskloopToARTSPattern(MLIRContext *context, MetadataManager &metadataManager)
+      : OpRewritePattern<omp::TaskloopOp>(context),
+        metadataManager(metadataManager) {}
 
   LogicalResult matchAndRewrite(omp::TaskloopOp op,
                                 PatternRewriter &rewriter) const override {
@@ -686,8 +706,7 @@ struct TaskloopToARTSPattern : public OpRewritePattern<omp::TaskloopOp> {
         /*schedule*/ nullptr,
         /*reductionAccumulators*/ ValueRange{});
 
-    /// Transfer metadata attributes (arts.loop, arts.id, etc.) from source
-    copyArtsMetadataAttrs(op, forOp);
+    carryRewriteMetadata(op, forOp, metadataManager);
 
     Region &dstRegion = forOp.getRegion();
     if (dstRegion.empty())
@@ -710,6 +729,9 @@ struct TaskloopToARTSPattern : public OpRewritePattern<omp::TaskloopOp> {
     rewriter.eraseOp(op);
     return success();
   }
+
+private:
+  MetadataManager &metadataManager;
 };
 
 /// Pattern to replace 'func.call' with an equivalent 'arts' call if exists.
@@ -744,7 +766,12 @@ struct CallToARTSPattern : public OpRewritePattern<func::CallOp> {
 namespace {
 struct ConvertOpenMPToArtsPass
     : public impl::ConvertOpenMPToArtsBase<ConvertOpenMPToArtsPass> {
+  explicit ConvertOpenMPToArtsPass(mlir::arts::AnalysisManager *AM = nullptr)
+      : AM(AM) {}
   void runOnOperation() override;
+
+private:
+  mlir::arts::AnalysisManager *AM = nullptr;
 };
 } // namespace
 
@@ -754,6 +781,13 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
   ARTS_INFO_HEADER(ConvertOpenMPToArtsPass);
   ARTS_DEBUG_REGION(module.dump(););
   MLIRContext *context = &getContext();
+  if (!AM) {
+    module.emitError()
+        << "ConvertOpenMPToArtsPass requires AnalysisManager/MetadataManager";
+    signalPassFailure();
+    return;
+  }
+  MetadataManager &metadataManager = AM->getMetadataManager();
 
   /// Record sources that participate in writer dependencies anywhere in this
   /// module before rewrites mutate the task graph.
@@ -770,11 +804,17 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
 
   /// Add patterns to convert OpenMP operations to Arts operations
   RewritePatternSet patterns(context);
-  patterns.add<OMPParallelToArtsPattern, SCFParallelToArtsPattern,
-               MasterToARTSPattern, SingleToARTSPattern, TaskloopToARTSPattern,
-               WsloopToARTSPattern, AtomicUpdateToArtsPattern,
-               TerminatorToARTSPattern, BarrierToARTSPattern,
-               TaskwaitToARTSPattern, CallToARTSPattern>(context);
+  patterns.add<OMPParallelToArtsPattern>(context);
+  patterns.add<SCFParallelToArtsPattern>(context, metadataManager);
+  patterns.add<MasterToARTSPattern>(context);
+  patterns.add<SingleToARTSPattern>(context);
+  patterns.add<TaskloopToARTSPattern>(context, metadataManager);
+  patterns.add<WsloopToARTSPattern>(context, metadataManager);
+  patterns.add<AtomicUpdateToArtsPattern>(context);
+  patterns.add<TerminatorToARTSPattern>(context);
+  patterns.add<BarrierToARTSPattern>(context);
+  patterns.add<TaskwaitToARTSPattern>(context);
+  patterns.add<CallToARTSPattern>(context);
   patterns.add<TaskToARTSPattern>(context, &writerDepSources);
   GreedyRewriteConfig config;
   (void)applyPatternsGreedily(module, std::move(patterns), config);
@@ -789,8 +829,9 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
 ///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createConvertOpenMPToArtsPass() {
-  return std::make_unique<ConvertOpenMPToArtsPass>();
+std::unique_ptr<Pass> createConvertOpenMPToArtsPass(
+    mlir::arts::AnalysisManager *AM) {
+  return std::make_unique<ConvertOpenMPToArtsPass>(AM);
 }
 } // namespace arts
 } // namespace mlir
