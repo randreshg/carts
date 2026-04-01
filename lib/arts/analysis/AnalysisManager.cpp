@@ -32,6 +32,8 @@ AnalysisManager::~AnalysisManager() {}
 void AnalysisManager::invalidate() {
   /// Invalidate dependents before dependencies:
   /// EdtAnalysis depends on DbAnalysis depends on LoopAnalysis
+  if (epochAnalysis)
+    epochAnalysis->invalidate();
   if (edtAnalysis)
     edtAnalysis->invalidate();
   if (dbAnalysis)
@@ -60,6 +62,12 @@ EdtAnalysis &AnalysisManager::getEdtAnalysis() {
   if (!edtAnalysis)
     edtAnalysis = std::make_unique<EdtAnalysis>(*this);
   return *edtAnalysis;
+}
+
+EpochAnalysis &AnalysisManager::getEpochAnalysis() {
+  if (!epochAnalysis)
+    epochAnalysis = std::make_unique<EpochAnalysis>(*this);
+  return *epochAnalysis;
 }
 
 LoopAnalysis &AnalysisManager::getLoopAnalysis() {
@@ -141,6 +149,8 @@ void AnalysisManager::invalidateAndRebuildGraphs(ModuleOp module) {
 bool AnalysisManager::invalidateFunction(func::FuncOp func) {
   bool invalidated = false;
   /// Invalidate dependents before dependencies
+  if (epochAnalysis)
+    epochAnalysis->invalidate();
   if (edtAnalysis)
     invalidated |= edtAnalysis->invalidateGraph(func);
   if (dbAnalysis)
