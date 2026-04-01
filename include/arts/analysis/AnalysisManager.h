@@ -11,6 +11,7 @@
 #include "arts/analysis/StringAnalysis.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/edt/EdtAnalysis.h"
+#include "arts/analysis/edt/EpochAnalysis.h"
 #include "arts/analysis/heuristics/DbHeuristics.h"
 #include "arts/analysis/heuristics/EdtHeuristics.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
@@ -42,6 +43,7 @@ public:
   /// Get analysis objects
   DbAnalysis &getDbAnalysis();
   EdtAnalysis &getEdtAnalysis();
+  EpochAnalysis &getEpochAnalysis();
   LoopAnalysis &getLoopAnalysis();
   StringAnalysis &getStringAnalysis();
   DbHeuristics &getDbHeuristics();
@@ -116,6 +118,7 @@ private:
   PartitionFallback partitionFallback;
   std::unique_ptr<DbAnalysis> dbAnalysis;
   std::unique_ptr<EdtAnalysis> edtAnalysis;
+  std::unique_ptr<EpochAnalysis> epochAnalysis;
   std::unique_ptr<DbHeuristics> dbHeuristics;
   std::unique_ptr<EdtHeuristics> edtHeuristics;
   std::unique_ptr<LoopAnalysis> loopAnalysis;
