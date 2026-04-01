@@ -6,17 +6,13 @@
 
 #include "arts/transforms/edt/WorkDistributionUtils.h"
 #include "arts/analysis/db/DbAnalysis.h"
-#include "arts/analysis/graphs/db/DbGraph.h"
-#include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/IRMapping.h"
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include <algorithm>
@@ -62,19 +58,12 @@ static std::optional<int64_t> getExplicitLoopBlockHint(ForOp forOp) {
   return std::nullopt;
 }
 
-static bool shouldHonorLoopBlockHintForDbAlignment(ForOp forOp,
-                                                   EdtOp parallelEdt) {
-  if (!forOp || !parallelEdt)
+static bool shouldHonorLoopBlockHintForDbAlignment(
+    const LoweringContractInfo &contract, EdtOp parallelEdt) {
+  if (!parallelEdt)
     return false;
-  if (parallelEdt.getConcurrency() != EdtConcurrency::intranode)
-    return false;
-
-  if (auto depPattern = getEffectiveDepPattern(forOp.getOperation()))
-    return isStencilFamilyDepPattern(*depPattern) &&
-           *depPattern != ArtsDepPattern::wavefront_2d;
-  if (auto pattern = getEdtDistributionPattern(forOp.getOperation()))
-    return *pattern == EdtDistributionPattern::stencil;
-  return false;
+  return parallelEdt.getConcurrency() == EdtConcurrency::intranode &&
+         contract.shouldHonorLoopBlockHintForDbAlignment();
 }
 
 static std::optional<int64_t> getStaticRuntimeWorkersPerNode(ModuleOp module) {
@@ -159,10 +148,6 @@ chooseColumnWorkersNearTarget(int64_t totalWorkers,
   return best;
 }
 
-static bool isWavefrontTilingPattern(std::optional<ArtsDepPattern> depPattern) {
-  return depPattern && *depPattern == ArtsDepPattern::wavefront_2d;
-}
-
 static int64_t
 chooseTiling2DColumnWorkers(int64_t totalWorkers,
                             std::optional<int64_t> workersPerNode) {
@@ -186,136 +171,10 @@ chooseWavefront2DColumnWorkers(int64_t totalWorkers,
 static int64_t
 chooseColumnWorkersForPattern(int64_t totalWorkers,
                               std::optional<int64_t> workersPerNode,
-                              std::optional<ArtsDepPattern> depPattern) {
-  if (isWavefrontTilingPattern(depPattern))
+                              const LoweringContractInfo &contract) {
+  if (contract.prefersWideTiling2DColumns())
     return chooseWavefront2DColumnWorkers(totalWorkers, workersPerNode);
   return chooseTiling2DColumnWorkers(totalWorkers, workersPerNode);
-}
-
-static std::optional<unsigned> inferLoopMappedDim(DbAcquireNode *acqNode,
-                                                  ForOp forOp) {
-  if (!acqNode || !forOp)
-    return std::nullopt;
-
-  Block &forBody = forOp.getRegion().front();
-  if (forBody.getNumArguments() == 0)
-    return std::nullopt;
-
-  Value loopIV = forBody.getArgument(0);
-  if (auto mappedDim =
-          acqNode->getPartitionOffsetDim(loopIV, /*requireLeading=*/false)) {
-    return mappedDim;
-  }
-
-  Region &forRegion = forOp.getRegion();
-  std::optional<unsigned> mappedDim;
-
-  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
-  acqNode->collectAccessOperations(dbRefToMemOps);
-
-  for (auto &[dbRef, memOps] : dbRefToMemOps) {
-    for (Operation *memOp : memOps) {
-      Region *memRegion = memOp ? memOp->getParentRegion() : nullptr;
-      if (!memRegion)
-        continue;
-      if (memRegion != &forRegion && !forRegion.isAncestor(memRegion))
-        continue;
-
-      SmallVector<Value> fullChain =
-          DbUtils::collectFullIndexChain(dbRef, memOp);
-      if (fullChain.empty())
-        continue;
-
-      unsigned memrefStart = dbRef.getIndices().size();
-      if (memrefStart >= fullChain.size())
-        continue;
-
-      SmallVector<unsigned, 2> matchingDims;
-      ArrayRef<Value> memrefChain(fullChain);
-      memrefChain = memrefChain.drop_front(memrefStart);
-      for (auto [dimIdx, indexVal] : llvm::enumerate(memrefChain)) {
-        if (ValueAnalysis::dependsOn(ValueAnalysis::stripNumericCasts(indexVal),
-                                     loopIV))
-          matchingDims.push_back(dimIdx);
-      }
-
-      if (matchingDims.size() != 1)
-        return std::nullopt;
-
-      unsigned dim = matchingDims.front();
-      if (!mappedDim)
-        mappedDim = dim;
-      else if (*mappedDim != dim)
-        return std::nullopt;
-    }
-  }
-
-  return mappedDim;
-}
-
-static std::optional<unsigned> inferLoopMappedDimFromValue(Value dep,
-                                                           ForOp forOp) {
-  if (!dep || !forOp)
-    return std::nullopt;
-
-  Block &forBody = forOp.getRegion().front();
-  if (forBody.getNumArguments() == 0)
-    return std::nullopt;
-
-  Value loopIV = forBody.getArgument(0);
-  Region &forRegion = forOp.getRegion();
-  std::optional<unsigned> mappedDim;
-  llvm::SetVector<Value> sources;
-  sources.insert(dep);
-  for (Operation *user : dep.getUsers()) {
-    auto edt = dyn_cast<EdtOp>(user);
-    if (!edt)
-      continue;
-
-    ValueRange deps = edt.getDependencies();
-    Block &edtBody = edt.getBody().front();
-    unsigned argCount = edtBody.getNumArguments();
-    for (auto [idx, operand] : llvm::enumerate(deps)) {
-      if (operand != dep || idx >= argCount)
-        continue;
-      sources.insert(edtBody.getArgument(static_cast<unsigned>(idx)));
-    }
-  }
-
-  llvm::SetVector<Operation *> memOps;
-  for (Value source : sources)
-    DbUtils::collectReachableMemoryOps(source, memOps, /*scope=*/nullptr);
-
-  for (Operation *memOp : memOps) {
-    Region *memRegion = memOp ? memOp->getParentRegion() : nullptr;
-    if (!memRegion)
-      continue;
-    if (memRegion != &forRegion && !forRegion.isAncestor(memRegion))
-      continue;
-
-    std::optional<DbUtils::MemoryAccessInfo> access =
-        DbUtils::getMemoryAccessInfo(memOp);
-    if (!access || access->indices.empty())
-      continue;
-
-    SmallVector<unsigned, 2> matchingDims;
-    for (auto [dimIdx, indexVal] : llvm::enumerate(access->indices)) {
-      if (ValueAnalysis::dependsOn(ValueAnalysis::stripNumericCasts(indexVal),
-                                   loopIV))
-        matchingDims.push_back(dimIdx);
-    }
-
-    if (matchingDims.size() != 1)
-      return std::nullopt;
-
-    unsigned dim = matchingDims.front();
-    if (!mappedDim)
-      mappedDim = dim;
-    else if (*mappedDim != dim)
-      return std::nullopt;
-  }
-
-  return mappedDim;
 }
 
 /// Cast a Value to index type if needed. Returns null Value for null input.
@@ -366,6 +225,7 @@ std::pair<Value, Value> WorkDistributionUtils::balancedDistribute(
 
 LoopChunkPlan
 WorkDistributionUtils::planLoopChunking(ArtsCodegen *AC, ForOp forOp,
+                                        const LoweringContractInfo &contract,
                                         Value runtimeBlockSizeHint) {
   LoopChunkPlan plan;
   if (!AC || !forOp)
@@ -386,8 +246,7 @@ WorkDistributionUtils::planLoopChunking(ArtsCodegen *AC, ForOp forOp,
   }
 
   plan.blockSize = AC->createIndexConstant(advisoryBlockSize, loc);
-  if (getEffectiveDepPattern(forOp.getOperation()) !=
-      ArtsDepPattern::wavefront_2d) {
+  if (contract.allowsDbAlignedChunking()) {
     if (runtimeBlockSizeHint) {
       Value requiredBlockSize = AC->castToIndex(runtimeBlockSizeHint, loc);
       requiredBlockSize =
@@ -451,7 +310,7 @@ WorkDistributionUtils::planLoopChunking(ArtsCodegen *AC, ForOp forOp,
 
 Tiling2DWorkerGrid WorkDistributionUtils::getTiling2DWorkerGrid(
     ArtsCodegen *AC, Location loc, Value workerId, Value totalWorkers,
-    Value workersPerNode, std::optional<ArtsDepPattern> depPattern) {
+    const LoweringContractInfo &contract, Value workersPerNode) {
   Tiling2DWorkerGrid grid;
   Value one = AC->createIndexConstant(1, loc);
   Value zero = AC->createIndexConstant(0, loc);
@@ -473,7 +332,7 @@ Tiling2DWorkerGrid WorkDistributionUtils::getTiling2DWorkerGrid(
     }
 
     int64_t colWorkersConst = chooseColumnWorkersForPattern(
-        *totalWorkersConst, workersPerNodeConst, depPattern);
+        *totalWorkersConst, workersPerNodeConst, contract);
     if (colWorkersConst > 1) {
       grid.colWorkers = AC->createIndexConstant(colWorkersConst, loc);
       grid.rowWorkers =
@@ -492,7 +351,7 @@ DistributionBounds WorkDistributionUtils::computeBounds(
     ArtsCodegen *AC, Location loc, const DistributionStrategy &strategy,
     Value workerId, Value runtimeTotalWorkers, Value runtimeWorkersPerNode,
     Value totalIterations, Value totalChunks, Value blockSize,
-    std::optional<ArtsDepPattern> depPattern) {
+    const LoweringContractInfo &contract) {
   DistributionBounds bounds;
   Value zeroIndex = AC->createIndexConstant(0, loc);
 
@@ -516,7 +375,7 @@ DistributionBounds WorkDistributionUtils::computeBounds(
     if (strategy.kind == DistributionKind::Tiling2D) {
       Tiling2DWorkerGrid grid =
           getTiling2DWorkerGrid(AC, loc, workerId, runtimeTotalWorkers,
-                                runtimeWorkersPerNode, depPattern);
+                                contract, runtimeWorkersPerNode);
       distWorkerId = grid.rowWorkerId;
       distWorkers = grid.rowWorkers;
     }
@@ -601,7 +460,7 @@ DistributionBounds WorkDistributionUtils::recomputeBoundsInside(
     Value workerId, Value insideTotalWorkers, Value workersPerNode,
     Value upperBound, Value lowerBound, Value loopStep, Value blockSize,
     std::optional<int64_t> alignmentBlockSize, bool useRuntimeBlockAlignment,
-    std::optional<ArtsDepPattern> depPattern) {
+    const LoweringContractInfo &contract) {
   Value workerIdIndex = AC->castToIndex(workerId, loc);
   Value totalWorkersIndex = AC->castToIndex(insideTotalWorkers, loc);
 
@@ -745,7 +604,7 @@ DistributionBounds WorkDistributionUtils::recomputeBoundsInside(
   Value distWorkers = totalWorkersIndex;
   if (strategy.kind == DistributionKind::Tiling2D) {
     Tiling2DWorkerGrid grid = getTiling2DWorkerGrid(
-        AC, loc, workerIdIndex, totalWorkersIndex, workersPerNode, depPattern);
+        AC, loc, workerIdIndex, totalWorkersIndex, contract, workersPerNode);
     distWorkerId = grid.rowWorkerId;
     distWorkers = grid.rowWorkers;
   }
@@ -778,20 +637,16 @@ DistributionBounds WorkDistributionUtils::recomputeBoundsInside(
 
 Value WorkDistributionUtils::computeDbAlignmentBlockSize(
     ForOp forOp, EdtOp parallelEdt, Value numPartitions, ArtsCodegen *AC,
-    Location loc, DbAnalysis *dbAnalysis) {
+    Location loc, DbAnalysis &dbAnalysis) {
   if (!forOp || !parallelEdt || !numPartitions)
     return Value();
 
   Value one = AC->createIndexConstant(1, loc);
   Value hintBlockSize;
+  LoweringContractInfo loopContract =
+      resolveLoopDistributionContract(forOp.getOperation());
 
   bool isTwoLevel = (parallelEdt.getConcurrency() == EdtConcurrency::internode);
-  DbGraph *graph = nullptr;
-  if (dbAnalysis) {
-    if (func::FuncOp func = parallelEdt->getParentOfType<func::FuncOp>())
-      graph = &dbAnalysis->getOrCreateGraph(func);
-  }
-
   for (Value dep : parallelEdt.getDependencies()) {
     auto allocInfo = DbUtils::traceToDbAlloc(dep);
     if (!allocInfo)
@@ -803,15 +658,11 @@ Value WorkDistributionUtils::computeDbAlignmentBlockSize(
       continue;
 
     std::optional<unsigned> mappedDim;
-    if (graph) {
-      if (auto acquire =
-              dyn_cast_or_null<DbAcquireOp>(DbUtils::getUnderlyingDb(dep))) {
-        if (DbAcquireNode *acqNode = graph->getDbAcquireNode(acquire))
-          mappedDim = inferLoopMappedDim(acqNode, forOp);
-      }
-    }
+    if (auto acquire = dyn_cast_or_null<DbAcquireOp>(DbUtils::getUnderlyingDb(
+            dep)))
+      mappedDim = dbAnalysis.inferLoopMappedDim(acquire, forOp);
     if (!mappedDim)
-      mappedDim = inferLoopMappedDimFromValue(dep, forOp);
+      mappedDim = dbAnalysis.inferLoopMappedDim(dep, forOp);
 
     if (!mappedDim) {
       if (allocOp.getElementSizes().size() == 1)
@@ -849,7 +700,7 @@ Value WorkDistributionUtils::computeDbAlignmentBlockSize(
 
   if (auto loopBlockHint = getExplicitLoopBlockHint(forOp);
       loopBlockHint &&
-      shouldHonorLoopBlockHintForDbAlignment(forOp, parallelEdt)) {
+      shouldHonorLoopBlockHintForDbAlignment(loopContract, parallelEdt)) {
     /// This helper computes a fallback owner-alignment size from the current
     /// dependency layout. When ForOpt already chose a stronger stencil owner
     /// span, keep that explicit hint instead of shrinking the loop back to a
@@ -965,7 +816,7 @@ Value WorkDistributionUtils::getDispatchWorkerCount(OpBuilder &builder,
 Value WorkDistributionUtils::getForDispatchWorkerCount(
     ArtsCodegen *AC, Location loc, EdtOp parallelEdt,
     const DistributionStrategy &strategy, Value totalChunks,
-    std::optional<ArtsDepPattern> depPattern) {
+    const LoweringContractInfo &contract) {
   Value one = AC->createIndexConstant(1, loc);
   Value totalWorkers = getTotalWorkers(AC, loc, parallelEdt);
   Value clampedDispatch = totalWorkers;
@@ -1001,7 +852,7 @@ Value WorkDistributionUtils::getForDispatchWorkerCount(
     }
 
     int64_t colWorkersConst = chooseColumnWorkersForPattern(
-        *totalWorkersConst, workersPerNodeConst, depPattern);
+        *totalWorkersConst, workersPerNodeConst, contract);
     int64_t rowWorkersConst =
         std::max<int64_t>(1, *totalWorkersConst / colWorkersConst);
 

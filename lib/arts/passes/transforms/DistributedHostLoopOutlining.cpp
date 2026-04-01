@@ -344,7 +344,8 @@ static void applyMachineWorkerTopology(EdtOp outlinedEdt,
 }
 
 static void outlineLoop(scf::ForOp loop, const AbstractMachine *machine,
-                        const EdtHeuristics *heuristics) {
+                        const EdtHeuristics *heuristics,
+                        MetadataManager &metadataManager) {
   Location loc = loop.getLoc();
   OpBuilder builder(loop);
 
@@ -373,7 +374,7 @@ static void outlineLoop(scf::ForOp loop, const AbstractMachine *machine,
       loc, ValueRange{loop.getLowerBound()}, ValueRange{loop.getUpperBound()},
       ValueRange{loop.getStep()}, schedAttr, ValueRange{});
 
-  copyArtsMetadataAttrs(loop, outlinedFor);
+  metadataManager.rewriteMetadata(loop, outlinedFor);
   cloneScfLoopBodyIntoArtsFor(loop, outlinedFor, epochBuilder);
 
   epochBuilder.setInsertionPointToEnd(&edtBody);
@@ -390,19 +391,17 @@ struct DistributedHostLoopOutliningPass
     : public impl::DistributedHostLoopOutliningBase<
           DistributedHostLoopOutliningPass> {
   explicit DistributedHostLoopOutliningPass(mlir::arts::AnalysisManager *AM)
-      : AM(AM) {}
+      : AM(AM) {
+    assert(AM && "AnalysisManager must be provided externally");
+  }
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    LoopAnalysis *loopAnalysis = nullptr;
-    EdtHeuristics *edtHeuristics = nullptr;
-    const AbstractMachine *machine = nullptr;
-    if (AM) {
-      loopAnalysis = &AM->getLoopAnalysis();
-      loopAnalysis->invalidate();
-      edtHeuristics = &AM->getEdtHeuristics();
-      machine = &AM->getAbstractMachine();
-    }
+    auto &loopAnalysis = AM->getLoopAnalysis();
+    loopAnalysis.invalidate();
+    auto &edtHeuristics = AM->getEdtHeuristics();
+    const auto &machine = AM->getAbstractMachine();
+    auto &metadataManager = AM->getMetadataManager();
 
     SmallVector<scf::ForOp> candidates;
     module.walk([&](func::FuncOp funcOp) {
@@ -423,7 +422,7 @@ struct DistributedHostLoopOutliningPass
           ARTS_DEBUG("Skip loop (function has DbControlOps): " << loop);
           return;
         }
-        if (isEligibleDistributedHostLoop(loop, loopAnalysis, machine))
+        if (isEligibleDistributedHostLoop(loop, &loopAnalysis, &machine))
           candidates.push_back(loop);
       });
     });
@@ -433,7 +432,7 @@ struct DistributedHostLoopOutliningPass
     for (scf::ForOp loop : candidates) {
       if (!loop || !loop->getBlock())
         continue;
-      outlineLoop(loop, machine, edtHeuristics);
+      outlineLoop(loop, &machine, &edtHeuristics, metadataManager);
       ++numConverted;
     }
 

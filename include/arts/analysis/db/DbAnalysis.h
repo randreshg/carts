@@ -98,9 +98,27 @@ public:
              contract.isStencilFamily() || contract.usesStencilDistribution() ||
              contract.supportsBlockHalo();
     }
+    bool hasExplicitStencilLayout() const {
+      return contract.hasExplicitStencilContract();
+    }
+    PartitionMode preferredBlockPartitionMode() const {
+      return usesStencilSemantics() ? PartitionMode::stencil
+                                    : PartitionMode::block;
+    }
+    bool supportsContractDrivenBlockCapability() const {
+      return hasBlockHints() || inferredBlock() || usesStencilSemantics();
+    }
+    bool prefersSemanticOwnerLayoutPreservation() const {
+      return contract.prefersSemanticOwnerLayoutPreservation();
+    }
+    bool prefersNDBlock(unsigned requiredRank = 2) const {
+      return contract.prefersNDBlock(requiredRank);
+    }
+    bool usesWavefrontStencilContract() const {
+      return contract.isWavefrontStencilContract();
+    }
     bool usesMatmulSemantics() const {
-      return (contract.depPattern &&
-              *contract.depPattern == ArtsDepPattern::matmul) ||
+      return contract.getEffectiveKind() == ContractKind::Matmul ||
              accessPattern == AccessPattern::Uniform;
     }
   };
@@ -144,6 +162,8 @@ public:
   std::optional<AcquireContractSummary>
   getAcquireContractSummary(DbAcquireOp acquire);
   AcquireRewriteContract getAcquireRewriteContract(DbAcquireOp acquire);
+  std::optional<unsigned> inferLoopMappedDim(DbAcquireOp acquire, ForOp forOp);
+  std::optional<unsigned> inferLoopMappedDim(Value dep, ForOp forOp);
   AccessPattern resolveCanonicalAcquireAccessPattern(
       DbAcquireOp acquire, const AcquireContractSummary *summary = nullptr,
       const DbAcquirePartitionFacts *facts = nullptr);

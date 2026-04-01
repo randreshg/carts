@@ -9,6 +9,7 @@
 #define ARTS_ANALYSIS_HEURISTICUTILS_H
 
 #include "arts/Dialect.h"
+#include <cstdint>
 
 namespace mlir {
 
@@ -27,6 +28,12 @@ class LoopNode;
 /// the operation for inter-iteration dependencies and the Sequential
 /// parallel classification.
 bool isSequentialLoop(ForOp forOp, LoopNode *loopNode = nullptr);
+
+/// Shared arithmetic helpers for bounded heuristic cost models.
+int64_t ceilDivPositive(int64_t num, int64_t denom);
+int64_t clampPositive(int64_t value, int64_t minValue, int64_t maxValue);
+int64_t saturatingMulPositive(int64_t lhs, int64_t rhs);
+int64_t floorLog2Positive(int64_t value);
 
 } // namespace arts
 } // namespace mlir

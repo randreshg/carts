@@ -12,6 +12,7 @@
 #ifndef ARTS_TRANSFORMS_EDT_EDTREDUCTIONLOWERING_H
 #define ARTS_TRANSFORMS_EDT_EDTREDUCTIONLOWERING_H
 
+#include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/Dialect.h"
 #include "arts/codegen/Codegen.h"
 #include "mlir/IR/Builders.h"
@@ -23,7 +24,6 @@ namespace arts {
 
 struct ReductionLoweringInfo {
   SmallVector<Value> reductionVars;
-  Attribute loopMetadataAttr;
   std::optional<Location> loopLocation;
 
   /// Partial accumulators: array[num_workers] for intermediate results
@@ -59,14 +59,15 @@ void collectOldAccumulatorDbRefs(ForOp forOp, Block &parallelBlock,
 
 /// Allocate reduction DBs and initialize worker-local partial accumulators.
 ReductionLoweringInfo
-allocatePartialAccumulators(ArtsCodegen *AC, ForOp forOp, EdtOp parallelEdt,
-                            Location loc, Attribute loopMetadataAttr,
+allocatePartialAccumulators(ArtsCodegen *AC,
+                            MetadataManager &metadataManager, ForOp forOp,
+                            EdtOp parallelEdt, Location loc,
                             bool splitMode = false,
                             Value workerCountOverride = Value());
 
 /// Create result EDT to combine partial accumulators into final result DBs.
-void createResultEdt(ArtsCodegen *AC, ReductionLoweringInfo &redInfo,
-                     Location loc);
+void createResultEdt(ArtsCodegen *AC, MetadataManager &metadataManager,
+                     ReductionLoweringInfo &redInfo, Location loc);
 
 /// Copy final reduction results back and release temporary reduction DBs.
 void finalizeReductionAfterEpoch(ArtsCodegen *AC,

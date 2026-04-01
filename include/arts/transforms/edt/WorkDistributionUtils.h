@@ -13,6 +13,7 @@
 
 #include "arts/analysis/heuristics/DistributionHeuristics.h"
 #include "arts/codegen/Codegen.h"
+#include "arts/utils/LoweringContractUtils.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Value.h"
 #include <optional>
@@ -60,6 +61,7 @@ struct LoopChunkPlan {
 class WorkDistributionUtils {
 public:
   static LoopChunkPlan planLoopChunking(ArtsCodegen *AC, ForOp forOp,
+                                        const LoweringContractInfo &contract,
                                         Value runtimeBlockSizeHint = Value());
 
   static DistributionBounds
@@ -67,19 +69,19 @@ public:
                 const DistributionStrategy &strategy, Value workerId,
                 Value totalWorkers, Value workersPerNode, Value totalIterations,
                 Value totalChunks, Value blockSize,
-                std::optional<ArtsDepPattern> depPattern = std::nullopt);
+                const LoweringContractInfo &contract);
 
   static DistributionBounds recomputeBoundsInside(
       ArtsCodegen *AC, Location loc, const DistributionStrategy &strategy,
       Value workerId, Value insideTotalWorkers, Value workersPerNode,
       Value upperBound, Value lowerBound, Value loopStep, Value blockSize,
       std::optional<int64_t> alignmentBlockSize, bool useRuntimeBlockAlignment,
-      std::optional<ArtsDepPattern> depPattern = std::nullopt);
+      const LoweringContractInfo &contract);
 
   static Value computeDbAlignmentBlockSize(ForOp forOp, EdtOp parallelEdt,
                                            Value numPartitions, ArtsCodegen *AC,
                                            Location loc,
-                                           DbAnalysis *dbAnalysis = nullptr);
+                                           DbAnalysis &dbAnalysis);
 
   static Value getWorkersPerNode(OpBuilder &builder, Location loc,
                                  EdtOp parallelEdt);
@@ -97,12 +99,11 @@ public:
   static Value getForDispatchWorkerCount(
       ArtsCodegen *AC, Location loc, EdtOp parallelEdt,
       const DistributionStrategy &strategy, Value totalChunks,
-      std::optional<ArtsDepPattern> depPattern = std::nullopt);
+      const LoweringContractInfo &contract);
 
   static Tiling2DWorkerGrid getTiling2DWorkerGrid(
       ArtsCodegen *AC, Location loc, Value workerId, Value totalWorkers,
-      Value workersPerNode = Value(),
-      std::optional<ArtsDepPattern> depPattern = std::nullopt);
+      const LoweringContractInfo &contract, Value workersPerNode = Value());
 
 private:
   static std::pair<Value, Value>

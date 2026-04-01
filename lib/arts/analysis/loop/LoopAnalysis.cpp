@@ -18,78 +18,6 @@ ARTS_DEBUG_SETUP(loop_analysis);
 using namespace mlir;
 using namespace mlir::arts;
 
-namespace {
-
-static std::optional<int64_t> getTripCountFromMetadata(Operation *loopOp,
-                                                       LoopNode *loopNode) {
-  if (loopNode && loopNode->tripCount && *loopNode->tripCount > 0)
-    return *loopNode->tripCount;
-
-  if (auto artsFor = dyn_cast<arts::ForOp>(loopOp)) {
-    if (auto loopAttr = artsFor->getAttrOfType<LoopMetadataAttr>(
-            AttrNames::LoopMetadata::Name)) {
-      if (auto tripAttr = loopAttr.getTripCount()) {
-        int64_t tc = tripAttr.getInt();
-        if (tc > 0)
-          return tc;
-      }
-    }
-  }
-
-  return std::nullopt;
-}
-
-static std::optional<int64_t>
-getTripCountFromConstantBounds(Operation *loopOp) {
-  if (auto affineFor = dyn_cast<affine::AffineForOp>(loopOp)) {
-    if (affineFor.hasConstantBounds()) {
-      int64_t lb = affineFor.getConstantLowerBound();
-      int64_t ub = affineFor.getConstantUpperBound();
-      int64_t step = affineFor.getStepAsInt();
-      if (step > 0) {
-        int64_t span = ub - lb;
-        if (span <= 0)
-          return 0;
-        return (span + step - 1) / step;
-      }
-    }
-    return std::nullopt;
-  }
-
-  if (auto artsFor = dyn_cast<arts::ForOp>(loopOp)) {
-    if (artsFor.getLowerBound().empty() || artsFor.getUpperBound().empty() ||
-        artsFor.getStep().empty())
-      return std::nullopt;
-
-    int64_t lb = 0, ub = 0, step = 0;
-    if (ValueAnalysis::getConstantIndex(artsFor.getLowerBound()[0], lb) &&
-        ValueAnalysis::getConstantIndex(artsFor.getUpperBound()[0], ub) &&
-        ValueAnalysis::getConstantIndex(artsFor.getStep()[0], step) &&
-        step > 0) {
-      int64_t span = ub - lb;
-      if (span <= 0)
-        return 0;
-      return (span + step - 1) / step;
-    }
-  }
-
-  if (auto forOp = dyn_cast<scf::ForOp>(loopOp)) {
-    int64_t lb = 0, ub = 0, step = 0;
-    if (ValueAnalysis::getConstantIndex(forOp.getLowerBound(), lb) &&
-        ValueAnalysis::getConstantIndex(forOp.getUpperBound(), ub) &&
-        ValueAnalysis::getConstantIndex(forOp.getStep(), step) && step > 0) {
-      int64_t span = ub - lb;
-      if (span <= 0)
-        return 0;
-      return (span + step - 1) / step;
-    }
-  }
-
-  return std::nullopt;
-}
-
-} // namespace
-
 LoopAnalysis::LoopAnalysis(AnalysisManager &analysisManager)
     : ArtsAnalysis(analysisManager), module(analysisManager.getModule()) {}
 
@@ -195,11 +123,89 @@ std::optional<int64_t> LoopAnalysis::getStaticTripCount(Operation *loopOp) {
   if (!loopOp || !isLoopOperation(loopOp))
     return std::nullopt;
 
-  LoopNode *loopNode = getLoopNode(loopOp);
-  if (auto metadataTripCount = getTripCountFromMetadata(loopOp, loopNode))
-    return metadataTripCount;
+  auto getTripCountFromMetadata = [&](LoopNode *loopNode) {
+    if (loopNode && loopNode->tripCount && *loopNode->tripCount > 0)
+      return std::optional<int64_t>(*loopNode->tripCount);
 
-  return getTripCountFromConstantBounds(loopOp);
+    if (auto artsFor = dyn_cast<arts::ForOp>(loopOp)) {
+      if (auto loopAttr = artsFor->getAttrOfType<LoopMetadataAttr>(
+              AttrNames::LoopMetadata::Name)) {
+        if (auto tripAttr = loopAttr.getTripCount()) {
+          int64_t tc = tripAttr.getInt();
+          if (tc > 0)
+            return std::optional<int64_t>(tc);
+        }
+      }
+    }
+
+    return std::optional<int64_t>{};
+  };
+  auto getTripCountFromConstantBounds = [&]() -> std::optional<int64_t> {
+    if (auto affineFor = dyn_cast<affine::AffineForOp>(loopOp)) {
+      if (affineFor.hasConstantBounds()) {
+        int64_t lb = affineFor.getConstantLowerBound();
+        int64_t ub = affineFor.getConstantUpperBound();
+        int64_t step = affineFor.getStepAsInt();
+        if (step > 0) {
+          int64_t span = ub - lb;
+          if (span <= 0)
+            return 0;
+          return (span + step - 1) / step;
+        }
+      }
+      return std::nullopt;
+    }
+
+    if (auto artsFor = dyn_cast<arts::ForOp>(loopOp)) {
+      if (artsFor.getLowerBound().empty() || artsFor.getUpperBound().empty() ||
+          artsFor.getStep().empty())
+        return std::nullopt;
+
+      int64_t lb = 0, ub = 0, step = 0;
+      if (ValueAnalysis::getConstantIndex(artsFor.getLowerBound()[0], lb) &&
+          ValueAnalysis::getConstantIndex(artsFor.getUpperBound()[0], ub) &&
+          ValueAnalysis::getConstantIndex(artsFor.getStep()[0], step) &&
+          step > 0) {
+        int64_t span = ub - lb;
+        if (span <= 0)
+          return 0;
+        return (span + step - 1) / step;
+      }
+    }
+
+    if (auto forOp = dyn_cast<scf::ForOp>(loopOp)) {
+      int64_t lb = 0, ub = 0, step = 0;
+      if (ValueAnalysis::getConstantIndex(forOp.getLowerBound(), lb) &&
+          ValueAnalysis::getConstantIndex(forOp.getUpperBound(), ub) &&
+          ValueAnalysis::getConstantIndex(forOp.getStep(), step) &&
+          step > 0) {
+        int64_t span = ub - lb;
+        if (span <= 0)
+          return 0;
+        return (span + step - 1) / step;
+      }
+    }
+
+    return std::nullopt;
+  };
+
+  LoopNode *loopNode = getLoopNode(loopOp);
+  std::optional<int64_t> constantTripCount = getTripCountFromConstantBounds();
+  std::optional<int64_t> metadataTripCount =
+      getTripCountFromMetadata(loopNode);
+
+  if (constantTripCount) {
+    if (metadataTripCount && *metadataTripCount != *constantTripCount) {
+      ARTS_DEBUG("Preferring direct static trip count " << *constantTripCount
+                                                        << " over metadata "
+                                                        << *metadataTripCount
+                                                        << " for "
+                                                        << loopOp->getName());
+    }
+    return constantTripCount;
+  }
+
+  return metadataTripCount;
 }
 
 std::optional<int64_t>

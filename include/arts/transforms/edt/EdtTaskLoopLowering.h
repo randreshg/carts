@@ -23,7 +23,7 @@ struct TaskLoopLoweringInput {
 
   DistributionStrategy strategy;
   DistributionBounds bounds;
-  std::optional<ArtsDepPattern> depPattern;
+  LoweringContractInfo distributionContract;
   Value taskWorkerId;
   Value totalWorkers;
   Value workersPerNode;

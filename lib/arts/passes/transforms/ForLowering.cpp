@@ -76,146 +76,14 @@ using namespace mlir::arts;
 
 namespace {
 
-static std::optional<unsigned> inferLoopMappedDim(DbAcquireNode *acqNode,
-                                                  ForOp forOp) {
-  if (!acqNode || !forOp)
-    return std::nullopt;
-
-  Block &forBody = forOp.getRegion().front();
-  if (forBody.getNumArguments() == 0)
-    return std::nullopt;
-
-  Value loopIV = forBody.getArgument(0);
-  if (auto mappedDim =
-          acqNode->getPartitionOffsetDim(loopIV, /*requireLeading=*/false)) {
-    return mappedDim;
-  }
-
-  Region &forRegion = forOp.getRegion();
-  std::optional<unsigned> mappedDim;
-  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
-  acqNode->collectAccessOperations(dbRefToMemOps);
-
-  for (auto &[dbRef, memOps] : dbRefToMemOps) {
-    for (Operation *memOp : memOps) {
-      Region *memRegion = memOp ? memOp->getParentRegion() : nullptr;
-      if (!memRegion)
-        continue;
-      if (memRegion != &forRegion && !forRegion.isAncestor(memRegion))
-        continue;
-
-      SmallVector<Value> fullChain =
-          DbUtils::collectFullIndexChain(dbRef, memOp);
-      if (fullChain.empty())
-        continue;
-
-      unsigned memrefStart = dbRef.getIndices().size();
-      if (memrefStart >= fullChain.size())
-        continue;
-
-      SmallVector<unsigned, 2> matchingDims;
-      ArrayRef<Value> memrefChain(fullChain);
-      memrefChain = memrefChain.drop_front(memrefStart);
-      for (auto [dimIdx, indexVal] : llvm::enumerate(memrefChain)) {
-        if (ValueAnalysis::dependsOn(ValueAnalysis::stripNumericCasts(indexVal),
-                                     loopIV))
-          matchingDims.push_back(dimIdx);
-      }
-
-      if (matchingDims.size() != 1)
-        return std::nullopt;
-
-      unsigned dim = matchingDims.front();
-      if (!mappedDim)
-        mappedDim = dim;
-      else if (*mappedDim != dim)
-        return std::nullopt;
-    }
-  }
-
-  return mappedDim;
-}
-
-static std::optional<unsigned> inferLoopMappedDimFromValue(Value dep,
-                                                           ForOp forOp) {
-  if (!dep || !forOp)
-    return std::nullopt;
-
-  Block &forBody = forOp.getRegion().front();
-  if (forBody.getNumArguments() == 0)
-    return std::nullopt;
-
-  Value loopIV = forBody.getArgument(0);
-  Region &forRegion = forOp.getRegion();
-  std::optional<unsigned> mappedDim;
-  llvm::SetVector<Value> sources;
-  sources.insert(dep);
-  for (Operation *user : dep.getUsers()) {
-    auto edt = dyn_cast<EdtOp>(user);
-    if (!edt)
-      continue;
-
-    ValueRange deps = edt.getDependencies();
-    Block &edtBody = edt.getBody().front();
-    unsigned argCount = edtBody.getNumArguments();
-    for (auto [idx, operand] : llvm::enumerate(deps)) {
-      if (operand != dep || idx >= argCount)
-        continue;
-      sources.insert(edtBody.getArgument(static_cast<unsigned>(idx)));
-    }
-  }
-
-  llvm::SetVector<Operation *> memOps;
-  for (Value source : sources)
-    DbUtils::collectReachableMemoryOps(source, memOps, /*scope=*/nullptr);
-
-  for (Operation *memOp : memOps) {
-    Region *memRegion = memOp ? memOp->getParentRegion() : nullptr;
-    if (!memRegion)
-      continue;
-    if (memRegion != &forRegion && !forRegion.isAncestor(memRegion))
-      continue;
-
-    std::optional<DbUtils::MemoryAccessInfo> access =
-        DbUtils::getMemoryAccessInfo(memOp);
-    if (!access || access->indices.empty())
-      continue;
-
-    SmallVector<unsigned, 2> matchingDims;
-    for (auto [dimIdx, indexVal] : llvm::enumerate(access->indices)) {
-      if (ValueAnalysis::dependsOn(ValueAnalysis::stripNumericCasts(indexVal),
-                                   loopIV))
-        matchingDims.push_back(dimIdx);
-    }
-
-    if (matchingDims.size() != 1)
-      return std::nullopt;
-
-    unsigned dim = matchingDims.front();
-    if (!mappedDim)
-      mappedDim = dim;
-    else if (*mappedDim != dim)
-      return std::nullopt;
-  }
-
-  return mappedDim;
-}
-
 static std::optional<unsigned> inferAcquireMappedDim(DbAnalysis *dbAnalysis,
                                                      DbAcquireOp acquire,
                                                      ForOp forOp) {
-  if (!acquire || !forOp)
+  if (!dbAnalysis || !acquire || !forOp)
     return std::nullopt;
-
-  if (dbAnalysis)
-    if (func::FuncOp func = acquire->getParentOfType<func::FuncOp>()) {
-      DbGraph &graph = dbAnalysis->getOrCreateGraph(func);
-      if (DbAcquireNode *acqNode = graph.getDbAcquireNode(acquire))
-        if (auto mappedDim = inferLoopMappedDim(acqNode, forOp))
-          return mappedDim;
-    }
-
-  return inferLoopMappedDimFromValue(acquire.getPtr(), forOp);
+  if (auto mappedDim = dbAnalysis->inferLoopMappedDim(acquire, forOp))
+    return mappedDim;
+  return dbAnalysis->inferLoopMappedDim(acquire.getPtr(), forOp);
 }
 
 static std::optional<AccessBoundsResult>
@@ -309,35 +177,6 @@ inferLoopHaloBoundsFromValue(Value dep, ForOp forOp, unsigned mappedDim) {
   return bounds;
 }
 
-static std::optional<ArtsMode> inferLoopLocalAccessMode(Value dep,
-                                                        ForOp forOp) {
-  if (!dep || !forOp)
-    return std::nullopt;
-
-  Region &forRegion = forOp.getRegion();
-  llvm::SetVector<Operation *> memOps;
-  DbUtils::collectReachableMemoryOps(dep, memOps, &forRegion);
-
-  bool hasLoads = false;
-  bool hasStores = false;
-  for (Operation *memOp : memOps) {
-    if (!DbUtils::getMemoryAccessInfo(memOp))
-      continue;
-    if (isa<memref::StoreOp, affine::AffineStoreOp>(memOp))
-      hasStores = true;
-    else
-      hasLoads = true;
-  }
-
-  if (!hasLoads && !hasStores)
-    return std::nullopt;
-  if (hasLoads && hasStores)
-    return ArtsMode::inout;
-  if (hasStores)
-    return ArtsMode::out;
-  return ArtsMode::in;
-}
-
 ///===----------------------------------------------------------------------===///
 /// LoopInfo - Information about a loop within a parallel EDT
 ///
@@ -356,10 +195,10 @@ public:
     lowerBound = forOp.getLowerBound()[0];
     upperBound = forOp.getUpperBound()[0];
     loopStep = forOp.getStep()[0];
-    depPattern = getEffectiveDepPattern(forOp.getOperation());
+    distributionContract = resolveLoopDistributionContract(forOp.getOperation());
     totalWorkers = numWorkers;
     LoopChunkPlan chunkPlan = WorkDistributionUtils::planLoopChunking(
-        AC, forOp, runtimeBlockSizeHint);
+        AC, forOp, distributionContract, runtimeBlockSizeHint);
     blockSize = chunkPlan.blockSize;
     chunkLowerBound = chunkPlan.chunkLowerBound;
     totalIterations = chunkPlan.totalIterations;
@@ -382,7 +221,7 @@ public:
   std::optional<int64_t> alignmentBlockSize;
   /// Distribution information
   Value blockSize, totalWorkers, totalIterations, totalChunks;
-  std::optional<ArtsDepPattern> depPattern;
+  LoweringContractInfo distributionContract;
 
   /// Distribution strategy and bounds from DistributionHeuristics
   DistributionStrategy strategy;
@@ -553,10 +392,26 @@ static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
   }
 }
 
+static void clearReductionLoopFacts(LoopMetadata &metadata) {
+  metadata.hasReductions = false;
+  metadata.reductionKinds.clear();
+}
+
+static void markReductionLoweredLoop(LoopMetadata &metadata) {
+  metadata.potentiallyParallel = true;
+  metadata.hasReductions = false;
+  metadata.reductionKinds.clear();
+  metadata.hasInterIterationDeps = false;
+  metadata.memrefsWithLoopCarriedDeps = 0;
+  metadata.parallelClassification = LoopMetadata::ParallelClassification::Likely;
+}
+
 /// ForLowering Pass Implementation
 struct ForLoweringPass : public impl::ForLoweringBase<ForLoweringPass> {
   explicit ForLoweringPass(mlir::arts::AnalysisManager *AM = nullptr)
-      : AM(AM) {}
+      : AM(AM) {
+    assert(AM && "AnalysisManager must be provided externally");
+  }
   void runOnOperation() override;
 
 private:
@@ -584,8 +439,9 @@ private:
                               Value workerCountOverride = Value());
 
   void createResultEdt(ArtsCodegen *AC, ReductionInfo &redInfo, Location loc);
-
-  Attribute getLoopMetadataAttr(ForOp forOp);
+  MetadataManager &getMetadataManager() const;
+  void attachLoweredLoopMetadata(ForOp sourceFor, scf::ForOp loweredLoop,
+                                 bool parallelizeReductionOnly = false);
 
   /// Lower an arts.for with DB acquires rewired directly to DbAllocOp.
   /// This is used when splitting the parallel region - the for body is
@@ -717,13 +573,24 @@ void ForLoweringPass::lowerParallelEdt(EdtOp parallelEdt) {
   ARTS_INFO(" - Parallel EDT lowering complete");
 }
 
-Attribute ForLoweringPass::getLoopMetadataAttr(ForOp forOp) {
-  Attribute attr = forOp->getAttr(AttrNames::LoopMetadata::Name);
-  if (attr)
-    return attr;
-  MetadataManager manager(forOp.getContext());
-  manager.ensureLoopMetadata(forOp);
-  return forOp->getAttr(AttrNames::LoopMetadata::Name);
+MetadataManager &ForLoweringPass::getMetadataManager() const {
+  assert(AM && "AnalysisManager must be provided externally");
+  return AM->getMetadataManager();
+}
+
+void ForLoweringPass::attachLoweredLoopMetadata(ForOp sourceFor,
+                                                scf::ForOp loweredLoop,
+                                                bool parallelizeReductionOnly) {
+  auto &metadataManager = getMetadataManager();
+  if (parallelizeReductionOnly) {
+    metadataManager.cloneLoopMetadata(sourceFor.getOperation(),
+                                      loweredLoop.getOperation(),
+                                      markReductionLoweredLoop);
+    return;
+  }
+  metadataManager.cloneLoopMetadata(sourceFor.getOperation(),
+                                    loweredLoop.getOperation(),
+                                    clearReductionLoopFacts);
 }
 
 void ForLoweringPass::cloneLoopBody(ArtsCodegen *AC, ForOp forOp,
@@ -790,13 +657,13 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(
     ArtsCodegen *AC, ForOp forOp, EdtOp parallelEdt, Location loc,
     bool splitMode, Value workerCountOverride) {
   return mlir::arts::allocatePartialAccumulators(
-      AC, forOp, parallelEdt, loc, getLoopMetadataAttr(forOp), splitMode,
+      AC, getMetadataManager(), forOp, parallelEdt, loc, splitMode,
       workerCountOverride);
 }
 
 void ForLoweringPass::createResultEdt(ArtsCodegen *AC, ReductionInfo &redInfo,
                                       Location loc) {
-  arts::createResultEdt(AC, redInfo, loc);
+  arts::createResultEdt(AC, getMetadataManager(), redInfo, loc);
 }
 
 ///===----------------------------------------------------------------------===///
@@ -810,10 +677,7 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
 
   /// Read distribution strategy selected by EdtDistributionPass.
   DistributionStrategy strategy =
-      AM ? AM->getEdtHeuristics().resolveLoweringStrategy(originalParallel,
-                                                          forOp)
-         : DistributionHeuristics::resolveLoweringStrategy(originalParallel,
-                                                           forOp);
+      AM->getEdtHeuristics().resolveLoweringStrategy(originalParallel, forOp);
 
   Value zero;
   Value one;
@@ -852,13 +716,13 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
     /// actually receive work.
     Value runtimeBlockSize = WorkDistributionUtils::computeDbAlignmentBlockSize(
         forOp, originalParallel, numDbPartitions, &AC, loc,
-        AM ? &AM->getDbAnalysis() : nullptr);
+        AM->getDbAnalysis());
     loopInfoStorage.emplace(&AC, forOp, numWorkers, runtimeBlockSize);
     LoopInfo &loopInfo = *loopInfoStorage;
     loopInfo.strategy = strategy;
     dispatchWorkers = WorkDistributionUtils::getForDispatchWorkerCount(
         &AC, loc, originalParallel, loopInfo.strategy, loopInfo.totalChunks,
-        loopInfo.depPattern);
+        loopInfo.distributionContract);
 
     /// Allocate reduction accumulators (same as before, but place BEFORE epoch)
     /// Use splitMode=true since we're splitting the parallel EDT and will
@@ -871,9 +735,6 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
     }
   }
 
-  auto isWavefrontPattern = [](Operation *op) {
-    return op && getEffectiveDepPattern(op) == ArtsDepPattern::wavefront_2d;
-  };
   /// Treat both a truly single-worker topology and a one-lane dispatch clamp
   /// as the trivial lowering case. The dispatch worker count can remain
   /// symbolically wrapped in min/max arithmetic even when the topology has
@@ -885,9 +746,7 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   const bool reuseEnclosingEpoch =
       forOp.getReductionAccumulators().empty() &&
       originalParallel->getParentOfType<EpochOp>() &&
-      (isWavefrontPattern(forOp.getOperation()) ||
-       isWavefrontPattern(originalParallel.getOperation()) ||
-       isWavefrontPattern(originalParallel->getParentOp()));
+      loopInfoStorage->distributionContract.shouldReuseEnclosingEpoch();
 
   std::optional<EpochOp> forEpoch;
   Block *epochBlock = nullptr;
@@ -963,7 +822,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   loopInfo.bounds = WorkDistributionUtils::computeBounds(
       AC, loc, loopInfo.strategy, workerIdPlaceholder, loopInfo.totalWorkers,
       workersPerNode, loopInfo.totalIterations, loopInfo.totalChunks,
-      loopInfo.blockSize, loopInfo.depPattern);
+      loopInfo.blockSize, loopInfo.distributionContract);
 
   Value chunkOffset = loopInfo.bounds.iterStart;
   ValueRange parentDeps = originalParallel.getDependencies();
@@ -987,7 +846,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
                                       loc,
                                       loopInfo.strategy,
                                       loopInfo.bounds,
-                                      loopInfo.depPattern,
+                                      loopInfo.distributionContract,
                                       taskWorkerId,
                                       loopInfo.totalWorkers,
                                       workersPerNode,
@@ -1094,18 +953,16 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     /// so ForLowering RESPECTS the user's intent and does NOT override.
     bool parentHasPartitionInfo = parentAcqOp.hasExplicitPartitionHints();
 
+    /// CreateDbs/Db analysis own the canonical access mode for each acquire.
+    /// ForLowering preserves that mode instead of reclassifying loop-local
+    /// memops and drifting away from the dependency contract.
     ArtsMode effectiveTaskMode = parentAcqOp.getMode();
-    if (auto localMode = inferLoopLocalAccessMode(parallelArg, forOp))
-      effectiveTaskMode = *localMode;
 
     DbAcquireOp chunkAcqOp;
     bool chunkUsesStencilHalo = false;
 
     std::optional<EdtDistributionPattern> distributionPattern =
-        AM ? AM->getEdtHeuristics().resolveDistributionPattern(forOp,
-                                                               originalParallel)
-           : DistributionHeuristics::resolveDistributionPattern(
-                 nullptr, forOp, originalParallel);
+        loopInfo.distributionContract.getEffectiveDistributionPattern();
 
     AcquireRewriteContract rewriteContract =
         resolveAcquireRewriteContract(AM, parentAcqOp);
@@ -1136,8 +993,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     }
     std::optional<unsigned> inferredMappedDim;
     if (rewriteContract.ownerDims.empty())
-      if (auto mappedDim = inferAcquireMappedDim(
-              AM ? &AM->getDbAnalysis() : nullptr, parentAcqOp, forOp)) {
+      if (auto mappedDim =
+              inferAcquireMappedDim(&AM->getDbAnalysis(), parentAcqOp, forOp)) {
         rewriteContract.ownerDims.push_back(static_cast<int64_t>(*mappedDim));
         inferredMappedDim = *mappedDim;
       }
@@ -1411,9 +1268,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         taskLoopLowering->lower(taskLoopInput, mappedLoopValues);
     loopInfo.insideBounds = loweredLoop.insideBounds;
     scf::ForOp iterLoop = loweredLoop.iterLoop;
-
-    if (Attribute loopAttr = getLoopMetadataAttr(forOp))
-      iterLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
+    attachLoweredLoopMetadata(forOp, iterLoop);
 
     AC->setInsertionPointToStart(iterLoop.getBody());
 
@@ -1639,32 +1494,23 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   chunkOffset = loweredLoop.iterStart;
   scf::ForOp iterLoop = loweredLoop.iterLoop;
 
-  /// Set loop metadata, marking as parallel if only reduction deps existed
-  if (Attribute loopAttr = getLoopMetadataAttr(forOp)) {
-    if (!reductionVarIndex.empty()) {
-      if (auto origMeta = dyn_cast<LoopMetadataAttr>(loopAttr)) {
-        int64_t memrefDeps = 0;
-        if (auto attr = origMeta.getMemrefsWithLoopCarriedDeps())
-          memrefDeps = attr.getInt();
-
-        if (memrefDeps == 0) {
-          auto parallelMeta = LoopMetadata::createParallelizedMetadata(
-              forOp.getContext(), origMeta);
-          iterLoop->setAttr(AttrNames::LoopMetadata::Name, parallelMeta);
-          ARTS_DEBUG("  Updated loop metadata: potentiallyParallel=true "
-                     "(reduction-only deps, no stencil patterns)");
-        } else {
-          iterLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
-          ARTS_DEBUG("  Keeping original metadata: memrefsWithLoopCarriedDeps="
-                     << memrefDeps << " (stencil patterns detected)");
-        }
+  bool parallelizeReductionOnly = false;
+  if (!reductionVarIndex.empty()) {
+    auto &metadataManager = getMetadataManager();
+    metadataManager.refreshMetadata(forOp.getOperation());
+    if (auto *sourceMetadata = metadataManager.getLoopMetadata(forOp)) {
+      int64_t memrefDeps = sourceMetadata->memrefsWithLoopCarriedDeps.value_or(0);
+      if (memrefDeps == 0) {
+        parallelizeReductionOnly = true;
+        ARTS_DEBUG("  Updated loop metadata: potentiallyParallel=true "
+                   "(reduction-only deps, no stencil patterns)");
       } else {
-        iterLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
+        ARTS_DEBUG("  Keeping original metadata: memrefsWithLoopCarriedDeps="
+                   << memrefDeps << " (stencil patterns detected)");
       }
-    } else {
-      iterLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
     }
   }
+  attachLoweredLoopMetadata(forOp, iterLoop, parallelizeReductionOnly);
 
   AC->setInsertionPointToStart(iterLoop.getBody());
 

@@ -71,7 +71,7 @@ TaskLoopLoweringResult EdtTaskLoopLowering::lowerBlockStyle(
       input.totalWorkers, input.workersPerNode, input.upperBound,
       input.lowerBound, input.loopStep, input.blockSize,
       input.alignmentBlockSize, input.useRuntimeBlockAlignment,
-      input.depPattern);
+      input.distributionContract);
   result.iterStart = result.insideBounds.iterStart;
   result.globalBase = mapped.workerBaseOffset;
 

@@ -260,10 +260,9 @@ private:
   void createDbAllocOps();
   void lowerEdtExternalDependencies();
   void cleanupAndFinalize();
-  void projectSemanticContractToDbValue(
-      Operation *sourceOp, Operation *targetOp, Value contractTarget,
-      OperationContractTransferPolicy policy =
-          OperationContractTransferPolicy::PreserveStampedContractOnly);
+  void projectSemanticContractToDbValue(Operation *sourceOp,
+                                        Operation *targetOp,
+                                        Value contractTarget);
   void createDbAcquireOps(EdtOp edt, SetVector<Value> &externalDeps);
   Value findLocalAcquireView(EdtOp edt, Operation *dbAllocOp,
                              bool requiresIndexedAccess = false);
@@ -451,12 +450,11 @@ void CreateDbsPass::cleanupAndFinalize() {
 }
 
 void CreateDbsPass::projectSemanticContractToDbValue(
-    Operation *sourceOp, Operation *targetOp, Value contractTarget,
-    OperationContractTransferPolicy policy) {
+    Operation *sourceOp, Operation *targetOp, Value contractTarget) {
   if (!sourceOp || !targetOp || !contractTarget)
     return;
 
-  transferOperationContract(sourceOp, targetOp, policy);
+  transferOperationContract(sourceOp, targetOp);
 
   OpBuilder::InsertionGuard guard(AC->getBuilder());
   AC->setInsertionPointAfter(targetOp);
@@ -1196,9 +1194,9 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
         AC->setInsertionPointToStart(&edt.getBody().front());
       auto acquireOp = createAcquire(edt.getLoc());
 
-      projectSemanticContractToDbValue(
-          edt.getOperation(), acquireOp.getOperation(), acquireOp.getPtr(),
-          OperationContractTransferPolicy::IncludeEffectiveDepPatternFallback);
+      projectSemanticContractToDbValue(edt.getOperation(),
+                                       acquireOp.getOperation(),
+                                       acquireOp.getPtr());
 
       if (!depGroup.empty()) {
         /// Explicit DbControlOp-derived acquires always preserve their access

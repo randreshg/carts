@@ -90,10 +90,10 @@ void mlir::arts::collectOldAccumulatorDbRefs(
 }
 
 ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
-    ArtsCodegen *AC, ForOp forOp, EdtOp parallelEdt, Location loc,
-    Attribute loopMetadataAttr, bool splitMode, Value workerCountOverride) {
+    ArtsCodegen *AC, MetadataManager &metadataManager, ForOp forOp,
+    EdtOp parallelEdt, Location loc, bool splitMode,
+    Value workerCountOverride) {
   ReductionLoweringInfo redInfo;
-  redInfo.loopMetadataAttr = loopMetadataAttr;
   redInfo.loopLocation = forOp.getLoc();
   redInfo.parentConcurrency = parallelEdt.getConcurrency();
   ValueRange reductionAccums = forOp.getReductionAccumulators();
@@ -271,8 +271,7 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
     } else {
       auto initLoop =
           AC->create<scf::ForOp>(loopLoc, zeroIndex, numWorkers, one);
-      if (loopMetadataAttr)
-        initLoop->setAttr(AttrNames::LoopMetadata::Name, loopMetadataAttr);
+      metadataManager.refreshMetadata(initLoop.getOperation());
       AC->setInsertionPointToStart(initLoop.getBody());
       Value workerIdx = initLoop.getInductionVar();
 
@@ -312,6 +311,7 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
 }
 
 void mlir::arts::createResultEdt(ArtsCodegen *AC,
+                                 MetadataManager &metadataManager,
                                  ReductionLoweringInfo &redInfo, Location loc) {
   OpBuilder::InsertionGuard IG(AC->getBuilder());
   if (redInfo.reductionVars.empty())
@@ -440,9 +440,7 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
     } else {
       auto combineLoop = AC->create<scf::ForOp>(loopLoc, zeroIndex, numWorkers,
                                                 sizeOne, ValueRange{identity});
-      if (redInfo.loopMetadataAttr)
-        combineLoop->setAttr(AttrNames::LoopMetadata::Name,
-                             redInfo.loopMetadataAttr);
+      metadataManager.refreshMetadata(combineLoop.getOperation());
 
       AC->setInsertionPointToStart(combineLoop.getBody());
       Value workerIdx = combineLoop.getInductionVar();
