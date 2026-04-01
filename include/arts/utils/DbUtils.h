@@ -209,6 +209,14 @@ public:
   /// Supports memref/affine load/store operations.
   static std::optional<MemoryAccessInfo> getMemoryAccessInfo(Operation *memOp);
 
+  /// Return true when both scopes read the same underlying DB allocation or
+  /// raw memref without either scope writing that root.
+  static bool hasSharedReadonlyRoot(Operation *lhs, Operation *rhs);
+
+  /// Return true when two scopes touch the same underlying DB allocation or
+  /// raw memref and at least one side writes that root.
+  static bool hasSharedWritableRootConflict(Operation *lhs, Operation *rhs);
+
   /// Collect load/store operations reachable from source through view-like
   /// forwarding ops (casts, subviews, etc.). Optionally restrict to a scope.
   static void collectReachableMemoryOps(Value source,
@@ -221,6 +229,12 @@ public:
       Value source,
       llvm::function_ref<WalkResult(const MemoryAccessInfo &)> visitor,
       Region *scope = nullptr);
+
+  /// Return true when every reachable use of source is forwarding or cleanup
+  /// plumbing. Collected operations can be erased to remove the dead DB chain.
+  static bool collectCleanupOnlyUseChain(Value source,
+                                         llvm::SetVector<Operation *> &ops,
+                                         Region *scope = nullptr);
 };
 
 ///===----------------------------------------------------------------------===///

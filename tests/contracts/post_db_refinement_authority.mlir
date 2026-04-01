@@ -11,8 +11,9 @@
 // UNIFORM-CONC-NOT: arts.lowering_contract({{.*}}){{.*}}distribution_version = 2 : i64
 
 // STENCIL-PRE: arts.db_acquire[<in>] {{.*}}partitioning(<block>)
-// STENCIL-PRE: arts.db_acquire[<out>] {{.*}}partitioning(<block>
+// STENCIL-PRE: arts.db_acquire[<inout>] {{.*}}partitioning(<block>
 // STENCIL-PRE-NOT: partitioning(<coarse>)
+// STENCIL-PRE-NOT: arts.lowering_contract({{.*}}memref<?xmemref<?x?xf64>>)
 
 // UNIFORM-PRE: arts.db_acquire[<out>] {{.*}}partitioning(<block>
 // UNIFORM-PRE-NOT: partitioning(<coarse>)

@@ -14,6 +14,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "polygeist/Ops.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -55,6 +56,42 @@ static bool isMemrefForwardingOp(Operation *op, Value source) {
 
 static bool isStructuralHostDbUse(Operation *op) {
   return isa<EdtOp, LoweringContractOp, DbReleaseOp, DbFreeOp>(op);
+}
+
+static bool isCleanupTerminalOp(Operation *op, Value current) {
+  if (auto release = dyn_cast<DbReleaseOp>(op))
+    return release.getSource() == current;
+  if (auto free = dyn_cast<DbFreeOp>(op))
+    return free.getSource() == current;
+  if (auto contract = dyn_cast<LoweringContractOp>(op))
+    return contract.getTarget() == current;
+  return false;
+}
+
+static bool isStructuralDbChainUser(Operation *op, Value current) {
+  if (isMemrefForwardingOp(op, current))
+    return true;
+
+  if (auto acquire = dyn_cast<DbAcquireOp>(op))
+    return acquire.getSourcePtr() == current ||
+           (acquire.getSourceGuid() && acquire.getSourceGuid() == current);
+
+  return false;
+}
+
+static void enqueueStructuralDbChainResults(Operation *op,
+                                            SmallVectorImpl<Value> &worklist) {
+  if (!op)
+    return;
+
+  if (auto acquire = dyn_cast<DbAcquireOp>(op)) {
+    worklist.push_back(acquire.getGuid());
+    worklist.push_back(acquire.getPtr());
+    return;
+  }
+
+  for (Value result : op->getResults())
+    worklist.push_back(result);
 }
 
 static bool isNullPointerLike(Value value) {
@@ -134,6 +171,47 @@ static Value getAccessedMemref(Operation *memOp) {
   if (auto store = dyn_cast<affine::AffineStoreOp>(memOp))
     return store.getMemRef();
   return Value();
+}
+
+struct RootAccessSummary {
+  bool reads = false;
+  bool writes = false;
+
+  void record(DbUtils::MemoryAccessKind kind) {
+    if (kind == DbUtils::MemoryAccessKind::Read)
+      reads = true;
+    else
+      writes = true;
+  }
+
+  bool isReadOnly() const { return reads && !writes; }
+  bool hasWrite() const { return writes; }
+};
+
+struct MemoryRootSummary {
+  DenseMap<Operation *, RootAccessSummary> dbAllocs;
+  DenseMap<Value, RootAccessSummary> rawMemrefs;
+};
+
+static MemoryRootSummary summarizeMemoryRoots(Operation *scope) {
+  MemoryRootSummary summary;
+  if (!scope)
+    return summary;
+
+  scope->walk([&](Operation *op) {
+    auto access = DbUtils::getMemoryAccessInfo(op);
+    if (!access)
+      return;
+
+    if (Operation *alloc = DbUtils::getUnderlyingDbAlloc(access->memref)) {
+      summary.dbAllocs[alloc].record(access->kind);
+      return;
+    }
+
+    summary.rawMemrefs[access->memref].record(access->kind);
+  });
+
+  return summary;
 }
 
 } // namespace
@@ -682,6 +760,52 @@ DbUtils::getMemoryAccessInfo(Operation *memOp) {
   return std::nullopt;
 }
 
+bool DbUtils::hasSharedReadonlyRoot(Operation *lhs, Operation *rhs) {
+  MemoryRootSummary lhsSummary = summarizeMemoryRoots(lhs);
+  MemoryRootSummary rhsSummary = summarizeMemoryRoots(rhs);
+
+  for (const auto &[alloc, access] : lhsSummary.dbAllocs) {
+    auto it = rhsSummary.dbAllocs.find(alloc);
+    if (it != rhsSummary.dbAllocs.end() && access.isReadOnly() &&
+        it->second.isReadOnly()) {
+      return true;
+    }
+  }
+
+  for (const auto &[memref, access] : lhsSummary.rawMemrefs) {
+    auto it = rhsSummary.rawMemrefs.find(memref);
+    if (it != rhsSummary.rawMemrefs.end() && access.isReadOnly() &&
+        it->second.isReadOnly()) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool DbUtils::hasSharedWritableRootConflict(Operation *lhs, Operation *rhs) {
+  MemoryRootSummary lhsSummary = summarizeMemoryRoots(lhs);
+  MemoryRootSummary rhsSummary = summarizeMemoryRoots(rhs);
+
+  for (const auto &[alloc, access] : lhsSummary.dbAllocs) {
+    auto it = rhsSummary.dbAllocs.find(alloc);
+    if (it != rhsSummary.dbAllocs.end() &&
+        (access.hasWrite() || it->second.hasWrite())) {
+      return true;
+    }
+  }
+
+  for (const auto &[memref, access] : lhsSummary.rawMemrefs) {
+    auto it = rhsSummary.rawMemrefs.find(memref);
+    if (it != rhsSummary.rawMemrefs.end() &&
+        (access.hasWrite() || it->second.hasWrite())) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 void DbUtils::forEachReachableMemoryAccess(
     Value source, llvm::function_ref<WalkResult(const MemoryAccessInfo &)> fn,
     Region *scope) {
@@ -731,6 +855,50 @@ void DbUtils::collectReachableMemoryOps(Value source,
         return WalkResult::advance();
       },
       scope);
+}
+
+bool DbUtils::collectCleanupOnlyUseChain(Value source,
+                                         llvm::SetVector<Operation *> &ops,
+                                         Region *scope) {
+  if (!source)
+    return true;
+
+  SmallVector<Value, 16> worklist;
+  DenseSet<Value> visited;
+  worklist.push_back(source);
+
+  while (!worklist.empty()) {
+    Value current = worklist.pop_back_val();
+    if (!current || !visited.insert(current).second)
+      continue;
+
+    for (Operation *user : current.getUsers()) {
+      if (scope && !scope->isAncestor(user->getParentRegion()))
+        continue;
+
+      if (auto access = getMemoryAccessInfo(user)) {
+        if (access->memref == current)
+          return false;
+        continue;
+      }
+
+      if (isa<EdtOp>(user))
+        return false;
+
+      if (isCleanupTerminalOp(user, current)) {
+        ops.insert(user);
+        continue;
+      }
+
+      if (!isStructuralDbChainUser(user, current))
+        return false;
+
+      ops.insert(user);
+      enqueueStructuralDbChainResults(user, worklist);
+    }
+  }
+
+  return true;
 }
 
 ///===----------------------------------------------------------------------===///

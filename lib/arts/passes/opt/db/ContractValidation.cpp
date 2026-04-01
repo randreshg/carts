@@ -148,22 +148,16 @@ struct ContractValidationPass
     /// ---------------------------------------------------------------
     /// Phase 3: Log statistics
     /// ---------------------------------------------------------------
-    llvm::errs() << "[CARTS] Contract validation: " << totalContracts
-                 << " contracts, " << invalidContracts << " invalid, "
-                 << orphanAcquires << " orphan acquires\n";
-
-    if (!patternCounts.empty()) {
-      llvm::errs() << "[CARTS]   Per-pattern counts:";
-      for (auto &entry : patternCounts) {
-        llvm::errs() << " " << stringifyArtsDepPattern(entry.first) << "="
-                     << entry.second;
-      }
-      llvm::errs() << "\n";
+    ARTS_INFO("Contract validation summary: " << totalContracts
+                                              << " contracts, "
+                                              << invalidContracts
+                                              << " invalid, "
+                                              << orphanAcquires
+                                              << " orphan acquires");
+    for (auto &entry : patternCounts) {
+      ARTS_INFO("  Pattern " << stringifyArtsDepPattern(entry.first) << ": "
+                             << entry.second);
     }
-
-    ARTS_INFO("Total contracts: " << totalContracts
-                                  << ", invalid: " << invalidContracts
-                                  << ", orphan acquires: " << orphanAcquires);
 
     /// Fail the pass if requested and there were problems
     if (failOnError && (invalidContracts > 0 || orphanAcquires > 0)) {

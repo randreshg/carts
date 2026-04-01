@@ -835,6 +835,9 @@ void buildConcurrencyOptPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   /// reduction analysis see accurate writer/reader modes.
   pm.addPass(arts::createDbModeTighteningPass(AM));
   pm.addPass(arts::createEdtTransformsPass(AM));
+  /// Re-run DB transforms after EDT dependency pruning so cleanup-only
+  /// acquires and now-unreachable DB roots are removed in the DB layer.
+  pm.addPass(arts::createDbTransformsPass(AM));
   pm.addPass(arts::createContractValidationPass());
   pm.addPass(arts::createDbScratchEliminationPass());
   addCanonicalizeAndCSE(pm);

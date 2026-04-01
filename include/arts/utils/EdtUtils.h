@@ -14,6 +14,8 @@
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Operation.h"
+#include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
 
 namespace mlir {
@@ -101,6 +103,20 @@ void classifyEdtArgAccesses(EdtOp edt, SmallVectorImpl<bool> &reads,
 /// body without needing its surrounding control flow. This accepts constant or
 /// pure regionless operand chains whose inputs can be captured by the EDT.
 bool canCloneAllocaInitStore(memref::StoreOp store, Value memref);
+
+/// Classify an explicit ordered list of EDT user values using the same
+/// parameter/constant/DB-handle contract as EDT lowering.
+void classifyEdtUserValues(ArrayRef<Value> userValues,
+                           llvm::SetVector<Value> &parameters,
+                           llvm::SetVector<Value> &constants,
+                           llvm::SetVector<Value> &dbHandles);
+
+/// Analyze the values an EDT captures from above its region using the same
+/// classification contract as EDT lowering.
+void analyzeEdtCapturedValues(EdtOp edt, llvm::SetVector<Value> &capturedValues,
+                              llvm::SetVector<Value> &parameters,
+                              llvm::SetVector<Value> &constants,
+                              llvm::SetVector<Value> &dbHandles);
 
 } // namespace arts
 } // namespace mlir
