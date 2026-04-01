@@ -12,96 +12,11 @@
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include <algorithm>
+#include <limits>
 #include <cmath>
 
 using namespace mlir;
 using namespace mlir::arts;
-
-namespace {
-
-static std::optional<int64_t> getExplicitWorkerCount(EdtOp edt) {
-  if (!edt)
-    return std::nullopt;
-  return arts::getWorkers(edt.getOperation());
-}
-
-static std::optional<int64_t> getExplicitWorkersPerNodeCount(EdtOp edt) {
-  if (!edt)
-    return std::nullopt;
-  return arts::getWorkersPerNode(edt.getOperation());
-}
-
-static DistributionKind toDistributionKind(EdtDistributionKind kind) {
-  switch (kind) {
-  case EdtDistributionKind::block:
-    return DistributionKind::Flat;
-  case EdtDistributionKind::two_level:
-    return DistributionKind::TwoLevel;
-  case EdtDistributionKind::block_cyclic:
-    return DistributionKind::BlockCyclic;
-  case EdtDistributionKind::tiling_2d:
-    return DistributionKind::Tiling2D;
-  case EdtDistributionKind::replicated:
-    return DistributionKind::Replicated;
-  }
-  return DistributionKind::Flat;
-}
-
-static int64_t ceilDivPositive(int64_t num, int64_t denom) {
-  if (num <= 0 || denom <= 0)
-    return 1;
-  return 1 + (num - 1) / denom;
-}
-
-static int64_t clampPositive(int64_t value, int64_t minValue,
-                             int64_t maxValue) {
-  return std::clamp(std::max<int64_t>(1, value), std::max<int64_t>(1, minValue),
-                    std::max<int64_t>(1, maxValue));
-}
-
-static int64_t estimateNestedLoopWork(LoopAnalysis &loopAnalysis, ForOp forOp) {
-  if (!forOp)
-    return 1;
-
-  if (auto perfectWork =
-          loopAnalysis.estimateStaticPerfectNestedWork(forOp.getOperation(), 8);
-      perfectWork && *perfectWork > 1) {
-    return *perfectWork;
-  }
-
-  int64_t maxNestedTrip = 1;
-  forOp.walk([&](scf::ForOp nestedFor) {
-    if (nestedFor == forOp)
-      return;
-    if (auto trip = loopAnalysis.getStaticTripCount(nestedFor.getOperation()))
-      maxNestedTrip = std::max(maxNestedTrip, *trip);
-  });
-  return maxNestedTrip;
-}
-
-static int64_t estimateStencilIterationWork(LoopAnalysis &loopAnalysis,
-                                            ForOp forOp, int64_t cap) {
-  if (!forOp)
-    return 1;
-
-  int64_t boundedCap = std::max<int64_t>(1, cap);
-  if (auto perfectWork = loopAnalysis.estimateStaticPerfectNestedWork(
-          forOp.getOperation(), boundedCap);
-      perfectWork && *perfectWork > 1) {
-    return *perfectWork;
-  }
-
-  int64_t maxNestedTrip = 1;
-  forOp.walk([&](scf::ForOp nestedFor) {
-    if (nestedFor == forOp)
-      return;
-    if (auto trip = loopAnalysis.getStaticTripCount(nestedFor.getOperation()))
-      maxNestedTrip = std::max(maxNestedTrip, *trip);
-  });
-  return std::min(maxNestedTrip, boundedCap);
-}
-
-} // namespace
 
 ParallelismDecision DistributionHeuristics::resolveParallelismFromMachine(
     const AbstractMachine *machine) {
@@ -142,13 +57,17 @@ DistributionHeuristics::resolveWorkerConfig(EdtOp parallelEdt,
   WorkerConfig cfg;
   cfg.internode = parallelEdt.getConcurrency() == EdtConcurrency::internode;
 
-  if (auto workers = getExplicitWorkerCount(parallelEdt)) {
+  if (auto workers = parallelEdt ? arts::getWorkers(parallelEdt.getOperation())
+                                 : std::nullopt) {
     cfg.totalWorkers = *workers;
     if (cfg.totalWorkers <= 0)
       return std::nullopt;
 
     if (cfg.internode) {
-      if (auto workersPerNode = getExplicitWorkersPerNodeCount(parallelEdt)) {
+      if (auto workersPerNode =
+              parallelEdt
+                  ? arts::getWorkersPerNode(parallelEdt.getOperation())
+                  : std::nullopt) {
         cfg.workersPerNode = *workersPerNode;
       } else if (machine && machine->getNodeCount() > 0) {
         int64_t nc = machine->getNodeCount();
@@ -295,30 +214,116 @@ DistributionHeuristics::chooseWavefront2DTilingPlan(
   return plan;
 }
 
-std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
-    ForOp forOp, LoopAnalysis &loopAnalysis, const WorkerConfig &workerCfg) {
-  if (workerCfg.totalWorkers <= 0)
+std::optional<StencilStripCostModelResult>
+DistributionHeuristics::evaluateStencilStripCostModel(
+    const StencilStripCostModelInput &input) {
+  if (input.tripCount <= 0 || input.stencilIterationWork <= 0 ||
+      input.totalWorkers <= 0)
     return std::nullopt;
+
+  constexpr int64_t kMinOwnedOuterItersFloor = 8;
+  constexpr int64_t kAmortizationLogStride = 16;
+  constexpr int64_t kMaxAmortizationMultiplier = 4;
+
+  int64_t baselineOwnedOuterIters = std::max<int64_t>(
+      kMinOwnedOuterItersFloor,
+      ceilDivPositive(input.tripCount, input.totalWorkers));
+  int64_t baselineOwnedCells =
+      saturatingMulPositive(baselineOwnedOuterIters,
+                            input.stencilIterationWork);
+
+  int64_t amortizationScore =
+      floorLog2Positive(std::max<int64_t>(1, input.repeatedTripProduct)) +
+      floorLog2Positive(std::max<int64_t>(1, input.stencilIterationWork));
+  int64_t amortizationMultiplier =
+      clampPositive(1 + amortizationScore / kAmortizationLogStride, 1,
+                    kMaxAmortizationMultiplier);
+
+  int64_t targetOwnedCells =
+      saturatingMulPositive(baselineOwnedCells, amortizationMultiplier);
+  int64_t minOwnedOuterIters =
+      std::max<int64_t>(baselineOwnedOuterIters,
+                        ceilDivPositive(targetOwnedCells,
+                                        input.stencilIterationWork));
+  int64_t maxWorkersByOwnedSpan =
+      std::max<int64_t>(1, input.tripCount / minOwnedOuterIters);
+
+  StencilStripCostModelResult result;
+  result.baselineOwnedOuterIters = baselineOwnedOuterIters;
+  result.minOwnedOuterIters = minOwnedOuterIters;
+  result.targetOwnedCells = targetOwnedCells;
+  result.amortizationMultiplier = amortizationMultiplier;
+  result.desiredWorkers =
+      std::min(input.totalWorkers, std::max<int64_t>(1, maxWorkersByOwnedSpan));
+  return result;
+}
+
+LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
+    ForOp forOp, LoopAnalysis &loopAnalysis, const WorkerConfig &workerCfg) {
+  auto estimateNestedLoopWork = [&](ForOp loop) {
+    if (!loop)
+      return int64_t{1};
+
+    if (auto perfectWork =
+            loopAnalysis.estimateStaticPerfectNestedWork(loop.getOperation(), 8);
+        perfectWork && *perfectWork > 1) {
+      return *perfectWork;
+    }
+
+    int64_t maxNestedTrip = 1;
+    loop.walk([&](scf::ForOp nestedFor) {
+      if (nestedFor == loop)
+        return;
+      if (auto trip = loopAnalysis.getStaticTripCount(nestedFor.getOperation()))
+        maxNestedTrip = std::max(maxNestedTrip, *trip);
+    });
+    return maxNestedTrip;
+  };
+  auto estimateStencilIterationWork = [&](ForOp loop, int64_t cap) {
+    if (!loop)
+      return int64_t{1};
+
+    int64_t boundedCap = std::max<int64_t>(1, cap);
+    if (auto perfectWork = loopAnalysis.estimateStaticPerfectNestedWork(
+            loop.getOperation(), boundedCap);
+        perfectWork && *perfectWork > 1) {
+      return *perfectWork;
+    }
+
+    int64_t maxNestedTrip = 1;
+    loop.walk([&](scf::ForOp nestedFor) {
+      if (nestedFor == loop)
+        return;
+      if (auto trip = loopAnalysis.getStaticTripCount(nestedFor.getOperation()))
+        maxNestedTrip = std::max(maxNestedTrip, *trip);
+    });
+    return std::min(maxNestedTrip, boundedCap);
+  };
+
+  LoopCoarseningDecision decision;
+  decision.desiredWorkers = std::max<int64_t>(1, workerCfg.totalWorkers);
+
+  if (workerCfg.totalWorkers <= 0)
+    return decision;
 
   LoopNode *loopNode = loopAnalysis.getOrCreateLoopNode(forOp.getOperation());
   if (isSequentialLoop(forOp, loopNode))
-    return std::nullopt;
+    return decision;
 
   auto tripOpt = loopAnalysis.getStaticTripCount(forOp.getOperation());
   if (!tripOpt)
-    return std::nullopt;
+    return decision;
 
   int64_t tripCount = *tripOpt;
   if (tripCount <= 0)
-    return std::nullopt;
+    return decision;
 
   int64_t effectiveTripCount = tripCount;
   bool allowNestedWorkBoost = false;
   bool isStencilPattern = false;
   bool isWavefrontPattern = false;
   int64_t repeatedTripProduct = 1;
-  int64_t nestedLoopWork = estimateNestedLoopWork(loopAnalysis, forOp);
-  constexpr int64_t kPreferredMinCellsPerStencilTask = 1 << 21;
+  int64_t nestedLoopWork = estimateNestedLoopWork(forOp);
   int64_t stencilIterationWork = 1;
   if (auto depPattern = getEffectiveDepPattern(forOp.getOperation())) {
     isWavefrontPattern = *depPattern == ArtsDepPattern::wavefront_2d;
@@ -341,8 +346,9 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
     /// Keep the generic nested-work signal aggressively capped, but estimate
     /// stencil inner-loop work with a larger budget so repeated N-D stencils
     /// can coarsen their owned strips from real per-iteration work.
-    stencilIterationWork = estimateStencilIterationWork(
-        loopAnalysis, forOp, kPreferredMinCellsPerStencilTask);
+    constexpr int64_t kStencilIterationWorkEstimateCap = 1 << 21;
+    stencilIterationWork =
+        estimateStencilIterationWork(forOp, kStencilIterationWorkEstimateCap);
   }
   if (allowNestedWorkBoost) {
     if (nestedLoopWork > 1) {
@@ -384,55 +390,57 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
     else if (repeatedTripProduct >= 16)
       minItersPerWorker = std::max<int64_t>(minItersPerWorker, 12);
   }
+  decision.minItersPerWorker = minItersPerWorker;
 
   if (isStencilPattern && !isWavefrontPattern && !workerCfg.internode) {
-    int64_t minOwnedOuterIters = 8;
+    StencilStripCostModelInput input;
+    input.tripCount = tripCount;
+    input.stencilIterationWork = std::max<int64_t>(1, stencilIterationWork);
+    input.repeatedTripProduct = std::max<int64_t>(1, repeatedTripProduct);
+    input.totalWorkers = workerCfg.totalWorkers;
 
-    /// Large stencil strips amortize better with fewer, larger owned tiles
-    /// once each outer iteration already carries substantial inner-loop work.
-    /// Without this floor, wide Jacobi/Poisson-style grids can still create
-    /// one EDT per worker even though each strip already spans millions of
-    /// cells.
-    if (repeatedTripProduct >= 64 && stencilIterationWork >= 4096) {
-      int64_t innerWork = std::max<int64_t>(1, stencilIterationWork);
-      int64_t minOwnedByWork =
-          ceilDivPositive(kPreferredMinCellsPerStencilTask, innerWork);
-      minOwnedOuterIters =
-          std::max<int64_t>(minOwnedOuterIters, minOwnedByWork);
-    }
-
-    int64_t maxWorkersByOwnedSpan =
-        std::max<int64_t>(1, tripCount / minOwnedOuterIters);
-    if (workerCfg.totalWorkers > maxWorkersByOwnedSpan) {
-      int64_t desiredWorkers = maxWorkersByOwnedSpan;
-      int64_t blockSize = (tripCount + desiredWorkers - 1) / desiredWorkers;
-      blockSize = std::max<int64_t>(1, blockSize);
-      if (blockSize > 1)
-        return blockSize;
+    decision.stencilStripPlan = evaluateStencilStripCostModel(input);
+    if (decision.stencilStripPlan) {
+      decision.desiredWorkers = decision.stencilStripPlan->desiredWorkers;
+      if (workerCfg.totalWorkers > decision.desiredWorkers) {
+        int64_t blockSize = ceilDivPositive(tripCount, decision.desiredWorkers);
+        if (blockSize > 1) {
+          decision.blockSize = blockSize;
+          return decision;
+        }
+      }
     }
   }
 
   if (effectiveTripCount >= workerCfg.totalWorkers * minItersPerWorker)
-    return std::nullopt;
+    return decision;
 
-  int64_t desiredWorkers =
+  decision.desiredWorkers =
       std::max<int64_t>(1, effectiveTripCount / minItersPerWorker);
-  desiredWorkers = std::min(desiredWorkers, workerCfg.totalWorkers);
+  decision.desiredWorkers =
+      std::min(decision.desiredWorkers, workerCfg.totalWorkers);
 
-  int64_t blockSize = (tripCount + desiredWorkers - 1) / desiredWorkers;
+  int64_t blockSize = ceilDivPositive(tripCount, decision.desiredWorkers);
   blockSize = std::max<int64_t>(1, blockSize);
 
   if (workerCfg.internode) {
     int64_t maxBlockForAllWorkers = tripCount / workerCfg.totalWorkers;
     if (maxBlockForAllWorkers <= 1)
-      return std::nullopt;
+      return decision;
     blockSize = std::min(blockSize, maxBlockForAllWorkers);
   }
 
   if (blockSize <= 1)
-    return std::nullopt;
+    return decision;
 
-  return blockSize;
+  decision.blockSize = blockSize;
+  return decision;
+}
+
+std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
+    ForOp forOp, LoopAnalysis &loopAnalysis, const WorkerConfig &workerCfg) {
+  return computeLoopCoarseningDecision(forOp, loopAnalysis, workerCfg)
+      .blockSize;
 }
 
 DistributionStrategy
@@ -466,8 +474,25 @@ DistributionHeuristics::resolveLoweringStrategy(EdtOp originalParallel,
                                                 ForOp forOp) {
   DistributionStrategy strategy =
       analyzeStrategy(originalParallel.getConcurrency(), /*machine=*/nullptr);
-  if (auto selectedKind = getEdtDistributionKind(forOp.getOperation()))
-    strategy.kind = toDistributionKind(*selectedKind);
+  if (auto selectedKind = getEdtDistributionKind(forOp.getOperation())) {
+    switch (*selectedKind) {
+    case EdtDistributionKind::block:
+      strategy.kind = DistributionKind::Flat;
+      break;
+    case EdtDistributionKind::two_level:
+      strategy.kind = DistributionKind::TwoLevel;
+      break;
+    case EdtDistributionKind::block_cyclic:
+      strategy.kind = DistributionKind::BlockCyclic;
+      break;
+    case EdtDistributionKind::tiling_2d:
+      strategy.kind = DistributionKind::Tiling2D;
+      break;
+    case EdtDistributionKind::replicated:
+      strategy.kind = DistributionKind::Replicated;
+      break;
+    }
+  }
   return strategy;
 }
 

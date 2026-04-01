@@ -526,6 +526,13 @@ void copyArtsMetadataAttrs(Operation *source, Operation *dest) {
     ARTS_DEBUG("  -> transferred arts.id=" << id.getInt());
   }
 
+  if (auto originId = source->getAttrOfType<IntegerAttr>(
+          AttrNames::Operation::MetadataOriginId))
+    dest->setAttr(AttrNames::Operation::MetadataOriginId, originId);
+  if (auto provenance = source->getAttrOfType<StringAttr>(
+          AttrNames::Operation::MetadataProvenance))
+    dest->setAttr(AttrNames::Operation::MetadataProvenance, provenance);
+
   /// Transfer partition_mode
   if (auto mode = source->getAttrOfType<PartitionModeAttr>(
           AttrNames::Operation::PartitionMode))

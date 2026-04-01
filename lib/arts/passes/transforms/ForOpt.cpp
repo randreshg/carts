@@ -87,18 +87,19 @@ struct ForOptPass : public impl::ForOptBase<ForOptPass> {
         if (getPartitioningHint(forOp.getOperation()))
           return;
 
-        auto coarsened =
-            heuristics.computeCoarsenedBlockHint(forOp, *workerCfg);
-        if (!coarsened)
+        auto decision = heuristics.computeLoopCoarseningDecision(forOp,
+                                                                 *workerCfg);
+        if (!decision.blockSize)
           return;
 
         setPartitioningHint(forOp.getOperation(),
-                            PartitioningHint::block(*coarsened));
+                            PartitioningHint::block(*decision.blockSize));
 
         ARTS_INFO("Set arts.partition_hint blockSize="
-                  << *coarsened << " for arts.for ("
+                  << *decision.blockSize << " for arts.for ("
                   << stringifyEdtConcurrency(parallelEdt.getConcurrency())
-                  << ", workers=" << workerCfg->totalWorkers << ")");
+                  << ", workers=" << workerCfg->totalWorkers
+                  << ", desired_workers=" << decision.desiredWorkers << ")");
       });
     });
 

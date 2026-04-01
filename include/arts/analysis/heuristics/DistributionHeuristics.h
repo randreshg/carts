@@ -145,6 +145,33 @@ struct WorkerConfig {
   bool internode = false;
 };
 
+/// Inputs for the intranode stencil owned-strip cost model.
+/// The model sizes worker-owned strips from loop work that is already known to
+/// analysis instead of relying on a single fixed cell threshold.
+struct StencilStripCostModelInput {
+  int64_t tripCount = 0;
+  int64_t stencilIterationWork = 1;
+  int64_t repeatedTripProduct = 1;
+  int64_t totalWorkers = 0;
+};
+
+/// Result of the intranode stencil owned-strip cost model.
+struct StencilStripCostModelResult {
+  int64_t baselineOwnedOuterIters = 0;
+  int64_t minOwnedOuterIters = 0;
+  int64_t targetOwnedCells = 0;
+  int64_t amortizationMultiplier = 1;
+  int64_t desiredWorkers = 0;
+};
+
+/// Shared result for arts.for coarsening policy.
+struct LoopCoarseningDecision {
+  std::optional<int64_t> blockSize;
+  int64_t desiredWorkers = 0;
+  int64_t minItersPerWorker = 0;
+  std::optional<StencilStripCostModelResult> stencilStripPlan;
+};
+
 /// Shared policy result for weighted 2-D wavefront tiling.
 /// This stays in the heuristics layer so semantic wavefront transforms can
 /// reuse one cost model instead of embedding per-pattern worker math.
@@ -198,10 +225,21 @@ public:
                       const AbstractMachine *machine = nullptr);
 
   /// Compute an optional coarsened block-size hint for arts.for loops.
+  /// Returns the full policy result so passes can stay thin and diagnostics can
+  /// report the chosen worker topology.
+  static LoopCoarseningDecision
+  computeLoopCoarseningDecision(ForOp forOp, LoopAnalysis &loopAnalysis,
+                                const WorkerConfig &workerCfg);
+
+  /// Convenience wrapper for callers that only need the block hint.
   /// Returns nullopt when coarsening should be skipped.
   static std::optional<int64_t>
   computeCoarsenedBlockHint(ForOp forOp, LoopAnalysis &loopAnalysis,
                             const WorkerConfig &workerCfg);
+
+  /// Size intranode stencil owned strips from loop work and repetition.
+  static std::optional<StencilStripCostModelResult>
+  evaluateStencilStripCostModel(const StencilStripCostModelInput &input);
 
   /// Choose a shared tiling/chunking plan for weighted 2-D wavefronts.
   /// The plan balances worker saturation against per-task granularity.

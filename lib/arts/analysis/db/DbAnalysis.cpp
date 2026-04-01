@@ -47,28 +47,6 @@ classifyDistributionPattern(const DbAnalysis::LoopDbAccessSummary &summary) {
   return EdtDistributionPattern::uniform;
 }
 
-static std::optional<EdtDistributionPattern>
-distributionPatternFromDepPattern(ArtsDepPattern pattern) {
-  switch (pattern) {
-  case ArtsDepPattern::unknown:
-    return std::nullopt;
-  case ArtsDepPattern::uniform:
-  case ArtsDepPattern::elementwise_pipeline:
-    return EdtDistributionPattern::uniform;
-  case ArtsDepPattern::stencil:
-  case ArtsDepPattern::stencil_tiling_nd:
-  case ArtsDepPattern::cross_dim_stencil_3d:
-  case ArtsDepPattern::higher_order_stencil:
-  case ArtsDepPattern::wavefront_2d:
-  case ArtsDepPattern::jacobi_alternating_buffers:
-    return EdtDistributionPattern::stencil;
-  case ArtsDepPattern::matmul:
-    return EdtDistributionPattern::matmul;
-  case ArtsDepPattern::triangular:
-    return EdtDistributionPattern::triangular;
-  }
-}
-
 static void applyDependencePatternHint(DbAnalysis::LoopDbAccessSummary &summary,
                                        ArtsDepPattern pattern) {
   switch (pattern) {
@@ -134,7 +112,7 @@ static bool refineContractWithFacts(LoweringContractInfo &contract,
 
   if (!contract.distributionPattern && contract.depPattern) {
     if (auto pattern =
-            distributionPatternFromDepPattern(*contract.depPattern)) {
+            getDistributionPatternForDepPattern(*contract.depPattern)) {
       contract.distributionPattern = *pattern;
       changed = true;
     }
@@ -207,21 +185,135 @@ resolveAcquireAccessPattern(const DbAnalysis::AcquireContractSummary &summary) {
   return AccessPattern::Unknown;
 }
 
-static AccessPattern mapDbAccessPattern(DbAccessPattern pattern) {
-  switch (pattern) {
-  case DbAccessPattern::stencil:
-    return AccessPattern::Stencil;
-  case DbAccessPattern::indexed:
-    return AccessPattern::Indexed;
-  case DbAccessPattern::uniform:
-    return AccessPattern::Uniform;
-  case DbAccessPattern::unknown:
-    return AccessPattern::Unknown;
+} // namespace
+
+std::optional<unsigned> DbAnalysis::inferLoopMappedDim(DbAcquireOp acquire,
+                                                       ForOp forOp) {
+  if (!acquire || !forOp)
+    return std::nullopt;
+
+  Block &forBody = forOp.getRegion().front();
+  if (forBody.getNumArguments() == 0)
+    return std::nullopt;
+
+  DbAcquireNode *acqNode = getDbAcquireNode(acquire);
+  if (!acqNode)
+    return std::nullopt;
+
+  Value loopIV = forBody.getArgument(0);
+  if (auto mappedDim =
+          acqNode->getPartitionOffsetDim(loopIV, /*requireLeading=*/false)) {
+    return mappedDim;
   }
-  return AccessPattern::Unknown;
+
+  Region &forRegion = forOp.getRegion();
+  std::optional<unsigned> mappedDim;
+  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+  acqNode->collectAccessOperations(dbRefToMemOps);
+
+  for (auto &[dbRef, memOps] : dbRefToMemOps) {
+    for (Operation *memOp : memOps) {
+      Region *memRegion = memOp ? memOp->getParentRegion() : nullptr;
+      if (!memRegion)
+        continue;
+      if (memRegion != &forRegion && !forRegion.isAncestor(memRegion))
+        continue;
+
+      SmallVector<Value> fullChain =
+          DbUtils::collectFullIndexChain(dbRef, memOp);
+      if (fullChain.empty())
+        continue;
+
+      unsigned memrefStart = dbRef.getIndices().size();
+      if (memrefStart >= fullChain.size())
+        continue;
+
+      SmallVector<unsigned, 2> matchingDims;
+      ArrayRef<Value> memrefChain(fullChain);
+      memrefChain = memrefChain.drop_front(memrefStart);
+      for (auto [dimIdx, indexVal] : llvm::enumerate(memrefChain)) {
+        if (ValueAnalysis::dependsOn(ValueAnalysis::stripNumericCasts(indexVal),
+                                     loopIV))
+          matchingDims.push_back(dimIdx);
+      }
+
+      if (matchingDims.size() != 1)
+        return std::nullopt;
+
+      unsigned dim = matchingDims.front();
+      if (!mappedDim)
+        mappedDim = dim;
+      else if (*mappedDim != dim)
+        return std::nullopt;
+    }
+  }
+
+  return mappedDim;
 }
 
-} // namespace
+std::optional<unsigned> DbAnalysis::inferLoopMappedDim(Value dep, ForOp forOp) {
+  if (!dep || !forOp)
+    return std::nullopt;
+
+  Block &forBody = forOp.getRegion().front();
+  if (forBody.getNumArguments() == 0)
+    return std::nullopt;
+
+  Value loopIV = forBody.getArgument(0);
+  Region &forRegion = forOp.getRegion();
+  std::optional<unsigned> mappedDim;
+  llvm::SetVector<Value> sources;
+  sources.insert(dep);
+  for (Operation *user : dep.getUsers()) {
+    auto edt = dyn_cast<EdtOp>(user);
+    if (!edt)
+      continue;
+
+    ValueRange deps = edt.getDependencies();
+    Block &edtBody = edt.getBody().front();
+    unsigned argCount = edtBody.getNumArguments();
+    for (auto [idx, operand] : llvm::enumerate(deps)) {
+      if (operand != dep || idx >= argCount)
+        continue;
+      sources.insert(edtBody.getArgument(static_cast<unsigned>(idx)));
+    }
+  }
+
+  llvm::SetVector<Operation *> memOps;
+  for (Value source : sources)
+    DbUtils::collectReachableMemoryOps(source, memOps, /*scope=*/nullptr);
+
+  for (Operation *memOp : memOps) {
+    Region *memRegion = memOp ? memOp->getParentRegion() : nullptr;
+    if (!memRegion)
+      continue;
+    if (memRegion != &forRegion && !forRegion.isAncestor(memRegion))
+      continue;
+
+    std::optional<DbUtils::MemoryAccessInfo> access =
+        DbUtils::getMemoryAccessInfo(memOp);
+    if (!access || access->indices.empty())
+      continue;
+
+    SmallVector<unsigned, 2> matchingDims;
+    for (auto [dimIdx, indexVal] : llvm::enumerate(access->indices)) {
+      if (ValueAnalysis::dependsOn(ValueAnalysis::stripNumericCasts(indexVal),
+                                   loopIV))
+        matchingDims.push_back(dimIdx);
+    }
+
+    if (matchingDims.size() != 1)
+      return std::nullopt;
+
+    unsigned dim = matchingDims.front();
+    if (!mappedDim)
+      mappedDim = dim;
+    else if (*mappedDim != dim)
+      return std::nullopt;
+  }
+
+  return mappedDim;
+}
 
 bool DbAnalysis::isTiling2DTaskAcquire(DbAcquireOp acquire) {
   if (!acquire)
@@ -401,7 +493,7 @@ DbAnalysis::analyzeLoopDbAccessPatterns(ForOp forOp) {
   });
 
   if (depPatternHint) {
-    if (auto directPattern = distributionPatternFromDepPattern(*depPatternHint))
+    if (auto directPattern = getDistributionPatternForDepPattern(*depPatternHint))
       summary.distributionPattern = *directPattern;
     else
       summary.distributionPattern = classifyDistributionPattern(summary);
@@ -791,7 +883,6 @@ DbAnalysis::getAcquireContractSummary(DbAcquireOp acquire) {
   }
 
   summary.accessPattern = resolveAcquireAccessPattern(summary);
-
   if (summary.empty())
     return std::nullopt;
   return summary;
@@ -910,9 +1001,6 @@ AccessPattern DbAnalysis::resolveCanonicalAcquireAccessPattern(
   if (facts && facts->accessPattern != AccessPattern::Unknown)
     return facts->accessPattern;
 
-  if (auto rawPattern = getDbAccessPattern(acquire.getOperation()))
-    return mapDbAccessPattern(*rawPattern);
-
   return AccessPattern::Unknown;
 }
 
@@ -936,10 +1024,6 @@ ArtsDepPattern DbAnalysis::resolveCanonicalAcquireDepPattern(
     facts = getAcquirePartitionFacts(acquire);
   if (facts && facts->depPattern != ArtsDepPattern::unknown)
     return facts->depPattern;
-
-  if (auto rawPattern = getDepPattern(acquire.getOperation());
-      rawPattern && *rawPattern != ArtsDepPattern::unknown)
-    return *rawPattern;
 
   return ArtsDepPattern::unknown;
 }

@@ -188,20 +188,20 @@ def DbDistributedOwnership
 }
 
 def DbTransforms : Pass<"db-transforms", "mlir::ModuleOp"> {
-  let summary = "Post-DB transforms (contract persistence, halo, ESD, GUID)";
+  let summary = "Post-DB transforms (contracts, halo, GUID, cleanup)";
   let description = [{
     Hosts DB-level transformations that run after DB partitioning and
     distributed ownership decisions are known. Current transforms:
     - DT-1: Contract persistence -- persist refined AcquireContractSummary
       back to IR via upsertLoweringContract().
-
-    Placeholder slots:
     - DT-2: Stencil halo consolidation
-    - DT-3: ESD annotation
     - DT-4: GUID range allocation
-    - DT-5: Acquire coalescing
     - DT-6: DB lifetime shortening
     - DT-7: Dead DB elimination
+
+    Placeholder slots:
+    - DT-3: ESD annotation
+    - DT-5: Acquire coalescing
   }];
   let dependentDialects =
       ["func::FuncDialect", "arts::ArtsDialect"];

@@ -101,14 +101,9 @@ static bool dbPartitionTraceEnabled() {
 template <typename... Args> static void dbPartitionTrace(Args &&...args) {
   if (!dbPartitionTraceEnabled())
     return;
-  llvm::errs() << "[db_partition_trace] ";
-  (llvm::errs() << ... << std::forward<Args>(args));
-  llvm::errs() << "\n";
-}
-
-static bool
-hasExplicitStencilContract(const DbAnalysis::AcquireContractSummary *summary) {
-  return summary && summary->contract.hasExplicitStencilContract();
+  ARTS_DEBUG_REGION(ARTS_DBGS() << "[db_partition_trace] ";
+                    (ARTS_DBGS() << ... << std::forward<Args>(args));
+                    ARTS_DBGS() << "\n";);
 }
 
 /// DbBlockPlanResolver/DbPartitionPlanner model leading-dimension block plans
@@ -330,7 +325,7 @@ summarizeAcquirePatterns(ArrayRef<DbAcquireNode *> acquireNodes,
 
     if (contractSummary->hasIndirectAccess())
       summary.hasIndexed = true;
-    if (hasExplicitStencilContract(&*contractSummary))
+    if (contractSummary->hasExplicitStencilLayout())
       summary.hasStencil = true;
     if (contractSummary->usesMatmulSemantics())
       summary.hasUniform = true;
@@ -626,10 +621,8 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(
     }
 
     if (info.mode == PartitionMode::coarse &&
-        (summary->hasBlockHints() || summary->inferredBlock())) {
-      info.mode = summary->contract.isStencilFamily() ? PartitionMode::stencil
-                                                      : PartitionMode::block;
-    }
+        (summary->hasBlockHints() || summary->inferredBlock()))
+      info.mode = summary->preferredBlockPartitionMode();
   }
 
   if (acqNode) {
@@ -1681,7 +1674,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
   bool hasContractBackedStencil =
       llvm::any_of(acquireContractSummaries, [](const auto &summary) {
-        return summary && summary->contract.hasExplicitStencilContract();
+        return summary && summary->hasExplicitStencilLayout();
       });
   if (decision.mode == PartitionMode::stencil && !hasContractBackedStencil) {
     unsigned outerRank = std::max(1u, decision.outerRank);
@@ -2062,13 +2055,11 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
                    "block capability for full-range acquires");
       }
     }
-    if (!thisAcquireCanBlock &&
-        ((contractSummary &&
-          contractSummary->accessPattern == AccessPattern::Stencil) ||
-         (!contractSummary &&
-          acqNode->getAccessPattern() == AccessPattern::Stencil)))
+    if (!thisAcquireCanBlock && contractSummary &&
+        contractSummary->supportsContractDrivenBlockCapability())
       thisAcquireCanBlock = true;
-    if (!thisAcquireCanBlock && hasExplicitStencilContract(contractSummary))
+    if (!thisAcquireCanBlock && !contractSummary &&
+        acqNode->getAccessPattern() == AccessPattern::Stencil)
       thisAcquireCanBlock = true;
     bool thisAcquireCanElementWise =
         (acquireMode && *acquireMode == PartitionMode::fine_grained) ||
@@ -2086,8 +2077,8 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
           contractSummary && contractSummary->hasUnmappedPartitionEntry();
       if (hasUnmappedEntry) {
         bool preserveFromStencilContract =
-            contractSummary && contractSummary->contract.supportsBlockHalo() &&
-            contractSummary->contract.hasOwnerDims();
+            contractSummary &&
+            contractSummary->prefersSemanticOwnerLayoutPreservation();
         bool writesThroughAcquire = acquire.getMode() == ArtsMode::out ||
                                     acquire.getMode() == ArtsMode::inout ||
                                     acqNode->hasStores();
@@ -2175,15 +2166,13 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
     }
 
     if (!ctx.preferBlockND && acqInfo.partitionSizes.size() >= 2) {
-      bool preferContractND = contractSummary &&
-                              contractSummary->contract.supportsBlockHalo() &&
-                              contractSummary->contract.hasOwnerDims();
+      bool preferContractND =
+          contractSummary &&
+          contractSummary->prefersSemanticOwnerLayoutPreservation();
       bool preferTiling2D = acquire.getMode() == ArtsMode::inout &&
                             DbAnalysis::isTiling2DTaskAcquire(acquire);
       bool preferWavefrontStencilMode =
-          info.depPattern == ArtsDepPattern::wavefront_2d && contractSummary &&
-          contractSummary->contract.hasExplicitStencilContract() &&
-          contractSummary->contract.supportsBlockHalo();
+          contractSummary && contractSummary->usesWavefrontStencilContract();
       if (preferWavefrontStencilMode) {
         ARTS_DEBUG("    Acquire[" << idx
                                   << "]: explicit wavefront stencil "
@@ -2198,8 +2187,7 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
               targetRank, static_cast<unsigned>(
                               contractSummary->contract.ownerDims.size()));
         if (preferContractND) {
-          if (contractSummary &&
-              prefersContractNDBlock(contractSummary->contract, targetRank)) {
+          if (contractSummary && contractSummary->prefersNDBlock(targetRank)) {
             auto staticBlockShape =
                 contractSummary->contract.getStaticBlockShape();
             candidateBlockSizes.reserve(targetRank);

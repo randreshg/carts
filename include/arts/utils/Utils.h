@@ -82,6 +82,10 @@ inline bool isStartBlockArithmeticOp(Operation *op) {
              arith::SelectOp, arith::IndexCastOp>(op);
 }
 
+/// Return true for regionless arithmetic-like operations that are safe to
+/// duplicate when restructuring control flow around epochs/EDTs.
+bool isSideEffectFreeArithmeticLikeOp(Operation *op);
+
 /// Convert OMP task dependency mode to ARTS access mode.
 ArtsMode convertOmpMode(omp::ClauseTaskDepend mode);
 

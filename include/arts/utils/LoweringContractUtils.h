@@ -95,6 +95,15 @@ struct LoweringContractInfo {
   bool hasExplicitStencilContract() const;
   bool usesStencilDistribution() const;
   bool supportsBlockHalo() const;
+  std::optional<EdtDistributionPattern> getEffectiveDistributionPattern() const;
+  bool isWavefrontFamily() const;
+  bool allowsDbAlignedChunking() const;
+  bool shouldHonorLoopBlockHintForDbAlignment() const;
+  bool prefersWideTiling2DColumns() const;
+  bool shouldReuseEnclosingEpoch() const;
+  bool prefersSemanticOwnerLayoutPreservation() const;
+  bool isWavefrontStencilContract() const;
+  bool prefersNDBlock(unsigned requiredRank = 2) const;
   std::optional<SmallVector<int64_t, 4>> getStaticBlockShape() const;
   std::optional<SmallVector<int64_t, 4>> getStaticMinOffsets() const;
   std::optional<SmallVector<int64_t, 4>> getStaticMaxOffsets() const;
@@ -109,17 +118,10 @@ struct AcquireRewriteContract {
   SmallVector<int64_t, 4> haloMaxOffsets;
 };
 
-enum class OperationContractTransferPolicy : uint8_t {
-  /// Copy only explicitly stamped semantic contract attributes.
-  PreserveStampedContractOnly = 0,
-  /// Also project effective dep-pattern fallback when the destination does not
-  /// have an explicit dep-pattern attribute.
-  IncludeEffectiveDepPatternFallback = 1
-};
-
 LoweringContractOp getLoweringContractOp(Value target);
 std::optional<LoweringContractInfo> getLoweringContract(Value target);
 std::optional<LoweringContractInfo> getSemanticContract(Operation *op);
+LoweringContractInfo resolveLoopDistributionContract(Operation *op);
 std::optional<LoweringContractInfo>
 getLoweringContract(Operation *op, OpBuilder &builder, Location loc);
 void normalizeLoweringContractInfo(LoweringContractInfo &info);
@@ -134,19 +136,17 @@ bool prefersContractNDBlock(const LoweringContractInfo &info,
 LoweringContractOp upsertLoweringContract(OpBuilder &builder, Location loc,
                                           Value target,
                                           const LoweringContractInfo &info);
-void transferOperationContract(
-    Operation *source, Operation *target,
-    OperationContractTransferPolicy policy =
-        OperationContractTransferPolicy::PreserveStampedContractOnly);
+void eraseLoweringContracts(Value target);
+void transferOperationContract(Operation *source, Operation *target);
 void transferLoweringContract(Operation *source, Value target,
                               OpBuilder &builder, Location loc);
 void transferValueContract(Value source, Value target, OpBuilder &builder,
                            Location loc);
-void transferContract(
-    Operation *sourceOp, Operation *targetOp, Value sourceContractTarget,
-    Value targetContractTarget, OpBuilder &builder, Location loc,
-    OperationContractTransferPolicy policy =
-        OperationContractTransferPolicy::PreserveStampedContractOnly);
+void moveValueContract(Value source, Value target, OpBuilder &builder,
+                       Location loc);
+void transferContract(Operation *sourceOp, Operation *targetOp,
+                      Value sourceContractTarget, Value targetContractTarget,
+                      OpBuilder &builder, Location loc);
 
 } // namespace arts
 } // namespace mlir

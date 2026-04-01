@@ -35,6 +35,7 @@
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
@@ -378,44 +379,15 @@ getStaticDbOuterShape(Value dbHandle) {
 class EdtEnvManager {
 public:
   EdtEnvManager(EdtOp edtOp) : edtOp(edtOp) { analyze(); }
+  EdtEnvManager(EdtOp edtOp, const EdtCaptureSummary &captureSummary)
+      : edtOp(edtOp) {
+    loadCaptureSummary(captureSummary);
+  }
 
   /// Analyze the region and collect parameters/constants
   void analyze() {
-    getUsedValuesDefinedAbove(edtOp.getRegion(), capturedValues);
-
-    /// Checks if the value is a constant, if so, ignore it
-    auto isConstant = [&](Value val) {
-      auto defOp = val.getDefiningOp();
-      if (!defOp)
-        return false;
-
-      auto constantOp = dyn_cast<arith::ConstantOp>(defOp);
-      if (!constantOp)
-        return false;
-      constants.insert(val);
-      return true;
-    };
-
-    /// Classify variables into parameters, constants, and captured values
-    for (Value val : capturedValues) {
-      /// DbAllocOp results must NEVER be cloned — they create new DBs.
-      /// Mark them as db handles to be packed as opaque i64 parameters.
-      if (auto defOp = val.getDefiningOp()) {
-        if (isa<DbAllocOp>(defOp)) {
-          dbHandles.insert(val);
-          continue;
-        }
-      }
-
-      if (isConstant(val))
-        continue;
-
-      /// Only treat integers, indices, or floats as parameters
-      if (val.getType().isIntOrIndexOrFloat())
-        parameters.insert(val);
-
-      /// Ignore other types, they might be dependencies
-    }
+    analyzeEdtCapturedValues(edtOp, capturedValues, parameters, constants,
+                             dbHandles);
 
     /// Only treat explicit EDT operands as deps
     for (Value operand : edtOp.getDependencies())
@@ -435,6 +407,18 @@ public:
   DenseMap<Value, unsigned> &getValueToPackIndex() { return valueToPackIndex; }
 
 private:
+  void loadCaptureSummary(const EdtCaptureSummary &captureSummary) {
+    auto appendValues = [](SetVector<Value> &dst, ArrayRef<Value> values) {
+      for (Value value : values)
+        dst.insert(value);
+    };
+    appendValues(capturedValues, captureSummary.capturedValues);
+    appendValues(parameters, captureSummary.parameters);
+    appendValues(constants, captureSummary.constants);
+    appendValues(dbHandles, captureSummary.dbHandles);
+    appendValues(deps, captureSummary.dependencies);
+  }
+
   EdtOp edtOp;
   SetVector<Value> capturedValues, parameters, constants, deps, dbHandles;
   DenseMap<Value, unsigned> valueToPackIndex;
@@ -447,6 +431,10 @@ struct EdtLoweringPass : public impl::EdtLoweringBase<EdtLoweringPass> {
   explicit EdtLoweringPass(mlir::arts::AnalysisManager *AM = nullptr,
                            uint64_t idStride = IdRegistry::DefaultStride)
       : idStride(idStride), AM(AM) {}
+  EdtLoweringPass(const EdtLoweringPass &other)
+      : impl::EdtLoweringBase<EdtLoweringPass>(other), idStride(other.idStride),
+        functionCounter(other.functionCounter), module(other.module),
+        AM(other.AM), AC(other.AC), idRegistry(other.idRegistry) {}
   void runOnOperation() override;
 
 private:
@@ -480,11 +468,14 @@ private:
   LogicalResult insertDepManagement(Location loc, Value edtGuid,
                                     const SmallVector<Value> &deps);
 
+  mlir::arts::AnalysisManager &getAnalysisManager();
+
   /// Attributes
   uint64_t idStride = IdRegistry::DefaultStride;
   unsigned functionCounter = 0;
   ModuleOp module;
   mlir::arts::AnalysisManager *AM = nullptr;
+  std::unique_ptr<mlir::arts::AnalysisManager> ownedAM;
   ArtsCodegen *AC = nullptr;
   IdRegistry idRegistry;
 };
@@ -495,18 +486,29 @@ private:
 /// Pass Implementation
 ///===----------------------------------------------------------------------===///
 
+mlir::arts::AnalysisManager &EdtLoweringPass::getAnalysisManager() {
+  if (!AM) {
+    ownedAM = std::make_unique<mlir::arts::AnalysisManager>(module);
+    AM = ownedAM.get();
+  }
+  return *AM;
+}
+
 void EdtLoweringPass::runOnOperation() {
   module = getOperation();
   auto ownedAC = std::make_unique<ArtsCodegen>(module, false);
   AC = ownedAC.get();
+  mlir::arts::AnalysisManager &analysisManager = getAnalysisManager();
 
   ARTS_INFO_HEADER(EdtLoweringPass);
   ARTS_DEBUG_REGION(module.dump(););
 
-  /// Earlier passes may have modified the IR, making cached DbGraph nodes
-  /// stale.
-  if (AM)
-    AM->getDbAnalysis().invalidate();
+  /// Snapshot EDT capture contracts before nested lowering mutates parent EDT
+  /// bodies. DbAnalysis must also be fresh because EdtAnalysis rebuilds its
+  /// graph through the DB analysis layer.
+  analysisManager.getDbAnalysis().invalidate();
+  analysisManager.getEdtAnalysis().invalidate();
+  analysisManager.getEdtAnalysis().analyze();
 
   ARTS_DEBUG_HEADER(TaskEdtLowering);
   SmallVector<EdtOp, 8> taskEdts;
@@ -520,9 +522,10 @@ void EdtLoweringPass::runOnOperation() {
     /// Each lowerEdt call outlines the EDT body, invalidating any cached
     /// DbGraph nodes that reference block arguments or operations from the
     /// old EDT body. Invalidate so the next EDT's analysis rebuilds fresh.
-    if (AM)
-      AM->getDbAnalysis().invalidate();
+    analysisManager.getDbAnalysis().invalidate();
   }
+  analysisManager.getEdtAnalysis().invalidate();
+  analysisManager.getDbAnalysis().invalidate();
 
   ARTS_INFO_FOOTER(EdtLoweringPass);
   AC = nullptr;
@@ -568,8 +571,14 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   OpBuilder::InsertionGuard IG(AC->getBuilder());
   AC->setInsertionPoint(edtOp);
   Location loc = edtOp.getLoc();
+  mlir::arts::AnalysisManager &analysisManager = getAnalysisManager();
+
   /// Analyze EDT environment (parameters, constants, deps)
-  EdtEnvManager envManager(edtOp);
+  const EdtCaptureSummary *captureSummary =
+      analysisManager.getEdtAnalysis().getCaptureSummary(edtOp);
+  if (!captureSummary)
+    return edtOp.emitError("Missing canonical EDT capture summary");
+  EdtEnvManager envManager(edtOp, *captureSummary);
   ArrayRef<Value> edtDeps = envManager.getDependencies();
 
   /// Normalize dependency slices before outlining so the packed parameters,
@@ -577,8 +586,9 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   /// same DB-space contract.
   for (Value dep : edtDeps)
     if (auto acquire = dep.getDefiningOp<DbAcquireOp>())
-      normalizeTaskDepSlice(AC, acquire,
-                            resolveAcquireRewriteContract(AM, acquire));
+      normalizeTaskDepSlice(
+          AC, acquire,
+          resolveAcquireRewriteContract(&analysisManager, acquire));
 
   SmallVector<Type> packTypes;
 
@@ -741,7 +751,6 @@ Value EdtLoweringPass::packParams(Location loc, EdtEnvManager &envManager,
   /// cloning creates new datablocks. Convert to raw i64 for transport.
   for (Value dbHandle : dbHandles) {
     Value scalar;
-    auto memrefTy = dyn_cast<MemRefType>(dbHandle.getType());
     /// Both GUID handles (memref<?xi64>) and ptr handles are passed as
     /// raw pointers (memref → ptr → i64). This preserves the full array
     /// so that CPS chain continuations can access all block partitions,

@@ -237,8 +237,8 @@ void DbLoweringPass::convertDbAllocOps() {
       ARTS_DEBUG("  - DB arts.create_id=" << createId << " (base=" << baseId
                                           << " x stride=" << idStride << ")");
     }
-    transferValueContract(oldOp.getPtr(), newOp.getPtr(), AC->getBuilder(),
-                          newOp.getLoc());
+    moveValueContract(oldOp.getPtr(), newOp.getPtr(), AC->getBuilder(),
+                      newOp.getLoc());
     updateAllocUsers(oldOp, newOp);
     opsToRemove.insert(oldOp);
   }
@@ -336,6 +336,11 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
       continue;
     }
 
+    if (isa<CPSAdvanceOp>(userOp)) {
+      use.set(newPtr);
+      continue;
+    }
+
     if (auto freeOp = dyn_cast<DbFreeOp>(userOp)) {
       auto newFree = AC->create<DbFreeOp>(freeOp.getLoc(), newPtr);
       freeOp->replaceAllUsesWith(newFree);
@@ -388,8 +393,8 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
   copySemanticContractAttrs(acquireOp.getOperation(),
                             newAcquireOp.getOperation());
   newAcquireOp.copyPartitionSegmentsFrom(acquireOp);
-  transferValueContract(acquireOp.getPtr(), newAcquireOp.getPtr(),
-                        AC->getBuilder(), newAcquireOp.getLoc());
+  moveValueContract(acquireOp.getPtr(), newAcquireOp.getPtr(),
+                    AC->getBuilder(), newAcquireOp.getLoc());
   normalizeBlockHaloAcquireSlice(AC, newAcquireOp, sourcePtr);
   ARTS_DEBUG("  - New DbAcquireOp: " << newAcquireOp);
 
@@ -491,6 +496,7 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
   }
 
   blockArg.setType(newPtr.getType());
+  eraseLoweringContracts(blockArg);
   rewriteBlockUses(blockArg, blockArg);
   acquireOp->replaceAllUsesWith(newAcquireOp);
   opsToRemove.insert(acquireOp);

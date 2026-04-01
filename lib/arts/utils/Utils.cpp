@@ -256,6 +256,21 @@ void transferAttributes(Operation *src, Operation *dst,
 /// OMP Mode Conversion Utilities
 ///===----------------------------------------------------------------------===///
 
+bool isSideEffectFreeArithmeticLikeOp(Operation *op) {
+  if (!op || op->hasTrait<OpTrait::IsTerminator>())
+    return true;
+
+  return isa<arith::ConstantOp, arith::AddIOp, arith::SubIOp, arith::MulIOp,
+             arith::DivUIOp, arith::DivSIOp, arith::RemUIOp, arith::RemSIOp,
+             arith::AddFOp, arith::SubFOp, arith::MulFOp, arith::DivFOp,
+             arith::NegFOp, arith::CmpIOp, arith::CmpFOp, arith::SelectOp,
+             arith::MaxUIOp, arith::MinUIOp, arith::MaximumFOp,
+             arith::MinimumFOp, arith::IndexCastOp, arith::IndexCastUIOp,
+             arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, arith::TruncIOp,
+             arith::TruncFOp, arith::SIToFPOp, arith::UIToFPOp,
+             arith::FPToSIOp, arith::FPToUIOp>(op);
+}
+
 ArtsMode convertOmpMode(omp::ClauseTaskDepend mode) {
   switch (mode) {
   case omp::ClauseTaskDepend::taskdependin:

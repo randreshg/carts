@@ -582,6 +582,28 @@ inline bool isUniformFamilyDepPattern(ArtsDepPattern pattern) {
   }
 }
 
+inline std::optional<EdtDistributionPattern>
+getDistributionPatternForDepPattern(ArtsDepPattern pattern) {
+  switch (pattern) {
+  case ArtsDepPattern::unknown:
+    return std::nullopt;
+  case ArtsDepPattern::uniform:
+  case ArtsDepPattern::elementwise_pipeline:
+    return EdtDistributionPattern::uniform;
+  case ArtsDepPattern::stencil:
+  case ArtsDepPattern::stencil_tiling_nd:
+  case ArtsDepPattern::cross_dim_stencil_3d:
+  case ArtsDepPattern::higher_order_stencil:
+  case ArtsDepPattern::wavefront_2d:
+  case ArtsDepPattern::jacobi_alternating_buffers:
+    return EdtDistributionPattern::stencil;
+  case ArtsDepPattern::matmul:
+    return EdtDistributionPattern::matmul;
+  case ArtsDepPattern::triangular:
+    return EdtDistributionPattern::triangular;
+  }
+}
+
 inline std::optional<ArtsDepPattern> getEffectiveDepPattern(Operation *op) {
   for (Operation *current = op; current; current = current->getParentOp()) {
     if (auto pattern = getDepPattern(current))
@@ -739,16 +761,6 @@ inline void inheritSemanticContractAttrs(Operation *source, Operation *dest) {
       source->hasAttr(AttrNames::Operation::Contract::NarrowableDep))
     dest->setAttr(AttrNames::Operation::Contract::NarrowableDep,
                   UnitAttr::get(dest->getContext()));
-}
-
-/// Copy contract attrs
-inline void copyContractAttrs(Operation *source, Operation *dest) {
-  if (!source || !dest)
-    return;
-  copySemanticContractAttrs(source, dest);
-  if (!getDepPattern(dest))
-    if (auto pattern = getEffectiveDepPattern(source))
-      setDepPattern(dest, *pattern);
 }
 
 /// Full implementation in PartitioningHeuristics.cpp (uses DictionaryAttr).

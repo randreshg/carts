@@ -117,6 +117,23 @@ materializeDominatingIndexValues(OpBuilder &builder, Location loc,
   return {};
 }
 
+static std::optional<EdtDistributionPattern>
+deriveDistributionPatternFromKind(ContractKind kind) {
+  switch (kind) {
+  case ContractKind::Elementwise:
+    return EdtDistributionPattern::uniform;
+  case ContractKind::Stencil:
+    return EdtDistributionPattern::stencil;
+  case ContractKind::Matmul:
+    return EdtDistributionPattern::matmul;
+  case ContractKind::Triangular:
+    return EdtDistributionPattern::triangular;
+  case ContractKind::Unknown:
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
 } // namespace
 
 ContractKind LoweringContractInfo::getEffectiveKind() const {
@@ -165,6 +182,59 @@ bool LoweringContractInfo::hasExplicitStencilContract() const {
 
 bool LoweringContractInfo::supportsBlockHalo() const {
   return supportedBlockHalo && hasExplicitStencilContract();
+}
+
+std::optional<EdtDistributionPattern>
+LoweringContractInfo::getEffectiveDistributionPattern() const {
+  if (distributionPattern &&
+      *distributionPattern != EdtDistributionPattern::unknown)
+    return distributionPattern;
+  if (depPattern)
+    if (auto pattern = getDistributionPatternForDepPattern(*depPattern))
+      return pattern;
+  return deriveDistributionPatternFromKind(getEffectiveKind());
+}
+
+bool LoweringContractInfo::isWavefrontFamily() const {
+  return depPattern && *depPattern == ArtsDepPattern::wavefront_2d;
+}
+
+bool LoweringContractInfo::allowsDbAlignedChunking() const {
+  return !isWavefrontFamily();
+}
+
+bool LoweringContractInfo::shouldHonorLoopBlockHintForDbAlignment() const {
+  auto pattern = getEffectiveDistributionPattern();
+  return pattern && *pattern == EdtDistributionPattern::stencil &&
+         allowsDbAlignedChunking();
+}
+
+bool LoweringContractInfo::prefersWideTiling2DColumns() const {
+  return isWavefrontFamily();
+}
+
+bool LoweringContractInfo::shouldReuseEnclosingEpoch() const {
+  return isWavefrontFamily();
+}
+
+bool LoweringContractInfo::prefersSemanticOwnerLayoutPreservation() const {
+  return hasOwnerDims() && supportsBlockHalo();
+}
+
+bool LoweringContractInfo::isWavefrontStencilContract() const {
+  return isWavefrontFamily() && hasExplicitStencilContract() &&
+         supportsBlockHalo();
+}
+
+bool LoweringContractInfo::prefersNDBlock(unsigned requiredRank) const {
+  if (!supportsBlockHalo())
+    return false;
+  auto staticBlockShape = getStaticBlockShape();
+  if (ownerDims.size() < requiredRank ||
+      ((!staticBlockShape || staticBlockShape->size() < requiredRank) &&
+       blockShape.size() < requiredRank))
+    return false;
+  return true;
 }
 
 std::optional<SmallVector<int64_t, 4>>
@@ -335,6 +405,59 @@ mlir::arts::getSemanticContract(Operation *op) {
   return info;
 }
 
+LoweringContractInfo mlir::arts::resolveLoopDistributionContract(Operation *op) {
+  if (!op)
+    return LoweringContractInfo{};
+
+  LoweringContractInfo info =
+      getSemanticContract(op).value_or(LoweringContractInfo{});
+
+  if (info.depPattern && *info.depPattern == ArtsDepPattern::unknown)
+    info.depPattern = std::nullopt;
+  if (info.distributionPattern &&
+      *info.distributionPattern == EdtDistributionPattern::unknown) {
+    info.distributionPattern = std::nullopt;
+  }
+
+  for (Operation *current = op; current; current = current->getParentOp()) {
+    if (!info.depPattern) {
+      if (auto depPattern = getDepPattern(current);
+          depPattern && *depPattern != ArtsDepPattern::unknown) {
+        info.depPattern = *depPattern;
+      }
+    }
+
+    if (!info.distributionKind)
+      if (auto distKind = getEdtDistributionKind(current))
+        info.distributionKind = *distKind;
+
+    if (!info.distributionPattern) {
+      if (auto distPattern = getEdtDistributionPattern(current);
+          distPattern && *distPattern != EdtDistributionPattern::unknown) {
+        info.distributionPattern = *distPattern;
+      }
+    }
+
+    if (!info.distributionVersion) {
+      if (auto version = current->getAttrOfType<IntegerAttr>(
+              AttrNames::Operation::DistributionVersion))
+        info.distributionVersion = version.getInt();
+    }
+
+    if (info.kind == ContractKind::Unknown) {
+      if (auto contractKind = current->getAttrOfType<IntegerAttr>(
+              AttrNames::Operation::Contract::ContractKindKey)) {
+        int64_t rawKind = contractKind.getInt();
+        if (rawKind != static_cast<int64_t>(ContractKind::Unknown))
+          info.kind = static_cast<ContractKind>(rawKind);
+      }
+    }
+  }
+
+  normalizeLoweringContractInfo(info);
+  return info;
+}
+
 std::optional<LoweringContractInfo>
 mlir::arts::getLoweringContract(Operation *op, OpBuilder &builder,
                                 Location loc) {
@@ -484,9 +607,8 @@ mlir::arts::deriveAcquireRewriteContract(DbAcquireOp acquire) {
        !contract.applyStencilHalo &&
        acquire.getPartitionMode().value_or(PartitionMode::coarse) ==
            PartitionMode::stencil) ||
-      (acquire.getMode() == ArtsMode::inout && info->depPattern &&
-       *info->depPattern == ArtsDepPattern::wavefront_2d &&
-       info->supportsBlockHalo());
+      (acquire.getMode() == ArtsMode::inout &&
+       info->isWavefrontStencilContract());
   contract.preserveParentDepRange =
       acquire.getMode() == ArtsMode::in && !contract.applyStencilHalo &&
       !hasExplicitStencilContract && !prefersWorkerLocalReadSlice;
@@ -534,14 +656,7 @@ mlir::arts::resolveContractOwnerDims(const LoweringContractInfo &info,
 
 bool mlir::arts::prefersContractNDBlock(const LoweringContractInfo &info,
                                         unsigned requiredRank) {
-  if (!info.supportsBlockHalo())
-    return false;
-  auto staticBlockShape = info.getStaticBlockShape();
-  if (info.ownerDims.size() < requiredRank ||
-      ((!staticBlockShape || staticBlockShape->size() < requiredRank) &&
-       info.blockShape.size() < requiredRank))
-    return false;
-  return true;
+  return info.prefersNDBlock(requiredRank);
 }
 
 LoweringContractOp
@@ -581,17 +696,15 @@ mlir::arts::upsertLoweringContract(OpBuilder &builder, Location loc,
   return contract;
 }
 
-void mlir::arts::transferOperationContract(
-    Operation *source, Operation *target,
-    OperationContractTransferPolicy policy) {
+void mlir::arts::eraseLoweringContracts(Value target) {
+  for (auto contract : collectLoweringContractOps(target))
+    contract->erase();
+}
+
+void mlir::arts::transferOperationContract(Operation *source,
+                                           Operation *target) {
   if (!source || !target)
     return;
-
-  if (policy ==
-      OperationContractTransferPolicy::IncludeEffectiveDepPatternFallback) {
-    copyContractAttrs(source, target);
-    return;
-  }
   copySemanticContractAttrs(source, target);
 }
 
@@ -619,12 +732,19 @@ void mlir::arts::transferValueContract(Value source, Value target,
   copyLoweringContract(source, target, builder, loc);
 }
 
+void mlir::arts::moveValueContract(Value source, Value target,
+                                   OpBuilder &builder, Location loc) {
+  if (!source || !target || source == target)
+    return;
+  copyLoweringContract(source, target, builder, loc);
+  eraseLoweringContracts(source);
+}
+
 void mlir::arts::transferContract(Operation *sourceOp, Operation *targetOp,
                                   Value sourceContractTarget,
                                   Value targetContractTarget,
-                                  OpBuilder &builder, Location loc,
-                                  OperationContractTransferPolicy policy) {
-  transferOperationContract(sourceOp, targetOp, policy);
+                                  OpBuilder &builder, Location loc) {
+  transferOperationContract(sourceOp, targetOp);
   transferValueContract(sourceContractTarget, targetContractTarget, builder,
                         loc);
 }
