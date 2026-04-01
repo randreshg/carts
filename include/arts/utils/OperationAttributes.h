@@ -35,6 +35,8 @@ constexpr StringLiteral Workers = "workers";
 constexpr StringLiteral WorkersPerNode = "workers_per_node";
 constexpr StringLiteral ArtsId = "arts.id";
 constexpr StringLiteral ArtsCreateId = "arts.create_id";
+constexpr StringLiteral MetadataOriginId = "arts.metadata_origin_id";
+constexpr StringLiteral MetadataProvenance = "arts.metadata_provenance";
 constexpr StringLiteral OutlinedFunc = "outlined_func";
 constexpr StringLiteral Nowait = "nowait";
 constexpr StringLiteral PreserveAccessMode = "preserve_access_mode";
@@ -109,6 +111,40 @@ constexpr StringLiteral ContractKindKey = "contract_kind";
 } // namespace Operation
 
 } // namespace AttrNames
+
+enum class MetadataProvenanceKind : uint8_t {
+  Exact = 0,
+  Transferred = 1,
+  Recomputed = 2,
+  Recovered = 3
+};
+
+inline StringRef metadataProvenanceToString(MetadataProvenanceKind kind) {
+  switch (kind) {
+  case MetadataProvenanceKind::Exact:
+    return "exact";
+  case MetadataProvenanceKind::Transferred:
+    return "transferred";
+  case MetadataProvenanceKind::Recomputed:
+    return "recomputed";
+  case MetadataProvenanceKind::Recovered:
+    return "recovered";
+  }
+  return "exact";
+}
+
+inline std::optional<MetadataProvenanceKind>
+parseMetadataProvenance(StringRef value) {
+  if (value == "exact")
+    return MetadataProvenanceKind::Exact;
+  if (value == "transferred")
+    return MetadataProvenanceKind::Transferred;
+  if (value == "recomputed")
+    return MetadataProvenanceKind::Recomputed;
+  if (value == "recovered")
+    return MetadataProvenanceKind::Recovered;
+  return std::nullopt;
+}
 
 inline std::optional<StringRef> getRuntimeConfigPath(ModuleOp module) {
   if (!module)
@@ -247,6 +283,54 @@ inline void setArtsCreateId(Operation *op, int64_t id) {
   auto *ctx = op->getContext();
   auto type = IntegerType::get(ctx, 64);
   op->setAttr(AttrNames::Operation::ArtsCreateId, IntegerAttr::get(type, id));
+}
+
+inline std::optional<int64_t> getMetadataOriginId(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr = op->getAttrOfType<IntegerAttr>(
+          AttrNames::Operation::MetadataOriginId))
+    return attr.getInt();
+  return std::nullopt;
+}
+
+inline void setMetadataOriginId(Operation *op, int64_t id) {
+  if (!op)
+    return;
+  if (id <= 0) {
+    op->removeAttr(AttrNames::Operation::MetadataOriginId);
+    return;
+  }
+  auto *ctx = op->getContext();
+  auto type = IntegerType::get(ctx, 64);
+  op->setAttr(AttrNames::Operation::MetadataOriginId,
+              IntegerAttr::get(type, id));
+}
+
+inline std::optional<MetadataProvenanceKind>
+getMetadataProvenance(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  auto attr = op->getAttrOfType<StringAttr>(
+      AttrNames::Operation::MetadataProvenance);
+  if (!attr)
+    return std::nullopt;
+  return parseMetadataProvenance(attr.getValue());
+}
+
+inline void setMetadataProvenance(Operation *op, MetadataProvenanceKind kind) {
+  if (!op)
+    return;
+  op->setAttr(AttrNames::Operation::MetadataProvenance,
+              StringAttr::get(op->getContext(),
+                              metadataProvenanceToString(kind)));
+}
+
+inline void ensureMetadataProvenance(Operation *op,
+                                     MetadataProvenanceKind kind) {
+  if (!op || op->hasAttr(AttrNames::Operation::MetadataProvenance))
+    return;
+  setMetadataProvenance(op, kind);
 }
 
 inline std::optional<StringRef> getOutlinedFunc(Operation *op) {

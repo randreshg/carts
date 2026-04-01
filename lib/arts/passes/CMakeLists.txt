@@ -2,6 +2,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   # Transformation passes
   transforms/CollectMetadata.cpp
   transforms/VerifyMetadata.cpp
+  transforms/VerifyMetadataIntegrity.cpp
   transforms/VerifyForLowered.cpp
   transforms/VerifyDbCreated.cpp
   transforms/VerifyPreLowered.cpp

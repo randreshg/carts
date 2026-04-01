@@ -119,6 +119,8 @@ public:
   void initializeMetadata(ArtsMetadata *metadata);
   ArtsId assignOperationId(Operation *op);
   bool transferMetadata(Operation *sourceOp, Operation *targetOp);
+  bool replaceMetadataForRewrite(Operation *sourceOp, Operation *targetOp);
+  bool refreshMetadata(Operation *op);
 
   ///===------------------------------------------------------------------===///
   /// Operation Classification

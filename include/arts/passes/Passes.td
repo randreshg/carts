@@ -817,6 +817,31 @@ def VerifyMetadata : Pass<"verify-metadata", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createVerifyMetadataPass(nullptr)";
 }
 
+def VerifyMetadataIntegrity : Pass<"verify-metadata-integrity",
+                                   "mlir::ModuleOp"> {
+  let summary = "Verify metadata integrity, provenance, and trusted facts";
+  let description = [{
+    This pass validates semantic metadata invariants on operations that already
+    carry ARTS metadata:
+    - every metadata-bearing operation has a recognized provenance marker
+    - transferred metadata records a source origin id
+    - no duplicate active arts.id values exist across metadata-bearing ops
+    - loop metadata trip_count matches current static bounds when statically
+      knowable
+
+    Unlike verify-metadata, this pass does not check coverage; it checks that
+    the metadata that exists is still trustworthy after rewrites.
+  }];
+  let dependentDialects = [
+    "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",
+    "affine::AffineDialect", "scf::SCFDialect"
+  ];
+  let options =
+      [Option<"failOnError", "fail-on-error", "bool", "false",
+              "Fail compilation if any metadata integrity errors are found">];
+  let constructor = "mlir::arts::createVerifyMetadataIntegrityPass(nullptr)";
+}
+
 def AliasScopeGen : Pass<"arts-alias-scope-gen", "mlir::ModuleOp"> {
   let summary = "Generate LLVM alias scope metadata for ARTS data pointers";
   let dependentDialects = ["LLVM::LLVMDialect"];

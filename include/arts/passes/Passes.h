@@ -125,6 +125,8 @@ std::unique_ptr<Pass> createEdtTransformsPass(AnalysisManager *AM);
 /// Validation passes for metadata and lowering contracts.
 std::unique_ptr<Pass> createVerifyMetadataPass(AnalysisManager *AM,
                                                bool failOnMissing = false);
+std::unique_ptr<Pass> createVerifyMetadataIntegrityPass(
+    AnalysisManager *AM, bool failOnError = false);
 std::unique_ptr<Pass> createContractValidationPass(bool failOnError = false);
 
 /// Verification passes at lowering boundaries.

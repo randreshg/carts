@@ -20,8 +20,8 @@
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/utils/LoopUtils.h"
 #define GEN_PASS_DEF_VERIFYMETADATA
-#include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/metadata/LoopMetadata.h"
@@ -34,6 +34,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
 #include "llvm/Support/raw_ostream.h"
+#include <memory>
 
 /// Debug
 #include "arts/utils/Debug.h"
@@ -42,15 +43,24 @@ ARTS_DEBUG_SETUP(verify_metadata);
 using namespace mlir;
 using namespace mlir::arts;
 
+namespace {
+struct LoopMetadataMismatch {
+  Operation *op = nullptr;
+  int64_t staticTripCount = 0;
+  int64_t metadataTripCount = 0;
+};
+} // namespace
+
 ///===----------------------------------------------------------------------===///
 /// VerifyMetadataPass
 ///===----------------------------------------------------------------------===///
 
 struct VerifyMetadataPass
     : public impl::VerifyMetadataBase<VerifyMetadataPass> {
-  mlir::arts::AnalysisManager *analysisManager = nullptr;
-
   VerifyMetadataPass() = default;
+  VerifyMetadataPass(const VerifyMetadataPass &other)
+      : impl::VerifyMetadataBase<VerifyMetadataPass>(other),
+        analysisManager(other.analysisManager) {}
   VerifyMetadataPass(mlir::arts::AnalysisManager *AM, bool failOnMissing)
       : VerifyMetadataBase(), analysisManager(AM) {
     this->failOnMissing = failOnMissing;
@@ -58,30 +68,31 @@ struct VerifyMetadataPass
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
+    mlir::arts::AnalysisManager &AM = getAnalysisManager(module);
 
     ARTS_INFO_HEADER(VerifyMetadataPass);
 
-    /// Get metadata manager
-    MetadataManager *mm = nullptr;
-    if (analysisManager) {
-      mm = &analysisManager->getMetadataManager();
-    }
-
-    if (!mm) {
-      ARTS_DEBUG("No metadata manager available, skipping verification");
-      return;
-    }
+    MetadataManager &mm = AM.getMetadataManager();
 
     /// Count loops in the module
     int64_t totalLoops = 0;
     int64_t loopsWithMetadata = 0;
     SmallVector<Operation *> loopsMissingMetadata;
+    SmallVector<LoopMetadataMismatch> loopsWithMismatchedTripCount;
 
     module.walk([&](Operation *op) {
-      if (analysisManager->getLoopAnalysis().isLoopOperation(op)) {
+      if (AM.getLoopAnalysis().isLoopOperation(op)) {
         totalLoops++;
-        if (mm->getLoopMetadata(op)) {
+        if (auto *loopMetadata = mm.getLoopMetadata(op)) {
           loopsWithMetadata++;
+          if (loopMetadata->tripCount) {
+            if (std::optional<int64_t> staticTripCount = getStaticTripCount(op);
+                staticTripCount &&
+                *staticTripCount != *loopMetadata->tripCount) {
+              loopsWithMismatchedTripCount.push_back(
+                  {op, *staticTripCount, *loopMetadata->tripCount});
+            }
+          }
         } else {
           loopsMissingMetadata.push_back(op);
         }
@@ -96,7 +107,7 @@ struct VerifyMetadataPass
     module.walk([&](Operation *op) {
       if (isa<memref::AllocOp, memref::AllocaOp>(op)) {
         totalMemrefs++;
-        if (mm->getMemrefMetadata(op)) {
+        if (mm.getMemrefMetadata(op)) {
           memrefsWithMetadata++;
         } else {
           memrefsMissingMetadata.push_back(op);
@@ -116,51 +127,65 @@ struct VerifyMetadataPass
             : 100.0;
 
     /// Report coverage
-    llvm::errs() << "[CARTS] Metadata verification: " << loopsWithMetadata
-                 << "/" << totalLoops << " loops, " << memrefsWithMetadata
-                 << "/" << totalMemrefs << " memrefs ("
-                 << llvm::format("%.1f", totalCoverage) << "% coverage)\n";
+    ARTS_INFO("Metadata verification: " << loopsWithMetadata << "/"
+                                        << totalLoops << " loops, "
+                                        << memrefsWithMetadata << "/"
+                                        << totalMemrefs << " memrefs ("
+                                        << llvm::format("%.1f", totalCoverage)
+                                        << "% coverage)");
 
     /// Emit warnings for missing metadata
     if (!loopsMissingMetadata.empty()) {
       for (auto *op : loopsMissingMetadata) {
-        auto loc = op->getLoc();
-        if (auto fileLoc = dyn_cast<FileLineColLoc>(loc)) {
-          llvm::errs() << "[CARTS] Warning: Loop at " << fileLoc.getFilename()
-                       << ":" << fileLoc.getLine() << " missing metadata\n";
-        } else {
-          llvm::errs() << "[CARTS] Warning: Loop missing metadata\n";
-        }
+        op->emitWarning("loop missing metadata");
+      }
+    }
+
+    if (!loopsWithMismatchedTripCount.empty()) {
+      for (const LoopMetadataMismatch &mismatch :
+           loopsWithMismatchedTripCount) {
+        mismatch.op->emitWarning()
+            << "loop has stale metadata tripCount="
+            << mismatch.metadataTripCount << " (static trip count is "
+            << mismatch.staticTripCount << ")";
       }
     }
 
     if (!memrefsMissingMetadata.empty()) {
       for (auto *op : memrefsMissingMetadata) {
-        auto loc = op->getLoc();
-        if (auto fileLoc = dyn_cast<FileLineColLoc>(loc)) {
-          llvm::errs() << "[CARTS] Warning: Memref at " << fileLoc.getFilename()
-                       << ":" << fileLoc.getLine() << " missing metadata\n";
-        } else {
-          llvm::errs() << "[CARTS] Warning: Memref missing metadata\n";
-        }
+        op->emitWarning("memref missing metadata");
       }
     }
 
     /// Store coverage data in analysis manager for diagnose export
-    if (analysisManager) {
-      analysisManager->setMetadataCoverage(loopsWithMetadata, totalLoops,
-                                           memrefsWithMetadata, totalMemrefs);
-    }
+    AM.setMetadataCoverage(loopsWithMetadata, totalLoops, memrefsWithMetadata,
+                           totalMemrefs);
 
     /// Optionally fail if coverage is incomplete
     if (failOnMissing && (loopsWithMetadata < totalLoops ||
-                          memrefsWithMetadata < totalMemrefs)) {
+                          memrefsWithMetadata < totalMemrefs ||
+                          !loopsWithMismatchedTripCount.empty())) {
       emitError(module.getLoc())
-          << "Incomplete metadata coverage: " << loopCoverage << "% loops, "
-          << memrefCoverage << "% memrefs";
+          << "Metadata verification failed: " << loopCoverage << "% loops, "
+          << memrefCoverage << "% memrefs, "
+          << loopsWithMismatchedTripCount.size()
+          << " loop trip-count mismatch(es)";
       signalPassFailure();
     }
   }
+
+private:
+  mlir::arts::AnalysisManager &getAnalysisManager(ModuleOp module) {
+    if (!analysisManager) {
+      ownedAnalysisManager =
+          std::make_unique<mlir::arts::AnalysisManager>(module);
+      analysisManager = ownedAnalysisManager.get();
+    }
+    return *analysisManager;
+  }
+
+  mlir::arts::AnalysisManager *analysisManager = nullptr;
+  std::unique_ptr<mlir::arts::AnalysisManager> ownedAnalysisManager;
 };
 
 std::unique_ptr<Pass>
