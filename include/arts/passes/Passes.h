@@ -38,7 +38,8 @@ std::unique_ptr<Pass> createRaiseMemRefDimensionalityPass();
 /// Convert residual OMP task dependencies to arts.omp_dep.
 std::unique_ptr<Pass> createHandleDepsPass();
 /// Lower OpenMP regions into high-level ARTS dialect operations.
-std::unique_ptr<Pass> createConvertOpenMPToArtsPass();
+std::unique_ptr<Pass> createConvertOpenMPToArtsPass(
+    AnalysisManager *AM = nullptr);
 /// Discover or refine semantic pattern contracts before DB creation.
 std::unique_ptr<Pass> createPatternDiscoveryPass(AnalysisManager *AM,
                                                  bool refine = false);
@@ -111,7 +112,7 @@ std::unique_ptr<Pass> createHoistingPass();
 std::unique_ptr<Pass> createBlockLoopStripMiningPass();
 
 /// Semantic pattern family passes.
-std::unique_ptr<Pass> createDepTransformsPass();
+std::unique_ptr<Pass> createDepTransformsPass(AnalysisManager *AM = nullptr);
 std::unique_ptr<Pass> createStencilBoundaryPeelingPass();
 std::unique_ptr<Pass> createLoopNormalizationPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createLoopReorderingPass(AnalysisManager *AM);

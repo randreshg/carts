@@ -48,11 +48,15 @@ namespace arts {
 
 class SymmetricTriangularPattern : public LoopPattern {
 public:
+  explicit SymmetricTriangularPattern(MetadataManager &metadataManager)
+      : metadataManager(metadataManager) {}
+
   bool match(ForOp artsFor) override;
   LogicalResult apply(OpBuilder &builder) override;
   StringRef getName() const override { return "symmetric-triangular"; }
 
 private:
+  MetadataManager &metadataManager;
   ForOp outerArtsFor;
   SymmetricTriangularPatternMatch matchResult;
 };
@@ -137,22 +141,19 @@ LogicalResult SymmetricTriangularPattern::apply(OpBuilder &builder) {
       });
 
   /// Step 3: Copy loop attributes to new j-loop
-  copyLoopAttributes(m.jLoop.getOperation(), newJLoop.getOperation());
+  rewriteNormalizedLoop(m.jLoop.getOperation(), newJLoop.getOperation(),
+                        metadataManager);
 
-  /// Step 4: Update tripCount metadata — the loop is now rectangular (full ub)
-  /// The old tripCount was dynamic (0) for triangular; set to 0 to keep it
-  /// dynamic, since actual trip count depends on the upper bound at runtime.
-
-  /// Step 5: Handle diagonal store — move it after the new j-loop
+  /// Step 4: Handle diagonal store — move it after the new j-loop
   if (m.diagStore) {
     /// Erase the original diagonal store (which was before the j-loop)
     m.diagStore->moveBefore(outerArtsFor.getBody()->getTerminator());
   }
 
-  /// Step 6: Replace uses of j-loop results (if any iter_args)
+  /// Step 5: Replace uses of j-loop results (if any iter_args)
   m.jLoop.replaceAllUsesWith(newJLoop.getResults());
 
-  /// Step 7: Erase the original j-loop
+  /// Step 6: Erase the original j-loop
   m.jLoop.erase();
 
   ARTS_INFO("Applied symmetric-triangular normalization");
@@ -160,8 +161,9 @@ LogicalResult SymmetricTriangularPattern::apply(OpBuilder &builder) {
 }
 
 /// Factory function — called from LoopNormalization pass
-std::unique_ptr<LoopPattern> createSymmetricTriangularPattern() {
-  return std::make_unique<SymmetricTriangularPattern>();
+std::unique_ptr<LoopPattern>
+createSymmetricTriangularPattern(MetadataManager &metadataManager) {
+  return std::make_unique<SymmetricTriangularPattern>(metadataManager);
 }
 
 } // namespace arts

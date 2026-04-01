@@ -39,30 +39,6 @@ using namespace mlir::arts;
 
 namespace {
 
-/// Clear hasReductions for loops that no longer contain reduction operations
-/// (e.g., init loops created by loop distribution).
-static Attribute sanitizeLoopMetadataForInitLoop(Attribute attr,
-                                                 MLIRContext *ctx) {
-  if (!attr || !ctx)
-    return attr;
-  auto loopAttr = dyn_cast<LoopMetadataAttr>(attr);
-  if (!loopAttr)
-    return attr;
-
-  /// Init loops don't have reductions - clear the flag
-  return LoopMetadataAttr::get(
-      ctx,
-      /*potentiallyParallel=*/loopAttr.getPotentiallyParallel(),
-      /*hasReductions=*/BoolAttr::get(ctx, false),
-      /*reductionKinds=*/ArrayAttr(),
-      /*tripCount=*/loopAttr.getTripCount(),
-      /*nestingLevel=*/loopAttr.getNestingLevel(),
-      /*hasInterIterationDeps=*/BoolAttr::get(ctx, false),
-      /*memrefsWithLoopCarriedDeps=*/loopAttr.getMemrefsWithLoopCarriedDeps(),
-      /*parallelClassification=*/loopAttr.getParallelClassification(),
-      /*locationKey=*/loopAttr.getLocationKey());
-}
-
 struct LoopReorderingPass
     : public impl::LoopReorderingBase<LoopReorderingPass> {
   LoopReorderingPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
@@ -97,7 +73,7 @@ struct LoopReorderingPass
 
       /// If metadata didn't apply, try auto-detection for matmul patterns
       if (!metadataApplied) {
-        if (tryAutoDetectAndReorder(artsFor)) {
+        if (tryAutoDetectAndReorder(artsFor, manager)) {
           reorderCount++;
         }
       }
@@ -109,7 +85,7 @@ struct LoopReorderingPass
 
   /// Try to auto-detect matmul-like patterns and apply loop interchange.
   /// Returns true if a transformation was applied.
-  bool tryAutoDetectAndReorder(ForOp artsFor) {
+  bool tryAutoDetectAndReorder(ForOp artsFor, MetadataManager &manager) {
     MatmulInitReductionLoopMatch loopMatch;
     if (!detectMatmulInitReductionLoopNest(artsFor, &AM->getLoopAnalysis(),
                                            loopMatch))
@@ -120,7 +96,7 @@ struct LoopReorderingPass
 
     /// Apply the distribution + interchange
     return interchangeInnerLoopsWithDistribution(
-        artsFor, loopMatch.jLoop, loopMatch.kLoop, loopMatch.initOps);
+        artsFor, loopMatch.jLoop, loopMatch.kLoop, loopMatch.initOps, manager);
   }
 
 private:
@@ -211,7 +187,8 @@ private:
       if (targetLoops[1] == loopsInCurrentOrder[2] &&
           targetLoops[2] == loopsInCurrentOrder[1]) {
         /// Need to swap firstInner and secondInner
-        return interchangeInnerLoops(outerLoop, firstInner, secondInner);
+        return interchangeInnerLoops(outerLoop, firstInner, secondInner,
+                                     manager);
       }
     }
 
@@ -224,7 +201,8 @@ private:
   /// Before: outerLoop { firstInner { secondInner { body } } }
   /// After:  outerLoop { secondInner { firstInner { body } } }
   bool interchangeInnerLoops(ForOp outerLoop, scf::ForOp firstInner,
-                             scf::ForOp secondInner) {
+                             scf::ForOp secondInner,
+                             MetadataManager &manager) {
     ARTS_DEBUG("Interchanging inner loops");
 
     /// Check if this is an imperfect nest (has init ops before inner loop)
@@ -243,19 +221,21 @@ private:
     if (!initOps.empty() && innerLoopOp) {
       ARTS_DEBUG("Detected imperfect nest with "
                  << initOps.size() << " init ops - using distribution");
-      return interchangeInnerLoopsWithDistribution(outerLoop, firstInner,
-                                                   secondInner, initOps);
+      return interchangeInnerLoopsWithDistribution(
+          outerLoop, firstInner, secondInner, initOps, manager);
     }
 
     /// Perfect nest case - simple interchange
-    return interchangeInnerLoopsPerfect(outerLoop, firstInner, secondInner);
+    return interchangeInnerLoopsPerfect(outerLoop, firstInner, secondInner,
+                                        manager);
   }
 
   /// Interchange two adjacent inner scf.for loops (perfect nest case).
   /// Before: outerLoop { firstInner { secondInner { body } } }
   /// After:  outerLoop { secondInner { firstInner { body } } }
   bool interchangeInnerLoopsPerfect(ForOp outerLoop, scf::ForOp firstInner,
-                                    scf::ForOp secondInner) {
+                                    scf::ForOp secondInner,
+                                    MetadataManager &manager) {
     ARTS_DEBUG("Interchanging inner loops (perfect nest)");
 
     OpBuilder builder(firstInner);
@@ -303,16 +283,25 @@ private:
           nestedBuilder.create<scf::YieldOp>(loc);
         });
 
-    /// Copy attributes from original loops
-    copyLoopAttributes(secondInner.getOperation(), newOuterLoop.getOperation());
-
+    scf::ForOp newInnerLoop = nullptr;
     auto &innerLoops = newOuterLoop.getBody()->getOperations();
     for (Operation &op : innerLoops) {
       if (auto forOp = dyn_cast<scf::ForOp>(&op)) {
-        copyLoopAttributes(firstInner.getOperation(), forOp.getOperation());
+        newInnerLoop = forOp;
         break;
       }
     }
+    if (!newInnerLoop) {
+      ARTS_DEBUG("Loop reordering: missing rebuilt inner loop");
+      return false;
+    }
+
+    copyPatternAttrs(secondInner.getOperation(), newOuterLoop.getOperation());
+    copyPatternAttrs(firstInner.getOperation(), newInnerLoop.getOperation());
+    manager.rewriteMetadata(secondInner.getOperation(),
+                            newOuterLoop.getOperation());
+    manager.rewriteMetadata(firstInner.getOperation(),
+                            newInnerLoop.getOperation());
 
     /// Replace firstInner with newOuterLoop
     firstInner->replaceAllUsesWith(newOuterLoop->getResults());
@@ -342,7 +331,8 @@ private:
   bool interchangeInnerLoopsWithDistribution(ForOp outerLoop,
                                              scf::ForOp firstInner,
                                              scf::ForOp secondInner,
-                                             ArrayRef<Operation *> initOps) {
+                                             ArrayRef<Operation *> initOps,
+                                             MetadataManager &manager) {
     ARTS_DEBUG("Interchanging inner loops with distribution");
 
     OpBuilder builder(firstInner);
@@ -380,13 +370,8 @@ private:
           nestedBuilder.create<scf::YieldOp>(loc);
         });
 
-    /// Copy j loop attributes to init loop (sanitize: init has no reductions)
-    if (auto idAttr = firstInner->getAttr(AttrNames::Operation::ArtsId))
-      initLoop->setAttr(AttrNames::Operation::ArtsId, idAttr);
-    if (auto loopAttr = firstInner->getAttr(AttrNames::LoopMetadata::Name))
-      initLoop->setAttr(
-          AttrNames::LoopMetadata::Name,
-          sanitizeLoopMetadataForInitLoop(loopAttr, firstInner->getContext()));
+    /// The init loop is synthetic and must get its own metadata identity.
+    manager.refreshMetadata(initLoop.getOperation());
 
     /// STEP 2: Create the interchanged reduction loop (for k: for j: reduce)
     auto newOuterLoop = builder.create<scf::ForOp>(
@@ -414,17 +399,25 @@ private:
           nestedBuilder.create<scf::YieldOp>(loc);
         });
 
-    /// Copy k loop attributes to new outer loop
-    copyLoopAttributes(secondInner.getOperation(), newOuterLoop.getOperation());
-
-    /// Copy j loop attributes to new inner loop
+    scf::ForOp newInnerLoop = nullptr;
     auto &innerLoops = newOuterLoop.getBody()->getOperations();
     for (Operation &op : innerLoops) {
       if (auto forOp = dyn_cast<scf::ForOp>(&op)) {
-        copyLoopAttributes(firstInner.getOperation(), forOp.getOperation());
+        newInnerLoop = forOp;
         break;
       }
     }
+    if (!newInnerLoop) {
+      ARTS_DEBUG("Loop reordering: missing rebuilt reduction loop");
+      return false;
+    }
+
+    copyPatternAttrs(secondInner.getOperation(), newOuterLoop.getOperation());
+    copyPatternAttrs(firstInner.getOperation(), newInnerLoop.getOperation());
+    manager.rewriteMetadata(secondInner.getOperation(),
+                            newOuterLoop.getOperation());
+    manager.rewriteMetadata(firstInner.getOperation(),
+                            newInnerLoop.getOperation());
 
     ARTS_INFO("Loop distribution + interchange applied: "
               << "init loop + k-j reduction (was j-k)");

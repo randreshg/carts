@@ -12,6 +12,7 @@
 ///==========================================================================///
 
 #define GEN_PASS_DEF_DEPTRANSFORMS
+#include "arts/analysis/AnalysisManager.h"
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
@@ -27,12 +28,15 @@ using namespace mlir::arts;
 namespace {
 
 struct DepTransformsPass : public impl::DepTransformsBase<DepTransformsPass> {
-  using Base::Base;
+  explicit DepTransformsPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
+    assert(AM && "AnalysisManager must be provided externally");
+  }
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
+    auto &metadataManager = AM->getMetadataManager();
     SmallVector<std::unique_ptr<DepPatternTransform>> patterns;
-    patterns.push_back(createSeidel2DWavefrontPattern());
+    patterns.push_back(createSeidel2DWavefrontPattern(metadataManager));
     patterns.push_back(createJacobiAlternatingBuffersPattern());
 
     int rewrites = 0;
@@ -46,6 +50,9 @@ struct DepTransformsPass : public impl::DepTransformsBase<DepTransformsPass> {
 
     ARTS_INFO("DepTransformsPass: applied " << rewrites << " rewrite(s)");
   }
+
+private:
+  mlir::arts::AnalysisManager *AM;
 };
 
 } // namespace
@@ -53,8 +60,8 @@ struct DepTransformsPass : public impl::DepTransformsBase<DepTransformsPass> {
 namespace mlir {
 namespace arts {
 
-std::unique_ptr<Pass> createDepTransformsPass() {
-  return std::make_unique<DepTransformsPass>();
+std::unique_ptr<Pass> createDepTransformsPass(mlir::arts::AnalysisManager *AM) {
+  return std::make_unique<DepTransformsPass>(AM);
 }
 
 } // namespace arts

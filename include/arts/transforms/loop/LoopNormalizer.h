@@ -9,6 +9,7 @@
 #ifndef ARTS_TRANSFORMS_LOOP_LOOPNORMALIZER_H
 #define ARTS_TRANSFORMS_LOOP_LOOPNORMALIZER_H
 
+#include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/Dialect.h"
 #include "arts/transforms/pattern/PatternTransform.h"
 #include "mlir/IR/Builders.h"
@@ -40,11 +41,9 @@ public:
 /// Shared utility functions for loop patterns
 ///===----------------------------------------------------------------------===///
 
-/// Copy loop attributes (arts.id and arts.loop) from source to target op.
-void copyLoopAttributes(Operation *source, Operation *target);
-
-/// Update the tripCount field in a loop's arts.loop metadata attribute.
-void updateTripCountMetadata(Operation *loop, int64_t newTripCount);
+/// Rewrite one loop entity into another while preserving pattern contracts.
+bool rewriteNormalizedLoop(Operation *source, Operation *target,
+                           MetadataManager &metadataManager);
 
 /// Check if a lower bound value depends on an outer induction variable
 /// via arith.addi(outerIV, constant). Returns the constant offset if found.
@@ -55,11 +54,13 @@ std::optional<int64_t> getTriangularOffset(Value lb, Value outerIV);
 ///===----------------------------------------------------------------------===///
 
 /// Create SymmetricTriangularPattern for triangular→rectangular normalization.
-std::unique_ptr<LoopPattern> createSymmetricTriangularPattern();
+std::unique_ptr<LoopPattern>
+createSymmetricTriangularPattern(MetadataManager &metadataManager);
 
 /// Create PerfectNestLinearizationPattern for absorbing directly nested
 /// scf.for loops into a single linearized arts.for iteration space.
-std::unique_ptr<LoopPattern> createPerfectNestLinearizationPattern();
+std::unique_ptr<LoopPattern>
+createPerfectNestLinearizationPattern(MetadataManager &metadataManager);
 
 } // namespace arts
 } // namespace mlir

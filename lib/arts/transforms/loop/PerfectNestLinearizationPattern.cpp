@@ -137,11 +137,15 @@ static Value createUnitTripCount(OpBuilder &builder, Location loc, Value lb,
 
 class PerfectNestLinearizationPattern : public LoopPattern {
 public:
+  explicit PerfectNestLinearizationPattern(MetadataManager &metadataManager)
+      : metadataManager(metadataManager) {}
+
   bool match(ForOp artsFor) override;
   LogicalResult apply(OpBuilder &builder) override;
   StringRef getName() const override { return "perfect-nest-linearization"; }
 
 private:
+  MetadataManager &metadataManager;
   ForOp outerArtsFor = nullptr;
   scf::ForOp innerLoop = nullptr;
   SmallVector<Operation *, 4> preludeOps;
@@ -257,7 +261,8 @@ LogicalResult PerfectNestLinearizationPattern::apply(OpBuilder &builder) {
     bodyBuilder.clone(op, mapping);
   bodyBuilder.create<arts::YieldOp>(loc);
 
-  copyLoopAttributes(outerArtsFor.getOperation(), linearFor.getOperation());
+  rewriteNormalizedLoop(outerArtsFor.getOperation(), linearFor.getOperation(),
+                        metadataManager);
   outerArtsFor.erase();
 
   ARTS_INFO("Applied perfect-nest linearization on arts.for");
@@ -266,8 +271,9 @@ LogicalResult PerfectNestLinearizationPattern::apply(OpBuilder &builder) {
 
 } // namespace
 
-std::unique_ptr<LoopPattern> createPerfectNestLinearizationPattern() {
-  return std::make_unique<PerfectNestLinearizationPattern>();
+std::unique_ptr<LoopPattern>
+createPerfectNestLinearizationPattern(MetadataManager &metadataManager) {
+  return std::make_unique<PerfectNestLinearizationPattern>(metadataManager);
 }
 
 } // namespace arts

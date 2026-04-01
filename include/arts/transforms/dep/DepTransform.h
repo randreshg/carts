@@ -13,6 +13,8 @@
 namespace mlir {
 namespace arts {
 
+class MetadataManager;
+
 /// Rewrite Jacobi copy+stencil timestep loops into alternating-buffer stencil
 /// phases before DB creation.
 std::unique_ptr<DepPatternTransform> createJacobiAlternatingBuffersPattern();
@@ -20,7 +22,8 @@ std::unique_ptr<DepPatternTransform> createJacobiAlternatingBuffersPattern();
 /// Rewrite Seidel-style in-place 2D stencils into a tiled wavefront schedule
 /// after OpenMP-to-ARTS conversion so later task/DB passes see a scalable
 /// dependence shape.
-std::unique_ptr<DepPatternTransform> createSeidel2DWavefrontPattern();
+std::unique_ptr<DepPatternTransform>
+createSeidel2DWavefrontPattern(MetadataManager &metadataManager);
 
 } // namespace arts
 } // namespace mlir
