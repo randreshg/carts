@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --O3 --arts-config %S/../examples/arts.cfg --start-from edt-opt --pipeline edt-opt | %FileCheck %s
+// RUN: %carts-compile %s --O3 --arts-config %S/../examples/arts.cfg --start-from=concurrency-opt --pipeline=concurrency-opt | %FileCheck %s
 
 // Keep sibling parallel EDTs separate when they form independent
 // reduction-like pipelines that already amortize launch overhead and only

@@ -50,7 +50,7 @@ enum class ReductionOp {
 class EdtAnalysis : public ArtsAnalysis {
 public:
   struct ParallelEdtWorkSummary {
-    bool reductionLike = false;
+    bool hasReductionLoop = false;
     int64_t peakWorkPerWorker = 0;
   };
 

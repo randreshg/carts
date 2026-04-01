@@ -29,19 +29,8 @@ using namespace mlir;
 using namespace arts;
 
 namespace {
-static bool isReductionLikeLoop(const LoopMetadata *metadata,
-                                int64_t nestedWork) {
-  if (!metadata)
-    return nestedWork > 1;
-
-  if (metadata->hasReductions)
-    return true;
-  if (metadata->hasInterIterationDeps.value_or(false) && nestedWork > 1)
-    return true;
-  return metadata->parallelClassification &&
-         *metadata->parallelClassification ==
-             LoopMetadata::ParallelClassification::Sequential &&
-         nestedWork > 1;
+static bool hasExplicitReductionLoop(const LoopMetadata *metadata) {
+  return metadata && metadata->hasReductions;
 }
 
 } // namespace
@@ -257,8 +246,8 @@ EdtAnalysis::summarizeParallelEdtWork(EdtOp edt, int64_t workerCount) {
     if (tripCount > 0)
       workPerWorker = ceilDivPositive(tripCount, effectiveWorkers) * nestedWork;
 
-    summary.reductionLike =
-        summary.reductionLike || isReductionLikeLoop(metadata, nestedWork);
+    summary.hasReductionLoop =
+        summary.hasReductionLoop || hasExplicitReductionLoop(metadata);
     summary.peakWorkPerWorker =
         std::max(summary.peakWorkPerWorker, workPerWorker);
   }

@@ -99,13 +99,13 @@ EdtHeuristics::evaluateParallelEdtFusion(EdtOp first, EdtOp second) const {
   bool sharedReadonlyInputs =
       edtAnalysis.hasSharedReadonlyInputs(first, second);
   bool heavyReductionPipeline =
-      workerCount > 1 && sharedReadonlyInputs && firstLoops.reductionLike &&
-      secondLoops.reductionLike &&
+      workerCount > 1 && sharedReadonlyInputs && firstLoops.hasReductionLoop &&
+      secondLoops.hasReductionLoop &&
       firstLoops.peakWorkPerWorker >= workerCount &&
       secondLoops.peakWorkPerWorker >= workerCount;
   if (heavyReductionPipeline) {
     decision.rationale =
-        "reduction-like sibling loops already amortize launch overhead";
+        "sibling reductions already amortize launch overhead";
     return decision;
   }
 
