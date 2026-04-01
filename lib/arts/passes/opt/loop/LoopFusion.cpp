@@ -47,7 +47,6 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/IRMapping.h"
-#include "llvm/ADT/DenseMap.h"
 
 #include "arts/utils/Debug.h"
 
@@ -60,25 +59,6 @@ using namespace mlir::arts;
 ARTS_DEBUG_SETUP(loop_fusion);
 
 namespace {
-struct AccessSummary {
-  bool reads = false;
-  bool writes = false;
-
-  void record(DbUtils::MemoryAccessKind kind) {
-    if (kind == DbUtils::MemoryAccessKind::Read)
-      reads = true;
-    else
-      writes = true;
-  }
-};
-
-struct LoopAccessSummary {
-  DenseMap<Operation *, AccessSummary> datablocks;
-  DenseMap<Value, AccessSummary> rawMemrefs;
-
-  size_t size() const { return datablocks.size() + rawMemrefs.size(); }
-};
-
 struct LoopFusionPass : public ::impl::LoopFusionBase<LoopFusionPass> {
   LoopFusionPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
@@ -136,7 +116,6 @@ private:
   bool haveCompatibleBounds(ForOp a, ForOp b);
   bool areIndependent(ForOp a, ForOp b, LoopAnalysis &loopAnalysis);
   void fuseForOps(ForOp first, ForOp second);
-  LoopAccessSummary getAccessSummary(ForOp forOp);
 };
 } // namespace
 
@@ -145,30 +124,6 @@ bool LoopFusionPass::haveCompatibleBounds(ForOp a, ForOp b) {
   LoopNode *nodeA = loopAnalysis.getOrCreateLoopNode(a.getOperation());
   LoopNode *nodeB = loopAnalysis.getOrCreateLoopNode(b.getOperation());
   return LoopNode::haveCompatibleBounds(nodeA, nodeB);
-}
-
-/// Collect the per-loop read/write summary keyed by the underlying datablock
-/// when available. If an access does not trace to a datablock, fall back to
-/// the raw memref value so non-DB scratch buffers are still treated
-/// conservatively.
-LoopAccessSummary LoopFusionPass::getAccessSummary(ForOp forOp) {
-  LoopAccessSummary accesses;
-  forOp.walk([&](Operation *op) {
-    auto access = DbUtils::getMemoryAccessInfo(op);
-    if (!access)
-      return;
-
-    if (Operation *db = DbUtils::getUnderlyingDb(access->memref)) {
-      accesses.datablocks[db].record(access->kind);
-      ARTS_DEBUG("  Access -> underlying DB: " << *db);
-      return;
-    }
-
-    accesses.rawMemrefs[access->memref].record(access->kind);
-    ARTS_DEBUG("  Access -> raw memref: " << access->memref);
-  });
-  ARTS_DEBUG("ForOp accesses " << accesses.size() << " unique memory root(s)");
-  return accesses;
 }
 
 bool LoopFusionPass::areIndependent(ForOp a, ForOp b,
@@ -181,36 +136,12 @@ bool LoopFusionPass::areIndependent(ForOp a, ForOp b,
     return false;
   }
 
-  auto hasCrossLoopHazard = [](const AccessSummary &lhs,
-                               const AccessSummary &rhs) {
-    /// Shared reads are safe to fuse. Any shared writer must preserve the
-    /// existing barrier.
-    return lhs.writes || rhs.writes;
-  };
-
   /// First check: no shared writable accesses between loops.
   ARTS_INFO("Checking independence between two ForOps");
-  ARTS_DEBUG("Loop A:");
-  LoopAccessSummary aAccesses = getAccessSummary(a);
-  ARTS_DEBUG("Loop B:");
-  LoopAccessSummary bAccesses = getAccessSummary(b);
-
-  for (auto &[db, accessA] : aAccesses.datablocks) {
-    auto it = bAccesses.datablocks.find(db);
-    if (it != bAccesses.datablocks.end() &&
-        hasCrossLoopHazard(accessA, it->second)) {
-      ARTS_DEBUG("Loops share writable datablock - not independent");
-      return false;
-    }
-  }
-
-  for (auto &[memref, accessA] : aAccesses.rawMemrefs) {
-    auto it = bAccesses.rawMemrefs.find(memref);
-    if (it != bAccesses.rawMemrefs.end() &&
-        hasCrossLoopHazard(accessA, it->second)) {
-      ARTS_DEBUG("Loops share writable raw memref - not independent");
-      return false;
-    }
+  if (DbUtils::hasSharedWritableRootConflict(a.getOperation(),
+                                             b.getOperation())) {
+    ARTS_DEBUG("Loops share a writable memory root - not independent");
+    return false;
   }
 
   /// Second check: consult loop metadata for diagnostics only. Internal

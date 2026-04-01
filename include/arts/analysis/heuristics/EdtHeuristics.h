@@ -15,9 +15,15 @@
 #include "arts/analysis/Analysis.h"
 #include "arts/analysis/heuristics/DistributionHeuristics.h"
 #include <optional>
+#include <string>
 
 namespace mlir {
 namespace arts {
+
+struct ParallelEdtFusionDecision {
+  bool shouldFuse = false;
+  std::string rationale;
+};
 
 class EdtHeuristics : public ArtsAnalysis {
 public:
@@ -34,8 +40,12 @@ public:
                                                ForOp forOp) const;
   std::optional<EdtDistributionPattern>
   resolveDistributionPattern(ForOp forOp, EdtOp originalParallel) const;
+  LoopCoarseningDecision computeLoopCoarseningDecision(
+      ForOp forOp, const WorkerConfig &workerCfg) const;
   std::optional<int64_t>
   computeCoarsenedBlockHint(ForOp forOp, const WorkerConfig &workerCfg) const;
+  ParallelEdtFusionDecision evaluateParallelEdtFusion(EdtOp first,
+                                                      EdtOp second) const;
 
 private:
   const AbstractMachine &getMachine() const;
