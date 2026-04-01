@@ -52,6 +52,12 @@ public:
   ArtsDepPattern getFamily() const override { return family; }
   int64_t getRevision() const override { return revision; }
   StringRef getName() const override { return "stencil-nd"; }
+  ArrayRef<int64_t> getOwnerDims() const { return ownerDims; }
+  ArrayRef<int64_t> getMinOffsets() const { return minOffsets; }
+  ArrayRef<int64_t> getMaxOffsets() const { return maxOffsets; }
+  ArrayRef<int64_t> getWriteFootprint() const { return writeFootprint; }
+  ArrayRef<int64_t> getBlockShape() const { return blockShape; }
+  bool isMultiDimensional() const { return ownerDims.size() >= 2; }
   void stamp(Operation *op) const override;
 
 private:

@@ -27,7 +27,9 @@
 ///==========================================================================///
 
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/transforms/kernel/KernelTransform.h"
+#include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -108,7 +110,7 @@ static bool isPureScalarCall(func::CallOp call) {
     if (isa<BaseMemRefType>(resultTy))
       return false;
   }
-  return true;
+  return isPure(call.getOperation());
 }
 
 static bool isAllowedStageOp(Operation *op, Value iv) {
@@ -128,8 +130,18 @@ static bool isAllowedStageOp(Operation *op, Value iv) {
   if (auto store = dyn_cast<memref::StoreOp>(op)) {
     if (store.getIndices().empty())
       return false;
-    return llvm::all_of(store.getIndices(),
-                        [&](Value idx) { return isInvariantIndex(idx, iv); });
+    bool hasIvIndexedStore = false;
+    for (Value idx : store.getIndices()) {
+      if (!ValueAnalysis::dependsOn(idx, iv)) {
+        if (!isInvariantIndex(idx, iv))
+          return false;
+        continue;
+      }
+      if (!isSameOrZeroOffset(idx, iv))
+        return false;
+      hasIvIndexedStore = true;
+    }
+    return hasIvIndexedStore;
   }
 
   if (auto call = dyn_cast<func::CallOp>(op))
@@ -173,7 +185,7 @@ static bool matchElementwiseStage(ForOp loop, ElementwiseStage &stage) {
       return false;
     if (auto store = dyn_cast<memref::StoreOp>(op)) {
       sawStore = true;
-      Value target = store.getMemRef();
+      Value target = ValueAnalysis::stripMemrefViewOps(store.getMemRef());
       if (!writes.insert(target).second)
         return false;
       stage.writes.push_back(target);
@@ -187,7 +199,8 @@ static bool matchElementwiseStage(ForOp loop, ElementwiseStage &stage) {
   return true;
 }
 
-static ForOp fuseStages(SmallVectorImpl<ElementwiseStage> &stages) {
+static ForOp fuseStages(SmallVectorImpl<ElementwiseStage> &stages,
+                        MetadataManager &metadataManager) {
   assert(stages.size() >= 2 && "expected at least two stages");
 
   ForOp first = stages.front().loop;
@@ -195,8 +208,8 @@ static ForOp fuseStages(SmallVectorImpl<ElementwiseStage> &stages) {
   builder.setInsertionPoint(first);
   auto fused = cast<ForOp>(builder.clone(*first.getOperation()));
 
-  copyLoopAttributes(first.getOperation(), fused.getOperation());
   copyPatternAttrs(first.getOperation(), fused.getOperation());
+  metadataManager.rewriteMetadata(first.getOperation(), fused.getOperation());
   setDepPattern(fused.getOperation(), ArtsDepPattern::elementwise_pipeline);
   setEdtDistributionPattern(fused.getOperation(),
                             EdtDistributionPattern::uniform);
@@ -219,6 +232,7 @@ static ForOp fuseStages(SmallVectorImpl<ElementwiseStage> &stages) {
     }
   }
 
+  metadataManager.refreshMetadata(fused.getOperation());
   return fused;
 }
 
@@ -227,16 +241,7 @@ static bool matchSingleLoopElementwiseEdt(EdtOp edt,
   if (!edt || edt.getType() != EdtType::parallel)
     return false;
 
-  Block &block = edt.getBody().front();
-  ForOp onlyLoop = nullptr;
-  for (Operation &op : block.without_terminator()) {
-    auto loop = dyn_cast<ForOp>(&op);
-    if (!loop)
-      return false;
-    if (onlyLoop)
-      return false;
-    onlyLoop = loop;
-  }
+  ForOp onlyLoop = getSingleTopLevelFor(edt);
   if (!onlyLoop)
     return false;
 
@@ -249,18 +254,22 @@ static bool matchSingleLoopElementwiseEdt(EdtOp edt,
   return true;
 }
 
-static EdtOp fuseEdtStages(SmallVectorImpl<ElementwiseEdtStage> &stages) {
+static EdtOp fuseEdtStages(SmallVectorImpl<ElementwiseEdtStage> &stages,
+                           MetadataManager &metadataManager) {
   assert(stages.size() >= 2 && "expected at least two EDT stages");
 
   EdtOp first = stages.front().edt;
   OpBuilder builder(first);
   builder.setInsertionPoint(first);
   auto fused = cast<EdtOp>(builder.clone(*first.getOperation()));
-  copyArtsMetadataAttrs(first.getOperation(), fused.getOperation());
+  metadataManager.rewriteMetadata(first.getOperation(), fused.getOperation());
   copyWorkerTopologyAttrs(first.getOperation(), fused.getOperation());
   setDepPattern(fused.getOperation(), ArtsDepPattern::elementwise_pipeline);
   setEdtDistributionPattern(fused.getOperation(),
                             EdtDistributionPattern::uniform);
+  if (ForOp fusedLoop = getSingleTopLevelFor(fused))
+    metadataManager.rewriteMetadata(stages.front().stage.loop.getOperation(),
+                                    fusedLoop.getOperation());
 
   Block &dstBlock = fused.getBody().front();
   Operation *terminator = dstBlock.getTerminator();
@@ -268,15 +277,19 @@ static EdtOp fuseEdtStages(SmallVectorImpl<ElementwiseEdtStage> &stages) {
   IRMapping mapping;
   for (size_t stageIdx = 1; stageIdx < stages.size(); ++stageIdx) {
     for (Operation &op :
-         stages[stageIdx].edt.getBody().front().without_terminator())
-      bodyBuilder.clone(op, mapping);
+         stages[stageIdx].edt.getBody().front().without_terminator()) {
+      if (Operation *cloned = bodyBuilder.clone(op, mapping))
+        metadataManager.rewriteMetadata(&op, cloned);
+    }
   }
+  metadataManager.refreshMetadata(fused.getOperation());
   return fused;
 }
 
 } // namespace
 
-int mlir::arts::applyElementwisePipelineTransform(ModuleOp module) {
+int mlir::arts::applyElementwisePipelineTransform(
+    ModuleOp module, MetadataManager &metadataManager) {
   if (!module)
     return 0;
 
@@ -339,9 +352,11 @@ int mlir::arts::applyElementwisePipelineTransform(ModuleOp module) {
         if (stages.size() < 2)
           continue;
 
-        fuseStages(stages);
-        for (ElementwiseStage &stage : stages)
+        fuseStages(stages, metadataManager);
+        for (ElementwiseStage &stage : stages) {
+          metadataManager.removeMetadata(stage.loop.getOperation());
           stage.loop.erase();
+        }
         rewrites++;
         changed = true;
         break;
@@ -407,9 +422,12 @@ int mlir::arts::applyElementwisePipelineTransform(ModuleOp module) {
         if (stages.size() < 2)
           continue;
 
-        fuseEdtStages(stages);
-        for (auto &stage : stages)
+        fuseEdtStages(stages, metadataManager);
+        for (auto &stage : stages) {
+          metadataManager.removeMetadata(stage.stage.loop.getOperation());
+          metadataManager.removeMetadata(stage.edt.getOperation());
           stage.edt.erase();
+        }
         rewrites++;
         changed = true;
         break;
