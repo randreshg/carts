@@ -8,21 +8,43 @@
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/graphs/edt/EdtGraph.h"
 #include "arts/analysis/graphs/edt/EdtNode.h"
+#include "arts/analysis/heuristics/HeuristicUtils.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SetVector.h"
 
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
 
 using namespace mlir;
 using namespace arts;
+
+namespace {
+static bool isReductionLikeLoop(const LoopMetadata *metadata,
+                                int64_t nestedWork) {
+  if (!metadata)
+    return nestedWork > 1;
+
+  if (metadata->hasReductions)
+    return true;
+  if (metadata->hasInterIterationDeps.value_or(false) && nestedWork > 1)
+    return true;
+  return metadata->parallelClassification &&
+         *metadata->parallelClassification ==
+             LoopMetadata::ParallelClassification::Sequential &&
+         nestedWork > 1;
+}
+
+} // namespace
 
 ///==========================================================================///
 /// EdtAnalysis
@@ -57,6 +79,21 @@ void EdtAnalysis::analyzeFunc(func::FuncOp func) {
 
     info.loopDistributionPatterns.clear();
     info.dominantDistributionPattern = EdtDistributionPattern::unknown;
+    info.captureSummary = EdtCaptureSummary{};
+
+    llvm::SetVector<Value> capturedValues;
+    llvm::SetVector<Value> parameters;
+    llvm::SetVector<Value> constants;
+    llvm::SetVector<Value> dbHandles;
+    analyzeEdtCapturedValues(edt, capturedValues, parameters, constants,
+                             dbHandles);
+    info.captureSummary.capturedValues.assign(capturedValues.begin(),
+                                              capturedValues.end());
+    info.captureSummary.parameters.assign(parameters.begin(), parameters.end());
+    info.captureSummary.constants.assign(constants.begin(), constants.end());
+    info.captureSummary.dbHandles.assign(dbHandles.begin(), dbHandles.end());
+    info.captureSummary.dependencies.assign(edt.getDependencies().begin(),
+                                            edt.getDependencies().end());
 
     bool sawLoop = false;
     bool mixed = false;
@@ -172,6 +209,61 @@ EdtAnalysis::getAllocAccessPattern(Operation *allocOp) {
   if (it == allocPatternByOp.end())
     return std::nullopt;
   return it->second;
+}
+
+bool EdtAnalysis::hasSharedReadonlyInputs(EdtOp first, EdtOp second) {
+  return DbUtils::hasSharedReadonlyRoot(first.getOperation(),
+                                        second.getOperation());
+}
+
+const EdtCaptureSummary *EdtAnalysis::getCaptureSummary(EdtOp edt) {
+  if (!edt)
+    return nullptr;
+  if (!analyzed)
+    analyze();
+  auto *edtNode = getEdtNode(edt);
+  return edtNode ? &edtNode->getInfo().captureSummary : nullptr;
+}
+
+EdtAnalysis::ParallelEdtWorkSummary
+EdtAnalysis::summarizeParallelEdtWork(EdtOp edt, int64_t workerCount) {
+  ParallelEdtWorkSummary summary;
+  if (!edt)
+    return summary;
+
+  MetadataManager &metadataManager = getMetadataManager();
+  LoopAnalysis &loopAnalysis = getLoopAnalysis();
+  int64_t effectiveWorkers = std::max<int64_t>(1, workerCount);
+  int64_t nestedWorkCap =
+      std::max<int64_t>(1, effectiveWorkers * effectiveWorkers);
+
+  for (Operation &op : edt.getBody().front().without_terminator()) {
+    auto forOp = dyn_cast<ForOp>(&op);
+    if (!forOp)
+      continue;
+
+    metadataManager.ensureLoopMetadata(forOp.getOperation());
+    const LoopMetadata *metadata =
+        metadataManager.getLoopMetadata(forOp.getOperation());
+
+    int64_t nestedWork =
+        std::max<int64_t>(1, loopAnalysis
+                                 .estimateStaticPerfectNestedWork(
+                                     forOp.getOperation(), nestedWorkCap)
+                                 .value_or(1));
+    int64_t tripCount =
+        loopAnalysis.getStaticTripCount(forOp.getOperation()).value_or(0);
+    int64_t workPerWorker = nestedWork;
+    if (tripCount > 0)
+      workPerWorker = ceilDivPositive(tripCount, effectiveWorkers) * nestedWork;
+
+    summary.reductionLike =
+        summary.reductionLike || isReductionLikeLoop(metadata, nestedWork);
+    summary.peakWorkPerWorker =
+        std::max(summary.peakWorkPerWorker, workPerWorker);
+  }
+
+  return summary;
 }
 
 void EdtAnalysis::forEachAllocAccessPattern(

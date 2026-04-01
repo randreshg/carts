@@ -149,13 +149,16 @@ void sinkExternalAllocasInEdt(EdtOp edt) {
 
 /// Fuses consecutive fusable parallel EDTs in a block.
 /// Returns true if any fusion was performed.
-static bool fuseConsecutiveParallelEdts(Block &block) {
+static bool fuseConsecutiveParallelEdts(Block &block,
+                                        const EdtHeuristics &heuristics) {
   return fuseConsecutivePairs<EdtOp>(
       block,
-      [](EdtOp a, EdtOp b) {
-        return EdtAnalysis::isParallelEdtFusable(a) &&
-               EdtAnalysis::isParallelEdtFusable(b) &&
-               !DbAnalysis::hasDbConflict(a, b);
+      [&](EdtOp a, EdtOp b) {
+        ParallelEdtFusionDecision decision =
+            heuristics.evaluateParallelEdtFusion(a, b);
+        if (!decision.shouldFuse)
+          ARTS_DEBUG("Skipping parallel EDT fusion: " << decision.rationale);
+        return decision.shouldFuse;
       },
       [](EdtOp a, EdtOp b) {
         Block &firstBody = a.getBody().front();
@@ -170,14 +173,15 @@ static bool fuseConsecutiveParallelEdts(Block &block) {
 /// Does NOT recurse into scf::ForOp bodies to avoid breaking patterns
 /// that JacobiAlternatingBuffersPattern needs to match (exactly 2 parallel EDTs
 /// inside a time-stepping loop).
-static void processRegionForParallelEdtFusion(Region &region, bool &changed) {
+static void processRegionForParallelEdtFusion(Region &region, bool &changed,
+                                              const EdtHeuristics &heuristics) {
   for (Block &block : region) {
-    changed |= fuseConsecutiveParallelEdts(block);
+    changed |= fuseConsecutiveParallelEdts(block, heuristics);
     for (Operation &op : block) {
       if (isa<scf::ForOp>(op))
         continue;
       for (Region &nested : op.getRegions())
-        processRegionForParallelEdtFusion(nested, changed);
+        processRegionForParallelEdtFusion(nested, changed, heuristics);
     }
   }
 }
@@ -265,7 +269,8 @@ void EdtStructuralOptPass::runOnOperation() {
     /// This merges independent parallel regions (e.g., 7 separate activation
     /// functions inlined into main) into one, reducing epoch overhead.
     bool fusionChanged = false;
-    processRegionForParallelEdtFusion(module.getRegion(), fusionChanged);
+    processRegionForParallelEdtFusion(module.getRegion(), fusionChanged,
+                                      AM->getEdtHeuristics());
     if (fusionChanged)
       ARTS_INFO("Parallel EDT fusion applied");
 

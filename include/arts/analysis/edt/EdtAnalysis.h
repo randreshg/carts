@@ -49,6 +49,11 @@ enum class ReductionOp {
 
 class EdtAnalysis : public ArtsAnalysis {
 public:
+  struct ParallelEdtWorkSummary {
+    bool reductionLike = false;
+    int64_t peakWorkPerWorker = 0;
+  };
+
   EdtAnalysis(AnalysisManager &AM);
 
   /// Build summaries for all EDTs in the module.
@@ -65,6 +70,19 @@ public:
   /// Returns std::nullopt when the allocation was not observed in analyzed
   /// loops.
   std::optional<DbAccessPattern> getAllocAccessPattern(Operation *allocOp);
+
+  /// Return true when two EDTs share at least one common input that both only
+  /// read. This is used by fusion profitability policy, not legality.
+  bool hasSharedReadonlyInputs(EdtOp first, EdtOp second);
+
+  /// Return the canonical captured-value summary for one EDT.
+  const EdtCaptureSummary *getCaptureSummary(EdtOp edt);
+
+  /// Summarize the dominant loop workload inside one parallel EDT. The
+  /// returned peak work is normalized per worker so heuristics can compare
+  /// launch amortization against preserved parallel slack.
+  ParallelEdtWorkSummary summarizeParallelEdtWork(EdtOp edt,
+                                                  int64_t workerCount);
 
   /// Iterate all analyzed DB allocation access patterns.
   void forEachAllocAccessPattern(
