@@ -719,8 +719,9 @@ void buildInitialCleanupPipeline(OpPassManager &optPM) {
 }
 
 /// OpenMP to ARTS conversion pass.
-void buildOpenMPToArtsPipeline(PassManager &pm) {
-  pm.addPass(arts::createConvertOpenMPToArtsPass());
+void buildOpenMPToArtsPipeline(PassManager &pm,
+                               arts::AnalysisManager *AM = nullptr) {
+  pm.addPass(arts::createConvertOpenMPToArtsPass(AM));
   pm.addPass(arts::createDCEPass());
   pm.addPass(createCSEPass());
 }
@@ -739,7 +740,7 @@ void buildEdtTransformsPipeline(PassManager &pm, arts::AnalysisManager *AM) {
 /// and dependence families before DB creation.
 void buildPatternPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(arts::createPatternDiscoveryPass(AM, /*refine=*/false));
-  pm.addPass(arts::createDepTransformsPass());
+  pm.addPass(arts::createDepTransformsPass(AM));
   pm.addPass(arts::createLoopNormalizationPass(AM));
   pm.addPass(arts::createStencilBoundaryPeelingPass());
   pm.addPass(arts::createLoopReorderingPass(AM));
@@ -1061,9 +1062,9 @@ LogicalResult buildPassManager(
        [&](PassManager &pm) {
          OpPassManager &optPM = pm.nest<func::FuncOp>();
          buildInitialCleanupPipeline(optPM);
-       }},
+      }},
       {PipelineStep::OpenMPToArts, "Error when converting OpenMP to ARTS",
-       [&](PassManager &pm) { buildOpenMPToArtsPipeline(pm); }},
+       [&](PassManager &pm) { buildOpenMPToArtsPipeline(pm, AM.get()); }},
       {PipelineStep::PatternPipeline,
        "Error when applying the semantic pattern pipeline",
        [&](PassManager &pm) { buildPatternPipeline(pm, AM.get()); }},
