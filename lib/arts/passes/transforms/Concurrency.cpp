@@ -30,7 +30,24 @@
 #include <algorithm>
 
 #include "arts/utils/Debug.h"
+#include "llvm/ADT/Statistic.h"
 ARTS_DEBUG_SETUP(concurrency)
+
+static llvm::Statistic numEdtsAssignedInternode{
+    "concurrency", "NumEdtsAssignedInternode",
+    "Number of EDTs assigned internode concurrency"};
+static llvm::Statistic numEdtsAssignedIntranode{
+    "concurrency", "NumEdtsAssignedIntranode",
+    "Number of EDTs assigned intranode concurrency"};
+static llvm::Statistic numEdtsKeptIntranodeForTasks{
+    "concurrency", "NumEdtsKeptIntranodeForTasks",
+    "Number of EDTs kept intranode due to nested task EDTs"};
+static llvm::Statistic numRuntimeQueriesRemapped{
+    "concurrency", "NumRuntimeQueriesRemapped",
+    "Number of runtime query ops remapped for concurrency model"};
+static llvm::Statistic numDbModesAdjusted{
+    "concurrency", "NumDbModesAdjusted",
+    "Number of DB modes adjusted for concurrency"};
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -111,6 +128,7 @@ void ConcurrencyPass::updateRuntimeQueryOperations() {
   });
 
   /// Phase 2: Replace collected operations (safe - no iteration happening)
+  numRuntimeQueriesRemapped += toReplace.size();
   for (auto &[op, newKind] : toReplace) {
     ARTS_INFO("Replacing runtime_query "
               << stringifyRuntimeQueryKind(op.getKind()) << " with "
@@ -138,6 +156,7 @@ void ConcurrencyPass::adjustDbModes() {
         /// Update the dbMode attribute
         OpBuilder builder(dbAlloc.getContext());
         dbAlloc.setDbModeAttr(DbModeAttr::get(builder.getContext(), newDbMode));
+        ++numDbModesAdjusted;
         ARTS_INFO("Adjusted datablock mode to "
                   << (newDbMode == DbMode::read ? "read" : "write"));
       }
@@ -188,6 +207,7 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
     int64_t workers = std::max<int64_t>(1, machineDecision.workersPerNode);
     ARTS_INFO("Parallel EDT contains nested tasks - keeping intranode with "
               << workers << " workers");
+    ++numEdtsKeptIntranodeForTasks;
     edtOp.setConcurrency(EdtConcurrency::intranode);
     arts::setWorkers(edtOp.getOperation(), workers);
     arts::setWorkersPerNode(edtOp.getOperation(), 0);
@@ -240,6 +260,10 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
   }
 
   /// Set the attributes on the EDT operation
+  if (concurrencyType == EdtConcurrency::internode)
+    ++numEdtsAssignedInternode;
+  else
+    ++numEdtsAssignedIntranode;
   edtOp.setConcurrency(concurrencyType);
   arts::setWorkers(edtOp.getOperation(), numWorkers);
 

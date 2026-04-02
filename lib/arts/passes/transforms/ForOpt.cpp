@@ -23,7 +23,18 @@
 #include "mlir/Pass/Pass.h"
 
 #include "arts/utils/Debug.h"
+#include "llvm/ADT/Statistic.h"
 ARTS_DEBUG_SETUP(for_opt);
+
+static llvm::Statistic numLoopsAnnotatedWithHints{
+    "for_opt", "NumLoopsAnnotatedWithHints",
+    "Number of arts.for loops annotated with partition hints"};
+static llvm::Statistic numAccessPatternsAnnotated{
+    "for_opt", "NumAccessPatternsAnnotated",
+    "Number of DB allocs annotated with access patterns"};
+static llvm::Statistic numLoopsSkippedExistingHint{
+    "for_opt", "NumLoopsSkippedExistingHint",
+    "Number of loops skipped because they already had a hint"};
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -50,6 +61,7 @@ static void annotateAccessPatterns(ModuleOp module,
       pattern = DbAccessPattern::uniform;
 
     setDbAccessPattern(allocOp.getOperation(), pattern);
+    ++numAccessPatternsAnnotated;
     ARTS_DEBUG("Annotated alloc " << allocOp << " with access_pattern="
                                   << stringifyDbAccessPattern(pattern));
   });
@@ -84,8 +96,10 @@ struct ForOptPass : public impl::ForOptBase<ForOptPass> {
           return;
 
         /// Respect explicit user/compiler hints already present.
-        if (getPartitioningHint(forOp.getOperation()))
+        if (getPartitioningHint(forOp.getOperation())) {
+          ++numLoopsSkippedExistingHint;
           return;
+        }
 
         auto decision =
             heuristics.computeLoopCoarseningDecision(forOp, *workerCfg);
@@ -94,6 +108,7 @@ struct ForOptPass : public impl::ForOptBase<ForOptPass> {
 
         setPartitioningHint(forOp.getOperation(),
                             PartitioningHint::block(*decision.blockSize));
+        ++numLoopsAnnotatedWithHints;
 
         ARTS_INFO("Set arts.partition_hint blockSize="
                   << *decision.blockSize << " for arts.for ("
