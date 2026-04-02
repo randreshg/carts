@@ -718,7 +718,7 @@ capabilities:
 | Profiling / feedback loop | **None** | PGO | FDO | No | Offline | Yes |
 | Autotuning | **None** | No | No | No | Yes | Yes |
 | Phase ordering semantics | **Partial (dependency DAG + validation)** | Strong | Strong | Strong | N/A | N/A |
-| Pass parallelization | **Partially unblocked** (G-1 Phase 1a/1b/1d done) | Yes | Partial | Yes | N/A | N/A |
+| Pass parallelization | **Partially unblocked** (G-1 Phase 1a–1d all done) | Yes | Partial | Yes | N/A | N/A |
 | Verification passes | **11 (creation + lowering boundaries)** | Continuous | Continuous | Continuous | N/A | Partial |
 | IR-embedded decisions | Yes | Limited | Limited | Yes | Yes | Yes |
 | Pipeline checkpoint/resume | `--pipeline` + `--start-from` (no AM persistence) | Full | Full | `--start-from` | N/A | N/A |
@@ -731,16 +731,16 @@ capabilities:
 
 | ID | Gap | Impact | Effort | Files |
 |----|-----|--------|--------|-------|
-| G-1 | AnalysisManager thread safety | Blocks parallelization (5–15% speedup available). **Phase 1a done** (std::call_once for 8 lazy getters), **Phase 1b done** (shared_mutex on graph maps in DbAnalysis/EdtAnalysis), **Phase 1d done** (atomic flags/counters in DbGraph/EdtGraph/EdtAnalysis). Remaining: Phase 1c (clear-then-read), Phase 2 (eager init). | 1 week remaining | `AnalysisManager.h`, all 8 analysis classes |
-| G-2 | Lowering contract authority completion | Graph-backed fallbacks still required; ~500 LOC cleanup blocked. **Phase 1 done**: thin contract-state API added (resolveEffectiveContract, combineContracts, patchContract, projectHaloWindow, hasCompleteHaloState). | 2 weeks remaining | `DbAnalysis.cpp`, `DbAcquireNode.cpp`, `PartitionBoundsAnalyzer.cpp`, `DbBlockInfoComputer.cpp` |
+| G-1 | AnalysisManager thread safety | Blocks parallelization (5–15% speedup available). **Phase 1a done** (std::call_once for 8 lazy getters), **Phase 1b done** (shared_mutex on graph maps in DbAnalysis/EdtAnalysis), **Phase 1c done** (std::mutex on EdtAnalysis::analyze, DbGraph::build/buildNodesOnly, EdtGraph::build/buildNodesOnly), **Phase 1d done** (atomic flags/counters + metadataCoverage shared_mutex). Remaining: Phase 2 (eager init). | 3–5 days remaining | `AnalysisManager.h`, all 8 analysis classes |
+| G-2 | Lowering contract authority completion | Graph-backed fallbacks still required; ~500 LOC cleanup blocked. **Phase 1 done**: thin contract-state API. **Phase 2a done**: EdtRewriter wired to use combineContracts + projectHaloWindow (85 lines of manual merge replaced). **Phase 2b done**: DbTransformsPass::consolidateStencilHalos wired to projectHaloWindow. Remaining: refactor EdtRewriter signature from AcquireRewriteContract to LoweringContractInfo, eliminate direct stencil attribute setters, wire remaining consumers. | 1.5 weeks remaining | `EdtRewriter.cpp`, `ForLowering.cpp`, `DbAnalysis.cpp`, `DbAcquireNode.cpp` |
 
 #### Tier 2 — High (optimization visibility and caching)
 
 | ID | Gap | Impact | Effort | Files |
 |----|-----|--------|--------|-------|
 | G-3 | Pass statistics coverage | **Done**: 19 passes now have statistics (~94 counters). All major passes covered. | 0 | All covered |
-| G-4 | Analysis dependency declarations | **Phase 1 done**: AnalysisDependencies.h header with AnalysisKind enum + AnalysisDependencyInfo struct. 10 passes annotated with declarative read/invalidate arrays (DbModeTightening, DbPartitioning, EdtStructuralOpt, EpochOpt, Concurrency, ConvertOpenMPToArts, CreateDbs, EdtDistribution, ForLowering, ForOpt). Remaining: annotate ~13 more passes, wire into AnalysisManager for selective invalidation. | 1 week remaining | All passes that use AM |
-| G-5 | Phase ordering semantics | **Phase 1 done**: StageDescriptor now has `dependsOn` field with dependency arrays for all 20 stages. `validatePipelineDAG()` runs at pipeline construction time and asserts no forward dependencies. `--pipeline --json` now exports dependency info. Remaining: `--start-from` validation against DAG, extended verification barriers. | 2–3 days remaining | `Compile.cpp`, `StageDescriptor` |
+| G-4 | Analysis dependency declarations | **Phase 1 done**: AnalysisDependencies.h header with AnalysisKind enum + AnalysisDependencyInfo struct. **Phase 2 done**: 21 passes now annotated with declarative read/invalidate arrays. Remaining: wire declarations into AnalysisManager for selective invalidation. | 3–5 days remaining | All passes that use AM |
+| G-5 | Phase ordering semantics | **Phase 1 done**: StageDescriptor dependsOn + validatePipelineDAG(). **Phase 2 done**: `--start-from` now warns about skipped dependencies via warnSkippedDependencies(). Remaining: extended verification barriers. | 1–2 days remaining | `Compile.cpp`, `StageDescriptor` |
 
 #### Tier 3 — Medium (optimization quality and code health)
 
@@ -755,7 +755,7 @@ capabilities:
 | ID | Gap | Impact | Effort | Files |
 |----|-----|--------|--------|-------|
 | G-9 | `--mlir-timing` integration | **Resolved**: already functional via `applyDefaultTimingPassManagerCLOptions(pm)` in `configurePassManager()` (`Compile.cpp:576`) | 0 | `Compile.cpp` |
-| G-10 | Pass instrumentation hooks | **Phase 1 done**: CartsPassInstrumentation class implemented with per-pass wall-clock timing. `--pass-timing` prints sorted report to stderr. `--pass-timing-output` exports JSON. Shared PassTimingData accumulates across pipeline stages. Remaining: analysis timing, IR change detection, op count tracking. | 1 week remaining | `Compile.cpp`, `PassInstrumentation.h/.cpp` |
+| G-10 | Pass instrumentation hooks | **Phase 1 done**: per-pass wall-clock timing with --pass-timing/--pass-timing-output. **Phase 2 done**: IR change detection via op counting (runBeforePass counts ops, recordElapsed computes delta), "Chgd" and "Ops Rm'd" columns in timing report, numChanged/totalOpsRemoved in JSON export. Remaining: analysis timing hooks. | 2–3 days remaining | `Compile.cpp`, `PassInstrumentation.h/.cpp` |
 | G-11 | Autotuning foundation | No parameter search space, no empirical search loop | 2–3 months | New infrastructure |
 | G-12 | Verification at every boundary | **Done**: 11 verification passes now cover all creation and lowering boundaries. Added `VerifyEdtCreated` (after OpenMP conversion), `VerifyEpochCreated` (after epoch creation), plus existing `VerifyEdtLowered`, `VerifyDbLowered`, `VerifyEpochLowered`. | 0 | `Compile.cpp`, verification pass sources |
 
@@ -989,3 +989,32 @@ using 10-agent parallel investigation. Reports are located at:
   and ProvenancedFact<T> template for Known/Assumed provenance tracking.
 - **Section 6.3** (committed `3ffcb4f0`): ArtsInformationCache with single-walk
   module pre-scan caching EdtOp/ForOp/DbAllocOp/DbAcquireOp per function.
+
+### Implementation Deliverables — Round 3 (2026-04-02 late PM)
+
+7-agent parallel implementation:
+
+- **G-1 Phase 1c** (committed `4299d296`): `std::mutex` on EdtAnalysis::analyze(),
+  DbGraph::build()/buildNodesOnly(), EdtGraph::build()/buildNodesOnly() to prevent
+  clear-then-read races.
+- **G-1 Phase 1d addendum** (committed `4299d296`): `std::shared_mutex
+  metadataCoverageMutex` in AnalysisManager. getMetadataCoverage returns by value
+  under shared_lock, setMetadataCoverage/invalidate use unique_lock.
+- **G-2 Phase 2a** (committed `4299d296`): EdtRewriter::applyTaskAcquireContractMetadata
+  refactored — 85-line manual field-by-field merge replaced with combineContracts(),
+  paired getStaticMinOffsets/getStaticMaxOffsets replaced with projectHaloWindow().
+- **G-2 Phase 2b** (committed `4299d296`): DbTransformsPass::consolidateStencilHalos
+  (DT-2) refactored — paired contractStaticMins/contractStaticMaxs replaced with
+  single projectHaloWindow() call using structured bindings.
+- **G-4 Phase 2** (committed `4299d296`): 11 additional passes annotated with
+  AnalysisDependencyInfo (DbDistributedOwnership, DepTransforms, EdtTransformsPass,
+  KernelTransforms, LoopFusion, LoopNormalization, LoopReordering,
+  DistributedHostLoopOutlining, EdtLowering, PatternDiscovery, DbTransformsPass).
+  Total: 21 passes with declarative analysis dependency declarations.
+- **G-5 Phase 2** (committed `4299d296`): warnSkippedDependencies() function added to
+  Compile.cpp. When --start-from skips stages, emits warnings listing which
+  dependencies of the starting stage were not executed.
+- **G-10 Phase 2** (committed `4299d296`): CartsPassInstrumentation extended with
+  IR change detection — runBeforePass counts ops via walk(), recordElapsed computes
+  delta. Timing report includes "Chgd" and "Ops Rm'd" columns. JSON export includes
+  numChanged and totalOpsRemoved fields.
