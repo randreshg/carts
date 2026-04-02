@@ -568,6 +568,12 @@ bool ValueAnalysis::areValuesEquivalent(Value a, Value b, int depth) {
   if (ca && cb)
     return *ca == *cb;
 
+  // Recursive structural equivalence below handles cases that
+  // ValueBoundsConstraintSet::areEqual cannot:
+  //   - Non-index types (areEqual requires isIndex())
+  //   - Commutative operand order (add(x,y) == add(y,x))
+  //   - Structurally identical trees from different IR regions where the
+  //     Presburger solver lacks sufficient constraints
   Operation *opA = a.getDefiningOp();
   Operation *opB = b.getDefiningOp();
   if (!opA || !opB)
@@ -602,15 +608,15 @@ bool ValueAnalysis::isConstantAtLeastOne(Value v) {
   if (!v)
     return false;
   v = stripNumericCasts(v);
+  // proveValueAtLeast delegates to
+  // ValueBoundsConstraintSet::computeConstantBound but only works for
+  // index-typed values. The getConstantIndex fallback below covers non-index
+  // integer constants that the bounds infrastructure rejects.
   if (auto atLeastOne = proveValueAtLeast(v, 1); atLeastOne)
     return *atLeastOne;
   int64_t val = 0;
   if (getConstantIndex(v, val))
     return val >= 1;
-  if (auto cst = v.getDefiningOp<arith::ConstantOp>()) {
-    if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue()))
-      return intAttr.getInt() >= 1;
-  }
   return false;
 }
 
@@ -618,6 +624,11 @@ bool ValueAnalysis::isProvablyNonZero(Value v, unsigned depth) {
   if (!v || depth > 4)
     return false;
   v = stripNumericCasts(v);
+  // proveValueNonZero checks LB >= 1 || UB <= -1 via bounds, but only for
+  // index types. The isConstantAtLeastOne fallback handles non-index integer
+  // constants. Max propagation handles max(a, b) where either operand is
+  // provably non-zero — the bounds infrastructure does not propagate through
+  // max ops reliably.
   if (auto nonZero = proveValueNonZero(v); nonZero)
     return *nonZero;
   if (isConstantAtLeastOne(v))
