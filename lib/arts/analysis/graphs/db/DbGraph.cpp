@@ -47,40 +47,42 @@ DbGraph::DbGraph(func::FuncOp func, DbAnalysis *analysis)
 DbGraph::~DbGraph() = default;
 
 void DbGraph::build() {
-  if (built && !needsRebuild)
+  if (built.load(std::memory_order_acquire) &&
+      !needsRebuild.load(std::memory_order_acquire))
     return;
   ARTS_DEBUG("Building DB hierarchy");
   invalidate();
   collectNodes();
   computeOpOrder();
   computeMetrics();
-  built = true;
-  needsRebuild = false;
-  ++version;
+  built.store(true, std::memory_order_release);
+  needsRebuild.store(false, std::memory_order_release);
+  version.fetch_add(1, std::memory_order_relaxed);
 }
 
 void DbGraph::buildNodesOnly() {
-  if (built && !needsRebuild)
+  if (built.load(std::memory_order_acquire) &&
+      !needsRebuild.load(std::memory_order_acquire))
     return;
   ARTS_DEBUG("Building DB hierarchy (nodes only)");
   invalidate();
   collectNodes();
   computeOpOrder();
-  built = true;
-  needsRebuild = false;
-  ++version;
+  built.store(true, std::memory_order_release);
+  needsRebuild.store(false, std::memory_order_release);
+  version.fetch_add(1, std::memory_order_relaxed);
 }
 
 void DbGraph::invalidate() {
-  ++version;
+  version.fetch_add(1, std::memory_order_relaxed);
   allocNodes.clear();
   acquireNodeMap.clear();
   opOrder.clear();
   nextAllocId = 1;
   peakLiveDbs = 0;
   peakBytes = 0;
-  built = false;
-  needsRebuild = true;
+  built.store(false, std::memory_order_release);
+  needsRebuild.store(true, std::memory_order_release);
 }
 
 DbAllocNode *DbGraph::getDbAllocNode(DbAllocOp op) const {

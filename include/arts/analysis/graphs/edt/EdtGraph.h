@@ -18,6 +18,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
+#include <atomic>
 #include <memory>
 
 namespace mlir {
@@ -53,7 +54,9 @@ public:
   bool hasDbGraph() const { return dbGraph != nullptr; }
   DbGraph *getDbGraph() const { return dbGraph; }
   size_t size() const { return nodes.size(); }
-  uint64_t getVersion() const { return version; }
+  uint64_t getVersion() const {
+    return version.load(std::memory_order_relaxed);
+  }
 
   /// Check if two EDTs are independent under the current memory-root model.
   /// Shared read-only roots are allowed; any shared writable root is treated
@@ -67,9 +70,9 @@ private:
   DenseMap<EdtOp, std::unique_ptr<EdtNode>> edtNodes;
   SmallVector<NodeBase *, 8> nodes;
   DenseMap<std::pair<NodeBase *, NodeBase *>, std::unique_ptr<EdgeBase>> edges;
-  bool isBuilt = false;
-  bool needsRebuild = true;
-  uint64_t version = 0;
+  std::atomic<bool> isBuilt{false};
+  std::atomic<bool> needsRebuild{true};
+  std::atomic<uint64_t> version{0};
 
   /// Private helpers
   void collectNodes();

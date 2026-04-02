@@ -52,7 +52,7 @@ void EdtAnalysis::analyze() {
   auto &AM = getAnalysisManager();
   for (auto func : AM.getModule().getOps<func::FuncOp>())
     analyzeFunc(func);
-  analyzed = true;
+  analyzed.store(true, std::memory_order_release);
 }
 
 void EdtAnalysis::analyzeFunc(func::FuncOp func) {
@@ -200,7 +200,7 @@ std::optional<EdtDistributionPattern>
 EdtAnalysis::getEdtDistributionPattern(EdtOp edt) {
   if (!edt)
     return std::nullopt;
-  if (!analyzed)
+  if (!analyzed.load(std::memory_order_acquire))
     analyze();
   auto it = edtPatternByOp.find(edt.getOperation());
   if (it == edtPatternByOp.end())
@@ -212,7 +212,7 @@ std::optional<DbAccessPattern>
 EdtAnalysis::getAllocAccessPattern(Operation *allocOp) {
   if (!allocOp)
     return std::nullopt;
-  if (!analyzed)
+  if (!analyzed.load(std::memory_order_acquire))
     analyze();
   auto it = allocPatternByOp.find(allocOp);
   if (it == allocPatternByOp.end())
@@ -228,7 +228,7 @@ bool EdtAnalysis::hasSharedReadonlyInputs(EdtOp first, EdtOp second) {
 const EdtCaptureSummary *EdtAnalysis::getCaptureSummary(EdtOp edt) {
   if (!edt)
     return nullptr;
-  if (!analyzed)
+  if (!analyzed.load(std::memory_order_acquire))
     analyze();
   auto *edtNode = getEdtNode(edt);
   return edtNode ? &edtNode->getInfo().captureSummary : nullptr;
@@ -277,7 +277,7 @@ EdtAnalysis::summarizeParallelEdtWork(EdtOp edt, int64_t workerCount) {
 
 void EdtAnalysis::forEachAllocAccessPattern(
     llvm::function_ref<void(Operation *, DbAccessPattern)> fn) {
-  if (!analyzed)
+  if (!analyzed.load(std::memory_order_acquire))
     analyze();
   for (const auto &entry : allocPatternByOp)
     fn(entry.first, entry.second);
@@ -289,7 +289,7 @@ bool EdtAnalysis::invalidateGraph(func::FuncOp func) {
     if (it->second)
       it->second->invalidate();
     edtGraphs.erase(it);
-    analyzed = false;
+    analyzed.store(false, std::memory_order_release);
     return true;
   }
   return false;
@@ -303,7 +303,7 @@ void EdtAnalysis::invalidate() {
   edtPatternByOp.clear();
   allocPatternByOp.clear();
   edtOrderIndex.clear();
-  analyzed = false;
+  analyzed.store(false, std::memory_order_release);
 }
 
 bool EdtAnalysis::isParallelEdtFusable(EdtOp edt) {

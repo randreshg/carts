@@ -12,6 +12,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/JSON.h"
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
@@ -67,7 +68,9 @@ public:
   /// Get DbAnalysis instance
   DbAnalysis *getAnalysis() const { return analysis; }
   func::FuncOp getFunction() const { return func; }
-  uint64_t getVersion() const { return version; }
+  uint64_t getVersion() const {
+    return version.load(std::memory_order_relaxed);
+  }
 
 private:
   func::FuncOp func;
@@ -96,9 +99,9 @@ private:
   DenseMap<Operation *, unsigned> opOrder;
   uint64_t peakLiveDbs = 0;
   unsigned long long peakBytes = 0;
-  bool built = false;
-  bool needsRebuild = true;
-  uint64_t version = 0;
+  std::atomic<bool> built{false};
+  std::atomic<bool> needsRebuild{true};
+  std::atomic<uint64_t> version{0};
 };
 
 } // namespace arts

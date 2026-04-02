@@ -58,7 +58,8 @@ EdtGraph::EdtGraph(func::FuncOp func, DbGraph *dbGraph, EdtAnalysis *EA)
 
 /// Build task graph nodes and DB-induced dependency edges.
 void EdtGraph::build() {
-  if (isBuilt && !needsRebuild)
+  if (isBuilt.load(std::memory_order_acquire) &&
+      !needsRebuild.load(std::memory_order_acquire))
     return;
   ARTS_INFO("Building EDT graph");
   invalidate();
@@ -66,29 +67,30 @@ void EdtGraph::build() {
   collectNodes();
   linkEdtsToLoops();
   buildDependencies();
-  isBuilt = true;
-  needsRebuild = false;
-  ++version;
+  isBuilt.store(true, std::memory_order_release);
+  needsRebuild.store(false, std::memory_order_release);
+  version.fetch_add(1, std::memory_order_relaxed);
 }
 
 void EdtGraph::buildNodesOnly() {
-  if (isBuilt && !needsRebuild)
+  if (isBuilt.load(std::memory_order_acquire) &&
+      !needsRebuild.load(std::memory_order_acquire))
     return;
   ARTS_INFO("Building EDT graph nodes only");
   invalidate();
   collectNodes();
-  isBuilt = true;
-  needsRebuild = false;
-  ++version;
+  isBuilt.store(true, std::memory_order_release);
+  needsRebuild.store(false, std::memory_order_release);
+  version.fetch_add(1, std::memory_order_relaxed);
 }
 
 void EdtGraph::invalidate() {
-  ++version;
+  version.fetch_add(1, std::memory_order_relaxed);
   edtNodes.clear();
   edges.clear();
   nodes.clear();
-  isBuilt = false;
-  needsRebuild = true;
+  isBuilt.store(false, std::memory_order_release);
+  needsRebuild.store(true, std::memory_order_release);
 }
 
 NodeBase *EdtGraph::getEntryNode() const {
