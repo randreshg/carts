@@ -124,6 +124,8 @@ Already landed:
 - `LoweringContractInfo` is split into `SemanticPattern`, `SpatialLayout`, and
   `AnalysisRefinement`.
 - `PatternAttr` and `ContractAttr` exist as typed IR payloads.
+- `mergeLoweringContractInfo` now returns `ContractChange` enum
+  (`Unchanged`/`Changed`) for monotone update tracking (Section 6.6).
 
 Still missing:
 
@@ -165,22 +167,25 @@ Primary files:
 
 ### Phase 8: Pass Statistics
 
-Status: partial
+Status: mostly done
 
 Current state:
 
-- 4 passes already declare `llvm::Statistic` counters (27 total):
+- 15 passes now declare `llvm::Statistic` counters (~70 total):
   `DbPartitioning.cpp` (10), `CreateDbs.cpp` (7), `EdtTransformsPass.cpp` (6),
-  `DbTransformsPass.cpp` (4).
-- The remaining ~26 passes have no statistics.
+  `DbTransformsPass.cpp` (4), `EpochOpt.cpp` (8, member-based),
+  `ForLowering.cpp` (7, member-based), `DbModeTightening.cpp` (5),
+  `DbScratchElimination.cpp` (3), `ConvertOpenMPToArts.cpp` (5),
+  `CreateEpochs.cpp` (3), `EdtDistribution.cpp` (3),
+  `ParallelEdtLowering.cpp` (3), `DbLowering.cpp` (4),
+  `EdtLowering.cpp` (4), `EpochLowering.cpp` (5),
+  `Concurrency.cpp` (5), `ForOpt.cpp` (3).
+- Remaining uncovered: `EdtStructuralOpt.cpp`, codegen passes.
 
-Primary files (uncovered high-value passes):
+Primary files (still uncovered):
 
-- `lib/arts/passes/opt/edt/EpochOpt.cpp`
-- `lib/arts/passes/transforms/ForLowering.cpp`
-- `lib/arts/passes/opt/edt/Concurrency.cpp`
 - `lib/arts/passes/opt/edt/EdtStructuralOpt.cpp`
-- other optimization and lowering passes
+- codegen passes (`AliasScopeGen`, `BlockLoopStripMining`, etc.)
 
 ### Phase 9: EdtInfo Dead Field Cleanup
 
@@ -749,7 +754,7 @@ capabilities:
 
 | ID | Gap | Impact | Effort | Files |
 |----|-----|--------|--------|-------|
-| G-3 | Pass statistics coverage | 4 passes have statistics (27 counters); ~26 passes lack them | 3–5 days | `EpochOpt.cpp`, `ForLowering.cpp`, `Concurrency.cpp`, `EdtStructuralOpt.cpp`, + other uncovered passes |
+| G-3 | Pass statistics coverage | **Mostly done**: 15 passes now have statistics (~70 counters). Remaining: `EdtStructuralOpt.cpp`, codegen passes | 1–2 days | Remaining uncovered passes |
 | G-4 | Analysis dependency declarations | Prerequisite for selective invalidation and caching | 1–2 weeks | All passes that use AM |
 | G-5 | Phase ordering semantics | Pipeline reordering causes silent miscompilation; no invariant enforcement | 1 week | `Compile.cpp`, `StageDescriptor` |
 
@@ -757,7 +762,7 @@ capabilities:
 
 | ID | Gap | Impact | Effort | Files |
 |----|-----|--------|--------|-------|
-| G-6 | Heuristic parameterization | Thresholds exist as named constants in `DbHeuristics.h` (`kMaxOuterDBs=1024`, `kMaxDepsPerEDT=8`, `kMinInnerBytes=64`) but are `static constexpr`, not CLI-tunable pass options; blocks autotuning | 3–5 days | `DbHeuristics.h`, `PartitioningHeuristics.h`, `PartitioningHeuristics.cpp` |
+| G-6 | Heuristic parameterization | **Done**: `kMaxOuterDBs`, `kMaxDepsPerEDT`, `kMinInnerBytes` exposed as `--max-outer-dbs`, `--max-deps-per-edt`, `--min-inner-bytes` CLI options on `db-partitioning` pass | 0 | `DbHeuristics.h`, `Passes.td`, `DbPartitioning.cpp` |
 | G-7 | Cost models for partitioning | Partitioning decisions based on access patterns only, no actual cost estimation | 2–3 weeks | `DbHeuristics.cpp`, `PartitioningHeuristics.h`, `DistributionHeuristics.h` |
 | G-8 | Runtime function builder cleanup | `getOrCreateRuntimeFunction()` uses `func::lookupFnDecl()` + `func::createFnDecl()`. Upstream `func::lookupOrCreateFnDecl()` (`Utils.h:81`) **cannot be used**: it defaults null `resultType` to `i64` (`Utils.cpp:307`), breaking void-returning runtime functions. Current code correctly handles void returns via `isa<NoneType>(ReturnType) ? ArrayRef<Type>{} : ArrayRef<Type>{ReturnType}`. **Blocked** until upstream adds void-return support or a `FunctionType` overload. | N/A | `Codegen.cpp`, `Codegen.h`, `ConvertArtsToLLVM.cpp` |
 
@@ -768,7 +773,7 @@ capabilities:
 | G-9 | `--mlir-timing` integration | **Resolved**: already functional via `applyDefaultTimingPassManagerCLOptions(pm)` in `configurePassManager()` (`Compile.cpp:576`) | 0 | `Compile.cpp` |
 | G-10 | Pass instrumentation hooks | Cannot hook analysis timing, tracing, or verification automatically | 2–3 weeks | `Compile.cpp`, new `PassInstrumentation` subclass |
 | G-11 | Autotuning foundation | No parameter search space, no empirical search loop | 2–3 months | New infrastructure |
-| G-12 | Verification at every boundary | Only 6 verification points vs IREE's continuous checking | 1 week per boundary | New verification passes |
+| G-12 | Verification at every boundary | **Done**: 9 verification passes now cover all lowering boundaries (`VerifyEdtLowered`, `VerifyDbLowered`, `VerifyEpochLowered` added) | 0 | `Compile.cpp`, new verification passes |
 
 ### 6. Attributor-Inspired Recommendations
 
@@ -832,20 +837,11 @@ struct ArtsInformationCache {
 Primary file: new `include/arts/analysis/InformationCache.h`, consumed by
 `AnalysisManager.h`.
 
-#### 6.4 Graph Versioning
+#### 6.4 Graph Versioning — DONE
 
-Add a modification counter to `DbGraph` and `EdtGraph`. Analysis caches check
-the counter before reusing results, eliminating silent stale-data bugs:
-
-```cpp
-class DbGraph {
-  uint64_t version = 0;
-  void onNodeModified() { ++version; }
-};
-```
-
-This is lighter than full PreservedAnalyses integration and addresses the most
-common source of stale analysis data.
+**Implemented**: `uint64_t version` counter added to both `DbGraph` and
+`EdtGraph`. Incremented on `build()`, `buildNodesOnly()`, and `invalidate()`.
+Public `getVersion()` getter available for staleness detection.
 
 Primary files: `include/arts/analysis/graphs/db/DbGraph.h`,
 `include/arts/analysis/graphs/edt/EdtGraph.h`.
@@ -869,20 +865,13 @@ from Section 6.2.
 Primary files: `include/arts/analysis/AnalysisManager.h`, all passes in
 `lib/arts/passes/`.
 
-#### 6.6 Change Reporting for Monotone Updates
+#### 6.6 Change Reporting for Monotone Updates — DONE
 
-Contract merge and refinement operations should return an explicit change
-status, similar to the Attributor's `ChangeStatus`:
-
-```cpp
-enum class ContractChange { Unchanged, Changed };
-
-ContractChange mergeLoweringContractInfo(LoweringContractInfo &dst,
-                                         const LoweringContractInfo &src);
-```
-
-This enables refinement passes to express whether they actually strengthened
-the contract, supporting future fixed-point iteration over contract state.
+**Implemented**: `enum class ContractChange { Unchanged, Changed }` added.
+`mergeLoweringContractInfo` now returns `ContractChange` instead of `void`.
+Each conditional assignment branch sets `changed = true` when the value
+actually changes. Source-compatible (callers that discard the return are
+unaffected).
 
 Primary file: `lib/arts/utils/LoweringContractUtils.cpp`.
 
