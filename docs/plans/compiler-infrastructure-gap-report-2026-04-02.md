@@ -713,17 +713,17 @@ capabilities:
 |---------|-------|------|-----|------|--------|-----|
 | Heuristics framework | Static rules (H1, H2) | Cost-based | Heuristics + FDO | Cost-based | Multi-objective search | Learned predictor |
 | Cost models | Hard-coded thresholds | Extensive | Partial | Partial | Explicit | XGBoost/RF |
-| Pass statistics | **Partial (4 of 30+ passes)** | Yes | Yes | Yes | N/A | Partial |
-| Analysis dependency decls | **None** | Yes | Yes | Yes | N/A | Partial |
+| Pass statistics | **Done (19 passes, ~94 counters)** | Yes | Yes | Yes | N/A | Partial |
+| Analysis dependency decls | **Partial (10 of 23 passes annotated)** | Yes | Yes | Yes | N/A | Partial |
 | Profiling / feedback loop | **None** | PGO | FDO | No | Offline | Yes |
 | Autotuning | **None** | No | No | No | Yes | Yes |
-| Phase ordering semantics | Weak (ad hoc) | Strong | Strong | Strong | N/A | N/A |
-| Pass parallelization | **Blocked** | Yes | Partial | Yes | N/A | N/A |
-| Verification passes | 6 strategic | Continuous | Continuous | Continuous | N/A | Partial |
+| Phase ordering semantics | **Partial (dependency DAG + validation)** | Strong | Strong | Strong | N/A | N/A |
+| Pass parallelization | **Partially unblocked** (G-1 Phase 1a/1b/1d done) | Yes | Partial | Yes | N/A | N/A |
+| Verification passes | **11 (creation + lowering boundaries)** | Continuous | Continuous | Continuous | N/A | Partial |
 | IR-embedded decisions | Yes | Limited | Limited | Yes | Yes | Yes |
 | Pipeline checkpoint/resume | `--pipeline` + `--start-from` (no AM persistence) | Full | Full | `--start-from` | N/A | N/A |
 | Analysis invalidation | All-or-nothing | Selective | Selective | Selective | N/A | N/A |
-| Compiler instrumentation | `--diagnose` JSON | `--time-passes` | `-ftime-report` | `--mlir-timing` | Trace files | Logging |
+| Compiler instrumentation | **`--diagnose` JSON + `--pass-timing` + `--mlir-timing`** | `--time-passes` | `-ftime-report` | `--mlir-timing` | Trace files | Logging |
 
 ### 5. Priority-Ranked Infrastructure Gaps
 
@@ -731,16 +731,16 @@ capabilities:
 
 | ID | Gap | Impact | Effort | Files |
 |----|-----|--------|--------|-------|
-| G-1 | AnalysisManager thread safety | Blocks parallelization (5–15% speedup available) | 1–2 weeks | `AnalysisManager.h`, all 8 analysis classes |
-| G-2 | Lowering contract authority completion | Graph-backed fallbacks still required; ~500 LOC cleanup blocked | 2–3 weeks | `DbAnalysis.cpp`, `DbAcquireNode.cpp`, `PartitionBoundsAnalyzer.cpp`, `DbBlockInfoComputer.cpp` |
+| G-1 | AnalysisManager thread safety | Blocks parallelization (5–15% speedup available). **Phase 1a done** (std::call_once for 8 lazy getters), **Phase 1b done** (shared_mutex on graph maps in DbAnalysis/EdtAnalysis), **Phase 1d done** (atomic flags/counters in DbGraph/EdtGraph/EdtAnalysis). Remaining: Phase 1c (clear-then-read), Phase 2 (eager init). | 1 week remaining | `AnalysisManager.h`, all 8 analysis classes |
+| G-2 | Lowering contract authority completion | Graph-backed fallbacks still required; ~500 LOC cleanup blocked. **Phase 1 done**: thin contract-state API added (resolveEffectiveContract, combineContracts, patchContract, projectHaloWindow, hasCompleteHaloState). | 2 weeks remaining | `DbAnalysis.cpp`, `DbAcquireNode.cpp`, `PartitionBoundsAnalyzer.cpp`, `DbBlockInfoComputer.cpp` |
 
 #### Tier 2 — High (optimization visibility and caching)
 
 | ID | Gap | Impact | Effort | Files |
 |----|-----|--------|--------|-------|
 | G-3 | Pass statistics coverage | **Done**: 19 passes now have statistics (~94 counters). All major passes covered. | 0 | All covered |
-| G-4 | Analysis dependency declarations | Prerequisite for selective invalidation and caching | 1–2 weeks | All passes that use AM |
-| G-5 | Phase ordering semantics | Pipeline reordering causes silent miscompilation; no invariant enforcement | 1 week | `Compile.cpp`, `StageDescriptor` |
+| G-4 | Analysis dependency declarations | **Phase 1 done**: AnalysisDependencies.h header with AnalysisKind enum + AnalysisDependencyInfo struct. 10 passes annotated with declarative read/invalidate arrays (DbModeTightening, DbPartitioning, EdtStructuralOpt, EpochOpt, Concurrency, ConvertOpenMPToArts, CreateDbs, EdtDistribution, ForLowering, ForOpt). Remaining: annotate ~13 more passes, wire into AnalysisManager for selective invalidation. | 1 week remaining | All passes that use AM |
+| G-5 | Phase ordering semantics | **Phase 1 done**: StageDescriptor now has `dependsOn` field with dependency arrays for all 20 stages. `validatePipelineDAG()` runs at pipeline construction time and asserts no forward dependencies. `--pipeline --json` now exports dependency info. Remaining: `--start-from` validation against DAG, extended verification barriers. | 2–3 days remaining | `Compile.cpp`, `StageDescriptor` |
 
 #### Tier 3 — Medium (optimization quality and code health)
 
@@ -755,36 +755,31 @@ capabilities:
 | ID | Gap | Impact | Effort | Files |
 |----|-----|--------|--------|-------|
 | G-9 | `--mlir-timing` integration | **Resolved**: already functional via `applyDefaultTimingPassManagerCLOptions(pm)` in `configurePassManager()` (`Compile.cpp:576`) | 0 | `Compile.cpp` |
-| G-10 | Pass instrumentation hooks | Cannot hook analysis timing, tracing, or verification automatically | 2–3 weeks | `Compile.cpp`, new `PassInstrumentation` subclass |
+| G-10 | Pass instrumentation hooks | **Phase 1 done**: CartsPassInstrumentation class implemented with per-pass wall-clock timing. `--pass-timing` prints sorted report to stderr. `--pass-timing-output` exports JSON. Shared PassTimingData accumulates across pipeline stages. Remaining: analysis timing, IR change detection, op count tracking. | 1 week remaining | `Compile.cpp`, `PassInstrumentation.h/.cpp` |
 | G-11 | Autotuning foundation | No parameter search space, no empirical search loop | 2–3 months | New infrastructure |
-| G-12 | Verification at every boundary | **Done**: 9 verification passes now cover all lowering boundaries (`VerifyEdtLowered`, `VerifyDbLowered`, `VerifyEpochLowered` added) | 0 | `Compile.cpp`, new verification passes |
+| G-12 | Verification at every boundary | **Done**: 11 verification passes now cover all creation and lowering boundaries. Added `VerifyEdtCreated` (after OpenMP conversion), `VerifyEpochCreated` (after epoch creation), plus existing `VerifyEdtLowered`, `VerifyDbLowered`, `VerifyEpochLowered`. | 0 | `Compile.cpp`, verification pass sources |
 
 ### 6. Attributor-Inspired Recommendations
 
 These are concrete patterns to adopt from the Attributor's *discipline* without
 importing its framework.
 
-#### 6.1 State Lattices for DbAnalysis
+#### 6.1 State Lattices for DbAnalysis — DONE
 
-Replace the current binary "has graph or doesn't" model with an explicit
-assumed/known pair for key properties:
+**Implemented**: `DbPartitionState` header at
+`include/arts/analysis/db/DbPartitionState.h` with:
 
-```
-DbPartitionState:
-  Known  = { properties proved from IR contracts }
-  Assumed = { properties assumed from heuristic context }
-  Invariant: Known ⊆ Assumed
+- `FactProvenance` enum: `IRContract`, `GraphInferred`, `HeuristicAssumption`
+- `ProvenancedFact<T>` template with `isKnown()`, `isAssumed()`, `strengthen()`
+- `DbPartitionState` struct with provenanced fields for mode, ownerDims,
+  partitionDims, haloWindow, blockShape, replicationFactor
+- Monotone `meet()` operation: higher-provenance facts dominate lower ones
+- `isComplete()` check for all required fields
 
-Fixpoint: all heuristic decisions either confirmed by IR evidence or
-          narrowed to worst-case.
-```
+This formalizes the Known/Assumed lattice for partition decisions. The
+`PartitioningContext` can now track provenance of each fact explicitly.
 
-This makes the distinction between "inferred from graph" and "persisted in
-contract" explicit in the type system. The `PartitioningContext` already carries
-the right input data; the state lattice formalizes the output.
-
-Primary files: `include/arts/analysis/db/DbAnalysis.h`,
-`include/arts/analysis/heuristics/PartitioningHeuristics.h`.
+Primary file: `include/arts/analysis/db/DbPartitionState.h`.
 
 #### 6.2 Dependency-Aware Analysis Queries
 
@@ -802,24 +797,22 @@ current all-or-nothing `AM->invalidate()`.
 
 Primary file: `include/arts/analysis/AnalysisManager.h`.
 
-#### 6.3 InformationCache for Module-Level Facts
+#### 6.3 InformationCache for Module-Level Facts — DONE
 
-Pre-scan the module once and cache opcode maps, EDT counts per function, DB
-allocation sites, and loop nesting structure. Currently, 86+ redundant module
-walks have been identified. A shared `InformationCache` built in the
-AnalysisManager constructor would eliminate most of them.
+**Implemented**: `ArtsInformationCache` class at
+`include/arts/analysis/InformationCache.h` +
+`lib/arts/analysis/InformationCache.cpp` with:
 
-```cpp
-struct ArtsInformationCache {
-  DenseMap<func::FuncOp, SmallVector<arts::EdtOp>> edtsPerFunction;
-  DenseMap<func::FuncOp, SmallVector<arts::DbAllocOp>> allocsPerFunction;
-  DenseMap<func::FuncOp, SmallVector<arts::ForOp>> loopsPerFunction;
-  // Built once in AnalysisManager constructor
-};
-```
+- Single walk using `dyn_cast` dispatch for EdtOp, ForOp, DbAllocOp,
+  DbAcquireOp
+- Per-function caches: `edtsPerFunction`, `loopsPerFunction`,
+  `allocsPerFunction`, `acquiresPerFunction`
+- `ArrayRef<T>` getters for zero-copy access
+- `invalidate()` method to clear all caches on module mutation
+- Built from `ModuleOp` in constructor
 
-Primary file: new `include/arts/analysis/InformationCache.h`, consumed by
-`AnalysisManager.h`.
+Primary files: `include/arts/analysis/InformationCache.h`,
+`lib/arts/analysis/InformationCache.cpp`.
 
 #### 6.4 Graph Versioning — DONE
 
@@ -965,3 +958,34 @@ using 10-agent parallel investigation. Reports are located at:
   No refactoring needed. 14 descriptor construction sites audited. All memref
   construction properly delegates through Polygeist's Pointer2MemrefOp.
   ArtsHintBuilder is a 2-field custom struct, not a memref descriptor.
+
+### Implementation Deliverables — Round 2 (2026-04-02 PM)
+
+10-agent parallel implementation of investigation recommendations:
+
+- **G-1 Phase 1a** (committed `e261b3b9`→ merged into AM changes): `std::call_once`
+  for all 8 AnalysisManager lazy getters.
+- **G-1 Phase 1b** (committed `e50c7dbc`): `std::shared_mutex` added to
+  DbAnalysis::functionGraphMap and EdtAnalysis::edtGraphs. getOrCreateGraph/
+  invalidateGraph wrapped with unique_lock.
+- **G-1 Phase 1d** (committed `d849cd12`): `std::atomic<bool>` for built/needsRebuild/
+  analyzed flags; `std::atomic<uint64_t>` for version counters. Memory ordering:
+  acquire/release for bools, relaxed for counters.
+- **G-2 Phase 1** (committed `2df7de11`): 5 contract-state API functions in
+  LoweringContractUtils: resolveEffectiveContract, combineContracts, patchContract,
+  projectHaloWindow, hasCompleteHaloState.
+- **G-4 Phase 1** (committed `a2ab162a`): AnalysisDependencies.h with AnalysisKind
+  enum + AnalysisDependencyInfo struct. 10 passes annotated with reads/invalidates
+  arrays.
+- **G-5 Phase 1** (committed `7d2bddb3`): StageDescriptor::dependsOn field with
+  dependency arrays for all 20 stages. validatePipelineDAG() assertion.
+  JSON pipeline manifest now exports dependency info.
+- **G-10 Phase 1** (committed `7d2bddb3`): CartsPassInstrumentation class with
+  per-pass wall-clock timing. --pass-timing and --pass-timing-output CLI flags.
+  PassTimingData shared across pipeline stages.
+- **G-12 additions** (committed `a2ab162a`): VerifyEdtCreated (after openmp-to-arts)
+  and VerifyEpochCreated (after create-epochs) verification passes.
+- **Section 6.1** (committed `2c243cd1`): DbPartitionState with FactProvenance enum
+  and ProvenancedFact<T> template for Known/Assumed provenance tracking.
+- **Section 6.3** (committed `3ffcb4f0`): ArtsInformationCache with single-walk
+  module pre-scan caching EdtOp/ForOp/DbAllocOp/DbAcquireOp per function.
