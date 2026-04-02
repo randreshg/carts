@@ -17,8 +17,8 @@
 #include "arts/utils/Utils.h"
 #include "arts/utils/metadata/LocationMetadata.h"
 #include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
@@ -68,6 +68,7 @@ void EdtGraph::build() {
   buildDependencies();
   isBuilt = true;
   needsRebuild = false;
+  ++version;
 }
 
 void EdtGraph::buildNodesOnly() {
@@ -78,9 +79,11 @@ void EdtGraph::buildNodesOnly() {
   collectNodes();
   isBuilt = true;
   needsRebuild = false;
+  ++version;
 }
 
 void EdtGraph::invalidate() {
+  ++version;
   edtNodes.clear();
   edges.clear();
   nodes.clear();

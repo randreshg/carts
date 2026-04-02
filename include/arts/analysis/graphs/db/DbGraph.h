@@ -67,6 +67,7 @@ public:
   /// Get DbAnalysis instance
   DbAnalysis *getAnalysis() const { return analysis; }
   func::FuncOp getFunction() const { return func; }
+  uint64_t getVersion() const { return version; }
 
 private:
   func::FuncOp func;
@@ -97,6 +98,7 @@ private:
   unsigned long long peakBytes = 0;
   bool built = false;
   bool needsRebuild = true;
+  uint64_t version = 0;
 };
 
 } // namespace arts

@@ -56,6 +56,7 @@ void DbGraph::build() {
   computeMetrics();
   built = true;
   needsRebuild = false;
+  ++version;
 }
 
 void DbGraph::buildNodesOnly() {
@@ -67,9 +68,11 @@ void DbGraph::buildNodesOnly() {
   computeOpOrder();
   built = true;
   needsRebuild = false;
+  ++version;
 }
 
 void DbGraph::invalidate() {
+  ++version;
   allocNodes.clear();
   acquireNodeMap.clear();
   opOrder.clear();
