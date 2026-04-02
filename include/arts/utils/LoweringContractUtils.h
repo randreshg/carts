@@ -29,10 +29,11 @@ struct SemanticPattern {
   std::optional<EdtDistributionKind> distributionKind;
   std::optional<EdtDistributionPattern> distributionPattern;
   std::optional<int64_t> distributionVersion;
+  std::optional<int64_t> revision;
 
   bool hasDistributionContract() const {
     return kind != ContractKind::Unknown || depPattern || distributionKind ||
-           distributionPattern || distributionVersion;
+           distributionPattern || distributionVersion || revision;
   }
 };
 
@@ -47,6 +48,7 @@ struct SpatialLayout {
   SmallVector<int64_t, 4> staticMaxOffsets;
   SmallVector<int64_t, 4> spatialDims;
   SmallVector<int64_t, 4> stencilIndependentDims;
+  std::optional<int64_t> centerOffset;
   bool supportedBlockHalo = false;
 
   bool empty() const {
@@ -54,7 +56,8 @@ struct SpatialLayout {
            maxOffsets.empty() && writeFootprint.empty() &&
            spatialDims.empty() && staticBlockShape.empty() &&
            staticMinOffsets.empty() && staticMaxOffsets.empty() &&
-           !supportedBlockHalo && stencilIndependentDims.empty();
+           !supportedBlockHalo && stencilIndependentDims.empty() &&
+           !centerOffset;
   }
 };
 
@@ -129,8 +132,13 @@ std::optional<LoweringContractInfo> getSemanticContract(Operation *op);
 LoweringContractInfo resolveLoopDistributionContract(Operation *op);
 std::optional<LoweringContractInfo>
 getLoweringContract(Operation *op, OpBuilder &builder, Location loc);
+void mergeLoweringContractInfo(LoweringContractInfo &dest,
+                               const LoweringContractInfo &src);
 void normalizeLoweringContractInfo(LoweringContractInfo &info);
 AcquireRewriteContract deriveAcquireRewriteContract(DbAcquireOp acquire);
+std::optional<unsigned>
+getContractOwnerPosition(const LoweringContractInfo &info,
+                         unsigned physicalDim);
 SmallVector<unsigned, 4>
 resolveContractOwnerDims(const LoweringContractInfo &info, unsigned rank);
 bool prefersContractNDBlock(const LoweringContractInfo &info,

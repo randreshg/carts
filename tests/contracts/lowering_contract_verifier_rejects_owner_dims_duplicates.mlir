@@ -6,7 +6,7 @@ module {
   func.func @main() {
     %c0 = arith.constant 0 : index
     %alloc = memref.alloc() : memref<16xf32>
-    arts.lowering_contract(%alloc : memref<16xf32>) block_shape[%c0, %c0] {owner_dims = array<i64: 0, 0>}
+    arts.lowering_contract(%alloc : memref<16xf32>) block_shape[%c0, %c0] contract(<ownerDims = [0, 0]>)
     return
   }
 }

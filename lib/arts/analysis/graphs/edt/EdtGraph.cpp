@@ -16,6 +16,9 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/metadata/LocationMetadata.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
@@ -39,6 +42,12 @@ StringRef depTypeToString(DbDepType type) {
     return "RAR";
   }
   return "Dep";
+}
+
+void sortEdtNodesByHierId(SmallVectorImpl<EdtNode *> &nodes) {
+  llvm::sort(nodes, [](EdtNode *lhs, EdtNode *rhs) {
+    return lhs->getHierId() < rhs->getHierId();
+  });
 }
 } // namespace
 
@@ -133,11 +142,88 @@ bool EdtGraph::isEdtReachable(EdtOp fromOp, EdtOp toOp) {
   EdtNode *to = static_cast<EdtNode *>(getNode(toOp.getOperation()));
   if (!from || !to)
     return false;
-  for (auto *edge : from->getOutEdges()) {
-    if (edge->getTo() == to)
-      return true;
+
+  DenseSet<NodeBase *> visited;
+  SmallVector<NodeBase *, 8> worklist;
+  visited.insert(from);
+  worklist.push_back(from);
+
+  while (!worklist.empty()) {
+    NodeBase *current = worklist.pop_back_val();
+    for (auto *edge : current->getOutEdges()) {
+      NodeBase *next = edge->getTo();
+      if (next == to)
+        return true;
+      if (visited.insert(next).second)
+        worklist.push_back(next);
+    }
   }
   return false;
+}
+
+void EdtGraph::getDeterministicTopologicalOrder(
+    SmallVectorImpl<EdtNode *> &topoOrder,
+    SmallVectorImpl<EdtNode *> &leftoverNodes) const {
+  topoOrder.clear();
+  leftoverNodes.clear();
+
+  SmallVector<EdtNode *, 16> allNodes;
+  forEachNode([&](NodeBase *base) {
+    if (auto *edtNode = dyn_cast<EdtNode>(base))
+      allNodes.push_back(edtNode);
+  });
+
+  if (allNodes.empty())
+    return;
+
+  DenseMap<EdtNode *, unsigned> inDegree;
+  for (auto *node : allNodes)
+    inDegree[node] = 0;
+
+  for (auto *node : allNodes) {
+    for (auto *edge : node->getInEdges()) {
+      auto *fromNode = dyn_cast<EdtNode>(edge->getFrom());
+      if (fromNode && inDegree.count(fromNode))
+        ++inDegree[node];
+    }
+  }
+
+  SmallVector<EdtNode *, 16> worklist;
+  for (auto *node : allNodes) {
+    if (inDegree[node] == 0)
+      worklist.push_back(node);
+  }
+  sortEdtNodesByHierId(worklist);
+
+  topoOrder.reserve(allNodes.size());
+  while (!worklist.empty()) {
+    EdtNode *current = worklist.pop_back_val();
+    topoOrder.push_back(current);
+
+    SmallVector<EdtNode *, 8> successors;
+    for (auto *edge : current->getOutEdges()) {
+      auto *toNode = dyn_cast<EdtNode>(edge->getTo());
+      if (toNode && inDegree.count(toNode)) {
+        --inDegree[toNode];
+        if (inDegree[toNode] == 0)
+          successors.push_back(toNode);
+      }
+    }
+
+    sortEdtNodesByHierId(successors);
+    worklist.append(successors.begin(), successors.end());
+  }
+
+  if (topoOrder.size() == allNodes.size())
+    return;
+
+  DenseSet<EdtNode *> visitedNodes(topoOrder.begin(), topoOrder.end());
+  leftoverNodes.reserve(allNodes.size() - topoOrder.size());
+  for (auto *node : allNodes) {
+    if (!visitedNodes.contains(node))
+      leftoverNodes.push_back(node);
+  }
+  sortEdtNodesByHierId(leftoverNodes);
 }
 
 bool EdtGraph::areEdtsIndependent(EdtOp a, EdtOp b) {

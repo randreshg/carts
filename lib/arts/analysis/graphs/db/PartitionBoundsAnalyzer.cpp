@@ -180,6 +180,39 @@ analyzeAccessBounds(DbAcquireNode *node, Value blockOffset, Value loopIV,
                                         partitionDim);
 }
 
+static Value normalizePartitionOffsetRoot(Value offset) {
+  if (!offset)
+    return Value();
+
+  Value normalized = ValueAnalysis::stripNumericCasts(offset);
+  normalized = ValueAnalysis::stripConstantOffset(normalized, nullptr);
+  normalized = ValueAnalysis::stripNumericCasts(
+      ValueAnalysis::stripSelectClamp(normalized));
+  return normalized;
+}
+
+static std::optional<int64_t>
+getPartitionRelativeConstantOffset(Value idx, Value partitionOffset) {
+  if (!idx || !partitionOffset)
+    return std::nullopt;
+
+  Value normalizedIdx = ValueAnalysis::stripNumericCasts(idx);
+  Value normalizedOffset = normalizePartitionOffsetRoot(partitionOffset);
+  if (!normalizedOffset)
+    return std::nullopt;
+
+  if (!ValueAnalysis::dependsOn(normalizedIdx, normalizedOffset) &&
+      !ValueAnalysis::dependsOn(normalizedIdx, partitionOffset) &&
+      !ValueAnalysis::sameValue(normalizedIdx, normalizedOffset) &&
+      !ValueAnalysis::sameValue(normalizedIdx, partitionOffset) &&
+      !ValueAnalysis::areValuesEquivalent(normalizedIdx, normalizedOffset) &&
+      !ValueAnalysis::areValuesEquivalent(normalizedIdx, partitionOffset))
+    return std::nullopt;
+
+  return ValueAnalysis::extractConstantOffset(normalizedIdx, partitionOffset,
+                                             normalizedOffset);
+}
+
 /// Collect the set of array dimensions that carry non-zero stencil offsets
 /// relative to the loop induction variable / partition offset.
 ///
@@ -218,9 +251,6 @@ static llvm::DenseSet<unsigned> collectStencilDims(DbAcquireNode *node,
 
   /// For each memref dimension, a "stencil dimension" carries at least one
   /// non-zero constant offset relative to partition offset / loop IV.
-  Value normalizedOffset = ValueAnalysis::stripNumericCasts(
-      ValueAnalysis::stripSelectClamp(partitionOffset));
-
   for (const AccessIndexInfo &access : accesses) {
     unsigned memrefStart = access.dbRefPrefix;
     for (unsigned i = memrefStart; i < access.indexChain.size(); ++i) {
@@ -229,14 +259,10 @@ static llvm::DenseSet<unsigned> collectStencilDims(DbAcquireNode *node,
       if (!idx)
         continue;
 
-      /// Check if this index depends on the partition offset.
-      if (!ValueAnalysis::dependsOn(idx, normalizedOffset) &&
-          !ValueAnalysis::dependsOn(idx, partitionOffset))
-        continue;
-
-      /// Extract constant offset relative to the partition variable.
-      auto constOffset = ValueAnalysis::extractConstantOffset(
-          idx, partitionOffset, normalizedOffset);
+      /// Ask ValueAnalysis to prove the exact constant delta from the
+      /// partition root before falling back to bespoke per-dim reasoning.
+      auto constOffset =
+          getPartitionRelativeConstantOffset(idx, partitionOffset);
       if (constOffset && *constOffset != 0)
         stencilDims.insert(dim);
     }
@@ -270,6 +296,13 @@ static bool canUseReadOnlyStencilHaloWindow(DbAcquireNode *node,
   llvm::DenseSet<unsigned> stencilDims =
       collectStencilDims(node, partitionOffset);
   return !stencilDims.empty() && stencilDims.contains(*mappedDim);
+}
+
+static DbAnalysis::AcquireContractSummary
+buildCanonicalAcquireContractSummary(DbAcquireNode *node) {
+  if (!node)
+    return {};
+  return DbAnalysis::buildCanonicalAcquireContractSummary(node->getDbAcquireOp());
 }
 
 ///===----------------------------------------------------------------------===///
@@ -566,10 +599,12 @@ std::optional<unsigned> PartitionBoundsAnalyzer::getPartitionOffsetDim(
     offsetStripped = offsetBase;
   }
 
-  Value normalizedOffset = ValueAnalysis::stripSelectClamp(offsetStripped);
+  Value normalizedOffset = normalizePartitionOffsetRoot(offsetStripped);
   auto matchesPartitionOffset = [&](Value candidate) -> bool {
     if (!candidate || !normalizedOffset)
       return false;
+    if (getPartitionRelativeConstantOffset(candidate, offsetStripped))
+      return true;
     Value normalizedCandidate = ValueAnalysis::stripNumericCasts(
         ValueAnalysis::stripSelectClamp(candidate));
     Value normalized = ValueAnalysis::stripNumericCasts(normalizedOffset);
@@ -729,34 +764,32 @@ std::optional<unsigned> PartitionBoundsAnalyzer::getPartitionOffsetDim(
 bool PartitionBoundsAnalyzer::needsFullRange(DbAcquireNode *node,
                                              Value partitionOffset) {
   DbAcquireOp acquire = node ? node->getDbAcquireOp() : DbAcquireOp();
-  std::optional<LoweringContractInfo> contract =
-      acquire ? getLoweringContract(acquire.getPtr()) : std::nullopt;
-  bool supportedBlockHalo =
-      contract ? contract->supportsBlockHalo()
-               : (acquire && hasSupportedBlockHalo(acquire.getOperation()));
-  SmallVector<unsigned, 4> ownerDims;
-  if (contract && !contract->spatial.ownerDims.empty()) {
-    unsigned rank = 0;
-    for (int64_t dim : contract->spatial.ownerDims) {
-      if (dim >= 0)
-        rank = std::max<unsigned>(rank, static_cast<unsigned>(dim) + 1);
-    }
-    if (rank == 0)
-      rank = static_cast<unsigned>(contract->spatial.ownerDims.size());
-    ownerDims = resolveContractOwnerDims(*contract, rank);
-  } else if (acquire) {
-    if (auto attrOwnerDims = getStencilOwnerDims(acquire.getOperation())) {
-      for (int64_t dim : *attrOwnerDims) {
-        if (dim >= 0)
-          ownerDims.push_back(static_cast<unsigned>(dim));
-      }
-    }
+  DbAnalysis::AcquireContractSummary contractSummary =
+      buildCanonicalAcquireContractSummary(node);
+  bool supportedBlockHalo = contractSummary.contract.supportsBlockHalo();
+  SmallVector<unsigned, 4> ownerDims(contractSummary.partitionDims.begin(),
+                                     contractSummary.partitionDims.end());
+  AccessPattern accessPattern =
+      contractSummary.accessPattern != AccessPattern::Unknown
+          ? contractSummary.accessPattern
+          : node->getAccessPattern();
+  bool hasIndirectAccess = MemoryAccessClassifier::hasIndirectAccess(node);
+  bool hasStores = MemoryAccessClassifier::hasStores(node);
+  std::optional<unsigned> mappedDim =
+      partitionOffset ? getPartitionOffsetDim(node, partitionOffset,
+                                              /*requireLeading=*/false)
+                      : std::nullopt;
+
+  if (partitionOffset && contractSummary.contract.analysis.narrowableDep &&
+      acquire.getMode() == ArtsMode::in && !hasIndirectAccess && mappedDim &&
+      llvm::is_contained(ownerDims, *mappedDim)) {
+    ARTS_DEBUG("  needsFullRange: honoring canonical narrowable dependency "
+               "slice");
+    return false;
   }
 
   if (partitionOffset) {
-    auto dimOpt = getPartitionOffsetDim(node, partitionOffset,
-                                        /*requireLeading=*/false);
-    if (dimOpt) {
+    if (mappedDim) {
       DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
       MemoryAccessClassifier::collectAccessOperations(node, dbRefToMemOps);
       bool indirectInPartitionedDim = false;
@@ -765,7 +798,7 @@ bool PartitionBoundsAnalyzer::needsFullRange(DbAcquireNode *node,
           SmallVector<Value> fullChain =
               DbUtils::collectFullIndexChain(dbRef, memOp);
           unsigned memrefStart = dbRef.getIndices().size();
-          unsigned idxPos = memrefStart + *dimOpt;
+          unsigned idxPos = memrefStart + *mappedDim;
           if (idxPos >= fullChain.size()) {
             indirectInPartitionedDim = true;
             break;
@@ -785,17 +818,13 @@ bool PartitionBoundsAnalyzer::needsFullRange(DbAcquireNode *node,
         ARTS_DEBUG("  needsFullRange: indirect access in partitioned dim");
         return true;
       }
-    } else {
-      if (MemoryAccessClassifier::hasIndirectAccess(node)) {
-        ARTS_DEBUG("  needsFullRange: indirect access detected");
-        return true;
-      }
-    }
-  } else {
-    if (MemoryAccessClassifier::hasIndirectAccess(node)) {
+    } else if (hasIndirectAccess) {
       ARTS_DEBUG("  needsFullRange: indirect access detected");
       return true;
     }
+  } else if (hasIndirectAccess) {
+    ARTS_DEBUG("  needsFullRange: indirect access detected");
+    return true;
   }
 
   if (node->getHasNonConstantOffset()) {
@@ -803,12 +832,8 @@ bool PartitionBoundsAnalyzer::needsFullRange(DbAcquireNode *node,
     return true;
   }
 
-  if (!MemoryAccessClassifier::hasStores(node) &&
-      node->getAccessPattern() == AccessPattern::Stencil && partitionOffset) {
-    if (!getPartitionOffsetDim(node, partitionOffset,
-                               /*requireLeading=*/true)) {
-      auto mappedDim = getPartitionOffsetDim(node, partitionOffset,
-                                             /*requireLeading=*/false);
+  if (!hasStores && accessPattern == AccessPattern::Stencil && partitionOffset) {
+    if (!getPartitionOffsetDim(node, partitionOffset, /*requireLeading=*/true)) {
       if (supportedBlockHalo && mappedDim &&
           llvm::is_contained(ownerDims, *mappedDim)) {
         ARTS_DEBUG("  needsFullRange: preserving non-leading stencil dim from "
@@ -840,10 +865,6 @@ bool PartitionBoundsAnalyzer::needsFullRange(DbAcquireNode *node,
   }
 
   if (!partitionOffset || !canPartitionWithOffset(node, partitionOffset)) {
-    auto mappedDim = partitionOffset
-                         ? getPartitionOffsetDim(node, partitionOffset,
-                                                 /*requireLeading=*/false)
-                         : std::nullopt;
     if (partitionOffset && supportedBlockHalo && mappedDim &&
         llvm::is_contained(ownerDims, *mappedDim)) {
       ARTS_DEBUG("  needsFullRange: trusting N-D halo contract for partition "
@@ -894,9 +915,12 @@ bool PartitionBoundsAnalyzer::shouldPreserveDistributedContract(
 
   bool selectsNestedDb = isa<MemRefType>(ptrTy.getElementType());
   bool selectsLeafDb = !selectsNestedDb;
+  DbAnalysis::AcquireContractSummary contractSummary =
+      buildCanonicalAcquireContractSummary(node);
   bool readOnlyNestedStencilAcquire =
       acquire.getMode() == ArtsMode::in && selectsNestedDb &&
-      node->getAccessPattern() == AccessPattern::Stencil &&
+      (contractSummary.accessPattern == AccessPattern::Stencil ||
+       contractSummary.usesStencilSemantics()) &&
       !node->hasIndirectAccess() && !node->hasStores();
   auto selectsConstantLeafFromNestedDb = [&]() {
     if (!blockArg || !selectsNestedDb)
@@ -923,13 +947,8 @@ bool PartitionBoundsAnalyzer::shouldPreserveDistributedContract(
 
     return sawDbRef;
   };
-  bool hasExplicitOwnerDims = false;
-  if (auto contract = getLoweringContract(acquire.getPtr()))
-    hasExplicitOwnerDims = !contract->spatial.ownerDims.empty();
-  if (!hasExplicitOwnerDims) {
-    if (auto ownerDims = getStencilOwnerDims(acquire.getOperation()))
-      hasExplicitOwnerDims = !ownerDims->empty();
-  }
+  bool hasExplicitOwnerDims =
+      !contractSummary.contract.spatial.ownerDims.empty();
   /// ForLowering/H2 rewrites uniform worker tasks to consume an EDT-local
   /// nested DB pointer. After that rewrite the outer block offset no longer
   /// appears in the inner memref access expressions, so raw offset matching

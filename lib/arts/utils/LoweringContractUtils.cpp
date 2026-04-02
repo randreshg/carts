@@ -139,8 +139,11 @@ deriveDistributionPatternFromKind(ContractKind kind) {
 ContractKind LoweringContractInfo::getEffectiveKind() const {
   if (pattern.kind != ContractKind::Unknown)
     return pattern.kind;
-  if (!pattern.depPattern)
+  if (!pattern.depPattern) {
+    if (usesStencilDistribution())
+      return ContractKind::Stencil;
     return ContractKind::Unknown;
+  }
   switch (*pattern.depPattern) {
   case ArtsDepPattern::stencil:
   case ArtsDepPattern::stencil_tiling_nd:
@@ -331,9 +334,13 @@ mlir::arts::getLoweringContract(Value target) {
     info.pattern.distributionPattern = *distributionPattern;
   if (auto version = contract.getDistributionVersion())
     info.pattern.distributionVersion = static_cast<int64_t>(*version);
+  if (auto revision = contract.getPatternRevision())
+    info.pattern.revision = static_cast<int64_t>(*revision);
   info.analysis.narrowableDep = contract.getNarrowableDep().value_or(false);
   if (auto ownerDims = contract.getOwnerDims())
     info.spatial.ownerDims = SmallVector<int64_t, 4>(*ownerDims);
+  if (auto centerOffset = contract.getCenterOffset())
+    info.spatial.centerOffset = *centerOffset;
   info.spatial.blockShape.assign(contract.getBlockShape().begin(),
                                  contract.getBlockShape().end());
   info.spatial.minOffsets.assign(contract.getMinOffsets().begin(),
@@ -387,6 +394,7 @@ mlir::arts::getSemanticContract(Operation *op) {
   if (auto version = op->getAttrOfType<IntegerAttr>(
           AttrNames::Operation::DistributionVersion))
     info.pattern.distributionVersion = version.getInt();
+  info.pattern.revision = getPatternRevision(op);
   if (auto ownerDims = getStencilOwnerDims(op))
     info.spatial.ownerDims.assign(ownerDims->begin(), ownerDims->end());
   if (auto blockShape = getStencilBlockShape(op))
@@ -400,6 +408,7 @@ mlir::arts::getSemanticContract(Operation *op) {
                                          maxOffsets->end());
   if (auto spatialDims = getStencilSpatialDims(op))
     info.spatial.spatialDims.assign(spatialDims->begin(), spatialDims->end());
+  info.spatial.centerOffset = getStencilCenterOffset(op);
   info.spatial.supportedBlockHalo = hasSupportedBlockHalo(op);
   info.analysis.narrowableDep =
       op->hasAttr(AttrNames::Operation::Contract::NarrowableDep);
@@ -489,8 +498,8 @@ mlir::arts::getLoweringContract(Operation *op, OpBuilder &builder,
   return info;
 }
 
-static void mergeLoweringContractInfo(LoweringContractInfo &dest,
-                                      const LoweringContractInfo &src) {
+void mlir::arts::mergeLoweringContractInfo(LoweringContractInfo &dest,
+                                           const LoweringContractInfo &src) {
   if (dest.pattern.kind == ContractKind::Unknown &&
       src.pattern.kind != ContractKind::Unknown)
     dest.pattern.kind = src.pattern.kind;
@@ -502,6 +511,8 @@ static void mergeLoweringContractInfo(LoweringContractInfo &dest,
     dest.pattern.distributionPattern = src.pattern.distributionPattern;
   if (!dest.pattern.distributionVersion && src.pattern.distributionVersion)
     dest.pattern.distributionVersion = src.pattern.distributionVersion;
+  if (!dest.pattern.revision && src.pattern.revision)
+    dest.pattern.revision = src.pattern.revision;
   dest.analysis.narrowableDep =
       dest.analysis.narrowableDep || src.analysis.narrowableDep;
 
@@ -515,6 +526,8 @@ static void mergeLoweringContractInfo(LoweringContractInfo &dest,
                            src.spatial.ownerDims.size()))
     dest.spatial.ownerDims.assign(src.spatial.ownerDims.begin(),
                                   src.spatial.ownerDims.end());
+  if (!dest.spatial.centerOffset && src.spatial.centerOffset)
+    dest.spatial.centerOffset = src.spatial.centerOffset;
 
   if (shouldTakeHigherRank(dest.spatial.blockShape.size(),
                            src.spatial.blockShape.size()))
@@ -639,6 +652,23 @@ mlir::arts::deriveAcquireRewriteContract(DbAcquireOp acquire) {
   return contract;
 }
 
+std::optional<unsigned>
+mlir::arts::getContractOwnerPosition(const LoweringContractInfo &info,
+                                     unsigned physicalDim) {
+  if (info.spatial.ownerDims.empty())
+    return physicalDim;
+
+  for (unsigned idx = 0; idx < info.spatial.ownerDims.size(); ++idx) {
+    int64_t ownerDim = info.spatial.ownerDims[idx];
+    if (ownerDim < 0)
+      continue;
+    if (static_cast<unsigned>(ownerDim) == physicalDim)
+      return idx;
+  }
+
+  return std::nullopt;
+}
+
 SmallVector<unsigned, 4>
 mlir::arts::resolveContractOwnerDims(const LoweringContractInfo &info,
                                      unsigned rank) {
@@ -676,6 +706,9 @@ mlir::arts::upsertLoweringContract(OpBuilder &builder, Location loc,
 
   LoweringContractInfo normalizedInfo = info;
   normalizeLoweringContractInfo(normalizedInfo);
+
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointAfterValue(target);
 
   auto staleContracts = collectLoweringContractOps(target);
 

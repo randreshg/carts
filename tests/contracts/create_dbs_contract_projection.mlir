@@ -14,4 +14,4 @@
 // Ensure CreateDbs projects semantic contracts onto DbAcquireOp attrs and the
 // pointer-level lowering contract consumed by post-DB analysis/policy passes.
 // DB: arts.db_acquire[<in>] {{.*}}depPattern = #arts.dep_pattern<jacobi_alternating_buffers>{{.*}}distribution_pattern = #arts.distribution_pattern<stencil>{{.*}}stencil_max_offsets = [1], stencil_min_offsets = [-1], stencil_owner_dims = [0], stencil_spatial_dims = [0, 1], stencil_supported_block_halo, stencil_write_footprint = [0]
-// DB: arts.lowering_contract({{.*}}) dep_pattern(<jacobi_alternating_buffers>) distribution_pattern(<stencil>) min_offsets[{{.*}}] max_offsets[{{.*}}] write_footprint[{{.*}}] {owner_dims = array<i64: 0>, spatial_dims = array<i64: 0, 1>, supported_block_halo}
+// DB: arts.lowering_contract({{.*}}) pattern(<depPattern = <jacobi_alternating_buffers>, distributionPattern = <stencil>, revision = 1 : i64>) min_offsets[{{.*}}] max_offsets[{{.*}}] write_footprint[{{.*}}] contract(<ownerDims = [0], spatialDims = [0, 1], supportedBlockHalo = true>)

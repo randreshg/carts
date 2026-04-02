@@ -28,7 +28,9 @@ void StencilNDPatternContract::stamp(Operation *op) const {
     return;
   setEdtDistributionPattern(op, EdtDistributionPattern::stencil);
   setSupportedBlockHalo(op);
-  setStencilSpatialDims(op, ownerDims);
+  ArrayRef<int64_t> dims = spatialDims.empty() ? ArrayRef<int64_t>(ownerDims)
+                                               : ArrayRef<int64_t>(spatialDims);
+  setStencilSpatialDims(op, dims);
   setStencilOwnerDims(op, ownerDims);
   setStencilMinOffsets(op, minOffsets);
   setStencilMaxOffsets(op, maxOffsets);

@@ -16,7 +16,7 @@ carts triage-benchmark <suite/name> --size small --threads 2
 
 Optional narrowing to specific stages:
 ```bash
-carts triage-benchmark <suite/name> --stages edt-distribution,concurrency-opt
+carts triage-benchmark <suite/name> --stages edt-distribution,db-partitioning
 ```
 
 Only use stage names from `carts pipeline --json`.
@@ -31,7 +31,7 @@ Only use stage names from `carts pipeline --json`.
    - ARTS-only regression from a pipeline stage
    - Benchmark-side UB or invalid verification
    - Runtime/distributed lowering issue
-5. Read stage dumps in order: `openmp-to-arts` → `create-dbs` → `edt-distribution` → `concurrency-opt` → `pre-lowering` → `arts-to-llvm`
+5. Read stage dumps in order: `openmp-to-arts` → `create-dbs` → `edt-distribution` → `post-distribution-cleanup` → `db-partitioning` → `post-db-refinement` → `late-concurrency-cleanup` → `pre-lowering` → `arts-to-llvm`
 
 ## OpenMP Baseline
 

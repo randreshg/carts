@@ -58,22 +58,18 @@ static void emitIntegrityError(Operation *op, llvm::Twine message) {
 struct VerifyMetadataIntegrityPass
     : public impl::VerifyMetadataIntegrityBase<VerifyMetadataIntegrityPass> {
   VerifyMetadataIntegrityPass() = default;
-  VerifyMetadataIntegrityPass(const VerifyMetadataIntegrityPass &other)
-      : impl::VerifyMetadataIntegrityBase<VerifyMetadataIntegrityPass>(other),
-        analysisManager(other.analysisManager) {}
-  VerifyMetadataIntegrityPass(mlir::arts::AnalysisManager *AM, bool failOnError)
-      : analysisManager(AM) {
+  VerifyMetadataIntegrityPass(const VerifyMetadataIntegrityPass &other) =
+      default;
+  VerifyMetadataIntegrityPass(mlir::arts::AnalysisManager *, bool failOnError) {
     this->failOnError = failOnError;
   }
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    mlir::arts::AnalysisManager &AM = getAnalysisManager(module);
-    MetadataManager &mm = AM.getMetadataManager();
-
-    /// Import metadata-bearing attrs so the pass also works on handwritten
-    /// contract tests and standalone IR.
-    mm.collectFromModule(module);
+    /// Validate a fresh snapshot of the current IR so rewritten/erased ops
+    /// cached in the shared metadata manager cannot poison verification.
+    MetadataManager snapshot(module.getContext());
+    snapshot.collectFromModule(module);
 
     DenseMap<int64_t, Operation *> seenIds;
     SmallVector<Operation *> missingIds;
@@ -83,7 +79,7 @@ struct VerifyMetadataIntegrityPass
     SmallVector<LoopMetadataMismatch> tripMismatches;
     unsigned duplicateIdCount = 0;
 
-    for (const auto &entry : mm.getRegistry().getMetadataMap()) {
+    for (const auto &entry : snapshot.getRegistry().getMetadataMap()) {
       Operation *op = entry.first;
       const ArtsMetadata *metadata = entry.second.get();
       if (!op || !metadata)
@@ -159,7 +155,7 @@ struct VerifyMetadataIntegrityPass
                           tripMismatches.size();
 
     ARTS_INFO("Metadata integrity verification checked "
-              << mm.getRegistry().getMetadataMap().size()
+              << snapshot.getRegistry().getMetadataMap().size()
               << " metadata entries and found " << issueCount
               << " integrity issue(s)");
 
@@ -170,19 +166,6 @@ struct VerifyMetadataIntegrityPass
       signalPassFailure();
     }
   }
-
-private:
-  mlir::arts::AnalysisManager &getAnalysisManager(ModuleOp module) {
-    if (!analysisManager) {
-      ownedAnalysisManager =
-          std::make_unique<mlir::arts::AnalysisManager>(module);
-      analysisManager = ownedAnalysisManager.get();
-    }
-    return *analysisManager;
-  }
-
-  mlir::arts::AnalysisManager *analysisManager = nullptr;
-  std::unique_ptr<mlir::arts::AnalysisManager> ownedAnalysisManager;
 };
 
 } // namespace

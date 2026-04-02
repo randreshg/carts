@@ -174,19 +174,6 @@ static cl::opt<int64_t> KernelTransformsMinTripCount(
     cl::desc("Minimum constant trip count required to apply tiling"),
     cl::init(kDefaultKernelTransformsMinTripCount));
 
-/// Partition fallback strategy
-enum class PartitionFallback { Coarse, Fine };
-
-static cl::opt<PartitionFallback> PartitionFallbackMode(
-    "partition-fallback",
-    cl::desc("Fallback strategy for non-partitionable accesses:"),
-    cl::values(
-        clEnumValN(PartitionFallback::Coarse, "coarse",
-                   "Use coarse allocation - serializes access (default)"),
-        clEnumValN(PartitionFallback::Fine, "fine",
-                   "Use fine-grained (element-wise) allocation")),
-    cl::init(PartitionFallback::Coarse));
-
 /// Distributed DB allocation enablement (after DbPartitioning).
 static cl::opt<bool> DistributedDb(
     "distributed-db",
@@ -1186,13 +1173,8 @@ buildPassManager(ModuleOp module, MLIRContext &context,
   }
 
   /// Create module-level analysis manager for caching across functions
-  arts::PartitionFallback partitionFallback =
-      (PartitionFallbackMode == PartitionFallback::Fine)
-          ? arts::PartitionFallback::FineGrained
-          : arts::PartitionFallback::Coarse;
   std::unique_ptr<arts::AnalysisManager> AM =
-      std::make_unique<arts::AnalysisManager>(module, ArtsConfig, MetadataFile,
-                                              partitionFallback);
+      std::make_unique<arts::AnalysisManager>(module, ArtsConfig, MetadataFile);
 
   auto &machine = AM->getAbstractMachine();
   if (!machine.hasConfigFile() || !machine.isValid()) {
@@ -1354,12 +1336,8 @@ int main(int argc, char **argv) {
   PipelineHooks hooks;
   PipelineHooks *hooksPtr = nullptr;
   if (VerifyMetadataIntegrityInput) {
-    arts::PartitionFallback partitionFallback =
-        (PartitionFallbackMode == PartitionFallback::Fine)
-            ? arts::PartitionFallback::FineGrained
-            : arts::PartitionFallback::Coarse;
     auto verifyAM = std::make_unique<arts::AnalysisManager>(
-        module.get(), ArtsConfig, MetadataFile, partitionFallback);
+        module.get(), ArtsConfig, MetadataFile);
     PassManager verifyPM(&context);
     if (failed(configurePassManager(verifyPM))) {
       ARTS_ERROR("Error configuring pass manager for metadata integrity "

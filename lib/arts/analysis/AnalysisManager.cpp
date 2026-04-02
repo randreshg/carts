@@ -20,12 +20,11 @@ using namespace mlir;
 using namespace mlir::arts;
 
 AnalysisManager::AnalysisManager(ModuleOp module, const std::string &configFile,
-                                 const std::string &metadataFile,
-                                 PartitionFallback fallback)
+                                 const std::string &metadataFile)
     : module(module), configFile(configFile),
       metadataFile(metadataFile.empty() ? ".carts-metadata.json"
                                         : metadataFile),
-      abstractMachine(configFile), partitionFallback(fallback) {}
+      abstractMachine(configFile) {}
 
 AnalysisManager::~AnalysisManager() {}
 
@@ -107,8 +106,8 @@ DbHeuristics &AnalysisManager::getDbHeuristics() {
   if (!dbHeuristics) {
     /// Ensure MetadataManager and IdRegistry are initialized first
     auto &idRegistry = getMetadataManager().getIdRegistry();
-    dbHeuristics = std::make_unique<DbHeuristics>(abstractMachine, idRegistry,
-                                                  partitionFallback);
+    dbHeuristics =
+        std::make_unique<DbHeuristics>(abstractMachine, idRegistry);
   }
   return *dbHeuristics;
 }

@@ -30,6 +30,7 @@
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/codegen/Types.h"
+#include "arts/utils/LoopUtils.h"
 #define GEN_PASS_DEF_GUIDRANGCALLOPT
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
@@ -50,22 +51,6 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
-
-static bool isCanonicalZeroBasedUnitStepLoop(scf::ForOp loop) {
-  auto lb = ValueAnalysis::tryFoldConstantIndex(loop.getLowerBound());
-  auto step = ValueAnalysis::tryFoldConstantIndex(loop.getStep());
-  return lb && step && *lb == 0 && *step == 1;
-}
-
-/// Returns static trip count when it fits into uint32_t, otherwise nullopt.
-static std::optional<int64_t> getStaticTripCountU32(scf::ForOp loop) {
-  auto ub = ValueAnalysis::tryFoldConstantIndex(loop.getUpperBound());
-  if (!ub || *ub < 0)
-    return std::nullopt;
-  if (*ub > static_cast<int64_t>(std::numeric_limits<uint32_t>::max()))
-    return std::nullopt;
-  return *ub;
-}
 
 static bool isGuidReserveCall(func::CallOp call) {
   if (call.getNumOperands() != 2 || call.getNumResults() != 1)
@@ -97,7 +82,9 @@ struct GuidRangCallOptPass
     int rewrittenStatic = 0;
     int rewrittenGuarded = 0;
     for (scf::ForOp loop : loops) {
-      if (!isCanonicalZeroBasedUnitStepLoop(loop))
+      auto lowerBound = ValueAnalysis::tryFoldConstantIndex(loop.getLowerBound());
+      auto step = ValueAnalysis::tryFoldConstantIndex(loop.getStep());
+      if (!lowerBound || !step || *lowerBound != 0 || *step != 1)
         continue;
 
       SmallVector<func::CallOp> reserveCalls;
@@ -116,7 +103,13 @@ struct GuidRangCallOptPass
         if (!routeConst || *routeConst != 0)
           continue;
 
-        auto staticTripCount = getStaticTripCountU32(loop);
+        auto staticTripCount = getStaticTripCount(loop.getOperation());
+        if (staticTripCount &&
+            (*staticTripCount < 0 ||
+             *staticTripCount >
+                 static_cast<int64_t>(std::numeric_limits<uint32_t>::max()))) {
+          staticTripCount.reset();
+        }
         if (staticTripCount && *staticTripCount <= 1)
           continue;
 
@@ -221,10 +214,6 @@ namespace arts {
 
 std::unique_ptr<Pass> createGuidRangCallOptPass() {
   return std::make_unique<GuidRangCallOptPass>();
-}
-
-std::unique_ptr<Pass> createGuidRangeCallOptimizationPass() {
-  return createGuidRangCallOptPass();
 }
 
 } // namespace arts

@@ -419,34 +419,37 @@ def LoweringContractOp : Arts_Op<"lowering_contract",
     Variadic<Index>:$min_offsets,
     Variadic<Index>:$max_offsets,
     Variadic<Index>:$write_footprint,
-    OptionalAttr<ArtsDepPatternAttr>:$dep_pattern,
-    OptionalAttr<EdtDistributionKindAttr>:$distribution_kind,
-    OptionalAttr<EdtDistributionPatternAttr>:$distribution_pattern,
-    OptionalAttr<I64Attr>:$distribution_version,
-    OptionalAttr<DenseI64ArrayAttr>:$owner_dims,
-    OptionalAttr<UnitAttr>:$supported_block_halo,
-    OptionalAttr<DenseI64ArrayAttr>:$spatial_dims,
-    OptionalAttr<DenseI64ArrayAttr>:$stencil_independent_dims,
-    OptionalAttr<UnitAttr>:$narrowable_dep,
-    OptionalAttr<UnitAttr>:$post_db_refined,
-    OptionalAttr<I64Attr>:$critical_path_distance,
-    OptionalAttr<I64Attr>:$contract_kind
+    OptionalAttr<PatternAttr>:$pattern,
+    OptionalAttr<ContractAttr>:$contract
   );
   let assemblyFormat = [{
     `(` $target `:` type($target) `)`
-    (`dep_pattern` `(` $dep_pattern^ `)` )?
-    (`distribution_kind` `(` $distribution_kind^ `)` )?
-    (`distribution_pattern` `(` $distribution_pattern^ `)` )?
+    (`pattern` `(` $pattern^ `)` )?
     (`block_shape` `[` $block_shape^ `]` )?
     (`min_offsets` `[` $min_offsets^ `]` )?
     (`max_offsets` `[` $max_offsets^ `]` )?
     (`write_footprint` `[` $write_footprint^ `]` )?
+    (`contract` `(` $contract^ `)` )?
     attr-dict
   }];
   let hasVerifier = 1;
   let extraClassDeclaration = [{
     static void build(OpBuilder &builder, OperationState &state, Value target,
                       const LoweringContractInfo &info);
+    std::optional<ArtsDepPattern> getDepPattern();
+    std::optional<EdtDistributionKind> getDistributionKind();
+    std::optional<EdtDistributionPattern> getDistributionPattern();
+    std::optional<int64_t> getDistributionVersion();
+    std::optional<int64_t> getPatternRevision();
+    std::optional<SmallVector<int64_t, 4>> getOwnerDims();
+    std::optional<int64_t> getCenterOffset();
+    std::optional<SmallVector<int64_t, 4>> getSpatialDims();
+    std::optional<SmallVector<int64_t, 4>> getStencilIndependentDims();
+    std::optional<bool> getSupportedBlockHalo();
+    std::optional<bool> getNarrowableDep();
+    std::optional<bool> getPostDbRefined();
+    std::optional<int64_t> getCriticalPathDistance();
+    std::optional<int64_t> getContractKind();
   }];
   let builders = [
     OpBuilder<(ins "Value":$target,
@@ -454,11 +457,13 @@ def LoweringContractOp : Arts_Op<"lowering_contract",
                    CArg<"std::optional<EdtDistributionKind>", "std::nullopt">:$distributionKind,
                    CArg<"std::optional<EdtDistributionPattern>", "std::nullopt">:$distributionPattern,
                    CArg<"std::optional<int64_t>", "std::nullopt">:$distributionVersion,
+                   CArg<"std::optional<int64_t>", "std::nullopt">:$revision,
                    CArg<"SmallVector<int64_t>", "{}">:$ownerDims,
                    CArg<"SmallVector<Value>", "{}">:$blockShape,
                    CArg<"SmallVector<Value>", "{}">:$minOffsets,
                    CArg<"SmallVector<Value>", "{}">:$maxOffsets,
                    CArg<"SmallVector<Value>", "{}">:$writeFootprint,
+                   CArg<"std::optional<int64_t>", "std::nullopt">:$centerOffset,
                    CArg<"bool", "false">:$supportedBlockHalo,
                    CArg<"SmallVector<int64_t>", "{}">:$spatialDims,
                    CArg<"SmallVector<int64_t>", "{}">:$stencilIndependentDims,

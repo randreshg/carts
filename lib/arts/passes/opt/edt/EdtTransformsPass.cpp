@@ -384,72 +384,19 @@ unsigned EdtTransformsPass::analyzeCriticalPath(func::FuncOp func,
                              << "] critical_path_distance=" << dist);
   };
 
-  /// Collect all EDT nodes from the graph.
-  SmallVector<EdtNode *, 16> allNodes;
-  edtGraph.forEachNode([&](NodeBase *base) {
-    if (auto *edtNode = dyn_cast<EdtNode>(base))
-      allNodes.push_back(edtNode);
-  });
-
-  if (allNodes.empty())
-    return 0;
-
-  /// Compute in-degree for each node (counting only edges within EDT nodes).
-  DenseMap<EdtNode *, unsigned> inDegree;
-  for (auto *node : allNodes)
-    inDegree[node] = 0;
-
-  for (auto *node : allNodes) {
-    for (auto *edge : node->getInEdges()) {
-      auto *fromNode = dyn_cast<EdtNode>(edge->getFrom());
-      if (fromNode && inDegree.count(fromNode))
-        inDegree[node]++;
-    }
-  }
-
-  /// Kahn's algorithm for topological sort.
   SmallVector<EdtNode *, 16> topoOrder;
-  SmallVector<EdtNode *, 16> worklist;
+  SmallVector<EdtNode *, 8> leftoverNodes;
+  edtGraph.getDeterministicTopologicalOrder(topoOrder, leftoverNodes);
 
-  for (auto *node : allNodes) {
-    if (inDegree[node] == 0)
-      worklist.push_back(node);
-  }
-
-  /// Sort the initial worklist by hier ID for deterministic ordering.
-  llvm::sort(worklist, [](EdtNode *a, EdtNode *b) {
-    return a->getHierId() < b->getHierId();
-  });
-
-  while (!worklist.empty()) {
-    EdtNode *current = worklist.pop_back_val();
-    topoOrder.push_back(current);
-
-    /// Collect successors from outgoing edges.
-    SmallVector<EdtNode *, 8> successors;
-    for (auto *edge : current->getOutEdges()) {
-      auto *toNode = dyn_cast<EdtNode>(edge->getTo());
-      if (toNode && inDegree.count(toNode)) {
-        inDegree[toNode]--;
-        if (inDegree[toNode] == 0)
-          successors.push_back(toNode);
-      }
-    }
-
-    /// Sort successors for deterministic ordering.
-    llvm::sort(successors, [](EdtNode *a, EdtNode *b) {
-      return a->getHierId() < b->getHierId();
-    });
-
-    worklist.append(successors.begin(), successors.end());
-  }
+  if (topoOrder.empty() && leftoverNodes.empty())
+    return 0;
 
   /// If topological sort did not cover all nodes, there is a cycle.
   /// Assign distance 0 to any remaining nodes (defensive).
-  if (topoOrder.size() != allNodes.size()) {
+  if (!leftoverNodes.empty()) {
     ARTS_WARN("ET-6: EDT dependency graph has a cycle in function "
               << func.getName() << "; assigning distance 0 to "
-              << (allNodes.size() - topoOrder.size()) << " unreachable EDTs");
+              << leftoverNodes.size() << " unreachable EDTs");
   }
 
   /// Compute critical path distance in topological order.
@@ -480,20 +427,7 @@ unsigned EdtTransformsPass::analyzeCriticalPath(func::FuncOp func,
     annotateNode(node, distance[node], annotated);
   }
 
-  if (topoOrder.size() != allNodes.size()) {
-    DenseSet<EdtNode *> visitedNodes(topoOrder.begin(), topoOrder.end());
-    SmallVector<EdtNode *, 8> leftoverNodes;
-    leftoverNodes.reserve(allNodes.size() - topoOrder.size());
-
-    for (auto *node : allNodes) {
-      if (!visitedNodes.contains(node))
-        leftoverNodes.push_back(node);
-    }
-
-    llvm::sort(leftoverNodes, [](EdtNode *a, EdtNode *b) {
-      return a->getHierId() < b->getHierId();
-    });
-
+  if (!leftoverNodes.empty()) {
     for (auto *node : leftoverNodes)
       annotateNode(node, /*dist=*/0, annotated);
   }
@@ -896,8 +830,7 @@ unsigned EdtTransformsPass::narrowDepChains() {
 
         /// Skip if already marked narrowable.
         LoweringContractOp contractOp = getLoweringContractOp(ptr);
-        if (contractOp && contractOp->hasAttr(
-                              AttrNames::Operation::Contract::NarrowableDep)) {
+        if (existingContract && existingContract->analysis.narrowableDep) {
           ARTS_DEBUG("ET-3:   acquire already marked narrowable, skipping");
           continue;
         }

@@ -14,7 +14,6 @@
 #ifndef ARTS_ANALYSIS_HEURISTICS_DBHEURISTICS_H
 #define ARTS_ANALYSIS_HEURISTICS_DBHEURISTICS_H
 
-#include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
 #include "llvm/ADT/SmallVector.h"
@@ -30,7 +29,6 @@ class Operation;
 namespace arts {
 
 class IdRegistry;
-struct DbAcquirePartitionFacts;
 
 struct HeuristicDecision {
   std::string heuristic;
@@ -43,11 +41,25 @@ struct HeuristicDecision {
   llvm::StringMap<int64_t> costModelInputs;
 };
 
+/// Pass-facing per-acquire policy input assembled by DbPartitioning.
+/// This is a normalized snapshot for H1.7-style acquire decisions, not a raw
+/// graph fact object or a second contract authority.
+struct AcquirePolicyInput {
+  DbAcquireOp acquire;
+  ArtsDepPattern depPattern = ArtsDepPattern::unknown;
+  bool hasPartitionDims = false;
+  bool hasOwnerDims = false;
+  bool hasBlockHints = false;
+  bool hasExplicitStencilContract = false;
+  bool hasIndirectAccess = false;
+  bool needsFullRange = false;
+  bool preservesDistributedContract = false;
+};
+
 class DbHeuristics {
 public:
   DbHeuristics(const mlir::arts::AbstractMachine &machine,
-               IdRegistry &idRegistry,
-               PartitionFallback fallback = PartitionFallback::Coarse);
+               IdRegistry &idRegistry);
 
   bool isSingleNode() const;
   bool isValid() const;
@@ -57,9 +69,8 @@ public:
   static constexpr int64_t kMinInnerBytes = 64;
 
   PartitioningDecision choosePartitioning(const PartitioningContext &ctx);
-  SmallVector<AcquireDecision> chooseAcquirePolicies(
-      ArrayRef<const DbAcquirePartitionFacts *> acquireFacts,
-      ArrayRef<const DbAnalysis::AcquireContractSummary *> summaries = {});
+  SmallVector<AcquireDecision>
+  chooseAcquirePolicies(ArrayRef<AcquirePolicyInput> acquireInputs);
 
   void recordDecision(llvm::StringRef heuristic, bool applied,
                       llvm::StringRef rationale, Operation *op,
@@ -72,7 +83,6 @@ private:
   const mlir::arts::AbstractMachine &machine;
   IdRegistry &idRegistry;
   llvm::SmallVector<HeuristicDecision> decisions;
-  PartitionFallback partitionFallback;
 };
 
 } // namespace arts

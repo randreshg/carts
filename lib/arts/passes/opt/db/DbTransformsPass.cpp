@@ -182,7 +182,7 @@ unsigned DbTransformsPass::persistContracts() {
       if (!contractSummary)
         continue;
 
-      if (!contractSummary->facts)
+      if (!contractSummary->derivedFactEvidence)
         continue;
 
       LoweringContractInfo persistedContract = contractSummary->contract;
@@ -229,11 +229,6 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
 
       unsigned rank = 0;
 
-      std::optional<StencilBounds> graphBounds;
-      DbAcquireNode *acqNode = dbAnalysis.getDbAcquireNode(acquire);
-      if (acqNode)
-        graphBounds = acqNode->getStencilBounds();
-
       auto rawMinOffsets = getStencilMinOffsets(acquire.getOperation());
       auto rawMaxOffsets = getStencilMaxOffsets(acquire.getOperation());
       if (rawMinOffsets)
@@ -252,9 +247,6 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
         rank =
             std::max(rank, static_cast<unsigned>(contractStaticMaxs->size()));
 
-      if (graphBounds && graphBounds->valid && rank == 0)
-        rank = 1;
-
       if (rank == 0) {
         ARTS_DEBUG("DT-2: no halo bounds available, skipping");
         continue;
@@ -262,14 +254,6 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
 
       SmallVector<int64_t, 4> unifiedMin(rank, 0);
       SmallVector<int64_t, 4> unifiedMax(rank, 0);
-
-      if (graphBounds && graphBounds->valid) {
-        unifiedMin[0] = std::min(unifiedMin[0], graphBounds->minOffset);
-        unifiedMax[0] = std::max(unifiedMax[0], graphBounds->maxOffset);
-        ARTS_DEBUG("DT-2:   graph bounds: min=" << graphBounds->minOffset
-                                                << " max="
-                                                << graphBounds->maxOffset);
-      }
 
       if (rawMinOffsets) {
         for (unsigned d = 0; d < rawMinOffsets->size() && d < rank; ++d)

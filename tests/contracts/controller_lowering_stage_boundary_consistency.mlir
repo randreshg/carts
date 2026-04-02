@@ -8,7 +8,7 @@
 // DB-POLICY: arts.db_alloc[<inout>, <heap>, <write>, <block>, <uniform>]
 // DB-POLICY: arts.lowering_contract(
 // DB-POLICY-SAME: block_shape[
-// DB-POLICY-SAME: owner_dims = array<i64: 0>, post_db_refined
+// DB-POLICY-SAME: contract(<ownerDims = [0], postDbRefined = true>)
 // DB-POLICY: arts.db_acquire[<out>] {{.*}}partitioning(<block>, offsets[
 // DB-POLICY-SAME: ), offsets[
 

@@ -31,10 +31,8 @@ namespace arts {
 /// Centralized manager for all ARTS analysis objects.
 class AnalysisManager {
 public:
-  AnalysisManager(
-      ModuleOp module, const std::string &configFile = "",
-      const std::string &metadataFile = "",
-      PartitionFallback partitionFallback = PartitionFallback::Coarse);
+  AnalysisManager(ModuleOp module, const std::string &configFile = "",
+                  const std::string &metadataFile = "");
   ~AnalysisManager();
 
   /// Invalidate all analysis objects and graphs
@@ -115,7 +113,6 @@ private:
   std::string configFile;
   std::string metadataFile;
   AbstractMachine abstractMachine;
-  PartitionFallback partitionFallback;
   std::unique_ptr<DbAnalysis> dbAnalysis;
   std::unique_ptr<EdtAnalysis> edtAnalysis;
   std::unique_ptr<EpochAnalysis> epochAnalysis;

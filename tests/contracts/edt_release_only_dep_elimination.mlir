@@ -1,9 +1,9 @@
-// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from=late-concurrency-cleanup --pipeline=late-concurrency-cleanup | %FileCheck %s
+// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from=post-db-refinement --pipeline=post-db-refinement | %FileCheck %s
 
 // CHECK-LABEL: func.func @test_release_only_dep_elimination
 // CHECK-NOT: arts.edt <task> <intranode> route(%c0_i32) (%{{.*}}, %{{.*}}, %{{.*}})
 // CHECK: arts.edt <task> <intranode> route(%c0_i32) (%{{.*}}, %{{.*}}) : memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>>
-// CHECK: ^bb0(%[[IN_ARG:.*]]: memref<?xmemref<?xf64>>, %[[OUT_ARG:.*]]: memref<?xmemref<?xf64>>):
+// CHECK: ^bb0(%[[IN_ARG:[A-Za-z0-9_]+]]: memref<?xmemref<?xf64>>, %[[OUT_ARG:[A-Za-z0-9_]+]]: memref<?xmemref<?xf64>>):
 // CHECK: arts.db_ref %[[IN_ARG]][%c0]
 // CHECK: arts.db_ref %[[OUT_ARG]][%c0]
 

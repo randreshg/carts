@@ -67,13 +67,12 @@ hasMixedAuthoritativeReadOnlyOwnerDims(const PartitioningContext &ctx) {
 ///   - Block:        H1.B1-H1.B4
 ///   - Stencil/ESD:  H1.S1-H1.S3
 ///   - Element-Wise: H1.E1-H1.E2
-///   - Fallback:     User preference when no heuristic matches
+///   - Fallback:     Canonical coarse when no heuristic matches
 ///===----------------------------------------------------------------------===///
 
 PartitioningDecision
 mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
-                                           const AbstractMachine *machine,
-                                           PartitionFallback fallback) {
+                                           const AbstractMachine *machine) {
   ARTS_DEBUG("evaluatePartitioningHeuristics: canElementWise="
              << ctx.canElementWise << ", canBlock=" << ctx.canBlock
              << ", pinnedDimCount=" << ctx.pinnedDimCount
@@ -440,25 +439,18 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
       unsigned outerRank = ctx.minPinnedDimCount();
       outerRank = outerRank > 0 ? outerRank : 1;
       return PartitioningDecision::elementWise(
-          ctx, outerRank, "H1.E3: Multi-node fallback to fine-grained");
+          ctx, outerRank, "H1.E3: Multi-node prefers fine-grained");
     }
   }
 
   ///===--------------------------------------------------------------------===///
-  /// Fallback: User Preference
+  /// Fallback: Canonical Coarse
   ///===--------------------------------------------------------------------===///
 
-  if (fallback == PartitionFallback::FineGrained) {
-    ARTS_DEBUG("Fallback applied: No heuristic matched, using fine-grained "
-               "(user preference)");
-    return PartitioningDecision::elementWise(
-        ctx, 1, "Fallback: User preference for fine-grained partitioning");
-  }
-
-  ARTS_DEBUG("Fallback applied: No heuristic matched, using coarse (user "
-             "preference)");
-  return PartitioningDecision::coarse(
-      ctx, "Fallback: User preference for coarse partitioning");
+  ARTS_DEBUG(
+      "Fallback applied: No heuristic matched, using canonical coarse");
+  return PartitioningDecision::coarse(ctx,
+                                      "H1.F: Canonical coarse fallback");
 }
 
 ///===----------------------------------------------------------------------===///

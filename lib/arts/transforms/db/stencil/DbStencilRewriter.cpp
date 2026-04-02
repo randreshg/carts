@@ -128,22 +128,20 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   planBlockSize = builder.create<arith::MaxUIOp>(loc, planBlockSize, one);
   SmallVector<Value> ownerBlockShape;
   Value ownerBlockSpan;
-  if (auto contract = getLoweringContract(acquire.getPtr())) {
-    if (auto staticShape = contract->getStaticBlockShape();
+  std::optional<LoweringContractInfo> acquireContract =
+      getLoweringContract(acquire.getPtr());
+  if (!acquireContract)
+    acquireContract = getSemanticContract(acquire.getOperation());
+  if (acquireContract) {
+    if (auto staticShape = acquireContract->getStaticBlockShape();
         staticShape && !staticShape->empty()) {
       for (int64_t dim : *staticShape)
         ownerBlockShape.push_back(arts::createConstantIndex(builder, loc, dim));
-    } else if (!contract->spatial.blockShape.empty()) {
-      ownerBlockShape.assign(contract->spatial.blockShape.begin(),
-                             contract->spatial.blockShape.end());
+    } else if (!acquireContract->spatial.blockShape.empty()) {
+      ownerBlockShape.assign(acquireContract->spatial.blockShape.begin(),
+                             acquireContract->spatial.blockShape.end());
     }
   }
-  if (ownerBlockShape.empty())
-    if (auto blockShape = getStencilBlockShape(acquire.getOperation());
-        blockShape && !blockShape->empty()) {
-      for (int64_t dim : *blockShape)
-        ownerBlockShape.push_back(arts::createConstantIndex(builder, loc, dim));
-    }
   if (!ownerBlockShape.empty())
     ownerBlockSpan = ownerBlockShape.front();
   if (ownerBlockSpan && !ownerBlockSpan.getType().isIndex())
@@ -214,11 +212,7 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
         arts::isValueBoundedByBlockSpan(ownedSpan, planBlockSize) && isAligned)
       singleBlock = true;
     bool hasExplicitBlockHaloContract =
-        hasSupportedBlockHalo(acquire.getOperation());
-    if (!hasExplicitBlockHaloContract) {
-      if (auto contract = getLoweringContract(acquire.getPtr()))
-        hasExplicitBlockHaloContract = contract->supportsBlockHalo();
-    }
+        acquireContract && acquireContract->supportsBlockHalo();
     if (!singleBlock &&
         arts::isValueBoundedByBlockSpan(ownedSpan, planBlockSize) &&
         acquire.getMode() == ArtsMode::in && hasExplicitBlockHaloContract) {
@@ -488,6 +482,9 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
       /// halo block even though the element slice metadata looks complete.
       if (acquire.getMode() == ArtsMode::in) {
         unsigned ownerDim = resolveOwnerDim(d);
+        std::optional<unsigned> ownerPosition =
+            contract ? getContractOwnerPosition(*contract, ownerDim)
+                     : std::nullopt;
         auto applyHaloWindow = [&](int64_t minOffset, int64_t maxOffset) {
           ExpandedElementWindow expanded = expandElementWindowWithHalo(
               builder, loc, elemOff, elemSz, totalExtent, minOffset, maxOffset);
@@ -504,21 +501,11 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
 
         auto staticMaxOffsets =
             contract ? contract->getStaticMaxOffsets() : std::nullopt;
-        if (staticMinOffsets && staticMaxOffsets &&
-            ownerDim < staticMinOffsets->size() &&
-            ownerDim < staticMaxOffsets->size()) {
-          applyHaloWindow((*staticMinOffsets)[ownerDim],
-                          (*staticMaxOffsets)[ownerDim]);
-        } else if (info.graphStencilBounds && info.graphStencilBounds->valid &&
-                   info.graphStencilBounds->hasHalo() &&
-                   (!info.graphStencilOwnerDim ||
-                    ownerDim == *info.graphStencilOwnerDim)) {
-          /// Graph-backed fallback for contracts that only persist
-          /// EDT-local fields on the acquire result. PartitionBoundsAnalyzer
-          /// already proved the halo span; reuse the full min/max window here
-          /// so block fallback and slice lowering observe the same footprint.
-          applyHaloWindow(info.graphStencilBounds->minOffset,
-                          info.graphStencilBounds->maxOffset);
+        if (staticMinOffsets && staticMaxOffsets && ownerPosition &&
+            *ownerPosition < staticMinOffsets->size() &&
+            *ownerPosition < staticMaxOffsets->size()) {
+          applyHaloWindow((*staticMinOffsets)[*ownerPosition],
+                          (*staticMaxOffsets)[*ownerPosition]);
         }
       }
 

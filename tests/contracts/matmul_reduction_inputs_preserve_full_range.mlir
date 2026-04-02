@@ -5,10 +5,10 @@
 // must remain whole-range after db-partitioning. Owner-local row inputs can
 // still keep their block-local element slice.
 
-// TWOMM: arts.db_acquire[<in>] ({{.*}}) partitioning(<coarse>), offsets[%c0], sizes[%c1] {
-// TWOMM: arts.db_acquire[<in>] ({{.*}}) partitioning(<coarse>), offsets[%c0], sizes[%c1] {
-// TWOMM: arts.db_acquire[<in>] ({{.*}}) partitioning(<block>, offsets[%13], sizes[%c4]), offsets[%21], sizes[%c1] element_offsets[%13] element_sizes[%c4] {
+// TWOMM-DAG: arts.db_acquire[<in>] ({{.*}}) partitioning(<coarse>), offsets[%c0{{.*}}], sizes[%c1] {
+// TWOMM-DAG: arts.db_acquire[<in>] ({{.*}}) partitioning(<coarse>), offsets[%c0{{.*}}], sizes[%c1] {
+// TWOMM-DAG: arts.db_acquire[<in>] ({{.*}}) partitioning(<block>, offsets[%{{.*}}], sizes[%c4]), offsets[%{{.*}}], sizes[%c1{{.*}}] element_offsets[%{{.*}}] element_sizes[%c4] {
 
-// THREEMM: arts.db_acquire[<in>] ({{.*}}) partitioning(<coarse>), offsets[%c0], sizes[%c1] {
-// THREEMM: arts.db_acquire[<in>] ({{.*}}) partitioning(<coarse>), offsets[%c0], sizes[%c1] {
-// THREEMM: arts.db_acquire[<in>] ({{.*}}) partitioning(<block>, offsets[%14], sizes[%c4]), offsets[%22], sizes[%c1] element_offsets[%14] element_sizes[%c4] {
+// THREEMM-DAG: arts.db_acquire[<in>] ({{.*}}) partitioning(<coarse>), offsets[%c0{{.*}}], sizes[%c1] {
+// THREEMM-DAG: arts.db_acquire[<in>] ({{.*}}) partitioning(<coarse>), offsets[%c0{{.*}}], sizes[%c1] {
+// THREEMM-DAG: arts.db_acquire[<in>] ({{.*}}) partitioning(<block>, offsets[%{{.*}}], sizes[%c4]), offsets[%{{.*}}], sizes[%c1{{.*}}] element_offsets[%{{.*}}] element_sizes[%c4] {

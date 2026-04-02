@@ -19,7 +19,8 @@ namespace arts {
 /// Pass-local per-acquire partition summary used by DbPartitioning.
 ///
 /// Ownership split:
-///   - DbGraph / DbAnalysis own canonical facts
+///   - lowering contracts + typed DB IR attrs own canonical semantics
+///   - DbAnalysis supplies derived legality/profitability evidence
 ///   - DbPartitioning builds this normalized snapshot
 ///   - DbBlockPlanResolver consumes it to resolve concrete block geometry
 struct AcquirePartitionInfo {
@@ -34,11 +35,6 @@ struct AcquirePartitionInfo {
   bool hasDistributionContract = false;
   bool preservesDepMode = false;
   bool needsFullRange = false;
-  /// Graph-backed stencil bounds are rewrite-only facts. They let the later
-  /// block fallback recover the exact halo shift even when the acquire result
-  /// contract only carries EDT-local fields such as critical_path_distance.
-  std::optional<StencilBounds> graphStencilBounds;
-  std::optional<unsigned> graphStencilOwnerDim;
 };
 
 } // namespace arts

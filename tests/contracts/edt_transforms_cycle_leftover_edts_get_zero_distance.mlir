@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from=late-concurrency-cleanup --pipeline=late-concurrency-cleanup | %FileCheck %s
+// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from=post-db-refinement --pipeline=post-db-refinement | %FileCheck %s
 
 // ET-6 documents that cyclic leftover EDTs fall back to
 // critical_path_distance = 0. This loop creates a loop-carried cycle between
@@ -6,10 +6,10 @@
 // reaches Kahn's topo worklist.
 //
 // CHECK-LABEL: func.func @cyclic_leftover_edts_get_zero_distance
-// CHECK-DAG: arts.lowering_contract({{.*}}) {critical_path_distance = 0 : i64
-// CHECK-DAG: arts.lowering_contract({{.*}}) {critical_path_distance = 0 : i64
-// CHECK-DAG: arts.edt <task> <intranode> route(%c0_i32) (%{{.*}}) : memref<?xmemref<?xf64>> attributes {arts.id = 1 : i64, critical_path_distance = 0 : i64
-// CHECK-DAG: arts.edt <task> <intranode> route(%c0_i32) (%{{.*}}) : memref<?xmemref<?xf64>> attributes {arts.id = 2 : i64, critical_path_distance = 0 : i64
+// CHECK-DAG: arts.lowering_contract({{.*}}) contract(<postDbRefined = true, criticalPathDistance = 0 : i64>)
+// CHECK-DAG: arts.lowering_contract({{.*}}) contract(<postDbRefined = true, criticalPathDistance = 0 : i64>)
+// CHECK-DAG: arts.edt <task> <intranode> route(%c0_i32) (%{{.*}}) : memref<?xmemref<?xf64>> attributes {arts.id = 1 : i64, {{.*}}critical_path_distance = 0 : i64
+// CHECK-DAG: arts.edt <task> <intranode> route(%c0_i32) (%{{.*}}) : memref<?xmemref<?xf64>> attributes {arts.id = 2 : i64, {{.*}}critical_path_distance = 0 : i64
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i8, dense<[8, 32]> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<i1, dense<8> : vector<2xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {
   func.func @cyclic_leftover_edts_get_zero_distance() {

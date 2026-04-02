@@ -10,6 +10,7 @@
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/PartitionPredicates.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/IRMapping.h"
@@ -52,7 +53,7 @@ static std::optional<int64_t> getExplicitLoopBlockHint(ForOp forOp) {
   if (!forOp)
     return std::nullopt;
   if (auto hint = getPartitioningHint(forOp.getOperation()))
-    if (hint->mode == PartitionMode::block && hint->blockSize &&
+    if (usesBlockLayout(hint->mode) && hint->blockSize &&
         *hint->blockSize > 0)
       return hint->blockSize;
   return std::nullopt;
@@ -238,13 +239,7 @@ WorkDistributionUtils::planLoopChunking(ArtsCodegen *AC, ForOp forOp,
   Value upperBound = forOp.getUpperBound()[0];
   Value loopStep = forOp.getStep()[0];
 
-  int64_t advisoryBlockSize = 1;
-  if (auto hint = getPartitioningHint(forOp.getOperation())) {
-    if (hint->mode == PartitionMode::block && hint->blockSize &&
-        *hint->blockSize > 0) {
-      advisoryBlockSize = *hint->blockSize;
-    }
-  }
+  int64_t advisoryBlockSize = getExplicitLoopBlockHint(forOp).value_or(1);
 
   plan.blockSize = AC->createIndexConstant(advisoryBlockSize, loc);
   if (contract.allowsDbAlignedChunking()) {

@@ -10,6 +10,7 @@
 #include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Func/Utils/Utils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -87,10 +88,6 @@ ArtsCodegen::ArtsCodegen(ModuleOp &module, llvm::DataLayout &llvmDL,
 ArtsCodegen::~ArtsCodegen() { ARTS_DEBUG_FOOTER(ArtsCodegen); }
 
 func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
-  auto cacheIt = runtimeFunctionCache.find(FnID);
-  if (cacheIt != runtimeFunctionCache.end())
-    return cacheIt->second;
-
   OpBuilder::InsertionGuard IG(getBuilder());
   getBuilder().setInsertionPointToStart(module.getBody());
 
@@ -104,16 +101,21 @@ func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
         argumentTypes, isa<mlir::NoneType>(ReturnType)                         \
                            ? ArrayRef<Type>{}                                  \
                            : ArrayRef<Type>{ReturnType});                      \
-    funcOp = module.lookupSymbol<func::FuncOp>(Str);                           \
+    auto funcOrError = func::lookupFnDecl(module, Str, fnType);                \
+    assert(succeeded(funcOrError) &&                                           \
+           "Failed to look up ARTS runtime function declaration");             \
+    funcOp = *funcOrError;                                                     \
     if (!funcOp) {                                                             \
-      funcOp = create<func::FuncOp>(getUnknownLoc(), Str, fnType);             \
+      funcOp =                                                                 \
+          func::createFnDecl(getBuilder(), module, Str, fnType,                \
+                             /*setPrivate=*/true);                             \
       funcOp.setPrivate();                                                     \
-      funcOp->setAttr(                                                         \
-          "llvm.linkage",                                                      \
-          LLVM::LinkageAttr::get(getContext(), LLVM::Linkage::External));      \
-      /* Apply function attributes for optimization */                         \
-      applyRuntimeFunctionAttributes(funcOp, Enum);                            \
     }                                                                          \
+    funcOp->setAttr(                                                           \
+        "llvm.linkage",                                                        \
+        LLVM::LinkageAttr::get(getContext(), LLVM::Linkage::External));        \
+    /* Apply function attributes for optimization */                           \
+    applyRuntimeFunctionAttributes(funcOp, Enum);                              \
     break;                                                                     \
   }
   switch (FnID) {
@@ -123,9 +125,6 @@ func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
 #undef ARTS_RTL
 
   assert(funcOp && "Failed to create ARTS runtime function");
-
-  /// Cache the function for future use
-  runtimeFunctionCache[FnID] = funcOp;
   return funcOp;
 }
 
@@ -896,11 +895,13 @@ Value ArtsCodegen::computeElementTypeSize(Type elementType, Location loc) {
 Value ArtsCodegen::computeTotalElements(ValueRange sizes, Location loc) {
   if (sizes.empty())
     return createIndexConstant(1, loc);
+  if (sizes.size() == 1)
+    return castToIndex(sizes.front(), loc);
 
-  Value total = sizes[0];
-  for (size_t i = 1; i < sizes.size(); ++i)
-    total = create<arith::MulIOp>(loc, total, sizes[i]);
-  return total;
+  SmallVector<Value> sizeBuffer(sizes.begin(), sizes.end());
+  SmallVector<Value> strides = computeStridesFromSizes(sizeBuffer, loc);
+  return create<arith::MulIOp>(loc, castToIndex(sizes.front(), loc),
+                               strides.front());
 }
 
 Value ArtsCodegen::computeLinearIndex(ArrayRef<Value> sizes,

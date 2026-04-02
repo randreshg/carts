@@ -17,6 +17,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
 /// Arts
@@ -34,6 +35,7 @@
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
+#include "llvm/ADT/STLExtras.h"
 
 using namespace mlir;
 using namespace mlir::func;
@@ -147,38 +149,35 @@ static bool isIndexFullCoverage(Value idx, Value dimSize,
   return isLoopFullRange(best, dimSize);
 }
 
-static SmallVector<Value> getEffectiveSliceDimSizes(DbAcquireNode *acqNode,
+static SmallVector<Value> getEffectiveSliceDimSizes(DbAnalysis &dbAnalysis,
+                                                    DbAcquireNode *acqNode,
                                                     DbAllocOp allocOp) {
   SmallVector<Value> dimSizes(allocOp.getElementSizes().begin(),
                               allocOp.getElementSizes().end());
   if (!acqNode || !allocOp || dimSizes.empty())
     return dimSizes;
 
-  const DbAcquirePartitionFacts &facts = acqNode->getPartitionFacts();
-  for (const DbPartitionEntryFact &entry : facts.entries) {
-    if (!entry.mappedDim || !entry.representativeSize)
-      continue;
-    if (*entry.mappedDim < dimSizes.size())
-      dimSizes[*entry.mappedDim] = entry.representativeSize;
-  }
+  DbAcquireOp acquire = acqNode->getDbAcquireOp();
+  if (!acquire)
+    return dimSizes;
 
-  if (std::optional<unsigned> dim = facts.inferSingleMappedDim()) {
-    Value blockOffset;
-    Value blockSize;
-    if (succeeded(acqNode->computeBlockInfo(blockOffset, blockSize)) &&
-        blockSize) {
-      if (*dim < dimSizes.size()) {
-        /// Graph-side block info refines the nominal block size to the
-        /// acquire's actual owned slice, including dynamic tail blocks.
-        dimSizes[*dim] = blockSize;
-      }
-    }
+  OpBuilder builder(acquire);
+  DbAnalysis::AcquirePartitionSummary partitionSummary =
+      dbAnalysis.analyzeAcquirePartition(acquire, builder);
+
+  for (auto [idx, size] : llvm::enumerate(partitionSummary.partitionSizes)) {
+    if (!size || idx >= partitionSummary.partitionDims.size())
+      continue;
+    unsigned dim = partitionSummary.partitionDims[idx];
+    if (dim < dimSizes.size())
+      dimSizes[dim] = size;
   }
 
   return dimSizes;
 }
 
-static bool writesFullAllocation(DbAcquireNode *acqNode, DbAllocOp allocOp,
+static bool writesFullAllocation(DbAnalysis &dbAnalysis, DbAcquireNode *acqNode,
+                                 DbAllocOp allocOp,
                                  LoopAnalysis &loopAnalysis) {
   if (!acqNode || !allocOp)
     return true;
@@ -197,7 +196,8 @@ static bool writesFullAllocation(DbAcquireNode *acqNode, DbAllocOp allocOp,
   if (dbRefToMemOps.empty())
     return true;
 
-  SmallVector<Value> dimSizes = getEffectiveSliceDimSizes(acqNode, allocOp);
+  SmallVector<Value> dimSizes =
+      getEffectiveSliceDimSizes(dbAnalysis, acqNode, allocOp);
   if (dimSizes.empty())
     return true;
 
@@ -337,17 +337,19 @@ static void collectModesRecursive(DbAcquireNode *acqNode, ArtsMode &combined) {
 
 /// Recursively check whether any acquire has a distribution contract.
 static void checkDistributedRecursive(DbAcquireNode *acqNode,
+                                      DbAnalysis &dbAnalysis,
                                       bool &isLocalOnly) {
   if (!isLocalOnly)
     return;
-  const DbAcquirePartitionFacts &facts = acqNode->getPartitionFacts();
-  if (facts.hasDistributionContract) {
+  DbAcquireOp acquire = acqNode ? acqNode->getDbAcquireOp() : DbAcquireOp();
+  if (auto summary = dbAnalysis.getAcquireContractSummary(acquire);
+      summary && summary->hasDistributionContract()) {
     isLocalOnly = false;
     return;
   }
   acqNode->forEachChildNode([&](NodeBase *child) {
     if (auto *nestedAcq = dyn_cast<DbAcquireNode>(child))
-      checkDistributedRecursive(nestedAcq, isLocalOnly);
+      checkDistributedRecursive(nestedAcq, dbAnalysis, isLocalOnly);
   });
 }
 
@@ -441,7 +443,8 @@ bool DbModeTighteningPass::adjustDbModes() {
   bool changed = false;
 
   module.walk([&](func::FuncOp func) {
-    DbGraph &graph = AM->getDbAnalysis().getOrCreateGraph(func);
+    DbAnalysis &dbAnalysis = AM->getDbAnalysis();
+    DbGraph &graph = dbAnalysis.getOrCreateGraph(func);
 
     /// First, adjust per-acquire modes
     graph.forEachAcquireNode([&](DbAcquireNode *acqNode) {
@@ -500,8 +503,9 @@ bool DbModeTighteningPass::adjustDbModes() {
         DbAllocNode *allocNode = acqNode->getRootAlloc();
         DbAllocOp allocOp = allocNode ? allocNode->getDbAllocOp() : DbAllocOp();
         LoopAnalysis &loopAnalysis = AM->getLoopAnalysis();
-        bool fullWrite =
-            !allocOp || writesFullAllocation(acqNode, allocOp, loopAnalysis);
+        bool fullWrite = !allocOp ||
+                         writesFullAllocation(dbAnalysis, acqNode, allocOp,
+                                              loopAnalysis);
         if (allocOp && !fullWrite) {
           ARTS_DEBUG("AcquireOp: " << acqOp
                                    << " writes partial region; upgrading to "
@@ -570,6 +574,7 @@ void DbModeTighteningPass::inferDbStorageTypes() {
 
   module.walk([&](func::FuncOp func) {
     DbGraph &graph = AM->getDbAnalysis().getOrCreateGraph(func);
+    DbAnalysis &dbAnalysis = AM->getDbAnalysis();
 
     graph.forEachAllocNode([&](DbAllocNode *allocNode) {
       DbAllocOp allocOp = allocNode->getDbAllocOp();
@@ -587,7 +592,7 @@ void DbModeTighteningPass::inferDbStorageTypes() {
         /// Check all acquire children (recursively) for distribution contracts
         allocNode->forEachChildNode([&](NodeBase *child) {
           if (auto *acqNode = dyn_cast<DbAcquireNode>(child))
-            checkDistributedRecursive(acqNode, isLocalOnly);
+            checkDistributedRecursive(acqNode, dbAnalysis, isLocalOnly);
         });
       }
 
