@@ -43,6 +43,7 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
+#include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/metadata/MetadataManager.h"
@@ -91,6 +92,15 @@
 /// Debug
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(create_dbs);
+
+using mlir::arts::AnalysisDependencyInfo;
+using mlir::arts::AnalysisKind;
+
+static const AnalysisKind kCreateDbs_reads[] = {AnalysisKind::DbAnalysis,
+                                                AnalysisKind::DbHeuristics,
+                                                AnalysisKind::MetadataManager};
+[[maybe_unused]] static const AnalysisDependencyInfo kCreateDbs_deps = {
+    kCreateDbs_reads, {}};
 
 static llvm::Statistic numDbAllocsCreated{
     "create_dbs", "NumDbAllocsCreated",

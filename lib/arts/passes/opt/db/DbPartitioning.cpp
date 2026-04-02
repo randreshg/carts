@@ -41,6 +41,7 @@
 #include "mlir/Support/LLVM.h"
 /// Arts
 #include "arts/Dialect.h"
+#include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/graphs/db/DbGraph.h"
@@ -91,6 +92,15 @@ using namespace mlir::arts;
 #include "arts/passes/Passes.h.inc"
 
 ARTS_DEBUG_SETUP(db_partitioning);
+
+static const AnalysisKind kDbPartitioning_reads[] = {
+    AnalysisKind::DbAnalysis, AnalysisKind::DbHeuristics,
+    AnalysisKind::LoopAnalysis, AnalysisKind::AbstractMachine,
+    AnalysisKind::MetadataManager};
+static const AnalysisKind kDbPartitioning_invalidates[] = {
+    AnalysisKind::DbAnalysis};
+[[maybe_unused]] static const AnalysisDependencyInfo kDbPartitioning_deps = {
+    kDbPartitioning_reads, kDbPartitioning_invalidates};
 
 static llvm::Statistic numMultiEntryAcquiresExpanded{
     "db_partitioning", "NumMultiEntryAcquiresExpanded",

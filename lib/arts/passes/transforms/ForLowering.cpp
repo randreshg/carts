@@ -23,6 +23,7 @@
 
 #include "arts/Dialect.h"
 #include "arts/analysis/AccessPatternAnalysis.h"
+#include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/heuristics/DistributionHeuristics.h"
@@ -68,6 +69,15 @@
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(for_lowering);
+
+using mlir::arts::AnalysisDependencyInfo;
+using mlir::arts::AnalysisKind;
+
+static const AnalysisKind kForLowering_reads[] = {
+    AnalysisKind::DbAnalysis, AnalysisKind::EdtHeuristics,
+    AnalysisKind::AbstractMachine, AnalysisKind::MetadataManager};
+[[maybe_unused]] static const AnalysisDependencyInfo kForLowering_deps = {
+    kForLowering_reads, {}};
 
 using namespace mlir;
 using namespace mlir::func;

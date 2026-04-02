@@ -23,6 +23,7 @@
 #include "mlir/Support/LLVM.h"
 /// Arts
 #include "arts/Dialect.h"
+#include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/graphs/edt/EdtGraph.h"
@@ -46,6 +47,11 @@ using namespace mlir::arts;
 #include "arts/passes/Passes.h.inc"
 
 ARTS_DEBUG_SETUP(edt_structural_opt);
+
+static const AnalysisKind kEdtStructuralOpt_reads[] = {
+    AnalysisKind::EdtAnalysis, AnalysisKind::EdtHeuristics};
+[[maybe_unused]] static const AnalysisDependencyInfo kEdtStructuralOpt_deps = {
+    kEdtStructuralOpt_reads, {}};
 
 static llvm::Statistic numExternalAllocasSunkStat{
     "edt_structural_opt", "NumExternalAllocasSunk",
