@@ -141,6 +141,8 @@ createVerifyMetadataIntegrityPass(AnalysisManager *AM,
 std::unique_ptr<Pass> createContractValidationPass(bool failOnError = false);
 
 /// Verification passes at lowering boundaries.
+std::unique_ptr<Pass> createVerifyEdtCreatedPass();
+std::unique_ptr<Pass> createVerifyEpochCreatedPass();
 std::unique_ptr<Pass> createVerifyForLoweredPass();
 std::unique_ptr<Pass> createVerifyDbCreatedPass();
 std::unique_ptr<Pass> createVerifyPreLoweredPass();

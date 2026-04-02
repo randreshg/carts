@@ -855,6 +855,18 @@ def AliasScopeGen : Pass<"arts-alias-scope-gen", "mlir::ModuleOp"> {
 /// Verification Passes
 ///===----------------------------------------------------------------------===///
 
+def VerifyEdtCreated : Pass<"verify-edt-created", "mlir::ModuleOp"> {
+  let summary = "Verify EDT operations exist after OpenMP conversion";
+  let dependentDialects = ["arts::ArtsDialect"];
+  let constructor = "mlir::arts::createVerifyEdtCreatedPass()";
+}
+
+def VerifyEpochCreated : Pass<"verify-epoch-created", "mlir::ModuleOp"> {
+  let summary = "Verify epoch operations exist after epoch creation";
+  let dependentDialects = ["arts::ArtsDialect"];
+  let constructor = "mlir::arts::createVerifyEpochCreatedPass()";
+}
+
 def VerifyForLowered : Pass<"verify-for-lowered", "mlir::ModuleOp"> {
   let summary = "Verify all arts.for ops have been lowered";
   let dependentDialects = ["arts::ArtsDialect"];
