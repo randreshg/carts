@@ -22,6 +22,7 @@
 #include "arts/analysis/edt/EdtInfo.h"
 #include "arts/analysis/graphs/edt/EdtGraph.h"
 
+#include <atomic>
 #include <optional>
 
 namespace mlir {
@@ -143,7 +144,7 @@ private:
   DenseMap<EdtOp, unsigned> edtOrderIndex;
   DenseMap<Operation *, EdtDistributionPattern> edtPatternByOp;
   DenseMap<Operation *, DbAccessPattern> allocPatternByOp;
-  bool analyzed = false;
+  std::atomic<bool> analyzed{false};
 
   /// Per-function graph caches
   llvm::DenseMap<func::FuncOp, std::unique_ptr<EdtGraph>> edtGraphs;
