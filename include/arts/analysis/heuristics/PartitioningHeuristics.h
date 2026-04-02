@@ -270,8 +270,9 @@ struct PartitioningHint {
 ///===----------------------------------------------------------------------===///
 
 /// Evaluate all H1.x heuristics and return partitioning decision
-PartitioningDecision evaluatePartitioningHeuristics(
-    const PartitioningContext &ctx, const AbstractMachine *machine);
+PartitioningDecision
+evaluatePartitioningHeuristics(const PartitioningContext &ctx,
+                               const AbstractMachine *machine);
 
 /// PartitioningHint accessors
 std::optional<PartitioningHint> getPartitioningHint(Operation *op);

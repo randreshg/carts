@@ -49,6 +49,21 @@
 #include <memory>
 
 ARTS_DEBUG_SETUP(db_lowering);
+
+#include "llvm/ADT/Statistic.h"
+static llvm::Statistic numAllocsLowered{
+    "db_lowering", "NumAllocsLowered",
+    "Number of DB allocations lowered to heap representation"};
+static llvm::Statistic numAcquiresRewritten{
+    "db_lowering", "NumAcquiresRewritten",
+    "Number of DB acquires rewritten with lowered handles"};
+static llvm::Statistic numDbRefsLowered{
+    "db_lowering", "NumDbRefsLowered",
+    "Number of DbRefOps lowered to pointer-based access"};
+static llvm::Statistic numAllocsSkippedAlreadyLowered{
+    "db_lowering", "NumAllocsSkippedAlreadyLowered",
+    "Number of DB allocations skipped because already lowered"};
+
 using namespace mlir;
 using namespace arts;
 
@@ -195,6 +210,7 @@ void DbLoweringPass::convertDbAllocOps() {
     const bool alreadyHeap = oldOp.getAllocType() == DbAllocType::heap;
     if (alreadyOpaque && alreadyHeap) {
       ARTS_DEBUG("  - Allocation already lowered; skipping");
+      ++numAllocsSkippedAlreadyLowered;
       continue;
     }
 
@@ -241,6 +257,7 @@ void DbLoweringPass::convertDbAllocOps() {
                       newOp.getLoc());
     updateAllocUsers(oldOp, newOp);
     opsToRemove.insert(oldOp);
+    ++numAllocsLowered;
   }
 }
 
@@ -302,6 +319,7 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
           dbRefUse.set(castedMemref);
         }
       }
+      ++numDbRefsLowered;
       opsToRemove.insert(dbRefOp);
       continue;
     }
@@ -396,6 +414,7 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
   moveValueContract(acquireOp.getPtr(), newAcquireOp.getPtr(), AC->getBuilder(),
                     newAcquireOp.getLoc());
   normalizeBlockHaloAcquireSlice(AC, newAcquireOp, sourcePtr);
+  ++numAcquiresRewritten;
   ARTS_DEBUG("  - New DbAcquireOp: " << newAcquireOp);
 
   auto rewriteBlockUses = [&](Value base, Value replacementBase) {
@@ -443,6 +462,7 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
             dbRefUse.set(castedMemref);
           }
         }
+        ++numDbRefsLowered;
         opsToRemove.insert(dbRefOp);
         continue;
       }

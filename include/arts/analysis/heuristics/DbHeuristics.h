@@ -68,6 +68,14 @@ public:
   static constexpr int64_t kMaxDepsPerEDT = 8;
   static constexpr int64_t kMinInnerBytes = 64;
 
+  void setMaxOuterDBs(int64_t value) { maxOuterDBsOverride = value; }
+  void setMaxDepsPerEDT(int64_t value) { maxDepsPerEDTOverride = value; }
+  void setMinInnerBytes(int64_t value) { minInnerBytesOverride = value; }
+
+  int64_t getMaxOuterDBs() const { return maxOuterDBsOverride; }
+  int64_t getMaxDepsPerEDT() const { return maxDepsPerEDTOverride; }
+  int64_t getMinInnerBytes() const { return minInnerBytesOverride; }
+
   PartitioningDecision choosePartitioning(const PartitioningContext &ctx);
   SmallVector<AcquireDecision>
   chooseAcquirePolicies(ArrayRef<AcquirePolicyInput> acquireInputs);
@@ -83,6 +91,9 @@ private:
   const mlir::arts::AbstractMachine &machine;
   IdRegistry &idRegistry;
   llvm::SmallVector<HeuristicDecision> decisions;
+  int64_t maxOuterDBsOverride = kMaxOuterDBs;
+  int64_t maxDepsPerEDTOverride = kMaxDepsPerEDT;
+  int64_t minInnerBytesOverride = kMinInnerBytes;
 };
 
 } // namespace arts

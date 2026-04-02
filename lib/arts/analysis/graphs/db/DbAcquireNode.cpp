@@ -136,21 +136,20 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
     auto maxOffsets = contract->getStaticMaxOffsets();
     if (minOffsets && maxOffsets && !minOffsets->empty() &&
         !maxOffsets->empty()) {
-      stencilBounds = StencilBounds::create(
-          minOffsets->front(), maxOffsets->front(),
-          /*isStencil=*/true, /*valid=*/true);
+      stencilBounds =
+          StencilBounds::create(minOffsets->front(), maxOffsets->front(),
+                                /*isStencil=*/true, /*valid=*/true);
       ARTS_DEBUG("DbAcquireNode constructor: Initialized stencil bounds from "
                  "contract");
       ARTS_DEBUG("  bounds=[" << minOffsets->front() << ", "
-                               << maxOffsets->front() << "]");
+                              << maxOffsets->front() << "]");
     } else if (contract->spatial.centerOffset) {
       int64_t centerOffset = *contract->spatial.centerOffset;
       /// Stencil pattern with center offset implies symmetric access pattern
       /// e.g., A[i-1], A[i], A[i+1] has center_offset=1
       /// Min offset = -centerOffset, Max offset = +centerOffset
-      stencilBounds = StencilBounds::create(
-          -centerOffset, centerOffset,
-          /*isStencil=*/true, /*valid=*/true);
+      stencilBounds = StencilBounds::create(-centerOffset, centerOffset,
+                                            /*isStencil=*/true, /*valid=*/true);
       ARTS_DEBUG("DbAcquireNode constructor: Initialized stencil bounds from "
                  "contract center offset");
       ARTS_DEBUG("  centerOffset=" << centerOffset << " -> bounds=["

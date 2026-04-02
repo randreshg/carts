@@ -389,8 +389,8 @@ static SmallVector<Value> collectContractNDBlockShapeCandidates(
     if (!blockCapableAcquire)
       continue;
 
-    auto staticShape = contract ? contract->getStaticBlockShape()
-                                : std::nullopt;
+    auto staticShape =
+        contract ? contract->getStaticBlockShape() : std::nullopt;
     if (!staticShape || staticShape->size() < 2)
       continue;
 
@@ -413,8 +413,7 @@ static SmallVector<Value> collectContractNDBlockShapeCandidates(
     if (supportedRank < 2)
       continue;
 
-    bool prefersContract =
-        info.hasDistributionContract || hasBlockHaloContract;
+    bool prefersContract = info.hasDistributionContract || hasBlockHaloContract;
     if (!prefersContract && hasPreferredContract)
       continue;
     if (prefersContract && !hasPreferredContract) {

@@ -145,6 +145,9 @@ std::unique_ptr<Pass> createVerifyForLoweredPass();
 std::unique_ptr<Pass> createVerifyDbCreatedPass();
 std::unique_ptr<Pass> createVerifyPreLoweredPass();
 std::unique_ptr<Pass> createVerifyLoweredPass();
+std::unique_ptr<Pass> createVerifyEdtLoweredPass();
+std::unique_ptr<Pass> createVerifyDbLoweredPass();
+std::unique_ptr<Pass> createVerifyEpochLoweredPass();
 } // namespace arts
 } // namespace mlir
 

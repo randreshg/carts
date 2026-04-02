@@ -87,23 +87,23 @@ public:
     bool hasBlockHints() const { return blockHints; }
     bool inferredBlock() const { return inferredBlockCapability; }
     bool hasFineGrainedEntries() const { return fineGrainedEntries; }
-    bool hasUnmappedPartitionEntry() const {
-      return unmappedPartitionEntry;
-    }
+    bool hasUnmappedPartitionEntry() const { return unmappedPartitionEntry; }
     bool preservesDistributedContractEntry() const {
       return distributedContractEntry;
     }
     bool hasDistributionContract() const { return distributionContract; }
     bool partitionDimsFromPeers() const { return partitionDimsFromPeersFlag; }
-    AccessPattern getDerivedAccessPattern() const { return derivedAccessPattern; }
+    AccessPattern getDerivedAccessPattern() const {
+      return derivedAccessPattern;
+    }
 
     bool empty() const {
       return contract.empty() && accessPattern == AccessPattern::Unknown &&
              partitionDims.empty() && !derivedFactEvidence && !indirectAccess &&
-             !directAccess && !blockHints &&
-             !inferredBlockCapability && !fineGrainedEntries &&
-             !unmappedPartitionEntry && !distributedContractEntry &&
-             !distributionContract && !partitionDimsFromPeersFlag;
+             !directAccess && !blockHints && !inferredBlockCapability &&
+             !fineGrainedEntries && !unmappedPartitionEntry &&
+             !distributedContractEntry && !distributionContract &&
+             !partitionDimsFromPeersFlag;
     }
     bool usesStencilSemantics() const {
       return contract.isStencilFamily() || contract.usesStencilDistribution() ||

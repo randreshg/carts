@@ -167,7 +167,13 @@ def DbPartitioning : Pass<"db-partitioning", "mlir::ModuleOp"> {
   ];
   let options = [
     Option<"forceCoarseAllocId", "force-coarse-alloc-id", "int64_t", "-1",
-           "Force the DB allocation with this arts.id to use coarse partitioning (-1 = disabled)">
+           "Force the DB allocation with this arts.id to use coarse partitioning (-1 = disabled)">,
+    Option<"maxOuterDbs", "max-outer-dbs", "int64_t", "1024",
+           "Maximum number of outer DB partitions before coarsening">,
+    Option<"maxDepsPerEdt", "max-deps-per-edt", "int64_t", "8",
+           "Maximum dependencies per EDT before coarsening">,
+    Option<"minInnerBytes", "min-inner-bytes", "int64_t", "64",
+           "Minimum inner partition size in bytes">
   ];
   let constructor = "mlir::arts::createDbPartitioningPass(nullptr)";
 }
@@ -871,6 +877,24 @@ def VerifyLowered : Pass<"verify-lowered", "mlir::ModuleOp"> {
   let summary = "Verify no high-level ARTS ops survive past arts-to-llvm";
   let dependentDialects = ["arts::ArtsDialect"];
   let constructor = "mlir::arts::createVerifyLoweredPass()";
+}
+
+def VerifyEdtLowered : Pass<"verify-edt-lowered", "mlir::ModuleOp"> {
+  let summary = "Verify all EDTs have been lowered";
+  let dependentDialects = ["arts::ArtsDialect"];
+  let constructor = "mlir::arts::createVerifyEdtLoweredPass()";
+}
+
+def VerifyDbLowered : Pass<"verify-db-lowered", "mlir::ModuleOp"> {
+  let summary = "Verify all DB operations have been lowered";
+  let dependentDialects = ["arts::ArtsDialect"];
+  let constructor = "mlir::arts::createVerifyDbLoweredPass()";
+}
+
+def VerifyEpochLowered : Pass<"verify-epoch-lowered", "mlir::ModuleOp"> {
+  let summary = "Verify all epoch operations have been lowered";
+  let dependentDialects = ["arts::ArtsDialect"];
+  let constructor = "mlir::arts::createVerifyEpochLoweredPass()";
 }
 
 #endif // CARTS_PASSES

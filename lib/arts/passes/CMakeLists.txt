@@ -7,6 +7,9 @@ add_mlir_dialect_library(MLIRArtsTransforms
   transforms/VerifyDbCreated.cpp
   transforms/VerifyPreLowered.cpp
   transforms/VerifyLowered.cpp
+  transforms/VerifyEdtLowered.cpp
+  transforms/VerifyDbLowered.cpp
+  transforms/VerifyEpochLowered.cpp
   transforms/PatternDiscovery.cpp
   transforms/CreateDbs.cpp
   transforms/CreateEpochs.cpp

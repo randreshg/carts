@@ -53,6 +53,22 @@
 #include "polygeist/Ops.h"
 ARTS_DEBUG_SETUP(epoch_lowering);
 
+#include "llvm/ADT/Statistic.h"
+static llvm::Statistic numEpochsLowered{
+    "epoch_lowering", "NumEpochsLowered",
+    "Number of epoch operations lowered to CreateEpochOp + WaitOnEpochOp"};
+static llvm::Statistic numContinuationEpochsLowered{
+    "epoch_lowering", "NumContinuationEpochsLowered",
+    "Number of continuation epochs lowered without WaitOnEpochOp"};
+static llvm::Statistic numEmptyEpochsElided{
+    "epoch_lowering", "NumEmptyEpochsElided", "Number of empty epochs elided"};
+static llvm::Statistic numCpsAdvancesResolved{
+    "epoch_lowering", "NumCpsAdvancesResolved",
+    "Number of CPS advance placeholders resolved"};
+static llvm::Statistic numEdtCreatesUpdatedWithEpoch{
+    "epoch_lowering", "NumEdtCreatesUpdatedWithEpoch",
+    "Number of EdtCreateOps updated with epoch GUID"};
+
 using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
@@ -108,6 +124,7 @@ void EpochLoweringPass::runOnOperation() {
     auto &epochRegion = epochOp.getRegion();
     if (epochRegion.empty() ||
         epochRegion.front().without_terminator().empty()) {
+      ++numEmptyEpochsElided;
       epochOp.erase();
       continue;
     }
@@ -185,6 +202,7 @@ void EpochLoweringPass::runOnOperation() {
     ARTS_INFO("Updating " << edtCreatesToUpdate.size()
                           << " EdtCreateOps with epoch GUID");
 
+    numEdtCreatesUpdatedWithEpoch += edtCreatesToUpdate.size();
     for (EdtCreateOp edtCreateOp : edtCreatesToUpdate) {
       AC->setInsertionPoint(edtCreateOp);
       auto newEdtCreateOp = AC->create<EdtCreateOp>(
@@ -248,6 +266,11 @@ void EpochLoweringPass::runOnOperation() {
     int64_t cpsInitIter = 0;
     if (auto initIterAttr = epochOp->getAttrOfType<IntegerAttr>(CPSInitIter))
       cpsInitIter = initIterAttr.getInt();
+
+    if (hasContinuation)
+      ++numContinuationEpochsLowered;
+    else
+      ++numEpochsLowered;
 
     /// Replace the epoch op with the epoch GUID.
     epochOp.replaceAllUsesWith(currentEpoch);
@@ -766,6 +789,7 @@ void EpochLoweringPass::runOnOperation() {
     }
 
     advanceOp.erase();
+    ++numCpsAdvancesResolved;
     ARTS_INFO("CPS advance: resolved with epoch finish → "
               << outlinedFunc.getValue());
   }

@@ -459,16 +459,15 @@ private:
       return globalCoords;
     if (contract->spatial.minOffsets.empty()) {
       if (contract->spatial.centerOffset)
-        return inferSymmetricStencilCenterCoords(*contract->spatial.centerOffset,
-                                                 dbInfo, loc);
+        return inferSymmetricStencilCenterCoords(
+            *contract->spatial.centerOffset, dbInfo, loc);
       return globalCoords;
     }
 
     unsigned rank = std::min<unsigned>(dbInfo.sizes.size(),
                                        contract->spatial.minOffsets.size());
     if (!contract->spatial.writeFootprint.empty())
-      rank =
-          std::min<unsigned>(rank, contract->spatial.writeFootprint.size());
+      rank = std::min<unsigned>(rank, contract->spatial.writeFootprint.size());
     if (rank == 0)
       return globalCoords;
 
@@ -865,8 +864,7 @@ private:
     unsigned rank = std::min<unsigned>(dbInfo.sizes.size(),
                                        contract->spatial.minOffsets.size());
     if (!contract->spatial.writeFootprint.empty())
-      rank =
-          std::min<unsigned>(rank, contract->spatial.writeFootprint.size());
+      rank = std::min<unsigned>(rank, contract->spatial.writeFootprint.size());
     if (rank == 0)
       return nullptr;
 

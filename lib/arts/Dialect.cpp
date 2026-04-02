@@ -871,8 +871,7 @@ void LoweringContractOp::build(OpBuilder &builder, OperationState &state,
                            info.spatial.maxOffsets.end()),
         SmallVector<Value>(info.spatial.writeFootprint.begin(),
                            info.spatial.writeFootprint.end()),
-        info.spatial.centerOffset,
-        info.spatial.supportedBlockHalo,
+        info.spatial.centerOffset, info.spatial.supportedBlockHalo,
         SmallVector<int64_t>(info.spatial.spatialDims.begin(),
                              info.spatial.spatialDims.end()),
         SmallVector<int64_t>(info.spatial.stencilIndependentDims.begin(),
@@ -882,17 +881,17 @@ void LoweringContractOp::build(OpBuilder &builder, OperationState &state,
 }
 
 namespace {
-static PatternAttr buildPatternAttr(
-    OpBuilder &builder, std::optional<ArtsDepPattern> depPattern,
-    std::optional<EdtDistributionKind> distributionKind,
-    std::optional<EdtDistributionPattern> distributionPattern,
-    std::optional<int64_t> distributionVersion,
-    std::optional<int64_t> revision) {
+static PatternAttr
+buildPatternAttr(OpBuilder &builder, std::optional<ArtsDepPattern> depPattern,
+                 std::optional<EdtDistributionKind> distributionKind,
+                 std::optional<EdtDistributionPattern> distributionPattern,
+                 std::optional<int64_t> distributionVersion,
+                 std::optional<int64_t> revision) {
   auto *ctx = builder.getContext();
   auto i64Type = IntegerType::get(ctx, 64);
-  ArtsDepPatternAttr depAttr =
-      depPattern ? ArtsDepPatternAttr::get(ctx, *depPattern)
-                 : ArtsDepPatternAttr();
+  ArtsDepPatternAttr depAttr = depPattern
+                                   ? ArtsDepPatternAttr::get(ctx, *depPattern)
+                                   : ArtsDepPatternAttr();
   EdtDistributionKindAttr kindAttr =
       distributionKind ? EdtDistributionKindAttr::get(ctx, *distributionKind)
                        : EdtDistributionKindAttr();
@@ -900,9 +899,9 @@ static PatternAttr buildPatternAttr(
       distributionPattern
           ? EdtDistributionPatternAttr::get(ctx, *distributionPattern)
           : EdtDistributionPatternAttr();
-  IntegerAttr versionAttr = distributionVersion
-                                ? IntegerAttr::get(i64Type, *distributionVersion)
-                                : IntegerAttr();
+  IntegerAttr versionAttr =
+      distributionVersion ? IntegerAttr::get(i64Type, *distributionVersion)
+                          : IntegerAttr();
   IntegerAttr revisionAttr =
       revision ? IntegerAttr::get(i64Type, *revision) : IntegerAttr();
 
@@ -953,11 +952,10 @@ static ContractAttr buildContractAttr(
     return ContractAttr();
   }
 
-  return ContractAttr::get(ctx, ownerDimsAttr, centerOffsetAttr,
-                           spatialDimsAttr, stencilIndependentDimsAttr,
-                           supportedBlockHaloAttr, narrowableDepAttr,
-                           postDbRefinedAttr, criticalPathDistanceAttr,
-                           contractKindAttr);
+  return ContractAttr::get(
+      ctx, ownerDimsAttr, centerOffsetAttr, spatialDimsAttr,
+      stencilIndependentDimsAttr, supportedBlockHaloAttr, narrowableDepAttr,
+      postDbRefinedAttr, criticalPathDistanceAttr, contractKindAttr);
 }
 
 static std::optional<int64_t> getOptionalI64(IntegerAttr attr) {
@@ -993,16 +991,15 @@ void LoweringContractOp::build(
            static_cast<int32_t>(maxOffsets.size()),
            static_cast<int32_t>(writeFootprint.size())}));
 
-  if (PatternAttr patternAttr =
-          buildPatternAttr(builder, depPattern, distributionKind,
-                           distributionPattern, distributionVersion, revision)) {
+  if (PatternAttr patternAttr = buildPatternAttr(
+          builder, depPattern, distributionKind, distributionPattern,
+          distributionVersion, revision)) {
     state.addAttribute("pattern", patternAttr);
   }
-  if (ContractAttr contractAttr =
-          buildContractAttr(builder, ownerDims, centerOffset, spatialDims,
-                            stencilIndependentDims, supportedBlockHalo,
-                            narrowableDep, postDbRefined,
-                            criticalPathDistance, contractKind)) {
+  if (ContractAttr contractAttr = buildContractAttr(
+          builder, ownerDims, centerOffset, spatialDims, stencilIndependentDims,
+          supportedBlockHalo, narrowableDep, postDbRefined,
+          criticalPathDistance, contractKind)) {
     state.addAttribute("contract", contractAttr);
   }
 }

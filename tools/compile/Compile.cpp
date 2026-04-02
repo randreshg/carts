@@ -876,6 +876,7 @@ void buildPreLoweringPipeline(PassManager &pm, arts::AnalysisManager *AM,
   addCanonicalizeAndCSE(pm);
   pm.addPass(arts::createEdtLoweringPass(AM, ArtsIdStride));
   addCanonicalizeAndCSE(pm);
+  pm.addPass(arts::createVerifyEdtLoweredPass());
   pm.addPass(createLoopInvariantCodeMotionPass());
   /// Hoist loop-invariant DB/dep pointer loads before scalar replacement;
   /// buildArtsToLLVMPipeline runs hoisting again after Arts->LLVM materializes
@@ -886,6 +887,7 @@ void buildPreLoweringPipeline(PassManager &pm, arts::AnalysisManager *AM,
   addCanonicalizeAndCSE(pm);
   pm.addPass(arts::createEpochLoweringPass());
   addCanonicalizeAndCSE(pm);
+  pm.addPass(arts::createVerifyEpochLoweredPass());
   pm.addPass(arts::createVerifyPreLoweredPass());
 }
 
@@ -909,6 +911,7 @@ void buildArtsToLLVMPipeline(PassManager &pm, bool debug,
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createControlFlowSinkPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(arts::createVerifyDbLoweredPass());
   pm.addPass(arts::createVerifyLoweredPass());
 }
 

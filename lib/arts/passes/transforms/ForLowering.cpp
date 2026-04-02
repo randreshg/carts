@@ -115,7 +115,8 @@ inferLoopHaloBoundsFromValue(Value dep, ForOp forOp, unsigned mappedDim) {
     AccessIndexInfo info;
     Value baseMemref = ValueAnalysis::stripMemrefViewOps(access->memref);
     if (auto dbRef = baseMemref.getDefiningOp<DbRefOp>()) {
-      SmallVector<Value> indexChain = DbUtils::collectFullIndexChain(dbRef, memOp);
+      SmallVector<Value> indexChain =
+          DbUtils::collectFullIndexChain(dbRef, memOp);
       if (indexChain.empty())
         continue;
       info.dbRefPrefix = dbRef.getIndices().size();

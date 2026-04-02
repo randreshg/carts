@@ -28,6 +28,17 @@
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(db_scratch_elimination);
 
+#include "llvm/ADT/Statistic.h"
+static llvm::Statistic numScratchDbsEliminated{
+    "db_scratch_elimination", "NumScratchDbsEliminated",
+    "Number of scratch DBs fully eliminated"};
+static llvm::Statistic numScratchUsesReplaced{
+    "db_scratch_elimination", "NumScratchUsesReplaced",
+    "Number of scratch DB uses replaced with local allocas"};
+static llvm::Statistic numScratchCandidatesRejected{
+    "db_scratch_elimination", "NumScratchCandidatesRejected",
+    "Number of scratch DB candidates rejected"};
+
 using namespace mlir;
 using namespace mlir::arts;
 
@@ -262,9 +273,12 @@ struct DbScratchEliminationPass
       if (allocs.empty())
         return;
       DominanceInfo domInfo(func);
-      for (DbAllocOp alloc : allocs)
+      for (DbAllocOp alloc : allocs) {
         if (auto candidate = matchScratchCandidate(alloc, domInfo))
           candidates.push_back(std::move(*candidate));
+        else
+          ++numScratchCandidatesRejected;
+      }
     });
 
     if (candidates.empty())
@@ -296,6 +310,7 @@ struct DbScratchEliminationPass
         argsToRemove[use.edt.getOperation()].push_back(
             use.blockArg.getArgNumber());
         acquiresToErase[use.edt.getOperation()].push_back(use.acquire);
+        ++numScratchUsesReplaced;
         rewrites++;
       }
 
@@ -330,8 +345,10 @@ struct DbScratchEliminationPass
       for (DbFreeOp freeOp : candidate.freeOps)
         eraseIfPresent(freeOp.getOperation());
       if (candidate.alloc && candidate.alloc.getGuid().use_empty() &&
-          candidate.alloc.getPtr().use_empty())
+          candidate.alloc.getPtr().use_empty()) {
         candidate.alloc.erase();
+        ++numScratchDbsEliminated;
+      }
     }
 
     ARTS_INFO("DbScratchEliminationPass: removed " << rewrites

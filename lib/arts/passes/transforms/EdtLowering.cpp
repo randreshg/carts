@@ -71,6 +71,20 @@
 #include "polygeist/Ops.h"
 ARTS_DEBUG_SETUP(edt_lowering);
 
+#include "llvm/ADT/Statistic.h"
+static llvm::Statistic numEdtsLowered{
+    "edt_lowering", "NumEdtsLowered",
+    "Number of EDT operations lowered to runtime calls"};
+static llvm::Statistic numParamPacksCreated{
+    "edt_lowering", "NumParamPacksCreated",
+    "Number of parameter packs created for EDT outlining"};
+static llvm::Statistic numDepsRecorded{
+    "edt_lowering", "NumDepsRecorded",
+    "Number of dependencies recorded for lowered EDTs"};
+static llvm::Statistic numEdtsDemotedToTask{
+    "edt_lowering", "NumEdtsDemotedToTask",
+    "Number of non-task EDTs demoted to task type"};
+
 using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
@@ -540,6 +554,7 @@ void EdtLoweringPass::gatherLowerableTaskEdts(
     /// ParallelEdtLowering already.
     if (edtOp.getType() != EdtType::task) {
       ARTS_DEBUG("Demoting non-task EDT to task: " << edtOp);
+      ++numEdtsDemotedToTask;
       edtOp.setType(EdtType::task);
       arts::setWorkers(edtOp.getOperation(), 0);
       arts::setWorkersPerNode(edtOp.getOperation(), 0);
@@ -662,6 +677,7 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
 
   /// Remove original EDT.
   edtOp.erase();
+  ++numEdtsLowered;
 
   return success();
 }
@@ -812,6 +828,7 @@ Value EdtLoweringPass::packParams(Location loc, EdtEnvManager &envManager,
   auto memrefType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
   auto packOp = AC->create<EdtParamPackOp>(loc, TypeRange{memrefType},
                                            ValueRange(packValues));
+  ++numParamPacksCreated;
   return packOp;
 }
 
@@ -1197,6 +1214,7 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
   AC->create<RecordDepOp>(loc, edtGuid, depGuids, boundsValids,
                           finalByteOffsets, finalByteSizes, modeAttr,
                           acquireAttr, depFlagsAttr);
+  numDepsRecorded += depGuids.size();
 
   return success();
 }

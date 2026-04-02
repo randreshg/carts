@@ -82,7 +82,8 @@ struct GuidRangCallOptPass
     int rewrittenStatic = 0;
     int rewrittenGuarded = 0;
     for (scf::ForOp loop : loops) {
-      auto lowerBound = ValueAnalysis::tryFoldConstantIndex(loop.getLowerBound());
+      auto lowerBound =
+          ValueAnalysis::tryFoldConstantIndex(loop.getLowerBound());
       auto step = ValueAnalysis::tryFoldConstantIndex(loop.getStep());
       if (!lowerBound || !step || *lowerBound != 0 || *step != 1)
         continue;
