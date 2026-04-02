@@ -28,6 +28,7 @@
 #include "mlir/IR/BuiltinOps.h"
 /// Arts
 #include "arts/Dialect.h"
+#include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/analysis/metadata/MetadataManager.h"
@@ -53,6 +54,14 @@
 #include "arts/utils/Debug.h"
 #include <optional>
 ARTS_DEBUG_SETUP(convert_openmp_to_arts);
+
+using mlir::arts::AnalysisDependencyInfo;
+using mlir::arts::AnalysisKind;
+
+static const AnalysisKind kConvertOpenMPToArts_reads[] = {
+    AnalysisKind::MetadataManager};
+[[maybe_unused]] static const AnalysisDependencyInfo kConvertOpenMPToArts_deps =
+    {kConvertOpenMPToArts_reads, {}};
 
 #include "llvm/ADT/Statistic.h"
 static llvm::Statistic numParallelRegionsConverted{

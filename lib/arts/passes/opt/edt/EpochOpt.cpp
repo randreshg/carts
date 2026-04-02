@@ -21,6 +21,7 @@
 
 #define GEN_PASS_DEF_EPOCHOPT
 #include "arts/Dialect.h"
+#include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/value/ValueAnalysis.h"
@@ -51,6 +52,13 @@
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopUtils.h"
 ARTS_DEBUG_SETUP(epoch_opt);
+
+using mlir::arts::AnalysisDependencyInfo;
+using mlir::arts::AnalysisKind;
+
+static const AnalysisKind kEpochOpt_reads[] = {AnalysisKind::EpochAnalysis};
+[[maybe_unused]] static const AnalysisDependencyInfo kEpochOpt_deps = {
+    kEpochOpt_reads, {}};
 
 using namespace mlir;
 using namespace mlir::arts;

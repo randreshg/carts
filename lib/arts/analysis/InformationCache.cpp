@@ -48,8 +48,7 @@ void InformationCache::invalidate() {
   acquiresPerFunction.clear();
 }
 
-ArrayRef<EdtOp>
-InformationCache::getEdtsInFunction(func::FuncOp func) const {
+ArrayRef<EdtOp> InformationCache::getEdtsInFunction(func::FuncOp func) const {
   auto it = edtsPerFunction.find(func);
   if (it != edtsPerFunction.end())
     return it->second;
@@ -64,8 +63,7 @@ InformationCache::getAllocsInFunction(func::FuncOp func) const {
   return emptyAllocs;
 }
 
-ArrayRef<ForOp>
-InformationCache::getLoopsInFunction(func::FuncOp func) const {
+ArrayRef<ForOp> InformationCache::getLoopsInFunction(func::FuncOp func) const {
   auto it = loopsPerFunction.find(func);
   if (it != loopsPerFunction.end())
     return it->second;

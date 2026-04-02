@@ -25,6 +25,7 @@
 
 #define GEN_PASS_DEF_EDTDISTRIBUTION
 #include "arts/Dialect.h"
+#include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
@@ -36,6 +37,17 @@
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(edt_distribution);
+
+using mlir::arts::AnalysisDependencyInfo;
+using mlir::arts::AnalysisKind;
+
+static const AnalysisKind kEdtDistribution_reads[] = {
+    AnalysisKind::DbAnalysis, AnalysisKind::EdtHeuristics,
+    AnalysisKind::AbstractMachine};
+static const AnalysisKind kEdtDistribution_invalidates[] = {
+    AnalysisKind::DbAnalysis};
+[[maybe_unused]] static const AnalysisDependencyInfo kEdtDistribution_deps = {
+    kEdtDistribution_reads, kEdtDistribution_invalidates};
 
 #include "llvm/ADT/Statistic.h"
 static llvm::Statistic numLoopsAnnotated{
