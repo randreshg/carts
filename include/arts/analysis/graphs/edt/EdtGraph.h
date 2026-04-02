@@ -53,6 +53,7 @@ public:
   bool hasDbGraph() const { return dbGraph != nullptr; }
   DbGraph *getDbGraph() const { return dbGraph; }
   size_t size() const { return nodes.size(); }
+  uint64_t getVersion() const { return version; }
 
   /// Check if two EDTs are independent under the current memory-root model.
   /// Shared read-only roots are allowed; any shared writable root is treated
@@ -68,6 +69,7 @@ private:
   DenseMap<std::pair<NodeBase *, NodeBase *>, std::unique_ptr<EdgeBase>> edges;
   bool isBuilt = false;
   bool needsRebuild = true;
+  uint64_t version = 0;
 
   /// Private helpers
   void collectNodes();

@@ -15,6 +15,8 @@ namespace arts {
 /// Discriminator for the high-level computational pattern a lowering contract
 /// represents.  When the field is `Unknown` on a `LoweringContractInfo`,
 /// `getEffectiveKind()` will attempt to derive the kind from `depPattern`.
+enum class ContractChange { Unchanged, Changed };
+
 enum class ContractKind : int64_t {
   Unknown = 0,
   Stencil = 1,
@@ -132,8 +134,8 @@ std::optional<LoweringContractInfo> getSemanticContract(Operation *op);
 LoweringContractInfo resolveLoopDistributionContract(Operation *op);
 std::optional<LoweringContractInfo>
 getLoweringContract(Operation *op, OpBuilder &builder, Location loc);
-void mergeLoweringContractInfo(LoweringContractInfo &dest,
-                               const LoweringContractInfo &src);
+ContractChange mergeLoweringContractInfo(LoweringContractInfo &dest,
+                                         const LoweringContractInfo &src);
 void normalizeLoweringContractInfo(LoweringContractInfo &info);
 AcquireRewriteContract deriveAcquireRewriteContract(DbAcquireOp acquire);
 std::optional<unsigned>

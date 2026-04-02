@@ -23,8 +23,9 @@ using namespace mlir;
 using namespace mlir::arts;
 
 /// Forward declarations for internal-only helpers.
-static void mergeLoweringContractInfo(LoweringContractInfo &dest,
-                                      const LoweringContractInfo &src);
+static ContractChange
+mergeLoweringContractInfo(LoweringContractInfo &dest,
+                          const LoweringContractInfo &src);
 static void copyLoweringContract(Value source, Value target, OpBuilder &builder,
                                  Location loc);
 
@@ -498,23 +499,40 @@ mlir::arts::getLoweringContract(Operation *op, OpBuilder &builder,
   return info;
 }
 
-void mlir::arts::mergeLoweringContractInfo(LoweringContractInfo &dest,
-                                           const LoweringContractInfo &src) {
+ContractChange
+mlir::arts::mergeLoweringContractInfo(LoweringContractInfo &dest,
+                                      const LoweringContractInfo &src) {
+  bool changed = false;
+
   if (dest.pattern.kind == ContractKind::Unknown &&
-      src.pattern.kind != ContractKind::Unknown)
+      src.pattern.kind != ContractKind::Unknown) {
     dest.pattern.kind = src.pattern.kind;
-  if (!dest.pattern.depPattern && src.pattern.depPattern)
+    changed = true;
+  }
+  if (!dest.pattern.depPattern && src.pattern.depPattern) {
     dest.pattern.depPattern = src.pattern.depPattern;
-  if (!dest.pattern.distributionKind && src.pattern.distributionKind)
+    changed = true;
+  }
+  if (!dest.pattern.distributionKind && src.pattern.distributionKind) {
     dest.pattern.distributionKind = src.pattern.distributionKind;
-  if (!dest.pattern.distributionPattern && src.pattern.distributionPattern)
+    changed = true;
+  }
+  if (!dest.pattern.distributionPattern && src.pattern.distributionPattern) {
     dest.pattern.distributionPattern = src.pattern.distributionPattern;
-  if (!dest.pattern.distributionVersion && src.pattern.distributionVersion)
+    changed = true;
+  }
+  if (!dest.pattern.distributionVersion && src.pattern.distributionVersion) {
     dest.pattern.distributionVersion = src.pattern.distributionVersion;
-  if (!dest.pattern.revision && src.pattern.revision)
+    changed = true;
+  }
+  if (!dest.pattern.revision && src.pattern.revision) {
     dest.pattern.revision = src.pattern.revision;
-  dest.analysis.narrowableDep =
-      dest.analysis.narrowableDep || src.analysis.narrowableDep;
+    changed = true;
+  }
+  if (!dest.analysis.narrowableDep && src.analysis.narrowableDep) {
+    dest.analysis.narrowableDep = true;
+    changed = true;
+  }
 
   auto shouldTakeHigherRank = [](size_t current, size_t incoming) -> bool {
     if (incoming == 0)
@@ -523,62 +541,91 @@ void mlir::arts::mergeLoweringContractInfo(LoweringContractInfo &dest,
   };
 
   if (shouldTakeHigherRank(dest.spatial.ownerDims.size(),
-                           src.spatial.ownerDims.size()))
+                           src.spatial.ownerDims.size())) {
     dest.spatial.ownerDims.assign(src.spatial.ownerDims.begin(),
                                   src.spatial.ownerDims.end());
-  if (!dest.spatial.centerOffset && src.spatial.centerOffset)
+    changed = true;
+  }
+  if (!dest.spatial.centerOffset && src.spatial.centerOffset) {
     dest.spatial.centerOffset = src.spatial.centerOffset;
+    changed = true;
+  }
 
   if (shouldTakeHigherRank(dest.spatial.blockShape.size(),
-                           src.spatial.blockShape.size()))
+                           src.spatial.blockShape.size())) {
     dest.spatial.blockShape.assign(src.spatial.blockShape.begin(),
                                    src.spatial.blockShape.end());
+    changed = true;
+  }
   if (shouldTakeHigherRank(dest.spatial.minOffsets.size(),
-                           src.spatial.minOffsets.size()))
+                           src.spatial.minOffsets.size())) {
     dest.spatial.minOffsets.assign(src.spatial.minOffsets.begin(),
                                    src.spatial.minOffsets.end());
+    changed = true;
+  }
   if (shouldTakeHigherRank(dest.spatial.maxOffsets.size(),
-                           src.spatial.maxOffsets.size()))
+                           src.spatial.maxOffsets.size())) {
     dest.spatial.maxOffsets.assign(src.spatial.maxOffsets.begin(),
                                    src.spatial.maxOffsets.end());
+    changed = true;
+  }
   if (shouldTakeHigherRank(dest.spatial.writeFootprint.size(),
-                           src.spatial.writeFootprint.size()))
+                           src.spatial.writeFootprint.size())) {
     dest.spatial.writeFootprint.assign(src.spatial.writeFootprint.begin(),
                                        src.spatial.writeFootprint.end());
+    changed = true;
+  }
 
   if (shouldTakeHigherRank(dest.spatial.staticBlockShape.size(),
-                           src.spatial.staticBlockShape.size()))
+                           src.spatial.staticBlockShape.size())) {
     dest.spatial.staticBlockShape.assign(src.spatial.staticBlockShape.begin(),
                                          src.spatial.staticBlockShape.end());
+    changed = true;
+  }
   if (shouldTakeHigherRank(dest.spatial.staticMinOffsets.size(),
-                           src.spatial.staticMinOffsets.size()))
+                           src.spatial.staticMinOffsets.size())) {
     dest.spatial.staticMinOffsets.assign(src.spatial.staticMinOffsets.begin(),
                                          src.spatial.staticMinOffsets.end());
+    changed = true;
+  }
   if (shouldTakeHigherRank(dest.spatial.staticMaxOffsets.size(),
-                           src.spatial.staticMaxOffsets.size()))
+                           src.spatial.staticMaxOffsets.size())) {
     dest.spatial.staticMaxOffsets.assign(src.spatial.staticMaxOffsets.begin(),
                                          src.spatial.staticMaxOffsets.end());
+    changed = true;
+  }
 
-  dest.spatial.supportedBlockHalo =
-      dest.spatial.supportedBlockHalo || src.spatial.supportedBlockHalo;
+  if (!dest.spatial.supportedBlockHalo && src.spatial.supportedBlockHalo) {
+    dest.spatial.supportedBlockHalo = true;
+    changed = true;
+  }
 
-  if (dest.spatial.spatialDims.empty() && !src.spatial.spatialDims.empty())
+  if (dest.spatial.spatialDims.empty() && !src.spatial.spatialDims.empty()) {
     dest.spatial.spatialDims.assign(src.spatial.spatialDims.begin(),
                                     src.spatial.spatialDims.end());
+    changed = true;
+  }
 
   if (dest.spatial.stencilIndependentDims.empty() &&
       !src.spatial.stencilIndependentDims.empty()) {
     dest.spatial.stencilIndependentDims.assign(
         src.spatial.stencilIndependentDims.begin(),
         src.spatial.stencilIndependentDims.end());
+    changed = true;
   }
 
-  dest.analysis.postDbRefined =
-      dest.analysis.postDbRefined || src.analysis.postDbRefined;
-  if (!dest.analysis.criticalPathDistance && src.analysis.criticalPathDistance)
+  if (!dest.analysis.postDbRefined && src.analysis.postDbRefined) {
+    dest.analysis.postDbRefined = true;
+    changed = true;
+  }
+  if (!dest.analysis.criticalPathDistance &&
+      src.analysis.criticalPathDistance) {
     dest.analysis.criticalPathDistance = src.analysis.criticalPathDistance;
+    changed = true;
+  }
 
   normalizeLoweringContractInfo(dest);
+  return changed ? ContractChange::Changed : ContractChange::Unchanged;
 }
 
 void mlir::arts::normalizeLoweringContractInfo(LoweringContractInfo &info) {
