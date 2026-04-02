@@ -16,6 +16,7 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
+#include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/passes/Passes.h"
 #include "arts/transforms/kernel/KernelTransform.h"
@@ -29,6 +30,11 @@ using namespace mlir::arts;
 #include "arts/passes/Passes.h.inc"
 
 ARTS_DEBUG_SETUP(kernel_transforms);
+
+static const AnalysisKind kKernelTransforms_reads[] = {
+    AnalysisKind::MetadataManager};
+[[maybe_unused]] static const AnalysisDependencyInfo kKernelTransforms_deps = {
+    kKernelTransforms_reads, {}};
 
 namespace {
 

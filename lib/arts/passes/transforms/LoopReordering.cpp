@@ -16,6 +16,7 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
+#include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbPatternMatchers.h"
 #include "arts/analysis/metadata/MetadataManager.h"
@@ -36,6 +37,11 @@ ARTS_DEBUG_SETUP(loop_reordering);
 
 using namespace mlir;
 using namespace mlir::arts;
+
+static const AnalysisKind kLoopReordering_reads[] = {
+    AnalysisKind::LoopAnalysis, AnalysisKind::MetadataManager};
+[[maybe_unused]] static const AnalysisDependencyInfo kLoopReordering_deps = {
+    kLoopReordering_reads, {}};
 
 namespace {
 

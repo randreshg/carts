@@ -859,92 +859,7 @@ void mlir::arts::applyTaskAcquireContractMetadata(
     if (!currentContract) {
       currentContract = *opContract;
     } else {
-      if (currentContract->pattern.kind == ContractKind::Unknown)
-        currentContract->pattern.kind = opContract->pattern.kind;
-      if (!currentContract->pattern.depPattern &&
-          opContract->pattern.depPattern)
-        currentContract->pattern.depPattern = opContract->pattern.depPattern;
-      if (!currentContract->pattern.distributionKind &&
-          opContract->pattern.distributionKind) {
-        currentContract->pattern.distributionKind =
-            opContract->pattern.distributionKind;
-      }
-      if (!currentContract->pattern.distributionPattern &&
-          opContract->pattern.distributionPattern) {
-        currentContract->pattern.distributionPattern =
-            opContract->pattern.distributionPattern;
-      }
-      if (!currentContract->pattern.distributionVersion &&
-          opContract->pattern.distributionVersion) {
-        currentContract->pattern.distributionVersion =
-            opContract->pattern.distributionVersion;
-      }
-      if (!currentContract->pattern.revision && opContract->pattern.revision)
-        currentContract->pattern.revision = opContract->pattern.revision;
-      currentContract->analysis.narrowableDep =
-          currentContract->analysis.narrowableDep ||
-          opContract->analysis.narrowableDep;
-      currentContract->analysis.postDbRefined =
-          currentContract->analysis.postDbRefined ||
-          opContract->analysis.postDbRefined;
-      if (!currentContract->analysis.criticalPathDistance &&
-          opContract->analysis.criticalPathDistance) {
-        currentContract->analysis.criticalPathDistance =
-            opContract->analysis.criticalPathDistance;
-      }
-      if (currentContract->spatial.ownerDims.empty() &&
-          !opContract->spatial.ownerDims.empty()) {
-        currentContract->spatial.ownerDims = opContract->spatial.ownerDims;
-      }
-      if (!currentContract->spatial.centerOffset &&
-          opContract->spatial.centerOffset) {
-        currentContract->spatial.centerOffset =
-            opContract->spatial.centerOffset;
-      }
-      if (currentContract->spatial.blockShape.empty() &&
-          !opContract->spatial.blockShape.empty()) {
-        currentContract->spatial.blockShape = opContract->spatial.blockShape;
-      }
-      if (currentContract->spatial.minOffsets.empty() &&
-          !opContract->spatial.minOffsets.empty()) {
-        currentContract->spatial.minOffsets = opContract->spatial.minOffsets;
-      }
-      if (currentContract->spatial.maxOffsets.empty() &&
-          !opContract->spatial.maxOffsets.empty()) {
-        currentContract->spatial.maxOffsets = opContract->spatial.maxOffsets;
-      }
-      if (currentContract->spatial.writeFootprint.empty() &&
-          !opContract->spatial.writeFootprint.empty()) {
-        currentContract->spatial.writeFootprint =
-            opContract->spatial.writeFootprint;
-      }
-      if (currentContract->spatial.staticBlockShape.empty() &&
-          !opContract->spatial.staticBlockShape.empty()) {
-        currentContract->spatial.staticBlockShape =
-            opContract->spatial.staticBlockShape;
-      }
-      if (currentContract->spatial.staticMinOffsets.empty() &&
-          !opContract->spatial.staticMinOffsets.empty()) {
-        currentContract->spatial.staticMinOffsets =
-            opContract->spatial.staticMinOffsets;
-      }
-      if (currentContract->spatial.staticMaxOffsets.empty() &&
-          !opContract->spatial.staticMaxOffsets.empty()) {
-        currentContract->spatial.staticMaxOffsets =
-            opContract->spatial.staticMaxOffsets;
-      }
-      currentContract->spatial.supportedBlockHalo =
-          currentContract->spatial.supportedBlockHalo ||
-          opContract->spatial.supportedBlockHalo;
-      if (currentContract->spatial.spatialDims.empty() &&
-          !opContract->spatial.spatialDims.empty()) {
-        currentContract->spatial.spatialDims = opContract->spatial.spatialDims;
-      }
-      if (currentContract->spatial.stencilIndependentDims.empty() &&
-          !opContract->spatial.stencilIndependentDims.empty()) {
-        currentContract->spatial.stencilIndependentDims =
-            opContract->spatial.stencilIndependentDims;
-      }
+      combineContracts(*currentContract, *opContract);
     }
   }
 
@@ -998,21 +913,20 @@ void mlir::arts::applyTaskAcquireContractMetadata(
   };
 
   SmallVector<int64_t, 4> taskHaloMinOffsets;
-  if (currentContract)
-    if (auto minOffsets = currentContract->getStaticMinOffsets())
-      taskHaloMinOffsets = *minOffsets;
+  SmallVector<int64_t, 4> taskHaloMaxOffsets;
+  if (currentContract) {
+    if (auto halo = projectHaloWindow(*currentContract)) {
+      taskHaloMinOffsets = std::move(halo->first);
+      taskHaloMaxOffsets = std::move(halo->second);
+    }
+  }
   if (taskHaloMinOffsets.empty())
     taskHaloMinOffsets.assign(rewriteContract.haloMinOffsets.begin(),
                               rewriteContract.haloMinOffsets.end());
-  taskHaloMinOffsets = clampRankedStencilVector(std::move(taskHaloMinOffsets));
-
-  SmallVector<int64_t, 4> taskHaloMaxOffsets;
-  if (currentContract)
-    if (auto maxOffsets = currentContract->getStaticMaxOffsets())
-      taskHaloMaxOffsets = *maxOffsets;
   if (taskHaloMaxOffsets.empty())
     taskHaloMaxOffsets.assign(rewriteContract.haloMaxOffsets.begin(),
                               rewriteContract.haloMaxOffsets.end());
+  taskHaloMinOffsets = clampRankedStencilVector(std::move(taskHaloMinOffsets));
   taskHaloMaxOffsets = clampRankedStencilVector(std::move(taskHaloMaxOffsets));
 
   SmallVector<int64_t, 4> taskWriteFootprint;

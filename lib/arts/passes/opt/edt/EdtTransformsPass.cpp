@@ -38,6 +38,7 @@
 #include "mlir/Pass/Pass.h"
 /// Arts
 #include "arts/Dialect.h"
+#include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/edt/EdtInfo.h"
@@ -66,6 +67,11 @@ using namespace mlir::arts;
 #include "arts/passes/Passes.h.inc"
 
 ARTS_DEBUG_SETUP(edt_transforms);
+
+static const AnalysisKind kEdtTransforms_reads[] = {
+    AnalysisKind::EdtAnalysis};
+[[maybe_unused]] static const AnalysisDependencyInfo kEdtTransforms_deps = {
+    kEdtTransforms_reads, {}};
 
 static llvm::Statistic numGranularityAnnotations{
     "edt_transforms", "NumGranularityAnnotations",

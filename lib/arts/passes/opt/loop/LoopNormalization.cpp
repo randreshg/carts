@@ -25,6 +25,7 @@
 ///     }
 ///==========================================================================///
 
+#include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
 #define GEN_PASS_DEF_LOOPNORMALIZATION
 #include "arts/Dialect.h"
@@ -39,6 +40,11 @@ ARTS_DEBUG_SETUP(loop_normalization);
 
 using namespace mlir;
 using namespace mlir::arts;
+
+static const AnalysisKind kLoopNormalization_reads[] = {
+    AnalysisKind::MetadataManager};
+[[maybe_unused]] static const AnalysisDependencyInfo kLoopNormalization_deps = {
+    kLoopNormalization_reads, {}};
 
 namespace {
 

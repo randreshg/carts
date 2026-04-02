@@ -11,6 +11,7 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
+#include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/analysis/value/ValueAnalysis.h"
@@ -39,6 +40,11 @@ ARTS_DEBUG_SETUP(pattern_discovery);
 
 using namespace mlir;
 using namespace mlir::arts;
+
+static const AnalysisKind kPatternDiscovery_reads[] = {
+    AnalysisKind::MetadataManager};
+[[maybe_unused]] static const AnalysisDependencyInfo kPatternDiscovery_deps = {
+    kPatternDiscovery_reads, {}};
 
 namespace {
 
