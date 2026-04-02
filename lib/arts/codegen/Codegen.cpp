@@ -904,10 +904,10 @@ Value ArtsCodegen::computeTotalElements(ValueRange sizes, Location loc) {
   if (sizes.size() == 1)
     return castToIndex(sizes.front(), loc);
 
-  SmallVector<Value> sizeBuffer(sizes.begin(), sizes.end());
-  SmallVector<Value> strides = computeStridesFromSizes(sizeBuffer, loc);
-  return create<arith::MulIOp>(loc, castToIndex(sizes.front(), loc),
-                               strides.front());
+  Value product = castToIndex(sizes.front(), loc);
+  for (Value size : sizes.drop_front())
+    product = create<arith::MulIOp>(loc, product, castToIndex(size, loc));
+  return product;
 }
 
 Value ArtsCodegen::computeLinearIndex(ArrayRef<Value> sizes,
