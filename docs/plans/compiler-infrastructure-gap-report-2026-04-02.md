@@ -153,7 +153,7 @@ Status: mostly missing
 Still missing:
 
 - `ArtsCodegen::getOrCreateRuntimeFunction()` is still a custom cache instead
-  of using `LLVM::lookupOrCreateFn()`.
+  of using `func::lookupOrCreateFnDecl()` (`mlir/Dialect/Func/Utils/Utils.h`).
 - memref-descriptor construction still needs a focused audit against upstream
   builders before it can be called simplified.
 
@@ -165,20 +165,22 @@ Primary files:
 
 ### Phase 8: Pass Statistics
 
-Status: missing
+Status: partial
 
 Current state:
 
-- there are no `Statistic<>` or `STATISTIC(...)` declarations in the compiler
-  pass tree.
+- 4 passes already declare `llvm::Statistic` counters (27 total):
+  `DbPartitioning.cpp` (10), `CreateDbs.cpp` (7), `EdtTransformsPass.cpp` (6),
+  `DbTransformsPass.cpp` (4).
+- The remaining ~26 passes have no statistics.
 
-Primary files:
+Primary files (uncovered high-value passes):
 
-- `include/arts/passes/Passes.td`
-- `lib/arts/passes/opt/db/DbPartitioning.cpp`
-- `lib/arts/passes/opt/db/DbTransformsPass.cpp`
-- `lib/arts/passes/opt/edt/EdtTransformsPass.cpp`
-- other high-value optimization passes
+- `lib/arts/passes/opt/edt/EpochOpt.cpp`
+- `lib/arts/passes/transforms/ForLowering.cpp`
+- `lib/arts/passes/opt/edt/Concurrency.cpp`
+- `lib/arts/passes/opt/edt/EdtStructuralOpt.cpp`
+- other optimization and lowering passes
 
 ### Phase 9: EdtInfo Dead Field Cleanup
 
@@ -505,3 +507,425 @@ The following items should not be reopened as "missing":
 - `LoweringContractInfo` structural decomposition;
 - partition predicate introduction;
 - `EdtInfo::maxLoopDepth` removal.
+
+---
+
+## Production Compiler Infrastructure Comparison
+
+The sections below expand the gap report with findings from three focused research
+investigations into production compiler infrastructure: LLVM's Attributor
+framework, MLIR and IREE's analysis/pass infrastructure, and a cross-compiler
+feature matrix covering LLVM, GCC, IREE, Halide, and TVM.
+
+### 1. LLVM Attributor Architecture
+
+The Attributor is a fixed-point interprocedural abstract analysis framework in
+LLVM. Its architecture is built on four interlocking design patterns that are
+worth understanding even though CARTS should not import the full framework.
+
+#### 1.1 Core Design Patterns
+
+**Fixed-point iteration.** The Attributor seeds AbstractAttribute instances for
+all IR positions, then iteratively calls `updateImpl()` on each until no
+attribute reports a state change (fixpoint). Termination is guaranteed by
+monotone update functions over finite lattices, with a hard iteration cap
+(default 32) as a safety net.
+
+**AbstractState lattices.** Every attribute carries two parallel states:
+
+- *Assumed* (optimistic): the best property that has not been disproved yet.
+- *Known* (conservative): what has been proved from IR evidence.
+- Invariant: `Known ≤ Assumed` always holds.
+
+Built-in state types include `BooleanState`, `BitIntegerState`,
+`IncIntegerState`, `DecIntegerState`, `IntegerRangeState`, and `SetState`. The
+assumed/known pair makes optimistic reasoning safe: the framework starts
+optimistic and narrows toward the conservative bound.
+
+**Automatic dependency tracking via `getAAFor()`.** When attribute X queries
+attribute Y via `A.getAAFor<AAType>(queryingAA, position, depClass)`, the
+framework automatically records a dependency edge Y → X. If Y later changes
+state, X is re-evaluated. Dependency classes are:
+
+- `REQUIRED`: X is invalid if Y is invalid.
+- `OPTIONAL`: X might stay valid even if Y changes.
+- `NONE`: no automatic recording (caller manages manually).
+
+**IRPosition anchoring.** Every attribute is anchored to an explicit IR
+position (function, argument, return value, call-site, call-site argument, call-
+site return, or floating value). Subsuming positions propagate information
+upward (e.g., call-site argument → callee argument → callee function).
+
+**InformationCache.** A one-time pre-scan of the module builds opcode maps,
+read/write instruction lists, and must-be-executed context information. All
+attributes share this cache, eliminating redundant IR traversals.
+
+#### 1.2 Comparison to CARTS AnalysisManager
+
+| Aspect | LLVM Attributor | CARTS AnalysisManager |
+|--------|-----------------|----------------------|
+| Type | Interprocedural fixed-point | Analysis holder / lazy factory |
+| Dependency tracking | Automatic via `getAAFor()` | None (manual) |
+| State management | Optimistic/pessimistic lattices | Binary (has graph or not) |
+| Fixed-point iteration | Built-in (32-iteration cap) | External (in-pass loops) |
+| Invalidation | Dependency-triggered | Manual `AM->invalidate()` |
+| IR positions | Rich `IRPosition` (8 kinds) | Implicit (operation / value) |
+| Caching | Fine-grained per attribute | Coarse per analysis type |
+| Scale | 10K+ lines, ~50 abstract attrs | ~400 lines, 8 analyses |
+
+#### 1.3 What CARTS Should Borrow
+
+The useful idea is the *discipline*, not the framework:
+
+- Facts should live in a small explicit state object.
+- Combines should be monotone and ordered.
+- Change detection should be explicit when useful.
+- IR-visible facts and transient inferred state should be separate concepts.
+
+For CARTS, this suggests a thin contract-state layer (see Section 6 below), not
+a heavyweight abstract-attribute engine.
+
+#### 1.4 What CARTS Should Avoid
+
+- **Full Attributor port.** CARTS operates on MLIR, not LLVM IR; the framework
+  is deeply tied to LLVM's `Value`, `CallBase`, and `Function` abstractions.
+- **File fragmentation.** The Attributor spans 7 `AttributorAttributes*.cpp`
+  files totaling ~10K lines. CARTS should keep pass implementations monolithic.
+- **Deep nesting of analysis types.** CARTS has 8 analyses; 50 would be
+  over-engineering.
+- **Manifest-phase complexity.** CARTS already has dedicated lowering passes
+  that write results to IR.
+
+### 2. MLIR Native Analysis and Pass Infrastructure
+
+#### 2.1 MLIR's AnalysisManager Design
+
+MLIR provides a built-in `AnalysisManager` with the following characteristics:
+
+- **Lazy-initialized, type-safe caching.** Analyses are computed on demand via
+  `getAnalysis<T>()` and cached per IR operation using `TypeID`.
+- **PreservedAnalyses tracking.** Each pass returns a `PreservedAnalyses` set
+  declaring which analyses survive. The PassManager automatically invalidates
+  unpreserved analyses after each pass.
+- **Polymorphic AnalysisConcept.** Each analysis wraps itself in an
+  `AnalysisModel<T>` providing a virtual `isInvalidated()` hook for custom
+  survival logic.
+- **Nested analysis maps.** Separate caches for module-level, function-level,
+  and per-operation analyses, enabling thread-safe function-level parallelism.
+- **Instrumentation hooks.** `PassInstrumentation` provides
+  `runBeforeAnalysis()` and `runAfterAnalysis()` callbacks for timing, tracing,
+  and verification.
+
+#### 2.2 CARTS vs MLIR Convention
+
+| Feature | MLIR | CARTS | Gap |
+|---------|------|-------|-----|
+| Analysis caching | Per-operation, automatic | Per-module, manual | No preservation tracking |
+| Analysis queries | `getAnalysis<T>()` via PassBase | `AM->getDbAnalysis()` | Passes need AM pointer injection |
+| Preservation | TypeID-based PreservedAnalyses | None | All-or-nothing invalidation |
+| Pipeline structure | Linear pass sequence + nesting | Custom 20-stage descriptors | Extra complexity, enables `--pipeline` |
+| Pass initialization | `initialize(MLIRContext *)` hook | No explicit init hook | Unused MLIR lifecycle point |
+| Instrumentation | PassInstrumentation | None | Cannot measure analysis time |
+| Thread safety | Per-operation nesting | Monolithic (NOT safe) | Blocks parallelization |
+
+#### 2.3 TextualPassPipeline and Sub-Pipeline Registration
+
+MLIR supports registering named pass pipelines:
+
+```cpp
+registerPipeline("carts-db-optimization", [](OpPassManager &pm) {
+  pm.addPass(createDbModeTighteningPass());
+  pm.addPass(createDbScratchEliminationPass());
+});
+```
+
+CARTS instead uses a custom `StageDescriptor` registry (`Compile.cpp:238-250`)
+with explicit builder functions. Each descriptor carries:
+
+- `captureDiagnosticsBefore` — triggers diagnostic snapshot before the stage
+- `errorMessage` — custom message on stage failure
+- `passes` — ordered list of pass names for `--all-pipelines` output
+- `enabled` — predicate controlling whether the stage runs
+- `allowStartFrom` — controls `--start-from` eligibility
+
+The CARTS approach is more verbose but enables richer metadata (`--pipeline`,
+`--start-from`, `--all-pipelines`). The trade-off is intentional but adds ~600
+LOC of pipeline plumbing.
+
+#### 2.4 Pass Statistics Integration
+
+MLIR passes inherit `Pass::Statistic` from the LLVM `Statistic` infrastructure.
+Declaration is one line per counter:
+
+```cpp
+Statistic numPartitioned{this, "num-partitioned", "DBs partitioned"};
+```
+
+CARTS has partial `Statistic` coverage: 4 of 30+ passes declare statistics
+(27 total counters):
+
+- `DbPartitioning.cpp` — 10 statistics (expanded acquires, stencil preservation, modes, failures)
+- `CreateDbs.cpp` — 7 statistics (allocs created, skipped, inferred modes, groups, views)
+- `EdtTransformsPass.cpp` — 6 statistics (granularity, affinity, reduction, deps, critical path)
+- `DbTransformsPass.cpp` — 4 statistics (persistence, consolidation, cleanup, dead roots)
+
+The remaining ~26 passes have no statistics.
+
+### 3. IREE Best Practices
+
+IREE is the most relevant production reference because it is also an MLIR-based
+compiler targeting heterogeneous runtimes. Five practices stand out.
+
+#### 3.1 Verification at Boundaries (HIGH priority)
+
+IREE inserts lightweight verification passes between major phases. CARTS
+currently has 6 verification points (`VerifyDbCreated`, `VerifyForLowered`,
+`VerifyLowered`, `VerifyPreLowered`, `VerifyMetadata`, `VerifyMetadataIntegrity`).
+Recommended additions:
+
+- `VerifyEdtLowered` — after EDT lowering
+- `VerifyDbLowered` — after DB lowering
+- `VerifyEpochLowered` — after epoch lowering
+
+#### 3.2 `--start-from` Pipeline Control (MEDIUM priority)
+
+IREE supports resuming compilation from a named phase. CARTS already has both
+`--pipeline` (stop-at) and `--start-from` (resume from a named stage token,
+defined in `Compile.cpp:259-262`), with validation ensuring `startIndex <=
+stopIndex` at lines 1159–1172. The remaining gap is not the CLI flag itself but
+**AnalysisManager state persistence**: when resuming from a serialized `.mlir`
+snapshot, all analysis caches (graphs, heuristic state) must be rebuilt from
+scratch because there is no checkpoint/restore for AM state.
+
+#### 3.3 `beforePhase` / `afterPhase` Hooks (MEDIUM priority)
+
+IREE uses a `PipelineHooks` struct to inject diagnostics and validation at phase
+boundaries without hardcoding them into pass code. CARTS currently hardcodes a
+diagnostics check in the `PreLowering` phase.
+
+#### 3.4 Function-Level Parallelism (HIGH priority, HIGH effort)
+
+IREE enables multi-threading by default with a 12-thread pool and uses
+pre-nested AnalysisManager instances for thread safety. CARTS has
+`context.disableMultithreading(true)` at `Compile.cpp:334`. The primary blocker
+is AnalysisManager thread safety (13 identified issues).
+
+#### 3.5 Fixed-Point Canonicalize/CSE (LOW priority)
+
+IREE replaces repeated canonicalize + CSE runs with a convergence loop. CARTS
+currently runs these passes multiple times at fixed positions in the pipeline.
+
+### 4. Feature Gap Matrix
+
+Comparison of CARTS against five production compilers across key infrastructure
+capabilities:
+
+| Feature | CARTS | LLVM | GCC | IREE | Halide | TVM |
+|---------|-------|------|-----|------|--------|-----|
+| Heuristics framework | Static rules (H1, H2) | Cost-based | Heuristics + FDO | Cost-based | Multi-objective search | Learned predictor |
+| Cost models | Hard-coded thresholds | Extensive | Partial | Partial | Explicit | XGBoost/RF |
+| Pass statistics | **Partial (4 of 30+ passes)** | Yes | Yes | Yes | N/A | Partial |
+| Analysis dependency decls | **None** | Yes | Yes | Yes | N/A | Partial |
+| Profiling / feedback loop | **None** | PGO | FDO | No | Offline | Yes |
+| Autotuning | **None** | No | No | No | Yes | Yes |
+| Phase ordering semantics | Weak (ad hoc) | Strong | Strong | Strong | N/A | N/A |
+| Pass parallelization | **Blocked** | Yes | Partial | Yes | N/A | N/A |
+| Verification passes | 6 strategic | Continuous | Continuous | Continuous | N/A | Partial |
+| IR-embedded decisions | Yes | Limited | Limited | Yes | Yes | Yes |
+| Pipeline checkpoint/resume | `--pipeline` + `--start-from` (no AM persistence) | Full | Full | `--start-from` | N/A | N/A |
+| Analysis invalidation | All-or-nothing | Selective | Selective | Selective | N/A | N/A |
+| Compiler instrumentation | `--diagnose` JSON | `--time-passes` | `-ftime-report` | `--mlir-timing` | Trace files | Logging |
+
+### 5. Priority-Ranked Infrastructure Gaps
+
+#### Tier 1 — Critical (correctness and parallelization blockers)
+
+| ID | Gap | Impact | Effort | Files |
+|----|-----|--------|--------|-------|
+| G-1 | AnalysisManager thread safety | Blocks parallelization (5–15% speedup available) | 1–2 weeks | `AnalysisManager.h`, all 8 analysis classes |
+| G-2 | Lowering contract authority completion | Graph-backed fallbacks still required; ~500 LOC cleanup blocked | 2–3 weeks | `DbAnalysis.cpp`, `DbAcquireNode.cpp`, `PartitionBoundsAnalyzer.cpp`, `DbBlockInfoComputer.cpp` |
+
+#### Tier 2 — High (optimization visibility and caching)
+
+| ID | Gap | Impact | Effort | Files |
+|----|-----|--------|--------|-------|
+| G-3 | Pass statistics coverage | 4 passes have statistics (27 counters); ~26 passes lack them | 3–5 days | `EpochOpt.cpp`, `ForLowering.cpp`, `Concurrency.cpp`, `EdtStructuralOpt.cpp`, + other uncovered passes |
+| G-4 | Analysis dependency declarations | Prerequisite for selective invalidation and caching | 1–2 weeks | All passes that use AM |
+| G-5 | Phase ordering semantics | Pipeline reordering causes silent miscompilation; no invariant enforcement | 1 week | `Compile.cpp`, `StageDescriptor` |
+
+#### Tier 3 — Medium (optimization quality and code health)
+
+| ID | Gap | Impact | Effort | Files |
+|----|-----|--------|--------|-------|
+| G-6 | Heuristic parameterization | Thresholds exist as named constants in `DbHeuristics.h` (`kMaxOuterDBs=1024`, `kMaxDepsPerEDT=8`, `kMinInnerBytes=64`) but are `static constexpr`, not CLI-tunable pass options; blocks autotuning | 3–5 days | `DbHeuristics.h`, `PartitioningHeuristics.h`, `PartitioningHeuristics.cpp` |
+| G-7 | Cost models for partitioning | Partitioning decisions based on access patterns only, no actual cost estimation | 2–3 weeks | `DbHeuristics.cpp`, `PartitioningHeuristics.h`, `DistributionHeuristics.h` |
+| G-8 | Runtime function builder cleanup | `getOrCreateRuntimeFunction()` uses `func::lookupFnDecl()` + `func::createFnDecl()`. Upstream `func::lookupOrCreateFnDecl()` (`Utils.h:81`) **cannot be used**: it defaults null `resultType` to `i64` (`Utils.cpp:307`), breaking void-returning runtime functions. Current code correctly handles void returns via `isa<NoneType>(ReturnType) ? ArrayRef<Type>{} : ArrayRef<Type>{ReturnType}`. **Blocked** until upstream adds void-return support or a `FunctionType` overload. | N/A | `Codegen.cpp`, `Codegen.h`, `ConvertArtsToLLVM.cpp` |
+
+#### Tier 4 — Low (instrumentation and future foundations)
+
+| ID | Gap | Impact | Effort | Files |
+|----|-----|--------|--------|-------|
+| G-9 | `--mlir-timing` integration | **Resolved**: already functional via `applyDefaultTimingPassManagerCLOptions(pm)` in `configurePassManager()` (`Compile.cpp:576`) | 0 | `Compile.cpp` |
+| G-10 | Pass instrumentation hooks | Cannot hook analysis timing, tracing, or verification automatically | 2–3 weeks | `Compile.cpp`, new `PassInstrumentation` subclass |
+| G-11 | Autotuning foundation | No parameter search space, no empirical search loop | 2–3 months | New infrastructure |
+| G-12 | Verification at every boundary | Only 6 verification points vs IREE's continuous checking | 1 week per boundary | New verification passes |
+
+### 6. Attributor-Inspired Recommendations
+
+These are concrete patterns to adopt from the Attributor's *discipline* without
+importing its framework.
+
+#### 6.1 State Lattices for DbAnalysis
+
+Replace the current binary "has graph or doesn't" model with an explicit
+assumed/known pair for key properties:
+
+```
+DbPartitionState:
+  Known  = { properties proved from IR contracts }
+  Assumed = { properties assumed from heuristic context }
+  Invariant: Known ⊆ Assumed
+
+Fixpoint: all heuristic decisions either confirmed by IR evidence or
+          narrowed to worst-case.
+```
+
+This makes the distinction between "inferred from graph" and "persisted in
+contract" explicit in the type system. The `PartitioningContext` already carries
+the right input data; the state lattice formalizes the output.
+
+Primary files: `include/arts/analysis/db/DbAnalysis.h`,
+`include/arts/analysis/heuristics/PartitioningHeuristics.h`.
+
+#### 6.2 Dependency-Aware Analysis Queries
+
+Adopt the `getAAFor()` pattern at the AnalysisManager level:
+
+```cpp
+template <typename AnalysisT>
+AnalysisT &getAnalysisFor(Pass *queryingPass,
+                          AnalysisDependency dep = OPTIONAL);
+```
+
+When a pass queries an analysis, the AnalysisManager records the dependency
+edge. On invalidation, only dependent analyses are cleared. This replaces the
+current all-or-nothing `AM->invalidate()`.
+
+Primary file: `include/arts/analysis/AnalysisManager.h`.
+
+#### 6.3 InformationCache for Module-Level Facts
+
+Pre-scan the module once and cache opcode maps, EDT counts per function, DB
+allocation sites, and loop nesting structure. Currently, 86+ redundant module
+walks have been identified. A shared `InformationCache` built in the
+AnalysisManager constructor would eliminate most of them.
+
+```cpp
+struct ArtsInformationCache {
+  DenseMap<func::FuncOp, SmallVector<arts::EdtOp>> edtsPerFunction;
+  DenseMap<func::FuncOp, SmallVector<arts::DbAllocOp>> allocsPerFunction;
+  DenseMap<func::FuncOp, SmallVector<arts::ForOp>> loopsPerFunction;
+  // Built once in AnalysisManager constructor
+};
+```
+
+Primary file: new `include/arts/analysis/InformationCache.h`, consumed by
+`AnalysisManager.h`.
+
+#### 6.4 Graph Versioning
+
+Add a modification counter to `DbGraph` and `EdtGraph`. Analysis caches check
+the counter before reusing results, eliminating silent stale-data bugs:
+
+```cpp
+class DbGraph {
+  uint64_t version = 0;
+  void onNodeModified() { ++version; }
+};
+```
+
+This is lighter than full PreservedAnalyses integration and addresses the most
+common source of stale analysis data.
+
+Primary files: `include/arts/analysis/graphs/db/DbGraph.h`,
+`include/arts/analysis/graphs/edt/EdtGraph.h`.
+
+#### 6.5 PreservedAnalyses Integration
+
+Move from all-or-nothing invalidation to selective preservation. Each pass
+declares which analyses it preserves:
+
+```cpp
+void DbModeTighteningPass::runOnOperation() {
+  // ... pass logic ...
+  markAnalysesPreserved<LoopAnalysis>();  // Loop structure unchanged
+}
+```
+
+The AnalysisManager checks the preservation set and only destroys unpreserved
+caches. This is the MLIR-native pattern and complements the dependency tracking
+from Section 6.2.
+
+Primary files: `include/arts/analysis/AnalysisManager.h`, all passes in
+`lib/arts/passes/`.
+
+#### 6.6 Change Reporting for Monotone Updates
+
+Contract merge and refinement operations should return an explicit change
+status, similar to the Attributor's `ChangeStatus`:
+
+```cpp
+enum class ContractChange { Unchanged, Changed };
+
+ContractChange mergeLoweringContractInfo(LoweringContractInfo &dst,
+                                         const LoweringContractInfo &src);
+```
+
+This enables refinement passes to express whether they actually strengthened
+the contract, supporting future fixed-point iteration over contract state.
+
+Primary file: `lib/arts/utils/LoweringContractUtils.cpp`.
+
+### 7. Recommended Implementation Sequence
+
+When infrastructure work resumes, the recommended order integrates these new
+findings with the existing contract-authority work from the first half of this
+report:
+
+1. **Contract authority** (Tier 1, G-2): finish the thin contract-state API
+   and eliminate graph-backed fallbacks. This is already the top priority from
+   the existing gap analysis.
+
+2. **Pass statistics coverage** (Tier 2, G-3): extend `Statistic` coverage
+   from the existing 4 passes (27 counters) to the remaining ~26 uncovered
+   passes. Low risk, immediate visibility into optimization impact.
+
+3. **Analysis dependency declarations** (Tier 2, G-4): implement dependency-
+   aware queries in AnalysisManager. Prerequisite for selective invalidation.
+
+4. **AnalysisManager thread safety** (Tier 1, G-1): harden for multi-threaded
+   execution. Requires dependency declarations (step 3) to be in place first
+   for safe selective invalidation.
+
+5. **Graph versioning** (Section 6.4): add modification counters to DbGraph
+   and EdtGraph. Quick win that eliminates stale-data bugs.
+
+6. **InformationCache** (Section 6.3): pre-scan module to eliminate redundant
+   walks. Medium effort, measurable compile-time improvement.
+
+7. **Runtime function builder cleanup** (Tier 3, G-8): **blocked** — upstream
+   `func::lookupOrCreateFnDecl()` defaults null `resultType` to `i64`, breaking
+   void-returning ARTS runtime functions. Current `lookupFnDecl()` +
+   `createFnDecl()` pattern is correct. Revisit if upstream adds a
+   `FunctionType` overload or void-return support.
+
+8. **Heuristic parameterization** (Tier 3, G-6): expose existing named
+   constants (`kMaxOuterDBs`, `kMaxDepsPerEDT`, `kMinInnerBytes`) as CLI-tunable
+   pass options. Foundation for future autotuning.
+
+9. **Verification passes** (Tier 4, G-12): add `VerifyEdtLowered`,
+   `VerifyDbLowered`, `VerifyEpochLowered` at lowering boundaries.
+
+10. **`--mlir-timing`** (Tier 4, G-9): **Resolved** — already functional via
+    `applyDefaultTimingPassManagerCLOptions(pm)` in `configurePassManager()`
+    (`Compile.cpp:576`). No further work needed.

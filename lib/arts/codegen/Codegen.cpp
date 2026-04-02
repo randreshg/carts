@@ -92,6 +92,13 @@ func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
   getBuilder().setInsertionPointToStart(module.getBody());
 
   func::FuncOp funcOp;
+  // NOTE: Cannot use func::lookupOrCreateFnDecl() here because its signature
+  // takes (TypeRange paramTypes, Type resultType={}) and defaults a null
+  // resultType to i64 (Utils.cpp:307). ARTS runtime functions include
+  // void-returning entries, which the current code handles correctly by
+  // building a FunctionType with an empty results array when
+  // isa<NoneType>(ReturnType). The upstream API has no FunctionType overload
+  // and no way to express void returns without the i64 default.
   /// Try to find the declaration in the module first.
 #define ARTS_RTL_FUNCTIONS
 #define ARTS_RTL(Enum, Str, ReturnType, ...)                                   \
@@ -106,9 +113,8 @@ func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
            "Failed to look up ARTS runtime function declaration");             \
     funcOp = *funcOrError;                                                     \
     if (!funcOp) {                                                             \
-      funcOp =                                                                 \
-          func::createFnDecl(getBuilder(), module, Str, fnType,                \
-                             /*setPrivate=*/true);                             \
+      funcOp = func::createFnDecl(getBuilder(), module, Str, fnType,           \
+                                  /*setPrivate=*/true);                        \
       funcOp.setPrivate();                                                     \
     }                                                                          \
     funcOp->setAttr(                                                           \
