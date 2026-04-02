@@ -1,4 +1,4 @@
-// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %S/../../tools/carts compile %S/../../external/carts-benchmarks/sw4lite/rhs4sg-base/rhs4sg_base.c --pipeline pre-lowering --arts-config %S/../examples/arts.cfg -- -I%S/../../external/carts-benchmarks/sw4lite/common -DNX=40 -DNY=40 -DNZ=40 -DNREPS=1 >/dev/null && cat %t.compile/rhs4sg_base.pre-lowering.mlir' | %FileCheck %s
+// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %carts compile %S/../../external/carts-benchmarks/sw4lite/rhs4sg-base/rhs4sg_base.c --pipeline pre-lowering --arts-config %S/../examples/arts.cfg -- -I%S/../../external/carts-benchmarks/sw4lite/common -DNX=40 -DNY=40 -DNZ=40 -DNREPS=1 >/dev/null && cat %t.compile/rhs4sg_base.pre-lowering.mlir' | %FileCheck %s
 
 // Check that DataPtrHoisting treats invariant pointer2memref materializations
 // as first-class hoist candidates so the EDT body reuses memrefs instead of

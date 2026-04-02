@@ -1,4 +1,4 @@
-// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %S/../../tools/carts compile %S/../../external/carts-benchmarks/polybench/atax/atax.c --pipeline concurrency-opt --arts-config %S/inputs/arts_2t.cfg -- -I%S/../../external/carts-benchmarks/polybench/atax -I%S/../../external/carts-benchmarks/polybench/common -I%S/../../external/carts-benchmarks/polybench/utilities -D_GNU_SOURCE -lm >/dev/null && cat %t.compile/atax.concurrency-opt.mlir' | %FileCheck %s
+// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %carts compile %S/../../external/carts-benchmarks/polybench/atax/atax.c --pipeline db-partitioning --arts-config %S/inputs/arts_2t.cfg -- -I%S/../../external/carts-benchmarks/polybench/atax -I%S/../../external/carts-benchmarks/polybench/common -I%S/../../external/carts-benchmarks/polybench/utilities -D_GNU_SOURCE -lm >/dev/null && cat %t.compile/atax.db-partitioning.mlir' | %FileCheck %s
 
 // ATAX reuses the read-only matrix `A` under conflicting owner dimensions:
 // the first phase is row-owned while the second phase is column-owned. On a

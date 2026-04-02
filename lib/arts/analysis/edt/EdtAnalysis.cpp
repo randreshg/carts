@@ -19,8 +19,9 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "llvm/ADT/SmallPtrSet.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
 
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -65,6 +66,25 @@ void EdtAnalysis::analyzeFunc(func::FuncOp func) {
     auto &info = edtNode->getInfo();
     info.orderIndex = edtIndex;
     edtOrderIndex[edt] = edtIndex++;
+
+    /// Compute max loop depth within the EDT body.
+    unsigned maxDepth = 0;
+    edt.getBody().walk([&](Operation *op) {
+      if (!isa<scf::ForOp, affine::AffineForOp, scf::ParallelOp, arts::ForOp>(
+              op))
+        return;
+      unsigned depth = 0;
+      for (Operation *parent = op->getParentOp(); parent;
+           parent = parent->getParentOp()) {
+        if (parent == edt.getOperation())
+          break;
+        if (isa<scf::ForOp, affine::AffineForOp, scf::ParallelOp, arts::ForOp>(
+                parent))
+          ++depth;
+      }
+      maxDepth = std::max(maxDepth, depth + 1);
+    });
+    info.maxLoopDepth = maxDepth;
 
     info.loopDistributionPatterns.clear();
     info.dominantDistributionPattern = EdtDistributionPattern::unknown;

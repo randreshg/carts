@@ -8,7 +8,8 @@ argument-hint: [command]
 
 # CARTS CLI
 
-The `carts` command is the unified CLI. NEVER use `make`, `ninja`, or full paths to `carts_cli.py`.
+Use `dekk carts` for project lifecycle and `carts` for compiler work. NEVER use
+`make`, `ninja`, or full paths to `carts_cli.py`.
 
 ## Available commands
 
@@ -26,7 +27,7 @@ The `carts` command is the unified CLI. NEVER use `make`, `ninja`, or full paths
 | `carts doctor` | Check environment health |
 | `carts pipeline --json` | List pipeline stages |
 | `carts benchmarks list` | List available benchmarks |
-| `carts agents status` | Show agent skill status |
+| `dekk carts agents status` | Show agent skill status |
 
 ## Instructions
 

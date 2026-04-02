@@ -1,4 +1,4 @@
-// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %S/../../tools/carts compile %S/../../external/carts-benchmarks/ml-kernels/activations/activations.c --pipeline initial-cleanup --arts-config %S/inputs/arts_1t.cfg -- -DSIZE=1024 -DNREPS=1 -lm >/dev/null && %S/../../tools/carts compile %t.compile/activations.mlir --emit-llvm --arts-config %S/inputs/arts_1t.cfg' | %FileCheck %s
+// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %carts compile %S/../../external/carts-benchmarks/ml-kernels/activations/activations.c --pipeline initial-cleanup --arts-config %S/inputs/arts_1t.cfg -- -DSIZE=1024 -DNREPS=1 -lm >/dev/null && %carts compile %t.compile/activations.mlir --emit-llvm --arts-config %S/inputs/arts_1t.cfg' | %FileCheck %s
 
 // The scalar-call activations path should not receive forced llvm.loop
 // vectorize/unroll hints because LLVM cannot honor them profitably on that

@@ -84,12 +84,35 @@
 #include "polygeist/Ops.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/Statistic.h"
 #include <cstdint>
 #include <memory>
 
 /// Debug
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(create_dbs);
+
+static llvm::Statistic numDbAllocsCreated{
+    "create_dbs", "NumDbAllocsCreated",
+    "Number of arts.db_alloc ops created for shared allocations"};
+static llvm::Statistic numPrivateEdtAllocsSkipped{
+    "create_dbs", "NumPrivateEdtAllocsSkipped",
+    "Number of EDT-local allocations skipped because they never escape"};
+static llvm::Statistic numEdtAccessModesInferred{
+    "create_dbs", "NumEdtAccessModesInferred",
+    "Number of EDT/memref pairs that required inferred access modes"};
+static llvm::Statistic numMemrefsDefaultedToInOut{
+    "create_dbs", "NumMemrefsDefaultedToInOut",
+    "Number of memrefs defaulted to inout because no access evidence existed"};
+static llvm::Statistic numDbAcquireGroupsCreated{
+    "create_dbs", "NumDbAcquireGroupsCreated",
+    "Number of DbAcquireOp groups created for EDT dependencies"};
+static llvm::Statistic numGlobalDbInitializations{
+    "create_dbs", "NumGlobalDbInitializations",
+    "Number of global datablocks initialized from memref.global contents"};
+static llvm::Statistic numOpsRewrittenToDbViews{
+    "create_dbs", "NumOpsRewrittenToDbViews",
+    "Number of operations rewritten to access datablock-backed views"};
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -404,6 +427,7 @@ void CreateDbsPass::reconcileExternalDepAccessModes() {
                  << " used in EDT without DbControlOps, inferred mode="
                  << inferredMode);
       info.accessMode = combineAccessModes(info.accessMode, inferredMode);
+      ++numEdtAccessModesInferred;
     }
   }
 }
@@ -420,6 +444,7 @@ void CreateDbsPass::ensureInitializedAccessModes() {
                << *entry.first
                << " has no DbControlOps at all, defaulting to inout mode");
     info.accessMode = ArtsMode::inout;
+    ++numMemrefsDefaultedToInOut;
   }
 }
 
@@ -449,8 +474,9 @@ void CreateDbsPass::cleanupAndFinalize() {
   arts::simplifyIR(module, domInfo);
 }
 
-void CreateDbsPass::projectSemanticContractToDbValue(
-    Operation *sourceOp, Operation *targetOp, Value contractTarget) {
+void CreateDbsPass::projectSemanticContractToDbValue(Operation *sourceOp,
+                                                     Operation *targetOp,
+                                                     Value contractTarget) {
   if (!sourceOp || !targetOp || !contractTarget)
     return;
 
@@ -671,6 +697,7 @@ void CreateDbsPass::createDbAllocOps() {
       }
       if (!escapesEdt) {
         ARTS_DEBUG(" - Skipping local EDT allocation (no external uses)");
+        ++numPrivateEdtAllocsSkipped;
         continue;
       }
     }
@@ -741,6 +768,7 @@ void CreateDbsPass::createDbAllocOps() {
     auto dbAllocOp =
         AC->create<DbAllocOp>(loc, mode, route, allocType, dbMode, elementType,
                               sizes, elementSizes, partitionMode);
+    ++numDbAllocsCreated;
 
     projectSemanticContractToDbValue(alloc, dbAllocOp.getOperation(),
                                      dbAllocOp.getPtr());
@@ -824,6 +852,7 @@ void CreateDbsPass::initializeGlobalDbIfNeeded(Operation *alloc,
       getGlobal, getGlobal.getNameAttr());
   if (!globalOp || !globalOp.getInitialValue().has_value())
     return;
+  ++numGlobalDbInitializations;
 
   Location loc = alloc->getLoc();
   OpBuilder::InsertionGuard initGuard(AC->getBuilder());
@@ -1193,10 +1222,10 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       if (!preserveDepEdge)
         AC->setInsertionPointToStart(&edt.getBody().front());
       auto acquireOp = createAcquire(edt.getLoc());
+      ++numDbAcquireGroupsCreated;
 
-      projectSemanticContractToDbValue(edt.getOperation(),
-                                       acquireOp.getOperation(),
-                                       acquireOp.getPtr());
+      projectSemanticContractToDbValue(
+          edt.getOperation(), acquireOp.getOperation(), acquireOp.getPtr());
 
       if (!depGroup.empty()) {
         /// Explicit DbControlOp-derived acquires always preserve their access
@@ -1459,6 +1488,7 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
     SmallVector<Value> &acquireIndices, SmallVector<Value> &acquireOffsets,
     Value localAcquireView, const DbRewritePlan &plan) {
   ARTS_DEBUG(" - Rewriting " << operations.size() << " operations in EDT");
+  numOpsRewrittenToDbViews += operations.size();
 
   /// Get the element type from the acquired datablock
   /// For fine-grained: memref<?xmemref<?xT>> -> extract memref<?xT>

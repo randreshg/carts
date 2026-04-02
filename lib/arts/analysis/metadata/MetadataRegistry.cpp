@@ -25,7 +25,8 @@ using namespace mlir::arts;
 
 namespace {
 
-static bool refreshLoopMetadataFactsImpl(LoopMetadata &metadata, Operation *op) {
+static bool refreshLoopMetadataFactsImpl(LoopMetadata &metadata,
+                                         Operation *op) {
   if (!op)
     return false;
 
@@ -89,8 +90,8 @@ static bool refreshMetadataFactsImpl(ArtsMetadata &metadata, Operation *op) {
   return true;
 }
 
-static std::unique_ptr<ArtsMetadata> createMetadataEntryForOperation(
-    Operation *op) {
+static std::unique_ptr<ArtsMetadata>
+createMetadataEntryForOperation(Operation *op) {
   if (!op)
     return nullptr;
 

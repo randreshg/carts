@@ -16,6 +16,7 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/PartitionPredicates.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Dominance.h"
@@ -214,7 +215,7 @@ matchScratchCandidate(DbAllocOp alloc, DominanceInfo &domInfo) {
       return std::nullopt;
 
     auto mode = getPartitionMode(acquire.getOperation());
-    if (mode && *mode != PartitionMode::coarse)
+    if (mode && requiresWorkerBoundsPlanning(*mode))
       return std::nullopt;
 
     auto [edt, blockArg] = getEdtBlockArgumentForAcquire(acquire);

@@ -1,4 +1,4 @@
-// RUN: %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %S/../examples/arts.cfg --pipeline concurrency-opt | %FileCheck %s --check-prefix=DB-POLICY
+// RUN: %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %S/../examples/arts.cfg --pipeline post-db-refinement | %FileCheck %s --check-prefix=DB-POLICY
 // RUN: %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %S/../examples/arts.cfg --pipeline edt-distribution | %FileCheck %s --check-prefix=EDT-BND
 // RUN: %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %S/../examples/arts.cfg --pipeline pre-lowering | %FileCheck %s --check-prefix=EPOCH-BND
 // RUN: %carts-compile %S/inputs/uniform_block.mlir --O3 --arts-config %S/inputs/arts_multinode.cfg --pipeline edt-distribution | %FileCheck %s --check-prefix=DIST-EDT

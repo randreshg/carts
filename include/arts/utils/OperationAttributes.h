@@ -311,8 +311,8 @@ inline std::optional<MetadataProvenanceKind>
 getMetadataProvenance(Operation *op) {
   if (!op)
     return std::nullopt;
-  auto attr = op->getAttrOfType<StringAttr>(
-      AttrNames::Operation::MetadataProvenance);
+  auto attr =
+      op->getAttrOfType<StringAttr>(AttrNames::Operation::MetadataProvenance);
   if (!attr)
     return std::nullopt;
   return parseMetadataProvenance(attr.getValue());
@@ -321,9 +321,9 @@ getMetadataProvenance(Operation *op) {
 inline void setMetadataProvenance(Operation *op, MetadataProvenanceKind kind) {
   if (!op)
     return;
-  op->setAttr(AttrNames::Operation::MetadataProvenance,
-              StringAttr::get(op->getContext(),
-                              metadataProvenanceToString(kind)));
+  op->setAttr(
+      AttrNames::Operation::MetadataProvenance,
+      StringAttr::get(op->getContext(), metadataProvenanceToString(kind)));
 }
 
 inline void ensureMetadataProvenance(Operation *op,

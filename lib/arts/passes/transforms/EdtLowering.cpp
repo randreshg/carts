@@ -38,6 +38,7 @@
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/PartitionPredicates.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/metadata/IdRegistry.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -86,8 +87,7 @@ static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
     return;
 
   auto mode = acquire.getPartitionMode();
-  if (!mode ||
-      (*mode != PartitionMode::block && *mode != PartitionMode::stencil))
+  if (!mode || !usesBlockLayout(*mode))
     return;
   /// For contract-backed block/stencil acquires, partition_* is the
   /// authoritative task-local dependency window in element space. Lowering
@@ -120,7 +120,7 @@ static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   auto outerSizes = alloc.getSizes();
   auto elementSizes = alloc.getElementSizes();
   LoweringContractInfo contractInfo;
-  contractInfo.ownerDims = contract.ownerDims;
+  contractInfo.spatial.ownerDims = contract.ownerDims;
   SmallVector<unsigned, 4> dims = resolveContractOwnerDims(contractInfo, rank);
 
   if (dims.size() > outerSizes.size() || dims.size() > elementSizes.size())
@@ -191,7 +191,7 @@ normalizeCommonElementSlice(ArtsCodegen *AC, DbAcquireOp acquire,
 
   AcquireRewriteContract contract = deriveAcquireRewriteContract(acquire);
   LoweringContractInfo contractInfo;
-  contractInfo.ownerDims = contract.ownerDims;
+  contractInfo.spatial.ownerDims = contract.ownerDims;
   SmallVector<unsigned, 4> ownerDims =
       resolveContractOwnerDims(contractInfo, ownerRank);
   if (ownerDims.size() != ownerRank)
@@ -586,9 +586,7 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   /// same DB-space contract.
   for (Value dep : edtDeps)
     if (auto acquire = dep.getDefiningOp<DbAcquireOp>())
-      normalizeTaskDepSlice(
-          AC, acquire,
-          resolveAcquireRewriteContract(&analysisManager, acquire));
+      normalizeTaskDepSlice(AC, acquire, deriveAcquireRewriteContract(acquire));
 
   SmallVector<Type> packTypes;
 
@@ -1315,8 +1313,7 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
     auto originalAcquire = originalDeps[depIndex].getDefiningOp<DbAcquireOp>();
     const bool indicesAlreadySliceRelative =
         originalAcquire && originalAcquire.getPartitionMode() &&
-        (*originalAcquire.getPartitionMode() == PartitionMode::block ||
-         *originalAcquire.getPartitionMode() == PartitionMode::stencil);
+        usesBlockLayout(*originalAcquire.getPartitionMode());
 
     /// Replace remaining uses of the dependency placeholder with the dependency
     bool isSingleElement = DbAnalysis::hasSingleSize(

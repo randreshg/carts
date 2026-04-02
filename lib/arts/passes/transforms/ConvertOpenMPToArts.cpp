@@ -29,8 +29,8 @@
 /// Arts
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
+#include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #define GEN_PASS_DEF_CONVERTOPENMPTOARTS
 #include "arts/Dialect.h"
@@ -376,8 +376,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
 
 /// Pattern to replace `omp.wsloop` with `arts.for` loop
 struct WsloopToARTSPattern : public OpRewritePattern<omp::WsloopOp> {
-  WsloopToARTSPattern(MLIRContext *context,
-                      MetadataManager &metadataManager)
+  WsloopToARTSPattern(MLIRContext *context, MetadataManager &metadataManager)
       : OpRewritePattern<omp::WsloopOp>(context),
         metadataManager(metadataManager) {}
 
@@ -829,8 +828,8 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
 ///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createConvertOpenMPToArtsPass(
-    mlir::arts::AnalysisManager *AM) {
+std::unique_ptr<Pass>
+createConvertOpenMPToArtsPass(mlir::arts::AnalysisManager *AM) {
   return std::make_unique<ConvertOpenMPToArtsPass>(AM);
 }
 } // namespace arts

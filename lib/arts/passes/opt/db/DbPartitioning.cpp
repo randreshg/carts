@@ -40,8 +40,6 @@
 #include "mlir/Support/LLVM.h"
 /// Arts
 #include "arts/Dialect.h"
-#include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/graphs/db/DbGraph.h"
@@ -49,6 +47,8 @@
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/analysis/loop/LoopNode.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
 /// Other
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
@@ -61,6 +61,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/Statistic.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cstdint>
@@ -90,7 +91,57 @@ using namespace mlir::arts;
 
 ARTS_DEBUG_SETUP(db_partitioning);
 
+static llvm::Statistic numMultiEntryAcquiresExpanded{
+    "db_partitioning", "NumMultiEntryAcquiresExpanded",
+    "Number of multi-entry DbAcquireOps expanded into per-entry acquires"};
+static llvm::Statistic numExpandedAcquireEntriesCreated{
+    "db_partitioning", "NumExpandedAcquireEntriesCreated",
+    "Number of per-entry DbAcquireOps created while expanding multi-entry "
+    "acquires"};
+static llvm::Statistic numStencilAcquireGroupsPreserved{
+    "db_partitioning", "NumStencilAcquireGroupsPreserved",
+    "Number of multi-entry stencil acquires preserved for ESD lowering"};
+static llvm::Statistic numAllocsPreservedForLeafContracts{
+    "db_partitioning", "NumAllocsPreservedForLeafContracts",
+    "Number of allocations left in place to preserve explicit distributed leaf "
+    "layouts"};
+static llvm::Statistic numAllocsLeftCoarseForHostViews{
+    "db_partitioning", "NumAllocsLeftCoarseForHostViews",
+    "Number of allocations forced to stay coarse because host-side full-view "
+    "users remain"};
+static llvm::Statistic numAllocsLeftCoarseByHeuristics{
+    "db_partitioning", "NumAllocsLeftCoarseByHeuristics",
+    "Number of allocations left coarse after heuristic arbitration"};
+static llvm::Statistic numAcquiresForcedFullRange{
+    "db_partitioning", "NumAcquiresForcedFullRange",
+    "Number of DbAcquireOps widened to full-range access to preserve "
+    "correctness"};
+static llvm::Statistic numStencilBoundsGuardsInserted{
+    "db_partitioning", "NumStencilBoundsGuardsInserted",
+    "Number of DbAcquireOps rewritten with bounds-valid guards for stencil "
+    "accesses"};
+static llvm::Statistic numAllocsPartitionedBlock{
+    "db_partitioning", "NumAllocsPartitionedBlock",
+    "Number of allocations rewritten to block partitioning"};
+static llvm::Statistic numAllocsPartitionedStencil{
+    "db_partitioning", "NumAllocsPartitionedStencil",
+    "Number of allocations rewritten to stencil partitioning"};
+static llvm::Statistic numAllocsPartitionedFineGrained{
+    "db_partitioning", "NumAllocsPartitionedFineGrained",
+    "Number of allocations rewritten to fine-grained partitioning"};
+static llvm::Statistic numPartitionRewriteFailures{
+    "db_partitioning", "NumPartitionRewriteFailures",
+    "Number of allocation rewrites that failed in DbRewriter"};
+
 namespace {
+
+static bool markAcquireNeedsFullRange(AcquirePartitionInfo &info) {
+  if (info.needsFullRange)
+    return false;
+  info.needsFullRange = true;
+  ++numAcquiresForcedFullRange;
+  return true;
+}
 
 static bool dbPartitionTraceEnabled() {
   static const bool enabled =
@@ -410,7 +461,7 @@ reconcileAcquireModes(PartitioningContext &ctx,
     ctx.canElementWise = false;
     for (auto &info : acquireInfos) {
       if (info.mode == PartitionMode::coarse)
-        info.needsFullRange = true;
+        markAcquireNeedsFullRange(info);
     }
   } else if (hasCoarse) {
     ctx.canElementWise = false;
@@ -527,6 +578,7 @@ static void applyBoundsValid(DbAcquireOp acquireOp,
 
   acquireOp.getGuid().replaceAllUsesWith(newAcquire.getGuid());
   acquireOp.getPtr().replaceAllUsesWith(newAcquire.getPtr());
+  ++numStencilBoundsGuardsInserted;
   acquireOp.erase();
 }
 
@@ -601,15 +653,16 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(
   /// They must remain authoritative even when the acquire does not opt into
   /// halo transport, otherwise non-leading stencil contracts collapse back to
   /// implicit leading-dim plans during block-plan resolution.
-  if (summary && !summary->contract.ownerDims.empty()) {
+  if (summary && !summary->contract.spatial.ownerDims.empty()) {
     unsigned contractRank = 0;
-    for (int64_t dim : summary->contract.ownerDims) {
+    for (int64_t dim : summary->contract.spatial.ownerDims) {
       if (dim >= 0)
         contractRank =
             std::max<unsigned>(contractRank, static_cast<unsigned>(dim) + 1);
     }
     if (contractRank == 0)
-      contractRank = static_cast<unsigned>(summary->contract.ownerDims.size());
+      contractRank =
+          static_cast<unsigned>(summary->contract.spatial.ownerDims.size());
 
     SmallVector<unsigned, 4> contractDims =
         resolveContractOwnerDims(summary->contract, contractRank);
@@ -726,8 +779,9 @@ feedbackPartitionDecisionToContract(DbAllocOp newAllocOp,
 
   /// Populate resolved block shape from the block-plan resolver output.
   if (!blockSizes.empty() &&
-      (info.ownerDims.empty() || blockSizes.size() == info.ownerDims.size())) {
-    info.blockShape.assign(blockSizes.begin(), blockSizes.end());
+      (info.spatial.ownerDims.empty() ||
+       blockSizes.size() == info.spatial.ownerDims.size())) {
+    info.spatial.blockShape.assign(blockSizes.begin(), blockSizes.end());
   }
 
   /// Populate ownerDims from the resolved partitioned dimensions only when the
@@ -735,16 +789,16 @@ feedbackPartitionDecisionToContract(DbAllocOp newAllocOp,
   /// shape. For stencil families, ownerDims describe the semantic footprint
   /// rank and must not be collapsed to a narrower layout choice here.
   if (!partitionedDims.empty() &&
-      (!info.hasExplicitStencilContract() || info.ownerDims.empty())) {
-    info.ownerDims.clear();
-    info.ownerDims.reserve(partitionedDims.size());
+      (!info.hasExplicitStencilContract() || info.spatial.ownerDims.empty())) {
+    info.spatial.ownerDims.clear();
+    info.spatial.ownerDims.reserve(partitionedDims.size());
     for (unsigned dim : partitionedDims)
-      info.ownerDims.push_back(static_cast<int64_t>(dim));
+      info.spatial.ownerDims.push_back(static_cast<int64_t>(dim));
   }
 
   /// Mark as post-DB refined so consumers can distinguish contracts that
   /// survived partitioning from pre-partitioning seeds.
-  info.postDbRefined = true;
+  info.analysis.postDbRefined = true;
 
   /// Partitioning may learn a narrower layout than the semantic owner-dim
   /// footprint carried by stencil contracts. Drop any ranked payload that no
@@ -1194,6 +1248,7 @@ bool DbPartitioningPass::expandMultiEntryAcquires() {
         /// The partitioning pass will handle this with stencil/ESD mode
         original.setPartitionModeAttr(PartitionModeAttr::get(
             original.getContext(), PartitionMode::stencil));
+        ++numStencilAcquireGroupsPreserved;
         continue;
       }
 
@@ -1217,6 +1272,8 @@ bool DbPartitioningPass::expandMultiEntryAcquires() {
     /// Create separate acquires for each partition entry
     SmallVector<DbAcquireOp> expandedAcquires =
         createExpandedAcquires(original, builder);
+    ++numMultiEntryAcquiresExpanded;
+    numExpandedAcquireEntriesCreated += expandedAcquires.size();
 
     /// Update EDT dependencies: replace original with all expanded acquires
     edtUser.setDependencies(
@@ -1435,6 +1492,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   if (DbUtils::hasNonPartitionableHostViewUses(allocOp.getPtr())) {
     ARTS_DEBUG("  Host-side opaque/full-view users require coarse layout");
     resetCoarseAcquireRanges(allocOp, allocNode, builder);
+    ++numAllocsLeftCoarseForHostViews;
     heuristics.recordDecision(
         "Partition-UnsafeHostView", false,
         "host-side opaque/full-view uses require coarse allocation",
@@ -1571,7 +1629,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     for (size_t i = 0; i < acquireDecisions.size() && i < acquireInfos.size();
          ++i) {
       if (acquireDecisions[i].needsFullRange) {
-        acquireInfos[i].needsFullRange = true;
+        markAcquireNeedsFullRange(acquireInfos[i]);
       }
     }
 
@@ -1652,8 +1710,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       getArtsId(allocOp.getOperation()) == forceCoarseAllocId) {
     decision = PartitioningDecision::coarse(
         ctx, "Debug override: forced coarse allocation by arts.id");
-    ARTS_DEBUG("  Forcing coarse allocation via "
-               << "--force-coarse-alloc-id=" << forceCoarseAllocId);
+    ARTS_DEBUG("  Forcing coarse allocation via " << "--force-coarse-alloc-id="
+                                                  << forceCoarseAllocId);
     heuristics.recordDecision(
         "Partition-DebugForceCoarse", true,
         "forced coarse allocation via --force-coarse-alloc-id",
@@ -1663,6 +1721,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   if (decision.isCoarse()) {
     ARTS_DEBUG("  Heuristics chose coarse - keeping original");
     resetCoarseAcquireRanges(allocOp, allocNode, builder);
+    ++numAllocsLeftCoarseByHeuristics;
     heuristics.recordDecision(
         "Partition-HeuristicsCoarse", false,
         "heuristics chose coarse allocation, keeping original",
@@ -1767,8 +1826,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   /// Check for both indexed and uniform patterns (block-wise access).
   bool hasExplicitBlockSizes = false;
   for (const auto &info : acquireInfos) {
-    if (info.mode != PartitionMode::block &&
-        info.mode != PartitionMode::stencil)
+    if (!usesBlockLayout(info.mode))
       continue;
     for (Value sz : info.partitionSizes) {
       if (!sz)
@@ -1875,8 +1933,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         bool hasPartitionRange =
             !info.partitionOffsets.empty() && !info.partitionSizes.empty();
         bool blockLikeMode =
-            info.mode == PartitionMode::block ||
-            info.mode == PartitionMode::stencil ||
+            usesBlockLayout(info.mode) ||
             (info.mode == PartitionMode::coarse && info.isValid);
         if (blockLikeMode && hasPartitionRange)
           info.needsFullRange = false;
@@ -1893,8 +1950,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         if (info.isValid && !info.partitionOffsets.empty() &&
             !info.partitionSizes.empty())
           continue;
-        info.needsFullRange = true;
-        ++widenedAcquires;
+        if (markAcquireNeedsFullRange(info))
+          ++widenedAcquires;
       }
 
       ARTS_DEBUG("  Some acquires missing partition info - forcing full-range "
@@ -2039,10 +2096,8 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
     }
     bool hasDistributionContract =
         contractSummary ? contractSummary->hasDistributionContract() : false;
-    bool thisAcquireCanBlock =
-        (acquireMode && (*acquireMode == PartitionMode::block ||
-                         *acquireMode == PartitionMode::stencil)) ||
-        hasBlockHints || inferredBlock;
+    bool thisAcquireCanBlock = (acquireMode && usesBlockLayout(*acquireMode)) ||
+                               hasBlockHints || inferredBlock;
     /// If access is indirect and no explicit hints exist, still allow block
     /// partitioning so we can fall back to full-range acquires on a blocked
     /// allocation (improves parallelism vs coarse).
@@ -2108,7 +2163,7 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
             ARTS_DEBUG("  Partition offset incompatible with write access; "
                        "preserving block capability with full-range write "
                        "acquire");
-            acqInfo.needsFullRange = true;
+            markAcquireNeedsFullRange(acqInfo);
           } else {
             ARTS_DEBUG("  Partition offset incompatible with write access; "
                        "disabling block capability");
@@ -2117,7 +2172,7 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
         } else {
           ARTS_DEBUG("  Partition offset incompatible with read-only access "
                      "pattern; preserving block capability with full-range");
-          acqInfo.needsFullRange = true;
+          markAcquireNeedsFullRange(acqInfo);
         }
       }
     }
@@ -2135,12 +2190,12 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
     info.explicitCoarseRequest =
         acquireMode && *acquireMode == PartitionMode::coarse;
     if (contractSummary && !info.partitionDimsFromPeers &&
-        !contractSummary->contract.ownerDims.empty()) {
-      info.ownerDimsCount = static_cast<uint8_t>(
-          std::min<size_t>(4, contractSummary->contract.ownerDims.size()));
+        !contractSummary->contract.spatial.ownerDims.empty()) {
+      info.ownerDimsCount = static_cast<uint8_t>(std::min<size_t>(
+          4, contractSummary->contract.spatial.ownerDims.size()));
       for (unsigned dim = 0; dim < info.ownerDimsCount; ++dim)
-        info.ownerDims[dim] =
-            static_cast<int16_t>(contractSummary->contract.ownerDims[dim]);
+        info.ownerDims[dim] = static_cast<int16_t>(
+            contractSummary->contract.spatial.ownerDims[dim]);
     }
 
     /// Populate unified partition infos from DbAcquireOp.
@@ -2184,8 +2239,9 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
             static_cast<unsigned>(acqInfo.partitionSizes.size());
         if (preferContractND)
           targetRank = std::min<unsigned>(
-              targetRank, static_cast<unsigned>(
-                              contractSummary->contract.ownerDims.size()));
+              targetRank,
+              static_cast<unsigned>(
+                  contractSummary->contract.spatial.ownerDims.size()));
         if (preferContractND) {
           if (contractSummary && contractSummary->prefersNDBlock(targetRank)) {
             auto staticBlockShape =
@@ -2194,8 +2250,8 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
             for (unsigned dim = 0; dim < targetRank; ++dim) {
               int64_t dimSize = 0;
               Value blockSize = nullptr;
-              if (dim < contractSummary->contract.blockShape.size())
-                blockSize = contractSummary->contract.blockShape[dim];
+              if (dim < contractSummary->contract.spatial.blockShape.size())
+                blockSize = contractSummary->contract.spatial.blockShape[dim];
               if (blockSize) {
                 if (!ValueAnalysis::getConstantIndex(blockSize, dimSize) ||
                     dimSize <= 0) {
@@ -2266,6 +2322,7 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
   if (preserveExplicitContractLayout) {
     ARTS_DEBUG("  Preserving explicit block-contract leaf acquire layout; "
                "skipping allocation rewrite");
+    ++numAllocsPreservedForLeafContracts;
     heuristics.recordDecision(
         "Partition-PreserveLeafContractLayout", true,
         "leaf acquire uses explicit distributed contract offsets; preserving "
@@ -2507,7 +2564,7 @@ bool DbPartitioningPass::resolveBlockPlanSizes(
       if (info.needsFullRange)
         continue;
       if (info.partitionDims.empty()) {
-        info.needsFullRange = true;
+        markAcquireNeedsFullRange(info);
         ARTS_DEBUG("  Acquire missing partition dims under concrete plan; "
                    "forcing full-range access");
         continue;
@@ -2523,7 +2580,7 @@ bool DbPartitioningPass::resolveBlockPlanSizes(
         }
       }
       if (!compatible) {
-        info.needsFullRange = true;
+        markAcquireNeedsFullRange(info);
         ARTS_DEBUG("  Acquire partition dims mismatch with plan; "
                    "forcing full-range access");
       }
@@ -2644,6 +2701,19 @@ FailureOr<DbAllocOp> DbPartitioningPass::assembleAndApplyRewritePlan(
   /// Set partition attribute on new alloc
   if (succeeded(result)) {
     setPartitionMode(*result, decision.mode);
+    switch (decision.mode) {
+    case PartitionMode::block:
+      ++numAllocsPartitionedBlock;
+      break;
+    case PartitionMode::stencil:
+      ++numAllocsPartitionedStencil;
+      break;
+    case PartitionMode::fine_grained:
+      ++numAllocsPartitionedFineGrained;
+      break;
+    case PartitionMode::coarse:
+      break;
+    }
 
     AM->getMetadataManager().transferMetadata(allocOp, result.value());
 
@@ -2678,6 +2748,7 @@ FailureOr<DbAllocOp> DbPartitioningPass::assembleAndApplyRewritePlan(
          {"acquireCount", static_cast<int64_t>(acquireInfos.size())}});
   } else {
     /// Record partition failure
+    ++numPartitionRewriteFailures;
     heuristics.recordDecision(
         "Partition-RewriterFailed", false,
         "DbRewriter failed to apply partition transformation",

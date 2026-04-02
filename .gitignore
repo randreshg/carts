@@ -8,7 +8,7 @@ compile_commands.json
 CMakeFiles/
 core
 core.*
-# Agent configs (generated from .carts/ — run `carts agents generate`)
+# Agent configs (generated from .agents/ — run `dekk carts agents generate`)
 /CLAUDE.md
 /CODEX.md
 /AGENTS.md
@@ -18,6 +18,7 @@ core.*
 /.claude/skills/
 /.claude/rules/
 /.agents.json
+/.dekk/
 
 .cursor/*
 !.cursor/rules/

@@ -12,8 +12,6 @@
 namespace mlir {
 namespace arts {
 
-class AnalysisManager;
-
 /// Discriminator for the high-level computational pattern a lowering contract
 /// represents.  When the field is `Unknown` on a `LoweringContractInfo`,
 /// `getEffectiveKind()` will attempt to derive the kind from `depPattern`.
@@ -25,12 +23,20 @@ enum class ContractKind : int64_t {
   Triangular = 4
 };
 
-struct LoweringContractInfo {
+struct SemanticPattern {
   ContractKind kind = ContractKind::Unknown;
   std::optional<ArtsDepPattern> depPattern;
   std::optional<EdtDistributionKind> distributionKind;
   std::optional<EdtDistributionPattern> distributionPattern;
   std::optional<int64_t> distributionVersion;
+
+  bool hasDistributionContract() const {
+    return kind != ContractKind::Unknown || depPattern || distributionKind ||
+           distributionPattern || distributionVersion;
+  }
+};
+
+struct SpatialLayout {
   SmallVector<int64_t, 4> ownerDims;
   SmallVector<Value, 4> blockShape;
   SmallVector<Value, 4> minOffsets;
@@ -39,44 +45,43 @@ struct LoweringContractInfo {
   SmallVector<int64_t, 4> staticBlockShape;
   SmallVector<int64_t, 4> staticMinOffsets;
   SmallVector<int64_t, 4> staticMaxOffsets;
+  SmallVector<int64_t, 4> spatialDims;
+  SmallVector<int64_t, 4> stencilIndependentDims;
   bool supportedBlockHalo = false;
 
-  /// Spatial dimensions of the contract.
-  SmallVector<int64_t, 4> spatialDims;
+  bool empty() const {
+    return ownerDims.empty() && blockShape.empty() && minOffsets.empty() &&
+           maxOffsets.empty() && writeFootprint.empty() &&
+           spatialDims.empty() && staticBlockShape.empty() &&
+           staticMinOffsets.empty() && staticMaxOffsets.empty() &&
+           !supportedBlockHalo && stencilIndependentDims.empty();
+  }
+};
 
-  /// Dimension-aware stencil analysis.
-  SmallVector<int64_t, 4> stencilIndependentDims;
-
-  /// Dependency-range narrowing remains advisory until a lowering pass with an
-  /// exact window planner consumes it.
+struct AnalysisRefinement {
   bool narrowableDep = false;
-
-  /// Post-DB refinement marker.
   bool postDbRefined = false;
-
-  /// Critical path distance.
   std::optional<int64_t> criticalPathDistance;
 
+  bool empty() const { return !postDbRefined && !criticalPathDistance; }
+};
+
+struct LoweringContractInfo {
+  SemanticPattern pattern;
+  SpatialLayout spatial;
+  AnalysisRefinement analysis;
+
   bool hasDistributionContract() const {
-    return kind != ContractKind::Unknown || depPattern || distributionKind ||
-           distributionPattern || distributionVersion;
+    return pattern.hasDistributionContract();
   }
 
   bool hasSemanticContract() const {
-    return hasDistributionContract() || narrowableDep;
+    return hasDistributionContract() || analysis.narrowableDep;
   }
 
-  bool hasSpatialContract() const {
-    return !ownerDims.empty() || !blockShape.empty() || !minOffsets.empty() ||
-           !maxOffsets.empty() || !writeFootprint.empty() ||
-           !spatialDims.empty() || !staticBlockShape.empty() ||
-           !staticMinOffsets.empty() || !staticMaxOffsets.empty() ||
-           supportedBlockHalo || !stencilIndependentDims.empty();
-  }
+  bool hasSpatialContract() const { return !spatial.empty(); }
 
-  bool hasAnalysisRefinements() const {
-    return postDbRefined || criticalPathDistance;
-  }
+  bool hasAnalysisRefinements() const { return !analysis.empty(); }
 
   bool empty() const {
     return !hasSemanticContract() && !hasSpatialContract() &&
@@ -91,7 +96,7 @@ struct LoweringContractInfo {
     return getEffectiveKind() == ContractKind::Stencil;
   }
 
-  bool hasOwnerDims() const { return !ownerDims.empty(); }
+  bool hasOwnerDims() const { return !spatial.ownerDims.empty(); }
   bool hasExplicitStencilContract() const;
   bool usesStencilDistribution() const;
   bool supportsBlockHalo() const;
@@ -126,8 +131,6 @@ std::optional<LoweringContractInfo>
 getLoweringContract(Operation *op, OpBuilder &builder, Location loc);
 void normalizeLoweringContractInfo(LoweringContractInfo &info);
 AcquireRewriteContract deriveAcquireRewriteContract(DbAcquireOp acquire);
-AcquireRewriteContract resolveAcquireRewriteContract(AnalysisManager *AM,
-                                                     DbAcquireOp acquire);
 SmallVector<unsigned, 4>
 resolveContractOwnerDims(const LoweringContractInfo &info, unsigned rank);
 bool prefersContractNDBlock(const LoweringContractInfo &info,

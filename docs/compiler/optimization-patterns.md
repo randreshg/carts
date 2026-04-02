@@ -71,9 +71,20 @@ edt-distribution
   |- FL
   |
   v
-concurrency-opt
-  |- DBP
+post-distribution-cleanup
+  |- structural cleanup + epoch shaping
+  |
+  v
+db-partitioning
+  |- DBP + distributed ownership
+  |
+  v
+post-db-refinement
   |- DB/EDT cleanup + contract validation
+  |
+  v
+late-concurrency-cleanup
+  |- strip-mining + hoisting + sink/cleanup
   |
   v
 epochs -> pre-lowering -> arts-to-llvm -> LLVM IR / executable

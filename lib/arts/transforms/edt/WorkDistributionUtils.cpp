@@ -58,8 +58,9 @@ static std::optional<int64_t> getExplicitLoopBlockHint(ForOp forOp) {
   return std::nullopt;
 }
 
-static bool shouldHonorLoopBlockHintForDbAlignment(
-    const LoweringContractInfo &contract, EdtOp parallelEdt) {
+static bool
+shouldHonorLoopBlockHintForDbAlignment(const LoweringContractInfo &contract,
+                                       EdtOp parallelEdt) {
   if (!parallelEdt)
     return false;
   return parallelEdt.getConcurrency() == EdtConcurrency::intranode &&
@@ -658,8 +659,8 @@ Value WorkDistributionUtils::computeDbAlignmentBlockSize(
       continue;
 
     std::optional<unsigned> mappedDim;
-    if (auto acquire = dyn_cast_or_null<DbAcquireOp>(DbUtils::getUnderlyingDb(
-            dep)))
+    if (auto acquire =
+            dyn_cast_or_null<DbAcquireOp>(DbUtils::getUnderlyingDb(dep)))
       mappedDim = dbAnalysis.inferLoopMappedDim(acquire, forOp);
     if (!mappedDim)
       mappedDim = dbAnalysis.inferLoopMappedDim(dep, forOp);

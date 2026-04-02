@@ -135,8 +135,8 @@ public:
   static std::optional<int64_t> getStaticElementStride(DbAllocOp alloc);
 
   /// Compute stride as a Value (handles both static and dynamic dimensions).
-  /// If all trailing dimensions are static, returns an arith::ConstantIndexOp.
-  /// If any trailing dimension is dynamic, generates arith::MulIOp chain.
+  /// Materializes the row-major suffix product via upstream MLIR memref
+  /// indexing helpers, returning a constant index when fully static.
   /// For single-dimension [N], returns constant 1.
   /// Returns nullptr if sizes is empty.
   static Value getStrideValue(OpBuilder &builder, Location loc,

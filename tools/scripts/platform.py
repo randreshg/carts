@@ -1,7 +1,8 @@
 """CARTS platform configuration and project path detection.
 
 All environment setup (PATH, env vars, tool versions) is handled by dekk's
-auto_activate mechanism via ``.dekk.toml``.  This module only provides:
+project runner, conda environment activation, and installed wrapper. This
+module only provides:
 
 * Project path detection (CARTS_DIR, install dirs)
 * CARTS-specific compiler/linker flag construction

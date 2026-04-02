@@ -64,12 +64,13 @@ public:
                                         const LoweringContractInfo &contract,
                                         Value runtimeBlockSizeHint = Value());
 
-  static DistributionBounds
-  computeBounds(ArtsCodegen *AC, Location loc,
-                const DistributionStrategy &strategy, Value workerId,
-                Value totalWorkers, Value workersPerNode, Value totalIterations,
-                Value totalChunks, Value blockSize,
-                const LoweringContractInfo &contract);
+  static DistributionBounds computeBounds(ArtsCodegen *AC, Location loc,
+                                          const DistributionStrategy &strategy,
+                                          Value workerId, Value totalWorkers,
+                                          Value workersPerNode,
+                                          Value totalIterations,
+                                          Value totalChunks, Value blockSize,
+                                          const LoweringContractInfo &contract);
 
   static DistributionBounds recomputeBoundsInside(
       ArtsCodegen *AC, Location loc, const DistributionStrategy &strategy,
@@ -96,10 +97,11 @@ public:
   static Value getDispatchWorkerCount(OpBuilder &builder, Location loc,
                                       EdtOp parallelEdt);
 
-  static Value getForDispatchWorkerCount(
-      ArtsCodegen *AC, Location loc, EdtOp parallelEdt,
-      const DistributionStrategy &strategy, Value totalChunks,
-      const LoweringContractInfo &contract);
+  static Value getForDispatchWorkerCount(ArtsCodegen *AC, Location loc,
+                                         EdtOp parallelEdt,
+                                         const DistributionStrategy &strategy,
+                                         Value totalChunks,
+                                         const LoweringContractInfo &contract);
 
   static Tiling2DWorkerGrid getTiling2DWorkerGrid(
       ArtsCodegen *AC, Location loc, Value workerId, Value totalWorkers,

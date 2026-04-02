@@ -87,8 +87,8 @@ struct ForOptPass : public impl::ForOptBase<ForOptPass> {
         if (getPartitioningHint(forOp.getOperation()))
           return;
 
-        auto decision = heuristics.computeLoopCoarseningDecision(forOp,
-                                                                 *workerCfg);
+        auto decision =
+            heuristics.computeLoopCoarseningDecision(forOp, *workerCfg);
         if (!decision.blockSize)
           return;
 

@@ -12,8 +12,8 @@
 #ifndef ARTS_TRANSFORMS_EDT_EDTREDUCTIONLOWERING_H
 #define ARTS_TRANSFORMS_EDT_EDTREDUCTIONLOWERING_H
 
-#include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/Dialect.h"
+#include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/codegen/Codegen.h"
 #include "mlir/IR/Builders.h"
 #include "llvm/ADT/DenseSet.h"
@@ -59,9 +59,8 @@ void collectOldAccumulatorDbRefs(ForOp forOp, Block &parallelBlock,
 
 /// Allocate reduction DBs and initialize worker-local partial accumulators.
 ReductionLoweringInfo
-allocatePartialAccumulators(ArtsCodegen *AC,
-                            MetadataManager &metadataManager, ForOp forOp,
-                            EdtOp parallelEdt, Location loc,
+allocatePartialAccumulators(ArtsCodegen *AC, MetadataManager &metadataManager,
+                            ForOp forOp, EdtOp parallelEdt, Location loc,
                             bool splitMode = false,
                             Value workerCountOverride = Value());
 

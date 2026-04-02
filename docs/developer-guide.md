@@ -15,7 +15,8 @@ The following tools must be available on your system:
 - **cmake** >= 3.20
 - **ninja** (build system)
 - **clang** >= 14 (C/C++ compiler)
-- **python3** >= 3.10
+- **conda**
+- **python** >= 3.11
 - **git** with submodule support
 
 Run `carts doctor` to verify that all prerequisites are installed and at the correct versions.
@@ -25,11 +26,12 @@ Run `carts doctor` to verify that all prerequisites are installed and at the cor
 ```bash
 git clone <repo-url>
 cd carts
-dekk tools/carts_cli.py install       # recommended (pip install dekk)
-./tools/carts install                  # alternative (no extra tools)
+pip install dekk
+dekk carts install
 ```
 
-Both commands bootstrap the Python environment, fetch submodules, and build the full toolchain. After installation, `carts` is available in your PATH:
+This creates the project-local conda environment, fetches submodules, builds
+the full toolchain, and installs `carts` into your PATH:
 
 ```bash
 carts doctor

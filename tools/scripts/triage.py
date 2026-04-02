@@ -13,17 +13,13 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from dekk import Argument, Colors, Exit, Option, console, print_error, print_info, print_success, print_warning
 
-from scripts import SUBMODULE_BENCHMARKS, run_subprocess
+from scripts import SUBMODULE_BENCHMARKS, carts_cli_command, run_subprocess
 from scripts.platform import get_config
 
 @dataclass(frozen=True)
 class ArtsBuildStamp:
     cflags: List[str]
     compile_args: List[str]
-
-
-def _carts_executable() -> Path:
-    return get_config().carts_dir / "tools" / "carts"
 
 
 def _results_root() -> Path:
@@ -116,7 +112,7 @@ def _parse_arts_build_stamp(stamp_path: Path) -> ArtsBuildStamp:
 
 def _write_pipeline_manifest(output_dir: Path) -> Path:
     manifest_path = output_dir / "pipeline-manifest.json"
-    cmd = [str(_carts_executable()), "pipeline", "--json"]
+    cmd = carts_cli_command("pipeline", "--json")
     result = run_subprocess(cmd, capture_output=True, check=False)
     if result.returncode != 0:
         raise Exit("Failed to query pipeline manifest")
@@ -138,9 +134,7 @@ def _stage_output_path(output_dir: Path, source_file: Path, stage: str) -> Path:
 
 def _run_triage_build(benchmark: str, size: str, threads: int, timeout: int) -> None:
     cmd = [
-        str(_carts_executable()),
-        "benchmarks",
-        "run",
+        *carts_cli_command("benchmarks", "run"),
         benchmark,
         "--size",
         size,
@@ -160,8 +154,7 @@ def _dump_stage(parallel_mlir: Path, source_file: Path, arts_config: Path,
                 compile_args: Sequence[str], stage: str, output_dir: Path) -> Path:
     output_path = _stage_output_path(output_dir, source_file, stage)
     cmd = [
-        str(_carts_executable()),
-        "compile",
+        *carts_cli_command("compile"),
         str(parallel_mlir),
         f"--pipeline={stage}",
         "-o",
@@ -184,8 +177,7 @@ def _dump_stage(parallel_mlir: Path, source_file: Path, arts_config: Path,
 def _dump_all_pipelines(parallel_mlir: Path, arts_config: Path,
                         compile_args: Sequence[str], output_dir: Path) -> None:
     cmd = [
-        str(_carts_executable()),
-        "compile",
+        *carts_cli_command("compile"),
         str(parallel_mlir),
         "--all-pipelines",
         "-o",

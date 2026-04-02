@@ -619,8 +619,8 @@ createInnermostLoopHints(MLIRContext *ctx, unsigned width, unsigned interleave,
       ctx,
       /*disable=*/BoolAttr::get(ctx, false),
       /*count=*/
-          fullUnroll ? IntegerAttr()
-                     : IntegerAttr::get(IntegerType::get(ctx, 32), unrollCount),
+      fullUnroll ? IntegerAttr()
+                 : IntegerAttr::get(IntegerType::get(ctx, 32), unrollCount),
       /*runtimeDisable=*/nullptr,
       /*full=*/fullUnroll ? BoolAttr::get(ctx, true) : nullptr,
       /*followupUnrolled=*/nullptr,

@@ -13,6 +13,7 @@
 #include "arts/analysis/graphs/edt/EdtNode.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/analysis/loop/LoopNode.h"
+#include "arts/utils/DbUtils.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/metadata/LocationMetadata.h"
 #include "llvm/Support/Debug.h"
@@ -140,14 +141,20 @@ bool EdtGraph::isEdtReachable(EdtOp fromOp, EdtOp toOp) {
 }
 
 bool EdtGraph::areEdtsIndependent(EdtOp a, EdtOp b) {
+  if (!a || !b || a == b)
+    return false;
+
   EdtNode *nodeA = getEdtNode(a);
   EdtNode *nodeB = getEdtNode(b);
   if (!nodeA || !nodeB)
     return false;
 
-  /// TODO: implement DB-level conflict checking when EdtInfo populates
-  /// per-EDT DB read/write sets. For now, conservatively return true.
-  return true;
+  Operation *opA = nodeA->getOp();
+  Operation *opB = nodeB->getOp();
+  if (!opA || !opB)
+    return false;
+
+  return !DbUtils::hasSharedWritableRootConflict(opA, opB);
 }
 
 void EdtGraph::print(llvm::raw_ostream &os) {

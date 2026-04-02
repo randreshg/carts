@@ -9,8 +9,11 @@
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/MemRef/Utils/MemRefUtils.h"
+#include "mlir/Dialect/Utils/IndexingUtils.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "polygeist/Ops.h"
@@ -430,17 +433,14 @@ std::optional<int64_t> DbUtils::getStaticStride(ValueRange sizes) {
   if (sizes.empty())
     return std::nullopt;
 
-  if (sizes.size() == 1)
-    return 1;
-
-  int64_t stride = 1;
+  SmallVector<int64_t> staticShape(sizes.size(), 1);
   for (size_t i = 1; i < sizes.size(); ++i) {
     int64_t dim;
     if (!ValueAnalysis::getConstantIndex(sizes[i], dim))
       return std::nullopt;
-    stride *= dim;
+    staticShape[i] = dim;
   }
-  return stride;
+  return computeSuffixProduct(staticShape).front();
 }
 
 std::optional<int64_t> DbUtils::getStaticStride(MemRefType memrefType) {
@@ -448,16 +448,10 @@ std::optional<int64_t> DbUtils::getStaticStride(MemRefType memrefType) {
   if (shape.empty())
     return std::nullopt;
 
-  if (shape.size() == 1)
-    return 1;
+  if (llvm::is_contained(shape.drop_front(), ShapedType::kDynamic))
+    return std::nullopt;
 
-  int64_t stride = 1;
-  for (size_t i = 1; i < shape.size(); ++i) {
-    if (shape[i] == ShapedType::kDynamic)
-      return std::nullopt;
-    stride *= shape[i];
-  }
-  return stride;
+  return computeSuffixProduct(shape).front();
 }
 
 std::optional<int64_t> DbUtils::getStaticElementStride(DbAllocOp alloc) {
@@ -469,16 +463,14 @@ Value DbUtils::getStrideValue(OpBuilder &builder, Location loc,
   if (sizes.empty())
     return nullptr;
 
-  if (sizes.size() == 1)
-    return arts::createOneIndex(builder, loc);
+  SmallVector<OpFoldResult> mixedSizes;
+  mixedSizes.reserve(sizes.size());
+  for (Value size : sizes)
+    mixedSizes.push_back(size);
 
-  if (auto staticStride = getStaticStride(sizes))
-    return arts::createConstantIndex(builder, loc, *staticStride);
-
-  Value stride = sizes[1];
-  for (size_t i = 2; i < sizes.size(); ++i)
-    stride = builder.create<arith::MulIOp>(loc, stride, sizes[i]);
-  return stride;
+  SmallVector<OpFoldResult> strides =
+      memref::computeSuffixProductIRBlock(loc, builder, mixedSizes);
+  return getValueOrCreateConstantIndexOp(builder, loc, strides.front());
 }
 
 bool DbUtils::isWriterMode(ArtsMode mode) {

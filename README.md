@@ -10,10 +10,11 @@ systems.
 ## Quick Start
 ```bash
 git clone <repo-url> && cd carts
-./tools/carts install                   # Same thing, no extra tools needed
+pip install dekk
+dekk carts install
 ```
 
-After installation, the `carts` command is available in your PATH:
+After installation, the `carts` command is installed into your PATH:
 
 ```bash
 carts doctor                            # Verify the toolchain
@@ -42,7 +43,7 @@ See **[Getting Started](docs/getting-started.md)** for the full walkthrough.
 
 | Command | Description |
 |---|---|
-| `carts install` | Install prerequisites, init submodules, and build |
+| `dekk carts install` | Create the project environment, fetch submodules, build, and install the `carts` wrapper |
 | `carts doctor` | Validate the toolchain and environment |
 | `carts build` | Build CARTS (`--clean` for fresh, `--arts` for runtime) |
 | `carts compile <file> [flags]` | Run the full compilation pipeline |
@@ -55,6 +56,8 @@ See **[Getting Started](docs/getting-started.md)** for the full walkthrough.
 | `carts update` | Update git submodules |
 | `carts docker <cmd>` | Docker operations (build, start, stop, exec) |
 | `carts examples <cmd>` | List or run bundled examples |
+| `dekk carts agents <cmd>` | Generate/install agent resources from `.agents/` |
+| `dekk carts worktree <cmd>` | Manage dekk-aware CARTS worktrees |
 
 ## Documentation
 

@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from concurrency --pipeline concurrency-opt | %FileCheck %s
+// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from concurrency --pipeline post-db-refinement | %FileCheck %s
 
 // CHECK-LABEL: func.func @main
 // CHECK: arts.lowering_contract(%ptr : memref<?xmemref<?xf64>>) dep_pattern(<elementwise_pipeline>) distribution_kind(<block>) distribution_pattern(<uniform>) block_shape[

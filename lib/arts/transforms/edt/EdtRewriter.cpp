@@ -22,6 +22,7 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/PartitionPredicates.h"
 #include "arts/utils/StencilAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include <algorithm>
@@ -64,7 +65,7 @@ computeTaskAcquireWindow(TaskAcquireSlicePlanInput input) {
 
   PartitionMode mode =
       input.taskAcquire.getPartitionMode().value_or(PartitionMode::coarse);
-  if (mode != PartitionMode::block && mode != PartitionMode::stencil)
+  if (!usesBlockLayout(mode))
     return std::nullopt;
 
   Value one = input.AC->createIndexConstant(1, input.loc);
@@ -188,7 +189,7 @@ static bool shouldMaterializeTaskElementSlice(TaskAcquireSlicePlanInput input) {
 
   PartitionMode mode =
       input.taskAcquire.getPartitionMode().value_or(PartitionMode::coarse);
-  if (mode != PartitionMode::block && mode != PartitionMode::stencil)
+  if (!usesBlockLayout(mode))
     return false;
 
   if (input.usesStencilHalo)
@@ -221,9 +222,9 @@ computeTaskElementSlice(TaskAcquireSlicePlanInput input) {
     if (auto staticShape = taskContract->getStaticBlockShape()) {
       for (int64_t dim : *staticShape)
         blockExtents.push_back(input.AC->createIndexConstant(dim, input.loc));
-    } else if (!taskContract->blockShape.empty()) {
-      blockExtents.assign(taskContract->blockShape.begin(),
-                          taskContract->blockShape.end());
+    } else if (!taskContract->spatial.blockShape.empty()) {
+      blockExtents.assign(taskContract->spatial.blockShape.begin(),
+                          taskContract->spatial.blockShape.end());
     }
   }
   if (blockExtents.empty())
@@ -245,17 +246,17 @@ computeTaskElementSlice(TaskAcquireSlicePlanInput input) {
     return std::nullopt;
 
   LoweringContractInfo contractInfo;
-  if (taskContract && !taskContract->ownerDims.empty())
-    contractInfo.ownerDims = taskContract->ownerDims;
+  if (taskContract && !taskContract->spatial.ownerDims.empty())
+    contractInfo.spatial.ownerDims = taskContract->spatial.ownerDims;
   else
-    contractInfo.ownerDims = input.rewriteContract.ownerDims;
+    contractInfo.spatial.ownerDims = input.rewriteContract.ownerDims;
   /// Element-space task slices need an authoritative mapping from partition
   /// entries back to physical memref dims. Falling back to implicit leading
   /// dims is not a benign heuristic here: it fabricates owner-local slices for
   /// reduction inputs whose accesses do not actually follow the distributed
   /// loop IV. When the contract cannot name owner dims, keep the dependency
   /// full- range and let later passes preserve correctness.
-  if (contractInfo.ownerDims.empty())
+  if (contractInfo.spatial.ownerDims.empty())
     return std::nullopt;
   SmallVector<unsigned, 4> explicitDims =
       resolveContractOwnerDims(contractInfo, explicitRank);
@@ -762,7 +763,7 @@ void mlir::arts::applyTaskAcquireSlicePlan(TaskAcquireSlicePlanInput input) {
     PartitionMode mode =
         input.taskAcquire.getPartitionMode().value_or(PartitionMode::coarse);
     bool needsPartitionMetadata =
-        (mode == PartitionMode::block || mode == PartitionMode::stencil) &&
+        usesBlockLayout(mode) &&
         (input.taskAcquire.getPartitionOffsets().empty() ||
          input.taskAcquire.getPartitionSizes().empty());
     shouldUpdateBlockWindow =
@@ -839,8 +840,7 @@ void mlir::arts::applyTaskAcquireContractMetadata(
   if (!getPartitioningHint(taskAcquire.getOperation()))
     if (auto hint = getPartitioningHint(semanticSourceOp)) {
       auto mode = taskAcquire.getPartitionMode();
-      if (mode &&
-          (*mode == PartitionMode::block || *mode == PartitionMode::stencil)) {
+      if (mode && usesBlockLayout(*mode)) {
         /// DbPartitioning resolves allocation block plans from task acquires
         /// after ForLowering. Carry the loop-selected owner-span hint onto the
         /// rewritten acquire so lowering and later DB planning use the same
@@ -1027,7 +1027,7 @@ void mlir::arts::applyTaskAcquireContractMetadata(
 
     LoweringContractInfo updated = *contract;
     if (!taskOwnerDims.empty())
-      updated.ownerDims = taskOwnerDims;
+      updated.spatial.ownerDims = taskOwnerDims;
     auto clampDynamicRank = [&](auto &values) {
       if (supportedOwnerRank != 0 && values.size() > supportedOwnerRank)
         values.resize(supportedOwnerRank);
@@ -1037,31 +1037,31 @@ void mlir::arts::applyTaskAcquireContractMetadata(
         values.resize(supportedOwnerRank);
     };
 
-    clampDynamicRank(updated.blockShape);
-    clampDynamicRank(updated.minOffsets);
-    clampDynamicRank(updated.maxOffsets);
-    clampDynamicRank(updated.writeFootprint);
-    clampStaticRank(updated.staticBlockShape);
-    clampStaticRank(updated.staticMinOffsets);
-    clampStaticRank(updated.staticMaxOffsets);
+    clampDynamicRank(updated.spatial.blockShape);
+    clampDynamicRank(updated.spatial.minOffsets);
+    clampDynamicRank(updated.spatial.maxOffsets);
+    clampDynamicRank(updated.spatial.writeFootprint);
+    clampStaticRank(updated.spatial.staticBlockShape);
+    clampStaticRank(updated.spatial.staticMinOffsets);
+    clampStaticRank(updated.spatial.staticMaxOffsets);
 
     if (!contractTaskBlockShape.empty())
-      updated.staticBlockShape = contractTaskBlockShape;
+      updated.spatial.staticBlockShape = contractTaskBlockShape;
     if (!taskHaloMinOffsets.empty()) {
-      updated.minOffsets.clear();
-      updated.staticMinOffsets = taskHaloMinOffsets;
+      updated.spatial.minOffsets.clear();
+      updated.spatial.staticMinOffsets = taskHaloMinOffsets;
     }
     if (!taskHaloMaxOffsets.empty()) {
-      updated.maxOffsets.clear();
-      updated.staticMaxOffsets = taskHaloMaxOffsets;
+      updated.spatial.maxOffsets.clear();
+      updated.spatial.staticMaxOffsets = taskHaloMaxOffsets;
     }
     if (!taskWriteFootprint.empty()) {
-      updated.writeFootprint.clear();
+      updated.spatial.writeFootprint.clear();
       for (int64_t value : taskWriteFootprint)
-        updated.writeFootprint.push_back(
+        updated.spatial.writeFootprint.push_back(
             builder.create<arith::ConstantIndexOp>(loc, value));
     }
-    updated.blockShape.clear();
+    updated.spatial.blockShape.clear();
     upsertLoweringContract(builder, loc, taskAcquire.getPtr(), updated);
   }
 }

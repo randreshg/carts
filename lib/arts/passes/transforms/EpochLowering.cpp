@@ -371,9 +371,8 @@ void EpochLoweringPass::runOnOperation() {
           loc, paramArrayMemref, ValueRange{epochIdxVal});
 
       ARTS_INFO("CPS propagation: " << info.funcName.getValue()
-                                    << " loading iter["
-                                    << info.iterIdx << "], epoch["
-                                    << info.epochIdx << "]");
+                                    << " loading iter[" << info.iterIdx
+                                    << "], epoch[" << info.epochIdx << "]");
 
       /// Build a map from parent function's unpack results to their indices.
       DenseMap<Value, int64_t> unpackResultToIdx;
@@ -438,8 +437,8 @@ void EpochLoweringPass::runOnOperation() {
         ARTS_INFO("  Injected iter[" << newIterIdx << "], epoch[" << newEpochIdx
                                      << "] for child chain EDT");
 
-        if (auto childFuncAttr =
-                edt->getAttrOfType<StringAttr>(AttrNames::Operation::OutlinedFunc))
+        if (auto childFuncAttr = edt->getAttrOfType<StringAttr>(
+                AttrNames::Operation::OutlinedFunc))
           enqueueChainFunc(childFuncAttr, newIterIdx, newEpochIdx);
       }
     }
@@ -604,11 +603,11 @@ void EpochLoweringPass::runOnOperation() {
 
     bool hasCanonicalLoopBackContract = advanceOp->hasAttr(CPSNumCarry);
     SmallVector<Value> canonicalLoopBackParams;
-    if (auto numCarryAttr = advanceOp->getAttrOfType<IntegerAttr>(CPSNumCarry)) {
+    if (auto numCarryAttr =
+            advanceOp->getAttrOfType<IntegerAttr>(CPSNumCarry)) {
       unsigned paramStart = (isAdditive && nextParams.size() >= 2) ? 2 : 0;
-      unsigned available = nextParams.size() > paramStart
-                               ? nextParams.size() - paramStart
-                               : 0;
+      unsigned available =
+          nextParams.size() > paramStart ? nextParams.size() - paramStart : 0;
       unsigned carryCount =
           std::min<unsigned>(numCarryAttr.getInt(), available);
       canonicalLoopBackParams.reserve(carryCount);

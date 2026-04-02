@@ -17,6 +17,7 @@
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Interfaces/ValueBoundsOpInterface.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/CSE.h"
 #include "polygeist/Ops.h"
@@ -26,6 +27,44 @@
 
 namespace mlir {
 namespace arts {
+
+static std::optional<bool> proveValuesEqualWithBounds(Value lhs, Value rhs) {
+  if (!lhs || !rhs || !lhs.getType().isIndex() || !rhs.getType().isIndex())
+    return std::nullopt;
+  if (auto equal = ValueBoundsConstraintSet::areEqual(
+          ValueBoundsConstraintSet::Variable(lhs),
+          ValueBoundsConstraintSet::Variable(rhs));
+      succeeded(equal)) {
+    return *equal;
+  }
+  return std::nullopt;
+}
+
+static std::optional<bool> proveValueAtLeast(Value value, int64_t minValue) {
+  if (!value || !value.getType().isIndex())
+    return std::nullopt;
+  if (auto lowerBound = ValueBoundsConstraintSet::computeConstantBound(
+          presburger::BoundType::LB, ValueBoundsConstraintSet::Variable(value));
+      succeeded(lowerBound)) {
+    return *lowerBound >= minValue;
+  }
+  return std::nullopt;
+}
+
+static std::optional<bool> proveValueNonZero(Value value) {
+  if (!value || !value.getType().isIndex())
+    return std::nullopt;
+  if (auto atLeastOne = proveValueAtLeast(value, 1); atLeastOne && *atLeastOne)
+    return true;
+  if (auto upperBound = ValueBoundsConstraintSet::computeConstantBound(
+          presburger::BoundType::UB, ValueBoundsConstraintSet::Variable(value),
+          /*stopCondition=*/nullptr,
+          /*closedUB=*/true);
+      succeeded(upperBound)) {
+    return *upperBound <= -1;
+  }
+  return std::nullopt;
+}
 
 ///===----------------------------------------------------------------------===///
 /// Value Cloning Utilities
@@ -398,6 +437,8 @@ bool ValueAnalysis::sameValue(Value a, Value b) {
   b = stripNumericCasts(b);
   if (a == b)
     return true;
+  if (auto equal = proveValuesEqualWithBounds(a, b); equal && *equal)
+    return true;
   auto aConst = tryFoldConstantIndex(a);
   auto bConst = tryFoldConstantIndex(b);
   return aConst && bConst && *aConst == *bConst;
@@ -477,6 +518,8 @@ bool ValueAnalysis::areValuesEquivalent(Value a, Value b, int depth) {
   b = stripNumericCasts(b);
   if (a == b)
     return true;
+  if (auto equal = proveValuesEqualWithBounds(a, b); equal && *equal)
+    return true;
 
   auto ca = getConstantValue(a);
   auto cb = getConstantValue(b);
@@ -517,6 +560,8 @@ bool ValueAnalysis::isConstantAtLeastOne(Value v) {
   if (!v)
     return false;
   v = stripNumericCasts(v);
+  if (auto atLeastOne = proveValueAtLeast(v, 1); atLeastOne)
+    return *atLeastOne;
   int64_t val = 0;
   if (getConstantIndex(v, val))
     return val >= 1;
@@ -531,6 +576,8 @@ bool ValueAnalysis::isProvablyNonZero(Value v, unsigned depth) {
   if (!v || depth > 4)
     return false;
   v = stripNumericCasts(v);
+  if (auto nonZero = proveValueNonZero(v); nonZero)
+    return *nonZero;
   if (isConstantAtLeastOne(v))
     return true;
   if (auto maxui = v.getDefiningOp<arith::MaxUIOp>()) {

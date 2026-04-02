@@ -1,7 +1,7 @@
-// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %S/../../tools/carts compile %S/../../external/carts-benchmarks/ml-kernels/activations/activations.c --pipeline concurrency-opt --arts-config %S/inputs/arts_1t.cfg -- -DNREPS=1 >/dev/null && cat %t.compile/activations.concurrency-opt.mlir' | %FileCheck %s
+// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %carts compile %S/../../external/carts-benchmarks/ml-kernels/activations/activations.c --pipeline post-db-refinement --arts-config %S/inputs/arts_1t.cfg -- -DNREPS=1 >/dev/null && cat %t.compile/activations.post-db-refinement.mlir' | %FileCheck %s
 
 // Verify that the late DbModeTightening pass does not degrade write-capable
-// activation outputs back to read-only acquires after concurrency-opt rewrites
+// activation outputs back to read-only acquires after post-db-refinement rewrites
 // the accesses through arts.db_ref. Under the single-worker contract these
 // outputs should stay coarse, but they still must tighten to `<out>`.
 

@@ -177,7 +177,8 @@ SmallVector<AcquireDecision> DbHeuristics::chooseAcquirePolicies(
     /// If the summary has ownerDims information, the acquire has a known
     /// owner-compute relationship that can restrict access to owned blocks,
     /// so full-range may not actually be needed.
-    if (needsFullRange && summary && !summary->contract.ownerDims.empty() &&
+    if (needsFullRange && summary &&
+        !summary->contract.spatial.ownerDims.empty() &&
         !facts->hasIndirectAccess) {
       ARTS_DEBUG("  chooseAcquirePolicies["
                  << i
@@ -201,8 +202,8 @@ SmallVector<AcquireDecision> DbHeuristics::chooseAcquirePolicies(
     /// When the contract summary has a refined depPattern, prefer it over
     /// the raw facts' pattern for rationale reporting.
     std::optional<ArtsDepPattern> effectiveDepPattern;
-    if (summary && summary->contract.depPattern)
-      effectiveDepPattern = summary->contract.depPattern;
+    if (summary && summary->contract.pattern.depPattern)
+      effectiveDepPattern = summary->contract.pattern.depPattern;
     else
       effectiveDepPattern = facts->depPattern;
 

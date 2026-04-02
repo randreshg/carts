@@ -150,8 +150,9 @@ static unsigned countTailWorkUnits(ArrayRef<Operation *> tailOps) {
   return units;
 }
 
-static void collectCapturedTailDbAcquireValues(
-    ArrayRef<Operation *> tailOps, SmallVectorImpl<Value> &capturedValues) {
+static void
+collectCapturedTailDbAcquireValues(ArrayRef<Operation *> tailOps,
+                                   SmallVectorImpl<Value> &capturedValues) {
   DenseSet<Operation *> tailOpSet(tailOps.begin(), tailOps.end());
   DenseSet<Value> seenValues;
   for (Operation *op : tailOps) {
@@ -280,10 +281,11 @@ EpochHeuristics::evaluateEpochFusion(EpochOp first, EpochOp second,
   return decision;
 }
 
-EpochContinuationDecision EpochHeuristics::evaluateContinuation(
-    EpochOp epoch, EpochOp previousEpoch, bool continuationEnabled,
-    const EpochAccessSummary *previousSummary,
-    const EpochAccessSummary *epochSummary) {
+EpochContinuationDecision
+EpochHeuristics::evaluateContinuation(EpochOp epoch, EpochOp previousEpoch,
+                                      bool continuationEnabled,
+                                      const EpochAccessSummary *previousSummary,
+                                      const EpochAccessSummary *epochSummary) {
   EpochContinuationDecision decision;
   if (!epoch) {
     decision.rationale = "missing epoch";

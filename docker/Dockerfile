@@ -28,6 +28,18 @@ RUN apt-get update && apt-get install -y \
     libtool \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Miniforge so Docker follows the same conda-backed environment model
+# as local development.
+RUN wget -qO /tmp/miniforge.sh https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh && \
+    bash /tmp/miniforge.sh -b -p /opt/conda && \
+    rm -f /tmp/miniforge.sh
+
+ENV PATH="/opt/conda/bin:$PATH"
+
+# Install dekk in the image bootstrap environment. Project setup then runs
+# through `dekk carts install`, which creates the project-local conda env.
+RUN python3 -m pip install --no-cache-dir dekk
+
 # Install newer CMake (3.20+ required by CARTS)
 RUN wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /etc/apt/trusted.gpg.d/kitware.gpg >/dev/null && \
     echo 'deb https://apt.kitware.com/ubuntu/ jammy main' | tee /etc/apt/sources.list.d/kitware.list && \
@@ -54,10 +66,6 @@ RUN ln -s /usr/bin/clang-18 /usr/bin/clang && \
     ln -s /usr/bin/clang++-18 /usr/bin/clang++ && \
     ln -s /usr/bin/clangd-18 /usr/bin/clangd && \
     ln -s /usr/bin/llvm-config-18 /usr/bin/llvm-config
-
-# Install Poetry (Python dependency manager)
-RUN curl -sSL https://install.python-poetry.org | python3 - && \
-    ln -s /root/.local/bin/poetry /usr/local/bin/poetry
 
 # Install Node.js and npm (latest LTS version)
 RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && \
@@ -98,11 +106,8 @@ COPY slurm.conf /etc/slurm/slurm.conf
 # Default working directory
 WORKDIR /root
 
-# Keep the source-tree CARTS wrapper first. Docker bootstrap uses
-# `carts install`, but the installed `.install/carts/bin/carts` wrapper does
-# not currently ship its Python companion files, so `/opt/carts/tools` remains
-# the authoritative CLI entrypoint inside containers.
-ENV PATH="/opt/carts/tools:/opt/carts/.install/carts/bin:$PATH"
+# Use the installed wrapper and toolchain from the mounted workspace.
+ENV PATH="/opt/carts/.install/bin:/opt/carts/.install/carts/bin:/opt/carts/.install/llvm/bin:/opt/carts/.install/polygeist/bin:/opt/carts/.install/arts/bin:$PATH"
 
 
 # Set working directory

@@ -6,7 +6,8 @@ runtime.
 
 ## Critical Rules
 
-- **ALWAYS** use the `carts` CLI (already in PATH) for all operations
+- **ALWAYS** use `dekk carts` for project lifecycle commands (`install`,
+  `setup`, `agents`, `worktree`) and `carts` for daily compiler commands
 - **NEVER** use `make`, `ninja`, or raw build commands
 - **NEVER** use full paths like `python tools/carts_cli.py` — just use `carts`
 - **NEVER** hardcode attribute name strings — use `AttrNames::Operation` from
@@ -19,6 +20,7 @@ runtime.
 ## Essential Commands
 
 ```bash
+dekk carts install            # Create/refresh the conda env, build, install wrapper
 carts build                    # Build CARTS compiler
 carts build --arts             # Rebuild ARTS runtime
 carts build --clean            # Full clean rebuild
@@ -119,13 +121,15 @@ module { ... }
 - **Pipeline stage ordering is load-bearing** — reordering passes in `Compile.cpp` can cause silent miscompilation; always verify with `carts test` after changes
 - **DB mode constants are NOT the enum values you'd expect** — `ARTS_DB_PIN=2` maps to GPU memory, `ARTS_DB_ONCE=3` maps to local copy; see `include/arts/utils/ArtsDbModes.h`
 - **`*.mlir` is gitignored EXCEPT `tests/contracts/*.mlir`** — if you create MLIR test files outside `tests/contracts/`, they won't be committed
-- **The `carts` CLI must be used for everything** — `make`/`ninja` skip critical environment setup from `.dekk.toml`
+- **Use the supported entrypoints** — `dekk carts` for lifecycle and `carts`
+  for daily operations. Raw `make`/`ninja` skip critical environment setup
+  from `.dekk.toml`
 - **Hardcoded attribute strings break silently** — always use `AttrNames::Operation` constants; typos in string literals cause passes to silently skip operations
 
 ## Agent Skills
 
-Custom skills in `.carts/skills/`: `/build`, `/test`, `/debug`, `/benchmark`,
-`/benchmark-triage`, `/pass-dev`, `/carts`. Run `carts agents generate` to
+Custom skills in `.agents/skills/`: `/build`, `/test`, `/debug`, `/benchmark`,
+`/benchmark-triage`, `/pass-dev`, `/carts`. Run `dekk carts agents generate` to
 sync to all agent systems (Claude, Codex, Copilot, Cursor).
 
 ## Reference Documentation

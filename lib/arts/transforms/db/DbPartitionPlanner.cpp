@@ -300,11 +300,11 @@ static void buildStencilRewriteAcquire(const DbAcquirePartitionView &input,
     allocIsStencil = *pattern == DbAccessPattern::stencil;
   ArtsDepPattern depPattern = ArtsDepPattern::unknown;
   if (auto contract = getLoweringContract(acquire.getPtr());
-      contract && contract->depPattern) {
-    depPattern = *contract->depPattern;
+      contract && contract->pattern.depPattern) {
+    depPattern = *contract->pattern.depPattern;
   } else if (auto semantic = getSemanticContract(acquire.getOperation());
-             semantic && semantic->depPattern) {
-    depPattern = *semantic->depPattern;
+             semantic && semantic->pattern.depPattern) {
+    depPattern = *semantic->pattern.depPattern;
   } else {
     depPattern = getEffectiveDepPattern(acquire.getOperation())
                      .value_or(ArtsDepPattern::unknown);

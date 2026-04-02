@@ -137,11 +137,11 @@ deriveDistributionPatternFromKind(ContractKind kind) {
 } // namespace
 
 ContractKind LoweringContractInfo::getEffectiveKind() const {
-  if (kind != ContractKind::Unknown)
-    return kind;
-  if (!depPattern)
+  if (pattern.kind != ContractKind::Unknown)
+    return pattern.kind;
+  if (!pattern.depPattern)
     return ContractKind::Unknown;
-  switch (*depPattern) {
+  switch (*pattern.depPattern) {
   case ArtsDepPattern::stencil:
   case ArtsDepPattern::stencil_tiling_nd:
   case ArtsDepPattern::cross_dim_stencil_3d:
@@ -163,8 +163,8 @@ ContractKind LoweringContractInfo::getEffectiveKind() const {
 }
 
 bool LoweringContractInfo::usesStencilDistribution() const {
-  return distributionPattern &&
-         *distributionPattern == EdtDistributionPattern::stencil;
+  return pattern.distributionPattern &&
+         *pattern.distributionPattern == EdtDistributionPattern::stencil;
 }
 
 bool LoweringContractInfo::hasExplicitStencilContract() const {
@@ -174,29 +174,30 @@ bool LoweringContractInfo::hasExplicitStencilContract() const {
   /// has attached concrete ownership / halo / block-shape information.
   if (!isStencilFamily())
     return false;
-  return hasOwnerDims() || !stencilIndependentDims.empty() ||
-         !blockShape.empty() || !minOffsets.empty() || !maxOffsets.empty() ||
-         !staticBlockShape.empty() || !staticMinOffsets.empty() ||
-         !staticMaxOffsets.empty();
+  return hasOwnerDims() || !spatial.stencilIndependentDims.empty() ||
+         !spatial.blockShape.empty() || !spatial.minOffsets.empty() ||
+         !spatial.maxOffsets.empty() || !spatial.staticBlockShape.empty() ||
+         !spatial.staticMinOffsets.empty() || !spatial.staticMaxOffsets.empty();
 }
 
 bool LoweringContractInfo::supportsBlockHalo() const {
-  return supportedBlockHalo && hasExplicitStencilContract();
+  return spatial.supportedBlockHalo && hasExplicitStencilContract();
 }
 
 std::optional<EdtDistributionPattern>
 LoweringContractInfo::getEffectiveDistributionPattern() const {
-  if (distributionPattern &&
-      *distributionPattern != EdtDistributionPattern::unknown)
-    return distributionPattern;
-  if (depPattern)
-    if (auto pattern = getDistributionPatternForDepPattern(*depPattern))
-      return pattern;
+  if (pattern.distributionPattern &&
+      *pattern.distributionPattern != EdtDistributionPattern::unknown)
+    return pattern.distributionPattern;
+  if (pattern.depPattern)
+    if (auto derived = getDistributionPatternForDepPattern(*pattern.depPattern))
+      return derived;
   return deriveDistributionPatternFromKind(getEffectiveKind());
 }
 
 bool LoweringContractInfo::isWavefrontFamily() const {
-  return depPattern && *depPattern == ArtsDepPattern::wavefront_2d;
+  return pattern.depPattern &&
+         *pattern.depPattern == ArtsDepPattern::wavefront_2d;
 }
 
 bool LoweringContractInfo::allowsDbAlignedChunking() const {
@@ -229,38 +230,38 @@ bool LoweringContractInfo::isWavefrontStencilContract() const {
 bool LoweringContractInfo::prefersNDBlock(unsigned requiredRank) const {
   if (!supportsBlockHalo())
     return false;
-  auto staticBlockShape = getStaticBlockShape();
-  if (ownerDims.size() < requiredRank ||
-      ((!staticBlockShape || staticBlockShape->size() < requiredRank) &&
-       blockShape.size() < requiredRank))
+  auto staticShape = getStaticBlockShape();
+  if (spatial.ownerDims.size() < requiredRank ||
+      ((!staticShape || staticShape->size() < requiredRank) &&
+       spatial.blockShape.size() < requiredRank))
     return false;
   return true;
 }
 
 std::optional<SmallVector<int64_t, 4>>
 LoweringContractInfo::getStaticBlockShape() const {
-  if (auto dynamic = readConstantIndexValues(blockShape))
+  if (auto dynamic = readConstantIndexValues(spatial.blockShape))
     return dynamic;
-  if (!staticBlockShape.empty())
-    return staticBlockShape;
+  if (!spatial.staticBlockShape.empty())
+    return spatial.staticBlockShape;
   return std::nullopt;
 }
 
 std::optional<SmallVector<int64_t, 4>>
 LoweringContractInfo::getStaticMinOffsets() const {
-  if (auto dynamic = readConstantIndexValues(minOffsets))
+  if (auto dynamic = readConstantIndexValues(spatial.minOffsets))
     return dynamic;
-  if (!staticMinOffsets.empty())
-    return staticMinOffsets;
+  if (!spatial.staticMinOffsets.empty())
+    return spatial.staticMinOffsets;
   return std::nullopt;
 }
 
 std::optional<SmallVector<int64_t, 4>>
 LoweringContractInfo::getStaticMaxOffsets() const {
-  if (auto dynamic = readConstantIndexValues(maxOffsets))
+  if (auto dynamic = readConstantIndexValues(spatial.maxOffsets))
     return dynamic;
-  if (!staticMaxOffsets.empty())
-    return staticMaxOffsets;
+  if (!spatial.staticMaxOffsets.empty())
+    return spatial.staticMaxOffsets;
   return std::nullopt;
 }
 
@@ -323,35 +324,37 @@ mlir::arts::getLoweringContract(Value target) {
 
   LoweringContractInfo info;
   if (auto depPattern = contract.getDepPattern())
-    info.depPattern = *depPattern;
+    info.pattern.depPattern = *depPattern;
   if (auto distributionKind = contract.getDistributionKind())
-    info.distributionKind = *distributionKind;
+    info.pattern.distributionKind = *distributionKind;
   if (auto distributionPattern = contract.getDistributionPattern())
-    info.distributionPattern = *distributionPattern;
+    info.pattern.distributionPattern = *distributionPattern;
   if (auto version = contract.getDistributionVersion())
-    info.distributionVersion = static_cast<int64_t>(*version);
-  info.narrowableDep = contract.getNarrowableDep().value_or(false);
+    info.pattern.distributionVersion = static_cast<int64_t>(*version);
+  info.analysis.narrowableDep = contract.getNarrowableDep().value_or(false);
   if (auto ownerDims = contract.getOwnerDims())
-    info.ownerDims = SmallVector<int64_t, 4>(*ownerDims);
-  info.blockShape.assign(contract.getBlockShape().begin(),
-                         contract.getBlockShape().end());
-  info.minOffsets.assign(contract.getMinOffsets().begin(),
-                         contract.getMinOffsets().end());
-  info.maxOffsets.assign(contract.getMaxOffsets().begin(),
-                         contract.getMaxOffsets().end());
-  info.writeFootprint.assign(contract.getWriteFootprint().begin(),
-                             contract.getWriteFootprint().end());
-  info.supportedBlockHalo = contract.getSupportedBlockHalo().value_or(false);
+    info.spatial.ownerDims = SmallVector<int64_t, 4>(*ownerDims);
+  info.spatial.blockShape.assign(contract.getBlockShape().begin(),
+                                 contract.getBlockShape().end());
+  info.spatial.minOffsets.assign(contract.getMinOffsets().begin(),
+                                 contract.getMinOffsets().end());
+  info.spatial.maxOffsets.assign(contract.getMaxOffsets().begin(),
+                                 contract.getMaxOffsets().end());
+  info.spatial.writeFootprint.assign(contract.getWriteFootprint().begin(),
+                                     contract.getWriteFootprint().end());
+  info.spatial.supportedBlockHalo =
+      contract.getSupportedBlockHalo().value_or(false);
   if (auto spatialDims = contract.getSpatialDims())
-    info.spatialDims = SmallVector<int64_t, 4>(*spatialDims);
+    info.spatial.spatialDims = SmallVector<int64_t, 4>(*spatialDims);
   if (auto stencilIndependentDims = contract.getStencilIndependentDims())
-    info.stencilIndependentDims =
+    info.spatial.stencilIndependentDims =
         SmallVector<int64_t, 4>(*stencilIndependentDims);
-  info.postDbRefined = contract.getPostDbRefined().value_or(false);
+  info.analysis.postDbRefined = contract.getPostDbRefined().value_or(false);
   if (auto criticalPathDistance = contract.getCriticalPathDistance())
-    info.criticalPathDistance = static_cast<int64_t>(*criticalPathDistance);
+    info.analysis.criticalPathDistance =
+        static_cast<int64_t>(*criticalPathDistance);
   if (auto contractKind = contract.getContractKind())
-    info.kind = static_cast<ContractKind>(*contractKind);
+    info.pattern.kind = static_cast<ContractKind>(*contractKind);
 
   if (auto acquire = originalTarget.getDefiningOp<DbAcquireOp>()) {
     if (Value sourcePtr = acquire.getSourcePtr();
@@ -378,78 +381,83 @@ mlir::arts::getSemanticContract(Operation *op) {
     return std::nullopt;
 
   LoweringContractInfo info;
-  info.depPattern = getDepPattern(op);
-  info.distributionKind = getEdtDistributionKind(op);
-  info.distributionPattern = getEdtDistributionPattern(op);
+  info.pattern.depPattern = getDepPattern(op);
+  info.pattern.distributionKind = getEdtDistributionKind(op);
+  info.pattern.distributionPattern = getEdtDistributionPattern(op);
   if (auto version = op->getAttrOfType<IntegerAttr>(
           AttrNames::Operation::DistributionVersion))
-    info.distributionVersion = version.getInt();
+    info.pattern.distributionVersion = version.getInt();
   if (auto ownerDims = getStencilOwnerDims(op))
-    info.ownerDims.assign(ownerDims->begin(), ownerDims->end());
+    info.spatial.ownerDims.assign(ownerDims->begin(), ownerDims->end());
   if (auto blockShape = getStencilBlockShape(op))
-    info.staticBlockShape.assign(blockShape->begin(), blockShape->end());
+    info.spatial.staticBlockShape.assign(blockShape->begin(),
+                                         blockShape->end());
   if (auto minOffsets = getStencilMinOffsets(op))
-    info.staticMinOffsets.assign(minOffsets->begin(), minOffsets->end());
+    info.spatial.staticMinOffsets.assign(minOffsets->begin(),
+                                         minOffsets->end());
   if (auto maxOffsets = getStencilMaxOffsets(op))
-    info.staticMaxOffsets.assign(maxOffsets->begin(), maxOffsets->end());
+    info.spatial.staticMaxOffsets.assign(maxOffsets->begin(),
+                                         maxOffsets->end());
   if (auto spatialDims = getStencilSpatialDims(op))
-    info.spatialDims.assign(spatialDims->begin(), spatialDims->end());
-  info.supportedBlockHalo = hasSupportedBlockHalo(op);
-  info.narrowableDep =
+    info.spatial.spatialDims.assign(spatialDims->begin(), spatialDims->end());
+  info.spatial.supportedBlockHalo = hasSupportedBlockHalo(op);
+  info.analysis.narrowableDep =
       op->hasAttr(AttrNames::Operation::Contract::NarrowableDep);
   if (auto contractKind = op->getAttrOfType<IntegerAttr>(
           AttrNames::Operation::Contract::ContractKindKey))
-    info.kind = static_cast<ContractKind>(contractKind.getInt());
+    info.pattern.kind = static_cast<ContractKind>(contractKind.getInt());
   if (info.empty())
     return std::nullopt;
   return info;
 }
 
-LoweringContractInfo mlir::arts::resolveLoopDistributionContract(Operation *op) {
+LoweringContractInfo
+mlir::arts::resolveLoopDistributionContract(Operation *op) {
   if (!op)
     return LoweringContractInfo{};
 
   LoweringContractInfo info =
       getSemanticContract(op).value_or(LoweringContractInfo{});
 
-  if (info.depPattern && *info.depPattern == ArtsDepPattern::unknown)
-    info.depPattern = std::nullopt;
-  if (info.distributionPattern &&
-      *info.distributionPattern == EdtDistributionPattern::unknown) {
-    info.distributionPattern = std::nullopt;
+  if (info.pattern.depPattern &&
+      *info.pattern.depPattern == ArtsDepPattern::unknown)
+    info.pattern.depPattern = std::nullopt;
+  if (info.pattern.distributionPattern &&
+      *info.pattern.distributionPattern == EdtDistributionPattern::unknown) {
+    info.pattern.distributionPattern = std::nullopt;
   }
 
   for (Operation *current = op; current; current = current->getParentOp()) {
-    if (!info.depPattern) {
+    if (!info.pattern.depPattern) {
       if (auto depPattern = getDepPattern(current);
           depPattern && *depPattern != ArtsDepPattern::unknown) {
-        info.depPattern = *depPattern;
+        info.pattern.depPattern = *depPattern;
       }
     }
 
-    if (!info.distributionKind)
+    if (!info.pattern.distributionKind)
       if (auto distKind = getEdtDistributionKind(current))
-        info.distributionKind = *distKind;
+        info.pattern.distributionKind = *distKind;
 
-    if (!info.distributionPattern) {
+    if (!info.pattern.distributionPattern) {
       if (auto distPattern = getEdtDistributionPattern(current);
           distPattern && *distPattern != EdtDistributionPattern::unknown) {
-        info.distributionPattern = *distPattern;
+        info.pattern.distributionPattern = *distPattern;
       }
     }
 
-    if (!info.distributionVersion) {
+    if (!info.pattern.distributionVersion) {
       if (auto version = current->getAttrOfType<IntegerAttr>(
               AttrNames::Operation::DistributionVersion))
-        info.distributionVersion = version.getInt();
+        info.pattern.distributionVersion = version.getInt();
     }
 
-    if (info.kind == ContractKind::Unknown) {
+    if (info.pattern.kind == ContractKind::Unknown) {
       if (auto contractKind = current->getAttrOfType<IntegerAttr>(
               AttrNames::Operation::Contract::ContractKindKey)) {
         int64_t rawKind = contractKind.getInt();
         if (rawKind != static_cast<int64_t>(ContractKind::Unknown))
-          info.kind = static_cast<ContractKind>(rawKind);
+          info.pattern.kind = static_cast<ContractKind>(rawKind);
       }
     }
   }
@@ -467,13 +475,14 @@ mlir::arts::getLoweringContract(Operation *op, OpBuilder &builder,
   LoweringContractInfo info =
       getSemanticContract(op).value_or(LoweringContractInfo{});
   if (auto blockShape = getStencilBlockShape(op))
-    info.blockShape = materializeIndexValues(builder, loc, *blockShape);
+    info.spatial.blockShape = materializeIndexValues(builder, loc, *blockShape);
   if (auto minOffsets = getStencilMinOffsets(op))
-    info.minOffsets = materializeIndexValues(builder, loc, *minOffsets);
+    info.spatial.minOffsets = materializeIndexValues(builder, loc, *minOffsets);
   if (auto maxOffsets = getStencilMaxOffsets(op))
-    info.maxOffsets = materializeIndexValues(builder, loc, *maxOffsets);
+    info.spatial.maxOffsets = materializeIndexValues(builder, loc, *maxOffsets);
   if (auto writeFootprint = getStencilWriteFootprint(op))
-    info.writeFootprint = materializeIndexValues(builder, loc, *writeFootprint);
+    info.spatial.writeFootprint =
+        materializeIndexValues(builder, loc, *writeFootprint);
 
   if (info.empty())
     return std::nullopt;
@@ -482,17 +491,19 @@ mlir::arts::getLoweringContract(Operation *op, OpBuilder &builder,
 
 static void mergeLoweringContractInfo(LoweringContractInfo &dest,
                                       const LoweringContractInfo &src) {
-  if (dest.kind == ContractKind::Unknown && src.kind != ContractKind::Unknown)
-    dest.kind = src.kind;
-  if (!dest.depPattern && src.depPattern)
-    dest.depPattern = src.depPattern;
-  if (!dest.distributionKind && src.distributionKind)
-    dest.distributionKind = src.distributionKind;
-  if (!dest.distributionPattern && src.distributionPattern)
-    dest.distributionPattern = src.distributionPattern;
-  if (!dest.distributionVersion && src.distributionVersion)
-    dest.distributionVersion = src.distributionVersion;
-  dest.narrowableDep = dest.narrowableDep || src.narrowableDep;
+  if (dest.pattern.kind == ContractKind::Unknown &&
+      src.pattern.kind != ContractKind::Unknown)
+    dest.pattern.kind = src.pattern.kind;
+  if (!dest.pattern.depPattern && src.pattern.depPattern)
+    dest.pattern.depPattern = src.pattern.depPattern;
+  if (!dest.pattern.distributionKind && src.pattern.distributionKind)
+    dest.pattern.distributionKind = src.pattern.distributionKind;
+  if (!dest.pattern.distributionPattern && src.pattern.distributionPattern)
+    dest.pattern.distributionPattern = src.pattern.distributionPattern;
+  if (!dest.pattern.distributionVersion && src.pattern.distributionVersion)
+    dest.pattern.distributionVersion = src.pattern.distributionVersion;
+  dest.analysis.narrowableDep =
+      dest.analysis.narrowableDep || src.analysis.narrowableDep;
 
   auto shouldTakeHigherRank = [](size_t current, size_t incoming) -> bool {
     if (incoming == 0)
@@ -500,53 +511,65 @@ static void mergeLoweringContractInfo(LoweringContractInfo &dest,
     return current == 0 || incoming > current;
   };
 
-  if (shouldTakeHigherRank(dest.ownerDims.size(), src.ownerDims.size()))
-    dest.ownerDims.assign(src.ownerDims.begin(), src.ownerDims.end());
+  if (shouldTakeHigherRank(dest.spatial.ownerDims.size(),
+                           src.spatial.ownerDims.size()))
+    dest.spatial.ownerDims.assign(src.spatial.ownerDims.begin(),
+                                  src.spatial.ownerDims.end());
 
-  if (shouldTakeHigherRank(dest.blockShape.size(), src.blockShape.size()))
-    dest.blockShape.assign(src.blockShape.begin(), src.blockShape.end());
-  if (shouldTakeHigherRank(dest.minOffsets.size(), src.minOffsets.size()))
-    dest.minOffsets.assign(src.minOffsets.begin(), src.minOffsets.end());
-  if (shouldTakeHigherRank(dest.maxOffsets.size(), src.maxOffsets.size()))
-    dest.maxOffsets.assign(src.maxOffsets.begin(), src.maxOffsets.end());
-  if (shouldTakeHigherRank(dest.writeFootprint.size(),
-                           src.writeFootprint.size()))
-    dest.writeFootprint.assign(src.writeFootprint.begin(),
-                               src.writeFootprint.end());
+  if (shouldTakeHigherRank(dest.spatial.blockShape.size(),
+                           src.spatial.blockShape.size()))
+    dest.spatial.blockShape.assign(src.spatial.blockShape.begin(),
+                                   src.spatial.blockShape.end());
+  if (shouldTakeHigherRank(dest.spatial.minOffsets.size(),
+                           src.spatial.minOffsets.size()))
+    dest.spatial.minOffsets.assign(src.spatial.minOffsets.begin(),
+                                   src.spatial.minOffsets.end());
+  if (shouldTakeHigherRank(dest.spatial.maxOffsets.size(),
+                           src.spatial.maxOffsets.size()))
+    dest.spatial.maxOffsets.assign(src.spatial.maxOffsets.begin(),
+                                   src.spatial.maxOffsets.end());
+  if (shouldTakeHigherRank(dest.spatial.writeFootprint.size(),
+                           src.spatial.writeFootprint.size()))
+    dest.spatial.writeFootprint.assign(src.spatial.writeFootprint.begin(),
+                                       src.spatial.writeFootprint.end());
 
-  if (shouldTakeHigherRank(dest.staticBlockShape.size(),
-                           src.staticBlockShape.size()))
-    dest.staticBlockShape.assign(src.staticBlockShape.begin(),
-                                 src.staticBlockShape.end());
-  if (shouldTakeHigherRank(dest.staticMinOffsets.size(),
-                           src.staticMinOffsets.size()))
-    dest.staticMinOffsets.assign(src.staticMinOffsets.begin(),
-                                 src.staticMinOffsets.end());
-  if (shouldTakeHigherRank(dest.staticMaxOffsets.size(),
-                           src.staticMaxOffsets.size()))
-    dest.staticMaxOffsets.assign(src.staticMaxOffsets.begin(),
-                                 src.staticMaxOffsets.end());
+  if (shouldTakeHigherRank(dest.spatial.staticBlockShape.size(),
+                           src.spatial.staticBlockShape.size()))
+    dest.spatial.staticBlockShape.assign(src.spatial.staticBlockShape.begin(),
+                                         src.spatial.staticBlockShape.end());
+  if (shouldTakeHigherRank(dest.spatial.staticMinOffsets.size(),
+                           src.spatial.staticMinOffsets.size()))
+    dest.spatial.staticMinOffsets.assign(src.spatial.staticMinOffsets.begin(),
+                                         src.spatial.staticMinOffsets.end());
+  if (shouldTakeHigherRank(dest.spatial.staticMaxOffsets.size(),
+                           src.spatial.staticMaxOffsets.size()))
+    dest.spatial.staticMaxOffsets.assign(src.spatial.staticMaxOffsets.begin(),
+                                         src.spatial.staticMaxOffsets.end());
 
-  dest.supportedBlockHalo = dest.supportedBlockHalo || src.supportedBlockHalo;
+  dest.spatial.supportedBlockHalo =
+      dest.spatial.supportedBlockHalo || src.spatial.supportedBlockHalo;
 
-  if (dest.spatialDims.empty() && !src.spatialDims.empty())
-    dest.spatialDims.assign(src.spatialDims.begin(), src.spatialDims.end());
+  if (dest.spatial.spatialDims.empty() && !src.spatial.spatialDims.empty())
+    dest.spatial.spatialDims.assign(src.spatial.spatialDims.begin(),
+                                    src.spatial.spatialDims.end());
 
-  if (dest.stencilIndependentDims.empty() &&
-      !src.stencilIndependentDims.empty()) {
-    dest.stencilIndependentDims.assign(src.stencilIndependentDims.begin(),
-                                       src.stencilIndependentDims.end());
+  if (dest.spatial.stencilIndependentDims.empty() &&
+      !src.spatial.stencilIndependentDims.empty()) {
+    dest.spatial.stencilIndependentDims.assign(
+        src.spatial.stencilIndependentDims.begin(),
+        src.spatial.stencilIndependentDims.end());
   }
 
-  dest.postDbRefined = dest.postDbRefined || src.postDbRefined;
-  if (!dest.criticalPathDistance && src.criticalPathDistance)
-    dest.criticalPathDistance = src.criticalPathDistance;
+  dest.analysis.postDbRefined =
+      dest.analysis.postDbRefined || src.analysis.postDbRefined;
+  if (!dest.analysis.criticalPathDistance && src.analysis.criticalPathDistance)
+    dest.analysis.criticalPathDistance = src.analysis.criticalPathDistance;
 
   normalizeLoweringContractInfo(dest);
 }
 
 void mlir::arts::normalizeLoweringContractInfo(LoweringContractInfo &info) {
-  const size_t expectedRank = info.ownerDims.size();
+  const size_t expectedRank = info.spatial.ownerDims.size();
   if (expectedRank == 0)
     return;
 
@@ -559,13 +582,13 @@ void mlir::arts::normalizeLoweringContractInfo(LoweringContractInfo &info) {
       values.clear();
   };
 
-  clearMismatchedDynamic(info.blockShape);
-  clearMismatchedDynamic(info.minOffsets);
-  clearMismatchedDynamic(info.maxOffsets);
+  clearMismatchedDynamic(info.spatial.blockShape);
+  clearMismatchedDynamic(info.spatial.minOffsets);
+  clearMismatchedDynamic(info.spatial.maxOffsets);
 
-  clearMismatchedStatic(info.staticBlockShape);
-  clearMismatchedStatic(info.staticMinOffsets);
-  clearMismatchedStatic(info.staticMaxOffsets);
+  clearMismatchedStatic(info.spatial.staticBlockShape);
+  clearMismatchedStatic(info.spatial.staticMinOffsets);
+  clearMismatchedStatic(info.spatial.staticMaxOffsets);
 }
 
 AcquireRewriteContract
@@ -583,7 +606,8 @@ mlir::arts::deriveAcquireRewriteContract(DbAcquireOp acquire) {
   if (!info)
     return contract;
 
-  contract.ownerDims.assign(info->ownerDims.begin(), info->ownerDims.end());
+  contract.ownerDims.assign(info->spatial.ownerDims.begin(),
+                            info->spatial.ownerDims.end());
 
   if (auto minOffsets = info->getStaticMinOffsets())
     contract.haloMinOffsets = *minOffsets;
@@ -601,7 +625,7 @@ mlir::arts::deriveAcquireRewriteContract(DbAcquireOp acquire) {
   /// than widening a read-only acquire back to the parent dependency range.
   /// The flag does not synthesize new offsets/sizes by itself.
   const bool prefersWorkerLocalReadSlice =
-      acquire.getMode() == ArtsMode::in && info->narrowableDep;
+      acquire.getMode() == ArtsMode::in && info->analysis.narrowableDep;
   contract.usePartitionSliceAsDepWindow =
       (acquire.getMode() == ArtsMode::in && hasExplicitStencilContract &&
        !contract.applyStencilHalo &&
@@ -615,28 +639,12 @@ mlir::arts::deriveAcquireRewriteContract(DbAcquireOp acquire) {
   return contract;
 }
 
-AcquireRewriteContract
-mlir::arts::resolveAcquireRewriteContract(AnalysisManager *AM,
-                                          DbAcquireOp acquire) {
-  if (!acquire)
-    return AcquireRewriteContract{};
-  if (!AM)
-    return deriveAcquireRewriteContract(acquire);
-  // CPS chain continuations contain cloned acquires not in the analysis graph.
-  // Derive the contract directly from IR attributes instead of looking up
-  // the analysis, which would crash in MemoryAccessClassifier.
-  if (auto parentEdt = acquire->getParentOfType<EdtOp>())
-    if (parentEdt->hasAttr(AttrNames::Operation::CPSChainId))
-      return deriveAcquireRewriteContract(acquire);
-  return AM->getDbAnalysis().getAcquireRewriteContract(acquire);
-}
-
 SmallVector<unsigned, 4>
 mlir::arts::resolveContractOwnerDims(const LoweringContractInfo &info,
                                      unsigned rank) {
   SmallVector<unsigned, 4> dims;
   dims.reserve(rank);
-  for (int64_t dim : info.ownerDims) {
+  for (int64_t dim : info.spatial.ownerDims) {
     if (dim < 0)
       continue;
     /// `rank` is the number of owner dimensions the caller wants to resolve,
@@ -672,19 +680,22 @@ mlir::arts::upsertLoweringContract(OpBuilder &builder, Location loc,
   auto staleContracts = collectLoweringContractOps(target);
 
   SmallVector<Value> blockShapeVals = materializeDominatingIndexValues(
-      builder, loc, normalizedInfo.blockShape, normalizedInfo.staticBlockShape);
+      builder, loc, normalizedInfo.spatial.blockShape,
+      normalizedInfo.spatial.staticBlockShape);
   SmallVector<Value> minOffsetVals = materializeDominatingIndexValues(
-      builder, loc, normalizedInfo.minOffsets, normalizedInfo.staticMinOffsets);
+      builder, loc, normalizedInfo.spatial.minOffsets,
+      normalizedInfo.spatial.staticMinOffsets);
   SmallVector<Value> maxOffsetVals = materializeDominatingIndexValues(
-      builder, loc, normalizedInfo.maxOffsets, normalizedInfo.staticMaxOffsets);
+      builder, loc, normalizedInfo.spatial.maxOffsets,
+      normalizedInfo.spatial.staticMaxOffsets);
   SmallVector<Value> writeFootprintVals = materializeDominatingIndexValues(
-      builder, loc, normalizedInfo.writeFootprint, {});
+      builder, loc, normalizedInfo.spatial.writeFootprint, {});
 
   LoweringContractInfo materializedInfo = normalizedInfo;
-  materializedInfo.blockShape = std::move(blockShapeVals);
-  materializedInfo.minOffsets = std::move(minOffsetVals);
-  materializedInfo.maxOffsets = std::move(maxOffsetVals);
-  materializedInfo.writeFootprint = std::move(writeFootprintVals);
+  materializedInfo.spatial.blockShape = std::move(blockShapeVals);
+  materializedInfo.spatial.minOffsets = std::move(minOffsetVals);
+  materializedInfo.spatial.maxOffsets = std::move(maxOffsetVals);
+  materializedInfo.spatial.writeFootprint = std::move(writeFootprintVals);
 
   auto contract =
       builder.create<LoweringContractOp>(loc, target, materializedInfo);

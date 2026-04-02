@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from concurrency-opt --pipeline concurrency-opt | %FileCheck %s
+// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from post-db-refinement --pipeline post-db-refinement | %FileCheck %s
 
 // CHECK: arts.lowering_contract({{.*}}) dep_pattern(<stencil>) distribution_kind(<block>) distribution_pattern(<stencil>) block_shape[{{.*}}] min_offsets[{{.*}}] max_offsets[{{.*}}] write_footprint[{{.*}}] {contract_kind = 1 : i64, narrowable_dep, owner_dims = array<i64: 0>, spatial_dims = array<i64: 0>, supported_block_halo}
 

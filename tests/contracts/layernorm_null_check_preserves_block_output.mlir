@@ -1,4 +1,4 @@
-// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %S/../../tools/carts compile %S/../../external/carts-benchmarks/ml-kernels/layernorm/layernorm.c --pipeline concurrency-opt --arts-config %S/inputs/arts_2t.cfg -- -DNREPS=1 >/dev/null && cat %t.compile/layernorm.concurrency-opt.mlir' | %FileCheck %s
+// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %carts compile %S/../../external/carts-benchmarks/ml-kernels/layernorm/layernorm.c --pipeline post-db-refinement --arts-config %S/inputs/arts_2t.cfg -- -DNREPS=1 >/dev/null && cat %t.compile/layernorm.post-db-refinement.mlir' | %FileCheck %s
 
 // The layernorm benchmark guards its DB-backed buffers with `if (!x || !gamma
 // || !beta)`. Those checks lower through polygeist.memref2pointer, but they do

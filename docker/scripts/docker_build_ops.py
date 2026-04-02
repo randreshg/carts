@@ -92,7 +92,7 @@ def docker_build(
                 cd /opt/carts
                 export MAKEFLAGS='-j{docker_cpus}'
                 export CMAKE_BUILD_PARALLEL_LEVEL={docker_cpus}
-                carts install --skip-deps
+                dekk carts install --no-interactive
                 """
             ).strip()
             result = _docker_exec("arts-node-builder", build_cmd, check=False)

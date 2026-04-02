@@ -319,13 +319,15 @@ DbAliasAnalysis::classifyAlias(const NodeBase &a, const NodeBase &b,
           dbAnalysis->getAcquireContractSummary(acqA->getDbAcquireOp());
       auto summaryB =
           dbAnalysis->getAcquireContractSummary(acqB->getDbAcquireOp());
-      if (summaryA && summaryB && !summaryA->contract.ownerDims.empty() &&
-          !summaryB->contract.ownerDims.empty()) {
+      if (summaryA && summaryB &&
+          !summaryA->contract.spatial.ownerDims.empty() &&
+          !summaryB->contract.spatial.ownerDims.empty()) {
         /// Same ownerDims; disjointness was not proved above. Log for
         /// diagnostics.
-        if (summaryA->contract.ownerDims == summaryB->contract.ownerDims) {
+        if (summaryA->contract.spatial.ownerDims ==
+            summaryB->contract.spatial.ownerDims) {
           ARTS_DEBUG("  Step 2c: Both acquires share ownerDims (count="
-                     << summaryA->contract.ownerDims.size()
+                     << summaryA->contract.spatial.ownerDims.size()
                      << "), partition on same dims");
         }
       }

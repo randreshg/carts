@@ -30,6 +30,7 @@
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/PartitionPredicates.h"
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/metadata/IdRegistry.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -59,8 +60,7 @@ static void normalizeBlockHaloAcquireSlice(ArtsCodegen *AC, DbAcquireOp acquire,
     return;
 
   auto mode = acquire.getPartitionMode();
-  if (!mode ||
-      (*mode != PartitionMode::block && *mode != PartitionMode::stencil))
+  if (!mode || !usesBlockLayout(*mode))
     return;
   auto contractInfo = getLoweringContract(acquire.getPtr());
   if (!contractInfo || !contractInfo->supportsBlockHalo())
@@ -393,8 +393,8 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
   copySemanticContractAttrs(acquireOp.getOperation(),
                             newAcquireOp.getOperation());
   newAcquireOp.copyPartitionSegmentsFrom(acquireOp);
-  moveValueContract(acquireOp.getPtr(), newAcquireOp.getPtr(),
-                    AC->getBuilder(), newAcquireOp.getLoc());
+  moveValueContract(acquireOp.getPtr(), newAcquireOp.getPtr(), AC->getBuilder(),
+                    newAcquireOp.getLoc());
   normalizeBlockHaloAcquireSlice(AC, newAcquireOp, sourcePtr);
   ARTS_DEBUG("  - New DbAcquireOp: " << newAcquireOp);
 

@@ -1,27 +1,64 @@
 # CARTS environment configuration
 #
-# Quick start (recommended):
+# Canonical project lifecycle entrypoints:
 #   pip install dekk
-#   dekk tools/carts_cli.py install
+#   dekk carts install
+#   dekk carts agents generate
+#   dekk carts build
+#   dekk carts worktree list
 #
-# Alternative (no dekk required):
-#   ./tools/carts install
+# Daily compiler usage after install goes through the installed `carts`
+# wrapper, not a checked-in bootstrap script.
 
 [project]
 name = "carts"
 description = "Compiler for Asynchronous Runtime Systems"
 
+[environment]
+type = "conda"
+path = "{project}/.dekk/env"
+file = "environment.yml"
+name = "carts"
+
+[agents]
+source = ".agents"
+targets = ["claude", "codex", "copilot", "cursor"]
+
 [tools]
+conda       = { command = "conda" }
 cmake       = { command = "cmake",        version = ">=3.20" }
 ninja       = { command = "ninja" }
 make        = { command = "make" }
 git         = { command = "git" }
 clang       = { command = "clang",        version = ">=14" }
 "clang++"   = { command = "clang++" }
-python3     = { command = "python3",      version = ">=3.10" }
+python      = { command = "python",       version = ">=3.11" }
 gcc         = { command = "gcc",          optional = true }
 clang-format = { command = "clang-format", optional = true }
 lit         = { command = "lit",          optional = true }
+
+[commands]
+doctor = { run = "python tools/carts_cli.py doctor", description = "Validate the CARTS toolchain and environment" }
+env = { run = "python tools/carts_cli.py env", description = "Show the active CARTS environment" }
+version = { run = "python tools/carts_cli.py version", description = "Show the CARTS CLI version" }
+build = { run = "python tools/carts_cli.py build", description = "Build CARTS and related components" }
+compile = { run = "python tools/carts_cli.py compile", description = "Run the CARTS compilation pipeline" }
+pipeline = { run = "python tools/carts_cli.py pipeline", description = "Inspect compiler pipeline stages" }
+cgeist = { run = "python tools/carts_cli.py cgeist", description = "Run the Polygeist cgeist frontend" }
+clang = { run = "python tools/carts_cli.py clang", description = "Run the CARTS-managed clang frontend" }
+mlir-translate = { run = "python tools/carts_cli.py mlir-translate", description = "Run MLIR translation helpers" }
+triage-benchmark = { run = "python tools/carts_cli.py triage-benchmark", description = "Run the benchmark triage workflow" }
+test = { run = "python tools/carts_cli.py test", description = "Run the CARTS test suite" }
+lit = { run = "python tools/carts_cli.py lit", description = "Run focused lit regressions" }
+format = { run = "python tools/carts_cli.py format", description = "Format tracked source files" }
+clean = { run = "python tools/carts_cli.py clean", description = "Clean generated files and build outputs" }
+update = { run = "python tools/carts_cli.py update", description = "Update CARTS and pinned submodules" }
+benchmarks = { run = "python tools/carts_cli.py benchmarks", description = "Build and run benchmark workloads" }
+examples = { run = "python tools/carts_cli.py examples", description = "List or run bundled examples" }
+docker = { run = "python tools/carts_cli.py docker", description = "Manage Docker-based CARTS workflows" }
+
+[install]
+build = "python tools/install_driver.py"
 
 [env]
 CARTS_DIR = "{project}"
@@ -30,7 +67,6 @@ LLVM_SYMBOLIZER_PATH = "{project}/.install/llvm/bin/llvm-symbolizer"
 [paths]
 bin = [
     "{project}/.install/bin",
-    "{project}/tools",
     "{project}/.install/carts/bin",
     "{project}/.install/llvm/bin",
     "{project}/.install/arts/bin",

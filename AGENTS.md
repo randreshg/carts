@@ -12,13 +12,13 @@ This guide teaches agents and developers how to understand, run, and debug CARTS
 ### Architecture
 
 ```
-.carts/                          <-- SOURCE OF TRUTH (committed to git)
+.agents/                         <-- SOURCE OF TRUTH (committed to git)
   project.md                     Project instructions (one file, all agents)
   agents-reference.md            Detailed reference (this file's source)
   skills/                        Skill definitions (7 skills)
   rules/                         Path-scoped rules (5 rules)
 
-GENERATED (gitignored, run `carts agents generate`):
+GENERATED (gitignored, run `dekk carts agents generate`):
   CLAUDE.md                      <- Claude Code (from project.md)
   AGENTS.md                      <- All agents (from agents-reference.md)
   .claude/skills/                <- Claude Code skills (from skills/)
@@ -34,44 +34,44 @@ GENERATED (gitignored, run `carts agents generate`):
 
 ```bash
 # Edit the source of truth
-vim .carts/project.md            # Project instructions
-vim .carts/skills/build/SKILL.md # A skill
+vim .agents/project.md           # Project instructions
+vim .agents/skills/build/SKILL.md # A skill
 
 # Generate all agent configs
-carts agents generate            # Produces CLAUDE.md, CODEX.md, .cursorrules, etc.
+dekk carts agents generate       # Produces CLAUDE.md, CODEX.md, .cursorrules, etc.
 
 # Install skills to Codex
-carts agents install             # Copies to ~/.codex/skills/
+dekk carts agents install        # Copies to ~/.codex/skills/
 
 # Check status
-carts agents status              # Shows source + all targets
-carts agents list                # Lists available skills
+dekk carts agents status         # Shows source + all targets
+dekk carts agents list           # Lists available skills
 ```
 
 ### Supported Agents
 
 | Agent | Instructions | Skills | Path Rules | Generated From |
 |-------|-------------|--------|------------|---------------|
-| Claude Code | `CLAUDE.md` | `.claude/skills/` | `.claude/rules/` (paths: frontmatter) | `.carts/` |
-| Codex | `CODEX.md` | `~/.codex/skills/` | N/A | `.carts/` |
-| Copilot | `.github/copilot-instructions.md` | N/A | `.github/instructions/` (applyTo: frontmatter) | `.carts/` |
-| Cursor | `.cursorrules` | `.cursor/rules/` (manual) | N/A | `.carts/` |
+| Claude Code | `CLAUDE.md` | `.claude/skills/` | `.claude/rules/` (paths: frontmatter) | `.agents/` |
+| Codex | `CODEX.md` | `~/.codex/skills/` | N/A | `.agents/` |
+| Copilot | `.github/copilot-instructions.md` | N/A | `.github/instructions/` (applyTo: frontmatter) | `.agents/` |
+| Cursor | `.cursorrules` | `.cursor/rules/` (manual) | N/A | `.agents/` |
 
 ### Path-Scoped Rules
 
-Rules in `.carts/rules/*.md` are auto-generated to agent-specific formats:
+Rules in `.agents/rules/*.md` are auto-generated to agent-specific formats:
 - **Claude Code**: `.claude/rules/*.md` with `paths:` YAML frontmatter
 - **Copilot**: `.github/instructions/*.instructions.md` with `applyTo:` YAML frontmatter
 - Rules are loaded automatically when agents read files matching the glob patterns
 
 ### Design Rules
 
-- `.carts/` is the single source of truth — edit ONLY there
+- `.agents/` is the single source of truth — edit ONLY there
 - Generated files are gitignored — never edit them directly
-- `AGENTS.md` is generated from `.carts/agents-reference.md` (edit the source, not the output)
+- `AGENTS.md` is generated from `.agents/agents-reference.md` (edit the source, not the output)
 - Skills use YAML frontmatter (`name`, `description`, `user-invocable`)
 - Rules use YAML frontmatter (`paths:` list of globs)
-- Keep workflow commands in `carts`, not in agent-specific wrappers
+- Keep workflow commands in `dekk carts agents`, not in agent-specific wrappers
 
 ## Table of Contents
 
@@ -133,13 +133,13 @@ Do not hardcode pipeline-step lists in docs. Query the compiler manifest:
 
 ```bash
 # Human-readable order + pass counts
-tools/carts pipeline
+carts pipeline
 
 # Full machine-readable manifest (pipeline/start_from/passes)
-tools/carts pipeline --json
+carts pipeline --json
 
 # Pass list for one pipeline step
-tools/carts pipeline --pipeline=concurrency-opt
+carts pipeline --pipeline=concurrency-opt
 ```
 
 Use these outputs as the source of truth for valid `--pipeline` and
@@ -151,7 +151,7 @@ Use these outputs as the source of truth for valid `--pipeline` and
 forwards them to `carts-compile`.
 
 ```bash
-tools/carts compile example.mlir --pipeline=create-dbs --arts-debug=create_dbs 2>&1
+carts compile example.mlir --pipeline=create-dbs --arts-debug=create_dbs 2>&1
 ```
 
 Prefer discovering channels from current compiler output/source instead of

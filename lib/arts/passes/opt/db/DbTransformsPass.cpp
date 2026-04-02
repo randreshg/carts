@@ -41,9 +41,23 @@
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/Statistic.h"
 /// Debug
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(db_transforms);
+
+static llvm::Statistic numContractsPersisted{
+    "db_transforms", "NumContractsPersisted",
+    "Number of refined lowering contracts persisted back to IR"};
+static llvm::Statistic numStencilHalosConsolidated{
+    "db_transforms", "NumStencilHalosConsolidated",
+    "Number of stencil acquires whose halo bounds were consolidated"};
+static llvm::Statistic numCleanupOnlyAcquireChainsRemoved{
+    "db_transforms", "NumCleanupOnlyAcquireChainsRemoved",
+    "Number of cleanup-only acquire chains removed from the DB graph"};
+static llvm::Statistic numDeadDbRootsEliminated{
+    "db_transforms", "NumDeadDbRootsEliminated",
+    "Number of dead datablock root chains eliminated"};
 
 using namespace mlir;
 using namespace mlir::func;
@@ -78,9 +92,9 @@ void DbTransformsPass::runOnOperation() {
   ARTS_INFO_HEADER(DbTransformsPass);
 
   /// DbTransforms runs immediately after IR-mutating DB/EDT passes in the
-  /// concurrency-opt pipeline and is also re-run later after additional
-  /// cleanup. Always refresh shared analyses up front so node lookups and
-  /// access classification never observe stale graph state.
+  /// explicit post-partition refinement stages and is also re-run later after
+  /// additional cleanup. Always refresh shared analyses up front so node
+  /// lookups and access classification never observe stale graph state.
   AM->getEdtAnalysis().invalidate();
   AM->getDbAnalysis().invalidate();
 
@@ -93,6 +107,7 @@ void DbTransformsPass::runOnOperation() {
   /// downstream lowering passes see the refined depPattern, ownerDims, etc.
   ///===------------------------------------------------------------------===///
   unsigned dt1Count = persistContracts();
+  numContractsPersisted += dt1Count;
   if (dt1Count > 0)
     ARTS_INFO("DT-1: persisted " << dt1Count << " refined contracts");
 
@@ -104,6 +119,7 @@ void DbTransformsPass::runOnOperation() {
   /// consolidation, remove redundant raw stencil attrs from the acquire op.
   ///===------------------------------------------------------------------===///
   unsigned dt2Count = consolidateStencilHalos();
+  numStencilHalosConsolidated += dt2Count;
   if (dt2Count > 0)
     ARTS_INFO("DT-2: consolidated stencil halos on " << dt2Count
                                                      << " acquires");
@@ -130,6 +146,7 @@ void DbTransformsPass::runOnOperation() {
   /// other semantic consumers.
   ///===------------------------------------------------------------------===///
   unsigned dt6Count = shortenDbLifetimes();
+  numCleanupOnlyAcquireChainsRemoved += dt6Count;
   if (dt6Count > 0)
     ARTS_INFO("DT-6: shortened " << dt6Count
                                  << " cleanup-only acquire lifetimes");
@@ -141,6 +158,7 @@ void DbTransformsPass::runOnOperation() {
   /// forwarding and cleanup plumbing only.
   ///===------------------------------------------------------------------===///
   unsigned dt7Count = eliminateDeadDbs();
+  numDeadDbRootsEliminated += dt7Count;
   if (dt7Count > 0)
     ARTS_INFO("DT-7: eliminated " << dt7Count << " dead DB roots");
 
@@ -168,9 +186,9 @@ unsigned DbTransformsPass::persistContracts() {
         continue;
 
       LoweringContractInfo persistedContract = contractSummary->contract;
-      const bool needsRefinedMarker = !persistedContract.postDbRefined;
+      const bool needsRefinedMarker = !persistedContract.analysis.postDbRefined;
       if (needsRefinedMarker)
-        persistedContract.postDbRefined = true;
+        persistedContract.analysis.postDbRefined = true;
 
       if (!contractSummary->refinedByDbAnalysis && !needsRefinedMarker)
         continue;
@@ -228,9 +246,11 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
       contractStaticMins = contractSummary->contract.getStaticMinOffsets();
       contractStaticMaxs = contractSummary->contract.getStaticMaxOffsets();
       if (contractStaticMins)
-        rank = std::max(rank, static_cast<unsigned>(contractStaticMins->size()));
+        rank =
+            std::max(rank, static_cast<unsigned>(contractStaticMins->size()));
       if (contractStaticMaxs)
-        rank = std::max(rank, static_cast<unsigned>(contractStaticMaxs->size()));
+        rank =
+            std::max(rank, static_cast<unsigned>(contractStaticMaxs->size()));
 
       if (graphBounds && graphBounds->valid && rank == 0)
         rank = 1;
@@ -290,11 +310,13 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
       }
 
       LoweringContractInfo newContract = contractSummary->contract;
-      if (newContract.kind == ContractKind::Unknown &&
+      if (newContract.pattern.kind == ContractKind::Unknown &&
           contractSummary->usesStencilSemantics())
-        newContract.kind = ContractKind::Stencil;
-      if (!newContract.distributionPattern && contractSummary->usesStencilSemantics())
-        newContract.distributionPattern = EdtDistributionPattern::stencil;
+        newContract.pattern.kind = ContractKind::Stencil;
+      if (!newContract.pattern.distributionPattern &&
+          contractSummary->usesStencilSemantics())
+        newContract.pattern.distributionPattern =
+            EdtDistributionPattern::stencil;
 
       OpBuilder builder(acquire.getContext());
       builder.setInsertionPointAfter(acquire.getOperation());
@@ -311,10 +333,10 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
             createConstantIndex(builder, loc, unifiedMax[d]));
       }
 
-      newContract.minOffsets.assign(minOffsetValues.begin(),
-                                    minOffsetValues.end());
-      newContract.maxOffsets.assign(maxOffsetValues.begin(),
-                                    maxOffsetValues.end());
+      newContract.spatial.minOffsets.assign(minOffsetValues.begin(),
+                                            minOffsetValues.end());
+      newContract.spatial.maxOffsets.assign(maxOffsetValues.begin(),
+                                            maxOffsetValues.end());
 
       upsertLoweringContract(builder, loc, acquire.getPtr(), newContract);
 
@@ -358,8 +380,7 @@ unsigned DbTransformsPass::shortenDbLifetimes() {
         continue;
 
       llvm::SetVector<Operation *> cleanupChain;
-      if (!DbUtils::collectCleanupOnlyUseChain(acquire.getGuid(),
-                                               cleanupChain))
+      if (!DbUtils::collectCleanupOnlyUseChain(acquire.getGuid(), cleanupChain))
         continue;
       if (!DbUtils::collectCleanupOnlyUseChain(acquire.getPtr(), cleanupChain))
         continue;

@@ -12,8 +12,8 @@
 #ifndef ARTS_TRANSFORMS_KERNEL_KERNELTRANSFORM_H
 #define ARTS_TRANSFORMS_KERNEL_KERNELTRANSFORM_H
 
-#include "arts/transforms/pattern/PatternTransform.h"
 #include "arts/transforms/loop/LoopNormalizer.h"
+#include "arts/transforms/pattern/PatternTransform.h"
 #include <optional>
 
 namespace mlir {

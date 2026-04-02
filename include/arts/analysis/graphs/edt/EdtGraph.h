@@ -50,7 +50,9 @@ public:
   DbGraph *getDbGraph() const { return dbGraph; }
   size_t size() const { return nodes.size(); }
 
-  /// Check if two EDTs are independent (no shared DB accesses)
+  /// Check if two EDTs are independent under the current memory-root model.
+  /// Shared read-only roots are allowed; any shared writable root is treated
+  /// as a dependency that prevents barrier elision.
   bool areEdtsIndependent(EdtOp a, EdtOp b);
 
 private:

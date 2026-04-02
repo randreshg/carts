@@ -12,6 +12,7 @@ include "mlir/Interfaces/ViewLikeInterface.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/IR/SymbolInterfaces.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
+include "mlir/Interfaces/LoopLikeInterface.td"
 
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Dialect/LLVMIR/LLVMInterfaces.td"
@@ -400,6 +401,11 @@ def LoweringContractOp : Arts_Op<"lowering_contract",
     emission passes. The contract is attached to a datablock pointer-like
     memref value and is the single downstream source of truth for specialized
     lowering behavior.
+
+    Graph analyses may cache or refine derived facts while the pipeline
+    evolves, but those facts are implementation detail. Any semantic decision
+    that downstream passes depend on must be expressible in this contract
+    vocabulary rather than in graph-only side channels.
 
     Static fields remain attributes when they are genuinely compile-time
     constants (for example `owner_dims` or the dep/distribution family).
@@ -1140,7 +1146,10 @@ def DbGepOp : Arts_Op<"db_gep", [Pure, AttrSizedOperandSegments]> {
 }
 
 def ForOp : Arts_Op<"for", [
-  AttrSizedOperandSegments, SingleBlockImplicitTerminator<"arts::YieldOp">
+  AttrSizedOperandSegments, SingleBlockImplicitTerminator<"arts::YieldOp">,
+  DeclareOpInterfaceMethods<LoopLikeOpInterface,
+    ["getLoopRegions", "getLoopInductionVars", "getLoopLowerBounds",
+     "getLoopUpperBounds", "getLoopSteps"]>
 ]> {
   let summary = "ARTS parallel for loop operation";
   let description = [{

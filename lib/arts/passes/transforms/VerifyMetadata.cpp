@@ -127,12 +127,10 @@ struct VerifyMetadataPass
             : 100.0;
 
     /// Report coverage
-    ARTS_INFO("Metadata verification: " << loopsWithMetadata << "/"
-                                        << totalLoops << " loops, "
-                                        << memrefsWithMetadata << "/"
-                                        << totalMemrefs << " memrefs ("
-                                        << llvm::format("%.1f", totalCoverage)
-                                        << "% coverage)");
+    ARTS_INFO("Metadata verification: "
+              << loopsWithMetadata << "/" << totalLoops << " loops, "
+              << memrefsWithMetadata << "/" << totalMemrefs << " memrefs ("
+              << llvm::format("%.1f", totalCoverage) << "% coverage)");
 
     /// Emit warnings for missing metadata
     if (!loopsMissingMetadata.empty()) {
@@ -162,9 +160,9 @@ struct VerifyMetadataPass
                            totalMemrefs);
 
     /// Optionally fail if coverage is incomplete
-    if (failOnMissing && (loopsWithMetadata < totalLoops ||
-                          memrefsWithMetadata < totalMemrefs ||
-                          !loopsWithMismatchedTripCount.empty())) {
+    if (failOnMissing &&
+        (loopsWithMetadata < totalLoops || memrefsWithMetadata < totalMemrefs ||
+         !loopsWithMismatchedTripCount.empty())) {
       emitError(module.getLoc())
           << "Metadata verification failed: " << loopCoverage << "% loops, "
           << memrefCoverage << "% memrefs, "

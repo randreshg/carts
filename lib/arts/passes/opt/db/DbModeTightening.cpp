@@ -21,11 +21,11 @@
 #include "mlir/IR/Dominance.h"
 /// Arts
 #include "arts/Dialect.h"
-#include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/graphs/db/DbGraph.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
 /// Debug
 #include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/analysis/value/ValueAnalysis.h"

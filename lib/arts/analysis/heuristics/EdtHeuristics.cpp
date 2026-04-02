@@ -51,8 +51,7 @@ EdtHeuristics::resolveDistributionPattern(ForOp forOp,
       &getAnalysisManager(), forOp, originalParallel);
 }
 
-LoopCoarseningDecision
-EdtHeuristics::computeLoopCoarseningDecision(
+LoopCoarseningDecision EdtHeuristics::computeLoopCoarseningDecision(
     ForOp forOp, const WorkerConfig &workerCfg) const {
   return DistributionHeuristics::computeLoopCoarseningDecision(
       forOp, getAnalysisManager().getLoopAnalysis(), workerCfg);
@@ -98,14 +97,13 @@ EdtHeuristics::evaluateParallelEdtFusion(EdtOp first, EdtOp second) const {
       edtAnalysis.summarizeParallelEdtWork(second, workerCount);
   bool sharedReadonlyInputs =
       edtAnalysis.hasSharedReadonlyInputs(first, second);
-  bool heavyReductionPipeline =
-      workerCount > 1 && sharedReadonlyInputs && firstLoops.hasReductionLoop &&
-      secondLoops.hasReductionLoop &&
-      firstLoops.peakWorkPerWorker >= workerCount &&
-      secondLoops.peakWorkPerWorker >= workerCount;
+  bool heavyReductionPipeline = workerCount > 1 && sharedReadonlyInputs &&
+                                firstLoops.hasReductionLoop &&
+                                secondLoops.hasReductionLoop &&
+                                firstLoops.peakWorkPerWorker >= workerCount &&
+                                secondLoops.peakWorkPerWorker >= workerCount;
   if (heavyReductionPipeline) {
-    decision.rationale =
-        "sibling reductions already amortize launch overhead";
+    decision.rationale = "sibling reductions already amortize launch overhead";
     return decision;
   }
 

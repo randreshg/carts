@@ -1,7 +1,8 @@
 ///==========================================================================///
 /// File: DbGraph.h
 ///
-/// Defines DbGraph as a lightweight hierarchy for database operations.
+/// Defines DbGraph as a lightweight derived hierarchy/cache for datablock
+/// operations.
 ///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_GRAPHS_DB_DBGRAPH_H
@@ -25,7 +26,9 @@ class MetadataManager;
 class DbAllocNode;
 class DbAcquireNode;
 
-/// DbGraph: Maintains the hierarchy of DbAlloc/DbAcquire nodes plus metrics.
+/// DbGraph maintains the hierarchy of DbAlloc/DbAcquire nodes plus metrics.
+/// It is an analysis projection over canonical IR contracts and DB operations,
+/// not an independent semantic source of truth.
 class DbGraph {
 public:
   DbGraph(func::FuncOp func, DbAnalysis *analysis);

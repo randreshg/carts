@@ -856,22 +856,28 @@ void DbAcquireOp::build(
 void LoweringContractOp::build(OpBuilder &builder, OperationState &state,
                                Value target, const LoweringContractInfo &info) {
   std::optional<int64_t> contractKind;
-  if (info.kind != ContractKind::Unknown)
-    contractKind = static_cast<int64_t>(info.kind);
-  build(builder, state, target, info.depPattern, info.distributionKind,
-        info.distributionPattern, info.distributionVersion,
-        SmallVector<int64_t>(info.ownerDims.begin(), info.ownerDims.end()),
-        SmallVector<Value>(info.blockShape.begin(), info.blockShape.end()),
-        SmallVector<Value>(info.minOffsets.begin(), info.minOffsets.end()),
-        SmallVector<Value>(info.maxOffsets.begin(), info.maxOffsets.end()),
-        SmallVector<Value>(info.writeFootprint.begin(),
-                           info.writeFootprint.end()),
-        info.supportedBlockHalo,
-        SmallVector<int64_t>(info.spatialDims.begin(), info.spatialDims.end()),
-        SmallVector<int64_t>(info.stencilIndependentDims.begin(),
-                             info.stencilIndependentDims.end()),
-        info.narrowableDep, info.postDbRefined, info.criticalPathDistance,
-        contractKind);
+  if (info.pattern.kind != ContractKind::Unknown)
+    contractKind = static_cast<int64_t>(info.pattern.kind);
+  build(builder, state, target, info.pattern.depPattern,
+        info.pattern.distributionKind, info.pattern.distributionPattern,
+        info.pattern.distributionVersion,
+        SmallVector<int64_t>(info.spatial.ownerDims.begin(),
+                             info.spatial.ownerDims.end()),
+        SmallVector<Value>(info.spatial.blockShape.begin(),
+                           info.spatial.blockShape.end()),
+        SmallVector<Value>(info.spatial.minOffsets.begin(),
+                           info.spatial.minOffsets.end()),
+        SmallVector<Value>(info.spatial.maxOffsets.begin(),
+                           info.spatial.maxOffsets.end()),
+        SmallVector<Value>(info.spatial.writeFootprint.begin(),
+                           info.spatial.writeFootprint.end()),
+        info.spatial.supportedBlockHalo,
+        SmallVector<int64_t>(info.spatial.spatialDims.begin(),
+                             info.spatial.spatialDims.end()),
+        SmallVector<int64_t>(info.spatial.stencilIndependentDims.begin(),
+                             info.spatial.stencilIndependentDims.end()),
+        info.analysis.narrowableDep, info.analysis.postDbRefined,
+        info.analysis.criticalPathDistance, contractKind);
 }
 
 void LoweringContractOp::build(
@@ -1192,3 +1198,31 @@ void OmpDepOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
 
 void arts::ForOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                               MLIRContext *context) {}
+
+///===----------------------------------------------------------------------===///
+/// ForOp LoopLikeOpInterface implementation
+///===----------------------------------------------------------------------===///
+
+SmallVector<Region *> arts::ForOp::getLoopRegions() { return {&getRegion()}; }
+
+std::optional<SmallVector<Value>> arts::ForOp::getLoopInductionVars() {
+  auto numIVs = getLowerBound().size();
+  SmallVector<Value> ivs;
+  for (unsigned i = 0; i < numIVs; ++i)
+    ivs.push_back(getRegion().getArgument(i));
+  return ivs;
+}
+
+std::optional<SmallVector<OpFoldResult>> arts::ForOp::getLoopLowerBounds() {
+  return SmallVector<OpFoldResult>(getLowerBound().begin(),
+                                   getLowerBound().end());
+}
+
+std::optional<SmallVector<OpFoldResult>> arts::ForOp::getLoopUpperBounds() {
+  return SmallVector<OpFoldResult>(getUpperBound().begin(),
+                                   getUpperBound().end());
+}
+
+std::optional<SmallVector<OpFoldResult>> arts::ForOp::getLoopSteps() {
+  return SmallVector<OpFoldResult>(getStep().begin(), getStep().end());
+}

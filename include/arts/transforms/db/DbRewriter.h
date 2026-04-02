@@ -18,6 +18,7 @@
 #include "arts/Dialect.h"
 #include "arts/analysis/graphs/db/DbAccessPattern.h"
 #include "arts/transforms/db/DbIndexerBase.h"
+#include "arts/utils/PartitionPredicates.h"
 #include "arts/utils/Utils.h"
 #include "mlir/IR/Builders.h"
 #include "llvm/ADT/SmallVector.h"
@@ -33,7 +34,7 @@ namespace arts {
 
 /// Check if mode requires block size parameter
 inline bool requiresBlockSize(PartitionMode mode) {
-  return mode == PartitionMode::block || mode == PartitionMode::stencil;
+  return usesBlockLayout(mode);
 }
 
 /// Get string name for mode (for debugging/logging)

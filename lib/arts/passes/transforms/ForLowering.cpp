@@ -25,8 +25,6 @@
 #include "arts/analysis/AccessPatternAnalysis.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
-#include "arts/analysis/graphs/db/DbGraph.h"
-#include "arts/analysis/graphs/db/DbNode.h"
 #include "arts/analysis/heuristics/DistributionHeuristics.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/analysis/metadata/MetadataManager.h"
@@ -45,6 +43,7 @@
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/PartitionPredicates.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/metadata/LoopMetadata.h"
@@ -84,54 +83,6 @@ static std::optional<unsigned> inferAcquireMappedDim(DbAnalysis *dbAnalysis,
   if (auto mappedDim = dbAnalysis->inferLoopMappedDim(acquire, forOp))
     return mappedDim;
   return dbAnalysis->inferLoopMappedDim(acquire.getPtr(), forOp);
-}
-
-static std::optional<AccessBoundsResult>
-inferLoopHaloBounds(DbAcquireNode *acqNode, ForOp forOp, unsigned mappedDim) {
-  if (!acqNode || !forOp)
-    return std::nullopt;
-
-  Block &forBody = forOp.getRegion().front();
-  if (forBody.getNumArguments() == 0)
-    return std::nullopt;
-
-  if (acqNode->hasIndirectAccess())
-    return std::nullopt;
-
-  Value loopIV = forBody.getArgument(0);
-  Region &forRegion = forOp.getRegion();
-  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
-  acqNode->collectAccessOperations(dbRefToMemOps);
-
-  SmallVector<AccessIndexInfo, 16> accesses;
-  for (auto &[dbRef, memOps] : dbRefToMemOps) {
-    for (Operation *memOp : memOps) {
-      Region *memRegion = memOp ? memOp->getParentRegion() : nullptr;
-      if (!memRegion)
-        continue;
-      if (memRegion != &forRegion && !forRegion.isAncestor(memRegion))
-        continue;
-
-      SmallVector<Value> fullChain =
-          DbUtils::collectFullIndexChain(dbRef, memOp);
-      if (fullChain.empty())
-        continue;
-
-      AccessIndexInfo info;
-      info.dbRefPrefix = dbRef.getIndices().size();
-      info.indexChain.append(fullChain.begin(), fullChain.end());
-      accesses.push_back(std::move(info));
-    }
-  }
-
-  if (accesses.empty())
-    return std::nullopt;
-
-  AccessBoundsResult bounds =
-      analyzeAccessBoundsFromIndices(accesses, loopIV, loopIV, mappedDim);
-  if (!bounds.valid || (bounds.minOffset == 0 && bounds.maxOffset == 0))
-    return std::nullopt;
-  return bounds;
 }
 
 static std::optional<AccessBoundsResult>
@@ -195,7 +146,8 @@ public:
     lowerBound = forOp.getLowerBound()[0];
     upperBound = forOp.getUpperBound()[0];
     loopStep = forOp.getStep()[0];
-    distributionContract = resolveLoopDistributionContract(forOp.getOperation());
+    distributionContract =
+        resolveLoopDistributionContract(forOp.getOperation());
     totalWorkers = numWorkers;
     LoopChunkPlan chunkPlan = WorkDistributionUtils::planLoopChunking(
         AC, forOp, distributionContract, runtimeBlockSizeHint);
@@ -403,20 +355,68 @@ static void markReductionLoweredLoop(LoopMetadata &metadata) {
   metadata.reductionKinds.clear();
   metadata.hasInterIterationDeps = false;
   metadata.memrefsWithLoopCarriedDeps = 0;
-  metadata.parallelClassification = LoopMetadata::ParallelClassification::Likely;
+  metadata.parallelClassification =
+      LoopMetadata::ParallelClassification::Likely;
 }
 
 /// ForLowering Pass Implementation
 struct ForLoweringPass : public impl::ForLoweringBase<ForLoweringPass> {
   explicit ForLoweringPass(mlir::arts::AnalysisManager *AM = nullptr)
-      : AM(AM) {
+      : AM(AM),
+        numEdtsLowered(this, "num-edts-lowered",
+                       "Number of EDT regions rewritten to lower arts.for"),
+        numForOpsLowered(this, "num-arts-for-lowered",
+                         "Number of arts.for operations lowered"),
+        numEpochsCreated(this, "num-for-epochs-created",
+                         "Number of epochs created for lowered arts.for"),
+        numTaskEdtsCreated(this, "num-loop-task-edts-created",
+                           "Number of worker task EDTs created for lowered "
+                           "arts.for"),
+        numInlineSingleLaneLowerings(
+            this, "num-inline-single-lane-lowerings",
+            "Number of lowered loops executed inline because dispatch "
+            "collapsed to one lane"),
+        numContinuationParallelsCreated(
+            this, "num-continuation-parallels-created",
+            "Number of continuation parallel EDTs created for post-loop work"),
+        numReductionResultEdtsCreated(
+            this, "num-reduction-result-edts-created",
+            "Number of reduction result EDTs created after loop lowering") {
     assert(AM && "AnalysisManager must be provided externally");
   }
+  ForLoweringPass(const ForLoweringPass &other)
+      : impl::ForLoweringBase<ForLoweringPass>(other), AM(other.AM),
+        numEdtsLowered(this, "num-edts-lowered",
+                       "Number of EDT regions rewritten to lower arts.for"),
+        numForOpsLowered(this, "num-arts-for-lowered",
+                         "Number of arts.for operations lowered"),
+        numEpochsCreated(this, "num-for-epochs-created",
+                         "Number of epochs created for lowered arts.for"),
+        numTaskEdtsCreated(this, "num-loop-task-edts-created",
+                           "Number of worker task EDTs created for lowered "
+                           "arts.for"),
+        numInlineSingleLaneLowerings(
+            this, "num-inline-single-lane-lowerings",
+            "Number of lowered loops executed inline because dispatch "
+            "collapsed to one lane"),
+        numContinuationParallelsCreated(
+            this, "num-continuation-parallels-created",
+            "Number of continuation parallel EDTs created for post-loop work"),
+        numReductionResultEdtsCreated(
+            this, "num-reduction-result-edts-created",
+            "Number of reduction result EDTs created after loop lowering") {}
   void runOnOperation() override;
 
 private:
   ModuleOp module;
   mlir::arts::AnalysisManager *AM = nullptr;
+  Statistic numEdtsLowered;
+  Statistic numForOpsLowered;
+  Statistic numEpochsCreated;
+  Statistic numTaskEdtsCreated;
+  Statistic numInlineSingleLaneLowerings;
+  Statistic numContinuationParallelsCreated;
+  Statistic numReductionResultEdtsCreated;
 
   void gatherLowerableEdts(SmallVectorImpl<EdtOp> &lowerableEdts);
   void lowerCollectedEdts(ArrayRef<EdtOp> lowerableEdts);
@@ -522,6 +522,7 @@ void ForLoweringPass::lowerParallelEdt(EdtOp parallelEdt) {
     return;
   }
 
+  ++numEdtsLowered;
   ARTS_INFO(" - Found " << analysis.forOps.size() << " arts.for operation(s)");
 
   /// Analyze which DBs are used by for and post-for operations
@@ -563,8 +564,10 @@ void ForLoweringPass::lowerParallelEdt(EdtOp parallelEdt) {
     bool onlyCleanup = llvm::all_of(analysis.opsAfterFor, [](Operation *op) {
       return isa<DbReleaseOp>(op);
     });
-    if (!onlyCleanup)
+    if (!onlyCleanup) {
       createContinuationParallel(AC, parallelEdt, analysis, loc);
+      ++numContinuationParallelsCreated;
+    }
   }
 
   /// Step 4: Clean up original parallel EDT + dependencies.
@@ -674,6 +677,7 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
                                              ParallelRegionAnalysis &analysis,
                                              Location loc) {
   ARTS_INFO(" - Lowering arts.for with DB rewiring (split pattern)");
+  ++numForOpsLowered;
 
   /// Read distribution strategy selected by EdtDistributionPass.
   DistributionStrategy strategy =
@@ -757,6 +761,7 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
     /// Create EpochOp wrapper for the for-body at the caller-managed insertion
     /// point so multiple arts.for regions preserve source order.
     forEpoch = AC.create<EpochOp>(loc);
+    ++numEpochsCreated;
     Region &epochRegion = forEpoch->getRegion();
     if (epochRegion.empty())
       epochRegion.push_back(new Block());
@@ -780,6 +785,7 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   AC.setInsertionPointAfter(workerLoop);
   if (!redInfo.reductionVars.empty()) {
     createResultEdt(&AC, redInfo, loc);
+    ++numReductionResultEdtsCreated;
   }
 
   if (forEpoch) {
@@ -965,11 +971,13 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         loopInfo.distributionContract.getEffectiveDistributionPattern();
 
     AcquireRewriteContract rewriteContract =
-        resolveAcquireRewriteContract(AM, parentAcqOp);
+        deriveAcquireRewriteContract(parentAcqOp);
     if (auto loopContract = getSemanticContract(forOp.getOperation())) {
-      if (rewriteContract.ownerDims.empty() && !loopContract->ownerDims.empty())
-        rewriteContract.ownerDims.assign(loopContract->ownerDims.begin(),
-                                         loopContract->ownerDims.end());
+      if (rewriteContract.ownerDims.empty() &&
+          !loopContract->spatial.ownerDims.empty())
+        rewriteContract.ownerDims.assign(
+            loopContract->spatial.ownerDims.begin(),
+            loopContract->spatial.ownerDims.end());
       if (rewriteContract.haloMinOffsets.empty())
         if (auto mins = loopContract->getStaticMinOffsets())
           rewriteContract.haloMinOffsets = *mins;
@@ -983,7 +991,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       /// contract here so rewriteAcquire() widens the worker-local read slice
       /// instead of preserving only the owner tile.
       if (effectiveTaskMode == ArtsMode::in &&
-          loopContract->supportedBlockHalo &&
+          loopContract->spatial.supportedBlockHalo &&
           !rewriteContract.haloMinOffsets.empty() &&
           !rewriteContract.haloMaxOffsets.empty()) {
         rewriteContract.applyStencilHalo = true;
@@ -1009,28 +1017,18 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     if (effectiveTaskMode == ArtsMode::in && ownerDimForHalo &&
         rewriteContract.ownerDims.size() <= 1 &&
         rewriteContract.haloMinOffsets.empty() &&
-        rewriteContract.haloMaxOffsets.empty() && AM) {
-      if (func::FuncOp func = parentAcqOp->getParentOfType<func::FuncOp>()) {
-        DbGraph &graph = AM->getDbAnalysis().getOrCreateGraph(func);
-        if (DbAcquireNode *acqNode = graph.getDbAcquireNode(parentAcqOp))
-          if (auto bounds =
-                  inferLoopHaloBounds(acqNode, forOp, *ownerDimForHalo)) {
-            rewriteContract.haloMinOffsets.push_back(bounds->minOffset);
-            rewriteContract.haloMaxOffsets.push_back(bounds->maxOffset);
-            rewriteContract.applyStencilHalo = true;
-            rewriteContract.preserveParentDepRange = false;
-            rewriteContract.usePartitionSliceAsDepWindow = false;
-          }
+        rewriteContract.haloMaxOffsets.empty()) {
+      /// Prefer the persisted acquire/loop contract. When it is still
+      /// incomplete, infer a conservative loop-local halo directly from IR
+      /// uses instead of consulting graph-only partition facts here.
+      if (auto bounds = inferLoopHaloBoundsFromValue(parentAcqOp.getPtr(),
+                                                     forOp, *ownerDimForHalo)) {
+        rewriteContract.haloMinOffsets.push_back(bounds->minOffset);
+        rewriteContract.haloMaxOffsets.push_back(bounds->maxOffset);
+        rewriteContract.applyStencilHalo = true;
+        rewriteContract.preserveParentDepRange = false;
+        rewriteContract.usePartitionSliceAsDepWindow = false;
       }
-      if (!rewriteContract.applyStencilHalo)
-        if (auto bounds = inferLoopHaloBoundsFromValue(
-                parentAcqOp.getPtr(), forOp, *ownerDimForHalo)) {
-          rewriteContract.haloMinOffsets.push_back(bounds->minOffset);
-          rewriteContract.haloMaxOffsets.push_back(bounds->maxOffset);
-          rewriteContract.applyStencilHalo = true;
-          rewriteContract.preserveParentDepRange = false;
-          rewriteContract.usePartitionSliceAsDepWindow = false;
-        }
     }
 
     TaskAcquireRewritePlanInput planningInput{
@@ -1102,8 +1100,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
       /// Hinted ranges are usually element-space and still need DB-space slice
       /// planning for rec_dep/depCount correctness.
-      if (mode == PartitionMode::block || mode == PartitionMode::stencil ||
-          hasExplicitRangeHints) {
+      if (usesBlockLayout(mode) || hasExplicitRangeHints) {
         auto [plannedAcquire, rewritePlan] = createPlannedAcquire();
         chunkAcqOp = plannedAcquire;
         chunkUsesStencilHalo = rewritePlan.useStencilRewriter;
@@ -1180,6 +1177,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   /// avoids per-iteration task/epoch overhead while preserving the same
   /// partitioning and contract decisions.
   if (singleDispatchLane && redInfo.reductionVars.empty()) {
+    ++numInlineSingleLaneLowerings;
     Block &forBody = forOp.getRegion().front();
     Region *directRegion = &ifOp.getThenRegion();
     Block &directBlock = directRegion->front();
@@ -1353,6 +1351,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   }
   auto taskEdt = AC->create<EdtOp>(loc, EdtType::task, taskConcurrency,
                                    routeValue, ValueRange{});
+  ++numTaskEdtsCreated;
   transferOperationContract(forOp.getOperation(), taskEdt.getOperation());
   if (refinedTaskBlockShape)
     setStencilBlockShape(taskEdt.getOperation(), *refinedTaskBlockShape);
@@ -1499,7 +1498,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     auto &metadataManager = getMetadataManager();
     metadataManager.refreshMetadata(forOp.getOperation());
     if (auto *sourceMetadata = metadataManager.getLoopMetadata(forOp)) {
-      int64_t memrefDeps = sourceMetadata->memrefsWithLoopCarriedDeps.value_or(0);
+      int64_t memrefDeps =
+          sourceMetadata->memrefsWithLoopCarriedDeps.value_or(0);
       if (memrefDeps == 0) {
         parallelizeReductionOnly = true;
         ARTS_DEBUG("  Updated loop metadata: potentiallyParallel=true "

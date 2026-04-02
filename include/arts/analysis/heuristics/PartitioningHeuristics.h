@@ -26,6 +26,7 @@
 
 #include "arts/Dialect.h"
 #include "arts/analysis/graphs/db/DbAccessPattern.h"
+#include "arts/utils/PartitionPredicates.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Value.h"
@@ -245,9 +246,7 @@ struct PartitioningDecision {
 
   bool isCoarse() const { return outerRank == 0; }
   bool isFineGrained() const { return mode == PartitionMode::fine_grained; }
-  bool isBlock() const {
-    return mode == PartitionMode::block || mode == PartitionMode::stencil;
-  }
+  bool isBlock() const { return usesBlockLayout(mode); }
 };
 
 /// Consolidated structure for partitioning recommendations

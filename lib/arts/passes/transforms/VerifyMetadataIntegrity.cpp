@@ -46,9 +46,9 @@ static void emitIntegrityError(Operation *op, llvm::Twine message) {
   }
 
   if (auto fileLoc = dyn_cast<FileLineColLoc>(op->getLoc())) {
-    ARTS_ERROR(op->getName() << " at " << fileLoc.getFilename() << ":"
-                             << fileLoc.getLine() << ":" << fileLoc.getColumn()
-                             << " " << message);
+    ARTS_ERROR(op->getName()
+               << " at " << fileLoc.getFilename() << ":" << fileLoc.getLine()
+               << ":" << fileLoc.getColumn() << " " << message);
     return;
   }
 
@@ -61,8 +61,7 @@ struct VerifyMetadataIntegrityPass
   VerifyMetadataIntegrityPass(const VerifyMetadataIntegrityPass &other)
       : impl::VerifyMetadataIntegrityBase<VerifyMetadataIntegrityPass>(other),
         analysisManager(other.analysisManager) {}
-  VerifyMetadataIntegrityPass(mlir::arts::AnalysisManager *AM,
-                              bool failOnError)
+  VerifyMetadataIntegrityPass(mlir::arts::AnalysisManager *AM, bool failOnError)
       : analysisManager(AM) {
     this->failOnError = failOnError;
   }
@@ -96,9 +95,8 @@ struct VerifyMetadataIntegrityPass
       } else {
         auto [it, inserted] = seenIds.try_emplace(metadataId.value(), op);
         if (!inserted) {
-          emitIntegrityError(
-              op, llvm::Twine("duplicates metadata arts.id=") +
-                      llvm::Twine(metadataId.value()));
+          emitIntegrityError(op, llvm::Twine("duplicates metadata arts.id=") +
+                                     llvm::Twine(metadataId.value()));
           emitIntegrityError(it->second,
                              llvm::Twine("shares metadata arts.id=") +
                                  llvm::Twine(metadataId.value()));
@@ -132,8 +130,8 @@ struct VerifyMetadataIntegrityPass
         continue;
 
       if (*staticTripCount != *loopMetadata->tripCount) {
-        tripMismatches.push_back({op, *staticTripCount,
-                                  *loopMetadata->tripCount});
+        tripMismatches.push_back(
+            {op, *staticTripCount, *loopMetadata->tripCount});
       }
     }
 
@@ -144,15 +142,15 @@ struct VerifyMetadataIntegrityPass
     for (Operation *op : invalidProvenance)
       emitIntegrityError(op, "has invalid metadata provenance marker");
     for (Operation *op : transferredWithoutOrigin)
-      emitIntegrityError(op,
-                         "has transferred metadata provenance but no origin id");
-    for (const LoopMetadataMismatch &mismatch : tripMismatches) {
       emitIntegrityError(
-          mismatch.op,
-          llvm::Twine("has stale metadata tripCount=") +
-              llvm::Twine(mismatch.metadataTripCount) +
-              llvm::Twine(" (static trip count is ") +
-              llvm::Twine(mismatch.staticTripCount) + llvm::Twine(")"));
+          op, "has transferred metadata provenance but no origin id");
+    for (const LoopMetadataMismatch &mismatch : tripMismatches) {
+      emitIntegrityError(mismatch.op,
+                         llvm::Twine("has stale metadata tripCount=") +
+                             llvm::Twine(mismatch.metadataTripCount) +
+                             llvm::Twine(" (static trip count is ") +
+                             llvm::Twine(mismatch.staticTripCount) +
+                             llvm::Twine(")"));
     }
 
     unsigned issueCount = duplicateIdCount + missingIds.size() +
@@ -176,8 +174,8 @@ struct VerifyMetadataIntegrityPass
 private:
   mlir::arts::AnalysisManager &getAnalysisManager(ModuleOp module) {
     if (!analysisManager) {
-      ownedAnalysisManager = std::make_unique<mlir::arts::AnalysisManager>(
-          module);
+      ownedAnalysisManager =
+          std::make_unique<mlir::arts::AnalysisManager>(module);
       analysisManager = ownedAnalysisManager.get();
     }
     return *analysisManager;

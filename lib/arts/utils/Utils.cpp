@@ -267,8 +267,8 @@ bool isSideEffectFreeArithmeticLikeOp(Operation *op) {
              arith::MaxUIOp, arith::MinUIOp, arith::MaximumFOp,
              arith::MinimumFOp, arith::IndexCastOp, arith::IndexCastUIOp,
              arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, arith::TruncIOp,
-             arith::TruncFOp, arith::SIToFPOp, arith::UIToFPOp,
-             arith::FPToSIOp, arith::FPToUIOp>(op);
+             arith::TruncFOp, arith::SIToFPOp, arith::UIToFPOp, arith::FPToSIOp,
+             arith::FPToUIOp>(op);
 }
 
 ArtsMode convertOmpMode(omp::ClauseTaskDepend mode) {

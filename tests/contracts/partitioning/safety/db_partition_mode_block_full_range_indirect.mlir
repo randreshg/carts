@@ -1,4 +1,4 @@
-// RUN: %carts-compile %S/../../../examples/mixed_access/mixed_access.mlir --O3 --arts-config %S/../../../examples/arts.cfg --pipeline concurrency-opt | %FileCheck %s
+// RUN: %carts-compile %S/../../../examples/mixed_access/mixed_access.mlir --O3 --arts-config %S/../../../examples/arts.cfg --pipeline db-partitioning | %FileCheck %s
 
 // CHECK-LABEL: func.func @main
 // CHECK: arts.db_alloc[{{.*}}<block>, <indexed>{{.*}}]

@@ -17,6 +17,7 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/PartitionPredicates.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -85,9 +86,8 @@ static bool canNarrowDirectReadSlice(const LoweringContractInfo &contract,
   if (facts.partitionDimsFromPeers)
     return false;
 
-  bool blockLikeRequest = facts.requestedMode == PartitionMode::block ||
-                          facts.requestedMode == PartitionMode::stencil;
-  bool hasResolvedOwnerDims = !contract.ownerDims.empty() ||
+  bool blockLikeRequest = usesBlockLayout(facts.requestedMode);
+  bool hasResolvedOwnerDims = !contract.spatial.ownerDims.empty() ||
                               !facts.stencilOwnerDims.empty() ||
                               !facts.partitionDims.empty();
 
@@ -104,16 +104,16 @@ static bool refineContractWithFacts(LoweringContractInfo &contract,
 
   /// Post-DB analysis should refine the same contract language, not invent a
   /// new semantic family after the pre-DB pattern pipeline failed to match.
-  if (hasSeededContract && !contract.depPattern &&
+  if (hasSeededContract && !contract.pattern.depPattern &&
       facts.depPattern != ArtsDepPattern::unknown) {
-    contract.depPattern = facts.depPattern;
+    contract.pattern.depPattern = facts.depPattern;
     changed = true;
   }
 
-  if (!contract.distributionPattern && contract.depPattern) {
-    if (auto pattern =
-            getDistributionPatternForDepPattern(*contract.depPattern)) {
-      contract.distributionPattern = *pattern;
+  if (!contract.pattern.distributionPattern && contract.pattern.depPattern) {
+    if (auto derived =
+            getDistributionPatternForDepPattern(*contract.pattern.depPattern)) {
+      contract.pattern.distributionPattern = *derived;
       changed = true;
     }
   }
@@ -127,40 +127,41 @@ static bool refineContractWithFacts(LoweringContractInfo &contract,
       refinedOwnerDims.reserve(dims.size());
       for (unsigned dim : dims)
         refinedOwnerDims.push_back(static_cast<int64_t>(dim));
-      if (contract.ownerDims != refinedOwnerDims &&
-          (contract.ownerDims.empty() ||
-           refinedOwnerDims.size() >= contract.ownerDims.size())) {
-        contract.ownerDims = std::move(refinedOwnerDims);
+      if (contract.spatial.ownerDims != refinedOwnerDims &&
+          (contract.spatial.ownerDims.empty() ||
+           refinedOwnerDims.size() >= contract.spatial.ownerDims.size())) {
+        contract.spatial.ownerDims = std::move(refinedOwnerDims);
         changed = true;
       }
     }
   }
 
-  if (seededStencilSemantics && !contract.supportedBlockHalo &&
+  if (seededStencilSemantics && !contract.spatial.supportedBlockHalo &&
       facts.supportedBlockHalo) {
-    contract.supportedBlockHalo = true;
+    contract.spatial.supportedBlockHalo = true;
     changed = true;
   }
 
-  if (seededStencilSemantics && !contract.distributionPattern &&
+  if (seededStencilSemantics && !contract.pattern.distributionPattern &&
       facts.accessPattern == AccessPattern::Stencil) {
-    contract.distributionPattern = EdtDistributionPattern::stencil;
+    contract.pattern.distributionPattern = EdtDistributionPattern::stencil;
     changed = true;
-    if (!contract.depPattern)
-      contract.depPattern = ArtsDepPattern::stencil;
+    if (!contract.pattern.depPattern)
+      contract.pattern.depPattern = ArtsDepPattern::stencil;
   }
 
   /// Direct read-only block/stencil accesses with a resolved owner dimension
   /// can safely keep a worker-local dependency slice. Preserve that fact on
   /// the contract so generic acquire rewriting can narrow the dependency
   /// window without pattern-specific branches in ForLowering.
-  if (canNarrowDirectReadSlice(contract, facts) && !contract.narrowableDep) {
-    contract.narrowableDep = true;
+  if (canNarrowDirectReadSlice(contract, facts) &&
+      !contract.analysis.narrowableDep) {
+    contract.analysis.narrowableDep = true;
     changed = true;
   }
 
   if (changed)
-    contract.postDbRefined = true;
+    contract.analysis.postDbRefined = true;
 
   return changed;
 }
@@ -319,8 +320,8 @@ bool DbAnalysis::isTiling2DTaskAcquire(DbAcquireOp acquire) {
   if (!acquire)
     return false;
   if (auto contract = getLoweringContract(acquire.getPtr())) {
-    if (contract->distributionKind &&
-        *contract->distributionKind == EdtDistributionKind::tiling_2d)
+    if (contract->pattern.distributionKind &&
+        *contract->pattern.distributionKind == EdtDistributionKind::tiling_2d)
       return true;
   }
   if (auto kind = getEdtDistributionKind(acquire.getOperation()))
@@ -493,7 +494,8 @@ DbAnalysis::analyzeLoopDbAccessPatterns(ForOp forOp) {
   });
 
   if (depPatternHint) {
-    if (auto directPattern = getDistributionPatternForDepPattern(*depPatternHint))
+    if (auto directPattern =
+            getDistributionPatternForDepPattern(*depPatternHint))
       summary.distributionPattern = *directPattern;
     else
       summary.distributionPattern = classifyDistributionPattern(summary);
@@ -869,7 +871,7 @@ DbAnalysis::getAcquireContractSummary(DbAcquireOp acquire) {
 
   if (const DbAcquirePartitionFacts *facts =
           getAcquirePartitionFacts(acquire)) {
-    const bool hasPersistedRefinement = summary.contract.postDbRefined;
+    const bool hasPersistedRefinement = summary.contract.analysis.postDbRefined;
     /// Once post-DB refinement is persisted, treat that contract as
     /// authoritative and avoid rediscovery-driven mutation here.
     if (!hasPersistedRefinement)
@@ -888,99 +890,10 @@ DbAnalysis::getAcquireContractSummary(DbAcquireOp acquire) {
   return summary;
 }
 
-AcquireRewriteContract
-DbAnalysis::getAcquireRewriteContract(DbAcquireOp acquire) {
-  AcquireRewriteContract contract = deriveAcquireRewriteContract(acquire);
-  if (!acquire)
-    return contract;
-
-  auto contractSummary = getAcquireContractSummary(acquire);
-  if (!contractSummary)
-    return contract;
-
-  /// Refined/persisted contract payload is authoritative for owner dims.
-  if (!contractSummary->contract.ownerDims.empty())
-    contract.ownerDims.assign(contractSummary->contract.ownerDims.begin(),
-                              contractSummary->contract.ownerDims.end());
-  else if (contract.ownerDims.empty() && contractSummary->facts) {
-    ArrayRef<unsigned> dims = contractSummary->facts->stencilOwnerDims;
-    if (dims.empty())
-      dims = contractSummary->facts->partitionDims;
-    for (unsigned dim : dims)
-      contract.ownerDims.push_back(static_cast<int64_t>(dim));
-  }
-
-  if (auto mins = contractSummary->contract.getStaticMinOffsets())
-    contract.haloMinOffsets = *mins;
-  if (auto maxs = contractSummary->contract.getStaticMaxOffsets())
-    contract.haloMaxOffsets = *maxs;
-
-  if (contractSummary->contract.narrowableDep ||
-      (contractSummary->facts &&
-       canNarrowDirectReadSlice(contractSummary->contract,
-                                *contractSummary->facts)))
-    contract.preserveParentDepRange = false;
-
-  /// Pattern-driven N-D contracts remain the preferred source of halo bounds.
-  /// When they are absent, fall back to the graph-backed scalar stencil span
-  /// only for direct single-owner-dim reads. That keeps the generic contract
-  /// path intact while still fixing block-local read windows for cases such as
-  /// k-owned higher-order stencils that were not explicitly pattern-stamped.
-  DbAcquireNode *acqNode = nullptr;
-  if (acquire.getMode() == ArtsMode::in &&
-      (contract.haloMinOffsets.empty() || contract.haloMaxOffsets.empty()) &&
-      contract.ownerDims.size() == 1) {
-    acqNode = getDbAcquireNode(acquire);
-    if (acqNode && acqNode->getAccessPattern() == AccessPattern::Stencil &&
-        !acqNode->hasIndirectAccess()) {
-      if (auto bounds = acqNode->getStencilBounds();
-          bounds && bounds->valid && bounds->hasHalo()) {
-        if (contract.haloMinOffsets.empty())
-          contract.haloMinOffsets.push_back(bounds->minOffset);
-        if (contract.haloMaxOffsets.empty())
-          contract.haloMaxOffsets.push_back(bounds->maxOffset);
-      }
-    }
-  }
-
-  const bool hasExplicitStencilContract =
-      contractSummary->contract.hasExplicitStencilContract();
-  bool supportsStencilHalo = hasExplicitStencilContract &&
-                             contractSummary->contract.supportsBlockHalo() &&
-                             !contract.haloMinOffsets.empty() &&
-                             !contract.haloMaxOffsets.empty();
-  bool supportsGraphHalo =
-      acquire.getMode() == ArtsMode::in && !contract.haloMinOffsets.empty() &&
-      !contract.haloMaxOffsets.empty() && contract.ownerDims.size() == 1 &&
-      acqNode && acqNode->getAccessPattern() == AccessPattern::Stencil &&
-      !acqNode->hasIndirectAccess();
-
-  if (acquire.getMode() == ArtsMode::in &&
-      ((hasExplicitStencilContract && supportsStencilHalo) ||
-       supportsGraphHalo)) {
-    if (contract.haloMinOffsets.empty() && !contract.haloMaxOffsets.empty()) {
-      contract.haloMinOffsets.resize(contract.haloMaxOffsets.size(), 0);
-      for (size_t i = 0; i < contract.haloMaxOffsets.size(); ++i)
-        if (contract.haloMaxOffsets[i] > 0)
-          contract.haloMinOffsets[i] = -contract.haloMaxOffsets[i];
-    } else if (contract.haloMinOffsets.size() ==
-               contract.haloMaxOffsets.size()) {
-      for (size_t i = 0; i < contract.haloMinOffsets.size(); ++i)
-        if (contract.haloMinOffsets[i] == 0 && contract.haloMaxOffsets[i] > 0)
-          contract.haloMinOffsets[i] = -contract.haloMaxOffsets[i];
-    }
-
-    contract.applyStencilHalo = true;
-    contract.usePartitionSliceAsDepWindow = false;
-    contract.preserveParentDepRange = false;
-  }
-
-  return contract;
-}
-
 AccessPattern DbAnalysis::resolveCanonicalAcquireAccessPattern(
     DbAcquireOp acquire, const AcquireContractSummary *summary,
     const DbAcquirePartitionFacts *facts) {
+  (void)facts;
   if (!acquire)
     return AccessPattern::Unknown;
 
@@ -996,17 +909,13 @@ AccessPattern DbAnalysis::resolveCanonicalAcquireAccessPattern(
   if (summary && summary->contract.hasExplicitStencilContract())
     return AccessPattern::Stencil;
 
-  if (!facts)
-    facts = getAcquirePartitionFacts(acquire);
-  if (facts && facts->accessPattern != AccessPattern::Unknown)
-    return facts->accessPattern;
-
   return AccessPattern::Unknown;
 }
 
 ArtsDepPattern DbAnalysis::resolveCanonicalAcquireDepPattern(
     DbAcquireOp acquire, const AcquireContractSummary *summary,
     const DbAcquirePartitionFacts *facts) {
+  (void)facts;
   if (!acquire)
     return ArtsDepPattern::unknown;
 
@@ -1017,13 +926,8 @@ ArtsDepPattern DbAnalysis::resolveCanonicalAcquireDepPattern(
       summary = &*ownedSummary;
   }
 
-  if (summary && summary->contract.depPattern)
-    return *summary->contract.depPattern;
-
-  if (!facts)
-    facts = getAcquirePartitionFacts(acquire);
-  if (facts && facts->depPattern != ArtsDepPattern::unknown)
-    return facts->depPattern;
+  if (summary && summary->contract.pattern.depPattern)
+    return *summary->contract.pattern.depPattern;
 
   return ArtsDepPattern::unknown;
 }

@@ -331,14 +331,14 @@ DbAcquirePartitionFacts DbDimAnalyzer::compute(DbAcquireNode *node) {
   facts.acquire = acquire;
   facts.requestedMode = getRequestedMode(acquire);
   if (auto contract = getLoweringContract(acquire.getPtr())) {
-    if (contract->depPattern)
-      facts.depPattern = *contract->depPattern;
+    if (contract->pattern.depPattern)
+      facts.depPattern = *contract->pattern.depPattern;
     facts.supportedBlockHalo = contract->supportsBlockHalo();
     /// getLoweringContract() already merges acquire-result refinements with the
     /// source-pointer contract, so consumers can read owner dims from one
     /// place even when the acquire result only persists a partial refinement.
-    for (unsigned dim :
-         resolveContractOwnerDims(*contract, contract->ownerDims.size()))
+    for (unsigned dim : resolveContractOwnerDims(
+             *contract, contract->spatial.ownerDims.size()))
       facts.stencilOwnerDims.push_back(dim);
   } else {
     if (auto depPattern = getEffectiveDepPattern(acquire.getOperation()))

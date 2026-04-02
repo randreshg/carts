@@ -5,12 +5,15 @@
 #include "arts/codegen/Codegen.h"
 
 /// Other dialects
+#include "mlir/Dialect/Affine/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/MemRef/Utils/MemRefUtils.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Support/LLVM.h"
 #include "polygeist/Dialect.h"
@@ -902,57 +905,30 @@ Value ArtsCodegen::computeTotalElements(ValueRange sizes, Location loc) {
 
 Value ArtsCodegen::computeLinearIndex(ArrayRef<Value> sizes,
                                       ArrayRef<Value> indices, Location loc) {
-  /// Convert multi-dimensional indices to linear index for 1D memref
-  /// Formula: linear_index = i0 * (size1 * size2 * ... * sizeN) +
-  ///                        i1 * (size2 * size3 * ... * sizeN) +
-  ///                        ...
-  ///                        iN
-  if (indices.size() <= 1)
-    return indices.empty() ? createIndexConstant(0, loc) : indices[0];
+  if (indices.empty())
+    return createIndexConstant(0, loc);
+  if (indices.size() == 1)
+    return castToIndex(indices.front(), loc);
 
-  /// If all sizes are constants, we can compute strides statically
-  bool allSizesConstant = llvm::all_of(sizes, [](Value sz) {
-    return sz.getDefiningOp<arith::ConstantIndexOp>() != nullptr;
-  });
+  /// Most callers pass matching shape/index ranks. For the few cases that
+  /// don't, keep the existing stride-based behavior rather than changing the
+  /// linearization contract here.
+  if (sizes.size() != indices.size())
+    return computeLinearIndexFromStrides(computeStridesFromSizes(sizes, loc),
+                                         indices, loc);
 
-  Value linearIndex = createIndexConstant(0, loc);
-  if (allSizesConstant) {
-    /// pre-compute strides when all sizes are constants
-    SmallVector<int64_t> strides(sizes.size());
-    strides.back() = 1;
-    for (int i = static_cast<int>(sizes.size()) - 2; i >= 0; --i) {
-      auto constOp = sizes[i + 1].getDefiningOp<arith::ConstantIndexOp>();
-      strides[i] = strides[i + 1] * constOp.value();
-    }
+  SmallVector<OpFoldResult, 4> mixedSizes;
+  SmallVector<OpFoldResult, 4> mixedIndices;
+  mixedSizes.reserve(sizes.size());
+  mixedIndices.reserve(indices.size());
+  for (Value size : sizes)
+    mixedSizes.push_back(castToIndex(size, loc));
+  for (Value index : indices)
+    mixedIndices.push_back(castToIndex(index, loc));
 
-    for (size_t i = 0; i < indices.size(); ++i) {
-      if (auto constIdx = indices[i].getDefiningOp<arith::ConstantIndexOp>()) {
-        /// Constant folding: compute contribution at compile time
-        int64_t contribution = constIdx.value() * strides[i];
-        if (contribution != 0) {
-          auto constContrib = createIndexConstant(contribution, loc);
-          linearIndex = create<arith::AddIOp>(loc, linearIndex, constContrib);
-        }
-      } else {
-        /// Dynamic index: compute stride * index
-        auto stride = createIndexConstant(strides[i], loc);
-        auto contribution = create<arith::MulIOp>(loc, indices[i], stride);
-        linearIndex = create<arith::AddIOp>(loc, linearIndex, contribution);
-      }
-    }
-  } else {
-    /// Fallback: original dynamic computation
-    for (size_t i = 0; i < indices.size(); ++i) {
-      Value stride = createIndexConstant(1, loc);
-      for (size_t j = i + 1; j < sizes.size(); ++j)
-        stride = create<arith::MulIOp>(loc, stride, sizes[j]);
-
-      auto contribution = create<arith::MulIOp>(loc, indices[i], stride);
-      linearIndex = create<arith::AddIOp>(loc, linearIndex, contribution);
-    }
-  }
-
-  return linearIndex;
+  return getValueOrCreateConstantIndexOp(
+      getBuilder(), loc,
+      affine::linearizeIndex(getBuilder(), loc, mixedIndices, mixedSizes));
 }
 
 Value ArtsCodegen::computeLinearIndexFromStrides(ValueRange strides,
@@ -977,17 +953,13 @@ SmallVector<Value> ArtsCodegen::computeStridesFromSizes(ArrayRef<Value> sizes,
   if (sizes.empty())
     return {};
 
-  SmallVector<Value> strides(sizes.size());
-  Value stride = createIndexConstant(1, loc);
-
-  /// Compute strides from right to left (row-major)
-  for (int i = static_cast<int>(sizes.size()) - 1; i >= 0; --i) {
-    strides[i] = stride;
-    if (i > 0)
-      stride = create<arith::MulIOp>(loc, stride, sizes[i]);
-  }
-
-  return strides;
+  SmallVector<OpFoldResult, 4> mixedSizes;
+  mixedSizes.reserve(sizes.size());
+  for (Value size : sizes)
+    mixedSizes.push_back(castToIndex(size, loc));
+  return getValueOrCreateConstantIndexOp(
+      getBuilder(), loc,
+      memref::computeStridesIRBlock(loc, getBuilder(), mixedSizes));
 }
 
 /// Helper to iterate over all Db elements
