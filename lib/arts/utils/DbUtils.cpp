@@ -481,6 +481,13 @@ DbMode DbUtils::convertArtsModeToDbMode(ArtsMode mode) {
   return (mode == ArtsMode::in) ? DbMode::read : DbMode::write;
 }
 
+/// Custom use-chain traversal: upstream view-chain utilities
+/// (skipFullyAliasingOperations, skipViewLikeOps) walk UP the def chain to
+/// find the root allocation. This function walks DOWN the use chain to
+/// detect non-structural host consumers that would block partitioning.
+/// It also handles CARTS-specific ops (EdtOp, DbAcquireOp, DbReleaseOp,
+/// LoweringContractOp, Memref2PointerOp null-checks) that have no upstream
+/// equivalent, so the custom traversal is necessary.
 bool DbUtils::hasNonPartitionableHostViewUses(Value dbValue) {
   if (!dbValue)
     return false;
