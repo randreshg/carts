@@ -457,25 +457,36 @@ DbAnalysis::~DbAnalysis() { ARTS_DEBUG("Destroying DbAnalysis"); }
 
 DbGraph &DbAnalysis::getOrCreateGraph(func::FuncOp func) {
   ARTS_INFO("Getting or creating DbGraph for function: " << func.getName());
-  auto it = functionGraphMap.find(func);
-  if (it != functionGraphMap.end())
-    return *it->second.get();
+  // Fast path: shared lock for read.
+  {
+    std::shared_lock<std::shared_mutex> readLock(graphMutex);
+    auto it = functionGraphMap.find(func);
+    if (it != functionGraphMap.end())
+      return *it->second;
+  }
+  // Slow path: exclusive lock for write.
+  std::unique_lock<std::shared_mutex> writeLock(graphMutex);
+  // Re-check after acquiring write lock (another thread may have created it).
+  auto &graph = functionGraphMap[func];
+  if (graph)
+    return *graph;
 
   ARTS_DEBUG(" - Creating new DbGraph for function: " << func.getName());
-  auto newGraph = std::make_unique<DbGraph>(func, this);
-  newGraph->build();
-
-  DbGraph *graphPtr = newGraph.get();
-  functionGraphMap[func] = std::move(newGraph);
-  return *graphPtr;
+  graph = std::make_unique<DbGraph>(func, this);
+  graph->build();
+  return *graph;
 }
 
 bool DbAnalysis::invalidateGraph(func::FuncOp func) {
   ARTS_INFO("Invalidating DbGraph for function: " << func.getName());
+  std::unique_lock<std::shared_mutex> writeLock(graphMutex);
   auto it = functionGraphMap.find(func);
   if (it != functionGraphMap.end()) {
     functionGraphMap.erase(it);
-    loopAccessSummaryByOp.clear();
+    {
+      std::unique_lock<std::shared_mutex> summaryLock(accessSummaryMutex);
+      loopAccessSummaryByOp.clear();
+    }
     if (dbAliasAnalysis)
       dbAliasAnalysis->resetCache();
     return true;
@@ -485,8 +496,12 @@ bool DbAnalysis::invalidateGraph(func::FuncOp func) {
 
 void DbAnalysis::invalidate() {
   ARTS_INFO("Invalidating all DbGraphs");
+  std::unique_lock<std::shared_mutex> writeLock(graphMutex);
   functionGraphMap.clear();
-  loopAccessSummaryByOp.clear();
+  {
+    std::unique_lock<std::shared_mutex> summaryLock(accessSummaryMutex);
+    loopAccessSummaryByOp.clear();
+  }
   if (dbAliasAnalysis)
     dbAliasAnalysis->resetCache();
 }
@@ -509,13 +524,18 @@ DbAnalysis::analyzeLoopDbAccessPatterns(ForOp forOp) {
     return summary;
   }
 
-  if (auto it = loopAccessSummaryByOp.find(forOp.getOperation());
-      it != loopAccessSummaryByOp.end())
-    return it->second;
+  // Fast path: shared lock for cache read.
+  {
+    std::shared_lock<std::shared_mutex> readLock(accessSummaryMutex);
+    if (auto it = loopAccessSummaryByOp.find(forOp.getOperation());
+        it != loopAccessSummaryByOp.end())
+      return it->second;
+  }
 
   Block &forBody = forOp.getRegion().front();
   if (forBody.getNumArguments() == 0) {
     summary.distributionPattern = EdtDistributionPattern::unknown;
+    std::unique_lock<std::shared_mutex> writeLock(accessSummaryMutex);
     loopAccessSummaryByOp[forOp.getOperation()] = summary;
     return summary;
   }
@@ -533,6 +553,7 @@ DbAnalysis::analyzeLoopDbAccessPatterns(ForOp forOp) {
   func::FuncOp func = forOp->getParentOfType<func::FuncOp>();
   if (!edt || !func) {
     summary.distributionPattern = classifyDistributionPattern(summary);
+    std::unique_lock<std::shared_mutex> writeLock(accessSummaryMutex);
     loopAccessSummaryByOp[forOp.getOperation()] = summary;
     return summary;
   }
@@ -616,7 +637,10 @@ DbAnalysis::analyzeLoopDbAccessPatterns(ForOp forOp) {
   } else {
     summary.distributionPattern = classifyDistributionPattern(summary);
   }
-  loopAccessSummaryByOp[forOp.getOperation()] = summary;
+  {
+    std::unique_lock<std::shared_mutex> writeLock(accessSummaryMutex);
+    loopAccessSummaryByOp[forOp.getOperation()] = summary;
+  }
   return summary;
 }
 
@@ -624,9 +648,12 @@ std::optional<DbAnalysis::LoopDbAccessSummary>
 DbAnalysis::getLoopDbAccessSummary(ForOp forOp) {
   if (!forOp)
     return std::nullopt;
-  if (auto it = loopAccessSummaryByOp.find(forOp.getOperation());
-      it != loopAccessSummaryByOp.end())
-    return it->second;
+  {
+    std::shared_lock<std::shared_mutex> readLock(accessSummaryMutex);
+    if (auto it = loopAccessSummaryByOp.find(forOp.getOperation());
+        it != loopAccessSummaryByOp.end())
+      return it->second;
+  }
   return analyzeLoopDbAccessPatterns(forOp);
 }
 

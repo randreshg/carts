@@ -24,6 +24,7 @@
 
 #include <atomic>
 #include <optional>
+#include <shared_mutex>
 
 namespace mlir {
 namespace arts {
@@ -148,6 +149,7 @@ private:
 
   /// Per-function graph caches
   llvm::DenseMap<func::FuncOp, std::unique_ptr<EdtGraph>> edtGraphs;
+  mutable std::shared_mutex edtGraphMutex;
 
   void analyzeFunc(func::FuncOp func);
 };

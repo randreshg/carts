@@ -28,6 +28,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "llvm/ADT/DenseMap.h"
 #include <optional>
+#include <shared_mutex>
 
 namespace mlir {
 namespace arts {
@@ -271,7 +272,9 @@ public:
 
 private:
   llvm::DenseMap<func::FuncOp, std::unique_ptr<DbGraph>> functionGraphMap;
+  mutable std::shared_mutex graphMutex;
   llvm::DenseMap<Operation *, LoopDbAccessSummary> loopAccessSummaryByOp;
+  mutable std::shared_mutex accessSummaryMutex;
   std::unique_ptr<DbAliasAnalysis> dbAliasAnalysis;
 };
 
