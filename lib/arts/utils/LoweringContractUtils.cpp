@@ -744,6 +744,66 @@ bool mlir::arts::prefersContractNDBlock(const LoweringContractInfo &info,
   return info.prefersNDBlock(requiredRank);
 }
 
+std::optional<LoweringContractInfo>
+mlir::arts::resolveEffectiveContract(Value target) {
+  if (!target)
+    return std::nullopt;
+  auto ptrContract = getLoweringContract(target);
+  if (auto *defOp = target.getDefiningOp()) {
+    if (auto semContract = getSemanticContract(defOp)) {
+      if (!ptrContract)
+        return semContract;
+      mergeLoweringContractInfo(*ptrContract, *semContract);
+      return ptrContract;
+    }
+  }
+  return ptrContract;
+}
+
+std::optional<LoweringContractInfo>
+mlir::arts::resolveEffectiveContract(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  auto semContract = getSemanticContract(op);
+  if (!semContract || semContract->empty())
+    return std::nullopt;
+  return semContract;
+}
+
+ContractChange mlir::arts::combineContracts(LoweringContractInfo &dest,
+                                            const LoweringContractInfo &src) {
+  return mergeLoweringContractInfo(dest, src);
+}
+
+void mlir::arts::patchContract(LoweringContractInfo &contract,
+                               ArrayRef<int64_t> ownerDims,
+                               ArrayRef<int64_t> minOffsets,
+                               ArrayRef<int64_t> maxOffsets) {
+  if (!ownerDims.empty())
+    contract.spatial.ownerDims.assign(ownerDims.begin(), ownerDims.end());
+  if (!minOffsets.empty())
+    contract.spatial.staticMinOffsets.assign(minOffsets.begin(),
+                                             minOffsets.end());
+  if (!maxOffsets.empty())
+    contract.spatial.staticMaxOffsets.assign(maxOffsets.begin(),
+                                             maxOffsets.end());
+}
+
+std::optional<std::pair<SmallVector<int64_t, 4>, SmallVector<int64_t, 4>>>
+mlir::arts::projectHaloWindow(const LoweringContractInfo &contract) {
+  auto minOffsets = contract.getStaticMinOffsets();
+  auto maxOffsets = contract.getStaticMaxOffsets();
+  if (!minOffsets || !maxOffsets)
+    return std::nullopt;
+  return std::make_pair(*minOffsets, *maxOffsets);
+}
+
+bool mlir::arts::hasCompleteHaloState(const LoweringContractInfo &contract) {
+  return !contract.spatial.ownerDims.empty() &&
+         (contract.getStaticMinOffsets().has_value()) &&
+         (contract.getStaticMaxOffsets().has_value());
+}
+
 LoweringContractOp
 mlir::arts::upsertLoweringContract(OpBuilder &builder, Location loc,
                                    Value target,
