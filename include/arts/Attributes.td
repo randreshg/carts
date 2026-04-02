@@ -264,6 +264,47 @@ def PreserveDepEdgeAttr : AttrDef<ArtsDialect, "PreserveDepEdge"> {
   let assemblyFormat = "";
 }
 
+/// Canonical semantic pattern payload shared by lowering contracts.
+def PatternAttr : Arts_Attr<"Pattern", "pattern"> {
+  let summary = "Canonical ARTS semantic pattern payload";
+  let description = [{
+    Bundles the semantic pattern family and distribution selection into one
+    typed attribute so lowering contracts do not need to spread the same
+    meaning across unrelated top-level attrs.
+  }];
+  let parameters = (ins
+    OptionalParameter<"::mlir::arts::ArtsDepPatternAttr">:$depPattern,
+    OptionalParameter<"::mlir::arts::EdtDistributionKindAttr">:$distributionKind,
+    OptionalParameter<"::mlir::arts::EdtDistributionPatternAttr">:$distributionPattern,
+    OptionalParameter<"::mlir::IntegerAttr">:$distributionVersion,
+    OptionalParameter<"::mlir::IntegerAttr">:$revision
+  );
+  let assemblyFormat = "`<` struct(params) `>`";
+}
+
+/// Canonical static lowering-contract payload shared by lowering contracts.
+def ContractAttr : Arts_Attr<"Contract", "contract"> {
+  let summary = "Canonical ARTS lowering-contract payload";
+  let description = [{
+    Bundles static lowering-contract refinements such as owner dimensions,
+    stencil center/halo semantics, and post-DB analysis flags into one typed
+    attribute. Dynamic quantities remain SSA operands on
+    `arts.lowering_contract`.
+  }];
+  let parameters = (ins
+    OptionalParameter<"::mlir::DenseI64ArrayAttr">:$ownerDims,
+    OptionalParameter<"::mlir::IntegerAttr">:$centerOffset,
+    OptionalParameter<"::mlir::DenseI64ArrayAttr">:$spatialDims,
+    OptionalParameter<"::mlir::DenseI64ArrayAttr">:$stencilIndependentDims,
+    OptionalParameter<"::mlir::BoolAttr">:$supportedBlockHalo,
+    OptionalParameter<"::mlir::BoolAttr">:$narrowableDep,
+    OptionalParameter<"::mlir::BoolAttr">:$postDbRefined,
+    OptionalParameter<"::mlir::IntegerAttr">:$criticalPathDistance,
+    OptionalParameter<"::mlir::IntegerAttr">:$contractKind
+  );
+  let assemblyFormat = "`<` struct(params) `>`";
+}
+
 ///===----------------------------------------------------------------------===///
 // ARTS Metadata Attributes
 ///===----------------------------------------------------------------------===///

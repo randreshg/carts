@@ -18,7 +18,7 @@
 ///   H1.S1: Element-wise stencil -> stencil/ESD
 ///   H1.S2: Block-capable stencil -> stencil/ESD
 ///   H1.E1: Element-wise capable -> element-wise
-///   H1.F:  Fallback -> coarse or fine-grained (CLI option)
+///   H1.F:  Fallback -> coarse
 ///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_HEURISTICS_PARTITIONINGHEURISTICS_H
@@ -42,9 +42,6 @@ namespace mlir {
 class Operation;
 
 namespace arts {
-
-/// Partition fallback strategy (from CLI option --partition-fallback)
-enum class PartitionFallback { Coarse, FineGrained };
 
 ///===----------------------------------------------------------------------===///
 /// H1: Partitioning Heuristic Types
@@ -274,8 +271,7 @@ struct PartitioningHint {
 
 /// Evaluate all H1.x heuristics and return partitioning decision
 PartitioningDecision evaluatePartitioningHeuristics(
-    const PartitioningContext &ctx, const AbstractMachine *machine,
-    PartitionFallback fallback = PartitionFallback::Coarse);
+    const PartitioningContext &ctx, const AbstractMachine *machine);
 
 /// PartitioningHint accessors
 std::optional<PartitioningHint> getPartitioningHint(Operation *op);

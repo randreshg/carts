@@ -78,11 +78,6 @@ struct DbRewriteAcquire {
   PartitionInfo partitionInfo;
   bool isFullRange = false;
   bool skipRebase = false;
-  /// Optional graph-backed halo fact for block fallback on stencil-shaped
-  /// reads. This avoids depending on persisted lowering contracts when the
-  /// controller already proved the precise halo window.
-  std::optional<StencilBounds> graphStencilBounds;
-  std::optional<unsigned> graphStencilOwnerDim;
 
   /// Accessors for partition data (mode-aware)
   ArrayRef<Value> getIndices() const { return partitionInfo.indices; }
@@ -122,17 +117,18 @@ struct DbRewritePlan {
                                     : blockSizes.size();
   }
 
+  bool isCoarse() const { return !requiresWorkerBoundsPlanning(mode); }
+  bool isElementWise() const { return arts::usesElementLayout(mode); }
+  bool usesBlockedLayout() const { return arts::usesBlockLayout(mode); }
+  bool isStencil() const { return arts::supportsHaloExtension(mode); }
+  bool isBlock() const { return usesBlockedLayout() && !isStencil(); }
+
   bool isValid() const {
-    switch (mode) {
-    case PartitionMode::stencil:
+    if (isStencil())
       return stencilInfo.has_value();
-    case PartitionMode::block:
+    if (usesBlockedLayout())
       return !blockSizes.empty();
-    case PartitionMode::fine_grained:
-    case PartitionMode::coarse:
-      return true;
-    }
-    return false;
+    return true;
   }
 
   /// Default constructor
@@ -154,12 +150,10 @@ public:
 
   /// Accessors
   PartitionMode getMode() const { return plan.mode; }
-  bool isElementWise() const {
-    return plan.mode == PartitionMode::fine_grained;
-  }
-  bool isBlock() const { return plan.mode == PartitionMode::block; }
-  bool isStencil() const { return plan.mode == PartitionMode::stencil; }
-  bool isCoarse() const { return plan.mode == PartitionMode::coarse; }
+  bool isElementWise() const { return plan.isElementWise(); }
+  bool isBlock() const { return plan.isBlock(); }
+  bool isStencil() const { return plan.isStencil(); }
+  bool isCoarse() const { return plan.isCoarse(); }
 
 protected:
   /// Protected constructor - use create() factory instead

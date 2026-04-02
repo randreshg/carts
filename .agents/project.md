@@ -63,8 +63,8 @@ docs/                  Architecture and developer docs
 
 ## Pipeline Overview
 
-15 stages in order (use `carts pipeline --json` for canonical list):
-1. canonicalize-memrefs — normalize memrefs, inline
+18 stages in order (use `carts pipeline --json` for the canonical list):
+1. raise-memref-dimensionality — normalize memrefs and raise nested layouts
 2. collect-metadata — extract loop/array metadata
 3. initial-cleanup — DCE, CSE
 4. openmp-to-arts — OMP parallel to ARTS EDTs
@@ -75,10 +75,13 @@ docs/                  Architecture and developer docs
 9. edt-opt — EDT fusion
 10. concurrency — build EDT concurrency graph
 11. edt-distribution — distribution strategy + ForLowering
-12. concurrency-opt — DB partitioning (H1 heuristics)
-13. epochs — epoch synchronization
-14. pre-lowering — EDT/DB/epoch lowering to runtime calls
-15. arts-to-llvm — final ARTS to LLVM conversion
+12. post-distribution-cleanup — structural cleanup after loop lowering
+13. db-partitioning — DB partitioning (H1 heuristics)
+14. post-db-refinement — contract validation and DB refinement
+15. late-concurrency-cleanup — late hoisting/sinking and cleanup
+16. epochs — epoch synchronization
+17. pre-lowering — EDT/DB/epoch lowering to runtime calls
+18. arts-to-llvm — final ARTS to LLVM conversion
 
 ## Debugging
 

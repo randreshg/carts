@@ -221,8 +221,6 @@ private:
   std::unique_ptr<mlir::DataLayout> mlirDL;
   bool debug = false;
 
-  /// Other Attributes
-  llvm::DenseMap<RuntimeFunction, func::FuncOp> runtimeFunctionCache;
   llvm::StringMap<LLVM::GlobalOp> llvmStringGlobals;
   SmallVector<func::FuncOp, 8> distributedInitNodeCallbacks;
   SmallVector<func::FuncOp, 8> distributedInitWorkerCallbacks;

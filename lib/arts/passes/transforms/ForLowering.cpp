@@ -113,8 +113,17 @@ inferLoopHaloBoundsFromValue(Value dep, ForOp forOp, unsigned mappedDim) {
       continue;
 
     AccessIndexInfo info;
-    info.dbRefPrefix = 0;
-    info.indexChain.append(access->indices.begin(), access->indices.end());
+    Value baseMemref = ValueAnalysis::stripMemrefViewOps(access->memref);
+    if (auto dbRef = baseMemref.getDefiningOp<DbRefOp>()) {
+      SmallVector<Value> indexChain = DbUtils::collectFullIndexChain(dbRef, memOp);
+      if (indexChain.empty())
+        continue;
+      info.dbRefPrefix = dbRef.getIndices().size();
+      info.indexChain.append(indexChain.begin(), indexChain.end());
+    } else {
+      info.dbRefPrefix = 0;
+      info.indexChain.append(access->indices.begin(), access->indices.end());
+    }
     accesses.push_back(std::move(info));
   }
 

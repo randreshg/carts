@@ -1389,8 +1389,27 @@ void CreateDbsPass::rewriteUsesEverywhereCoarse(Operation *alloc,
   if (!originalValue)
     return;
 
+  auto getAnchorInDbAllocBlock = [&](Operation *user) -> Operation * {
+    if (!user)
+      return nullptr;
+    Block *dbAllocBlock = dbAlloc->getBlock();
+    Operation *anchor = user;
+    while (anchor && anchor->getBlock() != dbAllocBlock)
+      anchor = anchor->getParentOp();
+    return anchor;
+  };
+
   auto shouldRewrite = [&](Operation *user) {
-    return user != dbAlloc.getOperation() && !user->getParentOfType<EdtOp>();
+    if (!user || user == dbAlloc.getOperation() || user->getParentOfType<EdtOp>())
+      return false;
+
+    Operation *anchor = getAnchorInDbAllocBlock(user);
+    if (!anchor)
+      return false;
+    if (anchor->getBlock() == dbAlloc->getBlock() && anchor->isBeforeInBlock(
+                                                         dbAlloc.getOperation()))
+      return false;
+    return true;
   };
 
   bool hasHostUses = false;
@@ -1543,7 +1562,7 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
       }
     }
 
-    if (plan.mode == PartitionMode::coarse) {
+    if (plan.isCoarse()) {
       /// Coarse mode: db_ref index must be constant zero.
       PartitionInfo coarseInfo;
       coarseInfo.mode = PartitionMode::coarse;
@@ -1556,7 +1575,7 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
       continue;
     }
 
-    if (plan.mode == PartitionMode::block) {
+    if (plan.isBlock()) {
       /// Block mode: Use DbBlockIndexer with stored block size
       ARTS_DEBUG(" - Using DbBlockIndexer with stored plan");
       Location loc = op->getLoc();

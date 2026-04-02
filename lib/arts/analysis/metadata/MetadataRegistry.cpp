@@ -214,6 +214,11 @@ void MetadataRegistry::exportToOperations() {
 void MetadataRegistry::collectFromModule(ModuleOp module) {
   ARTS_DEBUG_HEADER(MetadataRegistry::collectFromModule);
 
+  /// This importer is used to reconstruct the in-memory registry from the
+  /// current IR attributes. Rebuilding from scratch avoids leaving stale
+  /// Operation* keys behind after earlier passes rewrote or erased ops.
+  metadataMap.clear();
+
   uint64_t opsWithArtsAttrs = 0;
   uint64_t importedCount = 0;
 

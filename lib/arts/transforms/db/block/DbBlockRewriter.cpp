@@ -189,6 +189,8 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
     /// the element-space window into DB-space blocks.
     if (acquire.getMode() == ArtsMode::in) {
       auto contract = getLoweringContract(acquire.getPtr());
+      if (!contract)
+        contract = getSemanticContract(acquire.getOperation());
       SmallVector<unsigned, 4> ownerDims =
           (contract && !contract->spatial.ownerDims.empty())
               ? resolveContractOwnerDims(*contract, nPartDims)
@@ -202,6 +204,9 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
       };
 
       unsigned ownerDim = resolveOwnerDim(d);
+      std::optional<unsigned> ownerPosition =
+          contract ? getContractOwnerPosition(*contract, ownerDim)
+                   : std::nullopt;
       auto applyHaloWindow = [&](int64_t minOffset, int64_t maxOffset) {
         ExpandedElementWindow expanded = expandElementWindowWithHalo(
             builder, loc, elemOff, elemSz, totalExtent, minOffset, maxOffset);
@@ -217,26 +222,14 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
       if (contract) {
         auto staticMinOffsets = contract->getStaticMinOffsets();
         auto staticMaxOffsets = contract->getStaticMaxOffsets();
-        if (staticMinOffsets && staticMaxOffsets &&
-            ownerDim < staticMinOffsets->size() &&
-            ownerDim < staticMaxOffsets->size()) {
+        if (staticMinOffsets && staticMaxOffsets && ownerPosition &&
+            *ownerPosition < staticMinOffsets->size() &&
+            *ownerPosition < staticMaxOffsets->size()) {
           ARTS_DEBUG("  Block rewrite uses contract halo window on dim "
                      << ownerDim << " for acquire " << acquire);
-          applyHaloWindow((*staticMinOffsets)[ownerDim],
-                          (*staticMaxOffsets)[ownerDim]);
-        } else if (info.graphStencilBounds && info.graphStencilBounds->valid &&
-                   info.graphStencilBounds->hasHalo() &&
-                   (!info.graphStencilOwnerDim ||
-                    ownerDim == *info.graphStencilOwnerDim)) {
-          applyHaloWindow(info.graphStencilBounds->minOffset,
-                          info.graphStencilBounds->maxOffset);
+          applyHaloWindow((*staticMinOffsets)[*ownerPosition],
+                          (*staticMaxOffsets)[*ownerPosition]);
         }
-      } else if (info.graphStencilBounds && info.graphStencilBounds->valid &&
-                 info.graphStencilBounds->hasHalo() &&
-                 (!info.graphStencilOwnerDim ||
-                  ownerDim == *info.graphStencilOwnerDim)) {
-        applyHaloWindow(info.graphStencilBounds->minOffset,
-                        info.graphStencilBounds->maxOffset);
       }
     }
 

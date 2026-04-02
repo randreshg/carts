@@ -10,6 +10,7 @@
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/Debug.h"
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include <algorithm>
@@ -155,37 +156,7 @@ std::optional<int64_t> LoopAnalysis::getStaticTripCount(Operation *loopOp) {
       }
       return std::nullopt;
     }
-
-    if (auto artsFor = dyn_cast<arts::ForOp>(loopOp)) {
-      if (artsFor.getLowerBound().empty() || artsFor.getUpperBound().empty() ||
-          artsFor.getStep().empty())
-        return std::nullopt;
-
-      int64_t lb = 0, ub = 0, step = 0;
-      if (ValueAnalysis::getConstantIndex(artsFor.getLowerBound()[0], lb) &&
-          ValueAnalysis::getConstantIndex(artsFor.getUpperBound()[0], ub) &&
-          ValueAnalysis::getConstantIndex(artsFor.getStep()[0], step) &&
-          step > 0) {
-        int64_t span = ub - lb;
-        if (span <= 0)
-          return 0;
-        return (span + step - 1) / step;
-      }
-    }
-
-    if (auto forOp = dyn_cast<scf::ForOp>(loopOp)) {
-      int64_t lb = 0, ub = 0, step = 0;
-      if (ValueAnalysis::getConstantIndex(forOp.getLowerBound(), lb) &&
-          ValueAnalysis::getConstantIndex(forOp.getUpperBound(), ub) &&
-          ValueAnalysis::getConstantIndex(forOp.getStep(), step) && step > 0) {
-        int64_t span = ub - lb;
-        if (span <= 0)
-          return 0;
-        return (span + step - 1) / step;
-      }
-    }
-
-    return std::nullopt;
+    return arts::getStaticTripCount(loopOp);
   };
 
   LoopNode *loopNode = getLoopNode(loopOp);

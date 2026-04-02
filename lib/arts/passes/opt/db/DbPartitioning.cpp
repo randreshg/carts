@@ -2,13 +2,14 @@
 /// DbPartitioning.cpp - Datablock partitioning controller pass
 ///
 /// Controller responsibilities:
-///   Phase 1: query graph-backed facts from DbAnalysis / DbNode
+///   Phase 1: query canonical contracts via DbAnalysis plus derived graph
+///            legality/detail evidence
 ///   Phase 2: assemble heuristic snapshots and obtain H1 decisions
 ///   Phase 3: reconcile/normalize those decisions for one allocation
 ///   Phase 4: build planner inputs and invoke the rewriter
 ///
 /// Non-responsibilities:
-///   - does not own canonical per-acquire facts (DbGraph/DbNode do)
+///   - does not own canonical per-acquire semantics (IR contracts do)
 ///   - does not choose policy directly (DbHeuristics does)
 ///   - does not localize indices directly (rewriters/indexers do)
 ///
@@ -200,6 +201,34 @@ static bool blockSizeCoversFullExtent(Value blockSize, Value extent) {
   return blockConst && extentConst && *blockConst >= *extentConst;
 }
 
+static std::optional<std::pair<StencilBounds, unsigned>>
+getSingleOwnerContractStencilBounds(
+    const DbAnalysis::AcquireContractSummary *summary) {
+  if (!summary)
+    return std::nullopt;
+
+  const LoweringContractInfo &contract = summary->contract;
+  if (!contract.supportsBlockHalo() || contract.spatial.ownerDims.size() != 1)
+    return std::nullopt;
+
+  int64_t ownerDim = contract.spatial.ownerDims.front();
+  if (ownerDim < 0)
+    return std::nullopt;
+
+  auto minOffsets = contract.getStaticMinOffsets();
+  auto maxOffsets = contract.getStaticMaxOffsets();
+  if (!minOffsets || !maxOffsets || minOffsets->size() != 1 ||
+      maxOffsets->size() != 1)
+    return std::nullopt;
+
+  StencilBounds bounds = StencilBounds::create(
+      (*minOffsets)[0], (*maxOffsets)[0], /*stencil=*/true, /*isValid=*/true);
+  if (!bounds.hasHalo())
+    return std::nullopt;
+
+  return std::make_pair(bounds, static_cast<unsigned>(ownerDim));
+}
+
 /// Block plans can preserve the semantic owner rank from a stencil/uniform
 /// contract even when a trailing physical partition dim spans the full extent
 /// of the underlying memref. Carrying that singleton outer dim into the DB
@@ -360,7 +389,11 @@ summarizeAcquirePatterns(ArrayRef<DbAcquireNode *> acquireNodes,
       continue;
     sawSummary = true;
 
-    switch (contractSummary->accessPattern) {
+    AccessPattern accessPattern = contractSummary->accessPattern;
+    if (accessPattern == AccessPattern::Unknown)
+      accessPattern = contractSummary->getDerivedAccessPattern();
+
+    switch (accessPattern) {
     case AccessPattern::Uniform:
       summary.hasUniform = true;
       break;
@@ -625,13 +658,12 @@ static void lowerStencilAcquireBounds(ModuleOp module,
 
 /// Analyze a single acquire to determine its partition mode and chunk info.
 static AcquirePartitionInfo computeAcquirePartitionInfo(
-    DbAnalysis &dbAnalysis, DbAcquireNode *acqNode, DbAcquireOp acquire,
-    const DbAnalysis::AcquireContractSummary *summary,
-    const DbAcquirePartitionFacts *facts, OpBuilder &builder) {
+    DbAnalysis &dbAnalysis, DbAcquireOp acquire,
+    const DbAnalysis::AcquireContractSummary *summary, OpBuilder &builder) {
   AcquirePartitionInfo info;
   info.acquire = acquire;
   DbAnalysis::AcquirePartitionSummary partitionSummary;
-  partitionSummary = dbAnalysis.analyzeAcquirePartition(acquire, builder);
+  partitionSummary = dbAnalysis.analyzeAcquirePartition(acquire, builder, summary);
   info.mode = partitionSummary.mode;
   info.partitionOffsets.assign(partitionSummary.partitionOffsets.begin(),
                                partitionSummary.partitionOffsets.end());
@@ -640,7 +672,7 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(
   info.partitionDims.assign(partitionSummary.partitionDims.begin(),
                             partitionSummary.partitionDims.end());
   info.accessPattern =
-      dbAnalysis.resolveCanonicalAcquireAccessPattern(acquire, summary, facts);
+      dbAnalysis.resolveCanonicalAcquireAccessPattern(acquire, summary);
   info.isValid = partitionSummary.isValid;
   info.hasIndirectAccess = summary ? summary->hasIndirectAccess()
                                    : partitionSummary.hasIndirectAccess;
@@ -676,32 +708,6 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(
     if (info.mode == PartitionMode::coarse &&
         (summary->hasBlockHints() || summary->inferredBlock()))
       info.mode = summary->preferredBlockPartitionMode();
-  }
-
-  if (acqNode) {
-    if (auto bounds = acqNode->getStencilBounds();
-        bounds && bounds->valid && bounds->hasHalo()) {
-      info.graphStencilBounds = *bounds;
-
-      unsigned offsetIdx = 0;
-      Value repOffset = DbUtils::pickRepresentativePartitionOffset(
-          info.partitionOffsets, &offsetIdx);
-      if (!repOffset) {
-        auto [nodeOffset, nodeSize] = acqNode->getPartitionInfo();
-        (void)nodeSize;
-        repOffset = nodeOffset;
-      }
-
-      if (repOffset) {
-        info.graphStencilOwnerDim =
-            acqNode->getPartitionOffsetDim(repOffset, /*requireLeading=*/false);
-      }
-
-      if (!info.graphStencilOwnerDim && offsetIdx < info.partitionDims.size())
-        info.graphStencilOwnerDim = info.partitionDims[offsetIdx];
-      if (!info.graphStencilOwnerDim && !info.partitionDims.empty())
-        info.graphStencilOwnerDim = info.partitionDims.front();
-    }
   }
 
   return info;
@@ -871,7 +877,6 @@ private:
       ArrayRef<DbAcquireNode *> allocAcquireNodes,
       ArrayRef<std::optional<DbAnalysis::AcquireContractSummary>>
           acquireContractSummaries,
-      ArrayRef<const DbAcquirePartitionFacts *> acquireFacts,
       SmallVectorImpl<Value> &blockSizesForNDBlock, DbAllocOp allocOp,
       DbAllocNode *allocNode, DbAnalysis &dbAnalysis, bool canUseBlock,
       std::optional<int64_t> &writerBlockSizeHint,
@@ -885,7 +890,6 @@ private:
       ArrayRef<DbAcquireNode *> allocAcquireNodes,
       ArrayRef<std::optional<DbAnalysis::AcquireContractSummary>>
           acquireContractSummaries,
-      ArrayRef<const DbAcquirePartitionFacts *> acquireFacts,
       SmallVectorImpl<AcquirePartitionInfo> &acquireInfos,
       bool allocHasStencilPattern, DbAnalysis &dbAnalysis,
       PartitioningDecision &decision, PartitioningContext &ctx,
@@ -1506,23 +1510,20 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
   /// Step 1: Analyze each acquire's PartitionMode
   SmallVector<AcquirePartitionInfo, 4> acquireInfos;
-  SmallVector<const DbAcquirePartitionFacts *> acquireFacts;
   SmallVector<std::optional<DbAnalysis::AcquireContractSummary>, 8>
       acquireContractSummaries;
   DbAnalysis &dbAnalysis = AM->getDbAnalysis();
   if (allocNode) {
     for (DbAcquireNode *acqNode : allocAcquireNodes) {
-      const DbAcquirePartitionFacts *facts =
-          dbAnalysis.getAcquirePartitionFacts(acqNode->getDbAcquireOp());
-      if (!facts)
-        facts = &acqNode->getPartitionFacts();
-      acquireFacts.push_back(facts);
       auto contractSummary =
           dbAnalysis.getAcquireContractSummary(acqNode->getDbAcquireOp());
       acquireContractSummaries.push_back(contractSummary);
-      auto info = computeAcquirePartitionInfo(
-          dbAnalysis, acqNode, acqNode->getDbAcquireOp(),
-          contractSummary ? &*contractSummary : nullptr, facts, builder);
+      auto info = computeAcquirePartitionInfo(dbAnalysis,
+                                              acqNode->getDbAcquireOp(),
+                                              contractSummary
+                                                  ? &*contractSummary
+                                                  : nullptr,
+                                              builder);
       if (!info.isValid) {
         ARTS_DEBUG("  Acquire analysis failed for "
                    << acqNode->getDbAcquireOp());
@@ -1611,19 +1612,46 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     std::optional<int64_t> anyBlockSizeHint;
     if (buildPerAcquireCapabilities(
             ctx, acquireInfos, allocAcquireNodes, acquireContractSummaries,
-            acquireFacts, blockSizesForNDBlock, allocOp, allocNode, dbAnalysis,
-            canUseBlock, writerBlockSizeHint, anyBlockSizeHint, builder))
+            blockSizesForNDBlock, allocOp, allocNode, dbAnalysis, canUseBlock,
+            writerBlockSizeHint, anyBlockSizeHint, builder))
       return allocOp;
 
-    /// Collect DbAcquireNode* and partition offsets for heuristic decisions
-    /// Get per-acquire decisions from heuristics (calls needsFullRange)
-    /// Build contract summary pointer array for heuristics consumption.
-    SmallVector<const DbAnalysis::AcquireContractSummary *> summaryPtrs;
-    summaryPtrs.reserve(acquireContractSummaries.size());
-    for (auto &opt : acquireContractSummaries)
-      summaryPtrs.push_back(opt ? &*opt : nullptr);
+    /// Build per-acquire policy inputs for H1.7 full-range arbitration.
+    SmallVector<AcquirePolicyInput> acquirePolicyInputs;
+    acquirePolicyInputs.reserve(acquireInfos.size());
+    for (size_t i = 0; i < acquireInfos.size(); ++i) {
+      const auto &acqInfo = acquireInfos[i];
+      const DbAnalysis::AcquireContractSummary *contractSummary =
+          i < acquireContractSummaries.size() && acquireContractSummaries[i]
+              ? &*acquireContractSummaries[i]
+              : nullptr;
+
+      AcquirePolicyInput input;
+      input.acquire = acqInfo.acquire;
+      input.depPattern =
+          i < ctx.acquires.size()
+              ? ctx.acquires[i].depPattern
+              : dbAnalysis.resolveCanonicalAcquireDepPattern(acqInfo.acquire,
+                                                             contractSummary);
+      input.hasPartitionDims = !acqInfo.partitionDims.empty();
+      input.hasOwnerDims =
+          contractSummary &&
+          !contractSummary->contract.spatial.ownerDims.empty();
+      input.hasBlockHints =
+          contractSummary && contractSummary->hasBlockHints();
+      input.hasExplicitStencilContract =
+          contractSummary &&
+          contractSummary->contract.hasExplicitStencilContract();
+      input.hasIndirectAccess =
+          contractSummary ? contractSummary->hasIndirectAccess()
+                          : acqInfo.hasIndirectAccess;
+      input.needsFullRange = acqInfo.needsFullRange;
+      input.preservesDistributedContract =
+          contractSummary && contractSummary->preservesDistributedContractEntry();
+      acquirePolicyInputs.push_back(input);
+    }
     auto acquireDecisions =
-        heuristics.chooseAcquirePolicies(acquireFacts, summaryPtrs);
+        heuristics.chooseAcquirePolicies(acquirePolicyInputs);
 
     /// Apply decisions to acquireInfos
     for (size_t i = 0; i < acquireDecisions.size() && i < acquireInfos.size();
@@ -1977,8 +2005,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   if (decision.mode == PartitionMode::stencil && allocNode) {
     stencilInfo = computeStencilHaloInfo(
         allocOp, allocNode, allocAcquireNodes, acquireContractSummaries,
-        acquireFacts, acquireInfos, allocHasStencilPattern, dbAnalysis,
-        decision, ctx, builder, loc);
+        acquireInfos, allocHasStencilPattern, dbAnalysis, decision, ctx,
+        builder, loc);
   }
 
   /// Step 5b: Resolve block-plan sizes and reconcile partition dimensions.
@@ -2003,8 +2031,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                                    allocOp.getElementSizes().size())) {
     stencilInfo = computeStencilHaloInfo(
         allocOp, allocNode, allocAcquireNodes, acquireContractSummaries,
-        acquireFacts, acquireInfos, allocHasStencilPattern, dbAnalysis,
-        decision, ctx, builder, loc);
+        acquireInfos, allocHasStencilPattern, dbAnalysis, decision, ctx,
+        builder, loc);
   }
 
   SmallVector<Value> newOuterSizes, newInnerSizes;
@@ -2035,7 +2063,6 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
     ArrayRef<DbAcquireNode *> allocAcquireNodes,
     ArrayRef<std::optional<DbAnalysis::AcquireContractSummary>>
         acquireContractSummaries,
-    ArrayRef<const DbAcquirePartitionFacts *> acquireFacts,
     SmallVectorImpl<Value> &blockSizesForNDBlock, DbAllocOp allocOp,
     DbAllocNode *allocNode, DbAnalysis &dbAnalysis, bool canUseBlock,
     std::optional<int64_t> &writerBlockSizeHint,
@@ -2054,12 +2081,11 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
         idx < acquireContractSummaries.size() && acquireContractSummaries[idx]
             ? &*acquireContractSummaries[idx]
             : nullptr;
-    const DbAcquirePartitionFacts *facts =
-        idx < acquireFacts.size() ? acquireFacts[idx] : nullptr;
 
     /// Check access patterns for block capability decisions.
     bool hasIndirect =
-        facts ? facts->hasIndirectAccess : acqNode->hasIndirectAccess();
+        contractSummary ? contractSummary->hasIndirectAccess()
+                        : acqInfo.hasIndirectAccess;
 
     /// Read partition capability from acquire's attribute.
     /// ForLowering sets this to 'chunked' when adding offset/size hints.
@@ -2113,8 +2139,11 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
     if (!thisAcquireCanBlock && contractSummary &&
         contractSummary->supportsContractDrivenBlockCapability())
       thisAcquireCanBlock = true;
+    if (!thisAcquireCanBlock && contractSummary &&
+        contractSummary->getDerivedAccessPattern() == AccessPattern::Stencil)
+      thisAcquireCanBlock = true;
     if (!thisAcquireCanBlock && !contractSummary &&
-        acqNode->getAccessPattern() == AccessPattern::Stencil)
+        acqInfo.accessPattern == AccessPattern::Stencil)
       thisAcquireCanBlock = true;
     bool thisAcquireCanElementWise =
         (acquireMode && *acquireMode == PartitionMode::fine_grained) ||
@@ -2155,7 +2184,7 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
         } else if (writesThroughAcquire) {
           bool hasDirectWriteAccess = contractSummary
                                           ? contractSummary->hasDirectAccess()
-                                          : !acqNode->hasIndirectAccess();
+                                          : !hasIndirect;
           bool canPreserveWriteFullRange =
               !hasIndirect && hasDirectWriteAccess &&
               (!ctx.totalElements || *ctx.totalElements > 1);
@@ -2210,9 +2239,9 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
 
     /// Populate access pattern and dep pattern using canonical ordering.
     info.accessPattern = dbAnalysis.resolveCanonicalAcquireAccessPattern(
-        acquire, contractSummary, facts);
-    info.depPattern = dbAnalysis.resolveCanonicalAcquireDepPattern(
-        acquire, contractSummary, facts);
+        acquire, contractSummary);
+    info.depPattern =
+        dbAnalysis.resolveCanonicalAcquireDepPattern(acquire, contractSummary);
 
     if (info.accessPattern == AccessPattern::Unknown &&
         info.accessMode == ArtsMode::in &&
@@ -2342,7 +2371,6 @@ std::optional<StencilInfo> DbPartitioningPass::computeStencilHaloInfo(
     ArrayRef<DbAcquireNode *> allocAcquireNodes,
     ArrayRef<std::optional<DbAnalysis::AcquireContractSummary>>
         acquireContractSummaries,
-    ArrayRef<const DbAcquirePartitionFacts *> acquireFacts,
     SmallVectorImpl<AcquirePartitionInfo> &acquireInfos,
     bool allocHasStencilPattern, DbAnalysis &dbAnalysis,
     PartitioningDecision &decision, PartitioningContext &ctx,
@@ -2351,25 +2379,28 @@ std::optional<StencilInfo> DbPartitioningPass::computeStencilHaloInfo(
   info.haloLeft = 0;
   info.haloRight = 0;
 
-  /// Collect stencil bounds from acquire nodes or multi-entry structure.
-  /// For multi-entry stencil acquires (not expanded), extract halo bounds
-  /// from the partition indices pattern using DbUtils.
-  for (DbAcquireNode *acqNode : allocAcquireNodes) {
+  /// Collect stencil bounds from persisted lowering contracts. For multi-entry
+  /// acquires, recover the same halo directly from the explicit IR structure
+  /// instead of consulting graph-only stencil facts.
+  for (auto [acqNode, contractSummary] :
+       llvm::zip_equal(allocAcquireNodes, acquireContractSummaries)) {
     if (!acqNode)
       continue;
     DbAcquireOp acq = acqNode->getDbAcquireOp();
     if (!acq)
       continue;
 
-    /// First try: get bounds from DbAcquireNode analysis
-    auto stencilBounds = acqNode->getStencilBounds();
-    if (stencilBounds && stencilBounds->hasHalo()) {
-      info.haloLeft = std::max(info.haloLeft, stencilBounds->haloLeft());
-      info.haloRight = std::max(info.haloRight, stencilBounds->haloRight());
+    if (auto contractBounds = getSingleOwnerContractStencilBounds(
+            contractSummary ? &*contractSummary : nullptr)) {
+      info.haloLeft =
+          std::max(info.haloLeft, contractBounds->first.haloLeft());
+      info.haloRight =
+          std::max(info.haloRight, contractBounds->first.haloRight());
       continue;
     }
 
-    /// Second try: for multi-entry stencil acquires, extract from structure
+    /// Last resort: for multi-entry stencil acquires, recover halo widths from
+    /// the explicit entry structure.
     if (acq.hasMultiplePartitionEntries()) {
       int64_t minOffset = 0, maxOffset = 0;
       if (DbAnalysis::hasMultiEntryStencilPattern(acq, minOffset, maxOffset)) {
@@ -2385,17 +2416,15 @@ std::optional<StencilInfo> DbPartitioningPass::computeStencilHaloInfo(
   }
 
   bool hasReadStencilAcquire = false;
-  for (auto [acqNode, contractSummary, acqFacts] : llvm::zip_equal(
-           allocAcquireNodes, acquireContractSummaries, acquireFacts)) {
+  for (auto [acqNode, contractSummary] :
+       llvm::zip_equal(allocAcquireNodes, acquireContractSummaries)) {
     if (!acqNode)
       continue;
     DbAcquireOp acquire = acqNode->getDbAcquireOp();
     if (!acquire || acquire.getMode() != ArtsMode::in)
       continue;
-    const DbAcquirePartitionFacts *facts =
-        acqFacts ? acqFacts : &acqNode->getPartitionFacts();
     if (dbAnalysis.hasCanonicalAcquireStencilSemantics(
-            acquire, contractSummary ? &*contractSummary : nullptr, facts) ||
+            acquire, contractSummary ? &*contractSummary : nullptr) ||
         allocHasStencilPattern) {
       hasReadStencilAcquire = true;
       break;
@@ -2637,8 +2666,12 @@ FailureOr<DbAllocOp> DbPartitioningPass::assembleAndApplyRewritePlan(
     for (auto &info : acquireInfos) {
       if (!info.acquire)
         continue;
-      if (auto center = getStencilCenterOffset(info.acquire.getOperation())) {
-        centerOffset = *center;
+      auto contract = getLoweringContract(info.acquire.getPtr());
+      if (!contract)
+        contract = getLoweringContract(info.acquire.getOperation(), builder,
+                                       info.acquire.getLoc());
+      if (contract && contract->spatial.centerOffset) {
+        centerOffset = *contract->spatial.centerOffset;
         break;
       }
     }
@@ -2646,8 +2679,18 @@ FailureOr<DbAllocOp> DbPartitioningPass::assembleAndApplyRewritePlan(
       for (auto &info : acquireInfos) {
         if (!info.acquire)
           continue;
-        if (!getStencilCenterOffset(info.acquire.getOperation()))
-          setStencilCenterOffset(info.acquire.getOperation(), *centerOffset);
+        auto contract = getLoweringContract(info.acquire.getPtr());
+        if (!contract)
+          contract = getLoweringContract(info.acquire.getOperation(), builder,
+                                         info.acquire.getLoc());
+        if (contract && contract->spatial.centerOffset)
+          continue;
+
+        LoweringContractInfo updated =
+            contract.value_or(LoweringContractInfo{});
+        updated.spatial.centerOffset = *centerOffset;
+        upsertLoweringContract(builder, info.acquire.getLoc(),
+                              info.acquire.getPtr(), updated);
       }
     }
   }
@@ -2686,8 +2729,6 @@ FailureOr<DbAllocOp> DbPartitioningPass::assembleAndApplyRewritePlan(
     view.isValid = info.isValid;
     view.hasIndirectAccess = info.hasIndirectAccess;
     view.needsFullRange = info.needsFullRange;
-    view.graphStencilBounds = info.graphStencilBounds;
-    view.graphStencilOwnerDim = info.graphStencilOwnerDim;
     PartitionMode rewriteMode =
         enableMixedStencilRewrite ? PartitionMode::stencil : decision.mode;
     buildRewriteAcquire(rewriteMode, view, allocOp, plan, rewriteInfo, builder);

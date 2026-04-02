@@ -17,6 +17,7 @@
 ///==========================================================================///
 
 /// Dialects
+#include "mlir/Conversion/LLVMCommon/StructBuilder.h"
 #include "mlir/Dialect/Affine/Utils.h"
 #include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -149,6 +150,45 @@ resolveOuterSizesForGuid(Value dbGuid, ArtsCodegen *AC, Location loc) {
 }
 
 static constexpr int32_t kArtsDepFlagPreserveShape = 1 << 1;
+
+class ArtsHintBuilder : public StructBuilder {
+public:
+  explicit ArtsHintBuilder(Value value) : StructBuilder(value) {}
+
+  static ArtsHintBuilder undef(OpBuilder &builder, Location loc,
+                               Type descriptorType) {
+    return ArtsHintBuilder(
+        builder.create<LLVM::UndefOp>(loc, descriptorType).getResult());
+  }
+
+  void setRoute(OpBuilder &builder, Location loc, Value route) {
+    setPtr(builder, loc, kRouteField, route);
+  }
+
+  void setArtsId(OpBuilder &builder, Location loc, Value artsId) {
+    setPtr(builder, loc, kArtsIdField, artsId);
+  }
+
+private:
+  static constexpr unsigned kRouteField = 0;
+  static constexpr unsigned kArtsIdField = 1;
+};
+
+static Value buildArtsHintMemref(ArtsCodegen *AC, Value route, Value artsId,
+                                 Location loc) {
+  Value hintAlloc =
+      AC->create<LLVM::AllocaOp>(loc, AC->llvmPtr, AC->ArtsHintType,
+                                 AC->createIntConstant(1, AC->Int32, loc));
+
+  ArtsHintBuilder hint =
+      ArtsHintBuilder::undef(AC->getBuilder(), loc, AC->ArtsHintType);
+  hint.setRoute(AC->getBuilder(), loc, route);
+  hint.setArtsId(AC->getBuilder(), loc, artsId);
+  AC->create<LLVM::StoreOp>(loc, Value(hint), hintAlloc);
+
+  return AC->create<polygeist::Pointer2MemrefOp>(loc, AC->ArtsHintTypePtr,
+                                                 hintAlloc);
+}
 
 } // namespace
 
@@ -414,9 +454,15 @@ private:
       return globalCoords;
 
     auto contract = getAcquireStencilContract(dbAcquireOp, loc);
-    if (!contract || !contract->isStencilFamily() ||
-        contract->spatial.minOffsets.empty())
+    if (!contract ||
+        !(contract->isStencilFamily() || contract->usesStencilDistribution()))
       return globalCoords;
+    if (contract->spatial.minOffsets.empty()) {
+      if (contract->spatial.centerOffset)
+        return inferSymmetricStencilCenterCoords(*contract->spatial.centerOffset,
+                                                 dbInfo, loc);
+      return globalCoords;
+    }
 
     unsigned rank = std::min<unsigned>(dbInfo.sizes.size(),
                                        contract->spatial.minOffsets.size());
@@ -806,9 +852,15 @@ private:
       return nullptr;
 
     auto contract = getAcquireStencilContract(dbAcquireOp, loc);
-    if (!contract || !contract->isStencilFamily() ||
-        contract->spatial.minOffsets.empty())
+    if (!contract ||
+        !(contract->isStencilFamily() || contract->usesStencilDistribution()))
       return nullptr;
+    if (contract->spatial.minOffsets.empty()) {
+      if (contract->spatial.centerOffset)
+        return inferSymmetricStencilCenterLinear(
+            *contract->spatial.centerOffset, dbInfo, allocSizes, loc);
+      return nullptr;
+    }
 
     unsigned rank = std::min<unsigned>(dbInfo.sizes.size(),
                                        contract->spatial.minOffsets.size());
@@ -915,15 +967,6 @@ private:
             dbAcquireOp, result.dbInfo, result.allocSizes, loc);
         result.stencilCenterCoords = inferStencilCenterCoordsFromContract(
             dbAcquireOp, result.dbInfo, loc);
-        if (!result.stencilCenterLinear)
-          if (auto centerOffset =
-                  getStencilCenterOffset(dbAcquireOp.getOperation())) {
-            result.stencilCenterLinear = inferSymmetricStencilCenterLinear(
-                *centerOffset, result.dbInfo, result.allocSizes, loc);
-            if (result.stencilCenterCoords.empty())
-              result.stencilCenterCoords = inferSymmetricStencilCenterCoords(
-                  *centerOffset, result.dbInfo, loc);
-          }
       }
 
       if (auto alloc = dyn_cast_or_null<DbAllocOp>(
@@ -1558,24 +1601,7 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
     else
       artsIdVal = AC->createIntConstant(0, AC->Int64, loc);
 
-    /// Stack-allocate arts_hint_t and populate fields
-    Value hintAlloc =
-        AC->create<LLVM::AllocaOp>(loc, AC->llvmPtr, AC->ArtsHintType,
-                                   AC->createIntConstant(1, AC->Int32, loc));
-    auto c0 = AC->createIntConstant(0, AC->Int32, loc);
-    auto c1 = AC->createIntConstant(1, AC->Int32, loc);
-    /// Store route into field 0
-    Value routeFieldPtr = AC->create<LLVM::GEPOp>(
-        loc, AC->llvmPtr, AC->ArtsHintType, hintAlloc, ValueRange{c0, c0});
-    AC->create<LLVM::StoreOp>(loc, route, routeFieldPtr);
-    /// Store arts_id into field 1
-    Value idFieldPtr = AC->create<LLVM::GEPOp>(
-        loc, AC->llvmPtr, AC->ArtsHintType, hintAlloc, ValueRange{c0, c1});
-    AC->create<LLVM::StoreOp>(loc, artsIdVal, idFieldPtr);
-
-    /// Cast !llvm.ptr to ArtsHintTypePtr memref for runtime call
-    Value hintMemref = AC->create<polygeist::Pointer2MemrefOp>(
-        loc, AC->ArtsHintTypePtr, hintAlloc);
+    Value hintMemref = buildArtsHintMemref(AC, route, artsIdVal, loc);
 
     /// Create arts_edt_create call with hint as last argument
     ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
@@ -2079,15 +2105,6 @@ private:
     Value elemSize64 = AC->ensureI64(elementSize, loc);
 
     /// Build arts_hint_t with arts_id if available.
-    Value hintAlloc =
-        AC->create<LLVM::AllocaOp>(loc, AC->llvmPtr, AC->ArtsHintType,
-                                   AC->createIntConstant(1, AC->Int32, loc));
-    auto c0 = AC->createIntConstant(0, AC->Int32, loc);
-    auto c1 = AC->createIntConstant(1, AC->Int32, loc);
-    Value routeFieldPtr = AC->create<LLVM::GEPOp>(
-        loc, AC->llvmPtr, AC->ArtsHintType, hintAlloc, ValueRange{c0, c0});
-    AC->create<LLVM::StoreOp>(loc, c0, routeFieldPtr);
-
     Value artsIdValue;
     if (nextId.has_value()) {
       Value baseArtsId = AC->create<arith::ConstantOp>(
@@ -2097,12 +2114,8 @@ private:
     } else {
       artsIdValue = AC->createIntConstant(0, AC->Int64, loc);
     }
-    Value idFieldPtr = AC->create<LLVM::GEPOp>(
-        loc, AC->llvmPtr, AC->ArtsHintType, hintAlloc, ValueRange{c0, c1});
-    AC->create<LLVM::StoreOp>(loc, artsIdValue, idFieldPtr);
-
-    Value hintMemref = AC->create<polygeist::Pointer2MemrefOp>(
-        loc, AC->ArtsHintTypePtr, hintAlloc);
+    Value zeroRoute = AC->createIntConstant(0, AC->Int32, loc);
+    Value hintMemref = buildArtsHintMemref(AC, zeroRoute, artsIdValue, loc);
     Value dbType = AC->createIntConstant(0, AC->Int32, loc);
     Value nullPtr = AC->create<LLVM::ZeroOp>(loc, AC->llvmPtr);
     Value nullData =

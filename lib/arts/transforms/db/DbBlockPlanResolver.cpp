@@ -18,8 +18,8 @@
 #include "arts/transforms/db/DbRewriter.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
+#include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -375,17 +375,23 @@ static SmallVector<Value> collectContractNDBlockShapeCandidates(
       continue;
 
     DbAcquireOp acquire = info.acquire;
+    std::optional<LoweringContractInfo> contract =
+        getLoweringContract(acquire.getPtr());
+    if (!contract)
+      contract = getSemanticContract(acquire.getOperation());
+
     auto acquireMode = getPartitionMode(acquire.getOperation());
+    bool hasBlockHaloContract = contract && contract->supportsBlockHalo();
     bool blockCapableAcquire =
         requiresBlockSize(info.mode) ||
         (acquireMode && requiresBlockSize(*acquireMode)) ||
-        info.hasDistributionContract ||
-        hasSupportedBlockHalo(acquire.getOperation());
+        info.hasDistributionContract || hasBlockHaloContract;
     if (!blockCapableAcquire)
       continue;
 
-    auto shapeAttr = getStencilBlockShape(acquire.getOperation());
-    if (!shapeAttr || shapeAttr->size() < 2)
+    auto staticShape = contract ? contract->getStaticBlockShape()
+                                : std::nullopt;
+    if (!staticShape || staticShape->size() < 2)
       continue;
 
     /// `stencil_block_shape` describes the full logical task tile, not
@@ -403,12 +409,12 @@ static SmallVector<Value> collectContractNDBlockShapeCandidates(
           static_cast<unsigned>(info.partitionOffsets.size()),
           static_cast<unsigned>(info.partitionSizes.size()));
     supportedRank = std::min<unsigned>(
-        supportedRank, static_cast<unsigned>(shapeAttr->size()));
+        supportedRank, static_cast<unsigned>(staticShape->size()));
     if (supportedRank < 2)
       continue;
 
-    bool prefersContract = info.hasDistributionContract ||
-                           hasSupportedBlockHalo(acquire.getOperation());
+    bool prefersContract =
+        info.hasDistributionContract || hasBlockHaloContract;
     if (!prefersContract && hasPreferredContract)
       continue;
     if (prefersContract && !hasPreferredContract) {
@@ -419,7 +425,7 @@ static SmallVector<Value> collectContractNDBlockShapeCandidates(
     if (contractShape.empty()) {
       contractShape.reserve(supportedRank);
       for (unsigned dim = 0; dim < supportedRank; ++dim) {
-        int64_t dimSize = (*shapeAttr)[dim];
+        int64_t dimSize = (*staticShape)[dim];
         if (dimSize <= 0) {
           contractShape.clear();
           break;
@@ -433,7 +439,7 @@ static SmallVector<Value> collectContractNDBlockShapeCandidates(
       continue;
 
     for (unsigned dim = 0; dim < supportedRank; ++dim) {
-      Value dimConst = createConstantIndex(builder, loc, (*shapeAttr)[dim]);
+      Value dimConst = createConstantIndex(builder, loc, (*staticShape)[dim]);
       contractShape[dim] =
           builder.create<arith::MinUIOp>(loc, contractShape[dim], dimConst);
     }

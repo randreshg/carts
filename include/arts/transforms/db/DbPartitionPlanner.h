@@ -36,8 +36,6 @@ struct DbAcquirePartitionView {
   bool isValid = false;
   bool hasIndirectAccess = false;
   bool needsFullRange = false;
-  std::optional<StencilBounds> graphStencilBounds;
-  std::optional<unsigned> graphStencilOwnerDim;
 };
 
 /// Compute allocation outer/inner sizes for the given partition mode.

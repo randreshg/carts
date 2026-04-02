@@ -10,6 +10,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/MemRef/Utils/MemRefUtils.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -62,6 +63,47 @@ static std::optional<bool> proveValueNonZero(Value value) {
           /*closedUB=*/true);
       succeeded(upperBound)) {
     return *upperBound <= -1;
+  }
+  return std::nullopt;
+}
+
+static std::optional<int64_t>
+proveConstantOffsetWithBounds(Value idx, Value loopIV, Value chunkOffset) {
+  idx = ValueAnalysis::stripNumericCasts(idx);
+  loopIV = ValueAnalysis::stripNumericCasts(loopIV);
+  chunkOffset = ValueAnalysis::stripNumericCasts(chunkOffset);
+
+  auto isIndexValue = [](Value v) { return v && v.getType().isIndex(); };
+  if (!isIndexValue(idx))
+    return std::nullopt;
+
+  SmallVector<Value, 3> operands;
+  operands.push_back(idx);
+
+  Builder builder(idx.getContext());
+  AffineExpr deltaExpr = builder.getAffineDimExpr(0);
+  unsigned dimCount = 1;
+
+  if (isIndexValue(loopIV)) {
+    deltaExpr = deltaExpr - builder.getAffineDimExpr(dimCount);
+    operands.push_back(loopIV);
+    ++dimCount;
+  }
+  if (isIndexValue(chunkOffset)) {
+    deltaExpr = deltaExpr - builder.getAffineDimExpr(dimCount);
+    operands.push_back(chunkOffset);
+    ++dimCount;
+  }
+
+  if (operands.size() == 1)
+    return std::nullopt;
+
+  if (auto delta = ValueBoundsConstraintSet::computeConstantBound(
+          presburger::BoundType::EQ,
+          ValueBoundsConstraintSet::Variable(
+              AffineMap::get(dimCount, 0, deltaExpr), operands));
+      succeeded(delta)) {
+    return *delta;
   }
   return std::nullopt;
 }
@@ -793,6 +835,9 @@ bool ValueAnalysis::isDerivedFromPtr(Value value, Value source) {
 std::optional<int64_t> ValueAnalysis::extractConstantOffset(Value idx,
                                                             Value loopIV,
                                                             Value chunkOffset) {
+  if (auto delta = proveConstantOffsetWithBounds(idx, loopIV, chunkOffset))
+    return delta;
+
   int64_t accumulator = 0;
   Value current = idx;
 
@@ -968,22 +1013,18 @@ static Value getUnderlyingValueImpl(Value v, SmallPtrSet<Value, 16> &visited,
 
 Value ValueAnalysis::stripMemrefViewOps(Value value) {
   while (value) {
-    Operation *def = value.getDefiningOp();
-    if (!def)
-      break;
-    if (auto castOp = dyn_cast<memref::CastOp>(def)) {
-      value = castOp.getSource();
-      continue;
+    if (isa<BaseMemRefType>(value.getType())) {
+      auto memrefValue = cast<mlir::MemrefValue>(value);
+      Value stripped = memref::skipFullyAliasingOperations(memrefValue);
+      stripped = memref::skipViewLikeOps(cast<mlir::MemrefValue>(stripped));
+      if (stripped != value) {
+        value = stripped;
+        continue;
+      }
     }
-    if (auto subview = dyn_cast<memref::SubViewOp>(def)) {
-      value = subview.getSource();
-      continue;
-    }
-    if (auto reinterpret = dyn_cast<memref::ReinterpretCastOp>(def)) {
-      value = reinterpret.getSource();
-      continue;
-    }
-    if (auto unrealized = dyn_cast<UnrealizedConversionCastOp>(def)) {
+
+    auto unrealized = value.getDefiningOp<UnrealizedConversionCastOp>();
+    if (unrealized) {
       if (unrealized.getInputs().size() != 1)
         break;
       value = unrealized.getInputs().front();

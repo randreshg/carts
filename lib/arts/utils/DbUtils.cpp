@@ -41,18 +41,18 @@ static bool isMemrefForwardingOp(Operation *op, Value source) {
   if (!op || !source)
     return false;
 
-  if (auto castOp = dyn_cast<memref::CastOp>(op))
-    return castOp.getSource() == source;
-  if (auto subview = dyn_cast<memref::SubViewOp>(op))
-    return subview.getSource() == source;
-  if (auto view = dyn_cast<memref::ViewOp>(op))
-    return view.getSource() == source;
-  if (auto reinterpret = dyn_cast<memref::ReinterpretCastOp>(op))
-    return reinterpret.getSource() == source;
+  source = ValueAnalysis::stripMemrefViewOps(source);
   if (auto unrealized = dyn_cast<UnrealizedConversionCastOp>(op))
     return llvm::is_contained(unrealized.getInputs(), source);
   if (auto dbRef = dyn_cast<DbRefOp>(op))
     return dbRef.getSource() == source;
+
+  for (Value result : op->getResults()) {
+    if (!isa<BaseMemRefType>(result.getType()))
+      continue;
+    if (ValueAnalysis::stripMemrefViewOps(result) == source)
+      return true;
+  }
 
   return false;
 }

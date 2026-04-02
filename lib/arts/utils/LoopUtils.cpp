@@ -8,20 +8,21 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "llvm/ADT/StringRef.h"
+#include <limits>
 
 namespace mlir {
 namespace arts {
 
 static std::optional<int64_t> getStaticTripCount(scf::ForOp loop) {
-  auto lb = ValueAnalysis::tryFoldConstantIndex(loop.getLowerBound());
-  auto ub = ValueAnalysis::tryFoldConstantIndex(loop.getUpperBound());
-  auto step = ValueAnalysis::tryFoldConstantIndex(loop.getStep());
-  if (!lb || !ub || !step || *step <= 0)
+  if (!loop)
     return std::nullopt;
-  int64_t span = std::max<int64_t>(0, *ub - *lb);
-  return (span + *step - 1) / *step;
+  std::optional<llvm::APInt> tripCount = loop.getStaticTripCount();
+  if (!tripCount || !tripCount->isSignedIntN(64))
+    return std::nullopt;
+  return tripCount->getSExtValue();
 }
 
 static std::optional<int64_t> getStaticTripCount(arts::ForOp loop) {

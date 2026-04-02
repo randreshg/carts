@@ -218,6 +218,12 @@ computeTaskElementSlice(TaskAcquireSlicePlanInput input) {
   SmallVector<Value, 4> blockExtents;
   std::optional<LoweringContractInfo> taskContract =
       getLoweringContract(input.taskAcquire.getPtr());
+  if ((!taskContract || (!taskContract->getStaticBlockShape() &&
+                         taskContract->spatial.blockShape.empty())))
+    if (auto opContract = getLoweringContract(input.taskAcquire.getOperation(),
+                                              input.AC->getBuilder(),
+                                              input.loc))
+      taskContract = *opContract;
   if (taskContract) {
     if (auto staticShape = taskContract->getStaticBlockShape()) {
       for (int64_t dim : *staticShape)
@@ -227,11 +233,6 @@ computeTaskElementSlice(TaskAcquireSlicePlanInput input) {
                           taskContract->spatial.blockShape.end());
     }
   }
-  if (blockExtents.empty())
-    if (auto staticShape =
-            getStencilBlockShape(input.taskAcquire.getOperation()))
-      for (int64_t dim : *staticShape)
-        blockExtents.push_back(input.AC->createIndexConstant(dim, input.loc));
   if (blockExtents.empty() && rootAlloc)
     blockExtents.assign(rootAlloc.getElementSizes().begin(),
                         rootAlloc.getElementSizes().end());
@@ -458,13 +459,15 @@ mlir::arts::planTaskAcquireRewrite(TaskAcquireRewritePlanInput input) {
                     : std::nullopt;
             SmallVector<int64_t, 4> staticTaskBlockShape;
             bool refinedShape = false;
-            if (auto inheritedShape =
-                    getStencilBlockShape(input.parentAcquire.getOperation())) {
-              staticTaskBlockShape.assign(inheritedShape->begin(),
-                                          inheritedShape->end());
-            } else if (auto contract =
-                           getLoweringContract(input.parentAcquire.getPtr())) {
+            if (auto contract = getLoweringContract(input.parentAcquire.getPtr())) {
               if (auto inheritedShape = contract->getStaticBlockShape())
+                staticTaskBlockShape.assign(inheritedShape->begin(),
+                                            inheritedShape->end());
+            } else if (auto opContract =
+                           getLoweringContract(input.parentAcquire.getOperation(),
+                                               input.AC->getBuilder(),
+                                               input.loc)) {
+              if (auto inheritedShape = opContract->getStaticBlockShape())
                 staticTaskBlockShape.assign(inheritedShape->begin(),
                                             inheritedShape->end());
             }
@@ -849,9 +852,105 @@ void mlir::arts::applyTaskAcquireContractMetadata(
       }
     }
 
+  std::optional<LoweringContractInfo> currentContract =
+      getLoweringContract(taskAcquire.getPtr());
+  if (auto opContract =
+          getLoweringContract(taskAcquire.getOperation(), builder, loc)) {
+    if (!currentContract) {
+      currentContract = *opContract;
+    } else {
+      if (currentContract->pattern.kind == ContractKind::Unknown)
+        currentContract->pattern.kind = opContract->pattern.kind;
+      if (!currentContract->pattern.depPattern && opContract->pattern.depPattern)
+        currentContract->pattern.depPattern = opContract->pattern.depPattern;
+      if (!currentContract->pattern.distributionKind &&
+          opContract->pattern.distributionKind) {
+        currentContract->pattern.distributionKind =
+            opContract->pattern.distributionKind;
+      }
+      if (!currentContract->pattern.distributionPattern &&
+          opContract->pattern.distributionPattern) {
+        currentContract->pattern.distributionPattern =
+            opContract->pattern.distributionPattern;
+      }
+      if (!currentContract->pattern.distributionVersion &&
+          opContract->pattern.distributionVersion) {
+        currentContract->pattern.distributionVersion =
+            opContract->pattern.distributionVersion;
+      }
+      if (!currentContract->pattern.revision && opContract->pattern.revision)
+        currentContract->pattern.revision = opContract->pattern.revision;
+      currentContract->analysis.narrowableDep =
+          currentContract->analysis.narrowableDep ||
+          opContract->analysis.narrowableDep;
+      currentContract->analysis.postDbRefined =
+          currentContract->analysis.postDbRefined ||
+          opContract->analysis.postDbRefined;
+      if (!currentContract->analysis.criticalPathDistance &&
+          opContract->analysis.criticalPathDistance) {
+        currentContract->analysis.criticalPathDistance =
+            opContract->analysis.criticalPathDistance;
+      }
+      if (currentContract->spatial.ownerDims.empty() &&
+          !opContract->spatial.ownerDims.empty()) {
+        currentContract->spatial.ownerDims = opContract->spatial.ownerDims;
+      }
+      if (!currentContract->spatial.centerOffset &&
+          opContract->spatial.centerOffset) {
+        currentContract->spatial.centerOffset =
+            opContract->spatial.centerOffset;
+      }
+      if (currentContract->spatial.blockShape.empty() &&
+          !opContract->spatial.blockShape.empty()) {
+        currentContract->spatial.blockShape = opContract->spatial.blockShape;
+      }
+      if (currentContract->spatial.minOffsets.empty() &&
+          !opContract->spatial.minOffsets.empty()) {
+        currentContract->spatial.minOffsets = opContract->spatial.minOffsets;
+      }
+      if (currentContract->spatial.maxOffsets.empty() &&
+          !opContract->spatial.maxOffsets.empty()) {
+        currentContract->spatial.maxOffsets = opContract->spatial.maxOffsets;
+      }
+      if (currentContract->spatial.writeFootprint.empty() &&
+          !opContract->spatial.writeFootprint.empty()) {
+        currentContract->spatial.writeFootprint =
+            opContract->spatial.writeFootprint;
+      }
+      if (currentContract->spatial.staticBlockShape.empty() &&
+          !opContract->spatial.staticBlockShape.empty()) {
+        currentContract->spatial.staticBlockShape =
+            opContract->spatial.staticBlockShape;
+      }
+      if (currentContract->spatial.staticMinOffsets.empty() &&
+          !opContract->spatial.staticMinOffsets.empty()) {
+        currentContract->spatial.staticMinOffsets =
+            opContract->spatial.staticMinOffsets;
+      }
+      if (currentContract->spatial.staticMaxOffsets.empty() &&
+          !opContract->spatial.staticMaxOffsets.empty()) {
+        currentContract->spatial.staticMaxOffsets =
+            opContract->spatial.staticMaxOffsets;
+      }
+      currentContract->spatial.supportedBlockHalo =
+          currentContract->spatial.supportedBlockHalo ||
+          opContract->spatial.supportedBlockHalo;
+      if (currentContract->spatial.spatialDims.empty() &&
+          !opContract->spatial.spatialDims.empty()) {
+        currentContract->spatial.spatialDims = opContract->spatial.spatialDims;
+      }
+      if (currentContract->spatial.stencilIndependentDims.empty() &&
+          !opContract->spatial.stencilIndependentDims.empty()) {
+        currentContract->spatial.stencilIndependentDims =
+            opContract->spatial.stencilIndependentDims;
+      }
+    }
+  }
+
   SmallVector<int64_t, 4> taskOwnerDims;
-  if (auto existingOwnerDims = getStencilOwnerDims(taskAcquire.getOperation()))
-    taskOwnerDims.assign(existingOwnerDims->begin(), existingOwnerDims->end());
+  if (currentContract && !currentContract->spatial.ownerDims.empty())
+    taskOwnerDims.assign(currentContract->spatial.ownerDims.begin(),
+                         currentContract->spatial.ownerDims.end());
   else
     taskOwnerDims.assign(rewriteContract.ownerDims.begin(),
                          rewriteContract.ownerDims.end());
@@ -898,30 +997,37 @@ void mlir::arts::applyTaskAcquireContractMetadata(
   };
 
   SmallVector<int64_t, 4> taskHaloMinOffsets;
-  if (auto existingMinOffsets =
-          getStencilMinOffsets(taskAcquire.getOperation()))
-    taskHaloMinOffsets.assign(existingMinOffsets->begin(),
-                              existingMinOffsets->end());
-  else
+  if (currentContract)
+    if (auto minOffsets = currentContract->getStaticMinOffsets())
+      taskHaloMinOffsets = *minOffsets;
+  if (taskHaloMinOffsets.empty())
     taskHaloMinOffsets.assign(rewriteContract.haloMinOffsets.begin(),
                               rewriteContract.haloMinOffsets.end());
   taskHaloMinOffsets = clampRankedStencilVector(std::move(taskHaloMinOffsets));
 
   SmallVector<int64_t, 4> taskHaloMaxOffsets;
-  if (auto existingMaxOffsets =
-          getStencilMaxOffsets(taskAcquire.getOperation()))
-    taskHaloMaxOffsets.assign(existingMaxOffsets->begin(),
-                              existingMaxOffsets->end());
-  else
+  if (currentContract)
+    if (auto maxOffsets = currentContract->getStaticMaxOffsets())
+      taskHaloMaxOffsets = *maxOffsets;
+  if (taskHaloMaxOffsets.empty())
     taskHaloMaxOffsets.assign(rewriteContract.haloMaxOffsets.begin(),
                               rewriteContract.haloMaxOffsets.end());
   taskHaloMaxOffsets = clampRankedStencilVector(std::move(taskHaloMaxOffsets));
 
   SmallVector<int64_t, 4> taskWriteFootprint;
-  if (auto existingWriteFootprint =
-          getStencilWriteFootprint(taskAcquire.getOperation()))
-    taskWriteFootprint.assign(existingWriteFootprint->begin(),
-                              existingWriteFootprint->end());
+  if (currentContract && !currentContract->spatial.writeFootprint.empty()) {
+    bool allConstant = true;
+    for (Value value : currentContract->spatial.writeFootprint) {
+      auto folded = ValueAnalysis::tryFoldConstantIndex(value);
+      if (!folded) {
+        allConstant = false;
+        break;
+      }
+      taskWriteFootprint.push_back(*folded);
+    }
+    if (!allConstant)
+      taskWriteFootprint.clear();
+  }
   taskWriteFootprint = clampRankedStencilVector(std::move(taskWriteFootprint));
 
   auto chunkMode = taskAcquire.getPartitionMode();
@@ -929,13 +1035,14 @@ void mlir::arts::applyTaskAcquireContractMetadata(
       rewriteContract.usePartitionSliceAsDepWindow ||
       rewriteContract.applyStencilHalo ||
       (chunkMode && *chunkMode == PartitionMode::stencil);
-  if (shouldMarkStencilCenter &&
-      !getStencilCenterOffset(taskAcquire.getOperation())) {
-    int64_t centerOffset = 1;
+  std::optional<int64_t> taskCenterOffset;
+  if (currentContract)
+    taskCenterOffset = currentContract->spatial.centerOffset;
+  if (shouldMarkStencilCenter && !taskCenterOffset) {
+    taskCenterOffset = 1;
     if (!rewriteContract.haloMinOffsets.empty())
-      centerOffset =
+      taskCenterOffset =
           std::max<int64_t>(0, -rewriteContract.haloMinOffsets.front());
-    setStencilCenterOffset(taskAcquire.getOperation(), centerOffset);
   }
 
   /// Task acquires must carry the full stencil halo contract before
@@ -956,23 +1063,14 @@ void mlir::arts::applyTaskAcquireContractMetadata(
     setStencilWriteFootprint(taskAcquire.getOperation(), taskWriteFootprint);
 
   std::optional<SmallVector<int64_t, 4>> taskBlockShape = refinedTaskBlockShape;
-  if (!taskBlockShape)
-    if (auto inheritedShape = getStencilBlockShape(taskAcquire.getOperation()))
-      taskBlockShape = SmallVector<int64_t, 4>(inheritedShape->begin(),
-                                               inheritedShape->end());
+  if (!taskBlockShape && currentContract)
+    taskBlockShape = currentContract->getStaticBlockShape();
 
   if (!taskBlockShape) {
     SmallVector<unsigned, 4> ownerDims;
-    if (auto dims = getStencilOwnerDims(taskAcquire.getOperation())) {
-      for (int64_t dim : *dims) {
-        if (dim >= 0)
-          ownerDims.push_back(static_cast<unsigned>(dim));
-      }
-    } else {
-      for (int64_t dim : rewriteContract.ownerDims) {
-        if (dim >= 0)
-          ownerDims.push_back(static_cast<unsigned>(dim));
-      }
+    for (int64_t dim : taskOwnerDims) {
+      if (dim >= 0)
+        ownerDims.push_back(static_cast<unsigned>(dim));
     }
 
     if (!ownerDims.empty())
@@ -1011,21 +1109,28 @@ void mlir::arts::applyTaskAcquireContractMetadata(
       }
   }
 
-  if (!taskBlockShape)
-    return;
+  std::optional<SmallVector<int64_t, 4>> contractTaskBlockShape;
+  if (taskBlockShape) {
+    /// Tiling-2D workers refine the inherited stencil owner shape into a
+    /// worker-local owner tile. Reflect that narrower static tile on the
+    /// acquire before DbPartitioning runs so the N-D block planner can align
+    /// allocation blocks with the actual 2-D worker grid instead of widening
+    /// back to the parent stencil tile.
+    setStencilBlockShape(taskAcquire.getOperation(), *taskBlockShape);
 
-  /// Tiling-2D workers refine the inherited stencil owner shape into a
-  /// worker-local owner tile. Reflect that narrower static tile on the
-  /// acquire before DbPartitioning runs so the N-D block planner can align
-  /// allocation blocks with the actual 2-D worker grid instead of widening
-  /// back to the parent stencil tile.
-  setStencilBlockShape(taskAcquire.getOperation(), *taskBlockShape);
-  if (auto contract = getLoweringContract(taskAcquire.getPtr())) {
-    SmallVector<int64_t, 4> contractTaskBlockShape = *taskBlockShape;
-    contractTaskBlockShape =
-        clampRankedStencilVector(std::move(contractTaskBlockShape));
+    SmallVector<int64_t, 4> clampedTaskBlockShape = *taskBlockShape;
+    clampedTaskBlockShape =
+        clampRankedStencilVector(std::move(clampedTaskBlockShape));
+    contractTaskBlockShape = std::move(clampedTaskBlockShape);
+  }
 
-    LoweringContractInfo updated = *contract;
+  if (currentContract) {
+    /// Keep the rewritten pointer contract authoritative even when no static
+    /// worker block shape is inferable. Halo windows and owner dims must still
+    /// survive on the pointer contract so later DB planning never needs to
+    /// rediscover them from graph-only stencil facts.
+
+    LoweringContractInfo updated = *currentContract;
     if (!taskOwnerDims.empty())
       updated.spatial.ownerDims = taskOwnerDims;
     auto clampDynamicRank = [&](auto &values) {
@@ -1045,8 +1150,8 @@ void mlir::arts::applyTaskAcquireContractMetadata(
     clampStaticRank(updated.spatial.staticMinOffsets);
     clampStaticRank(updated.spatial.staticMaxOffsets);
 
-    if (!contractTaskBlockShape.empty())
-      updated.spatial.staticBlockShape = contractTaskBlockShape;
+    if (contractTaskBlockShape)
+      updated.spatial.staticBlockShape = *contractTaskBlockShape;
     if (!taskHaloMinOffsets.empty()) {
       updated.spatial.minOffsets.clear();
       updated.spatial.staticMinOffsets = taskHaloMinOffsets;
@@ -1061,7 +1166,10 @@ void mlir::arts::applyTaskAcquireContractMetadata(
         updated.spatial.writeFootprint.push_back(
             builder.create<arith::ConstantIndexOp>(loc, value));
     }
-    updated.spatial.blockShape.clear();
+    if (taskCenterOffset)
+      updated.spatial.centerOffset = taskCenterOffset;
+    if (contractTaskBlockShape)
+      updated.spatial.blockShape.clear();
     upsertLoweringContract(builder, loc, taskAcquire.getPtr(), updated);
   }
 }

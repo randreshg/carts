@@ -39,6 +39,7 @@
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/transforms/dep/DepTransform.h"
+#include "arts/transforms/pattern/PatternTransform.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoopUtils.h"
@@ -67,14 +68,11 @@ struct JacobiLoopMatch {
 };
 
 static void stampJacobiAlternatingBuffers(Operation *op) {
-  setDepPattern(op, ArtsDepPattern::jacobi_alternating_buffers);
-  setEdtDistributionPattern(op, EdtDistributionPattern::stencil);
-  setStencilSpatialDims(op, {0, 1});
-  setStencilOwnerDims(op, {0});
-  setStencilMinOffsets(op, {-1});
-  setStencilMaxOffsets(op, {1});
-  setStencilWriteFootprint(op, {0});
-  setSupportedBlockHalo(op);
+  static const StencilNDPatternContract contract(
+      ArtsDepPattern::jacobi_alternating_buffers, ArrayRef<int64_t>{0},
+      ArrayRef<int64_t>{-1}, ArrayRef<int64_t>{1}, ArrayRef<int64_t>{0},
+      /*revision=*/1, /*blockShape=*/{}, /*spatialDims=*/{0, 1});
+  contract.stamp(op);
 }
 
 static bool matchSimpleCopyFor(ForOp forOp, Value &srcMemref,

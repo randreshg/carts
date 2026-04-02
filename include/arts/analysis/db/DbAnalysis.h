@@ -63,46 +63,50 @@ public:
   struct AcquireContractSummary {
     LoweringContractInfo contract;
     bool refinedByDbAnalysis = false;
-    /// Kept as a stored field because getAcquireContractSummary() applies
-    /// post-hoc refinement (stencil/matmul fallback) that may differ from
-    /// the raw facts value.
+    /// Canonical access-pattern view materialized from `contract`.
     AccessPattern accessPattern = AccessPattern::Unknown;
-    /// Pointer to the derived graph cache that supported refinement. Valid for
-    /// the lifetime of the DbGraph (i.e., within a single pass's
-    /// runOnOperation()). Consumers may use this for legality/detail queries,
-    /// but the semantic lowering contract remains `contract`.
-    const DbAcquirePartitionFacts *facts = nullptr;
+    /// Graph-derived classifier evidence kept separate from the canonical
+    /// contract-facing pattern above.
+    AccessPattern derivedAccessPattern = AccessPattern::Unknown;
+    /// Materialized pass-facing facts derived from the graph cache.
+    /// The semantic authority still remains `contract`.
+    SmallVector<unsigned, 4> partitionDims;
+    bool derivedFactEvidence = false;
+    bool indirectAccess = false;
+    bool directAccess = false;
+    bool blockHints = false;
+    bool inferredBlockCapability = false;
+    bool fineGrainedEntries = false;
+    bool unmappedPartitionEntry = false;
+    bool distributedContractEntry = false;
+    bool distributionContract = false;
+    bool partitionDimsFromPeersFlag = false;
 
-    /// Delegating accessors — null-safe, return conservative defaults.
-    bool hasIndirectAccess() const { return facts && facts->hasIndirectAccess; }
-    bool hasDirectAccess() const { return facts && facts->hasDirectAccess; }
-    bool hasBlockHints() const { return facts && facts->hasBlockHints; }
-    bool inferredBlock() const { return facts && facts->inferredBlock; }
-    bool hasFineGrainedEntries() const {
-      return facts && facts->hasFineGrainedEntries();
-    }
+    bool hasIndirectAccess() const { return indirectAccess; }
+    bool hasDirectAccess() const { return directAccess; }
+    bool hasBlockHints() const { return blockHints; }
+    bool inferredBlock() const { return inferredBlockCapability; }
+    bool hasFineGrainedEntries() const { return fineGrainedEntries; }
     bool hasUnmappedPartitionEntry() const {
-      return facts && facts->hasUnmappedPartitionEntry();
+      return unmappedPartitionEntry;
     }
     bool preservesDistributedContractEntry() const {
-      return facts && facts->hasDistributedContractEntries();
+      return distributedContractEntry;
     }
-    bool hasDistributionContract() const {
-      return contract.pattern.distributionKind ||
-             contract.pattern.distributionPattern ||
-             contract.pattern.distributionVersion;
-    }
-    bool partitionDimsFromPeers() const {
-      return facts && facts->partitionDimsFromPeers;
-    }
+    bool hasDistributionContract() const { return distributionContract; }
+    bool partitionDimsFromPeers() const { return partitionDimsFromPeersFlag; }
+    AccessPattern getDerivedAccessPattern() const { return derivedAccessPattern; }
 
     bool empty() const {
       return contract.empty() && accessPattern == AccessPattern::Unknown &&
-             !facts;
+             partitionDims.empty() && !derivedFactEvidence && !indirectAccess &&
+             !directAccess && !blockHints &&
+             !inferredBlockCapability && !fineGrainedEntries &&
+             !unmappedPartitionEntry && !distributedContractEntry &&
+             !distributionContract && !partitionDimsFromPeersFlag;
     }
     bool usesStencilSemantics() const {
-      return accessPattern == AccessPattern::Stencil ||
-             contract.isStencilFamily() || contract.usesStencilDistribution() ||
+      return contract.isStencilFamily() || contract.usesStencilDistribution() ||
              contract.supportsBlockHalo();
     }
     bool hasExplicitStencilLayout() const {
@@ -125,8 +129,7 @@ public:
       return contract.isWavefrontStencilContract();
     }
     bool usesMatmulSemantics() const {
-      return contract.getEffectiveKind() == ContractKind::Matmul ||
-             accessPattern == AccessPattern::Uniform;
+      return contract.getEffectiveKind() == ContractKind::Matmul;
     }
   };
 
@@ -164,21 +167,24 @@ public:
   LoopDbAccessSummary analyzeLoopDbAccessPatterns(ForOp forOp);
   std::optional<LoopDbAccessSummary> getLoopDbAccessSummary(ForOp forOp);
   std::optional<EdtDistributionPattern> getLoopDistributionPattern(ForOp forOp);
-  AcquirePartitionSummary analyzeAcquirePartition(DbAcquireOp acquire,
-                                                  OpBuilder &builder);
+  AcquirePartitionSummary
+  analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder,
+                          const AcquireContractSummary *summary = nullptr);
+  /// IR-only canonical acquire contract view.
+  /// This does not consult graph-derived partition facts, so it is safe to use
+  /// while graph-side analyses are still constructing those facts.
+  static AcquireContractSummary
+  buildCanonicalAcquireContractSummary(DbAcquireOp acquire);
   std::optional<AcquireContractSummary>
   getAcquireContractSummary(DbAcquireOp acquire);
   std::optional<unsigned> inferLoopMappedDim(DbAcquireOp acquire, ForOp forOp);
   std::optional<unsigned> inferLoopMappedDim(Value dep, ForOp forOp);
   AccessPattern resolveCanonicalAcquireAccessPattern(
-      DbAcquireOp acquire, const AcquireContractSummary *summary = nullptr,
-      const DbAcquirePartitionFacts *facts = nullptr);
+      DbAcquireOp acquire, const AcquireContractSummary *summary = nullptr);
   ArtsDepPattern resolveCanonicalAcquireDepPattern(
-      DbAcquireOp acquire, const AcquireContractSummary *summary = nullptr,
-      const DbAcquirePartitionFacts *facts = nullptr);
+      DbAcquireOp acquire, const AcquireContractSummary *summary = nullptr);
   bool hasCanonicalAcquireStencilSemantics(
-      DbAcquireOp acquire, const AcquireContractSummary *summary = nullptr,
-      const DbAcquirePartitionFacts *facts = nullptr);
+      DbAcquireOp acquire, const AcquireContractSummary *summary = nullptr);
   ArtsMode inferEdtAccessMode(Operation *underlyingOp, EdtOp edt) const;
   static ArtsMode classifyMemrefUserAccessMode(Operation *op,
                                                Operation *underlyingOp);
@@ -188,11 +194,6 @@ public:
                                              ArtsMode requestedMode);
   bool operationHasDistributedDbContract(Operation *op);
   bool operationHasPeerInferredPartitionDims(Operation *op);
-  /// Raw partition facts remain available as a derived cache for
-  /// legality/detail consumers inside DB analysis and controller plumbing.
-  /// Semantic pattern and lowering decisions should prefer
-  /// getAcquireContractSummary().
-  const DbAcquirePartitionFacts *getAcquirePartitionFacts(DbAcquireOp acquire);
   bool hasCrossElementSelfReadInLoop(DbAcquireOp acquire, ForOp loopOp);
 
   /// Return true when producerEdt writes DBs that are later consumed outside

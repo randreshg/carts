@@ -108,7 +108,7 @@ carts compile <file>.mlir --pipeline=<step>
 carts compile <file>.mlir --all-pipelines -o ./pipeline_steps/
 
 # Resume from a specific pipeline step (.mlir only)
-carts compile <file>.mlir --start-from=concurrency-opt -o <file>.prelower.mlir
+carts compile <file>.mlir --start-from=post-db-refinement -o <file>.prelower.mlir
 
 # Collect metadata
 carts compile <file>_seq.mlir --collect-metadata
@@ -139,7 +139,7 @@ carts pipeline
 carts pipeline --json
 
 # Pass list for one pipeline step
-carts pipeline --pipeline=concurrency-opt
+carts pipeline --pipeline=db-partitioning
 ```
 
 Use these outputs as the source of truth for valid `--pipeline` and
@@ -171,7 +171,7 @@ flowchart TB
 
     subgraph P1["Phase 1: Normalization & Analysis"]
       direction TB
-      S1["1) canonicalize-memrefs<br/>Normalize memref operations"]
+      S1["1) raise-memref-dimensionality<br/>Normalize memrefs + raise layouts"]
       S2["2) collect-metadata<br/>Extract loop/array metadata"]
       S3["3) initial-cleanup<br/>Dead code elimination"]
       S1 --> S2 --> S3
@@ -197,16 +197,19 @@ flowchart TB
       direction TB
       S10["10) concurrency<br/>Build EDT concurrency graph"]
       S11["11) edt-distribution<br/>Distribution selection + ForLowering"]
-      S12["12) concurrency-opt<br/>DB partitioning"]
-      S13["13) epochs<br/>Epoch synchronization"]
-      S10 --> S11 --> S12 --> S13
+      S12["12) post-distribution-cleanup<br/>Cleanup after loop lowering"]
+      S13["13) db-partitioning<br/>DB partitioning"]
+      S14["14) post-db-refinement<br/>Contract validation + DB refinement"]
+      S15["15) late-concurrency-cleanup<br/>Late hoisting/sinking cleanup"]
+      S16["16) epochs<br/>Epoch synchronization"]
+      S10 --> S11 --> S12 --> S13 --> S14 --> S15 --> S16
     end
 
     subgraph P5["Phase 5: Lowering to LLVM"]
       direction TB
-      S14["14) pre-lowering<br/>EDT/DB/Epoch lowering"]
-      S15["15) arts-to-llvm<br/>Final ARTS → LLVM conversion"]
-      S14 --> S15
+      S17["17) pre-lowering<br/>EDT/DB/Epoch lowering"]
+      S18["18) arts-to-llvm<br/>Final ARTS → LLVM conversion"]
+      S17 --> S18
     end
 
     P1 --> P2 --> P3 --> P4 --> P5
@@ -241,22 +244,24 @@ flowchart TB
 
 ## Pipeline Steps
 
-### Step 1: canonicalize-memrefs
+### Step 1: raise-memref-dimensionality
 
 **Purpose:** Normalize memref operations and inline functions to prepare for analysis.
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --pipeline=canonicalize-memrefs
+carts compile <file>.mlir --pipeline=raise-memref-dimensionality
 ```
 
 **Passes Executed:**
 - `LowerAffine` - Lower affine dialect operations
 - `CSE` - Common subexpression elimination
-- `Inliner` - MLIR function inlining
 - `ArtsInliner` - ARTS-specific inlining
-- `CanonicalizeMemrefs` - Normalize memref allocations and accesses
+- `PolygeistCanonicalize` - Canonicalize polygeist + memref structure
+- `RaiseMemRefDimensionality` - Raise nested memref layouts to multi-dimensional forms
+- `HandleDeps` - Normalize dependency-carrier structure after raising
 - `DeadCodeElimination` - Remove unused code
+- `CSE` - Final cleanup after normalization
 
 **What to Look For:**
 - Nested pointer arrays (`memref<?xmemref<?xT>>`) converted to multi-dimensional memrefs (`memref<?x?xT>`)
@@ -610,29 +615,28 @@ carts compile <file>.mlir --pipeline=edt-distribution --arts-debug=edt_distribut
 
 ---
 
-### Step 12: concurrency-opt
+### Steps 12-15: post-distribution-cleanup, db-partitioning, post-db-refinement, late-concurrency-cleanup
 
-**Purpose:** Optimize concurrent execution with DB partitioning and concurrency rewrites.
+**Purpose:** Replace the old `concurrency-opt` basin with explicit stages for post-lowering cleanup, DB partitioning, contract refinement, and late concurrency cleanup.
 
 **Reference Doc:**
 - `docs/heuristics/partitioning.md`
 
 **Run Command:**
 ```bash
-carts compile <file>.mlir --pipeline=concurrency-opt
+carts compile <file>.mlir --pipeline=db-partitioning
 ```
 
 **Debug Command:**
 ```bash
-carts compile <file>.mlir --pipeline=concurrency-opt --arts-debug=db,db_partitioning 2>&1
+carts compile <file>.mlir --pipeline=db-partitioning --arts-debug=db,db_partitioning 2>&1
 ```
 
 **Passes Executed:**
-- `DeadCodeElimination` - Remove dead code
-- `Edt` - Convert parallel EDTs to single EDTs
-- `Db` - Re-optimize DataBlocks
-- `DbPartitioning` - Partition DBs for fine-grained parallel access
-- `PolygeistCanonicalize`, `CSE`, `Mem2Reg` - Cleanup passes
+- `post-distribution-cleanup` - structural cleanup and `EpochOpt` after `ForLowering`
+- `db-partitioning` - `DbPartitioning`, optional `DbDistributedOwnership`, and `DbTransforms`
+- `post-db-refinement` - mode tightening, contract validation, scratch cleanup, and canonicalization
+- `late-concurrency-cleanup` - strip mining, hoisting, alloca sinking, DCE, and `Mem2Reg`
 
 **Partitioning Decision (Heuristics):**
 
@@ -1253,7 +1257,7 @@ All passes use the ARTS debug infrastructure with color-coded output:
 carts compile gemm.mlir --pipeline=pattern-pipeline --arts-debug=loop_reordering 2>&1 | tee debug.log
 
 # Debug DB partitioning decisions
-carts compile gemm.mlir --pipeline=concurrency-opt --arts-debug=db,db_partitioning 2>&1 | tee debug.log
+carts compile gemm.mlir --pipeline=db-partitioning --arts-debug=db,db_partitioning 2>&1 | tee debug.log
 
 # Debug multiple passes
 carts compile gemm.mlir --arts-debug=loop_reordering,create_dbs,db_partitioning 2>&1 | tee debug.log
@@ -1415,10 +1419,10 @@ carts compile example_seq.mlir --collect-metadata
 carts cgeist example.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine -o example.mlir
 
 # Step 4: Inspect each pipeline step
-carts compile example.mlir --pipeline=canonicalize-memrefs -o pipeline_steps/01_canonicalize.mlir
+carts compile example.mlir --pipeline=raise-memref-dimensionality -o pipeline_steps/01_raise_memref_dimensionality.mlir
 carts compile example.mlir --pipeline=openmp-to-arts -o pipeline_steps/04_openmp_to_arts.mlir
 carts compile example.mlir --pipeline=create-dbs -o pipeline_steps/07_create_dbs.mlir
-carts compile example.mlir --pipeline=concurrency-opt -o pipeline_steps/12_concurrency_opt.mlir
+carts compile example.mlir --pipeline=db-partitioning -o pipeline_steps/13_db_partitioning.mlir
 
 # Or dump all steps at once
 carts compile example.mlir --all-pipelines -o pipeline_steps/
@@ -1436,8 +1440,8 @@ carts compile example.c -O3
 # Generate MLIR
 carts cgeist example.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine -o example.mlir
 
-# Stop at concurrency-opt and debug
-carts compile example.mlir --pipeline=concurrency-opt --arts-debug=db,db_partitioning 2>&1 | tee db_debug.log
+# Stop at db-partitioning and debug
+carts compile example.mlir --pipeline=db-partitioning --arts-debug=db,db_partitioning 2>&1 | tee db_debug.log
 
 # Look for partitioning decisions in output:
 # [INFO] [db_partitioning] Analyzing DB partitioning...
@@ -1445,7 +1449,7 @@ carts compile example.mlir --pipeline=concurrency-opt --arts-debug=db,db_partiti
 # [DEBUG] [db_partitioning] H2 heuristic: cost model suggests partition
 
 # Inspect the MLIR to see allocation strategy
-grep -A2 "arts.db_alloc" example_concurrency-opt.mlir
+grep -A2 "arts.db_alloc" example_db-partitioning.mlir
 ```
 
 ### Workflow 3: Debug Loop Vectorization
@@ -1496,7 +1500,7 @@ find pipeline_steps -maxdepth 1 -type f | sort
 #   <stem>.ll
 
 # Compare transformation between pipeline steps
-diff pipeline_steps/example_create-dbs.mlir pipeline_steps/example_concurrency-opt.mlir
+diff pipeline_steps/example_create-dbs.mlir pipeline_steps/example_db-partitioning.mlir
 ```
 
 ## Distributed Runtime Debug

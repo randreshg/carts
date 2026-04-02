@@ -15,6 +15,7 @@
 #include "arts/analysis/graphs/edt/EdtNode.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
@@ -45,6 +46,9 @@ public:
 
   /// Edt-specific methods
   bool isEdtReachable(EdtOp from, EdtOp to);
+  void getDeterministicTopologicalOrder(
+      SmallVectorImpl<EdtNode *> &topoOrder,
+      SmallVectorImpl<EdtNode *> &leftoverNodes) const;
   func::FuncOp getFunction() const { return func; }
   bool hasDbGraph() const { return dbGraph != nullptr; }
   DbGraph *getDbGraph() const { return dbGraph; }

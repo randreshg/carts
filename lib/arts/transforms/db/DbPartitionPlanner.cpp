@@ -234,8 +234,6 @@ static void buildBlockRewriteAcquire(const DbAcquirePartitionView &input,
   output.partitionInfo.offsets.clear();
   output.partitionInfo.sizes.clear();
   output.partitionInfo.mode = PartitionMode::block;
-  output.graphStencilBounds = input.graphStencilBounds;
-  output.graphStencilOwnerDim = input.graphStencilOwnerDim;
 
   if (input.needsFullRange) {
     output.isFullRange = true;
@@ -356,36 +354,32 @@ void mlir::arts::computeAllocationShape(PartitionMode mode, DbAllocOp allocOp,
                                         ArrayRef<unsigned> partitionedDims,
                                         SmallVector<Value> &newOuterSizes,
                                         SmallVector<Value> &newInnerSizes) {
-  switch (mode) {
-  case PartitionMode::coarse:
+  if (!requiresWorkerBoundsPlanning(mode)) {
     computeCoarseShape(allocOp, newOuterSizes, newInnerSizes);
     return;
-  case PartitionMode::fine_grained:
+  }
+  if (usesElementLayout(mode)) {
     computeElementWiseShape(allocOp, decision, newOuterSizes, newInnerSizes);
     return;
-  case PartitionMode::block:
-  case PartitionMode::stencil:
-    computeBlockShape(allocOp, blockSizes, partitionedDims, newOuterSizes,
-                      newInnerSizes);
-    return;
   }
+  computeBlockShape(allocOp, blockSizes, partitionedDims, newOuterSizes,
+                    newInnerSizes);
 }
 
 void mlir::arts::buildRewriteAcquire(
     PartitionMode mode, const DbAcquirePartitionView &input, DbAllocOp allocOp,
     const DbRewritePlan &plan, DbRewriteAcquire &output, OpBuilder &builder) {
-  switch (mode) {
-  case PartitionMode::coarse:
+  if (!requiresWorkerBoundsPlanning(mode)) {
     buildCoarseRewriteAcquire(allocOp, output, builder);
     return;
-  case PartitionMode::fine_grained:
+  }
+  if (usesElementLayout(mode)) {
     buildElementWiseRewriteAcquire(input, allocOp, output, builder);
     return;
-  case PartitionMode::block:
-    buildBlockRewriteAcquire(input, allocOp, plan, output, builder);
-    return;
-  case PartitionMode::stencil:
+  }
+  if (supportsHaloExtension(mode)) {
     buildStencilRewriteAcquire(input, allocOp, plan, output, builder);
     return;
   }
+  buildBlockRewriteAcquire(input, allocOp, plan, output, builder);
 }

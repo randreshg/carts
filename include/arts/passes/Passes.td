@@ -158,10 +158,7 @@ def DbPartitioning : Pass<"db-partitioning", "mlir::ModuleOp"> {
     Transforms coarse-grained DB allocations to fine-grained (chunked)
     allocations for better parallelism. Also handles:
     - Stencil bounds analysis and runtime bounds checking
-
-    Partition Fallback (--partition-fallback):
-    - coarse (default): Non-affine accesses block partitioning, use coarse allocation
-    - fine: Non-affine accesses use element-wise (fine-grained) partitioning
+    - Unsupported/non-partitionable accesses remain coarse
   }];
   let dependentDialects = [
     "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",

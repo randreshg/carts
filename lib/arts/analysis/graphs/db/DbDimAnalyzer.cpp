@@ -14,6 +14,7 @@
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/PartitionPredicates.h"
 #include "llvm/ADT/DenseSet.h"
 
 using namespace mlir;
@@ -46,7 +47,7 @@ pickRepresentativeRange(PartitionMode mode, const PartitionInfo &info) {
   };
 
   Value offset;
-  if (mode == PartitionMode::fine_grained)
+  if (usesElementLayout(mode))
     offset = pickRepresentative(info.indices);
   else
     offset = pickRepresentative(info.offsets);
@@ -64,7 +65,7 @@ collectPartitionEntries(DbAcquireOp acquire) {
     return entries;
 
   PartitionMode mode = getRequestedMode(acquire);
-  if (mode == PartitionMode::coarse)
+  if (!requiresWorkerBoundsPlanning(mode))
     return entries;
 
   PartitionInfo info;
@@ -330,35 +331,26 @@ DbAcquirePartitionFacts DbDimAnalyzer::compute(DbAcquireNode *node) {
 
   facts.acquire = acquire;
   facts.requestedMode = getRequestedMode(acquire);
-  if (auto contract = getLoweringContract(acquire.getPtr())) {
-    if (contract->pattern.depPattern)
-      facts.depPattern = *contract->pattern.depPattern;
-    facts.supportedBlockHalo = contract->supportsBlockHalo();
-    /// getLoweringContract() already merges acquire-result refinements with the
-    /// source-pointer contract, so consumers can read owner dims from one
-    /// place even when the acquire result only persists a partial refinement.
-    for (unsigned dim : resolveContractOwnerDims(
-             *contract, contract->spatial.ownerDims.size()))
-      facts.stencilOwnerDims.push_back(dim);
-  } else {
-    if (auto depPattern = getEffectiveDepPattern(acquire.getOperation()))
-      facts.depPattern = *depPattern;
-    facts.supportedBlockHalo = hasSupportedBlockHalo(acquire.getOperation());
-    if (auto ownerDims = getStencilOwnerDims(acquire.getOperation())) {
-      for (int64_t dim : *ownerDims) {
-        if (dim >= 0)
-          facts.stencilOwnerDims.push_back(static_cast<unsigned>(dim));
-      }
-    }
-  }
-  facts.accessPattern = node->getAccessPattern();
+  DbAnalysis::AcquireContractSummary canonicalSummary =
+      DbAnalysis::buildCanonicalAcquireContractSummary(acquire);
+  if (canonicalSummary.contract.pattern.depPattern)
+    facts.depPattern = *canonicalSummary.contract.pattern.depPattern;
+  facts.supportedBlockHalo = canonicalSummary.contract.supportsBlockHalo();
+  facts.stencilOwnerDims.assign(canonicalSummary.partitionDims.begin(),
+                                canonicalSummary.partitionDims.end());
+  facts.accessPattern = canonicalSummary.accessPattern != AccessPattern::Unknown
+                            ? canonicalSummary.accessPattern
+                            : node->getAccessPattern();
   facts.hasIndirectAccess = node->hasIndirectAccess();
   facts.hasDirectAccess = node->hasDirectAccess();
-  facts.hasDistributionContract = hasDistributionContract(acquire);
-  facts.explicitCoarseRequest = facts.requestedMode == PartitionMode::coarse &&
-                                acquire.getPartitionIndices().empty() &&
-                                acquire.getPartitionOffsets().empty() &&
-                                acquire.getPartitionSizes().empty();
+  facts.hasDistributionContract =
+      canonicalSummary.hasDistributionContract() ||
+      hasDistributionContract(acquire);
+  facts.explicitCoarseRequest =
+      !requiresWorkerBoundsPlanning(facts.requestedMode) &&
+      acquire.getPartitionIndices().empty() &&
+      acquire.getPartitionOffsets().empty() &&
+      acquire.getPartitionSizes().empty();
   facts.hasBlockHints = !acquire.getPartitionOffsets().empty() ||
                         !acquire.getPartitionSizes().empty();
 

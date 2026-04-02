@@ -87,13 +87,11 @@ static bool canNarrowDirectReadSlice(const LoweringContractInfo &contract,
     return false;
 
   bool blockLikeRequest = usesBlockLayout(facts.requestedMode);
-  bool hasResolvedOwnerDims = !contract.spatial.ownerDims.empty() ||
-                              !facts.stencilOwnerDims.empty() ||
-                              !facts.partitionDims.empty();
+  bool hasCanonicalOwnerLayout = !contract.spatial.ownerDims.empty();
 
   return blockLikeRequest && facts.hasDirectAccess &&
          !facts.hasIndirectAccess && !facts.hasUnmappedPartitionEntry() &&
-         hasResolvedOwnerDims;
+         hasCanonicalOwnerLayout;
 }
 
 static bool refineContractWithFacts(LoweringContractInfo &contract,
@@ -166,24 +164,140 @@ static bool refineContractWithFacts(LoweringContractInfo &contract,
   return changed;
 }
 
+static bool refineContractWithStencilBounds(LoweringContractInfo &contract,
+                                            DbAcquireNode *acqNode) {
+  if (!acqNode || !contract.hasExplicitStencilContract() ||
+      contract.spatial.ownerDims.size() != 1)
+    return false;
+
+  auto minOffsets = contract.getStaticMinOffsets();
+  auto maxOffsets = contract.getStaticMaxOffsets();
+  if (minOffsets && maxOffsets)
+    return false;
+
+  auto bounds = acqNode->getStencilBounds();
+  if (!bounds || !bounds->valid || !bounds->hasHalo())
+    return false;
+
+  contract.spatial.minOffsets.clear();
+  contract.spatial.maxOffsets.clear();
+  contract.spatial.staticMinOffsets = {bounds->minOffset};
+  contract.spatial.staticMaxOffsets = {bounds->maxOffset};
+  contract.analysis.postDbRefined = true;
+  return true;
+}
+
 static LoweringContractInfo buildAcquireContractSeed(DbAcquireOp acquire) {
   LoweringContractInfo contract;
   if (!acquire)
     return contract;
   if (auto explicitContract = getLoweringContract(acquire.getPtr()))
     contract = *explicitContract;
+  if (auto semanticContract = getSemanticContract(acquire.getOperation())) {
+    if (contract.empty())
+      contract = *semanticContract;
+    else
+      mergeLoweringContractInfo(contract, *semanticContract);
+  }
   return contract;
+}
+
+static SmallVector<unsigned, 4>
+resolveContractPartitionDims(const LoweringContractInfo &contract) {
+  if (contract.spatial.ownerDims.empty())
+    return {};
+
+  unsigned rank = 0;
+  for (int64_t dim : contract.spatial.ownerDims) {
+    if (dim >= 0)
+      rank = std::max<unsigned>(rank, static_cast<unsigned>(dim) + 1);
+  }
+  if (rank == 0)
+    rank = static_cast<unsigned>(contract.spatial.ownerDims.size());
+  return resolveContractOwnerDims(contract, rank);
 }
 
 static AccessPattern
 resolveAcquireAccessPattern(const DbAnalysis::AcquireContractSummary &summary) {
+  switch (summary.contract.getEffectiveKind()) {
+  case ContractKind::Stencil:
+    return AccessPattern::Stencil;
+  case ContractKind::Elementwise:
+  case ContractKind::Matmul:
+    return AccessPattern::Uniform;
+  case ContractKind::Triangular:
+  case ContractKind::Unknown:
+    break;
+  }
+
+  if (auto distributionPattern =
+          summary.contract.getEffectiveDistributionPattern()) {
+    switch (*distributionPattern) {
+    case EdtDistributionPattern::stencil:
+      return AccessPattern::Stencil;
+    case EdtDistributionPattern::uniform:
+    case EdtDistributionPattern::matmul:
+      return AccessPattern::Uniform;
+    case EdtDistributionPattern::triangular:
+    case EdtDistributionPattern::unknown:
+      break;
+    }
+  }
+
   if (summary.accessPattern != AccessPattern::Unknown)
     return summary.accessPattern;
-  if (summary.usesStencilSemantics())
-    return AccessPattern::Stencil;
-  if (summary.usesMatmulSemantics())
-    return AccessPattern::Uniform;
   return AccessPattern::Unknown;
+}
+
+static void populateSummaryFromCanonicalContract(
+    DbAnalysis::AcquireContractSummary &summary, DbAcquireOp acquire) {
+  summary.distributionContract =
+      summary.distributionContract || summary.contract.hasDistributionContract();
+
+  if (summary.partitionDims.empty()) {
+    SmallVector<unsigned, 4> contractDims =
+        resolveContractPartitionDims(summary.contract);
+    summary.partitionDims.assign(contractDims.begin(), contractDims.end());
+  }
+
+  summary.blockHints =
+      summary.blockHints || !acquire.getPartitionOffsets().empty() ||
+      !acquire.getPartitionSizes().empty();
+  summary.fineGrainedEntries =
+      summary.fineGrainedEntries || acquire.hasAllFineGrainedEntries() ||
+      !acquire.getPartitionIndices().empty();
+  summary.accessPattern = resolveAcquireAccessPattern(summary);
+}
+
+static void mergeDerivedFactEvidence(
+    DbAnalysis::AcquireContractSummary &summary,
+    const DbAcquirePartitionFacts &facts) {
+  summary.derivedFactEvidence = true;
+  summary.indirectAccess = facts.hasIndirectAccess;
+  summary.directAccess = facts.hasDirectAccess;
+  summary.blockHints = summary.blockHints || facts.hasBlockHints;
+  summary.inferredBlockCapability =
+      summary.inferredBlockCapability || facts.inferredBlock;
+  summary.fineGrainedEntries =
+      summary.fineGrainedEntries || facts.hasFineGrainedEntries();
+  summary.unmappedPartitionEntry =
+      summary.unmappedPartitionEntry || facts.hasUnmappedPartitionEntry();
+  summary.distributedContractEntry =
+      summary.distributedContractEntry || facts.hasDistributedContractEntries();
+  summary.partitionDimsFromPeersFlag =
+      summary.partitionDimsFromPeersFlag ||
+      (summary.partitionDims.empty() && facts.partitionDimsFromPeers);
+
+  if (summary.partitionDims.empty()) {
+    if (!facts.partitionDims.empty()) {
+      summary.partitionDims.assign(facts.partitionDims.begin(),
+                                   facts.partitionDims.end());
+    } else if (auto inferredDim = facts.inferSingleMappedDim()) {
+      summary.partitionDims.push_back(*inferredDim);
+    }
+  }
+
+  summary.derivedAccessPattern = facts.accessPattern;
 }
 
 } // namespace
@@ -613,13 +727,14 @@ static Value refineSizeFromMinInBlock(DbAcquireOp acquire, Value offset,
   return Value();
 }
 
-/// Apply partition dimension information from facts to the summary.
-static void inferPartitionDims(DbAnalysis::AcquirePartitionSummary &summary,
-                               const DbAcquirePartitionFacts *facts) {
-  if (!facts || facts->partitionDims.empty())
+/// Apply partition dimension information from the canonical acquire summary.
+static void
+inferPartitionDims(DbAnalysis::AcquirePartitionSummary &summary,
+                   const DbAnalysis::AcquireContractSummary *contractSummary) {
+  if (!contractSummary || contractSummary->partitionDims.empty())
     return;
-  summary.partitionDims.assign(facts->partitionDims.begin(),
-                               facts->partitionDims.end());
+  summary.partitionDims.assign(contractSummary->partitionDims.begin(),
+                               contractSummary->partitionDims.end());
   if (!summary.partitionOffsets.empty() &&
       summary.partitionDims.size() > summary.partitionOffsets.size()) {
     summary.partitionDims.resize(summary.partitionOffsets.size());
@@ -644,7 +759,8 @@ applyTiling2DPartitionDimsFallback(DbAnalysis::AcquirePartitionSummary &summary,
 /// Analyze partition info for a coarse-mode acquire.
 static void analyzeCoarsePartition(DbAnalysis::AcquirePartitionSummary &info,
                                    DbAcquireOp acquire, DbAcquireNode *acqNode,
-                                   const DbAcquirePartitionFacts *facts) {
+                                   const DbAnalysis::AcquireContractSummary
+                                       *contractSummary) {
   info.isValid = true;
   if (acqNode) {
     Value offset, size;
@@ -663,7 +779,7 @@ static void analyzeCoarsePartition(DbAnalysis::AcquirePartitionSummary &info,
         else if (!info.partitionSizes.empty())
           info.partitionSizes[0] = refined;
       }
-      inferPartitionDims(info, facts);
+      inferPartitionDims(info, contractSummary);
     } else {
       info.isValid = false;
     }
@@ -675,7 +791,8 @@ static void analyzeCoarsePartition(DbAnalysis::AcquirePartitionSummary &info,
 /// Analyze partition info for a fine-grained-mode acquire.
 static void analyzeFineGrainedPartition(
     DbAnalysis::AcquirePartitionSummary &info, DbAcquireOp acquire,
-    const DbAcquirePartitionFacts *facts, OpBuilder &builder) {
+    const DbAnalysis::AcquireContractSummary *contractSummary,
+    OpBuilder &builder) {
   if (!acquire.getPartitionIndices().empty()) {
     for (Value idx : acquire.getPartitionIndices())
       info.partitionOffsets.push_back(idx);
@@ -683,7 +800,7 @@ static void analyzeFineGrainedPartition(
     for (unsigned i = 0; i < info.partitionOffsets.size(); ++i)
       info.partitionSizes.push_back(one);
     info.isValid = true;
-    inferPartitionDims(info, facts);
+    inferPartitionDims(info, contractSummary);
   }
 }
 
@@ -691,7 +808,8 @@ static void analyzeFineGrainedPartition(
 static void
 analyzeBlockStencilPartition(DbAnalysis::AcquirePartitionSummary &info,
                              DbAcquireOp acquire, DbAcquireNode *acqNode,
-                             const DbAcquirePartitionFacts *facts,
+                             const DbAnalysis::AcquireContractSummary
+                                 *contractSummary,
                              OpBuilder &builder) {
   /// Prefer explicit partition_* hints when available. If they were already
   /// materialized into offsets/sizes (post-rewrite acquires), reuse those so
@@ -733,9 +851,10 @@ analyzeBlockStencilPartition(DbAnalysis::AcquirePartitionSummary &info,
         !acquire.getElementOffsets().empty() &&
         acquire.getElementOffsets().size() == acquire.getElementSizes().size();
     if (!trustExplicitHaloSlice) {
-      trustExplicitHaloSlice = facts && facts->supportedBlockHalo &&
-                               facts->accessPattern == AccessPattern::Stencil &&
-                               acquire.getMode() == ArtsMode::in;
+      trustExplicitHaloSlice =
+          contractSummary && acquire.getMode() == ArtsMode::in &&
+          contractSummary->contract.supportsBlockHalo() &&
+          contractSummary->usesStencilSemantics();
     }
 
     if (acqNode && !trustExplicitHaloSlice) {
@@ -794,7 +913,7 @@ analyzeBlockStencilPartition(DbAnalysis::AcquirePartitionSummary &info,
         }
       }
     }
-    inferPartitionDims(info, facts);
+    inferPartitionDims(info, contractSummary);
     applyTiling2DPartitionDimsFallback(info, acquire);
     return;
   }
@@ -805,7 +924,7 @@ analyzeBlockStencilPartition(DbAnalysis::AcquirePartitionSummary &info,
       info.partitionOffsets.push_back(offset);
       info.partitionSizes.push_back(size);
       info.isValid = true;
-      inferPartitionDims(info, facts);
+      inferPartitionDims(info, contractSummary);
       applyTiling2DPartitionDimsFallback(info, acquire);
     } else {
       info.mode = PartitionMode::coarse;
@@ -813,8 +932,9 @@ analyzeBlockStencilPartition(DbAnalysis::AcquirePartitionSummary &info,
   }
 }
 
-DbAnalysis::AcquirePartitionSummary
-DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
+DbAnalysis::AcquirePartitionSummary DbAnalysis::analyzeAcquirePartition(
+    DbAcquireOp acquire, OpBuilder &builder,
+    const AcquireContractSummary *summary) {
   AcquirePartitionSummary info;
   if (!acquire)
     return info;
@@ -838,27 +958,45 @@ DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder) {
     acqNode = graph.getDbAcquireNode(acquire);
   }
 
-  const DbAcquirePartitionFacts *facts = getAcquirePartitionFacts(acquire);
-  if (facts) {
-    info.hasIndirectAccess = facts->hasIndirectAccess;
-    info.hasDistributionContract = facts->hasDistributionContract;
-    info.partitionDimsFromPeers = facts->partitionDimsFromPeers;
+  std::optional<AcquireContractSummary> ownedSummary;
+  if (!summary) {
+    ownedSummary = getAcquireContractSummary(acquire);
+    if (ownedSummary)
+      summary = &*ownedSummary;
+  }
+
+  if (summary) {
+    info.hasIndirectAccess = summary->hasIndirectAccess();
+    info.hasDistributionContract = summary->hasDistributionContract();
+    info.partitionDimsFromPeers = summary->partitionDimsFromPeers();
   }
 
   switch (info.mode) {
   case PartitionMode::coarse:
-    analyzeCoarsePartition(info, acquire, acqNode, facts);
+    analyzeCoarsePartition(info, acquire, acqNode, summary);
     break;
   case PartitionMode::fine_grained:
-    analyzeFineGrainedPartition(info, acquire, facts, builder);
+    analyzeFineGrainedPartition(info, acquire, summary, builder);
     break;
   case PartitionMode::block:
   case PartitionMode::stencil:
-    analyzeBlockStencilPartition(info, acquire, acqNode, facts, builder);
+    analyzeBlockStencilPartition(info, acquire, acqNode, summary, builder);
     break;
   }
 
   return info;
+}
+
+DbAnalysis::AcquireContractSummary
+DbAnalysis::buildCanonicalAcquireContractSummary(DbAcquireOp acquire) {
+  AcquireContractSummary summary;
+  if (!acquire)
+    return summary;
+
+  summary.contract = buildAcquireContractSeed(acquire);
+  populateSummaryFromCanonicalContract(summary, acquire);
+  summary.accessPattern = resolveAcquireAccessPattern(summary);
+  return summary;
 }
 
 std::optional<DbAnalysis::AcquireContractSummary>
@@ -866,22 +1004,31 @@ DbAnalysis::getAcquireContractSummary(DbAcquireOp acquire) {
   if (!acquire)
     return std::nullopt;
 
-  AcquireContractSummary summary;
-  summary.contract = buildAcquireContractSeed(acquire);
+  AcquireContractSummary summary = buildCanonicalAcquireContractSummary(acquire);
 
-  if (const DbAcquirePartitionFacts *facts =
-          getAcquirePartitionFacts(acquire)) {
+  func::FuncOp func = acquire->getParentOfType<func::FuncOp>();
+  DbAcquireNode *acqNode = nullptr;
+  if (func) {
+    DbGraph &graph = getOrCreateGraph(func);
+    acqNode = graph.getDbAcquireNode(acquire);
+  }
+
+  if (acqNode) {
+    const DbAcquirePartitionFacts *facts = &acqNode->getPartitionFacts();
     const bool hasPersistedRefinement = summary.contract.analysis.postDbRefined;
     /// Once post-DB refinement is persisted, treat that contract as
     /// authoritative and avoid rediscovery-driven mutation here.
-    if (!hasPersistedRefinement)
-      summary.refinedByDbAnalysis =
-          refineContractWithFacts(summary.contract, *facts);
+    if (!hasPersistedRefinement) {
+      bool refined = refineContractWithFacts(summary.contract, *facts);
+      refined = refineContractWithStencilBounds(summary.contract, acqNode) ||
+                refined;
+      summary.refinedByDbAnalysis = refined;
+    }
+    populateSummaryFromCanonicalContract(summary, acquire);
     /// FIX-3: Contract persistence is handled by DT-1 in DbTransformsPass
     /// to avoid double-emission when getAcquireContractSummary() is called
     /// multiple times during analysis.
-    summary.facts = facts;
-    summary.accessPattern = facts->accessPattern;
+    mergeDerivedFactEvidence(summary, *facts);
   }
 
   summary.accessPattern = resolveAcquireAccessPattern(summary);
@@ -891,9 +1038,7 @@ DbAnalysis::getAcquireContractSummary(DbAcquireOp acquire) {
 }
 
 AccessPattern DbAnalysis::resolveCanonicalAcquireAccessPattern(
-    DbAcquireOp acquire, const AcquireContractSummary *summary,
-    const DbAcquirePartitionFacts *facts) {
-  (void)facts;
+    DbAcquireOp acquire, const AcquireContractSummary *summary) {
   if (!acquire)
     return AccessPattern::Unknown;
 
@@ -913,9 +1058,7 @@ AccessPattern DbAnalysis::resolveCanonicalAcquireAccessPattern(
 }
 
 ArtsDepPattern DbAnalysis::resolveCanonicalAcquireDepPattern(
-    DbAcquireOp acquire, const AcquireContractSummary *summary,
-    const DbAcquirePartitionFacts *facts) {
-  (void)facts;
+    DbAcquireOp acquire, const AcquireContractSummary *summary) {
   if (!acquire)
     return ArtsDepPattern::unknown;
 
@@ -933,13 +1076,11 @@ ArtsDepPattern DbAnalysis::resolveCanonicalAcquireDepPattern(
 }
 
 bool DbAnalysis::hasCanonicalAcquireStencilSemantics(
-    DbAcquireOp acquire, const AcquireContractSummary *summary,
-    const DbAcquirePartitionFacts *facts) {
-  if (resolveCanonicalAcquireAccessPattern(acquire, summary, facts) ==
+    DbAcquireOp acquire, const AcquireContractSummary *summary) {
+  if (resolveCanonicalAcquireAccessPattern(acquire, summary) ==
       AccessPattern::Stencil)
     return true;
-  ArtsDepPattern depPattern =
-      resolveCanonicalAcquireDepPattern(acquire, summary, facts);
+  ArtsDepPattern depPattern = resolveCanonicalAcquireDepPattern(acquire, summary);
   return isStencilFamilyDepPattern(depPattern);
 }
 
@@ -1047,22 +1188,6 @@ bool DbAnalysis::operationHasPeerInferredPartitionDims(Operation *op) {
     return WalkResult::advance();
   });
   return found;
-}
-
-const DbAcquirePartitionFacts *
-DbAnalysis::getAcquirePartitionFacts(DbAcquireOp acquire) {
-  if (!acquire)
-    return nullptr;
-
-  func::FuncOp func = acquire->getParentOfType<func::FuncOp>();
-  if (!func)
-    return nullptr;
-
-  DbGraph &graph = getOrCreateGraph(func);
-  DbAcquireNode *acqNode = graph.getDbAcquireNode(acquire);
-  if (!acqNode)
-    return nullptr;
-  return &acqNode->getPartitionFacts();
 }
 
 bool DbAnalysis::hasCrossElementSelfReadInLoop(DbAcquireOp acquire,
