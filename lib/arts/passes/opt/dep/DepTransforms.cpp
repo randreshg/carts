@@ -13,6 +13,7 @@
 
 #define GEN_PASS_DEF_DEPTRANSFORMS
 #include "arts/Dialect.h"
+#include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
@@ -24,6 +25,11 @@ ARTS_DEBUG_SETUP(dep_transforms);
 
 using namespace mlir;
 using namespace mlir::arts;
+
+static const AnalysisKind kDepTransforms_reads[] = {
+    AnalysisKind::MetadataManager};
+[[maybe_unused]] static const AnalysisDependencyInfo kDepTransforms_deps = {
+    kDepTransforms_reads, {}};
 
 namespace {
 

@@ -24,6 +24,7 @@
 #include "mlir/Pass/Pass.h"
 /// Arts
 #include "arts/Dialect.h"
+#include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/graphs/db/DbGraph.h"
@@ -62,6 +63,13 @@ static llvm::Statistic numDeadDbRootsEliminated{
 using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
+
+static const AnalysisKind kDbTransforms_reads[] = {AnalysisKind::DbAnalysis,
+                                                    AnalysisKind::EdtAnalysis};
+static const AnalysisKind kDbTransforms_invalidates[] = {
+    AnalysisKind::DbAnalysis};
+[[maybe_unused]] static const AnalysisDependencyInfo kDbTransforms_deps = {
+    kDbTransforms_reads, kDbTransforms_invalidates};
 
 namespace {
 struct DbTransformsPass : public impl::DbTransformsBase<DbTransformsPass> {
@@ -236,16 +244,13 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
       if (rawMaxOffsets)
         rank = std::max(rank, static_cast<unsigned>(rawMaxOffsets->size()));
 
-      std::optional<SmallVector<int64_t, 4>> contractStaticMins;
-      std::optional<SmallVector<int64_t, 4>> contractStaticMaxs;
-      contractStaticMins = contractSummary->contract.getStaticMinOffsets();
-      contractStaticMaxs = contractSummary->contract.getStaticMaxOffsets();
-      if (contractStaticMins)
+      auto contractHalo = projectHaloWindow(contractSummary->contract);
+      if (contractHalo) {
         rank =
-            std::max(rank, static_cast<unsigned>(contractStaticMins->size()));
-      if (contractStaticMaxs)
+            std::max(rank, static_cast<unsigned>(contractHalo->first.size()));
         rank =
-            std::max(rank, static_cast<unsigned>(contractStaticMaxs->size()));
+            std::max(rank, static_cast<unsigned>(contractHalo->second.size()));
+      }
 
       if (rank == 0) {
         ARTS_DEBUG("DT-2: no halo bounds available, skipping");
@@ -268,17 +273,15 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
             "DT-2:   raw max offsets present, size=" << rawMaxOffsets->size());
       }
 
-      if (contractStaticMins) {
-        for (unsigned d = 0; d < contractStaticMins->size() && d < rank; ++d)
-          unifiedMin[d] = std::min(unifiedMin[d], (*contractStaticMins)[d]);
-        ARTS_DEBUG("DT-2:   contract min offsets present, size="
-                   << contractStaticMins->size());
-      }
-      if (contractStaticMaxs) {
-        for (unsigned d = 0; d < contractStaticMaxs->size() && d < rank; ++d)
-          unifiedMax[d] = std::max(unifiedMax[d], (*contractStaticMaxs)[d]);
-        ARTS_DEBUG("DT-2:   contract max offsets present, size="
-                   << contractStaticMaxs->size());
+      if (contractHalo) {
+        auto &[contractMins, contractMaxs] = *contractHalo;
+        for (unsigned d = 0; d < contractMins.size() && d < rank; ++d)
+          unifiedMin[d] = std::min(unifiedMin[d], contractMins[d]);
+        for (unsigned d = 0; d < contractMaxs.size() && d < rank; ++d)
+          unifiedMax[d] = std::max(unifiedMax[d], contractMaxs[d]);
+        ARTS_DEBUG("DT-2:   contract halo present, min_rank="
+                   << contractMins.size()
+                   << " max_rank=" << contractMaxs.size());
       }
 
       bool allZero = true;

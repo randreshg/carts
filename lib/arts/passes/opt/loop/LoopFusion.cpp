@@ -37,6 +37,7 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
+#include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/passes/Passes.h"
@@ -57,6 +58,10 @@ using namespace mlir::arts;
 #include "arts/passes/Passes.h.inc"
 
 ARTS_DEBUG_SETUP(loop_fusion);
+
+static const AnalysisKind kLoopFusion_reads[] = {AnalysisKind::LoopAnalysis};
+[[maybe_unused]] static const AnalysisDependencyInfo kLoopFusion_deps = {
+    kLoopFusion_reads, {}};
 
 namespace {
 struct LoopFusionPass : public ::impl::LoopFusionBase<LoopFusionPass> {

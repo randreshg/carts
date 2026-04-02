@@ -992,6 +992,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
     AcquireRewriteContract rewriteContract =
         deriveAcquireRewriteContract(parentAcqOp);
+    /// TODO: Once AcquireRewriteContract carries a full LoweringContractInfo,
+    /// replace this manual field seeding with combineContracts().
     if (auto loopContract = getSemanticContract(forOp.getOperation())) {
       if (rewriteContract.ownerDims.empty() &&
           !loopContract->spatial.ownerDims.empty())

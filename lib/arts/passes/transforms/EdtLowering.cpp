@@ -26,6 +26,7 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
+#include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/value/ValueAnalysis.h"
@@ -90,6 +91,11 @@ using namespace mlir::func;
 using namespace mlir::arts;
 using AttrNames::Operation::ContinuationForEpoch;
 using AttrNames::Operation::CPSChainId;
+
+static const AnalysisKind kEdtLowering_invalidates[] = {
+    AnalysisKind::DbAnalysis, AnalysisKind::EdtAnalysis};
+[[maybe_unused]] static const AnalysisDependencyInfo kEdtLowering_deps = {
+    {}, kEdtLowering_invalidates};
 
 namespace {
 

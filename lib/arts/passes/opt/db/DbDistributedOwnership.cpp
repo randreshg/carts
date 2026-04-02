@@ -13,6 +13,7 @@
 
 #define GEN_PASS_DEF_DBDISTRIBUTEDOWNERSHIP
 #include "arts/Dialect.h"
+#include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/db/DbDistributedEligibility.h"
@@ -28,6 +29,14 @@ ARTS_DEBUG_SETUP(db_distributed_ownership);
 
 using namespace mlir;
 using namespace mlir::arts;
+
+static const AnalysisKind kDbDistributedOwnership_reads[] = {
+    AnalysisKind::DbAnalysis, AnalysisKind::AbstractMachine};
+static const AnalysisKind kDbDistributedOwnership_invalidates[] = {
+    AnalysisKind::DbAnalysis};
+[[maybe_unused]] static const AnalysisDependencyInfo
+    kDbDistributedOwnership_deps = {kDbDistributedOwnership_reads,
+                                    kDbDistributedOwnership_invalidates};
 
 namespace {
 
