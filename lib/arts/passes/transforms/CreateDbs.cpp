@@ -1400,14 +1400,15 @@ void CreateDbsPass::rewriteUsesEverywhereCoarse(Operation *alloc,
   };
 
   auto shouldRewrite = [&](Operation *user) {
-    if (!user || user == dbAlloc.getOperation() || user->getParentOfType<EdtOp>())
+    if (!user || user == dbAlloc.getOperation() ||
+        user->getParentOfType<EdtOp>())
       return false;
 
     Operation *anchor = getAnchorInDbAllocBlock(user);
     if (!anchor)
       return false;
-    if (anchor->getBlock() == dbAlloc->getBlock() && anchor->isBeforeInBlock(
-                                                         dbAlloc.getOperation()))
+    if (anchor->getBlock() == dbAlloc->getBlock() &&
+        anchor->isBeforeInBlock(dbAlloc.getOperation()))
       return false;
     return true;
   };

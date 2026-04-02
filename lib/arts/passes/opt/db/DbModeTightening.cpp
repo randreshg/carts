@@ -46,6 +46,23 @@ using namespace mlir::arts;
 
 ARTS_DEBUG_SETUP(db_mode_tightening);
 
+#include "llvm/ADT/Statistic.h"
+static llvm::Statistic numAcquiresTightenedToRead{
+    "db_mode_tightening", "NumAcquiresTightenedToRead",
+    "Number of acquires tightened to read mode"};
+static llvm::Statistic numAcquiresTightenedToOut{
+    "db_mode_tightening", "NumAcquiresTightenedToOut",
+    "Number of acquires tightened to out mode"};
+static llvm::Statistic numAllocModesAdjusted{
+    "db_mode_tightening", "NumAllocModesAdjusted",
+    "Number of alloc modes adjusted to match acquire patterns"};
+static llvm::Statistic numDbsMarkedLocalOnly{
+    "db_mode_tightening", "NumDbsMarkedLocalOnly",
+    "Number of DBs annotated as local-only"};
+static llvm::Statistic numDbsMarkedReadOnlyAfterInit{
+    "db_mode_tightening", "NumDbsMarkedReadOnlyAfterInit",
+    "Number of DBs annotated as read-only-after-init"};
+
 namespace {
 
 static bool isProvablyZeroLoopLowerBound(Value lb) {
@@ -503,9 +520,9 @@ bool DbModeTighteningPass::adjustDbModes() {
         DbAllocNode *allocNode = acqNode->getRootAlloc();
         DbAllocOp allocOp = allocNode ? allocNode->getDbAllocOp() : DbAllocOp();
         LoopAnalysis &loopAnalysis = AM->getLoopAnalysis();
-        bool fullWrite = !allocOp ||
-                         writesFullAllocation(dbAnalysis, acqNode, allocOp,
-                                              loopAnalysis);
+        bool fullWrite =
+            !allocOp ||
+            writesFullAllocation(dbAnalysis, acqNode, allocOp, loopAnalysis);
         if (allocOp && !fullWrite) {
           ARTS_DEBUG("AcquireOp: " << acqOp
                                    << " writes partial region; upgrading to "
@@ -522,6 +539,10 @@ bool DbModeTighteningPass::adjustDbModes() {
       ARTS_DEBUG("AcquireOp: " << acqOp << " from " << acqOp.getMode() << " to "
                                << newMode);
       acqOp.setModeAttr(ArtsModeAttr::get(acqOp.getContext(), newMode));
+      if (newMode == ArtsMode::in)
+        ++numAcquiresTightenedToRead;
+      else if (newMode == ArtsMode::out)
+        ++numAcquiresTightenedToOut;
       changed = true;
     });
 
@@ -552,6 +573,7 @@ bool DbModeTighteningPass::adjustDbModes() {
       ARTS_DEBUG("AllocOp: " << allocOp << " from " << currentDbMode << " to "
                              << maxMode);
       allocOp.setModeAttr(ArtsModeAttr::get(allocOp.getContext(), maxMode));
+      ++numAllocModesAdjusted;
 
       changed = true;
     });
@@ -599,6 +621,7 @@ void DbModeTighteningPass::inferDbStorageTypes() {
       if (isLocalOnly) {
         allocOp->setAttr(AttrNames::Operation::LocalOnly,
                          UnitAttr::get(allocOp.getContext()));
+        ++numDbsMarkedLocalOnly;
         ARTS_DEBUG("AllocOp: " << allocOp << " => local_only (PIN candidate)");
       }
 
@@ -648,6 +671,7 @@ void DbModeTighteningPass::inferDbStorageTypes() {
       if (foundWriter && allReadAfterWrite) {
         allocOp->setAttr(AttrNames::Operation::ReadOnlyAfterInit,
                          UnitAttr::get(allocOp.getContext()));
+        ++numDbsMarkedReadOnlyAfterInit;
         ARTS_DEBUG("AllocOp: " << allocOp
                                << " => read_only_after_init (ONCE candidate)");
       }

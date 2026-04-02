@@ -343,9 +343,8 @@ DbAcquirePartitionFacts DbDimAnalyzer::compute(DbAcquireNode *node) {
                             : node->getAccessPattern();
   facts.hasIndirectAccess = node->hasIndirectAccess();
   facts.hasDirectAccess = node->hasDirectAccess();
-  facts.hasDistributionContract =
-      canonicalSummary.hasDistributionContract() ||
-      hasDistributionContract(acquire);
+  facts.hasDistributionContract = canonicalSummary.hasDistributionContract() ||
+                                  hasDistributionContract(acquire);
   facts.explicitCoarseRequest =
       !requiresWorkerBoundsPlanning(facts.requestedMode) &&
       acquire.getPartitionIndices().empty() &&

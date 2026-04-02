@@ -210,7 +210,7 @@ getPartitionRelativeConstantOffset(Value idx, Value partitionOffset) {
     return std::nullopt;
 
   return ValueAnalysis::extractConstantOffset(normalizedIdx, partitionOffset,
-                                             normalizedOffset);
+                                              normalizedOffset);
 }
 
 /// Collect the set of array dimensions that carry non-zero stencil offsets
@@ -302,7 +302,8 @@ static DbAnalysis::AcquireContractSummary
 buildCanonicalAcquireContractSummary(DbAcquireNode *node) {
   if (!node)
     return {};
-  return DbAnalysis::buildCanonicalAcquireContractSummary(node->getDbAcquireOp());
+  return DbAnalysis::buildCanonicalAcquireContractSummary(
+      node->getDbAcquireOp());
 }
 
 ///===----------------------------------------------------------------------===///
@@ -832,8 +833,10 @@ bool PartitionBoundsAnalyzer::needsFullRange(DbAcquireNode *node,
     return true;
   }
 
-  if (!hasStores && accessPattern == AccessPattern::Stencil && partitionOffset) {
-    if (!getPartitionOffsetDim(node, partitionOffset, /*requireLeading=*/true)) {
+  if (!hasStores && accessPattern == AccessPattern::Stencil &&
+      partitionOffset) {
+    if (!getPartitionOffsetDim(node, partitionOffset,
+                               /*requireLeading=*/true)) {
       if (supportedBlockHalo && mappedDim &&
           llvm::is_contained(ownerDims, *mappedDim)) {
         ARTS_DEBUG("  needsFullRange: preserving non-leading stencil dim from "

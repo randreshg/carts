@@ -37,6 +37,17 @@
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(edt_distribution);
 
+#include "llvm/ADT/Statistic.h"
+static llvm::Statistic numLoopsAnnotated{
+    "edt_distribution", "NumLoopsAnnotated",
+    "Number of arts.for loops annotated with distribution strategy"};
+static llvm::Statistic numBlockStrategiesSelected{
+    "edt_distribution", "NumBlockStrategiesSelected",
+    "Number of loops assigned block distribution kind"};
+static llvm::Statistic numCyclicStrategiesSelected{
+    "edt_distribution", "NumCyclicStrategiesSelected",
+    "Number of loops assigned cyclic distribution kind"};
+
 using namespace mlir;
 using namespace mlir::arts;
 
@@ -88,6 +99,11 @@ struct EdtDistributionPass
         /// preserved.
         setEdtDistributionKind(forOp.getOperation(), kind);
         setEdtDistributionPattern(forOp.getOperation(), pattern);
+        ++numLoopsAnnotated;
+        if (kind == EdtDistributionKind::block)
+          ++numBlockStrategiesSelected;
+        else if (kind == EdtDistributionKind::block_cyclic)
+          ++numCyclicStrategiesSelected;
         forOp->setAttr(
             AttrNames::Operation::DistributionVersion,
             IntegerAttr::get(IntegerType::get(forOp.getContext(), 32), 1));

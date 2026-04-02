@@ -53,8 +53,7 @@ static std::optional<int64_t> getExplicitLoopBlockHint(ForOp forOp) {
   if (!forOp)
     return std::nullopt;
   if (auto hint = getPartitioningHint(forOp.getOperation()))
-    if (usesBlockLayout(hint->mode) && hint->blockSize &&
-        *hint->blockSize > 0)
+    if (usesBlockLayout(hint->mode) && hint->blockSize && *hint->blockSize > 0)
       return hint->blockSize;
   return std::nullopt;
 }

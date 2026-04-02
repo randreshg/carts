@@ -44,6 +44,17 @@ using namespace mlir::arts;
 
 ARTS_DEBUG_SETUP(parallel_edt_lowering);
 
+#include "llvm/ADT/Statistic.h"
+static llvm::Statistic numParallelEdtsLowered{
+    "parallel_edt_lowering", "NumParallelEdtsLowered",
+    "Number of parallel EDTs lowered to worker loops"};
+static llvm::Statistic numSingleEdtsGuarded{
+    "parallel_edt_lowering", "NumSingleEdtsGuarded",
+    "Number of single EDTs guarded with worker==0 check"};
+static llvm::Statistic numWorkerLoopsCreated{
+    "parallel_edt_lowering", "NumWorkerLoopsCreated",
+    "Number of worker loops created for parallel EDT dispatch"};
+
 namespace {
 
 /// Replace all arts.runtime_query<parallel_worker_id> operations nested under
@@ -72,6 +83,7 @@ static void guardSingleEdts(Operation *op, Value workerId) {
   if (singleEdts.empty())
     return;
 
+  numSingleEdtsGuarded += singleEdts.size();
   OpBuilder builder(op->getContext());
   for (EdtOp edt : singleEdts) {
     builder.setInsertionPoint(edt);
@@ -291,6 +303,8 @@ private:
     }
 
     parallelEdt.erase();
+    ++numParallelEdtsLowered;
+    ++numWorkerLoopsCreated;
     ARTS_DEBUG("  Lowered parallel EDT into worker loop form");
     return success();
   }

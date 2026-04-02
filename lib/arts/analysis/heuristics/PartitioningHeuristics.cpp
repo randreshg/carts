@@ -447,10 +447,8 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// Fallback: Canonical Coarse
   ///===--------------------------------------------------------------------===///
 
-  ARTS_DEBUG(
-      "Fallback applied: No heuristic matched, using canonical coarse");
-  return PartitioningDecision::coarse(ctx,
-                                      "H1.F: Canonical coarse fallback");
+  ARTS_DEBUG("Fallback applied: No heuristic matched, using canonical coarse");
+  return PartitioningDecision::coarse(ctx, "H1.F: Canonical coarse fallback");
 }
 
 ///===----------------------------------------------------------------------===///

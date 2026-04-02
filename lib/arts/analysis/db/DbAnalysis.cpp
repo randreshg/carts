@@ -251,8 +251,8 @@ resolveAcquireAccessPattern(const DbAnalysis::AcquireContractSummary &summary) {
 
 static void populateSummaryFromCanonicalContract(
     DbAnalysis::AcquireContractSummary &summary, DbAcquireOp acquire) {
-  summary.distributionContract =
-      summary.distributionContract || summary.contract.hasDistributionContract();
+  summary.distributionContract = summary.distributionContract ||
+                                 summary.contract.hasDistributionContract();
 
   if (summary.partitionDims.empty()) {
     SmallVector<unsigned, 4> contractDims =
@@ -260,18 +260,18 @@ static void populateSummaryFromCanonicalContract(
     summary.partitionDims.assign(contractDims.begin(), contractDims.end());
   }
 
-  summary.blockHints =
-      summary.blockHints || !acquire.getPartitionOffsets().empty() ||
-      !acquire.getPartitionSizes().empty();
-  summary.fineGrainedEntries =
-      summary.fineGrainedEntries || acquire.hasAllFineGrainedEntries() ||
-      !acquire.getPartitionIndices().empty();
+  summary.blockHints = summary.blockHints ||
+                       !acquire.getPartitionOffsets().empty() ||
+                       !acquire.getPartitionSizes().empty();
+  summary.fineGrainedEntries = summary.fineGrainedEntries ||
+                               acquire.hasAllFineGrainedEntries() ||
+                               !acquire.getPartitionIndices().empty();
   summary.accessPattern = resolveAcquireAccessPattern(summary);
 }
 
-static void mergeDerivedFactEvidence(
-    DbAnalysis::AcquireContractSummary &summary,
-    const DbAcquirePartitionFacts &facts) {
+static void
+mergeDerivedFactEvidence(DbAnalysis::AcquireContractSummary &summary,
+                         const DbAcquirePartitionFacts &facts) {
   summary.derivedFactEvidence = true;
   summary.indirectAccess = facts.hasIndirectAccess;
   summary.directAccess = facts.hasDirectAccess;
@@ -757,10 +757,10 @@ applyTiling2DPartitionDimsFallback(DbAnalysis::AcquirePartitionSummary &summary,
 }
 
 /// Analyze partition info for a coarse-mode acquire.
-static void analyzeCoarsePartition(DbAnalysis::AcquirePartitionSummary &info,
-                                   DbAcquireOp acquire, DbAcquireNode *acqNode,
-                                   const DbAnalysis::AcquireContractSummary
-                                       *contractSummary) {
+static void analyzeCoarsePartition(
+    DbAnalysis::AcquirePartitionSummary &info, DbAcquireOp acquire,
+    DbAcquireNode *acqNode,
+    const DbAnalysis::AcquireContractSummary *contractSummary) {
   info.isValid = true;
   if (acqNode) {
     Value offset, size;
@@ -805,12 +805,11 @@ static void analyzeFineGrainedPartition(
 }
 
 /// Analyze partition info for a block/stencil-mode acquire.
-static void
-analyzeBlockStencilPartition(DbAnalysis::AcquirePartitionSummary &info,
-                             DbAcquireOp acquire, DbAcquireNode *acqNode,
-                             const DbAnalysis::AcquireContractSummary
-                                 *contractSummary,
-                             OpBuilder &builder) {
+static void analyzeBlockStencilPartition(
+    DbAnalysis::AcquirePartitionSummary &info, DbAcquireOp acquire,
+    DbAcquireNode *acqNode,
+    const DbAnalysis::AcquireContractSummary *contractSummary,
+    OpBuilder &builder) {
   /// Prefer explicit partition_* hints when available. If they were already
   /// materialized into offsets/sizes (post-rewrite acquires), reuse those so
   /// we do not regress valid block acquires back to coarse.
@@ -851,10 +850,10 @@ analyzeBlockStencilPartition(DbAnalysis::AcquirePartitionSummary &info,
         !acquire.getElementOffsets().empty() &&
         acquire.getElementOffsets().size() == acquire.getElementSizes().size();
     if (!trustExplicitHaloSlice) {
-      trustExplicitHaloSlice =
-          contractSummary && acquire.getMode() == ArtsMode::in &&
-          contractSummary->contract.supportsBlockHalo() &&
-          contractSummary->usesStencilSemantics();
+      trustExplicitHaloSlice = contractSummary &&
+                               acquire.getMode() == ArtsMode::in &&
+                               contractSummary->contract.supportsBlockHalo() &&
+                               contractSummary->usesStencilSemantics();
     }
 
     if (acqNode && !trustExplicitHaloSlice) {
@@ -932,9 +931,9 @@ analyzeBlockStencilPartition(DbAnalysis::AcquirePartitionSummary &info,
   }
 }
 
-DbAnalysis::AcquirePartitionSummary DbAnalysis::analyzeAcquirePartition(
-    DbAcquireOp acquire, OpBuilder &builder,
-    const AcquireContractSummary *summary) {
+DbAnalysis::AcquirePartitionSummary
+DbAnalysis::analyzeAcquirePartition(DbAcquireOp acquire, OpBuilder &builder,
+                                    const AcquireContractSummary *summary) {
   AcquirePartitionSummary info;
   if (!acquire)
     return info;
@@ -1004,7 +1003,8 @@ DbAnalysis::getAcquireContractSummary(DbAcquireOp acquire) {
   if (!acquire)
     return std::nullopt;
 
-  AcquireContractSummary summary = buildCanonicalAcquireContractSummary(acquire);
+  AcquireContractSummary summary =
+      buildCanonicalAcquireContractSummary(acquire);
 
   func::FuncOp func = acquire->getParentOfType<func::FuncOp>();
   DbAcquireNode *acqNode = nullptr;
@@ -1020,8 +1020,8 @@ DbAnalysis::getAcquireContractSummary(DbAcquireOp acquire) {
     /// authoritative and avoid rediscovery-driven mutation here.
     if (!hasPersistedRefinement) {
       bool refined = refineContractWithFacts(summary.contract, *facts);
-      refined = refineContractWithStencilBounds(summary.contract, acqNode) ||
-                refined;
+      refined =
+          refineContractWithStencilBounds(summary.contract, acqNode) || refined;
       summary.refinedByDbAnalysis = refined;
     }
     populateSummaryFromCanonicalContract(summary, acquire);
@@ -1080,7 +1080,8 @@ bool DbAnalysis::hasCanonicalAcquireStencilSemantics(
   if (resolveCanonicalAcquireAccessPattern(acquire, summary) ==
       AccessPattern::Stencil)
     return true;
-  ArtsDepPattern depPattern = resolveCanonicalAcquireDepPattern(acquire, summary);
+  ArtsDepPattern depPattern =
+      resolveCanonicalAcquireDepPattern(acquire, summary);
   return isStencilFamilyDepPattern(depPattern);
 }
 

@@ -54,6 +54,23 @@
 #include <optional>
 ARTS_DEBUG_SETUP(convert_openmp_to_arts);
 
+#include "llvm/ADT/Statistic.h"
+static llvm::Statistic numParallelRegionsConverted{
+    "convert_openmp_to_arts", "NumParallelRegionsConverted",
+    "Number of omp.parallel regions converted to arts.edt"};
+static llvm::Statistic numTaskRegionsConverted{
+    "convert_openmp_to_arts", "NumTaskRegionsConverted",
+    "Number of omp.task regions converted to arts.edt"};
+static llvm::Statistic numWsloopsConverted{
+    "convert_openmp_to_arts", "NumWsloopsConverted",
+    "Number of omp.wsloop operations converted to arts.for"};
+static llvm::Statistic numScfParallelsConverted{
+    "convert_openmp_to_arts", "NumScfParallelsConverted",
+    "Number of scf.parallel operations converted to arts.edt + arts.for"};
+static llvm::Statistic numAtomicUpdatesConverted{
+    "convert_openmp_to_arts", "NumAtomicUpdatesConverted",
+    "Number of omp.atomic.update operations converted to arts.atomic_add"};
+
 using namespace mlir;
 using namespace arts;
 
@@ -102,6 +119,7 @@ struct OMPParallelToArtsPattern : public OpRewritePattern<omp::ParallelOp> {
     /// required by OpenMP parallel regions.
 
     /// Remove the original operation.
+    ++numParallelRegionsConverted;
     rewriter.eraseOp(op);
     return success();
   }
@@ -170,6 +188,7 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
     }
 
     /// Remove original scf.parallel
+    ++numScfParallelsConverted;
     rewriter.eraseOp(op);
     return success();
   }
@@ -369,6 +388,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
     blk.getOperations().splice(blk.end(), old.getOperations());
 
     /// Remove the original `omp.task`.
+    ++numTaskRegionsConverted;
     rewriter.eraseOp(op);
     return success();
   }
@@ -518,6 +538,7 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsloopOp> {
     }
 
     /// Remove the original wsloop
+    ++numWsloopsConverted;
     rewriter.eraseOp(op);
     return success();
   }
@@ -636,6 +657,7 @@ struct AtomicUpdateToArtsPattern
     else
       return failure();
 
+    ++numAtomicUpdatesConverted;
     rewriter.replaceOpWithNewOp<arts::AtomicAddOp>(op, addr, inc);
     return success();
   }

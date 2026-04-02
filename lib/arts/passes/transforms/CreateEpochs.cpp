@@ -41,7 +41,18 @@
 #include "mlir/Support/LogicalResult.h"
 
 #include "arts/utils/Debug.h"
+#include "llvm/ADT/Statistic.h"
 ARTS_DEBUG_SETUP(create_epochs);
+
+static llvm::Statistic numSyncEdtsWrapped{
+    "create_epochs", "NumSyncEdtsWrapped",
+    "Number of sync EDTs wrapped in epoch regions"};
+static llvm::Statistic numBarriersProcessed{
+    "create_epochs", "NumBarriersProcessed",
+    "Number of barrier operations converted to epoch regions"};
+static llvm::Statistic numEpochsCreated{
+    "create_epochs", "NumEpochsCreated",
+    "Total number of epoch regions created"};
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -84,6 +95,8 @@ static void processSyncEdtOp(EdtOp op) {
     return;
   ARTS_DEBUG("Processing Sync EDT Op: " << op);
   wrapEdtInEpoch(op, /*demoteToTask=*/true);
+  ++numSyncEdtsWrapped;
+  ++numEpochsCreated;
 }
 
 static bool containsEdtLaunch(Operation *op) {
@@ -147,6 +160,8 @@ static void processBarrierOp(BarrierOp barrier) {
   builder.setInsertionPointToEnd(newBlock);
   builder.create<YieldOp>(loc);
 
+  ++numBarriersProcessed;
+  ++numEpochsCreated;
   barrier.erase();
 }
 

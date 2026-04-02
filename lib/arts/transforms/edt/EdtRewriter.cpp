@@ -220,9 +220,9 @@ computeTaskElementSlice(TaskAcquireSlicePlanInput input) {
       getLoweringContract(input.taskAcquire.getPtr());
   if ((!taskContract || (!taskContract->getStaticBlockShape() &&
                          taskContract->spatial.blockShape.empty())))
-    if (auto opContract = getLoweringContract(input.taskAcquire.getOperation(),
-                                              input.AC->getBuilder(),
-                                              input.loc))
+    if (auto opContract =
+            getLoweringContract(input.taskAcquire.getOperation(),
+                                input.AC->getBuilder(), input.loc))
       taskContract = *opContract;
   if (taskContract) {
     if (auto staticShape = taskContract->getStaticBlockShape()) {
@@ -459,14 +459,14 @@ mlir::arts::planTaskAcquireRewrite(TaskAcquireRewritePlanInput input) {
                     : std::nullopt;
             SmallVector<int64_t, 4> staticTaskBlockShape;
             bool refinedShape = false;
-            if (auto contract = getLoweringContract(input.parentAcquire.getPtr())) {
+            if (auto contract =
+                    getLoweringContract(input.parentAcquire.getPtr())) {
               if (auto inheritedShape = contract->getStaticBlockShape())
                 staticTaskBlockShape.assign(inheritedShape->begin(),
                                             inheritedShape->end());
-            } else if (auto opContract =
-                           getLoweringContract(input.parentAcquire.getOperation(),
-                                               input.AC->getBuilder(),
-                                               input.loc)) {
+            } else if (auto opContract = getLoweringContract(
+                           input.parentAcquire.getOperation(),
+                           input.AC->getBuilder(), input.loc)) {
               if (auto inheritedShape = opContract->getStaticBlockShape())
                 staticTaskBlockShape.assign(inheritedShape->begin(),
                                             inheritedShape->end());
@@ -861,7 +861,8 @@ void mlir::arts::applyTaskAcquireContractMetadata(
     } else {
       if (currentContract->pattern.kind == ContractKind::Unknown)
         currentContract->pattern.kind = opContract->pattern.kind;
-      if (!currentContract->pattern.depPattern && opContract->pattern.depPattern)
+      if (!currentContract->pattern.depPattern &&
+          opContract->pattern.depPattern)
         currentContract->pattern.depPattern = opContract->pattern.depPattern;
       if (!currentContract->pattern.distributionKind &&
           opContract->pattern.distributionKind) {

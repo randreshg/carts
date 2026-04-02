@@ -67,7 +67,7 @@ void DbHeuristics::recordDecision(llvm::StringRef heuristic, bool applied,
               ValueAnalysis::getConstantIndex(offsets[0], offset);
           bool sizeKnown = ValueAnalysis::getConstantIndex(sizes[0], count);
           if (offsetKnown && sizeKnown && allocId != 0) {
-            if (count > kMaxOuterDBs) {
+            if (count > getMaxOuterDBs()) {
               /// Cap: store only the range start for very large DB counts.
               affectedDbIds.push_back(allocId + offset);
             } else {
@@ -91,7 +91,7 @@ void DbHeuristics::recordDecision(llvm::StringRef heuristic, bool applied,
                   allStatic = false;
               }
               if (allStatic) {
-                if (totalDbs > kMaxOuterDBs) {
+                if (totalDbs > getMaxOuterDBs()) {
                   /// Cap: store only the first element for very large DB
                   /// counts.
                   affectedDbIds.push_back(allocId);
@@ -126,8 +126,7 @@ DbHeuristics::choosePartitioning(const PartitioningContext &ctx) {
                                          rationale);
   }
 
-  auto decision =
-      evaluatePartitioningHeuristics(ctx, &machine);
+  auto decision = evaluatePartitioningHeuristics(ctx, &machine);
   std::string heuristicId = extractHeuristicId(decision.rationale);
   recordDecision(heuristicId, true, decision.rationale, nullptr, {});
   return decision;

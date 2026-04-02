@@ -106,8 +106,7 @@ DbHeuristics &AnalysisManager::getDbHeuristics() {
   if (!dbHeuristics) {
     /// Ensure MetadataManager and IdRegistry are initialized first
     auto &idRegistry = getMetadataManager().getIdRegistry();
-    dbHeuristics =
-        std::make_unique<DbHeuristics>(abstractMachine, idRegistry);
+    dbHeuristics = std::make_unique<DbHeuristics>(abstractMachine, idRegistry);
   }
   return *dbHeuristics;
 }
