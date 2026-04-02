@@ -5,6 +5,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include <cstdint>
 #include <optional>
@@ -145,6 +146,35 @@ SmallVector<unsigned, 4>
 resolveContractOwnerDims(const LoweringContractInfo &info, unsigned rank);
 bool prefersContractNDBlock(const LoweringContractInfo &info,
                             unsigned requiredRank = 2);
+
+/// Resolve the effective lowering contract for a value, combining
+/// any explicit LoweringContractOp annotations with semantic operation
+/// attributes. Returns nullopt if no contract information is available.
+std::optional<LoweringContractInfo> resolveEffectiveContract(Value target);
+std::optional<LoweringContractInfo> resolveEffectiveContract(Operation *op);
+
+/// Monotone ordered combine of two contracts. The dest contract is
+/// updated with information from src. Returns Changed if any field
+/// was modified.
+ContractChange combineContracts(LoweringContractInfo &dest,
+                                const LoweringContractInfo &src);
+
+/// Patch specific fields of a contract with deliberate overrides.
+/// Unlike combineContracts (which preserves existing values),
+/// this unconditionally writes the provided fields.
+void patchContract(LoweringContractInfo &contract,
+                   ArrayRef<int64_t> ownerDims = {},
+                   ArrayRef<int64_t> minOffsets = {},
+                   ArrayRef<int64_t> maxOffsets = {});
+
+/// Extract the halo window (min/max offsets) from a contract.
+/// Returns nullopt if the contract has no offset information.
+std::optional<std::pair<SmallVector<int64_t, 4>, SmallVector<int64_t, 4>>>
+projectHaloWindow(const LoweringContractInfo &contract);
+
+/// Check whether a contract has complete halo state (ownerDims +
+/// min/max offsets), meaning it doesn't need graph-backed fallbacks.
+bool hasCompleteHaloState(const LoweringContractInfo &contract);
 
 LoweringContractOp upsertLoweringContract(OpBuilder &builder, Location loc,
                                           Value target,
