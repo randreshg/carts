@@ -35,6 +35,7 @@
 #include "mlir/IR/Visitors.h"
 /// Debug
 #include "arts/utils/Debug.h"
+#include "llvm/ADT/Statistic.h"
 
 using namespace mlir;
 using namespace mlir::func;
@@ -45,6 +46,29 @@ using namespace mlir::arts;
 #include "arts/passes/Passes.h.inc"
 
 ARTS_DEBUG_SETUP(edt_structural_opt);
+
+static llvm::Statistic numExternalAllocasSunkStat{
+    "edt_structural_opt", "NumExternalAllocasSunk",
+    "Number of external allocas cloned into EDT-local storage"};
+static llvm::Statistic numParallelEdtsFusedStat{
+    "edt_structural_opt", "NumParallelEdtsFused",
+    "Number of consecutive parallel EDT pairs fused"};
+static llvm::Statistic numNoDepEdtsInlinedStat{
+    "edt_structural_opt", "NumNoDepEdtsInlined",
+    "Number of dependency-free EDTs inlined"};
+static llvm::Statistic numParallelEdtsConvertedToSyncStat{
+    "edt_structural_opt", "NumParallelEdtsConvertedToSync",
+    "Number of parallel EDTs converted into sync EDTs"};
+static llvm::Statistic numParallelEdtsConvertedWithAcquireRewiringStat{
+    "edt_structural_opt", "NumParallelEdtsConvertedWithAcquireRewiring",
+    "Number of parallel EDTs converted into sync EDTs by rewiring inner "
+    "acquires"};
+static llvm::Statistic numSyncEdtsConvertedToEpochsStat{
+    "edt_structural_opt", "NumSyncEdtsConvertedToEpochs",
+    "Number of top-level sync EDTs converted into epochs"};
+static llvm::Statistic numBarriersRemovedStat{
+    "edt_structural_opt", "NumBarriersRemoved",
+    "Number of redundant barriers removed"};
 
 namespace {
 unsigned sinkExternalAllocasInEdt(EdtOp edt) {
@@ -311,7 +335,9 @@ void EdtStructuralOptPass::runOnOperation() {
   /// categorizes EDTs by type into buckets, then processes each bucket.
 
   module.walk([&](EdtOp edt) {
-    numExternalAllocasSunk += sinkExternalAllocasInEdt(edt);
+    unsigned sunk = sinkExternalAllocasInEdt(edt);
+    numExternalAllocasSunk += sunk;
+    numExternalAllocasSunkStat += sunk;
   });
 
   if (runAnalysis) {
@@ -328,6 +354,7 @@ void EdtStructuralOptPass::runOnOperation() {
     unsigned fusedParallelEdts = processRegionForParallelEdtFusion(
         module.getRegion(), AM->getEdtHeuristics());
     numParallelEdtsFused += fusedParallelEdts;
+    numParallelEdtsFusedStat += fusedParallelEdts;
     if (fusedParallelEdts != 0)
       ARTS_INFO("Parallel EDT fusion applied");
 
@@ -340,7 +367,9 @@ void EdtStructuralOptPass::runOnOperation() {
   /// Re-run alloca sinking after EDT rewrites to keep task-local buffers inside
   /// their regions.
   module.walk([&](EdtOp edt) {
-    numExternalAllocasSunk += sinkExternalAllocasInEdt(edt);
+    unsigned sunk = sinkExternalAllocasInEdt(edt);
+    numExternalAllocasSunk += sunk;
+    numExternalAllocasSunkStat += sunk;
   });
 
   /// Remove ops marked for removal
@@ -396,6 +425,7 @@ bool EdtStructuralOptPass::inlineNoDepEdts() {
 
     edt.erase();
     ++numNoDepEdtsInlined;
+    ++numNoDepEdtsInlinedStat;
     changed = true;
     ARTS_DEBUG("Inlined no-dep EDT");
   }
@@ -432,6 +462,7 @@ bool EdtStructuralOptPass::processSingleEdts() {
     if (parallelOp && parallelOp.getType() == arts::EdtType::parallel) {
       unsigned removed = removeBarriersAroundSingleEdt(parallelOp, singleEdt);
       numBarriersRemoved += removed;
+      numBarriersRemovedStat += removed;
       changed |= removed != 0;
     }
   }
@@ -529,6 +560,7 @@ bool EdtStructuralOptPass::convertParallelIntoSingle(EdtOp &op) {
   opsToRemove.insert(op);
 
   ++numParallelEdtsConvertedToSync;
+  ++numParallelEdtsConvertedToSyncStat;
   ARTS_INFO("Converted parallel EDT into sync EDT");
   return true;
 }
@@ -702,7 +734,9 @@ bool EdtStructuralOptPass::convertParallelWithAcquiresToSync(
   ARTS_DEBUG("Parallel erased successfully");
 
   ++numParallelEdtsConvertedToSync;
+  ++numParallelEdtsConvertedToSyncStat;
   ++numParallelEdtsConvertedWithAcquireRewiring;
+  ++numParallelEdtsConvertedWithAcquireRewiringStat;
   ARTS_INFO("Converted parallel EDT with inner acquires into sync EDT");
   return true;
 }
@@ -848,6 +882,7 @@ bool EdtStructuralOptPass::processSyncTaskEdts() {
     /// Erase the now-empty EdtOp
     op.erase();
     ++numSyncEdtsConvertedToEpochs;
+    ++numSyncEdtsConvertedToEpochsStat;
 
     builder.setInsertionPointAfter(epochOp);
     return true;
@@ -921,6 +956,7 @@ bool EdtStructuralOptPass::removeRedundantBarriersWithGraphs(
     ARTS_INFO("Removing redundant barrier");
     b.erase();
     ++numBarriersRemoved;
+    ++numBarriersRemovedStat;
     changed = true;
   }
   return changed;

@@ -59,7 +59,24 @@
 
 /// Debug
 #include "arts/utils/Debug.h"
+#include "llvm/ADT/Statistic.h"
 ARTS_DEBUG_SETUP(convert_arts_to_llvm);
+
+static llvm::Statistic numEdtOpsConverted{
+    "convert_arts_to_llvm", "NumEdtOpsConverted",
+    "Number of EDT operations converted to LLVM runtime calls"};
+static llvm::Statistic numDbOpsConverted{
+    "convert_arts_to_llvm", "NumDbOpsConverted",
+    "Number of DataBlock operations converted to LLVM runtime calls"};
+static llvm::Statistic numEpochOpsConverted{
+    "convert_arts_to_llvm", "NumEpochOpsConverted",
+    "Number of epoch operations converted to LLVM runtime calls"};
+static llvm::Statistic numDepOpsConverted{
+    "convert_arts_to_llvm", "NumDepOpsConverted",
+    "Number of dependency operations converted to LLVM runtime calls"};
+static llvm::Statistic numMiscOpsConverted{
+    "convert_arts_to_llvm", "NumMiscOpsConverted",
+    "Number of miscellaneous ARTS operations converted"};
 
 using namespace mlir;
 using namespace arts;
@@ -221,6 +238,7 @@ struct RuntimeQueryPattern : public ArtsToLLVMPattern<RuntimeQueryOp> {
                             "by ParallelEdtLowering before LLVM lowering");
     }
     rewriter.replaceOp(op, result);
+    ++numMiscOpsConverted;
     return success();
   }
 };
@@ -240,6 +258,7 @@ struct BarrierPattern : public ArtsToLLVMPattern<BarrierOp> {
     ArtsCodegen::RuntimeCallBuilder RCB(*AC, op.getLoc());
     RCB.callVoid(types::ARTSRTL_arts_yield, {});
     rewriter.eraseOp(op);
+    ++numMiscOpsConverted;
     return success();
   }
 };
@@ -254,6 +273,7 @@ struct GetEdtEpochGuidPattern : public ArtsToLLVMPattern<GetEdtEpochGuidOp> {
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
     Value result = AC->getEdtEpochGuid(op.getLoc());
     rewriter.replaceOp(op, result);
+    ++numEpochOpsConverted;
     return success();
   }
 };
@@ -284,6 +304,7 @@ struct CreateEpochPattern : public ArtsToLLVMPattern<CreateEpochOp> {
     else
       epochGuid = AC->createEpoch(guid, edtSlot, loc);
     rewriter.replaceOp(op, epochGuid);
+    ++numEpochOpsConverted;
     return success();
   }
 };
@@ -298,6 +319,7 @@ struct WaitOnEpochPattern : public ArtsToLLVMPattern<WaitOnEpochOp> {
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
     AC->waitOnHandle(op.getEpochGuid(), op.getLoc());
     rewriter.eraseOp(op);
+    ++numEpochOpsConverted;
     return success();
   }
 };
@@ -324,6 +346,7 @@ struct AtomicAddPattern : public ArtsToLLVMPattern<AtomicAddOp> {
                               value, LLVM::AtomicOrdering::seq_cst);
 
     rewriter.eraseOp(op);
+    ++numMiscOpsConverted;
     return success();
   }
 };
@@ -382,6 +405,7 @@ struct BuiltinObjectSizePattern : public OpRewritePattern<func::CallOp> {
         ValueRange{ptr, min, nullIsUnknown, dynamic});
 
     rewriter.replaceOp(callOp, intrinsicOp.getResults());
+    ++numMiscOpsConverted;
     return success();
   }
 };
@@ -441,6 +465,7 @@ struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
     }
 
     rewriter.eraseOp(op);
+    ++numDepOpsConverted;
     return success();
   }
 
@@ -1356,6 +1381,7 @@ struct IncrementDepPattern : public ArtsToLLVMPattern<IncrementDepOp> {
                                 PatternRewriter &rewriter) const override {
     ARTS_INFO("Erasing IncrementDep Op (latch removed in v2) " << op);
     rewriter.eraseOp(op);
+    ++numDepOpsConverted;
     return success();
   }
 };
@@ -1403,6 +1429,7 @@ struct EdtParamPackPattern : public ArtsToLLVMPattern<EdtParamPackOp> {
     }
 
     rewriter.replaceOp(op, allocOp);
+    ++numEdtOpsConverted;
     return success();
   }
 };
@@ -1430,6 +1457,7 @@ struct EdtParamUnpackPattern : public ArtsToLLVMPattern<EdtParamUnpackOp> {
     }
 
     rewriter.replaceOp(op, newResults);
+    ++numEdtOpsConverted;
     return success();
   }
 };
@@ -1488,6 +1516,7 @@ struct DepGepOpPattern : public ArtsToLLVMPattern<DepGepOp> {
 
     /// Return both: guid pointer and data pointer
     rewriter.replaceOp(op, ValueRange{guidPtr, dataPtr});
+    ++numDepOpsConverted;
     return success();
   }
 };
@@ -1500,6 +1529,7 @@ struct DepDbAcquireOpPattern : public ArtsToLLVMPattern<DepDbAcquireOp> {
                                 PatternRewriter &rewriter) const override {
     auto depStruct = op.getDepStruct();
     rewriter.replaceOp(op, ValueRange{depStruct, depStruct});
+    ++numDepOpsConverted;
     return success();
   }
 };
@@ -1540,6 +1570,7 @@ struct DbGepOpPattern : public ArtsToLLVMPattern<arts::DbGepOp> {
                                              ValueRange{idx64});
 
     rewriter.replaceOp(op, elemAddr);
+    ++numDbOpsConverted;
     return success();
   }
 };
@@ -1615,6 +1646,7 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
     if (createIdAttr)
       callOp->setAttr(AttrNames::Operation::ArtsCreateId, createIdAttr);
     rewriter.replaceOp(op, callOp.getResult(0));
+    ++numEdtOpsConverted;
     return success();
   }
 };
@@ -1664,6 +1696,7 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
               op, nextId, dbSizes, isSingleElement, guidMemref, dbMemref)))
         return failure();
       rewriter.replaceOp(op, {guidMemref, dbMemref});
+      ++numDbOpsConverted;
       return success();
     }
 
@@ -1699,6 +1732,7 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
     }
 
     rewriter.replaceOp(op, {guidMemref, dbMemref});
+    ++numDbOpsConverted;
     return success();
   }
 
@@ -2253,6 +2287,7 @@ struct DbAcquirePattern : public ArtsToLLVMPattern<DbAcquireOp> {
       rewriter.replaceOp(op, ValueRange{sourceGuid, sourcePtr});
     }
 
+    ++numDbOpsConverted;
     return success();
   }
 };
@@ -2266,6 +2301,7 @@ struct DbReleasePattern : public ArtsToLLVMPattern<DbReleaseOp> {
     ARTS_INFO("Lowering DbRelease Op " << op);
     /// Simply erase the DbReleaseOp
     rewriter.eraseOp(op);
+    ++numDbOpsConverted;
     return success();
   }
 };
@@ -2283,6 +2319,7 @@ struct DbFreePattern : public ArtsToLLVMPattern<DbFreeOp> {
     if (!isa_and_nonnull<memref::GetGlobalOp>(rootOp))
       AC->create<memref::DeallocOp>(op.getLoc(), source);
     rewriter.eraseOp(op);
+    ++numDbOpsConverted;
     return success();
   }
 };
@@ -2297,6 +2334,7 @@ struct DbControlPattern : public ArtsToLLVMPattern<DbControlOp> {
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
     /// Control DBs are not supported yet
     rewriter.eraseOp(op);
+    ++numDbOpsConverted;
     return success();
   }
 };
@@ -2317,6 +2355,7 @@ struct DbNumElementsPattern : public ArtsToLLVMPattern<DbNumElementsOp> {
     /// If no sizes are provided, return constant 1 (index)
     if (sizes.empty()) {
       rewriter.replaceOp(op, AC->createIndexConstant(1, loc));
+      ++numDbOpsConverted;
       return success();
     }
 
@@ -2335,6 +2374,7 @@ struct DbNumElementsPattern : public ArtsToLLVMPattern<DbNumElementsOp> {
     }
     if (allConst) {
       rewriter.replaceOp(op, AC->createIndexConstant(folded, loc));
+      ++numDbOpsConverted;
       return success();
     }
 
@@ -2346,6 +2386,7 @@ struct DbNumElementsPattern : public ArtsToLLVMPattern<DbNumElementsOp> {
     }
 
     rewriter.replaceOp(op, productVal);
+    ++numDbOpsConverted;
     return success();
   }
 };
@@ -2361,6 +2402,7 @@ struct AllocPattern : public ArtsToLLVMPattern<AllocOp> {
     auto resultType = dyn_cast<MemRefType>(op.getResult().getType());
     if (!resultType)
       return op.emitError("Expected MemRef type for result");
+    ++numMiscOpsConverted;
     return success();
   }
 };
@@ -2379,6 +2421,7 @@ struct YieldPattern : public ArtsToLLVMPattern<YieldOp> {
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
     /// arts.yield is a terminator that should be erased during conversion
     rewriter.eraseOp(op);
+    ++numMiscOpsConverted;
     return success();
   }
 };
@@ -2392,6 +2435,7 @@ struct UndefPattern : public ArtsToLLVMPattern<UndefOp> {
     ARTS_INFO("Lowering Undef Op " << op);
     Type resultType = op.getResult().getType();
     rewriter.replaceOpWithNewOp<polygeist::UndefOp>(op, resultType);
+    ++numMiscOpsConverted;
     return success();
   }
 };
