@@ -52,6 +52,8 @@
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/RemovalUtils.h"
+/// Statistics
+#include "llvm/ADT/Statistic.h"
 /// Debug
 #include "arts/utils/Debug.h"
 #include <algorithm>
@@ -64,6 +66,25 @@ using namespace mlir::arts;
 #include "arts/passes/Passes.h.inc"
 
 ARTS_DEBUG_SETUP(edt_transforms);
+
+static llvm::Statistic numGranularityAnnotations{
+    "edt_transforms", "NumGranularityAnnotations",
+    "Number of ET-1 granularity annotations"};
+static llvm::Statistic numAffinityAnnotations{
+    "edt_transforms", "NumAffinityAnnotations",
+    "Number of ET-2 affinity annotations"};
+static llvm::Statistic numReductionAnnotations{
+    "edt_transforms", "NumReductionAnnotations",
+    "Number of ET-5 reduction strategy annotations"};
+static llvm::Statistic numNarrowedDeps{
+    "edt_transforms", "NumNarrowedDeps",
+    "Number of ET-3 narrowed dependency chains"};
+static llvm::Statistic numCriticalPathAnnotations{
+    "edt_transforms", "NumCriticalPathAnnotations",
+    "Number of ET-6 critical path annotations"};
+static llvm::Statistic numDeadDepsRemoved{
+    "edt_transforms", "NumDeadDepsRemoved",
+    "Number of EXT-EDT-2 dead deps removed"};
 
 namespace {
 
@@ -90,8 +111,7 @@ constexpr llvm::StringLiteral Tree = "tree";
 constexpr llvm::StringLiteral LocalAccumulate = "local_accumulate";
 } // namespace ReductionStrategyNames
 
-struct EdtTransformsPass
-    : public ::impl::EdtTransformsBase<EdtTransformsPass> {
+struct EdtTransformsPass : public ::impl::EdtTransformsBase<EdtTransformsPass> {
   EdtTransformsPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }
@@ -182,6 +202,7 @@ void EdtTransformsPass::runOnOperation() {
   /// Trivially small tasks (< threshold) emit a diagnostic warning.
   ///===--------------------------------------------------------------------===///
   unsigned et1Count = estimateTaskGranularity();
+  numGranularityAnnotations += et1Count;
   if (et1Count > 0)
     ARTS_INFO("ET-1: annotated " << et1Count
                                  << " EDTs with estimated task cost");
@@ -196,6 +217,7 @@ void EdtTransformsPass::runOnOperation() {
   /// scheduling/lowering can place the task near its dominant data.
   ///===--------------------------------------------------------------------===///
   unsigned et2Count = placeEdtsByAffinity();
+  numAffinityAnnotations += et2Count;
   if (et2Count > 0)
     ARTS_INFO("ET-2: annotated " << et2Count
                                  << " EDTs with data affinity placement");
@@ -209,6 +231,7 @@ void EdtTransformsPass::runOnOperation() {
   /// local_accumulate lowering.
   ///===--------------------------------------------------------------------===///
   unsigned et5Count = selectReductionStrategies();
+  numReductionAnnotations += et5Count;
   if (et5Count > 0)
     ARTS_INFO("ET-5: annotated " << et5Count
                                  << " EDTs with reduction strategy");
@@ -222,6 +245,7 @@ void EdtTransformsPass::runOnOperation() {
   /// arts_add_dependence_at (ESD) instead of a full-DB dependency.
   ///===--------------------------------------------------------------------===///
   unsigned et3Count = narrowDepChains();
+  numNarrowedDeps += et3Count;
   if (et3Count > 0)
     ARTS_INFO("ET-3: narrowed " << et3Count
                                 << " dependency chains for stencil/wavefront");
@@ -234,6 +258,7 @@ void EdtTransformsPass::runOnOperation() {
   /// and can unlock further DbScratchElimination.
   ///===--------------------------------------------------------------------===///
   unsigned extEdt2Count = eliminateDeadDependencies();
+  numDeadDepsRemoved += extEdt2Count;
   if (extEdt2Count > 0)
     ARTS_INFO("EXT-EDT-2: eliminated " << extEdt2Count << " dead dependencies");
 
@@ -266,6 +291,7 @@ EdtTransformsPass::ModuleEdtMetrics EdtTransformsPass::gatherModuleEdtFacts() {
     });
 
     unsigned et6Count = analyzeCriticalPath(func, edtGraph);
+    numCriticalPathAnnotations += et6Count;
     ARTS_DEBUG("ET-6: Annotated " << et6Count
                                   << " EDTs with critical path distance");
   });
@@ -338,6 +364,26 @@ unsigned EdtTransformsPass::estimateTaskGranularity() {
 ///===----------------------------------------------------------------------===///
 unsigned EdtTransformsPass::analyzeCriticalPath(func::FuncOp func,
                                                 EdtGraph &edtGraph) {
+  auto i64Type = IntegerType::get(func.getContext(), 64);
+  auto annotateNode = [&](EdtNode *node, int64_t dist, unsigned &annotated) {
+    EdtOp edt = node->getEdtOp();
+
+    /// Set critical_path_distance directly on the EdtOp.
+    edt->setAttr(AttrNames::Operation::Contract::CriticalPathDistance,
+                 IntegerAttr::get(i64Type, dist));
+
+    /// Also update LoweringContractOps on the EDT's dependency acquires.
+    annotateEdtDepContracts(edt, [&](DbAcquireOp /*acquire*/, Value /*ptr*/,
+                                     LoweringContractInfo &info) {
+      info.analysis.criticalPathDistance = dist;
+    });
+
+    ++annotated;
+
+    ARTS_DEBUG("ET-6: EDT [" << node->getHierId()
+                             << "] critical_path_distance=" << dist);
+  };
+
   /// Collect all EDT nodes from the graph.
   SmallVector<EdtNode *, 16> allNodes;
   edtGraph.forEachNode([&](NodeBase *base) {
@@ -430,27 +476,26 @@ unsigned EdtTransformsPass::analyzeCriticalPath(func::FuncOp func,
   /// Annotate each EDT with the critical_path_distance attribute and
   /// update any LoweringContractOps on its dependencies.
   unsigned annotated = 0;
-  auto *ctx = func.getContext();
-  auto i64Type = IntegerType::get(ctx, 64);
-
   for (auto *node : topoOrder) {
-    int64_t dist = distance[node];
-    EdtOp edt = node->getEdtOp();
+    annotateNode(node, distance[node], annotated);
+  }
 
-    /// Set critical_path_distance directly on the EdtOp.
-    edt->setAttr(AttrNames::Operation::Contract::CriticalPathDistance,
-                 IntegerAttr::get(i64Type, dist));
+  if (topoOrder.size() != allNodes.size()) {
+    DenseSet<EdtNode *> visitedNodes(topoOrder.begin(), topoOrder.end());
+    SmallVector<EdtNode *, 8> leftoverNodes;
+    leftoverNodes.reserve(allNodes.size() - topoOrder.size());
 
-    /// Also update LoweringContractOps on the EDT's dependency acquires.
-    annotateEdtDepContracts(edt, [&](DbAcquireOp /*acquire*/, Value /*ptr*/,
-                                     LoweringContractInfo &info) {
-      info.criticalPathDistance = dist;
+    for (auto *node : allNodes) {
+      if (!visitedNodes.contains(node))
+        leftoverNodes.push_back(node);
+    }
+
+    llvm::sort(leftoverNodes, [](EdtNode *a, EdtNode *b) {
+      return a->getHierId() < b->getHierId();
     });
 
-    ++annotated;
-
-    ARTS_DEBUG("ET-6: EDT [" << node->getHierId()
-                             << "] critical_path_distance=" << dist);
+    for (auto *node : leftoverNodes)
+      annotateNode(node, /*dist=*/0, annotated);
   }
 
   if (annotated > 0) {
@@ -687,8 +732,8 @@ static void markDepNarrowable(DbAcquireOp acquire, Value ptr,
   } else {
     /// No existing contract -- create one with the marker.
     LoweringContractInfo newInfo;
-    if (!newInfo.depPattern && edtDepPattern)
-      newInfo.depPattern = *edtDepPattern;
+    if (!newInfo.pattern.depPattern && edtDepPattern)
+      newInfo.pattern.depPattern = *edtDepPattern;
     OpBuilder builder(acquire.getContext());
     builder.setInsertionPointAfter(acquire.getOperation());
     auto newContractOp =

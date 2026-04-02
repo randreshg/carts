@@ -162,7 +162,10 @@ Distribution is now a dedicated pipeline step:
 
 - `concurrency`: prepares parallel structure
 - `edt-distribution`: runs `EdtDistributionPass`, annotates distribution attrs, then `ForLowering`
-- `concurrency-opt`: DB partitioning and downstream optimization
+- `post-distribution-cleanup`: structural cleanup after loop lowering
+- `db-partitioning`: DB partition planning and ownership materialization
+- `post-db-refinement`: DB mode tightening, EDT transforms, and contract validation
+- `late-concurrency-cleanup`: strip-mining, hoisting, and late cleanup
 
 Key files:
 - `tools/compile/Compile.cpp`
@@ -173,7 +176,7 @@ Useful stop points:
 ```bash
 carts-compile input.mlir --pipeline=concurrency
 carts-compile input.mlir --pipeline=edt-distribution
-carts-compile input.mlir --pipeline=concurrency-opt
+carts-compile input.mlir --pipeline=db-partitioning
 ```
 
 ## 6. Distributed DB Ownership

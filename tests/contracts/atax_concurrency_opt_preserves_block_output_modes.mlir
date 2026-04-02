@@ -1,4 +1,4 @@
-// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %S/../../tools/carts compile %S/../../external/carts-benchmarks/polybench/atax/atax.c --pipeline concurrency-opt --arts-config %S/inputs/arts_2t.cfg -- -I%S/../../external/carts-benchmarks/polybench/atax -I%S/../../external/carts-benchmarks/polybench/common -I%S/../../external/carts-benchmarks/polybench/utilities -D_GNU_SOURCE -lm >/dev/null && cat %t.compile/atax.concurrency-opt.mlir' | %FileCheck %s
+// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %carts compile %S/../../external/carts-benchmarks/polybench/atax/atax.c --pipeline post-db-refinement --arts-config %S/inputs/arts_2t.cfg -- -I%S/../../external/carts-benchmarks/polybench/atax -I%S/../../external/carts-benchmarks/polybench/common -I%S/../../external/carts-benchmarks/polybench/utilities -D_GNU_SOURCE -lm >/dev/null && cat %t.compile/atax.post-db-refinement.mlir' | %FileCheck %s
 
 // The blocked `tmp` and `y` outputs initialize a worker-local slice and then
 // reload only values produced earlier in the same EDT. Keep both acquires in

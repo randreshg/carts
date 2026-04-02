@@ -1,4 +1,4 @@
-// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %S/../../../../tools/carts compile %S/../../../../external/carts-benchmarks/specfem3d/stress/stress_update.c --pipeline concurrency-opt --arts-config %S/../../../examples/arts.cfg >/dev/null && cat %t.compile/stress_update.concurrency-opt.mlir' | %FileCheck %s
+// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %carts compile %S/../../../../external/carts-benchmarks/specfem3d/stress/stress_update.c --pipeline db-partitioning --arts-config %S/../../../examples/arts.cfg >/dev/null && cat %t.compile/stress_update.db-partitioning.mlir' | %FileCheck %s
 
 // Verify the block fallback keeps the owner slice for inout acquires while
 // widening the read-only stencil acquire window by the halo width.

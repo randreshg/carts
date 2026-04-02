@@ -201,8 +201,7 @@ private:
   /// Before: outerLoop { firstInner { secondInner { body } } }
   /// After:  outerLoop { secondInner { firstInner { body } } }
   bool interchangeInnerLoops(ForOp outerLoop, scf::ForOp firstInner,
-                             scf::ForOp secondInner,
-                             MetadataManager &manager) {
+                             scf::ForOp secondInner, MetadataManager &manager) {
     ARTS_DEBUG("Interchanging inner loops");
 
     /// Check if this is an imperfect nest (has init ops before inner loop)

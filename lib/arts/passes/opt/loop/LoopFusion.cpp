@@ -40,13 +40,13 @@
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/Pass/Pass.h"
 
 #include "arts/utils/Debug.h"
 
@@ -60,9 +60,43 @@ ARTS_DEBUG_SETUP(loop_fusion);
 
 namespace {
 struct LoopFusionPass : public ::impl::LoopFusionBase<LoopFusionPass> {
-  LoopFusionPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
+  LoopFusionPass(mlir::arts::AnalysisManager *AM)
+      : AM(AM), numAdjacentLoopPairsExamined(
+                    this, "num-adjacent-loop-pairs-examined",
+                    "Number of adjacent arts.for pairs examined for fusion"),
+        numPairsBlockedByBarrier(
+            this, "num-loop-pairs-blocked-by-barrier",
+            "Number of adjacent arts.for pairs skipped because a barrier "
+            "separated them"),
+        numPairsRejectedByBounds(
+            this, "num-loop-pairs-rejected-by-bounds",
+            "Number of adjacent arts.for pairs rejected due to incompatible "
+            "bounds"),
+        numPairsRejectedByDependence(
+            this, "num-loop-pairs-rejected-by-dependence",
+            "Number of adjacent arts.for pairs rejected by dependence checks"),
+        numLoopsFused(this, "num-loops-fused",
+                      "Number of arts.for loops fused") {
     assert(AM && "AnalysisManager must be provided externally");
   }
+  LoopFusionPass(const LoopFusionPass &other)
+      : ::impl::LoopFusionBase<LoopFusionPass>(other), AM(other.AM),
+        numAdjacentLoopPairsExamined(
+            this, "num-adjacent-loop-pairs-examined",
+            "Number of adjacent arts.for pairs examined for fusion"),
+        numPairsBlockedByBarrier(
+            this, "num-loop-pairs-blocked-by-barrier",
+            "Number of adjacent arts.for pairs skipped because a barrier "
+            "separated them"),
+        numPairsRejectedByBounds(
+            this, "num-loop-pairs-rejected-by-bounds",
+            "Number of adjacent arts.for pairs rejected due to incompatible "
+            "bounds"),
+        numPairsRejectedByDependence(
+            this, "num-loop-pairs-rejected-by-dependence",
+            "Number of adjacent arts.for pairs rejected by dependence checks"),
+        numLoopsFused(this, "num-loops-fused",
+                      "Number of arts.for loops fused") {}
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
@@ -86,6 +120,7 @@ struct LoopFusionPass : public ::impl::LoopFusionBase<LoopFusionPass> {
         for (size_t i = 0; i + 1 < forOps.size(); ++i) {
           ForOp a = forOps[i];
           ForOp b = forOps[i + 1];
+          ++numAdjacentLoopPairsExamined;
 
           /// Skip if barrier between them
           Operation *next = a->getNextNode();
@@ -94,13 +129,25 @@ struct LoopFusionPass : public ::impl::LoopFusionBase<LoopFusionPass> {
               break;
             next = next->getNextNode();
           }
-          if (next != b.getOperation())
+          if (next != b.getOperation()) {
+            ++numPairsBlockedByBarrier;
             continue;
+          }
 
-          if (haveCompatibleBounds(a, b) &&
-              areIndependent(a, b, loopAnalysis)) {
+          if (!haveCompatibleBounds(a, b)) {
+            ++numPairsRejectedByBounds;
+            continue;
+          }
+
+          if (!areIndependent(a, b, loopAnalysis)) {
+            ++numPairsRejectedByDependence;
+            continue;
+          }
+
+          {
             ARTS_INFO("Fusing independent for loops");
             fuseForOps(a, b);
+            ++numLoopsFused;
             forOps.erase(forOps.begin() + i + 1);
             changed = true;
             break;
@@ -112,6 +159,11 @@ struct LoopFusionPass : public ::impl::LoopFusionBase<LoopFusionPass> {
 
 private:
   mlir::arts::AnalysisManager *AM = nullptr;
+  Statistic numAdjacentLoopPairsExamined;
+  Statistic numPairsBlockedByBarrier;
+  Statistic numPairsRejectedByBounds;
+  Statistic numPairsRejectedByDependence;
+  Statistic numLoopsFused;
 
   bool haveCompatibleBounds(ForOp a, ForOp b);
   bool areIndependent(ForOp a, ForOp b, LoopAnalysis &loopAnalysis);

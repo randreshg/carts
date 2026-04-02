@@ -4,8 +4,12 @@
 /// This file defines the public DB analysis facade.
 ///
 /// Responsibility split:
-///   - DbGraph / DbNode own canonical graph-backed facts.
-///   - DbAnalysis exposes pass-facing queries and lightweight summaries.
+///   - `arts.lowering_contract` and typed DB IR attributes are the canonical
+///     semantic contract.
+///   - DbGraph / DbNode cache derived graph summaries and legality evidence
+///     projected from that IR.
+///   - DbAnalysis exposes pass-facing queries that reconcile the canonical IR
+///     contract with those derived caches.
 ///   - Controller passes should ask DbAnalysis first instead of rebuilding DB
 ///     reasoning directly from raw IR or raw node methods.
 ///==========================================================================///
@@ -37,8 +41,8 @@ class LoopAnalysis;
 class DbAnalysis : public ArtsAnalysis {
 public:
   /// Pass-facing summary used by DbPartitioning while assembling heuristic and
-  /// planner inputs. This is intentionally derived from graph-backed facts
-  /// rather than a second canonical storage class.
+  /// planner inputs. This is a transient query result synthesized from the
+  /// canonical IR contract plus graph-derived caches, not a second authority.
   struct AcquirePartitionSummary {
     PartitionMode mode = PartitionMode::coarse;
     SmallVector<Value> partitionOffsets;
@@ -50,11 +54,12 @@ public:
     bool partitionDimsFromPeers = false;
   };
 
-  /// DB-side refined contract view.
-  /// This keeps the same contract vocabulary used by lowering, but lets
-  /// DbAnalysis strengthen incomplete contracts with graph-backed facts after
-  /// DB creation. Pre-DB pattern passes seed the contract; post-DB analysis
-  /// may refine it, but should not invent a separate contract language.
+  /// Canonical pass-facing contract view for an acquire.
+  /// This keeps the same contract vocabulary used by lowering, while letting
+  /// DbAnalysis strengthen incomplete IR contracts with graph-derived evidence
+  /// after DB creation. Pre-DB pattern passes seed the contract; post-DB
+  /// analysis may refine it, but should not invent a separate contract
+  /// language or ask downstream consumers to reason over graph-only facts.
   struct AcquireContractSummary {
     LoweringContractInfo contract;
     bool refinedByDbAnalysis = false;
@@ -62,8 +67,10 @@ public:
     /// post-hoc refinement (stencil/matmul fallback) that may differ from
     /// the raw facts value.
     AccessPattern accessPattern = AccessPattern::Unknown;
-    /// Pointer to graph-owned facts. Valid for the lifetime of the DbGraph
-    /// (i.e., within a single pass's runOnOperation()).
+    /// Pointer to the derived graph cache that supported refinement. Valid for
+    /// the lifetime of the DbGraph (i.e., within a single pass's
+    /// runOnOperation()). Consumers may use this for legality/detail queries,
+    /// but the semantic lowering contract remains `contract`.
     const DbAcquirePartitionFacts *facts = nullptr;
 
     /// Delegating accessors — null-safe, return conservative defaults.
@@ -81,9 +88,9 @@ public:
       return facts && facts->hasDistributedContractEntries();
     }
     bool hasDistributionContract() const {
-      return (facts && facts->hasDistributionContract) ||
-             contract.distributionKind || contract.distributionPattern ||
-             contract.distributionVersion;
+      return contract.pattern.distributionKind ||
+             contract.pattern.distributionPattern ||
+             contract.pattern.distributionVersion;
     }
     bool partitionDimsFromPeers() const {
       return facts && facts->partitionDimsFromPeers;
@@ -124,7 +131,7 @@ public:
   };
 
   /// Loop-facing summary for H2 distribution selection and related consumers.
-  /// This is a query result, not canonical ownership of DB facts.
+  /// This is a query result, not canonical storage for DB semantics.
   struct LoopDbAccessSummary {
     llvm::DenseMap<Operation *, DbAccessPattern> allocPatterns;
     bool hasStencilOffset = false;
@@ -161,7 +168,6 @@ public:
                                                   OpBuilder &builder);
   std::optional<AcquireContractSummary>
   getAcquireContractSummary(DbAcquireOp acquire);
-  AcquireRewriteContract getAcquireRewriteContract(DbAcquireOp acquire);
   std::optional<unsigned> inferLoopMappedDim(DbAcquireOp acquire, ForOp forOp);
   std::optional<unsigned> inferLoopMappedDim(Value dep, ForOp forOp);
   AccessPattern resolveCanonicalAcquireAccessPattern(
@@ -182,9 +188,10 @@ public:
                                              ArtsMode requestedMode);
   bool operationHasDistributedDbContract(Operation *op);
   bool operationHasPeerInferredPartitionDims(Operation *op);
-  /// Raw partition facts remain available for legality/detail consumers inside
-  /// DB analysis and controller plumbing. Semantic pattern/lowering decisions
-  /// should prefer getAcquireContractSummary().
+  /// Raw partition facts remain available as a derived cache for
+  /// legality/detail consumers inside DB analysis and controller plumbing.
+  /// Semantic pattern and lowering decisions should prefer
+  /// getAcquireContractSummary().
   const DbAcquirePartitionFacts *getAcquirePartitionFacts(DbAcquireOp acquire);
   bool hasCrossElementSelfReadInLoop(DbAcquireOp acquire, ForOp loopOp);
 

@@ -1,4 +1,4 @@
-// RUN: %carts-compile %S/../../inputs/uniform_block.mlir --O3 --arts-config %S/../../../examples/arts.cfg --pipeline concurrency-opt | %FileCheck %s
+// RUN: %carts-compile %S/../../inputs/uniform_block.mlir --O3 --arts-config %S/../../../examples/arts.cfg --pipeline db-partitioning | %FileCheck %s
 
 // Verify that uniform direct writes are inferred as block/uniform.
 // CHECK: arts.db_alloc[{{.*}}<block>, <uniform>{{.*}}]

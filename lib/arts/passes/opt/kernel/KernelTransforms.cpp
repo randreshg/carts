@@ -58,9 +58,8 @@ struct KernelTransformsPass
     SmallVector<std::unique_ptr<KernelPatternTransform>> patterns;
     patterns.push_back(createStencilTilingNDPattern());
     if (enableMatmul) {
-      patterns.push_back(
-          createMatmulReductionPattern(enableTiling, tileJ, minTripCount,
-                                       metadataManager));
+      patterns.push_back(createMatmulReductionPattern(
+          enableTiling, tileJ, minTripCount, metadataManager));
     }
 
     SmallVector<ForOp, 16> artsFors;

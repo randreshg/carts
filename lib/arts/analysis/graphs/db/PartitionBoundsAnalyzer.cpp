@@ -20,6 +20,7 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/PartitionPredicates.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -92,10 +93,8 @@ AcquirePartitionHints mlir::arts::extractPartitionHints(DbAcquireOp acquire) {
   /// non-coarse partition mode is set (already-partitioned acquires).
   if (!hints.offset && !hints.size) {
     if (auto mode = acquire.getPartitionMode();
-        mode &&
-        (*mode == PartitionMode::block || *mode == PartitionMode::stencil ||
-         *mode == PartitionMode::fine_grained)) {
-      bool preferDbIndices = (*mode == PartitionMode::fine_grained);
+        mode && requiresWorkerBoundsPlanning(*mode)) {
+      bool preferDbIndices = usesElementLayout(*mode);
       if (preferDbIndices && !acquire.getIndices().empty())
         hints.offset = pickRepresentativeValue(acquire.getIndices(), idx);
       else if (!acquire.getOffsets().empty())
@@ -736,14 +735,14 @@ bool PartitionBoundsAnalyzer::needsFullRange(DbAcquireNode *node,
       contract ? contract->supportsBlockHalo()
                : (acquire && hasSupportedBlockHalo(acquire.getOperation()));
   SmallVector<unsigned, 4> ownerDims;
-  if (contract && !contract->ownerDims.empty()) {
+  if (contract && !contract->spatial.ownerDims.empty()) {
     unsigned rank = 0;
-    for (int64_t dim : contract->ownerDims) {
+    for (int64_t dim : contract->spatial.ownerDims) {
       if (dim >= 0)
         rank = std::max<unsigned>(rank, static_cast<unsigned>(dim) + 1);
     }
     if (rank == 0)
-      rank = static_cast<unsigned>(contract->ownerDims.size());
+      rank = static_cast<unsigned>(contract->spatial.ownerDims.size());
     ownerDims = resolveContractOwnerDims(*contract, rank);
   } else if (acquire) {
     if (auto attrOwnerDims = getStencilOwnerDims(acquire.getOperation())) {
@@ -875,9 +874,7 @@ bool PartitionBoundsAnalyzer::shouldPreserveDistributedContract(
     return false;
 
   auto acquireMode = getPartitionMode(acquire.getOperation());
-  bool explicitBlockMode =
-      acquireMode && (*acquireMode == PartitionMode::block ||
-                      *acquireMode == PartitionMode::stencil);
+  bool explicitBlockMode = acquireMode && usesBlockLayout(*acquireMode);
   if (!explicitBlockMode)
     return false;
 
@@ -928,7 +925,7 @@ bool PartitionBoundsAnalyzer::shouldPreserveDistributedContract(
   };
   bool hasExplicitOwnerDims = false;
   if (auto contract = getLoweringContract(acquire.getPtr()))
-    hasExplicitOwnerDims = !contract->ownerDims.empty();
+    hasExplicitOwnerDims = !contract->spatial.ownerDims.empty();
   if (!hasExplicitOwnerDims) {
     if (auto ownerDims = getStencilOwnerDims(acquire.getOperation()))
       hasExplicitOwnerDims = !ownerDims->empty();

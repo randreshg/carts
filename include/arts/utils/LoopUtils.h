@@ -14,6 +14,7 @@
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include <optional>
 
 namespace mlir {
@@ -81,8 +82,7 @@ inline bool haveSameBounds(ForOp a, ForOp b) {
 inline bool isLoopInductionVar(Value value) {
   if (auto arg = dyn_cast<BlockArgument>(value)) {
     Operation *parent = arg.getOwner()->getParentOp();
-    return parent && isa<affine::AffineForOp, scf::ForOp, scf::ParallelOp,
-                         scf::ForallOp, arts::ForOp>(parent);
+    return parent && isa<LoopLikeOpInterface>(parent);
   }
   return false;
 }
@@ -106,8 +106,7 @@ bool containsLoop(EdtOp edt);
 /// scf::ParallelOp, scf::ForallOp, and arts::ForOp.
 inline Operation *findNearestLoop(Operation *op) {
   for (Operation *cur = op->getParentOp(); cur; cur = cur->getParentOp()) {
-    if (isa<scf::ForOp, affine::AffineForOp, omp::WsloopOp, scf::ParallelOp,
-            scf::ForallOp, arts::ForOp>(cur))
+    if (isa<LoopLikeOpInterface>(cur) || isa<omp::WsloopOp>(cur))
       return cur;
   }
   return nullptr;

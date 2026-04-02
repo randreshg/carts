@@ -51,7 +51,8 @@ struct EpochAccessSummary {
   void mergeFrom(const EpochAccessSummary &other) {
     for (const auto &entry : other.allocModes)
       record(entry.first, entry.second);
-    acquireAllocs.insert(other.acquireAllocs.begin(), other.acquireAllocs.end());
+    acquireAllocs.insert(other.acquireAllocs.begin(),
+                         other.acquireAllocs.end());
   }
 
   bool empty() const { return allocModes.empty(); }

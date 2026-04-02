@@ -49,6 +49,7 @@ from scripts.arts_config import (
 from scripts.platform import get_config
 from scripts import (
     ARTS_CONFIG_FILENAME,
+    carts_cli_command,
     format_failed,
     format_passed,
     format_skipped,
@@ -216,24 +217,17 @@ def run_carts_execute(
     """
     start_time = time.time()
 
-    # Find carts CLI
-    config = get_config()
-    carts_cli = config.carts_dir / "tools" / "carts"
-
-    if not carts_cli.is_file():
-        return False, 0.0, "carts CLI not found"
-
     # Build command
     source_name = example.source_file.name
-    cmd = [str(carts_cli), "compile", source_name, "-O3"]
+    cmd = carts_cli_command("compile", source_name, "-O3")
 
     # Pass config file to carts-compile for compile-time abstract machine config
     if config_file:
         config_path = config_file.resolve()
         if config_path.is_file():
             cmd.extend(["--arts-config", str(config_path)])
-            if verbose:
-                print_debug(f"Using config file for build: {config_path}")
+        if verbose:
+            print_debug(f"Using config file for build: {config_path}")
 
     if verbose:
         print_debug(f"Running: {' '.join(cmd)} in {example.path}")

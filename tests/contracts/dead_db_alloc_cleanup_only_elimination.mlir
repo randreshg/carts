@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from=concurrency-opt --pipeline=concurrency-opt | %FileCheck %s
+// RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from=late-concurrency-cleanup --pipeline=late-concurrency-cleanup | %FileCheck %s
 
 // CHECK-LABEL: func.func @test_dead_db_alloc_cleanup_only_elimination
 // CHECK-NOT: arts.db_alloc

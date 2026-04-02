@@ -1,7 +1,8 @@
 """CARTS CLI Scripts - Modular command implementations.
 
-Environment setup (PATH, env vars, tool versions) is handled by dekk's
-auto_activate before any command runs.  Scripts just need project paths.
+Environment setup (conda activation, PATH, env vars, wrapper installation) is
+handled by dekk's project runner or the installed `carts` wrapper. Scripts only
+need to resolve project paths and execute domain logic.
 """
 
 import os
@@ -157,3 +158,13 @@ def run_command_with_output(
     except Exception as e:
         print_error(f"Command failed: {e}")
         return 1
+
+
+def carts_cli_path() -> Path:
+    """Return the canonical CLI script path."""
+    return Path(__file__).resolve().parent.parent / "carts_cli.py"
+
+
+def carts_cli_command(*args: str) -> list[str]:
+    """Build a command line that runs the CARTS CLI with the current Python."""
+    return [sys.executable, str(carts_cli_path()), *args]

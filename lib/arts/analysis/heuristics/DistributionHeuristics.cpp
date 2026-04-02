@@ -12,8 +12,8 @@
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include <algorithm>
-#include <limits>
 #include <cmath>
+#include <limits>
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -65,9 +65,8 @@ DistributionHeuristics::resolveWorkerConfig(EdtOp parallelEdt,
 
     if (cfg.internode) {
       if (auto workersPerNode =
-              parallelEdt
-                  ? arts::getWorkersPerNode(parallelEdt.getOperation())
-                  : std::nullopt) {
+              parallelEdt ? arts::getWorkersPerNode(parallelEdt.getOperation())
+                          : std::nullopt) {
         cfg.workersPerNode = *workersPerNode;
       } else if (machine && machine->getNodeCount() > 0) {
         int64_t nc = machine->getNodeCount();
@@ -225,12 +224,11 @@ DistributionHeuristics::evaluateStencilStripCostModel(
   constexpr int64_t kAmortizationLogStride = 16;
   constexpr int64_t kMaxAmortizationMultiplier = 4;
 
-  int64_t baselineOwnedOuterIters = std::max<int64_t>(
-      kMinOwnedOuterItersFloor,
-      ceilDivPositive(input.tripCount, input.totalWorkers));
-  int64_t baselineOwnedCells =
-      saturatingMulPositive(baselineOwnedOuterIters,
-                            input.stencilIterationWork);
+  int64_t baselineOwnedOuterIters =
+      std::max<int64_t>(kMinOwnedOuterItersFloor,
+                        ceilDivPositive(input.tripCount, input.totalWorkers));
+  int64_t baselineOwnedCells = saturatingMulPositive(
+      baselineOwnedOuterIters, input.stencilIterationWork);
 
   int64_t amortizationScore =
       floorLog2Positive(std::max<int64_t>(1, input.repeatedTripProduct)) +
@@ -241,10 +239,9 @@ DistributionHeuristics::evaluateStencilStripCostModel(
 
   int64_t targetOwnedCells =
       saturatingMulPositive(baselineOwnedCells, amortizationMultiplier);
-  int64_t minOwnedOuterIters =
-      std::max<int64_t>(baselineOwnedOuterIters,
-                        ceilDivPositive(targetOwnedCells,
-                                        input.stencilIterationWork));
+  int64_t minOwnedOuterIters = std::max<int64_t>(
+      baselineOwnedOuterIters,
+      ceilDivPositive(targetOwnedCells, input.stencilIterationWork));
   int64_t maxWorkersByOwnedSpan =
       std::max<int64_t>(1, input.tripCount / minOwnedOuterIters);
 
@@ -264,8 +261,8 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
     if (!loop)
       return int64_t{1};
 
-    if (auto perfectWork =
-            loopAnalysis.estimateStaticPerfectNestedWork(loop.getOperation(), 8);
+    if (auto perfectWork = loopAnalysis.estimateStaticPerfectNestedWork(
+            loop.getOperation(), 8);
         perfectWork && *perfectWork > 1) {
       return *perfectWork;
     }

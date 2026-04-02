@@ -55,6 +55,13 @@ ARTS_DEBUG_SETUP(epoch_opt);
 using namespace mlir;
 using namespace mlir::arts;
 
+namespace {
+struct EpochNarrowingCounts {
+  unsigned epochsNarrowed = 0;
+  unsigned newEpochsCreated = 0;
+};
+} // namespace
+
 ///===----------------------------------------------------------------------===///
 /// Shared Utilities
 ///===----------------------------------------------------------------------===///
@@ -208,8 +215,8 @@ static SmallVector<unsigned> findEpochCutPoints(ArrayRef<Operation *> ops) {
 }
 
 /// Attempt to narrow (split) a single epoch into multiple smaller epochs.
-/// Returns true if the epoch was split.
-static bool narrowEpoch(EpochOp epoch) {
+/// Returns the number of new epochs created by the split.
+static unsigned narrowEpoch(EpochOp epoch) {
   Block &body = epoch.getBody().front();
 
   /// Collect non-terminator operations in order.
@@ -218,12 +225,12 @@ static bool narrowEpoch(EpochOp epoch) {
     ops.push_back(&op);
 
   if (ops.size() <= 1)
-    return false;
+    return 0;
 
   /// Find cut points.
   SmallVector<unsigned> cutPoints = findEpochCutPoints(ops);
   if (cutPoints.empty())
-    return false;
+    return 0;
 
   ARTS_DEBUG("Found " << cutPoints.size() << " cut point(s) in epoch");
 
@@ -242,7 +249,7 @@ static bool narrowEpoch(EpochOp epoch) {
   /// If only one group, no split needed (shouldn't happen with non-empty
   /// cutPoints, but be safe).
   if (groups.size() <= 1)
-    return false;
+    return 0;
 
   Location loc = epoch.getLoc();
 
@@ -255,7 +262,7 @@ static bool narrowEpoch(EpochOp epoch) {
     /// If the epoch GUID is used externally, we cannot safely split because
     /// multiple new epochs would each produce their own GUID. Be conservative.
     ARTS_DEBUG("Epoch GUID is used externally, skipping narrowing");
-    return false;
+    return 0;
   }
 
   /// Create new epochs for groups [1..n) and move ops into them.
@@ -285,12 +292,13 @@ static bool narrowEpoch(EpochOp epoch) {
   /// Nothing else to do for group 0.
 
   ARTS_DEBUG("Split epoch into " << groups.size() << " narrower epochs");
-  return true;
+  return groups.size() - 1;
 }
 
 /// Walk all epochs in the module and attempt to narrow them.
 /// Processes epochs bottom-up so inner epochs are narrowed before outer ones.
-static void narrowEpochScopes(ModuleOp module, bool &changed) {
+static EpochNarrowingCounts narrowEpochScopes(ModuleOp module) {
+  EpochNarrowingCounts counts;
   SmallVector<EpochOp> epochs;
   module.walk([&](EpochOp epoch) { epochs.push_back(epoch); });
 
@@ -302,8 +310,13 @@ static void narrowEpochScopes(ModuleOp module, bool &changed) {
     /// must not be split since continuations depend on the enclosing epoch.
     if (epoch->hasAttr(ContinuationForEpoch))
       continue;
-    changed |= narrowEpoch(epoch);
+    unsigned created = narrowEpoch(epoch);
+    if (created == 0)
+      continue;
+    ++counts.epochsNarrowed;
+    counts.newEpochsCreated += created;
   }
+  return counts;
 }
 
 ///===----------------------------------------------------------------------===///
@@ -357,13 +370,13 @@ static void fuseEpochs(EpochOp first, EpochOp second) {
 }
 
 /// Processes a block to fuse consecutive compatible epochs.
-/// Returns true if any fusion was performed.
+/// Returns the number of consecutive epoch pairs fused.
 /// Uses a cached EpochAccessSummary for the first epoch to avoid recomputing
 /// effective accesses on each chain-fusion step.
-static bool processBlockForEpochFusion(Block &block,
-                                       const EpochAnalysis &epochAnalysis,
-                                       bool continuationEnabled) {
-  bool changed = false;
+static unsigned processBlockForEpochFusion(Block &block,
+                                           const EpochAnalysis &epochAnalysis,
+                                           bool continuationEnabled) {
+  unsigned fusedPairs = 0;
   for (auto it = block.begin(); it != block.end();) {
     auto first = dyn_cast<EpochOp>(&*it);
     if (!first) {
@@ -372,7 +385,8 @@ static bool processBlockForEpochFusion(Block &block,
     }
 
     /// Cache first's accesses for chain-fusion.
-    EpochAccessSummary firstAccesses = epochAnalysis.summarizeEpochAccess(first);
+    EpochAccessSummary firstAccesses =
+        epochAnalysis.summarizeEpochAccess(first);
     auto nextIt = std::next(it);
     while (nextIt != block.end()) {
       auto second = dyn_cast<EpochOp>(&*nextIt);
@@ -390,27 +404,29 @@ static bool processBlockForEpochFusion(Block &block,
       ARTS_DEBUG("Fusing consecutive epochs");
       fuseEpochs(first, second);
       firstAccesses.mergeFrom(secondAccesses);
-      changed = true;
+      ++fusedPairs;
       nextIt = std::next(it);
     }
     ++it;
   }
-  return changed;
+  return fusedPairs;
 }
 
 /// Recursively processes all blocks in a region for epoch fusion.
-static void processRegionForEpochFusion(Region &region, bool &changed,
-                                        const EpochAnalysis &epochAnalysis,
-                                        bool continuationEnabled) {
+static unsigned processRegionForEpochFusion(Region &region,
+                                            const EpochAnalysis &epochAnalysis,
+                                            bool continuationEnabled) {
+  unsigned fusedPairs = 0;
   for (Block &block : region) {
-    changed |=
+    fusedPairs +=
         processBlockForEpochFusion(block, epochAnalysis, continuationEnabled);
     for (Operation &op : block) {
       for (Region &nested : op.getRegions())
-        processRegionForEpochFusion(nested, changed, epochAnalysis,
-                                    continuationEnabled);
+        fusedPairs += processRegionForEpochFusion(nested, epochAnalysis,
+                                                  continuationEnabled);
     }
   }
+  return fusedPairs;
 }
 
 ///===----------------------------------------------------------------------===///
@@ -471,18 +487,21 @@ static void fuseLoops(scf::ForOp first, scf::ForOp second) {
 }
 
 /// Fuses consecutive compatible worker loops within an epoch.
-/// Returns true if any fusion was performed.
-static bool fuseWorkerLoopsInEpoch(EpochOp epoch) {
+/// Returns the number of worker loop pairs fused.
+static unsigned fuseWorkerLoopsInEpoch(EpochOp epoch) {
   Block &body = epoch.getBody().front();
-  return fuseConsecutivePairs<scf::ForOp>(
+  unsigned fusedPairs = 0;
+  (void)fuseConsecutivePairs<scf::ForOp>(
       body,
       [](scf::ForOp a, scf::ForOp b) {
         return isFusableWorkerLoop(a, b) && !DbAnalysis::hasDbConflict(a, b);
       },
-      [](scf::ForOp a, scf::ForOp b) {
+      [&](scf::ForOp a, scf::ForOp b) {
         ARTS_DEBUG("Fusing consecutive worker loops in epoch");
+        ++fusedPairs;
         fuseLoops(a, b);
       });
+  return fusedPairs;
 }
 
 ///===----------------------------------------------------------------------===///
@@ -678,13 +697,14 @@ static bool tryAmortizeRepeatedEpochLoop(EpochOp epochOp) {
 ///===----------------------------------------------------------------------===///
 
 /// Transform an eligible epoch + tail into continuation form.
-static LogicalResult transformToContinuation(
-    EpochOp epochOp, const EpochContinuationDecision &decision) {
+static LogicalResult
+transformToContinuation(EpochOp epochOp,
+                        const EpochContinuationDecision &decision) {
   OpBuilder builder(epochOp->getContext());
   Location loc = epochOp.getLoc();
 
-  ARTS_DEBUG("  DB acquires captured: "
-             << decision.capturedDbAcquireValues.size());
+  ARTS_DEBUG(
+      "  DB acquires captured: " << decision.capturedDbAcquireValues.size());
 
   /// Step 1: Build the dependency list for the continuation EDT from the
   /// canonical continuation analysis result.
@@ -749,8 +769,7 @@ static LogicalResult transformToContinuation(
 /// an asynchronous continuation chain using finish-EDT signaling.
 static bool tryCPSLoopTransform(scf::ForOp forOp,
                                 const EpochAnalysis &epochAnalysis) {
-  EpochLoopDriverDecision decision =
-      epochAnalysis.evaluateCPSLoopDriver(forOp);
+  EpochLoopDriverDecision decision = epochAnalysis.evaluateCPSLoopDriver(forOp);
   if (!decision.eligible) {
     ARTS_DEBUG("CPS: " << decision.rationale << ", skipping");
     return false;
@@ -1154,8 +1173,7 @@ static void promoteAllocsForCPSChain(scf::ForOp forOp,
     SmallVector<Value> elementSizes;
     elementSizes.reserve(rank);
     unsigned dynamicIdx = 0;
-    for (unsigned i = 0; i < static_cast<unsigned>(memRefType.getRank());
-         ++i) {
+    for (unsigned i = 0; i < static_cast<unsigned>(memRefType.getRank()); ++i) {
       if (memRefType.isDynamicDim(i)) {
         elementSizes.push_back(dynamicSizes[dynamicIdx++]);
       } else {
@@ -1444,8 +1462,7 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
   auto clearAdvanceSite = [](Block *block, Operation *anchor) {
     SmallVector<Operation *> opsToErase;
     for (Operation *op = anchor ? anchor->getNextNode() : &block->front();
-         op && !op->hasTrait<OpTrait::IsTerminator>();
-         op = op->getNextNode()) {
+         op && !op->hasTrait<OpTrait::IsTerminator>(); op = op->getNextNode()) {
       opsToErase.push_back(op);
     }
     for (Operation *op : llvm::reverse(opsToErase))
@@ -1494,15 +1511,59 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
 
 namespace {
 struct EpochOptPass : public impl::EpochOptBase<EpochOptPass> {
-  EpochOptPass() = default;
+  EpochOptPass() : EpochOptPass(/*AM=*/nullptr) {}
   EpochOptPass(const EpochOptPass &other)
-      : impl::EpochOptBase<EpochOptPass>(other), AM(other.AM) {}
-  explicit EpochOptPass(mlir::arts::AnalysisManager *AM) : AM(AM) {}
+      : impl::EpochOptBase<EpochOptPass>(other), AM(other.AM),
+        numRepeatedEpochLoopsAmortized(
+            this, "num-repeated-epoch-loops-amortized",
+            "Number of repeated epoch loops amortized"),
+        numContinuationEdtsCreated(
+            this, "num-continuation-edts-created",
+            "Number of continuation EDTs created from epoch tails"),
+        numCpsDriverLoopsTransformed(
+            this, "num-cps-driver-loops-transformed",
+            "Number of loops wrapped in CPS driver form"),
+        numCpsChainLoopsTransformed(
+            this, "num-cps-chain-loops-transformed",
+            "Number of loops transformed into CPS continuation chains"),
+        numEpochsNarrowed(this, "num-epochs-narrowed",
+                          "Number of epochs split into narrower scopes"),
+        numEpochsCreatedByNarrowing(
+            this, "num-epochs-created-by-narrowing",
+            "Number of new epochs created while narrowing epoch scopes"),
+        numEpochPairsFused(this, "num-epoch-pairs-fused",
+                           "Number of consecutive epoch pairs fused"),
+        numWorkerLoopsFused(this, "num-worker-loops-fused",
+                            "Number of worker loop pairs fused inside epochs") {
+  }
+  explicit EpochOptPass(mlir::arts::AnalysisManager *AM)
+      : AM(AM), numRepeatedEpochLoopsAmortized(
+                    this, "num-repeated-epoch-loops-amortized",
+                    "Number of repeated epoch loops amortized"),
+        numContinuationEdtsCreated(
+            this, "num-continuation-edts-created",
+            "Number of continuation EDTs created from epoch tails"),
+        numCpsDriverLoopsTransformed(
+            this, "num-cps-driver-loops-transformed",
+            "Number of loops wrapped in CPS driver form"),
+        numCpsChainLoopsTransformed(
+            this, "num-cps-chain-loops-transformed",
+            "Number of loops transformed into CPS continuation chains"),
+        numEpochsNarrowed(this, "num-epochs-narrowed",
+                          "Number of epochs split into narrower scopes"),
+        numEpochsCreatedByNarrowing(
+            this, "num-epochs-created-by-narrowing",
+            "Number of new epochs created while narrowing epoch scopes"),
+        numEpochPairsFused(this, "num-epoch-pairs-fused",
+                           "Number of consecutive epoch pairs fused"),
+        numWorkerLoopsFused(this, "num-worker-loops-fused",
+                            "Number of worker loop pairs fused inside epochs") {
+  }
 
   EpochOptPass(mlir::arts::AnalysisManager *AM, bool narrowing, bool fusion,
                bool loopFusion, bool amortization, bool continuation,
                bool cpsDriver, bool cpsChain = false)
-      : AM(AM) {
+      : EpochOptPass(AM) {
     enableEpochNarrowing = narrowing;
     enableEpochFusion = fusion;
     enableLoopFusion = loopFusion;
@@ -1543,6 +1604,7 @@ struct EpochOptPass : public impl::EpochOptBase<EpochOptPass> {
           ++chainTransformed;
       }
       if (chainTransformed > 0) {
+        numCpsChainLoopsTransformed += chainTransformed;
         ARTS_INFO("CPS-chain-transformed " << chainTransformed
                                            << " epoch loop(s)");
         changed = true;
@@ -1561,6 +1623,7 @@ struct EpochOptPass : public impl::EpochOptBase<EpochOptPass> {
           ++cpsTransformed;
       }
       if (cpsTransformed > 0) {
+        numCpsDriverLoopsTransformed += cpsTransformed;
         ARTS_INFO("CPS-transformed " << cpsTransformed << " epoch loop(s)");
         changed = true;
       }
@@ -1582,6 +1645,7 @@ struct EpochOptPass : public impl::EpochOptBase<EpochOptPass> {
           ++amortized;
       }
       if (amortized > 0) {
+        numRepeatedEpochLoopsAmortized += amortized;
         ARTS_INFO("Amortized " << amortized << " repeated epoch loop(s)");
         changed = true;
       }
@@ -1597,8 +1661,8 @@ struct EpochOptPass : public impl::EpochOptBase<EpochOptPass> {
             epochOp, dyn_cast_or_null<EpochOp>(epochOp->getPrevNode()),
             /*continuationEnabled=*/true);
         if (!decision.eligible) {
-          ARTS_DEBUG("  Epoch not eligible for continuation: "
-                     << decision.rationale);
+          ARTS_DEBUG(
+              "  Epoch not eligible for continuation: " << decision.rationale);
           continue;
         }
 
@@ -1607,6 +1671,7 @@ struct EpochOptPass : public impl::EpochOptBase<EpochOptPass> {
           ++transformed;
       }
       if (transformed > 0) {
+        numContinuationEdtsCreated += transformed;
         ARTS_INFO("Transformed " << transformed
                                  << " epochs to continuation form");
         changed = true;
@@ -1617,29 +1682,32 @@ struct EpochOptPass : public impl::EpochOptBase<EpochOptPass> {
 
     /// Narrowing runs FIRST so it can create opportunities for fusion.
     if (enableEpochNarrowing) {
-      bool narrowChanged = false;
-      narrowEpochScopes(module, narrowChanged);
-      if (narrowChanged) {
+      EpochNarrowingCounts narrowingCounts = narrowEpochScopes(module);
+      if (narrowingCounts.epochsNarrowed != 0) {
+        numEpochsNarrowed += narrowingCounts.epochsNarrowed;
+        numEpochsCreatedByNarrowing += narrowingCounts.newEpochsCreated;
         ARTS_INFO("Epoch scope narrowing applied");
         changed = true;
       }
     }
 
     if (enableEpochFusion) {
-      bool fusionChanged = false;
-      processRegionForEpochFusion(module.getRegion(), fusionChanged,
-                                  epochAnalysis, enableContinuation);
-      if (fusionChanged) {
+      unsigned fusedEpochPairs = processRegionForEpochFusion(
+          module.getRegion(), epochAnalysis, enableContinuation);
+      if (fusedEpochPairs != 0) {
+        numEpochPairsFused += fusedEpochPairs;
         ARTS_INFO("Epoch fusion applied");
         changed = true;
       }
     }
 
     if (enableLoopFusion) {
-      bool loopChanged = false;
-      module.walk(
-          [&](EpochOp epoch) { loopChanged |= fuseWorkerLoopsInEpoch(epoch); });
-      if (loopChanged) {
+      unsigned fusedWorkerLoops = 0;
+      module.walk([&](EpochOp epoch) {
+        fusedWorkerLoops += fuseWorkerLoopsInEpoch(epoch);
+      });
+      if (fusedWorkerLoops != 0) {
+        numWorkerLoopsFused += fusedWorkerLoops;
         ARTS_INFO("Epoch worker loop fusion applied");
         changed = true;
       }
@@ -1653,6 +1721,14 @@ struct EpochOptPass : public impl::EpochOptBase<EpochOptPass> {
 
 private:
   mlir::arts::AnalysisManager *AM = nullptr;
+  Statistic numRepeatedEpochLoopsAmortized;
+  Statistic numContinuationEdtsCreated;
+  Statistic numCpsDriverLoopsTransformed;
+  Statistic numCpsChainLoopsTransformed;
+  Statistic numEpochsNarrowed;
+  Statistic numEpochsCreatedByNarrowing;
+  Statistic numEpochPairsFused;
+  Statistic numWorkerLoopsFused;
   std::unique_ptr<mlir::arts::AnalysisManager> ownedAM;
 };
 } // namespace
@@ -1668,12 +1744,11 @@ std::unique_ptr<Pass> createEpochOptPass(mlir::arts::AnalysisManager *AM) {
 }
 
 std::unique_ptr<Pass> createEpochOptPass(mlir::arts::AnalysisManager *AM,
-                                         bool amortization,
-                                         bool continuation, bool cpsDriver,
-                                         bool cpsChain) {
-  return std::make_unique<EpochOptPass>(
-      AM, /*narrowing=*/true, /*fusion=*/true, /*loopFusion=*/true,
-      amortization, continuation, cpsDriver, cpsChain);
+                                         bool amortization, bool continuation,
+                                         bool cpsDriver, bool cpsChain) {
+  return std::make_unique<EpochOptPass>(AM, /*narrowing=*/true, /*fusion=*/true,
+                                        /*loopFusion=*/true, amortization,
+                                        continuation, cpsDriver, cpsChain);
 }
 
 std::unique_ptr<Pass> createEpochOptPass(bool amortization, bool continuation,
@@ -1683,11 +1758,8 @@ std::unique_ptr<Pass> createEpochOptPass(bool amortization, bool continuation,
 }
 
 std::unique_ptr<Pass>
-createEpochOptSchedulingPass(mlir::arts::AnalysisManager *AM,
-                                                   bool amortization,
-                                                   bool continuation,
-                                                   bool cpsDriver,
-                                                   bool cpsChain) {
+createEpochOptSchedulingPass(mlir::arts::AnalysisManager *AM, bool amortization,
+                             bool continuation, bool cpsDriver, bool cpsChain) {
   return std::make_unique<EpochOptPass>(
       AM, /*narrowing=*/false, /*fusion=*/false, /*loopFusion=*/false,
       amortization, continuation, cpsDriver, cpsChain);

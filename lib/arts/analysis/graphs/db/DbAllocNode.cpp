@@ -11,6 +11,7 @@
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/PartitionPredicates.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/metadata/MemrefMetadata.h"
 #include "arts/utils/metadata/Metadata.h"
@@ -407,7 +408,7 @@ bool DbAllocNode::canProveNonOverlapping() const {
   if (dbAllocOp) {
     auto &mutableAlloc = const_cast<DbAllocOp &>(dbAllocOp);
     if (auto mode = getPartitionMode(mutableAlloc.getOperation()))
-      isPartitioned = (*mode != PartitionMode::coarse);
+      isPartitioned = requiresWorkerBoundsPlanning(*mode);
   }
   if (!isPartitioned)
     return false;
@@ -458,7 +459,7 @@ AcquirePatternSummary DbAllocNode::summarizeAcquirePatterns() const {
       continue;
     if (DbAcquireOp acqOp = acqNode->getDbAcquireOp()) {
       auto mode = acqOp.getPartitionModeOr();
-      if (mode == PartitionMode::block || mode == PartitionMode::stencil)
+      if (usesBlockLayout(mode))
         hasBlockHint = true;
       if (!acqOp.getPartitionOffsets().empty() ||
           !acqOp.getPartitionSizes().empty())

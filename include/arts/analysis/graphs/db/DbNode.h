@@ -36,12 +36,13 @@ class DbAcquireNode;
 class MetadataManager;
 class LoopNode;
 
-/// Canonical per-entry partition legality for one acquire.
+/// Derived per-entry partition legality cache for one acquire.
 ///
 /// This is graph-owned state. It captures what the compiler proved about one
 /// depend-clause entry or inferred partition entry, not the final rewrite
-/// payload. DbPartitioning translates these facts into pass-local summaries and
-/// then into planner/rewriter inputs.
+/// payload and not the semantic contract boundary. DbPartitioning translates
+/// these facts into pass-local summaries and then into planner/rewriter inputs
+/// expressed in the canonical IR contract vocabulary.
 struct DbPartitionEntryFact {
   PartitionInfo partition;
   Value representativeOffset;
@@ -65,13 +66,15 @@ struct DbDimPartitionFact {
   bool needsFullRange = false;
 };
 
-/// Canonical per-acquire partition facts cached on DbAcquireNode.
+/// Derived per-acquire partition facts cached on DbAcquireNode.
 ///
 /// Ownership:
 ///   - produced and cached by graph-side analysis
 ///   - exposed through DbAnalysis
-///   - consumed by controller passes such as DbPartitioning
-///   - never used directly as the final rewrite contract
+///   - consumed by controller passes such as DbPartitioning as supporting
+///     evidence
+///   - recomputable from IR/analysis state
+///   - never used directly as the final rewrite contract or semantic authority
 struct DbAcquirePartitionFacts {
   DbAcquireOp acquire;
   PartitionMode requestedMode = PartitionMode::coarse;
@@ -108,7 +111,7 @@ struct DbAcquirePartitionFacts {
     });
   }
 
-  /// Return a unique mapped owner dimension when graph-side facts already
+  /// Return a unique mapped owner dimension when derived graph facts already
   /// imply one, even if multi-entry acquires could not populate
   /// `partitionDims` directly.
   std::optional<unsigned> inferSingleMappedDim() const {
@@ -228,13 +231,15 @@ private:
 /// DbAcquireNode
 /// Represents a `arts.db.acquire` operation in the DB graph.
 ///
-/// DbAcquireNode is the canonical owner of per-acquire DB facts:
+/// DbAcquireNode caches per-acquire DB facts derived from IR and analysis:
 ///   - memory-access classification
 ///   - partition legality / mapped dimensions
 ///   - cached block/stencil helper results
 ///
 /// Passes should prefer reaching this state through DbAnalysis instead of
-/// rebuilding it ad hoc from IR.
+/// rebuilding it ad hoc from IR. These caches support refinement and legality
+/// checks, but `arts.lowering_contract` remains the semantic contract that
+/// downstream lowering is expected to consume.
 ///===----------------------------------------------------------------------===///
 class DbAcquireNode : public NodeBase {
 public:
@@ -300,6 +305,7 @@ public:
   std::optional<unsigned> getPartitionOffsetDim(Value offset,
                                                 bool requireLeading = false);
 
+  /// Return the lazily-computed derived partition-facts cache for this acquire.
   const DbAcquirePartitionFacts &getPartitionFacts() const;
   void invalidatePartitionFacts() const;
 

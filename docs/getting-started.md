@@ -9,19 +9,19 @@ Install the following system tools before you begin:
 
 | Tool | Version | Check |
 |------|---------|-------|
+| conda | any | `conda --version` |
 | git | any | `git --version` |
 | cmake | >= 3.20 | `cmake --version` |
 | ninja | any | `ninja --version` |
 | make | any | `make --version` |
 | clang | >= 14 | `clang --version` |
 | clang++ | >= 14 | `clang++ --version` |
-| python3 | >= 3.10 | `python3 --version` |
+| python | >= 3.11 | `python --version` |
 
-Optional (but recommended):
+Optional:
 
 | Tool | Purpose |
 |------|---------|
-| poetry | Faster Python env setup (auto-detected by `carts`) |
 | clang-format | Source formatting (`carts format`) |
 | lit | Test runner (`carts test`) -- built automatically if missing |
 
@@ -37,50 +37,27 @@ submodules automatically with shallow clones to save bandwidth.
 
 ## 2. Install
 
-There are two ways to install. Both do exactly the same thing: bootstrap a
-Python virtual environment, check system dependencies, init submodules, and
-build the full toolchain.
-
-### Option A: Using dekk (recommended)
-
-[dekk](https://pypi.org/project/dekk/) auto-detects your project, creates
-a Python environment, and runs the CLI -- no manual setup needed.
+The canonical install path is dekk-first. dekk creates the project-local conda
+environment, activates the `.dekk.toml` configuration, initializes submodules,
+builds the toolchain, and installs the `carts` wrapper.
 
 ```bash
 pip install dekk
-dekk tools/carts_cli.py install
-```
-
-### Option B: Bash wrapper (no extra tools)
-
-```bash
-./tools/carts install
+dekk carts install
 ```
 
 ### What install does
 
-1. **Bootstraps the Python environment** -- creates `tools/.venv` with all CLI
-   dependencies (first run only, takes ~10 seconds)
-2. **Checks system dependencies** -- verifies cmake, ninja, clang, etc.
-3. **Initializes git submodules** -- ARTS, Polygeist, LLVM, carts-benchmarks
-4. **Builds the full toolchain** in order:
+1. **Creates the project environment** -- creates `.dekk/env` from `environment.yml`
+2. **Initializes git submodules** -- ARTS, Polygeist, LLVM, carts-benchmarks
+3. **Builds the full toolchain** in order:
    - LLVM + MLIR + OpenMP (longest step, ~30-60 min)
    - Polygeist (C-to-MLIR frontend)
    - ARTS runtime
    - CARTS compiler
+4. **Installs the `carts` wrapper** into `.install/bin/` and updates shell PATH
 
 The installed binaries go into `.install/{llvm,polygeist,arts,carts}/`.
-
-### Useful flags
-
-| Flag | Effect |
-|------|--------|
-| `--check` | Only validate prerequisites, don't build |
-| `--skip-build` | Set up submodules and Python env, skip compilation |
-| `--skip-python-env` | Skip Python venv setup (already done) |
-| `--skip-deps` | Skip prerequisite checking |
-| `--auto`, `-y` | Non-interactive mode |
-| `--cc`, `--cxx` | Override C/C++ compiler for LLVM bootstrap |
 
 ## 3. Use `carts`
 
@@ -195,7 +172,7 @@ Run `carts --help` for the full command list. Key commands:
 
 | Command | Description |
 |---------|-------------|
-| `carts install` | Full setup: deps, submodules, build |
+| `dekk carts install` | Full project setup: environment, submodules, build, wrapper install |
 | `carts doctor` | System and toolchain diagnostics |
 | `carts build` | Build components (`--arts`, `--llvm`, `--polygeist`) |
 | `carts compile` | Compile C/C++/MLIR through the pipeline |
@@ -207,6 +184,8 @@ Run `carts --help` for the full command list. Key commands:
 | `carts update` | Update git submodules |
 | `carts docker` | Multi-node Docker operations |
 | `carts format` | Format source files |
+| `dekk carts agents` | Generate and install agent resources |
+| `dekk carts worktree` | Create and manage project worktrees |
 
 ## Next steps
 

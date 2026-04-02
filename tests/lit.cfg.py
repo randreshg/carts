@@ -44,13 +44,19 @@ install_root = os.path.join(project_root, ".install")
 carts_bin_dir = os.path.join(install_root, "carts", "bin")
 llvm_bin_dir = os.path.join(install_root, "llvm", "bin")
 llvm_lib_dir = os.path.join(install_root, "llvm", "lib")
+build_bin_dir = os.path.join(project_root, "build", "bin")
 
-required_tools = {
-    "%carts-compile": os.path.join(carts_bin_dir, "carts-compile"),
-    "%FileCheck": os.path.join(llvm_bin_dir, "FileCheck"),
-}
+carts_compile_tool = os.path.join(build_bin_dir, "carts-compile")
+if not os.path.exists(carts_compile_tool):
+    carts_compile_tool = os.path.join(install_root, "carts", "bin", "carts-compile")
 
-for subst, tool in required_tools.items():
+required_tools = [
+    ("%carts-compile", carts_compile_tool),
+    ("%carts", os.path.join(install_root, "bin", "carts")),
+    ("%FileCheck", os.path.join(llvm_bin_dir, "FileCheck")),
+]
+
+for subst, tool in required_tools:
     if not os.path.exists(tool):
         lit_config.fatal(
             f"Required tool '{tool}' was not found. "
@@ -64,7 +70,7 @@ config.llvm_lib_dir = llvm_lib_dir
 
 # Add our installed bins to PATH for convenience.
 config.environment["PATH"] = os.pathsep.join(
-    [carts_bin_dir, llvm_bin_dir, config.environment.get("PATH", "")]
+    [build_bin_dir, carts_bin_dir, llvm_bin_dir, config.environment.get("PATH", "")]
 )
 
 # These directories contain example inputs and should not be treated as lit tests.

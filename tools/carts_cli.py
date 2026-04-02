@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""
-CARTS CLI - Compiler for Asynchronous Runtime Systems
-A modern Python CLI with rich terminal output.
-"""
-
-from bootstrap_dekk import ensure_dekk_bootstrap
-
-ensure_dekk_bootstrap()
+"""CARTS CLI - Compiler for Asynchronous Runtime Systems."""
 
 from pathlib import Path
 import os
@@ -40,9 +33,7 @@ from scripts.format import format_sources as format_cmd
 from scripts.clean import run_local_clean, run_full_clean
 from scripts.update import update as update_cmd
 from scripts.examples import examples_app
-from scripts.install import install as install_cmd
 from scripts.triage import triage_benchmark
-from scripts.agents import agents_app
 
 
 # ============================================================================
@@ -67,7 +58,7 @@ VERSION = "0.1.0"
 
 app = Typer(
     name="carts",
-    auto_activate=True,
+    auto_activate=False,
     # Avoid eager dekk ExecutionContext capture for every command. The
     # compiler/benchmark commands do not consume that metadata, and the
     # hardware probe path can stall on systems where rocm-smi misbehaves.
@@ -93,7 +84,6 @@ app.add_typer(docker_app, name="docker")
 
 # Examples subcommand group
 app.add_typer(examples_app, name="examples", context_settings=HELP_CTX)
-app.add_typer(agents_app, name="agents", context_settings=HELP_CTX)
 
 
 # ============================================================================
@@ -132,9 +122,6 @@ app.command(
 
 # Formatting
 app.command(name="format")(format_cmd)
-
-# Install (deps → submodules → build)
-app.command(name="install")(install_cmd)
 
 # Update submodules
 app.command(name="update")(update_cmd)
@@ -198,7 +185,7 @@ def benchmarks(
         print_error(f"Benchmark runner not found at {benchmark_runner}")
         raise Exit(1)
 
-    # Use current Python interpreter (already in poetry env) for faster startup
+    # Use the current interpreter from the activated dekk/conda environment.
     cmd = [sys.executable, str(benchmark_runner)]
 
     # Pass through all extra args (e.g., run, --verbose, --size, or `-- --help`)

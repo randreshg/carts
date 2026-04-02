@@ -1,4 +1,4 @@
-// RUN: not %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from concurrency-opt --pipeline concurrency-opt 2>&1 | %FileCheck %s
+// RUN: not %carts-compile %s --arts-config %S/../examples/arts.cfg --start-from post-db-refinement --pipeline post-db-refinement 2>&1 | %FileCheck %s
 
 // CHECK: 'arts.lowering_contract' op owner_dims contains duplicate value: 0
 

@@ -510,8 +510,8 @@ def LoweringContractCleanup : Pass<"lowering-contract-cleanup", "mlir::ModuleOp"
   let description = [{
     Removes `arts.lowering_contract` operations after all DB/EDT optimization
     passes have consumed them. This keeps semantic contracts available through
-    concurrency-opt while ensuring pre-lowering/LLVM translation does not see
-    dialect-only metadata ops.
+    post-db-refinement and late-concurrency-cleanup while ensuring
+    pre-lowering/LLVM translation does not see dialect-only metadata ops.
   }];
   let dependentDialects = ["arts::ArtsDialect", "func::FuncDialect"];
   let constructor = "mlir::arts::createLoweringContractCleanupPass()";

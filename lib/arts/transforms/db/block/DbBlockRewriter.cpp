@@ -190,7 +190,7 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
     if (acquire.getMode() == ArtsMode::in) {
       auto contract = getLoweringContract(acquire.getPtr());
       SmallVector<unsigned, 4> ownerDims =
-          (contract && !contract->ownerDims.empty())
+          (contract && !contract->spatial.ownerDims.empty())
               ? resolveContractOwnerDims(*contract, nPartDims)
               : SmallVector<unsigned, 4>{};
       auto resolveOwnerDim = [&](unsigned dim) -> unsigned {

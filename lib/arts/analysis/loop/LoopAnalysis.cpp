@@ -11,6 +11,7 @@
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include <algorithm>
 
 ARTS_DEBUG_SETUP(loop_analysis);
@@ -57,8 +58,7 @@ void LoopAnalysis::run() {
 ///===----------------------------------------------------------------------===///
 
 bool LoopAnalysis::isLoopOperation(Operation *op) const {
-  return isa<scf::ForOp, affine::AffineForOp, scf::ParallelOp, scf::WhileOp,
-             arts::ForOp>(op);
+  return isa<LoopLikeOpInterface>(op);
 }
 
 LoopNode *LoopAnalysis::getOrCreateLoopNode(Operation *loopOp) {
@@ -177,8 +177,7 @@ std::optional<int64_t> LoopAnalysis::getStaticTripCount(Operation *loopOp) {
       int64_t lb = 0, ub = 0, step = 0;
       if (ValueAnalysis::getConstantIndex(forOp.getLowerBound(), lb) &&
           ValueAnalysis::getConstantIndex(forOp.getUpperBound(), ub) &&
-          ValueAnalysis::getConstantIndex(forOp.getStep(), step) &&
-          step > 0) {
+          ValueAnalysis::getConstantIndex(forOp.getStep(), step) && step > 0) {
         int64_t span = ub - lb;
         if (span <= 0)
           return 0;
@@ -191,16 +190,13 @@ std::optional<int64_t> LoopAnalysis::getStaticTripCount(Operation *loopOp) {
 
   LoopNode *loopNode = getLoopNode(loopOp);
   std::optional<int64_t> constantTripCount = getTripCountFromConstantBounds();
-  std::optional<int64_t> metadataTripCount =
-      getTripCountFromMetadata(loopNode);
+  std::optional<int64_t> metadataTripCount = getTripCountFromMetadata(loopNode);
 
   if (constantTripCount) {
     if (metadataTripCount && *metadataTripCount != *constantTripCount) {
-      ARTS_DEBUG("Preferring direct static trip count " << *constantTripCount
-                                                        << " over metadata "
-                                                        << *metadataTripCount
-                                                        << " for "
-                                                        << loopOp->getName());
+      ARTS_DEBUG("Preferring direct static trip count "
+                 << *constantTripCount << " over metadata "
+                 << *metadataTripCount << " for " << loopOp->getName());
     }
     return constantTripCount;
   }

@@ -1,5 +1,5 @@
-// RUN: %carts-compile %S/../examples/jacobi/for/jacobi-for.mlir --O3 --arts-config %S/inputs/arts_64t.cfg --pipeline concurrency-opt | %FileCheck %s --check-prefix=CHECK-64
-// RUN: %carts-compile %S/../examples/jacobi/for/jacobi-for.mlir --O3 --arts-config %S/inputs/arts_2t.cfg --pipeline concurrency-opt | %FileCheck %s --check-prefix=CHECK-2
+// RUN: %carts-compile %S/../examples/jacobi/for/jacobi-for.mlir --O3 --arts-config %S/inputs/arts_64t.cfg --pipeline db-partitioning | %FileCheck %s --check-prefix=CHECK-64
+// RUN: %carts-compile %S/../examples/jacobi/for/jacobi-for.mlir --O3 --arts-config %S/inputs/arts_2t.cfg --pipeline db-partitioning | %FileCheck %s --check-prefix=CHECK-2
 
 // The stencil owned-strip policy must scale with available workers. High
 // worker counts should coarsen the strip; low worker counts should keep the

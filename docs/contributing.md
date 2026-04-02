@@ -5,7 +5,7 @@
 - `lib/arts/` - Core MLIR dialect implementation
 - `include/arts/` - Public headers
 - `tools/` - User-facing scripts and utilities
-  - `carts_cli.py` - Main CLI entry point (run via `dekk` or `./tools/carts` wrapper)
+  - `carts_cli.py` - Main compiler CLI entry point (wrapped/activated by dekk)
   - `compile/` - C++ compilation driver (`carts-compile`)
   - `scripts/` - Python CLI subcommands/helpers
 - `tests/` - Test suites
@@ -21,7 +21,7 @@ Compiler layering and ownership rules are documented in:
 
 ```bash
 # Setup and build
-carts install                          # Install prerequisites
+dekk carts install                     # Install prerequisites, build, and install the carts wrapper
 carts build                            # Build CARTS
 carts build --clean                    # Clean build
 carts build --arts --debug 0           # ARTS errors only
@@ -52,15 +52,19 @@ CARTS uses [dekk](https://pypi.org/project/dekk/) for environment management. Th
 
 ```bash
 pip install dekk                                          # once, globally
-dekk tools/carts_cli.py install                           # bootstrap + build
+dekk carts install                                        # setup + build + wrapper install
 ```
 
-dekk auto-detects the project, creates a Python environment from `tools/pyproject.toml`, activates `.dekk.toml` paths/env vars, and runs the CLI. After installation, `carts` is in your PATH.
+dekk auto-detects the project, creates the conda environment from
+`environment.yml`, activates `.dekk.toml` paths/env vars, builds the toolchain,
+and installs the `carts` wrapper into your PATH.
 
-Alternative without dekk:
+Agent configuration is managed through dekk:
 
 ```bash
-./tools/carts install
+dekk carts agents status
+dekk carts agents generate
+dekk carts agents install
 ```
 
 ### Key Commands
@@ -73,7 +77,7 @@ carts env                 # Show current environment variables and paths
 ### How It Works
 
 - `.dekk.toml` declares the required toolchain versions, environment variables, and paths.
-- When you run `dekk tools/carts_cli.py <command>`, dekk reads `.dekk.toml` and activates the environment (PATH, env vars) before executing.
+- When you run `dekk carts <command>`, dekk reads `.dekk.toml`, activates the environment, and executes the requested project command.
 - `carts doctor` runs a suite of checks (cmake version, compiler availability, LLVM install, etc.) and reports any issues.
 
 Run `carts doctor` after cloning the repository and whenever you update dependencies to ensure your environment is correctly configured.

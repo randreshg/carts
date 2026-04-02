@@ -148,12 +148,9 @@ struct ContractValidationPass
     /// ---------------------------------------------------------------
     /// Phase 3: Log statistics
     /// ---------------------------------------------------------------
-    ARTS_INFO("Contract validation summary: " << totalContracts
-                                              << " contracts, "
-                                              << invalidContracts
-                                              << " invalid, "
-                                              << orphanAcquires
-                                              << " orphan acquires");
+    ARTS_INFO("Contract validation summary: "
+              << totalContracts << " contracts, " << invalidContracts
+              << " invalid, " << orphanAcquires << " orphan acquires");
     for (auto &entry : patternCounts) {
       ARTS_INFO("  Pattern " << stringifyArtsDepPattern(entry.first) << ": "
                              << entry.second);

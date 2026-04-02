@@ -11,8 +11,8 @@ this pipeline, see [`optimization-patterns.md`](./optimization-patterns.md).
 
 ## CLI Introspection
 
-- `tools/carts pipeline`: show pipeline order and pass counts.
-- `tools/carts pipeline --pipeline=<step>`: show passes for one pipeline step.
+- `carts pipeline`: show pipeline order and pass counts.
+- `carts pipeline --pipeline=<step>`: show passes for one pipeline step.
 - `carts-compile --print-pipeline-manifest-json`: print the machine-readable
   manifest consumed by the Python CLI.
 
@@ -29,11 +29,14 @@ this pipeline, see [`optimization-patterns.md`](./optimization-patterns.md).
 9. `edt-opt`
 10. `concurrency`
 11. `edt-distribution`
-12. `concurrency-opt`
-13. `epochs`
-14. `pre-lowering`
-15. `arts-to-llvm`
-16. `complete`
+12. `post-distribution-cleanup`
+13. `db-partitioning`
+14. `post-db-refinement`
+15. `late-concurrency-cleanup`
+16. `epochs`
+17. `pre-lowering`
+18. `arts-to-llvm`
+19. `complete`
 
 ## Pipeline Controls
 
@@ -128,7 +131,7 @@ this pipeline, see [`optimization-patterns.md`](./optimization-patterns.md).
 - `ForLowering`
 - `VerifyForLowered`
 
-### 12) concurrency-opt
+### 12) post-distribution-cleanup
 - `EdtStructuralOpt(runAnalysis=false)`
 - `DeadCodeElimination`
 - `PolygeistCanonicalize`
@@ -137,15 +140,22 @@ this pipeline, see [`optimization-patterns.md`](./optimization-patterns.md).
 - `EpochOpt`
 - `PolygeistCanonicalize`
 - `CSE`
+
+### 13) db-partitioning
 - `DbPartitioning`
 - optional `DbDistributedOwnership` (enabled by `--distributed-db`)
 - `DbTransforms`
+
+### 14) post-db-refinement
 - `DbModeTightening`
 - `EdtTransforms`
+- `DbTransforms`
 - `ContractValidation`
 - `DbScratchElimination`
 - `PolygeistCanonicalize`
 - `CSE`
+
+### 15) late-concurrency-cleanup
 - `BlockLoopStripMining` (nested func)
 - `Hoisting`
 - `PolygeistCanonicalize`
@@ -154,13 +164,13 @@ this pipeline, see [`optimization-patterns.md`](./optimization-patterns.md).
 - `DeadCodeElimination`
 - `Mem2Reg`
 
-### 13) epochs
+### 16) epochs
 - `PolygeistCanonicalize`
 - `CreateEpochs`
 - `EpochContinuationPrep` (conditional)
 - `PolygeistCanonicalize`
 
-### 14) pre-lowering
+### 17) pre-lowering
 - `EdtAllocaSinking`
 - `ParallelEdtLowering`
 - `PolygeistCanonicalize`
@@ -184,7 +194,7 @@ this pipeline, see [`optimization-patterns.md`](./optimization-patterns.md).
 - `CSE`
 - `VerifyPreLowered`
 
-### 15) arts-to-llvm
+### 18) arts-to-llvm
 - `ConvertArtsToLLVM`
 - `GuidRangCallOpt`
 - `RuntimeCallOpt`
@@ -197,7 +207,7 @@ this pipeline, see [`optimization-patterns.md`](./optimization-patterns.md).
 - `PolygeistCanonicalize`
 - `VerifyLowered`
 
-### 16) complete extras
+### 19) complete extras
 - optional `-O3` function-level cleanup:
   `PolygeistCanonicalize -> ControlFlowSink -> PolygeistCanonicalize -> LICM ->
   CSE -> PolygeistCanonicalize`

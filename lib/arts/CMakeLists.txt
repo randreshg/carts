@@ -13,6 +13,7 @@ add_mlir_dialect_library(MLIRArts
     MLIRLLVMDialect
     MLIROpenMPDialect
     MLIRAffineDialect
+    MLIRLoopLikeInterface
     MLIRSupport
     MLIRSCFTransforms
 )

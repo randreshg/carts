@@ -224,8 +224,7 @@ resolveLoopMetadataForArtsFor(arts::ForOp forOp, MetadataManager &manager) {
 static LocalStencilEvidence collectLocalStencilEvidence(arts::ForOp forOp,
                                                         int64_t revision) {
   LocalStencilEvidence evidence;
-  if (auto explicitContract =
-          matchExplicitStencilNDContract(forOp, revision)) {
+  if (auto explicitContract = matchExplicitStencilNDContract(forOp, revision)) {
     evidence.isStencil = true;
     evidence.isMultiDimStencil = explicitContract->isMultiDimensional();
     evidence.explicitContract = std::move(explicitContract);
@@ -298,9 +297,9 @@ static LocalStencilEvidence collectLocalStencilEvidence(arts::ForOp forOp,
   return evidence;
 }
 
-static DiscoveryEvidence collectEvidence(arts::ForOp forOp,
-                                         MetadataManager &manager,
-                                         const LocalStencilEvidence &localStencil) {
+static DiscoveryEvidence
+collectEvidence(arts::ForOp forOp, MetadataManager &manager,
+                const LocalStencilEvidence &localStencil) {
   DiscoveryEvidence evidence;
   evidence.loopMeta = resolveLoopMetadataForArtsFor(forOp, manager);
   if (!evidence.loopMeta)
@@ -478,7 +477,8 @@ struct PatternDiscoveryPass
 
       bool changed = false;
       if (explicitStencil && isStencilFamilyDepPattern(*chosen)) {
-        changed |= stampExplicitContract(forOp.getOperation(), *explicitStencil);
+        changed |=
+            stampExplicitContract(forOp.getOperation(), *explicitStencil);
       } else {
         changed =
             stampPatternContract(forOp.getOperation(), *chosen, targetRevision);

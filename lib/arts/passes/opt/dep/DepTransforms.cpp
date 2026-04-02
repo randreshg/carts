@@ -12,8 +12,8 @@
 ///==========================================================================///
 
 #define GEN_PASS_DEF_DEPTRANSFORMS
-#include "arts/analysis/AnalysisManager.h"
 #include "arts/Dialect.h"
+#include "arts/analysis/AnalysisManager.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/transforms/dep/DepTransform.h"

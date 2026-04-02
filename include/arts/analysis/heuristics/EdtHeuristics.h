@@ -40,8 +40,9 @@ public:
                                                ForOp forOp) const;
   std::optional<EdtDistributionPattern>
   resolveDistributionPattern(ForOp forOp, EdtOp originalParallel) const;
-  LoopCoarseningDecision computeLoopCoarseningDecision(
-      ForOp forOp, const WorkerConfig &workerCfg) const;
+  LoopCoarseningDecision
+  computeLoopCoarseningDecision(ForOp forOp,
+                                const WorkerConfig &workerCfg) const;
   std::optional<int64_t>
   computeCoarsenedBlockHint(ForOp forOp, const WorkerConfig &workerCfg) const;
   ParallelEdtFusionDecision evaluateParallelEdtFusion(EdtOp first,

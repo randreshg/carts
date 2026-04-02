@@ -159,8 +159,7 @@ bool MetadataAttacher::attachMetadataFromJson(
       const llvm::json::Object *obj = entry.second.get();
       if (!hasCompatibleStaticTripCount(*obj)) {
         ARTS_DEBUG("  -> rejecting loop metadata candidate due to trip-count "
-                   << "mismatch: op="
-                   << *getStaticTripCount(op)
+                   << "mismatch: op=" << *getStaticTripCount(op)
                    << ", json=" << *getJsonLoopTripCount(*obj));
         continue;
       }

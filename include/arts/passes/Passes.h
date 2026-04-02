@@ -38,8 +38,8 @@ std::unique_ptr<Pass> createRaiseMemRefDimensionalityPass();
 /// Convert residual OMP task dependencies to arts.omp_dep.
 std::unique_ptr<Pass> createHandleDepsPass();
 /// Lower OpenMP regions into high-level ARTS dialect operations.
-std::unique_ptr<Pass> createConvertOpenMPToArtsPass(
-    AnalysisManager *AM = nullptr);
+std::unique_ptr<Pass>
+createConvertOpenMPToArtsPass(AnalysisManager *AM = nullptr);
 /// Discover or refine semantic pattern contracts before DB creation.
 std::unique_ptr<Pass> createPatternDiscoveryPass(AnalysisManager *AM,
                                                  bool refine = false);
@@ -137,8 +137,9 @@ std::unique_ptr<Pass> createEdtTransformsPass(AnalysisManager *AM);
 /// Validation passes for metadata and lowering contracts.
 std::unique_ptr<Pass> createVerifyMetadataPass(AnalysisManager *AM,
                                                bool failOnMissing = false);
-std::unique_ptr<Pass> createVerifyMetadataIntegrityPass(
-    AnalysisManager *AM, bool failOnError = false);
+std::unique_ptr<Pass>
+createVerifyMetadataIntegrityPass(AnalysisManager *AM,
+                                  bool failOnError = false);
 std::unique_ptr<Pass> createContractValidationPass(bool failOnError = false);
 
 /// Verification passes at lowering boundaries.

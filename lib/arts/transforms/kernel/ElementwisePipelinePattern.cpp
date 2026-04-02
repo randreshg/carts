@@ -26,8 +26,8 @@
 ///   }
 ///==========================================================================///
 
-#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/transforms/kernel/KernelTransform.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoopUtils.h"

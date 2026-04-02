@@ -467,8 +467,7 @@ static bool isTilingApplicable(scf::ForOp loop, int64_t tileSize,
 }
 
 static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
-                                          int64_t tileJ,
-                                          int64_t minTripCount,
+                                          int64_t tileJ, int64_t minTripCount,
                                           MetadataManager &metadataManager) {
   scf::ForOp jLoop = m.jLoop;
   scf::ForOp kLoop = m.kLoop;
@@ -596,9 +595,8 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
     if (!createdTiledUpdate) {
       auto newJ = b.create<scf::ForOp>(loc, jLoop.getLowerBound(),
                                        jLoop.getUpperBound(), jLoop.getStep());
-      metadataManager.rewriteLoopMetadata(jLoop.getOperation(),
-                                          newJ.getOperation(),
-                                          clearReductionLoopFacts);
+      metadataManager.rewriteLoopMetadata(
+          jLoop.getOperation(), newJ.getOperation(), clearReductionLoopFacts);
       b.setInsertionPointToStart(newJ.getBody());
       emitUpdateBody(b, loc, newJ.getInductionVar());
     }
@@ -672,9 +670,8 @@ std::unique_ptr<KernelPatternTransform>
 createMatmulReductionPattern(bool enableTiling, int64_t tileJ,
                              int64_t minTripCount,
                              MetadataManager &metadataManager) {
-  return std::make_unique<MatmulReductionPattern>(enableTiling, tileJ,
-                                                  minTripCount,
-                                                  metadataManager);
+  return std::make_unique<MatmulReductionPattern>(
+      enableTiling, tileJ, minTripCount, metadataManager);
 }
 
 } // namespace arts

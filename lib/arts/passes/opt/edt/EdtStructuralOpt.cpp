@@ -23,11 +23,11 @@
 #include "mlir/Support/LLVM.h"
 /// Arts
 #include "arts/Dialect.h"
-#include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/graphs/edt/EdtGraph.h"
+#include "arts/passes/Passes.h"
+#include "mlir/Pass/Pass.h"
 /// Other
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
@@ -47,7 +47,7 @@ using namespace mlir::arts;
 ARTS_DEBUG_SETUP(edt_structural_opt);
 
 namespace {
-void sinkExternalAllocasInEdt(EdtOp edt) {
+unsigned sinkExternalAllocasInEdt(EdtOp edt) {
   Block &body = edt.getBody().front();
   DenseMap<Operation *, SmallVector<Operation *, 4>> usesByAlloca;
 
@@ -63,12 +63,13 @@ void sinkExternalAllocasInEdt(EdtOp edt) {
   });
 
   if (usesByAlloca.empty())
-    return;
+    return 0;
 
   OpBuilder builder(edt);
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPointToStart(&body);
 
+  unsigned sunkAllocas = 0;
   for (const auto &entry : usesByAlloca) {
     auto allocaOp = cast<memref::AllocaOp>(entry.first);
     bool hasStoreInEdt = false;
@@ -111,6 +112,7 @@ void sinkExternalAllocasInEdt(EdtOp edt) {
       continue;
 
     Operation *clonedOp = builder.clone(*allocaOp.getOperation());
+    ++sunkAllocas;
     auto newAlloca = cast<memref::AllocaOp>(clonedOp);
     IRMapping mapping;
     mapping.map(allocaOp.getResult(), newAlloca.getResult());
@@ -125,6 +127,7 @@ void sinkExternalAllocasInEdt(EdtOp edt) {
       builder.setInsertionPointToStart(&body);
     }
   }
+  return sunkAllocas;
 }
 ///===----------------------------------------------------------------------===///
 /// Parallel EDT Fusion
@@ -149,9 +152,10 @@ void sinkExternalAllocasInEdt(EdtOp edt) {
 
 /// Fuses consecutive fusable parallel EDTs in a block.
 /// Returns true if any fusion was performed.
-static bool fuseConsecutiveParallelEdts(Block &block,
-                                        const EdtHeuristics &heuristics) {
-  return fuseConsecutivePairs<EdtOp>(
+static unsigned fuseConsecutiveParallelEdts(Block &block,
+                                            const EdtHeuristics &heuristics) {
+  unsigned fusedPairs = 0;
+  (void)fuseConsecutivePairs<EdtOp>(
       block,
       [&](EdtOp a, EdtOp b) {
         ParallelEdtFusionDecision decision =
@@ -160,30 +164,35 @@ static bool fuseConsecutiveParallelEdts(Block &block,
           ARTS_DEBUG("Skipping parallel EDT fusion: " << decision.rationale);
         return decision.shouldFuse;
       },
-      [](EdtOp a, EdtOp b) {
+      [&](EdtOp a, EdtOp b) {
         Block &firstBody = a.getBody().front();
         Block &secondBody = b.getBody().front();
         spliceBodyBeforeTerminator(secondBody, firstBody);
         ARTS_DEBUG("Fused consecutive parallel EDTs");
+        ++fusedPairs;
         b.erase();
       });
+  return fusedPairs;
 }
 
 /// Processes top-level blocks in a region for parallel EDT fusion.
 /// Does NOT recurse into scf::ForOp bodies to avoid breaking patterns
 /// that JacobiAlternatingBuffersPattern needs to match (exactly 2 parallel EDTs
 /// inside a time-stepping loop).
-static void processRegionForParallelEdtFusion(Region &region, bool &changed,
-                                              const EdtHeuristics &heuristics) {
+static unsigned
+processRegionForParallelEdtFusion(Region &region,
+                                  const EdtHeuristics &heuristics) {
+  unsigned fusedPairs = 0;
   for (Block &block : region) {
-    changed |= fuseConsecutiveParallelEdts(block, heuristics);
+    fusedPairs += fuseConsecutiveParallelEdts(block, heuristics);
     for (Operation &op : block) {
       if (isa<scf::ForOp>(op))
         continue;
       for (Region &nested : op.getRegions())
-        processRegionForParallelEdtFusion(nested, changed, heuristics);
+        fusedPairs += processRegionForParallelEdtFusion(nested, heuristics);
     }
   }
+  return fusedPairs;
 }
 
 } // namespace
@@ -195,10 +204,49 @@ namespace {
 struct EdtStructuralOptPass
     : public ::impl::EdtStructuralOptBase<EdtStructuralOptPass> {
   EdtStructuralOptPass(mlir::arts::AnalysisManager *AM, bool runAnalysis)
-      : AM(AM) {
+      : AM(AM), numExternalAllocasSunk(
+                    this, "num-external-allocas-sunk",
+                    "Number of external allocas cloned into EDT-local storage"),
+        numParallelEdtsFused(this, "num-parallel-edts-fused",
+                             "Number of consecutive parallel EDT pairs fused"),
+        numNoDepEdtsInlined(this, "num-no-dep-edts-inlined",
+                            "Number of dependency-free EDTs inlined"),
+        numParallelEdtsConvertedToSync(
+            this, "num-parallel-edts-converted-to-sync",
+            "Number of parallel EDTs converted into sync EDTs"),
+        numParallelEdtsConvertedWithAcquireRewiring(
+            this, "num-parallel-edts-converted-with-acquire-rewiring",
+            "Number of parallel EDTs converted into sync EDTs by rewiring "
+            "inner acquires"),
+        numSyncEdtsConvertedToEpochs(
+            this, "num-sync-edts-converted-to-epochs",
+            "Number of top-level sync EDTs converted into epochs"),
+        numBarriersRemoved(this, "num-barriers-removed",
+                           "Number of redundant barriers removed") {
     assert(AM && "AnalysisManager must be provided externally");
     this->runAnalysis = runAnalysis;
   }
+  EdtStructuralOptPass(const EdtStructuralOptPass &other)
+      : ::impl::EdtStructuralOptBase<EdtStructuralOptPass>(other), AM(other.AM),
+        numExternalAllocasSunk(
+            this, "num-external-allocas-sunk",
+            "Number of external allocas cloned into EDT-local storage"),
+        numParallelEdtsFused(this, "num-parallel-edts-fused",
+                             "Number of consecutive parallel EDT pairs fused"),
+        numNoDepEdtsInlined(this, "num-no-dep-edts-inlined",
+                            "Number of dependency-free EDTs inlined"),
+        numParallelEdtsConvertedToSync(
+            this, "num-parallel-edts-converted-to-sync",
+            "Number of parallel EDTs converted into sync EDTs"),
+        numParallelEdtsConvertedWithAcquireRewiring(
+            this, "num-parallel-edts-converted-with-acquire-rewiring",
+            "Number of parallel EDTs converted into sync EDTs by rewiring "
+            "inner acquires"),
+        numSyncEdtsConvertedToEpochs(
+            this, "num-sync-edts-converted-to-epochs",
+            "Number of top-level sync EDTs converted into epochs"),
+        numBarriersRemoved(this, "num-barriers-removed",
+                           "Number of redundant barriers removed") {}
   void runOnOperation() override;
   bool convertParallelIntoSingle(EdtOp &op);
 
@@ -208,7 +256,7 @@ struct EdtStructuralOptPass
                                          ArrayRef<Value> additionalDeps = {});
 
   /// Remove barriers immediately before and after a single EDT
-  void removeBarriersAroundSingleEdt(EdtOp parallelOp, EdtOp singleOp);
+  unsigned removeBarriersAroundSingleEdt(EdtOp parallelOp, EdtOp singleOp);
 
   /// Convert parallel EDT with inner acquires to sync EDT by rewiring outer
   /// acquires
@@ -233,6 +281,13 @@ struct EdtStructuralOptPass
 private:
   ModuleOp module;
   mlir::arts::AnalysisManager *AM = nullptr;
+  Statistic numExternalAllocasSunk;
+  Statistic numParallelEdtsFused;
+  Statistic numNoDepEdtsInlined;
+  Statistic numParallelEdtsConvertedToSync;
+  Statistic numParallelEdtsConvertedWithAcquireRewiring;
+  Statistic numSyncEdtsConvertedToEpochs;
+  Statistic numBarriersRemoved;
   SetVector<Operation *> opsToRemove;
 };
 
@@ -240,7 +295,7 @@ struct EdtAllocaSinkingPass
     : public ::impl::EdtAllocaSinkingBase<EdtAllocaSinkingPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    module.walk([&](EdtOp edt) { sinkExternalAllocasInEdt(edt); });
+    module.walk([&](EdtOp edt) { (void)sinkExternalAllocasInEdt(edt); });
   }
 };
 } // namespace
@@ -255,7 +310,9 @@ void EdtStructuralOptPass::runOnOperation() {
   /// processSyncTaskEdts). These could be combined into a single walk that
   /// categorizes EDTs by type into buckets, then processes each bucket.
 
-  module.walk([&](EdtOp edt) { sinkExternalAllocasInEdt(edt); });
+  module.walk([&](EdtOp edt) {
+    numExternalAllocasSunk += sinkExternalAllocasInEdt(edt);
+  });
 
   if (runAnalysis) {
     ARTS_INFO("Running EDT pass with analysis");
@@ -268,10 +325,10 @@ void EdtStructuralOptPass::runOnOperation() {
     /// Fuse consecutive parallel EDTs before any other transformation.
     /// This merges independent parallel regions (e.g., 7 separate activation
     /// functions inlined into main) into one, reducing epoch overhead.
-    bool fusionChanged = false;
-    processRegionForParallelEdtFusion(module.getRegion(), fusionChanged,
-                                      AM->getEdtHeuristics());
-    if (fusionChanged)
+    unsigned fusedParallelEdts = processRegionForParallelEdtFusion(
+        module.getRegion(), AM->getEdtHeuristics());
+    numParallelEdtsFused += fusedParallelEdts;
+    if (fusedParallelEdts != 0)
       ARTS_INFO("Parallel EDT fusion applied");
 
     processSingleEdts();
@@ -282,7 +339,9 @@ void EdtStructuralOptPass::runOnOperation() {
 
   /// Re-run alloca sinking after EDT rewrites to keep task-local buffers inside
   /// their regions.
-  module.walk([&](EdtOp edt) { sinkExternalAllocasInEdt(edt); });
+  module.walk([&](EdtOp edt) {
+    numExternalAllocasSunk += sinkExternalAllocasInEdt(edt);
+  });
 
   /// Remove ops marked for removal
   ARTS_DEBUG("Ops to remove: " << opsToRemove.size());
@@ -336,6 +395,7 @@ bool EdtStructuralOptPass::inlineNoDepEdts() {
       childOp->moveBefore(insertBefore);
 
     edt.erase();
+    ++numNoDepEdtsInlined;
     changed = true;
     ARTS_DEBUG("Inlined no-dep EDT");
   }
@@ -365,14 +425,18 @@ bool EdtStructuralOptPass::processSingleEdts() {
       singleOps.push_back(edt);
   });
 
+  bool changed = false;
   for (EdtOp singleEdt : singleOps) {
     /// Find parent parallel EDT if it exists
     EdtOp parallelOp = singleEdt->getParentOfType<EdtOp>();
-    if (parallelOp && parallelOp.getType() == arts::EdtType::parallel)
-      removeBarriersAroundSingleEdt(parallelOp, singleEdt);
+    if (parallelOp && parallelOp.getType() == arts::EdtType::parallel) {
+      unsigned removed = removeBarriersAroundSingleEdt(parallelOp, singleEdt);
+      numBarriersRemoved += removed;
+      changed |= removed != 0;
+    }
   }
 
-  return !singleOps.empty();
+  return changed;
 }
 
 bool EdtStructuralOptPass::processParallelEdts() {
@@ -464,6 +528,7 @@ bool EdtStructuralOptPass::convertParallelIntoSingle(EdtOp &op) {
   /// Mark the parallel EDT for removal
   opsToRemove.insert(op);
 
+  ++numParallelEdtsConvertedToSync;
   ARTS_INFO("Converted parallel EDT into sync EDT");
   return true;
 }
@@ -636,6 +701,8 @@ bool EdtStructuralOptPass::convertParallelWithAcquiresToSync(
   parallelOp->erase();
   ARTS_DEBUG("Parallel erased successfully");
 
+  ++numParallelEdtsConvertedToSync;
+  ++numParallelEdtsConvertedWithAcquireRewiring;
   ARTS_INFO("Converted parallel EDT with inner acquires into sync EDT");
   return true;
 }
@@ -644,29 +711,31 @@ bool EdtStructuralOptPass::convertParallelWithAcquiresToSync(
 /// region. Since arts.edt<single> has implicit barrier semantics, explicit
 /// barriers around it are redundant and cause issues with the CreateEpochs
 /// pass.
-void EdtStructuralOptPass::removeBarriersAroundSingleEdt(EdtOp parallelOp,
-                                                         EdtOp singleOp) {
+unsigned EdtStructuralOptPass::removeBarriersAroundSingleEdt(EdtOp parallelOp,
+                                                             EdtOp singleOp) {
   Block *parentBlock = singleOp->getBlock();
   if (!parentBlock)
-    return;
+    return 0;
 
   /// If the single region spawns nested EDTs (tasks/parallel/sync), we must
   /// keep explicit barriers to preserve ordering for CreateEpochs.
   auto *singleNode = AM->getEdtAnalysis().getEdtNode(singleOp);
   if (singleNode && singleNode->hasNestedEdts()) {
     ARTS_DEBUG("Keeping barriers around single EDT with nested EDTs");
-    return;
+    return 0;
   }
 
+  unsigned removed = 0;
   /// Find and remove barrier immediately before the single EDT
   Operation *prevOp = singleOp->getPrevNode();
-  if (prevOp && isa<arts::BarrierOp>(prevOp))
-    opsToRemove.insert(prevOp);
+  if (prevOp && isa<arts::BarrierOp>(prevOp) && opsToRemove.insert(prevOp))
+    ++removed;
 
   /// Find and remove barrier immediately after the single EDT
   Operation *nextOp = singleOp->getNextNode();
-  if (nextOp && isa<arts::BarrierOp>(nextOp))
-    opsToRemove.insert(nextOp);
+  if (nextOp && isa<arts::BarrierOp>(nextOp) && opsToRemove.insert(nextOp))
+    ++removed;
+  return removed;
 }
 
 /// Utility function to create a new EDT operation with merged dependencies
@@ -735,7 +804,7 @@ bool EdtStructuralOptPass::processSyncTaskEdts() {
   /// arts::EpochOp. This effectively assigns the work to the master thread,
   /// avoiding unnecessary signal/sync overhead. The EdtOp itself is erased
   /// after its body is moved.
-  auto convertToEpoch = [](EdtOp &op) -> bool {
+  auto convertToEpoch = [&](EdtOp &op) -> bool {
     OpBuilder builder(op);
     /// If the op is not top-level, return false.
     if (op->getParentOfType<EdtOp>())
@@ -778,6 +847,7 @@ bool EdtStructuralOptPass::processSyncTaskEdts() {
 
     /// Erase the now-empty EdtOp
     op.erase();
+    ++numSyncEdtsConvertedToEpochs;
 
     builder.setInsertionPointAfter(epochOp);
     return true;
@@ -794,11 +864,12 @@ bool EdtStructuralOptPass::processSyncTaskEdts() {
     return false;
 
   /// Try to convert each sync task-EDT to an EpochOp.
+  bool changed = false;
   for (EdtOp op : syncTaskOps) {
     op.setType(arts::EdtType::task);
-    convertToEpoch(op);
+    changed |= convertToEpoch(op);
   }
-  return true;
+  return changed;
 }
 
 bool EdtStructuralOptPass::removeRedundantBarriersWithGraphs(
@@ -849,6 +920,7 @@ bool EdtStructuralOptPass::removeRedundantBarriersWithGraphs(
   for (auto b : toErase) {
     ARTS_INFO("Removing redundant barrier");
     b.erase();
+    ++numBarriersRemoved;
     changed = true;
   }
   return changed;

@@ -8,6 +8,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "llvm/ADT/StringRef.h"
 
 namespace mlir {
@@ -52,8 +53,7 @@ unsigned getLoopDepth(Operation *op) {
   unsigned depth = 0;
   for (Operation *parent = op ? op->getParentOp() : nullptr; parent;
        parent = parent->getParentOp()) {
-    if (isa<affine::AffineForOp, scf::ForOp, scf::ParallelOp, scf::ForallOp,
-            omp::WsloopOp, arts::ForOp>(parent))
+    if (isa<LoopLikeOpInterface>(parent) || isa<omp::WsloopOp>(parent))
       ++depth;
   }
   return depth;

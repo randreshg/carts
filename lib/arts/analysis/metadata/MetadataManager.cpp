@@ -112,7 +112,9 @@ size_t MetadataManager::size() const { return registry.size(); }
 
 bool MetadataManager::empty() const { return registry.empty(); }
 
-MLIRContext *MetadataManager::getContext() const { return registry.getContext(); }
+MLIRContext *MetadataManager::getContext() const {
+  return registry.getContext();
+}
 
 void MetadataManager::setMetadataFile(llvm::StringRef filename) {
   io.setMetadataFile(filename);
@@ -130,7 +132,8 @@ ArtsId MetadataManager::assignOperationId(Operation *op) {
   return registry.assignOperationId(op);
 }
 
-bool MetadataManager::transferMetadata(Operation *sourceOp, Operation *targetOp) {
+bool MetadataManager::transferMetadata(Operation *sourceOp,
+                                       Operation *targetOp) {
   bool transferred = registry.transferMetadata(sourceOp, targetOp);
   if (transferred)
     stampTransferredMetadata(sourceOp, targetOp);
@@ -148,7 +151,8 @@ bool MetadataManager::replaceMetadataForRewrite(Operation *sourceOp,
   return replaced;
 }
 
-bool MetadataManager::rewriteMetadata(Operation *sourceOp, Operation *targetOp) {
+bool MetadataManager::rewriteMetadata(Operation *sourceOp,
+                                      Operation *targetOp) {
   if (!sourceOp || !targetOp)
     return false;
 
@@ -200,7 +204,9 @@ bool MetadataManager::refreshMetadata(Operation *op) {
   return refreshed;
 }
 
-IdRegistry &MetadataManager::getIdRegistry() { return registry.getIdRegistry(); }
+IdRegistry &MetadataManager::getIdRegistry() {
+  return registry.getIdRegistry();
+}
 
 const IdRegistry &MetadataManager::getIdRegistry() const {
   return registry.getIdRegistry();
@@ -214,7 +220,9 @@ void MetadataManager::dump() const { registry.dump(); }
 
 MetadataRegistry &MetadataManager::getRegistry() { return registry; }
 
-const MetadataRegistry &MetadataManager::getRegistry() const { return registry; }
+const MetadataRegistry &MetadataManager::getRegistry() const {
+  return registry;
+}
 
 MetadataIO &MetadataManager::getIO() { return io; }
 
@@ -222,7 +230,9 @@ const MetadataIO &MetadataManager::getIO() const { return io; }
 
 MetadataAttacher &MetadataManager::getAttacher() { return attacher; }
 
-const MetadataAttacher &MetadataManager::getAttacher() const { return attacher; }
+const MetadataAttacher &MetadataManager::getAttacher() const {
+  return attacher;
+}
 
 void MetadataManager::stampTransferredMetadata(Operation *sourceOp,
                                                Operation *targetOp) {

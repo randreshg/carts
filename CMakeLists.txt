@@ -122,16 +122,17 @@ if(CARTS_ENABLE_TESTS)
   else()
     set(LLVM_LIT_TOOLS_DIR "")
   endif()
+  find_program(DEKK_EXECUTABLE dekk)
 
   set(MISSING_TOOLS "")
+  if(NOT DEKK_EXECUTABLE)
+    list(APPEND MISSING_TOOLS dekk)
+  endif()
   if(NOT LLVM_LIT_EXECUTABLE)
     list(APPEND MISSING_TOOLS llvm-lit)
   endif()
   if(NOT FILECHECK_EXECUTABLE)
     list(APPEND MISSING_TOOLS FileCheck)
-  endif()
-  if(NOT EXISTS ${CMAKE_SOURCE_DIR}/tools/carts)
-    list(APPEND MISSING_TOOLS "carts wrapper script")
   endif()
 
   if(MISSING_TOOLS)
@@ -143,7 +144,7 @@ if(CARTS_ENABLE_TESTS)
   
   # Create test targets with proper dependencies
   add_custom_target(check
-    COMMAND ${CMAKE_SOURCE_DIR}/tools/carts test
+    COMMAND ${DEKK_EXECUTABLE} carts test
     COMMENT "Running CARTS test suite"
     USES_TERMINAL
     VERBATIM
@@ -151,7 +152,7 @@ if(CARTS_ENABLE_TESTS)
   
   # Add convenience target for examples suite.
   add_custom_target(check-examples
-    COMMAND ${CMAKE_SOURCE_DIR}/tools/carts examples run --all
+    COMMAND ${DEKK_EXECUTABLE} carts examples run --all
     COMMENT "Running CARTS examples test suite"
     USES_TERMINAL
     VERBATIM
@@ -159,7 +160,7 @@ if(CARTS_ENABLE_TESTS)
   
   # Add verbose test targets
   add_custom_target(check-verbose
-    COMMAND ${CMAKE_SOURCE_DIR}/tools/carts test -v
+    COMMAND ${DEKK_EXECUTABLE} carts test -v
     COMMENT "Running CARTS test suite (verbose)"
     USES_TERMINAL
     VERBATIM

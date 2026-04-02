@@ -1,4 +1,4 @@
-// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %S/../../../../tools/carts compile %S/../../../../external/carts-benchmarks/kastors-jacobi/poisson-for/poisson-for.c --pipeline concurrency-opt --arts-config %S/../../../examples/arts.cfg >/dev/null && cat %t.compile/poisson-for.concurrency-opt.mlir' | %FileCheck %s
+// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %carts compile %S/../../../../external/carts-benchmarks/kastors-jacobi/poisson-for/poisson-for.c --pipeline db-partitioning --arts-config %S/../../../examples/arts.cfg >/dev/null && cat %t.compile/poisson-for.db-partitioning.mlir' | %FileCheck %s
 
 // Verify that the poisson-for benchmark lowers forcing-array reads to
 // stencil-partitioned halo slices with explicit element windows, while the

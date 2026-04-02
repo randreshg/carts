@@ -14,9 +14,8 @@
 ///===----------------------------------------------------------------------===///
 
 #include "arts/Dialect.h"
-#include "arts/passes/Passes.h"
-#include "mlir/Pass/Pass.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/RemovalUtils.h"
@@ -32,6 +31,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Interfaces/CallInterfaces.h"
+#include "mlir/Pass/Pass.h"
 #include "polygeist/Ops.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"

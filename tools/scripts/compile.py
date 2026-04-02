@@ -16,7 +16,6 @@ from scripts import (
     run_subprocess,
     run_command_with_output,
     ARTS_CONFIG_FILENAME,
-    PIPELINE_MANIFEST_FILENAME,
     TOOL_CARTS_COMPILE,
     TOOL_CGEIST,
     TOOL_CLANG,
@@ -51,9 +50,35 @@ class PipelineManifestStep:
 class PipelineManifest:
     tokens: PipelineTokens
     steps: List[PipelineManifestStep]
+    epilogue_steps: List[PipelineManifestStep]
 
 
-_PIPELINE_TOKENS_CACHE: Optional[PipelineTokens] = None
+def _parse_manifest_steps_field(
+    data: Dict[str, object], key: str
+) -> List[PipelineManifestStep]:
+    """Parse a manifest step-list field."""
+    steps_raw = data.get(key)
+    if steps_raw is None:
+        raise ValueError(f"field '{key}' must be a list")
+    if not isinstance(steps_raw, list):
+        raise ValueError(f"field '{key}' must be a list")
+
+    steps: List[PipelineManifestStep] = []
+    for step_raw in steps_raw:
+        if not isinstance(step_raw, dict):
+            raise ValueError(f"each '{key}' entry must be an object")
+        name = step_raw.get("name")
+        passes = step_raw.get("passes", [])
+        if not isinstance(name, str):
+            raise ValueError(f"manifest step field '{key}.name' must be a string")
+        if not isinstance(passes, list) or not all(isinstance(p, str) for p in passes):
+            raise ValueError(
+                f"manifest step field '{key}.passes' must be a list of strings"
+            )
+        steps.append(PipelineManifestStep(name=name, passes=list(passes)))
+    return steps
+
+
 _PIPELINE_MANIFEST_CACHE: Optional[PipelineManifest] = None
 _DISALLOWED_PIPELINE_FLAGS = {
     FLAG_DEBUG_ONLY: FLAG_ARTS_DEBUG,
@@ -81,7 +106,7 @@ def _has_flag(args: List[str], flag: str) -> bool:
 
 
 def _parse_pipeline_tokens_payload(payload: str) -> PipelineTokens:
-    """Parse `carts-compile --print-pipeline-tokens-json` output."""
+    """Parse pipeline token arrays from the compiler manifest JSON."""
     data = json.loads(payload)
     if not isinstance(data, dict):
         raise ValueError("root JSON object must be a map")
@@ -114,28 +139,19 @@ def _parse_pipeline_manifest_payload(payload: str) -> PipelineManifest:
     """Parse `carts-compile --print-pipeline-manifest-json` output."""
     tokens = _parse_pipeline_tokens_payload(payload)
     data = json.loads(payload)
-    steps_raw = data.get("pipeline_steps")
-    if not isinstance(steps_raw, list):
-        raise ValueError("field 'pipeline_steps' must be a list")
+    steps = _parse_manifest_steps_field(data, "pipeline_steps")
+    epilogue_steps = _parse_manifest_steps_field(data, "epilogue_steps")
 
-    steps: List[PipelineManifestStep] = []
-    for step_raw in steps_raw:
-        if not isinstance(step_raw, dict):
-            raise ValueError("each pipeline step entry must be an object")
-        name = step_raw.get("name")
-        passes = step_raw.get("passes", [])
-        if not isinstance(name, str):
-            raise ValueError("pipeline step field 'name' must be a string")
-        if not isinstance(passes, list) or not all(isinstance(p, str) for p in passes):
-            raise ValueError("pipeline step field 'passes' must be a list of strings")
-        steps.append(PipelineManifestStep(name=name, passes=list(passes)))
-
-    return PipelineManifest(tokens=tokens, steps=steps)
+    return PipelineManifest(
+        tokens=tokens,
+        steps=steps,
+        epilogue_steps=epilogue_steps,
+    )
 
 
 def _pipeline_manifest_to_dict(manifest: PipelineManifest) -> Dict[str, object]:
     """Convert pipeline manifest dataclass into a JSON-serializable dict."""
-    return {
+    payload: Dict[str, object] = {
         "pipeline": manifest.tokens.pipeline,
         "start_from": manifest.tokens.start_from,
         "pipeline_sequence": manifest.tokens.pipeline_sequence,
@@ -143,7 +159,12 @@ def _pipeline_manifest_to_dict(manifest: PipelineManifest) -> Dict[str, object]:
             {"name": step.name, "passes": step.passes}
             for step in manifest.steps
         ],
+        "epilogue_steps": [
+            {"name": step.name, "passes": step.passes}
+            for step in manifest.epilogue_steps
+        ],
     }
+    return payload
 
 
 def _query_compiler_json(
@@ -166,67 +187,10 @@ def _query_compiler_json(
     return result.stdout or ""
 
 
-def _pipeline_manifest_path(config: CartsConfig) -> Path:
-    """Return installed pipeline manifest path."""
-    return config.carts_install_dir / "share" / PIPELINE_MANIFEST_FILENAME
-
-
-def _load_pipeline_manifest_from_file(config: CartsConfig) -> Optional[PipelineManifest]:
-    """Load installed pipeline manifest when available."""
-    manifest_path = _pipeline_manifest_path(config)
-    if not manifest_path.is_file():
-        return None
-    try:
-        payload = manifest_path.read_text(encoding="utf-8")
-        return _parse_pipeline_manifest_payload(payload)
-    except (OSError, json.JSONDecodeError, ValueError) as exc:
-        print_warning(f"Ignoring invalid pipeline manifest at {manifest_path}: {exc}")
-        return None
-
-
-def _load_pipeline_tokens_from_manifest(config: CartsConfig) -> Optional[PipelineTokens]:
-    """Load pipeline tokens from installed manifest file when available."""
-    manifest = _load_pipeline_manifest_from_file(config)
-    if manifest is None:
-        return None
-    return manifest.tokens
-
-
-def _get_pipeline_tokens(config: CartsConfig) -> PipelineTokens:
-    """Load pipeline tokens from carts-compile once per process."""
-    global _PIPELINE_TOKENS_CACHE
-    if _PIPELINE_TOKENS_CACHE is not None:
-        return _PIPELINE_TOKENS_CACHE
-
-    from_manifest = _load_pipeline_tokens_from_manifest(config)
-    if from_manifest is not None:
-        _PIPELINE_TOKENS_CACHE = from_manifest
-        return _PIPELINE_TOKENS_CACHE
-
-    try:
-        payload = _query_compiler_json(
-            config,
-            "--print-pipeline-tokens-json",
-            "Failed to query pipeline tokens from carts-compile. "
-            "Run `tools/carts build` and retry.",
-        )
-        _PIPELINE_TOKENS_CACHE = _parse_pipeline_tokens_payload(payload)
-    except (json.JSONDecodeError, ValueError) as exc:
-        print_error(f"Invalid pipeline token payload from carts-compile: {exc}")
-        raise Exit(1)
-
-    return _PIPELINE_TOKENS_CACHE
-
-
 def _get_pipeline_manifest(config: CartsConfig) -> PipelineManifest:
-    """Load pipeline manifest from install cache or compiler JSON endpoint."""
+    """Load pipeline manifest from carts-compile once per process."""
     global _PIPELINE_MANIFEST_CACHE
     if _PIPELINE_MANIFEST_CACHE is not None:
-        return _PIPELINE_MANIFEST_CACHE
-
-    from_file = _load_pipeline_manifest_from_file(config)
-    if from_file is not None:
-        _PIPELINE_MANIFEST_CACHE = from_file
         return _PIPELINE_MANIFEST_CACHE
 
     try:
@@ -234,7 +198,7 @@ def _get_pipeline_manifest(config: CartsConfig) -> PipelineManifest:
             config,
             "--print-pipeline-manifest-json",
             "Failed to query pipeline manifest from carts-compile. "
-            "Run `tools/carts build` and retry.",
+            "Run `carts build` and retry.",
         )
         _PIPELINE_MANIFEST_CACHE = _parse_pipeline_manifest_payload(payload)
     except (json.JSONDecodeError, ValueError) as exc:
@@ -685,17 +649,17 @@ def compile_cmd(
         raise Exit(1)
 
     config = get_config()
-    pipeline_tokens = _get_pipeline_tokens(config)
-    if pipeline and pipeline not in pipeline_tokens.pipeline:
+    manifest = _get_pipeline_manifest(config)
+    if pipeline and pipeline not in manifest.tokens.pipeline:
         print_error(f"Unknown pipeline step: '{pipeline}'")
         print_info("Available pipeline steps:")
-        for pipeline_token in pipeline_tokens.pipeline:
+        for pipeline_token in manifest.tokens.pipeline:
             console.print(f"  - {pipeline_token}")
         raise Exit(1)
-    if start_from and start_from not in pipeline_tokens.start_from:
+    if start_from and start_from not in manifest.tokens.start_from:
         print_error(f"Unknown start-from pipeline step: '{start_from}'")
         print_info("Available start-from pipeline steps:")
-        for pipeline_token in pipeline_tokens.start_from:
+        for pipeline_token in manifest.tokens.start_from:
             console.print(f"  - {pipeline_token}")
         raise Exit(1)
 
@@ -1206,8 +1170,8 @@ def _compile_all_pipelines(
     out_dir = output_dir if output_dir else source_file.parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    pipeline_tokens = _get_pipeline_tokens(config)
-    pipeline_steps = pipeline_tokens.pipeline_sequence
+    manifest = _get_pipeline_manifest(config)
+    pipeline_steps = manifest.tokens.pipeline_sequence
 
     stem = source_file.stem
     total_steps = 2 + len(pipeline_steps)

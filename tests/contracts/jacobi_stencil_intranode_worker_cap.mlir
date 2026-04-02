@@ -1,4 +1,4 @@
-// RUN: %carts-compile %S/../examples/jacobi/for/jacobi-for.mlir --O3 --arts-config %S/inputs/arts_64t.cfg --pipeline concurrency-opt | %FileCheck %s
+// RUN: %carts-compile %S/../examples/jacobi/for/jacobi-for.mlir --O3 --arts-config %S/inputs/arts_64t.cfg --pipeline db-partitioning | %FileCheck %s
 
 // CHECK-DAG: %c12 = arith.constant 12 : index
 // CHECK: arts.db_alloc[<in>, <heap>, <read>, <stencil>, <uniform>] route(%c-1_i32 : i32) sizes[%{{.+}}] elementType(f64) elementSizes[%{{.+}}, %c100]

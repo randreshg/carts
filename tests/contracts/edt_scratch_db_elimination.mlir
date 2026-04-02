@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --O3 --arts-config %S/../examples/arts.cfg --pipeline concurrency-opt | %FileCheck %s
+// RUN: %carts-compile %s --O3 --arts-config %S/../examples/arts.cfg --pipeline late-concurrency-cleanup | %FileCheck %s
 
 // CHECK-NOT: arts.db_alloc[<inout>, <stack>, <write>, <coarse>, <uniform>]
 // CHECK: arts.edt <task>

@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --O3 --arts-config %S/../../../examples/arts.cfg --pipeline concurrency-opt | %FileCheck %s
+// RUN: %carts-compile %s --O3 --arts-config %S/../../../examples/arts.cfg --pipeline db-partitioning | %FileCheck %s
 
 // CHECK-LABEL: func.func @main
 // CHECK: arts.db_alloc[{{.*}}<block>, <stencil>{{.*}}]

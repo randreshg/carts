@@ -133,9 +133,9 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
         staticShape && !staticShape->empty()) {
       for (int64_t dim : *staticShape)
         ownerBlockShape.push_back(arts::createConstantIndex(builder, loc, dim));
-    } else if (!contract->blockShape.empty()) {
-      ownerBlockShape.assign(contract->blockShape.begin(),
-                             contract->blockShape.end());
+    } else if (!contract->spatial.blockShape.empty()) {
+      ownerBlockShape.assign(contract->spatial.blockShape.begin(),
+                             contract->spatial.blockShape.end());
     }
   }
   if (ownerBlockShape.empty())
@@ -453,7 +453,7 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
     auto staticMinOffsets =
         contract ? contract->getStaticMinOffsets() : std::nullopt;
     SmallVector<unsigned, 4> ownerDims =
-        (contract && !contract->ownerDims.empty())
+        (contract && !contract->spatial.ownerDims.empty())
             ? resolveContractOwnerDims(*contract, nPartDims)
             : SmallVector<unsigned, 4>{};
     auto resolveOwnerDim = [&](unsigned d) -> unsigned {

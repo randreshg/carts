@@ -17,6 +17,8 @@
 ///==========================================================================///
 
 /// Dialects
+#include "mlir/Dialect/Affine/Utils.h"
+#include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -34,6 +36,7 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/PartitionPredicates.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
@@ -76,6 +79,15 @@ public:
 };
 
 namespace {
+static SmallVector<OpFoldResult, 4>
+getMixedIndexValues(ArtsCodegen *AC, ArrayRef<Value> values, Location loc) {
+  SmallVector<OpFoldResult, 4> mixedValues;
+  mixedValues.reserve(values.size());
+  for (Value value : values)
+    mixedValues.push_back(AC->castToIndex(value, loc));
+  return mixedValues;
+}
+
 static inline DbAllocOp getAllocOpFromGuid(Value dbGuid) {
   if (auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>())
     return dbAcquireOp.getSourceGuid().getDefiningOp<DbAllocOp>();
@@ -403,13 +415,14 @@ private:
 
     auto contract = getAcquireStencilContract(dbAcquireOp, loc);
     if (!contract || !contract->isStencilFamily() ||
-        contract->minOffsets.empty())
+        contract->spatial.minOffsets.empty())
       return globalCoords;
 
-    unsigned rank =
-        std::min<unsigned>(dbInfo.sizes.size(), contract->minOffsets.size());
-    if (!contract->writeFootprint.empty())
-      rank = std::min<unsigned>(rank, contract->writeFootprint.size());
+    unsigned rank = std::min<unsigned>(dbInfo.sizes.size(),
+                                       contract->spatial.minOffsets.size());
+    if (!contract->spatial.writeFootprint.empty())
+      rank =
+          std::min<unsigned>(rank, contract->spatial.writeFootprint.size());
     if (rank == 0)
       return globalCoords;
 
@@ -418,9 +431,10 @@ private:
 
     globalCoords.reserve(rank);
     for (unsigned i = 0; i < rank; ++i) {
-      Value writeCoord =
-          contract->writeFootprint.empty() ? zero : contract->writeFootprint[i];
-      Value minOffset = contract->minOffsets[i];
+      Value writeCoord = contract->spatial.writeFootprint.empty()
+                             ? zero
+                             : contract->spatial.writeFootprint[i];
+      Value minOffset = contract->spatial.minOffsets[i];
       Value dimSize = AC->castToIndex(dbInfo.sizes[i], loc);
 
       Value rawCoord =
@@ -547,23 +561,12 @@ private:
 
     DbAllocOp allocOp = getAllocOpFromGuid(dbGuid);
 
-    if (allocOp && !allocOp.getSizes().empty()) {
-      auto sizes = allocOp.getSizes();
-      Value totalDBs = sizes[0];
-      for (size_t i = 1; i < sizes.size(); ++i)
-        totalDBs =
-            AC->create<arith::MulIOp>(allocOp.getLoc(), totalDBs, sizes[i]);
-      return totalDBs;
-    }
+    if (allocOp && !allocOp.getSizes().empty())
+      return AC->computeTotalElements(allocOp.getSizes(), allocOp.getLoc());
     SmallVector<Value, 4> sizes =
         resolveOuterSizesForGuid(dbGuid, AC, dbGuid.getLoc());
-    if (!sizes.empty()) {
-      Value totalDBs = sizes[0];
-      for (size_t i = 1; i < sizes.size(); ++i)
-        totalDBs =
-            AC->create<arith::MulIOp>(dbGuid.getLoc(), totalDBs, sizes[i]);
-      return totalDBs;
-    }
+    if (!sizes.empty())
+      return AC->computeTotalElements(sizes, dbGuid.getLoc());
     return nullptr;
   }
 
@@ -591,11 +594,7 @@ private:
   static Value buildTrailingExtentProduct(ArtsCodegen *AC,
                                           ArrayRef<Value> extents,
                                           unsigned firstDim, Location loc) {
-    Value product = AC->createIndexConstant(1, loc);
-    for (unsigned i = firstDim; i < extents.size(); ++i)
-      product = AC->create<arith::MulIOp>(loc, product,
-                                          AC->castToIndex(extents[i], loc));
-    return product;
+    return AC->computeTotalElements(extents.drop_front(firstDim), loc);
   }
 
   static std::pair<Value, Value>
@@ -767,33 +766,25 @@ private:
     }
 
     unsigned rank = dbInfo.sizes.size();
-    Value one = AC->createIndexConstant(1, loc);
-    Value remaining = AC->castToIndex(localLinear, loc);
-    SmallVector<Value, 4> globalCoords;
+    FailureOr<SmallVector<Value>> localCoords = affine::delinearizeIndex(
+        AC->getBuilder(), loc, AC->castToIndex(localLinear, loc),
+        getMixedIndexValues(AC, dbInfo.sizes, loc));
+    if (failed(localCoords))
+      return localLinear;
+
+    SmallVector<OpFoldResult, 4> globalCoords;
     globalCoords.reserve(rank);
-
-    for (unsigned i = 0; i < rank; ++i) {
-      Value stride = one;
-      for (unsigned j = i + 1; j < rank; ++j)
-        stride = AC->create<arith::MulIOp>(
-            loc, stride, AC->castToIndex(dbInfo.sizes[j], loc));
-
-      Value localCoord = remaining;
-      if (i + 1 < rank) {
-        localCoord = AC->create<arith::DivUIOp>(loc, remaining, stride);
-        remaining = AC->create<arith::RemUIOp>(loc, remaining, stride);
-      }
-
+    for (auto [localCoord, offset] : llvm::zip(*localCoords, dbInfo.offsets)) {
       Value globalCoord = AC->create<arith::AddIOp>(
-          loc, AC->castToIndex(dbInfo.offsets[i], loc), localCoord);
+          loc, localCoord, AC->castToIndex(offset, loc));
       globalCoords.push_back(globalCoord);
     }
 
-    SmallVector<Value, 4> globalExtents;
-    globalExtents.reserve(rank);
-    for (unsigned i = 0; i < rank; ++i)
-      globalExtents.push_back(AC->castToIndex(allocSizes[i], loc));
-    return AC->computeLinearIndex(globalExtents, globalCoords, loc);
+    return getValueOrCreateConstantIndexOp(
+        AC->getBuilder(), loc,
+        affine::linearizeIndex(
+            AC->getBuilder(), loc, globalCoords,
+            getMixedIndexValues(AC, allocSizes.take_front(rank), loc)));
   }
 
   std::optional<LoweringContractInfo>
@@ -816,13 +807,14 @@ private:
 
     auto contract = getAcquireStencilContract(dbAcquireOp, loc);
     if (!contract || !contract->isStencilFamily() ||
-        contract->minOffsets.empty())
+        contract->spatial.minOffsets.empty())
       return nullptr;
 
-    unsigned rank =
-        std::min<unsigned>(dbInfo.sizes.size(), contract->minOffsets.size());
-    if (!contract->writeFootprint.empty())
-      rank = std::min<unsigned>(rank, contract->writeFootprint.size());
+    unsigned rank = std::min<unsigned>(dbInfo.sizes.size(),
+                                       contract->spatial.minOffsets.size());
+    if (!contract->spatial.writeFootprint.empty())
+      rank =
+          std::min<unsigned>(rank, contract->spatial.writeFootprint.size());
     if (rank == 0)
       return nullptr;
 
@@ -832,9 +824,10 @@ private:
     SmallVector<Value, 4> localCoords;
     localCoords.reserve(rank);
     for (unsigned i = 0; i < rank; ++i) {
-      Value writeCoord =
-          contract->writeFootprint.empty() ? zero : contract->writeFootprint[i];
-      Value minOffset = contract->minOffsets[i];
+      Value writeCoord = contract->spatial.writeFootprint.empty()
+                             ? zero
+                             : contract->spatial.writeFootprint[i];
+      Value minOffset = contract->spatial.minOffsets[i];
       Value dimSize = AC->castToIndex(dbInfo.sizes[i], loc);
 
       Value rawCoord =
@@ -848,18 +841,8 @@ private:
           AC->create<arith::MinSIOp>(loc, nonNegative, sizeMinusOne));
     }
 
-    Value localLinearIndex = zero;
-    for (unsigned i = 0; i < rank; ++i) {
-      Value stride = one;
-      for (unsigned j = i + 1; j < rank; ++j) {
-        stride = AC->create<arith::MulIOp>(
-            loc, stride, AC->castToIndex(dbInfo.sizes[j], loc));
-      }
-      Value contribution =
-          AC->create<arith::MulIOp>(loc, localCoords[i], stride);
-      localLinearIndex =
-          AC->create<arith::AddIOp>(loc, localLinearIndex, contribution);
-    }
+    Value localLinearIndex = AC->computeLinearIndex(
+        ArrayRef<Value>(dbInfo.sizes).take_front(rank), localCoords, loc);
 
     return localLinearToGlobalLinear(localLinearIndex, dbInfo, allocSizes, loc);
   }
@@ -875,22 +858,18 @@ private:
     Value one = AC->createIndexConstant(1, loc);
     Value center = AC->createIndexConstant(centerOffset, loc);
 
-    Value localLinearIndex = zero;
+    SmallVector<Value, 4> localCoords;
+    localCoords.reserve(dbInfo.sizes.size());
     for (unsigned i = 0; i < dbInfo.sizes.size(); ++i) {
       Value dimSize = AC->castToIndex(dbInfo.sizes[i], loc);
       Value sizeMinusOne = AC->create<arith::SubIOp>(loc, dimSize, one);
       sizeMinusOne = AC->create<arith::MaxSIOp>(loc, sizeMinusOne, zero);
-      Value localCoord = AC->create<arith::MinSIOp>(loc, center, sizeMinusOne);
-
-      Value stride = one;
-      for (unsigned j = i + 1; j < dbInfo.sizes.size(); ++j) {
-        stride = AC->create<arith::MulIOp>(
-            loc, stride, AC->castToIndex(dbInfo.sizes[j], loc));
-      }
-      Value contribution = AC->create<arith::MulIOp>(loc, localCoord, stride);
-      localLinearIndex =
-          AC->create<arith::AddIOp>(loc, localLinearIndex, contribution);
+      localCoords.push_back(
+          AC->create<arith::MinSIOp>(loc, center, sizeMinusOne));
     }
+
+    Value localLinearIndex =
+        AC->computeLinearIndex(dbInfo.sizes, localCoords, loc);
 
     return localLinearToGlobalLinear(localLinearIndex, dbInfo, allocSizes, loc);
   }
@@ -930,9 +909,7 @@ private:
       int32_t writeMode = static_cast<int32_t>(DbMode::write);
       bool writerMode = !acquireMode || *acquireMode == writeMode;
       auto partitionMode = dbAcquireOp.getPartitionMode();
-      if (writerMode && partitionMode &&
-          (*partitionMode == PartitionMode::block ||
-           *partitionMode == PartitionMode::stencil)) {
+      if (writerMode && partitionMode && usesBlockLayout(*partitionMode)) {
         result.stencilContract = getAcquireStencilContract(dbAcquireOp, loc);
         result.stencilCenterLinear = inferStencilCenterLinearFromContract(
             dbAcquireOp, result.dbInfo, result.allocSizes, loc);
@@ -963,9 +940,9 @@ private:
 
         unsigned ownerRank = result.dbInfo.sizes.size();
         if (result.stencilContract &&
-            !result.stencilContract->ownerDims.empty())
-          ownerRank =
-              static_cast<unsigned>(result.stencilContract->ownerDims.size());
+            !result.stencilContract->spatial.ownerDims.empty())
+          ownerRank = static_cast<unsigned>(
+              result.stencilContract->spatial.ownerDims.size());
         if (ownerRank != 0) {
           if (result.stencilContract)
             result.blockOwnerDims =
