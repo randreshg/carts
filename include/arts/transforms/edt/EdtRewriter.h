@@ -63,7 +63,7 @@ struct TaskAcquireRewritePlanInput {
   DistributionKind distributionKind = DistributionKind::Flat;
   std::optional<EdtDistributionPattern> distributionPattern;
   std::optional<Tiling2DWorkerGrid> tiling2DGrid;
-  AcquireRewriteContract rewriteContract;
+  LoweringContractInfo contract;
   Value acquireOffset;
   Value acquireSize;
   Value acquireHintSize;
@@ -94,7 +94,7 @@ struct TaskAcquireSlicePlanInput {
   Value plannedElementSize;
   Value plannedElementSizeSeed;
   bool usesStencilHalo = false;
-  AcquireRewriteContract rewriteContract;
+  LoweringContractInfo contract;
 };
 
 /// Plan the per-worker acquire rewrite payload from the resolved distribution
@@ -113,7 +113,7 @@ void applyTaskAcquireSlicePlan(TaskAcquireSlicePlanInput input);
 /// Project semantic contract metadata onto one rewritten task acquire.
 void applyTaskAcquireContractMetadata(
     Operation *semanticSourceOp, DbAcquireOp taskAcquire,
-    const AcquireRewriteContract &rewriteContract,
+    const LoweringContractInfo &contract,
     std::optional<SmallVector<int64_t, 4>> refinedTaskBlockShape,
     OpBuilder &builder, Location loc);
 

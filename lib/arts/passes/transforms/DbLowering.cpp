@@ -97,9 +97,8 @@ static void normalizeBlockHaloAcquireSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   if (rank == 0)
     return;
 
-  AcquireRewriteContract rewriteContract =
-      deriveAcquireRewriteContract(acquire);
-  bool usePartitionSlice = rewriteContract.usePartitionSliceAsDepWindow;
+  bool usePartitionSlice =
+      shouldUsePartitionSliceAsDepWindow(*contractInfo, acquire);
   auto offsetRange =
       usePartitionSlice ? acquire.getPartitionOffsets() : acquire.getOffsets();
   auto sizeRange =

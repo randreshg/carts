@@ -102,7 +102,7 @@ namespace {
 static constexpr int32_t kArtsDepFlagPreferDuplicate = 1 << 0;
 
 static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
-                                  const AcquireRewriteContract &contract) {
+                                  const LoweringContractInfo &contract) {
   if (!AC || !acquire)
     return;
 
@@ -124,9 +124,11 @@ static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   if (rank == 0)
     return;
 
-  bool hasContractHalo = contract.applyStencilHalo ||
-                         !contract.haloMinOffsets.empty() ||
-                         !contract.haloMaxOffsets.empty();
+  bool applyStencilHalo = shouldApplyStencilHalo(contract, acquire);
+  auto haloMinOffsets = contract.getStaticMinOffsets();
+  auto haloMaxOffsets = contract.getStaticMaxOffsets();
+  bool hasContractHalo =
+      applyStencilHalo || haloMinOffsets || haloMaxOffsets;
   bool needsStructuralNormalization =
       rank > 1 || *mode == PartitionMode::stencil;
   if (!hasContractHalo && !needsStructuralNormalization)
@@ -139,9 +141,7 @@ static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
 
   auto outerSizes = alloc.getSizes();
   auto elementSizes = alloc.getElementSizes();
-  LoweringContractInfo contractInfo;
-  contractInfo.spatial.ownerDims = contract.ownerDims;
-  SmallVector<unsigned, 4> dims = resolveContractOwnerDims(contractInfo, rank);
+  SmallVector<unsigned, 4> dims = resolveContractOwnerDims(contract, rank);
 
   if (dims.size() > outerSizes.size() || dims.size() > elementSizes.size())
     return;
@@ -209,11 +209,11 @@ normalizeCommonElementSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   Value one = AC->createIndexConstant(1, loc);
   Value trueI1 = AC->create<arith::ConstantIntOp>(loc, 1, 1);
 
-  AcquireRewriteContract contract = deriveAcquireRewriteContract(acquire);
-  LoweringContractInfo contractInfo;
-  contractInfo.spatial.ownerDims = contract.ownerDims;
+  auto contract = resolveAcquireContract(acquire);
+  if (!contract)
+    return std::nullopt;
   SmallVector<unsigned, 4> ownerDims =
-      resolveContractOwnerDims(contractInfo, ownerRank);
+      resolveContractOwnerDims(*contract, ownerRank);
   if (ownerDims.size() != ownerRank)
     return std::nullopt;
 
@@ -607,7 +607,8 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   /// same DB-space contract.
   for (Value dep : edtDeps)
     if (auto acquire = dep.getDefiningOp<DbAcquireOp>())
-      normalizeTaskDepSlice(AC, acquire, deriveAcquireRewriteContract(acquire));
+      if (auto contract = resolveAcquireContract(acquire))
+        normalizeTaskDepSlice(AC, acquire, *contract);
 
   SmallVector<Type> packTypes;
 

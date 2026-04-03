@@ -32,10 +32,13 @@ using namespace mlir::arts;
 
 namespace {
 
-static bool hasConcreteReadHaloContract(const AcquireRewriteContract &contract,
+static bool hasConcreteReadHaloContract(const LoweringContractInfo &contract,
                                         ArtsMode effectiveMode) {
-  return effectiveMode == ArtsMode::in && !contract.haloMinOffsets.empty() &&
-         contract.haloMinOffsets.size() == contract.haloMaxOffsets.size();
+  if (effectiveMode != ArtsMode::in)
+    return false;
+  auto minOffsets = contract.getStaticMinOffsets();
+  auto maxOffsets = contract.getStaticMaxOffsets();
+  return minOffsets && maxOffsets && minOffsets->size() == maxOffsets->size();
 }
 
 struct TaskAcquireWindow {
@@ -91,17 +94,20 @@ computeTaskAcquireWindow(TaskAcquireSlicePlanInput input) {
   Value elementOffset = input.plannedElementOffset;
   Value elementSize = input.plannedElementSizeSeed;
   const bool useRewrittenWindow =
-      input.rewriteContract.usePartitionSliceAsDepWindow;
+      shouldUsePartitionSliceAsDepWindow(input.contract, input.taskAcquire);
   const bool hasReadHaloContract =
-      hasConcreteReadHaloContract(input.rewriteContract, input.effectiveMode);
-  const bool useTaskDepWindow = input.usesStencilHalo ||
-                                input.rewriteContract.applyStencilHalo ||
-                                hasReadHaloContract;
+      hasConcreteReadHaloContract(input.contract, input.effectiveMode);
+  const bool applyStencilHalo =
+      shouldApplyStencilHalo(input.contract, input.taskAcquire);
+  const bool useTaskDepWindow =
+      input.usesStencilHalo || applyStencilHalo || hasReadHaloContract;
+  const bool preserveParentDepRange =
+      shouldPreserveParentDepRange(input.contract, input.taskAcquire);
   const bool useTaskPartitionWindow =
       !input.taskAcquire.getPartitionOffsets().empty() &&
       !input.taskAcquire.getPartitionSizes().empty() &&
-      (input.effectiveMode != ArtsMode::in ||
-       !input.rewriteContract.preserveParentDepRange || useRewrittenWindow);
+      (input.effectiveMode != ArtsMode::in || !preserveParentDepRange ||
+       useRewrittenWindow);
 
   if (useTaskPartitionWindow) {
     auto offsetRange = input.taskAcquire.getPartitionOffsets();
@@ -195,7 +201,7 @@ static bool shouldMaterializeTaskElementSlice(TaskAcquireSlicePlanInput input) {
   if (input.usesStencilHalo)
     return input.effectiveMode == ArtsMode::in;
 
-  if (input.rewriteContract.usePartitionSliceAsDepWindow) {
+  if (shouldUsePartitionSliceAsDepWindow(input.contract, input.taskAcquire)) {
     /// A single element_offsets/element_sizes pair is only sound when the
     /// entire acquire lowers to one slice shape. Writer-capable stencil
     /// windows expand into multiple DB slots whose predecessor/successor face
@@ -205,7 +211,7 @@ static bool shouldMaterializeTaskElementSlice(TaskAcquireSlicePlanInput input) {
   }
 
   return input.effectiveMode == ArtsMode::in &&
-         !input.rewriteContract.preserveParentDepRange;
+         !shouldPreserveParentDepRange(input.contract, input.taskAcquire);
 }
 
 static std::optional<TaskElementSlice>
@@ -250,7 +256,7 @@ computeTaskElementSlice(TaskAcquireSlicePlanInput input) {
   if (taskContract && !taskContract->spatial.ownerDims.empty())
     contractInfo.spatial.ownerDims = taskContract->spatial.ownerDims;
   else
-    contractInfo.spatial.ownerDims = input.rewriteContract.ownerDims;
+    contractInfo.spatial.ownerDims = input.contract.spatial.ownerDims;
   /// Element-space task slices need an authoritative mapping from partition
   /// entries back to physical memref dims. Falling back to implicit leading
   /// dims is not a benign heuristic here: it fabricates owner-local slices for
@@ -325,21 +331,25 @@ mlir::arts::planTaskAcquireRewrite(TaskAcquireRewritePlanInput input) {
   SmallVector<Value, 4> extraSizes;
   SmallVector<Value, 4> extraHintSizes;
   SmallVector<Value, 4> dimensionExtents;
-  AcquireRewriteContract rewriteContract = input.rewriteContract;
+  const LoweringContractInfo &contract = input.contract;
 
-  if (!rewriteContract.applyStencilHalo &&
-      input.effectiveMode == ArtsMode::in &&
-      !rewriteContract.haloMinOffsets.empty() &&
-      !rewriteContract.haloMaxOffsets.empty()) {
-    /// Some pipelines stamp the full stencil contract on the loop/task shape
-    /// and only copy it onto the rewritten acquire after planning. When that
-    /// happens, the halo bounds are already known here even if
-    /// applyStencilHalo was not flipped upstream yet. Enable halo-aware task
-    /// window planning directly from the resolved stencil bounds so the
-    /// dependency slice matches the task's true read footprint.
-    rewriteContract.applyStencilHalo = true;
-    rewriteContract.preserveParentDepRange = false;
-    rewriteContract.usePartitionSliceAsDepWindow = false;
+  /// Check if we should apply stencil halo extension. Some pipelines stamp the
+  /// full stencil contract on the loop/task shape, so the halo bounds may be
+  /// present even before explicit applyStencilHalo enablement.
+  bool applyStencilHalo = shouldApplyStencilHalo(contract, input.parentAcquire);
+  bool preserveParentDepRange =
+      shouldPreserveParentDepRange(contract, input.parentAcquire);
+  bool usePartitionSliceAsDepWindow =
+      shouldUsePartitionSliceAsDepWindow(contract, input.parentAcquire);
+
+  auto haloMinOffsets = contract.getStaticMinOffsets();
+  auto haloMaxOffsets = contract.getStaticMaxOffsets();
+  if (!applyStencilHalo && input.effectiveMode == ArtsMode::in &&
+      haloMinOffsets && haloMaxOffsets) {
+    /// Enable halo-aware task window planning when contract has halo bounds.
+    applyStencilHalo = true;
+    preserveParentDepRange = false;
+    usePartitionSliceAsDepWindow = false;
   }
 
   if (Operation *rootAllocOp = DbUtils::getUnderlyingDbAlloc(input.rootPtr)) {
@@ -375,12 +385,12 @@ mlir::arts::planTaskAcquireRewrite(TaskAcquireRewritePlanInput input) {
         }
 
         unsigned primaryOwnerDim = 0;
-        if (!rewriteContract.ownerDims.empty() &&
-            rewriteContract.ownerDims.front() >= 0 &&
-            static_cast<size_t>(rewriteContract.ownerDims.front()) <
+        if (!contract.spatial.ownerDims.empty() &&
+            contract.spatial.ownerDims.front() >= 0 &&
+            static_cast<size_t>(contract.spatial.ownerDims.front()) <
                 elemSizes.size()) {
           primaryOwnerDim =
-              static_cast<unsigned>(rewriteContract.ownerDims.front());
+              static_cast<unsigned>(contract.spatial.ownerDims.front());
         }
 
         auto outerSizes = dbAlloc.getSizes();
@@ -402,7 +412,7 @@ mlir::arts::planTaskAcquireRewrite(TaskAcquireRewritePlanInput input) {
 
         Value primaryExtent =
             buildTotalOwnerExtent(/*ownerSlot=*/0, primaryOwnerDim);
-        if (rewriteContract.applyStencilHalo)
+        if (applyStencilHalo)
           stencilExtent = primaryExtent;
         dimensionExtents.push_back(primaryExtent);
 
@@ -415,12 +425,12 @@ mlir::arts::planTaskAcquireRewrite(TaskAcquireRewritePlanInput input) {
               ValueAnalysis::tryFoldConstantIndex(colWorkers);
           if (!colWorkersConst || *colWorkersConst > 1) {
             unsigned secondaryOwnerDim = 1;
-            if (rewriteContract.ownerDims.size() > 1 &&
-                rewriteContract.ownerDims[1] >= 0 &&
-                static_cast<size_t>(rewriteContract.ownerDims[1]) <
+            if (contract.spatial.ownerDims.size() > 1 &&
+                contract.spatial.ownerDims[1] >= 0 &&
+                static_cast<size_t>(contract.spatial.ownerDims[1]) <
                     elemSizes.size()) {
               secondaryOwnerDim =
-                  static_cast<unsigned>(rewriteContract.ownerDims[1]);
+                  static_cast<unsigned>(contract.spatial.ownerDims[1]);
             }
 
             Value totalCols =
@@ -450,7 +460,7 @@ mlir::arts::planTaskAcquireRewrite(TaskAcquireRewritePlanInput input) {
             extraSizes.push_back(colCount);
             extraHintSizes.push_back(colCount);
             dimensionExtents.push_back(totalCols);
-            rewriteContract.preserveParentDepRange = false;
+            preserveParentDepRange = false;
 
             auto rowWorkersConst =
                 input.tiling2DGrid->rowWorkers
@@ -509,9 +519,9 @@ mlir::arts::planTaskAcquireRewrite(TaskAcquireRewritePlanInput input) {
         /// loses the pre-halo chunk extent. Materialize the N-D owner tile
         /// here, from the pre-halo hint sizes, so DbPartitioning can harmonize
         /// read/write allocations on the same worker-local block plan.
-        if (!plan.refinedTaskBlockShape && !rewriteContract.ownerDims.empty()) {
+        if (!plan.refinedTaskBlockShape && !contract.spatial.ownerDims.empty()) {
           SmallVector<unsigned, 4> ownerDims;
-          for (int64_t dim : rewriteContract.ownerDims) {
+          for (int64_t dim : contract.spatial.ownerDims) {
             if (dim >= 0 && static_cast<size_t>(dim) < elemSizes.size())
               ownerDims.push_back(static_cast<unsigned>(dim));
           }
@@ -554,19 +564,22 @@ mlir::arts::planTaskAcquireRewrite(TaskAcquireRewritePlanInput input) {
     }
   }
 
-  plan.useStencilRewriter = rewriteContract.applyStencilHalo;
+  plan.useStencilRewriter = applyStencilHalo;
   plan.rewriteInput.singleElement = isSingleElement;
   plan.rewriteInput.forceCoarse = forceCoarseRewrite;
   plan.rewriteInput.effectiveMode = input.effectiveMode;
-  plan.rewriteInput.preserveParentDepRange =
-      rewriteContract.preserveParentDepRange;
+  plan.rewriteInput.preserveParentDepRange = preserveParentDepRange;
   plan.rewriteInput.stencilExtent = stencilExtent;
   plan.rewriteInput.extraOffsets = std::move(extraOffsets);
   plan.rewriteInput.extraSizes = std::move(extraSizes);
   plan.rewriteInput.extraHintSizes = std::move(extraHintSizes);
   plan.rewriteInput.dimensionExtents = std::move(dimensionExtents);
-  plan.rewriteInput.haloMinOffsets = std::move(rewriteContract.haloMinOffsets);
-  plan.rewriteInput.haloMaxOffsets = std::move(rewriteContract.haloMaxOffsets);
+  if (haloMinOffsets)
+    plan.rewriteInput.haloMinOffsets.assign(haloMinOffsets->begin(),
+                                            haloMinOffsets->end());
+  if (haloMaxOffsets)
+    plan.rewriteInput.haloMaxOffsets.assign(haloMaxOffsets->begin(),
+                                            haloMaxOffsets->end());
   return plan;
 }
 
@@ -750,10 +763,14 @@ void mlir::arts::applyTaskAcquireSlicePlan(TaskAcquireSlicePlanInput input) {
     return;
 
   const bool hasReadHaloContract =
-      hasConcreteReadHaloContract(input.rewriteContract, input.effectiveMode);
-  bool shouldUseStencilWindow =
-      input.usesStencilHalo || input.rewriteContract.applyStencilHalo ||
-      input.rewriteContract.usePartitionSliceAsDepWindow || hasReadHaloContract;
+      hasConcreteReadHaloContract(input.contract, input.effectiveMode);
+  const bool applyStencilHalo =
+      shouldApplyStencilHalo(input.contract, input.taskAcquire);
+  const bool usePartitionSliceAsDepWindow =
+      shouldUsePartitionSliceAsDepWindow(input.contract, input.taskAcquire);
+  bool shouldUseStencilWindow = input.usesStencilHalo || applyStencilHalo ||
+                                usePartitionSliceAsDepWindow ||
+                                hasReadHaloContract;
   bool shouldMaterializeElementSlice = shouldMaterializeTaskElementSlice(input);
   bool shouldUpdateBlockWindow = true;
 
@@ -769,8 +786,10 @@ void mlir::arts::applyTaskAcquireSlicePlan(TaskAcquireSlicePlanInput input) {
         usesBlockLayout(mode) &&
         (input.taskAcquire.getPartitionOffsets().empty() ||
          input.taskAcquire.getPartitionSizes().empty());
+    const bool preserveParentDepRange =
+        shouldPreserveParentDepRange(input.contract, input.taskAcquire);
     shouldUpdateBlockWindow =
-        needsPartitionMetadata || !input.rewriteContract.preserveParentDepRange;
+        needsPartitionMetadata || !preserveParentDepRange;
   }
   size_t sourceRank =
       DbUtils::getSizesFromDb(input.taskAcquire.getSourcePtr()).size();
@@ -828,7 +847,7 @@ void mlir::arts::applyTaskAcquireSlicePlan(TaskAcquireSlicePlanInput input) {
 
 void mlir::arts::applyTaskAcquireContractMetadata(
     Operation *semanticSourceOp, DbAcquireOp taskAcquire,
-    const AcquireRewriteContract &rewriteContract,
+    const LoweringContractInfo &contract,
     std::optional<SmallVector<int64_t, 4>> refinedTaskBlockShape,
     OpBuilder &builder, Location loc) {
   if (!semanticSourceOp || !taskAcquire)
@@ -868,8 +887,8 @@ void mlir::arts::applyTaskAcquireContractMetadata(
     taskOwnerDims.assign(currentContract->spatial.ownerDims.begin(),
                          currentContract->spatial.ownerDims.end());
   else
-    taskOwnerDims.assign(rewriteContract.ownerDims.begin(),
-                         rewriteContract.ownerDims.end());
+    taskOwnerDims.assign(contract.spatial.ownerDims.begin(),
+                         contract.spatial.ownerDims.end());
 
   unsigned supportedOwnerRank = 0;
   if (!taskAcquire.getPartitionOffsets().empty() &&
@@ -921,11 +940,11 @@ void mlir::arts::applyTaskAcquireContractMetadata(
     }
   }
   if (taskHaloMinOffsets.empty())
-    taskHaloMinOffsets.assign(rewriteContract.haloMinOffsets.begin(),
-                              rewriteContract.haloMinOffsets.end());
+    if (auto haloMins = contract.getStaticMinOffsets())
+      taskHaloMinOffsets.assign(haloMins->begin(), haloMins->end());
   if (taskHaloMaxOffsets.empty())
-    taskHaloMaxOffsets.assign(rewriteContract.haloMaxOffsets.begin(),
-                              rewriteContract.haloMaxOffsets.end());
+    if (auto haloMaxs = contract.getStaticMaxOffsets())
+      taskHaloMaxOffsets.assign(haloMaxs->begin(), haloMaxs->end());
   taskHaloMinOffsets = clampRankedStencilVector(std::move(taskHaloMinOffsets));
   taskHaloMaxOffsets = clampRankedStencilVector(std::move(taskHaloMaxOffsets));
 
@@ -946,18 +965,20 @@ void mlir::arts::applyTaskAcquireContractMetadata(
   taskWriteFootprint = clampRankedStencilVector(std::move(taskWriteFootprint));
 
   auto chunkMode = taskAcquire.getPartitionMode();
-  bool shouldMarkStencilCenter =
-      rewriteContract.usePartitionSliceAsDepWindow ||
-      rewriteContract.applyStencilHalo ||
-      (chunkMode && *chunkMode == PartitionMode::stencil);
+  const bool applyStencilHalo =
+      shouldApplyStencilHalo(contract, taskAcquire);
+  const bool usePartitionSliceAsDepWindow =
+      shouldUsePartitionSliceAsDepWindow(contract, taskAcquire);
+  bool shouldMarkStencilCenter = usePartitionSliceAsDepWindow ||
+                                 applyStencilHalo ||
+                                 (chunkMode && *chunkMode == PartitionMode::stencil);
   std::optional<int64_t> taskCenterOffset;
   if (currentContract)
     taskCenterOffset = currentContract->spatial.centerOffset;
   if (shouldMarkStencilCenter && !taskCenterOffset) {
     taskCenterOffset = 1;
-    if (!rewriteContract.haloMinOffsets.empty())
-      taskCenterOffset =
-          std::max<int64_t>(0, -rewriteContract.haloMinOffsets.front());
+    if (!taskHaloMinOffsets.empty())
+      taskCenterOffset = std::max<int64_t>(0, -taskHaloMinOffsets.front());
   }
 
   /// Task acquires must carry the full stencil halo contract before
