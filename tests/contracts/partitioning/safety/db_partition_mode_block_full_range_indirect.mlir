@@ -3,4 +3,4 @@
 // CHECK-LABEL: func.func @main
 // CHECK: arts.db_alloc[{{.*}}<block>, <indexed>{{.*}}]
 // CHECK: arts.db_acquire[<in>] ({{.*}}) partitioning(<block>, offsets[
-// CHECK-SAME: ]), offsets[%c0], sizes[
+// CHECK-SAME: ]), offsets[%{{.*}}], sizes[

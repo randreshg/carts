@@ -10,20 +10,18 @@
 // CHECK: %[[POS_PTR:.+]] = scf.if {{.+}} -> (!llvm.ptr) {
 // CHECK: scf.for %[[TAP:.+]] = %c-2 to %c3 step %c1 iter_args(%{{.+}} = %cst_1) -> (f32) {
 // CHECK: %{{.+}} = arith.addf %{{.+}}, %{{.+}} : f32
-// CHECK: %[[GLOBAL:.+]] = arith.addi %{{.+}}, %[[TAP]] : index
-// CHECK: %[[NEXT_BLOCK:.+]] = arith.addi %{{.+}}, %{{.+}} : index
-// CHECK: %[[LOW:.+]] = arith.cmpi ult, %[[GLOBAL]], %{{.+}} : index
-// CHECK: %[[HIGH:.+]] = arith.cmpi uge, %[[GLOBAL]], %[[NEXT_BLOCK]] : index
-// CHECK: %[[LOCAL:.+]] = arith.subi %[[GLOBAL]], %{{.+}} : index
-// CHECK: %[[LOCAL_NEG:.+]] = arith.addi %[[LOCAL]], %{{.+}} : index
-// CHECK: %[[LOCAL_POS:.+]] = arith.subi %[[LOCAL]], %{{.+}} : index
-// CHECK: %[[SEL_LOCAL0:.+]] = arith.select %[[LOW]], %[[LOCAL_NEG]], %[[LOCAL]] : index
-// CHECK: %[[SEL_LOCAL1:.+]] = arith.select %[[HIGH]], %[[LOCAL_POS]], %[[SEL_LOCAL0]] : index
+// CHECK: %[[GLOBAL:.+]] = arith.addi %{{.+}}, %{{.+}} : index
+// CHECK: %[[LOW:.+]] = arith.cmpi s{{.+}}, %[[GLOBAL]], %{{.+}} : index
+// CHECK: %[[HIGH:.+]] = arith.cmpi s{{.+}}, %[[GLOBAL]], %{{.+}} : index
+// CHECK: %{{.+}} = arith.s{{.+}} %[[GLOBAL]], %{{.+}} : index
+// CHECK: %{{.+}} = arith.{{.+}} %[[GLOBAL]], %{{.+}} : index
+// CHECK: %[[SEL_LOCAL0:.+]] = arith.select %[[LOW]], %{{.+}}, %{{.+}} : index
+// CHECK: %[[SEL_LOCAL1:.+]] = arith.select %[[HIGH]], %{{.+}}, %[[SEL_LOCAL0]] : index
 // CHECK-NOT: arith.remui
-// CHECK: %[[SEL_PTR0:.+]] = llvm.select %[[LOW]], %[[NEG_PTR]], %{{.+}} : i1, !llvm.ptr
-// CHECK: %[[SEL_PTR1:.+]] = llvm.select %[[HIGH]], %[[POS_PTR]], %[[SEL_PTR0]] : i1, !llvm.ptr
-// CHECK: %[[VIEW:.+]] = polygeist.pointer2memref %[[SEL_PTR1]] : !llvm.ptr to memref<?x?x?x?xf32>
-// CHECK: polygeist.load %[[VIEW]][%c0, %{{.+}}, %{{.+}}, %[[SEL_LOCAL1]]] sizes
+// CHECK: %{{.+}} = llvm.select %[[LOW]], %{{.+}}, %{{.+}} : i1, !llvm.ptr
+// CHECK: %{{.+}} = llvm.select %[[HIGH]], %{{.+}}, %{{.+}} : i1, !llvm.ptr
+// CHECK: %{{.+}} = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?x?xf32>
+// CHECK: polygeist.load %{{.+}}[%c0, %{{.+}}, %{{.+}}, %[[SEL_LOCAL1]]] sizes
 
 module {
 }

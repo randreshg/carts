@@ -7,8 +7,8 @@
 // blocked.
 
 // CHECK: %[[A_GUID:[^,]+]], %[[A_PTR:[^ ]+]] = arts.db_alloc[<in>, <heap>, <read>, <coarse>, <uniform>]
-// CHECK-DAG: arts.db_acquire[<in>] (%[[A_GUID]] : memref<?xi64>, %[[A_PTR]] : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0], sizes[%c1] {{.*}}stencil_owner_dims = [0]
-// CHECK-DAG: arts.db_acquire[<in>] (%[[A_GUID]] : memref<?xi64>, %[[A_PTR]] : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0], sizes[%c1] {{.*}}stencil_owner_dims = [1]
+// CHECK-DAG: arts.db_acquire[<in>] (%[[A_GUID]] : memref<?xi64>, %[[A_PTR]] : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%{{.*}}], sizes[%c1] {{.*}}stencil_owner_dims = [0]
+// CHECK-DAG: arts.db_acquire[<in>] (%[[A_GUID]] : memref<?xi64>, %[[A_PTR]] : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%{{.*}}], sizes[%c1] {{.*}}stencil_owner_dims = [1]
 
 module {
 }

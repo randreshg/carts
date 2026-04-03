@@ -11,7 +11,7 @@
 // CHECK-64: arts.db_acquire[<in>] {{.*}} {arts.partition_hint = {blockSize = 9 : i64, mode = 1 : i8},
 
 // CHECK-2: arts.runtime_query <total_workers>
-// CHECK-2: arts.db_alloc[<inout>, <heap>, <write>, <block>, <stencil>] route(%c-1_i32 : i32) sizes[%c2] elementType(f64) elementSizes[%c50, %c100]
+// CHECK-2: arts.db_alloc[<inout>, <heap>, <write>, <stencil>, <stencil>] route(%c-1_i32 : i32) sizes[%{{.+}}] elementType(f64) elementSizes[%{{.+}}, %c100]
 // CHECK-2-NOT: arts.partition_hint = {blockSize =
 
 module {

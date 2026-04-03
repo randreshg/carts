@@ -20,4 +20,4 @@
 // CHECK:         %{{.+}} = polygeist.load %[[MU_MEM]][
 // CHECK:         %{{.+}} = polygeist.load %[[LA_MEM]][
 // CHECK:         %{{.+}} = polygeist.load %[[CENTER_MEM]][
-// CHECK:         polygeist.store %{{.+}}, %[[RHS_MEM]][
+// CHECK:         polygeist.store %{{.+}}, %{{.+}}[

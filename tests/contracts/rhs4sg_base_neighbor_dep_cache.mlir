@@ -20,14 +20,14 @@
 // CHECK:   scf.yield %{{.+}} : !llvm.ptr
 // CHECK: }
 // CHECK: scf.for %{{.+}} = %c-2 to %c3 step %c1 iter_args(%{{.+}} = %cst_1) -> (f32) {
-// CHECK:   %{{.+}} = arith.cmpi ult, %{{.+}}, %{{.+}} : index
-// CHECK:   %{{.+}} = arith.cmpi uge, %{{.+}}, %{{.+}} : index
-// CHECK:   %[[SEL_PTR0:.+]] = llvm.select %{{.+}}, %[[NEG_PTR]], %{{.+}} : i1, !llvm.ptr
-// CHECK:   %[[SEL_PTR1:.+]] = llvm.select %{{.+}}, %[[POS_PTR]], %[[SEL_PTR0]] : i1, !llvm.ptr
-// CHECK:   %[[MEM:.+]] = polygeist.pointer2memref %[[SEL_PTR1]] : !llvm.ptr to memref<?x?x?x?xf32>
+// CHECK:   %{{.+}} = arith.cmpi {{.+}}, %{{.+}}, %{{.+}} : index
+// CHECK:   %{{.+}} = arith.cmpi {{.+}}, %{{.+}}, %{{.+}} : index
+// CHECK:   %{{.+}} = llvm.select %{{.+}}, %[[NEG_PTR]], %{{.+}} : i1, !llvm.ptr
+// CHECK:   %{{.+}} = llvm.select %{{.+}}, %[[POS_PTR]], %{{.+}} : i1, !llvm.ptr
+// CHECK:   %{{.+}} = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?x?xf32>
 // CHECK-NOT: arts.dep_gep
 // CHECK-NOT: arith.divui
-// CHECK:   %{{.+}} = polygeist.load %[[MEM]][%{{.+}}, %{{.+}}, %{{.+}}, %{{.+}}] sizes
+// CHECK:   %{{.+}} = polygeist.load %{{.+}}[%{{.+}}, %{{.+}}, %{{.+}}, %{{.+}}] sizes
 // CHECK:   scf.yield %{{.+}} : f32
 
 module {

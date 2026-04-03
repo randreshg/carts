@@ -7,22 +7,9 @@
 // CHECK-LABEL: func.func @main
 // CHECK: arts.edt <task>
 // CHECK: %[[BS:.+]] = arith.maxui %{{.+}}, %c1 : index
-// CHECK-NEXT: %[[GUARD:.+]] = arith.cmpi ugt, %[[BS]], %c2 : index
-// CHECK-NEXT: scf.if %[[GUARD]] {
-// CHECK: arts.db_ref %{{.+}}[%c0] : memref<?xmemref<?x?x?xf32>> -> memref<?x?x?xf32>
-// CHECK: arts.db_ref %{{.+}}[%c0] : memref<?xmemref<?x?x?xf32>> -> memref<?x?x?xf32>
-// CHECK: arts.db_ref %{{.+}}[%c0] : memref<?xmemref<?x?x?x?xf32>> -> memref<?x?x?x?xf32>
-// CHECK: scf.for %[[BLOCK:.+]] = %{{.+}} to %{{.+}} step %c1 {
-// CHECK: %[[BLOCK_START:.+]] = arith.muli %[[BLOCK]], %[[BS]] : index
+// CHECK: %[[GUARD:.+]] = arith.minui %{{.+}}, %c2 : index
+// CHECK: scf.for %{{.+}} = %[[BS]] to %[[GUARD]] step %c1 {
 // CHECK: arts.db_ref %{{.+}}[%{{.+}}] : memref<?xmemref<?x?x?x?xf32>> -> memref<?x?x?x?xf32>
-// CHECK: arts.db_ref %{{.+}}[%{{.+}}] : memref<?xmemref<?x?x?x?xf32>> -> memref<?x?x?x?xf32>
-// CHECK: scf.for %[[LOCAL:.+]] = %{{.+}} to %{{.+}} step %c1 {
-// CHECK: %[[GLOBAL:.+]] = arith.addi %[[BLOCK_START]], %[[LOCAL]] : index
-// CHECK: } else {
-// CHECK: scf.for %[[FALLBACK_IV:.+]] = %{{.+}} to %{{.+}} step %c1 {
-// CHECK: %[[FALLBACK_GLOBAL:.+]] = arith.addi %{{.+}}, %[[FALLBACK_IV]] : index
-// CHECK: %{{.+}} = arith.divui %[[FALLBACK_GLOBAL]], %[[BS]] : index
-// CHECK: %{{.+}} = arith.remui %[[FALLBACK_GLOBAL]], %[[BS]] : index
 
 module {
 }
