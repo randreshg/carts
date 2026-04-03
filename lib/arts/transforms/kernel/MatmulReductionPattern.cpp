@@ -46,6 +46,7 @@
 
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/transforms/kernel/KernelTransform.h"
+#include "arts/transforms/pattern/PatternTransform.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
@@ -648,9 +649,15 @@ public:
               << "rewriting to k-j update form");
     rewriteReductionDotToKJUpdate(matchResult, effectiveTileJ, minTripCount,
                                   metadataManager);
-    setDepPattern(matchResult.outerI.getOperation(), ArtsDepPattern::matmul);
+
+    /// Stamp matmul contract on the transformed loop and parent EDT.
+    /// This is a lightweight marker-only contract - see MatmulPatternContract
+    /// documentation for why we don't carry tiling/layout metadata.
+    MatmulPatternContract contract(getRevision());
+    contract.stamp(matchResult.outerI.getOperation());
     if (auto parentEdt = matchResult.outerI->getParentOfType<EdtOp>())
-      setDepPattern(parentEdt.getOperation(), ArtsDepPattern::matmul);
+      contract.stamp(parentEdt.getOperation());
+
     return success();
   }
 
