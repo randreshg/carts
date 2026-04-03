@@ -79,6 +79,7 @@
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/PatternSemantics.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
 
@@ -872,7 +873,9 @@ struct DbPartitioningPass
   /// Invalidate and rebuild the datablock graph after transformations.
   void invalidateAndRebuildGraph();
 
-  /// Partition an allocation based on per-acquire analysis and heuristics
+  /// Partition an allocation based on per-acquire analysis and heuristics.
+  /// Orchestrates the partition decision pipeline (validation, capability
+  /// analysis, heuristic arbitration, plan resolution, and rewriting).
   FailureOr<DbAllocOp> partitionAlloc(DbAllocOp allocOp,
                                       DbAllocNode *allocNode);
 
@@ -880,6 +883,12 @@ struct DbPartitioningPass
   bool expandMultiEntryAcquires();
 
 private:
+  /// Validate allocation can be partitioned. Returns nullopt if partitioning
+  /// should be skipped (with reason logged), or the allocOp if validation passes.
+  std::optional<FailureOr<DbAllocOp>>
+  validatePartitionPreconditions(DbAllocOp allocOp, DbAllocNode *allocNode,
+                                  OpBuilder &builder);
+
   /// Build per-acquire capability info (canBlock, canElementWise, etc.) and
   /// populate ctx.acquires for heuristic voting. Returns true if the caller
   /// should early-return (preserve explicit contract layout).
@@ -1454,26 +1463,23 @@ bool DbPartitioningPass::partitionDb() {
   return changed;
 }
 
-/// Analyze allocation acquires and apply appropriate partitioning rewriter.
-/// TODO(REFACTOR): partitionAlloc is ~1000 lines. Consider splitting into:
-/// (a) buildPartitionContext (per-acquire capability loop),
-/// (b) resolveStencilAndBlockPlan (stencil info + block-plan resolution),
-/// (c) assembleAndApplyRewritePlan (rewrite plan assembly + application).
-FailureOr<DbAllocOp>
-DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
-  if (!allocOp || !allocOp.getOperation())
-    return failure();
-
-  if (allocOp.getElementSizes().empty())
-    return failure();
-
+/// Validate allocation can be partitioned. Returns nullopt if validation passes,
+/// or a FailureOr<DbAllocOp> early-exit result if partitioning should be skipped.
+std::optional<FailureOr<DbAllocOp>>
+DbPartitioningPass::validatePartitionPreconditions(DbAllocOp allocOp,
+                                                    DbAllocNode *allocNode,
+                                                    OpBuilder &builder) {
   auto &heuristics = AM->getDbHeuristics();
 
-  /// Step 0: Check existing partition attribute
+  if (!allocOp || !allocOp.getOperation())
+    return FailureOr<DbAllocOp>(failure());
+
+  if (allocOp.getElementSizes().empty())
+    return FailureOr<DbAllocOp>(failure());
+
+  /// Check existing partition attribute.
   if (auto existingMode = getPartitionMode(allocOp)) {
     /// Fine-grained allocations are already in their terminal shape.
-    /// Rewriting them again adds compile-time churn without improving
-    /// localization.
     if (*existingMode == PartitionMode::fine_grained) {
       ARTS_DEBUG("  Already partitioned as "
                  << mlir::arts::stringifyPartitionMode(*existingMode)
@@ -1481,13 +1487,10 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       heuristics.recordDecision("Partition-AlreadyPartitioned", false,
                                 "allocation already fine-grained, skipping",
                                 allocOp.getOperation(), {});
-      return allocOp;
+      return FailureOr<DbAllocOp>(allocOp);
     }
 
     /// For block/stencil, continue with loop-aware re-analysis.
-    /// CreateDbs establishes an initial partition shape, but DbPartitioning
-    /// still needs a chance to reconcile acquire ranges and EDT-local
-    /// db_ref localization (especially for single-block layouts).
     ARTS_DEBUG("  Partition mode is "
                << mlir::arts::stringifyPartitionMode(*existingMode)
                << " - re-analyzing with loop structure");
@@ -1497,20 +1500,17 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         allocOp.getOperation(), {});
   }
 
-  /// Already fine-grained by structure - skip
+  /// Already fine-grained by structure - skip.
   if (allocNode && DbAnalysis::isFineGrained(allocNode->getDbAllocOp())) {
     ARTS_DEBUG("  Already fine-grained by structure - SKIP");
     heuristics.recordDecision(
         "Partition-AlreadyFineGrained", false,
         "allocation already fine-grained by structure, skipping",
         allocOp.getOperation(), {});
-    return allocOp;
+    return FailureOr<DbAllocOp>(allocOp);
   }
 
-  OpBuilder builder(allocOp);
-  Location loc = allocOp.getLoc();
-  builder.setInsertionPoint(allocOp);
-
+  /// Check for non-partitionable host-side uses.
   if (DbUtils::hasNonPartitionableHostViewUses(allocOp.getPtr())) {
     ARTS_DEBUG("  Host-side opaque/full-view users require coarse layout");
     resetCoarseAcquireRanges(allocOp, allocNode, builder);
@@ -1519,14 +1519,39 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         "Partition-UnsafeHostView", false,
         "host-side opaque/full-view uses require coarse allocation",
         allocOp.getOperation(), {});
-    return allocOp;
+    return FailureOr<DbAllocOp>(allocOp);
   }
 
+  /// Validation passed - proceed with partitioning.
+  return std::nullopt;
+}
+
+/// Analyze allocation acquires and apply appropriate partitioning rewriter.
+///
+/// Orchestration pipeline:
+///   1. Validate preconditions (early exits for already-partitioned, host-view)
+///   2. Analyze per-acquire partition modes and contract summaries
+///   3. Build partitioning context and per-acquire capabilities
+///   4. Reconcile per-acquire modes into allocation-level decision
+///   5. Invoke heuristics for partition mode arbitration
+///   6. Resolve block-plan sizes and stencil halo info (if applicable)
+///   7. Assemble rewrite plan and apply via DbRewriter
+FailureOr<DbAllocOp>
+DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
+  OpBuilder builder(allocOp);
+  Location loc = allocOp.getLoc();
+  builder.setInsertionPoint(allocOp);
+
+  /// Phase 1: Validate preconditions.
+  if (auto earlyExit = validatePartitionPreconditions(allocOp, allocNode, builder))
+    return *earlyExit;
+
+  auto &heuristics = AM->getDbHeuristics();
   SmallVector<DbAcquireNode *, 16> allocAcquireNodes =
       allocNode ? allocNode->collectAllAcquireNodes()
                 : SmallVector<DbAcquireNode *, 16>{};
 
-  /// Step 1: Analyze each acquire's PartitionMode
+  /// Phase 2: Analyze each acquire's PartitionMode.
   SmallVector<AcquirePartitionInfo, 4> acquireInfos;
   SmallVector<std::optional<DbAnalysis::AcquireContractSummary>, 8>
       acquireContractSummaries;
@@ -1556,7 +1581,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     return allocOp;
   }
 
-  /// Step 2: Build PartitioningContext and check for non-leading offsets
+  /// Phase 3: Build PartitioningContext and per-acquire capabilities.
   PartitioningContext ctx;
   SmallVector<Value> blockSizesForNDBlock;
   ctx.machine = &AM->getAbstractMachine();
@@ -1680,7 +1705,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       ctx.blockSize = anyBlockSizeHint;
   }
 
-  /// Step 3: Reconcile per-acquire capabilities into allocation-level mode.
+  /// Phase 4: Reconcile per-acquire modes into allocation-level decision.
   AcquireModeReconcileResult modeSummary =
       reconcileAcquireModes(ctx, acquireInfos, canUseBlock);
   bool modesConsistent = modeSummary.modesConsistent;
@@ -1734,7 +1759,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                                .value_or(DbAccessPattern::unknown);
   ctx.allocDbMode = allocOp.getDbMode();
 
-  /// Step 4: Initial heuristics arbitration.
+  /// Phase 5: Invoke heuristics for partition mode arbitration.
   PartitioningDecision decision = heuristics.choosePartitioning(ctx);
   dbPartitionTrace("alloc=", getArtsId(allocOp.getOperation()),
                    " patterns(uniform=", ctx.accessPatterns.hasUniform,
@@ -2012,7 +2037,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     }
   }
 
-  /// Step 5a: Compute stencilInfo early (needed for inner size calculation)
+  /// Phase 6a: Compute stencilInfo (needed for inner size calculation).
   /// Must be done before computeAllocationShape() for stencil mode.
   std::optional<StencilInfo> stencilInfo;
   if (decision.mode == PartitionMode::stencil && allocNode) {
@@ -2022,7 +2047,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                                          decision, ctx, builder, loc);
   }
 
-  /// Step 5b: Resolve block-plan sizes and reconcile partition dimensions.
+  /// Phase 6b: Resolve block-plan sizes and reconcile partition dimensions.
   SmallVector<Value> blockSizesForPlan;
   SmallVector<unsigned> partitionedDimsForPlan;
   if (decision.isBlock()) {
@@ -2061,7 +2086,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     return allocOp;
   }
 
-  /// Steps 6-7: Assemble rewrite plan and apply via DbRewriter.
+  /// Phase 7: Assemble rewrite plan and apply via DbRewriter.
   return assembleAndApplyRewritePlan(
       decision, acquireInfos, blockSizesForPlan, partitionedDimsForPlan,
       newOuterSizes, newInnerSizes, stencilInfo, allocOp, heuristics, builder);
@@ -2257,7 +2282,7 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
 
     if (info.accessPattern == AccessPattern::Unknown &&
         info.accessMode == ArtsMode::in &&
-        isStencilFamilyDepPattern(info.depPattern)) {
+        PatternSemantics::isStencilFamily(info.depPattern)) {
       info.accessPattern = AccessPattern::Stencil;
     }
 
