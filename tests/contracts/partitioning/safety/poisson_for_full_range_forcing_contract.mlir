@@ -5,11 +5,11 @@
 // owned writeback acquire remains block-partitioned and carries the stencil
 // center offset contract.
 // CHECK-LABEL: func.func @main
-// CHECK: arts.db_alloc[<inout>, <heap>, <write>, <block>, <uniform>]
+// CHECK: arts.db_alloc[<inout>, <heap>, <write>, <block>, <stencil>]
 // CHECK: arts.db_acquire[<in>]
-// CHECK-SAME: partitioning(<stencil>)
+// CHECK-SAME: partitioning(<block>)
 // CHECK-SAME: element_offsets[
 // CHECK-SAME: element_sizes[
 // CHECK: arts.db_acquire[<out>]
 // CHECK-SAME: partitioning(<block>)
-// CHECK-SAME: stencil_center_offset = 1 : i64
+// CHECK: centerOffset = 1 : i64

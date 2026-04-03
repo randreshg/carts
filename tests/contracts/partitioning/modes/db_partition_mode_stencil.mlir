@@ -4,4 +4,5 @@
 // CHECK: arts.db_acquire[<in>] {{.*}}partitioning(<block>), offsets[
 // CHECK-SAME: element_offsets[
 // CHECK-SAME: element_sizes[
-// CHECK-SAME: stencil_center_offset = 1 : i64
+// CHECK: arts.lowering_contract
+// CHECK-SAME: centerOffset = 1 : i64

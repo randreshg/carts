@@ -46,379 +46,303 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
     %c0_9 = arith.constant 0 : index
     %c1_10 = arith.constant 1 : index
     %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <block>, <uniform>] route(%c-1_i32 : i32) sizes[%12] elementType(f64) elementSizes[%6, %c256] {arts.id = 314 : i64, arts.local_only, arts.read_only_after_init} : (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-    arts.lowering_contract(%ptr : memref<?xmemref<?x?xf64>>) block_shape[%6] {owner_dims = array<i64: 0>, post_db_refined}
+    arts.lowering_contract(%ptr : memref<?xmemref<?x?xf64>>) block_shape[%6] contract(<ownerDims = [0], postDbRefined = true>)
     %c1_11 = arith.constant 1 : index
     %c1_12 = arith.constant 1 : index
     %c1_13 = arith.constant 1 : index
-    %c15_14 = arith.constant 15 : index
-    %c1_15 = arith.constant 1 : index
-    %13 = arith.maxui %c15_14, %c1_15 : index
-    %c1_i64_16 = arith.constant 1 : i64
+    %c0_14 = arith.constant 0 : index
+    %guid_15, %ptr_16 = arts.db_alloc[<in>, <heap>, <read>, <coarse>, <uniform>] route(%c-1_i32 : i32) sizes[%c1] elementType(f64) elementSizes[%c256, %c256] {arts.id = 315 : i64, arts.local_only} : (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+    %c1_17 = arith.constant 1 : index
+    %c1_18 = arith.constant 1 : index
+    %c1_19 = arith.constant 1 : index
+    %c0_20 = arith.constant 0 : index
+    %guid_21, %ptr_22 = arts.db_alloc[<in>, <heap>, <read>, <coarse>, <uniform>] route(%c-1_i32 : i32) sizes[%c1] elementType(f64) elementSizes[%c256, %c256] {arts.id = 316 : i64, arts.local_only} : (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+    %c1_23 = arith.constant 1 : index
+    %c1_24 = arith.constant 1 : index
+    %c1_25 = arith.constant 1 : index
+    %c15_26 = arith.constant 15 : index
+    %c1_27 = arith.constant 1 : index
+    %13 = arith.maxui %c15_26, %c1_27 : index
+    %c1_i64_28 = arith.constant 1 : i64
     %14 = arith.index_cast %c256 : index to i64
     %15 = arith.index_cast %13 : index to i64
     %16 = arith.addi %14, %15 : i64
-    %17 = arith.subi %16, %c1_i64_16 : i64
+    %17 = arith.subi %16, %c1_i64_28 : i64
     %18 = arith.divui %17, %15 : i64
     %19 = arith.index_cast %18 : i64 to index
-    %c0_17 = arith.constant 0 : index
-    %c1_18 = arith.constant 1 : index
-    %c0_19 = arith.constant 0 : index
-    %c1_20 = arith.constant 1 : index
-    %c0_21 = arith.constant 0 : index
-    %c1_22 = arith.constant 1 : index
-    %guid_23, %ptr_24 = arts.db_alloc[<in>, <heap>, <read>, <block>, <uniform>] route(%c-1_i32 : i32) sizes[%19] elementType(f64) elementSizes[%13, %c256] {arts.id = 315 : i64, arts.local_only} : (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-    arts.lowering_contract(%ptr_24 : memref<?xmemref<?x?xf64>>) block_shape[%13] {owner_dims = array<i64: 0>, post_db_refined}
-    %c0_25 = arith.constant 0 : index
-    %c1_26 = arith.constant 1 : index
-    %c1_27 = arith.constant 1 : index
-    %c1_28 = arith.constant 1 : index
     %c0_29 = arith.constant 0 : index
-    %guid_30, %ptr_31 = arts.db_alloc[<in>, <heap>, <read>, <coarse>, <uniform>] route(%c-1_i32 : i32) sizes[%c1] elementType(f64) elementSizes[%c256, %c256] {arts.id = 316 : i64, arts.local_only} : (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+    %c1_30 = arith.constant 1 : index
+    %c0_31 = arith.constant 0 : index
     %c1_32 = arith.constant 1 : index
-    %c1_33 = arith.constant 1 : index
+    %c0_33 = arith.constant 0 : index
     %c1_34 = arith.constant 1 : index
-    %c15_35 = arith.constant 15 : index
-    %c1_36 = arith.constant 1 : index
-    %20 = arith.maxui %c15_35, %c1_36 : index
-    %c1_i64_37 = arith.constant 1 : i64
+    %guid_35, %ptr_36 = arts.db_alloc[<inout>, <heap>, <write>, <block>, <uniform>] route(%c-1_i32 : i32) sizes[%19] elementType(f64) elementSizes[%13, %c256] {arts.id = 317 : i64, arts.local_only, arts.read_only_after_init} : (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+    arts.lowering_contract(%ptr_36 : memref<?xmemref<?x?xf64>>) block_shape[%13] contract(<ownerDims = [0], postDbRefined = true>)
+    %c1_37 = arith.constant 1 : index
+    %c1_38 = arith.constant 1 : index
+    %c1_39 = arith.constant 1 : index
+    %c0_40 = arith.constant 0 : index
+    %guid_41, %ptr_42 = arts.db_alloc[<in>, <heap>, <read>, <coarse>, <uniform>] route(%c-1_i32 : i32) sizes[%c1] elementType(f64) elementSizes[%c256, %c256] {arts.id = 318 : i64, arts.local_only} : (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+    %c1_43 = arith.constant 1 : index
+    %c1_44 = arith.constant 1 : index
+    %c1_45 = arith.constant 1 : index
+    %c0_46 = arith.constant 0 : index
+    %guid_47, %ptr_48 = arts.db_alloc[<in>, <heap>, <read>, <coarse>, <uniform>] route(%c-1_i32 : i32) sizes[%c1] elementType(f64) elementSizes[%c256, %c256] {arts.id = 319 : i64, arts.local_only} : (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+    %c1_49 = arith.constant 1 : index
+    %c1_50 = arith.constant 1 : index
+    %c1_51 = arith.constant 1 : index
+    %c15_52 = arith.constant 15 : index
+    %c1_53 = arith.constant 1 : index
+    %20 = arith.maxui %c15_52, %c1_53 : index
+    %c1_i64_54 = arith.constant 1 : i64
     %21 = arith.index_cast %c256 : index to i64
     %22 = arith.index_cast %20 : index to i64
     %23 = arith.addi %21, %22 : i64
-    %24 = arith.subi %23, %c1_i64_37 : i64
+    %24 = arith.subi %23, %c1_i64_54 : i64
     %25 = arith.divui %24, %22 : i64
     %26 = arith.index_cast %25 : i64 to index
-    %c0_38 = arith.constant 0 : index
-    %c1_39 = arith.constant 1 : index
-    %c0_40 = arith.constant 0 : index
-    %c1_41 = arith.constant 1 : index
-    %c0_42 = arith.constant 0 : index
-    %c1_43 = arith.constant 1 : index
-    %guid_44, %ptr_45 = arts.db_alloc[<inout>, <heap>, <write>, <block>, <uniform>] route(%c-1_i32 : i32) sizes[%26] elementType(f64) elementSizes[%20, %c256] {arts.id = 317 : i64, arts.local_only, arts.read_only_after_init} : (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-    arts.lowering_contract(%ptr_45 : memref<?xmemref<?x?xf64>>) block_shape[%20] {owner_dims = array<i64: 0>, post_db_refined}
-    %c1_46 = arith.constant 1 : index
-    %c1_47 = arith.constant 1 : index
-    %c1_48 = arith.constant 1 : index
-    %c15_49 = arith.constant 15 : index
-    %c1_50 = arith.constant 1 : index
-    %27 = arith.maxui %c15_49, %c1_50 : index
-    %c1_i64_51 = arith.constant 1 : i64
-    %28 = arith.index_cast %c256 : index to i64
-    %29 = arith.index_cast %27 : index to i64
-    %30 = arith.addi %28, %29 : i64
-    %31 = arith.subi %30, %c1_i64_51 : i64
-    %32 = arith.divui %31, %29 : i64
-    %33 = arith.index_cast %32 : i64 to index
-    %c0_52 = arith.constant 0 : index
-    %c1_53 = arith.constant 1 : index
-    %c0_54 = arith.constant 0 : index
-    %c1_55 = arith.constant 1 : index
-    %c0_56 = arith.constant 0 : index
-    %c1_57 = arith.constant 1 : index
-    %guid_58, %ptr_59 = arts.db_alloc[<in>, <heap>, <read>, <block>, <uniform>] route(%c-1_i32 : i32) sizes[%33] elementType(f64) elementSizes[%27, %c256] {arts.id = 318 : i64, arts.local_only} : (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-    arts.lowering_contract(%ptr_59 : memref<?xmemref<?x?xf64>>) block_shape[%27] {owner_dims = array<i64: 0>, post_db_refined}
-    %c0_60 = arith.constant 0 : index
-    %c1_61 = arith.constant 1 : index
-    %c1_62 = arith.constant 1 : index
-    %c1_63 = arith.constant 1 : index
-    %c0_64 = arith.constant 0 : index
-    %guid_65, %ptr_66 = arts.db_alloc[<in>, <heap>, <read>, <coarse>, <uniform>] route(%c-1_i32 : i32) sizes[%c1] elementType(f64) elementSizes[%c256, %c256] {arts.id = 319 : i64, arts.local_only} : (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-    %c1_67 = arith.constant 1 : index
-    %c1_68 = arith.constant 1 : index
-    %c1_69 = arith.constant 1 : index
-    %c15_70 = arith.constant 15 : index
-    %c1_71 = arith.constant 1 : index
-    %34 = arith.maxui %c15_70, %c1_71 : index
-    %c1_i64_72 = arith.constant 1 : i64
-    %35 = arith.index_cast %c256 : index to i64
-    %36 = arith.index_cast %34 : index to i64
-    %37 = arith.addi %35, %36 : i64
-    %38 = arith.subi %37, %c1_i64_72 : i64
-    %39 = arith.divui %38, %36 : i64
-    %40 = arith.index_cast %39 : i64 to index
-    %c0_73 = arith.constant 0 : index
-    %c1_74 = arith.constant 1 : index
-    %c0_75 = arith.constant 0 : index
-    %c1_76 = arith.constant 1 : index
-    %c0_77 = arith.constant 0 : index
-    %c1_78 = arith.constant 1 : index
-    %guid_79, %ptr_80 = arts.db_alloc[<inout>, <heap>, <write>, <block>, <uniform>] route(%c-1_i32 : i32) sizes[%40] elementType(f64) elementSizes[%34, %c256] {arts.id = 320 : i64, arts.local_only, arts.read_only_after_init} : (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-    arts.lowering_contract(%ptr_80 : memref<?xmemref<?x?xf64>>) block_shape[%34] {owner_dims = array<i64: 0>, post_db_refined}
-    %c0_81 = arith.constant 0 : index
+    %c0_55 = arith.constant 0 : index
+    %c1_56 = arith.constant 1 : index
+    %c0_57 = arith.constant 0 : index
+    %c1_58 = arith.constant 1 : index
+    %c0_59 = arith.constant 0 : index
+    %c1_60 = arith.constant 1 : index
+    %guid_61, %ptr_62 = arts.db_alloc[<inout>, <heap>, <write>, <block>, <uniform>] route(%c-1_i32 : i32) sizes[%26] elementType(f64) elementSizes[%20, %c256] {arts.id = 320 : i64, arts.local_only, arts.read_only_after_init} : (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+    arts.lowering_contract(%ptr_62 : memref<?xmemref<?x?xf64>>) block_shape[%20] contract(<ownerDims = [0], postDbRefined = true>)
+    %c0_63 = arith.constant 0 : index
     scf.for %arg2 = %c0 to %c256 step %c1 {
-      %46 = arith.index_cast %arg2 : index to i32
-      %47 = arith.sitofp %46 : i32 to f64
+      %32 = arith.index_cast %arg2 : index to i32
+      %33 = arith.sitofp %32 : i32 to f64
       scf.for %arg3 = %c0 to %c256 step %c1 {
-        %48 = arith.index_cast %arg3 : index to i32
-        %49 = arith.sitofp %48 : i32 to f64
-        %50 = arith.mulf %47, %49 : f64
-        %51 = arith.divf %50, %cst : f64
-        %c1_82 = arith.constant 1 : index
-        %52 = arith.maxui %13, %c1_82 : index
-        %53 = arith.divui %arg2, %52 : index
-        %54 = arith.subi %53, %c0_25 : index
-        %55 = arith.remui %arg2, %52 : index
-        %56 = arts.db_ref %ptr_24[%54] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-        memref.store %51, %56[%55, %arg3] : memref<?x?xf64>
+        %34 = arith.index_cast %arg3 : index to i32
+        %35 = arith.sitofp %34 : i32 to f64
+        %36 = arith.mulf %33, %35 : f64
+        %37 = arith.divf %36, %cst : f64
+        %38 = arts.db_ref %ptr_16[%c0] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+        memref.store %37, %38[%arg2, %arg3] : memref<?x?xf64>
       }
     }
     scf.for %arg2 = %c0 to %c256 step %c1 {
-      %46 = arith.index_cast %arg2 : index to i32
-      %47 = arith.sitofp %46 : i32 to f64
+      %32 = arith.index_cast %arg2 : index to i32
+      %33 = arith.sitofp %32 : i32 to f64
       scf.for %arg3 = %c0 to %c256 step %c1 {
-        %48 = arith.index_cast %arg3 : index to i32
-        %49 = arith.addi %48, %c1_i32 : i32
-        %50 = arith.sitofp %49 : i32 to f64
-        %51 = arith.mulf %47, %50 : f64
-        %52 = arith.divf %51, %cst : f64
-        %53 = arts.db_ref %ptr_31[%c0] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-        memref.store %52, %53[%arg2, %arg3] : memref<?x?xf64>
+        %34 = arith.index_cast %arg3 : index to i32
+        %35 = arith.addi %34, %c1_i32 : i32
+        %36 = arith.sitofp %35 : i32 to f64
+        %37 = arith.mulf %33, %36 : f64
+        %38 = arith.divf %37, %cst : f64
+        %39 = arts.db_ref %ptr_22[%c0] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+        memref.store %38, %39[%arg2, %arg3] : memref<?x?xf64>
       }
     }
     scf.for %arg2 = %c0 to %c256 step %c1 {
-      %46 = arith.index_cast %arg2 : index to i32
-      %47 = arith.sitofp %46 : i32 to f64
+      %32 = arith.index_cast %arg2 : index to i32
+      %33 = arith.sitofp %32 : i32 to f64
       scf.for %arg3 = %c0 to %c256 step %c1 {
-        %48 = arith.index_cast %arg3 : index to i32
-        %49 = arith.addi %48, %c3_i32 : i32
-        %50 = arith.sitofp %49 : i32 to f64
-        %51 = arith.mulf %47, %50 : f64
-        %52 = arith.divf %51, %cst : f64
-        %c1_82 = arith.constant 1 : index
-        %53 = arith.maxui %27, %c1_82 : index
-        %54 = arith.divui %arg2, %53 : index
-        %55 = arith.subi %54, %c0_60 : index
-        %56 = arith.remui %arg2, %53 : index
-        %57 = arts.db_ref %ptr_59[%55] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-        memref.store %52, %57[%56, %arg3] : memref<?x?xf64>
+        %34 = arith.index_cast %arg3 : index to i32
+        %35 = arith.addi %34, %c3_i32 : i32
+        %36 = arith.sitofp %35 : i32 to f64
+        %37 = arith.mulf %33, %36 : f64
+        %38 = arith.divf %37, %cst : f64
+        %39 = arts.db_ref %ptr_42[%c0] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+        memref.store %38, %39[%arg2, %arg3] : memref<?x?xf64>
       }
     }
     scf.for %arg2 = %c0 to %c256 step %c1 {
-      %46 = arith.index_cast %arg2 : index to i32
-      %47 = arith.sitofp %46 : i32 to f64
+      %32 = arith.index_cast %arg2 : index to i32
+      %33 = arith.sitofp %32 : i32 to f64
       scf.for %arg3 = %c0 to %c256 step %c1 {
-        %48 = arith.index_cast %arg3 : index to i32
-        %49 = arith.addi %48, %c2_i32 : i32
-        %50 = arith.sitofp %49 : i32 to f64
-        %51 = arith.mulf %47, %50 : f64
-        %52 = arith.divf %51, %cst : f64
-        %53 = arts.db_ref %ptr_66[%c0] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-        memref.store %52, %53[%arg2, %arg3] : memref<?x?xf64>
+        %34 = arith.index_cast %arg3 : index to i32
+        %35 = arith.addi %34, %c2_i32 : i32
+        %36 = arith.sitofp %35 : i32 to f64
+        %37 = arith.mulf %33, %36 : f64
+        %38 = arith.divf %37, %cst : f64
+        %39 = arts.db_ref %ptr_48[%c0] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+        memref.store %38, %39[%arg2, %arg3] : memref<?x?xf64>
       }
     }
     call @carts_phase_timer_stop(%5) : (memref<?xi8>) -> ()
     call @carts_kernel_timer_start(%4) : (memref<?xi8>) -> ()
-    %41 = arts.epoch attributes {distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32} {
+    %27 = arts.epoch attributes {distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32} {
       scf.for %arg2 = %c0 to %c64 step %c1 {
-        %46 = arith.muli %arg2, %c4 : index
-        %47 = arith.cmpi uge, %46, %c256 : index
-        %48 = arith.subi %c256, %46 : index
-        %49 = arith.select %47, %c0, %48 : index
-        %50 = arith.minui %49, %c4 : index
-        %51 = arith.cmpi ugt, %50, %c0 : index
-        scf.if %51 {
-          %52 = arith.divui %46, %c256 : index
-          %53 = arith.addi %46, %c3 : index
-          %54 = arith.divui %53, %c256 : index
-          %55 = arith.cmpi ugt, %52, %c0 : index
-          %56 = arith.select %55, %54, %c0 : index
-          %57 = arith.subi %56, %52 : index
-          %58 = arith.addi %57, %c1 : index
-          %59 = arith.select %55, %c0, %52 : index
-          %60 = arith.select %55, %c0, %58 : index
-          %c1_82 = arith.constant 1 : index
-          %c0_83 = arith.constant 0 : index
-          %61 = arith.maxui %6, %c1_82 : index
-          %62 = arith.muli %12, %61 : index
-          %63 = arith.divui %46, %61 : index
-          %64 = arith.addi %46, %c4 : index
-          %65 = arith.subi %64, %c1_82 : index
-          %66 = arith.divui %65, %61 : index
-          %67 = arith.subi %12, %c1_82 : index
-          %68 = arith.cmpi ugt, %63, %67 : index
-          %69 = arith.minui %66, %67 : index
-          %70 = arith.select %68, %66, %69 : index
-          %71 = arith.subi %70, %63 : index
-          %72 = arith.addi %71, %c1_82 : index
-          %73 = arith.select %68, %c0_83, %63 : index
-          %74 = arith.select %68, %c0_83, %72 : index
-          %guid_84, %ptr_85 = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%46], sizes[%c4]), offsets[%73], sizes[%c1_82] {arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          arts.lowering_contract(%ptr_85 : memref<?xmemref<?x?xf64>>) distribution_kind(<block>) distribution_pattern(<matmul>) block_shape[%c4] {distribution_version = 1 : i64, owner_dims = array<i64: 0>}
-          %c1_86 = arith.constant 1 : index
-          %c0_87 = arith.constant 0 : index
-          %75 = arith.maxui %13, %c1_86 : index
-          %76 = arith.muli %19, %75 : index
-          %77 = arith.divui %46, %75 : index
-          %78 = arith.addi %46, %c4 : index
-          %79 = arith.subi %78, %c1_86 : index
-          %80 = arith.divui %79, %75 : index
-          %81 = arith.subi %19, %c1_86 : index
-          %82 = arith.cmpi ugt, %77, %81 : index
-          %83 = arith.minui %80, %81 : index
-          %84 = arith.select %82, %80, %83 : index
-          %85 = arith.subi %84, %77 : index
-          %86 = arith.addi %85, %c1_86 : index
-          %87 = arith.select %82, %c0_87, %77 : index
-          %88 = arith.select %82, %c0_87, %86 : index
-          %guid_88, %ptr_89 = arts.db_acquire[<in>] (%guid_23 : memref<?xi64>, %ptr_24 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%46], sizes[%c4]), offsets[%87], sizes[%c1_86] element_offsets[%46] element_sizes[%c4] {arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          arts.lowering_contract(%ptr_89 : memref<?xmemref<?x?xf64>>) distribution_kind(<block>) distribution_pattern(<matmul>) block_shape[%c4] {distribution_version = 1 : i64, owner_dims = array<i64: 0>}
-          %c0_90 = arith.constant 0 : index
-          %guid_91, %ptr_92 = arts.db_acquire[<in>] (%guid_30 : memref<?xi64>, %ptr_31 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_29], sizes[%c1] {arts.id = 326 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          arts.lowering_contract(%ptr_92 : memref<?xmemref<?x?xf64>>) distribution_kind(<block>) distribution_pattern(<matmul>) {distribution_version = 1 : i64, post_db_refined}
-          %c1_93 = arith.constant 1 : index
-          %c0_94 = arith.constant 0 : index
-          %guid_95, %ptr_96 = arts.db_acquire[<inout>] (%guid_44 : memref<?xi64>, %ptr_45 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%46], sizes[%c4]), offsets[%c0_94], sizes[%26] {arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          %c1_97 = arith.constant 1 : index
-          %c0_98 = arith.constant 0 : index
-          %guid_99, %ptr_100 = arts.db_acquire[<in>] (%guid_58 : memref<?xi64>, %ptr_59 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%46], sizes[%c4]), offsets[%c0_98], sizes[%33] {arts.id = 332 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          %guid_101, %ptr_102 = arts.db_acquire[<in>] (%guid_65 : memref<?xi64>, %ptr_66 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_64], sizes[%c1] {arts.id = 329 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          arts.lowering_contract(%ptr_102 : memref<?xmemref<?x?xf64>>) distribution_kind(<block>) distribution_pattern(<matmul>) {distribution_version = 1 : i64, post_db_refined}
-          %c1_103 = arith.constant 1 : index
-          %c0_104 = arith.constant 0 : index
-          %guid_105, %ptr_106 = arts.db_acquire[<inout>] (%guid_79 : memref<?xi64>, %ptr_80 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%46], sizes[%c4]), offsets[%c0_104], sizes[%40] {arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          arts.edt <task> <intranode> route(%c-1_i32) (%ptr_85, %ptr_89, %ptr_92, %ptr_96, %ptr_100, %ptr_102, %ptr_106) : memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>> attributes {arts.id = 324 : i64, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256]} {
+        %32 = arith.muli %arg2, %c4 : index
+        %33 = arith.cmpi uge, %32, %c256 : index
+        %34 = arith.subi %c256, %32 : index
+        %35 = arith.select %33, %c0, %34 : index
+        %36 = arith.minui %35, %c4 : index
+        %37 = arith.cmpi ugt, %36, %c0 : index
+        scf.if %37 {
+          %38 = arith.divui %32, %c256 : index
+          %39 = arith.addi %32, %c3 : index
+          %40 = arith.divui %39, %c256 : index
+          %41 = arith.cmpi ugt, %38, %c0 : index
+          %42 = arith.select %41, %40, %c0 : index
+          %43 = arith.subi %42, %38 : index
+          %44 = arith.addi %43, %c1 : index
+          %45 = arith.select %41, %c0, %38 : index
+          %46 = arith.select %41, %c0, %44 : index
+          %c1_64 = arith.constant 1 : index
+          %c0_65 = arith.constant 0 : index
+          %47 = arith.maxui %6, %c1_64 : index
+          %48 = arith.muli %12, %47 : index
+          %49 = arith.divui %32, %47 : index
+          %50 = arith.addi %32, %c4 : index
+          %51 = arith.subi %50, %c1_64 : index
+          %52 = arith.divui %51, %47 : index
+          %53 = arith.subi %12, %c1_64 : index
+          %54 = arith.cmpi ugt, %49, %53 : index
+          %55 = arith.minui %52, %53 : index
+          %56 = arith.select %54, %52, %55 : index
+          %57 = arith.subi %56, %49 : index
+          %58 = arith.addi %57, %c1_64 : index
+          %59 = arith.select %54, %c0_65, %49 : index
+          %60 = arith.select %54, %c0_65, %58 : index
+          %guid_66, %ptr_67 = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%32], sizes[%c4]), offsets[%59], sizes[%c1_64] {arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_67 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) block_shape[%c4] contract(<ownerDims = [0]>)
+          %61 = arith.addi %32, %36 : index
+          %62 = arith.cmpi uge, %32, %c1 : index
+          %63 = arith.subi %32, %c1 : index
+          %64 = arith.select %62, %63, %c0 : index
+          %65 = arith.addi %61, %c1 : index
+          %66 = arith.minui %65, %c256 : index
+          %67 = arith.cmpi uge, %66, %64 : index
+          %68 = arith.subi %66, %64 : index
+          %69 = arith.select %67, %68, %c0 : index
+          %70 = arith.maxui %69, %c1 : index
+          %71 = arith.divui %64, %c256 : index
+          %72 = arith.addi %64, %70 : index
+          %73 = arith.subi %72, %c1 : index
+          %74 = arith.divui %73, %c256 : index
+          %75 = arith.cmpi ugt, %71, %c0 : index
+          %76 = arith.select %75, %74, %c0 : index
+          %77 = arith.subi %76, %71 : index
+          %78 = arith.addi %77, %c1 : index
+          %79 = arith.select %75, %c0, %71 : index
+          %80 = arith.select %75, %c0, %78 : index
+          %guid_68, %ptr_69 = arts.db_acquire[<in>] (%guid_15 : memref<?xi64>, %ptr_16 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_14], sizes[%c1] {arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_69 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) block_shape[%c4] contract(<ownerDims = [0], postDbRefined = true>)
+          %c0_70 = arith.constant 0 : index
+          %guid_71, %ptr_72 = arts.db_acquire[<in>] (%guid_21 : memref<?xi64>, %ptr_22 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_20], sizes[%c1] {arts.id = 327 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_72 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) contract(<postDbRefined = true>)
+          %c1_73 = arith.constant 1 : index
+          %c0_74 = arith.constant 0 : index
+          %guid_75, %ptr_76 = arts.db_acquire[<inout>] (%guid_35 : memref<?xi64>, %ptr_36 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%32], sizes[%c4]), offsets[%c0_74], sizes[%19] {arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_76 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>)
+          %guid_77, %ptr_78 = arts.db_acquire[<in>] (%guid_41 : memref<?xi64>, %ptr_42 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_40], sizes[%c1] {arts.id = 336 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_78 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) contract(<postDbRefined = true>)
+          %guid_79, %ptr_80 = arts.db_acquire[<in>] (%guid_47 : memref<?xi64>, %ptr_48 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_46], sizes[%c1] {arts.id = 333 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_80 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) contract(<postDbRefined = true>)
+          %c1_81 = arith.constant 1 : index
+          %c0_82 = arith.constant 0 : index
+          %guid_83, %ptr_84 = arts.db_acquire[<inout>] (%guid_61 : memref<?xi64>, %ptr_62 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%32], sizes[%c4]), offsets[%c0_82], sizes[%26] {arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_84 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>)
+          arts.edt <task> <intranode> route(%c-1_i32) (%ptr_67, %ptr_69, %ptr_72, %ptr_76, %ptr_78, %ptr_80, %ptr_84) : memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>> attributes {arts.id = 324 : i64, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256]} {
           ^bb0(%arg3: memref<?xmemref<?x?xf64>>, %arg4: memref<?xmemref<?x?xf64>>, %arg5: memref<?xmemref<?x?xf64>>, %arg6: memref<?xmemref<?x?xf64>>, %arg7: memref<?xmemref<?x?xf64>>, %arg8: memref<?xmemref<?x?xf64>>, %arg9: memref<?xmemref<?x?xf64>>):
-            %c1_107 = arith.constant 1 : index
-            %c0_108 = arith.constant 0 : index
-            %89 = arith.maxui %6, %c1_107 : index
-            %c0_109 = arith.constant 0 : index
-            %c4_110 = arith.constant 4 : index
-            %90 = arith.muli %arg2, %c4_110 : index
-            %c15_111 = arith.constant 15 : index
-            %c1_112 = arith.constant 1 : index
-            %91 = arith.maxui %c15_111, %c1_112 : index
-            %c1_113 = arith.constant 1 : index
-            %92 = arith.maxui %91, %c1_113 : index
-            %93 = arith.divui %90, %92 : index
-            %94 = arith.select %68, %c0_109, %93 : index
-            %c1_114 = arith.constant 1 : index
-            %c0_115 = arith.constant 0 : index
-            %95 = arith.maxui %20, %c1_114 : index
-            %c0_116 = arith.constant 0 : index
-            %c1_117 = arith.constant 1 : index
-            %c0_118 = arith.constant 0 : index
-            %96 = arith.maxui %13, %c1_117 : index
-            %c0_119 = arith.constant 0 : index
-            %c4_120 = arith.constant 4 : index
-            %97 = arith.muli %arg2, %c4_120 : index
-            %c15_121 = arith.constant 15 : index
-            %c1_122 = arith.constant 1 : index
-            %98 = arith.maxui %c15_121, %c1_122 : index
-            %c1_123 = arith.constant 1 : index
-            %99 = arith.maxui %98, %c1_123 : index
-            %100 = arith.divui %97, %99 : index
-            %101 = arith.select %82, %c0_119, %100 : index
-            %c1_124 = arith.constant 1 : index
-            %c0_125 = arith.constant 0 : index
-            %102 = arith.maxui %27, %c1_124 : index
-            %c0_126 = arith.constant 0 : index
-            %c1_127 = arith.constant 1 : index
-            %c0_128 = arith.constant 0 : index
-            %103 = arith.maxui %34, %c1_127 : index
-            %c0_129 = arith.constant 0 : index
-            %104 = arith.subi %c0, %46 : index
-            %105 = arith.cmpi slt, %104, %c0 : index
-            %106 = arith.select %105, %c0, %104 : index
-            %107 = arith.cmpi slt, %48, %c0 : index
-            %108 = arith.select %107, %c0, %48 : index
-            %109 = arith.minui %108, %50 : index
-            scf.for %arg10 = %106 to %109 step %c1 {
-              %110 = arith.addi %46, %arg10 : index
+            %c1_85 = arith.constant 1 : index
+            %c0_86 = arith.constant 0 : index
+            %81 = arith.maxui %20, %c1_85 : index
+            %c0_87 = arith.constant 0 : index
+            %c1_88 = arith.constant 1 : index
+            %c0_89 = arith.constant 0 : index
+            %82 = arith.maxui %13, %c1_88 : index
+            %c0_90 = arith.constant 0 : index
+            %c1_91 = arith.constant 1 : index
+            %c0_92 = arith.constant 0 : index
+            %83 = arith.maxui %6, %c1_91 : index
+            %c0_93 = arith.constant 0 : index
+            %c4_94 = arith.constant 4 : index
+            %84 = arith.muli %arg2, %c4_94 : index
+            %c15_95 = arith.constant 15 : index
+            %c1_96 = arith.constant 1 : index
+            %85 = arith.maxui %c15_95, %c1_96 : index
+            %c1_97 = arith.constant 1 : index
+            %86 = arith.maxui %85, %c1_97 : index
+            %87 = arith.divui %84, %86 : index
+            %88 = arith.select %54, %c0_93, %87 : index
+            %89 = arith.subi %c0, %32 : index
+            %90 = arith.cmpi slt, %89, %c0 : index
+            %91 = arith.select %90, %c0, %89 : index
+            %92 = arith.cmpi slt, %34, %c0 : index
+            %93 = arith.select %92, %c0, %34 : index
+            %94 = arith.minui %93, %36 : index
+            scf.for %arg10 = %91 to %94 step %c1 {
+              %95 = arith.addi %32, %arg10 : index
               scf.for %arg11 = %c0 to %c256 step %c1 {
-                %c1_130 = arith.constant 1 : index
-                %111 = arith.maxui %89, %c1_130 : index
-                %c0_131 = arith.constant 0 : index
-                %c1_132 = arith.constant 1 : index
+                %c1_98 = arith.constant 1 : index
+                %96 = arith.maxui %83, %c1_98 : index
+                %c0_99 = arith.constant 0 : index
+                %c1_100 = arith.constant 1 : index
                 %c-1 = arith.constant -1 : index
-                %112 = arith.addi %46, %106 : index
-                %113 = arith.divui %112, %111 : index
-                %114 = arith.remui %112, %111 : index
-                %115 = arith.subi %arg10, %106 : index
-                %116 = arith.addi %114, %115 : index
-                %117 = arith.subi %113, %94 : index
-                %118 = arith.cmpi slt, %116, %c0_131 : index
-                %119 = arith.cmpi sge, %116, %111 : index
-                %120 = arith.select %118, %c-1, %c0_131 : index
-                %121 = arith.select %119, %c1_132, %120 : index
-                %122 = arith.addi %117, %121 : index
-                %123 = arith.subi %116, %111 : index
-                %124 = arith.addi %116, %111 : index
-                %125 = arith.select %118, %124, %116 : index
-                %126 = arith.select %119, %123, %125 : index
-                %127 = arts.db_ref %arg3[%c0_108] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-                memref.store %cst_0, %127[%126, %arg11] : memref<?x?xf64>
+                %97 = arith.addi %32, %91 : index
+                %98 = arith.divui %97, %96 : index
+                %99 = arith.remui %97, %96 : index
+                %100 = arith.subi %arg10, %91 : index
+                %101 = arith.addi %99, %100 : index
+                %102 = arith.subi %98, %88 : index
+                %103 = arith.cmpi slt, %101, %c0_99 : index
+                %104 = arith.cmpi sge, %101, %96 : index
+                %105 = arith.select %103, %c-1, %c0_99 : index
+                %106 = arith.select %104, %c1_100, %105 : index
+                %107 = arith.addi %102, %106 : index
+                %108 = arith.subi %101, %96 : index
+                %109 = arith.addi %101, %96 : index
+                %110 = arith.select %103, %109, %101 : index
+                %111 = arith.select %104, %108, %110 : index
+                %112 = arts.db_ref %arg3[%c0_92] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                memref.store %cst_0, %112[%111, %arg11] : memref<?x?xf64>
               } {arts.id = 307 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 256 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 0 : i64, locationKey = "3mm.c:137:3">, arts.metadata_provenance = "exact"}
               scf.for %arg11 = %c0 to %c256 step %c1 {
                 scf.for %arg12 = %c0 to %c256 step %c1 {
-                  %c1_130 = arith.constant 1 : index
-                  %111 = arith.maxui %96, %c1_130 : index
-                  %c0_131 = arith.constant 0 : index
-                  %c1_132 = arith.constant 1 : index
+                  %96 = arts.db_ref %arg4[%c0] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                  %97 = memref.load %96[%95, %arg11] : memref<?x?xf64>
+                  %98 = arts.db_ref %arg5[%c0] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                  %99 = memref.load %98[%arg11, %arg12] : memref<?x?xf64>
+                  %100 = arith.mulf %97, %99 : f64
+                  %c1_98 = arith.constant 1 : index
+                  %101 = arith.maxui %83, %c1_98 : index
+                  %c0_99 = arith.constant 0 : index
+                  %c1_100 = arith.constant 1 : index
                   %c-1 = arith.constant -1 : index
-                  %112 = arith.addi %46, %106 : index
-                  %113 = arith.divui %112, %111 : index
-                  %114 = arith.remui %112, %111 : index
-                  %115 = arith.subi %arg10, %106 : index
-                  %116 = arith.addi %114, %115 : index
-                  %117 = arith.subi %113, %101 : index
-                  %118 = arith.cmpi slt, %116, %c0_131 : index
-                  %119 = arith.cmpi sge, %116, %111 : index
-                  %120 = arith.select %118, %c-1, %c0_131 : index
-                  %121 = arith.select %119, %c1_132, %120 : index
-                  %122 = arith.addi %117, %121 : index
-                  %123 = arith.subi %116, %111 : index
-                  %124 = arith.addi %116, %111 : index
-                  %125 = arith.select %118, %124, %116 : index
-                  %126 = arith.select %119, %123, %125 : index
-                  %127 = arts.db_ref %arg4[%c0_118] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-                  %128 = memref.load %127[%126, %arg11] : memref<?x?xf64>
-                  %129 = arts.db_ref %arg5[%c0] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-                  %130 = memref.load %129[%arg11, %arg12] : memref<?x?xf64>
-                  %131 = arith.mulf %128, %130 : f64
-                  %c1_133 = arith.constant 1 : index
-                  %132 = arith.maxui %89, %c1_133 : index
-                  %c0_134 = arith.constant 0 : index
-                  %c1_135 = arith.constant 1 : index
-                  %c-1_136 = arith.constant -1 : index
-                  %133 = arith.addi %46, %106 : index
-                  %134 = arith.divui %133, %132 : index
-                  %135 = arith.remui %133, %132 : index
-                  %136 = arith.subi %arg10, %106 : index
-                  %137 = arith.addi %135, %136 : index
-                  %138 = arith.subi %134, %94 : index
-                  %139 = arith.cmpi slt, %137, %c0_134 : index
-                  %140 = arith.cmpi sge, %137, %132 : index
-                  %141 = arith.select %139, %c-1_136, %c0_134 : index
-                  %142 = arith.select %140, %c1_135, %141 : index
-                  %143 = arith.addi %138, %142 : index
-                  %144 = arith.subi %137, %132 : index
-                  %145 = arith.addi %137, %132 : index
-                  %146 = arith.select %139, %145, %137 : index
-                  %147 = arith.select %140, %144, %146 : index
-                  %148 = arts.db_ref %arg3[%c0_108] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-                  %149 = memref.load %148[%147, %arg12] : memref<?x?xf64>
-                  %150 = arith.addf %149, %131 : f64
-                  %c1_137 = arith.constant 1 : index
-                  %151 = arith.maxui %89, %c1_137 : index
-                  %c0_138 = arith.constant 0 : index
-                  %c1_139 = arith.constant 1 : index
-                  %c-1_140 = arith.constant -1 : index
-                  %152 = arith.addi %46, %106 : index
-                  %153 = arith.divui %152, %151 : index
-                  %154 = arith.remui %152, %151 : index
-                  %155 = arith.subi %arg10, %106 : index
-                  %156 = arith.addi %154, %155 : index
-                  %157 = arith.subi %153, %94 : index
-                  %158 = arith.cmpi slt, %156, %c0_138 : index
-                  %159 = arith.cmpi sge, %156, %151 : index
-                  %160 = arith.select %158, %c-1_140, %c0_138 : index
-                  %161 = arith.select %159, %c1_139, %160 : index
-                  %162 = arith.addi %157, %161 : index
-                  %163 = arith.subi %156, %151 : index
-                  %164 = arith.addi %156, %151 : index
-                  %165 = arith.select %158, %164, %156 : index
-                  %166 = arith.select %159, %163, %165 : index
-                  %167 = arts.db_ref %arg3[%c0_108] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-                  memref.store %150, %167[%166, %arg12] : memref<?x?xf64>
+                  %102 = arith.addi %32, %91 : index
+                  %103 = arith.divui %102, %101 : index
+                  %104 = arith.remui %102, %101 : index
+                  %105 = arith.subi %arg10, %91 : index
+                  %106 = arith.addi %104, %105 : index
+                  %107 = arith.subi %103, %88 : index
+                  %108 = arith.cmpi slt, %106, %c0_99 : index
+                  %109 = arith.cmpi sge, %106, %101 : index
+                  %110 = arith.select %108, %c-1, %c0_99 : index
+                  %111 = arith.select %109, %c1_100, %110 : index
+                  %112 = arith.addi %107, %111 : index
+                  %113 = arith.subi %106, %101 : index
+                  %114 = arith.addi %106, %101 : index
+                  %115 = arith.select %108, %114, %106 : index
+                  %116 = arith.select %109, %113, %115 : index
+                  %117 = arts.db_ref %arg3[%c0_92] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                  %118 = memref.load %117[%116, %arg12] : memref<?x?xf64>
+                  %119 = arith.addf %118, %100 : f64
+                  %c1_101 = arith.constant 1 : index
+                  %120 = arith.maxui %83, %c1_101 : index
+                  %c0_102 = arith.constant 0 : index
+                  %c1_103 = arith.constant 1 : index
+                  %c-1_104 = arith.constant -1 : index
+                  %121 = arith.addi %32, %91 : index
+                  %122 = arith.divui %121, %120 : index
+                  %123 = arith.remui %121, %120 : index
+                  %124 = arith.subi %arg10, %91 : index
+                  %125 = arith.addi %123, %124 : index
+                  %126 = arith.subi %122, %88 : index
+                  %127 = arith.cmpi slt, %125, %c0_102 : index
+                  %128 = arith.cmpi sge, %125, %120 : index
+                  %129 = arith.select %127, %c-1_104, %c0_102 : index
+                  %130 = arith.select %128, %c1_103, %129 : index
+                  %131 = arith.addi %126, %130 : index
+                  %132 = arith.subi %125, %120 : index
+                  %133 = arith.addi %125, %120 : index
+                  %134 = arith.select %127, %133, %125 : index
+                  %135 = arith.select %128, %132, %134 : index
+                  %136 = arts.db_ref %arg3[%c0_92] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                  memref.store %119, %136[%135, %arg12] : memref<?x?xf64>
                 } {arts.id = 309 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 256 : i64, nestingLevel = 2 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 0 : i64, locationKey = "3mm.c:137:3">, arts.metadata_origin_id = 309 : i64, arts.metadata_provenance = "transferred"}
               } {arts.id = 308 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 256 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 0 : i64, locationKey = "3mm.c:137:3">, arts.metadata_origin_id = 308 : i64, arts.metadata_provenance = "transferred"}
             } {arts.id = 321 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = true, hasReductions = false, tripCount = 0 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 2 : i64, locationKey = "3mm.c:137:3">, arts.metadata_provenance = "exact"}
@@ -433,216 +357,184 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
         }
       }
       scf.for %arg2 = %c0 to %c64 step %c1 {
-        %46 = arith.muli %arg2, %c4 : index
-        %47 = arith.cmpi uge, %46, %c256 : index
-        %48 = arith.subi %c256, %46 : index
-        %49 = arith.select %47, %c0, %48 : index
-        %50 = arith.minui %49, %c4 : index
-        %51 = arith.cmpi ugt, %50, %c0 : index
-        scf.if %51 {
-          %52 = arith.divui %46, %c256 : index
-          %53 = arith.addi %46, %c3 : index
-          %54 = arith.divui %53, %c256 : index
-          %55 = arith.cmpi ugt, %52, %c0 : index
-          %56 = arith.select %55, %54, %c0 : index
-          %57 = arith.subi %56, %52 : index
-          %58 = arith.addi %57, %c1 : index
-          %59 = arith.select %55, %c0, %52 : index
-          %60 = arith.select %55, %c0, %58 : index
-          %c1_82 = arith.constant 1 : index
-          %c0_83 = arith.constant 0 : index
-          %guid_84, %ptr_85 = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%46], sizes[%c4]), offsets[%c0_83], sizes[%12] {arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          %c1_86 = arith.constant 1 : index
-          %c0_87 = arith.constant 0 : index
-          %guid_88, %ptr_89 = arts.db_acquire[<in>] (%guid_23 : memref<?xi64>, %ptr_24 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%46], sizes[%c4]), offsets[%c0_87], sizes[%19] {arts.id = 334 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          %guid_90, %ptr_91 = arts.db_acquire[<in>] (%guid_30 : memref<?xi64>, %ptr_31 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_29], sizes[%c1] {arts.id = 327 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          arts.lowering_contract(%ptr_91 : memref<?xmemref<?x?xf64>>) distribution_kind(<block>) distribution_pattern(<matmul>) {distribution_version = 1 : i64, post_db_refined}
-          %c1_92 = arith.constant 1 : index
-          %c0_93 = arith.constant 0 : index
-          %61 = arith.maxui %20, %c1_92 : index
-          %62 = arith.muli %26, %61 : index
-          %63 = arith.divui %46, %61 : index
-          %64 = arith.addi %46, %c4 : index
-          %65 = arith.subi %64, %c1_92 : index
-          %66 = arith.divui %65, %61 : index
-          %67 = arith.subi %26, %c1_92 : index
-          %68 = arith.cmpi ugt, %63, %67 : index
-          %69 = arith.minui %66, %67 : index
-          %70 = arith.select %68, %66, %69 : index
-          %71 = arith.subi %70, %63 : index
-          %72 = arith.addi %71, %c1_92 : index
-          %73 = arith.select %68, %c0_93, %63 : index
-          %74 = arith.select %68, %c0_93, %72 : index
-          %guid_94, %ptr_95 = arts.db_acquire[<inout>] (%guid_44 : memref<?xi64>, %ptr_45 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%46], sizes[%c4]), offsets[%73], sizes[%c1_92] {arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          arts.lowering_contract(%ptr_95 : memref<?xmemref<?x?xf64>>) distribution_kind(<block>) distribution_pattern(<matmul>) block_shape[%c4] {distribution_version = 1 : i64, owner_dims = array<i64: 0>}
-          %c1_96 = arith.constant 1 : index
-          %c0_97 = arith.constant 0 : index
-          %75 = arith.maxui %27, %c1_96 : index
-          %76 = arith.muli %33, %75 : index
-          %77 = arith.divui %46, %75 : index
-          %78 = arith.addi %46, %c4 : index
-          %79 = arith.subi %78, %c1_96 : index
-          %80 = arith.divui %79, %75 : index
-          %81 = arith.subi %33, %c1_96 : index
-          %82 = arith.cmpi ugt, %77, %81 : index
-          %83 = arith.minui %80, %81 : index
-          %84 = arith.select %82, %80, %83 : index
-          %85 = arith.subi %84, %77 : index
-          %86 = arith.addi %85, %c1_96 : index
-          %87 = arith.select %82, %c0_97, %77 : index
-          %88 = arith.select %82, %c0_97, %86 : index
-          %guid_98, %ptr_99 = arts.db_acquire[<in>] (%guid_58 : memref<?xi64>, %ptr_59 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%46], sizes[%c4]), offsets[%87], sizes[%c1_96] element_offsets[%46] element_sizes[%c4] {arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          arts.lowering_contract(%ptr_99 : memref<?xmemref<?x?xf64>>) distribution_kind(<block>) distribution_pattern(<matmul>) block_shape[%c4] {distribution_version = 1 : i64, owner_dims = array<i64: 0>}
-          %c0_100 = arith.constant 0 : index
-          %guid_101, %ptr_102 = arts.db_acquire[<in>] (%guid_65 : memref<?xi64>, %ptr_66 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_64], sizes[%c1] {arts.id = 330 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          arts.lowering_contract(%ptr_102 : memref<?xmemref<?x?xf64>>) distribution_kind(<block>) distribution_pattern(<matmul>) {distribution_version = 1 : i64, post_db_refined}
-          %c1_103 = arith.constant 1 : index
-          %c0_104 = arith.constant 0 : index
-          %guid_105, %ptr_106 = arts.db_acquire[<inout>] (%guid_79 : memref<?xi64>, %ptr_80 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%46], sizes[%c4]), offsets[%c0_104], sizes[%40] {arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          arts.edt <task> <intranode> route(%c-1_i32) (%ptr_85, %ptr_89, %ptr_91, %ptr_95, %ptr_99, %ptr_102, %ptr_106) : memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>> attributes {arts.id = 325 : i64, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256]} {
+        %32 = arith.muli %arg2, %c4 : index
+        %33 = arith.cmpi uge, %32, %c256 : index
+        %34 = arith.subi %c256, %32 : index
+        %35 = arith.select %33, %c0, %34 : index
+        %36 = arith.minui %35, %c4 : index
+        %37 = arith.cmpi ugt, %36, %c0 : index
+        scf.if %37 {
+          %38 = arith.divui %32, %c256 : index
+          %39 = arith.addi %32, %c3 : index
+          %40 = arith.divui %39, %c256 : index
+          %41 = arith.cmpi ugt, %38, %c0 : index
+          %42 = arith.select %41, %40, %c0 : index
+          %43 = arith.subi %42, %38 : index
+          %44 = arith.addi %43, %c1 : index
+          %45 = arith.select %41, %c0, %38 : index
+          %46 = arith.select %41, %c0, %44 : index
+          %c1_64 = arith.constant 1 : index
+          %c0_65 = arith.constant 0 : index
+          %guid_66, %ptr_67 = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%32], sizes[%c4]), offsets[%c0_65], sizes[%12] {arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_67 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>)
+          %47 = arith.addi %32, %36 : index
+          %48 = arith.cmpi uge, %32, %c1 : index
+          %49 = arith.subi %32, %c1 : index
+          %50 = arith.select %48, %49, %c0 : index
+          %51 = arith.addi %47, %c1 : index
+          %52 = arith.minui %51, %c256 : index
+          %53 = arith.cmpi uge, %52, %50 : index
+          %54 = arith.subi %52, %50 : index
+          %55 = arith.select %53, %54, %c0 : index
+          %56 = arith.maxui %55, %c1 : index
+          %57 = arith.divui %50, %c256 : index
+          %58 = arith.addi %50, %56 : index
+          %59 = arith.subi %58, %c1 : index
+          %60 = arith.divui %59, %c256 : index
+          %61 = arith.cmpi ugt, %57, %c0 : index
+          %62 = arith.select %61, %60, %c0 : index
+          %63 = arith.subi %62, %57 : index
+          %64 = arith.addi %63, %c1 : index
+          %65 = arith.select %61, %c0, %57 : index
+          %66 = arith.select %61, %c0, %64 : index
+          %guid_68, %ptr_69 = arts.db_acquire[<in>] (%guid_15 : memref<?xi64>, %ptr_16 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_14], sizes[%c1] {arts.id = 331 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_69 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) contract(<postDbRefined = true>)
+          %guid_70, %ptr_71 = arts.db_acquire[<in>] (%guid_21 : memref<?xi64>, %ptr_22 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_20], sizes[%c1] {arts.id = 328 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_71 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) contract(<postDbRefined = true>)
+          %c1_72 = arith.constant 1 : index
+          %c0_73 = arith.constant 0 : index
+          %67 = arith.maxui %13, %c1_72 : index
+          %68 = arith.muli %19, %67 : index
+          %69 = arith.divui %32, %67 : index
+          %70 = arith.addi %32, %c4 : index
+          %71 = arith.subi %70, %c1_72 : index
+          %72 = arith.divui %71, %67 : index
+          %73 = arith.subi %19, %c1_72 : index
+          %74 = arith.cmpi ugt, %69, %73 : index
+          %75 = arith.minui %72, %73 : index
+          %76 = arith.select %74, %72, %75 : index
+          %77 = arith.subi %76, %69 : index
+          %78 = arith.addi %77, %c1_72 : index
+          %79 = arith.select %74, %c0_73, %69 : index
+          %80 = arith.select %74, %c0_73, %78 : index
+          %guid_74, %ptr_75 = arts.db_acquire[<inout>] (%guid_35 : memref<?xi64>, %ptr_36 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%32], sizes[%c4]), offsets[%79], sizes[%c1_72] {arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_75 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) block_shape[%c4] contract(<ownerDims = [0]>)
+          %guid_76, %ptr_77 = arts.db_acquire[<in>] (%guid_41 : memref<?xi64>, %ptr_42 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_40], sizes[%c1] {arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_77 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) block_shape[%c4] contract(<ownerDims = [0], postDbRefined = true>)
+          %c0_78 = arith.constant 0 : index
+          %guid_79, %ptr_80 = arts.db_acquire[<in>] (%guid_47 : memref<?xi64>, %ptr_48 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_46], sizes[%c1] {arts.id = 334 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_80 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) contract(<postDbRefined = true>)
+          %c1_81 = arith.constant 1 : index
+          %c0_82 = arith.constant 0 : index
+          %guid_83, %ptr_84 = arts.db_acquire[<inout>] (%guid_61 : memref<?xi64>, %ptr_62 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%32], sizes[%c4]), offsets[%c0_82], sizes[%26] {arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_84 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>)
+          arts.edt <task> <intranode> route(%c-1_i32) (%ptr_67, %ptr_69, %ptr_71, %ptr_75, %ptr_77, %ptr_80, %ptr_84) : memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>> attributes {arts.id = 325 : i64, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256]} {
           ^bb0(%arg3: memref<?xmemref<?x?xf64>>, %arg4: memref<?xmemref<?x?xf64>>, %arg5: memref<?xmemref<?x?xf64>>, %arg6: memref<?xmemref<?x?xf64>>, %arg7: memref<?xmemref<?x?xf64>>, %arg8: memref<?xmemref<?x?xf64>>, %arg9: memref<?xmemref<?x?xf64>>):
-            %c1_107 = arith.constant 1 : index
-            %c0_108 = arith.constant 0 : index
-            %89 = arith.maxui %6, %c1_107 : index
-            %c0_109 = arith.constant 0 : index
-            %c1_110 = arith.constant 1 : index
-            %c0_111 = arith.constant 0 : index
-            %90 = arith.maxui %20, %c1_110 : index
-            %c0_112 = arith.constant 0 : index
-            %c4_113 = arith.constant 4 : index
-            %91 = arith.muli %arg2, %c4_113 : index
-            %c15_114 = arith.constant 15 : index
-            %c1_115 = arith.constant 1 : index
-            %92 = arith.maxui %c15_114, %c1_115 : index
-            %c1_116 = arith.constant 1 : index
-            %93 = arith.maxui %92, %c1_116 : index
-            %94 = arith.divui %91, %93 : index
-            %95 = arith.select %68, %c0_112, %94 : index
-            %c1_117 = arith.constant 1 : index
-            %c0_118 = arith.constant 0 : index
-            %96 = arith.maxui %13, %c1_117 : index
-            %c0_119 = arith.constant 0 : index
-            %c1_120 = arith.constant 1 : index
-            %c0_121 = arith.constant 0 : index
-            %97 = arith.maxui %27, %c1_120 : index
-            %c0_122 = arith.constant 0 : index
-            %c4_123 = arith.constant 4 : index
-            %98 = arith.muli %arg2, %c4_123 : index
-            %c15_124 = arith.constant 15 : index
-            %c1_125 = arith.constant 1 : index
-            %99 = arith.maxui %c15_124, %c1_125 : index
-            %c1_126 = arith.constant 1 : index
-            %100 = arith.maxui %99, %c1_126 : index
-            %101 = arith.divui %98, %100 : index
-            %102 = arith.select %82, %c0_122, %101 : index
-            %c1_127 = arith.constant 1 : index
-            %c0_128 = arith.constant 0 : index
-            %103 = arith.maxui %34, %c1_127 : index
-            %c0_129 = arith.constant 0 : index
-            %104 = arith.subi %c0, %46 : index
-            %105 = arith.cmpi slt, %104, %c0 : index
-            %106 = arith.select %105, %c0, %104 : index
-            %107 = arith.cmpi slt, %48, %c0 : index
-            %108 = arith.select %107, %c0, %48 : index
-            %109 = arith.minui %108, %50 : index
-            scf.for %arg10 = %106 to %109 step %c1 {
-              %110 = arith.addi %46, %arg10 : index
+            %c1_85 = arith.constant 1 : index
+            %c0_86 = arith.constant 0 : index
+            %81 = arith.maxui %20, %c1_85 : index
+            %c0_87 = arith.constant 0 : index
+            %c1_88 = arith.constant 1 : index
+            %c0_89 = arith.constant 0 : index
+            %82 = arith.maxui %13, %c1_88 : index
+            %c0_90 = arith.constant 0 : index
+            %c4_91 = arith.constant 4 : index
+            %83 = arith.muli %arg2, %c4_91 : index
+            %c15_92 = arith.constant 15 : index
+            %c1_93 = arith.constant 1 : index
+            %84 = arith.maxui %c15_92, %c1_93 : index
+            %c1_94 = arith.constant 1 : index
+            %85 = arith.maxui %84, %c1_94 : index
+            %86 = arith.divui %83, %85 : index
+            %87 = arith.select %74, %c0_90, %86 : index
+            %c1_95 = arith.constant 1 : index
+            %c0_96 = arith.constant 0 : index
+            %88 = arith.maxui %6, %c1_95 : index
+            %c0_97 = arith.constant 0 : index
+            %89 = arith.subi %c0, %32 : index
+            %90 = arith.cmpi slt, %89, %c0 : index
+            %91 = arith.select %90, %c0, %89 : index
+            %92 = arith.cmpi slt, %34, %c0 : index
+            %93 = arith.select %92, %c0, %34 : index
+            %94 = arith.minui %93, %36 : index
+            scf.for %arg10 = %91 to %94 step %c1 {
+              %95 = arith.addi %32, %arg10 : index
               scf.for %arg11 = %c0 to %c256 step %c1 {
-                %c1_130 = arith.constant 1 : index
-                %111 = arith.maxui %90, %c1_130 : index
-                %c0_131 = arith.constant 0 : index
-                %c1_132 = arith.constant 1 : index
+                %c1_98 = arith.constant 1 : index
+                %96 = arith.maxui %82, %c1_98 : index
+                %c0_99 = arith.constant 0 : index
+                %c1_100 = arith.constant 1 : index
                 %c-1 = arith.constant -1 : index
-                %112 = arith.addi %46, %106 : index
-                %113 = arith.divui %112, %111 : index
-                %114 = arith.remui %112, %111 : index
-                %115 = arith.subi %arg10, %106 : index
-                %116 = arith.addi %114, %115 : index
-                %117 = arith.subi %113, %95 : index
-                %118 = arith.cmpi slt, %116, %c0_131 : index
-                %119 = arith.cmpi sge, %116, %111 : index
-                %120 = arith.select %118, %c-1, %c0_131 : index
-                %121 = arith.select %119, %c1_132, %120 : index
-                %122 = arith.addi %117, %121 : index
-                %123 = arith.subi %116, %111 : index
-                %124 = arith.addi %116, %111 : index
-                %125 = arith.select %118, %124, %116 : index
-                %126 = arith.select %119, %123, %125 : index
-                %127 = arts.db_ref %arg6[%c0_111] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-                memref.store %cst_0, %127[%126, %arg11] : memref<?x?xf64>
+                %97 = arith.addi %32, %91 : index
+                %98 = arith.divui %97, %96 : index
+                %99 = arith.remui %97, %96 : index
+                %100 = arith.subi %arg10, %91 : index
+                %101 = arith.addi %99, %100 : index
+                %102 = arith.subi %98, %87 : index
+                %103 = arith.cmpi slt, %101, %c0_99 : index
+                %104 = arith.cmpi sge, %101, %96 : index
+                %105 = arith.select %103, %c-1, %c0_99 : index
+                %106 = arith.select %104, %c1_100, %105 : index
+                %107 = arith.addi %102, %106 : index
+                %108 = arith.subi %101, %96 : index
+                %109 = arith.addi %101, %96 : index
+                %110 = arith.select %103, %109, %101 : index
+                %111 = arith.select %104, %108, %110 : index
+                %112 = arts.db_ref %arg6[%c0_89] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                memref.store %cst_0, %112[%111, %arg11] : memref<?x?xf64>
               } {arts.id = 309 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 256 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 0 : i64, locationKey = "3mm.c:137:3">, arts.metadata_provenance = "exact"}
               scf.for %arg11 = %c0 to %c256 step %c1 {
                 scf.for %arg12 = %c0 to %c256 step %c1 {
-                  %c1_130 = arith.constant 1 : index
-                  %111 = arith.maxui %97, %c1_130 : index
-                  %c0_131 = arith.constant 0 : index
-                  %c1_132 = arith.constant 1 : index
+                  %96 = arts.db_ref %arg7[%c0] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                  %97 = memref.load %96[%95, %arg11] : memref<?x?xf64>
+                  %98 = arts.db_ref %arg8[%c0] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                  %99 = memref.load %98[%arg11, %arg12] : memref<?x?xf64>
+                  %100 = arith.mulf %97, %99 : f64
+                  %c1_98 = arith.constant 1 : index
+                  %101 = arith.maxui %82, %c1_98 : index
+                  %c0_99 = arith.constant 0 : index
+                  %c1_100 = arith.constant 1 : index
                   %c-1 = arith.constant -1 : index
-                  %112 = arith.addi %46, %106 : index
-                  %113 = arith.divui %112, %111 : index
-                  %114 = arith.remui %112, %111 : index
-                  %115 = arith.subi %arg10, %106 : index
-                  %116 = arith.addi %114, %115 : index
-                  %117 = arith.subi %113, %102 : index
-                  %118 = arith.cmpi slt, %116, %c0_131 : index
-                  %119 = arith.cmpi sge, %116, %111 : index
-                  %120 = arith.select %118, %c-1, %c0_131 : index
-                  %121 = arith.select %119, %c1_132, %120 : index
-                  %122 = arith.addi %117, %121 : index
-                  %123 = arith.subi %116, %111 : index
-                  %124 = arith.addi %116, %111 : index
-                  %125 = arith.select %118, %124, %116 : index
-                  %126 = arith.select %119, %123, %125 : index
-                  %127 = arts.db_ref %arg7[%c0_121] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-                  %128 = memref.load %127[%126, %arg11] : memref<?x?xf64>
-                  %129 = arts.db_ref %arg8[%c0] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-                  %130 = memref.load %129[%arg11, %arg12] : memref<?x?xf64>
-                  %131 = arith.mulf %128, %130 : f64
-                  %c1_133 = arith.constant 1 : index
-                  %132 = arith.maxui %90, %c1_133 : index
-                  %c0_134 = arith.constant 0 : index
-                  %c1_135 = arith.constant 1 : index
-                  %c-1_136 = arith.constant -1 : index
-                  %133 = arith.addi %46, %106 : index
-                  %134 = arith.divui %133, %132 : index
-                  %135 = arith.remui %133, %132 : index
-                  %136 = arith.subi %arg10, %106 : index
-                  %137 = arith.addi %135, %136 : index
-                  %138 = arith.subi %134, %95 : index
-                  %139 = arith.cmpi slt, %137, %c0_134 : index
-                  %140 = arith.cmpi sge, %137, %132 : index
-                  %141 = arith.select %139, %c-1_136, %c0_134 : index
-                  %142 = arith.select %140, %c1_135, %141 : index
-                  %143 = arith.addi %138, %142 : index
-                  %144 = arith.subi %137, %132 : index
-                  %145 = arith.addi %137, %132 : index
-                  %146 = arith.select %139, %145, %137 : index
-                  %147 = arith.select %140, %144, %146 : index
-                  %148 = arts.db_ref %arg6[%c0_111] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-                  %149 = memref.load %148[%147, %arg12] : memref<?x?xf64>
-                  %150 = arith.addf %149, %131 : f64
-                  %c1_137 = arith.constant 1 : index
-                  %151 = arith.maxui %90, %c1_137 : index
-                  %c0_138 = arith.constant 0 : index
-                  %c1_139 = arith.constant 1 : index
-                  %c-1_140 = arith.constant -1 : index
-                  %152 = arith.addi %46, %106 : index
-                  %153 = arith.divui %152, %151 : index
-                  %154 = arith.remui %152, %151 : index
-                  %155 = arith.subi %arg10, %106 : index
-                  %156 = arith.addi %154, %155 : index
-                  %157 = arith.subi %153, %95 : index
-                  %158 = arith.cmpi slt, %156, %c0_138 : index
-                  %159 = arith.cmpi sge, %156, %151 : index
-                  %160 = arith.select %158, %c-1_140, %c0_138 : index
-                  %161 = arith.select %159, %c1_139, %160 : index
-                  %162 = arith.addi %157, %161 : index
-                  %163 = arith.subi %156, %151 : index
-                  %164 = arith.addi %156, %151 : index
-                  %165 = arith.select %158, %164, %156 : index
-                  %166 = arith.select %159, %163, %165 : index
-                  %167 = arts.db_ref %arg6[%c0_111] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-                  memref.store %150, %167[%166, %arg12] : memref<?x?xf64>
+                  %102 = arith.addi %32, %91 : index
+                  %103 = arith.divui %102, %101 : index
+                  %104 = arith.remui %102, %101 : index
+                  %105 = arith.subi %arg10, %91 : index
+                  %106 = arith.addi %104, %105 : index
+                  %107 = arith.subi %103, %87 : index
+                  %108 = arith.cmpi slt, %106, %c0_99 : index
+                  %109 = arith.cmpi sge, %106, %101 : index
+                  %110 = arith.select %108, %c-1, %c0_99 : index
+                  %111 = arith.select %109, %c1_100, %110 : index
+                  %112 = arith.addi %107, %111 : index
+                  %113 = arith.subi %106, %101 : index
+                  %114 = arith.addi %106, %101 : index
+                  %115 = arith.select %108, %114, %106 : index
+                  %116 = arith.select %109, %113, %115 : index
+                  %117 = arts.db_ref %arg6[%c0_89] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                  %118 = memref.load %117[%116, %arg12] : memref<?x?xf64>
+                  %119 = arith.addf %118, %100 : f64
+                  %c1_101 = arith.constant 1 : index
+                  %120 = arith.maxui %82, %c1_101 : index
+                  %c0_102 = arith.constant 0 : index
+                  %c1_103 = arith.constant 1 : index
+                  %c-1_104 = arith.constant -1 : index
+                  %121 = arith.addi %32, %91 : index
+                  %122 = arith.divui %121, %120 : index
+                  %123 = arith.remui %121, %120 : index
+                  %124 = arith.subi %arg10, %91 : index
+                  %125 = arith.addi %123, %124 : index
+                  %126 = arith.subi %122, %87 : index
+                  %127 = arith.cmpi slt, %125, %c0_102 : index
+                  %128 = arith.cmpi sge, %125, %120 : index
+                  %129 = arith.select %127, %c-1_104, %c0_102 : index
+                  %130 = arith.select %128, %c1_103, %129 : index
+                  %131 = arith.addi %126, %130 : index
+                  %132 = arith.subi %125, %120 : index
+                  %133 = arith.addi %125, %120 : index
+                  %134 = arith.select %127, %133, %125 : index
+                  %135 = arith.select %128, %132, %134 : index
+                  %136 = arts.db_ref %arg6[%c0_89] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                  memref.store %119, %136[%135, %arg12] : memref<?x?xf64>
                 } {arts.id = 311 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 256 : i64, nestingLevel = 2 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 0 : i64, locationKey = "3mm.c:137:3">, arts.metadata_origin_id = 311 : i64, arts.metadata_provenance = "transferred"}
               } {arts.id = 310 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 256 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 0 : i64, locationKey = "3mm.c:137:3">, arts.metadata_origin_id = 310 : i64, arts.metadata_provenance = "transferred"}
             } {arts.id = 322 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = true, hasReductions = false, tripCount = 0 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 2 : i64, locationKey = "3mm.c:137:3">, arts.metadata_provenance = "exact"}
@@ -657,223 +549,234 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
         }
       }
     } : i64
-    %42 = arts.epoch attributes {distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32} {
+    %28 = arts.epoch attributes {distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32} {
       scf.for %arg2 = %c0 to %c64 step %c1 {
-        %46 = arith.muli %arg2, %c4 : index
-        %47 = arith.cmpi uge, %46, %c256 : index
-        %48 = arith.subi %c256, %46 : index
-        %49 = arith.select %47, %c0, %48 : index
-        %50 = arith.minui %49, %c4 : index
-        %51 = arith.cmpi ugt, %50, %c0 : index
-        scf.if %51 {
-          %52 = arith.divui %46, %c256 : index
-          %53 = arith.addi %46, %c3 : index
-          %54 = arith.divui %53, %c256 : index
-          %55 = arith.cmpi ugt, %52, %c0 : index
-          %56 = arith.select %55, %54, %c0 : index
-          %57 = arith.subi %56, %52 : index
-          %58 = arith.addi %57, %c1 : index
-          %59 = arith.select %55, %c0, %52 : index
-          %60 = arith.select %55, %c0, %58 : index
-          %c1_82 = arith.constant 1 : index
-          %c0_83 = arith.constant 0 : index
-          %61 = arith.maxui %6, %c1_82 : index
-          %62 = arith.muli %12, %61 : index
-          %63 = arith.divui %46, %61 : index
-          %64 = arith.addi %46, %c4 : index
-          %65 = arith.subi %64, %c1_82 : index
-          %66 = arith.divui %65, %61 : index
-          %67 = arith.subi %12, %c1_82 : index
-          %68 = arith.cmpi ugt, %63, %67 : index
-          %69 = arith.minui %66, %67 : index
-          %70 = arith.select %68, %66, %69 : index
-          %71 = arith.subi %70, %63 : index
-          %72 = arith.addi %71, %c1_82 : index
-          %73 = arith.select %68, %c0_83, %63 : index
-          %74 = arith.select %68, %c0_83, %72 : index
-          %guid_84, %ptr_85 = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%46], sizes[%c4]), offsets[%73], sizes[%c1_82] {arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          arts.lowering_contract(%ptr_85 : memref<?xmemref<?x?xf64>>) distribution_kind(<block>) distribution_pattern(<matmul>) block_shape[%c4] {distribution_version = 1 : i64, owner_dims = array<i64: 0>}
-          %c1_86 = arith.constant 1 : index
-          %c0_87 = arith.constant 0 : index
-          %guid_88, %ptr_89 = arts.db_acquire[<in>] (%guid_23 : memref<?xi64>, %ptr_24 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%46], sizes[%c4]), offsets[%c0_87], sizes[%19] {arts.id = 335 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          %guid_90, %ptr_91 = arts.db_acquire[<in>] (%guid_30 : memref<?xi64>, %ptr_31 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_29], sizes[%c1] {arts.id = 328 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          arts.lowering_contract(%ptr_91 : memref<?xmemref<?x?xf64>>) distribution_kind(<block>) distribution_pattern(<matmul>) {distribution_version = 1 : i64, post_db_refined}
-          %c0_92 = arith.constant 0 : index
-          %c1_93 = arith.constant 1 : index
-          %c0_94 = arith.constant 0 : index
-          %guid_95, %ptr_96 = arts.db_acquire[<inout>] (%guid_44 : memref<?xi64>, %ptr_45 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%46], sizes[%c4]), offsets[%c0_94], sizes[%26] {arts.id = 336 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          %c1_97 = arith.constant 1 : index
-          %c0_98 = arith.constant 0 : index
-          %guid_99, %ptr_100 = arts.db_acquire[<in>] (%guid_58 : memref<?xi64>, %ptr_59 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%46], sizes[%c4]), offsets[%c0_98], sizes[%33] {arts.id = 333 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          %guid_101, %ptr_102 = arts.db_acquire[<in>] (%guid_65 : memref<?xi64>, %ptr_66 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_64], sizes[%c1] {arts.id = 331 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          arts.lowering_contract(%ptr_102 : memref<?xmemref<?x?xf64>>) distribution_kind(<block>) distribution_pattern(<matmul>) {distribution_version = 1 : i64, post_db_refined}
-          %c1_103 = arith.constant 1 : index
-          %c0_104 = arith.constant 0 : index
-          %75 = arith.maxui %34, %c1_103 : index
-          %76 = arith.muli %40, %75 : index
-          %77 = arith.divui %46, %75 : index
-          %78 = arith.addi %46, %c4 : index
-          %79 = arith.subi %78, %c1_103 : index
-          %80 = arith.divui %79, %75 : index
-          %81 = arith.subi %40, %c1_103 : index
-          %82 = arith.cmpi ugt, %77, %81 : index
-          %83 = arith.minui %80, %81 : index
-          %84 = arith.select %82, %80, %83 : index
-          %85 = arith.subi %84, %77 : index
-          %86 = arith.addi %85, %c1_103 : index
-          %87 = arith.select %82, %c0_104, %77 : index
-          %88 = arith.select %82, %c0_104, %86 : index
-          %guid_105, %ptr_106 = arts.db_acquire[<inout>] (%guid_79 : memref<?xi64>, %ptr_80 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%46], sizes[%c4]), offsets[%87], sizes[%c1_103] {arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
-          arts.lowering_contract(%ptr_106 : memref<?xmemref<?x?xf64>>) distribution_kind(<block>) distribution_pattern(<matmul>) block_shape[%c4] {distribution_version = 1 : i64, owner_dims = array<i64: 0>}
-          arts.edt <task> <intranode> route(%c-1_i32) (%ptr_85, %ptr_89, %ptr_91, %ptr_96, %ptr_100, %ptr_102, %ptr_106) : memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>> attributes {arts.id = 121 : i64, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256]} {
+        %32 = arith.muli %arg2, %c4 : index
+        %33 = arith.cmpi uge, %32, %c256 : index
+        %34 = arith.subi %c256, %32 : index
+        %35 = arith.select %33, %c0, %34 : index
+        %36 = arith.minui %35, %c4 : index
+        %37 = arith.cmpi ugt, %36, %c0 : index
+        scf.if %37 {
+          %38 = arith.divui %32, %c256 : index
+          %39 = arith.addi %32, %c3 : index
+          %40 = arith.divui %39, %c256 : index
+          %41 = arith.cmpi ugt, %38, %c0 : index
+          %42 = arith.select %41, %40, %c0 : index
+          %43 = arith.subi %42, %38 : index
+          %44 = arith.addi %43, %c1 : index
+          %45 = arith.select %41, %c0, %38 : index
+          %46 = arith.select %41, %c0, %44 : index
+          %c1_64 = arith.constant 1 : index
+          %c0_65 = arith.constant 0 : index
+          %47 = arith.maxui %6, %c1_64 : index
+          %48 = arith.muli %12, %47 : index
+          %49 = arith.divui %32, %47 : index
+          %50 = arith.addi %32, %c4 : index
+          %51 = arith.subi %50, %c1_64 : index
+          %52 = arith.divui %51, %47 : index
+          %53 = arith.subi %12, %c1_64 : index
+          %54 = arith.cmpi ugt, %49, %53 : index
+          %55 = arith.minui %52, %53 : index
+          %56 = arith.select %54, %52, %55 : index
+          %57 = arith.subi %56, %49 : index
+          %58 = arith.addi %57, %c1_64 : index
+          %59 = arith.select %54, %c0_65, %49 : index
+          %60 = arith.select %54, %c0_65, %58 : index
+          %guid_66, %ptr_67 = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%32], sizes[%c4]), offsets[%59], sizes[%c1_64] {arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_67 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) block_shape[%c4] contract(<ownerDims = [0]>)
+          %61 = arith.addi %32, %36 : index
+          %62 = arith.cmpi uge, %32, %c1 : index
+          %63 = arith.subi %32, %c1 : index
+          %64 = arith.select %62, %63, %c0 : index
+          %65 = arith.addi %61, %c1 : index
+          %66 = arith.minui %65, %c256 : index
+          %67 = arith.cmpi uge, %66, %64 : index
+          %68 = arith.subi %66, %64 : index
+          %69 = arith.select %67, %68, %c0 : index
+          %70 = arith.maxui %69, %c1 : index
+          %71 = arith.divui %64, %c256 : index
+          %72 = arith.addi %64, %70 : index
+          %73 = arith.subi %72, %c1 : index
+          %74 = arith.divui %73, %c256 : index
+          %75 = arith.cmpi ugt, %71, %c0 : index
+          %76 = arith.select %75, %74, %c0 : index
+          %77 = arith.subi %76, %71 : index
+          %78 = arith.addi %77, %c1 : index
+          %79 = arith.select %75, %c0, %71 : index
+          %80 = arith.select %75, %c0, %78 : index
+          %guid_68, %ptr_69 = arts.db_acquire[<in>] (%guid_15 : memref<?xi64>, %ptr_16 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_14], sizes[%c1] {arts.id = 332 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_69 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) contract(<postDbRefined = true>)
+          %guid_70, %ptr_71 = arts.db_acquire[<in>] (%guid_21 : memref<?xi64>, %ptr_22 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_20], sizes[%c1] {arts.id = 329 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_71 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) contract(<postDbRefined = true>)
+          %c0_72 = arith.constant 0 : index
+          %c1_73 = arith.constant 1 : index
+          %c0_74 = arith.constant 0 : index
+          %guid_75, %ptr_76 = arts.db_acquire[<inout>] (%guid_35 : memref<?xi64>, %ptr_36 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%32], sizes[%c4]), offsets[%c0_74], sizes[%19] {arts.id = 330 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_76 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>)
+          %guid_77, %ptr_78 = arts.db_acquire[<in>] (%guid_41 : memref<?xi64>, %ptr_42 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_40], sizes[%c1] {arts.id = 337 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_78 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) contract(<postDbRefined = true>)
+          %guid_79, %ptr_80 = arts.db_acquire[<in>] (%guid_47 : memref<?xi64>, %ptr_48 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_46], sizes[%c1] {arts.id = 335 : i64, arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_80 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) contract(<postDbRefined = true>)
+          %c1_81 = arith.constant 1 : index
+          %c0_82 = arith.constant 0 : index
+          %81 = arith.maxui %20, %c1_81 : index
+          %82 = arith.muli %26, %81 : index
+          %83 = arith.divui %32, %81 : index
+          %84 = arith.addi %32, %c4 : index
+          %85 = arith.subi %84, %c1_81 : index
+          %86 = arith.divui %85, %81 : index
+          %87 = arith.subi %26, %c1_81 : index
+          %88 = arith.cmpi ugt, %83, %87 : index
+          %89 = arith.minui %86, %87 : index
+          %90 = arith.select %88, %86, %89 : index
+          %91 = arith.subi %90, %83 : index
+          %92 = arith.addi %91, %c1_81 : index
+          %93 = arith.select %88, %c0_82, %83 : index
+          %94 = arith.select %88, %c0_82, %92 : index
+          %guid_83, %ptr_84 = arts.db_acquire[<inout>] (%guid_61 : memref<?xi64>, %ptr_62 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%32], sizes[%c4]), offsets[%93], sizes[%c1_81] {arts.partition_hint = {blockSize = 15 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          arts.lowering_contract(%ptr_84 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) block_shape[%c4] contract(<ownerDims = [0]>)
+          arts.edt <task> <intranode> route(%c-1_i32) (%ptr_67, %ptr_69, %ptr_71, %ptr_76, %ptr_78, %ptr_80, %ptr_84) : memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>> attributes {arts.id = 326 : i64, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256]} {
           ^bb0(%arg3: memref<?xmemref<?x?xf64>>, %arg4: memref<?xmemref<?x?xf64>>, %arg5: memref<?xmemref<?x?xf64>>, %arg6: memref<?xmemref<?x?xf64>>, %arg7: memref<?xmemref<?x?xf64>>, %arg8: memref<?xmemref<?x?xf64>>, %arg9: memref<?xmemref<?x?xf64>>):
-            %c1_107 = arith.constant 1 : index
-            %c0_108 = arith.constant 0 : index
-            %89 = arith.maxui %6, %c1_107 : index
-            %c0_109 = arith.constant 0 : index
-            %c4_110 = arith.constant 4 : index
-            %90 = arith.muli %arg2, %c4_110 : index
-            %c15_111 = arith.constant 15 : index
-            %c1_112 = arith.constant 1 : index
-            %91 = arith.maxui %c15_111, %c1_112 : index
-            %c1_113 = arith.constant 1 : index
-            %92 = arith.maxui %91, %c1_113 : index
-            %93 = arith.divui %90, %92 : index
-            %94 = arith.select %68, %c0_109, %93 : index
-            %c1_114 = arith.constant 1 : index
-            %c0_115 = arith.constant 0 : index
-            %95 = arith.maxui %20, %c1_114 : index
-            %c0_116 = arith.constant 0 : index
-            %c1_117 = arith.constant 1 : index
-            %c0_118 = arith.constant 0 : index
-            %96 = arith.maxui %13, %c1_117 : index
-            %c0_119 = arith.constant 0 : index
-            %c1_120 = arith.constant 1 : index
-            %c0_121 = arith.constant 0 : index
-            %97 = arith.maxui %27, %c1_120 : index
-            %c0_122 = arith.constant 0 : index
-            %c1_123 = arith.constant 1 : index
-            %c0_124 = arith.constant 0 : index
-            %98 = arith.maxui %34, %c1_123 : index
-            %c0_125 = arith.constant 0 : index
-            %c4_126 = arith.constant 4 : index
-            %99 = arith.muli %arg2, %c4_126 : index
-            %c15_127 = arith.constant 15 : index
-            %c1_128 = arith.constant 1 : index
-            %100 = arith.maxui %c15_127, %c1_128 : index
-            %c1_129 = arith.constant 1 : index
-            %101 = arith.maxui %100, %c1_129 : index
-            %102 = arith.divui %99, %101 : index
-            %103 = arith.select %82, %c0_125, %102 : index
-            %104 = arith.subi %c0, %46 : index
-            %105 = arith.cmpi slt, %104, %c0 : index
-            %106 = arith.select %105, %c0, %104 : index
-            %107 = arith.cmpi slt, %48, %c0 : index
-            %108 = arith.select %107, %c0, %48 : index
-            %109 = arith.minui %108, %50 : index
-            scf.for %arg10 = %106 to %109 step %c1 {
-              %110 = arith.addi %46, %arg10 : index
+            %c1_85 = arith.constant 1 : index
+            %c0_86 = arith.constant 0 : index
+            %95 = arith.maxui %20, %c1_85 : index
+            %c0_87 = arith.constant 0 : index
+            %c4_88 = arith.constant 4 : index
+            %96 = arith.muli %arg2, %c4_88 : index
+            %c15_89 = arith.constant 15 : index
+            %c1_90 = arith.constant 1 : index
+            %97 = arith.maxui %c15_89, %c1_90 : index
+            %c1_91 = arith.constant 1 : index
+            %98 = arith.maxui %97, %c1_91 : index
+            %99 = arith.divui %96, %98 : index
+            %100 = arith.select %88, %c0_87, %99 : index
+            %c1_92 = arith.constant 1 : index
+            %c0_93 = arith.constant 0 : index
+            %101 = arith.maxui %13, %c1_92 : index
+            %c0_94 = arith.constant 0 : index
+            %c1_95 = arith.constant 1 : index
+            %c0_96 = arith.constant 0 : index
+            %102 = arith.maxui %6, %c1_95 : index
+            %c0_97 = arith.constant 0 : index
+            %c4_98 = arith.constant 4 : index
+            %103 = arith.muli %arg2, %c4_98 : index
+            %c15_99 = arith.constant 15 : index
+            %c1_100 = arith.constant 1 : index
+            %104 = arith.maxui %c15_99, %c1_100 : index
+            %c1_101 = arith.constant 1 : index
+            %105 = arith.maxui %104, %c1_101 : index
+            %106 = arith.divui %103, %105 : index
+            %107 = arith.select %54, %c0_97, %106 : index
+            %108 = arith.subi %c0, %32 : index
+            %109 = arith.cmpi slt, %108, %c0 : index
+            %110 = arith.select %109, %c0, %108 : index
+            %111 = arith.cmpi slt, %34, %c0 : index
+            %112 = arith.select %111, %c0, %34 : index
+            %113 = arith.minui %112, %36 : index
+            scf.for %arg10 = %110 to %113 step %c1 {
+              %114 = arith.addi %32, %arg10 : index
               scf.for %arg11 = %c0 to %c256 step %c1 {
-                %c1_130 = arith.constant 1 : index
-                %111 = arith.maxui %98, %c1_130 : index
-                %c0_131 = arith.constant 0 : index
-                %c1_132 = arith.constant 1 : index
+                %c1_102 = arith.constant 1 : index
+                %115 = arith.maxui %95, %c1_102 : index
+                %c0_103 = arith.constant 0 : index
+                %c1_104 = arith.constant 1 : index
                 %c-1 = arith.constant -1 : index
-                %112 = arith.addi %46, %106 : index
-                %113 = arith.divui %112, %111 : index
-                %114 = arith.remui %112, %111 : index
-                %115 = arith.subi %arg10, %106 : index
-                %116 = arith.addi %114, %115 : index
-                %117 = arith.subi %113, %103 : index
-                %118 = arith.cmpi slt, %116, %c0_131 : index
-                %119 = arith.cmpi sge, %116, %111 : index
-                %120 = arith.select %118, %c-1, %c0_131 : index
-                %121 = arith.select %119, %c1_132, %120 : index
-                %122 = arith.addi %117, %121 : index
-                %123 = arith.subi %116, %111 : index
-                %124 = arith.addi %116, %111 : index
-                %125 = arith.select %118, %124, %116 : index
-                %126 = arith.select %119, %123, %125 : index
-                %127 = arts.db_ref %arg9[%c0_124] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-                memref.store %cst_0, %127[%126, %arg11] : memref<?x?xf64>
+                %116 = arith.addi %32, %110 : index
+                %117 = arith.divui %116, %115 : index
+                %118 = arith.remui %116, %115 : index
+                %119 = arith.subi %arg10, %110 : index
+                %120 = arith.addi %118, %119 : index
+                %121 = arith.subi %117, %100 : index
+                %122 = arith.cmpi slt, %120, %c0_103 : index
+                %123 = arith.cmpi sge, %120, %115 : index
+                %124 = arith.select %122, %c-1, %c0_103 : index
+                %125 = arith.select %123, %c1_104, %124 : index
+                %126 = arith.addi %121, %125 : index
+                %127 = arith.subi %120, %115 : index
+                %128 = arith.addi %120, %115 : index
+                %129 = arith.select %122, %128, %120 : index
+                %130 = arith.select %123, %127, %129 : index
+                %131 = arts.db_ref %arg9[%c0_86] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                memref.store %cst_0, %131[%130, %arg11] : memref<?x?xf64>
               } {arts.id = 311 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 256 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 0 : i64, locationKey = "3mm.c:137:3">, arts.metadata_provenance = "exact"}
               scf.for %arg11 = %c0 to %c256 step %c1 {
                 scf.for %arg12 = %c0 to %c256 step %c1 {
-                  %c1_130 = arith.constant 1 : index
-                  %111 = arith.maxui %89, %c1_130 : index
-                  %c0_131 = arith.constant 0 : index
-                  %c1_132 = arith.constant 1 : index
+                  %c1_102 = arith.constant 1 : index
+                  %115 = arith.maxui %102, %c1_102 : index
+                  %c0_103 = arith.constant 0 : index
+                  %c1_104 = arith.constant 1 : index
                   %c-1 = arith.constant -1 : index
-                  %112 = arith.addi %46, %106 : index
-                  %113 = arith.divui %112, %111 : index
-                  %114 = arith.remui %112, %111 : index
-                  %115 = arith.subi %arg10, %106 : index
-                  %116 = arith.addi %114, %115 : index
-                  %117 = arith.subi %113, %94 : index
-                  %118 = arith.cmpi slt, %116, %c0_131 : index
-                  %119 = arith.cmpi sge, %116, %111 : index
-                  %120 = arith.select %118, %c-1, %c0_131 : index
-                  %121 = arith.select %119, %c1_132, %120 : index
-                  %122 = arith.addi %117, %121 : index
-                  %123 = arith.subi %116, %111 : index
-                  %124 = arith.addi %116, %111 : index
-                  %125 = arith.select %118, %124, %116 : index
-                  %126 = arith.select %119, %123, %125 : index
-                  %127 = arts.db_ref %arg3[%c0_108] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-                  %128 = memref.load %127[%126, %arg11] : memref<?x?xf64>
-                  %c1_133 = arith.constant 1 : index
-                  %129 = arith.maxui %95, %c1_133 : index
-                  %130 = arith.divui %arg11, %129 : index
-                  %131 = arith.subi %130, %c0_116 : index
-                  %132 = arith.remui %arg11, %129 : index
-                  %133 = arts.db_ref %arg6[%131] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-                  %134 = memref.load %133[%132, %arg12] : memref<?x?xf64>
-                  %135 = arith.mulf %128, %134 : f64
-                  %c1_134 = arith.constant 1 : index
-                  %136 = arith.maxui %98, %c1_134 : index
-                  %c0_135 = arith.constant 0 : index
-                  %c1_136 = arith.constant 1 : index
-                  %c-1_137 = arith.constant -1 : index
-                  %137 = arith.addi %46, %106 : index
-                  %138 = arith.divui %137, %136 : index
-                  %139 = arith.remui %137, %136 : index
-                  %140 = arith.subi %arg10, %106 : index
-                  %141 = arith.addi %139, %140 : index
-                  %142 = arith.subi %138, %103 : index
-                  %143 = arith.cmpi slt, %141, %c0_135 : index
-                  %144 = arith.cmpi sge, %141, %136 : index
-                  %145 = arith.select %143, %c-1_137, %c0_135 : index
-                  %146 = arith.select %144, %c1_136, %145 : index
-                  %147 = arith.addi %142, %146 : index
-                  %148 = arith.subi %141, %136 : index
-                  %149 = arith.addi %141, %136 : index
-                  %150 = arith.select %143, %149, %141 : index
-                  %151 = arith.select %144, %148, %150 : index
-                  %152 = arts.db_ref %arg9[%c0_124] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-                  %153 = memref.load %152[%151, %arg12] : memref<?x?xf64>
-                  %154 = arith.addf %153, %135 : f64
-                  %c1_138 = arith.constant 1 : index
-                  %155 = arith.maxui %98, %c1_138 : index
-                  %c0_139 = arith.constant 0 : index
-                  %c1_140 = arith.constant 1 : index
-                  %c-1_141 = arith.constant -1 : index
-                  %156 = arith.addi %46, %106 : index
-                  %157 = arith.divui %156, %155 : index
-                  %158 = arith.remui %156, %155 : index
-                  %159 = arith.subi %arg10, %106 : index
-                  %160 = arith.addi %158, %159 : index
-                  %161 = arith.subi %157, %103 : index
-                  %162 = arith.cmpi slt, %160, %c0_139 : index
-                  %163 = arith.cmpi sge, %160, %155 : index
-                  %164 = arith.select %162, %c-1_141, %c0_139 : index
-                  %165 = arith.select %163, %c1_140, %164 : index
-                  %166 = arith.addi %161, %165 : index
-                  %167 = arith.subi %160, %155 : index
-                  %168 = arith.addi %160, %155 : index
-                  %169 = arith.select %162, %168, %160 : index
-                  %170 = arith.select %163, %167, %169 : index
-                  %171 = arts.db_ref %arg9[%c0_124] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-                  memref.store %154, %171[%170, %arg12] : memref<?x?xf64>
+                  %116 = arith.addi %32, %110 : index
+                  %117 = arith.divui %116, %115 : index
+                  %118 = arith.remui %116, %115 : index
+                  %119 = arith.subi %arg10, %110 : index
+                  %120 = arith.addi %118, %119 : index
+                  %121 = arith.subi %117, %107 : index
+                  %122 = arith.cmpi slt, %120, %c0_103 : index
+                  %123 = arith.cmpi sge, %120, %115 : index
+                  %124 = arith.select %122, %c-1, %c0_103 : index
+                  %125 = arith.select %123, %c1_104, %124 : index
+                  %126 = arith.addi %121, %125 : index
+                  %127 = arith.subi %120, %115 : index
+                  %128 = arith.addi %120, %115 : index
+                  %129 = arith.select %122, %128, %120 : index
+                  %130 = arith.select %123, %127, %129 : index
+                  %131 = arts.db_ref %arg3[%c0_96] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                  %132 = memref.load %131[%130, %arg11] : memref<?x?xf64>
+                  %c1_105 = arith.constant 1 : index
+                  %133 = arith.maxui %101, %c1_105 : index
+                  %134 = arith.divui %arg11, %133 : index
+                  %135 = arith.subi %134, %c0_94 : index
+                  %136 = arith.remui %arg11, %133 : index
+                  %137 = arts.db_ref %arg6[%135] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                  %138 = memref.load %137[%136, %arg12] : memref<?x?xf64>
+                  %139 = arith.mulf %132, %138 : f64
+                  %c1_106 = arith.constant 1 : index
+                  %140 = arith.maxui %95, %c1_106 : index
+                  %c0_107 = arith.constant 0 : index
+                  %c1_108 = arith.constant 1 : index
+                  %c-1_109 = arith.constant -1 : index
+                  %141 = arith.addi %32, %110 : index
+                  %142 = arith.divui %141, %140 : index
+                  %143 = arith.remui %141, %140 : index
+                  %144 = arith.subi %arg10, %110 : index
+                  %145 = arith.addi %143, %144 : index
+                  %146 = arith.subi %142, %100 : index
+                  %147 = arith.cmpi slt, %145, %c0_107 : index
+                  %148 = arith.cmpi sge, %145, %140 : index
+                  %149 = arith.select %147, %c-1_109, %c0_107 : index
+                  %150 = arith.select %148, %c1_108, %149 : index
+                  %151 = arith.addi %146, %150 : index
+                  %152 = arith.subi %145, %140 : index
+                  %153 = arith.addi %145, %140 : index
+                  %154 = arith.select %147, %153, %145 : index
+                  %155 = arith.select %148, %152, %154 : index
+                  %156 = arts.db_ref %arg9[%c0_86] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                  %157 = memref.load %156[%155, %arg12] : memref<?x?xf64>
+                  %158 = arith.addf %157, %139 : f64
+                  %c1_110 = arith.constant 1 : index
+                  %159 = arith.maxui %95, %c1_110 : index
+                  %c0_111 = arith.constant 0 : index
+                  %c1_112 = arith.constant 1 : index
+                  %c-1_113 = arith.constant -1 : index
+                  %160 = arith.addi %32, %110 : index
+                  %161 = arith.divui %160, %159 : index
+                  %162 = arith.remui %160, %159 : index
+                  %163 = arith.subi %arg10, %110 : index
+                  %164 = arith.addi %162, %163 : index
+                  %165 = arith.subi %161, %100 : index
+                  %166 = arith.cmpi slt, %164, %c0_111 : index
+                  %167 = arith.cmpi sge, %164, %159 : index
+                  %168 = arith.select %166, %c-1_113, %c0_111 : index
+                  %169 = arith.select %167, %c1_112, %168 : index
+                  %170 = arith.addi %165, %169 : index
+                  %171 = arith.subi %164, %159 : index
+                  %172 = arith.addi %164, %159 : index
+                  %173 = arith.select %166, %172, %164 : index
+                  %174 = arith.select %167, %171, %173 : index
+                  %175 = arts.db_ref %arg9[%c0_86] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                  memref.store %158, %175[%174, %arg12] : memref<?x?xf64>
                 } {arts.id = 313 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 256 : i64, nestingLevel = 2 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 0 : i64, locationKey = "3mm.c:137:3">, arts.metadata_origin_id = 313 : i64, arts.metadata_provenance = "transferred"}
               } {arts.id = 312 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 256 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 0 : i64, locationKey = "3mm.c:137:3">, arts.metadata_origin_id = 312 : i64, arts.metadata_provenance = "transferred"}
             } {arts.id = 323 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = true, hasReductions = false, tripCount = 0 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 2 : i64, locationKey = "3mm.c:137:3">, arts.metadata_provenance = "exact"}
@@ -889,39 +792,39 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
       }
     } : i64
     call @carts_kernel_timer_stop(%4) : (memref<?xi8>) -> ()
-    %43 = polygeist.pointer2memref %1 : !llvm.ptr to memref<?xi8>
-    call @carts_phase_timer_start(%43, %4) : (memref<?xi8>, memref<?xi8>) -> ()
-    %44 = scf.for %arg2 = %c0 to %c256 step %c1 iter_args(%arg3 = %cst_0) -> (f64) {
-      %c1_82 = arith.constant 1 : index
-      %46 = arith.maxui %34, %c1_82 : index
-      %47 = arith.divui %arg2, %46 : index
-      %48 = arith.subi %47, %c0_81 : index
-      %49 = arith.remui %arg2, %46 : index
-      %50 = arts.db_ref %ptr_80[%48] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-      %51 = memref.load %50[%49, %arg2] : memref<?x?xf64>
-      %52 = arith.addf %arg3, %51 : f64
-      scf.yield %52 : f64
+    %29 = polygeist.pointer2memref %1 : !llvm.ptr to memref<?xi8>
+    call @carts_phase_timer_start(%29, %4) : (memref<?xi8>, memref<?xi8>) -> ()
+    %30 = scf.for %arg2 = %c0 to %c256 step %c1 iter_args(%arg3 = %cst_0) -> (f64) {
+      %c1_64 = arith.constant 1 : index
+      %32 = arith.maxui %20, %c1_64 : index
+      %33 = arith.divui %arg2, %32 : index
+      %34 = arith.subi %33, %c0_63 : index
+      %35 = arith.remui %arg2, %32 : index
+      %36 = arts.db_ref %ptr_62[%34] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+      %37 = memref.load %36[%35, %arg2] : memref<?x?xf64>
+      %38 = arith.addf %arg3, %37 : f64
+      scf.yield %38 : f64
     }
-    call @carts_bench_checksum_d(%44) : (f64) -> ()
-    call @carts_phase_timer_stop(%43) : (memref<?xi8>) -> ()
-    %45 = polygeist.pointer2memref %0 : !llvm.ptr to memref<?xi8>
-    call @carts_phase_timer_start(%45, %4) : (memref<?xi8>, memref<?xi8>) -> ()
-    call @carts_phase_timer_stop(%45) : (memref<?xi8>) -> ()
+    call @carts_bench_checksum_d(%30) : (f64) -> ()
+    call @carts_phase_timer_stop(%29) : (memref<?xi8>) -> ()
+    %31 = polygeist.pointer2memref %0 : !llvm.ptr to memref<?xi8>
+    call @carts_phase_timer_start(%31, %4) : (memref<?xi8>, memref<?xi8>) -> ()
+    call @carts_phase_timer_stop(%31) : (memref<?xi8>) -> ()
     call @carts_e2e_timer_stop() : () -> ()
-    arts.db_free(%guid_30) : memref<?xi64>
-    arts.db_free(%ptr_31) : memref<?xmemref<?x?xf64>>
+    arts.db_free(%guid_61) : memref<?xi64>
+    arts.db_free(%ptr_62) : memref<?xmemref<?x?xf64>>
+    arts.db_free(%guid_35) : memref<?xi64>
+    arts.db_free(%ptr_36) : memref<?xmemref<?x?xf64>>
+    arts.db_free(%guid_41) : memref<?xi64>
+    arts.db_free(%ptr_42) : memref<?xmemref<?x?xf64>>
+    arts.db_free(%guid_15) : memref<?xi64>
+    arts.db_free(%ptr_16) : memref<?xmemref<?x?xf64>>
+    arts.db_free(%guid_21) : memref<?xi64>
+    arts.db_free(%ptr_22) : memref<?xmemref<?x?xf64>>
     arts.db_free(%guid) : memref<?xi64>
     arts.db_free(%ptr) : memref<?xmemref<?x?xf64>>
-    arts.db_free(%guid_23) : memref<?xi64>
-    arts.db_free(%ptr_24) : memref<?xmemref<?x?xf64>>
-    arts.db_free(%guid_65) : memref<?xi64>
-    arts.db_free(%ptr_66) : memref<?xmemref<?x?xf64>>
-    arts.db_free(%guid_58) : memref<?xi64>
-    arts.db_free(%ptr_59) : memref<?xmemref<?x?xf64>>
-    arts.db_free(%guid_79) : memref<?xi64>
-    arts.db_free(%ptr_80) : memref<?xmemref<?x?xf64>>
-    arts.db_free(%guid_44) : memref<?xi64>
-    arts.db_free(%ptr_45) : memref<?xmemref<?x?xf64>>
+    arts.db_free(%guid_47) : memref<?xi64>
+    arts.db_free(%ptr_48) : memref<?xmemref<?x?xf64>>
     return %c0_i32 : i32
   }
   func.func private @carts_benchmarks_start() attributes {llvm.linkage = #llvm.linkage<external>}

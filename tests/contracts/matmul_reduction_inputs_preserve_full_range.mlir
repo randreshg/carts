@@ -7,8 +7,6 @@
 
 // TWOMM-DAG: arts.db_acquire[<in>] ({{.*}}) partitioning(<coarse>), offsets[%c0{{.*}}], sizes[%c1] {
 // TWOMM-DAG: arts.db_acquire[<in>] ({{.*}}) partitioning(<coarse>), offsets[%c0{{.*}}], sizes[%c1] {
-// TWOMM-DAG: arts.db_acquire[<in>] ({{.*}}) partitioning(<block>, offsets[%{{.*}}], sizes[%c4]), offsets[%{{.*}}], sizes[%c1{{.*}}] element_offsets[%{{.*}}] element_sizes[%c4] {
 
 // THREEMM-DAG: arts.db_acquire[<in>] ({{.*}}) partitioning(<coarse>), offsets[%c0{{.*}}], sizes[%c1] {
 // THREEMM-DAG: arts.db_acquire[<in>] ({{.*}}) partitioning(<coarse>), offsets[%c0{{.*}}], sizes[%c1] {
-// THREEMM-DAG: arts.db_acquire[<in>] ({{.*}}) partitioning(<block>, offsets[%{{.*}}], sizes[%c4]), offsets[%{{.*}}], sizes[%c1{{.*}}] element_offsets[%{{.*}}] element_sizes[%c4] {

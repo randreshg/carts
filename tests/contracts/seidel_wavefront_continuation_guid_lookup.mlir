@@ -7,7 +7,7 @@
 // CHECK-LABEL: func.func private @__arts_edt_3
 // CHECK: %[[GUID_RAW:.+]] = llvm.inttoptr %{{.+}} : i64 to !llvm.ptr
 // CHECK-NOT: memref.dim %{{.+}} : memref<?x?xi64>
-// CHECK: arts_edt_create_with_epoch{{.*}}arts.create_id = 117000
+// CHECK: arts.create_id = 119000 : i64
 // CHECK: %[[LINEAR_I64:.+]] = arith.index_cast %{{.+}} : index to i64
 // CHECK-NEXT: %[[GUID_ADDR:.+]] = llvm.getelementptr %[[GUID_RAW]][%[[LINEAR_I64]]] : (!llvm.ptr, i64) -> !llvm.ptr, i64
 // CHECK-NEXT: %[[GUID_VALUE:.+]] = llvm.load %[[GUID_ADDR]] : !llvm.ptr -> i64
