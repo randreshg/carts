@@ -27,8 +27,9 @@ enum class AnalysisKind : uint8_t {
 };
 
 /// Declares which analyses a pass reads and invalidates.
-/// This is purely declarative — no enforcement yet.
-/// Future work (G-4 Phase 4+) will use these for selective invalidation.
+/// Declarative registry used by AnalysisManager for selective invalidation.
+/// Invalidation is active; reads coverage is good for mutating passes but
+/// is not yet comprehensive for every pass-local declaration.
 struct AnalysisDependencyInfo {
   /// Analyses that this pass reads (queries via AM).
   llvm::ArrayRef<AnalysisKind> reads;

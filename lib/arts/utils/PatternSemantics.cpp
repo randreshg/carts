@@ -76,6 +76,10 @@ bool PatternSemantics::isMatmulFamily(ArtsDepPattern pattern) {
   return pattern == ArtsDepPattern::matmul;
 }
 
+bool PatternSemantics::isWavefrontFamily(ArtsDepPattern pattern) {
+  return pattern == ArtsDepPattern::wavefront_2d;
+}
+
 std::optional<EdtDistributionPattern>
 PatternSemantics::inferDistributionPattern(ArtsDepPattern pattern) {
   switch (pattern) {

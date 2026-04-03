@@ -324,7 +324,7 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
   int64_t nestedLoopWork = estimateNestedLoopWork(forOp);
   int64_t stencilIterationWork = 1;
   if (auto depPattern = getEffectiveDepPattern(forOp.getOperation())) {
-    isWavefrontPattern = *depPattern == ArtsDepPattern::wavefront_2d;
+    isWavefrontPattern = PatternSemantics::isWavefrontFamily(*depPattern);
     /// The loop access summary is not always populated yet when ForOpt runs.
     /// Fall back to the semantic dep-pattern contract so Jacobi/stencil loops
     /// still take the stencil coarsening path before lowering.
