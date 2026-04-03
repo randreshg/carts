@@ -51,7 +51,7 @@ struct DeadCodeEliminationPass
     : public impl::DeadCodeEliminationBase<DeadCodeEliminationPass> {
 
   static bool isContractUse(Operation *user) {
-    return isa<LoweringContractOp>(user);
+    return isa<LoweringContractOp, DbFreeOp, DbReleaseOp>(user);
   }
 
   static bool hasNonContractUse(Value value) {
@@ -280,6 +280,21 @@ struct DeadCodeEliminationPass
         collectContractUsers(dbAlloc.getPtr(), contracts);
         for (Operation *contract : contracts)
           removalMgr.markForRemoval(contract);
+
+        /// Also remove associated db_free operations
+        for (Operation *user : dbAlloc.getGuid().getUsers()) {
+          if (auto freeOp = dyn_cast<DbFreeOp>(user)) {
+            ARTS_DEBUG("Removing associated db_free for guid: " << freeOp);
+            removalMgr.markForRemoval(freeOp);
+          }
+        }
+        for (Operation *user : dbAlloc.getPtr().getUsers()) {
+          if (auto freeOp = dyn_cast<DbFreeOp>(user)) {
+            ARTS_DEBUG("Removing associated db_free for ptr: " << freeOp);
+            removalMgr.markForRemoval(freeOp);
+          }
+        }
+
         ARTS_DEBUG("Removing dead db_alloc: " << dbAlloc);
         removalMgr.markForRemoval(dbAlloc);
       }
@@ -299,6 +314,14 @@ struct DeadCodeEliminationPass
     module.walk([&](DbAcquireOp acquire) {
       if (!hasNonContractUse(acquire.getPtr()) &&
           !hasNonContractUse(acquire.getGuid())) {
+        /// Also remove associated db_release operations
+        for (Operation *user : acquire.getPtr().getUsers()) {
+          if (auto releaseOp = dyn_cast<DbReleaseOp>(user)) {
+            ARTS_DEBUG("Removing associated db_release: " << releaseOp);
+            removalMgr.markForRemoval(releaseOp);
+          }
+        }
+
         ARTS_DEBUG("Removing unused acquire: " << acquire);
         SmallVector<Operation *> contracts;
         collectContractUsers(acquire.getPtr(), contracts);
