@@ -1,6 +1,6 @@
 ---
 name: carts-debug
-description: Debug CARTS compiler issues, analyze diagnostic output, inspect pipeline stages, troubleshoot runtime behavior, and profile with ARTS counters. Use when the user asks to debug, diagnose, inspect, troubleshoot, profile, or analyze compiler or runtime behavior.
+description: General CARTS debugging entrypoint for compiler or runtime issues when the failure is not yet clearly classified. Use when the user asks to debug, diagnose, inspect, troubleshoot, profile, or analyze CARTS behavior and you still need to determine whether the issue is a miscompile, runtime failure, benchmark regression, or analysis/invalidation bug.
 user-invocable: true
 allowed-tools: Bash, Read, Write, Grep, Glob, Agent
 argument-hint: [<input-file>]
@@ -9,6 +9,25 @@ argument-hint: [<input-file>]
 # CARTS Debug
 
 Two layers: **compile-time** (compiler diagnostics) and **runtime** (ARTS debug builds + counters).
+
+Shared resources live here for the other debugging skills too:
+- `references/failure-signatures.md`
+- `references/codepath-map.md`
+- `references/command-patterns.md`
+- `references/stage-ownership.md`
+- `scripts/list-pipeline-stages.sh`
+- `scripts/dump-stage.sh`
+- `scripts/find-debug-channels.sh`
+- `scripts/find-pass-codepaths.sh`
+- `scripts/collect-debug-bundle.sh`
+
+If the symptom is already clear, prefer the narrower skills:
+- wrong output / checksum mismatch / semantic drift -> `carts-miscompile-triage`
+- hang / crash / deadlock / route / epoch issue -> `carts-runtime-triage`
+- multi-node / ownership / route / distributed-db issue -> `carts-distributed-triage`
+- stale graph / invalidation / pass-ordering bug -> `carts-analysis-triage`
+- large benchmark needs shrinking into a test -> `carts-reproducer`
+- benchmark-specific failure or regression -> `carts-benchmark-triage`
 
 ## Compile-Time Diagnostics
 
@@ -63,6 +82,14 @@ Counters are compile-time configured — rebuild ARTS to change. Output: JSON in
 | Wrong codegen | `--pipeline <stage>` to inspect IR |
 | Runtime hang | `carts build --arts --debug 3`, run, check stderr |
 | Benchmark regression | `--counters 1`, compare timing JSON |
+
+## Shared References
+
+Read the shared references before inventing a new workflow:
+- `references/failure-signatures.md` — symptom-to-owner split
+- `references/codepath-map.md` — high-value files by bug class
+- `references/command-patterns.md` — command templates worth reusing
+- `references/stage-ownership.md` — stage-to-ownership map for bisection
 
 ## Instructions
 

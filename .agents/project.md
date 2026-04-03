@@ -131,9 +131,12 @@ module { ... }
 
 ## Agent Skills
 
-Custom skills in `.agents/skills/`: `/build`, `/test`, `/debug`, `/benchmark`,
-`/benchmark-triage`, `/pass-dev`, `/carts`. Run `dekk carts agents generate` to
-sync to all agent systems (Claude, Codex, Copilot, Cursor).
+Custom skills in `.agents/skills/`: `/build`, `/test`, `/debug`,
+`/miscompile-triage`, `/runtime-triage`, `/distributed-triage`,
+`/analysis-triage`, `/reproducer`, `/benchmark`, `/benchmark-triage`,
+`/pass-dev`, `/carts`. Run
+`dekk carts skills generate` to sync to all agent systems (Claude, Codex,
+Copilot, Cursor).
 
 ## Reference Documentation
 

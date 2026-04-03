@@ -15,10 +15,10 @@ This guide teaches agents and developers how to understand, run, and debug CARTS
 .agents/                         <-- SOURCE OF TRUTH (committed to git)
   project.md                     Project instructions (one file, all agents)
   agents-reference.md            Detailed reference (this file's source)
-  skills/                        Skill definitions (7 skills)
+  skills/                        Skill definitions (12 skills)
   rules/                         Path-scoped rules (5 rules)
 
-GENERATED (gitignored, run `dekk carts agents generate`):
+GENERATED (gitignored, run `dekk carts skills generate`):
   CLAUDE.md                      <- Claude Code (from project.md)
   AGENTS.md                      <- All agents (from agents-reference.md)
   .claude/skills/                <- Claude Code skills (from skills/)
@@ -38,14 +38,14 @@ vim .agents/project.md           # Project instructions
 vim .agents/skills/build/SKILL.md # A skill
 
 # Generate all agent configs
-dekk carts agents generate       # Produces CLAUDE.md, CODEX.md, .cursorrules, etc.
+dekk carts skills generate       # Produces CLAUDE.md, CODEX.md, .cursorrules, etc.
 
 # Install skills to Codex
-dekk carts agents install        # Copies to ~/.codex/skills/
+dekk carts skills sync --target codex  # Syncs to ~/.codex/skills/
 
 # Check status
-dekk carts agents status         # Shows source + all targets
-dekk carts agents list           # Lists available skills
+dekk carts skills status         # Shows source + generated targets
+dekk carts skills list           # Lists available skills
 ```
 
 ### Supported Agents
@@ -71,7 +71,7 @@ Rules in `.agents/rules/*.md` are auto-generated to agent-specific formats:
 - `AGENTS.md` is generated from `.agents/agents-reference.md` (edit the source, not the output)
 - Skills use YAML frontmatter (`name`, `description`, `user-invocable`)
 - Rules use YAML frontmatter (`paths:` list of globs)
-- Keep workflow commands in `dekk carts agents`, not in agent-specific wrappers
+- Keep workflow commands in `dekk carts skills`, not in agent-specific wrappers
 
 ## Table of Contents
 
