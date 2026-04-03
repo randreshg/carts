@@ -195,7 +195,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
           %guid_42, %ptr_43 = arts.db_acquire[<in>] (%guid_13 : memref<?xi64>, %ptr_14 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_12], sizes[%c1] {arts.partition_hint = {blockSize = 11 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
           arts.lowering_contract(%ptr_43 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) block_shape[%c4] contract(<ownerDims = [0], postDbRefined = true>)
           %c0_44 = arith.constant 0 : index
-          %guid_45, %ptr_46 = arts.db_acquire[<in>] (%guid_18 : memref<?xi64>, %ptr_19 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_17], sizes[%c1] {arts.id = 278 : i64, arts.partition_hint = {blockSize = 11 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          %guid_45, %ptr_46 = arts.db_acquire[<in>] (%guid_18 : memref<?xi64>, %ptr_19 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_17], sizes[%c1] {arts.id = 277 : i64, arts.partition_hint = {blockSize = 11 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
           arts.lowering_contract(%ptr_46 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) contract(<postDbRefined = true>)
           %c1_47 = arith.constant 1 : index
           %c0_48 = arith.constant 0 : index
@@ -203,7 +203,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
           arts.lowering_contract(%ptr_50 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>)
           %guid_51, %ptr_52 = arts.db_acquire[<in>] (%guid_23 : memref<?xi64>, %ptr_24 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_22], sizes[%c1] {arts.id = 275 : i64, arts.partition_hint = {blockSize = 11 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
           arts.lowering_contract(%ptr_52 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) contract(<postDbRefined = true>)
-          arts.edt <task> <intranode> route(%c-1_i32) (%ptr_41, %ptr_43, %ptr_46, %ptr_50, %ptr_52) : memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>> attributes {arts.id = 69 : i64, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256]} {
+          arts.edt <task> <intranode> route(%c-1_i32) (%ptr_41, %ptr_43, %ptr_46, %ptr_50, %ptr_52) : memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>> attributes {arts.id = 72 : i64, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256]} {
           ^bb0(%arg3: memref<?xmemref<?x?xf64>>, %arg4: memref<?xmemref<?x?xf64>>, %arg5: memref<?xmemref<?x?xf64>>, %arg6: memref<?xmemref<?x?xf64>>, %arg7: memref<?xmemref<?x?xf64>>):
             %c1_53 = arith.constant 1 : index
             %c0_54 = arith.constant 0 : index
@@ -375,9 +375,9 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
           %71 = arith.addi %70, %c1 : index
           %72 = arith.select %68, %c0, %64 : index
           %73 = arith.select %68, %c0, %71 : index
-          %guid_42, %ptr_43 = arts.db_acquire[<in>] (%guid_13 : memref<?xi64>, %ptr_14 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_12], sizes[%c1] {arts.id = 277 : i64, arts.partition_hint = {blockSize = 11 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          %guid_42, %ptr_43 = arts.db_acquire[<in>] (%guid_13 : memref<?xi64>, %ptr_14 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_12], sizes[%c1] {arts.id = 274 : i64, arts.partition_hint = {blockSize = 11 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
           arts.lowering_contract(%ptr_43 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) contract(<postDbRefined = true>)
-          %guid_44, %ptr_45 = arts.db_acquire[<in>] (%guid_18 : memref<?xi64>, %ptr_19 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_17], sizes[%c1] {arts.id = 279 : i64, arts.partition_hint = {blockSize = 11 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          %guid_44, %ptr_45 = arts.db_acquire[<in>] (%guid_18 : memref<?xi64>, %ptr_19 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_17], sizes[%c1] {arts.id = 278 : i64, arts.partition_hint = {blockSize = 11 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
           arts.lowering_contract(%ptr_45 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) contract(<postDbRefined = true>)
           %c1_46 = arith.constant 1 : index
           %c0_47 = arith.constant 0 : index
@@ -400,7 +400,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
           %c0_50 = arith.constant 0 : index
           %guid_51, %ptr_52 = arts.db_acquire[<in>] (%guid_23 : memref<?xi64>, %ptr_24 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_22], sizes[%c1] {arts.id = 276 : i64, arts.partition_hint = {blockSize = 11 : i64, mode = 1 : i8}, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
           arts.lowering_contract(%ptr_52 : memref<?xmemref<?x?xf64>>) pattern(<distributionKind = <block>, distributionPattern = <matmul>, distributionVersion = 1 : i64>) contract(<postDbRefined = true>)
-          arts.edt <task> <intranode> route(%c-1_i32) (%ptr_41, %ptr_43, %ptr_45, %ptr_49, %ptr_52) : memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>> attributes {arts.id = 274 : i64, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256]} {
+          arts.edt <task> <intranode> route(%c-1_i32) (%ptr_41, %ptr_43, %ptr_45, %ptr_49, %ptr_52) : memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>> attributes {arts.id = 240 : i64, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<matmul>, distribution_version = 1 : i32, stencil_block_shape = [4, 256]} {
           ^bb0(%arg3: memref<?xmemref<?x?xf64>>, %arg4: memref<?xmemref<?x?xf64>>, %arg5: memref<?xmemref<?x?xf64>>, %arg6: memref<?xmemref<?x?xf64>>, %arg7: memref<?xmemref<?x?xf64>>):
             %c1_53 = arith.constant 1 : index
             %c0_54 = arith.constant 0 : index
@@ -587,16 +587,16 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
     call @carts_phase_timer_start(%24, %4) : (memref<?xi8>, memref<?xi8>) -> ()
     call @carts_phase_timer_stop(%24) : (memref<?xi8>) -> ()
     call @carts_e2e_timer_stop() : () -> ()
-    arts.db_free(%guid_23) : memref<?xi64>
-    arts.db_free(%ptr_24) : memref<?xmemref<?x?xf64>>
     arts.db_free(%guid_34) : memref<?xi64>
     arts.db_free(%ptr_35) : memref<?xmemref<?x?xf64>>
     arts.db_free(%guid_18) : memref<?xi64>
     arts.db_free(%ptr_19) : memref<?xmemref<?x?xf64>>
-    arts.db_free(%guid) : memref<?xi64>
-    arts.db_free(%ptr) : memref<?xmemref<?x?xf64>>
     arts.db_free(%guid_13) : memref<?xi64>
     arts.db_free(%ptr_14) : memref<?xmemref<?x?xf64>>
+    arts.db_free(%guid_23) : memref<?xi64>
+    arts.db_free(%ptr_24) : memref<?xmemref<?x?xf64>>
+    arts.db_free(%guid) : memref<?xi64>
+    arts.db_free(%ptr) : memref<?xmemref<?x?xf64>>
     return %c0_i32 : i32
   }
   func.func private @carts_benchmarks_start() attributes {llvm.linkage = #llvm.linkage<external>}
