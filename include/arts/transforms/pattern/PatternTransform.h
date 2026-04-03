@@ -35,6 +35,24 @@ public:
   virtual void stamp(ArrayRef<Operation *> ops) const;
 };
 
+/// Simple pattern contract for patterns without additional spatial metadata.
+/// Stamps dep_pattern, distribution_pattern (derived from dep_pattern), and
+/// pattern_revision.
+class SimplePatternContract final : public PatternContract {
+public:
+  SimplePatternContract(ArtsDepPattern family, int64_t revision = 1)
+      : family(family), revision(revision) {}
+
+  ArtsDepPattern getFamily() const override { return family; }
+  int64_t getRevision() const override { return revision; }
+  StringRef getName() const override;
+  void stamp(Operation *op) const override;
+
+private:
+  ArtsDepPattern family = ArtsDepPattern::unknown;
+  int64_t revision = 1;
+};
+
 class StencilNDPatternContract final : public PatternContract {
 public:
   StencilNDPatternContract(ArtsDepPattern family, ArrayRef<int64_t> ownerDims,

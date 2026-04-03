@@ -16,6 +16,7 @@
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/transforms/kernel/KernelTransform.h"
+#include "arts/transforms/pattern/PatternTransform.h"
 #define GEN_PASS_DEF_PATTERNDISCOVERY
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
@@ -34,6 +35,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include <cstdlib>
+#include <memory>
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(pattern_discovery);
@@ -388,46 +390,29 @@ chooseRefinedPattern(std::optional<ArtsDepPattern> existing,
   return std::nullopt;
 }
 
-static bool stampPatternContract(Operation *op, ArtsDepPattern pattern,
-                                 int64_t revision) {
-  bool changed = false;
+/// Helper to check if stamping a contract would change the operation's attrs.
+static bool wouldContractChange(Operation *op,
+                                const PatternContract &contract) {
+  if (!op)
+    return false;
+
   std::optional<ArtsDepPattern> existing = getDepPattern(op);
-  if (!existing || *existing != pattern) {
-    setDepPattern(op, pattern);
-    changed = true;
-  }
+  if (!existing || *existing != contract.getFamily())
+    return true;
 
   int64_t currentRevision = getPatternRevision(op).value_or(0);
-  if (currentRevision < revision) {
-    setPatternRevision(op, revision);
-    changed = true;
-  }
-  return changed;
-}
+  if (currentRevision < contract.getRevision())
+    return true;
 
-static bool stampEdtContract(arts::EdtOp edt, ArtsDepPattern depPattern,
-                             int64_t revision) {
-  bool changed = false;
-  if (!getDepPattern(edt.getOperation()) ||
-      *getDepPattern(edt.getOperation()) != depPattern) {
-    setDepPattern(edt.getOperation(), depPattern);
-    changed = true;
-  }
-  if (auto distPattern = getDistributionPatternForDepPattern(depPattern)) {
-    std::optional<EdtDistributionPattern> existing =
-        getEdtDistributionPattern(edt.getOperation());
-    if (!existing || *existing != *distPattern) {
-      setEdtDistributionPattern(edt.getOperation(), *distPattern);
-      changed = true;
-    }
+  // Check distribution pattern for all non-stencil contracts
+  if (auto distPattern = getDistributionPatternForDepPattern(contract.getFamily())) {
+    std::optional<EdtDistributionPattern> existingDist =
+        getEdtDistributionPattern(op);
+    if (!existingDist || *existingDist != *distPattern)
+      return true;
   }
 
-  int64_t currentRevision = getPatternRevision(edt.getOperation()).value_or(0);
-  if (currentRevision < revision) {
-    setPatternRevision(edt.getOperation(), revision);
-    changed = true;
-  }
-  return changed;
+  return false;
 }
 
 struct PatternDiscoveryPass
@@ -472,30 +457,21 @@ struct PatternDiscoveryPass
         return;
       }
 
-      auto stampExplicitContract =
-          [](Operation *op, const StencilNDPatternContract &contract) {
-            if (!op)
-              return false;
-            DictionaryAttr before = op->getAttrDictionary();
-            contract.stamp(op);
-            return before != op->getAttrDictionary();
-          };
-
-      bool changed = false;
+      // Create the appropriate contract for this pattern
+      std::unique_ptr<PatternContract> contract;
       if (explicitStencil && isStencilFamilyDepPattern(*chosen)) {
-        changed |=
-            stampExplicitContract(forOp.getOperation(), *explicitStencil);
+        contract = std::make_unique<StencilNDPatternContract>(*explicitStencil);
       } else {
-        changed =
-            stampPatternContract(forOp.getOperation(), *chosen, targetRevision);
+        contract = std::make_unique<SimplePatternContract>(*chosen, targetRevision);
       }
+
+      // Stamp the contract on the ForOp and its parent EdtOp
+      bool changed = wouldContractChange(forOp.getOperation(), *contract);
+      contract->stamp(forOp.getOperation());
+
       if (auto parentEdt = forOp->getParentOfType<arts::EdtOp>()) {
-        if (explicitStencil && isStencilFamilyDepPattern(*chosen)) {
-          changed |=
-              stampExplicitContract(parentEdt.getOperation(), *explicitStencil);
-        } else {
-          changed |= stampEdtContract(parentEdt, *chosen, targetRevision);
-        }
+        changed |= wouldContractChange(parentEdt.getOperation(), *contract);
+        contract->stamp(parentEdt.getOperation());
       }
 
       if (!existing && changed) {
