@@ -22,6 +22,7 @@ public:
   static bool isUniformFamily(ArtsDepPattern pattern);
   static bool isTriangularFamily(ArtsDepPattern pattern);
   static bool isMatmulFamily(ArtsDepPattern pattern);
+  static bool isWavefrontFamily(ArtsDepPattern pattern);
 
   /// Stencil-specific subclassifications.
   static bool requiresHaloExchange(ArtsDepPattern pattern);

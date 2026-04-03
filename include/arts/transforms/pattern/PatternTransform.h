@@ -115,6 +115,9 @@ private:
 /// If future passes need matmul-specific metadata (e.g., tile size selection,
 /// layout-aware block partitioning), the contract can be enriched at that time
 /// with proven requirements rather than speculative payload.
+///
+/// Enrich when: a concrete pass requires tile dimensions, matrix layout
+/// (row/col-major), or reduction-dimension info and has no other source.
 class MatmulPatternContract final : public PatternContract {
 public:
   explicit MatmulPatternContract(int64_t revision = 1) : revision(revision) {}
