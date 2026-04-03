@@ -1,9 +1,20 @@
-name: carts
-channels:
-  - conda-forge
-dependencies:
-  - python>=3.11,<3.14
-  - pip
-  - openpyxl>=3.1.5
-  - pip:
-      - dekk>=1.6.0,<2.0
+# DEPRECATED: This file is no longer used.
+#
+# Environment configuration has been migrated to inline package declarations
+# in .dekk.toml (dekk 1.7+ feature). See the [environment.packages] and
+# [environment.pip] sections in .dekk.toml for the current dependency list.
+#
+# The following packages are now declared inline:
+#   - python>=3.11,<3.14
+#   - pip
+#   - openpyxl>=3.1.5
+#   - cmake>=3.20
+#   - ninja
+#   - make
+#   - clang>=14
+#   - git
+#
+# Pip packages:
+#   - dekk>=1.8.0,<2.0
+#
+# This file is kept as a placeholder for backward compatibility documentation.

@@ -13,8 +13,7 @@ flow; this driver owns the CARTS-specific work that dekk cannot infer:
 from __future__ import annotations
 from pathlib import Path
 
-from dekk import BinaryInstaller, print_error, print_header, print_info, print_step, print_success
-from dekk.environment.spec import EnvironmentSpec
+from dekk import print_error, print_header, print_info, print_step, print_success
 
 from scripts import (
     ARTS_NESTED_SUBMODULES,
@@ -105,37 +104,20 @@ def _build_project() -> None:
     _export_pipeline_manifest(config)
 
 
-def _install_wrapper() -> None:
-    config = get_config()
-    project_root = config.carts_dir
-    cli_script = project_root / "tools" / "carts_cli.py"
-    spec = EnvironmentSpec.from_file(project_root / ".dekk.toml")
-
-    print_step("Installing carts wrapper...")
-    result = BinaryInstaller(project_root).install_wrapper(
-        target=cli_script,
-        spec=spec,
-        name="carts",
-        install_dir=project_root / ".install" / "bin",
-        update_shell=True,
-    )
-    print_success(result.message)
-
-
 def main() -> int:
     print_header("CARTS Install")
     print_info("Running CARTS project install through dekk-managed environment setup.")
+    print_info("Note: The 'carts' wrapper will be installed by dekk after this script completes.")
 
     try:
         _setup_project()
         _build_project()
-        _install_wrapper()
     except RuntimeError as exc:
         print_error(str(exc))
         return 1
 
-    print_header("Install Complete")
-    print_success("CARTS is installed. Use `carts --help` for daily commands.")
+    print_header("Build Complete")
+    print_success("CARTS build finished. Dekk will now install the wrapper.")
     return 0
 
 
