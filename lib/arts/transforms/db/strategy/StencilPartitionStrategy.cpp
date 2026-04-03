@@ -17,6 +17,7 @@
 #include "arts/analysis/heuristics/HeuristicUtils.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/utils/Debug.h"
+#include "arts/utils/OperationAttributes.h"
 
 ARTS_DEBUG_SETUP(stencil_partition_strategy)
 
