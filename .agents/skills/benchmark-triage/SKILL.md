@@ -8,6 +8,16 @@ argument-hint: [<benchmark-path>]
 
 # CARTS Benchmark Triage
 
+Use bundled helpers when they fit:
+- `scripts/rerun-benchmark.sh` — rerun `carts triage-benchmark` with explicit size/threads/stages
+- `scripts/locate-run-artifacts.sh` — locate logs, flags, and configs under a benchmark results tree
+- `scripts/find-benchmark-codepaths.sh` — grep benchmark-driver and compiler codepaths
+
+Read these before classifying the regression:
+- `references/failure-classification.md`
+- `../debug/references/failure-signatures.md`
+- `../debug/references/command-patterns.md`
+
 ## Primary Command
 
 ```bash
@@ -32,6 +42,8 @@ Only use stage names from `carts pipeline --json`.
    - Benchmark-side UB or invalid verification
    - Runtime/distributed lowering issue
 5. Read stage dumps in order: `openmp-to-arts` → `create-dbs` → `edt-distribution` → `post-distribution-cleanup` → `db-partitioning` → `post-db-refinement` → `late-concurrency-cleanup` → `pre-lowering` → `arts-to-llvm`
+
+If the regression is multi-node specific or depends on `--distributed-db`, switch to `carts-distributed-triage`.
 
 ## OpenMP Baseline
 

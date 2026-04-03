@@ -27,7 +27,7 @@ Use `dekk carts` for project lifecycle and `carts` for compiler work. NEVER use
 | `carts doctor` | Check environment health |
 | `carts pipeline --json` | List pipeline stages |
 | `carts benchmarks list` | List available benchmarks |
-| `dekk carts agents status` | Show agent skill status |
+| `dekk carts skills status` | Show agent skill status |
 
 ## Instructions
 

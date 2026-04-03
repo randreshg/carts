@@ -1,0 +1,35 @@
+# Runtime Debug Checklist
+
+Use this checklist after compilation succeeds but the produced program fails at runtime.
+
+## Build Mode
+
+- normal runtime: `carts build --arts`
+- verbose runtime logging: `carts build --arts --debug 3`
+- counters:
+  - `--counters 1` timing
+  - `--counters 2` workload characterization
+  - `--counters 3` overhead analysis
+
+## Symptom Split
+
+- crash / assertion: inspect stderr first, then sanitizer/debug build
+- hang / timeout: inspect epochs, continuation edges, and progress threads
+- slow runtime: gather counters before changing compiler heuristics
+- distributed-only issue: switch to `carts-distributed-triage`
+
+## Artifacts to Keep
+
+- executable stderr/stdout
+- `arts.log`
+- `omp.log`
+- `cluster.json`
+- `n*.json`
+
+## Codepaths Worth Reading
+
+- `lib/arts/passes/transforms/ForLowering.cpp`
+- `lib/arts/passes/transforms/ConvertArtsToLLVM.cpp`
+- `lib/arts/passes/transforms/EdtLowering.cpp`
+- `lib/arts/passes/opt/edt/`
+- `external/arts/` runtime code when compiler-generated structure looks correct
