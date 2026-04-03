@@ -120,15 +120,6 @@ struct LoweringContractInfo {
   std::optional<SmallVector<int64_t, 4>> getStaticMaxOffsets() const;
 };
 
-struct AcquireRewriteContract {
-  bool applyStencilHalo = false;
-  bool preserveParentDepRange = false;
-  bool usePartitionSliceAsDepWindow = false;
-  SmallVector<int64_t, 4> ownerDims;
-  SmallVector<int64_t, 4> haloMinOffsets;
-  SmallVector<int64_t, 4> haloMaxOffsets;
-};
-
 LoweringContractOp getLoweringContractOp(Value target);
 std::optional<LoweringContractInfo> getLoweringContract(Value target);
 std::optional<LoweringContractInfo> getSemanticContract(Operation *op);
@@ -138,7 +129,6 @@ getLoweringContract(Operation *op, OpBuilder &builder, Location loc);
 ContractChange mergeLoweringContractInfo(LoweringContractInfo &dest,
                                          const LoweringContractInfo &src);
 void normalizeLoweringContractInfo(LoweringContractInfo &info);
-AcquireRewriteContract deriveAcquireRewriteContract(DbAcquireOp acquire);
 std::optional<unsigned>
 getContractOwnerPosition(const LoweringContractInfo &info,
                          unsigned physicalDim);
@@ -175,6 +165,28 @@ projectHaloWindow(const LoweringContractInfo &contract);
 /// Check whether a contract has complete halo state (ownerDims +
 /// min/max offsets), meaning it doesn't need graph-backed fallbacks.
 bool hasCompleteHaloState(const LoweringContractInfo &contract);
+
+/// Resolve the effective lowering contract for an acquire operation,
+/// combining pointer contract + alloc contract + semantic annotations.
+std::optional<LoweringContractInfo>
+resolveAcquireContract(DbAcquireOp acquire);
+
+/// Check if an acquire should apply stencil halo extension to worker-local
+/// read slices. Returns true when mode=in and contract supports block halo.
+bool shouldApplyStencilHalo(const LoweringContractInfo &contract,
+                            DbAcquireOp acquire);
+
+/// Check if an acquire should use partition_offsets/partition_sizes as the
+/// dependency window instead of offsets/sizes. Returns true for stencil-mode
+/// read acquires with explicit stencil contracts or wavefront inout acquires.
+bool shouldUsePartitionSliceAsDepWindow(const LoweringContractInfo &contract,
+                                        DbAcquireOp acquire);
+
+/// Check if an acquire should preserve the parent dependency range instead
+/// of using the worker-local partition slice. Returns true for read acquires
+/// without explicit stencil contracts and without narrowable_dep annotation.
+bool shouldPreserveParentDepRange(const LoweringContractInfo &contract,
+                                  DbAcquireOp acquire);
 
 LoweringContractOp upsertLoweringContract(OpBuilder &builder, Location loc,
                                           Value target,

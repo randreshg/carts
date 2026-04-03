@@ -651,54 +651,6 @@ void mlir::arts::normalizeLoweringContractInfo(LoweringContractInfo &info) {
   clearMismatchedStatic(info.spatial.staticMaxOffsets);
 }
 
-AcquireRewriteContract
-mlir::arts::deriveAcquireRewriteContract(DbAcquireOp acquire) {
-  AcquireRewriteContract contract;
-  auto info = getLoweringContract(acquire.getPtr());
-  if (auto alloc = dyn_cast_or_null<DbAllocOp>(
-          DbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr())))
-    if (auto allocInfo = getLoweringContract(alloc.getPtr())) {
-      if (!info)
-        info = *allocInfo;
-      else
-        mergeLoweringContractInfo(*info, *allocInfo);
-    }
-  if (!info)
-    return contract;
-
-  contract.ownerDims.assign(info->spatial.ownerDims.begin(),
-                            info->spatial.ownerDims.end());
-
-  if (auto minOffsets = info->getStaticMinOffsets())
-    contract.haloMinOffsets = *minOffsets;
-  if (auto maxOffsets = info->getStaticMaxOffsets())
-    contract.haloMaxOffsets = *maxOffsets;
-
-  contract.applyStencilHalo =
-      acquire.getMode() == ArtsMode::in && info->supportsBlockHalo();
-  /// Halo-aware stencil reads keep the authoritative dependency window in the
-  /// rewritten acquire's offsets/sizes. partition_* remains the owner slice and
-  /// would drop the left/right halo if used as the block-dependency window.
-  const bool hasExplicitStencilContract = info->hasExplicitStencilContract();
-  /// `narrowable_dep` is advisory, not a standalone window description. Treat
-  /// it as permission to keep the worker-local slice chosen by lowering rather
-  /// than widening a read-only acquire back to the parent dependency range.
-  /// The flag does not synthesize new offsets/sizes by itself.
-  const bool prefersWorkerLocalReadSlice =
-      acquire.getMode() == ArtsMode::in && info->analysis.narrowableDep;
-  contract.usePartitionSliceAsDepWindow =
-      (acquire.getMode() == ArtsMode::in && hasExplicitStencilContract &&
-       !contract.applyStencilHalo &&
-       acquire.getPartitionMode().value_or(PartitionMode::coarse) ==
-           PartitionMode::stencil) ||
-      (acquire.getMode() == ArtsMode::inout &&
-       info->isWavefrontStencilContract());
-  contract.preserveParentDepRange =
-      acquire.getMode() == ArtsMode::in && !contract.applyStencilHalo &&
-      !hasExplicitStencilContract && !prefersWorkerLocalReadSlice;
-  return contract;
-}
-
 std::optional<unsigned>
 mlir::arts::getContractOwnerPosition(const LoweringContractInfo &info,
                                      unsigned physicalDim) {
@@ -802,6 +754,64 @@ bool mlir::arts::hasCompleteHaloState(const LoweringContractInfo &contract) {
   return !contract.spatial.ownerDims.empty() &&
          (contract.getStaticMinOffsets().has_value()) &&
          (contract.getStaticMaxOffsets().has_value());
+}
+
+std::optional<LoweringContractInfo>
+mlir::arts::resolveAcquireContract(DbAcquireOp acquire) {
+  if (!acquire)
+    return std::nullopt;
+
+  auto info = getLoweringContract(acquire.getPtr());
+  if (auto alloc = dyn_cast_or_null<DbAllocOp>(
+          DbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr())))
+    if (auto allocInfo = getLoweringContract(alloc.getPtr())) {
+      if (!info)
+        info = *allocInfo;
+      else
+        mergeLoweringContractInfo(*info, *allocInfo);
+    }
+  return info;
+}
+
+bool mlir::arts::shouldApplyStencilHalo(const LoweringContractInfo &contract,
+                                        DbAcquireOp acquire) {
+  if (!acquire || acquire.getMode() != ArtsMode::in)
+    return false;
+  return contract.supportsBlockHalo();
+}
+
+bool mlir::arts::shouldUsePartitionSliceAsDepWindow(
+    const LoweringContractInfo &contract, DbAcquireOp acquire) {
+  if (!acquire)
+    return false;
+
+  const bool hasExplicitStencilContract = contract.hasExplicitStencilContract();
+  const bool applyStencilHalo = shouldApplyStencilHalo(contract, acquire);
+
+  if (acquire.getMode() == ArtsMode::in && hasExplicitStencilContract &&
+      !applyStencilHalo &&
+      acquire.getPartitionMode().value_or(PartitionMode::coarse) ==
+          PartitionMode::stencil)
+    return true;
+
+  if (acquire.getMode() == ArtsMode::inout &&
+      contract.isWavefrontStencilContract())
+    return true;
+
+  return false;
+}
+
+bool mlir::arts::shouldPreserveParentDepRange(
+    const LoweringContractInfo &contract, DbAcquireOp acquire) {
+  if (!acquire || acquire.getMode() != ArtsMode::in)
+    return false;
+
+  const bool applyStencilHalo = shouldApplyStencilHalo(contract, acquire);
+  const bool hasExplicitStencilContract = contract.hasExplicitStencilContract();
+  const bool prefersWorkerLocalReadSlice = contract.analysis.narrowableDep;
+
+  return !applyStencilHalo && !hasExplicitStencilContract &&
+         !prefersWorkerLocalReadSlice;
 }
 
 LoweringContractOp

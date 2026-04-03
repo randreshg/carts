@@ -990,66 +990,37 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     std::optional<EdtDistributionPattern> distributionPattern =
         loopInfo.distributionContract.getEffectiveDistributionPattern();
 
-    AcquireRewriteContract rewriteContract =
-        deriveAcquireRewriteContract(parentAcqOp);
-    /// TODO: Once AcquireRewriteContract carries a full LoweringContractInfo,
-    /// replace this manual field seeding with combineContracts().
-    if (auto loopContract = getSemanticContract(forOp.getOperation())) {
-      if (rewriteContract.ownerDims.empty() &&
-          !loopContract->spatial.ownerDims.empty())
-        rewriteContract.ownerDims.assign(
-            loopContract->spatial.ownerDims.begin(),
-            loopContract->spatial.ownerDims.end());
-      if (rewriteContract.haloMinOffsets.empty())
-        if (auto mins = loopContract->getStaticMinOffsets())
-          rewriteContract.haloMinOffsets = *mins;
-      if (rewriteContract.haloMaxOffsets.empty())
-        if (auto maxs = loopContract->getStaticMaxOffsets())
-          rewriteContract.haloMaxOffsets = *maxs;
+    /// Resolve the effective contract by combining acquire + alloc + loop contracts.
+    LoweringContractInfo contract;
+    if (auto acquireContract = resolveAcquireContract(parentAcqOp))
+      contract = *acquireContract;
+    if (auto loopContract = getSemanticContract(forOp.getOperation()))
+      combineContracts(contract, *loopContract);
 
-      /// Task-acquire window planning happens before the loop contract is
-      /// copied onto the rewritten acquire. If the parent acquire does not yet
-      /// carry the full stencil halo contract, seed it from the `arts.for`
-      /// contract here so rewriteAcquire() widens the worker-local read slice
-      /// instead of preserving only the owner tile.
-      if (effectiveTaskMode == ArtsMode::in &&
-          loopContract->spatial.supportedBlockHalo &&
-          !rewriteContract.haloMinOffsets.empty() &&
-          !rewriteContract.haloMaxOffsets.empty()) {
-        rewriteContract.applyStencilHalo = true;
-        rewriteContract.preserveParentDepRange = false;
-        rewriteContract.usePartitionSliceAsDepWindow = false;
-      }
-    }
     std::optional<unsigned> inferredMappedDim;
-    if (rewriteContract.ownerDims.empty())
+    if (contract.spatial.ownerDims.empty())
       if (auto mappedDim =
               inferAcquireMappedDim(&AM->getDbAnalysis(), parentAcqOp, forOp)) {
-        rewriteContract.ownerDims.push_back(static_cast<int64_t>(*mappedDim));
+        contract.spatial.ownerDims.push_back(static_cast<int64_t>(*mappedDim));
         inferredMappedDim = *mappedDim;
       }
 
     std::optional<unsigned> ownerDimForHalo;
-    if (rewriteContract.ownerDims.size() == 1 &&
-        rewriteContract.ownerDims[0] >= 0)
-      ownerDimForHalo = static_cast<unsigned>(rewriteContract.ownerDims[0]);
+    if (contract.spatial.ownerDims.size() == 1 &&
+        contract.spatial.ownerDims[0] >= 0)
+      ownerDimForHalo = static_cast<unsigned>(contract.spatial.ownerDims[0]);
     else if (inferredMappedDim)
       ownerDimForHalo = *inferredMappedDim;
 
     if (effectiveTaskMode == ArtsMode::in && ownerDimForHalo &&
-        rewriteContract.ownerDims.size() <= 1 &&
-        rewriteContract.haloMinOffsets.empty() &&
-        rewriteContract.haloMaxOffsets.empty()) {
+        contract.spatial.ownerDims.size() <= 1 &&
+        !contract.getStaticMinOffsets() && !contract.getStaticMaxOffsets()) {
       /// Prefer the persisted acquire/loop contract. When it is still
       /// incomplete, infer a conservative loop-local halo directly from IR
       /// uses instead of consulting graph-only partition facts here.
       if (auto bounds = inferLoopHaloBoundsFromValue(parentAcqOp.getPtr(),
                                                      forOp, *ownerDimForHalo)) {
-        rewriteContract.haloMinOffsets.push_back(bounds->minOffset);
-        rewriteContract.haloMaxOffsets.push_back(bounds->maxOffset);
-        rewriteContract.applyStencilHalo = true;
-        rewriteContract.preserveParentDepRange = false;
-        rewriteContract.usePartitionSliceAsDepWindow = false;
+        patchContract(contract, {}, {bounds->minOffset}, {bounds->maxOffset});
       }
     }
 
@@ -1064,7 +1035,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         loopInfo.strategy.kind,
         distributionPattern,
         tiling2DGrid,
-        rewriteContract,
+        contract,
         acquireOffsetVal,
         acquireSizeVal,
         acquireHintSizeVal,
@@ -1073,8 +1044,10 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
     ARTS_DEBUG(
         "    - Planned contract for dep "
-        << depIndex << ": applyStencilHalo=" << rewriteContract.applyStencilHalo
-        << ", preserveParentDepRange=" << rewriteContract.preserveParentDepRange
+        << depIndex
+        << ": applyStencilHalo=" << shouldApplyStencilHalo(contract, parentAcqOp)
+        << ", preserveParentDepRange="
+        << shouldPreserveParentDepRange(contract, parentAcqOp)
         << ", parentAcquire=" << parentAcqOp);
 
     auto createPlannedAcquire =
@@ -1164,7 +1137,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     }
 
     applyTaskAcquireContractMetadata(
-        forOp.getOperation(), chunkAcqOp, planningInput.rewriteContract,
+        forOp.getOperation(), chunkAcqOp, planningInput.contract,
         plannedTaskBlockShape, AC->getBuilder(), loc);
     if (plannedTaskBlockShape)
       refinedTaskBlockShape = *plannedTaskBlockShape;
@@ -1173,7 +1146,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         AC, loc, parentAcqOp, chunkAcqOp, effectiveTaskMode, rootGuidValue,
         rootPtrValue, loopInfo.strategy.kind, distributionPattern,
         acquireOffsetVal, loopInfo.bounds.iterCount, acquireHintSizeVal,
-        chunkUsesStencilHalo, planningInput.rewriteContract});
+        chunkUsesStencilHalo, planningInput.contract});
 
     if (originalParallel.getConcurrency() == EdtConcurrency::internode &&
         chunkAcqOp.getMode() != ArtsMode::in &&
