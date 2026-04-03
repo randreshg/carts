@@ -1477,9 +1477,27 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
       op->erase();
   };
 
+  /// Seed loop-back params from the original loop body, not the continuation EDT.
+  /// The continuation may not use all captured values directly (e.g., values
+  /// only used to compute other captured values), but we need to carry them all
+  /// to maintain the param pack contract.
   SmallVector<Value> loopBackParams;
-  if (firstContinuation)
-    loopBackParams = collectCurrentEdtPackedUserValues(firstContinuation);
+  if (firstContinuation) {
+    llvm::SetVector<Value> originalCaptured;
+    llvm::SetVector<Value> parameters, constants, dbHandles;
+    getUsedValuesDefinedAbove(forOp.getRegion(), originalCaptured);
+    classifyEdtUserValues(originalCaptured.getArrayRef(), parameters, constants,
+                          dbHandles);
+
+    loopBackParams.reserve(parameters.size() + dbHandles.size());
+    for (Value param : parameters) {
+      if (auto *defOp = param.getDefiningOp())
+        if (defOp->getName().getStringRef() == "llvm.mlir.undef")
+          continue;
+      loopBackParams.push_back(param);
+    }
+    loopBackParams.append(dbHandles.begin(), dbHandles.end());
+  }
 
   constexpr unsigned kMaxLoopBackIterations = 8;
   bool loopBackParamsStabilized = false;
