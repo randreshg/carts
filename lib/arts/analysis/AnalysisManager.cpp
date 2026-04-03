@@ -96,6 +96,17 @@ const MetadataManager &AnalysisManager::getMetadataManager() const {
   return *metadataManager;
 }
 
+void AnalysisManager::syncMetadataManagerFromModule(
+    bool allowJsonImportIfUninitialized) {
+  if (!metadataManager) {
+    metadataManager = std::make_unique<MetadataManager>(module.getContext());
+    metadataManager->getIdRegistry().initializeFromModule(module);
+    if (allowJsonImportIfUninitialized)
+      metadataManager->importFromJsonFile(module, metadataFile);
+  }
+  metadataManager->collectFromModule(module);
+}
+
 const StringAnalysis &AnalysisManager::getStringAnalysis() const {
   assert(stringAnalysis && "String analysis not initialized. Call non-const "
                            "getStringAnalysis() first.");

@@ -5,7 +5,6 @@
 #include "arts/codegen/Codegen.h"
 
 /// Other dialects
-#include "mlir/Dialect/Affine/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -917,25 +916,34 @@ Value ArtsCodegen::computeLinearIndex(ArrayRef<Value> sizes,
   if (indices.size() == 1)
     return castToIndex(indices.front(), loc);
 
-  /// Most callers pass matching shape/index ranks. For the few cases that
-  /// don't, keep the existing stride-based behavior rather than changing the
-  /// linearization contract here.
-  if (sizes.size() != indices.size())
-    return computeLinearIndexFromStrides(computeStridesFromSizes(sizes, loc),
-                                         indices, loc);
+  return computeLinearIndexFromStrides(computeStridesFromSizes(sizes, loc),
+                                       indices, loc);
+}
 
-  SmallVector<OpFoldResult, 4> mixedSizes;
-  SmallVector<OpFoldResult, 4> mixedIndices;
-  mixedSizes.reserve(sizes.size());
-  mixedIndices.reserve(indices.size());
-  for (Value size : sizes)
-    mixedSizes.push_back(castToIndex(size, loc));
-  for (Value index : indices)
-    mixedIndices.push_back(castToIndex(index, loc));
+SmallVector<Value>
+ArtsCodegen::computeIndicesFromLinearIndex(ArrayRef<Value> sizes,
+                                           Value linearIndex, Location loc) {
+  SmallVector<Value> coords;
+  if (sizes.empty())
+    return coords;
 
-  return getValueOrCreateConstantIndexOp(
-      getBuilder(), loc,
-      affine::linearizeIndex(getBuilder(), loc, mixedIndices, mixedSizes));
+  Value remaining = castToIndex(linearIndex, loc);
+  SmallVector<Value> strides = computeStridesFromSizes(sizes, loc);
+  coords.reserve(sizes.size());
+
+  for (size_t i = 0; i < sizes.size(); ++i) {
+    if (i + 1 == sizes.size()) {
+      coords.push_back(remaining);
+      break;
+    }
+
+    Value stride = castToIndex(strides[i], loc);
+    Value coord = create<arith::DivUIOp>(loc, remaining, stride);
+    coords.push_back(coord);
+    remaining = create<arith::RemUIOp>(loc, remaining, stride);
+  }
+
+  return coords;
 }
 
 Value ArtsCodegen::computeLinearIndexFromStrides(ValueRange strides,
@@ -948,7 +956,9 @@ Value ArtsCodegen::computeLinearIndexFromStrides(ValueRange strides,
 
   /// Use strides directly: linear_index = sum(indices[i] * strides[i])
   for (size_t i = 0; i < indices.size() && i < strides.size(); ++i) {
-    auto contribution = create<arith::MulIOp>(loc, indices[i], strides[i]);
+    Value index = castToIndex(indices[i], loc);
+    Value stride = castToIndex(strides[i], loc);
+    auto contribution = create<arith::MulIOp>(loc, index, stride);
     linearIndex = create<arith::AddIOp>(loc, linearIndex, contribution);
   }
 

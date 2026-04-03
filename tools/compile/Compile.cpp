@@ -1294,9 +1294,10 @@ buildPassManager(ModuleOp module, MLIRContext &context,
   if (machine.getNodeCount() > 1 && !DistributedDb)
     ARTS_WARN("Multi-node execution without --distributed-db: all DBs will "
               "be created on their origin node");
-
-  /// Load metadata from JSON file
-  (void)AM->getMetadataManager();
+  int collectMetadataIndex =
+      stageIndex(StageId::CollectMetadata, StageKind::Core);
+  if (startIndex > collectMetadataIndex)
+    AM->syncMetadataManagerFromModule(/*allowJsonImportIfUninitialized=*/true);
 
   /// Create shared timing data for pass instrumentation.
   arts::PassTimingData timingData;
@@ -1320,6 +1321,14 @@ buildPassManager(ModuleOp module, MLIRContext &context,
         module, context, AM.get(), &machine, stopAfterStage, Opt, EmitLLVM};
     stage.build(pm, stageContext);
     auto result = pm.run(module);
+    if (succeeded(result)) {
+      /// Keep the shared metadata registry aligned with the current IR between
+      /// stage boundaries. CollectMetadata builds its own metadata manager, and
+      /// generic canonicalization passes may erase or replace ops without
+      /// updating the cached registry.
+      AM->syncMetadataManagerFromModule(
+          /*allowJsonImportIfUninitialized=*/false);
+    }
 
     if (hooks && hooks->afterStep)
       hooks->afterStep(stage.id, result);

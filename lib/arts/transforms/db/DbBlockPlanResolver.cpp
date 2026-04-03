@@ -24,6 +24,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Dominance.h"
+#include <algorithm>
 #include <limits>
 
 using namespace mlir;
@@ -364,11 +365,94 @@ static SmallVector<Value> collectCanonicalNDBlockSizeCandidates(
   return perDimMerged;
 }
 
-static SmallVector<Value> collectContractNDBlockShapeCandidates(
+static std::optional<DbBlockPlanResult>
+collectCanonicalPartialNDBlockPlanCandidate(
     DbAllocOp allocOp, ArrayRef<AcquirePartitionInfo> acquireInfos,
-    OpBuilder &builder, Location loc) {
-  SmallVector<Value> contractShape;
+    unsigned requestedRank, OpBuilder &builder, DominanceInfo &domInfo,
+    Location loc) {
+  if (requestedRank < 2)
+    return std::nullopt;
+
+  unsigned memrefRank = allocOp.getElementSizes().size();
+  if (memrefRank < requestedRank)
+    return std::nullopt;
+
+  SmallVector<Value> mergedByDim(memrefRank);
+  SmallVector<unsigned> supportCounts(memrefRank, 0);
+
+  for (const auto &info : acquireInfos) {
+    if (!requiresBlockSize(info.mode) || info.needsFullRange ||
+        info.partitionDims.empty())
+      continue;
+
+    unsigned explicitRank = std::min<unsigned>(info.partitionOffsets.size(),
+                                               info.partitionSizes.size());
+    explicitRank = std::min<unsigned>(explicitRank, info.partitionDims.size());
+    if (explicitRank == 0)
+      continue;
+
+    SmallVector<bool> seenDim(memrefRank, false);
+    for (unsigned dimIdx = 0; dimIdx < explicitRank; ++dimIdx) {
+      unsigned physDim = info.partitionDims[dimIdx];
+      if (physDim >= memrefRank || seenDim[physDim])
+        continue;
+      seenDim[physDim] = true;
+
+      Value candidate = normalizeBlockSizeCandidate(
+          info.partitionOffsets[dimIdx], info.partitionSizes[dimIdx], builder,
+          domInfo, allocOp, loc);
+      if (!candidate)
+        continue;
+
+      if (!mergedByDim[physDim]) {
+        mergedByDim[physDim] = candidate;
+      } else {
+        mergedByDim[physDim] =
+            builder.create<arith::MinUIOp>(loc, mergedByDim[physDim], candidate);
+      }
+      ++supportCounts[physDim];
+    }
+  }
+
+  SmallVector<unsigned> availableDims;
+  for (unsigned dim = 0; dim < memrefRank; ++dim) {
+    if (mergedByDim[dim] && supportCounts[dim] > 0)
+      availableDims.push_back(dim);
+  }
+  if (availableDims.size() < requestedRank)
+    return std::nullopt;
+
+  llvm::sort(availableDims, [&](unsigned lhs, unsigned rhs) {
+    if (supportCounts[lhs] != supportCounts[rhs])
+      return supportCounts[lhs] > supportCounts[rhs];
+    return lhs < rhs;
+  });
+  availableDims.resize(requestedRank);
+  llvm::sort(availableDims);
+
+  DbBlockPlanResult result;
+  result.partitionedDims.assign(availableDims.begin(), availableDims.end());
+  result.blockSizes.reserve(availableDims.size());
+  for (unsigned dim : availableDims)
+    result.blockSizes.push_back(mergedByDim[dim]);
+  return result;
+}
+
+static std::optional<DbBlockPlanResult> collectContractNDBlockPlanCandidate(
+    DbAllocOp allocOp, ArrayRef<AcquirePartitionInfo> acquireInfos,
+    unsigned requestedRank, OpBuilder &builder, Location loc) {
+  if (requestedRank < 2 || allocOp.getElementSizes().size() < requestedRank)
+    return std::nullopt;
+
+  struct ContractCandidate {
+    SmallVector<unsigned> partitionDims;
+    SmallVector<int64_t, 4> staticShape;
+    bool preferred = false;
+  };
+
+  SmallVector<ContractCandidate> candidates;
   bool hasPreferredContract = false;
+  unsigned memrefRank = allocOp.getElementSizes().size();
 
   for (const auto &info : acquireInfos) {
     if (info.needsFullRange || !info.acquire)
@@ -376,9 +460,13 @@ static SmallVector<Value> collectContractNDBlockShapeCandidates(
 
     DbAcquireOp acquire = info.acquire;
     std::optional<LoweringContractInfo> contract =
-        getLoweringContract(acquire.getPtr());
-    if (!contract)
-      contract = getSemanticContract(acquire.getOperation());
+        getSemanticContract(acquire.getOperation());
+    if (auto inherited = getLoweringContract(acquire.getPtr())) {
+      if (contract)
+        mergeLoweringContractInfo(*contract, *inherited);
+      else
+        contract = *inherited;
+    }
 
     auto acquireMode = getPartitionMode(acquire.getOperation());
     bool hasBlockHaloContract = contract && contract->supportsBlockHalo();
@@ -391,63 +479,86 @@ static SmallVector<Value> collectContractNDBlockShapeCandidates(
 
     auto staticShape =
         contract ? contract->getStaticBlockShape() : std::nullopt;
-    if (!staticShape || staticShape->size() < 2)
+    if (!staticShape)
       continue;
 
-    /// `stencil_block_shape` describes the full logical task tile, not
-    /// necessarily the number of DB dimensions that this acquire proved safe to
-    /// partition. For row-owned Jacobi/Poisson-style contracts we routinely
-    /// carry a 2-D block shape like [rows, cols] while only one owner
-    /// dimension is actually distributed. Promoting that full shape directly to
-    /// an N-D DB plan manufactures extra outer DB dimensions and later
-    /// mismatches task acquires that correctly operate on a 1-D owner space.
-    unsigned supportedRank = 0;
-    if (!info.partitionDims.empty())
-      supportedRank = static_cast<unsigned>(info.partitionDims.size());
-    else
-      supportedRank = std::min<unsigned>(
-          static_cast<unsigned>(info.partitionOffsets.size()),
-          static_cast<unsigned>(info.partitionSizes.size()));
-    supportedRank = std::min<unsigned>(
-        supportedRank, static_cast<unsigned>(staticShape->size()));
-    if (supportedRank < 2)
+    SmallVector<unsigned> candidateDims;
+    if (!info.partitionDims.empty()) {
+      candidateDims.assign(info.partitionDims.begin(), info.partitionDims.end());
+    } else if (contract && !contract->spatial.ownerDims.empty()) {
+      for (int64_t dim : contract->spatial.ownerDims) {
+        if (dim >= 0)
+          candidateDims.push_back(static_cast<unsigned>(dim));
+      }
+    }
+
+    SmallVector<bool> seenDim(memrefRank, false);
+    candidateDims.erase(std::remove_if(candidateDims.begin(),
+                                       candidateDims.end(),
+                                       [&](unsigned dim) {
+                                         if (dim >= memrefRank ||
+                                             dim >= static_cast<unsigned>(
+                                                        staticShape->size()) ||
+                                             seenDim[dim])
+                                           return true;
+                                         seenDim[dim] = true;
+                                         return false;
+                                       }),
+                        candidateDims.end());
+    if (candidateDims.empty())
       continue;
 
     bool prefersContract = info.hasDistributionContract || hasBlockHaloContract;
-    if (!prefersContract && hasPreferredContract)
-      continue;
-    if (prefersContract && !hasPreferredContract) {
-      hasPreferredContract = true;
-      contractShape.clear();
-    }
+    hasPreferredContract |= prefersContract;
+    candidates.push_back(
+        {std::move(candidateDims), *staticShape, prefersContract});
+  }
 
-    if (contractShape.empty()) {
-      contractShape.reserve(supportedRank);
-      for (unsigned dim = 0; dim < supportedRank; ++dim) {
-        int64_t dimSize = (*staticShape)[dim];
-        if (dimSize <= 0) {
-          contractShape.clear();
-          break;
-        }
-        contractShape.push_back(createConstantIndex(builder, loc, dimSize));
-      }
-      continue;
-    }
+  if (candidates.empty())
+    return std::nullopt;
 
-    if (contractShape.size() != supportedRank)
+  SmallVector<int64_t, 4> mergedShape(memrefRank, -1);
+  SmallVector<unsigned, 4> contributionCounts(memrefRank, 0);
+  for (const auto &candidate : candidates) {
+    if (hasPreferredContract && !candidate.preferred)
       continue;
-
-    for (unsigned dim = 0; dim < supportedRank; ++dim) {
-      Value dimConst = createConstantIndex(builder, loc, (*staticShape)[dim]);
-      contractShape[dim] =
-          builder.create<arith::MinUIOp>(loc, contractShape[dim], dimConst);
+    for (unsigned dim : candidate.partitionDims) {
+      if (dim >= candidate.staticShape.size())
+        continue;
+      int64_t dimSize = candidate.staticShape[dim];
+      if (dimSize <= 0)
+        continue;
+      if (mergedShape[dim] <= 0)
+        mergedShape[dim] = dimSize;
+      else
+        mergedShape[dim] = std::min(mergedShape[dim], dimSize);
+      ++contributionCounts[dim];
     }
   }
 
-  if (!contractShape.empty() &&
-      allocOp.getElementSizes().size() >= contractShape.size())
-    return contractShape;
-  return {};
+  SmallVector<unsigned> availableDims;
+  for (unsigned dim = 0; dim < memrefRank; ++dim) {
+    if (mergedShape[dim] > 0 && contributionCounts[dim] > 0)
+      availableDims.push_back(dim);
+  }
+  if (availableDims.size() < requestedRank)
+    return std::nullopt;
+
+  llvm::sort(availableDims, [&](unsigned lhs, unsigned rhs) {
+    if (contributionCounts[lhs] != contributionCounts[rhs])
+      return contributionCounts[lhs] > contributionCounts[rhs];
+    return lhs < rhs;
+  });
+  availableDims.resize(requestedRank);
+  llvm::sort(availableDims);
+
+  DbBlockPlanResult result;
+  result.partitionedDims.assign(availableDims.begin(), availableDims.end());
+  result.blockSizes.reserve(availableDims.size());
+  for (unsigned dim : availableDims)
+    result.blockSizes.push_back(
+        createConstantIndex(builder, loc, mergedShape[dim]));
+  return result;
 }
 
 static SmallVector<unsigned>
@@ -506,6 +617,41 @@ choosePartitionedDims(DbAllocOp allocOp, ArrayRef<AcquirePartitionInfo> infos,
     }
   });
 
+  if (chosen.empty() && nPartDims > 1) {
+    SmallVector<unsigned> supportCounts(allocOp.getElementSizes().size(), 0);
+    SmallVector<unsigned> mergedDims;
+
+    forEachVotingInfo([&](const AcquirePartitionInfo &info) {
+      if (preferredInfos.empty() && info.needsFullRange)
+        return;
+      if (info.partitionDims.empty())
+        return;
+
+      SmallVector<bool> seenDim(allocOp.getElementSizes().size(), false);
+      for (unsigned dim : info.partitionDims) {
+        if (dim >= supportCounts.size() || seenDim[dim])
+          return;
+        seenDim[dim] = true;
+      }
+
+      for (unsigned dim : info.partitionDims) {
+        if (supportCounts[dim]++ == 0)
+          mergedDims.push_back(dim);
+      }
+    });
+
+    if (mergedDims.size() >= nPartDims) {
+      llvm::sort(mergedDims, [&](unsigned lhs, unsigned rhs) {
+        if (supportCounts[lhs] != supportCounts[rhs])
+          return supportCounts[lhs] > supportCounts[rhs];
+        return lhs < rhs;
+      });
+      mergedDims.resize(nPartDims);
+      llvm::sort(mergedDims);
+      chosen.assign(mergedDims.begin(), mergedDims.end());
+    }
+  }
+
   if (!chosen.empty()) {
     SmallVector<bool> seen(allocOp.getElementSizes().size(), false);
     bool valid = true;
@@ -545,11 +691,25 @@ mlir::arts::resolveDbBlockPlan(const DbBlockPlanInput &input) {
         input.allocOp, input.ndBlockSizeHints, builder, domInfo, loc);
   }
 
-  SmallVector<Value> contractShape = collectContractNDBlockShapeCandidates(
-      input.allocOp, input.acquireInfos, builder, loc);
-  if (result.blockSizes.empty() ||
-      contractShape.size() > result.blockSizes.size()) {
-    result.blockSizes = std::move(contractShape);
+  if (auto contractPlan = collectContractNDBlockPlanCandidate(
+          input.allocOp, input.acquireInfos, input.requestedPartitionRank,
+          builder, loc)) {
+    if (result.blockSizes.empty() ||
+        contractPlan->blockSizes.size() > result.blockSizes.size()) {
+      result = *contractPlan;
+    } else if (result.partitionedDims.empty() &&
+               result.blockSizes.size() == contractPlan->blockSizes.size()) {
+      result.partitionedDims.assign(contractPlan->partitionedDims.begin(),
+                                    contractPlan->partitionedDims.end());
+    }
+  }
+
+  if (result.blockSizes.empty()) {
+    if (auto partialPlan = collectCanonicalPartialNDBlockPlanCandidate(
+            input.allocOp, input.acquireInfos, input.requestedPartitionRank,
+            builder, domInfo, loc)) {
+      result = *partialPlan;
+    }
   }
 
   if (result.blockSizes.empty()) {
@@ -617,9 +777,11 @@ mlir::arts::resolveDbBlockPlan(const DbBlockPlanInput &input) {
         builder.create<arith::MaxUIOp>(loc, result.blockSizes[i], one);
   }
 
-  result.partitionedDims =
-      choosePartitionedDims(input.allocOp, input.acquireInfos,
-                            static_cast<unsigned>(result.blockSizes.size()));
+  if (result.partitionedDims.empty()) {
+    result.partitionedDims =
+        choosePartitionedDims(input.allocOp, input.acquireInfos,
+                              static_cast<unsigned>(result.blockSizes.size()));
+  }
 
   return result;
 }

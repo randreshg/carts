@@ -25,6 +25,7 @@ struct DbBlockPlanInput {
   std::optional<int64_t> staticBlockSizeHint;
   Value dynamicBlockSizeHint;
   ArrayRef<Value> ndBlockSizeHints;
+  unsigned requestedPartitionRank = 0;
   OpBuilder *builder = nullptr;
   Location loc;
   bool useNodesForFallback = false;

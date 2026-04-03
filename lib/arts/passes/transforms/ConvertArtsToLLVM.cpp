@@ -18,7 +18,6 @@
 
 /// Dialects
 #include "mlir/Conversion/LLVMCommon/StructBuilder.h"
-#include "mlir/Dialect/Affine/Utils.h"
 #include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -97,15 +96,6 @@ public:
 };
 
 namespace {
-static SmallVector<OpFoldResult, 4>
-getMixedIndexValues(ArtsCodegen *AC, ArrayRef<Value> values, Location loc) {
-  SmallVector<OpFoldResult, 4> mixedValues;
-  mixedValues.reserve(values.size());
-  for (Value value : values)
-    mixedValues.push_back(AC->castToIndex(value, loc));
-  return mixedValues;
-}
-
 static inline DbAllocOp getAllocOpFromGuid(Value dbGuid) {
   if (auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>())
     return dbAcquireOp.getSourceGuid().getDefiningOp<DbAllocOp>();
@@ -836,25 +826,27 @@ private:
     }
 
     unsigned rank = dbInfo.sizes.size();
-    FailureOr<SmallVector<Value>> localCoords = affine::delinearizeIndex(
-        AC->getBuilder(), loc, AC->castToIndex(localLinear, loc),
-        getMixedIndexValues(AC, dbInfo.sizes, loc));
-    if (failed(localCoords))
-      return localLinear;
+    SmallVector<Value> localCoords = AC->computeIndicesFromLinearIndex(
+        ArrayRef<Value>(dbInfo.sizes).take_front(rank), localLinear, loc);
+    if (localCoords.size() != rank)
+      return AC->castToIndex(localLinear, loc);
 
     SmallVector<OpFoldResult, 4> globalCoords;
     globalCoords.reserve(rank);
-    for (auto [localCoord, offset] : llvm::zip(*localCoords, dbInfo.offsets)) {
+    for (auto [localCoord, offset] : llvm::zip(localCoords, dbInfo.offsets)) {
       Value globalCoord = AC->create<arith::AddIOp>(
           loc, localCoord, AC->castToIndex(offset, loc));
       globalCoords.push_back(globalCoord);
     }
 
-    return getValueOrCreateConstantIndexOp(
-        AC->getBuilder(), loc,
-        affine::linearizeIndex(
-            AC->getBuilder(), loc, globalCoords,
-            getMixedIndexValues(AC, allocSizes.take_front(rank), loc)));
+    SmallVector<Value> globalCoordValues;
+    globalCoordValues.reserve(globalCoords.size());
+    for (OpFoldResult coord : globalCoords)
+      globalCoordValues.push_back(getValueOrCreateConstantIndexOp(
+          AC->getBuilder(), loc, coord));
+
+    return AC->computeLinearIndex(allocSizes.take_front(rank), globalCoordValues,
+                                  loc);
   }
 
   std::optional<LoweringContractInfo>

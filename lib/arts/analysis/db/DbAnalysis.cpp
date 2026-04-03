@@ -191,13 +191,14 @@ static LoweringContractInfo buildAcquireContractSeed(DbAcquireOp acquire) {
   LoweringContractInfo contract;
   if (!acquire)
     return contract;
-  if (auto explicitContract = getLoweringContract(acquire.getPtr()))
-    contract = *explicitContract;
   if (auto semanticContract = getSemanticContract(acquire.getOperation())) {
+    contract = *semanticContract;
+  }
+  if (auto explicitContract = getLoweringContract(acquire.getPtr())) {
     if (contract.empty())
-      contract = *semanticContract;
+      contract = *explicitContract;
     else
-      mergeLoweringContractInfo(contract, *semanticContract);
+      mergeLoweringContractInfo(contract, *explicitContract);
   }
   return contract;
 }

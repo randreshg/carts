@@ -70,6 +70,8 @@ public:
   /// Get the metadata manager
   MetadataManager &getMetadataManager();
   const MetadataManager &getMetadataManager() const;
+  void syncMetadataManagerFromModule(
+      bool allowJsonImportIfUninitialized = false);
   const StringAnalysis &getStringAnalysis() const;
 
   /// Print summary of analysis objects and their graphs

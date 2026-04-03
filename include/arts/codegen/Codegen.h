@@ -165,6 +165,9 @@ public:
   Value computeTotalElements(ValueRange sizes, Location loc);
   Value computeLinearIndex(ArrayRef<Value> sizes, ArrayRef<Value> indices,
                            Location loc);
+  SmallVector<Value> computeIndicesFromLinearIndex(ArrayRef<Value> sizes,
+                                                   Value linearIndex,
+                                                   Location loc);
   Value computeLinearIndexFromStrides(ValueRange strides, ValueRange indices,
                                       Location loc);
   SmallVector<Value> computeStridesFromSizes(ArrayRef<Value> sizes,
