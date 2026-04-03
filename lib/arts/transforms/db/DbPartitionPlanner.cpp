@@ -253,22 +253,86 @@ static void buildBlockRewriteAcquire(const DbAcquirePartitionView &input,
   if (input.isValid) {
     if (input.partitionOffsets.empty() && input.partitionSizes.empty() &&
         !input.partitionIndices.empty()) {
-      for (Value idx : input.partitionIndices) {
-        output.partitionInfo.offsets.push_back(idx);
-        output.partitionInfo.sizes.push_back(one);
+      if (plan.numPartitionedDims() > 1) {
+        SmallVector<unsigned> planDims;
+        planDims.reserve(plan.numPartitionedDims());
+        for (unsigned d = 0; d < plan.numPartitionedDims(); ++d)
+          planDims.push_back(d < plan.partitionedDims.size()
+                                 ? plan.partitionedDims[d]
+                                 : d);
+
+        output.partitionInfo.offsets.assign(plan.numPartitionedDims(), zero);
+        output.partitionInfo.sizes.reserve(plan.numPartitionedDims());
+        for (unsigned d = 0; d < plan.numPartitionedDims(); ++d) {
+          unsigned physDim = planDims[d];
+          Value fullExtent = physDim < allocOp.getElementSizes().size()
+                                 ? allocOp.getElementSizes()[physDim]
+                                 : one;
+          output.partitionInfo.sizes.push_back(fullExtent ? fullExtent : one);
+        }
+
+        for (unsigned i = 0; i < input.partitionIndices.size(); ++i) {
+          if (i >= input.partitionDims.size())
+            continue;
+          unsigned physDim = input.partitionDims[i];
+          auto it = llvm::find(planDims, physDim);
+          if (it == planDims.end())
+            continue;
+          unsigned slot = static_cast<unsigned>(std::distance(planDims.begin(), it));
+          output.partitionInfo.offsets[slot] = input.partitionIndices[i];
+          Value blockSz = plan.getBlockSize(slot);
+          output.partitionInfo.sizes[slot] = blockSz ? blockSz : one;
+        }
+      } else {
+        for (Value idx : input.partitionIndices) {
+          output.partitionInfo.offsets.push_back(idx);
+          output.partitionInfo.sizes.push_back(one);
+        }
       }
     } else if (plan.numPartitionedDims() > 1) {
-      for (Value idx : input.partitionIndices) {
-        output.partitionInfo.offsets.push_back(idx);
-        unsigned dimIdx = output.partitionInfo.offsets.size() - 1;
-        Value blockSz = plan.getBlockSize(dimIdx);
-        output.partitionInfo.sizes.push_back(blockSz ? blockSz : one);
+      SmallVector<unsigned> planDims;
+      planDims.reserve(plan.numPartitionedDims());
+      for (unsigned d = 0; d < plan.numPartitionedDims(); ++d)
+        planDims.push_back(d < plan.partitionedDims.size() ? plan.partitionedDims[d]
+                                                           : d);
+
+      output.partitionInfo.offsets.assign(plan.numPartitionedDims(), zero);
+      output.partitionInfo.sizes.reserve(plan.numPartitionedDims());
+      for (unsigned d = 0; d < plan.numPartitionedDims(); ++d) {
+        unsigned physDim = planDims[d];
+        Value fullExtent = physDim < allocOp.getElementSizes().size()
+                               ? allocOp.getElementSizes()[physDim]
+                               : one;
+        output.partitionInfo.sizes.push_back(fullExtent ? fullExtent : one);
       }
-      if (output.partitionInfo.offsets.empty()) {
-        output.partitionInfo.offsets.assign(input.partitionOffsets.begin(),
-                                            input.partitionOffsets.end());
-        output.partitionInfo.sizes.assign(input.partitionSizes.begin(),
-                                          input.partitionSizes.end());
+
+      if (!input.partitionIndices.empty()) {
+        for (unsigned i = 0; i < input.partitionIndices.size(); ++i) {
+          if (i >= input.partitionDims.size())
+            continue;
+          unsigned physDim = input.partitionDims[i];
+          auto it = llvm::find(planDims, physDim);
+          if (it == planDims.end())
+            continue;
+          unsigned slot = static_cast<unsigned>(std::distance(planDims.begin(), it));
+          output.partitionInfo.offsets[slot] = input.partitionIndices[i];
+          Value blockSz = plan.getBlockSize(slot);
+          output.partitionInfo.sizes[slot] = blockSz ? blockSz : one;
+        }
+      }
+
+      unsigned rangeCount =
+          std::min(input.partitionOffsets.size(), input.partitionSizes.size());
+      for (unsigned i = 0; i < rangeCount; ++i) {
+        if (i >= input.partitionDims.size())
+          continue;
+        unsigned physDim = input.partitionDims[i];
+        auto it = llvm::find(planDims, physDim);
+        if (it == planDims.end())
+          continue;
+        unsigned slot = static_cast<unsigned>(std::distance(planDims.begin(), it));
+        output.partitionInfo.offsets[slot] = input.partitionOffsets[i];
+        output.partitionInfo.sizes[slot] = input.partitionSizes[i];
       }
     } else {
       output.partitionInfo.offsets.assign(input.partitionOffsets.begin(),

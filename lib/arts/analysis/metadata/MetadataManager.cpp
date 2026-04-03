@@ -9,6 +9,22 @@
 using namespace mlir;
 using namespace mlir::arts;
 
+namespace {
+
+static void clearMovedMetadataAttrs(Operation *op) {
+  if (!op)
+    return;
+
+  op->removeAttr(ArtsMetadata::IdAttrName);
+  op->removeAttr(AttrNames::Operation::MetadataOriginId);
+  op->removeAttr(AttrNames::Operation::MetadataProvenance);
+  op->removeAttr(AttrNames::LoopMetadata::Name);
+  op->removeAttr(AttrNames::MemrefMetadata::Name);
+  op->removeAttr(AttrNames::ValueMetadata::Name);
+}
+
+} // namespace
+
 MetadataManager::MetadataManager(MLIRContext *context)
     : registry(context), io(registry), attacher(registry, io) {}
 
@@ -135,8 +151,11 @@ ArtsId MetadataManager::assignOperationId(Operation *op) {
 bool MetadataManager::transferMetadata(Operation *sourceOp,
                                        Operation *targetOp) {
   bool transferred = registry.transferMetadata(sourceOp, targetOp);
-  if (transferred)
+  if (transferred) {
     stampTransferredMetadata(sourceOp, targetOp);
+    if (sourceOp != targetOp)
+      clearMovedMetadataAttrs(sourceOp);
+  }
   return transferred;
 }
 
@@ -146,8 +165,11 @@ bool MetadataManager::replaceMetadataForRewrite(Operation *sourceOp,
     return false;
   refreshMetadata(sourceOp);
   bool replaced = registry.replaceMetadataForRewrite(sourceOp, targetOp);
-  if (replaced)
+  if (replaced) {
     stampTransferredMetadata(sourceOp, targetOp);
+    if (sourceOp != targetOp)
+      clearMovedMetadataAttrs(sourceOp);
+  }
   return replaced;
 }
 
@@ -156,13 +178,17 @@ bool MetadataManager::rewriteMetadata(Operation *sourceOp,
   if (!sourceOp || !targetOp)
     return false;
 
-  bool replaced = replaceMetadataForRewrite(sourceOp, targetOp);
+  refreshMetadata(sourceOp);
+  bool replaced = registry.replaceMetadataForRewrite(sourceOp, targetOp);
   if (!replaced)
     copyArtsMetadataAttrs(sourceOp, targetOp);
 
   bool refreshed = refreshMetadata(targetOp);
-  if (refreshed || replaced)
+  if (refreshed || replaced) {
     stampTransferredMetadata(sourceOp, targetOp);
+    if (sourceOp != targetOp)
+      clearMovedMetadataAttrs(sourceOp);
+  }
   return refreshed || replaced;
 }
 

@@ -727,6 +727,55 @@ computeAcquirePartitionInfo(DbAnalysis &dbAnalysis, DbAcquireOp acquire,
   return info;
 }
 
+static unsigned deriveAuthoritativeOwnerBlockRank(
+    DbAllocOp allocOp, ArrayRef<AcquirePartitionInfo> acquireInfos,
+    ArrayRef<std::optional<DbAnalysis::AcquireContractSummary>>
+        acquireContractSummaries,
+    ArrayRef<AcquireInfo> heuristicInfos) {
+  unsigned maxSupportedRank = allocOp.getElementSizes().size();
+  if (maxSupportedRank == 0)
+    return 0;
+
+  SmallVector<bool> seenOwnerDims(maxSupportedRank, false);
+  unsigned distinctOwnerDims = 0;
+
+  for (size_t acquireIdx = 0;
+       acquireIdx < acquireInfos.size() &&
+       acquireIdx < acquireContractSummaries.size() &&
+       acquireIdx < heuristicInfos.size();
+       ++acquireIdx) {
+    const auto &acqInfo = acquireInfos[acquireIdx];
+    const auto &summary = acquireContractSummaries[acquireIdx];
+    const auto &heuristicInfo = heuristicInfos[acquireIdx];
+
+    if (!summary || acqInfo.needsFullRange || !heuristicInfo.canBlock ||
+        summary->partitionDimsFromPeers())
+      continue;
+
+    ArrayRef<unsigned> authoritativeDims = acqInfo.partitionDims;
+    if (authoritativeDims.empty())
+      authoritativeDims = summary->partitionDims;
+    if (authoritativeDims.empty())
+      continue;
+
+    unsigned explicitRank = std::min<unsigned>(acqInfo.partitionOffsets.size(),
+                                               acqInfo.partitionSizes.size());
+    if (explicitRank > authoritativeDims.size())
+      continue;
+
+    for (unsigned dim : authoritativeDims) {
+      if (dim >= maxSupportedRank)
+        continue;
+      if (!seenOwnerDims[dim]) {
+        seenOwnerDims[dim] = true;
+        ++distinctOwnerDims;
+      }
+    }
+  }
+
+  return distinctOwnerDims;
+}
+
 static void resetCoarseAcquireRanges(DbAllocOp allocOp, DbAllocNode *allocNode,
                                      OpBuilder &builder) {
   if (!allocNode || allocOp.getSizes().empty())
@@ -797,23 +846,32 @@ feedbackPartitionDecisionToContract(DbAllocOp newAllocOp,
   if (auto existing = getLoweringContract(allocPtr))
     info = *existing;
 
-  /// Populate resolved block shape from the block-plan resolver output.
-  if (!blockSizes.empty() &&
-      (info.spatial.ownerDims.empty() ||
-       blockSizes.size() == info.spatial.ownerDims.size())) {
-    info.spatial.blockShape.assign(blockSizes.begin(), blockSizes.end());
+  SmallVector<unsigned, 4> effectivePartitionDims;
+  if (!partitionedDims.empty()) {
+    effectivePartitionDims.assign(partitionedDims.begin(),
+                                  partitionedDims.end());
+  } else if (blockSizes.size() > 1) {
+    effectivePartitionDims.reserve(blockSizes.size());
+    for (unsigned dim = 0; dim < blockSizes.size(); ++dim)
+      effectivePartitionDims.push_back(dim);
   }
 
-  /// Populate ownerDims from the resolved partitioned dimensions only when the
-  /// contract does not already carry an explicit higher-rank semantic owner
-  /// shape. For stencil families, ownerDims describe the semantic footprint
-  /// rank and must not be collapsed to a narrower layout choice here.
-  if (!partitionedDims.empty() &&
+  /// Populate ownerDims from the resolved plan. Implicit leading-prefix N-D
+  /// plans are canonical block layouts too; materialize them explicitly in the
+  /// contract so downstream consumers do not have to rediscover them from the
+  /// rewritten allocation shape alone.
+  if (!effectivePartitionDims.empty() &&
       (!info.hasExplicitStencilContract() || info.spatial.ownerDims.empty())) {
     info.spatial.ownerDims.clear();
-    info.spatial.ownerDims.reserve(partitionedDims.size());
-    for (unsigned dim : partitionedDims)
+    info.spatial.ownerDims.reserve(effectivePartitionDims.size());
+    for (unsigned dim : effectivePartitionDims)
       info.spatial.ownerDims.push_back(static_cast<int64_t>(dim));
+  }
+
+  /// Populate resolved block shape from the block-plan resolver output.
+  if (!blockSizes.empty() &&
+      blockSizes.size() == info.spatial.ownerDims.size()) {
+    info.spatial.blockShape.assign(blockSizes.begin(), blockSizes.end());
   }
 
   /// Mark as post-DB refined so consumers can distinguish contracts that
@@ -1750,6 +1808,17 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     ctx.elementTypeIsMemRef = false;
   }
 
+  unsigned authoritativeOwnerBlockRank = deriveAuthoritativeOwnerBlockRank(
+      allocOp, acquireInfos, acquireContractSummaries, ctx.acquires);
+  if (authoritativeOwnerBlockRank > ctx.preferredOuterRank) {
+    ctx.preferredOuterRank = authoritativeOwnerBlockRank;
+    ctx.preferBlockND = authoritativeOwnerBlockRank > 1;
+    if (ctx.preferBlockND) {
+      ARTS_DEBUG("  Preserving multi-dim block layout from authoritative "
+                 "owner dims (rank=" << ctx.preferredOuterRank << ")");
+    }
+  }
+
   /// Feed raw allocation facts to H1 so the heuristic layer, not the
   /// controller, decides whether special coarse cases (for example tiny
   /// read-only stencil coefficient tables) should remain coarse.
@@ -2585,6 +2654,7 @@ bool DbPartitioningPass::resolveBlockPlanSizes(
                                   ctx.blockSize,
                                   /*dynamicBlockSizeHint=*/Value(),
                                   blockSizesForNDBlock,
+                                  decision.outerRank,
                                   &builder,
                                   loc,
                                   useNodesForFallback,
@@ -2640,9 +2710,9 @@ bool DbPartitioningPass::resolveBlockPlanSizes(
   /// If an acquire's inferred partition dims disagree with the chosen plan,
   /// require full-range to preserve correctness.
   ///
-  /// Allow acquires to carry extra trailing partition dimensions as long as
-  /// the plan dims are a leading prefix. This is common when a 2D acquire
-  /// participates in a 1D block plan (partition along rows only).
+  /// Allow 1-D plans to keep the historical leading-prefix behavior. For N-D
+  /// plans, allow acquires to localize any subset of the chosen plan dims;
+  /// omitted dims widen to full-range later in the planner.
   if (!partitionedDimsForPlan.empty()) {
     for (auto &info : acquireInfos) {
       if (info.needsFullRange)
@@ -2653,13 +2723,30 @@ bool DbPartitioningPass::resolveBlockPlanSizes(
                    "forcing full-range access");
         continue;
       }
-      bool compatible =
-          info.partitionDims.size() >= partitionedDimsForPlan.size();
-      if (compatible) {
-        for (unsigned i = 0; i < partitionedDimsForPlan.size(); ++i) {
-          if (info.partitionDims[i] != partitionedDimsForPlan[i]) {
+      bool compatible = true;
+      if (partitionedDimsForPlan.size() > 1) {
+        unsigned explicitRank = std::min(info.partitionOffsets.size(),
+                                         info.partitionSizes.size());
+        if (explicitRank > info.partitionDims.size())
+          compatible = false;
+
+        SmallVector<bool> seenDim(allocOp.getElementSizes().size(), false);
+        for (unsigned dim : info.partitionDims) {
+          if (dim >= seenDim.size() || seenDim[dim] ||
+              !llvm::is_contained(partitionedDimsForPlan, dim)) {
             compatible = false;
             break;
+          }
+          seenDim[dim] = true;
+        }
+      } else {
+        compatible = info.partitionDims.size() >= partitionedDimsForPlan.size();
+        if (compatible) {
+          for (unsigned i = 0; i < partitionedDimsForPlan.size(); ++i) {
+            if (info.partitionDims[i] != partitionedDimsForPlan[i]) {
+              compatible = false;
+              break;
+            }
           }
         }
       }
@@ -2780,6 +2867,7 @@ FailureOr<DbAllocOp> DbPartitioningPass::assembleAndApplyRewritePlan(
                                  info.partitionOffsets.end());
     view.partitionSizes.assign(info.partitionSizes.begin(),
                                info.partitionSizes.end());
+    view.partitionDims.assign(info.partitionDims.begin(), info.partitionDims.end());
     view.accessPattern = info.accessPattern;
     view.isValid = info.isValid;
     view.hasIndirectAccess = info.hasIndirectAccess;

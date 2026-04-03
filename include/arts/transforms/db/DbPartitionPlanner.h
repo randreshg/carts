@@ -32,6 +32,7 @@ struct DbAcquirePartitionView {
   SmallVector<Value> partitionIndices;
   SmallVector<Value> partitionOffsets;
   SmallVector<Value> partitionSizes;
+  SmallVector<unsigned> partitionDims;
   AccessPattern accessPattern = AccessPattern::Unknown;
   bool isValid = false;
   bool hasIndirectAccess = false;

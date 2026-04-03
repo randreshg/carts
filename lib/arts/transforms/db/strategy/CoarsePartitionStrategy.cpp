@@ -7,7 +7,6 @@
 ///   H1.C0: Tiny read-only stencil coefficient table -> coarse
 ///   H1.C1: Read-only single-node without partitioning support -> coarse
 ///   H1.C2: Explicit coarse acquire on single-node -> coarse
-///   H1.C2b: Read-only mixed owner dims on single-node -> coarse
 ///   H1.C3: Read-only full-range block acquires -> coarse
 ///   H1.C4: Read-only stencil on single-node -> coarse
 ///   H1.C5: Non-uniform access without partitioning support -> coarse
@@ -37,35 +36,6 @@ isTinyReadOnlyStencilCoefficientTable(const PartitioningContext &ctx) {
          ctx.accessMode == ArtsMode::in && ctx.allocDbMode == DbMode::read &&
          ctx.staticElementCount && *ctx.staticElementCount > 0 &&
          *ctx.staticElementCount <= 8;
-}
-
-static bool
-hasMixedAuthoritativeReadOnlyOwnerDims(const PartitioningContext &ctx) {
-  bool sawAuthoritativeOwner = false;
-  uint8_t referenceCount = 0;
-  int16_t referenceOwnerDims[4] = {-1, -1, -1, -1};
-
-  for (const AcquireInfo &info : ctx.acquires) {
-    if (info.accessMode != ArtsMode::in || !info.canBlock ||
-        info.partitionDimsFromPeers || info.ownerDimsCount == 0)
-      continue;
-
-    if (!sawAuthoritativeOwner) {
-      sawAuthoritativeOwner = true;
-      referenceCount = info.ownerDimsCount;
-      for (unsigned dim = 0; dim < referenceCount; ++dim)
-        referenceOwnerDims[dim] = info.ownerDims[dim];
-      continue;
-    }
-
-    if (referenceCount != info.ownerDimsCount)
-      return true;
-    for (unsigned dim = 0; dim < referenceCount; ++dim)
-      if (referenceOwnerDims[dim] != info.ownerDims[dim])
-        return true;
-  }
-
-  return false;
 }
 
 ///===----------------------------------------------------------------------===///
@@ -107,17 +77,6 @@ public:
       return PartitioningDecision::coarse(
           ctx, "H1.C2: Single-node explicit coarse acquire with no "
                "partitioning support");
-    }
-
-    /// H1.C2b: Read-only mixed owner dims on single-node -> Coarse
-    if (isSingleNode && isReadOnly && ctx.canBlock && !patterns.hasStencil &&
-        hasMixedAuthoritativeReadOnlyOwnerDims(ctx) && !ctx.preferBlockND &&
-        ctx.maxPinnedDimCount() <= 1) {
-      ARTS_DEBUG(
-          "H1.C2b applied: Read-only mixed owner dims on single-node");
-      return PartitioningDecision::coarse(
-          ctx,
-          "H1.C2b: Read-only mixed owner dims on single-node prefer coarse");
     }
 
     /// H1.C3: Read-only full-range block acquires → Coarse

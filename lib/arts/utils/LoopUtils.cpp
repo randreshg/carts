@@ -50,6 +50,31 @@ static std::optional<int64_t> getStaticTripCount(affine::AffineForOp loop) {
   return (span + step - 1) / step;
 }
 
+static std::optional<int64_t> getStaticTripCount(omp::WsloopOp loop) {
+  if (!loop)
+    return std::nullopt;
+
+  auto loopNest = dyn_cast_or_null<omp::LoopNestOp>(loop.getWrappedLoop());
+  if (!loopNest)
+    return std::nullopt;
+
+  auto lowerBounds = loopNest.getLoopLowerBounds();
+  auto upperBounds = loopNest.getLoopUpperBounds();
+  auto steps = loopNest.getLoopSteps();
+  if (lowerBounds.empty() || lowerBounds.size() != upperBounds.size() ||
+      lowerBounds.size() != steps.size())
+    return std::nullopt;
+
+  auto lowerBound = ValueAnalysis::tryFoldConstantIndex(lowerBounds.front());
+  auto upperBound = ValueAnalysis::tryFoldConstantIndex(upperBounds.front());
+  auto step = ValueAnalysis::tryFoldConstantIndex(steps.front());
+  if (!lowerBound || !upperBound || !step || *step <= 0)
+    return std::nullopt;
+
+  int64_t span = std::max<int64_t>(0, *upperBound - *lowerBound);
+  return (span + *step - 1) / *step;
+}
+
 unsigned getLoopDepth(Operation *op) {
   unsigned depth = 0;
   for (Operation *parent = op ? op->getParentOp() : nullptr; parent;
@@ -108,6 +133,8 @@ std::optional<int64_t> getStaticTripCount(Operation *loopOp) {
     return getStaticTripCount(artsFor);
   if (auto affineFor = dyn_cast<affine::AffineForOp>(loopOp))
     return getStaticTripCount(affineFor);
+  if (auto wsloop = dyn_cast<omp::WsloopOp>(loopOp))
+    return getStaticTripCount(wsloop);
   return std::nullopt;
 }
 

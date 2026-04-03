@@ -28,35 +28,6 @@ isTinyReadOnlyStencilCoefficientTable(const PartitioningContext &ctx) {
          *ctx.staticElementCount <= 8;
 }
 
-static bool
-hasMixedAuthoritativeReadOnlyOwnerDims(const PartitioningContext &ctx) {
-  bool sawAuthoritativeOwner = false;
-  uint8_t referenceCount = 0;
-  int16_t referenceOwnerDims[4] = {-1, -1, -1, -1};
-
-  for (const AcquireInfo &info : ctx.acquires) {
-    if (info.accessMode != ArtsMode::in || !info.canBlock ||
-        info.partitionDimsFromPeers || info.ownerDimsCount == 0)
-      continue;
-
-    if (!sawAuthoritativeOwner) {
-      sawAuthoritativeOwner = true;
-      referenceCount = info.ownerDimsCount;
-      for (unsigned dim = 0; dim < referenceCount; ++dim)
-        referenceOwnerDims[dim] = info.ownerDims[dim];
-      continue;
-    }
-
-    if (referenceCount != info.ownerDimsCount)
-      return true;
-    for (unsigned dim = 0; dim < referenceCount; ++dim)
-      if (referenceOwnerDims[dim] != info.ownerDims[dim])
-        return true;
-  }
-
-  return false;
-}
-
 } // namespace
 
 ///===----------------------------------------------------------------------===///
@@ -153,22 +124,6 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
              (ctx.canBlock || ctx.canElementWise)) {
     ARTS_DEBUG("H1.C2 skipped: explicit coarse hint overridden by available "
                "partitioned plan");
-  }
-
-  /// H1.C2b: Read-only mixed owner dims on single-node -> Coarse
-  /// Rationale: A read-only allocation only benefits from block partitioning
-  /// when consumers agree on the ownership mapping that the block layout is
-  /// supposed to encode. If authoritative owner dims disagree across phases
-  /// and the planner only has a 1-D block candidate, no single blocked layout
-  /// can satisfy all consumers. On a single node, prefer a coarse shared input
-  /// instead of paying for a block graph that later consumers will widen.
-  if (isSingleNode && isReadOnly && ctx.canBlock && !patterns.hasStencil &&
-      hasMixedAuthoritativeReadOnlyOwnerDims(ctx) && !ctx.preferBlockND &&
-      ctx.maxPinnedDimCount() <= 1) {
-    ARTS_DEBUG("H1.C2b applied: Read-only mixed owner dims prefer coarse on "
-               "single-node 1-D block candidates");
-    return PartitioningDecision::coarse(
-        ctx, "H1.C2b: Read-only mixed owner dims on single-node prefer coarse");
   }
 
   /// H1.C3: Read-only full-range block acquires → Coarse
