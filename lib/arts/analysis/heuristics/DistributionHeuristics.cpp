@@ -11,6 +11,7 @@
 #include "arts/analysis/loop/LoopAnalysis.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/PatternSemantics.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -327,7 +328,7 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
     /// The loop access summary is not always populated yet when ForOpt runs.
     /// Fall back to the semantic dep-pattern contract so Jacobi/stencil loops
     /// still take the stencil coarsening path before lowering.
-    isStencilPattern = isStencilFamilyDepPattern(*depPattern);
+    isStencilPattern = PatternSemantics::isStencilFamily(*depPattern);
   }
   if (auto summary =
           loopAnalysis.getLoopDbAccessSummary(forOp.getOperation())) {
@@ -510,12 +511,17 @@ DistributionHeuristics::resolveDistributionPattern(AnalysisManager *AM,
 
 EdtDistributionKind DistributionHeuristics::selectDistributionKind(
     const DistributionStrategy &strategy, EdtDistributionPattern pattern) {
+  /// First, check if the distribution pattern has a pattern-specific override.
+  /// This handles matmul -> tiling_2d for TwoLevel.
+  /// PatternSemantics::getPreferredDistributionKind currently takes ArtsDepPattern,
+  /// but we don't have access to that here. For now, inline the matmul override.
   if (pattern == EdtDistributionPattern::matmul) {
     if (strategy.kind == DistributionKind::TwoLevel)
       return EdtDistributionKind::tiling_2d;
     return EdtDistributionKind::block;
   }
 
+  /// Strategy-based dispatch (general case).
   switch (strategy.kind) {
   case DistributionKind::TwoLevel:
     return EdtDistributionKind::two_level;
@@ -529,6 +535,7 @@ EdtDistributionKind DistributionHeuristics::selectDistributionKind(
     break;
   }
 
+  /// Fallback to pattern-specific defaults.
   switch (pattern) {
   case EdtDistributionPattern::triangular:
     return EdtDistributionKind::block_cyclic;
