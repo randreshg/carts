@@ -124,6 +124,15 @@ static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   if (rank == 0)
     return;
 
+  /// Read-only acquires that intentionally preserved the parent DB-space
+  /// range must keep that full-range contract through pre-lowering. Their
+  /// partition_* hints still describe the worker-local element slice, but
+  /// reinterpreting those hints as the authoritative DB window narrows
+  /// correctness-preserving full-range fallbacks back to one block.
+  if (shouldPreserveParentDepRange(contract, acquire) &&
+      !acquire.getOffsets().empty() && !acquire.getSizes().empty())
+    return;
+
   bool applyStencilHalo = shouldApplyStencilHalo(contract, acquire);
   auto haloMinOffsets = contract.getStaticMinOffsets();
   auto haloMaxOffsets = contract.getStaticMaxOffsets();
