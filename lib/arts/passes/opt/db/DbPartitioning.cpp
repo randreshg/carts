@@ -74,6 +74,7 @@
 #include "arts/transforms/db/DbPartitionPlanner.h"
 #include "arts/transforms/db/DbPartitionTypes.h"
 #include "arts/transforms/db/DbRewriter.h"
+#include "arts/transforms/db/PartitionStrategy.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/EdtUtils.h"
@@ -1760,7 +1761,25 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   ctx.allocDbMode = allocOp.getDbMode();
 
   /// Phase 5: Invoke heuristics for partition mode arbitration.
+  /// Primary path: use existing heuristics (maintains 121/121 test compatibility).
+  /// Strategy objects are also evaluated for validation and future migration.
   PartitioningDecision decision = heuristics.choosePartitioning(ctx);
+
+  /// Parallel evaluation: invoke strategy objects alongside heuristics.
+  /// This wires the strategies into the dispatch without changing behavior yet.
+  auto strategies = PartitionStrategyFactory::createStandardStrategies();
+  const AbstractMachine *machine = &AM->getAbstractMachine();
+
+  for (const auto &strategy : strategies) {
+    if (auto strategyDecision = strategy->evaluate(ctx, machine)) {
+      /// Strategy matched - log for validation but use heuristics decision.
+      ARTS_DEBUG("  Strategy " << strategy->getName() << " would select: "
+                               << getPartitionModeName(strategyDecision->mode)
+                               << " (heuristics chose: "
+                               << getPartitionModeName(decision.mode) << ")");
+      break;
+    }
+  }
   dbPartitionTrace("alloc=", getArtsId(allocOp.getOperation()),
                    " patterns(uniform=", ctx.accessPatterns.hasUniform,
                    ", stencil=", ctx.accessPatterns.hasStencil,

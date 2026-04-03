@@ -95,6 +95,9 @@ private:
 
 /// Lightweight marker-only contract for matmul patterns.
 ///
+/// TODO: Enrich when layout-aware block partitioning or tile size selection is
+/// proven necessary by a concrete pass.
+///
 /// Unlike StencilNDPatternContract which carries rich payload (offsets, block
 /// shapes, footprints) needed for DB partitioning heuristics, matmul patterns
 /// serve primarily as semantic markers that trigger specific EDT distribution
