@@ -13,7 +13,9 @@ Use one command model only:
   install
 
 Do not use checked-in wrappers or direct `python tools/carts_cli.py` invocations
-as the public interface.
+as the public interface. The repo-local `tools/carts` file exists only as a
+compatibility shim for internal benchmark/tooling paths that still expect that
+entrypoint.
 
 ## Directory Layout
 
