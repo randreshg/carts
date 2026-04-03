@@ -75,6 +75,74 @@ private:
   int64_t revision = 1;
 };
 
+/// Lightweight marker-only contract for matmul patterns.
+///
+/// Unlike StencilNDPatternContract which carries rich payload (offsets, block
+/// shapes, footprints) needed for DB partitioning heuristics, matmul patterns
+/// serve primarily as semantic markers that trigger specific EDT distribution
+/// strategies. The pattern is detected by MatmulReductionPattern and recorded
+/// as ArtsDepPattern::matmul, which downstream passes (EdtDistribution,
+/// LoweringContractUtils) use to select matmul-aware distribution without
+/// requiring additional metadata.
+///
+/// Why marker-only:
+/// - Matmul distribution strategy needs only the pattern family, not tiling
+///   factors or reduction dimensions - those are kernel-transform details that
+///   don't affect the distribution decision.
+/// - Current consumers (getEffectiveDistributionPattern, DbAnalysis) only
+///   check the enum value to set hasMatmulUpdate hint for coarse partitioning.
+/// - Enriching with unused metadata (alpha/beta coefficients, matrix layout,
+///   reduction dims) would create infrastructure without consumer value.
+///
+/// If future passes need matmul-specific metadata (e.g., tile size selection,
+/// layout-aware block partitioning), the contract can be enriched at that time
+/// with proven requirements rather than speculative payload.
+class MatmulPatternContract final : public PatternContract {
+public:
+  explicit MatmulPatternContract(int64_t revision = 1) : revision(revision) {}
+
+  ArtsDepPattern getFamily() const override { return ArtsDepPattern::matmul; }
+  int64_t getRevision() const override { return revision; }
+  StringRef getName() const override { return "matmul"; }
+
+private:
+  int64_t revision = 1;
+};
+
+/// Lightweight marker-only contract for triangular (LU/Cholesky) patterns.
+///
+/// Similar to MatmulPatternContract, this serves as a semantic marker for
+/// triangular solver patterns (LU decomposition, Cholesky factorization, etc.)
+/// without carrying pattern-specific payload. The pattern is recorded as
+/// ArtsDepPattern::triangular and consumed by distribution strategy selection.
+///
+/// Why marker-only:
+/// - No triangular-specific pattern transform currently exists (unlike matmul's
+///   MatmulReductionPattern) - the enum is defined but unused in practice.
+/// - When implemented, the triangular pattern would primarily need the marker
+///   to select appropriate distribution (likely block-cyclic for load balance).
+/// - Speculative metadata (pivot column, triangular type upper/lower, blocking
+///   factor) would have no consumers until a triangular-aware transform exists.
+///
+/// If/when a triangular pattern transform is implemented, this contract can be
+/// enriched with proven requirements (e.g., triangular type for dependency
+/// computation, blocking factor for tile-size selection) rather than unused
+/// infrastructure.
+class TriangularPatternContract final : public PatternContract {
+public:
+  explicit TriangularPatternContract(int64_t revision = 1)
+      : revision(revision) {}
+
+  ArtsDepPattern getFamily() const override {
+    return ArtsDepPattern::triangular;
+  }
+  int64_t getRevision() const override { return revision; }
+  StringRef getName() const override { return "triangular"; }
+
+private:
+  int64_t revision = 1;
+};
+
 /// Base interface for transforms that participate in the pre-DB pattern
 /// pipeline.
 class PatternTransform {
