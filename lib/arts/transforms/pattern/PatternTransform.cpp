@@ -22,6 +22,44 @@ void PatternContract::stamp(ArrayRef<Operation *> ops) const {
     stamp(op);
 }
 
+StringRef SimplePatternContract::getName() const {
+  switch (family) {
+  case ArtsDepPattern::uniform:
+    return "uniform";
+  case ArtsDepPattern::stencil:
+    return "stencil";
+  case ArtsDepPattern::matmul:
+    return "matmul";
+  case ArtsDepPattern::triangular:
+    return "triangular";
+  case ArtsDepPattern::wavefront_2d:
+    return "wavefront-2d";
+  case ArtsDepPattern::jacobi_alternating_buffers:
+    return "jacobi-alternating-buffers";
+  case ArtsDepPattern::elementwise_pipeline:
+    return "elementwise-pipeline";
+  case ArtsDepPattern::stencil_tiling_nd:
+    return "stencil-tiling-nd";
+  case ArtsDepPattern::cross_dim_stencil_3d:
+    return "cross-dim-stencil-3d";
+  case ArtsDepPattern::higher_order_stencil:
+    return "higher-order-stencil";
+  case ArtsDepPattern::unknown:
+    return "unknown";
+  }
+  return "unknown";
+}
+
+void SimplePatternContract::stamp(Operation *op) const {
+  PatternContract::stamp(op);
+  if (!op)
+    return;
+  // Also stamp the derived distribution pattern if one exists
+  if (auto distPattern = getDistributionPatternForDepPattern(family)) {
+    setEdtDistributionPattern(op, *distPattern);
+  }
+}
+
 void StencilNDPatternContract::stamp(Operation *op) const {
   PatternContract::stamp(op);
   if (!op)
