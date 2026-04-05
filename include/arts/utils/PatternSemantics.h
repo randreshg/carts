@@ -35,7 +35,7 @@ public:
   /// Used by DistributionHeuristics::selectDistributionKind.
   static std::optional<EdtDistributionKind>
   getPreferredDistributionKind(ArtsDepPattern depPattern,
-                                const DistributionStrategy &strategy);
+                               const DistributionStrategy &strategy);
 
   /// Stencil-specific coarsening policy.
   /// Returns true if the pattern benefits from specialized stencil coarsening.

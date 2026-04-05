@@ -257,9 +257,8 @@ static void buildBlockRewriteAcquire(const DbAcquirePartitionView &input,
         SmallVector<unsigned> planDims;
         planDims.reserve(plan.numPartitionedDims());
         for (unsigned d = 0; d < plan.numPartitionedDims(); ++d)
-          planDims.push_back(d < plan.partitionedDims.size()
-                                 ? plan.partitionedDims[d]
-                                 : d);
+          planDims.push_back(
+              d < plan.partitionedDims.size() ? plan.partitionedDims[d] : d);
 
         output.partitionInfo.offsets.assign(plan.numPartitionedDims(), zero);
         output.partitionInfo.sizes.reserve(plan.numPartitionedDims());
@@ -278,7 +277,8 @@ static void buildBlockRewriteAcquire(const DbAcquirePartitionView &input,
           auto it = llvm::find(planDims, physDim);
           if (it == planDims.end())
             continue;
-          unsigned slot = static_cast<unsigned>(std::distance(planDims.begin(), it));
+          unsigned slot =
+              static_cast<unsigned>(std::distance(planDims.begin(), it));
           output.partitionInfo.offsets[slot] = input.partitionIndices[i];
           Value blockSz = plan.getBlockSize(slot);
           output.partitionInfo.sizes[slot] = blockSz ? blockSz : one;
@@ -293,8 +293,8 @@ static void buildBlockRewriteAcquire(const DbAcquirePartitionView &input,
       SmallVector<unsigned> planDims;
       planDims.reserve(plan.numPartitionedDims());
       for (unsigned d = 0; d < plan.numPartitionedDims(); ++d)
-        planDims.push_back(d < plan.partitionedDims.size() ? plan.partitionedDims[d]
-                                                           : d);
+        planDims.push_back(
+            d < plan.partitionedDims.size() ? plan.partitionedDims[d] : d);
 
       output.partitionInfo.offsets.assign(plan.numPartitionedDims(), zero);
       output.partitionInfo.sizes.reserve(plan.numPartitionedDims());
@@ -314,7 +314,8 @@ static void buildBlockRewriteAcquire(const DbAcquirePartitionView &input,
           auto it = llvm::find(planDims, physDim);
           if (it == planDims.end())
             continue;
-          unsigned slot = static_cast<unsigned>(std::distance(planDims.begin(), it));
+          unsigned slot =
+              static_cast<unsigned>(std::distance(planDims.begin(), it));
           output.partitionInfo.offsets[slot] = input.partitionIndices[i];
           Value blockSz = plan.getBlockSize(slot);
           output.partitionInfo.sizes[slot] = blockSz ? blockSz : one;
@@ -330,7 +331,8 @@ static void buildBlockRewriteAcquire(const DbAcquirePartitionView &input,
         auto it = llvm::find(planDims, physDim);
         if (it == planDims.end())
           continue;
-        unsigned slot = static_cast<unsigned>(std::distance(planDims.begin(), it));
+        unsigned slot =
+            static_cast<unsigned>(std::distance(planDims.begin(), it));
         output.partitionInfo.offsets[slot] = input.partitionOffsets[i];
         output.partitionInfo.sizes[slot] = input.partitionSizes[i];
       }

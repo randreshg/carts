@@ -405,7 +405,8 @@ static bool wouldContractChange(Operation *op,
     return true;
 
   // Check distribution pattern for all non-stencil contracts
-  if (auto distPattern = getDistributionPatternForDepPattern(contract.getFamily())) {
+  if (auto distPattern =
+          getDistributionPatternForDepPattern(contract.getFamily())) {
     std::optional<EdtDistributionPattern> existingDist =
         getEdtDistributionPattern(op);
     if (!existingDist || *existingDist != *distPattern)
@@ -462,7 +463,8 @@ struct PatternDiscoveryPass
       if (explicitStencil && isStencilFamilyDepPattern(*chosen)) {
         contract = std::make_unique<StencilNDPatternContract>(*explicitStencil);
       } else {
-        contract = std::make_unique<SimplePatternContract>(*chosen, targetRevision);
+        contract =
+            std::make_unique<SimplePatternContract>(*chosen, targetRevision);
       }
 
       // Stamp the contract on the ForOp and its parent EdtOp

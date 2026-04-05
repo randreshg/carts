@@ -990,7 +990,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     std::optional<EdtDistributionPattern> distributionPattern =
         loopInfo.distributionContract.getEffectiveDistributionPattern();
 
-    /// Resolve the effective contract by combining acquire + alloc + loop contracts.
+    /// Resolve the effective contract by combining acquire + alloc + loop
+    /// contracts.
     LoweringContractInfo contract;
     if (auto acquireContract = resolveAcquireContract(parentAcqOp))
       contract = *acquireContract;
@@ -1042,13 +1043,12 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         stepVal,
         stepIsUnit};
 
-    ARTS_DEBUG(
-        "    - Planned contract for dep "
-        << depIndex
-        << ": applyStencilHalo=" << shouldApplyStencilHalo(contract, parentAcqOp)
-        << ", preserveParentDepRange="
-        << shouldPreserveParentDepRange(contract, parentAcqOp)
-        << ", parentAcquire=" << parentAcqOp);
+    ARTS_DEBUG("    - Planned contract for dep "
+               << depIndex << ": applyStencilHalo="
+               << shouldApplyStencilHalo(contract, parentAcqOp)
+               << ", preserveParentDepRange="
+               << shouldPreserveParentDepRange(contract, parentAcqOp)
+               << ", parentAcquire=" << parentAcqOp);
 
     auto createPlannedAcquire =
         [&]() -> std::pair<DbAcquireOp, TaskAcquireRewritePlan> {
@@ -1495,13 +1495,26 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     if (auto *sourceMetadata = metadataManager.getLoopMetadata(forOp)) {
       int64_t memrefDeps =
           sourceMetadata->memrefsWithLoopCarriedDeps.value_or(0);
-      if (memrefDeps == 0) {
+      int64_t numReductionVars = reductionVarIndex.size();
+
+      /// Check if ALL loop-carried dependencies are from reduction variables.
+      /// If memrefDeps == numReductionVars, all deps are reductions, which is
+      /// safe to parallelize because reduction dependencies are handled via
+      /// worker-local accumulators and a final reduction phase, NOT via
+      /// cross-iteration data flow. If memrefDeps < numReductionVars, some
+      /// reductions have no deps (write-only), which is also safe. If
+      /// memrefDeps > numReductionVars, there are non-reduction dependencies
+      /// (likely stencil patterns), which we must keep sequential.
+      if (memrefDeps <= numReductionVars) {
         parallelizeReductionOnly = true;
         ARTS_DEBUG("  Updated loop metadata: potentiallyParallel=true "
-                   "(reduction-only deps, no stencil patterns)");
+                   "(reduction-only deps: "
+                   << memrefDeps << " memrefs with deps, " << numReductionVars
+                   << " reduction vars, no stencil patterns)");
       } else {
         ARTS_DEBUG("  Keeping original metadata: memrefsWithLoopCarriedDeps="
-                   << memrefDeps << " (stencil patterns detected)");
+                   << memrefDeps << " > reduction vars=" << numReductionVars
+                   << " (stencil patterns detected)");
       }
     }
   }

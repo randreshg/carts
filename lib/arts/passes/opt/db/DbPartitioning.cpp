@@ -739,10 +739,9 @@ static unsigned deriveAuthoritativeOwnerBlockRank(
   SmallVector<bool> seenOwnerDims(maxSupportedRank, false);
   unsigned distinctOwnerDims = 0;
 
-  for (size_t acquireIdx = 0;
-       acquireIdx < acquireInfos.size() &&
-       acquireIdx < acquireContractSummaries.size() &&
-       acquireIdx < heuristicInfos.size();
+  for (size_t acquireIdx = 0; acquireIdx < acquireInfos.size() &&
+                              acquireIdx < acquireContractSummaries.size() &&
+                              acquireIdx < heuristicInfos.size();
        ++acquireIdx) {
     const auto &acqInfo = acquireInfos[acquireIdx];
     const auto &summary = acquireContractSummaries[acquireIdx];
@@ -943,10 +942,11 @@ struct DbPartitioningPass
 
 private:
   /// Validate allocation can be partitioned. Returns nullopt if partitioning
-  /// should be skipped (with reason logged), or the allocOp if validation passes.
+  /// should be skipped (with reason logged), or the allocOp if validation
+  /// passes.
   std::optional<FailureOr<DbAllocOp>>
   validatePartitionPreconditions(DbAllocOp allocOp, DbAllocNode *allocNode,
-                                  OpBuilder &builder);
+                                 OpBuilder &builder);
 
   /// Build per-acquire capability info (canBlock, canElementWise, etc.) and
   /// populate ctx.acquires for heuristic voting. Returns true if the caller
@@ -1522,12 +1522,13 @@ bool DbPartitioningPass::partitionDb() {
   return changed;
 }
 
-/// Validate allocation can be partitioned. Returns nullopt if validation passes,
-/// or a FailureOr<DbAllocOp> early-exit result if partitioning should be skipped.
+/// Validate allocation can be partitioned. Returns nullopt if validation
+/// passes, or a FailureOr<DbAllocOp> early-exit result if partitioning should
+/// be skipped.
 std::optional<FailureOr<DbAllocOp>>
 DbPartitioningPass::validatePartitionPreconditions(DbAllocOp allocOp,
-                                                    DbAllocNode *allocNode,
-                                                    OpBuilder &builder) {
+                                                   DbAllocNode *allocNode,
+                                                   OpBuilder &builder) {
   auto &heuristics = AM->getDbHeuristics();
 
   if (!allocOp || !allocOp.getOperation())
@@ -1602,7 +1603,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   builder.setInsertionPoint(allocOp);
 
   /// Phase 1: Validate preconditions.
-  if (auto earlyExit = validatePartitionPreconditions(allocOp, allocNode, builder))
+  if (auto earlyExit =
+          validatePartitionPreconditions(allocOp, allocNode, builder))
     return *earlyExit;
 
   auto &heuristics = AM->getDbHeuristics();
@@ -1815,7 +1817,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     ctx.preferBlockND = authoritativeOwnerBlockRank > 1;
     if (ctx.preferBlockND) {
       ARTS_DEBUG("  Preserving multi-dim block layout from authoritative "
-                 "owner dims (rank=" << ctx.preferredOuterRank << ")");
+                 "owner dims (rank="
+                 << ctx.preferredOuterRank << ")");
     }
   }
 
@@ -1830,8 +1833,9 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   ctx.allocDbMode = allocOp.getDbMode();
 
   /// Phase 5: Invoke heuristics for partition mode arbitration.
-  /// Primary path: use existing heuristics (maintains 121/121 test compatibility).
-  /// Strategy objects are also evaluated for validation and future migration.
+  /// Primary path: use existing heuristics (maintains 121/121 test
+  /// compatibility). Strategy objects are also evaluated for validation and
+  /// future migration.
   PartitioningDecision decision = heuristics.choosePartitioning(ctx);
 
   /// Parallel evaluation: invoke strategy objects alongside heuristics.
@@ -2725,8 +2729,8 @@ bool DbPartitioningPass::resolveBlockPlanSizes(
       }
       bool compatible = true;
       if (partitionedDimsForPlan.size() > 1) {
-        unsigned explicitRank = std::min(info.partitionOffsets.size(),
-                                         info.partitionSizes.size());
+        unsigned explicitRank =
+            std::min(info.partitionOffsets.size(), info.partitionSizes.size());
         if (explicitRank > info.partitionDims.size())
           compatible = false;
 
@@ -2867,7 +2871,8 @@ FailureOr<DbAllocOp> DbPartitioningPass::assembleAndApplyRewritePlan(
                                  info.partitionOffsets.end());
     view.partitionSizes.assign(info.partitionSizes.begin(),
                                info.partitionSizes.end());
-    view.partitionDims.assign(info.partitionDims.begin(), info.partitionDims.end());
+    view.partitionDims.assign(info.partitionDims.begin(),
+                              info.partitionDims.end());
     view.accessPattern = info.accessPattern;
     view.isValid = info.isValid;
     view.hasIndirectAccess = info.hasIndirectAccess;

@@ -519,7 +519,8 @@ mlir::arts::planTaskAcquireRewrite(TaskAcquireRewritePlanInput input) {
         /// loses the pre-halo chunk extent. Materialize the N-D owner tile
         /// here, from the pre-halo hint sizes, so DbPartitioning can harmonize
         /// read/write allocations on the same worker-local block plan.
-        if (!plan.refinedTaskBlockShape && !contract.spatial.ownerDims.empty()) {
+        if (!plan.refinedTaskBlockShape &&
+            !contract.spatial.ownerDims.empty()) {
           SmallVector<unsigned, 4> ownerDims;
           for (int64_t dim : contract.spatial.ownerDims) {
             if (dim >= 0 && static_cast<size_t>(dim) < elemSizes.size())
@@ -788,8 +789,7 @@ void mlir::arts::applyTaskAcquireSlicePlan(TaskAcquireSlicePlanInput input) {
          input.taskAcquire.getPartitionSizes().empty());
     const bool preserveParentDepRange =
         shouldPreserveParentDepRange(input.contract, input.taskAcquire);
-    shouldUpdateBlockWindow =
-        needsPartitionMetadata || !preserveParentDepRange;
+    shouldUpdateBlockWindow = needsPartitionMetadata || !preserveParentDepRange;
   }
   size_t sourceRank =
       DbUtils::getSizesFromDb(input.taskAcquire.getSourcePtr()).size();
@@ -965,13 +965,12 @@ void mlir::arts::applyTaskAcquireContractMetadata(
   taskWriteFootprint = clampRankedStencilVector(std::move(taskWriteFootprint));
 
   auto chunkMode = taskAcquire.getPartitionMode();
-  const bool applyStencilHalo =
-      shouldApplyStencilHalo(contract, taskAcquire);
+  const bool applyStencilHalo = shouldApplyStencilHalo(contract, taskAcquire);
   const bool usePartitionSliceAsDepWindow =
       shouldUsePartitionSliceAsDepWindow(contract, taskAcquire);
-  bool shouldMarkStencilCenter = usePartitionSliceAsDepWindow ||
-                                 applyStencilHalo ||
-                                 (chunkMode && *chunkMode == PartitionMode::stencil);
+  bool shouldMarkStencilCenter =
+      usePartitionSliceAsDepWindow || applyStencilHalo ||
+      (chunkMode && *chunkMode == PartitionMode::stencil);
   std::optional<int64_t> taskCenterOffset;
   if (currentContract)
     taskCenterOffset = currentContract->spatial.centerOffset;

@@ -194,7 +194,7 @@ void classifyEdtUserValues(ArrayRef<Value> userValues,
                            llvm::SetVector<Value> &dbHandles) {
   for (Value val : userValues) {
     if (auto *defOp = val.getDefiningOp()) {
-      if (isa<DbAllocOp>(defOp)) {
+      if (isa<DbAllocOp, DbAcquireOp>(defOp)) {
         dbHandles.insert(val);
         continue;
       }

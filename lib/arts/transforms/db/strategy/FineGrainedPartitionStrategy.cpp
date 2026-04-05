@@ -13,9 +13,9 @@
 ///   - H1.C4 fallback: Read-only stencil on single-node -> element-wise
 ///==========================================================================///
 
-#include "arts/transforms/db/PartitionStrategy.h"
 #include "arts/analysis/heuristics/HeuristicUtils.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
+#include "arts/transforms/db/PartitionStrategy.h"
 #include "arts/utils/Debug.h"
 
 ARTS_DEBUG_SETUP(fine_grained_partition_strategy)
