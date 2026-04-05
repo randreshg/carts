@@ -68,8 +68,7 @@ using namespace mlir::arts;
 
 ARTS_DEBUG_SETUP(edt_transforms);
 
-static const AnalysisKind kEdtTransforms_reads[] = {
-    AnalysisKind::EdtAnalysis};
+static const AnalysisKind kEdtTransforms_reads[] = {AnalysisKind::EdtAnalysis};
 [[maybe_unused]] static const AnalysisDependencyInfo kEdtTransforms_deps = {
     kEdtTransforms_reads, {}};
 

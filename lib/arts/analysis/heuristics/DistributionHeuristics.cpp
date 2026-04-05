@@ -513,8 +513,9 @@ EdtDistributionKind DistributionHeuristics::selectDistributionKind(
     const DistributionStrategy &strategy, EdtDistributionPattern pattern) {
   /// First, check if the distribution pattern has a pattern-specific override.
   /// This handles matmul -> tiling_2d for TwoLevel.
-  /// PatternSemantics::getPreferredDistributionKind currently takes ArtsDepPattern,
-  /// but we don't have access to that here. For now, inline the matmul override.
+  /// PatternSemantics::getPreferredDistributionKind currently takes
+  /// ArtsDepPattern, but we don't have access to that here. For now, inline the
+  /// matmul override.
   if (pattern == EdtDistributionPattern::matmul) {
     if (strategy.kind == DistributionKind::TwoLevel)
       return EdtDistributionKind::tiling_2d;

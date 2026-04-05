@@ -80,6 +80,7 @@ using AttrNames::Operation::ContinuationForEpoch;
 using AttrNames::Operation::CPSAdditiveParams;
 using AttrNames::Operation::CPSAdvanceHasIvArg;
 using AttrNames::Operation::CPSChainId;
+using AttrNames::Operation::CPSDepRouting;
 using AttrNames::Operation::CPSInitIter;
 using AttrNames::Operation::CPSLoopContinuation;
 using AttrNames::Operation::CPSNumCarry;
@@ -1477,10 +1478,10 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
       op->erase();
   };
 
-  /// Seed loop-back params from the original loop body, not the continuation EDT.
-  /// The continuation may not use all captured values directly (e.g., values
-  /// only used to compute other captured values), but we need to carry them all
-  /// to maintain the param pack contract.
+  /// Seed loop-back params from the original loop body, not the continuation
+  /// EDT. The continuation may not use all captured values directly (e.g.,
+  /// values only used to compute other captured values), but we need to carry
+  /// them all to maintain the param pack contract.
   SmallVector<Value> loopBackParams;
   if (firstContinuation) {
     llvm::SetVector<Value> originalCaptured;
@@ -1489,7 +1490,7 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
     classifyEdtUserValues(originalCaptured.getArrayRef(), parameters, constants,
                           dbHandles);
 
-    loopBackParams.reserve(parameters.size() + dbHandles.size());
+    loopBackParams.reserve(originalCaptured.size());
     for (Value param : parameters) {
       if (auto *defOp = param.getDefiningOp())
         if (defOp->getName().getStringRef() == "llvm.mlir.undef")
@@ -1499,32 +1500,617 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
     loopBackParams.append(dbHandles.begin(), dbHandles.end());
   }
 
-  constexpr unsigned kMaxLoopBackIterations = 8;
+  /// =======================================================================
+  /// Scratch DB with Dep Routing — route DB handles through depv instead of
+  /// paramv so CPS continuations receive valid handles on remote nodes.
+  ///
+  /// Classification:
+  ///   - Timing DBs (1-partition): flow through depv as explicit deps
+  ///   - Data GUID arrays (multi-partition): stored in a scratch DB dep
+  ///   - Data PTR arrays (multi-partition): dropped (workers use depv)
+  ///   - Scalars: stay in paramv (already safe)
+  /// =======================================================================
+
+  /// Helper: trace a value to its underlying DbAllocOp.
+  auto traceToDbAlloc = [](Value v) -> DbAllocOp {
+    for (int depth = 0; depth < 10; ++depth) {
+      if (!v)
+        return nullptr;
+      auto *defOp = v.getDefiningOp();
+      if (!defOp)
+        return nullptr;
+      if (auto alloc = dyn_cast<DbAllocOp>(defOp))
+        return alloc;
+      if (auto ref = dyn_cast<DbRefOp>(defOp)) {
+        v = ref.getSource();
+        continue;
+      }
+      if (auto cast = dyn_cast<memref::CastOp>(defOp)) {
+        v = cast.getSource();
+        continue;
+      }
+      return nullptr;
+    }
+    return nullptr;
+  };
+
+  /// Helper: compute static partition count (product of sizes).
+  auto computeStaticPartitionCount = [](DbAllocOp alloc) -> int64_t {
+    int64_t count = 1;
+    for (Value sz : alloc.getSizes()) {
+      if (auto cst = getConstantIntValue(sz))
+        count *= *cst;
+      else
+        return -1;
+    }
+    return count;
+  };
+
+  /// Helper: check if a value is a DbRefOp result or a cast of one.
+  auto isDbRefCast = [](Operation *defOp) -> bool {
+    if (isa<DbRefOp>(defOp))
+      return true;
+    if (auto cast = dyn_cast<memref::CastOp>(defOp))
+      if (cast.getSource().getDefiningOp<DbRefOp>())
+        return true;
+    return false;
+  };
+
+  struct CpsDbInfo {
+    DbAllocOp alloc;
+    bool isGuid;
+  };
+
+  SmallVector<Value> scalarParams;
+  SmallVector<std::pair<Value, CpsDbInfo>> timingDbs;
+  SmallVector<std::pair<Value, CpsDbInfo>> dataGuids;
+  SmallVector<Value> dataPtrs;
+  SmallVector<EdtOp> allContinuations;
+
+  if (firstContinuation) {
+    outerEpoch.walk([&](EdtOp edt) {
+      if (edt->hasAttr(kCPSLoopContinuation))
+        allContinuations.push_back(edt);
+    });
+  }
+
+  DbAllocOp scratchAlloc;
+  Value scratchGuidScalar;
+  unsigned numTimingDbGuids = 0;
+  SmallVector<Value> depGuidValues; /// All dep GUID scalars for CPS-8 lookup.
+
+  if (firstContinuation && !loopBackParams.empty()) {
+    /// Step CPS-1: Classify loopBackParams.
+    for (Value v : loopBackParams) {
+      if (auto *defOp = v.getDefiningOp()) {
+        if (auto dbAlloc = dyn_cast<DbAllocOp>(defOp)) {
+          bool isGuid = (v == dbAlloc.getGuid());
+          int64_t partCount = computeStaticPartitionCount(dbAlloc);
+          if (partCount == 1) {
+            timingDbs.push_back({v, {dbAlloc, isGuid}});
+          } else {
+            if (isGuid)
+              dataGuids.push_back({v, {dbAlloc, isGuid}});
+            else
+              dataPtrs.push_back(v);
+          }
+          continue;
+        }
+        if (isDbRefCast(defOp)) {
+          timingDbs.push_back({v, {traceToDbAlloc(v), false}});
+          continue;
+        }
+      }
+      scalarParams.push_back(v);
+    }
+
+    bool hasDbHandles =
+        !timingDbs.empty() || !dataGuids.empty() || !dataPtrs.empty();
+
+    if (hasDbHandles) {
+      ARTS_INFO("CPS Chain: DB routing — "
+                << timingDbs.size() << " timing, " << dataGuids.size()
+                << " data GUID arrays, " << dataPtrs.size()
+                << " data PTR arrays (dropped), " << scalarParams.size()
+                << " scalars");
+
+      /// Step CPS-2: Create scratch DB for data GUIDs (before outer epoch).
+      OpBuilder preEpochBuilder(outerEpoch);
+      Value zero = preEpochBuilder.create<arith::ConstantIndexOp>(loc, 0);
+      Value one = preEpochBuilder.create<arith::ConstantIndexOp>(loc, 1);
+
+      if (!dataGuids.empty()) {
+        Value totalGuidSlots =
+            preEpochBuilder.create<arith::ConstantIndexOp>(loc, 0);
+
+        SmallVector<std::pair<Value, Value>> guidArrayLayout;
+        for (auto &[guidValue, info] : dataGuids) {
+          Value count =
+              preEpochBuilder.create<DbNumElementsOp>(loc, info.alloc);
+          guidArrayLayout.push_back({totalGuidSlots, count});
+          totalGuidSlots =
+              preEpochBuilder.create<arith::AddIOp>(loc, totalGuidSlots, count);
+        }
+
+        Value route = preEpochBuilder.create<arith::ConstantOp>(
+            loc, preEpochBuilder.getI32Type(),
+            preEpochBuilder.getI32IntegerAttr(0));
+
+        auto i64Type = preEpochBuilder.getI64Type();
+        auto scratchPtrType = MemRefType::get({ShapedType::kDynamic}, i64Type);
+        scratchAlloc = preEpochBuilder.create<DbAllocOp>(
+            loc, ArtsMode::inout, route, DbAllocType::heap, DbMode::write,
+            i64Type, scratchPtrType, SmallVector<Value>{one},
+            SmallVector<Value>{totalGuidSlots});
+
+        /// Step CPS-3: Populate scratch with GUIDs.
+        Value scratchView = preEpochBuilder.create<DbRefOp>(
+            loc, scratchAlloc.getPtr(), SmallVector<Value>{zero});
+
+        for (unsigned g = 0; g < dataGuids.size(); ++g) {
+          Value guidArray = dataGuids[g].first;
+          auto [offset, count] = guidArrayLayout[g];
+
+          auto loop = preEpochBuilder.create<scf::ForOp>(
+              loc, preEpochBuilder.create<arith::ConstantIndexOp>(loc, 0),
+              count, preEpochBuilder.create<arith::ConstantIndexOp>(loc, 1));
+          OpBuilder loopBody = OpBuilder::atBlockTerminator(loop.getBody());
+          Value i = loop.getInductionVar();
+          Value guid =
+              loopBody.create<memref::LoadOp>(loc, guidArray, ValueRange{i});
+          Value scratchIdx = loopBody.create<arith::AddIOp>(loc, offset, i);
+          loopBody.create<memref::StoreOp>(loc, guid, scratchView,
+                                           ValueRange{scratchIdx});
+        }
+
+        scratchGuidScalar = preEpochBuilder.create<memref::LoadOp>(
+            loc, scratchAlloc.getGuid(), ValueRange{zero});
+      }
+
+      /// Step CPS-7: Prepend dep GUIDs to loopBackParams. Keep ALL original
+      /// values — inner continuations still capture DB handles from paramv
+      /// for same-node access. The dep GUIDs are PREPENDED at the beginning
+      /// to match EdtLowering::packParams order, which puts i64 scalars
+      /// (classified as parameters) before dbHandles (memref DB alloc
+      /// results). EpochLowering finds them using the cps_dep_routing attr.
+      SmallVector<Value> depGuidPrefix;
+      if (scratchGuidScalar) {
+        depGuidPrefix.push_back(scratchGuidScalar);
+        depGuidValues.push_back(scratchGuidScalar);
+      }
+
+      /// Load timing DB GUIDs as i64 scalars.
+      for (auto &[ptrValue, info] : timingDbs) {
+        if (info.isGuid || !info.alloc)
+          continue;
+        Value guidScalar = preEpochBuilder.create<memref::LoadOp>(
+            loc, info.alloc.getGuid(), ValueRange{zero});
+        depGuidPrefix.push_back(guidScalar);
+        depGuidValues.push_back(guidScalar);
+        ++numTimingDbGuids;
+      }
+
+      /// Prepend: [dep GUIDs, original params...]
+      if (!depGuidPrefix.empty()) {
+        depGuidPrefix.append(loopBackParams.begin(), loopBackParams.end());
+        loopBackParams = std::move(depGuidPrefix);
+      }
+    }
+  }
+
+  /// Emit advance logic. When we have authoritative original-loop-derived
+  /// params (from firstContinuation), emit once. Otherwise fall back to
+  /// the stabilization loop.
   bool loopBackParamsStabilized = false;
-  for (unsigned iter = 0; iter < kMaxLoopBackIterations; ++iter) {
+  if (firstContinuation && !loopBackParams.empty()) {
     for (auto [advanceBlock, anchor] : advanceSites) {
       clearAdvanceSite(advanceBlock, anchor);
       OpBuilder advanceBuilder = OpBuilder::atBlockTerminator(advanceBlock);
       emitAdvanceLogic(advanceBuilder, loc, iv, lb, ub, step, body, slots,
                        sequentialOps, loopBackParams);
     }
+    loopBackParamsStabilized = true;
+  } else {
+    constexpr unsigned kMaxLoopBackIterations = 8;
+    for (unsigned iter = 0; iter < kMaxLoopBackIterations; ++iter) {
+      for (auto [advanceBlock, anchor] : advanceSites) {
+        clearAdvanceSite(advanceBlock, anchor);
+        OpBuilder advanceBuilder = OpBuilder::atBlockTerminator(advanceBlock);
+        emitAdvanceLogic(advanceBuilder, loc, iv, lb, ub, step, body, slots,
+                         sequentialOps, loopBackParams);
+      }
 
-    if (!firstContinuation)
-      break;
+      if (!firstContinuation)
+        break;
 
-    SmallVector<Value> updatedLoopBackParams =
-        collectCurrentEdtPackedUserValues(firstContinuation);
-    if (sameValueSequence(loopBackParams, updatedLoopBackParams)) {
-      loopBackParamsStabilized = true;
-      break;
+      SmallVector<Value> updatedLoopBackParams =
+          collectCurrentEdtPackedUserValues(firstContinuation);
+      if (sameValueSequence(loopBackParams, updatedLoopBackParams)) {
+        loopBackParamsStabilized = true;
+        break;
+      }
+      loopBackParams = std::move(updatedLoopBackParams);
     }
-    loopBackParams = std::move(updatedLoopBackParams);
   }
   if (!loopBackParamsStabilized && !advanceSites.empty())
     ARTS_WARN("CPS Chain: loop-back parameter contract reached iteration cap");
 
+  /// Step CPS-4/5/6: Wire deps and replace body captures AFTER
+  /// emitAdvanceLogic. emitAdvanceLogic clones epoch_0 into the
+  /// CPSAdvanceOp region, creating new references to outer-scope DB
+  /// handles. Running replacement after ensures ALL uses are caught.
+  bool hasDbHandles =
+      !timingDbs.empty() || !dataGuids.empty() || !dataPtrs.empty();
+  if (hasDbHandles && firstContinuation) {
+    /// Step CPS-4: Create deps for timing DBs + scratch.
+    OpBuilder preEpochBuilder(outerEpoch);
+    Value zero = preEpochBuilder.create<arith::ConstantIndexOp>(loc, 0);
+    Value one = preEpochBuilder.create<arith::ConstantIndexOp>(loc, 1);
+    SmallVector<Value> contDeps;
+
+    /// Timing DB deps (1-partition coarse).
+    for (auto &[ptrValue, info] : timingDbs) {
+      if (info.isGuid)
+        continue;
+      if (!info.alloc) {
+        ARTS_WARN("CPS Chain: timing DB has null alloc, skipping dep");
+        continue;
+      }
+      auto acq = preEpochBuilder.create<DbAcquireOp>(
+          loc, ArtsMode::inout, info.alloc.getGuid(), info.alloc.getPtr(),
+          info.alloc.getPtr().getType(),
+          /*partitionMode=*/std::nullopt,
+          /*indices=*/SmallVector<Value>{},
+          /*offsets=*/SmallVector<Value>{zero},
+          /*sizes=*/SmallVector<Value>{one});
+      contDeps.push_back(acq.getPtr());
+    }
+
+    /// Scratch DB dep.
+    if (scratchAlloc) {
+      auto scratchAcq = preEpochBuilder.create<DbAcquireOp>(
+          loc, ArtsMode::in, scratchAlloc.getGuid(), scratchAlloc.getPtr(),
+          scratchAlloc.getPtr().getType(),
+          /*partitionMode=*/std::nullopt,
+          /*indices=*/SmallVector<Value>{},
+          /*offsets=*/SmallVector<Value>{zero},
+          /*sizes=*/SmallVector<Value>{one});
+      contDeps.push_back(scratchAcq.getPtr());
+    }
+
+    /// Build dep index maps.
+    DenseMap<Value, unsigned> timingPtrToDepIdx;
+    unsigned depIdx = 0;
+    for (auto &[ptrValue, info] : timingDbs) {
+      if (info.isGuid)
+        continue;
+      timingPtrToDepIdx[ptrValue] = depIdx++;
+    }
+    unsigned scratchDepIdx = scratchAlloc ? depIdx : UINT_MAX;
+
+    /// GUID layout for body loading is now computed INSIDE the
+    /// continuation body (step CPS-6) to avoid creating outer-scope
+    /// captures that would inflate the carry params.
+
+    /// Re-collect continuations (advance logic may have restructured).
+    allContinuations.clear();
+    outerEpoch.walk([&](EdtOp edt) {
+      if (edt->hasAttr(kCPSLoopContinuation))
+        allContinuations.push_back(edt);
+    });
+
+    /// Only add deps to the outermost continuation (allContinuations[0]).
+    /// Inner continuations (nested inside the parent's epoch) capture the
+    /// original outer-scope DbAllocOp values through normal EdtLowering
+    /// outlining (classifyEdtUserValues → dbHandles → packParams → i64 in
+    /// paramv). This is safe because CPS continuations are intra-node: the
+    /// outermost continuation's deps ensure data arrives at the correct node,
+    /// and inner continuations run in the same node context.
+    {
+      /// Find the outermost continuation — the one directly inside the outer
+      /// epoch (not nested inside other EdtOps). Inner continuations capture
+      /// DB values through normal EdtLowering paramv transport.
+      EdtOp contEdt = nullptr;
+      for (EdtOp candidate : allContinuations) {
+        Operation *parentOp = candidate->getParentOp();
+        /// Walk up to find if this EDT is directly under an EpochOp (not
+        /// under another continuation EdtOp).
+        bool isOutermost = true;
+        while (parentOp && parentOp != outerEpoch.getOperation()) {
+          if (auto edtParent = dyn_cast<EdtOp>(parentOp)) {
+            if (edtParent->hasAttr(kCPSLoopContinuation)) {
+              isOutermost = false;
+              break;
+            }
+          }
+          parentOp = parentOp->getParentOp();
+        }
+        if (isOutermost) {
+          contEdt = candidate;
+          break;
+        }
+      }
+      if (!contEdt)
+        contEdt = allContinuations.back();
+      Block &contBlock = contEdt.getBody().front();
+
+      /// Add deps and corresponding block args.
+      for (Value dep : contDeps) {
+        contEdt.appendDependency(dep);
+        contBlock.addArgument(dep.getType(), loc);
+      }
+      auto chainId = contEdt->getAttrOfType<StringAttr>("arts.cps_chain_id");
+      ARTS_INFO("CPS Chain: Added "
+                << contDeps.size() << " deps to "
+                << (chainId ? chainId.getValue() : "unknown"));
+
+      unsigned numDeps = contDeps.size();
+      unsigned numBlockArgs = contBlock.getNumArguments();
+
+      /// Step CPS-6: Transform captures in the outermost continuation.
+      /// Replace ALL uses (including nested EdtOps) of timing DB values
+      /// with values reconstructed from dep block args. This ensures
+      /// inner EDTs capture locally-defined values (from chain_0's body)
+      /// rather than outer-scope DbAllocOp/DbRefOp results. EdtLowering's
+      /// cloneCaptured mechanism handles these body-defined values properly.
+      OpBuilder bodyBuilder(&contBlock, contBlock.begin());
+
+      /// Predicate: use is anywhere inside contEdt (including nested EDTs).
+      auto isAnyUseOf = [&](OpOperand &use) {
+        return contEdt->isAncestor(use.getOwner());
+      };
+
+      /// Predicate: use is directly inside contEdt's body (NOT inside
+      /// nested EdtOps). This prevents replacing captures that inner
+      /// EdtOps need to keep as original DbAllocOp references, which
+      /// EdtLowering handles via packParams/dbHandles classification.
+      auto isDirectUseOf = [&](OpOperand &use) {
+        Operation *owner = use.getOwner();
+        if (!contEdt->isAncestor(owner))
+          return false;
+        /// Walk up to find if the use is inside a nested EdtOp.
+        Operation *parent = owner->getParentOp();
+        while (parent && parent != contEdt.getOperation()) {
+          if (isa<EdtOp>(parent))
+            return false;
+          parent = parent->getParentOp();
+        }
+        return true;
+      };
+
+      /// Timing DBs: replace ALL uses of the ptr and any db_ref/cast
+      /// results with a db_ref reconstructed from the dep block arg.
+      DenseSet<Value> replacedAllocPtrs;
+      for (auto &[ptrValue, info] : timingDbs) {
+        if (info.isGuid)
+          continue;
+        auto it = timingPtrToDepIdx.find(ptrValue);
+        if (it == timingPtrToDepIdx.end())
+          continue;
+        unsigned argIdx = numBlockArgs - numDeps + it->second;
+        BlockArgument depArg = contBlock.getArgument(argIdx);
+
+        /// Replace the raw DB ptr (DbAllocOp.getPtr()) with dep arg.
+        if (info.alloc && !replacedAllocPtrs.count(info.alloc.getPtr())) {
+          info.alloc.getPtr().replaceUsesWithIf(depArg, isAnyUseOf);
+          replacedAllocPtrs.insert(info.alloc.getPtr());
+        }
+
+        /// If ptrValue is a db_ref or cast(db_ref) result (from
+        /// promoteAllocsForCPSChain), reconstruct it from the dep arg
+        /// so inner EDTs capture a body-local value.
+        if (ptrValue != (info.alloc ? info.alloc.getPtr() : Value())) {
+          bodyBuilder.setInsertionPoint(&contBlock, contBlock.begin());
+          Value czero = bodyBuilder.create<arith::ConstantIndexOp>(loc, 0);
+          Value dbView = bodyBuilder.create<DbRefOp>(loc, depArg,
+                                                     SmallVector<Value>{czero});
+          Value replacement = dbView;
+          if (replacement.getType() != ptrValue.getType())
+            replacement = bodyBuilder.create<memref::CastOp>(
+                loc, ptrValue.getType(), dbView);
+          ptrValue.replaceUsesWithIf(replacement, isAnyUseOf);
+        }
+      }
+
+      /// Timing DB guids: replace ALL uses with dummy allocas.
+      DenseSet<Value> replacedAllocGuids;
+      for (auto &[guidValue, info] : timingDbs) {
+        if (!info.isGuid)
+          continue;
+        auto memrefTy = dyn_cast<MemRefType>(guidValue.getType());
+        if (!memrefTy)
+          continue;
+        bodyBuilder.setInsertionPoint(&contBlock, contBlock.begin());
+        SmallVector<Value> dynSizes;
+        for (int64_t dim : memrefTy.getShape()) {
+          if (dim == ShapedType::kDynamic)
+            dynSizes.push_back(
+                bodyBuilder.create<arith::ConstantIndexOp>(loc, 1));
+        }
+        Value dummyGuid =
+            bodyBuilder.create<memref::AllocaOp>(loc, memrefTy, dynSizes);
+        guidValue.replaceUsesWithIf(dummyGuid, isAnyUseOf);
+        if (info.alloc && info.alloc.getGuid() != guidValue &&
+            !replacedAllocGuids.count(info.alloc.getGuid())) {
+          info.alloc.getGuid().replaceUsesWithIf(dummyGuid, isAnyUseOf);
+          replacedAllocGuids.insert(info.alloc.getGuid());
+        }
+      }
+
+      /// Data GUID arrays: load from scratch dep into local alloca.
+      /// Replace ALL uses so inner EDTs capture body-local values.
+      if (scratchAlloc && scratchDepIdx != UINT_MAX) {
+        unsigned scratchArgIdx = numBlockArgs - numDeps + scratchDepIdx;
+        BlockArgument scratchArg = contBlock.getArgument(scratchArgIdx);
+
+        bodyBuilder.setInsertionPoint(&contBlock, contBlock.begin());
+        auto i64MemrefTy =
+            MemRefType::get({ShapedType::kDynamic}, bodyBuilder.getI64Type());
+        Value czero = bodyBuilder.create<arith::ConstantIndexOp>(loc, 0);
+        Value scratchView = bodyBuilder.create<DbRefOp>(
+            loc, scratchArg, SmallVector<Value>{czero});
+
+        /// Compute GUID layout INSIDE the body to avoid outer captures.
+        Value runningOffset =
+            bodyBuilder.create<arith::ConstantIndexOp>(loc, 0);
+        SmallVector<std::pair<Value, Value>> guidLayoutForBody;
+        for (auto &[guidValue, info] : dataGuids) {
+          Value count = bodyBuilder.create<DbNumElementsOp>(loc, info.alloc);
+          guidLayoutForBody.push_back({runningOffset, count});
+          runningOffset =
+              bodyBuilder.create<arith::AddIOp>(loc, runningOffset, count);
+        }
+
+        for (unsigned g = 0; g < dataGuids.size(); ++g) {
+          Value origGuidArray = dataGuids[g].first;
+          auto [offset, count] = guidLayoutForBody[g];
+          auto origMemrefTy = dyn_cast<MemRefType>(origGuidArray.getType());
+          if (!origMemrefTy)
+            continue;
+
+          Value localGuids = bodyBuilder.create<memref::AllocaOp>(
+              loc, i64MemrefTy, ValueRange{count});
+
+          auto copyLoop = bodyBuilder.create<scf::ForOp>(
+              loc, bodyBuilder.create<arith::ConstantIndexOp>(loc, 0), count,
+              bodyBuilder.create<arith::ConstantIndexOp>(loc, 1));
+          OpBuilder copyBody = OpBuilder::atBlockTerminator(copyLoop.getBody());
+          Value ci2 = copyLoop.getInductionVar();
+          Value scratchIdx = copyBody.create<arith::AddIOp>(loc, offset, ci2);
+          Value guidVal = copyBody.create<memref::LoadOp>(
+              loc, scratchView, ValueRange{scratchIdx});
+          copyBody.create<memref::StoreOp>(loc, guidVal, localGuids,
+                                           ValueRange{ci2});
+
+          Value replacement = localGuids;
+          if (replacement.getType() != origMemrefTy)
+            replacement = bodyBuilder.create<memref::CastOp>(loc, origMemrefTy,
+                                                             localGuids);
+
+          origGuidArray.replaceUsesWithIf(replacement, isDirectUseOf);
+        }
+      }
+
+      /// Data PTR arrays: replace ALL uses with dummy allocas.
+      for (Value dataPtrVal : dataPtrs) {
+        auto memrefTy = dyn_cast<MemRefType>(dataPtrVal.getType());
+        if (!memrefTy)
+          continue;
+        bodyBuilder.setInsertionPoint(&contBlock, contBlock.begin());
+        /// Provide dynamic sizes for any dynamic dims in the memref type.
+        SmallVector<Value> dynSizes;
+        for (int64_t dim : memrefTy.getShape()) {
+          if (dim == ShapedType::kDynamic)
+            dynSizes.push_back(
+                bodyBuilder.create<arith::ConstantIndexOp>(loc, 1));
+        }
+        Value dummyPtr =
+            bodyBuilder.create<memref::AllocaOp>(loc, memrefTy, dynSizes);
+        dataPtrVal.replaceUsesWithIf(dummyPtr, isDirectUseOf);
+      }
+    }
+
+    ARTS_INFO("CPS Chain: DB routing complete — "
+              << contDeps.size() << " deps wired to " << allContinuations.size()
+              << " continuations");
+  }
+
+  /// Step CPS-8: Re-analyze chain_0's FINAL captures to rebuild carry
+  /// params in the EXACT order that EdtLowering will see. This eliminates
+  /// ordering mismatches between EpochOpt's initial classification and
+  /// EdtLowering's getUsedValuesDefinedAbove + classifyEdtUserValues.
+  if (firstContinuation && hasDbHandles) {
+    llvm::SetVector<Value> finalCaptures;
+    llvm::SetVector<Value> finalParams, finalConstants, finalDbHandles;
+    getUsedValuesDefinedAbove(firstContinuation.getRegion(), finalCaptures);
+    classifyEdtUserValues(finalCaptures.getArrayRef(), finalParams,
+                          finalConstants, finalDbHandles);
+
+    SmallVector<Value> reorderedCarry;
+    for (Value p : finalParams) {
+      if (auto *defOp = p.getDefiningOp())
+        if (defOp->getName().getStringRef() == "llvm.mlir.undef")
+          continue;
+      reorderedCarry.push_back(p);
+    }
+    reorderedCarry.append(finalDbHandles.begin(), finalDbHandles.end());
+
+    ARTS_INFO("CPS Chain: Re-analyzed chain_0 captures — "
+              << reorderedCarry.size() << " carry params ("
+              << finalParams.size() << " params, " << finalDbHandles.size()
+              << " dbHandles)");
+
+    /// Walk all CPSAdvanceOps and replace carry params with reordered list.
+    outerEpoch.walk([&](CPSAdvanceOp adv) {
+      auto numCarryAttr = adv->getAttrOfType<IntegerAttr>(CPSNumCarry);
+      if (!numCarryAttr)
+        return;
+      bool isAdditive = adv->hasAttr(CPSAdditiveParams);
+      unsigned paramStart = isAdditive ? 2 : 0;
+      SmallVector<Value> newNextParams;
+      /// Keep step+ub (or other prefix params).
+      auto oldParams = adv.getNextIterParams();
+      for (unsigned i = 0; i < paramStart && i < oldParams.size(); ++i)
+        newNextParams.push_back(oldParams[i]);
+      /// Use the reordered carry params.
+      newNextParams.append(reorderedCarry.begin(), reorderedCarry.end());
+
+      OpBuilder advBuilder(adv);
+      auto targetId = adv.getTargetChainIdAttr();
+      auto newAdv = advBuilder.create<CPSAdvanceOp>(adv.getLoc(), newNextParams,
+                                                    targetId);
+      /// Copy attributes (skip the built-in targetChainId).
+      for (auto attr : adv->getAttrs())
+        if (attr.getName() != "targetChainId")
+          newAdv->setAttr(attr.getName(), attr.getValue());
+      newAdv->setAttr(CPSNumCarry,
+                      advBuilder.getI64IntegerAttr(reorderedCarry.size()));
+
+      /// Move epoch body from old to new.
+      Region &oldRegion = adv.getEpochBody();
+      Region &newRegion = newAdv.getEpochBody();
+      if (!oldRegion.empty()) {
+        newRegion.takeBody(oldRegion);
+      }
+      adv.erase();
+    });
+
+    /// Update dep routing attribute on the new CPSAdvanceOps.
+    /// Format: [numTimingDbs, hasScratch, guidIdx0, guidIdx1, ...]
+    /// where guidIdx values are positions within the carry params
+    /// (after step+ub prefix). scratch guid index comes first if present,
+    /// then timing DB guid indices.
+    if (numTimingDbGuids > 0 || scratchAlloc) {
+      int64_t hasScratch = scratchAlloc ? 1 : 0;
+      SmallVector<int64_t> routingData = {(int64_t)numTimingDbGuids,
+                                          hasScratch};
+      /// Find each dep GUID's position in reorderedCarry.
+      for (Value dgv : depGuidValues) {
+        int64_t idx = -1;
+        for (unsigned i = 0; i < reorderedCarry.size(); ++i) {
+          if (reorderedCarry[i] == dgv) {
+            idx = i;
+            break;
+          }
+        }
+        routingData.push_back(idx);
+      }
+      outerEpoch.walk([&](CPSAdvanceOp adv) {
+        adv->setAttr(CPSDepRouting,
+                     DenseI64ArrayAttr::get(adv.getContext(), routingData));
+      });
+    }
+  }
+
   /// Step 4: Erase the original loop.
   forOp.erase();
+
+  /// Step CPS-9: Free scratch DB after the outer epoch.
+  if (scratchAlloc) {
+    OpBuilder afterEpoch(outerEpoch->getNextNode());
+    afterEpoch.create<DbFreeOp>(loc, scratchAlloc.getGuid());
+    afterEpoch.create<DbFreeOp>(loc, scratchAlloc.getPtr());
+  }
 
   ARTS_INFO("CPS Chain: Transformed " << N
                                       << "-epoch loop into continuation chain");

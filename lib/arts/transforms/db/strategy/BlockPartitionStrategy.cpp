@@ -13,9 +13,9 @@
 ///   H1.B6: Multi-node with block support -> block
 ///==========================================================================///
 
-#include "arts/transforms/db/PartitionStrategy.h"
 #include "arts/analysis/heuristics/HeuristicUtils.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
+#include "arts/transforms/db/PartitionStrategy.h"
 #include "arts/utils/Debug.h"
 
 ARTS_DEBUG_SETUP(block_partition_strategy)
@@ -120,8 +120,7 @@ public:
         /// H1.B3b: Read-only stencil with full-range acquires → Block
         ARTS_DEBUG("H1.B3b applied: RO stencil with full-range");
         return PartitioningDecision::block(
-            ctx,
-            "H1.B3b: Read-only cross-dim stencil prefers block for NUMA");
+            ctx, "H1.B3b: Read-only cross-dim stencil prefers block for NUMA");
       } else {
         /// Let StencilPartitionStrategy handle other stencil patterns
         ARTS_DEBUG("H1.B3 not matched - deferring to stencil strategy");

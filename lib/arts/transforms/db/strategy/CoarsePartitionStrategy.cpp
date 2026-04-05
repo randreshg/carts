@@ -12,9 +12,9 @@
 ///   H1.C5: Non-uniform access without partitioning support -> coarse
 ///==========================================================================///
 
-#include "arts/transforms/db/PartitionStrategy.h"
 #include "arts/analysis/heuristics/HeuristicUtils.h"
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
+#include "arts/transforms/db/PartitionStrategy.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 
@@ -109,9 +109,10 @@ public:
       }
       ARTS_DEBUG("H1.C3 applied: Read-only full-range acquires");
       return PartitioningDecision::coarse(
-          ctx, isSingleNode
-                   ? "H1.C3: Read-only full-range on single-node prefers coarse"
-                   : "H1.C3: Read-only full-range on multi-node prefers coarse");
+          ctx,
+          isSingleNode
+              ? "H1.C3: Read-only full-range on single-node prefers coarse"
+              : "H1.C3: Read-only full-range on multi-node prefers coarse");
     }
 
     /// H1.C4: Read-only stencil on single-node → Coarse

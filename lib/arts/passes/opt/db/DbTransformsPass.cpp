@@ -65,7 +65,7 @@ using namespace mlir::func;
 using namespace mlir::arts;
 
 static const AnalysisKind kDbTransforms_reads[] = {AnalysisKind::DbAnalysis,
-                                                    AnalysisKind::EdtAnalysis};
+                                                   AnalysisKind::EdtAnalysis};
 static const AnalysisKind kDbTransforms_invalidates[] = {
     AnalysisKind::DbAnalysis};
 [[maybe_unused]] static const AnalysisDependencyInfo kDbTransforms_deps = {

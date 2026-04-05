@@ -168,8 +168,7 @@ bool hasCompleteHaloState(const LoweringContractInfo &contract);
 
 /// Resolve the effective lowering contract for an acquire operation,
 /// combining pointer contract + alloc contract + semantic annotations.
-std::optional<LoweringContractInfo>
-resolveAcquireContract(DbAcquireOp acquire);
+std::optional<LoweringContractInfo> resolveAcquireContract(DbAcquireOp acquire);
 
 /// Check if an acquire should apply stencil halo extension to worker-local
 /// read slices. Returns true when mode=in and contract supports block halo.

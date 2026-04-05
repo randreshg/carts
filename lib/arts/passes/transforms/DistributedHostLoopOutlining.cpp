@@ -44,8 +44,8 @@ static const AnalysisKind kDistributedHostLoopOutlining_reads[] = {
     AnalysisKind::AbstractMachine, AnalysisKind::EdtHeuristics,
     AnalysisKind::LoopAnalysis, AnalysisKind::MetadataManager};
 [[maybe_unused]] static const AnalysisDependencyInfo
-    kDistributedHostLoopOutlining_deps = {
-        kDistributedHostLoopOutlining_reads, {}};
+    kDistributedHostLoopOutlining_deps = {kDistributedHostLoopOutlining_reads,
+                                          {}};
 
 namespace {
 

@@ -136,8 +136,7 @@ static void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   bool applyStencilHalo = shouldApplyStencilHalo(contract, acquire);
   auto haloMinOffsets = contract.getStaticMinOffsets();
   auto haloMaxOffsets = contract.getStaticMaxOffsets();
-  bool hasContractHalo =
-      applyStencilHalo || haloMinOffsets || haloMaxOffsets;
+  bool hasContractHalo = applyStencilHalo || haloMinOffsets || haloMaxOffsets;
   bool needsStructuralNormalization =
       rank > 1 || *mode == PartitionMode::stencil;
   if (!hasContractHalo && !needsStructuralNormalization)
@@ -827,6 +826,17 @@ Value EdtLoweringPass::packParams(Location loc, EdtEnvManager &envManager,
       appendIfMissing(partOff);
     for (Value partSize : dbAcquireOp.getPartitionSizes())
       appendIfMissing(partSize);
+
+    /// Also pack element sizes from the underlying DbAllocOp. These are needed
+    /// inside the outlined function to create DynLoadOp/DynStoreOp for
+    /// multi-dynamic-dim memref accesses via DbRefOp → Pointer2MemrefOp.
+    if (auto *rawAlloc =
+            DbUtils::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr())) {
+      if (auto alloc = dyn_cast<DbAllocOp>(rawAlloc)) {
+        for (Value elemSz : alloc.getElementSizes())
+          appendIfMissing(elemSz);
+      }
+    }
   }
 
   if (packValues.empty()) {
@@ -1160,9 +1170,11 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
 
     DbAllocOp allocForHint =
         dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(dep));
-    if (dbAcquireOp && !allocForHint)
-      allocForHint = dyn_cast<DbAllocOp>(
-          DbUtils::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()));
+    if (dbAcquireOp && !allocForHint) {
+      if (auto *rawAlloc =
+              DbUtils::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()))
+        allocForHint = dyn_cast<DbAllocOp>(rawAlloc);
+    }
 
     /// Extract acquire mode: Convert ArtsMode to DbMode enum
     ArtsMode artsMode = ArtsMode::inout;
@@ -1349,6 +1361,44 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         originalAcquire && originalAcquire.getPartitionMode() &&
         usesBlockLayout(*originalAcquire.getPartitionMode());
 
+    /// Get element sizes from the underlying DbAllocOp. These are the
+    /// dimensions within each partition (e.g. [N, 100] for a 2D array).
+    /// Needed for DynLoadOp/DynStoreOp when DbRefOp produces multi-dynamic-dim
+    /// memrefs.
+    SmallVector<Value> allocElementSizes;
+    if (auto *rawAlloc =
+            DbUtils::getUnderlyingDbAlloc(originalDeps[depIndex])) {
+      if (auto alloc = dyn_cast<DbAllocOp>(rawAlloc))
+        allocElementSizes.assign(alloc.getElementSizes().begin(),
+                                 alloc.getElementSizes().end());
+    }
+    /// Fallback for CPS continuations where the DB trace is broken:
+    /// scan the module for a DbAllocOp with matching inner memref element type.
+    if (allocElementSizes.empty()) {
+      auto depType = dyn_cast<MemRefType>(placeholder.getType());
+      if (depType) {
+        Type innerElemType;
+        if (auto innerMrt = dyn_cast<MemRefType>(depType.getElementType()))
+          innerElemType = innerMrt.getElementType();
+        if (innerElemType) {
+          if (auto moduleOp =
+                  placeholder.getDefiningOp()->getParentOfType<ModuleOp>()) {
+            moduleOp.walk([&](DbAllocOp alloc) {
+              if (!allocElementSizes.empty())
+                return WalkResult::interrupt();
+              if (alloc.getElementType() == innerElemType &&
+                  !alloc.getElementSizes().empty())
+                allocElementSizes.assign(alloc.getElementSizes().begin(),
+                                         alloc.getElementSizes().end());
+              return WalkResult::advance();
+            });
+          }
+        }
+      }
+    }
+    ARTS_DEBUG(" - allocElementSizes.size() = " << allocElementSizes.size()
+                                                << " for dep " << depIndex);
+
     /// Replace remaining uses of the dependency placeholder with the dependency
     bool isSingleElement = DbAnalysis::hasSingleSize(
         originalDeps[depIndex].getDefiningOp<DbAcquireOp>());
@@ -1475,7 +1525,50 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
                                            baseOffset, refIndices, depStrides);
         auto newMemref = AC->create<polygeist::Pointer2MemrefOp>(
             loc, dbRef.getType(), depGep.getPtr());
-        dbRef.getResult().replaceAllUsesWith(newMemref.getResult());
+
+        /// Rewrite memref.load/store users of DbRefOp to DynLoadOp/DynStoreOp
+        /// when the result type has multiple dynamic dims. Without this,
+        /// ConvertPolygeistToLLVM crashes because CLoadOpLowering cannot handle
+        /// multi-dynamic-dim memrefs via Pointer2MemrefOp.
+        auto resultType = dyn_cast<MemRefType>(dbRef.getType());
+        bool needsDynOps = false;
+        if (resultType && !allocElementSizes.empty()) {
+          unsigned numDynDims =
+              llvm::count_if(resultType.getShape(), [](int64_t d) {
+                return d == ShapedType::kDynamic;
+              });
+          needsDynOps = numDynDims > 1;
+        }
+
+        if (needsDynOps) {
+          SmallVector<Value> resolvedElemSizes =
+              resolveParam(allocElementSizes, dbRef.getLoc());
+          for (auto &use :
+               llvm::make_early_inc_range(dbRef.getResult().getUses())) {
+            Operation *userOp = use.getOwner();
+            AC->setInsertionPoint(userOp);
+            if (auto loadOp = dyn_cast<memref::LoadOp>(userOp)) {
+              SmallVector<Value> indices(loadOp.getIndices().begin(),
+                                         loadOp.getIndices().end());
+              auto dynLoad = AC->create<polygeist::DynLoadOp>(
+                  loadOp.getLoc(), loadOp.getResult().getType(), newMemref,
+                  indices, resolvedElemSizes);
+              loadOp.getResult().replaceAllUsesWith(dynLoad.getResult());
+              loadOp.erase();
+            } else if (auto storeOp = dyn_cast<memref::StoreOp>(userOp)) {
+              SmallVector<Value> indices(storeOp.getIndices().begin(),
+                                         storeOp.getIndices().end());
+              AC->create<polygeist::DynStoreOp>(
+                  storeOp.getLoc(), storeOp.getValueToStore(), newMemref,
+                  indices, resolvedElemSizes);
+              storeOp.erase();
+            } else {
+              use.set(newMemref.getResult());
+            }
+          }
+        } else {
+          dbRef.getResult().replaceAllUsesWith(newMemref.getResult());
+        }
         op->erase();
       } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
         AC->setInsertionPoint(op);

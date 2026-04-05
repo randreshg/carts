@@ -246,8 +246,9 @@ LogicalResult EdtOp::verify() {
         continue;
 
       if (llvm::is_contained(blockArgs, operand)) {
-        DbAcquireOp underlyingAcquire =
-            dyn_cast<DbAcquireOp>(DbUtils::getUnderlyingDb(operand));
+        DbAcquireOp underlyingAcquire;
+        if (auto *rawDb = DbUtils::getUnderlyingDb(operand))
+          underlyingAcquire = dyn_cast<DbAcquireOp>(rawDb);
         if (!underlyingAcquire) {
           op->emitOpError("EDT region uses block argument '")
               << operand << "' as a DbAcquire value.";
@@ -787,10 +788,10 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
                         SmallVector<Value> elementOffsets,
                         SmallVector<Value> elementSizes) {
   auto sourceDb = DbUtils::getUnderlyingDb(sourcePtr);
-  auto sourceDbAlloc =
-      dyn_cast<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(sourcePtr));
   assert(sourceDb && "Expected sourceDb");
-  assert(sourceDbAlloc && "Expected sourceDbAlloc");
+  auto *rawSourceDbAlloc = DbUtils::getUnderlyingDbAlloc(sourcePtr);
+  assert(rawSourceDbAlloc && "Expected sourceDbAlloc");
+  auto sourceDbAlloc = dyn_cast<DbAllocOp>(rawSourceDbAlloc);
 
   auto sourceSizes = DbUtils::getSizesFromDb(sourceDb);
   const uint64_t sourceRank = sourceSizes.size();
@@ -1207,9 +1208,9 @@ LogicalResult LoweringContractOp::verify() {
 
 void DbRefOp::build(OpBuilder &builder, OperationState &state, Value source,
                     ArrayRef<Value> indices) {
-  DbAllocOp dbAllocOp =
-      dyn_cast<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(source));
-  assert(dbAllocOp && "Expected dbAllocOp");
+  auto *rawDbAlloc = DbUtils::getUnderlyingDbAlloc(source);
+  assert(rawDbAlloc && "Expected dbAllocOp");
+  DbAllocOp dbAllocOp = dyn_cast<DbAllocOp>(rawDbAlloc);
   state.addTypes(dbAllocOp.getAllocatedElementType());
   state.addOperands(source);
   state.addOperands(indices);
@@ -1253,16 +1254,20 @@ LogicalResult DbRefOp::verify() {
 
   DbAllocOp dbAllocOp = nullptr;
   if (auto dbAcquire = dyn_cast<DbAcquireOp>(underlyingDbOp)) {
-    dbAllocOp = dyn_cast<DbAllocOp>(
-        DbUtils::getUnderlyingDbAlloc(dbAcquire.getSourcePtr()));
+    Operation *rawAlloc =
+        DbUtils::getUnderlyingDbAlloc(dbAcquire.getSourcePtr());
+    if (rawAlloc)
+      dbAllocOp = dyn_cast<DbAllocOp>(rawAlloc);
   } else
     dbAllocOp = dyn_cast<DbAllocOp>(underlyingDbOp);
 
   /// Verify output type
   auto resultType = cast<MemRefType>(getResult().getType());
-  if (resultType != dbAllocOp.getAllocatedElementType())
-    return emitOpError("result type must match source element type\n")
-           << *getOperation();
+  if (dbAllocOp) {
+    if (resultType != dbAllocOp.getAllocatedElementType())
+      return emitOpError("result type must match source element type\n")
+             << *getOperation();
+  }
   return success();
 }
 

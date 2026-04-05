@@ -842,11 +842,11 @@ private:
     SmallVector<Value> globalCoordValues;
     globalCoordValues.reserve(globalCoords.size());
     for (OpFoldResult coord : globalCoords)
-      globalCoordValues.push_back(getValueOrCreateConstantIndexOp(
-          AC->getBuilder(), loc, coord));
+      globalCoordValues.push_back(
+          getValueOrCreateConstantIndexOp(AC->getBuilder(), loc, coord));
 
-    return AC->computeLinearIndex(allocSizes.take_front(rank), globalCoordValues,
-                                  loc);
+    return AC->computeLinearIndex(allocSizes.take_front(rank),
+                                  globalCoordValues, loc);
   }
 
   std::optional<LoweringContractInfo>

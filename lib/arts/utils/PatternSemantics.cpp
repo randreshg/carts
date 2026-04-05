@@ -123,7 +123,8 @@ bool PatternSemantics::prefersStencilCoarsening(ArtsDepPattern pattern) {
   return isStencilFamily(pattern);
 }
 
-bool PatternSemantics::prefersStencilCoarsening(EdtDistributionPattern pattern) {
+bool PatternSemantics::prefersStencilCoarsening(
+    EdtDistributionPattern pattern) {
   /// Distribution-level stencil patterns also prefer strip coarsening.
   return pattern == EdtDistributionPattern::stencil;
 }

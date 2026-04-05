@@ -78,6 +78,12 @@ constexpr StringLiteral CPSAdditiveParams = "arts.cps_additive_params";
 constexpr StringLiteral CPSNumCarry = "arts.cps_num_carry";
 constexpr StringLiteral CPSLoopContinuation = "arts.cps_loop_continuation";
 constexpr StringLiteral CPSAdvanceHasIvArg = "arts.cps_advance_has_iv_arg";
+/// CPS dep routing: DenseI64ArrayAttr [numTimingDbs, hasScratch].
+/// Tells EpochLowering how many dep GUIDs are in loopBackParams and their
+/// layout: last (numTimingDbs + hasScratch) carry params are dep GUIDs,
+/// ordered as [scratchGuid?, timingGuid_0, ..., timingGuid_{T-1}].
+/// Dep slots: timing DBs occupy slots 0..T-1, scratch occupies slot T.
+constexpr StringLiteral CPSDepRouting = "arts.cps_dep_routing";
 
 /// Preserves compile-time DB outer extents on rehydrated handle values when
 /// outlining breaks the original DbAllocOp def-use chain.

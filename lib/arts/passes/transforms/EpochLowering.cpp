@@ -35,7 +35,6 @@
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -50,7 +49,6 @@
 
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
-#include "polygeist/Ops.h"
 ARTS_DEBUG_SETUP(epoch_lowering);
 
 #include "llvm/ADT/Statistic.h"
@@ -76,6 +74,7 @@ using AttrNames::Operation::ContinuationForEpoch;
 using AttrNames::Operation::CPSAdditiveParams;
 using AttrNames::Operation::CPSAdvanceHasIvArg;
 using AttrNames::Operation::CPSChainId;
+using AttrNames::Operation::CPSDepRouting;
 using AttrNames::Operation::CPSInitIter;
 using AttrNames::Operation::CPSIterCounterParamIdx;
 using AttrNames::Operation::CPSNumCarry;
@@ -615,16 +614,20 @@ void EpochLoweringPass::runOnOperation() {
     }
 
     auto materializeLoopBackParam = [&](Value value) -> Value {
-      auto memrefType = dyn_cast<MemRefType>(value.getType());
-      if (!memrefType)
+      if (!isa<MemRefType>(value.getType()))
         return value;
-
-      Value rawPtr = AC->create<polygeist::Memref2PointerOp>(
-          loc, LLVM::LLVMPointerType::get(AC->getContext()), value);
+      /// Convert memref DB handles to raw i64 for paramv transport.
+      Value rawPtr = AC->castToLLVMPtr(value, loc);
       return AC->create<LLVM::PtrToIntOp>(loc, AC->Int64, rawPtr);
     };
 
     bool hasCanonicalLoopBackContract = advanceOp->hasAttr(CPSNumCarry);
+
+    /// Build the self-recreation param pack using the canonical carry
+    /// params from CPSAdvanceOp. EpochOpt step CPS-8 ensures carry params
+    /// are in the EXACT same order as EdtLowering::packParams, so we can
+    /// use them directly. materializeLoopBackParam converts memref
+    /// dbHandles to raw i64, matching packParams' conversion.
     SmallVector<Value> canonicalLoopBackParams;
     if (auto numCarryAttr =
             advanceOp->getAttrOfType<IntegerAttr>(CPSNumCarry)) {
@@ -639,9 +642,6 @@ void EpochLoweringPass::runOnOperation() {
             materializeLoopBackParam(nextParams[paramStart + i]));
     }
 
-    /// Prefer the canonical loop-back parameter contract carried by
-    /// CPSAdvanceOp. Older IR that lacks the contract falls back to the
-    /// local permutation-based reconstruction.
     Value paramMemref;
     if (hasCanonicalLoopBackContract) {
       SmallVector<Value> newPackParams(canonicalLoopBackParams.begin(),
@@ -658,47 +658,9 @@ void EpochLoweringPass::runOnOperation() {
     } else if (localUnpack) {
       auto unpackResults = localUnpack.getResults();
       unsigned numUserParams = unpackResults.size();
-
-      /// Find the EdtCreateOp that created the current function to get
-      /// the permutation (how current function's params map to parent's).
-      SmallVector<int64_t> invPerm;
-      EdtCreateOp callerEdt = nullptr;
-      module.walk([&](EdtCreateOp edt) {
-        auto funcAttr =
-            edt->getAttrOfType<StringAttr>(AttrNames::Operation::OutlinedFunc);
-        if (funcAttr && funcAttr.getValue() == parentFunc.getName())
-          callerEdt = edt;
-      });
-      if (callerEdt) {
-        if (auto permAttr =
-                callerEdt->getAttrOfType<DenseI64ArrayAttr>(CPSParamPerm)) {
-          ArrayRef<int64_t> perm = permAttr.asArrayRef();
-          /// Compute inverse permutation: inv[perm[i]] = i.
-          invPerm.resize(numUserParams, -1);
-          for (unsigned i = 0; i < perm.size() && i < numUserParams; ++i) {
-            int64_t j = perm[i];
-            if (j >= 0 && static_cast<unsigned>(j) < numUserParams)
-              invPerm[j] = i;
-          }
-        }
-      }
-
       SmallVector<Value> newPackParams;
-      if (!invPerm.empty()) {
-        /// Apply inverse permutation: target param[j] = local param[inv[j]].
-        for (unsigned j = 0; j < numUserParams; ++j) {
-          int64_t srcIdx = invPerm[j];
-          if (srcIdx >= 0 && static_cast<unsigned>(srcIdx) < numUserParams)
-            newPackParams.push_back(unpackResults[srcIdx]);
-          else
-            newPackParams.push_back(unpackResults[j]);
-        }
-      } else {
-        for (unsigned i = 0; i < numUserParams; ++i)
-          newPackParams.push_back(unpackResults[i]);
-      }
-
-      /// Append iter counter and outer epoch GUID.
+      for (unsigned i = 0; i < numUserParams; ++i)
+        newPackParams.push_back(unpackResults[i]);
       newPackParams.push_back(tNext ? tNext : curIter);
       newPackParams.push_back(outerEpochGuid);
       auto packType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
@@ -724,6 +686,50 @@ void EpochLoweringPass::runOnOperation() {
     newContEdt->setAttr(ContinuationForEpoch, AC->getBuilder().getUnitAttr());
 
     Value newContGuid = newContEdt.getGuid();
+
+    /// Replicate non-control deps from the initial creation.
+    /// The dep GUIDs are at explicit indices in the carry params, recorded
+    /// by EpochOpt step CPS-8 in the routing attribute.
+    /// Format: [numTimingDbs, hasScratch, guidIdx0, guidIdx1, ...]
+    /// Dep slots: timing DBs at slots 0..T-1, scratch at slot T.
+    if (auto depRouting =
+            advanceOp->getAttrOfType<DenseI64ArrayAttr>(CPSDepRouting)) {
+      ArrayRef<int64_t> routing = depRouting.asArrayRef();
+      int64_t numTimingDbs = routing.size() > 0 ? routing[0] : 0;
+      int64_t hasScratch = routing.size() > 1 ? routing[1] : 0;
+      unsigned paramStart = (isAdditive && nextParams.size() >= 2) ? 2 : 0;
+      unsigned guidDataStart = 2; /// Index offsets start at routing[2].
+
+      /// Scratch DB → dep slot after all timing DBs (mode=read=1).
+      if (hasScratch && guidDataStart < routing.size()) {
+        int64_t carryIdx = routing[guidDataStart];
+        if (carryIdx >= 0 && paramStart + carryIdx < nextParams.size()) {
+          Value scratchGuid = nextParams[paramStart + carryIdx];
+          Value scratchSlot =
+              AC->createIntConstant(numTimingDbs, AC->Int32, loc);
+          Value modeRead = AC->createIntConstant(1, AC->Int32, loc);
+          AC->createRuntimeCall(
+              types::ARTSRTL_arts_add_dependence,
+              {scratchGuid, newContGuid, scratchSlot, modeRead}, loc);
+        }
+        ++guidDataStart;
+      }
+
+      /// Timing DBs → dep slots 0..T-1 (mode=write=2, i.e. inout).
+      for (int64_t t = 0; t < numTimingDbs; ++t) {
+        unsigned routingIdx = guidDataStart + t;
+        if (routingIdx >= routing.size())
+          break;
+        int64_t carryIdx = routing[routingIdx];
+        if (carryIdx < 0 || paramStart + carryIdx >= nextParams.size())
+          continue;
+        Value timingGuid = nextParams[paramStart + carryIdx];
+        Value slot = AC->createIntConstant(t, AC->Int32, loc);
+        Value modeWrite = AC->createIntConstant(2, AC->Int32, loc);
+        AC->createRuntimeCall(types::ARTSRTL_arts_add_dependence,
+                              {timingGuid, newContGuid, slot, modeWrite}, loc);
+      }
+    }
 
     /// Finish slot = depCount - 1.
     Value one = AC->createIntConstant(1, AC->Int32, loc);

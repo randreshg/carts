@@ -407,8 +407,8 @@ collectCanonicalPartialNDBlockPlanCandidate(
       if (!mergedByDim[physDim]) {
         mergedByDim[physDim] = candidate;
       } else {
-        mergedByDim[physDim] =
-            builder.create<arith::MinUIOp>(loc, mergedByDim[physDim], candidate);
+        mergedByDim[physDim] = builder.create<arith::MinUIOp>(
+            loc, mergedByDim[physDim], candidate);
       }
       ++supportCounts[physDim];
     }
@@ -484,7 +484,8 @@ static std::optional<DbBlockPlanResult> collectContractNDBlockPlanCandidate(
 
     SmallVector<unsigned> candidateDims;
     if (!info.partitionDims.empty()) {
-      candidateDims.assign(info.partitionDims.begin(), info.partitionDims.end());
+      candidateDims.assign(info.partitionDims.begin(),
+                           info.partitionDims.end());
     } else if (contract && !contract->spatial.ownerDims.empty()) {
       for (int64_t dim : contract->spatial.ownerDims) {
         if (dim >= 0)
@@ -493,18 +494,18 @@ static std::optional<DbBlockPlanResult> collectContractNDBlockPlanCandidate(
     }
 
     SmallVector<bool> seenDim(memrefRank, false);
-    candidateDims.erase(std::remove_if(candidateDims.begin(),
-                                       candidateDims.end(),
-                                       [&](unsigned dim) {
-                                         if (dim >= memrefRank ||
-                                             dim >= static_cast<unsigned>(
-                                                        staticShape->size()) ||
-                                             seenDim[dim])
-                                           return true;
-                                         seenDim[dim] = true;
-                                         return false;
-                                       }),
-                        candidateDims.end());
+    candidateDims.erase(
+        std::remove_if(candidateDims.begin(), candidateDims.end(),
+                       [&](unsigned dim) {
+                         if (dim >= memrefRank ||
+                             dim >=
+                                 static_cast<unsigned>(staticShape->size()) ||
+                             seenDim[dim])
+                           return true;
+                         seenDim[dim] = true;
+                         return false;
+                       }),
+        candidateDims.end());
     if (candidateDims.empty())
       continue;
 
