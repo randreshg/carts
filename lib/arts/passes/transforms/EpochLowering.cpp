@@ -91,6 +91,8 @@ struct EpochLoweringPass : public impl::EpochLoweringBase<EpochLoweringPass> {
   void runOnOperation() override;
 
 private:
+  LogicalResult compactContinuationParamAbi();
+
   /// State
   ModuleOp module;
   ArtsCodegen *AC = nullptr;
@@ -605,6 +607,7 @@ void EpochLoweringPass::runOnOperation() {
     }
 
     Value tNext;
+    Value continueCond;
     if (isAdditive && curIter && nextParams.size() >= 2) {
       Value step = nextParams[0];
       Value ub = nextParams[1];
@@ -613,11 +616,8 @@ void EpochLoweringPass::runOnOperation() {
       if (ub.getType() != curIter.getType())
         ub = AC->create<arith::IndexCastOp>(loc, curIter.getType(), ub);
       tNext = AC->create<arith::AddIOp>(loc, curIter, step);
-      Value cond =
+      continueCond =
           AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, tNext, ub);
-      auto ifOp = AC->create<scf::IfOp>(loc, cond, /*withElse=*/false);
-      Block &thenBlock = ifOp.getThenRegion().front();
-      AC->setInsertionPoint(thenBlock.getTerminator());
     }
 
     auto materializeLoopBackParam = [&](Value value) -> Value {
@@ -709,6 +709,31 @@ void EpochLoweringPass::runOnOperation() {
         canonicalValues[canonicalIdx] = canonicalLoopBackParams[i];
       }
 
+      SmallVector<Value> localCarryFallback(std::max<int64_t>(canonicalWidth, 0));
+      if (localUnpack) {
+        auto unpackedValues = localUnpack.getResults();
+        unsigned localCarryCount = unpackedValues.size();
+        if (localParamPermAttr)
+          localCarryCount =
+              std::min<unsigned>(localCarryCount, localParamPermAttr.size());
+        else if (localIterCounterIdxAttr)
+          localCarryCount = std::min<unsigned>(
+              localCarryCount, localIterCounterIdxAttr.getInt());
+        else if (localOuterEpochIdxAttr)
+          localCarryCount = std::min<unsigned>(
+              localCarryCount, localOuterEpochIdxAttr.getInt());
+
+        for (unsigned i = 0; i < localCarryCount; ++i) {
+          int64_t canonicalIdx = resolveCanonicalIndex(localPerm, i);
+          if (canonicalIdx < 0)
+            continue;
+          if (static_cast<size_t>(canonicalIdx) >= localCarryFallback.size())
+            localCarryFallback.resize(canonicalIdx + 1);
+          localCarryFallback[canonicalIdx] =
+              materializeLoopBackParam(unpackedValues[i]);
+        }
+      }
+
       Value zeroI64 = AC->createIntConstant(0, AC->Int64, loc);
       newPackParams.assign(totalPackSlots, zeroI64);
 
@@ -723,6 +748,12 @@ void EpochLoweringPass::runOnOperation() {
         }
         if (!targetParamPermAttr && slot < canonicalLoopBackParams.size()) {
           newPackParams[slot] = canonicalLoopBackParams[slot];
+          continue;
+        }
+        if (canonicalIdx >= 0 &&
+            static_cast<size_t>(canonicalIdx) < localCarryFallback.size() &&
+            localCarryFallback[canonicalIdx]) {
+          newPackParams[slot] = localCarryFallback[canonicalIdx];
           continue;
         }
         ++missingCarrySlots;
@@ -749,226 +780,318 @@ void EpochLoweringPass::runOnOperation() {
       return newPackParams;
     };
 
-    Value paramMemref;
-    SmallVector<Value> schemaPackParams = rebuildCpsPackToTargetSchema();
-    if (!schemaPackParams.empty()) {
-      auto packType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
-      paramMemref = AC->create<EdtParamPackOp>(loc, packType, schemaPackParams)
-                         .getMemref();
-    } else if (localUnpack) {
-      auto unpackResults = localUnpack.getResults();
-      SmallVector<Value> newPackParams;
-      newPackParams.reserve(unpackResults.size() + 2);
-      for (Value unpacked : unpackResults)
-        newPackParams.push_back(unpacked);
-      if (tNext)
-        newPackParams.push_back(tNext);
-      else if (curIter)
-        newPackParams.push_back(curIter);
-      if (outerEpochGuid)
-        newPackParams.push_back(outerEpochGuid);
-      auto packType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
-      paramMemref =
-          AC->create<EdtParamPackOp>(loc, packType, newPackParams).getMemref();
-    } else {
-      SmallVector<Value> packVals;
-      if (tNext)
-        packVals.push_back(tNext);
-      else if (curIter)
-        packVals.push_back(curIter);
-      if (outerEpochGuid)
-        packVals.push_back(outerEpochGuid);
-      auto packType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
-      paramMemref =
-          AC->create<EdtParamPackOp>(loc, packType, packVals).getMemref();
-    }
-
-    /// Create the self-referential EdtCreateOp, enrolled in the outer epoch.
-    auto newContEdt = AC->create<EdtCreateOp>(loc, paramMemref, localDepCount,
-                                              localRoute, outerEpochGuid);
-    setOutlinedFunc(newContEdt, outlinedFunc.getValue());
-    newContEdt->setAttr(ContinuationForEpoch, AC->getBuilder().getUnitAttr());
-    if (auto chainIdAttr = contEdtCreate->getAttrOfType<StringAttr>(CPSChainId))
-      newContEdt->setAttr(CPSChainId, chainIdAttr);
-    if (targetIterCounterIdxAttr)
-      newContEdt->setAttr(CPSIterCounterParamIdx, targetIterCounterIdxAttr);
-    if (targetOuterEpochIdxAttr)
-      newContEdt->setAttr(CPSOuterEpochParamIdx, targetOuterEpochIdxAttr);
-    if (targetParamPermAttr)
-      newContEdt->setAttr(CPSParamPerm, targetParamPermAttr);
-
-    Value newContGuid = newContEdt.getGuid();
-
-    auto emitWholeDbDep = [&](Value depGuid, unsigned slotIdx, int32_t mode,
-                              std::optional<int32_t> depFlags) {
-      if (!depGuid)
-        return;
-      depGuid = AC->ensureI64(depGuid, loc);
-      Value slot = AC->createIntConstant(slotIdx, AC->Int32, loc);
-      Value modeVal = AC->createIntConstant(mode, AC->Int32, loc);
-      ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
-      if (depFlags && *depFlags != 0) {
-        Value flagsVal = AC->createIntConstant(*depFlags, AC->Int32, loc);
-        RCB.callVoid(types::ARTSRTL_arts_add_dependence_ex,
-                     {depGuid, newContGuid, slot, modeVal, flagsVal});
+    auto emitContinuationEpoch = [&]() -> Value {
+      Value paramMemref;
+      SmallVector<Value> schemaPackParams = rebuildCpsPackToTargetSchema();
+      if (!schemaPackParams.empty()) {
+        auto packType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
+        paramMemref = AC->create<EdtParamPackOp>(loc, packType, schemaPackParams)
+                           .getMemref();
+      } else if (localUnpack) {
+        auto unpackResults = localUnpack.getResults();
+        SmallVector<Value> newPackParams;
+        newPackParams.reserve(unpackResults.size() + 2);
+        for (Value unpacked : unpackResults)
+          newPackParams.push_back(unpacked);
+        if (tNext)
+          newPackParams.push_back(tNext);
+        else if (curIter)
+          newPackParams.push_back(curIter);
+        if (outerEpochGuid)
+          newPackParams.push_back(outerEpochGuid);
+        auto packType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
+        paramMemref =
+            AC->create<EdtParamPackOp>(loc, packType, newPackParams).getMemref();
       } else {
-        RCB.callVoid(types::ARTSRTL_arts_add_dependence,
-                     {depGuid, newContGuid, slot, modeVal});
+        SmallVector<Value> packVals;
+        if (tNext)
+          packVals.push_back(tNext);
+        else if (curIter)
+          packVals.push_back(curIter);
+        if (outerEpochGuid)
+          packVals.push_back(outerEpochGuid);
+        auto packType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
+        paramMemref =
+            AC->create<EdtParamPackOp>(loc, packType, packVals).getMemref();
       }
-    };
 
-    auto findOriginalRecDep = [&](EdtCreateOp edt) -> RecordDepOp {
-      for (Operation *user : edt.getGuid().getUsers())
-        if (auto recordDep = dyn_cast<RecordDepOp>(user))
-          if (recordDep.getEdtGuid() == edt.getGuid())
-            return recordDep;
-      return nullptr;
-    };
+      auto newContEdt = AC->create<EdtCreateOp>(loc, paramMemref, localDepCount,
+                                                localRoute, outerEpochGuid);
+      setOutlinedFunc(newContEdt, outlinedFunc.getValue());
+      newContEdt->setAttr(ContinuationForEpoch, AC->getBuilder().getUnitAttr());
+      if (auto chainIdAttr =
+              contEdtCreate->getAttrOfType<StringAttr>(CPSChainId))
+        newContEdt->setAttr(CPSChainId, chainIdAttr);
+      if (targetIterCounterIdxAttr)
+        newContEdt->setAttr(CPSIterCounterParamIdx, targetIterCounterIdxAttr);
+      if (targetOuterEpochIdxAttr)
+        newContEdt->setAttr(CPSOuterEpochParamIdx, targetOuterEpochIdxAttr);
+      if (targetParamPermAttr)
+        newContEdt->setAttr(CPSParamPerm, targetParamPermAttr);
 
-    auto getLoopBackValueForPackIndex = [&](unsigned packIdx) -> Value {
-      if (packIdx < canonicalLoopBackParams.size())
-        return canonicalLoopBackParams[packIdx];
-      if (localUnpack && packIdx < localUnpack.getNumResults())
-        return localUnpack.getResult(packIdx);
-      return Value();
-    };
+      Value newContGuid = newContEdt.getGuid();
 
-    auto findPackIndexForSafeWholeDbDep =
-        [&](EdtParamPackOp packOp, Value depGuid) -> std::optional<unsigned> {
-      if (!packOp || !depGuid)
-        return std::nullopt;
-
-      SmallVector<std::pair<Value, Value>> candidateSources;
-      candidateSources.push_back({depGuid, Value()});
-
-      if (auto depAcquire = depGuid.getDefiningOp<DbAcquireOp>()) {
-        if (depAcquire.getSizes().size() == 1 &&
-            depAcquire.getOffsets().size() == 1) {
-          if (auto foldedSize =
-                  ValueAnalysis::tryFoldConstantIndex(depAcquire.getSizes()[0]);
-              foldedSize && *foldedSize == 1) {
-            candidateSources.push_back(
-                {depAcquire.getSourceGuid(), depAcquire.getOffsets()[0]});
-          }
+      auto emitWholeDbDep = [&](Value depGuid, unsigned slotIdx, int32_t mode,
+                                std::optional<int32_t> depFlags) {
+        if (!depGuid)
+          return;
+        depGuid = AC->ensureI64(depGuid, loc);
+        Value slot = AC->createIntConstant(slotIdx, AC->Int32, loc);
+        Value modeVal = AC->createIntConstant(mode, AC->Int32, loc);
+        ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
+        if (depFlags && *depFlags != 0) {
+          Value flagsVal = AC->createIntConstant(*depFlags, AC->Int32, loc);
+          RCB.callVoid(types::ARTSRTL_arts_add_dependence_ex,
+                       {depGuid, newContGuid, slot, modeVal, flagsVal});
+        } else {
+          RCB.callVoid(types::ARTSRTL_arts_add_dependence,
+                       {depGuid, newContGuid, slot, modeVal});
         }
-      }
-
-      auto sameIndex = [](Value lhs, Value rhs) {
-        return ValueAnalysis::stripNumericCasts(lhs) ==
-               ValueAnalysis::stripNumericCasts(rhs);
       };
 
-      for (auto [idx, operand] : llvm::enumerate(packOp.getOperands())) {
-        for (auto [sourceGuid, offset] : candidateSources) {
-          if (operand == sourceGuid && !offset)
-            return idx;
-          auto loadOp = operand.getDefiningOp<memref::LoadOp>();
-          if (!loadOp || loadOp.getIndices().size() != 1)
-            continue;
-          if (loadOp.getMemRef() != sourceGuid)
-            continue;
-          if (!offset) {
-            if (ValueAnalysis::isZeroConstant(
-                    ValueAnalysis::stripNumericCasts(loadOp.getIndices()[0])))
-              return idx;
-            continue;
+      auto emitForwardedDepSlot = [&](unsigned fromSlot, unsigned toSlot,
+                                      int32_t mode,
+                                      std::optional<int32_t> depFlags) {
+        if (!parentFunc || parentFunc.getNumArguments() <= 3)
+          return;
+        Value depv = parentFunc.getArgument(3);
+        Value fromSlotIdx = AC->createIndexConstant(fromSlot, loc);
+        SmallVector<Value> emptyArgs;
+        auto depGep = AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
+                                           fromSlotIdx, emptyArgs, emptyArgs);
+        Value guidPtr = depGep.getGuid();
+        Value depGuid = AC->create<LLVM::LoadOp>(loc, AC->Int64, guidPtr);
+        emitWholeDbDep(depGuid, toSlot, mode, depFlags);
+      };
+
+      auto findOriginalRecDep = [&](EdtCreateOp edt) -> RecordDepOp {
+        for (Operation *user : edt.getGuid().getUsers())
+          if (auto recordDep = dyn_cast<RecordDepOp>(user))
+            if (recordDep.getEdtGuid() == edt.getGuid())
+              return recordDep;
+        return nullptr;
+      };
+
+      auto getLoopBackValueForPackIndex = [&](unsigned packIdx) -> Value {
+        if (packIdx < canonicalLoopBackParams.size())
+          return canonicalLoopBackParams[packIdx];
+        if (localUnpack && packIdx < localUnpack.getNumResults())
+          return localUnpack.getResult(packIdx);
+        return Value();
+      };
+
+      auto findPackIndexForSafeWholeDbDep =
+          [&](EdtParamPackOp packOp, Value depGuid) -> std::optional<unsigned> {
+        if (!packOp || !depGuid)
+          return std::nullopt;
+
+        SmallVector<std::pair<Value, Value>> candidateSources;
+        candidateSources.push_back({depGuid, Value()});
+
+        if (auto depAcquire = depGuid.getDefiningOp<DbAcquireOp>()) {
+          if (depAcquire.getSizes().size() == 1 &&
+              depAcquire.getOffsets().size() == 1) {
+            if (auto foldedSize = ValueAnalysis::tryFoldConstantIndex(
+                    depAcquire.getSizes()[0]);
+                foldedSize && *foldedSize == 1) {
+              candidateSources.push_back(
+                  {depAcquire.getSourceGuid(), depAcquire.getOffsets()[0]});
+            }
           }
-          if (sameIndex(loadOp.getIndices()[0], offset))
-            return idx;
         }
-      }
 
-      return std::nullopt;
-    };
+        auto sameIndex = [](Value lhs, Value rhs) {
+          return ValueAnalysis::stripNumericCasts(lhs) ==
+                 ValueAnalysis::stripNumericCasts(rhs);
+        };
 
-    /// Replicate non-control deps from the initial creation.
-    /// The dep GUIDs are at explicit indices in the carry params, recorded
-    /// by EpochOpt step CPS-8 in the routing attribute.
-    /// Format: [numTimingDbs, hasScratch, guidIdx0, guidIdx1, ...]
-    /// Dep slots: timing DBs at slots 0..T-1, scratch at slot T.
-    if (auto depRouting =
-            advanceOp->getAttrOfType<DenseI64ArrayAttr>(CPSDepRouting)) {
-      ArrayRef<int64_t> routing = depRouting.asArrayRef();
-      int64_t numTimingDbs = routing.size() > 0 ? routing[0] : 0;
-      int64_t hasScratch = routing.size() > 1 ? routing[1] : 0;
-      unsigned paramStart = (isAdditive && nextParams.size() >= 2) ? 2 : 0;
-      unsigned guidDataStart = 2; /// Index offsets start at routing[2].
-
-      /// Scratch DB → dep slot after all timing DBs (mode=read=1).
-      if (hasScratch && guidDataStart < routing.size()) {
-        int64_t carryIdx = routing[guidDataStart];
-        if (carryIdx >= 0 && paramStart + carryIdx < nextParams.size()) {
-          Value scratchGuid = nextParams[paramStart + carryIdx];
-          Value scratchSlot =
-              AC->createIntConstant(numTimingDbs, AC->Int32, loc);
-          Value modeRead = AC->createIntConstant(1, AC->Int32, loc);
-          AC->createRuntimeCall(
-              types::ARTSRTL_arts_add_dependence,
-              {scratchGuid, newContGuid, scratchSlot, modeRead}, loc);
+        for (auto [idx, operand] : llvm::enumerate(packOp.getOperands())) {
+          for (auto [sourceGuid, offset] : candidateSources) {
+            if (operand == sourceGuid && !offset)
+              return idx;
+            auto loadOp = operand.getDefiningOp<memref::LoadOp>();
+            if (!loadOp || loadOp.getIndices().size() != 1)
+              continue;
+            if (loadOp.getMemRef() != sourceGuid)
+              continue;
+            if (!offset) {
+              if (ValueAnalysis::isZeroConstant(
+                      ValueAnalysis::stripNumericCasts(
+                          loadOp.getIndices()[0])))
+                return idx;
+              continue;
+            }
+            if (sameIndex(loadOp.getIndices()[0], offset))
+              return idx;
+          }
         }
-        ++guidDataStart;
-      }
 
-      /// Timing DBs → dep slots 0..T-1 (mode=write=2, i.e. inout).
-      for (int64_t t = 0; t < numTimingDbs; ++t) {
-        unsigned routingIdx = guidDataStart + t;
-        if (routingIdx >= routing.size())
-          break;
-        int64_t carryIdx = routing[routingIdx];
-        if (carryIdx < 0 || paramStart + carryIdx >= nextParams.size())
-          continue;
-        Value timingGuid = nextParams[paramStart + carryIdx];
-        Value slot = AC->createIntConstant(t, AC->Int32, loc);
-        Value modeWrite = AC->createIntConstant(2, AC->Int32, loc);
-        AC->createRuntimeCall(types::ARTSRTL_arts_add_dependence,
-                              {timingGuid, newContGuid, slot, modeWrite}, loc);
-      }
-    } else if (auto originalRecDep = findOriginalRecDep(contEdtCreate)) {
+        return std::nullopt;
+      };
+
+      auto originalRecDep = findOriginalRecDep(contEdtCreate);
       auto originalPack =
           contEdtCreate.getParamMemref().getDefiningOp<EdtParamPackOp>();
       ArrayRef<int32_t> acquireModes =
-          originalRecDep.getAcquireModes()
+          originalRecDep && originalRecDep.getAcquireModes()
               ? ArrayRef<int32_t>(*originalRecDep.getAcquireModes())
               : ArrayRef<int32_t>{};
       ArrayRef<int32_t> depFlags =
-          originalRecDep.getDepFlags()
+          originalRecDep && originalRecDep.getDepFlags()
               ? ArrayRef<int32_t>(*originalRecDep.getDepFlags())
               : ArrayRef<int32_t>{};
+      unsigned originalDepCount =
+          originalRecDep ? originalRecDep.getDatablocks().size() : 0;
+      SmallVector<bool> satisfiedOriginalDepSlots(originalDepCount, false);
 
-      bool hasExplicitSlices = !originalRecDep.getByteOffsets().empty() ||
-                               !originalRecDep.getByteSizes().empty();
-      bool hasGuardedDeps =
-          llvm::any_of(originalRecDep.getBoundsValids(), [](Value boundsValid) {
-            return boundsValid &&
-                   !ValueAnalysis::isOneConstant(
-                       ValueAnalysis::stripNumericCasts(boundsValid));
-          });
+      auto getOriginalDepMode = [&](unsigned depIdx) -> int32_t {
+        return depIdx < acquireModes.size() ? acquireModes[depIdx] : 2;
+      };
 
-      if (!hasExplicitSlices && !hasGuardedDeps && originalPack) {
-        for (auto [depIdx, depGuid] : llvm::enumerate(originalRecDep.getDatablocks())) {
+      auto getOriginalDepFlags =
+          [&](unsigned depIdx) -> std::optional<int32_t> {
+        if (depIdx < depFlags.size())
+          return depFlags[depIdx];
+        return std::nullopt;
+      };
+
+      auto resolveOriginalDepSlotForCarryIndex =
+          [&](int64_t carryIdx) -> std::optional<unsigned> {
+        if (carryIdx < 0 || !originalRecDep || !originalPack)
+          return std::nullopt;
+
+        for (auto [depIdx, depGuid] :
+             llvm::enumerate(originalRecDep.getDatablocks())) {
           auto packIdx = findPackIndexForSafeWholeDbDep(originalPack, depGuid);
           if (!packIdx)
             continue;
-          Value localDepGuid = getLoopBackValueForPackIndex(*packIdx);
-          if (!localDepGuid)
+          if (*packIdx == static_cast<unsigned>(carryIdx))
+            return depIdx;
+        }
+        return std::nullopt;
+      };
+
+      auto emitMappedCarryDep = [&](int64_t carryIdx, Value depGuid,
+                                    std::optional<unsigned> fallbackSlot,
+                                    int32_t fallbackMode,
+                                    std::optional<int32_t> fallbackFlags) {
+        if (!depGuid)
+          return;
+
+        if (auto mappedSlot = resolveOriginalDepSlotForCarryIndex(carryIdx)) {
+          emitWholeDbDep(depGuid, *mappedSlot, getOriginalDepMode(*mappedSlot),
+                         getOriginalDepFlags(*mappedSlot));
+          satisfiedOriginalDepSlots[*mappedSlot] = true;
+          return;
+        }
+
+        if (fallbackSlot) {
+          emitWholeDbDep(depGuid, *fallbackSlot, fallbackMode, fallbackFlags);
+          if (*fallbackSlot < satisfiedOriginalDepSlots.size())
+            satisfiedOriginalDepSlots[*fallbackSlot] = true;
+        }
+      };
+
+      if (auto depRouting =
+              advanceOp->getAttrOfType<DenseI64ArrayAttr>(CPSDepRouting)) {
+        ArrayRef<int64_t> routing = depRouting.asArrayRef();
+        int64_t numTimingDbs = routing.size() > 0 ? routing[0] : 0;
+        int64_t hasScratch = routing.size() > 1 ? routing[1] : 0;
+        unsigned paramStart = (isAdditive && nextParams.size() >= 2) ? 2 : 0;
+        unsigned guidDataStart = 2;
+
+        if (hasScratch && guidDataStart < routing.size()) {
+          int64_t carryIdx = routing[guidDataStart];
+          if (carryIdx >= 0 && paramStart + carryIdx < nextParams.size()) {
+            Value scratchGuid = nextParams[paramStart + carryIdx];
+            std::optional<unsigned> fallbackSlot = std::nullopt;
+            if (!originalRecDep)
+              fallbackSlot = static_cast<unsigned>(numTimingDbs);
+            emitMappedCarryDep(carryIdx, scratchGuid, fallbackSlot,
+                               /*fallbackMode=*/1,
+                               /*fallbackFlags=*/std::nullopt);
+          }
+          ++guidDataStart;
+        }
+
+        for (int64_t t = 0; t < numTimingDbs; ++t) {
+          unsigned routingIdx = guidDataStart + t;
+          if (routingIdx >= routing.size())
+            break;
+          int64_t carryIdx = routing[routingIdx];
+          if (carryIdx < 0 || paramStart + carryIdx >= nextParams.size())
             continue;
-          int32_t mode = depIdx < acquireModes.size() ? acquireModes[depIdx] : 2;
-          std::optional<int32_t> flags = std::nullopt;
-          if (depIdx < depFlags.size())
-            flags = depFlags[depIdx];
-          emitWholeDbDep(localDepGuid, depIdx, mode, flags);
+          Value timingGuid = nextParams[paramStart + carryIdx];
+          std::optional<unsigned> fallbackSlot = std::nullopt;
+          if (!originalRecDep)
+            fallbackSlot = static_cast<unsigned>(t);
+          emitMappedCarryDep(carryIdx, timingGuid, fallbackSlot,
+                             /*fallbackMode=*/2,
+                             /*fallbackFlags=*/std::nullopt);
+        }
+
+        if (originalRecDep) {
+          for (unsigned depIdx = 0; depIdx < originalDepCount; ++depIdx) {
+            if (satisfiedOriginalDepSlots[depIdx])
+              continue;
+            emitForwardedDepSlot(depIdx, depIdx, getOriginalDepMode(depIdx),
+                                 getOriginalDepFlags(depIdx));
+          }
+        }
+      } else if (auto originalRecDep = findOriginalRecDep(contEdtCreate)) {
+        bool hasExplicitSlices = !originalRecDep.getByteOffsets().empty() ||
+                                 !originalRecDep.getByteSizes().empty();
+        bool hasGuardedDeps = llvm::any_of(
+            originalRecDep.getBoundsValids(), [](Value boundsValid) {
+              return boundsValid &&
+                     !ValueAnalysis::isOneConstant(
+                         ValueAnalysis::stripNumericCasts(boundsValid));
+            });
+
+        if (!hasExplicitSlices && !hasGuardedDeps && originalPack) {
+          for (auto [depIdx, depGuid] :
+               llvm::enumerate(originalRecDep.getDatablocks())) {
+            auto packIdx = findPackIndexForSafeWholeDbDep(originalPack, depGuid);
+            if (!packIdx)
+              continue;
+            Value localDepGuid = getLoopBackValueForPackIndex(*packIdx);
+            if (!localDepGuid)
+              continue;
+            emitWholeDbDep(localDepGuid, depIdx, getOriginalDepMode(depIdx),
+                           getOriginalDepFlags(depIdx));
+          }
         }
       }
+
+      Value one = AC->createIntConstant(1, AC->Int32, loc);
+      Value finishSlot = AC->create<arith::SubIOp>(loc, localDepCount, one);
+      auto innerEpoch = AC->create<CreateEpochOp>(
+          loc, IntegerType::get(AC->getContext(), 64), newContGuid, finishSlot);
+      return innerEpoch.getEpochGuid();
+    };
+
+    Value epochGuid;
+    if (continueCond) {
+      auto ifOp = AC->create<scf::IfOp>(loc, TypeRange{outerEpochGuid.getType()},
+                                        continueCond, /*withElseRegion=*/true);
+      {
+        OpBuilder::InsertionGuard guard(AC->getBuilder());
+        Block &thenBlock = ifOp.getThenRegion().front();
+        AC->getBuilder().setInsertionPointToEnd(&thenBlock);
+        Value thenEpochGuid = emitContinuationEpoch();
+        AC->create<scf::YieldOp>(loc, thenEpochGuid);
+      }
+      {
+        OpBuilder::InsertionGuard guard(AC->getBuilder());
+        Block &elseBlock = ifOp.getElseRegion().front();
+        AC->getBuilder().setInsertionPointToEnd(&elseBlock);
+        AC->create<scf::YieldOp>(loc, outerEpochGuid);
+      }
+      epochGuid = ifOp.getResult(0);
+      AC->setInsertionPointAfter(ifOp);
+    } else {
+      epochGuid = emitContinuationEpoch();
     }
-
-    /// Finish slot = depCount - 1.
-    Value one = AC->createIntConstant(1, AC->Int32, loc);
-    Value finishSlot = AC->create<arith::SubIOp>(loc, localDepCount, one);
-
-    /// Create epoch with finish target pointing to the new continuation.
-    auto innerEpoch = AC->create<CreateEpochOp>(
-        loc, IntegerType::get(AC->getContext(), 64), newContGuid, finishSlot);
-    Value epochGuid = innerEpoch.getEpochGuid();
 
     /// If the advance region has a block argument serving as the IV
     /// placeholder (from wrappingIf support), replace it with the actual
@@ -996,7 +1119,12 @@ void EpochLoweringPass::runOnOperation() {
     for (Operation &op : advBody.without_terminator())
       workerOps.push_back(&op);
 
-    Operation *insertAfter = innerEpoch.getOperation();
+    Operation *insertAfter = epochGuid.getDefiningOp();
+    if (!insertAfter) {
+      advanceOp.emitError("CPS advance: expected epoch-guid producer");
+      signalPassFailure();
+      return;
+    }
     for (Operation *workerOp : workerOps) {
       workerOp->moveAfter(insertAfter);
       insertAfter = workerOp;
@@ -1030,9 +1158,204 @@ void EpochLoweringPass::runOnOperation() {
               << outlinedFunc.getValue());
   }
 
+  if (failed(compactContinuationParamAbi()))
+    return signalPassFailure();
+
   ARTS_INFO_FOOTER(EpochLoweringPass);
   AC = nullptr;
   ARTS_DEBUG_REGION(module.dump(););
+}
+
+LogicalResult EpochLoweringPass::compactContinuationParamAbi() {
+  DenseMap<StringRef, SmallVector<EdtCreateOp>> createsByFunc;
+  module.walk([&](EdtCreateOp edt) {
+    if (!edt->hasAttr(ContinuationForEpoch))
+      return;
+    auto funcAttr =
+        edt->getAttrOfType<StringAttr>(AttrNames::Operation::OutlinedFunc);
+    if (!funcAttr)
+      return;
+    createsByFunc[funcAttr.getValue()].push_back(edt);
+  });
+
+  for (auto &[funcName, creates] : createsByFunc) {
+    func::FuncOp func = module.lookupSymbol<func::FuncOp>(funcName);
+    if (!func)
+      continue;
+
+    EdtParamUnpackOp unpackOp = nullptr;
+    func.walk([&](EdtParamUnpackOp op) {
+      if (!unpackOp)
+        unpackOp = op;
+    });
+    if (!unpackOp)
+      continue;
+
+    Value paramMemref = unpackOp.getOperand();
+    unsigned unpackSlots = unpackOp.getNumResults();
+    unsigned totalSlots = unpackSlots;
+
+    auto updateTotalSlots = [&](unsigned idx) {
+      totalSlots = std::max<unsigned>(totalSlots, idx + 1);
+    };
+    for (EdtCreateOp edt : creates) {
+      if (auto attr = edt->getAttrOfType<IntegerAttr>(CPSIterCounterParamIdx))
+        updateTotalSlots(attr.getInt());
+      if (auto attr = edt->getAttrOfType<IntegerAttr>(CPSOuterEpochParamIdx))
+        updateTotalSlots(attr.getInt());
+      if (auto packOp = edt.getParamMemref().getDefiningOp<EdtParamPackOp>())
+        totalSlots = std::max<unsigned>(totalSlots, packOp->getNumOperands());
+    }
+
+    SmallVector<bool> keep(totalSlots, false);
+    for (auto [idx, result] : llvm::enumerate(unpackOp.getResults()))
+      if (!result.use_empty())
+        keep[idx] = true;
+
+    SmallVector<memref::LoadOp> directParamLoads;
+    func.walk([&](memref::LoadOp load) {
+      if (load.getMemRef() != paramMemref || load.getIndices().size() != 1)
+        return;
+      auto idxOp =
+          load.getIndices()[0].getDefiningOp<arith::ConstantIndexOp>();
+      if (!idxOp)
+        return;
+      unsigned idx = idxOp.value();
+      if (idx >= keep.size())
+        keep.resize(idx + 1, false);
+      updateTotalSlots(idx);
+      keep[idx] = true;
+      directParamLoads.push_back(load);
+    });
+
+    bool allLive = llvm::all_of(keep, [](bool live) { return live; });
+    if (allLive)
+      continue;
+
+    SmallVector<int64_t> oldToNew(totalSlots, -1);
+    SmallVector<unsigned> keptSlots;
+    for (unsigned oldIdx = 0; oldIdx < totalSlots; ++oldIdx) {
+      if (!keep[oldIdx])
+        continue;
+      oldToNew[oldIdx] = keptSlots.size();
+      keptSlots.push_back(oldIdx);
+    }
+    if (keptSlots.empty())
+      continue;
+
+    OpBuilder builder(func.getContext());
+
+    SmallVector<Type> liveTypes;
+    SmallVector<unsigned> keptUnpackSlots;
+    liveTypes.reserve(unpackSlots);
+    keptUnpackSlots.reserve(unpackSlots);
+    for (unsigned oldIdx = 0; oldIdx < unpackSlots; ++oldIdx) {
+      if (!keep[oldIdx])
+        continue;
+      keptUnpackSlots.push_back(oldIdx);
+      liveTypes.push_back(unpackOp.getResult(oldIdx).getType());
+    }
+
+    builder.setInsertionPoint(unpackOp);
+    auto newUnpack = builder.create<EdtParamUnpackOp>(unpackOp.getLoc(),
+                                                      liveTypes, paramMemref);
+    for (auto [newIdx, oldIdx] : llvm::enumerate(keptUnpackSlots))
+      unpackOp.getResult(oldIdx).replaceAllUsesWith(newUnpack.getResult(newIdx));
+    unpackOp.erase();
+
+    for (memref::LoadOp load : directParamLoads) {
+      if (!load || load->getBlock() == nullptr)
+        continue;
+      auto idxOp =
+          load.getIndices()[0].getDefiningOp<arith::ConstantIndexOp>();
+      if (!idxOp)
+        continue;
+      unsigned oldIdx = idxOp.value();
+      if (oldIdx >= oldToNew.size() || oldToNew[oldIdx] < 0)
+        continue;
+      unsigned newIdx = oldToNew[oldIdx];
+      if (newIdx == oldIdx)
+        continue;
+      builder.setInsertionPoint(load);
+      Value newIdxVal =
+          builder.create<arith::ConstantIndexOp>(load.getLoc(),
+                                                 static_cast<int64_t>(newIdx));
+      auto newLoad = builder.create<memref::LoadOp>(load.getLoc(), paramMemref,
+                                                    ValueRange{newIdxVal});
+      load.getResult().replaceAllUsesWith(newLoad.getResult());
+      load.erase();
+    }
+
+    auto getCarryCount = [&](EdtCreateOp edt) -> unsigned {
+      if (auto perm = edt->getAttrOfType<DenseI64ArrayAttr>(CPSParamPerm))
+        return perm.size();
+      if (auto iterAttr = edt->getAttrOfType<IntegerAttr>(CPSIterCounterParamIdx))
+        return iterAttr.getInt();
+      if (auto epochAttr =
+              edt->getAttrOfType<IntegerAttr>(CPSOuterEpochParamIdx))
+        return epochAttr.getInt();
+      return 0;
+    };
+
+    for (EdtCreateOp edt : creates) {
+      if (auto packOp = edt.getParamMemref().getDefiningOp<EdtParamPackOp>()) {
+        SmallVector<Value> operands;
+        operands.reserve(keptSlots.size());
+        for (unsigned oldIdx : keptSlots)
+          if (oldIdx < packOp->getNumOperands())
+            operands.push_back(packOp->getOperand(oldIdx));
+        builder.setInsertionPoint(packOp);
+        auto packType = MemRefType::get({ShapedType::kDynamic},
+                                        builder.getI64Type());
+        auto newPack = builder.create<EdtParamPackOp>(
+            packOp.getLoc(), packType, operands);
+        edt->setOperand(0, newPack.getMemref());
+        if (packOp->use_empty())
+          packOp.erase();
+      }
+
+      if (auto iterAttr = edt->getAttrOfType<IntegerAttr>(CPSIterCounterParamIdx)) {
+        int64_t oldIdx = iterAttr.getInt();
+        if (oldIdx >= 0 && static_cast<size_t>(oldIdx) < oldToNew.size() &&
+            oldToNew[oldIdx] >= 0) {
+          edt->setAttr(CPSIterCounterParamIdx,
+                       builder.getI64IntegerAttr(oldToNew[oldIdx]));
+        }
+      }
+      if (auto epochAttr =
+              edt->getAttrOfType<IntegerAttr>(CPSOuterEpochParamIdx)) {
+        int64_t oldIdx = epochAttr.getInt();
+        if (oldIdx >= 0 && static_cast<size_t>(oldIdx) < oldToNew.size() &&
+            oldToNew[oldIdx] >= 0) {
+          edt->setAttr(CPSOuterEpochParamIdx,
+                       builder.getI64IntegerAttr(oldToNew[oldIdx]));
+        }
+      }
+
+      unsigned oldCarryCount = getCarryCount(edt);
+      SmallVector<int64_t> newPerm;
+      if (auto permAttr = edt->getAttrOfType<DenseI64ArrayAttr>(CPSParamPerm)) {
+        auto perm = permAttr.asArrayRef();
+        for (unsigned oldSlot = 0;
+             oldSlot < oldCarryCount && oldSlot < keep.size() &&
+             oldSlot < perm.size();
+             ++oldSlot) {
+          if (keep[oldSlot])
+            newPerm.push_back(perm[oldSlot]);
+        }
+      } else {
+        for (unsigned oldSlot = 0;
+             oldSlot < oldCarryCount && oldSlot < keep.size(); ++oldSlot) {
+          if (keep[oldSlot])
+            newPerm.push_back(oldSlot);
+        }
+      }
+      if (!newPerm.empty())
+        edt->setAttr(CPSParamPerm, builder.getDenseI64ArrayAttr(newPerm));
+    }
+  }
+
+  return success();
 }
 
 ///===----------------------------------------------------------------------===///

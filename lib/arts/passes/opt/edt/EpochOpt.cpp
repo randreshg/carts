@@ -78,6 +78,8 @@ struct EpochNarrowingCounts {
 /// Shared Utilities
 ///===----------------------------------------------------------------------===///
 
+static bool hasCpsExcludedDepPattern(scf::ForOp forOp);
+
 /// Attribute names for continuation metadata.
 constexpr llvm::StringLiteral kHasControlDep = "arts.has_control_dep";
 using AttrNames::Operation::ContinuationForEpoch;
@@ -765,6 +767,11 @@ transformToContinuation(EpochOp epochOp,
 /// an asynchronous continuation chain using finish-EDT signaling.
 static bool tryCPSLoopTransform(scf::ForOp forOp,
                                 const EpochAnalysis &epochAnalysis) {
+  if (hasCpsExcludedDepPattern(forOp)) {
+    ARTS_INFO("CPS: skipping loop with specialized dep pattern");
+    return false;
+  }
+
   EpochLoopDriverDecision decision = epochAnalysis.evaluateCPSLoopDriver(forOp);
   if (!decision.eligible) {
     ARTS_DEBUG("CPS: " << decision.rationale << ", skipping");
@@ -989,6 +996,30 @@ static void cloneNonSlotArith(OpBuilder &builder, Block &body,
 static void ensureYieldTerminator(Block &block, Location loc) {
   if (block.empty() || !block.back().hasTrait<OpTrait::IsTerminator>())
     OpBuilder::atBlockEnd(&block).create<YieldOp>(loc);
+}
+
+static bool hasCpsExcludedDepPattern(scf::ForOp forOp) {
+  auto matchesExcludedPattern = [](Operation *op) {
+    auto pattern = getEffectiveDepPattern(op);
+    return pattern &&
+           (*pattern == ArtsDepPattern::jacobi_alternating_buffers ||
+            *pattern == ArtsDepPattern::wavefront_2d);
+  };
+
+  if (!forOp)
+    return false;
+  if (matchesExcludedPattern(forOp.getOperation()))
+    return true;
+
+  bool found = false;
+  forOp.walk([&](Operation *inner) {
+    if (matchesExcludedPattern(inner)) {
+      found = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return found;
 }
 
 /// Emit the CPS advance logic for the last continuation: check loop bounds
@@ -1227,6 +1258,11 @@ static void promoteAllocsForCPSChain(scf::ForOp forOp,
 /// appears after epoch_i in the same block, as required by EpochLowering.
 static bool tryCPSChainTransform(scf::ForOp forOp,
                                  const EpochAnalysis &epochAnalysis) {
+  if (hasCpsExcludedDepPattern(forOp)) {
+    ARTS_INFO("CPS Chain: skipping loop with specialized dep pattern");
+    return false;
+  }
+
   EpochChainDecision chainDecision = epochAnalysis.evaluateCPSChain(forOp);
   if (!chainDecision.eligible) {
     ARTS_DEBUG("CPS Chain: " << chainDecision.rationale << ", skipping");
@@ -1551,7 +1587,7 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
   SmallVector<Value> scalarParams;
   SmallVector<std::pair<Value, CpsDbInfo>> timingDbs;
   SmallVector<std::pair<Value, CpsDbInfo>> dataGuids;
-  SmallVector<Value> dataPtrs;
+  SmallVector<std::pair<Value, CpsDbInfo>> dataPtrs;
   SmallVector<EdtOp> allContinuations;
 
   if (firstContinuation) {
@@ -1579,7 +1615,7 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
             if (isGuid)
               dataGuids.push_back({v, {dbAlloc, isGuid}});
             else
-              dataPtrs.push_back(v);
+              dataPtrs.push_back({v, {dbAlloc, isGuid}});
           }
           continue;
         }
@@ -1590,6 +1626,12 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
       }
       scalarParams.push_back(v);
     }
+
+    /// CPS loop-back carries may only contain scalar state plus GUID-safe
+    /// dep-routing values. Multi-partition DB handle families are rebuilt
+    /// inside each continuation from routed deps/scratch, never transported
+    /// through paramv as raw pointers.
+    loopBackParams.assign(scalarParams.begin(), scalarParams.end());
 
     bool hasDbHandles =
         !timingDbs.empty() || !dataGuids.empty() || !dataPtrs.empty();
@@ -1654,12 +1696,7 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
             loc, scratchAlloc.getGuid(), ValueRange{zero});
       }
 
-      /// Step CPS-7: Prepend dep GUIDs to loopBackParams. Keep ALL original
-      /// values — inner continuations still capture DB handles from paramv
-      /// for same-node access. The dep GUIDs are PREPENDED at the beginning
-      /// to match EdtLowering::packParams order, which puts i64 scalars
-      /// (classified as parameters) before dbHandles (memref DB alloc
-      /// results). EpochLowering finds them using the cps_dep_routing attr.
+      /// Step CPS-7: Prepend dep GUIDs to the scalar carry state.
       SmallVector<Value> depGuidPrefix;
       if (scratchGuidScalar) {
         depGuidPrefix.push_back(scratchGuidScalar);
@@ -1677,7 +1714,6 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
         ++numTimingDbGuids;
       }
 
-      /// Prepend: [dep GUIDs, original params...]
       if (!depGuidPrefix.empty()) {
         depGuidPrefix.append(loopBackParams.begin(), loopBackParams.end());
         loopBackParams = std::move(depGuidPrefix);
@@ -1734,6 +1770,20 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
     Value zero = preEpochBuilder.create<arith::ConstantIndexOp>(loc, 0);
     Value one = preEpochBuilder.create<arith::ConstantIndexOp>(loc, 1);
     SmallVector<Value> contDeps;
+    Value scratchDepGuid;
+    DenseSet<Operation *> releasedDbRoots;
+
+    auto emitEarlyRelease = [&](Value dbPtr) {
+      Operation *underlyingDb = DbUtils::getUnderlyingDb(dbPtr);
+      if (!underlyingDb || !releasedDbRoots.insert(underlyingDb).second)
+        return;
+      preEpochBuilder.create<DbReleaseOp>(loc, dbPtr);
+    };
+
+    for (auto &[guidValue, info] : dataGuids) {
+      if (info.alloc)
+        emitEarlyRelease(info.alloc.getPtr());
+    }
 
     /// Timing DB deps (1-partition coarse).
     for (auto &[ptrValue, info] : timingDbs) {
@@ -1743,6 +1793,7 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
         ARTS_WARN("CPS Chain: timing DB has null alloc, skipping dep");
         continue;
       }
+      emitEarlyRelease(info.alloc.getPtr());
       auto acq = preEpochBuilder.create<DbAcquireOp>(
           loc, ArtsMode::inout, info.alloc.getGuid(), info.alloc.getPtr(),
           info.alloc.getPtr().getType(),
@@ -1753,8 +1804,29 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
       contDeps.push_back(acq.getPtr());
     }
 
+    /// Stable multi-partition ptr families are loop-invariant metadata.
+    /// Route them through continuation deps instead of raw param captures.
+    DenseSet<Value> routedDataPtrRoots;
+    for (auto &[ptrValue, info] : dataPtrs) {
+      if (!info.alloc)
+        continue;
+      Value allocPtr = info.alloc.getPtr();
+      if (!allocPtr || !routedDataPtrRoots.insert(allocPtr).second)
+        continue;
+      emitEarlyRelease(allocPtr);
+      auto acq = preEpochBuilder.create<DbAcquireOp>(
+          loc, ArtsMode::in, info.alloc.getGuid(), allocPtr,
+          allocPtr.getType(),
+          /*partitionMode=*/std::nullopt,
+          /*indices=*/SmallVector<Value>{},
+          /*offsets=*/SmallVector<Value>{zero},
+          /*sizes=*/SmallVector<Value>{one});
+      contDeps.push_back(acq.getPtr());
+    }
+
     /// Scratch DB dep.
     if (scratchAlloc) {
+      emitEarlyRelease(scratchAlloc.getPtr());
       auto scratchAcq = preEpochBuilder.create<DbAcquireOp>(
           loc, ArtsMode::in, scratchAlloc.getGuid(), scratchAlloc.getPtr(),
           scratchAlloc.getPtr().getType(),
@@ -1762,16 +1834,26 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
           /*indices=*/SmallVector<Value>{},
           /*offsets=*/SmallVector<Value>{zero},
           /*sizes=*/SmallVector<Value>{one});
+      scratchDepGuid = scratchAcq.getGuid();
       contDeps.push_back(scratchAcq.getPtr());
     }
 
     /// Build dep index maps.
     DenseMap<Value, unsigned> timingPtrToDepIdx;
+    DenseMap<Value, unsigned> dataPtrToDepIdx;
     unsigned depIdx = 0;
     for (auto &[ptrValue, info] : timingDbs) {
       if (info.isGuid)
         continue;
       timingPtrToDepIdx[ptrValue] = depIdx++;
+    }
+    for (auto &[ptrValue, info] : dataPtrs) {
+      if (!info.alloc)
+        continue;
+      Value allocPtr = info.alloc.getPtr();
+      if (!allocPtr || dataPtrToDepIdx.contains(allocPtr))
+        continue;
+      dataPtrToDepIdx[allocPtr] = depIdx++;
     }
     unsigned scratchDepIdx = scratchAlloc ? depIdx : UINT_MAX;
 
@@ -1855,6 +1937,33 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
         }
       }
 
+      /// Stable multi-partition ptr families: rewrite continuation-local uses
+      /// to the routed dep block-arg so they stop inflating CPS param packs.
+      DenseSet<Value> replacedDataPtrRoots;
+      for (auto &[ptrValue, info] : dataPtrs) {
+        if (!info.alloc)
+          continue;
+        Value allocPtr = info.alloc.getPtr();
+        auto it = dataPtrToDepIdx.find(allocPtr);
+        if (!allocPtr || it == dataPtrToDepIdx.end())
+          continue;
+        unsigned argIdx = numBlockArgs - numDeps + it->second;
+        BlockArgument depArg = contBlock.getArgument(argIdx);
+
+        if (!replacedDataPtrRoots.count(allocPtr)) {
+          allocPtr.replaceUsesWithIf(depArg, isWithinContinuationScope);
+          replacedDataPtrRoots.insert(allocPtr);
+        }
+
+        if (ptrValue != allocPtr) {
+          Value replacement = depArg;
+          if (replacement.getType() != ptrValue.getType())
+            replacement = bodyBuilder.create<memref::CastOp>(
+                loc, ptrValue.getType(), depArg);
+          ptrValue.replaceUsesWithIf(replacement, isWithinContinuationScope);
+        }
+      }
+
       /// Timing DB GUIDs are compile-time handle scaffolding only.
       DenseSet<Value> replacedAllocGuids;
       for (auto &[guidValue, info] : timingDbs) {
@@ -1889,10 +1998,39 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
         bodyBuilder.setInsertionPoint(&contBlock, contBlock.begin());
         auto i64MemrefTy =
             MemRefType::get({ShapedType::kDynamic}, bodyBuilder.getI64Type());
-        Value czero = bodyBuilder.create<arith::ConstantIndexOp>(loc, 0);
-        Value scratchView = bodyBuilder.create<DbRefOp>(
-            loc, scratchArg, SmallVector<Value>{czero});
+        auto adaptScratchReplacement =
+            [&](Value replacement, Type targetType) -> Value {
+          if (!replacement || replacement.getType() == targetType)
+            return replacement;
+          return bodyBuilder.create<memref::CastOp>(loc, targetType,
+                                                    replacement)
+              .getResult();
+            };
 
+        if (scratchDepGuid) {
+          Value replacement =
+              adaptScratchReplacement(scratchArg, scratchDepGuid.getType());
+          scratchDepGuid.replaceUsesWithIf(replacement,
+                                           isWithinContinuationScope);
+        }
+
+        Value scratchView = scratchArg;
+        if (scratchView.getType() != i64MemrefTy)
+          scratchView =
+              bodyBuilder.create<memref::CastOp>(loc, i64MemrefTy, scratchArg);
+
+        DenseMap<Value, Value> rebuiltGuidArrays;
+        auto resolveRootAllocIdForValue = [&](Value original,
+                                              DbAllocOp fallbackAlloc) {
+          if (fallbackAlloc)
+            return getArtsId(fallbackAlloc);
+          if (auto *rootOp = DbUtils::getUnderlyingDbAlloc(original))
+            if (auto rootAlloc = dyn_cast<DbAllocOp>(rootOp))
+              return getArtsId(rootAlloc);
+          if (auto rootId = getDbRootAllocId(original))
+            return *rootId;
+          return int64_t{0};
+        };
         Value runningOffset =
             bodyBuilder.create<arith::ConstantIndexOp>(loc, 0);
         SmallVector<std::pair<Value, Value>> guidLayoutForBody;
@@ -1905,13 +2043,19 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
 
         for (unsigned g = 0; g < dataGuids.size(); ++g) {
           Value origGuidArray = dataGuids[g].first;
+          auto &guidInfo = dataGuids[g].second;
           auto [offset, count] = guidLayoutForBody[g];
           auto origMemrefTy = dyn_cast<MemRefType>(origGuidArray.getType());
           if (!origMemrefTy)
             continue;
 
-          Value localGuids = bodyBuilder.create<memref::AllocaOp>(
-              loc, i64MemrefTy, ValueRange{count});
+          Value localGuids =
+              bodyBuilder.create<memref::AllocOp>(loc, i64MemrefTy,
+                                                  ValueRange{count});
+          if (int64_t allocId =
+                  resolveRootAllocIdForValue(origGuidArray, guidInfo.alloc);
+              allocId > 0)
+            setDbRootAllocId(localGuids.getDefiningOp(), allocId);
 
           auto copyLoop = bodyBuilder.create<scf::ForOp>(
               loc, bodyBuilder.create<arith::ConstantIndexOp>(loc, 0), count,
@@ -1925,19 +2069,31 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
                                            ValueRange{ci2});
 
           Value replacement = localGuids;
-          if (replacement.getType() != origMemrefTy)
-            replacement = bodyBuilder.create<memref::CastOp>(loc, origMemrefTy,
-                                                             localGuids);
+          if (replacement.getType() != origMemrefTy) {
+            auto castOp =
+                bodyBuilder.create<memref::CastOp>(loc, origMemrefTy, localGuids);
+            if (int64_t allocId =
+                    resolveRootAllocIdForValue(origGuidArray, guidInfo.alloc);
+                allocId > 0)
+              setDbRootAllocId(castOp.getOperation(), allocId);
+            replacement = castOp.getResult();
+          }
 
+          if (guidInfo.alloc)
+            rebuiltGuidArrays[guidInfo.alloc.getGuid()] = replacement;
+
+          if (guidInfo.alloc)
+            guidInfo.alloc.getGuid().replaceUsesWithIf(
+                replacement, isWithinContinuationScope);
           origGuidArray.replaceUsesWithIf(replacement,
                                           isWithinContinuationScope);
         }
-      }
 
-      /// Keep multi-partition ptr-array handles intact. Pre-lowering still
-      /// needs the original DbAllocOp trace on the source ptr operand to
-      /// validate/rewrite DbAcquireOps into dep-backed acquires. Runtime
-      /// transport correctness comes from the routed GUID/scratch state.
+        /// Keep original multi-partition ptr-array handles intact. Child
+        /// DbAcquireOp sourcePtr operands must retain a real DB-backed trace
+        /// through the original DbAllocOp; rebuilding them into local dummy
+        /// memrefs loses provenance and can stall later continuation waves.
+      }
     }
 
     ARTS_INFO("CPS Chain: DB routing complete — "
