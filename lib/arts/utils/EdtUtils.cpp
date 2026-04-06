@@ -219,6 +219,24 @@ void analyzeEdtCapturedValues(EdtOp edt, llvm::SetVector<Value> &capturedValues,
     return;
 
   getUsedValuesDefinedAbove(edt.getRegion(), capturedValues);
+  /// RegionUtils also reports values defined in the EDT body when they are
+  /// referenced from nested regions inside the EDT. Those are not true
+  /// captures for outlining: they must remain local to the outlined function
+  /// instead of being re-packed through paramv.
+  auto isDefinedInsideEdt = [&](Value value) {
+    if (Operation *defOp = value.getDefiningOp())
+      return edt.getOperation()->isAncestor(defOp);
+    if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+      if (Operation *parentOp = blockArg.getOwner()->getParentOp())
+        return edt.getOperation()->isAncestor(parentOp);
+    }
+    return false;
+  };
+  llvm::SetVector<Value> externalCaptures;
+  for (Value value : capturedValues)
+    if (!isDefinedInsideEdt(value))
+      externalCaptures.insert(value);
+  capturedValues = std::move(externalCaptures);
   classifyEdtUserValues(capturedValues.getArrayRef(), parameters, constants,
                         dbHandles);
 }
