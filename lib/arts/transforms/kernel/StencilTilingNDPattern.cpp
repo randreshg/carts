@@ -690,9 +690,28 @@ public:
     if (!matchResult.artsFor)
       return failure();
 
+    ArtsDepPattern family = matchResult.pattern;
+    int64_t revision = 1;
+    if (auto existing = getDepPattern(matchResult.artsFor.getOperation());
+        existing && *existing == ArtsDepPattern::jacobi_alternating_buffers) {
+      family = *existing;
+      revision = std::max<int64_t>(
+          revision, getPatternRevision(matchResult.artsFor.getOperation())
+                        .value_or(revision));
+    } else if (matchResult.parentEdt) {
+      if (auto existing = getDepPattern(matchResult.parentEdt.getOperation());
+          existing &&
+          *existing == ArtsDepPattern::jacobi_alternating_buffers) {
+        family = *existing;
+        revision = std::max<int64_t>(
+            revision, getPatternRevision(matchResult.parentEdt.getOperation())
+                          .value_or(revision));
+      }
+    }
+
     StencilNDPatternContract contract(
-        matchResult.pattern, matchResult.ownerDims, matchResult.minOffsets,
-        matchResult.maxOffsets, matchResult.writeFootprint);
+        family, matchResult.ownerDims, matchResult.minOffsets,
+        matchResult.maxOffsets, matchResult.writeFootprint, revision);
 
     auto stamp = [&](Operation *op) {
       if (!op)
