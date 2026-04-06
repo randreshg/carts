@@ -80,6 +80,11 @@ constexpr StringLiteral CPSAdditiveParams = "arts.cps_additive_params";
 constexpr StringLiteral CPSNumCarry = "arts.cps_num_carry";
 constexpr StringLiteral CPSLoopContinuation = "arts.cps_loop_continuation";
 constexpr StringLiteral CPSAdvanceHasIvArg = "arts.cps_advance_has_iv_arg";
+constexpr StringLiteral CPSDirectRecreate = "arts.cps_direct_recreate";
+/// Preserve the full carry-slot prefix for direct-recreate continuations even
+/// when some slots are locally dead; the relaunch path must reproduce the
+/// kickoff ABI exactly.
+constexpr StringLiteral CPSPreserveCarryAbi = "arts.cps_preserve_carry_abi";
 /// CPS dep routing: DenseI64ArrayAttr [numTimingDbs, hasScratch].
 /// Tells EpochLowering how many dep GUIDs are in loopBackParams and their
 /// layout: last (numTimingDbs + hasScratch) carry params are dep GUIDs,

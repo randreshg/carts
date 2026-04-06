@@ -76,6 +76,12 @@ struct EpochLoopDriverDecision {
   std::string rationale;
 };
 
+enum class EpochAsyncLoopStrategy : uint8_t {
+  None = 0,
+  AdvanceEdt = 1,
+  CpsChain = 2
+};
+
 struct EpochSlot {
   EpochOp epoch;
   scf::IfOp wrappingIf;
@@ -83,6 +89,21 @@ struct EpochSlot {
 
 struct EpochChainDecision {
   bool eligible = false;
+  llvm::SmallVector<EpochSlot> slots;
+  llvm::SmallVector<Operation *> sequentialOps;
+  std::string rationale;
+};
+
+struct EpochAsyncLoopDecision {
+  EpochAsyncLoopStrategy strategy = EpochAsyncLoopStrategy::None;
+  bool eligible = false;
+  bool bodyIsEpochOnly = false;
+  bool hasSequentialSidecars = false;
+  bool hasInterEpochSidecars = false;
+  bool hasTailSidecars = false;
+  bool hasCallSidecars = false;
+  bool hasUnsupportedSideEffects = false;
+  bool hasIvConditionedEpochSlots = false;
   llvm::SmallVector<EpochSlot> slots;
   llvm::SmallVector<Operation *> sequentialOps;
   std::string rationale;
@@ -114,6 +135,14 @@ public:
 
   /// Decide whether a loop is eligible for the CPS chain transform.
   static EpochChainDecision evaluateCPSChain(scf::ForOp forOp);
+
+  /// Decide which async loop strategy best matches the runtime-first contract.
+  ///
+  /// `AdvanceEdt` is the preferred shape for epoch-only time-step loops whose
+  /// cross-iteration handoff is just "this iteration finished, launch the
+  /// next one". `CpsChain` is reserved for loops that need an inner
+  /// continuation stage to publish sequential state between iterations.
+  static EpochAsyncLoopDecision evaluateAsyncLoopStrategy(scf::ForOp forOp);
 };
 
 } // namespace arts

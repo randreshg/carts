@@ -34,6 +34,7 @@
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
+#include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -74,6 +75,7 @@ using namespace mlir::arts;
 using AttrNames::Operation::ContinuationForEpoch;
 using AttrNames::Operation::CPSAdditiveParams;
 using AttrNames::Operation::CPSAdvanceHasIvArg;
+using AttrNames::Operation::CPSDirectRecreate;
 using AttrNames::Operation::CPSChainId;
 using AttrNames::Operation::CPSDepRouting;
 using AttrNames::Operation::CPSInitIter;
@@ -81,6 +83,7 @@ using AttrNames::Operation::CPSIterCounterParamIdx;
 using AttrNames::Operation::CPSNumCarry;
 using AttrNames::Operation::CPSOuterEpochParamIdx;
 using AttrNames::Operation::CPSParamPerm;
+using AttrNames::Operation::CPSPreserveCarryAbi;
 
 ///===----------------------------------------------------------------------===///
 /// Epoch Lowering Pass Implementation
@@ -241,20 +244,14 @@ void EpochLoweringPass::runOnOperation() {
     /// naturally calls arts_increment_finished_epoch_list, processing all
     /// epochs in the EDT's epoch_list.
     ///
-    /// Continuation epochs nested inside another EpochOp (the mainBody
-    /// pattern from CPS chain) use arts_initialize_epoch (no caller-active
-    /// count) instead of arts_initialize_and_start_epoch, so the epoch
-    /// fires when all N workers finish (active=N, finished=N) without
-    /// needing the caller to resolve its accounting.
+    /// Continuation epochs still need a started epoch. In ARTS, a deferred
+    /// epoch created with arts_initialize_epoch() must be paired with an
+    /// explicit arts_start_epoch() before it can complete. The runtime-first
+    /// CPS contract therefore uses started inner epochs even when the
+    /// continuation itself provides the finish signal and no blocking wait is
+    /// emitted in the creator EDT.
     bool needsWait = !hasContinuation;
     if (hasContinuation) {
-      bool nestedInEpoch = epochOp->getParentOfType<EpochOp>() != nullptr;
-      if (nestedInEpoch) {
-        createEpochOp->setAttr(AttrNames::Operation::NoStartEpoch,
-                               AC->getBuilder().getUnitAttr());
-        ARTS_INFO("  Nested continuation epoch — using no-start epoch "
-                  "(caller not active)");
-      }
       ARTS_INFO("  Skipping WaitOnEpochOp (continuation path)");
     }
     if (needsWait) {
@@ -410,6 +407,26 @@ void EpochLoweringPass::runOnOperation() {
         if (!packOp)
           continue;
 
+        auto childFuncAttr = edt->getAttrOfType<StringAttr>(
+            AttrNames::Operation::OutlinedFunc);
+        func::FuncOp childFunc =
+            childFuncAttr
+                ? module.lookupSymbol<func::FuncOp>(childFuncAttr.getValue())
+                : func::FuncOp();
+        bool childUsesDirectRecreate = false;
+        if (childFunc) {
+          childFunc.walk([&](CPSAdvanceOp advanceOp) {
+            if (advanceOp->hasAttr(CPSDirectRecreate))
+              childUsesDirectRecreate = true;
+          });
+        }
+        if (childUsesDirectRecreate) {
+          ARTS_INFO("CPS propagation: direct-recreate child "
+                    << childFunc.getName() << " under " << info.funcName
+                    << " preserving carry prefix up to iter slot "
+                    << info.iterIdx);
+        }
+
         /// Compute permutation: for each pack operand, find which parent
         /// param index it derives from. We check two paths:
         /// 1. SSA identity with EdtParamUnpackOp results (pre-CSE)
@@ -445,7 +462,43 @@ void EpochLoweringPass::runOnOperation() {
           perm.push_back(traceToParamIdx(operand));
         edt->setAttr(CPSParamPerm, AC->getBuilder().getDenseI64ArrayAttr(perm));
 
-        SmallVector<Value> packParams(packOp->getOperands());
+        SmallVector<Value> packParams;
+        if (childUsesDirectRecreate) {
+          unsigned carryCount = std::max<int64_t>(info.iterIdx, 0);
+          ARTS_INFO("  rebuilding child pack with carryCount=" << carryCount
+                                                               << ", iter="
+                                                               << info.iterIdx
+                                                               << ", epoch="
+                                                               << info.epochIdx);
+          packParams.reserve(carryCount + 2);
+          for (unsigned slot = 0; slot < carryCount; ++slot) {
+            if (unpackOp && slot < unpackOp.getNumResults()) {
+              packParams.push_back(unpackOp.getResult(slot));
+              continue;
+            }
+            Value slotIdx = AC->createIndexConstant(slot, loc);
+            packParams.push_back(AC->create<memref::LoadOp>(
+                loc, paramArrayMemref, ValueRange{slotIdx}));
+          }
+          SmallVector<int64_t> identityPerm;
+          identityPerm.reserve(carryCount);
+          for (unsigned slot = 0; slot < carryCount; ++slot)
+            identityPerm.push_back(static_cast<int64_t>(slot));
+          edt->setAttr(CPSParamPerm,
+                       AC->getBuilder().getDenseI64ArrayAttr(identityPerm));
+          if (childFunc) {
+            auto existingPreserve =
+                childFunc->getAttrOfType<IntegerAttr>(CPSPreserveCarryAbi);
+            if (!existingPreserve || existingPreserve.getInt() < carryCount) {
+              childFunc->setAttr(
+                  CPSPreserveCarryAbi,
+                  AC->getBuilder().getI64IntegerAttr(carryCount));
+            }
+          }
+        } else {
+          packParams.assign(packOp->getOperands().begin(),
+                            packOp->getOperands().end());
+        }
         packParams.push_back(iterCounter);
         unsigned newIterIdx = packParams.size() - 1;
         packParams.push_back(outerEpochGuid);
@@ -465,6 +518,84 @@ void EpochLoweringPass::runOnOperation() {
         if (auto childFuncAttr = edt->getAttrOfType<StringAttr>(
                 AttrNames::Operation::OutlinedFunc))
           enqueueChainFunc(childFuncAttr, newIterIdx, newEpochIdx);
+      }
+
+      SmallVector<EdtCreateOp> directRecreateContinuations;
+      func.walk([&](EdtCreateOp edt) {
+        if (!edt->hasAttr(ContinuationForEpoch))
+          return;
+        auto childFuncAttr = edt->getAttrOfType<StringAttr>(
+            AttrNames::Operation::OutlinedFunc);
+        if (!childFuncAttr)
+          return;
+        func::FuncOp childFunc =
+            module.lookupSymbol<func::FuncOp>(childFuncAttr.getValue());
+        if (!childFunc)
+          return;
+        bool childUsesDirectRecreate = false;
+        childFunc.walk([&](CPSAdvanceOp advanceOp) {
+          if (advanceOp->hasAttr(CPSDirectRecreate))
+            childUsesDirectRecreate = true;
+        });
+        if (childUsesDirectRecreate)
+          directRecreateContinuations.push_back(edt);
+      });
+
+      for (EdtCreateOp edt : directRecreateContinuations) {
+        auto packOp = edt.getParamMemref().getDefiningOp<EdtParamPackOp>();
+        if (!packOp)
+          continue;
+
+        unsigned carryCount = std::max<int64_t>(info.iterIdx, 0);
+        ARTS_INFO("CPS propagation: rewriting local direct-recreate continuation "
+                  << edt << " with carryCount=" << carryCount);
+        SmallVector<Value> packParams;
+        packParams.reserve(carryCount + 2);
+        for (unsigned slot = 0; slot < carryCount; ++slot) {
+          if (unpackOp && slot < unpackOp.getNumResults()) {
+            packParams.push_back(unpackOp.getResult(slot));
+            continue;
+          }
+          Value slotIdx = AC->createIndexConstant(slot, loc);
+          packParams.push_back(AC->create<memref::LoadOp>(
+              loc, paramArrayMemref, ValueRange{slotIdx}));
+        }
+        packParams.push_back(iterCounter);
+        unsigned newIterIdx = packParams.size() - 1;
+        packParams.push_back(outerEpochGuid);
+        unsigned newEpochIdx = packParams.size() - 1;
+
+        AC->setInsertionPoint(packOp);
+        auto newPack = AC->create<EdtParamPackOp>(
+            packOp->getLoc(), packOp->getResultTypes()[0], packParams);
+        packOp->getResult(0).replaceAllUsesWith(newPack.getMemref());
+        packOp->erase();
+
+        SmallVector<int64_t> identityPerm;
+        identityPerm.reserve(carryCount);
+        for (unsigned slot = 0; slot < carryCount; ++slot)
+          identityPerm.push_back(static_cast<int64_t>(slot));
+        edt->setAttr(CPSParamPerm,
+                     AC->getBuilder().getDenseI64ArrayAttr(identityPerm));
+        edt->setAttr(CPSIterCounterParamIdx,
+                     AC->getBuilder().getI64IntegerAttr(newIterIdx));
+        edt->setAttr(CPSOuterEpochParamIdx,
+                     AC->getBuilder().getI64IntegerAttr(newEpochIdx));
+
+        auto childFuncAttr = edt->getAttrOfType<StringAttr>(
+            AttrNames::Operation::OutlinedFunc);
+        func::FuncOp childFunc =
+            childFuncAttr
+                ? module.lookupSymbol<func::FuncOp>(childFuncAttr.getValue())
+                : func::FuncOp();
+        if (childFunc) {
+          auto existingPreserve =
+              childFunc->getAttrOfType<IntegerAttr>(CPSPreserveCarryAbi);
+          if (!existingPreserve || existingPreserve.getInt() < carryCount) {
+            childFunc->setAttr(CPSPreserveCarryAbi,
+                               AC->getBuilder().getI64IntegerAttr(carryCount));
+          }
+        }
       }
     }
   }
@@ -559,11 +690,15 @@ void EpochLoweringPass::runOnOperation() {
     IntegerAttr localOuterEpochIdxAttr;
     IntegerAttr localIterCounterIdxAttr;
     DenseI64ArrayAttr localParamPermAttr;
+    EdtParamPackOp localSchemaPackOp = nullptr;
     if (parentFunc) {
       module.walk([&](EdtCreateOp edt) {
         auto funcAttr =
             edt->getAttrOfType<StringAttr>(AttrNames::Operation::OutlinedFunc);
         if (funcAttr && funcAttr.getValue() == parentFunc.getName()) {
+          if (!localSchemaPackOp)
+            localSchemaPackOp =
+                edt.getParamMemref().getDefiningOp<EdtParamPackOp>();
           localIterCounterIdxAttr =
               edt->getAttrOfType<IntegerAttr>(CPSIterCounterParamIdx);
           localOuterEpochIdxAttr =
@@ -606,6 +741,7 @@ void EpochLoweringPass::runOnOperation() {
       outerEpochGuid = outerEpochGuidOp.getEpochGuid();
     }
 
+    bool directRecreate = advanceOp->hasAttr(CPSDirectRecreate);
     Value tNext;
     Value continueCond;
     if (isAdditive && curIter && nextParams.size() >= 2) {
@@ -621,14 +757,20 @@ void EpochLoweringPass::runOnOperation() {
     }
 
     auto materializeLoopBackParam = [&](Value value) -> Value {
+      if (DbUtils::getUnderlyingDbAlloc(value)) {
+        ARTS_INFO("CPS advance: dropping DB-backed carry from paramv rebuild");
+        return Value();
+      }
       if (!isa<MemRefType>(value.getType()))
         return value;
-      /// Convert memref DB handles to raw i64 for paramv transport.
+      /// Non-DB memrefs still lower through the existing ABI path.
       Value rawPtr = AC->castToLLVMPtr(value, loc);
       return AC->create<LLVM::PtrToIntOp>(loc, AC->Int64, rawPtr);
     };
 
     bool hasCanonicalLoopBackContract = advanceOp->hasAttr(CPSNumCarry);
+    auto targetOriginalPack =
+        contEdtCreate.getParamMemref().getDefiningOp<EdtParamPackOp>();
 
     /// Build the self-recreation param pack using the canonical carry
     /// params from CPSAdvanceOp. EpochOpt step CPS-8 ensures carry params
@@ -653,6 +795,53 @@ void EpochLoweringPass::runOnOperation() {
       SmallVector<Value> newPackParams;
       if (!hasCanonicalLoopBackContract)
         return newPackParams;
+
+      if (parentFunc && localUnpack &&
+          outlinedFunc.getValue() == parentFunc.getName()) {
+        auto unpackedValues = localUnpack.getResults();
+        unsigned localCarryCount = unpackedValues.size();
+        if (localIterCounterIdxAttr)
+          localCarryCount =
+              std::min<unsigned>(localCarryCount,
+                                 localIterCounterIdxAttr.getInt());
+        else if (localOuterEpochIdxAttr)
+          localCarryCount =
+              std::min<unsigned>(localCarryCount,
+                                 localOuterEpochIdxAttr.getInt());
+
+        unsigned totalPackSlots = localCarryCount;
+        if (targetIterCounterIdxAttr)
+          totalPackSlots = std::max<unsigned>(
+              totalPackSlots, targetIterCounterIdxAttr.getInt() + 1);
+        if (targetOuterEpochIdxAttr)
+          totalPackSlots = std::max<unsigned>(
+              totalPackSlots, targetOuterEpochIdxAttr.getInt() + 1);
+
+        Value zeroI64 = AC->createIntConstant(0, AC->Int64, loc);
+        newPackParams.assign(totalPackSlots, zeroI64);
+        for (unsigned i = 0; i < localCarryCount && i < totalPackSlots; ++i) {
+          bool unsafeCarry = false;
+          if (localSchemaPackOp && i < localSchemaPackOp.getNumOperands())
+            unsafeCarry =
+                static_cast<bool>(DbUtils::getUnderlyingDbAlloc(
+                    localSchemaPackOp.getOperand(i)));
+          if (!unsafeCarry)
+            newPackParams[i] = unpackedValues[i];
+        }
+
+        Value iterValue = tNext ? tNext : curIter;
+        if (targetIterCounterIdxAttr && iterValue) {
+          unsigned iterIdx = targetIterCounterIdxAttr.getInt();
+          if (iterIdx < newPackParams.size())
+            newPackParams[iterIdx] = iterValue;
+        }
+        if (targetOuterEpochIdxAttr && outerEpochGuid) {
+          unsigned epochIdx = targetOuterEpochIdxAttr.getInt();
+          if (epochIdx < newPackParams.size())
+            newPackParams[epochIdx] = outerEpochGuid;
+        }
+        return newPackParams;
+      }
 
       unsigned targetCarryCount = canonicalLoopBackParams.size();
       if (targetParamPermAttr)
@@ -700,6 +889,14 @@ void EpochLoweringPass::runOnOperation() {
       ArrayRef<int64_t> targetPerm =
           targetParamPermAttr ? targetParamPermAttr.asArrayRef()
                               : ArrayRef<int64_t>();
+      auto sameCanonicalValue = [](Value lhs, Value rhs) {
+        if (!lhs || !rhs)
+          return false;
+        if (lhs == rhs)
+          return true;
+        return ValueAnalysis::stripNumericCasts(lhs) ==
+               ValueAnalysis::stripNumericCasts(rhs);
+      };
       for (unsigned i = 0; i < canonicalLoopBackParams.size(); ++i) {
         int64_t canonicalIdx = resolveCanonicalIndex(localPerm, i);
         if (canonicalIdx < 0)
@@ -713,6 +910,10 @@ void EpochLoweringPass::runOnOperation() {
       if (localUnpack) {
         auto unpackedValues = localUnpack.getResults();
         unsigned localCarryCount = unpackedValues.size();
+        if (hasCanonicalLoopBackContract)
+          localCarryCount =
+              std::min<unsigned>(localCarryCount,
+                                 canonicalLoopBackParams.size());
         if (localParamPermAttr)
           localCarryCount =
               std::min<unsigned>(localCarryCount, localParamPermAttr.size());
@@ -739,6 +940,23 @@ void EpochLoweringPass::runOnOperation() {
 
       unsigned missingCarrySlots = 0;
       for (unsigned slot = 0; slot < targetCarryCount; ++slot) {
+        if (targetOriginalPack && slot < targetOriginalPack.getNumOperands()) {
+          Value originalOperand = targetOriginalPack.getOperand(slot);
+          bool matchedOriginalSlot = false;
+          for (unsigned canonicalSlot = 0;
+               canonicalSlot < canonicalLoopBackParams.size();
+               ++canonicalSlot) {
+            Value canonicalValue = canonicalLoopBackParams[canonicalSlot];
+            if (!sameCanonicalValue(originalOperand, canonicalValue))
+              continue;
+            newPackParams[slot] = canonicalValue;
+            matchedOriginalSlot = true;
+            break;
+          }
+          if (matchedOriginalSlot)
+            continue;
+        }
+
         int64_t canonicalIdx = resolveCanonicalIndex(targetPerm, slot);
         if (canonicalIdx >= 0 &&
             static_cast<size_t>(canonicalIdx) < canonicalValues.size() &&
@@ -747,8 +965,10 @@ void EpochLoweringPass::runOnOperation() {
           continue;
         }
         if (!targetParamPermAttr && slot < canonicalLoopBackParams.size()) {
-          newPackParams[slot] = canonicalLoopBackParams[slot];
-          continue;
+          if (canonicalLoopBackParams[slot]) {
+            newPackParams[slot] = canonicalLoopBackParams[slot];
+            continue;
+          }
         }
         if (canonicalIdx >= 0 &&
             static_cast<size_t>(canonicalIdx) < localCarryFallback.size() &&
@@ -774,14 +994,71 @@ void EpochLoweringPass::runOnOperation() {
       if (missingCarrySlots > 0) {
         ARTS_WARN("CPS advance: rebuilt continuation pack for "
                   << outlinedFunc.getValue() << " with " << missingCarrySlots
-                  << " schema hole(s); preserving slot count with zero fill");
+                  << " schema hole(s); preserving slot count with zero fill"
+                  << " (targetCarryCount=" << targetCarryCount
+                  << ", canonicalCarry=" << canonicalLoopBackParams.size()
+                  << ")");
       }
 
       return newPackParams;
     };
 
-    auto emitContinuationEpoch = [&]() -> Value {
+    struct DeferredDepEmit {
+      enum class Kind { WholeDb, ForwardedSlot };
+      Kind kind;
+      Value depGuid;
+      unsigned fromSlot = 0;
+      unsigned toSlot = 0;
+      int32_t mode = 0;
+      std::optional<int32_t> depFlags;
+    };
+
+    struct ContinuationEpochPlan {
+      Value epochGuid;
+      Value contGuid;
+      SmallVector<DeferredDepEmit, 8> deferredDeps;
+    };
+
+    auto emitWholeDbDep = [&](Value targetGuid, Value depGuid, unsigned slotIdx,
+                              int32_t mode,
+                              std::optional<int32_t> depFlags) {
+      if (!targetGuid || !depGuid)
+        return;
+      depGuid = AC->ensureI64(depGuid, loc);
+      Value slot = AC->createIntConstant(slotIdx, AC->Int32, loc);
+      Value modeVal = AC->createIntConstant(mode, AC->Int32, loc);
+      ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
+      if (depFlags && *depFlags != 0) {
+        Value flagsVal = AC->createIntConstant(*depFlags, AC->Int32, loc);
+        RCB.callVoid(types::ARTSRTL_arts_add_dependence_ex,
+                     {depGuid, targetGuid, slot, modeVal, flagsVal});
+      } else {
+        RCB.callVoid(types::ARTSRTL_arts_add_dependence,
+                     {depGuid, targetGuid, slot, modeVal});
+      }
+    };
+
+    auto emitForwardedDepSlot = [&](Value targetGuid, unsigned fromSlot,
+                                    unsigned toSlot, int32_t mode,
+                                    std::optional<int32_t> depFlags) {
+      if (!targetGuid || !parentFunc || parentFunc.getNumArguments() <= 3)
+        return;
+      Value depv = parentFunc.getArgument(3);
+      Value fromSlotIdx = AC->createIndexConstant(fromSlot, loc);
+      SmallVector<Value> emptyArgs;
+      auto depGep = AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
+                                         fromSlotIdx, emptyArgs, emptyArgs);
+      Value guidPtr = depGep.getGuid();
+      Value depGuid = AC->create<LLVM::LoadOp>(loc, AC->Int64, guidPtr);
+      emitWholeDbDep(targetGuid, depGuid, toSlot, mode, depFlags);
+    };
+
+    auto createContinuationLaunch = [&]() -> ContinuationEpochPlan {
+      ContinuationEpochPlan plan;
       Value paramMemref;
+      // Direct relaunch still has to recreate the target kickoff ABI, not the
+      // compact local continuation ABI. Otherwise relaunched params shift when
+      // the local continuation dropped target-only carry slots.
       SmallVector<Value> schemaPackParams = rebuildCpsPackToTargetSchema();
       if (!schemaPackParams.empty()) {
         auto packType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
@@ -818,51 +1095,23 @@ void EpochLoweringPass::runOnOperation() {
       auto newContEdt = AC->create<EdtCreateOp>(loc, paramMemref, localDepCount,
                                                 localRoute, outerEpochGuid);
       setOutlinedFunc(newContEdt, outlinedFunc.getValue());
-      newContEdt->setAttr(ContinuationForEpoch, AC->getBuilder().getUnitAttr());
+      if (!directRecreate)
+        newContEdt->setAttr(ContinuationForEpoch,
+                            AC->getBuilder().getUnitAttr());
       if (auto chainIdAttr =
               contEdtCreate->getAttrOfType<StringAttr>(CPSChainId))
         newContEdt->setAttr(CPSChainId, chainIdAttr);
-      if (targetIterCounterIdxAttr)
-        newContEdt->setAttr(CPSIterCounterParamIdx, targetIterCounterIdxAttr);
-      if (targetOuterEpochIdxAttr)
-        newContEdt->setAttr(CPSOuterEpochParamIdx, targetOuterEpochIdxAttr);
-      if (targetParamPermAttr)
-        newContEdt->setAttr(CPSParamPerm, targetParamPermAttr);
+      if (!directRecreate) {
+        if (targetIterCounterIdxAttr)
+          newContEdt->setAttr(CPSIterCounterParamIdx, targetIterCounterIdxAttr);
+        if (targetOuterEpochIdxAttr)
+          newContEdt->setAttr(CPSOuterEpochParamIdx, targetOuterEpochIdxAttr);
+        if (targetParamPermAttr)
+          newContEdt->setAttr(CPSParamPerm, targetParamPermAttr);
+      }
 
       Value newContGuid = newContEdt.getGuid();
-
-      auto emitWholeDbDep = [&](Value depGuid, unsigned slotIdx, int32_t mode,
-                                std::optional<int32_t> depFlags) {
-        if (!depGuid)
-          return;
-        depGuid = AC->ensureI64(depGuid, loc);
-        Value slot = AC->createIntConstant(slotIdx, AC->Int32, loc);
-        Value modeVal = AC->createIntConstant(mode, AC->Int32, loc);
-        ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
-        if (depFlags && *depFlags != 0) {
-          Value flagsVal = AC->createIntConstant(*depFlags, AC->Int32, loc);
-          RCB.callVoid(types::ARTSRTL_arts_add_dependence_ex,
-                       {depGuid, newContGuid, slot, modeVal, flagsVal});
-        } else {
-          RCB.callVoid(types::ARTSRTL_arts_add_dependence,
-                       {depGuid, newContGuid, slot, modeVal});
-        }
-      };
-
-      auto emitForwardedDepSlot = [&](unsigned fromSlot, unsigned toSlot,
-                                      int32_t mode,
-                                      std::optional<int32_t> depFlags) {
-        if (!parentFunc || parentFunc.getNumArguments() <= 3)
-          return;
-        Value depv = parentFunc.getArgument(3);
-        Value fromSlotIdx = AC->createIndexConstant(fromSlot, loc);
-        SmallVector<Value> emptyArgs;
-        auto depGep = AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
-                                           fromSlotIdx, emptyArgs, emptyArgs);
-        Value guidPtr = depGep.getGuid();
-        Value depGuid = AC->create<LLVM::LoadOp>(loc, AC->Int64, guidPtr);
-        emitWholeDbDep(depGuid, toSlot, mode, depFlags);
-      };
+      plan.contGuid = newContGuid;
 
       auto findOriginalRecDep = [&](EdtCreateOp edt) -> RecordDepOp {
         for (Operation *user : edt.getGuid().getUsers())
@@ -979,14 +1228,18 @@ void EpochLoweringPass::runOnOperation() {
           return;
 
         if (auto mappedSlot = resolveOriginalDepSlotForCarryIndex(carryIdx)) {
-          emitWholeDbDep(depGuid, *mappedSlot, getOriginalDepMode(*mappedSlot),
-                         getOriginalDepFlags(*mappedSlot));
+          plan.deferredDeps.push_back(
+              {DeferredDepEmit::Kind::WholeDb, depGuid, 0, *mappedSlot,
+               getOriginalDepMode(*mappedSlot),
+               getOriginalDepFlags(*mappedSlot)});
           satisfiedOriginalDepSlots[*mappedSlot] = true;
           return;
         }
 
         if (fallbackSlot) {
-          emitWholeDbDep(depGuid, *fallbackSlot, fallbackMode, fallbackFlags);
+          plan.deferredDeps.push_back(
+              {DeferredDepEmit::Kind::WholeDb, depGuid, 0, *fallbackSlot,
+               fallbackMode, fallbackFlags});
           if (*fallbackSlot < satisfiedOriginalDepSlots.size())
             satisfiedOriginalDepSlots[*fallbackSlot] = true;
         }
@@ -1034,8 +1287,9 @@ void EpochLoweringPass::runOnOperation() {
           for (unsigned depIdx = 0; depIdx < originalDepCount; ++depIdx) {
             if (satisfiedOriginalDepSlots[depIdx])
               continue;
-            emitForwardedDepSlot(depIdx, depIdx, getOriginalDepMode(depIdx),
-                                 getOriginalDepFlags(depIdx));
+            plan.deferredDeps.push_back(
+                {DeferredDepEmit::Kind::ForwardedSlot, Value(), depIdx, depIdx,
+                 getOriginalDepMode(depIdx), getOriginalDepFlags(depIdx)});
           }
         }
       } else if (auto originalRecDep = findOriginalRecDep(contEdtCreate)) {
@@ -1057,98 +1311,215 @@ void EpochLoweringPass::runOnOperation() {
             Value localDepGuid = getLoopBackValueForPackIndex(*packIdx);
             if (!localDepGuid)
               continue;
-            emitWholeDbDep(localDepGuid, depIdx, getOriginalDepMode(depIdx),
-                           getOriginalDepFlags(depIdx));
+            plan.deferredDeps.push_back(
+                {DeferredDepEmit::Kind::WholeDb, localDepGuid, 0,
+                 static_cast<unsigned>(depIdx), getOriginalDepMode(depIdx),
+                 getOriginalDepFlags(depIdx)});
           }
         }
       }
 
+      return plan;
+    };
+
+    auto emitContinuationEpoch = [&]() -> ContinuationEpochPlan {
+      ContinuationEpochPlan plan = createContinuationLaunch();
+      Value newContGuid = plan.contGuid;
       Value one = AC->createIntConstant(1, AC->Int32, loc);
       Value finishSlot = AC->create<arith::SubIOp>(loc, localDepCount, one);
       auto innerEpoch = AC->create<CreateEpochOp>(
           loc, IntegerType::get(AC->getContext(), 64), newContGuid, finishSlot);
-      return innerEpoch.getEpochGuid();
+      plan.epochGuid = innerEpoch.getEpochGuid();
+      return plan;
     };
 
     Value epochGuid;
-    if (continueCond) {
-      auto ifOp = AC->create<scf::IfOp>(loc, TypeRange{outerEpochGuid.getType()},
-                                        continueCond, /*withElseRegion=*/true);
+    Value deferredContGuid;
+    SmallVector<DeferredDepEmit, 8> deferredDepEmits;
+    if (directRecreate && continueCond) {
+      auto ifOp = AC->create<scf::IfOp>(loc, TypeRange{AC->Int64},
+                                        continueCond,
+                                        /*withElseRegion=*/true);
       {
         OpBuilder::InsertionGuard guard(AC->getBuilder());
         Block &thenBlock = ifOp.getThenRegion().front();
         AC->getBuilder().setInsertionPointToEnd(&thenBlock);
-        Value thenEpochGuid = emitContinuationEpoch();
-        AC->create<scf::YieldOp>(loc, thenEpochGuid);
+        auto plan = createContinuationLaunch();
+        deferredDepEmits = std::move(plan.deferredDeps);
+        AC->create<scf::YieldOp>(loc, ValueRange{plan.contGuid});
       }
       {
         OpBuilder::InsertionGuard guard(AC->getBuilder());
         Block &elseBlock = ifOp.getElseRegion().front();
         AC->getBuilder().setInsertionPointToEnd(&elseBlock);
-        AC->create<scf::YieldOp>(loc, outerEpochGuid);
+        Value zeroGuid = AC->createIntConstant(0, AC->Int64, loc);
+        AC->create<scf::YieldOp>(loc, ValueRange{zeroGuid});
+      }
+      deferredContGuid = ifOp.getResult(0);
+      AC->setInsertionPointAfter(ifOp);
+    } else if (directRecreate) {
+      auto plan = createContinuationLaunch();
+      deferredContGuid = plan.contGuid;
+      deferredDepEmits = std::move(plan.deferredDeps);
+    } else if (continueCond) {
+      auto ifOp = AC->create<scf::IfOp>(
+          loc, TypeRange{outerEpochGuid.getType(), AC->Int64},
+                                        continueCond, /*withElseRegion=*/true);
+      {
+        OpBuilder::InsertionGuard guard(AC->getBuilder());
+        Block &thenBlock = ifOp.getThenRegion().front();
+        AC->getBuilder().setInsertionPointToEnd(&thenBlock);
+        auto plan = emitContinuationEpoch();
+        deferredDepEmits = std::move(plan.deferredDeps);
+        AC->create<scf::YieldOp>(loc,
+                                 ValueRange{plan.epochGuid, plan.contGuid});
+      }
+      {
+        OpBuilder::InsertionGuard guard(AC->getBuilder());
+        Block &elseBlock = ifOp.getElseRegion().front();
+        AC->getBuilder().setInsertionPointToEnd(&elseBlock);
+        Value zeroGuid = AC->createIntConstant(0, AC->Int64, loc);
+        AC->create<scf::YieldOp>(loc, ValueRange{outerEpochGuid, zeroGuid});
       }
       epochGuid = ifOp.getResult(0);
+      deferredContGuid = ifOp.getResult(1);
       AC->setInsertionPointAfter(ifOp);
     } else {
-      epochGuid = emitContinuationEpoch();
+      auto plan = emitContinuationEpoch();
+      epochGuid = plan.epochGuid;
+      deferredContGuid = plan.contGuid;
+      deferredDepEmits = std::move(plan.deferredDeps);
     }
 
-    /// If the advance region has a block argument serving as the IV
-    /// placeholder (from wrappingIf support), replace it with the actual
-    /// runtime iteration counter (tNext or curIter).
-    Block &advBody = advanceOp.getEpochBody().front();
-    if (advanceOp->hasAttr(CPSAdvanceHasIvArg) &&
-        advBody.getNumArguments() > 0) {
-      Value ivReplacement = tNext ? tNext : curIter;
-      if (ivReplacement) {
-        // Cast to index if needed (block arg is index type).
-        if (ivReplacement.getType() != advBody.getArgument(0).getType()) {
-          AC->setInsertionPointAfter(ivReplacement.getDefiningOp()
-                                         ? ivReplacement.getDefiningOp()
-                                         : &advBody.front());
-          ivReplacement = AC->create<arith::IndexCastOp>(
-              loc, advBody.getArgument(0).getType(), ivReplacement);
+    if (!directRecreate) {
+      /// If the advance region has a block argument serving as the IV
+      /// placeholder (from wrappingIf support), replace it with the actual
+      /// runtime iteration counter (tNext or curIter).
+      Block &advBody = advanceOp.getEpochBody().front();
+      if (advanceOp->hasAttr(CPSAdvanceHasIvArg) &&
+          advBody.getNumArguments() > 0) {
+        Value ivReplacement = tNext ? tNext : curIter;
+        if (ivReplacement) {
+          // Cast to index if needed (block arg is index type).
+          if (ivReplacement.getType() != advBody.getArgument(0).getType()) {
+            AC->setInsertionPointAfter(ivReplacement.getDefiningOp()
+                                           ? ivReplacement.getDefiningOp()
+                                           : &advBody.front());
+            ivReplacement = AC->create<arith::IndexCastOp>(
+                loc, advBody.getArgument(0).getType(), ivReplacement);
+          }
+          advBody.getArgument(0).replaceAllUsesWith(ivReplacement);
         }
-        advBody.getArgument(0).replaceAllUsesWith(ivReplacement);
+        advBody.eraseArgument(0);
       }
-      advBody.eraseArgument(0);
-    }
 
-    /// Move worker ops from CPSAdvanceOp's epochBody AFTER the epoch creation.
-    SmallVector<Operation *> workerOps;
-    for (Operation &op : advBody.without_terminator())
-      workerOps.push_back(&op);
+      /// Move worker ops from CPSAdvanceOp's epochBody AFTER the epoch creation.
+      SmallVector<Operation *> workerOps;
+      for (Operation &op : advBody.without_terminator())
+        workerOps.push_back(&op);
 
-    Operation *insertAfter = epochGuid.getDefiningOp();
-    if (!insertAfter) {
-      advanceOp.emitError("CPS advance: expected epoch-guid producer");
-      signalPassFailure();
-      return;
-    }
-    for (Operation *workerOp : workerOps) {
-      workerOp->moveAfter(insertAfter);
-      insertAfter = workerOp;
-    }
+      Operation *insertAfter = epochGuid.getDefiningOp();
+      if (!insertAfter) {
+        advanceOp.emitError("CPS advance: expected epoch-guid producer");
+        signalPassFailure();
+        return;
+      }
+      for (Operation *workerOp : workerOps) {
+        workerOp->moveAfter(insertAfter);
+        insertAfter = workerOp;
+      }
 
-    /// Update EdtCreateOps in moved worker ops with the epoch GUID.
-    for (Operation *workerOp : workerOps) {
-      auto updateEdtCreates = [&](EdtCreateOp edtCreate) {
-        if (!edtCreate.getEpochGuid()) {
-          AC->setInsertionPoint(edtCreate);
-          auto updated = AC->create<EdtCreateOp>(
-              edtCreate.getLoc(), edtCreate.getParamMemref(),
-              edtCreate.getDepCount(), edtCreate.getRoute(), epochGuid);
-          for (auto attr : edtCreate->getAttrs())
-            updated->setAttr(attr.getName(), attr.getValue());
-          edtCreate->replaceAllUsesWith(updated);
-          edtCreate->erase();
+      /// Update EdtCreateOps in moved worker ops with the epoch GUID.
+      for (Operation *workerOp : workerOps) {
+        auto updateEdtCreates = [&](EdtCreateOp edtCreate) {
+          if (!edtCreate.getEpochGuid()) {
+            AC->setInsertionPoint(edtCreate);
+            auto updated = AC->create<EdtCreateOp>(
+                edtCreate.getLoc(), edtCreate.getParamMemref(),
+                edtCreate.getDepCount(), edtCreate.getRoute(), epochGuid);
+            for (auto attr : edtCreate->getAttrs())
+              updated->setAttr(attr.getName(), attr.getValue());
+            edtCreate->replaceAllUsesWith(updated);
+            edtCreate->erase();
+          }
+        };
+
+        if (auto edtCreate = dyn_cast<EdtCreateOp>(workerOp)) {
+          updateEdtCreates(edtCreate);
+        } else {
+          workerOp->walk(updateEdtCreates);
         }
-      };
+      }
 
-      if (auto edtCreate = dyn_cast<EdtCreateOp>(workerOp)) {
-        updateEdtCreates(edtCreate);
+      if (!deferredDepEmits.empty()) {
+        // Preserve CPS frontier order: current-iteration worker writes must be
+        // registered before the next continuation's whole-DB reads/writes.
+        AC->setInsertionPointAfter(insertAfter);
+        if (continueCond) {
+          auto depIf =
+              AC->create<scf::IfOp>(loc, continueCond, /*withElse=*/false);
+          OpBuilder::InsertionGuard guard(AC->getBuilder());
+          Block &thenBlock = depIf.getThenRegion().front();
+          AC->getBuilder().setInsertionPoint(thenBlock.getTerminator());
+          for (const DeferredDepEmit &dep : deferredDepEmits) {
+            switch (dep.kind) {
+            case DeferredDepEmit::Kind::WholeDb:
+              emitWholeDbDep(deferredContGuid, dep.depGuid, dep.toSlot,
+                             dep.mode, dep.depFlags);
+              break;
+            case DeferredDepEmit::Kind::ForwardedSlot:
+              emitForwardedDepSlot(deferredContGuid, dep.fromSlot, dep.toSlot,
+                                   dep.mode, dep.depFlags);
+              break;
+            }
+          }
+        } else {
+          for (const DeferredDepEmit &dep : deferredDepEmits) {
+            switch (dep.kind) {
+            case DeferredDepEmit::Kind::WholeDb:
+              emitWholeDbDep(deferredContGuid, dep.depGuid, dep.toSlot,
+                             dep.mode, dep.depFlags);
+              break;
+            case DeferredDepEmit::Kind::ForwardedSlot:
+              emitForwardedDepSlot(deferredContGuid, dep.fromSlot, dep.toSlot,
+                                   dep.mode, dep.depFlags);
+              break;
+            }
+          }
+        }
+      }
+    } else if (!deferredDepEmits.empty()) {
+      if (continueCond) {
+        auto depIf =
+            AC->create<scf::IfOp>(loc, continueCond, /*withElse=*/false);
+        OpBuilder::InsertionGuard guard(AC->getBuilder());
+        Block &thenBlock = depIf.getThenRegion().front();
+        AC->getBuilder().setInsertionPoint(thenBlock.getTerminator());
+        for (const DeferredDepEmit &dep : deferredDepEmits) {
+          switch (dep.kind) {
+          case DeferredDepEmit::Kind::WholeDb:
+            emitWholeDbDep(deferredContGuid, dep.depGuid, dep.toSlot, dep.mode,
+                           dep.depFlags);
+            break;
+          case DeferredDepEmit::Kind::ForwardedSlot:
+            emitForwardedDepSlot(deferredContGuid, dep.fromSlot, dep.toSlot,
+                                 dep.mode, dep.depFlags);
+            break;
+          }
+        }
       } else {
-        workerOp->walk(updateEdtCreates);
+        for (const DeferredDepEmit &dep : deferredDepEmits) {
+          switch (dep.kind) {
+          case DeferredDepEmit::Kind::WholeDb:
+            emitWholeDbDep(deferredContGuid, dep.depGuid, dep.toSlot, dep.mode,
+                           dep.depFlags);
+            break;
+          case DeferredDepEmit::Kind::ForwardedSlot:
+            emitForwardedDepSlot(deferredContGuid, dep.fromSlot, dep.toSlot,
+                                 dep.mode, dep.depFlags);
+            break;
+          }
+        }
       }
     }
 
@@ -1211,6 +1582,17 @@ LogicalResult EpochLoweringPass::compactContinuationParamAbi() {
     for (auto [idx, result] : llvm::enumerate(unpackOp.getResults()))
       if (!result.use_empty())
         keep[idx] = true;
+
+    if (auto preserveCarryAttr =
+            func->getAttrOfType<IntegerAttr>(CPSPreserveCarryAbi)) {
+      unsigned preserveCount =
+          std::max<int64_t>(preserveCarryAttr.getInt(), 0);
+      if (keep.size() < preserveCount)
+        keep.resize(preserveCount, false);
+      for (unsigned idx = 0; idx < preserveCount; ++idx)
+        keep[idx] = true;
+      totalSlots = std::max<unsigned>(totalSlots, preserveCount);
+    }
 
     SmallVector<memref::LoadOp> directParamLoads;
     func.walk([&](memref::LoadOp load) {

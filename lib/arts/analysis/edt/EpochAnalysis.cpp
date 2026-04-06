@@ -34,6 +34,11 @@ EpochAnalysis::evaluateCPSLoopDriver(scf::ForOp forOp) const {
   return EpochHeuristics::evaluateCPSLoopDriver(forOp);
 }
 
+EpochAsyncLoopDecision
+EpochAnalysis::evaluateAsyncLoopStrategy(scf::ForOp forOp) const {
+  return EpochHeuristics::evaluateAsyncLoopStrategy(forOp);
+}
+
 EpochChainDecision EpochAnalysis::evaluateCPSChain(scf::ForOp forOp) const {
   return EpochHeuristics::evaluateCPSChain(forOp);
 }
