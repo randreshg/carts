@@ -554,36 +554,42 @@ void EpochLoweringPass::runOnOperation() {
     /// own CPS param indices based on its own param count.
     Value outerEpochGuid;
     Value curIter;
-    IntegerAttr outerEpochIdxAttr;
-    IntegerAttr iterCounterIdxAttr;
+    IntegerAttr localOuterEpochIdxAttr;
+    IntegerAttr localIterCounterIdxAttr;
+    DenseI64ArrayAttr localParamPermAttr;
     if (parentFunc) {
       module.walk([&](EdtCreateOp edt) {
         auto funcAttr =
             edt->getAttrOfType<StringAttr>(AttrNames::Operation::OutlinedFunc);
         if (funcAttr && funcAttr.getValue() == parentFunc.getName()) {
-          iterCounterIdxAttr =
+          localIterCounterIdxAttr =
               edt->getAttrOfType<IntegerAttr>(CPSIterCounterParamIdx);
-          outerEpochIdxAttr =
+          localOuterEpochIdxAttr =
               edt->getAttrOfType<IntegerAttr>(CPSOuterEpochParamIdx);
+          localParamPermAttr = edt->getAttrOfType<DenseI64ArrayAttr>(CPSParamPerm);
         }
       });
     }
-    if (!iterCounterIdxAttr)
-      iterCounterIdxAttr =
-          contEdtCreate->getAttrOfType<IntegerAttr>(CPSIterCounterParamIdx);
-    if (!outerEpochIdxAttr)
-      outerEpochIdxAttr =
-          contEdtCreate->getAttrOfType<IntegerAttr>(CPSOuterEpochParamIdx);
+    IntegerAttr targetIterCounterIdxAttr =
+        contEdtCreate->getAttrOfType<IntegerAttr>(CPSIterCounterParamIdx);
+    IntegerAttr targetOuterEpochIdxAttr =
+        contEdtCreate->getAttrOfType<IntegerAttr>(CPSOuterEpochParamIdx);
+    DenseI64ArrayAttr targetParamPermAttr =
+        contEdtCreate->getAttrOfType<DenseI64ArrayAttr>(CPSParamPerm);
+    if (!localIterCounterIdxAttr)
+      localIterCounterIdxAttr = targetIterCounterIdxAttr;
+    if (!localOuterEpochIdxAttr)
+      localOuterEpochIdxAttr = targetOuterEpochIdxAttr;
     if (localUnpack) {
       Value paramArrayMemref = localUnpack->getOperand(0);
-      if (iterCounterIdxAttr) {
-        unsigned idx = iterCounterIdxAttr.getInt();
+      if (localIterCounterIdxAttr) {
+        unsigned idx = localIterCounterIdxAttr.getInt();
         Value idxVal = AC->createIndexConstant(idx, loc);
         curIter = AC->create<memref::LoadOp>(loc, paramArrayMemref,
                                              ValueRange{idxVal});
       }
-      if (outerEpochIdxAttr) {
-        unsigned idx = outerEpochIdxAttr.getInt();
+      if (localOuterEpochIdxAttr) {
+        unsigned idx = localOuterEpochIdxAttr.getInt();
         Value idxVal = AC->createIndexConstant(idx, loc);
         outerEpochGuid = AC->create<memref::LoadOp>(loc, paramArrayMemref,
                                                     ValueRange{idxVal});
@@ -643,26 +649,112 @@ void EpochLoweringPass::runOnOperation() {
             materializeLoopBackParam(nextParams[paramStart + i]));
     }
 
+    auto rebuildCpsPackToTargetSchema = [&]() -> SmallVector<Value> {
+      SmallVector<Value> newPackParams;
+      if (!hasCanonicalLoopBackContract)
+        return newPackParams;
+
+      unsigned targetCarryCount = canonicalLoopBackParams.size();
+      if (targetParamPermAttr)
+        targetCarryCount = targetParamPermAttr.size();
+      else if (targetIterCounterIdxAttr)
+        targetCarryCount = targetIterCounterIdxAttr.getInt();
+      else if (targetOuterEpochIdxAttr)
+        targetCarryCount = targetOuterEpochIdxAttr.getInt();
+
+      unsigned totalPackSlots = targetCarryCount;
+      if (targetIterCounterIdxAttr)
+        totalPackSlots =
+            std::max<unsigned>(totalPackSlots,
+                               targetIterCounterIdxAttr.getInt() + 1);
+      if (targetOuterEpochIdxAttr)
+        totalPackSlots =
+            std::max<unsigned>(totalPackSlots,
+                               targetOuterEpochIdxAttr.getInt() + 1);
+      if (totalPackSlots == 0)
+        return newPackParams;
+
+      auto resolveCanonicalIndex = [](ArrayRef<int64_t> perm,
+                                      unsigned slot) -> int64_t {
+        if (slot < perm.size() && perm[slot] >= 0)
+          return perm[slot];
+        return slot;
+      };
+
+      int64_t canonicalWidth = canonicalLoopBackParams.size();
+      auto growCanonicalWidth = [&](ArrayRef<int64_t> perm) {
+        for (int64_t idx : perm) {
+          if (idx >= 0)
+            canonicalWidth = std::max<int64_t>(canonicalWidth, idx + 1);
+        }
+      };
+      if (localParamPermAttr)
+        growCanonicalWidth(localParamPermAttr.asArrayRef());
+      if (targetParamPermAttr)
+        growCanonicalWidth(targetParamPermAttr.asArrayRef());
+
+      SmallVector<Value> canonicalValues(std::max<int64_t>(canonicalWidth, 0));
+      ArrayRef<int64_t> localPerm =
+          localParamPermAttr ? localParamPermAttr.asArrayRef()
+                             : ArrayRef<int64_t>();
+      ArrayRef<int64_t> targetPerm =
+          targetParamPermAttr ? targetParamPermAttr.asArrayRef()
+                              : ArrayRef<int64_t>();
+      for (unsigned i = 0; i < canonicalLoopBackParams.size(); ++i) {
+        int64_t canonicalIdx = resolveCanonicalIndex(localPerm, i);
+        if (canonicalIdx < 0)
+          continue;
+        if (static_cast<size_t>(canonicalIdx) >= canonicalValues.size())
+          canonicalValues.resize(canonicalIdx + 1);
+        canonicalValues[canonicalIdx] = canonicalLoopBackParams[i];
+      }
+
+      Value zeroI64 = AC->createIntConstant(0, AC->Int64, loc);
+      newPackParams.assign(totalPackSlots, zeroI64);
+
+      unsigned missingCarrySlots = 0;
+      for (unsigned slot = 0; slot < targetCarryCount; ++slot) {
+        int64_t canonicalIdx = resolveCanonicalIndex(targetPerm, slot);
+        if (canonicalIdx >= 0 &&
+            static_cast<size_t>(canonicalIdx) < canonicalValues.size() &&
+            canonicalValues[canonicalIdx]) {
+          newPackParams[slot] = canonicalValues[canonicalIdx];
+          continue;
+        }
+        if (!targetParamPermAttr && slot < canonicalLoopBackParams.size()) {
+          newPackParams[slot] = canonicalLoopBackParams[slot];
+          continue;
+        }
+        ++missingCarrySlots;
+      }
+
+      Value iterValue = tNext ? tNext : curIter;
+      if (targetIterCounterIdxAttr && iterValue) {
+        unsigned iterIdx = targetIterCounterIdxAttr.getInt();
+        if (iterIdx < newPackParams.size())
+          newPackParams[iterIdx] = iterValue;
+      }
+      if (targetOuterEpochIdxAttr && outerEpochGuid) {
+        unsigned epochIdx = targetOuterEpochIdxAttr.getInt();
+        if (epochIdx < newPackParams.size())
+          newPackParams[epochIdx] = outerEpochGuid;
+      }
+
+      if (missingCarrySlots > 0) {
+        ARTS_WARN("CPS advance: rebuilt continuation pack for "
+                  << outlinedFunc.getValue() << " with " << missingCarrySlots
+                  << " schema hole(s); preserving slot count with zero fill");
+      }
+
+      return newPackParams;
+    };
+
     Value paramMemref;
-    bool hasDepRouting = advanceOp->hasAttr(CPSDepRouting);
-    bool preferCanonicalLoopBack = hasCanonicalLoopBackContract;
-    if (preferCanonicalLoopBack && localUnpack && !hasDepRouting) {
-      unsigned unpackedCount = localUnpack.getNumResults();
-      if (canonicalLoopBackParams.size() < unpackedCount)
-        preferCanonicalLoopBack = false;
-    }
-    if (preferCanonicalLoopBack) {
-      SmallVector<Value> newPackParams(canonicalLoopBackParams.begin(),
-                                       canonicalLoopBackParams.end());
-      if (tNext)
-        newPackParams.push_back(tNext);
-      else if (curIter)
-        newPackParams.push_back(curIter);
-      if (outerEpochGuid)
-        newPackParams.push_back(outerEpochGuid);
+    SmallVector<Value> schemaPackParams = rebuildCpsPackToTargetSchema();
+    if (!schemaPackParams.empty()) {
       auto packType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
-      paramMemref =
-          AC->create<EdtParamPackOp>(loc, packType, newPackParams).getMemref();
+      paramMemref = AC->create<EdtParamPackOp>(loc, packType, schemaPackParams)
+                         .getMemref();
     } else if (localUnpack) {
       auto unpackResults = localUnpack.getResults();
       SmallVector<Value> newPackParams;
@@ -696,6 +788,14 @@ void EpochLoweringPass::runOnOperation() {
                                               localRoute, outerEpochGuid);
     setOutlinedFunc(newContEdt, outlinedFunc.getValue());
     newContEdt->setAttr(ContinuationForEpoch, AC->getBuilder().getUnitAttr());
+    if (auto chainIdAttr = contEdtCreate->getAttrOfType<StringAttr>(CPSChainId))
+      newContEdt->setAttr(CPSChainId, chainIdAttr);
+    if (targetIterCounterIdxAttr)
+      newContEdt->setAttr(CPSIterCounterParamIdx, targetIterCounterIdxAttr);
+    if (targetOuterEpochIdxAttr)
+      newContEdt->setAttr(CPSOuterEpochParamIdx, targetOuterEpochIdxAttr);
+    if (targetParamPermAttr)
+      newContEdt->setAttr(CPSParamPerm, targetParamPermAttr);
 
     Value newContGuid = newContEdt.getGuid();
 
