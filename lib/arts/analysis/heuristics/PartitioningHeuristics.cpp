@@ -28,6 +28,12 @@ isTinyReadOnlyStencilCoefficientTable(const PartitioningContext &ctx) {
          *ctx.staticElementCount <= 8;
 }
 
+static bool hasJacobiLikeStencilContract(const PartitioningContext &ctx) {
+  return llvm::any_of(ctx.acquires, [](const AcquireInfo &info) {
+    return info.depPattern == ArtsDepPattern::jacobi_alternating_buffers;
+  });
+}
+
 } // namespace
 
 ///===----------------------------------------------------------------------===///
@@ -77,6 +83,7 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
                  isStencilFamilyDepPattern(info.depPattern);
         });
   }
+  bool hasJacobiStencil = hasJacobiLikeStencilContract(ctx);
 
   ///===--------------------------------------------------------------------===///
   /// Coarse Partitioning Heuristics (H1.C*)
@@ -172,8 +179,8 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// stencil is on a non-partition dimension (e.g., specfem3d: stencil on
   /// i-dim, partition on k-dim). In that case, block partitioning is safe
   /// and avoids the NUMA penalty of a single coarse allocation.
-  if (patterns.hasStencil && isSingleNode && isReadOnly && !ctx.canBlock &&
-      !ctx.hasDistributedBlockContract()) {
+  if (patterns.hasStencil && isSingleNode && isReadOnly &&
+      (!ctx.canBlock || (!ctx.allBlockFullRange && !hasJacobiStencil))) {
     if (ctx.canElementWise) {
       unsigned outerRank = ctx.minPinnedDimCount();
       outerRank = outerRank > 0 ? outerRank : 1;
@@ -184,12 +191,16 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
           "H1.C4: Read-only stencil on single-node without block support uses "
           "element-wise");
     }
-    ARTS_DEBUG("H1.C4 applied: Read-only stencil on single-node -> coarse");
-    return PartitioningDecision::coarse(
-        ctx, "H1.C4: Read-only stencil on single-node prefers coarse");
+    ARTS_DEBUG("H1.C4 applied: Read-only same-dimension stencil on "
+               "single-node -> coarse");
+    return PartitioningDecision::coarse(ctx,
+                                        "H1.C4: Read-only same-dimension "
+                                        "stencil on single-node prefers "
+                                        "coarse");
   } else if (patterns.hasStencil && isSingleNode && isReadOnly &&
              (ctx.canBlock || ctx.hasDistributedBlockContract())) {
-    ARTS_DEBUG("H1.C4 skipped: stencil on non-partition dim, block is safe");
+    ARTS_DEBUG("H1.C4 skipped: explicit Jacobi/cross-dim/full-range stencil "
+               "block layout is safe");
   }
 
   /// H1.C5: Non-uniform access without partitioning support → Coarse
