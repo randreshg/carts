@@ -301,6 +301,7 @@ static void rewriteSeidelSequential(SeidelWavefrontMatch &match,
 static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
                                    const Wavefront2DTilingPlan &tilingPlan) {
   Location loc = match.parallelEdt.getLoc();
+  Location syntheticLoopLoc = UnknownLoc::get(match.parallelEdt.getContext());
   OpBuilder builder(match.parallelEdt);
   int64_t tileRowsConst = tilingPlan.tileRows;
   int64_t tileColsConst = tilingPlan.tileCols;
@@ -346,8 +347,8 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
   Block &epochBlock = epochRegion.front();
 
   OpBuilder epochBuilder = OpBuilder::atBlockBegin(&epochBlock);
-  auto waveLoop =
-      epochBuilder.create<scf::ForOp>(loc, zero, waveUbExclusive, one);
+  auto waveLoop = epochBuilder.create<scf::ForOp>(syntheticLoopLoc, zero,
+                                                  waveUbExclusive, one);
   wavefrontContract.stamp(waveLoop.getOperation());
 
   OpBuilder waveBuilder = OpBuilder::atBlockBegin(waveLoop.getBody());
@@ -383,12 +384,15 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
       tileBuilder.create<arith::MulIOp>(loc, biMaxExclusive, tileRows);
 
   auto tileFor = tileBuilder.create<arts::ForOp>(
-      loc, ValueRange{tileRowLb}, ValueRange{tileRowUb}, ValueRange{tileRows},
+      syntheticLoopLoc, ValueRange{tileRowLb}, ValueRange{tileRowUb},
+      ValueRange{tileRows},
       /*schedule=*/nullptr, /*reductionAccumulators=*/ValueRange{});
   /// This frontier loop is synthetic. It preserves the stencil contract, but
   /// it does not preserve the source row-loop trip count or other loop
   /// metadata, so restamp only the contract attrs below.
   wavefrontContract.stamp(tileFor.getOperation());
+  tileFor->setAttr(AttrNames::Operation::SkipLoopMetadataRecovery,
+                   tileBuilder.getUnitAttr());
   if (tilingPlan.taskChunkHint)
     setPartitioningHint(tileFor.getOperation(),
                         PartitioningHint::block(*tilingPlan.taskChunkHint));

@@ -46,8 +46,6 @@ static bool isCPSSequentialOp(Operation *op) {
     return false;
   if (isa<scf::ForOp>(op))
     return true;
-  if (isa<func::CallOp>(op))
-    return true;
   if (isa<memref::LoadOp, memref::StoreOp, memref::AllocaOp, memref::AllocOp,
           memref::DeallocOp, memref::CastOp, memref::SubViewOp>(op))
     return true;
@@ -487,6 +485,11 @@ EpochChainDecision EpochHeuristics::evaluateCPSChain(scf::ForOp forOp) {
       continue;
     if (isa<DbAcquireOp, DbReleaseOp>(op))
       continue;
+    if (isa<func::CallOp>(op)) {
+      decision.rationale =
+          "loop body has call-based sidecars that stay on the non-CPS path";
+      return decision;
+    }
     if (isCPSSequentialOp(&op)) {
       decision.sequentialOps.push_back(&op);
       continue;
