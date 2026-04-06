@@ -9,6 +9,7 @@
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/heuristics/HeuristicUtils.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
+#include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/PatternSemantics.h"
@@ -334,6 +335,7 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
   bool allowNestedWorkBoost = false;
   bool isStencilPattern = false;
   bool isWavefrontPattern = false;
+  bool canUseStencilStripCoarsening = false;
   int64_t repeatedTripProduct = 1;
   int64_t nestedLoopWork = estimateNestedLoopWork(forOp);
   int64_t stencilIterationWork = 1;
@@ -344,6 +346,16 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
     /// Fall back to the semantic dep-pattern contract so stencil-family loops
     /// still take the stencil coarsening path before lowering.
     isStencilPattern = PatternSemantics::isStencilFamily(*depPattern);
+  }
+  if (isStencilPattern) {
+    LoweringContractInfo loopContract =
+        resolveLoopDistributionContract(forOp.getOperation());
+    /// The owned-strip stencil policy is only profitable once lowering carries
+    /// an explicit halo/ownership contract. Pure dep-pattern classification is
+    /// too coarse and can under-distribute neighborhood kernels like
+    /// convolution that do not need stencil halo amortization.
+    canUseStencilStripCoarsening =
+        loopContract.hasExplicitStencilContract();
   }
   if (auto summary =
           loopAnalysis.getLoopDbAccessSummary(forOp.getOperation())) {
@@ -391,7 +403,7 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
       minItersPerWorker = std::max<int64_t>(minItersPerWorker, depCount * 2);
   }
 
-  if (isStencilPattern) {
+  if (canUseStencilStripCoarsening) {
     repeatedTripProduct =
         arts::getRepeatedParentTripProduct(forOp.getOperation());
     StencilStripCostModelInput input;
@@ -411,7 +423,8 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
   /// halo-exchange families. Larger owned strips can materially reduce EDT and
   /// dependence overhead on repeated stencil kernels once the worker-local
   /// halo fast path is available.
-  if (isStencilPattern && !isWavefrontPattern && !workerCfg.internode) {
+  if (canUseStencilStripCoarsening && !isWavefrontPattern &&
+      !workerCfg.internode) {
     decision.stencilStripPlan = stencilStripPlan;
     if (decision.stencilStripPlan) {
       decision.desiredWorkers = decision.stencilStripPlan->desiredWorkers;
