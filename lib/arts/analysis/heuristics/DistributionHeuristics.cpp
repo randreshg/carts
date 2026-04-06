@@ -222,7 +222,8 @@ DistributionHeuristics::evaluateStencilStripCostModel(
     return std::nullopt;
 
   constexpr int64_t kMinOwnedOuterItersFloor = 8;
-  constexpr int64_t kAmortizationLogStride = 16;
+  constexpr int64_t kAmortizationPressureStride = 8;
+  constexpr int64_t kOwnedSpanStridePenalty = 2;
   constexpr int64_t kMaxAmortizationMultiplier = 4;
 
   int64_t baselineOwnedOuterIters =
@@ -234,9 +235,22 @@ DistributionHeuristics::evaluateStencilStripCostModel(
   int64_t amortizationScore =
       floorLog2Positive(std::max<int64_t>(1, input.repeatedTripProduct)) +
       floorLog2Positive(std::max<int64_t>(1, input.stencilIterationWork));
-  int64_t amortizationMultiplier =
-      clampPositive(1 + amortizationScore / kAmortizationLogStride, 1,
-                    kMaxAmortizationMultiplier);
+  int64_t ownedSpanScore =
+      floorLog2Positive(std::max<int64_t>(1, baselineOwnedOuterIters));
+  int64_t stencilPressureScore =
+      std::max<int64_t>(0, amortizationScore - ownedSpanScore);
+  /// As each worker already owns a wider outer strip, require proportionally
+  /// more amortization pressure before reducing worker count again. This keeps
+  /// the policy monotone without a hard large-strip cutoff.
+  int64_t amortizationStride = kAmortizationPressureStride +
+                               ownedSpanScore * kOwnedSpanStridePenalty;
+  int64_t amortizationMultiplier = 1;
+  if (stencilPressureScore > 0) {
+    amortizationMultiplier +=
+        ceilDivPositive(stencilPressureScore, amortizationStride);
+  }
+  amortizationMultiplier = clampPositive(amortizationMultiplier, 1,
+                                         kMaxAmortizationMultiplier);
 
   int64_t targetOwnedCells =
       saturatingMulPositive(baselineOwnedCells, amortizationMultiplier);
@@ -323,10 +337,11 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
   int64_t repeatedTripProduct = 1;
   int64_t nestedLoopWork = estimateNestedLoopWork(forOp);
   int64_t stencilIterationWork = 1;
+  std::optional<StencilStripCostModelResult> stencilStripPlan;
   if (auto depPattern = getEffectiveDepPattern(forOp.getOperation())) {
     isWavefrontPattern = PatternSemantics::isWavefrontFamily(*depPattern);
     /// The loop access summary is not always populated yet when ForOpt runs.
-    /// Fall back to the semantic dep-pattern contract so Jacobi/stencil loops
+    /// Fall back to the semantic dep-pattern contract so stencil-family loops
     /// still take the stencil coarsening path before lowering.
     isStencilPattern = PatternSemantics::isStencilFamily(*depPattern);
   }
@@ -377,27 +392,27 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
   }
 
   if (isStencilPattern) {
-    if (std::max(nestedLoopWork, stencilIterationWork) >= 4096) {
-      minItersPerWorker = std::max<int64_t>(minItersPerWorker, 16);
-    }
-
     repeatedTripProduct =
         arts::getRepeatedParentTripProduct(forOp.getOperation());
-    if (repeatedTripProduct >= 64)
-      minItersPerWorker = std::max<int64_t>(minItersPerWorker, 16);
-    else if (repeatedTripProduct >= 16)
-      minItersPerWorker = std::max<int64_t>(minItersPerWorker, 12);
-  }
-  decision.minItersPerWorker = minItersPerWorker;
-
-  if (isStencilPattern && !isWavefrontPattern && !workerCfg.internode) {
     StencilStripCostModelInput input;
     input.tripCount = tripCount;
     input.stencilIterationWork = std::max<int64_t>(1, stencilIterationWork);
     input.repeatedTripProduct = std::max<int64_t>(1, repeatedTripProduct);
     input.totalWorkers = workerCfg.totalWorkers;
+    stencilStripPlan = evaluateStencilStripCostModel(input);
 
-    decision.stencilStripPlan = evaluateStencilStripCostModel(input);
+    if (stencilStripPlan && !isWavefrontPattern && !workerCfg.internode)
+      minItersPerWorker = std::max<int64_t>(
+          minItersPerWorker, stencilStripPlan->minOwnedOuterIters);
+  }
+  decision.minItersPerWorker = minItersPerWorker;
+
+  /// Prefer the stencil strip cost model for single-node stencils, including
+  /// halo-exchange families. Larger owned strips can materially reduce EDT and
+  /// dependence overhead on repeated stencil kernels once the worker-local
+  /// halo fast path is available.
+  if (isStencilPattern && !isWavefrontPattern && !workerCfg.internode) {
+    decision.stencilStripPlan = stencilStripPlan;
     if (decision.stencilStripPlan) {
       decision.desiredWorkers = decision.stencilStripPlan->desiredWorkers;
       if (workerCfg.totalWorkers > decision.desiredWorkers) {
