@@ -1662,16 +1662,54 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
       continue;
     }
 
+    Value payloadView;
+    auto getPayloadView = [&]() -> Value {
+      if (payloadView)
+        return payloadView;
+
+      OpBuilder::InsertionGuard payloadIG(AC->getBuilder());
+      AC->setInsertionPoint(placeholder.getDefiningOp());
+
+      Type depGuidType = placeholder.getType();
+      Type depPtrType = placeholder.getType();
+      if (auto sourceAcquire =
+              originalDeps[depIndex].getDefiningOp<DbAcquireOp>()) {
+        depGuidType = sourceAcquire.getResult(0).getType();
+        depPtrType = sourceAcquire.getResult(1).getType();
+      } else if (auto sourceAcquire =
+                     originalDeps[depIndex].getDefiningOp<DepDbAcquireOp>()) {
+        depGuidType = sourceAcquire.getResult(0).getType();
+        depPtrType = sourceAcquire.getResult(1).getType();
+      }
+
+      auto depDbAcquire = AC->create<arts::DepDbAcquireOp>(
+          loc, depGuidType, depPtrType, depv, baseOffset,
+          /*indices=*/SmallVector<Value>{},
+          /*offsets=*/SmallVector<Value>{},
+          /*sizes=*/SmallVector<Value>{}, Value());
+      payloadView = depDbAcquire.getResult(1);
+      return payloadView;
+    };
+
     /// If not, for each user of the dependency placeholder, rewrite the
     /// operation
     ARTS_DEBUG(" - Rewriting " << users.size() << " users");
     for (Operation *op : users) {
       if (auto mp = dyn_cast<polygeist::Memref2PointerOp>(op)) {
         AC->setInsertionPoint(op);
-        SmallVector<Value> emptyArgs;
-        auto depGep = AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
-                                           baseOffset, emptyArgs, emptyArgs);
-        op->getResult(0).replaceAllUsesWith(depGep.getPtr());
+        if (usePayloadIndexing) {
+          SmallVector<Value> emptyArgs;
+          auto payloadGep = AC->create<DbGepOp>(loc, AC->llvmPtr,
+                                                getPayloadView(), emptyArgs,
+                                                emptyArgs);
+          op->getResult(0).replaceAllUsesWith(payloadGep.getPtr());
+        } else {
+          SmallVector<Value> emptyArgs;
+          auto depGep =
+              AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
+                                   baseOffset, emptyArgs, emptyArgs);
+          op->getResult(0).replaceAllUsesWith(depGep.getPtr());
+        }
         op->erase();
       } else if (auto dbGep = dyn_cast<arts::DbGepOp>(op)) {
         AC->setInsertionPoint(op);
@@ -1680,10 +1718,17 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         dbGepIndices = resolveParam(dbGepIndices, dbGep.getLoc());
         dbGepIndices = normalizeSliceIndices(dbGepIndices, accessOffsets,
                                              accessSizes, usePayloadIndexing);
-        auto depGep =
-            AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
-                                 baseOffset, dbGepIndices, accessStrides);
-        op->getResult(0).replaceAllUsesWith(depGep.getPtr());
+        if (usePayloadIndexing) {
+          auto payloadGep = AC->create<DbGepOp>(loc, AC->llvmPtr,
+                                                getPayloadView(), dbGepIndices,
+                                                accessStrides);
+          op->getResult(0).replaceAllUsesWith(payloadGep.getPtr());
+        } else {
+          auto depGep =
+              AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
+                                   baseOffset, dbGepIndices, accessStrides);
+          op->getResult(0).replaceAllUsesWith(depGep.getPtr());
+        }
         op->erase();
       } else if (auto dbRef = dyn_cast<arts::DbRefOp>(op)) {
         AC->setInsertionPoint(op);
@@ -1692,11 +1737,18 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         refIndices = resolveParam(refIndices, dbRef.getLoc());
         refIndices = normalizeSliceIndices(refIndices, accessOffsets,
                                            accessSizes, usePayloadIndexing);
-        auto depGep = AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
-                                           baseOffset, refIndices,
-                                           accessStrides);
+        Value basePtr;
+        if (usePayloadIndexing) {
+          basePtr = AC->create<DbGepOp>(loc, AC->llvmPtr, getPayloadView(),
+                                        refIndices, accessStrides)
+                        .getPtr();
+        } else {
+          basePtr = AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
+                                         baseOffset, refIndices, accessStrides)
+                        .getPtr();
+        }
         auto newMemref = AC->create<polygeist::Pointer2MemrefOp>(
-            loc, dbRef.getType(), depGep.getPtr());
+            loc, dbRef.getType(), basePtr);
 
         /// Rewrite memref.load/store users of DbRefOp to DynLoadOp/DynStoreOp
         /// when the result type has multiple dynamic dims. Without this,
@@ -1749,10 +1801,18 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         storeIndices = resolveParam(storeIndices, store.getLoc());
         storeIndices = normalizeSliceIndices(storeIndices, accessOffsets,
                                              accessSizes, usePayloadIndexing);
-        auto depGep =
-            AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
-                                 baseOffset, storeIndices, accessStrides);
-        AC->create<LLVM::StoreOp>(loc, store.getValue(), depGep.getPtr());
+        if (usePayloadIndexing) {
+          auto payloadGep = AC->create<DbGepOp>(loc, AC->llvmPtr,
+                                                getPayloadView(), storeIndices,
+                                                accessStrides);
+          AC->create<LLVM::StoreOp>(loc, store.getValue(),
+                                    payloadGep.getPtr());
+        } else {
+          auto depGep =
+              AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
+                                   baseOffset, storeIndices, accessStrides);
+          AC->create<LLVM::StoreOp>(loc, store.getValue(), depGep.getPtr());
+        }
         op->erase();
       } else if (auto load = dyn_cast<memref::LoadOp>(op)) {
         AC->setInsertionPoint(op);
@@ -1761,11 +1821,20 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         loadIndices = resolveParam(loadIndices, load.getLoc());
         loadIndices = normalizeSliceIndices(loadIndices, accessOffsets,
                                             accessSizes, usePayloadIndexing);
-        auto depGep = AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
-                                           baseOffset, loadIndices,
-                                           accessStrides);
-        Value loaded =
-            AC->create<LLVM::LoadOp>(loc, load.getType(), depGep.getPtr());
+        Value loaded;
+        if (usePayloadIndexing) {
+          auto payloadGep = AC->create<DbGepOp>(loc, AC->llvmPtr,
+                                                getPayloadView(), loadIndices,
+                                                accessStrides);
+          loaded = AC->create<LLVM::LoadOp>(loc, load.getType(),
+                                            payloadGep.getPtr());
+        } else {
+          auto depGep =
+              AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
+                                   baseOffset, loadIndices, accessStrides);
+          loaded = AC->create<LLVM::LoadOp>(loc, load.getType(),
+                                            depGep.getPtr());
+        }
         op->getResult(0).replaceAllUsesWith(loaded);
         op->erase();
       } else if (auto release = dyn_cast<DbReleaseOp>(op)) {
