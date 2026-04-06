@@ -1303,6 +1303,13 @@ private:
       /// path until the upstream acquire rewrite carries a compact index space.
       effectiveByteOffset = nullptr;
       effectiveByteSize = nullptr;
+      if (effectiveDepFlags) {
+        int32_t depFlagBits = *effectiveDepFlags & ~kArtsDepFlagPreserveShape;
+        if (depFlagBits == 0)
+          effectiveDepFlags.reset();
+        else
+          effectiveDepFlags = depFlagBits;
+      }
     }
 
     /// Prepare ESD values if needed (cast Index to Int64).
@@ -1519,8 +1526,68 @@ struct DepDbAcquireOpPattern : public ArtsToLLVMPattern<DepDbAcquireOp> {
 
   LogicalResult matchAndRewrite(DepDbAcquireOp op,
                                 PatternRewriter &rewriter) const override {
+    ARTS_INFO("Lowering DepDbAcquire Op " << op);
+    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
+    auto loc = op.getLoc();
     auto depStruct = op.getDepStruct();
-    rewriter.replaceOp(op, ValueRange{depStruct, depStruct});
+
+    Value typedDepPtr = AC->castToLLVMPtr(depStruct, loc);
+    Value linearIndex = op.getOffset();
+    if (linearIndex.getType() != AC->Int64)
+      linearIndex = AC->ensureI64(linearIndex, loc);
+
+    SmallVector<Value> strides;
+    if (!op.getSizes().empty()) {
+      SmallVector<Value> sizes(op.getSizes().begin(), op.getSizes().end());
+      strides = AC->computeStridesFromSizes(sizes, loc);
+    }
+
+    auto indices = op.getIndices();
+    for (size_t i = 0; i < indices.size(); ++i) {
+      Value idx = indices[i];
+      if (idx.getType() != AC->Int64)
+        idx = AC->ensureI64(idx, loc);
+      Value strideVal = (i < strides.size())
+                            ? strides[i]
+                            : AC->createIntConstant(1, AC->Int64, loc);
+      if (strideVal.getType() != AC->Int64)
+        strideVal = AC->ensureI64(strideVal, loc);
+
+      Value contrib = AC->create<arith::MulIOp>(loc, idx, strideVal);
+      linearIndex = AC->create<arith::AddIOp>(loc, linearIndex, contrib);
+    }
+
+    Value depEntryPtr = AC->create<LLVM::GEPOp>(
+        loc, AC->llvmPtr, AC->ArtsEdtDep, typedDepPtr, ValueRange{linearIndex});
+
+    auto c0 = AC->createIntConstant(0, AC->Int64, loc);
+    auto cPtrIdx = AC->createIntConstant(1, AC->Int64, loc);
+
+    Value guidPtr = AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->ArtsEdtDep,
+                                            depEntryPtr, ValueRange{c0, c0});
+    Value dataPtrAddr =
+        AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->ArtsEdtDep, depEntryPtr,
+                                ValueRange{c0, cPtrIdx});
+    Value payloadPtr =
+        AC->create<LLVM::LoadOp>(loc, AC->llvmPtr, dataPtrAddr);
+
+    /// DepDbAcquireOp feeds two distinct downstream shapes:
+    /// - flat payload memrefs (e.g. memref<?x?xf32>) expect the dep entry's
+    ///   ptr field to be resolved to the payload base pointer directly.
+    /// - handle-table memrefs (e.g. memref<?x!llvm.ptr>) still need one level
+    ///   of pointer indirection preserved so later db_gep/load pairs can
+    ///   recover the concrete payload pointer. Loading the dep entry here for
+    ///   those cases turns data bytes into fake pointers at runtime.
+    Value ptrBase = payloadPtr;
+    if (auto ptrType = dyn_cast<MemRefType>(op.getPtr().getType()))
+      if (isa<LLVM::LLVMPointerType>(ptrType.getElementType()))
+        ptrBase = dataPtrAddr;
+
+    auto guidView = AC->create<polygeist::Pointer2MemrefOp>(
+        loc, op.getGuid().getType(), guidPtr);
+    auto ptrView = AC->create<polygeist::Pointer2MemrefOp>(
+        loc, op.getPtr().getType(), ptrBase);
+    rewriter.replaceOp(op, ValueRange{guidView, ptrView});
     ++numDepOpsConverted;
     return success();
   }
@@ -2291,7 +2358,57 @@ struct DbReleasePattern : public ArtsToLLVMPattern<DbReleaseOp> {
   LogicalResult matchAndRewrite(DbReleaseOp op,
                                 PatternRewriter &rewriter) const override {
     ARTS_INFO("Lowering DbRelease Op " << op);
-    /// Simply erase the DbReleaseOp
+    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
+    Value source = op.getSource();
+    Operation *underlyingDb = DbUtils::getUnderlyingDb(source);
+    Value guidStorage;
+    if (auto alloc = dyn_cast_or_null<DbAllocOp>(underlyingDb))
+      guidStorage = alloc.getGuid();
+    else if (auto acquire = dyn_cast_or_null<DbAcquireOp>(underlyingDb))
+      guidStorage = acquire.getGuid();
+    else if (auto depAcquire = dyn_cast_or_null<DepDbAcquireOp>(underlyingDb))
+      guidStorage = depAcquire.getGuid();
+
+    if (guidStorage) {
+      auto emitRelease = [&](Value guidValue) {
+        guidValue = AC->ensureI64(guidValue, op.getLoc());
+        ArtsCodegen::RuntimeCallBuilder RCB(*AC, op.getLoc());
+        RCB.callVoid(types::ARTSRTL_arts_db_release, {guidValue});
+      };
+
+      if (auto storageTy = dyn_cast<MemRefType>(guidStorage.getType())) {
+        SmallVector<Value> releaseSizes = DbUtils::getSizesFromDb(underlyingDb);
+        if (releaseSizes.empty()) {
+          Value zero = AC->createIndexConstant(0, op.getLoc());
+          emitRelease(AC->create<memref::LoadOp>(op.getLoc(), guidStorage,
+                                                 ValueRange{zero}));
+        } else {
+          SmallVector<Value> releaseOffsets;
+          releaseOffsets.reserve(releaseSizes.size());
+          for (size_t i = 0; i < releaseSizes.size(); ++i)
+            releaseOffsets.push_back(AC->createIndexConstant(0, op.getLoc()));
+          bool isSingle = releaseSizes.size() == 1;
+          AC->iterateDbElements(
+              guidStorage, Value(), releaseSizes, releaseOffsets, isSingle,
+              op.getLoc(),
+              [&](Value linearIndex) {
+                Value idx = AC->castToIndex(linearIndex, op.getLoc());
+                SmallVector<Value> indices;
+                if (storageTy.getRank() == 1) {
+                  indices.push_back(idx);
+                } else {
+                  indices =
+                      AC->computeIndicesFromLinearIndex(releaseSizes, idx,
+                                                        op.getLoc());
+                }
+                emitRelease(AC->create<memref::LoadOp>(op.getLoc(), guidStorage,
+                                                       indices));
+              });
+        }
+      } else {
+        emitRelease(guidStorage);
+      }
+    }
     rewriter.eraseOp(op);
     ++numDbOpsConverted;
     return success();

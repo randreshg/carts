@@ -478,13 +478,16 @@ private:
 
   /// Parameter handling
   Value packParams(Location loc, EdtEnvManager &envManager,
-                   SmallVector<Type> &packTypes);
+                   SmallVector<Type> &packTypes,
+                   SmallVectorImpl<Value> *packedValues = nullptr);
 
   /// Region outlining
   LogicalResult outlineRegionToFunction(EdtOp edtOp, func::FuncOp targetFunc,
                                         EdtEnvManager &envManager,
-                                        const SmallVector<Type> &packTypes,
-                                        size_t numUserParams);
+                                        SmallVector<Type> &packTypes,
+                                        size_t numUserParams,
+                                        SmallVectorImpl<unsigned>
+                                            &livePackIndices);
 
   void transformDepUses(ArrayRef<Value> originalDeps, Value depv,
                         ArrayRef<Value> allParams, EdtEnvManager &envManager,
@@ -618,6 +621,7 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
         normalizeTaskDepSlice(AC, acquire, *contract);
 
   SmallVector<Type> packTypes;
+  SmallVector<Value> packedValues;
 
   /// Create edt outlined function
   func::FuncOp outlinedFunc = createOutlinedFunction(edtOp, envManager);
@@ -625,12 +629,37 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
     return edtOp.emitError("Failed to create outlined function");
 
   /// Pack parameters
-  Value paramPack = packParams(loc, envManager, packTypes);
+  Value paramPack = packParams(loc, envManager, packTypes, &packedValues);
 
   /// Outline region to function and replace EDT
+  SmallVector<unsigned> livePackIndices;
   if (failed(outlineRegionToFunction(edtOp, outlinedFunc, envManager, packTypes,
-                                     envManager.getParameters().size()))) {
+                                     envManager.getParameters().size(),
+                                     livePackIndices))) {
     return edtOp.emitError("Failed to outline region to function");
+  }
+
+  /// transformDepUses can forward nested continuation DB families back onto
+  /// depv, leaving previously packed handle slots dead. Rebuild the caller
+  /// param pack to the compact live ABI so continuations do not preserve
+  /// redundant zero-filled carry state.
+  if (!packedValues.empty() && livePackIndices.size() != packedValues.size()) {
+    SmallVector<Value> livePackValues;
+    livePackValues.reserve(livePackIndices.size());
+    for (unsigned index : livePackIndices) {
+      if (index < packedValues.size())
+        livePackValues.push_back(packedValues[index]);
+    }
+
+    if (livePackValues.empty()) {
+      auto emptyType = MemRefType::get({0}, AC->Int64);
+      paramPack =
+          AC->create<EdtParamPackOp>(loc, TypeRange{emptyType}, ValueRange{});
+    } else {
+      auto memrefType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
+      paramPack = AC->create<EdtParamPackOp>(loc, TypeRange{memrefType},
+                                             ValueRange(livePackValues));
+    }
   }
 
   /// Calculate dependency count from the dependency view of each DB.
@@ -766,7 +795,8 @@ EdtLoweringPass::createOutlinedFunction(EdtOp edtOp,
 /// and metadata for datablock dependencies (indices, offsets, sizes).
 ///===----------------------------------------------------------------------===///
 Value EdtLoweringPass::packParams(Location loc, EdtEnvManager &envManager,
-                                  SmallVector<Type> &packTypes) {
+                                  SmallVector<Type> &packTypes,
+                                  SmallVectorImpl<Value> *packedValues) {
   const auto &parameters = envManager.getParameters();
   const auto &deps = envManager.getDependencies();
   const auto &dbHandles = envManager.getDbHandles();
@@ -851,10 +881,15 @@ Value EdtLoweringPass::packParams(Location loc, EdtEnvManager &envManager,
   }
 
   if (packValues.empty()) {
+    if (packedValues)
+      packedValues->clear();
     ARTS_INFO("No parameters to pack, creating empty EdtParamPackOp");
     auto emptyType = MemRefType::get({0}, AC->Int64);
     return AC->create<EdtParamPackOp>(loc, TypeRange{emptyType}, ValueRange{});
   }
+
+  if (packedValues)
+    packedValues->assign(packValues.begin(), packValues.end());
 
   ARTS_DEBUG_REGION({
     ARTS_INFO("Creating parameter pack for " << packValues.size() << " items");
@@ -878,7 +913,8 @@ Value EdtLoweringPass::packParams(Location loc, EdtEnvManager &envManager,
 ///===----------------------------------------------------------------------===///
 LogicalResult EdtLoweringPass::outlineRegionToFunction(
     EdtOp edtOp, func::FuncOp targetFunc, EdtEnvManager &envManager,
-    const SmallVector<Type> &packTypes, size_t numUserParams) {
+    SmallVector<Type> &packTypes, size_t numUserParams,
+    SmallVectorImpl<unsigned> &livePackIndices) {
   Location loc = edtOp.getLoc();
   auto &builder = AC->getBuilder();
   OpBuilder::InsertionGuard IG(builder);
@@ -892,9 +928,10 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
 
   const auto &parameters = envManager.getParameters();
   SmallVector<Value> unpackedParams, allParams;
+  EdtParamUnpackOp paramUnpackOp = nullptr;
 
   if (!packTypes.empty()) {
-    auto paramUnpackOp = AC->create<EdtParamUnpackOp>(loc, packTypes, paramv);
+    paramUnpackOp = AC->create<EdtParamUnpackOp>(loc, packTypes, paramv);
     auto results = paramUnpackOp.getResults();
     allParams.assign(results.begin(), results.end());
     unpackedParams.append(allParams.begin(), allParams.begin() + numUserParams);
@@ -1030,6 +1067,31 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
 
   /// Transform dependency uses inside outlined region.
   transformDepUses(originalDeps, depv, allParams, envManager, depPlaceholders);
+
+  livePackIndices.clear();
+  if (paramUnpackOp) {
+    SmallVector<Type> livePackTypes;
+    livePackTypes.reserve(allParams.size());
+    for (auto [index, param] : llvm::enumerate(allParams)) {
+      if (param.use_empty())
+        continue;
+      livePackIndices.push_back(index);
+      livePackTypes.push_back(packTypes[index]);
+    }
+
+    if (livePackIndices.size() != allParams.size()) {
+      if (!livePackTypes.empty()) {
+        AC->setInsertionPoint(paramUnpackOp);
+        auto compactUnpack =
+            AC->create<EdtParamUnpackOp>(loc, livePackTypes, paramv);
+        for (auto [newIndex, oldIndex] : llvm::enumerate(livePackIndices))
+          allParams[oldIndex].replaceAllUsesWith(
+              compactUnpack.getResult(newIndex));
+      }
+      paramUnpackOp.erase();
+      packTypes.assign(livePackTypes.begin(), livePackTypes.end());
+    }
+  }
   return success();
 }
 
@@ -1458,6 +1520,8 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         accessOffsets.push_back(AC->createIndexConstant(0, loc));
       accessStrides = AC->computeStridesFromSizes(accessSizes, loc);
     }
+    const bool accessIndicesAlreadySliceRelative =
+        indicesAlreadySliceRelative || usePayloadIndexing;
 
     auto normalizeSliceIndices = [&](ArrayRef<Value> indices,
                                      ArrayRef<Value> offsets,
@@ -1469,11 +1533,28 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
       Value zero = AC->createIndexConstant(0, loc);
       for (size_t i = 0; i < indices.size(); ++i) {
         Value idx = indices[i];
-        if (!alreadySliceRelative && i < offsets.size()) {
+        if (i < offsets.size()) {
           Value off = offsets[i];
           if (off.getType() != idx.getType())
             off = AC->castToInt(idx.getType(), off, loc);
-          idx = AC->create<arith::SubIOp>(loc, idx, off);
+          if (alreadySliceRelative) {
+            if (auto sub = idx.getDefiningOp<arith::SubIOp>();
+                sub && sub.getRhs() == off) {
+              Value lhs = sub.getLhs();
+              if (lhs.getType() != idx.getType())
+                lhs = AC->castToInt(idx.getType(), lhs, loc);
+              Value belowOffset = AC->create<arith::CmpIOp>(
+                  loc, arith::CmpIPredicate::ult, lhs, off);
+              Value shifted = AC->create<arith::SubIOp>(loc, lhs, off);
+              idx = AC->create<arith::SelectOp>(loc, belowOffset, zero,
+                                                shifted);
+            }
+          } else {
+            Value belowOffset = AC->create<arith::CmpIOp>(
+                loc, arith::CmpIPredicate::ult, idx, off);
+            Value shifted = AC->create<arith::SubIOp>(loc, idx, off);
+            idx = AC->create<arith::SelectOp>(loc, belowOffset, zero, shifted);
+          }
         }
         if (i < sizes.size()) {
           Value size = sizes[i];
@@ -1647,7 +1728,8 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
     /// we must index depv, not treat a single dep entry as an array.
     bool hasIndexedUsers = llvm::any_of(users, [](Operation *op) {
       return isa<arts::DbRefOp, arts::DbGepOp, memref::LoadOp, memref::StoreOp,
-                 polygeist::Memref2PointerOp>(op);
+                 polygeist::Memref2PointerOp,
+                 polygeist::Pointer2MemrefOp>(op);
     });
     if (isSingleElement && !isNestedMemref && !hasIndexedUsers) {
       ARTS_DEBUG(" - Rewriting single element placeholder");
@@ -1695,7 +1777,27 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
     /// operation
     ARTS_DEBUG(" - Rewriting " << users.size() << " users");
     for (Operation *op : users) {
-      if (auto mp = dyn_cast<polygeist::Memref2PointerOp>(op)) {
+      if (auto ptr2Memref = dyn_cast<polygeist::Pointer2MemrefOp>(op)) {
+        AC->setInsertionPoint(op);
+        Value basePtr;
+        if (usePayloadIndexing) {
+          SmallVector<Value> emptyArgs;
+          basePtr = AC->create<DbGepOp>(loc, AC->llvmPtr, getPayloadView(),
+                                        emptyArgs, emptyArgs)
+                        .getPtr();
+        } else {
+          SmallVector<Value> emptyArgs;
+          Value ptrField =
+              AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
+                                   baseOffset, emptyArgs, emptyArgs)
+                  .getPtr();
+          basePtr = AC->create<LLVM::LoadOp>(loc, AC->llvmPtr, ptrField);
+        }
+        auto newMemref = AC->create<polygeist::Pointer2MemrefOp>(
+            loc, ptr2Memref.getType(), basePtr);
+        ptr2Memref.getResult().replaceAllUsesWith(newMemref.getResult());
+        ptr2Memref.erase();
+      } else if (auto mp = dyn_cast<polygeist::Memref2PointerOp>(op)) {
         AC->setInsertionPoint(op);
         if (usePayloadIndexing) {
           SmallVector<Value> emptyArgs;
@@ -1717,7 +1819,8 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
                                         dbGep.getIndices().end());
         dbGepIndices = resolveParam(dbGepIndices, dbGep.getLoc());
         dbGepIndices = normalizeSliceIndices(dbGepIndices, accessOffsets,
-                                             accessSizes, usePayloadIndexing);
+                                             accessSizes,
+                                             accessIndicesAlreadySliceRelative);
         if (usePayloadIndexing) {
           auto payloadGep = AC->create<DbGepOp>(loc, AC->llvmPtr,
                                                 getPayloadView(), dbGepIndices,
@@ -1736,16 +1839,19 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
                                       dbRef.getIndices().end());
         refIndices = resolveParam(refIndices, dbRef.getLoc());
         refIndices = normalizeSliceIndices(refIndices, accessOffsets,
-                                           accessSizes, usePayloadIndexing);
+                                           accessSizes,
+                                           accessIndicesAlreadySliceRelative);
         Value basePtr;
         if (usePayloadIndexing) {
           basePtr = AC->create<DbGepOp>(loc, AC->llvmPtr, getPayloadView(),
                                         refIndices, accessStrides)
                         .getPtr();
         } else {
-          basePtr = AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
-                                         baseOffset, refIndices, accessStrides)
-                        .getPtr();
+          Value ptrField =
+              AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
+                                   baseOffset, refIndices, accessStrides)
+                  .getPtr();
+          basePtr = AC->create<LLVM::LoadOp>(loc, AC->llvmPtr, ptrField);
         }
         auto newMemref = AC->create<polygeist::Pointer2MemrefOp>(
             loc, dbRef.getType(), basePtr);
@@ -1800,7 +1906,8 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
                                         store.getIndices().end());
         storeIndices = resolveParam(storeIndices, store.getLoc());
         storeIndices = normalizeSliceIndices(storeIndices, accessOffsets,
-                                             accessSizes, usePayloadIndexing);
+                                             accessSizes,
+                                             accessIndicesAlreadySliceRelative);
         if (usePayloadIndexing) {
           auto payloadGep = AC->create<DbGepOp>(loc, AC->llvmPtr,
                                                 getPayloadView(), storeIndices,
@@ -1820,7 +1927,8 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
                                        load.getIndices().end());
         loadIndices = resolveParam(loadIndices, load.getLoc());
         loadIndices = normalizeSliceIndices(loadIndices, accessOffsets,
-                                            accessSizes, usePayloadIndexing);
+                                            accessSizes,
+                                            accessIndicesAlreadySliceRelative);
         Value loaded;
         if (usePayloadIndexing) {
           auto payloadGep = AC->create<DbGepOp>(loc, AC->llvmPtr,
