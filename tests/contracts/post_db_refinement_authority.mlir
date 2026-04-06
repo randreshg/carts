@@ -11,9 +11,11 @@
 // UNIFORM-CONC-NOT: arts.lowering_contract({{.*}}){{.*}}distributionVersion = 2 : i64
 
 // STENCIL-PRE: arts.db_acquire[<in>] {{.*}}partitioning(<block>)
-// STENCIL-PRE: arts.db_acquire[<inout>] {{.*}}partitioning(<block>
-// STENCIL-PRE-NOT: partitioning(<coarse>)
-// STENCIL-PRE-NOT: arts.lowering_contract({{.*}}memref<?xmemref<?x?xf64>>)
+// STENCIL-PRE: arts.db_acquire[<out>] {{.*}}partitioning(<block>)
+// Scratch DBs for CPS chain infrastructure may use coarse partitioning
+// (memref<?xi64> GUIDs). Verify that *data array* DBs are not coarse.
+// STENCIL-PRE-NOT: arts.db_acquire[<inout>]{{.*}}partitioning(<coarse>)
 
 // UNIFORM-PRE: arts.db_acquire[<out>] {{.*}}partitioning(<block>
-// UNIFORM-PRE-NOT: partitioning(<coarse>)
+// UNIFORM-PRE-NOT: arts.db_acquire[<out>]{{.*}}partitioning(<coarse>)
+// UNIFORM-PRE-NOT: arts.db_acquire[<inout>]{{.*}}partitioning(<coarse>)

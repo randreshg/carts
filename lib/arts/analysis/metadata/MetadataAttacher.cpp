@@ -35,6 +35,9 @@ bool MetadataAttacher::ensureLoopMetadata(Operation *op) {
   if (!op)
     return false;
 
+  if (op->hasAttr(AttrNames::Operation::SkipLoopMetadataRecovery))
+    return false;
+
   ARTS_DEBUG("ensureLoopMetadata: " << op->getName());
 
   /// 1. Check if already in memory

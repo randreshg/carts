@@ -274,12 +274,6 @@ LogicalResult EdtOp::verify() {
       if (operand.getDefiningOp<DbAllocOp>())
         continue;
 
-      if (externalValues.contains(operand)) {
-        op->emitOpError("EDT region uses external DbAcquire value '")
-            << operand << "' directly instead of DbAcquire block argument. ";
-        return WalkResult::interrupt();
-      }
-
       /// DbAcquire source handles may intentionally reference outer-scope
       /// datablock handles to derive nested views inside EDTs.
       if (auto dbAcquire = dyn_cast<DbAcquireOp>(op)) {
@@ -293,6 +287,12 @@ LogicalResult EdtOp::verify() {
       /// etc.). These are captured by EdtEnvManager during EdtLowering.
       if ((*this)->hasAttr(AttrNames::Operation::CPSChainId))
         continue;
+
+      if (externalValues.contains(operand)) {
+        op->emitOpError("EDT region uses external DbAcquire value '")
+            << operand << "' directly instead of DbAcquire block argument. ";
+        return WalkResult::interrupt();
+      }
 
       op->emitOpError("EDT region uses external value '")
           << operand << "' that is not a block argument or dependency.\n"

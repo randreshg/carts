@@ -207,7 +207,7 @@ std::unique_ptr<DbIndexerBase> DbRewriter::createStencilIndexer(
   if (!partitionedDims.empty())
     info.partitionedDims.assign(partitionedDims.begin(), partitionedDims.end());
 
-  return std::make_unique<DbStencilIndexer>(info, haloLeft, haloRight,
-                                            outerRank, innerRank, ownedArg,
-                                            leftHaloArg, rightHaloArg);
+  return std::make_unique<DbStencilIndexer>(
+      info, haloLeft, haloRight, outerRank, innerRank, Value(), Value(),
+      ownedArg, leftHaloArg, rightHaloArg);
 }

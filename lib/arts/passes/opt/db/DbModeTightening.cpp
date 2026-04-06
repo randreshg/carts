@@ -34,6 +34,7 @@
 #include "arts/utils/BlockedAccessUtils.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
+#include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
 #include "llvm/ADT/STLExtras.h"
@@ -257,6 +258,22 @@ static bool writesFullAllocation(DbAnalysis &dbAnalysis, DbAcquireNode *acqNode,
   }
 
   return true;
+}
+
+static bool canPreservePartialPartitionedStencilWrite(DbAcquireOp acquire) {
+  if (!acquire)
+    return false;
+
+  auto partitionMode =
+      acquire.getPartitionMode().value_or(PartitionMode::coarse);
+  if (partitionMode == PartitionMode::coarse)
+    return false;
+
+  auto contract = resolveAcquireContract(acquire);
+  if (!contract || !contract->hasExplicitStencilContract())
+    return false;
+
+  return contract->supportsBlockHalo();
 }
 
 struct MemAccessSite {
@@ -531,7 +548,15 @@ bool DbModeTighteningPass::adjustDbModes() {
         bool fullWrite =
             !allocOp ||
             writesFullAllocation(dbAnalysis, acqNode, allocOp, loopAnalysis);
-        if (allocOp && !fullWrite) {
+        bool partialPartitionedStencilWrite =
+            allocOp && !fullWrite &&
+            canPreservePartialPartitionedStencilWrite(acqOp);
+        if (partialPartitionedStencilWrite) {
+          ARTS_DEBUG("AcquireOp: " << acqOp
+                                   << " writes a partial partitioned stencil "
+                                      "tile; keeping out mode so the runtime "
+                                      "can use the cheaper writer path");
+        } else if (allocOp && !fullWrite) {
           ARTS_DEBUG("AcquireOp: " << acqOp
                                    << " writes partial region; upgrading to "
                                       "inout to preserve untouched elements");

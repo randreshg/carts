@@ -90,6 +90,10 @@ constexpr StringLiteral CPSDepRouting = "arts.cps_dep_routing";
 /// Preserves compile-time DB outer extents on rehydrated handle values when
 /// outlining breaks the original DbAllocOp def-use chain.
 constexpr StringLiteral DbStaticOuterShape = "arts.db_static_outer_shape";
+/// Preserves the original DbAllocOp arts.id on rebuilt compile-time handle
+/// scaffolding so downstream lowering/analysis can recover element sizes and
+/// provenance without transporting raw handle pointers.
+constexpr StringLiteral DbRootAllocId = "arts.db_root_alloc_id";
 
 /// GUID range detection annotations (set by GUIDRangeDetection)
 constexpr StringLiteral GuidRangeTripCount = "guid_range_trip_count";
@@ -218,6 +222,27 @@ inline void setDbStaticOuterShape(Operation *op, ArrayRef<int64_t> shape) {
     return;
   op->setAttr(AttrNames::Operation::DbStaticOuterShape,
               buildI64ArrayAttr(op, shape));
+}
+
+inline std::optional<int64_t> getDbRootAllocId(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr =
+          op->getAttrOfType<IntegerAttr>(AttrNames::Operation::DbRootAllocId))
+    return attr.getInt();
+  return std::nullopt;
+}
+
+inline std::optional<int64_t> getDbRootAllocId(Value value) {
+  return value ? getDbRootAllocId(value.getDefiningOp()) : std::nullopt;
+}
+
+inline void setDbRootAllocId(Operation *op, int64_t id) {
+  if (!op || id <= 0)
+    return;
+  auto *ctx = op->getContext();
+  auto type = IntegerType::get(ctx, 64);
+  op->setAttr(AttrNames::Operation::DbRootAllocId, IntegerAttr::get(type, id));
 }
 
 inline bool getRuntimeStaticWorkers(ModuleOp module) {

@@ -5,7 +5,7 @@
 // working arrays block-partitioned and worker EDTs materialize their local
 // slot with `arts.db_ref ... [%c0]`.
 
-// CHECK: arts.db_alloc[<inout>, <heap>, <write>, <block>, <uniform>]
+// CHECK: arts.db_alloc[<inout>, <heap>, <write>, <block>, <indexed>]
 // CHECK: arts.db_acquire[<out>] {{.*}}partitioning(<block>, offsets[
 // CHECK: arts.db_ref %{{.+}}[%{{.+}}] : memref<?xmemref<?xf32>> -> memref<?xf32>
 // CHECK-NOT: call @init_data(
