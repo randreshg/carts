@@ -450,7 +450,12 @@ struct PatternDiscoveryPass
           chooseRefinedPattern(existing, candidate, evidence, mode);
 
       if (mode == DiscoveryMode::Refine && explicitStencil) {
-        chosen = explicitStencil->getFamily();
+        if (existing &&
+            *existing == ArtsDepPattern::jacobi_alternating_buffers) {
+          chosen = *existing;
+        } else {
+          chosen = explicitStencil->getFamily();
+        }
       }
 
       if (!chosen) {
@@ -461,7 +466,12 @@ struct PatternDiscoveryPass
       // Create the appropriate contract for this pattern
       std::unique_ptr<PatternContract> contract;
       if (explicitStencil && isStencilFamilyDepPattern(*chosen)) {
-        contract = std::make_unique<StencilNDPatternContract>(*explicitStencil);
+        contract = std::make_unique<StencilNDPatternContract>(
+            *chosen, explicitStencil->getOwnerDims(),
+            explicitStencil->getMinOffsets(), explicitStencil->getMaxOffsets(),
+            explicitStencil->getWriteFootprint(),
+            explicitStencil->getRevision(), explicitStencil->getBlockShape(),
+            explicitStencil->getSpatialDims());
       } else {
         contract =
             std::make_unique<SimplePatternContract>(*chosen, targetRevision);
