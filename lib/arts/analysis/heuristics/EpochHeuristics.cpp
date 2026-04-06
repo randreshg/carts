@@ -514,3 +514,143 @@ EpochChainDecision EpochHeuristics::evaluateCPSChain(scf::ForOp forOp) {
   decision.rationale = "eligible";
   return decision;
 }
+
+EpochAsyncLoopDecision
+EpochHeuristics::evaluateAsyncLoopStrategy(scf::ForOp forOp) {
+  EpochAsyncLoopDecision decision;
+  if (!forOp) {
+    decision.rationale = "missing loop";
+    return decision;
+  }
+  if (forOp.getNumResults() > 0 || !forOp.getInitArgs().empty()) {
+    decision.rationale = "loop has iter_args";
+    return decision;
+  }
+  if (isInsideLoop(forOp)) {
+    decision.rationale = "loop is nested";
+    return decision;
+  }
+
+  if (auto tripCount = arts::getStaticTripCount(forOp.getOperation());
+      tripCount && *tripCount < 2) {
+    decision.rationale = "trip count is less than 2";
+    return decision;
+  }
+
+  Block &body = *forOp.getBody();
+  collectEpochSlots(body, decision.slots);
+  if (decision.slots.empty()) {
+    decision.rationale = "loop body has no epoch slots";
+    return decision;
+  }
+
+  for (EpochSlot &slot : decision.slots) {
+    if (slot.epoch->hasAttr(ContinuationForEpoch)) {
+      decision.rationale = "loop already contains continuation-managed epochs";
+      return decision;
+    }
+    if (!epochBodyIsClonable(slot.epoch)) {
+      decision.rationale = "epoch body is empty or unclonable";
+      return decision;
+    }
+    if (slot.wrappingIf)
+      decision.hasIvConditionedEpochSlots = true;
+  }
+
+  decision.bodyIsEpochOnly = bodyIsEpochOnly(body);
+
+  DenseSet<Operation *> sequentialSet;
+  for (Operation &op : body.without_terminator()) {
+    bool isSlot = false;
+    for (EpochSlot &slot : decision.slots) {
+      if (&op == slot.epoch.getOperation() ||
+          (slot.wrappingIf && &op == slot.wrappingIf.getOperation())) {
+        isSlot = true;
+        break;
+      }
+    }
+    if (isSlot)
+      continue;
+    if (isPureArith(&op))
+      continue;
+    if (isa<DbAcquireOp, DbReleaseOp, LoweringContractOp>(op))
+      continue;
+    if (isa<func::CallOp>(op)) {
+      decision.hasCallSidecars = true;
+      decision.hasUnsupportedSideEffects = true;
+      decision.rationale =
+          "loop body has call-based sidecars that require explicit outlining";
+      return decision;
+    }
+    if (isCPSSequentialOp(&op)) {
+      decision.hasSequentialSidecars = true;
+      decision.sequentialOps.push_back(&op);
+      sequentialSet.insert(&op);
+      continue;
+    }
+    decision.hasUnsupportedSideEffects = true;
+    decision.rationale = "loop body contains unsupported side effects";
+    return decision;
+  }
+
+  if (!decision.sequentialOps.empty()) {
+    unsigned currentSlot = 0;
+    for (Operation &op : body.without_terminator()) {
+      if (sequentialSet.contains(&op)) {
+        if (currentSlot < decision.slots.size() - 1)
+          decision.hasInterEpochSidecars = true;
+        else
+          decision.hasTailSidecars = true;
+      }
+
+      for (unsigned slotIdx = currentSlot; slotIdx < decision.slots.size();
+           ++slotIdx) {
+        Operation *slotOp =
+            decision.slots[slotIdx].wrappingIf
+                ? decision.slots[slotIdx].wrappingIf.getOperation()
+                : decision.slots[slotIdx].epoch.getOperation();
+        if (&op == slotOp) {
+          currentSlot = slotIdx + 1;
+          break;
+        }
+      }
+    }
+  }
+
+  decision.eligible = true;
+  if (decision.hasSequentialSidecars) {
+    decision.strategy = EpochAsyncLoopStrategy::CpsChain;
+    if (decision.hasInterEpochSidecars)
+      decision.rationale =
+          "loop has sequential sidecars between epoch slots";
+    else if (decision.hasTailSidecars)
+      decision.rationale =
+          "loop has sequential tail state that needs inner continuation";
+    else
+      decision.rationale = "loop has sequential sidecars";
+    return decision;
+  }
+
+  if (decision.bodyIsEpochOnly) {
+    if (decision.slots.size() == 1) {
+      decision.strategy = EpochAsyncLoopStrategy::AdvanceEdt;
+      if (decision.hasIvConditionedEpochSlots) {
+        decision.rationale =
+            "single-slot epoch-only loop with IV-conditioned slot prefers "
+            "advance EDT";
+      } else {
+        decision.rationale = "single-slot epoch-only loop prefers advance EDT";
+      }
+    } else {
+      decision.strategy = EpochAsyncLoopStrategy::CpsChain;
+      decision.rationale =
+          "multi-slot epoch-only loop needs CPS chain for intra-iteration "
+          "continuations";
+    }
+    return decision;
+  }
+
+  decision.strategy = EpochAsyncLoopStrategy::CpsChain;
+  decision.rationale = "loop needs CPS chain";
+  return decision;
+}

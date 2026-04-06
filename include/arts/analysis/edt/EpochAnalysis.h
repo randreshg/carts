@@ -30,6 +30,7 @@ public:
                        bool continuationEnabled = true,
                        const EpochAccessSummary *previousSummary = nullptr,
                        const EpochAccessSummary *epochSummary = nullptr) const;
+  EpochAsyncLoopDecision evaluateAsyncLoopStrategy(scf::ForOp forOp) const;
   EpochLoopDriverDecision evaluateCPSLoopDriver(scf::ForOp forOp) const;
   EpochChainDecision evaluateCPSChain(scf::ForOp forOp) const;
 };

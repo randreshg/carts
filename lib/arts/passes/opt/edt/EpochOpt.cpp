@@ -45,6 +45,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include <optional>
@@ -72,25 +73,38 @@ struct EpochNarrowingCounts {
   unsigned epochsNarrowed = 0;
   unsigned newEpochsCreated = 0;
 };
+
+static llvm::StringRef
+asyncLoopStrategyToString(EpochAsyncLoopStrategy strategy) {
+  switch (strategy) {
+  case EpochAsyncLoopStrategy::None:
+    return "none";
+  case EpochAsyncLoopStrategy::AdvanceEdt:
+    return "advance_edt";
+  case EpochAsyncLoopStrategy::CpsChain:
+    return "cps_chain";
+  }
+  return "none";
+}
 } // namespace
 
-static bool isCpsExcludedDepPattern(ArtsDepPattern pattern) {
+static bool isCpsChainExcludedDepPattern(ArtsDepPattern pattern) {
   switch (pattern) {
   case ArtsDepPattern::jacobi_alternating_buffers:
-  case ArtsDepPattern::wavefront_2d:
     return true;
   default:
     return false;
   }
 }
 
-static bool loopContainsCpsExcludedDepPattern(scf::ForOp forOp) {
+static bool loopContainsExcludedDepPattern(
+    scf::ForOp forOp, function_ref<bool(ArtsDepPattern)> isExcluded) {
   if (!forOp)
     return false;
 
-  auto matchesExcludedPattern = [](Operation *op) {
+  auto matchesExcludedPattern = [&](Operation *op) {
     auto pattern = getEffectiveDepPattern(op);
-    return pattern && isCpsExcludedDepPattern(*pattern);
+    return pattern && isExcluded(*pattern);
   };
 
   if (matchesExcludedPattern(forOp.getOperation()))
@@ -106,20 +120,45 @@ static bool loopContainsCpsExcludedDepPattern(scf::ForOp forOp) {
   return found;
 }
 
+static bool loopContainsCpsChainExcludedDepPattern(scf::ForOp forOp) {
+  return loopContainsExcludedDepPattern(forOp, isCpsChainExcludedDepPattern);
+}
+
+static bool isCpsDriverExcludedDepPattern(ArtsDepPattern pattern) {
+  switch (pattern) {
+  case ArtsDepPattern::jacobi_alternating_buffers:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static bool loopContainsCpsDriverExcludedDepPattern(scf::ForOp forOp) {
+  return loopContainsExcludedDepPattern(forOp, isCpsDriverExcludedDepPattern);
+}
+
 /// Attribute names for continuation metadata.
 constexpr llvm::StringLiteral kHasControlDep = "arts.has_control_dep";
 using AttrNames::Operation::ContinuationForEpoch;
 using AttrNames::Operation::CPSAdditiveParams;
 using AttrNames::Operation::CPSAdvanceHasIvArg;
 using AttrNames::Operation::CPSChainId;
+using AttrNames::Operation::CPSDirectRecreate;
 using AttrNames::Operation::CPSDepRouting;
 using AttrNames::Operation::CPSInitIter;
+using AttrNames::Operation::CPSIterCounterParamIdx;
 using AttrNames::Operation::CPSLoopContinuation;
 using AttrNames::Operation::CPSNumCarry;
 
 static SmallVector<Value> collectCurrentEdtPackedUserValues(EdtOp edt) {
   return collectEdtPackedValues(edt);
 }
+
+static void ensureYieldTerminator(Block &block, Location loc);
+static void cloneNonSlotArith(OpBuilder &builder, Block &body,
+                              MutableArrayRef<EpochSlot> slots,
+                              IRMapping &mapping,
+                              ArrayRef<Operation *> sequentialOps = {});
 
 ///===----------------------------------------------------------------------===///
 /// Epoch Scope Narrowing
@@ -790,11 +829,19 @@ transformToContinuation(EpochOp epochOp,
 ///===----------------------------------------------------------------------===///
 
 /// CPS Loop Driver Transform: Convert a time-step loop containing epochs into
-/// an asynchronous continuation chain using finish-EDT signaling.
+/// an asynchronous launcher/advance chain inside a single wrapping epoch.
 static bool tryCPSLoopTransform(scf::ForOp forOp,
                                 const EpochAnalysis &epochAnalysis) {
-  if (loopContainsCpsExcludedDepPattern(forOp)) {
+  if (loopContainsCpsDriverExcludedDepPattern(forOp)) {
     ARTS_INFO("CPS: skipping loop with specialized dep pattern");
+    return false;
+  }
+
+  EpochAsyncLoopDecision asyncDecision =
+      epochAnalysis.evaluateAsyncLoopStrategy(forOp);
+  if (asyncDecision.strategy != EpochAsyncLoopStrategy::AdvanceEdt ||
+      asyncDecision.slots.size() != 1) {
+    ARTS_DEBUG("CPS: advance_edt requires a single epoch slot, skipping");
     return false;
   }
 
@@ -810,14 +857,31 @@ static bool tryCPSLoopTransform(scf::ForOp forOp,
 
   OpBuilder builder(forOp->getContext());
   Location loc = forOp.getLoc();
+  Block &body = *forOp.getBody();
+  Value lb = forOp.getLowerBound();
+  Value ub = forOp.getUpperBound();
+  Value step = forOp.getStep();
+  Value iv = forOp.getInductionVar();
+  auto i64Ty = builder.getI64Type();
+  std::string chainId =
+      "async_loop_" +
+      std::to_string(reinterpret_cast<uintptr_t>(forOp.getOperation()));
 
-  /// The driver EDT has no explicit DB dependencies.
+  /// The launcher EDT has no explicit DB dependencies. Loop-invariant values
+  /// flow through EdtLowering's normal param packing contract.
   SmallVector<Value> deps;
+  MutableArrayRef<EpochSlot> slots(asyncDecision.slots);
 
   /// Step 1: Create the wrapping epoch.
   builder.setInsertionPoint(forOp);
   auto wrapEpoch =
       builder.create<EpochOp>(loc, IntegerType::get(builder.getContext(), 64));
+  wrapEpoch->setAttr(AttrNames::Operation::CPSOuterEpoch,
+                     builder.getUnitAttr());
+  if (auto lbCst = getConstantIntValue(lb))
+    wrapEpoch->setAttr(CPSInitIter, builder.getI64IntegerAttr(*lbCst));
+  else
+    wrapEpoch->setAttr(CPSInitIter, builder.getI64IntegerAttr(0));
   /// Ensure the epoch region has a block with a yield terminator.
   Region &epochRegion = wrapEpoch.getRegion();
   if (epochRegion.empty())
@@ -829,37 +893,95 @@ static bool tryCPSLoopTransform(scf::ForOp forOp,
     yieldBuilder.create<YieldOp>(loc);
   }
 
-  /// Step 2: Create the loop driver EDT inside the epoch (before the yield).
+  /// Step 2: Create the kickoff EDT inside the epoch (before the yield).
   OpBuilder epochBuilder = OpBuilder::atBlockTerminator(&epochBlock);
 
-  auto driverEdt = epochBuilder.create<EdtOp>(loc, EdtType::task,
-                                              EdtConcurrency::intranode, deps);
+  auto kickoffEdt = epochBuilder.create<EdtOp>(loc, EdtType::task,
+                                               EdtConcurrency::intranode, deps);
+  kickoffEdt->setAttr(CPSChainId, builder.getStringAttr(chainId));
 
-  /// The EdtOp builder creates a body block but without block arguments
-  /// matching the dependencies. Add them now.
-  Block &edtBlock = driverEdt.getBody().front();
+  Block &edtBlock = kickoffEdt.getBody().front();
   for (Value dep : deps)
     edtBlock.addArgument(dep.getType(), loc);
 
-  /// Step 3: Clone the loop into the driver EDT body.
-
-  /// Map captured values to EDT block arguments.
+  /// Step 3: Clone one logical iteration into a continuation-managed epoch.
   IRMapping edtMapping;
   for (auto [oldDep, blockArg] : llvm::zip(deps, edtBlock.getArguments()))
     edtMapping.map(oldDep, blockArg);
+  edtMapping.map(iv, lb);
 
-  /// Clone the loop into the EDT body.
   OpBuilder edtBuilder = OpBuilder::atBlockEnd(&edtBlock);
-  edtBuilder.clone(*forOp.getOperation(), edtMapping);
+  cloneNonSlotArith(edtBuilder, body, slots, edtMapping);
 
-  /// Add yield terminator if not already present.
+  EpochSlot &slot = slots.front();
+  if (slot.wrappingIf) {
+    Operation *clonedIfOp =
+        edtBuilder.clone(*slot.wrappingIf.getOperation(), edtMapping);
+    auto clonedIf = cast<scf::IfOp>(clonedIfOp);
+    for (Operation &op : clonedIf.getThenRegion().front())
+      if (auto epoch = dyn_cast<EpochOp>(op))
+        epoch->setAttr(ContinuationForEpoch, builder.getUnitAttr());
+    if (!clonedIf.getElseRegion().empty())
+      for (Operation &op : clonedIf.getElseRegion().front())
+        if (auto epoch = dyn_cast<EpochOp>(op))
+          epoch->setAttr(ContinuationForEpoch, builder.getUnitAttr());
+  } else {
+    Operation *clonedEpochOp =
+        edtBuilder.clone(*slot.epoch.getOperation(), edtMapping);
+    cast<EpochOp>(clonedEpochOp)
+        ->setAttr(ContinuationForEpoch, builder.getUnitAttr());
+  }
+
+  auto advanceEdt =
+      edtBuilder.create<EdtOp>(loc, EdtType::task, EdtConcurrency::intranode,
+                               SmallVector<Value>{});
+  advanceEdt->setAttr(kHasControlDep,
+                      builder.getIntegerAttr(builder.getI32Type(), 1));
+  advanceEdt->setAttr(ContinuationForEpoch, builder.getUnitAttr());
+  Block &advanceBlock = advanceEdt.getBody().front();
+  ensureYieldTerminator(advanceBlock, loc);
+
+  SmallVector<Value> loopBackParams = collectEdtPackedValues(kickoffEdt);
+  auto iterIt = llvm::find(loopBackParams, lb);
+  if (iterIt != loopBackParams.end()) {
+    unsigned iterIdx = std::distance(loopBackParams.begin(), iterIt);
+    kickoffEdt->setAttr(CPSIterCounterParamIdx,
+                        builder.getI64IntegerAttr(iterIdx));
+  }
+
+  OpBuilder advanceBuilder = OpBuilder::atBlockTerminator(&advanceBlock);
+  Value stepI64 =
+      step.getType().isIndex()
+          ? advanceBuilder.create<arith::IndexCastOp>(loc, i64Ty, step)
+                .getResult()
+          : advanceBuilder.create<arith::ExtSIOp>(loc, i64Ty, step)
+                .getResult();
+  Value ubI64 =
+      ub.getType().isIndex()
+          ? advanceBuilder.create<arith::IndexCastOp>(loc, i64Ty, ub)
+                .getResult()
+          : advanceBuilder.create<arith::ExtSIOp>(loc, i64Ty, ub)
+                .getResult();
+  SmallVector<Value> nextParams = {stepI64, ubI64};
+  nextParams.append(loopBackParams.begin(), loopBackParams.end());
+  auto advance = advanceBuilder.create<CPSAdvanceOp>(
+      loc, nextParams, advanceBuilder.getStringAttr(chainId));
+  advance->setAttr(CPSAdditiveParams, builder.getUnitAttr());
+  advance->setAttr(CPSDirectRecreate, builder.getUnitAttr());
+  advance->setAttr(CPSNumCarry,
+                   builder.getI64IntegerAttr(loopBackParams.size()));
+  Region &advanceRegion = advance.getEpochBody();
+  if (advanceRegion.empty())
+    advanceRegion.emplaceBlock();
+  ensureYieldTerminator(advanceRegion.front(), loc);
+
   if (edtBlock.empty() || !edtBlock.back().hasTrait<OpTrait::IsTerminator>())
     edtBuilder.create<YieldOp>(loc);
 
-  /// Step 5: Erase the original loop.
+  /// Step 4: Erase the original loop.
   forOp.erase();
 
-  ARTS_INFO("CPS: Wrapped time-step loop in epoch+driver EDT");
+  ARTS_INFO("CPS: Wrapped time-step loop in epoch + async advance EDT");
   return true;
 }
 
@@ -1004,7 +1126,7 @@ static void rematerializeExternalDefs(OpBuilder &builder, Operation *op,
 static void cloneNonSlotArith(OpBuilder &builder, Block &body,
                               MutableArrayRef<EpochSlot> slots,
                               IRMapping &mapping,
-                              ArrayRef<Operation *> sequentialOps = {}) {
+                              ArrayRef<Operation *> sequentialOps) {
   DenseSet<Operation *> seqOpSet(sequentialOps.begin(), sequentialOps.end());
   for (Operation &op : body.without_terminator()) {
     if (isSlotOp(&op, slots))
@@ -1260,7 +1382,7 @@ static void promoteAllocsForCPSChain(scf::ForOp forOp,
 /// appears after epoch_i in the same block, as required by EpochLowering.
 static bool tryCPSChainTransform(scf::ForOp forOp,
                                  const EpochAnalysis &epochAnalysis) {
-  if (loopContainsCpsExcludedDepPattern(forOp)) {
+  if (loopContainsCpsChainExcludedDepPattern(forOp)) {
     ARTS_INFO("CPS Chain: skipping loop with specialized dep pattern");
     return false;
   }
@@ -1536,27 +1658,10 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
   ///   - Scalars: stay in paramv (already safe)
   /// =======================================================================
 
-  /// Helper: trace a value to its underlying DbAllocOp.
+  /// Helper: trace a carried value to its underlying DbAllocOp, even when
+  /// lowering has wrapped it in memref/pointer/int conversions.
   auto traceToDbAlloc = [](Value v) -> DbAllocOp {
-    for (int depth = 0; depth < 10; ++depth) {
-      if (!v)
-        return nullptr;
-      auto *defOp = v.getDefiningOp();
-      if (!defOp)
-        return nullptr;
-      if (auto alloc = dyn_cast<DbAllocOp>(defOp))
-        return alloc;
-      if (auto ref = dyn_cast<DbRefOp>(defOp)) {
-        v = ref.getSource();
-        continue;
-      }
-      if (auto cast = dyn_cast<memref::CastOp>(defOp)) {
-        v = cast.getSource();
-        continue;
-      }
-      return nullptr;
-    }
-    return nullptr;
+    return dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(v));
   };
 
   /// Helper: compute static partition count (product of sizes).
@@ -2290,6 +2395,14 @@ struct EpochOptPass : public impl::EpochOptBase<EpochOptPass> {
       SmallVector<scf::ForOp> chainForOps;
       module.walk([&](scf::ForOp forOp) { chainForOps.push_back(forOp); });
       for (scf::ForOp forOp : chainForOps) {
+        EpochAsyncLoopDecision asyncDecision =
+            epochAnalysis.evaluateAsyncLoopStrategy(forOp);
+        if (asyncDecision.strategy != EpochAsyncLoopStrategy::CpsChain) {
+          ARTS_DEBUG("CPS Chain: selector chose "
+                     << asyncLoopStrategyToString(asyncDecision.strategy)
+                     << " (" << asyncDecision.rationale << "), skipping");
+          continue;
+        }
         if (tryCPSChainTransform(forOp, epochAnalysis))
           ++chainTransformed;
       }
@@ -2309,6 +2422,14 @@ struct EpochOptPass : public impl::EpochOptBase<EpochOptPass> {
       SmallVector<scf::ForOp> forOps;
       module.walk([&](scf::ForOp forOp) { forOps.push_back(forOp); });
       for (scf::ForOp forOp : forOps) {
+        EpochAsyncLoopDecision asyncDecision =
+            epochAnalysis.evaluateAsyncLoopStrategy(forOp);
+        if (asyncDecision.strategy != EpochAsyncLoopStrategy::AdvanceEdt) {
+          ARTS_DEBUG("CPS Driver: selector chose "
+                     << asyncLoopStrategyToString(asyncDecision.strategy)
+                     << " (" << asyncDecision.rationale << "), skipping");
+          continue;
+        }
         if (tryCPSLoopTransform(forOp, epochAnalysis))
           ++cpsTransformed;
       }
