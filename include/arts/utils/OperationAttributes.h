@@ -37,6 +37,8 @@ constexpr StringLiteral ArtsId = "arts.id";
 constexpr StringLiteral ArtsCreateId = "arts.create_id";
 constexpr StringLiteral MetadataOriginId = "arts.metadata_origin_id";
 constexpr StringLiteral MetadataProvenance = "arts.metadata_provenance";
+constexpr StringLiteral SkipLoopMetadataRecovery =
+    "arts.skip_loop_metadata_recovery";
 constexpr StringLiteral OutlinedFunc = "outlined_func";
 constexpr StringLiteral Nowait = "nowait";
 constexpr StringLiteral PreserveAccessMode = "preserve_access_mode";

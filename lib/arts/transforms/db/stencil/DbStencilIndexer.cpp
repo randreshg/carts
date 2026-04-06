@@ -48,12 +48,14 @@ using namespace mlir::arts;
 
 DbStencilIndexer::DbStencilIndexer(const PartitionInfo &info, Value haloLeft,
                                    Value haloRight, unsigned outerRank,
-                                   unsigned innerRank, Value ownedArg,
+                                   unsigned innerRank, Value leftAvail,
+                                   Value rightAvail, Value ownedArg,
                                    Value leftHaloArg, Value rightHaloArg)
     : DbIndexerBase(info, outerRank, innerRank),
       elemOffset(info.offsets.empty() ? Value() : info.offsets.front()),
       haloLeft(haloLeft), haloRight(haloRight),
       blockSize(info.sizes.empty() ? Value() : info.sizes.front()),
+      leftAvail(leftAvail), rightAvail(rightAvail),
       ownedArg(ownedArg), leftHaloArg(leftHaloArg), rightHaloArg(rightHaloArg) {
 }
 
@@ -144,6 +146,8 @@ struct StencilRewriteContext {
   Value ownedMemref;
   Value leftMemref;
   Value rightMemref;
+  Value leftAvail;
+  Value rightAvail;
   Value leftPtrNotNull;
   Value rightPtrNotNull;
   llvm::SetVector<Operation *> &opsToRemove;
@@ -298,8 +302,12 @@ static RowSelection buildSelection(OpBuilder &selBuilder, Location selLoc,
       selBuilder, selLoc, arith::CmpIPredicate::sge, localRowVal, ownedRows);
   Value falseI1 = arith::ConstantIntOp::create(selBuilder, selLoc, 0, 1);
   Value trueI1 = arith::ConstantIntOp::create(selBuilder, selLoc, 1, 1);
-  Value leftAvail = ctx.leftPtrNotNull ? ctx.leftPtrNotNull : falseI1;
-  Value rightAvail = ctx.rightPtrNotNull ? ctx.rightPtrNotNull : falseI1;
+  Value leftAvail = ctx.leftAvail ? ctx.leftAvail
+                                  : (ctx.leftPtrNotNull ? ctx.leftPtrNotNull
+                                                        : falseI1);
+  Value rightAvail = ctx.rightAvail ? ctx.rightAvail
+                                    : (ctx.rightPtrNotNull ? ctx.rightPtrNotNull
+                                                           : falseI1);
   Value leftIdx =
       arith::AddIOp::create(selBuilder, selLoc, localRowVal, ctx.haloLeft);
   Value ownedIdx = clampIndex(localRowVal, ownedMemrefRows, selBuilder, selLoc);
@@ -338,26 +346,18 @@ static RowSelection buildSelection(OpBuilder &selBuilder, Location selLoc,
 
   if (ctx.leftMemref) {
     Value safeLeftMemref =
-        ctx.leftPtrNotNull
-            ? selectValue(ctx.leftPtrNotNull, ctx.leftMemref, ctx.ownedMemref)
-            : ctx.leftMemref;
+        selectValue(leftAvail, ctx.leftMemref, ctx.ownedMemref);
     Value safeLeftIdx =
-        ctx.leftPtrNotNull
-            ? selectValue(ctx.leftPtrNotNull, clampedLeftIdx, clampedOwnedIdx)
-            : clampedLeftIdx;
+        selectValue(leftAvail, clampedLeftIdx, clampedOwnedIdx);
     selectedMemref = selectValue(isLeft, safeLeftMemref, selectedMemref);
     selectedRowIdx = selectValue(isLeft, safeLeftIdx, selectedRowIdx);
   }
 
   if (ctx.rightMemref) {
     Value safeRightMemref =
-        ctx.rightPtrNotNull
-            ? selectValue(ctx.rightPtrNotNull, ctx.rightMemref, ctx.ownedMemref)
-            : ctx.rightMemref;
+        selectValue(rightAvail, ctx.rightMemref, ctx.ownedMemref);
     Value safeRightIdx =
-        ctx.rightPtrNotNull
-            ? selectValue(ctx.rightPtrNotNull, clampedRightIdx, clampedOwnedIdx)
-            : clampedRightIdx;
+        selectValue(rightAvail, clampedRightIdx, clampedOwnedIdx);
 
     selectedMemref = selectValue(isRight, safeRightMemref, selectedMemref);
     selectedRowIdx = selectValue(isRight, safeRightIdx, selectedRowIdx);
@@ -398,7 +398,6 @@ struct ResolvedRowInfo {
 static ResolvedRowInfo resolvePartitionRow(ValueRange indices,
                                            const StencilRewriteContext &ctx,
                                            OpBuilder &builder, Location loc) {
-  ValueRange refIndices = ctx.ref.getIndices();
   Value anchor = findAnchor(ctx.elemOffset);
   unsigned partitionDim = 0;
   if (!ctx.partitionInfo.partitionedDims.empty() &&
@@ -408,17 +407,6 @@ static ResolvedRowInfo resolvePartitionRow(ValueRange indices,
     partitionDim = pickPartitionDim(indices, anchor);
   }
   Value globalRow = indices[partitionDim];
-
-  /// If load/store indices don't carry the partition dimension, fall back to
-  /// the db_ref indices (common for row-partitioned 2D stencils).
-  if (anchor && !ValueAnalysis::dependsOn(globalRow, anchor) &&
-      !refIndices.empty()) {
-    unsigned refPartitionDim = pickPartitionDim(refIndices, anchor);
-    Value refRow = refIndices[refPartitionDim];
-    if (refRow == anchor || ValueAnalysis::dependsOn(refRow, anchor)) {
-      globalRow = refRow;
-    }
-  }
 
   /// Handle linearized access: extract row from linear index
   Value stride = getLinearizedStride(indices, ctx.newElementType, builder, loc);
@@ -585,11 +573,23 @@ static void rewriteUserForRegion(Operation *user, StencilRegionKind region,
 static bool tryVersionRowLoop(ArrayRef<Operation *> users, OpBuilder &builder,
                               const StencilRewriteContext &ctx,
                               bool &refErasedWithRowLoop) {
+  auto fail = [&](llvm::StringRef reason) {
+    ARTS_DEBUG("  Row-loop versioning skipped: " << reason);
+    return false;
+  };
+
+  /// The current row-loop cloning path is not yet strong enough to prove
+  /// exact local/global row rebasing for all surviving arithmetic that remains
+  /// outside the rewritten load/store indices. Fall back to the per-row
+  /// selection path until the specialization can rewrite against an exact
+  /// cloned-ref contract.
+  return fail("disabled pending exact-ref row-band rewrite");
+
   int64_t haloLeftConst = 0;
   int64_t haloRightConst = 0;
   if (!ValueAnalysis::getConstantIndex(ctx.haloLeft, haloLeftConst) ||
       !ValueAnalysis::getConstantIndex(ctx.haloRight, haloRightConst))
-    return false;
+    return fail("non-constant halo sizes");
 
   scf::ForOp rowLoop;
   scf::ForOp innerLoop;
@@ -624,7 +624,7 @@ static bool tryVersionRowLoop(ArrayRef<Operation *> users, OpBuilder &builder,
       }
     }
     if (!foundInner)
-      return false;
+      return fail("missing inner loop");
 
     ValueRange refIndices = ctx.ref.getIndices();
     Value anchor = findAnchor(ctx.elemOffset);
@@ -646,16 +646,6 @@ static bool tryVersionRowLoop(ArrayRef<Operation *> users, OpBuilder &builder,
       }
     }
 
-    if (indices.size() == 1) {
-      if (auto memrefType = dyn_cast<MemRefType>(ctx.newElementType)) {
-        if (memrefType.getRank() >= 2) {
-          auto staticStride = DbUtils::getStaticStride(memrefType);
-          if (staticStride && *staticStride > 1)
-            return false;
-        }
-      }
-    }
-
     scf::ForOp foundRow;
     for (Operation *parent = user->getParentOp(); parent;
          parent = parent->getParentOp()) {
@@ -668,17 +658,17 @@ static bool tryVersionRowLoop(ArrayRef<Operation *> users, OpBuilder &builder,
       }
     }
     if (!foundRow)
-      return false;
+      return fail("missing row loop");
 
     if (!rowLoop)
       rowLoop = foundRow;
     else if (rowLoop != foundRow)
-      return false;
+      return fail("multiple row loops");
 
     if (!innerLoop)
       innerLoop = foundInner;
     else if (innerLoop != foundInner)
-      return false;
+      return fail("multiple inner loops");
 
     Value baseOffset = ctx.partitionInfo.offsets.empty()
                            ? ctx.zero
@@ -687,13 +677,14 @@ static bool tryVersionRowLoop(ArrayRef<Operation *> users, OpBuilder &builder,
     bool includesBaseOffset = false;
     if (!deriveRowOffset(globalRow, rowLoop.getInductionVar(), baseOffset,
                          rowOffset, includesBaseOffset))
-      return false;
+      return fail("could not derive row offset");
 
+    bool currentRowIvIsLocal = includesBaseOffset;
     if (!rowIvIsLocalSet) {
-      rowIvIsLocal = includesBaseOffset;
+      rowIvIsLocal = currentRowIvIsLocal;
       rowIvIsLocalSet = true;
-    } else if (rowIvIsLocal != includesBaseOffset) {
-      return false;
+    } else if (rowIvIsLocal != currentRowIvIsLocal) {
+      return fail("mixed local/global row IV semantics");
     }
 
     minOffset = hasOffsets ? std::min(minOffset, rowOffset) : rowOffset;
@@ -702,22 +693,22 @@ static bool tryVersionRowLoop(ArrayRef<Operation *> users, OpBuilder &builder,
   }
 
   if (!rowLoop || !innerLoop || !hasOffsets)
-    return false;
+    return fail("incomplete loop/offset discovery");
 
   int64_t leftBand = minOffset < 0 ? -minOffset : 0;
   int64_t rightBand = maxOffset > 0 ? maxOffset : 0;
   if (leftBand > 0 && haloLeftConst < leftBand)
-    return false;
+    return fail("left halo too small");
   if (rightBand > 0 && haloRightConst < rightBand)
-    return false;
+    return fail("right halo too small");
 
   if (rowLoop.getNumResults() != 0)
-    return false;
+    return fail("row loop has iter args/results");
 
   int64_t stepConst = 0;
   if (!ValueAnalysis::getConstantIndex(rowLoop.getStep(), stepConst) ||
       stepConst != 1)
-    return false;
+    return fail("row loop step is not constant 1");
 
   /// Create three row-loop regions: left, middle, right.
   OpBuilder::InsertionGuard versionGuard(builder);
@@ -736,13 +727,16 @@ static bool tryVersionRowLoop(ArrayRef<Operation *> users, OpBuilder &builder,
                       ? Value()
                       : ctx.partitionInfo.sizes.front();
   if (!baseOffset || !blockSz)
-    return false;
+    return fail("missing base offset or block size");
 
   int64_t blockSzConst = 0;
-  if (!ValueAnalysis::getConstantIndex(blockSz, blockSzConst))
-    return false;
+  if (auto foldedBlockSz = ValueAnalysis::tryFoldConstantIndex(blockSz)) {
+    blockSzConst = *foldedBlockSz;
+  } else {
+    return fail("non-constant block size");
+  }
   if (leftBand + rightBand > blockSzConst)
-    return false;
+    return fail("halo bands exceed block size");
 
   Value leftBandVal = arts::createConstantIndex(builder, loopLoc, leftBand);
   Value rightBandVal = arts::createConstantIndex(builder, loopLoc, rightBand);
@@ -802,6 +796,14 @@ static bool tryVersionRowLoop(ArrayRef<Operation *> users, OpBuilder &builder,
 
     return newLoop;
   };
+
+  unsigned sameSourceRefsInRowLoop = 0;
+  rowLoop.walk([&](DbRefOp dbRef) {
+    if (dbRef.getSource() == ctx.ref.getSource())
+      ++sameSourceRefsInRowLoop;
+  });
+  if (sameSourceRefsInRowLoop != 1)
+    return fail("row loop has multiple same-source db_refs");
 
   cloneRowLoop(leftLb, leftUb, StencilRegionKind::Left);
   cloneRowLoop(midLb, midUb, StencilRegionKind::Middle);
@@ -1157,10 +1159,22 @@ void DbStencilIndexer::transformDbRefUsers(
              << ", right=" << (rightMemref ? "yes" : "no"));
 
   /// Build shared context for helper functions.
-  StencilRewriteContext ctx{
-      ref,         partitionInfo,  elemOffset,      haloLeft,    haloRight,
-      blockSize,   zero,           newElementType,  ownedMemref, leftMemref,
-      rightMemref, leftPtrNotNull, rightPtrNotNull, opsToRemove};
+  StencilRewriteContext ctx{ref,
+                            partitionInfo,
+                            elemOffset,
+                            haloLeft,
+                            haloRight,
+                            blockSize,
+                            zero,
+                            newElementType,
+                            ownedMemref,
+                            leftMemref,
+                            rightMemref,
+                            leftAvail,
+                            rightAvail,
+                            leftPtrNotNull,
+                            rightPtrNotNull,
+                            opsToRemove};
 
   /// Try row-loop versioning first (splits loop into Left/Middle/Right).
   bool refErasedWithRowLoop = false;

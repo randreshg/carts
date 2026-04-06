@@ -118,6 +118,13 @@ void analyzeEdtCapturedValues(EdtOp edt, llvm::SetVector<Value> &capturedValues,
                               llvm::SetVector<Value> &constants,
                               llvm::SetVector<Value> &dbHandles);
 
+/// Collect values in the same logical order EdtLowering packs them into
+/// `arts.edt_param_pack`: user params, DB handles, then dep-derived scalars
+/// (indices/offsets/sizes/partition slices/element sizes). DB handles are
+/// returned in their original SSA form; lowering is responsible for casting
+/// them to raw i64 payloads.
+SmallVector<Value> collectEdtPackedValues(EdtOp edt);
+
 } // namespace arts
 } // namespace mlir
 

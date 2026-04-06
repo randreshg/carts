@@ -28,6 +28,7 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #define GEN_PASS_DEF_EPOCHLOWERING
 #include "arts/Dialect.h"
@@ -643,7 +644,14 @@ void EpochLoweringPass::runOnOperation() {
     }
 
     Value paramMemref;
-    if (hasCanonicalLoopBackContract) {
+    bool hasDepRouting = advanceOp->hasAttr(CPSDepRouting);
+    bool preferCanonicalLoopBack = hasCanonicalLoopBackContract;
+    if (preferCanonicalLoopBack && localUnpack && !hasDepRouting) {
+      unsigned unpackedCount = localUnpack.getNumResults();
+      if (canonicalLoopBackParams.size() < unpackedCount)
+        preferCanonicalLoopBack = false;
+    }
+    if (preferCanonicalLoopBack) {
       SmallVector<Value> newPackParams(canonicalLoopBackParams.begin(),
                                        canonicalLoopBackParams.end());
       if (tNext)
@@ -657,12 +665,16 @@ void EpochLoweringPass::runOnOperation() {
           AC->create<EdtParamPackOp>(loc, packType, newPackParams).getMemref();
     } else if (localUnpack) {
       auto unpackResults = localUnpack.getResults();
-      unsigned numUserParams = unpackResults.size();
       SmallVector<Value> newPackParams;
-      for (unsigned i = 0; i < numUserParams; ++i)
-        newPackParams.push_back(unpackResults[i]);
-      newPackParams.push_back(tNext ? tNext : curIter);
-      newPackParams.push_back(outerEpochGuid);
+      newPackParams.reserve(unpackResults.size() + 2);
+      for (Value unpacked : unpackResults)
+        newPackParams.push_back(unpacked);
+      if (tNext)
+        newPackParams.push_back(tNext);
+      else if (curIter)
+        newPackParams.push_back(curIter);
+      if (outerEpochGuid)
+        newPackParams.push_back(outerEpochGuid);
       auto packType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
       paramMemref =
           AC->create<EdtParamPackOp>(loc, packType, newPackParams).getMemref();
@@ -686,6 +698,88 @@ void EpochLoweringPass::runOnOperation() {
     newContEdt->setAttr(ContinuationForEpoch, AC->getBuilder().getUnitAttr());
 
     Value newContGuid = newContEdt.getGuid();
+
+    auto emitWholeDbDep = [&](Value depGuid, unsigned slotIdx, int32_t mode,
+                              std::optional<int32_t> depFlags) {
+      if (!depGuid)
+        return;
+      depGuid = AC->ensureI64(depGuid, loc);
+      Value slot = AC->createIntConstant(slotIdx, AC->Int32, loc);
+      Value modeVal = AC->createIntConstant(mode, AC->Int32, loc);
+      ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
+      if (depFlags && *depFlags != 0) {
+        Value flagsVal = AC->createIntConstant(*depFlags, AC->Int32, loc);
+        RCB.callVoid(types::ARTSRTL_arts_add_dependence_ex,
+                     {depGuid, newContGuid, slot, modeVal, flagsVal});
+      } else {
+        RCB.callVoid(types::ARTSRTL_arts_add_dependence,
+                     {depGuid, newContGuid, slot, modeVal});
+      }
+    };
+
+    auto findOriginalRecDep = [&](EdtCreateOp edt) -> RecordDepOp {
+      for (Operation *user : edt.getGuid().getUsers())
+        if (auto recordDep = dyn_cast<RecordDepOp>(user))
+          if (recordDep.getEdtGuid() == edt.getGuid())
+            return recordDep;
+      return nullptr;
+    };
+
+    auto getLoopBackValueForPackIndex = [&](unsigned packIdx) -> Value {
+      if (packIdx < canonicalLoopBackParams.size())
+        return canonicalLoopBackParams[packIdx];
+      if (localUnpack && packIdx < localUnpack.getNumResults())
+        return localUnpack.getResult(packIdx);
+      return Value();
+    };
+
+    auto findPackIndexForSafeWholeDbDep =
+        [&](EdtParamPackOp packOp, Value depGuid) -> std::optional<unsigned> {
+      if (!packOp || !depGuid)
+        return std::nullopt;
+
+      SmallVector<std::pair<Value, Value>> candidateSources;
+      candidateSources.push_back({depGuid, Value()});
+
+      if (auto depAcquire = depGuid.getDefiningOp<DbAcquireOp>()) {
+        if (depAcquire.getSizes().size() == 1 &&
+            depAcquire.getOffsets().size() == 1) {
+          if (auto foldedSize =
+                  ValueAnalysis::tryFoldConstantIndex(depAcquire.getSizes()[0]);
+              foldedSize && *foldedSize == 1) {
+            candidateSources.push_back(
+                {depAcquire.getSourceGuid(), depAcquire.getOffsets()[0]});
+          }
+        }
+      }
+
+      auto sameIndex = [](Value lhs, Value rhs) {
+        return ValueAnalysis::stripNumericCasts(lhs) ==
+               ValueAnalysis::stripNumericCasts(rhs);
+      };
+
+      for (auto [idx, operand] : llvm::enumerate(packOp.getOperands())) {
+        for (auto [sourceGuid, offset] : candidateSources) {
+          if (operand == sourceGuid && !offset)
+            return idx;
+          auto loadOp = operand.getDefiningOp<memref::LoadOp>();
+          if (!loadOp || loadOp.getIndices().size() != 1)
+            continue;
+          if (loadOp.getMemRef() != sourceGuid)
+            continue;
+          if (!offset) {
+            if (ValueAnalysis::isZeroConstant(
+                    ValueAnalysis::stripNumericCasts(loadOp.getIndices()[0])))
+              return idx;
+            continue;
+          }
+          if (sameIndex(loadOp.getIndices()[0], offset))
+            return idx;
+        }
+      }
+
+      return std::nullopt;
+    };
 
     /// Replicate non-control deps from the initial creation.
     /// The dep GUIDs are at explicit indices in the carry params, recorded
@@ -728,6 +822,42 @@ void EpochLoweringPass::runOnOperation() {
         Value modeWrite = AC->createIntConstant(2, AC->Int32, loc);
         AC->createRuntimeCall(types::ARTSRTL_arts_add_dependence,
                               {timingGuid, newContGuid, slot, modeWrite}, loc);
+      }
+    } else if (auto originalRecDep = findOriginalRecDep(contEdtCreate)) {
+      auto originalPack =
+          contEdtCreate.getParamMemref().getDefiningOp<EdtParamPackOp>();
+      ArrayRef<int32_t> acquireModes =
+          originalRecDep.getAcquireModes()
+              ? ArrayRef<int32_t>(*originalRecDep.getAcquireModes())
+              : ArrayRef<int32_t>{};
+      ArrayRef<int32_t> depFlags =
+          originalRecDep.getDepFlags()
+              ? ArrayRef<int32_t>(*originalRecDep.getDepFlags())
+              : ArrayRef<int32_t>{};
+
+      bool hasExplicitSlices = !originalRecDep.getByteOffsets().empty() ||
+                               !originalRecDep.getByteSizes().empty();
+      bool hasGuardedDeps =
+          llvm::any_of(originalRecDep.getBoundsValids(), [](Value boundsValid) {
+            return boundsValid &&
+                   !ValueAnalysis::isOneConstant(
+                       ValueAnalysis::stripNumericCasts(boundsValid));
+          });
+
+      if (!hasExplicitSlices && !hasGuardedDeps && originalPack) {
+        for (auto [depIdx, depGuid] : llvm::enumerate(originalRecDep.getDatablocks())) {
+          auto packIdx = findPackIndexForSafeWholeDbDep(originalPack, depGuid);
+          if (!packIdx)
+            continue;
+          Value localDepGuid = getLoopBackValueForPackIndex(*packIdx);
+          if (!localDepGuid)
+            continue;
+          int32_t mode = depIdx < acquireModes.size() ? acquireModes[depIdx] : 2;
+          std::optional<int32_t> flags = std::nullopt;
+          if (depIdx < depFlags.size())
+            flags = depFlags[depIdx];
+          emitWholeDbDep(localDepGuid, depIdx, mode, flags);
+        }
       }
     }
 

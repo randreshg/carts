@@ -157,9 +157,7 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   /// Mixed stencil mode: only read-only stencil acquires should use ESD
   /// 3-buffer lowering. Non-stencil or write-capable acquires are lowered via
   /// regular block semantics over the same block-partitioned allocation.
-  bool useStencilEsd = info.partitionInfo.mode == PartitionMode::stencil &&
-                       acquire.getMode() == ArtsMode::in && plan.stencilInfo &&
-                       plan.stencilInfo->hasHalo();
+  bool useStencilEsd = false;
   int64_t haloLeftVal = plan.stencilInfo ? plan.stencilInfo->haloLeft : 0;
   int64_t haloRightVal = plan.stencilInfo ? plan.stencilInfo->haloRight : 0;
   ARTS_DEBUG("  initial ESD eligibility="
@@ -851,18 +849,28 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
 
   /// For stencil mode, get the 3 block args (owned, left halo, right halo)
   Value leftHaloArg, rightHaloArg;
+  Value leftHaloAvail, rightHaloAvail;
   Block &edtBody = edt.getBody().front();
+  auto deps = edt.getDependencies();
 
   /// Read halo arg indices from acquire attributes
   if (auto leftIdxOpt = getLeftHaloArgIndex(acquire.getOperation())) {
     unsigned leftIdx = *leftIdxOpt;
-    if (leftIdx < edtBody.getNumArguments())
+    if (leftIdx < edtBody.getNumArguments()) {
       leftHaloArg = edtBody.getArgument(leftIdx);
+      if (leftIdx < deps.size())
+        if (auto leftHaloAcquire = deps[leftIdx].getDefiningOp<DbAcquireOp>())
+          leftHaloAvail = leftHaloAcquire.getBoundsValid();
+    }
   }
   if (auto rightIdxOpt = getRightHaloArgIndex(acquire.getOperation())) {
     unsigned rightIdx = *rightIdxOpt;
-    if (rightIdx < edtBody.getNumArguments())
+    if (rightIdx < edtBody.getNumArguments()) {
       rightHaloArg = edtBody.getArgument(rightIdx);
+      if (rightIdx < deps.size())
+        if (auto rightHaloAcquire = deps[rightIdx].getDefiningOp<DbAcquireOp>())
+          rightHaloAvail = rightHaloAcquire.getBoundsValid();
+    }
   }
 
   ARTS_DEBUG("  Stencil 3-buffer: owned="
@@ -877,8 +885,8 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
 
   /// Create stencil indexer with PartitionInfo (base-offset semantics)
   auto indexer = std::make_unique<DbStencilIndexer>(
-      info, haloLeft, haloRight, plan.outerRank(), plan.innerRank(), localView,
-      leftHaloArg, rightHaloArg);
+      info, haloLeft, haloRight, plan.outerRank(), plan.innerRank(),
+      leftHaloAvail, rightHaloAvail, localView, leftHaloArg, rightHaloArg);
 
   SmallVector<Operation *> users(localView.getUsers().begin(),
                                  localView.getUsers().end());
