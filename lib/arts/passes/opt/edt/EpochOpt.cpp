@@ -58,9 +58,9 @@ using mlir::arts::AnalysisKind;
 
 static const AnalysisKind kEpochOpt_reads[] = {AnalysisKind::EpochAnalysis};
 static const AnalysisKind kEpochOpt_invalidates[] = {
-    AnalysisKind::DbAnalysis,      AnalysisKind::EdtAnalysis,
-    AnalysisKind::EpochAnalysis,   AnalysisKind::LoopAnalysis,
-    AnalysisKind::DbHeuristics,    AnalysisKind::EdtHeuristics};
+    AnalysisKind::DbAnalysis,    AnalysisKind::EdtAnalysis,
+    AnalysisKind::EpochAnalysis, AnalysisKind::LoopAnalysis,
+    AnalysisKind::DbHeuristics,  AnalysisKind::EdtHeuristics};
 [[maybe_unused]] static const AnalysisDependencyInfo kEpochOpt_deps = {
     kEpochOpt_reads, kEpochOpt_invalidates};
 
@@ -74,11 +74,37 @@ struct EpochNarrowingCounts {
 };
 } // namespace
 
-///===----------------------------------------------------------------------===///
-/// Shared Utilities
-///===----------------------------------------------------------------------===///
+static bool isCpsExcludedDepPattern(ArtsDepPattern pattern) {
+  switch (pattern) {
+  case ArtsDepPattern::jacobi_alternating_buffers:
+  case ArtsDepPattern::wavefront_2d:
+    return true;
+  default:
+    return false;
+  }
+}
 
-static bool hasCpsExcludedDepPattern(scf::ForOp forOp);
+static bool loopContainsCpsExcludedDepPattern(scf::ForOp forOp) {
+  if (!forOp)
+    return false;
+
+  auto matchesExcludedPattern = [](Operation *op) {
+    auto pattern = getEffectiveDepPattern(op);
+    return pattern && isCpsExcludedDepPattern(*pattern);
+  };
+
+  if (matchesExcludedPattern(forOp.getOperation()))
+    return true;
+
+  bool found = false;
+  forOp.walk([&](Operation *inner) {
+    if (!matchesExcludedPattern(inner))
+      return WalkResult::advance();
+    found = true;
+    return WalkResult::interrupt();
+  });
+  return found;
+}
 
 /// Attribute names for continuation metadata.
 constexpr llvm::StringLiteral kHasControlDep = "arts.has_control_dep";
@@ -767,7 +793,7 @@ transformToContinuation(EpochOp epochOp,
 /// an asynchronous continuation chain using finish-EDT signaling.
 static bool tryCPSLoopTransform(scf::ForOp forOp,
                                 const EpochAnalysis &epochAnalysis) {
-  if (hasCpsExcludedDepPattern(forOp)) {
+  if (loopContainsCpsExcludedDepPattern(forOp)) {
     ARTS_INFO("CPS: skipping loop with specialized dep pattern");
     return false;
   }
@@ -996,30 +1022,6 @@ static void cloneNonSlotArith(OpBuilder &builder, Block &body,
 static void ensureYieldTerminator(Block &block, Location loc) {
   if (block.empty() || !block.back().hasTrait<OpTrait::IsTerminator>())
     OpBuilder::atBlockEnd(&block).create<YieldOp>(loc);
-}
-
-static bool hasCpsExcludedDepPattern(scf::ForOp forOp) {
-  auto matchesExcludedPattern = [](Operation *op) {
-    auto pattern = getEffectiveDepPattern(op);
-    return pattern &&
-           (*pattern == ArtsDepPattern::jacobi_alternating_buffers ||
-            *pattern == ArtsDepPattern::wavefront_2d);
-  };
-
-  if (!forOp)
-    return false;
-  if (matchesExcludedPattern(forOp.getOperation()))
-    return true;
-
-  bool found = false;
-  forOp.walk([&](Operation *inner) {
-    if (matchesExcludedPattern(inner)) {
-      found = true;
-      return WalkResult::interrupt();
-    }
-    return WalkResult::advance();
-  });
-  return found;
 }
 
 /// Emit the CPS advance logic for the last continuation: check loop bounds
@@ -1258,7 +1260,7 @@ static void promoteAllocsForCPSChain(scf::ForOp forOp,
 /// appears after epoch_i in the same block, as required by EpochLowering.
 static bool tryCPSChainTransform(scf::ForOp forOp,
                                  const EpochAnalysis &epochAnalysis) {
-  if (hasCpsExcludedDepPattern(forOp)) {
+  if (loopContainsCpsExcludedDepPattern(forOp)) {
     ARTS_INFO("CPS Chain: skipping loop with specialized dep pattern");
     return false;
   }
@@ -1815,8 +1817,7 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
         continue;
       emitEarlyRelease(allocPtr);
       auto acq = preEpochBuilder.create<DbAcquireOp>(
-          loc, ArtsMode::in, info.alloc.getGuid(), allocPtr,
-          allocPtr.getType(),
+          loc, ArtsMode::in, info.alloc.getGuid(), allocPtr, allocPtr.getType(),
           /*partitionMode=*/std::nullopt,
           /*indices=*/SmallVector<Value>{},
           /*offsets=*/SmallVector<Value>{zero},
@@ -1895,7 +1896,8 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
         Operation *owner = use.getOwner();
         if (!contEdt->isAncestor(owner))
           return false;
-        for (Operation *parent = owner; parent && parent != contEdt.getOperation();
+        for (Operation *parent = owner;
+             parent && parent != contEdt.getOperation();
              parent = parent->getParentOp()) {
           if (auto edtParent = dyn_cast<EdtOp>(parent)) {
             if (edtParent != contEdt &&
@@ -1927,8 +1929,8 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
         if (ptrValue != (info.alloc ? info.alloc.getPtr() : Value())) {
           bodyBuilder.setInsertionPoint(&contBlock, contBlock.begin());
           Value czero = bodyBuilder.create<arith::ConstantIndexOp>(loc, 0);
-          Value dbView = bodyBuilder.create<DbRefOp>(
-              loc, depArg, SmallVector<Value>{czero});
+          Value dbView = bodyBuilder.create<DbRefOp>(loc, depArg,
+                                                     SmallVector<Value>{czero});
           Value replacement = dbView;
           if (replacement.getType() != ptrValue.getType())
             replacement = bodyBuilder.create<memref::CastOp>(
@@ -1998,14 +2000,14 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
         bodyBuilder.setInsertionPoint(&contBlock, contBlock.begin());
         auto i64MemrefTy =
             MemRefType::get({ShapedType::kDynamic}, bodyBuilder.getI64Type());
-        auto adaptScratchReplacement =
-            [&](Value replacement, Type targetType) -> Value {
+        auto adaptScratchReplacement = [&](Value replacement,
+                                           Type targetType) -> Value {
           if (!replacement || replacement.getType() == targetType)
             return replacement;
-          return bodyBuilder.create<memref::CastOp>(loc, targetType,
-                                                    replacement)
+          return bodyBuilder
+              .create<memref::CastOp>(loc, targetType, replacement)
               .getResult();
-            };
+        };
 
         if (scratchDepGuid) {
           Value replacement =
@@ -2019,18 +2021,6 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
           scratchView =
               bodyBuilder.create<memref::CastOp>(loc, i64MemrefTy, scratchArg);
 
-        DenseMap<Value, Value> rebuiltGuidArrays;
-        auto resolveRootAllocIdForValue = [&](Value original,
-                                              DbAllocOp fallbackAlloc) {
-          if (fallbackAlloc)
-            return getArtsId(fallbackAlloc);
-          if (auto *rootOp = DbUtils::getUnderlyingDbAlloc(original))
-            if (auto rootAlloc = dyn_cast<DbAllocOp>(rootOp))
-              return getArtsId(rootAlloc);
-          if (auto rootId = getDbRootAllocId(original))
-            return *rootId;
-          return int64_t{0};
-        };
         Value runningOffset =
             bodyBuilder.create<arith::ConstantIndexOp>(loc, 0);
         SmallVector<std::pair<Value, Value>> guidLayoutForBody;
@@ -2049,13 +2039,11 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
           if (!origMemrefTy)
             continue;
 
-          Value localGuids =
-              bodyBuilder.create<memref::AllocOp>(loc, i64MemrefTy,
-                                                  ValueRange{count});
-          if (int64_t allocId =
-                  resolveRootAllocIdForValue(origGuidArray, guidInfo.alloc);
-              allocId > 0)
-            setDbRootAllocId(localGuids.getDefiningOp(), allocId);
+          Value localGuids = bodyBuilder.create<memref::AllocOp>(
+              loc, i64MemrefTy, ValueRange{count});
+          if (auto allocId =
+                  DbUtils::resolveRootAllocId(origGuidArray, guidInfo.alloc))
+            setDbRootAllocId(localGuids.getDefiningOp(), *allocId);
 
           auto copyLoop = bodyBuilder.create<scf::ForOp>(
               loc, bodyBuilder.create<arith::ConstantIndexOp>(loc, 0), count,
@@ -2070,17 +2058,13 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
 
           Value replacement = localGuids;
           if (replacement.getType() != origMemrefTy) {
-            auto castOp =
-                bodyBuilder.create<memref::CastOp>(loc, origMemrefTy, localGuids);
-            if (int64_t allocId =
-                    resolveRootAllocIdForValue(origGuidArray, guidInfo.alloc);
-                allocId > 0)
-              setDbRootAllocId(castOp.getOperation(), allocId);
+            auto castOp = bodyBuilder.create<memref::CastOp>(loc, origMemrefTy,
+                                                             localGuids);
+            if (auto allocId =
+                    DbUtils::resolveRootAllocId(origGuidArray, guidInfo.alloc))
+              setDbRootAllocId(castOp.getOperation(), *allocId);
             replacement = castOp.getResult();
           }
-
-          if (guidInfo.alloc)
-            rebuiltGuidArrays[guidInfo.alloc.getGuid()] = replacement;
 
           if (guidInfo.alloc)
             guidInfo.alloc.getGuid().replaceUsesWithIf(
@@ -2169,8 +2153,8 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
 
         OpBuilder advBuilder(adv);
         auto targetId = adv.getTargetChainIdAttr();
-        auto newAdv =
-            advBuilder.create<CPSAdvanceOp>(adv.getLoc(), newNextParams, targetId);
+        auto newAdv = advBuilder.create<CPSAdvanceOp>(adv.getLoc(),
+                                                      newNextParams, targetId);
         /// Copy attributes (skip the built-in targetChainId).
         for (auto attr : adv->getAttrs())
           if (attr.getName() != "targetChainId")

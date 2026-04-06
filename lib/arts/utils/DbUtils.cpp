@@ -6,6 +6,7 @@
 
 #include "arts/utils/DbUtils.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -29,6 +30,60 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
+
+static Operation *resolveRootAllocFromAttr(Value v) {
+  if (!v)
+    return nullptr;
+
+  std::optional<int64_t> rootId;
+  SmallPtrSet<Operation *, 8> visited;
+  for (unsigned depth = 0; depth < 16 && v; ++depth) {
+    Operation *defOp = v.getDefiningOp();
+    if (!defOp || !visited.insert(defOp).second)
+      break;
+
+    if (auto candidate = getDbRootAllocId(defOp)) {
+      rootId = candidate;
+      break;
+    }
+
+    if (auto castOp = dyn_cast<memref::CastOp>(defOp)) {
+      v = castOp.getSource();
+      continue;
+    }
+    if (auto subview = dyn_cast<memref::SubViewOp>(defOp)) {
+      v = subview.getSource();
+      continue;
+    }
+    if (auto dbRef = dyn_cast<DbRefOp>(defOp)) {
+      v = dbRef.getSource();
+      continue;
+    }
+    if (auto dbGep = dyn_cast<DbGepOp>(defOp)) {
+      v = dbGep.getBasePtr();
+      continue;
+    }
+    break;
+  }
+
+  if (!rootId || *rootId <= 0)
+    return nullptr;
+
+  auto module = v.getParentRegion()
+                    ? v.getParentRegion()->getParentOfType<ModuleOp>()
+                    : ModuleOp();
+  if (!module)
+    return nullptr;
+
+  Operation *resolved = nullptr;
+  module.walk([&](DbAllocOp alloc) {
+    if (getArtsId(alloc) != *rootId)
+      return WalkResult::advance();
+    resolved = alloc.getOperation();
+    return WalkResult::interrupt();
+  });
+  return resolved;
+}
 
 static void getAcquireDepSlice(DbAcquireOp acquire,
                                SmallVector<Value> &sizesOut,
@@ -321,6 +376,8 @@ Operation *DbUtils::getUnderlyingDb(Value v, unsigned depth) {
   }
 
   if (Operation *def = v.getDefiningOp()) {
+    if (Operation *rootAlloc = resolveRootAllocFromAttr(v))
+      return rootAlloc;
     if (auto gep = dyn_cast<DbGepOp>(def))
       return getUnderlyingDb(gep.getBasePtr(), depth + 1);
     if (auto castOp = dyn_cast<memref::CastOp>(def))
@@ -328,6 +385,9 @@ Operation *DbUtils::getUnderlyingDb(Value v, unsigned depth) {
     if (auto subview = dyn_cast<memref::SubViewOp>(def))
       return getUnderlyingDb(subview.getSource(), depth + 1);
   }
+
+  if (Operation *rootAlloc = resolveRootAllocFromAttr(v))
+    return rootAlloc;
 
   if (Operation *root = ValueAnalysis::getUnderlyingOperation(v))
     if (isa<DbAcquireOp, DbAllocOp>(root))
@@ -346,6 +406,27 @@ Operation *DbUtils::getUnderlyingDbAlloc(Value v) {
   if (dbAcquire)
     return getUnderlyingDbAlloc(dbAcquire.getSourcePtr());
   return nullptr;
+}
+
+std::optional<int64_t> DbUtils::resolveRootAllocId(Value value,
+                                                   DbAllocOp fallbackAlloc) {
+  if (fallbackAlloc) {
+    int64_t allocId = getArtsId(fallbackAlloc);
+    if (allocId > 0)
+      return allocId;
+  }
+
+  if (Operation *rootOp = getUnderlyingDbAlloc(value))
+    if (auto rootAlloc = dyn_cast<DbAllocOp>(rootOp)) {
+      int64_t allocId = getArtsId(rootAlloc);
+      if (allocId > 0)
+        return allocId;
+    }
+
+  if (auto rootId = getDbRootAllocId(value); rootId && *rootId > 0)
+    return rootId;
+
+  return std::nullopt;
 }
 
 ///===----------------------------------------------------------------------===///
