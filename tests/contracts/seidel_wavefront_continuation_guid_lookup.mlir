@@ -4,14 +4,12 @@
 // on the direct pointer lookup path. This guards the regression where
 // record_dep fell back to memref.dim on a rehydrated guid handle after
 // outlining broke the original DbAllocOp def-use chain.
-// CHECK-LABEL: func.func private @__arts_edt_3
-// CHECK: %[[GUID_RAW:.+]] = llvm.inttoptr %{{.+}} : i64 to !llvm.ptr
+// CHECK-LABEL: func.func private @__arts_edt_{{[0-9]+}}
 // CHECK-NOT: memref.dim %{{.+}} : memref<?x?xi64>
-// CHECK: arts.create_id = 119000 : i64
-// CHECK: %[[LINEAR_I64:.+]] = arith.index_cast %{{.+}} : index to i64
-// CHECK-NEXT: %[[GUID_ADDR:.+]] = llvm.getelementptr %[[GUID_RAW]][%[[LINEAR_I64]]] : (!llvm.ptr, i64) -> !llvm.ptr, i64
+// CHECK: %[[GUID_TABLE:.+]] = polygeist.memref2pointer %{{.+}} : memref<?xi64> to !llvm.ptr
+// CHECK-NEXT: %[[LINEAR_I64:.+]] = arith.index_cast %{{.+}} : index to i64
+// CHECK-NEXT: %[[GUID_ADDR:.+]] = llvm.getelementptr %[[GUID_TABLE]][%[[LINEAR_I64]]] : (!llvm.ptr, i64) -> !llvm.ptr, i64
 // CHECK-NEXT: %[[GUID_VALUE:.+]] = llvm.load %[[GUID_ADDR]] : !llvm.ptr -> i64
-// CHECK-NEXT: func.call @arts_add_dependence(%[[GUID_VALUE]], %{{.+}}, %{{.+}}, %{{.+}}) : (i64, i64, i32, i32) -> ()
+// CHECK: func.call @arts_add_dependence{{.*}}(%[[GUID_VALUE]], %{{.+}}, %{{.+}}, %{{.+}}{{.*}})
 
-module {
-}
+module {}

@@ -67,6 +67,12 @@ public:
   /// Traces through DbAcquireOp chains to find the root allocation.
   static Operation *getUnderlyingDbAlloc(Value v);
 
+  /// Recover the original DbAllocOp arts.id for a rebuilt or forwarded DB
+  /// handle family. Uses an explicit fallback alloc when available, otherwise
+  /// traces through DB provenance and preserved root-id attrs.
+  static std::optional<int64_t>
+  resolveRootAllocId(Value value, DbAllocOp fallbackAlloc = nullptr);
+
   ///===----------------------------------------------------------------------===////
   /// Datablock Lowering Info Extraction
   ///===----------------------------------------------------------------------===////
