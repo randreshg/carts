@@ -38,6 +38,8 @@ class DbStencilIndexer : public DbIndexerBase {
   Value haloLeft;     /// Left halo size (number of rows)
   Value haloRight;    /// Right halo size (number of rows)
   Value blockSize;    /// Owned block size (rows per worker)
+  Value leftAvail;    /// Semantic availability for left halo
+  Value rightAvail;   /// Semantic availability for right halo
   Value ownedArg;     /// Block arg for owned buffer
   Value leftHaloArg;  /// Block arg for left halo (may be null at boundary)
   Value rightHaloArg; /// Block arg for right halo (may be null at boundary)
@@ -47,8 +49,9 @@ public:
   /// baseOffset and partitionInfo.sizes[0] as blockSize.
   /// Uses base-offset semantics where localRow = globalRow - baseOffset.
   DbStencilIndexer(const PartitionInfo &info, Value haloLeft, Value haloRight,
-                   unsigned outerRank, unsigned innerRank, Value ownedArg,
-                   Value leftHaloArg, Value rightHaloArg);
+                   unsigned outerRank, unsigned innerRank, Value leftAvail,
+                   Value rightAvail, Value ownedArg, Value leftHaloArg,
+                   Value rightHaloArg);
 
   LocalizedIndices localize(ArrayRef<Value> globalIndices, OpBuilder &builder,
                             Location loc) override;

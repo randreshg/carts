@@ -6,11 +6,13 @@
 
 #include "arts/utils/EdtUtils.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/DbUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include <algorithm>
 
@@ -219,6 +221,69 @@ void analyzeEdtCapturedValues(EdtOp edt, llvm::SetVector<Value> &capturedValues,
   getUsedValuesDefinedAbove(edt.getRegion(), capturedValues);
   classifyEdtUserValues(capturedValues.getArrayRef(), parameters, constants,
                         dbHandles);
+}
+
+SmallVector<Value> collectEdtPackedValues(EdtOp edt) {
+  llvm::SetVector<Value> capturedValues;
+  llvm::SetVector<Value> parameters;
+  llvm::SetVector<Value> constants;
+  llvm::SetVector<Value> dbHandles;
+  analyzeEdtCapturedValues(edt, capturedValues, parameters, constants,
+                           dbHandles);
+
+  SmallVector<Value> packedValues;
+  packedValues.reserve(parameters.size() + dbHandles.size());
+  DenseMap<Value, unsigned> valueToPackIndex;
+
+  for (Value parameter : parameters) {
+    if (auto *defOp = parameter.getDefiningOp())
+      if (defOp->getName().getStringRef() == "llvm.mlir.undef")
+        continue;
+    valueToPackIndex.try_emplace(parameter, packedValues.size());
+    packedValues.push_back(parameter);
+  }
+
+  for (Value dbHandle : dbHandles) {
+    valueToPackIndex.try_emplace(dbHandle, packedValues.size());
+    packedValues.push_back(dbHandle);
+  }
+
+  auto appendIfMissing = [&](Value val) {
+    if (!val)
+      return;
+    if (val.getDefiningOp<arith::ConstantOp>())
+      return;
+    if (valueToPackIndex.count(val))
+      return;
+    valueToPackIndex[val] = packedValues.size();
+    packedValues.push_back(val);
+  };
+
+  for (Value dep : edt.getDependencies()) {
+    auto dbAcquireOp = dep.getDefiningOp<DbAcquireOp>();
+    if (!dbAcquireOp)
+      continue;
+
+    for (Value idx : dbAcquireOp.getIndices())
+      appendIfMissing(idx);
+    for (Value off : dbAcquireOp.getOffsets())
+      appendIfMissing(off);
+    for (Value sz : dbAcquireOp.getSizes())
+      appendIfMissing(sz);
+    for (Value partIdx : dbAcquireOp.getPartitionIndices())
+      appendIfMissing(partIdx);
+    for (Value partOff : dbAcquireOp.getPartitionOffsets())
+      appendIfMissing(partOff);
+    for (Value partSize : dbAcquireOp.getPartitionSizes())
+      appendIfMissing(partSize);
+
+    if (auto *rawAlloc = DbUtils::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()))
+      if (auto alloc = dyn_cast<DbAllocOp>(rawAlloc))
+        for (Value elemSz : alloc.getElementSizes())
+          appendIfMissing(elemSz);
+  }
+
+  return packedValues;
 }
 
 } // namespace arts

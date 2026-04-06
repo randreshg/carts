@@ -57,8 +57,12 @@ using mlir::arts::AnalysisDependencyInfo;
 using mlir::arts::AnalysisKind;
 
 static const AnalysisKind kEpochOpt_reads[] = {AnalysisKind::EpochAnalysis};
+static const AnalysisKind kEpochOpt_invalidates[] = {
+    AnalysisKind::DbAnalysis,      AnalysisKind::EdtAnalysis,
+    AnalysisKind::EpochAnalysis,   AnalysisKind::LoopAnalysis,
+    AnalysisKind::DbHeuristics,    AnalysisKind::EdtHeuristics};
 [[maybe_unused]] static const AnalysisDependencyInfo kEpochOpt_deps = {
-    kEpochOpt_reads, {}};
+    kEpochOpt_reads, kEpochOpt_invalidates};
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -86,24 +90,7 @@ using AttrNames::Operation::CPSLoopContinuation;
 using AttrNames::Operation::CPSNumCarry;
 
 static SmallVector<Value> collectCurrentEdtPackedUserValues(EdtOp edt) {
-  llvm::SetVector<Value> capturedValues;
-  llvm::SetVector<Value> parameters;
-  llvm::SetVector<Value> constants;
-  llvm::SetVector<Value> dbHandles;
-  analyzeEdtCapturedValues(edt, capturedValues, parameters, constants,
-                           dbHandles);
-
-  SmallVector<Value> packedValues;
-  packedValues.reserve(parameters.size() + dbHandles.size());
-  for (Value parameter : parameters) {
-    if (auto *defOp = parameter.getDefiningOp())
-      if (defOp->getName().getStringRef() == "llvm.mlir.undef")
-        continue;
-    packedValues.push_back(parameter);
-  }
-
-  packedValues.append(dbHandles.begin(), dbHandles.end());
-  return packedValues;
+  return collectEdtPackedValues(edt);
 }
 
 ///===----------------------------------------------------------------------===///
@@ -1799,39 +1786,11 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
         allContinuations.push_back(edt);
     });
 
-    /// Only add deps to the outermost continuation (allContinuations[0]).
-    /// Inner continuations (nested inside the parent's epoch) capture the
-    /// original outer-scope DbAllocOp values through normal EdtLowering
-    /// outlining (classifyEdtUserValues → dbHandles → packParams → i64 in
-    /// paramv). This is safe because CPS continuations are intra-node: the
-    /// outermost continuation's deps ensure data arrives at the correct node,
-    /// and inner continuations run in the same node context.
-    {
-      /// Find the outermost continuation — the one directly inside the outer
-      /// epoch (not nested inside other EdtOps). Inner continuations capture
-      /// DB values through normal EdtLowering paramv transport.
-      EdtOp contEdt = nullptr;
-      for (EdtOp candidate : allContinuations) {
-        Operation *parentOp = candidate->getParentOp();
-        /// Walk up to find if this EDT is directly under an EpochOp (not
-        /// under another continuation EdtOp).
-        bool isOutermost = true;
-        while (parentOp && parentOp != outerEpoch.getOperation()) {
-          if (auto edtParent = dyn_cast<EdtOp>(parentOp)) {
-            if (edtParent->hasAttr(kCPSLoopContinuation)) {
-              isOutermost = false;
-              break;
-            }
-          }
-          parentOp = parentOp->getParentOp();
-        }
-        if (isOutermost) {
-          contEdt = candidate;
-          break;
-        }
-      }
-      if (!contEdt)
-        contEdt = allContinuations.back();
+    /// Every CPS continuation crosses an EDT boundary. Route stable deps
+    /// through each continuation, but keep parent-local rewrites out of nested
+    /// CPS continuations so each stage rebuilds its own local state from the
+    /// routed deps instead of capturing a parent's stack temporaries.
+    for (EdtOp contEdt : allContinuations) {
       Block &contBlock = contEdt.getBody().front();
 
       /// Add deps and corresponding block args.
@@ -1847,39 +1806,26 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
       unsigned numDeps = contDeps.size();
       unsigned numBlockArgs = contBlock.getNumArguments();
 
-      /// Step CPS-6: Transform captures in the outermost continuation.
-      /// Replace ALL uses (including nested EdtOps) of timing DB values
-      /// with values reconstructed from dep block args. This ensures
-      /// inner EDTs capture locally-defined values (from chain_0's body)
-      /// rather than outer-scope DbAllocOp/DbRefOp results. EdtLowering's
-      /// cloneCaptured mechanism handles these body-defined values properly.
+      /// Replace captures in this continuation body and its worker EDTs, but
+      /// let nested CPS continuations rebuild their own state from deps.
       OpBuilder bodyBuilder(&contBlock, contBlock.begin());
-
-      /// Predicate: use is anywhere inside contEdt (including nested EDTs).
-      auto isAnyUseOf = [&](OpOperand &use) {
-        return contEdt->isAncestor(use.getOwner());
-      };
-
-      /// Predicate: use is directly inside contEdt's body (NOT inside
-      /// nested EdtOps). This prevents replacing captures that inner
-      /// EdtOps need to keep as original DbAllocOp references, which
-      /// EdtLowering handles via packParams/dbHandles classification.
-      auto isDirectUseOf = [&](OpOperand &use) {
+      auto isWithinContinuationScope = [&](OpOperand &use) {
         Operation *owner = use.getOwner();
         if (!contEdt->isAncestor(owner))
           return false;
-        /// Walk up to find if the use is inside a nested EdtOp.
-        Operation *parent = owner->getParentOp();
-        while (parent && parent != contEdt.getOperation()) {
-          if (isa<EdtOp>(parent))
-            return false;
-          parent = parent->getParentOp();
+        for (Operation *parent = owner; parent && parent != contEdt.getOperation();
+             parent = parent->getParentOp()) {
+          if (auto edtParent = dyn_cast<EdtOp>(parent)) {
+            if (edtParent != contEdt &&
+                edtParent->hasAttr(kCPSLoopContinuation))
+              return false;
+          }
         }
         return true;
       };
 
-      /// Timing DBs: replace ALL uses of the ptr and any db_ref/cast
-      /// results with a db_ref reconstructed from the dep block arg.
+      /// Timing DBs: replace uses of the ptr and any db_ref/cast results with
+      /// a db_ref reconstructed from the dep block arg.
       DenseSet<Value> replacedAllocPtrs;
       for (auto &[ptrValue, info] : timingDbs) {
         if (info.isGuid)
@@ -1890,29 +1836,26 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
         unsigned argIdx = numBlockArgs - numDeps + it->second;
         BlockArgument depArg = contBlock.getArgument(argIdx);
 
-        /// Replace the raw DB ptr (DbAllocOp.getPtr()) with dep arg.
         if (info.alloc && !replacedAllocPtrs.count(info.alloc.getPtr())) {
-          info.alloc.getPtr().replaceUsesWithIf(depArg, isAnyUseOf);
+          info.alloc.getPtr().replaceUsesWithIf(depArg,
+                                                isWithinContinuationScope);
           replacedAllocPtrs.insert(info.alloc.getPtr());
         }
 
-        /// If ptrValue is a db_ref or cast(db_ref) result (from
-        /// promoteAllocsForCPSChain), reconstruct it from the dep arg
-        /// so inner EDTs capture a body-local value.
         if (ptrValue != (info.alloc ? info.alloc.getPtr() : Value())) {
           bodyBuilder.setInsertionPoint(&contBlock, contBlock.begin());
           Value czero = bodyBuilder.create<arith::ConstantIndexOp>(loc, 0);
-          Value dbView = bodyBuilder.create<DbRefOp>(loc, depArg,
-                                                     SmallVector<Value>{czero});
+          Value dbView = bodyBuilder.create<DbRefOp>(
+              loc, depArg, SmallVector<Value>{czero});
           Value replacement = dbView;
           if (replacement.getType() != ptrValue.getType())
             replacement = bodyBuilder.create<memref::CastOp>(
                 loc, ptrValue.getType(), dbView);
-          ptrValue.replaceUsesWithIf(replacement, isAnyUseOf);
+          ptrValue.replaceUsesWithIf(replacement, isWithinContinuationScope);
         }
       }
 
-      /// Timing DB guids: replace ALL uses with dummy allocas.
+      /// Timing DB GUIDs are compile-time handle scaffolding only.
       DenseSet<Value> replacedAllocGuids;
       for (auto &[guidValue, info] : timingDbs) {
         if (!info.isGuid)
@@ -1929,16 +1872,16 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
         }
         Value dummyGuid =
             bodyBuilder.create<memref::AllocaOp>(loc, memrefTy, dynSizes);
-        guidValue.replaceUsesWithIf(dummyGuid, isAnyUseOf);
+        guidValue.replaceUsesWithIf(dummyGuid, isWithinContinuationScope);
         if (info.alloc && info.alloc.getGuid() != guidValue &&
             !replacedAllocGuids.count(info.alloc.getGuid())) {
-          info.alloc.getGuid().replaceUsesWithIf(dummyGuid, isAnyUseOf);
+          info.alloc.getGuid().replaceUsesWithIf(dummyGuid,
+                                                 isWithinContinuationScope);
           replacedAllocGuids.insert(info.alloc.getGuid());
         }
       }
 
-      /// Data GUID arrays: load from scratch dep into local alloca.
-      /// Replace ALL uses so inner EDTs capture body-local values.
+      /// Data GUID arrays: rebuild them from scratch inside each continuation.
       if (scratchAlloc && scratchDepIdx != UINT_MAX) {
         unsigned scratchArgIdx = numBlockArgs - numDeps + scratchDepIdx;
         BlockArgument scratchArg = contBlock.getArgument(scratchArgIdx);
@@ -1950,7 +1893,6 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
         Value scratchView = bodyBuilder.create<DbRefOp>(
             loc, scratchArg, SmallVector<Value>{czero});
 
-        /// Compute GUID layout INSIDE the body to avoid outer captures.
         Value runningOffset =
             bodyBuilder.create<arith::ConstantIndexOp>(loc, 0);
         SmallVector<std::pair<Value, Value>> guidLayoutForBody;
@@ -1987,27 +1929,15 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
             replacement = bodyBuilder.create<memref::CastOp>(loc, origMemrefTy,
                                                              localGuids);
 
-          origGuidArray.replaceUsesWithIf(replacement, isDirectUseOf);
+          origGuidArray.replaceUsesWithIf(replacement,
+                                          isWithinContinuationScope);
         }
       }
 
-      /// Data PTR arrays: replace ALL uses with dummy allocas.
-      for (Value dataPtrVal : dataPtrs) {
-        auto memrefTy = dyn_cast<MemRefType>(dataPtrVal.getType());
-        if (!memrefTy)
-          continue;
-        bodyBuilder.setInsertionPoint(&contBlock, contBlock.begin());
-        /// Provide dynamic sizes for any dynamic dims in the memref type.
-        SmallVector<Value> dynSizes;
-        for (int64_t dim : memrefTy.getShape()) {
-          if (dim == ShapedType::kDynamic)
-            dynSizes.push_back(
-                bodyBuilder.create<arith::ConstantIndexOp>(loc, 1));
-        }
-        Value dummyPtr =
-            bodyBuilder.create<memref::AllocaOp>(loc, memrefTy, dynSizes);
-        dataPtrVal.replaceUsesWithIf(dummyPtr, isDirectUseOf);
-      }
+      /// Keep multi-partition ptr-array handles intact. Pre-lowering still
+      /// needs the original DbAllocOp trace on the source ptr operand to
+      /// validate/rewrite DbAcquireOps into dep-backed acquires. Runtime
+      /// transport correctness comes from the routed GUID/scratch state.
     }
 
     ARTS_INFO("CPS Chain: DB routing complete — "
@@ -2019,76 +1949,22 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
   /// params in the EXACT order that EdtLowering will see. This eliminates
   /// ordering mismatches between EpochOpt's initial classification and
   /// EdtLowering's getUsedValuesDefinedAbove + classifyEdtUserValues.
+  ///
+  /// IMPORTANT: this step is reorder-only. Later lowering still expects the
+  /// original carry arity that the CPS chain was seeded with. If the live
+  /// re-analysis shrinks or grows the carry list, keep the original contract
+  /// intact instead of rewriting CPSAdvanceOp to a different width.
   if (firstContinuation && hasDbHandles) {
-    llvm::SetVector<Value> finalCaptures;
-    llvm::SetVector<Value> finalParams, finalConstants, finalDbHandles;
-    getUsedValuesDefinedAbove(firstContinuation.getRegion(), finalCaptures);
-    classifyEdtUserValues(finalCaptures.getArrayRef(), finalParams,
-                          finalConstants, finalDbHandles);
-
-    SmallVector<Value> reorderedCarry;
-    for (Value p : finalParams) {
-      if (auto *defOp = p.getDefiningOp())
-        if (defOp->getName().getStringRef() == "llvm.mlir.undef")
-          continue;
-      reorderedCarry.push_back(p);
-    }
-    reorderedCarry.append(finalDbHandles.begin(), finalDbHandles.end());
-
-    ARTS_INFO("CPS Chain: Re-analyzed chain_0 captures — "
-              << reorderedCarry.size() << " carry params ("
-              << finalParams.size() << " params, " << finalDbHandles.size()
-              << " dbHandles)");
-
-    /// Walk all CPSAdvanceOps and replace carry params with reordered list.
-    outerEpoch.walk([&](CPSAdvanceOp adv) {
-      auto numCarryAttr = adv->getAttrOfType<IntegerAttr>(CPSNumCarry);
-      if (!numCarryAttr)
+    auto setDepRoutingAttrForCarry = [&](ArrayRef<Value> carryValues) {
+      if (!(numTimingDbGuids > 0 || scratchAlloc))
         return;
-      bool isAdditive = adv->hasAttr(CPSAdditiveParams);
-      unsigned paramStart = isAdditive ? 2 : 0;
-      SmallVector<Value> newNextParams;
-      /// Keep step+ub (or other prefix params).
-      auto oldParams = adv.getNextIterParams();
-      for (unsigned i = 0; i < paramStart && i < oldParams.size(); ++i)
-        newNextParams.push_back(oldParams[i]);
-      /// Use the reordered carry params.
-      newNextParams.append(reorderedCarry.begin(), reorderedCarry.end());
-
-      OpBuilder advBuilder(adv);
-      auto targetId = adv.getTargetChainIdAttr();
-      auto newAdv = advBuilder.create<CPSAdvanceOp>(adv.getLoc(), newNextParams,
-                                                    targetId);
-      /// Copy attributes (skip the built-in targetChainId).
-      for (auto attr : adv->getAttrs())
-        if (attr.getName() != "targetChainId")
-          newAdv->setAttr(attr.getName(), attr.getValue());
-      newAdv->setAttr(CPSNumCarry,
-                      advBuilder.getI64IntegerAttr(reorderedCarry.size()));
-
-      /// Move epoch body from old to new.
-      Region &oldRegion = adv.getEpochBody();
-      Region &newRegion = newAdv.getEpochBody();
-      if (!oldRegion.empty()) {
-        newRegion.takeBody(oldRegion);
-      }
-      adv.erase();
-    });
-
-    /// Update dep routing attribute on the new CPSAdvanceOps.
-    /// Format: [numTimingDbs, hasScratch, guidIdx0, guidIdx1, ...]
-    /// where guidIdx values are positions within the carry params
-    /// (after step+ub prefix). scratch guid index comes first if present,
-    /// then timing DB guid indices.
-    if (numTimingDbGuids > 0 || scratchAlloc) {
       int64_t hasScratch = scratchAlloc ? 1 : 0;
       SmallVector<int64_t> routingData = {(int64_t)numTimingDbGuids,
                                           hasScratch};
-      /// Find each dep GUID's position in reorderedCarry.
       for (Value dgv : depGuidValues) {
         int64_t idx = -1;
-        for (unsigned i = 0; i < reorderedCarry.size(); ++i) {
-          if (reorderedCarry[i] == dgv) {
+        for (unsigned i = 0; i < carryValues.size(); ++i) {
+          if (carryValues[i] == dgv) {
             idx = i;
             break;
           }
@@ -2099,6 +1975,68 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
         adv->setAttr(CPSDepRouting,
                      DenseI64ArrayAttr::get(adv.getContext(), routingData));
       });
+    };
+
+    SmallVector<Value> reorderedCarry =
+        collectEdtPackedValues(firstContinuation);
+
+    ARTS_INFO("CPS Chain: Re-analyzed chain_0 captures — "
+              << reorderedCarry.size() << " carry params");
+
+    bool preserveOriginalCarryContract = numTimingDbGuids > 0 || scratchAlloc;
+    if (preserveOriginalCarryContract) {
+      if (!sameValueSequence(reorderedCarry, loopBackParams)) {
+        ARTS_INFO("CPS Chain: dep-routed carry changed after re-analysis; "
+                  << "preserving original loop-back contract");
+      }
+      setDepRoutingAttrForCarry(loopBackParams);
+    } else if (reorderedCarry.size() != loopBackParams.size()) {
+      ARTS_INFO("CPS Chain: carry re-analysis changed arity from "
+                << loopBackParams.size() << " to " << reorderedCarry.size()
+                << "; preserving original loop-back contract");
+      setDepRoutingAttrForCarry(loopBackParams);
+    } else {
+      /// Walk all CPSAdvanceOps and replace carry params with reordered list.
+      outerEpoch.walk([&](CPSAdvanceOp adv) {
+        auto numCarryAttr = adv->getAttrOfType<IntegerAttr>(CPSNumCarry);
+        if (!numCarryAttr)
+          return;
+        bool isAdditive = adv->hasAttr(CPSAdditiveParams);
+        unsigned paramStart = isAdditive ? 2 : 0;
+        SmallVector<Value> newNextParams;
+        /// Keep step+ub (or other prefix params).
+        auto oldParams = adv.getNextIterParams();
+        for (unsigned i = 0; i < paramStart && i < oldParams.size(); ++i)
+          newNextParams.push_back(oldParams[i]);
+        /// Use the reordered carry params.
+        newNextParams.append(reorderedCarry.begin(), reorderedCarry.end());
+
+        OpBuilder advBuilder(adv);
+        auto targetId = adv.getTargetChainIdAttr();
+        auto newAdv =
+            advBuilder.create<CPSAdvanceOp>(adv.getLoc(), newNextParams, targetId);
+        /// Copy attributes (skip the built-in targetChainId).
+        for (auto attr : adv->getAttrs())
+          if (attr.getName() != "targetChainId")
+            newAdv->setAttr(attr.getName(), attr.getValue());
+        newAdv->setAttr(CPSNumCarry,
+                        advBuilder.getI64IntegerAttr(reorderedCarry.size()));
+
+        /// Move epoch body from old to new.
+        Region &oldRegion = adv.getEpochBody();
+        Region &newRegion = newAdv.getEpochBody();
+        if (!oldRegion.empty()) {
+          newRegion.takeBody(oldRegion);
+        }
+        adv.erase();
+      });
+
+      /// Update dep routing attribute on the new CPSAdvanceOps.
+      /// Format: [numTimingDbs, hasScratch, guidIdx0, guidIdx1, ...]
+      /// where guidIdx values are positions within the carry params
+      /// (after step+ub prefix). scratch guid index comes first if present,
+      /// then timing DB guid indices.
+      setDepRoutingAttrForCarry(reorderedCarry);
     }
   }
 
