@@ -19,6 +19,7 @@
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
+#include "arts/utils/Utils.h"
 #include "mlir/Analysis/CallGraph.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -37,27 +38,6 @@ using namespace mlir;
 using namespace arts;
 
 namespace {
-static bool isInsideOmpRegion(Operation *op) {
-  for (Operation *ancestor = op ? op->getParentOp() : nullptr; ancestor;
-       ancestor = ancestor->getParentOp()) {
-    if (ancestor->getDialect() &&
-        ancestor->getDialect()->getNamespace() == "omp")
-      return true;
-  }
-  return false;
-}
-
-static bool containsOmpOp(Operation *op) {
-  bool found = false;
-  op->walk([&](Operation *nested) {
-    if (nested->getDialect() && nested->getDialect()->getNamespace() == "omp") {
-      found = true;
-      return WalkResult::interrupt();
-    }
-    return WalkResult::advance();
-  });
-  return found;
-}
 
 static bool containsSequentialLoopLikeOp(Operation *op) {
   bool found = false;

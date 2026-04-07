@@ -19,7 +19,9 @@
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/Utils.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/Pass/Pass.h"
 
@@ -152,25 +154,6 @@ static bool hasOnlySupportedEffects(scf::ForOp loop, Operation *storeRoot) {
   return hasStores && !hasUnsupportedOp;
 }
 
-static Value getLoopInductionVar(Operation *op) {
-  if (!op)
-    return Value();
-
-  if (auto artsFor = dyn_cast<arts::ForOp>(op)) {
-    if (artsFor.getRegion().empty())
-      return Value();
-    Block &block = artsFor.getRegion().front();
-    if (block.getNumArguments() == 0)
-      return Value();
-    return block.getArgument(0);
-  }
-
-  if (auto scfFor = dyn_cast<scf::ForOp>(op))
-    return scfFor.getInductionVar();
-
-  return Value();
-}
-
 static bool edtWillRunInternode(EdtOp edt, const AbstractMachine *machine) {
   if (!edt)
     return false;
@@ -179,27 +162,6 @@ static bool edtWillRunInternode(EdtOp edt, const AbstractMachine *machine) {
   if (!machine || !machine->isDistributed())
     return false;
   return edt.getTypeAttr().getValue() == EdtType::parallel;
-}
-
-static Operation *getTopLevelFuncChild(Operation *op, func::FuncOp parentFunc) {
-  if (!op || !parentFunc)
-    return nullptr;
-
-  Operation *cursor = op;
-  while (cursor && cursor->getParentOp() != parentFunc)
-    cursor = cursor->getParentOp();
-  return cursor;
-}
-
-static bool isOrderedAfter(Operation *anchor, Operation *candidate,
-                           func::FuncOp parentFunc) {
-  Operation *anchorTop = getTopLevelFuncChild(anchor, parentFunc);
-  Operation *candidateTop = getTopLevelFuncChild(candidate, parentFunc);
-  if (!anchorTop || !candidateTop)
-    return false;
-  if (anchorTop->getBlock() != candidateTop->getBlock())
-    return false;
-  return anchorTop->isBeforeInBlock(candidateTop);
 }
 
 static bool hasAlignedInternodeForUseAfter(scf::ForOp loop,

@@ -72,6 +72,57 @@ Value createCurrentNodeRoute(OpBuilder &builder, Location loc) {
 }
 
 ///===----------------------------------------------------------------------===///
+/// OMP Region Utilities
+///===----------------------------------------------------------------------===///
+
+bool isInsideOmpRegion(Operation *op) {
+  for (Operation *ancestor = op ? op->getParentOp() : nullptr; ancestor;
+       ancestor = ancestor->getParentOp()) {
+    if (ancestor->getDialect() &&
+        ancestor->getDialect()->getNamespace() == "omp")
+      return true;
+  }
+  return false;
+}
+
+bool containsOmpOp(Operation *op) {
+  bool found = false;
+  op->walk([&](Operation *nested) {
+    if (nested->getDialect() && nested->getDialect()->getNamespace() == "omp") {
+      found = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return found;
+}
+
+///===----------------------------------------------------------------------===///
+/// Operation Ordering Utilities
+///===----------------------------------------------------------------------===///
+
+Operation *getTopLevelFuncChild(Operation *op, func::FuncOp parentFunc) {
+  if (!op || !parentFunc)
+    return nullptr;
+
+  Operation *cursor = op;
+  while (cursor && cursor->getParentOp() != parentFunc)
+    cursor = cursor->getParentOp();
+  return cursor;
+}
+
+bool isOrderedAfter(Operation *anchor, Operation *candidate,
+                    func::FuncOp parentFunc) {
+  Operation *anchorTop = getTopLevelFuncChild(anchor, parentFunc);
+  Operation *candidateTop = getTopLevelFuncChild(candidate, parentFunc);
+  if (!anchorTop || !candidateTop)
+    return false;
+  if (anchorTop->getBlock() != candidateTop->getBlock())
+    return false;
+  return anchorTop->isBeforeInBlock(candidateTop);
+}
+
+///===----------------------------------------------------------------------===///
 /// ARTS Runtime Query Utilities
 ///===----------------------------------------------------------------------===///
 

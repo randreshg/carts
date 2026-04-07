@@ -90,6 +90,21 @@ inline bool isStartBlockArithmeticOp(Operation *op) {
 /// duplicate when restructuring control flow around epochs/EDTs.
 bool isSideEffectFreeArithmeticLikeOp(Operation *op);
 
+/// Return true when `op` is nested inside an OMP dialect region.
+bool isInsideOmpRegion(Operation *op);
+
+/// Return true when `op` transitively contains any OMP dialect operation.
+bool containsOmpOp(Operation *op);
+
+/// Walk up from `op` to `parentFunc` and return the immediate child of
+/// `parentFunc` that contains `op`. Returns nullptr when unreachable.
+Operation *getTopLevelFuncChild(Operation *op, func::FuncOp parentFunc);
+
+/// Return true when `candidate` is positioned after `anchor` in the top-level
+/// block of `parentFunc`.
+bool isOrderedAfter(Operation *anchor, Operation *candidate,
+                    func::FuncOp parentFunc);
+
 /// Convert OMP task dependency mode to ARTS access mode.
 ArtsMode convertOmpMode(omp::ClauseTaskDepend mode);
 
