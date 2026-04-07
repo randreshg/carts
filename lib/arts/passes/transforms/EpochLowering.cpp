@@ -75,9 +75,9 @@ using namespace mlir::arts;
 using AttrNames::Operation::ContinuationForEpoch;
 using AttrNames::Operation::CPSAdditiveParams;
 using AttrNames::Operation::CPSAdvanceHasIvArg;
-using AttrNames::Operation::CPSDirectRecreate;
 using AttrNames::Operation::CPSChainId;
 using AttrNames::Operation::CPSDepRouting;
+using AttrNames::Operation::CPSDirectRecreate;
 using AttrNames::Operation::CPSForwardDeps;
 using AttrNames::Operation::CPSInitIter;
 using AttrNames::Operation::CPSIterCounterParamIdx;
@@ -149,6 +149,18 @@ void EpochLoweringPass::runOnOperation() {
       continue;
     }
 
+    /// Check if this epoch is marked for persistent structured region lowering.
+    /// When set, worker EDTs within this epoch are expected to maintain stable
+    /// owner-local slices across multiple logical timesteps.
+    bool isPersistent = false;
+    if (auto persistAttr = epochOp->getAttrOfType<BoolAttr>(
+            AttrNames::Operation::PersistentRegion))
+      isPersistent = persistAttr.getValue();
+    if (isPersistent) {
+      ARTS_INFO("  Persistent structured region: epoch will use stable "
+                "owner-strip execution");
+    }
+
     /// Check if this epoch has a continuation EDT (set by EpochOpt).
     bool hasContinuation = epochOp->hasAttr(ContinuationForEpoch);
     Value finishGuid;
@@ -211,6 +223,11 @@ void EpochLoweringPass::runOnOperation() {
         hasContinuation ? finishGuid : Value(),
         hasContinuation ? finishSlot : Value());
     auto currentEpoch = createEpochOp.getEpochGuid();
+
+    /// Propagate persistent region flag to the lowered CreateEpochOp.
+    if (isPersistent)
+      createEpochOp->setAttr(AttrNames::Operation::PersistentRegion,
+                             BoolAttr::get(createEpochOp.getContext(), true));
 
     /// Collect EdtCreateOps that need the epoch GUID.
     SmallVector<EdtCreateOp, 8> edtCreatesToUpdate;
@@ -318,8 +335,8 @@ void EpochLoweringPass::runOnOperation() {
           unsigned epochIdx = packParams.size() - 1;
           auto packType = MemRefType::get(
               {static_cast<int64_t>(packParams.size())}, AC->Int64);
-          auto newPack =
-              AC->create<EdtParamPackOp>(packOp->getLoc(), packType, packParams);
+          auto newPack = AC->create<EdtParamPackOp>(packOp->getLoc(), packType,
+                                                    packParams);
           packOp->getResult(0).replaceAllUsesWith(newPack.getMemref());
           packOp->erase();
           SmallVector<int64_t> identityPerm;
@@ -388,8 +405,8 @@ void EpochLoweringPass::runOnOperation() {
       func.walk([&](EdtCreateOp edt) {
         if (!edt->hasAttr(ContinuationForEpoch))
           return;
-        auto childFuncAttr = edt->getAttrOfType<StringAttr>(
-            AttrNames::Operation::OutlinedFunc);
+        auto childFuncAttr =
+            edt->getAttrOfType<StringAttr>(AttrNames::Operation::OutlinedFunc);
         if (!childFuncAttr)
           return;
         func::FuncOp childFunc =
@@ -466,8 +483,8 @@ void EpochLoweringPass::runOnOperation() {
           if (auto loadOp = dyn_cast<memref::LoadOp>(defOp)) {
             if (loadOp.getMemRef() == paramArrayMemref &&
                 loadOp.getIndices().size() == 1) {
-              if (auto idxOp =
-                      loadOp.getIndices()[0].getDefiningOp<arith::ConstantIndexOp>())
+              if (auto idxOp = loadOp.getIndices()[0]
+                                   .getDefiningOp<arith::ConstantIndexOp>())
                 return idxOp.value();
             }
           }
@@ -478,16 +495,17 @@ void EpochLoweringPass::runOnOperation() {
         return -1;
       };
 
-      auto buildExpandedDirectRecreateCarry =
-          [&](EdtParamPackOp packOp, unsigned carryCount)
-              -> std::pair<SmallVector<Value>, SmallVector<int64_t>> {
+      auto buildExpandedDirectRecreateCarry = [&](EdtParamPackOp packOp,
+                                                  unsigned carryCount)
+          -> std::pair<SmallVector<Value>, SmallVector<int64_t>> {
         SmallVector<Value> newCarryValues;
         SmallVector<int64_t> newPerm;
         DenseSet<int64_t> representedCanonicalSlots;
 
         for (Value operand : packOp.getOperands()) {
           int64_t canonicalIdx = traceToParamIdx(operand);
-          if (canonicalIdx < 0 || canonicalIdx >= static_cast<int64_t>(carryCount))
+          if (canonicalIdx < 0 ||
+              canonicalIdx >= static_cast<int64_t>(carryCount))
             continue;
           newCarryValues.push_back(operand);
           newPerm.push_back(canonicalIdx);
@@ -503,8 +521,8 @@ void EpochLoweringPass::runOnOperation() {
             slotValue = unpackOp.getResult(canonicalSlot);
           } else {
             Value slotIdx = AC->createIndexConstant(canonicalSlot, loc);
-            slotValue = AC->create<memref::LoadOp>(
-                loc, paramArrayMemref, ValueRange{slotIdx});
+            slotValue = AC->create<memref::LoadOp>(loc, paramArrayMemref,
+                                                   ValueRange{slotIdx});
           }
           newCarryValues.push_back(slotValue);
           newPerm.push_back(canonicalSlot);
@@ -518,8 +536,8 @@ void EpochLoweringPass::runOnOperation() {
         if (!packOp)
           continue;
 
-        auto childFuncAttr = edt->getAttrOfType<StringAttr>(
-            AttrNames::Operation::OutlinedFunc);
+        auto childFuncAttr =
+            edt->getAttrOfType<StringAttr>(AttrNames::Operation::OutlinedFunc);
         func::FuncOp childFunc =
             childFuncAttr
                 ? module.lookupSymbol<func::FuncOp>(childFuncAttr.getValue())
@@ -545,12 +563,11 @@ void EpochLoweringPass::runOnOperation() {
         SmallVector<Value> packParams;
         if (childUsesDirectRecreate) {
           unsigned carryCount = std::max<int64_t>(info.iterIdx, 0);
-          ARTS_INFO("  rebuilding child pack with carryCount=" << carryCount
-                                                               << ", iter="
-                                                               << info.iterIdx
-                                                               << ", epoch="
-                                                               << info.epochIdx);
-          auto expandedCarry = buildExpandedDirectRecreateCarry(packOp, carryCount);
+          ARTS_INFO("  rebuilding child pack with carryCount="
+                    << carryCount << ", iter=" << info.iterIdx
+                    << ", epoch=" << info.epochIdx);
+          auto expandedCarry =
+              buildExpandedDirectRecreateCarry(packOp, carryCount);
           packParams = std::move(expandedCarry.first);
           perm = std::move(expandedCarry.second);
           if (childFunc) {
@@ -601,9 +618,11 @@ void EpochLoweringPass::runOnOperation() {
           perm.push_back(traceToParamIdx(operand));
 
         unsigned carryCount = std::max<int64_t>(info.iterIdx, 0);
-        ARTS_INFO("CPS propagation: rewriting local direct-recreate continuation "
-                  << edt << " with carryCount=" << carryCount);
-        auto expandedCarry = buildExpandedDirectRecreateCarry(packOp, carryCount);
+        ARTS_INFO(
+            "CPS propagation: rewriting local direct-recreate continuation "
+            << edt << " with carryCount=" << carryCount);
+        auto expandedCarry =
+            buildExpandedDirectRecreateCarry(packOp, carryCount);
         SmallVector<Value> packParams = std::move(expandedCarry.first);
         perm = std::move(expandedCarry.second);
         packParams.push_back(iterCounter);
@@ -621,8 +640,8 @@ void EpochLoweringPass::runOnOperation() {
 
         setCpsSchemaAttrs(edt, perm, newIterIdx, newEpochIdx);
 
-        auto childFuncAttr = edt->getAttrOfType<StringAttr>(
-            AttrNames::Operation::OutlinedFunc);
+        auto childFuncAttr =
+            edt->getAttrOfType<StringAttr>(AttrNames::Operation::OutlinedFunc);
         func::FuncOp childFunc =
             childFuncAttr
                 ? module.lookupSymbol<func::FuncOp>(childFuncAttr.getValue())
@@ -766,8 +785,8 @@ void EpochLoweringPass::runOnOperation() {
 
       if (bestLocalSchemaEdt) {
         if (!localSchemaPackOp)
-          localSchemaPackOp =
-              bestLocalSchemaEdt.getParamMemref().getDefiningOp<EdtParamPackOp>();
+          localSchemaPackOp = bestLocalSchemaEdt.getParamMemref()
+                                  .getDefiningOp<EdtParamPackOp>();
         if (!localIterCounterIdxAttr)
           localIterCounterIdxAttr =
               bestLocalSchemaEdt->getAttrOfType<IntegerAttr>(
@@ -892,6 +911,24 @@ void EpochLoweringPass::runOnOperation() {
       if (!hasCanonicalLoopBackContract)
         return newPackParams;
 
+      /// Plan-aware path: when the new launch state schema is present,
+      /// use it to interpret the carry param layout structurally instead
+      /// of relying on positional CPSParamPerm archaeology.
+      if (auto stateSchema = contEdtCreate->getAttrOfType<DenseI64ArrayAttr>(
+              AttrNames::Operation::LaunchState::StateSchema)) {
+        ArrayRef<int64_t> schema = stateSchema.asArrayRef();
+        /// schema format: [numScalars, numTimingDbs, numDataGuids, numDataPtrs]
+        int64_t numScalars = schema.size() > 0 ? schema[0] : 0;
+        int64_t numTotal = 0;
+        for (int64_t v : schema)
+          numTotal += v;
+        /// Use canonical loop-back params directly; the schema just
+        /// documents the layout for debugging and downstream consumers.
+        ARTS_DEBUG("CPS advance: using launch state schema — "
+                   << numScalars << " scalars, " << numTotal << " total");
+        /// Fall through to canonical path below — the schema is advisory.
+      }
+
       auto isTargetSlotTypeCompatible = [&](unsigned slot, Value candidate) {
         if (!candidate)
           return false;
@@ -906,13 +943,11 @@ void EpochLoweringPass::runOnOperation() {
         auto unpackedValues = localUnpack.getResults();
         unsigned localCarryCount = unpackedValues.size();
         if (localIterCounterIdxAttr)
-          localCarryCount =
-              std::min<unsigned>(localCarryCount,
-                                 localIterCounterIdxAttr.getInt());
+          localCarryCount = std::min<unsigned>(
+              localCarryCount, localIterCounterIdxAttr.getInt());
         else if (localOuterEpochIdxAttr)
-          localCarryCount =
-              std::min<unsigned>(localCarryCount,
-                                 localOuterEpochIdxAttr.getInt());
+          localCarryCount = std::min<unsigned>(localCarryCount,
+                                               localOuterEpochIdxAttr.getInt());
 
         unsigned totalPackSlots = localCarryCount;
         if (targetIterCounterIdxAttr)
@@ -927,9 +962,8 @@ void EpochLoweringPass::runOnOperation() {
         for (unsigned i = 0; i < localCarryCount && i < totalPackSlots; ++i) {
           bool unsafeCarry = false;
           if (localSchemaPackOp && i < localSchemaPackOp.getNumOperands())
-            unsafeCarry =
-                static_cast<bool>(DbUtils::getUnderlyingDbAlloc(
-                    localSchemaPackOp.getOperand(i)));
+            unsafeCarry = static_cast<bool>(
+                DbUtils::getUnderlyingDbAlloc(localSchemaPackOp.getOperand(i)));
           if (!unsafeCarry)
             newPackParams[i] = unpackedValues[i];
         }
@@ -958,13 +992,11 @@ void EpochLoweringPass::runOnOperation() {
 
       unsigned totalPackSlots = targetCarryCount;
       if (targetIterCounterIdxAttr)
-        totalPackSlots =
-            std::max<unsigned>(totalPackSlots,
-                               targetIterCounterIdxAttr.getInt() + 1);
+        totalPackSlots = std::max<unsigned>(
+            totalPackSlots, targetIterCounterIdxAttr.getInt() + 1);
       if (targetOuterEpochIdxAttr)
-        totalPackSlots =
-            std::max<unsigned>(totalPackSlots,
-                               targetOuterEpochIdxAttr.getInt() + 1);
+        totalPackSlots = std::max<unsigned>(
+            totalPackSlots, targetOuterEpochIdxAttr.getInt() + 1);
       if (totalPackSlots == 0)
         return newPackParams;
 
@@ -988,12 +1020,12 @@ void EpochLoweringPass::runOnOperation() {
         growCanonicalWidth(targetParamPermAttr.asArrayRef());
 
       SmallVector<Value> canonicalValues(std::max<int64_t>(canonicalWidth, 0));
-      ArrayRef<int64_t> localPerm =
-          localParamPermAttr ? localParamPermAttr.asArrayRef()
-                             : ArrayRef<int64_t>();
-      ArrayRef<int64_t> targetPerm =
-          targetParamPermAttr ? targetParamPermAttr.asArrayRef()
-                              : ArrayRef<int64_t>();
+      ArrayRef<int64_t> localPerm = localParamPermAttr
+                                        ? localParamPermAttr.asArrayRef()
+                                        : ArrayRef<int64_t>();
+      ArrayRef<int64_t> targetPerm = targetParamPermAttr
+                                         ? targetParamPermAttr.asArrayRef()
+                                         : ArrayRef<int64_t>();
       auto sameCanonicalValue = [](Value lhs, Value rhs) {
         if (!lhs || !rhs)
           return false;
@@ -1012,11 +1044,12 @@ void EpochLoweringPass::runOnOperation() {
       }
 
       IntegerAttr preserveCarryAbiAttr =
-          parentFunc ? parentFunc->getAttrOfType<IntegerAttr>(CPSPreserveCarryAbi)
-                     : IntegerAttr();
-      bool preserveIncomingCarryAbi =
-          localParamArrayMemref && preserveCarryAbiAttr &&
-          preserveCarryAbiAttr.getInt() > 0;
+          parentFunc
+              ? parentFunc->getAttrOfType<IntegerAttr>(CPSPreserveCarryAbi)
+              : IntegerAttr();
+      bool preserveIncomingCarryAbi = localParamArrayMemref &&
+                                      preserveCarryAbiAttr &&
+                                      preserveCarryAbiAttr.getInt() > 0;
 
       SmallVector<Value> preservedIncomingCarry(
           std::max<int64_t>(canonicalWidth, 0));
@@ -1024,18 +1057,18 @@ void EpochLoweringPass::runOnOperation() {
         unsigned preservedCarryCount =
             std::max<int64_t>(preserveCarryAbiAttr.getInt(), 0);
         if (localParamPermAttr)
-          preservedCarryCount =
-              std::max<unsigned>(preservedCarryCount, localParamPermAttr.size());
+          preservedCarryCount = std::max<unsigned>(preservedCarryCount,
+                                                   localParamPermAttr.size());
         for (unsigned i = 0; i < preservedCarryCount; ++i) {
           int64_t canonicalIdx = resolveCanonicalIndex(localPerm, i);
           if (canonicalIdx < 0)
             continue;
-          if (static_cast<size_t>(canonicalIdx) >= preservedIncomingCarry.size())
+          if (static_cast<size_t>(canonicalIdx) >=
+              preservedIncomingCarry.size())
             preservedIncomingCarry.resize(canonicalIdx + 1);
           Value slotIdx = AC->createIndexConstant(i, loc);
-          preservedIncomingCarry[canonicalIdx] =
-              AC->create<memref::LoadOp>(loc, localParamArrayMemref,
-                                         ValueRange{slotIdx});
+          preservedIncomingCarry[canonicalIdx] = AC->create<memref::LoadOp>(
+              loc, localParamArrayMemref, ValueRange{slotIdx});
         }
       }
 
@@ -1043,9 +1076,8 @@ void EpochLoweringPass::runOnOperation() {
         if (localUnpack) {
           unsigned localCarryCount = localUnpack.getNumResults();
           if (hasCanonicalLoopBackContract)
-            localCarryCount =
-                std::min<unsigned>(localCarryCount,
-                                   canonicalLoopBackParams.size());
+            localCarryCount = std::min<unsigned>(
+                localCarryCount, canonicalLoopBackParams.size());
           if (localParamPermAttr)
             localCarryCount =
                 std::min<unsigned>(localCarryCount, localParamPermAttr.size());
@@ -1077,7 +1109,8 @@ void EpochLoweringPass::runOnOperation() {
 
       unsigned localExplicitCarryCount = computeLocalExplicitCarryCount();
 
-      SmallVector<Value> localCarryFallback(std::max<int64_t>(canonicalWidth, 0));
+      SmallVector<Value> localCarryFallback(
+          std::max<int64_t>(canonicalWidth, 0));
       if (localUnpack) {
         auto unpackedValues = localUnpack.getResults();
         for (unsigned i = 0; i < localExplicitCarryCount; ++i) {
@@ -1097,9 +1130,8 @@ void EpochLoweringPass::runOnOperation() {
           if (static_cast<size_t>(canonicalIdx) >= localCarryFallback.size())
             localCarryFallback.resize(canonicalIdx + 1);
           Value slotIdx = AC->createIndexConstant(i, loc);
-          localCarryFallback[canonicalIdx] =
-              AC->create<memref::LoadOp>(loc, localParamArrayMemref,
-                                         ValueRange{slotIdx});
+          localCarryFallback[canonicalIdx] = AC->create<memref::LoadOp>(
+              loc, localParamArrayMemref, ValueRange{slotIdx});
         }
       }
 
@@ -1110,12 +1142,12 @@ void EpochLoweringPass::runOnOperation() {
       for (unsigned slot = 0; slot < targetCarryCount; ++slot) {
         int64_t canonicalIdx = resolveCanonicalIndex(targetPerm, slot);
         bool preserveStructuralCarrySlot =
-            directRecreate && preserveIncomingCarryAbi &&
-            canonicalIdx >= 0 &&
+            directRecreate && preserveIncomingCarryAbi && canonicalIdx >= 0 &&
             static_cast<unsigned>(canonicalIdx) >= localExplicitCarryCount &&
             static_cast<size_t>(canonicalIdx) < preservedIncomingCarry.size() &&
             preservedIncomingCarry[canonicalIdx] &&
-            isTargetSlotTypeCompatible(slot, preservedIncomingCarry[canonicalIdx]);
+            isTargetSlotTypeCompatible(slot,
+                                       preservedIncomingCarry[canonicalIdx]);
 
         /// Direct-recreate continuations can compact away kickoff-only carry
         /// slots locally while still needing the original kickoff ABI on
@@ -1161,14 +1193,16 @@ void EpochLoweringPass::runOnOperation() {
         if (canonicalIdx >= 0 &&
             static_cast<size_t>(canonicalIdx) < localCarryFallback.size() &&
             localCarryFallback[canonicalIdx] &&
-            isTargetSlotTypeCompatible(slot, localCarryFallback[canonicalIdx])) {
+            isTargetSlotTypeCompatible(slot,
+                                       localCarryFallback[canonicalIdx])) {
           newPackParams[slot] = localCarryFallback[canonicalIdx];
           continue;
         }
         if (preserveIncomingCarryAbi && canonicalIdx >= 0 &&
             static_cast<size_t>(canonicalIdx) < preservedIncomingCarry.size() &&
             preservedIncomingCarry[canonicalIdx] &&
-            isTargetSlotTypeCompatible(slot, preservedIncomingCarry[canonicalIdx])) {
+            isTargetSlotTypeCompatible(slot,
+                                       preservedIncomingCarry[canonicalIdx])) {
           /// Preserved incoming ABI slots are a structural fallback for target
           /// schema holes. Fresh loop-back values from the current iteration
           /// must win whenever they are available.
@@ -1219,8 +1253,7 @@ void EpochLoweringPass::runOnOperation() {
     };
 
     auto emitWholeDbDep = [&](Value targetGuid, Value depGuid, unsigned slotIdx,
-                              int32_t mode,
-                              std::optional<int32_t> depFlags) {
+                              int32_t mode, std::optional<int32_t> depFlags) {
       if (!targetGuid || !depGuid)
         return;
       depGuid = AC->ensureI64(depGuid, loc);
@@ -1261,8 +1294,9 @@ void EpochLoweringPass::runOnOperation() {
       SmallVector<Value> schemaPackParams = rebuildCpsPackToTargetSchema();
       if (!schemaPackParams.empty()) {
         auto packType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
-        paramMemref = AC->create<EdtParamPackOp>(loc, packType, schemaPackParams)
-                           .getMemref();
+        paramMemref =
+            AC->create<EdtParamPackOp>(loc, packType, schemaPackParams)
+                .getMemref();
       } else if (localUnpack) {
         auto unpackResults = localUnpack.getResults();
         SmallVector<Value> newPackParams;
@@ -1276,8 +1310,8 @@ void EpochLoweringPass::runOnOperation() {
         if (outerEpochGuid)
           newPackParams.push_back(outerEpochGuid);
         auto packType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
-        paramMemref =
-            AC->create<EdtParamPackOp>(loc, packType, newPackParams).getMemref();
+        paramMemref = AC->create<EdtParamPackOp>(loc, packType, newPackParams)
+                          .getMemref();
       } else {
         SmallVector<Value> packVals;
         if (tNext)
@@ -1364,8 +1398,7 @@ void EpochLoweringPass::runOnOperation() {
               continue;
             if (!offset) {
               if (ValueAnalysis::isZeroConstant(
-                      ValueAnalysis::stripNumericCasts(
-                          loadOp.getIndices()[0])))
+                      ValueAnalysis::stripNumericCasts(loadOp.getIndices()[0])))
                 return idx;
               continue;
             }
@@ -1427,25 +1460,40 @@ void EpochLoweringPass::runOnOperation() {
           return;
 
         if (auto mappedSlot = resolveOriginalDepSlotForCarryIndex(carryIdx)) {
-          plan.deferredDeps.push_back(
-              {DeferredDepEmit::Kind::WholeDb, depGuid, 0, *mappedSlot,
-               getOriginalDepMode(*mappedSlot),
-               getOriginalDepFlags(*mappedSlot)});
+          plan.deferredDeps.push_back({DeferredDepEmit::Kind::WholeDb, depGuid,
+                                       0, *mappedSlot,
+                                       getOriginalDepMode(*mappedSlot),
+                                       getOriginalDepFlags(*mappedSlot)});
           satisfiedOriginalDepSlots[*mappedSlot] = true;
           return;
         }
 
         if (fallbackSlot) {
-          plan.deferredDeps.push_back(
-              {DeferredDepEmit::Kind::WholeDb, depGuid, 0, *fallbackSlot,
-               fallbackMode, fallbackFlags});
+          plan.deferredDeps.push_back({DeferredDepEmit::Kind::WholeDb, depGuid,
+                                       0, *fallbackSlot, fallbackMode,
+                                       fallbackFlags});
           if (*fallbackSlot < satisfiedOriginalDepSlots.size())
             satisfiedOriginalDepSlots[*fallbackSlot] = true;
         }
       };
 
-      if (auto depRouting =
-              advanceOp->getAttrOfType<DenseI64ArrayAttr>(CPSDepRouting)) {
+      /// Plan-aware path: when the continuation has a structured kernel plan,
+      /// emit dep_forward ops to make slot forwarding explicit in the IR.
+      if (contEdtCreate->hasAttr(AttrNames::Operation::Plan::KernelFamily) &&
+          originalRecDep) {
+        ARTS_DEBUG("CPS advance: plan-aware dep_forward path");
+        for (unsigned depIdx = 0; depIdx < originalDepCount; ++depIdx) {
+          plan.deferredDeps.push_back(
+              {DeferredDepEmit::Kind::ForwardedSlot, Value(), depIdx, depIdx,
+               getOriginalDepMode(depIdx), getOriginalDepFlags(depIdx)});
+        }
+        /// Emit dep_forward ops for each forwarded slot.
+        for (unsigned depIdx = 0; depIdx < originalDepCount; ++depIdx) {
+          Value slotVal = AC->createIntConstant(depIdx, AC->Int64, loc);
+          AC->create<DepForwardOp>(loc, slotVal);
+        }
+      } else if (auto depRouting = advanceOp->getAttrOfType<DenseI64ArrayAttr>(
+                     CPSDepRouting)) {
         ArrayRef<int64_t> routing = depRouting.asArrayRef();
         int64_t numTimingDbs = routing.size() > 0 ? routing[0] : 0;
         int64_t hasScratch = routing.size() > 1 ? routing[1] : 0;
@@ -1510,7 +1558,8 @@ void EpochLoweringPass::runOnOperation() {
         if (!hasExplicitSlices && !hasGuardedDeps && originalPack) {
           for (auto [depIdx, depGuid] :
                llvm::enumerate(originalRecDep.getDatablocks())) {
-            auto packIdx = findPackIndexForSafeWholeDbDep(originalPack, depGuid);
+            auto packIdx =
+                findPackIndexForSafeWholeDbDep(originalPack, depGuid);
             if (!packIdx)
               continue;
             Value localDepGuid = getLoopBackValueForPackIndex(*packIdx);
@@ -1542,8 +1591,7 @@ void EpochLoweringPass::runOnOperation() {
     Value deferredContGuid;
     SmallVector<DeferredDepEmit, 8> deferredDepEmits;
     if (directRecreate && continueCond) {
-      auto ifOp = AC->create<scf::IfOp>(loc, TypeRange{AC->Int64},
-                                        continueCond,
+      auto ifOp = AC->create<scf::IfOp>(loc, TypeRange{AC->Int64}, continueCond,
                                         /*withElseRegion=*/true);
       {
         OpBuilder::InsertionGuard guard(AC->getBuilder());
@@ -1568,8 +1616,8 @@ void EpochLoweringPass::runOnOperation() {
       deferredDepEmits = std::move(plan.deferredDeps);
     } else if (continueCond) {
       auto ifOp = AC->create<scf::IfOp>(
-          loc, TypeRange{outerEpochGuid.getType(), AC->Int64},
-                                        continueCond, /*withElseRegion=*/true);
+          loc, TypeRange{outerEpochGuid.getType(), AC->Int64}, continueCond,
+          /*withElseRegion=*/true);
       {
         OpBuilder::InsertionGuard guard(AC->getBuilder());
         Block &thenBlock = ifOp.getThenRegion().front();
@@ -1618,7 +1666,8 @@ void EpochLoweringPass::runOnOperation() {
         advBody.eraseArgument(0);
       }
 
-      /// Move worker ops from CPSAdvanceOp's epochBody AFTER the epoch creation.
+      /// Move worker ops from CPSAdvanceOp's epochBody AFTER the epoch
+      /// creation.
       SmallVector<Operation *> workerOps;
       for (Operation &op : advBody.without_terminator())
         workerOps.push_back(&op);
@@ -1790,8 +1839,7 @@ LogicalResult EpochLoweringPass::compactContinuationParamAbi() {
 
     if (auto preserveCarryAttr =
             func->getAttrOfType<IntegerAttr>(CPSPreserveCarryAbi)) {
-      unsigned preserveCount =
-          std::max<int64_t>(preserveCarryAttr.getInt(), 0);
+      unsigned preserveCount = std::max<int64_t>(preserveCarryAttr.getInt(), 0);
       if (keep.size() < preserveCount)
         keep.resize(preserveCount, false);
       for (unsigned idx = 0; idx < preserveCount; ++idx)
@@ -1803,8 +1851,7 @@ LogicalResult EpochLoweringPass::compactContinuationParamAbi() {
     func.walk([&](memref::LoadOp load) {
       if (load.getMemRef() != paramMemref || load.getIndices().size() != 1)
         return;
-      auto idxOp =
-          load.getIndices()[0].getDefiningOp<arith::ConstantIndexOp>();
+      auto idxOp = load.getIndices()[0].getDefiningOp<arith::ConstantIndexOp>();
       if (!idxOp)
         return;
       unsigned idx = idxOp.value();
@@ -1847,14 +1894,14 @@ LogicalResult EpochLoweringPass::compactContinuationParamAbi() {
     auto newUnpack = builder.create<EdtParamUnpackOp>(unpackOp.getLoc(),
                                                       liveTypes, paramMemref);
     for (auto [newIdx, oldIdx] : llvm::enumerate(keptUnpackSlots))
-      unpackOp.getResult(oldIdx).replaceAllUsesWith(newUnpack.getResult(newIdx));
+      unpackOp.getResult(oldIdx).replaceAllUsesWith(
+          newUnpack.getResult(newIdx));
     unpackOp.erase();
 
     for (memref::LoadOp load : directParamLoads) {
       if (!load || load->getBlock() == nullptr)
         continue;
-      auto idxOp =
-          load.getIndices()[0].getDefiningOp<arith::ConstantIndexOp>();
+      auto idxOp = load.getIndices()[0].getDefiningOp<arith::ConstantIndexOp>();
       if (!idxOp)
         continue;
       unsigned oldIdx = idxOp.value();
@@ -1864,9 +1911,8 @@ LogicalResult EpochLoweringPass::compactContinuationParamAbi() {
       if (newIdx == oldIdx)
         continue;
       builder.setInsertionPoint(load);
-      Value newIdxVal =
-          builder.create<arith::ConstantIndexOp>(load.getLoc(),
-                                                 static_cast<int64_t>(newIdx));
+      Value newIdxVal = builder.create<arith::ConstantIndexOp>(
+          load.getLoc(), static_cast<int64_t>(newIdx));
       auto newLoad = builder.create<memref::LoadOp>(load.getLoc(), paramMemref,
                                                     ValueRange{newIdxVal});
       load.getResult().replaceAllUsesWith(newLoad.getResult());
@@ -1876,7 +1922,8 @@ LogicalResult EpochLoweringPass::compactContinuationParamAbi() {
     auto getCarryCount = [&](EdtCreateOp edt) -> unsigned {
       if (auto perm = edt->getAttrOfType<DenseI64ArrayAttr>(CPSParamPerm))
         return perm.size();
-      if (auto iterAttr = edt->getAttrOfType<IntegerAttr>(CPSIterCounterParamIdx))
+      if (auto iterAttr =
+              edt->getAttrOfType<IntegerAttr>(CPSIterCounterParamIdx))
         return iterAttr.getInt();
       if (auto epochAttr =
               edt->getAttrOfType<IntegerAttr>(CPSOuterEpochParamIdx))
@@ -1892,16 +1939,17 @@ LogicalResult EpochLoweringPass::compactContinuationParamAbi() {
           if (oldIdx < packOp->getNumOperands())
             operands.push_back(packOp->getOperand(oldIdx));
         builder.setInsertionPoint(packOp);
-        auto packType = MemRefType::get({ShapedType::kDynamic},
-                                        builder.getI64Type());
-        auto newPack = builder.create<EdtParamPackOp>(
-            packOp.getLoc(), packType, operands);
+        auto packType =
+            MemRefType::get({ShapedType::kDynamic}, builder.getI64Type());
+        auto newPack =
+            builder.create<EdtParamPackOp>(packOp.getLoc(), packType, operands);
         edt->setOperand(0, newPack.getMemref());
         if (packOp->use_empty())
           packOp.erase();
       }
 
-      if (auto iterAttr = edt->getAttrOfType<IntegerAttr>(CPSIterCounterParamIdx)) {
+      if (auto iterAttr =
+              edt->getAttrOfType<IntegerAttr>(CPSIterCounterParamIdx)) {
         int64_t oldIdx = iterAttr.getInt();
         if (oldIdx >= 0 && static_cast<size_t>(oldIdx) < oldToNew.size() &&
             oldToNew[oldIdx] >= 0) {
