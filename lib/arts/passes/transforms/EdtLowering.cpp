@@ -89,6 +89,7 @@ static llvm::Statistic numEdtsDemotedToTask{
 using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
+using AttrNames::Operation::ControlDep;
 using AttrNames::Operation::ContinuationForEpoch;
 using AttrNames::Operation::CPSChainId;
 using AttrNames::Operation::CPSForwardDeps;
@@ -740,7 +741,7 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   /// If this EDT has a control dependency (epoch continuation slot), add +1
   /// to depCount. The control slot is the last slot, satisfied by the epoch
   /// finish signal via arts_signal_edt_value.
-  if (edtOp->hasAttr("arts.has_control_dep")) {
+  if (edtOp->hasAttr(ControlDep)) {
     Value one = AC->createIntConstant(1, AC->Int32, loc);
     depCount = AC->create<arith::AddIOp>(loc, depCount, one);
     ARTS_DEBUG("  Adding +1 control dep slot for epoch continuation");
@@ -760,9 +761,8 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   /// Propagate continuation attributes so EpochLowering can find them.
   if (edtOp->hasAttr(ContinuationForEpoch))
     outlineOp->setAttr(ContinuationForEpoch, AC->getBuilder().getUnitAttr());
-  if (edtOp->hasAttr("arts.has_control_dep"))
-    outlineOp->setAttr("arts.has_control_dep",
-                       edtOp->getAttr("arts.has_control_dep"));
+  if (edtOp->hasAttr(ControlDep))
+    outlineOp->setAttr(ControlDep, edtOp->getAttr(ControlDep));
   if (edtOp->hasAttr(CPSForwardDeps))
     outlineOp->setAttr(CPSForwardDeps, AC->getBuilder().getUnitAttr());
   /// Record the pre-CPS param-pack schema on continuation EDTs so
@@ -785,13 +785,18 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   if (auto familyAttr = edtOp->getAttrOfType<StringAttr>(
           AttrNames::Operation::Plan::KernelFamily))
     outlineOp->setAttr(AttrNames::Operation::Plan::KernelFamily, familyAttr);
+  /// CPS-chain continuations stamp launch schemas at the high-level EDT once
+  /// EpochOpt has proven the carry/dependency ABI. Preserve that contract on
+  /// the lowered create op so EpochLowering can rebuild relaunch slots without
+  /// falling back to positional inference.
   if (auto stateSchema = edtOp->getAttrOfType<DenseI64ArrayAttr>(
           AttrNames::Operation::LaunchState::StateSchema))
     outlineOp->setAttr(AttrNames::Operation::LaunchState::StateSchema,
                        stateSchema);
   if (auto depSchema = edtOp->getAttrOfType<DenseI64ArrayAttr>(
           AttrNames::Operation::LaunchState::DepSchema))
-    outlineOp->setAttr(AttrNames::Operation::LaunchState::DepSchema, depSchema);
+    outlineOp->setAttr(AttrNames::Operation::LaunchState::DepSchema,
+                       depSchema);
 
   int64_t baseId = getArtsId(edtOp);
   if (!baseId)

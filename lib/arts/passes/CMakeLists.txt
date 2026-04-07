@@ -50,7 +50,12 @@ add_mlir_dialect_library(MLIRArtsTransforms
   opt/edt/EdtStructuralOpt.cpp
   opt/edt/EdtICM.cpp
   opt/edt/EdtTransformsPass.cpp
-  opt/edt/EpochOpt.cpp
+  # Epoch optimization split
+  opt/epoch/EpochOpt.cpp
+  opt/epoch/EpochOptSupport.cpp
+  opt/epoch/EpochOptStructural.cpp
+  opt/epoch/EpochOptScheduling.cpp
+  opt/epoch/EpochOptCpsChain.cpp
   opt/edt/StructuredKernelPlanPass.cpp
   opt/edt/PersistentStructuredRegion.cpp
   opt/codegen/AliasScopeGen.cpp
