@@ -10,7 +10,6 @@
 #define ARTS_PASSES_TRANSFORMS_EDTLOWERINGINTERNAL_H
 
 #include "arts/Dialect.h"
-#include "arts/analysis/edt/EdtInfo.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/utils/DbUtils.h"
@@ -50,55 +49,6 @@ struct NormalizedElementSlice {
 struct DepSourceInfo {
   DbAcquireOp dbAcquire;
   DepDbAcquireOp depDbAcquire;
-};
-
-///===----------------------------------------------------------------------===//
-/// EdtEnvManager
-///===----------------------------------------------------------------------===//
-
-class EdtEnvManager {
-public:
-  EdtEnvManager(EdtOp edtOp) : edtOp(edtOp) { analyze(); }
-  EdtEnvManager(EdtOp edtOp, const EdtCaptureSummary &captureSummary)
-      : edtOp(edtOp) {
-    loadCaptureSummary(captureSummary);
-  }
-
-  void analyze() {
-    analyzeEdtCapturedValues(edtOp, capturedValues, parameters, constants,
-                             dbHandles);
-    for (Value operand : edtOp.getDependencies())
-      deps.insert(operand);
-  }
-
-  ArrayRef<Value> getParameters() const { return parameters.getArrayRef(); }
-  ArrayRef<Value> getConstants() const { return constants.getArrayRef(); }
-  ArrayRef<Value> getCapturedValues() const {
-    return capturedValues.getArrayRef();
-  }
-  ArrayRef<Value> getDependencies() const { return deps.getArrayRef(); }
-  ArrayRef<Value> getDbHandles() const { return dbHandles.getArrayRef(); }
-  const DenseMap<Value, unsigned> &getValueToPackIndex() const {
-    return valueToPackIndex;
-  }
-  DenseMap<Value, unsigned> &getValueToPackIndex() { return valueToPackIndex; }
-
-private:
-  void loadCaptureSummary(const EdtCaptureSummary &captureSummary) {
-    auto appendValues = [](SetVector<Value> &dst, ArrayRef<Value> values) {
-      for (Value value : values)
-        dst.insert(value);
-    };
-    appendValues(capturedValues, captureSummary.capturedValues);
-    appendValues(parameters, captureSummary.parameters);
-    appendValues(constants, captureSummary.constants);
-    appendValues(dbHandles, captureSummary.dbHandles);
-    appendValues(deps, captureSummary.dependencies);
-  }
-
-  EdtOp edtOp;
-  SetVector<Value> capturedValues, parameters, constants, deps, dbHandles;
-  DenseMap<Value, unsigned> valueToPackIndex;
 };
 
 ///===----------------------------------------------------------------------===//
