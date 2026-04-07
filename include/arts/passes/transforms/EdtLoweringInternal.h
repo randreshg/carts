@@ -69,8 +69,6 @@ DepSourceInfo resolveDepSource(Value dep);
 
 Operation *getCanonicalDependencySource(Value dep);
 
-std::optional<SmallVector<int64_t, 4>> getStaticDbOuterShape(Value dbHandle);
-
 } // namespace mlir::arts::edt_lowering
 
 #endif // ARTS_PASSES_TRANSFORMS_EDTLOWERINGINTERNAL_H

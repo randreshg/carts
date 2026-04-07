@@ -719,7 +719,7 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
           AC->create<polygeist::Pointer2MemrefOp>(loc, memrefTy, rawPtr);
       /// Preserve compile-time outer layout on rehydrated handles so
       /// downstream DB lowering can still recover source strides.
-      if (auto staticShape = getStaticDbOuterShape(dbHandle))
+      if (auto staticShape = DbUtils::getStaticDbOuterShape(dbHandle))
         setDbStaticOuterShape(memrefVal.getDefiningOp(), *staticShape);
       valueMapping.map(dbHandle, memrefVal);
     }
