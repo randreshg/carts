@@ -339,21 +339,8 @@ Operation *getCanonicalDependencySource(Value dep) {
 /// getStaticDbOuterShape
 ///===----------------------------------------------------------------------===///
 
-std::optional<SmallVector<int64_t, 4>>
-getStaticDbOuterShape(Value dbHandle) {
-  auto dbAlloc = dbHandle.getDefiningOp<DbAllocOp>();
-  if (!dbAlloc)
-    return std::nullopt;
-
-  SmallVector<int64_t, 4> shape;
-  shape.reserve(dbAlloc.getSizes().size());
-  for (Value size : dbAlloc.getSizes()) {
-    int64_t constantSize = 0;
-    if (!ValueAnalysis::getConstantIndex(size, constantSize))
-      return std::nullopt;
-    shape.push_back(constantSize);
-  }
-  return shape;
+std::optional<SmallVector<int64_t, 4>> getStaticDbOuterShape(Value dbHandle) {
+  return DbUtils::getStaticDbOuterShape(dbHandle);
 }
 
 } // namespace mlir::arts::edt_lowering

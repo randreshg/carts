@@ -232,14 +232,7 @@ DbAllocOp traceToDbAlloc(Value v) {
 }
 
 int64_t computeStaticPartitionCount(DbAllocOp alloc) {
-  int64_t count = 1;
-  for (Value sz : alloc.getSizes()) {
-    if (auto cst = getConstantIntValue(sz))
-      count *= *cst;
-    else
-      return -1;
-  }
-  return count;
+  return DbUtils::computeStaticPartitionCount(alloc);
 }
 
 bool isDbRefCast(Operation *defOp) {
