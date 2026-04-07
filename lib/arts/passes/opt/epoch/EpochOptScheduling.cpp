@@ -4,7 +4,7 @@
 /// Scheduling-oriented epoch transforms used by EpochOpt.
 ///==========================================================================///
 
-#include "EpochOptInternal.h"
+#include "arts/passes/opt/epoch/EpochOptInternal.h"
 #include "arts/utils/Debug.h"
 
 ARTS_DEBUG_SETUP(epoch_opt);
@@ -32,8 +32,9 @@ scf::IfOp ensureElseBranch(Location loc, scf::IfOp ifOp) {
 
 } // namespace
 
-LogicalResult transformToContinuation(
-    EpochOp epochOp, const EpochContinuationDecision &decision) {
+LogicalResult
+transformToContinuation(EpochOp epochOp,
+                        const EpochContinuationDecision &decision) {
   OpBuilder builder(epochOp->getContext());
   Location loc = epochOp.getLoc();
 
@@ -46,8 +47,7 @@ LogicalResult transformToContinuation(
   builder.setInsertionPointAfter(epochOp);
   auto edtOp = builder.create<EdtOp>(loc, EdtType::task,
                                      EdtConcurrency::intranode, deps);
-  edtOp->setAttr(ControlDep,
-                 builder.getIntegerAttr(builder.getI32Type(), 1));
+  edtOp->setAttr(ControlDep, builder.getIntegerAttr(builder.getI32Type(), 1));
   edtOp->setAttr(ContinuationForEpoch, builder.getUnitAttr());
 
   Block &edtBlock = edtOp.getBody().front();
@@ -77,8 +77,7 @@ LogicalResult transformToContinuation(
   return success();
 }
 
-bool tryCPSLoopTransform(scf::ForOp forOp,
-                         const EpochAnalysis &epochAnalysis) {
+bool tryCPSLoopTransform(scf::ForOp forOp, const EpochAnalysis &epochAnalysis) {
   if (loopContainsCpsDriverExcludedDepPattern(forOp)) {
     ARTS_INFO("CPS: skipping loop with specialized dep pattern");
     return false;
