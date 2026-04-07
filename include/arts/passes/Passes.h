@@ -61,9 +61,6 @@ std::unique_ptr<Pass> createCreateEpochsPass();
 
 /// Lower ARTS dialect operations into LLVM-ready IR.
 std::unique_ptr<Pass> createConvertArtsToLLVMPass();
-std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug);
-std::unique_ptr<Pass>
-createConvertArtsToLLVMPass(bool debug, bool distributedInitPerWorker);
 std::unique_ptr<Pass>
 createConvertArtsToLLVMPass(bool debug, bool distributedInitPerWorker,
                             const AbstractMachine *machine);
@@ -109,17 +106,9 @@ std::unique_ptr<Pass> createEpochOptPass(AnalysisManager *AM,
                                          bool enableContinuation,
                                          bool enableCPSDriver,
                                          bool enableCPSChain = false);
-std::unique_ptr<Pass> createEpochOptPass(bool enableAmortization,
-                                         bool enableContinuation,
-                                         bool enableCPSDriver,
-                                         bool enableCPSChain = false);
 /// Create EpochOpt with scheduling-only flags (structural opts disabled).
 std::unique_ptr<Pass> createEpochOptSchedulingPass(AnalysisManager *AM,
                                                    bool enableAmortization,
-                                                   bool enableContinuation,
-                                                   bool enableCPSDriver,
-                                                   bool enableCPSChain = false);
-std::unique_ptr<Pass> createEpochOptSchedulingPass(bool enableAmortization,
                                                    bool enableContinuation,
                                                    bool enableCPSDriver,
                                                    bool enableCPSChain = false);

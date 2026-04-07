@@ -27,19 +27,19 @@ add_mlir_dialect_library(MLIRArtsTransforms
   transforms/EdtDistribution.cpp
   transforms/ForLowering.cpp
   transforms/ParallelEdtLowering.cpp
-  transforms/LoopReordering.cpp
   transforms/EdtPtrRematerialization.cpp
-  
+  transforms/DepTransforms.cpp
+
   # Optimization passes
   opt/general/Inliner.cpp
   opt/general/RaiseMemRefDimensionality.cpp
   opt/general/HandleDeps.cpp
   opt/general/DeadCodeElimination.cpp
-  opt/dep/DepTransforms.cpp
   opt/kernel/KernelTransforms.cpp
   opt/loop/LoopFusion.cpp
   opt/loop/LoopNormalization.cpp
   opt/loop/StencilBoundaryPeeling.cpp
+  opt/loop/LoopReordering.cpp
   opt/db/BlockLoopStripMining.cpp
   opt/db/ContractValidation.cpp
   opt/db/DbModeTightening.cpp
@@ -48,6 +48,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   opt/db/DbTransformsPass.cpp
   opt/db/DbDistributedOwnership.cpp
   opt/edt/EdtStructuralOpt.cpp
+  opt/edt/EdtAllocaSinking.cpp
   opt/edt/EdtICM.cpp
   opt/edt/EdtTransformsPass.cpp
   # Epoch optimization split
