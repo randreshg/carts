@@ -21,9 +21,9 @@ ARTS_DEBUG_SETUP(structured_kernel_plan);
 using namespace mlir;
 using namespace mlir::arts;
 
-//===----------------------------------------------------------------------===//
-// String conversion helpers
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// String conversion helpers
+///===----------------------------------------------------------------------===///
 
 StringRef mlir::arts::kernelFamilyToString(KernelFamily family) {
   switch (family) {
@@ -43,8 +43,7 @@ StringRef mlir::arts::kernelFamilyToString(KernelFamily family) {
   return "unknown";
 }
 
-std::optional<KernelFamily>
-mlir::arts::parseKernelFamily(StringRef str) {
+std::optional<KernelFamily> mlir::arts::parseKernelFamily(StringRef str) {
   if (str == "uniform")
     return KernelFamily::Uniform;
   if (str == "stencil")
@@ -109,8 +108,7 @@ StringRef mlir::arts::asyncStrategyToString(AsyncStrategy strategy) {
   return "blocking";
 }
 
-std::optional<AsyncStrategy>
-mlir::arts::parseAsyncStrategy(StringRef str) {
+std::optional<AsyncStrategy> mlir::arts::parseAsyncStrategy(StringRef str) {
   if (str == "blocking")
     return AsyncStrategy::Blocking;
   if (str == "advance_edt")
@@ -122,8 +120,7 @@ mlir::arts::parseAsyncStrategy(StringRef str) {
   return std::nullopt;
 }
 
-StringRef
-mlir::arts::repetitionStructureToString(RepetitionStructure rep) {
+StringRef mlir::arts::repetitionStructureToString(RepetitionStructure rep) {
   switch (rep) {
   case RepetitionStructure::None:
     return "none";
@@ -150,12 +147,11 @@ mlir::arts::parseRepetitionStructure(StringRef str) {
   return std::nullopt;
 }
 
-//===----------------------------------------------------------------------===//
-// StructuredKernelPlanAnalysis
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// StructuredKernelPlanAnalysis
+///===----------------------------------------------------------------------===///
 
-StructuredKernelPlanAnalysis::StructuredKernelPlanAnalysis(
-    AnalysisManager &AM)
+StructuredKernelPlanAnalysis::StructuredKernelPlanAnalysis(AnalysisManager &AM)
     : ArtsAnalysis(AM) {}
 
 void StructuredKernelPlanAnalysis::invalidate() {
@@ -179,8 +175,7 @@ void StructuredKernelPlanAnalysis::run(ModuleOp module) {
 
       if (auto plan = synthesizePlan(forOp, edt)) {
         ARTS_DEBUG("Synthesized plan for ForOp: family="
-                   << kernelFamilyToString(plan->family)
-                   << " topology="
+                   << kernelFamilyToString(plan->family) << " topology="
                    << iterationTopologyToString(plan->topology));
         forOpPlans[forOp.getOperation()] = *plan;
         /// Also store on the parent EDT (use the first valid plan).
@@ -190,10 +185,9 @@ void StructuredKernelPlanAnalysis::run(ModuleOp module) {
     });
   });
 
-  ARTS_DEBUG("Plan synthesis complete: " << forOpPlans.size()
-                                          << " ForOp plans, "
-                                          << edtOpPlans.size()
-                                          << " EdtOp plans");
+  ARTS_DEBUG("Plan synthesis complete: "
+             << forOpPlans.size() << " ForOp plans, " << edtOpPlans.size()
+             << " EdtOp plans");
 }
 
 const StructuredKernelPlan *
@@ -212,9 +206,9 @@ StructuredKernelPlanAnalysis::getPlan(EdtOp edtOp) const {
   return nullptr;
 }
 
-//===----------------------------------------------------------------------===//
-// Plan synthesis
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// Plan synthesis
+///===----------------------------------------------------------------------===///
 
 std::optional<StructuredKernelPlan>
 StructuredKernelPlanAnalysis::synthesizePlan(ForOp forOp, EdtOp parentEdt) {
@@ -254,8 +248,7 @@ StructuredKernelPlanAnalysis::synthesizePlan(ForOp forOp, EdtOp parentEdt) {
   }
 
   /// 5. Determine if internode.
-  bool isInternode =
-      parentEdt.getConcurrency() == EdtConcurrency::internode;
+  bool isInternode = parentEdt.getConcurrency() == EdtConcurrency::internode;
 
   /// 6. Select topology.
   plan.topology = selectTopology(family, isInternode);
@@ -272,8 +265,9 @@ StructuredKernelPlanAnalysis::synthesizePlan(ForOp forOp, EdtOp parentEdt) {
   return plan;
 }
 
-KernelFamily StructuredKernelPlanAnalysis::classifyFamily(
-    ForOp forOp, EdtOp parentEdt) const {
+KernelFamily
+StructuredKernelPlanAnalysis::classifyFamily(ForOp forOp,
+                                             EdtOp parentEdt) const {
   /// Read dep pattern from ForOp or parent EDT.
   auto depPattern = getEffectiveDepPattern(forOp.getOperation());
   if (!depPattern)
@@ -299,8 +293,9 @@ KernelFamily StructuredKernelPlanAnalysis::classifyFamily(
   return KernelFamily::Unknown;
 }
 
-IterationTopology StructuredKernelPlanAnalysis::selectTopology(
-    KernelFamily family, bool isInternode) const {
+IterationTopology
+StructuredKernelPlanAnalysis::selectTopology(KernelFamily family,
+                                             bool isInternode) const {
   switch (family) {
   case KernelFamily::Uniform:
   case KernelFamily::ReductionMixed:
@@ -331,8 +326,8 @@ AsyncStrategy StructuredKernelPlanAnalysis::selectAsyncStrategy(
   return AsyncStrategy::Blocking;
 }
 
-RepetitionStructure StructuredKernelPlanAnalysis::detectRepetition(
-    ForOp forOp) const {
+RepetitionStructure
+StructuredKernelPlanAnalysis::detectRepetition(ForOp forOp) const {
   /// Walk up to find enclosing scf.for that looks like a timestep loop.
   Operation *parent = forOp->getParentOp();
   while (parent) {

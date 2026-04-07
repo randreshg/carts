@@ -45,8 +45,7 @@ struct PersistentStructuredRegionPass
           PersistentStructuredRegionPass> {
 
   PersistentStructuredRegionPass() = default;
-  explicit PersistentStructuredRegionPass(arts::AnalysisManager *AM)
-      : AM(AM) {}
+  explicit PersistentStructuredRegionPass(arts::AnalysisManager *AM) : AM(AM) {}
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
@@ -66,13 +65,13 @@ struct PersistentStructuredRegionPass
     module.walk([&](EpochOp epoch) {
       ++totalEpochs;
 
-      // Collect all worker EDTs within this epoch.
+      /// Collect all worker EDTs within this epoch.
       SmallVector<EdtOp> workerEdts;
       epoch.walk([&](EdtOp edt) { workerEdts.push_back(edt); });
       if (workerEdts.empty())
         return;
 
-      // Check if any worker EDT has a structured kernel plan.
+      /// Check if any worker EDT has a structured kernel plan.
       const StructuredKernelPlan *plan = nullptr;
       for (EdtOp edt : workerEdts) {
         auto familyAttr = edt->getAttrOfType<StringAttr>(
@@ -80,12 +79,12 @@ struct PersistentStructuredRegionPass
         if (!familyAttr)
           continue;
 
-        // Reconstruct plan from attrs.
+        /// Reconstruct plan from attrs.
         auto family = parseKernelFamily(familyAttr.getValue());
         if (!family || *family == KernelFamily::Unknown)
           continue;
 
-        // Build a local plan from the stamped attributes.
+        /// Build a local plan from the stamped attributes.
         static thread_local StructuredKernelPlan localPlan;
         localPlan = StructuredKernelPlan();
         localPlan.family = *family;
@@ -105,7 +104,7 @@ struct PersistentStructuredRegionPass
           if (auto rep = parseRepetitionStructure(repAttr.getValue()))
             localPlan.repetition = *rep;
 
-        // Read cost signals (stored as milliunits).
+        /// Read cost signals (stored as milliunits).
         auto readCost = [&](StringRef name) -> double {
           if (auto attr = edt->getAttrOfType<IntegerAttr>(name))
             return attr.getInt() / 1000.0;
@@ -125,7 +124,7 @@ struct PersistentStructuredRegionPass
       if (!plan)
         return;
 
-      // Check ownership proofs on all LoweringContractOps within the epoch.
+      /// Check ownership proofs on all LoweringContractOps within the epoch.
       OwnershipProof worstProof;
       worstProof.ownerDimReachability = true;
       worstProof.partitionAccessMapping = true;
@@ -149,12 +148,12 @@ struct PersistentStructuredRegionPass
 
       ++eligibleEpochs;
 
-      // Evaluate the cost model gate.
+      /// Evaluate the cost model gate.
       PersistentRegionGate gate =
           evaluatePersistentRegionGate(*plan, worstProof, workerCount);
 
-      ARTS_DEBUG("Epoch " << epoch->getLoc() << ": proof="
-                          << worstProof.provenCount() << "/5"
+      ARTS_DEBUG("Epoch " << epoch->getLoc()
+                          << ": proof=" << worstProof.provenCount() << "/5"
                           << " gate=" << (gate.shouldPersist ? "PASS" : "FAIL")
                           << " overhead=" << gate.launchOverheadRatio
                           << " repetition=" << gate.repetitionBenefit
@@ -163,19 +162,17 @@ struct PersistentStructuredRegionPass
       if (gate.shouldPersist) {
         epoch->setAttr(AttrNames::Operation::PersistentRegion,
                        BoolAttr::get(epoch.getContext(), true));
-        // Propagate plan family to epoch for downstream lowering.
-        epoch->setAttr(
-            AttrNames::Operation::Plan::KernelFamily,
-            StringAttr::get(epoch.getContext(),
-                            kernelFamilyToString(plan->family)));
+        /// Propagate plan family to epoch for downstream lowering.
+        epoch->setAttr(AttrNames::Operation::Plan::KernelFamily,
+                       StringAttr::get(epoch.getContext(),
+                                       kernelFamilyToString(plan->family)));
         ++persistentEpochs;
       }
     });
 
-    ARTS_INFO("Persistent region summary: " << totalEpochs << " epochs, "
-                                            << eligibleEpochs << " eligible, "
-                                            << persistentEpochs
-                                            << " marked persistent");
+    ARTS_INFO("Persistent region summary: "
+              << totalEpochs << " epochs, " << eligibleEpochs << " eligible, "
+              << persistentEpochs << " marked persistent");
 
     ARTS_INFO_FOOTER(PersistentStructuredRegionPass);
   }

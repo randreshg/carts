@@ -14,7 +14,8 @@
 using namespace mlir;
 using namespace mlir::arts;
 
-OwnershipProof mlir::arts::computeOwnershipProof(LoweringContractOp contractOp) {
+OwnershipProof
+mlir::arts::computeOwnershipProof(LoweringContractOp contractOp) {
   OwnershipProof proof;
   if (!contractOp)
     return proof;
@@ -32,7 +33,7 @@ OwnershipProof mlir::arts::computeOwnershipProof(LoweringContractOp contractOp) 
   bool supportedBlockHalo = contractOp.getSupportedBlockHalo().value_or(false);
   bool narrowableDep = contractOp.getNarrowableDep().value_or(false);
 
-  // 1. ownerDimReachability: owner dims are present, non-empty, and within rank
+  /// 1. ownerDimReachability: owner dims are present, non-empty, and within rank
   if (ownerDims && !ownerDims->empty()) {
     bool allValid = true;
     for (int64_t dim : *ownerDims) {
@@ -44,12 +45,11 @@ OwnershipProof mlir::arts::computeOwnershipProof(LoweringContractOp contractOp) 
     proof.ownerDimReachability = allValid;
   }
 
-  // 2. partitionAccessMapping: partition mode is block-compatible and
-  //    owner dims rank matches memref rank in the relevant dimensions
+  /// 2. partitionAccessMapping: partition mode is block-compatible and
+  ///    owner dims rank matches memref rank in the relevant dimensions
   if (proof.ownerDimReachability && depPattern) {
-    auto partitionMode =
-        contractOp->getAttrOfType<PartitionModeAttr>(
-            AttrNames::Operation::PartitionMode);
+    auto partitionMode = contractOp->getAttrOfType<PartitionModeAttr>(
+        AttrNames::Operation::PartitionMode);
     bool hasBlockCompatibleMode =
         !partitionMode || partitionMode.getValue() == PartitionMode::block ||
         partitionMode.getValue() == PartitionMode::stencil;
@@ -62,26 +62,27 @@ OwnershipProof mlir::arts::computeOwnershipProof(LoweringContractOp contractOp) 
         }
       }
     }
-    proof.partitionAccessMapping = hasBlockCompatibleMode && ownerDimsWithinRank;
+    proof.partitionAccessMapping =
+        hasBlockCompatibleMode && ownerDimsWithinRank;
   }
 
-  // 3. haloLegality: for stencil family, check offsets are present;
-  //    for uniform family, always true
+  /// 3. haloLegality: for stencil family, check offsets are present;
+  ///    for uniform family, always true
   if (depPattern) {
     if (isStencilFamilyDepPattern(*depPattern)) {
-      // Stencil: need offsets to prove halo legality
+      /// Stencil: need offsets to prove halo legality
       auto minOffsets = contractOp.getMinOffsets();
       auto maxOffsets = contractOp.getMaxOffsets();
-      proof.haloLegality = (!minOffsets.empty() && !maxOffsets.empty()) ||
-                           supportedBlockHalo;
+      proof.haloLegality =
+          (!minOffsets.empty() && !maxOffsets.empty()) || supportedBlockHalo;
     } else if (isUniformFamilyDepPattern(*depPattern)) {
-      // Uniform: no halo needed, always legal
+      /// Uniform: no halo needed, always legal
       proof.haloLegality = true;
     }
-    // Unknown or other patterns: stays false
+    /// Unknown or other patterns: stays false
   }
 
-  // 4. depSliceSoundness: check narrowable_dep attr or uniform pattern
+  /// 4. depSliceSoundness: check narrowable_dep attr or uniform pattern
   if (depPattern) {
     if (narrowableDep) {
       proof.depSliceSoundness = true;
@@ -90,24 +91,26 @@ OwnershipProof mlir::arts::computeOwnershipProof(LoweringContractOp contractOp) 
     }
   }
 
-  // 5. relaunchStateSoundness: check CPS chain attrs are consistent (if present)
-  //    If no CPS attrs, relaunch is trivially sound.
+  /// 5. relaunchStateSoundness: check CPS chain attrs are consistent (if
+  /// present)
+  ///    If no CPS attrs, relaunch is trivially sound.
   Operation *parentOp = contractOp->getParentOp();
   if (!parentOp) {
     proof.relaunchStateSoundness = true;
   } else {
-    // Walk up to find the enclosing EdtOp
+    /// Walk up to find the enclosing EdtOp
     Operation *enclosingEdt = contractOp->getParentOfType<EdtOp>();
     if (!enclosingEdt) {
-      // No EDT context means no relaunch concern
+      /// No EDT context means no relaunch concern
       proof.relaunchStateSoundness = true;
     } else {
-      bool hasCpsChain = enclosingEdt->hasAttr(AttrNames::Operation::CPSChainId);
+      bool hasCpsChain =
+          enclosingEdt->hasAttr(AttrNames::Operation::CPSChainId);
       if (!hasCpsChain) {
-        // No CPS chain, relaunch is trivially sound
+        /// No CPS chain, relaunch is trivially sound
         proof.relaunchStateSoundness = true;
       } else {
-        // CPS chain present: check routing is defined
+        /// CPS chain present: check routing is defined
         bool hasDepRouting =
             enclosingEdt->hasAttr(AttrNames::Operation::CPSDepRouting);
         bool hasParamPerm =

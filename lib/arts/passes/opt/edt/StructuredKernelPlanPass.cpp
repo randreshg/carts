@@ -46,8 +46,7 @@ namespace {
 
 struct StructuredKernelPlanPass
     : public impl::StructuredKernelPlanBase<StructuredKernelPlanPass> {
-  explicit StructuredKernelPlanPass(mlir::arts::AnalysisManager *AM)
-      : AM(AM) {
+  explicit StructuredKernelPlanPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
   }
 
@@ -84,12 +83,12 @@ private:
                 StringAttr::get(ctx, kernelFamilyToString(plan.family)));
     op->setAttr(AttrNames::Operation::Plan::IterationTopology,
                 StringAttr::get(ctx, iterationTopologyToString(plan.topology)));
-    op->setAttr(AttrNames::Operation::Plan::AsyncStrategy,
-                StringAttr::get(ctx, asyncStrategyToString(plan.asyncStrategy)));
+    op->setAttr(
+        AttrNames::Operation::Plan::AsyncStrategy,
+        StringAttr::get(ctx, asyncStrategyToString(plan.asyncStrategy)));
     op->setAttr(
         AttrNames::Operation::Plan::RepetitionStructure,
-        StringAttr::get(ctx,
-                        repetitionStructureToString(plan.repetition)));
+        StringAttr::get(ctx, repetitionStructureToString(plan.repetition)));
 
     if (!plan.ownerDims.empty())
       op->setAttr(AttrNames::Operation::Plan::OwnerDims,
@@ -107,8 +106,7 @@ private:
     /// Cost signals.
     auto i64Type = IntegerType::get(ctx, 64);
     auto costToAttr = [&](double val) -> IntegerAttr {
-      return IntegerAttr::get(i64Type,
-                              static_cast<int64_t>(val * 1000.0));
+      return IntegerAttr::get(i64Type, static_cast<int64_t>(val * 1000.0));
     };
     op->setAttr(AttrNames::Operation::Plan::CostSchedulerOverhead,
                 costToAttr(plan.costSignals.schedulerOverhead));
@@ -119,8 +117,8 @@ private:
     op->setAttr(AttrNames::Operation::Plan::CostRelaunchAmortization,
                 costToAttr(plan.costSignals.relaunchAmortization));
 
-    ARTS_DEBUG("Stamped plan on op: family="
-               << kernelFamilyToString(plan.family));
+    ARTS_DEBUG(
+        "Stamped plan on op: family=" << kernelFamilyToString(plan.family));
   }
 
   mlir::arts::AnalysisManager *AM = nullptr;

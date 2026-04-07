@@ -189,20 +189,20 @@ static bool loopHasScalarCarryState(scf::ForOp forOp) {
   return false;
 }
 
-static bool shouldAvoidCpsChainForLoop(
-    scf::ForOp forOp, const EpochAsyncLoopDecision &decision) {
+static bool shouldAvoidCpsChainForLoop(scf::ForOp forOp,
+                                       const EpochAsyncLoopDecision &decision) {
   if (decision.slots.empty())
     return false;
 
-  bool allSlotsHaveZeroExpectedLocalWork = llvm::all_of(
-      decision.slots, [](const EpochSlot &slot) {
+  bool allSlotsHaveZeroExpectedLocalWork =
+      llvm::all_of(decision.slots, [](const EpochSlot &slot) {
         return slotMatches(slot, epochHasZeroExpectedLocalWork);
       });
   if (!allSlotsHaveZeroExpectedLocalWork)
     return false;
 
-  bool coordinatorWaveLoop = llvm::any_of(
-      decision.slots, [](const EpochSlot &slot) {
+  bool coordinatorWaveLoop =
+      llvm::any_of(decision.slots, [](const EpochSlot &slot) {
         return slotMatches(slot, epochCreatesCoordinatorWave);
       });
   bool hasScalarCarryState = loopHasScalarCarryState(forOp);
@@ -210,8 +210,8 @@ static bool shouldAvoidCpsChainForLoop(
       !hasScalarCarryState && coordinatorWaveLoop &&
       (decision.slots.size() > 1 || decision.hasSequentialSidecars);
 
-  bool allSlotsFullTimestep = llvm::all_of(
-      decision.slots, [](const EpochSlot &slot) {
+  bool allSlotsFullTimestep =
+      llvm::all_of(decision.slots, [](const EpochSlot &slot) {
         return slotMatches(slot, [](EpochOp epoch) {
           return epochHasRepetitionStructure(epoch,
                                              RepetitionStructure::FullTimestep);
