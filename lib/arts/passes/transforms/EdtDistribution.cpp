@@ -27,6 +27,7 @@
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/heuristics/StructuredKernelPlanAnalysis.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/OperationAttributes.h"
@@ -59,6 +60,9 @@ static llvm::Statistic numBlockStrategiesSelected{
 static llvm::Statistic numCyclicStrategiesSelected{
     "edt_distribution", "NumCyclicStrategiesSelected",
     "Number of loops assigned cyclic distribution kind"};
+static llvm::Statistic numPlanDrivenAnnotations{
+    "edt_distribution", "NumPlanDrivenAnnotations",
+    "Number of loops annotated using structured kernel plan"};
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -97,10 +101,39 @@ struct EdtDistributionPass
         if (forOp->getParentOfType<EdtOp>() != edt)
           return;
 
+        /// Plan-driven path: if the structured kernel plan stamped a family,
+        /// use it to inform the distribution pattern selection.
         EdtDistributionPattern pattern = EdtDistributionPattern::unknown;
-        if (auto analyzedPattern =
-                heuristics.resolveDistributionPattern(forOp, edt))
-          pattern = *analyzedPattern;
+        if (auto familyAttr = forOp->getAttrOfType<StringAttr>(
+                AttrNames::Operation::Plan::KernelFamily)) {
+          auto family = parseKernelFamily(familyAttr.getValue());
+          if (family) {
+            switch (*family) {
+            case KernelFamily::Stencil:
+            case KernelFamily::Wavefront:
+            case KernelFamily::TimestepChain:
+              pattern = EdtDistributionPattern::stencil;
+              break;
+            case KernelFamily::Uniform:
+              pattern = EdtDistributionPattern::uniform;
+              break;
+            case KernelFamily::ReductionMixed:
+              pattern = EdtDistributionPattern::matmul;
+              break;
+            case KernelFamily::Unknown:
+              break;
+            }
+            ++numPlanDrivenAnnotations;
+            ARTS_DEBUG("Using plan-driven distribution pattern for family="
+                       << familyAttr.getValue());
+          }
+        }
+        /// Fallback: use heuristic analysis when no plan is present.
+        if (pattern == EdtDistributionPattern::unknown) {
+          if (auto analyzedPattern =
+                  heuristics.resolveDistributionPattern(forOp, edt))
+            pattern = *analyzedPattern;
+        }
         EdtDistributionKind kind = heuristics.chooseKind(strategy, pattern);
         /// Keep distribution_kind focused on execution decomposition.
         /// 2-D stencil owner semantics already flow through the

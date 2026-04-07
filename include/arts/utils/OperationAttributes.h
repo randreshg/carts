@@ -68,6 +68,12 @@ constexpr StringLiteral LocalOnly = "arts.local_only";
 constexpr StringLiteral ReadOnlyAfterInit = "arts.read_only_after_init";
 
 /// CPS chain / epoch continuation attributes
+/// NOTE: The CPS positional pack attrs below (cps_param_perm, cps_dep_routing,
+/// cps_forward_deps, cps_preserve_carry_abi) are DEPRECATED in favor of the
+/// explicit state/deps schema from split launch state IR (Phase 2/3).
+/// New code should use arts.launch.state_schema / arts.launch.dep_schema.
+/// Legacy attrs are still consumed by EpochLowering as a fallback when split
+/// ops are absent. They will be removed once all CPS paths emit split ops.
 constexpr StringLiteral ContinuationForEpoch = "arts.continuation_for_epoch";
 constexpr StringLiteral CPSChainId = "arts.cps_chain_id";
 constexpr StringLiteral CPSOuterEpochParamIdx =
@@ -127,6 +133,52 @@ constexpr StringLiteral SpatialDims = "spatial_dims";
 constexpr StringLiteral NarrowableDep = "narrowable_dep";
 constexpr StringLiteral ContractKindKey = "contract_kind";
 } // namespace Contract
+
+/// Structured kernel plan attributes (Phase 0 constants, RFC Section 5.1)
+namespace Plan {
+using namespace llvm;
+constexpr StringLiteral KernelFamily = "arts.plan.kernel_family";
+constexpr StringLiteral OwnerDims = "arts.plan.owner_dims";
+constexpr StringLiteral PhysicalBlockShape = "arts.plan.physical_block_shape";
+constexpr StringLiteral LogicalWorkerSlice = "arts.plan.logical_worker_slice";
+constexpr StringLiteral HaloShape = "arts.plan.halo_shape";
+constexpr StringLiteral IterationTopology = "arts.plan.iteration_topology";
+constexpr StringLiteral RepetitionStructure = "arts.plan.repetition_structure";
+constexpr StringLiteral AsyncStrategy = "arts.plan.async_strategy";
+constexpr StringLiteral CostSchedulerOverhead =
+    "arts.plan.cost.scheduler_overhead";
+constexpr StringLiteral CostSliceWideningPressure =
+    "arts.plan.cost.slice_widening_pressure";
+constexpr StringLiteral CostExpectedLocalWork =
+    "arts.plan.cost.expected_local_work";
+constexpr StringLiteral CostRelaunchAmortization =
+    "arts.plan.cost.relaunch_amortization";
+} // namespace Plan
+
+/// Split launch state attributes (Phase 0 constants, RFC Section 5.2)
+namespace LaunchState {
+using namespace llvm;
+constexpr StringLiteral StateSchema = "arts.launch.state_schema";
+constexpr StringLiteral DepSchema = "arts.launch.dep_schema";
+constexpr StringLiteral StateSchemaVersion = "arts.launch.state_schema_version";
+constexpr StringLiteral DepSchemaVersion = "arts.launch.dep_schema_version";
+} // namespace LaunchState
+
+/// Proof-driven ownership attributes (Phase 0 constants, RFC Section 5.3)
+namespace Proof {
+using namespace llvm;
+constexpr StringLiteral OwnerDimReachability =
+    "arts.proof.owner_dim_reachability";
+constexpr StringLiteral PartitionAccessMapping =
+    "arts.proof.partition_access_mapping";
+constexpr StringLiteral HaloLegality = "arts.proof.halo_legality";
+constexpr StringLiteral DepSliceSoundness = "arts.proof.dep_slice_soundness";
+constexpr StringLiteral RelaunchStateSoundness =
+    "arts.proof.relaunch_state_soundness";
+} // namespace Proof
+
+/// Persistent structured region attribute.
+constexpr llvm::StringLiteral PersistentRegion = "arts.persistent_region";
 
 } // namespace Operation
 
@@ -786,6 +838,17 @@ inline void copySemanticContractAttrs(Operation *source, Operation *dest) {
                   UnitAttr::get(dest->getContext()));
   else
     dest->removeAttr(AttrNames::Operation::Contract::NarrowableDep);
+}
+
+/// Copy structured kernel plan attrs from source to dest.
+/// Used by ForLowering to propagate plan attrs from ForOp to EpochOp/EdtOp.
+inline void copyPlanAttrs(Operation *source, Operation *dest) {
+  if (!source || !dest)
+    return;
+  for (auto &attr : source->getAttrs()) {
+    if (attr.getName().getValue().starts_with("arts.plan."))
+      dest->setAttr(attr.getName(), attr.getValue());
+  }
 }
 
 inline void inheritSemanticContractAttrs(Operation *source, Operation *dest) {

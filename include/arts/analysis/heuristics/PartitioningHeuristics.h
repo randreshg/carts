@@ -115,6 +115,12 @@ struct PartitioningContext {
   bool preferBlockND = false;
   unsigned preferredOuterRank = 0;
 
+  /// Structured kernel plan hints (injected by DbPartitioning from plan attrs).
+  /// These are advisory: heuristics may use them for tie-breaking but must not
+  /// override hard evidence from DB analysis.
+  SmallVector<int64_t, 4> planBlockShapeHint;
+  bool planHintIsStencil = false;
+
   /// Per-acquire info for voting
   SmallVector<AcquireInfo> acquires;
 

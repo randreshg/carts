@@ -51,6 +51,8 @@ add_mlir_dialect_library(MLIRArtsTransforms
   opt/edt/EdtICM.cpp
   opt/edt/EdtTransformsPass.cpp
   opt/edt/EpochOpt.cpp
+  opt/edt/StructuredKernelPlanPass.cpp
+  opt/edt/PersistentStructuredRegion.cpp
   opt/codegen/AliasScopeGen.cpp
   opt/codegen/Hoisting.cpp
   opt/codegen/DataPtrHoisting.cpp

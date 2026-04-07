@@ -70,6 +70,7 @@
 #include <cstdlib>
 #include <optional>
 
+#include "arts/analysis/db/OwnershipProof.h"
 #include "arts/transforms/db/DbBlockPlanResolver.h"
 #include "arts/transforms/db/DbPartitionPlanner.h"
 #include "arts/transforms/db/DbPartitionTypes.h"
@@ -396,6 +397,26 @@ summarizeAcquirePatterns(ArrayRef<DbAcquireNode *> acquireNodes,
     DbAcquireOp acquire = acqNode->getDbAcquireOp();
     if (!acquire || !dbAnalysis)
       continue;
+
+    // If proof.partition_access_mapping is proven on the source contract,
+    // trust the contract's pattern directly without graph re-derivation.
+    Value sourcePtr = acquire.getSourcePtr();
+    LoweringContractOp contractOp = getLoweringContractOp(sourcePtr);
+    if (contractOp) {
+      OwnershipProof proof = readOwnershipProof(contractOp.getOperation());
+      if (proof.partitionAccessMapping) {
+        sawSummary = true;
+        auto depPattern = contractOp.getDepPattern();
+        if (depPattern && isStencilFamilyDepPattern(*depPattern))
+          summary.hasStencil = true;
+        else if (depPattern && isUniformFamilyDepPattern(*depPattern))
+          summary.hasUniform = true;
+        dbPartitionTrace("Proof-trusted access mapping for acquire ",
+                         acquire.getOperation()->getLoc());
+        continue;
+      }
+    }
+
     auto contractSummary = dbAnalysis->getAcquireContractSummary(acquire);
     if (!contractSummary)
       continue;
@@ -1831,6 +1852,35 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   ctx.allocAccessPattern = getDbAccessPattern(allocOp.getOperation())
                                .value_or(DbAccessPattern::unknown);
   ctx.allocDbMode = allocOp.getDbMode();
+
+  /// Phase 4.5: Inject structured kernel plan hints when available.
+  /// Walk EdtOp parents of acquires to find plan attrs. If the plan provides
+  /// a physical block shape, feed it as a hint to the partitioning context.
+  for (size_t i = 0; i < allocAcquireNodes.size(); ++i) {
+    auto *acqNode = allocAcquireNodes[i];
+    if (!acqNode)
+      continue;
+    auto acqOp = acqNode->getDbAcquireOp();
+    if (!acqOp)
+      continue;
+    Operation *forOpParent = acqOp->getParentOfType<ForOp>();
+    if (!forOpParent)
+      continue;
+    if (auto familyAttr = forOpParent->getAttrOfType<StringAttr>(
+            AttrNames::Operation::Plan::KernelFamily)) {
+      ARTS_DEBUG("  Plan hint for acquire: family=" << familyAttr.getValue());
+      /// Plan-driven block shape overrides.
+      if (auto planBlockShape = readI64ArrayAttr(
+              forOpParent, AttrNames::Operation::Plan::PhysicalBlockShape)) {
+        if (!planBlockShape->empty())
+          ctx.planBlockShapeHint = *planBlockShape;
+      }
+      /// Plan-driven stencil vs uniform classification.
+      if (familyAttr.getValue() == "stencil")
+        ctx.planHintIsStencil = true;
+      break;
+    }
+  }
 
   /// Phase 5: Invoke heuristics for partition mode arbitration.
   /// Primary path: use existing heuristics (maintains 121/121 test

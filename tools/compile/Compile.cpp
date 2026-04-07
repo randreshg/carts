@@ -336,8 +336,9 @@ static const std::array<llvm::StringLiteral, 4> kEdtOptPasses = {
     "CSE"};
 static const std::array<llvm::StringLiteral, 4> kConcurrencyPasses = {
     "PolygeistCanonicalize", "Concurrency", "ForOpt", "PolygeistCanonicalize"};
-static const std::array<llvm::StringLiteral, 3> kEdtDistributionPasses = {
-    "EdtDistribution", "ForLowering", "VerifyForLowered"};
+static const std::array<llvm::StringLiteral, 4> kEdtDistributionPasses = {
+    "StructuredKernelPlan", "EdtDistribution", "ForLowering",
+    "VerifyForLowered"};
 static const std::array<llvm::StringLiteral, 8> kPostDistributionCleanupPasses =
     {"EdtStructuralOpt(runAnalysis=false)",
      "DeadCodeElimination",
@@ -365,8 +366,8 @@ static const std::array<llvm::StringLiteral, 7> kLateConcurrencyCleanupPasses =
      "EdtAllocaSinking",
      "DeadCodeElimination",
      "Mem2Reg"};
-static const std::array<llvm::StringLiteral, 4> kEpochsPasses = {
-    "PolygeistCanonicalize", "CreateEpochs",
+static const std::array<llvm::StringLiteral, 5> kEpochsPasses = {
+    "PolygeistCanonicalize", "CreateEpochs", "PersistentStructuredRegion",
     "EpochOpt[scheduling] (conditional)", "PolygeistCanonicalize"};
 static const std::array<llvm::StringLiteral, 22> kPreLoweringPasses = {
     "EdtAllocaSinking",
@@ -810,6 +811,7 @@ void buildConcurrencyPipeline(PassManager &pm, arts::AnalysisManager *AM) {
 
 /// EDT distribution and loop lowering passes.
 void buildEdtDistributionPipeline(PassManager &pm, arts::AnalysisManager *AM) {
+  pm.addPass(arts::createStructuredKernelPlanPass(AM));
   pm.addPass(arts::createEdtDistributionPass(AM));
   pm.addPass(arts::createForLoweringPass(AM));
   pm.addPass(arts::createVerifyForLoweredPass());
@@ -873,6 +875,8 @@ void buildEpochsPipeline(PassManager &pm, arts::AnalysisManager *AM,
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createCreateEpochsPass());
   pm.addPass(arts::createVerifyEpochCreatedPass());
+  /// Gate proven regular epochs for persistent structured region lowering.
+  pm.addPass(arts::createPersistentStructuredRegionPass(AM));
   /// Run EpochOpt with structural + scheduling optimizations on newly created
   /// epochs. Amortization is always enabled; continuation/CPS opts are gated.
   pm.addPass(arts::createEpochOptPass(AM,
