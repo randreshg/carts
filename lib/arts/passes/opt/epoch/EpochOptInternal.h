@@ -50,6 +50,8 @@ struct EpochNarrowingCounts {
 };
 
 llvm::StringRef asyncLoopStrategyToString(EpochAsyncLoopStrategy strategy);
+llvm::StringRef
+asyncLoopStrategyToPlanAttrString(EpochAsyncLoopStrategy strategy);
 bool loopContainsCpsChainExcludedDepPattern(scf::ForOp forOp);
 bool loopContainsCpsDriverExcludedDepPattern(scf::ForOp forOp);
 std::string makeAsyncLoopChainId(Operation *op);
@@ -67,6 +69,7 @@ using AttrNames::Operation::CPSInitIter;
 using AttrNames::Operation::CPSIterCounterParamIdx;
 using AttrNames::Operation::CPSLoopContinuation;
 using AttrNames::Operation::CPSNumCarry;
+using AttrNames::Operation::Plan::AsyncStrategy;
 
 bool isSlotOp(Operation *op, ArrayRef<EpochSlot> slots);
 void ensureYieldTerminator(Block &block, Location loc);
@@ -83,6 +86,10 @@ void emitAdvanceLogic(OpBuilder &builder, Location loc, Value iv,
                       ArrayRef<Operation *> allSequentialOps = {},
                       ArrayRef<Value> loopBackParams = {});
 void markAsContinuation(EdtOp edt, OpBuilder &builder, unsigned chainIdx);
+void normalizeAsyncLoopPlanAttrs(scf::ForOp forOp,
+                                 EpochAsyncLoopStrategy strategy);
+void copyNormalizedPlanAttrs(Operation *source, Operation *dest,
+                             EpochAsyncLoopStrategy strategy);
 
 EpochNarrowingCounts narrowEpochScopes(ModuleOp module);
 unsigned processRegionForEpochFusion(Region &region,

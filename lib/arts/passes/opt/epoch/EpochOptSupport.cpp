@@ -61,6 +61,19 @@ llvm::StringRef asyncLoopStrategyToString(EpochAsyncLoopStrategy strategy) {
   return "none";
 }
 
+llvm::StringRef
+asyncLoopStrategyToPlanAttrString(EpochAsyncLoopStrategy strategy) {
+  switch (strategy) {
+  case EpochAsyncLoopStrategy::AdvanceEdt:
+    return "advance_edt";
+  case EpochAsyncLoopStrategy::CpsChain:
+    return "cps_chain";
+  case EpochAsyncLoopStrategy::None:
+    return "blocking";
+  }
+  return "blocking";
+}
+
 bool loopContainsCpsChainExcludedDepPattern(scf::ForOp forOp) {
   return loopContainsExcludedDepPattern(forOp, isCpsExcludedDepPattern);
 }
@@ -207,6 +220,41 @@ void markAsContinuation(EdtOp edt, OpBuilder &builder, unsigned chainIdx) {
   edt->setAttr(ContinuationForEpoch, builder.getUnitAttr());
   edt->setAttr(CPSChainId, builder.getStringAttr(chainId));
   edt->setAttr(CPSLoopContinuation, builder.getUnitAttr());
+}
+
+void normalizeAsyncLoopPlanAttrs(scf::ForOp forOp,
+                                 EpochAsyncLoopStrategy strategy) {
+  if (!forOp)
+    return;
+
+  StringRef normalizedStrategy = asyncLoopStrategyToPlanAttrString(strategy);
+  MLIRContext *ctx = forOp.getContext();
+  StringAttr normalizedAttr = StringAttr::get(ctx, normalizedStrategy);
+
+  if (forOp->hasAttr(AsyncStrategy))
+    forOp->setAttr(AsyncStrategy, normalizedAttr);
+
+  forOp.walk([&](Operation *op) {
+    if (op == forOp.getOperation())
+      return WalkResult::advance();
+    if (!op->hasAttr(AsyncStrategy))
+      return WalkResult::advance();
+    op->setAttr(AsyncStrategy, normalizedAttr);
+    return WalkResult::advance();
+  });
+}
+
+void copyNormalizedPlanAttrs(Operation *source, Operation *dest,
+                             EpochAsyncLoopStrategy strategy) {
+  if (!source || !dest)
+    return;
+  copyPlanAttrs(source, dest);
+  if (!source->hasAttr(AsyncStrategy))
+    return;
+  dest->setAttr(
+      AsyncStrategy,
+      StringAttr::get(dest->getContext(),
+                      asyncLoopStrategyToPlanAttrString(strategy)));
 }
 
 } // namespace mlir::arts::epoch_opt
