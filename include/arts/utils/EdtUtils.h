@@ -1,19 +1,22 @@
 ///==========================================================================///
 /// File: EdtUtils.h
 ///
-/// Utility functions for working with ARTS EDTs (EdtOp).
-/// Contains IR manipulation helpers: block splicing, epoch wrapping,
-/// block argument navigation, and consecutive-op fusion.
+/// Utility functions and EdtEnvManager for working with ARTS EDTs (EdtOp).
+/// Contains EdtEnvManager (capture classification), IR manipulation helpers
+/// (block splicing, epoch wrapping, block argument navigation), and
+/// consecutive-op fusion.
 ///==========================================================================///
 
 #ifndef CARTS_UTILS_EDTUTILS_H
 #define CARTS_UTILS_EDTUTILS_H
 
 #include "arts/Dialect.h"
+#include "arts/analysis/edt/EdtInfo.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Operation.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
@@ -29,6 +32,69 @@ namespace arts {
 class EdtOp;
 class EpochOp;
 class DbAcquireOp;
+
+/// Forward-declare so EdtEnvManager::analyze() can call it inline.
+void analyzeEdtCapturedValues(EdtOp edt, llvm::SetVector<Value> &capturedValues,
+                              llvm::SetVector<Value> &parameters,
+                              llvm::SetVector<Value> &constants,
+                              llvm::SetVector<Value> &dbHandles);
+
+///===----------------------------------------------------------------------===//
+/// EdtEnvManager
+///===----------------------------------------------------------------------===//
+
+/// Manages EDT environment classification: captured values are partitioned
+/// into parameters, constants, DB handles, and dependencies.  This is the
+/// canonical helper for any pass that needs to reason about what an EDT
+/// captures from its enclosing scope (EdtLowering, EpochOptCpsChain, etc.).
+class EdtEnvManager {
+public:
+  EdtEnvManager(EdtOp edtOp) : edtOp(edtOp) { analyze(); }
+  EdtEnvManager(EdtOp edtOp, const EdtCaptureSummary &captureSummary)
+      : edtOp(edtOp) {
+    loadCaptureSummary(captureSummary);
+  }
+
+  void analyze() {
+    analyzeEdtCapturedValues(edtOp, capturedValues, parameters, constants,
+                             dbHandles);
+    for (Value operand : edtOp.getDependencies())
+      deps.insert(operand);
+  }
+
+  ArrayRef<Value> getParameters() const { return parameters.getArrayRef(); }
+  ArrayRef<Value> getConstants() const { return constants.getArrayRef(); }
+  ArrayRef<Value> getCapturedValues() const {
+    return capturedValues.getArrayRef();
+  }
+  ArrayRef<Value> getDependencies() const { return deps.getArrayRef(); }
+  ArrayRef<Value> getDbHandles() const { return dbHandles.getArrayRef(); }
+  const DenseMap<Value, unsigned> &getValueToPackIndex() const {
+    return valueToPackIndex;
+  }
+  DenseMap<Value, unsigned> &getValueToPackIndex() { return valueToPackIndex; }
+
+private:
+  void loadCaptureSummary(const EdtCaptureSummary &captureSummary) {
+    auto appendValues = [](SetVector<Value> &dst, ArrayRef<Value> values) {
+      for (Value value : values)
+        dst.insert(value);
+    };
+    appendValues(capturedValues, captureSummary.capturedValues);
+    appendValues(parameters, captureSummary.parameters);
+    appendValues(constants, captureSummary.constants);
+    appendValues(dbHandles, captureSummary.dbHandles);
+    appendValues(deps, captureSummary.dependencies);
+  }
+
+  EdtOp edtOp;
+  SetVector<Value> capturedValues, parameters, constants, deps, dbHandles;
+  DenseMap<Value, unsigned> valueToPackIndex;
+};
+
+///===----------------------------------------------------------------------===//
+/// Inline Helpers
+///===----------------------------------------------------------------------===//
 
 /// Move all non-terminator operations from src block into dst block,
 /// inserting them before dst's terminator.
