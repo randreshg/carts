@@ -419,6 +419,42 @@ Operation *DbUtils::getUnderlyingDbAlloc(Value v) {
   return nullptr;
 }
 
+DbAllocOp DbUtils::getAllocOpFromGuid(Value dbGuid) {
+  if (auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>())
+    return dbAcquireOp.getSourceGuid().getDefiningOp<DbAllocOp>();
+  if (auto depDbAcquireOp = dbGuid.getDefiningOp<DepDbAcquireOp>())
+    return depDbAcquireOp.getGuid().getDefiningOp<DbAllocOp>();
+  return nullptr;
+}
+
+std::optional<SmallVector<int64_t, 4>>
+DbUtils::getStaticDbOuterShape(Value dbHandle) {
+  auto dbAlloc = dbHandle.getDefiningOp<DbAllocOp>();
+  if (!dbAlloc)
+    return std::nullopt;
+
+  SmallVector<int64_t, 4> shape;
+  shape.reserve(dbAlloc.getSizes().size());
+  for (Value size : dbAlloc.getSizes()) {
+    int64_t constantSize = 0;
+    if (!ValueAnalysis::getConstantIndex(size, constantSize))
+      return std::nullopt;
+    shape.push_back(constantSize);
+  }
+  return shape;
+}
+
+int64_t DbUtils::computeStaticPartitionCount(DbAllocOp alloc) {
+  int64_t count = 1;
+  for (Value sz : alloc.getSizes()) {
+    if (auto cst = getConstantIntValue(sz))
+      count *= *cst;
+    else
+      return -1;
+  }
+  return count;
+}
+
 std::optional<int64_t> DbUtils::resolveRootAllocId(Value value,
                                                    DbAllocOp fallbackAlloc) {
   if (fallbackAlloc) {

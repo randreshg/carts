@@ -24,9 +24,9 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/PatternMatch.h"
+#include "polygeist/Ops.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SetVector.h"
-#include "polygeist/Ops.h"
 
 #include "arts/utils/Debug.h"
 #include "llvm/ADT/Statistic.h"
@@ -52,7 +52,6 @@ using namespace mlir;
 using namespace mlir::arts;
 using namespace mlir::arts::convert_arts_to_llvm;
 
-
 ///===----------------------------------------------------------------------===///
 /// Helper Functions
 ///===----------------------------------------------------------------------===///
@@ -60,16 +59,11 @@ using namespace mlir::arts::convert_arts_to_llvm;
 namespace mlir::arts::convert_arts_to_llvm {
 
 DbAllocOp getAllocOpFromGuid(Value dbGuid) {
-  if (auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>())
-    return dbAcquireOp.getSourceGuid().getDefiningOp<DbAllocOp>();
-  if (auto depDbAcquireOp = dbGuid.getDefiningOp<DepDbAcquireOp>())
-    return depDbAcquireOp.getGuid().getDefiningOp<DbAllocOp>();
-  return nullptr;
+  return DbUtils::getAllocOpFromGuid(dbGuid);
 }
 
-SmallVector<Value, 4> materializeStaticDbOuterShape(Value handle,
-                                                    ArtsCodegen *AC,
-                                                    Location loc) {
+SmallVector<Value, 4>
+materializeStaticDbOuterShape(Value handle, ArtsCodegen *AC, Location loc) {
   SmallVector<Value, 4> sizes;
   auto shape = getDbStaticOuterShape(handle);
   if (!shape)
@@ -81,9 +75,8 @@ SmallVector<Value, 4> materializeStaticDbOuterShape(Value handle,
   return sizes;
 }
 
-SmallVector<Value, 4> resolveSourceOuterSizes(Value sourceGuid,
-                                              Value sourcePtr, ArtsCodegen *AC,
-                                              Location loc) {
+SmallVector<Value, 4> resolveSourceOuterSizes(Value sourceGuid, Value sourcePtr,
+                                              ArtsCodegen *AC, Location loc) {
   SmallVector<Value, 4> sizes;
 
   if (auto allocOp = dyn_cast_or_null<DbAllocOp>(sourceGuid.getDefiningOp()))

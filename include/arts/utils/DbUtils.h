@@ -67,6 +67,20 @@ public:
   /// Traces through DbAcquireOp chains to find the root allocation.
   static Operation *getUnderlyingDbAlloc(Value v);
 
+  /// Trace a GUID value through acquire chains to find the originating
+  /// DbAllocOp. Returns nullptr if the GUID does not trace to an allocation.
+  static DbAllocOp getAllocOpFromGuid(Value dbGuid);
+
+  /// Extract a compile-time constant outer shape from a DbAllocOp.
+  /// Returns nullopt if the handle does not define a DbAllocOp or if any
+  /// size dimension is dynamic.
+  static std::optional<SmallVector<int64_t, 4>>
+  getStaticDbOuterShape(Value dbHandle);
+
+  /// Compute the total static partition count (product of all outer sizes)
+  /// for a DbAllocOp. Returns -1 if any size is dynamic.
+  static int64_t computeStaticPartitionCount(DbAllocOp alloc);
+
   /// Recover the original DbAllocOp arts.id for a rebuilt or forwarded DB
   /// handle family. Uses an explicit fallback alloc when available, otherwise
   /// traces through DB provenance and preserved root-id attrs.
