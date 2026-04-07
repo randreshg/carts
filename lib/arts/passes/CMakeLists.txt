@@ -1,17 +1,19 @@
 add_mlir_dialect_library(MLIRArtsTransforms
+  # Verification passes
+  verify/VerifyMetadata.cpp
+  verify/VerifyMetadataIntegrity.cpp
+  verify/VerifyEdtCreated.cpp
+  verify/VerifyEpochCreated.cpp
+  verify/VerifyForLowered.cpp
+  verify/VerifyDbCreated.cpp
+  verify/VerifyPreLowered.cpp
+  verify/VerifyLowered.cpp
+  verify/VerifyEdtLowered.cpp
+  verify/VerifyDbLowered.cpp
+  verify/VerifyEpochLowered.cpp
+
   # Transformation passes
   transforms/CollectMetadata.cpp
-  transforms/VerifyMetadata.cpp
-  transforms/VerifyMetadataIntegrity.cpp
-  transforms/VerifyEdtCreated.cpp
-  transforms/VerifyEpochCreated.cpp
-  transforms/VerifyForLowered.cpp
-  transforms/VerifyDbCreated.cpp
-  transforms/VerifyPreLowered.cpp
-  transforms/VerifyLowered.cpp
-  transforms/VerifyEdtLowered.cpp
-  transforms/VerifyDbLowered.cpp
-  transforms/VerifyEpochLowered.cpp
   transforms/PatternDiscovery.cpp
   transforms/CreateDbs.cpp
   transforms/CreateEpochs.cpp
