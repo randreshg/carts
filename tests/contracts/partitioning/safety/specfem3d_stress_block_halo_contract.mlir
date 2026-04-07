@@ -3,6 +3,13 @@
 // Verify the block fallback keeps the owner slice for inout acquires while
 // widening the read-only stencil acquire window by the halo width.
 // CHECK-LABEL: func.func @main
-// CHECK: arts.lowering_contract(%ptr : memref<?xmemref<?x?x?xf64>>) block_shape[%{{.+}}] contract(<ownerDims = [2], postDbRefined = true>)
-// CHECK: %[[DIRECT_GUID:.*]], %[[DIRECT_PTR:.*]] = arts.db_acquire[<in>]{{.*}}partitioning(<block>, offsets[%[[PART_BASE:.*]]], sizes[%[[PART_ELEMS:.*]]]), offsets[%{{.+}}], sizes[%{{.+}}] element_offsets[%c0, %c0, %{{.+}}] element_sizes[%c40, %c40, %{{.+}}] {{.*}}distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<stencil>{{.*}}stencil_owner_dims = [2]
-// CHECK: %[[WRITE_GUID:.*]], %[[WRITE_PTR:.*]] = arts.db_acquire[<inout>]{{.*}}partitioning(<block>, offsets[%{{.+}}], sizes[%{{.+}}]), offsets[%{{.+}}], sizes[%{{.+}}]{{.*}}
+// CHECK: %[[READ_GUID0:.*]], %[[READ_PTR0:.*]] = arts.db_alloc[<in>, <heap>, <read>, <block>, <stencil>]
+// CHECK: arts.lowering_contract(%[[READ_PTR0]] : memref<?xmemref<?x?x?xf64>>) block_shape[
+// CHECK-SAME: contract(<ownerDims = [2], postDbRefined = true>)
+// CHECK: %[[DIRECT_GUID:.*]], %[[DIRECT_PTR:.*]] = arts.db_acquire[<in>] (%{{.*}} : memref<?xi64>, %{{.*}} : memref<?xmemref<?x?x?xf64>>) partitioning(<block>, offsets[
+// CHECK-SAME: distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<stencil>
+// CHECK-SAME: stencil_owner_dims = [2]
+// CHECK: arts.lowering_contract(%[[DIRECT_PTR]] : memref<?xmemref<?x?x?xf64>>) pattern(<depPattern = <stencil_tiling_nd>, distributionKind = <block>, distributionPattern = <stencil>
+// CHECK: %[[WRITE_GUID:.*]], %[[WRITE_PTR:.*]] = arts.db_acquire[<inout>] (%{{.*}} : memref<?xi64>, %{{.*}} : memref<?xmemref<?x?x?xf64>>) partitioning(<block>, offsets[
+// CHECK-SAME: stencil_owner_dims = [2]
+// CHECK: arts.lowering_contract(%[[WRITE_PTR]] : memref<?xmemref<?x?x?xf64>>) pattern(<depPattern = <stencil_tiling_nd>, distributionKind = <block>, distributionPattern = <stencil>

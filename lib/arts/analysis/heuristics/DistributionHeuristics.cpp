@@ -246,9 +246,11 @@ DistributionHeuristics::evaluateStencilStripCostModel(
   int64_t amortizationStride = kAmortizationPressureStride +
                                ownedSpanScore * kOwnedSpanStridePenalty;
   int64_t amortizationMultiplier = 1;
-  if (stencilPressureScore > 0) {
-    amortizationMultiplier +=
-        ceilDivPositive(stencilPressureScore, amortizationStride);
+  if (stencilPressureScore >= amortizationStride) {
+    /// Only coarsen once the pressure clears a full stride. Using ceil() here
+    /// makes any positive excess immediately widen the owned strip, which can
+    /// strand a large fraction of the machine on long-running stencil loops.
+    amortizationMultiplier += stencilPressureScore / amortizationStride;
   }
   amortizationMultiplier = clampPositive(amortizationMultiplier, 1,
                                          kMaxAmortizationMultiplier);

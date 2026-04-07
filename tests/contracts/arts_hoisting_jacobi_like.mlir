@@ -8,19 +8,15 @@
 // CHECK-LABEL: func.func @main
 // CHECK: arts.edt <task>
 // CHECK: ^bb0(%arg1: memref<?xmemref<?x?xf32>>, %arg2: memref<?xmemref<?x?xf32>>):
-// CHECK: scf.for %[[ROW_OUTER:.*]] = %{{.*}} to %{{.*}} step %c1 {
-
-// Verify db_ref ops are hoisted to the outer (row-block) loop, not the inner column loop
-// CHECK: arts.db_ref %arg1[%{{.*}}] : memref<?xmemref<?x?xf32>> -> memref<?x?xf32>
-// CHECK: arts.db_ref %arg2[%{{.*}}] : memref<?xmemref<?x?xf32>> -> memref<?x?xf32>
-// CHECK: arts.db_ref %arg1[%{{.*}}] : memref<?xmemref<?x?xf32>> -> memref<?x?xf32>
+// CHECK: %[[IN_BLOCK:.*]] = arts.db_ref %arg1[%c0] : memref<?xmemref<?x?xf32>> -> memref<?x?xf32>
 // CHECK: scf.for %[[ROW:.*]] = %{{.*}} to %{{.*}} step %c1 {
+// CHECK: %[[OUT_BLOCK:.*]] = arts.db_ref %arg2[%{{.*}}] : memref<?xmemref<?x?xf32>> -> memref<?x?xf32>
 // CHECK: scf.for %[[COL:.*]] = %{{.*}} to %{{.*}} step %c1 {
 // CHECK-NOT: arts.db_ref
-// CHECK: memref.load {{.*}} : memref<?x?xf32>
-// CHECK: memref.load {{.*}} : memref<?x?xf32>
-// CHECK: memref.load {{.*}} : memref<?x?xf32>
-// CHECK: memref.store {{.*}} : memref<?x?xf32>
+// CHECK: memref.load %[[IN_BLOCK]]
+// CHECK: memref.load %[[IN_BLOCK]]
+// CHECK: memref.load %[[IN_BLOCK]]
+// CHECK: memref.store {{.*}}, %[[OUT_BLOCK]]
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f32, dense<32> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu", "polygeist.target-cpu" = "generic", "polygeist.target-features" = "+fp-armv8,+neon,+outline-atomics,+v8a,-fmv"} {
   func.func @main() -> f32 {

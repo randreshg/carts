@@ -1403,28 +1403,29 @@ struct EdtParamPackPattern : public ArtsToLLVMPattern<EdtParamPackOp> {
     if (!resultType)
       return op.emitError("Expected MemRef type for result");
 
-    /// Check if result type has dynamic dimensions
-    bool hasDynamicDims = resultType.getNumDynamicDims() > 0;
-
     memref::AllocaOp allocOp;
-    if (hasDynamicDims) {
-      /// Dynamic memref: allocate with size and store parameters
-      auto numParams = AC->createIndexConstant(params.size(), loc);
-      allocOp =
-          AC->create<memref::AllocaOp>(loc, resultType, ValueRange{numParams});
-
-      for (unsigned i = 0; i < params.size(); ++i) {
-        auto index = AC->createIndexConstant(i, loc);
-        auto castParam = AC->castParameter(
-            AC->Int64, params[i], loc, ArtsCodegen::ParameterCastMode::Bitwise);
-        AC->create<memref::StoreOp>(loc, castParam, allocOp, ValueRange{index});
-      }
-    } else {
+    if (params.empty() ||
+        (resultType.hasStaticShape() && resultType.getNumElements() == 0)) {
       /// Empty parameter pack: allocate dynamic memref<?xi64> with size 0
       auto dynamicType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
       auto zeroIndex = AC->createIndexConstant(0, loc);
       allocOp =
           AC->create<memref::AllocaOp>(loc, dynamicType, ValueRange{zeroIndex});
+    } else if (resultType.getNumDynamicDims() > 0) {
+      /// Dynamic memref: allocate with runtime size and store parameters.
+      auto numParams = AC->createIndexConstant(params.size(), loc);
+      allocOp =
+          AC->create<memref::AllocaOp>(loc, resultType, ValueRange{numParams});
+    } else {
+      /// Static non-empty pack: preserve its compile-time extent.
+      allocOp = AC->create<memref::AllocaOp>(loc, resultType, ValueRange{});
+    }
+
+    for (unsigned i = 0; i < params.size(); ++i) {
+      auto index = AC->createIndexConstant(i, loc);
+      auto castParam = AC->castParameter(
+          AC->Int64, params[i], loc, ArtsCodegen::ParameterCastMode::Bitwise);
+      AC->create<memref::StoreOp>(loc, castParam, allocOp, ValueRange{index});
     }
 
     rewriter.replaceOp(op, allocOp);
@@ -1656,10 +1657,18 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
     /// Build arts_edt_create arguments
     auto funcPtr = AC->createFnPtr(outlined, op.getLoc());
     auto loc = op.getLoc();
-    auto paramv = op.getParamMemref();
+    Value paramv = op.getParamMemref();
     Value depc = op.getDepCount();
     if (depc && depc.getType() != AC->Int32)
       depc = AC->castToInt(AC->Int32, depc, loc);
+
+    /// Normalize paramv to the runtime ABI type expected by the helper decls.
+    if (auto memrefType = dyn_cast<MemRefType>(paramv.getType())) {
+      auto runtimeParamType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
+      if (memrefType != runtimeParamType)
+        paramv =
+            AC->create<memref::CastOp>(loc, runtimeParamType, paramv).getResult();
+    }
 
     /// Calculate parameter count from memref size
     Value paramc;

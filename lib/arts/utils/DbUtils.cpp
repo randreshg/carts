@@ -321,6 +321,9 @@ template DbLoweringInfo DbUtils::extractDbLoweringInfo<DbAllocOp>(DbAllocOp op);
 ///===----------------------------------------------------------------------===///
 
 std::optional<std::pair<Value, Value>> DbUtils::traceToDbAlloc(Value dep) {
+  if (auto allocOp = dyn_cast_or_null<DbAllocOp>(getUnderlyingDbAlloc(dep)))
+    return std::make_pair(allocOp.getGuid(), allocOp.getPtr());
+
   if (auto allocOp = dep.getDefiningOp<DbAllocOp>())
     return std::make_pair(allocOp.getGuid(), allocOp.getPtr());
 
@@ -380,6 +383,14 @@ Operation *DbUtils::getUnderlyingDb(Value v, unsigned depth) {
       return rootAlloc;
     if (auto gep = dyn_cast<DbGepOp>(def))
       return getUnderlyingDb(gep.getBasePtr(), depth + 1);
+    if (auto ptrToInt = dyn_cast<LLVM::PtrToIntOp>(def))
+      return getUnderlyingDb(ptrToInt.getArg(), depth + 1);
+    if (auto intToPtr = dyn_cast<LLVM::IntToPtrOp>(def))
+      return getUnderlyingDb(intToPtr.getArg(), depth + 1);
+    if (auto memrefToPtr = dyn_cast<polygeist::Memref2PointerOp>(def))
+      return getUnderlyingDb(memrefToPtr.getSource(), depth + 1);
+    if (auto ptrToMemref = dyn_cast<polygeist::Pointer2MemrefOp>(def))
+      return getUnderlyingDb(ptrToMemref.getSource(), depth + 1);
     if (auto castOp = dyn_cast<memref::CastOp>(def))
       return getUnderlyingDb(castOp.getSource(), depth + 1);
     if (auto subview = dyn_cast<memref::SubViewOp>(def))

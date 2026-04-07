@@ -11,10 +11,11 @@
 // CHECK: scf.for %[[TAP:.+]] = %c-2 to %c3 step %c1 iter_args(%{{.+}} = %cst_1) -> (f32) {
 // CHECK: %{{.+}} = arith.addf %{{.+}}, %{{.+}} : f32
 // CHECK: %[[GLOBAL:.+]] = arith.addi %{{.+}}, %{{.+}} : index
-// CHECK: %[[LOW:.+]] = arith.cmpi s{{.+}}, %[[GLOBAL]], %{{.+}} : index
-// CHECK: %[[HIGH:.+]] = arith.cmpi s{{.+}}, %[[GLOBAL]], %{{.+}} : index
-// CHECK: %{{.+}} = arith.s{{.+}} %[[GLOBAL]], %{{.+}} : index
-// CHECK: %{{.+}} = arith.{{.+}} %[[GLOBAL]], %{{.+}} : index
+// CHECK: %[[LOW:.+]] = arith.cmpi ult, %[[GLOBAL]], %{{.+}} : index
+// CHECK: %[[HIGH:.+]] = arith.cmpi uge, %[[GLOBAL]], %{{.+}} : index
+// CHECK: %{{.+}} = arith.subi %[[GLOBAL]], %{{.+}} : index
+// CHECK: %{{.+}} = arith.addi %{{.+}}, %{{.+}} : index
+// CHECK: %{{.+}} = arith.subi %{{.+}}, %{{.+}} : index
 // CHECK: %[[SEL_LOCAL0:.+]] = arith.select %[[LOW]], %{{.+}}, %{{.+}} : index
 // CHECK: %[[SEL_LOCAL1:.+]] = arith.select %[[HIGH]], %{{.+}}, %[[SEL_LOCAL0]] : index
 // CHECK-NOT: arith.remui

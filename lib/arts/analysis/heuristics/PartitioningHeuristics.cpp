@@ -34,6 +34,18 @@ static bool hasJacobiLikeStencilContract(const PartitioningContext &ctx) {
   });
 }
 
+static bool hasNonLeadingOrMultiDimOwnerContract(
+    const PartitioningContext &ctx) {
+  return llvm::any_of(ctx.acquires, [](const AcquireInfo &info) {
+    if (!info.hasDistributionContract || !info.canBlock ||
+        info.ownerDimsCount == 0)
+      return false;
+    if (info.ownerDimsCount > 1)
+      return true;
+    return info.ownerDims[0] > 0;
+  });
+}
+
 } // namespace
 
 ///===----------------------------------------------------------------------===///
@@ -84,6 +96,10 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
         });
   }
   bool hasJacobiStencil = hasJacobiLikeStencilContract(ctx);
+  bool hasNonLeadingOwnerContract =
+      hasNonLeadingOrMultiDimOwnerContract(ctx);
+  bool preserveReadOnlyStencilOwnership =
+      hasNonLeadingOwnerContract || ctx.memrefRank == 1 || ctx.memrefRank >= 3;
 
   ///===--------------------------------------------------------------------===///
   /// Coarse Partitioning Heuristics (H1.C*)
@@ -143,7 +159,8 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// on a single node once every block-capable acquire widened to full-range;
   /// at that point the contract no longer buys locality for read-only inputs.
   bool preserveStencilBlockForReadOnlyFullRange =
-      (patterns.hasStencil || hasTrustedStencilAcquire) && !patterns.hasIndexed;
+      (patterns.hasStencil || hasTrustedStencilAcquire) && !patterns.hasIndexed &&
+      preserveReadOnlyStencilOwnership;
   bool preserveBlockForReadOnlyFullRange =
       ctx.canBlock &&
       (!isSingleNode || preserveStencilBlockForReadOnlyFullRange);
@@ -180,7 +197,8 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// i-dim, partition on k-dim). In that case, block partitioning is safe
   /// and avoids the NUMA penalty of a single coarse allocation.
   if (patterns.hasStencil && isSingleNode && isReadOnly &&
-      (!ctx.canBlock || (!ctx.allBlockFullRange && !hasJacobiStencil))) {
+      (!ctx.canBlock || (!ctx.allBlockFullRange && !hasJacobiStencil &&
+                         !preserveReadOnlyStencilOwnership))) {
     if (ctx.canElementWise) {
       unsigned outerRank = ctx.minPinnedDimCount();
       outerRank = outerRank > 0 ? outerRank : 1;

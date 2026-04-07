@@ -34,7 +34,16 @@ config.test_exec_root = config.test_source_root
 test_times_path = os.path.join(config.test_exec_root, ".lit_test_times.txt")
 if os.path.exists(test_times_path):
     with open(test_times_path, "r") as time_file:
-        cleaned_lines = [line for line in time_file if line.split()]
+        cleaned_lines = []
+        for line in time_file:
+            fields = line.split(maxsplit=1)
+            if len(fields) != 2:
+                continue
+            try:
+                float(fields[0])
+            except ValueError:
+                continue
+            cleaned_lines.append(line)
     with open(test_times_path, "w") as time_file:
         time_file.writelines(cleaned_lines)
 

@@ -346,6 +346,13 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
       continue;
     }
 
+    if (auto releaseOp = dyn_cast<DbReleaseOp>(userOp)) {
+      auto newRelease = AC->create<DbReleaseOp>(releaseOp.getLoc(), newPtr);
+      releaseOp->replaceAllUsesWith(newRelease);
+      opsToRemove.insert(releaseOp);
+      continue;
+    }
+
     if (auto m2p = dyn_cast<polygeist::Memref2PointerOp>(userOp)) {
       Value llvmPtr = AC->castToLLVMPtr(newPtr, m2p.getLoc());
       m2p.getResult().replaceAllUsesWith(llvmPtr);
