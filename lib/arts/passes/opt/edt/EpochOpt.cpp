@@ -100,8 +100,9 @@ static bool isCpsChainExcludedDepPattern(ArtsDepPattern pattern) {
   }
 }
 
-static bool loopContainsExcludedDepPattern(
-    scf::ForOp forOp, function_ref<bool(ArtsDepPattern)> isExcluded) {
+static bool
+loopContainsExcludedDepPattern(scf::ForOp forOp,
+                               function_ref<bool(ArtsDepPattern)> isExcluded) {
   if (!forOp)
     return false;
 
@@ -147,8 +148,8 @@ using AttrNames::Operation::ContinuationForEpoch;
 using AttrNames::Operation::CPSAdditiveParams;
 using AttrNames::Operation::CPSAdvanceHasIvArg;
 using AttrNames::Operation::CPSChainId;
-using AttrNames::Operation::CPSDirectRecreate;
 using AttrNames::Operation::CPSDepRouting;
+using AttrNames::Operation::CPSDirectRecreate;
 using AttrNames::Operation::CPSForwardDeps;
 using AttrNames::Operation::CPSInitIter;
 using AttrNames::Operation::CPSIterCounterParamIdx;
@@ -901,9 +902,8 @@ static bool tryCPSLoopTransform(scf::ForOp forOp,
   /// Step 2: Create the kickoff EDT inside the epoch (before the yield).
   OpBuilder epochBuilder = OpBuilder::atBlockTerminator(&epochBlock);
 
-  auto kickoffEdt = epochBuilder.create<EdtOp>(loc, EdtType::task,
-                                               EdtConcurrency::intranode,
-                                               currentStateDeps);
+  auto kickoffEdt = epochBuilder.create<EdtOp>(
+      loc, EdtType::task, EdtConcurrency::intranode, currentStateDeps);
   kickoffEdt->setAttr(CPSChainId, builder.getStringAttr(chainId));
   if (!currentStateDeps.empty())
     kickoffEdt->setAttr(CPSForwardDeps, builder.getUnitAttr());
@@ -938,8 +938,7 @@ static bool tryCPSLoopTransform(scf::ForOp forOp,
       return ifOp;
 
     OpBuilder ifBuilder(ifOp);
-    auto newIf =
-        ifBuilder.create<scf::IfOp>(loc, ifOp.getCondition(), true);
+    auto newIf = ifBuilder.create<scf::IfOp>(loc, ifOp.getCondition(), true);
     Block &oldThenBlock = ifOp.getThenRegion().front();
     Block &newThenBlock = newIf.getThenRegion().front();
     for (Operation &op :
@@ -1051,9 +1050,8 @@ static bool tryCPSLoopTransform(scf::ForOp forOp,
     OpBuilder advanceSiteBuilder = OpBuilder::atBlockTerminator(advanceBlock);
     auto advanceEdt = advanceSiteBuilder.create<EdtOp>(
         loc, EdtType::task, EdtConcurrency::intranode, advanceStateDeps);
-    advanceEdt->setAttr(
-        kHasControlDep,
-        builder.getIntegerAttr(builder.getI32Type(), 1));
+    advanceEdt->setAttr(kHasControlDep,
+                        builder.getIntegerAttr(builder.getI32Type(), 1));
     advanceEdt->setAttr(ContinuationForEpoch, builder.getUnitAttr());
     if (!advanceStateDeps.empty())
       advanceEdt->setAttr(CPSForwardDeps, builder.getUnitAttr());
@@ -1073,8 +1071,7 @@ static bool tryCPSLoopTransform(scf::ForOp forOp,
         ub.getType().isIndex()
             ? advanceBuilder.create<arith::IndexCastOp>(loc, i64Ty, ub)
                   .getResult()
-            : advanceBuilder.create<arith::ExtSIOp>(loc, i64Ty, ub)
-                  .getResult();
+            : advanceBuilder.create<arith::ExtSIOp>(loc, i64Ty, ub).getResult();
     auto materializeAdvanceCarry = [&](Value value) -> Value {
       if (!isa<BaseMemRefType>(value.getType()))
         return value;
@@ -2435,6 +2432,39 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
       /// (after step+ub prefix). scratch guid index comes first if present,
       /// then timing DB guid indices.
       setDepRoutingAttrForCarry(reorderedCarry);
+    }
+
+    /// Step CPS-9b: When plan attrs are present on any worker EDT within
+    /// the outer epoch, stamp the new launch state schema on all
+    /// continuations. This provides a structured alternative to the
+    /// positional cps_dep_routing, enabling Phase 3 CPS schema cleanup.
+    bool hasPlanAttrs = false;
+    outerEpoch.walk([&](EdtOp edt) {
+      if (edt->hasAttr(AttrNames::Operation::Plan::KernelFamily))
+        hasPlanAttrs = true;
+    });
+    if (hasPlanAttrs) {
+      /// state_schema format: [numScalars, numTimingDbs, numDataGuids,
+      ///                       numDataPtrs]
+      SmallVector<int64_t> stateSchema = {
+          static_cast<int64_t>(scalarParams.size()),
+          static_cast<int64_t>(timingDbs.size()),
+          static_cast<int64_t>(dataGuids.size()),
+          static_cast<int64_t>(dataPtrs.size())};
+      /// dep_schema format: [numTimingDbGuids, hasScratch]
+      SmallVector<int64_t> depSchema = {
+          static_cast<int64_t>(numTimingDbGuids),
+          static_cast<int64_t>(scratchAlloc ? 1 : 0)};
+      for (EdtOp contEdt : allContinuations) {
+        contEdt->setAttr(
+            AttrNames::Operation::LaunchState::StateSchema,
+            DenseI64ArrayAttr::get(contEdt.getContext(), stateSchema));
+        contEdt->setAttr(
+            AttrNames::Operation::LaunchState::DepSchema,
+            DenseI64ArrayAttr::get(contEdt.getContext(), depSchema));
+      }
+      ARTS_INFO("CPS Chain: Stamped launch state schema on "
+                << allContinuations.size() << " continuations");
     }
   }
 

@@ -19,6 +19,7 @@
 #include "arts/Dialect.h"
 #define GEN_PASS_DEF_CONTRACTVALIDATION
 #include "arts/Dialect.h"
+#include "arts/analysis/db/OwnershipProof.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/LoweringContractUtils.h"
@@ -146,11 +147,178 @@ struct ContractValidationPass
     });
 
     /// ---------------------------------------------------------------
+    /// Phase 3a: Compute and stamp ownership proofs
+    /// ---------------------------------------------------------------
+    unsigned proofsStamped = 0;
+    unsigned fullyProven = 0;
+
+    module.walk([&](LoweringContractOp contract) {
+      Value target = contract.getTarget();
+      if (!target || !isa<MemRefType>(target.getType()))
+        return;
+
+      OwnershipProof proof = computeOwnershipProof(contract);
+      if (proof.provenCount() > 0) {
+        stampOwnershipProof(contract, proof);
+        ++proofsStamped;
+        if (proof.isFullyProven())
+          ++fullyProven;
+      }
+    });
+
+    ARTS_DEBUG("  Ownership proofs: " << proofsStamped << " stamped, "
+                                      << fullyProven << " fully proven");
+
+    /// ---------------------------------------------------------------
+    /// Phase 3b: Verify proof consistency
+    /// ---------------------------------------------------------------
+    unsigned proofInconsistencies = 0;
+
+    module.walk([&](LoweringContractOp contract) {
+      OwnershipProof proof = readOwnershipProof(contract.getOperation());
+      if (proof.provenCount() == 0)
+        return;
+
+      /// If owner_dim_reachability is false but block partitioning is
+      /// requested, emit warning
+      auto partMode = contract->getAttrOfType<PartitionModeAttr>(
+          AttrNames::Operation::PartitionMode);
+      if (!proof.ownerDimReachability && partMode &&
+          (partMode.getValue() == PartitionMode::block ||
+           partMode.getValue() == PartitionMode::stencil)) {
+        contract.emitWarning("proof inconsistency: owner_dim_reachability is "
+                             "false but block partitioning is requested");
+        ++proofInconsistencies;
+      }
+
+      /// If halo_legality is false but supported_block_halo is set
+      if (!proof.haloLegality &&
+          contract.getSupportedBlockHalo().value_or(false)) {
+        contract.emitWarning("proof inconsistency: halo_legality is false but "
+                             "supported_block_halo is set");
+        ++proofInconsistencies;
+      }
+    });
+
+    ARTS_DEBUG("  Proof inconsistencies: " << proofInconsistencies);
+
+    /// ---------------------------------------------------------------
+    /// Phase 4: Advisory proof-gap and CPS pack-schema warnings
+    /// ---------------------------------------------------------------
+    unsigned proofGapWarnings = 0;
+
+    if (warnOnProofGaps) {
+      /// Phase 4a: Ownership proof gap checks on LoweringContractOps
+      module.walk([&](LoweringContractOp contract) {
+        Value target = contract.getTarget();
+        if (!target || !isa<MemRefType>(target.getType()))
+          return;
+
+        auto ownerDims = contract.getOwnerDims();
+        auto blockShape = contract.getBlockShape();
+        auto depPattern = contract.getDepPattern();
+
+        /// owner_dims without block_shape
+        if (ownerDims && !ownerDims->empty() && blockShape.empty()) {
+          contract.emitWarning("proof gap: owner_dims without block_shape");
+          ++proofGapWarnings;
+        }
+
+        /// stencil-family depPattern without supported_block_halo
+        if (depPattern && isStencilFamilyDepPattern(*depPattern) &&
+            !contract.getSupportedBlockHalo()) {
+          contract.emitWarning(
+              "proof gap: stencil pattern without supported_block_halo");
+          ++proofGapWarnings;
+        }
+
+        /// narrowable_dep without owner_dims
+        if (contract->hasAttr(AttrNames::Operation::Contract::NarrowableDep) &&
+            (!ownerDims || ownerDims->empty())) {
+          contract.emitWarning("proof gap: narrowable_dep without owner_dims");
+          ++proofGapWarnings;
+        }
+
+        /// owner_dims value >= memref rank
+        if (ownerDims) {
+          unsigned rank = cast<MemRefType>(target.getType()).getRank();
+          for (int64_t dim : *ownerDims) {
+            if (dim >= static_cast<int64_t>(rank)) {
+              contract.emitWarning(
+                  "proof gap: owner_dims value >= memref rank");
+              ++proofGapWarnings;
+              break;
+            }
+          }
+        }
+
+        /// block_shape without owner_dims
+        if (!blockShape.empty() && (!ownerDims || ownerDims->empty())) {
+          contract.emitWarning("proof gap: block_shape without owner_dims");
+          ++proofGapWarnings;
+        }
+      });
+
+      /// Phase 4b: CPS pack-schema gap checks on EdtOps
+      module.walk([&](EdtOp edt) {
+        /// cps_chain_id without cps_dep_routing
+        if (edt->hasAttr(AttrNames::Operation::CPSChainId) &&
+            !edt->hasAttr(AttrNames::Operation::CPSDepRouting)) {
+          edt.emitWarning(
+              "CPS schema gap: cps_chain_id without cps_dep_routing");
+          ++proofGapWarnings;
+        }
+
+        /// cps_forward_deps without cps_dep_routing
+        if (auto fwdDeps = edt->getAttrOfType<DenseI64ArrayAttr>(
+                AttrNames::Operation::CPSForwardDeps)) {
+          if (fwdDeps.size() > 0 &&
+              !edt->hasAttr(AttrNames::Operation::CPSDepRouting)) {
+            edt.emitWarning(
+                "CPS schema gap: cps_forward_deps without cps_dep_routing");
+            ++proofGapWarnings;
+          }
+        }
+
+        /// cps_param_perm with negative slot
+        if (auto paramPerm = edt->getAttrOfType<DenseI64ArrayAttr>(
+                AttrNames::Operation::CPSParamPerm)) {
+          for (int64_t slot : paramPerm.asArrayRef()) {
+            if (slot < 0) {
+              edt.emitWarning(
+                  "CPS schema gap: cps_param_perm has negative slot");
+              ++proofGapWarnings;
+              break;
+            }
+          }
+        }
+
+        /// Mixed schema warning: both legacy CPS attrs and new split
+        /// launch state schema present on the same EDT.
+        bool hasLegacyCps = edt->hasAttr(AttrNames::Operation::CPSParamPerm) ||
+                            edt->hasAttr(AttrNames::Operation::CPSDepRouting);
+        bool hasNewSchema =
+            edt->hasAttr(AttrNames::Operation::LaunchState::StateSchema) ||
+            edt->hasAttr(AttrNames::Operation::LaunchState::DepSchema);
+        if (hasLegacyCps && hasNewSchema) {
+          edt.emitWarning("mixed CPS schema: EDT has both legacy "
+                          "cps_param_perm/cps_dep_routing and new "
+                          "launch.state_schema/dep_schema");
+          ++proofGapWarnings;
+        }
+      });
+    }
+
+    /// ---------------------------------------------------------------
     /// Phase 3: Log statistics
     /// ---------------------------------------------------------------
     ARTS_INFO("Contract validation summary: "
               << totalContracts << " contracts, " << invalidContracts
-              << " invalid, " << orphanAcquires << " orphan acquires");
+              << " invalid, " << orphanAcquires << " orphan acquires"
+              << ", " << proofGapWarnings << " proof gap warnings"
+              << ", " << proofsStamped << " proofs stamped (" << fullyProven
+              << " fully proven, " << proofInconsistencies
+              << " inconsistencies)");
     for (auto &entry : patternCounts) {
       ARTS_INFO("  Pattern " << stringifyArtsDepPattern(entry.first) << ": "
                              << entry.second);
