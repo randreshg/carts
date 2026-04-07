@@ -12,16 +12,17 @@
 
 // Outer wrapping epoch.
 // CHECK: arts.epoch
+// Launcher EDT carries a compiler-generated async loop chain id.
+// CHECK: arts.edt <task> <intranode> route(%c-1_i32) attributes {arts.cps_chain_id = "[[CHAIN:async_loop_[0-9]+]]"}
 // First iteration: scf.if with conditional epoch.
 // CHECK: scf.if
 // CHECK: arts.continuation_for_epoch
-// Continuation EDT.
-// CHECK: arts.cps_chain_id = "chain_0"
-// CPS advance.
-// CHECK: arts.cps_advance
-// Advance region contains scf.if for both branches.
-// CHECK: scf.if
+// CPS advance in the then branch recreates the same chain.
+// CHECK: arts.cps_advance(%c1_i64, %c10_i64, %true) target "[[CHAIN]]"
+// Else branch also stays in the same continuation chain.
+// CHECK: } else {
 // CHECK: arts.continuation_for_epoch
+// CHECK: arts.cps_advance(%c1_i64, %c10_i64, %false) target "[[CHAIN]]"
 // No loop remains.
 // CHECK-NOT: scf.for
 

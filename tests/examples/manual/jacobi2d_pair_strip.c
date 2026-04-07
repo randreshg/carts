@@ -10,11 +10,14 @@
  * Manual ARTS reference for the ideal Jacobi2D lowering.
  *
  * Design:
- * - Stable row-strip DB families for A and B across the whole run.
+ * - Row-strip DB families are rotated every pair step.
  * - One CPS step per t += 2 pair.
  * - One outer epoch per pair, with both A->B and B->A strip waves created
  *   immediately and ordered by DB frontier/dataflow instead of a second epoch.
  * - Exact one-row halo deps via arts_add_dependence_at().
+ * - Advance EDT destroys the previous pair's input/intermediate GUID families
+ *   after the outer epoch completes, then launches the next pair with a fresh
+ *   state DB.
  * - Row-specialized worker kernel: choose halo sources once per row, never
  *   perform owned/left/right buffer selection per element access.
  *
@@ -42,14 +45,15 @@ typedef struct {
   uint32_t n;
   uint32_t tsteps;
   uint32_t num_strips;
-  uint32_t reserved;
+  uint32_t iter;
   double expected_checksum;
   arts_guid_t finish_guid;
   uint32_t strip_starts[MAX_STRIPS];
   uint32_t strip_rows[MAX_STRIPS];
-  arts_guid_t a_guids[MAX_STRIPS];
-  arts_guid_t b_guids[MAX_STRIPS];
-} topology_t;
+  arts_guid_t current_guids[MAX_STRIPS];
+  arts_guid_t cleanup_input_guids[MAX_STRIPS];
+  arts_guid_t cleanup_temp_guids[MAX_STRIPS];
+} state_t;
 
 static float init_value(uint32_t i, uint32_t j) {
   return (float)((i + j) % 256) * 0.001f;
@@ -124,6 +128,12 @@ static void pair_iter_edt(uint32_t paramc, const uint64_t *paramv,
                           uint32_t depc, arts_edt_dep_t depv[]);
 static void advance_edt(uint32_t paramc, const uint64_t *paramv, uint32_t depc,
                         arts_edt_dep_t depv[]);
+
+static void destroy_guid_family(const arts_guid_t *guids, uint32_t count) {
+  for (uint32_t i = 0; i < count; ++i)
+    if (guids[i] != NULL_GUID)
+      arts_db_destroy(guids[i]);
+}
 
 static inline void preserve_row(const float *src, float *dst, uint32_t n) {
   memcpy(dst, src, (size_t)n * sizeof(float));
@@ -233,14 +243,14 @@ static void jacobi_strip_edt(uint32_t paramc, const uint64_t *paramv,
 
 static void launch_strip_wave(arts_guid_t epoch_guid, arts_guid_t *input_guids,
                               arts_guid_t *output_guids,
-                              const topology_t *topology) {
-  const uint64_t halo_bytes = (uint64_t)topology->n * sizeof(float);
+                              const state_t *state) {
+  const uint64_t halo_bytes = (uint64_t)state->n * sizeof(float);
 
-  for (uint32_t strip = 0; strip < topology->num_strips; ++strip) {
+  for (uint32_t strip = 0; strip < state->num_strips; ++strip) {
     uint64_t params[3];
-    params[0] = topology->strip_starts[strip];
-    params[1] = topology->strip_rows[strip];
-    params[2] = topology->n;
+    params[0] = state->strip_starts[strip];
+    params[1] = state->strip_rows[strip];
+    params[2] = state->n;
 
     arts_guid_t edt = arts_edt_create_with_epoch(
         jacobi_strip_edt, 3, params, 4, epoch_guid,
@@ -249,8 +259,8 @@ static void launch_strip_wave(arts_guid_t epoch_guid, arts_guid_t *input_guids,
     arts_add_dependence(input_guids[strip], edt, 0, DB_MODE_RO);
 
     if (strip > 0) {
-      uint64_t prev_rows = topology->strip_rows[strip - 1];
-      uint64_t top_offset = (prev_rows - 1) * (uint64_t)topology->n *
+      uint64_t prev_rows = state->strip_rows[strip - 1];
+      uint64_t top_offset = (prev_rows - 1) * (uint64_t)state->n *
                             sizeof(float);
       arts_add_dependence_at(input_guids[strip - 1], edt, 1, DB_MODE_RO,
                              top_offset, halo_bytes);
@@ -258,7 +268,7 @@ static void launch_strip_wave(arts_guid_t epoch_guid, arts_guid_t *input_guids,
       arts_add_dependence(NULL_GUID, edt, 1, DB_MODE_RO);
     }
 
-    if (strip + 1 < topology->num_strips) {
+    if (strip + 1 < state->num_strips) {
       arts_add_dependence_at(input_guids[strip + 1], edt, 2, DB_MODE_RO, 0,
                              halo_bytes);
     } else {
@@ -275,28 +285,28 @@ static void finish_edt(uint32_t paramc, const uint64_t *paramv, uint32_t depc,
   (void)paramv;
   (void)depc;
 
-  const topology_t *topology = (const topology_t *)depv[0].ptr;
-  if (!topology)
-    fail_run("finish EDT missing topology DB");
+  const state_t *state = (const state_t *)depv[0].ptr;
+  if (!state)
+    fail_run("finish EDT missing final state DB");
 
   double checksum = 0.0;
-  for (uint32_t strip = 0; strip < topology->num_strips; ++strip) {
+  for (uint32_t strip = 0; strip < state->num_strips; ++strip) {
     const float *data = (const float *)depv[strip + 1].ptr;
-    uint32_t start_row = topology->strip_starts[strip];
-    uint32_t rows = topology->strip_rows[strip];
+    uint32_t start_row = state->strip_starts[strip];
+    uint32_t rows = state->strip_rows[strip];
     if (!data)
       fail_run("finish EDT missing final strip DB");
     for (uint32_t local_i = 0; local_i < rows; ++local_i) {
       uint32_t global_i = start_row + local_i;
-      checksum += data[(size_t)local_i * topology->n + global_i];
+      checksum += data[(size_t)local_i * state->n + global_i];
     }
   }
 
   arts_printf("jacobi2d_pair_strip: checksum=%0.12e\n", checksum);
   if (VERIFY_REFERENCE) {
-    double diff = fabs(checksum - topology->expected_checksum);
+    double diff = fabs(checksum - state->expected_checksum);
     arts_printf("jacobi2d_pair_strip: expected=%0.12e diff=%0.12e\n",
-                topology->expected_checksum, diff);
+                state->expected_checksum, diff);
     if (diff > 1.0e-3)
       fail_run("reference checksum mismatch");
   }
@@ -307,48 +317,74 @@ static void finish_edt(uint32_t paramc, const uint64_t *paramv, uint32_t depc,
 static void pair_iter_edt(uint32_t paramc, const uint64_t *paramv,
                           uint32_t depc, arts_edt_dep_t depv[]) {
   (void)paramc;
+  (void)paramv;
   (void)depc;
 
-  uint32_t t = (uint32_t)paramv[0];
-  const topology_t *topology = (const topology_t *)depv[0].ptr;
-  if (!topology)
-    fail_run("pair_iter EDT missing topology DB");
+  const state_t *state = (const state_t *)depv[0].ptr;
+  if (!state)
+    fail_run("pair_iter EDT missing state DB");
 
-  uint64_t advance_param = t;
-  arts_guid_t advance_guid =
-      arts_edt_create(advance_edt, 1, &advance_param, 2, NULL);
-  arts_add_dependence(depv[0].guid, advance_guid, 1, DB_MODE_RO);
+  void *next_state_ptr = NULL;
+  arts_guid_t next_state_guid =
+      arts_db_create(&next_state_ptr, sizeof(state_t), ARTS_DB_DEFAULT, NULL);
+  state_t *next_state = (state_t *)next_state_ptr;
+  memset(next_state, 0, sizeof(*next_state));
+  *next_state = *state;
+  next_state->iter = state->iter + 2;
+
+  for (uint32_t strip = 0; strip < state->num_strips; ++strip) {
+    uint32_t rows = state->strip_rows[strip];
+    size_t bytes = (size_t)rows * (size_t)state->n * sizeof(float);
+
+    void *temp_ptr = NULL;
+    arts_guid_t temp_guid =
+        arts_db_create(&temp_ptr, (uint64_t)bytes, ARTS_DB_DEFAULT, NULL);
+    memset(temp_ptr, 0, bytes);
+
+    void *next_ptr = NULL;
+    arts_guid_t next_guid =
+        arts_db_create(&next_ptr, (uint64_t)bytes, ARTS_DB_DEFAULT, NULL);
+    memset(next_ptr, 0, bytes);
+
+    next_state->current_guids[strip] = next_guid;
+    next_state->cleanup_input_guids[strip] = state->current_guids[strip];
+    next_state->cleanup_temp_guids[strip] = temp_guid;
+  }
+
+  arts_guid_t advance_guid = arts_edt_create(advance_edt, 0, NULL, 2, NULL);
+  arts_add_dependence(next_state_guid, advance_guid, 1, DB_MODE_RO);
 
   arts_guid_t outer_epoch = arts_initialize_and_start_epoch(advance_guid, 0);
 
-  launch_strip_wave(outer_epoch, (arts_guid_t *)topology->a_guids,
-                    (arts_guid_t *)topology->b_guids, topology);
-  launch_strip_wave(outer_epoch, (arts_guid_t *)topology->b_guids,
-                    (arts_guid_t *)topology->a_guids, topology);
+  launch_strip_wave(outer_epoch, (arts_guid_t *)state->current_guids,
+                    (arts_guid_t *)next_state->cleanup_temp_guids, state);
+  launch_strip_wave(outer_epoch, (arts_guid_t *)next_state->cleanup_temp_guids,
+                    (arts_guid_t *)next_state->current_guids, state);
 }
 
 static void advance_edt(uint32_t paramc, const uint64_t *paramv, uint32_t depc,
                         arts_edt_dep_t depv[]) {
   (void)paramc;
+  (void)paramv;
   (void)depc;
   (void)depv[0];
 
-  uint32_t t = (uint32_t)paramv[0];
-  const topology_t *topology = (const topology_t *)depv[1].ptr;
-  if (!topology)
-    fail_run("advance EDT missing topology DB");
+  const state_t *state = (const state_t *)depv[1].ptr;
+  if (!state)
+    fail_run("advance EDT missing next-state DB");
 
-  if (t + 2 < topology->tsteps) {
-    uint64_t next_param = (uint64_t)(t + 2);
-    arts_guid_t next_iter =
-        arts_edt_create(pair_iter_edt, 1, &next_param, 1, NULL);
+  destroy_guid_family(state->cleanup_input_guids, state->num_strips);
+  destroy_guid_family(state->cleanup_temp_guids, state->num_strips);
+
+  if (state->iter < state->tsteps) {
+    arts_guid_t next_iter = arts_edt_create(pair_iter_edt, 0, NULL, 1, NULL);
     arts_add_dependence(depv[1].guid, next_iter, 0, DB_MODE_RO);
     return;
   }
 
-  arts_add_dependence(depv[1].guid, topology->finish_guid, 0, DB_MODE_RO);
-  for (uint32_t strip = 0; strip < topology->num_strips; ++strip) {
-    arts_add_dependence(topology->a_guids[strip], topology->finish_guid,
+  arts_add_dependence(depv[1].guid, state->finish_guid, 0, DB_MODE_RO);
+  for (uint32_t strip = 0; strip < state->num_strips; ++strip) {
+    arts_add_dependence(state->current_guids[strip], state->finish_guid,
                         strip + 1, DB_MODE_RO);
   }
 }
@@ -372,14 +408,15 @@ void main_edt(uint32_t paramc, const uint64_t *paramv, uint32_t depc,
   if (num_strips > N)
     num_strips = N;
 
-  void *topology_ptr = NULL;
-  arts_guid_t topology_guid =
-      arts_db_create(&topology_ptr, sizeof(topology_t), ARTS_DB_DEFAULT, NULL);
-  topology_t *topology = (topology_t *)topology_ptr;
-  memset(topology, 0, sizeof(*topology));
-  topology->n = N;
-  topology->tsteps = TSTEPS;
-  topology->num_strips = num_strips;
+  void *state_ptr = NULL;
+  arts_guid_t state_guid =
+      arts_db_create(&state_ptr, sizeof(state_t), ARTS_DB_DEFAULT, NULL);
+  state_t *state = (state_t *)state_ptr;
+  memset(state, 0, sizeof(*state));
+  state->n = N;
+  state->tsteps = TSTEPS;
+  state->num_strips = num_strips;
+  state->iter = 0;
 
   uint32_t base_rows = N / num_strips;
   uint32_t extra_rows = N % num_strips;
@@ -387,8 +424,8 @@ void main_edt(uint32_t paramc, const uint64_t *paramv, uint32_t depc,
 
   for (uint32_t strip = 0; strip < num_strips; ++strip) {
     uint32_t rows = base_rows + (strip < extra_rows ? 1u : 0u);
-    topology->strip_starts[strip] = row_cursor;
-    topology->strip_rows[strip] = rows;
+    state->strip_starts[strip] = row_cursor;
+    state->strip_rows[strip] = rows;
 
     size_t bytes = (size_t)rows * (size_t)N * sizeof(float);
 
@@ -396,35 +433,20 @@ void main_edt(uint32_t paramc, const uint64_t *paramv, uint32_t depc,
     arts_guid_t a_guid =
         arts_db_create(&a_ptr, (uint64_t)bytes, ARTS_DB_DEFAULT, NULL);
     fill_initial_strip((float *)a_ptr, row_cursor, rows, N, 0);
-    arts_db_release(a_guid);
-
-    void *b_ptr = NULL;
-    arts_guid_t b_guid =
-        arts_db_create(&b_ptr, (uint64_t)bytes, ARTS_DB_DEFAULT, NULL);
-    fill_initial_strip((float *)b_ptr, row_cursor, rows, N, 1);
-    arts_db_release(b_guid);
-
-    topology->a_guids[strip] = a_guid;
-    topology->b_guids[strip] = b_guid;
+    state->current_guids[strip] = a_guid;
     row_cursor += rows;
   }
 
-  topology->expected_checksum =
+  state->expected_checksum =
       VERIFY_REFERENCE ? compute_reference_checksum(N, TSTEPS) : 0.0;
-  topology->finish_guid =
+  state->finish_guid =
       arts_edt_create(finish_edt, 0, NULL, num_strips + 1, NULL);
 
   arts_printf("jacobi2d_pair_strip: N=%u TSTEPS=%u strips=%u workers=%u\n", N,
               TSTEPS, num_strips, workers);
 
-  arts_db_release(topology_guid);
-
-  {
-    uint64_t start_param = 0;
-    arts_guid_t start_iter = arts_edt_create(pair_iter_edt, 1, &start_param, 1,
-                                             NULL);
-    arts_add_dependence(topology_guid, start_iter, 0, DB_MODE_RO);
-  }
+  arts_guid_t start_iter = arts_edt_create(pair_iter_edt, 0, NULL, 1, NULL);
+  arts_add_dependence(state_guid, start_iter, 0, DB_MODE_RO);
 }
 
 int main(int argc, char **argv) {

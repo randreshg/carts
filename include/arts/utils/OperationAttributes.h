@@ -81,6 +81,9 @@ constexpr StringLiteral CPSNumCarry = "arts.cps_num_carry";
 constexpr StringLiteral CPSLoopContinuation = "arts.cps_loop_continuation";
 constexpr StringLiteral CPSAdvanceHasIvArg = "arts.cps_advance_has_iv_arg";
 constexpr StringLiteral CPSDirectRecreate = "arts.cps_direct_recreate";
+/// Marks async-loop kickoff/relaunch EDTs whose explicit dependency slots form
+/// part of the loop-carried state ABI and must be forwarded on relaunch.
+constexpr StringLiteral CPSForwardDeps = "arts.cps_forward_deps";
 /// Preserve the full carry-slot prefix for direct-recreate continuations even
 /// when some slots are locally dead; the relaunch path must reproduce the
 /// kickoff ABI exactly.

@@ -10,12 +10,12 @@
 
 // Outer wrapping epoch.
 // CHECK: arts.epoch
-// Launcher EDT contains epoch_0 marked for continuation.
+// Launcher EDT carries a compiler-generated async loop chain id.
+// CHECK: arts.edt <task> <intranode> route(%c-1_i32) attributes {arts.cps_chain_id = "[[CHAIN:async_loop_[0-9]+]]"}
+// Nested epoch is still continuation-managed.
 // CHECK: arts.continuation_for_epoch
-// Continuation EDT with CPS chain attributes (nested after epoch_0).
-// CHECK: arts.cps_chain_id = "chain_0"
-// CPS advance placeholder.
-// CHECK: arts.cps_advance
+// CPS advance recreates the same async loop target.
+// CHECK: arts.cps_advance(%c2_i64, %c100_i64) target "[[CHAIN]]"
 // No loop remains.
 // CHECK-NOT: scf.for
 

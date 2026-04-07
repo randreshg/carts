@@ -10,26 +10,25 @@
 // The outlined task still clamps the aligned block slice back to the real
 // interior domain [4, 572), so correctness is preserved while ownership stays
 // block-aligned.
-// CHECK-LABEL: func.func private @__arts_edt_1
-// CHECK: %[[LOWER_GAP:.+]] = arith.subi %c4, %0#0 : index
-// CHECK: %[[LOWER_CLAMP:.+]] = arith.select {{.+}}, %c0, %[[LOWER_GAP]] : index
-// CHECK: %[[LOWER_BOUND:.+]] = arith.addi %[[LOWER_CLAMP]], %0#0 : index
-// CHECK: %[[LOWER_CHUNK:.+]] = arith.divui %[[LOWER_BOUND]], %c19 : index
-// CHECK: scf.for %{{.+}} = %[[LOWER_CHUNK]] to %{{.+}} step %c1 {
+// CHECK-LABEL: func.func private @__arts_edt_{{[0-9]+}}
+// CHECK: scf.for %{{.+}} = %c0 to %c64 step %c1 {
+// CHECK: %[[CHUNK_BASE:.+]] = arith.muli %{{.+}}, %c9 : index
+// CHECK: %[[CHUNK_ELEMS:.+]] = arith.minui %{{.+}}, %c9 : index
 
 // CHECK-LABEL: func.func @main
 // CHECK: %guid, %ptr = arts.db_alloc[<in>, <heap>, <read>, <block>] {{.*}} elementSizes[%c3, %c320, %c320, %{{.+}}]
 // CHECK: arts.lowering_contract(%ptr : memref<?x!llvm.ptr>) block_shape[%{{.+}}] contract(<ownerDims = [3], postDbRefined = true>)
+// CHECK: %guid_7, %ptr_8 = arts.db_alloc[<inout>, <heap>, <write>, <block>] {{.*}} elementSizes[%c3, %c320, %c320, %c9]
+// CHECK: arts.lowering_contract(%ptr_8 : memref<?x!llvm.ptr>) block_shape[%c9] contract(<ownerDims = [3], postDbRefined = true>)
 // CHECK: %{{.+}} = arts.create_epoch : i64
-// CHECK: scf.for %[[WORKER:.+]] = %c0 to %c31 step %c1 {
-// CHECK: %[[CHUNK_ORDINAL:.+]] = arith.minui %[[WORKER]], %c31 : index
-// CHECK: %[[CHUNK_BASE:.+]] = arith.muli %[[CHUNK_ORDINAL]], %c19 : index
+// CHECK: scf.for %[[WORKER:.+]] = %c0 to %c64 step %c1 {
+// CHECK: %[[WORK_BASE:.+]] = arith.muli %[[WORKER]], %c9 : index
 // CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>, offsets[%{{.+}}], sizes[%{{.+}}]), offsets[%{{.+}}], sizes[%{{.+}}] {{.*}}distribution_pattern = #arts.distribution_pattern<stencil>{{.*}}stencil_owner_dims = [3]
-// CHECK: arts.lowering_contract({{.*}}) pattern(<{{.*}}distributionKind = <block>, distributionPattern = <stencil>{{.*}}) block_shape[%c19] contract(<ownerDims = [3], postDbRefined = true, criticalPathDistance = 0 : i64>)
-// CHECK: arts.db_acquire[<inout>] {{.*}} partitioning(<block>, offsets[%[[CHUNK_BASE]]], sizes[%{{.+}}]), offsets[%{{.+}}], sizes[%{{.+}}] {{.*}}stencil_owner_dims = [3]
-// CHECK: arts.lowering_contract({{.*}}) pattern(<{{.*}}distributionKind = <block>, distributionPattern = <stencil>{{.*}}) block_shape[%c19] contract(<ownerDims = [3], postDbRefined = true, criticalPathDistance = 0 : i64>)
+// CHECK: arts.lowering_contract({{.*}}) pattern(<{{.*}}distributionKind = <block>, distributionPattern = <stencil>{{.*}}) block_shape[%c3] contract(<ownerDims = [3], postDbRefined = true, criticalPathDistance = 0 : i64>)
+// CHECK: arts.db_acquire[<inout>] {{.*}} partitioning(<block>, offsets[%{{.+}}], sizes[%{{.+}}]), offsets[%{{.+}}], sizes[%{{.+}}] {{.*}}stencil_owner_dims = [3]
+// CHECK: arts.lowering_contract({{.*}}) pattern(<{{.*}}distributionKind = <block>, distributionPattern = <stencil>{{.*}}) block_shape[%c3] contract(<ownerDims = [3], postDbRefined = true, criticalPathDistance = 0 : i64>)
 
-// LLVM: func.call @arts_add_dependence_at(
+// LLVM: func.call @arts_add_dependence(
 
 module {
 }

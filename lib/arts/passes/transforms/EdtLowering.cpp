@@ -91,6 +91,7 @@ using namespace mlir::func;
 using namespace mlir::arts;
 using AttrNames::Operation::ContinuationForEpoch;
 using AttrNames::Operation::CPSChainId;
+using AttrNames::Operation::CPSForwardDeps;
 using AttrNames::Operation::CPSParamPerm;
 
 static const AnalysisKind kEdtLowering_invalidates[] = {
@@ -382,6 +383,15 @@ static DepSourceInfo resolveDepSource(Value dep) {
   info.dbAcquire = dyn_cast_or_null<DbAcquireOp>(underlyingDb);
   info.depDbAcquire = dyn_cast_or_null<DepDbAcquireOp>(underlyingDb);
   return info;
+}
+
+static Operation *getCanonicalDependencySource(Value dep) {
+  DepSourceInfo info = resolveDepSource(dep);
+  if (info.dbAcquire)
+    return info.dbAcquire.getOperation();
+  if (info.depDbAcquire)
+    return info.depDbAcquire.getOperation();
+  return nullptr;
 }
 
 static std::optional<SmallVector<int64_t, 4>>
@@ -691,6 +701,8 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   if (edtOp->hasAttr("arts.has_control_dep"))
     outlineOp->setAttr("arts.has_control_dep",
                        edtOp->getAttr("arts.has_control_dep"));
+  if (edtOp->hasAttr(CPSForwardDeps))
+    outlineOp->setAttr(CPSForwardDeps, AC->getBuilder().getUnitAttr());
   /// Record the pre-CPS param-pack schema on continuation EDTs so
   /// EpochLowering can rebuild loop-back continuation packs to the exact
   /// outlined ABI instead of compacting them to the current carry subset.
@@ -742,7 +754,11 @@ Value EdtLoweringPass::computeDependencyCount(Location loc,
   /// For partitioned acquires, this uses slice sizes (not full allocation
   /// sizes) so depCount matches the slots produced by rec_dep lowering.
   Value depCount = AC->createIntConstant(0, AC->Int32, loc);
+  DenseSet<Operation *> seenSources;
   for (Value dep : edtDeps) {
+    if (Operation *source = getCanonicalDependencySource(dep))
+      if (!seenSources.insert(source).second)
+        continue;
     SmallVector<Value> sizes = DbUtils::getDepSizesFromDb(dep);
     Value numElements = AC->create<DbNumElementsOp>(loc, sizes);
     numElements = AC->castToInt(AC->Int32, numElements, loc);
@@ -1129,8 +1145,13 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
   SmallVector<int32_t> depFlags;
   bool hasEsdDeps = false;
   bool hasDepFlags = false;
+  DenseSet<Operation *> seenSources;
 
   for (Value dep : deps) {
+    if (Operation *source = getCanonicalDependencySource(dep))
+      if (!seenSources.insert(source).second)
+        continue;
+
     /// Handle both DbAcquireOp and DepDbAcquireOp as dependency sources, even
     /// when they are threaded through block arguments.
     DepSourceInfo depSource = resolveDepSource(dep);
@@ -1173,7 +1194,7 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
             dbAcquireOp.getElementOffsets().end());
         SmallVector<Value, 4> elemSizes(dbAcquireOp.getElementSizes().begin(),
                                         dbAcquireOp.getElementSizes().end());
-        Value useSliceTransport = AC->create<arith::ConstantIntOp>(loc, 0, 1);
+        Value useSliceTransport = AC->create<arith::ConstantIntOp>(loc, 1, 1);
         if (auto normalized =
                 normalizeCommonElementSlice(AC, dbAcquireOp, alloc)) {
           elemOffsets.assign(normalized->offsets.begin(),
@@ -1188,8 +1209,8 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
               AC->create<arith::ConstantIntOp>(loc, 1, 1));
           Value sliceRepresentable = AC->create<arith::AndIOp>(
               loc, normalized->representable, normalized->contiguous);
-          (void)sliceNarrowerThanBlock;
-          (void)sliceRepresentable;
+          useSliceTransport = AC->create<arith::AndIOp>(
+              loc, sliceNarrowerThanBlock, sliceRepresentable);
         }
 
         /// Get scalar type size from the element type
@@ -1429,9 +1450,26 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
   /// Compute the base offset of the dependency within the outlined Edt
   /// This corresponds to the sum of number of elements in the previous
   /// dependencies
+  SmallVector<Operation *> canonicalDepSources;
+  canonicalDepSources.reserve(originalDeps.size());
+  for (Value dep : originalDeps)
+    canonicalDepSources.push_back(getCanonicalDependencySource(dep));
+
   auto computeBaseOffset = [&](size_t depIndex, Location loc) {
+    Operation *currentSource =
+        depIndex < canonicalDepSources.size() ? canonicalDepSources[depIndex]
+                                              : nullptr;
     Value base = AC->createIndexConstant(0, loc);
+    DenseSet<Operation *> seenSources;
     for (size_t i = 0; i < depIndex; ++i) {
+      Operation *prevSource =
+          i < canonicalDepSources.size() ? canonicalDepSources[i] : nullptr;
+      if (prevSource) {
+        if (prevSource == currentSource)
+          continue;
+        if (!seenSources.insert(prevSource).second)
+          continue;
+      }
       SmallVector<Value> prevSizes =
           DbUtils::getDepSizesFromDb(originalDeps[i]);
       SmallVector<Value> prevResolved = resolveParam(prevSizes, loc);

@@ -34,6 +34,7 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -52,6 +53,7 @@
 
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopUtils.h"
+#include "polygeist/Ops.h"
 ARTS_DEBUG_SETUP(epoch_opt);
 
 using mlir::arts::AnalysisDependencyInfo;
@@ -91,6 +93,7 @@ asyncLoopStrategyToString(EpochAsyncLoopStrategy strategy) {
 static bool isCpsChainExcludedDepPattern(ArtsDepPattern pattern) {
   switch (pattern) {
   case ArtsDepPattern::jacobi_alternating_buffers:
+  case ArtsDepPattern::wavefront_2d:
     return true;
   default:
     return false;
@@ -127,6 +130,7 @@ static bool loopContainsCpsChainExcludedDepPattern(scf::ForOp forOp) {
 static bool isCpsDriverExcludedDepPattern(ArtsDepPattern pattern) {
   switch (pattern) {
   case ArtsDepPattern::jacobi_alternating_buffers:
+  case ArtsDepPattern::wavefront_2d:
     return true;
   default:
     return false;
@@ -145,6 +149,7 @@ using AttrNames::Operation::CPSAdvanceHasIvArg;
 using AttrNames::Operation::CPSChainId;
 using AttrNames::Operation::CPSDirectRecreate;
 using AttrNames::Operation::CPSDepRouting;
+using AttrNames::Operation::CPSForwardDeps;
 using AttrNames::Operation::CPSInitIter;
 using AttrNames::Operation::CPSIterCounterParamIdx;
 using AttrNames::Operation::CPSLoopContinuation;
@@ -159,6 +164,8 @@ static void cloneNonSlotArith(OpBuilder &builder, Block &body,
                               MutableArrayRef<EpochSlot> slots,
                               IRMapping &mapping,
                               ArrayRef<Operation *> sequentialOps = {});
+static void markAsContinuation(EdtOp edt, OpBuilder &builder,
+                               unsigned chainIdx);
 
 ///===----------------------------------------------------------------------===///
 /// Epoch Scope Narrowing
@@ -867,13 +874,11 @@ static bool tryCPSLoopTransform(scf::ForOp forOp,
       "async_loop_" +
       std::to_string(reinterpret_cast<uintptr_t>(forOp.getOperation()));
 
-  /// The launcher EDT has no explicit DB dependencies. Loop-invariant values
-  /// flow through EdtLowering's normal param packing contract.
-  SmallVector<Value> deps;
+  builder.setInsertionPoint(forOp);
+  SmallVector<Value> currentStateDeps;
   MutableArrayRef<EpochSlot> slots(asyncDecision.slots);
 
   /// Step 1: Create the wrapping epoch.
-  builder.setInsertionPoint(forOp);
   auto wrapEpoch =
       builder.create<EpochOp>(loc, IntegerType::get(builder.getContext(), 64));
   wrapEpoch->setAttr(AttrNames::Operation::CPSOuterEpoch,
@@ -897,50 +902,128 @@ static bool tryCPSLoopTransform(scf::ForOp forOp,
   OpBuilder epochBuilder = OpBuilder::atBlockTerminator(&epochBlock);
 
   auto kickoffEdt = epochBuilder.create<EdtOp>(loc, EdtType::task,
-                                               EdtConcurrency::intranode, deps);
+                                               EdtConcurrency::intranode,
+                                               currentStateDeps);
   kickoffEdt->setAttr(CPSChainId, builder.getStringAttr(chainId));
+  if (!currentStateDeps.empty())
+    kickoffEdt->setAttr(CPSForwardDeps, builder.getUnitAttr());
 
   Block &edtBlock = kickoffEdt.getBody().front();
-  for (Value dep : deps)
+  for (Value dep : currentStateDeps)
     edtBlock.addArgument(dep.getType(), loc);
 
-  /// Step 3: Clone one logical iteration into a continuation-managed epoch.
+  /// Step 3: Clone one logical iteration into continuation-managed epochs.
   IRMapping edtMapping;
-  for (auto [oldDep, blockArg] : llvm::zip(deps, edtBlock.getArguments()))
+  for (auto [oldDep, blockArg] :
+       llvm::zip(currentStateDeps, edtBlock.getArguments()))
     edtMapping.map(oldDep, blockArg);
   edtMapping.map(iv, lb);
 
   OpBuilder edtBuilder = OpBuilder::atBlockEnd(&edtBlock);
   cloneNonSlotArith(edtBuilder, body, slots, edtMapping);
 
-  EpochSlot &slot = slots.front();
-  if (slot.wrappingIf) {
-    Operation *clonedIfOp =
-        edtBuilder.clone(*slot.wrappingIf.getOperation(), edtMapping);
-    auto clonedIf = cast<scf::IfOp>(clonedIfOp);
-    for (Operation &op : clonedIf.getThenRegion().front())
+  SmallVector<Block *> advanceBlocks;
+  auto markClonedSlotEpochs = [&](scf::IfOp ifOp, OpBuilder &attrBuilder) {
+    for (Operation &op : ifOp.getThenRegion().front())
       if (auto epoch = dyn_cast<EpochOp>(op))
-        epoch->setAttr(ContinuationForEpoch, builder.getUnitAttr());
-    if (!clonedIf.getElseRegion().empty())
-      for (Operation &op : clonedIf.getElseRegion().front())
+        epoch->setAttr(ContinuationForEpoch, attrBuilder.getUnitAttr());
+    if (!ifOp.getElseRegion().empty())
+      for (Operation &op : ifOp.getElseRegion().front())
         if (auto epoch = dyn_cast<EpochOp>(op))
-          epoch->setAttr(ContinuationForEpoch, builder.getUnitAttr());
-  } else {
+          epoch->setAttr(ContinuationForEpoch, attrBuilder.getUnitAttr());
+  };
+
+  auto ensureElseBranch = [&](scf::IfOp ifOp) -> scf::IfOp {
+    if (!ifOp.getElseRegion().empty())
+      return ifOp;
+
+    OpBuilder ifBuilder(ifOp);
+    auto newIf =
+        ifBuilder.create<scf::IfOp>(loc, ifOp.getCondition(), true);
+    Block &oldThenBlock = ifOp.getThenRegion().front();
+    Block &newThenBlock = newIf.getThenRegion().front();
+    for (Operation &op :
+         llvm::make_early_inc_range(oldThenBlock.without_terminator()))
+      op.moveBefore(newThenBlock.getTerminator());
+    ifOp.erase();
+    return newIf;
+  };
+
+  auto cloneSlotIntoBlock = [&](OpBuilder &slotBuilder, EpochSlot &slot,
+                                IRMapping &mapping) -> Operation * {
+    if (slot.wrappingIf) {
+      Operation *clonedIfOp =
+          slotBuilder.clone(*slot.wrappingIf.getOperation(), mapping);
+      auto clonedIf = cast<scf::IfOp>(clonedIfOp);
+      markClonedSlotEpochs(clonedIf, slotBuilder);
+      return clonedIfOp;
+    }
+
     Operation *clonedEpochOp =
-        edtBuilder.clone(*slot.epoch.getOperation(), edtMapping);
+        slotBuilder.clone(*slot.epoch.getOperation(), mapping);
     cast<EpochOp>(clonedEpochOp)
         ->setAttr(ContinuationForEpoch, builder.getUnitAttr());
+    return clonedEpochOp;
+  };
+
+  OpBuilder *currentBuilder = &edtBuilder;
+  IRMapping currentMapping = edtMapping;
+  Operation *firstClonedSlotOp =
+      cloneSlotIntoBlock(*currentBuilder, slots.front(), currentMapping);
+
+  if (slots.size() == 1) {
+    if (slots.front().wrappingIf) {
+      auto clonedIf = cast<scf::IfOp>(firstClonedSlotOp);
+      clonedIf = ensureElseBranch(clonedIf);
+      advanceBlocks.push_back(&clonedIf.getThenRegion().front());
+      advanceBlocks.push_back(&clonedIf.getElseRegion().front());
+    } else {
+      advanceBlocks.push_back(currentBuilder->getBlock());
+    }
+  } else {
+    for (unsigned slotIdx = 1; slotIdx < slots.size(); ++slotIdx) {
+      auto contEdt = currentBuilder->create<EdtOp>(
+          loc, EdtType::task, EdtConcurrency::intranode, currentStateDeps);
+      markAsContinuation(contEdt, *currentBuilder, slotIdx);
+      if (!currentStateDeps.empty())
+        contEdt->setAttr(CPSForwardDeps, builder.getUnitAttr());
+
+      Block &contBlock = contEdt.getBody().front();
+      for (Value dep : currentStateDeps)
+        contBlock.addArgument(dep.getType(), loc);
+      ensureYieldTerminator(contBlock, loc);
+      OpBuilder contBuilder = OpBuilder::atBlockTerminator(&contBlock);
+      IRMapping contMapping;
+      contMapping.map(iv, lb);
+      cloneNonSlotArith(contBuilder, body, slots, contMapping);
+      Operation *clonedSlotOp =
+          cloneSlotIntoBlock(contBuilder, slots[slotIdx], contMapping);
+
+      bool isLastSlot = slotIdx + 1 == slots.size();
+      if (!isLastSlot) {
+        currentBuilder = &contBuilder;
+        currentMapping = std::move(contMapping);
+        continue;
+      }
+
+      if (slots[slotIdx].wrappingIf) {
+        auto clonedIf = cast<scf::IfOp>(clonedSlotOp);
+        clonedIf = ensureElseBranch(clonedIf);
+        advanceBlocks.push_back(&clonedIf.getThenRegion().front());
+        advanceBlocks.push_back(&clonedIf.getElseRegion().front());
+      } else {
+        advanceBlocks.push_back(&contBlock);
+      }
+    }
   }
 
-  auto advanceEdt =
-      edtBuilder.create<EdtOp>(loc, EdtType::task, EdtConcurrency::intranode,
-                               SmallVector<Value>{});
-  advanceEdt->setAttr(kHasControlDep,
-                      builder.getIntegerAttr(builder.getI32Type(), 1));
-  advanceEdt->setAttr(ContinuationForEpoch, builder.getUnitAttr());
-  Block &advanceBlock = advanceEdt.getBody().front();
-  ensureYieldTerminator(advanceBlock, loc);
-
+  /// Carry the kickoff EDT pack contract in the same order EdtLowering will
+  /// materialize it. Forwarded dependency state still lives on the advance EDT
+  /// through `currentStateDeps`, but the CPS loop-back params must preserve the
+  /// kickoff ABI rather than prepend dependency-carrier memrefs ahead of the
+  /// user-visible kickoff captures.
+  /// Keep the carry order aligned with EdtLowering's pack contract:
+  /// parameters first, DB handles next, then dependency metadata.
   SmallVector<Value> loopBackParams = collectEdtPackedValues(kickoffEdt);
   auto iterIt = llvm::find(loopBackParams, lb);
   if (iterIt != loopBackParams.end()) {
@@ -949,31 +1032,82 @@ static bool tryCPSLoopTransform(scf::ForOp forOp,
                         builder.getI64IntegerAttr(iterIdx));
   }
 
-  OpBuilder advanceBuilder = OpBuilder::atBlockTerminator(&advanceBlock);
-  Value stepI64 =
-      step.getType().isIndex()
-          ? advanceBuilder.create<arith::IndexCastOp>(loc, i64Ty, step)
-                .getResult()
-          : advanceBuilder.create<arith::ExtSIOp>(loc, i64Ty, step)
-                .getResult();
-  Value ubI64 =
-      ub.getType().isIndex()
-          ? advanceBuilder.create<arith::IndexCastOp>(loc, i64Ty, ub)
-                .getResult()
-          : advanceBuilder.create<arith::ExtSIOp>(loc, i64Ty, ub)
-                .getResult();
-  SmallVector<Value> nextParams = {stepI64, ubI64};
-  nextParams.append(loopBackParams.begin(), loopBackParams.end());
-  auto advance = advanceBuilder.create<CPSAdvanceOp>(
-      loc, nextParams, advanceBuilder.getStringAttr(chainId));
-  advance->setAttr(CPSAdditiveParams, builder.getUnitAttr());
-  advance->setAttr(CPSDirectRecreate, builder.getUnitAttr());
-  advance->setAttr(CPSNumCarry,
-                   builder.getI64IntegerAttr(loopBackParams.size()));
-  Region &advanceRegion = advance.getEpochBody();
-  if (advanceRegion.empty())
-    advanceRegion.emplaceBlock();
-  ensureYieldTerminator(advanceRegion.front(), loc);
+  for (Block *advanceBlock : advanceBlocks) {
+    SmallVector<Value> advanceStateDeps(currentStateDeps.begin(),
+                                        currentStateDeps.end());
+    auto appendAdvanceStateDep = [&](Value value) {
+      if (!value || !isa<BaseMemRefType>(value.getType()))
+        return;
+      Operation *underlyingDb = DbUtils::getUnderlyingDb(value);
+      if (!isa_and_nonnull<DbAcquireOp, DepDbAcquireOp>(underlyingDb))
+        return;
+      if (!llvm::is_contained(advanceStateDeps, value))
+        advanceStateDeps.push_back(value);
+    };
+    for (Value value : loopBackParams)
+      appendAdvanceStateDep(value);
+
+    ensureYieldTerminator(*advanceBlock, loc);
+    OpBuilder advanceSiteBuilder = OpBuilder::atBlockTerminator(advanceBlock);
+    auto advanceEdt = advanceSiteBuilder.create<EdtOp>(
+        loc, EdtType::task, EdtConcurrency::intranode, advanceStateDeps);
+    advanceEdt->setAttr(
+        kHasControlDep,
+        builder.getIntegerAttr(builder.getI32Type(), 1));
+    advanceEdt->setAttr(ContinuationForEpoch, builder.getUnitAttr());
+    if (!advanceStateDeps.empty())
+      advanceEdt->setAttr(CPSForwardDeps, builder.getUnitAttr());
+    Block &advanceBlockBody = advanceEdt.getBody().front();
+    for (Value dep : advanceStateDeps)
+      advanceBlockBody.addArgument(dep.getType(), loc);
+    ensureYieldTerminator(advanceBlockBody, loc);
+
+    OpBuilder advanceBuilder = OpBuilder::atBlockTerminator(&advanceBlockBody);
+    Value stepI64 =
+        step.getType().isIndex()
+            ? advanceBuilder.create<arith::IndexCastOp>(loc, i64Ty, step)
+                  .getResult()
+            : advanceBuilder.create<arith::ExtSIOp>(loc, i64Ty, step)
+                  .getResult();
+    Value ubI64 =
+        ub.getType().isIndex()
+            ? advanceBuilder.create<arith::IndexCastOp>(loc, i64Ty, ub)
+                  .getResult()
+            : advanceBuilder.create<arith::ExtSIOp>(loc, i64Ty, ub)
+                  .getResult();
+    auto materializeAdvanceCarry = [&](Value value) -> Value {
+      if (!isa<BaseMemRefType>(value.getType()))
+        return value;
+      Value rawPtr = advanceBuilder.create<polygeist::Memref2PointerOp>(
+          loc, LLVM::LLVMPointerType::get(advanceBuilder.getContext()), value);
+      return advanceBuilder.create<LLVM::PtrToIntOp>(loc, i64Ty, rawPtr);
+    };
+    SmallVector<Value> localizedLoopBackParams;
+    localizedLoopBackParams.reserve(loopBackParams.size());
+    for (Value value : loopBackParams) {
+      auto depIt = llvm::find(advanceStateDeps, value);
+      if (depIt == advanceStateDeps.end()) {
+        localizedLoopBackParams.push_back(materializeAdvanceCarry(value));
+        continue;
+      }
+      unsigned depIndex = std::distance(advanceStateDeps.begin(), depIt);
+      localizedLoopBackParams.push_back(
+          materializeAdvanceCarry(advanceBlockBody.getArgument(depIndex)));
+    }
+    SmallVector<Value> nextParams = {stepI64, ubI64};
+    nextParams.append(localizedLoopBackParams.begin(),
+                      localizedLoopBackParams.end());
+    auto advance = advanceBuilder.create<CPSAdvanceOp>(
+        loc, nextParams, advanceBuilder.getStringAttr(chainId));
+    advance->setAttr(CPSAdditiveParams, builder.getUnitAttr());
+    advance->setAttr(CPSDirectRecreate, builder.getUnitAttr());
+    advance->setAttr(CPSNumCarry,
+                     builder.getI64IntegerAttr(loopBackParams.size()));
+    Region &advanceRegion = advance.getEpochBody();
+    if (advanceRegion.empty())
+      advanceRegion.emplaceBlock();
+    ensureYieldTerminator(advanceRegion.front(), loc);
+  }
 
   if (edtBlock.empty() || !edtBlock.back().hasTrait<OpTrait::IsTerminator>())
     edtBuilder.create<YieldOp>(loc);
@@ -1144,6 +1278,17 @@ static void cloneNonSlotArith(OpBuilder &builder, Block &body,
 static void ensureYieldTerminator(Block &block, Location loc) {
   if (block.empty() || !block.back().hasTrait<OpTrait::IsTerminator>())
     OpBuilder::atBlockEnd(&block).create<YieldOp>(loc);
+}
+
+/// Return the last payload op in `block`, or nullptr when the block contains
+/// no non-terminator ops yet.
+static Operation *getLastNonTerminatorOp(Block &block) {
+  if (block.empty())
+    return nullptr;
+
+  Operation *lastOp = &block.back();
+  return lastOp->hasTrait<OpTrait::IsTerminator>() ? lastOp->getPrevNode()
+                                                   : lastOp;
 }
 
 /// Emit the CPS advance logic for the last continuation: check loop bounds
@@ -1539,8 +1684,7 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
         rematerializeExternalDefs(contBuilder, seqOp, &body, contMapping);
         contBuilder.clone(*seqOp, contMapping);
       }
-      advanceSites.push_back(
-          {&contBlock, contBlock.getTerminator()->getPrevNode()});
+      advanceSites.push_back({&contBlock, getLastNonTerminatorOp(contBlock)});
     } else {
       /// Middle continuation: clone inter-epoch sequential ops,
       /// then set up epoch_{i+1} and nest cont_{i+1}.
@@ -1581,7 +1725,7 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
 
           Block &elseBlock = newIf.getElseRegion().front();
           advanceSites.push_back(
-              {&elseBlock, elseBlock.getTerminator()->getPrevNode()});
+              {&elseBlock, getLastNonTerminatorOp(elseBlock)});
 
           clonedIf.erase();
 
@@ -1590,7 +1734,7 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
         } else {
           Block &elseBlock = clonedIf.getElseRegion().front();
           advanceSites.push_back(
-              {&elseBlock, elseBlock.getTerminator()->getPrevNode()});
+              {&elseBlock, getLastNonTerminatorOp(elseBlock)});
 
           Block &thenBlock = clonedIf.getThenRegion().front();
           chainBuilder.setInsertionPoint(thenBlock.getTerminator());
@@ -1625,26 +1769,31 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
       op->erase();
   };
 
-  /// Seed loop-back params from the original loop body, not the continuation
-  /// EDT. The continuation may not use all captured values directly (e.g.,
-  /// values only used to compute other captured values), but we need to carry
-  /// them all to maintain the param pack contract.
+  /// Seed loop-back params from the actual continuation EDT pack contract so
+  /// CPS carry ordering stays aligned with EdtLowering. Falling back to the
+  /// original loop-body captures misses dependency metadata that EdtLowering
+  /// appends structurally (for example block/element-size carry needed to
+  /// rebuild dynamic memrefs), which can make direct-recreate relaunch packs
+  /// drift from the kickoff ABI.
   SmallVector<Value> loopBackParams;
   if (firstContinuation) {
-    llvm::SetVector<Value> originalCaptured;
-    llvm::SetVector<Value> parameters, constants, dbHandles;
-    getUsedValuesDefinedAbove(forOp.getRegion(), originalCaptured);
-    classifyEdtUserValues(originalCaptured.getArrayRef(), parameters, constants,
-                          dbHandles);
+    loopBackParams = collectCurrentEdtPackedUserValues(firstContinuation);
+    if (loopBackParams.empty()) {
+      llvm::SetVector<Value> originalCaptured;
+      llvm::SetVector<Value> parameters, constants, dbHandles;
+      getUsedValuesDefinedAbove(forOp.getRegion(), originalCaptured);
+      classifyEdtUserValues(originalCaptured.getArrayRef(), parameters,
+                            constants, dbHandles);
 
-    loopBackParams.reserve(originalCaptured.size());
-    for (Value param : parameters) {
-      if (auto *defOp = param.getDefiningOp())
-        if (defOp->getName().getStringRef() == "llvm.mlir.undef")
-          continue;
-      loopBackParams.push_back(param);
+      loopBackParams.reserve(originalCaptured.size());
+      for (Value param : parameters) {
+        if (auto *defOp = param.getDefiningOp())
+          if (defOp->getName().getStringRef() == "llvm.mlir.undef")
+            continue;
+        loopBackParams.push_back(param);
+      }
+      loopBackParams.append(dbHandles.begin(), dbHandles.end());
     }
-    loopBackParams.append(dbHandles.begin(), dbHandles.end());
   }
 
   /// =======================================================================
@@ -2234,6 +2383,10 @@ static bool tryCPSChainTransform(scf::ForOp forOp,
         ARTS_INFO("CPS Chain: dep-routed carry changed after re-analysis; "
                   << "preserving original loop-back contract");
       }
+      setDepRoutingAttrForCarry(loopBackParams);
+    } else if (!sameValueSequence(reorderedCarry, loopBackParams)) {
+      ARTS_INFO("CPS Chain: carry re-analysis changed order; preserving "
+                << "original kickoff carry contract");
       setDepRoutingAttrForCarry(loopBackParams);
     } else if (reorderedCarry.size() != loopBackParams.size()) {
       ARTS_INFO("CPS Chain: carry re-analysis changed arity from "
