@@ -7,11 +7,11 @@
 
 #define GEN_PASS_DEF_EPOCHOPT
 
-#include "EpochOptInternal.h"
 #include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
+#include "arts/passes/opt/epoch/EpochOptInternal.h"
 #include "arts/utils/Debug.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/Statistic.h"

@@ -4,7 +4,7 @@
 /// Shared local helpers for the split EpochOpt implementation.
 ///==========================================================================///
 
-#include "EpochOptInternal.h"
+#include "arts/passes/opt/epoch/EpochOptInternal.h"
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -215,8 +215,7 @@ void emitAdvanceLogic(OpBuilder &builder, Location loc, Value iv,
 
 void markAsContinuation(EdtOp edt, OpBuilder &builder, unsigned chainIdx) {
   std::string chainId = makeContinuationChainId(chainIdx);
-  edt->setAttr(ControlDep,
-               builder.getIntegerAttr(builder.getI32Type(), 1));
+  edt->setAttr(ControlDep, builder.getIntegerAttr(builder.getI32Type(), 1));
   edt->setAttr(ContinuationForEpoch, builder.getUnitAttr());
   edt->setAttr(CPSChainId, builder.getStringAttr(chainId));
   edt->setAttr(CPSLoopContinuation, builder.getUnitAttr());
@@ -251,10 +250,9 @@ void copyNormalizedPlanAttrs(Operation *source, Operation *dest,
   copyPlanAttrs(source, dest);
   if (!source->hasAttr(AsyncStrategy))
     return;
-  dest->setAttr(
-      AsyncStrategy,
-      StringAttr::get(dest->getContext(),
-                      asyncLoopStrategyToPlanAttrString(strategy)));
+  dest->setAttr(AsyncStrategy,
+                StringAttr::get(dest->getContext(),
+                                asyncLoopStrategyToPlanAttrString(strategy)));
 }
 
 } // namespace mlir::arts::epoch_opt

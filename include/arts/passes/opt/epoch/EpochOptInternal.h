@@ -31,13 +31,13 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "polygeist/Ops.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
-#include "polygeist/Ops.h"
 #include <climits>
 #include <optional>
 #include <string>
@@ -57,8 +57,8 @@ bool loopContainsCpsDriverExcludedDepPattern(scf::ForOp forOp);
 std::string makeAsyncLoopChainId(Operation *op);
 std::string makeContinuationChainId(unsigned chainIdx);
 
-using AttrNames::Operation::ControlDep;
 using AttrNames::Operation::ContinuationForEpoch;
+using AttrNames::Operation::ControlDep;
 using AttrNames::Operation::CPSAdditiveParams;
 using AttrNames::Operation::CPSAdvanceHasIvArg;
 using AttrNames::Operation::CPSChainId;
@@ -100,10 +100,8 @@ bool tryAmortizeRepeatedEpochLoop(EpochOp epochOp);
 LogicalResult
 transformToContinuation(EpochOp epochOp,
                         const EpochContinuationDecision &decision);
-bool tryCPSLoopTransform(scf::ForOp forOp,
-                         const EpochAnalysis &epochAnalysis);
-bool tryCPSChainTransform(scf::ForOp forOp,
-                          const EpochAnalysis &epochAnalysis);
+bool tryCPSLoopTransform(scf::ForOp forOp, const EpochAnalysis &epochAnalysis);
+bool tryCPSChainTransform(scf::ForOp forOp, const EpochAnalysis &epochAnalysis);
 
 } // namespace mlir::arts::epoch_opt
 

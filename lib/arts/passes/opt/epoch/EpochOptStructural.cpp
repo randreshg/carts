@@ -4,7 +4,7 @@
 /// Structural and local scheduling transforms used by EpochOpt.
 ///==========================================================================///
 
-#include "EpochOptInternal.h"
+#include "arts/passes/opt/epoch/EpochOptInternal.h"
 #include "arts/utils/Debug.h"
 
 ARTS_DEBUG_SETUP(epoch_opt);

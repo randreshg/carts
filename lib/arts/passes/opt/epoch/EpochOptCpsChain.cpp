@@ -4,7 +4,7 @@
 /// CPS-chain epoch loop transform used by EpochOpt.
 ///==========================================================================///
 
-#include "EpochOptInternal.h"
+#include "arts/passes/opt/epoch/EpochOptInternal.h"
 #include "arts/utils/Debug.h"
 
 ARTS_DEBUG_SETUP(epoch_opt);
@@ -503,7 +503,8 @@ bool tryCPSChainTransform(scf::ForOp forOp,
 
         SmallVector<std::pair<Value, Value>> guidArrayLayout;
         for (auto &[guidValue, info] : dataGuids) {
-          Value count = preEpochBuilder.create<DbNumElementsOp>(loc, info.alloc);
+          Value count =
+              preEpochBuilder.create<DbNumElementsOp>(loc, info.alloc);
           guidArrayLayout.push_back({totalGuidSlots, count});
           totalGuidSlots =
               preEpochBuilder.create<arith::AddIOp>(loc, totalGuidSlots, count);
@@ -712,11 +713,11 @@ bool tryCPSChainTransform(scf::ForOp forOp,
         Operation *owner = use.getOwner();
         if (!contEdt->isAncestor(owner))
           return false;
-        for (Operation *parent = owner; parent && parent != contEdt.getOperation();
+        for (Operation *parent = owner;
+             parent && parent != contEdt.getOperation();
              parent = parent->getParentOp()) {
           if (auto edtParent = dyn_cast<EdtOp>(parent)) {
-            if (edtParent != contEdt &&
-                edtParent->hasAttr(CPSLoopContinuation))
+            if (edtParent != contEdt && edtParent->hasAttr(CPSLoopContinuation))
               return false;
           }
         }
@@ -912,7 +913,8 @@ bool tryCPSChainTransform(scf::ForOp forOp,
       });
     };
 
-    SmallVector<Value> reorderedCarry = collectEdtPackedValues(firstContinuation);
+    SmallVector<Value> reorderedCarry =
+        collectEdtPackedValues(firstContinuation);
 
     ARTS_INFO("CPS Chain: Re-analyzed chain_0 captures — "
               << reorderedCarry.size() << " carry params");
@@ -1036,8 +1038,8 @@ bool tryCPSChainTransform(scf::ForOp forOp,
     afterEpoch.create<DbFreeOp>(loc, scratchAlloc.getPtr());
   }
 
-  ARTS_INFO("CPS Chain: Transformed "
-            << slotCount << "-epoch loop into continuation chain");
+  ARTS_INFO("CPS Chain: Transformed " << slotCount
+                                      << "-epoch loop into continuation chain");
   return true;
 }
 
