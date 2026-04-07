@@ -372,6 +372,26 @@ normalizeCommonElementSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   return slice;
 }
 
+/// Split launch-state dep_bind currently records one representative GUID per
+/// dependency family. Load the first element using the storage rank instead of
+/// assuming a rank-0/1 GUID holder.
+static Value loadRepresentativeGuidScalar(ArtsCodegen *AC, Location loc,
+                                          Value guidStorage) {
+  if (!AC || !guidStorage)
+    return {};
+
+  auto guidType = dyn_cast<MemRefType>(guidStorage.getType());
+  if (!guidType)
+    return {};
+
+  SmallVector<Value, 4> zeroIndices;
+  zeroIndices.reserve(guidType.getRank());
+  for (int64_t i = 0; i < guidType.getRank(); ++i)
+    zeroIndices.push_back(AC->createIndexConstant(0, loc));
+
+  return AC->create<memref::LoadOp>(loc, guidStorage, zeroIndices);
+}
+
 struct DepSourceInfo {
   DbAcquireOp dbAcquire;
   DepDbAcquireOp depDbAcquire;
@@ -698,11 +718,12 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
       auto acquire = dep.getDefiningOp<DbAcquireOp>();
       if (!acquire)
         continue;
-      Value guidMemref = acquire.getSourceGuid();
+      Value guidMemref = acquire.getGuid();
       if (!guidMemref)
         continue;
-      Value guidScalar =
-          AC->create<memref::LoadOp>(loc, guidMemref, ValueRange{});
+      Value guidScalar = loadRepresentativeGuidScalar(AC, loc, guidMemref);
+      if (!guidScalar)
+        continue;
       Value modeVal = AC->createIntConstant(
           static_cast<int64_t>(acquire.getMode()), AC->Int64, loc);
       AC->create<DepBindOp>(loc, guidScalar, modeVal);
@@ -764,11 +785,11 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   if (auto familyAttr = edtOp->getAttrOfType<StringAttr>(
           AttrNames::Operation::Plan::KernelFamily))
     outlineOp->setAttr(AttrNames::Operation::Plan::KernelFamily, familyAttr);
-  if (auto stateSchema = edtOp->getAttrOfType<StringAttr>(
+  if (auto stateSchema = edtOp->getAttrOfType<DenseI64ArrayAttr>(
           AttrNames::Operation::LaunchState::StateSchema))
     outlineOp->setAttr(AttrNames::Operation::LaunchState::StateSchema,
                        stateSchema);
-  if (auto depSchema = edtOp->getAttrOfType<StringAttr>(
+  if (auto depSchema = edtOp->getAttrOfType<DenseI64ArrayAttr>(
           AttrNames::Operation::LaunchState::DepSchema))
     outlineOp->setAttr(AttrNames::Operation::LaunchState::DepSchema, depSchema);
 
