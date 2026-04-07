@@ -613,8 +613,7 @@ EpochHeuristics::evaluateAsyncLoopStrategy(scf::ForOp forOp) {
   if (decision.hasSequentialSidecars) {
     decision.strategy = EpochAsyncLoopStrategy::CpsChain;
     if (decision.hasInterEpochSidecars)
-      decision.rationale =
-          "loop has sequential sidecars between epoch slots";
+      decision.rationale = "loop has sequential sidecars between epoch slots";
     else if (decision.hasTailSidecars)
       decision.rationale =
           "loop has sequential tail state that needs inner continuation";

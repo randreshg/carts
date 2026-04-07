@@ -55,9 +55,8 @@ DbStencilIndexer::DbStencilIndexer(const PartitionInfo &info, Value haloLeft,
       elemOffset(info.offsets.empty() ? Value() : info.offsets.front()),
       haloLeft(haloLeft), haloRight(haloRight),
       blockSize(info.sizes.empty() ? Value() : info.sizes.front()),
-      leftAvail(leftAvail), rightAvail(rightAvail),
-      ownedArg(ownedArg), leftHaloArg(leftHaloArg), rightHaloArg(rightHaloArg) {
-}
+      leftAvail(leftAvail), rightAvail(rightAvail), ownedArg(ownedArg),
+      leftHaloArg(leftHaloArg), rightHaloArg(rightHaloArg) {}
 
 ///===----------------------------------------------------------------------===///
 /// Helper: Clamp index to valid bounds
@@ -302,12 +301,12 @@ static RowSelection buildSelection(OpBuilder &selBuilder, Location selLoc,
       selBuilder, selLoc, arith::CmpIPredicate::sge, localRowVal, ownedRows);
   Value falseI1 = arith::ConstantIntOp::create(selBuilder, selLoc, 0, 1);
   Value trueI1 = arith::ConstantIntOp::create(selBuilder, selLoc, 1, 1);
-  Value leftAvail = ctx.leftAvail ? ctx.leftAvail
-                                  : (ctx.leftPtrNotNull ? ctx.leftPtrNotNull
-                                                        : falseI1);
-  Value rightAvail = ctx.rightAvail ? ctx.rightAvail
-                                    : (ctx.rightPtrNotNull ? ctx.rightPtrNotNull
-                                                           : falseI1);
+  Value leftAvail = ctx.leftAvail
+                        ? ctx.leftAvail
+                        : (ctx.leftPtrNotNull ? ctx.leftPtrNotNull : falseI1);
+  Value rightAvail =
+      ctx.rightAvail ? ctx.rightAvail
+                     : (ctx.rightPtrNotNull ? ctx.rightPtrNotNull : falseI1);
   Value leftIdx =
       arith::AddIOp::create(selBuilder, selLoc, localRowVal, ctx.haloLeft);
   Value ownedIdx = clampIndex(localRowVal, ownedMemrefRows, selBuilder, selLoc);
@@ -347,8 +346,7 @@ static RowSelection buildSelection(OpBuilder &selBuilder, Location selLoc,
   if (ctx.leftMemref) {
     Value safeLeftMemref =
         selectValue(leftAvail, ctx.leftMemref, ctx.ownedMemref);
-    Value safeLeftIdx =
-        selectValue(leftAvail, clampedLeftIdx, clampedOwnedIdx);
+    Value safeLeftIdx = selectValue(leftAvail, clampedLeftIdx, clampedOwnedIdx);
     selectedMemref = selectValue(isLeft, safeLeftMemref, selectedMemref);
     selectedRowIdx = selectValue(isLeft, safeLeftIdx, selectedRowIdx);
   }
@@ -1159,21 +1157,11 @@ void DbStencilIndexer::transformDbRefUsers(
              << ", right=" << (rightMemref ? "yes" : "no"));
 
   /// Build shared context for helper functions.
-  StencilRewriteContext ctx{ref,
-                            partitionInfo,
-                            elemOffset,
-                            haloLeft,
-                            haloRight,
-                            blockSize,
-                            zero,
-                            newElementType,
-                            ownedMemref,
-                            leftMemref,
-                            rightMemref,
-                            leftAvail,
-                            rightAvail,
-                            leftPtrNotNull,
-                            rightPtrNotNull,
+  StencilRewriteContext ctx{ref,        partitionInfo,  elemOffset,
+                            haloLeft,   haloRight,      blockSize,
+                            zero,       newElementType, ownedMemref,
+                            leftMemref, rightMemref,    leftAvail,
+                            rightAvail, leftPtrNotNull, rightPtrNotNull,
                             opsToRemove};
 
   /// Try row-loop versioning first (splits loop into Left/Middle/Right).

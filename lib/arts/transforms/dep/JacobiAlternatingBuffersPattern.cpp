@@ -49,8 +49,8 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/IR/IntegerSet.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/IntegerSet.h"
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -235,10 +235,10 @@ static bool extractAffineLinearForm(AffineExpr expr, ArrayRef<Value> dims,
 static bool proveLinearPredicateAlwaysTrue(arith::CmpIPredicate pred,
                                            int64_t coeff, int64_t constant,
                                            int64_t first, int64_t last) {
-  int64_t minValue = coeff >= 0 ? coeff * first + constant
-                                : coeff * last + constant;
-  int64_t maxValue = coeff >= 0 ? coeff * last + constant
-                                : coeff * first + constant;
+  int64_t minValue =
+      coeff >= 0 ? coeff * first + constant : coeff * last + constant;
+  int64_t maxValue =
+      coeff >= 0 ? coeff * last + constant : coeff * first + constant;
 
   switch (pred) {
   case arith::CmpIPredicate::eq:
@@ -266,8 +266,8 @@ static bool isGuardConditionAlwaysTrue(Value condition, scf::ForOp timeLoop) {
   if (!loopRange)
     return false;
 
-  auto cmp = ValueAnalysis::stripNumericCasts(condition).getDefiningOp<
-      arith::CmpIOp>();
+  auto cmp = ValueAnalysis::stripNumericCasts(condition)
+                 .getDefiningOp<arith::CmpIOp>();
   if (!cmp)
     return false;
 
@@ -278,8 +278,7 @@ static bool isGuardConditionAlwaysTrue(Value condition, scf::ForOp timeLoop) {
                          rhsConst))
     return false;
 
-  return proveLinearPredicateAlwaysTrue(cmp.getPredicate(),
-                                        lhsCoeff - rhsCoeff,
+  return proveLinearPredicateAlwaysTrue(cmp.getPredicate(), lhsCoeff - rhsCoeff,
                                         lhsConst - rhsConst, loopRange->first,
                                         loopRange->second);
 }
@@ -296,7 +295,8 @@ static bool isAffineIfAlwaysTrue(affine::AffineIfOp ifOp, scf::ForOp timeLoop) {
   SmallVector<Value, 4> operands(ifOp.getOperands().begin(),
                                  ifOp.getOperands().end());
   ArrayRef<Value> dims(operands.data(), set.getNumDims());
-  ArrayRef<Value> symbols = ArrayRef<Value>(operands).drop_front(set.getNumDims());
+  ArrayRef<Value> symbols =
+      ArrayRef<Value>(operands).drop_front(set.getNumDims());
 
   for (unsigned i = 0; i < set.getNumConstraints(); ++i) {
     int64_t coeff = 0;

@@ -700,8 +700,7 @@ public:
                         .value_or(revision));
     } else if (matchResult.parentEdt) {
       if (auto existing = getDepPattern(matchResult.parentEdt.getOperation());
-          existing &&
-          *existing == ArtsDepPattern::jacobi_alternating_buffers) {
+          existing && *existing == ArtsDepPattern::jacobi_alternating_buffers) {
         family = *existing;
         revision = std::max<int64_t>(
             revision, getPatternRevision(matchResult.parentEdt.getOperation())

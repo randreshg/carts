@@ -82,9 +82,9 @@ static void compute_reference_pair(float *input, float *output, uint32_t n) {
   for (uint32_t i = 1; i + 1 < n; ++i) {
     for (uint32_t j = 1; j + 1 < n; ++j) {
       output[i * n + j] =
-          0.2f * (input[i * n + j] + input[(i - 1) * n + j] +
-                  input[(i + 1) * n + j] + input[i * n + (j - 1)] +
-                  input[i * n + (j + 1)]);
+          0.2f *
+          (input[i * n + j] + input[(i - 1) * n + j] + input[(i + 1) * n + j] +
+           input[i * n + (j - 1)] + input[i * n + (j + 1)]);
     }
   }
 }
@@ -146,16 +146,14 @@ static inline void jacobi_row_core(const float *restrict up,
   out[0] = row[0];
 #pragma GCC ivdep
   for (uint32_t j = 1; j + 1 < n; ++j) {
-    out[j] =
-        0.2f * (row[j] + up[j] + down[j] + row[j - 1] + row[j + 1]);
+    out[j] = 0.2f * (row[j] + up[j] + down[j] + row[j - 1] + row[j + 1]);
   }
   out[n - 1] = row[n - 1];
 }
 
 static void jacobi_strip_kernel(const float *center, const float *top_halo,
                                 const float *bottom_halo, float *out,
-                                uint32_t start_row, uint32_t rows,
-                                uint32_t n) {
+                                uint32_t start_row, uint32_t rows, uint32_t n) {
   if (rows == 0)
     return;
 
@@ -179,8 +177,8 @@ static void jacobi_strip_kernel(const float *center, const float *top_halo,
     first_row = 1;
   }
   if (start_row + rows == n) {
-    preserve_row(center + (size_t)(rows - 1) * n,
-                 out + (size_t)(rows - 1) * n, n);
+    preserve_row(center + (size_t)(rows - 1) * n, out + (size_t)(rows - 1) * n,
+                 n);
     last_row_exclusive = rows - 1;
   }
   if (first_row >= last_row_exclusive)
@@ -242,8 +240,7 @@ static void jacobi_strip_edt(uint32_t paramc, const uint64_t *paramv,
 }
 
 static void launch_strip_wave(arts_guid_t epoch_guid, arts_guid_t *input_guids,
-                              arts_guid_t *output_guids,
-                              const state_t *state) {
+                              arts_guid_t *output_guids, const state_t *state) {
   const uint64_t halo_bytes = (uint64_t)state->n * sizeof(float);
 
   for (uint32_t strip = 0; strip < state->num_strips; ++strip) {
@@ -260,8 +257,8 @@ static void launch_strip_wave(arts_guid_t epoch_guid, arts_guid_t *input_guids,
 
     if (strip > 0) {
       uint64_t prev_rows = state->strip_rows[strip - 1];
-      uint64_t top_offset = (prev_rows - 1) * (uint64_t)state->n *
-                            sizeof(float);
+      uint64_t top_offset =
+          (prev_rows - 1) * (uint64_t)state->n * sizeof(float);
       arts_add_dependence_at(input_guids[strip - 1], edt, 1, DB_MODE_RO,
                              top_offset, halo_bytes);
     } else {
