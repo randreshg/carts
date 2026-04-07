@@ -58,10 +58,6 @@ using namespace mlir::arts::convert_arts_to_llvm;
 
 namespace mlir::arts::convert_arts_to_llvm {
 
-DbAllocOp getAllocOpFromGuid(Value dbGuid) {
-  return DbUtils::getAllocOpFromGuid(dbGuid);
-}
-
 SmallVector<Value, 4>
 materializeStaticDbOuterShape(Value handle, ArtsCodegen *AC, Location loc) {
   SmallVector<Value, 4> sizes;
@@ -96,7 +92,7 @@ SmallVector<Value, 4> resolveOuterSizesForGuid(Value dbGuid, ArtsCodegen *AC,
                                                Location loc) {
   SmallVector<Value, 4> sizes;
 
-  if (auto allocOp = getAllocOpFromGuid(dbGuid)) {
+  if (auto allocOp = DbUtils::getAllocOpFromGuid(dbGuid)) {
     sizes.assign(allocOp.getSizes().begin(), allocOp.getSizes().end());
     return sizes;
   }
@@ -554,7 +550,7 @@ private:
     if (!boundsValid)
       return nullptr;
 
-    DbAllocOp allocOp = getAllocOpFromGuid(dbGuid);
+    DbAllocOp allocOp = DbUtils::getAllocOpFromGuid(dbGuid);
 
     if (allocOp && !allocOp.getSizes().empty())
       return AC->computeTotalElements(allocOp.getSizes(), allocOp.getLoc());

@@ -227,14 +227,6 @@ bool continuationCreatesNestedAsyncWork(EdtOp contEdt) {
   return createsNestedAsyncWork;
 }
 
-DbAllocOp traceToDbAlloc(Value v) {
-  return dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(v));
-}
-
-int64_t computeStaticPartitionCount(DbAllocOp alloc) {
-  return DbUtils::computeStaticPartitionCount(alloc);
-}
-
 bool isDbRefCast(Operation *defOp) {
   if (isa<DbRefOp>(defOp))
     return true;
@@ -457,7 +449,7 @@ bool tryCPSChainTransform(scf::ForOp forOp,
       if (auto *defOp = v.getDefiningOp()) {
         if (auto dbAlloc = dyn_cast<DbAllocOp>(defOp)) {
           bool isGuid = (v == dbAlloc.getGuid());
-          int64_t partCount = computeStaticPartitionCount(dbAlloc);
+          int64_t partCount = DbUtils::computeStaticPartitionCount(dbAlloc);
           if (partCount == 1) {
             timingDbs.push_back({v, {dbAlloc, isGuid}});
           } else if (isGuid) {
@@ -468,7 +460,10 @@ bool tryCPSChainTransform(scf::ForOp forOp,
           continue;
         }
         if (isDbRefCast(defOp)) {
-          timingDbs.push_back({v, {traceToDbAlloc(v), false}});
+          timingDbs.push_back(
+              {v,
+               {dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(v)),
+                false}});
           continue;
         }
       }

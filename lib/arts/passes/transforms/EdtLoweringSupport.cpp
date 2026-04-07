@@ -335,12 +335,4 @@ Operation *getCanonicalDependencySource(Value dep) {
   return nullptr;
 }
 
-///===----------------------------------------------------------------------===///
-/// getStaticDbOuterShape
-///===----------------------------------------------------------------------===///
-
-std::optional<SmallVector<int64_t, 4>> getStaticDbOuterShape(Value dbHandle) {
-  return DbUtils::getStaticDbOuterShape(dbHandle);
-}
-
 } // namespace mlir::arts::edt_lowering
