@@ -295,7 +295,8 @@ SmallVector<Value> collectEdtPackedValues(EdtOp edt) {
     for (Value partSize : dbAcquireOp.getPartitionSizes())
       appendIfMissing(partSize);
 
-    if (auto *rawAlloc = DbUtils::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()))
+    if (auto *rawAlloc =
+            DbUtils::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()))
       if (auto alloc = dyn_cast<DbAllocOp>(rawAlloc))
         for (Value elemSz : alloc.getElementSizes())
           appendIfMissing(elemSz);

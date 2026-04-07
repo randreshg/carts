@@ -9,8 +9,8 @@
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/heuristics/HeuristicUtils.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
-#include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/LoopUtils.h"
+#include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/PatternSemantics.h"
 #include <algorithm>
@@ -243,8 +243,8 @@ DistributionHeuristics::evaluateStencilStripCostModel(
   /// As each worker already owns a wider outer strip, require proportionally
   /// more amortization pressure before reducing worker count again. This keeps
   /// the policy monotone without a hard large-strip cutoff.
-  int64_t amortizationStride = kAmortizationPressureStride +
-                               ownedSpanScore * kOwnedSpanStridePenalty;
+  int64_t amortizationStride =
+      kAmortizationPressureStride + ownedSpanScore * kOwnedSpanStridePenalty;
   int64_t amortizationMultiplier = 1;
   if (stencilPressureScore >= amortizationStride) {
     /// Only coarsen once the pressure clears a full stride. Using ceil() here
@@ -252,8 +252,8 @@ DistributionHeuristics::evaluateStencilStripCostModel(
     /// strand a large fraction of the machine on long-running stencil loops.
     amortizationMultiplier += stencilPressureScore / amortizationStride;
   }
-  amortizationMultiplier = clampPositive(amortizationMultiplier, 1,
-                                         kMaxAmortizationMultiplier);
+  amortizationMultiplier =
+      clampPositive(amortizationMultiplier, 1, kMaxAmortizationMultiplier);
 
   int64_t targetOwnedCells =
       saturatingMulPositive(baselineOwnedCells, amortizationMultiplier);
@@ -356,8 +356,7 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
     /// an explicit halo/ownership contract. Pure dep-pattern classification is
     /// too coarse and can under-distribute neighborhood kernels like
     /// convolution that do not need stencil halo amortization.
-    canUseStencilStripCoarsening =
-        loopContract.hasExplicitStencilContract();
+    canUseStencilStripCoarsening = loopContract.hasExplicitStencilContract();
   }
   if (auto summary =
           loopAnalysis.getLoopDbAccessSummary(forOp.getOperation())) {

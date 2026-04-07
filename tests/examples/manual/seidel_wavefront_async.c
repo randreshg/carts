@@ -127,9 +127,8 @@ static void iter_edt(uint32_t paramc, const uint64_t *paramv, uint32_t depc,
     fail_example("iter EDT missing state payload");
 
   void *next_state_ptr = NULL;
-  arts_guid_t next_state_guid =
-      arts_db_create(&next_state_ptr, sizeof(seidel_state_t), ARTS_DB_DEFAULT,
-                     NULL);
+  arts_guid_t next_state_guid = arts_db_create(
+      &next_state_ptr, sizeof(seidel_state_t), ARTS_DB_DEFAULT, NULL);
   seidel_state_t *next_state = (seidel_state_t *)next_state_ptr;
   memset(next_state, 0, sizeof(*next_state));
   next_state->iter = iter + 1;
@@ -145,13 +144,12 @@ static void iter_edt(uint32_t paramc, const uint64_t *paramv, uint32_t depc,
   }
 
   uint64_t advance_param = iter;
-  arts_guid_t advance_guid = arts_edt_create(advance_edt, 1, &advance_param, 2,
-                                             NULL);
+  arts_guid_t advance_guid =
+      arts_edt_create(advance_edt, 1, &advance_param, 2, NULL);
   arts_guid_t outer_epoch = arts_initialize_and_start_epoch(advance_guid, 0);
 
-  arts_guid_t inner_cont =
-      arts_edt_create_with_epoch(inner_cont_edt, 0, NULL, NUM_BLOCKS + 2,
-                                 outer_epoch, NULL);
+  arts_guid_t inner_cont = arts_edt_create_with_epoch(
+      inner_cont_edt, 0, NULL, NUM_BLOCKS + 2, outer_epoch, NULL);
   arts_guid_t inner_epoch =
       arts_initialize_and_start_epoch(inner_cont, NUM_BLOCKS + 1);
 
@@ -195,8 +193,7 @@ static void finish_edt(uint32_t paramc, const uint64_t *paramv, uint32_t depc,
   if (!state)
     fail_example("finish missing final state");
 
-  arts_printf("seidel_wavefront_async completed %u iterations\n",
-              state->iter);
+  arts_printf("seidel_wavefront_async completed %u iterations\n", state->iter);
   for (uint32_t block = 0; block < NUM_BLOCKS; ++block) {
     int *data = (int *)depv[block + 1].ptr;
     if (!data)

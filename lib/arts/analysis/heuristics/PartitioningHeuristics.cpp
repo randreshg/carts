@@ -34,8 +34,8 @@ static bool hasJacobiLikeStencilContract(const PartitioningContext &ctx) {
   });
 }
 
-static bool hasNonLeadingOrMultiDimOwnerContract(
-    const PartitioningContext &ctx) {
+static bool
+hasNonLeadingOrMultiDimOwnerContract(const PartitioningContext &ctx) {
   return llvm::any_of(ctx.acquires, [](const AcquireInfo &info) {
     if (!info.hasDistributionContract || !info.canBlock ||
         info.ownerDimsCount == 0)
@@ -96,8 +96,7 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
         });
   }
   bool hasJacobiStencil = hasJacobiLikeStencilContract(ctx);
-  bool hasNonLeadingOwnerContract =
-      hasNonLeadingOrMultiDimOwnerContract(ctx);
+  bool hasNonLeadingOwnerContract = hasNonLeadingOrMultiDimOwnerContract(ctx);
   bool preserveReadOnlyStencilOwnership =
       hasNonLeadingOwnerContract || ctx.memrefRank == 1 || ctx.memrefRank >= 3;
 
@@ -159,8 +158,8 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// on a single node once every block-capable acquire widened to full-range;
   /// at that point the contract no longer buys locality for read-only inputs.
   bool preserveStencilBlockForReadOnlyFullRange =
-      (patterns.hasStencil || hasTrustedStencilAcquire) && !patterns.hasIndexed &&
-      preserveReadOnlyStencilOwnership;
+      (patterns.hasStencil || hasTrustedStencilAcquire) &&
+      !patterns.hasIndexed && preserveReadOnlyStencilOwnership;
   bool preserveBlockForReadOnlyFullRange =
       ctx.canBlock &&
       (!isSingleNode || preserveStencilBlockForReadOnlyFullRange);
@@ -211,10 +210,9 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
     }
     ARTS_DEBUG("H1.C4 applied: Read-only same-dimension stencil on "
                "single-node -> coarse");
-    return PartitioningDecision::coarse(ctx,
-                                        "H1.C4: Read-only same-dimension "
-                                        "stencil on single-node prefers "
-                                        "coarse");
+    return PartitioningDecision::coarse(ctx, "H1.C4: Read-only same-dimension "
+                                             "stencil on single-node prefers "
+                                             "coarse");
   } else if (patterns.hasStencil && isSingleNode && isReadOnly &&
              (ctx.canBlock || ctx.hasDistributedBlockContract())) {
     ARTS_DEBUG("H1.C4 skipped: explicit Jacobi/cross-dim/full-range stencil "

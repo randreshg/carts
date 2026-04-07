@@ -392,6 +392,216 @@ Files likely involved:
 - `docs/compiler/`
 - benchmark runner policy / regression docs
 
+Primary deliverables:
+
+1. a dedicated structured-kernel contract matrix
+2. benchmark experiment subsets for structured winners and non-structured
+   regressions
+3. perf-gate policies that distinguish required gates from advisory tracking
+
+#### E.1 Contract gate layout
+
+The contract gate should be split into required classes so each new
+architecture surface has a direct regression owner.
+
+1. `structured_plan_*`
+   - plan creation on regular kernels
+   - plan rejection on irregular kernels
+   - pass-boundary preservation from plan creation through pre-lowering
+2. `state_dep_schema_*`
+   - state/deps split remains stable through CPS and non-CPS lowering
+   - launch-state ordering does not depend on positional pack archaeology
+   - forwarded dep slots remain aligned with relaunch ABI
+3. `ownership_proof_*`
+   - owner dims, worker-local slices, halo legality, and widening decisions
+   - verifier rejects inconsistent proof states
+   - proof-preserving passes cannot silently drop required facts
+4. `persistent_region_*`
+   - persistent structured region legality
+   - explicit fallback when proof or cost gates fail
+   - no persistence for nested / irregular / unsafe loop shapes
+5. `structured_fallback_*`
+   - same input shape compiles through the generic path when the structured
+     path is disabled or rejected
+   - ensures new fast paths never become correctness-critical
+
+Initial benchmark-shaped contract coverage should include:
+
+- `jacobi2d`-like timestep strip stencil
+- `seidel-2d`-like wavefront / split-phase halo case
+- `convolution-2d`-like neighborhood window
+- `rhs4sg` / `vel4sg`-like blocked neighborhood ownership
+- one deliberately irregular negative case that must not produce a structured
+  plan
+
+#### E.2 New contract tests to add
+
+Minimum new required tests:
+
+1. plan synthesis / rejection
+   - structured plan emitted for regular stencil/timestep kernel
+   - structured plan rejected for mixed-indirect or non-affine kernel
+2. plan preservation
+   - plan survives `edt-distribution`
+   - plan survives `db-partitioning`
+   - plan survives `post-db-refinement`
+3. split launch schema
+   - CPS relaunch consumes explicit state/deps schema
+   - non-CPS structured launch uses the same schema surface
+   - verifier rejects state/deps width mismatch
+4. ownership proof
+   - verifier rejects impossible owner-dim / halo combination
+   - verifier rejects block-local read when proof requires full-range
+   - verifier accepts exact owner-local reachability without widening
+5. persistent-region legality
+   - legal positive case
+   - proof failure fallback case
+   - cost-gate fallback case
+6. regression guards
+   - disabling structured-kernel mode preserves old generic lowering
+   - structured path does not change non-structured kernels' key contracts
+
+The rule for new fast paths should be: every positive structured-path test must
+have a paired fallback or reject test using the same family of IR shape.
+
+#### E.3 Benchmark gate tiers
+
+Use existing benchmark-runner experiments and perf-gate policy machinery rather
+than a separate gating stack.
+
+Tier 0: required correctness / compile gate
+
+- run focused `tests/contracts/` lit coverage for all new plan/schema/proof
+  tests
+- no performance assertions here, only semantic and verifier stability
+
+Tier 1: required structured-kernel performance gate
+
+- add one experiment config for a structured stable subset
+- target kernels:
+  - `polybench/jacobi2d`
+  - `polybench/seidel-2d`
+  - `polybench/convolution-2d`
+  - `sw4lite/rhs4sg-base`
+  - `sw4lite/vel4sg-base`
+  - `specfem3d/velocity` and/or `specfem3d/stress` as advisory until stable
+- default size: `large`
+- default single-node thread profile: local full-thread point plus a short
+  sweep (`1, full`)
+
+Tier 2: required non-structured regression gate
+
+- add one experiment config for benchmarks that should not depend on the new
+  architecture but are sensitive to runtime overhead changes
+- target kernels:
+  - `polybench/gemm`
+  - `polybench/2mm`
+  - `polybench/3mm`
+  - `polybench/atax`
+  - `polybench/bicg`
+  - `ml-kernels/layernorm`
+  - `ml-kernels/activations`
+  - `stream`
+- purpose:
+  - catch scheduler / launch overhead regressions
+  - catch accidental structured-path activation where it should not occur
+
+Tier 3: advisory broad-suite gate
+
+- full single-node large suite
+- multinode structured subset once structured ownership is stable
+- this should inform rollout decisions but should not block early architectural
+  landing until the stable subsets are trustworthy
+
+#### E.4 Perf-gate policy split
+
+Add separate policy files instead of one monolithic threshold list:
+
+1. `structured-kernel-required.json`
+   - required entries for the Tier 1 subset
+   - benchmark-specific baselines are allowed only as measurement baselines,
+     not as compile-time decision thresholds
+2. `nonstructured-regression-required.json`
+   - required entries for Tier 2
+   - wider tolerances, focused on "do not get worse"
+3. `structured-kernel-advisory.json`
+   - larger and/or noisier cases tracked for trend visibility
+
+Policy semantics should stay aligned with the current perf-gate model:
+
+- require success
+- require correctness
+- cap startup outliers
+- use `baseline_speedup` plus tolerance or direct `min_speedup`
+- allow `required: false` only in advisory policies
+
+#### E.5 Counter-based regression checks
+
+Time-only gates are not enough for this architecture. Structured-kernel
+improvements should also be validated against runtime-shape counters already
+reported by the benchmark tooling.
+
+Required tracked metrics:
+
+- `num_edts_created`
+- `num_edts_finished`
+- `num_dbs_created`
+- task throughput / average task time derived by the report tooling
+
+Add advisory counter expectations for structured winners:
+
+1. no increase in `num_edts_created` unless time improves materially
+2. no increase in `num_dbs_created` from proof-driven ownership unless time or
+   locality benefit justifies it
+3. persistent-region mode should show a clear drop in EDT creation rate versus
+   the generic relaunch path
+
+These should start as report-only assertions in policy documentation, then move
+to hard gates once variance is understood.
+
+#### E.6 Regression-prevention rules
+
+1. Every structured optimization remains proof-gated and cost-gated.
+2. Generic fallback must remain compilable and tested for every kernel family.
+3. No benchmark may require a benchmark-specific compile-time special case to
+   pass the gate.
+4. New structured-path defaults should roll out in stages:
+   - verifier + contracts first
+   - advisory benchmark gate second
+   - required structured subset third
+   - broad default enablement last
+5. If a kernel wins only by inflating DB or EDT counts dramatically, treat that
+   as a suspicious optimization until the cost model explains it.
+
+#### E.7 Suggested initial commands and CI shape
+
+Contract gate:
+
+```bash
+carts lit tests/contracts/
+```
+
+Structured subset benchmark gate:
+
+```bash
+carts benchmarks run --experiment <structured-subset-config>
+carts benchmarks perf-gate <results-dir-or-json> --policy <structured-policy>
+```
+
+Non-structured regression gate:
+
+```bash
+carts benchmarks run --experiment <nonstructured-regression-config>
+carts benchmarks perf-gate <results-dir-or-json> --policy <regression-policy>
+```
+
+Recommended rollout order for Workstream E:
+
+1. land contract-test matrix names and paired fallback tests
+2. land structured and non-structured subset experiment configs
+3. land advisory perf-gate policies
+4. promote stable entries to required gates only after variance is measured
+
 ## 11. Recommended Execution Order
 
 1. land the RFC and verifier expansion
