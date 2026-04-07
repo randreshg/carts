@@ -13,8 +13,8 @@
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/Debug.h"
-#include "llvm/ADT/Statistic.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/Statistic.h"
 
 ARTS_DEBUG_SETUP(epoch_opt);
 
@@ -50,11 +50,10 @@ unsigned runAsyncLoopTransform(ModuleOp module, EpochAnalysis &epochAnalysis,
     EpochAsyncLoopDecision asyncDecision =
         epochAnalysis.evaluateAsyncLoopStrategy(forOp);
     if (asyncDecision.strategy != spec.selectedStrategy) {
-      ARTS_DEBUG(spec.debugLabel << ": selector chose "
-                                 << asyncLoopStrategyToString(
-                                        asyncDecision.strategy)
-                                 << " (" << asyncDecision.rationale
-                                 << "), skipping");
+      ARTS_DEBUG(spec.debugLabel
+                 << ": selector chose "
+                 << asyncLoopStrategyToString(asyncDecision.strategy) << " ("
+                 << asyncDecision.rationale << "), skipping");
       continue;
     }
     if (spec.apply(forOp, epochAnalysis))
@@ -153,8 +152,7 @@ struct EpochOptPass : public impl::EpochOptBase<EpochOptPass> {
 
     if (enableCPSChain) {
       static constexpr AsyncLoopTransformSpec kCpsChainSpec = {
-          "CPS Chain", EpochAsyncLoopStrategy::CpsChain,
-          &tryCPSChainTransform};
+          "CPS Chain", EpochAsyncLoopStrategy::CpsChain, &tryCPSChainTransform};
       unsigned chainTransformed =
           runAsyncLoopTransform(module, epochAnalysis, kCpsChainSpec);
       if (chainTransformed > 0) {
@@ -208,8 +206,8 @@ struct EpochOptPass : public impl::EpochOptBase<EpochOptPass> {
             epochOp, dyn_cast_or_null<EpochOp>(epochOp->getPrevNode()),
             /*continuationEnabled=*/true);
         if (!decision.eligible) {
-          ARTS_DEBUG("  Epoch not eligible for continuation: "
-                     << decision.rationale);
+          ARTS_DEBUG(
+              "  Epoch not eligible for continuation: " << decision.rationale);
           continue;
         }
 
@@ -297,26 +295,12 @@ std::unique_ptr<Pass> createEpochOptPass(mlir::arts::AnalysisManager *AM,
                                         continuation, cpsDriver, cpsChain);
 }
 
-std::unique_ptr<Pass> createEpochOptPass(bool amortization, bool continuation,
-                                         bool cpsDriver, bool cpsChain) {
-  return createEpochOptPass(/*AM=*/nullptr, amortization, continuation,
-                            cpsDriver, cpsChain);
-}
-
 std::unique_ptr<Pass>
 createEpochOptSchedulingPass(mlir::arts::AnalysisManager *AM, bool amortization,
                              bool continuation, bool cpsDriver, bool cpsChain) {
   return std::make_unique<EpochOptPass>(
       AM, /*narrowing=*/false, /*fusion=*/false, /*loopFusion=*/false,
       amortization, continuation, cpsDriver, cpsChain);
-}
-
-std::unique_ptr<Pass> createEpochOptSchedulingPass(bool amortization,
-                                                   bool continuation,
-                                                   bool cpsDriver,
-                                                   bool cpsChain) {
-  return createEpochOptSchedulingPass(/*AM=*/nullptr, amortization,
-                                      continuation, cpsDriver, cpsChain);
 }
 
 } // namespace arts

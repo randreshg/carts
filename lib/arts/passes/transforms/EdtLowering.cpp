@@ -89,8 +89,8 @@ static llvm::Statistic numEdtsDemotedToTask{
 using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
-using AttrNames::Operation::ControlDep;
 using AttrNames::Operation::ContinuationForEpoch;
+using AttrNames::Operation::ControlDep;
 using AttrNames::Operation::CPSChainId;
 using AttrNames::Operation::CPSForwardDeps;
 using AttrNames::Operation::CPSParamPerm;
@@ -795,8 +795,7 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
                        stateSchema);
   if (auto depSchema = edtOp->getAttrOfType<DenseI64ArrayAttr>(
           AttrNames::Operation::LaunchState::DepSchema))
-    outlineOp->setAttr(AttrNames::Operation::LaunchState::DepSchema,
-                       depSchema);
+    outlineOp->setAttr(AttrNames::Operation::LaunchState::DepSchema, depSchema);
 
   int64_t baseId = getArtsId(edtOp);
   if (!baseId)
@@ -2089,10 +2088,6 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
 
 namespace mlir {
 namespace arts {
-
-std::unique_ptr<Pass> createEdtLoweringPass() {
-  return std::make_unique<EdtLoweringPass>(nullptr);
-}
 
 std::unique_ptr<Pass> createEdtLoweringPass(uint64_t idStride) {
   return std::make_unique<EdtLoweringPass>(nullptr, idStride);

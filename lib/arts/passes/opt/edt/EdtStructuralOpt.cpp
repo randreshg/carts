@@ -42,7 +42,6 @@ using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
 
-#define GEN_PASS_DEF_EDTALLOCASINKING
 #define GEN_PASS_DEF_EDTSTRUCTURALOPT
 #include "arts/passes/Passes.h.inc"
 
@@ -321,13 +320,6 @@ private:
   SetVector<Operation *> opsToRemove;
 };
 
-struct EdtAllocaSinkingPass
-    : public ::impl::EdtAllocaSinkingBase<EdtAllocaSinkingPass> {
-  void runOnOperation() override {
-    ModuleOp module = getOperation();
-    module.walk([&](EdtOp edt) { (void)sinkExternalAllocasInEdt(edt); });
-  }
-};
 } // namespace
 
 void EdtStructuralOptPass::runOnOperation() {
@@ -976,9 +968,6 @@ namespace arts {
 std::unique_ptr<Pass>
 createEdtStructuralOptPass(mlir::arts::AnalysisManager *AM, bool runAnalysis) {
   return std::make_unique<EdtStructuralOptPass>(AM, runAnalysis);
-}
-std::unique_ptr<Pass> createEdtAllocaSinkingPass() {
-  return std::make_unique<EdtAllocaSinkingPass>();
 }
 } // namespace arts
 } // namespace mlir

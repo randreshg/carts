@@ -2802,16 +2802,6 @@ std::unique_ptr<Pass> createConvertArtsToLLVMPass() {
   return std::make_unique<ConvertArtsToLLVMPass>();
 }
 
-std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug) {
-  return std::make_unique<ConvertArtsToLLVMPass>(debug, false);
-}
-
-std::unique_ptr<Pass>
-createConvertArtsToLLVMPass(bool debug, bool distributedInitPerWorker) {
-  return std::make_unique<ConvertArtsToLLVMPass>(
-      debug, distributedInitPerWorker, nullptr);
-}
-
 std::unique_ptr<Pass>
 createConvertArtsToLLVMPass(bool debug, bool distributedInitPerWorker,
                             const AbstractMachine *machine) {

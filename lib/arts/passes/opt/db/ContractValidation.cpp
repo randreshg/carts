@@ -79,48 +79,10 @@ struct ContractValidationPass
         return;
       }
 
-      /// 2. If supported_block_halo is set, depPattern must be stencil family
-      if (contract.getSupportedBlockHalo()) {
-        auto dp = contract.getDepPattern();
-        if (!dp) {
-          contract.emitWarning(
-              "supported_block_halo set but no dep_pattern specified");
-          ++invalidContracts;
-        } else if (!isStencilFamilyDepPattern(*dp)) {
-          contract.emitWarning(
-              "supported_block_halo set but dep_pattern is not stencil family");
-          ++invalidContracts;
-        }
-      }
-
-      /// 3. min_offsets and max_offsets must have matching rank
-      unsigned minRank = contract.getMinOffsets().size();
-      unsigned maxRank = contract.getMaxOffsets().size();
-      if (minRank != 0 && maxRank != 0 && minRank != maxRank) {
-        contract.emitWarning("min_offsets rank (")
-            << minRank << ") differs from max_offsets rank (" << maxRank << ")";
-        ++invalidContracts;
-      }
-
-      /// 4. block_shape rank > 0 if present (non-empty means it was set)
-      auto blockShape = contract.getBlockShape();
-      if (!blockShape.empty() && blockShape.size() == 0) {
-        /// Unreachable by construction; guards against future changes that
-        /// allow empty-but-present block_shape attrs.
-        contract.emitWarning("block_shape is present but has rank 0");
-        ++invalidContracts;
-      }
-
-      /// 5. owner_dims values must be non-negative
-      if (auto ownerDims = contract.getOwnerDims()) {
-        for (int64_t dim : *ownerDims) {
-          if (dim < 0) {
-            contract.emitWarning("owner_dims contains negative value: ") << dim;
-            ++invalidContracts;
-            break;
-          }
-        }
-      }
+      /// Checks 2-5 (supported_block_halo/stencil, offset rank,
+      /// block_shape, owner_dims non-negative) are enforced by
+      /// LoweringContractOp::verify() and omitted here to avoid
+      /// duplication.
     });
 
     /// ---------------------------------------------------------------
