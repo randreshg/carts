@@ -1477,17 +1477,19 @@ void EpochLoweringPass::runOnOperation() {
         }
       };
 
-      /// Schema-aware path: when the continuation carries structured launch
-      /// dependency metadata, emit dep_forward ops to make slot forwarding
-      /// explicit in the IR. Synthetic continuation relaunches are stamped
-      /// with launch schema attrs, but do not always retain kernel_family.
-      bool hasStructuredLaunchSchema =
+      /// Contract-aware path: structured continuations may carry either the
+      /// original kernel-family marker or an explicit launch schema stamped by
+      /// EpochOpt. Both represent a proven relaunch ABI for this continuation,
+      /// so preserve original dependency slots with dep_forward instead of
+      /// reconstructing them positionally.
+      bool hasStructuredLaunchContract =
+          contEdtCreate->hasAttr(AttrNames::Operation::Plan::KernelFamily) ||
           contEdtCreate->hasAttr(
               AttrNames::Operation::LaunchState::DepSchema) ||
           contEdtCreate->hasAttr(
               AttrNames::Operation::LaunchState::StateSchema);
-      if (hasStructuredLaunchSchema && originalRecDep) {
-        ARTS_DEBUG("CPS advance: plan-aware dep_forward path");
+      if (hasStructuredLaunchContract && originalRecDep) {
+        ARTS_DEBUG("CPS advance: contract-aware dep_forward path");
         for (unsigned depIdx = 0; depIdx < originalDepCount; ++depIdx) {
           plan.deferredDeps.push_back(
               {DeferredDepEmit::Kind::ForwardedSlot, Value(), depIdx, depIdx,

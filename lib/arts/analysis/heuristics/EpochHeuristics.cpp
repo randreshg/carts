@@ -7,6 +7,7 @@
 ///==========================================================================///
 
 #include "arts/analysis/heuristics/EpochHeuristics.h"
+#include "arts/analysis/heuristics/StructuredKernelPlanAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
@@ -16,6 +17,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/DenseSet.h"
 #include <optional>
 
@@ -106,6 +108,122 @@ static void collectEpochSlots(Block &body, SmallVectorImpl<EpochSlot> &slots) {
 static bool epochBodyIsClonable(EpochOp epoch) {
   return epoch && !epoch.getRegion().empty() &&
          !epoch.getRegion().front().without_terminator().empty();
+}
+
+static bool epochHasZeroExpectedLocalWork(EpochOp epoch) {
+  if (!epoch)
+    return false;
+  auto expectedLocalWork = epoch->getAttrOfType<IntegerAttr>(
+      AttrNames::Operation::Plan::CostExpectedLocalWork);
+  return expectedLocalWork && expectedLocalWork.getInt() == 0;
+}
+
+static bool epochHasRepetitionStructure(EpochOp epoch,
+                                        RepetitionStructure repetition) {
+  if (!epoch)
+    return false;
+  auto repetitionAttr = epoch->getAttrOfType<StringAttr>(
+      AttrNames::Operation::Plan::RepetitionStructure);
+  return repetitionAttr &&
+         repetitionAttr.getValue() == repetitionStructureToString(repetition);
+}
+
+static bool epochCreatesCoordinatorWave(EpochOp epoch) {
+  if (!epoch)
+    return false;
+
+  unsigned nestedEdtCount = 0;
+  bool hasNestedEpoch = false;
+  epoch.walk([&](Operation *op) {
+    if (op == epoch.getOperation())
+      return WalkResult::advance();
+    if (isa<EpochOp>(op)) {
+      hasNestedEpoch = true;
+      return WalkResult::interrupt();
+    }
+    if (isa<EdtOp>(op)) {
+      ++nestedEdtCount;
+      if (nestedEdtCount > 1)
+        return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return hasNestedEpoch || nestedEdtCount > 1;
+}
+
+template <typename PredicateT>
+static bool slotMatches(EpochSlot slot, PredicateT &&predicate) {
+  if (predicate(slot.epoch))
+    return true;
+  if (!slot.wrappingIf)
+    return false;
+
+  bool sawEpoch = false;
+  bool allMatch = true;
+  slot.wrappingIf->walk([&](EpochOp nestedEpoch) {
+    sawEpoch = true;
+    if (predicate(nestedEpoch))
+      return WalkResult::advance();
+    allMatch = false;
+    return WalkResult::interrupt();
+  });
+  return sawEpoch && allMatch;
+}
+
+static bool loopHasScalarCarryState(scf::ForOp forOp) {
+  llvm::SetVector<Value> capturedValues;
+  getUsedValuesDefinedAbove(forOp.getRegion(), capturedValues);
+  for (Value captured : capturedValues) {
+    auto dbAlloc =
+        dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(captured));
+    if (dbAlloc)
+      continue;
+    if (auto *defOp = captured.getDefiningOp()) {
+      if (isa<arith::ConstantOp, arith::ConstantIndexOp, LLVM::AddressOfOp>(
+              defOp))
+        continue;
+    }
+    if (isa<IndexType, IntegerType, FloatType>(captured.getType()))
+      return true;
+  }
+  return false;
+}
+
+static bool shouldAvoidCpsChainForLoop(
+    scf::ForOp forOp, const EpochAsyncLoopDecision &decision) {
+  if (decision.slots.empty())
+    return false;
+
+  bool allSlotsHaveZeroExpectedLocalWork = llvm::all_of(
+      decision.slots, [](const EpochSlot &slot) {
+        return slotMatches(slot, epochHasZeroExpectedLocalWork);
+      });
+  if (!allSlotsHaveZeroExpectedLocalWork)
+    return false;
+
+  bool coordinatorWaveLoop = llvm::any_of(
+      decision.slots, [](const EpochSlot &slot) {
+        return slotMatches(slot, epochCreatesCoordinatorWave);
+      });
+  bool hasScalarCarryState = loopHasScalarCarryState(forOp);
+  bool pureOrchestrationLoop =
+      !hasScalarCarryState && coordinatorWaveLoop &&
+      (decision.slots.size() > 1 || decision.hasSequentialSidecars);
+
+  bool allSlotsFullTimestep = llvm::all_of(
+      decision.slots, [](const EpochSlot &slot) {
+        return slotMatches(slot, [](EpochOp epoch) {
+          return epochHasRepetitionStructure(epoch,
+                                             RepetitionStructure::FullTimestep);
+        });
+      });
+  bool multiStageOrSidecarFullTimestepLoop =
+      allSlotsFullTimestep &&
+      (decision.slots.size() > 1 || decision.hasSequentialSidecars);
+
+  return (allSlotsHaveZeroExpectedLocalWork &&
+          multiStageOrSidecarFullTimestepLoop) ||
+         (allSlotsHaveZeroExpectedLocalWork && pureOrchestrationLoop);
 }
 
 static void recordAccess(EpochAccessSummary &summary, Value value,
@@ -610,6 +728,13 @@ EpochHeuristics::evaluateAsyncLoopStrategy(scf::ForOp forOp) {
   }
 
   decision.eligible = true;
+  if (shouldAvoidCpsChainForLoop(forOp, decision)) {
+    decision.rationale =
+        "loop is orchestration-heavy and has no profitable CPS-chain-local "
+        "work";
+    return decision;
+  }
+
   if (decision.hasSequentialSidecars) {
     decision.strategy = EpochAsyncLoopStrategy::CpsChain;
     if (decision.hasInterEpochSidecars)

@@ -74,6 +74,7 @@ constexpr StringLiteral ReadOnlyAfterInit = "arts.read_only_after_init";
 /// New code should use arts.launch.state_schema / arts.launch.dep_schema.
 /// Legacy attrs are still consumed by EpochLowering as a fallback when split
 /// ops are absent. They will be removed once all CPS paths emit split ops.
+constexpr StringLiteral ControlDep = "arts.has_control_dep";
 constexpr StringLiteral ContinuationForEpoch = "arts.continuation_for_epoch";
 constexpr StringLiteral CPSChainId = "arts.cps_chain_id";
 constexpr StringLiteral CPSOuterEpochParamIdx =
