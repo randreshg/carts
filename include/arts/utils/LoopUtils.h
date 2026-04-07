@@ -79,6 +79,11 @@ inline bool haveSameBounds(ForOp a, ForOp b) {
          ValueAnalysis::sameValue(a.getStep().front(), b.getStep().front());
 }
 
+/// Return the induction variable of a loop operation (arts::ForOp or
+/// scf::ForOp). Returns a null Value for unsupported loop types or if the
+/// loop body is empty.
+Value getLoopInductionVar(Operation *op);
+
 /// Check whether a value is a loop induction variable (i.e., a BlockArgument
 /// whose parent operation is a loop construct).
 inline bool isLoopInductionVar(Value value) {

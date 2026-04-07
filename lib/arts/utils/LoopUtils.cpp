@@ -18,6 +18,25 @@
 namespace mlir {
 namespace arts {
 
+Value getLoopInductionVar(Operation *op) {
+  if (!op)
+    return Value();
+
+  if (auto artsFor = dyn_cast<arts::ForOp>(op)) {
+    if (artsFor.getRegion().empty())
+      return Value();
+    Block &block = artsFor.getRegion().front();
+    if (block.getNumArguments() == 0)
+      return Value();
+    return block.getArgument(0);
+  }
+
+  if (auto scfFor = dyn_cast<scf::ForOp>(op))
+    return scfFor.getInductionVar();
+
+  return Value();
+}
+
 bool isProvablyZeroLoopLowerBound(Value lb) {
   lb = ValueAnalysis::stripNumericCasts(lb);
   if (ValueAnalysis::isZeroConstant(lb))
