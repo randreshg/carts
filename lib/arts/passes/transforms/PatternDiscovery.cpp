@@ -21,6 +21,7 @@
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
+#include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 #include "arts/utils/metadata/MemrefMetadata.h"
@@ -125,18 +126,6 @@ static Operation *resolveAllocLikeSource(Value value) {
   if (def && isa<memref::AllocOp, memref::AllocaOp>(def))
     return def;
   return nullptr;
-}
-
-static Value getAccessedMemref(Operation *op) {
-  if (auto load = dyn_cast<memref::LoadOp>(op))
-    return load.getMemref();
-  if (auto store = dyn_cast<memref::StoreOp>(op))
-    return store.getMemref();
-  if (auto load = dyn_cast<affine::AffineLoadOp>(op))
-    return load.getMemref();
-  if (auto store = dyn_cast<affine::AffineStoreOp>(op))
-    return store.getMemref();
-  return Value();
 }
 
 static SmallVector<Value> getAccessIndices(Operation *op) {
@@ -251,7 +240,7 @@ static LocalStencilEvidence collectLocalStencilEvidence(arts::ForOp forOp,
   DenseMap<Operation *, SmallVector<llvm::DenseSet<int64_t>, 4>> offsetsByAlloc;
 
   body->walk([&](Operation *op) {
-    Value memref = getAccessedMemref(op);
+    Value memref = DbUtils::getAccessedMemref(op);
     if (!memref)
       return;
 
@@ -321,7 +310,7 @@ collectEvidence(arts::ForOp forOp, MetadataManager &manager,
 
   llvm::SmallPtrSet<Operation *, 8> seenAllocs;
   forOp.getBody()->walk([&](Operation *op) {
-    Value memref = getAccessedMemref(op);
+    Value memref = DbUtils::getAccessedMemref(op);
     if (!memref)
       return;
 

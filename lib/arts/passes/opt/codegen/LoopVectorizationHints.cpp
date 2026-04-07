@@ -44,6 +44,7 @@
 #include "arts/passes/Passes.h"
 
 #include "arts/utils/Debug.h"
+#include "arts/utils/LoopUtils.h"
 #include "llvm/ADT/StringRef.h"
 #include <limits>
 #include <optional>
@@ -150,29 +151,6 @@ analyzeLoadTypes(const SmallPtrSet<Block *, 16> &loopBlocks) {
     width = 4;
 
   return {width, doubleCount, floatCount, totalLoads};
-}
-
-static bool hasFloatingPointType(Type type) {
-  if (!type)
-    return false;
-  if (type.isF16() || type.isBF16() || type.isF32() || type.isF64() ||
-      type.isF80() || type.isF128())
-    return true;
-  if (auto vectorType = dyn_cast<VectorType>(type))
-    return hasFloatingPointType(vectorType.getElementType());
-  return false;
-}
-
-static bool operationTouchesFloatingPoint(Operation *op) {
-  for (Value operand : op->getOperands()) {
-    if (hasFloatingPointType(operand.getType()))
-      return true;
-  }
-  for (Value result : op->getResults()) {
-    if (hasFloatingPointType(result.getType()))
-      return true;
-  }
-  return false;
 }
 
 static bool isVectorFriendlyFPIntrinsic(StringRef intrinsic) {

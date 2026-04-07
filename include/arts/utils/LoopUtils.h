@@ -144,6 +144,14 @@ int64_t getRepeatedParentTripProduct(Operation *op,
 /// which would otherwise suppress vectorization on the simple stages.
 PointwiseLoopComputeClass classifyPointwiseLoopCompute(arts::ForOp loop);
 
+/// Return true when a type is a floating-point type (F16, BF16, F32, F64, F80,
+/// F128) or a vector of one.
+bool hasFloatingPointType(Type type);
+
+/// Return true when any operand or result of an operation has a floating-point
+/// type.
+bool operationTouchesFloatingPoint(Operation *op);
+
 } // namespace arts
 } // namespace mlir
 
