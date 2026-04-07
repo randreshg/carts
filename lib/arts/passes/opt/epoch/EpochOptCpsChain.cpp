@@ -322,6 +322,8 @@ bool tryCPSChainTransform(scf::ForOp forOp,
   outerEpoch->setAttr(ContinuationForEpoch, builder.getUnitAttr());
   outerEpoch->setAttr(AttrNames::Operation::CPSOuterEpoch,
                       builder.getUnitAttr());
+  copyNormalizedPlanAttrs(forOp.getOperation(), outerEpoch.getOperation(),
+                          EpochAsyncLoopStrategy::CpsChain);
 
   if (auto lbCst = getConstantIntValue(lb))
     outerEpoch->setAttr(CPSInitIter, builder.getI64IntegerAttr(*lbCst));
@@ -348,6 +350,8 @@ bool tryCPSChainTransform(scf::ForOp forOp,
     auto contEdt = chainBuilder.create<EdtOp>(
         loc, EdtType::task, EdtConcurrency::intranode, SmallVector<Value>{});
     markAsContinuation(contEdt, chainBuilder, i);
+    copyNormalizedPlanAttrs(forOp.getOperation(), contEdt.getOperation(),
+                            EpochAsyncLoopStrategy::CpsChain);
     if (!firstContinuation)
       firstContinuation = contEdt;
 

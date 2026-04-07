@@ -143,6 +143,14 @@ struct EpochOptPass : public impl::EpochOptBase<EpochOptPass> {
 
     ARTS_INFO_HEADER(EpochOptPass);
 
+    SmallVector<scf::ForOp> asyncLoops;
+    module.walk([&](scf::ForOp forOp) { asyncLoops.push_back(forOp); });
+    for (scf::ForOp forOp : asyncLoops) {
+      EpochAsyncLoopDecision asyncDecision =
+          epochAnalysis.evaluateAsyncLoopStrategy(forOp);
+      normalizeAsyncLoopPlanAttrs(forOp, asyncDecision.strategy);
+    }
+
     if (enableCPSChain) {
       static constexpr AsyncLoopTransformSpec kCpsChainSpec = {
           "CPS Chain", EpochAsyncLoopStrategy::CpsChain,

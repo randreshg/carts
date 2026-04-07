@@ -118,6 +118,8 @@ bool tryCPSLoopTransform(scf::ForOp forOp,
       builder.create<EpochOp>(loc, IntegerType::get(builder.getContext(), 64));
   wrapEpoch->setAttr(AttrNames::Operation::CPSOuterEpoch,
                      builder.getUnitAttr());
+  copyNormalizedPlanAttrs(forOp.getOperation(), wrapEpoch.getOperation(),
+                          EpochAsyncLoopStrategy::AdvanceEdt);
   if (auto lbCst = getConstantIntValue(lb))
     wrapEpoch->setAttr(CPSInitIter, builder.getI64IntegerAttr(*lbCst));
   else
@@ -137,6 +139,8 @@ bool tryCPSLoopTransform(scf::ForOp forOp,
   auto kickoffEdt = epochBuilder.create<EdtOp>(
       loc, EdtType::task, EdtConcurrency::intranode, currentStateDeps);
   kickoffEdt->setAttr(CPSChainId, builder.getStringAttr(chainId));
+  copyNormalizedPlanAttrs(forOp.getOperation(), kickoffEdt.getOperation(),
+                          EpochAsyncLoopStrategy::AdvanceEdt);
   if (!currentStateDeps.empty())
     kickoffEdt->setAttr(CPSForwardDeps, builder.getUnitAttr());
 
@@ -173,6 +177,8 @@ bool tryCPSLoopTransform(scf::ForOp forOp,
       auto contEdt = currentBuilder->create<EdtOp>(
           loc, EdtType::task, EdtConcurrency::intranode, currentStateDeps);
       markAsContinuation(contEdt, *currentBuilder, slotIdx);
+      copyNormalizedPlanAttrs(forOp.getOperation(), contEdt.getOperation(),
+                              EpochAsyncLoopStrategy::AdvanceEdt);
       if (!currentStateDeps.empty())
         contEdt->setAttr(CPSForwardDeps, builder.getUnitAttr());
 
@@ -236,6 +242,8 @@ bool tryCPSLoopTransform(scf::ForOp forOp,
     advanceEdt->setAttr(ControlDep,
                         builder.getIntegerAttr(builder.getI32Type(), 1));
     advanceEdt->setAttr(ContinuationForEpoch, builder.getUnitAttr());
+    copyNormalizedPlanAttrs(forOp.getOperation(), advanceEdt.getOperation(),
+                            EpochAsyncLoopStrategy::AdvanceEdt);
     if (!advanceStateDeps.empty())
       advanceEdt->setAttr(CPSForwardDeps, builder.getUnitAttr());
     Block &advanceBlockBody = advanceEdt.getBody().front();
