@@ -217,20 +217,6 @@ static bool dependsOnOffset(Value v, Value offset) {
   return ValueAnalysis::dependsOn(vStripped, oStripped);
 }
 
-static Value getAccessedMemref(Operation *memOp) {
-  if (!memOp)
-    return Value();
-  if (auto load = dyn_cast<memref::LoadOp>(memOp))
-    return load.getMemRef();
-  if (auto store = dyn_cast<memref::StoreOp>(memOp))
-    return store.getMemRef();
-  if (auto load = dyn_cast<affine::AffineLoadOp>(memOp))
-    return load.getMemRef();
-  if (auto store = dyn_cast<affine::AffineStoreOp>(memOp))
-    return store.getMemRef();
-  return Value();
-}
-
 struct RootAccessSummary {
   bool reads = false;
   bool writes = false;
@@ -273,6 +259,20 @@ static MemoryRootSummary summarizeMemoryRoots(Operation *scope) {
 }
 
 } // namespace
+
+Value DbUtils::getAccessedMemref(Operation *memOp) {
+  if (!memOp)
+    return Value();
+  if (auto load = dyn_cast<memref::LoadOp>(memOp))
+    return load.getMemRef();
+  if (auto store = dyn_cast<memref::StoreOp>(memOp))
+    return store.getMemRef();
+  if (auto load = dyn_cast<affine::AffineLoadOp>(memOp))
+    return load.getMemRef();
+  if (auto store = dyn_cast<affine::AffineStoreOp>(memOp))
+    return store.getMemRef();
+  return Value();
+}
 
 ///===----------------------------------------------------------------------===///
 /// Datablock Lowering Info Extraction

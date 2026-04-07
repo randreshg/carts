@@ -235,7 +235,7 @@ int64_t getRepeatedParentTripProduct(Operation *op, int64_t maxProduct) {
   return product;
 }
 
-static bool hasFloatingPointType(Type type) {
+bool hasFloatingPointType(Type type) {
   if (!type)
     return false;
   if (type.isF16() || type.isBF16() || type.isF32() || type.isF64() ||
@@ -246,7 +246,7 @@ static bool hasFloatingPointType(Type type) {
   return false;
 }
 
-static bool operationTouchesFloatingPoint(Operation *op) {
+bool operationTouchesFloatingPoint(Operation *op) {
   for (Value operand : op->getOperands()) {
     if (hasFloatingPointType(operand.getType()))
       return true;

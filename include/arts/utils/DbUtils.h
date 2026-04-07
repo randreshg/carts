@@ -207,6 +207,10 @@ public:
   static SmallVector<Value> collectFullIndexChain(DbRefOp dbRef,
                                                   Operation *memOp);
 
+  /// Return the accessed memref value from a load/store op, or a null Value.
+  /// Supports memref and affine load/store operations.
+  static Value getAccessedMemref(Operation *memOp);
+
   /// Extract index operands from a memory access op.
   /// Supports memref/affine load/store operations.
   static SmallVector<Value> getMemoryAccessIndices(Operation *memOp);
