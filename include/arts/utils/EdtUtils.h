@@ -74,6 +74,16 @@ bool fuseConsecutivePairs(Block &block,
   return changed;
 }
 
+/// Return true when an EDT is nested inside an EpochOp.
+inline bool isInsideEpoch(EdtOp op) {
+  return op->getParentOfType<EpochOp>() != nullptr;
+}
+
+/// Return true when an operation is nested inside an EpochOp.
+inline bool isInsideEpoch(Operation *op) {
+  return op->getParentOfType<EpochOp>() != nullptr;
+}
+
 /// Return the single top-level arts::ForOp inside an EDT body, or nullptr
 /// if there are zero or multiple top-level ForOps, or any non-ForOp
 /// non-terminator operation exists.

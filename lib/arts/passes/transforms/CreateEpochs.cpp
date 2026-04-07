@@ -31,6 +31,7 @@
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
+#include "arts/utils/EdtUtils.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Pass/Pass.h"
 /// Other
@@ -65,10 +66,6 @@ static void clearIsSyncAttr(EdtOp op) {
 static void setIsTaskAttr(EdtOp op) {
   auto newTypeAttr = EdtTypeAttr::get(op.getContext(), EdtType::task);
   op.setTypeAttr(newTypeAttr);
-}
-
-static bool isInsideEpoch(EdtOp op) {
-  return op->getParentOfType<EpochOp>() != nullptr;
 }
 
 static void wrapEdtInEpoch(EdtOp op, bool demoteToTask) {

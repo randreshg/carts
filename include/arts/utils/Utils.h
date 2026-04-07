@@ -61,6 +61,10 @@ void replaceInRegion(Region &region, DenseMap<Value, Value> &rewireMap,
 void transferAttributes(Operation *src, Operation *dst,
                         ArrayRef<StringRef> excludes = {});
 
+/// Return true when `v` dominates `op` or is defined in an ancestor region
+/// of `op`. Handles both op-result and block-argument values.
+bool dominatesOrInAncestor(Value v, Operation *op, DominanceInfo &domInfo);
+
 /// Check if a value is defined inside a given region (either as a block
 /// argument owned by a block in the region, or as the result of an operation
 /// whose parent region is within the given region).

@@ -103,8 +103,8 @@ void clearGeneratedStripMiningMarks(func::FuncOp func);
 bool getConstIndex(Value v, int64_t &out);
 std::optional<Value> extractInvariantOffset(Value lhs, Value iv);
 bool mergeInvariantBase(Value &currentBase, Value candidateBase);
-std::optional<NeighborhoodExprInfo>
-extractNeighborhoodExprInfo(Value value, Value iv);
+std::optional<NeighborhoodExprInfo> extractNeighborhoodExprInfo(Value value,
+                                                                Value iv);
 
 OffsetPatternGroup &getOrCreateOffsetGroup(NeighborhoodLoopInfo &info,
                                            int64_t offsetConst);
@@ -138,8 +138,6 @@ bool isAlignedValue(Value value, Value blockSize,
                     const std::optional<int64_t> &blockSizeConst,
                     Value *divHint = nullptr);
 
-bool dominatesOrInAncestor(Value v, Operation *op, DominanceInfo &domInfo);
-
 void rewriteNestedNeighborhoodClone(
     Block &originalBlock, Block &clonedBlock,
     const NeighborhoodReplacementMap &replacements,
@@ -171,8 +169,7 @@ bool hasNonZeroNeighborhoodOffset(const NeighborhoodLoopInfo &info);
 unsigned countNeighborhoodDbRefUsers(scf::ForOp loop,
                                      const NeighborhoodLoopInfo &info);
 
-bool finalizeNeighborhoodCandidate(scf::ForOp loop,
-                                   NeighborhoodLoopInfo &info,
+bool finalizeNeighborhoodCandidate(scf::ForOp loop, NeighborhoodLoopInfo &info,
                                    DominanceInfo &domInfo);
 
 bool isBetterNeighborhoodCandidate(const NeighborhoodLoopInfo &lhs,
@@ -192,9 +189,9 @@ Value buildNeighborhoodRemValue(OpBuilder &builder, Location loc, Value local,
                                 Value blockSize, int64_t offsetConst,
                                 int64_t blockDelta);
 
-bool stripMineNeighborhoodLoopImpl(scf::ForOp loop,
-                                   const NeighborhoodLoopInfo &info,
-                                   SmallVectorImpl<Value> *newResults = nullptr);
+bool stripMineNeighborhoodLoopImpl(
+    scf::ForOp loop, const NeighborhoodLoopInfo &info,
+    SmallVectorImpl<Value> *newResults = nullptr);
 
 bool stripMineNeighborhoodLoop(scf::ForOp loop,
                                const NeighborhoodLoopInfo &info);

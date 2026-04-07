@@ -14,6 +14,7 @@
 #include "arts/utils/BlockedAccessUtils.h"
 #include "arts/utils/LoopInvarianceUtils.h"
 #include "arts/utils/LoopUtils.h"
+#include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -93,8 +94,6 @@ bool isDepsPtrLoad(LLVM::LoadOp loadOp);
 /// Check if an LLVM load is loading a datablock pointer from a db_gep.
 bool isDbPtrLoad(LLVM::LoadOp loadOp);
 
-Value createIndexConst(OpBuilder &builder, Location loc, int64_t value);
-
 bool isMinusOneConstant(Value value);
 
 bool isZeroIndexConstant(Value value);
@@ -125,9 +124,9 @@ Value buildLoopInvariantI1And(OpBuilder &builder, Location loc, Value lhs,
 Value buildDepPtrLoad(OpBuilder &builder, Location loc, DepGepOp depGep,
                       ArrayRef<Value> indices);
 
-Value buildGuardedDepPtrLoad(OpBuilder &builder, Location loc,
-                             DepGepOp depGep, ArrayRef<Value> indices,
-                             Value guard, Value fallbackPtr);
+Value buildGuardedDepPtrLoad(OpBuilder &builder, Location loc, DepGepOp depGep,
+                             ArrayRef<Value> indices, Value guard,
+                             Value fallbackPtr);
 
 Value buildNormalizedForceZeroCond(OpBuilder &builder, Location loc,
                                    const BlockedNeighborCarryPattern &pattern);
@@ -140,9 +139,10 @@ bool canHoistBlockedNeighborCacheAcross(
     scf::ForOp loop, int varyingIndex, ArrayRef<Value> indices,
     const BlockedNeighborCarryPattern &pattern);
 
-scf::ForOp findBlockedNeighborCacheHoistLoop(
-    scf::ForOp loop, int varyingIndex, ArrayRef<Value> indices,
-    const BlockedNeighborCarryPattern &pattern);
+scf::ForOp
+findBlockedNeighborCacheHoistLoop(scf::ForOp loop, int varyingIndex,
+                                  ArrayRef<Value> indices,
+                                  const BlockedNeighborCarryPattern &pattern);
 
 bool materializeBlockedNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop);
 
@@ -165,8 +165,7 @@ bool matchSingleBlockBlockedDepIndex(Value value, scf::ForOp loop,
 
 Value stripInvariantZeroFallback(Value value, scf::ForOp loop);
 
-bool materializeSingleBlockBlockedDepView(LLVM::LoadOp loadOp,
-                                          scf::ForOp loop);
+bool materializeSingleBlockBlockedDepView(LLVM::LoadOp loadOp, scf::ForOp loop);
 
 bool getSelectOperands(Value value, Value &cond, Value &trueValue,
                        Value &falseValue);
@@ -177,8 +176,7 @@ bool matchUpperBoundaryCond(Value cond, Value candidate);
 
 bool tryBuildBoundaryIndexChain(Value firstCond, Value firstValue,
                                 Value secondCond, Value secondValue,
-                                Value middleValue,
-                                BoundarySelectChain &chain);
+                                Value middleValue, BoundarySelectChain &chain);
 
 bool matchBoundaryIndexPattern(Value value, scf::ForOp loop,
                                BoundaryIndexPattern &pattern);
