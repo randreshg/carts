@@ -33,8 +33,8 @@ bool dbPartitionTraceEnabled() {
 void dbPartitionTraceImpl(llvm::function_ref<void(llvm::raw_ostream &)> fn) {
   if (!dbPartitionTraceEnabled())
     return;
-  ARTS_DEBUG_REGION(ARTS_DBGS() << "[db_partition_trace] ";
-                    fn(ARTS_DBGS()); ARTS_DBGS() << "\n";);
+  ARTS_DEBUG_REGION(ARTS_DBGS() << "[db_partition_trace] "; fn(ARTS_DBGS());
+                    ARTS_DBGS() << "\n";);
 }
 
 ///===----------------------------------------------------------------------===//
@@ -274,8 +274,8 @@ summarizeAcquirePatterns(ArrayRef<DbAcquireNode *> acquireNodes,
     if (!acquire || !dbAnalysis)
       continue;
 
-    // If proof.partition_access_mapping is proven on the source contract,
-    // trust the contract's pattern directly without graph re-derivation.
+    /// If proof.partition_access_mapping is proven on the source contract,
+    /// trust the contract's pattern directly without graph re-derivation.
     Value sourcePtr = acquire.getSourcePtr();
     LoweringContractOp contractOp = getLoweringContractOp(sourcePtr);
     if (contractOp) {
@@ -442,8 +442,8 @@ bool isLowerBoundGuaranteedByControlFlow(Operation *op, Value loopIV) {
   return false;
 }
 
-void applyBoundsValid(DbAcquireOp acquireOp,
-                      ArrayRef<int64_t> boundsCheckFlags, Value loopIV) {
+void applyBoundsValid(DbAcquireOp acquireOp, ArrayRef<int64_t> boundsCheckFlags,
+                      Value loopIV) {
   if (acquireOp.hasMultiplePartitionEntries()) {
     ARTS_DEBUG("  Skipping bounds generation for multi-entry stencil acquire");
     return;
@@ -794,7 +794,7 @@ bool feedbackPartitionDecisionToContract(DbAllocOp newAllocOp,
 ///===----------------------------------------------------------------------===//
 
 SmallVector<DbAcquireOp> createExpandedAcquires(DbAcquireOp original,
-                                                 OpBuilder &builder) {
+                                                OpBuilder &builder) {
   SmallVector<DbAcquireOp> expanded;
   Location loc = original.getLoc();
   size_t numEntries = original.getNumPartitionEntries();
@@ -864,9 +864,10 @@ SmallVector<Value> rebuildEdtDeps(EdtOp edt, DbAcquireOp original,
   return deps;
 }
 
-SmallVector<BlockArgument>
-insertExpandedBlockArgs(EdtOp edt, BlockArgument originalArg, size_t numEntries,
-                        Type argType, Location loc) {
+SmallVector<BlockArgument> insertExpandedBlockArgs(EdtOp edt,
+                                                   BlockArgument originalArg,
+                                                   size_t numEntries,
+                                                   Type argType, Location loc) {
   Block &edtBlock = edt.getBody().front();
   SmallVector<BlockArgument> args;
   args.push_back(originalArg);

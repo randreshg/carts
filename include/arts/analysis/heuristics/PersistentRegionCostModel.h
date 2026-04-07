@@ -22,8 +22,8 @@
 #ifndef ARTS_ANALYSIS_HEURISTICS_PERSISTENTREGIONCOSTMODEL_H
 #define ARTS_ANALYSIS_HEURISTICS_PERSISTENTREGIONCOSTMODEL_H
 
-#include "arts/analysis/heuristics/StructuredKernelPlanAnalysis.h"
 #include "arts/analysis/db/OwnershipProof.h"
+#include "arts/analysis/heuristics/StructuredKernelPlanAnalysis.h"
 
 namespace mlir {
 namespace arts {
@@ -47,10 +47,9 @@ struct PersistentRegionGate {
 ///   1. Fully proven ownership (all 5 dimensions)
 ///   2. Repetition structure (timestep or neighborhood iteration)
 ///   3. Cost model benefit: launch overhead dominates and state is stable
-PersistentRegionGate evaluatePersistentRegionGate(
-    const StructuredKernelPlan &plan,
-    const OwnershipProof &proof,
-    unsigned workerCount);
+PersistentRegionGate
+evaluatePersistentRegionGate(const StructuredKernelPlan &plan,
+                             const OwnershipProof &proof, unsigned workerCount);
 
 } // namespace arts
 } // namespace mlir

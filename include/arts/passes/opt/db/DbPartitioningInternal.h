@@ -132,8 +132,8 @@ reconcileAcquireModes(PartitioningContext &ctx,
 
 bool isLowerBoundGuaranteedByControlFlow(Operation *op, Value loopIV);
 
-void applyBoundsValid(DbAcquireOp acquireOp,
-                      ArrayRef<int64_t> boundsCheckFlags, Value loopIV);
+void applyBoundsValid(DbAcquireOp acquireOp, ArrayRef<int64_t> boundsCheckFlags,
+                      Value loopIV);
 
 void lowerStencilAcquireBounds(ModuleOp module, LoopAnalysis &loopAnalysis);
 
@@ -162,14 +162,15 @@ bool feedbackPartitionDecisionToContract(DbAllocOp newAllocOp,
 ///===----------------------------------------------------------------------===//
 
 SmallVector<DbAcquireOp> createExpandedAcquires(DbAcquireOp original,
-                                                 OpBuilder &builder);
+                                                OpBuilder &builder);
 
 SmallVector<Value> rebuildEdtDeps(EdtOp edt, DbAcquireOp original,
                                   ArrayRef<DbAcquireOp> expanded);
 
-SmallVector<BlockArgument>
-insertExpandedBlockArgs(EdtOp edt, BlockArgument originalArg, size_t numEntries,
-                        Type argType, Location loc);
+SmallVector<BlockArgument> insertExpandedBlockArgs(EdtOp edt,
+                                                   BlockArgument originalArg,
+                                                   size_t numEntries,
+                                                   Type argType, Location loc);
 
 SmallVector<DbRefOp> collectDbRefUsers(BlockArgument arg);
 

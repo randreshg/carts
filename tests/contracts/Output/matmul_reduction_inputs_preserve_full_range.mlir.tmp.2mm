@@ -231,7 +231,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
           %guid_51, %ptr_52 = arts.db_acquire[<in>] (%guid_19 : memref<?xi64>, %ptr_20 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%64], sizes[%69]), offsets[%93], sizes[%94] element_offsets[%64] element_sizes[%69] {arts.partition_hint = {blockSize = 11 : i64, mode = 1 : i8}, arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [4, 256], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
           arts.lowering_contract(%ptr_52 : memref<?xmemref<?x?xf64>>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) block_shape[%c4] contract(<ownerDims = [0]>)
           %c0_53 = arith.constant 0 : index
-          %guid_54, %ptr_55 = arts.db_acquire[<in>] (%guid_25 : memref<?xi64>, %ptr_26 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_24], sizes[%c1] {arts.id = 156 : i64, arts.partition_hint = {blockSize = 11 : i64, mode = 1 : i8}, arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          %guid_54, %ptr_55 = arts.db_acquire[<in>] (%guid_25 : memref<?xi64>, %ptr_26 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_24], sizes[%c1] {arts.id = 157 : i64, arts.partition_hint = {blockSize = 11 : i64, mode = 1 : i8}, arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
           arts.lowering_contract(%ptr_55 : memref<?xmemref<?x?xf64>>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<postDbRefined = true>)
           %c1_56 = arith.constant 1 : index
           %c0_57 = arith.constant 0 : index
@@ -243,38 +243,38 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
           ^bb0(%arg3: memref<?xmemref<?x?xf64>>, %arg4: memref<?xmemref<?x?xf64>>, %arg5: memref<?xmemref<?x?xf64>>, %arg6: memref<?xmemref<?x?xf64>>, %arg7: memref<?xmemref<?x?xf64>>):
             %c1_62 = arith.constant 1 : index
             %c0_63 = arith.constant 0 : index
-            %95 = arith.maxui %13, %c1_62 : index
+            %95 = arith.maxui %6, %c1_62 : index
             %c0_64 = arith.constant 0 : index
             %c4_65 = arith.constant 4 : index
             %96 = arith.muli %arg2, %c4_65 : index
-            %c1_66 = arith.constant 1 : index
-            %97 = arith.subi %96, %c1_66 : index
-            %c0_67 = arith.constant 0 : index
-            %98 = arith.select %62, %97, %c0_67 : index
-            %c11_68 = arith.constant 11 : index
+            %c11_66 = arith.constant 11 : index
+            %c1_67 = arith.constant 1 : index
+            %97 = arith.maxui %c11_66, %c1_67 : index
+            %c1_68 = arith.constant 1 : index
+            %98 = arith.maxui %97, %c1_68 : index
+            %99 = arith.divui %96, %98 : index
+            %100 = arith.select %54, %c0_64, %99 : index
             %c1_69 = arith.constant 1 : index
-            %99 = arith.maxui %c11_68, %c1_69 : index
-            %c1_70 = arith.constant 1 : index
-            %100 = arith.maxui %99, %c1_70 : index
-            %101 = arith.divui %98, %100 : index
-            %102 = arith.select %88, %c0_64, %101 : index
-            %c1_71 = arith.constant 1 : index
-            %c0_72 = arith.constant 0 : index
-            %103 = arith.maxui %20, %c1_71 : index
-            %c0_73 = arith.constant 0 : index
-            %c1_74 = arith.constant 1 : index
-            %c0_75 = arith.constant 0 : index
-            %104 = arith.maxui %6, %c1_74 : index
-            %c0_76 = arith.constant 0 : index
-            %c4_77 = arith.constant 4 : index
-            %105 = arith.muli %arg2, %c4_77 : index
-            %c11_78 = arith.constant 11 : index
-            %c1_79 = arith.constant 1 : index
-            %106 = arith.maxui %c11_78, %c1_79 : index
-            %c1_80 = arith.constant 1 : index
-            %107 = arith.maxui %106, %c1_80 : index
-            %108 = arith.divui %105, %107 : index
-            %109 = arith.select %54, %c0_76, %108 : index
+            %c0_70 = arith.constant 0 : index
+            %101 = arith.maxui %13, %c1_69 : index
+            %c0_71 = arith.constant 0 : index
+            %c4_72 = arith.constant 4 : index
+            %102 = arith.muli %arg2, %c4_72 : index
+            %c1_73 = arith.constant 1 : index
+            %103 = arith.subi %102, %c1_73 : index
+            %c0_74 = arith.constant 0 : index
+            %104 = arith.select %62, %103, %c0_74 : index
+            %c11_75 = arith.constant 11 : index
+            %c1_76 = arith.constant 1 : index
+            %105 = arith.maxui %c11_75, %c1_76 : index
+            %c1_77 = arith.constant 1 : index
+            %106 = arith.maxui %105, %c1_77 : index
+            %107 = arith.divui %104, %106 : index
+            %108 = arith.select %88, %c0_71, %107 : index
+            %c1_78 = arith.constant 1 : index
+            %c0_79 = arith.constant 0 : index
+            %109 = arith.maxui %20, %c1_78 : index
+            %c0_80 = arith.constant 0 : index
             %110 = arith.subi %c0, %32 : index
             %111 = arith.cmpi slt, %110, %c0 : index
             %112 = arith.select %111, %c0, %110 : index
@@ -285,7 +285,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
               %116 = arith.addi %32, %arg8 : index
               scf.for %arg9 = %c0 to %c256 step %c1 {
                 %c1_81 = arith.constant 1 : index
-                %117 = arith.maxui %104, %c1_81 : index
+                %117 = arith.maxui %95, %c1_81 : index
                 %c0_82 = arith.constant 0 : index
                 %c1_83 = arith.constant 1 : index
                 %c-1 = arith.constant -1 : index
@@ -294,7 +294,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
                 %120 = arith.remui %118, %117 : index
                 %121 = arith.subi %arg8, %112 : index
                 %122 = arith.addi %120, %121 : index
-                %123 = arith.subi %119, %109 : index
+                %123 = arith.subi %119, %100 : index
                 %124 = arith.cmpi slt, %122, %c0_82 : index
                 %125 = arith.cmpi sge, %122, %117 : index
                 %126 = arith.select %124, %c-1, %c0_82 : index
@@ -304,13 +304,13 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
                 %130 = arith.addi %122, %117 : index
                 %131 = arith.select %124, %130, %122 : index
                 %132 = arith.select %125, %129, %131 : index
-                %133 = arts.db_ref %arg3[%c0_75] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                %133 = arts.db_ref %arg3[%c0_63] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
                 memref.store %cst_2, %133[%132, %arg9] : memref<?x?xf64>
               } {arts.id = 145 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 256 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 0 : i64, locationKey = "2mm.c:137:3">, arts.metadata_provenance = "exact"}
               scf.for %arg9 = %c0 to %c256 step %c1 {
                 scf.for %arg10 = %c0 to %c256 step %c1 {
                   %c1_81 = arith.constant 1 : index
-                  %117 = arith.maxui %95, %c1_81 : index
+                  %117 = arith.maxui %101, %c1_81 : index
                   %c0_82 = arith.constant 0 : index
                   %c1_83 = arith.constant 1 : index
                   %c-1 = arith.constant -1 : index
@@ -319,7 +319,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
                   %120 = arith.remui %118, %117 : index
                   %121 = arith.subi %arg8, %112 : index
                   %122 = arith.addi %120, %121 : index
-                  %123 = arith.subi %119, %102 : index
+                  %123 = arith.subi %119, %108 : index
                   %124 = arith.cmpi slt, %122, %c0_82 : index
                   %125 = arith.cmpi sge, %122, %117 : index
                   %126 = arith.select %124, %c-1, %c0_82 : index
@@ -336,7 +336,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
                   %137 = memref.load %136[%arg9, %arg10] : memref<?x?xf64>
                   %138 = arith.mulf %135, %137 : f64
                   %c1_84 = arith.constant 1 : index
-                  %139 = arith.maxui %104, %c1_84 : index
+                  %139 = arith.maxui %95, %c1_84 : index
                   %c0_85 = arith.constant 0 : index
                   %c1_86 = arith.constant 1 : index
                   %c-1_87 = arith.constant -1 : index
@@ -345,7 +345,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
                   %142 = arith.remui %140, %139 : index
                   %143 = arith.subi %arg8, %112 : index
                   %144 = arith.addi %142, %143 : index
-                  %145 = arith.subi %141, %109 : index
+                  %145 = arith.subi %141, %100 : index
                   %146 = arith.cmpi slt, %144, %c0_85 : index
                   %147 = arith.cmpi sge, %144, %139 : index
                   %148 = arith.select %146, %c-1_87, %c0_85 : index
@@ -355,11 +355,11 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
                   %152 = arith.addi %144, %139 : index
                   %153 = arith.select %146, %152, %144 : index
                   %154 = arith.select %147, %151, %153 : index
-                  %155 = arts.db_ref %arg3[%c0_75] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                  %155 = arts.db_ref %arg3[%c0_63] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
                   %156 = memref.load %155[%154, %arg10] : memref<?x?xf64>
                   %157 = arith.addf %156, %138 : f64
                   %c1_88 = arith.constant 1 : index
-                  %158 = arith.maxui %104, %c1_88 : index
+                  %158 = arith.maxui %95, %c1_88 : index
                   %c0_89 = arith.constant 0 : index
                   %c1_90 = arith.constant 1 : index
                   %c-1_91 = arith.constant -1 : index
@@ -368,7 +368,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
                   %161 = arith.remui %159, %158 : index
                   %162 = arith.subi %arg8, %112 : index
                   %163 = arith.addi %161, %162 : index
-                  %164 = arith.subi %160, %109 : index
+                  %164 = arith.subi %160, %100 : index
                   %165 = arith.cmpi slt, %163, %c0_89 : index
                   %166 = arith.cmpi sge, %163, %158 : index
                   %167 = arith.select %165, %c-1_91, %c0_89 : index
@@ -378,7 +378,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
                   %171 = arith.addi %163, %158 : index
                   %172 = arith.select %165, %171, %163 : index
                   %173 = arith.select %166, %170, %172 : index
-                  %174 = arts.db_ref %arg3[%c0_75] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                  %174 = arts.db_ref %arg3[%c0_63] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
                   memref.store %157, %174[%173, %arg10] : memref<?x?xf64>
                 } {arts.id = 147 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 256 : i64, nestingLevel = 2 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 0 : i64, locationKey = "2mm.c:137:3">, arts.metadata_origin_id = 147 : i64, arts.metadata_provenance = "transferred"}
               } {arts.id = 146 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 256 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 0 : i64, locationKey = "2mm.c:137:3">, arts.metadata_origin_id = 146 : i64, arts.metadata_provenance = "transferred"}
@@ -450,9 +450,9 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
           %80 = arith.select %75, %c0, %78 : index
           %c1_49 = arith.constant 1 : index
           %c0_50 = arith.constant 0 : index
-          %guid_51, %ptr_52 = arts.db_acquire[<in>] (%guid_19 : memref<?xi64>, %ptr_20 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%64], sizes[%69]), offsets[%c0_50], sizes[%19] {arts.id = 158 : i64, arts.partition_hint = {blockSize = 11 : i64, mode = 1 : i8}, arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          %guid_51, %ptr_52 = arts.db_acquire[<in>] (%guid_19 : memref<?xi64>, %ptr_20 : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%64], sizes[%69]), offsets[%c0_50], sizes[%19] {arts.id = 156 : i64, arts.partition_hint = {blockSize = 11 : i64, mode = 1 : i8}, arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
           arts.lowering_contract(%ptr_52 : memref<?xmemref<?x?xf64>>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>)
-          %guid_53, %ptr_54 = arts.db_acquire[<in>] (%guid_25 : memref<?xi64>, %ptr_26 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_24], sizes[%c1] {arts.id = 157 : i64, arts.partition_hint = {blockSize = 11 : i64, mode = 1 : i8}, arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          %guid_53, %ptr_54 = arts.db_acquire[<in>] (%guid_25 : memref<?xi64>, %ptr_26 : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0_24], sizes[%c1] {arts.id = 158 : i64, arts.partition_hint = {blockSize = 11 : i64, mode = 1 : i8}, arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
           arts.lowering_contract(%ptr_54 : memref<?xmemref<?x?xf64>>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<postDbRefined = true>)
           %c1_55 = arith.constant 1 : index
           %c0_56 = arith.constant 0 : index
@@ -479,24 +479,24 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
           ^bb0(%arg3: memref<?xmemref<?x?xf64>>, %arg4: memref<?xmemref<?x?xf64>>, %arg5: memref<?xmemref<?x?xf64>>, %arg6: memref<?xmemref<?x?xf64>>, %arg7: memref<?xmemref<?x?xf64>>):
             %c1_62 = arith.constant 1 : index
             %c0_63 = arith.constant 0 : index
-            %95 = arith.maxui %13, %c1_62 : index
+            %95 = arith.maxui %6, %c1_62 : index
             %c0_64 = arith.constant 0 : index
-            %c1_65 = arith.constant 1 : index
-            %c0_66 = arith.constant 0 : index
-            %96 = arith.maxui %20, %c1_65 : index
-            %c0_67 = arith.constant 0 : index
-            %c4_68 = arith.constant 4 : index
-            %97 = arith.muli %arg2, %c4_68 : index
-            %c11_69 = arith.constant 11 : index
-            %c1_70 = arith.constant 1 : index
-            %98 = arith.maxui %c11_69, %c1_70 : index
-            %c1_71 = arith.constant 1 : index
-            %99 = arith.maxui %98, %c1_71 : index
-            %100 = arith.divui %97, %99 : index
-            %101 = arith.select %88, %c0_67, %100 : index
+            %c4_65 = arith.constant 4 : index
+            %96 = arith.muli %arg2, %c4_65 : index
+            %c11_66 = arith.constant 11 : index
+            %c1_67 = arith.constant 1 : index
+            %97 = arith.maxui %c11_66, %c1_67 : index
+            %c1_68 = arith.constant 1 : index
+            %98 = arith.maxui %97, %c1_68 : index
+            %99 = arith.divui %96, %98 : index
+            %100 = arith.select %54, %c0_64, %99 : index
+            %c1_69 = arith.constant 1 : index
+            %c0_70 = arith.constant 0 : index
+            %101 = arith.maxui %13, %c1_69 : index
+            %c0_71 = arith.constant 0 : index
             %c1_72 = arith.constant 1 : index
             %c0_73 = arith.constant 0 : index
-            %102 = arith.maxui %6, %c1_72 : index
+            %102 = arith.maxui %20, %c1_72 : index
             %c0_74 = arith.constant 0 : index
             %c4_75 = arith.constant 4 : index
             %103 = arith.muli %arg2, %c4_75 : index
@@ -506,7 +506,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
             %c1_78 = arith.constant 1 : index
             %105 = arith.maxui %104, %c1_78 : index
             %106 = arith.divui %103, %105 : index
-            %107 = arith.select %54, %c0_74, %106 : index
+            %107 = arith.select %88, %c0_74, %106 : index
             %108 = arith.subi %c0, %32 : index
             %109 = arith.cmpi slt, %108, %c0 : index
             %110 = arith.select %109, %c0, %108 : index
@@ -517,7 +517,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
               %114 = arith.addi %32, %arg8 : index
               scf.for %arg9 = %c0 to %c256 step %c1 {
                 %c1_79 = arith.constant 1 : index
-                %115 = arith.maxui %96, %c1_79 : index
+                %115 = arith.maxui %102, %c1_79 : index
                 %c0_80 = arith.constant 0 : index
                 %c1_81 = arith.constant 1 : index
                 %c-1 = arith.constant -1 : index
@@ -526,7 +526,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
                 %118 = arith.remui %116, %115 : index
                 %119 = arith.subi %arg8, %110 : index
                 %120 = arith.addi %118, %119 : index
-                %121 = arith.subi %117, %101 : index
+                %121 = arith.subi %117, %107 : index
                 %122 = arith.cmpi slt, %120, %c0_80 : index
                 %123 = arith.cmpi sge, %120, %115 : index
                 %124 = arith.select %122, %c-1, %c0_80 : index
@@ -536,11 +536,11 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
                 %128 = arith.addi %120, %115 : index
                 %129 = arith.select %122, %128, %120 : index
                 %130 = arith.select %123, %127, %129 : index
-                %131 = arts.db_ref %arg6[%c0_66] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                %131 = arts.db_ref %arg6[%c0_73] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
                 %132 = memref.load %131[%130, %arg9] : memref<?x?xf64>
                 %133 = arith.mulf %132, %cst : f64
                 %c1_82 = arith.constant 1 : index
-                %134 = arith.maxui %96, %c1_82 : index
+                %134 = arith.maxui %102, %c1_82 : index
                 %c0_83 = arith.constant 0 : index
                 %c1_84 = arith.constant 1 : index
                 %c-1_85 = arith.constant -1 : index
@@ -549,7 +549,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
                 %137 = arith.remui %135, %134 : index
                 %138 = arith.subi %arg8, %110 : index
                 %139 = arith.addi %137, %138 : index
-                %140 = arith.subi %136, %101 : index
+                %140 = arith.subi %136, %107 : index
                 %141 = arith.cmpi slt, %139, %c0_83 : index
                 %142 = arith.cmpi sge, %139, %134 : index
                 %143 = arith.select %141, %c-1_85, %c0_83 : index
@@ -559,13 +559,13 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
                 %147 = arith.addi %139, %134 : index
                 %148 = arith.select %141, %147, %139 : index
                 %149 = arith.select %142, %146, %148 : index
-                %150 = arts.db_ref %arg6[%c0_66] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                %150 = arts.db_ref %arg6[%c0_73] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
                 memref.store %133, %150[%149, %arg9] : memref<?x?xf64>
               } {arts.id = 148 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 256 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 0 : i64, locationKey = "2mm.c:137:3">, arts.metadata_provenance = "exact"}
               scf.for %arg9 = %c0 to %c256 step %c1 {
                 scf.for %arg10 = %c0 to %c256 step %c1 {
                   %c1_79 = arith.constant 1 : index
-                  %115 = arith.maxui %102, %c1_79 : index
+                  %115 = arith.maxui %95, %c1_79 : index
                   %c0_80 = arith.constant 0 : index
                   %c1_81 = arith.constant 1 : index
                   %c-1 = arith.constant -1 : index
@@ -574,7 +574,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
                   %118 = arith.remui %116, %115 : index
                   %119 = arith.subi %arg8, %110 : index
                   %120 = arith.addi %118, %119 : index
-                  %121 = arith.subi %117, %107 : index
+                  %121 = arith.subi %117, %100 : index
                   %122 = arith.cmpi slt, %120, %c0_80 : index
                   %123 = arith.cmpi sge, %120, %115 : index
                   %124 = arith.select %122, %c-1, %c0_80 : index
@@ -584,13 +584,13 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
                   %128 = arith.addi %120, %115 : index
                   %129 = arith.select %122, %128, %120 : index
                   %130 = arith.select %123, %127, %129 : index
-                  %131 = arts.db_ref %arg3[%c0_73] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                  %131 = arts.db_ref %arg3[%c0_63] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
                   %132 = memref.load %131[%130, %arg9] : memref<?x?xf64>
                   %133 = arts.db_ref %arg7[%c0] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
                   %134 = memref.load %133[%arg9, %arg10] : memref<?x?xf64>
                   %135 = arith.mulf %132, %134 : f64
                   %c1_82 = arith.constant 1 : index
-                  %136 = arith.maxui %96, %c1_82 : index
+                  %136 = arith.maxui %102, %c1_82 : index
                   %c0_83 = arith.constant 0 : index
                   %c1_84 = arith.constant 1 : index
                   %c-1_85 = arith.constant -1 : index
@@ -599,7 +599,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
                   %139 = arith.remui %137, %136 : index
                   %140 = arith.subi %arg8, %110 : index
                   %141 = arith.addi %139, %140 : index
-                  %142 = arith.subi %138, %101 : index
+                  %142 = arith.subi %138, %107 : index
                   %143 = arith.cmpi slt, %141, %c0_83 : index
                   %144 = arith.cmpi sge, %141, %136 : index
                   %145 = arith.select %143, %c-1_85, %c0_83 : index
@@ -609,11 +609,11 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
                   %149 = arith.addi %141, %136 : index
                   %150 = arith.select %143, %149, %141 : index
                   %151 = arith.select %144, %148, %150 : index
-                  %152 = arts.db_ref %arg6[%c0_66] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                  %152 = arts.db_ref %arg6[%c0_73] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
                   %153 = memref.load %152[%151, %arg10] : memref<?x?xf64>
                   %154 = arith.addf %153, %135 : f64
                   %c1_86 = arith.constant 1 : index
-                  %155 = arith.maxui %96, %c1_86 : index
+                  %155 = arith.maxui %102, %c1_86 : index
                   %c0_87 = arith.constant 0 : index
                   %c1_88 = arith.constant 1 : index
                   %c-1_89 = arith.constant -1 : index
@@ -622,7 +622,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
                   %158 = arith.remui %156, %155 : index
                   %159 = arith.subi %arg8, %110 : index
                   %160 = arith.addi %158, %159 : index
-                  %161 = arith.subi %157, %101 : index
+                  %161 = arith.subi %157, %107 : index
                   %162 = arith.cmpi slt, %160, %c0_87 : index
                   %163 = arith.cmpi sge, %160, %155 : index
                   %164 = arith.select %162, %c-1_89, %c0_87 : index
@@ -632,7 +632,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
                   %168 = arith.addi %160, %155 : index
                   %169 = arith.select %162, %168, %160 : index
                   %170 = arith.select %163, %167, %169 : index
-                  %171 = arts.db_ref %arg6[%c0_66] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                  %171 = arts.db_ref %arg6[%c0_73] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
                   memref.store %154, %171[%170, %arg10] : memref<?x?xf64>
                 } {arts.id = 150 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 256 : i64, nestingLevel = 2 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 0 : i64, locationKey = "2mm.c:137:3">, arts.metadata_origin_id = 150 : i64, arts.metadata_provenance = "transferred"}
               } {arts.id = 149 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 256 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 0 : i64, locationKey = "2mm.c:137:3">, arts.metadata_origin_id = 149 : i64, arts.metadata_provenance = "transferred"}
@@ -666,16 +666,16 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
     call @carts_phase_timer_start(%31, %4) : (memref<?xi8>, memref<?xi8>) -> ()
     call @carts_phase_timer_stop(%31) : (memref<?xi8>) -> ()
     call @carts_e2e_timer_stop() : () -> ()
-    arts.db_free(%guid_41) : memref<?xi64>
-    arts.db_free(%ptr_42) : memref<?xmemref<?x?xf64>>
     arts.db_free(%guid_19) : memref<?xi64>
     arts.db_free(%ptr_20) : memref<?xmemref<?x?xf64>>
-    arts.db_free(%guid_25) : memref<?xi64>
-    arts.db_free(%ptr_26) : memref<?xmemref<?x?xf64>>
+    arts.db_free(%guid_41) : memref<?xi64>
+    arts.db_free(%ptr_42) : memref<?xmemref<?x?xf64>>
     arts.db_free(%guid_30) : memref<?xi64>
     arts.db_free(%ptr_31) : memref<?xmemref<?x?xf64>>
     arts.db_free(%guid) : memref<?xi64>
     arts.db_free(%ptr) : memref<?xmemref<?x?xf64>>
+    arts.db_free(%guid_25) : memref<?xi64>
+    arts.db_free(%ptr_26) : memref<?xmemref<?x?xf64>>
     return %c0_i32 : i32
   }
   func.func private @carts_benchmarks_start() attributes {llvm.linkage = #llvm.linkage<external>}

@@ -2,6 +2,7 @@
 .clangd
 .install
 .build
+.agents/
 .vscode
 compile_commands.json
 /build/
