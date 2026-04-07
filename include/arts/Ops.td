@@ -1150,6 +1150,79 @@ def DbGepOp : Arts_Op<"db_gep", [Pure, AttrSizedOperandSegments]> {
                              : $strides)>];
 }
 
+///===----------------------------------------------------------------------===///
+/// Split Launch State Operations (Structured Kernel Plan, Phase 2)
+///===----------------------------------------------------------------------===///
+
+def StatePackOp : Arts_Op<"state_pack", [MemoryEffects<[MemWrite]>]> {
+  let summary = "Pack scalar values into a state channel";
+  let description = [{
+    Packs loop counters, bounds, and other scalar values into a contiguous
+    i64 memref for transport through CPS relaunch or EDT parameter arrays.
+    Each value is cast to i64 before storage; the original types are
+    recovered by the paired `arts.state_unpack`.
+
+    Emitted by EdtLowering when a structured kernel plan
+    (`arts.plan.kernel_family`) is present on the EDT.
+  }];
+  let arguments = (ins Variadic<AnyType>:$values);
+  let results = (outs MemRefOf<[I64]>:$state);
+  let assemblyFormat =
+      "`(` $values `)` attr-dict `:` type($values) `->` type($state)";
+}
+
+def StateUnpackOp : Arts_Op<"state_unpack", [Pure]> {
+  let summary = "Unpack values from a state channel";
+  let description = [{
+    Recovers the original typed values from a state channel memref
+    produced by `arts.state_pack`. Each i64 element is loaded and cast
+    back to the target type.
+
+    Emitted inside outlined EDT functions when a structured kernel plan
+    is present, replacing the generic `arts.edt_param_unpack` for the
+    state portion of the parameter array.
+  }];
+  let arguments = (ins MemRefOf<[I64]>:$state);
+  let results = (outs Variadic<AnyType>:$values);
+  let assemblyFormat =
+      "$state `:` type($state) attr-dict `:` `(` type($values) `)`";
+}
+
+def DepBindOp : Arts_Op<"dep_bind", [MemoryEffects<[MemWrite]>]> {
+  let summary = "Bind a DB GUID to a dependency channel slot";
+  let description = [{
+    Binds a DataBlock GUID to a logical dependency slot with the given
+    access mode. The returned slot identifier is consumed by
+    `arts.dep_forward` or dependency recording lowering.
+
+    Emitted by EdtLowering when a structured kernel plan is present,
+    making the state/dep separation explicit in the IR.
+  }];
+  let arguments = (ins I64:$guid, I64:$mode);
+  let results = (outs I64:$slot);
+  let assemblyFormat =
+      "`(` $guid `,` $mode `)` attr-dict";
+}
+
+def DepForwardOp : Arts_Op<"dep_forward", [Pure]> {
+  let summary = "Forward a dependency slot across CPS relaunch";
+  let description = [{
+    Forwards a dependency slot produced by `arts.dep_bind` across a CPS
+    continuation boundary. At runtime level this is an identity (the slot
+    value is unchanged), but the op makes the forwarding intent explicit
+    so that CPS schema cleanup can verify slot liveness.
+
+    Consumed by EpochLowering's CPS advance resolution path.
+  }];
+  let arguments = (ins I64:$slot);
+  let results = (outs I64:$forwarded);
+  let assemblyFormat = "$slot attr-dict";
+}
+
+///===----------------------------------------------------------------------===///
+/// arts.for
+///===----------------------------------------------------------------------===///
+
 def ForOp : Arts_Op<"for", [
   AttrSizedOperandSegments, SingleBlockImplicitTerminator<"arts::YieldOp">,
   DeclareOpInterfaceMethods<LoopLikeOpInterface,

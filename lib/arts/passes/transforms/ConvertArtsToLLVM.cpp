@@ -1566,11 +1566,9 @@ struct DepDbAcquireOpPattern : public ArtsToLLVMPattern<DepDbAcquireOp> {
 
     Value guidPtr = AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->ArtsEdtDep,
                                             depEntryPtr, ValueRange{c0, c0});
-    Value dataPtrAddr =
-        AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->ArtsEdtDep, depEntryPtr,
-                                ValueRange{c0, cPtrIdx});
-    Value payloadPtr =
-        AC->create<LLVM::LoadOp>(loc, AC->llvmPtr, dataPtrAddr);
+    Value dataPtrAddr = AC->create<LLVM::GEPOp>(
+        loc, AC->llvmPtr, AC->ArtsEdtDep, depEntryPtr, ValueRange{c0, cPtrIdx});
+    Value payloadPtr = AC->create<LLVM::LoadOp>(loc, AC->llvmPtr, dataPtrAddr);
 
     /// DepDbAcquireOp feeds two distinct downstream shapes:
     /// - flat payload memrefs (e.g. memref<?x?xf32>) expect the dep entry's
@@ -1664,10 +1662,11 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
 
     /// Normalize paramv to the runtime ABI type expected by the helper decls.
     if (auto memrefType = dyn_cast<MemRefType>(paramv.getType())) {
-      auto runtimeParamType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
+      auto runtimeParamType =
+          MemRefType::get({ShapedType::kDynamic}, AC->Int64);
       if (memrefType != runtimeParamType)
-        paramv =
-            AC->create<memref::CastOp>(loc, runtimeParamType, paramv).getResult();
+        paramv = AC->create<memref::CastOp>(loc, runtimeParamType, paramv)
+                     .getResult();
     }
 
     /// Calculate parameter count from memref size
@@ -2399,16 +2398,14 @@ struct DbReleasePattern : public ArtsToLLVMPattern<DbReleaseOp> {
           bool isSingle = releaseSizes.size() == 1;
           AC->iterateDbElements(
               guidStorage, Value(), releaseSizes, releaseOffsets, isSingle,
-              op.getLoc(),
-              [&](Value linearIndex) {
+              op.getLoc(), [&](Value linearIndex) {
                 Value idx = AC->castToIndex(linearIndex, op.getLoc());
                 SmallVector<Value> indices;
                 if (storageTy.getRank() == 1) {
                   indices.push_back(idx);
                 } else {
-                  indices =
-                      AC->computeIndicesFromLinearIndex(releaseSizes, idx,
-                                                        op.getLoc());
+                  indices = AC->computeIndicesFromLinearIndex(releaseSizes, idx,
+                                                              op.getLoc());
                 }
                 emitRelease(AC->create<memref::LoadOp>(op.getLoc(), guidStorage,
                                                        indices));
@@ -2559,6 +2556,111 @@ struct UndefPattern : public ArtsToLLVMPattern<UndefOp> {
 };
 
 ///===----------------------------------------------------------------------===///
+/// Split Launch State Lowering Patterns (Structured Kernel Plan, Phase 2)
+///===----------------------------------------------------------------------===///
+
+/// Pattern to lower arts.state_pack to alloca + stores.
+/// Each value is cast to i64 and stored sequentially into the allocated memref.
+struct StatePackPattern : public ArtsToLLVMPattern<StatePackOp> {
+  using ArtsToLLVMPattern::ArtsToLLVMPattern;
+
+  LogicalResult matchAndRewrite(StatePackOp op,
+                                PatternRewriter &rewriter) const override {
+    ARTS_INFO("Lowering StatePack Op " << op);
+    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
+
+    auto loc = op.getLoc();
+    auto values = op.getValues();
+    auto resultType = dyn_cast<MemRefType>(op.getState().getType());
+    if (!resultType)
+      return op.emitError("Expected MemRef type for state result");
+
+    memref::AllocaOp allocOp;
+    if (values.empty()) {
+      auto dynamicType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
+      auto zeroIndex = AC->createIndexConstant(0, loc);
+      allocOp =
+          AC->create<memref::AllocaOp>(loc, dynamicType, ValueRange{zeroIndex});
+    } else if (resultType.getNumDynamicDims() > 0) {
+      auto numValues = AC->createIndexConstant(values.size(), loc);
+      allocOp =
+          AC->create<memref::AllocaOp>(loc, resultType, ValueRange{numValues});
+    } else {
+      allocOp = AC->create<memref::AllocaOp>(loc, resultType, ValueRange{});
+    }
+
+    for (unsigned i = 0; i < values.size(); ++i) {
+      auto index = AC->createIndexConstant(i, loc);
+      auto castVal = AC->castParameter(AC->Int64, values[i], loc,
+                                       ArtsCodegen::ParameterCastMode::Bitwise);
+      AC->create<memref::StoreOp>(loc, castVal, allocOp, ValueRange{index});
+    }
+
+    rewriter.replaceOp(op, allocOp);
+    ++numMiscOpsConverted;
+    return success();
+  }
+};
+
+/// Pattern to lower arts.state_unpack to loads + casts.
+/// Each i64 element is loaded from the state memref and cast back to the
+/// target type.
+struct StateUnpackPattern : public ArtsToLLVMPattern<StateUnpackOp> {
+  using ArtsToLLVMPattern::ArtsToLLVMPattern;
+
+  LogicalResult matchAndRewrite(StateUnpackOp op,
+                                PatternRewriter &rewriter) const override {
+    ARTS_INFO("Lowering StateUnpack Op " << op);
+    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
+    auto stateMemref = op.getState();
+    auto results = op.getValues();
+
+    SmallVector<Value> newResults;
+    for (unsigned i = 0; i < results.size(); ++i) {
+      auto idx = AC->createIndexConstant(i, op.getLoc());
+      auto loadedVal =
+          AC->create<memref::LoadOp>(op.getLoc(), stateMemref, ValueRange{idx});
+      auto castedVal =
+          AC->castParameter(results[i].getType(), loadedVal, op.getLoc(),
+                            ArtsCodegen::ParameterCastMode::Bitwise);
+      newResults.push_back(castedVal);
+    }
+
+    rewriter.replaceOp(op, newResults);
+    ++numMiscOpsConverted;
+    return success();
+  }
+};
+
+/// Pattern to lower arts.dep_bind to a pass-through.
+/// At LLVM level, the GUID itself is the slot identifier.
+struct DepBindPattern : public ArtsToLLVMPattern<DepBindOp> {
+  using ArtsToLLVMPattern::ArtsToLLVMPattern;
+
+  LogicalResult matchAndRewrite(DepBindOp op,
+                                PatternRewriter &rewriter) const override {
+    ARTS_INFO("Lowering DepBind Op " << op);
+    rewriter.replaceOp(op, op.getGuid());
+    ++numMiscOpsConverted;
+    return success();
+  }
+};
+
+/// Pattern to lower arts.dep_forward to identity (pass-through).
+/// At runtime level the slot value is unchanged across relaunch.
+struct DepForwardPattern : public ArtsToLLVMPattern<DepForwardOp> {
+  using ArtsToLLVMPattern::ArtsToLLVMPattern;
+
+  LogicalResult matchAndRewrite(DepForwardOp op,
+                                PatternRewriter &rewriter) const override {
+    ARTS_INFO("Lowering DepForward Op " << op);
+    rewriter.replaceOp(op, op.getSlot());
+    ++numMiscOpsConverted;
+    return success();
+  }
+};
+
+///===----------------------------------------------------------------------===///
 /// Pass Implementation
 ///===----------------------------------------------------------------------===///
 namespace {
@@ -2677,6 +2779,10 @@ void ConvertArtsToLLVMPass::populateCorePatterns(RewritePatternSet &patterns) {
   /// Dep patterns
   patterns.add<DepGepOpPattern>(context, AC);
   patterns.add<RecordDepPattern, IncrementDepPattern>(context, AC);
+
+  /// Split launch state patterns (structured kernel plan)
+  patterns.add<StatePackPattern, StateUnpackPattern>(context, AC);
+  patterns.add<DepBindPattern, DepForwardPattern>(context, AC);
 }
 
 void ConvertArtsToLLVMPass::populateDbPatterns(RewritePatternSet &patterns) {

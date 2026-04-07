@@ -492,12 +492,11 @@ private:
                    SmallVectorImpl<Value> *packedValues = nullptr);
 
   /// Region outlining
-  LogicalResult outlineRegionToFunction(EdtOp edtOp, func::FuncOp targetFunc,
-                                        EdtEnvManager &envManager,
-                                        SmallVector<Type> &packTypes,
-                                        size_t numUserParams,
-                                        SmallVectorImpl<unsigned>
-                                            &livePackIndices);
+  LogicalResult
+  outlineRegionToFunction(EdtOp edtOp, func::FuncOp targetFunc,
+                          EdtEnvManager &envManager,
+                          SmallVector<Type> &packTypes, size_t numUserParams,
+                          SmallVectorImpl<unsigned> &livePackIndices);
 
   void transformDepUses(ArrayRef<Value> originalDeps, Value depv,
                         ArrayRef<Value> allParams, EdtEnvManager &envManager,
@@ -672,6 +671,48 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
     }
   }
 
+  /// When a structured kernel plan is present, emit split state/dep ops
+  /// to make the state-vs-dependency separation explicit in the IR.
+  /// The generic path remains the fallback for unplanned EDTs.
+  if (auto familyAttr = edtOp->getAttrOfType<StringAttr>(
+          AttrNames::Operation::Plan::KernelFamily)) {
+    ARTS_DEBUG("Plan-aware path: kernel_family=" << familyAttr.getValue());
+
+    /// Emit state_pack for scalar parameters (non-dep captured values).
+    SmallVector<Value> stateValues;
+    for (Value param : envManager.getParameters())
+      stateValues.push_back(param);
+    for (Value constant : envManager.getConstants())
+      stateValues.push_back(constant);
+
+    if (!stateValues.empty()) {
+      auto stateMemrefType = MemRefType::get(
+          {static_cast<int64_t>(stateValues.size())}, AC->Int64);
+      AC->create<StatePackOp>(loc, stateMemrefType, stateValues);
+      ARTS_DEBUG("  Emitted state_pack with " << stateValues.size()
+                                              << " values");
+    }
+
+    /// Emit dep_bind for each dependency to make slot assignment explicit.
+    for (Value dep : edtDeps) {
+      auto acquire = dep.getDefiningOp<DbAcquireOp>();
+      if (!acquire)
+        continue;
+      Value guidMemref = acquire.getSourceGuid();
+      if (!guidMemref)
+        continue;
+      Value guidScalar =
+          AC->create<memref::LoadOp>(loc, guidMemref, ValueRange{});
+      Value modeVal = AC->createIntConstant(
+          static_cast<int64_t>(acquire.getMode()), AC->Int64, loc);
+      AC->create<DepBindOp>(loc, guidScalar, modeVal);
+      ARTS_DEBUG("  Emitted dep_bind for dep");
+    }
+
+    /// Propagate plan attrs to the EdtCreateOp (set below).
+    /// Fall through to the generic EdtCreateOp emission.
+  }
+
   /// Calculate dependency count from the dependency view of each DB.
   Value depCount = computeDependencyCount(loc, edtDeps);
 
@@ -717,6 +758,19 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   }
   if (auto chainId = edtOp->getAttrOfType<StringAttr>(CPSChainId))
     outlineOp->setAttr(CPSChainId, chainId);
+
+  /// Propagate structured kernel plan attrs to the EdtCreateOp so
+  /// downstream passes (EpochLowering, ConvertArtsToLLVM) can use them.
+  if (auto familyAttr = edtOp->getAttrOfType<StringAttr>(
+          AttrNames::Operation::Plan::KernelFamily))
+    outlineOp->setAttr(AttrNames::Operation::Plan::KernelFamily, familyAttr);
+  if (auto stateSchema = edtOp->getAttrOfType<StringAttr>(
+          AttrNames::Operation::LaunchState::StateSchema))
+    outlineOp->setAttr(AttrNames::Operation::LaunchState::StateSchema,
+                       stateSchema);
+  if (auto depSchema = edtOp->getAttrOfType<StringAttr>(
+          AttrNames::Operation::LaunchState::DepSchema))
+    outlineOp->setAttr(AttrNames::Operation::LaunchState::DepSchema, depSchema);
 
   int64_t baseId = getArtsId(edtOp);
   if (!baseId)
@@ -1299,10 +1353,9 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
         depFlagBits |= kArtsDepFlagPreferDuplicate;
       }
     }
-    bool hasExplicitSlice =
-        byteOffset && byteSize &&
-        !ValueAnalysis::isZeroConstant(
-            ValueAnalysis::stripNumericCasts(byteSize));
+    bool hasExplicitSlice = byteOffset && byteSize &&
+                            !ValueAnalysis::isZeroConstant(
+                                ValueAnalysis::stripNumericCasts(byteSize));
     if (depDbAcquireOp && hasExplicitSlice) {
       /// Depv-carried slices are the last remaining unstable path in the
       /// 64-thread stencil continuation benchmarks. Fall back to whole-block
@@ -1314,9 +1367,9 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
       hasExplicitSlice = false;
     }
     Operation *patternSource =
-        dbAcquireOp ? dbAcquireOp.getOperation()
-                    : (depDbAcquireOp ? depDbAcquireOp.getOperation()
-                                      : nullptr);
+        dbAcquireOp
+            ? dbAcquireOp.getOperation()
+            : (depDbAcquireOp ? depDbAcquireOp.getOperation() : nullptr);
     if (patternSource && hasExplicitSlice && dbMode == DbMode::read) {
       if (auto depPattern = getEffectiveDepPattern(patternSource);
           depPattern && isStencilHaloDepPattern(*depPattern)) {
@@ -1456,9 +1509,9 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
     canonicalDepSources.push_back(getCanonicalDependencySource(dep));
 
   auto computeBaseOffset = [&](size_t depIndex, Location loc) {
-    Operation *currentSource =
-        depIndex < canonicalDepSources.size() ? canonicalDepSources[depIndex]
-                                              : nullptr;
+    Operation *currentSource = depIndex < canonicalDepSources.size()
+                                   ? canonicalDepSources[depIndex]
+                                   : nullptr;
     Value base = AC->createIndexConstant(0, loc);
     DenseSet<Operation *> seenSources;
     for (size_t i = 0; i < depIndex; ++i) {
@@ -1584,8 +1637,8 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
               Value belowOffset = AC->create<arith::CmpIOp>(
                   loc, arith::CmpIPredicate::ult, lhs, off);
               Value shifted = AC->create<arith::SubIOp>(loc, lhs, off);
-              idx = AC->create<arith::SelectOp>(loc, belowOffset, zero,
-                                                shifted);
+              idx =
+                  AC->create<arith::SelectOp>(loc, belowOffset, zero, shifted);
             }
           } else {
             Value belowOffset = AC->create<arith::CmpIOp>(
@@ -1627,8 +1680,7 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
           nestedEdtDepUses.push_back(&use);
         else
           users.push_back(use.getOwner());
-      }
-      else
+      } else
         users.push_back(use.getOwner());
     }
 
@@ -1685,9 +1737,8 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
                                 sourceAcquire.getIndices().end());
       }
       forwardedIndices = resolveParam(forwardedIndices, loc);
-      forwardedIndices = normalizeSliceIndices(forwardedIndices, depOffsets,
-                                               depSizes,
-                                               indicesAlreadySliceRelative);
+      forwardedIndices = normalizeSliceIndices(
+          forwardedIndices, depOffsets, depSizes, indicesAlreadySliceRelative);
 
       return AC->create<arts::DepDbAcquireOp>(
           userLoc, depGuidType, depPtrType, depv, baseOffset, forwardedIndices,
@@ -1697,21 +1748,24 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
     SmallVector<unsigned, 4> depHandlePackIndices;
     if (auto sourceAcquire =
             originalDeps[depIndex].getDefiningOp<DbAcquireOp>()) {
-      for (Value candidate : {sourceAcquire.getGuid(), sourceAcquire.getPtr()}) {
+      for (Value candidate :
+           {sourceAcquire.getGuid(), sourceAcquire.getPtr()}) {
         auto it = paramMap.find(candidate);
         if (it != paramMap.end())
           depHandlePackIndices.push_back(it->second);
       }
     } else if (auto sourceAcquire =
                    originalDeps[depIndex].getDefiningOp<DepDbAcquireOp>()) {
-      for (Value candidate : {sourceAcquire.getGuid(), sourceAcquire.getPtr()}) {
+      for (Value candidate :
+           {sourceAcquire.getGuid(), sourceAcquire.getPtr()}) {
         auto it = paramMap.find(candidate);
         if (it != paramMap.end())
           depHandlePackIndices.push_back(it->second);
       }
     }
 
-    auto tracePackedDepHandleIndex = [&](Value value) -> std::optional<unsigned> {
+    auto tracePackedDepHandleIndex =
+        [&](Value value) -> std::optional<unsigned> {
       for (unsigned depth = 0; depth < 8 && value; ++depth) {
         for (unsigned packIdx : depHandlePackIndices) {
           if (packIdx < allParams.size() && value == allParams[packIdx])
@@ -1730,14 +1784,14 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
     if (!recordDepUses.empty()) {
       for (OpOperand *use : recordDepUses) {
         AC->setInsertionPoint(use->getOwner());
-        auto forwardedDep = createForwardedDepAcquire(use->getOwner()->getLoc());
+        auto forwardedDep =
+            createForwardedDepAcquire(use->getOwner()->getLoc());
         use->set(forwardedDep.getResult(0));
       }
     }
 
     if (!depHandlePackIndices.empty())
-      if (Operation *scope =
-              placeholder.getParentBlock()->getParentOp())
+      if (Operation *scope = placeholder.getParentBlock()->getParentOp())
         scope->walk([&](RecordDepOp recordDep) {
           for (OpOperand &operand : recordDep->getOpOperands()) {
             Value operandValue = operand.get();
@@ -1766,8 +1820,7 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
     /// we must index depv, not treat a single dep entry as an array.
     bool hasIndexedUsers = llvm::any_of(users, [](Operation *op) {
       return isa<arts::DbRefOp, arts::DbGepOp, memref::LoadOp, memref::StoreOp,
-                 polygeist::Memref2PointerOp,
-                 polygeist::Pointer2MemrefOp>(op);
+                 polygeist::Memref2PointerOp, polygeist::Pointer2MemrefOp>(op);
     });
     if (isSingleElement && !isNestedMemref && !hasIndexedUsers) {
       ARTS_DEBUG(" - Rewriting single element placeholder");
@@ -1839,9 +1892,8 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         AC->setInsertionPoint(op);
         if (usePayloadIndexing) {
           SmallVector<Value> emptyArgs;
-          auto payloadGep = AC->create<DbGepOp>(loc, AC->llvmPtr,
-                                                getPayloadView(), emptyArgs,
-                                                emptyArgs);
+          auto payloadGep = AC->create<DbGepOp>(
+              loc, AC->llvmPtr, getPayloadView(), emptyArgs, emptyArgs);
           op->getResult(0).replaceAllUsesWith(payloadGep.getPtr());
         } else {
           SmallVector<Value> emptyArgs;
@@ -1856,13 +1908,12 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         SmallVector<Value> dbGepIndices(dbGep.getIndices().begin(),
                                         dbGep.getIndices().end());
         dbGepIndices = resolveParam(dbGepIndices, dbGep.getLoc());
-        dbGepIndices = normalizeSliceIndices(dbGepIndices, accessOffsets,
-                                             accessSizes,
-                                             accessIndicesAlreadySliceRelative);
+        dbGepIndices =
+            normalizeSliceIndices(dbGepIndices, accessOffsets, accessSizes,
+                                  accessIndicesAlreadySliceRelative);
         if (usePayloadIndexing) {
-          auto payloadGep = AC->create<DbGepOp>(loc, AC->llvmPtr,
-                                                getPayloadView(), dbGepIndices,
-                                                accessStrides);
+          auto payloadGep = AC->create<DbGepOp>(
+              loc, AC->llvmPtr, getPayloadView(), dbGepIndices, accessStrides);
           op->getResult(0).replaceAllUsesWith(payloadGep.getPtr());
         } else {
           auto depGep =
@@ -1876,9 +1927,9 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         SmallVector<Value> refIndices(dbRef.getIndices().begin(),
                                       dbRef.getIndices().end());
         refIndices = resolveParam(refIndices, dbRef.getLoc());
-        refIndices = normalizeSliceIndices(refIndices, accessOffsets,
-                                           accessSizes,
-                                           accessIndicesAlreadySliceRelative);
+        refIndices =
+            normalizeSliceIndices(refIndices, accessOffsets, accessSizes,
+                                  accessIndicesAlreadySliceRelative);
         Value basePtr;
         if (usePayloadIndexing) {
           basePtr = AC->create<DbGepOp>(loc, AC->llvmPtr, getPayloadView(),
@@ -1943,15 +1994,13 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         SmallVector<Value> storeIndices(store.getIndices().begin(),
                                         store.getIndices().end());
         storeIndices = resolveParam(storeIndices, store.getLoc());
-        storeIndices = normalizeSliceIndices(storeIndices, accessOffsets,
-                                             accessSizes,
-                                             accessIndicesAlreadySliceRelative);
+        storeIndices =
+            normalizeSliceIndices(storeIndices, accessOffsets, accessSizes,
+                                  accessIndicesAlreadySliceRelative);
         if (usePayloadIndexing) {
-          auto payloadGep = AC->create<DbGepOp>(loc, AC->llvmPtr,
-                                                getPayloadView(), storeIndices,
-                                                accessStrides);
-          AC->create<LLVM::StoreOp>(loc, store.getValue(),
-                                    payloadGep.getPtr());
+          auto payloadGep = AC->create<DbGepOp>(
+              loc, AC->llvmPtr, getPayloadView(), storeIndices, accessStrides);
+          AC->create<LLVM::StoreOp>(loc, store.getValue(), payloadGep.getPtr());
         } else {
           auto depGep =
               AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
@@ -1964,22 +2013,21 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         SmallVector<Value> loadIndices(load.getIndices().begin(),
                                        load.getIndices().end());
         loadIndices = resolveParam(loadIndices, load.getLoc());
-        loadIndices = normalizeSliceIndices(loadIndices, accessOffsets,
-                                            accessSizes,
-                                            accessIndicesAlreadySliceRelative);
+        loadIndices =
+            normalizeSliceIndices(loadIndices, accessOffsets, accessSizes,
+                                  accessIndicesAlreadySliceRelative);
         Value loaded;
         if (usePayloadIndexing) {
-          auto payloadGep = AC->create<DbGepOp>(loc, AC->llvmPtr,
-                                                getPayloadView(), loadIndices,
-                                                accessStrides);
+          auto payloadGep = AC->create<DbGepOp>(
+              loc, AC->llvmPtr, getPayloadView(), loadIndices, accessStrides);
           loaded = AC->create<LLVM::LoadOp>(loc, load.getType(),
                                             payloadGep.getPtr());
         } else {
           auto depGep =
               AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
                                    baseOffset, loadIndices, accessStrides);
-          loaded = AC->create<LLVM::LoadOp>(loc, load.getType(),
-                                            depGep.getPtr());
+          loaded =
+              AC->create<LLVM::LoadOp>(loc, load.getType(), depGep.getPtr());
         }
         op->getResult(0).replaceAllUsesWith(loaded);
         op->erase();
