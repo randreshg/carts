@@ -18,8 +18,10 @@ add_mlir_dialect_library(MLIRArtsTransforms
   transforms/Concurrency.cpp
   transforms/ConvertOpenMPToArts.cpp
   transforms/ConvertArtsToLLVM.cpp
+  transforms/ConvertArtsToLLVMPatterns.cpp
   transforms/DbLowering.cpp
   transforms/EdtLowering.cpp
+  transforms/EdtLoweringSupport.cpp
   transforms/EpochLowering.cpp
   transforms/LoweringContractCleanup.cpp
   transforms/ForOpt.cpp
