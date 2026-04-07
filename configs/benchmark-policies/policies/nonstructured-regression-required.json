@@ -1,0 +1,63 @@
+{
+  "name": "nonstructured-regression-required",
+  "description": "Required regression gate for non-structured benchmarks. Ensures structured kernel changes do not degrade BLAS, reduction, elementwise, or streaming workloads. Wider tolerance reflects measurement noise on these shorter-running kernels.",
+  "required": true,
+  "entries": [
+    {
+      "benchmark": "polybench/gemm",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.20,
+      "required": true
+    },
+    {
+      "benchmark": "polybench/2mm",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.20,
+      "required": true
+    },
+    {
+      "benchmark": "polybench/3mm",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.20,
+      "required": true
+    },
+    {
+      "benchmark": "polybench/atax",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.20,
+      "required": true
+    },
+    {
+      "benchmark": "polybench/bicg",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.20,
+      "required": true
+    },
+    {
+      "benchmark": "ml-kernels/layernorm",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.20,
+      "required": true
+    },
+    {
+      "benchmark": "ml-kernels/activations",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.20,
+      "required": true
+    },
+    {
+      "benchmark": "stream",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.20,
+      "required": true
+    }
+  ]
+}

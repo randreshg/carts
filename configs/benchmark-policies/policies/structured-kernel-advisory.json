@@ -1,0 +1,112 @@
+{
+  "name": "structured-kernel-advisory",
+  "description": "Advisory tracking policy for all structured and non-structured benchmarks. Does not block merges. Wider tolerance accounts for cross-run variance; regressions here trigger investigation but not automatic rejection.",
+  "required": false,
+  "entries": [
+    {
+      "benchmark": "polybench/jacobi2d",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.25,
+      "required": false
+    },
+    {
+      "benchmark": "polybench/seidel-2d",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.25,
+      "required": false
+    },
+    {
+      "benchmark": "polybench/convolution-2d",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.25,
+      "required": false
+    },
+    {
+      "benchmark": "sw4lite/rhs4sg-base",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.25,
+      "required": false
+    },
+    {
+      "benchmark": "sw4lite/vel4sg-base",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.25,
+      "required": false
+    },
+    {
+      "benchmark": "specfem3d/velocity",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.25,
+      "required": false
+    },
+    {
+      "benchmark": "specfem3d/stress",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.25,
+      "required": false
+    },
+    {
+      "benchmark": "polybench/gemm",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.25,
+      "required": false
+    },
+    {
+      "benchmark": "polybench/2mm",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.25,
+      "required": false
+    },
+    {
+      "benchmark": "polybench/3mm",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.25,
+      "required": false
+    },
+    {
+      "benchmark": "polybench/atax",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.25,
+      "required": false
+    },
+    {
+      "benchmark": "polybench/bicg",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.25,
+      "required": false
+    },
+    {
+      "benchmark": "ml-kernels/layernorm",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.25,
+      "required": false
+    },
+    {
+      "benchmark": "ml-kernels/activations",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.25,
+      "required": false
+    },
+    {
+      "benchmark": "stream",
+      "min_speedup": 1.0,
+      "baseline_speedup": null,
+      "tolerance": 0.25,
+      "required": false
+    }
+  ]
+}
