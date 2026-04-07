@@ -76,8 +76,8 @@ bool mergeInvariantBase(Value &currentBase, Value candidateBase) {
 /// around that base. This keeps the transform generic for worker-local loops
 /// where the IV is relative to an aligned chunk base instead of being the
 /// global block index directly.
-std::optional<NeighborhoodExprInfo>
-extractNeighborhoodExprInfo(Value value, Value iv) {
+std::optional<NeighborhoodExprInfo> extractNeighborhoodExprInfo(Value value,
+                                                                Value iv) {
   value = ValueAnalysis::stripNumericCasts(value);
   if (!value)
     return std::nullopt;
@@ -373,27 +373,6 @@ bool isAlignedValue(Value value, Value blockSize,
   return false;
 }
 
-bool dominatesOrInAncestor(Value v, Operation *op, DominanceInfo &domInfo) {
-  if (!v || !op)
-    return false;
-  if (Operation *def = v.getDefiningOp()) {
-    Region *defRegion = def->getParentRegion();
-    Region *opRegion = op->getParentRegion();
-    if (defRegion && opRegion && defRegion != opRegion &&
-        defRegion->isAncestor(opRegion))
-      return true;
-  } else {
-    /// Block arguments from ancestor regions are considered in-scope.
-    if (auto arg = dyn_cast<BlockArgument>(v)) {
-      if (Region *argRegion = arg.getOwner()->getParent())
-        if (Region *opRegion = op->getParentRegion())
-          if (argRegion->isAncestor(opRegion))
-            return true;
-    }
-  }
-  return domInfo.dominates(v, op);
-}
-
 /// Neighborhood analysis walks recursively so it can detect block-neighborhood
 /// localization rooted in an enclosing loop even when the actual db_ref uses
 /// live inside nested point loops. The rewrite must mirror that recursive
@@ -438,8 +417,7 @@ void rewriteNestedNeighborhoodClone(
   for (; origIt != originalBlock.end() && clonedIt != clonedBlock.end();) {
     Operation *origOp = &*origIt++;
     Operation *clonedOp = &*clonedIt++;
-    rewriteNestedNeighborhoodClone(origOp, clonedOp, replacements,
-                                   eraseIfDead);
+    rewriteNestedNeighborhoodClone(origOp, clonedOp, replacements, eraseIfDead);
   }
 }
 
@@ -447,8 +425,7 @@ LoopNeighborhoodSegment::Boundary makeConstantBoundary(int64_t constant) {
   return {LoopNeighborhoodSegment::BoundaryKind::constant, constant};
 }
 
-LoopNeighborhoodSegment::Boundary
-makeBlockSizeMinusBoundary(int64_t constant) {
+LoopNeighborhoodSegment::Boundary makeBlockSizeMinusBoundary(int64_t constant) {
   return {LoopNeighborhoodSegment::BoundaryKind::blockSizeMinusConstant,
           constant};
 }
@@ -632,8 +609,7 @@ unsigned countNeighborhoodDbRefUsers(scf::ForOp loop,
   return matchedRefs.size();
 }
 
-bool finalizeNeighborhoodCandidate(scf::ForOp loop,
-                                   NeighborhoodLoopInfo &info,
+bool finalizeNeighborhoodCandidate(scf::ForOp loop, NeighborhoodLoopInfo &info,
                                    DominanceInfo &domInfo) {
   if (!info.blockSizeVal || info.offsetGroups.empty()) {
     ARTS_DEBUG("Neighborhood candidate rejected: missing block size or offset "

@@ -20,6 +20,8 @@
 namespace mlir {
 namespace arts {
 
+class LoopNode;
+
 enum class PointwiseLoopComputeClass { arithmeticOnly, vectorMath, scalarCall };
 
 /// Check whether a scf::ForOp is a "worker loop" (i.e., contains at least one
@@ -111,6 +113,14 @@ inline Operation *findNearestLoop(Operation *op) {
   }
   return nullptr;
 }
+
+/// Return true when a loop lower bound is provably zero, including through
+/// select-based clamping patterns like max(0, expr).
+bool isProvablyZeroLoopLowerBound(Value lb);
+
+/// Return true when a LoopNode covers the full iteration range [0, dimSize)
+/// with unit step.
+bool isLoopFullRange(LoopNode *loop, Value dimSize);
 
 /// Resolve a constant trip count for a loop-like op when all bounds are static.
 /// Returns std::nullopt when the trip count cannot be proven statically.

@@ -56,10 +56,6 @@ bool isDbPtrLoad(LLVM::LoadOp loadOp) {
   return false;
 }
 
-Value createIndexConst(OpBuilder &builder, Location loc, int64_t value) {
-  return builder.create<arith::ConstantIndexOp>(loc, value);
-}
-
 bool isMinusOneConstant(Value value) {
   auto folded = ValueAnalysis::tryFoldConstantIndex(
       ValueAnalysis::stripNumericCasts(value));
@@ -393,9 +389,10 @@ bool canHoistBlockedNeighborCacheAcross(
   return true;
 }
 
-scf::ForOp findBlockedNeighborCacheHoistLoop(
-    scf::ForOp loop, int varyingIndex, ArrayRef<Value> indices,
-    const BlockedNeighborCarryPattern &pattern) {
+scf::ForOp
+findBlockedNeighborCacheHoistLoop(scf::ForOp loop, int varyingIndex,
+                                  ArrayRef<Value> indices,
+                                  const BlockedNeighborCarryPattern &pattern) {
   scf::ForOp hoistLoop = loop;
   for (Operation *parent = loop->getParentOp(); parent;
        parent = parent->getParentOp()) {
@@ -419,9 +416,9 @@ Value buildDepPtrLoad(OpBuilder &builder, Location loc, DepGepOp depGep,
                                       newDepGep.getPtr());
 }
 
-Value buildGuardedDepPtrLoad(OpBuilder &builder, Location loc,
-                             DepGepOp depGep, ArrayRef<Value> indices,
-                             Value guard, Value fallbackPtr) {
+Value buildGuardedDepPtrLoad(OpBuilder &builder, Location loc, DepGepOp depGep,
+                             ArrayRef<Value> indices, Value guard,
+                             Value fallbackPtr) {
   if (!guard)
     return buildDepPtrLoad(builder, loc, depGep, indices);
 
@@ -444,8 +441,7 @@ Value buildGuardedDepPtrLoad(OpBuilder &builder, Location loc,
   return ifOp.getResult(0);
 }
 
-bool materializeBlockedNeighborPtrCache(LLVM::LoadOp loadOp,
-                                        scf::ForOp loop) {
+bool materializeBlockedNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop) {
   auto depGep = loadOp.getAddr().getDefiningOp<DepGepOp>();
   if (!depGep)
     return false;
@@ -475,8 +471,8 @@ bool materializeBlockedNeighborPtrCache(LLVM::LoadOp loadOp,
       findBlockedNeighborCacheHoistLoop(loop, varyingIndex, indices, pattern);
   Location loc = loadOp.getLoc();
   OpBuilder beforeLoop(hoistLoop);
-  Value zero = createIndexConst(beforeLoop, loc, 0);
-  Value one = createIndexConst(beforeLoop, loc, 1);
+  Value zero = createConstantIndex(beforeLoop, loc, 0);
+  Value one = createConstantIndex(beforeLoop, loc, 1);
   SmallVector<polygeist::Pointer2MemrefOp> ptr2memrefs;
   for (Operation *user :
        llvm::make_early_inc_range(loadOp.getResult().getUsers()))
@@ -588,15 +584,15 @@ Value buildNeighborCandidateIndex(OpBuilder &builder, Location loc,
   Value result = pattern.baseIndex;
   if (adjust > 0) {
     result = builder.create<arith::AddIOp>(
-        loc, result, createIndexConst(builder, loc, adjust));
+        loc, result, createConstantIndex(builder, loc, adjust));
   } else if (adjust < 0) {
     result = builder.create<arith::SubIOp>(
-        loc, result, createIndexConst(builder, loc, -adjust));
+        loc, result, createConstantIndex(builder, loc, -adjust));
   }
   if (pattern.clampMax)
     result = builder.create<arith::MinUIOp>(loc, result, pattern.clampMax);
   if (pattern.forceZeroCond) {
-    Value zero = createIndexConst(builder, loc, 0);
+    Value zero = createConstantIndex(builder, loc, 0);
     result = builder.create<arith::SelectOp>(loc, pattern.forceZeroCond, zero,
                                              result);
   }
@@ -850,7 +846,7 @@ bool materializeSingleBlockBlockedDepView(LLVM::LoadOp loadOp,
   OpBuilder beforeLoop(loop);
   Location loc = loadOp.getLoc();
   SmallVector<Value> hoistedIndices(depIndices.begin(), depIndices.end());
-  hoistedIndices[varyingIndex] = createIndexConst(beforeLoop, loc, 0);
+  hoistedIndices[varyingIndex] = createConstantIndex(beforeLoop, loc, 0);
   Value hoistedPtr = buildDepPtrLoad(beforeLoop, loc, depGep, hoistedIndices);
 
   loadOp.replaceAllUsesWith(hoistedPtr);
@@ -938,8 +934,7 @@ bool matchUpperBoundaryCond(Value cond, Value candidate) {
 
 bool tryBuildBoundaryIndexChain(Value firstCond, Value firstValue,
                                 Value secondCond, Value secondValue,
-                                Value middleValue,
-                                BoundarySelectChain &chain) {
+                                Value middleValue, BoundarySelectChain &chain) {
   Value middle = ValueAnalysis::stripNumericCasts(middleValue);
   if (matchLowerBoundaryCond(firstCond, middle) &&
       matchUpperBoundaryCond(secondCond, middle)) {
@@ -1052,8 +1047,8 @@ bool matchBoundaryPointerChain(Value value, Value lowCond, Value highCond,
   return false;
 }
 
-std::optional<LoopWindowAccessPattern>
-matchLoopWindowAccess(Operation *op, scf::ForOp loop) {
+std::optional<LoopWindowAccessPattern> matchLoopWindowAccess(Operation *op,
+                                                             scf::ForOp loop) {
   auto memInfoOr = getMemoryAccessInfo(op);
   if (!memInfoOr)
     return std::nullopt;
@@ -1242,14 +1237,14 @@ bool versionLoopWindowAccesses(scf::ForOp loop, int &rewrittenAccesses) {
   Location loc = loop.getLoc();
   OpBuilder builder(loop);
 
-  Value zero = createIndexConst(builder, loc, 0);
+  Value zero = createConstantIndex(builder, loc, 0);
   Value lb = loop.getLowerBound();
   Value ub = loop.getUpperBound();
   Value tripCount = builder.create<arith::SubIOp>(loc, ub, lb);
 
   Value leftSize = zero;
   if (leftBand > 0) {
-    Value leftBandVal = createIndexConst(builder, loc, leftBand);
+    Value leftBandVal = createConstantIndex(builder, loc, leftBand);
     leftSize = builder.create<arith::MinUIOp>(loc, tripCount, leftBandVal);
   }
 
@@ -1259,7 +1254,7 @@ bool versionLoopWindowAccesses(scf::ForOp loop, int &rewrittenAccesses) {
 
   Value middleSize = remainingAfterLeft;
   if (rightBand > 0) {
-    Value rightBandVal = createIndexConst(builder, loc, rightBand);
+    Value rightBandVal = createConstantIndex(builder, loc, rightBand);
     Value hasInterior = builder.create<arith::CmpIOp>(
         loc, arith::CmpIPredicate::ugt, remainingAfterLeft, rightBandVal);
     Value trimmed =
@@ -1315,7 +1310,7 @@ bool materializeNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop) {
 
   Location loc = loadOp.getLoc();
   OpBuilder beforeLoop(loop);
-  Value zero = createIndexConst(beforeLoop, loc, 0);
+  Value zero = createConstantIndex(beforeLoop, loc, 0);
 
   SmallVector<Value> centerIndices(indices.begin(), indices.end());
   centerIndices.back() =

@@ -27,6 +27,31 @@ namespace mlir {
 namespace arts {
 
 ///===----------------------------------------------------------------------===///
+/// Dominance Utilities
+///===----------------------------------------------------------------------===///
+
+bool dominatesOrInAncestor(Value v, Operation *op, DominanceInfo &domInfo) {
+  if (!v || !op)
+    return false;
+  if (Operation *def = v.getDefiningOp()) {
+    Region *defRegion = def->getParentRegion();
+    Region *opRegion = op->getParentRegion();
+    if (defRegion && opRegion && defRegion != opRegion &&
+        defRegion->isAncestor(opRegion))
+      return true;
+  } else {
+    /// Block arguments from ancestor regions are considered in-scope.
+    if (auto arg = dyn_cast<BlockArgument>(v)) {
+      if (Region *argRegion = arg.getOwner()->getParent())
+        if (Region *opRegion = op->getParentRegion())
+          if (argRegion->isAncestor(opRegion))
+            return true;
+    }
+  }
+  return domInfo.dominates(v, op);
+}
+
+///===----------------------------------------------------------------------===///
 /// Constant Index Creation Utilities
 ///===----------------------------------------------------------------------===///
 
