@@ -33,6 +33,7 @@
 #include "arts/codegen/Codegen.h"
 #define GEN_PASS_DEF_FORLOWERING
 #include "arts/Dialect.h"
+#include "arts/analysis/db/OwnershipProof.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/transforms/edt/EdtParallelSplitLowering.h"
@@ -798,8 +799,10 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   /// Create task EDT with DB rewiring
   createTaskEdtWithRewiring(&AC, *loopInfoStorage, forOp, workerIV,
                             originalParallel, singleDispatchLane, redInfo);
-  if (forEpoch)
+  if (forEpoch) {
     transferOperationContract(forOp.getOperation(), forEpoch->getOperation());
+    copyPlanAttrs(forOp.getOperation(), forEpoch->getOperation());
+  }
 
   /// After worker loop, create result EDT (if reductions)
   AC.setInsertionPointAfter(workerLoop);
@@ -999,6 +1002,16 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       combineContracts(contract, *loopContract);
 
     std::optional<unsigned> inferredMappedDim;
+    /// Plan-driven path: use plan ownerDims when present.
+    if (contract.spatial.ownerDims.empty()) {
+      if (auto planOwnerDims = readI64ArrayAttr(
+              forOp.getOperation(), AttrNames::Operation::Plan::OwnerDims)) {
+        contract.spatial.ownerDims = *planOwnerDims;
+        if (!planOwnerDims->empty() && (*planOwnerDims)[0] >= 0)
+          inferredMappedDim = static_cast<unsigned>((*planOwnerDims)[0]);
+      }
+    }
+    /// Fallback: infer from DB analysis.
     if (contract.spatial.ownerDims.empty())
       if (auto mappedDim =
               inferAcquireMappedDim(&AM->getDbAnalysis(), parentAcqOp, forOp)) {
@@ -1013,8 +1026,17 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     else if (inferredMappedDim)
       ownerDimForHalo = *inferredMappedDim;
 
-    if (effectiveTaskMode == ArtsMode::in && ownerDimForHalo &&
-        contract.spatial.ownerDims.size() <= 1 &&
+    // If proof.halo_legality is proven, the contract's halo shape is
+    // already valid -- skip re-inferring from access patterns.
+    bool proofTrustedHalo = false;
+    if (LoweringContractOp contractOp =
+            getLoweringContractOp(parentAcqOp.getSourcePtr())) {
+      OwnershipProof proof = readOwnershipProof(contractOp.getOperation());
+      proofTrustedHalo = proof.haloLegality;
+    }
+
+    if (!proofTrustedHalo && effectiveTaskMode == ArtsMode::in &&
+        ownerDimForHalo && contract.spatial.ownerDims.size() <= 1 &&
         !contract.getStaticMinOffsets() && !contract.getStaticMaxOffsets()) {
       /// Prefer the persisted acquire/loop contract. When it is still
       /// incomplete, infer a conservative loop-local halo directly from IR
@@ -1348,6 +1370,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
                                    routeValue, ValueRange{});
   ++numTaskEdtsCreated;
   transferOperationContract(forOp.getOperation(), taskEdt.getOperation());
+  copyPlanAttrs(forOp.getOperation(), taskEdt.getOperation());
   if (refinedTaskBlockShape)
     setStencilBlockShape(taskEdt.getOperation(), *refinedTaskBlockShape);
 

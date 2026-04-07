@@ -24,6 +24,7 @@ enum class AnalysisKind : uint8_t {
   EdtHeuristics,
   MetadataManager,
   AbstractMachine,
+  StructuredKernelPlan,
 };
 
 /// Declares which analyses a pass reads and invalidates.

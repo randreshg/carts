@@ -86,6 +86,12 @@ std::unique_ptr<Pass> createEdtLoweringPass(AnalysisManager *AM,
                                             uint64_t idStride = 1000);
 std::unique_ptr<Pass> createLoweringContractCleanupPass();
 
+/// Structured kernel plan analysis pass.
+std::unique_ptr<Pass> createStructuredKernelPlanPass(AnalysisManager *AM);
+
+/// Persistent structured region gating pass.
+std::unique_ptr<Pass> createPersistentStructuredRegionPass(AnalysisManager *AM);
+
 /// High-level scheduling and distribution passes.
 std::unique_ptr<Pass> createForOptPass(AnalysisManager *AM);
 std::unique_ptr<Pass>

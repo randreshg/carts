@@ -266,11 +266,48 @@ def EdtTransforms : Pass<"edt-transforms", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createEdtTransformsPass(nullptr)";
 }
 
+def StructuredKernelPlan : Pass<"structured-kernel-plan", "mlir::ModuleOp"> {
+  let summary = "Classify regular kernels and stamp structured execution plans";
+  let description = [{
+    Runs StructuredKernelPlanAnalysis on parallel EDTs. For regular kernels
+    with recognizable dep patterns (stencil, uniform, wavefront, matmul),
+    stamps arts.plan.* attributes encoding the kernel family, iteration
+    topology, async strategy, owner dims, block/halo shape, and cost signals.
+
+    Downstream passes (EdtDistribution, ForLowering, DbPartitioning) consult
+    these plan attrs when present and fall back to existing generic logic
+    when absent.
+  }];
+  let dependentDialects = [
+    "func::FuncDialect", "arts::ArtsDialect", "scf::SCFDialect",
+    "arith::ArithDialect"
+  ];
+  let constructor = "mlir::arts::createStructuredKernelPlanPass(nullptr)";
+}
+
 def Concurrency : Pass<"concurrency", "mlir::ModuleOp"> {
   let summary =
       "Build EDT concurrency graph and apply concurrency-driven cleanups";
   let dependentDialects = ["func::FuncDialect", "arts::ArtsDialect"];
   let constructor = "mlir::arts::createConcurrencyPass(nullptr)";
+}
+
+def PersistentStructuredRegion : Pass<"persistent-structured-region", "mlir::ModuleOp"> {
+  let summary = "Mark proven regular epochs for persistent structured region lowering";
+  let description = [{
+    Evaluates ownership proofs and cost model gates for epochs containing
+    structured kernel plans. Epochs that pass both gates are marked with
+    arts.persistent_region = true, enabling downstream EpochLowering to
+    use a persistent owner-strip or owner-tile execution shape.
+
+    This pass runs before EpochOpt in the epochs pipeline. When the gate
+    is not met, the epoch is left unchanged and follows the default
+    per-step lowering path.
+  }];
+  let dependentDialects = [
+    "func::FuncDialect", "arts::ArtsDialect"
+  ];
+  let constructor = "mlir::arts::createPersistentStructuredRegionPass(nullptr)";
 }
 
 def CreateEpochs : Pass<"create-epochs", "mlir::ModuleOp"> {
@@ -789,7 +826,9 @@ def ContractValidation : Pass<"contract-validation", "mlir::ModuleOp"> {
       ["memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect"];
   let options = [
     Option<"failOnError", "fail-on-error", "bool", "false",
-           "Fail compilation if any contract validation errors are found">
+           "Fail compilation if any contract validation errors are found">,
+    Option<"warnOnProofGaps", "warn-on-proof-gaps", "bool", "false",
+           "Emit advisory warnings for ownership proof gaps and CPS pack-schema gaps">
   ];
   let constructor = "mlir::arts::createContractValidationPass()";
 }
