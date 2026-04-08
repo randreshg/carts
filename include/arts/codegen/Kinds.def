@@ -329,6 +329,17 @@ __ARTS_RTL_ATTRS(arts_edt_create_with_epoch_dep, ControlAttrs, EmptyAttrs,
                  ParamAttrs(ReadOnlyPtrAttrs, ZExt, ReadOnlyPtrAttrs, ZExt,
                             EmptyAttrs, ZExt, ReadOnlyPtrAttrs))
 
+/// arts_guid_t arts_edt_create_ready_local_with_epoch(
+///     arts_edt_t func_ptr, uint32_t paramc, const uint64_t *paramv,
+///     uint32_t depc, const arts_edt_dep_t *depv, arts_guid_t epoch_guid,
+///     const arts_hint_t *hint);
+__ARTS_RTL(arts_edt_create_ready_local_with_epoch, ArtsGuid, EdtFnPtr, Int32,
+           Int64Ptr, Int32, RawPtr, ArtsGuid, ArtsHintTypePtr)
+__ARTS_RTL_ATTRS(arts_edt_create_ready_local_with_epoch, ControlAttrs,
+                 EmptyAttrs,
+                 ParamAttrs(ReadOnlyPtrAttrs, ZExt, ReadOnlyPtrAttrs, ZExt,
+                            ReadOnlyPtrAttrs, EmptyAttrs, ReadOnlyPtrAttrs))
+
 /// void arts_edt_destroy(arts_guid_t guid);
 __ARTS_RTL(arts_edt_destroy, Void, ArtsGuid)
 __ARTS_RTL_ATTRS(arts_edt_destroy, ControlAttrs, EmptyAttrs,

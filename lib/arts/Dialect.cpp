@@ -1209,7 +1209,19 @@ LogicalResult LoweringContractOp::verify() {
 void DbRefOp::build(OpBuilder &builder, OperationState &state, Value source,
                     ArrayRef<Value> indices) {
   auto *rawDbAlloc = DbUtils::getUnderlyingDbAlloc(source);
-  assert(rawDbAlloc && "Expected dbAllocOp");
+
+  // If source is a BlockArgument or otherwise doesn't trace to a DbAllocOp,
+  // extract the result type from the source memref's element type.
+  if (!rawDbAlloc) {
+    auto sourceMemRefType = dyn_cast<MemRefType>(source.getType());
+    assert(sourceMemRefType && "Expected source to be a memref type");
+    Type resultType = sourceMemRefType.getElementType();
+    state.addTypes(resultType);
+    state.addOperands(source);
+    state.addOperands(indices);
+    return;
+  }
+
   DbAllocOp dbAllocOp = dyn_cast<DbAllocOp>(rawDbAlloc);
   state.addTypes(dbAllocOp.getAllocatedElementType());
   state.addOperands(source);
@@ -1265,6 +1277,13 @@ LogicalResult DbRefOp::verify() {
   auto resultType = cast<MemRefType>(getResult().getType());
   if (dbAllocOp) {
     if (resultType != dbAllocOp.getAllocatedElementType())
+      return emitOpError("result type must match source element type\n")
+             << *getOperation();
+  } else {
+    // If no DbAllocOp found (e.g., source is a BlockArgument), verify that
+    // the result type matches the source memref's element type.
+    auto sourceMemRefType = cast<MemRefType>(getSource().getType());
+    if (resultType != sourceMemRefType.getElementType())
       return emitOpError("result type must match source element type\n")
              << *getOperation();
   }

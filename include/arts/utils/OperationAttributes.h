@@ -44,6 +44,7 @@ constexpr StringLiteral Nowait = "nowait";
 constexpr StringLiteral PreserveAccessMode = "preserve_access_mode";
 constexpr StringLiteral PreserveDepEdge = "preserve_dep_edge";
 constexpr StringLiteral LocalityOnly = "arts.locality_only";
+constexpr StringLiteral ReadyLocalLaunch = "arts.ready_local_launch";
 
 /// Partition-related attributes (TableGen-generated names)
 constexpr StringLiteral PartitionMode = "partition_mode";

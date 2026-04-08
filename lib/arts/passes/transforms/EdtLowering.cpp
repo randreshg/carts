@@ -105,6 +105,53 @@ using namespace mlir::arts::edt_lowering;
 
 namespace {
 
+static bool isUndefLikeOp(Operation *op) {
+  if (!op)
+    return false;
+  StringRef name = op->getName().getStringRef();
+  return name == "llvm.mlir.undef" || name == "polygeist.undef" ||
+         name == "arts.undef";
+}
+
+static bool isOneLikeValue(Value value) {
+  if (ValueAnalysis::isOneConstant(value))
+    return true;
+
+  auto addOp = value.getDefiningOp<arith::AddIOp>();
+  if (!addOp)
+    return false;
+
+  Value lhs = addOp.getLhs();
+  Value rhs = addOp.getRhs();
+  Value other;
+  if (ValueAnalysis::isOneConstant(lhs))
+    other = rhs;
+  else if (ValueAnalysis::isOneConstant(rhs))
+    other = lhs;
+  else
+    return false;
+
+  auto subOp = other.getDefiningOp<arith::SubIOp>();
+  if (!subOp)
+    return false;
+
+  Value subLhs = subOp.getLhs();
+  Value subRhs = subOp.getRhs();
+  if (subLhs == subRhs)
+    return true;
+
+  if (auto minOp = subLhs.getDefiningOp<arith::MinUIOp>())
+    return minOp.getLhs() == subRhs || minOp.getRhs() == subRhs;
+
+  return false;
+}
+
+static bool hasSingleDepWindow(ArrayRef<Value> sizes) {
+  if (sizes.empty())
+    return true;
+  return llvm::all_of(sizes, isOneLikeValue);
+}
+
 ///===----------------------------------------------------------------------===///
 /// EDT Lowering Pass Implementation
 ///===----------------------------------------------------------------------===///
@@ -399,6 +446,9 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   }
   if (auto chainId = edtOp->getAttrOfType<StringAttr>(CPSChainId))
     outlineOp->setAttr(CPSChainId, chainId);
+  if (edtOp->hasAttr(AttrNames::Operation::ReadyLocalLaunch))
+    outlineOp->setAttr(AttrNames::Operation::ReadyLocalLaunch,
+                       AC->getBuilder().getUnitAttr());
 
   /// Propagate structured kernel plan attrs to the EdtCreateOp so
   /// downstream passes (EpochLowering, ConvertArtsToLLVM) can use them.
@@ -521,11 +571,9 @@ Value EdtLoweringPass::packParams(Location loc, EdtEnvManager &envManager,
 
   /// Pack user parameters first
   for (Value v : parameters) {
-    /// Skip llvm.mlir.undef values - they can be easily recreated
-    if (auto defOp = v.getDefiningOp()) {
-      if (defOp->getName().getStringRef() == "llvm.mlir.undef")
-        continue;
-    }
+    /// Skip undef-like values - they can be recreated in the outlined body.
+    if (isUndefLikeOp(v.getDefiningOp()))
+      continue;
     valueToPackIndex.try_emplace(v, packValues.size());
     packTypes.push_back(v.getType());
     packValues.push_back(v);
@@ -679,7 +727,7 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
   auto cloneConstantLike = [&](Value val) {
     if (Operation *defOp = val.getDefiningOp())
       if (defOp->hasTrait<OpTrait::ConstantLike>() ||
-          defOp->getName().getStringRef() == "llvm.mlir.undef")
+          isUndefLikeOp(defOp))
         valueMapping.map(val, builder.clone(*defOp)->getResult(0));
   };
 
@@ -693,11 +741,10 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
   /// cloned)
   size_t unpackedIndex = 0;
   for (Value param : parameters) {
-    if (auto defOp = param.getDefiningOp())
-      if (defOp->getName().getStringRef() == "llvm.mlir.undef") {
-        cloneConstantLike(param);
-        continue;
-      }
+    if (isUndefLikeOp(param.getDefiningOp())) {
+      cloneConstantLike(param);
+      continue;
+    }
     if (unpackedIndex < unpackedParams.size())
       valueMapping.map(param, unpackedParams[unpackedIndex++]);
   }
@@ -1256,6 +1303,33 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         accessOffsets.push_back(AC->createIndexConstant(0, loc));
       accessStrides = AC->computeStridesFromSizes(accessSizes, loc);
     }
+    /// Get the users of the dependency placeholder
+    SmallVector<Operation *, 16> users, dbAcquireUsers;
+    SmallVector<OpOperand *, 8> nestedEdtDepUses;
+    SmallVector<OpOperand *, 8> recordDepUses;
+    for (auto &use : placeholder.getUses()) {
+      if (auto dbAcquire = dyn_cast<arts::DbAcquireOp>(use.getOwner()))
+        dbAcquireUsers.push_back(use.getOwner());
+      else if (isa<RecordDepOp>(use.getOwner()))
+        recordDepUses.push_back(&use);
+      else if (auto edt = dyn_cast<arts::EdtOp>(use.getOwner())) {
+        /// Nested EDT dependency operands must stay on the depv-backed path.
+        /// Leaving them as captured memrefs makes the child EDT re-pack the
+        /// routed DB through paramv, which later breaks RecordDep lowering.
+        if (edt.getRoute() != placeholder)
+          nestedEdtDepUses.push_back(&use);
+        else
+          users.push_back(use.getOwner());
+      } else
+        users.push_back(use.getOwner());
+    }
+
+    const bool hasDbGepUsers =
+        llvm::any_of(users, [](Operation *op) { return isa<arts::DbGepOp>(op); });
+    const bool useInvariantSingleDepView =
+        indicesAlreadySliceRelative && hasSingleDepWindow(depSizes) &&
+        !hasDbGepUsers;
+
     const bool accessIndicesAlreadySliceRelative =
         indicesAlreadySliceRelative || usePayloadIndexing;
 
@@ -1307,27 +1381,6 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
       }
       return adjusted;
     };
-
-    /// Get the users of the dependency placeholder
-    SmallVector<Operation *, 16> users, dbAcquireUsers;
-    SmallVector<OpOperand *, 8> nestedEdtDepUses;
-    SmallVector<OpOperand *, 8> recordDepUses;
-    for (auto &use : placeholder.getUses()) {
-      if (auto dbAcquire = dyn_cast<arts::DbAcquireOp>(use.getOwner()))
-        dbAcquireUsers.push_back(use.getOwner());
-      else if (isa<RecordDepOp>(use.getOwner()))
-        recordDepUses.push_back(&use);
-      else if (auto edt = dyn_cast<arts::EdtOp>(use.getOwner())) {
-        /// Nested EDT dependency operands must stay on the depv-backed path.
-        /// Leaving them as captured memrefs makes the child EDT re-pack the
-        /// routed DB through paramv, which later breaks RecordDep lowering.
-        if (edt.getRoute() != placeholder)
-          nestedEdtDepUses.push_back(&use);
-        else
-          users.push_back(use.getOwner());
-      } else
-        users.push_back(use.getOwner());
-    }
 
     /// Rewrite the dbAcquire users
     ARTS_DEBUG(" - Rewriting " << dbAcquireUsers.size() << " dbAcquire users");
@@ -1509,12 +1562,49 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
       return payloadView;
     };
 
+    Value invariantDepBasePtr;
+    DenseMap<Type, Value> invariantDepMemrefViews;
+    auto getInvariantDepBasePtr = [&]() -> Value {
+      if (invariantDepBasePtr)
+        return invariantDepBasePtr;
+
+      OpBuilder::InsertionGuard payloadIG(AC->getBuilder());
+      AC->setInsertionPoint(placeholder.getDefiningOp());
+      SmallVector<Value> emptyArgs;
+      Value ptrField =
+          AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv, baseOffset,
+                               emptyArgs, emptyArgs)
+              .getPtr();
+      invariantDepBasePtr =
+          AC->create<LLVM::LoadOp>(loc, AC->llvmPtr, ptrField);
+      return invariantDepBasePtr;
+    };
+
+    auto getInvariantDepMemrefView = [&](Type memrefType) -> Value {
+      auto it = invariantDepMemrefViews.find(memrefType);
+      if (it != invariantDepMemrefViews.end())
+        return it->second;
+
+      OpBuilder::InsertionGuard payloadIG(AC->getBuilder());
+      AC->setInsertionPoint(placeholder.getDefiningOp());
+      Value view = AC->create<polygeist::Pointer2MemrefOp>(
+          loc, memrefType, getInvariantDepBasePtr());
+      invariantDepMemrefViews[memrefType] = view;
+      return view;
+    };
+
     /// If not, for each user of the dependency placeholder, rewrite the
     /// operation
     ARTS_DEBUG(" - Rewriting " << users.size() << " users");
     for (Operation *op : users) {
       if (auto ptr2Memref = dyn_cast<polygeist::Pointer2MemrefOp>(op)) {
         AC->setInsertionPoint(op);
+        if (useInvariantSingleDepView) {
+          ptr2Memref.getResult().replaceAllUsesWith(
+              getInvariantDepMemrefView(ptr2Memref.getType()));
+          ptr2Memref.erase();
+          continue;
+        }
         Value basePtr;
         if (usePayloadIndexing) {
           SmallVector<Value> emptyArgs;
@@ -1535,6 +1625,11 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         ptr2Memref.erase();
       } else if (auto mp = dyn_cast<polygeist::Memref2PointerOp>(op)) {
         AC->setInsertionPoint(op);
+        if (useInvariantSingleDepView) {
+          op->getResult(0).replaceAllUsesWith(getInvariantDepBasePtr());
+          op->erase();
+          continue;
+        }
         if (usePayloadIndexing) {
           SmallVector<Value> emptyArgs;
           auto payloadGep = AC->create<DbGepOp>(
@@ -1569,6 +1664,51 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         op->erase();
       } else if (auto dbRef = dyn_cast<arts::DbRefOp>(op)) {
         AC->setInsertionPoint(op);
+        if (useInvariantSingleDepView) {
+          Value invariantView = getInvariantDepMemrefView(dbRef.getType());
+
+          auto resultType = dyn_cast<MemRefType>(dbRef.getType());
+          bool needsDynOps = false;
+          if (resultType && !allocElementSizes.empty()) {
+            unsigned numDynDims =
+                llvm::count_if(resultType.getShape(), [](int64_t d) {
+                  return d == ShapedType::kDynamic;
+                });
+            needsDynOps = numDynDims > 1;
+          }
+
+          if (needsDynOps) {
+            SmallVector<Value> resolvedElemSizes =
+                resolveParam(allocElementSizes, dbRef.getLoc());
+            for (auto &use :
+                 llvm::make_early_inc_range(dbRef.getResult().getUses())) {
+              Operation *userOp = use.getOwner();
+              AC->setInsertionPoint(userOp);
+              if (auto loadOp = dyn_cast<memref::LoadOp>(userOp)) {
+                SmallVector<Value> indices(loadOp.getIndices().begin(),
+                                           loadOp.getIndices().end());
+                auto dynLoad = AC->create<polygeist::DynLoadOp>(
+                    loadOp.getLoc(), loadOp.getResult().getType(),
+                    invariantView, indices, resolvedElemSizes);
+                loadOp.getResult().replaceAllUsesWith(dynLoad.getResult());
+                loadOp.erase();
+              } else if (auto storeOp = dyn_cast<memref::StoreOp>(userOp)) {
+                SmallVector<Value> indices(storeOp.getIndices().begin(),
+                                           storeOp.getIndices().end());
+                AC->create<polygeist::DynStoreOp>(
+                    storeOp.getLoc(), storeOp.getValueToStore(), invariantView,
+                    indices, resolvedElemSizes);
+                storeOp.erase();
+              } else {
+                use.set(invariantView);
+              }
+            }
+          } else {
+            dbRef.getResult().replaceAllUsesWith(invariantView);
+          }
+          op->erase();
+          continue;
+        }
         SmallVector<Value> refIndices(dbRef.getIndices().begin(),
                                       dbRef.getIndices().end());
         refIndices = resolveParam(refIndices, dbRef.getLoc());

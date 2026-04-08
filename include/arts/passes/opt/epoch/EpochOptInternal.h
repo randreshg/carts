@@ -55,7 +55,7 @@ asyncLoopStrategyToPlanAttrString(EpochAsyncLoopStrategy strategy);
 bool loopContainsCpsChainExcludedDepPattern(scf::ForOp forOp);
 bool loopContainsCpsDriverExcludedDepPattern(scf::ForOp forOp);
 std::string makeAsyncLoopChainId(Operation *op);
-std::string makeContinuationChainId(unsigned chainIdx);
+std::string makeContinuationChainId(Operation *ownerOp, unsigned chainIdx);
 
 using AttrNames::Operation::ContinuationForEpoch;
 using AttrNames::Operation::ControlDep;
@@ -83,9 +83,13 @@ Operation *getLastNonTerminatorOp(Block &block);
 void emitAdvanceLogic(OpBuilder &builder, Location loc, Value iv,
                       Value tCurrent, Value ub, Value step, Block &body,
                       MutableArrayRef<EpochSlot> slots,
+                      StringRef targetChainId,
+                      ArrayRef<Operation *> prefixSequentialOps = {},
                       ArrayRef<Operation *> allSequentialOps = {},
-                      ArrayRef<Value> loopBackParams = {});
-void markAsContinuation(EdtOp edt, OpBuilder &builder, unsigned chainIdx);
+                      ArrayRef<Value> loopBackParams = {},
+                      const IRMapping *seedMapping = nullptr);
+void markAsContinuation(EdtOp edt, OpBuilder &builder, Operation *ownerOp,
+                        unsigned chainIdx);
 void normalizeAsyncLoopPlanAttrs(scf::ForOp forOp,
                                  EpochAsyncLoopStrategy strategy);
 void copyNormalizedPlanAttrs(Operation *source, Operation *dest,
