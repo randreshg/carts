@@ -180,7 +180,7 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// on a single node once every block-capable acquire widened to full-range;
   /// at that point the contract no longer buys locality for read-only inputs.
   ///
-  /// H1.C3a (NEW): Conflicting owner dims + full-range → Coarse
+  /// H1.C3a (NEW): Conflicting owner dims → Coarse
   /// When different EDT families access the same DB with different owner_dims
   /// (e.g., atax: Phase 1 uses owner_dims=[0] for row access, Phase 2 uses
   /// owner_dims=[1] for column access), block partitioning hurts both phases:
@@ -190,12 +190,11 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// Guard: Preserve block for Jacobi/wavefront stencil patterns where
   /// alternating buffers with consistent owner dims are essential.
   if (hasConflictingOwnerDims(ctx) && isSingleNode && isReadOnly &&
-      ctx.allBlockFullRange && !hasJacobiStencil &&
-      !patterns.hasStencil) {
-    ARTS_DEBUG("H1.C3a applied: Conflicting owner_dims + full-range acquires "
+      !hasJacobiStencil && !patterns.hasStencil) {
+    ARTS_DEBUG("H1.C3a applied: Conflicting owner_dims "
                "→ coarse (transpose pattern)");
     return PartitioningDecision::coarse(
-        ctx, "H1.C3a: Conflicting owner_dims with full-range prefers coarse");
+        ctx, "H1.C3a: Conflicting owner_dims (transpose pattern) prefers coarse");
   }
 
   bool preserveStencilBlockForReadOnlyFullRange =

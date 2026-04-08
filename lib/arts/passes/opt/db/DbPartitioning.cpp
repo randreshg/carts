@@ -1361,6 +1361,12 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
       for (unsigned dim = 0; dim < info.ownerDimsCount; ++dim)
         info.ownerDims[dim] = static_cast<int16_t>(
             contractSummary->contract.spatial.ownerDims[dim]);
+    } else if (auto stencilOwnerDims = getStencilOwnerDims(acquire)) {
+      // Fallback: read from stencil_owner_dims attribute if contract is empty
+      info.ownerDimsCount =
+          static_cast<uint8_t>(std::min<size_t>(4, stencilOwnerDims->size()));
+      for (unsigned dim = 0; dim < info.ownerDimsCount; ++dim)
+        info.ownerDims[dim] = static_cast<int16_t>((*stencilOwnerDims)[dim]);
     }
 
     /// Populate unified partition infos from DbAcquireOp.
