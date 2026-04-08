@@ -110,6 +110,7 @@ static bool isPureScalarCall(func::CallOp call) {
     if (isa<BaseMemRefType>(resultTy))
       return false;
   }
+
   return isPure(call.getOperation());
 }
 

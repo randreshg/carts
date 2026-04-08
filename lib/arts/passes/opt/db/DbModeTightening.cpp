@@ -26,6 +26,7 @@
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/graphs/db/DbGraph.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
+#include "arts/analysis/db/OwnershipProof.h"
 #include "arts/passes/Passes.h"
 #include "mlir/Pass/Pass.h"
 /// Debug
@@ -220,6 +221,27 @@ static bool canPreservePartialPartitionedStencilWrite(DbAcquireOp acquire) {
     return false;
 
   return contract->supportsBlockHalo();
+}
+
+static bool canPreserveProofTrustedPartitionedWrite(DbAcquireOp acquire) {
+  if (!acquire)
+    return false;
+
+  auto partitionMode =
+      acquire.getPartitionMode().value_or(PartitionMode::coarse);
+  if (partitionMode == PartitionMode::coarse)
+    return false;
+
+  LoweringContractOp contract = getLoweringContractOp(acquire.getPtr());
+  if (!contract)
+    contract = getLoweringContractOp(acquire.getSourcePtr());
+  if (!contract)
+    return false;
+
+  OwnershipProof proof = readOwnershipProof(contract.getOperation());
+  if (!(proof.partitionAccessMapping && proof.depSliceSoundness))
+    proof = computeOwnershipProof(contract);
+  return proof.partitionAccessMapping && proof.depSliceSoundness;
 }
 
 struct MemAccessSite {
@@ -497,11 +519,19 @@ bool DbModeTighteningPass::adjustDbModes() {
         bool partialPartitionedStencilWrite =
             allocOp && !fullWrite &&
             canPreservePartialPartitionedStencilWrite(acqOp);
+        bool proofTrustedPartitionedWrite =
+            allocOp && !fullWrite &&
+            canPreserveProofTrustedPartitionedWrite(acqOp);
         if (partialPartitionedStencilWrite) {
           ARTS_DEBUG("AcquireOp: " << acqOp
                                    << " writes a partial partitioned stencil "
                                       "tile; keeping out mode so the runtime "
                                       "can use the cheaper writer path");
+        } else if (proofTrustedPartitionedWrite) {
+          ARTS_DEBUG("AcquireOp: "
+                     << acqOp
+                     << " writes within a proof-trusted partitioned slice; "
+                        "keeping out mode");
         } else if (allocOp && !fullWrite) {
           ARTS_DEBUG("AcquireOp: " << acqOp
                                    << " writes partial region; upgrading to "
