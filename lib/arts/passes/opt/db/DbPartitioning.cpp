@@ -562,6 +562,50 @@ DbPartitioningPass::validatePartitionPreconditions(DbAllocOp allocOp,
   return std::nullopt;
 }
 
+/// Collect all DbAcquireOps from the entire module that reference the given
+/// GUID, not just those attached to the DbAllocNode. This is crucial for
+/// detecting transpose patterns where different EDT families access the same
+/// DB with different owner_dims (e.g., atax matrix A accessed by row and column).
+static void collectAllAcquiresByGuid(Value allocGuid, DbGraph *dbGraph,
+                                      SmallVectorImpl<DbAcquireNode *> &result) {
+  if (!allocGuid || !dbGraph)
+    return;
+
+  /// Get the module to walk all functions
+  auto moduleOp = allocGuid.getDefiningOp()->getParentOfType<ModuleOp>();
+  if (!moduleOp)
+    return;
+
+  /// Walk all DbAcquireOps in the module
+  moduleOp.walk([&](DbAcquireOp acquireOp) {
+    /// Check if this acquire references our GUID
+    Value sourceGuid = acquireOp.getSourceGuid();
+    if (!sourceGuid)
+      return;
+
+    /// Trace the source GUID back through the SSA chain
+    /// (could be from DbAllocOp or from another DbAcquireOp)
+    Value currentGuid = sourceGuid;
+    while (currentGuid) {
+      if (currentGuid == allocGuid) {
+        /// This acquire uses our DB GUID - add it to the result
+        if (auto *acqNode = dbGraph->getDbAcquireNode(acquireOp)) {
+          result.push_back(acqNode);
+        }
+        return;
+      }
+
+      /// Trace through DbAcquireOp chains
+      if (auto definingAcquire =
+              dyn_cast_or_null<DbAcquireOp>(currentGuid.getDefiningOp())) {
+        currentGuid = definingAcquire.getSourceGuid();
+      } else {
+        break;
+      }
+    }
+  });
+}
+
 /// Analyze allocation acquires and apply appropriate partitioning rewriter.
 ///
 /// Orchestration pipeline:
@@ -584,9 +628,23 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     return *earlyExit;
 
   auto &heuristics = AM->getDbHeuristics();
-  SmallVector<DbAcquireNode *, 16> allocAcquireNodes =
-      allocNode ? allocNode->collectAllAcquireNodes()
-                : SmallVector<DbAcquireNode *, 16>{};
+
+  /// Collect acquires from ALL EDT families that reference this DB GUID,
+  /// not just from the current allocNode. This is critical for H1.C3a
+  /// transpose detection (e.g., atax matrix A accessed with different
+  /// owner_dims in different EDT families).
+  SmallVector<DbAcquireNode *, 16> allocAcquireNodes;
+  if (allocNode) {
+    DbAnalysis &dbAnalysis = AM->getDbAnalysis();
+    func::FuncOp func = allocOp->getParentOfType<func::FuncOp>();
+    DbGraph *dbGraph = func ? &dbAnalysis.getOrCreateGraph(func) : nullptr;
+    collectAllAcquiresByGuid(allocOp.getGuid(), dbGraph, allocAcquireNodes);
+
+    /// Fallback to local collection if global search finds nothing
+    if (allocAcquireNodes.empty()) {
+      allocAcquireNodes = allocNode->collectAllAcquireNodes();
+    }
+  }
 
   /// Phase 2: Analyze each acquire's PartitionMode.
   SmallVector<AcquirePartitionInfo, 4> acquireInfos;
