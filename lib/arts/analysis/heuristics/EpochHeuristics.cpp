@@ -221,6 +221,12 @@ static bool shouldAvoidCpsChainForLoop(scf::ForOp forOp,
       allSlotsFullTimestep &&
       (decision.slots.size() > 1 || decision.hasSequentialSidecars);
 
+  // STREAM fix: If the loop has inter-epoch sequential sidecars (e.g., timing
+  // between kernels), allow CPS chain even for orchestration-heavy loops.
+  // The sidecars represent per-iteration state that benefits from CPS.
+  if (decision.hasInterEpochSidecars)
+    return false;  // Don't avoid CPS chain
+
   return (allSlotsHaveZeroExpectedLocalWork &&
           multiStageOrSidecarFullTimestepLoop) ||
          (allSlotsHaveZeroExpectedLocalWork && pureOrchestrationLoop);

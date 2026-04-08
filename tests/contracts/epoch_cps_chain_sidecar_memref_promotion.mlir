@@ -5,9 +5,9 @@
 // memref storage to DB-backed views that continuations can capture safely.
 //
 // CHECK-LABEL: func.func @test_cps_chain_sidecar_memref_promotion
-// CHECK: arts.db_alloc[<inout>, <heap>, <write>, <coarse>] route(%c0_i32 : i32) sizes[%c1] elementType(f64) elementSizes[%c4] : (memref<?xi64>, memref<?xmemref<4xf64>>)
+// CHECK: arts.db_alloc[<inout>, <heap>, <write>, <coarse>] route(%c0_i32 : i32) sizes[%c1] elementType(memref<4xf64>) elementSizes[%c4] : (memref<?xi64>, memref<1xmemref<4xf64>>)
 // CHECK: arts.cps_chain_id = "chain_0"
-// CHECK: arts.db_ref %{{.*}}[%c0] : memref<?xmemref<4xf64>> -> memref<4xf64>
+// CHECK: arts.db_ref %{{.*}}[%c0] : memref<1xmemref<4xf64>> -> memref<4xf64>
 // CHECK: arts.cps_advance
 // CHECK-NOT: scf.for
 

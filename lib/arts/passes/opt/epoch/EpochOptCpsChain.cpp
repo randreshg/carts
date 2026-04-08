@@ -159,10 +159,12 @@ void promoteAllocsForCPSChain(scf::ForOp forOp,
     Value route = builder.create<arith::ConstantOp>(
         loc, builder.getI32Type(), builder.getI32IntegerAttr(0));
 
-    auto ptrType = MemRefType::get({ShapedType::kDynamic}, memRefType);
+    // For CPS-promoted allocs (single partition), use static shape.
+    // The DB stores whole memrefs, so elementType is the memref itself.
+    auto ptrType = MemRefType::get({1}, memRefType);
     auto dbAlloc = builder.create<DbAllocOp>(
         loc, ArtsMode::inout, route, DbAllocType::heap, DbMode::write,
-        elementType, ptrType, sizes, elementSizes);
+        memRefType, ptrType, sizes, elementSizes);
     Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
     Value dbView = builder.create<DbRefOp>(loc, dbAlloc.getPtr(),
                                            SmallVector<Value>{zero});

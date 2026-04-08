@@ -46,16 +46,18 @@ unsigned runAsyncLoopTransform(ModuleOp module, EpochAnalysis &epochAnalysis,
   unsigned transformed = 0;
   SmallVector<scf::ForOp> forOps;
   module.walk([&](scf::ForOp forOp) { forOps.push_back(forOp); });
+  ARTS_INFO(spec.debugLabel << ": Evaluating " << forOps.size() << " loop(s)");
   for (scf::ForOp forOp : forOps) {
     EpochAsyncLoopDecision asyncDecision =
         epochAnalysis.evaluateAsyncLoopStrategy(forOp);
     if (asyncDecision.strategy != spec.selectedStrategy) {
-      ARTS_DEBUG(spec.debugLabel
+      ARTS_INFO(spec.debugLabel
                  << ": selector chose "
                  << asyncLoopStrategyToString(asyncDecision.strategy) << " ("
                  << asyncDecision.rationale << "), skipping");
       continue;
     }
+    ARTS_INFO(spec.debugLabel << ": Applying to loop (strategy matched)");
     if (spec.apply(forOp, epochAnalysis))
       ++transformed;
   }
