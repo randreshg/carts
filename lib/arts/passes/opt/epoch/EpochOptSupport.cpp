@@ -14,14 +14,83 @@ namespace {
 constexpr llvm::StringLiteral kAsyncLoopChainPrefix = "async_loop_";
 constexpr llvm::StringLiteral kContinuationChainPrefix = "chain_";
 
+bool isCarryRematerializableOp(Operation *op) {
+  if (!op)
+    return false;
+
+  if (isSideEffectFreeArithmeticLikeOp(op) || mlir::isPure(op))
+    return true;
+
+  return isa<memref::LoadOp, memref::CastOp, memref::SubViewOp,
+             polygeist::Pointer2MemrefOp, polygeist::Memref2PointerOp,
+             LLVM::PtrToIntOp, LLVM::IntToPtrOp>(op);
+}
+
+Value rematerializeCarryValueAtAdvanceSite(OpBuilder &builder, Value value,
+                                           Block &loopBody,
+                                           IRMapping &mapping) {
+  if (!value)
+    return value;
+  if (Value mapped = mapping.lookupOrNull(value))
+    return mapped;
+  if (isa<BlockArgument>(value))
+    return value;
+
+  SmallVector<Operation *> toClone;
+  SmallVector<Value> worklist{value};
+  DenseSet<Value> visitedValues;
+  DenseSet<Operation *> scheduled;
+
+  while (!worklist.empty()) {
+    Value current = worklist.pop_back_val();
+    if (!current || !visitedValues.insert(current).second)
+      continue;
+    if (mapping.contains(current) || isa<BlockArgument>(current))
+      continue;
+
+    Operation *defOp = current.getDefiningOp();
+    if (!defOp || loopBody.findAncestorOpInBlock(*defOp))
+      continue;
+    if (!isCarryRematerializableOp(defOp))
+      continue;
+    if (!scheduled.insert(defOp).second)
+      continue;
+
+    toClone.push_back(defOp);
+    for (Value operand : defOp->getOperands())
+      worklist.push_back(operand);
+  }
+
+  for (auto it = toClone.rbegin(); it != toClone.rend(); ++it) {
+    Operation *defOp = *it;
+    Operation *cloned = builder.clone(*defOp, mapping);
+    for (auto [oldRes, newRes] :
+         llvm::zip(defOp->getResults(), cloned->getResults()))
+      mapping.map(oldRes, newRes);
+  }
+
+  return mapping.lookupOrDefault(value);
+}
+
 bool isCpsExcludedDepPattern(ArtsDepPattern pattern) {
   switch (pattern) {
-  case ArtsDepPattern::jacobi_alternating_buffers:
   case ArtsDepPattern::wavefront_2d:
     return true;
   default:
     return false;
   }
+}
+
+bool hasRelaunchSoundJacobiContract(Operation *op) {
+  if (!op)
+    return false;
+  auto pattern = getEffectiveDepPattern(op);
+  if (!pattern || *pattern != ArtsDepPattern::jacobi_alternating_buffers)
+    return false;
+  if (auto soundAttr = op->getAttrOfType<BoolAttr>(
+          AttrNames::Operation::Proof::RelaunchStateSoundness))
+    return soundAttr.getValue();
+  return false;
 }
 
 bool loopContainsExcludedDepPattern(
@@ -75,7 +144,39 @@ asyncLoopStrategyToPlanAttrString(EpochAsyncLoopStrategy strategy) {
 }
 
 bool loopContainsCpsChainExcludedDepPattern(scf::ForOp forOp) {
-  return loopContainsExcludedDepPattern(forOp, isCpsExcludedDepPattern);
+  if (!forOp)
+    return false;
+
+  bool sawJacobiPattern = false;
+  bool sawRelaunchSoundJacobi = false;
+  bool foundExcludedPattern = false;
+
+  auto inspectOp = [&](Operation *op) {
+    auto pattern = getEffectiveDepPattern(op);
+    if (!pattern)
+      return WalkResult::advance();
+    if (*pattern == ArtsDepPattern::wavefront_2d) {
+      foundExcludedPattern = true;
+      return WalkResult::interrupt();
+    }
+    if (*pattern != ArtsDepPattern::jacobi_alternating_buffers)
+      return WalkResult::advance();
+
+    sawJacobiPattern = true;
+    if (hasRelaunchSoundJacobiContract(op))
+      sawRelaunchSoundJacobi = true;
+    return WalkResult::advance();
+  };
+
+  if (inspectOp(forOp.getOperation()).wasInterrupted())
+    return true;
+  forOp.walk([&](Operation *inner) { return inspectOp(inner); });
+
+  if (foundExcludedPattern)
+    return true;
+  if (!sawJacobiPattern)
+    return false;
+  return !sawRelaunchSoundJacobi;
 }
 
 bool loopContainsCpsDriverExcludedDepPattern(scf::ForOp forOp) {
@@ -87,8 +188,9 @@ std::string makeAsyncLoopChainId(Operation *op) {
          std::to_string(reinterpret_cast<uintptr_t>(op));
 }
 
-std::string makeContinuationChainId(unsigned chainIdx) {
-  return std::string(kContinuationChainPrefix.data()) +
+std::string makeContinuationChainId(Operation *ownerOp, unsigned chainIdx) {
+  return makeAsyncLoopChainId(ownerOp) + "_" +
+         std::string(kContinuationChainPrefix.data()) +
          std::to_string(chainIdx);
 }
 
@@ -162,21 +264,33 @@ Operation *getLastNonTerminatorOp(Block &block) {
 void emitAdvanceLogic(OpBuilder &builder, Location loc, Value iv,
                       Value tCurrent, Value ub, Value step, Block &body,
                       MutableArrayRef<EpochSlot> slots,
+                      StringRef targetChainId,
+                      ArrayRef<Operation *> prefixSequentialOps,
                       ArrayRef<Operation *> allSequentialOps,
-                      ArrayRef<Value> loopBackParams) {
+                      ArrayRef<Value> loopBackParams,
+                      const IRMapping *seedMapping) {
   Value tNext = builder.create<arith::AddIOp>(loc, tCurrent, step);
   IRMapping advanceMapping;
+  if (seedMapping)
+    advanceMapping = *seedMapping;
   advanceMapping.map(iv, tNext);
   cloneNonSlotArith(builder, body, slots, advanceMapping, allSequentialOps);
+  for (Operation *seqOp : prefixSequentialOps) {
+    Operation *cloned = builder.clone(*seqOp, advanceMapping);
+    for (auto [oldRes, newRes] :
+         llvm::zip(seqOp->getResults(), cloned->getResults()))
+      advanceMapping.map(oldRes, newRes);
+  }
 
   auto i64Ty = IntegerType::get(builder.getContext(), 64);
   Value stepI64 = builder.create<arith::IndexCastOp>(loc, i64Ty, step);
   Value ubI64 = builder.create<arith::IndexCastOp>(loc, i64Ty, ub);
   SmallVector<Value> nextParams = {stepI64, ubI64};
   for (Value v : loopBackParams)
-    nextParams.push_back(v);
+    nextParams.push_back(
+        rematerializeCarryValueAtAdvanceSite(builder, v, body, advanceMapping));
   auto advance = builder.create<CPSAdvanceOp>(
-      loc, nextParams, builder.getStringAttr(makeContinuationChainId(0)));
+      loc, nextParams, builder.getStringAttr(targetChainId));
   advance->setAttr(CPSAdditiveParams, builder.getUnitAttr());
   advance->setAttr(CPSNumCarry,
                    builder.getI64IntegerAttr(loopBackParams.size()));
@@ -209,12 +323,17 @@ void emitAdvanceLogic(OpBuilder &builder, Location loc, Value iv,
   }
 
   Block &epochBody = slots[0].epoch.getBody().front();
-  for (Operation &epochOp : epochBody.without_terminator())
-    advBuilder.clone(epochOp, advanceMapping);
+  for (Operation &epochOp : epochBody.without_terminator()) {
+    Operation *cloned = advBuilder.clone(epochOp, advanceMapping);
+    for (auto [oldRes, newRes] :
+         llvm::zip(epochOp.getResults(), cloned->getResults()))
+      advanceMapping.map(oldRes, newRes);
+  }
 }
 
-void markAsContinuation(EdtOp edt, OpBuilder &builder, unsigned chainIdx) {
-  std::string chainId = makeContinuationChainId(chainIdx);
+void markAsContinuation(EdtOp edt, OpBuilder &builder, Operation *ownerOp,
+                        unsigned chainIdx) {
+  std::string chainId = makeContinuationChainId(ownerOp, chainIdx);
   edt->setAttr(ControlDep, builder.getIntegerAttr(builder.getI32Type(), 1));
   edt->setAttr(ContinuationForEpoch, builder.getUnitAttr());
   edt->setAttr(CPSChainId, builder.getStringAttr(chainId));

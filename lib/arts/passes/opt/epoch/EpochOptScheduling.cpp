@@ -175,7 +175,8 @@ bool tryCPSLoopTransform(scf::ForOp forOp, const EpochAnalysis &epochAnalysis) {
     for (unsigned slotIdx = 1; slotIdx < slots.size(); ++slotIdx) {
       auto contEdt = currentBuilder->create<EdtOp>(
           loc, EdtType::task, EdtConcurrency::intranode, currentStateDeps);
-      markAsContinuation(contEdt, *currentBuilder, slotIdx);
+      markAsContinuation(contEdt, *currentBuilder, forOp.getOperation(),
+                         slotIdx);
       copyNormalizedPlanAttrs(forOp.getOperation(), contEdt.getOperation(),
                               EpochAsyncLoopStrategy::AdvanceEdt);
       if (!currentStateDeps.empty())

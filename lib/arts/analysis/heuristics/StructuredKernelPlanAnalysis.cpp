@@ -11,8 +11,10 @@
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 
 #include "arts/utils/Debug.h"
@@ -20,6 +22,95 @@ ARTS_DEBUG_SETUP(structured_kernel_plan);
 
 using namespace mlir;
 using namespace mlir::arts;
+
+namespace {
+
+constexpr double kMaxEstimatedWork = 1.0e12;
+
+double saturatingMul(double lhs, double rhs) {
+  if (lhs <= 0.0 || rhs <= 0.0)
+    return 0.0;
+  return std::min(lhs * rhs, kMaxEstimatedWork);
+}
+
+double estimateBlockWork(Block &block);
+
+double estimateRegionWork(Region &region) {
+  double maxBlockWork = 0.0;
+  for (Block &block : region)
+    maxBlockWork = std::max(maxBlockWork, estimateBlockWork(block));
+  return maxBlockWork;
+}
+
+double estimateOpWork(Operation &op) {
+  if (op.hasTrait<OpTrait::IsTerminator>())
+    return 0.0;
+
+  double nestedRegionWork = 0.0;
+  if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+    nestedRegionWork = std::max(estimateRegionWork(ifOp.getThenRegion()),
+                                estimateRegionWork(ifOp.getElseRegion()));
+  } else {
+    for (Region &region : op.getRegions())
+      nestedRegionWork += estimateRegionWork(region);
+  }
+
+  if (auto tripCount = arts::getStaticTripCount(&op);
+      tripCount && *tripCount > 0 && op.getNumRegions() > 0) {
+    return saturatingMul(static_cast<double>(*tripCount),
+                         std::max(nestedRegionWork, 1.0));
+  }
+
+  if (nestedRegionWork > 0.0)
+    return std::max(1.0, nestedRegionWork);
+
+  return 1.0;
+}
+
+double estimateBlockWork(Block &block) {
+  double blockWork = 0.0;
+  for (Operation &op : block)
+    blockWork = std::min(kMaxEstimatedWork, blockWork + estimateOpWork(op));
+  return blockWork;
+}
+
+int64_t getStructuredWorkerCount(ForOp forOp) {
+  if (auto workers = getWorkers(forOp.getOperation()); workers && *workers > 0)
+    return *workers;
+  if (auto workersPerNode = getWorkersPerNode(forOp.getOperation());
+      workersPerNode && *workersPerNode > 0) {
+    return *workersPerNode;
+  }
+
+  for (Operation *parent = forOp->getParentOp(); parent;
+       parent = parent->getParentOp()) {
+    if (auto workers = getWorkers(parent); workers && *workers > 0)
+      return *workers;
+    if (auto workersPerNode = getWorkersPerNode(parent);
+        workersPerNode && *workersPerNode > 0) {
+      return *workersPerNode;
+    }
+  }
+
+  return 1;
+}
+
+double estimateExpectedLocalWork(ForOp forOp) {
+  auto tripCount = arts::getStaticTripCount(forOp.getOperation());
+  if (!tripCount || *tripCount <= 0)
+    return 0.0;
+
+  double perIterationWork = estimateBlockWork(*forOp.getBody());
+  if (perIterationWork <= 0.0)
+    return 0.0;
+
+  double totalLoopWork =
+      saturatingMul(static_cast<double>(*tripCount), perIterationWork);
+  int64_t workers = std::max<int64_t>(1, getStructuredWorkerCount(forOp));
+  return std::max(1.0, totalLoopWork / static_cast<double>(workers));
+}
+
+} // namespace
 
 ///===----------------------------------------------------------------------===///
 /// String conversion helpers
@@ -389,6 +480,9 @@ PlanCostSignals StructuredKernelPlanAnalysis::computeCostSignals(
     signals.relaunchAmortization = 1.0;
     break;
   }
+
+  if (plan.repetition != RepetitionStructure::None)
+    signals.expectedLocalWork = estimateExpectedLocalWork(forOp);
 
   return signals;
 }

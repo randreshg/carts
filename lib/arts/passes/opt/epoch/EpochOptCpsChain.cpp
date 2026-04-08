@@ -64,7 +64,10 @@ void rematerializeExternalDefs(OpBuilder &builder, Operation *op,
       continue;
     if (loopBody->findAncestorOpInBlock(*defOp))
       continue;
-    if (!isSideEffectFreeArithmeticLikeOp(defOp) && !mlir::isPure(defOp))
+    bool clonableReadOnlyDef =
+        isa<memref::LoadOp, memref::CastOp, memref::SubViewOp>(defOp);
+    if (!isSideEffectFreeArithmeticLikeOp(defOp) && !mlir::isPure(defOp) &&
+        !clonableReadOnlyDef)
       continue;
     if (!scheduled.insert(defOp).second)
       continue;
@@ -205,6 +208,27 @@ bool sameValueSequence(ArrayRef<Value> lhs, ArrayRef<Value> rhs) {
   return true;
 }
 
+Operation *cloneWithResultMapping(OpBuilder &builder, Operation &op,
+                                  IRMapping &mapping);
+
+void cloneSequentialOpsWithExternalDefs(OpBuilder &builder,
+                                        ArrayRef<Operation *> ops,
+                                        Block *loopBody,
+                                        IRMapping &mapping) {
+  for (Operation *op : ops) {
+    rematerializeExternalDefs(builder, op, loopBody, mapping);
+    cloneWithResultMapping(builder, *op, mapping);
+  }
+}
+
+Operation *cloneWithResultMapping(OpBuilder &builder, Operation &op,
+                                  IRMapping &mapping) {
+  Operation *cloned = builder.clone(op, mapping);
+  for (auto [oldRes, newRes] : llvm::zip(op.getResults(), cloned->getResults()))
+    mapping.map(oldRes, newRes);
+  return cloned;
+}
+
 void clearAdvanceSite(Block *block, Operation *anchor) {
   SmallVector<Operation *> opsToErase;
   for (Operation *op = anchor ? anchor->getNextNode() : &block->front();
@@ -265,26 +289,28 @@ bool tryCPSChainTransform(scf::ForOp forOp,
 
   Value iv = forOp.getInductionVar();
   unsigned slotCount = slots.size();
+  std::string firstChainId = makeContinuationChainId(forOp.getOperation(), 0);
 
   SmallVector<SmallVector<Operation *>> interEpochOps(slotCount);
   if (!sequentialOps.empty()) {
     DenseSet<Operation *> seqOpSet(sequentialOps.begin(), sequentialOps.end());
-    unsigned currentSlot = 0;
+    SmallVector<Operation *> slotAnchors;
+    slotAnchors.reserve(slotCount);
+    for (EpochSlot &slot : slots) {
+      slotAnchors.push_back(slot.wrappingIf ? slot.wrappingIf.getOperation()
+                                            : slot.epoch.getOperation());
+    }
+    unsigned nextSlot = 0;
     for (Operation &op : body.without_terminator()) {
-      if (isSlotOp(&op, slots)) {
-        for (unsigned slotIdx = currentSlot; slotIdx < slotCount; ++slotIdx) {
-          Operation *slotOp = slots[slotIdx].wrappingIf
-                                  ? slots[slotIdx].wrappingIf.getOperation()
-                                  : slots[slotIdx].epoch.getOperation();
-          if (&op == slotOp) {
-            currentSlot = slotIdx + 1;
-            break;
-          }
-        }
+      if (nextSlot < slotCount && &op == slotAnchors[nextSlot]) {
+        ++nextSlot;
         continue;
       }
+      if (isSlotOp(&op, slots))
+        continue;
       if (seqOpSet.contains(&op)) {
-        unsigned group = std::min(currentSlot, slotCount - 1);
+        unsigned group =
+            nextSlot < slotCount ? nextSlot : static_cast<unsigned>(slotCount - 1);
         interEpochOps[group].push_back(&op);
       }
     }
@@ -327,6 +353,8 @@ bool tryCPSChainTransform(scf::ForOp forOp,
   IRMapping firstIterMapping;
   firstIterMapping.map(iv, lb);
   cloneNonSlotArith(outerBuilder, body, slots, firstIterMapping, sequentialOps);
+  cloneSequentialOpsWithExternalDefs(outerBuilder, interEpochOps.front(), &body,
+                                     firstIterMapping);
   cloneEpochSlot(outerBuilder, slots.front(), firstIterMapping);
 
   OpBuilder chainBuilder(outerBuilder);
@@ -336,7 +364,7 @@ bool tryCPSChainTransform(scf::ForOp forOp,
   for (unsigned i = 0; i < slotCount; ++i) {
     auto contEdt = chainBuilder.create<EdtOp>(
         loc, EdtType::task, EdtConcurrency::intranode, SmallVector<Value>{});
-    markAsContinuation(contEdt, chainBuilder, i);
+    markAsContinuation(contEdt, chainBuilder, forOp.getOperation(), i);
     copyNormalizedPlanAttrs(forOp.getOperation(), contEdt.getOperation(),
                             EpochAsyncLoopStrategy::CpsChain);
     if (!firstContinuation)
@@ -352,19 +380,16 @@ bool tryCPSChainTransform(scf::ForOp forOp,
 
     if (i == slotCount - 1) {
       cloneNonSlotArith(contBuilder, body, slots, contMapping, sequentialOps);
-      for (Operation *seqOp : interEpochOps[slotCount - 1]) {
-        rematerializeExternalDefs(contBuilder, seqOp, &body, contMapping);
-        contBuilder.clone(*seqOp, contMapping);
-      }
+      cloneSequentialOpsWithExternalDefs(contBuilder,
+                                         interEpochOps[slotCount - 1], &body,
+                                         contMapping);
       advanceSites.push_back({&contBlock, getLastNonTerminatorOp(contBlock)});
       continue;
     }
 
     cloneNonSlotArith(contBuilder, body, slots, contMapping, sequentialOps);
-    for (Operation *seqOp : interEpochOps[i]) {
-      rematerializeExternalDefs(contBuilder, seqOp, &body, contMapping);
-      contBuilder.clone(*seqOp, contMapping);
-    }
+    cloneSequentialOpsWithExternalDefs(contBuilder, interEpochOps[i + 1], &body,
+                                       contMapping);
 
     EpochSlot &nextSlot = slots[i + 1];
     if (nextSlot.wrappingIf) {
@@ -560,11 +585,12 @@ bool tryCPSChainTransform(scf::ForOp forOp,
   bool loopBackParamsStabilized = false;
   if (firstContinuation && !loopBackParams.empty()) {
     for (auto [advanceBlock, anchor] : advanceSites) {
-      clearAdvanceSite(advanceBlock, anchor);
-      OpBuilder advanceBuilder = OpBuilder::atBlockTerminator(advanceBlock);
-      emitAdvanceLogic(advanceBuilder, loc, iv, lb, ub, step, body, slots,
-                       sequentialOps, loopBackParams);
-    }
+        clearAdvanceSite(advanceBlock, anchor);
+        OpBuilder advanceBuilder = OpBuilder::atBlockTerminator(advanceBlock);
+        emitAdvanceLogic(advanceBuilder, loc, iv, lb, ub, step, body, slots,
+                         firstChainId, interEpochOps.front(), sequentialOps,
+                         loopBackParams);
+      }
     loopBackParamsStabilized = true;
   } else {
     constexpr unsigned kMaxLoopBackIterations = 8;
@@ -573,7 +599,8 @@ bool tryCPSChainTransform(scf::ForOp forOp,
         clearAdvanceSite(advanceBlock, anchor);
         OpBuilder advanceBuilder = OpBuilder::atBlockTerminator(advanceBlock);
         emitAdvanceLogic(advanceBuilder, loc, iv, lb, ub, step, body, slots,
-                         sequentialOps, loopBackParams);
+                         firstChainId, interEpochOps.front(), sequentialOps,
+                         loopBackParams);
       }
 
       if (!firstContinuation)
@@ -733,8 +760,18 @@ bool tryCPSChainTransform(scf::ForOp forOp,
         if (ptrValue != (info.alloc ? info.alloc.getPtr() : Value())) {
           bodyBuilder.setInsertionPoint(&contBlock, contBlock.begin());
           Value czero = bodyBuilder.create<arith::ConstantIndexOp>(loc, 0);
-          Value dbView = bodyBuilder.create<DbRefOp>(loc, depArg,
-                                                     SmallVector<Value>{czero});
+
+          // Extract result type from the BlockArgument's memref element type.
+          // depArg is a DB pointer like memref<1xmemref<10xf64>>, so the
+          // element type (memref<10xf64>) is the DbRefOp result type.
+          auto depArgType = cast<MemRefType>(depArg.getType());
+          Type dbViewResultType = depArgType.getElementType();
+
+          // Create DbRefOp with explicit result type (builder can't infer from
+          // BlockArgument). Use the 3-arg create<> overload.
+          Value dbView = bodyBuilder.create<DbRefOp>(
+              loc, dbViewResultType, depArg, SmallVector<Value>{czero});
+
           Value replacement = dbView;
           if (replacement.getType() != ptrValue.getType())
             replacement = bodyBuilder.create<memref::CastOp>(
@@ -903,17 +940,54 @@ bool tryCPSChainTransform(scf::ForOp forOp,
       });
     };
 
+    auto rewriteAdvanceCarry = [&](ArrayRef<Value> carryValues) {
+      outerEpoch.walk([&](CPSAdvanceOp adv) {
+        auto numCarryAttr = adv->getAttrOfType<IntegerAttr>(CPSNumCarry);
+        if (!numCarryAttr)
+          return;
+        bool isAdditive = adv->hasAttr(CPSAdditiveParams);
+        unsigned paramStart = isAdditive ? 2 : 0;
+        SmallVector<Value> newNextParams;
+        auto oldParams = adv.getNextIterParams();
+        for (unsigned i = 0; i < paramStart && i < oldParams.size(); ++i)
+          newNextParams.push_back(oldParams[i]);
+        newNextParams.append(carryValues.begin(), carryValues.end());
+
+        OpBuilder advBuilder(adv);
+        auto targetId = adv.getTargetChainIdAttr();
+        auto newAdv =
+            advBuilder.create<CPSAdvanceOp>(adv.getLoc(), newNextParams, targetId);
+        for (auto attr : adv->getAttrs())
+          if (attr.getName() != "targetChainId")
+            newAdv->setAttr(attr.getName(), attr.getValue());
+        newAdv->setAttr(CPSNumCarry,
+                        advBuilder.getI64IntegerAttr(carryValues.size()));
+
+        Region &oldRegion = adv.getEpochBody();
+        Region &newRegion = newAdv.getEpochBody();
+        if (!oldRegion.empty())
+          newRegion.takeBody(oldRegion);
+        adv.erase();
+      });
+    };
+
     SmallVector<Value> reorderedCarry =
         collectEdtPackedValues(firstContinuation);
 
-    ARTS_INFO("CPS Chain: Re-analyzed chain_0 captures — "
-              << reorderedCarry.size() << " carry params");
+    ARTS_INFO("CPS Chain: Re-analyzed " << firstChainId << " captures — "
+                                        << reorderedCarry.size()
+                                        << " carry params");
 
     bool preserveOriginalCarryContract = numTimingDbGuids > 0 || scratchAlloc;
     if (preserveOriginalCarryContract) {
-      if (!sameValueSequence(reorderedCarry, loopBackParams)) {
+      bool carryChanged = !sameValueSequence(reorderedCarry, loopBackParams) ||
+                          reorderedCarry.size() != loopBackParams.size();
+      if (carryChanged) {
         ARTS_INFO("CPS Chain: dep-routed carry changed after re-analysis; "
-                  << "preserving original loop-back contract");
+                  << "reseeding loop-back carry from the reanalyzed "
+                     "continuation state");
+        rewriteAdvanceCarry(reorderedCarry);
+        loopBackParams.assign(reorderedCarry.begin(), reorderedCarry.end());
       }
       setDepRoutingAttrForCarry(loopBackParams);
     } else if (!sameValueSequence(reorderedCarry, loopBackParams)) {
@@ -926,35 +1000,7 @@ bool tryCPSChainTransform(scf::ForOp forOp,
                 << "; preserving original loop-back contract");
       setDepRoutingAttrForCarry(loopBackParams);
     } else {
-      outerEpoch.walk([&](CPSAdvanceOp adv) {
-        auto numCarryAttr = adv->getAttrOfType<IntegerAttr>(CPSNumCarry);
-        if (!numCarryAttr)
-          return;
-        bool isAdditive = adv->hasAttr(CPSAdditiveParams);
-        unsigned paramStart = isAdditive ? 2 : 0;
-        SmallVector<Value> newNextParams;
-        auto oldParams = adv.getNextIterParams();
-        for (unsigned i = 0; i < paramStart && i < oldParams.size(); ++i)
-          newNextParams.push_back(oldParams[i]);
-        newNextParams.append(reorderedCarry.begin(), reorderedCarry.end());
-
-        OpBuilder advBuilder(adv);
-        auto targetId = adv.getTargetChainIdAttr();
-        auto newAdv = advBuilder.create<CPSAdvanceOp>(adv.getLoc(),
-                                                      newNextParams, targetId);
-        for (auto attr : adv->getAttrs())
-          if (attr.getName() != "targetChainId")
-            newAdv->setAttr(attr.getName(), attr.getValue());
-        newAdv->setAttr(CPSNumCarry,
-                        advBuilder.getI64IntegerAttr(reorderedCarry.size()));
-
-        Region &oldRegion = adv.getEpochBody();
-        Region &newRegion = newAdv.getEpochBody();
-        if (!oldRegion.empty())
-          newRegion.takeBody(oldRegion);
-        adv.erase();
-      });
-
+      rewriteAdvanceCarry(reorderedCarry);
       setDepRoutingAttrForCarry(reorderedCarry);
     }
 
@@ -1018,6 +1064,25 @@ bool tryCPSChainTransform(scf::ForOp forOp,
                           : ""));
       }
     }
+  }
+
+  bool hasEscapedLoopDefs = false;
+  forOp.walk([&](Operation *op) {
+    for (Value result : op->getResults()) {
+      for (Operation *user : result.getUsers()) {
+        if (forOp->isAncestor(user))
+          continue;
+        hasEscapedLoopDefs = true;
+        ARTS_WARN("CPS Chain: loop-local value still used outside loop before "
+                  "erase: " << result << " defined by " << *op << " used by "
+                  << *user);
+      }
+    }
+  });
+  if (hasEscapedLoopDefs) {
+    ARTS_WARN("CPS Chain: aborting erase of transformed loop due to escaped "
+              "loop-local values");
+    return false;
   }
 
   forOp.erase();

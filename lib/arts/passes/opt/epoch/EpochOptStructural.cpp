@@ -164,6 +164,46 @@ bool isKernelTimerTailOp(Operation *op) {
   return callOp.getCallee().starts_with("carts_kernel_timer_");
 }
 
+static bool isRankZeroLocalAlloca(Value value) {
+  value = ValueAnalysis::stripNumericCasts(value);
+  auto alloca = value.getDefiningOp<memref::AllocaOp>();
+  return alloca && alloca.getType().getRank() == 0;
+}
+
+static bool isLoopInvariantForRepeat(Value value, Value loopIv) {
+  return value && !ValueAnalysis::dependsOn(value, loopIv);
+}
+
+static bool isAmortizableSetupOp(Operation *op, Value loopIv) {
+  if (!op)
+    return false;
+  if (isSideEffectFreeArithmeticLikeOp(op))
+    return llvm::all_of(op->getOperands(), [&](Value operand) {
+      return isLoopInvariantForRepeat(operand, loopIv);
+    });
+
+  if (auto load = dyn_cast<memref::LoadOp>(op))
+    return isRankZeroLocalAlloca(load.getMemRef()) &&
+           isLoopInvariantForRepeat(load.getMemRef(), loopIv);
+
+  if (auto store = dyn_cast<memref::StoreOp>(op))
+    return isRankZeroLocalAlloca(store.getMemRef()) &&
+           isLoopInvariantForRepeat(store.getMemRef(), loopIv) &&
+           isLoopInvariantForRepeat(store.getValue(), loopIv);
+
+  return false;
+}
+
+static bool isAmortizableTailOp(Operation *op, Value loopIv) {
+  if (isKernelTimerTailOp(op))
+    return true;
+  if (auto store = dyn_cast<memref::StoreOp>(op))
+    return isRankZeroLocalAlloca(store.getMemRef()) &&
+           isLoopInvariantForRepeat(store.getMemRef(), loopIv) &&
+           isLoopInvariantForRepeat(store.getValue(), loopIv);
+  return false;
+}
+
 bool canWrapEdtBodyWithRepeatLoop(EdtOp edt) {
   Block &body = edt.getBody().front();
   bool seenRelease = false;
@@ -186,15 +226,18 @@ void wrapEdtBodyWithRepeatLoop(EdtOp edt, int64_t repeatCount) {
 
   Block &body = edt.getBody().front();
   SmallVector<Operation *> repeatOps;
+  Operation *insertionPoint = body.getTerminator();
   for (Operation &op : body.without_terminator()) {
-    if (isa<DbReleaseOp>(op))
+    if (isa<DbReleaseOp>(op)) {
+      insertionPoint = &op;
       break;
+    }
     repeatOps.push_back(&op);
   }
   if (repeatOps.empty())
     return;
 
-  OpBuilder builder(body.getTerminator());
+  OpBuilder builder(insertionPoint);
   Location loc = edt.getLoc();
   Value c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
   Value cN = builder.create<arith::ConstantIndexOp>(loc, repeatCount);
@@ -351,7 +394,14 @@ bool tryAmortizeRepeatedEpochLoop(EpochOp epochOp) {
   if (!epochOp || !epochOp->getBlock())
     return false;
 
-  auto repeatLoop = dyn_cast<scf::ForOp>(epochOp->getParentOp());
+  scf::ForOp repeatLoop = dyn_cast<scf::ForOp>(epochOp->getParentOp());
+  scf::IfOp wrappingIf = nullptr;
+  if (!repeatLoop) {
+    wrappingIf = dyn_cast<scf::IfOp>(epochOp->getParentOp());
+    if (!wrappingIf)
+      return false;
+    repeatLoop = dyn_cast<scf::ForOp>(wrappingIf->getParentOp());
+  }
   if (!repeatLoop)
     return false;
   if (repeatLoop.getNumResults() != 0 || !repeatLoop.getInitArgs().empty())
@@ -364,25 +414,74 @@ bool tryAmortizeRepeatedEpochLoop(EpochOp epochOp) {
   if (!tripCount || *tripCount < 2)
     return false;
 
+  Value loopIv = repeatLoop.getInductionVar();
   Block *loopBody = repeatLoop.getBody();
-  if (epochOp->getBlock() != loopBody)
-    return false;
 
-  bool seenEpoch = false;
+  SmallVector<Operation *> prefixOps;
   SmallVector<Operation *> tailOps;
-  for (Operation &op : loopBody->without_terminator()) {
-    if (&op == epochOp.getOperation()) {
-      seenEpoch = true;
-      continue;
+
+  if (!wrappingIf) {
+    if (epochOp->getBlock() != loopBody)
+      return false;
+
+    bool seenEpoch = false;
+    for (Operation &op : loopBody->without_terminator()) {
+      if (&op == epochOp.getOperation()) {
+        seenEpoch = true;
+        continue;
+      }
+      if (!seenEpoch) {
+        prefixOps.push_back(&op);
+        continue;
+      }
+      tailOps.push_back(&op);
     }
     if (!seenEpoch)
       return false;
-    tailOps.push_back(&op);
+  } else {
+    if (!wrappingIf.getElseRegion().empty() &&
+        !wrappingIf.getElseRegion().front().without_terminator().empty())
+      return false;
+    if (wrappingIf->getBlock() != loopBody || epochOp->getBlock() != &wrappingIf.getThenRegion().front())
+      return false;
+    if (!isLoopInvariantForRepeat(wrappingIf.getCondition(), loopIv))
+      return false;
+
+    bool seenIf = false;
+    for (Operation &op : loopBody->without_terminator()) {
+      if (&op == wrappingIf.getOperation()) {
+        seenIf = true;
+        continue;
+      }
+      if (seenIf)
+        return false;
+      prefixOps.push_back(&op);
+    }
+
+    bool seenEpoch = false;
+    for (Operation &op : wrappingIf.getThenRegion().front().without_terminator()) {
+      if (&op == epochOp.getOperation()) {
+        seenEpoch = true;
+        continue;
+      }
+      if (!seenEpoch) {
+        if (!isAmortizableSetupOp(&op, loopIv))
+          return false;
+        continue;
+      }
+      tailOps.push_back(&op);
+    }
+    if (!seenEpoch)
+      return false;
   }
-  if (!seenEpoch)
+
+  if (!llvm::all_of(prefixOps, [&](Operation *op) {
+        return isAmortizableSetupOp(op, loopIv);
+      }))
     return false;
+
   for (Operation *tailOp : tailOps) {
-    if (!isKernelTimerTailOp(tailOp))
+    if (!isAmortizableTailOp(tailOp, loopIv))
       return false;
   }
 
@@ -398,10 +497,17 @@ bool tryAmortizeRepeatedEpochLoop(EpochOp epochOp) {
       return false;
   }
 
+  for (Operation *prefixOp : prefixOps)
+    prefixOp->moveBefore(repeatLoop);
   for (EdtOp edt : edts)
     wrapEdtBodyWithRepeatLoop(edt, *tripCount);
-
-  epochOp->moveBefore(repeatLoop);
+  if (wrappingIf) {
+    wrappingIf->moveBefore(repeatLoop);
+  } else {
+    epochOp->moveBefore(repeatLoop);
+    for (Operation *tailOp : tailOps)
+      tailOp->moveBefore(repeatLoop);
+  }
   if (repeatLoop.getBody()->without_terminator().empty())
     repeatLoop.erase();
 

@@ -38,6 +38,7 @@
 #include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include <limits>
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
@@ -73,6 +74,7 @@ using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
 using AttrNames::Operation::ContinuationForEpoch;
+using AttrNames::Operation::ControlDep;
 using AttrNames::Operation::CPSAdditiveParams;
 using AttrNames::Operation::CPSAdvanceHasIvArg;
 using AttrNames::Operation::CPSChainId;
@@ -670,26 +672,53 @@ void EpochLoweringPass::runOnOperation() {
   for (CPSAdvanceOp advanceOp : cpsAdvanceOps) {
     StringRef targetChainId = advanceOp.getTargetChainId();
 
-    /// Find the EdtCreateOp with matching cps_chain_id in the same function.
+    auto scoreContinuationCandidate = [&](EdtCreateOp edt) -> int {
+      int score = 0;
+      if (edt->hasAttr(AttrNames::Operation::ControlDep))
+        score += 4;
+      if (edt->hasAttr(ContinuationForEpoch))
+        score += 2;
+      for (Operation *user : edt.getGuid().getUsers()) {
+        if (auto recordDep = dyn_cast<RecordDepOp>(user))
+          if (recordDep.getEdtGuid() == edt.getGuid()) {
+            score += 1;
+            break;
+          }
+      }
+      return score;
+    };
+
+    auto considerContinuationCandidate = [&](EdtCreateOp edt,
+                                             EdtCreateOp &bestEdt,
+                                             int &bestScore) {
+      auto chainAttr = edt->getAttrOfType<StringAttr>(CPSChainId);
+      if (!chainAttr || chainAttr.getValue() != targetChainId)
+        return;
+      int score = scoreContinuationCandidate(edt);
+      if (!bestEdt || score > bestScore) {
+        bestEdt = edt;
+        bestScore = score;
+      }
+    };
+
+    /// Find the best EdtCreateOp with matching cps_chain_id in the same
+    /// function. Prefer the canonical continuation kickoff site that still
+    /// carries the control-dep / rec_dep contract over inline self-recreate
+    /// sites that only share the same chain id.
     func::FuncOp parentFunc = advanceOp->getParentOfType<func::FuncOp>();
     EdtCreateOp contEdtCreate = nullptr;
+    int contEdtScore = std::numeric_limits<int>::min();
     if (parentFunc) {
       parentFunc.walk([&](EdtCreateOp edt) {
-        auto chainAttr = edt->getAttrOfType<StringAttr>(CPSChainId);
-        if (chainAttr && chainAttr.getValue() == targetChainId)
-          contEdtCreate = edt;
+        considerContinuationCandidate(edt, contEdtCreate, contEdtScore);
       });
     }
 
-    if (!contEdtCreate) {
-      /// Fall back to module-wide search (target may be in a different
-      /// function).
-      module.walk([&](EdtCreateOp edt) {
-        auto chainAttr = edt->getAttrOfType<StringAttr>(CPSChainId);
-        if (chainAttr && chainAttr.getValue() == targetChainId)
-          contEdtCreate = edt;
-      });
-    }
+    /// Fall back to module-wide search (target may be in a different
+    /// function), but keep the highest-scoring candidate overall.
+    module.walk([&](EdtCreateOp edt) {
+      considerContinuationCandidate(edt, contEdtCreate, contEdtScore);
+    });
 
     if (!contEdtCreate) {
       advanceOp.emitError("CPS advance: no EdtCreateOp with chain_id '")
@@ -858,6 +887,15 @@ void EpochLoweringPass::runOnOperation() {
     }
 
     bool directRecreate = advanceOp->hasAttr(CPSDirectRecreate);
+    int64_t recreatedDepCountVal = depCountVal;
+    if (directRecreate &&
+        contEdtCreate->hasAttr(AttrNames::Operation::ControlDep) &&
+        recreatedDepCountVal > 0) {
+      /// Direct recreate re-emits only the recorded DB deps. The epoch-finish
+      /// control slot is valid only on the continuation-epoch path that
+      /// recreates the finish-target epoch.
+      --recreatedDepCountVal;
+    }
     Value tNext;
     Value continueCond;
     if (isAdditive && curIter && nextParams.size() >= 2) {
@@ -1288,6 +1326,13 @@ void EpochLoweringPass::runOnOperation() {
     auto createContinuationLaunch = [&]() -> ContinuationEpochPlan {
       ContinuationEpochPlan plan;
       Value paramMemref;
+      auto findOriginalRecDep = [&](EdtCreateOp edt) -> RecordDepOp {
+        for (Operation *user : edt.getGuid().getUsers())
+          if (auto recordDep = dyn_cast<RecordDepOp>(user))
+            if (recordDep.getEdtGuid() == edt.getGuid())
+              return recordDep;
+        return nullptr;
+      };
       // Direct relaunch still has to recreate the target kickoff ABI, not the
       // compact local continuation ABI. Otherwise relaunched params shift when
       // the local continuation dropped target-only carry slots.
@@ -1325,8 +1370,20 @@ void EpochLoweringPass::runOnOperation() {
             AC->create<EdtParamPackOp>(loc, packType, packVals).getMemref();
       }
 
-      auto newContEdt = AC->create<EdtCreateOp>(loc, paramMemref, localDepCount,
-                                                localRoute, outerEpochGuid);
+      auto originalRecDep = findOriginalRecDep(contEdtCreate);
+      unsigned originalDepCount =
+          originalRecDep ? originalRecDep.getDatablocks().size() : 0;
+      Value recreatedDepCount = localDepCount;
+      if (directRecreate) {
+        int64_t directDepCountVal =
+            originalRecDep ? static_cast<int64_t>(originalDepCount)
+                           : recreatedDepCountVal;
+        recreatedDepCount =
+            AC->createIntConstant(directDepCountVal, AC->Int32, loc);
+      }
+
+      auto newContEdt = AC->create<EdtCreateOp>(
+          loc, paramMemref, recreatedDepCount, localRoute, outerEpochGuid);
       setOutlinedFunc(newContEdt, outlinedFunc.getValue());
       if (!directRecreate)
         newContEdt->setAttr(ContinuationForEpoch,
@@ -1345,14 +1402,6 @@ void EpochLoweringPass::runOnOperation() {
 
       Value newContGuid = newContEdt.getGuid();
       plan.contGuid = newContGuid;
-
-      auto findOriginalRecDep = [&](EdtCreateOp edt) -> RecordDepOp {
-        for (Operation *user : edt.getGuid().getUsers())
-          if (auto recordDep = dyn_cast<RecordDepOp>(user))
-            if (recordDep.getEdtGuid() == edt.getGuid())
-              return recordDep;
-        return nullptr;
-      };
 
       auto getLoopBackValueForPackIndex = [&](unsigned packIdx) -> Value {
         if (packIdx < canonicalLoopBackParams.size())
@@ -1410,7 +1459,6 @@ void EpochLoweringPass::runOnOperation() {
         return std::nullopt;
       };
 
-      auto originalRecDep = findOriginalRecDep(contEdtCreate);
       auto originalPack =
           contEdtCreate.getParamMemref().getDefiningOp<EdtParamPackOp>();
       ArrayRef<int32_t> acquireModes =
@@ -1421,8 +1469,6 @@ void EpochLoweringPass::runOnOperation() {
           originalRecDep && originalRecDep.getDepFlags()
               ? ArrayRef<int32_t>(*originalRecDep.getDepFlags())
               : ArrayRef<int32_t>{};
-      unsigned originalDepCount =
-          originalRecDep ? originalRecDep.getDatablocks().size() : 0;
       SmallVector<bool> satisfiedOriginalDepSlots(originalDepCount, false);
 
       auto getOriginalDepMode = [&](unsigned depIdx) -> int32_t {
@@ -1789,6 +1835,36 @@ void EpochLoweringPass::runOnOperation() {
     ++numCpsAdvancesResolved;
     ARTS_INFO("CPS advance: resolved with epoch finish → "
               << outlinedFunc.getValue());
+  }
+
+  SmallVector<EdtCreateOp> strayControlDepCreates;
+  module.walk([&](EdtCreateOp edt) {
+    if (edt->hasAttr(ControlDep))
+      strayControlDepCreates.push_back(edt);
+  });
+
+  for (EdtCreateOp edt : strayControlDepCreates) {
+    bool hasFinishTarget = false;
+    for (Operation *user : edt.getGuid().getUsers()) {
+      if (auto createEpoch = dyn_cast<CreateEpochOp>(user))
+        if (createEpoch.getFinishEdtGuid() == edt.getGuid()) {
+          hasFinishTarget = true;
+          break;
+        }
+    }
+    if (hasFinishTarget)
+      continue;
+
+    OpBuilder::InsertionGuard guard(AC->getBuilder());
+    AC->setInsertionPoint(edt);
+    Value one = AC->createIntConstant(1, AC->Int32, edt.getLoc());
+    Value depCount = edt.getDepCount();
+    Value adjustedDepCount = AC->create<arith::SubIOp>(edt.getLoc(), depCount,
+                                                       one);
+    edt->setOperand(1, adjustedDepCount);
+    edt->removeAttr(ControlDep);
+    ARTS_INFO("Removed stray control dep from continuation kickoff "
+              << edt.getOperationName());
   }
 
   if (failed(compactContinuationParamAbi()))

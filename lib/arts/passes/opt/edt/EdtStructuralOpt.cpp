@@ -37,6 +37,7 @@
 /// Debug
 #include "arts/utils/Debug.h"
 #include "llvm/ADT/Statistic.h"
+#include <algorithm>
 
 using namespace mlir;
 using namespace mlir::func;
@@ -76,9 +77,24 @@ static llvm::Statistic numBarriersRemovedStat{
     "Number of redundant barriers removed"};
 
 namespace {
+static void sortStoresInProgramOrder(MutableArrayRef<memref::StoreOp> stores) {
+  std::stable_sort(
+      stores.begin(), stores.end(),
+      [](memref::StoreOp lhs, memref::StoreOp rhs) {
+        Operation *lhsOp = lhs.getOperation();
+        Operation *rhsOp = rhs.getOperation();
+        if (lhsOp == rhsOp)
+          return false;
+        if (lhsOp->getBlock() == rhsOp->getBlock())
+          return lhsOp->isBeforeInBlock(rhsOp);
+        return lhsOp < rhsOp;
+      });
+}
+
 unsigned sinkExternalAllocasInEdt(EdtOp edt) {
   Block &body = edt.getBody().front();
   DenseMap<Operation *, SmallVector<Operation *, 4>> usesByAlloca;
+  DenseMap<Operation *, unsigned> operationOrder;
 
   body.walk([&](Operation *op) {
     for (Value operand : op->getOperands()) {
@@ -93,6 +109,11 @@ unsigned sinkExternalAllocasInEdt(EdtOp edt) {
 
   if (usesByAlloca.empty())
     return 0;
+
+  if (func::FuncOp parentFunc = edt->getParentOfType<func::FuncOp>()) {
+    unsigned ordinal = 0;
+    parentFunc.walk([&](Operation *op) { operationOrder[op] = ordinal++; });
+  }
 
   OpBuilder builder(edt);
   OpBuilder::InsertionGuard guard(builder);
@@ -130,6 +151,21 @@ unsigned sinkExternalAllocasInEdt(EdtOp edt) {
         continue;
       }
     }
+    std::stable_sort(
+        initStores.begin(), initStores.end(),
+        [&](memref::StoreOp lhs, memref::StoreOp rhs) {
+          Operation *lhsOp = lhs.getOperation();
+          Operation *rhsOp = rhs.getOperation();
+          if (lhsOp == rhsOp)
+            return false;
+          if (lhsOp->getBlock() == rhsOp->getBlock())
+            return lhsOp->isBeforeInBlock(rhsOp);
+          auto lhsIt = operationOrder.find(lhsOp);
+          auto rhsIt = operationOrder.find(rhsOp);
+          if (lhsIt != operationOrder.end() && rhsIt != operationOrder.end())
+            return lhsIt->second < rhsIt->second;
+          return lhsOp < rhsOp;
+        });
 
     if (hasUnsafeStore)
       continue;

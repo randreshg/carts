@@ -65,6 +65,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include <algorithm>
 #include <memory>
 #include <optional>
 
@@ -240,6 +241,7 @@ static void collectExternalValues(Block &sourceBlock, Region *boundaryRegion,
 static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
                                         IRMapping &mapper, OpBuilder &builder) {
   DenseMap<Operation *, SmallVector<Operation *, 4>> usesByAlloca;
+  DenseMap<Operation *, unsigned> operationOrder;
 
   taskBlock.walk([&](Operation *op) {
     for (Value operand : op->getOperands()) {
@@ -254,6 +256,32 @@ static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
 
   if (usesByAlloca.empty())
     return;
+
+  if (func::FuncOp parentFunc = taskEdtRegion->getParentOfType<func::FuncOp>()) {
+    unsigned ordinal = 0;
+    parentFunc.walk([&](Operation *op) { operationOrder[op] = ordinal++; });
+  }
+
+  auto sortStoresInProgramOrder = [](MutableArrayRef<memref::StoreOp> stores) {
+    (void)stores;
+  };
+  auto sortStoresWithOrder = [&](MutableArrayRef<memref::StoreOp> stores) {
+    std::stable_sort(
+        stores.begin(), stores.end(),
+        [&](memref::StoreOp lhs, memref::StoreOp rhs) {
+          Operation *lhsOp = lhs.getOperation();
+          Operation *rhsOp = rhs.getOperation();
+          if (lhsOp == rhsOp)
+            return false;
+          if (lhsOp->getBlock() == rhsOp->getBlock())
+            return lhsOp->isBeforeInBlock(rhsOp);
+          auto lhsIt = operationOrder.find(lhsOp);
+          auto rhsIt = operationOrder.find(rhsOp);
+          if (lhsIt != operationOrder.end() && rhsIt != operationOrder.end())
+            return lhsIt->second < rhsIt->second;
+          return lhsOp < rhsOp;
+        });
+  };
 
   ARTS_DEBUG("  - Cloning " << usesByAlloca.size()
                             << " external stack allocas into EDT");
@@ -307,6 +335,7 @@ static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
         initStores.push_back(store);
       }
     }
+    sortStoresWithOrder(initStores);
 
     if (hasStoreOutsideEdt && !hasStoreInEdt && allocaVisible &&
         (hasUnsafeStore || initStores.empty())) {
@@ -833,6 +862,44 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   Location loc = forOp.getLoc();
 
   ARTS_DEBUG("  Creating task EDT with DB rewiring");
+
+  auto canUseReadyLocalLaunchFastPath = [&]() -> bool {
+    if (singleDispatchLane || !redInfo.reductionVars.empty())
+      return false;
+    if (originalParallel.getConcurrency() != EdtConcurrency::intranode)
+      return false;
+    auto depPattern = getEffectiveDepPattern(forOp.getOperation());
+    if (!depPattern || *depPattern != ArtsDepPattern::uniform)
+      return false;
+    auto kernelFamilyAttr = forOp->getAttrOfType<StringAttr>(
+        AttrNames::Operation::Plan::KernelFamily);
+    if (kernelFamilyAttr && kernelFamilyAttr.getValue() != "uniform")
+      return false;
+    for (Operation *parent = forOp->getParentOp();
+         parent && parent != originalParallel.getOperation();
+         parent = parent->getParentOp()) {
+      if (isa<scf::ForOp>(parent))
+        return false;
+    }
+    for (Operation *parent = originalParallel->getParentOp(); parent;
+         parent = parent->getParentOp()) {
+      if (isa<scf::ForOp>(parent))
+        return false;
+    }
+    if (forOp->hasAttr(AttrNames::Operation::ControlDep) ||
+        originalParallel->hasAttr(AttrNames::Operation::ControlDep))
+      return false;
+    bool hasUnsupportedAsync = false;
+    forOp.walk([&](Operation *nested) {
+      if (nested == forOp.getOperation())
+        return;
+      if (isa<EdtOp, BarrierOp, GetEdtEpochGuidOp>(nested)) {
+        hasUnsupportedAsync = true;
+        return;
+      }
+    });
+    return !hasUnsupportedAsync;
+  };
 
   /// Recreate total workers using shared distribution helper.
   loopInfo.totalWorkers =
@@ -1371,6 +1438,9 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   ++numTaskEdtsCreated;
   transferOperationContract(forOp.getOperation(), taskEdt.getOperation());
   copyPlanAttrs(forOp.getOperation(), taskEdt.getOperation());
+  if (canUseReadyLocalLaunchFastPath())
+    taskEdt->setAttr(AttrNames::Operation::ReadyLocalLaunch,
+                     AC->getBuilder().getUnitAttr());
   if (refinedTaskBlockShape)
     setStencilBlockShape(taskEdt.getOperation(), *refinedTaskBlockShape);
 

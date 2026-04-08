@@ -38,7 +38,12 @@ static bool hasConcreteReadHaloContract(const LoweringContractInfo &contract,
     return false;
   auto minOffsets = contract.getStaticMinOffsets();
   auto maxOffsets = contract.getStaticMaxOffsets();
-  return minOffsets && maxOffsets && minOffsets->size() == maxOffsets->size();
+  if (!minOffsets || !maxOffsets || minOffsets->size() != maxOffsets->size())
+    return false;
+  return llvm::any_of(llvm::zip(*minOffsets, *maxOffsets), [](auto pair) {
+    auto [minOffset, maxOffset] = pair;
+    return minOffset != 0 || maxOffset != 0;
+  });
 }
 
 struct TaskAcquireWindow {
@@ -201,6 +206,9 @@ static bool shouldMaterializeTaskElementSlice(TaskAcquireSlicePlanInput input) {
   if (input.usesStencilHalo)
     return input.effectiveMode == ArtsMode::in;
 
+  if (hasConcreteReadHaloContract(input.contract, input.effectiveMode))
+    return true;
+
   if (shouldUsePartitionSliceAsDepWindow(input.contract, input.taskAcquire)) {
     /// A single element_offsets/element_sizes pair is only sound when the
     /// entire acquire lowers to one slice shape. Writer-capable stencil
@@ -210,8 +218,18 @@ static bool shouldMaterializeTaskElementSlice(TaskAcquireSlicePlanInput input) {
     return input.effectiveMode == ArtsMode::in;
   }
 
-  return input.effectiveMode == ArtsMode::in &&
-         !shouldPreserveParentDepRange(input.contract, input.taskAcquire);
+  if (input.effectiveMode == ArtsMode::in)
+    return !shouldPreserveParentDepRange(input.contract, input.taskAcquire);
+
+  /// Uniform block writers carry a single owner-local slice shape. Materialize
+  /// it so later lowering can reason from the same worker-local element
+  /// contract already attached to the corresponding reads.
+  bool isUniformBlock =
+      input.distributionPattern &&
+      *input.distributionPattern == EdtDistributionPattern::uniform;
+  return isUniformBlock && !input.taskAcquire.getPartitionOffsets().empty() &&
+         !input.taskAcquire.getPartitionSizes().empty() &&
+         !input.contract.spatial.ownerDims.empty();
 }
 
 static std::optional<TaskElementSlice>
@@ -339,8 +357,6 @@ mlir::arts::planTaskAcquireRewrite(TaskAcquireRewritePlanInput input) {
   bool applyStencilHalo = shouldApplyStencilHalo(contract, input.parentAcquire);
   bool preserveParentDepRange =
       shouldPreserveParentDepRange(contract, input.parentAcquire);
-  bool usePartitionSliceAsDepWindow =
-      shouldUsePartitionSliceAsDepWindow(contract, input.parentAcquire);
 
   auto haloMinOffsets = contract.getStaticMinOffsets();
   auto haloMaxOffsets = contract.getStaticMaxOffsets();
@@ -349,7 +365,6 @@ mlir::arts::planTaskAcquireRewrite(TaskAcquireRewritePlanInput input) {
     /// Enable halo-aware task window planning when contract has halo bounds.
     applyStencilHalo = true;
     preserveParentDepRange = false;
-    usePartitionSliceAsDepWindow = false;
   }
 
   if (Operation *rootAllocOp = DbUtils::getUnderlyingDbAlloc(input.rootPtr)) {
@@ -800,8 +815,11 @@ void mlir::arts::applyTaskAcquireSlicePlan(TaskAcquireSlicePlanInput input) {
     /// already-correct worker-local slices back to 1-D metadata.
     shouldUpdateBlockWindow = false;
   }
-  if (!shouldUpdateBlockWindow && !shouldMaterializeElementSlice)
+  if (!shouldUpdateBlockWindow && !shouldMaterializeElementSlice) {
+    input.taskAcquire.getElementOffsetsMutable().clear();
+    input.taskAcquire.getElementSizesMutable().clear();
     return;
+  }
 
   OpBuilder::InsertionGuard guard(input.AC->getBuilder());
   input.AC->setInsertionPoint(input.taskAcquire);
@@ -843,6 +861,10 @@ void mlir::arts::applyTaskAcquireSlicePlan(TaskAcquireSlicePlanInput input) {
       input.taskAcquire.getElementOffsetsMutable().assign(slice->offsets);
       input.taskAcquire.getElementSizesMutable().assign(slice->sizes);
     }
+  if (!shouldMaterializeElementSlice) {
+    input.taskAcquire.getElementOffsetsMutable().clear();
+    input.taskAcquire.getElementSizesMutable().clear();
+  }
 }
 
 void mlir::arts::applyTaskAcquireContractMetadata(

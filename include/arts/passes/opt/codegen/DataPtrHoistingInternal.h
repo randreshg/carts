@@ -19,6 +19,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/OpDefinition.h"
@@ -146,6 +147,11 @@ findBlockedNeighborCacheHoistLoop(scf::ForOp loop, int varyingIndex,
 
 bool materializeBlockedNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop);
 
+/// Cache the current blocked dep-family pointer inside a monotone unit-step
+/// loop and only reload it when the computed family index changes.
+bool materializeMonotoneBlockedDepPtrCache(LLVM::LoadOp loadOp,
+                                          scf::ForOp loop);
+
 Value buildNeighborCandidateIndex(OpBuilder &builder, Location loc,
                                   const NeighborCarryIndexPattern &pattern,
                                   int64_t adjust);
@@ -160,12 +166,19 @@ bool rewriteBlockedNeighborLocalIndices(Operation *op, scf::ForOp loop,
                                         Value replacementIndex);
 
 bool matchSingleBlockBlockedDepIndex(Value value, scf::ForOp loop,
-                                     Value &globalIndex, Value &blockSize,
-                                     Value &startBlock);
+                                     Value &globalIndex,
+                                     BlockedNeighborCarryPattern &pattern);
 
 Value stripInvariantZeroFallback(Value value, scf::ForOp loop);
 
 bool materializeSingleBlockBlockedDepView(LLVM::LoadOp loadOp, scf::ForOp loop);
+
+bool versionSingleBlockUniformDepLoops(scf::ForOp loop);
+
+/// Clone worker EDTs with verified single-block fast paths and rewrite launch
+/// sites to dispatch to the fast clone when the launch-time param pack proves
+/// the same condition as the worker-local guard.
+int specializeVersionedSingleBlockEdtCreates(ModuleOp module);
 
 bool getSelectOperands(Value value, Value &cond, Value &trueValue,
                        Value &falseValue);
