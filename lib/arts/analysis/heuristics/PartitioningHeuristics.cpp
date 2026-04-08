@@ -46,6 +46,28 @@ hasNonLeadingOrMultiDimOwnerContract(const PartitioningContext &ctx) {
   });
 }
 
+/// Detect conflicting owner dimensions across different EDT families.
+/// When different phases access the same DB with different owner_dims (e.g.,
+/// row access vs column access), block partitioning hurts both phases.
+static bool hasConflictingOwnerDims(const PartitioningContext &ctx) {
+  llvm::SmallDenseSet<uint32_t, 4> ownerDimSets;
+
+  for (const AcquireInfo &acq : ctx.acquires) {
+    if (acq.ownerDimsCount == 0)
+      continue;
+
+    // Encode owner dims as a unique hash
+    uint32_t hash = 0;
+    for (uint8_t i = 0; i < acq.ownerDimsCount; ++i) {
+      hash = hash * 31 + static_cast<uint32_t>(acq.ownerDims[i]);
+    }
+    ownerDimSets.insert(hash);
+  }
+
+  // Conflict if more than one unique owner_dims pattern
+  return ownerDimSets.size() > 1;
+}
+
 } // namespace
 
 ///===----------------------------------------------------------------------===///
@@ -157,6 +179,25 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// A generic lowering/distribution contract is not enough to preserve block
   /// on a single node once every block-capable acquire widened to full-range;
   /// at that point the contract no longer buys locality for read-only inputs.
+  ///
+  /// H1.C3a (NEW): Conflicting owner dims + full-range → Coarse
+  /// When different EDT families access the same DB with different owner_dims
+  /// (e.g., atax: Phase 1 uses owner_dims=[0] for row access, Phase 2 uses
+  /// owner_dims=[1] for column access), block partitioning hurts both phases:
+  /// - Phase 1 benefits from row blocking
+  /// - Phase 2 forces full-range acquires (column access across row blocks)
+  /// Result: worse than coarse (block overhead + full-range communication).
+  /// Guard: Preserve block for Jacobi/wavefront stencil patterns where
+  /// alternating buffers with consistent owner dims are essential.
+  if (hasConflictingOwnerDims(ctx) && isSingleNode && isReadOnly &&
+      ctx.allBlockFullRange && !hasJacobiStencil &&
+      !patterns.hasStencil) {
+    ARTS_DEBUG("H1.C3a applied: Conflicting owner_dims + full-range acquires "
+               "→ coarse (transpose pattern)");
+    return PartitioningDecision::coarse(
+        ctx, "H1.C3a: Conflicting owner_dims with full-range prefers coarse");
+  }
+
   bool preserveStencilBlockForReadOnlyFullRange =
       (patterns.hasStencil || hasTrustedStencilAcquire) &&
       !patterns.hasIndexed && preserveReadOnlyStencilOwnership;
