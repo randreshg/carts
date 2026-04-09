@@ -94,6 +94,7 @@ std::unique_ptr<Pass> createForOptPass(AnalysisManager *AM);
 std::unique_ptr<Pass>
 createDistributedHostLoopOutliningPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createEdtDistributionPass(AnalysisManager *AM);
+std::unique_ptr<Pass> createEdtOrchestrationOptPass();
 std::unique_ptr<Pass> createForLoweringPass();
 std::unique_ptr<Pass> createForLoweringPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createLoopFusionPass(AnalysisManager *AM);

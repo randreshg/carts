@@ -157,6 +157,15 @@ constexpr StringLiteral CostRelaunchAmortization =
     "arts.plan.cost.relaunch_amortization";
 } // namespace Plan
 
+/// Orchestration attributes for grouped repeated-wave lowering.
+namespace Orchestration {
+using namespace llvm;
+constexpr StringLiteral Kind = "arts.orch.kind";
+constexpr StringLiteral GroupId = "arts.orch.group_id";
+constexpr StringLiteral WaveIndex = "arts.orch.wave_index";
+constexpr StringLiteral WaveCount = "arts.orch.wave_count";
+} // namespace Orchestration
+
 /// Split launch state attributes (Phase 0 constants, RFC Section 5.2)
 namespace LaunchState {
 using namespace llvm;

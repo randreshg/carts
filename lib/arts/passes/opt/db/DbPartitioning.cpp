@@ -565,10 +565,11 @@ DbPartitioningPass::validatePartitionPreconditions(DbAllocOp allocOp,
 /// Collect all DbAcquireOps from the entire module that reference the given
 /// GUID, not just those attached to the DbAllocNode. This is crucial for
 /// detecting transpose patterns where different EDT families access the same
-/// DB with different owner_dims (e.g., atax matrix A accessed by row and column).
-static void collectAllAcquiresByGuid(Value allocGuid, DbGraph *dbGraph,
-                                      SmallVectorImpl<DbAcquireNode *> &result) {
-  if (!allocGuid || !dbGraph)
+/// DB with different owner_dims (e.g., atax matrix A accessed by row and
+/// column).
+static void collectAllAcquiresByGuid(DbAnalysis &dbAnalysis, Value allocGuid,
+                                     SmallVectorImpl<DbAcquireNode *> &result) {
+  if (!allocGuid)
     return;
 
   /// Get the module to walk all functions
@@ -589,7 +590,7 @@ static void collectAllAcquiresByGuid(Value allocGuid, DbGraph *dbGraph,
     while (currentGuid) {
       if (currentGuid == allocGuid) {
         /// This acquire uses our DB GUID - add it to the result
-        if (auto *acqNode = dbGraph->getDbAcquireNode(acquireOp)) {
+        if (auto *acqNode = dbAnalysis.getDbAcquireNode(acquireOp)) {
           result.push_back(acqNode);
         }
         return;
@@ -636,9 +637,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   SmallVector<DbAcquireNode *, 16> allocAcquireNodes;
   if (allocNode) {
     DbAnalysis &dbAnalysis = AM->getDbAnalysis();
-    func::FuncOp func = allocOp->getParentOfType<func::FuncOp>();
-    DbGraph *dbGraph = func ? &dbAnalysis.getOrCreateGraph(func) : nullptr;
-    collectAllAcquiresByGuid(allocOp.getGuid(), dbGraph, allocAcquireNodes);
+    collectAllAcquiresByGuid(dbAnalysis, allocOp.getGuid(), allocAcquireNodes);
 
     /// Fallback to local collection if global search finds nothing
     if (allocAcquireNodes.empty()) {
@@ -941,17 +940,21 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
         allocOp.getOperation(), {{"forcedArtsId", forceCoarseAllocId}});
   }
 
-  if (decision.isCoarse()) {
-    ARTS_DEBUG("  Heuristics chose coarse - keeping original");
+  if (decision.isCoarse() && ctx.existingAllocMode == PartitionMode::coarse) {
+    ARTS_DEBUG("  Heuristics chose coarse - allocation already coarse");
     resetCoarseAcquireRanges(allocOp, allocNode, builder);
     ++numAllocsLeftCoarseByHeuristics;
     heuristics.recordDecision(
         "Partition-HeuristicsCoarse", false,
-        "heuristics chose coarse allocation, keeping original",
+        "heuristics chose coarse allocation, existing allocation already "
+        "matches",
         allocOp.getOperation(),
         {{"canBlock", ctx.canBlock ? 1 : 0},
          {"canElementWise", ctx.canElementWise ? 1 : 0}});
     return allocOp;
+  }
+  if (decision.isCoarse()) {
+    ARTS_DEBUG("  Heuristics chose coarse - rewriting allocation to coarse");
   }
 
   bool hasContractBackedStencil =
@@ -1412,7 +1415,7 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
         contractSummary ? contractSummary->partitionDimsFromPeers() : false;
     info.explicitCoarseRequest =
         acquireMode && *acquireMode == PartitionMode::coarse;
-    if (contractSummary && !info.partitionDimsFromPeers &&
+    if (contractSummary &&
         !contractSummary->contract.spatial.ownerDims.empty()) {
       info.ownerDimsCount = static_cast<uint8_t>(std::min<size_t>(
           4, contractSummary->contract.spatial.ownerDims.size()));
@@ -1530,7 +1533,11 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
     ARTS_DEBUG("    Acquire["
                << idx << "]: mode=" << static_cast<int>(info.accessMode)
                << ", canEW=" << info.canElementWise
-               << ", canBlock=" << info.canBlock << ", acquireAttr="
+               << ", canBlock=" << info.canBlock << ", ownerDimsCount="
+               << static_cast<unsigned>(info.ownerDimsCount) << ", ownerDims=["
+               << info.ownerDims[0] << "," << info.ownerDims[1] << ","
+               << info.ownerDims[2] << "," << info.ownerDims[3] << "]"
+               << ", acquireAttr="
                << (acquireMode ? static_cast<int>(*acquireMode) : -1));
     dbPartitionTraceImpl([&](llvm::raw_ostream &os) {
       os << "alloc=" << getArtsId(allocOp.getOperation())

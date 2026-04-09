@@ -336,9 +336,9 @@ static const std::array<llvm::StringLiteral, 4> kEdtOptPasses = {
     "CSE"};
 static const std::array<llvm::StringLiteral, 4> kConcurrencyPasses = {
     "PolygeistCanonicalize", "Concurrency", "ForOpt", "PolygeistCanonicalize"};
-static const std::array<llvm::StringLiteral, 4> kEdtDistributionPasses = {
-    "StructuredKernelPlan", "EdtDistribution", "ForLowering",
-    "VerifyForLowered"};
+static const std::array<llvm::StringLiteral, 5> kEdtDistributionPasses = {
+    "StructuredKernelPlan", "EdtDistribution", "EdtOrchestrationOpt",
+    "ForLowering", "VerifyForLowered"};
 static const std::array<llvm::StringLiteral, 8> kPostDistributionCleanupPasses =
     {"EdtStructuralOpt(runAnalysis=false)",
      "DeadCodeElimination",
@@ -813,6 +813,7 @@ void buildConcurrencyPipeline(PassManager &pm, arts::AnalysisManager *AM) {
 void buildEdtDistributionPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(arts::createStructuredKernelPlanPass(AM));
   pm.addPass(arts::createEdtDistributionPass(AM));
+  pm.addPass(arts::createEdtOrchestrationOptPass());
   pm.addPass(arts::createForLoweringPass(AM));
   pm.addPass(arts::createVerifyForLoweredPass());
 }

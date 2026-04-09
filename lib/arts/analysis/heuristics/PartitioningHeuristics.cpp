@@ -68,6 +68,32 @@ static bool hasConflictingOwnerDims(const PartitioningContext &ctx) {
   return ownerDimSets.size() > 1;
 }
 
+/// Detect a single-node producer/consumer mismatch where one phase writes
+/// block-local slices but a later read phase widens back to a full-range view.
+/// In that shape the block allocation keeps the write-side overhead while
+/// losing locality on the consumer side, so coarse is usually better.
+static bool
+hasLocalProducerAndFullRangeReadConsumer(const PartitioningContext &ctx) {
+  bool hasLocalWriter = false;
+  bool hasFullRangeReader = false;
+
+  for (const AcquireInfo &acq : ctx.acquires) {
+    if (!acq.canBlock)
+      continue;
+
+    bool isWriter =
+        acq.accessMode == ArtsMode::out || acq.accessMode == ArtsMode::inout;
+    bool isReader = acq.accessMode == ArtsMode::in;
+
+    if (isWriter && !acq.needsFullRange)
+      hasLocalWriter = true;
+    if (isReader && acq.needsFullRange)
+      hasFullRangeReader = true;
+  }
+
+  return hasLocalWriter && hasFullRangeReader;
+}
+
 } // namespace
 
 ///===----------------------------------------------------------------------===///
@@ -194,7 +220,8 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
     ARTS_DEBUG("H1.C3a applied: Conflicting owner_dims "
                "→ coarse (transpose pattern)");
     return PartitioningDecision::coarse(
-        ctx, "H1.C3a: Conflicting owner_dims (transpose pattern) prefers coarse");
+        ctx,
+        "H1.C3a: Conflicting owner_dims (transpose pattern) prefers coarse");
   }
 
   bool preserveStencilBlockForReadOnlyFullRange =
@@ -225,6 +252,21 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
     ARTS_DEBUG(
         "H1.C3 skipped: stencil/distribution semantics keep block layout for "
         "read-only full-range acquires");
+  }
+
+  /// H1.C3b: Local write producer + full-range read consumer on single-node
+  /// -> Coarse
+  /// Rationale: a blocked allocation no longer buys locality once the read
+  /// phase widens to full-range, but it still keeps the per-block dependency
+  /// and DB-management overhead from the producer phase.
+  if (isSingleNode && ctx.canBlock && ctx.hasDirectAccess &&
+      !ctx.hasIndirectAccess && patterns.hasUniform && !patterns.hasStencil &&
+      hasLocalProducerAndFullRangeReadConsumer(ctx)) {
+    ARTS_DEBUG("H1.C3b applied: Local producer + full-range read consumer "
+               "prefers coarse");
+    return PartitioningDecision::coarse(
+        ctx, "H1.C3b: Single-node full-range read consumer outweighs local "
+             "block producer");
   }
 
   /// H1.C4: Read-only stencil on single-node → Coarse (when stencil is on

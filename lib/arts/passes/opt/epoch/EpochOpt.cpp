@@ -52,9 +52,9 @@ unsigned runAsyncLoopTransform(ModuleOp module, EpochAnalysis &epochAnalysis,
         epochAnalysis.evaluateAsyncLoopStrategy(forOp);
     if (asyncDecision.strategy != spec.selectedStrategy) {
       ARTS_INFO(spec.debugLabel
-                 << ": selector chose "
-                 << asyncLoopStrategyToString(asyncDecision.strategy) << " ("
-                 << asyncDecision.rationale << "), skipping");
+                << ": selector chose "
+                << asyncLoopStrategyToString(asyncDecision.strategy) << " ("
+                << asyncDecision.rationale << "), skipping");
       continue;
     }
     ARTS_INFO(spec.debugLabel << ": Applying to loop (strategy matched)");
@@ -152,6 +152,26 @@ struct EpochOptPass : public impl::EpochOptBase<EpochOptPass> {
       normalizeAsyncLoopPlanAttrs(forOp, asyncDecision.strategy);
     }
 
+    // Amortization runs before CPS transforms: if amortization succeeds,
+    // the loop is consumed and CPS is unnecessary. If it fails, the loop
+    // falls through to CPS chain as before.
+    if (enableAmortization) {
+      SmallVector<EpochOp> amortEpochOps;
+      module.walk([&](EpochOp epochOp) { amortEpochOps.push_back(epochOp); });
+      ARTS_INFO("Found " << amortEpochOps.size()
+                         << " epoch operations to analyze for amortization");
+      unsigned amortized = 0;
+      for (EpochOp epochOp : amortEpochOps) {
+        if (tryAmortizeRepeatedEpochLoop(epochOp))
+          ++amortized;
+      }
+      if (amortized > 0) {
+        numRepeatedEpochLoopsAmortized += amortized;
+        ARTS_INFO("Amortized " << amortized << " repeated epoch loop(s)");
+        changed = true;
+      }
+    }
+
     if (enableCPSChain) {
       static constexpr AsyncLoopTransformSpec kCpsChainSpec = {
           "CPS Chain", EpochAsyncLoopStrategy::CpsChain, &tryCPSChainTransform};
@@ -178,27 +198,11 @@ struct EpochOptPass : public impl::EpochOptBase<EpochOptPass> {
       }
     }
 
-    SmallVector<EpochOp> epochOps;
-    if (enableAmortization || enableContinuation) {
+    if (enableContinuation) {
+      SmallVector<EpochOp> epochOps;
       module.walk([&](EpochOp epochOp) { epochOps.push_back(epochOp); });
       ARTS_INFO("Found " << epochOps.size()
                          << " epoch operations to analyze for scheduling");
-    }
-
-    if (enableAmortization) {
-      unsigned amortized = 0;
-      for (EpochOp epochOp : epochOps) {
-        if (tryAmortizeRepeatedEpochLoop(epochOp))
-          ++amortized;
-      }
-      if (amortized > 0) {
-        numRepeatedEpochLoopsAmortized += amortized;
-        ARTS_INFO("Amortized " << amortized << " repeated epoch loop(s)");
-        changed = true;
-      }
-    }
-
-    if (enableContinuation) {
       unsigned transformed = 0;
       for (EpochOp epochOp : epochOps) {
         if (!epochOp || !epochOp->getBlock())

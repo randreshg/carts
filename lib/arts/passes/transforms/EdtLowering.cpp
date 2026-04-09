@@ -726,8 +726,7 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
   /// Clone constants and constant-like operations into the outlined function
   auto cloneConstantLike = [&](Value val) {
     if (Operation *defOp = val.getDefiningOp())
-      if (defOp->hasTrait<OpTrait::ConstantLike>() ||
-          isUndefLikeOp(defOp))
+      if (defOp->hasTrait<OpTrait::ConstantLike>() || isUndefLikeOp(defOp))
         valueMapping.map(val, builder.clone(*defOp)->getResult(0));
   };
 
@@ -1324,11 +1323,11 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         users.push_back(use.getOwner());
     }
 
-    const bool hasDbGepUsers =
-        llvm::any_of(users, [](Operation *op) { return isa<arts::DbGepOp>(op); });
-    const bool useInvariantSingleDepView =
-        indicesAlreadySliceRelative && hasSingleDepWindow(depSizes) &&
-        !hasDbGepUsers;
+    const bool hasDbGepUsers = llvm::any_of(
+        users, [](Operation *op) { return isa<arts::DbGepOp>(op); });
+    const bool useInvariantSingleDepView = indicesAlreadySliceRelative &&
+                                           hasSingleDepWindow(depSizes) &&
+                                           !hasDbGepUsers;
 
     const bool accessIndicesAlreadySliceRelative =
         indicesAlreadySliceRelative || usePayloadIndexing;
@@ -1571,10 +1570,9 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
       OpBuilder::InsertionGuard payloadIG(AC->getBuilder());
       AC->setInsertionPoint(placeholder.getDefiningOp());
       SmallVector<Value> emptyArgs;
-      Value ptrField =
-          AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv, baseOffset,
-                               emptyArgs, emptyArgs)
-              .getPtr();
+      Value ptrField = AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
+                                            baseOffset, emptyArgs, emptyArgs)
+                           .getPtr();
       invariantDepBasePtr =
           AC->create<LLVM::LoadOp>(loc, AC->llvmPtr, ptrField);
       return invariantDepBasePtr;

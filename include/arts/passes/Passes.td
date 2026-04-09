@@ -521,6 +521,23 @@ def EdtDistribution : Pass<"edt-distribution", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createEdtDistributionPass(nullptr)";
 }
 
+def EdtOrchestrationOpt : Pass<"edt-orchestration-opt", "mlir::ModuleOp"> {
+  let summary = "Recognize repeated sibling waves and stamp orchestration contracts";
+  let description = [{
+    Matches repeated multi-wave timestep loops where several sibling
+    arts.edt<parallel> regions inside one enclosing scf.for represent ordered
+    waves of the same repeated kernel family. The pass records a canonical
+    orchestration contract on the participating EDTs/arts.for ops so
+    ForLowering can preserve the group structure instead of lowering each wave
+    in isolation.
+  }];
+  let dependentDialects = [
+    "func::FuncDialect", "arts::ArtsDialect", "arith::ArithDialect",
+    "scf::SCFDialect", "memref::MemRefDialect"
+  ];
+  let constructor = "mlir::arts::createEdtOrchestrationOptPass()";
+}
+
 def ForLowering : Pass<"for-lowering", "mlir::ModuleOp"> {
   let summary = "Lower arts.for inside parallel EDTs to chunked task EDTs";
   let description = [{

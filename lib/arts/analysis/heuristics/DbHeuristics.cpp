@@ -118,15 +118,14 @@ llvm::ArrayRef<HeuristicDecision> DbHeuristics::getDecisions() const {
 
 PartitioningDecision
 DbHeuristics::choosePartitioning(const PartitioningContext &ctx) {
-  if (ctx.preferBlockND && ctx.preferredOuterRank > 0) {
+  auto decision = evaluatePartitioningHeuristics(ctx, &machine);
+  if (ctx.preferBlockND && ctx.preferredOuterRank > 0 && !decision.isCoarse()) {
     std::string rationale =
         "H1.B0: owner-compute tiling keeps N-D block partitioning";
     recordDecision("H1.B0", true, rationale, nullptr, {});
     return PartitioningDecision::blockND(ctx, ctx.preferredOuterRank,
                                          rationale);
   }
-
-  auto decision = evaluatePartitioningHeuristics(ctx, &machine);
   std::string heuristicId = extractHeuristicId(decision.rationale);
   recordDecision(heuristicId, true, decision.rationale, nullptr, {});
   return decision;

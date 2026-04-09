@@ -9,4 +9,5 @@ Passes that optimize Event-Driven Task structure and execution.
 | EdtICM | edt-transforms | EDT invariant code motion |
 | EdtTransformsPass | edt-transforms | Composite EDT optimization driver |
 | StructuredKernelPlanPass | edt-opt | Plan structured kernel launch patterns |
+| EdtOrchestrationOpt | edt-distribution | Stamp repeated-wave orchestration contracts |
 | PersistentStructuredRegion | edt-opt | Persistent structured region cost gating |

@@ -11,6 +11,7 @@
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -19,6 +20,8 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
+#include <algorithm>
 #include <optional>
 
 using namespace mlir;
@@ -189,6 +192,51 @@ static bool loopHasScalarCarryState(scf::ForOp forOp) {
   return false;
 }
 
+using OwnerDimSignature = SmallVector<int64_t, 4>;
+
+static void
+appendUniqueOwnerDimSignature(SmallVectorImpl<OwnerDimSignature> &signatures,
+                              ArrayRef<int64_t> ownerDims) {
+  OwnerDimSignature candidate(ownerDims.begin(), ownerDims.end());
+  if (llvm::any_of(signatures, [&](const OwnerDimSignature &existing) {
+        return existing == candidate;
+      }))
+    return;
+  signatures.push_back(std::move(candidate));
+}
+
+static void collectOwnerDimSignatures(EpochOp epoch,
+                                      SmallVectorImpl<OwnerDimSignature> &out) {
+  if (!epoch)
+    return;
+
+  epoch.walk([&](Operation *op) {
+    if (auto ownerDims = getStencilOwnerDims(op))
+      appendUniqueOwnerDimSignature(out, *ownerDims);
+    if (auto contract = dyn_cast<LoweringContractOp>(op))
+      if (auto ownerDims = contract.getOwnerDims())
+        appendUniqueOwnerDimSignature(out, *ownerDims);
+  });
+
+  llvm::sort(out,
+             [](const OwnerDimSignature &lhs, const OwnerDimSignature &rhs) {
+               return std::lexicographical_compare(lhs.begin(), lhs.end(),
+                                                   rhs.begin(), rhs.end());
+             });
+}
+
+static bool loopHasHeterogeneousOwnerDims(ArrayRef<EpochSlot> slots) {
+  for (EpochSlot slot : slots) {
+    if (slotMatches(slot, [](EpochOp epoch) {
+          SmallVector<OwnerDimSignature> signatures;
+          collectOwnerDimSignatures(epoch, signatures);
+          return signatures.size() > 1;
+        }))
+      return true;
+  }
+  return false;
+}
+
 static bool shouldAvoidCpsChainForLoop(scf::ForOp forOp,
                                        const EpochAsyncLoopDecision &decision) {
   if (decision.slots.empty())
@@ -198,8 +246,6 @@ static bool shouldAvoidCpsChainForLoop(scf::ForOp forOp,
       llvm::all_of(decision.slots, [](const EpochSlot &slot) {
         return slotMatches(slot, epochHasZeroExpectedLocalWork);
       });
-  if (!allSlotsHaveZeroExpectedLocalWork)
-    return false;
 
   bool coordinatorWaveLoop =
       llvm::any_of(decision.slots, [](const EpochSlot &slot) {
@@ -209,6 +255,9 @@ static bool shouldAvoidCpsChainForLoop(scf::ForOp forOp,
   bool pureOrchestrationLoop =
       !hasScalarCarryState && coordinatorWaveLoop &&
       (decision.slots.size() > 1 || decision.hasSequentialSidecars);
+  bool twoSlotCoordinatorLoopWithSidecars =
+      decision.slots.size() == 2 && decision.hasInterEpochSidecars &&
+      coordinatorWaveLoop && !hasScalarCarryState;
 
   bool allSlotsFullTimestep =
       llvm::all_of(decision.slots, [](const EpochSlot &slot) {
@@ -220,12 +269,26 @@ static bool shouldAvoidCpsChainForLoop(scf::ForOp forOp,
   bool multiStageOrSidecarFullTimestepLoop =
       allSlotsFullTimestep &&
       (decision.slots.size() > 1 || decision.hasSequentialSidecars);
+  bool hasHeterogeneousOwnerDimLayout =
+      allSlotsFullTimestep &&
+      (decision.slots.size() > 1 || decision.hasSequentialSidecars) &&
+      loopHasHeterogeneousOwnerDims(decision.slots);
+
+  if (twoSlotCoordinatorLoopWithSidecars)
+    return true;
 
   // STREAM fix: If the loop has inter-epoch sequential sidecars (e.g., timing
   // between kernels), allow CPS chain even for orchestration-heavy loops.
   // The sidecars represent per-iteration state that benefits from CPS.
-  if (decision.hasInterEpochSidecars)
-    return false;  // Don't avoid CPS chain
+  if (decision.hasInterEpochSidecars && !hasHeterogeneousOwnerDimLayout)
+    return false; // Don't avoid CPS chain
+
+  // Heterogeneous owner dims only block CPS chain when inter-epoch sidecars
+  // are present (handled above). Tail-only sidecars with heterogeneous dims
+  // are safe because each epoch slot is lowered independently within the
+  // continuation — no partition state crosses between slots.
+  if (hasHeterogeneousOwnerDimLayout && decision.hasInterEpochSidecars)
+    return true;
 
   return (allSlotsHaveZeroExpectedLocalWork &&
           multiStageOrSidecarFullTimestepLoop) ||

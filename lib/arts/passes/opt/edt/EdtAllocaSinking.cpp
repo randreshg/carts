@@ -22,17 +22,16 @@ using namespace mlir::arts;
 
 namespace {
 static void sortStoresInProgramOrder(MutableArrayRef<memref::StoreOp> stores) {
-  std::stable_sort(
-      stores.begin(), stores.end(),
-      [](memref::StoreOp lhs, memref::StoreOp rhs) {
-        Operation *lhsOp = lhs.getOperation();
-        Operation *rhsOp = rhs.getOperation();
-        if (lhsOp == rhsOp)
-          return false;
-        if (lhsOp->getBlock() == rhsOp->getBlock())
-          return lhsOp->isBeforeInBlock(rhsOp);
-        return lhsOp < rhsOp;
-      });
+  std::stable_sort(stores.begin(), stores.end(),
+                   [](memref::StoreOp lhs, memref::StoreOp rhs) {
+                     Operation *lhsOp = lhs.getOperation();
+                     Operation *rhsOp = rhs.getOperation();
+                     if (lhsOp == rhsOp)
+                       return false;
+                     if (lhsOp->getBlock() == rhsOp->getBlock())
+                       return lhsOp->isBeforeInBlock(rhsOp);
+                     return lhsOp < rhsOp;
+                   });
 }
 
 unsigned sinkExternalAllocasInEdt(EdtOp edt) {
@@ -95,21 +94,21 @@ unsigned sinkExternalAllocasInEdt(EdtOp edt) {
         continue;
       }
     }
-    std::stable_sort(
-        initStores.begin(), initStores.end(),
-        [&](memref::StoreOp lhs, memref::StoreOp rhs) {
-          Operation *lhsOp = lhs.getOperation();
-          Operation *rhsOp = rhs.getOperation();
-          if (lhsOp == rhsOp)
-            return false;
-          if (lhsOp->getBlock() == rhsOp->getBlock())
-            return lhsOp->isBeforeInBlock(rhsOp);
-          auto lhsIt = operationOrder.find(lhsOp);
-          auto rhsIt = operationOrder.find(rhsOp);
-          if (lhsIt != operationOrder.end() && rhsIt != operationOrder.end())
-            return lhsIt->second < rhsIt->second;
-          return lhsOp < rhsOp;
-        });
+    std::stable_sort(initStores.begin(), initStores.end(),
+                     [&](memref::StoreOp lhs, memref::StoreOp rhs) {
+                       Operation *lhsOp = lhs.getOperation();
+                       Operation *rhsOp = rhs.getOperation();
+                       if (lhsOp == rhsOp)
+                         return false;
+                       if (lhsOp->getBlock() == rhsOp->getBlock())
+                         return lhsOp->isBeforeInBlock(rhsOp);
+                       auto lhsIt = operationOrder.find(lhsOp);
+                       auto rhsIt = operationOrder.find(rhsOp);
+                       if (lhsIt != operationOrder.end() &&
+                           rhsIt != operationOrder.end())
+                         return lhsIt->second < rhsIt->second;
+                       return lhsOp < rhsOp;
+                     });
 
     if (hasUnsafeStore)
       continue;
