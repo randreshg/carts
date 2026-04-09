@@ -6,6 +6,7 @@ add_mlir_dialect_library(MLIRArts
 
   DEPENDS
     MLIROpsIncGen
+    MLIRRtOpsIncGen
 
   LINK_LIBS PUBLIC
     MLIRIR
@@ -17,6 +18,7 @@ add_mlir_dialect_library(MLIRArts
     MLIRSupport
     MLIRSCFTransforms
 )
+add_subdirectory(dialect)
 add_subdirectory(utils)
 add_subdirectory(transforms)
 add_subdirectory(analysis)

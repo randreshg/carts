@@ -7,4 +7,5 @@ mlir_tablegen(OpsAttributes.cpp.inc -gen-attrdef-defs
               -attrdefs-dialect=arts)
 add_mlir_dialect(Ops arts)
 
+add_subdirectory(dialect)
 add_subdirectory(passes)
