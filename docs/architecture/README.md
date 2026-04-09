@@ -12,24 +12,30 @@ following IREE's proven multi-dialect pattern.
   =====|=====================================================
   ||   v   SDE DIALECT (sde.*)  Stages 1-5                ||
   ||   CU: what runs  SU: how/when  MU: data access       ||
+  ||   Type-polymorphic: tensor + memref native            ||
   ==========================================================
        |
        |  +------------------------------------------------+
        |  | MLIR Infrastructure (composed, not reinvented)  |
        |  |                                                 |
        |  |  +----------+  +----------+  +----------+      |
-       |  |  |  Affine  |  |  Linalg  |  |  Tensor  |      |
-       |  |  | analysis |  | struct   |  | analysis |      |
+       |  |  |  Linalg  |  |  Tensor  |  |  Affine  |      |
+       |  |  | native:  |  | native:  |  | analysis:|      |
+       |  |  | generic, |  | SSA deps |  | deps,    |      |
+       |  |  | tile&fuse|  | no alias |  | parallel |      |
        |  |  +----------+  +----------+  +----------+      |
        |  |  +----------+  +----------+                     |
-       |  |  |  Vector  |  | Bufferz  |                     |
-       |  |  | codegen  |  | tensor>m |                     |
+       |  |  | Bufferz  |  |  Vector  |                     |
+       |  |  | tensor>m |  | codegen  |                     |
        |  |  +----------+  +----------+                     |
        |  +------------------------------------------------+
        |
        |  CU: sde.cu_region, sde.cu_task, sde.cu_reduce, sde.cu_atomic
+       |    (ins/outs accept tensor OR memref via DestinationStyleOpInterface)
        |  SU: sde.su_iterate, sde.su_barrier, sde.su_distribute
+       |    (iter_args carry tensor values for SSA-tracked state)
        |  MU: sde.mu_dep, sde.mu_access, sde.mu_reduction_decl
+       |    (memref fallback only; tensor path uses tensor.extract/insert_slice)
        |
   -----+--- SdeToArts Conversion ----------------------------
        |
@@ -97,8 +103,8 @@ enables:
 
 - **CU/SU/MU separation**: Compute Units (what), Scheduling Units (how/when), Memory Units (data)
 - **STATE, DEPENDENCY, EFFECT are first-class** in every CU op
-- **Tensor-first analysis**: Raise to tensor space for alias-free SSA dependency analysis
-- **Compose with MLIR**: Use linalg/tensor/affine/bufferization, don't reinvent
+- **Tensor-native ops**: SDE CU ops are type-polymorphic (tensor + memref) with `DestinationStyleOpInterface`; in tensor space, SSA def-use chains ARE the dependency graph -- no custom analysis needed
+- **Compose with MLIR**: linalg/tensor/bufferization are native to SDE, not separate; affine for analysis
 - **Lossless from OMP**: Preserve reduction combiners, nowait, collapse, schedule
 - **Runtime-agnostic SDE**: Could target ARTS, Legion, StarPU, or GPU runtimes
 

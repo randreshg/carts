@@ -17,6 +17,100 @@ task-based runtime (ARTS, Legion, StarPU, GPU).
 
 **Input is OpenMP code.** The OMP-to-SDE conversion must be natural and direct.
 
+## Tensor-First Design
+
+Following IREE's Flow dialect — which operates ENTIRELY in tensor space — SDE
+ops are **type-polymorphic**: they natively accept tensor, memref, and scalar
+types. This is the single most important design decision in SDE.
+
+### Why Tensor Types Are Native to SDE
+
+IREE's Flow dialect never sees memrefs. All optimization — partitioning,
+dispatch formation, fusion, scheduling — happens on immutable tensor values.
+Memrefs appear only after bufferization, during final codegen. SDE follows
+the same principle:
+
+| Property | Memref (current CARTS) | Tensor (SDE native) |
+|---|---|---|
+| Aliasing | Mutable pointers; alias analysis required | Immutable SSA values; no aliasing possible |
+| Dependencies | Must be explicitly tracked | Implicit in SSA def-use chains — FREE |
+| Access regions | Must be declared (offsets/sizes) | `tensor.extract_slice` IS the declaration |
+| Optimization | Alias analysis limits fusion/tiling | Arbitrary fusion, tiling, composition |
+| Pattern classify | Requires custom PatternDiscovery | linalg `iterator_types` classify automatically |
+| Buffer decisions | Manual DB mode analysis | One-shot bufferization — proven, optimal |
+
+### SDE Ops Are Type-Polymorphic
+
+SDE CU ops implement `DestinationStyleOpInterface` (like `linalg.generic`),
+enabling native composition with MLIR's tile-and-fuse infrastructure. Every
+CU op accepts **both tensor and memref** operands:
+
+```mlir
+// TENSOR PATH: ins/outs notation, SSA deps are automatic
+%A_slice = tensor.extract_slice %A[%i][%N][1] : tensor<?xf64> to tensor<?xf64>
+%B_init  = tensor.extract_slice %B[%i][%N][1] : tensor<?xf64> to tensor<?xf64>
+
+%result = sde.cu_task
+    ins(%A_slice : tensor<?xf64>)
+    outs(%B_init : tensor<?xf64>) {
+^bb0(%a: tensor<?xf64>, %b: tensor<?xf64>):
+  %computed = linalg.generic { ... } ins(%a) outs(%b) { ... } -> tensor<?xf64>
+  sde.yield %computed : tensor<?xf64>
+} -> tensor<?xf64>
+
+%B_new = tensor.insert_slice %result into %B[%i][%N][1] : ...
+
+// MEMREF FALLBACK: explicit deps, side-effecting body
+%dep = sde.mu_dep <write> %B[%i] size [%N] : memref<?xf64> -> !sde.dep
+sde.cu_task deps(%dep) {
+^bb0(%B_view: memref<?xf64>):
+  memref.store %val, %B_view[%j] : memref<?xf64>
+  sde.yield
+}
+```
+
+### What Standard MLIR Ops Replace in the Tensor Path
+
+In the tensor path, standard MLIR ops replace custom SDE MU ops:
+
+| SDE Op (memref fallback) | Standard MLIR (tensor path) |
+|---|---|
+| `sde.mu_dep <read> %A[%i] size [%N]` | `tensor.extract_slice %A[%i][%N][1]` |
+| `sde.mu_dep <write> %B[%i] size [%N]` | `tensor.insert_slice %result into %B[%i][%N][1]` |
+| `sde.mu_access <read> %A[%lo] size [%sz]` | Implicit in `tensor.extract_slice` |
+| Custom dependency analysis | SSA def-use chains (free, exact) |
+| Custom alias analysis | No aliasing by construction |
+| Custom DB mode analysis | One-shot bufferization (optimal) |
+
+### Two-Path Architecture
+
+SDE does NOT require all code to be in tensor form. The pipeline is
+**best-effort raising** with graceful fallback:
+
+```
+OMP-to-SDE: produces memref-based SDE ops (faithful to Polygeist)
+     |
+     v
+RaiseToLinalg: scf.for+memref -> linalg.generic on memref (best-effort)
+     |          [code that can't be raised stays as scf.for+memref]
+     v
+RaiseToTensor: linalg on memref -> linalg on tensor (best-effort)
+     |          [code that can't be raised stays as linalg on memref]
+     v
+SDE Analysis: tensor bodies get alias-free SSA analysis
+              memref bodies get conservative metadata-based analysis
+     |
+     v
+Bufferize: tensor -> memref (one-shot, upstream MLIR)
+     |
+     v
+SDE->ARTS: all back to memref for ARTS core
+```
+
+~60% of benchmarks reach the tensor path (structured loops). ~40% stay
+in the memref fallback (indirect, sparse, I/O). Both paths coexist
+naturally because SDE ops are type-polymorphic.
+
 ## Dialect Definition
 
 ```tablegen
@@ -107,43 +201,74 @@ ContractAttr  : lowering contract with pattern + strategy
 
 Every CU makes three things explicit:
 
-- **STATE**: Block args receive data views; `iter_args` carry loop state;
-  `sde.yield` forwards values
-- **DEPENDENCY**: `$deps` operands are `sde.dep` values from `sde.mu_dep`;
-  each dep has access mode and region bounds
+- **STATE**: Block args receive data views (tensor or memref);
+  `iter_args` carry loop state; `sde.yield` forwards values
+- **DEPENDENCY**: Tensor path: implicit in SSA def-use chains.
+  Memref fallback: `$deps` from `sde.mu_dep` with access mode and region.
 - **EFFECT**: `MemoryEffectsOpInterface` + `RecursiveMemoryEffects` trait
+
+All CU ops implement `DestinationStyleOpInterface` with optional `ins/outs`
+operands, enabling native composition with linalg tile-and-fuse.
 
 ### `sde.cu_region` -- Parallel or Single Execution Region
 
 Captures `omp.parallel`, `omp.single`, `omp.master`.
 
 ```mlir
-// Parallel region (from omp.parallel)
+// Memref form (from OMP-to-SDE, before raising)
 sde.cu_region parallel scope(<distributed>) {
-  // body -- may contain sde.su_iterate, sde.su_barrier, etc.
+  // body with memref.load/store
   sde.yield
 }
 
-// Single-execution region (from omp.master)
-sde.cu_region single scope(<local>) {
-  sde.yield
+// Tensor form (after RaiseToTensor)
+%B_new = sde.cu_region parallel scope(<distributed>)
+    ins(%A : tensor<?xf64>)
+    outs(%B : tensor<?xf64>) -> tensor<?xf64> {
+  // body with linalg.generic on tensors
+  sde.yield %result : tensor<?xf64>
 }
 ```
 
 **Operands**: `kind` (parallel/single/task), `concurrency_scope` (optional),
-`nowait` (unit attr), `deps` (Variadic<sde.dep>)
+`nowait` (unit attr), `ins` (tensor/memref), `outs` (tensor/memref),
+`deps` (Variadic<sde.dep> -- memref fallback only)
 
-**Results**: Optional `sde.completion` token
+**Results**: Tensor results (tensor path) and/or optional `sde.completion` token
 
 **Region**: Single-block body terminated by `sde.yield`
 
 **Effects**: Write on ComputeResource; RecursiveMemoryEffects propagates body
 
-**State**: Block args correspond 1:1 to `$deps`, receiving runtime-acquired views
-
-### `sde.cu_task` -- Task with Explicit Dependencies
+### `sde.cu_task` -- Task with Dependencies
 
 Captures `omp.task` with `depend(in/out/inout)` clauses.
+
+**Tensor path** -- dependencies implicit in SSA:
+
+```mlir
+// tensor.extract_slice replaces sde.mu_dep <read>
+%A_slice = tensor.extract_slice %A[%i][%N][1] : tensor<?xf64> to tensor<?xf64>
+%B_init  = tensor.extract_slice %B[%i][%N][1] : tensor<?xf64> to tensor<?xf64>
+
+%result = sde.cu_task
+    ins(%A_slice : tensor<?xf64>)
+    outs(%B_init : tensor<?xf64>) {
+^bb0(%a: tensor<?xf64>, %b: tensor<?xf64>):
+  %computed = linalg.generic {
+    indexing_maps = [...], iterator_types = ["parallel"]
+  } ins(%a : tensor<?xf64>) outs(%b : tensor<?xf64>) {
+  ^bb0(%a_elem: f64, %b_elem: f64):
+    linalg.yield %val : f64
+  } -> tensor<?xf64>
+  sde.yield %computed : tensor<?xf64>
+} -> tensor<?xf64>
+
+// tensor.insert_slice replaces sde.mu_dep <write>
+%B_new = tensor.insert_slice %result into %B[%i][%N][1] : ...
+```
+
+**Memref fallback** -- explicit `sde.mu_dep` deps:
 
 ```mlir
 %dep_A = sde.mu_dep <read> %A[%i] size [%N] : memref<?xf64> -> !sde.dep
@@ -151,19 +276,18 @@ Captures `omp.task` with `depend(in/out/inout)` clauses.
 
 %done = sde.cu_task deps(%dep_A, %dep_B) {
 ^bb0(%A_view: memref<?xf64>, %B_view: memref<?xf64>):
-  // body uses acquired views
+  // body uses memref.load/store
   sde.yield
 } : !sde.completion
 ```
 
-**State**: Block args receive data views for each dep
-
-**Dependency**: `$deps` carry mode + region; write->read on overlapping regions
-enforces happens-before
+**Key insight**: In the tensor path, `tensor.extract_slice` IS the read
+declaration and `tensor.insert_slice` IS the write declaration. No custom
+`sde.mu_dep` needed — standard MLIR ops carry the same information.
 
 **Effect**: Write on ComputeResource; RecursiveMemoryEffects for body
 
-**Result**: `sde.completion` token consumed by `sde.su_barrier`
+**Result**: Tensor results (tensor path) and/or `sde.completion` token
 
 ### `sde.cu_reduce` -- Reduction Accumulation
 
@@ -171,28 +295,46 @@ Captures `omp.wsloop reduction(+: sum)`. **PRESERVES the combiner semantics
 that the current pipeline LOSES.**
 
 ```mlir
-// Named reduction (add, mul, etc.)
-sde.cu_reduce add (%acc, %partial : memref<f64>, f64)
-    identity (%zero : f64)
+// TENSOR PATH: accumulator is a tensor value (SSA, no aliasing)
+%result = sde.cu_reduce add
+    ins(%partial : tensor<f64>)
+    outs(%acc : tensor<f64>)
+    identity (%zero : f64) -> tensor<f64>
 
-// Custom reduction with combiner region
-sde.cu_reduce custom (%acc, %partial : memref<f64>, f64)
+// TENSOR PATH: custom combiner
+%result = sde.cu_reduce custom
+    ins(%partial : tensor<f64>)
+    outs(%acc : tensor<f64>)
     identity (%zero : f64) combiner {
 ^bb0(%lhs: f64, %rhs: f64):
   %r = arith.addf %lhs, %rhs : f64
   sde.yield %r : f64
-}
+} -> tensor<f64>
+
+// MEMREF FALLBACK: accumulator is a memref (side-effecting)
+sde.cu_reduce add (%acc, %partial : memref<f64>, f64)
+    identity (%zero : f64)
 ```
+
+In the tensor path, the accumulator is an immutable tensor value returned
+via SSA — no atomic updates, no aliasing concerns. SDE-to-ARTS conversion
+decides whether to implement as `arts.atomic_add` or a tree reduction.
 
 **Effect**: Read+Write on DataResource
 
 ### `sde.cu_atomic` -- Atomic Memory Update
 
-Captures `omp.atomic.update` (currently only add{i,f}).
+Captures `omp.atomic.update` (currently only add{i,f}). **Memref-only** --
+atomics are inherently side-effecting operations on mutable memory locations.
+There is no meaningful tensor form.
 
 ```mlir
 sde.cu_atomic add (%addr, %val : memref<f64>, f64)
 ```
+
+In the tensor path, atomics arise only AFTER bufferization (when tensor
+values become memref locations). Before bufferization, what would be an
+atomic is expressed as a `sde.cu_reduce` on tensor values.
 
 **Effect**: Write on DataResource
 
@@ -207,30 +349,67 @@ SU ops carry scheduling policy without computation content.
 Captures `omp.wsloop + omp.loop_nest`, `omp.taskloop`, `scf.parallel`.
 Implements `LoopLikeOpInterface` for iter_args state flow.
 
-```mlir
-// Simple parallel loop (from omp.wsloop, static schedule)
-sde.su_iterate (%c1) to (%Nm1) step (%c1)
-    schedule(<static>, %chunk) {
-^bb0(%i: index):
-  // loop body
-  sde.yield
-}
+**Tensor path** -- `iter_args` carry tensor values, enabling natural
+alternating-buffer patterns without aliasing:
 
-// With reduction (preserves combiner!)
+```mlir
+// Jacobi alternating buffers: swap A/B each iteration
+%A_final, %B_final = sde.su_iterate (%c0) to (%T) step (%c1)
+    iter_args(%A_iter = %A_init : tensor<?x?xf64>,
+              %B_iter = %B_init : tensor<?x?xf64>) {
+^bb0(%t: index, %A: tensor<?x?xf64>, %B: tensor<?x?xf64>):
+  %B_new = linalg.generic {
+    indexing_maps = [affine_map<(i) -> (i-1)>,
+                     affine_map<(i) -> (i+1)>,
+                     affine_map<(i) -> (i)>],
+    iterator_types = ["parallel"]
+  } ins(%A, %A : tensor<?x?xf64>, tensor<?x?xf64>)
+    outs(%B : tensor<?x?xf64>) {
+  ^bb0(%left: f64, %right: f64, %b: f64):
+    %sum = arith.addf %left, %right : f64
+    %val = arith.mulf %half, %sum : f64
+    linalg.yield %val : f64
+  } -> tensor<?x?xf64>
+  sde.yield %B_new, %A : tensor<?x?xf64>, tensor<?x?xf64>  // swap
+} -> (tensor<?x?xf64>, tensor<?x?xf64>)
+```
+
+Key insight: In tensor space, the A/B swap is just SSA value forwarding.
+No aliasing, no double-buffering analysis needed. Bufferization decides
+whether to allocate in-place.
+
+**Tensor path with reduction:**
+
+```mlir
 %final = sde.su_iterate (%c0) to (%N) step (%c1)
     reduction [#sde<reduction_kind<add>>]
-    (%sum_init : f64) identity (%zero : f64) {
+    iter_args(%sum = %sum_init : f64) identity (%zero : f64) {
 ^bb0(%i: index, %partial: f64):
-  %a = memref.load %A[%i] : memref<?xf64>
+  %a_slice = tensor.extract_slice %A[%i][1][1] : tensor<?xf64> to tensor<f64>
+  %a = tensor.extract %a_slice[] : tensor<f64>
   %new = arith.addf %partial, %a : f64
   sde.yield %new : f64
 } : f64
 ```
 
-**Operands**: lb, ub, step, schedule, chunk_size, nowait, collapse,
-reduction_accumulators, reduction_kinds, reduction_identities, loop_info
+**Memref fallback** -- classic form:
 
-**State**: Induction var + reduction accumulators as block args (LoopLikeOpInterface)
+```mlir
+sde.su_iterate (%c1) to (%Nm1) step (%c1)
+    schedule(<static>, %chunk) {
+^bb0(%i: index):
+  %a = memref.load %A[%i] : memref<?xf64>
+  memref.store %val, %B[%i] : memref<?xf64>
+  sde.yield
+}
+```
+
+**Operands**: lb, ub, step, schedule, chunk_size, nowait, collapse,
+iter_args (tensor/memref/scalar), reduction_kinds, reduction_identities,
+loop_info
+
+**State**: Induction var + iter_args as block args (LoopLikeOpInterface).
+Tensor iter_args enable SSA-based dep tracking across iterations.
 
 **Effect**: Write on ComputeResource
 
@@ -264,11 +443,20 @@ sde.su_distribute scope(<distributed>) workers(64) {
 
 ## MU (Memory Unit) Ops
 
-MU ops declare data access patterns and dependencies.
+MU ops declare data access patterns and dependencies. **In the tensor path,
+standard MLIR ops replace most MU ops** — `tensor.extract_slice` is a read
+declaration, `tensor.insert_slice` is a write declaration, and SSA def-use
+chains ARE the dependency graph. MU ops exist primarily for the memref
+fallback path and for explicit task ordering where SSA can't express the
+dependency (e.g., point-to-point synchronization between tasks on different
+branches of control flow).
 
 ### `sde.mu_dep` -- Data Dependency Declaration
 
 Replaces the current `arts.omp_dep` -> `arts.db_control` two-op chain.
+**Used in the memref fallback path only.** In the tensor path,
+`tensor.extract_slice`/`tensor.insert_slice` carry the same information
+natively.
 
 ```mlir
 // Region dependency (from depend(in: A[0:N]))
@@ -285,8 +473,10 @@ Replaces the current `arts.omp_dep` -> `arts.db_control` two-op chain.
 
 ### `sde.mu_access` -- In-Body Access Region Annotation
 
-Used INSIDE CU bodies to annotate which subregion is actually touched
-(enables precise DB mode tightening in downstream passes).
+**Memref fallback only.** Used INSIDE CU bodies to annotate which subregion
+is actually touched (enables precise DB mode tightening in downstream passes).
+In the tensor path, `tensor.extract_slice` carries the same information
+natively and this op is not needed.
 
 ```mlir
 %view = sde.mu_access <read> %A[%lo] size [%sz] : memref<?xf64> -> memref<?xf64>
@@ -361,6 +551,39 @@ sde.cu_region parallel scope(<distributed>) {
 
 No `sde.mu_dep` needed -- worksharing loops have implicit deps analyzed later.
 
+After RaiseToLinalg + RaiseToTensor, the same code becomes:
+```mlir
+%B_new = sde.cu_region parallel scope(<distributed>)
+    ins(%A : tensor<?xf64>)
+    outs(%B : tensor<?xf64>) -> tensor<?xf64> {
+^bb0(%a_in: tensor<?xf64>, %b_out: tensor<?xf64>):
+  %result = sde.su_iterate (%c1) to (%Nm1) step (%c1)
+      iter_args(%b_iter = %b_out : tensor<?xf64>) {
+  ^bb0(%i: index, %b: tensor<?xf64>):
+    %stencil = linalg.generic {
+      indexing_maps = [affine_map<(d0) -> (d0 - 1)>,
+                       affine_map<(d0) -> (d0 + 1)>,
+                       affine_map<(d0) -> (d0)>],
+      iterator_types = ["parallel"]
+    } ins(%a_in, %a_in : tensor<?xf64>, tensor<?xf64>)
+      outs(%b : tensor<?xf64>) {
+    ^bb0(%left: f64, %right: f64, %old: f64):
+      %sum = arith.addf %left, %right : f64
+      %val = arith.mulf %half, %sum : f64
+      linalg.yield %val : f64
+    } -> tensor<?xf64>
+    sde.yield %stencil : tensor<?xf64>
+  } -> tensor<?xf64>
+  sde.yield %result : tensor<?xf64>
+}
+```
+
+Key observations in the tensor form:
+- Dependencies are SSA def-use chains: `%B_new` depends on `%A` and `%B`
+- Access pattern is in the linalg `indexing_maps`: stencil with +/-1 offsets
+- Pattern classification is automatic: `iterator_types = ["parallel"]`
+- No alias analysis, no custom dependency tracking, no `sde.mu_dep`
+
 ### Example 2: Task with Dependencies
 
 ```c
@@ -379,6 +602,26 @@ After OMP-to-SDE:
   sde.yield
 } : !sde.completion
 ```
+
+After raising to tensor, the same task becomes:
+```mlir
+%A_slice = tensor.extract_slice %A[%i][%N][1] : tensor<?xf64> to tensor<?xf64>
+%B_init  = tensor.extract_slice %B[%i][%N][1] : tensor<?xf64> to tensor<?xf64>
+
+%result = sde.cu_task
+    ins(%A_slice : tensor<?xf64>)
+    outs(%B_init : tensor<?xf64>) {
+^bb0(%a: tensor<?xf64>, %b: tensor<?xf64>):
+  %computed = linalg.generic { ... }
+    ins(%a : tensor<?xf64>) outs(%b : tensor<?xf64>) { ... } -> tensor<?xf64>
+  sde.yield %computed : tensor<?xf64>
+} -> tensor<?xf64>
+
+%B_new = tensor.insert_slice %result into %B[%i][%N][1] : ...
+```
+
+`tensor.extract_slice` replaces `sde.mu_dep <read>`, `tensor.insert_slice`
+replaces `sde.mu_dep <write>`, and SSA deps replace the `sde.dep` token chain.
 
 ### Example 3: Parallel Reduction
 
@@ -405,6 +648,27 @@ sde.cu_region parallel scope(<distributed>) {
 
 Reduction kind (`add`) and identity (`0.0`) are preserved -- unlike
 the current pipeline which loses the combiner region.
+
+After raising to tensor:
+```mlir
+%final = sde.cu_region parallel scope(<distributed>)
+    ins(%A : tensor<?xf64>) -> f64 {
+^bb0(%a_in: tensor<?xf64>):
+  %result = sde.su_iterate (%c0) to (%N) step (%c1)
+      reduction [#sde<reduction_kind<add>>]
+      iter_args(%sum = %sum_init : f64) identity (%zero : f64) {
+  ^bb0(%i: index, %partial: f64):
+    %a = tensor.extract %a_in[%i] : tensor<?xf64>
+    %new = arith.addf %partial, %a : f64
+    sde.yield %new : f64
+  } : f64
+  sde.yield %result : f64
+}
+```
+
+Scalar reductions work identically in both paths — `f64` is not a tensor or
+memref, so the reduction accumulator is the same. The difference is that the
+input array `%A` is now a tensor value with SSA-tracked dependencies.
 
 ### Example 4: Taskwait with Completion Tokens
 
@@ -438,38 +702,42 @@ to which tasks are awaited. SDE preserves the exact dependency.
 
 ## Information Preservation: SDE vs Current Pipeline
 
-| Information | Current (OMP->ARTS) | SDE (OMP->SDE->ARTS) |
-|---|---|---|
-| Reduction combiner region | **LOST** | Preserved in `sde.su_iterate` + `sde.mu_reduction_decl` |
-| Nowait intent | **LOST** (barrier decision at conversion) | Preserved as `nowait` attr |
-| Schedule + chunk size | Partially preserved | Fully preserved on `sde.su_iterate` |
-| Collapse depth | **LOST** | Preserved as `collapse` attr |
-| Task completion tracking | **LOST** (bare `arts.barrier`) | Preserved via `sde.completion` tokens |
-| Dep regions (offsets/sizes) | Split into `arts.omp_dep` -> `arts.db_control` | Unified in `sde.mu_dep` |
+| Information | Current (OMP->ARTS) | SDE memref path | SDE tensor path |
+|---|---|---|---|
+| Reduction combiner | **LOST** | Preserved in `sde.su_iterate` + `sde.mu_reduction_decl` | Same |
+| Nowait intent | **LOST** | Preserved as `nowait` attr | Same |
+| Schedule + chunk | Partially preserved | Fully preserved on `sde.su_iterate` | Same |
+| Collapse depth | **LOST** | Preserved as `collapse` attr | Same |
+| Task completion | **LOST** (bare barrier) | Preserved via `sde.completion` tokens | Same |
+| Dep regions | Split `omp_dep`/`db_control` | Unified in `sde.mu_dep` | `tensor.extract_slice` (native) |
+| Aliasing info | Custom `DbAliasAnalysis` | Conservative analysis | No aliasing by construction |
+| Access patterns | Custom `AccessAnalyzer` | `sde.mu_access` annotations | linalg `indexing_maps` (native) |
+| Dependencies | Custom `EdtDataFlowAnalysis` | `sde.dep` tokens | SSA def-use chains (free) |
+| Buffer reuse | Custom DB mode analysis | Manual | One-shot bufferization (optimal) |
 
 ---
 
 ## Dialect Composition
 
-### SDE composes WITH (uses directly)
+### SDE composes WITH natively (tensor-first)
+
+SDE ops are type-polymorphic — their operands accept tensor, memref, and
+scalar types. In the tensor path, linalg/tensor ops appear INSIDE SDE CU
+bodies and as operands to SDE ops. This is native composition, not a
+separate analysis step.
 
 | Dialect | How |
 |---|---|
-| **memref** | Data operands are `AnyMemRef`; load/store/alloc inside CU bodies |
+| **tensor** | Native operand type for CU ins/outs; `tensor.extract_slice`/`tensor.insert_slice` replace `sde.mu_dep`; SSA def-use chains ARE dependency graphs |
+| **linalg** | Structured computation inside CU bodies (`linalg.generic`, named ops); `iterator_types` classify patterns; `TilingInterface` enables tile-and-fuse |
+| **bufferization** | One-shot bufferize: tensor -> memref with optimal in-place decisions; replaces manual DB alias analysis |
+| **memref** | Fallback data type; load/store/alloc inside CU bodies for code that can't be raised |
 | **arith** | Arithmetic ops inside CU bodies |
 | **index** | Iteration bounds, offsets, sizes |
 | **scf** | Serial control flow (`scf.for`, `scf.if`, `scf.while`) inside CU bodies |
-| **affine** | Affine ops in CU bodies; analysis passes use affine analysis |
+| **affine** | Affine ops in CU bodies; analysis passes use affine dependence analysis |
 | **func** | Functions contain SDE ops; calls inside CU bodies |
 | **DLTI** | Data layout for footprint estimation |
-
-### SDE uses for ANALYSIS (raise/analyze/lower cycle)
-
-| Dialect | How |
-|---|---|
-| **linalg** | scf.for+memref raised to linalg.generic for structured analysis |
-| **tensor** | linalg on memref raised to tensor for alias-free SSA dep analysis |
-| **bufferization** | One-shot bufferize: tensor -> memref with optimal in-place decisions |
 
 ### SDE CONSUMES (ops removed after conversion)
 
@@ -481,12 +749,17 @@ to which tasks are awaited. SDE preserves the exact dependency.
 
 | Dialect | How |
 |---|---|
-| **arts** | Primary target: SDE-to-ARTS conversion |
+| **arts** | Primary target: SDE-to-ARTS conversion (after bufferization back to memref) |
 | **gpu** | Future: SDE-to-GPU for accelerator targets |
 
 ---
 
 ## SDE-to-ARTS Lowering
+
+**Precondition**: Before SDE-to-ARTS conversion, one-shot bufferization
+converts all tensor operands back to memref. After bufferization, SDE ops
+are in memref form and the lowering is mechanical. `linalg-to-loops` converts
+any remaining linalg ops to `scf.for`.
 
 | SDE Op | ARTS Op(s) | Information Added |
 |---|---|---|
@@ -549,10 +822,11 @@ lib/arts/dialect/core/Conversion/SdeToArts/
 
 | Interface | On Which Ops | Purpose |
 |---|---|---|
+| `DestinationStyleOpInterface` | `sde.cu_region`, `sde.cu_task`, `sde.cu_reduce` (tensor path) | ins/outs notation; enables tile-and-fuse composition with linalg; outs are "destinations" that bufferization can potentially allocate in-place |
 | `MemoryEffectsOpInterface` | All CU/SU/MU ops | Per-op effect declarations |
-| `LoopLikeOpInterface` | `sde.su_iterate` | iter_args state flow |
+| `LoopLikeOpInterface` | `sde.su_iterate` | iter_args state flow (tensor or memref) |
 | `RecursiveMemoryEffects` | `sde.cu_region`, `sde.cu_task` | Propagate body effects |
-| `DestinationStyleOpInterface` | linalg ops inside CU bodies | ins/outs read/write tracking |
+| `RegionBranchOpInterface` | `sde.cu_region`, `sde.cu_task`, `sde.su_iterate` | Control flow into/out of SDE regions |
 
 ## Critical Source Files (Current Codebase)
 

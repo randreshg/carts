@@ -19,7 +19,11 @@ Stage 18:     arts_rt.* -> llvm.*  [final codegen]
 
 ## The Tensor Window (Stages 3.7-3.9)
 
-This is where SDE gets maximum leverage from MLIR infrastructure.
+This is where SDE gets maximum leverage from MLIR infrastructure. SDE ops
+are **type-polymorphic** — they natively accept both tensor and memref
+operands via `DestinationStyleOpInterface` (like `linalg.generic`). After
+RaiseToTensor, SDE CU ops carry tensor `ins/outs` where SSA def-use chains
+ARE the dependency graph. No custom analysis needed.
 
 ### Problem
 
