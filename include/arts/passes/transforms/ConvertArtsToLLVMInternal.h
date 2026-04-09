@@ -85,6 +85,7 @@ Value buildArtsHintMemref(ArtsCodegen *AC, Value route, Value artsId,
 /// Pattern Population
 ///===----------------------------------------------------------------------===///
 
+void populateRuntimePatterns(RewritePatternSet &patterns, ArtsCodegen *AC);
 void populateCorePatterns(RewritePatternSet &patterns, ArtsCodegen *AC);
 void populateDbPatterns(RewritePatternSet &patterns, ArtsCodegen *AC);
 void populateOtherPatterns(RewritePatternSet &patterns, ArtsCodegen *AC);

@@ -36,6 +36,9 @@ bool isArtsOp(mlir::Operation *op);
 /// Arts Dialect Enums
 #include "arts/OpsEnums.h.inc"
 
+/// Transitional runtime dialect compatibility shims.
+#include "arts/dialect/rt/IR/RtDialect.h"
+
 namespace mlir {
 namespace arts {
 
@@ -74,5 +77,26 @@ struct PartitionInfo {
 /// Arts Dialect Operations
 #define GET_OP_CLASSES
 #include "arts/Ops.h.inc"
+
+namespace mlir {
+namespace arts {
+using rt::CreateEpochOp;
+using rt::DbGepOp;
+using rt::DepAccessMode;
+using rt::DepAccessModeAttr;
+using rt::DepBindOp;
+using rt::DepDbAcquireOp;
+using rt::DepForwardOp;
+using rt::DepGepOp;
+using rt::EdtCreateOp;
+using rt::EdtParamPackOp;
+using rt::EdtParamUnpackOp;
+using rt::IncrementDepOp;
+using rt::RecordDepOp;
+using rt::StatePackOp;
+using rt::StateUnpackOp;
+using rt::WaitOnEpochOp;
+} // namespace arts
+} // namespace mlir
 
 #endif // CARTS_DIALECT_H

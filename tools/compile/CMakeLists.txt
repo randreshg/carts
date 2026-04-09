@@ -39,6 +39,7 @@ set(LIBS
   ${conversion_libs}
   MLIROptLib
   MLIRArts
+  MLIRArtsRt
   MLIRArtsTransforms
   MLIRFuncAllExtensions
   MLIRPolygeist
@@ -84,7 +85,8 @@ set(LIBS
 )
 
 target_link_libraries(carts-compile PRIVATE ${LIBS})
-add_dependencies(carts-compile MLIROpsIncGen MLIRArtsPassIncGen)
+add_dependencies(carts-compile MLIROpsIncGen MLIRRtOpsIncGen
+                 MLIRArtsPassIncGen)
 
 if(CARTS_ENABLE_TESTS AND CARTS_TESTS_REQUIRE_INSTALLED_RUNNER)
   set(_carts_install_bin_dir ${CMAKE_INSTALL_PREFIX}/${CARTS_TOOLS_DIR})

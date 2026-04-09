@@ -79,12 +79,24 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   AC->setAbstractMachine(machine);
   ARTS_DEBUG_TYPE("ArtsCodegen initialized successfully");
 
-  //// Apply patterns with greedy rewriter (two runs)
+  //// Apply patterns with greedy rewriter (four runs)
   GreedyRewriteConfig config;
   config.setUseTopDownTraversal(true);
   config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Aggressive);
 
-  /// Run 1: core patterns
+  /// Run 1: runtime patterns
+  {
+    ARTS_INFO("Running runtime patterns");
+    RewritePatternSet runtimePatterns(context);
+    convert_arts_to_llvm::populateRuntimePatterns(runtimePatterns, AC);
+    if (failed(
+            applyPatternsGreedily(module, std::move(runtimePatterns), config))) {
+      ARTS_ERROR("Failed to apply runtime ARTS to LLVM conversion patterns");
+      return signalPassFailure();
+    }
+  }
+
+  /// Run 2: core patterns
   {
     ARTS_INFO("Running core patterns");
     RewritePatternSet corePatterns(context);
@@ -96,18 +108,19 @@ void ConvertArtsToLLVMPass::runOnOperation() {
     }
   }
 
-  /// Run 2: Db Patterns
+  /// Run 3: Db Patterns
   {
     ARTS_INFO("Running db patterns");
     RewritePatternSet dbPatterns(context);
     convert_arts_to_llvm::populateDbPatterns(dbPatterns, AC);
-    if (failed(applyPatternsGreedily(module, std::move(dbPatterns), config))) {
+    if (failed(
+            applyPatternsGreedily(module, std::move(dbPatterns), config))) {
       ARTS_ERROR("Failed to apply DbAcquire/DbRelease conversion patterns");
       return signalPassFailure();
     }
   }
 
-  /// Run 3: Other Patterns
+  /// Run 4: Other Patterns
   {
     ARTS_INFO("Running other patterns");
     RewritePatternSet otherPatterns(context);

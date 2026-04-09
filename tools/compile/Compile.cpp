@@ -39,6 +39,7 @@
 #include "polygeist/Passes/Passes.h"
 
 #include "arts/Dialect.h"
+#include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
@@ -607,7 +608,8 @@ configurePassManager(PassManager &pm,
 ///===----------------------------------------------------------------------===///
 /// Register standard MLIR dialects, passes, and translations.
 void registerDialects(DialectRegistry &registry) {
-  registry.insert<polygeist::PolygeistDialect, arts::ArtsDialect>();
+  registry.insert<polygeist::PolygeistDialect, arts::ArtsDialect,
+                  arts::rt::ArtsRtDialect>();
   registerAllPasses();
   registerAllTranslations();
   registerpolygeistPasses();
@@ -638,6 +640,7 @@ void initializeContext(MLIRContext &context) {
   context.getOrLoadDialect<linalg::LinalgDialect>();
   context.getOrLoadDialect<polygeist::PolygeistDialect>();
   context.getOrLoadDialect<arts::ArtsDialect>();
+  context.getOrLoadDialect<arts::rt::ArtsRtDialect>();
   context.getOrLoadDialect<cf::ControlFlowDialect>();
 
   /// Register all necessary interfaces for LLVM conversion
