@@ -110,15 +110,42 @@ enables:
 
 ## Directory Layout (Target)
 
+Each dialect owns its own IREE-style directory with `IR/`, `Conversion/`,
+`Transforms/`, and `Analysis/` subdirectories. Shared infrastructure
+(`patterns/`, `general/`, `verify/`, `analysis/`, `utils/`) sits outside
+the dialect directories.
+
 ```
+include/arts/dialect/
+  sde/IR/          SdeDialect.td, SdeOps.td, SdeTypes.td, SdeAttrs.td, SdeDialect.h
+  core/IR/         ArtsDialect.td, ArtsOps.td, ArtsAttrs.td, ArtsTypes.td, ArtsDialect.h
+  rt/IR/           RtDialect.td, RtOps.td, RtDialect.h
+
 lib/arts/
   dialect/
-    sde/       "this computation reads A, writes C with neighbor deps"
-    core/      "create an EDT with 3 deps partitioned as block-stencil"
-    rt/        "call artsEdtCreate(guid, paramv, 3)"
-  patterns/    pattern detection and classification (no dialect dependency)
-  general/     standard MLIR transforms (DCE, CSE, memref raising)
-  verify/      pipeline barrier checks
-  analysis/    shared analysis framework
-  utils/       shared utilities
+    sde/                   "this computation reads A, writes C with neighbor deps"
+      IR/                  SdeDialect.cpp, SdeOps.cpp
+      Analysis/            metadata/, ValueAnalysis, SdeLoopAnalysis
+      Transforms/          ConvertOpenMPToSde, RaiseToLinalg, RaiseToTensor, SdeOpt,
+                           LoopNormalization, LoopReordering, CollectMetadata
+
+    core/                  "create an EDT with 3 deps partitioned as block-stencil"
+      IR/                  Dialect.cpp (reduced: 21 ops)
+      Transforms/          EdtStructuralOpt, DbPartitioning, CreateDbs, Concurrency,
+                           EdtDistribution, ForLowering, CreateEpochs, EpochOpt, ...
+      Conversion/
+        SdeToArts/         SDE -> ARTS conversion (+ linalg-to-loops)
+
+    rt/                    "call artsEdtCreate(guid, paramv, 3)"
+      IR/                  RtDialect.cpp, RtOps.cpp (14 ops)
+      Conversion/
+        ArtsToRt/          EdtLowering, EpochLowering, DbLowering, ParallelEdtLowering
+        RtToLLVM/          RtToLLVMPatterns (14 patterns from ConvertArtsToLLVM)
+      Transforms/          DataPtrHoisting, GuidRangCallOpt, RuntimeCallOpt
+
+  patterns/                pattern detection and classification (no dialect dependency)
+  general/                 standard MLIR transforms (DCE, CSE, memref raising)
+  verify/                  pipeline barrier checks (11 passes)
+  analysis/                shared analysis framework
+  utils/                   shared utilities
 ```

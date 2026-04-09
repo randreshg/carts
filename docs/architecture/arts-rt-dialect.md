@@ -128,23 +128,62 @@ before pre-lowering.
 
 ## Directory Structure
 
-```
-include/arts/dialect/rt/IR/
-  RtDialect.td          # Dialect definition + ArtsRt_Op base class
-  RtOps.td              # 14 runtime ops (moved from Ops.td)
-  RtDialect.h           # Public C++ header
-  CMakeLists.txt
+The `rt/` dialect owns its own directory with the IREE-style per-dialect
+layout: `IR/`, `Conversion/`, `Transforms/`. This keeps all runtime-level
+code (dialect definition, lowering FROM arts, lowering TO LLVM, and
+post-lowering optimization) in a single cohesive directory.
 
-lib/arts/dialect/rt/
-  IR/
-    RtDialect.cpp       # ArtsRtDialect::initialize()
-    RtOps.cpp           # Verifiers: CreateEpochOp, RecordDepOp
-                        # Builders: EdtCreateOp, DbGepOp
-    CMakeLists.txt
-  Conversion/RtToLLVM/
-    RtToLLVMPatterns.cpp  # 14 patterns from ConvertArtsToLLVMPatterns.cpp
-    CMakeLists.txt
 ```
+include/arts/dialect/
+  rt/
+    IR/
+      RtDialect.td            # Dialect definition + ArtsRt_Op base class
+      RtOps.td                # 14 runtime ops (moved from Ops.td)
+      RtDialect.h             # Public C++ header
+      CMakeLists.txt
+    Transforms/
+      CMakeLists.txt          # (headers for post-lowering opt, if needed)
+
+lib/arts/dialect/
+  rt/
+    IR/
+      RtDialect.cpp           # ArtsRtDialect::initialize()
+      RtOps.cpp               # Verifiers: CreateEpochOp, RecordDepOp
+                               # Builders: EdtCreateOp, DbGepOp
+      CMakeLists.txt
+    Conversion/
+      ArtsToRt/                # arts.edt/epoch/for → arts_rt.edt_create/...
+        EdtLowering.cpp        # Main structural→runtime boundary
+        EdtLoweringSupport.cpp # Helpers for EDT lowering
+        EpochLowering.cpp      # Epoch region → create_epoch + wait
+        DbLowering.cpp         # DB stack→heap rewriting
+        ParallelEdtLowering.cpp # Parallel EDT → worker loop + task EDTs
+        CMakeLists.txt
+      RtToLLVM/                # arts_rt.* → llvm.call @arts*
+        RtToLLVMPatterns.cpp   # 14 patterns from ConvertArtsToLLVMPatterns.cpp
+        CMakeLists.txt
+    Transforms/
+      DataPtrHoisting.cpp      # Hoists lowered dep/db ptr loads
+      DataPtrHoistingSupport.cpp
+      GuidRangCallOpt.cpp      # arts_guid_reserve → range optimization
+      RuntimeCallOpt.cpp       # Runtime call hoisting
+      CMakeLists.txt
+```
+
+### Why rt/ Owns Both Conversions
+
+The `rt/` dialect directory contains TWO conversion directories:
+
+- **`ArtsToRt/`**: Passes that CONSUME structural `arts.*` ops (EdtOp, EpochOp)
+  and CREATE runtime `arts_rt.*` ops (EdtCreateOp, CreateEpochOp). This is
+  where the structural→runtime boundary crossing happens.
+
+- **`RtToLLVM/`**: Patterns that CONSUME `arts_rt.*` ops and CREATE `llvm.*`
+  calls. These are the 14 patterns extracted from ConvertArtsToLLVMPatterns.cpp.
+
+Following IREE's convention, conversion directories live in the TARGET dialect:
+`rt/Conversion/ArtsToRt/` (arts is source, rt is target) and
+`rt/Conversion/RtToLLVM/` (rt is source, LLVM is target).
 
 ## TableGen
 
