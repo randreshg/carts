@@ -213,8 +213,7 @@ Operation *cloneWithResultMapping(OpBuilder &builder, Operation &op,
 
 void cloneSequentialOpsWithExternalDefs(OpBuilder &builder,
                                         ArrayRef<Operation *> ops,
-                                        Block *loopBody,
-                                        IRMapping &mapping) {
+                                        Block *loopBody, IRMapping &mapping) {
   for (Operation *op : ops) {
     rematerializeExternalDefs(builder, op, loopBody, mapping);
     cloneWithResultMapping(builder, *op, mapping);
@@ -292,6 +291,7 @@ bool tryCPSChainTransform(scf::ForOp forOp,
   std::string firstChainId = makeContinuationChainId(forOp.getOperation(), 0);
 
   SmallVector<SmallVector<Operation *>> interEpochOps(slotCount);
+  SmallVector<Operation *> tailOps;
   if (!sequentialOps.empty()) {
     DenseSet<Operation *> seqOpSet(sequentialOps.begin(), sequentialOps.end());
     SmallVector<Operation *> slotAnchors;
@@ -309,9 +309,10 @@ bool tryCPSChainTransform(scf::ForOp forOp,
       if (isSlotOp(&op, slots))
         continue;
       if (seqOpSet.contains(&op)) {
-        unsigned group =
-            nextSlot < slotCount ? nextSlot : static_cast<unsigned>(slotCount - 1);
-        interEpochOps[group].push_back(&op);
+        if (nextSlot >= slotCount)
+          tailOps.push_back(&op);
+        else
+          interEpochOps[nextSlot].push_back(&op);
       }
     }
   }
@@ -380,8 +381,9 @@ bool tryCPSChainTransform(scf::ForOp forOp,
 
     if (i == slotCount - 1) {
       cloneNonSlotArith(contBuilder, body, slots, contMapping, sequentialOps);
-      cloneSequentialOpsWithExternalDefs(contBuilder,
-                                         interEpochOps[slotCount - 1], &body,
+      cloneSequentialOpsWithExternalDefs(
+          contBuilder, interEpochOps[slotCount - 1], &body, contMapping);
+      cloneSequentialOpsWithExternalDefs(contBuilder, tailOps, &body,
                                          contMapping);
       advanceSites.push_back({&contBlock, getLastNonTerminatorOp(contBlock)});
       continue;
@@ -585,12 +587,12 @@ bool tryCPSChainTransform(scf::ForOp forOp,
   bool loopBackParamsStabilized = false;
   if (firstContinuation && !loopBackParams.empty()) {
     for (auto [advanceBlock, anchor] : advanceSites) {
-        clearAdvanceSite(advanceBlock, anchor);
-        OpBuilder advanceBuilder = OpBuilder::atBlockTerminator(advanceBlock);
-        emitAdvanceLogic(advanceBuilder, loc, iv, lb, ub, step, body, slots,
-                         firstChainId, interEpochOps.front(), sequentialOps,
-                         loopBackParams);
-      }
+      clearAdvanceSite(advanceBlock, anchor);
+      OpBuilder advanceBuilder = OpBuilder::atBlockTerminator(advanceBlock);
+      emitAdvanceLogic(advanceBuilder, loc, iv, lb, ub, step, body, slots,
+                       firstChainId, interEpochOps.front(), sequentialOps,
+                       loopBackParams);
+    }
     loopBackParamsStabilized = true;
   } else {
     constexpr unsigned kMaxLoopBackIterations = 8;
@@ -955,8 +957,8 @@ bool tryCPSChainTransform(scf::ForOp forOp,
 
         OpBuilder advBuilder(adv);
         auto targetId = adv.getTargetChainIdAttr();
-        auto newAdv =
-            advBuilder.create<CPSAdvanceOp>(adv.getLoc(), newNextParams, targetId);
+        auto newAdv = advBuilder.create<CPSAdvanceOp>(adv.getLoc(),
+                                                      newNextParams, targetId);
         for (auto attr : adv->getAttrs())
           if (attr.getName() != "targetChainId")
             newAdv->setAttr(attr.getName(), attr.getValue());
@@ -1074,8 +1076,8 @@ bool tryCPSChainTransform(scf::ForOp forOp,
           continue;
         hasEscapedLoopDefs = true;
         ARTS_WARN("CPS Chain: loop-local value still used outside loop before "
-                  "erase: " << result << " defined by " << *op << " used by "
-                  << *user);
+                  "erase: "
+                  << result << " defined by " << *op << " used by " << *user);
       }
     }
   });
