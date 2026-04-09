@@ -38,6 +38,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/DenseSet.h"
 #include <algorithm>
 
 ARTS_DEBUG_SETUP(dead_code_elimination);
@@ -103,6 +104,7 @@ struct DeadCodeEliminationPass
       unsigned removedEdts = removeEmptyEdts(module);
       unsigned removedDbs = removeDeadDbs(module);
       unsigned removedAcquires = removeUnusedAcquires(module);
+      unsigned removedDuplicateReleases = removeDuplicateDbReleases(module);
       unsigned removedPureOps = removeDeadPureOps(module);
       /// Conservatively keep EDT dependency operands. Some control-only
       /// dependency edges encode ordering constraints even when the block
@@ -112,7 +114,8 @@ struct DeadCodeEliminationPass
 
       unsigned removed = removedLoads + removedStores + removedAllocas +
                          removedUndefs + removedEdts + removedDbs +
-                         removedAcquires + removedPureOps + removedEdtDeps;
+                         removedAcquires + removedDuplicateReleases +
+                         removedPureOps + removedEdtDeps;
       totalRemoved += removed;
       changed = (removed > 0);
     }
@@ -334,6 +337,36 @@ struct DeadCodeEliminationPass
     auto opsToRemoveSize = removalMgr.getOpsToRemove().size();
     removalMgr.removeAllMarked(module, /*recursive=*/true);
     return opsToRemoveSize;
+  }
+
+  /// Remove duplicate db_release operations on the same SSA value within a
+  /// block. A repeated release of the same acquire view is never meaningful
+  /// and later lowers to duplicate runtime releases on the same guid.
+  unsigned removeDuplicateDbReleases(ModuleOp module) {
+    SmallVector<Operation *> toRemove;
+
+    module.walk([&](Operation *op) {
+      for (Region &region : op->getRegions()) {
+        for (Block &block : region) {
+          llvm::SmallDenseSet<Value, 8> releasedValues;
+          for (Operation &nested : block) {
+            auto release = dyn_cast<DbReleaseOp>(&nested);
+            if (!release)
+              continue;
+            Value source = release.getSource();
+            if (!releasedValues.insert(source).second) {
+              ARTS_DEBUG("Removing duplicate db_release: " << release);
+              toRemove.push_back(release);
+            }
+          }
+        }
+      }
+    });
+
+    for (Operation *op : toRemove)
+      op->erase();
+
+    return toRemove.size();
   }
 
   /// Check if a block argument has only DbReleaseOp uses (no real memory ops)

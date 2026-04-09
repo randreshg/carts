@@ -1346,6 +1346,26 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
         (acquireMode && *acquireMode == PartitionMode::fine_grained) ||
         (contractSummary && contractSummary->hasFineGrainedEntries());
 
+    /// If the current acquire pointer cannot represent the contract's owner
+    /// dimensions, block partitioning is not sound on this view. This happens
+    /// for promoted array-of-arrays containers where the contract refers to a
+    /// logical inner dimension (e.g. owner_dims=[1]) but the active acquire
+    /// ptr is only rank-1 at this stage.
+    if (thisAcquireCanBlock && contractSummary) {
+      if (auto sourcePtrTy = dyn_cast<MemRefType>(acquire.getSourcePtr().getType())) {
+        unsigned sourceRank = sourcePtrTy.getRank();
+        bool ownerDimsOutOfRange = llvm::any_of(
+            contractSummary->contract.spatial.ownerDims, [&](int64_t dim) {
+              return dim >= 0 && static_cast<unsigned>(dim) >= sourceRank;
+            });
+        if (ownerDimsOutOfRange) {
+          ARTS_DEBUG("  Contract owner dims exceed source ptr rank; "
+                     "disabling block capability for acquire");
+          thisAcquireCanBlock = false;
+        }
+      }
+    }
+
     /// If the partition offset does not map to the access pattern, block
     /// partitioning would select the wrong dimension (non-leading) and is
     /// unsafe. Disable block capability in that case.

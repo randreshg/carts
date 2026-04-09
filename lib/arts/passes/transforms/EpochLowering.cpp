@@ -46,6 +46,7 @@
 #include <limits>
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
@@ -1879,6 +1880,28 @@ void EpochLoweringPass::runOnOperation() {
 
   if (failed(compactContinuationParamAbi()))
     return signalPassFailure();
+
+  SmallVector<Operation *> duplicateReleases;
+  module.walk([&](Operation *op) {
+    for (Region &region : op->getRegions()) {
+      for (Block &block : region) {
+        llvm::SmallDenseSet<Value, 8> releasedValues;
+        for (Operation &nested : block) {
+          auto release = dyn_cast<DbReleaseOp>(&nested);
+          if (!release)
+            continue;
+          if (!releasedValues.insert(release.getSource()).second)
+            duplicateReleases.push_back(release);
+        }
+      }
+    }
+  });
+  for (Operation *release : duplicateReleases) {
+    ARTS_DEBUG("Removing duplicate db_release introduced during epoch "
+               "lowering: "
+               << *release);
+    release->erase();
+  }
 
   ARTS_INFO_FOOTER(EpochLoweringPass);
   AC = nullptr;
