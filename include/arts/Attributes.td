@@ -124,16 +124,6 @@ def EdtConcurrency
 /// Enum attribute for EDT concurrency types
 def EdtConcurrencyAttr : Arts_I32EnumAttr<"concurrency", EdtConcurrency>;
 
-/// Enum info for dependency access modes
-def DepAccessMode
-    : Arts_I32Enum<"DepAccessMode", "Dependency GUID access mode", [
-      I32EnumAttrCase<"direct", 0, "direct">,
-      I32EnumAttrCase<"from_depv", 1, "from_depv">
-    ]>;
-
-/// Enum attribute for dependency access modes
-def DepAccessModeAttr : Arts_I32EnumAttr<"dep_access", DepAccessMode>;
-
 /// Enum info for DB partition modes
 /// Used to track how a DbAllocOp was partitioned and how DbAcquireOp accesses:
 ///   - coarse: Single DB for entire array (outerRank=0), full array access

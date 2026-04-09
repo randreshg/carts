@@ -5,30 +5,22 @@
 
 #include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/DialectImplementation.h"
-#include "mlir/IR/IntegerSet.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Types.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include <cassert>
-#include <cstdint>
 
 #include "arts/Dialect.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/transforms/db/DbRewriter.h"
 #include "arts/utils/DbUtils.h"
-#include "arts/utils/LoweringContractUtils.h"
-#include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
-#include "polygeist/Ops.h"
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -335,19 +327,6 @@ void DbDimOp::build(OpBuilder &builder, OperationState &state, Value source,
   state.addTypes(builder.getIndexType());
 }
 
-void DbGepOp::build(OpBuilder &builder, OperationState &state, Type ptr,
-                    Value base_ptr, SmallVector<Value> indices,
-                    SmallVector<Value> strides) {
-  state.addOperands(base_ptr);
-  state.addOperands(indices);
-  state.addOperands(strides);
-  SmallVector<int32_t, 3> segments = {1, (int32_t)indices.size(),
-                                      (int32_t)strides.size()};
-  state.addAttribute(DbGepOp::getOperandSegmentSizesAttrName(state.name),
-                     builder.getDenseI32ArrayAttr(segments));
-  state.addTypes(ptr);
-}
-
 void DbControlOp::build(OpBuilder &builder, OperationState &state,
                         ArtsMode mode, Value ptr, SmallVector<Value> indices,
                         SmallVector<Value> offsets, SmallVector<Value> sizes) {
@@ -383,28 +362,6 @@ void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
   Region *bodyRegion = state.addRegion();
   Block *bodyBlock = new Block();
   bodyRegion->push_back(bodyBlock);
-}
-
-LogicalResult CreateEpochOp::verify() {
-  bool hasGuid = getFinishEdtGuid() != nullptr;
-  bool hasSlot = getFinishSlot() != nullptr;
-  if (hasGuid != hasSlot)
-    return emitOpError("finishEdtGuid and finishSlot must both be present or "
-                       "both be absent");
-  return success();
-}
-
-void EdtCreateOp::build(OpBuilder &builder, OperationState &state,
-                        Value param_memref, Value depCount) {
-  Value route = createCurrentNodeRoute(builder, state.location);
-  state.addTypes(builder.getI64Type());
-  state.addOperands({param_memref, depCount, route});
-}
-
-void EdtCreateOp::build(OpBuilder &builder, OperationState &state,
-                        Value param_memref, Value depCount, Value route) {
-  state.addTypes(builder.getI64Type());
-  state.addOperands({param_memref, depCount, route});
 }
 
 /// Helper to compute GUID type from sizes
@@ -1287,44 +1244,6 @@ LogicalResult DbRefOp::verify() {
       return emitOpError("result type must match source element type\n")
              << *getOperation();
   }
-  return success();
-}
-
-LogicalResult RecordDepOp::verify() {
-  const size_t dbCount = getDatablocks().size();
-  if (auto modes = getAcquireModes()) {
-    if (modes->size() != dbCount)
-      return emitOpError("acquire_modes entries (")
-             << modes->size() << ") must match datablocks (" << dbCount << ")\n"
-             << *getOperation();
-  }
-
-  /// ESD byte_offsets/byte_sizes validation: if present, must match dbCount
-  if (!getByteOffsets().empty() && getByteOffsets().size() != dbCount)
-    return emitOpError("byte_offsets entries (")
-           << getByteOffsets().size() << ") must match datablocks (" << dbCount
-           << ")\n"
-           << *getOperation();
-
-  if (!getByteSizes().empty() && getByteSizes().size() != dbCount)
-    return emitOpError("byte_sizes entries (")
-           << getByteSizes().size() << ") must match datablocks (" << dbCount
-           << ")\n"
-           << *getOperation();
-
-  if (auto flags = getDepFlags()) {
-    if (flags->size() != dbCount)
-      return emitOpError("dep_flags entries (")
-             << flags->size() << ") must match datablocks (" << dbCount << ")\n"
-             << *getOperation();
-  }
-
-  /// byte_offsets and byte_sizes must be provided together
-  if (getByteOffsets().empty() != getByteSizes().empty())
-    return emitOpError(
-               "byte_offsets and byte_sizes must be provided together\n")
-           << *getOperation();
-
   return success();
 }
 

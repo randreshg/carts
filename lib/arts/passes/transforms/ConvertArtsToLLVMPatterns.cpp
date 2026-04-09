@@ -2915,7 +2915,7 @@ struct DepForwardPattern : public ArtsToLLVMPattern<DepForwardOp> {
 
 namespace mlir::arts::convert_arts_to_llvm {
 
-void populateCorePatterns(RewritePatternSet &patterns, ArtsCodegen *AC) {
+void populateRuntimePatterns(RewritePatternSet &patterns, ArtsCodegen *AC) {
   MLIRContext *context = patterns.getContext();
 
   /// Runtime helper patterns
@@ -2930,6 +2930,10 @@ void populateCorePatterns(RewritePatternSet &patterns, ArtsCodegen *AC) {
   /// Epoch patterns
   patterns.add<CreateEpochPattern, WaitOnEpochPattern, GetEdtEpochGuidPattern>(
       context, AC);
+}
+
+void populateCorePatterns(RewritePatternSet &patterns, ArtsCodegen *AC) {
+  MLIRContext *context = patterns.getContext();
 
   /// EDT patterns
   patterns.add<EdtParamPackPattern, EdtParamUnpackPattern>(context, AC);
