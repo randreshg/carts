@@ -204,6 +204,43 @@ static bool isAmortizableTailOp(Operation *op, Value loopIv) {
   return false;
 }
 
+static bool hasPlanAttrValue(Operation *op, StringRef attrName,
+                             StringRef expected) {
+  auto attr = op ? op->getAttrOfType<StringAttr>(attrName) : nullptr;
+  return attr && attr.getValue() == expected;
+}
+
+static bool isStableRepeatTopology(Operation *op) {
+  return hasPlanAttrValue(op, AttrNames::Operation::Plan::IterationTopology,
+                          "owner_strip") ||
+         hasPlanAttrValue(op, AttrNames::Operation::Plan::IterationTopology,
+                          "owner_tile");
+}
+
+static bool hasZeroSliceWideningPressure(Operation *op) {
+  auto attr = op ? op->getAttrOfType<IntegerAttr>(
+                       AttrNames::Operation::Plan::CostSliceWideningPressure)
+                 : nullptr;
+  return attr && attr.getInt() == 0;
+}
+
+static bool epochHasRepeatStableUniformPlan(EpochOp epochOp) {
+  Operation *op = epochOp.getOperation();
+  return hasPlanAttrValue(op, AttrNames::Operation::Plan::KernelFamily,
+                          "uniform") &&
+         hasPlanAttrValue(op, AttrNames::Operation::Plan::RepetitionStructure,
+                          "full_timestep") &&
+         isStableRepeatTopology(op) && hasZeroSliceWideningPressure(op);
+}
+
+static bool acquireHasRepeatStableUniformSlice(DbAcquireOp acquire) {
+  if (!acquire)
+    return false;
+  auto depPattern = getDepPattern(acquire.getOperation());
+  return depPattern && isUniformFamilyDepPattern(*depPattern) &&
+         !DbAnalysis::isCoarse(acquire);
+}
+
 bool canWrapEdtBodyWithRepeatLoop(EdtOp edt) {
   Block &body = edt.getBody().front();
   bool seenRelease = false;
@@ -250,13 +287,20 @@ void wrapEdtBodyWithRepeatLoop(EdtOp edt, int64_t repeatCount) {
 }
 
 bool epochSupportsRepetitionAmortization(EpochOp epochOp) {
-  DenseSet<Operation *> readAllocs;
-  DenseSet<Operation *> writeAllocs;
+  struct RepeatAllocAccessInfo {
+    bool hasRead = false;
+    bool hasWrite = false;
+    bool repeatStableUniformSlices = true;
+  };
+
+  DenseMap<Operation *, RepeatAllocAccessInfo> allocAccesses;
   bool sawEdt = false;
   bool safe = true;
+  unsigned edtCount = 0;
 
   epochOp.walk([&](EdtOp edt) {
     sawEdt = true;
+    ++edtCount;
     SmallVector<bool> argReads;
     SmallVector<bool> argWrites;
     classifyEdtArgAccesses(edt, argReads, argWrites);
@@ -280,7 +324,7 @@ bool epochSupportsRepetitionAmortization(EpochOp epochOp) {
         return WalkResult::interrupt();
       }
 
-      if (argReads[i] && DbUtils::isWriterMode(acq.getMode())) {
+      if (argReads[i] && acq.getMode() == ArtsMode::out) {
         safe = false;
         return WalkResult::interrupt();
       }
@@ -289,18 +333,27 @@ bool epochSupportsRepetitionAmortization(EpochOp epochOp) {
         return WalkResult::interrupt();
       }
 
+      RepeatAllocAccessInfo &accessInfo = allocAccesses[alloc];
+      accessInfo.repeatStableUniformSlices &=
+          acquireHasRepeatStableUniformSlice(acq);
       if (argReads[i])
-        readAllocs.insert(alloc);
+        accessInfo.hasRead = true;
       if (argWrites[i])
-        writeAllocs.insert(alloc);
+        accessInfo.hasWrite = true;
     }
     return WalkResult::advance();
   });
 
   if (!safe || !sawEdt)
     return false;
-  for (Operation *alloc : writeAllocs) {
-    if (readAllocs.contains(alloc))
+
+  for (const auto &entry : allocAccesses) {
+    const RepeatAllocAccessInfo &accessInfo = entry.second;
+    if (!(accessInfo.hasRead && accessInfo.hasWrite))
+      continue;
+    if (!epochHasRepeatStableUniformPlan(epochOp))
+      return false;
+    if (edtCount > 1 && !accessInfo.repeatStableUniformSlices)
       return false;
   }
   return true;

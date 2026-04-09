@@ -85,7 +85,6 @@ std::unique_ptr<Pass> createLoweringContractCleanupPass();
 
 /// Structured kernel plan analysis pass.
 std::unique_ptr<Pass> createStructuredKernelPlanPass(AnalysisManager *AM);
-
 /// Persistent structured region gating pass.
 std::unique_ptr<Pass> createPersistentStructuredRegionPass(AnalysisManager *AM);
 

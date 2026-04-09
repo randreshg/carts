@@ -278,12 +278,13 @@ DistributionHeuristics::evaluateStencilStripCostModel(
 
 LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
     ForOp forOp, LoopAnalysis &loopAnalysis, const WorkerConfig &workerCfg) {
-  auto estimateNestedLoopWork = [&](ForOp loop) {
+  auto estimateNestedLoopWork = [&](ForOp loop, int64_t cap) {
     if (!loop)
       return int64_t{1};
 
+    int64_t boundedCap = std::max<int64_t>(1, cap);
     if (auto perfectWork = loopAnalysis.estimateStaticPerfectNestedWork(
-            loop.getOperation(), 8);
+            loop.getOperation(), boundedCap);
         perfectWork && *perfectWork > 1) {
       return *perfectWork;
     }
@@ -295,7 +296,7 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
       if (auto trip = loopAnalysis.getStaticTripCount(nestedFor.getOperation()))
         maxNestedTrip = std::max(maxNestedTrip, *trip);
     });
-    return maxNestedTrip;
+    return std::min(maxNestedTrip, boundedCap);
   };
   auto estimateStencilIterationWork = [&](ForOp loop, int64_t cap) {
     if (!loop)
@@ -341,16 +342,20 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
   bool isStencilPattern = false;
   bool isWavefrontPattern = false;
   bool canUseStencilStripCoarsening = false;
+  bool hasTriangularBound = false;
   int64_t repeatedTripProduct = 1;
-  int64_t nestedLoopWork = estimateNestedLoopWork(forOp);
+  int64_t nestedLoopWork = 1;
   int64_t stencilIterationWork = 1;
   std::optional<StencilStripCostModelResult> stencilStripPlan;
+  std::optional<EdtDistributionPattern> semanticDistributionPattern;
   if (auto depPattern = getEffectiveDepPattern(forOp.getOperation())) {
     isWavefrontPattern = PatternSemantics::isWavefrontFamily(*depPattern);
     /// The loop access summary is not always populated yet when ForOpt runs.
     /// Fall back to the semantic dep-pattern contract so stencil-family loops
     /// still take the stencil coarsening path before lowering.
     isStencilPattern = PatternSemantics::isStencilFamily(*depPattern);
+    if (auto directPattern = getDistributionPatternForDepPattern(*depPattern))
+      semanticDistributionPattern = *directPattern;
   }
   if (isStencilPattern) {
     LoweringContractInfo loopContract =
@@ -363,14 +368,23 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
   }
   if (auto summary =
           loopAnalysis.getLoopDbAccessSummary(forOp.getOperation())) {
-    isStencilPattern = isStencilPattern || summary->distributionPattern ==
-                                               EdtDistributionPattern::stencil;
-    allowNestedWorkBoost =
-        !isStencilPattern &&
-        summary->distributionPattern == EdtDistributionPattern::uniform &&
-        summary->allocPatterns.size() <= 4 && !summary->hasStencilOffset &&
-        !summary->hasMatmulUpdate && !summary->hasTriangularBound;
+    hasTriangularBound = summary->hasTriangularBound;
+    if (summary->distributionPattern != EdtDistributionPattern::unknown)
+      semanticDistributionPattern = summary->distributionPattern;
+    isStencilPattern = isStencilPattern ||
+                       semanticDistributionPattern ==
+                           EdtDistributionPattern::stencil;
+    /// Uniform kernels should account for the work hidden in perfectly nested
+    /// inner loops even when the body contains neighbor accesses. The DB
+    /// summary marks those accesses with `hasStencilOffset`, but that does not
+    /// mean the outer worksharing loop needs stencil-family coarsening. Kernels
+    /// such as specfem velocity still scale by splitting the outer dimension
+    /// directly across workers.
   }
+  allowNestedWorkBoost =
+      !isStencilPattern &&
+      semanticDistributionPattern == EdtDistributionPattern::uniform &&
+      !hasTriangularBound;
   if (isStencilPattern) {
     /// Keep the generic nested-work signal aggressively capped, but estimate
     /// stencil inner-loop work with a larger budget so repeated N-D stencils
@@ -379,27 +393,6 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
     stencilIterationWork =
         estimateStencilIterationWork(forOp, kStencilIterationWorkEstimateCap);
   }
-  if (allowNestedWorkBoost) {
-    if (nestedLoopWork > 1) {
-      if (nestedLoopWork >=
-          std::numeric_limits<int64_t>::max() / effectiveTripCount)
-        effectiveTripCount = std::numeric_limits<int64_t>::max();
-      else
-        effectiveTripCount *= nestedLoopWork;
-    }
-  }
-
-  if (isStencilPattern && !allowNestedWorkBoost) {
-    if (nestedLoopWork > 1) {
-      int64_t cappedWork = std::min(nestedLoopWork, (int64_t)1024);
-      if (cappedWork >=
-          std::numeric_limits<int64_t>::max() / effectiveTripCount)
-        effectiveTripCount = std::numeric_limits<int64_t>::max();
-      else
-        effectiveTripCount *= cappedWork;
-    }
-  }
-
   int64_t minItersPerWorker = 8;
   if (auto parentEdt = forOp->getParentOfType<EdtOp>()) {
     int64_t depCount = static_cast<int64_t>(parentEdt.getDependencies().size());
@@ -422,6 +415,40 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
           minItersPerWorker, stencilStripPlan->minOwnedOuterIters);
   }
   decision.minItersPerWorker = minItersPerWorker;
+
+  /// Size the nested-work proof to the amount of work needed to keep the
+  /// current worker topology busy. A fixed tiny cap can incorrectly collapse
+  /// naturally scalable uniform kernels whose useful work mostly lives in
+  /// inner loops, such as specfem velocity.
+  int64_t targetEffectiveTripCount =
+      saturatingMulPositive(workerCfg.totalWorkers, minItersPerWorker);
+  int64_t nestedWorkSaturationTarget =
+      ceilDivPositive(std::max<int64_t>(1, targetEffectiveTripCount),
+                      tripCount);
+  int64_t nestedLoopWorkCap =
+      std::max<int64_t>(8, nestedWorkSaturationTarget);
+  nestedLoopWork = estimateNestedLoopWork(forOp, nestedLoopWorkCap);
+
+  if (allowNestedWorkBoost) {
+    if (nestedLoopWork > 1) {
+      if (nestedLoopWork >=
+          std::numeric_limits<int64_t>::max() / effectiveTripCount)
+        effectiveTripCount = std::numeric_limits<int64_t>::max();
+      else
+        effectiveTripCount *= nestedLoopWork;
+    }
+  }
+
+  if (isStencilPattern && !allowNestedWorkBoost) {
+    if (nestedLoopWork > 1) {
+      int64_t cappedWork = std::min(nestedLoopWork, (int64_t)1024);
+      if (cappedWork >=
+          std::numeric_limits<int64_t>::max() / effectiveTripCount)
+        effectiveTripCount = std::numeric_limits<int64_t>::max();
+      else
+        effectiveTripCount *= cappedWork;
+    }
+  }
 
   /// Prefer the stencil strip cost model for single-node stencils, including
   /// halo-exchange families. Larger owned strips can materially reduce EDT and

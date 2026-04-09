@@ -12,6 +12,7 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -297,6 +298,12 @@ bool mlir::arts::detectMatmulInitReductionLoopNest(
   }
 
   if (initOps.empty() || !kLoop)
+    return false;
+
+  bool hasInitEffects = llvm::any_of(initOps, [](Operation *op) {
+    return !isMemoryEffectFree(op);
+  });
+  if (!hasInitEffects)
     return false;
 
   out.jLoop = jLoop;

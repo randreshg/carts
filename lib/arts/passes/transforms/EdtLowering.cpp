@@ -146,6 +146,83 @@ static bool isOneLikeValue(Value value) {
   return false;
 }
 
+static std::optional<std::pair<SmallVector<Value, 4>, SmallVector<Value, 4>>>
+trySynthesizeElementSlice(ArtsCodegen *AC, DbAcquireOp acquire,
+                          Location loc) {
+  if (!AC || !acquire)
+    return std::nullopt;
+  if (!acquire.getElementOffsets().empty() || !acquire.getElementSizes().empty())
+    return std::nullopt;
+
+  PartitionMode mode =
+      acquire.getPartitionMode().value_or(PartitionMode::coarse);
+  if (!usesBlockLayout(mode))
+    return std::nullopt;
+
+  auto contract = resolveAcquireContract(acquire);
+  if (!contract)
+    return std::nullopt;
+
+  const bool allowReadSlice =
+      acquire.getMode() != ArtsMode::in || contract->analysis.narrowableDep ||
+      shouldApplyStencilHalo(*contract, acquire) ||
+      shouldUsePartitionSliceAsDepWindow(*contract, acquire);
+  if (!allowReadSlice)
+    return std::nullopt;
+
+  auto partitionOffsets = acquire.getPartitionOffsets();
+  auto partitionSizes = acquire.getPartitionSizes();
+  unsigned explicitRank =
+      std::min<unsigned>(partitionOffsets.size(), partitionSizes.size());
+  if (explicitRank == 0)
+    return std::nullopt;
+  if (contract->spatial.ownerDims.empty())
+    return std::nullopt;
+
+  SmallVector<Value, 4> blockExtents;
+  if (auto staticShape = contract->getStaticBlockShape()) {
+    for (int64_t dim : *staticShape)
+      blockExtents.push_back(AC->createIndexConstant(dim, loc));
+  } else if (!contract->spatial.blockShape.empty()) {
+    blockExtents.assign(contract->spatial.blockShape.begin(),
+                        contract->spatial.blockShape.end());
+  } else if (auto alloc = dyn_cast_or_null<DbAllocOp>(
+                 DbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr()))) {
+    blockExtents.assign(alloc.getElementSizes().begin(),
+                        alloc.getElementSizes().end());
+  }
+  if (blockExtents.empty())
+    return std::nullopt;
+
+  SmallVector<unsigned, 4> explicitDims =
+      resolveContractOwnerDims(*contract, explicitRank);
+  if (explicitDims.size() != explicitRank)
+    return std::nullopt;
+
+  Value zero = AC->createIndexConstant(0, loc);
+  SmallVector<Value, 4> elementOffsets;
+  SmallVector<Value, 4> elementSizes;
+  elementOffsets.reserve(blockExtents.size());
+  elementSizes.reserve(blockExtents.size());
+  for (Value extent : blockExtents) {
+    elementOffsets.push_back(zero);
+    elementSizes.push_back(AC->castToIndex(extent, loc));
+  }
+
+  for (unsigned i = 0; i < explicitRank; ++i) {
+    unsigned dim = explicitDims[i];
+    if (dim >= blockExtents.size())
+      return std::nullopt;
+    elementOffsets[dim] = AC->castToIndex(partitionOffsets[i], loc);
+    elementSizes[dim] = AC->castToIndex(partitionSizes[i], loc);
+  }
+
+  ARTS_DEBUG("Synthesized element slice for dep acquire with ownerDims rank "
+             << explicitRank << " and block rank " << blockExtents.size());
+  return std::pair<SmallVector<Value, 4>, SmallVector<Value, 4>>{
+      std::move(elementOffsets), std::move(elementSizes)};
+}
+
 static bool hasSingleDepWindow(ArrayRef<Value> sizes) {
   if (sizes.empty())
     return true;
@@ -927,36 +1004,51 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     /// When element_offsets is non-empty, compute byte_offset and byte_size
     /// using the allocation's elementSizes for linearization.
     Value byteOffset, byteSize;
-    if (dbAcquireOp && !dbAcquireOp.getElementOffsets().empty()) {
+    if (dbAcquireOp) {
+      SmallVector<Value, 4> elemOffsets;
+      SmallVector<Value, 4> elemSizes;
+      if (!dbAcquireOp.getElementOffsets().empty()) {
+        elemOffsets.assign(dbAcquireOp.getElementOffsets().begin(),
+                           dbAcquireOp.getElementOffsets().end());
+        elemSizes.assign(dbAcquireOp.getElementSizes().begin(),
+                         dbAcquireOp.getElementSizes().end());
+      } else if (auto synthesized =
+                     trySynthesizeElementSlice(AC, dbAcquireOp, loc)) {
+        elemOffsets = synthesized->first;
+        elemSizes = synthesized->second;
+        ARTS_DEBUG("Using synthesized element slice for dependency");
+      }
+
+      if (elemOffsets.empty()) {
+        /// No partial acquisition - use zero for standard dependency
+        byteOffset = AC->createIndexConstant(0, loc);
+        byteSize = AC->createIndexConstant(0, loc);
+      } else {
       /// Get elementSizes from underlying allocation for stride computation
       auto alloc = dyn_cast_or_null<DbAllocOp>(
           DbUtils::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()));
 
       if (alloc && !alloc.getElementSizes().empty()) {
         auto elementSizes = alloc.getElementSizes();
-        SmallVector<Value, 4> elemOffsets(
-            dbAcquireOp.getElementOffsets().begin(),
-            dbAcquireOp.getElementOffsets().end());
-        SmallVector<Value, 4> elemSizes(dbAcquireOp.getElementSizes().begin(),
-                                        dbAcquireOp.getElementSizes().end());
         Value useSliceTransport = AC->create<arith::ConstantIntOp>(loc, 1, 1);
-        if (auto normalized =
-                normalizeCommonElementSlice(AC, dbAcquireOp, alloc)) {
-          elemOffsets.assign(normalized->offsets.begin(),
-                             normalized->offsets.end());
-          elemSizes.assign(normalized->sizes.begin(), normalized->sizes.end());
+        if (!dbAcquireOp.getElementOffsets().empty())
+          if (auto normalized =
+                  normalizeCommonElementSlice(AC, dbAcquireOp, alloc)) {
+            elemOffsets.assign(normalized->offsets.begin(),
+                               normalized->offsets.end());
+            elemSizes.assign(normalized->sizes.begin(), normalized->sizes.end());
           /// ARTS ESD is copy-based RO transport. If the normalized slice
           /// still covers the entire local DB block, using
           /// arts_add_dependence_at would only copy the whole block instead of
           /// reusing the normal whole-DB dependence path.
-          Value sliceNarrowerThanBlock = AC->create<arith::XOrIOp>(
-              loc, normalized->wholeBlock,
-              AC->create<arith::ConstantIntOp>(loc, 1, 1));
-          Value sliceRepresentable = AC->create<arith::AndIOp>(
-              loc, normalized->representable, normalized->contiguous);
-          useSliceTransport = AC->create<arith::AndIOp>(
-              loc, sliceNarrowerThanBlock, sliceRepresentable);
-        }
+            Value sliceNarrowerThanBlock = AC->create<arith::XOrIOp>(
+                loc, normalized->wholeBlock,
+                AC->create<arith::ConstantIntOp>(loc, 1, 1));
+            Value sliceRepresentable = AC->create<arith::AndIOp>(
+                loc, normalized->representable, normalized->contiguous);
+            useSliceTransport = AC->create<arith::AndIOp>(
+                loc, sliceNarrowerThanBlock, sliceRepresentable);
+          }
 
         /// Get scalar type size from the element type
         Type elementType = alloc.getElementType();
@@ -998,6 +1090,7 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
         /// Fallback: no allocation info available
         byteOffset = AC->createIndexConstant(0, loc);
         byteSize = AC->createIndexConstant(0, loc);
+      }
       }
     } else {
       /// No partial acquisition - use zero for standard dependency
