@@ -62,6 +62,13 @@ Constraints followed throughout this work:
    - This keeps benchmark-control loops on the blocking path and avoids
      relaunching scheduler topology around non-kernel work.
 
+7. `lib/arts/analysis/heuristics/DistributionHeuristics.cpp`
+   - Increased the weighted-wavefront worker-saturation floor from roughly
+     half the worker count to the full effective worker count when the kernel
+     has enough tile work.
+   - This keeps Seidel-style wavefront frontiers wide enough to scale with the
+     configured thread count instead of capping ready-task exposure too early.
+
 ## Validated benchmark results
 
 All results below are `large` / `64 threads` unless noted otherwise.
@@ -74,7 +81,7 @@ All results below are `large` / `64 threads` unless noted otherwise.
 | `polybench/bicg` | 16.394112 | 19.182751 | 1.17x | `external/carts-benchmarks/results/codex-bicg-final2/20260409_122814/results.json` |
 | `polybench/correlation` | 7.425213 | 11.567341 | 1.56x | `external/carts-benchmarks/results/codex-correlation-final/20260409_122936/results.json` |
 | `polybench/jacobi2d` | 0.180650 | 29.708493 | 164.45x | `external/carts-benchmarks/results/codex-jacobi2d-current2/20260409_121637/results.json` |
-| `polybench/seidel-2d` | 34.343335 | 21.044925 | 0.61x | `external/carts-benchmarks/results/codex-seidel2d-final/20260409_123202/results.json` |
+| `polybench/seidel-2d` | 28.501291 | 20.428175 | 0.72x | `external/carts-benchmarks/results/codex-seidel-frontier-fullworkers/20260409_140450/results.json` |
 
 ### Remaining Polybench large/64 sweep
 
@@ -119,10 +126,13 @@ Current status:
 
 - The timeout is fixed and the benchmark is correct.
 - The generated IR now contains the intended wavefront structure, but the final
-  `large/64` result is still only `0.61x`.
-- I investigated additional heuristic changes for wavefront saturation and did
-  not find a second compiler-only optimization that improved `seidel-2d`
-  without regressing it again.
+  `large/64` result is still below OpenMP at `0.72x`.
+- A narrow wavefront-frontier heuristic update improved the validated `large/64`
+  kernel time from `34.343335s` to `28.501291s` while keeping correctness and
+  the intended wavefront lowering intact.
+- The same run increased `NUM_EDT_CREATE` from `194561` to `204801`, which is
+  consistent with widening the ready frontier rather than merely shaving
+  startup overhead.
 
 Conclusion:
 
@@ -130,6 +140,20 @@ Conclusion:
   final validated large/64 set.
 - The remaining gap is now a wavefront-tiling / scheduling-quality problem,
   not the original missing-transform bug.
+
+## Remaining outliers from local validated large/64 artifacts
+
+These are the slowest currently known validated `large` / `64-thread` results
+visible in `external/carts-benchmarks/results` after the final Seidel rerun.
+This ranking uses the latest local passing artifact per benchmark.
+
+| Benchmark | ARTS kernel (s) | OMP kernel (s) | Speedup | Status | Results |
+|---|---:|---:|---:|---|---|
+| `polybench/seidel-2d` | 28.501291 | 20.428175 | 0.72x | active compiler target | `external/carts-benchmarks/results/codex-seidel-frontier-fullworkers/20260409_140450/results.json` |
+| `kastors-jacobi/poisson-for` | 14.250541 | 10.632664 | 0.75x | next actionable compiler target | `external/carts-benchmarks/results/codex-final-poisson-regression/20260409_083418/results.json` |
+| `specfem3d/velocity` | 1.578558 | 1.327091 | 0.84x | lower priority; near parity, specfem family historically noisy | `external/carts-benchmarks/results/20260408_codex_large64/20260408_021629/results.json` |
+| `specfem3d/stress` | 1.984270 | 1.823418 | 0.92x | lower priority; near parity, specfem family historically noisy | `external/carts-benchmarks/results/20260408_codex_large64/20260408_021629/results.json` |
+| `sw4lite/vel4sg-base` | 1.592883 | 1.565831 | 0.98x | low priority; effectively parity | `external/carts-benchmarks/results/20260408_codex_large64/20260408_021629/results.json` |
 
 ### `polybench/gemm`
 
@@ -169,6 +193,8 @@ What improved materially in this session:
 
 What remains open:
 
-- `polybench/seidel-2d` is still underperforming at `0.61x`.
-- I did not find a validated compiler-only seidel optimization beyond the
-  bound-fold fix, so that remains the main unresolved performance gap.
+- `polybench/seidel-2d` is still underperforming at `0.72x`.
+- `kastors-jacobi/poisson-for` is the next slowest currently known validated
+  large/64 benchmark in the local artifact set at `0.75x`.
+- The remaining Seidel gap is now smaller, but it is still the main unresolved
+  large/64 performance issue on the current compiler tree.

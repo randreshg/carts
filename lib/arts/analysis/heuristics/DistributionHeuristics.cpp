@@ -179,8 +179,11 @@ DistributionHeuristics::chooseWavefront2DTilingPlan(
 
   int64_t frontierRows = granularityRows;
   if (desiredTasksByGranularity >= effectiveWorkers * 2) {
-    int64_t workerSaturationFloor = clampPositive(
-        (effectiveWorkers + 1) / 2, minRowTiles, maxRowsByTileArea);
+    /// Weighted wavefronts only scale with the row frontier. When the kernel
+    /// has ample work, drive that frontier toward the available worker count
+    /// instead of only half-saturating the machine.
+    int64_t workerSaturationFloor =
+        clampPositive(effectiveWorkers, minRowTiles, maxRowsByTileArea);
     frontierRows = std::max(frontierRows, workerSaturationFloor);
   }
   frontierRows = clampPositive(frontierRows, minRowTiles, maxRowsByTileArea);
