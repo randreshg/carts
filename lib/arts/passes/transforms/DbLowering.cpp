@@ -400,8 +400,17 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
   SmallVector<Value> partitionSizes(acquireOp.getPartitionSizes().begin(),
                                     acquireOp.getPartitionSizes().end());
   Value boundsValid = acquireOp.getBoundsValid();
+  /// Use the builder with explicit ptrType to avoid the default builder
+  /// tracing back through block arguments to an old (pre-lowered) DbAllocOp
+  /// that still carries the original typed memref (e.g.
+  /// memref<?xmemref<?xf64>>) instead of the lowered opaque pointer type
+  /// (memref<?x!llvm.ptr>). This matters for nested acquires inside CPS
+  /// continuation EDT bodies where the source pointer is a block argument —
+  /// getUnderlyingDbAlloc would reach the old alloc (scheduled for removal but
+  /// not yet erased) and read its stale type.
+  Type ptrType = sourcePtr.getType();
   auto newAcquireOp = AC->create<DbAcquireOp>(
-      acquireOp.getLoc(), acquireOp.getMode(), sourceGuid, sourcePtr,
+      acquireOp.getLoc(), acquireOp.getMode(), sourceGuid, sourcePtr, ptrType,
       acquireOp.getPartitionMode(), indices, offsets, sizes, partitionIndices,
       partitionOffsets, partitionSizes, boundsValid, elementOffsets,
       acquireElementSizes);

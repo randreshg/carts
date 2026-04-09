@@ -57,6 +57,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   opt/edt/EdtAllocaSinking.cpp
   opt/edt/EdtICM.cpp
   opt/edt/EdtTransformsPass.cpp
+  opt/edt/EdtOrchestrationOpt.cpp
   # Epoch optimization split
   opt/epoch/EpochOpt.cpp
   opt/epoch/EpochOptSupport.cpp

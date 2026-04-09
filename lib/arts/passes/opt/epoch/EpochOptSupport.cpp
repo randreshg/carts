@@ -263,8 +263,7 @@ Operation *getLastNonTerminatorOp(Block &block) {
 
 void emitAdvanceLogic(OpBuilder &builder, Location loc, Value iv,
                       Value tCurrent, Value ub, Value step, Block &body,
-                      MutableArrayRef<EpochSlot> slots,
-                      StringRef targetChainId,
+                      MutableArrayRef<EpochSlot> slots, StringRef targetChainId,
                       ArrayRef<Operation *> prefixSequentialOps,
                       ArrayRef<Operation *> allSequentialOps,
                       ArrayRef<Value> loopBackParams,

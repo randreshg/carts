@@ -38,12 +38,12 @@
 #include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include <limits>
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
+#include <limits>
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
@@ -165,6 +165,7 @@ void EpochLoweringPass::runOnOperation() {
 
     /// Check if this epoch has a continuation EDT (set by EpochOpt).
     bool hasContinuation = epochOp->hasAttr(ContinuationForEpoch);
+    bool isCPSChainInnerEpoch = false;
     Value finishGuid;
     Value finishSlot;
 
@@ -182,6 +183,8 @@ void EpochLoweringPass::runOnOperation() {
       }
 
       if (contEdtCreate) {
+        isCPSChainInnerEpoch = contEdtCreate->hasAttr(CPSChainId);
+
         /// Recursively move the continuation EdtCreateOp and ALL transitive
         /// operand-defining ops before the epoch. A shallow move misses ops
         /// like DB handle extractions (memref.load, llvm.ptrtoint) that feed
@@ -274,18 +277,18 @@ void EpochLoweringPass::runOnOperation() {
     ///
     /// Non-continuation epochs always get a blocking wait.
     ///
-    /// Continuation epochs skip the wait entirely because the EDT's return
-    /// naturally calls arts_increment_finished_epoch_list, processing all
-    /// epochs in the EDT's epoch_list.
+    /// Regular continuation epochs skip the wait: the creator EDT terminates
+    /// promptly after spawning workers, and arts_increment_finished_epoch_list
+    /// releases the creator's guard active count naturally.
     ///
-    /// Continuation epochs still need a started epoch. In ARTS, a deferred
-    /// epoch created with arts_initialize_epoch() must be paired with an
-    /// explicit arts_start_epoch() before it can complete. The runtime-first
-    /// CPS contract therefore uses started inner epochs even when the
-    /// continuation itself provides the finish signal and no blocking wait is
-    /// emitted in the creator EDT.
-    bool needsWait = !hasContinuation;
-    if (hasContinuation) {
+    /// CPS chain inner epochs are the exception: the creator (mainBody) is
+    /// blocked waiting on the outer CPS epoch and cannot terminate until the
+    /// entire chain completes. Without an explicit wait, the creator's guard
+    /// active count in the inner epoch is never released, creating a circular
+    /// dependency → deadlock. Emitting WaitOnEpochOp releases the guard and
+    /// blocks only until the first iteration's workers finish.
+    bool needsWait = !hasContinuation || isCPSChainInnerEpoch;
+    if (hasContinuation && !isCPSChainInnerEpoch) {
       ARTS_INFO("  Skipping WaitOnEpochOp (continuation path)");
     }
     if (needsWait) {
@@ -688,18 +691,17 @@ void EpochLoweringPass::runOnOperation() {
       return score;
     };
 
-    auto considerContinuationCandidate = [&](EdtCreateOp edt,
-                                             EdtCreateOp &bestEdt,
-                                             int &bestScore) {
-      auto chainAttr = edt->getAttrOfType<StringAttr>(CPSChainId);
-      if (!chainAttr || chainAttr.getValue() != targetChainId)
-        return;
-      int score = scoreContinuationCandidate(edt);
-      if (!bestEdt || score > bestScore) {
-        bestEdt = edt;
-        bestScore = score;
-      }
-    };
+    auto considerContinuationCandidate =
+        [&](EdtCreateOp edt, EdtCreateOp &bestEdt, int &bestScore) {
+          auto chainAttr = edt->getAttrOfType<StringAttr>(CPSChainId);
+          if (!chainAttr || chainAttr.getValue() != targetChainId)
+            return;
+          int score = scoreContinuationCandidate(edt);
+          if (!bestEdt || score > bestScore) {
+            bestEdt = edt;
+            bestScore = score;
+          }
+        };
 
     /// Find the best EdtCreateOp with matching cps_chain_id in the same
     /// function. Prefer the canonical continuation kickoff site that still
@@ -999,9 +1001,17 @@ void EpochLoweringPass::runOnOperation() {
         newPackParams.assign(totalPackSlots, zeroI64);
         for (unsigned i = 0; i < localCarryCount && i < totalPackSlots; ++i) {
           bool unsafeCarry = false;
-          if (localSchemaPackOp && i < localSchemaPackOp.getNumOperands())
-            unsafeCarry = static_cast<bool>(
-                DbUtils::getUnderlyingDbAlloc(localSchemaPackOp.getOperand(i)));
+          if (localSchemaPackOp && i < localSchemaPackOp.getNumOperands()) {
+            // Only values that trace through a DbAcquireOp are unsafe to
+            // carry — they are data pointers that may be invalidated by
+            // release/reacquire across iterations. Values that trace
+            // directly to DbAllocOp results (guid/ptr handle arrays for
+            // block-partitioned DBs) are stable malloc'd arrays and safe
+            // to carry across CPS iterations.
+            Operation *underlyingDb =
+                DbUtils::getUnderlyingDb(localSchemaPackOp.getOperand(i));
+            unsafeCarry = underlyingDb && isa<DbAcquireOp>(underlyingDb);
+          }
           if (!unsafeCarry)
             newPackParams[i] = unpackedValues[i];
         }
@@ -1375,9 +1385,9 @@ void EpochLoweringPass::runOnOperation() {
           originalRecDep ? originalRecDep.getDatablocks().size() : 0;
       Value recreatedDepCount = localDepCount;
       if (directRecreate) {
-        int64_t directDepCountVal =
-            originalRecDep ? static_cast<int64_t>(originalDepCount)
-                           : recreatedDepCountVal;
+        int64_t directDepCountVal = originalRecDep
+                                        ? static_cast<int64_t>(originalDepCount)
+                                        : recreatedDepCountVal;
         recreatedDepCount =
             AC->createIntConstant(directDepCountVal, AC->Int32, loc);
       }
@@ -1859,8 +1869,8 @@ void EpochLoweringPass::runOnOperation() {
     AC->setInsertionPoint(edt);
     Value one = AC->createIntConstant(1, AC->Int32, edt.getLoc());
     Value depCount = edt.getDepCount();
-    Value adjustedDepCount = AC->create<arith::SubIOp>(edt.getLoc(), depCount,
-                                                       one);
+    Value adjustedDepCount =
+        AC->create<arith::SubIOp>(edt.getLoc(), depCount, one);
     edt->setOperand(1, adjustedDepCount);
     edt->removeAttr(ControlDep);
     ARTS_INFO("Removed stray control dep from continuation kickoff "

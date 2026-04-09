@@ -442,7 +442,8 @@ bool tryAmortizeRepeatedEpochLoop(EpochOp epochOp) {
     if (!wrappingIf.getElseRegion().empty() &&
         !wrappingIf.getElseRegion().front().without_terminator().empty())
       return false;
-    if (wrappingIf->getBlock() != loopBody || epochOp->getBlock() != &wrappingIf.getThenRegion().front())
+    if (wrappingIf->getBlock() != loopBody ||
+        epochOp->getBlock() != &wrappingIf.getThenRegion().front())
       return false;
     if (!isLoopInvariantForRepeat(wrappingIf.getCondition(), loopIv))
       return false;
@@ -459,7 +460,8 @@ bool tryAmortizeRepeatedEpochLoop(EpochOp epochOp) {
     }
 
     bool seenEpoch = false;
-    for (Operation &op : wrappingIf.getThenRegion().front().without_terminator()) {
+    for (Operation &op :
+         wrappingIf.getThenRegion().front().without_terminator()) {
       if (&op == epochOp.getOperation()) {
         seenEpoch = true;
         continue;

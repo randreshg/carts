@@ -16,10 +16,10 @@
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/OpDefinition.h"
@@ -150,7 +150,7 @@ bool materializeBlockedNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop);
 /// Cache the current blocked dep-family pointer inside a monotone unit-step
 /// loop and only reload it when the computed family index changes.
 bool materializeMonotoneBlockedDepPtrCache(LLVM::LoadOp loadOp,
-                                          scf::ForOp loop);
+                                           scf::ForOp loop);
 
 Value buildNeighborCandidateIndex(OpBuilder &builder, Location loc,
                                   const NeighborCarryIndexPattern &pattern,

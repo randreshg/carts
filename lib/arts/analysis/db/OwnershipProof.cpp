@@ -33,7 +33,8 @@ mlir::arts::computeOwnershipProof(LoweringContractOp contractOp) {
   bool supportedBlockHalo = contractOp.getSupportedBlockHalo().value_or(false);
   bool narrowableDep = contractOp.getNarrowableDep().value_or(false);
 
-  /// 1. ownerDimReachability: owner dims are present, non-empty, and within rank
+  /// 1. ownerDimReachability: owner dims are present, non-empty, and within
+  /// rank
   if (ownerDims && !ownerDims->empty()) {
     bool allValid = true;
     for (int64_t dim : *ownerDims) {
