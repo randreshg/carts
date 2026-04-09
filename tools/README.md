@@ -7,10 +7,10 @@ modules.
 
 Use one command model only:
 
-- `dekk carts ...` for project lifecycle operations such as setup, install,
-  worktrees, and agent generation
-- `carts ...` for daily compiler, testing, benchmark, and Docker usage after
-  install
+- `dekk carts ...` for project lifecycle operations and the guaranteed
+  worktree-safe interface
+- `carts ...` only if you explicitly generated the project-local wrapper with
+  `dekk carts install --wrap` and exposed `./.install` on your `PATH`
 
 Do not use checked-in wrappers or direct `python tools/carts_cli.py` invocations
 as the public interface. The repo-local `tools/carts` file exists only as a
@@ -32,15 +32,15 @@ tools/
 dekk carts install
 dekk carts agents generate
 
-carts build
-carts compile simple.c -O3 -o simple_arts
-carts test
-carts lit tests/contracts/example.mlir
-carts benchmarks list
+dekk carts build
+dekk carts compile simple.c -O3 -o simple_arts
+dekk carts test
+dekk carts lit tests/contracts/example.mlir
+dekk carts benchmarks list
 ```
 
 ## Notes
 
 - dekk creates the project-local conda environment from `environment.yml`
-- the installed `carts` wrapper lives under `.install/bin/`
+- `dekk carts install --wrap` writes the wrapper to `./.install/carts`
 - `carts-compile` lives under `.install/carts/bin/`

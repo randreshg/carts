@@ -104,7 +104,7 @@ def _ensure_lit_tools(config: CartsConfig) -> Tuple[Path, Path, Path]:
         for tool in missing:
             console.print(f"  - {tool}")
         print_info(
-            "Run `carts build` to install llvm-lit/FileCheck/carts-compile under .install/."
+            "Run `dekk carts build` to install llvm-lit/FileCheck/carts-compile under .install/."
         )
         raise Exit(1)
 

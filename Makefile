@@ -95,7 +95,8 @@ polygeist-clean:
 
 # LLVM
 llvm:
-	@$(call ensure_ninja_build_dir,$(LLVM_BUILD_DIR))
+	@set -e; \
+	$(call ensure_ninja_build_dir,$(LLVM_BUILD_DIR)); \
 	echo "Building LLVM..."; \
 	mkdir -p $(LLVM_BUILD_DIR); \
 	mkdir -p $(LLVM_INSTALL_DIR); \
@@ -273,7 +274,9 @@ fulluninstall: uninstall arts-clean
 	rm -f .arts
 
 clean:
-	make -C $(CARTS_BUILD_DIR) clean -j
+	@if [ -d "$(CARTS_BUILD_DIR)" ]; then \
+		make -C $(CARTS_BUILD_DIR) clean -j || true; \
+	fi
 	rm -rf $(CARTS_BUILD_DIR)
 
 check-doc-flags:
