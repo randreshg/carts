@@ -14,30 +14,31 @@ The following tools must be available on your system:
 
 - **cmake** >= 3.20
 - **ninja** (build system)
-- **clang** >= 14 (C/C++ compiler)
 - **conda**
 - **python** >= 3.11
 - **git** with submodule support
 
-Run `carts doctor` to verify that all prerequisites are installed and at the correct versions.
+Run `dekk carts doctor` to verify that all prerequisites are installed and at the correct versions.
 
 ### Installation
 
 ```bash
 git clone <repo-url>
 cd carts
-pip install dekk
+python -m pip install --upgrade dekk
 dekk carts install
 ```
 
-This creates the project-local conda environment, fetches submodules, builds
-the full toolchain, and installs `carts` into your PATH:
+This creates or syncs the project-local conda environment, fetches submodules,
+builds the full toolchain, installs the bootstrap `clang`/`clang++` pair
+required for the LLVM 23 build, and makes the `dekk carts ...` commands
+available for the project:
 
 ```bash
-carts doctor
+dekk carts doctor
 ```
 
-If `carts doctor` reports issues, resolve them before proceeding.
+If `dekk carts doctor` reports issues, resolve them before proceeding.
 
 ## Language Support
 

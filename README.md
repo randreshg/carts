@@ -10,17 +10,25 @@ systems.
 ## Quick Start
 ```bash
 git clone <repo-url> && cd carts
-pip install dekk
+python -m pip install --upgrade dekk
 dekk carts install
 ```
 
-After installation, the `carts` command is installed into your PATH:
+`dekk carts install` creates or synchronizes the project-local Conda
+environment from `environment.yml`, including the bootstrap `clang`/`clang++`
+toolchain used to build LLVM 23.
+
+Use the project through dekk's project runner:
 
 ```bash
-carts doctor                            # Verify the toolchain
-carts compile example.c -O3 -o example  # Compile a program
-carts test                              # Run the test suite
+dekk carts doctor                                           # Verify the toolchain
+dekk carts compile tests/examples/dotproduct/dotproduct.c -O3 -o dotproduct
+dekk carts test                                             # Run the test suite
 ```
+
+If you want a bare `carts ...` command, run `dekk carts install --wrap` and add
+`./.install` to your `PATH`. The wrapper is project-local; dekk does not edit
+your shell config automatically.
 
 See **[Getting Started](docs/getting-started.md)** for the full walkthrough.
 
@@ -43,19 +51,20 @@ See **[Getting Started](docs/getting-started.md)** for the full walkthrough.
 
 | Command | Description |
 |---|---|
-| `dekk carts install` | Create the project environment, fetch submodules, build, and install the `carts` wrapper |
-| `carts doctor` | Validate the toolchain and environment |
-| `carts build` | Build CARTS (`--clean` for fresh, `--arts` for runtime) |
-| `carts compile <file> [flags]` | Run the full compilation pipeline |
-| `carts pipeline` | Display or query compiler pipeline stages |
-| `carts test` | Run the complete test suite |
-| `carts lit <test.mlir>` | Run a single lit regression test |
-| `carts format` | Format tracked C/C++/TableGen files (`--check` to verify) |
-| `carts benchmarks <cmd>` | Build and run benchmarks (list, run, build, clean) |
-| `carts clean` | Remove generated files (`--all` for full clean) |
-| `carts update` | Update git submodules |
-| `carts docker <cmd>` | Docker operations (build, start, stop, exec) |
-| `carts examples <cmd>` | List or run bundled examples |
+| `dekk carts install` | Create the project environment, fetch submodules, and build the toolchain |
+| `dekk carts install --wrap` | Also generate a project-local `./.install/carts` wrapper |
+| `dekk carts doctor` | Validate the toolchain and environment |
+| `dekk carts build` | Build CARTS (`--clean` for fresh, `--arts` for runtime) |
+| `dekk carts compile <file> [flags]` | Run the full compilation pipeline |
+| `dekk carts pipeline` | Display or query compiler pipeline stages |
+| `dekk carts test` | Run the complete test suite |
+| `dekk carts lit <test.mlir>` | Run a single lit regression test |
+| `dekk carts format` | Format tracked C/C++/TableGen files (`--check` to verify) |
+| `dekk carts benchmarks <cmd>` | Build and run benchmarks (list, run, build, clean) |
+| `dekk carts clean` | Remove generated files (`--all` for full clean) |
+| `dekk carts update` | Update git submodules |
+| `dekk carts docker <cmd>` | Docker operations (build, start, stop, exec) |
+| `dekk carts examples <cmd>` | List or run bundled examples |
 | `dekk carts agents <cmd>` | Generate/install agent resources from `.agents/` |
 | `dekk carts worktree <cmd>` | Manage dekk-aware CARTS worktrees |
 

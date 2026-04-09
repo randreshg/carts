@@ -26,6 +26,13 @@ from scripts import (
     SUBMODULE_BENCHMARKS,
 )
 
+_CLEAN_TARGETS = {
+    MAKE_TARGET_BUILD: "clean",
+    MAKE_TARGET_ARTS: "arts-clean",
+    MAKE_TARGET_POLYGEIST: "polygeist-clean",
+    MAKE_TARGET_LLVM: "llvm-clean",
+}
+
 
 # Counter profile mapping: level -> config file name
 COUNTER_PROFILES = {
@@ -155,7 +162,8 @@ def build(
     # Clean if requested
     if clean:
         print_step("Cleaning previous build...")
-        run_subprocess(["make", "clean"], cwd=config.carts_dir, check=False)
+        clean_target = _CLEAN_TARGETS[target]
+        run_subprocess(["make", clean_target], cwd=config.carts_dir, check=False)
 
     # Run build
     print_step(f"Building {target}...")

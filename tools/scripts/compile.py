@@ -198,7 +198,7 @@ def _get_pipeline_manifest(config: CartsConfig) -> PipelineManifest:
             config,
             "--print-pipeline-manifest-json",
             "Failed to query pipeline manifest from carts-compile. "
-            "Run `carts build` and retry.",
+            "Run `dekk carts build` and retry.",
         )
         _PIPELINE_MANIFEST_CACHE = _parse_pipeline_manifest_payload(payload)
     except (json.JSONDecodeError, ValueError) as exc:

@@ -21,27 +21,28 @@ Compiler layering and ownership rules are documented in:
 
 ```bash
 # Setup and build
-dekk carts install                     # Install prerequisites, build, and install the carts wrapper
-carts build                            # Build CARTS
-carts build --clean                    # Clean build
-carts build --arts --debug 0           # ARTS errors only
-carts build --arts --debug 1           # ARTS warnings
-carts build --arts --debug 2           # ARTS info
-carts build --arts --debug 3           # Build ARTS with full debug logging
+dekk carts install                      # Install prerequisites and build the toolchain
+dekk carts install --wrap              # Also generate the optional project-local wrapper
+dekk carts build                       # Build CARTS
+dekk carts build --clean               # Clean build
+dekk carts build --arts --debug 0      # ARTS errors only
+dekk carts build --arts --debug 1      # ARTS warnings
+dekk carts build --arts --debug 2      # ARTS info
+dekk carts build --arts --debug 3      # Build ARTS with full debug logging
 
 # Testing
-carts compile simple.cpp -o simple     # Full compilation pipeline
-carts test                             # Run all tests
-carts lit tests/contracts/<file>.mlir  # Run focused lit regressions
-carts lit --suite contracts            # Run the maintained contracts suite
+dekk carts compile simple.cpp -o simple # Full compilation pipeline
+dekk carts test                        # Run all tests
+dekk carts lit tests/contracts/<file>.mlir # Run focused lit regressions
+dekk carts lit --suite contracts       # Run the maintained contracts suite
 make check-doc-flags                   # Validate docs flags against carts-compile options
 
 # Formatting
-carts format                           # Format tracked C/C++/TableGen files
-carts format --check                   # Check formatting without edits
+dekk carts format                      # Format tracked C/C++/TableGen files
+dekk carts format --check              # Check formatting without edits
 
 # Docker
-carts docker build                     # Build Docker image + workspace volume
+dekk carts docker build                # Build Docker image + workspace volume
 ```
 
 ## Environment Management
@@ -51,13 +52,16 @@ CARTS uses [dekk](https://pypi.org/project/dekk/) for environment management. Th
 ### Setup
 
 ```bash
-pip install dekk                                          # once, globally
-dekk carts install                                        # setup + build + wrapper install
+python -m pip install --upgrade dekk                      # once, globally
+dekk carts install                                        # setup + build
 ```
 
-dekk auto-detects the project, creates the conda environment from
-`environment.yml`, activates `.dekk.toml` paths/env vars, builds the toolchain,
-and installs the `carts` wrapper into your PATH.
+dekk auto-detects the project, creates or syncs the conda environment from
+`environment.yml`, activates `.dekk.toml` paths/env vars, installs the
+bootstrap `clang`/`clang++` toolchain for the LLVM 23 build, and builds the
+rest of the stack. Add `--wrap` to generate the optional project-local
+`./.install/carts` wrapper. Dekk does not modify your shell `PATH` as part of
+`dekk carts install`.
 
 Agent configuration is managed through dekk:
 
@@ -70,17 +74,17 @@ dekk carts agents install
 ### Key Commands
 
 ```bash
-carts doctor              # Validate that all required tools and dependencies are present
-carts env                 # Show current environment variables and paths
+dekk carts doctor         # Validate that all required tools and dependencies are present
+dekk carts env            # Show current environment variables and paths
 ```
 
 ### How It Works
 
 - `.dekk.toml` declares the required toolchain versions, environment variables, and paths.
 - When you run `dekk carts <command>`, dekk reads `.dekk.toml`, activates the environment, and executes the requested project command.
-- `carts doctor` runs a suite of checks (cmake version, compiler availability, LLVM install, etc.) and reports any issues.
+- `dekk carts doctor` runs a suite of checks (cmake version, compiler availability, LLVM install, etc.) and reports any issues.
 
-Run `carts doctor` after cloning the repository and whenever you update dependencies to ensure your environment is correctly configured.
+Run `dekk carts doctor` after cloning the repository and whenever you update dependencies to ensure your environment is correctly configured.
 
 ## Coding Style
 
@@ -90,7 +94,7 @@ Follow LLVM conventions:
 - Braces on same line
 - `CamelCase` for types/ops (e.g., `DbDimOp`)
 - `camelCase` for variables
-- Run `carts format` (or `clang-format -i <file>`) before committing
+- Run `dekk carts format` (or `clang-format -i <file>`) before committing
 - Keep `// RUN:` and `FileCheck` directives aligned
 
 ## Testing Guidelines
@@ -103,7 +107,7 @@ Follow LLVM conventions:
    - Include source files, `arts.cfg`, and expected MLIR
    - Document in per-directory README
 
-3. **Always run** `carts lit tests/contracts/<changed-test>.mlir` for focused compiler changes, and `carts test` before submitting
+3. **Always run** `dekk carts lit tests/contracts/<changed-test>.mlir` for focused compiler changes, and `dekk carts test` before submitting
 4. **For distributed changes**, run the 3-mode benchmark workflow in:
    - `docs/benchmarks/modes.md`
 
@@ -122,4 +126,4 @@ Follow LLVM conventions:
 - Export `CARTS_VERBOSE=1` to debug wrapper invocations
 - Docker scripts mount shared workspace volume for clean builds
 - Environment configuration lives in `.dekk.toml` at the repo root
-- Run `carts doctor` to diagnose environment issues
+- Run `dekk carts doctor` to diagnose environment issues
