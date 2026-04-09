@@ -4,7 +4,7 @@
 // pre-lowering so rec_dep can emit precise byte-range dependencies instead of
 // whole-DB edges.
 // CHECK: arts.lowering_contract({{.*}}contract(<ownerDims = [2], narrowableDep = true, postDbRefined = true
-// CHECK: arts.rec_dep
+// CHECK: arts_rt.rec_dep
 // CHECK-SAME: byte_offsets(
 // CHECK-SAME: byte_sizes(
 

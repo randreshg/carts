@@ -12,8 +12,8 @@
 // and bottom pointers.
 // CHECK-LABEL: func.func private @__arts_edt_{{[0-9]+}}
 // --- left band: two dep_gep, two pointer2memref, then loop with store ---
-// CHECK: arts.dep_gep
-// CHECK: arts.dep_gep
+// CHECK: arts_rt.dep_gep
+// CHECK: arts_rt.dep_gep
 // CHECK: polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?xf64>
 // CHECK: polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?xf64>
 // CHECK: scf.for %{{.+}} = %{{.+}} to %{{.+}} step %c1 {
@@ -25,7 +25,7 @@
 // CHECK:   scf.for %{{.+}} = %{{.+}} to %{{.+}} step %c1 {
 // CHECK:     polygeist.store %{{.+}}, %{{.+}}[%{{.+}}, %{{.+}}] sizes
 // --- right band: new dep_gep + two pointer2memref (mid, bot), loop with store ---
-// CHECK: arts.dep_gep
+// CHECK: arts_rt.dep_gep
 // CHECK: polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?xf64>
 // CHECK: polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?xf64>
 // CHECK: scf.for %{{.+}} = %{{.+}} to %{{.+}} step %c1 {

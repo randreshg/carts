@@ -15,7 +15,7 @@
 // CHECK: arts.lowering_contract(%ptr : memref<?x!llvm.ptr>) block_shape[%{{.+}}] contract(<ownerDims = [3], postDbRefined = true>)
 // CHECK: %[[WRITE_GUID:.+]], %[[WRITE_PTR:.+]] = arts.db_alloc[<inout>, <heap>, <write>, <block>] {{.*}} elementSizes[%c3, %c320, %c320, %c9]
 // CHECK: arts.lowering_contract(%[[WRITE_PTR]] : memref<?x!llvm.ptr>) block_shape[%c9] contract(<ownerDims = [3], postDbRefined = true>)
-// CHECK: %{{.+}} = arts.create_epoch : i64
+// CHECK: %{{.+}} = arts_rt.create_epoch : i64
 // CHECK: scf.for %[[WORKER:.+]] = %c0 to %c64 step %c1 {
 // CHECK: %[[WORK_BASE:.+]] = arith.muli %[[WORKER]], %c9 : index
 // CHECK: %[[CHUNK_ELEMS:.+]] = arith.minui %{{.+}}, %c9 : index

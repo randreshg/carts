@@ -23,15 +23,15 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f128, dense<128> 
   // Test 1: CreateEpochOp without finish target (regression test).
   // Should lower to arts_initialize_and_start_epoch(0, 0).
   func.func @test_no_finish() -> i64 {
-    %e = arts.create_epoch : i64
-    arts.wait_on_epoch %e : i64
+    %e = arts_rt.create_epoch : i64
+    arts_rt.wait_on_epoch %e : i64
     return %e : i64
   }
 
   // Test 2: CreateEpochOp with finish target.
   // Should lower to arts_initialize_and_start_epoch(guid, slot).
   func.func @test_with_finish(%guid: i64, %slot: i32) -> i64 {
-    %e = arts.create_epoch finish(%guid : i64, %slot : i32) : i64
+    %e = arts_rt.create_epoch finish(%guid : i64, %slot : i32) : i64
     return %e : i64
   }
 }
