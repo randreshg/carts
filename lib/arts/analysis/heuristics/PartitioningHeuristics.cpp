@@ -7,6 +7,7 @@
 #include "arts/analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/Dialect.h"
 #include "arts/analysis/heuristics/HeuristicUtils.h"
+#include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/metadata/LoopMetadata.h"
@@ -130,6 +131,48 @@ hasLocalProducerAndFullRangeReadConsumer(const PartitioningContext &ctx) {
   }
 
   return hasLocalWriter && hasFullRangeReader;
+}
+
+/// Preserve blocked layout for small 1-D producer/readback vectors.
+/// ATAX/BICG-style scratch vectors still benefit from block-local writes even
+/// when a later direct read phase widens back to the full range; the fan-in is
+/// modest, but collapsing to coarse removes producer locality entirely.
+static bool
+shouldPreserveBlockForSmallVectorReadback(const PartitioningContext &ctx) {
+  if (ctx.memrefRank != 1 || !ctx.staticElementCount)
+    return false;
+
+  int64_t totalElements = *ctx.staticElementCount;
+  std::optional<int64_t> blockSize = ctx.blockSize;
+  if (!blockSize) {
+    for (const AcquireInfo &info : ctx.acquires) {
+      for (const PartitionInfo &pinfo : info.partitionInfos) {
+        if (!usesBlockLayout(pinfo.mode) || pinfo.sizes.empty())
+          continue;
+        int64_t constantSize = 0;
+        if (!ValueAnalysis::getConstantIndex(pinfo.sizes.front(),
+                                             constantSize) ||
+            constantSize <= 0)
+          continue;
+        if (!blockSize)
+          blockSize = constantSize;
+        else
+          blockSize = std::min(*blockSize, constantSize);
+      }
+    }
+  }
+
+  if (totalElements <= 0 || !blockSize || *blockSize <= 0)
+    return false;
+
+  /// Keep the carve-out narrow: only small vectors with a bounded block fan-in
+  /// should bypass H1.C3b.
+  constexpr int64_t kMaxElements = 65536;
+  constexpr int64_t kMaxBlocks = 64;
+
+  int64_t blockCount = (totalElements + *blockSize - 1) / *blockSize;
+  return totalElements <= kMaxElements && blockCount > 1 &&
+         blockCount <= kMaxBlocks;
 }
 
 } // namespace
@@ -302,11 +345,16 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
       !ctx.hasIndirectAccess && patterns.hasUniform && !patterns.hasStencil &&
       !hasReadOnlyNonLeadingOrMultiDimOwnerConflict(ctx) &&
       hasLocalProducerAndFullRangeReadConsumer(ctx)) {
+    if (shouldPreserveBlockForSmallVectorReadback(ctx)) {
+      ARTS_DEBUG("H1.C3b skipped: small 1-D producer/readback vector keeps "
+                 "block layout");
+    } else {
     ARTS_DEBUG("H1.C3b applied: Local producer + full-range read consumer "
                "prefers coarse");
     return PartitioningDecision::coarse(
         ctx, "H1.C3b: Single-node full-range read consumer outweighs local "
              "block producer");
+    }
   }
 
   /// H1.C4: Read-only stencil on single-node → Coarse (when stencil is on

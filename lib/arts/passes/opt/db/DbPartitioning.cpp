@@ -1336,6 +1336,22 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
     if (!thisAcquireCanBlock && contractSummary &&
         contractSummary->supportsContractDrivenBlockCapability())
       thisAcquireCanBlock = true;
+    if (!thisAcquireCanBlock && contractSummary) {
+      bool writesThroughAcquire = acquire.getMode() == ArtsMode::out ||
+                                  acquire.getMode() == ArtsMode::inout ||
+                                  acqNode->hasStores();
+      bool hasExplicitOwnerBlockContract =
+          contractSummary->hasDistributionContract() &&
+          !contractSummary->contract.spatial.ownerDims.empty() &&
+          (!contractSummary->contract.spatial.blockShape.empty() ||
+           contractSummary->contract.getStaticBlockShape().has_value()) &&
+          !contractSummary->hasIndirectAccess();
+      if (writesThroughAcquire && hasExplicitOwnerBlockContract) {
+        ARTS_DEBUG("  Preserving block capability from explicit owner/block "
+                   "contract on write acquire");
+        thisAcquireCanBlock = true;
+      }
+    }
     if (!thisAcquireCanBlock && contractSummary &&
         contractSummary->getDerivedAccessPattern() == AccessPattern::Stencil)
       thisAcquireCanBlock = true;

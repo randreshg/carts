@@ -796,6 +796,15 @@ EpochHeuristics::evaluateAsyncLoopStrategy(scf::ForOp forOp) {
     }
   }
 
+  /// Host-side call sidecars usually indicate benchmark/timing control loops
+  /// or other external coordination that should stay on the blocking path.
+  /// Rewriting those loops into CPS chains relaunches scheduler topology
+  /// around non-kernel work and has regressed uniform large-thread kernels.
+  if (decision.hasCallSidecars) {
+    decision.rationale = "loop has host call sidecars";
+    return decision;
+  }
+
   decision.eligible = true;
   if (shouldAvoidCpsChainForLoop(forOp, decision)) {
     decision.rationale =
