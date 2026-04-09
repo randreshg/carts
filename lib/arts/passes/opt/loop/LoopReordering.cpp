@@ -30,7 +30,10 @@
 #include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/DenseSet.h"
+#include <functional>
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(loop_reordering);
@@ -107,6 +110,50 @@ struct LoopReorderingPass
 
 private:
   mlir::arts::AnalysisManager *AM;
+
+  /// Collect pure prefix ops from firstInner that are used by secondInner's
+  /// body. These must be rematerialized into the rebuilt loop nest before the
+  /// original firstInner is erased. If secondInner depends on a side-effecting
+  /// prefix op, the interchange is not structurally safe.
+  bool collectRematerializablePrefixOps(ArrayRef<Operation *> prefixOps,
+                                        scf::ForOp secondInner,
+                                        SmallVectorImpl<Operation *> &out) {
+    DenseSet<Operation *> prefixSet(prefixOps.begin(), prefixOps.end());
+    DenseSet<Operation *> needed;
+    bool supported = true;
+
+    std::function<void(Value)> visitValue = [&](Value value) {
+      if (!supported)
+        return;
+
+      Operation *defOp = value.getDefiningOp();
+      if (!defOp || !prefixSet.contains(defOp))
+        return;
+      if (!needed.insert(defOp).second)
+        return;
+      if (!isMemoryEffectFree(defOp)) {
+        supported = false;
+        return;
+      }
+
+      for (Value operand : defOp->getOperands())
+        visitValue(operand);
+    };
+
+    secondInner.walk([&](Operation *op) {
+      for (Value operand : op->getOperands())
+        visitValue(operand);
+    });
+
+    if (!supported)
+      return false;
+
+    for (Operation *op : prefixOps) {
+      if (needed.contains(op))
+        out.push_back(op);
+    }
+    return true;
+  }
 
   /// Apply the reordering specified by targetOrder (arts.ids in target order).
   /// Returns true if reordering was applied successfully.
@@ -359,24 +406,37 @@ private:
       return false;
     }
 
-    /// STEP 1: Create the init loop (for j: init_ops)
-    auto initLoop = builder.create<scf::ForOp>(
-        firstInner.getLoc(), lb1, ub1, step1, ValueRange{},
-        [&](OpBuilder &nestedBuilder, Location loc, Value initLoopIV,
-            ValueRange iterArgs) {
-          /// Clone init ops, mapping original j IV to new IV
-          IRMapping mapping;
-          mapping.map(iv1, initLoopIV);
+    SmallVector<Operation *, 8> rematerializedPrefixOps;
+    if (!collectRematerializablePrefixOps(initOps, secondInner,
+                                          rematerializedPrefixOps)) {
+      ARTS_DEBUG("Loop reordering: reduction body captures side-effecting "
+                 "prefix ops");
+      return false;
+    }
 
-          for (Operation *op : initOps) {
-            nestedBuilder.clone(*op, mapping);
-          }
+    bool needsInitLoop = llvm::any_of(initOps, [](Operation *op) {
+      return !isMemoryEffectFree(op);
+    });
 
-          nestedBuilder.create<scf::YieldOp>(loc);
-        });
+    if (needsInitLoop) {
+      /// STEP 1: Create the init loop (for j: init_ops)
+      auto initLoop = builder.create<scf::ForOp>(
+          firstInner.getLoc(), lb1, ub1, step1, ValueRange{},
+          [&](OpBuilder &nestedBuilder, Location loc, Value initLoopIV,
+              ValueRange iterArgs) {
+            /// Clone init ops, mapping original j IV to new IV
+            IRMapping mapping;
+            mapping.map(iv1, initLoopIV);
 
-    /// The init loop is synthetic and must get its own metadata identity.
-    manager.refreshMetadata(initLoop.getOperation());
+            for (Operation *op : initOps)
+              nestedBuilder.clone(*op, mapping);
+
+            nestedBuilder.create<scf::YieldOp>(loc);
+          });
+
+      /// The init loop is synthetic and must get its own metadata identity.
+      manager.refreshMetadata(initLoop.getOperation());
+    }
 
     /// STEP 2: Create the interchanged reduction loop (for k: for j: reduce)
     auto newOuterLoop = builder.create<scf::ForOp>(
@@ -392,6 +452,9 @@ private:
                 IRMapping mapping;
                 mapping.map(iv1, newInnerIV); /// j IV -> new inner IV
                 mapping.map(iv2, newOuterIV); /// k IV -> new outer IV
+
+                for (Operation *op : rematerializedPrefixOps)
+                  innerBuilder.clone(*op, mapping);
 
                 /// Clone all operations from secondInner's body except yield
                 for (Operation &op :

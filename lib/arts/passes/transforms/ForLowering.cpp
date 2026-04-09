@@ -1251,10 +1251,15 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     Value rootGuidValue = rootGuid;
     Value rootPtrValue = rootPtr;
 
-    /// Check if parent acquire already has partition hints (from CreateDbs via
-    /// DbControlOp). If hints exist, the user provided explicit partitioning,
-    /// so ForLowering RESPECTS the user's intent and does NOT override.
-    bool parentHasPartitionInfo = parentAcqOp.hasExplicitPartitionHints();
+    /// Preserve only authoritative parent partitioning contracts. CreateDbs
+    /// materializes default coarse offsets/sizes even when the source had no
+    /// explicit DbControl contract; treating those defaults as authoritative
+    /// blocks later worker-local rewrite planning and can leave
+    /// block-distributed loops with whole-DB coarse dependencies.
+    bool parentHasPartitionInfo =
+        parentAcqOp.hasExplicitPartitionHints() &&
+        (!parentAcqOp.isCoarse() || parentAcqOp.getPreserveAccessMode() ||
+         parentAcqOp.getPreserveDepEdge());
 
     /// CreateDbs/Db analysis own the canonical access mode for each acquire.
     /// ForLowering preserves that mode instead of reclassifying loop-local

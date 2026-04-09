@@ -767,6 +767,10 @@ DbAcquireOp mlir::arts::rewriteAcquire(AcquireRewriteInput &in,
   transferContract(in.parentAcquire.getOperation(), blockAcquire.getOperation(),
                    in.parentAcquire.getPtr(), blockAcquire.getPtr(),
                    in.AC->getBuilder(), in.loc);
+  /// Task-local block/stencil rewrites define the authoritative dependency
+  /// window for the lowered worker EDT, even when later allocation planning
+  /// keeps the backing DB layout coarse.
+  blockAcquire.setPreserveDepEdge();
   if (in.parentAcquire.getPreserveAccessMode())
     blockAcquire.setPreserveAccessMode();
   if (in.parentAcquire.getPreserveDepEdge())
@@ -1127,6 +1131,11 @@ void mlir::arts::applyTaskAcquireContractMetadata(
       updated.spatial.centerOffset = taskCenterOffset;
     if (contractTaskBlockShape)
       updated.spatial.blockShape.clear();
+    /// Worker-local acquires are freshly rewritten slices. Even when the
+    /// parent acquire carried post-DB refinement markers, the new worker-local
+    /// contract still needs a fresh DT-1/DT-2 pass to recover properties such
+    /// as narrowableDep on the rewritten slice.
+    updated.analysis.postDbRefined = false;
     upsertLoweringContract(builder, loc, taskAcquire.getPtr(), updated);
   }
 }

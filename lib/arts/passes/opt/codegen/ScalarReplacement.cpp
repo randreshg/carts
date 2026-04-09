@@ -38,6 +38,7 @@
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopInvarianceUtils.h"
 #include "polygeist/Ops.h"
+#include "llvm/ADT/SetVector.h"
 
 ARTS_DEBUG_SETUP(scalar_replacement);
 
@@ -199,6 +200,101 @@ detectReductionPattern(scf::ForOp forOp) {
   return std::nullopt;
 }
 
+/// Rank-0 scratch memrefs often survive outlining even when they are used like
+/// pure SSA temporaries. Forward same-block stores to later loads so the
+/// outlined worker body can stay register-based.
+static bool isPromotableScalarScratch(memref::AllocaOp allocaOp) {
+  auto type = allocaOp.getType();
+  if (type.getRank() != 0)
+    return false;
+  Type elemType = type.getElementType();
+  if (!elemType.isIntOrIndexOrFloat())
+    return false;
+
+  for (Operation *user : allocaOp->getUsers()) {
+    if (auto load = dyn_cast<memref::LoadOp>(user)) {
+      if (!load.getIndices().empty())
+        return false;
+      continue;
+    }
+    if (auto store = dyn_cast<memref::StoreOp>(user)) {
+      if (!store.getIndices().empty())
+        return false;
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+static unsigned forwardScalarScratchLoadsInBlock(Block &block) {
+  DenseMap<Value, Value> availableValueByScratch;
+  unsigned forwardedLoads = 0;
+
+  for (Operation &op : llvm::make_early_inc_range(block)) {
+    if (auto store = dyn_cast<memref::StoreOp>(&op)) {
+      auto allocaOp = store.getMemRef().getDefiningOp<memref::AllocaOp>();
+      if (allocaOp && isPromotableScalarScratch(allocaOp)) {
+        availableValueByScratch[allocaOp.getResult()] = store.getValue();
+        continue;
+      }
+    }
+
+    if (auto load = dyn_cast<memref::LoadOp>(&op)) {
+      auto allocaOp = load.getMemRef().getDefiningOp<memref::AllocaOp>();
+      if (allocaOp && isPromotableScalarScratch(allocaOp)) {
+        auto it = availableValueByScratch.find(allocaOp.getResult());
+        if (it != availableValueByScratch.end()) {
+          load.getResult().replaceAllUsesWith(it->second);
+          load.erase();
+          ++forwardedLoads;
+          continue;
+        }
+      }
+    }
+
+    for (Region &region : op.getRegions())
+      for (Block &nestedBlock : region)
+        forwardedLoads += forwardScalarScratchLoadsInBlock(nestedBlock);
+  }
+
+  return forwardedLoads;
+}
+
+static unsigned forwardScalarScratchLoads(ModuleOp module) {
+  unsigned forwardedLoads = 0;
+  module.walk([&](func::FuncOp funcOp) {
+    for (Block &block : funcOp.getBlocks())
+      forwardedLoads += forwardScalarScratchLoadsInBlock(block);
+  });
+  return forwardedLoads;
+}
+
+static unsigned eraseDeadScalarScratchAllocas(ModuleOp module) {
+  llvm::SetVector<memref::AllocaOp> deadAllocas;
+  module.walk([&](memref::AllocaOp allocaOp) {
+    if (!isPromotableScalarScratch(allocaOp))
+      return;
+
+    bool hasLoadUsers = llvm::any_of(allocaOp->getUsers(), [](Operation *user) {
+      return isa<memref::LoadOp>(user);
+    });
+    if (!hasLoadUsers)
+      deadAllocas.insert(allocaOp);
+  });
+
+  for (memref::AllocaOp allocaOp : deadAllocas) {
+    SmallVector<Operation *> stores;
+    for (Operation *user : allocaOp->getUsers())
+      stores.push_back(user);
+    for (Operation *store : stores)
+      store->erase();
+    allocaOp.erase();
+  }
+
+  return deadAllocas.size();
+}
+
 /// Transform a reduction pattern to use iter_args
 static LogicalResult transformReduction(ReductionPattern &pattern,
                                         IRRewriter &rewriter) {
@@ -301,7 +397,7 @@ struct ScalarReplacementPass
     ModuleOp module = getOperation();
     ARTS_INFO_HEADER(ScalarReplacementPass);
 
-    int transformed = 0;
+    int transformedReductions = 0;
 
     /// Walk all scf.for loops and try to transform reductions
     /// Do this iteratively as transformations change the IR
@@ -324,14 +420,21 @@ struct ScalarReplacementPass
         /// Transform the pattern
         IRRewriter rewriter(module.getContext());
         if (succeeded(transformReduction(*pattern, rewriter))) {
-          transformed++;
+          transformedReductions++;
           changed = true;
           break; /// Start over after transformation
         }
       }
     }
 
-    ARTS_INFO("Transformed " << transformed << " reduction patterns");
+    unsigned forwardedScratchLoads = forwardScalarScratchLoads(module);
+    unsigned erasedScratchAllocas = eraseDeadScalarScratchAllocas(module);
+
+    ARTS_INFO("Transformed " << transformedReductions
+                             << " reduction patterns");
+    ARTS_INFO("Forwarded " << forwardedScratchLoads
+                           << " scalar scratch loads and erased "
+                           << erasedScratchAllocas << " scratch allocas");
     ARTS_INFO_FOOTER(ScalarReplacementPass);
   }
 };

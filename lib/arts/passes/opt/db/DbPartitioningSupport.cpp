@@ -687,6 +687,15 @@ void resetCoarseAcquireRanges(DbAllocOp allocOp, DbAllocNode *allocNode,
     DbAcquireOp acqOp = acqNode->getDbAcquireOp();
     if (!acqOp)
       continue;
+    PartitionMode mode =
+        getPartitionMode(acqOp.getOperation()).value_or(PartitionMode::coarse);
+    /// Worker-local dependency edges may still carry an authoritative block or
+    /// stencil slice even when the allocation itself falls back to a coarse DB
+    /// layout. Preserve those edges so later lowering can still route
+    /// per-task dependence windows instead of collapsing back to whole-array
+    /// serialization.
+    if (acqOp.getPreserveDepEdge() && requiresBlockSize(mode))
+      continue;
     /// preserve_access_mode protects the acquire's access mode contract, not
     /// the allocation layout. If the allocation fell back to coarse, always
     /// reset the DB-space slice to match the coarse layout.
