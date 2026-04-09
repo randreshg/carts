@@ -81,6 +81,7 @@ following IREE's proven multi-dialect pattern.
 | [implementation-order.md](implementation-order.md) | Phased execution plan with parallelization strategy |
 | [cost-model.md](cost-model.md) | Cost model, 21 hardcoded thresholds, runtime awareness gaps, convergence framework |
 | [op-classification.md](op-classification.md) | Complete op/attribute classification table, IREE patterns, operation lifecycle |
+| [directory-map.md](directory-map.md) | Every source file mapped from current to target location across all 3 phases |
 
 ## Why Three Dialects?
 
