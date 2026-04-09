@@ -19,12 +19,12 @@
 // EDT-BND: arts.edt <task> <intranode> route(%{{.*}}) {{.*}}attributes {{.*}}distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [128]
 
 // EPOCH-BND-LABEL: func.func @main
-// EPOCH-BND: %[[EPOCH:.+]] = arts.create_epoch : i64
+// EPOCH-BND: %[[EPOCH:.+]] = arts_rt.create_epoch : i64
 // EPOCH-BND: arts.db_acquire[<out>] {{.*}}partitioning(<block>, offsets[
 // EPOCH-BND-SAME: ), offsets[
-// EPOCH-BND: %[[TASK:.+]] = arts.edt_create({{.*}}) depCount(%{{.*}}) route(%{{.*}}) epoch(%[[EPOCH]] : i64)
-// EPOCH-BND: arts.rec_dep %[[TASK]]
-// EPOCH-BND: arts.wait_on_epoch %[[EPOCH]] : i64
+// EPOCH-BND: %[[TASK:.+]] = arts_rt.edt_create({{.*}}) depCount(%{{.*}}) route(%{{.*}}) epoch(%[[EPOCH]] : i64)
+// EPOCH-BND: arts_rt.rec_dep %[[TASK]]
+// EPOCH-BND: arts_rt.wait_on_epoch %[[EPOCH]] : i64
 // EPOCH-BND-NOT: arts.epoch
 
 // DIST-EDT-LABEL: func.func @main
@@ -35,9 +35,9 @@
 // DIST-EDT: arts.edt <task> <internode> route(%[[ROUTE]]) {{.*}}attributes {{.*}}distribution_kind = #arts.distribution_kind<two_level>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32
 
 // DIST-PRE-LABEL: func.func @main
-// DIST-PRE: %[[EPOCH:.+]] = arts.create_epoch : i64
+// DIST-PRE: %[[EPOCH:.+]] = arts_rt.create_epoch : i64
 // DIST-PRE: arts.db_acquire[<inout>] {{.*}}partitioning(<block>, offsets[
 // DIST-PRE-SAME: ), offsets[
 // DIST-PRE: %[[ROUTE:.+]] = arith.index_cast %{{.*}} : index to i32
-// DIST-PRE: %[[TASK:.+]] = arts.edt_create({{.*}}) depCount(%{{.*}}) route(%[[ROUTE]]) epoch(%[[EPOCH]] : i64)
-// DIST-PRE: arts.wait_on_epoch %[[EPOCH]] : i64
+// DIST-PRE: %[[TASK:.+]] = arts_rt.edt_create({{.*}}) depCount(%{{.*}}) route(%[[ROUTE]]) epoch(%[[EPOCH]] : i64)
+// DIST-PRE: arts_rt.wait_on_epoch %[[EPOCH]] : i64

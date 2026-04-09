@@ -7,7 +7,7 @@
 //   3. No cps_iter_counter_param_idx appears
 //   4. No cps_advance is generated
 
-// CHECK: arts.edt_create
+// CHECK: arts_rt.edt_create
 // CHECK-NOT: cps_chain_id
 // CHECK-NOT: cps_iter_counter_param_idx
 // CHECK-NOT: arts.cps_advance

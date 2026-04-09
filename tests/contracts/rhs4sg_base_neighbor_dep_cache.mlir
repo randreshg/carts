@@ -5,7 +5,7 @@
 // dep pointers plus in-loop pointer selects, not per-tap dep_gep/divui chains.
 
 // CHECK-LABEL: func.func private @__arts_edt_1
-// CHECK: %{{.+}}, %{{.+}} = arts.dep_gep(%arg3) offset[%1 : index] indices[%{{.+}} : index] strides[%c1] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> !llvm.ptr, !llvm.ptr
+// CHECK: %{{.+}}, %{{.+}} = arts_rt.dep_gep(%arg3) offset[%1 : index] indices[%{{.+}} : index] strides[%c1] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> !llvm.ptr, !llvm.ptr
 // CHECK: %{{.+}} = llvm.load %{{.+}} : !llvm.ptr -> !llvm.ptr
 // CHECK: %[[NEG_PTR:.+]] = scf.if %{{.+}} -> (!llvm.ptr) {
 // CHECK:   %{{.+}} = llvm.load %{{.+}} : !llvm.ptr -> !llvm.ptr
@@ -25,7 +25,7 @@
 // CHECK:   %{{.+}} = llvm.select %{{.+}}, %[[NEG_PTR]], %{{.+}} : i1, !llvm.ptr
 // CHECK:   %{{.+}} = llvm.select %{{.+}}, %[[POS_PTR]], %{{.+}} : i1, !llvm.ptr
 // CHECK:   %{{.+}} = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?x?xf32>
-// CHECK-NOT: arts.dep_gep
+// CHECK-NOT: arts_rt.dep_gep
 // CHECK-NOT: arith.divui
 // CHECK:   %{{.+}} = polygeist.load %{{.+}}[%{{.+}}, %{{.+}}, %{{.+}}, %{{.+}}] sizes
 // CHECK:   scf.yield %{{.+}} : f32
