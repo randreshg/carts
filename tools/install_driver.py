@@ -7,7 +7,7 @@ flow; this driver owns the CARTS-specific work that dekk cannot infer:
 1. create local build/install directories
 2. initialize the required submodules
 3. build LLVM, Polygeist, ARTS, and CARTS in order
-4. install the `carts` wrapper into `.install/bin`
+4. optionally install the project-local `carts` wrapper into `.install/`
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ from scripts import (
     SUBMODULE_POLYGEIST,
     run_subprocess,
 )
-from scripts.build import _export_pipeline_manifest
 from scripts.platform import get_config
 
 
@@ -36,6 +35,18 @@ def _run(cmd: list[str], *, cwd: Path, label: str) -> None:
 def _setup_project() -> None:
     config = get_config()
     project_root = config.carts_dir
+
+    print_step("Synchronizing conda environment from environment.yml...")
+    _run(
+        [
+            "conda", "env", "update",
+            "-p", str(project_root / ".dekk" / "env"),
+            "-f", str(project_root / "environment.yml"),
+            "--prune",
+        ],
+        cwd=project_root,
+        label="conda environment sync",
+    )
 
     print_step("Preparing build directories...")
     for dir_name in [".install", ".install/bin", "build", "external"]:
@@ -101,13 +112,11 @@ def _build_project() -> None:
         print_step(label)
         _run(cmd, cwd=project_root, label=label)
 
-    _export_pipeline_manifest(config)
-
 
 def main() -> int:
     print_header("CARTS Install")
     print_info("Running CARTS project install through dekk-managed environment setup.")
-    print_info("Note: The 'carts' wrapper will be installed by dekk after this script completes.")
+    print_info("Use `dekk carts install --wrap` if you also want a project-local `carts` wrapper in `.install/`.")
 
     try:
         _setup_project()
@@ -117,7 +126,7 @@ def main() -> int:
         return 1
 
     print_header("Build Complete")
-    print_success("CARTS build finished. Dekk will now install the wrapper.")
+    print_success("CARTS build finished.")
     return 0
 
 
