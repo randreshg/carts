@@ -180,6 +180,34 @@ uniform kernels to lower with fewer worker lanes. It changed the IR as intended,
 but it made `activations` worse once task chunking was coarsened, so it was not
 kept in the final tree.
 
+I also tried a narrower compiler-only `ForOpt` heuristic that stayed within the
+existing safe lowering contract by coarsening repeated uniform loops only via a
+larger `arts.partition_hint` block size, so `dispatchWorkers` would drop only
+because `totalChunks` dropped.
+
+- `activations` narrowed coarsening results:
+  `external/carts-benchmarks/results/codex-activations-repeated-uniform-coarsen/20260409_095100`
+- `batchnorm` narrowed coarsening results:
+  `external/carts-benchmarks/results/codex-batchnorm-repeated-uniform-coarsen/20260409_095410`
+
+Why it was rejected:
+
+- Both benchmarks failed quickly instead of timing out.
+- In both cases the runtime aborted with:
+  `arts_add_dependence_at ... only supports DB_MODE_RO slices; mode=DB_MODE_EW must use a whole-DB dependence instead`
+- That shows the repeated-uniform block coarsening path is not compatible with
+  these ML kernels' remaining element-wise dependency contracts, even when the
+  worker-lane reduction is expressed only through existing chunk-count
+  semantics.
+
+Conclusion:
+
+- A heuristic-only worker-lane reduction in `ForOpt` is not sufficient and is
+  not even contract-safe for these remaining kernels.
+- Any future compiler-only fix still needs a more explicit lowering contract
+  that can distinguish dispatch topology from DB dependence mode, rather than
+  just forcing larger worker chunks.
+
 I also tried a compiler-only sibling-task fusion experiment inside `EpochOpt`
 for repeated uniform worker-lane tasks.
 
