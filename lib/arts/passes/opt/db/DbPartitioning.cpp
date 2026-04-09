@@ -864,6 +864,8 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   ctx.allocAccessPattern = getDbAccessPattern(allocOp.getOperation())
                                .value_or(DbAccessPattern::unknown);
   ctx.allocDbMode = allocOp.getDbMode();
+  ctx.readOnlyAfterInit =
+      allocOp->hasAttr(AttrNames::Operation::ReadOnlyAfterInit);
 
   /// Phase 4.5: Inject structured kernel plan hints when available.
   /// Walk EdtOp parents of acquires to find plan attrs. If the plan provides

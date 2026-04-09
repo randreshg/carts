@@ -85,6 +85,43 @@ hasReadOnlyNonLeadingOrMultiDimOwnerConflict(const PartitioningContext &ctx) {
   return sawReadOnlyNonLeadingContract;
 }
 
+/// Upgrade mixed-orientation read-only-after-init inputs to a 2-D block plan
+/// when a one-time non-leading writer feeds leading-dimension stencil readers.
+/// This matches pointer-backed setup phases such as poisson-for, where the
+/// producer writes by columns once but the hot repeated consumers read by row.
+static bool
+shouldUseMixedOrientationBlockNDForReadOnlyAfterInit(const PartitioningContext &ctx) {
+  if (!ctx.readOnlyAfterInit || !ctx.canBlock || !ctx.accessPatterns.hasStencil ||
+      ctx.memrefRank < 2)
+    return false;
+
+  bool sawNonLeadingWriter = false;
+  bool sawLeadingReader = false;
+
+  for (const AcquireInfo &info : ctx.acquires) {
+    if (!info.hasDistributionContract || info.ownerDimsCount == 0)
+      continue;
+
+    bool isLeadingOwner =
+        info.ownerDimsCount == 1 && info.ownerDims[0] == 0;
+    bool isNonLeadingOrMultiDim =
+        info.ownerDimsCount > 1 || info.ownerDims[0] > 0;
+
+    if (info.accessMode == ArtsMode::in) {
+      if (!isLeadingOwner || !info.canBlock)
+        return false;
+      sawLeadingReader = true;
+      continue;
+    }
+
+    if (!isNonLeadingOrMultiDim)
+      return false;
+    sawNonLeadingWriter = true;
+  }
+
+  return sawNonLeadingWriter && sawLeadingReader;
+}
+
 /// Detect conflicting owner dimensions across different EDT families.
 /// When different phases access the same DB with different owner_dims (e.g.,
 /// row access vs column access), block partitioning hurts both phases.
@@ -297,8 +334,21 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   ///
   /// Guard: Preserve Jacobi-style stencil layouts, which legitimately carry
   /// block ownership across alternating buffer phases.
+  bool useMixedOrientationBlockND =
+      shouldUseMixedOrientationBlockNDForReadOnlyAfterInit(ctx);
   if (hasConflictingOwnerDims(ctx) && isSingleNode &&
-      hasNonLeadingOrMultiDimOwnerWriterContract(ctx) && !hasJacobiStencil) {
+      hasNonLeadingOrMultiDimOwnerWriterContract(ctx) &&
+      useMixedOrientationBlockND) {
+    ARTS_DEBUG("H1.C3a redirected: mixed-orientation read_only_after_init "
+               "input uses 2-D block layout");
+    return PartitioningDecision::blockND(
+        ctx, /*outerRank=*/2,
+        "H1.B0: Mixed-orientation read_only_after_init input uses 2-D "
+        "block layout");
+  }
+  if (hasConflictingOwnerDims(ctx) && isSingleNode &&
+      hasNonLeadingOrMultiDimOwnerWriterContract(ctx) && !hasJacobiStencil &&
+      !useMixedOrientationBlockND) {
     ARTS_DEBUG("H1.C3a applied: Conflicting owner_dims "
                "with non-leading/N-D contract -> coarse");
     return PartitioningDecision::coarse(
