@@ -5,6 +5,8 @@
 ///==========================================================================///
 
 #include "arts/passes/opt/db/BlockLoopStripMiningInternal.h"
+#include "arts/utils/DbUtils.h"
+#include "arts/utils/OperationAttributes.h"
 
 ARTS_DEBUG_SETUP(block_loop_strip_mining);
 
@@ -40,6 +42,140 @@ bool getConstIndex(Value v, int64_t &out) {
     return true;
   }
   return false;
+}
+
+static std::optional<int64_t> tryFoldKnownRuntimeShape(Value v,
+                                                       unsigned depth = 0) {
+  if (!v || depth > 32)
+    return std::nullopt;
+
+  v = ValueAnalysis::stripNumericCasts(v);
+  if (auto folded = ValueAnalysis::tryFoldConstantIndex(v))
+    return folded;
+
+  if (auto query = v.getDefiningOp<RuntimeQueryOp>()) {
+    ModuleOp module = query->getParentOfType<ModuleOp>();
+    if (!module)
+      return std::nullopt;
+    switch (query.getKind()) {
+    case RuntimeQueryKind::totalWorkers:
+      return getRuntimeTotalWorkers(module);
+    case RuntimeQueryKind::totalNodes:
+      return getRuntimeTotalNodes(module);
+    default:
+      return std::nullopt;
+    }
+  }
+
+  if (auto cast = v.getDefiningOp<arith::IndexCastOp>())
+    return tryFoldKnownRuntimeShape(cast.getIn(), depth + 1);
+  if (auto cast = v.getDefiningOp<arith::IndexCastUIOp>())
+    return tryFoldKnownRuntimeShape(cast.getIn(), depth + 1);
+  if (auto ext = v.getDefiningOp<arith::ExtSIOp>())
+    return tryFoldKnownRuntimeShape(ext.getIn(), depth + 1);
+  if (auto ext = v.getDefiningOp<arith::ExtUIOp>())
+    return tryFoldKnownRuntimeShape(ext.getIn(), depth + 1);
+  if (auto trunc = v.getDefiningOp<arith::TruncIOp>())
+    return tryFoldKnownRuntimeShape(trunc.getIn(), depth + 1);
+
+  auto foldBinary = [&](Value lhs, Value rhs,
+                        auto folder) -> std::optional<int64_t> {
+    auto lhsFolded = tryFoldKnownRuntimeShape(lhs, depth + 1);
+    auto rhsFolded = tryFoldKnownRuntimeShape(rhs, depth + 1);
+    if (!lhsFolded || !rhsFolded)
+      return std::nullopt;
+    return folder(*lhsFolded, *rhsFolded);
+  };
+
+  if (auto add = v.getDefiningOp<arith::AddIOp>())
+    return foldBinary(add.getLhs(), add.getRhs(),
+                      [](int64_t lhs, int64_t rhs) { return lhs + rhs; });
+
+  if (auto sub = v.getDefiningOp<arith::SubIOp>())
+    return foldBinary(sub.getLhs(), sub.getRhs(),
+                      [](int64_t lhs, int64_t rhs) { return lhs - rhs; });
+
+  if (auto mul = v.getDefiningOp<arith::MulIOp>())
+    return foldBinary(mul.getLhs(), mul.getRhs(),
+                      [](int64_t lhs, int64_t rhs) { return lhs * rhs; });
+
+  if (auto div = v.getDefiningOp<arith::DivUIOp>()) {
+    return foldBinary(div.getLhs(), div.getRhs(),
+                      [](int64_t lhs, int64_t rhs) -> std::optional<int64_t> {
+                        if (rhs == 0)
+                          return std::nullopt;
+                        uint64_t ulhs = static_cast<uint64_t>(lhs);
+                        uint64_t urhs = static_cast<uint64_t>(rhs);
+                        return static_cast<int64_t>(ulhs / urhs);
+                      });
+  }
+
+  if (auto div = v.getDefiningOp<arith::DivSIOp>()) {
+    return foldBinary(div.getLhs(), div.getRhs(),
+                      [](int64_t lhs, int64_t rhs) -> std::optional<int64_t> {
+                        if (rhs == 0)
+                          return std::nullopt;
+                        return lhs / rhs;
+                      });
+  }
+
+  if (auto max = v.getDefiningOp<arith::MaxUIOp>()) {
+    return foldBinary(max.getLhs(), max.getRhs(),
+                      [](int64_t lhs, int64_t rhs) -> int64_t {
+                        return std::max<uint64_t>(static_cast<uint64_t>(lhs),
+                                                  static_cast<uint64_t>(rhs));
+                      });
+  }
+
+  if (auto min = v.getDefiningOp<arith::MinUIOp>()) {
+    return foldBinary(min.getLhs(), min.getRhs(),
+                      [](int64_t lhs, int64_t rhs) -> int64_t {
+                        return std::min<uint64_t>(static_cast<uint64_t>(lhs),
+                                                  static_cast<uint64_t>(rhs));
+                      });
+  }
+
+  if (auto select = v.getDefiningOp<arith::SelectOp>()) {
+    auto cond = tryFoldKnownRuntimeShape(select.getCondition(), depth + 1);
+    if (cond) {
+      return tryFoldKnownRuntimeShape((*cond != 0) ? select.getTrueValue()
+                                                   : select.getFalseValue(),
+                                      depth + 1);
+    }
+
+    auto trueValue =
+        tryFoldKnownRuntimeShape(select.getTrueValue(), depth + 1);
+    auto falseValue =
+        tryFoldKnownRuntimeShape(select.getFalseValue(), depth + 1);
+    if (trueValue && falseValue && *trueValue == *falseValue)
+      return trueValue;
+  }
+
+  return std::nullopt;
+}
+
+static std::optional<int64_t> resolveBlockSizeHint(Value value) {
+  if (!value)
+    return std::nullopt;
+  if (auto folded = tryFoldKnownRuntimeShape(value))
+    return folded;
+  return extractBlockSizeFromHint(value);
+}
+
+static bool sameBlockSizeFamily(Value lhsValue,
+                                std::optional<int64_t> lhsConst,
+                                Value rhsValue,
+                                std::optional<int64_t> rhsConst) {
+  lhsValue = ValueAnalysis::stripNumericCasts(lhsValue);
+  rhsValue = ValueAnalysis::stripNumericCasts(rhsValue);
+
+  if (ValueAnalysis::sameValue(lhsValue, rhsValue) ||
+      ValueAnalysis::areValuesEquivalent(lhsValue, rhsValue))
+    return true;
+
+  auto lhsResolved = lhsConst ? lhsConst : resolveBlockSizeHint(lhsValue);
+  auto rhsResolved = rhsConst ? rhsConst : resolveBlockSizeHint(rhsValue);
+  return lhsResolved && rhsResolved && *lhsResolved == *rhsResolved;
 }
 
 std::optional<Value> extractInvariantOffset(Value lhs, Value iv) {
@@ -181,9 +317,9 @@ NeighborhoodLoopInfo &getOrCreateNeighborhoodFamily(
     SmallVectorImpl<NeighborhoodLoopInfo> &families, Value blockSizeVal,
     std::optional<int64_t> blockSizeConst, Value invariantBase) {
   for (NeighborhoodLoopInfo &family : families) {
-    bool sameBlockSize =
-        ValueAnalysis::sameValue(family.blockSizeVal, blockSizeVal) ||
-        ValueAnalysis::areValuesEquivalent(family.blockSizeVal, blockSizeVal);
+    bool sameBlockSize = sameBlockSizeFamily(
+        family.blockSizeVal, family.blockSizeConst, blockSizeVal,
+        blockSizeConst);
     bool sameBase =
         (!family.invariantBase && !invariantBase) ||
         (family.invariantBase && invariantBase &&
@@ -278,8 +414,9 @@ bool recordRemPattern(Value lhs, Value rhs, Value remResult, Value iv,
     return false;
   if (!info.blockSizeVal) {
     info.blockSizeVal = normalizedRhs;
-    info.blockSizeConst = rhsConst;
-  } else if (info.blockSizeVal != normalizedRhs) {
+    info.blockSizeConst = rhsConst ? rhsConst : resolveBlockSizeHint(normalizedRhs);
+  } else if (!sameBlockSizeFamily(info.blockSizeVal, info.blockSizeConst,
+                                  normalizedRhs, rhsConst)) {
     if (!info.blockSizeConst || !rhsConst || *info.blockSizeConst != *rhsConst)
       return false;
   }
@@ -794,8 +931,9 @@ std::optional<LoopBlockInfo> analyzeLegacyLoop(scf::ForOp loop,
         return;
       if (!info.blockSizeVal) {
         info.blockSizeVal = rhs;
-        info.blockSizeConst = rhsConst;
-      } else if (info.blockSizeVal != rhs) {
+        info.blockSizeConst = rhsConst ? rhsConst : resolveBlockSizeHint(rhs);
+      } else if (!sameBlockSizeFamily(info.blockSizeVal, info.blockSizeConst,
+                                      rhs, rhsConst)) {
         if (!info.blockSizeConst || !rhsConst ||
             *info.blockSizeConst != *rhsConst)
           invalid = true;

@@ -142,6 +142,35 @@ static std::optional<int64_t> tryFoldTypeSizeBytes(polygeist::TypeSizeOp tsOp) {
   return std::nullopt;
 }
 
+static std::optional<int64_t> tryFoldScalarMemrefLoad(memref::LoadOp load,
+                                                      unsigned depth) {
+  if (!load || !load.getIndices().empty() || depth > 32)
+    return std::nullopt;
+
+  Value memref = ValueAnalysis::stripMemrefViewOps(load.getMemRef());
+  if (!memref)
+    return std::nullopt;
+
+  Operation *memrefDef = memref.getDefiningOp();
+  if (!isa_and_nonnull<memref::AllocOp, memref::AllocaOp>(memrefDef))
+    return std::nullopt;
+
+  for (Operation *cursor = load->getPrevNode(); cursor;
+       cursor = cursor->getPrevNode()) {
+    auto store = dyn_cast<memref::StoreOp>(cursor);
+    if (!store || !store.getIndices().empty())
+      continue;
+
+    Value storedMemref = ValueAnalysis::stripMemrefViewOps(store.getMemRef());
+    if (storedMemref != memref)
+      continue;
+
+    return ValueAnalysis::tryFoldConstantIndex(store.getValue(), depth + 1);
+  }
+
+  return std::nullopt;
+}
+
 static std::optional<int64_t> tryFoldCmpResult(arith::CmpIOp cmp,
                                                unsigned depth) {
   auto lhs = ValueAnalysis::tryFoldConstantIndex(cmp.getLhs(), depth + 1);
@@ -353,6 +382,10 @@ std::optional<int64_t> ValueAnalysis::tryFoldConstantIndex(Value v,
 
   if (auto typeSizeOp = v.getDefiningOp<polygeist::TypeSizeOp>())
     return tryFoldTypeSizeBytes(typeSizeOp);
+
+  if (auto load = v.getDefiningOp<memref::LoadOp>())
+    if (auto folded = tryFoldScalarMemrefLoad(load, depth + 1))
+      return folded;
 
   if (auto cast = v.getDefiningOp<arith::IndexCastOp>()) {
     return tryFoldConstantIndex(cast.getIn(), depth + 1);

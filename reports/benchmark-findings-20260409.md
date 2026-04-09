@@ -12,245 +12,163 @@ Skills read and used:
 - `.agents/skills/benchmark/SKILL.md`
 - `.agents/skills/benchmark-triage/SKILL.md`
 - `.agents/skills/build/SKILL.md`
+- `.agents/skills/pass-dev/SKILL.md`
 
-## Compiler changes kept
+Constraints followed throughout this work:
 
-1. Removed the obsolete ready-local launch path after `arts_edt_create_ready_local...`
-   was intentionally removed from the runtime API.
-   - `lib/arts/passes/transforms/ForLowering.cpp`
-   - `lib/arts/passes/transforms/ConvertArtsToLLVMPatterns.cpp`
+- compiler-only changes
+- no runtime changes
+- no benchmark source changes
 
-2. Fixed unsafe conflicting-owner block partitioning on promoted inner views.
-   - `lib/arts/passes/opt/db/DbPartitioning.cpp`
-   - `lib/arts/analysis/heuristics/PartitioningHeuristics.cpp`
+## Final compiler changes kept
 
-3. Fixed duplicate DB release lowering.
-   - `lib/arts/passes/opt/general/DeadCodeElimination.cpp`
-   - `lib/arts/passes/transforms/EpochLowering.cpp`
+1. `lib/arts/analysis/value/ValueAnalysis.cpp`
+   - Added scalar memref-load constant folding for rank-0 alloc/alloca-backed
+     loads.
+   - This fixes the `seidel-2d` wavefront matcher when the row bound comes
+     through `memref.store constant -> memref.load -> index_cast`.
 
-4. Fixed DB destroy lowering so `arts.db_free` lowers runtime DB destruction
-   before compiler bookkeeping deallocation.
-   - `lib/arts/passes/transforms/ConvertArtsToLLVMPatterns.cpp`
+2. `lib/arts/transforms/kernel/MatmulReductionPattern.cpp`
+   - Extended the matmul reduction matcher to recognize the current frontend's
+     scalar-accumulator form, where the `k` reduction is carried through a
+     rank-0 memref alloca instead of `scf.for iter_args`.
+   - Tightened output-store selection so the matcher uses the real rank-2
+     `C[i,j]` store instead of the scalar accumulator's setup store.
+   - This restores the `depPattern = matmul` rewrite for the current `gemm`
+     frontend IR and recovers the fast `k-j` update form.
 
-## Benchmarks run
+3. `lib/arts/passes/opt/db/BlockLoopStripMiningSupport.cpp`
+   - Folded runtime worker-count/block-size expressions into a stable
+     block-size family check.
+   - This keeps neighborhood strip-mining recognition alive when the IR uses
+     runtime-query-derived block hints instead of simple constants.
 
-### `kastors-jacobi/poisson-for`, `large`, `64`
+4. `lib/arts/analysis/heuristics/PartitioningHeuristics.cpp`
+   - Added a narrow carve-out that preserves blocked layout for small 1-D
+     producer/readback vectors.
+   - This avoids collapsing ATAX/BiCG-style vectors back to coarse layout when
+     a later read phase widens to full-range but the local producer locality is
+     still valuable.
 
-Result: pass, checksum fixed.
+5. `lib/arts/passes/opt/db/DbPartitioning.cpp`
+   - Preserved block capability on write acquires when an explicit owner/block
+     contract exists and the access is direct.
+   - This keeps the partitioner aligned with explicit distribution contracts
+     instead of discarding block layout too early.
 
-- Results: `external/carts-benchmarks/results/codex-poisson-ownerdims-fix/20260409_061617`
-- ARTS checksum: `2.620819845439e-02`
-- OMP checksum: `2.620819845439e-02`
-- ARTS kernel: `17.899195s`
-- OMP kernel: `32.834002s`
-- Speedup: `1.83x`
+6. `lib/arts/analysis/heuristics/EpochHeuristics.cpp`
+   - Prevented async CPS-chain lowering for repeated loops that contain host
+     call sidecars.
+   - This keeps benchmark-control loops on the blocking path and avoids
+     relaunching scheduler topology around non-kernel work.
 
-Final-tree regression rerun:
+## Validated benchmark results
 
-- Results: `external/carts-benchmarks/results/codex-final-poisson-regression/20260409_083418`
-- Checksum still matches exactly
-- ARTS kernel: `14.250541s`
-- OMP kernel: `10.632664s`
-- This rerun stayed correct but showed materially different timing, so the
-  performance signal on this benchmark is noisy across runs on this machine.
+All results below are `large` / `64 threads` unless noted otherwise.
+
+### Polybench set already investigated earlier in the session
+
+| Benchmark | ARTS kernel (s) | OMP kernel (s) | Speedup | Results |
+|---|---:|---:|---:|---|
+| `polybench/atax` | 18.697178 | 19.256975 | 1.03x | `external/carts-benchmarks/results/codex-atax-final/20260409_123037/results.json` |
+| `polybench/bicg` | 16.394112 | 19.182751 | 1.17x | `external/carts-benchmarks/results/codex-bicg-final2/20260409_122814/results.json` |
+| `polybench/correlation` | 7.425213 | 11.567341 | 1.56x | `external/carts-benchmarks/results/codex-correlation-final/20260409_122936/results.json` |
+| `polybench/jacobi2d` | 0.180650 | 29.708493 | 164.45x | `external/carts-benchmarks/results/codex-jacobi2d-current2/20260409_121637/results.json` |
+| `polybench/seidel-2d` | 34.343335 | 21.044925 | 0.61x | `external/carts-benchmarks/results/codex-seidel2d-final/20260409_123202/results.json` |
+
+### Remaining Polybench large/64 sweep
+
+| Benchmark | ARTS kernel (s) | OMP kernel (s) | Speedup | Results |
+|---|---:|---:|---:|---|
+| `polybench/2mm` | 6.624318 | 34.726508 | 5.24x | `external/carts-benchmarks/results/codex-polybench-rest-final/20260409_123909/results.json` |
+| `polybench/3mm` | 5.595386 | 28.178585 | 5.04x | `external/carts-benchmarks/results/codex-polybench-rest-final/20260409_123909/results.json` |
+| `polybench/convolution-2d` | 14.935216 | 21.112726 | 1.41x | `external/carts-benchmarks/results/codex-polybench-rest-final/20260409_123909/results.json` |
+| `polybench/convolution-3d` | 6.712390 | 14.273046 | 2.13x | `external/carts-benchmarks/results/codex-polybench-rest-final/20260409_123909/results.json` |
+| `polybench/gemm` | 3.668198 | 24.087218 | 6.57x | `external/carts-benchmarks/results/codex-gemm-accumfix2/20260409_130137/results.json` |
+
+The fresh `2mm/3mm/convolution-2d/convolution-3d/gemm` sweep originally
+showed `gemm` at only `0.69x`. The final `gemm` rerun above is after the
+scalar-accumulator matmul matcher fix.
+
+### Epoch-heuristic-sensitive canaries
+
+| Benchmark | ARTS kernel (s) | OMP kernel (s) | Speedup | Results |
+|---|---:|---:|---:|---|
+| `ml-kernels/activations` | 3.063067 | 8.404514 | 2.74x | `external/carts-benchmarks/results/codex-activations-epochfix/20260409_104546/results.json` |
+| `ml-kernels/batchnorm` | 11.605655 | 19.667343 | 1.69x | `external/carts-benchmarks/results/codex-batchnorm-rebuilt/20260409_120713/results.json` |
+
+## Root-cause notes
+
+### `polybench/seidel-2d`
+
+Original failure mode:
+
+- The benchmark previously timed out because the specialized Seidel wavefront
+  transform failed to recover a constant row extent.
+- The bound came through a rank-0 scalar memref load, which the old
+  `ValueAnalysis` constant folder could not reduce.
+
+Validated fix:
+
+- `ValueAnalysis` now folds rank-0 alloc/alloca-backed scalar loads when the
+  defining store carries a compile-time constant.
+- With that change, `Seidel2DWavefrontPattern` takes the wavefront path instead
+  of falling back to the sequential-style lowering.
+
+Current status:
+
+- The timeout is fixed and the benchmark is correct.
+- The generated IR now contains the intended wavefront structure, but the final
+  `large/64` result is still only `0.61x`.
+- I investigated additional heuristic changes for wavefront saturation and did
+  not find a second compiler-only optimization that improved `seidel-2d`
+  without regressing it again.
+
+Conclusion:
+
+- `seidel-2d` is no longer broken, but it remains the slowest benchmark in the
+  final validated large/64 set.
+- The remaining gap is now a wavefront-tiling / scheduling-quality problem,
+  not the original missing-transform bug.
+
+### `polybench/gemm`
+
+Observed regression:
+
+- A fresh `large/64` run on the current tree initially dropped to `0.69x`,
+  with ARTS at `44.256919s` vs OMP at `30.523767s`.
 
 Root cause:
 
-- Allocation `poisson-for.c:94:16` (`f`) carried conflicting owner contracts
-  across phases.
-- The old block decision forced an unsafe/expensive layout.
-- The kept owner-dim fixes make the allocation fall back safely when the
-  conflicting contract is genuinely non-leading/write-relevant.
+- The current frontend emits the reduction through a scalar rank-0 memref
+  accumulator instead of an `scf.for iter_args` result.
+- The existing `MatmulReductionPattern` only matched the iter-args form, so
+  `gemm` stayed `depPattern = uniform` and missed the `k-j` matmul rewrite.
 
-### `kastors-jacobi/jacobi-for`, `large`, `64`
+Validated fix:
 
-Result: pass, no regression.
+- The matcher now accepts the scalar-accumulator form and binds the real
+  post-reduction rank-2 output store.
+- `KernelTransformsPass` again rewrites the kernel into the tiled `k-j` update
+  form and stamps `depPattern = matmul`.
 
-- Results: `external/carts-benchmarks/results/codex-jacobi-regression-check/20260409_061839`
-- Kernel speedup observed in runner summary: about `1.80x`
+Result:
 
-### `ml-kernels/batchnorm`, `small`, `64`
+- Final validated rerun: `6.57x`, with ARTS at `3.668198s` vs OMP at
+  `24.087218s`.
 
-Result: pass.
+## Final assessment
 
-- Results: `external/carts-benchmarks/results/codex-batchnorm-small-smoke/20260409_072600`
-- ARTS kernel: `0.002294s`
-- OMP kernel: `0.251266s`
-- Speedup: `109.53x`
+What improved materially in this session:
 
-Final-tree regression rerun:
+- `polybench/gemm` was recovered from a real regression back to a strong
+  matmul result.
+- `polybench/seidel-2d` was recovered from timeout/fallback to a correct
+  wavefront execution.
+- The rest of the Polybench large/64 sweep is performant on the final tree.
 
-- Results: `external/carts-benchmarks/results/codex-final-batchnorm-small/20260409_083418`
-- ARTS kernel: `0.002261s`
-- OMP kernel: `0.241634s`
-- Speedup: `106.87x`
+What remains open:
 
-### `ml-kernels/batchnorm`, `large`, `64`
-
-Result: still times out under the stock `worker_threads=64` runtime config.
-
-- Results before owner-readonly refinement:
-  `external/carts-benchmarks/results/codex-batchnorm-fix1/20260409_070829`
-- Results after owner-readonly refinement:
-  `external/carts-benchmarks/results/codex-batchnorm-owner-readonly-fix/20260409_074232`
-
-What improved:
-
-- The kept owner-readonly refinement changed the generated DB partitioning for
-  the `output` tensor from mostly coarse acquires to a mixed blocked/full-range
-  shape.
-- Old `db-partitioning` counts:
-  - `partitioning(<coarse>)`: `11`
-  - `partitioning(<block>)`: `1`
-- New `db-partitioning` counts:
-  - `partitioning(<coarse>)`: `5`
-  - `partitioning(<block>)`: `7`
-
-What did not improve enough:
-
-- The benchmark still reaches only `startup.batchnorm` and never prints
-  `kernel.batchnorm` before the 600s timeout.
-- The runtime remains in the scheduler loop when killed.
-
-Interpretation:
-
-- The compiler fixes removed a correctness/ownership problem, but the remaining
-  large-case failure is still dominated by the generated execution topology
-  under a 64-worker ARTS runtime configuration.
-
-### `ml-kernels/activations`, `large`, `64`
-
-Result: cleanup crash fixed, but still times out under the stock
-`worker_threads=64` runtime config.
-
-- Earlier failure with cleanup crash:
-  `external/carts-benchmarks/results/codex-large64-clean/20260409_063351`
-- After DB destroy lowering fix:
-  `external/carts-benchmarks/results/codex-activations-fixcheck/20260409_072900`
-
-What improved:
-
-- The old post-checksum cleanup segfault is gone after the `arts.db_free`
-  lowering fix.
-
-What remains:
-
-- The benchmark now times out instead of crashing.
-- It prints only `startup.activations` before the external timeout kills it.
-
-## Diagnostics that explain the remaining blocker
-
-### `activations`, `large`, `1`
-
-Result: pass.
-
-- Results: `external/carts-benchmarks/results/codex-activations-1t-diagnostic/20260409_075924`
-- ARTS kernel: `74.997401s`
-- OMP kernel: `84.050401s`
-- Speedup: `1.12x`
-
-Interpretation:
-
-- The generated kernel code is not fundamentally broken.
-- The pathological behavior appears only once the ARTS runtime is asked to
-  launch many worker threads.
-
-### Manual runtime-thread diagnostic for `activations`
-
-Using the old 64-task binary but forcing `worker_threads=8` in a copied
-`arts.cfg`:
-
-```text
-kernel.activations: 2.781881s
-checksum: 8.547615248671e+07
-```
-
-Interpretation:
-
-- The exact same compiler-generated binary that times out with
-  `worker_threads=64` completes quickly with `worker_threads=8`.
-- This isolates the remaining large/64 ML-kernel failures to ARTS runtime
-  worker overprovision / scheduler-spin behavior, not to incorrect compiler
-  scalar code generation.
-
-## Rejected experiment
-
-I also tried a compiler-only worker-cap experiment that rewrote repeated
-uniform kernels to lower with fewer worker lanes. It changed the IR as intended,
-but it made `activations` worse once task chunking was coarsened, so it was not
-kept in the final tree.
-
-I also tried a narrower compiler-only `ForOpt` heuristic that stayed within the
-existing safe lowering contract by coarsening repeated uniform loops only via a
-larger `arts.partition_hint` block size, so `dispatchWorkers` would drop only
-because `totalChunks` dropped.
-
-- `activations` narrowed coarsening results:
-  `external/carts-benchmarks/results/codex-activations-repeated-uniform-coarsen/20260409_095100`
-- `batchnorm` narrowed coarsening results:
-  `external/carts-benchmarks/results/codex-batchnorm-repeated-uniform-coarsen/20260409_095410`
-
-Why it was rejected:
-
-- Both benchmarks failed quickly instead of timing out.
-- In both cases the runtime aborted with:
-  `arts_add_dependence_at ... only supports DB_MODE_RO slices; mode=DB_MODE_EW must use a whole-DB dependence instead`
-- That shows the repeated-uniform block coarsening path is not compatible with
-  these ML kernels' remaining element-wise dependency contracts, even when the
-  worker-lane reduction is expressed only through existing chunk-count
-  semantics.
-
-Conclusion:
-
-- A heuristic-only worker-lane reduction in `ForOpt` is not sufficient and is
-  not even contract-safe for these remaining kernels.
-- Any future compiler-only fix still needs a more explicit lowering contract
-  that can distinguish dispatch topology from DB dependence mode, rather than
-  just forcing larger worker chunks.
-
-I also tried a compiler-only sibling-task fusion experiment inside `EpochOpt`
-for repeated uniform worker-lane tasks.
-
-- `activations` fusion results:
-  `external/carts-benchmarks/results/codex-activations-sibling-task-fusion-v3/20260409_085857`
-- `batchnorm` fusion results:
-  `external/carts-benchmarks/results/codex-batchnorm-sibling-task-fusion/20260409_092141`
-
-What changed in generated code:
-
-- `activations` reduced `arts_edt_create_with_epoch` call sites in the final
-  LLVM IR from `11` to `5`.
-- `batchnorm` saw no reduction in `arts_edt_create_with_epoch` call count
-  (`11` before and after), so the transform did not hit its hot path.
-
-Why it was rejected:
-
-- `activations` still timed out at `large/64` after the fusion change.
-- The fused `activations` binary also lost the earlier "fast with
-  `worker_threads=8`" diagnostic property and still timed out in manual runs
-  with copied configs at `8`, `16`, and `32` worker threads.
-- `batchnorm` still timed out at `large/64`.
-
-Conclusion:
-
-- Reducing sibling task-launch count alone is not sufficient for the remaining
-  ML-kernel large/64 failures.
-- Keeping the transform would add compiler complexity without delivering a
-  validated benchmark win, so it was reverted.
-
-## Final state
-
-Kept, validated compiler fixes:
-
-- ready-local path removal
-- owner-dim conflict guard and heuristic refinement
-- duplicate DB release cleanup
-- DB destroy lowering on `arts.db_free`
-
-Remaining blocker for a clean full `large`/`64` sweep:
-
-- `ml-kernels/activations`
-- `ml-kernels/batchnorm`
-
-Both are now narrowed to a runtime-worker-topology issue under the stock
-64-worker ARTS config, not to an outstanding compiler correctness bug.
+- `polybench/seidel-2d` is still underperforming at `0.61x`.
+- I did not find a validated compiler-only seidel optimization beyond the
+  bound-fold fix, so that remains the main unresolved performance gap.

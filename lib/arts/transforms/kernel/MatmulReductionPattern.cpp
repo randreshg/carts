@@ -264,24 +264,113 @@ static bool matchMatmulDotInArtsFor(ForOp artsFor, ReductionDotMatch &out) {
   if (!jLoop)
     return false;
 
+  auto matchScalarAccumulatorReduction = [&](scf::ForOp reductionLoop,
+                                            Value &sumVal,
+                                            Type &elemTy) -> bool {
+    Value accMemref;
+    bool sawReductionLoop = false;
+    memref::LoadOp finalLoad = nullptr;
+
+    for (Operation &op : jLoop.getBody()->without_terminator()) {
+      if (&op == reductionLoop.getOperation()) {
+        sawReductionLoop = true;
+        continue;
+      }
+
+      if (!sawReductionLoop) {
+        auto store = dyn_cast<memref::StoreOp>(&op);
+        if (!store || !store.getIndices().empty())
+          continue;
+
+        Value candidateMemref =
+            ValueAnalysis::stripMemrefViewOps(store.getMemRef());
+        if (!candidateMemref)
+          continue;
+        if (!isa_and_nonnull<memref::AllocOp, memref::AllocaOp>(
+                candidateMemref.getDefiningOp()))
+          continue;
+        accMemref = candidateMemref;
+        continue;
+      }
+
+      auto load = dyn_cast<memref::LoadOp>(&op);
+      if (!load || !load.getIndices().empty())
+        continue;
+
+      Value loadedMemref = ValueAnalysis::stripMemrefViewOps(load.getMemRef());
+      if (loadedMemref != accMemref)
+        continue;
+
+      finalLoad = load;
+      break;
+    }
+
+    if (!accMemref || !finalLoad)
+      return false;
+
+    memref::LoadOp loopLoad = nullptr;
+    memref::StoreOp loopStore = nullptr;
+    reductionLoop.getBody()->walk([&](Operation *nestedOp) {
+      if (nestedOp == reductionLoop.getOperation())
+        return;
+
+      if (!loopLoad) {
+        if (auto load = dyn_cast<memref::LoadOp>(nestedOp);
+            load && load.getIndices().empty() &&
+            ValueAnalysis::stripMemrefViewOps(load.getMemRef()) == accMemref) {
+          loopLoad = load;
+        }
+      }
+
+      if (!loopStore) {
+        if (auto store = dyn_cast<memref::StoreOp>(nestedOp);
+            store && store.getIndices().empty() &&
+            ValueAnalysis::stripMemrefViewOps(store.getMemRef()) == accMemref) {
+          loopStore = store;
+        }
+      }
+    });
+
+    if (!loopLoad || !loopStore)
+      return false;
+
+    Value addLhs, addRhs;
+    if (!matchAddOp(loopStore.getValueToStore(), addLhs, addRhs))
+      return false;
+
+    addLhs = ValueAnalysis::stripNumericCasts(addLhs);
+    addRhs = ValueAnalysis::stripNumericCasts(addRhs);
+    if (addLhs != loopLoad.getResult() && addRhs != loopLoad.getResult())
+      return false;
+
+    sumVal = finalLoad.getResult();
+    elemTy = sumVal.getType();
+    return true;
+  };
+
   scf::ForOp kLoop = nullptr;
+  Value sumVal;
+  Type elemTy;
   for (Operation &op : jLoop.getBody()->without_terminator()) {
     auto forOp = dyn_cast<scf::ForOp>(&op);
     if (!forOp)
       continue;
-    if (forOp.getInitArgs().size() == 1) {
+
+    if (forOp.getInitArgs().size() == 1 && forOp.getNumResults() == 1) {
+      kLoop = forOp;
+      sumVal = forOp.getResult(0);
+      elemTy = sumVal.getType();
+      break;
+    }
+
+    if (forOp.getInitArgs().empty() && forOp.getNumResults() == 0 &&
+        matchScalarAccumulatorReduction(forOp, sumVal, elemTy)) {
       kLoop = forOp;
       break;
     }
   }
-  if (!kLoop)
+  if (!kLoop || !sumVal || !elemTy)
     return false;
-
-  if (kLoop.getNumResults() != 1)
-    return false;
-
-  Value sumVal = kLoop.getResult(0);
-  Type elemTy = sumVal.getType();
 
   ReductionKind kind = ReductionKind::Unknown;
   if (elemTy.isF32() || elemTy.isF64())
@@ -292,10 +381,20 @@ static bool matchMatmulDotInArtsFor(ForOp artsFor, ReductionDotMatch &out) {
     return false;
 
   memref::StoreOp storeC = nullptr;
+  bool sawKLoop = false;
   for (Operation &op : jLoop.getBody()->without_terminator()) {
-    if (&op == kLoop.getOperation())
+    if (&op == kLoop.getOperation()) {
+      sawKLoop = true;
       continue;
+    }
     if (auto st = dyn_cast<memref::StoreOp>(&op)) {
+      if (!sawKLoop)
+        continue;
+      auto memrefType = dyn_cast<MemRefType>(st.getMemref().getType());
+      if (!memrefType || memrefType.getRank() != 2 || st.getIndices().size() != 2)
+        continue;
+      if (st.getIndices()[1] != jLoop.getInductionVar())
+        continue;
       storeC = st;
       break;
     }
