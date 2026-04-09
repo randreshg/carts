@@ -1,7 +1,10 @@
 # MLIR Infrastructure Integration
 
-All four MLIR infrastructure dialects are **core to SDE from Phase 2**,
-not a future roadmap. Each has a specific role in the pipeline.
+All four MLIR infrastructure dialects are **native to SDE from Phase 2**,
+not a future roadmap. SDE ops are type-polymorphic — they accept tensor,
+memref, and scalar operands. Linalg, tensor, and bufferization aren't
+separate analysis tools; they compose directly with SDE CU ops via
+`DestinationStyleOpInterface` (same pattern as IREE's Flow dialect).
 
 ## Linalg: Core Structured Computation (Stages 3.6-3.9)
 
@@ -146,10 +149,11 @@ Replaces current `LoopVectorizationHints` approach (LLVM metadata).
 
 | Interface | On Which Ops | Purpose |
 |---|---|---|
+| `DestinationStyleOpInterface` | `sde.cu_region`, `sde.cu_task`, `sde.cu_reduce` | ins/outs notation on SDE CU ops themselves (not just linalg inside bodies); enables tile-and-fuse composition; outs are bufferization destinations |
 | `MemoryEffectsOpInterface` | All CU/SU/MU ops | Per-op effect declarations |
-| `LoopLikeOpInterface` | `sde.su_iterate` | iter_args state (init/yield/result) |
+| `LoopLikeOpInterface` | `sde.su_iterate` | iter_args state flow (tensor or memref values) |
 | `RecursiveMemoryEffects` | `sde.cu_region`, `sde.cu_task` | Propagate body effects |
-| `DestinationStyleOpInterface` | linalg ops inside CU bodies | ins/outs tracking |
+| `RegionBranchOpInterface` | `sde.cu_region`, `sde.cu_task`, `sde.su_iterate` | Control flow into/out of SDE regions |
 
 ---
 
