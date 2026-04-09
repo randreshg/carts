@@ -37,13 +37,51 @@ static bool hasJacobiLikeStencilContract(const PartitioningContext &ctx) {
 static bool
 hasNonLeadingOrMultiDimOwnerContract(const PartitioningContext &ctx) {
   return llvm::any_of(ctx.acquires, [](const AcquireInfo &info) {
-    if (!info.hasDistributionContract || !info.canBlock ||
-        info.ownerDimsCount == 0)
+    /// Ownership conflicts remain relevant even if DbPartitioning already
+    /// disabled block capability on the specific acquire. A dropped block vote
+    /// still tells us that some phase expects a non-leading/N-D owner layout
+    /// the allocation cannot safely satisfy together with other phases.
+    if (!info.hasDistributionContract || info.ownerDimsCount == 0)
       return false;
     if (info.ownerDimsCount > 1)
       return true;
     return info.ownerDims[0] > 0;
   });
+}
+
+static bool
+hasNonLeadingOrMultiDimOwnerWriterContract(const PartitioningContext &ctx) {
+  return llvm::any_of(ctx.acquires, [](const AcquireInfo &info) {
+    if (!info.hasDistributionContract || info.ownerDimsCount == 0)
+      return false;
+    if (info.accessMode == ArtsMode::in)
+      return false;
+    if (info.ownerDimsCount > 1)
+      return true;
+    return info.ownerDims[0] > 0;
+  });
+}
+
+static bool
+hasReadOnlyNonLeadingOrMultiDimOwnerConflict(const PartitioningContext &ctx) {
+  bool sawReadOnlyNonLeadingContract = false;
+
+  for (const AcquireInfo &info : ctx.acquires) {
+    if (!info.hasDistributionContract || info.ownerDimsCount == 0)
+      continue;
+
+    bool isNonLeadingOrMultiDim =
+        info.ownerDimsCount > 1 || info.ownerDims[0] > 0;
+    if (!isNonLeadingOrMultiDim)
+      continue;
+
+    if (info.accessMode != ArtsMode::in)
+      return false;
+
+    sawReadOnlyNonLeadingContract = true;
+  }
+
+  return sawReadOnlyNonLeadingContract;
 }
 
 /// Detect conflicting owner dimensions across different EDT families.
@@ -206,22 +244,23 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// on a single node once every block-capable acquire widened to full-range;
   /// at that point the contract no longer buys locality for read-only inputs.
   ///
-  /// H1.C3a (NEW): Conflicting owner dims → Coarse
-  /// When different EDT families access the same DB with different owner_dims
-  /// (e.g., atax: Phase 1 uses owner_dims=[0] for row access, Phase 2 uses
-  /// owner_dims=[1] for column access), block partitioning hurts both phases:
-  /// - Phase 1 benefits from row blocking
-  /// - Phase 2 forces full-range acquires (column access across row blocks)
-  /// Result: worse than coarse (block overhead + full-range communication).
-  /// Guard: Preserve block for Jacobi/wavefront stencil patterns where
-  /// alternating buffers with consistent owner dims are essential.
-  if (hasConflictingOwnerDims(ctx) && isSingleNode && isReadOnly &&
-      !hasJacobiStencil && !patterns.hasStencil) {
+  /// H1.C3a: Conflicting owner dims on single-node → Coarse
+  /// When different EDT families access the same DB with incompatible
+  /// owner_dims (for example row ownership in one phase and column ownership
+  /// in another), block partitioning cannot satisfy both layouts at once.
+  /// If the conflict involves a non-leading or N-D owner contract, later
+  /// block rewrites often fall back to full-range views or lose the mapping
+  /// proof entirely. In that shape coarse is safer and usually faster.
+  ///
+  /// Guard: Preserve Jacobi-style stencil layouts, which legitimately carry
+  /// block ownership across alternating buffer phases.
+  if (hasConflictingOwnerDims(ctx) && isSingleNode &&
+      hasNonLeadingOrMultiDimOwnerWriterContract(ctx) && !hasJacobiStencil) {
     ARTS_DEBUG("H1.C3a applied: Conflicting owner_dims "
-               "→ coarse (transpose pattern)");
+               "with non-leading/N-D contract -> coarse");
     return PartitioningDecision::coarse(
-        ctx,
-        "H1.C3a: Conflicting owner_dims (transpose pattern) prefers coarse");
+        ctx, "H1.C3a: Conflicting owner_dims with non-leading/N-D ownership "
+             "prefer coarse");
   }
 
   bool preserveStencilBlockForReadOnlyFullRange =
@@ -261,6 +300,7 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
   /// and DB-management overhead from the producer phase.
   if (isSingleNode && ctx.canBlock && ctx.hasDirectAccess &&
       !ctx.hasIndirectAccess && patterns.hasUniform && !patterns.hasStencil &&
+      !hasReadOnlyNonLeadingOrMultiDimOwnerConflict(ctx) &&
       hasLocalProducerAndFullRangeReadConsumer(ctx)) {
     ARTS_DEBUG("H1.C3b applied: Local producer + full-range read consumer "
                "prefers coarse");

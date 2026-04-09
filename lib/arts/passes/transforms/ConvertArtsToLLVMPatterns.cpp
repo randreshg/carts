@@ -342,8 +342,7 @@ struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
     auto edtGuid = op.getEdtGuid();
     auto loc = op.getLoc();
     auto readyLocalSite = resolveReadyLocalLaunchSite(edtGuid);
-    const bool useReadyLocalLaunch =
-        readyLocalSite && canUseReadyLocalLaunchSite(*readyLocalSite);
+    const bool useReadyLocalLaunch = false;
 
     /// Get access mode from attribute
     auto accessMode = op.getAccessMode();
@@ -1837,8 +1836,6 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
                                 PatternRewriter &rewriter) const override {
     ARTS_INFO("Lowering EdtCreate Op " << op);
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
-    if (op->hasAttr(AttrNames::Operation::ReadyLocalLaunch))
-      return failure();
     /// Get outlined function name
     auto funcNameAttr =
         op->getAttrOfType<StringAttr>(AttrNames::Operation::OutlinedFunc);
@@ -2628,6 +2625,60 @@ struct DbFreePattern : public ArtsToLLVMPattern<DbFreeOp> {
     ARTS_INFO("Lowering DbFree Op " << op);
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
     Value source = op.getSource();
+    Operation *underlyingDb = DbUtils::getUnderlyingDb(source);
+    Value guidStorage;
+    bool sourceIsGuidStorage = false;
+
+    if (auto alloc = dyn_cast_or_null<DbAllocOp>(underlyingDb)) {
+      guidStorage = alloc.getGuid();
+      sourceIsGuidStorage = (source == alloc.getGuid());
+    } else if (auto acquire = dyn_cast_or_null<DbAcquireOp>(underlyingDb)) {
+      guidStorage = acquire.getGuid();
+      sourceIsGuidStorage = (source == acquire.getGuid());
+    } else if (auto depAcquire = dyn_cast_or_null<DepDbAcquireOp>(underlyingDb)) {
+      guidStorage = depAcquire.getGuid();
+      sourceIsGuidStorage = (source == depAcquire.getGuid());
+    }
+
+    if (sourceIsGuidStorage && guidStorage) {
+      auto emitDestroy = [&](Value guidValue) {
+        guidValue = AC->ensureI64(guidValue, op.getLoc());
+        ArtsCodegen::RuntimeCallBuilder RCB(*AC, op.getLoc());
+        RCB.callVoid(types::ARTSRTL_arts_db_destroy, {guidValue});
+      };
+
+      if (auto storageTy = dyn_cast<MemRefType>(guidStorage.getType())) {
+        SmallVector<Value> destroySizes = DbUtils::getSizesFromDb(underlyingDb);
+        if (destroySizes.empty()) {
+          Value zero = AC->createIndexConstant(0, op.getLoc());
+          emitDestroy(AC->create<memref::LoadOp>(op.getLoc(), guidStorage,
+                                                 ValueRange{zero}));
+        } else {
+          SmallVector<Value> destroyOffsets;
+          destroyOffsets.reserve(destroySizes.size());
+          for (size_t i = 0; i < destroySizes.size(); ++i)
+            destroyOffsets.push_back(AC->createIndexConstant(0, op.getLoc()));
+          bool isSingle = destroySizes.size() == 1;
+          AC->iterateDbElements(
+              guidStorage, Value(), destroySizes, destroyOffsets, isSingle,
+              op.getLoc(), [&](Value linearIndex) {
+                Value idx = AC->castToIndex(linearIndex, op.getLoc());
+                SmallVector<Value> indices;
+                if (storageTy.getRank() == 1) {
+                  indices.push_back(idx);
+                } else {
+                  indices = AC->computeIndicesFromLinearIndex(destroySizes, idx,
+                                                              op.getLoc());
+                }
+                emitDestroy(AC->create<memref::LoadOp>(op.getLoc(), guidStorage,
+                                                       indices));
+              });
+        }
+      } else {
+        emitDestroy(guidStorage);
+      }
+    }
+
     Operation *rootOp = ValueAnalysis::getUnderlyingOperation(source);
     if (!isa_and_nonnull<memref::GetGlobalOp>(rootOp))
       AC->create<memref::DeallocOp>(op.getLoc(), source);

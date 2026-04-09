@@ -1108,33 +1108,6 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
   ARTS_DEBUG("  Creating task EDT with DB rewiring");
 
-  auto canUseReadyLocalLaunchFastPath = [&]() -> bool {
-    if (singleDispatchLane || !redInfo.reductionVars.empty())
-      return false;
-    if (originalParallel.getConcurrency() != EdtConcurrency::intranode)
-      return false;
-    auto depPattern = getEffectiveDepPattern(forOp.getOperation());
-    if (!depPattern || *depPattern != ArtsDepPattern::uniform)
-      return false;
-    auto kernelFamilyAttr = forOp->getAttrOfType<StringAttr>(
-        AttrNames::Operation::Plan::KernelFamily);
-    if (kernelFamilyAttr && kernelFamilyAttr.getValue() != "uniform")
-      return false;
-    if (forOp->hasAttr(AttrNames::Operation::ControlDep) ||
-        originalParallel->hasAttr(AttrNames::Operation::ControlDep))
-      return false;
-    bool hasUnsupportedAsync = false;
-    forOp.walk([&](Operation *nested) {
-      if (nested == forOp.getOperation())
-        return;
-      if (isa<EdtOp, BarrierOp, GetEdtEpochGuidOp>(nested)) {
-        hasUnsupportedAsync = true;
-        return;
-      }
-    });
-    return !hasUnsupportedAsync;
-  };
-
   /// Recreate total workers using shared distribution helper.
   loopInfo.totalWorkers =
       WorkDistributionUtils::getTotalWorkers(AC, loc, originalParallel);
@@ -1672,9 +1645,6 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   ++numTaskEdtsCreated;
   transferOperationContract(forOp.getOperation(), taskEdt.getOperation());
   copyPlanAttrs(forOp.getOperation(), taskEdt.getOperation());
-  if (canUseReadyLocalLaunchFastPath())
-    taskEdt->setAttr(AttrNames::Operation::ReadyLocalLaunch,
-                     AC->getBuilder().getUnitAttr());
   if (refinedTaskBlockShape)
     setStencilBlockShape(taskEdt.getOperation(), *refinedTaskBlockShape);
 
