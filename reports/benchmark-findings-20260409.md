@@ -180,6 +180,36 @@ uniform kernels to lower with fewer worker lanes. It changed the IR as intended,
 but it made `activations` worse once task chunking was coarsened, so it was not
 kept in the final tree.
 
+I also tried a compiler-only sibling-task fusion experiment inside `EpochOpt`
+for repeated uniform worker-lane tasks.
+
+- `activations` fusion results:
+  `external/carts-benchmarks/results/codex-activations-sibling-task-fusion-v3/20260409_085857`
+- `batchnorm` fusion results:
+  `external/carts-benchmarks/results/codex-batchnorm-sibling-task-fusion/20260409_092141`
+
+What changed in generated code:
+
+- `activations` reduced `arts_edt_create_with_epoch` call sites in the final
+  LLVM IR from `11` to `5`.
+- `batchnorm` saw no reduction in `arts_edt_create_with_epoch` call count
+  (`11` before and after), so the transform did not hit its hot path.
+
+Why it was rejected:
+
+- `activations` still timed out at `large/64` after the fusion change.
+- The fused `activations` binary also lost the earlier "fast with
+  `worker_threads=8`" diagnostic property and still timed out in manual runs
+  with copied configs at `8`, `16`, and `32` worker threads.
+- `batchnorm` still timed out at `large/64`.
+
+Conclusion:
+
+- Reducing sibling task-launch count alone is not sufficient for the remaining
+  ML-kernel large/64 failures.
+- Keeping the transform would add compiler complexity without delivering a
+  validated benchmark win, so it was reverted.
+
 ## Final state
 
 Kept, validated compiler fixes:
