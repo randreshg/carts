@@ -83,6 +83,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
 DEPENDS
   MLIROpsIncGen
   MLIRArtsPassIncGen
+  MLIRRtOpsIncGen
 
 LINK_LIBS PUBLIC
   MLIRAffineDialect
@@ -98,6 +99,7 @@ LINK_LIBS PUBLIC
   MLIRNVVMDialect
   MLIRPass
   MLIRArts
+  MLIRArtsRt
   MLIRSideEffectInterfaces
   MLIRSCFToControlFlow
   MLIRTargetLLVMIRImport
