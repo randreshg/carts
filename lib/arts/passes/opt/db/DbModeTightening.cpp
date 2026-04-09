@@ -24,9 +24,9 @@
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
+#include "arts/analysis/db/OwnershipProof.h"
 #include "arts/analysis/graphs/db/DbGraph.h"
 #include "arts/analysis/loop/LoopAnalysis.h"
-#include "arts/analysis/db/OwnershipProof.h"
 #include "arts/passes/Passes.h"
 #include "mlir/Pass/Pass.h"
 /// Debug

@@ -371,9 +371,8 @@ struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
       Value depCount = readyLocalSite->representativeCreate().getDepCount();
       if (depCount.getType() != AC->Int32)
         depCount = AC->castToInt(AC->Int32, depCount, loc);
-      readyLocalDepBuffer =
-          AC->create<LLVM::AllocaOp>(loc, AC->llvmPtr, AC->ArtsEdtDep,
-                                     depCount);
+      readyLocalDepBuffer = AC->create<LLVM::AllocaOp>(
+          loc, AC->llvmPtr, AC->ArtsEdtDep, depCount);
     }
 
     /// Add dependencies for each datablock using shared slot counter
@@ -400,9 +399,8 @@ struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
 
     if (useReadyLocalLaunch) {
       if (readyLocalSite->isMergedIfResult()) {
-        Value launchGuid = emitMergedIfReadyLocalLaunch(*readyLocalSite,
-                                                        readyLocalDepBuffer,
-                                                        loc);
+        Value launchGuid = emitMergedIfReadyLocalLaunch(
+            *readyLocalSite, readyLocalDepBuffer, loc);
         readyLocalSite->ifOp.getResult(readyLocalSite->ifResultIndex)
             .replaceAllUsesWith(launchGuid);
         if (readyLocalSite->ifOp->use_empty())
@@ -502,21 +500,19 @@ private:
 
   Value emitMergedIfReadyLocalLaunch(ReadyLocalLaunchSite &site,
                                      Value depBuffer, Location loc) const {
-    auto launchIf =
-        AC->create<scf::IfOp>(loc, site.ifOp.getResultTypes(),
-                              site.ifOp.getCondition(), /*withElseRegion=*/true);
+    auto launchIf = AC->create<scf::IfOp>(loc, site.ifOp.getResultTypes(),
+                                          site.ifOp.getCondition(),
+                                          /*withElseRegion=*/true);
 
     AC->setInsertionPointToStart(&launchIf.getThenRegion().front());
-    func::CallOp thenLaunch =
-        emitReadyLocalLaunch(site.creates.front(), depBuffer,
-                             site.creates.front().getLoc());
+    func::CallOp thenLaunch = emitReadyLocalLaunch(
+        site.creates.front(), depBuffer, site.creates.front().getLoc());
     AC->create<scf::YieldOp>(site.creates.front().getLoc(),
                              thenLaunch.getResult(0));
 
     AC->setInsertionPointToStart(&launchIf.getElseRegion().front());
-    func::CallOp elseLaunch =
-        emitReadyLocalLaunch(site.creates.back(), depBuffer,
-                             site.creates.back().getLoc());
+    func::CallOp elseLaunch = emitReadyLocalLaunch(
+        site.creates.back(), depBuffer, site.creates.back().getLoc());
     AC->create<scf::YieldOp>(site.creates.back().getLoc(),
                              elseLaunch.getResult(0));
 
@@ -582,8 +578,9 @@ private:
                        op.getEpochGuid(), hintMemref});
   }
 
-  void storeReadyLocalDepEntry(Value depBuffer, Value slotValue, Value guidValue,
-                               Value modeValue, std::optional<int32_t> depFlags,
+  void storeReadyLocalDepEntry(Value depBuffer, Value slotValue,
+                               Value guidValue, Value modeValue,
+                               std::optional<int32_t> depFlags,
                                Value byteOffsetI64, Value byteSizeI64,
                                Location loc) const {
     Value slotI64 = AC->ensureI64(slotValue, loc);
@@ -595,8 +592,8 @@ private:
     Value c3 = AC->createIntConstant(3, AC->Int64, loc);
     Value c4 = AC->createIntConstant(4, AC->Int64, loc);
     Value c5 = AC->createIntConstant(5, AC->Int64, loc);
-    Value flagsValue = AC->createIntConstant(depFlags.value_or(0), AC->Int32,
-                                             loc);
+    Value flagsValue =
+        AC->createIntConstant(depFlags.value_or(0), AC->Int32, loc);
     Value nullPtr = AC->create<LLVM::ZeroOp>(loc, AC->llvmPtr);
     if (!byteOffsetI64)
       byteOffsetI64 = AC->createIntConstant(0, AC->Int64, loc);
@@ -1244,14 +1241,13 @@ private:
                                   : AC->computeLinearIndex(bounds.allocSizes,
                                                            globalCoords, loc);
 
-          recordSingleDb(dbGuid, depInfo.guidStorage, edtGuid, sharedSlotAlloc,
-                         linearIndex, ArrayRef<Value>(globalCoords),
-                         bounds.allocSizes, accessMode, acquireMode, depFlags,
-                         boundsValid, depInfo.depStruct, depInfo.baseOffset,
-                         bounds.totalDBs, byteOffset, byteSize,
-                         depInfo.stencilCenterLinear,
-                         depInfo.stencilCenterCoords, &depInfo,
-                         readyLocalDepBuffer, loc);
+          recordSingleDb(
+              dbGuid, depInfo.guidStorage, edtGuid, sharedSlotAlloc,
+              linearIndex, ArrayRef<Value>(globalCoords), bounds.allocSizes,
+              accessMode, acquireMode, depFlags, boundsValid, depInfo.depStruct,
+              depInfo.baseOffset, bounds.totalDBs, byteOffset, byteSize,
+              depInfo.stencilCenterLinear, depInfo.stencilCenterCoords,
+              &depInfo, readyLocalDepBuffer, loc);
           return;
         }
 
@@ -1766,14 +1762,21 @@ struct DepDbAcquireOpPattern : public ArtsToLLVMPattern<DepDbAcquireOp> {
     /// DepDbAcquireOp feeds two distinct downstream shapes:
     /// - flat payload memrefs (e.g. memref<?x?xf32>) expect the dep entry's
     ///   ptr field to be resolved to the payload base pointer directly.
-    /// - handle-table memrefs (e.g. memref<?x!llvm.ptr>) still need one level
-    ///   of pointer indirection preserved so later db_gep/load pairs can
-    ///   recover the concrete payload pointer. Loading the dep entry here for
-    ///   those cases turns data bytes into fake pointers at runtime.
+    /// - handle-table memrefs (e.g. memref<?x!llvm.ptr> or
+    ///   memref<?xmemref<?xf64>>) still need one level of pointer indirection
+    ///   preserved so later db_gep/load pairs can recover the concrete payload
+    ///   pointer. Loading the dep entry here for those cases turns data bytes
+    ///   into fake pointers at runtime.
+    ///
+    /// The CPS chain path may produce memref<?xmemref<...>> types (the
+    /// original pre-DbAlloc types) instead of memref<?x!llvm.ptr>. Both
+    /// represent block-partitioned pointer tables and need dataPtrAddr.
     Value ptrBase = payloadPtr;
-    if (auto ptrType = dyn_cast<MemRefType>(op.getPtr().getType()))
-      if (isa<LLVM::LLVMPointerType>(ptrType.getElementType()))
+    if (auto ptrType = dyn_cast<MemRefType>(op.getPtr().getType())) {
+      auto elemTy = ptrType.getElementType();
+      if (isa<LLVM::LLVMPointerType>(elemTy) || isa<MemRefType>(elemTy))
         ptrBase = dataPtrAddr;
+    }
 
     auto guidView = AC->create<polygeist::Pointer2MemrefOp>(
         loc, op.getGuid().getType(), guidPtr);

@@ -205,6 +205,113 @@ public:
 
 using ReductionInfo = ReductionLoweringInfo;
 using ParallelRegionAnalysis = ParallelRegionSplitAnalysis;
+constexpr llvm::StringLiteral kRepeatedWaveGroupKind = "repeated_wave_group";
+
+static bool hasRepeatedWaveGroupKind(Operation *op) {
+  auto kindAttr = op ? op->getAttrOfType<StringAttr>(
+                           AttrNames::Operation::Orchestration::Kind)
+                     : nullptr;
+  return kindAttr && kindAttr.getValue() == kRepeatedWaveGroupKind;
+}
+
+static std::optional<int64_t> getI64Attr(Operation *op, StringRef attrName) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr = op->getAttrOfType<IntegerAttr>(attrName))
+    return attr.getInt();
+  return std::nullopt;
+}
+
+static std::optional<int64_t> getOrchestrationGroupId(Operation *op) {
+  return getI64Attr(op, AttrNames::Operation::Orchestration::GroupId);
+}
+
+static std::optional<int64_t> getOrchestrationWaveIndex(Operation *op) {
+  return getI64Attr(op, AttrNames::Operation::Orchestration::WaveIndex);
+}
+
+static std::optional<int64_t> getOrchestrationWaveCount(Operation *op) {
+  return getI64Attr(op, AttrNames::Operation::Orchestration::WaveCount);
+}
+
+static SmallVector<ForOp, 2> getTopLevelForOps(EdtOp edt) {
+  SmallVector<ForOp, 2> result;
+  if (!edt)
+    return result;
+  Block &body = edt.getBody().front();
+  for (Operation &op : body.without_terminator())
+    if (auto forOp = dyn_cast<ForOp>(&op))
+      result.push_back(forOp);
+  return result;
+}
+
+static bool haveCompatibleOrchestrationContract(EdtOp lhs, EdtOp rhs) {
+  if (!lhs || !rhs)
+    return false;
+  if (lhs.getType() != EdtType::parallel || rhs.getType() != EdtType::parallel)
+    return false;
+  if (lhs.getConcurrency() != rhs.getConcurrency())
+    return false;
+  if (getWorkers(lhs.getOperation()) != getWorkers(rhs.getOperation()))
+    return false;
+  if (getWorkersPerNode(lhs.getOperation()) !=
+      getWorkersPerNode(rhs.getOperation()))
+    return false;
+
+  Value lhsRoute = lhs.getRoute();
+  Value rhsRoute = rhs.getRoute();
+  if (static_cast<bool>(lhsRoute) != static_cast<bool>(rhsRoute))
+    return false;
+  if (lhsRoute && !ValueAnalysis::sameValue(lhsRoute, rhsRoute))
+    return false;
+
+  SmallVector<ForOp, 2> lhsForOps = getTopLevelForOps(lhs);
+  SmallVector<ForOp, 2> rhsForOps = getTopLevelForOps(rhs);
+  if (lhsForOps.size() != 1 || rhsForOps.size() != 1)
+    return false;
+
+  Operation *lhsFor = lhsForOps.front().getOperation();
+  Operation *rhsFor = rhsForOps.front().getOperation();
+  return getDepPattern(lhsFor) == getDepPattern(rhsFor) &&
+         getEdtDistributionKind(lhsFor) == getEdtDistributionKind(rhsFor) &&
+         getEdtDistributionPattern(lhsFor) == getEdtDistributionPattern(rhsFor);
+}
+
+static SmallVector<EdtOp, 4> collectOrchestratedWaveGroup(EdtOp seed) {
+  SmallVector<EdtOp, 4> groupedEdts;
+  if (!seed || !hasRepeatedWaveGroupKind(seed.getOperation()))
+    return groupedEdts;
+
+  std::optional<int64_t> groupId = getOrchestrationGroupId(seed.getOperation());
+  if (!groupId)
+    return groupedEdts;
+
+  Block *parentBlock = seed->getBlock();
+  if (!parentBlock)
+    return groupedEdts;
+
+  for (Operation &op : *parentBlock) {
+    auto candidate = dyn_cast<EdtOp>(&op);
+    if (!candidate)
+      continue;
+    if (!hasRepeatedWaveGroupKind(candidate.getOperation()))
+      continue;
+    if (getOrchestrationGroupId(candidate.getOperation()) != groupId)
+      continue;
+    if (!haveCompatibleOrchestrationContract(seed, candidate))
+      continue;
+    groupedEdts.push_back(candidate);
+  }
+
+  llvm::sort(groupedEdts, [](EdtOp lhs, EdtOp rhs) {
+    int64_t lhsIndex =
+        getOrchestrationWaveIndex(lhs.getOperation()).value_or(0);
+    int64_t rhsIndex =
+        getOrchestrationWaveIndex(rhs.getOperation()).value_or(0);
+    return lhsIndex < rhsIndex;
+  });
+  return groupedEdts;
+}
 
 /// Collect external values needed by operations in a block (including nested
 /// regions).
@@ -257,30 +364,28 @@ static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
   if (usesByAlloca.empty())
     return;
 
-  if (func::FuncOp parentFunc = taskEdtRegion->getParentOfType<func::FuncOp>()) {
+  if (func::FuncOp parentFunc =
+          taskEdtRegion->getParentOfType<func::FuncOp>()) {
     unsigned ordinal = 0;
     parentFunc.walk([&](Operation *op) { operationOrder[op] = ordinal++; });
   }
 
-  auto sortStoresInProgramOrder = [](MutableArrayRef<memref::StoreOp> stores) {
-    (void)stores;
-  };
   auto sortStoresWithOrder = [&](MutableArrayRef<memref::StoreOp> stores) {
-    std::stable_sort(
-        stores.begin(), stores.end(),
-        [&](memref::StoreOp lhs, memref::StoreOp rhs) {
-          Operation *lhsOp = lhs.getOperation();
-          Operation *rhsOp = rhs.getOperation();
-          if (lhsOp == rhsOp)
-            return false;
-          if (lhsOp->getBlock() == rhsOp->getBlock())
-            return lhsOp->isBeforeInBlock(rhsOp);
-          auto lhsIt = operationOrder.find(lhsOp);
-          auto rhsIt = operationOrder.find(rhsOp);
-          if (lhsIt != operationOrder.end() && rhsIt != operationOrder.end())
-            return lhsIt->second < rhsIt->second;
-          return lhsOp < rhsOp;
-        });
+    std::stable_sort(stores.begin(), stores.end(),
+                     [&](memref::StoreOp lhs, memref::StoreOp rhs) {
+                       Operation *lhsOp = lhs.getOperation();
+                       Operation *rhsOp = rhs.getOperation();
+                       if (lhsOp == rhsOp)
+                         return false;
+                       if (lhsOp->getBlock() == rhsOp->getBlock())
+                         return lhsOp->isBeforeInBlock(rhsOp);
+                       auto lhsIt = operationOrder.find(lhsOp);
+                       auto rhsIt = operationOrder.find(rhsOp);
+                       if (lhsIt != operationOrder.end() &&
+                           rhsIt != operationOrder.end())
+                         return lhsIt->second < rhsIt->second;
+                       return lhsOp < rhsOp;
+                     });
   };
 
   ARTS_DEBUG("  - Cloning " << usesByAlloca.size()
@@ -469,10 +574,11 @@ private:
   Statistic numReductionResultEdtsCreated;
 
   void gatherLowerableEdts(SmallVectorImpl<EdtOp> &lowerableEdts);
-  void lowerCollectedEdts(ArrayRef<EdtOp> lowerableEdts);
+  void lowerCollectedEdts();
 
   /// Process a parallel EDT containing arts_for operations
   void lowerParallelEdt(EdtOp parallelEdt);
+  bool lowerOrchestratedWaveGroup(ArrayRef<EdtOp> groupedEdts);
 
   /// Clone loop body into task EDT's scf.for
   void cloneLoopBody(ArtsCodegen *AC, ForOp forOp, scf::ForOp chunkLoop,
@@ -498,7 +604,9 @@ private:
   /// extracted outside the parallel EDT and acquires DBs directly.
   void lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
                               EdtOp originalParallel,
-                              ParallelRegionAnalysis &analysis, Location loc);
+                              ParallelRegionAnalysis &analysis, Location loc,
+                              Block *forcedEpochBlock = nullptr,
+                              Operation *setupInsertionAnchor = nullptr);
 
   /// Create task EDT with DB dependencies rewired to DbAllocOp.
   EdtOp createTaskEdtWithRewiring(ArtsCodegen *AC, LoopInfo &loopInfo,
@@ -534,7 +642,7 @@ void ForLoweringPass::runOnOperation() {
   ARTS_DEBUG_REGION(module.dump(););
 
   /// Phase 2-4: Evaluate lowering policy, build rewrite plans, and apply.
-  lowerCollectedEdts(lowerableEdts);
+  lowerCollectedEdts();
 
   ARTS_INFO_FOOTER(ForLowering);
   ARTS_DEBUG_REGION(module.dump(););
@@ -554,9 +662,46 @@ void ForLoweringPass::gatherLowerableEdts(
   });
 }
 
-void ForLoweringPass::lowerCollectedEdts(ArrayRef<EdtOp> lowerableEdts) {
-  for (EdtOp parallelEdt : lowerableEdts)
+void ForLoweringPass::lowerCollectedEdts() {
+  DenseSet<Operation *> processed;
+  while (true) {
+    EdtOp parallelEdt;
+    module.walk([&](EdtOp edt) {
+      if (parallelEdt)
+        return WalkResult::interrupt();
+      if (processed.contains(edt.getOperation()))
+        return WalkResult::advance();
+      if (edt.getType() != EdtType::parallel && edt.getType() != EdtType::task)
+        return WalkResult::advance();
+      bool hasForOps = edt.getBody()
+                           .walk([&](ForOp) { return WalkResult::interrupt(); })
+                           .wasInterrupted();
+      if (!hasForOps)
+        return WalkResult::advance();
+      parallelEdt = edt;
+      return WalkResult::interrupt();
+    });
+
+    if (!parallelEdt)
+      break;
+
+    SmallVector<EdtOp, 4> groupedEdts =
+        collectOrchestratedWaveGroup(parallelEdt);
+    if (groupedEdts.size() > 1 &&
+        getOrchestrationWaveIndex(parallelEdt.getOperation()).value_or(-1) ==
+            0) {
+      if (lowerOrchestratedWaveGroup(groupedEdts)) {
+        // The grouped EDTs were already erased by cleanupOriginalParallel
+        // inside lowerOrchestratedWaveGroup — do not insert into processed.
+        continue;
+      }
+      ARTS_WARN("Falling back to per-wave lowering for unsupported "
+                "orchestration group");
+    }
+
+    processed.insert(parallelEdt.getOperation());
     lowerParallelEdt(parallelEdt);
+  }
 }
 
 void ForLoweringPass::lowerParallelEdt(EdtOp parallelEdt) {
@@ -624,6 +769,96 @@ void ForLoweringPass::lowerParallelEdt(EdtOp parallelEdt) {
   cleanupOriginalParallel(parallelEdt, analysis, hasPreFor);
 
   ARTS_INFO(" - Parallel EDT lowering complete");
+}
+
+bool ForLoweringPass::lowerOrchestratedWaveGroup(ArrayRef<EdtOp> groupedEdts) {
+  if (groupedEdts.size() < 2)
+    return false;
+
+  EdtOp firstEdt = groupedEdts.front();
+  if (auto expectedWaveCount =
+          getOrchestrationWaveCount(firstEdt.getOperation())) {
+    if (*expectedWaveCount != static_cast<int64_t>(groupedEdts.size()))
+      return false;
+  }
+
+  SmallVector<ParallelRegionAnalysis, 4> analyses;
+  analyses.reserve(groupedEdts.size());
+  for (auto [idx, groupedEdt] : llvm::enumerate(groupedEdts)) {
+    EdtOp groupedEdtValue = groupedEdt;
+    if (!haveCompatibleOrchestrationContract(firstEdt, groupedEdtValue))
+      return false;
+    if (getOrchestrationWaveIndex(groupedEdtValue.getOperation())
+            .value_or(-1) != static_cast<int64_t>(idx)) {
+      return false;
+    }
+    if (auto expectedWaveCount =
+            getOrchestrationWaveCount(groupedEdtValue.getOperation())) {
+      if (*expectedWaveCount != static_cast<int64_t>(groupedEdts.size()))
+        return false;
+    }
+    ParallelRegionAnalysis analysis =
+        ParallelRegionAnalysis::analyze(groupedEdtValue);
+    if (!analysis.needsSplit() || analysis.hasWorkBefore() ||
+        analysis.hasWorkAfter() || analysis.forOps.size() != 1) {
+      return false;
+    }
+    if (!analysis.forOps.front().getReductionAccumulators().empty())
+      return false;
+    analyses.push_back(std::move(analysis));
+  }
+
+  ArtsCodegen AC(module);
+  if (AM)
+    AC.setAbstractMachine(&AM->getAbstractMachine());
+  Location loc = firstEdt.getLoc();
+  AC.setInsertionPointAfter(firstEdt);
+
+  auto sharedEpoch = AC.create<EpochOp>(loc);
+  ++numEpochsCreated;
+  if (auto kindAttr = firstEdt->getAttrOfType<StringAttr>(
+          AttrNames::Operation::Orchestration::Kind)) {
+    sharedEpoch->setAttr(AttrNames::Operation::Orchestration::Kind, kindAttr);
+  }
+  if (auto groupIdAttr = firstEdt->getAttrOfType<IntegerAttr>(
+          AttrNames::Operation::Orchestration::GroupId)) {
+    sharedEpoch->setAttr(AttrNames::Operation::Orchestration::GroupId,
+                         groupIdAttr);
+  }
+  if (auto waveCountAttr = firstEdt->getAttrOfType<IntegerAttr>(
+          AttrNames::Operation::Orchestration::WaveCount)) {
+    sharedEpoch->setAttr(AttrNames::Operation::Orchestration::WaveCount,
+                         waveCountAttr);
+  }
+  transferOperationContract(analyses.front().forOps.front().getOperation(),
+                            sharedEpoch.getOperation());
+  copyPlanAttrs(analyses.front().forOps.front().getOperation(),
+                sharedEpoch.getOperation());
+  Region &epochRegion = sharedEpoch.getRegion();
+  if (epochRegion.empty())
+    epochRegion.push_back(new Block());
+  Block *epochBlock = &epochRegion.front();
+
+  for (auto [idx, groupedEdt] : llvm::enumerate(groupedEdts)) {
+    ++numEdtsLowered;
+    ParallelRegionAnalysis &analysis = analyses[idx];
+    EdtOp groupedEdtValue = groupedEdt;
+    lowerForWithDbRewiring(AC, analysis.forOps.front(), groupedEdtValue,
+                           analysis, groupedEdtValue.getLoc(), epochBlock,
+                           sharedEpoch.getOperation());
+    cleanupOriginalParallel(groupedEdtValue, analysis, /*hasPreFor=*/false);
+  }
+
+  AC.setInsertionPointToEnd(epochBlock);
+  if (epochBlock->empty() ||
+      !epochBlock->back().hasTrait<OpTrait::IsTerminator>()) {
+    AC.create<YieldOp>(loc);
+  }
+  AC.setInsertionPointAfter(sharedEpoch);
+
+  ARTS_INFO(" - Lowered orchestrated wave group with " << groupedEdts.size()
+                                                       << " sibling waves");
+  return true;
 }
 
 MetadataManager &ForLoweringPass::getMetadataManager() const {
@@ -725,7 +960,9 @@ void ForLoweringPass::createResultEdt(ArtsCodegen *AC, ReductionInfo &redInfo,
 void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
                                              EdtOp originalParallel,
                                              ParallelRegionAnalysis &analysis,
-                                             Location loc) {
+                                             Location loc,
+                                             Block *forcedEpochBlock,
+                                             Operation *setupInsertionAnchor) {
   ARTS_INFO(" - Lowering arts.for with DB rewiring (split pattern)");
   ++numForOpsLowered;
 
@@ -743,7 +980,10 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
     OpBuilder::InsertionGuard guard(AC.getBuilder());
     /// Values consumed by split-mode reduction allocation must dominate the
     /// allocs inserted before the original parallel EDT.
-    AC.setInsertionPoint(originalParallel);
+    if (setupInsertionAnchor)
+      AC.setInsertionPoint(setupInsertionAnchor);
+    else
+      AC.setInsertionPoint(originalParallel);
 
     /// Get numWorkers from explicit attrs or runtime queries.
     Value numWorkers =
@@ -804,7 +1044,10 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
 
   std::optional<EpochOp> forEpoch;
   Block *epochBlock = nullptr;
-  if (reuseEnclosingEpoch) {
+  if (forcedEpochBlock) {
+    epochBlock = forcedEpochBlock;
+    AC.setInsertionPointToEnd(epochBlock);
+  } else if (reuseEnclosingEpoch) {
     epochBlock = originalParallel->getBlock();
     AC.setInsertionPoint(originalParallel);
   } else {
@@ -847,6 +1090,8 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
     /// Set insertion point after epoch so subsequent for loops insert
     /// correctly.
     AC.setInsertionPointAfter(*forEpoch);
+  } else if (forcedEpochBlock) {
+    AC.setInsertionPointToEnd(epochBlock);
   } else {
     AC.setInsertionPointAfter(workerLoop);
   }
@@ -875,17 +1120,6 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         AttrNames::Operation::Plan::KernelFamily);
     if (kernelFamilyAttr && kernelFamilyAttr.getValue() != "uniform")
       return false;
-    for (Operation *parent = forOp->getParentOp();
-         parent && parent != originalParallel.getOperation();
-         parent = parent->getParentOp()) {
-      if (isa<scf::ForOp>(parent))
-        return false;
-    }
-    for (Operation *parent = originalParallel->getParentOp(); parent;
-         parent = parent->getParentOp()) {
-      if (isa<scf::ForOp>(parent))
-        return false;
-    }
     if (forOp->hasAttr(AttrNames::Operation::ControlDep) ||
         originalParallel->hasAttr(AttrNames::Operation::ControlDep))
       return false;
