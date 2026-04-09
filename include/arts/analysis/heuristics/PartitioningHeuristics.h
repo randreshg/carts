@@ -100,6 +100,7 @@ struct PartitioningContext {
   PartitionMode existingAllocMode = PartitionMode::coarse;
   DbAccessPattern allocAccessPattern = DbAccessPattern::unknown;
   DbMode allocDbMode = DbMode::write;
+  bool readOnlyAfterInit = false;
   bool isUniformAccess = false;
   AcquirePatternSummary accessPatterns;
   bool hasIndirectAccess = false, hasIndirectRead = false;
