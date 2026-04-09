@@ -44,7 +44,7 @@ Tier 4: Conversion pattern split (PARALLEL)
   |-- ~3h
 
 Tier 5: Include/namespace updates (HIGHLY PARALLEL)
-  |-- Add using declarations to 7 lowering pass files
+  |-- Add using declarations to 15 files (see arts-rt-dialect.md cross-refs)
   |-- ~0.5h (parallelized)
 
 Tier 6: Test migration + verification
@@ -115,9 +115,14 @@ Phase 3A: Move core arts to dialect/core/
 Phase 3B: Move passes to dialect-owned structure
   5. Move EDT passes to core/Transforms/
   6. Move DB passes to core/Transforms/
-  7. Move lowering passes to core/Conversion/ and rt/Conversion/
-  8. Move codegen passes to rt/Transforms/ and general/
-  9. Create patterns/ directory and move pattern passes
+  7. Move lowering passes to rt/Conversion/ArtsToRt/
+     (EdtLowering, EpochLowering, DbLowering, ParallelEdtLowering)
+  8. Move codegen passes to rt/Transforms/
+     (DataPtrHoisting, GuidRangCallOpt, RuntimeCallOpt)
+  9. Move standard passes to general/
+     (RaiseMemRef, DCE, ScalarReplacement, AliasScopeGen, LoopVecHints)
+  10. Create patterns/ directory and move pattern passes
+      (PatternDiscovery, KernelTransforms, StencilBoundaryPeeling, DepTransforms)
 
 Phase 3C: Verification
   10. Build and test
@@ -157,13 +162,30 @@ dekk carts benchmarks run --size large --timeout 300 --threads 16
 
 ### Must Create (Phase 1)
 
-- `include/arts/dialect/rt/IR/RtDialect.td`
-- `include/arts/dialect/rt/IR/RtOps.td`
-- `include/arts/dialect/rt/IR/RtDialect.h`
-- `lib/arts/dialect/rt/IR/RtDialect.cpp`
-- `lib/arts/dialect/rt/IR/RtOps.cpp`
-- `lib/arts/dialect/rt/Conversion/RtToLLVM/RtToLLVMPatterns.cpp`
-- `lib/arts/passes/transforms/ConvertArtsToLLVMInternal.h`
+```
+include/arts/dialect/rt/
+  IR/
+    RtDialect.td               # NEW: dialect definition
+    RtOps.td                   # NEW: 14 op definitions
+    RtDialect.h                # NEW: public C++ header
+    CMakeLists.txt             # NEW: TableGen targets
+
+lib/arts/dialect/rt/
+  IR/
+    RtDialect.cpp              # NEW: initialize()
+    RtOps.cpp                  # NEW: verifiers + builders
+    CMakeLists.txt             # NEW: MLIRArtsRt library
+  Conversion/
+    RtToLLVM/
+      RtToLLVMPatterns.cpp     # NEW: 14 patterns extracted from ConvertArtsToLLVM
+      CMakeLists.txt
+```
+
+Note: In Phase 1, the lowering passes (EdtLowering, EpochLowering, etc.)
+stay in their current location (`lib/arts/passes/transforms/`). They move
+to `lib/arts/dialect/rt/Conversion/ArtsToRt/` in Phase 3 (full folder
+reorganization). Phase 1 is purely about extracting the 14 ops and their
+LLVM patterns, not about moving passes.
 
 ### Must Create (Phase 2)
 
@@ -183,12 +205,29 @@ dekk carts benchmarks run --size large --timeout 300 --threads 16
 
 ### Must Modify (Phase 1)
 
+Op extraction:
 - `include/arts/Ops.td` -- remove 14 ops
 - `include/arts/Attributes.td` -- remove DepAccessMode
 - `lib/arts/Dialect.cpp` -- remove 2 verifiers + 2 builders
-- `lib/arts/passes/transforms/EdtLowering.cpp` -- using declarations
-- `lib/arts/passes/transforms/EpochLowering.cpp` -- using declarations
-- `lib/arts/passes/transforms/ForLowering.cpp` -- using declarations
 - `lib/arts/passes/transforms/ConvertArtsToLLVMPatterns.cpp` -- extract 14 patterns
-- `tools/compile/Compile.cpp` -- register dialect
-- 24 test files in `tests/contracts/`
+
+Namespace updates (15 files, see [arts-rt-dialect.md](arts-rt-dialect.md) cross-ref table):
+- `lib/arts/passes/transforms/EdtLowering.cpp` -- using declarations (10 ops)
+- `lib/arts/passes/transforms/EpochLowering.cpp` -- using declarations (8 ops)
+- `lib/arts/passes/transforms/ForLowering.cpp` -- using declarations
+- `lib/arts/utils/DbUtils.cpp` + header -- using + template instantiation
+- `lib/arts/passes/opt/codegen/DataPtrHoistingSupport.cpp` + header -- using
+- `lib/arts/transforms/db/DbLayoutStrategy.cpp` -- using
+- `lib/arts/passes/opt/epoch/EpochOptScheduling.cpp` -- using
+- `lib/arts/analysis/heuristics/EpochHeuristics.cpp` -- using
+- `lib/arts/passes/opt/codegen/AliasScopeGen.cpp` -- using
+- `lib/arts/analysis/value/ValueAnalysis.cpp` -- using
+- `lib/arts/analysis/db/DbDistributedEligibility.cpp` -- using
+- `include/arts/passes/transforms/EdtLoweringInternal.h` -- using
+
+Registration:
+- `tools/compile/Compile.cpp` -- register `arts::rt::ArtsRtDialect`
+- `tools/compile/CMakeLists.txt` -- link `MLIRArtsRt`
+
+Tests:
+- 24 test files in `tests/contracts/` -- sed rename

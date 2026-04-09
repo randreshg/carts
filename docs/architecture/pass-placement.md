@@ -136,22 +136,24 @@ Stage 16 (epochs):
   general/:  PolygeistCanonicalize
 ```
 
-### Stages 17-18: Lowering
+### Stages 17-18: Lowering (rt/ dialect)
 
 ```
 Stage 17 (pre-lowering):
-  rt/Conversion/: ParallelEdtLowering, DbLowering, EdtLowering, EpochLowering
-  rt/Transforms/: DataPtrHoisting
-  core/:          EdtAllocaSinking, EpochOptScheduling
-  general/:       PolygeistCanonicalize, CSE, LICM, ScalarReplacement
-  verify/:        VerifyEdtLowered, VerifyPreLowered
+  rt/Conversion/ArtsToRt/:  ParallelEdtLowering, DbLowering, EdtLowering, EpochLowering
+                            (arts.edt/epoch → arts_rt.edt_create/create_epoch)
+  rt/Transforms/:           DataPtrHoisting (hoists lowered dep/db ptr loads)
+  core/:                    EdtAllocaSinking, EpochOptScheduling
+  general/:                 PolygeistCanonicalize, CSE, LICM, ScalarReplacement
+  verify/:                  VerifyEdtLowered, VerifyPreLowered
 
 Stage 18 (arts-to-llvm):
-  rt/Conversion/: ConvertArtsToLLVM
-  rt/Transforms/: GuidRangCallOpt, RuntimeCallOpt, DataPtrHoisting (2nd)
-  general/:       LoweringContractCleanup, PolygeistCanonicalize, CSE, Mem2Reg,
-                  ControlFlowSink, AliasScopeGen, LoopVectorizationHints
-  verify/:        VerifyDbLowered, VerifyLowered
+  rt/Conversion/RtToLLVM/:  ConvertArtsToLLVM
+                            (arts_rt.* → llvm.call @arts*, arts.db_* → llvm.call @artsDb*)
+  rt/Transforms/:           GuidRangCallOpt, RuntimeCallOpt, DataPtrHoisting (2nd)
+  general/:                 LoweringContractCleanup, PolygeistCanonicalize, CSE, Mem2Reg,
+                            ControlFlowSink, AliasScopeGen, LoopVectorizationHints
+  verify/:                  VerifyDbLowered, VerifyLowered
 ```
 
 ## Summary Statistics
@@ -161,8 +163,9 @@ Stage 18 (arts-to-llvm):
 | sde/Transforms/ | 7 | CollectMetadata, ConvertOpenMPToSde, RaiseToLinalg, RaiseToTensor, LoopNormalization, LoopReordering, SdeOpt |
 | patterns/Transforms/ | 4 | PatternDiscovery, KernelTransforms, StencilBoundaryPeeling, DepTransforms |
 | core/Transforms/ | 23 | EdtStructuralOpt, DbPartitioning, Concurrency, CreateEpochs, LoopFusion |
-| core/Conversion/ | 2 | ConvertSdeToArts, CreateDbs |
-| rt/Conversion/ | 5 | EdtLowering, EpochLowering, DbLowering, ParallelEdtLowering, ConvertArtsToLLVM |
+| core/Conversion/SdeToArts/ | 2 | ConvertSdeToArts, CreateDbs |
+| rt/Conversion/ArtsToRt/ | 4 | EdtLowering, EpochLowering, DbLowering, ParallelEdtLowering |
+| rt/Conversion/RtToLLVM/ | 1 | ConvertArtsToLLVM (14 rt patterns + core DB/barrier patterns) |
 | rt/Transforms/ | 4 | DataPtrHoisting, GuidRangCallOpt, RuntimeCallOpt |
 | general/Transforms/ | 16 | RaiseMemRef, DCE, ScalarReplacement, AliasScopeGen, LoopVecHints |
 | verify/ | 11+ | VerifyMetadata, VerifyEdtCreated, VerifySdeLowered, VerifyLowered |
