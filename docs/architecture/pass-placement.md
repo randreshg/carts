@@ -5,7 +5,7 @@
 | Directory | Ownership | Description |
 |---|---|---|
 | `sde/Transforms/` | SDE dialect | Metadata, normalization, OMP->SDE, raise, tensor |
-| `patterns/Transforms/` | shared | Pattern detection, classification, kernel rewrites |
+| `patterns/Analysis/` | shared | Pattern analysis only (DbPatternMatchers, AccessPatternAnalysis); all pattern *passes* are in core/ due to ARTS deps |
 | `core/Transforms/` | arts dialect | EDT/DB/Epoch structural optimization |
 | `core/Conversion/OmpToArts/` | arts dialect | SDE -> arts conversion |
 | `rt/Conversion/ArtsToRt/` | arts_rt dialect | arts -> arts_rt lowering |
@@ -18,13 +18,15 @@
 
 ```
 sde/       -> "this computation reads A, writes C with neighbor deps"
-patterns/  -> "this is a stencil; peel boundaries; reorder for cache"
 core/      -> "create an EDT with 3 deps partitioned as block-stencil"
+             (includes pattern passes: PatternDiscovery, KernelTransforms, etc.)
 rt/        -> "call artsEdtCreate(guid, paramv, 3)"
 ```
 
-Pattern classification is NEITHER runtime-specific NOR dialect-specific.
-Pattern passes reference ZERO ARTS structural ops.
+Note: Pattern passes were originally planned for a separate `patterns/` layer
+but investigation found ALL 4 have ARTS structural op dependencies (ForOp,
+EdtOp). They stay in `core/Transforms/`. Pattern *analysis* (read-only,
+DbPatternMatchers, AccessPatternAnalysis) stays in `analysis/`.
 
 ## Stage-by-Stage Pass Placement
 
@@ -69,14 +71,19 @@ Stage 4 (sde-to-arts):
   verify/:   VerifyEdtCreated, VerifySdeLowered
 ```
 
-### Stage 5: Pattern Pipeline (patterns/ + sde/)
+### Stage 5: Pattern Pipeline (core/)
 
 ```
-  patterns/: PatternDiscovery(seed), DepTransforms, StencilBoundaryPeeling,
-             PatternDiscovery(refine), KernelTransforms
-  sde/:      LoopNormalization, LoopReordering
+  core/:     PatternDiscovery(seed), DepTransforms, StencilBoundaryPeeling,
+             PatternDiscovery(refine), KernelTransforms,
+             LoopNormalization, LoopReordering
   general/:  CSE
 ```
+
+Note: LoopNormalization and LoopReordering were originally planned for `sde/`
+but investigation found deep ARTS dependencies (ForOp in match/apply,
+DbPatternMatchers in auto-detection). They operate on ARTS IR AFTER
+SDE→ARTS conversion and belong in `core/Transforms/`.
 
 ### Stages 6-9: Core Arts Optimization
 
@@ -162,9 +169,9 @@ Stage 18 (arts-to-llvm):
 
 | Classification | Count | Key Passes |
 |---|---|---|
-| sde/Transforms/ | 7 | CollectMetadata, ConvertOpenMPToSde, RaiseToLinalg, RaiseToTensor, LoopNormalization, LoopReordering, SdeOpt |
+| sde/Transforms/ | 5 | CollectMetadata, ConvertOpenMPToSde, RaiseToLinalg, RaiseToTensor, SdeOpt |
 | patterns/Analysis/ | 2 | DbPatternMatchers, AccessPatternAnalysis (pure analysis, no op mutation) |
-| core/Transforms/ | 32 | EdtStructuralOpt, DbPartitioning, PatternDiscovery, KernelTransforms, StencilBoundaryPeeling, DepTransforms, DbLowering, ParallelEdtLowering, Hoisting, AliasScopeGen, HandleDeps, ArtsInliner, LoweringContractCleanup, + 19 others |
+| core/Transforms/ | 34 | EdtStructuralOpt, DbPartitioning, PatternDiscovery, KernelTransforms, StencilBoundaryPeeling, DepTransforms, LoopNormalization, LoopReordering, DbLowering, ParallelEdtLowering, Hoisting, AliasScopeGen, HandleDeps, ArtsInliner, LoweringContractCleanup, + 19 others |
 | core/Conversion/SdeToArts/ | 2 | ConvertSdeToArts, CreateDbs |
 | rt/Conversion/ArtsToRt/ | 2 | EdtLowering, EpochLowering (the only passes that produce arts_rt ops) |
 | rt/Conversion/RtToLLVM/ | 1 | ConvertArtsToLLVM (14 rt patterns + core DB/barrier patterns) |

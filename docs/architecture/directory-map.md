@@ -195,9 +195,9 @@ LLVM conversion patterns. They stay shared.
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
 | `LoopFusion.cpp` | `lib/arts/dialect/core/Transforms/LoopFusion.cpp` | 3 | Walks EdtOp + BarrierOp — ARTS structural |
-| `LoopNormalization.cpp` | `lib/arts/dialect/sde/Transforms/LoopNormalization.cpp` | 2D | SDE-compatible; zero ARTS deps |
-| `LoopReordering.cpp` | `lib/arts/dialect/sde/Transforms/LoopReordering.cpp` | 2D | Metadata path SDE-compatible; extract matmul auto-detect |
-| `StencilBoundaryPeeling.cpp` | `lib/arts/patterns/Transforms/StencilBoundaryPeeling.cpp` | 3 | Pattern-level; no ARTS deps |
+| `LoopNormalization.cpp` | `lib/arts/dialect/core/Transforms/LoopNormalization.cpp` | 3 | ARTS-coupled: ForOp in match/apply, DbPatternMatchers |
+| `LoopReordering.cpp` | `lib/arts/dialect/core/Transforms/LoopReordering.cpp` | 3 | ARTS-coupled: ForOp, DbPatternMatchers auto-detection |
+| `StencilBoundaryPeeling.cpp` | `lib/arts/dialect/core/Transforms/StencilBoundaryPeeling.cpp` | 3 | ARTS-coupled: operates on ForOp loop bounds |
 
 ---
 
@@ -753,13 +753,9 @@ lib/arts/
       Transforms/
         CollectMetadata.cpp             <- passes/transforms/
         ConvertOpenMPToSde.cpp          NEW Phase 2B
-        LoopNormalization.cpp           <- passes/opt/loop/
-        LoopReordering.cpp              <- passes/opt/loop/
-        RaiseToLinalg.cpp               NEW Phase 2C
-        RaiseToTensor.cpp               NEW Phase 2C
-        SdeOpt.cpp                      NEW Phase 2C
-        loop/
-          LoopNormalizer.cpp            <- transforms/loop/
+        RaiseToLinalg.cpp               NEW Phase 2C (deferred)
+        RaiseToTensor.cpp               NEW Phase 2C (deferred)
+        SdeOpt.cpp                      NEW Phase 2C (deferred)
         CMakeLists.txt                  NEW Phase 2
     core/
       IR/
