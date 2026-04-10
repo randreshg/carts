@@ -307,8 +307,9 @@ static const std::array<llvm::StringLiteral, 8> kCollectMetadataPasses = {
     "VerifyMetadataIntegrity (diagnose mode)"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 3> kOpenMPToArtsPasses = {
-    "ConvertOpenMPToArts", "DeadCodeElimination", "CSE"};
+static const std::array<llvm::StringLiteral, 5> kOpenMPToArtsPasses = {
+    "ConvertOpenMPToSde", "ConvertSdeToArts", "VerifySdeLowered",
+    "DeadCodeElimination", "CSE"};
 static const std::array<llvm::StringLiteral, 8> kPatternPipelinePasses = {
     "PatternDiscovery(seed)", "DepTransforms",
     "LoopNormalization",      "StencilBoundaryPeeling",
