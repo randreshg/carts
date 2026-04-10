@@ -1,0 +1,36 @@
+///==========================================================================///
+/// File: SdeDialect.td
+/// This file defines the ARTS Structured Decomposition Environment dialect.
+///==========================================================================///
+
+#ifndef ARTS_SDE_DIALECT
+#define ARTS_SDE_DIALECT
+
+include "mlir/IR/OpBase.td"
+
+def ArtsSdeDialect : Dialect {
+  let name = "arts_sde";
+  let cppNamespace = "::mlir::arts::sde";
+
+  let summary = "Structured Decomposition Environment -- runtime-agnostic parallel IR";
+  let description = [{
+    SDE captures parallel computation intent using three orthogonal op
+    categories: CU (Compute Units -- what computation happens), SU (Scheduling
+    Units -- how/when it runs), and MU (Memory Units -- data access and
+    movement).
+
+    SDE is runtime-agnostic and could target any task-based runtime (ARTS,
+    Legion, StarPU, GPU). The primary input is OpenMP code via OMP-to-SDE
+    conversion.
+
+    SDE ops are type-polymorphic: they natively accept tensor, memref, and
+    scalar types.
+  }];
+
+  let useDefaultAttributePrinterParser = 1;
+}
+
+class ArtsSde_Op<string mnemonic, list<Trait> traits = []>
+    : Op<ArtsSdeDialect, mnemonic, traits>;
+
+#endif // ARTS_SDE_DIALECT
