@@ -1,4 +1,4 @@
-// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %carts compile %S/../../../../../external/carts-benchmarks/sw4lite/vel4sg-base/vel4sg_base.c --pipeline db-partitioning --arts-config %S/../../../../examples/arts.cfg >/dev/null && cat %t.compile/vel4sg_base.db-partitioning.mlir' | %FileCheck %s
+// RUN: %carts-compile %S/../../../inputs/snapshots/vel4sg_base_default_openmp_to_arts.mlir --pipeline db-partitioning --arts-config %S/../../../../examples/arts.cfg | %FileCheck %s
 
 // Verify vel4sg keeps its worker-local blocked reads and writes on the
 // distributed k-owner dimension even though the backing allocations stay

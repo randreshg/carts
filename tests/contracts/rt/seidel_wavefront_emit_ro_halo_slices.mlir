@@ -1,4 +1,4 @@
-// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %carts compile %S/../../../external/carts-benchmarks/polybench/seidel-2d/seidel-2d.c --pipeline arts-to-llvm --arts-config %S/../inputs/arts_64t.cfg -- -I%S/../../../external/carts-benchmarks/polybench/seidel-2d -I%S/../../../external/carts-benchmarks/polybench/common -I%S/../../../external/carts-benchmarks/polybench/utilities -DTSTEPS=320 -DN=9600 -lm >/dev/null && cat %t.compile/seidel-2d.arts-to-llvm.mlir' | %FileCheck %s
+// RUN: %carts-compile %S/../inputs/snapshots/seidel_2d_openmp_to_arts.mlir --pipeline arts-to-llvm --arts-config %S/../inputs/arts_64t.cfg | %FileCheck %s
 
 // Verify that widened Seidel wavefront inout dependencies lower to runtime
 // face slices: neighbor blocks become RO slice transports that preserve the
@@ -16,6 +16,3 @@
 // CHECK: %[[BYTE_OFF:.+]] = arith.select %{{.+}}, %c0_i64, %{{.+}} : i64
 // CHECK: func.call @arts_add_dependence_at_ex({{.*}}%[[BYTE_OFF]], %[[BYTE_SIZE]], %c2_i32) : (i64, i64, i32, i32, i64, i64, i32) -> ()
 // CHECK: }
-
-module {
-}

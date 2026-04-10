@@ -1,4 +1,4 @@
-// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %carts compile %S/../../../external/carts-benchmarks/ml-kernels/layernorm/layernorm.c --pipeline post-db-refinement --arts-config %S/../inputs/arts_2t.cfg -- -DNREPS=1 >/dev/null && cat %t.compile/layernorm.post-db-refinement.mlir' | %FileCheck %s
+// RUN: %carts-compile %S/../inputs/snapshots/layernorm_openmp_to_arts.mlir --pipeline post-db-refinement --arts-config %S/../inputs/arts_2t.cfg | %FileCheck %s
 
 // The layernorm benchmark guards its DB-backed buffers with `if (!x || !gamma
 // || !beta)`. Those checks lower through polygeist.memref2pointer, but they do
@@ -10,6 +10,3 @@
 // CHECK: %[[X_VIEW:[^ ]+]] = arts.db_ref %[[X_PTR]][%c0] : memref<?xmemref<?x?xf32>> -> memref<?x?xf32>
 // CHECK: %[[X_RAW:[^ ]+]] = polygeist.memref2pointer %[[X_VIEW]] : memref<?x?xf32> to !llvm.ptr
 // CHECK: arts.db_acquire[<inout>] (%[[X_GUID]] : memref<?xi64>, %[[X_PTR]] : memref<?xmemref<?x?xf32>>) partitioning(<block>
-
-module {
-}

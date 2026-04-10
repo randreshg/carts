@@ -1,4 +1,4 @@
-// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %carts compile %S/../../../../../external/carts-benchmarks/sw4lite/rhs4sg-base/rhs4sg_base.c --pipeline db-partitioning --arts-config %S/../../../../examples/arts.cfg >/dev/null && cat %t.compile/rhs4sg_base.db-partitioning.mlir' | %FileCheck %s
+// RUN: %carts-compile %S/../../../inputs/snapshots/rhs4sg_base_default_openmp_to_arts.mlir --pipeline db-partitioning --arts-config %S/../../../../examples/arts.cfg | %FileCheck %s
 
 // Canonical owner-dim rhs4sg contracts now keep the read-only input coarse at
 // allocation time while preserving the downstream block-distribution contract
