@@ -20,10 +20,10 @@
 #include "arts/Dialect.h"
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
-#include "arts/utils/ValueAnalysis.h"
-#include "arts/passes/Passes.h"
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
+#include "arts/passes/Passes.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/ValueAnalysis.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
@@ -90,8 +90,7 @@ static ArtsMode convertAccessMode(sde::SdeAccessMode mode) {
 //===----------------------------------------------------------------------===//
 
 /// sde.cu_region -> arts.edt
-struct CuRegionToArtsPattern
-    : public OpRewritePattern<sde::SdeCuRegionOp> {
+struct CuRegionToArtsPattern : public OpRewritePattern<sde::SdeCuRegionOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(sde::SdeCuRegionOp op,
@@ -137,8 +136,7 @@ struct CuRegionToArtsPattern
 };
 
 /// sde.cu_task -> arts.edt <task> with db_control deps
-struct CuTaskToArtsPattern
-    : public OpRewritePattern<sde::SdeCuTaskOp> {
+struct CuTaskToArtsPattern : public OpRewritePattern<sde::SdeCuTaskOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(sde::SdeCuTaskOp op,
@@ -157,7 +155,7 @@ struct CuTaskToArtsPattern
       SmallVector<Value> offsets(muDep.getOffsets().begin(),
                                  muDep.getOffsets().end());
       SmallVector<Value> sizes(muDep.getSizes().begin(),
-                                muDep.getSizes().end());
+                               muDep.getSizes().end());
 
       // Separate pinned dims (size=1) from chunk dims
       SmallVector<Value> pinnedIndices, chunkOffsets, blockSizes;
@@ -175,15 +173,14 @@ struct CuTaskToArtsPattern
       }
 
       rewriter.setInsertionPoint(op);
-      auto dbControl = DbControlOp::create(
-          rewriter, loc, mode, muDep.getSource(), pinnedIndices,
-          chunkOffsets, blockSizes);
+      auto dbControl =
+          DbControlOp::create(rewriter, loc, mode, muDep.getSource(),
+                              pinnedIndices, chunkOffsets, blockSizes);
       artsDeps.push_back(dbControl);
     }
 
-    auto edtOp =
-        EdtOp::create(rewriter, loc, EdtType::task,
-                      EdtConcurrency::intranode, artsDeps);
+    auto edtOp = EdtOp::create(rewriter, loc, EdtType::task,
+                               EdtConcurrency::intranode, artsDeps);
     edtOp.setNoVerifyAttr(NoVerifyAttr::get(ctx));
 
     Block &old = op.getBody().front();
@@ -197,8 +194,7 @@ struct CuTaskToArtsPattern
 };
 
 /// sde.su_iterate -> arts.for
-struct SuIterateToArtsPattern
-    : public OpRewritePattern<sde::SdeSuIterateOp> {
+struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
   SuIterateToArtsPattern(MLIRContext *context, MetadataManager &metadataManager)
       : OpRewritePattern(context), metadataManager(metadataManager) {}
 
@@ -209,10 +205,9 @@ struct SuIterateToArtsPattern
 
     auto schedAttr = convertSchedule(ctx, op.getScheduleAttr());
 
-    auto artsFor = ForOp::create(
-        rewriter, loc,
-        op.getLowerBounds(), op.getUpperBounds(), op.getSteps(),
-        schedAttr, op.getReductionAccumulators());
+    auto artsFor =
+        ForOp::create(rewriter, loc, op.getLowerBounds(), op.getUpperBounds(),
+                      op.getSteps(), schedAttr, op.getReductionAccumulators());
 
     metadataManager.rewriteMetadata(op, artsFor);
 
@@ -251,8 +246,7 @@ private:
 };
 
 /// sde.su_barrier -> arts.barrier
-struct SuBarrierToArtsPattern
-    : public OpRewritePattern<sde::SdeSuBarrierOp> {
+struct SuBarrierToArtsPattern : public OpRewritePattern<sde::SdeSuBarrierOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(sde::SdeSuBarrierOp op,
@@ -264,8 +258,7 @@ struct SuBarrierToArtsPattern
 };
 
 /// sde.cu_atomic -> arts.atomic_add
-struct CuAtomicToArtsPattern
-    : public OpRewritePattern<sde::SdeCuAtomicOp> {
+struct CuAtomicToArtsPattern : public OpRewritePattern<sde::SdeCuAtomicOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(sde::SdeCuAtomicOp op,
@@ -279,8 +272,7 @@ struct CuAtomicToArtsPattern
 };
 
 /// sde.yield -> arts.yield
-struct SdeYieldToArtsPattern
-    : public OpRewritePattern<sde::SdeYieldOp> {
+struct SdeYieldToArtsPattern : public OpRewritePattern<sde::SdeYieldOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(sde::SdeYieldOp op,
@@ -294,8 +286,7 @@ struct SdeYieldToArtsPattern
 /// sde.mu_dep (standalone) -> arts.omp_dep
 /// These are mu_deps not consumed by a cu_task — recreate as OmpDepOp
 /// for downstream passes (CreateDbs, etc.) to consume.
-struct MuDepToArtsPattern
-    : public OpRewritePattern<sde::SdeMuDepOp> {
+struct MuDepToArtsPattern : public OpRewritePattern<sde::SdeMuDepOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(sde::SdeMuDepOp op,
@@ -311,16 +302,15 @@ struct MuDepToArtsPattern
     SmallVector<Value> offsets(op.getOffsets().begin(), op.getOffsets().end());
     SmallVector<Value> sizes(op.getSizes().begin(), op.getSizes().end());
 
-    auto ompDep = OmpDepOp::create(
-        rewriter, op.getLoc(), mode, op.getSource(), offsets, sizes);
+    auto ompDep = OmpDepOp::create(rewriter, op.getLoc(), mode, op.getSource(),
+                                   offsets, sizes);
     rewriter.replaceOp(op, ompDep.getResult());
     return success();
   }
 };
 
 /// sde.cu_reduce -> handled inline (reduce to atomic_add for now)
-struct CuReduceToArtsPattern
-    : public OpRewritePattern<sde::SdeCuReduceOp> {
+struct CuReduceToArtsPattern : public OpRewritePattern<sde::SdeCuReduceOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(sde::SdeCuReduceOp op,

@@ -20,11 +20,15 @@ namespace {
 struct VerifySdeLoweredPass
     : public impl::VerifySdeLoweredBase<VerifySdeLoweredPass> {
   void runOnOperation() override {
+    auto *sdeDialect = getOperation()
+                           ->getContext()
+                           ->getLoadedDialect<arts::sde::ArtsSdeDialect>();
+    if (!sdeDialect)
+      return;
     bool failed = false;
     getOperation().walk([&](Operation *op) {
-      if (op->getDialect() &&
-          op->getDialect()->getNamespace() == "sde") {
-        op->emitError() << "sde operation '" << op->getName()
+      if (op->getDialect() == sdeDialect) {
+        op->emitError() << "SDE operation '" << op->getName()
                         << "' survived past SDE-to-ARTS conversion";
         failed = true;
       }
