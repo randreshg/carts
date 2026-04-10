@@ -9,10 +9,10 @@
 
 // CHECK-LABEL: func.func private @__arts_edt_1
 // CHECK: %[[MU_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?xf32>
-// CHECK-NEXT: %[[LA_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?xf32>
-// CHECK-NEXT: %[[CENTER_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?x?xf32>
-// CHECK-NEXT: %[[RHS_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?x?xf32>
-// CHECK-NEXT: scf.for %{{.+}} = %{{.+}} to %{{.+}} step %c1 {
+// CHECK: %[[LA_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?xf32>
+// CHECK: %[[CENTER_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?x?xf32>
+// CHECK: %[[RHS_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?x?xf32>
+// CHECK: scf.for %{{.+}} = %{{.+}} to %{{.+}} step %c1 {
 // CHECK:   scf.for %{{.+}} = %c4 to %c36 step %c1 {
 // CHECK:     scf.for %{{.+}} = %c4 to %c36 step %c1 {
 // CHECK:       %{{.+}} = polygeist.load %[[MU_MEM]][

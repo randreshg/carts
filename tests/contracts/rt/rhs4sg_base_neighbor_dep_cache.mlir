@@ -5,15 +5,18 @@
 // out of the loop and avoid per-tap dep_gep/divui chains.
 
 // CHECK-LABEL: func.func private @__arts_edt_1
-// CHECK: %{{.+}}, %{{.+}} = arts_rt.dep_gep(%arg3) offset[%1 : index] indices[%{{.+}} : index] strides[%c1] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> !llvm.ptr, !llvm.ptr
-// CHECK: %{{.+}} = llvm.load %{{.+}} : !llvm.ptr -> !llvm.ptr
-// CHECK: %{{.+}} = llvm.load %{{.+}} : !llvm.ptr -> !llvm.ptr
-// CHECK: %{{.+}} = llvm.load %{{.+}} : !llvm.ptr -> !llvm.ptr
-// CHECK: %{{.+}} = llvm.load %{{.+}} : !llvm.ptr -> !llvm.ptr
-// CHECK: %{{.+}} = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?xf32>
-// CHECK: %{{.+}} = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?xf32>
-// CHECK: %[[NEG_MEMREF:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?x?xf32>
-// CHECK: %{{.+}} = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?x?xf32>
+// CHECK: %{{.+}}, %{{.+}} = arts_rt.dep_db_acquire(%arg3) offset[%c0 : index] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> memref<?xi64>, memref<?x!llvm.ptr>
+// CHECK: %{{.+}}, %{{.+}} = arts_rt.dep_db_acquire(%arg3) offset[%c1 : index] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> memref<?xi64>, memref<?x!llvm.ptr>
+// CHECK: %{{.+}}, %{{.+}} = arts_rt.dep_db_acquire(%arg3) offset[%c2 : index] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> memref<?xi64>, memref<?x!llvm.ptr>
+// CHECK: %{{.+}}, %{{.+}} = arts_rt.dep_gep(%arg3) offset[%c3 : index] indices[%c0 : index] strides[%c1] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> !llvm.ptr, !llvm.ptr
+// CHECK-NEXT: %[[NEG_RAW:.+]] = llvm.load %{{.+}} : !llvm.ptr -> !llvm.ptr
+// CHECK-NEXT: %[[PTR3D0_RAW:.+]] = llvm.load %{{.+}} : !llvm.ptr -> !llvm.ptr
+// CHECK-NEXT: %{{.+}} = polygeist.pointer2memref %[[PTR3D0_RAW]] : !llvm.ptr to memref<?x?x?xf32>
+// CHECK-NEXT: %[[PTR3D1_RAW:.+]] = llvm.load %{{.+}} : !llvm.ptr -> !llvm.ptr
+// CHECK-NEXT: %{{.+}} = polygeist.pointer2memref %[[PTR3D1_RAW]] : !llvm.ptr to memref<?x?x?xf32>
+// CHECK-NEXT: %[[NEG_SRC_RAW:.+]] = llvm.load %{{.+}} : !llvm.ptr -> !llvm.ptr
+// CHECK-NEXT: %[[NEG_MEMREF:.+]] = polygeist.pointer2memref %[[NEG_SRC_RAW]] : !llvm.ptr to memref<?x?x?x?xf32>
+// CHECK-NEXT: %{{.+}} = polygeist.pointer2memref %[[NEG_RAW]] : !llvm.ptr to memref<?x?x?x?xf32>
 // CHECK: memref.store %cst_1, %{{.+}}[] : memref<f32>
 // CHECK-NEXT: scf.for %{{.+}} = %c-2 to %c3 step %c1 {
 // CHECK:   %{{.+}} = polygeist.load %[[NEG_MEMREF]][%c0, %{{.+}}, %{{.+}}, %{{.+}}] sizes
