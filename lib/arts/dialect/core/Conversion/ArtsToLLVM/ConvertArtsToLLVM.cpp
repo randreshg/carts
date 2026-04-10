@@ -16,7 +16,7 @@
 ///     call @arts_wait_on_handle(...)
 ///==========================================================================///
 
-#include "arts/passes/transforms/ConvertArtsToLLVMInternal.h"
+#include "arts/dialect/core/Conversion/ArtsToLLVM/ConvertArtsToLLVMInternal.h"
 
 #include "arts/Dialect.h"
 #include "arts/codegen/Codegen.h"

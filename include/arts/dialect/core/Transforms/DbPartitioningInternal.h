@@ -6,8 +6,8 @@
 /// should not be used as shared compiler infrastructure.
 ///==========================================================================///
 
-#ifndef ARTS_PASSES_OPT_DB_DBPARTITIONINGINTERNAL_H
-#define ARTS_PASSES_OPT_DB_DBPARTITIONINGINTERNAL_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_DBPARTITIONINGINTERNAL_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_DBPARTITIONINGINTERNAL_H
 
 /// Dialects
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -189,4 +189,4 @@ EntryMatch matchDbRefEntry(DbRefOp dbRef, ArrayRef<Value> accessIndices,
 
 } // namespace mlir::arts::db_partitioning
 
-#endif // ARTS_PASSES_OPT_DB_DBPARTITIONINGINTERNAL_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_DBPARTITIONINGINTERNAL_H

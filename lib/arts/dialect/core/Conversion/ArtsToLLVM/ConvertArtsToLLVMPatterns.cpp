@@ -6,7 +6,7 @@
 /// runtime calls via the ArtsCodegen infrastructure.
 ///==========================================================================///
 
-#include "arts/passes/transforms/ConvertArtsToLLVMInternal.h"
+#include "arts/dialect/core/Conversion/ArtsToLLVM/ConvertArtsToLLVMInternal.h"
 
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"

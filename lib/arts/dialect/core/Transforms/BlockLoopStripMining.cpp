@@ -9,7 +9,7 @@
 /// Transform implementations live in BlockLoopStripMiningSupport.cpp.
 ///==========================================================================///
 
-#include "arts/passes/opt/db/BlockLoopStripMiningInternal.h"
+#include "arts/dialect/core/Transforms/BlockLoopStripMiningInternal.h"
 #include "arts/utils/Debug.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"

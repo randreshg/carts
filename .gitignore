@@ -7,8 +7,9 @@
 compile_commands.json
 /build/
 CMakeFiles/
-core
-core.*
+# Core dump files (anchored to root to avoid matching dialect/core/)
+/core
+/core.*
 # Agent configs (generated from .agents/ — run `dekk carts agents generate`)
 /CLAUDE.md
 /CODEX.md

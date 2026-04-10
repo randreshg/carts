@@ -13,71 +13,80 @@ add_mlir_dialect_library(MLIRArtsTransforms
   verify/VerifyDbLowered.cpp
   verify/VerifyEpochLowered.cpp
 
-  # Transformation passes
+  # SDE dialect passes
   ../dialect/sde/Transforms/CollectMetadata.cpp
-  transforms/PatternDiscovery.cpp
-  transforms/CreateDbs.cpp
-  transforms/CreateEpochs.cpp
-  transforms/Concurrency.cpp
-  transforms/ConvertOpenMPToArts.cpp
   ../dialect/sde/Transforms/ConvertOpenMPToSde.cpp
   ../dialect/sde/Conversion/SdeToArts/SdeToArtsPatterns.cpp
-  transforms/ConvertArtsToLLVM.cpp
-  transforms/ConvertArtsToLLVMPatterns.cpp
-  ../dialect/rt/Conversion/RtToLLVM/RtToLLVMPatterns.cpp
-  transforms/DbLowering.cpp
+
+  # Core dialect passes — conversion
+  ../dialect/core/Conversion/OmpToArts/ConvertOpenMPToArts.cpp
+  ../dialect/core/Conversion/ArtsToLLVM/ConvertArtsToLLVM.cpp
+  ../dialect/core/Conversion/ArtsToLLVM/ConvertArtsToLLVMPatterns.cpp
+
+  # Core dialect passes — transforms
+  ../dialect/core/Transforms/Concurrency.cpp
+  ../dialect/core/Transforms/CreateDbs.cpp
+  ../dialect/core/Transforms/CreateEpochs.cpp
+  ../dialect/core/Transforms/DbLowering.cpp
+  ../dialect/core/Transforms/ParallelEdtLowering.cpp
+  ../dialect/core/Transforms/ForLowering.cpp
+  ../dialect/core/Transforms/ForOpt.cpp
+  ../dialect/core/Transforms/DistributedHostLoopOutlining.cpp
+  ../dialect/core/Transforms/EdtDistribution.cpp
+  ../dialect/core/Transforms/EdtPtrRematerialization.cpp
+  ../dialect/core/Transforms/DepTransforms.cpp
+  ../dialect/core/Transforms/PatternDiscovery.cpp
+  ../dialect/core/Transforms/KernelTransforms.cpp
+  ../dialect/core/Transforms/StencilBoundaryPeeling.cpp
+  ../dialect/core/Transforms/LoweringContractCleanup.cpp
+  # General transforms (ARTS-aware)
+  ../dialect/core/Transforms/Inliner.cpp
+  ../dialect/core/Transforms/RaiseMemRefDimensionality.cpp
+  ../dialect/core/Transforms/HandleDeps.cpp
+  ../dialect/core/Transforms/DeadCodeElimination.cpp
+  ../dialect/core/Transforms/ScalarReplacement.cpp
+  # Loop transforms
+  ../dialect/core/Transforms/LoopFusion.cpp
+  ../dialect/core/Transforms/LoopNormalization.cpp
+  ../dialect/core/Transforms/LoopReordering.cpp
+  # DB optimization
+  ../dialect/core/Transforms/BlockLoopStripMining.cpp
+  ../dialect/core/Transforms/BlockLoopStripMiningSupport.cpp
+  ../dialect/core/Transforms/ContractValidation.cpp
+  ../dialect/core/Transforms/DbModeTightening.cpp
+  ../dialect/core/Transforms/DbScratchElimination.cpp
+  ../dialect/core/Transforms/DbPartitioning.cpp
+  ../dialect/core/Transforms/DbPartitioningSupport.cpp
+  ../dialect/core/Transforms/DbTransformsPass.cpp
+  ../dialect/core/Transforms/DbDistributedOwnership.cpp
+  # EDT optimization
+  ../dialect/core/Transforms/EdtStructuralOpt.cpp
+  ../dialect/core/Transforms/EdtAllocaSinking.cpp
+  ../dialect/core/Transforms/EdtICM.cpp
+  ../dialect/core/Transforms/EdtTransformsPass.cpp
+  ../dialect/core/Transforms/EdtOrchestrationOpt.cpp
+  ../dialect/core/Transforms/StructuredKernelPlanPass.cpp
+  ../dialect/core/Transforms/PersistentStructuredRegion.cpp
+  # Epoch optimization
+  ../dialect/core/Transforms/EpochOpt.cpp
+  ../dialect/core/Transforms/EpochOptSupport.cpp
+  ../dialect/core/Transforms/EpochOptStructural.cpp
+  ../dialect/core/Transforms/EpochOptScheduling.cpp
+  ../dialect/core/Transforms/EpochOptCpsChain.cpp
+  # Codegen
+  ../dialect/core/Transforms/AliasScopeGen.cpp
+  ../dialect/core/Transforms/Hoisting.cpp
+  ../dialect/core/Transforms/LoopVectorizationHints.cpp
+
+  # RT dialect passes
   ../dialect/rt/Conversion/ArtsToRt/EdtLowering.cpp
   ../dialect/rt/Conversion/ArtsToRt/EdtLoweringSupport.cpp
   ../dialect/rt/Conversion/ArtsToRt/EpochLowering.cpp
-  transforms/LoweringContractCleanup.cpp
-  transforms/ForOpt.cpp
-  transforms/DistributedHostLoopOutlining.cpp
-  transforms/EdtDistribution.cpp
-  transforms/ForLowering.cpp
-  transforms/ParallelEdtLowering.cpp
-  transforms/EdtPtrRematerialization.cpp
-  transforms/DepTransforms.cpp
-
-  # Optimization passes
-  opt/general/Inliner.cpp
-  opt/general/RaiseMemRefDimensionality.cpp
-  opt/general/HandleDeps.cpp
-  opt/general/DeadCodeElimination.cpp
-  opt/kernel/KernelTransforms.cpp
-  opt/loop/LoopFusion.cpp
-  opt/loop/LoopNormalization.cpp
-  opt/loop/StencilBoundaryPeeling.cpp
-  opt/loop/LoopReordering.cpp
-  opt/db/BlockLoopStripMining.cpp
-  opt/db/BlockLoopStripMiningSupport.cpp
-  opt/db/ContractValidation.cpp
-  opt/db/DbModeTightening.cpp
-  opt/db/DbScratchElimination.cpp
-  opt/db/DbPartitioning.cpp
-  opt/db/DbPartitioningSupport.cpp
-  opt/db/DbTransformsPass.cpp
-  opt/db/DbDistributedOwnership.cpp
-  opt/edt/EdtStructuralOpt.cpp
-  opt/edt/EdtAllocaSinking.cpp
-  opt/edt/EdtICM.cpp
-  opt/edt/EdtTransformsPass.cpp
-  opt/edt/EdtOrchestrationOpt.cpp
-  # Epoch optimization split
-  opt/epoch/EpochOpt.cpp
-  opt/epoch/EpochOptSupport.cpp
-  opt/epoch/EpochOptStructural.cpp
-  opt/epoch/EpochOptScheduling.cpp
-  opt/epoch/EpochOptCpsChain.cpp
-  opt/edt/StructuredKernelPlanPass.cpp
-  opt/edt/PersistentStructuredRegion.cpp
-  opt/codegen/AliasScopeGen.cpp
-  opt/codegen/Hoisting.cpp
+  ../dialect/rt/Conversion/RtToLLVM/RtToLLVMPatterns.cpp
   ../dialect/rt/Transforms/DataPtrHoisting.cpp
   ../dialect/rt/Transforms/DataPtrHoistingSupport.cpp
   ../dialect/rt/Transforms/GuidRangCallOpt.cpp
   ../dialect/rt/Transforms/RuntimeCallOpt.cpp
-  opt/codegen/LoopVectorizationHints.cpp
-  opt/codegen/ScalarReplacement.cpp
   
   ${CARTS_TRANSFORMS_SOURCE_FILES}
   ${CARTS_UTILS_SOURCE_FILES}
