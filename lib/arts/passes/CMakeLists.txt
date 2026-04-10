@@ -19,6 +19,8 @@ add_mlir_dialect_library(MLIRArtsTransforms
   transforms/CreateEpochs.cpp
   transforms/Concurrency.cpp
   transforms/ConvertOpenMPToArts.cpp
+  ../dialect/sde/Transforms/ConvertOpenMPToSde.cpp
+  ../dialect/sde/Conversion/SdeToArts/SdeToArtsPatterns.cpp
   transforms/ConvertArtsToLLVM.cpp
   transforms/ConvertArtsToLLVMPatterns.cpp
   ../dialect/rt/Conversion/RtToLLVM/RtToLLVMPatterns.cpp
@@ -85,6 +87,7 @@ DEPENDS
   MLIROpsIncGen
   MLIRArtsPassIncGen
   MLIRRtOpsIncGen
+  MLIRSdeOpsIncGen
 
 LINK_LIBS PUBLIC
   MLIRAffineDialect
@@ -101,6 +104,7 @@ LINK_LIBS PUBLIC
   MLIRPass
   MLIRArts
   MLIRArtsRt
+  MLIRArtsSde
   MLIRSideEffectInterfaces
   MLIRSCFToControlFlow
   MLIRTargetLLVMIRImport
