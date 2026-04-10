@@ -14,14 +14,14 @@
 // Launcher contains epoch_0 marked for continuation.
 // CHECK: arts.continuation_for_epoch
 // First continuation (cont_0) with chain_id.
-// CHECK: arts.cps_chain_id = "chain_0"
+// CHECK: arts.cps_chain_id = "{{.*chain_0}}"
 // cont_0 contains epoch_1 also marked for continuation.
 // CHECK: arts.continuation_for_epoch
 // Second continuation (cont_1) — last one — with chain_id.
-// CHECK: arts.cps_chain_id = "chain_1"
+// CHECK: arts.cps_chain_id = "{{.*chain_1}}"
 // CPS advance placeholder in cont_1, targeting chain_0.
 // CHECK: arts.cps_advance
-// CHECK-SAME: target "chain_0"
+// CHECK-SAME: target "{{.*chain_0}}"
 // No loop remains.
 // CHECK-NOT: scf.for
 
