@@ -447,7 +447,7 @@ bool tryCPSChainTransform(scf::ForOp forOp,
       loopBackParams.reserve(originalCaptured.size());
       for (Value param : parameters) {
         if (auto *defOp = param.getDefiningOp())
-          if (defOp->getName().getStringRef() == "llvm.mlir.undef")
+          if (isUndefLikeOp(defOp))
             continue;
         loopBackParams.push_back(param);
       }

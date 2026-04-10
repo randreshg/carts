@@ -45,23 +45,6 @@ getOptimizableRuntimeFunction(func::CallOp call) {
   return fn;
 }
 
-static scf::ForOp findHoistTarget(func::CallOp call, DominanceInfo &domInfo) {
-  scf::ForOp target = nullptr;
-  for (Operation *parent = call->getParentOp(); parent;
-       parent = parent->getParentOp()) {
-    auto loop = dyn_cast<scf::ForOp>(parent);
-    if (!loop)
-      continue;
-
-    Region &loopRegion = loop.getRegion();
-    if (!allOperandsDefinedOutside(call, loopRegion))
-      break;
-    if (!allOperandsDominate(call, loop, domInfo))
-      break;
-    target = loop;
-  }
-  return target;
-}
 
 struct RuntimeCallOptPass
     : public impl::RuntimeCallOptBase<RuntimeCallOptPass> {
@@ -82,7 +65,8 @@ struct RuntimeCallOptPass
       for (func::CallOp call : calls) {
         if (!call)
           continue;
-        scf::ForOp target = findHoistTarget(call, domInfo);
+        scf::ForOp target = findHoistTarget(call.getOperation(),
+                                             call.getOperation(), domInfo);
         if (!target || !target->isAncestor(call))
           continue;
         call->moveBefore(target);

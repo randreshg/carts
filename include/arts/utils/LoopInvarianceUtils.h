@@ -41,6 +41,13 @@ bool allOperandsDefinedOutside(Operation *op, Region &region);
 bool allOperandsDominate(Operation *op, Operation *insertionPoint,
                          DominanceInfo &domInfo);
 
+/// Find the outermost enclosing scf::ForOp into which \p op can be legally
+/// hoisted.  Walks from \p op outward, checking that all operands of
+/// \p addrOp are defined outside each candidate loop and dominate it.
+/// Returns nullptr if no hoist target exists.
+scf::ForOp findHoistTarget(Operation *op, Operation *addrOp,
+                            DominanceInfo &domInfo);
+
 } // namespace arts
 } // namespace mlir
 

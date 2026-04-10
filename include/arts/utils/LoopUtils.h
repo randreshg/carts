@@ -12,6 +12,7 @@
 
 #include "arts/Dialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
@@ -151,6 +152,19 @@ bool hasFloatingPointType(Type type);
 /// Return true when any operand or result of an operation has a floating-point
 /// type.
 bool operationTouchesFloatingPoint(Operation *op);
+
+/// Collect induction variables from a perfectly nested spatial loop nest rooted
+/// at an arts::ForOp.  Descends through nested scf::ForOp / AffineForOp levels
+/// as long as each level contains exactly one nested loop plus only pure
+/// (side-effect-free) operations.  On success, \p ivs contains the IVs from
+/// outermost to innermost, \p spatialBody points to the innermost body block,
+/// and the function returns true.
+bool collectSpatialNestIvs(ForOp artsFor, SmallVector<Value, 4> &ivs,
+                           Block *&spatialBody);
+
+/// Clear reduction-related facts from loop metadata.  Sets
+/// `hasReductions = false` and clears `reductionKinds`.
+void clearReductionLoopFacts(LoopMetadata &metadata);
 
 } // namespace arts
 } // namespace mlir

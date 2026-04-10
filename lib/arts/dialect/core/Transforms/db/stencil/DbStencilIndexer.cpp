@@ -153,30 +153,6 @@ struct StencilRewriteContext {
 };
 
 ///===----------------------------------------------------------------------===///
-/// Helper: Compare values ignoring numeric casts
-///===----------------------------------------------------------------------===///
-
-/// Check whether two SSA values refer to the same definition, stripping
-/// arith::IndexCastOps and other numeric casts.
-static bool isSameValueWithCasts(Value a, Value b) {
-  if (!a || !b)
-    return false;
-  if (a == b)
-    return true;
-  a = ValueAnalysis::stripNumericCasts(a);
-  b = ValueAnalysis::stripNumericCasts(b);
-  if (a == b)
-    return true;
-  if (auto cast = a.getDefiningOp<arith::IndexCastOp>())
-    if (cast.getIn() == b)
-      return true;
-  if (auto cast = b.getDefiningOp<arith::IndexCastOp>())
-    if (cast.getIn() == a)
-      return true;
-  return false;
-}
-
-///===----------------------------------------------------------------------===///
 /// Helper: Derive constant row offset from expression
 ///===----------------------------------------------------------------------===///
 
@@ -190,7 +166,7 @@ static bool deriveRowOffset(Value rowExpr, Value rowIV, Value baseOffsetVal,
   Value baseExpr = ValueAnalysis::stripConstantOffset(rowExpr, &constOff);
   baseExpr = ValueAnalysis::stripNumericCasts(baseExpr);
 
-  if (isSameValueWithCasts(baseExpr, rowIV)) {
+  if (ValueAnalysis::sameValue(baseExpr, rowIV)) {
     rowOffset = constOff;
     includesBaseOffset = false;
     return true;
@@ -199,8 +175,8 @@ static bool deriveRowOffset(Value rowExpr, Value rowIV, Value baseOffsetVal,
   if (auto addOp = baseExpr.getDefiningOp<arith::AddIOp>()) {
     Value lhs = ValueAnalysis::stripNumericCasts(addOp.getLhs());
     Value rhs = ValueAnalysis::stripNumericCasts(addOp.getRhs());
-    bool lhsIsRow = isSameValueWithCasts(lhs, rowIV);
-    bool rhsIsRow = isSameValueWithCasts(rhs, rowIV);
+    bool lhsIsRow = ValueAnalysis::sameValue(lhs, rowIV);
+    bool rhsIsRow = ValueAnalysis::sameValue(rhs, rowIV);
     if (lhsIsRow || rhsIsRow) {
       Value other = lhsIsRow ? rhs : lhs;
       if (baseOffsetVal && (other == baseOffsetVal ||

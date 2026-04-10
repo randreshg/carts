@@ -204,11 +204,6 @@ static bool isAmortizableTailOp(Operation *op, Value loopIv) {
   return false;
 }
 
-static bool hasPlanAttrValue(Operation *op, StringRef attrName,
-                             StringRef expected) {
-  auto attr = op ? op->getAttrOfType<StringAttr>(attrName) : nullptr;
-  return attr && attr.getValue() == expected;
-}
 
 static bool isStableRepeatTopology(Operation *op) {
   return hasPlanAttrValue(op, AttrNames::Operation::Plan::IterationTopology,

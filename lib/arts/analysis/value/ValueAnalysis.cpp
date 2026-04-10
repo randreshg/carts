@@ -6,6 +6,7 @@
 
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/Dialect.h"
+#include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -387,6 +388,20 @@ std::optional<int64_t> ValueAnalysis::tryFoldConstantIndex(Value v,
     if (auto folded = tryFoldScalarMemrefLoad(load, depth + 1))
       return folded;
 
+  if (auto query = v.getDefiningOp<RuntimeQueryOp>()) {
+    ModuleOp module = query->getParentOfType<ModuleOp>();
+    if (!module)
+      return std::nullopt;
+    switch (query.getKind()) {
+    case RuntimeQueryKind::totalWorkers:
+      return getRuntimeTotalWorkers(module);
+    case RuntimeQueryKind::totalNodes:
+      return getRuntimeTotalNodes(module);
+    default:
+      return std::nullopt;
+    }
+  }
+
   if (auto cast = v.getDefiningOp<arith::IndexCastOp>()) {
     return tryFoldConstantIndex(cast.getIn(), depth + 1);
   }
@@ -482,6 +497,12 @@ std::optional<int64_t> ValueAnalysis::tryFoldConstantIndex(Value v,
   }
 
   return std::nullopt;
+}
+
+std::optional<int64_t> ValueAnalysis::getConstantIndexStripped(Value v) {
+  if (!v)
+    return std::nullopt;
+  return tryFoldConstantIndex(stripNumericCasts(v));
 }
 
 std::optional<double> ValueAnalysis::getConstantFloat(Value v) {
@@ -1318,6 +1339,39 @@ Value ValueAnalysis::traceSelectWithFallback(
     return falseTraced;
   }
   return nullptr;
+}
+
+bool ValueAnalysis::isOneLikeValue(Value value) {
+  if (isOneConstant(value))
+    return true;
+
+  auto addOp = value.getDefiningOp<arith::AddIOp>();
+  if (!addOp)
+    return false;
+
+  Value lhs = addOp.getLhs();
+  Value rhs = addOp.getRhs();
+  Value other;
+  if (isOneConstant(lhs))
+    other = rhs;
+  else if (isOneConstant(rhs))
+    other = lhs;
+  else
+    return false;
+
+  auto subOp = other.getDefiningOp<arith::SubIOp>();
+  if (!subOp)
+    return false;
+
+  Value subLhs = subOp.getLhs();
+  Value subRhs = subOp.getRhs();
+  if (subLhs == subRhs)
+    return true;
+
+  if (auto minOp = subLhs.getDefiningOp<arith::MinUIOp>())
+    return minOp.getLhs() == subRhs || minOp.getRhs() == subRhs;
+
+  return false;
 }
 
 } // namespace arts

@@ -15,7 +15,7 @@ static void clearMovedMetadataAttrs(Operation *op) {
   if (!op)
     return;
 
-  op->removeAttr(ArtsMetadata::IdAttrName);
+  op->removeAttr(AttrNames::Operation::ArtsId);
   op->removeAttr(AttrNames::Operation::MetadataOriginId);
   op->removeAttr(AttrNames::Operation::MetadataProvenance);
   op->removeAttr(AttrNames::LoopMetadata::Name);

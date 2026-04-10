@@ -8,6 +8,7 @@
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/EdtUtils.h"
+#include "arts/utils/Utils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
@@ -21,18 +22,6 @@ using namespace mlir::arts;
 #include "arts/passes/Passes.h.inc"
 
 namespace {
-static void sortStoresInProgramOrder(MutableArrayRef<memref::StoreOp> stores) {
-  std::stable_sort(stores.begin(), stores.end(),
-                   [](memref::StoreOp lhs, memref::StoreOp rhs) {
-                     Operation *lhsOp = lhs.getOperation();
-                     Operation *rhsOp = rhs.getOperation();
-                     if (lhsOp == rhsOp)
-                       return false;
-                     if (lhsOp->getBlock() == rhsOp->getBlock())
-                       return lhsOp->isBeforeInBlock(rhsOp);
-                     return lhsOp < rhsOp;
-                   });
-}
 
 unsigned sinkExternalAllocasInEdt(EdtOp edt) {
   Block &body = edt.getBody().front();

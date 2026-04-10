@@ -43,6 +43,7 @@
 #include "arts/transforms/edt/WorkDistributionUtils.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/PartitionPredicates.h"
@@ -205,13 +206,9 @@ public:
 
 using ReductionInfo = ReductionLoweringInfo;
 using ParallelRegionAnalysis = ParallelRegionSplitAnalysis;
-constexpr llvm::StringLiteral kRepeatedWaveGroupKind = "repeated_wave_group";
-
 static bool hasRepeatedWaveGroupKind(Operation *op) {
-  auto kindAttr = op ? op->getAttrOfType<StringAttr>(
-                           AttrNames::Operation::Orchestration::Kind)
-                     : nullptr;
-  return kindAttr && kindAttr.getValue() == kRepeatedWaveGroupKind;
+  return hasPlanAttrValue(op, AttrNames::Operation::Orchestration::Kind,
+                          AttrNames::Operation::RepeatedWaveGroup);
 }
 
 static std::optional<int64_t> getI64Attr(Operation *op, StringRef attrName) {
@@ -232,17 +229,6 @@ static std::optional<int64_t> getOrchestrationWaveIndex(Operation *op) {
 
 static std::optional<int64_t> getOrchestrationWaveCount(Operation *op) {
   return getI64Attr(op, AttrNames::Operation::Orchestration::WaveCount);
-}
-
-static SmallVector<ForOp, 2> getTopLevelForOps(EdtOp edt) {
-  SmallVector<ForOp, 2> result;
-  if (!edt)
-    return result;
-  Block &body = edt.getBody().front();
-  for (Operation &op : body.without_terminator())
-    if (auto forOp = dyn_cast<ForOp>(&op))
-      result.push_back(forOp);
-  return result;
 }
 
 static bool haveCompatibleOrchestrationContract(EdtOp lhs, EdtOp rhs) {
@@ -497,11 +483,6 @@ static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
       builder.setInsertionPointToStart(&taskBlock);
     }
   }
-}
-
-static void clearReductionLoopFacts(LoopMetadata &metadata) {
-  metadata.hasReductions = false;
-  metadata.reductionKinds.clear();
 }
 
 static void markReductionLoweredLoop(LoopMetadata &metadata) {

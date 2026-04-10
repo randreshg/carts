@@ -59,7 +59,7 @@ bool MetadataAttacher::ensureLoopMetadata(Operation *op) {
                                          << " (file=" << loc.file
                                          << ", line=" << loc.line << ")");
   std::string key;
-  if (auto idAttr = op->getAttrOfType<IntegerAttr>(ArtsMetadata::IdAttrName))
+  if (auto idAttr = op->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsId))
     key = std::to_string(idAttr.getInt());
   if (key.empty())
     key = loc.getKey().str();
@@ -94,7 +94,7 @@ bool MetadataAttacher::ensureMemrefMetadata(Operation *op) {
 
   /// 3. Try to attach from cache using arts.id or location
   std::string key;
-  if (auto idAttr = op->getAttrOfType<IntegerAttr>(ArtsMetadata::IdAttrName))
+  if (auto idAttr = op->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsId))
     key = std::to_string(idAttr.getInt());
   if (key.empty())
     key = LocationMetadata::fromLocation(op->getLoc()).getKey().str();

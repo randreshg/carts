@@ -155,6 +155,10 @@ inline bool isInsideEpoch(Operation *op) {
 /// non-terminator operation exists.
 ForOp getSingleTopLevelFor(EdtOp edt);
 
+/// Collect all top-level arts::ForOp operations in an EDT body (ignoring
+/// non-ForOp operations).  Returns an empty vector when \p edt is null.
+SmallVector<ForOp, 2> getTopLevelForOps(EdtOp edt);
+
 /// Wrap all operations (except terminator) in a block inside an EpochOp.
 /// Returns the created EpochOp, or nullptr if no operations to wrap.
 EpochOp wrapBodyInEpoch(Block &body, Location loc);

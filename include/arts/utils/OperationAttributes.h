@@ -199,7 +199,24 @@ constexpr StringLiteral IteratorTypes = "arts.linalg.iterator_types";
 constexpr StringLiteral IndexingMaps = "arts.linalg.indexing_maps";
 constexpr StringLiteral NumInputs = "arts.linalg.num_inputs";
 constexpr StringLiteral NumOutputs = "arts.linalg.num_outputs";
+
+/// Iterator type values (analogous to mlir::utils::IteratorTypeEnum).
+constexpr StringLiteral IterParallel = "parallel";
+constexpr StringLiteral IterReduction = "reduction";
+
+/// Pattern classification values returned by RaiseToLinalg.
+constexpr StringLiteral PatternElementwise = "elementwise";
+constexpr StringLiteral PatternStencil = "stencil";
+constexpr StringLiteral PatternMatmul = "matmul";
+constexpr StringLiteral PatternReduction = "reduction";
 } // namespace Linalg
+
+/// Orchestration kind value for repeated-wave groups.
+constexpr llvm::StringLiteral RepeatedWaveGroup = "repeated_wave_group";
+
+/// Block-loop strip-mining marker attribute.
+constexpr llvm::StringLiteral StripMiningGenerated =
+    "arts.block_loop_strip_mining.generated";
 
 } // namespace Operation
 
@@ -237,6 +254,14 @@ parseMetadataProvenance(StringRef value) {
   if (value == "recovered")
     return MetadataProvenanceKind::Recovered;
   return std::nullopt;
+}
+
+/// Check if an operation has a StringAttr with the given name whose value
+/// matches the expected string.  Null-safe: returns false if op is null.
+inline bool hasPlanAttrValue(Operation *op, StringRef attrName,
+                             StringRef expected) {
+  auto attr = op ? op->getAttrOfType<StringAttr>(attrName) : nullptr;
+  return attr && attr.getValue() == expected;
 }
 
 inline std::optional<StringRef> getRuntimeConfigPath(ModuleOp module) {

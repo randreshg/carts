@@ -16,147 +16,36 @@ using namespace mlir::arts;
 namespace mlir::arts::block_loop_strip_mining {
 
 const llvm::StringLiteral kStripMiningGeneratedAttr =
-    "arts.block_loop_strip_mining.generated";
+    AttrNames::Operation::StripMiningGenerated;
 
 bool isGeneratedByStripMining(scf::ForOp loop) {
-  return loop->hasAttr(kStripMiningGeneratedAttr);
+  return loop->hasAttr(AttrNames::Operation::StripMiningGenerated);
 }
 
 void markGeneratedByStripMining(scf::ForOp loop) {
-  loop->setAttr(kStripMiningGeneratedAttr, UnitAttr::get(loop.getContext()));
+  loop->setAttr(AttrNames::Operation::StripMiningGenerated,
+                UnitAttr::get(loop.getContext()));
 }
 
 void clearGeneratedStripMiningMarks(func::FuncOp func) {
   func.walk([](scf::ForOp loop) {
-    if (loop->hasAttr(kStripMiningGeneratedAttr))
-      loop->removeAttr(kStripMiningGeneratedAttr);
+    if (loop->hasAttr(AttrNames::Operation::StripMiningGenerated))
+      loop->removeAttr(AttrNames::Operation::StripMiningGenerated);
   });
 }
 
 bool getConstIndex(Value v, int64_t &out) {
-  if (!v)
-    return false;
-  if (auto folded = ValueAnalysis::tryFoldConstantIndex(
-          ValueAnalysis::stripNumericCasts(v))) {
+  if (auto folded = ValueAnalysis::getConstantIndexStripped(v)) {
     out = *folded;
     return true;
   }
   return false;
 }
 
-static std::optional<int64_t> tryFoldKnownRuntimeShape(Value v,
-                                                       unsigned depth = 0) {
-  if (!v || depth > 32)
-    return std::nullopt;
-
-  v = ValueAnalysis::stripNumericCasts(v);
-  if (auto folded = ValueAnalysis::tryFoldConstantIndex(v))
-    return folded;
-
-  if (auto query = v.getDefiningOp<RuntimeQueryOp>()) {
-    ModuleOp module = query->getParentOfType<ModuleOp>();
-    if (!module)
-      return std::nullopt;
-    switch (query.getKind()) {
-    case RuntimeQueryKind::totalWorkers:
-      return getRuntimeTotalWorkers(module);
-    case RuntimeQueryKind::totalNodes:
-      return getRuntimeTotalNodes(module);
-    default:
-      return std::nullopt;
-    }
-  }
-
-  if (auto cast = v.getDefiningOp<arith::IndexCastOp>())
-    return tryFoldKnownRuntimeShape(cast.getIn(), depth + 1);
-  if (auto cast = v.getDefiningOp<arith::IndexCastUIOp>())
-    return tryFoldKnownRuntimeShape(cast.getIn(), depth + 1);
-  if (auto ext = v.getDefiningOp<arith::ExtSIOp>())
-    return tryFoldKnownRuntimeShape(ext.getIn(), depth + 1);
-  if (auto ext = v.getDefiningOp<arith::ExtUIOp>())
-    return tryFoldKnownRuntimeShape(ext.getIn(), depth + 1);
-  if (auto trunc = v.getDefiningOp<arith::TruncIOp>())
-    return tryFoldKnownRuntimeShape(trunc.getIn(), depth + 1);
-
-  auto foldBinary = [&](Value lhs, Value rhs,
-                        auto folder) -> std::optional<int64_t> {
-    auto lhsFolded = tryFoldKnownRuntimeShape(lhs, depth + 1);
-    auto rhsFolded = tryFoldKnownRuntimeShape(rhs, depth + 1);
-    if (!lhsFolded || !rhsFolded)
-      return std::nullopt;
-    return folder(*lhsFolded, *rhsFolded);
-  };
-
-  if (auto add = v.getDefiningOp<arith::AddIOp>())
-    return foldBinary(add.getLhs(), add.getRhs(),
-                      [](int64_t lhs, int64_t rhs) { return lhs + rhs; });
-
-  if (auto sub = v.getDefiningOp<arith::SubIOp>())
-    return foldBinary(sub.getLhs(), sub.getRhs(),
-                      [](int64_t lhs, int64_t rhs) { return lhs - rhs; });
-
-  if (auto mul = v.getDefiningOp<arith::MulIOp>())
-    return foldBinary(mul.getLhs(), mul.getRhs(),
-                      [](int64_t lhs, int64_t rhs) { return lhs * rhs; });
-
-  if (auto div = v.getDefiningOp<arith::DivUIOp>()) {
-    return foldBinary(div.getLhs(), div.getRhs(),
-                      [](int64_t lhs, int64_t rhs) -> std::optional<int64_t> {
-                        if (rhs == 0)
-                          return std::nullopt;
-                        uint64_t ulhs = static_cast<uint64_t>(lhs);
-                        uint64_t urhs = static_cast<uint64_t>(rhs);
-                        return static_cast<int64_t>(ulhs / urhs);
-                      });
-  }
-
-  if (auto div = v.getDefiningOp<arith::DivSIOp>()) {
-    return foldBinary(div.getLhs(), div.getRhs(),
-                      [](int64_t lhs, int64_t rhs) -> std::optional<int64_t> {
-                        if (rhs == 0)
-                          return std::nullopt;
-                        return lhs / rhs;
-                      });
-  }
-
-  if (auto max = v.getDefiningOp<arith::MaxUIOp>()) {
-    return foldBinary(max.getLhs(), max.getRhs(),
-                      [](int64_t lhs, int64_t rhs) -> int64_t {
-                        return std::max<uint64_t>(static_cast<uint64_t>(lhs),
-                                                  static_cast<uint64_t>(rhs));
-                      });
-  }
-
-  if (auto min = v.getDefiningOp<arith::MinUIOp>()) {
-    return foldBinary(min.getLhs(), min.getRhs(),
-                      [](int64_t lhs, int64_t rhs) -> int64_t {
-                        return std::min<uint64_t>(static_cast<uint64_t>(lhs),
-                                                  static_cast<uint64_t>(rhs));
-                      });
-  }
-
-  if (auto select = v.getDefiningOp<arith::SelectOp>()) {
-    auto cond = tryFoldKnownRuntimeShape(select.getCondition(), depth + 1);
-    if (cond) {
-      return tryFoldKnownRuntimeShape((*cond != 0) ? select.getTrueValue()
-                                                   : select.getFalseValue(),
-                                      depth + 1);
-    }
-
-    auto trueValue = tryFoldKnownRuntimeShape(select.getTrueValue(), depth + 1);
-    auto falseValue =
-        tryFoldKnownRuntimeShape(select.getFalseValue(), depth + 1);
-    if (trueValue && falseValue && *trueValue == *falseValue)
-      return trueValue;
-  }
-
-  return std::nullopt;
-}
-
 static std::optional<int64_t> resolveBlockSizeHint(Value value) {
   if (!value)
     return std::nullopt;
-  if (auto folded = tryFoldKnownRuntimeShape(value))
+  if (auto folded = ValueAnalysis::getConstantIndexStripped(value))
     return folded;
   return extractBlockSizeFromHint(value);
 }

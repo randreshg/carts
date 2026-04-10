@@ -5,6 +5,7 @@
 #include "arts/analysis/metadata/MetadataRegistry.h"
 #include "arts/Dialect.h"
 #include "arts/utils/Debug.h"
+#include "arts/utils/OperationAttributes.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/metadata/LocationMetadata.h"
 #include "arts/utils/metadata/LoopMetadata.h"
@@ -300,7 +301,7 @@ void MetadataRegistry::initializeMetadata(ArtsMetadata *metadata) {
   /// If metadata already has an ID (e.g., from JSON), preserve it
   if (id.has_value()) {
     /// Set the arts.id attribute on the operation if it doesn't have one
-    if (!op->getAttrOfType<IntegerAttr>(ArtsMetadata::IdAttrName))
+    if (!op->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsId))
       idRegistry.set(op, id.value());
   } else {
     /// No ID in metadata, try to get/assign from operation

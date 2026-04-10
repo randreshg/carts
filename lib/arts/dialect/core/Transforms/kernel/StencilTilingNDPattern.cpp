@@ -27,8 +27,10 @@
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/transforms/kernel/KernelTransform.h"
 #include "arts/utils/Debug.h"
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
+#include "arts/utils/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -77,21 +79,6 @@ struct MatchResult {
   ArtsDepPattern pattern = ArtsDepPattern::unknown;
 };
 
-static bool isPureOp(Operation *op) {
-  if (!op)
-    return false;
-  if (isa<arts::ForOp, arts::YieldOp, memref::LoadOp, memref::StoreOp,
-          affine::AffineLoadOp, affine::AffineStoreOp, affine::AffineApplyOp,
-          scf::ForOp, scf::YieldOp, affine::AffineForOp, affine::AffineYieldOp>(
-          op))
-    return true;
-  if (isa<CallOpInterface>(op))
-    return false;
-  if (auto iface = dyn_cast<MemoryEffectOpInterface>(op))
-    return iface.hasNoEffect();
-  return op->getNumRegions() == 0;
-}
-
 static std::optional<std::pair<int64_t, int64_t>>
 getStaticIvRange(scf::ForOp loop) {
   if (!loop)
@@ -119,47 +106,6 @@ getStaticIvRange(affine::AffineForOp loop) {
   return std::make_pair(lb, ub - step);
 }
 
-static bool collectSpatialNestIvs(ForOp artsFor, SmallVector<Value, 4> &ivs,
-                                  Block *&spatialBody) {
-  if (!artsFor)
-    return false;
-  if (artsFor.getBody()->getNumArguments() == 0)
-    return false;
-  ivs.push_back(artsFor.getBody()->getArgument(0));
-
-  Block *block = artsFor.getBody();
-  while (block) {
-    SmallVector<Operation *, 2> nestedFors;
-    for (Operation &op : block->without_terminator()) {
-      if (isa<scf::ForOp, affine::AffineForOp>(&op)) {
-        nestedFors.push_back(&op);
-        continue;
-      }
-      if (!isPureOp(&op))
-        return false;
-    }
-
-    /// Allow index/scalar setup alongside the single nested spatial loop.
-    /// Real kernels often materialize loop-local arithmetic before descending
-    /// into the next loop, and treating that as a structural mismatch causes
-    /// us to miss reusable stencil families like sw4lite/rhs4sg-base.
-    if (nestedFors.size() != 1)
-      break;
-
-    Operation *nestedLoop = nestedFors.front();
-    if (auto scfFor = dyn_cast<scf::ForOp>(nestedLoop)) {
-      ivs.push_back(scfFor.getInductionVar());
-      block = scfFor.getBody();
-      continue;
-    }
-    auto affineFor = cast<affine::AffineForOp>(nestedLoop);
-    ivs.push_back(affineFor.getInductionVar());
-    block = affineFor.getBody();
-  }
-
-  spatialBody = block;
-  return !ivs.empty() && spatialBody;
-}
 
 static bool accumulateAffineExprTerms(AffineExpr expr, ValueRange operands,
                                       unsigned numDims, int64_t scale,
@@ -443,22 +389,6 @@ static bool buildLeafIndices(affine::AffineStoreOp store,
   return true;
 }
 
-static Value stripMemrefCasts(Value value) {
-  while (value) {
-    if (auto cast = value.getDefiningOp<memref::CastOp>()) {
-      value = cast.getSource();
-      continue;
-    }
-    if (auto cast = value.getDefiningOp<UnrealizedConversionCastOp>()) {
-      if (cast.getInputs().size() != 1)
-        break;
-      value = cast.getInputs().front();
-      continue;
-    }
-    break;
-  }
-  return value;
-}
 
 template <typename LoadOpTy>
 static bool prependContainerIndices(LoadOpTy containerLoad,
@@ -485,7 +415,7 @@ static bool resolveLogicalAccess(Value memref, ArrayRef<LinearExpr> leafIndices,
                                  LogicalAccess &access) {
   access = {};
   access.indices.append(leafIndices.begin(), leafIndices.end());
-  Value current = stripMemrefCasts(memref);
+  Value current = ValueAnalysis::stripMemrefViewOps(memref);
   if (!current)
     return false;
 
@@ -493,13 +423,13 @@ static bool resolveLogicalAccess(Value memref, ArrayRef<LinearExpr> leafIndices,
     if (auto load = current.getDefiningOp<memref::LoadOp>()) {
       if (!prependContainerIndices(load, access.indices))
         return false;
-      current = stripMemrefCasts(load.getMemRef());
+      current = ValueAnalysis::stripMemrefViewOps(load.getMemRef());
       continue;
     }
     if (auto load = current.getDefiningOp<affine::AffineLoadOp>()) {
       if (!prependContainerIndices(load, access.indices))
         return false;
-      current = stripMemrefCasts(load.getMemRef());
+      current = ValueAnalysis::stripMemrefViewOps(load.getMemRef());
       continue;
     }
     access.rootMemref = current;
