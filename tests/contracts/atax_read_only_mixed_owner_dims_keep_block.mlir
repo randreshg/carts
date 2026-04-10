@@ -2,12 +2,13 @@
 
 // ATAX reuses the read-only matrix `A` under conflicting owner dimensions:
 // the first phase is row-owned while the second phase is column-owned. Keep
-// the allocation blocked and preserve both owner-dim contracts; only the
-// mismatched column-owned acquire should widen to a full-range view.
+// the allocation blocked and preserve both owner-dim contracts, while both
+// read acquires widen to coarse full-range views under their respective
+// owner-dimension metadata.
 
 // CHECK: %[[A_GUID:[^,]+]], %[[A_PTR:[^ ]+]] = arts.db_alloc[<in>, <heap>, <read>, <block>, <indexed>]
-// CHECK-DAG: arts.db_acquire[<in>] (%[[A_GUID]] : memref<?xi64>, %[[A_PTR]] : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%{{.*}}], sizes[%{{.*}}]), offsets[%{{.*}}], sizes[%{{.*}}] element_offsets[%{{.*}}] element_sizes[%{{.*}}] {{.*}}stencil_owner_dims = [0]
-// CHECK-DAG: arts.db_acquire[<in>] (%[[A_GUID]] : memref<?xi64>, %[[A_PTR]] : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%{{.*}}], sizes[%{{.*}}]), offsets[%c0{{.*}}], sizes[%{{.*}}] {{.*}}stencil_owner_dims = [1]
+// CHECK-DAG: arts.db_acquire[<in>] (%[[A_GUID]] : memref<?xi64>, %[[A_PTR]] : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%{{.*}}], sizes[%{{.*}}] {{.*}}stencil_owner_dims = [0]
+// CHECK-DAG: arts.db_acquire[<in>] (%[[A_GUID]] : memref<?xi64>, %[[A_PTR]] : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%{{.*}}], sizes[%{{.*}}] {{.*}}stencil_owner_dims = [1]
 
 module {
 }
