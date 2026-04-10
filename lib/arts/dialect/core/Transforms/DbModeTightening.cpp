@@ -31,7 +31,6 @@
 #include "mlir/Pass/Pass.h"
 /// Debug
 #include "arts/dialect/core/Analysis/graphs/db/DbNode.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/BlockedAccessUtils.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
@@ -39,6 +38,7 @@
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "llvm/ADT/STLExtras.h"
 
 using namespace mlir;

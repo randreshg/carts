@@ -43,20 +43,20 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
+#include "arts/codegen/Codegen.h"
 #include "arts/dialect/core/Analysis/AnalysisDependencies.h"
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/dialect/core/Analysis/db/DbAnalysis.h"
 #include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #include "arts/utils/ValueAnalysis.h"
-#include "arts/codegen/Codegen.h"
 #define GEN_PASS_DEF_CREATEDBS
 #include "arts/Dialect.h"
-#include "arts/passes/Passes.h"
-#include "arts/passes/Passes.h.inc"
 #include "arts/dialect/core/Transforms/db/DbRewriter.h"
 #include "arts/dialect/core/Transforms/db/DbTransforms.h"
 #include "arts/dialect/core/Transforms/db/block/DbBlockIndexer.h"
 #include "arts/dialect/core/Transforms/db/elementwise/DbElementWiseIndexer.h"
+#include "arts/passes/Passes.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"

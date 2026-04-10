@@ -26,7 +26,6 @@
 ///==========================================================================///
 
 #include "arts/dialect/core/Transforms/db/stencil/DbStencilRewriter.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/dialect/core/Transforms/db/DbPartitionWindowUtils.h"
 #include "arts/dialect/core/Transforms/db/stencil/DbStencilIndexer.h"
@@ -39,6 +38,7 @@
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -111,15 +111,15 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   /// Base-offset semantics: elemOffset is the explicit dependency-window base.
   Value baseOffset = elemOffset ? elemOffset : zero;
   if (baseOffset && !baseOffset.getType().isIndex())
-    baseOffset = arith::IndexCastOp::create(builder, loc, builder.getIndexType(),
-                                                    baseOffset);
+    baseOffset = arith::IndexCastOp::create(builder, loc,
+                                            builder.getIndexType(), baseOffset);
   /// `baseOffset` is the explicit element-space start of the dependency
   /// window. It stays in halo-expanded coordinates until we remap it through
   /// the block plan below.
   Value blockBaseOffset = baseOffset;
   if (chunkIndexHint && !chunkIndexHint.getType().isIndex())
-    chunkIndexHint = arith::IndexCastOp::create(builder,
-        loc, builder.getIndexType(), chunkIndexHint);
+    chunkIndexHint = arith::IndexCastOp::create(
+        builder, loc, builder.getIndexType(), chunkIndexHint);
 
   /// Uniform allocation block size — all blocks are allocated with this size.
   /// Use this instead of computeChunkRows to avoid non-uniform chunk sizes
@@ -145,8 +145,8 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
   if (!ownerBlockShape.empty())
     ownerBlockSpan = ownerBlockShape.front();
   if (ownerBlockSpan && !ownerBlockSpan.getType().isIndex())
-    ownerBlockSpan = arith::IndexCastOp::create(builder,
-        loc, builder.getIndexType(), ownerBlockSpan);
+    ownerBlockSpan = arith::IndexCastOp::create(
+        builder, loc, builder.getIndexType(), ownerBlockSpan);
   if (ownerBlockSpan)
     ownerBlockSpan = arith::MaxUIOp::create(builder, loc, ownerBlockSpan, one);
   ARTS_DEBUG("  baseOffset=" << baseOffset << ", blockBaseOffset="
@@ -252,7 +252,7 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
                                : one);
     if (!dimSize.getType().isIndex())
       dimSize = arith::IndexCastOp::create(builder, loc, builder.getIndexType(),
-                                                   dimSize);
+                                           dimSize);
     ownedElementSizes.push_back(
         arith::MaxUIOp::create(builder, loc, dimSize, one));
   }
@@ -304,12 +304,13 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
         arith::SubIOp::create(builder, loc, leftChunkRows, haloLeftConst);
 
     /// bounds_valid = (blockIdx != 0): valid only if not first block
-    Value leftValid = arith::CmpIOp::create(builder,
-        loc, arith::CmpIPredicate::ne, blockIdx, zero);
+    Value leftValid = arith::CmpIOp::create(
+        builder, loc, arith::CmpIPredicate::ne, blockIdx, zero);
 
-    auto leftHalo = DbAcquireOp::create(builder,
-        loc, ArtsMode::in, acquire.getSourceGuid(), acquire.getSourcePtr(),
-        PartitionMode::stencil, /*indices=*/SmallVector<Value>{},
+    auto leftHalo = DbAcquireOp::create(
+        builder, loc, ArtsMode::in, acquire.getSourceGuid(),
+        acquire.getSourcePtr(), PartitionMode::stencil,
+        /*indices=*/SmallVector<Value>{},
         /*offsets=*/SmallVector<Value>{leftChunkIdx},
         /*sizes=*/SmallVector<Value>{one},
         /*partition_indices=*/SmallVector<Value>{},
@@ -333,20 +334,21 @@ void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
     Value rightChunkIdx = arith::AddIOp::create(builder, loc, blockIdx, one);
 
     /// bounds_valid = (blockIdx != lastBlock): valid only if not last block
-    Value rightValid = arith::CmpIOp::create(builder,
-        loc, arith::CmpIPredicate::ne, blockIdx, lastChunkIdx);
+    Value rightValid = arith::CmpIOp::create(
+        builder, loc, arith::CmpIPredicate::ne, blockIdx, lastChunkIdx);
 
-    auto rightHalo = DbAcquireOp::create(builder,
-        loc, ArtsMode::in, acquire.getSourceGuid(), acquire.getSourcePtr(),
-        PartitionMode::stencil, /*indices=*/SmallVector<Value>{},
-        /*offsets=*/SmallVector<Value>{rightChunkIdx},
-        /*sizes=*/SmallVector<Value>{one},
-        /*partition_indices=*/SmallVector<Value>{},
-        /*partition_offsets=*/SmallVector<Value>{},
-        /*partition_sizes=*/SmallVector<Value>{},
-        /*bounds_valid=*/rightValid,
-        /*element_offsets=*/buildHaloOffsets(zero),
-        /*element_sizes=*/buildHaloSizes(haloRightVal));
+    auto rightHalo =
+        DbAcquireOp::create(builder, loc, ArtsMode::in, acquire.getSourceGuid(),
+                            acquire.getSourcePtr(), PartitionMode::stencil,
+                            /*indices=*/SmallVector<Value>{},
+                            /*offsets=*/SmallVector<Value>{rightChunkIdx},
+                            /*sizes=*/SmallVector<Value>{one},
+                            /*partition_indices=*/SmallVector<Value>{},
+                            /*partition_offsets=*/SmallVector<Value>{},
+                            /*partition_sizes=*/SmallVector<Value>{},
+                            /*bounds_valid=*/rightValid,
+                            /*element_offsets=*/buildHaloOffsets(zero),
+                            /*element_sizes=*/buildHaloSizes(haloRightVal));
 
     addHaloAcquireToEdt(acquire, rightHalo, builder);
     /// Track right halo block arg index (it's the last one added)
@@ -464,8 +466,8 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
         blockSize = one;
       blockSize = arith::MaxUIOp::create(builder, loc, blockSize, one);
       Value totalExtent = (d < plan.outerSizes.size() && plan.outerSizes[d])
-                              ? arith::MulIOp::create(builder,
-                                    loc, plan.outerSizes[d], blockSize)
+                              ? arith::MulIOp::create(
+                                    builder, loc, plan.outerSizes[d], blockSize)
                               : Value();
 
       Value elemOff = (d < offsets.size() && offsets[d]) ? offsets[d] : zero;
@@ -517,12 +519,12 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
       if (d < plan.outerSizes.size()) {
         Value maxBlock =
             arith::SubIOp::create(builder, loc, plan.outerSizes[d], one);
-        startAboveMax = arith::CmpIOp::create(builder,
-            loc, arith::CmpIPredicate::ugt, startBlock, maxBlock);
+        startAboveMax = arith::CmpIOp::create(
+            builder, loc, arith::CmpIPredicate::ugt, startBlock, maxBlock);
         Value clampedEnd =
             arith::MinUIOp::create(builder, loc, endBlock, maxBlock);
-        endBlock = arith::SelectOp::create(builder, loc, startAboveMax, endBlock,
-                                                   clampedEnd);
+        endBlock = arith::SelectOp::create(builder, loc, startAboveMax,
+                                           endBlock, clampedEnd);
       }
 
       Value blockCount =
@@ -531,9 +533,9 @@ void DbStencilRewriter::transformAcquireAsBlock(const DbRewriteAcquire &info,
 
       if (startAboveMax) {
         startBlock = arith::SelectOp::create(builder, loc, startAboveMax, zero,
-                                                     startBlock);
+                                             startBlock);
         blockCount = arith::SelectOp::create(builder, loc, startAboveMax, zero,
-                                                     blockCount);
+                                             blockCount);
       }
 
       newOffsets.push_back(startBlock);
@@ -622,8 +624,8 @@ bool DbStencilRewriter::rebaseEdtUsersAsBlock(DbAcquireOp acquire,
     Value startBlock =
         d < acquire.getOffsets().size() ? acquire.getOffsets()[d] : zero;
     if (startBlock && !startBlock.getType().isIndex())
-      startBlock = arith::IndexCastOp::create(builder,
-          loc, builder.getIndexType(), startBlock);
+      startBlock = arith::IndexCastOp::create(
+          builder, loc, builder.getIndexType(), startBlock);
     if (!startBlock)
       startBlock = zero;
     if (!arts::isDefinedInRegion(startBlock, &edtRegion) &&
@@ -751,17 +753,17 @@ void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
     ARTS_DEBUG("  Outside-EDT stencil remap uses N-D block indexer");
 
     auto newRef = DbRefOp::create(builder, userLoc, newElementType, newSource,
-                                          localized.dbRefIndices);
+                                  localized.dbRefIndices);
 
     /// Create new load/store with transformed inner indices
     if (access->isRead()) {
       auto load = cast<memref::LoadOp>(user);
       auto newLoad = memref::LoadOp::create(builder, userLoc, newRef,
-                                                    localized.memrefIndices);
+                                            localized.memrefIndices);
       load.replaceAllUsesWith(newLoad.getResult());
     } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
       memref::StoreOp::create(builder, userLoc, store.getValue(), newRef,
-                                      localized.memrefIndices);
+                              localized.memrefIndices);
     }
     removal.markForRemoval(user);
   }
@@ -778,7 +780,7 @@ void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
     if (localized.dbRefIndices.empty())
       localized.dbRefIndices.push_back(zero);
     auto newRef = DbRefOp::create(builder, loc, newElementType, newSource,
-                                          localized.dbRefIndices);
+                                  localized.dbRefIndices);
     ref.replaceAllUsesWith(newRef.getResult());
   }
 
@@ -839,13 +841,13 @@ bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
                         : acquire.getElementSizes().front();
   if (!blockSize.getType().isIndex())
     blockSize = arith::IndexCastOp::create(builder, loc, builder.getIndexType(),
-                                                   blockSize);
+                                           blockSize);
   blockSize = arith::MaxUIOp::create(builder, loc, blockSize, one);
 
   Value baseOffset = baseOffsetArg ? baseOffsetArg : zero;
   if (!baseOffset.getType().isIndex())
-    baseOffset = arith::IndexCastOp::create(builder, loc, builder.getIndexType(),
-                                                    baseOffset);
+    baseOffset = arith::IndexCastOp::create(builder, loc,
+                                            builder.getIndexType(), baseOffset);
 
   /// For stencil mode, get the 3 block args (owned, left halo, right halo)
   Value leftHaloArg, rightHaloArg;

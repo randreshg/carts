@@ -22,8 +22,8 @@
 ///     }
 ///==========================================================================///
 
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/dialect/core/Transforms/edt/EdtTaskLoopLowering.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "llvm/ADT/STLExtras.h"
@@ -98,7 +98,8 @@ computeColumnLaneBounds(TaskLoopPostCloneInput &input, scf::ForOp loop) {
                                            input.innerStripeCount);
   Value laneOffset =
       arith::MulIOp::create(builder, loc, input.innerStripeLane, laneChunk);
-  Value laneLower = arith::AddIOp::create(builder, loc, domainLower, laneOffset);
+  Value laneLower =
+      arith::AddIOp::create(builder, loc, domainLower, laneOffset);
   Value laneUpperHint =
       arith::AddIOp::create(builder, loc, laneLower, laneChunk);
   Value laneUpper =
@@ -126,8 +127,8 @@ static void sliceLoopByColumns(TaskLoopPostCloneInput &input, scf::ForOp loop) {
   Value slicedUpper =
       arith::MinUIOp::create(builder, loc, loop.getUpperBound(), laneUpper);
 
-  scf::ForOp sliced =
-      scf::ForOp::create(builder, loc, slicedLower, slicedUpper, loop.getStep());
+  scf::ForOp sliced = scf::ForOp::create(builder, loc, slicedLower, slicedUpper,
+                                         loop.getStep());
   sliced->setAttrs(loop->getAttrs());
 
   IRMapping map;

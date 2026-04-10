@@ -28,13 +28,13 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/dialect/rt/IR/RtDialect.h"
+#include "arts/utils/ValueAnalysis.h"
 #define GEN_PASS_DEF_EPOCHLOWERING
 #include "arts/Dialect.h"
-#include "arts/passes/Passes.h"
 #include "arts/dialect/rt/Transforms/Passes.h.inc"
+#include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -2037,8 +2037,8 @@ LogicalResult EpochLoweringPass::compactContinuationParamAbi() {
       if (newIdx == oldIdx)
         continue;
       builder.setInsertionPoint(load);
-      Value newIdxVal = arith::ConstantIndexOp::create(builder,
-          load.getLoc(), static_cast<int64_t>(newIdx));
+      Value newIdxVal = arith::ConstantIndexOp::create(
+          builder, load.getLoc(), static_cast<int64_t>(newIdx));
       auto newLoad = memref::LoadOp::create(builder, load.getLoc(), paramMemref,
                                             ValueRange{newIdxVal});
       load.getResult().replaceAllUsesWith(newLoad.getResult());
@@ -2067,8 +2067,8 @@ LogicalResult EpochLoweringPass::compactContinuationParamAbi() {
         builder.setInsertionPoint(packOp);
         auto packType =
             MemRefType::get({ShapedType::kDynamic}, builder.getI64Type());
-        auto newPack =
-            EdtParamPackOp::create(builder, packOp.getLoc(), packType, operands);
+        auto newPack = EdtParamPackOp::create(builder, packOp.getLoc(),
+                                              packType, operands);
         edt->setOperand(0, newPack.getMemref());
         if (packOp->use_empty())
           packOp.erase();

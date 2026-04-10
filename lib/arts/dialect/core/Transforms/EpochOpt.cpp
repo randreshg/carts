@@ -9,9 +9,9 @@
 
 #include "arts/dialect/core/Analysis/AnalysisDependencies.h"
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
+#include "arts/dialect/core/Transforms/EpochOptInternal.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/dialect/core/Transforms/EpochOptInternal.h"
 #include "arts/utils/Debug.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/Statistic.h"

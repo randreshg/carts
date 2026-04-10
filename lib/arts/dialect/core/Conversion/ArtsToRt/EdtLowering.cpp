@@ -26,17 +26,17 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
+#include "arts/codegen/Codegen.h"
 #include "arts/dialect/core/Analysis/AnalysisDependencies.h"
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/dialect/core/Analysis/db/DbAnalysis.h"
-#include "arts/utils/ValueAnalysis.h"
-#include "arts/codegen/Codegen.h"
 #include "arts/dialect/rt/IR/RtDialect.h"
+#include "arts/utils/ValueAnalysis.h"
 #define GEN_PASS_DEF_EDTLOWERING
 #include "arts/Dialect.h"
-#include "arts/passes/Passes.h"
-#include "arts/dialect/rt/Transforms/Passes.h.inc"
 #include "arts/dialect/core/Conversion/ArtsToRt/EdtLoweringInternal.h"
+#include "arts/dialect/rt/Transforms/Passes.h.inc"
+#include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoweringContractUtils.h"

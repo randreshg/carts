@@ -657,10 +657,11 @@ bool EdtStructuralOptPass::convertParallelWithAcquiresToSync(
 
     /// Create replacement outer acquire with inner's mode
     OpBuilder builder(outerAcq);
-    auto newAcq = DbAcquireOp::create(builder,
-        outerAcq.getLoc(), innerAcq.getMode(), outerAcq.getSourceGuid(),
-        outerAcq.getSourcePtr(), outerAcq.getPtr().getType(),
-        outerAcq.getPartitionMode(), SmallVector<Value>(outerAcq.getIndices()),
+    auto newAcq = DbAcquireOp::create(
+        builder, outerAcq.getLoc(), innerAcq.getMode(),
+        outerAcq.getSourceGuid(), outerAcq.getSourcePtr(),
+        outerAcq.getPtr().getType(), outerAcq.getPartitionMode(),
+        SmallVector<Value>(outerAcq.getIndices()),
         SmallVector<Value>(outerAcq.getOffsets()),
         SmallVector<Value>(outerAcq.getSizes()),
         SmallVector<Value>(outerAcq.getPartitionIndices()),

@@ -5,9 +5,9 @@
 ///==========================================================================///
 
 #include "arts/utils/EdtUtils.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Utils.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"

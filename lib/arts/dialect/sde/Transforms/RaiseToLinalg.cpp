@@ -17,8 +17,8 @@
 
 #include "arts/Dialect.h"
 #define GEN_PASS_DEF_RAISETOLINALG
-#include "arts/passes/Passes.h"
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
+#include "arts/passes/Passes.h"
 #include "arts/utils/OperationAttributes.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -100,9 +100,8 @@ static bool collectPerfectNest(arts::ForOp forOp, LoopNestInfo &info) {
 
 /// Try to express @p value as an affine expression of @p ivs.
 /// Returns nullopt when the value cannot be expressed as an affine function.
-static std::optional<AffineExpr> tryGetAffineExpr(Value value,
-                                                  ArrayRef<Value> ivs,
-                                                  MLIRContext *ctx) {
+static std::optional<AffineExpr>
+tryGetAffineExpr(Value value, ArrayRef<Value> ivs, MLIRContext *ctx) {
   // Check if value is one of the induction variables.
   for (auto [idx, iv] : llvm::enumerate(ivs)) {
     if (value == iv)
@@ -154,9 +153,9 @@ static std::optional<AffineExpr> tryGetAffineExpr(Value value,
 }
 
 /// Build an AffineMap mapping loop IVs to a memref's access indices.
-static std::optional<AffineMap>
-tryBuildIndexingMap(OperandRange indices, ArrayRef<Value> ivs,
-                   MLIRContext *ctx) {
+static std::optional<AffineMap> tryBuildIndexingMap(OperandRange indices,
+                                                    ArrayRef<Value> ivs,
+                                                    MLIRContext *ctx) {
   SmallVector<AffineExpr> exprs;
   for (Value idx : indices) {
     auto expr = tryGetAffineExpr(idx, ivs, ctx);
@@ -237,8 +236,10 @@ static void computeIteratorTypes(unsigned numDims,
     }
   }
 
-  auto parallel = StringAttr::get(ctx, AttrNames::Operation::Linalg::IterParallel);
-  auto reduction = StringAttr::get(ctx, AttrNames::Operation::Linalg::IterReduction);
+  auto parallel =
+      StringAttr::get(ctx, AttrNames::Operation::Linalg::IterParallel);
+  auto reduction =
+      StringAttr::get(ctx, AttrNames::Operation::Linalg::IterReduction);
   for (unsigned d = 0; d < numDims; ++d)
     iterTypes.push_back(dimsInOutputs.test(d) ? parallel : reduction);
 }
@@ -300,8 +301,7 @@ static StringRef classifyPattern(ArrayRef<MemrefAccessEntry> reads,
 // Pass implementation
 //===----------------------------------------------------------------------===//
 
-struct RaiseToLinalgPass
-    : public impl::RaiseToLinalgBase<RaiseToLinalgPass> {
+struct RaiseToLinalgPass : public impl::RaiseToLinalgBase<RaiseToLinalgPass> {
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
@@ -349,25 +349,24 @@ struct RaiseToLinalgPass
       int64_t numOutputs = static_cast<int64_t>(writes.size());
 
       // 5. Classify.
-      StringRef pattern =
-          classifyPattern(reads, writes, iterTypes, numDims);
+      StringRef pattern = classifyPattern(reads, writes, iterTypes, numDims);
 
       // 6. Stamp attributes on the arts.for.
       auto i64Ty = IntegerType::get(ctx, 64);
       forOp->setAttr(AttrNames::Operation::Linalg::Pattern,
-                      StringAttr::get(ctx, pattern));
+                     StringAttr::get(ctx, pattern));
       forOp->setAttr(AttrNames::Operation::Linalg::IteratorTypes,
-                      ArrayAttr::get(ctx, iterTypes));
+                     ArrayAttr::get(ctx, iterTypes));
       forOp->setAttr(AttrNames::Operation::Linalg::IndexingMaps,
-                      ArrayAttr::get(ctx, indexingMapAttrs));
+                     ArrayAttr::get(ctx, indexingMapAttrs));
       forOp->setAttr(AttrNames::Operation::Linalg::NumInputs,
-                      IntegerAttr::get(i64Ty, numInputs));
+                     IntegerAttr::get(i64Ty, numInputs));
       forOp->setAttr(AttrNames::Operation::Linalg::NumOutputs,
-                      IntegerAttr::get(i64Ty, numOutputs));
+                     IntegerAttr::get(i64Ty, numOutputs));
 
-      ARTS_DEBUG("classified arts.for as '" << pattern << "' with " << numDims
-                 << " dims (" << numInputs << " ins, " << numOutputs
-                 << " outs)");
+      ARTS_DEBUG("classified arts.for as '"
+                 << pattern << "' with " << numDims << " dims (" << numInputs
+                 << " ins, " << numOutputs << " outs)");
       ++classified;
     });
 

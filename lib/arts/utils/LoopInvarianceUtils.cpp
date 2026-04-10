@@ -77,7 +77,7 @@ bool allOperandsDominate(Operation *op, Operation *insertionPoint,
 }
 
 scf::ForOp findHoistTarget(Operation *op, Operation *addrOp,
-                            DominanceInfo &domInfo) {
+                           DominanceInfo &domInfo) {
   scf::ForOp target = nullptr;
   for (Operation *parent = op->getParentOp(); parent;
        parent = parent->getParentOp()) {

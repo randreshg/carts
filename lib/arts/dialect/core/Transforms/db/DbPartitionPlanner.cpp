@@ -15,10 +15,10 @@
 
 #include "arts/dialect/core/Transforms/db/DbPartitionPlanner.h"
 #include "arts/dialect/core/Analysis/heuristics/PartitioningHeuristics.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
 using namespace mlir;
@@ -110,8 +110,8 @@ static void computeBlockShape(DbAllocOp allocOp, ArrayRef<Value> blockSizes,
       Value sumMinusOne = arith::SubIOp::create(builder, loc, sum, oneI64);
       Value numBlocksI64 =
           arith::DivUIOp::create(builder, loc, sumMinusOne, bsI64);
-      Value numBlocks = arith::IndexCastOp::create(builder,
-          loc, builder.getIndexType(), numBlocksI64);
+      Value numBlocks = arith::IndexCastOp::create(
+          builder, loc, builder.getIndexType(), numBlocksI64);
       newOuterSizes.push_back(numBlocks);
     }
 
@@ -136,8 +136,8 @@ static void computeBlockShape(DbAllocOp allocOp, ArrayRef<Value> blockSizes,
       Value sumMinusOne = arith::SubIOp::create(builder, loc, sum, oneI64);
       Value numBlocksI64 =
           arith::DivUIOp::create(builder, loc, sumMinusOne, bsI64);
-      Value numBlocks = arith::IndexCastOp::create(builder,
-          loc, builder.getIndexType(), numBlocksI64);
+      Value numBlocks = arith::IndexCastOp::create(
+          builder, loc, builder.getIndexType(), numBlocksI64);
       newOuterSizes.push_back(numBlocks);
       newInnerSizes.push_back(bs);
     }

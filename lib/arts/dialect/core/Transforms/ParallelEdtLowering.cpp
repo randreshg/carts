@@ -20,9 +20,9 @@
 #include "arts/Dialect.h"
 #define GEN_PASS_DEF_PARALLELEDTLOWERING
 #include "arts/Dialect.h"
+#include "arts/dialect/core/Transforms/edt/WorkDistributionUtils.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/dialect/core/Transforms/edt/WorkDistributionUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
@@ -90,7 +90,7 @@ static void guardSingleEdts(Operation *op, Value workerId) {
     Location loc = edt.getLoc();
     Value zero = arts::createZeroIndex(builder, loc);
     Value isZero = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq,
-                                                 workerId, zero);
+                                         workerId, zero);
 
     auto ifOp = scf::IfOp::create(builder, loc, TypeRange{}, isZero,
                                   /*withElseRegion=*/false);
@@ -257,8 +257,8 @@ private:
           RuntimeQueryOp::create(loopBuilder, loc, RuntimeQueryKind::totalNodes)
               .getResult();
       if (!nodes.getType().isIndex())
-        nodes = arith::IndexCastOp::create(loopBuilder,
-            loc, loopBuilder.getIndexType(), nodes);
+        nodes = arith::IndexCastOp::create(loopBuilder, loc,
+                                           loopBuilder.getIndexType(), nodes);
 
       Value workersPerNode = WorkDistributionUtils::getWorkersPerNode(
           loopBuilder, loc, parallelEdt);
@@ -266,8 +266,8 @@ private:
 
       Value nodeId =
           arith::DivUIOp::create(loopBuilder, loc, workerId, workersPerNode);
-      Value outOfRange = arith::CmpIOp::create(loopBuilder,
-          loc, arith::CmpIPredicate::uge, nodeId, nodes);
+      Value outOfRange = arith::CmpIOp::create(
+          loopBuilder, loc, arith::CmpIPredicate::uge, nodeId, nodes);
       nodeId = arith::SelectOp::create(loopBuilder, loc, outOfRange,
                                        nodesMinusOne, nodeId);
       workerRoute = nodeId;

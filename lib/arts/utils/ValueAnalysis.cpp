@@ -1181,7 +1181,8 @@ Value ValueAnalysis::traceValueToDominating(Value value,
     Value rhs = trace(cmpOp.getRhs());
     if (lhs && rhs) {
       builder.setInsertionPoint(insertBefore);
-      return arith::CmpIOp::create(builder, loc, cmpOp.getPredicate(), lhs, rhs);
+      return arith::CmpIOp::create(builder, loc, cmpOp.getPredicate(), lhs,
+                                   rhs);
     }
     return nullptr;
   }

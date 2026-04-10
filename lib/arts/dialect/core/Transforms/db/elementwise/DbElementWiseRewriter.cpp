@@ -24,7 +24,6 @@
 ///==========================================================================///
 
 #include "arts/dialect/core/Transforms/db/elementwise/DbElementWiseRewriter.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/dialect/core/Transforms/db/elementwise/DbElementWiseIndexer.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
@@ -33,6 +32,7 @@
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 
@@ -235,7 +235,7 @@ void DbElementWiseRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
       load.replaceAllUsesWith(newLoad.getResult());
     } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
       memref::StoreOp::create(builder, userLoc, store.getValue(), newRef,
-                                      newInner);
+                              newInner);
     }
     removal.markForRemoval(user);
   }

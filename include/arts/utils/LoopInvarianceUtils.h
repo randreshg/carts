@@ -46,7 +46,7 @@ bool allOperandsDominate(Operation *op, Operation *insertionPoint,
 /// \p addrOp are defined outside each candidate loop and dominate it.
 /// Returns nullptr if no hoist target exists.
 scf::ForOp findHoistTarget(Operation *op, Operation *addrOp,
-                            DominanceInfo &domInfo);
+                           DominanceInfo &domInfo);
 
 } // namespace arts
 } // namespace mlir

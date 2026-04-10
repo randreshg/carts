@@ -466,25 +466,26 @@ void applyBoundsValid(DbAcquireOp acquireOp, ArrayRef<int64_t> boundsCheckFlags,
 
     Value idx = indices[i];
     Value size = sourceSizes[i];
-    Value geZero = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::sge,
-                                                 idx, zero);
+    Value geZero = arith::CmpIOp::create(builder, loc,
+                                         arith::CmpIPredicate::sge, idx, zero);
     Value dimValid;
     if (lowerBoundGuarded) {
       dimValid = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::slt,
-                                               idx, size);
+                                       idx, size);
     } else {
-      Value ltSize = arith::CmpIOp::create(builder,
-          loc, arith::CmpIPredicate::slt, idx, size);
+      Value ltSize = arith::CmpIOp::create(
+          builder, loc, arith::CmpIPredicate::slt, idx, size);
       dimValid = arith::AndIOp::create(builder, loc, geZero, ltSize);
     }
     boundsValid =
         boundsValid ? arith::AndIOp::create(builder, loc, boundsValid, dimValid)
                     : dimValid;
 
-    Value nonNegative = arith::SelectOp::create(builder, loc, geZero, idx, zero);
+    Value nonNegative =
+        arith::SelectOp::create(builder, loc, geZero, idx, zero);
     Value one = arts::createOneIndex(builder, loc);
-    Value hasExtent = arith::CmpIOp::create(builder,
-        loc, arith::CmpIPredicate::sgt, size, zero);
+    Value hasExtent = arith::CmpIOp::create(
+        builder, loc, arith::CmpIPredicate::sgt, size, zero);
     Value lastIdxRaw = arith::SubIOp::create(builder, loc, size, one);
     Value lastIdx =
         arith::SelectOp::create(builder, loc, hasExtent, lastIdxRaw, zero);
@@ -506,8 +507,8 @@ void applyBoundsValid(DbAcquireOp acquireOp, ArrayRef<int64_t> boundsCheckFlags,
                                acquireOp.getPartitionSizes().end());
 
   auto partitionMode = getPartitionMode(acquireOp.getOperation());
-  auto newAcquire = DbAcquireOp::create(builder,
-      loc, acquireOp.getMode(), acquireOp.getSourceGuid(),
+  auto newAcquire = DbAcquireOp::create(
+      builder, loc, acquireOp.getMode(), acquireOp.getSourceGuid(),
       acquireOp.getSourcePtr(), partitionMode, indicesVec, offsetsVec, sizesVec,
       partIndices, partOffsets, partSizes, boundsValid);
   transferAttributes(acquireOp.getOperation(), newAcquire.getOperation(),
@@ -818,8 +819,8 @@ SmallVector<DbAcquireOp> createExpandedAcquires(DbAcquireOp original,
                             << ", indices=" << entryIndices.size()
                             << ", offsets=" << entryOffsets.size());
 
-    auto newAcquire = DbAcquireOp::create(builder,
-        loc, original.getMode(), original.getSourceGuid(),
+    auto newAcquire = DbAcquireOp::create(
+        builder, loc, original.getMode(), original.getSourceGuid(),
         original.getSourcePtr(), entryMode,
         /*indices=*/SmallVector<Value>{},
         /*offsets=*/

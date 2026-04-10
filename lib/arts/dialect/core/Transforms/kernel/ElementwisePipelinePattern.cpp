@@ -27,11 +27,11 @@
 ///==========================================================================///
 
 #include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/dialect/core/Transforms/kernel/KernelTransform.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Math/IR/Math.h"

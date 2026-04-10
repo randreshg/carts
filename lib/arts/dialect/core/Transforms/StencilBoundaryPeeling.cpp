@@ -303,7 +303,8 @@ static bool peelBoundaryLoop(BoundaryPeelingMatch &match) {
     return false;
 
   Value rowBoundary = arith::OrIOp::create(builder, loc, rowIsFirst, rowIsLast);
-  auto splitIf = scf::IfOp::create(builder, loc, TypeRange{}, rowBoundary, true);
+  auto splitIf =
+      scf::IfOp::create(builder, loc, TypeRange{}, rowBoundary, true);
 
   builder.setInsertionPointToStart(&splitIf.getThenRegion().front());
   cloneLoopSegment(builder, match, match.finalIf.getThenRegion().front(),

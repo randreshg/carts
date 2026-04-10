@@ -14,9 +14,9 @@
 #include "arts/dialect/core/Analysis/AnalysisDependencies.h"
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/dialect/core/Transforms/kernel/KernelTransform.h"
 #include "arts/dialect/core/Transforms/pattern/PatternTransform.h"
+#include "arts/utils/ValueAnalysis.h"
 #define GEN_PASS_DEF_PATTERNDISCOVERY
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
@@ -129,7 +129,6 @@ static Operation *resolveAllocLikeSource(Value value) {
     return def;
   return nullptr;
 }
-
 
 struct LocalStencilEvidence {
   bool isStencil = false;

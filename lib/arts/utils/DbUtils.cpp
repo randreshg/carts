@@ -5,9 +5,9 @@
 ///==========================================================================///
 
 #include "arts/utils/DbUtils.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/Utils/Utils.h"
@@ -1072,7 +1072,8 @@ void arts::convertElementSliceToBlockSlice(
     endBlock = arith::SelectOp::create(builder, loc, startAboveMax, endBlock,
                                        clampedEnd);
 
-    Value blockCount = arith::SubIOp::create(builder, loc, endBlock, startBlock);
+    Value blockCount =
+        arith::SubIOp::create(builder, loc, endBlock, startBlock);
     blockCount = arith::AddIOp::create(builder, loc, blockCount, one);
     startBlock =
         arith::SelectOp::create(builder, loc, startAboveMax, zero, startBlock);

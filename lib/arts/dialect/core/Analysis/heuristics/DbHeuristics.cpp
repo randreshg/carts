@@ -7,9 +7,9 @@
 
 #include "arts/dialect/core/Analysis/heuristics/DbHeuristics.h"
 #include "arts/Dialect.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/metadata/IdRegistry.h"
 #include "arts/utils/metadata/LocationMetadata.h"
 #include "arts/utils/metadata/LoopMetadata.h"

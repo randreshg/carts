@@ -92,10 +92,10 @@ FailureOr<DbAllocOp> DbRewriter::apply(OpBuilder &builder) {
 
   /// 1. Create new allocation with the given sizes from plan
   PartitionMode partitionMode = plan.mode;
-  auto newAlloc = DbAllocOp::create(builder,
-      loc, oldAlloc.getMode(), oldAlloc.getRoute(), oldAlloc.getAllocType(),
-      oldAlloc.getDbMode(), oldAlloc.getElementType(), oldAlloc.getAddress(),
-      plan.outerSizes, plan.innerSizes, partitionMode);
+  auto newAlloc = DbAllocOp::create(
+      builder, loc, oldAlloc.getMode(), oldAlloc.getRoute(),
+      oldAlloc.getAllocType(), oldAlloc.getDbMode(), oldAlloc.getElementType(),
+      oldAlloc.getAddress(), plan.outerSizes, plan.innerSizes, partitionMode);
 
   /// 2. Transfer metadata/attributes from old to new allocation
   transferAttributes(oldAlloc, newAlloc, {AttrNames::Operation::PartitionMode});

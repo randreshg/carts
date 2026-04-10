@@ -13,8 +13,8 @@
 ///==========================================================================///
 
 #include "arts/dialect/core/Transforms/db/DbLayoutStrategy.h"
-#include "arts/dialect/core/Analysis/db/DbAnalysis.h"
 #include "arts/codegen/Codegen.h"
+#include "arts/dialect/core/Analysis/db/DbAnalysis.h"
 #include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/utils/DbUtils.h"
 #include "mlir/IR/Operation.h"

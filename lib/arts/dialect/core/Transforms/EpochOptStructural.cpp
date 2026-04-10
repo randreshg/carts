@@ -204,7 +204,6 @@ static bool isAmortizableTailOp(Operation *op, Value loopIv) {
   return false;
 }
 
-
 static bool isStableRepeatTopology(Operation *op) {
   return hasPlanAttrValue(op, AttrNames::Operation::Plan::IterationTopology,
                           "owner_strip") ||

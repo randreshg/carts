@@ -43,11 +43,11 @@
 
 /// Arts
 #include "arts/Dialect.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/dialect/core/Transforms/db/transforms/GUIDRangeDetection.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/ValueAnalysis.h"
 
 ARTS_DEBUG_SETUP(guid_range_detection);
 

@@ -22,9 +22,9 @@
 #include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #define GEN_PASS_DEF_LOOPREORDERING
 #include "arts/Dialect.h"
+#include "arts/dialect/core/Transforms/loop/LoopNormalizer.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/dialect/core/Transforms/loop/LoopNormalizer.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/metadata/LoopMetadata.h"
@@ -310,13 +310,13 @@ private:
     }
 
     /// Create new outer loop (was secondInner)
-    auto newOuterLoop = scf::ForOp::create(builder,
-        firstInner.getLoc(), lb2, ub2, step2, ValueRange{},
+    auto newOuterLoop = scf::ForOp::create(
+        builder, firstInner.getLoc(), lb2, ub2, step2, ValueRange{},
         [&](OpBuilder &nestedBuilder, Location loc, Value newOuterIV,
             ValueRange iterArgs) {
           /// Create new inner loop (was firstInner)
-          scf::ForOp::create(nestedBuilder,
-              loc, lb1, ub1, step1, ValueRange{},
+          scf::ForOp::create(
+              nestedBuilder, loc, lb1, ub1, step1, ValueRange{},
               [&](OpBuilder &innerBuilder, Location innerLoc, Value newInnerIV,
                   ValueRange innerIterArgs) {
                 /// Clone the body of secondInner, replacing IVs
@@ -419,8 +419,8 @@ private:
 
     if (needsInitLoop) {
       /// STEP 1: Create the init loop (for j: init_ops)
-      auto initLoop = scf::ForOp::create(builder,
-          firstInner.getLoc(), lb1, ub1, step1, ValueRange{},
+      auto initLoop = scf::ForOp::create(
+          builder, firstInner.getLoc(), lb1, ub1, step1, ValueRange{},
           [&](OpBuilder &nestedBuilder, Location loc, Value initLoopIV,
               ValueRange iterArgs) {
             /// Clone init ops, mapping original j IV to new IV
@@ -438,13 +438,13 @@ private:
     }
 
     /// STEP 2: Create the interchanged reduction loop (for k: for j: reduce)
-    auto newOuterLoop = scf::ForOp::create(builder,
-        firstInner.getLoc(), lb2, ub2, step2, ValueRange{},
+    auto newOuterLoop = scf::ForOp::create(
+        builder, firstInner.getLoc(), lb2, ub2, step2, ValueRange{},
         [&](OpBuilder &nestedBuilder, Location loc, Value newOuterIV,
             ValueRange iterArgs) {
           /// Create new inner loop (was firstInner/j)
-          scf::ForOp::create(nestedBuilder,
-              loc, lb1, ub1, step1, ValueRange{},
+          scf::ForOp::create(
+              nestedBuilder, loc, lb1, ub1, step1, ValueRange{},
               [&](OpBuilder &innerBuilder, Location innerLoc, Value newInnerIV,
                   ValueRange innerIterArgs) {
                 /// Clone the body of secondInner (k loop), replacing IVs

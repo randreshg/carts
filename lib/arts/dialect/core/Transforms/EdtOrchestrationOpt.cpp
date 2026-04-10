@@ -7,12 +7,12 @@
 
 #define GEN_PASS_DEF_EDTORCHESTRATIONOPT
 #include "arts/Dialect.h"
-#include "arts/utils/ValueAnalysis.h"
+#include "arts/dialect/core/Transforms/edt/EdtParallelSplitLowering.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/dialect/core/Transforms/edt/EdtParallelSplitLowering.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
@@ -32,7 +32,6 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
-
 
 static bool isAllowedInterstitialOp(Operation *op) {
   if (isa<DbAcquireOp, LoweringContractOp>(op))
@@ -65,11 +64,11 @@ getRepeatedWaveSignature(EdtOp edt) {
   if (!forOp.getReductionAccumulators().empty())
     return std::nullopt;
   if (!hasPlanAttrValue(forOp.getOperation(),
-                   AttrNames::Operation::Plan::KernelFamily, "uniform"))
+                        AttrNames::Operation::Plan::KernelFamily, "uniform"))
     return std::nullopt;
   if (!hasPlanAttrValue(forOp.getOperation(),
-                   AttrNames::Operation::Plan::RepetitionStructure,
-                   "full_timestep")) {
+                        AttrNames::Operation::Plan::RepetitionStructure,
+                        "full_timestep")) {
     return std::nullopt;
   }
   if (edt->hasAttr(AttrNames::Operation::ControlDep) ||

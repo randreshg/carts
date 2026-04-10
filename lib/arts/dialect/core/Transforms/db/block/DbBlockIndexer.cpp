@@ -37,13 +37,13 @@
 ///==========================================================================///
 
 #include "arts/dialect/core/Transforms/db/block/DbBlockIndexer.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/utils/BlockedAccessUtils.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/Utils.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -141,10 +141,12 @@ tryLocalizeFromLoopWindow(Value globalIdx, Value startBlock, Value blockSize,
   Value localRaw = arith::AddIOp::create(builder, loc, baseLocal, ivDelta);
   if (constOffset > 0) {
     localRaw = arith::AddIOp::create(
-        builder, loc, localRaw, arts::createConstantIndex(builder, loc, constOffset));
+        builder, loc, localRaw,
+        arts::createConstantIndex(builder, loc, constOffset));
   } else if (constOffset < 0) {
     localRaw = arith::SubIOp::create(
-        builder, loc, localRaw, arts::createConstantIndex(builder, loc, -constOffset));
+        builder, loc, localRaw,
+        arts::createConstantIndex(builder, loc, -constOffset));
   }
 
   Value baseRelBlock = arith::SubIOp::create(builder, loc, baseBlock, sb);
@@ -153,10 +155,10 @@ tryLocalizeFromLoopWindow(Value globalIdx, Value startBlock, Value blockSize,
     return LoopWindowLocalization{baseRelBlock, loopIv};
   }
 
-  Value belowZero = arith::CmpIOp::create(builder,
-      loc, arith::CmpIPredicate::slt, localRaw, zero);
-  Value aboveBlock = arith::CmpIOp::create(builder,
-      loc, arith::CmpIPredicate::sge, localRaw, bs);
+  Value belowZero = arith::CmpIOp::create(
+      builder, loc, arith::CmpIPredicate::slt, localRaw, zero);
+  Value aboveBlock = arith::CmpIOp::create(
+      builder, loc, arith::CmpIPredicate::sge, localRaw, bs);
 
   Value adjust = arith::SelectOp::create(builder, loc, belowZero, negOne, zero);
   adjust = arith::SelectOp::create(builder, loc, aboveBlock, one, adjust);
@@ -166,10 +168,10 @@ tryLocalizeFromLoopWindow(Value globalIdx, Value startBlock, Value blockSize,
   Value localIdx = localRaw;
   Value localMinusBlock = arith::SubIOp::create(builder, loc, localRaw, bs);
   Value localPlusBlock = arith::AddIOp::create(builder, loc, localRaw, bs);
-  localIdx =
-      arith::SelectOp::create(builder, loc, belowZero, localPlusBlock, localIdx);
+  localIdx = arith::SelectOp::create(builder, loc, belowZero, localPlusBlock,
+                                     localIdx);
   localIdx = arith::SelectOp::create(builder, loc, aboveBlock, localMinusBlock,
-                                             localIdx);
+                                     localIdx);
 
   return LoopWindowLocalization{dbRefIdx, localIdx};
 }
@@ -311,7 +313,8 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
           }
           if (acquireSingleBlock) {
             Value blockBase = arith::MulIOp::create(builder, loc, sb, bs);
-            localIdx = arith::SubIOp::create(builder, loc, globalIdx, blockBase);
+            localIdx =
+                arith::SubIOp::create(builder, loc, globalIdx, blockBase);
           } else {
             localIdx = arith::RemUIOp::create(builder, loc, globalIdx, bs);
           }

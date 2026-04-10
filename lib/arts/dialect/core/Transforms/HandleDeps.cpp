@@ -209,13 +209,13 @@ void HandleDepsPass::runOnOperation() {
         continue;
 
       /// Create arts.omp_dep using DepInfo fields (insertion point already set)
-      auto ompDepOp = arts::OmpDepOp::create(builder,
-          task.getLoc(),
-          depInfo->source.getType(), /// result type
-          depInfo->mode,             /// ArtsMode
-          depInfo->source,           /// db
-          depInfo->indices,          /// offset
-          depInfo->sizes);           /// size
+      auto ompDepOp =
+          arts::OmpDepOp::create(builder, task.getLoc(),
+                                 depInfo->source.getType(), /// result type
+                                 depInfo->mode,             /// ArtsMode
+                                 depInfo->source,           /// db
+                                 depInfo->indices,          /// offset
+                                 depInfo->sizes);           /// size
 
       task.getDependVarsMutable()[i].set(ompDepOp.getResult());
       ARTS_DEBUG("  Created arts.omp_dep for task dep "

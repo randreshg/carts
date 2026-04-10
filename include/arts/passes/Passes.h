@@ -131,8 +131,7 @@ std::unique_ptr<Pass> createEdtTransformsPass(AnalysisManager *AM);
 namespace sde {
 std::unique_ptr<Pass>
 createConvertOpenMPToSdePass(AnalysisManager *AM = nullptr);
-std::unique_ptr<Pass>
-createConvertSdeToArtsPass(AnalysisManager *AM = nullptr);
+std::unique_ptr<Pass> createConvertSdeToArtsPass(AnalysisManager *AM = nullptr);
 /// Compute linalg-style structural classification for loop nests.
 std::unique_ptr<Pass> createRaiseToLinalgPass();
 } // namespace sde

@@ -8,11 +8,11 @@
 
 #include "arts/dialect/core/Conversion/ArtsToRt/EdtLoweringInternal.h"
 
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/PartitionPredicates.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 

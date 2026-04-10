@@ -416,7 +416,7 @@ bool DbPartitioningPass::expandMultiEntryAcquires() {
         size_t entry = entryPair.first;
         DbRefOp newRef =
             DbRefOp::create(refBuilder, dbRef.getLoc(), dbRef.getType(),
-                                       newBlockArgs[entry], dbRef.getIndices());
+                            newBlockArgs[entry], dbRef.getIndices());
         entryRefs[entry] = newRef;
       }
 
@@ -1701,14 +1701,14 @@ std::optional<StencilInfo> DbPartitioningPass::computeStencilHaloInfo(
 
     if (info.totalRows && (info.haloLeft > 0 || info.haloRight > 0)) {
       if (!info.totalRows.getType().isIndex())
-        info.totalRows = arith::IndexCastOp::create(builder,
-            loc, builder.getIndexType(), info.totalRows);
+        info.totalRows = arith::IndexCastOp::create(
+            builder, loc, builder.getIndexType(), info.totalRows);
 
       Value haloTotal = arts::createConstantIndex(
           builder, loc, info.haloLeft + info.haloRight);
       Value zero = arts::createZeroIndex(builder, loc);
-      Value canSubtract = arith::CmpIOp::create(builder,
-          loc, arith::CmpIPredicate::uge, info.totalRows, haloTotal);
+      Value canSubtract = arith::CmpIOp::create(
+          builder, loc, arith::CmpIPredicate::uge, info.totalRows, haloTotal);
       Value reduced =
           arith::SubIOp::create(builder, loc, info.totalRows, haloTotal);
       info.totalRows =

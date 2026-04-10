@@ -46,13 +46,13 @@
 #include "arts/dialect/core/Analysis/graphs/base/NodeBase.h"
 #include "arts/dialect/core/Analysis/graphs/edt/EdtGraph.h"
 #include "arts/dialect/core/Analysis/graphs/edt/EdtNode.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/RemovalUtils.h"
+#include "arts/utils/ValueAnalysis.h"
 /// Statistics
 #include "llvm/ADT/Statistic.h"
 /// Debug

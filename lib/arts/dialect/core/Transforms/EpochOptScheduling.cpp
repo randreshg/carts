@@ -135,8 +135,8 @@ bool tryCPSLoopTransform(scf::ForOp forOp, const EpochAnalysis &epochAnalysis) {
   }
 
   OpBuilder epochBuilder = OpBuilder::atBlockTerminator(&epochBlock);
-  auto kickoffEdt = EdtOp::create(epochBuilder,
-      loc, EdtType::task, EdtConcurrency::intranode, currentStateDeps);
+  auto kickoffEdt = EdtOp::create(epochBuilder, loc, EdtType::task,
+                                  EdtConcurrency::intranode, currentStateDeps);
   kickoffEdt->setAttr(CPSChainId, builder.getStringAttr(chainId));
   copyNormalizedPlanAttrs(forOp.getOperation(), kickoffEdt.getOperation(),
                           EpochAsyncLoopStrategy::AdvanceEdt);
@@ -173,8 +173,8 @@ bool tryCPSLoopTransform(scf::ForOp forOp, const EpochAnalysis &epochAnalysis) {
     }
   } else {
     for (unsigned slotIdx = 1; slotIdx < slots.size(); ++slotIdx) {
-      auto contEdt = EdtOp::create(*currentBuilder,
-          loc, EdtType::task, EdtConcurrency::intranode, currentStateDeps);
+      auto contEdt = EdtOp::create(*currentBuilder, loc, EdtType::task,
+                                   EdtConcurrency::intranode, currentStateDeps);
       markAsContinuation(contEdt, *currentBuilder, forOp.getOperation(),
                          slotIdx);
       copyNormalizedPlanAttrs(forOp.getOperation(), contEdt.getOperation(),
@@ -237,8 +237,9 @@ bool tryCPSLoopTransform(scf::ForOp forOp, const EpochAnalysis &epochAnalysis) {
 
     ensureYieldTerminator(*advanceBlock, loc);
     OpBuilder advanceSiteBuilder = OpBuilder::atBlockTerminator(advanceBlock);
-    auto advanceEdt = EdtOp::create(advanceSiteBuilder,
-        loc, EdtType::task, EdtConcurrency::intranode, advanceStateDeps);
+    auto advanceEdt =
+        EdtOp::create(advanceSiteBuilder, loc, EdtType::task,
+                      EdtConcurrency::intranode, advanceStateDeps);
     advanceEdt->setAttr(ControlDep,
                         builder.getIntegerAttr(builder.getI32Type(), 1));
     advanceEdt->setAttr(ContinuationForEpoch, builder.getUnitAttr());
@@ -262,12 +263,14 @@ bool tryCPSLoopTransform(scf::ForOp forOp, const EpochAnalysis &epochAnalysis) {
         ub.getType().isIndex()
             ? arith::IndexCastOp::create(advanceBuilder, loc, i64Ty, ub)
                   .getResult()
-            : arith::ExtSIOp::create(advanceBuilder, loc, i64Ty, ub).getResult();
+            : arith::ExtSIOp::create(advanceBuilder, loc, i64Ty, ub)
+                  .getResult();
     auto materializeAdvanceCarry = [&](Value value) -> Value {
       if (!isa<BaseMemRefType>(value.getType()))
         return value;
-      Value rawPtr = polygeist::Memref2PointerOp::create(advanceBuilder,
-          loc, LLVM::LLVMPointerType::get(advanceBuilder.getContext()), value);
+      Value rawPtr = polygeist::Memref2PointerOp::create(
+          advanceBuilder, loc,
+          LLVM::LLVMPointerType::get(advanceBuilder.getContext()), value);
       return LLVM::PtrToIntOp::create(advanceBuilder, loc, i64Ty, rawPtr);
     };
     SmallVector<Value> localizedLoopBackParams;
@@ -285,8 +288,8 @@ bool tryCPSLoopTransform(scf::ForOp forOp, const EpochAnalysis &epochAnalysis) {
     SmallVector<Value> nextParams = {stepI64, ubI64};
     nextParams.append(localizedLoopBackParams.begin(),
                       localizedLoopBackParams.end());
-    auto advance = CPSAdvanceOp::create(advanceBuilder,
-        loc, nextParams, advanceBuilder.getStringAttr(chainId));
+    auto advance = CPSAdvanceOp::create(advanceBuilder, loc, nextParams,
+                                        advanceBuilder.getStringAttr(chainId));
     advance->setAttr(CPSAdditiveParams, builder.getUnitAttr());
     advance->setAttr(CPSDirectRecreate, builder.getUnitAttr());
     advance->setAttr(CPSNumCarry,

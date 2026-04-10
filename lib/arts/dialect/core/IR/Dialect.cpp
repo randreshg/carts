@@ -17,10 +17,10 @@
 
 #include "arts/Dialect.h"
 #include "arts/dialect/core/Analysis/db/DbAnalysis.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
+#include "arts/utils/ValueAnalysis.h"
 
 using namespace mlir;
 using namespace mlir::arts;

@@ -14,10 +14,10 @@
 #include "arts/dialect/core/Analysis/graphs/db/MemoryAccessClassifier.h"
 #include "arts/dialect/core/Analysis/graphs/db/PartitionBoundsAnalyzer.h"
 #include "arts/dialect/core/Analysis/loop/LoopAnalysis.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/Utils.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
@@ -675,11 +675,12 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromForLoop(
 
     if (bounds.minOffset < 0) {
       Value absAdj = arts::createConstantIndex(builder, loc, -bounds.minOffset);
-      Value cond = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::uge,
-                                         adjustedOffset, absAdj);
+      Value cond = arith::CmpIOp::create(
+          builder, loc, arith::CmpIPredicate::uge, adjustedOffset, absAdj);
       Value sub = arith::SubIOp::create(builder, loc, adjustedOffset, absAdj);
       Value zeroIdx = arts::createZeroIndex(builder, loc);
-      adjustedOffset = arith::SelectOp::create(builder, loc, cond, sub, zeroIdx);
+      adjustedOffset =
+          arith::SelectOp::create(builder, loc, cond, sub, zeroIdx);
     } else if (bounds.minOffset > 0) {
       Value adj = arts::createConstantIndex(builder, loc, bounds.minOffset);
       adjustedOffset = arith::AddIOp::create(builder, loc, adjustedOffset, adj);

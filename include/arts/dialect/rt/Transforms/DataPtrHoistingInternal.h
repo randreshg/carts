@@ -10,12 +10,12 @@
 #define ARTS_DIALECT_RT_TRANSFORMS_DATAPTRHOISTINGINTERNAL_H
 
 #include "arts/Dialect.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/utils/BlockedAccessUtils.h"
 #include "arts/utils/LoopInvarianceUtils.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/Utils.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"

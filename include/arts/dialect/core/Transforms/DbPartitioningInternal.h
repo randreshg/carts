@@ -27,8 +27,8 @@
 #include "arts/dialect/core/Analysis/heuristics/DbHeuristics.h"
 #include "arts/dialect/core/Analysis/loop/LoopAnalysis.h"
 #include "arts/dialect/core/Analysis/loop/LoopNode.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/passes/Passes.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Pass/Pass.h"
 /// Other
 #include "mlir/IR/OpDefinition.h"

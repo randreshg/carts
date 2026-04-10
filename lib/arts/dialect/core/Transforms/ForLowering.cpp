@@ -22,6 +22,7 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
+#include "arts/codegen/Codegen.h"
 #include "arts/dialect/core/Analysis/AccessPatternAnalysis.h"
 #include "arts/dialect/core/Analysis/AnalysisDependencies.h"
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
@@ -30,17 +31,16 @@
 #include "arts/dialect/core/Analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #include "arts/utils/ValueAnalysis.h"
-#include "arts/codegen/Codegen.h"
 #define GEN_PASS_DEF_FORLOWERING
 #include "arts/Dialect.h"
 #include "arts/dialect/core/Analysis/db/OwnershipProof.h"
-#include "arts/passes/Passes.h"
-#include "arts/passes/Passes.h.inc"
 #include "arts/dialect/core/Transforms/edt/EdtParallelSplitLowering.h"
 #include "arts/dialect/core/Transforms/edt/EdtReductionLowering.h"
 #include "arts/dialect/core/Transforms/edt/EdtRewriter.h"
 #include "arts/dialect/core/Transforms/edt/EdtTaskLoopLowering.h"
 #include "arts/dialect/core/Transforms/edt/WorkDistributionUtils.h"
+#include "arts/passes/Passes.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoopUtils.h"
