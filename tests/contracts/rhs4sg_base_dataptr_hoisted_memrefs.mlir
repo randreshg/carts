@@ -4,20 +4,18 @@
 // as first-class hoist candidates so the EDT body reuses memrefs instead of
 // rebuilding them inside the hot inner stencil loops.
 //
-// RHS (4-D) is hoisted before the outer block loop.  MU, LA (3-D) and CENTER
-// (4-D) are hoisted to the outer block loop (their pointers depend on the block
-// index), but stay outside the inner stencil loops.
+// The current pre-lowering shape hoists all dependency-backed memref views
+// ahead of the worker loops, then reuses them inside the hot stencil nests.
 
 // CHECK-LABEL: func.func private @__arts_edt_1
-// CHECK: %[[RHS_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?x?xf32>
-// CHECK: scf.for %{{.+}} = %{{.+}} to %{{.+}} step %c1 {
-// CHECK:   %[[MU_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?xf32>
-// CHECK:   %[[LA_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?xf32>
-// CHECK:   %[[CENTER_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?x?xf32>
-// CHECK:   scf.for %{{.+}} = %{{.+}} to %{{.+}} step %c1 {
+// CHECK: %[[MU_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?xf32>
+// CHECK-NEXT: %[[LA_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?xf32>
+// CHECK-NEXT: %[[CENTER_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?x?xf32>
+// CHECK-NEXT: %[[RHS_MEM:.+]] = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?x?xf32>
+// CHECK-NEXT: scf.for %{{.+}} = %{{.+}} to %{{.+}} step %c1 {
+// CHECK:   scf.for %{{.+}} = %c4 to %c36 step %c1 {
 // CHECK:     scf.for %{{.+}} = %c4 to %c36 step %c1 {
-// CHECK:       scf.for %{{.+}} = %c4 to %c36 step %c1 {
-// CHECK:         %{{.+}} = polygeist.load %[[MU_MEM]][
-// CHECK:         %{{.+}} = polygeist.load %[[LA_MEM]][
-// CHECK:         %{{.+}} = polygeist.load %[[CENTER_MEM]][
-// CHECK:         polygeist.store %{{.+}}, %{{.+}}[
+// CHECK:       %{{.+}} = polygeist.load %[[MU_MEM]][
+// CHECK:       %{{.+}} = polygeist.load %[[LA_MEM]][
+// CHECK:       %{{.+}} = polygeist.load %[[CENTER_MEM]][
+// CHECK:       polygeist.store %{{.+}}, %[[RHS_MEM]][

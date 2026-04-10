@@ -4,7 +4,7 @@
 // SSA form instead of carrying rank-0 scratch memrefs through pre-lowering.
 // CHECK-LABEL: func.func private @__arts_edt_1(
 // CHECK-NOT: memref.alloca
-// CHECK-LABEL: func.func @mainBody()
+// CHECK-LABEL: func.func @main()
 
 module {
 }

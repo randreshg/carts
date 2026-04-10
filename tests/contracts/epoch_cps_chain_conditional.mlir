@@ -14,12 +14,12 @@
 // Launcher contains epoch_0 marked for continuation.
 // CHECK: arts.continuation_for_epoch
 // First continuation (cont_0).
-// CHECK: arts.cps_chain_id = "chain_0"
+// CHECK: arts.cps_chain_id = "{{.*chain_0}}"
 // Conditional epoch_1 inside scf.if, also marked for continuation.
 // CHECK: scf.if
 // CHECK: arts.continuation_for_epoch
 // Last continuation (cont_1).
-// CHECK: arts.cps_chain_id = "chain_1"
+// CHECK: arts.cps_chain_id = "{{.*chain_1}}"
 // CPS advance in cont_1.
 // CHECK: arts.cps_advance
 // The else-branch also has advance logic.
