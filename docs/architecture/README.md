@@ -82,6 +82,7 @@ following IREE's proven multi-dialect pattern.
 | [cost-model.md](cost-model.md) | Cost model, 21 hardcoded thresholds, runtime awareness gaps, convergence framework |
 | [op-classification.md](op-classification.md) | Complete op/attribute classification table, IREE patterns, operation lifecycle |
 | [directory-map.md](directory-map.md) | Every source file mapped from current to target location across all 3 phases |
+| [test-architecture.md](test-architecture.md) | Test decoupling from benchmarks: audit, industry conventions, migration strategy |
 
 ## Why Three Dialects?
 
