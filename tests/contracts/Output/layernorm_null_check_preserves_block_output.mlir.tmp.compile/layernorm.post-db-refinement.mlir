@@ -70,8 +70,8 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for tw
       %18 = llvm.getelementptr %2[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<20 x i8>
       %19 = llvm.call @fprintf(%17, %18) vararg(!llvm.func<i32 (ptr, ptr, ...)>) : (!llvm.ptr, !llvm.ptr) -> i32
     } else {
-      %alloca_10 = memref.alloca() {arts.id = 76 : i64, arts.memref = #arts.memref_metadata<rank = 0 : i64, allocationId = "layernorm.c:84:5", totalAccesses = 6 : i64, readCount = 2 : i64, writeCount = 4 : i64, allAccessesAffine = true, hasNonAffineAccesses = false, memoryFootprint = 4 : i64, firstUseId = 76 : i64, hasUniformAccess = true, dominantAccessPattern = 1 : i64, accessedInParallelLoop = true, hasLoopCarriedDeps = true, reuseDistance = 0 : i64, hasGoodSpatialLocality = true, estimatedAccessBytes = 24 : i64>, arts.metadata_provenance = "exact"} : memref<f32>
-      %alloca_11 = memref.alloca() {arts.id = 74 : i64, arts.memref = #arts.memref_metadata<rank = 0 : i64, allocationId = "layernorm.c:84:5", totalAccesses = 6 : i64, readCount = 2 : i64, writeCount = 4 : i64, allAccessesAffine = true, hasNonAffineAccesses = false, memoryFootprint = 4 : i64, firstUseId = 74 : i64, hasUniformAccess = true, dominantAccessPattern = 1 : i64, accessedInParallelLoop = true, hasLoopCarriedDeps = true, reuseDistance = 0 : i64, hasGoodSpatialLocality = true, estimatedAccessBytes = 24 : i64>, arts.metadata_provenance = "exact"} : memref<f32>
+      %alloca_10 = memref.alloca() {arts.id = 74 : i64, arts.memref = #arts.memref_metadata<rank = 0 : i64, allocationId = "layernorm.c:84:5", totalAccesses = 6 : i64, readCount = 2 : i64, writeCount = 4 : i64, allAccessesAffine = true, hasNonAffineAccesses = false, memoryFootprint = 4 : i64, firstUseId = 74 : i64, hasUniformAccess = true, dominantAccessPattern = 1 : i64, accessedInParallelLoop = true, hasLoopCarriedDeps = true, reuseDistance = 0 : i64, hasGoodSpatialLocality = true, estimatedAccessBytes = 24 : i64>, arts.metadata_provenance = "exact"} : memref<f32>
+      %alloca_11 = memref.alloca() {arts.id = 76 : i64, arts.memref = #arts.memref_metadata<rank = 0 : i64, allocationId = "layernorm.c:84:5", totalAccesses = 6 : i64, readCount = 2 : i64, writeCount = 4 : i64, allAccessesAffine = true, hasNonAffineAccesses = false, memoryFootprint = 4 : i64, firstUseId = 76 : i64, hasUniformAccess = true, dominantAccessPattern = 1 : i64, accessedInParallelLoop = true, hasLoopCarriedDeps = true, reuseDistance = 0 : i64, hasGoodSpatialLocality = true, estimatedAccessBytes = 24 : i64>, arts.metadata_provenance = "exact"} : memref<f32>
       %16 = "polygeist.undef"() : () -> i32
       %alloca_12 = memref.alloca() {arts.id = 53 : i64, arts.memref = #arts.memref_metadata<rank = 0 : i64, allocationId = "layernorm.c:78:3", totalAccesses = 5 : i64, readCount = 2 : i64, writeCount = 3 : i64, allAccessesAffine = true, hasNonAffineAccesses = false, memoryFootprint = 4 : i64, firstUseId = 53 : i64, hasUniformAccess = true, dominantAccessPattern = 1 : i64, accessedInParallelLoop = true, hasLoopCarriedDeps = true, reuseDistance = 0 : i64, hasGoodSpatialLocality = true, estimatedAccessBytes = 20 : i64>, arts.metadata_provenance = "exact"} : memref<i32>
       memref.store %16, %alloca_12[] : memref<i32>
@@ -148,32 +148,32 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for tw
               %55 = arith.select %54, %c0, %23 : index
               %56 = arith.minui %55, %25 : index
               scf.for %arg4 = %53 to %56 step %c1 {
-                memref.store %50, %alloca_11[] : memref<f32>
                 memref.store %50, %alloca_10[] : memref<f32>
-                memref.store %cst_4, %alloca_10[] : memref<f32>
+                memref.store %50, %alloca_11[] : memref<f32>
                 memref.store %cst_4, %alloca_11[] : memref<f32>
+                memref.store %cst_4, %alloca_10[] : memref<f32>
                 scf.for %arg5 = %c0 to %c1024 step %c1 {
                   %64 = arts.db_ref %arg1[%c0] : memref<?xmemref<?x?xf32>> -> memref<?x?xf32>
                   %65 = memref.load %64[%arg4, %arg5] : memref<?x?xf32>
-                  %66 = memref.load %alloca_10[] : memref<f32>
+                  %66 = memref.load %alloca_11[] : memref<f32>
                   %67 = arith.addf %66, %65 : f32
-                  memref.store %67, %alloca_10[] : memref<f32>
+                  memref.store %67, %alloca_11[] : memref<f32>
                 } {arts.id = 85 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 1024 : i64, nestingLevel = 0 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 1 : i64, parallelClassification = 3 : i64, locationKey = "layernorm.c:84:5">, arts.metadata_provenance = "exact"}
-                %57 = memref.load %alloca_10[] : memref<f32>
+                %57 = memref.load %alloca_11[] : memref<f32>
                 %58 = arith.divf %57, %cst_0 : f32
-                memref.store %58, %alloca_10[] : memref<f32>
+                memref.store %58, %alloca_11[] : memref<f32>
                 scf.for %arg5 = %c0 to %c1024 step %c1 {
                   %64 = arts.db_ref %arg1[%c0] : memref<?xmemref<?x?xf32>> -> memref<?x?xf32>
                   %65 = memref.load %64[%arg4, %arg5] : memref<?x?xf32>
                   %66 = arith.subf %65, %58 : f32
                   %67 = arith.mulf %66, %66 : f32
-                  %68 = memref.load %alloca_11[] : memref<f32>
+                  %68 = memref.load %alloca_10[] : memref<f32>
                   %69 = arith.addf %68, %67 : f32
-                  memref.store %69, %alloca_11[] : memref<f32>
+                  memref.store %69, %alloca_10[] : memref<f32>
                 } {arts.id = 96 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 1024 : i64, nestingLevel = 0 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 1 : i64, parallelClassification = 3 : i64, locationKey = "layernorm.c:84:5">, arts.metadata_provenance = "exact"}
-                %59 = memref.load %alloca_11[] : memref<f32>
+                %59 = memref.load %alloca_10[] : memref<f32>
                 %60 = arith.divf %59, %cst_0 : f32
-                memref.store %60, %alloca_11[] : memref<f32>
+                memref.store %60, %alloca_10[] : memref<f32>
                 %61 = arith.addf %60, %cst : f32
                 %62 = math.sqrt %61 : f32
                 %63 = arith.divf %cst_3, %62 : f32
@@ -222,10 +222,10 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for tw
       func.call @carts_phase_timer_stop(%20) : (memref<?xi8>) -> ()
       func.call @carts_e2e_timer_stop() : () -> ()
     }
-    arts.db_free(%guid_6) : memref<?xi64>
-    arts.db_free(%ptr_7) : memref<?xmemref<?xf32>>
     arts.db_free(%guid) : memref<?xi64>
     arts.db_free(%ptr) : memref<?xmemref<?x?xf32>>
+    arts.db_free(%guid_6) : memref<?xi64>
+    arts.db_free(%ptr_7) : memref<?xmemref<?xf32>>
     arts.db_free(%guid_8) : memref<?xi64>
     arts.db_free(%ptr_9) : memref<?xmemref<?xf32>>
     return %15 : i32
