@@ -6,8 +6,8 @@
 /// should not be used as shared compiler infrastructure.
 ///==========================================================================///
 
-#ifndef ARTS_PASSES_TRANSFORMS_EDTLOWERINGINTERNAL_H
-#define ARTS_PASSES_TRANSFORMS_EDTLOWERINGINTERNAL_H
+#ifndef ARTS_DIALECT_RT_CONVERSION_ARTSTORT_EDTLOWERINGINTERNAL_H
+#define ARTS_DIALECT_RT_CONVERSION_ARTSTORT_EDTLOWERINGINTERNAL_H
 
 #include "arts/Dialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"
@@ -72,4 +72,4 @@ Operation *getCanonicalDependencySource(Value dep);
 
 } // namespace mlir::arts::edt_lowering
 
-#endif // ARTS_PASSES_TRANSFORMS_EDTLOWERINGINTERNAL_H
+#endif // ARTS_DIALECT_RT_CONVERSION_ARTSTORT_EDTLOWERINGINTERNAL_H

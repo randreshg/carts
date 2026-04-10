@@ -36,7 +36,7 @@
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/passes/transforms/EdtLoweringInternal.h"
+#include "arts/dialect/rt/Conversion/ArtsToRt/EdtLoweringInternal.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoweringContractUtils.h"

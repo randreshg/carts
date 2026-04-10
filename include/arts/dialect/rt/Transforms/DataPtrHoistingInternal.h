@@ -6,8 +6,8 @@
 /// should not be used as shared compiler infrastructure.
 ///==========================================================================///
 
-#ifndef ARTS_PASSES_OPT_CODEGEN_DATAPTRHOISTINGINTERNAL_H
-#define ARTS_PASSES_OPT_CODEGEN_DATAPTRHOISTINGINTERNAL_H
+#ifndef ARTS_DIALECT_RT_TRANSFORMS_DATAPTRHOISTINGINTERNAL_H
+#define ARTS_DIALECT_RT_TRANSFORMS_DATAPTRHOISTINGINTERNAL_H
 
 #include "arts/Dialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"
@@ -228,4 +228,4 @@ bool hoistLoadOutOfLoop(LLVM::LoadOp loadOp, scf::ForOp targetLoop);
 
 } // namespace mlir::arts::data_ptr_hoisting
 
-#endif // ARTS_PASSES_OPT_CODEGEN_DATAPTRHOISTINGINTERNAL_H
+#endif // ARTS_DIALECT_RT_TRANSFORMS_DATAPTRHOISTINGINTERNAL_H
