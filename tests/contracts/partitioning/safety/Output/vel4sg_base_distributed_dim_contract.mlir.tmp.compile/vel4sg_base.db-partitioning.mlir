@@ -148,10 +148,10 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
     } {arts.id = 109 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 48 : i64, nestingLevel = 0 : i64, hasInterIterationDeps = true, memrefsWithLoopCarriedDeps = 1 : i64, parallelClassification = 3 : i64, locationKey = "vel4sg_base.c:135:3">, arts.metadata_provenance = "recovered"}
     call @carts_phase_timer_stop(%6) : (memref<?xi8>) -> ()
     call @carts_kernel_timer_start(%5) : (memref<?xi8>) -> ()
-    %alloca_48 = memref.alloca() {arts.id = 158 : i64, arts.memref = #arts.memref_metadata<rank = 0 : i64, allocationId = "vel4sg_base.c:141:5", totalAccesses = 3 : i64, readCount = 1 : i64, writeCount = 2 : i64, allAccessesAffine = true, hasNonAffineAccesses = false, memoryFootprint = 4 : i64, firstUseId = 158 : i64, hasUniformAccess = true, dominantAccessPattern = 1 : i64, accessedInParallelLoop = true, hasLoopCarriedDeps = true, reuseDistance = 7 : i64, hasGoodSpatialLocality = true, estimatedAccessBytes = 12 : i64>, arts.metadata_provenance = "exact"} : memref<f32>
-    %alloca_49 = memref.alloca() {arts.id = 163 : i64, arts.memref = #arts.memref_metadata<rank = 0 : i64, allocationId = "vel4sg_base.c:141:5", totalAccesses = 3 : i64, readCount = 1 : i64, writeCount = 2 : i64, allAccessesAffine = true, hasNonAffineAccesses = false, memoryFootprint = 4 : i64, firstUseId = 163 : i64, hasUniformAccess = true, dominantAccessPattern = 1 : i64, accessedInParallelLoop = true, hasLoopCarriedDeps = true, reuseDistance = 6 : i64, hasGoodSpatialLocality = true, estimatedAccessBytes = 12 : i64>, arts.metadata_provenance = "exact"} : memref<f32>
-    %alloca_50 = memref.alloca() {arts.id = 161 : i64, arts.memref = #arts.memref_metadata<rank = 0 : i64, allocationId = "vel4sg_base.c:141:5", totalAccesses = 3 : i64, readCount = 1 : i64, writeCount = 2 : i64, allAccessesAffine = true, hasNonAffineAccesses = false, memoryFootprint = 4 : i64, firstUseId = 161 : i64, hasUniformAccess = true, dominantAccessPattern = 1 : i64, accessedInParallelLoop = true, hasLoopCarriedDeps = true, reuseDistance = 7 : i64, hasGoodSpatialLocality = true, estimatedAccessBytes = 12 : i64>, arts.metadata_provenance = "exact"} : memref<f32>
-    %alloca_51 = memref.alloca() {arts.id = 165 : i64, arts.memref = #arts.memref_metadata<rank = 0 : i64, allocationId = "vel4sg_base.c:141:5", totalAccesses = 5 : i64, readCount = 3 : i64, writeCount = 2 : i64, allAccessesAffine = true, hasNonAffineAccesses = false, memoryFootprint = 4 : i64, firstUseId = 165 : i64, hasUniformAccess = true, dominantAccessPattern = 1 : i64, accessedInParallelLoop = true, hasLoopCarriedDeps = true, reuseDistance = 3 : i64, hasGoodSpatialLocality = true, estimatedAccessBytes = 20 : i64>, arts.metadata_provenance = "exact"} : memref<f32>
+    %alloca_48 = memref.alloca() {arts.id = 163 : i64, arts.memref = #arts.memref_metadata<rank = 0 : i64, allocationId = "vel4sg_base.c:141:5", totalAccesses = 3 : i64, readCount = 1 : i64, writeCount = 2 : i64, allAccessesAffine = true, hasNonAffineAccesses = false, memoryFootprint = 4 : i64, firstUseId = 163 : i64, hasUniformAccess = true, dominantAccessPattern = 1 : i64, accessedInParallelLoop = true, hasLoopCarriedDeps = true, reuseDistance = 6 : i64, hasGoodSpatialLocality = true, estimatedAccessBytes = 12 : i64>, arts.metadata_provenance = "exact"} : memref<f32>
+    %alloca_49 = memref.alloca() {arts.id = 165 : i64, arts.memref = #arts.memref_metadata<rank = 0 : i64, allocationId = "vel4sg_base.c:141:5", totalAccesses = 5 : i64, readCount = 3 : i64, writeCount = 2 : i64, allAccessesAffine = true, hasNonAffineAccesses = false, memoryFootprint = 4 : i64, firstUseId = 165 : i64, hasUniformAccess = true, dominantAccessPattern = 1 : i64, accessedInParallelLoop = true, hasLoopCarriedDeps = true, reuseDistance = 3 : i64, hasGoodSpatialLocality = true, estimatedAccessBytes = 20 : i64>, arts.metadata_provenance = "exact"} : memref<f32>
+    %alloca_50 = memref.alloca() {arts.id = 158 : i64, arts.memref = #arts.memref_metadata<rank = 0 : i64, allocationId = "vel4sg_base.c:141:5", totalAccesses = 3 : i64, readCount = 1 : i64, writeCount = 2 : i64, allAccessesAffine = true, hasNonAffineAccesses = false, memoryFootprint = 4 : i64, firstUseId = 158 : i64, hasUniformAccess = true, dominantAccessPattern = 1 : i64, accessedInParallelLoop = true, hasLoopCarriedDeps = true, reuseDistance = 7 : i64, hasGoodSpatialLocality = true, estimatedAccessBytes = 12 : i64>, arts.metadata_provenance = "exact"} : memref<f32>
+    %alloca_51 = memref.alloca() {arts.id = 161 : i64, arts.memref = #arts.memref_metadata<rank = 0 : i64, allocationId = "vel4sg_base.c:141:5", totalAccesses = 3 : i64, readCount = 1 : i64, writeCount = 2 : i64, allAccessesAffine = true, hasNonAffineAccesses = false, memoryFootprint = 4 : i64, firstUseId = 161 : i64, hasUniformAccess = true, dominantAccessPattern = 1 : i64, accessedInParallelLoop = true, hasLoopCarriedDeps = true, reuseDistance = 7 : i64, hasGoodSpatialLocality = true, estimatedAccessBytes = 12 : i64>, arts.metadata_provenance = "exact"} : memref<f32>
     %8 = arts.epoch attributes {arts.pattern_revision = 2 : i64, arts.plan.async_strategy = "blocking", arts.plan.cost.expected_local_work = 0 : i64, arts.plan.cost.relaunch_amortization = 0 : i64, arts.plan.cost.scheduler_overhead = 300 : i64, arts.plan.cost.slice_widening_pressure = 0 : i64, arts.plan.iteration_topology = "owner_strip", arts.plan.kernel_family = "uniform", arts.plan.repetition_structure = "none", depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32} {
       scf.for %arg0 = %c0 to %c8 step %c1 {
         %12 = arith.muli %arg0, %c6 : index
@@ -271,10 +271,10 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
             scf.for %arg11 = %92 to %95 step %c1 {
               %96 = arith.addi %12, %arg11 : index
               %97 = "polygeist.undef"() : () -> f32
-              memref.store %97, %alloca_48[] : memref<f32>
               memref.store %97, %alloca_50[] : memref<f32>
-              memref.store %97, %alloca_49[] : memref<f32>
               memref.store %97, %alloca_51[] : memref<f32>
+              memref.store %97, %alloca_48[] : memref<f32>
+              memref.store %97, %alloca_49[] : memref<f32>
               %98 = arith.index_cast %96 : index to i32
               scf.for %arg12 = %c2 to %c46 step %c1 {
                 %99 = arith.index_cast %arg12 : index to i32
@@ -283,7 +283,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
                   %101 = arts.db_ref %arg1[%c0] : memref<?xmemref<?x?x?xf32>> -> memref<?x?x?xf32>
                   %102 = memref.load %101[%arg13, %arg12, %96] : memref<?x?x?xf32>
                   %103 = arith.divf %cst_1, %102 : f32
-                  memref.store %103, %alloca_51[] : memref<f32>
+                  memref.store %103, %alloca_49[] : memref<f32>
                   %104 = arith.addi %100, %c1_i32 : i32
                   %105 = arith.index_cast %104 : i32 to index
                   %106 = arts.db_ref %arg2[%c0] : memref<?xmemref<?x?x?xf32>> -> memref<?x?x?xf32>
@@ -313,7 +313,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
                   %130 = arith.subf %126, %129 : f32
                   %131 = arith.mulf %130, %cst_0 : f32
                   %132 = arith.addf %122, %131 : f32
-                  memref.store %132, %alloca_49[] : memref<f32>
+                  memref.store %132, %alloca_48[] : memref<f32>
                   %133 = memref.load %115[%105, %arg12, %96] : memref<?x?x?xf32>
                   %134 = memref.load %115[%109, %arg12, %96] : memref<?x?x?xf32>
                   %135 = arith.subf %133, %134 : f32
@@ -330,7 +330,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
                   %146 = arith.subf %144, %145 : f32
                   %147 = arith.mulf %146, %cst_0 : f32
                   %148 = arith.addf %142, %147 : f32
-                  memref.store %148, %alloca_50[] : memref<f32>
+                  memref.store %148, %alloca_51[] : memref<f32>
                   %149 = memref.load %125[%105, %arg12, %96] : memref<?x?x?xf32>
                   %150 = memref.load %125[%109, %arg12, %96] : memref<?x?x?xf32>
                   %151 = arith.subf %149, %150 : f32
@@ -346,26 +346,26 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
                   %161 = arith.subf %159, %160 : f32
                   %162 = arith.mulf %161, %cst_0 : f32
                   %163 = arith.addf %157, %162 : f32
-                  memref.store %163, %alloca_48[] : memref<f32>
-                  %164 = memref.load %alloca_51[] : memref<f32>
+                  memref.store %163, %alloca_50[] : memref<f32>
+                  %164 = memref.load %alloca_49[] : memref<f32>
                   %165 = arith.mulf %164, %cst : f32
-                  %166 = memref.load %alloca_49[] : memref<f32>
+                  %166 = memref.load %alloca_48[] : memref<f32>
                   %167 = arith.mulf %165, %166 : f32
                   %168 = arts.db_ref %arg8[%c0] : memref<?xmemref<?x?x?xf32>> -> memref<?x?x?xf32>
                   %169 = memref.load %168[%arg13, %arg12, %96] : memref<?x?x?xf32>
                   %170 = arith.addf %169, %167 : f32
                   memref.store %170, %168[%arg13, %arg12, %96] : memref<?x?x?xf32>
-                  %171 = memref.load %alloca_51[] : memref<f32>
+                  %171 = memref.load %alloca_49[] : memref<f32>
                   %172 = arith.mulf %171, %cst : f32
-                  %173 = memref.load %alloca_50[] : memref<f32>
+                  %173 = memref.load %alloca_51[] : memref<f32>
                   %174 = arith.mulf %172, %173 : f32
                   %175 = arts.db_ref %arg9[%c0] : memref<?xmemref<?x?x?xf32>> -> memref<?x?x?xf32>
                   %176 = memref.load %175[%arg13, %arg12, %96] : memref<?x?x?xf32>
                   %177 = arith.addf %176, %174 : f32
                   memref.store %177, %175[%arg13, %arg12, %96] : memref<?x?x?xf32>
-                  %178 = memref.load %alloca_51[] : memref<f32>
+                  %178 = memref.load %alloca_49[] : memref<f32>
                   %179 = arith.mulf %178, %cst : f32
-                  %180 = memref.load %alloca_48[] : memref<f32>
+                  %180 = memref.load %alloca_50[] : memref<f32>
                   %181 = arith.mulf %179, %180 : f32
                   %182 = arts.db_ref %arg10[%c0] : memref<?xmemref<?x?x?xf32>> -> memref<?x?x?xf32>
                   %183 = memref.load %182[%arg13, %arg12, %96] : memref<?x?x?xf32>
@@ -419,26 +419,26 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
     call @carts_phase_timer_start(%11, %5) : (memref<?xi8>, memref<?xi8>) -> ()
     call @carts_phase_timer_stop(%11) : (memref<?xi8>) -> ()
     call @carts_e2e_timer_stop() : () -> ()
-    arts.db_free(%guid_45) : memref<?xi64>
-    arts.db_free(%ptr_46) : memref<?xmemref<?x?x?xf32>>
-    arts.db_free(%guid_37) : memref<?xi64>
-    arts.db_free(%ptr_38) : memref<?xmemref<?x?x?xf32>>
-    arts.db_free(%guid_17) : memref<?xi64>
-    arts.db_free(%ptr_18) : memref<?xmemref<?x?x?xf32>>
-    arts.db_free(%guid_41) : memref<?xi64>
-    arts.db_free(%ptr_42) : memref<?xmemref<?x?x?xf32>>
     arts.db_free(%guid_13) : memref<?xi64>
     arts.db_free(%ptr_14) : memref<?xmemref<?x?x?xf32>>
-    arts.db_free(%guid_29) : memref<?xi64>
-    arts.db_free(%ptr_30) : memref<?xmemref<?x?x?xf32>>
-    arts.db_free(%guid_33) : memref<?xi64>
-    arts.db_free(%ptr_34) : memref<?xmemref<?x?x?xf32>>
     arts.db_free(%guid_25) : memref<?xi64>
     arts.db_free(%ptr_26) : memref<?xmemref<?x?x?xf32>>
+    arts.db_free(%guid_33) : memref<?xi64>
+    arts.db_free(%ptr_34) : memref<?xmemref<?x?x?xf32>>
+    arts.db_free(%guid_37) : memref<?xi64>
+    arts.db_free(%ptr_38) : memref<?xmemref<?x?x?xf32>>
     arts.db_free(%guid) : memref<?xi64>
     arts.db_free(%ptr) : memref<?xmemref<?x?x?xf32>>
+    arts.db_free(%guid_45) : memref<?xi64>
+    arts.db_free(%ptr_46) : memref<?xmemref<?x?x?xf32>>
+    arts.db_free(%guid_41) : memref<?xi64>
+    arts.db_free(%ptr_42) : memref<?xmemref<?x?x?xf32>>
     arts.db_free(%guid_21) : memref<?xi64>
     arts.db_free(%ptr_22) : memref<?xmemref<?x?x?xf32>>
+    arts.db_free(%guid_29) : memref<?xi64>
+    arts.db_free(%ptr_30) : memref<?xmemref<?x?x?xf32>>
+    arts.db_free(%guid_17) : memref<?xi64>
+    arts.db_free(%ptr_18) : memref<?xmemref<?x?x?xf32>>
     return %c0_i32 : i32
   }
   func.func private @carts_benchmarks_start() attributes {llvm.linkage = #llvm.linkage<external>}

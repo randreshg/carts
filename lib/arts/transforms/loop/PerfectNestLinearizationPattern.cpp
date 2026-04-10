@@ -130,9 +130,9 @@ static Value createUnitTripCount(OpBuilder &builder, Location loc, Value lb,
                                  Value ub) {
   Value zero = arts::createZeroIndex(builder, loc);
   Value inRange =
-      builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge, ub, lb);
-  Value diff = builder.create<arith::SubIOp>(loc, ub, lb);
-  return builder.create<arith::SelectOp>(loc, inRange, diff, zero);
+      arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::uge, ub, lb);
+  Value diff = arith::SubIOp::create(builder, loc, ub, lb);
+  return arith::SelectOp::create(builder, loc, inRange, diff, zero);
 }
 
 class PerfectNestLinearizationPattern : public LoopPattern {
@@ -226,11 +226,11 @@ LogicalResult PerfectNestLinearizationPattern::apply(OpBuilder &builder) {
 
   Value outerTrip = createUnitTripCount(builder, loc, outerLb, outerUb);
   Value innerTrip = createUnitTripCount(builder, loc, innerLb, innerUb);
-  Value totalTrip = builder.create<arith::MulIOp>(loc, outerTrip, innerTrip);
+  Value totalTrip = arith::MulIOp::create(builder, loc, outerTrip, innerTrip);
 
   auto linearFor =
-      builder.create<ForOp>(loc, ValueRange{zero}, ValueRange{totalTrip},
-                            ValueRange{one}, nullptr, ValueRange{});
+      ForOp::create(builder, loc, ValueRange{zero}, ValueRange{totalTrip},
+                    ValueRange{one}, nullptr, ValueRange{});
 
   Region &dstRegion = linearFor.getRegion();
   if (dstRegion.empty())
@@ -242,13 +242,13 @@ LogicalResult PerfectNestLinearizationPattern::apply(OpBuilder &builder) {
   OpBuilder bodyBuilder = OpBuilder::atBlockBegin(&dst);
   Value linearIV = dst.getArgument(0);
   Value outerLinear =
-      bodyBuilder.create<arith::DivUIOp>(loc, linearIV, innerTrip);
+      arith::DivUIOp::create(bodyBuilder, loc, linearIV, innerTrip);
   Value innerLinear =
-      bodyBuilder.create<arith::RemUIOp>(loc, linearIV, innerTrip);
+      arith::RemUIOp::create(bodyBuilder, loc, linearIV, innerTrip);
   Value newOuterIV =
-      bodyBuilder.create<arith::AddIOp>(loc, outerLb, outerLinear);
+      arith::AddIOp::create(bodyBuilder, loc, outerLb, outerLinear);
   Value newInnerIV =
-      bodyBuilder.create<arith::AddIOp>(loc, innerLb, innerLinear);
+      arith::AddIOp::create(bodyBuilder, loc, innerLb, innerLinear);
 
   IRMapping mapping;
   mapping.map(outerArtsFor.getRegion().front().getArgument(0), newOuterIV);
@@ -259,7 +259,7 @@ LogicalResult PerfectNestLinearizationPattern::apply(OpBuilder &builder) {
 
   for (Operation &op : innerLoop.getBody()->without_terminator())
     bodyBuilder.clone(op, mapping);
-  bodyBuilder.create<arts::YieldOp>(loc);
+  arts::YieldOp::create(bodyBuilder, loc);
 
   rewriteNormalizedLoop(outerArtsFor.getOperation(), linearFor.getOperation(),
                         metadataManager);

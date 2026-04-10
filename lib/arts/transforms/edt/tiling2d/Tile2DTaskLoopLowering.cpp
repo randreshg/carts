@@ -89,20 +89,20 @@ computeColumnLaneBounds(TaskLoopPostCloneInput &input, scf::ForOp loop) {
   Value domainLower = domainLoop.getLowerBound();
   Value domainUpper = domainLoop.getUpperBound();
   Value domainExtent =
-      builder.create<arith::SubIOp>(loc, domainUpper, domainLower);
+      arith::SubIOp::create(builder, loc, domainUpper, domainLower);
   Value workersMinusOne =
-      builder.create<arith::SubIOp>(loc, input.innerStripeCount, one);
+      arith::SubIOp::create(builder, loc, input.innerStripeCount, one);
   Value adjustedExtent =
-      builder.create<arith::AddIOp>(loc, domainExtent, workersMinusOne);
-  Value laneChunk = builder.create<arith::DivUIOp>(loc, adjustedExtent,
-                                                   input.innerStripeCount);
+      arith::AddIOp::create(builder, loc, domainExtent, workersMinusOne);
+  Value laneChunk = arith::DivUIOp::create(builder, loc, adjustedExtent,
+                                           input.innerStripeCount);
   Value laneOffset =
-      builder.create<arith::MulIOp>(loc, input.innerStripeLane, laneChunk);
-  Value laneLower = builder.create<arith::AddIOp>(loc, domainLower, laneOffset);
+      arith::MulIOp::create(builder, loc, input.innerStripeLane, laneChunk);
+  Value laneLower = arith::AddIOp::create(builder, loc, domainLower, laneOffset);
   Value laneUpperHint =
-      builder.create<arith::AddIOp>(loc, laneLower, laneChunk);
+      arith::AddIOp::create(builder, loc, laneLower, laneChunk);
   Value laneUpper =
-      builder.create<arith::MinUIOp>(loc, laneUpperHint, domainUpper);
+      arith::MinUIOp::create(builder, loc, laneUpperHint, domainUpper);
   return {laneLower, laneUpper};
 }
 
@@ -122,12 +122,12 @@ static void sliceLoopByColumns(TaskLoopPostCloneInput &input, scf::ForOp loop) {
     return;
   builder.setInsertionPoint(loop);
   Value slicedLower =
-      builder.create<arith::MaxUIOp>(loc, loop.getLowerBound(), laneLower);
+      arith::MaxUIOp::create(builder, loc, loop.getLowerBound(), laneLower);
   Value slicedUpper =
-      builder.create<arith::MinUIOp>(loc, loop.getUpperBound(), laneUpper);
+      arith::MinUIOp::create(builder, loc, loop.getUpperBound(), laneUpper);
 
   scf::ForOp sliced =
-      builder.create<scf::ForOp>(loc, slicedLower, slicedUpper, loop.getStep());
+      scf::ForOp::create(builder, loc, slicedLower, slicedUpper, loop.getStep());
   sliced->setAttrs(loop->getAttrs());
 
   IRMapping map;

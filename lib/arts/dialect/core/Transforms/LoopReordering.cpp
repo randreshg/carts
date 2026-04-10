@@ -310,12 +310,12 @@ private:
     }
 
     /// Create new outer loop (was secondInner)
-    auto newOuterLoop = builder.create<scf::ForOp>(
+    auto newOuterLoop = scf::ForOp::create(builder,
         firstInner.getLoc(), lb2, ub2, step2, ValueRange{},
         [&](OpBuilder &nestedBuilder, Location loc, Value newOuterIV,
             ValueRange iterArgs) {
           /// Create new inner loop (was firstInner)
-          nestedBuilder.create<scf::ForOp>(
+          scf::ForOp::create(nestedBuilder,
               loc, lb1, ub1, step1, ValueRange{},
               [&](OpBuilder &innerBuilder, Location innerLoc, Value newInnerIV,
                   ValueRange innerIterArgs) {
@@ -330,9 +330,9 @@ private:
                   innerBuilder.clone(op, mapping);
                 }
 
-                innerBuilder.create<scf::YieldOp>(innerLoc);
+                scf::YieldOp::create(innerBuilder, innerLoc);
               });
-          nestedBuilder.create<scf::YieldOp>(loc);
+          scf::YieldOp::create(nestedBuilder, loc);
         });
 
     scf::ForOp newInnerLoop = nullptr;
@@ -419,7 +419,7 @@ private:
 
     if (needsInitLoop) {
       /// STEP 1: Create the init loop (for j: init_ops)
-      auto initLoop = builder.create<scf::ForOp>(
+      auto initLoop = scf::ForOp::create(builder,
           firstInner.getLoc(), lb1, ub1, step1, ValueRange{},
           [&](OpBuilder &nestedBuilder, Location loc, Value initLoopIV,
               ValueRange iterArgs) {
@@ -430,7 +430,7 @@ private:
             for (Operation *op : initOps)
               nestedBuilder.clone(*op, mapping);
 
-            nestedBuilder.create<scf::YieldOp>(loc);
+            scf::YieldOp::create(nestedBuilder, loc);
           });
 
       /// The init loop is synthetic and must get its own metadata identity.
@@ -438,12 +438,12 @@ private:
     }
 
     /// STEP 2: Create the interchanged reduction loop (for k: for j: reduce)
-    auto newOuterLoop = builder.create<scf::ForOp>(
+    auto newOuterLoop = scf::ForOp::create(builder,
         firstInner.getLoc(), lb2, ub2, step2, ValueRange{},
         [&](OpBuilder &nestedBuilder, Location loc, Value newOuterIV,
             ValueRange iterArgs) {
           /// Create new inner loop (was firstInner/j)
-          nestedBuilder.create<scf::ForOp>(
+          scf::ForOp::create(nestedBuilder,
               loc, lb1, ub1, step1, ValueRange{},
               [&](OpBuilder &innerBuilder, Location innerLoc, Value newInnerIV,
                   ValueRange innerIterArgs) {
@@ -461,9 +461,9 @@ private:
                   innerBuilder.clone(op, mapping);
                 }
 
-                innerBuilder.create<scf::YieldOp>(innerLoc);
+                scf::YieldOp::create(innerBuilder, innerLoc);
               });
-          nestedBuilder.create<scf::YieldOp>(loc);
+          scf::YieldOp::create(nestedBuilder, loc);
         });
 
     scf::ForOp newInnerLoop = nullptr;

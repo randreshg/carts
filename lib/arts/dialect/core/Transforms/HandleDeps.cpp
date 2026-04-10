@@ -209,7 +209,7 @@ void HandleDepsPass::runOnOperation() {
         continue;
 
       /// Create arts.omp_dep using DepInfo fields (insertion point already set)
-      auto ompDepOp = builder.create<arts::OmpDepOp>(
+      auto ompDepOp = arts::OmpDepOp::create(builder,
           task.getLoc(),
           depInfo->source.getType(), /// result type
           depInfo->mode,             /// ArtsMode

@@ -18,7 +18,7 @@
 #include "arts/Dialect.h"
 #define GEN_PASS_DEF_RAISETOLINALG
 #include "arts/passes/Passes.h"
-#include "arts/passes/Passes.h.inc"
+#include "arts/dialect/sde/Transforms/Passes.h.inc"
 #include "arts/utils/OperationAttributes.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"

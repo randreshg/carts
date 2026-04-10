@@ -306,20 +306,20 @@ static LogicalResult transformReduction(ReductionPattern &pattern,
 
   Value initValue;
   if (auto load = dyn_cast<memref::LoadOp>(pattern.loadOp)) {
-    initValue = rewriter.create<memref::LoadOp>(loc, load.getMemRef(),
-                                                load.getIndices());
+    initValue = memref::LoadOp::create(rewriter, loc, load.getMemRef(),
+                                      load.getIndices());
   } else if (auto dynLoad = dyn_cast<polygeist::DynLoadOp>(pattern.loadOp)) {
     /// For polygeist.load (DynLoadOp), create new load before the loop
-    initValue = rewriter.create<polygeist::DynLoadOp>(
+    initValue = polygeist::DynLoadOp::create(rewriter,
         loc, dynLoad.getResult().getType(), dynLoad.getMemref(),
         dynLoad.getIndices(), dynLoad.getSizes());
   }
 
   /// Create new ForOp with iter_args
   SmallVector<Value> iterArgs = {initValue};
-  auto newForOp = rewriter.create<scf::ForOp>(loc, forOp.getLowerBound(),
-                                              forOp.getUpperBound(),
-                                              forOp.getStep(), iterArgs);
+  auto newForOp = scf::ForOp::create(rewriter, loc, forOp.getLowerBound(),
+                                    forOp.getUpperBound(),
+                                    forOp.getStep(), iterArgs);
 
   /// Copy attributes (like arts.loop metadata)
   newForOp->setAttrs(forOp->getAttrs());
@@ -367,18 +367,18 @@ static LogicalResult transformReduction(ReductionPattern &pattern,
     /// here with our detection checks, but guard against it anyway
     return failure();
   }
-  rewriter.create<scf::YieldOp>(loc, ValueRange{newAccValue});
+  scf::YieldOp::create(rewriter, loc, ValueRange{newAccValue});
 
   /// Store final result after the loop
   rewriter.setInsertionPointAfter(newForOp);
   Value finalValue = newForOp.getResult(0);
 
   if (auto store = dyn_cast<memref::StoreOp>(pattern.storeOp)) {
-    rewriter.create<memref::StoreOp>(loc, finalValue, store.getMemRef(),
-                                     store.getIndices());
+    memref::StoreOp::create(rewriter, loc, finalValue, store.getMemRef(),
+                            store.getIndices());
   } else if (auto dynStore = dyn_cast<polygeist::DynStoreOp>(pattern.storeOp)) {
     /// For polygeist.store (DynStoreOp), create new store with updated value
-    rewriter.create<polygeist::DynStoreOp>(
+    polygeist::DynStoreOp::create(rewriter,
         loc, finalValue, dynStore.getMemref(), dynStore.getIndices(),
         dynStore.getSizes());
   }

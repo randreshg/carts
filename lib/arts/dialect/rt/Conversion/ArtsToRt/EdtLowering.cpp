@@ -35,7 +35,7 @@
 #define GEN_PASS_DEF_EDTLOWERING
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "arts/passes/Passes.h.inc"
+#include "arts/dialect/rt/Transforms/Passes.h.inc"
 #include "arts/dialect/rt/Conversion/ArtsToRt/EdtLoweringInternal.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"

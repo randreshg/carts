@@ -92,7 +92,7 @@ FailureOr<DbAllocOp> DbRewriter::apply(OpBuilder &builder) {
 
   /// 1. Create new allocation with the given sizes from plan
   PartitionMode partitionMode = plan.mode;
-  auto newAlloc = builder.create<DbAllocOp>(
+  auto newAlloc = DbAllocOp::create(builder,
       loc, oldAlloc.getMode(), oldAlloc.getRoute(), oldAlloc.getAllocType(),
       oldAlloc.getDbMode(), oldAlloc.getElementType(), oldAlloc.getAddress(),
       plan.outerSizes, plan.innerSizes, partitionMode);

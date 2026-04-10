@@ -17,7 +17,7 @@
 #include "arts/Dialect.h"
 #include "arts/codegen/Types.h"
 #include "arts/passes/Passes.h"
-#include "arts/passes/Passes.h.inc"
+#include "arts/dialect/rt/Transforms/Passes.h.inc"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopInvarianceUtils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"

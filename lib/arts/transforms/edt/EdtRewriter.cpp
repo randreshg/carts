@@ -1125,7 +1125,7 @@ void mlir::arts::applyTaskAcquireContractMetadata(
       updated.spatial.writeFootprint.clear();
       for (int64_t value : taskWriteFootprint)
         updated.spatial.writeFootprint.push_back(
-            builder.create<arith::ConstantIndexOp>(loc, value));
+            arith::ConstantIndexOp::create(builder, loc, value));
     }
     if (taskCenterOffset)
       updated.spatial.centerOffset = taskCenterOffset;

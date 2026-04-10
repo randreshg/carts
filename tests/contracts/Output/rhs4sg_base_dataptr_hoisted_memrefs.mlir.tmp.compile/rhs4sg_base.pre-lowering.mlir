@@ -386,12 +386,12 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
     call @carts_e2e_timer_stop() : () -> ()
     arts.db_free(%guid) : memref<?xi64>
     arts.db_free(%ptr) : memref<?x!llvm.ptr>
+    arts.db_free(%guid_14) : memref<?xi64>
+    arts.db_free(%ptr_15) : memref<?x!llvm.ptr>
     arts.db_free(%guid_12) : memref<?xi64>
     arts.db_free(%ptr_13) : memref<?x!llvm.ptr>
     arts.db_free(%guid_16) : memref<?xi64>
     arts.db_free(%ptr_17) : memref<?x!llvm.ptr>
-    arts.db_free(%guid_14) : memref<?xi64>
-    arts.db_free(%ptr_15) : memref<?x!llvm.ptr>
     return %c0_i32 : i32
   }
   func.func private @carts_benchmarks_start() attributes {llvm.linkage = #llvm.linkage<external>}

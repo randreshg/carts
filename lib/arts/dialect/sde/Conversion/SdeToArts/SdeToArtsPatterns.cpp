@@ -16,10 +16,13 @@
 ///==========================================================================///
 
 #include "arts/dialect/sde/IR/SdeDialect.h"
+#define GEN_PASS_DEF_CONVERTSDETOARTS
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/passes/Passes.h"
+#include "arts/dialect/sde/Transforms/Passes.h.inc"
 #include "arts/utils/OperationAttributes.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -342,16 +345,10 @@ struct CuReduceToArtsPattern
 
 namespace {
 struct ConvertSdeToArtsPass
-    : public PassWrapper<ConvertSdeToArtsPass, OperationPass<ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertSdeToArtsPass)
+    : public impl::ConvertSdeToArtsBase<ConvertSdeToArtsPass> {
 
   explicit ConvertSdeToArtsPass(mlir::arts::AnalysisManager *AM = nullptr)
       : AM(AM) {}
-
-  StringRef getArgument() const override { return "convert-sde-to-arts"; }
-  StringRef getDescription() const override {
-    return "Convert SDE operations to ARTS operations";
-  }
 
   void runOnOperation() override {
     ModuleOp module = getOperation();

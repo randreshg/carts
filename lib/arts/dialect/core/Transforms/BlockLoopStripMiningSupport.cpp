@@ -1024,7 +1024,7 @@ Value buildNeighborhoodBoundaryValue(
     return arts::createConstantIndex(builder, loc, boundary.constant);
   case LoopNeighborhoodSegment::BoundaryKind::blockSizeMinusConstant: {
     Value constant = arts::createConstantIndex(builder, loc, boundary.constant);
-    return builder.create<arith::SubIOp>(loc, blockSize, constant);
+    return arith::SubIOp::create(builder, loc, blockSize, constant);
   }
   case LoopNeighborhoodSegment::BoundaryKind::blockSize:
     return blockSize;
@@ -1038,12 +1038,12 @@ Value buildNeighborhoodRemValue(OpBuilder &builder, Location loc, Value local,
   Value remVal = local;
   if (offsetConst != 0) {
     Value offset = arts::createConstantIndex(builder, loc, offsetConst);
-    remVal = builder.create<arith::AddIOp>(loc, remVal, offset);
+    remVal = arith::AddIOp::create(builder, loc, remVal, offset);
   }
   if (blockDelta > 0)
-    remVal = builder.create<arith::SubIOp>(loc, remVal, blockSize);
+    remVal = arith::SubIOp::create(builder, loc, remVal, blockSize);
   else if (blockDelta < 0)
-    remVal = builder.create<arith::AddIOp>(loc, remVal, blockSize);
+    remVal = arith::AddIOp::create(builder, loc, remVal, blockSize);
   return remVal;
 }
 
@@ -1093,20 +1093,20 @@ bool stripMineNeighborhoodLoopImpl(scf::ForOp loop,
   Value effectiveLb = lbVal;
   Value effectiveUb = ubVal;
   if (baseVal) {
-    effectiveLb = builder.create<arith::AddIOp>(loc, effectiveLb, baseVal);
-    effectiveUb = builder.create<arith::AddIOp>(loc, effectiveUb, baseVal);
+    effectiveLb = arith::AddIOp::create(builder, loc, effectiveLb, baseVal);
+    effectiveUb = arith::AddIOp::create(builder, loc, effectiveUb, baseVal);
   }
-  Value bsMinusOne = builder.create<arith::SubIOp>(loc, bsVal, one);
+  Value bsMinusOne = arith::SubIOp::create(builder, loc, bsVal, one);
 
-  Value blockLower = builder.create<arith::DivUIOp>(loc, effectiveLb, bsVal);
-  Value ubPlus = builder.create<arith::AddIOp>(loc, effectiveUb, bsMinusOne);
-  Value blockUpperRaw = builder.create<arith::DivUIOp>(loc, ubPlus, bsVal);
-  Value hasWork = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt,
+  Value blockLower = arith::DivUIOp::create(builder, loc, effectiveLb, bsVal);
+  Value ubPlus = arith::AddIOp::create(builder, loc, effectiveUb, bsMinusOne);
+  Value blockUpperRaw = arith::DivUIOp::create(builder, loc, ubPlus, bsVal);
+  Value hasWork = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ugt,
                                                 effectiveUb, effectiveLb);
   Value blockUpper =
-      builder.create<arith::SelectOp>(loc, hasWork, blockUpperRaw, blockLower);
+      arith::SelectOp::create(builder, loc, hasWork, blockUpperRaw, blockLower);
 
-  auto outer = builder.create<scf::ForOp>(loc, blockLower, blockUpper, one,
+  auto outer = scf::ForOp::create(builder, loc, blockLower, blockUpper, one,
                                           loop.getInitArgs());
   /// The pass runs to fixed point. Mark implementation loops created here so
   /// the driver keeps analyzing user IR instead of re-strip-mining the
@@ -1115,15 +1115,15 @@ bool stripMineNeighborhoodLoopImpl(scf::ForOp loop,
   builder.setInsertionPointToStart(outer.getBody());
 
   Value blockStart =
-      builder.create<arith::MulIOp>(loc, outer.getInductionVar(), bsVal);
+      arith::MulIOp::create(builder, loc, outer.getInductionVar(), bsVal);
 
   auto clampToBlock = [&](Value bound) -> Value {
-    Value before = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
+    Value before = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::uge,
                                                  blockStart, bound);
-    Value distance = builder.create<arith::SubIOp>(loc, bound, blockStart);
+    Value distance = arith::SubIOp::create(builder, loc, bound, blockStart);
     Value nonNegative =
-        builder.create<arith::SelectOp>(loc, before, zero, distance);
-    return builder.create<arith::MinUIOp>(loc, nonNegative, bsVal);
+        arith::SelectOp::create(builder, loc, before, zero, distance);
+    return arith::MinUIOp::create(builder, loc, nonNegative, bsVal);
   };
 
   Value localLower = clampToBlock(effectiveLb);
@@ -1145,20 +1145,20 @@ bool stripMineNeighborhoodLoopImpl(scf::ForOp loop,
     Value segUpperBound = buildNeighborhoodBoundaryValue(
         builder, loc, segmentInfo.localUpper, bsVal);
     Value segLower =
-        builder.create<arith::MaxUIOp>(loc, localLower, segLowerBound);
+        arith::MaxUIOp::create(builder, loc, localLower, segLowerBound);
     Value segUpper =
-        builder.create<arith::MinUIOp>(loc, localUpper, segUpperBound);
+        arith::MinUIOp::create(builder, loc, localUpper, segUpperBound);
 
     auto inner =
-        builder.create<scf::ForOp>(loc, segLower, segUpper, one, carriedValues);
+        scf::ForOp::create(builder, loc, segLower, segUpper, one, carriedValues);
     markGeneratedByStripMining(inner);
     builder.setInsertionPointToStart(inner.getBody());
 
     Value local = inner.getInductionVar();
-    Value global = builder.create<arith::AddIOp>(loc, blockStart, local);
+    Value global = arith::AddIOp::create(builder, loc, blockStart, local);
     Value mappedIv = global;
     if (baseVal)
-      mappedIv = builder.create<arith::SubIOp>(loc, global, baseVal);
+      mappedIv = arith::SubIOp::create(builder, loc, global, baseVal);
 
     IRMapping mapping;
     mapping.map(loop.getInductionVar(), mappedIv);
@@ -1174,7 +1174,7 @@ bool stripMineNeighborhoodLoopImpl(scf::ForOp loop,
       Value blockIdx = outer.getInductionVar();
       if (blockDelta != 0) {
         Value deltaConst = arts::createConstantIndex(builder, loc, blockDelta);
-        blockIdx = builder.create<arith::AddIOp>(loc, blockIdx, deltaConst);
+        blockIdx = arith::AddIOp::create(builder, loc, blockIdx, deltaConst);
       }
       for (auto div : group.divOps)
         mapping.map(div.getResult(), blockIdx);
@@ -1193,7 +1193,7 @@ bool stripMineNeighborhoodLoopImpl(scf::ForOp loop,
       Value blockIdx = outer.getInductionVar();
       if (blockDelta != 0) {
         Value deltaConst = arts::createConstantIndex(builder, loc, blockDelta);
-        blockIdx = builder.create<arith::AddIOp>(loc, blockIdx, deltaConst);
+        blockIdx = arith::AddIOp::create(builder, loc, blockIdx, deltaConst);
       }
       for (auto div : group.divOps)
         nestedReplacements[div.getOperation()] = blockIdx;
@@ -1242,7 +1242,7 @@ bool stripMineNeighborhoodLoopImpl(scf::ForOp loop,
     newYieldOperands.reserve(origYield.getNumOperands());
     for (Value v : origYield.getOperands())
       newYieldOperands.push_back(mapping.lookupOrDefault(v));
-    builder.create<scf::YieldOp>(loc, newYieldOperands);
+    scf::YieldOp::create(builder, loc, newYieldOperands);
 
     builder.setInsertionPointAfter(inner);
     carriedValues.assign(inner.getResults().begin(), inner.getResults().end());
@@ -1258,7 +1258,7 @@ bool stripMineNeighborhoodLoopImpl(scf::ForOp loop,
   if (outerYield)
     outerYield.erase();
   builder.setInsertionPointToEnd(outer.getBody());
-  builder.create<scf::YieldOp>(loc, carriedValues);
+  scf::YieldOp::create(builder, loc, carriedValues);
 
   if (newResults)
     newResults->assign(outer.getResults().begin(), outer.getResults().end());
@@ -1284,9 +1284,9 @@ bool stripMineNeighborhoodLoop(scf::ForOp loop,
 
   Value threshold = arts::createConstantIndex(
       builder, loc, *info.dynamicOrderingGuardThreshold);
-  Value guard = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ugt,
+  Value guard = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ugt,
                                               bsVal, threshold);
-  auto ifOp = builder.create<scf::IfOp>(loc, loop.getResultTypes(), guard,
+  auto ifOp = scf::IfOp::create(builder, loc, loop.getResultTypes(), guard,
                                         /*withElseRegion=*/true);
 
   if (loop.getNumResults() > 0)
@@ -1338,14 +1338,14 @@ bool stripMineLegacyLoop(scf::ForOp loop, const LoopBlockInfo &info) {
       info.blockSizeConst
           ? arts::createConstantIndex(builder, loc, *info.blockSizeConst)
           : ValueAnalysis::ensureIndexType(info.blockSizeVal, builder, loc);
-  Value ubGeLb = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
+  Value ubGeLb = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::uge,
                                                ubVal, lbVal);
-  Value tripCountRaw = builder.create<arith::SubIOp>(loc, ubVal, lbVal);
+  Value tripCountRaw = arith::SubIOp::create(builder, loc, ubVal, lbVal);
   Value tripCount =
-      builder.create<arith::SelectOp>(loc, ubGeLb, tripCountRaw, zero);
-  Value bsMinusOne = builder.create<arith::SubIOp>(loc, bsVal, one);
-  Value tripPlus = builder.create<arith::AddIOp>(loc, tripCount, bsMinusOne);
-  Value numBlocksVal = builder.create<arith::DivUIOp>(loc, tripPlus, bsVal);
+      arith::SelectOp::create(builder, loc, ubGeLb, tripCountRaw, zero);
+  Value bsMinusOne = arith::SubIOp::create(builder, loc, bsVal, one);
+  Value tripPlus = arith::AddIOp::create(builder, loc, tripCount, bsMinusOne);
+  Value numBlocksVal = arith::DivUIOp::create(builder, loc, tripPlus, bsVal);
   if (info.blockSizeConst && info.lowerBoundConst &&
       getConstIndex(loop.getUpperBound(), ub)) {
     int64_t tripCountConst = ub - *info.lowerBoundConst;
@@ -1358,33 +1358,33 @@ bool stripMineLegacyLoop(scf::ForOp loop, const LoopBlockInfo &info) {
   }
 
   /// Create outer block loop.
-  auto outer = builder.create<scf::ForOp>(loc, zero, numBlocksVal, one,
+  auto outer = scf::ForOp::create(builder, loc, zero, numBlocksVal, one,
                                           loop.getInitArgs());
   markGeneratedByStripMining(outer);
 
   builder.setInsertionPointToStart(outer.getBody());
-  Value blockStart = builder.create<arith::AddIOp>(
+  Value blockStart = arith::AddIOp::create(builder,
       loc, lbVal,
-      builder.create<arith::MulIOp>(loc, outer.getInductionVar(), bsVal));
+      arith::MulIOp::create(builder, loc, outer.getInductionVar(), bsVal));
 
   /// innerUpper = min(bs, max(0, ub - blockStart))
-  Value remaining = builder.create<arith::SubIOp>(loc, ubVal, blockStart);
-  Value clampCond = builder.create<arith::CmpIOp>(
+  Value remaining = arith::SubIOp::create(builder, loc, ubVal, blockStart);
+  Value clampCond = arith::CmpIOp::create(builder,
       loc, arith::CmpIPredicate::uge, blockStart, ubVal);
   Value remainingNonNeg =
-      builder.create<arith::SelectOp>(loc, clampCond, zero, remaining);
+      arith::SelectOp::create(builder, loc, clampCond, zero, remaining);
   Value innerUpper =
-      builder.create<arith::MinUIOp>(loc, remainingNonNeg, bsVal);
+      arith::MinUIOp::create(builder, loc, remainingNonNeg, bsVal);
 
   /// Create inner local loop, carrying iter_args from outer.
-  auto inner = builder.create<scf::ForOp>(loc, zero, innerUpper, one,
+  auto inner = scf::ForOp::create(builder, loc, zero, innerUpper, one,
                                           outer.getRegionIterArgs());
   markGeneratedByStripMining(inner);
 
   /// Prepare mapping and clone body.
   builder.setInsertionPointToStart(inner.getBody());
   Value global =
-      builder.create<arith::AddIOp>(loc, blockStart, inner.getInductionVar());
+      arith::AddIOp::create(builder, loc, blockStart, inner.getInductionVar());
 
   IRMapping mapping;
   mapping.map(loop.getInductionVar(), global);
@@ -1406,7 +1406,7 @@ bool stripMineLegacyLoop(scf::ForOp loop, const LoopBlockInfo &info) {
     int64_t lowerDivConst = *info.lowerBoundConst / *info.blockSizeConst;
     effectiveLowerDiv = arts::createConstantIndex(builder, loc, lowerDivConst);
   } else {
-    effectiveLowerDiv = builder.create<arith::DivUIOp>(loc, lbVal, bsVal);
+    effectiveLowerDiv = arith::DivUIOp::create(builder, loc, lbVal, bsVal);
   }
   if (info.offsetVal) {
     Value offsetDiv = nullptr;
@@ -1423,15 +1423,15 @@ bool stripMineLegacyLoop(scf::ForOp loop, const LoopBlockInfo &info) {
     if (!offsetDiv) {
       Value offsetIdx =
           ValueAnalysis::ensureIndexType(info.offsetVal, builder, loc);
-      offsetDiv = builder.create<arith::DivUIOp>(loc, offsetIdx, bsVal);
+      offsetDiv = arith::DivUIOp::create(builder, loc, offsetIdx, bsVal);
     }
     effectiveLowerDiv =
-        builder.create<arith::AddIOp>(loc, effectiveLowerDiv, offsetDiv);
+        arith::AddIOp::create(builder, loc, effectiveLowerDiv, offsetDiv);
   }
   auto effectiveLowerDivConst =
       ValueAnalysis::tryFoldConstantIndex(effectiveLowerDiv);
   if (!effectiveLowerDivConst || *effectiveLowerDivConst != 0)
-    blockIdx = builder.create<arith::AddIOp>(loc, blockIdx, effectiveLowerDiv);
+    blockIdx = arith::AddIOp::create(builder, loc, blockIdx, effectiveLowerDiv);
   for (auto div : info.divOps)
     mapping.map(div.getResult(), blockIdx);
   for (Value rem : info.remValues)
@@ -1465,7 +1465,7 @@ bool stripMineLegacyLoop(scf::ForOp loop, const LoopBlockInfo &info) {
   for (Value v : origYield.getOperands()) {
     newYieldOperands.push_back(mapping.lookupOrDefault(v));
   }
-  builder.create<scf::YieldOp>(loc, newYieldOperands);
+  scf::YieldOp::create(builder, loc, newYieldOperands);
 
   /// Replace outer loop terminator with inner results.
   scf::YieldOp outerYield = nullptr;
@@ -1478,7 +1478,7 @@ bool stripMineLegacyLoop(scf::ForOp loop, const LoopBlockInfo &info) {
   if (outerYield)
     outerYield.erase();
   builder.setInsertionPointToEnd(outer.getBody());
-  builder.create<scf::YieldOp>(loc, inner.getResults());
+  scf::YieldOp::create(builder, loc, inner.getResults());
 
   /// Replace uses of original loop with new outer loop results.
   loop.replaceAllUsesWith(outer.getResults());

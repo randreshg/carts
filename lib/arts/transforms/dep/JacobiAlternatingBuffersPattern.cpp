@@ -680,7 +680,7 @@ static EdtOp cloneStencilEdt(EdtOp sourceEdt, Block *targetBlock, Value oldA,
   OpBuilder builder(targetBlock, targetTerminator
                                      ? Block::iterator(targetTerminator)
                                      : targetBlock->end());
-  auto cloned = builder.create<EdtOp>(
+  auto cloned = EdtOp::create(builder,
       sourceEdt.getLoc(), sourceEdt.getType(), sourceEdt.getConcurrency(),
       sourceEdt.getRoute(), sourceEdt.getDependencies());
   cloned->setAttrs(sourceEdt->getAttrs());
@@ -717,16 +717,16 @@ static bool rewriteJacobiTimeLoop(JacobiLoopMatch &match) {
   /// time-IV parity, so behavior is correct for arbitrary loop lower bounds.
   Value lb = match.timeLoop.getLowerBound();
   Value step = match.timeLoop.getStep();
-  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
-  Value two = builder.create<arith::ConstantIndexOp>(loc, 2);
-  Value delta = builder.create<arith::SubIOp>(loc, timeIV, lb);
-  Value iterOrdinal = builder.create<arith::DivUIOp>(loc, delta, step);
-  Value rem = builder.create<arith::RemUIOp>(loc, iterOrdinal, two);
+  Value zero = arith::ConstantIndexOp::create(builder, loc, 0);
+  Value two = arith::ConstantIndexOp::create(builder, loc, 2);
+  Value delta = arith::SubIOp::create(builder, loc, timeIV, lb);
+  Value iterOrdinal = arith::DivUIOp::create(builder, loc, delta, step);
+  Value rem = arith::RemUIOp::create(builder, loc, iterOrdinal, two);
   Value isSwapIter =
-      builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, rem, zero);
+      arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq, rem, zero);
 
-  auto ifOp = builder.create<scf::IfOp>(loc, TypeRange{}, isSwapIter,
-                                        /*withElseRegion=*/true);
+  auto ifOp = scf::IfOp::create(builder, loc, TypeRange{}, isSwapIter,
+                                 /*withElseRegion=*/true);
   stampJacobiAlternatingBuffers(ifOp.getOperation());
 
   cloneStencilEdt(match.stencilEdt, &ifOp.getThenRegion().front(),

@@ -36,10 +36,13 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 
+#define GEN_PASS_DEF_CONVERTOPENMPTOSDE
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/metadata/MetadataManager.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/passes/Passes.h"
+#include "arts/dialect/sde/Transforms/Passes.h.inc"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
 
@@ -592,16 +595,10 @@ struct TaskwaitToSdePattern : public OpRewritePattern<omp::TaskwaitOp> {
 
 namespace {
 struct ConvertOpenMPToSdePass
-    : public PassWrapper<ConvertOpenMPToSdePass, OperationPass<ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertOpenMPToSdePass)
+    : public impl::ConvertOpenMPToSdeBase<ConvertOpenMPToSdePass> {
 
   explicit ConvertOpenMPToSdePass(mlir::arts::AnalysisManager *AM = nullptr)
       : AM(AM) {}
-
-  StringRef getArgument() const override { return "convert-openmp-to-sde"; }
-  StringRef getDescription() const override {
-    return "Convert OpenMP operations to SDE operations";
-  }
 
   void runOnOperation() override {
     ModuleOp module = getOperation();

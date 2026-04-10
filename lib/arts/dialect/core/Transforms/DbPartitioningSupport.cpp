@@ -466,29 +466,29 @@ void applyBoundsValid(DbAcquireOp acquireOp, ArrayRef<int64_t> boundsCheckFlags,
 
     Value idx = indices[i];
     Value size = sourceSizes[i];
-    Value geZero = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge,
+    Value geZero = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::sge,
                                                  idx, zero);
     Value dimValid;
     if (lowerBoundGuarded) {
-      dimValid = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
+      dimValid = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::slt,
                                                idx, size);
     } else {
-      Value ltSize = builder.create<arith::CmpIOp>(
+      Value ltSize = arith::CmpIOp::create(builder,
           loc, arith::CmpIPredicate::slt, idx, size);
-      dimValid = builder.create<arith::AndIOp>(loc, geZero, ltSize);
+      dimValid = arith::AndIOp::create(builder, loc, geZero, ltSize);
     }
     boundsValid =
-        boundsValid ? builder.create<arith::AndIOp>(loc, boundsValid, dimValid)
+        boundsValid ? arith::AndIOp::create(builder, loc, boundsValid, dimValid)
                     : dimValid;
 
-    Value nonNegative = builder.create<arith::SelectOp>(loc, geZero, idx, zero);
+    Value nonNegative = arith::SelectOp::create(builder, loc, geZero, idx, zero);
     Value one = arts::createOneIndex(builder, loc);
-    Value hasExtent = builder.create<arith::CmpIOp>(
+    Value hasExtent = arith::CmpIOp::create(builder,
         loc, arith::CmpIPredicate::sgt, size, zero);
-    Value lastIdxRaw = builder.create<arith::SubIOp>(loc, size, one);
+    Value lastIdxRaw = arith::SubIOp::create(builder, loc, size, one);
     Value lastIdx =
-        builder.create<arith::SelectOp>(loc, hasExtent, lastIdxRaw, zero);
-    indicesVec[i] = builder.create<arith::MinUIOp>(loc, nonNegative, lastIdx);
+        arith::SelectOp::create(builder, loc, hasExtent, lastIdxRaw, zero);
+    indicesVec[i] = arith::MinUIOp::create(builder, loc, nonNegative, lastIdx);
   }
 
   if (!boundsValid)
@@ -506,7 +506,7 @@ void applyBoundsValid(DbAcquireOp acquireOp, ArrayRef<int64_t> boundsCheckFlags,
                                acquireOp.getPartitionSizes().end());
 
   auto partitionMode = getPartitionMode(acquireOp.getOperation());
-  auto newAcquire = builder.create<DbAcquireOp>(
+  auto newAcquire = DbAcquireOp::create(builder,
       loc, acquireOp.getMode(), acquireOp.getSourceGuid(),
       acquireOp.getSourcePtr(), partitionMode, indicesVec, offsetsVec, sizesVec,
       partIndices, partOffsets, partSizes, boundsValid);
@@ -818,7 +818,7 @@ SmallVector<DbAcquireOp> createExpandedAcquires(DbAcquireOp original,
                             << ", indices=" << entryIndices.size()
                             << ", offsets=" << entryOffsets.size());
 
-    auto newAcquire = builder.create<DbAcquireOp>(
+    auto newAcquire = DbAcquireOp::create(builder,
         loc, original.getMode(), original.getSourceGuid(),
         original.getSourcePtr(), entryMode,
         /*indices=*/SmallVector<Value>{},

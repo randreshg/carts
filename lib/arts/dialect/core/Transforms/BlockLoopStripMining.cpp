@@ -10,6 +10,9 @@
 ///==========================================================================///
 
 #include "arts/dialect/core/Transforms/BlockLoopStripMiningInternal.h"
+#define GEN_PASS_DEF_BLOCKLOOPSTRIPMINING
+#include "arts/passes/Passes.h"
+#include "arts/passes/Passes.h.inc"
 #include "arts/utils/Debug.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -25,9 +28,7 @@ using namespace mlir::arts::block_loop_strip_mining;
 namespace {
 
 struct BlockLoopStripMiningPass
-    : public PassWrapper<BlockLoopStripMiningPass,
-                         OperationPass<func::FuncOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(BlockLoopStripMiningPass)
+    : public impl::BlockLoopStripMiningBase<BlockLoopStripMiningPass> {
 
   void runOnOperation() override {
     func::FuncOp func = getOperation();

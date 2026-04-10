@@ -89,11 +89,11 @@ static void guardSingleEdts(Operation *op, Value workerId) {
     builder.setInsertionPoint(edt);
     Location loc = edt.getLoc();
     Value zero = arts::createZeroIndex(builder, loc);
-    Value isZero = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+    Value isZero = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq,
                                                  workerId, zero);
 
-    auto ifOp = builder.create<scf::IfOp>(loc, TypeRange{}, isZero,
-                                          /*withElseRegion=*/false);
+    auto ifOp = scf::IfOp::create(builder, loc, TypeRange{}, isZero,
+                                  /*withElseRegion=*/false);
 
     /// Inline the EDT body
     Block *thenBlock = &ifOp.getThenRegion().front();
@@ -209,7 +209,7 @@ private:
     OpBuilder epochBuilder = builder;
     if (!reuseEnclosingEpoch) {
       /// Wrap lowered worker loop in an epoch to provide an explicit
-      epochOp = builder.create<EpochOp>(loc);
+      epochOp = EpochOp::create(builder, loc);
       Region &epochRegion = epochOp->getBody();
       if (epochRegion.empty())
         epochRegion.push_back(new Block());
@@ -241,7 +241,7 @@ private:
 
     /// Create a worker loop that dispatches N task EDTs.
     auto workerLoop =
-        epochBuilder.create<scf::ForOp>(loc, zero, numWorkers, one);
+        scf::ForOp::create(epochBuilder, loc, zero, numWorkers, one);
     OpBuilder loopBuilder =
         OpBuilder::atBlockBegin(&workerLoop.getRegion().front());
     Value workerId = workerLoop.getInductionVar();
@@ -254,26 +254,26 @@ private:
     if (routeWorkers) {
       Type i32Ty = loopBuilder.getIntegerType(32);
       Value nodes =
-          loopBuilder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalNodes)
+          RuntimeQueryOp::create(loopBuilder, loc, RuntimeQueryKind::totalNodes)
               .getResult();
       if (!nodes.getType().isIndex())
-        nodes = loopBuilder.create<arith::IndexCastOp>(
+        nodes = arith::IndexCastOp::create(loopBuilder,
             loc, loopBuilder.getIndexType(), nodes);
 
       Value workersPerNode = WorkDistributionUtils::getWorkersPerNode(
           loopBuilder, loc, parallelEdt);
-      Value nodesMinusOne = loopBuilder.create<arith::SubIOp>(loc, nodes, one);
+      Value nodesMinusOne = arith::SubIOp::create(loopBuilder, loc, nodes, one);
 
       Value nodeId =
-          loopBuilder.create<arith::DivUIOp>(loc, workerId, workersPerNode);
-      Value outOfRange = loopBuilder.create<arith::CmpIOp>(
+          arith::DivUIOp::create(loopBuilder, loc, workerId, workersPerNode);
+      Value outOfRange = arith::CmpIOp::create(loopBuilder,
           loc, arith::CmpIPredicate::uge, nodeId, nodes);
-      nodeId = loopBuilder.create<arith::SelectOp>(loc, outOfRange,
-                                                   nodesMinusOne, nodeId);
+      nodeId = arith::SelectOp::create(loopBuilder, loc, outOfRange,
+                                       nodesMinusOne, nodeId);
       workerRoute = nodeId;
       if (workerRoute.getType() != i32Ty)
         workerRoute =
-            loopBuilder.create<arith::IndexCastOp>(loc, i32Ty, workerRoute);
+            arith::IndexCastOp::create(loopBuilder, loc, i32Ty, workerRoute);
     }
 
     /// Clone the parallel EDT into the worker loop as a task EDT
@@ -287,7 +287,7 @@ private:
     /// Update route: internode uses worker route, otherwise keep existing or 0
     Value routeVal = routeWorkers ? workerRoute : clonedEdt.getRoute();
     if (!routeVal)
-      routeVal = loopBuilder.create<arith::ConstantIntOp>(loc, 0, 32);
+      routeVal = arith::ConstantIntOp::create(loopBuilder, loc, 0, 32);
     clonedEdt.getRouteMutable().assign(routeVal);
 
     replaceWorkerIds(clonedEdt, workerId);
@@ -299,7 +299,7 @@ private:
     /// Finalize the explicit epoch region when this lowering created it.
     if (!reuseEnclosingEpoch) {
       epochBuilder.setInsertionPointToEnd(epochBlock);
-      epochBuilder.create<YieldOp>(loc);
+      YieldOp::create(epochBuilder, loc);
     }
 
     parallelEdt.erase();

@@ -719,8 +719,8 @@ Value ValueAnalysis::castToIndex(Value value, OpBuilder &builder,
   if (value.getType().isIndex())
     return value;
   if (value.getType().isIntOrIndex())
-    return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
-                                              value);
+    return arith::IndexCastOp::create(builder, loc, builder.getIndexType(),
+                                      value);
   return value;
 }
 
@@ -731,8 +731,8 @@ Value ValueAnalysis::ensureIndexType(Value value, OpBuilder &builder,
   if (isa<IndexType>(value.getType()))
     return value;
   if (auto intTy = dyn_cast<IntegerType>(value.getType()))
-    return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
-                                              value);
+    return arith::IndexCastOp::create(builder, loc, builder.getIndexType(),
+                                      value);
   return Value();
 }
 
@@ -1160,7 +1160,7 @@ Value ValueAnalysis::traceValueToDominating(Value value,
     Value rhs = trace(cmpOp.getRhs());
     if (lhs && rhs) {
       builder.setInsertionPoint(insertBefore);
-      return builder.create<arith::CmpIOp>(loc, cmpOp.getPredicate(), lhs, rhs);
+      return arith::CmpIOp::create(builder, loc, cmpOp.getPredicate(), lhs, rhs);
     }
     return nullptr;
   }
@@ -1171,7 +1171,7 @@ Value ValueAnalysis::traceValueToDominating(Value value,
     Value falseVal = trace(selectOp.getFalseValue());
     if (cond && trueVal && falseVal) {
       builder.setInsertionPoint(insertBefore);
-      return builder.create<arith::SelectOp>(loc, cond, trueVal, falseVal);
+      return arith::SelectOp::create(builder, loc, cond, trueVal, falseVal);
     }
     return nullptr;
   }
@@ -1183,7 +1183,7 @@ Value ValueAnalysis::traceValueToDominating(Value value,
     if (inner.getType() == castOp.getType())
       return inner;
     builder.setInsertionPoint(insertBefore);
-    return builder.create<arith::IndexCastOp>(loc, castOp.getType(), inner);
+    return arith::IndexCastOp::create(builder, loc, castOp.getType(), inner);
   }
   if (auto castOp = dyn_cast<arith::IndexCastUIOp>(defOp)) {
     Value inner = trace(castOp.getIn());
@@ -1192,34 +1192,34 @@ Value ValueAnalysis::traceValueToDominating(Value value,
     if (inner.getType() == castOp.getType())
       return inner;
     builder.setInsertionPoint(insertBefore);
-    return builder.create<arith::IndexCastUIOp>(loc, castOp.getType(), inner);
+    return arith::IndexCastUIOp::create(builder, loc, castOp.getType(), inner);
   }
   if (auto castOp = dyn_cast<arith::ExtSIOp>(defOp)) {
     Value inner = trace(castOp.getIn());
     if (!inner)
       return nullptr;
     builder.setInsertionPoint(insertBefore);
-    return builder.create<arith::ExtSIOp>(loc, castOp.getType(), inner);
+    return arith::ExtSIOp::create(builder, loc, castOp.getType(), inner);
   }
   if (auto castOp = dyn_cast<arith::ExtUIOp>(defOp)) {
     Value inner = trace(castOp.getIn());
     if (!inner)
       return nullptr;
     builder.setInsertionPoint(insertBefore);
-    return builder.create<arith::ExtUIOp>(loc, castOp.getType(), inner);
+    return arith::ExtUIOp::create(builder, loc, castOp.getType(), inner);
   }
   if (auto castOp = dyn_cast<arith::TruncIOp>(defOp)) {
     Value inner = trace(castOp.getIn());
     if (!inner)
       return nullptr;
     builder.setInsertionPoint(insertBefore);
-    return builder.create<arith::TruncIOp>(loc, castOp.getType(), inner);
+    return arith::TruncIOp::create(builder, loc, castOp.getType(), inner);
   }
 
   if (auto constOp = dyn_cast<arith::ConstantOp>(defOp)) {
     builder.setInsertionPoint(insertBefore);
-    return builder.create<arith::ConstantOp>(loc, constOp.getType(),
-                                             constOp.getValue());
+    return arith::ConstantOp::create(builder, loc, constOp.getType(),
+                                     constOp.getValue());
   }
   if (auto constIdxOp = dyn_cast<arith::ConstantIndexOp>(defOp)) {
     builder.setInsertionPoint(insertBefore);
@@ -1227,8 +1227,8 @@ Value ValueAnalysis::traceValueToDominating(Value value,
   }
   if (auto tsOp = dyn_cast<polygeist::TypeSizeOp>(defOp)) {
     builder.setInsertionPoint(insertBefore);
-    return builder.create<polygeist::TypeSizeOp>(loc, tsOp.getType(),
-                                                 tsOp.getSourceAttr());
+    return polygeist::TypeSizeOp::create(builder, loc, tsOp.getType(),
+                                         tsOp.getSourceAttr());
   }
 
   return nullptr;
@@ -1245,7 +1245,7 @@ Value ValueAnalysis::traceMinSIWithFallback(
     if (ValueAnalysis::isZeroConstant(rhsTraced))
       return lhsTraced;
     builder.setInsertionPoint(insertBefore);
-    return builder.create<arith::MinSIOp>(loc, lhsTraced, rhsTraced);
+    return arith::MinSIOp::create(builder, loc, lhsTraced, rhsTraced);
   }
   if (rhsTraced && !lhsTraced) {
     if (ValueAnalysis::isZeroConstant(rhsTraced))
@@ -1271,7 +1271,7 @@ Value ValueAnalysis::traceMinUIWithFallback(
     if (ValueAnalysis::isZeroConstant(rhsTraced))
       return lhsTraced;
     builder.setInsertionPoint(insertBefore);
-    return builder.create<arith::MinUIOp>(loc, lhsTraced, rhsTraced);
+    return arith::MinUIOp::create(builder, loc, lhsTraced, rhsTraced);
   }
   if (rhsTraced && !lhsTraced) {
     if (ValueAnalysis::isZeroConstant(rhsTraced))
@@ -1297,14 +1297,14 @@ Value ValueAnalysis::traceSelectWithFallback(
     Value cond = traceCondFn(selectOp.getCondition());
     builder.setInsertionPoint(insertBefore);
     if (cond) {
-      return builder.create<arith::SelectOp>(loc, cond, trueTraced,
-                                             falseTraced);
+      return arith::SelectOp::create(builder, loc, cond, trueTraced,
+                                     falseTraced);
     }
     /// Condition doesn't dominate -- use max of arms as safe upper bound.
     if (isa<IndexType>(trueTraced.getType())) {
-      return builder.create<arith::MaxUIOp>(loc, trueTraced, falseTraced);
+      return arith::MaxUIOp::create(builder, loc, trueTraced, falseTraced);
     }
-    return builder.create<arith::MaxSIOp>(loc, trueTraced, falseTraced);
+    return arith::MaxSIOp::create(builder, loc, trueTraced, falseTraced);
   }
 
   if (trueTraced && !falseTraced) {

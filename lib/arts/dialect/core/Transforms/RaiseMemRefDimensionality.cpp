@@ -516,7 +516,7 @@ RaiseMemRefDimensionalityPass::detectPattern(Value alloc) {
                   arts::createZeroIndex(cleanupBuilder, loadOp.getLoc()));
             }
           }
-          Value repl = cleanupBuilder.create<memref::AllocOp>(
+          Value repl = memref::AllocOp::create(cleanupBuilder,
               loadOp.getLoc(), memType, dynSizes);
           loadOp.replaceAllUsesWith(repl);
           cleanup.insert(loadOp);
@@ -530,7 +530,7 @@ RaiseMemRefDimensionalityPass::detectPattern(Value alloc) {
                   arts::createZeroIndex(cleanupBuilder, affineLoad.getLoc()));
             }
           }
-          Value repl = cleanupBuilder.create<memref::AllocOp>(
+          Value repl = memref::AllocOp::create(cleanupBuilder,
               affineLoad.getLoc(), memType, dynSizes);
           affineLoad.replaceAllUsesWith(repl);
           cleanup.insert(affineLoad);
@@ -894,7 +894,7 @@ std::optional<DepInfo> RaiseMemRefDimensionalityPass::analyzeDepVar(
       if (auto val = dyn_cast<Value>(offset))
         info.indices.push_back(val);
       else {
-        auto attr = cast<IntegerAttr>(offset.get<Attribute>());
+        auto attr = cast<IntegerAttr>(cast<Attribute>(offset));
         info.indices.push_back(
             arts::createConstantIndex(builder, loc, attr.getInt()));
       }
@@ -905,7 +905,7 @@ std::optional<DepInfo> RaiseMemRefDimensionalityPass::analyzeDepVar(
       if (auto val = dyn_cast<Value>(size))
         info.sizes.push_back(val);
       else {
-        auto attr = cast<IntegerAttr>(size.get<Attribute>());
+        auto attr = cast<IntegerAttr>(cast<Attribute>(size));
         info.sizes.push_back(
             arts::createConstantIndex(builder, loc, attr.getInt()));
       }
@@ -1370,7 +1370,7 @@ RaiseMemRefDimensionalityPass::transformPattern(AllocPattern &pattern,
     case AccessInfo::Kind::ElementLoad: {
       auto loadOp = cast<memref::LoadOp>(access.terminalOp);
       builder.setInsertionPoint(loadOp);
-      auto newLoad = builder.create<memref::LoadOp>(loadOp.getLoc(), ndAlloc,
+      auto newLoad = memref::LoadOp::create(builder, loadOp.getLoc(), ndAlloc,
                                                     access.indices);
       loadOp.replaceAllUsesWith(newLoad.getResult());
       toRemove.insert(loadOp);
@@ -1379,7 +1379,7 @@ RaiseMemRefDimensionalityPass::transformPattern(AllocPattern &pattern,
     case AccessInfo::Kind::ElementStore: {
       auto storeOp = cast<memref::StoreOp>(access.terminalOp);
       builder.setInsertionPoint(storeOp);
-      builder.create<memref::StoreOp>(storeOp.getLoc(), storeOp.getValue(),
+      memref::StoreOp::create(builder, storeOp.getLoc(), storeOp.getValue(),
                                       ndAlloc, access.indices);
       toRemove.insert(storeOp);
       break;
@@ -1394,7 +1394,7 @@ RaiseMemRefDimensionalityPass::transformPattern(AllocPattern &pattern,
     builder.setInsertionPoint(dep.taskOp);
 
     /// Create arts.omp_dep with proper indices and sizes
-    auto ompDepOp = builder.create<arts::OmpDepOp>(
+    auto ompDepOp = arts::OmpDepOp::create(builder,
         dep.taskOp.getLoc(), ndAlloc.getType(), dep.mode, ndAlloc, dep.indices,
         dep.sizes);
 
@@ -1505,7 +1505,7 @@ void RaiseMemRefDimensionalityPass::rewriteTracedMemref2PointerUses(
     }
 
     builder.setInsertionPoint(m2p);
-    auto newM2P = builder.create<polygeist::Memref2PointerOp>(
+    auto newM2P = polygeist::Memref2PointerOp::create(builder,
         m2p.getLoc(), m2p.getType(), ndAlloc);
     m2p.replaceAllUsesWith(newM2P.getResult());
     toRemove.insert(m2p);
@@ -1588,7 +1588,7 @@ RaiseMemRefDimensionalityPass::transformSimpleWrapper(AllocPattern &pattern,
   for (auto &dep : pattern.dependencies) {
     builder.setInsertionPoint(dep.taskOp);
 
-    auto ompDepOp = builder.create<arts::OmpDepOp>(
+    auto ompDepOp = arts::OmpDepOp::create(builder,
         dep.taskOp.getLoc(), actualAlloc.getType(), dep.mode, actualAlloc,
         dep.indices, dep.sizes);
 
@@ -1639,7 +1639,7 @@ Value RaiseMemRefDimensionalityPass::createCanonicalAllocation(
   }
 
   auto memrefType = MemRefType::get(shape, elementType);
-  auto allocOp = builder.create<memref::AllocOp>(loc, memrefType, dynamicDims);
+  auto allocOp = memref::AllocOp::create(builder, loc, memrefType, dynamicDims);
   return allocOp.getResult();
 }
 
@@ -1931,7 +1931,7 @@ void RaiseMemRefDimensionalityPass::handleDeallocations(
   /// Insert dealloc at the end of the block, before any terminator
   if (Operation *terminator = ndAllocBlock->getTerminator()) {
     builder.setInsertionPoint(terminator);
-    builder.create<memref::DeallocOp>(ndAlloc.getLoc(), ndAlloc);
+    memref::DeallocOp::create(builder, ndAlloc.getLoc(), ndAlloc);
     ARTS_DEBUG("  Inserted dealloc for ndAlloc before block terminator");
   }
 }

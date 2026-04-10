@@ -114,8 +114,8 @@ struct OMPParallelToArtsPattern : public OpRewritePattern<omp::ParallelOp> {
     ARTS_INFO("Converting omp.parallel to arts.parallel");
 
     /// Create a new `arts.edt` operation with parallel type
-    auto parOp = rewriter.create<EdtOp>(loc, EdtType::parallel,
-                                        EdtConcurrency::internode);
+    auto parOp = EdtOp::create(rewriter, loc, EdtType::parallel,
+                               EdtConcurrency::internode);
     parOp.setNoVerifyAttr(NoVerifyAttr::get(rewriter.getContext()));
     Block &blk = parOp.getBody().front();
 
@@ -149,8 +149,8 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
     rewriter.setInsertionPoint(op);
 
     /// Create `arts.edt` with `parallel` type and internode concurrency
-    auto parEdt = rewriter.create<EdtOp>(loc, EdtType::parallel,
-                                         EdtConcurrency::internode);
+    auto parEdt = EdtOp::create(rewriter, loc, EdtType::parallel,
+                                EdtConcurrency::internode);
     parEdt.setNoVerifyAttr(NoVerifyAttr::get(rewriter.getContext()));
     Block &parBlk = parEdt.getBody().front();
 
@@ -160,8 +160,8 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
     Value ub = op.getUpperBound().front();
     Value st = op.getStep().front();
 
-    auto artsFor = rewriter.create<arts::ForOp>(
-        loc, ValueRange{lb}, ValueRange{ub}, ValueRange{st},
+    auto artsFor = arts::ForOp::create(
+        rewriter, loc, ValueRange{lb}, ValueRange{ub}, ValueRange{st},
         /*schedule*/ nullptr,
         /*reductionAccumulators*/ ValueRange{});
 
@@ -185,15 +185,15 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
       mapper.map(src.getArgument(0), dst.getArgument(0));
     for (Operation &srcOp : src.without_terminator())
       rewriter.clone(srcOp, mapper);
-    rewriter.create<arts::YieldOp>(loc);
+    arts::YieldOp::create(rewriter, loc);
 
     /// Terminate parallel EDT body
     rewriter.setInsertionPointToEnd(&parBlk);
-    rewriter.create<arts::YieldOp>(loc);
+    arts::YieldOp::create(rewriter, loc);
 
     if (hasWorkAfterInParentBlock(op.getOperation())) {
       rewriter.setInsertionPointAfter(parEdt);
-      rewriter.create<arts::BarrierOp>(loc);
+      arts::BarrierOp::create(rewriter, loc);
     }
 
     /// Remove original scf.parallel
@@ -216,7 +216,7 @@ struct MasterToARTSPattern : public OpRewritePattern<omp::MasterOp> {
 
     /// Create a new `arts.single` operation with intranode concurrency.
     auto artsSingle =
-        rewriter.create<EdtOp>(loc, EdtType::single, EdtConcurrency::intranode);
+        EdtOp::create(rewriter, loc, EdtType::single, EdtConcurrency::intranode);
     artsSingle.setNoVerifyAttr(NoVerifyAttr::get(rewriter.getContext()));
 
     /// Move the region's operations.
@@ -241,7 +241,7 @@ struct SingleToARTSPattern : public OpRewritePattern<omp::SingleOp> {
 
     /// Create a new `arts.single` operation with intranode concurrency.
     auto artsSingle =
-        rewriter.create<EdtOp>(loc, EdtType::single, EdtConcurrency::intranode);
+        EdtOp::create(rewriter, loc, EdtType::single, EdtConcurrency::intranode);
     artsSingle.setNoVerifyAttr(NoVerifyAttr::get(rewriter.getContext()));
 
     /// Move the region's operations.
@@ -306,8 +306,8 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
         OpBuilder::InsertionGuard IG(rewriter);
         rewriter.setInsertionPointToStart(&region.front());
 
-        auto newOmpDep = rewriter.create<OmpDepOp>(
-            loc, depMode, ompDepOp.getSource(),
+        auto newOmpDep = OmpDepOp::create(
+            rewriter, loc, depMode, ompDepOp.getSource(),
             SmallVector<Value>(ompDepOp.getIndices().begin(),
                                ompDepOp.getIndices().end()),
             SmallVector<Value>(ompDepOp.getSizes().begin(),
@@ -366,8 +366,8 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
                    << allIndices.size() << " indices, " << pinnedIndices.size()
                    << " pinned, " << blockSizes.size() << " chunks");
 
-        Value dbControl = rewriter.create<DbControlOp>(
-            ompDepOp.getLoc(), depMode, ompDepOp.getSource(), pinnedIndices,
+        Value dbControl = DbControlOp::create(
+            rewriter, ompDepOp.getLoc(), depMode, ompDepOp.getSource(), pinnedIndices,
             chunkOffsets, blockSizes);
         deps.push_back(dbControl);
       }
@@ -387,8 +387,8 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
     }
 
     /// Create a new `arts.edt` operation with intranode concurrency.
-    auto edtOp = rewriter.create<EdtOp>(loc, EdtType::task,
-                                        EdtConcurrency::intranode, deps);
+    auto edtOp = EdtOp::create(rewriter, loc, EdtType::task,
+                               EdtConcurrency::intranode, deps);
     edtOp.setNoVerifyAttr(NoVerifyAttr::get(rewriter.getContext()));
     Block &blk = edtOp.getBody().front();
 
@@ -444,8 +444,8 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsloopOp> {
         op.getReductionSyms() && !op.getReductionSyms()->empty();
     if (nestedInSerialLoop && !hasReductions) {
       ARTS_INFO("  - Nested wsloop fallback: lowering to scf.parallel");
-      auto scfParallel = rewriter.create<scf::ParallelOp>(
-          loc, ValueRange{lowerBound}, ValueRange{upperBound},
+      auto scfParallel = scf::ParallelOp::create(
+          rewriter, loc, ValueRange{lowerBound}, ValueRange{upperBound},
           ValueRange{step});
       carryRewriteMetadata(op, scfParallel, metadataManager);
 
@@ -508,8 +508,8 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsloopOp> {
     collectReductionMetadata(op, rewriter, redAccs, reductionDecls);
 
     /// Create `arts.for` and move `omp.wsloop` body
-    auto forOp = rewriter.create<arts::ForOp>(
-        loc, ValueRange{lowerBound}, ValueRange{upperBound}, ValueRange{step},
+    auto forOp = arts::ForOp::create(
+        rewriter, loc, ValueRange{lowerBound}, ValueRange{upperBound}, ValueRange{step},
         schedAttr, ValueRange{redAccs});
 
     carryRewriteMetadata(op, forOp, metadataManager);
@@ -536,14 +536,14 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsloopOp> {
     if (!src.getArguments().empty())
       mapper.map(src.getArgument(0), dst.getArgument(0));
     moveOps(src, dst, rewriter, mapper, reductionDecls);
-    rewriter.create<arts::YieldOp>(loc);
+    arts::YieldOp::create(rewriter, loc);
 
     /// OpenMP wsloop has an implicit barrier unless nowait is present.
     /// Emit an explicit ARTS barrier only when there is following work in
     /// the same region that depends on that synchronization.
     if (!op.getNowait() && hasWorkAfterInParentBlock(op.getOperation())) {
       rewriter.setInsertionPointAfter(forOp);
-      rewriter.create<arts::BarrierOp>(loc);
+      arts::BarrierOp::create(rewriter, loc);
     }
 
     /// Remove the original wsloop
@@ -679,7 +679,7 @@ struct TerminatorToARTSPattern : public OpRewritePattern<omp::TerminatorOp> {
   LogicalResult matchAndRewrite(omp::TerminatorOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    rewriter.create<arts::YieldOp>(loc);
+    arts::YieldOp::create(rewriter, loc);
     rewriter.eraseOp(op);
     return success();
   }
@@ -693,7 +693,7 @@ struct BarrierToARTSPattern : public OpRewritePattern<omp::BarrierOp> {
                                 PatternRewriter &rewriter) const override {
     ARTS_INFO("Converting omp.barrier to arts.barrier");
     auto loc = op.getLoc();
-    rewriter.create<arts::BarrierOp>(loc);
+    arts::BarrierOp::create(rewriter, loc);
     rewriter.eraseOp(op);
     return success();
   }
@@ -707,7 +707,7 @@ struct TaskwaitToARTSPattern : public OpRewritePattern<omp::TaskwaitOp> {
                                 PatternRewriter &rewriter) const override {
     ARTS_INFO("Converting omp.taskwait to arts.barrier");
     auto loc = op.getLoc();
-    rewriter.create<arts::BarrierOp>(loc);
+    arts::BarrierOp::create(rewriter, loc);
     rewriter.eraseOp(op);
     return success();
   }
@@ -731,8 +731,8 @@ struct TaskloopToARTSPattern : public OpRewritePattern<omp::TaskloopOp> {
     auto step = loopNest.getLoopSteps()[0];
 
     /// Create arts.for and move taskloop body
-    auto forOp = rewriter.create<arts::ForOp>(
-        loc, ValueRange{lowerBound}, ValueRange{upperBound}, ValueRange{step},
+    auto forOp = arts::ForOp::create(
+        rewriter, loc, ValueRange{lowerBound}, ValueRange{upperBound}, ValueRange{step},
         /*schedule*/ nullptr,
         /*reductionAccumulators*/ ValueRange{});
 
@@ -753,7 +753,7 @@ struct TaskloopToARTSPattern : public OpRewritePattern<omp::TaskloopOp> {
       mapper.map(src.getArgument(0), dst.getArgument(0));
     for (Operation &srcOp : src.without_terminator())
       rewriter.clone(srcOp, mapper);
-    rewriter.create<arts::YieldOp>(loc);
+    arts::YieldOp::create(rewriter, loc);
 
     /// Remove the original taskloop
     rewriter.eraseOp(op);

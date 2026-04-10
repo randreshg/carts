@@ -432,12 +432,12 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
         }
       }
     } : i64
-    arts.db_free(%guid_11) : memref<?xi64>
-    arts.db_free(%ptr_12) : memref<?xmemref<?x?xf64>>
     arts.db_free(%guid_21) : memref<?xi64>
     arts.db_free(%ptr_22) : memref<?xmemref<?x?xf64>>
     arts.db_free(%guid) : memref<?xi64>
     arts.db_free(%ptr) : memref<?xmemref<?x?xf64>>
+    arts.db_free(%guid_11) : memref<?xi64>
+    arts.db_free(%ptr_12) : memref<?xmemref<?x?xf64>>
     return %c0_i32 : i32
   }
 }

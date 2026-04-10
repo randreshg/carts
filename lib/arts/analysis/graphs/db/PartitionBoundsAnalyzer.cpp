@@ -515,21 +515,21 @@ bool PartitionBoundsAnalyzer::computePartitionBounds(DbAcquireNode *node) {
 
   if (bounds.minOffset < 0) {
     Value absAdj = arts::createConstantIndex(builder, loc, -bounds.minOffset);
-    Value cond = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
-                                               partitionOffset, absAdj);
-    Value sub = builder.create<arith::SubIOp>(loc, partitionOffset, absAdj);
+    Value cond = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::uge,
+                                       partitionOffset, absAdj);
+    Value sub = arith::SubIOp::create(builder, loc, partitionOffset, absAdj);
     Value zero = arts::createZeroIndex(builder, loc);
-    adjustedOffset = builder.create<arith::SelectOp>(loc, cond, sub, zero);
+    adjustedOffset = arith::SelectOp::create(builder, loc, cond, sub, zero);
   } else if (bounds.minOffset > 0) {
     Value adj = arts::createConstantIndex(builder, loc, bounds.minOffset);
-    adjustedOffset = builder.create<arith::AddIOp>(loc, partitionOffset, adj);
+    adjustedOffset = arith::AddIOp::create(builder, loc, partitionOffset, adj);
   }
 
   int64_t sizeAdjustment = bounds.maxOffset - bounds.minOffset;
   if (sizeAdjustment != 0) {
     Value adjustment = arts::createConstantIndex(builder, loc, sizeAdjustment);
     adjustedSize =
-        builder.create<arith::AddIOp>(loc, partitionSize, adjustment);
+        arith::AddIOp::create(builder, loc, partitionSize, adjustment);
   }
 
   node->setComputedBlockInfo(std::make_pair(adjustedOffset, adjustedSize));

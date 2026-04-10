@@ -97,6 +97,8 @@ add_mlir_dialect_library(MLIRArtsTransforms
 DEPENDS
   MLIROpsIncGen
   MLIRArtsPassIncGen
+  MLIRArtsRtPassIncGen
+  MLIRArtsSdePassIncGen
   MLIRRtOpsIncGen
   MLIRSdeOpsIncGen
 

@@ -73,10 +73,10 @@ static void wrapEdtInEpoch(EdtOp op, bool demoteToTask) {
     return;
   auto loc = op.getLoc();
   OpBuilder builder(op);
-  auto epochOp = builder.create<EpochOp>(loc);
+  auto epochOp = EpochOp::create(builder, loc);
   auto &epochBlock = epochOp.getBody().emplaceBlock();
   builder.setInsertionPointToEnd(&epochBlock);
-  builder.create<YieldOp>(loc);
+  YieldOp::create(builder, loc);
   op->moveBefore(&epochBlock, --epochBlock.end());
 
   if (demoteToTask) {
@@ -141,7 +141,7 @@ static void processBarrierOp(BarrierOp barrier) {
   Location loc = barrier.getLoc();
   Operation *insertionOp = opsToMove.front();
   OpBuilder builder(block, Block::iterator(insertionOp));
-  auto epochOp = builder.create<EpochOp>(loc);
+  auto epochOp = EpochOp::create(builder, loc);
   auto &epochRegion = epochOp.getRegion();
   if (epochRegion.empty())
     epochRegion.push_back(new Block());
@@ -155,7 +155,7 @@ static void processBarrierOp(BarrierOp barrier) {
   }
 
   builder.setInsertionPointToEnd(newBlock);
-  builder.create<YieldOp>(loc);
+  YieldOp::create(builder, loc);
 
   ++numBarriersProcessed;
   ++numEpochsCreated;

@@ -276,7 +276,7 @@ static void cloneLoopSegment(OpBuilder &builder, BoundaryPeelingMatch &match,
   Value lower = arts::createConstantIndex(builder, loc, lowerConst);
   Value upper = arts::createConstantIndex(builder, loc, upperConst);
   auto segment =
-      builder.create<scf::ForOp>(loc, lower, upper, match.innerLoop.getStep());
+      scf::ForOp::create(builder, loc, lower, upper, match.innerLoop.getStep());
   builder.setInsertionPointToStart(segment.getBody());
 
   IRMapping mapping;
@@ -305,8 +305,8 @@ static bool peelBoundaryLoop(BoundaryPeelingMatch &match) {
   if (!rowIsFirst || !rowIsLast)
     return false;
 
-  Value rowBoundary = builder.create<arith::OrIOp>(loc, rowIsFirst, rowIsLast);
-  auto splitIf = builder.create<scf::IfOp>(loc, TypeRange{}, rowBoundary, true);
+  Value rowBoundary = arith::OrIOp::create(builder, loc, rowIsFirst, rowIsLast);
+  auto splitIf = scf::IfOp::create(builder, loc, TypeRange{}, rowBoundary, true);
 
   builder.setInsertionPointToStart(&splitIf.getThenRegion().front());
   cloneLoopSegment(builder, match, match.finalIf.getThenRegion().front(),

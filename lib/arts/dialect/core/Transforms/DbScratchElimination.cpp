@@ -295,7 +295,7 @@ struct DbScratchEliminationPass
             getDynamicAllocaSizes(candidate.alloc, refType);
         Block &entryBlock = use.edt.getBody().front();
         OpBuilder builder(&entryBlock, entryBlock.begin());
-        auto local = builder.create<memref::AllocaOp>(use.dbRef.getLoc(),
+        auto local = memref::AllocaOp::create(builder, use.dbRef.getLoc(),
                                                       refType, dynamicSizes);
         use.dbRef.getResult().replaceAllUsesWith(local.getMemref());
         use.dbRef.erase();
