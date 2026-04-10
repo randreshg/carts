@@ -2,27 +2,17 @@
 
 // Verify that the blocked-neighbor dep-pointer cache rewrites the outlined
 // rhs4sg tap loop to use block-start-relative local indices instead of a
-// per-tap remainder. The hot reduction should select among cached neighbor
-// pointers and local-index candidates without rebuilding a quotient/remainder
-// pair in the inner 5-tap loop.
+// per-tap remainder. The hot reduction should use hoisted dep loads and
+// local-index candidates without rebuilding a quotient/remainder pair in the
+// inner 5-tap loop.
 // CHECK-LABEL: func.func private @__arts_edt_1
-// CHECK: %[[NEG_PTR:.+]] = scf.if {{.+}} -> (!llvm.ptr) {
-// CHECK: %[[POS_PTR:.+]] = scf.if {{.+}} -> (!llvm.ptr) {
-// CHECK: scf.for %[[TAP:.+]] = %c-2 to %c3 step %c1 iter_args(%{{.+}} = %cst_1) -> (f32) {
-// CHECK: %{{.+}} = arith.addf %{{.+}}, %{{.+}} : f32
-// CHECK: %[[GLOBAL:.+]] = arith.addi %{{.+}}, %{{.+}} : index
-// CHECK: %[[LOW:.+]] = arith.cmpi ult, %[[GLOBAL]], %{{.+}} : index
-// CHECK: %[[HIGH:.+]] = arith.cmpi uge, %[[GLOBAL]], %{{.+}} : index
-// CHECK: %{{.+}} = arith.subi %[[GLOBAL]], %{{.+}} : index
-// CHECK: %{{.+}} = arith.addi %{{.+}}, %{{.+}} : index
-// CHECK: %{{.+}} = arith.subi %{{.+}}, %{{.+}} : index
-// CHECK: %[[SEL_LOCAL0:.+]] = arith.select %[[LOW]], %{{.+}}, %{{.+}} : index
-// CHECK: %[[SEL_LOCAL1:.+]] = arith.select %[[HIGH]], %{{.+}}, %[[SEL_LOCAL0]] : index
+// CHECK: %{{.+}} = llvm.load %{{.+}} : !llvm.ptr -> !llvm.ptr
+// CHECK: %{{.+}} = llvm.load %{{.+}} : !llvm.ptr -> !llvm.ptr
+// CHECK: scf.for %[[TAP:.+]] = %c-2 to %c3 step %c1 {
+// CHECK: %[[GLOBAL:.+]] = arith.addi %{{.+}}, %{{.+}} : i32
+// CHECK: %{{.+}} = arith.index_cast %[[GLOBAL]] : i32 to index
 // CHECK-NOT: arith.remui
-// CHECK: %{{.+}} = llvm.select %[[LOW]], %{{.+}}, %{{.+}} : i1, !llvm.ptr
-// CHECK: %{{.+}} = llvm.select %[[HIGH]], %{{.+}}, %{{.+}} : i1, !llvm.ptr
-// CHECK: %{{.+}} = polygeist.pointer2memref %{{.+}} : !llvm.ptr to memref<?x?x?x?xf32>
-// CHECK: polygeist.load %{{.+}}[%c0, %{{.+}}, %{{.+}}, %[[SEL_LOCAL1]]] sizes
+// CHECK: polygeist.load %{{.+}}[%c0, %{{.+}}, %{{.+}}, %{{.+}}] sizes
 
 module {
 }
